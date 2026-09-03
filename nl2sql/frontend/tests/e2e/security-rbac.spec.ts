@@ -2946,9 +2946,22 @@ test("ロールコード競合はコード欄へ結び付き、403 は安全な�
   await page.goto("/settings/security/roles");
   await page.getByTestId("security-roles-actions").getByRole("button", { name: "新規作成" }).click();
   const roleCode = page.getByLabel("ロールコード");
-  await roleCode.fill("DUPLICATE_ROLE");
-  await page.getByLabel("ロール名").fill("重複ロール");
   const actionBar = page.getByRole("group", { name: "ロール編集操作" });
+  await roleCode.fill("system_admin");
+  await page.getByLabel("ロール名").fill("予約コードロール");
+  await actionBar.getByRole("button", { name: "新規作成" }).click();
+
+  const reservedMessage =
+    "SYSTEM_ADMIN は組み込みロール専用のコードです。別のロールコードを入力してください。";
+  await expect(page.getByText(reservedMessage, { exact: true })).toHaveCount(1);
+  await expect(roleCode).toHaveAttribute("aria-invalid", "true");
+  await expect(roleCode).toHaveAttribute("aria-describedby", "security-role-code-error");
+  await expect(roleCode).toBeFocused();
+  expect(submitCount).toBe(0);
+
+  await roleCode.fill("DUPLICATE_ROLE");
+  await expect(page.getByText(reservedMessage, { exact: true })).toHaveCount(0);
+  await page.getByLabel("ロール名").fill("重複ロール");
   await actionBar.getByRole("button", { name: "新規作成" }).click();
 
   const conflictMessage = "このロールコードは既に使用されています。別のコードを入力してください。";

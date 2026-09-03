@@ -232,6 +232,7 @@ const nl2sqlJa = {
   "security.roles.formHint": "ロール名、画面表示と利用コンテキスト参照の機能権限を管理します。",
   "security.roles.code": "ロールコード",
   "security.roles.codeConflict": "このロールコードは既に使用されています。別のコードを入力してください。",
+  "security.roles.codeReserved": "SYSTEM_ADMIN は組み込みロール専用のコードです。別のロールコードを入力してください。",
   "security.roles.name": "ロール名",
   "security.roles.description": "説明",
   "security.roles.builtIn": "組み込み",

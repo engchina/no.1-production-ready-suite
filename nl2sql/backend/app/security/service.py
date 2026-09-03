@@ -72,6 +72,7 @@ _SECURITY_ERROR_CODES = {
 _SECURITY_CONFLICT_TITLES = {
     "SECURITY_USER_LOGIN_ID_CONFLICT": "ユーザーを作成できません",
     "SECURITY_ROLE_CODE_CONFLICT": "ロールを作成できません",
+    "SECURITY_ROLE_CODE_RESERVED": "ロールを作成できません",
 }
 
 
@@ -114,6 +115,9 @@ def _aware(value: datetime) -> datetime:
 
 _SYSTEM_ADMIN_BOOTSTRAP_ONLY_MESSAGE = (
     "SYSTEM_ADMIN ロールは初期システム管理者にのみ割り当てできます。"
+)
+_SYSTEM_ADMIN_ROLE_CODE_RESERVED_MESSAGE = (
+    "SYSTEM_ADMIN は組み込みロール専用のコードです。別のロールコードを入力してください。"
 )
 
 _SECURITY_SCHEMA_OBJECT_NAMES = frozenset(
@@ -599,11 +603,26 @@ class SecurityService:
         request_id: str = "",
         client_ip: str = "",
     ) -> RoleRecord:
+        normalized_role_code = role_code.strip().upper()
+        if normalized_role_code == SYSTEM_ADMIN_ROLE_CODE:
+            raise SecurityApiError(
+                409,
+                _SYSTEM_ADMIN_ROLE_CODE_RESERVED_MESSAGE,
+                code="SECURITY_ROLE_CODE_RESERVED",
+                title=_SECURITY_CONFLICT_TITLES["SECURITY_ROLE_CODE_RESERVED"],
+                field_errors=(
+                    {
+                        "pointer": "/role_code",
+                        "code": "reserved",
+                        "message": _SYSTEM_ADMIN_ROLE_CODE_RESERVED_MESSAGE,
+                    },
+                ),
+            )
         if allowed_profile_ids:
             self._assert_actor_can_manage_profile_access(actor)
         role = self._build_role(
             role_id=str(uuid4()),
-            role_code=role_code,
+            role_code=normalized_role_code,
             display_name=display_name,
             description=description,
             permissions=permissions,

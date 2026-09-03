@@ -26,6 +26,7 @@ from app.main import app
 from app.security import dependencies as security_dependencies
 from app.security.dependencies import authorize_api_request, local_debug_principal
 from app.security.domain import (
+    SYSTEM_ADMIN_ROLE_CODE,
     SYSTEM_ADMIN_ROLE_ID,
     DataEntitlementRecord,
     DataEntitlementScopeFilter,
@@ -1351,6 +1352,38 @@ def test_non_system_admin_cannot_change_role_profile_access() -> None:
     )
 
     assert unchanged.allowed_profile_ids == {"default"}
+
+
+@pytest.mark.parametrize("role_code", [SYSTEM_ADMIN_ROLE_CODE, "system_admin", " System_Admin "])
+def test_reserved_system_admin_role_code_cannot_be_created(role_code: str) -> None:
+    service = _service()
+    actor, _, _ = _login(service)
+
+    with pytest.raises(SecurityApiError) as error:
+        service.create_role(
+            role_code=role_code,
+            display_name="追加システム管理者",
+            description="",
+            permissions={"menu.security_roles"},
+            entitlements=[],
+            actor=actor,
+        )
+
+    assert error.value.status_code == 409
+    assert error.value.code == "SECURITY_ROLE_CODE_RESERVED"
+    assert error.value.field_errors == (
+        {
+            "pointer": "/role_code",
+            "code": "reserved",
+            "message": (
+                "SYSTEM_ADMIN は組み込みロール専用のコードです。"
+                "別のロールコードを入力してください。"
+            ),
+        },
+    )
+    assert [
+        role.role_id for role in service.store.list_roles(include_archived=True)
+    ] == [SYSTEM_ADMIN_ROLE_ID]
 
 
 def test_last_system_admin_cannot_be_disabled_or_unassigned() -> None:
@@ -3348,6 +3381,21 @@ def test_security_conflicts_and_validation_use_problem_contract(
             assert_problem_contract(
                 duplicate_role,
                 code="SECURITY_ROLE_CODE_CONFLICT",
+                pointer="/role_code",
+            )
+
+            reserved_role = await client.post(
+                "/api/security/roles",
+                headers=headers,
+                json={
+                    **role_payload,
+                    "role_code": "system_admin",
+                    "display_name": "追加システム管理者",
+                },
+            )
+            assert_problem_contract(
+                reserved_role,
+                code="SECURITY_ROLE_CODE_RESERVED",
                 pointer="/role_code",
             )
 

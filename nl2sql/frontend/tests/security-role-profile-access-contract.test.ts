@@ -78,6 +78,14 @@ test("role editor handles system admin and empty profile states", () => {
   assert.match(i18nSource, /利用可能な業務プロファイルがありません。管理者に権限付与を依頼してください。/u);
 });
 
+test("role editor blocks reserved SYSTEM_ADMIN role creation before submit", () => {
+  assert.match(rolesPageSource, /const SYSTEM_ADMIN_ROLE_CODE = "SYSTEM_ADMIN"/u);
+  assert.match(rolesPageSource, /normalizedRoleCode === SYSTEM_ADMIN_ROLE_CODE/u);
+  assert.match(rolesPageSource, /setFieldErrors\(nextErrors\)/u);
+  assert.match(rolesPageSource, /SECURITY_ROLE_CODE_RESERVED/u);
+  assert.match(i18nSource, /security\.roles\.codeReserved/u);
+});
+
 test("archived role editor keeps permission and profile options visible but read-only", () => {
   assert.match(
     rolesPageSource,
