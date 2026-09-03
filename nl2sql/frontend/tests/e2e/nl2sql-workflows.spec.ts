@@ -1433,34 +1433,56 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
   await page.route("**/api/nl2sql/history", (route) => fulfillJson(route, { items: [historyItem] }));
   await page.route(/\/api\/nl2sql\/feedback(?:\?.*)?$/, (route) => {
     if (route.request().method() === "GET") {
+      const url = new URL(route.request().url());
+      const rating = url.searchParams.get("rating") ?? "all";
+      const profileId = url.searchParams.get("profile_id") ?? "";
+      const query = (url.searchParams.get("q") ?? "").toLowerCase();
+      const appFeedbackRows = [
+        {
+          ...historyItem,
+          feedback_rating: "good",
+          feedback_comment: "SQL は期待通りです",
+          admin_feedback_rating: appAdminFeedbackRating,
+          admin_feedback_content: appAdminFeedbackContent,
+          admin_feedback_updated_at: appAdminFeedbackUpdatedAt,
+          training_status: feedbackCandidateAdded ? "added" : "pending",
+          training_example_id: feedbackCandidateAdded ? "feedback-hist-001" : "",
+        },
+        {
+          ...historyItem,
+          id: "hist-002",
+          question: "別プロファイルの請求確認",
+          generated_sql: "SELECT 2 FROM DUAL",
+          executable_sql: "SELECT 2 FROM DUAL",
+          profile_id: "payment",
+          profile_name: "入金管理",
+          profile_category: "入金管理",
+          feedback_rating: "bad",
+          feedback_comment: "条件が違います",
+          admin_feedback_rating: null,
+          admin_feedback_content: "",
+          admin_feedback_updated_at: "",
+          training_status: "pending",
+          training_example_id: "",
+        },
+      ];
+      const items = appFeedbackRows.filter((item) => {
+        if (rating === "unrated" && item.feedback_rating) return false;
+        if (rating !== "all" && rating !== "unrated" && item.feedback_rating !== rating) {
+          return false;
+        }
+        if (profileId && item.profile_id !== profileId) return false;
+        if (!query) return true;
+        return [
+          item.question,
+          item.generated_sql,
+          item.feedback_comment,
+          item.admin_feedback_content,
+        ].some((value) => String(value ?? "").toLowerCase().includes(query));
+      });
       return fulfillJson(route, {
-        items: [
-          {
-            ...historyItem,
-            feedback_rating: "good",
-            feedback_comment: "SQL は期待通りです",
-            admin_feedback_rating: appAdminFeedbackRating,
-            admin_feedback_content: appAdminFeedbackContent,
-            admin_feedback_updated_at: appAdminFeedbackUpdatedAt,
-            training_status: feedbackCandidateAdded ? "added" : "pending",
-            training_example_id: feedbackCandidateAdded ? "feedback-hist-001" : "",
-          },
-          {
-            ...historyItem,
-            id: "hist-002",
-            question: "別プロファイルの請求確認",
-            generated_sql: "SELECT 2 FROM DUAL",
-            executable_sql: "SELECT 2 FROM DUAL",
-            feedback_rating: "bad",
-            feedback_comment: "条件が違います",
-            admin_feedback_rating: null,
-            admin_feedback_content: "",
-            admin_feedback_updated_at: "",
-            training_status: "pending",
-            training_example_id: "",
-          },
-        ],
-        total: 2,
+        items,
+        total: items.length,
         next_cursor: "",
       });
     }
@@ -7790,11 +7812,17 @@ test("feedback management page mirrors Select AI feedback operations", async ({ 
   const feedbackFilterOptions = page.getByLabel("利用者評価フィルター").locator("option");
   await expect(feedbackFilterOptions).toHaveText(["すべて", "良い", "違う", "未評価"]);
   await expect(feedbackFilterOptions.filter({ hasText: "要確認" })).toHaveCount(0);
+  await expect(page.getByTestId("feedback-history-row")).toHaveCount(2);
+  await expect(page.getByTestId("feedback-history-pane")).toContainText("アプリ内 feedback 2");
   await page.getByLabel("利用者評価フィルター").selectOption("good");
+  await expect(page.getByTestId("feedback-history-row")).toHaveCount(1);
+  await expect(page.getByTestId("feedback-history-pane")).toContainText("アプリ内 feedback 1");
   await expect(
     page.getByTestId("feedback-history-row").filter({ hasText: "履歴から再実行したい請求金額" }).filter({ hasText: "良い" })
   ).toBeVisible();
   await page.getByLabel("利用者評価フィルター").selectOption("bad");
+  await expect(page.getByTestId("feedback-history-row")).toHaveCount(1);
+  await expect(page.getByTestId("feedback-history-pane")).toContainText("アプリ内 feedback 1");
   await expect(
     page.getByTestId("feedback-history-row").filter({ hasText: "別プロファイルの請求確認" }).filter({ hasText: "違う" })
   ).toBeVisible();
@@ -8072,6 +8100,13 @@ test("app feedback uses the shared responsive pagination for cursor pages", asyn
   await expect(pagination).toContainText("2 / 2 ページ");
   await expect(previousButton).toBeEnabled();
   await expect(nextButton).toBeDisabled();
+
+  await page.getByRole("button", { name: "フィードバック保存" }).click();
+  await expect(page.getByText("管理者レビューを保存し、類似検索に公開しました。")).toBeVisible();
+  await expect(rows).toHaveCount(1);
+  await expect(rows).toContainText("ページング対象 21");
+  await expect(pagination).toContainText("21-21 / 21 件");
+  await expect(pagination).toContainText("2 / 2 ページ");
 
   await previousButton.focus();
   await expect(previousButton).toBeFocused();

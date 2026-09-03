@@ -78,6 +78,13 @@ import type {
 import { formatElapsedDuration as formatElapsed } from "@/lib/operationTiming";
 
 type FeedbackManagementView = "entries" | "vectorIndex" | "appFeedback" | "similarityIndex";
+type AppFeedbackFilter = "all" | FeedbackRating | "unrated";
+type AppFeedbackFilters = {
+  rating?: AppFeedbackFilter;
+  profileId?: string;
+  query?: string;
+};
+type AppFeedbackRefreshDirection = "reset" | "next" | "prev" | "current";
 
 const APP_FEEDBACK_PAGE_SIZE = 20;
 const DEFAULT_FEEDBACK_MANAGEMENT_VIEW: FeedbackManagementView = "appFeedback";
@@ -147,7 +154,7 @@ export function FeedbackManagementPage() {
   const [adminFeedbackContent, setAdminFeedbackContent] = useState("");
   const [registerSelectAiFeedback, setRegisterSelectAiFeedback] = useState(false);
   const [selectAiResponse, setSelectAiResponse] = useState("");
-  const [feedbackFilter, setFeedbackFilter] = useState<"all" | FeedbackRating | "unrated">("all");
+  const [feedbackFilter, setFeedbackFilter] = useState<AppFeedbackFilter>("all");
   const [feedbackSearch, setFeedbackSearch] = useState("");
   const [appProfileFilter, setAppProfileFilter] = useState("");
   const [feedbackCursor, setFeedbackCursor] = useState("");
@@ -170,24 +177,7 @@ export function FeedbackManagementPage() {
     () => selectAiFeedbackItems[selectedIndex] ?? selectAiFeedbackItems[0] ?? null,
     [selectAiFeedbackItems, selectedIndex]
   );
-  const appFeedbackItems = useMemo(() => {
-    const q = feedbackSearch.trim().toLowerCase();
-    return history
-      .filter((item) => {
-        if (feedbackFilter === "unrated" && item.feedback_rating) return false;
-        if (feedbackFilter !== "all" && feedbackFilter !== "unrated" && item.feedback_rating !== feedbackFilter) {
-          return false;
-        }
-        if (!q) return true;
-        return (
-          item.question.toLowerCase().includes(q) ||
-          item.generated_sql.toLowerCase().includes(q) ||
-          item.feedback_comment.toLowerCase().includes(q) ||
-          (item.admin_feedback_content ?? "").toLowerCase().includes(q)
-        );
-      })
-      .slice(0, APP_FEEDBACK_PAGE_SIZE);
-  }, [feedbackFilter, feedbackSearch, history]);
+  const appFeedbackItems = history;
   const feedbackConfigDirty = Boolean(
     feedbackConfig &&
       savedFeedbackConfig &&
@@ -231,14 +221,21 @@ export function FeedbackManagementPage() {
       { signal }
     );
 
-  const fetchAppFeedback = (cursor = "", signal?: AbortSignal) => {
+  const fetchAppFeedback = (
+    cursor = "",
+    signal?: AbortSignal,
+    filters: AppFeedbackFilters = {}
+  ) => {
+    const rating = filters.rating ?? feedbackFilter;
+    const profileId = filters.profileId ?? appProfileFilter;
+    const query = filters.query ?? feedbackSearch;
     const params = new URLSearchParams({
       limit: String(APP_FEEDBACK_PAGE_SIZE),
-      rating: feedbackFilter,
+      rating,
     });
     if (cursor) params.set("cursor", cursor);
-    if (appProfileFilter) params.set("profile_id", appProfileFilter);
-    if (feedbackSearch.trim()) params.set("q", feedbackSearch.trim());
+    if (profileId) params.set("profile_id", profileId);
+    if (query.trim()) params.set("q", query.trim());
     return apiGet<FeedbackListData>(`/api/nl2sql/feedback?${params.toString()}`, {
       signal,
     });
@@ -326,12 +323,13 @@ export function FeedbackManagementPage() {
 
   const refreshAppFeedback = async (
     cursor = "",
-    direction: "reset" | "next" | "prev" = "reset"
+    direction: AppFeedbackRefreshDirection = "reset",
+    filters: AppFeedbackFilters = {}
   ) => {
     setLoading("app-feedback-load");
     setMessage("");
     try {
-      const data = await fetchAppFeedback(cursor);
+      const data = await fetchAppFeedback(cursor, undefined, filters);
       setHistory(data.items);
       setFeedbackTotal(data.total);
       setFeedbackNextCursor(data.next_cursor);
@@ -342,6 +340,8 @@ export function FeedbackManagementPage() {
         setFeedbackCursor("");
         setFeedbackCursorStack([]);
         setFeedbackPage(1);
+      } else if (direction === "current") {
+        setFeedbackCursor(cursor);
       } else {
         setFeedbackCursor(cursor);
         setFeedbackPage((current) => Math.max(1, current + (direction === "next" ? 1 : -1)));
@@ -445,7 +445,7 @@ export function FeedbackManagementPage() {
         select_ai_response: selectAiResponse.trim(),
         select_ai_profile_name: profileName.trim(),
       });
-      await refreshAppFeedback();
+      await refreshAppFeedback(feedbackCursor, "current");
       const publishWarnings = data.similar_history_publish?.warnings ?? [];
       if (publishWarnings.length > 0) {
         setMessage(publishWarnings.join(" "));
@@ -489,7 +489,7 @@ export function FeedbackManagementPage() {
     setMessage("");
     try {
       await apiDelete<FeedbackClearData>(`/api/nl2sql/feedback/${selectedAppFeedback.id}`);
-      await refreshAppFeedback();
+      await refreshAppFeedback(feedbackCursor, "current");
       setRegisterSelectAiFeedback(false);
       setSelectAiResponse(defaultResponse);
       toast.success(t("feedbackManagement.appFeedback.cleared"));
@@ -838,7 +838,7 @@ export function FeedbackManagementPage() {
                 data-testid="feedback-app-filters"
                 onSubmit={(event) => {
                   event.preventDefault();
-                  void refreshAppFeedback();
+                  void refreshAppFeedback("", "reset", { query: feedbackSearch });
                 }}
               >
                 <label className="grid min-w-0 gap-1 text-sm font-medium text-foreground">
@@ -855,9 +855,11 @@ export function FeedbackManagementPage() {
                   <select
                     aria-label={t("feedbackManagement.appFeedback.filter")}
                     value={feedbackFilter}
-                    onChange={(event) =>
-                      setFeedbackFilter(event.currentTarget.value as "all" | FeedbackRating | "unrated")
-                    }
+                    onChange={(event) => {
+                      const rating = event.currentTarget.value as AppFeedbackFilter;
+                      setFeedbackFilter(rating);
+                      void refreshAppFeedback("", "reset", { rating });
+                    }}
                     className="min-h-[44px] w-full min-w-0 max-w-full rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:ring-2 focus:ring-ring/40"
                   >
                     <option value="all">{t("feedbackManagement.appFeedback.filterAll")}</option>
@@ -871,7 +873,11 @@ export function FeedbackManagementPage() {
                   <select
                     aria-label={t("feedbackManagement.appFeedback.profileFilter")}
                     value={appProfileFilter}
-                    onChange={(event) => setAppProfileFilter(event.currentTarget.value)}
+                    onChange={(event) => {
+                      const profileId = event.currentTarget.value;
+                      setAppProfileFilter(profileId);
+                      void refreshAppFeedback("", "reset", { profileId });
+                    }}
                     className="min-h-[44px] w-full min-w-0 max-w-full rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:ring-2 focus:ring-ring/40"
                   >
                     <option value="">{t("feedbackManagement.appFeedback.profileAll")}</option>

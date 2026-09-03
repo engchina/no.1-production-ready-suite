@@ -6671,9 +6671,11 @@ class Nl2SqlService:
         return self._feedback_index_data(operation="status", include_bad=False)
 
     def rebuild_feedback_index(self, request: FeedbackIndexRequest) -> FeedbackIndexData:
-        return self._feedback_index_data(operation="rebuild", include_bad=request.include_bad)
+        del request
+        return self._feedback_index_data(operation="rebuild", include_bad=False)
 
     def clear_feedback_index(self, request: FeedbackIndexRequest) -> FeedbackIndexData:
+        del request
         self._load_feedback_state()
         started = time.monotonic()
         created_at = _utc_now()
@@ -6681,7 +6683,7 @@ class Nl2SqlService:
         executed = False
         runtime = "oracle" if self._use_oracle_runtime() else "deterministic"
         source_count = self._feedback_source_history_count()
-        indexable_count = len(self._feedback_indexable_history(request.include_bad))
+        indexable_count = len(self._feedback_indexable_history(False))
         with self._lock:
             current_indexed = len(self._feedback_indexed_ids)
         if not self._use_oracle_runtime():
@@ -6807,9 +6809,12 @@ class Nl2SqlService:
     def update_feedback_search_config(
         self, request: FeedbackSearchConfigRequest
     ) -> FeedbackSearchConfigData:
+        self._load_feedback_state()
         with self._lock:
-            self._feedback_similarity_threshold = request.similarity_threshold
-            self._feedback_match_limit = request.match_limit
+            if request.similarity_threshold is not None:
+                self._feedback_similarity_threshold = request.similarity_threshold
+            if request.match_limit is not None:
+                self._feedback_match_limit = request.match_limit
         self._persist_singletons("feedback_search_config")
         return self.feedback_search_config()
 

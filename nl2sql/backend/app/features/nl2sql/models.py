@@ -1237,7 +1237,11 @@ class FeedbackListData(BaseModel):
 class FeedbackIndexRequest(StrictMutationRequest):
     """Feedback learning index management request."""
 
-    include_bad: bool = False
+    include_bad: bool = Field(
+        default=False,
+        deprecated=True,
+        description="互換用の非推奨フィールドです。現在は管理者レビューが良い履歴のみ索引対象です。",
+    )
 
 
 class FeedbackIndexData(BaseModel):
@@ -1296,8 +1300,8 @@ class FeedbackEntriesDeleteRequest(BaseModel):
 class FeedbackSearchConfigRequest(BaseModel):
     """Similarity search defaults used when request does not override them."""
 
-    similarity_threshold: float = Field(default=0.0, ge=0.0, le=1.0)
-    match_limit: int = Field(default=3, ge=1, le=20)
+    similarity_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+    match_limit: int | None = Field(default=None, ge=1, le=20)
 
 
 class FeedbackSearchConfigData(BaseModel):

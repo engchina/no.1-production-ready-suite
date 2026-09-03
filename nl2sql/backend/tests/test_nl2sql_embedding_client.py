@@ -24,6 +24,44 @@ class _FakeInference:
             _FakeInference.calls.append(kwargs)
 
 
+class _FakeEmbedTextDetails:
+    def __init__(self) -> None:
+        self.inputs: list[str] = []
+        self.compartment_id = ""
+        self.serving_mode: object | None = None
+        self.truncate = ""
+        self.input_type = ""
+
+
+class _FakeOnDemandServingMode:
+    def __init__(self, *, model_id: str) -> None:
+        self.model_id = model_id
+
+
+class _FakeEmbedModels:
+    EmbedTextDetails = _FakeEmbedTextDetails
+    OnDemandServingMode = _FakeOnDemandServingMode
+
+
+class _FakeEmbedResponse:
+    def __init__(self, embeddings: list[list[float]]) -> None:
+        self.data = SimpleNamespace(embeddings=embeddings)
+
+
+class _FakeEmbedClient:
+    def __init__(self) -> None:
+        self.calls: list[list[str]] = []
+
+    def embed_text(self, details: _FakeEmbedTextDetails) -> _FakeEmbedResponse:
+        batch = list(details.inputs)
+        self.calls.append(batch)
+        embeddings: list[list[float]] = []
+        for text in batch:
+            index = int(text.rsplit("-", 1)[1])
+            embeddings.append([float(index), *([0.0] * 1535)])
+        return _FakeEmbedResponse(embeddings)
+
+
 def _settings(*, auth_mode: str = "config_file") -> Settings:
     return Settings(
         oci_region="us-chicago-1",
@@ -91,3 +129,20 @@ def test_oci_genai_embedding_client_principal_auth_passes_signer(
     assert _FakeInference.calls
     assert _FakeInference.calls[0]["config"] == {}
     assert _FakeInference.calls[0]["signer"] is signer
+
+
+def test_oci_genai_embedding_client_batches_oci_requests_and_preserves_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = OciGenAiEmbeddingClient(_settings())
+    fake_client = _FakeEmbedClient()
+    monkeypatch.setattr(client, "_get_client", lambda: fake_client)
+    monkeypatch.setattr(client, "_load_models", lambda: _FakeEmbedModels)
+
+    vectors = client.embed_texts([f"text-{index}" for index in range(200)])
+
+    assert [len(batch) for batch in fake_client.calls] == [96, 96, 8]
+    assert all(len(batch) <= 96 for batch in fake_client.calls)
+    assert len(vectors) == 200
+    assert [vectors[index][0] for index in range(200)] == [float(index) for index in range(200)]
+    assert all(len(vector) == 1536 for vector in vectors)

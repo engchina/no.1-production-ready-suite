@@ -13,6 +13,8 @@ from typing import Any, Protocol
 
 from app.settings import Settings
 
+OCI_GENAI_EMBED_BATCH_SIZE = 96
+
 
 class EmbeddingClientError(RuntimeError):
     """Embedding client の実行時エラー。"""
@@ -65,27 +67,35 @@ class OciGenAiEmbeddingClient:
             raise EmbeddingClientError("OCI GenAI embedding 設定が不足しています。")
         client = self._get_client()
         models = self._load_models()
-        details = models.EmbedTextDetails()
-        details.inputs = texts
-        details.compartment_id = self.settings.oci_compartment_id
-        details.serving_mode = models.OnDemandServingMode(
-            model_id=self.settings.oci_genai_embed_model_id
-        )
-        if hasattr(details, "truncate"):
-            details.truncate = "END"
-        if hasattr(details, "input_type"):
-            details.input_type = "SEARCH_DOCUMENT"
-        try:
-            response = client.embed_text(details)
-        except Exception as exc:  # pragma: no cover - live OCI defensive boundary
-            raise EmbeddingClientError(f"OCI GenAI embedding に失敗しました: {exc}") from exc
-        embeddings = getattr(response.data, "embeddings", None)
-        if embeddings is None:
-            raise EmbeddingClientError("OCI GenAI embedding 応答に embeddings がありません。")
-        vectors = [[float(value) for value in vector] for vector in embeddings]
-        for vector in vectors:
-            if len(vector) != 1536:
-                raise EmbeddingClientError(f"embedding 次元が 1536 ではありません: {len(vector)}")
+        vectors: list[list[float]] = []
+        for offset in range(0, len(texts), OCI_GENAI_EMBED_BATCH_SIZE):
+            batch = texts[offset : offset + OCI_GENAI_EMBED_BATCH_SIZE]
+            details = models.EmbedTextDetails()
+            details.inputs = batch
+            details.compartment_id = self.settings.oci_compartment_id
+            details.serving_mode = models.OnDemandServingMode(
+                model_id=self.settings.oci_genai_embed_model_id
+            )
+            if hasattr(details, "truncate"):
+                details.truncate = "END"
+            if hasattr(details, "input_type"):
+                details.input_type = "SEARCH_DOCUMENT"
+            try:
+                response = client.embed_text(details)
+            except Exception as exc:  # pragma: no cover - live OCI defensive boundary
+                raise EmbeddingClientError(f"OCI GenAI embedding に失敗しました: {exc}") from exc
+            embeddings = getattr(response.data, "embeddings", None)
+            if embeddings is None:
+                raise EmbeddingClientError("OCI GenAI embedding 応答に embeddings がありません。")
+            batch_vectors = [[float(value) for value in vector] for vector in embeddings]
+            if len(batch_vectors) != len(batch):
+                raise EmbeddingClientError("OCI GenAI embedding 応答件数が入力件数と一致しません。")
+            for vector in batch_vectors:
+                if len(vector) != 1536:
+                    raise EmbeddingClientError(
+                        f"embedding 次元が 1536 ではありません: {len(vector)}"
+                    )
+            vectors.extend(batch_vectors)
         return vectors
 
     def _load_oci(self) -> Any:

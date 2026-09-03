@@ -37,6 +37,7 @@ from app.features.nl2sql.incremental_store import (
 from app.features.nl2sql.models import (
     FeedbackIndexRequest,
     FeedbackRating,
+    FeedbackSearchConfigRequest,
     HistoryItem,
     JobCreateRequest,
     JobStatus,
@@ -495,6 +496,29 @@ def test_incremental_feedback_state_is_restored_lazily_after_restart() -> None:
     assert entries.indexed_count == 2
     assert {item.history_id for item in entries.items if item.indexed} == {
         item.id for item in histories
+    }
+
+
+def test_incremental_feedback_search_config_patch_preserves_omitted_fields() -> None:
+    repository = MemoryIncrementalNl2SqlRepository(seed_default=False)
+    repository.put_document(
+        "singletons",
+        "feedback_search_config",
+        {"value": {"similarity_threshold": 0.65, "match_limit": 9}},
+    )
+    service = _incremental_service(repository)
+
+    first = service.update_feedback_search_config(FeedbackSearchConfigRequest(match_limit=5))
+    second = service.update_feedback_search_config(
+        FeedbackSearchConfigRequest(similarity_threshold=0.8)
+    )
+
+    assert first.similarity_threshold == 0.65
+    assert first.match_limit == 5
+    assert second.similarity_threshold == 0.8
+    assert second.match_limit == 5
+    assert repository.get_document("singletons", "feedback_search_config") == {
+        "value": {"similarity_threshold": 0.8, "match_limit": 5}
     }
 
 
