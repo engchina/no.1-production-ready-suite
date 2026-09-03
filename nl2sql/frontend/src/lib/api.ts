@@ -310,7 +310,7 @@ export type ModelSettingsTestTargetType =
   | "embedding"
   | "rerank";
 export type UploadStorageBackend = "local" | "oci";
-export type DatabaseConnectionTestStatus = "success" | "failed" | "skipped";
+export type DatabaseConnectionTestStatus = "success" | "failed";
 export type OciConfigTestStatus = "success" | "failed";
 
 export interface DatabaseStatusData {

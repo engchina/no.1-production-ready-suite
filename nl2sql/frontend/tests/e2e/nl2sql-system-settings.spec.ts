@@ -297,12 +297,12 @@ async function mockNl2sqlSettingsApi(page: Page) {
   );
   await page.route("**/api/settings/database/test", (route) =>
     fulfillJson(route, {
-      status: "skipped",
+      status: "success",
       readiness: "ok",
-      message: "入力値の形式のみ確認します。",
+      message: "Oracle 26ai への接続に成功しました。",
       elapsed_ms: 1,
       troubleshooting: [],
-      details: { network_call: false },
+      details: { network_call: true },
       checked_at: "2026-06-21T10:00:00.000Z",
       error_type: null,
     })
@@ -741,10 +741,10 @@ test("NL2SQL のシステム設定画面を表示できる", async ({ page }) =>
   expect(databaseSavedSecretBadgeStyle).toEqual(modelSavedSecretBadgeStyle);
   await expectNoOperationsMemoOrReadiness(page);
   await page.getByRole("button", { name: "DB接続テスト" }).click();
-  await expect(page.getByText("入力値の形式のみ確認します。")).toBeVisible();
+  await expect(page.getByText("Oracle 26ai への接続に成功しました。")).toBeVisible();
   await expect(page.getByTestId("settings-database-test-result")).toHaveAttribute(
     "data-tone",
-    "warning"
+    "success"
   );
   await expectNoOperationsMemoOrReadiness(page);
   await page.getByRole("button", { name: "保存", exact: true }).click();

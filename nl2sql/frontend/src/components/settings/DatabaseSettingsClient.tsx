@@ -1576,12 +1576,7 @@ function DatabaseTestResultPanel({
   }
 
   if (!result) return null;
-  const tone =
-    result.status === "success"
-      ? "success"
-      : result.status === "skipped"
-        ? "warning"
-        : "danger";
+  const tone = result.status === "success" ? "success" : "danger";
 
   return (
     <SettingsTestResultPanel
