@@ -25,6 +25,7 @@ from pydantic import Field
 
 from app.api.concurrency import run_sync_io
 from app.security.domain import Principal
+from app.security.permissions import PROFILE_MANAGE_PERMISSION
 from app.security.request_actor import actor_scope
 from app.settings import get_settings
 
@@ -1649,6 +1650,8 @@ class OntologyApiRuntime:
     def recommend_profiles(
         self,
         request: OntologyProfileRecommendationRequest,
+        *,
+        allowed_profile_ids: set[str] | None = None,
     ) -> ProfileRecommendation:
         with self._lock:
             ontology = self._query_ontology()
@@ -1656,6 +1659,8 @@ class OntologyApiRuntime:
             node_by_id = {node.id: node for node in ontology.nodes}
             entries: list[tuple[Nl2SqlProfile, ProfileOntologyView, list[str], list[str]]] = []
             for profile in self._active_profiles():
+                if allowed_profile_ids is not None and profile.id not in allowed_profile_ids:
+                    continue
                 view = self._base_profile_view(profile, ontology)
                 scenario_terms = [
                     *view.activation_scenarios_ja,
@@ -4214,6 +4219,13 @@ def _principal_from_request(request: Request) -> Principal | None:
     return principal if isinstance(principal, Principal) else None
 
 
+def _allowed_profile_ids_for_request(request: Request) -> set[str] | None:
+    principal = _principal_from_request(request)
+    if principal is None or principal.has_permission(PROFILE_MANAGE_PERMISSION):
+        return None
+    return set(principal.allowed_profile_ids)
+
+
 def _query_session_actor(request: Request) -> tuple[str, bool]:
     principal = _principal_from_request(request)
     if principal is None:
@@ -4225,6 +4237,7 @@ def _ensure_query_session_access(data: QuerySessionData, request: Request) -> Qu
     principal = _principal_from_request(request)
     if principal is None or principal.is_system_admin:
         return data
+    assert_profile_access(request, data.session.profile_id)
     owner = data.session.actor_user_uuid.strip()
     if not owner or owner == principal.user_uuid:
         return data
@@ -4541,6 +4554,7 @@ def get_profile_ontology_mermaid(
 )
 def recommend_ontology_profile(
     request: OntologyProfileRecommendationRequest,
+    http_request: Request,
 ) -> ApiResponse[OntologyProfileRecommendationData]:
     try:
         return ApiResponse(
@@ -4548,6 +4562,7 @@ def recommend_ontology_profile(
                 recommendation=_run_runtime_sync(
                     ontology_runtime.recommend_profiles,
                     request,
+                    allowed_profile_ids=_allowed_profile_ids_for_request(http_request),
                 )
             )
         )
@@ -4562,7 +4577,9 @@ def recommend_ontology_profile(
 def confirm_ontology_profile_recommendation(
     recommendation_id: str,
     request: ProfileRecommendationConfirmationRequest,
+    http_request: Request,
 ) -> ApiResponse[ProfileRecommendationConfirmationData]:
+    assert_profile_access(http_request, request.selected_profile_id)
     try:
         recommendation, token = _run_runtime_sync(
             ontology_runtime.confirm_profile_recommendation,
@@ -4648,6 +4665,7 @@ def create_query_session(
     http_request: Request,
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
 ) -> ApiResponse[QuerySessionData]:
+    assert_profile_access(http_request, request.profile_id)
     try:
         actor_user_uuid, actor_is_system_admin = _query_session_actor(http_request)
         return ApiResponse(

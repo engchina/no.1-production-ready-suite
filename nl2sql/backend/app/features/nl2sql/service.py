@@ -6823,6 +6823,7 @@ class Nl2SqlService:
         content: bytes,
         replace: bool = False,
         profile_id: str | None = None,
+        allowed_profile_ids: set[str] | None = None,
     ) -> ClassifierImportData:
         _require_xlsx_template_upload(filename)
         self._load_classifier_state()
@@ -6841,6 +6842,13 @@ class Nl2SqlService:
                 warnings.append(
                     f"{category or row_profile_id} に対応する Profile を一意に解決できないため"
                     "除外しました。"
+                )
+                continue
+            if allowed_profile_ids is not None and resolved.id not in allowed_profile_ids:
+                skipped += 1
+                warnings.append(
+                    f"{resolved.name} は利用権限がない Profile のため "
+                    "training data から除外しました。"
                 )
                 continue
             normalized_question = self._normalize_classifier_question(text)
@@ -8240,8 +8248,7 @@ class Nl2SqlService:
                         "recommendation_source": "classifier",
                         "classifier_version": classifier_prediction.classifier_version,
                         "category_scores": {
-                            candidate.category: candidate.score
-                            for candidate in classifier_prediction.candidates
+                            candidate.category: candidate.score for candidate in mapped_candidates
                         },
                         "warnings": classifier_warnings,
                     }

@@ -366,9 +366,9 @@ def test_feedback_and_training_candidate_api_contract(
         ),
         anon_request,
     )
-    deleted = nl2sql_router.delete_classifier_training_example(example_id)
+    deleted = nl2sql_router.delete_classifier_training_example(example_id, anon_request)
     with pytest.raises(HTTPException) as delete_missing:
-        nl2sql_router.delete_classifier_training_example(example_id)
+        nl2sql_router.delete_classifier_training_example(example_id, anon_request)
     cleared = nl2sql_router.clear_feedback(item.id, anon_request)
     with pytest.raises(HTTPException) as clear_missing:
         nl2sql_router.clear_feedback("missing", anon_request)

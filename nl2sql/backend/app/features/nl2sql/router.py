@@ -254,6 +254,17 @@ def _assert_profile_access(
     assert_profile_access(request, profile_id, default_profile=default_profile)
 
 
+def _quality_evaluation_job_for_access(
+    job_id: str, request: Request
+) -> QualityEvaluationJobSummary:
+    try:
+        job = quality_evaluation_service.get_job(job_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    _assert_profile_access(request, job.profile_id)
+    return job
+
+
 persistence_router = APIRouter(prefix="/nl2sql", tags=["nl2sql"])
 router = APIRouter(
     prefix="/nl2sql",
@@ -819,7 +830,10 @@ def create_profile_oracle_sync_job(
     "/oracle-sync-jobs/{job_id}",
     response_model=ApiResponse[ProfileSyncJobData],
 )
-def get_profile_oracle_sync_job(job_id: str) -> ApiResponse[ProfileSyncJobData]:
+def get_profile_oracle_sync_job(
+    job_id: str,
+    request: Request,
+) -> ApiResponse[ProfileSyncJobData]:
     """Oracle Profile 同期 job の進捗を返す。"""
 
     from .profile_sync import profile_sync_service
@@ -827,6 +841,7 @@ def get_profile_oracle_sync_job(job_id: str) -> ApiResponse[ProfileSyncJobData]:
     job = profile_sync_service.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="指定された同期 job が見つかりません。")
+    _assert_profile_access(request, job.profile_id)
     return ApiResponse(data=job)
 
 
@@ -835,12 +850,19 @@ def get_profile_oracle_sync_job(job_id: str) -> ApiResponse[ProfileSyncJobData]:
     response_model=ApiResponse[ProfileSyncJobData],
     status_code=202,
 )
-def retry_profile_oracle_sync_job(job_id: str) -> ApiResponse[ProfileSyncJobData]:
+def retry_profile_oracle_sync_job(
+    job_id: str,
+    request: Request,
+) -> ApiResponse[ProfileSyncJobData]:
     """失敗した Oracle Profile 同期 job を最新版 Profile で再試行する。"""
 
     from .profile_sync import profile_sync_service
 
     try:
+        job = profile_sync_service.get(job_id)
+        if job is None:
+            raise KeyError(job_id)
+        _assert_profile_access(request, job.profile_id)
         return ApiResponse(data=profile_sync_service.retry(job_id))
     except KeyError as exc:
         raise HTTPException(
@@ -1414,8 +1436,20 @@ def update_classifier_training_example(
 )
 def delete_classifier_training_example(
     example_id: str,
+    request: Request,
 ) -> ApiResponse[ClassifierTrainingDataData]:
     try:
+        current = next(
+            (
+                item
+                for item in nl2sql_service.classifier_training_data().examples
+                if item.id == example_id
+            ),
+            None,
+        )
+        if current is None:
+            raise KeyError(example_id)
+        _assert_profile_access(request, current.profile_id)
         data = nl2sql_service.delete_classifier_training_example(example_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Training data が見つかりません。") from exc
@@ -1441,6 +1475,7 @@ async def import_classifier_training_data(
                 content=content,
                 replace=replace,
                 profile_id=profile_id,
+                allowed_profile_ids=_allowed_profile_ids_for_request(request),
             )
         )
     except ValueError as exc:
@@ -1624,13 +1659,20 @@ async def create_quality_evaluation(
     response_model=ApiResponse[QualityEvaluationJobPage],
 )
 def list_quality_evaluations(
-    cursor: str | None = None, limit: int = 20
+    request: Request,
+    cursor: str | None = None,
+    limit: int = 20,
 ) -> ApiResponse[QualityEvaluationJobPage]:
     """最近の SQL生成評価 job をページ取得する。"""
     try:
-        return ApiResponse(data=quality_evaluation_service.list_jobs(cursor=cursor, limit=limit))
+        page = quality_evaluation_service.list_jobs(cursor=cursor, limit=limit)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    allowed_profile_ids = _allowed_profile_ids_for_request(request)
+    if allowed_profile_ids is not None:
+        items = [item for item in page.items if item.profile_id in allowed_profile_ids]
+        page = page.model_copy(update={"items": items, "total": len(items)})
+    return ApiResponse(data=page)
 
 
 @router.get(
@@ -1638,9 +1680,13 @@ def list_quality_evaluations(
     response_model=ApiResponse[QualityEvaluationResultPage],
 )
 def quality_evaluation_results(
-    job_id: str, cursor: str | None = None, limit: int = 25
+    job_id: str,
+    request: Request,
+    cursor: str | None = None,
+    limit: int = 25,
 ) -> ApiResponse[QualityEvaluationResultPage]:
     """SQL生成評価結果の明細をページ取得する。"""
+    _quality_evaluation_job_for_access(job_id, request)
     try:
         return ApiResponse(
             data=quality_evaluation_service.list_results(job_id=job_id, cursor=cursor, limit=limit)
@@ -1650,8 +1696,9 @@ def quality_evaluation_results(
 
 
 @router.get("/quality-evaluations/{job_id}/results.xlsx")
-def quality_evaluation_results_xlsx(job_id: str) -> Response:
+def quality_evaluation_results_xlsx(job_id: str, request: Request) -> Response:
     """完了した SQL生成評価の全結果を Excel で返す。"""
+    _quality_evaluation_job_for_access(job_id, request)
     try:
         filename, content = quality_evaluation_service.results_workbook(job_id)
     except ValueError as exc:
@@ -1667,9 +1714,13 @@ def quality_evaluation_results_xlsx(job_id: str) -> Response:
     "/quality-evaluations/{job_id}/cancel",
     response_model=ApiResponse[QualityEvaluationJobSummary],
 )
-def cancel_quality_evaluation(job_id: str) -> ApiResponse[QualityEvaluationJobSummary]:
+def cancel_quality_evaluation(
+    job_id: str,
+    request: Request,
+) -> ApiResponse[QualityEvaluationJobSummary]:
     """待機中または実行中の SQL生成評価 job を中止する。"""
     try:
+        _quality_evaluation_job_for_access(job_id, request)
         return ApiResponse(data=quality_evaluation_service.cancel_job(job_id))
     except QualityEvaluationJobStateError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -1681,9 +1732,13 @@ def cancel_quality_evaluation(job_id: str) -> ApiResponse[QualityEvaluationJobSu
     "/quality-evaluations/{job_id}",
     response_model=ApiResponse[QualityEvaluationJobSummary],
 )
-def delete_quality_evaluation(job_id: str) -> ApiResponse[QualityEvaluationJobSummary]:
+def delete_quality_evaluation(
+    job_id: str,
+    request: Request,
+) -> ApiResponse[QualityEvaluationJobSummary]:
     """完了済みの SQL生成評価 job と結果明細を削除する。"""
     try:
+        _quality_evaluation_job_for_access(job_id, request)
         return ApiResponse(data=quality_evaluation_service.delete_job(job_id))
     except QualityEvaluationJobStateError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -1695,10 +1750,13 @@ def delete_quality_evaluation(job_id: str) -> ApiResponse[QualityEvaluationJobSu
     "/quality-evaluations/{job_id}",
     response_model=ApiResponse[QualityEvaluationJobSummary],
 )
-def get_quality_evaluation(job_id: str) -> ApiResponse[QualityEvaluationJobSummary]:
+def get_quality_evaluation(
+    job_id: str,
+    request: Request,
+) -> ApiResponse[QualityEvaluationJobSummary]:
     """SQL生成評価 job の進捗と集計を返す。"""
     try:
-        return ApiResponse(data=quality_evaluation_service.get_job(job_id))
+        return ApiResponse(data=_quality_evaluation_job_for_access(job_id, request))
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
