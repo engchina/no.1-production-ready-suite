@@ -2031,6 +2031,12 @@ def test_async_semantic_publish_succeeds_and_is_idempotent(
     assert (
         api.published_markdown_for_revision(revision.id, profile_id="sales") == confirmed_markdown
     )
+    state = api.ontology_markdown_state("sales")
+    assert state.draft_revision is None
+    assert state.draft_markdown == ""
+    assert state.published_revision is not None
+    assert state.published_revision.id == revision.id
+    assert state.published_markdown == confirmed_markdown
     with pytest.raises(OntologyStateConflictError):
         publisher.start(revision.id, etag=revision.etag, idempotency_key="publish-after-ready")
     ignored = api.update_reasoning_status(revision.id, OntologyReasoningStatus.FAILED)

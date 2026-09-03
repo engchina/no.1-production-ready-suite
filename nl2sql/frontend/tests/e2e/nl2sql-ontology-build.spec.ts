@@ -891,6 +891,67 @@ test("AI オントロジー構築の実行 → 進捗 → Markdown Draft 編集 
   await page.screenshot({ path: testInfo.outputPath("ontology-build.png"), fullPage: true });
 });
 
+test("公開完了後は Published を表示し、公開済み revision を Draft として保持しない", async ({ page }) => {
+  const state = await mockApi(page);
+  state.jobPolls = 2;
+  await page.unroute("**/api/nl2sql/profiles/*/ontology-markdown");
+  await page.route("**/api/nl2sql/profiles/*/ontology-markdown", (route) =>
+    fulfillJson(
+      route,
+      state.published
+        ? {
+            draft_markdown: "",
+            published_markdown: state.publishedMarkdown || state.draftMarkdown,
+            draft_revision: null,
+            published_revision: {
+              id: "revision-draft-4",
+              version: 4,
+              status: "published",
+              schema_fingerprint: "fp",
+              etag: "draft-etag-4",
+              published_at: "2026-07-12T00:00:20Z",
+            },
+            draft_etag: "",
+            published_at: "2026-07-12T00:00:20Z",
+          }
+        : markdownDraftPayload(state.draftMarkdown)
+    )
+  );
+
+  await page.goto("/ontology-build?profile=default");
+
+  const markdown = page.getByTestId("ontology-build-markdown");
+  const draftEditor = markdown.getByTestId("ontology-markdown-draft-editor");
+  await expect(draftEditor).toHaveValue(/# Ontology Draft/);
+  await draftEditor.fill(`${generatedDraftMarkdown}\n\n## Manual Notes\n- 公開確認済み`);
+
+  await markdown
+    .getByTestId("ontology-publish-actions")
+    .getByRole("button", { name: "Ontology を公開" })
+    .click();
+
+  await expect(page.getByText("Ontology を公開しました。")).toBeVisible();
+  await expect(page.getByTestId("ontology-publish-status")).toContainText("完了");
+  await expect(markdown.getByTestId("ontology-markdown-tab-published-meta")).toHaveText("v4");
+
+  await markdown.getByRole("tab", { name: "Markdown Ontology Published" }).click();
+  await expect(markdown.getByTestId("ontology-markdown-published-viewer")).toContainText(
+    "Manual Notes"
+  );
+  await expect(markdown.getByTestId("ontology-markdown-published-meta")).toContainText(
+    /公開日時: 07\/12 \d{2}:00/u
+  );
+
+  await markdown.getByRole("tab", { name: "Markdown Ontology Draft" }).click();
+  await expect(markdown.getByTestId("ontology-markdown-tab-draft-meta")).toHaveText("未生成");
+  await expect(markdown.getByTestId("ontology-markdown-draft-empty")).toBeVisible();
+  await expect(
+    markdown
+      .getByTestId("ontology-publish-actions")
+      .getByRole("button", { name: "Ontology を公開" })
+  ).toBeDisabled();
+});
+
 test("オントロジー構築の処理状況は折りたたみでき、再実行で自動展開する", async ({ page }) => {
   const state = await mockApi(page);
   await page.goto("/ontology-build?profile=default");

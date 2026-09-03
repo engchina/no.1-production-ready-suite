@@ -88,7 +88,7 @@ const textareaClass =
 const markdownTextareaClass =
   "min-h-[22rem] w-full resize-y rounded-md border border-border bg-code p-3 font-mono text-xs leading-6 text-code-fg outline-none transition-colors placeholder:text-muted focus:border-primary focus:ring-2 focus:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-70";
 type MarkdownTab = "draft" | "published";
-type MarkdownStateApplyReason = "profile-load" | "background" | "build" | "save";
+type MarkdownStateApplyReason = "profile-load" | "background" | "build" | "save" | "publish";
 
 interface ApplyMarkdownStateOptions {
   reason?: MarkdownStateApplyReason;
@@ -615,6 +615,7 @@ export function OntologyBuildSection({
     const incomingDraftMarkdown = next.draft_markdown ?? "";
     const incomingDraftRevision = next.draft_revision;
     const incomingRevisionId = incomingDraftRevision?.id ?? "";
+    const incomingPublishedRevisionId = next.published_revision?.id ?? "";
     const incomingHasDraft = markdownStateHasDraft(
       next,
       incomingDraftMarkdown,
@@ -640,9 +641,14 @@ export function OntologyBuildSection({
       currentState?.draft_etag === localSavedDraft.etag &&
       currentDraftMarkdown === localSavedDraft.markdown &&
       next.draft_etag !== localSavedDraft.etag;
+    const currentDraftWasPublished =
+      reason === "publish" &&
+      currentRevisionId !== "" &&
+      incomingPublishedRevisionId === currentRevisionId;
     const preserveCurrentDraft =
       reason !== "profile-load" &&
       reason !== "save" &&
+      !currentDraftWasPublished &&
       currentHasDraft &&
       (!incomingHasDraft ||
         staleAfterLocalSave ||
@@ -676,7 +682,11 @@ export function OntologyBuildSection({
         etag: reconciled.draft_etag,
         markdown: reconciled.draft_markdown ?? "",
       };
-    } else if (reason === "profile-load" || incomingIsNewBuildRevision) {
+    } else if (
+      reason === "profile-load" ||
+      incomingIsNewBuildRevision ||
+      currentDraftWasPublished
+    ) {
       localSavedDraftRef.current = null;
     }
 
@@ -966,7 +976,7 @@ export function OntologyBuildSection({
           publishTerminalHandledRef.current = publishJobId;
           if (next.status === "succeeded") {
             if (profileIdRef.current) {
-              void refreshMarkdown(profileIdRef.current, { reason: "background" });
+              void refreshMarkdown(profileIdRef.current, { reason: "publish" });
             }
             toast.success(t("profiles.ontologyBuild.published"));
             void onPublished?.();
