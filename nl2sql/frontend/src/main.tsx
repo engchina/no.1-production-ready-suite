@@ -7,6 +7,7 @@ import { Toaster } from "@engchina/production-ready-ui";
 
 import { App } from "./App";
 import { ConfirmProvider } from "@/components/ui/confirm-dialog";
+import { installBrowserErrorGuards } from "@/lib/browser-error-guards";
 import { initTheme } from "@/lib/theme";
 import { t } from "@/lib/i18n";
 import { AuthProvider } from "@/features/security/AuthProvider";
@@ -14,6 +15,7 @@ import { AuthProvider } from "@/features/security/AuthProvider";
 import "./globals.css";
 
 // 永続化テーマを描画前に適用（FOUC 回避）＋ store/OS 変更を購読。
+installBrowserErrorGuards();
 initTheme();
 
 const root = document.getElementById("root");

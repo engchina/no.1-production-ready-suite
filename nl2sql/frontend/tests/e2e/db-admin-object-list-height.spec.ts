@@ -39,6 +39,27 @@ async function expectNoHorizontalScroll(page: Page) {
   expect(size.scrollWidth).toBeLessThanOrEqual(size.width + 1);
 }
 
+async function dispatchDevToolsWebVitalsStartTimeError(page: Page) {
+  return page.evaluate(() => {
+    const error = new Error("Cannot read properties of undefined (reading 'startTime')");
+    error.stack = [
+      "TypeError: Cannot read properties of undefined (reading 'startTime')",
+      "    at et.reportAllChanges (<anonymous>:2:19429)",
+      "    at n.timeout (<anonymous>:2:5652)",
+    ].join("\n");
+    const event = new ErrorEvent("error", {
+      cancelable: true,
+      message: "Uncaught TypeError: Cannot read properties of undefined (reading 'startTime')",
+      filename: "VM327",
+      lineno: 2,
+      colno: 19429,
+      error,
+    });
+    window.dispatchEvent(event);
+    return event.defaultPrevented;
+  });
+}
+
 async function expectEqualFilterWidths(search: Locator, owner: Locator) {
   await expect
     .poll(async () => {
@@ -1382,6 +1403,20 @@ test("テーブル管理・ビュー管理の一覧件数 badge は API 総数�
   const viewGrid = page.locator("section[aria-labelledby='view-grid-heading']");
   await expect(viewGrid.getByText("2 件", { exact: true })).toBeVisible();
   await expect(page.getByTestId("view-management-footer")).toContainText("2 / 2 件を表示");
+});
+
+test("テーブル管理は DevTools web-vitals の startTime 例外だけを console に出さない", async ({ page }) => {
+  const consoleErrors: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") consoleErrors.push(message.text());
+  });
+  await mockPagedDbAdminObjectsApi(page);
+  await page.goto("/table-management");
+  await expect(page.getByTestId("table-management-grid")).toBeVisible();
+
+  expect(await dispatchDevToolsWebVitalsStartTimeError(page)).toBe(true);
+  await page.waitForTimeout(50);
+  expect(consoleErrors).toEqual([]);
 });
 
 test("テーブル管理・ビュー管理は共通検索と所有者入力で一覧を絞り込む", async ({ page }) => {
