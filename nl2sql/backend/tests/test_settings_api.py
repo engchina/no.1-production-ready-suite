@@ -1604,6 +1604,60 @@ def test_update_upload_storage_persists_env_and_keeps_namespace(
     assert "OBJECT_STORAGE_BUCKET=rag-uploads" in env_text
 
 
+def test_update_upload_storage_persists_payload_region(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    settings = get_settings()
+    env_file = tmp_path / ".env"
+    monkeypatch.setattr(settings_router, "BACKEND_ENV_FILE", env_file)
+    monkeypatch.setattr(settings, "object_storage_region", "")
+    monkeypatch.setattr(settings, "object_storage_namespace", "")
+
+    resp = client.patch(
+        "/api/settings/upload-storage",
+        json={
+            "backend": "oci",
+            "local_storage_dir": "/u01/data/production-ready-nl2sql",
+            "object_storage_region": "ap-osaka-1",
+            "object_storage_namespace": "existingnamespace",
+            "object_storage_bucket": "nl2sql-originals",
+        },
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["object_storage_region"] == "ap-osaka-1"
+    assert data["object_storage_namespace"] == "existingnamespace"
+    env_text = env_file.read_text(encoding="utf-8")
+    assert "OBJECT_STORAGE_REGION=ap-osaka-1" in env_text
+    assert "OBJECT_STORAGE_NAMESPACE=existingnamespace" in env_text
+
+
+def test_update_upload_storage_rejects_incomplete_oci_settings(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    settings = get_settings()
+    env_file = tmp_path / ".env"
+    monkeypatch.setattr(settings_router, "BACKEND_ENV_FILE", env_file)
+    monkeypatch.setattr(settings, "object_storage_region", "")
+    monkeypatch.setattr(settings, "object_storage_namespace", "")
+
+    resp = client.patch(
+        "/api/settings/upload-storage",
+        json={
+            "backend": "oci",
+            "local_storage_dir": "/u01/data/production-ready-nl2sql",
+            "object_storage_bucket": "nl2sql-originals",
+        },
+    )
+
+    assert resp.status_code == 422
+    assert "OCI Object Storage 設定が不足しています" in resp.text
+    assert not env_file.exists()
+
+
 def test_upload_storage_defaults_use_nl2sql_names(monkeypatch: MonkeyPatch) -> None:
     monkeypatch.delenv("LOCAL_STORAGE_DIR", raising=False)
     monkeypatch.delenv("OBJECT_STORAGE_BUCKET", raising=False)

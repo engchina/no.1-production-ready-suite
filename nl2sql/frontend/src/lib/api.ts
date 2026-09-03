@@ -599,6 +599,7 @@ export interface UploadStorageSettingsData {
 export interface UploadStorageSettingsUpdate {
   backend: UploadStorageBackend;
   local_storage_dir: string;
+  object_storage_region?: string;
   object_storage_namespace?: string;
   object_storage_bucket: string;
 }

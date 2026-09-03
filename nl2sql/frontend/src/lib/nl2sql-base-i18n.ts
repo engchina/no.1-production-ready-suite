@@ -905,17 +905,21 @@ export const ja = {
   "settings.uploadStorage.backend.ociDescription":
     "OCI 認証設定の namespace と指定 bucket へ保存します。",
   "settings.uploadStorage.field.localStorageDir": "ローカル保存ディレクトリ",
+  "settings.uploadStorage.field.objectStorageRegion": "Object Storage リージョン",
   "settings.uploadStorage.field.objectStorageNamespace": "Object Storage ネームスペース",
   "settings.uploadStorage.field.objectStorageBucket": "Object Storage バケット",
   "settings.uploadStorage.helper.localStorageDir":
     "バックエンドプロセスから作成・書き込みできるディレクトリを指定します。",
+  "settings.uploadStorage.helper.objectStorageRegion":
+    "原本ファイルを保存する bucket のリージョン。OCI 認証設定の Object Storage リージョンと合わせます。",
   "settings.uploadStorage.helper.objectStorageNamespace":
-    "原本ファイルを保存する OCI Object Storage namespace。",
+    "OCI 認証設定で保存済みの Object Storage namespace を使用します。",
   "settings.uploadStorage.helper.objectStorageBucket":
     "Object Storage ネームスペースは OCI 認証設定の値を使用します。原本ファイルを保存する bucket 名を指定します。",
   "settings.uploadStorage.actions.save": "保存",
   "settings.uploadStorage.actions.saving": "保存中…",
   "settings.uploadStorage.actions.saved": "保存しました",
+  "settings.uploadStorage.actions.openOciSettings": "OCI 認証設定を開く",
   "settings.uploadStorage.env.title": ".env プレビュー",
   "settings.uploadStorage.env.description":
     "保存時に backend/.env へ反映されるアップロード保存先の値です。",
@@ -929,10 +933,14 @@ export const ja = {
   "settings.uploadStorage.status.maxUploadSize": "最大アップロードサイズ",
   "settings.uploadStorage.status.localStorageDir": "ローカル保存先",
   "settings.uploadStorage.status.objectStorage": "Object Storage",
+  "settings.uploadStorage.status.ociSettingsIncomplete":
+    "OCI Object Storage を使うには、リージョンとネームスペースの設定が必要です。",
   "settings.uploadStorage.source.runtime": "backend/.env + 現在のプロセス設定",
   "settings.uploadStorage.validation.required": "値を入力してください。",
   "settings.uploadStorage.validation.localStorageDir":
     "ローカル保存ディレクトリを入力してください。",
+  "settings.uploadStorage.validation.objectStorageRegion":
+    "OCI 認証設定で Object Storage リージョンを選択してください。",
   "settings.uploadStorage.validation.objectStorageNamespace":
     "OCI 認証設定で Object Storage ネームスペースを設定してください。",
   "settings.uploadStorage.validation.objectStorageName":

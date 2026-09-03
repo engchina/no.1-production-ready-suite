@@ -4,8 +4,10 @@ import {
   Cloud,
   HardDrive,
   Save,
+  Settings2,
 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
+import { useNavigate } from "react-router-dom";
 import { toast } from "@engchina/production-ready-ui";
 
 import { ErrorState } from "@/components/StateViews";
@@ -15,6 +17,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { FieldError } from "@/components/ui/field-error";
 import { FormStatus } from "@/components/ui/form-status";
 import { FieldLabel, RequiredFieldsNote } from "@/components/ui/required-field";
+import { SelectField, type SelectFieldOption } from "@/components/ui/select-field";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   ApiError,
@@ -24,38 +27,47 @@ import {
 } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { useUpdateUploadStorageSettings, useUploadStorageSettings } from "@/lib/queries";
-import { readStoredOciSettingsDraft } from "@/lib/oci-settings";
+import { APP_ROUTES } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 
 interface UploadStorageForm {
   backend: UploadStorageBackend;
   localStorageDir: string;
+  objectStorageRegion: string;
+  objectStorageNamespace: string;
   objectStorageBucket: string;
 }
 
-type FieldErrors = Partial<Record<keyof UploadStorageForm | "objectStorageNamespace", string>>;
+type FieldErrors = Partial<Record<keyof UploadStorageForm, string>>;
 
 const EMPTY_FORM: UploadStorageForm = {
   backend: "local",
   localStorageDir: "",
+  objectStorageRegion: "",
+  objectStorageNamespace: "",
   objectStorageBucket: "",
 };
 
 const DEFAULT_LOCAL_STORAGE_DIR = "/u01/data/production-ready-nl2sql";
 const DEFAULT_OBJECT_STORAGE_BUCKET = "nl2sql-originals";
+const OBJECT_STORAGE_NAME_PATTERN = /^[A-Za-z0-9._-]+$/;
+const OCI_REGION_OPTIONS = [
+  { value: "ap-tokyo-1", label: "ap-tokyo-1" },
+  { value: "ap-osaka-1", label: "ap-osaka-1" },
+  { value: "us-chicago-1", label: "us-chicago-1" },
+] as const satisfies readonly SelectFieldOption<string>[];
 
 /** ドキュメントアップロード原本の保存先設定。 */
 export function UploadStorageSettingsClient() {
   const query = useUploadStorageSettings();
   const save = useUpdateUploadStorageSettings();
+  const navigate = useNavigate();
   const [form, setForm] = useState<UploadStorageForm>(EMPTY_FORM);
-  const [objectStorageNamespace, setObjectStorageNamespace] = useState("");
   const [errors, setErrors] = useState<FieldErrors>({});
 
   useEffect(() => {
     if (query.data) {
       setForm(formFromSettings(query.data));
-      setObjectStorageNamespace(resolveObjectStorageNamespace(query.data));
       setErrors({});
     }
   }, [query.data]);
@@ -74,11 +86,17 @@ export function UploadStorageSettingsClient() {
   }
 
   function submit() {
+    const validationErrors = validateUploadStorageForm(form);
+    if (Object.keys(validationErrors).length > 0) {
+      setErrors(validationErrors);
+      save.reset();
+      return;
+    }
+
     setErrors({});
-    save.mutate(payloadFromForm(form, objectStorageNamespace), {
+    save.mutate(payloadFromForm(form), {
       onSuccess: (data) => {
         setForm(formFromSettings(data));
-        setObjectStorageNamespace(resolveObjectStorageNamespace(data));
         setErrors({});
         toast.success(t("settings.uploadStorage.actions.saved"));
       },
@@ -121,6 +139,9 @@ export function UploadStorageSettingsClient() {
 
   const saveError =
     save.error instanceof ApiError ? save.error.message : t("settings.uploadStorage.saveError");
+  const ociSettingsMissing =
+    form.backend === "oci" &&
+    (!form.objectStorageRegion.trim() || !form.objectStorageNamespace.trim());
 
   return (
     <div className="space-y-5 p-8">
@@ -189,7 +210,33 @@ export function UploadStorageSettingsClient() {
                 required
               />
             ) : (
-              <div className="max-w-xl">
+              <div className="space-y-4">
+                <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+                  <SelectField
+                    id="upload-storage-object-storage-region"
+                    label={t("settings.uploadStorage.field.objectStorageRegion")}
+                    value={form.objectStorageRegion}
+                    options={OCI_REGION_OPTIONS}
+                    onValueChange={(value) => updateForm({ objectStorageRegion: value })}
+                    helper={t("settings.uploadStorage.helper.objectStorageRegion")}
+                    placeholder={t("settings.oci.placeholder.region")}
+                    error={errors.objectStorageRegion}
+                    required
+                    requiredLabel={t("settings.oci.required")}
+                    buttonClassName="h-11"
+                  />
+                  <TextField
+                    id="upload-storage-object-storage-namespace"
+                    label={t("settings.uploadStorage.field.objectStorageNamespace")}
+                    value={form.objectStorageNamespace}
+                    onChange={() => undefined}
+                    helper={t("settings.uploadStorage.helper.objectStorageNamespace")}
+                    placeholder="mytenancynamespace"
+                    error={errors.objectStorageNamespace}
+                    readOnly
+                    required
+                  />
+                </div>
                 <TextField
                   id="upload-storage-bucket"
                   label={t("settings.uploadStorage.field.objectStorageBucket")}
@@ -200,11 +247,24 @@ export function UploadStorageSettingsClient() {
                   error={errors.objectStorageBucket}
                   required
                 />
-                <FieldError
-                  id="uploadStorage-objectStorageNamespace-error"
-                  className="mt-2"
-                  message={errors.objectStorageNamespace}
-                />
+                {ociSettingsMissing ? (
+                  <div className="flex flex-wrap items-center gap-3 rounded-md border border-warning/30 bg-warning-bg p-3">
+                    <FormStatus
+                      tone="warning"
+                      message={t("settings.uploadStorage.status.ociSettingsIncomplete")}
+                    />
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="lg"
+                      className="min-h-[44px]"
+                      onClick={() => navigate(APP_ROUTES.settingsOci)}
+                    >
+                      <Settings2 size={15} aria-hidden />
+                      {t("settings.uploadStorage.actions.openOciSettings")}
+                    </Button>
+                  </div>
+                ) : null}
               </div>
             )}
           </CardContent>
@@ -279,6 +339,7 @@ function TextField({
   helper,
   placeholder,
   error,
+  readOnly = false,
   required = false,
 }: {
   id: string;
@@ -288,6 +349,7 @@ function TextField({
   helper: string;
   placeholder: string;
   error?: string;
+  readOnly?: boolean;
   required?: boolean;
 }) {
   const hintId = `${id}-hint`;
@@ -300,14 +362,19 @@ function TextField({
         id={id}
         type="text"
         value={value}
+        readOnly={readOnly}
+        aria-readonly={readOnly || undefined}
         required={required}
         aria-required={required}
-        onChange={(event) => onChange(event.target.value)}
+        onChange={(event) => {
+          if (!readOnly) onChange(event.target.value);
+        }}
         placeholder={placeholder}
         aria-invalid={Boolean(error)}
         aria-describedby={error ? `${hintId} ${errorId}` : hintId}
         className={cn(
           "h-11 w-full rounded-md border bg-card px-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted/70 focus-visible:border-primary",
+          readOnly && "cursor-default bg-background text-muted",
           error ? "border-danger" : "border-border"
         )}
       />
@@ -323,27 +390,51 @@ function formFromSettings(settings: UploadStorageSettingsData): UploadStorageFor
   return {
     backend: settings.backend,
     localStorageDir: settings.local_storage_dir,
+    objectStorageRegion: settings.object_storage_region,
+    objectStorageNamespace: settings.object_storage_namespace,
     objectStorageBucket: settings.object_storage_bucket,
   };
 }
 
-function payloadFromForm(
-  form: UploadStorageForm,
-  objectStorageNamespace: string
-): UploadStorageSettingsUpdate {
+function payloadFromForm(form: UploadStorageForm): UploadStorageSettingsUpdate {
   const payload: UploadStorageSettingsUpdate = {
     backend: form.backend,
     local_storage_dir: form.localStorageDir,
     object_storage_bucket: form.objectStorageBucket,
   };
   if (form.backend === "oci") {
-    payload.object_storage_namespace = objectStorageNamespace;
+    payload.object_storage_region = form.objectStorageRegion;
+    payload.object_storage_namespace = form.objectStorageNamespace;
   }
   return payload;
 }
 
-function resolveObjectStorageNamespace(settings: UploadStorageSettingsData): string {
-  const runtimeNamespace = settings.object_storage_namespace.trim();
-  if (runtimeNamespace) return runtimeNamespace;
-  return readStoredOciSettingsDraft().objectStorageNamespace;
+function validateUploadStorageForm(form: UploadStorageForm): FieldErrors {
+  const errors: FieldErrors = {};
+  if (form.backend === "local") {
+    if (!form.localStorageDir.trim()) {
+      errors.localStorageDir = t("settings.uploadStorage.validation.localStorageDir");
+    }
+    return errors;
+  }
+
+  const region = form.objectStorageRegion.trim();
+  const namespace = form.objectStorageNamespace.trim();
+  const bucket = form.objectStorageBucket.trim();
+  if (!region) {
+    errors.objectStorageRegion = t("settings.uploadStorage.validation.objectStorageRegion");
+  }
+  if (!namespace) {
+    errors.objectStorageNamespace = t(
+      "settings.uploadStorage.validation.objectStorageNamespace"
+    );
+  } else if (!OBJECT_STORAGE_NAME_PATTERN.test(namespace)) {
+    errors.objectStorageNamespace = t("settings.uploadStorage.validation.objectStorageName");
+  }
+  if (!bucket) {
+    errors.objectStorageBucket = t("settings.uploadStorage.validation.required");
+  } else if (!OBJECT_STORAGE_NAME_PATTERN.test(bucket)) {
+    errors.objectStorageBucket = t("settings.uploadStorage.validation.objectStorageName");
+  }
+  return errors;
 }

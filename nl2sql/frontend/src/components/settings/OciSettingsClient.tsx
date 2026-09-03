@@ -41,6 +41,7 @@ import {
   OCI_SETTINGS_STORAGE_KEY,
   normalizeOciSettingsDraft,
   readStoredOciSettingsDraft,
+  validateOciSettingsDraft,
   type OciSettingsDraft,
   type OciSettingsField,
   type OciValidationCode,
@@ -155,6 +156,17 @@ export function OciSettingsClient() {
   }
 
   async function saveAuthDraft() {
+    const validationErrors = validationErrorsForFields(draft, AUTH_PROFILE_FIELDS);
+    if (hasValidationErrors(validationErrors)) {
+      setErrors((current) => ({
+        ...clearSectionErrors(current, AUTH_PROFILE_FIELDS),
+        ...validationErrors,
+      }));
+      setAuthSaveState("error");
+      setConfigTestState({ phase: "idle" });
+      return;
+    }
+
     setErrors((current) => clearSectionErrors(current, AUTH_PROFILE_FIELDS));
     setAuthSaveState("loading");
     try {
@@ -197,6 +209,16 @@ export function OciSettingsClient() {
   }
 
   async function saveStorageDraft() {
+    const validationErrors = validationErrorsForFields(draft, OBJECT_STORAGE_FIELDS);
+    if (hasValidationErrors(validationErrors)) {
+      setErrors((current) => ({
+        ...clearSectionErrors(current, OBJECT_STORAGE_FIELDS),
+        ...validationErrors,
+      }));
+      setStorageSaveState("error");
+      return;
+    }
+
     setErrors((current) => clearSectionErrors(current, OBJECT_STORAGE_FIELDS));
     setStorageSaveState("loading");
     try {
@@ -995,6 +1017,24 @@ function clearSectionErrors(
     delete next[field];
   }
   return next;
+}
+
+function validationErrorsForFields(
+  draft: OciSettingsDraft,
+  fields: readonly OciSettingsField[]
+): OciValidationResult {
+  const allErrors = validateOciSettingsDraft(draft);
+  const sectionErrors: OciValidationResult = {};
+  for (const field of fields) {
+    if (allErrors[field]) {
+      sectionErrors[field] = allErrors[field];
+    }
+  }
+  return sectionErrors;
+}
+
+function hasValidationErrors(errors: OciValidationResult): boolean {
+  return Object.keys(errors).length > 0;
 }
 
 function sameDraft(left: OciSettingsDraft, right: OciSettingsDraft): boolean {

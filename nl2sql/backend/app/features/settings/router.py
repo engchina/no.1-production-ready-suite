@@ -722,6 +722,7 @@ def update_upload_storage_settings(
 ) -> ApiResponse[UploadStorageSettingsData]:
     settings = get_settings()
     candidate = _upload_storage_settings_candidate(settings, payload)
+    _validate_upload_storage_settings(candidate)
     _persist_upload_storage_settings(candidate)
     _apply_upload_storage_settings(settings, candidate)
     return ApiResponse(data=_upload_storage_settings_data(settings))
@@ -1847,16 +1848,17 @@ def _upload_storage_settings_data(settings: Settings) -> UploadStorageSettingsDa
     namespace = getattr(settings, "object_storage_namespace", "")
     bucket = getattr(settings, "object_storage_bucket", "")
     local_dir = getattr(settings, "local_storage_dir", "")
+    region = getattr(settings, "object_storage_region", "") or getattr(settings, "oci_region", "")
     readiness = (
         "ok"
-        if (backend == "local" and local_dir) or (backend == "oci" and namespace and bucket)
+        if (backend == "local" and local_dir)
+        or (backend == "oci" and region and namespace and bucket)
         else "missing"
     )
     return UploadStorageSettingsData(
         backend=backend,
         local_storage_dir=local_dir,
-        object_storage_region=getattr(settings, "object_storage_region", "")
-        or getattr(settings, "oci_region", ""),
+        object_storage_region=region,
         object_storage_namespace=namespace,
         object_storage_bucket=bucket,
         readiness=readiness,
@@ -1872,6 +1874,11 @@ def _upload_storage_settings_candidate(
     updates = {
         "upload_storage_backend": payload.backend,
         "local_storage_dir": payload.local_storage_dir.strip(),
+        "object_storage_region": (
+            payload.object_storage_region.strip()
+            if payload.object_storage_region is not None
+            else base.object_storage_region or base.oci_region
+        ),
         "object_storage_namespace": (
             payload.object_storage_namespace.strip()
             if payload.object_storage_namespace is not None
@@ -1880,6 +1887,26 @@ def _upload_storage_settings_candidate(
         "object_storage_bucket": payload.object_storage_bucket.strip(),
     }
     return base.model_copy(update=updates)
+
+
+def _validate_upload_storage_settings(settings: Settings) -> None:
+    if settings.upload_storage_backend != "oci":
+        return
+
+    missing_fields = [
+        label
+        for label, value in (
+            ("Object Storage リージョン", settings.object_storage_region),
+            ("Object Storage namespace", settings.object_storage_namespace),
+            ("Object Storage bucket", settings.object_storage_bucket),
+        )
+        if not value.strip()
+    ]
+    if missing_fields:
+        raise HTTPException(
+            status_code=422,
+            detail="OCI Object Storage 設定が不足しています: " + ", ".join(missing_fields),
+        )
 
 
 def _persist_upload_storage_settings(settings: Settings) -> None:

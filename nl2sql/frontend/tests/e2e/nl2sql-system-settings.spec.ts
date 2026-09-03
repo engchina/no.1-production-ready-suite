@@ -95,6 +95,20 @@ function modelSettingsFixture(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function uploadStorageFixture(overrides: Record<string, unknown> = {}) {
+  return {
+    backend: "local",
+    local_storage_dir: "/u01/data/production-ready-nl2sql",
+    object_storage_region: "ap-osaka-1",
+    object_storage_namespace: "exampletenancy",
+    object_storage_bucket: "nl2sql-originals",
+    readiness: "ok",
+    max_upload_bytes: 104857600,
+    config_source: "runtime",
+    ...overrides,
+  };
+}
+
 async function fulfillJson(route: Route, data: unknown) {
   await route.fulfill({
     status: 200,
@@ -125,16 +139,7 @@ async function mockNl2sqlSettingsApi(page: Page) {
     config_source: "runtime",
   };
 
-  const uploadStorage = {
-    backend: "local",
-    local_storage_dir: "/u01/data/production-ready-nl2sql",
-    object_storage_region: "ap-osaka-1",
-    object_storage_namespace: "exampletenancy",
-    object_storage_bucket: "nl2sql-originals",
-    readiness: "ok",
-    max_upload_bytes: 104857600,
-    config_source: "runtime",
-  };
+  const uploadStorage = uploadStorageFixture();
 
   const modelSettings = modelSettingsFixture();
 
@@ -687,6 +692,8 @@ test("NL2SQL のシステム設定画面を表示できる", async ({ page }) =>
   );
   await expectNoOperationsMemoOrReadiness(page);
   await page.getByRole("radio", { name: /OCI Object Storage/ }).check();
+  await expect(page.getByLabel("Object Storage リージョン")).toContainText("ap-osaka-1");
+  await expect(page.getByLabel("Object Storage ネームスペース")).toHaveValue("exampletenancy");
   await expect(page.getByLabel("Object Storage バケット")).toHaveValue("nl2sql-originals");
   await expectNoHorizontalOverflow(page);
   await page.setViewportSize({ width: 375, height: 812 });
@@ -743,6 +750,129 @@ test("NL2SQL のシステム設定画面を表示できる", async ({ page }) =>
   await page.getByRole("button", { name: "保存", exact: true }).click();
   await expect(page.getByText("操作履歴")).toBeVisible();
   await expect(page.getByText("ADB OCID が設定されています。")).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+});
+
+test("OCI 認証設定は保存前に必須値と形式を検証する", async ({ page }) => {
+  let authPatchRequests = 0;
+  let storagePatchRequests = 0;
+
+  await page.unroute("**/api/settings/oci");
+  await page.route("**/api/settings/oci", async (route) => {
+    if (route.request().method() === "PATCH") {
+      authPatchRequests += 1;
+    }
+    await fulfillJson(route, {
+      config_file: "~/.oci/config",
+      profile: "DEFAULT",
+      user: "",
+      fingerprint: "",
+      tenancy: "",
+      region: "",
+      key_file: "~/.oci/oci_api_key.pem",
+      key_file_exists: false,
+      config_file_exists: false,
+      config_source: "runtime",
+    });
+  });
+  await page.unroute("**/api/settings/upload-storage");
+  await page.route("**/api/settings/upload-storage", (route) =>
+    fulfillJson(
+      route,
+      uploadStorageFixture({
+        object_storage_region: "",
+        object_storage_namespace: "",
+      })
+    )
+  );
+  await page.unroute("**/api/settings/oci/object-storage");
+  await page.route("**/api/settings/oci/object-storage", async (route) => {
+    if (route.request().method() === "PATCH") {
+      storagePatchRequests += 1;
+    }
+    await fulfillJson(
+      route,
+      uploadStorageFixture({
+        object_storage_region: "",
+        object_storage_namespace: "",
+      })
+    );
+  });
+
+  await page.goto("/settings/oci");
+  await page.getByRole("button", { name: "OCI 認証設定: OCI 設定を保存" }).click();
+
+  await expect(page.getByLabel("ユーザー OCID")).toHaveAttribute("aria-invalid", "true");
+  await expect(page.getByText("値を入力してください。").first()).toBeVisible();
+  expect(authPatchRequests).toBe(0);
+
+  await page.getByLabel("ユーザー OCID").fill("not-a-user-ocid");
+  await page.getByLabel("フィンガープリント").fill("not-a-fingerprint");
+  await page.getByLabel("テナンシ OCID").fill("not-a-tenancy-ocid");
+  await page.getByRole("button", { name: "OCI 認証設定: OCI 設定を保存" }).click();
+
+  await expect(page.getByText(/ユーザー OCID は ocid1\.user\./)).toBeVisible();
+  await expect(page.getByText(/fingerprint は 16 進数/)).toBeVisible();
+  await expect(page.getByText(/テナンシ OCID は ocid1\.tenancy\./)).toBeVisible();
+  expect(authPatchRequests).toBe(0);
+
+  await page.getByRole("button", { name: "Object Storage: 保存" }).click();
+
+  await expect(page.getByLabel("Object Storage リージョン")).toHaveAttribute(
+    "aria-invalid",
+    "true"
+  );
+  await expect(
+    page.getByRole("textbox", { name: /Object Storage ネームスペース/ })
+  ).toHaveAttribute("aria-invalid", "true");
+  await expect(page.getByText("値を入力してください。").first()).toBeVisible();
+  expect(storagePatchRequests).toBe(0);
+  await expectNoHorizontalOverflow(page);
+});
+
+test("アップロード保存先は OCI の region と namespace 不足を保存前に止める", async ({
+  page,
+}) => {
+  let uploadStoragePatchRequests = 0;
+
+  await page.unroute("**/api/settings/upload-storage");
+  await page.route("**/api/settings/upload-storage", async (route) => {
+    if (route.request().method() === "PATCH") {
+      uploadStoragePatchRequests += 1;
+    }
+    await fulfillJson(
+      route,
+      uploadStorageFixture({
+        object_storage_region: "",
+        object_storage_namespace: "",
+      })
+    );
+  });
+
+  await page.goto("/settings/upload-storage");
+  await page.getByRole("radio", { name: /OCI Object Storage/ }).check();
+
+  await expect(page.getByLabel("Object Storage リージョン")).toBeVisible();
+  await expect(page.getByLabel("Object Storage ネームスペース")).toHaveValue("");
+  await expect(
+    page.getByText(
+      "OCI Object Storage を使うには、リージョンとネームスペースの設定が必要です。"
+    )
+  ).toBeVisible();
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+
+  await expect(
+    page.getByText("OCI 認証設定で Object Storage リージョンを選択してください。")
+  ).toBeVisible();
+  await expect(
+    page.getByText("OCI 認証設定で Object Storage ネームスペースを設定してください。")
+  ).toBeVisible();
+  expect(uploadStoragePatchRequests).toBe(0);
+  await expectNoHorizontalOverflow(page);
+
+  await page.setViewportSize({ width: 375, height: 812 });
+  await expect(page.getByLabel("Object Storage リージョン")).toBeVisible();
+  await expect(page.getByLabel("Object Storage ネームスペース")).toBeVisible();
   await expectNoHorizontalOverflow(page);
 });
 

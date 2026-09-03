@@ -405,6 +405,7 @@ class UploadStorageSettingsUpdate(BaseModel):
 
     backend: UploadStorageBackend
     local_storage_dir: str = Field(default="", max_length=1024)
+    object_storage_region: str | None = Field(default=None, max_length=128)
     object_storage_namespace: str | None = Field(default=None, max_length=256)
     object_storage_bucket: str = Field(default="", max_length=256)
 
@@ -414,10 +415,10 @@ class UploadStorageSettingsUpdate(BaseModel):
         """前後空白を設定値へ混入させない。"""
         return value.strip()
 
-    @field_validator("object_storage_namespace")
+    @field_validator("object_storage_region", "object_storage_namespace")
     @classmethod
     def strip_optional_text(cls, value: str | None) -> str | None:
-        """省略時は既存の OCI 認証設定 namespace を保持する。"""
+        """省略時は既存の OCI Object Storage 設定を保持する。"""
         return value.strip() if value is not None else None
 
     @field_validator("object_storage_namespace", "object_storage_bucket")
