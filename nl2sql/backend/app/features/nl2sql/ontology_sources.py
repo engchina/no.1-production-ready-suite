@@ -27,6 +27,7 @@ from .ontology_models import (
     OntologyEvidence,
     OntologyEvidenceLocatorKind,
     OntologySourceDocument,
+    OntologySourceRole,
     QaPair,
 )
 from .tabular_files import (
@@ -218,6 +219,7 @@ class OntologySourceStorage:
         *,
         profile_id: str,
         upload: UploadFile,
+        source_role: OntologySourceRole = OntologySourceRole.SOURCE,
     ) -> OntologySourceDocument:
         filename = Path(upload.filename or "source").name
         suffix = Path(filename).suffix.lower()
@@ -274,6 +276,7 @@ class OntologySourceStorage:
             id=source_id,
             profile_id=profile_id,
             filename=filename,
+            source_role=source_role,
             media_type=media_type,
             size_bytes=total,
             sha256=digest.hexdigest(),

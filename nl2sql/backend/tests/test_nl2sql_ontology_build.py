@@ -54,6 +54,7 @@ from app.features.nl2sql.ontology_models import (
     OntologyRevisionStatus,
     OntologySourceDocument,
     OntologySourceKind,
+    OntologySourceRole,
     OntologySourceStatus,
     PhysicalColumnRef,
     PhysicalMapping,
@@ -1153,6 +1154,56 @@ def test_list_profile_jobs_returns_newest_first_with_limit(
     assert [job.id for job in jobs] == [third.id, second.id]
     all_jobs = service.list_profile_jobs("sales", limit=10)
     assert [job.id for job in all_jobs] == [third.id, second.id, first.id]
+
+
+def test_list_profile_source_documents_returns_newest_first_with_legacy_role(
+    harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+) -> None:
+    runtime, store, _legacy = harness
+    service = OntologyBuildService(runtime)
+    old_source = OntologySourceDocument(
+        id="ontology_source_old",
+        profile_id="sales",
+        filename="old-rules.md",
+        media_type="text/markdown",
+        size_bytes=12,
+        sha256="0" * 64,
+        storage_uri="/tmp/old-rules.md",
+    )
+    qa_source = OntologySourceDocument(
+        id="ontology_source_qa",
+        profile_id="sales",
+        filename="qa-cases.csv",
+        source_role=OntologySourceRole.QA,
+        media_type="text/csv",
+        size_bytes=48,
+        sha256="1" * 64,
+        storage_uri="/tmp/qa-cases.csv",
+    )
+    legacy_payload = old_source.model_dump(mode="json")
+    legacy_payload.pop("source_role")
+    store.save_document(
+        "source_documents",
+        {
+            "source_document_id": old_source.id,
+            "profile_id": old_source.profile_id,
+            "status": old_source.status.value,
+            "sha256": old_source.sha256,
+            "payload": legacy_payload,
+        },
+    )
+    service._save_source_document(qa_source)  # noqa: SLF001 - persisted source fixture
+
+    listed = service.list_profile_source_documents("sales", limit=1)
+
+    assert [(source.filename, source.source_role) for source in listed] == [
+        ("qa-cases.csv", OntologySourceRole.QA)
+    ]
+    all_listed = service.list_profile_source_documents("sales", limit=10)
+    assert {source.filename: source.source_role for source in all_listed} == {
+        "old-rules.md": OntologySourceRole.SOURCE,
+        "qa-cases.csv": OntologySourceRole.QA,
+    }
 
 
 def test_cancel_single_job_is_idempotent_and_blocks_worker(

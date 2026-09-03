@@ -11108,6 +11108,9 @@ test("実行中 DB 構造再取得を全10ルートと再読込後に復元し�
   await page.route("**/api/nl2sql/profiles/*/ontology-build-jobs**", (route) =>
     fulfillJson(route, { jobs: [] })
   );
+  await page.route("**/api/nl2sql/profiles/*/ontology-source-documents**", (route) =>
+    fulfillJson(route, { source_documents: [] })
+  );
   await page.route("**/api/nl2sql/profiles/*/ontology-markdown", (route) =>
     fulfillJson(route, {
       draft_markdown: "",

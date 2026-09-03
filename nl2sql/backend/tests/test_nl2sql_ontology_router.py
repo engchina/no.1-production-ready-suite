@@ -39,6 +39,7 @@ from app.features.nl2sql.ontology_models import (
     OntologyReviewStatus,
     OntologySourceDocument,
     OntologySourceKind,
+    OntologySourceRole,
     OntologySourceStatus,
     PhysicalMapping,
     QuerySessionStatus,
@@ -1287,6 +1288,9 @@ async def test_http_ontology_build_persists_current_form_inputs(
                 ),
             ],
         )
+        list_response = await client.get(
+            "/api/nl2sql/profiles/sales/ontology-source-documents?limit=10"
+        )
 
     assert response.status_code == 202
     job = response.json()["data"]["job"]
@@ -1301,6 +1305,21 @@ async def test_http_ontology_build_persists_current_form_inputs(
         "rules.md",
         "qa_cases.csv",
     }
+    assert {
+        document["payload"]["filename"]: document["payload"]["source_role"]
+        for document in stored_sources
+    } == {
+        "rules.md": "source",
+        "qa_cases.csv": "qa",
+    }
+    assert list_response.status_code == 200
+    listed_sources = list_response.json()["data"]["source_documents"]
+    assert {document["filename"]: document["source_role"] for document in listed_sources} == {
+        "rules.md": "source",
+        "qa_cases.csv": "qa",
+    }
+    assert all("storage_uri" not in document for document in listed_sources)
+    assert all("sha256" not in document for document in listed_sources)
 
 
 @pytest.mark.asyncio
@@ -1319,6 +1338,7 @@ async def test_http_ontology_build_cleans_uploaded_sources_when_start_fails(
             *,
             profile_id: str,
             upload: Any,
+            source_role: OntologySourceRole = OntologySourceRole.SOURCE,
         ) -> OntologySourceDocument:
             content = await upload.read()
             source = OntologySourceDocument(
@@ -1330,6 +1350,7 @@ async def test_http_ontology_build_cleans_uploaded_sources_when_start_fails(
                 sha256=hashlib.sha256(content).hexdigest(),
                 storage_uri=f"memory://{upload.filename or 'source.md'}",
                 status=OntologySourceStatus.STORED,
+                source_role=source_role,
             )
             self.saved.append(source)
             return source

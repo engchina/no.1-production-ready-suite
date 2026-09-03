@@ -555,6 +555,9 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
   await page.route("**/api/nl2sql/profiles/*/ontology-build-jobs**", (route) =>
     fulfillJson(route, { jobs: [] })
   );
+  await page.route("**/api/nl2sql/profiles/*/ontology-source-documents**", (route) =>
+    fulfillJson(route, { source_documents: [] })
+  );
 }
 
 test("グラフはカード表示 + 検索 + 詳細ノードの折畳ができる", async ({ page }, testInfo) => {

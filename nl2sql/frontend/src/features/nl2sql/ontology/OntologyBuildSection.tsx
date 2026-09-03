@@ -33,7 +33,7 @@ import { isAbortError } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { toastError } from "@/lib/toast";
 import { mergeUniqueFiles } from "@/lib/file-dropzone";
-import { formatDateTime } from "@/lib/format";
+import { formatBytes, formatDateTime } from "@/lib/format";
 import { elapsedMsBetween, formatElapsedClock } from "@/lib/operationTiming";
 import { API_TIMEOUT_MS } from "@/lib/requestPolicy";
 import {
@@ -57,6 +57,7 @@ import {
   getOntologyMarkdownState,
   getOntologyPublishJob,
   listOntologyBuildJobs,
+  listOntologySourceDocuments,
   publishOntologyRevision,
   retryOntologyBuildJob,
   saveOntologyMarkdownDraft,
@@ -68,6 +69,7 @@ import type {
   OntologyMarkdownState,
   OntologyPublishJob,
   OntologyRevision,
+  OntologySourceDocument,
 } from "./types";
 
 const POLL_INTERVAL_MS = 1000;
@@ -369,6 +371,98 @@ function effectiveBuildStepStatus(
   return stepStatus;
 }
 
+function sourceStatusVariant(
+  status: OntologySourceDocument["status"]
+): "danger" | "info" | "pending" | "success" {
+  if (status === "failed") return "danger";
+  if (status === "extracted") return "success";
+  if (status === "extracting") return "pending";
+  return "info";
+}
+
+function sourceDocumentMeta(source: OntologySourceDocument): string {
+  return [
+    formatBytes(source.size_bytes ?? null),
+    formatDateTime(source.updated_at ?? source.created_at),
+  ].join(" · ");
+}
+
+function SavedSourceDocumentsList({
+  documents,
+  loading,
+}: {
+  documents: OntologySourceDocument[];
+  loading: boolean;
+}) {
+  return (
+    <section
+      className="grid min-w-0 gap-2 rounded-md border border-border bg-card px-3 py-2"
+      aria-label={t("profiles.ontologyBuild.savedFiles")}
+      data-testid="ontology-build-saved-files"
+    >
+      <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+        <div className="min-w-0">
+          <h4 className="text-sm font-semibold text-foreground">
+            {t("profiles.ontologyBuild.savedFiles")}
+          </h4>
+          <p className="text-xs leading-5 text-muted">
+            {t("profiles.ontologyBuild.savedFilesHint")}
+          </p>
+        </div>
+        {loading ? (
+          <StatusBadge variant="pending" label={t("common.loading")} />
+        ) : null}
+      </div>
+      {documents.length > 0 ? (
+        <ul className="grid gap-1" aria-label={t("profiles.ontologyBuild.savedFilesList")}>
+          {documents.map((source) => (
+            <li
+              key={source.id}
+              className="grid min-w-0 gap-2 rounded-md border border-border bg-background px-3 py-2 text-sm sm:grid-cols-[minmax(0,1fr)_auto]"
+            >
+              <span className="min-w-0">
+                <span className="block break-all font-semibold text-foreground">
+                  {source.filename}
+                </span>
+                <span className="block text-xs leading-5 text-muted">
+                  {sourceDocumentMeta(source)}
+                </span>
+              </span>
+              <span className="flex flex-wrap items-center gap-2 sm:justify-end">
+                <StatusBadge
+                  variant="neutral"
+                  label={t(
+                    `profiles.ontologyBuild.sourceRole.${source.source_role ?? "source"}`
+                  )}
+                />
+                <StatusBadge
+                  variant={sourceStatusVariant(source.status)}
+                  label={t(`profiles.ontologyBuild.sourceStatus.${source.status}`)}
+                />
+                {(source.extracted_chunk_count ?? 0) > 0 ? (
+                  <span className="text-xs tabular-nums text-muted">
+                    {t("profiles.ontologyBuild.sourceChunks", {
+                      count: source.extracted_chunk_count ?? 0,
+                    })}
+                  </span>
+                ) : null}
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : loading ? (
+        <p className="text-sm text-muted" data-testid="ontology-build-saved-files-loading">
+          {t("profiles.ontologyBuild.savedFilesLoading")}
+        </p>
+      ) : (
+        <p className="text-sm text-muted" data-testid="ontology-build-saved-files-empty">
+          {t("profiles.ontologyBuild.savedFilesEmpty")}
+        </p>
+      )}
+    </section>
+  );
+}
+
 export interface OntologyBuildSectionProps {
   profileId: string | null;
   hasProfileSchemaInput: boolean;
@@ -390,6 +484,8 @@ export function OntologyBuildSection({
   const [qaFile, setQaFile] = useState<File | null>(null);
   const [sourceFiles, setSourceFiles] = useState<File[]>([]);
   const [sourceFilesError, setSourceFilesError] = useState("");
+  const [savedSourceDocuments, setSavedSourceDocuments] = useState<OntologySourceDocument[]>([]);
+  const [savedSourceDocumentsLoading, setSavedSourceDocumentsLoading] = useState(false);
   const [job, setJob] = useState<OntologyBuildJob | null>(null);
   const [markdownState, setMarkdownState] = useState<OntologyMarkdownState | null>(null);
   const [markdownLoading, setMarkdownLoading] = useState(false);
@@ -412,6 +508,8 @@ export function OntologyBuildSection({
   const draftDirtyRef = useRef(false);
   const draftRevisionRef = useRef<OntologyRevision | null>(null);
   const localSavedDraftRef = useRef<LocalSavedDraft | null>(null);
+  const sourceDocumentsRequestIdRef = useRef(0);
+  const sourceDocumentsLoadControllerRef = useRef<AbortController | null>(null);
   const markdownRequestIdRef = useRef(0);
   const markdownLoadControllerRef = useRef<AbortController | null>(null);
   const buildMarkdownRefreshSignatureRef = useRef("");
@@ -588,6 +686,44 @@ export function OntologyBuildSection({
     onMarkdownStateChange?.(reconciled);
   }, [onMarkdownStateChange]);
 
+  const refreshSourceDocuments = useCallback(async (targetProfileId: string) => {
+    const requestId = sourceDocumentsRequestIdRef.current + 1;
+    sourceDocumentsRequestIdRef.current = requestId;
+    sourceDocumentsLoadControllerRef.current?.abort();
+    const controller = new AbortController();
+    sourceDocumentsLoadControllerRef.current = controller;
+    setSavedSourceDocumentsLoading(true);
+    try {
+      const documents = await listOntologySourceDocuments(targetProfileId, 20, {
+        signal: controller.signal,
+      });
+      if (
+        profileIdRef.current === targetProfileId &&
+        sourceDocumentsRequestIdRef.current === requestId
+      ) {
+        setSavedSourceDocuments(documents);
+      }
+    } catch (err) {
+      if (isAbortError(err)) return;
+      if (
+        profileIdRef.current === targetProfileId &&
+        sourceDocumentsRequestIdRef.current === requestId
+      ) {
+        setSavedSourceDocuments([]);
+      }
+    } finally {
+      if (
+        profileIdRef.current === targetProfileId &&
+        sourceDocumentsRequestIdRef.current === requestId
+      ) {
+        setSavedSourceDocumentsLoading(false);
+      }
+      if (sourceDocumentsLoadControllerRef.current === controller) {
+        sourceDocumentsLoadControllerRef.current = null;
+      }
+    }
+  }, []);
+
   const refreshMarkdown = useCallback(async (
     targetProfileId: string,
     options: ApplyMarkdownStateOptions = {}
@@ -692,9 +828,12 @@ export function OntologyBuildSection({
     setQaFile(null);
     setSourceFiles([]);
     setSourceFilesError("");
+    setSavedSourceDocuments([]);
+    setSavedSourceDocumentsLoading(Boolean(profileId));
     const jobsController = new AbortController();
     if (profileId) {
       void refreshMarkdown(profileId, { reason: "profile-load" });
+      void refreshSourceDocuments(profileId);
       // リロード/プロファイル切替後も直近 job を復元する(実行中なら進捗追跡を再開)
       listOntologyBuildJobs(profileId, 1, { signal: jobsController.signal })
         .then((jobs) => {
@@ -721,9 +860,11 @@ export function OntologyBuildSection({
     return () => {
       markdownLoadControllerRef.current?.abort();
       markdownLoadControllerRef.current = null;
+      sourceDocumentsLoadControllerRef.current?.abort();
+      sourceDocumentsLoadControllerRef.current = null;
       jobsController.abort();
     };
-  }, [onMarkdownStateChange, profileId, refreshMarkdown]);
+  }, [onMarkdownStateChange, profileId, refreshMarkdown, refreshSourceDocuments]);
 
   // job ポーリング(1s)。完了で停止し、Markdown Draft を更新する。
   // 依存は jobId(文字列)なので毎秒の setJob で interval は再生成されない。
@@ -761,6 +902,7 @@ export function OntologyBuildSection({
             terminalHandledRef.current = jobId;
             buildMarkdownRefreshSignatureRef.current = "";
             void refreshMarkdown(profileId, { reason: "build" });
+            void refreshSourceDocuments(profileId);
             if (next.status === "succeeded") {
               toast.success(t("profiles.ontologyBuild.jobSucceeded"));
             } else if (next.status === "succeeded_with_warnings") {
@@ -891,7 +1033,10 @@ export function OntologyBuildSection({
         runTextExtraction: hasBusinessTextInput || hasSourceFilesInput,
       });
       // プロファイル切替後に旧プロファイルの job を表示しない
-      if (profileIdRef.current === targetProfileId) setJob(started);
+      if (profileIdRef.current === targetProfileId) {
+        setJob(started);
+        void refreshSourceDocuments(targetProfileId);
+      }
     } catch (err) {
       if (profileIdRef.current !== targetProfileId) return;
       const timedOut =
@@ -1130,6 +1275,10 @@ export function OntologyBuildSection({
             dataTestId="ontology-build-qa-file"
             onFiles={([file]) => setQaFile(file)}
             onClear={() => setQaFile(null)}
+          />
+          <SavedSourceDocumentsList
+            documents={savedSourceDocuments}
+            loading={savedSourceDocumentsLoading}
           />
         </div>
 

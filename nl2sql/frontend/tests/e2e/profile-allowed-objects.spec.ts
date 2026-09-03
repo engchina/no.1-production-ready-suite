@@ -398,6 +398,9 @@ async function mockProfileApi(
   await page.route("**/api/nl2sql/profiles/*/ontology-build-jobs**", (route) =>
     fulfillJson(route, { jobs: [] })
   );
+  await page.route("**/api/nl2sql/profiles/*/ontology-source-documents**", (route) =>
+    fulfillJson(route, { source_documents: [] })
+  );
   await page.route("**/api/nl2sql/profiles/*/ontology-view", (route) =>
     fulfillJson(route, profileOntologyView)
   );
@@ -2123,4 +2126,51 @@ test("Ontology 未公開のとき旧モデル編集は出さず Markdown Draft �
   await expect(page.getByRole("region", { name: "質問の Ontology 接地確認" })).toBeVisible();
   await expect(page.getByText("公開済み Ontology がまだありません")).toBeVisible();
   await expect(page.getByTestId("profile-ontology-unresolved")).toHaveCount(0);
+});
+
+test("Ontology 構築はプロファイルごとの保存済みファイルを再表示する", async ({ page }) => {
+  await mockProfileApi(page);
+  await page.route("**/api/nl2sql/profiles/*/ontology-source-documents**", (route) =>
+    fulfillJson(route, {
+      source_documents: [
+        {
+          id: "ontology_source_rules",
+          profile_id: "default",
+          filename: "hr-rules.md",
+          source_role: "source",
+          media_type: "text/markdown",
+          size_bytes: 2048,
+          status: "extracted",
+          extracted_chunk_count: 2,
+          created_at: "2026-09-01T00:00:00.000Z",
+          updated_at: "2026-09-01T00:05:00.000Z",
+        },
+        {
+          id: "ontology_source_qa",
+          profile_id: "default",
+          filename: "qa_cases.csv",
+          source_role: "qa",
+          media_type: "text/csv",
+          size_bytes: 1024,
+          status: "stored",
+          extracted_chunk_count: 0,
+          created_at: "2026-09-01T00:01:00.000Z",
+          updated_at: "2026-09-01T00:01:00.000Z",
+        },
+      ],
+    })
+  );
+
+  await page.goto("/ontology-build?profile=default");
+
+  const savedFiles = page.getByTestId("ontology-build-saved-files");
+  await expect(savedFiles).toBeVisible();
+  await expect(savedFiles).toContainText("保存済みファイル");
+  await expect(savedFiles).toContainText("hr-rules.md");
+  await expect(savedFiles).toContainText("構築資料");
+  await expect(savedFiles).toContainText("抽出済み");
+  await expect(savedFiles).toContainText("2 チャンク");
+  await expect(savedFiles).toContainText("qa_cases.csv");
+  await expect(savedFiles).toContainText("Q/A");
+  await expect(savedFiles).toContainText("保存済み");
 });

@@ -844,10 +844,16 @@ class OntologySourceStatus(StrEnum):
     FAILED = "failed"
 
 
+class OntologySourceRole(StrEnum):
+    SOURCE = "source"
+    QA = "qa"
+
+
 class OntologySourceDocument(OntologyContract):
     id: str = Field(min_length=1)
     profile_id: str = Field(min_length=1)
     filename: str = Field(min_length=1)
+    source_role: OntologySourceRole = OntologySourceRole.SOURCE
     media_type: str = "application/octet-stream"
     size_bytes: int = Field(ge=0)
     sha256: str = Field(min_length=64, max_length=64)

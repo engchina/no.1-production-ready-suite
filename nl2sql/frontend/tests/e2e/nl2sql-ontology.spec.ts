@@ -736,6 +736,9 @@ async function mockApi(page: Page) {
         published_at: null,
       });
     }
+    if (path.endsWith("/ontology-source-documents") && request.method() === "GET") {
+      return fulfill(route, { source_documents: [] });
+    }
     if (
       path === "/api/nl2sql/ontology/revisions/revision-1/drafts" &&
       request.method() === "POST"

@@ -70,7 +70,10 @@ from .ontology_models import (
     OntologyReviewStatus,
     OntologyRevision,
     OntologyRevisionStatus,
+    OntologySourceDocument,
     OntologySourceKind,
+    OntologySourceRole,
+    OntologySourceStatus,
     OntologySqlGenerationContext,
     ProfileOntologyView,
     ProfileRecommendation,
@@ -5118,6 +5121,42 @@ class OntologyBuildJobListData(OntologyContract):
     jobs: list[OntologyBuildJob]
 
 
+class OntologySourceDocumentSummary(OntologyContract):
+    id: str = Field(min_length=1)
+    profile_id: str = Field(min_length=1)
+    filename: str = Field(min_length=1)
+    source_role: OntologySourceRole = OntologySourceRole.SOURCE
+    media_type: str = "application/octet-stream"
+    size_bytes: int = Field(ge=0)
+    status: OntologySourceStatus = OntologySourceStatus.STORED
+    extracted_chunk_count: int = Field(default=0, ge=0)
+    warnings_ja: list[str] = Field(default_factory=list)
+    error_message_ja: str = ""
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+    @classmethod
+    def from_document(cls, source: OntologySourceDocument) -> OntologySourceDocumentSummary:
+        return cls(
+            id=source.id,
+            profile_id=source.profile_id,
+            filename=source.filename,
+            source_role=source.source_role,
+            media_type=source.media_type,
+            size_bytes=source.size_bytes,
+            status=source.status,
+            extracted_chunk_count=source.extracted_chunk_count,
+            warnings_ja=list(source.warnings_ja),
+            error_message_ja=source.error_message_ja,
+            created_at=source.created_at,
+            updated_at=source.updated_at,
+        )
+
+
+class OntologySourceDocumentListData(OntologyContract):
+    source_documents: list[OntologySourceDocumentSummary]
+
+
 class OntologyProposalListData(OntologyContract):
     proposals: list[OntologyProposal]
 
@@ -5143,7 +5182,11 @@ async def start_ontology_build(
     assert_profile_access(http_request, profile_id)
     # 互換 qa_file も source_files と同じ永続資料として保存し、解析は worker だけで行う。
     # 上限判定は qa_file を含む総数で行う(qa_file による上限回避を防ぐ)。
-    uploads = [*(source_files or []), *([qa_file] if qa_file is not None else [])]
+    uploads: list[tuple[UploadFile, OntologySourceRole]] = [
+        (source_file, OntologySourceRole.SOURCE) for source_file in source_files or []
+    ]
+    if qa_file is not None:
+        uploads.append((qa_file, OntologySourceRole.QA))
     if len(uploads) > ONTOLOGY_SOURCE_FILE_MAX_COUNT:
         raise HTTPException(
             status_code=400,
@@ -5163,12 +5206,13 @@ async def start_ontology_build(
         _raise_domain_error(exc)
 
     stored_sources = []
-    for source_file in uploads:
+    for source_file, source_role in uploads:
         try:
             stored_sources.append(
                 await ontology_source_storage.save_upload(
                     profile_id=profile_id,
                     upload=source_file,
+                    source_role=source_role,
                 )
             )
         except Exception as exc:
@@ -5242,6 +5286,36 @@ def list_profile_ontology_build_jobs(
             limit=max(1, min(limit, 20)),
         )
         return ApiResponse(data=OntologyBuildJobListData(jobs=jobs))
+    except Exception as exc:
+        _raise_domain_error(exc)
+
+
+@router.get(
+    "/profiles/{profile_id}/ontology-source-documents",
+    response_model=ApiResponse[OntologySourceDocumentListData],
+)
+def list_profile_ontology_source_documents(
+    profile_id: str,
+    http_request: Request,
+    limit: int = 20,
+) -> ApiResponse[OntologySourceDocumentListData]:
+    """profile に保存済みの AI オントロジー構築資料を返す。"""
+
+    assert_profile_access(http_request, profile_id)
+    try:
+        source_documents = _run_runtime_sync(
+            ontology_build_service.list_profile_source_documents,
+            profile_id,
+            limit=max(1, min(limit, 50)),
+        )
+        return ApiResponse(
+            data=OntologySourceDocumentListData(
+                source_documents=[
+                    OntologySourceDocumentSummary.from_document(source)
+                    for source in source_documents
+                ]
+            )
+        )
     except Exception as exc:
         _raise_domain_error(exc)
 

@@ -3831,6 +3831,9 @@ test("ロール・権限管理はオントロジー提案取得が遅延して�
   await page.route("**/api/nl2sql/profiles/default/ontology-build-jobs**", (route) =>
     fulfill(route, { jobs: [] })
   );
+  await page.route("**/api/nl2sql/profiles/default/ontology-source-documents**", (route) =>
+    fulfill(route, { source_documents: [] })
+  );
   await page.route("**/api/security/roles?include_archived=true", (route) =>
     fulfill(route, [systemRole])
   );

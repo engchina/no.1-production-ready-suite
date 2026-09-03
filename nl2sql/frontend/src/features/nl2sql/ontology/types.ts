@@ -558,6 +558,23 @@ export interface OntologySourceProgress {
   error_message_ja?: string;
 }
 
+export type OntologySourceRole = "source" | "qa";
+
+export interface OntologySourceDocument {
+  id: string;
+  profile_id: string;
+  filename: string;
+  source_role?: OntologySourceRole;
+  media_type?: string;
+  size_bytes?: number;
+  status: "stored" | "extracting" | "extracted" | "failed";
+  extracted_chunk_count?: number;
+  warnings_ja?: string[];
+  error_message_ja?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
 export interface OntologyPublishJob {
   id: string;
   revision_id: string;

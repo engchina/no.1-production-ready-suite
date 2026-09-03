@@ -11,6 +11,7 @@ import type {
   OntologyProfileRecommendation,
   OntologyPublishJob,
   OntologyRevision,
+  OntologySourceDocument,
   QuerySession,
   QuerySessionCreateRequest,
   QuerySessionExecuteRequest,
@@ -300,6 +301,19 @@ export function listOntologyBuildJobs(
     undefined,
     options
   ).then((data) => data.jobs ?? []);
+}
+
+export function listOntologySourceDocuments(
+  profileId: string,
+  limit = 20,
+  options?: RequestOptions
+): Promise<OntologySourceDocument[]> {
+  return request<{ source_documents: OntologySourceDocument[] }>(
+    `/api/nl2sql/profiles/${encodeURIComponent(profileId)}/ontology-source-documents?limit=${limit}`,
+    "GET",
+    undefined,
+    options
+  ).then((data) => data.source_documents ?? []);
 }
 
 export function cancelOntologyBuildJob(

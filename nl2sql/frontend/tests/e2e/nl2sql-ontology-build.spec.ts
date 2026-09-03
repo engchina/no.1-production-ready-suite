@@ -495,6 +495,9 @@ async function mockApi(page: Page) {
   await page.route("**/api/nl2sql/profiles/*/ontology-build-jobs**", (route) =>
     fulfillJson(route, { jobs: [] })
   );
+  await page.route("**/api/nl2sql/profiles/*/ontology-source-documents**", (route) =>
+    fulfillJson(route, { source_documents: [] })
+  );
   await page.route("**/api/nl2sql/profiles/*/ontology-markdown/draft", (route) => {
     const body = route.request().postDataJSON() as { markdown?: string; base_etag?: string };
     state.savedDraftMarkdown = body.markdown ?? "";

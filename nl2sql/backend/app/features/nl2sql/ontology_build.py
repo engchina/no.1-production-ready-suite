@@ -1869,6 +1869,7 @@ class OntologyBuildService:
                     "business_text": business_text,
                     "qa_pairs": pairs,
                     "source_sha256": [source.sha256 for source in sources],
+                    "source_roles": [source.source_role.value for source in sources],
                     "run_schema_naming": run_schema_naming,
                     "run_qa_extraction": run_qa_extraction,
                     "run_text_extraction": run_text_extraction,
@@ -2116,6 +2117,27 @@ class OntologyBuildService:
         ]
         jobs.sort(key=lambda job: (job.created_at, job.id), reverse=True)
         return [self._normalize_job_for_response(job) for job in jobs[: max(1, limit)]]
+
+    def list_profile_source_documents(
+        self, profile_id: str, *, limit: int = 20
+    ) -> list[OntologySourceDocument]:
+        """profile に保存済みの Ontology 構築資料を新しい順に返す。"""
+
+        documents = self._runtime.store.list_documents(
+            "source_documents", {"profile_id": profile_id}
+        )
+        sources: list[OntologySourceDocument] = []
+        for document in documents:
+            try:
+                sources.append(OntologySourceDocument.model_validate(document["payload"]))
+            except Exception:
+                logger.warning(
+                    "ontology_source_document_decode_failed",
+                    exc_info=True,
+                    extra={"profile_id": profile_id},
+                )
+        sources.sort(key=lambda source: (source.created_at, source.id), reverse=True)
+        return sources[: max(1, limit)]
 
     def cancel(self, job_id: str) -> OntologyBuildJob:
         """ユーザー起点の単一 job キャンセル。
