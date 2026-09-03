@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { buildMetadataInputTexts } from "../src/features/nl2sql/metadataSql.ts";
 import type { DbAdminObjectDetail } from "../src/features/nl2sql/types.ts";
+
+const appSource = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
 
 const detail: DbAdminObjectDetail = {
   name: "ORDERS",
@@ -46,4 +49,23 @@ test("buildMetadataInputTexts builds structure constraints and samples", () => {
   assert.match(texts.primaryKeyText, /PK_ORDERS/);
   assert.match(texts.foreignKeyText, /FK_ORDERS_CUSTOMER/);
   assert.match(texts.sampleText, /ORDER_ID: 100/);
+});
+
+test("metadata SQL management pages keep execution state across navigation", () => {
+  const keepAliveStart = appSource.indexOf("const KEEP_ALIVE_PAGES = [");
+  const keepAliveEnd = appSource.indexOf("];", keepAliveStart);
+  const keepAliveBlock = appSource.slice(keepAliveStart, keepAliveEnd);
+
+  assert.match(keepAliveBlock, /APP_ROUTES\.commentManagement/u);
+  assert.match(keepAliveBlock, /<CommentManagementPage \/>/u);
+  assert.match(keepAliveBlock, /APP_ROUTES\.annotationManagement/u);
+  assert.match(keepAliveBlock, /<AnnotationManagementPage \/>/u);
+  assert.doesNotMatch(
+    appSource,
+    /<Route path=\{APP_ROUTES\.commentManagement\} element=\{<CommentManagementPage \/>/u
+  );
+  assert.doesNotMatch(
+    appSource,
+    /<Route path=\{APP_ROUTES\.annotationManagement\} element=\{<AnnotationManagementPage \/>/u
+  );
 });
