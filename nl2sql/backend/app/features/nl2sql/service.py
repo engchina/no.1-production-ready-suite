@@ -2661,6 +2661,7 @@ class Nl2SqlService:
         self._classifier_state_token = -1
         self._classifier_state_checked_at = 0.0
         self._classifier_model_payload_cache: tuple[str, str, dict[str, Any]] | None = None
+        self._classifier_import_lock = threading.RLock()
         self._asset_meta: dict[Nl2SqlEngine, AssetRefreshData] = {}
         self._admin_audit: list[dict[str, Any]] = []
         self._legacy_learning_material = LegacyLearningMaterialData()
@@ -3299,6 +3300,47 @@ class Nl2SqlService:
                 exc=exc,
                 operation_error_code="incremental_document_save_failed",
             )
+
+    def _replace_incremental_entity_collection(
+        self,
+        collection: str,
+        documents: list[tuple[str, str, dict[str, Any]]],
+    ) -> None:
+        repository = self._incremental_repository
+        if repository is None:
+            return
+        try:
+            repository.replace_documents(
+                collection,
+                [
+                    (
+                        entity_id,
+                        payload,
+                        str(payload.get("profile_id") or ""),
+                        self._document_status(collection, payload),
+                    )
+                    for _collection, entity_id, payload in documents
+                ],
+            )
+        except Exception as exc:
+            self._raise_incremental_repository_failure(
+                operation="document_replace",
+                exc=exc,
+                operation_error_code="incremental_document_replace_failed",
+            )
+        with self._lock:
+            for key in [key for key in self._incremental_hashes if key[0] == collection]:
+                self._incremental_hashes.pop(key, None)
+            for _collection, entity_id, payload in documents:
+                digest = hashlib.sha256(
+                    json.dumps(
+                        payload,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        default=str,
+                    ).encode()
+                ).hexdigest()
+                self._incremental_hashes[(collection, entity_id)] = digest
 
     def _document_status(self, collection: str, payload: dict[str, Any]) -> str:
         if collection == "history":
@@ -7121,91 +7163,120 @@ class Nl2SqlService:
         allowed_profile_ids: set[str] | None = None,
     ) -> ClassifierImportData:
         _require_xlsx_template_upload(filename)
-        self._load_classifier_state()
-        warnings: list[str] = []
-        parsed, skipped = self._parse_classifier_training_file(filename, content, warnings)
-        now = _utc_now()
-        examples: list[ClassifierTrainingExample] = []
-        with self._lock:
-            comparison_examples = [] if replace else list(self._classifier_examples)
-        for category, text, row_profile_id in parsed:
-            resolved = self._exact_profile_for_classifier_label(
-                profile_id or row_profile_id or category
-            )
-            if resolved is None:
-                skipped += 1
-                warnings.append(
-                    f"{category or row_profile_id} に対応する Profile を一意に解決できないため"
-                    "除外しました。"
+        with self._classifier_import_lock:
+            self._load_classifier_state()
+            warnings: list[str] = []
+            parsed, skipped = self._parse_classifier_training_file(filename, content, warnings)
+            if not parsed:
+                detail = (
+                    warnings[-1]
+                    if warnings
+                    else "classifier training data に有効な行がありません。"
                 )
-                continue
-            if allowed_profile_ids is not None and resolved.id not in allowed_profile_ids:
-                skipped += 1
-                warnings.append(
-                    f"{resolved.name} は利用権限がない Profile のため "
-                    "training data から除外しました。"
+                raise ValueError(detail)
+
+            now = _utc_now()
+            examples: list[ClassifierTrainingExample] = []
+            with self._lock:
+                current_examples = list(self._classifier_examples)
+            comparison_examples = [] if replace else current_examples
+            for category, text, row_profile_id in parsed:
+                resolved = self._exact_profile_for_classifier_label(
+                    profile_id or row_profile_id or category
                 )
-                continue
-            normalized_question = self._normalize_classifier_question(text)
-            matching = [
-                item
-                for item in [*comparison_examples, *examples]
-                if self._normalize_classifier_question(item.text) == normalized_question
-            ]
-            if any(item.profile_id == resolved.id for item in matching):
-                skipped += 1
-                warnings.append(
-                    f"{text} は同じ Profile の training data に既に存在するため除外しました。"
-                )
-                continue
-            if any(item.profile_id and item.profile_id != resolved.id for item in matching):
-                skipped += 1
-                warnings.append(f"{text} は別の Profile に対応済みのため競合として除外しました。")
-                continue
-            examples.append(
-                ClassifierTrainingExample(
-                    id=str(uuid.uuid4()),
-                    category=category or resolved.category or resolved.name,
-                    text=text,
-                    profile_id=resolved.id,
-                    profile_name=resolved.name,
-                    profile_category=resolved.category,
-                    source=filename,
-                    source_type="file",
-                    created_at=now,
-                    updated_at=now,
-                )
-            )
-        old_ids: set[str] = set()
-        with self._lock:
-            if replace:
-                old_ids = {item.id for item in self._classifier_examples}
-                self._classifier_examples = examples
-            else:
-                self._classifier_examples.extend(examples)
-            total_examples = len(self._classifier_examples)
-            all_categories = sorted({item.category for item in self._classifier_examples})
-        if replace and self._incremental_repository is not None:
-            for example_id in old_ids - {item.id for item in examples}:
-                self._incremental_repository.delete_document("classifier_examples", example_id)
-                self._incremental_hashes.pop(("classifier_examples", example_id), None)
-        if examples:
-            self._persist_entities(
-                [
-                    ("classifier_examples", item.id, item.model_dump(mode="json"))
-                    for item in examples
+                if resolved is None:
+                    skipped += 1
+                    warnings.append(
+                        f"{category or row_profile_id} に対応する Profile を一意に解決できないため"
+                        "除外しました。"
+                    )
+                    continue
+                if allowed_profile_ids is not None and resolved.id not in allowed_profile_ids:
+                    skipped += 1
+                    warnings.append(
+                        f"{resolved.name} は利用権限がない Profile のため "
+                        "training data から除外しました。"
+                    )
+                    continue
+                normalized_question = self._normalize_classifier_question(text)
+                matching = [
+                    item
+                    for item in [*comparison_examples, *examples]
+                    if self._normalize_classifier_question(item.text) == normalized_question
                 ]
+                if any(item.profile_id == resolved.id for item in matching):
+                    skipped += 1
+                    warnings.append(
+                        f"{text} は同じ Profile の training data に既に存在するため除外しました。"
+                    )
+                    continue
+                if any(item.profile_id and item.profile_id != resolved.id for item in matching):
+                    skipped += 1
+                    warnings.append(
+                        f"{text} は別の Profile に対応済みのため競合として除外しました。"
+                    )
+                    continue
+                examples.append(
+                    ClassifierTrainingExample(
+                        id=str(uuid.uuid4()),
+                        category=category or resolved.category or resolved.name,
+                        text=text,
+                        profile_id=resolved.id,
+                        profile_name=resolved.name,
+                        profile_category=resolved.category,
+                        source=filename,
+                        source_type="file",
+                        created_at=now,
+                        updated_at=now,
+                    )
+                )
+
+            if replace and not examples:
+                detail = (
+                    warnings[-1]
+                    if warnings
+                    else "有効な training data がないため置換を中止しました。"
+                )
+                raise ValueError(detail)
+
+            documents = [
+                ("classifier_examples", item.id, item.model_dump(mode="json")) for item in examples
+            ]
+            if replace:
+                if self._incremental_repository is not None:
+                    self._replace_incremental_entity_collection(
+                        "classifier_examples",
+                        documents,
+                    )
+                with self._lock:
+                    previous_examples = list(self._classifier_examples)
+                    self._classifier_examples = examples
+                if self._incremental_repository is None:
+                    try:
+                        self._persist_state(collections=("classifier_examples",))
+                    except Exception:
+                        with self._lock:
+                            self._classifier_examples = previous_examples
+                        raise
+            else:
+                if examples and self._incremental_repository is not None:
+                    self._persist_entities(documents)
+                with self._lock:
+                    self._classifier_examples.extend(examples)
+                if examples and self._incremental_repository is None:
+                    self._persist_state(collections=("classifier_examples",))
+
+            with self._lock:
+                total_examples = len(self._classifier_examples)
+                all_categories = sorted({item.category for item in self._classifier_examples})
+            return ClassifierImportData(
+                imported_count=len(examples),
+                skipped_count=skipped,
+                total_examples=total_examples,
+                categories=all_categories,
+                warnings=warnings,
+                examples=examples[:50],
             )
-        elif replace:
-            self._persist_state(collections=("classifier_examples",))
-        return ClassifierImportData(
-            imported_count=len(examples),
-            skipped_count=skipped,
-            total_examples=total_examples,
-            categories=all_categories,
-            warnings=warnings,
-            examples=examples[:50],
-        )
 
     def classifier_training_data(self) -> ClassifierTrainingDataData:
         self._load_classifier_state()

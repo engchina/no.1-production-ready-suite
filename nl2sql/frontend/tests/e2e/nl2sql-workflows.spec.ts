@@ -8321,6 +8321,26 @@ test("question classifier training data follows the CATEGORY/TEXT contract", asy
   );
   await expect(trainingWorkspace.getByText(".XLSX", { exact: true })).toBeVisible();
 
+  const replaceTrainingData = trainingWorkspace.getByRole("checkbox", {
+    name: "既存 training data を置き換える",
+  });
+  await replaceTrainingData.check();
+  await dropFiles(page, trainingWorkspace.getByTestId("qcm-training-file-field-dropzone"), [
+    {
+      name: "replacement.xlsx",
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      content: "mock xlsx",
+    },
+  ]);
+  const replaceDialog = page.getByRole("alertdialog");
+  await expect(replaceDialog.getByRole("heading", { name: "訓練データを置き換えますか" })).toBeVisible();
+  await expect(replaceDialog.getByText(/既存の訓練データ 12 件/u)).toBeVisible();
+  await replaceDialog.getByRole("button", { name: "キャンセル" }).click();
+  expect(api.classifierTrainingImportBody).toBeNull();
+  await expect(trainingWorkspace.getByText("選択中: replacement.xlsx")).toHaveCount(0);
+  await expect(trainingWorkspace.getByText("ページング対象 01: 請求金額が大きい取引先を見たい")).toBeVisible();
+  await replaceTrainingData.uncheck();
+
   await dropFiles(page, trainingWorkspace.getByTestId("qcm-training-file-field-dropzone"), [
     {
       name: "training_data.csv",

@@ -1734,6 +1734,10 @@ const nl2sqlJa = {
   "qcm.training.deleted": "訓練データを削除しました。モデルは再学習待ちです。",
   "qcm.training.deleteTitle": "訓練データを削除しますか",
   "qcm.training.deleteDescription": "質問と Profile の対応を削除します。現在のモデルは再学習まで継続利用されます。",
+  "qcm.training.replaceConfirmTitle": "訓練データを置き換えますか",
+  "qcm.training.replaceConfirmDescription":
+    "{filename} の取込により、既存の訓練データ {count} 件を置き換えます。現在のモデルは再学習まで継続利用されます。",
+  "qcm.training.replaceConfirmConfirm": "置き換えて取込",
   "qcm.training.error.update": "訓練データの更新に失敗しました。",
   "qcm.training.error.delete": "訓練データの削除に失敗しました。",
   "qcm.training.emptyTitle": "訓練データは未登録です",

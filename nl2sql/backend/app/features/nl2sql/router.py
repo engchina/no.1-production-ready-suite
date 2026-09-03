@@ -176,6 +176,7 @@ from .service import (
 from .service import (
     is_select_only as _is_select_only,
 )
+from .tabular_files import TabularFileReadError
 
 logger = logging.getLogger(__name__)
 LEARNING_MATERIAL_UPLOAD_MAX_BYTES = 5 * 1024 * 1024
@@ -1586,8 +1587,10 @@ async def import_classifier_training_data(
                 allowed_profile_ids=_allowed_profile_ids_for_request(request),
             )
         )
-    except ValueError as exc:
+    except TabularFileReadError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.get("/classifier/training-data/export.xlsx")

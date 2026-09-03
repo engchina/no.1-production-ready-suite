@@ -4,6 +4,7 @@ import importlib
 import io
 import json
 import pickle
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, cast
 
@@ -889,6 +890,97 @@ def test_classifier_training_data_xlsx_accepts_legacy_headers_and_blanks() -> No
     assert replaced_listing.total_examples == 1
     assert replaced_listing.categories == ["監査"]
     assert replaced_listing.examples[0].text == "監査ログを確認したい"
+
+
+def test_classifier_training_data_replace_rejects_invalid_header_without_deleting() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    imported = service.import_classifier_training_data(
+        filename="training_data.xlsx",
+        content=_single_sheet_workbook_bytes(
+            "training_data",
+            [["CATEGORY", "TEXT"], ["標準業務プロファイル", "請求金額を確認したい"]],
+        ),
+        replace=True,
+    )
+    assert imported.imported_count == 1
+
+    with pytest.raises(ValueError, match="CATEGORY または PROFILE_ID"):
+        service.import_classifier_training_data(
+            filename="broken.xlsx",
+            content=_single_sheet_workbook_bytes(
+                "training_data",
+                [["FOO", "BAR"], ["監査", "監査ログを確認したい"]],
+            ),
+            replace=True,
+        )
+
+    listed = service.classifier_training_data()
+    assert listed.total_examples == 1
+    assert listed.examples[0].text == "請求金額を確認したい"
+
+
+@pytest.mark.asyncio
+async def test_classifier_training_data_replace_api_returns_422_without_deleting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.features.nl2sql import router as nl2sql_router
+
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service.import_classifier_training_data(
+        filename="training_data.xlsx",
+        content=_single_sheet_workbook_bytes(
+            "training_data",
+            [["CATEGORY", "TEXT"], ["標準業務プロファイル", "請求金額を確認したい"]],
+        ),
+        replace=True,
+    )
+    monkeypatch.setattr(nl2sql_router, "nl2sql_service", service)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.post(
+            "/api/nl2sql/classifier/training-data/import",
+            data={"replace": "true"},
+            files={
+                "file": (
+                    "broken.xlsx",
+                    _single_sheet_workbook_bytes(
+                        "training_data",
+                        [["FOO", "BAR"], ["監査", "監査ログを確認したい"]],
+                    ),
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+            },
+        )
+
+    assert response.status_code == 422
+    assert "CATEGORY または PROFILE_ID" in response.text
+    assert service.classifier_training_data().total_examples == 1
+
+
+def test_classifier_training_data_import_serializes_duplicate_requests() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    content = _single_sheet_workbook_bytes(
+        "training_data",
+        [["CATEGORY", "TEXT"], ["標準業務プロファイル", "請求金額を確認したい"]],
+    )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(
+            pool.map(
+                lambda _index: service.import_classifier_training_data(
+                    filename="training_data.xlsx",
+                    content=content,
+                ),
+                range(2),
+            )
+        )
+
+    assert sum(result.imported_count for result in results) == 1
+    assert sum(result.skipped_count for result in results) == 1
+    assert service.classifier_training_data().total_examples == 1
 
 
 def test_classifier_training_data_xlsx_keeps_zero_text_value() -> None:

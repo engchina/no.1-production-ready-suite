@@ -316,6 +316,22 @@ export function QuestionClassifierModelsPage() {
 
   const importClassifierTraining = async (file: File) => {
     setTrainingFilename(file.name);
+    if (classifierReplace) {
+      const currentCount = classifierTrainingData?.total_examples ?? 0;
+      const ok = await confirm({
+        title: t("qcm.training.replaceConfirmTitle"),
+        description: t("qcm.training.replaceConfirmDescription", {
+          count: currentCount,
+          filename: file.name,
+        }),
+        confirmLabel: t("qcm.training.replaceConfirmConfirm"),
+        tone: "warning",
+      });
+      if (!ok) {
+        setTrainingFilename("");
+        return;
+      }
+    }
     setLoading("classifier-import");
     setMessage("");
     try {

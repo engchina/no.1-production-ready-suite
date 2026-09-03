@@ -318,6 +318,12 @@ class IncrementalNl2SqlRepository(Protocol):
         status: str = "",
     ) -> None: ...
 
+    def replace_documents(
+        self,
+        collection: str,
+        documents: Sequence[tuple[str, Mapping[str, Any], str, str]],
+    ) -> None: ...
+
     def get_document(self, collection: str, entity_id: str) -> dict[str, Any] | None: ...
 
     def delete_document(self, collection: str, entity_id: str) -> None: ...
@@ -773,6 +779,24 @@ class MemoryIncrementalNl2SqlRepository:
                 "_status": status,
                 "_updated_at": _utc_now(),
             }
+            self._tokens[STATE_NAMESPACE] += 1
+
+    def replace_documents(
+        self,
+        collection: str,
+        documents: Sequence[tuple[str, Mapping[str, Any], str, str]],
+    ) -> None:
+        with self._lock:
+            for key in [key for key in self._documents if key[0] == collection]:
+                self._documents.pop(key, None)
+            for entity_id, payload, profile_id, status in documents:
+                self._documents[(collection, entity_id)] = {
+                    **copy.deepcopy(dict(payload)),
+                    "_entity_id": entity_id,
+                    "_profile_id": profile_id,
+                    "_status": status,
+                    "_updated_at": _utc_now(),
+                }
             self._tokens[STATE_NAMESPACE] += 1
 
     def get_document(self, collection: str, entity_id: str) -> dict[str, Any] | None:
@@ -1691,6 +1715,41 @@ class OracleIncrementalNl2SqlRepository:
             )
             self._bump_token(cursor, STATE_NAMESPACE)
             connection.commit()
+
+    def replace_documents(
+        self,
+        collection: str,
+        documents: Sequence[tuple[str, Mapping[str, Any], str, str]],
+    ) -> None:
+        with self._connection_factory() as connection, connection.cursor() as cursor:
+            try:
+                cursor.execute(
+                    "DELETE FROM NL2SQL_STATE_DOCUMENTS WHERE COLLECTION = :collection",
+                    {"collection": collection},
+                )
+                _set_clob_bind(cursor, "payload")
+                for entity_id, payload, profile_id, status in documents:
+                    payload_json = _canonical_json(dict(payload))
+                    etag = hashlib.sha256(payload_json.encode()).hexdigest()
+                    cursor.execute(
+                        "INSERT INTO NL2SQL_STATE_DOCUMENTS "
+                        "(COLLECTION, ENTITY_ID, PROFILE_ID, STATUS, VERSION_NO, ETAG, "
+                        "PAYLOAD_JSON) VALUES (:collection, :entity_id, :profile_id, "
+                        ":status, 1, :etag, :payload)",
+                        {
+                            "collection": collection,
+                            "entity_id": entity_id,
+                            "profile_id": profile_id,
+                            "status": status,
+                            "etag": etag,
+                            "payload": payload_json,
+                        },
+                    )
+                self._bump_token(cursor, STATE_NAMESPACE)
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
 
     def get_document(self, collection: str, entity_id: str) -> dict[str, Any] | None:
         with self._connection_factory() as connection, connection.cursor() as cursor:
