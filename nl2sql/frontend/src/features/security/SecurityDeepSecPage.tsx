@@ -88,9 +88,9 @@ type ScrollPositionSnapshot = {
 };
 
 const INPUT_CLASS =
-  "h-11 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 disabled:bg-muted/20 disabled:text-muted";
+  "h-11 min-w-0 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 disabled:bg-muted/20 disabled:text-muted";
 const COMPACT_INPUT_CLASS =
-  "h-9 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 disabled:bg-muted/20 disabled:text-muted";
+  "h-9 min-w-0 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 disabled:bg-muted/20 disabled:text-muted";
 const ADMIN_EXECUTE_CONFIRMATION = "ADMIN_EXECUTE";
 const ADMIN_RESET_CONFIRMATION = "ADMIN_RESET";
 const TARGET_OBJECT_PAGE_SIZE = 50;
@@ -2442,7 +2442,7 @@ export function SecurityDeepSecPage() {
                                                   className="grid gap-2 rounded-md border border-border/80 bg-card/20 p-2"
                                                   data-testid={`security-deepsec-scope-filter-${index}-${filterIndex}`}
                                                 >
-                                                  <div className="grid min-w-0 gap-2 md:grid-cols-2 2xl:grid-cols-[minmax(15rem,1.25fr)_minmax(9rem,0.75fr)_minmax(10rem,0.8fr)_minmax(12rem,1fr)_auto]">
+                                                  <div className="grid min-w-0 gap-2 md:grid-cols-2 2xl:grid-cols-[minmax(0,1.25fr)_minmax(0,0.75fr)_minmax(0,0.8fr)_minmax(0,1fr)_auto]">
                                                     <label
                                                       className="grid min-w-0 gap-1 text-xs font-medium"
                                                       htmlFor={`deepsec-scope-filter-column-${index}-${filterIndex}`}
@@ -2452,7 +2452,7 @@ export function SecurityDeepSecPage() {
                                                       </span>
                                                       <select
                                                         id={`deepsec-scope-filter-column-${index}-${filterIndex}`}
-                                                        className={cn(COMPACT_INPUT_CLASS, "min-w-0")}
+                                                        className={COMPACT_INPUT_CLASS}
                                                         disabled={entitlementReadOnly}
                                                         value={filter.column_name}
                                                         onChange={(event) =>
