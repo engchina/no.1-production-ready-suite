@@ -35,8 +35,9 @@ HTTP request を延長せず durable job へ移す。静かな polling、prefetc
 - publish: worker が manifest 差分を取得し、成功時だけ active catalog を切り替える。失敗時は旧版を維持する。
 - concurrency: read path は Schema refresh のプロセス内実行 lock を取得しない。
 
-Docker/本番は `NL2SQL_SCHEMA_REFRESH_WORKER_MODE=external` と `schema-refresh-worker` を使用する。
-直接ローカル実行だけ `inprocess` を既定とする。
+Docker/本番は通常の SQL 生成 job も `NL2SQL_JOB_WORKER_MODE=external` と `nl2sql-job-worker`
+で処理し、Schema refresh は `NL2SQL_SCHEMA_REFRESH_WORKER_MODE=external` と
+`schema-refresh-worker` を使用する。直接ローカル実行だけ `inprocess` を既定とする。
 
 ## Mutation の影響分類
 

@@ -1546,6 +1546,7 @@ async def test_similar_history_lob_read_does_not_block_following_job(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from app.features.nl2sql import router as nl2sql_router
+    from app.settings import get_settings
 
     history_payload = json.dumps(
         {
@@ -1593,6 +1594,7 @@ async def test_similar_history_lob_read_does_not_block_following_job(
     monkeypatch.setattr(service, "list_profiles", lambda include_archived=False: [profile])
     monkeypatch.setattr(service, "_persist_job", lambda _job_id: None)
     monkeypatch.setattr(service, "_run_job_safely", lambda _job_id: None)
+    monkeypatch.setattr(get_settings(), "nl2sql_job_worker_mode", "external")
     monkeypatch.setattr(nl2sql_router, "nl2sql_service", service)
     similar_response = nl2sql_router.similar_history(
         SimilarHistoryRequest(question="部署名を検索", profile_id="default", limit=3),

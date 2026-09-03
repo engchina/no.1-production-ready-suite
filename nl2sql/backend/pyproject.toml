@@ -37,6 +37,7 @@ dependencies = [
 [project.scripts]
 nl2sql-migrate-state = "app.cli.nl2sql_migrate_state:main"
 nl2sql-system-schema = "app.cli.nl2sql_system_schema:main"
+nl2sql-job-worker = "app.cli.nl2sql_job_worker:main"
 nl2sql-schema-refresh-worker = "app.cli.nl2sql_schema_refresh_worker:main"
 nl2sql-config-audit = "app.cli.config_audit:main"
 

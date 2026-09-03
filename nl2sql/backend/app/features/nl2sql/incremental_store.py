@@ -174,6 +174,50 @@ def _state_document_status_value(
     return fallback
 
 
+def _state_document_claimable(payload: Mapping[str, Any], now: datetime) -> bool:
+    status = str(payload.get("status") or "")
+    if status == "pending":
+        return True
+    if status != "running":
+        return False
+    raw_expires_at = str(payload.get("lease_expires_at") or "")
+    if not raw_expires_at:
+        return True
+    try:
+        expires_at = datetime.fromisoformat(raw_expires_at.replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
+    return expires_at <= now
+
+
+def _claimed_state_document(
+    payload: Mapping[str, Any],
+    *,
+    worker_id: str,
+    lease_seconds: float,
+    now: datetime,
+) -> dict[str, Any]:
+    started_at = str(payload.get("started_at") or now.isoformat())
+    try:
+        attempt = int(payload.get("attempt") or 0)
+    except (TypeError, ValueError):
+        attempt = 0
+    lease_expires_at = datetime.fromtimestamp(
+        now.timestamp() + max(30.0, lease_seconds), UTC
+    ).isoformat()
+    return {
+        **copy.deepcopy(dict(payload)),
+        "status": "running",
+        "started_at": started_at,
+        "worker_id": worker_id,
+        "heartbeat_at": now.isoformat(),
+        "lease_expires_at": lease_expires_at,
+        "attempt": attempt + 1,
+    }
+
+
 def _state_document_sort_sql(collection: str) -> str:
     updated_at_expr = "TO_CHAR(UPDATED_AT, 'SYYYY-MM-DD\"T\"HH24:MI:SS.FF6TZH:TZM')"
     if collection != "history":
@@ -367,6 +411,15 @@ class IncrementalNl2SqlRepository(Protocol):
         lease_seconds: float,
         job_id: str | None = None,
     ) -> SchemaRefreshJob | None: ...
+
+    def claim_document(
+        self,
+        collection: str,
+        *,
+        worker_id: str,
+        lease_seconds: float,
+        entity_id: str | None = None,
+    ) -> dict[str, Any] | None: ...
 
     def put_document(
         self,
@@ -828,6 +881,51 @@ class MemoryIncrementalNl2SqlRepository:
             )
             self._refresh_jobs[claimed.job_id] = claimed
             return claimed.model_copy(deep=True)
+
+    def claim_document(
+        self,
+        collection: str,
+        *,
+        worker_id: str,
+        lease_seconds: float,
+        entity_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        now = datetime.now(UTC)
+        with self._lock:
+            candidates: list[tuple[tuple[str, str], dict[str, Any], dict[str, Any]]] = []
+            for key, value in self._documents.items():
+                item_collection, item_entity_id = key
+                if item_collection != collection:
+                    continue
+                if entity_id is not None and item_entity_id != entity_id:
+                    continue
+                payload = _memory_document_payload(value)
+                if _state_document_claimable(payload, now):
+                    candidates.append((key, value, payload))
+            if not candidates:
+                return None
+            key, current, payload = min(
+                candidates,
+                key=lambda item: (
+                    str(item[2].get("created_at") or item[1].get("_updated_at") or ""),
+                    item[0][1],
+                ),
+            )
+            claimed = _claimed_state_document(
+                payload,
+                worker_id=worker_id,
+                lease_seconds=lease_seconds,
+                now=now,
+            )
+            self._documents[key] = {
+                **claimed,
+                "_entity_id": key[1],
+                "_profile_id": str(current.get("_profile_id") or ""),
+                "_status": "running",
+                "_updated_at": now.isoformat(),
+            }
+            self._tokens[STATE_NAMESPACE] += 1
+            return copy.deepcopy(claimed)
 
     def put_document(
         self,
@@ -1784,6 +1882,67 @@ class OracleIncrementalNl2SqlRepository:
                 )
                 connection.commit()
                 return claimed
+            except Exception:
+                connection.rollback()
+                raise
+
+    def claim_document(
+        self,
+        collection: str,
+        *,
+        worker_id: str,
+        lease_seconds: float,
+        entity_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        now = datetime.now(UTC)
+        predicate = "COLLECTION = :collection AND STATUS IN ('pending', 'running')"
+        select_binds: dict[str, Any] = {"collection": collection}
+        if entity_id is not None:
+            predicate += " AND ENTITY_ID = :entity_id"
+            select_binds["entity_id"] = entity_id
+        select_sql = (
+            "SELECT ENTITY_ID, PAYLOAD_JSON, PROFILE_ID FROM NL2SQL_STATE_DOCUMENTS "  # nosec B608
+            "WHERE " + predicate + " ORDER BY CREATED_AT, ENTITY_ID FOR UPDATE SKIP LOCKED"
+        )
+        with self._connection_factory() as connection, connection.cursor() as cursor:
+            try:
+                # Oracle は row_limiting_clause と FOR UPDATE の併用を許可しない。
+                # SKIP LOCKED は fetch 時に行を lock するため、driver の内部 fetch も
+                # 小さく絞り、claim 候補だけを短時間 lock する。
+                cursor.prefetchrows = 0
+                cursor.arraysize = 25
+                cursor.execute(select_sql, select_binds)
+                for row in cursor.fetchmany(25):
+                    current = cast(dict[str, Any], json.loads(_read_lob(row[1])))
+                    if not _state_document_claimable(current, now):
+                        continue
+                    claimed = _claimed_state_document(
+                        current,
+                        worker_id=worker_id,
+                        lease_seconds=lease_seconds,
+                        now=now,
+                    )
+                    payload_json = _canonical_json(claimed)
+                    etag = hashlib.sha256(payload_json.encode()).hexdigest()
+                    _set_clob_bind(cursor, "payload")
+                    cursor.execute(
+                        "UPDATE NL2SQL_STATE_DOCUMENTS SET PROFILE_ID = :profile_id, "
+                        "STATUS = 'running', VERSION_NO = VERSION_NO + 1, ETAG = :etag, "
+                        "PAYLOAD_JSON = :payload, UPDATED_AT = SYSTIMESTAMP "
+                        "WHERE COLLECTION = :collection AND ENTITY_ID = :entity_id",
+                        {
+                            "collection": collection,
+                            "entity_id": str(row[0]),
+                            "profile_id": str(row[2] or ""),
+                            "etag": etag,
+                            "payload": payload_json,
+                        },
+                    )
+                    self._bump_token(cursor, STATE_NAMESPACE)
+                    connection.commit()
+                    return claimed
+                connection.commit()
+                return None
             except Exception:
                 connection.rollback()
                 raise

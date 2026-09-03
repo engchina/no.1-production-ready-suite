@@ -28,12 +28,12 @@ from app.features.nl2sql.models import (
 )
 from app.features.nl2sql.service import (
     JOB_CANCELLED_ERROR_CODE,
-    JOB_INTERRUPTED_ERROR_CODE,
     Nl2SqlService,
     StoredJob,
     _new_job_steps,
 )
 from app.features.nl2sql.store import MemoryNl2SqlStore
+from app.settings import get_settings
 
 _PROFILE_ID = "orders-profile"
 _GENERATED = '{"sql":"SELECT ID FROM APP.ORDERS","explanation":"注文 ID を取得します。"}'
@@ -166,6 +166,7 @@ def _wait_terminal(service: Nl2SqlService, job_id: str) -> Any:
 def test_observer_worker_rereads_in_flight_job_until_owner_finishes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(get_settings(), "nl2sql_job_worker_mode", "external")
     repository = _repository()
     owner = _worker(repository)
     observer = _worker(repository)
@@ -192,10 +193,12 @@ def test_observer_worker_rereads_in_flight_job_until_owner_finishes(
 def test_owner_worker_keeps_local_state_authoritative_for_its_own_job(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(get_settings(), "nl2sql_job_worker_mode", "external")
     repository = _repository()
     owner = _worker(repository)
     monkeypatch.setattr(owner, "_run_job_safely", lambda _job_id: None)
     created = owner.start_job(_request(), actor_user_uuid="user-1", actor_is_system_admin=True)
+    assert owner.run_next_nl2sql_job(job_id=created.job_id, worker_id="worker-owner") is True
 
     # 別 worker が DB 上の snapshot を書き換えても、実行中プロセスは自分の状態を返す。
     document = repository.get_document("jobs", created.job_id)
@@ -204,7 +207,59 @@ def test_owner_worker_keeps_local_state_authoritative_for_its_own_job(
 
     job = owner.get_job(created.job_id)
     assert job is not None
-    assert job.status == JobStatus.PENDING
+    assert job.status == JobStatus.RUNNING
+
+
+def test_external_worker_mode_enqueues_without_inprocess_dispatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(get_settings(), "nl2sql_job_worker_mode", "external")
+    repository = _repository()
+    owner = _worker(repository)
+    dispatched = False
+
+    def dispatch_should_not_run(*, settings: Any | None = None) -> bool:
+        nonlocal dispatched
+        del settings
+        dispatched = True
+        return False
+
+    monkeypatch.setattr(owner, "_dispatch_nl2sql_queue_worker", dispatch_should_not_run)
+
+    created = owner.start_job(_request(), actor_user_uuid="user-1", actor_is_system_admin=True)
+    fetched = owner.get_job(created.job_id)
+    document = repository.get_document("jobs", created.job_id)
+
+    assert dispatched is False
+    assert fetched is not None
+    assert fetched.status == JobStatus.PENDING
+    assert document is not None
+    assert document["status"] == "pending"
+    assert document["worker_id"] == ""
+
+
+def test_run_next_nl2sql_job_claims_pending_document_with_lease(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(get_settings(), "nl2sql_job_worker_mode", "external")
+    repository = _repository()
+    owner = _worker(repository)
+    monkeypatch.setattr(owner, "_run_job_safely", lambda _job_id: None)
+    created = owner.start_job(_request(), actor_user_uuid="user-1", actor_is_system_admin=True)
+
+    assert owner.run_next_nl2sql_job(job_id=created.job_id, worker_id="worker-claim") is True
+
+    document = repository.get_document("jobs", created.job_id)
+    assert document is not None
+    assert document["status"] == "running"
+    assert document["worker_id"] == "worker-claim"
+    assert document["heartbeat_at"]
+    assert document["lease_expires_at"]
+    assert document["attempt"] == 1
+    with owner._lock:  # noqa: SLF001
+        local = owner._jobs[created.job_id]  # noqa: SLF001
+    assert local.owned is True
+    assert local.worker_id == "worker-claim"
 
 
 def test_cancel_from_other_worker_reaches_owner_at_stage_boundary() -> None:
@@ -229,7 +284,7 @@ def test_cancel_from_other_worker_reaches_owner_at_stage_boundary() -> None:
     assert "キャンセル" in (finished.error_message or "")
 
     # error_code も snapshot 経由で他 worker に見える。
-    seen = observer.get_job(created.job_id)
+    seen = _wait_terminal(observer, created.job_id)
     assert seen is not None
     assert seen.status == JobStatus.ERROR
     assert seen.error_code == JOB_CANCELLED_ERROR_CODE
@@ -260,6 +315,7 @@ def _put_in_flight_snapshot(
     *,
     job_id: str,
     updated_at: str,
+    lease_expires_at: str | None = None,
 ) -> None:
     steps = _new_job_steps()
     steps[0] = steps[0].model_copy(update={"status": JobStepStatus.DONE, "elapsed_ms": 5})
@@ -273,36 +329,48 @@ def _put_in_flight_snapshot(
         created_at=updated_at,
         started_at=updated_at,
         steps=steps,
+        worker_id="worker-old",
+        heartbeat_at=updated_at,
+        lease_expires_at=lease_expires_at,
+        attempt=1,
     )
     snapshot = {**service._job_to_snapshot(stored), "updated_at": updated_at}  # noqa: SLF001
     repository.put_document("jobs", job_id, snapshot, status="running")
 
 
-def test_stale_in_flight_snapshot_is_closed_as_interrupted_and_persisted() -> None:
+def test_expired_running_snapshot_is_reclaimed_and_completed() -> None:
     repository = _repository()
     service = _worker(repository)
     two_hours_ago = (datetime.now(UTC) - timedelta(hours=2)).isoformat()
     _put_in_flight_snapshot(service, repository, job_id="job-orphan", updated_at=two_hours_ago)
 
+    assert service.run_next_nl2sql_job(worker_id="worker-retry") is True
     job = service.get_job("job-orphan")
 
     assert job is not None
-    assert job.status == JobStatus.ERROR
-    assert job.error_code == JOB_INTERRUPTED_ERROR_CODE
-    assert "再起動" in (job.error_message or "")
+    assert job.status == JobStatus.DONE
+    assert not job.error_code
     assert job.finished_at
-    assert [step.status for step in job.steps][:2] == [JobStepStatus.DONE, JobStepStatus.ERROR]
+    assert all(step.status == JobStepStatus.DONE for step in job.steps)
     persisted = repository.get_document("jobs", "job-orphan")
     assert persisted is not None
-    assert persisted["status"] == "error"
-    assert persisted["error_code"] == JOB_INTERRUPTED_ERROR_CODE
+    assert persisted["status"] == "done"
+    assert persisted["worker_id"] == ""
+    assert persisted["attempt"] == 2
 
 
 def test_fresh_in_flight_snapshot_from_other_worker_stays_running() -> None:
     repository = _repository()
     service = _worker(repository)
     now = datetime.now(UTC).isoformat()
-    _put_in_flight_snapshot(service, repository, job_id="job-live", updated_at=now)
+    lease_expires_at = (datetime.now(UTC) + timedelta(minutes=10)).isoformat()
+    _put_in_flight_snapshot(
+        service,
+        repository,
+        job_id="job-live",
+        updated_at=now,
+        lease_expires_at=lease_expires_at,
+    )
 
     job = service.get_job("job-live")
 
@@ -311,24 +379,27 @@ def test_fresh_in_flight_snapshot_from_other_worker_stays_running() -> None:
     persisted = repository.get_document("jobs", "job-live")
     assert persisted is not None
     assert persisted["status"] == "running"
+    assert persisted["lease_expires_at"] == lease_expires_at
 
 
-def test_stale_threshold_is_configurable(monkeypatch: pytest.MonkeyPatch) -> None:
-    from app.settings import get_settings
-
+def test_get_job_wakes_expired_running_job_inprocess() -> None:
     repository = _repository()
     service = _worker(repository)
-    monkeypatch.setattr(get_settings(), "nl2sql_job_stale_after_seconds", 60.0)
     three_minutes_ago = (datetime.now(UTC) - timedelta(minutes=3)).isoformat()
+    expired_lease = (datetime.now(UTC) - timedelta(seconds=1)).isoformat()
     _put_in_flight_snapshot(
-        service, repository, job_id="job-short-ttl", updated_at=three_minutes_ago
+        service,
+        repository,
+        job_id="job-expired-lease",
+        updated_at=three_minutes_ago,
+        lease_expires_at=expired_lease,
     )
 
-    job = service.get_job("job-short-ttl")
+    job = _wait_terminal(service, "job-expired-lease")
 
     assert job is not None
-    assert job.status == JobStatus.ERROR
-    assert job.error_code == JOB_INTERRUPTED_ERROR_CODE
+    assert job.status == JobStatus.DONE
+    assert job.error_code is None
 
 
 def test_run_job_safely_tolerates_missing_job_record() -> None:

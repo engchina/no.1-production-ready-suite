@@ -1840,12 +1840,12 @@ def test_get_job_denies_non_manage_actor_for_unowned_job() -> None:
     assert service.get_job(created.job_id) is not None
 
 
-def test_job_concurrency_is_bounded_by_semaphore(
+def test_job_concurrency_is_bounded_by_queue_workers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(get_settings(), "nl2sql_job_max_concurrency", 1)
     service = Nl2SqlService(store=MemoryNl2SqlStore())
     _import_sample(service)
-    service._job_concurrency = threading.BoundedSemaphore(1)  # noqa: SLF001
     lock = threading.Lock()
     active = 0
     max_active = 0

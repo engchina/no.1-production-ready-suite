@@ -136,10 +136,14 @@ class Settings(BaseServiceSettings):
     nl2sql_allow_select_only: bool = True
     nl2sql_default_row_limit: int = 100
     # 同時に実行する NL2SQL job worker 数の上限(超過分は pending のまま待機)。
-    # job 毎の裸スレッドが Oracle セッションを食い潰さないための安全弁。
+    # in-process queue worker 数をこの値で抑え、Oracle セッションの枯渇を防ぐ。
     nl2sql_job_max_concurrency: int = Field(default=4, ge=1, le=64)
-    # in-flight のまま snapshot の更新がこの秒数途絶えた job は、再起動などで孤児化した
-    # とみなし読込時に error へ正規化する(複数 worker / 再起動後に永久 running を防ぐ)。
+    # inprocess: local/CI 用 bounded worker、external: API は永続 queue への投入だけを行う。
+    nl2sql_job_worker_mode: Literal["inprocess", "external"] = "inprocess"
+    nl2sql_job_worker_poll_seconds: float = 1.0
+    nl2sql_job_lease_seconds: float = 900.0
+    # legacy snapshot の running job が lease を持たずこの秒数更新されない場合のみ、
+    # 再起動前の中断として扱う。新しい queue job は lease 期限後に worker が再 claim する。
     nl2sql_job_stale_after_seconds: float = Field(default=1800.0, ge=60.0)
     # deterministic: local/CI 用 mock, oracle: python-oracledb 経由で Oracle / Select AI を呼ぶ。
     nl2sql_runtime_mode: str = "deterministic"

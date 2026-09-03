@@ -2429,6 +2429,10 @@ class StoredJob:
     warning_message: str | None = None
     timing: TimingEnvelope | None = None
     steps: list[JobStepData] = field(default_factory=list)
+    worker_id: str = ""
+    heartbeat_at: str | None = None
+    lease_expires_at: str | None = None
+    attempt: int = 0
     # 協調キャンセル要求。worker が stage 境界で検出して JobCancelledError を送出する。
     cancel_requested: bool = False
     # 自プロセスの worker スレッドが実行している job か。False は他 worker / 再起動前の
@@ -2623,6 +2627,9 @@ class Nl2SqlService:
         self._profile_list_refresh_lock = threading.Lock()
         self._profile_list_refresh_dispatch_lock = threading.Lock()
         self._profile_list_refresh_dispatching_job_ids: set[str] = set()
+        self._job_dispatch_lock = threading.Lock()
+        self._job_active_worker_count = 0
+        self._job_worker_id = f"api:{uuid.uuid4()}"
         self._refresh_job_repository: IncrementalNl2SqlRepository = (
             self._incremental_repository
             if self._incremental_repository is not None
@@ -2651,8 +2658,6 @@ class Nl2SqlService:
             )
         }
         self._jobs: dict[str, StoredJob] = {}
-        # job 毎の worker スレッドが同時に走る数の上限(Oracle セッション枯渇防止)。
-        self._job_concurrency = threading.BoundedSemaphore(settings.nl2sql_job_max_concurrency)
         self._history: list[HistoryItem] = []
         self._feedback: dict[str, FeedbackRating] = {}
         self._feedback_indexed_ids: set[str] = set()
@@ -3398,6 +3403,10 @@ class Nl2SqlService:
             "warning_message": job.warning_message,
             "timing": job.timing.model_dump(mode="json") if job.timing else None,
             "steps": [step.model_dump(mode="json") for step in job.steps],
+            "worker_id": job.worker_id,
+            "heartbeat_at": job.heartbeat_at,
+            "lease_expires_at": job.lease_expires_at,
+            "attempt": job.attempt,
             # 他 worker / 再起動後の読込側が「更新が途絶えた in-flight job」を判定する基準。
             "updated_at": _utc_now(),
         }
@@ -3406,7 +3415,9 @@ class Nl2SqlService:
         """in-flight のまま更新が途絶えた snapshot(再起動などで孤児化した job)か。"""
 
         status = str(data.get("status") or "")
-        if status not in {JobStatus.PENDING.value, JobStatus.RUNNING.value}:
+        if status != JobStatus.RUNNING.value:
+            return False
+        if data.get("worker_id") or data.get("lease_expires_at"):
             return False
         stamp = str(
             data.get("updated_at") or data.get("started_at") or data.get("created_at") or ""
@@ -3434,13 +3445,44 @@ class Nl2SqlService:
                 update={"status": JobStepStatus.ERROR}
             )
 
+    @staticmethod
+    def _job_lease_expired(job: StoredJob) -> bool:
+        if job.status != JobStatus.RUNNING:
+            return False
+        if not job.lease_expires_at:
+            return True
+        try:
+            expires_at = datetime.fromisoformat(job.lease_expires_at.replace("Z", "+00:00"))
+        except ValueError:
+            return True
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=UTC)
+        return expires_at <= datetime.now(UTC)
+
+    @staticmethod
+    def _renew_job_lease_locked(job: StoredJob) -> None:
+        if not job.worker_id:
+            return
+        now = datetime.now(UTC)
+        lease_seconds = max(30.0, get_settings().nl2sql_job_lease_seconds)
+        job.heartbeat_at = now.isoformat()
+        job.lease_expires_at = datetime.fromtimestamp(
+            now.timestamp() + lease_seconds, UTC
+        ).isoformat()
+
+    @staticmethod
+    def _clear_job_worker_state_locked(job: StoredJob) -> None:
+        job.worker_id = ""
+        job.heartbeat_at = None
+        job.lease_expires_at = None
+
     def _load_job_record(self, job_id: str) -> StoredJob | None:
         """job をプロセス内 cache と repository から解決する。
 
         自プロセスが実行していない(owned=False)in-flight job は cache があっても
         repository を読み直す。gunicorn の複数 worker 構成で別 worker が進めた状態を
-        取りこぼさないため。in-flight のまま更新が途絶えた snapshot は error へ
-        正規化して書き戻し、永久 running を防ぐ。
+        取りこぼさないため。running job は lease 付き worker queue で再 claim 可能なため、
+        読み取り時には interrupted 化しない。
         """
 
         with self._lock:
@@ -3457,27 +3499,19 @@ class Nl2SqlService:
                     operation_error_code="job_query_failed",
                 )
             if document is not None:
-                stale = self._job_snapshot_is_stale(document)
                 job = self._job_from_snapshot(document)
-                if stale:
-                    self._mark_job_interrupted(job)
                 with self._lock:
                     self._jobs[job_id] = job
-                if stale:
-                    try:
-                        self._persist_job(job_id)
-                    except (Nl2SqlPersistenceUnavailable, Nl2SqlRepositoryOperationFailed):
-                        logger.warning(
-                            "nl2sql_interrupted_job_persist_failed",
-                            extra={"job_id": job_id},
-                            exc_info=True,
-                        )
         return job
 
     def _job_from_snapshot(self, data: dict[str, Any]) -> StoredJob:
         status = JobStatus(data.get("status", JobStatus.PENDING))
         timing = TimingEnvelope.model_validate(data["timing"]) if data.get("timing") else None
         result = Nl2SqlResult.model_validate(data["result"]) if data.get("result") else None
+        try:
+            attempt = int(data.get("attempt") or 0)
+        except (TypeError, ValueError):
+            attempt = 0
         return StoredJob(
             job_id=str(data["job_id"]),
             request=JobCreateRequest.model_validate(data["request"]),
@@ -3499,6 +3533,10 @@ class Nl2SqlService:
                 timing=timing,
                 has_result=result is not None,
             ),
+            worker_id=str(data.get("worker_id") or ""),
+            heartbeat_at=data.get("heartbeat_at"),
+            lease_expires_at=data.get("lease_expires_at"),
+            attempt=attempt,
         )
 
     def get_catalog(self) -> SchemaCatalog:
@@ -5875,6 +5913,7 @@ class Nl2SqlService:
                         ]
                     }
                 )
+            self._renew_job_lease_locked(job)
         self._persist_job(job_id)
 
     def start_job(
@@ -5897,7 +5936,7 @@ class Nl2SqlService:
             actor_user_uuid=actor_user_uuid,
             actor_is_system_admin=actor_is_system_admin,
             steps=_new_job_steps(),
-            owned=True,
+            owned=self._incremental_repository is None,
         )
         with self._lock:
             self._jobs[job_id] = job
@@ -5909,8 +5948,7 @@ class Nl2SqlService:
             created_at=job.created_at,
             steps=[step.model_copy() for step in job.steps],
         )
-        thread = threading.Thread(target=self._run_job_bounded, args=(job_id,), daemon=True)
-        thread.start()
+        self._wake_nl2sql_job_if_needed(job)
         return response
 
     @staticmethod
@@ -5931,10 +5969,131 @@ class Nl2SqlService:
         if job.actor_user_uuid != actor_user_uuid:
             raise PermissionError(job.job_id)
 
-    def _run_job_bounded(self, job_id: str) -> None:
-        """同時実行数を settings.nl2sql_job_max_concurrency に制限して実行する。"""
-        with self._job_concurrency:
-            self._run_job_safely(job_id)
+    def _wake_nl2sql_job_if_needed(
+        self,
+        job: StoredJob,
+        *,
+        settings: Any | None = None,
+    ) -> bool:
+        """local in-process mode で pending / lease 切れ job の queue worker を起こす。"""
+
+        settings = settings or get_settings()
+        if str(settings.nl2sql_job_worker_mode).strip().lower() == "external":
+            return False
+        if job.status == JobStatus.PENDING:
+            return self._dispatch_nl2sql_queue_worker(settings=settings)
+        if job.status == JobStatus.RUNNING and not job.owned and self._job_lease_expired(job):
+            return self._dispatch_nl2sql_queue_worker(settings=settings)
+        return False
+
+    def _dispatch_nl2sql_queue_worker(self, *, settings: Any | None = None) -> bool:
+        """1 job 1 thread ではなく、bounded な queue worker だけを起動する。"""
+
+        settings = settings or get_settings()
+        max_workers = max(1, int(settings.nl2sql_job_max_concurrency))
+        worker_id = f"{self._job_worker_id}:{uuid.uuid4().hex[:8]}"
+        with self._job_dispatch_lock:
+            if self._job_active_worker_count >= max_workers:
+                return False
+            self._job_active_worker_count += 1
+
+        def run() -> None:
+            try:
+                while self.run_next_nl2sql_job(worker_id=worker_id):
+                    pass
+            finally:
+                with self._job_dispatch_lock:
+                    self._job_active_worker_count = max(0, self._job_active_worker_count - 1)
+
+        thread = threading.Thread(
+            target=run,
+            daemon=True,
+            name=f"nl2sql-job-worker-{worker_id.rsplit(':', 1)[-1]}",
+        )
+        thread.start()
+        return True
+
+    def run_next_nl2sql_job(
+        self,
+        *,
+        worker_id: str | None = None,
+        job_id: str | None = None,
+    ) -> bool:
+        """外部 worker / in-process worker 共通の NL2SQL job claim + run entrypoint。"""
+
+        claimed = self._claim_nl2sql_job(
+            worker_id=worker_id or self._job_worker_id,
+            job_id=job_id,
+        )
+        if claimed is None:
+            return False
+        logger.info(
+            "nl2sql_job_claimed",
+            extra={
+                "job_id": claimed.job_id,
+                "worker_id": claimed.worker_id,
+                "attempt": claimed.attempt,
+            },
+        )
+        self._run_job_safely(claimed.job_id)
+        return True
+
+    def _claim_nl2sql_job(self, *, worker_id: str, job_id: str | None = None) -> StoredJob | None:
+        settings = get_settings()
+        repository = self._incremental_repository
+        if repository is not None:
+            try:
+                payload = repository.claim_document(
+                    "jobs",
+                    worker_id=worker_id,
+                    lease_seconds=settings.nl2sql_job_lease_seconds,
+                    entity_id=job_id,
+                )
+            except Exception as exc:
+                self._raise_incremental_repository_failure(
+                    operation="job_claim",
+                    exc=exc,
+                    operation_error_code="job_claim_failed",
+                )
+            if payload is None:
+                return None
+            claimed = self._job_from_snapshot(payload)
+            claimed.owned = True
+            with self._lock:
+                self._jobs[claimed.job_id] = claimed
+            return claimed
+
+        now = datetime.now(UTC)
+        lease_expires_at = datetime.fromtimestamp(
+            now.timestamp() + max(30.0, settings.nl2sql_job_lease_seconds), UTC
+        ).isoformat()
+        with self._lock:
+            candidates = [
+                job
+                for job in self._jobs.values()
+                if (job_id is None or job.job_id == job_id)
+                and (
+                    job.status == JobStatus.PENDING
+                    or (
+                        job.status == JobStatus.RUNNING
+                        and not job.owned
+                        and self._job_lease_expired(job)
+                    )
+                )
+            ]
+            if not candidates:
+                return None
+            claimed = min(candidates, key=lambda item: (item.created_at, item.job_id))
+            claimed.status = JobStatus.RUNNING
+            claimed.started_at = claimed.started_at or now.isoformat()
+            claimed.worker_id = worker_id
+            claimed.heartbeat_at = now.isoformat()
+            claimed.lease_expires_at = lease_expires_at
+            claimed.attempt += 1
+            claimed.owned = True
+            claimed_copy = replace(claimed)
+        self._persist_job(claimed_copy.job_id)
+        return claimed_copy
 
     def _prune_history_locked(self) -> None:
         """プロセス内 history の保持上限(古い順に破棄)。DB 側の履歴が正本。"""
@@ -6048,6 +6207,7 @@ class Nl2SqlService:
             actor_user_uuid=actor_user_uuid,
             actor_can_manage=actor_can_manage,
         )
+        self._wake_nl2sql_job_if_needed(job)
         with self._lock:
             return JobData(
                 job_id=job.job_id,
@@ -16101,6 +16261,7 @@ class Nl2SqlService:
                         else None
                     )
                 job.finished_at = _utc_now()
+                self._clear_job_worker_state_locked(job)
                 failure_index = _job_failure_step_index(job.steps)
                 failure_stage = job.steps[failure_index].stage if failure_index is not None else ""
                 if failure_index is not None:
@@ -16378,9 +16539,10 @@ class Nl2SqlService:
         with self._lock:
             job = self._jobs[job_id]
             job.status = JobStatus.RUNNING
-            job.started_at = _utc_now()
+            job.started_at = job.started_at or _utc_now()
             job.timing = TimingEnvelope(created_at=job.created_at, started_at=job.started_at)
             job.steps[0] = job.steps[0].model_copy(update={"status": JobStepStatus.RUNNING})
+            self._renew_job_lease_locked(job)
             request = job.request
         self._persist_job(job_id)
 
@@ -16608,6 +16770,9 @@ class Nl2SqlService:
             finished_at=finished,
             elapsed_ms=timing.elapsed_ms,
             timing=timing,
+            worker_id="",
+            heartbeat_at=None,
+            lease_expires_at=None,
         )
         persistence_warning: str | None = None
         try:
@@ -16638,6 +16803,7 @@ class Nl2SqlService:
             job.finished_at = finished
             job.elapsed_ms = timing.elapsed_ms
             job.timing = timing
+            self._clear_job_worker_state_locked(job)
             self._history.append(history_item)
             self._prune_history_locked()
 
