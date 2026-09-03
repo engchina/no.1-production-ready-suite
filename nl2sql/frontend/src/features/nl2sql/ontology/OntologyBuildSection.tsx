@@ -516,6 +516,7 @@ export function OntologyBuildSection({
   const pollInFlightRef = useRef(false);
   const pollFailureCountRef = useRef(0);
   const publishPollInFlightRef = useRef(false);
+  const publishPollFailureCountRef = useRef(0);
   // 終端(完了/失敗)通知を job ごとに一度だけ出す
   const terminalHandledRef = useRef<string | null>(null);
   const publishTerminalHandledRef = useRef<string | null>(null);
@@ -948,6 +949,7 @@ export function OntologyBuildSection({
   // 依存は publishJobId(文字列)なので毎秒の setPublishJob で interval は再生成されない。
   useEffect(() => {
     if (!publishRunning || !publishJobId) return;
+    publishPollFailureCountRef.current = 0;
     let cancelled = false;
     let currentController: AbortController | null = null;
     const timer = window.setInterval(() => {
@@ -957,6 +959,7 @@ export function OntologyBuildSection({
       getOntologyPublishJob(publishJobId, { signal: currentController.signal })
         .then((next) => {
           if (cancelled) return; // 古い応答で新しい状態を上書きしない
+          publishPollFailureCountRef.current = 0;
           setPublishJob(next);
           const terminal = next.status === "succeeded" || next.status === "failed";
           if (!terminal || publishTerminalHandledRef.current === publishJobId) return;
@@ -976,11 +979,15 @@ export function OntologyBuildSection({
         })
         .catch((err) => {
           if (cancelled || isAbortError(err)) return;
-          showNotice(
-            "danger",
-            err instanceof Error ? err.message : t("profiles.ontologyBuild.error.publish")
-          );
-          setPublishJob(null);
+          const notFound = err instanceof ApiError && err.status === 404;
+          publishPollFailureCountRef.current += 1;
+          if (notFound || publishPollFailureCountRef.current >= MAX_POLL_FAILURES) {
+            showNotice(
+              "danger",
+              err instanceof Error ? err.message : t("profiles.ontologyBuild.error.publish")
+            );
+            setPublishJob(null);
+          }
         })
         .finally(() => {
           currentController = null;

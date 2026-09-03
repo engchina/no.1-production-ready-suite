@@ -208,6 +208,15 @@ def validate_source_media_type(filename: str, media_type: str) -> None:
         )
 
 
+def _unlink_missing_ok(path: Path) -> None:
+    path.unlink(missing_ok=True)
+
+
+def _rmdir_if_empty(path: Path) -> None:
+    with contextlib.suppress(OSError):
+        path.rmdir()
+
+
 class OntologySourceStorage:
     """local / OCI Object Storage を同じ URI 契約で扱う。"""
 
@@ -232,32 +241,37 @@ class OntologySourceStorage:
         profile_storage_key = hashlib.sha256(profile_id.encode("utf-8")).hexdigest()[:24]
         target_dir = Path(self.settings.local_storage_dir).expanduser() / "ontology-sources"
         target_dir = target_dir / profile_storage_key / source_id
-        target_dir.mkdir(parents=True, exist_ok=True)
+        await asyncio.to_thread(target_dir.mkdir, parents=True, exist_ok=True)
         target = target_dir / filename
         digest = hashlib.sha256()
         total = 0
-        with target.open("wb") as stream:
-            while chunk := await upload.read(_CHUNK_SIZE):
-                total += len(chunk)
-                if total > self.settings.max_upload_bytes:
-                    stream.close()
-                    target.unlink(missing_ok=True)
-                    raise OntologySourceError(
-                        "ONTOLOGY_SOURCE_TOO_LARGE",
-                        "資料がアップロード上限を超えています。",
-                    )
-                digest.update(chunk)
-                stream.write(chunk)
+        try:
+            stream = await asyncio.to_thread(target.open, "wb")
+            try:
+                while chunk := await upload.read(_CHUNK_SIZE):
+                    total += len(chunk)
+                    if total > self.settings.max_upload_bytes:
+                        raise OntologySourceError(
+                            "ONTOLOGY_SOURCE_TOO_LARGE",
+                            "資料がアップロード上限を超えています。",
+                        )
+                    digest.update(chunk)
+                    await asyncio.to_thread(stream.write, chunk)
+            finally:
+                await asyncio.to_thread(stream.close)
+        except Exception:
+            await asyncio.to_thread(_unlink_missing_ok, target)
+            await asyncio.to_thread(_rmdir_if_empty, target.parent)
+            raise
         media_type = (
             upload.content_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"
         )
         try:
             validate_source_media_type(filename, media_type)
-            # 先頭 4 KiB と ZIP central directory の bounded local 検査。upload stream 自体も
-            # local file へ逐次書込みしているため、ここだけ executor を作る必要はない。
-            validate_source_path(filename, target)
+            await asyncio.to_thread(validate_source_path, filename, target)
         except Exception:
-            target.unlink(missing_ok=True)
+            await asyncio.to_thread(_unlink_missing_ok, target)
+            await asyncio.to_thread(_rmdir_if_empty, target.parent)
             raise
         storage_uri = str(target)
         if self.settings.upload_storage_backend.strip().lower() == "oci":
@@ -269,9 +283,8 @@ class OntologySourceStorage:
                 target,
             )
             # OCI へ移した後のローカルコピーは残さない(最大 200MiB×5/build のディスクリーク防止)
-            target.unlink(missing_ok=True)
-            with contextlib.suppress(OSError):
-                target.parent.rmdir()
+            await asyncio.to_thread(_unlink_missing_ok, target)
+            await asyncio.to_thread(_rmdir_if_empty, target.parent)
         return OntologySourceDocument(
             id=source_id,
             profile_id=profile_id,

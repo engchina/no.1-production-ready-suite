@@ -1492,6 +1492,49 @@ test("SHACL Violation で公開を止め、修正後の再公開で復旧でき�
   expect(publishAttempt).toBe(2);
 });
 
+test("公開ポーリングは一時エラー後も進行状態を維持して復旧する", async ({ page }) => {
+  await mockApi(page);
+  await page.unroute("**/api/nl2sql/profiles/*/ontology-markdown");
+  await page.route("**/api/nl2sql/profiles/*/ontology-markdown", (route) =>
+    fulfillJson(route, markdownDraftPayload(generatedDraftMarkdown))
+  );
+  await page.unroute("**/api/nl2sql/ontology-publish/*");
+  let publishPolls = 0;
+  await page.route("**/api/nl2sql/ontology-publish/*", (route) => {
+    publishPolls += 1;
+    if (publishPolls === 1) {
+      return route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({ error_messages: ["一時的な publish poll failure"] }),
+      });
+    }
+    return fulfillJson(route, {
+      job: {
+        id: "publish-job-1",
+        revision_id: "revision-draft-4",
+        requested_etag: "draft-etag-4",
+        status: "succeeded",
+        rdf_graph_name: "ONT_0123456789ABCDEF",
+        inferred_graph_name: "INF_0123456789ABCDEF",
+        shacl_conforms: true,
+      },
+    });
+  });
+
+  await page.goto("/ontology-build?profile=default");
+  const publish = page
+    .getByTestId("ontology-publish-actions")
+    .getByRole("button", { name: "Ontology を公開" });
+  await publish.click();
+
+  const status = page.getByTestId("ontology-publish-status");
+  await expect(status).toContainText("待機中");
+  await expect(status).toContainText("公開完了", { timeout: 7000 });
+  await expect(page.getByText("Ontology を公開しました。")).toBeVisible();
+  expect(publishPolls).toBeGreaterThanOrEqual(2);
+});
+
 test("job 取得が 404 のときポーリングを停止しエラー表示で実行ボタンが復帰する", async ({
   page,
 }) => {

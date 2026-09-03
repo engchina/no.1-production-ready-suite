@@ -18,7 +18,7 @@ import json
 import logging
 import threading
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -1820,6 +1820,8 @@ _TERMINAL_STATUSES = {
     OntologyBuildStatus.FAILED,
     OntologyBuildStatus.CANCELLED,
 }
+_PROFILE_ACTIVE_LOCK_OPERATION = "build_ontology_profile_active"
+_PROFILE_ACTIVE_LOCK_STALE_SECONDS = 300.0
 _TERMINAL_STEP_STATUSES = {
     OntologyBuildStepStatus.SUCCEEDED,
     OntologyBuildStepStatus.FAILED,
@@ -1917,38 +1919,43 @@ class OntologyBuildService:
                 for source in sources
             ],
         )
-        for source in sources:
-            self._save_source_document(source)
-        with self._lock:
-            self._prune_finished_jobs_locked()
-            self._jobs[job.id] = job
-            self._inputs[job.id] = {
-                "business_text": business_text,
-                "qa_pairs": [pair.model_dump(mode="json") for pair in pairs],
-                # retry がステップ構成を忠実に再現できるようトグルも永続化する
-                "run_schema_naming": run_schema_naming,
-                "run_qa_extraction": run_qa_extraction,
-                "run_text_extraction": run_text_extraction,
-            }
-        self._persist_job(job)
-        if idempotency_key:
-            self._runtime.store.save_idempotency(
-                {
-                    "operation": "build_ontology",
-                    "idempotency_key": idempotency_key,
-                    "request_hash": request_hash,
-                    "resource_id": job.id,
-                    "status": "accepted",
+        self._acquire_profile_job_lock(profile_id, job.id)
+        try:
+            for source in sources:
+                self._save_source_document(source)
+            with self._lock:
+                self._prune_finished_jobs_locked()
+                self._jobs[job.id] = job
+                self._inputs[job.id] = {
+                    "business_text": business_text,
+                    "qa_pairs": [pair.model_dump(mode="json") for pair in pairs],
+                    # retry がステップ構成を忠実に再現できるようトグルも永続化する
+                    "run_schema_naming": run_schema_naming,
+                    "run_qa_extraction": run_qa_extraction,
+                    "run_text_extraction": run_text_extraction,
                 }
-            )
-        if get_settings().nl2sql_ontology_worker_mode == "inprocess":
-            thread = threading.Thread(
-                target=self._run_safely,
-                args=(job.id, business_text, pairs),
-                daemon=True,
-            )
-            thread.start()
-        return job.model_copy(deep=True)
+            self._persist_job(job)
+            if idempotency_key:
+                self._runtime.store.save_idempotency(
+                    {
+                        "operation": "build_ontology",
+                        "idempotency_key": idempotency_key,
+                        "request_hash": request_hash,
+                        "resource_id": job.id,
+                        "status": "accepted",
+                    }
+                )
+            if get_settings().nl2sql_ontology_worker_mode == "inprocess":
+                thread = threading.Thread(
+                    target=self._run_safely,
+                    args=(job.id, business_text, pairs),
+                    daemon=True,
+                )
+                thread.start()
+            return job.model_copy(deep=True)
+        except Exception:
+            self._release_profile_job_lock(profile_id, job.id)
+            raise
 
     def get(self, job_id: str) -> OntologyBuildJob | None:
         # external worker モードでは worker だけが進捗を書くため store が正
@@ -2103,6 +2110,7 @@ class OntologyBuildService:
             },
             expected_etag=str(document["etag"]),
         )
+        self._release_profile_job_lock(job.profile_id, job.id)
         with self._lock:
             self._jobs[job.id] = job.model_copy(deep=True)
 
@@ -2227,6 +2235,142 @@ class OntologyBuildService:
             idempotency_key=f"retry:{job_id}:{uuid4().hex}",
         )
 
+    def _acquire_profile_job_lock(self, profile_id: str, job_id: str) -> None:
+        active = self._find_active_profile_job(profile_id)
+        if active is not None:
+            self._raise_active_profile_job_conflict(active)
+        existing = self._runtime.store.get_idempotency(
+            _PROFILE_ACTIVE_LOCK_OPERATION,
+            profile_id,
+        )
+        if existing is not None:
+            active = self._active_job_from_lock(existing)
+            if active is not None:
+                self._raise_active_profile_job_conflict(active)
+            self._delete_profile_job_lock(profile_id, str(existing.get("resource_id") or ""))
+        try:
+            self._runtime.store.save_idempotency(
+                {
+                    "operation": _PROFILE_ACTIVE_LOCK_OPERATION,
+                    "idempotency_key": profile_id,
+                    "request_hash": hashlib.sha256(profile_id.encode("utf-8")).hexdigest(),
+                    "resource_id": job_id,
+                    "status": "active",
+                    "payload": {
+                        "operation": _PROFILE_ACTIVE_LOCK_OPERATION,
+                        "profile_id": profile_id,
+                        "job_id": job_id,
+                        "created_at_epoch": time.time(),
+                    },
+                },
+                expected_etag=None,
+            )
+        except OntologyVersionConflict as exc:
+            lock = self._runtime.store.get_idempotency(
+                _PROFILE_ACTIVE_LOCK_OPERATION,
+                profile_id,
+            )
+            active = self._active_job_from_lock(lock) if lock is not None else None
+            if active is None:
+                active = self._find_active_profile_job(profile_id)
+            if active is not None:
+                self._raise_active_profile_job_conflict(active)
+            raise OntologyStateConflictError(
+                "ONTOLOGY_BUILD_START_CONFLICT",
+                "構築 job の開始状態が競合しました。再試行してください。",
+            ) from exc
+
+    def _release_profile_job_lock(self, profile_id: str, job_id: str) -> None:
+        try:
+            self._delete_profile_job_lock(profile_id, job_id)
+        except Exception:
+            logger.warning(
+                "ontology_build_profile_lock_release_failed",
+                exc_info=True,
+                extra={"profile_id": profile_id, "job_id": job_id},
+            )
+
+    def _delete_profile_job_lock(self, profile_id: str, job_id: str) -> None:
+        existing = self._runtime.store.get_idempotency(
+            _PROFILE_ACTIVE_LOCK_OPERATION,
+            profile_id,
+        )
+        if existing is None or str(existing.get("resource_id") or "") != job_id:
+            return
+        self._runtime.store.delete_documents(
+            "idempotency",
+            {
+                "operation": _PROFILE_ACTIVE_LOCK_OPERATION,
+                "idempotency_key": profile_id,
+            },
+        )
+
+    def _active_job_from_lock(self, lock: Mapping[str, Any]) -> OntologyBuildJob | None:
+        job_id = str(lock.get("resource_id") or "")
+        if not job_id:
+            return None
+        document = self._runtime.store.get_document("jobs", {"job_id": job_id})
+        job = self._job_from_document(document)
+        if job is None:
+            payload = lock.get("payload")
+            created_at_epoch = (
+                payload.get("created_at_epoch") if isinstance(payload, Mapping) else 0
+            )
+            lock_age = _PROFILE_ACTIVE_LOCK_STALE_SECONDS + 1
+            if isinstance(created_at_epoch, int | float | str):
+                try:
+                    lock_age = time.time() - float(created_at_epoch)
+                except ValueError:
+                    lock_age = _PROFILE_ACTIVE_LOCK_STALE_SECONDS + 1
+            if 0 <= lock_age <= _PROFILE_ACTIVE_LOCK_STALE_SECONDS:
+                profile_id = (
+                    str(payload.get("profile_id") or "")
+                    if isinstance(payload, Mapping)
+                    else str(lock.get("idempotency_key") or "")
+                )
+                return OntologyBuildJob(
+                    id=job_id,
+                    profile_id=profile_id,
+                    status=OntologyBuildStatus.QUEUED,
+                )
+            return None
+        return job if job.status not in _TERMINAL_STATUSES else None
+
+    def _find_active_profile_job(self, profile_id: str) -> OntologyBuildJob | None:
+        jobs: list[OntologyBuildJob] = []
+        for document in self._runtime.store.list_documents("jobs", {"profile_id": profile_id}):
+            job = self._job_from_document(document)
+            if job is not None:
+                jobs.append(job)
+        with self._lock:
+            jobs.extend(
+                job.model_copy(deep=True)
+                for job in self._jobs.values()
+                if job.profile_id == profile_id
+            )
+        active = [job for job in jobs if job.status not in _TERMINAL_STATUSES]
+        if not active:
+            return None
+        active.sort(key=lambda job: (job.created_at, job.id))
+        return active[0]
+
+    @staticmethod
+    def _job_from_document(document: Mapping[str, Any] | None) -> OntologyBuildJob | None:
+        if document is None or document.get("job_type") != "build":
+            return None
+        try:
+            return OntologyBuildJob.model_validate(document["payload"])
+        except Exception:
+            logger.warning("ontology_build_job_decode_failed", exc_info=True)
+            return None
+
+    @staticmethod
+    def _raise_active_profile_job_conflict(job: OntologyBuildJob) -> None:
+        raise OntologyStateConflictError(
+            "ONTOLOGY_BUILD_JOB_ALREADY_RUNNING",
+            f"この profile では構築 job {job.id} が実行中です。完了後に再実行してください。",
+        )
+
     # --- internal ---------------------------------------------------------------------------
 
     def _prune_finished_jobs_locked(self) -> None:
@@ -2345,6 +2489,8 @@ class OntologyBuildService:
                         },
                         expected_etag=str(current["etag"]) if current is not None else None,
                     )
+                    if job.status in _TERMINAL_STATUSES:
+                        self._release_profile_job_lock(job.profile_id, job.id)
                     return
                 except OntologyVersionConflict:
                     if attempt == 2:

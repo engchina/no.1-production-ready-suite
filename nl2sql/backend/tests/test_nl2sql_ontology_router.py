@@ -877,6 +877,31 @@ def test_runtime_executes_two_confirmation_flow_and_persists_every_artifact(
     assert store.get_artifact(generated.session.sql_artifacts[-1].id) is not None
 
 
+def test_stale_session_cache_reloads_store_state_before_execute(
+    runtime: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+) -> None:
+    api_a, store, legacy = runtime
+    created = api_a.create_session(
+        QuerySessionApiCreate(
+            question="受注件数を表示",
+            profile_id="sales",
+            allowed_objects=AllowedObjects(table_names=["APP.ORDERS"]),
+        )
+    )
+    api_b = OntologyApiRuntime(legacy_service=legacy, store=store)
+    stale = api_b.get_session(created.session.id)
+    assert stale.session.status == QuerySessionStatus.AWAITING_INTENT_CONFIRMATION
+
+    generated = api_a.generate_sql(created.session.id, _generate_request(created))
+    confirmation = _confirmation(generated)
+    api_a.confirm_sql(created.session.id, confirmation)
+
+    executed = api_b.execute(created.session.id, confirmation)
+
+    assert executed.session.status == QuerySessionStatus.DONE
+    assert executed.result.rows == [{"ORDER_COUNT": 3}]
+
+
 def test_execute_query_session_route_requires_sql_execute_permission(
     runtime: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
     monkeypatch: pytest.MonkeyPatch,
@@ -1504,6 +1529,89 @@ async def test_http_ontology_build_cleans_uploaded_sources_when_start_fails(
     assert [source.id for source in build_service.discarded] == [
         source.id for source in source_storage.saved
     ]
+
+
+@pytest.mark.asyncio
+async def test_http_ontology_build_idempotent_replay_discards_new_uploads(
+    runtime: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api, store, _legacy = runtime
+
+    class _RecordingSourceStorage:
+        def __init__(self) -> None:
+            self.saved: list[OntologySourceDocument] = []
+            self.deleted: list[str] = []
+
+        async def save_upload(
+            self,
+            *,
+            profile_id: str,
+            upload: Any,
+            source_role: OntologySourceRole = OntologySourceRole.SOURCE,
+        ) -> OntologySourceDocument:
+            content = await upload.read()
+            source = OntologySourceDocument(
+                id=f"ontology_source_{len(self.saved) + 1}",
+                profile_id=profile_id,
+                filename=str(upload.filename or "source.md"),
+                media_type=str(upload.content_type or "application/octet-stream"),
+                size_bytes=len(content),
+                sha256=hashlib.sha256(content).hexdigest(),
+                storage_uri=f"memory://{upload.filename or 'source.md'}:{len(self.saved) + 1}",
+                status=OntologySourceStatus.STORED,
+                source_role=source_role,
+            )
+            self.saved.append(source)
+            return source
+
+        def delete(self, source: OntologySourceDocument) -> None:
+            self.deleted.append(source.id)
+
+    source_storage = _RecordingSourceStorage()
+    build_service = OntologyBuildService(api, source_storage=source_storage)  # type: ignore[arg-type]
+    settings = get_settings()
+    monkeypatch.setattr(settings, "app_auth_enabled", False)
+    monkeypatch.setattr(settings, "nl2sql_ontology_worker_mode", "external")
+    monkeypatch.setattr(ontology_router_module, "ontology_runtime", api)
+    monkeypatch.setattr(ontology_router_module, "ontology_source_storage", source_storage)
+    monkeypatch.setattr(ontology_router_module, "ontology_build_service", build_service)
+
+    async def post_build() -> httpx.Response:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            return await client.post(
+                "/api/nl2sql/profiles/sales/ontology-build",
+                headers={"Idempotency-Key": "test-ontology-build-replay"},
+                data={
+                    "business_text": "受注は顧客に紐づく。",
+                    "run_schema_naming": "true",
+                    "run_qa_extraction": "true",
+                    "run_text_extraction": "true",
+                },
+                files=[
+                    (
+                        "source_files",
+                        ("rules.md", "# 受注ルール\n".encode(), "text/markdown"),
+                    )
+                ],
+            )
+
+    first = await post_build()
+    second = await post_build()
+
+    assert first.status_code == 202
+    assert second.status_code == 202
+    first_job = first.json()["data"]["job"]
+    second_job = second.json()["data"]["job"]
+    assert second_job["id"] == first_job["id"]
+    assert [source.id for source in source_storage.saved] == [
+        "ontology_source_1",
+        "ontology_source_2",
+    ]
+    assert source_storage.deleted == ["ontology_source_2"]
+    stored_sources = store.list_documents("source_documents", {"profile_id": "sales"})
+    assert [document["source_document_id"] for document in stored_sources] == ["ontology_source_1"]
 
 
 @pytest.mark.asyncio

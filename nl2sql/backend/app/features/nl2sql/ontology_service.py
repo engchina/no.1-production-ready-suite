@@ -853,6 +853,12 @@ class OntologyQuerySessionService:
                     "QUERY_SESSION_ALREADY_EXISTS",
                     "同じ query session ID は復元できません。",
                 )
+            return self.replace_session(session)
+
+    def replace_session(self, session: QuerySession) -> QuerySession:
+        """永続 store の最新 snapshot で in-memory session cache を置き換える。"""
+
+        with self._lock:
             revision = self._require_revision(session.ontology_revision_id)
             view = self._require_profile_view(session.profile_view_id)
             if view.profile_id != session.profile_id:
@@ -1232,6 +1238,12 @@ class OntologyQuerySessionService:
                     "ONTOLOGY_PROPOSAL_ALREADY_EXISTS",
                     "同じ Ontology 改善提案 ID は復元できません。",
                 )
+            return self.replace_proposal(proposal)
+
+    def replace_proposal(self, proposal: OntologyProposal) -> OntologyProposal:
+        """永続 store の最新 snapshot で in-memory proposal cache を置き換える。"""
+
+        with self._lock:
             # AI 構築 job 由来の proposal は query session に紐づかないため
             # session binding 検証をスキップして復元する。
             if proposal.session_id.startswith("ontology_build:"):

@@ -121,6 +121,7 @@ from .service import nl2sql_service
 logger = logging.getLogger(__name__)
 
 ONTOLOGY_SOURCE_FILE_MAX_COUNT = 5
+_EXPECTED_ETAG_UNSET = object()
 
 _STORE_IDENTITY_FIELDS: dict[OntologyCollection, tuple[str, ...]] = {
     "revisions": ("revision_id",),
@@ -135,6 +136,9 @@ _STORE_IDENTITY_FIELDS: dict[OntologyCollection, tuple[str, ...]] = {
     "jobs": ("job_id",),
     "recommendations": ("recommendation_id",),
 }
+_STORE_OPTIMISTIC_COLLECTIONS: frozenset[OntologyCollection] = frozenset(
+    {"query_sessions", "proposals"}
+)
 
 _BUSINESS_NODE_KINDS = frozenset(
     {
@@ -378,6 +382,7 @@ class OntologyApiRuntime:
         self._results: dict[str, QueryResults] = {}
         self._plans: dict[str, ExplainPlanData] = {}
         self._embeddings: dict[str, dict[str, list[float]]] = {}
+        self._store_etags: dict[tuple[OntologyCollection, tuple[str, ...]], str] = {}
 
     def reset_after_system_schema_change(self) -> None:
         """Schema recreate / migration 後に永続 store 由来 cache を破棄する。"""
@@ -399,6 +404,7 @@ class OntologyApiRuntime:
             self._results.clear()
             self._plans.clear()
             self._embeddings.clear()
+            self._store_etags.clear()
         with self._business_name_lock:
             self._business_name_cache.clear()
             self._business_name_cache_generation += 1
@@ -2940,12 +2946,14 @@ class OntologyApiRuntime:
     def _ensure_session_loaded(self, session_id: str) -> QuerySession:
         """指定 session だけを store から復元する。"""
 
-        try:
-            return self.sessions.get_session(session_id)
-        except OntologyNotFoundError:
-            pass
         document = self.store.get_document("query_sessions", {"session_id": session_id})
-        if document is None:
+        if document is not None:
+            self._remember_store_etag("query_sessions", document)
+        else:
+            try:
+                return self.sessions.get_session(session_id)
+            except OntologyNotFoundError:
+                pass
             raise OntologyNotFoundError(
                 "QUERY_SESSION_NOT_FOUND",
                 "query session が見つかりません。",
@@ -2979,21 +2987,28 @@ class OntologyApiRuntime:
                 self._stored_payload(view_document, collection="profile view")
             )
         self.sessions.register_profile_view(view)
-        self.sessions.restore_session(session)
         self._session_views[session.id] = view
         context_raw = document.get("runtime_context")
         if isinstance(context_raw, Mapping):
             self._contexts[session.id] = QueryRuntimeContext.model_validate(context_raw)
+        else:
+            self._contexts.pop(session.id, None)
         preview_raw = document.get("preview")
         if isinstance(preview_raw, Mapping):
             self._previews[session.id] = PreviewData.model_validate(preview_raw)
+        else:
+            self._previews.pop(session.id, None)
         result_raw = document.get("result")
         if isinstance(result_raw, Mapping):
             self._results[session.id] = QueryResults.model_validate(result_raw)
+        else:
+            self._results.pop(session.id, None)
         plan_raw = document.get("performance_check")
         if isinstance(plan_raw, Mapping):
             self._plans[session.id] = ExplainPlanData.model_validate(plan_raw)
-        return session
+        else:
+            self._plans.pop(session.id, None)
+        return self.sessions.replace_session(session)
 
     def patch_intent(self, session_id: str, patch: GraphPatch) -> QuerySessionData:
         with self._lock:
@@ -3145,7 +3160,7 @@ class OntologyApiRuntime:
                 )
             context = self._require_context(session_id)
             self.sessions.authorize_execution(session_id, request, sql=artifact.sql)
-            executing = self._ensure_session_loaded(session_id)
+            executing = self.sessions.get_session(session_id)
             self._persist_session(executing)
             record_transition(
                 session_id=executing.id,
@@ -3309,7 +3324,7 @@ class OntologyApiRuntime:
                     deep=True,
                 ),
             )
-            session = self._ensure_session_loaded(session_id)
+            session = self.sessions.get_session(session_id)
             self._persist_proposal(proposal)
             self._persist_session(session)
             return proposal, self._session_data(session)
@@ -3320,12 +3335,14 @@ class OntologyApiRuntime:
             return self._ensure_proposal_loaded(proposal_id)
 
     def _ensure_proposal_loaded(self, proposal_id: str) -> OntologyProposal:
-        try:
-            return self.sessions.get_proposal(proposal_id)
-        except OntologyNotFoundError:
-            pass
         document = self.store.get_document("proposals", {"proposal_id": proposal_id})
-        if document is None:
+        if document is not None:
+            self._remember_store_etag("proposals", document)
+        else:
+            try:
+                return self.sessions.get_proposal(proposal_id)
+            except OntologyNotFoundError:
+                pass
             raise OntologyNotFoundError(
                 "ONTOLOGY_PROPOSAL_NOT_FOUND",
                 "Ontology proposal が見つかりません。",
@@ -3344,7 +3361,7 @@ class OntologyApiRuntime:
             )
         if not proposal.session_id.startswith("ontology_build:"):
             self._ensure_session_loaded(proposal.session_id)
-        return self.sessions.restore_proposal(proposal)
+        return self.sessions.replace_proposal(proposal)
 
     def list_profile_proposals(self, profile_id: str) -> list[OntologyProposal]:
         with self._lock:
@@ -3352,28 +3369,20 @@ class OntologyApiRuntime:
             self._strict_profile(profile_id)
             for document in self.store.list_documents("proposals", {"profile_id": profile_id}):
                 try:
+                    self._remember_store_etag("proposals", document)
                     proposal = OntologyProposal.model_validate(
                         self._stored_payload(document, collection="proposal")
                     )
-                    self.sessions.get_proposal(proposal.id)
-                except OntologyNotFoundError:
-                    try:
-                        self._restore_persisted_proposal(proposal)
-                    except Exception:
-                        logger.warning(
-                            "ontology_proposal_restore_skipped",
-                            exc_info=True,
-                            extra={
-                                "proposal_id": proposal.id,
-                                "profile_id": profile_id,
-                                "session_id": proposal.session_id,
-                            },
-                        )
+                    self._restore_persisted_proposal(proposal)
                 except Exception:
                     logger.warning(
-                        "ontology_proposal_document_skipped",
+                        "ontology_proposal_restore_skipped",
                         exc_info=True,
-                        extra={"profile_id": profile_id},
+                        extra={
+                            "profile_id": profile_id,
+                            "proposal_id": str(document.get("proposal_id") or ""),
+                            "session_id": str(document.get("session_id") or ""),
+                        },
                     )
             return self.sessions.list_proposals_by_profile(profile_id)
 
@@ -3553,6 +3562,19 @@ class OntologyApiRuntime:
             titles=[proposal.title_ja for proposal in proposals],
         )
 
+    def _draft_for_accepted_proposals(
+        self,
+        proposals: list[OntologyProposal],
+    ) -> SchemaOntology:
+        for proposal in proposals:
+            draft_revision_id = str(proposal.proposal_payload.values.get("draft_revision_id") or "")
+            if not draft_revision_id:
+                continue
+            draft = self._load_ontology_revision(draft_revision_id)
+            if draft is not None:
+                return draft
+        return self._accept_base_revision(proposals)
+
     def create_build_markdown_draft(
         self,
         *,
@@ -3618,10 +3640,19 @@ class OntologyApiRuntime:
                 raise OntologyIntegrityError(
                     "ONTOLOGY_PROPOSAL_IDS_REQUIRED", "承認する提案を指定してください。"
                 )
+            submitted: list[OntologyProposal] = []
+            already_accepted: list[OntologyProposal] = []
             for proposal in proposals:
-                self._assert_proposal_reviewable(proposal, action_ja="承認")
-            base = self._accept_base_revision(proposals)
-            request = self._proposals_upsert_draft_request(proposals, base)
+                if proposal.status == OntologyProposalStatus.SUBMITTED:
+                    submitted.append(proposal)
+                elif proposal.status == OntologyProposalStatus.ACCEPTED:
+                    already_accepted.append(proposal)
+                else:
+                    self._assert_proposal_reviewable(proposal, action_ja="承認")
+            if not submitted:
+                return proposals, self._draft_for_accepted_proposals(already_accepted)
+            base = self._accept_base_revision(submitted)
+            request = self._proposals_upsert_draft_request(submitted, base)
             try:
                 draft = self.create_ontology_draft(base.revision.id, request)
             except OntologyIntegrityError as exc:
@@ -3633,7 +3664,7 @@ class OntologyApiRuntime:
                     f"(詳細: {exc.message_ja})",
                 ) from exc
             accepted_list: list[OntologyProposal] = []
-            for proposal in proposals:
+            for proposal in submitted:
                 accepted = proposal.model_copy(
                     update={
                         "status": OntologyProposalStatus.ACCEPTED,
@@ -3649,13 +3680,23 @@ class OntologyApiRuntime:
                     },
                     deep=True,
                 )
-                accepted = self.sessions.update_proposal(accepted)
-                self._persist_proposal(accepted)
                 accepted_list.append(accepted)
-            return accepted_list, draft
+            self._persist_proposals_atomic(accepted_list)
+            for accepted in accepted_list:
+                self.sessions.update_proposal(accepted)
+            accepted_by_id = {proposal.id: proposal for proposal in accepted_list}
+            return [
+                accepted_by_id.get(proposal.id, proposal)
+                for proposal in proposals
+                if proposal.status == OntologyProposalStatus.ACCEPTED
+                or proposal.id in accepted_by_id
+            ], draft
 
     def accept_proposal(self, proposal_id: str) -> OntologyProposalReviewData:
         with self._lock:
+            self._ensure_store()
+            proposal = self._ensure_proposal_loaded(proposal_id)
+            self._assert_proposal_reviewable(proposal, action_ja="承認")
             accepted_list, draft = self.accept_proposals([proposal_id])
             return OntologyProposalReviewData(
                 proposal=accepted_list[0],
@@ -4204,6 +4245,44 @@ class OntologyApiRuntime:
             )
         return payload
 
+    def _store_etag_key(
+        self,
+        collection: OntologyCollection,
+        identity: Mapping[str, Any],
+    ) -> tuple[OntologyCollection, tuple[str, ...]]:
+        return (
+            collection,
+            tuple(str(identity[field]) for field in _STORE_IDENTITY_FIELDS[collection]),
+        )
+
+    def _remember_store_etag(
+        self,
+        collection: OntologyCollection,
+        document: Mapping[str, Any],
+    ) -> None:
+        if collection not in _STORE_OPTIMISTIC_COLLECTIONS:
+            return
+        etag = str(document.get("etag") or "")
+        if not etag:
+            return
+        identity = {field: document[field] for field in _STORE_IDENTITY_FIELDS[collection]}
+        self._store_etags[self._store_etag_key(collection, identity)] = etag
+
+    def _expected_store_etag(
+        self,
+        collection: OntologyCollection,
+        identity: Mapping[str, Any],
+    ) -> str | None:
+        if collection in _STORE_OPTIMISTIC_COLLECTIONS:
+            cached = self._store_etags.get(self._store_etag_key(collection, identity))
+            if cached is not None:
+                return cached
+        current = self.store.get_document(collection, identity)
+        if current is None:
+            return None
+        self._remember_store_etag(collection, current)
+        return str(current["etag"])
+
     def _persist_ontology(self, ontology: SchemaOntology, *, include_graph: bool = True) -> None:
         """revision と(必要なら)nodes/edges を永続化する。
 
@@ -4396,24 +4475,62 @@ class OntologyApiRuntime:
         )
 
     def _persist_proposal(self, proposal: OntologyProposal) -> None:
-        self._save(
-            "proposals",
-            {
-                "proposal_id": proposal.id,
-                "session_id": proposal.session_id,
-                "ontology_revision_id": proposal.base_revision_id,
-                "profile_id": proposal.profile_id,
-                "status": proposal.status.value,
-                "payload": proposal,
-            },
-        )
+        self._save("proposals", self._proposal_document(proposal))
 
-    def _save(self, collection: OntologyCollection, document: dict[str, Any]) -> None:
+    def _persist_proposals_atomic(self, proposals: list[OntologyProposal]) -> None:
+        if not proposals:
+            return
+        documents = [self._proposal_document(proposal) for proposal in proposals]
+        saved = self.store.save_documents_atomic(
+            "proposals",
+            [
+                (
+                    document,
+                    self._expected_store_etag(
+                        "proposals",
+                        {field: document[field] for field in _STORE_IDENTITY_FIELDS["proposals"]},
+                    ),
+                )
+                for document in documents
+            ],
+        )
+        for document in saved:
+            self._remember_store_etag("proposals", document)
+
+    @staticmethod
+    def _proposal_document(proposal: OntologyProposal) -> dict[str, Any]:
+        return {
+            "proposal_id": proposal.id,
+            "session_id": proposal.session_id,
+            "ontology_revision_id": proposal.base_revision_id,
+            "profile_id": proposal.profile_id,
+            "status": proposal.status.value,
+            "payload": proposal,
+        }
+
+    def _save(
+        self,
+        collection: OntologyCollection,
+        document: dict[str, Any],
+        *,
+        expected_etag: str | None | object = _EXPECTED_ETAG_UNSET,
+    ) -> dict[str, Any]:
         self._ensure_store()
         identity = {field: document[field] for field in _STORE_IDENTITY_FIELDS[collection]}
-        current = self.store.get_document(collection, identity)
-        expected_etag = str(current["etag"]) if current is not None else None
-        self.store.save_document(collection, document, expected_etag=expected_etag)
+        resolved_expected_etag: str | None
+        if expected_etag is _EXPECTED_ETAG_UNSET:
+            resolved_expected_etag = self._expected_store_etag(collection, identity)
+        elif isinstance(expected_etag, str):
+            resolved_expected_etag = expected_etag
+        else:
+            resolved_expected_etag = None
+        saved = self.store.save_document(
+            collection,
+            document,
+            expected_etag=resolved_expected_etag,
+        )
+        self._remember_store_etag(collection, saved)
+        return saved
 
 
 ontology_runtime = OntologyApiRuntime()
@@ -5251,6 +5368,16 @@ async def start_ontology_build(
     except Exception as exc:
         _raise_domain_error(exc)
 
+    existing_build_idempotency = await run_sync_io(
+        ontology_runtime.store.get_idempotency,
+        "build_ontology",
+        idempotency_key,
+    )
+    existing_build_job_id = (
+        str(existing_build_idempotency.get("resource_id") or "")
+        if existing_build_idempotency is not None
+        else ""
+    )
     stored_sources = []
     for source_file, source_role in uploads:
         try:
@@ -5281,6 +5408,8 @@ async def start_ontology_build(
             source_documents=stored_sources,
             idempotency_key=idempotency_key,
         )
+        if stored_sources and existing_build_job_id and job.id == existing_build_job_id:
+            await run_sync_io(ontology_build_service.discard_source_documents, stored_sources)
         return ApiResponse(data=OntologyBuildJobData(job=job))
     except Exception as exc:
         if stored_sources:

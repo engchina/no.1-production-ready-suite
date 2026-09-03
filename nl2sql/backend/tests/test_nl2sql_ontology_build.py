@@ -1141,14 +1141,47 @@ def test_get_build_job_normalizes_succeeded_markdown_job_with_running_final_step
 
 def test_list_profile_jobs_returns_newest_first_with_limit(
     harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    runtime, _store, _legacy = harness
-    monkeypatch.setattr(get_settings(), "nl2sql_ontology_worker_mode", "external")
+    from datetime import timedelta
+
+    from app.features.nl2sql.ontology_models import utc_now
+
+    runtime, store, _legacy = harness
     service = OntologyBuildService(runtime)
-    first = service.start("sales", business_text="一件目")
-    second = service.start("sales", business_text="二件目")
-    third = service.start("sales", business_text="三件目")
+    base = utc_now()
+    first = OntologyBuildJob(
+        id="ontology_build_list_first",
+        profile_id="sales",
+        status=OntologyBuildStatus.SUCCEEDED,
+        created_at=base,
+        finished_at=base,
+    )
+    second = OntologyBuildJob(
+        id="ontology_build_list_second",
+        profile_id="sales",
+        status=OntologyBuildStatus.SUCCEEDED,
+        created_at=base + timedelta(seconds=1),
+        finished_at=base + timedelta(seconds=1),
+    )
+    third = OntologyBuildJob(
+        id="ontology_build_list_third",
+        profile_id="sales",
+        status=OntologyBuildStatus.SUCCEEDED,
+        created_at=base + timedelta(seconds=2),
+        finished_at=base + timedelta(seconds=2),
+    )
+    for job in [first, second, third]:
+        store.save_document(
+            "jobs",
+            {
+                "job_id": job.id,
+                "job_type": "build",
+                "profile_id": job.profile_id,
+                "status": job.status.value,
+                "payload": job.model_dump(mode="json"),
+                "input_payload": {},
+            },
+        )
 
     jobs = service.list_profile_jobs("sales", limit=2)
     assert [job.id for job in jobs] == [third.id, second.id]
@@ -1351,6 +1384,61 @@ def test_start_rejects_unknown_profile(
         service.start("unknown-profile")
 
 
+def test_start_rejects_second_active_profile_job_across_workers(
+    harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, store, legacy = harness
+    monkeypatch.setattr(get_settings(), "nl2sql_ontology_worker_mode", "external")
+    service_a = OntologyBuildService(runtime)
+    started = service_a.start("sales", business_text="販売業務")
+    runtime_b = OntologyApiRuntime(legacy_service=legacy, store=store)
+    service_b = OntologyBuildService(runtime_b)
+
+    with pytest.raises(OntologyStateConflictError) as exc_info:
+        service_b.start("sales", business_text="別タブからの二重実行")
+
+    assert exc_info.value.code == "ONTOLOGY_BUILD_JOB_ALREADY_RUNNING"
+    assert started.id in exc_info.value.message_ja
+
+    assert service_a.cancel(started.id).status == OntologyBuildStatus.CANCELLED
+    restarted = service_b.start("sales", business_text="取消後の再実行")
+    assert restarted.id != started.id
+
+
+def test_start_rejects_starting_profile_lock_before_job_is_visible(
+    harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.features.nl2sql.ontology_build import _PROFILE_ACTIVE_LOCK_OPERATION
+
+    runtime, store, legacy = harness
+    monkeypatch.setattr(get_settings(), "nl2sql_ontology_worker_mode", "external")
+    store.save_idempotency(
+        {
+            "operation": _PROFILE_ACTIVE_LOCK_OPERATION,
+            "idempotency_key": "sales",
+            "request_hash": hashlib.sha256(b"sales").hexdigest(),
+            "resource_id": "ontology_build_starting",
+            "status": "active",
+            "payload": {
+                "operation": _PROFILE_ACTIVE_LOCK_OPERATION,
+                "profile_id": "sales",
+                "job_id": "ontology_build_starting",
+                "created_at_epoch": time.time(),
+            },
+        }
+    )
+    runtime_b = OntologyApiRuntime(legacy_service=legacy, store=store)
+    service_b = OntologyBuildService(runtime_b)
+
+    with pytest.raises(OntologyStateConflictError) as exc_info:
+        service_b.start("sales", business_text="別 worker の開始直後")
+
+    assert exc_info.value.code == "ONTOLOGY_BUILD_JOB_ALREADY_RUNNING"
+    assert "ontology_build_starting" in exc_info.value.message_ja
+
+
 # --- accept → draft → publish → 再起動復元 -----------------------------------------------------
 
 
@@ -1412,6 +1500,49 @@ def test_accept_applies_upserts_accumulates_and_publishes(
     restarted = OntologyApiRuntime(legacy_service=legacy, store=store)
     restored = restarted.list_profile_proposals("sales")
     assert {proposal.id for proposal in restored} >= {relationship.id, mapping.id, metric.id}
+
+
+def test_stale_proposal_cache_reloads_store_state_before_review(
+    harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+) -> None:
+    runtime_a, store, legacy = harness
+    proposal = _seed_build_proposals(runtime_a)[0]
+    runtime_b = OntologyApiRuntime(legacy_service=legacy, store=store)
+    cached = runtime_b.get_proposal(proposal.id)
+    assert cached.status == OntologyProposalStatus.SUBMITTED
+
+    accepted = runtime_a.accept_proposal(proposal.id)
+    assert accepted.proposal.status == OntologyProposalStatus.ACCEPTED
+
+    with pytest.raises(OntologyStateConflictError) as exc_info:
+        runtime_b.reject_proposal(proposal.id)
+
+    assert exc_info.value.code == "ONTOLOGY_PROPOSAL_ALREADY_REVIEWED"
+
+
+def test_batch_accept_skips_already_accepted_proposals_after_partial_retry(
+    harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+) -> None:
+    runtime, store, _legacy = harness
+    proposals = _seed_build_proposals(runtime)[:2]
+    first = runtime.accept_proposal(proposals[0].id).proposal
+    assert first.status == OntologyProposalStatus.ACCEPTED
+
+    accepted, draft = runtime.accept_proposals([proposal.id for proposal in proposals])
+
+    assert draft.revision.status == OntologyRevisionStatus.DRAFT
+    assert [proposal.status for proposal in accepted] == [
+        OntologyProposalStatus.ACCEPTED,
+        OntologyProposalStatus.ACCEPTED,
+    ]
+    persisted = [
+        store.get_document("proposals", {"proposal_id": proposal.id}) for proposal in proposals
+    ]
+    assert all(document is not None for document in persisted)
+    assert [document["status"] for document in persisted if document is not None] == [
+        OntologyProposalStatus.ACCEPTED.value,
+        OntologyProposalStatus.ACCEPTED.value,
+    ]
 
 
 def test_build_job_fails_fast_when_db_profile_scope_is_empty(
@@ -1782,7 +1913,7 @@ def test_start_prunes_oldest_finished_jobs(
         service._jobs[job.id] = job
     running = OntologyBuildJob(
         id="ontology_build_running",
-        profile_id="sales",
+        profile_id="support",
         status=OntologyBuildStatus.RUNNING,
     )
     service._jobs[running.id] = running
