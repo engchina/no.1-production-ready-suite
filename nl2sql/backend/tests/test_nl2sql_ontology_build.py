@@ -48,6 +48,7 @@ from app.features.nl2sql.ontology_models import (
     OntologyNode,
     OntologyNodeKind,
     OntologyProposalKind,
+    OntologyProposalStatus,
     OntologyProvenance,
     OntologyReviewStatus,
     OntologyRevision,
@@ -68,7 +69,10 @@ from app.features.nl2sql.ontology_router import (
     OntologyMarkdownDraftPatch,
     OntologyPublishRequest,
 )
-from app.features.nl2sql.ontology_service import OntologyNotFoundError
+from app.features.nl2sql.ontology_service import (
+    OntologyNotFoundError,
+    OntologyStateConflictError,
+)
 from app.features.nl2sql.ontology_store import InMemoryOntologyStore, OntologyVersionConflict
 from app.settings import get_settings
 
@@ -1225,8 +1229,23 @@ def test_retry_reuses_persisted_inputs_and_toggles(
     step_names = {step.name for step in result.steps}
     assert OntologyBuildStepName.SCHEMA_NAMING not in step_names
     assert OntologyBuildStepName.TEXT_EXTRACTION in step_names
-    # 二度押しは idempotency で同じ再実行 job に合流する
-    assert service.retry(failed.id).id == retried.id
+
+
+def test_failed_retry_job_can_be_retried_again_as_new_job(
+    harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+) -> None:
+    runtime, _store, _legacy = harness
+    service = OntologyBuildService(runtime)
+    failed = _wait_for_job(service, service.start("sales", business_text="販売業務").id)
+    assert failed.status == OntologyBuildStatus.FAILED
+
+    retry_failed = _wait_for_job(service, service.retry(failed.id).id)
+    assert retry_failed.status == OntologyBuildStatus.FAILED
+
+    reretry = service.retry(retry_failed.id)
+
+    assert reretry.id not in {failed.id, retry_failed.id}
+    assert _wait_for_job(service, reretry.id).status == OntologyBuildStatus.FAILED
 
 
 def test_retry_rejects_non_terminal_and_missing_jobs(
@@ -1634,6 +1653,36 @@ def test_batch_accept_creates_single_draft_for_all_proposals(
         draft.revision.id, OntologyPublishRequest(etag=draft.revision.etag)
     )
     assert published.revision.status.value == "published"
+
+
+def test_reviewed_proposal_cannot_be_accepted_or_rejected_again(
+    harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+) -> None:
+    runtime, _store, _legacy = harness
+    proposal = _seed_build_proposals(runtime)[0]
+
+    review = runtime.accept_proposal(proposal.id)
+
+    assert review.proposal.status == OntologyProposalStatus.ACCEPTED
+    with pytest.raises(OntologyStateConflictError) as accept_conflict:
+        runtime.accept_proposal(proposal.id)
+    assert accept_conflict.value.code == "ONTOLOGY_PROPOSAL_ALREADY_REVIEWED"
+    with pytest.raises(OntologyStateConflictError) as reject_conflict:
+        runtime.reject_proposal(proposal.id)
+    assert reject_conflict.value.code == "ONTOLOGY_PROPOSAL_ALREADY_REVIEWED"
+
+
+def test_batch_accept_dedupes_proposal_ids(
+    harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+) -> None:
+    runtime, _store, _legacy = harness
+    proposal = _seed_build_proposals(runtime)[0]
+
+    accepted, draft = runtime.accept_proposals([proposal.id, proposal.id])
+
+    assert len(accepted) == 1
+    assert accepted[0].id == proposal.id
+    assert accepted[0].proposal_payload.values["draft_revision_id"] == draft.revision.id
 
 
 def test_rerun_replaces_markdown_draft_without_creating_proposals(

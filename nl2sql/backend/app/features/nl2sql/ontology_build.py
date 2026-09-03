@@ -2248,7 +2248,6 @@ class OntologyBuildService:
                     deep=True,
                 )
             )
-        finished_marker = job.finished_at.isoformat() if job.finished_at else "none"
         return self.start(
             job.profile_id,
             business_text=str(payload.get("business_text") or ""),
@@ -2259,8 +2258,7 @@ class OntologyBuildService:
                 "run_text_extraction", OntologyBuildStepName.TEXT_EXTRACTION
             ),
             source_documents=sources,
-            # 二度押しは既存 idempotency 機構で同じ再実行 job に合流させる
-            idempotency_key=f"retry:{job_id}:{finished_marker}",
+            idempotency_key=f"retry:{job_id}:{uuid4().hex}",
         )
 
     # --- internal ---------------------------------------------------------------------------

@@ -853,6 +853,15 @@ class OntologyApiRuntime:
                     "ONTOLOGY_REVISION_NOT_FOUND",
                     "推論対象の Ontology revision が見つかりません。",
                 )
+            if (
+                status == OntologyReasoningStatus.FAILED
+                and ontology.revision.status == OntologyRevisionStatus.PUBLISHED
+            ):
+                logger.warning(
+                    "ontology_reasoning_failed_status_ignored_for_published_revision",
+                    extra={"revision_id": revision_id},
+                )
+                return ontology.model_copy(deep=True)
             revision = ontology.revision.model_copy(
                 update={"reasoning_status": status, **metadata},
                 deep=True,
@@ -3158,23 +3167,48 @@ class OntologyApiRuntime:
         proposal = OntologyProposal.model_validate(
             self._stored_payload(document, collection="proposal")
         )
-        self._load_ontology_revision(proposal.base_revision_id)
-        self.sessions.restore_proposal(proposal)
-        return proposal
+        return self._restore_persisted_proposal(proposal)
+
+    def _restore_persisted_proposal(self, proposal: OntologyProposal) -> OntologyProposal:
+        ontology = self._load_ontology_revision(proposal.base_revision_id)
+        if ontology is None:
+            raise OntologyIntegrityError(
+                "RESTORED_PROPOSAL_REVISION_MISSING",
+                "永続化 proposal の Ontology revision を復元できません。",
+            )
+        if not proposal.session_id.startswith("ontology_build:"):
+            self._ensure_session_loaded(proposal.session_id)
+        return self.sessions.restore_proposal(proposal)
 
     def list_profile_proposals(self, profile_id: str) -> list[OntologyProposal]:
         with self._lock:
             self._ensure_store()
             self._strict_profile(profile_id)
             for document in self.store.list_documents("proposals", {"profile_id": profile_id}):
-                proposal = OntologyProposal.model_validate(
-                    self._stored_payload(document, collection="proposal")
-                )
                 try:
+                    proposal = OntologyProposal.model_validate(
+                        self._stored_payload(document, collection="proposal")
+                    )
                     self.sessions.get_proposal(proposal.id)
                 except OntologyNotFoundError:
-                    self._load_ontology_revision(proposal.base_revision_id)
-                    self.sessions.restore_proposal(proposal)
+                    try:
+                        self._restore_persisted_proposal(proposal)
+                    except Exception:
+                        logger.warning(
+                            "ontology_proposal_restore_skipped",
+                            exc_info=True,
+                            extra={
+                                "proposal_id": proposal.id,
+                                "profile_id": profile_id,
+                                "session_id": proposal.session_id,
+                            },
+                        )
+                except Exception:
+                    logger.warning(
+                        "ontology_proposal_document_skipped",
+                        exc_info=True,
+                        extra={"profile_id": profile_id},
+                    )
             return self.sessions.list_proposals_by_profile(profile_id)
 
     def supersede_profile_proposals(self, profile_id: str) -> None:
@@ -3412,11 +3446,14 @@ class OntologyApiRuntime:
 
         with self._lock:
             self._ensure_store()
-            proposals = [self._ensure_proposal_loaded(pid) for pid in proposal_ids]
+            unique_proposal_ids = list(dict.fromkeys(proposal_ids))
+            proposals = [self._ensure_proposal_loaded(pid) for pid in unique_proposal_ids]
             if not proposals:
                 raise OntologyIntegrityError(
                     "ONTOLOGY_PROPOSAL_IDS_REQUIRED", "承認する提案を指定してください。"
                 )
+            for proposal in proposals:
+                self._assert_proposal_reviewable(proposal, action_ja="承認")
             base = self._accept_base_revision(proposals)
             request = self._proposals_upsert_draft_request(proposals, base)
             try:
@@ -3467,6 +3504,7 @@ class OntologyApiRuntime:
         with self._lock:
             self._ensure_store()
             proposal = self._ensure_proposal_loaded(proposal_id)
+            self._assert_proposal_reviewable(proposal, action_ja="却下")
             rejected = proposal.model_copy(
                 update={"status": OntologyProposalStatus.REJECTED},
                 deep=True,
@@ -3474,6 +3512,19 @@ class OntologyApiRuntime:
             rejected = self.sessions.update_proposal(rejected)
             self._persist_proposal(rejected)
             return OntologyProposalReviewData(proposal=rejected)
+
+    @staticmethod
+    def _assert_proposal_reviewable(
+        proposal: OntologyProposal,
+        *,
+        action_ja: str,
+    ) -> None:
+        if proposal.status == OntologyProposalStatus.SUBMITTED:
+            return
+        raise OntologyStateConflictError(
+            "ONTOLOGY_PROPOSAL_ALREADY_REVIEWED",
+            f"{action_ja}できるのは未処理の Ontology 改善提案だけです。",
+        )
 
     def _sync_ontology(self) -> SchemaOntology:
         self._ensure_store()

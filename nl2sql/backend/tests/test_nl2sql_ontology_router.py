@@ -34,6 +34,7 @@ from app.features.nl2sql.ontology_models import (
     OntologyNode,
     OntologyNodeKind,
     OntologyProvenance,
+    OntologyReasoningStatus,
     OntologyReviewStatus,
     OntologySourceKind,
     PhysicalMapping,
@@ -1098,6 +1099,51 @@ def test_improvement_proposal_is_bound_to_session_and_persisted(
     assert store.get_proposal(proposal.id) is not None
 
 
+def test_query_session_proposal_rehydrates_without_preloaded_session(
+    runtime: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+) -> None:
+    api, store, legacy = runtime
+    created = api.create_session(
+        QuerySessionApiCreate(question="受注件数を表示", profile_id="sales")
+    )
+    proposal, _session_data = api.create_proposal(
+        created.session.id,
+        ImprovementProposalRequest(
+            title_ja="受注別名の改善",
+            summary="問い合わせから抽出した語彙を改善提案にする",
+        ),
+    )
+    broken = proposal.model_copy(
+        update={
+            "id": "ontology_proposal_missing_session",
+            "session_id": "query_session_missing",
+        },
+        deep=True,
+    )
+    store.save_proposal(
+        {
+            "proposal_id": broken.id,
+            "session_id": broken.session_id,
+            "ontology_revision_id": broken.base_revision_id,
+            "profile_id": broken.profile_id,
+            "status": broken.status.value,
+            "payload": broken.model_dump(mode="json"),
+        }
+    )
+
+    get_runtime = OntologyApiRuntime(legacy_service=legacy, store=store)
+    list_runtime = OntologyApiRuntime(legacy_service=legacy, store=store)
+    accept_runtime = OntologyApiRuntime(legacy_service=legacy, store=store)
+    restored = get_runtime.get_proposal(proposal.id)
+    listed = list_runtime.list_profile_proposals("sales")
+    review = accept_runtime.accept_proposal(proposal.id)
+
+    assert restored.id == proposal.id
+    assert {item.id for item in listed} == {proposal.id}
+    assert review.proposal.status.value == "accepted"
+    assert review.draft is not None
+
+
 @pytest.mark.asyncio
 async def test_http_contract_accepts_frontend_confirmation_and_draft_payloads(
     runtime: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
@@ -1642,7 +1688,9 @@ def test_async_semantic_publish_succeeds_and_is_idempotent(
     publisher = OntologyPublishService(api)
 
     queued = publisher.start(revision.id, etag=revision.etag, idempotency_key="publish-1")
+    joined = publisher.start(revision.id, etag=revision.etag, idempotency_key="publish-2")
     duplicate = publisher.start(revision.id, etag=revision.etag, idempotency_key="publish-1")
+    assert joined.id == queued.id
     assert duplicate.id == queued.id
     finished = publisher.run_persisted(queued.id)
 
@@ -1667,6 +1715,10 @@ def test_async_semantic_publish_succeeds_and_is_idempotent(
     assert (
         api.published_markdown_for_revision(revision.id, profile_id="sales") == confirmed_markdown
     )
+    with pytest.raises(ValueError):
+        publisher.start(revision.id, etag=revision.etag, idempotency_key="publish-after-ready")
+    ignored = api.update_reasoning_status(revision.id, OntologyReasoningStatus.FAILED)
+    assert ignored.revision.reasoning_status.value == "ready"
 
 
 def test_oracle_store_publish_uses_local_owl2rl_and_copies_markdown(

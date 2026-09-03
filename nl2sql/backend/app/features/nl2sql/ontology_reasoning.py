@@ -36,6 +36,13 @@ from .ontology_semantics import (
 from .ontology_store import OntologyStore, canonical_json
 
 logger = logging.getLogger(__name__)
+_IN_FLIGHT_PUBLISH_STATUSES = frozenset(
+    {
+        OntologyPublishStatus.QUEUED,
+        OntologyPublishStatus.MATERIALIZING,
+        OntologyPublishStatus.VALIDATING,
+    }
+)
 
 
 class Owl2RlMaterializer(Protocol):
@@ -102,6 +109,18 @@ class OntologyPublishService:
             raise ValueError("Draft 状態の Ontology revision だけを公開できます。")
         if ontology.revision.etag != etag:
             raise ValueError("Ontology revision が更新されています。再読込してください。")
+        active_job = self._active_job_for_revision(revision_id, etag=etag)
+        if active_job is not None:
+            self.store.save_idempotency(
+                {
+                    "operation": "publish_ontology",
+                    "idempotency_key": idempotency_key,
+                    "request_hash": request_hash,
+                    "resource_id": active_job.id,
+                    "status": "accepted",
+                }
+            )
+            return active_job
         job = OntologyPublishJob(
             id=f"ontology_publish_{uuid4().hex}",
             revision_id=revision_id,
@@ -183,13 +202,61 @@ class OntologyPublishService:
             failed_job = self.get(job_id)
             if failed_job is not None:
                 try:
-                    self.runtime.update_reasoning_status(
-                        failed_job.revision_id,
-                        OntologyReasoningStatus.FAILED,
-                    )
+                    self._mark_draft_reasoning_failed(failed_job.revision_id)
                 except Exception:  # pragma: no cover - original failure remains primary
                     logger.warning("ontology_reasoning_status_update_failed", exc_info=True)
             record_job(job_type="publish", status="failed", error_code="unexpected")
+
+    def _active_job_for_revision(
+        self,
+        revision_id: str,
+        *,
+        etag: str,
+    ) -> OntologyPublishJob | None:
+        with self._lock:
+            cached_jobs = list(self._jobs.values())
+        for job in cached_jobs:
+            if (
+                job.revision_id == revision_id
+                and job.requested_etag == etag
+                and job.status in _IN_FLIGHT_PUBLISH_STATUSES
+            ):
+                return job.model_copy(deep=True)
+        for document in self.store.list_documents("jobs", {"job_type": "publish"}):
+            try:
+                job = OntologyPublishJob.model_validate(document["payload"])
+            except Exception:
+                logger.warning(
+                    "ontology_publish_job_restore_skipped",
+                    exc_info=True,
+                    extra={"revision_id": revision_id},
+                )
+                continue
+            if (
+                job.revision_id == revision_id
+                and job.requested_etag == etag
+                and job.status in _IN_FLIGHT_PUBLISH_STATUSES
+            ):
+                with self._lock:
+                    self._jobs[job.id] = job.model_copy(deep=True)
+                return job.model_copy(deep=True)
+        return None
+
+    def _mark_draft_reasoning_failed(self, revision_id: str) -> None:
+        ontology = self.runtime.ontology_revision(revision_id)
+        if ontology.revision.status != OntologyRevisionStatus.DRAFT:
+            logger.warning(
+                "ontology_publish_failed_reasoning_status_preserved",
+                extra={
+                    "revision_id": revision_id,
+                    "revision_status": ontology.revision.status.value,
+                },
+            )
+            return
+        self.runtime.update_reasoning_status(
+            revision_id,
+            OntologyReasoningStatus.FAILED,
+        )
 
     def run_persisted(self, job_id: str) -> OntologyPublishJob:
         job = self.get(job_id)
