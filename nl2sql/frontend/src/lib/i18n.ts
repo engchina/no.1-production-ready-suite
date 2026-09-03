@@ -2208,7 +2208,7 @@ const nl2sqlJa = {
   "settings.database.systemTables.operation.migrated": "システムテーブルを更新しました。",
   "settings.database.systemTables.operation.recreated": "システムテーブルをすべて再作成しました。",
   "settings.database.systemTables.readOnly":
-    "状態は参照できます。作成・更新するには管理 SQL 実行権限が必要です。",
+    "状態は参照できます。作成・更新するにはシステムテーブル管理権限が必要です。",
   "settings.database.systemTables.previousFailure": "前回の操作が完了していません",
   "settings.database.systemTables.previousFailureDetail":
     "エラーコード: {code}。状態を再取得し、「作成・更新」で再試行してください。",
