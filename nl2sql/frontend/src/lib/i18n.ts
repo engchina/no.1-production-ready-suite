@@ -251,6 +251,7 @@ const nl2sqlJa = {
   "security.roles.profileAccessEmpty": "利用権限を設定できる業務プロファイルがありません。先に業務プロファイルを作成してください。",
   "security.roles.profileAccessNoResults": "条件に一致する業務プロファイルがありません。",
   "security.roles.profileAccessSystemAdmin": "SYSTEM_ADMIN はすべての業務プロファイルを自動的に利用できます。個別設定は不要です。",
+  "security.roles.profileAccessManagedAll": "業務プロファイル管理権限により、すべての業務プロファイルを利用できます。個別選択は不要です。",
   "security.roles.profileAccessAll": "すべての業務プロファイル",
   "security.roles.profileAccessCount": "{count} 件",
   "security.roles.dataEntitlements": "構造化データ権限",

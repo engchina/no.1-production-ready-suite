@@ -86,6 +86,7 @@ const ROLE_POINTER_TO_FIELD = {
 } as const satisfies Readonly<Record<string, RoleFormField>>;
 
 const SYSTEM_ADMIN_ROLE_CODE = "SYSTEM_ADMIN";
+const PROFILE_MANAGE_PERMISSION = "nl2sql.profiles.manage";
 
 const EMPTY_DRAFT: RoleDraftState = {
   roleCode: "",
@@ -161,6 +162,16 @@ function effectivePermissionCodes(
   return codes;
 }
 
+function roleGrantsAllProfileAccess(
+  role: SecurityRole,
+  permissionByCode: Map<string, PermissionDefinition>
+) {
+  return (
+    role.role_code === SYSTEM_ADMIN_ROLE_CODE ||
+    effectivePermissionCodes(role.permissions, permissionByCode).has(PROFILE_MANAGE_PERMISSION)
+  );
+}
+
 export function SecurityRolesPage() {
   const confirm = useConfirm();
   const { hasPermission } = useAuth();
@@ -211,6 +222,14 @@ export function SecurityRolesPage() {
     () => permissionInheritanceSources(draft.permissions, permissionByCode),
     [draft.permissions, permissionByCode]
   );
+  const draftEffectivePermissionCodes = useMemo(
+    () => effectivePermissionCodes(draft.permissions, permissionByCode),
+    [draft.permissions, permissionByCode]
+  );
+  const draftGrantsAllProfileAccess =
+    editingRole?.role_code === SYSTEM_ADMIN_ROLE_CODE ||
+    draftEffectivePermissionCodes.has(PROFILE_MANAGE_PERMISSION);
+  const profileAccessReadOnly = readOnly || draftGrantsAllProfileAccess;
 
   const rolePermissionText = (role: SecurityRole) =>
     [...effectivePermissionCodes(role.permissions, permissionByCode)]
@@ -218,7 +237,7 @@ export function SecurityRolesPage() {
       .join(" ");
 
   const roleProfileAccessText = (role: SecurityRole) =>
-    role.role_code === "SYSTEM_ADMIN"
+    roleGrantsAllProfileAccess(role, permissionByCode)
       ? t("security.roles.profileAccessAll")
       : profileAccessProfiles
           .filter((profile) => role.allowed_profile_ids.includes(profile.id))
@@ -406,7 +425,7 @@ export function SecurityRolesPage() {
           display_name: draft.displayName,
           description: draft.description,
           permissions: draft.permissions,
-          allowed_profile_ids: draft.allowedProfileIds,
+          allowed_profile_ids: draftGrantsAllProfileAccess ? [] : draft.allowedProfileIds,
           data_entitlements: editingRole.data_entitlements,
         });
         const nextRole = normalizedRole(updated);
@@ -419,7 +438,7 @@ export function SecurityRolesPage() {
           description: draft.description,
           permissions: draft.permissions,
           data_entitlements: [],
-          allowed_profile_ids: draft.allowedProfileIds,
+          allowed_profile_ids: draftGrantsAllProfileAccess ? [] : draft.allowedProfileIds,
         });
         const nextRole = normalizedRole(created);
         setRoles((rows) => [...rows, nextRole]);
@@ -637,7 +656,7 @@ export function SecurityRolesPage() {
     draft.allowedProfileIds.includes(id)
   ).length;
   const toggleProfileAccess = (profileId: string) => {
-    if (readOnly) return;
+    if (profileAccessReadOnly) return;
     setDraft((current) => ({
       ...current,
       allowedProfileIds: current.allowedProfileIds.includes(profileId)
@@ -646,14 +665,14 @@ export function SecurityRolesPage() {
     }));
   };
   const selectProfileAccess = (ids: string[]) => {
-    if (readOnly) return;
+    if (profileAccessReadOnly) return;
     setDraft((current) => ({
       ...current,
       allowedProfileIds: [...new Set([...current.allowedProfileIds, ...ids])],
     }));
   };
   const clearProfileAccess = (ids: string[]) => {
-    if (readOnly) return;
+    if (profileAccessReadOnly) return;
     const idSet = new Set(ids);
     setDraft((current) => ({
       ...current,
@@ -844,7 +863,7 @@ export function SecurityRolesPage() {
                 aria-labelledby="security-roles-form-heading"
               >
                 <RequiredFieldsNote />
-                {editingRole?.role_code === "SYSTEM_ADMIN" ? (
+                {editingRole?.role_code === SYSTEM_ADMIN_ROLE_CODE ? (
                   <Banner severity="info">{t("security.roles.systemAdminNotice")}</Banner>
                 ) : null}
                 <div className="grid gap-4 sm:grid-cols-2">
@@ -992,7 +1011,7 @@ export function SecurityRolesPage() {
                   )}
                 </fieldset>
 
-                <fieldset className="grid gap-3" disabled={readOnly}>
+                <fieldset className="grid gap-3" disabled={profileAccessReadOnly}>
                   <legend
                     id="security-roles-profile-access-label"
                     className="text-base font-semibold"
@@ -1000,8 +1019,14 @@ export function SecurityRolesPage() {
                     {t("security.roles.profileAccess")}
                   </legend>
                   <p className="text-sm text-muted">{t("security.roles.profileAccessHint")}</p>
-                  {editingRole?.role_code === "SYSTEM_ADMIN" ? (
-                    <Banner severity="info">{t("security.roles.profileAccessSystemAdmin")}</Banner>
+                  {draftGrantsAllProfileAccess ? (
+                    <Banner severity="info">
+                      {t(
+                        editingRole?.role_code === SYSTEM_ADMIN_ROLE_CODE
+                          ? "security.roles.profileAccessSystemAdmin"
+                          : "security.roles.profileAccessManagedAll"
+                      )}
+                    </Banner>
                   ) : (
                     <>
                       <div className="rounded-md border border-border bg-background p-3">
@@ -1010,9 +1035,9 @@ export function SecurityRolesPage() {
                           placeholder={t("security.roles.profileAccessSearchPlaceholder")}
                           value={profileAccessSearch}
                           testId="security-roles-profile-access-search"
-                          disabled={readOnly}
+                          disabled={profileAccessReadOnly}
                           onChange={(value) => {
-                            if (readOnly) return;
+                            if (profileAccessReadOnly) return;
                             setProfileAccessSearch(value);
                           }}
                         />
@@ -1021,8 +1046,8 @@ export function SecurityRolesPage() {
                         <BulkSelectionActions
                           selectLabel={t("common.selection.selectAll")}
                           clearLabel={t("common.selection.clearAll")}
-                          selectDisabled={readOnly || profileAccessIds.length === 0 || selectedProfileAccessCount === profileAccessIds.length}
-                          clearDisabled={readOnly || selectedProfileAccessCount === 0}
+                          selectDisabled={profileAccessReadOnly || profileAccessIds.length === 0 || selectedProfileAccessCount === profileAccessIds.length}
+                          clearDisabled={profileAccessReadOnly || selectedProfileAccessCount === 0}
                           dataTestId="security-roles-profile-access-selection-actions"
                           onSelectAll={() => selectProfileAccess(profileAccessIds)}
                           onClearAll={() => clearProfileAccess(profileAccessIds)}
@@ -1050,14 +1075,14 @@ export function SecurityRolesPage() {
                               <label
                                 key={profile.id}
                                 className={`flex min-h-11 items-start gap-2 text-sm ${
-                                  readOnly ? "cursor-not-allowed opacity-80" : "cursor-pointer"
+                                  profileAccessReadOnly ? "cursor-not-allowed opacity-80" : "cursor-pointer"
                                 }`}
                               >
                                 <input
                                   className="mt-0.5 h-4 w-4 accent-primary disabled:cursor-not-allowed"
                                   type="checkbox"
                                   checked={checked}
-                                  disabled={readOnly}
+                                  disabled={profileAccessReadOnly}
                                   onChange={() => toggleProfileAccess(profile.id)}
                                 />
                                 <span className="min-w-0">
@@ -1157,8 +1182,9 @@ function RoleDetailPanel({
   const effectivePermissionCount = role.permissions.length + [...inheritedSources.keys()].filter(
     (code) => !role.permissions.includes(code)
   ).length;
+  const grantsAllProfileAccess = roleGrantsAllProfileAccess(role, permissionByCode);
   const allowedProfiles =
-    role.role_code === "SYSTEM_ADMIN"
+    grantsAllProfileAccess
       ? profileAccessProfiles
       : profileAccessProfiles.filter((profile) => role.allowed_profile_ids.includes(profile.id));
 
@@ -1184,7 +1210,7 @@ function RoleDetailPanel({
         ) : null}
       </div>
 
-      {role.role_code === "SYSTEM_ADMIN" ? (
+      {role.role_code === SYSTEM_ADMIN_ROLE_CODE ? (
         <Banner severity="info">{t("security.roles.systemAdminNotice")}</Banner>
       ) : null}
       {role.archived ? (
@@ -1202,7 +1228,7 @@ function RoleDetailPanel({
           {t("security.roles.permissionCount", { count: effectivePermissionCount })}
         </SecurityDetailField>
         <SecurityDetailField label={t("security.roles.profileAccess")}>
-          {role.role_code === "SYSTEM_ADMIN"
+          {grantsAllProfileAccess
             ? t("security.roles.profileAccessAll")
             : t("security.roles.profileAccessCount", { count: allowedProfiles.length })}
         </SecurityDetailField>
@@ -1213,7 +1239,7 @@ function RoleDetailPanel({
           {role.description || t("security.common.none")}
         </SecurityDetailField>
       </dl>
-      {role.role_code !== "SYSTEM_ADMIN" && allowedProfiles.length > 0 ? (
+      {!grantsAllProfileAccess && allowedProfiles.length > 0 ? (
         <div className="grid gap-2 rounded-md border border-border bg-card p-3">
           <h3 className="text-sm font-semibold text-foreground">{t("security.roles.profileAccess")}</h3>
           <div className="flex flex-wrap gap-1.5">

@@ -42,6 +42,7 @@ from .passwords import (
 from .permissions import (
     ALL_PERMISSION_CODES,
     expand_permissions,
+    grants_all_profile_access,
     normalize_permission_codes,
     unknown_permission_codes,
 )
@@ -1089,6 +1090,11 @@ class SecurityService:
             raise SecurityApiError(400, f"未登録の権限コードです: {', '.join(sorted(unknown))}")
         normalized = normalize_permission_codes(permissions)
         data_records = self._data_entitlement_records(role_id, entitlements)
+        normalized_allowed_profile_ids = (
+            set()
+            if grants_all_profile_access(normalized)
+            else {item.strip() for item in allowed_profile_ids if item.strip()}
+        )
         return RoleRecord(
             role_id=role_id,
             role_code=role_code,
@@ -1099,7 +1105,7 @@ class SecurityService:
             version=version,
             permissions=normalized,
             entitlements=data_records,
-            allowed_profile_ids={item.strip() for item in allowed_profile_ids if item.strip()},
+            allowed_profile_ids=normalized_allowed_profile_ids,
         )
 
     @staticmethod

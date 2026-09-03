@@ -3168,6 +3168,100 @@ test("SYSTEM_ADMIN はロール管理で業務プロファイル利用権限を�
     .toEqual(["default", "finance"]);
 });
 
+test("業務プロファイル管理権限のロールは全業務プロファイルとして扱う", async ({ page }) => {
+  await mockDatabaseGateReady(page);
+  await page.unroute("**/api/security/profile-access/profiles**");
+  await page.route("**/api/security/profile-access/profiles**", (route) =>
+    fulfill(route, [
+      {
+        id: "default",
+        name: "標準プロファイル",
+        category: "共通",
+        description: "標準の業務プロファイル",
+        archived: false,
+        allowed_role_ids: ["role-profile-manager"],
+      },
+      {
+        id: "finance",
+        name: "財務プロファイル",
+        category: "会計",
+        description: "財務部門向け",
+        archived: false,
+        allowed_role_ids: ["role-profile-manager"],
+      },
+    ])
+  );
+  const permissionRows = [
+    {
+      code: "menu.profiles",
+      group: "メニュー権限",
+      label: "業務プロファイル",
+      description: "業務プロファイルを表示し、関連操作を利用できます。",
+      implies: ["nl2sql.profiles.manage"],
+    },
+    {
+      code: "nl2sql.profiles.manage",
+      group: "管理権限",
+      label: "業務プロファイル管理",
+      description: "業務プロファイルを管理できます。",
+      implies: ["nl2sql.profiles.read"],
+    },
+    {
+      code: "nl2sql.profiles.read",
+      group: "参照権限",
+      label: "業務プロファイル参照",
+      description: "業務プロファイルの利用コンテキストを参照できます。",
+      implies: [],
+    },
+  ];
+  const profileManagerRole = {
+    ...systemRole,
+    role_id: "role-profile-manager",
+    role_code: "PROFILE_MANAGER",
+    display_name: "業務プロファイル管理ロール",
+    description: "個別 profile ID は保存しない",
+    is_built_in: false,
+    permissions: ["menu.profiles"],
+    data_entitlements: [],
+    allowed_profile_ids: ["default"],
+  };
+  let savedPayload: Record<string, unknown> | null = null;
+  await page.route("**/api/security/roles?include_archived=true", (route) =>
+    fulfill(route, [systemRole, profileManagerRole])
+  );
+  await page.route("**/api/security/permissions", (route) => fulfill(route, permissionRows));
+  await page.route("**/api/security/roles/role-profile-manager", async (route) => {
+    savedPayload = route.request().postDataJSON() as Record<string, unknown>;
+    await fulfill(route, {
+      ...profileManagerRole,
+      version: 2,
+      allowed_profile_ids: savedPayload.allowed_profile_ids,
+    });
+  });
+
+  await page.goto("/settings/security/roles");
+  const grid = page.getByTestId("security-roles-grid");
+  await grid
+    .locator("tbody tr")
+    .filter({ hasText: "業務プロファイル管理ロール" })
+    .locator("td")
+    .first()
+    .click();
+  await expect(page.getByText("すべての業務プロファイル", { exact: true })).toBeVisible();
+  await page.getByTestId("security-roles-detail-actions").getByRole("button", { name: "編集" }).click();
+
+  await expect(
+    page.getByText(
+      "業務プロファイル管理権限により、すべての業務プロファイルを利用できます。個別選択は不要です。",
+      { exact: true }
+    )
+  ).toBeVisible();
+  await expect(page.getByTestId("security-roles-profile-access-list")).toHaveCount(0);
+  await page.getByRole("group", { name: "ロール編集操作" }).getByRole("button", { name: "保存" }).click();
+  await expect.poll(() => savedPayload?.allowed_profile_ids).toEqual([]);
+  await expectNoPageHorizontalScroll(page);
+});
+
 test("ロール・権限管理は業務プロファイル候補の取得失敗でもロール一覧を表示する", async ({ page }) => {
   await mockDatabaseGateReady(page);
   await page.unroute("**/api/security/profile-access/profiles**");

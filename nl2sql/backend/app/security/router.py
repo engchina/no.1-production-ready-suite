@@ -12,8 +12,8 @@ from app.settings import get_settings
 
 from .deepsec import get_deepsec_service
 from .dependencies import current_principal, local_debug_principal, request_context
-from .domain import Principal, RoleRecord, UserRecord
-from .permissions import PERMISSION_CATALOG
+from .domain import SYSTEM_ADMIN_ROLE_CODE, Principal, RoleRecord, UserRecord
+from .permissions import PERMISSION_CATALOG, grants_all_profile_access
 from .schemas import (
     CurrentUserData,
     DeepSecApplyRequest,
@@ -444,6 +444,10 @@ def list_profile_access_profiles(
     allowed_roles_by_profile: dict[str, list[str]] = {profile_id: [] for profile_id in profile_ids}
     for role in roles:
         if role.archived:
+            continue
+        if role.role_code == SYSTEM_ADMIN_ROLE_CODE or grants_all_profile_access(role.permissions):
+            for profile_id in profile_ids:
+                allowed_roles_by_profile[profile_id].append(role.role_id)
             continue
         for profile_id in role.allowed_profile_ids:
             if profile_id in allowed_roles_by_profile:

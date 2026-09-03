@@ -11,6 +11,7 @@ from __future__ import annotations
 from fastapi import HTTPException, Request
 
 from app.security.domain import Principal
+from app.security.permissions import PROFILE_MANAGE_PERMISSION
 
 
 def principal_from_request(request: Request) -> Principal | None:
@@ -33,11 +34,11 @@ def assert_profile_access(
 ) -> None:
     """profile_id が principal の許可リストに含まれることを検証する。
 
-    system admin と認証無効時は無条件で許可。許可外は 403。
+    system admin、認証無効、業務プロファイル管理権限は無条件で許可。許可外は 403。
     """
 
     principal = principal_from_request(request)
-    if principal is None or principal.is_system_admin:
+    if principal is None or principal.has_permission(PROFILE_MANAGE_PERMISSION):
         return
     resolved = (profile_id or ("default" if default_profile else "")).strip()
     if resolved and resolved in principal.allowed_profile_ids:
