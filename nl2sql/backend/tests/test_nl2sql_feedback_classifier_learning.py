@@ -385,8 +385,9 @@ def test_classifier_train_requires_two_categories_returns_422(
     )
     monkeypatch.setattr(nl2sql_router, "nl2sql_service", service)
 
+    request = cast(Request, SimpleNamespace(state=SimpleNamespace(principal=None)))
     with pytest.raises(HTTPException) as exc_info:
-        nl2sql_router.train_classifier(ClassifierTrainRequest())
+        nl2sql_router.train_classifier(ClassifierTrainRequest(), request)
 
     assert exc_info.value.status_code == 422
     assert "2 category" in str(exc_info.value.detail)
@@ -416,8 +417,9 @@ def test_classifier_train_failure_returns_422(
     monkeypatch.setattr(service, "_classifier_vectors", fail_vectors)
     monkeypatch.setattr(nl2sql_router, "nl2sql_service", service)
 
+    request = cast(Request, SimpleNamespace(state=SimpleNamespace(principal=None)))
     with pytest.raises(HTTPException) as exc_info:
-        nl2sql_router.train_classifier(ClassifierTrainRequest())
+        nl2sql_router.train_classifier(ClassifierTrainRequest(), request)
 
     assert exc_info.value.status_code == 422
     assert "embedding failure" in str(exc_info.value.detail)

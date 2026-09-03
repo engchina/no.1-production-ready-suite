@@ -537,9 +537,47 @@ class QualityEvaluationService:
         self._wake_quality_evaluation_job_if_needed(job)
         return job_summary(job)
 
-    def list_jobs(self, *, cursor: str | None, limit: int) -> QualityEvaluationJobPage:
+    def peek_job(self, job_id: str) -> QualityEvaluationJobSummary:
+        return job_summary(self.peek_job_record(job_id))
+
+    def peek_job_record(self, job_id: str) -> QualityEvaluationJobRecord:
+        job = self._repository.get_job(job_id)
+        if job is None:
+            raise QualityEvaluationJobNotFoundError("指定されたSQL生成評価 job が見つかりません。")
+        return job
+
+    def list_jobs(
+        self,
+        *,
+        cursor: str | None,
+        limit: int,
+        allowed_profile_ids: set[str] | None = None,
+    ) -> QualityEvaluationJobPage:
         offset = _decode_offset(cursor)
         page_size = min(max(limit, 1), 100)
+        if allowed_profile_ids is not None:
+            selected: list[QualityEvaluationJobRecord] = []
+            matching_total = 0
+            raw_offset = 0
+            while True:
+                jobs, raw_total = self._repository.list_jobs(offset=raw_offset, limit=500)
+                for job in jobs:
+                    if (job.profile_id or "default") not in allowed_profile_ids:
+                        continue
+                    if matching_total >= offset and len(selected) < page_size:
+                        selected.append(job)
+                    matching_total += 1
+                raw_offset += len(jobs)
+                if raw_offset >= raw_total or not jobs:
+                    break
+            next_offset = offset + len(selected)
+            for job in selected:
+                self._wake_quality_evaluation_job_if_needed(job)
+            return QualityEvaluationJobPage(
+                items=[job_summary(item) for item in selected],
+                next_cursor=_encode_offset(next_offset) if next_offset < matching_total else None,
+                total=matching_total,
+            )
         jobs, total = self._repository.list_jobs(offset=offset, limit=page_size)
         next_offset = offset + len(jobs)
         for job in jobs:

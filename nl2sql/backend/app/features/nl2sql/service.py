@@ -6284,6 +6284,14 @@ class Nl2SqlService:
     def _encode_page_cursor(self, offset: int) -> str:
         return base64.urlsafe_b64encode(str(offset).encode("ascii")).decode("ascii").rstrip("=")
 
+    @staticmethod
+    def _profile_in_allowed_profile_ids(
+        profile_id: str, allowed_profile_ids: set[str] | None
+    ) -> bool:
+        if allowed_profile_ids is None:
+            return True
+        return (profile_id or "default") in allowed_profile_ids
+
     def _history_page(
         self,
         *,
@@ -6294,12 +6302,55 @@ class Nl2SqlService:
         query: str = "",
         actor_user_uuid: str = "",
         payload_filters: Mapping[str, str] | None = None,
+        allowed_profile_ids: set[str] | None = None,
     ) -> tuple[list[HistoryItem], str, int]:
+        if allowed_profile_ids is not None and not allowed_profile_ids:
+            return [], "", 0
+        if profile_id and not self._profile_in_allowed_profile_ids(profile_id, allowed_profile_ids):
+            return [], "", 0
         filters = {key: value for key, value in (payload_filters or {}).items() if value}
         if actor_user_uuid:
             filters["actor_user_uuid"] = actor_user_uuid
         repository = self._incremental_repository
         if repository is not None:
+            if allowed_profile_ids is not None and not profile_id:
+                offset = self._decode_page_cursor(cursor)
+                items: list[HistoryItem] = []
+                repo_cursor: str | None = ""
+                while True:
+                    try:
+                        documents, repo_cursor, _total = repository.list_documents_page(
+                            "history",
+                            cursor=repo_cursor or None,
+                            limit=500,
+                            status=status,
+                            query=query,
+                            payload_filters=filters or None,
+                        )
+                    except Exception as exc:
+                        self._raise_incremental_repository_failure(
+                            operation="history_search",
+                            exc=exc,
+                            operation_error_code="history_query_failed",
+                        )
+                    page_items = [HistoryItem.model_validate(document) for document in documents]
+                    items.extend(
+                        item
+                        for item in page_items
+                        if self._profile_in_allowed_profile_ids(
+                            item.profile_id, allowed_profile_ids
+                        )
+                    )
+                    if not repo_cursor or not documents:
+                        break
+                total = len(items)
+                selected = items[offset : offset + limit]
+                next_offset = offset + len(selected)
+                return (
+                    [item.model_copy(deep=True) for item in selected],
+                    self._encode_page_cursor(next_offset) if next_offset < total else "",
+                    total,
+                )
             try:
                 documents, next_cursor, total = repository.list_documents_page(
                     "history",
@@ -6338,6 +6389,7 @@ class Nl2SqlService:
                     in f"{item.question} {item.generated_sql} {item.feedback_comment}".casefold()
                 )
                 and _history_item_matches_payload_filters(item, filters)
+                and self._profile_in_allowed_profile_ids(item.profile_id, allowed_profile_ids)
             ]
         total = len(items)
         selected = items[offset : offset + limit]
@@ -6348,14 +6400,20 @@ class Nl2SqlService:
             total,
         )
 
-    def _history_snapshot(self, *, status: str = "") -> list[HistoryItem]:
+    def _history_snapshot(
+        self, *, status: str = "", allowed_profile_ids: set[str] | None = None
+    ) -> list[HistoryItem]:
         if self._incremental_repository is None:
             with self._lock:
                 return [
                     item.model_copy(deep=True)
                     for item in reversed(self._history)
-                    if not status
-                    or (item.feedback_rating.value if item.feedback_rating else "unrated") == status
+                    if (
+                        not status
+                        or (item.feedback_rating.value if item.feedback_rating else "unrated")
+                        == status
+                    )
+                    and self._profile_in_allowed_profile_ids(item.profile_id, allowed_profile_ids)
                 ]
         items: list[HistoryItem] = []
         cursor = ""
@@ -6364,6 +6422,7 @@ class Nl2SqlService:
                 cursor=cursor or None,
                 limit=500,
                 status=status,
+                allowed_profile_ids=allowed_profile_ids,
             )
             items.extend(page)
             if not cursor:
@@ -6557,11 +6616,16 @@ class Nl2SqlService:
         )
 
     def save_admin_feedback_review(
-        self, request: AdminFeedbackReviewRequest
+        self,
+        request: AdminFeedbackReviewRequest,
+        *,
+        allowed_profile_ids: set[str] | None = None,
     ) -> AdminFeedbackReviewData:
         current = self._history_by_id(request.history_id)
         if current is None:
             raise KeyError(request.history_id)
+        if not self._profile_in_allowed_profile_ids(current.profile_id, allowed_profile_ids):
+            raise PermissionError(current.profile_id)
         feedback_content = request.feedback_content.strip()
         updated = current.model_copy(
             update={
@@ -6770,6 +6834,7 @@ class Nl2SqlService:
         rating: str,
         profile_id: str,
         query: str,
+        allowed_profile_ids: set[str] | None = None,
     ) -> FeedbackListData:
         self._load_classifier_state()
         status = rating if rating in {"good", "bad", "unrated"} else ""
@@ -6779,6 +6844,7 @@ class Nl2SqlService:
             profile_id=profile_id,
             status=status,
             query=query,
+            allowed_profile_ids=allowed_profile_ids,
         )
         records: list[FeedbackRecord] = []
         for item in items:
@@ -6912,14 +6978,34 @@ class Nl2SqlService:
             ),
         )
 
-    def feedback_index_status(self) -> FeedbackIndexData:
-        return self._feedback_index_data(operation="status", include_bad=False)
+    def feedback_index_status(
+        self, *, allowed_profile_ids: set[str] | None = None
+    ) -> FeedbackIndexData:
+        return self._feedback_index_data(
+            operation="status",
+            include_bad=False,
+            allowed_profile_ids=allowed_profile_ids,
+        )
 
-    def rebuild_feedback_index(self, request: FeedbackIndexRequest) -> FeedbackIndexData:
+    def rebuild_feedback_index(
+        self,
+        request: FeedbackIndexRequest,
+        *,
+        allowed_profile_ids: set[str] | None = None,
+    ) -> FeedbackIndexData:
         del request
-        return self._feedback_index_data(operation="rebuild", include_bad=False)
+        return self._feedback_index_data(
+            operation="rebuild",
+            include_bad=False,
+            allowed_profile_ids=allowed_profile_ids,
+        )
 
-    def clear_feedback_index(self, request: FeedbackIndexRequest) -> FeedbackIndexData:
+    def clear_feedback_index(
+        self,
+        request: FeedbackIndexRequest,
+        *,
+        allowed_profile_ids: set[str] | None = None,
+    ) -> FeedbackIndexData:
         del request
         self._load_feedback_state()
         started = time.monotonic()
@@ -6927,10 +7013,21 @@ class Nl2SqlService:
         warnings: list[str] = []
         executed = False
         runtime = "oracle" if self._use_oracle_runtime() else "deterministic"
-        source_count = self._feedback_source_history_count()
-        indexable_count = len(self._feedback_indexable_history(False))
+        source_count = self._feedback_source_history_count(allowed_profile_ids=allowed_profile_ids)
+        indexable_count = len(
+            self._feedback_indexable_history(False, allowed_profile_ids=allowed_profile_ids)
+        )
+        scoped_history_ids: set[str] | None = None
+        if allowed_profile_ids is not None:
+            scoped_history_ids = {
+                item.id for item in self._history_snapshot(allowed_profile_ids=allowed_profile_ids)
+            }
         with self._lock:
-            current_indexed = len(self._feedback_indexed_ids)
+            current_indexed = (
+                len(self._feedback_indexed_ids)
+                if scoped_history_ids is None
+                else len(self._feedback_indexed_ids & scoped_history_ids)
+            )
         if not self._use_oracle_runtime():
             warnings.append(
                 "Feedback vector index の clear 実行には NL2SQL_RUNTIME_MODE=oracle が必要です。"
@@ -6938,12 +7035,29 @@ class Nl2SqlService:
         else:
             try:
                 settings = get_settings()
-                self._oracle_adapter.clear_feedback_vector_index(
-                    table_name=settings.nl2sql_feedback_vector_table,
-                    index_name=settings.nl2sql_feedback_vector_index,
-                )
+                if scoped_history_ids is None:
+                    self._oracle_adapter.clear_feedback_vector_index(
+                        table_name=settings.nl2sql_feedback_vector_table,
+                        index_name=settings.nl2sql_feedback_vector_index,
+                    )
+                    with self._lock:
+                        self._feedback_indexed_ids = set()
+                else:
+                    with self._lock:
+                        ids_to_delete = sorted(self._feedback_indexed_ids & scoped_history_ids)
+                    for history_id in ids_to_delete:
+                        self._oracle_adapter.delete_feedback_vector_entry(
+                            table_name=settings.nl2sql_feedback_vector_table,
+                            history_id=history_id,
+                        )
+                    with self._lock:
+                        self._feedback_indexed_ids.difference_update(scoped_history_ids)
                 with self._lock:
-                    self._feedback_indexed_ids = set()
+                    current_indexed = (
+                        len(self._feedback_indexed_ids)
+                        if scoped_history_ids is None
+                        else len(self._feedback_indexed_ids & scoped_history_ids)
+                    )
                 executed = True
                 self._persist_singletons("feedback_indexed_ids")
             except OracleAdapterError as exc:
@@ -6952,16 +7066,12 @@ class Nl2SqlService:
         settings = get_settings()
         return FeedbackIndexData(
             operation="clear",
-            status=(
-                "empty"
-                if executed
-                else self._feedback_index_status(current_indexed, indexable_count)
-            ),
+            status=self._feedback_index_status(current_indexed, indexable_count),
             executed=executed,
             runtime=runtime,
             source_history_count=source_count,
             indexable_count=indexable_count,
-            indexed_count=0 if executed else current_indexed,
+            indexed_count=current_indexed,
             ddl=self._feedback_index_ddl(),
             embedding_model=settings.oci_genai_embed_model_id,
             embedding_configured=embedding_configured,
@@ -6987,10 +7097,13 @@ class Nl2SqlService:
         return SimilarHistoryData(items=filtered[:limit])
 
     def list_feedback_entries(
-        self, *, warnings: Sequence[str] | None = None
+        self,
+        *,
+        warnings: Sequence[str] | None = None,
+        allowed_profile_ids: set[str] | None = None,
     ) -> FeedbackEntriesData:
         self._load_feedback_state()
-        history = self._history_snapshot()
+        history = self._history_snapshot(allowed_profile_ids=allowed_profile_ids)
         with self._lock:
             items = [
                 FeedbackVectorEntry(
@@ -7018,11 +7131,24 @@ class Nl2SqlService:
             warnings=list(warnings or []),
         )
 
-    def delete_feedback_entries(self, history_ids: list[str]) -> FeedbackEntriesData:
+    def delete_feedback_entries(
+        self,
+        history_ids: list[str],
+        *,
+        allowed_profile_ids: set[str] | None = None,
+    ) -> FeedbackEntriesData:
         self._load_feedback_state()
         ids = {item.strip() for item in history_ids if item.strip()}
         if not ids:
-            return self.list_feedback_entries()
+            return self.list_feedback_entries(allowed_profile_ids=allowed_profile_ids)
+        denied = [
+            item_id
+            for item_id in ids
+            if (current := self._history_by_id(item_id)) is not None
+            and not self._profile_in_allowed_profile_ids(current.profile_id, allowed_profile_ids)
+        ]
+        if denied:
+            raise PermissionError(denied[0])
         warnings: list[str] = []
         if self._use_oracle_runtime():
             settings = get_settings()
@@ -7047,7 +7173,10 @@ class Nl2SqlService:
             self._persist_singletons("feedback_indexed_ids")
         else:
             self._persist_state()
-        return self.list_feedback_entries(warnings=warnings)
+        return self.list_feedback_entries(
+            warnings=warnings,
+            allowed_profile_ids=allowed_profile_ids,
+        )
 
     def feedback_search_config(self) -> FeedbackSearchConfigData:
         self._load_feedback_state()
@@ -7069,11 +7198,17 @@ class Nl2SqlService:
         self._persist_singletons("feedback_search_config")
         return self.feedback_search_config()
 
-    def classifier_status(self) -> ClassifierStatusData:
+    def classifier_status(
+        self, *, allowed_profile_ids: set[str] | None = None
+    ) -> ClassifierStatusData:
         self._load_classifier_state()
         with self._lock:
             artifact = dict(self._classifier_artifact or {})
-            examples = list(self._classifier_examples)
+            examples = [
+                item
+                for item in self._classifier_examples
+                if self._profile_in_allowed_profile_ids(item.profile_id, allowed_profile_ids)
+            ]
         categories = sorted({self._classifier_training_label(item) for item in examples})
         warnings: list[str] = []
         artifact_payload: dict[str, Any] | None = None
@@ -7179,7 +7314,18 @@ class Nl2SqlService:
             examples: list[ClassifierTrainingExample] = []
             with self._lock:
                 current_examples = list(self._classifier_examples)
-            comparison_examples = [] if replace else current_examples
+            preserved_examples = (
+                [
+                    item
+                    for item in current_examples
+                    if not self._profile_in_allowed_profile_ids(
+                        item.profile_id, allowed_profile_ids
+                    )
+                ]
+                if replace and allowed_profile_ids is not None
+                else []
+            )
+            comparison_examples = preserved_examples if replace else current_examples
             for category, text, row_profile_id in parsed:
                 resolved = self._exact_profile_for_classifier_label(
                     profile_id or row_profile_id or category
@@ -7239,8 +7385,10 @@ class Nl2SqlService:
                 )
                 raise ValueError(detail)
 
+            new_examples = [*preserved_examples, *examples] if replace else examples
             documents = [
-                ("classifier_examples", item.id, item.model_dump(mode="json")) for item in examples
+                ("classifier_examples", item.id, item.model_dump(mode="json"))
+                for item in new_examples
             ]
             if replace:
                 if self._incremental_repository is not None:
@@ -7250,7 +7398,7 @@ class Nl2SqlService:
                     )
                 with self._lock:
                     previous_examples = list(self._classifier_examples)
-                    self._classifier_examples = examples
+                    self._classifier_examples = new_examples
                 if self._incremental_repository is None:
                     try:
                         self._persist_state(collections=("classifier_examples",))
@@ -7278,10 +7426,16 @@ class Nl2SqlService:
                 examples=examples[:50],
             )
 
-    def classifier_training_data(self) -> ClassifierTrainingDataData:
+    def classifier_training_data(
+        self, *, allowed_profile_ids: set[str] | None = None
+    ) -> ClassifierTrainingDataData:
         self._load_classifier_state()
         with self._lock:
-            examples = list(self._classifier_examples)
+            examples = [
+                item
+                for item in self._classifier_examples
+                if self._profile_in_allowed_profile_ids(item.profile_id, allowed_profile_ids)
+            ]
         categories = sorted({item.category for item in examples})
         warnings = [] if examples else ["分類器の training data が未登録です。"]
         return ClassifierTrainingDataData(
@@ -7300,11 +7454,12 @@ class Nl2SqlService:
         profile_id: str,
         query: str,
         history_id: str = "",
+        allowed_profile_ids: set[str] | None = None,
     ) -> ClassifierTrainingCandidatesData:
         self._load_classifier_state()
         candidates = [
             candidate
-            for history in self._history_snapshot()
+            for history in self._history_snapshot(allowed_profile_ids=allowed_profile_ids)
             if (candidate := self._classifier_candidate_from_history(history)) is not None
         ]
         candidates.sort(key=lambda item: (item.created_at, item.history_id), reverse=True)
@@ -7840,10 +7995,19 @@ class Nl2SqlService:
                 self._classifier_model_payload_cache = None
                 raise
 
-    def train_classifier(self, request: ClassifierTrainRequest) -> ClassifierStatusData:
+    def train_classifier(
+        self,
+        request: ClassifierTrainRequest,
+        *,
+        allowed_profile_ids: set[str] | None = None,
+    ) -> ClassifierStatusData:
         self._load_classifier_state()
         with self._lock:
-            examples = list(self._classifier_examples)
+            examples = [
+                item
+                for item in self._classifier_examples
+                if self._profile_in_allowed_profile_ids(item.profile_id, allowed_profile_ids)
+            ]
         warnings: list[str] = []
         if not examples:
             raise ValueError("分類器の training data が未登録です。")
@@ -7895,7 +8059,9 @@ class Nl2SqlService:
             },
         }
         self._replace_classifier_artifact(artifact)
-        return self.classifier_status().model_copy(update={"warnings": warnings})
+        return self.classifier_status(allowed_profile_ids=allowed_profile_ids).model_copy(
+            update={"warnings": warnings}
+        )
 
     def import_classifier_model_artifact(
         self, *, filename: str, content: bytes
@@ -7973,10 +8139,16 @@ class Nl2SqlService:
             warnings=warnings,
         )
 
-    def export_classifier_training_data_xlsx(self) -> tuple[str, bytes]:
+    def export_classifier_training_data_xlsx(
+        self, *, allowed_profile_ids: set[str] | None = None
+    ) -> tuple[str, bytes]:
         self._load_classifier_state()
         with self._lock:
-            examples = list(self._classifier_examples)
+            examples = [
+                item
+                for item in self._classifier_examples
+                if self._profile_in_allowed_profile_ids(item.profile_id, allowed_profile_ids)
+            ]
         openpyxl = importlib.import_module("openpyxl")
         workbook = openpyxl.Workbook()
         sheet = workbook.active
@@ -8049,9 +8221,13 @@ class Nl2SqlService:
         warnings: list[str] = []
         try:
             model_payload = self._cached_classifier_model_payload_from_artifact(artifact)
-            vectors, embedding_warnings, embedding_model = self._classifier_vectors([question])
-            warnings.extend(embedding_warnings)
             artifact_embedding_model = str(artifact.get("embedding_model") or "")
+            if artifact_embedding_model == "deterministic-hash-1536":
+                vectors = [self._deterministic_embedding(question)]
+                embedding_model = artifact_embedding_model
+            else:
+                vectors, embedding_warnings, embedding_model = self._classifier_vectors([question])
+                warnings.extend(embedding_warnings)
             if artifact_embedding_model and artifact_embedding_model != embedding_model:
                 warnings.append(
                     "分類器の embedding model "
@@ -8560,16 +8736,34 @@ class Nl2SqlService:
             return scored[0][1]
         return None
 
-    def _feedback_index_data(self, *, operation: str, include_bad: bool) -> FeedbackIndexData:
+    def _feedback_index_data(
+        self,
+        *,
+        operation: str,
+        include_bad: bool,
+        allowed_profile_ids: set[str] | None = None,
+    ) -> FeedbackIndexData:
         self._load_feedback_state()
         started = time.monotonic()
         created_at = _utc_now()
         warnings: list[str] = []
         runtime = "oracle" if self._use_oracle_runtime() else "deterministic"
-        indexable = self._feedback_indexable_history(include_bad)
-        source_count = self._feedback_source_history_count()
+        indexable = self._feedback_indexable_history(
+            include_bad,
+            allowed_profile_ids=allowed_profile_ids,
+        )
+        source_count = self._feedback_source_history_count(allowed_profile_ids=allowed_profile_ids)
+        scoped_history_ids: set[str] | None = None
+        if allowed_profile_ids is not None:
+            scoped_history_ids = {
+                item.id for item in self._history_snapshot(allowed_profile_ids=allowed_profile_ids)
+            }
         with self._lock:
-            indexed_count = len(self._feedback_indexed_ids)
+            indexed_count = (
+                len(self._feedback_indexed_ids)
+                if scoped_history_ids is None
+                else len(self._feedback_indexed_ids & scoped_history_ids)
+            )
         executed = False
         if operation == "rebuild":
             if not self._use_oracle_runtime():
@@ -8602,21 +8796,54 @@ class Nl2SqlService:
                         }
                         for item, vector in zip(indexable, vectors, strict=True)
                     ]
-                    self._oracle_adapter.rebuild_feedback_vector_index(
-                        table_name=settings.nl2sql_feedback_vector_table,
-                        index_name=settings.nl2sql_feedback_vector_index,
-                        rows=rows,
-                    )
+                    if scoped_history_ids is None:
+                        self._oracle_adapter.rebuild_feedback_vector_index(
+                            table_name=settings.nl2sql_feedback_vector_table,
+                            index_name=settings.nl2sql_feedback_vector_index,
+                            rows=rows,
+                        )
+                    else:
+                        indexable_ids = {item.id for item in indexable}
+                        with self._lock:
+                            obsolete_ids = sorted(
+                                (self._feedback_indexed_ids & scoped_history_ids) - indexable_ids
+                            )
+                        for history_id in obsolete_ids:
+                            self._oracle_adapter.delete_feedback_vector_entry(
+                                table_name=settings.nl2sql_feedback_vector_table,
+                                history_id=history_id,
+                            )
+                        for row in rows:
+                            self._oracle_adapter.upsert_feedback_vector_entry(
+                                table_name=settings.nl2sql_feedback_vector_table,
+                                index_name=settings.nl2sql_feedback_vector_index,
+                                row=row,
+                            )
                     with self._lock:
-                        self._feedback_indexed_ids = {item.id for item in indexable}
-                        indexed_count = len(self._feedback_indexed_ids)
+                        if scoped_history_ids is None:
+                            self._feedback_indexed_ids = {item.id for item in indexable}
+                        else:
+                            self._feedback_indexed_ids.difference_update(scoped_history_ids)
+                            self._feedback_indexed_ids.update(item.id for item in indexable)
+                        indexed_count = (
+                            len(self._feedback_indexed_ids)
+                            if scoped_history_ids is None
+                            else len(self._feedback_indexed_ids & scoped_history_ids)
+                        )
                     executed = True
                     self._persist_singletons("feedback_indexed_ids")
                 except (EmbeddingClientError, OracleAdapterError, ValueError) as exc:
                     warnings.append(str(exc))
                     with self._lock:
-                        self._feedback_indexed_ids = set()
-                        indexed_count = 0
+                        if scoped_history_ids is None:
+                            self._feedback_indexed_ids = set()
+                        else:
+                            self._feedback_indexed_ids.difference_update(scoped_history_ids)
+                        indexed_count = (
+                            len(self._feedback_indexed_ids)
+                            if scoped_history_ids is None
+                            else len(self._feedback_indexed_ids & scoped_history_ids)
+                        )
                     self._persist_singletons("feedback_indexed_ids")
         settings = get_settings()
         return FeedbackIndexData(
@@ -8634,7 +8861,12 @@ class Nl2SqlService:
             timing=self._timing(created_at, started, "feedback_index"),
         )
 
-    def _feedback_indexable_history(self, include_bad: bool) -> list[HistoryItem]:
+    def _feedback_indexable_history(
+        self,
+        include_bad: bool,
+        *,
+        allowed_profile_ids: set[str] | None = None,
+    ) -> list[HistoryItem]:
         del include_bad
         good = FeedbackRating.GOOD.value
         if self._incremental_repository is None:
@@ -8643,6 +8875,7 @@ class Nl2SqlService:
                     item.model_copy(deep=True)
                     for item in self._history
                     if item.admin_feedback_rating == FeedbackRating.GOOD
+                    and self._profile_in_allowed_profile_ids(item.profile_id, allowed_profile_ids)
                 ]
         indexable: list[HistoryItem] = []
         cursor = ""
@@ -8651,6 +8884,7 @@ class Nl2SqlService:
                 cursor=cursor or None,
                 limit=500,
                 payload_filters={"admin_feedback_rating": good},
+                allowed_profile_ids=allowed_profile_ids,
             )
             indexable.extend(
                 item for item in page if item.admin_feedback_rating == FeedbackRating.GOOD
@@ -8658,11 +8892,19 @@ class Nl2SqlService:
             if not cursor or not page:
                 return indexable
 
-    def _feedback_source_history_count(self) -> int:
+    def _feedback_source_history_count(self, *, allowed_profile_ids: set[str] | None = None) -> int:
         if self._incremental_repository is None:
             with self._lock:
-                return len(self._history)
-        _page, _cursor, total = self._history_page(cursor=None, limit=1)
+                return sum(
+                    1
+                    for item in self._history
+                    if self._profile_in_allowed_profile_ids(item.profile_id, allowed_profile_ids)
+                )
+        _page, _cursor, total = self._history_page(
+            cursor=None,
+            limit=1,
+            allowed_profile_ids=allowed_profile_ids,
+        )
         return total
 
     def _feedback_index_status(self, indexed_count: int, indexable_count: int) -> str:

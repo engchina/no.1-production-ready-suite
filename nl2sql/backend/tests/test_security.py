@@ -2354,6 +2354,7 @@ def test_nl2sql_capability_boundaries_and_feedback_ownership(
         description="",
         permissions={"menu.feedback_management"},
         entitlements=[],
+        allowed_profile_ids={"default"},
         actor=admin,
     )
     data_role = service.create_role(

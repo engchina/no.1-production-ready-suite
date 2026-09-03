@@ -348,14 +348,37 @@ def _assert_profile_access(
 
 
 def _quality_evaluation_job_for_access(
-    job_id: str, request: Request
+    job_id: str,
+    request: Request,
+    *,
+    wake: bool = False,
+    require_actor_owner: bool = False,
 ) -> QualityEvaluationJobSummary:
     try:
-        job = quality_evaluation_service.get_job(job_id)
+        job_for_access = quality_evaluation_service.peek_job_record(job_id)
     except QualityEvaluationJobNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    _assert_profile_access(request, job.profile_id)
-    return job
+    _assert_profile_access(request, job_for_access.profile_id)
+    if require_actor_owner:
+        access = _actor_access_args(request, manage_permission=PROFILE_MANAGE_PERMISSION)
+        if (
+            not access.actor_can_manage
+            and job_for_access.actor_user_uuid
+            and job_for_access.actor_user_uuid != access.actor_user_uuid
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="他のユーザーのSQL生成評価 job を操作する権限がありません。",
+            )
+    if not wake:
+        try:
+            return quality_evaluation_service.peek_job(job_id)
+        except QualityEvaluationJobNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+    try:
+        return quality_evaluation_service.get_job(job_id)
+    except QualityEvaluationJobNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 persistence_router = APIRouter(prefix="/nl2sql", tags=["nl2sql"])
@@ -978,8 +1001,7 @@ def refresh_select_ai_profile(
     profile_id: str | None = None,
 ) -> ApiResponse[AssetRefreshData]:
     """Oracle Select AI profile を作成/更新する adapter boundary。"""
-    if profile_id:
-        _assert_profile_access(request, profile_id)
+    _assert_profile_access(request, profile_id, default_profile=True)
     try:
         return ApiResponse(data=nl2sql_service.refresh_select_ai_profile(profile_id))
     except KeyError as exc:
@@ -994,8 +1016,7 @@ def refresh_select_ai_agent_assets(
     profile_id: str | None = None,
 ) -> ApiResponse[AssetRefreshData]:
     """Oracle Select AI Agent assets を作成/更新する adapter boundary。"""
-    if profile_id:
-        _assert_profile_access(request, profile_id)
+    _assert_profile_access(request, profile_id, default_profile=True)
     try:
         return ApiResponse(data=nl2sql_service.refresh_select_ai_agent_assets(profile_id))
     except KeyError as exc:
@@ -1010,8 +1031,7 @@ def cleanup_select_ai_assets(
     request: Request,
 ) -> ApiResponse[list[AssetCleanupData]]:
     """Oracle Select AI / Agent assets の cleanup を実行する。"""
-    if req.profile_id:
-        _assert_profile_access(request, req.profile_id)
+    _assert_profile_access(request, req.profile_id, default_profile=True)
     return ApiResponse(
         data=nl2sql_service.cleanup_select_ai_assets(
             profile_id=req.profile_id,
@@ -1238,8 +1258,10 @@ def create_select_ai_agent_conversation(
 @router.post("/select-ai-agent/assets/cleanup", response_model=ApiResponse[list[AssetCleanupData]])
 def cleanup_select_ai_agent_assets(
     req: AssetCleanupRequest,
+    request: Request,
 ) -> ApiResponse[list[AssetCleanupData]]:
     """Oracle Select AI Agent low-level assets の cleanup を実行する。"""
+    _assert_profile_access(request, req.profile_id, default_profile=True)
     return ApiResponse(data=nl2sql_service.cleanup_select_ai_agent_assets_low_level(req))
 
 
@@ -1320,12 +1342,20 @@ def feedback(req: FeedbackRequest, request: Request) -> ApiResponse[FeedbackData
 
 
 @router.post("/feedback/admin-review", response_model=ApiResponse[AdminFeedbackReviewData])
-def admin_review_feedback(req: AdminFeedbackReviewRequest) -> ApiResponse[AdminFeedbackReviewData]:
+def admin_review_feedback(
+    req: AdminFeedbackReviewRequest,
+    request: Request,
+) -> ApiResponse[AdminFeedbackReviewData]:
     """管理者 review を保存し、必要な場合だけ Select AI feedback へ登録する。"""
     try:
-        data = nl2sql_service.save_admin_feedback_review(req)
+        data = nl2sql_service.save_admin_feedback_review(
+            req,
+            allowed_profile_ids=_allowed_profile_ids_for_request(request),
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="対象の SQL 履歴が見つかりません。") from exc
+    except PermissionError as exc:
+        raise _profile_access_denied() from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return ApiResponse(data=data)
@@ -1352,6 +1382,7 @@ def list_feedback(
             rating=rating,
             profile_id=profile_id.strip(),
             query=q.strip(),
+            allowed_profile_ids=_allowed_profile_ids_for_request(request),
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -1407,35 +1438,68 @@ def delete_sample_data(
 
 
 @router.get("/feedback-index", response_model=ApiResponse[FeedbackIndexData])
-def feedback_index_status() -> ApiResponse[FeedbackIndexData]:
+def feedback_index_status(request: Request) -> ApiResponse[FeedbackIndexData]:
     """Feedback learning vector index の状態を返す。"""
-    return ApiResponse(data=nl2sql_service.feedback_index_status())
+    return ApiResponse(
+        data=nl2sql_service.feedback_index_status(
+            allowed_profile_ids=_allowed_profile_ids_for_request(request),
+        )
+    )
 
 
 @router.post("/feedback-index/rebuild", response_model=ApiResponse[FeedbackIndexData])
-def rebuild_feedback_index(req: FeedbackIndexRequest) -> ApiResponse[FeedbackIndexData]:
+def rebuild_feedback_index(
+    req: FeedbackIndexRequest,
+    request: Request,
+) -> ApiResponse[FeedbackIndexData]:
     """Feedback learning vector index の再構築 plan / 実行。"""
-    return ApiResponse(data=nl2sql_service.rebuild_feedback_index(req))
+    return ApiResponse(
+        data=nl2sql_service.rebuild_feedback_index(
+            req,
+            allowed_profile_ids=_allowed_profile_ids_for_request(request),
+        )
+    )
 
 
 @router.post("/feedback-index/clear", response_model=ApiResponse[FeedbackIndexData])
-def clear_feedback_index(req: FeedbackIndexRequest) -> ApiResponse[FeedbackIndexData]:
+def clear_feedback_index(
+    req: FeedbackIndexRequest,
+    request: Request,
+) -> ApiResponse[FeedbackIndexData]:
     """Feedback learning vector index の clear plan / 実行。"""
-    return ApiResponse(data=nl2sql_service.clear_feedback_index(req))
+    return ApiResponse(
+        data=nl2sql_service.clear_feedback_index(
+            req,
+            allowed_profile_ids=_allowed_profile_ids_for_request(request),
+        )
+    )
 
 
 @router.get("/feedback-entries", response_model=ApiResponse[FeedbackEntriesData])
-def feedback_entries() -> ApiResponse[FeedbackEntriesData]:
+def feedback_entries(request: Request) -> ApiResponse[FeedbackEntriesData]:
     """Feedback learning entries を一覧する。"""
-    return ApiResponse(data=nl2sql_service.list_feedback_entries())
+    return ApiResponse(
+        data=nl2sql_service.list_feedback_entries(
+            allowed_profile_ids=_allowed_profile_ids_for_request(request),
+        )
+    )
 
 
 @router.post("/feedback-entries/delete", response_model=ApiResponse[FeedbackEntriesData])
 def delete_feedback_entries(
     req: FeedbackEntriesDeleteRequest,
+    request: Request,
 ) -> ApiResponse[FeedbackEntriesData]:
     """Feedback learning entries を削除する。"""
-    return ApiResponse(data=nl2sql_service.delete_feedback_entries(req.history_ids))
+    try:
+        return ApiResponse(
+            data=nl2sql_service.delete_feedback_entries(
+                req.history_ids,
+                allowed_profile_ids=_allowed_profile_ids_for_request(request),
+            )
+        )
+    except PermissionError as exc:
+        raise _profile_access_denied() from exc
 
 
 @router.get("/feedback-config", response_model=ApiResponse[FeedbackSearchConfigData])
@@ -1453,15 +1517,23 @@ def update_feedback_config(
 
 
 @router.get("/classifier", response_model=ApiResponse[ClassifierStatusData])
-def classifier_status() -> ApiResponse[ClassifierStatusData]:
+def classifier_status(request: Request) -> ApiResponse[ClassifierStatusData]:
     """Embedding + LogisticRegression classifier の状態を返す。"""
-    return ApiResponse(data=nl2sql_service.classifier_status())
+    return ApiResponse(
+        data=nl2sql_service.classifier_status(
+            allowed_profile_ids=_allowed_profile_ids_for_request(request),
+        )
+    )
 
 
 @router.get("/classifier/training-data", response_model=ApiResponse[ClassifierTrainingDataData])
-def classifier_training_data() -> ApiResponse[ClassifierTrainingDataData]:
+def classifier_training_data(request: Request) -> ApiResponse[ClassifierTrainingDataData]:
     """Classifier training data 一覧を返す。"""
-    return ApiResponse(data=nl2sql_service.classifier_training_data())
+    return ApiResponse(
+        data=nl2sql_service.classifier_training_data(
+            allowed_profile_ids=_allowed_profile_ids_for_request(request),
+        )
+    )
 
 
 @router.get(
@@ -1499,6 +1571,7 @@ def classifier_training_candidates(
             profile_id=profile_id.strip(),
             query=q.strip(),
             history_id=history_id.strip(),
+            allowed_profile_ids=_allowed_profile_ids_for_request(request),
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -1530,6 +1603,17 @@ def update_classifier_training_example(
     request: Request,
 ) -> ApiResponse[ClassifierTrainingExample]:
     try:
+        current = next(
+            (
+                item
+                for item in nl2sql_service.classifier_training_data().examples
+                if item.id == example_id
+            ),
+            None,
+        )
+        if current is None:
+            raise KeyError(example_id)
+        _assert_profile_access(request, current.profile_id)
         _assert_profile_access(request, req.profile_id)
         data = nl2sql_service.update_classifier_training_example(example_id, req)
     except KeyError as exc:
@@ -1594,9 +1678,11 @@ async def import_classifier_training_data(
 
 
 @router.get("/classifier/training-data/export.xlsx")
-def export_classifier_training_data_xlsx() -> Response:
+def export_classifier_training_data_xlsx(request: Request) -> Response:
     """Classifier training data を Excel workbook として出力する。"""
-    filename, content = nl2sql_service.export_classifier_training_data_xlsx()
+    filename, content = nl2sql_service.export_classifier_training_data_xlsx(
+        allowed_profile_ids=_allowed_profile_ids_for_request(request)
+    )
     return Response(
         content=content,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -1605,10 +1691,18 @@ def export_classifier_training_data_xlsx() -> Response:
 
 
 @router.post("/classifier/train", response_model=ApiResponse[ClassifierStatusData])
-def train_classifier(req: ClassifierTrainRequest) -> ApiResponse[ClassifierStatusData]:
+def train_classifier(
+    req: ClassifierTrainRequest,
+    request: Request,
+) -> ApiResponse[ClassifierStatusData]:
     """Imported training data から LogisticRegression classifier を学習する。"""
     try:
-        return ApiResponse(data=nl2sql_service.train_classifier(req))
+        return ApiResponse(
+            data=nl2sql_service.train_classifier(
+                req,
+                allowed_profile_ids=_allowed_profile_ids_for_request(request),
+            )
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -1784,13 +1878,13 @@ def list_quality_evaluations(
 ) -> ApiResponse[QualityEvaluationJobPage]:
     """最近の SQL生成評価 job をページ取得する。"""
     try:
-        page = quality_evaluation_service.list_jobs(cursor=cursor, limit=limit)
+        page = quality_evaluation_service.list_jobs(
+            cursor=cursor,
+            limit=limit,
+            allowed_profile_ids=_allowed_profile_ids_for_request(request),
+        )
     except QualityEvaluationCursorError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    allowed_profile_ids = _allowed_profile_ids_for_request(request)
-    if allowed_profile_ids is not None:
-        items = [item for item in page.items if item.profile_id in allowed_profile_ids]
-        page = page.model_copy(update={"items": items, "total": len(items)})
     return ApiResponse(data=page)
 
 
@@ -1843,7 +1937,7 @@ def cancel_quality_evaluation(
 ) -> ApiResponse[QualityEvaluationJobSummary]:
     """待機中または実行中の SQL生成評価 job を中止する。"""
     try:
-        _quality_evaluation_job_for_access(job_id, request)
+        _quality_evaluation_job_for_access(job_id, request, require_actor_owner=True)
         return ApiResponse(data=quality_evaluation_service.cancel_job(job_id))
     except QualityEvaluationJobStateError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -1861,7 +1955,7 @@ def delete_quality_evaluation(
 ) -> ApiResponse[QualityEvaluationJobSummary]:
     """完了済みの SQL生成評価 job と結果明細を削除する。"""
     try:
-        _quality_evaluation_job_for_access(job_id, request)
+        _quality_evaluation_job_for_access(job_id, request, require_actor_owner=True)
         return ApiResponse(data=quality_evaluation_service.delete_job(job_id))
     except QualityEvaluationJobStateError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -1879,7 +1973,7 @@ def get_quality_evaluation(
 ) -> ApiResponse[QualityEvaluationJobSummary]:
     """SQL生成評価 job の進捗と集計を返す。"""
     try:
-        return ApiResponse(data=_quality_evaluation_job_for_access(job_id, request))
+        return ApiResponse(data=_quality_evaluation_job_for_access(job_id, request, wake=True))
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
