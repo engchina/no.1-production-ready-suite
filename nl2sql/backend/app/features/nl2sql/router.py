@@ -549,13 +549,16 @@ def search_profiles(
     """Full payload を返さない業務 profile keyset page。"""
     if limit < 1 or limit > 100:
         raise HTTPException(status_code=422, detail="limit は 1 から 100 で指定してください。")
-    page = nl2sql_service.search_profiles(
-        cursor=cursor,
-        limit=limit,
-        query=q,
-        include_archived=include_archived,
-        allowed_profile_ids=_allowed_profile_ids_for_request(request),
-    )
+    try:
+        page = nl2sql_service.search_profiles(
+            cursor=cursor,
+            limit=limit,
+            query=q,
+            include_archived=include_archived,
+            allowed_profile_ids=_allowed_profile_ids_for_request(request),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     quoted_etag = f'"profiles-{page.change_token}-{_profile_access_digest(request)}"'
     if if_none_match == quoted_etag:
         return Response(status_code=304, headers={"ETag": quoted_etag})
@@ -750,6 +753,8 @@ def delete_profile(
         raise HTTPException(
             status_code=404, detail="指定された profile が見つかりません。"
         ) from exc
+    except ProfileNameConflict as exc:
+        raise _profile_name_conflict_exception(exc) from exc
 
 
 @router.post(
@@ -883,6 +888,8 @@ def archive_profile(profile_id: str, request: Request) -> ApiResponse[Nl2SqlProf
         raise HTTPException(
             status_code=404, detail="指定された profile が見つかりません。"
         ) from exc
+    except ProfileNameConflict as exc:
+        raise _profile_name_conflict_exception(exc) from exc
 
 
 @router.post("/profiles/{profile_id}/restore", response_model=ApiResponse[Nl2SqlProfile])
@@ -895,6 +902,8 @@ def restore_profile(profile_id: str, request: Request) -> ApiResponse[Nl2SqlProf
         raise HTTPException(
             status_code=404, detail="指定された profile が見つかりません。"
         ) from exc
+    except ProfileNameConflict as exc:
+        raise _profile_name_conflict_exception(exc) from exc
 
 
 @router.post(

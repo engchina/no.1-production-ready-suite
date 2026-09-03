@@ -192,6 +192,23 @@ def _decode_cursor(cursor: str | None, expected_parts: int) -> tuple[str, ...] |
     return tuple(str(value) for value in decoded)
 
 
+def _profile_search_key(value: str) -> str:
+    return str(value or "").upper()
+
+
+def _profile_matches_query(profile: Nl2SqlProfile, query_key: str) -> bool:
+    if not query_key:
+        return True
+    return any(
+        query_key in _profile_search_key(value)
+        for value in (profile.name, profile.category, profile.description)
+    )
+
+
+def _escape_oracle_like_pattern(value: str) -> str:
+    return _profile_search_key(value).replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def _profile_payload(profile: Nl2SqlProfile) -> dict[str, Any]:
     payload = profile.model_dump(mode="json")
     payload.pop("etag", None)
@@ -433,25 +450,22 @@ class MemoryIncrementalNl2SqlRepository:
         include_archived: bool,
     ) -> ProfileSummaryPage:
         after = _decode_cursor(cursor, 2)
-        query_key = query.casefold().strip()
+        query_key = _profile_search_key(query.strip())
         with self._lock:
             profiles = [
                 profile
                 for profile in self._profiles.values()
                 if (include_archived or not profile.archived)
-                and (
-                    not query_key
-                    or query_key
-                    in f"{profile.name} {profile.category} {profile.description}".casefold()
-                )
+                and _profile_matches_query(profile, query_key)
             ]
-            profiles.sort(key=lambda item: (item.name.casefold(), item.id))
+            profiles.sort(key=lambda item: (_profile_search_key(item.name), item.id))
             total = len(profiles)
             if after:
+                after_key = (_profile_search_key(after[0]), after[1])
                 profiles = [
                     item
                     for item in profiles
-                    if (item.name.casefold(), item.id) > (after[0], after[1])
+                    if (_profile_search_key(item.name), item.id) > after_key
                 ]
             selected = profiles[: limit + 1]
             has_more = len(selected) > limit
@@ -459,7 +473,7 @@ class MemoryIncrementalNl2SqlRepository:
             next_cursor = None
             if has_more and selected:
                 last = selected[-1]
-                next_cursor = _encode_cursor(last.name.casefold(), last.id)
+                next_cursor = _encode_cursor(_profile_search_key(last.name), last.id)
             return ProfileSummaryPage(
                 items=[_profile_summary(item) for item in selected],
                 next_cursor=next_cursor,
@@ -952,10 +966,11 @@ class OracleIncrementalNl2SqlRepository:
         }
         if query.strip():
             where.append(
-                "(UPPER(NAME) LIKE :query OR UPPER(CATEGORY) LIKE :query "
-                "OR UPPER(DESCRIPTION) LIKE :query)"
+                "(UPPER(NAME) LIKE :query ESCAPE '\\' "
+                "OR UPPER(CATEGORY) LIKE :query ESCAPE '\\' "
+                "OR UPPER(DESCRIPTION) LIKE :query ESCAPE '\\')"
             )
-            binds["query"] = f"%{query.strip().upper()}%"
+            binds["query"] = f"%{_escape_oracle_like_pattern(query.strip())}%"
         if after:
             where.append(
                 "(UPPER(NAME) > :after_name OR "
@@ -976,8 +991,9 @@ class OracleIncrementalNl2SqlRepository:
             count_binds: dict[str, Any] = {"include_archived": binds["include_archived"]}
             if query.strip():
                 count_where.append(
-                    "(UPPER(NAME) LIKE :query OR UPPER(CATEGORY) LIKE :query "
-                    "OR UPPER(DESCRIPTION) LIKE :query)"
+                    "(UPPER(NAME) LIKE :query ESCAPE '\\' "
+                    "OR UPPER(CATEGORY) LIKE :query ESCAPE '\\' "
+                    "OR UPPER(DESCRIPTION) LIKE :query ESCAPE '\\')"
                 )
                 count_binds["query"] = binds["query"]
             db_cursor.execute(

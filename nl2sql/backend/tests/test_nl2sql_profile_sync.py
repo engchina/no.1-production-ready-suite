@@ -10,6 +10,7 @@ from app.features.nl2sql.models import (
     AssetRefreshData,
     Nl2SqlEngine,
     Nl2SqlProfile,
+    ProfileSelectAiConfig,
     ProfileSyncJobRequest,
     ProfileSyncJobStatus,
     SelectAiDbProfileMutationData,
@@ -20,6 +21,8 @@ from app.features.nl2sql.oracle_adapter import (
     SelectAiCredentialMissingError,
 )
 from app.features.nl2sql.profile_sync import ProfileSyncService
+from app.features.nl2sql.service import Nl2SqlService, SelectAiDbProfileListRefreshSync
+from app.features.nl2sql.store import MemoryNl2SqlStore
 from app.settings import Settings
 
 
@@ -52,6 +55,24 @@ class _FakeProfileService:
             profile_name="INVOICE_PROFILE",
         )
 
+    def clear_profile_select_ai_previous_name(
+        self,
+        profile_id: str,
+        *,
+        expected_etag: str | None = None,
+    ) -> Nl2SqlProfile:
+        assert profile_id == self.profile.id
+        assert expected_etag in {None, self.profile.etag}
+        self.profile = self.profile.model_copy(
+            update={
+                "etag": f"{self.profile.etag}-cleared",
+                "select_ai_config": self.profile.select_ai_config.model_copy(
+                    update={"previous_profile_name": ""}
+                ),
+            }
+        )
+        return self.profile.model_copy(deep=True)
+
     def refresh_select_ai_agent_assets(
         self,
         profile_id: str,
@@ -66,6 +87,55 @@ class _FakeProfileService:
             refreshed=True,
             status="ready",
         )
+
+
+class _ProfileSyncOracleAdapter:
+    def __init__(self) -> None:
+        self.active_profiles: set[str] = set()
+        self.original_names: list[str] = []
+        self.object_lists: dict[str, list[dict[str, str]]] = {}
+
+    def upsert_select_ai_profile_low_level(
+        self,
+        *,
+        profile_name: str,
+        attributes: dict[str, object],
+        description: str,
+        original_name: str,
+    ) -> dict[str, object]:
+        del description
+        self.original_names.append(original_name)
+        if original_name:
+            self.active_profiles.discard(original_name)
+        self.active_profiles.discard(profile_name)
+        self.active_profiles.add(profile_name)
+        raw_object_list = attributes.get("object_list", [])
+        object_list = raw_object_list if isinstance(raw_object_list, list) else []
+        self.object_lists[profile_name] = [
+            dict(item) for item in object_list if isinstance(item, dict)
+        ]
+        return {"runtime": "oracle"}
+
+    def get_select_ai_profile_detail(self, *, profile_name: str) -> dict[str, object]:
+        return {
+            "name": profile_name,
+            "object_list": self.object_lists.get(profile_name, []),
+        }
+
+
+class _OracleRuntimeProfileService(Nl2SqlService):
+    def __init__(self, adapter: _ProfileSyncOracleAdapter) -> None:
+        super().__init__(store=MemoryNl2SqlStore())
+        self._oracle_adapter = adapter  # type: ignore[assignment]  # noqa: SLF001
+
+    def _use_oracle_runtime(self) -> bool:
+        return True
+
+    def _submit_select_ai_db_profile_list_refresh_after_mutation(
+        self,
+        **_kwargs: object,
+    ) -> SelectAiDbProfileListRefreshSync:
+        return SelectAiDbProfileListRefreshSync()
 
 
 def _settings() -> SimpleNamespace:
@@ -174,6 +244,69 @@ def test_profile_sync_passes_original_name_after_profile_rename(
     assert started.original_name == "INVOICE_PROFILE"
     assert completed.status == ProfileSyncJobStatus.SUCCEEDED
     assert service.oracle_original_names == ["INVOICE_PROFILE"]
+
+
+def test_profile_sync_clears_previous_name_after_each_successful_rename(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("app.features.nl2sql.profile_sync.get_settings", _settings)
+    adapter = _ProfileSyncOracleAdapter()
+    adapter.active_profiles.add("SALES_PROFILE")
+    service = _OracleRuntimeProfileService(adapter)
+    service.create_profile(
+        Nl2SqlProfile(
+            id="profile-1",
+            name="SALES_PROFILE",
+            allowed_tables=["APP.INVOICES"],
+            select_ai_config=ProfileSelectAiConfig(profile_name="SALES_PROFILE"),
+        )
+    )
+    store = InMemoryOntologyStore()
+    sync = ProfileSyncService(service=service, store_provider=lambda: store)
+
+    service.update_profile(
+        "profile-1",
+        lambda profile: profile.model_copy(
+            update={
+                "name": "SALES_V2",
+                "select_ai_config": profile.select_ai_config.model_copy(
+                    update={"profile_name": "SALES_V2"}
+                ),
+            }
+        ),
+    )
+    first = sync.start(
+        "profile-1",
+        ProfileSyncJobRequest(confirmation="ADMIN_EXECUTE"),
+        idempotency_key="sales-v2",
+    )
+    first_completed = sync.run_persisted(first.job_id)
+
+    assert first_completed.status == ProfileSyncJobStatus.SUCCEEDED
+    assert service.get_profile("profile-1").select_ai_config.previous_profile_name == ""
+
+    service.update_profile(
+        "profile-1",
+        lambda profile: profile.model_copy(
+            update={
+                "name": "SALES_V3",
+                "select_ai_config": profile.select_ai_config.model_copy(
+                    update={"profile_name": "SALES_V3"}
+                ),
+            }
+        ),
+    )
+    assert service.get_profile("profile-1").select_ai_config.previous_profile_name == "SALES_V2"
+    second = sync.start(
+        "profile-1",
+        ProfileSyncJobRequest(confirmation="ADMIN_EXECUTE"),
+        idempotency_key="sales-v3",
+    )
+    second_completed = sync.run_persisted(second.job_id)
+
+    assert second_completed.status == ProfileSyncJobStatus.SUCCEEDED
+    assert adapter.original_names == ["SALES_PROFILE", "SALES_V2"]
+    assert adapter.active_profiles == {"SALES_V3"}
 
 
 def test_profile_sync_credential_missing_uses_recoverable_code_without_oracle_stack(

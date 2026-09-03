@@ -275,7 +275,14 @@ class ProfileSyncService:
         if not oracle_result.executed or oracle_result.status == "error":
             warning = " ".join(oracle_result.warnings).strip()
             raise RuntimeError(warning or "Oracle DBMS_CLOUD_AI Profile の反映に失敗しました。")
-        running = running.model_copy(update={"oracle_result": oracle_result})
+        update_data: dict[str, Any] = {"oracle_result": oracle_result}
+        if running.original_name.strip():
+            profile = self._service.clear_profile_select_ai_previous_name(
+                running.profile_id,
+                expected_etag=running.profile_etag,
+            )
+            update_data["profile_etag"] = profile.etag
+        running = running.model_copy(update=update_data)
         self._assert_deadline(deadline)
         self._assert_not_cancelled(running.job_id)
 

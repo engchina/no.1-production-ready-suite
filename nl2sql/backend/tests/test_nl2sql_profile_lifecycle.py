@@ -19,6 +19,7 @@ from app.features.nl2sql.models import (
     Nl2SqlEngine,
     Nl2SqlProfile,
     ProfilePatchRequest,
+    ProfileSelectAiConfig,
     ProfileSelectAiProfileRequest,
     ProfileSyncJobRequest,
     ProfileUpsertRequest,
@@ -76,6 +77,14 @@ class _FakeOracleCleanupAdapter:
     def drop_select_ai_profile(self, **kwargs: str) -> dict[str, str]:
         self.calls.append(("profile", kwargs))
         return {"runtime": "oracle", "package": "DBMS_CLOUD_AI"}
+
+
+class _ProfileNameConflictService:
+    def archive_profile(self, _profile_id: str) -> None:
+        raise ProfileNameConflict("SALES_PROFILE")
+
+    def restore_profile(self, _profile_id: str) -> None:
+        raise ProfileNameConflict("SALES_PROFILE")
 
 
 def test_profile_upsert_request_uses_name_for_select_ai_profile_name() -> None:
@@ -146,6 +155,46 @@ def test_profile_name_conflict_returns_422_field_error(
             }
         ],
     }
+
+
+def test_profile_archive_restore_name_conflict_returns_422(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(nl2sql_router, "nl2sql_service", _ProfileNameConflictService())
+
+    calls: tuple[Callable[[], object], ...] = (
+        lambda: nl2sql_router.archive_profile("profile-a", _anon_request()),
+        lambda: nl2sql_router.restore_profile("profile-a", _anon_request()),
+    )
+    for call in calls:
+        with pytest.raises(HTTPException) as exc_info:
+            call()
+        assert exc_info.value.status_code == 422
+        assert cast(dict[str, Any], exc_info.value.detail)["code"] == (
+            "NL2SQL_PROFILE_NAME_CONFLICT"
+        )
+
+
+def test_profile_search_invalid_cursor_returns_422_without_persistence_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = MemoryIncrementalNl2SqlRepository(seed_default=False)
+    repository.save_profile(Nl2SqlProfile(id="profile-a", name="PROFILE_A"), expected_etag=None)
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service._incremental_repository = repository  # noqa: SLF001
+    monkeypatch.setattr(nl2sql_router, "nl2sql_service", service)
+    persistence_failures: list[tuple[tuple[object, ...], dict[str, object]]] = []
+    monkeypatch.setattr(
+        "app.features.nl2sql.service.record_persistence_failure",
+        lambda *args, **kwargs: persistence_failures.append((args, kwargs)),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        nl2sql_router.search_profiles(_anon_request(), Response(), cursor="not-a-cursor")
+
+    assert exc_info.value.status_code == 422
+    assert "cursor が不正" in str(exc_info.value.detail)
+    assert persistence_failures == []
 
 
 def test_profile_requests_reject_blank_glossary_keys_and_control_characters() -> None:
@@ -458,6 +507,32 @@ def test_profile_delete_executes_oracle_agent_then_profile_cleanup(
     assert adapter.calls[0][1]["team_name"] == "NL2SQL_DEFAULT_TEAM"
     assert adapter.calls[1][1]["profile_name"] == "NL2SQL_DEFAULT_PROFILE"
     assert service.list_profiles(include_archived=True) == []
+
+
+def test_cleanup_archived_profile_uses_stored_select_ai_profile_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    adapter = _FakeOracleCleanupAdapter()
+    monkeypatch.setattr(service, "_use_oracle_runtime", lambda: True)
+    monkeypatch.setattr(service, "_oracle_adapter", adapter)
+    profile = service.create_profile(
+        Nl2SqlProfile(
+            id="sales",
+            name="SALES_PROFILE",
+            select_ai_config=ProfileSelectAiConfig(profile_name="SALES_PROFILE"),
+        )
+    )
+    service.archive_profile(profile.id)
+
+    cleanup = service.cleanup_select_ai_assets(
+        profile_id=profile.id,
+        engines=[Nl2SqlEngine.SELECT_AI],
+        confirmation="ADMIN_EXECUTE",
+    )
+
+    assert cleanup[0].profile_name == "SALES_PROFILE"
+    assert adapter.calls == [("profile", {"profile_name": "SALES_PROFILE"})]
 
 
 def test_profile_delete_stale_etag_does_not_cleanup_oracle_assets(

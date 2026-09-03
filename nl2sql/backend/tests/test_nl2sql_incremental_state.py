@@ -1491,6 +1491,76 @@ def test_profile_repository_uses_cursor_summary_and_etag_conflict() -> None:
         repository.save_profile(current, expected_etag=current.etag)
 
 
+def test_profile_search_memory_paths_share_order_and_literal_query_matching() -> None:
+    profiles = [
+        Nl2SqlProfile(id="profile-ab", name="AB", category="sales"),
+        Nl2SqlProfile(id="profile-ac", name="AC", category="sales"),
+        Nl2SqlProfile(id="profile-a-b", name="A_B", category="sales"),
+    ]
+    repository = MemoryIncrementalNl2SqlRepository(seed_default=False)
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service.delete_profile("default")
+    for profile in profiles:
+        repository.save_profile(profile, expected_etag=None)
+        service.create_profile(profile)
+
+    repository_page = repository.search_profiles(
+        cursor=None,
+        limit=10,
+        query="",
+        include_archived=False,
+    )
+    service_page = service.search_profiles(
+        cursor=None,
+        limit=10,
+        query="",
+        include_archived=False,
+    )
+    assert [item.id for item in service_page.items] == [item.id for item in repository_page.items]
+    assert [item.id for item in service_page.items] == [
+        "profile-ab",
+        "profile-ac",
+        "profile-a-b",
+    ]
+
+    repository_wildcard = repository.search_profiles(
+        cursor=None,
+        limit=10,
+        query="_",
+        include_archived=False,
+    )
+    service_wildcard = service.search_profiles(
+        cursor=None,
+        limit=10,
+        query="_",
+        include_archived=False,
+    )
+    assert [item.id for item in service_wildcard.items] == [
+        item.id for item in repository_wildcard.items
+    ]
+    assert [item.id for item in service_wildcard.items] == ["profile-a-b"]
+
+
+def test_oracle_profile_search_escapes_like_wildcards() -> None:
+    repository, connections = _oracle_repository([[], [(0,)], [(7,)]])
+
+    page = repository.search_profiles(
+        cursor=None,
+        limit=10,
+        query="_%",
+        include_archived=False,
+    )
+
+    assert page.items == []
+    assert page.total == 0
+    select_sql, select_binds = connections[0].executed[0]
+    count_sql, count_binds = connections[0].executed[1]
+    assert "ESCAPE '\\'" in select_sql
+    assert "ESCAPE '\\'" in count_sql
+    assert select_binds["query"] == "%\\_\\%%"
+    assert count_binds["query"] == "%\\_\\%%"
+
+
 def test_state_document_page_uses_stable_keyset_cursor() -> None:
     repository = MemoryIncrementalNl2SqlRepository(seed_default=False)
     for index in range(5):

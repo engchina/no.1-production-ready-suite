@@ -68,6 +68,8 @@ from .incremental_store import (
     VersionedTtlCache,
     _decode_cursor,
     _encode_cursor,
+    _profile_matches_query,
+    _profile_search_key,
 )
 from .logical_steps import (
     LabelResolver,
@@ -5195,6 +5197,7 @@ class Nl2SqlService:
         include_archived: bool,
         allowed_profile_ids: set[str] | None = None,
     ) -> ProfileSummaryPage:
+        _decode_cursor(cursor, 2)
         if allowed_profile_ids is not None:
             profiles = [
                 profile
@@ -5227,6 +5230,8 @@ class Nl2SqlService:
                 query=query,
                 include_archived=include_archived,
             )
+        except ValueError:
+            raise
         except Exception as exc:
             self._raise_incremental_repository_failure(
                 operation="profile_search",
@@ -5245,23 +5250,21 @@ class Nl2SqlService:
         change_token: int,
     ) -> ProfileSummaryPage:
         after = _decode_cursor(cursor, 2)
-        query_key = query.casefold().strip()
+        query_key = _profile_search_key(query.strip())
         filtered = [
             profile
             for profile in profiles
             if (include_archived or not profile.archived)
-            and (
-                not query_key
-                or query_key
-                in f"{profile.name} {profile.category} {profile.description}".casefold()
-            )
+            and _profile_matches_query(profile, query_key)
         ]
-        filtered.sort(key=lambda profile: (profile.name.casefold(), profile.id))
+        filtered.sort(key=lambda profile: (_profile_search_key(profile.name), profile.id))
         total = len(filtered)
         if after:
-            after_key = (after[0].casefold(), after[1])
+            after_key = (_profile_search_key(after[0]), after[1])
             filtered = [
-                profile for profile in filtered if (profile.name.casefold(), profile.id) > after_key
+                profile
+                for profile in filtered
+                if (_profile_search_key(profile.name), profile.id) > after_key
             ]
         selected = filtered[: limit + 1]
         has_more = len(selected) > limit
@@ -5269,7 +5272,7 @@ class Nl2SqlService:
         next_cursor = None
         if has_more and selected:
             last = selected[-1]
-            next_cursor = _encode_cursor(last.name.casefold(), last.id)
+            next_cursor = _encode_cursor(_profile_search_key(last.name), last.id)
         return ProfileSummaryPage(
             items=[self._profile_summary(profile) for profile in selected],
             next_cursor=next_cursor,
@@ -5400,12 +5403,18 @@ class Nl2SqlService:
         current: Nl2SqlProfile,
         updated: Nl2SqlProfile,
     ) -> Nl2SqlProfile:
-        old_name = (
-            current.select_ai_config.previous_profile_name.strip()
-            or self._select_ai_profile_name(current).strip()
-        )
+        current_name = self._select_ai_profile_name(current).strip()
+        current_previous_name = current.select_ai_config.previous_profile_name.strip()
+        requested_previous_name = updated.select_ai_config.previous_profile_name.strip()
         new_name = self._select_ai_profile_name(updated).strip()
         select_ai_config = updated.select_ai_config
+        if (
+            current_previous_name
+            and not requested_previous_name
+            and current_name.upper() == new_name.upper()
+        ):
+            return updated
+        old_name = current_previous_name or current_name
         if old_name and new_name and old_name.upper() != new_name.upper():
             select_ai_config = select_ai_config.model_copy(
                 update={"previous_profile_name": old_name}
@@ -5416,6 +5425,24 @@ class Nl2SqlService:
         ):
             select_ai_config = select_ai_config.model_copy(update={"previous_profile_name": ""})
         return updated.model_copy(update={"select_ai_config": select_ai_config})
+
+    def clear_profile_select_ai_previous_name(
+        self,
+        profile_id: str,
+        *,
+        expected_etag: str | None = None,
+    ) -> Nl2SqlProfile:
+        return self.update_profile(
+            profile_id,
+            lambda profile: profile.model_copy(
+                update={
+                    "select_ai_config": profile.select_ai_config.model_copy(
+                        update={"previous_profile_name": ""}
+                    )
+                }
+            ),
+            expected_etag=expected_etag,
+        )
 
     def delete_profile(self, profile_id: str, *, expected_etag: str | None = None) -> Nl2SqlProfile:
         if self._incremental_repository is not None:
@@ -15337,7 +15364,7 @@ class Nl2SqlService:
         if not profile_id:
             return self.get_profile(None)
         try:
-            return self.get_profile(profile_id)
+            return self.get_profile(profile_id, include_archived=True)
         except ValueError:
             pass
         return Nl2SqlProfile(
