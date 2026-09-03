@@ -15,9 +15,15 @@ from fastapi import HTTPException, Request
 from app.features.nl2sql import ontology_router
 from app.features.nl2sql.profile_access import assert_profile_access
 from app.security.domain import Principal
+from app.security.permissions import PROFILE_MANAGE_PERMISSION
 
 
-def _principal(allowed_profile_ids: set[str], *, system_admin: bool = False) -> Principal:
+def _principal(
+    allowed_profile_ids: set[str],
+    *,
+    system_admin: bool = False,
+    profile_manager: bool = False,
+) -> Principal:
     return Principal(
         user_uuid="user-1",
         login_user_id="user1",
@@ -25,7 +31,7 @@ def _principal(allowed_profile_ids: set[str], *, system_admin: bool = False) -> 
         status="ACTIVE",
         force_password_change=False,
         role_codes=["SYSTEM_ADMIN"] if system_admin else ["GENERAL"],
-        permissions={"menu.ontology_build", "nl2sql.profiles.manage"},
+        permissions={PROFILE_MANAGE_PERMISSION} if profile_manager else set(),
         data_entitlements=[],
         allowed_profile_ids=allowed_profile_ids,
         session_id="session-1",
@@ -47,6 +53,12 @@ class TestAssertProfileAccess:
 
     def test_allowed_profile_is_allowed(self) -> None:
         assert_profile_access(_request_with(_principal({"profile-a"})), "profile-a")
+
+    def test_profile_manager_is_allowed_for_any_profile(self) -> None:
+        assert_profile_access(
+            _request_with(_principal(set(), profile_manager=True)),
+            "profile-b",
+        )
 
     def test_disallowed_profile_is_rejected(self) -> None:
         with pytest.raises(HTTPException) as exc_info:

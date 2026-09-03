@@ -23,7 +23,7 @@ from pr_backend_core import ApiResponse
 
 from app.api.concurrency import run_sync_io
 from app.security.domain import Principal
-from app.security.permissions import FEEDBACK_MANAGE_PERMISSION
+from app.security.permissions import FEEDBACK_MANAGE_PERMISSION, PROFILE_MANAGE_PERMISSION
 from app.settings import get_settings
 
 from .incremental_store import IncrementalVersionConflict
@@ -232,7 +232,7 @@ def _profile_access_denied() -> HTTPException:
 
 def _allowed_profile_ids_for_request(request: Request) -> set[str] | None:
     principal = _principal_from_request(request)
-    if principal is None or principal.is_system_admin:
+    if principal is None or principal.has_permission(PROFILE_MANAGE_PERMISSION):
         return None
     return set(principal.allowed_profile_ids)
 

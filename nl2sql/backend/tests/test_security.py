@@ -1298,6 +1298,34 @@ def test_role_profile_access_is_exposed_on_role_and_current_user_data() -> None:
     ]
 
 
+def test_profile_manage_role_grants_all_profile_access_without_stored_ids() -> None:
+    service = _service()
+    actor, _, _ = _login(service)
+    role = service.create_role(
+        role_code="PROFILE_MANAGER",
+        display_name="業務 profile 管理",
+        description="",
+        permissions={"menu.profiles"},
+        entitlements=[],
+        allowed_profile_ids={"default"},
+        actor=actor,
+    )
+    user, password = service.create_user(
+        login_user_id="profile.manager.all",
+        display_name="業務 profile 全体管理ユーザー",
+        role_ids=[role.role_id],
+        temporary_password="ProfileManagerPass!123",
+        actor=actor,
+    )
+
+    principal, _, _ = service.login(user.login_user_id, password)
+
+    assert role.allowed_profile_ids == set()
+    assert principal.allowed_profile_ids == set()
+    assert principal.has_permission(PROFILE_MANAGE_PERMISSION)
+    assert principal.can_use_profile("finance")
+
+
 def test_non_system_admin_cannot_change_role_profile_access() -> None:
     service = _service()
     actor, _, _ = _login(service)
@@ -2137,7 +2165,7 @@ def test_sql_use_roles_can_read_profile_usage_context_without_profile_management
         reset_security_service()
 
 
-def test_nl2sql_profiles_are_filtered_and_used_by_role_profile_access(
+def test_nl2sql_profiles_are_filtered_and_profile_managers_use_all_profiles(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     service = _configure_memory_api_auth(monkeypatch)
@@ -2164,7 +2192,6 @@ def test_nl2sql_profiles_are_filtered_and_used_by_role_profile_access(
         description="",
         permissions={"menu.profiles"},
         entitlements=[],
-        allowed_profile_ids={"default"},
         actor=admin,
     )
     blocked_role = service.create_role(
@@ -2251,9 +2278,18 @@ def test_nl2sql_profiles_are_filtered_and_used_by_role_profile_access(
             )
             assert denied_evaluation.status_code == 403
 
-            await _login_api(client, "profile.default.manager", "ProfileDefaultPass!123")
+            manager_current, _ = await _login_api(
+                client, "profile.default.manager", "ProfileDefaultPass!123"
+            )
+            assert manager_current["allowed_profile_ids"] == []
+            manager_search = await client.get("/api/nl2sql/profiles/search")
+            assert manager_search.status_code == 200
+            assert {item["id"] for item in manager_search.json()["data"]["items"]} >= {
+                "default",
+                "finance",
+            }
             assert (await client.get("/api/nl2sql/profiles/default")).status_code == 200
-            assert (await client.get("/api/nl2sql/profiles/finance")).status_code == 403
+            assert (await client.get("/api/nl2sql/profiles/finance")).status_code == 200
 
             _, csrf = await _login_api(client, "query.no.profile", "QueryNoProfilePass!123")
             empty_search = await client.get("/api/nl2sql/profiles/search")

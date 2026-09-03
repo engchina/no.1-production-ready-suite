@@ -513,6 +513,12 @@ def expand_permissions(codes: set[str]) -> set[str]:
     return expanded
 
 
+def grants_all_profile_access(codes: Iterable[str]) -> bool:
+    """業務プロファイル管理系の権限は個別 profile 制限を受けない。"""
+
+    return PROFILE_MANAGE_PERMISSION in expand_permissions(set(codes))
+
+
 PUBLIC_API_PATHS = frozenset({"/health", "/ready", "/ready/database", "/auth/login"})
 AUTHENTICATED_WITHOUT_PERMISSION = frozenset({"/auth/me", "/auth/logout", "/auth/password/change"})
 

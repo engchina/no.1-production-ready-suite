@@ -115,7 +115,7 @@ class Principal:
         return self.is_system_admin or bool(self.permissions.intersection(permissions))
 
     def can_use_profile(self, profile_id: str | None) -> bool:
-        if self.is_system_admin:
+        if self.is_system_admin or "nl2sql.profiles.manage" in self.permissions:
             return True
         normalized = str(profile_id or "").strip()
         return bool(normalized and normalized in self.allowed_profile_ids)
