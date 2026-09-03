@@ -72,12 +72,15 @@ interface DatabaseSettingsForm {
   connectionSecurity: DatabaseConnectionSecurity;
   password: string;
   clearPassword: boolean;
+  walletPassword: string;
+  clearWalletPassword: boolean;
 }
 
 interface DatabaseSettingsFormErrors {
   user?: string;
   dsn?: string;
   password?: string;
+  walletPassword?: string;
   wallet?: string;
 }
 
@@ -90,6 +93,8 @@ const EMPTY_FORM: DatabaseSettingsForm = {
   connectionSecurity: "wallet_mtls",
   password: "",
   clearPassword: false,
+  walletPassword: "",
+  clearWalletPassword: false,
 };
 
 function databaseConnectionSecurityOptions() {
@@ -120,12 +125,14 @@ export function DatabaseSettingsClient() {
   const [form, setForm] = useState<DatabaseSettingsForm>(EMPTY_FORM);
   const [errors, setErrors] = useState<DatabaseSettingsFormErrors>({});
   const [passwordVisible, setPasswordVisible] = useState(false);
+  const [walletPasswordVisible, setWalletPasswordVisible] = useState(false);
   const [optimisticSettings, setOptimisticSettings] = useState<DatabaseSettingsData | null>(null);
   const [walletDownloadSource, setWalletDownloadSource] =
     useState<WalletDownloadSource | null>(null);
 
   const userRef = useRef<HTMLInputElement>(null);
   const passwordRef = useRef<HTMLInputElement>(null);
+  const walletPasswordRef = useRef<HTMLInputElement>(null);
   const autoWalletAttemptedRef = useRef<Set<string>>(new Set());
   const resetPasswordReveal = passwordReveal.reset;
 
@@ -134,6 +141,7 @@ export function DatabaseSettingsClient() {
       setForm(formFromSettings(query.data));
       setErrors({});
       setPasswordVisible(false);
+      setWalletPasswordVisible(false);
       setOptimisticSettings(null);
       resetPasswordReveal();
     }
@@ -179,6 +187,14 @@ export function DatabaseSettingsClient() {
   function updatePasswordClear(clear: boolean) {
     if (clear) setPasswordVisible(false);
     updateForm({ clearPassword: clear, password: clear ? "" : form.password });
+  }
+
+  function updateWalletPasswordClear(clear: boolean) {
+    if (clear) setWalletPasswordVisible(false);
+    updateForm({
+      clearWalletPassword: clear,
+      walletPassword: clear ? "" : form.walletPassword,
+    });
   }
 
   async function togglePasswordVisible(settings: DatabaseSettingsData) {
@@ -232,7 +248,11 @@ export function DatabaseSettingsClient() {
     setErrors(nextErrors);
 
     if (Object.keys(nextErrors).length > 0) {
-      focusFirstInvalid(nextErrors, { user: userRef, password: passwordRef });
+      focusFirstInvalid(nextErrors, {
+        user: userRef,
+        password: passwordRef,
+        walletPassword: walletPasswordRef,
+      });
       return false;
     }
     return true;
@@ -256,6 +276,7 @@ export function DatabaseSettingsClient() {
         setForm(formFromSettings(data));
         setOptimisticSettings(data);
         setPasswordVisible(false);
+        setWalletPasswordVisible(false);
         toast.success(t("settings.database.actions.walletUploaded", { fileName: file.name }));
       },
     });
@@ -390,29 +411,76 @@ export function DatabaseSettingsClient() {
                 label={t("settings.database.field.connectionSecurity")}
                 value={form.connectionSecurity}
                 options={databaseConnectionSecurityOptions()}
-                onValueChange={(value) => updateForm({ connectionSecurity: value })}
+                onValueChange={(value) =>
+                  updateForm({
+                    connectionSecurity: value,
+                    ...(value === "walletless_tls"
+                      ? {
+                          walletPassword: "",
+                          clearWalletPassword: false,
+                        }
+                      : {}),
+                  })
+                }
                 helper={t(`settings.database.connectionSecurity.${form.connectionSecurity}.helper`)}
                 buttonClassName="h-11"
               />
 
               {form.connectionSecurity === "wallet_mtls" ? (
-                <WalletUploadField
-                  settings={settings}
-                  uploadPending={walletUpload.isPending}
-                  autoDownloadPending={walletDownload.isPending && walletFieldDownloadActive}
-                  autoDownloadError={
-                    walletDownload.isError && walletFieldDownloadActive ? walletDownloadError : null
-                  }
-                  canAutoDownload={Boolean(settings.adb_ocid.trim())}
-                  uploadError={walletUpload.isError ? walletUploadError : null}
-                  validationError={errors.wallet}
-                  onUpload={uploadWallet}
-                  onRetryDownload={() => {
-                    setWalletDownloadSource("wallet-field");
-                    resetWalletDownload();
-                    downloadWallet();
-                  }}
-                />
+                <div className="space-y-4">
+                  <WalletUploadField
+                    settings={settings}
+                    uploadPending={walletUpload.isPending}
+                    autoDownloadPending={walletDownload.isPending && walletFieldDownloadActive}
+                    autoDownloadError={
+                      walletDownload.isError && walletFieldDownloadActive ? walletDownloadError : null
+                    }
+                    canAutoDownload={Boolean(settings.adb_ocid.trim())}
+                    uploadError={walletUpload.isError ? walletUploadError : null}
+                    validationError={errors.wallet}
+                    onUpload={uploadWallet}
+                    onRetryDownload={() => {
+                      setWalletDownloadSource("wallet-field");
+                      resetWalletDownload();
+                      downloadWallet();
+                    }}
+                  />
+
+                  <PasswordField
+                    id="oracle-wallet-password"
+                    label={t("settings.database.field.walletPassword")}
+                    required={false}
+                    value={form.walletPassword}
+                    visible={walletPasswordVisible}
+                    disabled={form.clearWalletPassword}
+                    inputRef={walletPasswordRef}
+                    hasSavedSecret={settings.has_wallet_password}
+                    error={errors.walletPassword}
+                    helper={
+                      settings.has_wallet_password
+                        ? t("settings.database.helper.walletPasswordSaved")
+                        : t("settings.database.helper.walletPasswordEmpty")
+                    }
+                    placeholder={t("settings.database.placeholder.secret")}
+                    revealError={null}
+                    revealPending={false}
+                    revealButtonLabels={{
+                      show: t("settings.database.secrets.showWalletPassword"),
+                      hide: t("settings.database.secrets.hideWalletPassword"),
+                      revealing: t("settings.database.secrets.revealingWalletPassword"),
+                    }}
+                    onToggleVisible={() => setWalletPasswordVisible((current) => !current)}
+                    onChange={(value) => updateForm({ walletPassword: value })}
+                  />
+
+                  {settings.has_wallet_password ? (
+                    <SecretClearCheckbox
+                      checked={form.clearWalletPassword}
+                      onChange={updateWalletPasswordClear}
+                      label={t("settings.database.secrets.clearWalletPassword")}
+                    />
+                  ) : null}
+                </div>
               ) : (
                 <FormStatus
                   tone="info"
@@ -1222,8 +1290,11 @@ function PasswordField({
   hasSavedSecret,
   required,
   error,
+  helper,
+  placeholder,
   revealError,
   revealPending,
+  revealButtonLabels,
   inputRef,
   onChange,
   onToggleVisible,
@@ -1236,8 +1307,15 @@ function PasswordField({
   hasSavedSecret: boolean;
   required: boolean;
   error?: string;
+  helper?: string;
+  placeholder?: string;
   revealError: string | null;
   revealPending: boolean;
+  revealButtonLabels?: {
+    show: string;
+    hide: string;
+    revealing: string;
+  };
   inputRef: RefObject<HTMLInputElement | null>;
   onChange: (value: string) => void;
   onToggleVisible: () => void;
@@ -1249,10 +1327,15 @@ function PasswordField({
     .filter(Boolean)
     .join(" ");
   const revealButtonLabel = revealPending
-    ? t("settings.database.secrets.revealingPassword")
+    ? (revealButtonLabels?.revealing ?? t("settings.database.secrets.revealingPassword"))
     : visible
-      ? t("settings.database.secrets.hide")
-      : t("settings.database.secrets.show");
+      ? (revealButtonLabels?.hide ?? t("settings.database.secrets.hide"))
+      : (revealButtonLabels?.show ?? t("settings.database.secrets.show"));
+  const helperText =
+    helper ??
+    (hasSavedSecret
+      ? t("settings.database.helper.passwordSavedCompact")
+      : t("settings.database.helper.passwordRequired"));
 
   return (
     <div className="space-y-1.5">
@@ -1270,11 +1353,12 @@ function PasswordField({
           value={value}
           disabled={disabled}
           required={required}
+          aria-required={required}
           onChange={(event) => onChange(event.target.value)}
           placeholder={
             hasSavedSecret
               ? t("settings.database.placeholder.passwordSaved")
-              : t("settings.database.placeholder.password")
+              : (placeholder ?? t("settings.database.placeholder.password"))
           }
           aria-invalid={Boolean(error)}
           aria-describedby={describedBy}
@@ -1301,9 +1385,7 @@ function PasswordField({
         </button>
       </div>
       <p id={hintId} className="text-xs leading-relaxed text-muted">
-        {hasSavedSecret
-          ? t("settings.database.helper.passwordSavedCompact")
-          : t("settings.database.helper.passwordRequired")}
+        {helperText}
       </p>
       <FieldError id={errorId} message={error} />
       {revealError ? (
@@ -1512,6 +1594,8 @@ function formFromSettings(settings: DatabaseSettingsData): DatabaseSettingsForm 
     connectionSecurity: settings.connection_security ?? "wallet_mtls",
     password: "",
     clearPassword: false,
+    walletPassword: "",
+    clearWalletPassword: false,
   };
 }
 
@@ -1527,6 +1611,10 @@ function payloadFromForm(
   };
   if (form.clearPassword) payload.clear_password = true;
   else if (form.password !== "") payload.password = form.password;
+  if (form.connectionSecurity === "wallet_mtls") {
+    if (form.clearWalletPassword) payload.clear_wallet_password = true;
+    else if (form.walletPassword !== "") payload.wallet_password = form.walletPassword;
+  }
   return payload;
 }
 
@@ -1539,6 +1627,9 @@ function clearChangedErrors(
   if ("user" in update) next.user = undefined;
   if ("dsn" in update) next.dsn = undefined;
   if ("password" in update || "clearPassword" in update) next.password = undefined;
+  if ("walletPassword" in update || "clearWalletPassword" in update) {
+    next.walletPassword = undefined;
+  }
   return next;
 }
 
@@ -1547,8 +1638,10 @@ function focusFirstInvalid(
   refs: {
     user: RefObject<HTMLInputElement | null>;
     password: RefObject<HTMLInputElement | null>;
+    walletPassword: RefObject<HTMLInputElement | null>;
   }
 ) {
   if (errors.user) refs.user.current?.focus();
   else if (errors.password) refs.password.current?.focus();
+  else if (errors.walletPassword) refs.walletPassword.current?.focus();
 }
