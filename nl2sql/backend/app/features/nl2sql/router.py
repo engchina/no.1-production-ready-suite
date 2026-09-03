@@ -1468,15 +1468,18 @@ def train_classifier(req: ClassifierTrainRequest) -> ApiResponse[ClassifierStatu
 async def import_classifier_model(
     file: Annotated[UploadFile, File()],
 ) -> ApiResponse[ClassifierModelImportData]:
-    """唯一の classifier model を joblib / JSON artifact で置き換える。"""
+    """唯一の classifier model を安全な JSON artifact で置き換える。"""
     content = await file.read()
-    return ApiResponse(
-        data=await run_sync_io(
-            nl2sql_service.import_classifier_model_artifact,
-            filename=file.filename or "classifier.joblib",
-            content=content,
+    try:
+        return ApiResponse(
+            data=await run_sync_io(
+                nl2sql_service.import_classifier_model_artifact,
+                filename=file.filename or "classifier.json",
+                content=content,
+            )
         )
-    )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.post("/classifier/models/import", response_model=ApiResponse[ClassifierModelImportData])

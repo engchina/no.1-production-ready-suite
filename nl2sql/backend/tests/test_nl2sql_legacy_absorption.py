@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import importlib
 import io
-from types import SimpleNamespace
+import json
+import pickle
+from pathlib import Path
 from typing import Any, cast
 
 import httpx
@@ -156,11 +158,40 @@ def _single_sheet_workbook_bytes(title: str, rows: list[list[Any]]) -> bytes:
     return _workbook_bytes(workbook)
 
 
-def _classifier_model_bytes(*categories: str) -> bytes:
-    buffer = io.BytesIO()
-    joblib = importlib.import_module("joblib")
-    joblib.dump(SimpleNamespace(classes_=list(categories)), buffer)
-    return buffer.getvalue()
+def _pickle_marker(path: str) -> None:
+    Path(path).write_text("pickle executed", encoding="utf-8")
+
+
+class _MaliciousClassifierArtifact:
+    def __init__(self, marker_path: Path) -> None:
+        self.marker_path = marker_path
+
+    def __reduce__(self) -> tuple[Any, tuple[str]]:
+        return (_pickle_marker, (str(self.marker_path),))
+
+
+def _classifier_model_artifact_bytes(
+    *categories: str,
+    embedding_model: str = "deterministic-hash-1536",
+    feature_dim: int = 1536,
+    include_intercept: bool = True,
+) -> bytes:
+    row_count = 1 if len(categories) == 2 else len(categories)
+    coef: list[list[float]] = []
+    for index in range(row_count):
+        vector = [0.0] * feature_dim
+        if feature_dim:
+            vector[min(index + 1, feature_dim - 1)] = 1.0
+        coef.append(vector)
+    payload: dict[str, Any] = {
+        "classes": list(categories),
+        "coef": coef,
+        "feature_dim": feature_dim,
+        "embedding_model": embedding_model,
+    }
+    if include_intercept:
+        payload["intercept"] = [0.0] * row_count
+    return json.dumps(payload, ensure_ascii=False).encode("utf-8")
 
 
 def _import_sample(service: Nl2SqlService) -> None:
@@ -235,17 +266,18 @@ def test_classifier_model_import_replaces_the_single_model_and_preserves_it_on_f
     service = Nl2SqlService(store=MemoryNl2SqlStore())
 
     first = service.import_classifier_model_artifact(
-        filename="first.joblib",
-        content=_classifier_model_bytes("入金管理", "標準業務プロファイル"),
+        filename="first.json",
+        content=_classifier_model_artifact_bytes("入金管理", "標準業務プロファイル"),
     )
     assert first.imported is True
     assert first.model is not None
     assert first.model.active is True
+    assert first.model.source == "json:first.json"
     assert service.classifier_status().classifier_version == first.active_version
 
     second = service.import_classifier_model_artifact(
-        filename="second.joblib",
-        content=_classifier_model_bytes("監査", "標準業務プロファイル"),
+        filename="second.json",
+        content=_classifier_model_artifact_bytes("監査", "標準業務プロファイル"),
     )
     assert second.imported is True
     assert second.active_version != first.active_version
@@ -253,24 +285,103 @@ def test_classifier_model_import_replaces_the_single_model_and_preserves_it_on_f
     assert second.model.active is True
     assert service.classifier_status().classifier_version == second.active_version
 
-    failed = service.import_classifier_model_artifact(
-        filename="broken.txt",
-        content=b"not-a-model",
-    )
-    assert failed.imported is False
-    assert failed.active_version == second.active_version
+    with pytest.raises(ValueError, match="JSON artifact"):
+        service.import_classifier_model_artifact(
+            filename="broken.txt",
+            content=b"not-a-model",
+        )
     assert service.classifier_status().classifier_version == second.active_version
+
+
+def test_classifier_model_import_rejects_pickle_without_executing(
+    tmp_path: Path,
+) -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    marker_path = tmp_path / "pickle-marker.txt"
+    payload = pickle.dumps(_MaliciousClassifierArtifact(marker_path))
+
+    with pytest.raises(ValueError, match="pickle/joblib artifact"):
+        service.import_classifier_model_artifact(
+            filename="malicious.joblib",
+            content=payload,
+        )
+
+    assert not marker_path.exists()
+    assert service.classifier_status().ready is False
+
+
+def test_classifier_model_import_rejects_invalid_model_shapes() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+
+    with pytest.raises(ValueError, match="feature_dim"):
+        service.import_classifier_model_artifact(
+            filename="wrong-dimension.json",
+            content=_classifier_model_artifact_bytes(
+                "入金管理",
+                "標準業務プロファイル",
+                feature_dim=768,
+            ),
+        )
+    with pytest.raises(ValueError, match="intercept"):
+        service.import_classifier_model_artifact(
+            filename="missing-intercept.json",
+            content=_classifier_model_artifact_bytes(
+                "入金管理",
+                "標準業務プロファイル",
+                include_intercept=False,
+            ),
+        )
+
+    assert service.classifier_status().ready is False
+
+
+def test_classifier_prediction_falls_back_when_embedding_model_differs() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    cast(Any, service)._embedding_client = FakeEmbeddingClient()
+    service.create_profile(
+        Nl2SqlProfile(
+            id="payment",
+            name="入金管理",
+            allowed_tables=["PAYMENTS", "INVOICES"],
+            glossary={"入金": "PAYMENTS.PAID_AT"},
+        )
+    )
+    imported = service.import_classifier_model_artifact(
+        filename="classifier.json",
+        content=_classifier_model_artifact_bytes(
+            "標準業務プロファイル",
+            "入金管理",
+            embedding_model="old-embedding-model",
+        ),
+    )
+    assert imported.imported is True
+    assert service.classifier_status().ready is True
+
+    prediction = service.predict_classifier(
+        ClassifierPredictRequest(question="未入金の請求を確認したい")
+    )
+    assert prediction.recommendation_source == "deterministic"
+    assert any("embedding model" in warning for warning in prediction.warnings)
+
+    recommendation = service.recommend_profile(
+        ProfileRecommendationRequest(question="未入金の請求を確認したい")
+    )
+    assert recommendation.recommendation_source == "deterministic"
+    assert any("embedding model" in warning for warning in recommendation.warnings)
 
 
 @pytest.mark.asyncio
 async def test_classifier_model_api_exposes_only_single_model_import(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     from app.features.nl2sql import router as nl2sql_router
 
     service = Nl2SqlService(store=MemoryNl2SqlStore())
     monkeypatch.setattr(nl2sql_router, "nl2sql_service", service)
-    raw_model = _classifier_model_bytes("入金管理", "標準業務プロファイル")
+    raw_model = _classifier_model_artifact_bytes("入金管理", "標準業務プロファイル")
+    marker_path = tmp_path / "api-pickle-marker.txt"
+    unsafe_model = pickle.dumps(_MaliciousClassifierArtifact(marker_path))
 
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app),
@@ -278,17 +389,35 @@ async def test_classifier_model_api_exposes_only_single_model_import(
     ) as client:
         imported = await client.post(
             "/api/nl2sql/classifier/model/import",
-            files={"file": ("single.joblib", raw_model, "application/octet-stream")},
+            files={"file": ("single.json", raw_model, "application/json")},
         )
         legacy_imported = await client.post(
             "/api/nl2sql/classifier/models/import",
             data={"activate": "true"},
-            files={"file": ("legacy.joblib", raw_model, "application/octet-stream")},
+            files={"file": ("legacy.json", raw_model, "application/json")},
+        )
+        unsafe_imported = await client.post(
+            "/api/nl2sql/classifier/model/import",
+            files={"file": ("unsafe.joblib", unsafe_model, "application/octet-stream")},
+        )
+        invalid_imported = await client.post(
+            "/api/nl2sql/classifier/model/import",
+            files={
+                "file": (
+                    "wrong-dimension.json",
+                    _classifier_model_artifact_bytes(
+                        "入金管理",
+                        "標準業務プロファイル",
+                        feature_dim=768,
+                    ),
+                    "application/json",
+                )
+            },
         )
         inactive = await client.post(
             "/api/nl2sql/classifier/models/import",
             data={"activate": "false"},
-            files={"file": ("inactive.joblib", raw_model, "application/octet-stream")},
+            files={"file": ("inactive.json", raw_model, "application/json")},
         )
         listed = await client.get("/api/nl2sql/classifier/models")
         activated = await client.post(
@@ -301,6 +430,11 @@ async def test_classifier_model_api_exposes_only_single_model_import(
     assert imported.json()["data"]["model"]["active"] is True
     assert legacy_imported.status_code == 200
     assert legacy_imported.json()["data"]["model"]["active"] is True
+    assert unsafe_imported.status_code == 422
+    assert "pickle/joblib artifact" in unsafe_imported.text
+    assert not marker_path.exists()
+    assert invalid_imported.status_code == 422
+    assert "feature_dim" in invalid_imported.text
     assert inactive.status_code == 422
     assert "activate=false" in inactive.text
     assert listed.status_code == 404

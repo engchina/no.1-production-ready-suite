@@ -1366,6 +1366,7 @@ class ProfileRecommendationData(BaseModel):
     recommendation_source: str = "deterministic"
     classifier_version: str = ""
     category_scores: dict[str, float] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
 
 
 class ClassifierTrainingExample(BaseModel):
