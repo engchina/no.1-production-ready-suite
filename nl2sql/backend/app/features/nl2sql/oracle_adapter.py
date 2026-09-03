@@ -10,7 +10,7 @@ import hashlib
 import importlib
 import json
 import re
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager, suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -2879,6 +2879,7 @@ class OracleNl2SqlAdapter:
         table_name: str,
         embedding: list[float],
         profile_id: str | None,
+        profile_ids: Iterable[str] | None = None,
         include_bad: bool,
         limit: int,
     ) -> list[dict[str, Any]]:
@@ -2890,9 +2891,21 @@ class OracleNl2SqlAdapter:
             "embedding_json": json.dumps(embedding),
             "limit": max(limit, 1),
         }
-        if profile_id:
+        scoped_profile_ids = sorted(
+            {str(profile_id or "").strip()}
+            | {str(item or "").strip() for item in profile_ids or []}
+        )
+        scoped_profile_ids = [item for item in scoped_profile_ids if item]
+        if len(scoped_profile_ids) == 1:
             filters.append("PROFILE_ID = :profile_id")
-            binds["profile_id"] = profile_id
+            binds["profile_id"] = scoped_profile_ids[0]
+        elif scoped_profile_ids:
+            names: list[str] = []
+            for index, scoped_profile_id in enumerate(scoped_profile_ids):
+                name = f"profile_id_{index}"
+                names.append(f":{name}")
+                binds[name] = scoped_profile_id
+            filters.append(f"PROFILE_ID IN ({', '.join(names)})")
         if not include_bad:
             filters.append("FEEDBACK_RATING = :feedback_rating")
             binds["feedback_rating"] = "good"

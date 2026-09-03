@@ -3650,6 +3650,26 @@ def test_service_similar_history_uses_oracle_vector_search(
     assert any("TO_VECTOR(:embedding_json)" in sql for sql in fake_db.executed)
 
 
+def test_oracle_feedback_vector_search_filters_multiple_profile_ids() -> None:
+    fake_db = _FakeOracleDb()
+    adapter = _FakeRuntimeOracleAdapter(fake_db)
+
+    adapter.search_feedback_vector_index(
+        table_name="NL2SQL_FEEDBACK_VECTOR",
+        embedding=[1.0, 0.0],
+        profile_id=None,
+        profile_ids={"sales", "finance"},
+        include_bad=False,
+        limit=5,
+    )
+
+    vector_query = next(sql for sql in fake_db.executed if "VECTOR_DISTANCE" in sql)
+    vector_params = fake_db.executed_params[fake_db.executed.index(vector_query)] or {}
+    assert "PROFILE_ID IN (:profile_id_0, :profile_id_1)" in vector_query
+    assert vector_params["profile_id_0"] == "finance"
+    assert vector_params["profile_id_1"] == "sales"
+
+
 def test_service_preview_marks_oracle_vector_few_shot_source(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3680,6 +3700,7 @@ def test_service_preview_marks_oracle_vector_few_shot_source(
             generated_sql="SELECT TOTAL_AMOUNT FROM INVOICES",
             created_at="2026-08-13T00:00:00Z",
             admin_feedback_rating=FeedbackRating.GOOD,
+            profile_id="default",
         )
     ]
     service._catalog = SchemaCatalog(

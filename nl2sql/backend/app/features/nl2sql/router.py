@@ -1657,7 +1657,12 @@ def similar_history(
     """質問に近い履歴を few-shot / feedback 学習候補として返す。"""
     if req.profile_id:
         _assert_profile_access(request, req.profile_id)
-    return ApiResponse(data=nl2sql_service.similar_history(req))
+    return ApiResponse(
+        data=nl2sql_service.similar_history(
+            req,
+            allowed_profile_ids=_allowed_profile_ids_for_request(request),
+        )
+    )
 
 
 @router.post("/recommend-profile", response_model=ApiResponse[ProfileRecommendationData])

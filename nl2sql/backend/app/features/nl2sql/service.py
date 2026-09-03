@@ -6924,10 +6924,16 @@ class Nl2SqlService:
             timing=self._timing(created_at, started, "feedback_index"),
         )
 
-    def similar_history(self, request: SimilarHistoryRequest) -> SimilarHistoryData:
+    def similar_history(
+        self,
+        request: SimilarHistoryRequest,
+        *,
+        allowed_profile_ids: set[str] | None = None,
+    ) -> SimilarHistoryData:
         ranked = self._similar_history_candidates(
             question=request.question,
             profile_id=request.profile_id,
+            allowed_profile_ids=allowed_profile_ids,
             include_bad=False,
         )
         limit = request.limit or self._feedback_match_limit
@@ -15148,7 +15154,32 @@ class Nl2SqlService:
                 add_match(column.logical_name, 0.9)
         return score, matched_terms
 
-    def _similar_history_pool(self) -> list[HistoryItem]:
+    @staticmethod
+    def _similar_history_profile_scope(
+        profile_id: str | None,
+        allowed_profile_ids: set[str] | None,
+    ) -> set[str] | None:
+        requested = str(profile_id or "").strip()
+        if requested:
+            return {requested}
+        if allowed_profile_ids is None:
+            return None
+        return {str(item or "").strip() for item in allowed_profile_ids if str(item or "").strip()}
+
+    @staticmethod
+    def _similar_history_item_in_profile_scope(
+        item: HistoryItem,
+        profile_scope: set[str] | None,
+    ) -> bool:
+        if profile_scope is None:
+            return True
+        return item.profile_id in profile_scope
+
+    def _similar_history_pool(
+        self,
+        *,
+        profile_scope: set[str] | None = None,
+    ) -> list[HistoryItem]:
         """類似履歴 / few-shot の母集団。
 
         ランキングは管理者 GOOD かつ安全な履歴しか使わないため、全履歴を読んで捨てる
@@ -15157,23 +15188,34 @@ class Nl2SqlService:
         """
 
         good = FeedbackRating.GOOD.value
+        if profile_scope is not None and not profile_scope:
+            return []
         if self._incremental_repository is None:
             with self._lock:
                 items = [
                     item.model_copy(deep=True)
                     for item in reversed(self._history)
                     if item.admin_feedback_rating == FeedbackRating.GOOD
+                    and self._similar_history_item_in_profile_scope(item, profile_scope)
                 ]
             return items[:_SIMILAR_HISTORY_POOL_LIMIT]
         pool: list[HistoryItem] = []
         cursor = ""
+        page_profile_id = (
+            next(iter(profile_scope)) if profile_scope and len(profile_scope) == 1 else ""
+        )
         while len(pool) < _SIMILAR_HISTORY_POOL_LIMIT:
             page, cursor, _total = self._history_page(
                 cursor=cursor or None,
                 limit=min(500, _SIMILAR_HISTORY_POOL_LIMIT - len(pool)),
+                profile_id=page_profile_id,
                 payload_filters={"admin_feedback_rating": good},
             )
-            pool.extend(page)
+            pool.extend(
+                item
+                for item in page
+                if self._similar_history_item_in_profile_scope(item, profile_scope)
+            )
             if not cursor or not page:
                 break
         return pool
@@ -15183,14 +15225,19 @@ class Nl2SqlService:
         *,
         question: str,
         profile_id: str | None,
+        allowed_profile_ids: set[str] | None = None,
         include_bad: bool,
     ) -> list[SimilarHistoryItem]:
         self._load_feedback_state()
-        history = self._similar_history_pool()
+        profile_scope = self._similar_history_profile_scope(profile_id, allowed_profile_ids)
+        if profile_scope is not None and not profile_scope:
+            return []
+        history = self._similar_history_pool(profile_scope=profile_scope)
         target_objects = self._similar_history_query_target_objects(question)
         vector_ranked = self._rank_oracle_vector_history(
             question=question,
             profile_id=profile_id,
+            profile_scope=profile_scope,
             history=history,
             include_bad=include_bad,
             limit=10,
@@ -15199,6 +15246,7 @@ class Nl2SqlService:
         deterministic_ranked = self._rank_similar_history(
             question=question,
             profile_id=profile_id,
+            profile_scope=profile_scope,
             history=history,
             include_bad=include_bad,
             target_objects=target_objects,
@@ -15308,11 +15356,14 @@ class Nl2SqlService:
         *,
         question: str,
         profile_id: str | None,
+        profile_scope: set[str] | None,
         history: list[HistoryItem],
         include_bad: bool,
         limit: int,
         target_objects: set[str],
     ) -> list[SimilarHistoryItem]:
+        if not history:
+            return []
         settings = get_settings()
         if (
             not self._use_oracle_runtime()
@@ -15326,6 +15377,7 @@ class Nl2SqlService:
                 table_name=settings.nl2sql_feedback_vector_table,
                 embedding=embedding,
                 profile_id=profile_id,
+                profile_ids=profile_scope,
                 include_bad=include_bad,
                 limit=limit,
             )
@@ -15346,6 +15398,8 @@ class Nl2SqlService:
                 continue
             # 管理者が GOOD にした履歴だけを検索・few-shot 対象にする。
             if item.admin_feedback_rating != FeedbackRating.GOOD:
+                continue
+            if not self._similar_history_item_in_profile_scope(item, profile_scope):
                 continue
             if not item.safety_is_safe:
                 continue
@@ -15373,6 +15427,7 @@ class Nl2SqlService:
         *,
         question: str,
         profile_id: str | None,
+        profile_scope: set[str] | None,
         history: list[HistoryItem],
         include_bad: bool,
         target_objects: set[str],
@@ -15385,6 +15440,8 @@ class Nl2SqlService:
         for item in history:
             # 管理者が GOOD にした履歴だけを検索・few-shot 対象にする。
             if item.admin_feedback_rating != FeedbackRating.GOOD:
+                continue
+            if not self._similar_history_item_in_profile_scope(item, profile_scope):
                 continue
             if not item.safety_is_safe:
                 continue

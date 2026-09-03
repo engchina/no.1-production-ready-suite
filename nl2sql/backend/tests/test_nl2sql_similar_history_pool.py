@@ -6,31 +6,43 @@ DB 側で絞り、上限件数で止める(Issue: 類似履歴が毎回全履歴
 
 from __future__ import annotations
 
-from typing import Any
+from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
+from app.features.nl2sql import router as nl2sql_router
 from app.features.nl2sql import service as service_module
 from app.features.nl2sql.incremental_store import MemoryIncrementalNl2SqlRepository
 from app.features.nl2sql.models import (
     FeedbackRating,
     HistoryItem,
     Nl2SqlEngine,
+    Nl2SqlProfile,
     SimilarHistoryRequest,
 )
 from app.features.nl2sql.service import Nl2SqlService
 from app.features.nl2sql.store import MemoryNl2SqlStore
+from app.security.domain import Principal
+from app.security.permissions import QUERY_GENERATE_PERMISSION
+from app.settings import get_settings
 
 
-def _history(index: int, *, admin: FeedbackRating | None) -> HistoryItem:
+def _history(
+    index: int,
+    *,
+    admin: FeedbackRating | None,
+    profile_id: str = "default",
+    generated_sql: str = "SELECT TOTAL_AMOUNT FROM APP.INVOICES",
+) -> HistoryItem:
     return HistoryItem(
         id=f"hist-{index:03d}",
         question="請求金額を確認したい",
         engine=Nl2SqlEngine.ENTERPRISE_AI_DIRECT,
-        generated_sql="SELECT TOTAL_AMOUNT FROM APP.INVOICES",
+        generated_sql=generated_sql,
         created_at=f"2026-09-02T00:00:{index:02d}+00:00",
-        profile_id="default",
-        profile_name="標準プロファイル",
+        profile_id=profile_id,
+        profile_name=f"{profile_id} profile",
         safety_is_safe=True,
         admin_feedback_rating=admin,
         admin_feedback_updated_at=f"2026-09-02T01:00:{index:02d}+00:00" if admin else "",
@@ -56,6 +68,50 @@ def _seed(repository: MemoryIncrementalNl2SqlRepository, items: list[HistoryItem
             profile_id=item.profile_id,
             status=item.feedback_rating.value if item.feedback_rating else "unrated",
         )
+
+
+def _principal(allowed_profile_ids: set[str]) -> Principal:
+    return Principal(
+        user_uuid="user-1",
+        login_user_id="user1",
+        display_name="利用者",
+        status="ACTIVE",
+        force_password_change=False,
+        role_codes=["ANALYST"],
+        permissions={QUERY_GENERATE_PERMISSION},
+        data_entitlements=[],
+        allowed_profile_ids=allowed_profile_ids,
+        session_id="session-1",
+        csrf_token_hash="csrf",
+    )
+
+
+def _request(principal: Principal | None) -> Any:
+    return SimpleNamespace(state=SimpleNamespace(principal=principal))
+
+
+class _FakeEmbeddingClient:
+    def is_configured(self) -> bool:
+        return True
+
+    def module_available(self) -> bool:
+        return True
+
+    def embed_texts(self, texts: list[str]) -> list[list[float]]:
+        return [[1.0 if index == 0 else 0.0 for index in range(1536)] for _text in texts]
+
+
+class _RecordingOracleAdapter:
+    def __init__(self) -> None:
+        self.search_kwargs: dict[str, Any] | None = None
+
+    def search_feedback_vector_index(self, **kwargs: Any) -> list[dict[str, Any]]:
+        self.search_kwargs = kwargs
+        return [
+            {"history_id": "hist-001", "profile_id": "sales", "score": 0.91},
+            {"history_id": "hist-002", "profile_id": "finance", "score": 0.9},
+            {"history_id": "hist-003", "profile_id": "hr", "score": 0.99},
+        ]
 
 
 def test_pool_is_filtered_to_admin_good_on_the_repository_side(
@@ -118,6 +174,100 @@ def test_similar_history_only_surfaces_admin_good_items() -> None:
     )
 
     assert [entry.item.id for entry in data.items] == ["hist-001"]
+
+
+def test_similar_history_filters_to_requested_profile() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service._history = [  # noqa: SLF001
+        _history(1, admin=FeedbackRating.GOOD, profile_id="sales"),
+        _history(2, admin=FeedbackRating.GOOD, profile_id="finance"),
+    ]
+
+    data = service.similar_history(
+        SimilarHistoryRequest(question="請求金額を確認したい", profile_id="sales", limit=5)
+    )
+
+    assert [entry.item.profile_id for entry in data.items] == ["sales"]
+
+
+def test_similar_history_without_profile_filters_to_allowed_profiles() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service._history = [  # noqa: SLF001
+        _history(1, admin=FeedbackRating.GOOD, profile_id="sales"),
+        _history(2, admin=FeedbackRating.GOOD, profile_id="finance"),
+    ]
+
+    data = service.similar_history(
+        SimilarHistoryRequest(question="請求金額を確認したい", profile_id=None, limit=5),
+        allowed_profile_ids={"sales"},
+    )
+    empty = service.similar_history(
+        SimilarHistoryRequest(question="請求金額を確認したい", profile_id=None, limit=5),
+        allowed_profile_ids=set(),
+    )
+
+    assert [entry.item.profile_id for entry in data.items] == ["sales"]
+    assert empty.items == []
+
+
+def test_similar_history_route_scopes_empty_profile_to_principal_allowed_profiles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service._history = [  # noqa: SLF001
+        _history(1, admin=FeedbackRating.GOOD, profile_id="sales"),
+        _history(2, admin=FeedbackRating.GOOD, profile_id="finance"),
+    ]
+    monkeypatch.setattr(nl2sql_router, "nl2sql_service", service)
+
+    response = nl2sql_router.similar_history(
+        SimilarHistoryRequest(question="請求金額を確認したい", profile_id=None, limit=5),
+        _request(_principal({"sales"})),
+    )
+
+    assert response.data is not None
+    assert [entry.item.profile_id for entry in response.data.items] == ["sales"]
+
+
+def test_few_shot_examples_do_not_cross_profiles() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service._history = [  # noqa: SLF001
+        _history(1, admin=FeedbackRating.GOOD, profile_id="sales"),
+        _history(2, admin=FeedbackRating.GOOD, profile_id="finance"),
+    ]
+
+    examples = service._learning_examples_for_generation(  # noqa: SLF001
+        question="請求金額を確認したい",
+        profile=Nl2SqlProfile(id="sales", name="sales profile"),
+    )
+
+    assert [example.history_id for example in examples] == ["hist-001"]
+
+
+def test_oracle_vector_history_receives_allowed_profile_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "nl2sql_feedback_embedding_enabled", True)
+    monkeypatch.setattr(settings, "nl2sql_runtime_mode", "oracle")
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    adapter = _RecordingOracleAdapter()
+    service._oracle_adapter = cast(Any, adapter)  # noqa: SLF001
+    service._embedding_client = cast(Any, _FakeEmbeddingClient())  # noqa: SLF001
+    service._history = [  # noqa: SLF001
+        _history(1, admin=FeedbackRating.GOOD, profile_id="sales"),
+        _history(2, admin=FeedbackRating.GOOD, profile_id="finance"),
+        _history(3, admin=FeedbackRating.GOOD, profile_id="hr"),
+    ]
+
+    data = service.similar_history(
+        SimilarHistoryRequest(question="請求金額を確認したい", profile_id=None, limit=5),
+        allowed_profile_ids={"sales", "finance"},
+    )
+
+    assert adapter.search_kwargs is not None
+    assert adapter.search_kwargs["profile_ids"] == {"sales", "finance"}
+    assert {entry.item.profile_id for entry in data.items} == {"sales", "finance"}
 
 
 def test_memory_pool_matches_repository_semantics() -> None:
