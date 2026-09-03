@@ -37,6 +37,7 @@ from app.features.nl2sql.ontology_models import (
     OntologyProvenance,
     OntologyReasoningStatus,
     OntologyReviewStatus,
+    OntologyRevisionStatus,
     OntologySourceDocument,
     OntologySourceKind,
     OntologySourceRole,
@@ -69,6 +70,7 @@ from app.features.nl2sql.ontology_sources import OntologySourceStorage
 from app.features.nl2sql.ontology_store import (
     InMemoryOntologyStore,
     OntologyCollection,
+    OntologyVersionConflict,
     stable_physical_id,
 )
 from app.main import app
@@ -246,6 +248,37 @@ class _BatchRecordingStore(InMemoryOntologyStore):
         documents: Sequence[tuple[Mapping[str, Any], str | None]],
     ) -> list[dict[str, Any]]:
         self.atomic_saves.append((collection, len(documents)))
+        return super().save_documents_atomic(collection, documents)
+
+
+class _OnePublishedEnforcingStore(InMemoryOntologyStore):
+    """Oracle の active published unique index をテスト内で再現する store。"""
+
+    def save_documents_atomic(
+        self,
+        collection: OntologyCollection,
+        documents: Sequence[tuple[Mapping[str, Any], str | None]],
+    ) -> list[dict[str, Any]]:
+        if collection == "revisions":
+            statuses = {
+                str(document["revision_id"]): str(document["status"])
+                for document in self.list_documents("revisions")
+            }
+            for document, _expected_etag in documents:
+                revision_id = str(document["revision_id"])
+                next_status = str(document["status"])
+                if next_status == OntologyRevisionStatus.PUBLISHED.value:
+                    active_revision_ids = [
+                        current_revision_id
+                        for current_revision_id, current_status in statuses.items()
+                        if current_revision_id != revision_id
+                        and current_status == OntologyRevisionStatus.PUBLISHED.value
+                    ]
+                    if active_revision_ids:
+                        raise OntologyVersionConflict(
+                            "An Ontology document was concurrently created."
+                        )
+                statuses[revision_id] = next_status
         return super().save_documents_atomic(collection, documents)
 
 
@@ -1959,6 +1992,71 @@ def test_publish_materialization_failure_keeps_previous_revision_active(
     failed_revision = api.ontology_revision(draft.revision.id).revision
     assert failed_revision.status.value == "draft"
     assert failed_revision.reasoning_status.value == "failed"
+
+
+def test_external_publish_worker_loads_persisted_draft_revision(
+    runtime: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api, store, legacy = runtime
+    monkeypatch.setattr(get_settings(), "nl2sql_ontology_worker_mode", "external")
+    base = api.current_ontology()
+    published = api.publish_ontology_revision(
+        base.revision.id,
+        OntologyPublishRequest(etag=base.revision.etag),
+    )
+    draft = api.create_ontology_draft(
+        published.revision.id,
+        OntologyDraftRequest(base_etag=published.revision.etag, note="cold worker publish"),
+    )
+
+    queued = OntologyPublishService(api).start(
+        draft.revision.id,
+        etag=draft.revision.etag,
+        idempotency_key="publish-cold-worker",
+    )
+    cold_runtime = OntologyApiRuntime(legacy_service=legacy, store=store)
+    finished = OntologyPublishService(cold_runtime).run_persisted(queued.id)
+
+    assert finished.status.value == "succeeded"
+    revision = cold_runtime.ontology_revision(draft.revision.id).revision
+    assert revision.status.value == "published"
+    assert revision.reasoning_status.value == "ready"
+
+
+def test_publish_refreshes_persisted_published_header_before_atomic_switch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(get_settings(), "nl2sql_ontology_profile_confirmation_required", False)
+    store = _OnePublishedEnforcingStore()
+    legacy = _FakeLegacyNl2SqlService()
+    api = OntologyApiRuntime(legacy_service=legacy, store=store)
+    base = api.current_ontology()
+    published = api.publish_ontology_revision(
+        base.revision.id,
+        OntologyPublishRequest(etag=base.revision.etag),
+    )
+    draft = api.create_ontology_draft(
+        published.revision.id,
+        OntologyDraftRequest(base_etag=published.revision.etag, note="reload published header"),
+    )
+
+    stale_runtime = OntologyApiRuntime(legacy_service=legacy, store=store)
+    cached_draft = stale_runtime.ontology_revision(draft.revision.id)
+    # 別 worker 起動直後など、draft だけを読んだ cache で published 読込済み扱いに
+    # なっている状態でも、publish switch 直前に store から active header を再読込する。
+    stale_runtime._ontology = cached_draft
+    stale_runtime._published_revision_loaded = True
+
+    updated = stale_runtime.publish_ontology_revision(
+        draft.revision.id,
+        OntologyPublishRequest(etag=draft.revision.etag),
+    )
+
+    assert updated.revision.status.value == "published"
+    old_document = store.get_document("revisions", {"revision_id": published.revision.id})
+    assert old_document is not None
+    assert old_document["status"] == OntologyRevisionStatus.ARCHIVED.value
 
 
 def test_atomic_revision_switch_failure_restores_in_memory_active_revision(

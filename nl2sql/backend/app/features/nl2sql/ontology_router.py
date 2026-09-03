@@ -949,7 +949,7 @@ class OntologyApiRuntime:
 
         with self._lock:
             self._sync_ontology()
-            ontology = self._ontologies.get(revision_id)
+            ontology = self._load_ontology_revision(revision_id)
             if ontology is None:
                 raise OntologyNotFoundError(
                     "ONTOLOGY_REVISION_NOT_FOUND",
@@ -985,7 +985,7 @@ class OntologyApiRuntime:
 
         with self._lock:
             self._sync_ontology()
-            ontology = self._ontologies.get(revision_id)
+            ontology = self._load_ontology_revision(revision_id)
             if ontology is None:
                 raise OntologyNotFoundError(
                     "ONTOLOGY_REVISION_NOT_FOUND",
@@ -1290,6 +1290,27 @@ class OntologyApiRuntime:
     ) -> SchemaOntology:
         with self._lock:
             ontology = self.validate_ontology_for_publish(revision_id, etag=request.etag)
+            self._load_revision_headers(force=True)
+            refreshed = self._load_ontology_revision(revision_id)
+            if refreshed is None:
+                raise OntologyNotFoundError(
+                    "ONTOLOGY_REVISION_NOT_FOUND",
+                    "公開する Ontology revision が見つかりません。",
+                )
+            if refreshed.revision.status != OntologyRevisionStatus.DRAFT:
+                raise OntologyStateConflictError(
+                    "ONTOLOGY_DRAFT_REQUIRED",
+                    "Draft 状態の Ontology revision だけを公開できます。",
+                )
+            if refreshed.revision.etag != request.etag:
+                raise OntologyVersionConflictError(
+                    "REVISION_ETAG_MISMATCH",
+                    "Ontology revision が更新されています。再読込してください。",
+                )
+            ontology = refreshed
+            for header in list(self._revision_headers.values()):
+                if header.id != revision_id and header.status == OntologyRevisionStatus.PUBLISHED:
+                    self._load_ontology_revision(header.id)
             original_headers = [
                 item.revision.model_copy(deep=True)
                 for item in self._ontologies.values()
@@ -3983,17 +4004,28 @@ class OntologyApiRuntime:
             self._ontology = self._load_ontology_revision(active.id)
         self._published_revision_loaded = True
 
-    def _load_revision_headers(self) -> None:
+    def _load_revision_headers(self, *, force: bool = False) -> None:
         """Revision 一覧 API のときだけ全 header を読む。graph は必要な revision のみ。"""
 
-        if self._revision_headers_loaded:
+        if self._revision_headers_loaded and not force:
             return
         documents = self.store.list_documents("revisions")
         headers = [
             OntologyRevision.model_validate(self._stored_payload(document, collection="revision"))
             for document in documents
         ]
+        if force:
+            self._revision_headers.clear()
         self._revision_headers.update({header.id: header for header in headers})
+        for header in headers:
+            cached = self._ontologies.get(header.id)
+            if cached is None or cached.revision.etag == header.etag:
+                continue
+            updated = cached.model_copy(update={"revision": header}, deep=True)
+            self.sessions.register_revision(header, nodes=updated.nodes, edges=updated.edges)
+            self._cache_ontology(updated)
+            if self._ontology is not None and self._ontology.revision.id == header.id:
+                self._ontology = updated
         active_candidates = [
             header for header in headers if header.status == OntologyRevisionStatus.PUBLISHED
         ] or headers
@@ -4012,11 +4044,17 @@ class OntologyApiRuntime:
 
     def _load_ontology_revision(self, revision_id: str) -> SchemaOntology | None:
         cached = self._ontologies.get(revision_id)
+        header = self._revision_headers.get(revision_id)
         if cached is not None:
+            if header is not None and cached.revision.etag != header.etag:
+                cached = cached.model_copy(update={"revision": header}, deep=True)
+                self.sessions.register_revision(header, nodes=cached.nodes, edges=cached.edges)
+                self._cache_ontology(cached)
+                if self._ontology is not None and self._ontology.revision.id == revision_id:
+                    self._ontology = cached
             self._ontology_cache_order.pop(revision_id, None)
             self._ontology_cache_order[revision_id] = None
             return cached
-        header = self._revision_headers.get(revision_id)
         if header is None:
             document = self.store.get_document("revisions", {"revision_id": revision_id})
             if document is None:
