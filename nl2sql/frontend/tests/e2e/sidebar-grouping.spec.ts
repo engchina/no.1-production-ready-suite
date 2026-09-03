@@ -52,6 +52,17 @@ async function mockApi(page: Page, currentUser: CurrentUser = SYSTEM_ADMIN_USER)
           ? { items: [], next_cursor: null, total: 0, change_token: 0 }
         : path === "/api/nl2sql/profiles"
           ? []
+        : path === "/api/settings/upload-storage"
+          ? {
+              backend: "local",
+              local_storage_dir: "/u01/data/production-ready-nl2sql",
+              object_storage_region: "ap-osaka-1",
+              object_storage_namespace: "exampletenancy",
+              object_storage_bucket: "nl2sql-originals",
+              readiness: "ok",
+              max_upload_bytes: 104857600,
+              config_source: "runtime",
+            }
           : path === "/api/security/users" || path === "/api/security/roles"
             ? []
           : path === "/api/nl2sql/history"
@@ -395,6 +406,32 @@ test("SQL 生成権限がない既定入口は root から最初の許可画面�
   await expect(page).toHaveURL(/\/settings\/appearance$/);
   const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
   await expect(sidebar.getByRole("link", { name: "外観" })).toHaveAttribute(
+    "aria-current",
+    "page"
+  );
+  await expect(sidebar.getByRole("link", { name: "SQL 生成" })).toHaveCount(0);
+});
+
+test("settings_upload_storage 権限だけの既定入口は保存先設定へ振り分ける", async ({
+  page,
+}) => {
+  await page.unroute("**/api/**");
+  await mockApi(page, {
+    ...SYSTEM_ADMIN_USER,
+    user_uuid: "upload-storage-user",
+    login_user_id: "upload.storage.user",
+    display_name: "保存先設定ユーザー",
+    role_codes: ["UPLOAD_STORAGE_VIEWER"],
+    is_system_admin: false,
+    permissions: ["menu.settings_upload_storage"],
+  });
+
+  await page.goto("/");
+
+  await expect(page).toHaveURL(/\/settings\/upload-storage$/);
+  await expect(page.getByRole("heading", { name: "アップロード保存先" }).first()).toBeVisible();
+  const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
+  await expect(sidebar.getByRole("link", { name: "アップロード保存先" })).toHaveAttribute(
     "aria-current",
     "page"
   );

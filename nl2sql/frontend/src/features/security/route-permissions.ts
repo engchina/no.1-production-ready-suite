@@ -7,28 +7,16 @@ export const ROUTE_PERMISSIONS: Record<string, string> = Object.fromEntries(
   )
 );
 
-const FIRST_ALLOWED_ORDER = [
-  APP_ROUTES.query,
-  APP_ROUTES.directSql,
-  APP_ROUTES.sqlToQuestion,
-  APP_ROUTES.history,
-  APP_ROUTES.adminSql,
-  APP_ROUTES.tableManagement,
-  APP_ROUTES.viewManagement,
-  APP_ROUTES.dataManagement,
-  APP_ROUTES.profiles,
-  APP_ROUTES.ontologyBuild,
-  APP_ROUTES.evaluation,
-  APP_ROUTES.settingsOci,
-  APP_ROUTES.settingsAppearance,
-  APP_ROUTES.securityUsers,
-  APP_ROUTES.securityRoles,
-  APP_ROUTES.securityDeepSec,
-];
+const FIRST_ALLOWED_ORDER = NAV_SECTIONS.flatMap((section) =>
+  section.items.map((item) => item.href)
+);
 
 export function firstAllowedRoute(hasPermission: (permission: string) => boolean): string {
   return (
-    FIRST_ALLOWED_ORDER.find((path) => hasPermission(ROUTE_PERMISSIONS[path])) ??
+    FIRST_ALLOWED_ORDER.find((path) => {
+      const permission = ROUTE_PERMISSIONS[path];
+      return Boolean(permission && hasPermission(permission));
+    }) ??
     APP_ROUTES.forbidden
   );
 }

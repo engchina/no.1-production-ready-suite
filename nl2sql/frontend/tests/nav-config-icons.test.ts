@@ -33,7 +33,7 @@ moduleResolver._resolveFilename = function resolveTestAlias(
 
 const [
   { NAV_SECTIONS, resolveCollapsedSections },
-  { defaultEntryRoute, firstAllowedRoute },
+  { ROUTE_PERMISSIONS, defaultEntryRoute, firstAllowedRoute },
 ] = await Promise.all([
   import("../src/components/layout/nav-config.ts"),
   import("../src/features/security/route-permissions.ts"),
@@ -122,13 +122,35 @@ test("サイドバーは AI 活用だけを初期展開し、保存済みの明�
 test("既定入口は SQL 生成権限がなければ root に戻し、root が最初の許可画面へ振り分ける", () => {
   const queryOnly = (permission: string) => permission === "menu.query";
   const appearanceOnly = (permission: string) => permission === "menu.settings_appearance";
+  const uploadStorageOnly = (permission: string) => permission === "menu.settings_upload_storage";
+  const modelOnly = (permission: string) => permission === "menu.settings_model";
+  const databaseOnly = (permission: string) => permission === "menu.settings_database";
+  const systemTablesOnly = (permission: string) => permission === "menu.settings_system_tables";
   const adminSqlOnly = (permission: string) => permission === "menu.admin_sql";
   const noPermissions = () => false;
 
   assert.equal(defaultEntryRoute(queryOnly), "/query");
   assert.equal(defaultEntryRoute(appearanceOnly), "/");
+  assert.equal(firstAllowedRoute(uploadStorageOnly), "/settings/upload-storage");
+  assert.equal(firstAllowedRoute(modelOnly), "/settings/model");
+  assert.equal(firstAllowedRoute(databaseOnly), "/settings/database");
+  assert.equal(firstAllowedRoute(systemTablesOnly), "/settings/system-tables");
   assert.equal(firstAllowedRoute(appearanceOnly), "/settings/appearance");
   assert.equal(defaultEntryRoute(adminSqlOnly), "/");
   assert.equal(firstAllowedRoute(adminSqlOnly), "/admin-sql");
   assert.equal(firstAllowedRoute(noPermissions), "/forbidden");
+});
+
+test("root の最初の許可画面はサイドバー項目を漏れなく許可順に使う", () => {
+  const items = NAV_SECTIONS.flatMap((section) => section.items);
+
+  assert.deepEqual(Object.keys(ROUTE_PERMISSIONS), items.map((item) => item.href));
+
+  for (const item of items) {
+    assert.equal(
+      firstAllowedRoute((permission) => permission === item.permission),
+      item.href,
+      item.labelKey
+    );
+  }
 });
