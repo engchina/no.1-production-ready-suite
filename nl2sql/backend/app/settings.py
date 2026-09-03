@@ -11,6 +11,8 @@ from typing import Any, Literal
 from pr_backend_core.config import BaseServiceSettings
 from pydantic import BaseModel, Field, PrivateAttr, field_validator, model_validator
 
+BACKEND_DIR = Path(__file__).resolve().parents[1]
+BACKEND_ENV_FILE = BACKEND_DIR / ".env"
 DEFAULT_MODEL_SETTINGS_FILE = "model-settings.json"
 logger = logging.getLogger(__name__)
 
@@ -452,7 +454,7 @@ def resolve_model_settings_file(path_value: str) -> Path:
     path = Path(raw_path).expanduser()
     if path.is_absolute():
         return path
-    return (Path(__file__).resolve().parents[1] / path).resolve()
+    return (BACKEND_DIR / path).resolve()
 
 
 def load_persisted_model_settings(settings: Settings) -> None:

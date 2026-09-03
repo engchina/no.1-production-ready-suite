@@ -34,7 +34,7 @@ from pydantic import BaseModel, ValidationError
 from pydantic import Field as PydanticField
 
 from app.security.request_actor import actor_scope, current_actor_is_system_admin
-from app.settings import get_settings
+from app.settings import BACKEND_ENV_FILE, get_settings
 
 from .embedding_client import (
     EmbeddingClientError,
@@ -11277,7 +11277,7 @@ class Nl2SqlService:
         )
 
     def diagnostics(self) -> DiagnosticsData:
-        env = dotenv_values(Path(".env"))
+        env = dotenv_values(BACKEND_ENV_FILE)
 
         def check_present(name: str, label: str) -> DiagnosticCheck:
             value = str(env.get(name) or "").strip()

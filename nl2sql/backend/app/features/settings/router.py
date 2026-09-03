@@ -93,20 +93,20 @@ from app.schemas.settings import (
     UploadStorageSettingsUpdate,
 )
 from app.settings import (
-    EnterpriseAiConfiguredModel as SettingsEnterpriseAiConfiguredModel,
-)
-from app.settings import (
+    BACKEND_ENV_FILE,
     Settings,
     enterprise_ai_default_model_id,
     enterprise_ai_model_catalog,
     get_settings,
     resolve_model_settings_file,
 )
+from app.settings import (
+    EnterpriseAiConfiguredModel as SettingsEnterpriseAiConfiguredModel,
+)
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 logger = logging.getLogger(__name__)
 run_in_threadpool = run_sync_io
-BACKEND_ENV_FILE = Path(__file__).resolve().parents[3] / ".env"
 ENV_ASSIGNMENT_RE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=")
 OCI_DIRECTORY_MODE = 0o700
 OCI_CONFIG_MAX_BYTES = 64 * 1024
