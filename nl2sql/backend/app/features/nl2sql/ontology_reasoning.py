@@ -33,6 +33,7 @@ from .ontology_semantics import (
     revision_graph_names,
     validate_shacl_core,
 )
+from .ontology_service import OntologyStateConflictError, OntologyVersionConflictError
 from .ontology_store import OntologyStore, canonical_json
 
 logger = logging.getLogger(__name__)
@@ -100,15 +101,24 @@ class OntologyPublishService:
         existing = self.store.get_idempotency("publish_ontology", idempotency_key)
         if existing is not None:
             if existing.get("request_hash") != request_hash:
-                raise ValueError("同じ Idempotency-Key が別の公開リクエストに使用されています。")
+                raise OntologyVersionConflictError(
+                    "IDEMPOTENCY_KEY_REUSED",
+                    "同じ Idempotency-Key が別の公開リクエストに使用されています。",
+                )
             restored = self.get(str(existing.get("resource_id") or ""))
             if restored is not None:
                 return restored
         ontology = self.runtime.ontology_revision(revision_id)
         if ontology.revision.status != OntologyRevisionStatus.DRAFT:
-            raise ValueError("Draft 状態の Ontology revision だけを公開できます。")
+            raise OntologyStateConflictError(
+                "ONTOLOGY_REVISION_NOT_DRAFT",
+                "Draft 状態の Ontology revision だけを公開できます。",
+            )
         if ontology.revision.etag != etag:
-            raise ValueError("Ontology revision が更新されています。再読込してください。")
+            raise OntologyVersionConflictError(
+                "REVISION_ETAG_MISMATCH",
+                "Ontology revision が更新されています。再読込してください。",
+            )
         active_job = self._active_job_for_revision(revision_id, etag=etag)
         if active_job is not None:
             self.store.save_idempotency(

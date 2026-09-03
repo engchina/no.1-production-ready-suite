@@ -12,14 +12,13 @@ job と実行入力は Oracle store に永続化する。local は thread、prod
 
 from __future__ import annotations
 
-import csv
 import hashlib
 import inspect
-import io
 import json
 import logging
 import threading
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -62,6 +61,7 @@ from app.features.nl2sql.ontology_observability import record_job, record_source
 from app.features.nl2sql.ontology_service import (
     OntologyNotFoundError,
     OntologyStateConflictError,
+    OntologyVersionConflictError,
 )
 from app.features.nl2sql.ontology_sources import (
     ExtractedSourceChunk,
@@ -73,104 +73,13 @@ from app.features.nl2sql.ontology_store import (
     canonical_json,
     stable_ontology_id,
 )
-from app.features.nl2sql.tabular_files import (
-    WORKBOOK_SUFFIXES,
-    TabularFileReadError,
-    normalize_workbook_scalar,
-    read_workbook_sheets,
-    select_workbook_sheet,
-    validate_tabular_text_signature,
-)
 from app.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
-_QUESTION_HEADERS = ("QUESTION", "質問", "TEXT", "PROMPT")
-_SQL_HEADERS = ("SQL", "ANSWER_SQL", "回答SQL", "正解SQL")
-_NOTE_HEADERS = ("NOTE", "備考", "COMMENT", "メモ")
 _DANGEROUS_EXPRESSION_TOKENS = (";", "--", "/*")
 _ONTOLOGY_BUILD_LLM_CONTEXT_MAX_CHARS = 100_000
 _LLM_CONTEXT_HEADROOM_CHARS = 512
-
-
-# --- Q/A workbook ---------------------------------------------------------------------------
-
-
-def _normalized_header(value: str) -> str:
-    return value.strip().upper().replace(" ", "").replace("_", "")
-
-
-def _header_index(headers: list[str], candidates: tuple[str, ...]) -> int | None:
-    normalized = [_normalized_header(header) for header in headers]
-    for candidate in candidates:
-        key = _normalized_header(candidate)
-        if key in normalized:
-            return normalized.index(key)
-    return None
-
-
-def _rows_from_content(filename: str, content: bytes, warnings: list[str]) -> list[list[str]]:
-    suffix = Path(filename).suffix.lower()
-    if suffix in WORKBOOK_SUFFIXES:
-        try:
-            sheet, sheet_warnings = select_workbook_sheet(read_workbook_sheets(filename, content))
-        except TabularFileReadError as exc:
-            warnings.append(str(exc))
-            return []
-        warnings.extend(sheet_warnings)
-        return [
-            [normalize_workbook_scalar(value).strip() for value in raw_row]
-            for raw_row in sheet.rows
-        ]
-    if suffix in {".csv", ".txt", ""}:
-        try:
-            validate_tabular_text_signature(content)
-        except TabularFileReadError as exc:
-            warnings.append(str(exc))
-            return []
-        text = content.decode("utf-8-sig", errors="replace")
-        return [
-            [str(value).strip() for value in row]
-            for row in csv.reader(io.StringIO(text), delimiter=",")
-        ]
-    warnings.append(f"{suffix} は未対応の形式です。CSV、XLSX、XLS のいずれかを指定してください。")
-    return []
-
-
-def parse_qa_workbook(filename: str, content: bytes) -> tuple[list[QaPair], list[str]]:
-    """Q/A Excel/CSV を検証済み :class:`QaPair` へ変換する(SELECT/WITH 以外は warning)。"""
-
-    warnings: list[str] = []
-    rows = _rows_from_content(filename, content, warnings)
-    if not rows:
-        if not warnings:
-            warnings.append("Q/A ファイルに行がありません。")
-        return [], warnings
-    headers = rows[0]
-    question_index = _header_index(headers, _QUESTION_HEADERS)
-    sql_index = _header_index(headers, _SQL_HEADERS)
-    if question_index is None or sql_index is None:
-        warnings.append("Q/A ファイルには QUESTION(質問)列と SQL 列が必要です。")
-        return [], warnings
-    note_index = _header_index(headers, _NOTE_HEADERS)
-    pairs: list[QaPair] = []
-    for line_no, row in enumerate(rows[1:], start=2):
-        question = row[question_index] if len(row) > question_index else ""
-        sql = row[sql_index] if len(row) > sql_index else ""
-        if not question.strip() and not sql.strip():
-            continue
-        if not question.strip() or not sql.strip():
-            warnings.append(f"{line_no} 行目: 質問または SQL が空のため無視しました。")
-            continue
-        first_token = sql.strip().split(None, 1)[0].upper() if sql.strip() else ""
-        if first_token not in {"SELECT", "WITH"}:
-            warnings.append(f"{line_no} 行目: SELECT/WITH 以外の SQL のため無視しました。")
-            continue
-        note = row[note_index] if note_index is not None and len(row) > note_index else ""
-        pairs.append(QaPair(question=question.strip(), sql=sql.strip(), note_ja=note.strip()))
-    if not pairs and not warnings:
-        warnings.append("有効な Q/A 行がありません。")
-    return pairs, warnings
 
 
 # --- DB schema scope / profile view スコープの解決 -------------------------------------------
@@ -1970,8 +1879,9 @@ class OntologyBuildService:
             existing = self._runtime.store.get_idempotency("build_ontology", idempotency_key)
             if existing is not None:
                 if existing.get("request_hash") != request_hash:
-                    raise ValueError(
-                        "同じ Idempotency-Key が別の構築リクエストに使用されています。"
+                    raise OntologyVersionConflictError(
+                        "IDEMPOTENCY_KEY_REUSED",
+                        "同じ Idempotency-Key が別の構築リクエストに使用されています。",
                     )
                 restored = self.get(str(existing.get("resource_id") or ""))
                 if restored is not None:
@@ -2108,6 +2018,40 @@ class OntologyBuildService:
         return int(
             self._runtime.store.delete_documents("source_documents", {"profile_id": profile_id})
         )
+
+    def discard_source_documents(self, sources: Sequence[OntologySourceDocument]) -> int:
+        """Job 投入失敗時に、今回保存した source_documents だけを best-effort で破棄する。"""
+
+        deleted_rows = 0
+        for source in sources:
+            try:
+                self._source_storage.delete(source)
+            except Exception:
+                logger.warning(
+                    "ontology_source_blob_cleanup_failed",
+                    exc_info=True,
+                    extra={
+                        "profile_id": source.profile_id,
+                        "source_document_id": source.id,
+                    },
+                )
+            try:
+                deleted_rows += int(
+                    self._runtime.store.delete_documents(
+                        "source_documents",
+                        {"source_document_id": source.id},
+                    )
+                )
+            except Exception:
+                logger.warning(
+                    "ontology_source_row_cleanup_failed",
+                    exc_info=True,
+                    extra={
+                        "profile_id": source.profile_id,
+                        "source_document_id": source.id,
+                    },
+                )
+        return deleted_rows
 
     def cancel_profile_jobs(self, profile_id: str) -> int:
         """削除対象 Profile の queued/running build を永続的に取消す。"""

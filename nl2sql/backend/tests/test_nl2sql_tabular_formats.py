@@ -13,7 +13,6 @@ import pytest
 from fastapi import HTTPException, Request
 
 from app.features.nl2sql.models import DbAdminCsvUploadRequest, DbAdminImportTabularRequest
-from app.features.nl2sql.ontology_build import parse_qa_workbook
 from app.features.nl2sql.ontology_models import OntologySourceDocument
 from app.features.nl2sql.ontology_sources import (
     OntologySourceError,
@@ -204,10 +203,6 @@ def test_real_xls_flows_cover_table_upload_learning_material_and_ontology() -> N
     assert service._parse_legacy_rules_file("rules.xls", content, rules_warnings)[0] == (
         "監査ログを確認したい"
     )
-
-    qa_pairs, qa_warnings = parse_qa_workbook("qa.XLS", content)
-    assert qa_warnings == []
-    assert qa_pairs[0].question == "顧客一覧を取得"
 
     source = OntologySourceDocument(
         id="source-xls",

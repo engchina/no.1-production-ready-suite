@@ -6,6 +6,9 @@ UI プレビュー用の表現を生成するだけ。network・LLM・DB に依�
 
 from __future__ import annotations
 
+import hashlib
+import re
+
 from app.features.nl2sql.ontology_catalog import SchemaOntology
 from app.features.nl2sql.ontology_models import (
     OntologyEdge,
@@ -18,6 +21,8 @@ from app.features.nl2sql.ontology_models import (
 )
 
 _OBJECT_NODE_KINDS = frozenset({OntologyNodeKind.TABLE, OntologyNodeKind.VIEW})
+_MERMAID_TOKEN_INVALID_RE = re.compile(r"[^A-Za-z0-9_]+")
+_MERMAID_TOKEN_START_RE = re.compile(r"^[A-Za-z_]")
 
 # mermaid ER 記法(source 側, target 側)。未確認は非識別(点線)で描く。
 _CARDINALITY_NOTATION: dict[RelationshipCardinality, str] = {
@@ -41,9 +46,28 @@ def _quoted(value: str) -> str:
     return '"' + value.replace('"', "'") + '"'
 
 
+def _mermaid_token(value: str, *, fallback: str) -> str:
+    raw = value.strip()
+    normalized = _MERMAID_TOKEN_INVALID_RE.sub("_", raw)
+    normalized = re.sub(r"_+", "_", normalized).strip("_")
+    if not normalized:
+        if not raw:
+            return fallback
+        digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:8]
+        normalized = f"{fallback}_{digest}"
+    if _MERMAID_TOKEN_START_RE.match(normalized) is None:
+        normalized = f"{fallback}_{normalized}"
+    return normalized[:96]
+
+
 def _attribute_type(node: OntologyNode) -> str:
     data_type = str(node.metadata.get("data_type", "")).strip() or "UNKNOWN"
-    return "".join(data_type.split())
+    return _mermaid_token(data_type, fallback="UNKNOWN")
+
+
+def _attribute_name(node: OntologyNode) -> str:
+    column_name = str(node.metadata.get("column_name", "")).strip() or node.id
+    return _mermaid_token(column_name, fallback="COLUMN")
 
 
 def _label(value: str) -> str:
@@ -200,17 +224,20 @@ def render_mermaid_er(
             return lines
         lines.append(f"{header} {{")
         for column in columns:
-            column_name = str(column.metadata.get("column_name", "")).strip() or column.id
+            raw_column_name = str(column.metadata.get("column_name", "")).strip() or column.id
+            column_name = _attribute_name(column)
             owner_key = (
                 f"{column.metadata.get('owner', '')}.{column.metadata.get('object_name', '')}"
             ).upper()
-            marker = " FK" if (owner_key, column_name.upper()) in fk_column_keys else ""
+            marker = " FK" if (owner_key, raw_column_name.upper()) in fk_column_keys else ""
             logical_name = _label(column.business_name_ja)
-            comment_part = (
-                f" {_quoted(logical_name)}"
-                if logical_name and logical_name.upper() != column_name.upper()
-                else ""
-            )
+            comments: list[str] = []
+            if logical_name and logical_name.upper() != raw_column_name.upper():
+                comments.append(logical_name)
+            if column_name != raw_column_name:
+                comments.append(_label(raw_column_name))
+            comment_text = " / ".join(dict.fromkeys(item for item in comments if item))
+            comment_part = f" {_quoted(comment_text)}" if comment_text else ""
             lines.append(f"        {_attribute_type(column)} {column_name}{marker}{comment_part}")
         lines.append("    }")
         return lines

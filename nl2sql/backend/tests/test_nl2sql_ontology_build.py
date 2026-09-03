@@ -27,7 +27,6 @@ from app.features.nl2sql.models import (
 from app.features.nl2sql.ontology_build import (
     OntologyBuildService,
     build_schema_context_from_catalog,
-    parse_qa_workbook,
     render_ontology_build_markdown,
 )
 from app.features.nl2sql.ontology_catalog import SchemaOntology, catalog_schema_fingerprint
@@ -72,6 +71,7 @@ from app.features.nl2sql.ontology_router import (
 from app.features.nl2sql.ontology_service import (
     OntologyNotFoundError,
     OntologyStateConflictError,
+    OntologyVersionConflictError,
 )
 from app.features.nl2sql.ontology_store import InMemoryOntologyStore, OntologyVersionConflict
 from app.settings import get_settings
@@ -169,9 +169,14 @@ class _FakeEnterpriseAiClient:
 class _FakeOntologySourceStorage:
     def __init__(self, contents: dict[str, bytes]) -> None:
         self.contents = contents
+        self.deleted: list[str] = []
 
     def load(self, document: OntologySourceDocument) -> bytes:
         return self.contents[document.id]
+
+    def delete(self, document: OntologySourceDocument) -> None:
+        self.deleted.append(document.id)
+        self.contents.pop(document.id, None)
 
 
 _EXTRACTION = {
@@ -225,18 +230,6 @@ _QA_SQL = (
     "SELECT C.NAME, SUM(O.AMOUNT) FROM APP.ORDERS O "
     "JOIN APP.CUSTOMERS C ON O.CUSTOMER_ID = C.ID GROUP BY C.NAME"
 )
-
-
-def _xlsx_bytes(rows: list[list[str]]) -> bytes:
-    import openpyxl  # type: ignore[import-untyped]
-
-    workbook = openpyxl.Workbook()
-    sheet = workbook.active
-    for row in rows:
-        sheet.append(row)
-    buffer = io.BytesIO()
-    workbook.save(buffer)
-    return buffer.getvalue()
 
 
 def _source_document(
@@ -320,58 +313,6 @@ def harness() -> tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2
     store = InMemoryOntologyStore()
     legacy = _FakeLegacyNl2SqlService()
     return OntologyApiRuntime(legacy_service=legacy, store=store), store, legacy
-
-
-# --- Q/A workbook ----------------------------------------------------------------------------
-
-
-def test_parse_qa_workbook_xlsx_and_csv() -> None:
-    xlsx = _xlsx_bytes(
-        [
-            ["質問", "SQL", "備考"],
-            ["顧客別の売上は?", _QA_SQL, "月次で利用"],
-            ["削除して", "DELETE FROM APP.ORDERS", ""],
-            ["", "", ""],
-        ]
-    )
-    pairs, warnings = parse_qa_workbook("qa.xlsx", xlsx)
-    assert [pair.question for pair in pairs] == ["顧客別の売上は?"]
-    assert pairs[0].sql == _QA_SQL
-    assert pairs[0].note_ja == "月次で利用"
-    assert any("SELECT/WITH 以外" in warning for warning in warnings)
-
-    csv_content = "QUESTION,SQL\n受注件数,SELECT COUNT(*) FROM APP.ORDERS\n".encode()
-    csv_pairs, csv_warnings = parse_qa_workbook("qa.csv", csv_content)
-    assert len(csv_pairs) == 1
-    assert csv_warnings == []
-
-
-def test_parse_qa_workbook_keeps_more_than_two_hundred_valid_rows() -> None:
-    rows = [
-        "QUESTION,SQL",
-        *[f"質問 {index},SELECT {index} AS VALUE FROM APP.ORDERS" for index in range(205)],
-    ]
-    pairs, warnings = parse_qa_workbook("qa.csv", "\n".join(rows).encode())
-
-    assert warnings == []
-    assert len(pairs) == 205
-    assert pairs[-1].question == "質問 204"
-
-
-def test_parse_qa_workbook_rejects_missing_headers_and_unknown_suffix() -> None:
-    pairs, warnings = parse_qa_workbook("qa.csv", b"A,B\n1,2\n")
-    assert pairs == []
-    assert any("QUESTION" in warning for warning in warnings)
-
-    pairs, warnings = parse_qa_workbook("qa.pdf", b"binary")
-    assert pairs == []
-    assert any("未対応の形式" in warning for warning in warnings)
-
-    pairs, warnings = parse_qa_workbook(
-        "qa.tsv", b"QUESTION\tSQL\nq\tSELECT COUNT(*) FROM APP.ORDERS\n"
-    )
-    assert pairs == []
-    assert any("未対応の形式" in warning for warning in warnings)
 
 
 # --- DB catalog schema context ---------------------------------------------------------------
@@ -498,11 +439,10 @@ def test_build_job_creates_markdown_draft_and_drops_outside_candidates(
     legacy._enterprise_ai_client = client
     service = OntologyBuildService(runtime)
 
-    qa_pairs, _ = parse_qa_workbook("qa.csv", f"QUESTION,SQL\n顧客別売上,{_QA_SQL}\n".encode())
     job = service.start(
         "sales",
         business_text="受注は顧客に紐づく。売上は受注金額の合計。",
-        qa_pairs=qa_pairs,
+        qa_pairs=[QaPair(question="顧客別売上", sql=_QA_SQL)],
     )
     finished = _wait_for_job(service, job.id)
 
@@ -1835,6 +1775,56 @@ def test_start_persists_business_text_and_source_document_refs(
         "rules.md",
         "qa_cases.csv",
     }
+
+
+def test_start_idempotency_mismatch_raises_domain_conflict(
+    harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, _store, _legacy = harness
+    monkeypatch.setattr(get_settings(), "nl2sql_ontology_worker_mode", "external")
+    service = OntologyBuildService(runtime)
+    service.start(
+        "sales",
+        business_text="受注は顧客に紐づく。",
+        idempotency_key="build-idempotency-conflict",
+    )
+
+    with pytest.raises(OntologyVersionConflictError) as exc_info:
+        service.start(
+            "sales",
+            business_text="顧客は受注に紐づく。",
+            idempotency_key="build-idempotency-conflict",
+        )
+
+    assert exc_info.value.code == "IDEMPOTENCY_KEY_REUSED"
+
+
+def test_discard_source_documents_removes_only_requested_sources(
+    harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+) -> None:
+    runtime, store, _legacy = harness
+    content_a = b"# rules"
+    content_b = b"# keep"
+    source_a = _source_document("ontology_source_discard", "discard.md", content_a)
+    source_b = _source_document("ontology_source_keep", "keep.md", content_b)
+    storage = _FakeOntologySourceStorage(
+        {
+            source_a.id: content_a,
+            source_b.id: content_b,
+        }
+    )
+    service = OntologyBuildService(runtime, source_storage=storage)  # type: ignore[arg-type]
+    service._save_source_document(source_a)  # noqa: SLF001 - cleanup contract setup
+    service._save_source_document(source_b)  # noqa: SLF001 - cleanup contract setup
+
+    deleted = service.discard_source_documents([source_a])
+
+    assert deleted == 1
+    assert storage.deleted == [source_a.id]
+    assert store.get_document("source_documents", {"source_document_id": source_a.id}) is None
+    assert store.get_document("source_documents", {"source_document_id": source_b.id}) is not None
+    assert source_b.id in storage.contents
 
 
 # --- Phase 3: 部分成功・再試行・構造化コード・出力予算・provenance ---------------------------

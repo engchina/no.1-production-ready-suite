@@ -77,6 +77,7 @@ from .ontology_models import (
     ProfileRecommendationCandidateV2,
     QuerySession,
     QuerySessionCreate,
+    QuerySessionStatus,
     QuestionIntentGraph,
     SqlConfirmationRequest,
     utc_now,
@@ -2931,16 +2932,34 @@ class OntologyApiRuntime:
                 ontology=ontology,
                 runtime_context=context,
             )
-            with observe_stage("generate_sql"):
-                preview = self.legacy_service.preview(
-                    PreviewRequest(
-                        question=intent.question_effective,
-                        engine=context.engine,
-                        profile_id=confirmed.profile_id,
-                        allowed_objects=context.allowed_objects,
-                        row_limit=intent.limit or context.row_limit,
-                        ontology_context=generation_context,
-                    )
+
+        with observe_stage("generate_sql"):
+            preview = self.legacy_service.preview(
+                PreviewRequest(
+                    question=intent.question_effective,
+                    engine=context.engine,
+                    profile_id=confirmed.profile_id,
+                    allowed_objects=context.allowed_objects,
+                    row_limit=intent.limit or context.row_limit,
+                    ontology_context=generation_context,
+                )
+            )
+
+        with self._lock:
+            current = self._ensure_session_loaded(session_id)
+            if (
+                current.status != QuerySessionStatus.GENERATING_SQL
+                or current.current_intent_version != confirmed.current_intent_version
+                or current.intent_confirmed_version != request.intent_version
+            ):
+                raise OntologyVersionConflictError(
+                    "QUERY_SESSION_CHANGED_DURING_SQL_GENERATION",
+                    "SQL 生成中に query session が更新されています。最新版を再読込してください。",
+                )
+            if current.ontology_revision_id != confirmed.ontology_revision_id:
+                raise OntologyIntegrityError(
+                    "ONTOLOGY_REVISION_CHANGED_DURING_SQL_GENERATION",
+                    "SQL 生成中に Ontology revision が変更されています。再読込してください。",
                 )
             sql = preview.executable_sql.strip() or preview.sql
             with observe_stage("validate_sql"):
@@ -2989,8 +3008,19 @@ class OntologyApiRuntime:
             self._ensure_store()
             before = self._ensure_session_loaded(session_id)
             artifact = next(
-                item for item in before.sql_artifacts if item.id == before.current_sql_artifact_id
+                (
+                    item
+                    for item in before.sql_artifacts
+                    if item.id == before.current_sql_artifact_id
+                ),
+                None,
             )
+            if artifact is None:
+                raise OntologyStateConflictError(
+                    "SQL_ARTIFACT_NOT_GENERATED",
+                    "実行する SQL がまだ生成されていません。"
+                    "SQL を生成・確認してから実行してください。",
+                )
             context = self._require_context(session_id)
             self.sessions.authorize_execution(session_id, request, sql=artifact.sql)
             executing = self._ensure_session_loaded(session_id)
@@ -3000,22 +3030,24 @@ class OntologyApiRuntime:
                 revision_id=executing.ontology_revision_id,
                 state=executing.status.value,
             )
-            try:
-                with observe_stage("execute"):
-                    allowed = self.legacy_service.resolve_allowed_objects(
-                        executing.profile_id,
-                        context.allowed_objects,
+
+        try:
+            with observe_stage("execute"):
+                allowed = self.legacy_service.resolve_allowed_objects(
+                    executing.profile_id,
+                    context.allowed_objects,
+                )
+                with actor_scope(
+                    actor_user_uuid,
+                    is_system_admin=actor_is_system_admin,
+                ):
+                    safety, executable_sql, result = self.legacy_service.execute_sql(
+                        sql=artifact.sql,
+                        allowed=allowed,
+                        row_limit=context.row_limit,
                     )
-                    with actor_scope(
-                        actor_user_uuid,
-                        is_system_admin=actor_is_system_admin,
-                    ):
-                        safety, executable_sql, result = self.legacy_service.execute_sql(
-                            sql=artifact.sql,
-                            allowed=allowed,
-                            row_limit=context.row_limit,
-                        )
-                if not safety.is_safe:
+            if not safety.is_safe:
+                with self._lock:
                     failed = self.sessions.fail_session(
                         session_id,
                         code="LEGACY_SAFETY_BLOCKED",
@@ -3024,24 +3056,35 @@ class OntologyApiRuntime:
                         ),
                     )
                     self._persist_session(failed)
-                    raise OntologyGateBlockedError(
-                        "LEGACY_SAFETY_BLOCKED",
-                        safety.blocked_reason or "既存 SQL safety gate が実行を阻止しました。",
-                    )
-            except OntologyServiceError:
-                raise
-            except Exception as exc:
+                raise OntologyGateBlockedError(
+                    "LEGACY_SAFETY_BLOCKED",
+                    safety.blocked_reason or "既存 SQL safety gate が実行を阻止しました。",
+                )
+        except OntologyServiceError:
+            raise
+        except Exception as exc:
+            with self._lock:
                 failed = self.sessions.fail_session(
                     session_id,
                     code="SQL_EXECUTION_FAILED",
                     message_ja="SQL の実行に失敗しました。",
                 )
                 self._persist_session(failed)
-                raise OntologyGateBlockedError(
-                    "SQL_EXECUTION_FAILED",
-                    "SQL の実行に失敗しました。",
-                ) from exc
+            raise OntologyGateBlockedError(
+                "SQL_EXECUTION_FAILED",
+                "SQL の実行に失敗しました。",
+            ) from exc
 
+        with self._lock:
+            current = self._ensure_session_loaded(session_id)
+            if (
+                current.status != QuerySessionStatus.EXECUTING
+                or current.current_sql_artifact_id != artifact.id
+            ):
+                raise OntologyStateConflictError(
+                    "QUERY_SESSION_CHANGED_DURING_SQL_EXECUTION",
+                    "SQL 実行中に query session が更新されています。最新版を再読込してください。",
+                )
             session = self.sessions.complete_execution(
                 session_id,
                 row_count=result.total,
@@ -3055,43 +3098,44 @@ class OntologyApiRuntime:
                 state=session.status.value,
             )
             data = self._session_data(session)
-            record_history = getattr(self.legacy_service, "record_ontology_history", None)
-            if callable(record_history):
-                elapsed_ms: int | None = None
-                if session.execution is not None and session.execution.finished_at is not None:
-                    elapsed_ms = max(
-                        0,
-                        int(
-                            (
-                                session.execution.finished_at - session.execution.started_at
-                            ).total_seconds()
-                            * 1000
-                        ),
-                    )
-                try:
-                    record_history(
-                        session_id=session.id,
-                        question=session.original_question,
-                        rewritten_question=session.intents[-1].question_effective,
-                        engine=context.engine,
-                        generated_sql=artifact.sql,
-                        executable_sql=executable_sql,
-                        profile_id=session.profile_id,
-                        result=result,
-                        ontology_trace_summary=data.ontology_trace_summary,
-                        elapsed_ms=elapsed_ms,
-                        actor_user_uuid=actor_user_uuid,
-                    )
-                except Exception:
-                    # SQL は既に実行済みなので history 投影障害で結果を失わせない。
-                    logger.warning(
-                        "ontology_history_projection_failed",
-                        extra={"session_id": session.id},
-                        exc_info=True,
-                    )
-            payload = data.model_dump()
-            payload["result"] = result
-            return QueryExecutionData.model_validate(payload)
+
+        record_history = getattr(self.legacy_service, "record_ontology_history", None)
+        if callable(record_history):
+            elapsed_ms: int | None = None
+            if session.execution is not None and session.execution.finished_at is not None:
+                elapsed_ms = max(
+                    0,
+                    int(
+                        (
+                            session.execution.finished_at - session.execution.started_at
+                        ).total_seconds()
+                        * 1000
+                    ),
+                )
+            try:
+                record_history(
+                    session_id=session.id,
+                    question=session.original_question,
+                    rewritten_question=session.intents[-1].question_effective,
+                    engine=context.engine,
+                    generated_sql=artifact.sql,
+                    executable_sql=executable_sql,
+                    profile_id=session.profile_id,
+                    result=result,
+                    ontology_trace_summary=data.ontology_trace_summary,
+                    elapsed_ms=elapsed_ms,
+                    actor_user_uuid=actor_user_uuid,
+                )
+            except Exception:
+                # SQL は既に実行済みなので history 投影障害で結果を失わせない。
+                logger.warning(
+                    "ontology_history_projection_failed",
+                    extra={"session_id": session.id},
+                    exc_info=True,
+                )
+        payload = data.model_dump()
+        payload["result"] = result
+        return QueryExecutionData.model_validate(payload)
 
     def create_proposal(
         self,
@@ -5051,6 +5095,15 @@ async def start_ontology_build(
         )
         return ApiResponse(data=OntologyBuildJobData(job=job))
     except Exception as exc:
+        if stored_sources:
+            try:
+                await run_sync_io(ontology_build_service.discard_source_documents, stored_sources)
+            except Exception:
+                logger.warning(
+                    "ontology_build_source_cleanup_failed",
+                    exc_info=True,
+                    extra={"profile_id": profile_id},
+                )
         _raise_domain_error(exc)
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import threading
 import time
 from collections.abc import Mapping, Sequence
@@ -36,8 +37,11 @@ from app.features.nl2sql.ontology_models import (
     OntologyProvenance,
     OntologyReasoningStatus,
     OntologyReviewStatus,
+    OntologySourceDocument,
     OntologySourceKind,
+    OntologySourceStatus,
     PhysicalMapping,
+    QuerySessionStatus,
     SqlConfirmationRequest,
 )
 from app.features.nl2sql.ontology_reasoning import OntologyPublishService
@@ -57,6 +61,7 @@ from app.features.nl2sql.ontology_router import (
 from app.features.nl2sql.ontology_service import (
     OntologyGateBlockedError,
     OntologyNotFoundError,
+    OntologyStateConflictError,
     OntologyVersionConflictError,
 )
 from app.features.nl2sql.ontology_sources import OntologySourceStorage
@@ -1299,6 +1304,83 @@ async def test_http_ontology_build_persists_current_form_inputs(
 
 
 @pytest.mark.asyncio
+async def test_http_ontology_build_cleans_uploaded_sources_when_start_fails(
+    runtime: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api, _store, _legacy = runtime
+
+    class _RecordingSourceStorage:
+        def __init__(self) -> None:
+            self.saved: list[OntologySourceDocument] = []
+
+        async def save_upload(
+            self,
+            *,
+            profile_id: str,
+            upload: Any,
+        ) -> OntologySourceDocument:
+            content = await upload.read()
+            source = OntologySourceDocument(
+                id=f"ontology_source_{len(self.saved) + 1}",
+                profile_id=profile_id,
+                filename=str(upload.filename or "source.md"),
+                media_type=str(upload.content_type or "application/octet-stream"),
+                size_bytes=len(content),
+                sha256=hashlib.sha256(content).hexdigest(),
+                storage_uri=f"memory://{upload.filename or 'source.md'}",
+                status=OntologySourceStatus.STORED,
+            )
+            self.saved.append(source)
+            return source
+
+    class _FailingBuildService:
+        def __init__(self) -> None:
+            self.discarded: list[OntologySourceDocument] = []
+
+        def start(self, *_args: Any, **_kwargs: Any) -> None:
+            raise OntologyVersionConflictError(
+                "IDEMPOTENCY_KEY_REUSED",
+                "同じ Idempotency-Key が別の構築リクエストに使用されています。",
+            )
+
+        def discard_source_documents(self, sources: Sequence[OntologySourceDocument]) -> int:
+            self.discarded.extend(sources)
+            return len(sources)
+
+    source_storage = _RecordingSourceStorage()
+    build_service = _FailingBuildService()
+    monkeypatch.setattr(get_settings(), "app_auth_enabled", False)
+    monkeypatch.setattr(ontology_router_module, "ontology_runtime", api)
+    monkeypatch.setattr(ontology_router_module, "ontology_source_storage", source_storage)
+    monkeypatch.setattr(ontology_router_module, "ontology_build_service", build_service)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/api/nl2sql/profiles/sales/ontology-build",
+            headers={"Idempotency-Key": "test-ontology-build-conflict"},
+            data={
+                "business_text": "受注は顧客に紐づく。",
+                "run_schema_naming": "true",
+                "run_qa_extraction": "true",
+                "run_text_extraction": "true",
+            },
+            files=[
+                (
+                    "source_files",
+                    ("rules.md", "# 受注ルール\n".encode(), "text/markdown"),
+                )
+            ],
+        )
+
+    assert response.status_code == 409
+    assert "IDEMPOTENCY_KEY_REUSED" in response.json()["error_messages"][0]
+    assert [source.id for source in build_service.discarded] == [
+        source.id for source in source_storage.saved
+    ]
+
+
+@pytest.mark.asyncio
 async def test_http_ontology_build_rejects_too_many_source_files(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1715,7 +1797,7 @@ def test_async_semantic_publish_succeeds_and_is_idempotent(
     assert (
         api.published_markdown_for_revision(revision.id, profile_id="sales") == confirmed_markdown
     )
-    with pytest.raises(ValueError):
+    with pytest.raises(OntologyStateConflictError):
         publisher.start(revision.id, etag=revision.etag, idempotency_key="publish-after-ready")
     ignored = api.update_reasoning_status(revision.id, OntologyReasoningStatus.FAILED)
     assert ignored.revision.reasoning_status.value == "ready"
@@ -1942,3 +2024,130 @@ def test_create_session_does_not_hold_global_lock_during_llm_call(
     finally:
         llm_release.set()
     assert session_done.wait(timeout=10)
+
+
+def test_generate_sql_does_not_hold_global_lock_during_preview(
+    runtime: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+) -> None:
+    api, _store, legacy = runtime
+    created = api.create_session(
+        QuerySessionApiCreate(question="受注件数を表示", profile_id="sales")
+    )
+    preview_started = threading.Event()
+    preview_release = threading.Event()
+    original_preview = legacy.preview
+
+    def blocking_preview(request: PreviewRequest) -> PreviewData:
+        preview_started.set()
+        assert preview_release.wait(timeout=10)
+        return original_preview(request)
+
+    legacy.preview = blocking_preview  # type: ignore[method-assign]
+    generated: list[Any] = []
+    errors: list[BaseException] = []
+
+    def generate() -> None:
+        try:
+            generated.append(api.generate_sql(created.session.id, _generate_request(created)))
+        except BaseException as exc:  # pragma: no cover - surfaced by assertion below
+            errors.append(exc)
+
+    worker = threading.Thread(target=generate, daemon=True)
+    worker.start()
+    try:
+        assert preview_started.wait(timeout=5), "SQL preview 呼び出しに到達しなかった"
+        read_done = threading.Event()
+        statuses: list[QuerySessionStatus] = []
+
+        def read_session() -> None:
+            statuses.append(api.get_session(created.session.id).session.status)
+            read_done.set()
+
+        reader = threading.Thread(target=read_session, daemon=True)
+        reader.start()
+        assert read_done.wait(timeout=2), "SQL 生成中に他の ontology API がブロックされた"
+        assert statuses == [QuerySessionStatus.GENERATING_SQL]
+    finally:
+        preview_release.set()
+    worker.join(timeout=10)
+    assert not errors
+    assert generated and generated[0].session.status == QuerySessionStatus.AWAITING_SQL_CONFIRMATION
+
+
+def test_execute_does_not_hold_global_lock_during_sql_execution(
+    runtime: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+) -> None:
+    api, _store, legacy = runtime
+    created = api.create_session(
+        QuerySessionApiCreate(question="受注件数を表示", profile_id="sales")
+    )
+    generated = api.generate_sql(created.session.id, _generate_request(created))
+    confirmation = _confirmation(generated)
+    api.confirm_sql(created.session.id, confirmation)
+    execution_started = threading.Event()
+    execution_release = threading.Event()
+    original_execute_sql = legacy.execute_sql
+
+    def blocking_execute_sql(
+        sql: str,
+        allowed: AllowedObjects,
+        row_limit: int | None,
+    ) -> tuple[SafetyReport, str, QueryResults]:
+        execution_started.set()
+        assert execution_release.wait(timeout=10)
+        return original_execute_sql(sql, allowed, row_limit)
+
+    legacy.execute_sql = blocking_execute_sql  # type: ignore[method-assign]
+    executed: list[Any] = []
+    errors: list[BaseException] = []
+
+    def execute() -> None:
+        try:
+            executed.append(api.execute(created.session.id, confirmation))
+        except BaseException as exc:  # pragma: no cover - surfaced by assertion below
+            errors.append(exc)
+
+    worker = threading.Thread(target=execute, daemon=True)
+    worker.start()
+    try:
+        assert execution_started.wait(timeout=5), "SQL 実行呼び出しに到達しなかった"
+        read_done = threading.Event()
+        statuses: list[QuerySessionStatus] = []
+
+        def read_session() -> None:
+            statuses.append(api.get_session(created.session.id).session.status)
+            read_done.set()
+
+        reader = threading.Thread(target=read_session, daemon=True)
+        reader.start()
+        assert read_done.wait(timeout=2), "SQL 実行中に他の ontology API がブロックされた"
+        assert statuses == [QuerySessionStatus.EXECUTING]
+    finally:
+        execution_release.set()
+    worker.join(timeout=10)
+    assert not errors
+    assert executed and executed[0].session.status == QuerySessionStatus.DONE
+
+
+def test_execute_without_generated_sql_raises_state_conflict(
+    runtime: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+) -> None:
+    api, _store, _legacy = runtime
+    created = api.create_session(
+        QuerySessionApiCreate(question="受注件数を表示", profile_id="sales")
+    )
+
+    with pytest.raises(OntologyStateConflictError) as exc_info:
+        api.execute(
+            created.session.id,
+            SqlConfirmationRequest(
+                artifact_id="missing-artifact",
+                ontology_revision_id=created.session.ontology_revision_id,
+                intent_version=created.session.current_intent_version,
+                sql_hash="missing-sql-hash",
+                validation_hash="missing-validation-hash",
+                generation_context_hash="missing-context-hash",
+            ),
+        )
+
+    assert exc_info.value.code == "SQL_ARTIFACT_NOT_GENERATED"

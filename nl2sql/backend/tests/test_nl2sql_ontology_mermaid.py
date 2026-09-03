@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from app.features.nl2sql.models import (
     Nl2SqlProfile,
     SchemaCatalog,
@@ -158,6 +160,39 @@ def test_render_is_deterministic_and_contains_entities_fk_and_attributes() -> No
     # Entity block のインラインコメントは Mermaid ER parser が受け付けないため出さない。
     _assert_no_inline_entity_comments(first)
     assert "%% 注文 = SALES.ORDERS" in first
+
+
+def test_render_sanitizes_mermaid_attribute_type_and_name_tokens() -> None:
+    catalog = SchemaCatalog(
+        refreshed_at="2026-07-11T00:00:00+00:00",
+        tables=[
+            SchemaTable(
+                owner="SALES",
+                table_name="ODD_COLUMNS",
+                logical_name="特殊列",
+                columns=[
+                    _column("売上#額$", "売上#額$", "NUMBER(10,2)"),
+                    _column("1ST-RANK", "先頭数字列", "VARCHAR2(30 CHAR)"),
+                ],
+            )
+        ],
+    )
+    rendered = render_mermaid_er(build_schema_ontology(catalog))
+
+    assert "NUMBER_10_2 COLUMN_" in rendered
+    assert "VARCHAR2_30_CHAR COLUMN_1ST_RANK" in rendered
+    assert "NUMBER(10,2) 売上#額$" not in rendered
+    assert '"売上#額$"' in rendered
+    attribute_lines = [
+        line.strip()
+        for line in rendered.splitlines()
+        if line.startswith("        ") and not line.strip().startswith("%%")
+    ]
+    assert attribute_lines
+    assert all(
+        re.match(r"^[A-Za-z_][A-Za-z0-9_]* [A-Za-z_][A-Za-z0-9_]*(?: FK)?(?: \".*\")?$", line)
+        for line in attribute_lines
+    )
 
 
 def test_profile_view_scopes_entities() -> None:
