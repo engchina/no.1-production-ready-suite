@@ -181,13 +181,15 @@ const SecurityDeepSecPage = lazy(() =>
 );
 
 /**
- * ナビ切替で state を破棄したくない「AI 活用」4画面。常時マウントし表示のみ切替する。
+ * ナビ切替で作業中 state を破棄したくない画面。常時マウントし表示のみ切替する。
  * module 直下で JSX を一度だけ生成し、同一 instance を維持する(再マウント=state破棄を防ぐ)。
  */
 const KEEP_ALIVE_PAGES = [
   { path: APP_ROUTES.query, element: <Nl2SqlWorkbench /> },
   { path: APP_ROUTES.sqlToQuestion, element: <SqlToQuestionPage /> },
   { path: APP_ROUTES.directSql, element: <DirectSqlPage /> },
+  { path: APP_ROUTES.commentManagement, element: <CommentManagementPage /> },
+  { path: APP_ROUTES.annotationManagement, element: <AnnotationManagementPage /> },
 ];
 const KEEP_ALIVE_PATHS = new Set<string>(KEEP_ALIVE_PAGES.map((page) => page.path));
 
@@ -294,8 +296,6 @@ function AuthenticatedApplication() {
             <Route path={APP_ROUTES.viewManagement} element={<ViewManagementPage />} />
             <Route path={APP_ROUTES.dataManagement} element={<DataManagementPage />} />
             <Route path={APP_ROUTES.sampleData} element={<SampleDataPage />} />
-            <Route path={APP_ROUTES.commentManagement} element={<CommentManagementPage />} />
-            <Route path={APP_ROUTES.annotationManagement} element={<AnnotationManagementPage />} />
             {/* 旧ルート互換: スキーマ管理はテーブルの管理へ、データ投入はデータの管理へ */}
             <Route path="/schema" element={<Navigate to={APP_ROUTES.tableManagement} replace />} />
             <Route path="/data-tools" element={<Navigate to={APP_ROUTES.dataManagement} replace />} />
@@ -346,7 +346,7 @@ function AuthenticatedApplication() {
 }
 
 /**
- * 4画面を lazy-mount(初回訪問時のみ mount)し、以後は unmount せず `display` で表示を切替える。
+ * 対象画面を lazy-mount(初回訪問時のみ mount)し、以後は unmount せず `display` で表示を切替える。
  * 未訪問ページは描画しないので初回ロードでの eager fetch を避けられる。
  */
 function KeepAlivePages() {

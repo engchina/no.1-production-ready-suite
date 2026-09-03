@@ -9570,6 +9570,48 @@ test("metadata SQL regeneration resets the edited execution SQL", async ({ page 
   await expect(sqlTextarea).toHaveValue(generatedSql);
 });
 
+test("コメント管理は画面遷移後も生成 SQL と実行結果を保持する", async ({ page }) => {
+  const api = await mockNl2SqlApi(page);
+  await page.setViewportSize({ width: 1280, height: 900 });
+
+  await page.goto("/comment-management");
+  await expect(page.getByRole("heading", { name: "コメント管理" })).toBeVisible();
+  await page.getByRole("checkbox", { name: /INVOICES/ }).check();
+  await page.getByRole("button", { name: "情報を取得" }).click();
+  await expect(page.getByLabel("構造情報")).toHaveValue(/OBJECT: APP\.INVOICES/);
+  await page.getByRole("button", { name: "SQL 生成" }).click();
+
+  const executePanel = page.locator("#comment-management-panel-execute");
+  const sqlTextarea = executePanel.getByLabel("SQL(セミコロン区切りで複数文を入力可能)");
+  await expect(sqlTextarea).toHaveValue(
+    /COMMENT ON COLUMN "APP"\."INVOICES"\."TOTAL_AMOUNT" IS '税込請求金額';/
+  );
+  await executePanel.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
+  await executePanel.getByRole("button", { name: "SQL 実行" }).click();
+  await expect.poll(() => api.statementsPayload?.policy).toBe("comment_sql");
+  await expect(executePanel.getByTestId("statement-runner-comment_sql-execution-activity")).toContainText(
+    "SQL 実行が完了しました。"
+  );
+  await expect(executePanel.getByText("実行済み", { exact: true }).first()).toBeVisible();
+
+  await page.locator('a[href="/table-management"]').first().evaluate((node: HTMLElement) => node.click());
+  await expect(page.getByRole("heading", { name: "テーブル一覧と詳細" })).toBeVisible();
+  await page.locator('a[href="/comment-management"]').first().evaluate((node: HTMLElement) => node.click());
+  await expect(page.getByRole("heading", { name: "コメント管理" })).toBeVisible();
+
+  const restoredExecutePanel = page.locator("#comment-management-panel-execute");
+  await expect(page.getByTestId("comment-management-target-footer")).toContainText("選択 1 件");
+  await expect(page.getByLabel("構造情報")).toHaveValue(/OBJECT: APP\.INVOICES/);
+  await expect(
+    restoredExecutePanel.getByLabel("SQL(セミコロン区切りで複数文を入力可能)")
+  ).toHaveValue(/COMMENT ON COLUMN "APP"\."INVOICES"\."TOTAL_AMOUNT" IS '税込請求金額';/);
+  await expect(
+    restoredExecutePanel.getByTestId("statement-runner-comment_sql-execution-activity")
+  ).toContainText("SQL 実行が完了しました。");
+  await expect(restoredExecutePanel.getByText("実行済み", { exact: true }).first()).toBeVisible();
+  await expectNoHorizontalScroll(page);
+});
+
 test("table and view management object lists load more and find unloaded objects", async ({ page }) => {
   await mockNl2SqlApi(page);
   await page.setViewportSize({ width: 1280, height: 900 });
