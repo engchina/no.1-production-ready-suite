@@ -80,6 +80,8 @@ function modelSettingsFixture(overrides: Record<string, unknown> = {}) {
         vision_response_path: "",
         timeout_seconds: 120,
         max_retries: 3,
+        llm_max_output_tokens: 1200,
+        vlm_max_output_tokens: 65536,
       },
       generative_ai: {
         embedding_model: "cohere.embed-v4.0",
@@ -1417,6 +1419,8 @@ test("モデル設定を3カードごとに独立保存し、非表示設定と�
         vlm_input_mode: "inline_image",
         timeout_seconds: 177,
         max_retries: 4,
+        llm_max_output_tokens: 2048,
+        vlm_max_output_tokens: 8192,
       },
     },
   });
@@ -1475,6 +1479,8 @@ test("モデル設定を3カードごとに独立保存し、非表示設定と�
   expect(connectionEnterprise.vlm_input_mode).toBe("inline_image");
   expect(connectionEnterprise.timeout_seconds).toBe(177);
   expect(connectionEnterprise.max_retries).toBe(4);
+  expect(connectionEnterprise.llm_max_output_tokens).toBe(2048);
+  expect(connectionEnterprise.vlm_max_output_tokens).toBe(8192);
   expect(
     ((connectionEnterprise.models as Array<Record<string, unknown>>)[0]).model_id
   ).toBe("enterprise-nl2sql-llm");
@@ -1495,6 +1501,8 @@ test("モデル設定を3カードごとに独立保存し、非表示設定と�
   expect(modelsEnterprise.vlm_input_mode).toBe("inline_image");
   expect(modelsEnterprise.timeout_seconds).toBe(177);
   expect(modelsEnterprise.max_retries).toBe(4);
+  expect(modelsEnterprise.llm_max_output_tokens).toBe(2048);
+  expect(modelsEnterprise.vlm_max_output_tokens).toBe(8192);
   expect(((modelsEnterprise.models as Array<Record<string, unknown>>)[0]).model_id).toBe(
     "enterprise-unsaved-model"
   );
@@ -1517,6 +1525,12 @@ test("モデル設定を3カードごとに独立保存し、非表示設定と�
       Record<string, unknown>
     >)[0].model_id
   ).toBe("enterprise-unsaved-model");
+  expect(
+    (generativeRequest.enterprise_ai as Record<string, unknown>).llm_max_output_tokens
+  ).toBe(2048);
+  expect(
+    (generativeRequest.enterprise_ai as Record<string, unknown>).vlm_max_output_tokens
+  ).toBe(8192);
 
   rejectNextSave = true;
   await page.getByRole("textbox", { name: "モデル ID 1" }).fill("enterprise-failed-model");

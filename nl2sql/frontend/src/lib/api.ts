@@ -365,6 +365,8 @@ export interface EnterpriseAiModelSettings {
   vision_response_path: string;
   timeout_seconds: number;
   max_retries: number;
+  llm_max_output_tokens: number;
+  vlm_max_output_tokens: number;
 }
 
 export interface GenerativeAiModelSettings {
