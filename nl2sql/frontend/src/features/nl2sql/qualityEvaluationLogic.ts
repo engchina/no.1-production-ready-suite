@@ -87,11 +87,16 @@ export function qualityEvaluationLeaseExpired(
 export function qualityEvaluationAttemptTimedOut(
   job: Pick<
     QualityEvaluationJobSummary,
-    "status" | "current_attempt_started_at" | "attempt_timeout_seconds"
+    | "status"
+    | "current_attempt_started_at"
+    | "current_attempt_deadline_at"
+    | "attempt_timeout_seconds"
   >,
   nowMs = Date.now()
 ) {
   if (job.status !== "running") return false;
+  const deadlineAt = timestampMillis(job.current_attempt_deadline_at);
+  if (deadlineAt !== null) return deadlineAt <= nowMs;
   const startedAt = timestampMillis(job.current_attempt_started_at);
   if (startedAt === null) return false;
   const timeoutSeconds = Math.max(1, Number(job.attempt_timeout_seconds || 0));

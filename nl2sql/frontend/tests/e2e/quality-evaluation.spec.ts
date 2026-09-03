@@ -116,6 +116,7 @@ function job(
     updated_at: string;
     finished_at: string | null;
     current_attempt_started_at: string | null;
+    current_attempt_deadline_at: string | null;
     heartbeat_at: string | null;
     lease_expires_at: string | null;
     attempt_no: number;
@@ -153,6 +154,9 @@ function job(
     current_attempt_started_at:
       overrides.current_attempt_started_at ??
       (status === "running" ? "2026-07-22T08:00:01Z" : null),
+    current_attempt_deadline_at:
+      overrides.current_attempt_deadline_at ??
+      (status === "running" ? "2026-07-22T08:10:01Z" : null),
     engine_summaries: terminal && status !== "failed" && status !== "cancelled" ? summary : [],
     error_message:
       status === "failed"
@@ -727,6 +731,31 @@ test("recent active quality evaluation jobs keep polling until terminal", async 
   const recentRegion = page.getByTestId("quality-evaluation-recent-jobs-scroll-region");
   await expect(recentRegion.getByText("待機中")).toBeVisible();
   await expect(recentRegion.getByText("完了")).toBeVisible({ timeout: 6_000 });
+});
+
+test("quality evaluation job detail stops polling after the job is deleted", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "desktop polling");
+  await mockQualityApi(page);
+  let jobReads = 0;
+  await page.route("**/api/nl2sql/quality-evaluations/job-001", (route) => {
+    jobReads += 1;
+    if (jobReads === 1) return envelope(route, job("running"));
+    return route.fulfill({
+      status: 404,
+      contentType: "application/json",
+      body: JSON.stringify({ detail: "指定されたSQL生成評価 job が見つかりません。" }),
+    });
+  });
+
+  await page.goto("/evaluation?job=job-001");
+
+  await expect(page.getByText("実行中")).toBeVisible();
+  await expect.poll(() => jobReads, { timeout: 6_000 }).toBe(2);
+  await expect(page.getByText("SQL生成評価データを読み込めませんでした。")).toBeVisible();
+  await page.waitForTimeout(2_200);
+  expect(jobReads).toBe(2);
 });
 
 test("desktop shows stale attempt diagnostics and cancels a running job", async ({

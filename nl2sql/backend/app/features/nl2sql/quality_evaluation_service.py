@@ -518,17 +518,31 @@ class QualityEvaluationService:
 
     def _dispatch(self, job_id: str) -> None:
         with self._dispatch_lock:
+            self._active_threads = {
+                active_job_id: thread
+                for active_job_id, thread in self._active_threads.items()
+                if thread.is_alive()
+            }
             current = self._active_threads.get(job_id)
             if current and current.is_alive():
                 return
             worker = threading.Thread(
-                target=self.run_job,
+                target=self._run_dispatched_job,
                 kwargs={"job_id": job_id},
                 name=f"nl2sql-quality-evaluation-{job_id[:8]}",
                 daemon=True,
             )
             self._active_threads[job_id] = worker
             worker.start()
+
+    def _run_dispatched_job(self, *, job_id: str) -> None:
+        try:
+            self.run_job(job_id=job_id)
+        finally:
+            current_thread = threading.current_thread()
+            with self._dispatch_lock:
+                if self._active_threads.get(job_id) is current_thread:
+                    self._active_threads.pop(job_id, None)
 
     def get_job(self, job_id: str) -> QualityEvaluationJobSummary:
         job = self._repository.get_job(job_id)
@@ -555,30 +569,11 @@ class QualityEvaluationService:
     ) -> QualityEvaluationJobPage:
         offset = _decode_offset(cursor)
         page_size = min(max(limit, 1), 100)
-        if allowed_profile_ids is not None:
-            selected: list[QualityEvaluationJobRecord] = []
-            matching_total = 0
-            raw_offset = 0
-            while True:
-                jobs, raw_total = self._repository.list_jobs(offset=raw_offset, limit=500)
-                for job in jobs:
-                    if (job.profile_id or "default") not in allowed_profile_ids:
-                        continue
-                    if matching_total >= offset and len(selected) < page_size:
-                        selected.append(job)
-                    matching_total += 1
-                raw_offset += len(jobs)
-                if raw_offset >= raw_total or not jobs:
-                    break
-            next_offset = offset + len(selected)
-            for job in selected:
-                self._wake_quality_evaluation_job_if_needed(job)
-            return QualityEvaluationJobPage(
-                items=[job_summary(item) for item in selected],
-                next_cursor=_encode_offset(next_offset) if next_offset < matching_total else None,
-                total=matching_total,
-            )
-        jobs, total = self._repository.list_jobs(offset=offset, limit=page_size)
+        jobs, total = self._repository.list_jobs(
+            offset=offset,
+            limit=page_size,
+            profile_ids=allowed_profile_ids,
+        )
         next_offset = offset + len(jobs)
         for job in jobs:
             self._wake_quality_evaluation_job_if_needed(job)

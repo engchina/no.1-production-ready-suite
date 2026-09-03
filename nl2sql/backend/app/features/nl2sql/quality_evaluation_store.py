@@ -49,7 +49,11 @@ class QualityEvaluationRepository(Protocol):
     def get_job(self, job_id: str) -> QualityEvaluationJobRecord | None: ...
 
     def list_jobs(
-        self, *, offset: int, limit: int
+        self,
+        *,
+        offset: int,
+        limit: int,
+        profile_ids: set[str] | None = None,
     ) -> tuple[list[QualityEvaluationJobRecord], int]: ...
 
     def delete_job(self, job_id: str) -> QualityEvaluationJobRecord | None: ...
@@ -119,10 +123,22 @@ class MemoryQualityEvaluationRepository:
             job = self._jobs.get(job_id)
             return job.model_copy(deep=True) if job else None
 
-    def list_jobs(self, *, offset: int, limit: int) -> tuple[list[QualityEvaluationJobRecord], int]:
+    def list_jobs(
+        self,
+        *,
+        offset: int,
+        limit: int,
+        profile_ids: set[str] | None = None,
+    ) -> tuple[list[QualityEvaluationJobRecord], int]:
         with self._lock:
             jobs = sorted(
-                self._jobs.values(), key=lambda item: (item.created_at, item.job_id), reverse=True
+                (
+                    item
+                    for item in self._jobs.values()
+                    if profile_ids is None or (item.profile_id or "default") in profile_ids
+                ),
+                key=lambda item: (item.created_at, item.job_id),
+                reverse=True,
             )
             return [item.model_copy(deep=True) for item in jobs[offset : offset + limit]], len(jobs)
 
@@ -323,16 +339,40 @@ class OracleQualityEvaluationRepository:
             raw = _read_lob(row[0]) if row else ""
         return QualityEvaluationJobRecord.model_validate_json(raw) if raw else None
 
-    def list_jobs(self, *, offset: int, limit: int) -> tuple[list[QualityEvaluationJobRecord], int]:
+    def list_jobs(
+        self,
+        *,
+        offset: int,
+        limit: int,
+        profile_ids: set[str] | None = None,
+    ) -> tuple[list[QualityEvaluationJobRecord], int]:
+        profile_values = sorted(profile_ids) if profile_ids is not None else None
+        if profile_values == []:
+            return [], 0
+        where_sql = ""
+        filter_binds: dict[str, Any] = {}
+        if profile_values is not None:
+            placeholders: list[str] = []
+            for index, profile_id in enumerate(profile_values):
+                bind_name = f"profile_id_{index}"
+                placeholders.append(f":{bind_name}")
+                filter_binds[bind_name] = profile_id
+            where_sql = (
+                " WHERE COALESCE(NULLIF(PROFILE_ID, ''), 'default') "
+                f"IN ({', '.join(placeholders)})"
+            )
         with self._connection_factory() as connection, connection.cursor() as cursor:
             configure_clob_fetch_as_text(cursor)
-            cursor.execute("SELECT COUNT(*) FROM NL2SQL_EVALUATION_JOBS")
+            cursor.execute(
+                "SELECT COUNT(*) FROM NL2SQL_EVALUATION_JOBS" + where_sql,  # nosec B608
+                filter_binds,
+            )
             total = int(cursor.fetchone()[0])
             cursor.execute(
-                "SELECT PAYLOAD_JSON FROM NL2SQL_EVALUATION_JOBS "
+                "SELECT PAYLOAD_JSON FROM NL2SQL_EVALUATION_JOBS " + where_sql + " "  # nosec B608
                 "ORDER BY CREATED_AT DESC, JOB_ID DESC OFFSET :offset ROWS "
                 "FETCH NEXT :limit ROWS ONLY",
-                {"offset": offset, "limit": limit},
+                {**filter_binds, "offset": offset, "limit": limit},
             )
             rows = cursor.fetchall()
             raw_jobs = [_read_lob(row[0]) for row in rows]

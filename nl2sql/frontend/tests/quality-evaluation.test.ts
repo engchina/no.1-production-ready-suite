@@ -117,3 +117,17 @@ test("stale helpers detect expired quality evaluation attempt and lease", () => 
     false
   );
 });
+
+test("attempt timeout waits for the server-provided generation plus judge deadline", () => {
+  const judgingNow = Date.parse("2026-07-22T08:06:00Z");
+  const deadlineNow = Date.parse("2026-07-22T08:10:00Z");
+  const job = {
+    status: "running" as const,
+    current_attempt_started_at: "2026-07-22T08:00:00Z",
+    current_attempt_deadline_at: "2026-07-22T08:10:00Z",
+    attempt_timeout_seconds: 300,
+  };
+
+  assert.equal(qualityEvaluationAttemptTimedOut(job, judgingNow), false);
+  assert.equal(qualityEvaluationAttemptTimedOut(job, deadlineNow), true);
+});

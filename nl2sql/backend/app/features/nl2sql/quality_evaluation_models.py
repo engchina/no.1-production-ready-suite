@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Any, Literal
 
@@ -177,6 +178,7 @@ class QualityEvaluationJobSummary(BaseModel):
     current_engine: Nl2SqlEngine | None = None
     current_repetition: int = 0
     current_attempt_started_at: str | None = None
+    current_attempt_deadline_at: str | None = None
     engine_summaries: list[QualityEvaluationEngineSummary] = Field(default_factory=list)
     error_message: str = ""
     heartbeat_at: str | None = None
@@ -229,6 +231,19 @@ class QualityEvaluationCapabilities(BaseModel):
     limits: QualityEvaluationLimits
 
 
+def _current_attempt_deadline_at(job: QualityEvaluationJobRecord) -> str | None:
+    if job.status != QualityEvaluationStatus.RUNNING or not job.current_attempt_started_at:
+        return None
+    try:
+        started_at = datetime.fromisoformat(job.current_attempt_started_at.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if started_at.tzinfo is None:
+        started_at = started_at.replace(tzinfo=UTC)
+    timeout_seconds = max(1.0, float(job.attempt_timeout_seconds))
+    return (started_at + timedelta(seconds=2.0 * timeout_seconds)).isoformat()
+
+
 def job_summary(job: QualityEvaluationJobRecord) -> QualityEvaluationJobSummary:
     return QualityEvaluationJobSummary(
         job_id=job.job_id,
@@ -247,6 +262,7 @@ def job_summary(job: QualityEvaluationJobRecord) -> QualityEvaluationJobSummary:
         current_engine=job.current_engine,
         current_repetition=job.current_repetition,
         current_attempt_started_at=job.current_attempt_started_at,
+        current_attempt_deadline_at=_current_attempt_deadline_at(job),
         engine_summaries=job.engine_summaries,
         error_message=job.error_message,
         heartbeat_at=job.heartbeat_at,

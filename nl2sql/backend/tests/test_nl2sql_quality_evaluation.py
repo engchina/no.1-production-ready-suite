@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import io
+import threading
+import time
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -23,6 +25,7 @@ from app.features.nl2sql.quality_evaluation_models import (
     QualityEvaluationResult,
     QualityEvaluationStatus,
     QualityEvaluationVerdict,
+    job_summary,
 )
 from app.features.nl2sql.quality_evaluation_service import (
     QualityEvaluationJobStateError,
@@ -91,6 +94,9 @@ def _evaluation_job(
     status: QualityEvaluationStatus = QualityEvaluationStatus.PENDING,
     created_at: datetime | None = None,
     lease_expires_at: str | None = None,
+    profile_id: str = "default",
+    current_attempt_started_at: str | None = None,
+    attempt_timeout_seconds: float = 300.0,
 ) -> QualityEvaluationJobRecord:
     now = created_at or datetime.now(UTC)
     finished_at = (
@@ -106,8 +112,8 @@ def _evaluation_job(
     )
     return QualityEvaluationJobRecord(
         job_id=job_id,
-        profile_id="default",
-        profile_name="default",
+        profile_id=profile_id,
+        profile_name=profile_id,
         engines=[Nl2SqlEngine.SELECT_AI],
         repeat_count=1,
         cases=[
@@ -121,6 +127,8 @@ def _evaluation_job(
         ],
         status=status,
         total_attempts=1,
+        current_attempt_started_at=current_attempt_started_at,
+        attempt_timeout_seconds=attempt_timeout_seconds,
         lease_expires_at=lease_expires_at,
         created_at=now.isoformat(),
         finished_at=finished_at,
@@ -582,6 +590,91 @@ def test_quality_evaluation_list_wakes_visible_orphan_jobs_inprocess(
         "older-pending",
     ]
     assert dispatched == ["newer-pending", "older-pending"]
+
+
+def test_quality_evaluation_list_filters_profile_before_paging() -> None:
+    repository = MemoryQualityEvaluationRepository()
+    base = datetime(2026, 7, 22, 8, 0, tzinfo=UTC)
+    for index in range(12):
+        repository.save_job(
+            _evaluation_job(
+                f"foreign-{index:02d}",
+                profile_id="foreign",
+                created_at=base + timedelta(minutes=20 - index),
+            )
+        )
+    for index in range(3):
+        repository.save_job(
+            _evaluation_job(
+                f"allowed-{index:02d}",
+                profile_id="allowed",
+                created_at=base - timedelta(minutes=index),
+            )
+        )
+    service = QualityEvaluationService(
+        Nl2SqlService(store=MemoryNl2SqlStore()), repository=repository
+    )
+
+    first = service.list_jobs(
+        cursor=None,
+        limit=2,
+        allowed_profile_ids={"allowed"},
+    )
+    second = service.list_jobs(
+        cursor=first.next_cursor,
+        limit=2,
+        allowed_profile_ids={"allowed"},
+    )
+
+    assert first.total == 3
+    assert [item.job_id for item in first.items] == ["allowed-00", "allowed-01"]
+    assert first.next_cursor is not None
+    assert second.total == 3
+    assert [item.job_id for item in second.items] == ["allowed-02"]
+    assert second.next_cursor is None
+
+
+def test_quality_evaluation_summary_exposes_current_attempt_deadline() -> None:
+    summary = job_summary(
+        _evaluation_job(
+            "running-job",
+            status=QualityEvaluationStatus.RUNNING,
+            current_attempt_started_at="2026-07-22T08:00:00Z",
+            attempt_timeout_seconds=300,
+        )
+    )
+    completed = job_summary(
+        _evaluation_job("completed-job", status=QualityEvaluationStatus.COMPLETED)
+    )
+
+    assert summary.current_attempt_deadline_at == "2026-07-22T08:10:00+00:00"
+    assert completed.current_attempt_deadline_at is None
+
+
+def test_quality_evaluation_dispatch_drops_finished_active_thread(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = QualityEvaluationService(
+        Nl2SqlService(store=MemoryNl2SqlStore()),
+        repository=MemoryQualityEvaluationRepository(),
+    )
+    finished = threading.Event()
+
+    def run_job(*, job_id: str, worker_id: str | None = None) -> None:
+        del worker_id
+        assert job_id == "finished-job"
+        finished.set()
+
+    monkeypatch.setattr(service, "run_job", run_job)
+
+    service._dispatch("finished-job")  # noqa: SLF001
+
+    assert finished.wait(timeout=5)
+    for _ in range(50):
+        if not service._active_threads:  # noqa: SLF001
+            break
+        time.sleep(0.02)
+    assert service._active_threads == {}  # noqa: SLF001
 
 
 def test_quality_evaluation_delete_terminal_job_removes_job_and_results() -> None:
@@ -1323,6 +1416,40 @@ def test_oracle_repository_materializes_quality_evaluation_lobs_before_connectio
     assert claim_cursor.prefetchrows == 0
     assert claim_cursor.arraysize == 1
     assert all(connection.closed for connection in factory.connections)
+
+
+def test_oracle_repository_list_jobs_filters_profile_ids_before_paging() -> None:
+    job_payload = _evaluation_job("job-allowed", profile_id="allowed").model_dump_json()
+    factory = _QualityEvaluationOracleConnectionFactory(
+        [
+            [[(1,)], [(_LobPayload(job_payload),)]],
+        ]
+    )
+    repository = OracleQualityEvaluationRepository(connection_factory=factory)
+
+    jobs, total_jobs = repository.list_jobs(
+        offset=10,
+        limit=5,
+        profile_ids={"allowed", "default"},
+    )
+
+    cursor = factory.connections[0].cursors[0]
+    count_sql, count_binds = cursor.executed[0]
+    page_sql, page_binds = cursor.executed[1]
+    expected_predicate = (
+        "COALESCE(NULLIF(PROFILE_ID, ''), 'default') " "IN (:profile_id_0, :profile_id_1)"
+    )
+    assert total_jobs == 1
+    assert [item.job_id for item in jobs] == ["job-allowed"]
+    assert expected_predicate in count_sql
+    assert expected_predicate in page_sql
+    assert count_binds == {"profile_id_0": "allowed", "profile_id_1": "default"}
+    assert page_binds == {
+        "profile_id_0": "allowed",
+        "profile_id_1": "default",
+        "offset": 10,
+        "limit": 5,
+    }
 
 
 def test_oracle_repository_delete_job_uses_job_delete_and_transaction() -> None:

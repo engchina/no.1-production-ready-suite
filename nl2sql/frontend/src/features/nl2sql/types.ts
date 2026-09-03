@@ -776,6 +776,7 @@ export interface QualityEvaluationJobSummary {
   current_engine?: QualityEvaluationEngine | null;
   current_repetition: number;
   current_attempt_started_at?: string | null;
+  current_attempt_deadline_at?: string | null;
   engine_summaries: QualityEvaluationEngineSummary[];
   error_message: string;
   heartbeat_at?: string | null;

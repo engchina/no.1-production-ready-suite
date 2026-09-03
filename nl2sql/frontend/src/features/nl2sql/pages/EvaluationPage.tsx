@@ -32,6 +32,7 @@ import { FormStatus } from "@/components/ui/form-status";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { FieldLabel, RequiredFieldsNote } from "@/components/ui/required-field";
 import { ApiError, apiDelete, apiFetch, apiGet, apiPost, apiPostForm } from "@/lib/api";
+import { downloadBlob, downloadFilename } from "@/lib/download";
 import { t } from "@/lib/i18n";
 import { toastError } from "@/lib/toast";
 import { XLSX_TEMPLATE_FILE_FORMATS } from "@/lib/tabular-file-formats";
@@ -72,6 +73,19 @@ const controlClass =
   "min-h-11 w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground outline-none transition focus:border-primary focus:ring-2 focus:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-60";
 
 type FormErrors = Partial<Record<"profile" | "file" | "engines" | "repeat", string>>;
+
+function qualityEvaluationQueryPollingInterval(
+  status: QualityEvaluationStatus | undefined,
+  error: unknown
+) {
+  if (error) return false;
+  return qualityEvaluationPollingInterval(status);
+}
+
+function retryQualityEvaluationJob(failureCount: number, error: unknown) {
+  if (error instanceof ApiError && error.status === 404) return false;
+  return failureCount < 3;
+}
 
 export function EvaluationPage() {
   const queryClient = useQueryClient();
@@ -114,7 +128,9 @@ export function EvaluationPage() {
         }`
       ),
     refetchInterval: (query) =>
-      query.state.data?.items.some((job) => ACTIVE_STATUSES.has(job.status))
+      query.state.error
+        ? false
+        : query.state.data?.items.some((job) => ACTIVE_STATUSES.has(job.status))
         ? qualityEvaluationPollingInterval("running")
         : false,
   });
@@ -125,9 +141,16 @@ export function EvaluationPage() {
         `/api/nl2sql/quality-evaluations/${encodeURIComponent(currentJobId)}`
       ),
     enabled: Boolean(currentJobId),
-    refetchInterval: (query) => qualityEvaluationPollingInterval(query.state.data?.status),
+    retry: retryQualityEvaluationJob,
+    refetchInterval: (query) =>
+      qualityEvaluationQueryPollingInterval(query.state.data?.status, query.state.error),
   });
   const currentJob = currentJobQuery.data ?? null;
+  const recentJobs = recentJobsQuery.data?.items ?? [];
+  const showRecentJobsPagination = Boolean(
+    recentJobsQuery.data &&
+      (recentJobs.length > 0 || recentJobsQuery.data.next_cursor || jobCursorHistory.length > 0)
+  );
   const resultsQuery = useQuery({
     queryKey: ["quality-evaluations", "results", currentJobId, resultCursor],
     queryFn: () =>
@@ -326,14 +349,8 @@ export function EvaluationPage() {
       const response = await apiFetch(path);
       if (!response.ok) throw new Error(t("qualityEvaluation.error.download"));
       const blob = await response.blob();
-      const disposition = response.headers.get("Content-Disposition") ?? "";
-      const filename = disposition.match(/filename="?([^";]+)"?/i)?.[1] ?? fallbackName;
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = filename;
-      anchor.click();
-      URL.revokeObjectURL(url);
+      const filename = downloadFilename(response, fallbackName);
+      downloadBlob(filename, blob);
       toast.success(t("qualityEvaluation.notice.downloaded"));
     } catch (cause) {
       showNotice(
@@ -796,123 +813,127 @@ export function EvaluationPage() {
                 message={t("qualityEvaluation.error.load")}
                 onRetry={() => void recentJobsQuery.refetch()}
               />
-            ) : !recentJobsQuery.data?.items.length ? (
-              <EmptyState
-                title={t("qualityEvaluation.recent.emptyTitle")}
-                hint={t("qualityEvaluation.recent.emptyHint")}
-              />
             ) : (
               <>
-                <div
-                  className="grid max-h-[17.5rem] min-w-0 gap-2 overflow-auto pr-1 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-                  role="region"
-                  aria-label={t("qualityEvaluation.recent.scrollRegion")}
-                  tabIndex={0}
-                  data-testid="quality-evaluation-recent-jobs-scroll-region"
-                >
-                  {recentJobsQuery.data.items.map((job) => (
-                    <article
-                      key={job.job_id}
-                      className={`grid min-w-0 gap-3 rounded-lg border p-4 md:grid-cols-[1fr_auto] md:items-center ${
-                        job.job_id === currentJobId
-                          ? "border-primary bg-primary/5"
-                          : "border-border bg-background"
-                      }`}
-                    >
-                      <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="font-semibold text-foreground">
-                            {profileRecordDisplayLabel(job)}
-                          </span>
-                          <StatusBadge
-                            variant={statusVariant(job.status)}
-                            label={statusLabel(job.status)}
-                          />
+                {recentJobs.length === 0 ? (
+                  <EmptyState
+                    title={t("qualityEvaluation.recent.emptyTitle")}
+                    hint={t("qualityEvaluation.recent.emptyHint")}
+                  />
+                ) : (
+                  <div
+                    className="grid max-h-[17.5rem] min-w-0 gap-2 overflow-auto pr-1 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                    role="region"
+                    aria-label={t("qualityEvaluation.recent.scrollRegion")}
+                    tabIndex={0}
+                    data-testid="quality-evaluation-recent-jobs-scroll-region"
+                  >
+                    {recentJobs.map((job) => (
+                      <article
+                        key={job.job_id}
+                        className={`grid min-w-0 gap-3 rounded-lg border p-4 md:grid-cols-[1fr_auto] md:items-center ${
+                          job.job_id === currentJobId
+                            ? "border-primary bg-primary/5"
+                            : "border-border bg-background"
+                        }`}
+                      >
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-semibold text-foreground">
+                              {profileRecordDisplayLabel(job)}
+                            </span>
+                            <StatusBadge
+                              variant={statusVariant(job.status)}
+                              label={statusLabel(job.status)}
+                            />
+                          </div>
+                          <p className="mt-1 break-words text-xs text-muted">
+                            {formatDate(job.created_at)} ·{" "}
+                            {t("qualityEvaluation.recent.meta", {
+                              cases: job.case_count,
+                              attempts: job.total_attempts,
+                            })}
+                          </p>
                         </div>
-                        <p className="mt-1 break-words text-xs text-muted">
-                          {formatDate(job.created_at)} ·{" "}
-                          {t("qualityEvaluation.recent.meta", {
-                            cases: job.case_count,
-                            attempts: job.total_attempts,
-                          })}
-                        </p>
-                      </div>
-                      <div className="flex shrink-0 flex-wrap justify-end gap-2">
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="secondary"
-                          onClick={() => openJob(job.job_id)}
-                        >
-                          {t("qualityEvaluation.action.view")}
-                        </Button>
-                        {ACTIVE_STATUSES.has(job.status) ? (
+                        <div className="flex shrink-0 flex-wrap justify-end gap-2">
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="secondary"
+                            onClick={() => openJob(job.job_id)}
+                          >
+                            {t("qualityEvaluation.action.view")}
+                          </Button>
+                          {ACTIVE_STATUSES.has(job.status) ? (
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="secondary"
+                              className="border-danger/30 text-danger hover:bg-danger/10 hover:text-danger focus-visible:ring-danger/30"
+                              disabled={cancelJobMutation.isPending}
+                              loading={
+                                cancelJobMutation.isPending &&
+                                cancelJobMutation.variables?.job_id === job.job_id
+                              }
+                              aria-label={t("qualityEvaluation.action.cancelJob", {
+                                job: profileRecordDisplayLabel(job),
+                              })}
+                              onClick={() => void cancelJob(job)}
+                            >
+                              <CircleStop size={15} aria-hidden="true" />
+                              {t("qualityEvaluation.action.cancel")}
+                            </Button>
+                          ) : null}
                           <Button
                             type="button"
                             size="sm"
                             variant="secondary"
                             className="border-danger/30 text-danger hover:bg-danger/10 hover:text-danger focus-visible:ring-danger/30"
-                            disabled={cancelJobMutation.isPending}
-                            loading={
-                              cancelJobMutation.isPending &&
-                              cancelJobMutation.variables?.job_id === job.job_id
+                            disabled={
+                              !TERMINAL_STATUSES.has(job.status) ||
+                              deleteJobMutation.isPending
                             }
-                            aria-label={t("qualityEvaluation.action.cancelJob", {
-                              job: profileRecordDisplayLabel(job),
-                            })}
-                            onClick={() => void cancelJob(job)}
+                            loading={
+                              deleteJobMutation.isPending &&
+                              deleteJobMutation.variables?.job_id === job.job_id
+                            }
+                            title={
+                              TERMINAL_STATUSES.has(job.status)
+                                ? undefined
+                                : t("qualityEvaluation.action.deleteDisabled")
+                            }
+                            aria-label={
+                              TERMINAL_STATUSES.has(job.status)
+                                ? t("qualityEvaluation.action.deleteJob", {
+                                    job: profileRecordDisplayLabel(job),
+                                  })
+                                : t("qualityEvaluation.action.deleteDisabled")
+                            }
+                            onClick={() => void deleteJob(job)}
                           >
-                            <CircleStop size={15} aria-hidden="true" />
-                            {t("qualityEvaluation.action.cancel")}
+                            <Trash2 size={15} aria-hidden="true" />
+                            {t("qualityEvaluation.action.delete")}
                           </Button>
-                        ) : null}
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="secondary"
-                          className="border-danger/30 text-danger hover:bg-danger/10 hover:text-danger focus-visible:ring-danger/30"
-                          disabled={
-                            !TERMINAL_STATUSES.has(job.status) ||
-                            deleteJobMutation.isPending
-                          }
-                          loading={
-                            deleteJobMutation.isPending &&
-                            deleteJobMutation.variables?.job_id === job.job_id
-                          }
-                          title={
-                            TERMINAL_STATUSES.has(job.status)
-                              ? undefined
-                              : t("qualityEvaluation.action.deleteDisabled")
-                          }
-                          aria-label={
-                            TERMINAL_STATUSES.has(job.status)
-                              ? t("qualityEvaluation.action.deleteJob", {
-                                  job: profileRecordDisplayLabel(job),
-                                })
-                              : t("qualityEvaluation.action.deleteDisabled")
-                          }
-                          onClick={() => void deleteJob(job)}
-                        >
-                          <Trash2 size={15} aria-hidden="true" />
-                          {t("qualityEvaluation.action.delete")}
-                        </Button>
-                      </div>
-                    </article>
-                  ))}
-                </div>
-                <Pagination
-                  canGoPrevious={jobCursorHistory.length > 0}
-                  canGoNext={Boolean(recentJobsQuery.data.next_cursor)}
-                  onPrevious={() => {
-                    const history = [...jobCursorHistory];
-                    setJobCursor(history.pop() ?? null);
-                    setJobCursorHistory(history);
-                  }}
-                  onNext={() => {
-                    setJobCursorHistory((history) => [...history, jobCursor]);
-                    setJobCursor(recentJobsQuery.data?.next_cursor ?? null);
-                  }}
-                />
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                )}
+                {showRecentJobsPagination ? (
+                  <Pagination
+                    canGoPrevious={jobCursorHistory.length > 0}
+                    canGoNext={Boolean(recentJobsQuery.data?.next_cursor)}
+                    onPrevious={() => {
+                      const history = [...jobCursorHistory];
+                      setJobCursor(history.pop() ?? null);
+                      setJobCursorHistory(history);
+                    }}
+                    onNext={() => {
+                      setJobCursorHistory((history) => [...history, jobCursor]);
+                      setJobCursor(recentJobsQuery.data?.next_cursor ?? null);
+                    }}
+                  />
+                ) : null}
               </>
             )}
           </div>
