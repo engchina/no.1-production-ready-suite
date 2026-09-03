@@ -315,6 +315,57 @@ def harness() -> tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2
     return OntologyApiRuntime(legacy_service=legacy, store=store), store, legacy
 
 
+def test_markdown_state_does_not_show_global_published_revision_before_profile_work(
+    harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+) -> None:
+    runtime, _store, _legacy = harness
+
+    _view, ontology = runtime.profile_view("sales")
+    state = runtime.ontology_markdown_state("sales")
+
+    assert ontology.revision.status == OntologyRevisionStatus.PUBLISHED
+    assert state.draft_revision is None
+    assert state.draft_version is None
+    assert state.published_revision is None
+    assert state.published_version is None
+    assert state.published_markdown == ""
+
+
+def test_markdown_state_uses_profile_local_versions_for_draft_and_publish(
+    harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+) -> None:
+    runtime, _store, legacy = harness
+    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_FENCED_PAYLOAD)
+    service = OntologyBuildService(runtime)
+
+    first = _wait_for_job(service, service.start("sales", business_text="受注は顧客に紐づく。").id)
+    first_state = runtime.ontology_markdown_state("sales")
+    assert first_state.draft_revision is not None
+    assert first_state.draft_revision.id == first.draft_revision_id
+    assert first_state.draft_version == 1
+
+    runtime.publish_ontology_revision(
+        first_state.draft_revision.id,
+        OntologyPublishRequest(etag=first_state.draft_revision.etag),
+    )
+    runtime.copy_draft_markdown_to_published(first_state.draft_revision.id)
+    published_state = runtime.ontology_markdown_state("sales")
+    assert published_state.published_revision is not None
+    assert published_state.published_revision.id == first_state.draft_revision.id
+    assert published_state.published_version == 1
+
+    second = _wait_for_job(
+        service,
+        service.start("sales", business_text="受注は顧客に紐づく。").id,
+    )
+    second_state = runtime.ontology_markdown_state("sales")
+
+    assert second_state.draft_revision is not None
+    assert second_state.draft_revision.id == second.draft_revision_id
+    assert second_state.draft_version == 2
+    assert second_state.published_version == 1
+
+
 # --- DB catalog schema context ---------------------------------------------------------------
 
 

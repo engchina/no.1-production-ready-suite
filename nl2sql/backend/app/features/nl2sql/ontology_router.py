@@ -231,6 +231,8 @@ class OntologyMarkdownState(OntologyContract):
     published_markdown: str = ""
     draft_revision: OntologyRevision | None = None
     published_revision: OntologyRevision | None = None
+    draft_version: int | None = Field(default=None, ge=1)
+    published_version: int | None = Field(default=None, ge=1)
     draft_etag: str = ""
     published_at: datetime | None = None
 
@@ -539,6 +541,109 @@ class OntologyApiRuntime:
                 return payload_content
         return ""
 
+    @staticmethod
+    def _artifact_revision_id(document: Mapping[str, Any]) -> str:
+        revision_id = str(document.get("session_id") or "")
+        if revision_id:
+            return revision_id
+        payload = document.get("payload")
+        if isinstance(payload, Mapping):
+            return str(payload.get("ontology_revision_id") or payload.get("revision_id") or "")
+        return ""
+
+    @staticmethod
+    def _artifact_profile_revision_version(document: Mapping[str, Any]) -> int | None:
+        for source in (document, document.get("payload")):
+            if not isinstance(source, Mapping):
+                continue
+            for key in ("profile_revision_version", "profile_version"):
+                try:
+                    version = int(source.get(key) or 0)
+                except (TypeError, ValueError):
+                    continue
+                if version >= 1:
+                    return version
+        return None
+
+    def _profile_markdown_artifacts(self, profile_id: str) -> list[dict[str, Any]]:
+        return [
+            document
+            for document in self.store.list_documents("artifacts")
+            if document.get("artifact_type")
+            in {_MARKDOWN_DRAFT_ARTIFACT_TYPE, _MARKDOWN_PUBLISHED_ARTIFACT_TYPE}
+            and self._artifact_profile_id(document) == profile_id
+        ]
+
+    def _profile_markdown_revision_versions(self, profile_id: str) -> dict[str, int]:
+        grouped: dict[str, dict[str, Any]] = {}
+        for document in self._profile_markdown_artifacts(profile_id):
+            revision_id = self._artifact_revision_id(document)
+            if not revision_id:
+                continue
+            group = grouped.setdefault(
+                revision_id,
+                {
+                    "sort_key": (
+                        str(document.get("created_at") or document.get("updated_at") or ""),
+                        str(document.get("artifact_id") or ""),
+                    ),
+                    "direct_version": None,
+                },
+            )
+            group["sort_key"] = min(
+                group["sort_key"],
+                (
+                    str(document.get("created_at") or document.get("updated_at") or ""),
+                    str(document.get("artifact_id") or ""),
+                ),
+            )
+            direct_version = self._artifact_profile_revision_version(document)
+            if direct_version is not None:
+                current_direct = group["direct_version"]
+                group["direct_version"] = (
+                    direct_version
+                    if current_direct is None
+                    else min(int(current_direct), direct_version)
+                )
+
+        versions: dict[str, int] = {
+            revision_id: int(group["direct_version"])
+            for revision_id, group in grouped.items()
+            if group["direct_version"] is not None
+        }
+        used_versions = set(versions.values())
+        next_version = 1
+        missing = [
+            (revision_id, group["sort_key"])
+            for revision_id, group in grouped.items()
+            if group["direct_version"] is None
+        ]
+        for revision_id, _sort_key in sorted(missing, key=lambda item: item[1]):
+            while next_version in used_versions:
+                next_version += 1
+            versions[revision_id] = next_version
+            used_versions.add(next_version)
+            next_version += 1
+        return versions
+
+    def _profile_markdown_revision_version(
+        self,
+        profile_id: str,
+        document: Mapping[str, Any] | None,
+    ) -> int | None:
+        if document is None:
+            return None
+        direct_version = self._artifact_profile_revision_version(document)
+        if direct_version is not None:
+            return direct_version
+        revision_id = self._artifact_revision_id(document)
+        if not revision_id:
+            return None
+        return self._profile_markdown_revision_versions(profile_id).get(revision_id)
+
+    def _next_profile_markdown_revision_version(self, profile_id: str) -> int:
+        return max(self._profile_markdown_revision_versions(profile_id).values(), default=0) + 1
+
     def _markdown_artifact_for_revision(
         self,
         *,
@@ -580,6 +685,7 @@ class OntologyApiRuntime:
         artifact_type: str,
         markdown: str,
         expected_etag: str | None = None,
+        profile_version: int | None = None,
     ) -> dict[str, Any]:
         artifact_id = self._markdown_artifact_id(
             artifact_type=artifact_type,
@@ -596,6 +702,11 @@ class OntologyApiRuntime:
                 "再読込して再実行してください。",
             )
         now = utc_now()
+        resolved_profile_version = (
+            profile_version
+            or self._profile_markdown_revision_version(profile_id, current)
+            or self._next_profile_markdown_revision_version(profile_id)
+        )
         document = {
             "artifact_id": artifact_id,
             "session_id": revision.id,
@@ -604,6 +715,7 @@ class OntologyApiRuntime:
             "content": markdown,
             "profile_id": profile_id,
             "revision_version": revision.version,
+            "profile_revision_version": resolved_profile_version,
             "renderer_version": _MARKDOWN_RENDERER_VERSION,
             "created_at": current.get("created_at") if current is not None else now,
             "updated_at": now,
@@ -626,8 +738,9 @@ class OntologyApiRuntime:
             if self._artifact_profile_id(document) == profile_id
         ]
         candidates: list[tuple[dict[str, Any], OntologyRevision]] = []
+        profile_versions = self._profile_markdown_revision_versions(profile_id)
         for document in documents:
-            revision_id = str(document.get("session_id") or "")
+            revision_id = self._artifact_revision_id(document)
             if not revision_id:
                 continue
             ontology = self._load_ontology_revision(revision_id)
@@ -641,7 +754,7 @@ class OntologyApiRuntime:
             max(
                 candidates,
                 key=lambda item: (
-                    item[1].version,
+                    profile_versions.get(item[1].id, item[1].version),
                     str(item[0].get("updated_at") or item[0].get("created_at") or ""),
                     item[1].id,
                 ),
@@ -666,44 +779,25 @@ class OntologyApiRuntime:
             if draft_match is not None:
                 draft_document, draft_revision = draft_match
 
-            published_revisions = [
-                revision
-                for revision in self._revision_headers.values()
-                if revision.status == OntologyRevisionStatus.PUBLISHED
-            ]
-            published_revision = (
-                max(
-                    published_revisions,
-                    key=lambda item: (
-                        item.version,
-                        item.published_at or item.created_at,
-                        item.id,
-                    ),
-                )
-                if published_revisions
-                else None
-            )
             published_document: dict[str, Any] | None = None
-            if published_revision is not None:
-                published_document = self._markdown_artifact_for_revision(
-                    profile_id=profile_id,
-                    revision_id=published_revision.id,
-                    artifact_type=_MARKDOWN_PUBLISHED_ARTIFACT_TYPE,
-                )
-            if published_document is None:
-                published_match = self._latest_profile_markdown_artifact(
-                    profile_id=profile_id,
-                    artifact_type=_MARKDOWN_PUBLISHED_ARTIFACT_TYPE,
-                    statuses={OntologyRevisionStatus.PUBLISHED},
-                )
-                if published_match is not None:
-                    published_document, published_revision = published_match
+            published_revision: OntologyRevision | None = None
+            published_match = self._latest_profile_markdown_artifact(
+                profile_id=profile_id,
+                artifact_type=_MARKDOWN_PUBLISHED_ARTIFACT_TYPE,
+                statuses={OntologyRevisionStatus.PUBLISHED},
+            )
+            if published_match is not None:
+                published_document, published_revision = published_match
 
             return OntologyMarkdownState(
                 draft_markdown=self._artifact_content(draft_document),
                 published_markdown=self._artifact_content(published_document),
                 draft_revision=draft_revision,
                 published_revision=published_revision,
+                draft_version=self._profile_markdown_revision_version(profile_id, draft_document),
+                published_version=self._profile_markdown_revision_version(
+                    profile_id, published_document
+                ),
                 draft_etag=str(draft_document.get("etag") or "") if draft_document else "",
                 published_at=published_revision.published_at if published_revision else None,
             )
@@ -823,6 +917,10 @@ class OntologyApiRuntime:
                         revision=ontology.revision,
                         artifact_type=_MARKDOWN_PUBLISHED_ARTIFACT_TYPE,
                         markdown=self._artifact_content(document),
+                        profile_version=self._profile_markdown_revision_version(
+                            profile_id,
+                            document,
+                        ),
                     )
                 )
             return saved

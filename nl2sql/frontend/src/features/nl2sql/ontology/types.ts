@@ -598,6 +598,8 @@ export interface OntologyMarkdownState {
   published_markdown: string;
   draft_revision: OntologyRevision | null;
   published_revision: OntologyRevision | null;
+  draft_version?: number | null;
+  published_version?: number | null;
   draft_etag: string;
   published_at?: string | null;
 }

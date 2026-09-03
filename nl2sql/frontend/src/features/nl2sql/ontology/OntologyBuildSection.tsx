@@ -457,14 +457,16 @@ export function OntologyBuildSection({
   const publishedMarkdown = markdownState?.published_markdown ?? "";
   const publishedRevision = markdownState?.published_revision ?? null;
   const publishedAt = publishedRevision?.published_at ?? markdownState?.published_at ?? null;
+  const draftDisplayVersion = markdownState?.draft_version ?? draftRevision?.version;
+  const publishedDisplayVersion = markdownState?.published_version ?? publishedRevision?.version;
   const draftRevisionMeta = draftRevision
     ? t("profiles.ontologyBuild.markdownTabVersion", {
-        version: String(draftRevision.version),
+        version: String(draftDisplayVersion),
       })
     : t("profiles.ontologyBuild.markdownDraftMissing");
   const publishedRevisionMeta = publishedRevision
     ? t("profiles.ontologyBuild.markdownTabVersion", {
-        version: String(publishedRevision.version),
+        version: String(publishedDisplayVersion),
       })
     : t("profiles.ontologyBuild.markdownPublishedMissing");
   // 公開済み Markdown が無い(revision だけ公開済み)場合は公開日時を出さない。
@@ -557,6 +559,7 @@ export function OntologyBuildSection({
           ...next,
           draft_markdown: currentDraftMarkdown,
           draft_revision: currentDraftRevision,
+          draft_version: currentState?.draft_version ?? next.draft_version,
           draft_etag: currentState?.draft_etag ?? "",
         }
       : reason === "save"

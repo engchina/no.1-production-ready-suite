@@ -1368,6 +1368,35 @@ test("Markdown Ontology tabs はキーボードで切り替えできる", async 
   await expect(page.getByTestId("ontology-markdown-draft-empty")).toBeVisible();
 });
 
+test("Markdown Ontology tabs は profile 別 version を優先して表示する", async ({ page }) => {
+  await mockApi(page);
+  await page.unroute("**/api/nl2sql/profiles/*/ontology-markdown");
+  await page.route("**/api/nl2sql/profiles/*/ontology-markdown", (route) =>
+    fulfillJson(route, {
+      draft_markdown: generatedDraftMarkdown,
+      published_markdown: "",
+      draft_revision: {
+        id: "revision-draft-4",
+        version: 4,
+        status: "draft",
+        schema_fingerprint: "fp",
+        etag: "draft-etag-4",
+      },
+      published_revision: null,
+      draft_version: 1,
+      published_version: null,
+      draft_etag: "markdown-etag-1",
+      published_at: null,
+    })
+  );
+
+  await page.goto("/ontology-build?profile=default");
+
+  const markdown = page.getByTestId("ontology-build-markdown");
+  await expect(markdown.getByTestId("ontology-markdown-tab-draft-meta")).toHaveText("v1");
+  await expect(markdown.getByTestId("ontology-markdown-tab-published-meta")).toHaveText("未公開");
+});
+
 test("未公開 Markdown Draft はリロード後も公開ボタンが表示される", async ({ page }) => {
   await mockApi(page);
   await page.unroute("**/api/nl2sql/profiles/*/ontology-markdown");
