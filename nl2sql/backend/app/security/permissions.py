@@ -679,6 +679,8 @@ def permission_for_route(method: str, route_path: str) -> frozenset[str] | None:
         return _allowed(QUERY_GENERATE_PERMISSION)
     if route_path.startswith("/nl2sql/jobs/"):
         return _allowed(QUERY_GENERATE_PERMISSION, "menu.history", FEEDBACK_MANAGE_PERMISSION)
+    if route_path.startswith("/nl2sql/query-sessions/") and route_path.endswith("/execute"):
+        return _allowed(SQL_EXECUTE_PERMISSION)
     if route_path.startswith("/nl2sql/query-sessions"):
         return _allowed(QUERY_GENERATE_PERMISSION)
     if route_path in {

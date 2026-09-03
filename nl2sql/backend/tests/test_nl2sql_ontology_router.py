@@ -8,10 +8,12 @@ import threading
 import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import httpx
 import pytest
+from fastapi import HTTPException
 
 import app.features.nl2sql.ontology_router as ontology_router_module
 from app.features.nl2sql.models import (
@@ -58,6 +60,7 @@ from app.features.nl2sql.ontology_router import (
     ProfileOntologyViewPatch,
     ProfileRecommendationConfirmationRequest,
     QuerySessionApiCreate,
+    SqlBindingRequest,
     router,
 )
 from app.features.nl2sql.ontology_service import (
@@ -74,6 +77,8 @@ from app.features.nl2sql.ontology_store import (
     stable_physical_id,
 )
 from app.main import app
+from app.security.domain import Principal
+from app.security.permissions import QUERY_GENERATE_PERMISSION, SQL_EXECUTE_PERMISSION
 from app.settings import get_settings
 
 
@@ -313,6 +318,26 @@ def _generate_request(data: Any) -> GenerateSqlRequest:
         ontology_revision_id=data.session.ontology_revision_id,
         confirm_intent=True,
     )
+
+
+def _principal_with_permissions(permissions: set[str]) -> Principal:
+    return Principal(
+        user_uuid="user-1",
+        login_user_id="user1",
+        display_name="利用者",
+        status="ACTIVE",
+        force_password_change=False,
+        role_codes=["ANALYST"],
+        permissions=permissions,
+        data_entitlements=[],
+        allowed_profile_ids={"sales"},
+        session_id="session-1",
+        csrf_token_hash="csrf",
+    )
+
+
+def _request_with_principal(principal: Principal | None) -> Any:
+    return SimpleNamespace(state=SimpleNamespace(principal=principal))
 
 
 def test_router_declares_complete_query_session_and_profile_view_api() -> None:
@@ -850,6 +875,53 @@ def test_runtime_executes_two_confirmation_flow_and_persists_every_artifact(
     assert persisted_session["profile_view_snapshot"]["profile_id"] == "sales"
     assert store.get_query_session(created.session.id) is not None
     assert store.get_artifact(generated.session.sql_artifacts[-1].id) is not None
+
+
+def test_execute_query_session_route_requires_sql_execute_permission(
+    runtime: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api, _store, legacy = runtime
+    monkeypatch.setattr(ontology_router_module, "ontology_runtime", api)
+    created = api.create_session(
+        QuerySessionApiCreate(
+            question="受注件数を表示",
+            profile_id="sales",
+            allowed_objects=AllowedObjects(table_names=["APP.ORDERS"]),
+        )
+    )
+    generated = api.generate_sql(created.session.id, _generate_request(created))
+    confirmation = _confirmation(generated)
+    api.confirm_sql(created.session.id, confirmation)
+    payload = SqlBindingRequest(
+        session_id=created.session.id,
+        confirm_sql=True,
+        **confirmation.model_dump(mode="python"),
+    )
+
+    with pytest.raises(HTTPException) as denied:
+        ontology_router_module.execute_query_session(
+            created.session.id,
+            payload,
+            _request_with_principal(_principal_with_permissions({QUERY_GENERATE_PERMISSION})),
+            idempotency_key="route-execute-denied",
+        )
+
+    assert denied.value.status_code == 403
+    assert "SQL を実行する権限" in str(denied.value.detail)
+    assert legacy.executed_sql == []
+
+    permitted = ontology_router_module.execute_query_session(
+        created.session.id,
+        payload,
+        _request_with_principal(
+            _principal_with_permissions({QUERY_GENERATE_PERMISSION, SQL_EXECUTE_PERMISSION})
+        ),
+        idempotency_key="route-execute-permitted",
+    )
+    assert permitted.data is not None
+    assert permitted.data.result.rows == [{"ORDER_COUNT": 3}]
+    assert legacy.executed_sql == [generated.session.sql_artifacts[-1].sql]
 
 
 def test_runtime_rehydrates_complete_query_trace_and_profile_draft_after_restart(

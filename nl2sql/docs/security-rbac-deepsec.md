@@ -27,6 +27,10 @@ schema refresh は `nl2sql.schema.refresh`、schema 参照は `nl2sql.schema.rea
 `nl2sql.select_ai_assets.read` / `refresh` / `manage`、sample data は
 `nl2sql.sample_data.manage`、legacy learning material は `nl2sql.learning_material.manage`、
 diagnostics は `nl2sql.system_status.read`、persistence recover は `nl2sql.persistence.recover` で制御する。
+Ontology query-session 系も同じ境界に従う。`/api/nl2sql/query-sessions`、`generate-sql`、
+`confirm-sql` は `nl2sql.query.generate` を要求し、実 DB へ SELECT を発行する
+`/api/nl2sql/query-sessions/{session_id}/execute` は `POST /api/nl2sql/execute` と同じく
+`nl2sql.sql.execute` を要求する。
 ただし `GET /api/nl2sql/persistence` は業務画面起動時の readiness gate が利用する粗粒度状態であり、
 ログイン済みユーザーなら capability なしで参照できる。
 

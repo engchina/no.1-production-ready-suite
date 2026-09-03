@@ -67,6 +67,10 @@
 - `POST /api/nl2sql/query-sessions/{session_id}/confirm-sql`
 - `POST /api/nl2sql/query-sessions/{session_id}/execute`
 
+`query-sessions` の作成・intent/SQL 確認・SQL 生成は `nl2sql.query.generate` を要求する。
+ただし `query-sessions/{session_id}/execute` は実 DB へ SELECT を発行するため、
+通常の `POST /api/nl2sql/execute` と同じ `nl2sql.sql.execute` を要求する。
+
 | ID | 機能 | 手順 | 期待結果 | テストデータ |
 | --- | --- | --- | --- | --- |
 | QRY-001 | 初期表示 | `/query` を開く | engine selector、profile selector、質問 textarea、schema 参照、preview/run ボタンが表示される | `mock-responses/profiles-search.success.json`、`mock-responses/schema-objects.success.json` |

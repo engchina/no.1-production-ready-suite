@@ -1920,6 +1920,12 @@ def test_every_api_route_is_classified_by_manifest() -> None:
     assert permission_for_route("POST", "/nl2sql/jobs") == frozenset({QUERY_GENERATE_PERMISSION})
     assert permission_for_route("POST", "/nl2sql/rewrite") == frozenset({QUERY_GENERATE_PERMISSION})
     assert permission_for_route("POST", "/nl2sql/analyze") == frozenset({SQL_EXECUTE_PERMISSION})
+    assert permission_for_route("POST", "/nl2sql/query-sessions/{session_id}/execute") == frozenset(
+        {SQL_EXECUTE_PERMISSION}
+    )
+    assert permission_for_route(
+        "POST", "/nl2sql/query-sessions/{session_id}/generate-sql"
+    ) == frozenset({QUERY_GENERATE_PERMISSION})
     assert permission_for_route("POST", "/nl2sql/db-admin/execute") == frozenset(
         {"menu.admin_sql", "menu.comment_management", "menu.annotation_management"}
     )

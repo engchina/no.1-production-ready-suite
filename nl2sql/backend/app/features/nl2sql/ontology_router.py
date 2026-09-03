@@ -25,7 +25,7 @@ from pydantic import Field
 
 from app.api.concurrency import run_sync_io
 from app.security.domain import Principal
-from app.security.permissions import PROFILE_MANAGE_PERMISSION
+from app.security.permissions import PROFILE_MANAGE_PERMISSION, SQL_EXECUTE_PERMISSION
 from app.security.request_actor import actor_scope
 from app.settings import get_settings
 
@@ -4467,6 +4467,13 @@ def _query_session_actor(request: Request) -> tuple[str, bool]:
     return principal.user_uuid, principal.is_system_admin
 
 
+def _assert_sql_execute_permission(request: Request) -> None:
+    principal = _principal_from_request(request)
+    if principal is None or principal.has_permission(SQL_EXECUTE_PERMISSION):
+        return
+    raise HTTPException(status_code=403, detail="SQL を実行する権限がありません。")
+
+
 def _ensure_query_session_access(data: QuerySessionData, request: Request) -> QuerySessionData:
     principal = _principal_from_request(request)
     if principal is None or principal.is_system_admin:
@@ -5020,6 +5027,7 @@ def execute_query_session(
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
 ) -> ApiResponse[QueryExecutionData]:
     try:
+        _assert_sql_execute_permission(http_request)
         _load_authorized_query_session(session_id, http_request)
         if payload.session_id != session_id:
             raise OntologyIntegrityError(
