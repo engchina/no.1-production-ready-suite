@@ -1280,6 +1280,7 @@ class FeedbackEntriesData(BaseModel):
     items: list[FeedbackVectorEntry] = Field(default_factory=list)
     total: int = 0
     indexed_count: int = 0
+    warnings: list[str] = Field(default_factory=list)
 
 
 class FeedbackEntriesDeleteRequest(BaseModel):

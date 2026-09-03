@@ -680,6 +680,7 @@ export interface FeedbackEntriesData {
   items: FeedbackVectorEntry[];
   total: number;
   indexed_count: number;
+  warnings?: string[];
 }
 
 export interface FeedbackSearchConfigData {

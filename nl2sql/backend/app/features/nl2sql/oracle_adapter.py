@@ -2746,14 +2746,21 @@ class OracleNl2SqlAdapter:
             }
             for row in rows
         ]
-        with self.connection() as conn, conn.cursor() as cursor:
-            self._drop_best_effort(cursor, f"DROP INDEX {quoted_index}", {})
-            self._drop_best_effort(cursor, f"DROP TABLE {quoted_table} PURGE", {})
-            self._execute_plsql_like(cursor, create_table, {})
-            if bind_rows:
-                cursor.executemany(insert_sql, bind_rows)
-            self._execute_plsql_like(cursor, create_index, {})
-            conn.commit()
+        try:
+            with self.connection() as conn, conn.cursor() as cursor:
+                self._drop_best_effort(cursor, f"DROP INDEX {quoted_index}", {})
+                self._drop_best_effort(cursor, f"DROP TABLE {quoted_table} PURGE", {})
+                self._execute_plsql_like(cursor, create_table, {})
+                if bind_rows:
+                    cursor.executemany(insert_sql, bind_rows)
+                self._execute_plsql_like(cursor, create_index, {})
+                conn.commit()
+        except OracleAdapterError:
+            raise
+        except Exception as exc:
+            raise OracleAdapterError(
+                f"Feedback vector index の rebuild に失敗しました: {exc}"
+            ) from exc
         return {
             "runtime": "oracle",
             "table_name": safe_table,
