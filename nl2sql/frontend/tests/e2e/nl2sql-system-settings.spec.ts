@@ -36,6 +36,7 @@ function adbInfoFixture(overrides: Record<string, unknown> = {}) {
   return {
     status: "success",
     message: "ADB OCID が設定されています。",
+    error_code: null,
     id: "ocid1.autonomousdatabase.oc1.ap-osaka-1.example",
     display_name: "nl2sqldb",
     lifecycle_state: "AVAILABLE",
@@ -1736,6 +1737,99 @@ test("ADB 停止中は保存ボタンを無効化して保存表示のままに�
 
   stopGate.release();
   await expect(page.getByText("データベース 'NL2SQLDB' の停止を開始しました。")).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+});
+
+test("ADB 情報の status=error は lifecycle がなくても表示する", async ({ page }) => {
+  const safeMessage =
+    "ADB 情報を取得できませんでした。OCI 認証、リージョン、ADB OCID を確認して再試行してください。";
+
+  await page.unroute("**/api/settings/database/adb");
+  await page.route("**/api/settings/database/adb", (route) =>
+    fulfillJson(
+      route,
+      adbInfoFixture({
+        status: "error",
+        message: safeMessage,
+        error_code: "ADB_INFO_UNAVAILABLE",
+        display_name: null,
+        lifecycle_state: null,
+        db_name: null,
+        cpu_core_count: null,
+        data_storage_size_in_tbs: null,
+      })
+    )
+  );
+
+  await page.goto("/settings/database");
+
+  const adbCard = page.locator("#adb-management");
+  const alert = adbCard.getByRole("alert").filter({ hasText: safeMessage });
+  await expect(alert).toBeVisible();
+  await expect(adbCard.getByText("raw-sdk-detail")).toHaveCount(0);
+  await expect(adbCard.getByText("OCI ADB")).toHaveCount(0);
+  await expectNoHorizontalOverflow(page);
+
+  await page.setViewportSize({ width: 375, height: 812 });
+  await expect(alert).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+});
+
+test("ADB 情報の not_configured は lifecycle がなくても表示する", async ({ page }) => {
+  await page.unroute("**/api/settings/database");
+  await page.route("**/api/settings/database", (route) =>
+    fulfillJson(route, databaseSettingsFixture({ adb_ocid: "" }))
+  );
+  await page.unroute("**/api/settings/database/adb");
+  await page.route("**/api/settings/database/adb", (route) =>
+    fulfillJson(
+      route,
+      adbInfoFixture({
+        status: "not_configured",
+        message: "ADB OCID が設定されていません。",
+        error_code: "ADB_NOT_CONFIGURED",
+        id: null,
+        display_name: null,
+        lifecycle_state: null,
+        db_name: null,
+        cpu_core_count: null,
+        data_storage_size_in_tbs: null,
+      })
+    )
+  );
+
+  await page.goto("/settings/database");
+
+  const adbCard = page.locator("#adb-management");
+  await expect(adbCard.getByRole("status")).toContainText("ADB OCID が設定されていません。");
+  await expectNoHorizontalOverflow(page);
+});
+
+test("ADB 情報の query error をカード内に表示する", async ({ page }) => {
+  const apiError =
+    "ADB 情報を取得できませんでした。OCI 認証、リージョン、ADB OCID を確認して再試行してください。";
+
+  await page.unroute("**/api/settings/database/adb");
+  await page.route("**/api/settings/database/adb", (route) =>
+    route.fulfill({
+      status: 500,
+      contentType: "application/json",
+      body: JSON.stringify({
+        data: null,
+        error_messages: [apiError],
+        warning_messages: [],
+        error_code: "ADB_INFO_UNAVAILABLE",
+        request_id: "req-adb-info",
+      }),
+    })
+  );
+
+  await page.goto("/settings/database");
+
+  const adbCard = page.locator("#adb-management");
+  const alert = adbCard.getByRole("alert").filter({ hasText: apiError });
+  await expect(alert).toBeVisible();
+  await expect(alert).toContainText("req-adb-info");
   await expectNoHorizontalOverflow(page);
 });
 

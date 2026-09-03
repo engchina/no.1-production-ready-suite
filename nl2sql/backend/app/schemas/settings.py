@@ -270,6 +270,7 @@ class AdbInfoData(BaseModel):
 
     status: AdbOperationStatus
     message: str
+    error_code: str | None = None
     id: str | None = None
     display_name: str | None = None
     lifecycle_state: str | None = None

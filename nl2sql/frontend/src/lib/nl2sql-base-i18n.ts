@@ -1276,6 +1276,8 @@ export const ja = {
   "settings.adb.notify.infoOk": "データベース情報を取得しました。",
   "settings.adb.notify.alreadyAvailable": "データベースは既に起動しています。",
   "settings.adb.notify.alreadyStopped": "データベースは既に停止しています。",
+  "settings.adb.notify.infoFailed":
+    "ADB 情報を取得できませんでした。OCI 認証、リージョン、ADB OCID を確認して再試行してください。",
   "settings.adb.notify.actionFailed": "ADB の操作に失敗しました。",
   "settings.adb.operational.lifecycle": "OCI ADB",
   "settings.adb.lifecycle.AVAILABLE": "起動済み",

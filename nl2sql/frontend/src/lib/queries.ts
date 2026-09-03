@@ -204,6 +204,7 @@ export function useAdbInfo() {
   return useQuery({
     queryKey: queryKeys.adbInfo,
     queryFn: ({ signal }) => api.getAdbInfo({ signal }),
+    retry: false,
     refetchInterval: (query) =>
       adbIsTransitioning(query.state.data?.lifecycle_state)
         ? ACTIVE_REFETCH_INTERVAL_MS

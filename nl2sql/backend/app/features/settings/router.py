@@ -1641,6 +1641,7 @@ def _adb_info(
     settings: Settings,
     status: AdbOperationStatus | None = None,
     message: str | None = None,
+    error_code: str | None = None,
 ) -> AdbInfoData:
     adb_ocid = getattr(settings, "oracle_adb_ocid", "").strip()
     region = settings.resolved_oracle_adb_region
@@ -1649,9 +1650,30 @@ def _adb_info(
         status=resolved_status,
         message=message
         or ("ADB OCID が設定されています。" if adb_ocid else "ADB OCID が設定されていません。"),
+        error_code=error_code,
         id=adb_ocid or None,
         region=region or None,
     )
+
+
+AdbFailureOperation = Literal["info", "start", "stop"]
+_ADB_FAILURE_RESPONSES: dict[AdbFailureOperation, tuple[str, str]] = {
+    "info": (
+        "ADB_INFO_UNAVAILABLE",
+        "ADB 情報を取得できませんでした。"
+        "OCI 認証、リージョン、ADB OCID を確認して再試行してください。",
+    ),
+    "start": (
+        "ADB_START_FAILED",
+        "ADB の起動を開始できませんでした。"
+        "OCI 権限、リージョン、ADB OCID を確認して再試行してください。",
+    ),
+    "stop": (
+        "ADB_STOP_FAILED",
+        "ADB の停止を開始できませんでした。"
+        "OCI 権限、リージョン、ADB OCID を確認して再試行してください。",
+    ),
+}
 
 
 def _apply_adb_settings(settings: Settings, payload: AdbSettingsUpdate) -> None:
@@ -1667,11 +1689,13 @@ def _adb_info_data(
     region: str | None,
     *,
     lifecycle_override: str | None = None,
+    error_code: str | None = None,
 ) -> AdbInfoData:
     """ADB 情報スナップショットを表示用データへ変換する。"""
     return AdbInfoData(
         status=status,
         message=message,
+        error_code=error_code,
         id=info.id,
         display_name=info.display_name,
         lifecycle_state=lifecycle_override or info.lifecycle_state,
@@ -1682,21 +1706,47 @@ def _adb_info_data(
     )
 
 
+def _adb_failure_data(
+    operation: AdbFailureOperation,
+    exc: Exception,
+    *,
+    adb_ocid: str,
+    region: str | None,
+    info: AutonomousDatabaseInfo | None = None,
+) -> AdbInfoData:
+    """OCI SDK の詳細をレスポンスへ出さず ADB 操作失敗を正規化する。"""
+    error_code, message = _ADB_FAILURE_RESPONSES[operation]
+    logger.warning(
+        "adb_operation_failed",
+        extra={
+            "operation": operation,
+            "error_code": error_code,
+            "exception_type": type(exc).__name__,
+            "region": region,
+            "adb_ocid_configured": bool(adb_ocid),
+        },
+    )
+    if info is not None:
+        return _adb_info_data("error", message, info, region, error_code=error_code)
+    return AdbInfoData(
+        status="error",
+        message=message,
+        error_code=error_code,
+        id=adb_ocid,
+        region=region,
+    )
+
+
 async def _load_adb_info(settings: Settings) -> AdbInfoData:
     """ADB の情報を取得する。設定不足や OCI エラーは status へ載せて返す。"""
     region = settings.resolved_oracle_adb_region or None
     adb_ocid = settings.oracle_adb_ocid.strip()
     if not adb_ocid:
-        return _adb_info(settings, status="not_configured")
+        return _adb_info(settings, status="not_configured", error_code="ADB_NOT_CONFIGURED")
     try:
         info = await OciDatabaseClient(settings=settings).get_autonomous_database(adb_ocid)
     except Exception as exc:
-        return AdbInfoData(
-            status="error",
-            message=f"データベース情報の取得に失敗しました: {exc}",
-            id=adb_ocid,
-            region=region,
-        )
+        return _adb_failure_data("info", exc, adb_ocid=adb_ocid, region=region)
     return _adb_info_data(
         "success",
         "データベース情報を取得しました。",
@@ -1710,18 +1760,13 @@ async def _control_adb(settings: Settings, *, action: Literal["start", "stop"]) 
     region = settings.resolved_oracle_adb_region or None
     adb_ocid = settings.oracle_adb_ocid.strip()
     if not adb_ocid:
-        return _adb_info(settings, status="not_configured")
+        return _adb_info(settings, status="not_configured", error_code="ADB_NOT_CONFIGURED")
 
     client = OciDatabaseClient(settings=settings)
     try:
         info = await client.get_autonomous_database(adb_ocid)
     except Exception as exc:
-        return AdbInfoData(
-            status="error",
-            message=f"データベース情報の取得に失敗しました: {exc}",
-            id=adb_ocid,
-            region=region,
-        )
+        return _adb_failure_data("info", exc, adb_ocid=adb_ocid, region=region)
 
     state = info.lifecycle_state
     if action == "start":
@@ -1742,7 +1787,7 @@ async def _control_adb(settings: Settings, *, action: Literal["start", "stop"]) 
         try:
             await client.start_autonomous_database(adb_ocid)
         except Exception as exc:
-            return _adb_info_data("error", f"データベースの起動に失敗しました: {exc}", info, region)
+            return _adb_failure_data("start", exc, adb_ocid=adb_ocid, region=region, info=info)
         return _adb_info_data(
             "accepted",
             f"データベース '{info.display_name}' の起動を開始しました。",
@@ -1763,7 +1808,7 @@ async def _control_adb(settings: Settings, *, action: Literal["start", "stop"]) 
     try:
         await client.stop_autonomous_database(adb_ocid)
     except Exception as exc:
-        return _adb_info_data("error", f"データベースの停止に失敗しました: {exc}", info, region)
+        return _adb_failure_data("stop", exc, adb_ocid=adb_ocid, region=region, info=info)
     return _adb_info_data(
         "accepted",
         f"データベース '{info.display_name}' の停止を開始しました。",

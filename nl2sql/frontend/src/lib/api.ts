@@ -548,6 +548,7 @@ export type AdbOperationStatus =
 export interface AdbInfoData {
   status: AdbOperationStatus;
   message: string;
+  error_code?: string | null;
   id: string | null;
   display_name: string | null;
   lifecycle_state: string | null;

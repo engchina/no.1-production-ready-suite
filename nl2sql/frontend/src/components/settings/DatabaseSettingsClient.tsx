@@ -858,6 +858,7 @@ function AdbManagementCard({
   const lifecycle = info?.lifecycle_state ?? null;
   const canStart = lifecycle === "STOPPED" || lifecycle === "UNAVAILABLE";
   const canStop = lifecycle === "AVAILABLE";
+  const showInfoPanel = Boolean(info && (info.lifecycle_state || info.status !== "success"));
   const refreshWalletPending = refreshAttemptedWallet && walletEnsurePending;
   const saveSettingsFeedbackPending =
     (activeOperation === "save" || activeOperation === "refresh") && saveSettings.isPending;
@@ -960,6 +961,12 @@ function AdbManagementCard({
             : start.isError || stop.isError || saveSettings.isError
               ? t("settings.adb.notify.actionFailed")
               : null;
+  const infoError =
+    infoQuery.error instanceof ApiError
+      ? infoQuery.error.message
+      : infoQuery.isError
+        ? t("settings.adb.notify.infoFailed")
+        : null;
 
   return (
     <Card id="adb-management" className="scroll-mt-4 rounded-md">
@@ -1062,7 +1069,9 @@ function AdbManagementCard({
           ) : null}
         </div>
 
-        {info && info.lifecycle_state ? <AdbInfoPanel info={info} /> : null}
+        {infoError ? <FormStatus tone="danger" className="text-xs" message={infoError} /> : null}
+
+        {showInfoPanel && info ? <AdbInfoPanel info={info} /> : null}
 
         {log.length > 0 ? <AdbOperationLog entries={log} /> : null}
       </CardContent>
@@ -1072,11 +1081,12 @@ function AdbManagementCard({
 
 function AdbInfoPanel({ info }: { info: AdbInfoData }) {
   const known = info.status === "success" || info.status === "accepted";
+  const messageTone = info.status === "error" ? "danger" : "warning";
   // 自己完結したステータスバーを余分なパネルで囲まない。
   return (
     <div className="space-y-2">
-      <AdbLifecycleBadge state={info.lifecycle_state} />
-      {!known ? <FormStatus tone="warning" className="text-xs" message={info.message} /> : null}
+      {info.lifecycle_state ? <AdbLifecycleBadge state={info.lifecycle_state} /> : null}
+      {!known ? <FormStatus tone={messageTone} className="text-xs" message={info.message} /> : null}
     </div>
   );
 }
