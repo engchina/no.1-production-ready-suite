@@ -211,6 +211,62 @@ test("削除済みの監査ログ URL は専用 API を呼ばず、既存の全�
   expect(auditRequests).toBe(0);
 });
 
+test("管理 SQL 画面からサイドバーを操作しても表示が空白にならない", async ({ page }) => {
+  const pageErrors: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+
+  await page.goto("/admin-sql");
+  await expect(page.getByRole("heading", { level: 1, name: "管理 SQL を実行" })).toBeVisible();
+  await page.locator("#admin-sql-input").fill("SELECT 1 FROM DUAL");
+
+  const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
+  const collapseDataPrep = sidebar.getByRole("button", { name: "データ準備 を折りたたむ" });
+  if (await collapseDataPrep.isVisible()) {
+    await collapseDataPrep.click();
+    await expect(page.getByRole("heading", { level: 1, name: "管理 SQL を実行" })).toBeVisible();
+    await sidebar.getByRole("button", { name: "データ準備 を展開" }).click();
+  }
+
+  await sidebar.getByRole("link", { name: "SELECT SQL を実行" }).click();
+  await expect(page).toHaveURL(/\/direct-sql$/);
+  await expect(page.getByRole("heading", { level: 1, name: "SELECT SQL を実行" })).toBeVisible();
+  await sidebar.getByRole("link", { name: "管理 SQL を実行" }).click();
+  await expect(page).toHaveURL(/\/admin-sql$/);
+  await expect(page.getByRole("heading", { level: 1, name: "管理 SQL を実行" })).toBeVisible();
+  await expect(page.locator("#admin-sql-input")).toHaveValue("SELECT 1 FROM DUAL");
+
+  await sidebar.getByRole("link", { name: "SQL 生成" }).click();
+
+  await expect(page).toHaveURL(/\/query$/);
+  await expect(page.getByRole("heading", { level: 1, name: "SQL 生成" })).toBeVisible();
+  await expect(page.getByTestId("nl2sql-workspace-shell")).toBeVisible();
+  expect(pageErrors).toEqual([]);
+});
+
+test("管理 SQL 権限だけの既定入口は管理 SQL 画面へ振り分ける", async ({ page }) => {
+  await page.unroute("**/api/**");
+  await mockApi(page, {
+    ...SYSTEM_ADMIN_USER,
+    user_uuid: "admin-sql-user",
+    login_user_id: "admin.sql.user",
+    display_name: "管理 SQL ユーザー",
+    role_codes: ["ADMIN_SQL_OPERATOR"],
+    is_system_admin: false,
+    permissions: ["menu.admin_sql"],
+  });
+
+  await page.goto("/");
+
+  await expect(page).toHaveURL(/\/admin-sql$/);
+  await expect(page.getByRole("heading", { level: 1, name: "管理 SQL を実行" })).toBeVisible();
+  const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
+  await expect(sidebar.getByRole("link", { name: "管理 SQL を実行" })).toHaveAttribute(
+    "aria-current",
+    "page"
+  );
+  await expect(sidebar.getByRole("link", { name: "SQL 生成" })).toHaveCount(0);
+});
+
 test("共通ルールは用語・同義語の直下に独立メニューとして並び、専用ページへ遷移する", async ({
   page,
 }) => {

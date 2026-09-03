@@ -188,6 +188,7 @@ const KEEP_ALIVE_PAGES = [
   { path: APP_ROUTES.query, element: <Nl2SqlWorkbench /> },
   { path: APP_ROUTES.sqlToQuestion, element: <SqlToQuestionPage /> },
   { path: APP_ROUTES.directSql, element: <DirectSqlPage /> },
+  { path: APP_ROUTES.adminSql, element: <AdminSqlPage /> },
   { path: APP_ROUTES.commentManagement, element: <CommentManagementPage /> },
   { path: APP_ROUTES.annotationManagement, element: <AnnotationManagementPage /> },
 ];
@@ -291,7 +292,6 @@ function AuthenticatedApplication() {
             <KeepAlivePages />
             <Routes>
             <Route path={APP_ROUTES.home} element={<Navigate to={firstAllowedRoute(auth.hasPermission)} replace />} />
-            <Route path={APP_ROUTES.adminSql} element={<AdminSqlPage />} />
             <Route path={APP_ROUTES.tableManagement} element={<TableManagementPage />} />
             <Route path={APP_ROUTES.viewManagement} element={<ViewManagementPage />} />
             <Route path={APP_ROUTES.dataManagement} element={<DataManagementPage />} />

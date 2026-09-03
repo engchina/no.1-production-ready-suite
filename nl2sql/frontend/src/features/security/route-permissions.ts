@@ -12,6 +12,7 @@ const FIRST_ALLOWED_ORDER = [
   APP_ROUTES.directSql,
   APP_ROUTES.sqlToQuestion,
   APP_ROUTES.history,
+  APP_ROUTES.adminSql,
   APP_ROUTES.tableManagement,
   APP_ROUTES.viewManagement,
   APP_ROUTES.dataManagement,

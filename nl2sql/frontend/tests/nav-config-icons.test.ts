@@ -122,10 +122,13 @@ test("サイドバーは AI 活用だけを初期展開し、保存済みの明�
 test("既定入口は SQL 生成権限がなければ root に戻し、root が最初の許可画面へ振り分ける", () => {
   const queryOnly = (permission: string) => permission === "menu.query";
   const appearanceOnly = (permission: string) => permission === "menu.settings_appearance";
+  const adminSqlOnly = (permission: string) => permission === "menu.admin_sql";
   const noPermissions = () => false;
 
   assert.equal(defaultEntryRoute(queryOnly), "/query");
   assert.equal(defaultEntryRoute(appearanceOnly), "/");
   assert.equal(firstAllowedRoute(appearanceOnly), "/settings/appearance");
+  assert.equal(defaultEntryRoute(adminSqlOnly), "/");
+  assert.equal(firstAllowedRoute(adminSqlOnly), "/admin-sql");
   assert.equal(firstAllowedRoute(noPermissions), "/forbidden");
 });
