@@ -9102,8 +9102,9 @@ class Nl2SqlService:
                 )
             if mapped_candidates:
                 best = mapped_candidates[0]
+                # category_scores は legacy 名だが、同一 category の複数 profile を潰さない。
                 classifier_category_scores = {
-                    candidate.category: candidate.score for candidate in mapped_candidates
+                    candidate.profile_id: candidate.score for candidate in mapped_candidates
                 }
                 profile = self.get_profile(best.profile_id)
                 reason = (

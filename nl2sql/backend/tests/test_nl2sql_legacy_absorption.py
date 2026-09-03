@@ -4,6 +4,7 @@ import importlib
 import io
 import json
 import pickle
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, cast
@@ -960,12 +961,36 @@ async def test_classifier_training_data_replace_api_returns_422_without_deleting
     assert service.classifier_training_data().total_examples == 1
 
 
-def test_classifier_training_data_import_serializes_duplicate_requests() -> None:
+def test_classifier_training_data_import_serializes_duplicate_requests(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
     content = _single_sheet_workbook_bytes(
         "training_data",
         [["CATEGORY", "TEXT"], ["標準業務プロファイル", "請求金額を確認したい"]],
     )
+    original_parse = service._parse_classifier_training_file  # noqa: SLF001
+    active_parse_count = 0
+    max_active_parse_count = 0
+    active_parse_lock = threading.Lock()
+    first_parse_can_finish = threading.Event()
+
+    def slow_parse(
+        filename: str, content: bytes, warnings: list[str]
+    ) -> tuple[list[tuple[str, str, str]], int]:
+        nonlocal active_parse_count, max_active_parse_count
+        with active_parse_lock:
+            active_parse_count += 1
+            max_active_parse_count = max(max_active_parse_count, active_parse_count)
+        try:
+            first_parse_can_finish.wait(timeout=0.2)
+            return original_parse(filename, content, warnings)
+        finally:
+            with active_parse_lock:
+                active_parse_count -= 1
+            first_parse_can_finish.set()
+
+    monkeypatch.setattr(service, "_parse_classifier_training_file", slow_parse)
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         results = list(
@@ -980,6 +1005,7 @@ def test_classifier_training_data_import_serializes_duplicate_requests() -> None
 
     assert sum(result.imported_count for result in results) == 1
     assert sum(result.skipped_count for result in results) == 1
+    assert max_active_parse_count == 1
     assert service.classifier_training_data().total_examples == 1
 
 

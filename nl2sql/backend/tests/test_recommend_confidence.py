@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib
 import io
+import json
 from typing import Any, cast
 
 from app.features.nl2sql.models import (
@@ -32,6 +33,18 @@ def _single_sheet_workbook_bytes(title: str, rows: list[list[Any]]) -> bytes:
     buffer = io.BytesIO()
     workbook.save(buffer)
     return buffer.getvalue()
+
+
+def _classifier_artifact_bytes(*classes: str) -> bytes:
+    vector = [0.0] * 1536
+    payload = {
+        "classes": list(classes),
+        "coef": [vector],
+        "intercept": [5.0],
+        "feature_dim": 1536,
+        "embedding_model": "deterministic-hash-1536",
+    }
+    return json.dumps(payload, ensure_ascii=False).encode("utf-8")
 
 
 class _FakeEmbeddingClient:
@@ -201,3 +214,39 @@ def test_classifier_confidence_uses_probability_not_divided_by_six() -> None:
     # 信頼度は predict_proba そのもの（旧 proba/6 の潰れが無い）
     assert recommendation.confidence == round(best_proba, 3)
     assert recommendation.confidence > 0.2  # proba/6 なら最大 ≈0.167 に潰れていた
+
+
+def test_classifier_category_scores_keep_same_category_profiles_separate() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service.create_profile(
+        Nl2SqlProfile(
+            id="sales-east",
+            name="東日本営業",
+            category="営業",
+            allowed_tables=["SALES_EAST"],
+        )
+    )
+    service.create_profile(
+        Nl2SqlProfile(
+            id="sales-west",
+            name="西日本営業",
+            category="営業",
+            allowed_tables=["SALES_WEST"],
+        )
+    )
+    service.import_classifier_model_artifact(
+        filename="classifier.json",
+        content=_classifier_artifact_bytes("sales-east", "sales-west"),
+    )
+
+    recommendation = service.recommend_profile(
+        ProfileRecommendationRequest(question="営業の売上を確認したい")
+    )
+
+    assert recommendation.recommendation_source == "classifier"
+    assert {candidate.profile_id for candidate in recommendation.candidates} == {
+        "sales-east",
+        "sales-west",
+    }
+    assert {candidate.category for candidate in recommendation.candidates} == {"営業"}
+    assert set(recommendation.category_scores) == {"sales-east", "sales-west"}
