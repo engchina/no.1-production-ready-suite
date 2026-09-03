@@ -955,6 +955,62 @@ test("データベース設定は Wallet ZIP の下にサービス名を置き�
   await expectNoHorizontalOverflow(page);
 });
 
+test("データベース設定は Wallet パスワードを保存し、保存済み値を削除できる", async ({
+  page,
+}) => {
+  const savedRequests: Array<Record<string, unknown>> = [];
+  await page.unroute("**/api/settings/database");
+  await page.route("**/api/settings/database", async (route) => {
+    if (route.request().method() === "PATCH") {
+      savedRequests.push(route.request().postDataJSON() as Record<string, unknown>);
+      await fulfillJson(route, databaseSettingsFixture({ has_wallet_password: true }));
+      return;
+    }
+    await fulfillJson(route, databaseSettingsFixture({ has_wallet_password: true }));
+  });
+
+  await page.goto("/settings/database");
+
+  const walletPassword = page.getByLabel("Wallet パスワード", { exact: true });
+  await expect(walletPassword).toBeVisible();
+  await expect(walletPassword).toHaveValue("");
+  await expect(walletPassword).toHaveAttribute("type", "password");
+  const walletSavedSecretBadgeStyle = await getSavedSecretBadgeStyle(
+    page,
+    "oracle-wallet-password"
+  );
+  expect(walletSavedSecretBadgeStyle.text).toBe("保存済み");
+  await expect(
+    page.getByText("保存済み Wallet パスワードがあります。", { exact: false })
+  ).toBeVisible();
+
+  await walletPassword.fill("wallet-secret-fixture");
+  await page.getByRole("button", { name: "Wallet パスワードを表示", exact: true }).click();
+  await expect(walletPassword).toHaveAttribute("type", "text");
+  await page.getByRole("button", { name: "Wallet パスワードを隠す", exact: true }).click();
+  await expect(walletPassword).toHaveAttribute("type", "password");
+
+  await page.getByRole("button", { name: "DB設定を保存" }).click();
+  await expect.poll(() => savedRequests.length).toBe(1);
+  expect(savedRequests[0]).toMatchObject({
+    connection_security: "wallet_mtls",
+    wallet_password: "wallet-secret-fixture",
+  });
+  expect(savedRequests[0]).not.toHaveProperty("clear_wallet_password");
+
+  const clearWalletPassword = page.getByLabel("保存済み Wallet パスワードを削除する");
+  await clearWalletPassword.check();
+  await expect(walletPassword).toBeDisabled();
+  await page.getByRole("button", { name: "DB設定を保存" }).click();
+  await expect.poll(() => savedRequests.length).toBe(2);
+  expect(savedRequests[1]).toMatchObject({
+    connection_security: "wallet_mtls",
+    clear_wallet_password: true,
+  });
+  expect(savedRequests[1]).not.toHaveProperty("wallet_password");
+  await expectNoHorizontalOverflow(page);
+});
+
 test("DB パスワード表示ボタンの取得中 icon は上下に浮動しない StableLoadingIcon を使う", async ({
   page,
 }) => {
@@ -1013,12 +1069,14 @@ test("データベース設定は接続セキュリティで Wallet mTLS と Wal
   await expect(securityMode).toBeVisible();
   await expect(securityMode).toContainText("Wallet mTLS");
   await expect(page.getByTestId("oracle-wallet-upload")).toBeVisible();
+  await expect(page.getByLabel("Wallet パスワード", { exact: true })).toBeVisible();
 
   await securityMode.click();
   await page.getByRole("option", { name: /Walletless TLS/ }).click();
 
   await expect(page.getByText("Walletless TLS では Wallet", { exact: false })).toBeVisible();
   await expect(page.getByTestId("oracle-wallet-upload")).toHaveCount(0);
+  await expect(page.getByLabel("Wallet パスワード", { exact: true })).toHaveCount(0);
   await expect(page.getByLabel("接続 DSN")).toBeVisible();
   await expectNoHorizontalOverflow(page);
 });

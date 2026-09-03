@@ -1137,6 +1137,9 @@ export const ja = {
   "settings.database.secrets.show": "DB パスワードを表示",
   "settings.database.secrets.hide": "DB パスワードを隠す",
   "settings.database.secrets.revealingPassword": "DB パスワードを取得中",
+  "settings.database.secrets.showWalletPassword": "Wallet パスワードを表示",
+  "settings.database.secrets.hideWalletPassword": "Wallet パスワードを隠す",
+  "settings.database.secrets.revealingWalletPassword": "Wallet パスワードを取得中",
   "settings.database.secrets.revealError":
     "保存済み DB パスワードの取得に失敗しました。入力値または保存状態を確認してください。",
   "settings.database.secrets.clearPassword": "保存済みパスワードを削除する",
