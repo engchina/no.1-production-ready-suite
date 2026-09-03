@@ -3051,21 +3051,7 @@ class Nl2SqlService:
                 payloads["admin_audit"] = copy.deepcopy(self._admin_audit)
             singleton_payloads: dict[str, Any] = {}
             if "singletons" in selected:
-                singleton_payloads = {
-                    "feedback_indexed_ids": sorted(self._feedback_indexed_ids),
-                    "feedback_search_config": {
-                        "similarity_threshold": self._feedback_similarity_threshold,
-                        "match_limit": self._feedback_match_limit,
-                    },
-                    "classifier_artifact": copy.deepcopy(self._classifier_artifact),
-                    "asset_meta": {
-                        engine.value: data.model_dump(mode="json")
-                        for engine, data in self._asset_meta.items()
-                    },
-                    "legacy_learning_material": self._legacy_learning_material.model_dump(
-                        mode="json"
-                    ),
-                }
+                singleton_payloads = self._singleton_payloads_locked()
         for collection, identity_field in identities.items():
             if collection not in selected:
                 continue
@@ -3098,6 +3084,57 @@ class Nl2SqlService:
                     continue
                 repository.put_document("singletons", entity_id, raw)
                 self._incremental_hashes[key] = digest
+        with self._lock:
+            self._persistence_ready = True
+            self._persistence_writable = True
+            self._persistence_reason_code = None
+            self._persistence_checked_at = _utc_now()
+
+    def _singleton_payloads_locked(self, entity_ids: Iterable[str] | None = None) -> dict[str, Any]:
+        payloads: dict[str, Any] = {
+            "feedback_indexed_ids": sorted(self._feedback_indexed_ids),
+            "feedback_search_config": {
+                "similarity_threshold": self._feedback_similarity_threshold,
+                "match_limit": self._feedback_match_limit,
+            },
+            "classifier_artifact": copy.deepcopy(self._classifier_artifact),
+            "asset_meta": {
+                engine.value: data.model_dump(mode="json")
+                for engine, data in self._asset_meta.items()
+            },
+            "legacy_learning_material": self._legacy_learning_material.model_dump(mode="json"),
+        }
+        if entity_ids is None:
+            return payloads
+        selected = set(entity_ids)
+        return {entity_id: value for entity_id, value in payloads.items() if entity_id in selected}
+
+    def _persist_singletons(self, *entity_ids: str) -> None:
+        """Incremental mode では指定 singleton だけを書き、別 singleton を既定値で潰さない。"""
+
+        repository = self._incremental_repository
+        if repository is None:
+            self._persist_state(collections=("singletons",))
+            return
+        with self._lock:
+            payloads = self._singleton_payloads_locked(entity_ids or None)
+        try:
+            for entity_id, value in payloads.items():
+                raw = {"value": value}
+                digest = hashlib.sha256(
+                    json.dumps(raw, ensure_ascii=False, sort_keys=True, default=str).encode()
+                ).hexdigest()
+                key = ("singletons", entity_id)
+                if self._incremental_hashes.get(key) == digest:
+                    continue
+                repository.put_document("singletons", entity_id, raw)
+                self._incremental_hashes[key] = digest
+        except Exception as exc:
+            self._raise_incremental_repository_failure(
+                operation="singleton_save",
+                exc=exc,
+                operation_error_code="incremental_singleton_save_failed",
+            )
         with self._lock:
             self._persistence_ready = True
             self._persistence_writable = True
@@ -6053,6 +6090,40 @@ class Nl2SqlService:
             item = next((entry for entry in self._history if entry.id == history_id), None)
             return item.model_copy(deep=True) if item else None
 
+    def _load_feedback_state(self) -> None:
+        repository = self._incremental_repository
+        if repository is None:
+            return
+        try:
+            config_document = repository.get_document("singletons", "feedback_search_config")
+            indexed_document = repository.get_document("singletons", "feedback_indexed_ids")
+        except Exception as exc:
+            self._raise_incremental_repository_failure(
+                operation="feedback_state_load",
+                exc=exc,
+                operation_error_code="feedback_state_load_failed",
+            )
+
+        config_value = config_document.get("value") if config_document else None
+        indexed_value = indexed_document.get("value") if indexed_document else None
+        similarity_threshold: float | None = None
+        match_limit: int | None = None
+        indexed_ids: set[str] | None = None
+        if isinstance(config_value, Mapping):
+            similarity_threshold = float(config_value.get("similarity_threshold", 0.0))
+            match_limit = int(config_value.get("match_limit", 3))
+        if isinstance(indexed_value, Sequence) and not isinstance(
+            indexed_value, (str, bytes, bytearray)
+        ):
+            indexed_ids = {str(item) for item in indexed_value if str(item)}
+        with self._lock:
+            if similarity_threshold is not None:
+                self._feedback_similarity_threshold = similarity_threshold
+            if match_limit is not None:
+                self._feedback_match_limit = match_limit
+            if indexed_ids is not None:
+                self._feedback_indexed_ids = indexed_ids
+
     def _load_classifier_state(self) -> None:
         repository = self._incremental_repository
         if repository is None:
@@ -6244,13 +6315,14 @@ class Nl2SqlService:
     def _publish_admin_feedback_to_similar_history(
         self, item: HistoryItem
     ) -> SimilarHistoryPublishData:
+        self._load_feedback_state()
         runtime = "oracle" if self._use_oracle_runtime() else "deterministic"
         if item.admin_feedback_rating != FeedbackRating.GOOD:
             return self._unpublish_similar_history_entry(item.id, runtime=runtime)
         if not item.safety_is_safe:
             with self._lock:
                 self._feedback_indexed_ids.discard(item.id)
-            self._persist_state(collections=("singletons",))
+            self._persist_singletons("feedback_indexed_ids")
             return SimilarHistoryPublishData(
                 history_id=item.id,
                 status="skipped",
@@ -6316,7 +6388,7 @@ class Nl2SqlService:
             )
         with self._lock:
             self._feedback_indexed_ids.add(item.id)
-        self._persist_state(collections=("singletons",))
+        self._persist_singletons("feedback_indexed_ids")
         return SimilarHistoryPublishData(
             history_id=item.id,
             status="published",
@@ -6329,6 +6401,7 @@ class Nl2SqlService:
     def _unpublish_similar_history_entry(
         self, history_id: str, *, runtime: str
     ) -> SimilarHistoryPublishData:
+        self._load_feedback_state()
         settings = get_settings()
         warnings: list[str] = []
         executed = False
@@ -6344,7 +6417,7 @@ class Nl2SqlService:
                 warnings.append(str(exc))
         with self._lock:
             self._feedback_indexed_ids.discard(history_id)
-        self._persist_state(collections=("singletons",))
+        self._persist_singletons("feedback_indexed_ids")
         return SimilarHistoryPublishData(
             history_id=history_id,
             status="warning" if warnings else "unpublished",
@@ -6542,14 +6615,15 @@ class Nl2SqlService:
         return self._feedback_index_data(operation="rebuild", include_bad=request.include_bad)
 
     def clear_feedback_index(self, request: FeedbackIndexRequest) -> FeedbackIndexData:
+        self._load_feedback_state()
         started = time.monotonic()
         created_at = _utc_now()
         warnings: list[str] = []
         executed = False
         runtime = "oracle" if self._use_oracle_runtime() else "deterministic"
+        source_count = self._feedback_source_history_count()
+        indexable_count = len(self._feedback_indexable_history(request.include_bad))
         with self._lock:
-            source_count = len(self._history)
-            indexable_count = len(self._feedback_indexable_history(request.include_bad))
             current_indexed = len(self._feedback_indexed_ids)
         if not self._use_oracle_runtime():
             warnings.append(
@@ -6565,9 +6639,9 @@ class Nl2SqlService:
                 with self._lock:
                     self._feedback_indexed_ids = set()
                 executed = True
-                self._persist_state(collections=("singletons",))
-            except OracleAdapterError:
-                raise
+                self._persist_singletons("feedback_indexed_ids")
+            except OracleAdapterError as exc:
+                warnings.append(str(exc))
         embedding_configured = self._embedding_client.is_configured()
         settings = get_settings()
         return FeedbackIndexData(
@@ -6600,7 +6674,10 @@ class Nl2SqlService:
         filtered = [item for item in ranked if item.score >= threshold]
         return SimilarHistoryData(items=filtered[:limit])
 
-    def list_feedback_entries(self) -> FeedbackEntriesData:
+    def list_feedback_entries(
+        self, *, warnings: Sequence[str] | None = None
+    ) -> FeedbackEntriesData:
+        self._load_feedback_state()
         history = self._history_snapshot()
         with self._lock:
             items = [
@@ -6622,12 +6699,30 @@ class Nl2SqlService:
                 for item in history
             ]
             indexed_count = sum(1 for item in items if item.indexed)
-        return FeedbackEntriesData(items=items, total=len(items), indexed_count=indexed_count)
+        return FeedbackEntriesData(
+            items=items,
+            total=len(items),
+            indexed_count=indexed_count,
+            warnings=list(warnings or []),
+        )
 
     def delete_feedback_entries(self, history_ids: list[str]) -> FeedbackEntriesData:
+        self._load_feedback_state()
         ids = {item.strip() for item in history_ids if item.strip()}
         if not ids:
             return self.list_feedback_entries()
+        warnings: list[str] = []
+        if self._use_oracle_runtime():
+            settings = get_settings()
+            for item_id in sorted(ids):
+                try:
+                    self._oracle_adapter.delete_feedback_vector_entry(
+                        table_name=settings.nl2sql_feedback_vector_table,
+                        history_id=item_id,
+                    )
+                except OracleAdapterError as exc:
+                    logger.warning("feedback vector delete warning: %s", exc)
+                    warnings.append(str(exc))
         with self._lock:
             self._history = [item for item in self._history if item.id not in ids]
             for item_id in ids:
@@ -6637,12 +6732,13 @@ class Nl2SqlService:
             for item_id in ids:
                 self._incremental_repository.delete_document("history", item_id)
                 self._incremental_hashes.pop(("history", item_id), None)
-            self._persist_state(collections=("singletons",))
+            self._persist_singletons("feedback_indexed_ids")
         else:
             self._persist_state()
-        return self.list_feedback_entries()
+        return self.list_feedback_entries(warnings=warnings)
 
     def feedback_search_config(self) -> FeedbackSearchConfigData:
+        self._load_feedback_state()
         with self._lock:
             return FeedbackSearchConfigData(
                 similarity_threshold=self._feedback_similarity_threshold,
@@ -6655,7 +6751,7 @@ class Nl2SqlService:
         with self._lock:
             self._feedback_similarity_threshold = request.similarity_threshold
             self._feedback_match_limit = request.match_limit
-        self._persist_state(collections=("singletons",))
+        self._persist_singletons("feedback_search_config")
         return self.feedback_search_config()
 
     def classifier_status(self) -> ClassifierStatusData:
@@ -7269,7 +7365,7 @@ class Nl2SqlService:
             previous_artifact = copy.deepcopy(self._classifier_artifact)
             self._classifier_artifact = artifact
             try:
-                self._persist_state(collections=("singletons",))
+                self._persist_singletons("classifier_artifact")
             except Exception:
                 self._classifier_artifact = previous_artifact
                 raise
@@ -7935,13 +8031,14 @@ class Nl2SqlService:
         return None
 
     def _feedback_index_data(self, *, operation: str, include_bad: bool) -> FeedbackIndexData:
+        self._load_feedback_state()
         started = time.monotonic()
         created_at = _utc_now()
         warnings: list[str] = []
         runtime = "oracle" if self._use_oracle_runtime() else "deterministic"
+        indexable = self._feedback_indexable_history(include_bad)
+        source_count = self._feedback_source_history_count()
         with self._lock:
-            indexable = self._feedback_indexable_history(include_bad)
-            source_count = len(self._history)
             indexed_count = len(self._feedback_indexed_ids)
         executed = False
         if operation == "rebuild":
@@ -7984,9 +8081,13 @@ class Nl2SqlService:
                         self._feedback_indexed_ids = {item.id for item in indexable}
                         indexed_count = len(self._feedback_indexed_ids)
                     executed = True
-                    self._persist_state(collections=("singletons",))
+                    self._persist_singletons("feedback_indexed_ids")
                 except (EmbeddingClientError, OracleAdapterError, ValueError) as exc:
                     warnings.append(str(exc))
+                    with self._lock:
+                        self._feedback_indexed_ids = set()
+                        indexed_count = 0
+                    self._persist_singletons("feedback_indexed_ids")
         settings = get_settings()
         return FeedbackIndexData(
             operation=operation,
@@ -8005,7 +8106,34 @@ class Nl2SqlService:
 
     def _feedback_indexable_history(self, include_bad: bool) -> list[HistoryItem]:
         del include_bad
-        return [item for item in self._history if item.admin_feedback_rating == FeedbackRating.GOOD]
+        good = FeedbackRating.GOOD.value
+        if self._incremental_repository is None:
+            with self._lock:
+                return [
+                    item.model_copy(deep=True)
+                    for item in self._history
+                    if item.admin_feedback_rating == FeedbackRating.GOOD
+                ]
+        indexable: list[HistoryItem] = []
+        cursor = ""
+        while True:
+            page, cursor, _total = self._history_page(
+                cursor=cursor or None,
+                limit=500,
+                payload_filters={"admin_feedback_rating": good},
+            )
+            indexable.extend(
+                item for item in page if item.admin_feedback_rating == FeedbackRating.GOOD
+            )
+            if not cursor or not page:
+                return indexable
+
+    def _feedback_source_history_count(self) -> int:
+        if self._incremental_repository is None:
+            with self._lock:
+                return len(self._history)
+        _page, _cursor, total = self._history_page(cursor=None, limit=1)
+        return total
 
     def _feedback_index_status(self, indexed_count: int, indexable_count: int) -> str:
         if indexable_count == 0 and indexed_count == 0:
@@ -12812,7 +12940,7 @@ class Nl2SqlService:
                 )
                 with self._lock:
                     self._asset_meta[Nl2SqlEngine.SELECT_AI_AGENT] = data
-                self._persist_state(collections=("singletons",))
+                self._persist_singletons("asset_meta")
                 return data
             try:
                 previous_warning = self._cleanup_previous_select_ai_agent_team(
@@ -12877,7 +13005,7 @@ class Nl2SqlService:
         )
         with self._lock:
             self._asset_meta[Nl2SqlEngine.SELECT_AI_AGENT] = data
-        self._persist_state(collections=("singletons",))
+        self._persist_singletons("asset_meta")
         return data
 
     def _cleanup_previous_select_ai_agent_team(
@@ -12961,7 +13089,7 @@ class Nl2SqlService:
                 reason=reason,
                 detail={"engines": [engine.value for engine in engines], "profile_id": profile_id},
             )
-        self._persist_state(collections=("singletons",))
+        self._persist_singletons("asset_meta")
         return cleaned
 
     def list_select_ai_db_profiles(
@@ -13570,7 +13698,7 @@ class Nl2SqlService:
                 },
             )
             self._asset_meta[Nl2SqlEngine.SELECT_AI] = data
-        self._persist_state(collections=("singletons",))
+        self._persist_singletons("asset_meta")
         return data
 
     def _assert_select_ai_scope_ready(self, profile: Nl2SqlProfile) -> None:
@@ -14290,7 +14418,7 @@ class Nl2SqlService:
                     "engines": [item.engine.value for item in cleaned],
                 },
             )
-            self._persist_state(collections=("singletons",))
+            self._persist_singletons("asset_meta")
         return cleaned
 
     def _cleanup_select_ai_profile(self, profile_id: str | None) -> AssetCleanupData:
@@ -14719,6 +14847,7 @@ class Nl2SqlService:
         profile_id: str | None,
         include_bad: bool,
     ) -> list[SimilarHistoryItem]:
+        self._load_feedback_state()
         history = self._similar_history_pool()
         target_objects = self._similar_history_query_target_objects(question)
         vector_ranked = self._rank_oracle_vector_history(
