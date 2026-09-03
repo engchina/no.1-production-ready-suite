@@ -1381,9 +1381,9 @@ def test_reserved_system_admin_role_code_cannot_be_created(role_code: str) -> No
             ),
         },
     )
-    assert [
-        role.role_id for role in service.store.list_roles(include_archived=True)
-    ] == [SYSTEM_ADMIN_ROLE_ID]
+    assert [role.role_id for role in service.store.list_roles(include_archived=True)] == [
+        SYSTEM_ADMIN_ROLE_ID
+    ]
 
 
 def test_last_system_admin_cannot_be_disabled_or_unassigned() -> None:
