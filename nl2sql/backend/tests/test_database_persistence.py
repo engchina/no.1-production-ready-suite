@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -20,6 +21,12 @@ from app.features.nl2sql.service import (
     Nl2SqlService,
 )
 from app.main import app
+from app.readiness import (
+    READINESS_OK,
+    READINESS_WALLET_NOT_FOUND,
+    oracle_readiness_check,
+    readiness_checks,
+)
 from app.settings import get_settings
 
 
@@ -121,6 +128,89 @@ async def test_database_ready_reports_not_configured_without_probe(
     assert called is False
 
 
+def test_generic_readiness_wallet_mtls_requires_wallet_files_even_with_password(
+    tmp_path: Path,
+) -> None:
+    wallet_dir = tmp_path / "wallet"
+    wallet_dir.mkdir()
+    (wallet_dir / "tnsnames.ora").write_text("nl2sqldb_high=(DESCRIPTION=...)\n", encoding="utf-8")
+    settings = _settings(
+        nl2sql_runtime_mode="oracle",
+        nl2sql_persistence_mode="oracle",
+        oracle_user="APP",
+        oracle_password="secret",
+        oracle_dsn="nl2sqldb_high",
+        oracle_connection_security="wallet_mtls",
+        oracle_wallet_dir=str(wallet_dir),
+        oracle_driver_mode="thin",
+    )
+
+    assert oracle_readiness_check(settings) == READINESS_WALLET_NOT_FOUND
+    assert readiness_checks(settings) == {"oracle": READINESS_WALLET_NOT_FOUND}
+
+    (wallet_dir / "ewallet.pem").write_text("dummy", encoding="utf-8")
+
+    assert oracle_readiness_check(settings) == READINESS_OK
+
+
+def test_generic_readiness_walletless_tls_allows_password_without_wallet(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(
+        nl2sql_runtime_mode="oracle",
+        nl2sql_persistence_mode="oracle",
+        oracle_user="APP",
+        oracle_password="secret",
+        oracle_dsn="adb.example.oraclecloud.com:1522/nl2sqldb_high",
+        oracle_connection_security="walletless_tls",
+        oracle_wallet_dir=str(tmp_path / "missing-wallet"),
+    )
+
+    assert oracle_readiness_check(settings) == READINESS_OK
+    assert readiness_checks(settings) == {"oracle": READINESS_OK}
+
+
+@pytest.mark.asyncio
+async def test_database_ready_wallet_mtls_missing_files_skips_probe(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    called = False
+    wallet_dir = tmp_path / "wallet"
+    wallet_dir.mkdir()
+    (wallet_dir / "tnsnames.ora").write_text("nl2sqldb_high=(DESCRIPTION=...)\n", encoding="utf-8")
+
+    async def probe(_settings: Any) -> None:
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(
+        health_routes,
+        "get_settings",
+        lambda: _settings(
+            nl2sql_runtime_mode="oracle",
+            nl2sql_persistence_mode="oracle",
+            oracle_user="APP",
+            oracle_password="secret",
+            oracle_dsn="nl2sqldb_high",
+            oracle_connection_security="wallet_mtls",
+            oracle_wallet_dir=str(wallet_dir),
+            oracle_driver_mode="thin",
+        ),
+    )
+    monkeypatch.setattr(health_routes, "test_oracle_connection", probe)
+
+    response = await _get_database_status()
+
+    assert response.status_code == 200
+    assert response.json()["data"] == {
+        "status": "not_configured",
+        "check": READINESS_WALLET_NOT_FOUND,
+        "detail": None,
+    }
+    assert called is False
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("error", "detail"),
@@ -152,6 +242,7 @@ async def test_database_ready_redacts_probe_failures(
             oracle_user="APP",
             oracle_password="secret",
             oracle_dsn="service_high",
+            oracle_connection_security="walletless_tls",
         ),
     )
     monkeypatch.setattr(health_routes, "test_oracle_connection", probe)
@@ -183,6 +274,7 @@ async def test_database_ready_reports_successful_oracle_probe(
             oracle_user="APP",
             oracle_password="secret",
             oracle_dsn="service_high",
+            oracle_connection_security="walletless_tls",
         ),
     )
     monkeypatch.setattr(health_routes, "test_oracle_connection", probe)
@@ -214,6 +306,7 @@ async def test_database_ready_distinguishes_pending_migration_from_connection_se
             oracle_user="APP",
             oracle_password="secret",
             oracle_dsn="service_high",
+            oracle_connection_security="walletless_tls",
         ),
     )
     monkeypatch.setattr(health_routes, "test_oracle_connection", probe)
