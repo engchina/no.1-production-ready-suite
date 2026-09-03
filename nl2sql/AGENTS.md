@@ -1,4 +1,4 @@
-# AGENTS.md — Production Ready RAG
+# AGENTS.md — Production Ready NL2SQL
 
 > このファイルは **Claude Code と Codex の両方が参照する正本(single source of truth)** です。
 > `CLAUDE.md` はこのファイルを `@AGENTS.md` で取り込みます。ルールを変更する際は **必ずこのファイルを編集**してください。

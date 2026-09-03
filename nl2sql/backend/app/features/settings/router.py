@@ -1073,7 +1073,7 @@ async def _run_model_settings_test(
     if request.target_type == "enterprise_text":
         text = await OciEnterpriseAiClient(settings=settings).generate(
             "モデル接続テストです。短く応答してください。",
-            "これは Production Ready RAG のモデル接続テスト用コンテキストです。",
+            "これは Production Ready NL2SQL のモデル接続テスト用コンテキストです。",
         )
         return {"response_chars": len(text), "surface": "llm"}
     if request.target_type == "enterprise_vision":
