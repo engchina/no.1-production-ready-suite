@@ -176,6 +176,7 @@ def _classifier_model_artifact_bytes(
     embedding_model: str = "deterministic-hash-1536",
     feature_dim: int = 1536,
     include_intercept: bool = True,
+    include_embedding_model: bool = True,
 ) -> bytes:
     row_count = 1 if len(categories) == 2 else len(categories)
     coef: list[list[float]] = []
@@ -188,8 +189,9 @@ def _classifier_model_artifact_bytes(
         "classes": list(categories),
         "coef": coef,
         "feature_dim": feature_dim,
-        "embedding_model": embedding_model,
     }
+    if include_embedding_model:
+        payload["embedding_model"] = embedding_model
     if include_intercept:
         payload["intercept"] = [0.0] * row_count
     return json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -334,6 +336,85 @@ def test_classifier_model_import_rejects_invalid_model_shapes() -> None:
         )
 
     assert service.classifier_status().ready is False
+
+
+def test_classifier_model_import_rejects_invalid_metrics_without_replacing_artifact() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+
+    active = service.import_classifier_model_artifact(
+        filename="active.json",
+        content=_classifier_model_artifact_bytes("入金管理", "標準業務プロファイル"),
+    )
+    broken = json.loads(
+        _classifier_model_artifact_bytes("監査", "標準業務プロファイル").decode("utf-8")
+    )
+    broken["metrics"] = {
+        "nested": {"a": 1},
+        "training_examples": "abc",
+    }
+
+    with pytest.raises(ValueError, match="metrics.training_examples"):
+        service.import_classifier_model_artifact(
+            filename="broken-metrics.json",
+            content=json.dumps(broken, ensure_ascii=False).encode("utf-8"),
+        )
+
+    status = service.classifier_status()
+    assert status.ready is True
+    assert status.classifier_version == active.active_version
+
+
+def test_classifier_status_treats_corrupt_metrics_as_missing() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service.import_classifier_model_artifact(
+        filename="active.json",
+        content=_classifier_model_artifact_bytes("入金管理", "標準業務プロファイル"),
+    )
+    with cast(Any, service)._lock:
+        cast(Any, service)._classifier_artifact["metrics"] = {
+            "training_examples": "abc",
+            "source_example_count": None,
+            "nested": {"a": 1},
+        }
+
+    status = service.classifier_status()
+
+    assert status.ready is True
+    assert status.trained_example_count == 0
+    assert "training_examples" not in status.metrics
+    assert "source_example_count" not in status.metrics
+    assert "nested" not in status.metrics
+    assert any("metrics.training_examples" in warning for warning in status.warnings)
+
+
+def test_classifier_model_import_defaults_to_runtime_embedding_model_when_missing() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service.create_profile(
+        Nl2SqlProfile(
+            id="payment",
+            name="入金管理",
+            allowed_tables=["PAYMENTS", "INVOICES"],
+            glossary={"入金": "PAYMENTS.PAID_AT"},
+        )
+    )
+
+    imported = service.import_classifier_model_artifact(
+        filename="classifier.json",
+        content=_classifier_model_artifact_bytes(
+            "標準業務プロファイル",
+            "入金管理",
+            include_embedding_model=False,
+        ),
+    )
+    prediction = service.predict_classifier(
+        ClassifierPredictRequest(question="未入金の請求を確認したい")
+    )
+
+    assert imported.model is not None
+    assert imported.model.embedding_model == "deterministic-hash-1536"
+    assert any("deterministic fallback" in warning for warning in imported.warnings)
+    assert prediction.recommendation_source == "classifier"
+    assert prediction.classifier_version == imported.active_version
 
 
 def test_classifier_prediction_falls_back_when_embedding_model_differs() -> None:

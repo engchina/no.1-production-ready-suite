@@ -30,7 +30,7 @@ from typing import Any, Literal, NoReturn
 
 from charset_normalizer import from_bytes
 from dotenv import dotenv_values
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from pydantic import Field as PydanticField
 
 from app.security.request_actor import actor_scope, current_actor_is_system_admin
@@ -289,6 +289,9 @@ _SELECT_AI_DB_PROFILE_REFRESH_JOB_COLLECTION = "select_ai_db_profile_refresh_job
 _SELECT_AI_DB_PROFILE_REFRESH_META_COLLECTION = "select_ai_db_profile_refresh_meta"
 _CLASSIFIER_MODEL_FORMAT = "logistic_regression_coefficients_v1"
 _CLASSIFIER_VECTOR_DIMENSION = 1536
+_CLASSIFIER_COUNT_METRICS = frozenset(
+    {"training_examples", "source_example_count", "category_count"}
+)
 _CLASSIFIER_TRAINING_MAX_ROWS = 10_000
 _CLASSIFIER_TRAINING_MAX_COLUMNS = 32
 _CLASSIFIER_RECOMMENDATION_CONFIDENCE_THRESHOLD = 0.3
@@ -7041,12 +7044,25 @@ class Nl2SqlService:
         current_fingerprint = self._classifier_training_fingerprint(examples)
         trained_fingerprint = str(artifact.get("training_data_fingerprint") or "")
         stale = bool(ready and trained_fingerprint != current_fingerprint)
-        metrics = (
-            dict(artifact.get("metrics") or {}) if isinstance(artifact.get("metrics"), dict) else {}
+        metrics_warnings: list[str] = []
+        metrics = self._sanitize_classifier_metrics(
+            artifact.get("metrics"),
+            metrics_warnings,
         )
-        trained_example_count = int(metrics.get("training_examples", 0))
-        source_example_count = int(metrics.get("source_example_count", trained_example_count))
+        trained_example_count = self._classifier_metric_count(
+            metrics,
+            "training_examples",
+            default=0,
+            warnings=metrics_warnings,
+        )
+        source_example_count = self._classifier_metric_count(
+            metrics,
+            "source_example_count",
+            default=trained_example_count,
+            warnings=metrics_warnings,
+        )
         pending_change_count = max(1, abs(len(examples) - source_example_count)) if stale else 0
+        warnings.extend(metrics_warnings)
         if not examples:
             warnings.append("分類器の training data が未登録です。")
         if not ready:
@@ -7059,6 +7075,18 @@ class Nl2SqlService:
             warnings.append(
                 "分類器は deterministic fallback embedding で学習されています。"
                 "OCI GenAI embedding とは併用できません。"
+            )
+        raw_vector_dimension = (
+            artifact_payload.get("feature_dim", _CLASSIFIER_VECTOR_DIMENSION)
+            if artifact_payload
+            else artifact.get("vector_dimension") or _CLASSIFIER_VECTOR_DIMENSION
+        )
+        try:
+            vector_dimension = int(raw_vector_dimension)
+        except (TypeError, ValueError):
+            vector_dimension = _CLASSIFIER_VECTOR_DIMENSION
+            warnings.append(
+                "classifier artifact の vector_dimension が不正なため既定値にしました。"
             )
         return ClassifierStatusData(
             ready=ready,
@@ -7074,11 +7102,7 @@ class Nl2SqlService:
                 or get_settings().oci_genai_embed_model_id
                 or "deterministic-hash-1536"
             ),
-            vector_dimension=int(
-                artifact_payload.get("feature_dim", _CLASSIFIER_VECTOR_DIMENSION)
-                if artifact_payload
-                else artifact.get("vector_dimension") or _CLASSIFIER_VECTOR_DIMENSION
-            ),
+            vector_dimension=vector_dimension,
             persistence_mode=self._store.mode,
             recommendation_source="classifier" if ready else "deterministic",
             metrics=metrics,
@@ -7447,6 +7471,70 @@ class Nl2SqlService:
             json.dumps(rows, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         ).hexdigest()
 
+    def _sanitize_classifier_metrics(
+        self,
+        value: Any,
+        warnings: list[str] | None = None,
+    ) -> dict[str, float | int | str]:
+        if not isinstance(value, Mapping):
+            return {}
+        metrics: dict[str, float | int | str] = {}
+        for raw_key, raw_value in value.items():
+            key = str(raw_key).strip()
+            if not key:
+                continue
+            if isinstance(raw_value, int):
+                metrics[key] = raw_value
+            elif isinstance(raw_value, float):
+                if math.isfinite(raw_value):
+                    metrics[key] = raw_value
+                elif warnings is not None:
+                    warnings.append(f"metrics.{key} は finite でないため除外しました。")
+            elif isinstance(raw_value, str):
+                metrics[key] = raw_value
+            elif warnings is not None:
+                warnings.append(f"metrics.{key} は scalar 値ではないため除外しました。")
+        return metrics
+
+    def _classifier_metric_count(
+        self,
+        metrics: dict[str, float | int | str],
+        key: str,
+        *,
+        default: int,
+        warnings: list[str],
+        reject_invalid: bool = False,
+    ) -> int:
+        if key not in metrics:
+            return default
+        raw_value = metrics[key]
+        try:
+            if isinstance(raw_value, bool):
+                raise ValueError
+            if isinstance(raw_value, int):
+                value = raw_value
+            elif isinstance(raw_value, float):
+                if not math.isfinite(raw_value) or not raw_value.is_integer():
+                    raise ValueError
+                value = int(raw_value)
+            elif isinstance(raw_value, str):
+                text = raw_value.strip()
+                if not re.fullmatch(r"[+-]?\d+", text):
+                    raise ValueError
+                value = int(text)
+            else:
+                raise ValueError
+            if value < 0:
+                raise ValueError
+        except ValueError as exc:
+            if reject_invalid:
+                raise ValueError(f"metrics.{key} は 0 以上の整数で指定してください。") from exc
+            warnings.append(f"metrics.{key} が不正なため欠落扱いにしました。")
+            metrics.pop(key, None)
+            return default
+        metrics[key] = value
+        return value
+
     def _classifier_float_matrix(self, value: Any, field_name: str) -> list[list[float]]:
         if hasattr(value, "tolist"):
             value = value.tolist()
@@ -7513,9 +7601,12 @@ class Nl2SqlService:
         intercept_value = payload.get("intercept", payload.get("intercept_"))
         coef = self._classifier_float_matrix(coef_value, "coef")
         intercept = self._classifier_float_vector(intercept_value, "intercept")
-        feature_dim = int(
-            payload.get("feature_dim") or payload.get("vector_dimension") or len(coef[0])
-        )
+        try:
+            feature_dim = int(
+                payload.get("feature_dim") or payload.get("vector_dimension") or len(coef[0])
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError("feature_dim は整数で指定してください。") from exc
         if feature_dim != _CLASSIFIER_VECTOR_DIMENSION:
             raise ValueError(
                 f"feature_dim は {_CLASSIFIER_VECTOR_DIMENSION} である必要があります。"
@@ -7624,6 +7715,16 @@ class Nl2SqlService:
             "classes に対応する active Profile を一意に解決できない値があります: "
             + ", ".join(unresolved[:8])
         ]
+
+    def _classifier_runtime_embedding_model(self) -> tuple[str, list[str]]:
+        try:
+            _vectors, warnings, embedding_model = self._classifier_vectors([""])
+        except Exception as exc:  # pragma: no cover - defensive embedding boundary
+            return (
+                "deterministic-hash-1536",
+                [f"現在の classifier embedding model 判定に失敗しました: {exc}"],
+            )
+        return embedding_model or "deterministic-hash-1536", list(warnings)
 
     def _classifier_probabilities(
         self, payload: Mapping[str, Any], vector: Sequence[float]
@@ -7742,16 +7843,35 @@ class Nl2SqlService:
             raise ValueError("JSON classifier artifact は object で指定してください。")
 
         meta = dict(payload)
+        warnings: list[str] = []
         model_payload = self._classifier_model_payload_from_import(meta)
         version = str(meta.get("version") or uuid.uuid4())
-        embedding_model = str(
-            meta.get("embedding_model")
-            or meta.get("embed_model")
-            or get_settings().oci_genai_embed_model_id
-            or "deterministic-hash-1536"
-        )
-        metrics = dict(meta.get("metrics") or {}) if isinstance(meta.get("metrics"), dict) else {}
+        runtime_embedding_model, embedding_warnings = self._classifier_runtime_embedding_model()
+        raw_embedding_model = meta.get("embedding_model") or meta.get("embed_model")
+        embedding_model = str(raw_embedding_model or runtime_embedding_model).strip()
+        if not embedding_model:
+            embedding_model = "deterministic-hash-1536"
+        if raw_embedding_model:
+            if embedding_model != runtime_embedding_model:
+                warnings.extend(embedding_warnings)
+                warnings.append(
+                    "classifier artifact の embedding_model "
+                    f"({embedding_model}) と現在の embedding model "
+                    f"({runtime_embedding_model}) が一致しません。予測時は deterministic "
+                    "recommendation へ縮退します。"
+                )
+        else:
+            warnings.extend(embedding_warnings)
+        metrics = self._sanitize_classifier_metrics(meta.get("metrics"), warnings)
         metrics.setdefault("category_count", len(model_payload["classes"]))
+        for metric_name in sorted(_CLASSIFIER_COUNT_METRICS):
+            self._classifier_metric_count(
+                metrics,
+                metric_name,
+                default=0,
+                warnings=warnings,
+                reject_invalid=True,
+            )
         with self._lock:
             examples = list(self._classifier_examples)
         artifact = {
@@ -7769,12 +7889,16 @@ class Nl2SqlService:
             "metrics": metrics,
             "source": f"json:{filename}",
         }
-        warnings = self._classifier_import_warnings(model_payload["classes"])
+        warnings.extend(self._classifier_import_warnings(model_payload["classes"]))
+        try:
+            model_info = self._classifier_model_info(version, artifact, active_version=version)
+        except (TypeError, ValueError, ValidationError) as exc:
+            raise ValueError("classifier artifact metadata が不正です。") from exc
         self._replace_classifier_artifact(artifact)
         return ClassifierModelImportData(
             imported=True,
             active_version=version,
-            model=self._classifier_model_info(version, artifact, active_version=version),
+            model=model_info,
             warnings=warnings,
         )
 
@@ -7817,6 +7941,10 @@ class Nl2SqlService:
         self, version: str, artifact: dict[str, Any], *, active_version: str
     ) -> ClassifierModelInfo:
         categories = [str(item) for item in artifact.get("categories", [])]
+        try:
+            vector_dimension = int(artifact.get("vector_dimension") or 1536)
+        except (TypeError, ValueError):
+            vector_dimension = 1536
         return ClassifierModelInfo(
             version=version,
             active=version == active_version,
@@ -7824,8 +7952,8 @@ class Nl2SqlService:
             category_count=len(categories),
             categories=categories,
             embedding_model=str(artifact.get("embedding_model") or ""),
-            vector_dimension=int(artifact.get("vector_dimension") or 1536),
-            metrics=dict(artifact.get("metrics") or {}),
+            vector_dimension=vector_dimension,
+            metrics=self._sanitize_classifier_metrics(artifact.get("metrics")),
             source=str(artifact.get("source") or "oracle_state"),
         )
 
