@@ -565,6 +565,49 @@ test("初期化中は重複操作を無効化し、成功後に Toast と ready 
   expect(requestBody).toEqual({ recreate: false });
 });
 
+test("システムテーブル管理権限だけの利用者は初期化を実行できる", async ({ page }) => {
+  await page.route("**/api/auth/me", (route) =>
+    fulfill(route, {
+      ...systemAdminMe,
+      user_uuid: "system-tables-operator",
+      login_user_id: "system.tables.operator",
+      display_name: "システムテーブル管理者",
+      role_codes: ["SYSTEM_TABLES_OPERATOR"],
+      is_system_admin: false,
+      permissions: ["menu.settings_system_tables"],
+    })
+  );
+  await page.route("**/api/settings/database/system-tables", (route) =>
+    fulfill(route, systemTables("partial"))
+  );
+  let requestBody: unknown = null;
+  await page.route("**/api/settings/database/system-tables/initialize", (route) => {
+    requestBody = route.request().postDataJSON();
+    return fulfill(route, {
+      ...systemTables("ready"),
+      operation: "migrated",
+      applied_versions: [...APPLIED_VERSIONS],
+      dropped_object_count: 0,
+      created_object_count: PARTIAL_MISSING_NAMES.size,
+    });
+  });
+
+  await page.goto("/settings/system-tables");
+
+  const card = page.locator("#system-tables");
+  await expect(page).toHaveURL(/\/settings\/system-tables$/);
+  await expect(card.getByText(/システムテーブル管理権限が必要/)).toHaveCount(0);
+  const initialize = card.getByRole("button", { name: "作成・更新" });
+  await expect(initialize).toBeEnabled();
+  await expect(card.getByRole("button", { name: "すべて再作成" })).toBeVisible();
+
+  await initialize.click();
+
+  await expect(page.getByText("システムテーブルを更新しました。")).toBeVisible();
+  expect(requestBody).toEqual({ recreate: false });
+  await expectNoPageOverflow(page);
+});
+
 test("no-op Toast は文末で折り返し、通知領域・焦点・閉じる操作を統一する", async ({ page }) => {
   await page.route("**/api/settings/database/system-tables", (route) =>
     fulfill(route, systemTables("ready"))
@@ -663,13 +706,13 @@ test("全再作成は実行確認語の完全一致まで実行できない", as
   await expect(trigger).toBeDisabled();
 });
 
-test("SQL 実行権限がない利用者は状態のみ閲覧できる", async ({ page }) => {
+test("システムテーブル管理権限がない利用者は管理画面を開けない", async ({ page }) => {
   await page.route("**/api/auth/me", (route) =>
     fulfill(route, {
       ...systemAdminMe,
       role_codes: ["DB_VIEWER"],
       is_system_admin: false,
-      permissions: ["settings.database.view"],
+      permissions: ["menu.settings_database"],
     })
   );
   await page.route("**/api/settings/database/system-tables", (route) =>
@@ -677,11 +720,9 @@ test("SQL 実行権限がない利用者は状態のみ閲覧できる", async (
   );
 
   await page.goto("/settings/system-tables");
-  const card = page.locator("#system-tables");
-  await expect(card.getByText(/管理 SQL 実行権限が必要/)).toBeVisible();
-  await expect(card.getByRole("button", { name: "作成・更新" })).toHaveCount(0);
-  await expect(card.getByRole("button", { name: "すべて再作成" })).toHaveCount(0);
-  await expect(card.getByRole("button", { name: "状態を再取得" })).toBeVisible();
+  await expect(page).toHaveURL(/\/forbidden$/);
+  await expect(page.getByRole("heading", { name: "この機能を利用する権限がありません" })).toBeVisible();
+  await expect(page.locator("#system-tables")).toHaveCount(0);
 });
 
 test("接続・操作失敗を操作領域で通知し、復旧方法を提示する", async ({ page }) => {
