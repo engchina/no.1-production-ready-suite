@@ -214,6 +214,13 @@ test("DeepSec Data Grant editor は対象 object、許可列、行 scope の順�
   assert.ok(columnsIndex < scopeModeIndex);
 });
 
+test("DeepSec Data Grant 行削除は icon-only ではなく短い削除ラベルを表示する", () => {
+  assert.match(entitlementsPanel, /aria-label=\{t\("security\.deepsec\.entitlements\.remove"\)\}/u);
+  assert.match(entitlementsPanel, /<Trash2 size=\{14\} aria-hidden \/>[\s\S]*security\.deepsec\.entitlements\.removeButtonLabel/u);
+  assert.equal(t("security.deepsec.entitlements.remove"), "データ権限を削除");
+  assert.equal(t("security.deepsec.entitlements.removeButtonLabel"), "削除");
+});
+
 test("DeepSec 条件 filter row は mobile/tablet で重ならない responsive grid を使う", () => {
   assert.match(pageSource, /const INPUT_CLASS =\s*"h-11 min-w-0 w-full/u);
   assert.match(pageSource, /const COMPACT_INPUT_CLASS =\s*"h-9 min-w-0 w-full/u);

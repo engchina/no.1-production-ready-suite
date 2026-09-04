@@ -392,6 +392,7 @@ const nl2sqlJa = {
   "security.deepsec.entitlements.capability": "データ操作能力",
   "security.deepsec.entitlements.add": "データ権限を追加",
   "security.deepsec.entitlements.remove": "データ権限を削除",
+  "security.deepsec.entitlements.removeButtonLabel": "削除",
   "security.deepsec.entitlements.validation": "対象 table/view、許可列、scope 設定を確認してください。",
   "security.deepsec.entitlements.scopeFilterValidation": "条件で制限する場合は列、operator、値の種類、必要な値を指定してください。",
   "security.deepsec.entitlements.scopeFilterPositiveIntegerValidation": "NUMBER 列の等しい条件は正整数で指定してください。小数、負数、0 は使用できません。",
