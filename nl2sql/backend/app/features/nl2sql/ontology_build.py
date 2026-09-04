@@ -73,6 +73,7 @@ from app.features.nl2sql.ontology_store import (
     canonical_json,
     stable_ontology_id,
 )
+from app.features.nl2sql.sql_semantics import parse_oracle_sql
 from app.settings import get_settings
 
 logger = logging.getLogger(__name__)
@@ -80,6 +81,7 @@ logger = logging.getLogger(__name__)
 _DANGEROUS_EXPRESSION_TOKENS = (";", "--", "/*")
 _ONTOLOGY_BUILD_LLM_CONTEXT_MAX_CHARS = 100_000
 _LLM_CONTEXT_HEADROOM_CHARS = 512
+_ORACLE_PSEUDO_COLUMNS = {"LEVEL", "ORA_ROWSCN", "ROWID", "ROWNUM"}
 
 
 # --- DB schema scope / profile view スコープの解決 -------------------------------------------
@@ -345,6 +347,8 @@ class _ScopeResolver:
         self.objects: dict[str, OntologyNode] = {}
         self.objects_by_name: dict[str, list[OntologyNode]] = {}
         self.columns: dict[str, OntologyNode] = {}
+        self.columns_by_name: dict[str, list[OntologyNode]] = {}
+        self.sql_aliases: dict[str, set[str]] = {}
         for node in ontology.nodes:
             if node.id not in scoped:
                 continue
@@ -358,28 +362,82 @@ class _ScopeResolver:
                 name = str(node.metadata.get("object_name", "")).upper()
                 column = str(node.metadata.get("column_name", "")).upper()
                 self.columns[f"{owner}.{name}.{column}"] = node
+                self.columns_by_name.setdefault(column, []).append(node)
 
-    def resolve_object(self, reference: str) -> OntologyNode | None:
+    def _resolve_object_key(self, reference: str) -> str | None:
         key = reference.replace('"', "").strip().upper()
         if not key:
             return None
         if key in self.objects:
-            return self.objects[key]
-        candidates = self.objects_by_name.get(key, [])
-        return candidates[0] if len(candidates) == 1 else None
+            return key
+        alias_targets = self.sql_aliases.get(key, set())
+        if len(alias_targets) == 1:
+            return next(iter(alias_targets))
+        parts = [part for part in key.split(".") if part]
+        lookup_name = parts[-1] if parts else key
+        candidates = self.objects_by_name.get(lookup_name, [])
+        if len(candidates) == 1:
+            node = candidates[0]
+            owner = str(node.metadata.get("owner", "")).upper()
+            name = str(node.metadata.get("object_name", "")).upper()
+            return f"{owner}.{name}"
+        return None
+
+    def resolve_object(self, reference: str) -> OntologyNode | None:
+        key = self._resolve_object_key(reference)
+        return self.objects.get(key) if key is not None else None
+
+    def register_sql_aliases(self, sql_texts: Sequence[str]) -> None:
+        """Q/A SQL 内の table alias を profile scope の物理 object に結び直す。"""
+
+        for sql in sql_texts:
+            graph = parse_oracle_sql(sql).graph
+            if graph is None:
+                continue
+            for table in graph.tables:
+                if table.is_cte:
+                    continue
+                owner = str(table.owner).strip().upper()
+                name = str(table.name).strip().upper()
+                object_key = self._resolve_object_key(f"{owner}.{name}" if owner else name)
+                if object_key is None:
+                    continue
+                for token in {name, str(table.alias).strip().upper()}:
+                    if token:
+                        self.sql_aliases.setdefault(token, set()).add(object_key)
 
     def resolve_column(self, reference: str) -> OntologyNode | None:
         key = reference.replace('"', "").strip().upper()
         parts = [part for part in key.split(".") if part]
-        if len(parts) == 3:
-            return self.columns.get(".".join(parts))
+        if len(parts) >= 3:
+            exact = self.columns.get(".".join(parts[-3:]))
+            if exact is not None:
+                return exact
+            object_column = ".".join(parts[-2:])
+            matches = [
+                node
+                for node_key, node in self.columns.items()
+                if node_key.endswith(f".{object_column}")
+            ]
+            return matches[0] if len(matches) == 1 else None
         if len(parts) == 2:
+            alias_targets = self.sql_aliases.get(parts[0], set())
+            alias_matches = [
+                node
+                for object_key in sorted(alias_targets)
+                if (node := self.columns.get(f"{object_key}.{parts[1]}")) is not None
+            ]
+            if len(alias_matches) == 1:
+                return alias_matches[0]
             # OBJECT.COLUMN 形式は owner が一意に決まる場合だけ解決する
             matches = [
                 node
                 for node_key, node in self.columns.items()
                 if node_key.endswith("." + ".".join(parts))
             ]
+            return matches[0] if len(matches) == 1 else None
+        if len(parts) == 1:
+            matches = self.columns_by_name.get(parts[0], [])
             return matches[0] if len(matches) == 1 else None
         return None
 
@@ -780,6 +838,8 @@ def convert_extraction_to_proposals(
     """検証済み LLM 出力を承認フロー用の proposal 下書きへ決定論変換する。"""
 
     resolver = _ScopeResolver(ontology, view)
+    if qa_sql_texts is not None:
+        resolver.register_sql_aliases(qa_sql_texts)
     revision_id = ontology.revision.id
     result = _ConversionResult(warnings=list(extraction.warnings_ja))
     normalized_qa = [sql.upper() for sql in qa_sql_texts] if qa_sql_texts is not None else None
@@ -1414,6 +1474,8 @@ _EXTRACTION_SYSTEM_PROMPT = (
     '"synonyms": [{"target": "OWNER.OBJECT", "aliases": ["..."], "evidence_ja": "..."}], '
     '"warnings_ja": ["..."]} '
     "。schema_context に存在しない owner/object/column を参照しないでください。"
+    "qa_pairs に schema_resolved_columns / schema_resolved_join_conditions がある場合は、"
+    "SQL の alias 表記ではなく、その正規化済み参照を使ってください。"
     "抽出ルール: (1) 業務文中の名詞をエンティティ候補、動詞・述語を関係候補として抽出する。"
     "(2) 各関係の cardinality は one_to_one / one_to_many / many_to_one / many_to_many から"
     "必ず選ぶ。判断できない場合のみ unknown とし、理由を warnings_ja に 1 行残す。"
@@ -1666,6 +1728,277 @@ def _schema_context_payload(schema_context: str) -> dict[str, Any]:
     return loaded
 
 
+def _dedupe(values: Sequence[str]) -> list[str]:
+    return list(dict.fromkeys(value for value in values if value))
+
+
+@dataclass(frozen=True)
+class _SchemaContextLookup:
+    objects: dict[str, str]
+    objects_by_name: dict[str, tuple[str, ...]]
+    columns: dict[str, str]
+    columns_by_name: dict[str, tuple[str, ...]]
+
+    @classmethod
+    def from_payload(cls, schema_context: Mapping[str, Any]) -> _SchemaContextLookup:
+        objects: dict[str, str] = {}
+        objects_by_name: dict[str, list[str]] = {}
+        columns: dict[str, str] = {}
+        columns_by_name: dict[str, list[str]] = {}
+        for item in schema_context.get("objects") or []:
+            if not isinstance(item, Mapping):
+                continue
+            object_key = _schema_context_object_key(item)
+            if not object_key:
+                continue
+            objects[object_key] = object_key
+            object_name = object_key.split(".")[-1]
+            objects_by_name.setdefault(object_name, []).append(object_key)
+            for raw_column in item.get("columns") or []:
+                column_name = ""
+                qualified_column = ""
+                if isinstance(raw_column, Mapping):
+                    column_name = _normalize_oracle_identifier(str(raw_column.get("column") or ""))
+                    qualified_column = _normalize_oracle_identifier(
+                        str(raw_column.get("qualified_column") or "")
+                    )
+                else:
+                    column_name = _normalize_oracle_identifier(str(raw_column))
+                if not column_name:
+                    continue
+                qualified_column = qualified_column or f"{object_key}.{column_name}"
+                columns[qualified_column] = qualified_column
+                columns_by_name.setdefault(column_name, []).append(qualified_column)
+        return cls(
+            objects=objects,
+            objects_by_name={
+                key: tuple(sorted(set(value))) for key, value in objects_by_name.items()
+            },
+            columns=columns,
+            columns_by_name={
+                key: tuple(sorted(set(value))) for key, value in columns_by_name.items()
+            },
+        )
+
+    def resolve_object(self, owner: str, object_name: str) -> str | None:
+        normalized_owner = _normalize_oracle_identifier(owner)
+        normalized_object = _normalize_oracle_identifier(object_name)
+        if not normalized_object:
+            return None
+        if normalized_owner:
+            key = f"{normalized_owner}.{normalized_object}"
+            if key in self.objects:
+                return key
+        candidates = self.objects_by_name.get(normalized_object, ())
+        return candidates[0] if len(candidates) == 1 else None
+
+    def resolve_column(
+        self,
+        column_name: str,
+        *,
+        object_keys: Sequence[str] = (),
+    ) -> str | None:
+        normalized_column = _normalize_oracle_identifier(column_name)
+        if not normalized_column:
+            return None
+        if object_keys:
+            matches = [
+                column
+                for object_key in object_keys
+                if (column := self.columns.get(f"{object_key}.{normalized_column}")) is not None
+            ]
+            matches = sorted(set(matches))
+            if len(matches) == 1:
+                return matches[0]
+        candidates = self.columns_by_name.get(normalized_column, ())
+        return candidates[0] if len(candidates) == 1 else None
+
+    def resolve_qualified_column(
+        self,
+        reference: str,
+        *,
+        aliases: Mapping[str, set[str]],
+        statement_objects: Sequence[str],
+    ) -> str | None:
+        parts = [
+            _normalize_oracle_identifier(part)
+            for part in reference.replace('"', "").split(".")
+            if part.strip()
+        ]
+        if not parts:
+            return None
+        column_name = parts[-1]
+        if len(parts) >= 3:
+            object_key = self.resolve_object(parts[-3], parts[-2])
+            return self.resolve_column(column_name, object_keys=[object_key] if object_key else [])
+        if len(parts) == 2:
+            qualifier = parts[0]
+            alias_targets = aliases.get(qualifier, set())
+            if alias_targets:
+                return self.resolve_column(column_name, object_keys=sorted(alias_targets))
+            object_key = self.resolve_object("", qualifier)
+            return self.resolve_column(column_name, object_keys=[object_key] if object_key else [])
+        return self.resolve_column(column_name, object_keys=statement_objects)
+
+
+def _schema_context_object_key(item: Mapping[str, Any]) -> str:
+    owner = _normalize_oracle_identifier(str(item.get("owner") or ""))
+    object_name = _normalize_oracle_identifier(str(item.get("object_name") or ""))
+    if owner and object_name:
+        return f"{owner}.{object_name}"
+    raw_object = _normalize_oracle_identifier(str(item.get("object") or ""))
+    parts = [part for part in raw_object.split(".") if part]
+    if len(parts) >= 2:
+        return f"{parts[-2]}.{parts[-1]}"
+    return parts[0] if parts else object_name
+
+
+def _explicit_projection_aliases(graph: Any) -> set[str]:
+    aliases: set[str] = set()
+    for projection in graph.projections:
+        output_name = _normalize_oracle_identifier(str(projection.output_name))
+        if not output_name:
+            continue
+        expression = _normalize_oracle_identifier(str(projection.expression_sql))
+        if f" AS {output_name}" in f" {expression} ":
+            aliases.add(output_name)
+    return aliases
+
+
+def _derived_sql_qualifiers(graph: Any) -> set[str]:
+    qualifiers = {
+        _normalize_oracle_identifier(str(cte.name)) for cte in graph.ctes if str(cte.name).strip()
+    }
+    qualifiers.update(
+        _normalize_oracle_identifier(str(subquery.alias))
+        for subquery in graph.subqueries
+        if str(subquery.alias).strip()
+    )
+    return qualifiers
+
+
+def _ignore_sql_column_reference(
+    column: Any,
+    *,
+    projection_aliases: set[str],
+    derived_qualifiers: set[str],
+) -> bool:
+    name = _normalize_oracle_identifier(str(column.name))
+    qualifier = _normalize_oracle_identifier(str(column.table))
+    if name in _ORACLE_PSEUDO_COLUMNS:
+        return True
+    if not qualifier and name in projection_aliases:
+        return True
+    return bool(qualifier and qualifier in derived_qualifiers)
+
+
+def _qa_pair_context_payload(schema_context: Mapping[str, Any], pair: QaPair) -> dict[str, Any]:
+    payload = pair.model_dump(mode="json")
+    lookup = _SchemaContextLookup.from_payload(schema_context)
+    analysis = parse_oracle_sql(pair.sql)
+    graph = analysis.graph
+    if graph is None:
+        first_finding = analysis.validation.findings[0] if analysis.validation.findings else None
+        if first_finding is not None:
+            payload["sql_parse_warning_ja"] = first_finding.message_ja
+        return payload
+
+    aliases: dict[str, set[str]] = {}
+    alias_rows: list[dict[str, str]] = []
+    resolved_objects: list[dict[str, str]] = []
+    unresolved: list[str] = []
+    for table in graph.tables:
+        if table.is_cte:
+            continue
+        object_key = lookup.resolve_object(str(table.owner), str(table.name))
+        sql_table = str(table.source_sql or table.qualified_name or table.name)
+        if object_key is None:
+            unresolved.append(sql_table)
+            continue
+        resolved_objects.append(
+            {
+                "sql_table": sql_table,
+                "object": object_key,
+                "alias": str(table.alias or ""),
+            }
+        )
+        statement_tokens = {
+            str(table.name),
+            str(table.qualified_name),
+            f"{table.owner}.{table.name}" if str(table.owner).strip() else "",
+        }
+        for token in statement_tokens:
+            normalized = _normalize_oracle_identifier(token)
+            if normalized:
+                aliases.setdefault(normalized, set()).add(object_key)
+        alias = _normalize_oracle_identifier(str(table.alias or ""))
+        if alias:
+            aliases.setdefault(alias, set()).add(object_key)
+            alias_rows.append({"alias": alias, "object": object_key})
+
+    statement_objects = _dedupe([item["object"] for item in resolved_objects])
+    projection_aliases = _explicit_projection_aliases(graph)
+    derived_qualifiers = _derived_sql_qualifiers(graph)
+    resolved_columns: list[dict[str, str]] = []
+    ignored_aliases: list[str] = []
+    for column in graph.columns:
+        if _ignore_sql_column_reference(
+            column,
+            projection_aliases=projection_aliases,
+            derived_qualifiers=derived_qualifiers,
+        ):
+            ignored_aliases.append(str(column.expression_sql))
+            continue
+        resolved = lookup.resolve_qualified_column(
+            str(column.expression_sql),
+            aliases=aliases,
+            statement_objects=statement_objects,
+        )
+        if resolved is None:
+            unresolved.append(str(column.expression_sql))
+            continue
+        resolved_columns.append(
+            {
+                "sql": str(column.expression_sql),
+                "column": resolved,
+                "clause": str(column.clause),
+            }
+        )
+
+    resolved_join_conditions: list[dict[str, Any]] = []
+    for join in graph.joins:
+        columns = [
+            resolved
+            for reference in join.referenced_columns
+            if (
+                resolved := lookup.resolve_qualified_column(
+                    reference,
+                    aliases=aliases,
+                    statement_objects=statement_objects,
+                )
+            )
+            is not None
+        ]
+        if columns:
+            resolved_join_conditions.append(
+                {
+                    "condition_sql": join.condition_sql,
+                    "resolved_columns": sorted(set(columns)),
+                }
+            )
+
+    payload["schema_resolved_objects"] = resolved_objects
+    payload["schema_sql_aliases"] = alias_rows
+    payload["schema_projection_aliases"] = sorted(projection_aliases)
+    payload["schema_ignored_sql_aliases"] = _dedupe(ignored_aliases)
+    payload["schema_resolved_columns"] = [
+        item for index, item in enumerate(resolved_columns) if item not in resolved_columns[:index]
+    ]
+    payload["schema_resolved_join_conditions"] = resolved_join_conditions
+    payload["schema_unresolved_references"] = sorted(set(unresolved))
+    return payload
+
+
 def _dump_text_context(
     schema_context: dict[str, Any],
     units: list[_BuildTextUnit],
@@ -1684,7 +2017,7 @@ def _dump_qa_context(schema_context: dict[str, Any], pairs: list[QaPair]) -> str
     return json.dumps(
         {
             "schema_context": schema_context,
-            "qa_pairs": [pair.model_dump(mode="json") for pair in pairs],
+            "qa_pairs": [_qa_pair_context_payload(schema_context, pair) for pair in pairs],
         },
         ensure_ascii=False,
         sort_keys=True,
@@ -3140,6 +3473,12 @@ class OntologyBuildService:
                 prompt = (
                     "入力 JSON の qa_pairs にある質問と正解 SQL から、実際に使われた "
                     "JOIN パスを relationships に、業務指標を metrics に抽出してください。"
+                    "qa_pairs[].schema_resolved_columns と "
+                    "qa_pairs[].schema_resolved_join_conditions にある "
+                    "OWNER.OBJECT.COLUMN 形式の参照を正としてください。"
+                    "SQL 内の table alias、CTE/inline view alias、出力 alias は "
+                    "schema_context の object/column 名ではないため、"
+                    "schema_unresolved_references に含まれない限り不存在警告にしないでください。"
                     "SQL に現れない関係を推測しないでください。"
                     "cardinality フィールドは schema_context の constraints"
                     "(主キー P / 一意 U)から判断してください"

@@ -480,6 +480,124 @@ def test_build_schema_context_fails_ambiguous_unqualified_profile_object() -> No
     assert any("複数 object" in error for error in prepared.errors)
 
 
+def test_qa_context_adds_schema_resolved_sql_references(
+    harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+) -> None:
+    _runtime, _store, legacy = harness
+    schema_payload = json.loads(
+        build_schema_context_from_catalog(legacy.profile, legacy.catalog).schema_context
+    )
+    sql = (
+        "SELECT C.NAME, SUM(O.AMOUNT) AS TOTAL FROM APP.ORDERS O "
+        "JOIN APP.CUSTOMERS C ON O.CUSTOMER_ID = C.ID "
+        "GROUP BY C.NAME ORDER BY TOTAL DESC"
+    )
+
+    context = json.loads(
+        ontology_build_module._dump_qa_context(
+            schema_payload,
+            [QaPair(question="顧客別売上", sql=sql)],
+        )
+    )
+    sent_pair = context["qa_pairs"][0]
+
+    assert sent_pair["schema_unresolved_references"] == []
+    assert sent_pair["schema_projection_aliases"] == ["TOTAL"]
+    assert sent_pair["schema_ignored_sql_aliases"] == ["TOTAL"]
+    assert sent_pair["schema_sql_aliases"] == [
+        {"alias": "O", "object": "APP.ORDERS"},
+        {"alias": "C", "object": "APP.CUSTOMERS"},
+    ]
+    assert {"sql": "O.AMOUNT", "column": "APP.ORDERS.AMOUNT", "clause": "select"} in sent_pair[
+        "schema_resolved_columns"
+    ]
+    assert {
+        "condition_sql": "O.CUSTOMER_ID = C.ID",
+        "resolved_columns": ["APP.CUSTOMERS.ID", "APP.ORDERS.CUSTOMER_ID"],
+    } in sent_pair["schema_resolved_join_conditions"]
+
+
+def test_qa_context_resolves_current_schema_table_and_ignores_output_alias(
+    harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+) -> None:
+    _runtime, _store, legacy = harness
+    schema_payload = json.loads(
+        build_schema_context_from_catalog(legacy.profile, legacy.catalog).schema_context
+    )
+
+    context = json.loads(
+        ontology_build_module._dump_qa_context(
+            schema_payload,
+            [
+                QaPair(
+                    question="売上合計",
+                    sql="SELECT SUM(AMOUNT) AS TOTAL FROM ORDERS ORDER BY TOTAL DESC",
+                )
+            ],
+        )
+    )
+    sent_pair = context["qa_pairs"][0]
+
+    assert sent_pair["schema_resolved_objects"] == [
+        {"sql_table": "ORDERS", "object": "APP.ORDERS", "alias": ""}
+    ]
+    assert {"sql": "AMOUNT", "column": "APP.ORDERS.AMOUNT", "clause": "select"} in sent_pair[
+        "schema_resolved_columns"
+    ]
+    assert sent_pair["schema_ignored_sql_aliases"] == ["TOTAL"]
+    assert sent_pair["schema_unresolved_references"] == []
+
+
+def test_convert_extraction_resolves_alias_columns_from_qa_sql(
+    harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+) -> None:
+    from app.features.nl2sql.ontology_build import convert_extraction_to_proposals
+    from app.features.nl2sql.ontology_models import OntologyBuildExtraction
+
+    runtime, _store, _legacy = harness
+    view, ontology = runtime.profile_view("sales")
+    extraction = OntologyBuildExtraction.model_validate(
+        {
+            "relationships": [
+                {
+                    "source_object": "O",
+                    "target_object": "C",
+                    "relationship_name_ja": "顧客を参照",
+                    "cardinality": "many_to_one",
+                    "join_conditions": [{"left": "O.CUSTOMER_ID", "right": "C.ID"}],
+                    "evidence_ja": "Q/A SQL の JOIN 句",
+                    "confidence": 0.8,
+                }
+            ],
+            "metrics": [
+                {
+                    "metric_name_ja": "受注金額合計",
+                    "expression_sql": "SUM(O.AMOUNT)",
+                    "aggregation": "sum",
+                    "base_columns": ["O.AMOUNT"],
+                    "description_ja": "受注金額の合計",
+                    "evidence_ja": "Q/A SQL の SELECT 句",
+                    "confidence": 0.8,
+                }
+            ],
+        }
+    )
+
+    drafts, warnings = convert_extraction_to_proposals(
+        extraction,
+        ontology=ontology,
+        view=view,
+        job_id="job-1",
+        inferred_by="test",
+        qa_sql_texts=[_QA_SQL],
+    )
+
+    assert not any("profile 範囲内に解決できません" in warning for warning in warnings)
+    assert {OntologyProposalKind.RELATIONSHIP, OntologyProposalKind.METRIC_DEFINITION} <= {
+        draft.kind for draft in drafts
+    }
+
+
 # --- job → Markdown 下書き ---------------------------------------------------------------------
 
 
@@ -602,7 +720,7 @@ def test_build_job_batches_all_source_chunks_without_omission(
     runtime, _store, legacy = harness
     client = _FakeEnterpriseAiClient(_FENCED_PAYLOAD)
     legacy._enterprise_ai_client = client
-    monkeypatch.setattr(ontology_build_module, "_ONTOLOGY_BUILD_LLM_CONTEXT_MAX_CHARS", 6_500)
+    monkeypatch.setattr(ontology_build_module, "_ONTOLOGY_BUILD_LLM_CONTEXT_MAX_CHARS", 7_000)
     # このテストは「全 chunk が漏れなく 1 回処理される」ことの契約。gleaning の追加パスは
     # 同じ context を再送するため chunk 数の勘定から除外する
     monkeypatch.setattr(get_settings(), "nl2sql_ontology_extraction_gleaning_passes", 0)
@@ -658,7 +776,7 @@ def test_build_job_batches_more_than_two_hundred_qa_pairs(
     runtime, _store, legacy = harness
     client = _FakeEnterpriseAiClient(_FENCED_PAYLOAD)
     legacy._enterprise_ai_client = client
-    monkeypatch.setattr(ontology_build_module, "_ONTOLOGY_BUILD_LLM_CONTEXT_MAX_CHARS", 8_500)
+    monkeypatch.setattr(ontology_build_module, "_ONTOLOGY_BUILD_LLM_CONTEXT_MAX_CHARS", 30_000)
     qa_pairs = [
         QaPair(
             question=f"顧客別売上 {index}",
