@@ -45,6 +45,7 @@ import {
   unmappedApiErrorMessage,
   withoutFieldError,
 } from "@/lib/api-field-errors";
+import { copyTextToClipboard } from "@/lib/clipboard";
 import { t } from "@/lib/i18n";
 import {
   INFORMATION_TABLE_FOCUS_CLASS,
@@ -319,7 +320,7 @@ export function SecurityUsersPage() {
     if (activeView !== "edit" || userFormReadOnly || !draft.temporaryPassword) return;
     setCopyPasswordError("");
     try {
-      await navigator.clipboard.writeText(draft.temporaryPassword);
+      await copyTextToClipboard(draft.temporaryPassword);
       toast.success(t("common.action.copied"));
     } catch {
       setCopyPasswordError(t("security.users.oneTimePassword.copyError"));

@@ -13,6 +13,7 @@ import { ContentActionBar } from "@/components/ContentActionBar";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { FormStatus } from "@/components/ui/form-status";
+import { copyTextToClipboard } from "@/lib/clipboard";
 import { t } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
@@ -113,7 +114,7 @@ function SettingsPreviewCard({
 
   async function handleCopy() {
     try {
-      await navigator.clipboard.writeText(value);
+      await copyTextToClipboard(value);
       setCopyState("idle");
       toast.success(t("common.action.copied"));
     } catch {

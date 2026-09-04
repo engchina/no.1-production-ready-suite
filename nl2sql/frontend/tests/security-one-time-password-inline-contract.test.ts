@@ -23,7 +23,7 @@ test("作成・リセット結果は同じ読み取り専用欄とコピー操�
   assert.match(usersPage, /type=\{activeView === "create" \? "password" : "text"\}/u);
   assert.match(usersPage, /data-testid="security-user-temporary-password"/u);
   assert.match(usersPage, /data-testid="security-user-temporary-password-copy"/u);
-  assert.match(usersPage, /navigator\.clipboard\.writeText\(draft\.temporaryPassword\)/u);
+  assert.match(usersPage, /copyTextToClipboard\(draft\.temporaryPassword\)/u);
   assert.match(usersPage, /temporaryPassword: result\.temporary_password/u);
   assert.doesNotMatch(usersPage, /oneTimePassword\.createdTitle|oneTimePassword\.resetTitle/u);
 });

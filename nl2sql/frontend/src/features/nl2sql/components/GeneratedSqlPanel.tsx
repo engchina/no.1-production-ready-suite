@@ -8,6 +8,7 @@ import { Banner, toast } from "@engchina/production-ready-ui";
 import { ContentActionBar } from "@/components/ContentActionBar";
 import { LogicalStepsList } from "./LogicalStepsList";
 import { StatusBadge } from "@/components/ui/status-badge";
+import { copyTextToClipboard } from "@/lib/clipboard";
 import { t } from "@/lib/i18n";
 import { toastError } from "@/lib/toast";
 import { engineLabel } from "../labels";
@@ -395,7 +396,7 @@ export function GeneratedSqlSummary({
 
   const copySql = async () => {
     try {
-      await navigator.clipboard.writeText(displayedSql);
+      await copyTextToClipboard(displayedSql);
       toast.success(t("common.action.copied"));
     } catch {
       toastError(t("common.action.copyFailed"));

@@ -37,6 +37,7 @@ import {
 } from "@/components/ProcessingState";
 import { FixedSplitPane } from "@/components/layout/FixedSplitPane";
 import { ErrorState } from "@/components/StateViews";
+import { copyTextToClipboard } from "@/lib/clipboard";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { toastError } from "@/lib/toast";
@@ -1260,7 +1261,7 @@ export function DbObjectDetailPanel({
 
   const copyDdl = async () => {
     try {
-      await navigator.clipboard.writeText(detail.ddl);
+      await copyTextToClipboard(detail.ddl);
       toast.success(t("common.action.copied"));
     } catch {
       toastError(t("common.action.copyFailed"));

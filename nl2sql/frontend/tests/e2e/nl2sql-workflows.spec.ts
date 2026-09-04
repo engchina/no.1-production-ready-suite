@@ -4723,9 +4723,44 @@ test("検索を実行すると実処理の段階別進捗と結果を表示す�
   await expect(page.getByRole("status").filter({ hasText: "コピーしました" })).toBeVisible();
   await page.getByRole("status").filter({ hasText: "コピーしました" }).getByRole("button", { name: "閉じる" }).click();
   await page.evaluate(() => {
-    Object.defineProperty(navigator.clipboard, "writeText", {
+    const state = globalThis as typeof globalThis & { __legacyCopiedSql?: string };
+    Object.defineProperty(window, "isSecureContext", {
       configurable: true,
-      value: () => Promise.reject(new Error("clipboard denied")),
+      value: false,
+    });
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: undefined,
+    });
+    Object.defineProperty(document, "execCommand", {
+      configurable: true,
+      value: (command: string) => {
+        if (command !== "copy") return false;
+        state.__legacyCopiedSql = (document.activeElement as HTMLTextAreaElement | null)?.value ?? "";
+        return true;
+      },
+    });
+  });
+  await copySql.click();
+  await expect(page.getByRole("status").filter({ hasText: "コピーしました" })).toBeVisible();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => (globalThis as typeof globalThis & { __legacyCopiedSql?: string }).__legacyCopiedSql
+      )
+    )
+    .toBe("SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES");
+  await page.getByRole("status").filter({ hasText: "コピーしました" }).getByRole("button", { name: "閉じる" }).click();
+  await page.evaluate(() => {
+    Object.defineProperty(window, "isSecureContext", {
+      configurable: true,
+      value: true,
+    });
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: () => Promise.reject(new Error("clipboard denied")),
+      },
     });
   });
   await copySql.click();

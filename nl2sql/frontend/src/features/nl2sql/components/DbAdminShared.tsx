@@ -41,6 +41,7 @@ import {
 import { FileDropzone } from "@/components/ui/file-dropzone";
 import { FieldLabel } from "@/components/ui/required-field";
 import { ApiError, apiPost, type ApiErrorDetails } from "@/lib/api";
+import { copyTextToClipboard } from "@/lib/clipboard";
 import { downloadBlob } from "@/lib/download";
 import { t } from "@/lib/i18n";
 import { toastError } from "@/lib/toast";
@@ -1183,7 +1184,7 @@ export function ObjectDetailPanel({
 
   const copyDdl = async () => {
     try {
-      await navigator.clipboard.writeText(detail.ddl);
+      await copyTextToClipboard(detail.ddl);
       toast.success(t("common.action.copied"));
     } catch {
       toastError(t("common.action.copyFailed"));

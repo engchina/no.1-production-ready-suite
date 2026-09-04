@@ -30,6 +30,7 @@ import { useConfirm } from "@/components/ui/confirm-dialog";
 import { FileDropzone } from "@/components/ui/file-dropzone";
 import { PageNotice, usePageNotice } from "@/components/page-notice";
 import { isAbortError } from "@/lib/api";
+import { copyTextToClipboard } from "@/lib/clipboard";
 import { t } from "@/lib/i18n";
 import { toastError } from "@/lib/toast";
 import { mergeUniqueFiles } from "@/lib/file-dropzone";
@@ -1191,7 +1192,7 @@ export function OntologyBuildSection({
   const copyMarkdownOutput = async () => {
     if (!activeMarkdown.trim()) return;
     try {
-      await navigator.clipboard.writeText(activeMarkdown);
+      await copyTextToClipboard(activeMarkdown);
       toast.success(t("common.action.copied"));
     } catch {
       toastError(t("common.action.copyFailed"));
