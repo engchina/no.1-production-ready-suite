@@ -687,6 +687,39 @@ function profileScopedOntologyView(profileId: string) {
 async function mockProfileScopedApi(page: Page) {
   const state = {
     sourceDocumentProfileIds: [] as string[],
+    deletedSourceIds: [] as string[],
+    sourceDocumentsByProfile: {
+      sales: [
+        {
+          id: "source-sales",
+          profile_id: "sales",
+          filename: "sales-rules.md",
+          source_role: "source",
+          media_type: "text/markdown",
+          size_bytes: 2048,
+          status: "extracted",
+          extracted_chunk_count: 2,
+          warnings_ja: [],
+          created_at: "2026-07-12T00:00:00Z",
+          updated_at: "2026-07-12T00:00:00Z",
+        },
+      ],
+      finance: [
+        {
+          id: "source-finance",
+          profile_id: "finance",
+          filename: "finance-rules.xlsx",
+          source_role: "source",
+          media_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          size_bytes: 4096,
+          status: "extracted",
+          extracted_chunk_count: 4,
+          warnings_ja: [],
+          created_at: "2026-07-12T00:00:00Z",
+          updated_at: "2026-07-12T00:00:00Z",
+        },
+      ],
+    } as Record<string, Array<Record<string, unknown>>>,
   };
   await page.route("**/api/schema/catalog", (route) =>
     fulfillJson(route, { refreshed_at: "2026-07-12T00:00:00Z", tables: [] })
@@ -736,29 +769,32 @@ async function mockProfileScopedApi(page: Page) {
   await page.route("**/api/nl2sql/profiles/*/ontology-build-jobs**", (route) =>
     fulfillJson(route, { jobs: [] })
   );
-  await page.route("**/api/nl2sql/profiles/*/ontology-source-documents**", (route) => {
+  await page.route("**/api/nl2sql/profiles/*/ontology-source-documents**", async (route) => {
     const profileId = profileIdFromUrl(route.request().url());
+    const sourceDocumentId = route
+      .request()
+      .url()
+      .match(/\/ontology-source-documents\/([^/?]+)/u)?.[1];
+    if (route.request().method() === "DELETE" && sourceDocumentId) {
+      const decodedSourceDocumentId = decodeURIComponent(sourceDocumentId);
+      state.deletedSourceIds.push(`${profileId}:${decodedSourceDocumentId}`);
+      const documents = state.sourceDocumentsByProfile[profileId] ?? [];
+      const nextDocuments = documents.filter((source) => source.id !== decodedSourceDocumentId);
+      state.sourceDocumentsByProfile[profileId] = nextDocuments;
+      if (nextDocuments.length === documents.length) {
+        await route.fulfill({
+          status: 404,
+          contentType: "application/json",
+          body: JSON.stringify({ error: "not found" }),
+        });
+        return;
+      }
+      await fulfillJson(route, { source_document_id: decodedSourceDocumentId, deleted: true });
+      return;
+    }
     state.sourceDocumentProfileIds.push(profileId);
-    const filename = profileId === "finance" ? "finance-rules.xlsx" : "sales-rules.md";
-    fulfillJson(route, {
-      source_documents: [
-        {
-          id: `source-${profileId}`,
-          profile_id: profileId,
-          filename,
-          source_role: "source",
-          media_type:
-            profileId === "finance"
-              ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-              : "text/markdown",
-          size_bytes: profileId === "finance" ? 4096 : 2048,
-          status: "extracted",
-          extracted_chunk_count: profileId === "finance" ? 4 : 2,
-          warnings_ja: [],
-          created_at: "2026-07-12T00:00:00Z",
-          updated_at: "2026-07-12T00:00:00Z",
-        },
-      ],
+    await fulfillJson(route, {
+      source_documents: state.sourceDocumentsByProfile[profileId] ?? [],
     });
   });
   await page.route("**/api/nl2sql/profiles/*/ontology-markdown", (route) =>
@@ -1075,6 +1111,45 @@ test("オントロジー構築の保存済みファイルは選択プロファ�
   await expect(savedFiles.getByText("finance-rules.xlsx", { exact: true })).toBeVisible();
   await expect(savedFiles.getByText("sales-rules.md", { exact: true })).toHaveCount(0);
   expect(state.sourceDocumentProfileIds).toEqual(expect.arrayContaining(["sales", "finance"]));
+});
+
+test("オントロジー構築の保存済みファイルは確認付きで削除できる", async ({ page }) => {
+  const state = await mockProfileScopedApi(page);
+
+  await page.goto("/ontology-build?profile=sales");
+
+  const savedFiles = page.getByTestId("ontology-build-saved-files");
+  await expect(savedFiles.getByText("sales-rules.md", { exact: true })).toBeVisible();
+  const deleteButton = savedFiles.getByRole("button", {
+    name: "sales-rules.md を保存済みファイルから削除",
+  });
+  await expect(deleteButton).toBeVisible();
+
+  await deleteButton.click();
+  const dialog = page.getByRole("alertdialog", {
+    name: "保存済みファイルを削除しますか",
+  });
+  await expect(dialog).toContainText("sales-rules.md");
+  await dialog.getByRole("button", { name: "キャンセル" }).click();
+  expect(state.deletedSourceIds).toEqual([]);
+  await expect(savedFiles.getByText("sales-rules.md", { exact: true })).toBeVisible();
+
+  await deleteButton.click();
+  await page
+    .getByRole("alertdialog", { name: "保存済みファイルを削除しますか" })
+    .getByRole("button", { name: "削除" })
+    .click();
+
+  await expect.poll(() => state.deletedSourceIds).toEqual(["sales:source-sales"]);
+  await expect(savedFiles.getByText("sales-rules.md", { exact: true })).toHaveCount(0);
+  await expect(savedFiles.getByTestId("ontology-build-saved-files-empty")).toBeVisible();
+  await expect(
+    page.getByText("「sales-rules.md」を保存済みファイルから削除しました。")
+  ).toBeVisible();
+  const overflow = await page.evaluate(
+    () => document.documentElement.scrollWidth > window.innerWidth
+  );
+  expect(overflow).toBe(false);
 });
 
 test("公開完了後は Published を表示し、公開済み revision を Draft として保持しない", async ({ page }) => {

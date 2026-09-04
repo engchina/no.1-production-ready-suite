@@ -118,7 +118,7 @@ function conflictDetails(payload: ApiEnvelope<unknown>): {
 
 async function request<T>(
   path: string,
-  method: "GET" | "POST" | "PATCH",
+  method: "DELETE" | "GET" | "POST" | "PATCH",
   body?: unknown,
   options: RequestOptions = {}
 ): Promise<T> {
@@ -314,6 +314,19 @@ export function listOntologySourceDocuments(
     undefined,
     options
   ).then((data) => data.source_documents ?? []);
+}
+
+export function deleteOntologySourceDocument(
+  profileId: string,
+  sourceDocumentId: string,
+  options?: RequestOptions
+): Promise<{ source_document_id: string; deleted: boolean }> {
+  return request<{ source_document_id: string; deleted: boolean }>(
+    `/api/nl2sql/profiles/${encodeURIComponent(profileId)}/ontology-source-documents/${encodeURIComponent(sourceDocumentId)}`,
+    "DELETE",
+    undefined,
+    options
+  );
 }
 
 export function cancelOntologyBuildJob(

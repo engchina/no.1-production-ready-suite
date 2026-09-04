@@ -2674,6 +2674,59 @@ class OntologyBuildService:
                 )
         return deleted_rows
 
+    def delete_profile_source_document(
+        self,
+        profile_id: str,
+        source_document_id: str,
+    ) -> OntologySourceDocument:
+        """利用者操作で profile 配下の保存済み構築資料を 1 件削除する。"""
+
+        document = self._runtime.store.get_document(
+            "source_documents", {"source_document_id": source_document_id}
+        )
+        if document is None:
+            raise OntologyNotFoundError(
+                "ONTOLOGY_SOURCE_DOCUMENT_NOT_FOUND",
+                "保存済みファイルが見つかりません。表示を更新して対象を確認してください。",
+            )
+        try:
+            source = OntologySourceDocument.model_validate(document["payload"])
+        except Exception as exc:
+            raise OntologyStateConflictError(
+                "ONTOLOGY_SOURCE_DOCUMENT_INVALID",
+                "保存済みファイルの保存データを読み取れません。表示を更新して対象を確認してください。",
+            ) from exc
+        if source.profile_id != profile_id or document.get("profile_id") != profile_id:
+            raise OntologyNotFoundError(
+                "ONTOLOGY_SOURCE_DOCUMENT_NOT_FOUND",
+                "保存済みファイルが見つかりません。表示を更新して対象を確認してください。",
+            )
+
+        try:
+            self._source_storage.delete(source)
+        except Exception:
+            logger.warning(
+                "ontology_source_blob_cleanup_failed",
+                exc_info=True,
+                extra={
+                    "profile_id": profile_id,
+                    "source_document_id": source_document_id,
+                },
+            )
+        deleted_rows = self._runtime.store.delete_documents(
+            "source_documents",
+            {
+                "source_document_id": source_document_id,
+                "profile_id": profile_id,
+            },
+        )
+        if deleted_rows < 1:
+            raise OntologyNotFoundError(
+                "ONTOLOGY_SOURCE_DOCUMENT_NOT_FOUND",
+                "保存済みファイルが見つかりません。表示を更新して対象を確認してください。",
+            )
+        return source
+
     def cancel_profile_jobs(self, profile_id: str) -> int:
         """削除対象 Profile の queued/running build を永続的に取消す。"""
 

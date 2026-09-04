@@ -5348,6 +5348,11 @@ class OntologySourceDocumentListData(OntologyContract):
     source_documents: list[OntologySourceDocumentSummary]
 
 
+class OntologySourceDocumentDeleteData(OntologyContract):
+    source_document_id: str
+    deleted: bool = True
+
+
 class OntologyProposalListData(OntologyContract):
     proposals: list[OntologyProposal]
 
@@ -5517,6 +5522,34 @@ def list_profile_ontology_source_documents(
                     OntologySourceDocumentSummary.from_document(source)
                     for source in source_documents
                 ]
+            )
+        )
+    except Exception as exc:
+        _raise_domain_error(exc)
+
+
+@router.delete(
+    "/profiles/{profile_id}/ontology-source-documents/{source_document_id}",
+    response_model=ApiResponse[OntologySourceDocumentDeleteData],
+)
+def delete_profile_ontology_source_document(
+    profile_id: str,
+    source_document_id: str,
+    http_request: Request,
+) -> ApiResponse[OntologySourceDocumentDeleteData]:
+    """profile に保存済みの AI オントロジー構築資料を 1 件削除する。"""
+
+    assert_profile_access(http_request, profile_id)
+    try:
+        deleted_source = _run_runtime_sync(
+            ontology_build_service.delete_profile_source_document,
+            profile_id,
+            source_document_id,
+        )
+        return ApiResponse(
+            data=OntologySourceDocumentDeleteData(
+                source_document_id=deleted_source.id,
+                deleted=True,
             )
         )
     except Exception as exc:
