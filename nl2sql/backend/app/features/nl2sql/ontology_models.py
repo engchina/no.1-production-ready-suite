@@ -931,6 +931,7 @@ class OntologyPublishJob(OntologyContract):
     id: str = Field(min_length=1)
     revision_id: str = Field(min_length=1)
     requested_etag: str = Field(min_length=1)
+    profile_id: str = ""
     status: OntologyPublishStatus = OntologyPublishStatus.QUEUED
     rdf_graph_name: str = ""
     inferred_graph_name: str = ""

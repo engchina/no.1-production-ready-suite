@@ -256,6 +256,7 @@ class OntologyMarkdownDraftPatch(OntologyContract):
 
 class OntologyPublishRequest(OntologyContract):
     etag: str = Field(min_length=1)
+    profile_id: str = ""
 
 
 class SqlBindingRequest(OntologyContract):
@@ -891,13 +892,14 @@ class OntologyApiRuntime:
                 )
             return ""
 
-    def draft_markdown_for_revision(self, revision_id: str) -> str:
+    def draft_markdown_for_revision(self, revision_id: str, *, profile_id: str = "") -> str:
         with self._lock:
             self._ensure_store()
             draft_documents = [
                 document
                 for document in self.store.list_artifacts(revision_id)
                 if document.get("artifact_type") == _MARKDOWN_DRAFT_ARTIFACT_TYPE
+                and (not profile_id or self._artifact_profile_id(document) == profile_id)
             ]
             if not draft_documents:
                 return ""
@@ -911,7 +913,12 @@ class OntologyApiRuntime:
                 )
             )
 
-    def copy_draft_markdown_to_published(self, revision_id: str) -> list[dict[str, Any]]:
+    def copy_draft_markdown_to_published(
+        self,
+        revision_id: str,
+        *,
+        profile_id: str = "",
+    ) -> list[dict[str, Any]]:
         with self._lock:
             self._ensure_store()
             ontology = self.ontology_revision(revision_id)
@@ -919,20 +926,21 @@ class OntologyApiRuntime:
                 document
                 for document in self.store.list_artifacts(revision_id)
                 if document.get("artifact_type") == _MARKDOWN_DRAFT_ARTIFACT_TYPE
+                and (not profile_id or self._artifact_profile_id(document) == profile_id)
             ]
             saved: list[dict[str, Any]] = []
             for document in draft_documents:
-                profile_id = self._artifact_profile_id(document)
-                if not profile_id:
+                document_profile_id = self._artifact_profile_id(document)
+                if not document_profile_id:
                     continue
                 saved.append(
                     self._save_markdown_artifact(
-                        profile_id=profile_id,
+                        profile_id=document_profile_id,
                         revision=ontology.revision,
                         artifact_type=_MARKDOWN_PUBLISHED_ARTIFACT_TYPE,
                         markdown=self._artifact_content(document),
                         profile_version=self._profile_markdown_revision_version(
-                            profile_id,
+                            document_profile_id,
                             document,
                         ),
                     )
@@ -4739,10 +4747,13 @@ def create_ontology_revision_draft(
 def publish_ontology_revision(
     revision_id: str,
     request: OntologyPublishRequest,
+    http_request: Request,
     if_match: str = Header(..., alias="If-Match"),
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
 ) -> ApiResponse[OntologyPublishJobData]:
     try:
+        if request.profile_id.strip():
+            assert_profile_access(http_request, request.profile_id)
         normalized_match = if_match.strip().removeprefix("W/").strip('"')
         if normalized_match != request.etag:
             raise OntologyVersionConflictError(
@@ -4754,6 +4765,7 @@ def publish_ontology_revision(
             revision_id,
             etag=request.etag,
             idempotency_key=idempotency_key,
+            profile_id=request.profile_id,
         )
         return ApiResponse(data=OntologyPublishJobData(job=job))
     except Exception as exc:
@@ -4764,7 +4776,10 @@ def publish_ontology_revision(
     "/ontology-publish/{job_id}",
     response_model=ApiResponse[OntologyPublishJobData],
 )
-def get_ontology_publish_job(job_id: str) -> ApiResponse[OntologyPublishJobData]:
+def get_ontology_publish_job(
+    job_id: str,
+    http_request: Request,
+) -> ApiResponse[OntologyPublishJobData]:
     job = _run_runtime_sync(ontology_publish_service.get, job_id)
     if job is None:
         raise HTTPException(
@@ -4774,6 +4789,8 @@ def get_ontology_publish_job(job_id: str) -> ApiResponse[OntologyPublishJobData]
                 "message_ja": "Ontology 公開 job が見つかりません。",
             },
         )
+    if job.profile_id:
+        assert_profile_access(http_request, job.profile_id)
     return ApiResponse(data=OntologyPublishJobData(job=job))
 
 

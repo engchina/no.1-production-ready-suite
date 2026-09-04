@@ -2750,7 +2750,18 @@ class OntologyBuildService:
         sources: list[OntologySourceDocument] = []
         for document in documents:
             try:
-                sources.append(OntologySourceDocument.model_validate(document["payload"]))
+                source = OntologySourceDocument.model_validate(document["payload"])
+                if source.profile_id != profile_id:
+                    logger.warning(
+                        "ontology_source_document_profile_mismatch",
+                        extra={
+                            "profile_id": profile_id,
+                            "source_document_id": source.id,
+                            "source_profile_id": source.profile_id,
+                        },
+                    )
+                    continue
+                sources.append(source)
             except Exception:
                 logger.warning(
                     "ontology_source_document_decode_failed",
@@ -2822,7 +2833,7 @@ class OntologyBuildService:
         sources: list[OntologySourceDocument] = []
         for source_id in job.source_document_ids:
             try:
-                source = self._get_source_document(source_id)
+                source = self._get_source_document(source_id, profile_id=job.profile_id)
             except Exception as exc:
                 raise OntologyStateConflictError(
                     "ONTOLOGY_BUILD_SOURCE_MISSING",
@@ -3125,13 +3136,23 @@ class OntologyBuildService:
             expected_etag=str(current["etag"]) if current is not None else None,
         )
 
-    def _get_source_document(self, source_id: str) -> OntologySourceDocument:
+    def _get_source_document(
+        self,
+        source_id: str,
+        *,
+        profile_id: str = "",
+    ) -> OntologySourceDocument:
         document = self._runtime.store.get_document(
             "source_documents", {"source_document_id": source_id}
         )
         if document is None:
             raise RuntimeError(f"Ontology source document が見つかりません: {source_id}")
-        return OntologySourceDocument.model_validate(document["payload"])
+        source = OntologySourceDocument.model_validate(document["payload"])
+        if profile_id and source.profile_id != profile_id:
+            raise RuntimeError(
+                "Ontology source document の profile が構築 job と一致しません: " f"{source_id}"
+            )
+        return source
 
     def _update_source_document(
         self,
@@ -3481,7 +3502,7 @@ class OntologyBuildService:
             extracted_pairs: list[QaPair] = []
             seen_hashes: set[str] = set()
             for source_id in job.source_document_ids:
-                source = self._get_source_document(source_id)
+                source = self._get_source_document(source_id, profile_id=job.profile_id)
                 if source.sha256 in seen_hashes:
                     warning = f"{source.filename}: 同一内容の資料は 1 回だけ利用します。"
                     self._update_source_progress(

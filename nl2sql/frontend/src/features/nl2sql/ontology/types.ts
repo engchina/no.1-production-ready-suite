@@ -578,6 +578,7 @@ export interface OntologySourceDocument {
 export interface OntologyPublishJob {
   id: string;
   revision_id: string;
+  profile_id?: string;
   status: "queued" | "materializing" | "validating" | "succeeded" | "failed";
   rdf_graph_name?: string;
   inferred_graph_name?: string;

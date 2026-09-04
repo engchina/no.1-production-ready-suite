@@ -477,12 +477,13 @@ export function createOntologyRevisionDraft(
 export function publishOntologyRevision(
   revisionId: string,
   etag: string,
+  profileId = "",
   options?: RequestOptions
 ): Promise<OntologyPublishJob> {
   return request<{ job: OntologyPublishJob }>(
     `/api/nl2sql/ontology/revisions/${encodeURIComponent(revisionId)}/publish`,
     "POST",
-    { etag },
+    { etag, profile_id: profileId },
     { ...options, ifMatch: etag }
   ).then((data) => data.job);
 }

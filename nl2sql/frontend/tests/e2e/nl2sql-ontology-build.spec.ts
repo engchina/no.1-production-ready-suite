@@ -377,6 +377,7 @@ async function mockApi(page: Page) {
     draftMarkdownEtag: "markdown-etag-1",
     savedDraftMarkdown: null as string | null,
     publishedMarkdown: "",
+    publishPayload: null as Record<string, unknown> | null,
   };
   const currentOntologyViewPayload = () => {
     const revision = state.published
@@ -588,6 +589,7 @@ async function mockApi(page: Page) {
     });
   });
   await page.route("**/api/nl2sql/ontology/revisions/*/publish", async (route) => {
+    state.publishPayload = route.request().postDataJSON() as Record<string, unknown>;
     state.published = true;
     state.publishedMarkdown = state.draftMarkdown;
     await fulfillJson(route, {
@@ -613,6 +615,155 @@ async function mockApi(page: Page) {
       },
     });
   });
+  return state;
+}
+
+const profileScopedProfiles = [
+  {
+    id: "sales",
+    name: "販売分析",
+    category: "営業",
+    description: "営業部門の受注分析",
+    allowed_tables: ["ORDERS"],
+    allowed_views: [],
+    glossary: {},
+    sql_rules: [],
+    default_row_limit: 100,
+    safety_policy: "select_only",
+    few_shot_examples: [],
+    select_ai_config: null,
+    archived: false,
+  },
+  {
+    id: "finance",
+    name: "経理分析",
+    category: "経理",
+    description: "経理部門の請求分析",
+    allowed_tables: ["INVOICES"],
+    allowed_views: [],
+    glossary: {},
+    sql_rules: [],
+    default_row_limit: 100,
+    safety_policy: "select_only",
+    few_shot_examples: [],
+    select_ai_config: null,
+    archived: false,
+  },
+];
+
+function profileIdFromUrl(url: string): string {
+  const match = url.match(/\/api\/nl2sql\/profiles\/([^/?]+)/u);
+  return match ? decodeURIComponent(match[1]) : "";
+}
+
+function profileScopedOntologyView(profileId: string) {
+  return {
+    profile_ontology_view: {
+      id: `profile-view:${profileId}`,
+      profile_id: profileId,
+      ontology_revision_id: `revision-${profileId}`,
+      etag: `view-etag-${profileId}`,
+      node_ids: [],
+      edge_ids: [],
+      allowed_path_ids: [],
+    },
+    ontology_graph: {
+      revision: {
+        id: `revision-${profileId}`,
+        version: 1,
+        status: "published",
+        schema_fingerprint: `fp-${profileId}`,
+        etag: `revision-etag-${profileId}`,
+      },
+      nodes: [],
+      edges: [],
+    },
+    materialized: true,
+    stale: false,
+    warnings_ja: [],
+  };
+}
+
+async function mockProfileScopedApi(page: Page) {
+  const state = {
+    sourceDocumentProfileIds: [] as string[],
+  };
+  await page.route("**/api/schema/catalog", (route) =>
+    fulfillJson(route, { refreshed_at: "2026-07-12T00:00:00Z", tables: [] })
+  );
+  await page.route("**/api/nl2sql/db-admin/tables", (route) =>
+    fulfillJson(route, { runtime: "deterministic", items: [], warnings: [] })
+  );
+  await page.route("**/api/nl2sql/db-admin/views", (route) =>
+    fulfillJson(route, { runtime: "deterministic", items: [], warnings: [] })
+  );
+  await page.route("**/api/nl2sql/select-ai/db-profiles**", (route) =>
+    fulfillJson(route, { runtime: "deterministic", profiles: [], warnings: [] })
+  );
+  await page.route("**/api/nl2sql/profiles", (route) => fulfillJson(route, profileScopedProfiles));
+  await page.route("**/api/nl2sql/profiles/search?*", (route) =>
+    fulfillJson(route, {
+      items: profileScopedProfiles.map((profile) => ({
+        id: profile.id,
+        name: profile.name,
+        category: profile.category,
+        description: profile.description,
+        archived: profile.archived,
+        allowed_table_count: profile.allowed_tables.length,
+        allowed_view_count: profile.allowed_views.length,
+        glossary_count: 0,
+        few_shot_count: 0,
+        version: 1,
+        etag: `etag-${profile.id}`,
+        updated_at: "2026-07-12T00:00:00Z",
+      })),
+      next_cursor: null,
+      total: profileScopedProfiles.length,
+      change_token: 1,
+    })
+  );
+  await page.route(/\/api\/nl2sql\/profiles\/[^/?]+$/, (route) => {
+    const profileId = profileIdFromUrl(route.request().url());
+    fulfillJson(
+      route,
+      profileScopedProfiles.find((profile) => profile.id === profileId) ??
+        profileScopedProfiles[0]
+    );
+  });
+  await page.route("**/api/nl2sql/profiles/*/ontology-view", (route) => {
+    fulfillJson(route, profileScopedOntologyView(profileIdFromUrl(route.request().url())));
+  });
+  await page.route("**/api/nl2sql/profiles/*/ontology-build-jobs**", (route) =>
+    fulfillJson(route, { jobs: [] })
+  );
+  await page.route("**/api/nl2sql/profiles/*/ontology-source-documents**", (route) => {
+    const profileId = profileIdFromUrl(route.request().url());
+    state.sourceDocumentProfileIds.push(profileId);
+    const filename = profileId === "finance" ? "finance-rules.xlsx" : "sales-rules.md";
+    fulfillJson(route, {
+      source_documents: [
+        {
+          id: `source-${profileId}`,
+          profile_id: profileId,
+          filename,
+          source_role: "source",
+          media_type:
+            profileId === "finance"
+              ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+              : "text/markdown",
+          size_bytes: profileId === "finance" ? 4096 : 2048,
+          status: "extracted",
+          extracted_chunk_count: profileId === "finance" ? 4 : 2,
+          warnings_ja: [],
+          created_at: "2026-07-12T00:00:00Z",
+          updated_at: "2026-07-12T00:00:00Z",
+        },
+      ],
+    });
+  });
+  await page.route("**/api/nl2sql/profiles/*/ontology-markdown", (route) =>
+    fulfillJson(route, emptyMarkdownPayload())
+  );
   return state;
 }
 
@@ -858,6 +1009,7 @@ test("AI オントロジー構築の実行 → 進捗 → Markdown 下書き編�
   await expect(page.getByText("オントロジーを公開しました。")).toBeVisible();
   expect(state.savedDraftMarkdown).toContain("手動メモ");
   expect(state.published).toBe(true);
+  expect(state.publishPayload).toMatchObject({ etag: "draft-etag-4", profile_id: "default" });
   await expect(page.getByTestId("ontology-publish-status")).toContainText("完了");
   await expect.poll(() => state.ontologyViewCalls).toBeGreaterThan(ontologyViewCallsBeforePublish);
   await expect(ontologyQueryPanel.getByTestId("ontology-playground-revision-id")).toContainText(
@@ -893,6 +1045,36 @@ test("AI オントロジー構築の実行 → 進捗 → Markdown 下書き編�
 
   await ontologyQueryPanel.scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath("ontology-build.png"), fullPage: true });
+});
+
+test("オントロジー構築の保存済みファイルは選択プロファイルごとに切り替わる", async ({ page }) => {
+  const state = await mockProfileScopedApi(page);
+
+  await page.goto("/ontology-build?profile=sales");
+
+  await expect(page.getByTestId("ontology-build-profile-select")).toHaveValue("sales");
+  await expect(page.getByTestId("ontology-build-profile-scope")).toContainText(
+    "対象: 販売分析（営業）"
+  );
+  const savedFiles = page.getByTestId("ontology-build-saved-files");
+  await expect(savedFiles).toContainText(
+    "販売分析（営業）で過去にオントロジー構築へ使用したファイルです。"
+  );
+  await expect(savedFiles.getByText("sales-rules.md", { exact: true })).toBeVisible();
+  await expect(savedFiles.getByText("finance-rules.xlsx", { exact: true })).toHaveCount(0);
+
+  await page.getByTestId("ontology-build-profile-select").selectOption("finance");
+
+  await expect(page).toHaveURL(/profile=finance/u);
+  await expect(page.getByTestId("ontology-build-profile-scope")).toContainText(
+    "対象: 経理分析（経理）"
+  );
+  await expect(savedFiles).toContainText(
+    "経理分析（経理）で過去にオントロジー構築へ使用したファイルです。"
+  );
+  await expect(savedFiles.getByText("finance-rules.xlsx", { exact: true })).toBeVisible();
+  await expect(savedFiles.getByText("sales-rules.md", { exact: true })).toHaveCount(0);
+  expect(state.sourceDocumentProfileIds).toEqual(expect.arrayContaining(["sales", "finance"]));
 });
 
 test("公開完了後は Published を表示し、公開済み revision を Draft として保持しない", async ({ page }) => {

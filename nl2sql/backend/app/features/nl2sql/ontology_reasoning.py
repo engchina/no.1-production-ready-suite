@@ -94,9 +94,17 @@ class OntologyPublishService:
         *,
         etag: str,
         idempotency_key: str,
+        profile_id: str = "",
     ) -> OntologyPublishJob:
+        normalized_profile_id = profile_id.strip()
         request_hash = hashlib.sha256(
-            canonical_json({"revision_id": revision_id, "etag": etag}).encode("utf-8")
+            canonical_json(
+                {
+                    "revision_id": revision_id,
+                    "etag": etag,
+                    "profile_id": normalized_profile_id,
+                }
+            ).encode("utf-8")
         ).hexdigest()
         existing = self.store.get_idempotency("publish_ontology", idempotency_key)
         if existing is not None:
@@ -119,7 +127,11 @@ class OntologyPublishService:
                 "REVISION_ETAG_MISMATCH",
                 "Ontology revision が更新されています。再読込してください。",
             )
-        active_job = self._active_job_for_revision(revision_id, etag=etag)
+        active_job = self._active_job_for_revision(
+            revision_id,
+            etag=etag,
+            profile_id=normalized_profile_id,
+        )
         if active_job is not None:
             self.store.save_idempotency(
                 {
@@ -135,6 +147,7 @@ class OntologyPublishService:
             id=f"ontology_publish_{uuid4().hex}",
             revision_id=revision_id,
             requested_etag=etag,
+            profile_id=normalized_profile_id,
         )
         self._save_job(job)
         self.store.save_idempotency(
@@ -172,7 +185,7 @@ class OntologyPublishService:
         document = {
             "job_id": job.id,
             "job_type": "publish",
-            "profile_id": "-",
+            "profile_id": job.profile_id or "-",
             "status": job.status.value,
             "payload": job.model_dump(mode="json"),
             **(
@@ -222,6 +235,7 @@ class OntologyPublishService:
         revision_id: str,
         *,
         etag: str,
+        profile_id: str = "",
     ) -> OntologyPublishJob | None:
         with self._lock:
             cached_jobs = list(self._jobs.values())
@@ -229,6 +243,7 @@ class OntologyPublishService:
             if (
                 job.revision_id == revision_id
                 and job.requested_etag == etag
+                and job.profile_id == profile_id
                 and job.status in _IN_FLIGHT_PUBLISH_STATUSES
             ):
                 return job.model_copy(deep=True)
@@ -245,6 +260,7 @@ class OntologyPublishService:
             if (
                 job.revision_id == revision_id
                 and job.requested_etag == etag
+                and job.profile_id == profile_id
                 and job.status in _IN_FLIGHT_PUBLISH_STATUSES
             ):
                 with self._lock:
@@ -298,7 +314,9 @@ class OntologyPublishService:
         artifacts = build_semantic_artifacts(ontology)
         draft_markdown_reader = getattr(self.runtime, "draft_markdown_for_revision", None)
         draft_markdown = str(
-            draft_markdown_reader(job.revision_id) if callable(draft_markdown_reader) else ""
+            draft_markdown_reader(job.revision_id, profile_id=job.profile_id)
+            if callable(draft_markdown_reader)
+            else ""
         ).strip()
         llm_markdown = draft_markdown or artifacts.llm_markdown
         rdf_graph_name, inferred_graph_name = revision_graph_names(job.revision_id)
@@ -357,6 +375,7 @@ class OntologyPublishService:
                     "artifact_type": artifact_type,
                     "content_hash": hashlib.sha256(content.encode("utf-8")).hexdigest(),
                     "content": content,
+                    **({"profile_id": job.profile_id} if job.profile_id else {}),
                     "renderer_version": ONTOLOGY_RENDERER_VERSION,
                     "created_at": utc_now(),
                 }
@@ -405,7 +424,7 @@ class OntologyPublishService:
         )
         markdown_publisher = getattr(self.runtime, "copy_draft_markdown_to_published", None)
         if callable(markdown_publisher):
-            markdown_publisher(job.revision_id)
+            markdown_publisher(job.revision_id, profile_id=job.profile_id)
         published = self._update(
             job_id,
             status=OntologyPublishStatus.SUCCEEDED,

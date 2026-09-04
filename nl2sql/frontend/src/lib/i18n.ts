@@ -1066,6 +1066,7 @@ const nl2sqlJa = {
   "profiles.ontologyBuild.title": "オントロジー構築",
   "profiles.ontologyBuild.hint":
     "スキーマ情報・業務説明・Q/A(質問と正解 SQL)から Markdown 下書きを生成します。公開済み Markdown だけが SQL 生成に使われます。",
+  "profiles.ontologyBuild.profileScope": "対象: {profile}",
   "profiles.ontologyBuild.requiresProfile": "プロファイルを保存すると、AI によるオントロジー構築を実行できます。",
   "profiles.ontologyBuild.setupTitle": "資料・AI 構築",
   "profiles.ontologyBuild.setupHint":
@@ -1097,6 +1098,8 @@ const nl2sqlJa = {
   "profiles.ontologyBuild.savedFiles": "保存済みファイル",
   "profiles.ontologyBuild.savedFilesHint":
     "このプロファイルで過去にオントロジー構築へ使用したファイルです。",
+  "profiles.ontologyBuild.savedFilesHintForProfile":
+    "{profile}で過去にオントロジー構築へ使用したファイルです。",
   "profiles.ontologyBuild.savedFilesList": "保存済みファイル一覧",
   "profiles.ontologyBuild.savedFilesLoading": "保存済みファイルを読み込んでいます…",
   "profiles.ontologyBuild.savedFilesEmpty": "保存済みファイルはまだありません。",

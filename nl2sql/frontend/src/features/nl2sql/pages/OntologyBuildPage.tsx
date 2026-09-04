@@ -280,6 +280,9 @@ export function OntologyBuildPage() {
           <>
             <OntologyBuildSection
               profileId={selectedProfileId}
+              profileLabel={
+                selectedProfileSummary ? profileDisplayLabel(selectedProfileSummary) : ""
+              }
               hasProfileSchemaInput={
                 (selectedProfile?.allowed_tables?.length ?? 0) > 0 ||
                 (selectedProfile?.allowed_views?.length ?? 0) > 0
