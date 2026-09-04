@@ -94,6 +94,7 @@ type MarkdownStateApplyReason = "profile-load" | "background" | "build" | "save"
 interface ApplyMarkdownStateOptions {
   reason?: MarkdownStateApplyReason;
   fallbackDraftMarkdown?: string;
+  preserveCurrentOnError?: boolean;
 }
 
 interface LocalSavedDraft {
@@ -763,7 +764,18 @@ export function OntologyBuildSection({
         profileIdRef.current === targetProfileId &&
         markdownRequestIdRef.current === requestId
       ) {
-        setMarkdownError(t("profiles.ontologyBuild.markdownLoadError"));
+        const preservedMarkdownState = markdownStateRef.current;
+        const canPreserveCurrent =
+          options.preserveCurrentOnError === true &&
+          Boolean(
+            preservedMarkdownState?.published_markdown.trim() ||
+              preservedMarkdownState?.draft_markdown.trim() ||
+              preservedMarkdownState?.published_revision ||
+              preservedMarkdownState?.draft_revision
+          );
+        if (!canPreserveCurrent) {
+          setMarkdownError(t("profiles.ontologyBuild.markdownLoadError"));
+        }
       }
     } finally {
       if (
@@ -776,6 +788,42 @@ export function OntologyBuildSection({
         markdownLoadControllerRef.current = null;
       }
     }
+  }, [applyMarkdownState]);
+
+  const applyOptimisticPublishedMarkdown = useCallback((
+    publishedRevisionId: string
+  ): boolean => {
+    const currentState = markdownStateRef.current;
+    const currentDraftRevision = draftRevisionRef.current;
+    const currentDraftMarkdown = draftMarkdownRef.current;
+    if (
+      currentState === null ||
+      currentDraftRevision === null ||
+      currentDraftRevision.id !== publishedRevisionId ||
+      !currentDraftMarkdown.trim()
+    ) {
+      return false;
+    }
+    const publishedRevision: OntologyRevision = {
+      ...currentDraftRevision,
+      status: "published",
+      published_at: currentDraftRevision.published_at ?? null,
+    };
+    applyMarkdownState(
+      {
+        ...currentState,
+        draft_markdown: "",
+        draft_revision: null,
+        draft_etag: "",
+        published_markdown: currentDraftMarkdown,
+        published_revision: publishedRevision,
+        published_version: currentState.draft_version ?? currentDraftRevision.version,
+        published_at: publishedRevision.published_at ?? currentState.published_at ?? null,
+      },
+      { reason: "publish" }
+    );
+    setActiveMarkdownTab("published");
+    return true;
   }, [applyMarkdownState]);
 
   const cancelMarkdownLoad = useCallback(() => {
@@ -976,8 +1024,12 @@ export function OntologyBuildSection({
           if (!terminal || publishTerminalHandledRef.current === publishJobId) return;
           publishTerminalHandledRef.current = publishJobId;
           if (next.status === "succeeded") {
+            const preserveCurrentOnError = applyOptimisticPublishedMarkdown(next.revision_id);
             if (profileIdRef.current) {
-              void refreshMarkdown(profileIdRef.current, { reason: "publish" });
+              void refreshMarkdown(profileIdRef.current, {
+                reason: "publish",
+                preserveCurrentOnError,
+              });
             }
             toast.success(t("profiles.ontologyBuild.published"));
             void onPublished?.();
@@ -1010,7 +1062,14 @@ export function OntologyBuildSection({
       window.clearInterval(timer);
       currentController?.abort();
     };
-  }, [onPublished, publishJobId, publishRunning, refreshMarkdown, showNotice]);
+  }, [
+    applyOptimisticPublishedMarkdown,
+    onPublished,
+    publishJobId,
+    publishRunning,
+    refreshMarkdown,
+    showNotice,
+  ]);
 
   if (!profileId) {
     return (

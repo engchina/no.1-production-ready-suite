@@ -952,6 +952,68 @@ test("公開完了後は Published を表示し、公開済み revision を Draf
   ).toBeDisabled();
 });
 
+test("公開直後の Markdown 再読込が一時失敗しても公開済み内容を保持する", async ({ page }) => {
+  const state = await mockApi(page);
+  state.jobPolls = 2;
+  let failFirstPublishedRefresh = true;
+  await page.unroute("**/api/nl2sql/profiles/*/ontology-markdown");
+  await page.route("**/api/nl2sql/profiles/*/ontology-markdown", (route) => {
+    if (state.published && failFirstPublishedRefresh) {
+      failFirstPublishedRefresh = false;
+      return route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({ data: null, error_messages: ["一時的な接続エラー"] }),
+      });
+    }
+    return fulfillJson(
+      route,
+      state.published
+        ? {
+            draft_markdown: "",
+            published_markdown: state.publishedMarkdown || state.draftMarkdown,
+            draft_revision: null,
+            published_revision: {
+              id: "revision-draft-4",
+              version: 4,
+              status: "published",
+              schema_fingerprint: "fp",
+              etag: "draft-etag-4",
+              published_at: "2026-07-12T00:00:20Z",
+            },
+            draft_etag: "",
+            published_at: "2026-07-12T00:00:20Z",
+          }
+        : markdownDraftPayload(state.draftMarkdown)
+    );
+  });
+
+  await page.goto("/ontology-build?profile=default");
+
+  const markdown = page.getByTestId("ontology-build-markdown");
+  const draftEditor = markdown.getByTestId("ontology-markdown-draft-editor");
+  await expect(draftEditor).toHaveValue(/# オントロジー下書き/);
+  await draftEditor.fill(
+    `${generatedDraftMarkdown}\n\n## 手動メモ\n- 公開直後の再読込に失敗しても保持`
+  );
+
+  await markdown
+    .getByTestId("ontology-publish-actions")
+    .getByRole("button", { name: "オントロジーを公開" })
+    .click();
+
+  await expect(page.getByText("オントロジーを公開しました。")).toBeVisible();
+  await expect(markdown.getByText("Markdown オントロジーを読み込めませんでした。")).toHaveCount(0);
+  await expect(markdown.getByTestId("ontology-markdown-tab-published-meta")).toHaveText("v4");
+  await expect(markdown.getByRole("tab", { name: "公開済み Markdown オントロジー" })).toHaveAttribute(
+    "aria-selected",
+    "true"
+  );
+  await expect(markdown.getByTestId("ontology-markdown-published-viewer")).toContainText(
+    "公開直後の再読込に失敗しても保持"
+  );
+});
+
 test("オントロジー構築の処理状況は折りたたみでき、再実行で自動展開する", async ({ page }) => {
   const state = await mockApi(page);
   await page.goto("/ontology-build?profile=default");
