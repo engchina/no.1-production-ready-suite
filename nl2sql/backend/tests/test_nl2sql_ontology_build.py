@@ -1403,6 +1403,48 @@ def test_list_profile_source_documents_returns_newest_first_with_legacy_role(
     }
 
 
+def test_list_profile_source_documents_skips_mismatched_payload_profile(
+    harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+) -> None:
+    runtime, store, _legacy = harness
+    service = OntologyBuildService(runtime)
+    valid_source = OntologySourceDocument(
+        id="ontology_source_valid_sales",
+        profile_id="sales",
+        filename="sales-rules.md",
+        media_type="text/markdown",
+        size_bytes=12,
+        sha256="2" * 64,
+        storage_uri="/tmp/sales-rules.md",
+    )
+    mismatched_source = OntologySourceDocument(
+        id="ontology_source_mismatched",
+        profile_id="finance",
+        filename="finance-rules.md",
+        media_type="text/markdown",
+        size_bytes=12,
+        sha256="3" * 64,
+        storage_uri="/tmp/finance-rules.md",
+    )
+    service._save_source_document(valid_source)  # noqa: SLF001 - persisted source fixture
+    store.save_document(
+        "source_documents",
+        {
+            "source_document_id": mismatched_source.id,
+            "profile_id": "sales",
+            "status": mismatched_source.status.value,
+            "sha256": mismatched_source.sha256,
+            "payload": mismatched_source.model_dump(mode="json"),
+        },
+    )
+
+    listed = service.list_profile_source_documents("sales", limit=10)
+
+    assert [source.filename for source in listed] == ["sales-rules.md"]
+    with pytest.raises(RuntimeError, match="profile"):
+        service._get_source_document(mismatched_source.id, profile_id="sales")  # noqa: SLF001
+
+
 def test_cancel_single_job_is_idempotent_and_blocks_worker(
     harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
     monkeypatch: pytest.MonkeyPatch,

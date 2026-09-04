@@ -408,9 +408,11 @@ function sourceDocumentMeta(source: OntologySourceDocument): string {
 function SavedSourceDocumentsList({
   documents,
   loading,
+  profileLabel,
 }: {
   documents: OntologySourceDocument[];
   loading: boolean;
+  profileLabel?: string;
 }) {
   return (
     <section
@@ -424,7 +426,11 @@ function SavedSourceDocumentsList({
             {t("profiles.ontologyBuild.savedFiles")}
           </h4>
           <p className="text-xs leading-5 text-muted">
-            {t("profiles.ontologyBuild.savedFilesHint")}
+            {profileLabel
+              ? t("profiles.ontologyBuild.savedFilesHintForProfile", {
+                  profile: profileLabel,
+                })
+              : t("profiles.ontologyBuild.savedFilesHint")}
           </p>
         </div>
         {loading ? (
@@ -483,6 +489,7 @@ function SavedSourceDocumentsList({
 
 export interface OntologyBuildSectionProps {
   profileId: string | null;
+  profileLabel?: string;
   hasProfileSchemaInput: boolean;
   onPublished?: () => void | Promise<void>;
   onMarkdownStateChange?: (state: OntologyMarkdownState | null) => void;
@@ -492,6 +499,7 @@ export interface OntologyBuildSectionProps {
 
 export function OntologyBuildSection({
   profileId,
+  profileLabel,
   hasProfileSchemaInput,
   onPublished,
   onMarkdownStateChange,
@@ -1095,7 +1103,7 @@ export function OntologyBuildSection({
         aria-label={t("profiles.ontologyBuild.title")}
         data-testid="profile-ontology-build"
       >
-        <SectionHeading />
+        <SectionHeading profileLabel={profileLabel} />
         <Banner severity="info">{t("profiles.ontologyBuild.requiresProfile")}</Banner>
       </section>
     );
@@ -1243,7 +1251,13 @@ export function OntologyBuildSection({
         if (!saved?.draft_revision) return;
         revisionToPublish = saved.draft_revision;
       }
-      setPublishJob(await publishOntologyRevision(revisionToPublish.id, revisionToPublish.etag));
+      setPublishJob(
+        await publishOntologyRevision(
+          revisionToPublish.id,
+          revisionToPublish.etag,
+          profileId
+        )
+      );
     } catch (err) {
       showNotice("danger", err instanceof Error ? err.message : t("profiles.ontologyBuild.error.publish"));
     } finally {
@@ -1281,7 +1295,7 @@ export function OntologyBuildSection({
       aria-label={t("profiles.ontologyBuild.title")}
       data-testid="profile-ontology-build"
     >
-      <SectionHeading />
+      <SectionHeading profileLabel={profileLabel} />
       <PageNotice notice={notice} />
       <section
         className="grid w-full min-w-0 content-start gap-4 rounded-md border border-border bg-background p-3"
@@ -1373,6 +1387,7 @@ export function OntologyBuildSection({
           <SavedSourceDocumentsList
             documents={savedSourceDocuments}
             loading={savedSourceDocumentsLoading}
+            profileLabel={profileLabel}
           />
         </div>
 
@@ -1852,12 +1867,25 @@ export function OntologyBuildSection({
   );
 }
 
-function SectionHeading() {
+function SectionHeading({ profileLabel }: { profileLabel?: string }) {
   return (
     <DbObjectPanelHeader
       icon={Sparkles}
       title={t("profiles.ontologyBuild.title")}
       description={t("profiles.ontologyBuild.hint")}
+      action={
+        profileLabel ? (
+          <span data-testid="ontology-build-profile-scope">
+            <StatusBadge
+              variant="info"
+              className="max-w-full whitespace-normal text-center leading-5 sm:max-w-80"
+              label={t("profiles.ontologyBuild.profileScope", {
+                profile: profileLabel,
+              })}
+            />
+          </span>
+        ) : undefined
+      }
     />
   );
 }

@@ -2102,6 +2102,76 @@ def test_async_semantic_publish_succeeds_and_is_idempotent(
     assert ignored.revision.reasoning_status.value == "ready"
 
 
+def test_profile_scoped_semantic_publish_does_not_publish_other_profile_markdown(
+    runtime: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api, store, _legacy = runtime
+    monkeypatch.setattr(get_settings(), "nl2sql_ontology_worker_mode", "external")
+    base = api.current_ontology().revision
+    sales_markdown = "# Sales Markdown\n\n- 販売 profile 専用"
+    finance_markdown = "# Finance Markdown\n\n- 経理 profile 専用"
+    draft, _artifact = api.create_build_markdown_draft(
+        profile_id="sales",
+        base_revision_id=base.id,
+        payloads=[],
+        titles=[],
+        markdown=sales_markdown,
+        note="profile scoped publish",
+    )
+    api._save_markdown_artifact(  # noqa: SLF001 - profile-scoped fixture
+        profile_id="finance",
+        revision=draft.revision,
+        artifact_type="ontology_markdown_draft",
+        markdown=finance_markdown,
+        profile_version=1,
+    )
+    publisher = OntologyPublishService(api)
+
+    queued = publisher.start(
+        draft.revision.id,
+        etag=draft.revision.etag,
+        idempotency_key="publish-sales-only",
+        profile_id="sales",
+    )
+    duplicate = publisher.start(
+        draft.revision.id,
+        etag=draft.revision.etag,
+        idempotency_key="publish-sales-only-2",
+        profile_id="sales",
+    )
+    finished = publisher.run_persisted(queued.id)
+
+    assert duplicate.id == queued.id
+    assert queued.profile_id == "sales"
+    assert finished.profile_id == "sales"
+    assert finished.status.value == "succeeded"
+    assert (
+        api.published_markdown_for_revision(
+            draft.revision.id,
+            profile_id="sales",
+        )
+        == sales_markdown
+    )
+    assert (
+        api.published_markdown_for_revision(
+            draft.revision.id,
+            profile_id="finance",
+        )
+        == ""
+    )
+    artifacts = store.list_documents("artifacts", {"session_id": draft.revision.id})
+    published = [
+        item for item in artifacts if item["artifact_type"] == "ontology_markdown_published"
+    ]
+    assert {
+        api._artifact_profile_id(item): item["content"]  # noqa: SLF001 - persisted scope assertion
+        for item in published
+    } == {"sales": sales_markdown}
+    llm_markdown = [item for item in artifacts if item["artifact_type"] == "ontology_llm_markdown"]
+    assert {api._artifact_profile_id(item) for item in llm_markdown} == {"sales"}  # noqa: SLF001
+
+
 def test_oracle_store_publish_uses_local_owl2rl_and_copies_markdown(
     runtime: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
     monkeypatch: pytest.MonkeyPatch,
