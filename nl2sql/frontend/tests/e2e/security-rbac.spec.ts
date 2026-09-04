@@ -5035,7 +5035,9 @@ test("DeepSec は構造化データ権限をロール別に編集する", async 
   });
   await expect(page.getByText("Data Grant を適用しました。", { exact: true }).last()).toBeVisible();
 
-  await entitlementForm.getByRole("button", { name: "データ権限を削除" }).click();
+  const removeEntitlementButton = entitlementForm.getByRole("button", { name: "データ権限を削除" });
+  await expect(removeEntitlementButton).toContainText("削除");
+  await removeEntitlementButton.click();
   await expect(entitlementForm.getByText("Data Grant 1", { exact: true })).toHaveCount(0);
   await entitlementForm.getByText("ロール全体の SQL プレビュー", { exact: true }).click();
   await expect(sqlPreviewButton).toBeEnabled();

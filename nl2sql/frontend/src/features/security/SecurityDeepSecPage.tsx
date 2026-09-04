@@ -2070,6 +2070,7 @@ export function SecurityDeepSecPage() {
                                   disabled={entitlementReadOnly || selectedEntitlementDraftIndex < 0}
                                 >
                                   <Trash2 size={14} aria-hidden />
+                                  {t("security.deepsec.entitlements.removeButtonLabel")}
                                 </Button>
                               ) : null}
                               <Button
