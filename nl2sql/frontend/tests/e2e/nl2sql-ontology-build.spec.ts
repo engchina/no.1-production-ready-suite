@@ -227,7 +227,10 @@ const generatedDraftMarkdown = [
   "## 同義語",
   "- 対象: `APP.ORDERS`",
   "",
-  "## 証拠 / 警告",
+  "## 証拠 / 確認事項",
+  "- なし",
+  "",
+  "## 採用外候補",
   "- 命名候補 APP.SECRET を profile 範囲内に解決できません。",
 ].join("\n");
 
@@ -280,11 +283,11 @@ function buildJob(status: string, stepStatus: string, proposalIds: string[] = []
             ? [
                 {
                   at: "2026-07-12T00:00:08Z",
-                  message_ja: "Markdown 下書き v4 を生成しました(候補 2 件、警告 1 件)。",
+                  message_ja: "Markdown 下書き v4 を生成しました(候補 2 件、採用外 1 件)。",
                 },
                 {
                   at: "2026-07-12T00:00:09Z",
-                  message_ja: "構築が完了しました(Markdown 下書き v4、警告 1 件)。",
+                  message_ja: "構築が完了しました(Markdown 下書き v4、採用外 1 件)。",
                 },
               ]
             : []),
@@ -308,7 +311,7 @@ function buildJob(status: string, stepStatus: string, proposalIds: string[] = []
           status: stepStatus,
           detail_ja:
             stepStatus === "succeeded"
-              ? "Markdown 下書き v4 を生成しました(候補 2 件、警告 1 件)。"
+              ? "Markdown 下書き v4 を生成しました(候補 2 件、採用外 1 件)。"
               : "",
           ...stepTimes,
         },
@@ -797,9 +800,9 @@ test("AI オントロジー構築の実行 → 進捗 → Markdown 下書き編�
   await expect(page.getByTestId("ontology-build-timeline")).toHaveCount(0);
   await expect(page.getByTestId("ontology-build-history")).toHaveCount(0);
   await expect(steps.getByRole("timer")).toHaveAccessibleName(/処理時間 \d{2}:\d{2}/);
-  // スコープ外候補の警告が確認できる
-  await steps.locator("summary").filter({ hasText: "警告" }).click();
-  await expect(steps.getByText("APP.SECRET", { exact: false })).toBeVisible();
+  // スコープ外候補は正常な採用外判定なので、成功 job の警告枠には出さない。
+  await expect(steps.locator("summary").filter({ hasText: "警告" })).toHaveCount(0);
+  await expect(steps.getByText("APP.SECRET", { exact: false })).toHaveCount(0);
 
   const markdown = page.getByTestId("ontology-build-markdown");
   await expect(
@@ -813,6 +816,7 @@ test("AI オントロジー構築の実行 → 進捗 → Markdown 下書き編�
   await expect(markdown.getByTestId("ontology-markdown-tab-published-meta")).toHaveText("未公開");
   const draftEditor = markdown.getByTestId("ontology-markdown-draft-editor");
   await expect(draftEditor).toHaveValue(/# オントロジー下書き/);
+  await expect(draftEditor).toHaveValue(/## 採用外候補[\s\S]*APP\.SECRET/);
   await expect(draftEditor).toHaveValue(/## 関係 \/ Join/);
   await markdown.getByRole("button", { name: "Markdown をコピー" }).click();
   await expect(page.getByText("コピーしました")).toBeVisible();

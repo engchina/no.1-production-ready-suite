@@ -678,8 +678,8 @@ def test_build_job_creates_markdown_draft_and_drops_outside_candidates(
     assert event_times == sorted(event_times)
     assert any("スキーマ情報を準備しました" in event.message_ja for event in finished.events)
     assert any("Markdown 下書き" in event.message_ja for event in finished.events)
-    # スコープ外(APP.SECRET)は draft graph 化されず warnings に落ちる
-    assert any("APP.SECRET" in warning for warning in finished.warnings_ja)
+    # スコープ外(APP.SECRET)は draft graph 化せず、利用者向け warning ではなく採用外候補に残す
+    assert not any("APP.SECRET" in warning for warning in finished.warnings_ja)
     assert finished.proposal_ids == []
     assert finished.draft_revision_id
     assert finished.draft_etag
@@ -718,7 +718,8 @@ def test_build_job_creates_markdown_draft_and_drops_outside_candidates(
     assert "## 業務ルール / 列挙値" in finished.markdown_output
     assert "## 同義語" in finished.markdown_output
     assert "オーダー" in finished.markdown_output
-    assert "## 証拠 / 警告" in finished.markdown_output
+    assert "## 証拠 / 確認事項" in finished.markdown_output
+    assert "## 採用外候補" in finished.markdown_output
     assert "APP.SECRET" in finished.markdown_output
 
     assert runtime.list_profile_proposals("sales") == []

@@ -2,7 +2,7 @@
 
 OCI Enterprise AI の入力 schema は Profile + DB schema catalog から直接作る。
 出力は Pydantic(:class:`OntologyBuildExtraction`)で検証し、profile スコープ外の
-owner/object/column を参照する候補は Markdown 下書きへ入れず warnings に落とす。
+owner/object/column を参照する候補は Markdown 下書きへ入れず採用外候補として記録する。
 生成物は承認済み draft revision と Markdown 下書き artifact として保存され、
 publish で Published Markdown へコピーされるまで SQL 生成には使われない。
 
@@ -19,7 +19,7 @@ import logging
 import re
 import threading
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -662,6 +662,47 @@ def _upserts_payload(
             "edge_upserts": [edge.model_dump(mode="json") for edge in edges],
         },
     )
+
+
+_NON_ACTIONABLE_PROPOSAL_WARNING_FRAGMENTS = (
+    "profile 範囲外のため提案化しません",
+    "profile 範囲内に解決できません",
+)
+
+
+def _unique_non_empty_messages(messages: Iterable[str]) -> list[str]:
+    return list(dict.fromkeys(message.strip() for message in messages if message.strip()))
+
+
+def _is_non_actionable_proposal_rejection(message: str) -> bool:
+    if "Q/A の SQL に" in message:
+        return "現れないため提案化しません" in message
+    return any(fragment in message for fragment in _NON_ACTIONABLE_PROPOSAL_WARNING_FRAGMENTS)
+
+
+def _split_ontology_build_warnings(messages: Iterable[str]) -> tuple[list[str], list[str]]:
+    actionable: list[str] = []
+    proposal_rejections: list[str] = []
+    for message in _unique_non_empty_messages(messages):
+        if _is_non_actionable_proposal_rejection(message):
+            proposal_rejections.append(message)
+        else:
+            actionable.append(message)
+    return actionable, proposal_rejections
+
+
+def _build_result_counts_ja(
+    proposal_count: int,
+    *,
+    warning_count: int,
+    rejected_count: int,
+) -> str:
+    parts = [f"候補 {proposal_count} 件"]
+    if warning_count:
+        parts.append(f"警告 {warning_count} 件")
+    if rejected_count:
+        parts.append(f"採用外 {rejected_count} 件")
+    return "、".join(parts)
 
 
 def _convert_relationship(
@@ -1514,6 +1555,7 @@ def render_ontology_build_markdown(
     schema_context: str,
     drafts: list[ProposalDraft],
     warnings: list[str],
+    proposal_rejections: list[str] | None = None,
     source_count: int,
     qa_pair_count: int,
     business_text_present: bool,
@@ -1682,11 +1724,15 @@ def render_ontology_build_markdown(
     lines.extend(profile_rule_enum_lines or ["- なし"])
     lines.extend(["", "## 同義語"])
     lines.extend(synonym_lines or ["- なし"])
-    lines.extend(["", "## 証拠 / 警告"])
-    unique_warnings = list(dict.fromkeys(warning for warning in warnings if warning.strip()))
-    lines.extend(f"- {warning}" for warning in unique_warnings)
+    lines.extend(["", "## 証拠 / 確認事項"])
+    unique_warnings = _unique_non_empty_messages(warnings)
+    lines.extend(f"- 警告: {warning}" for warning in unique_warnings)
     if not unique_warnings:
         lines.append("- なし")
+    unique_proposal_rejections = _unique_non_empty_messages(proposal_rejections or [])
+    if unique_proposal_rejections:
+        lines.extend(["", "## 採用外候補"])
+        lines.extend(f"- {message}" for message in unique_proposal_rejections)
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -3894,16 +3940,23 @@ class OntologyBuildService:
                 )
                 drafts.extend(step_drafts)
                 warnings.extend(step_warnings)
+                actionable_step_warnings, step_rejections = _split_ontology_build_warnings(
+                    step_warnings
+                )
+                step_result_counts = _build_result_counts_ja(
+                    len(step_drafts),
+                    warning_count=len(actionable_step_warnings),
+                    rejected_count=len(step_rejections),
+                )
                 self._set_step(
                     job_id,
                     validated.name,
                     OntologyBuildStepStatus.SUCCEEDED,
-                    f"候補 {len(step_drafts)} 件、警告 {len(step_warnings)} 件",
+                    step_result_counts,
                 )
                 self._emit(
                     job_id,
-                    f"{validated.label_ja}: 候補 {len(step_drafts)} 件、"
-                    f"警告 {len(step_warnings)} 件を抽出しました。",
+                    f"{validated.label_ja}: {step_result_counts}を整理しました。",
                 )
         if ontology is None:
             self._set_step(
@@ -3961,12 +4014,14 @@ class OntologyBuildService:
             "Markdown 下書きをレンダリング中…",
         )
         self._emit(job_id, "Markdown 下書きをレンダリングしています。")
+        actionable_warnings, proposal_rejections = _split_ontology_build_warnings(warnings)
         try:
             markdown_output = render_ontology_build_markdown(
                 profile_id=job.profile_id,
                 schema_context=schema_context,
                 drafts=draft_inputs,
-                warnings=warnings,
+                warnings=actionable_warnings,
+                proposal_rejections=proposal_rejections,
                 source_count=len(job.source_document_ids),
                 qa_pair_count=len(qa_pairs),
                 business_text_present=bool(text_units),
@@ -4031,9 +4086,14 @@ class OntologyBuildService:
             )
             self._fail(job_id, message)
             return
+        result_counts = _build_result_counts_ja(
+            len(draft_inputs),
+            warning_count=len(actionable_warnings),
+            rejected_count=len(proposal_rejections),
+        )
         registered_note = (
             f"Markdown 下書き v{draft_ontology.revision.version} を生成しました"
-            f"(候補 {len(draft_inputs)} 件、警告 {len(warnings)} 件)。"
+            f"({result_counts})。"
         )
         self._set_step(
             job_id,
@@ -4069,7 +4129,10 @@ class OntologyBuildService:
             job.draft_revision_id = draft_ontology.revision.id
             job.draft_etag = str(markdown_artifact.get("etag") or "")
             job.markdown_output = markdown_output
-            job.warnings_ja = [*job.warnings_ja, *warnings]
+            job_warnings, _job_rejections = _split_ontology_build_warnings(
+                [*job.warnings_ja, *warnings]
+            )
+            job.warnings_ja = job_warnings
             job.finished_at = finished_at
             job.events.append(
                 OntologyBuildEvent(
@@ -4081,8 +4144,10 @@ class OntologyBuildService:
             job.events.append(
                 OntologyBuildEvent(
                     message_ja=(
-                        f"構築が完了しました(Markdown 下書き v{draft_ontology.revision.version}、"
-                        f"警告 {len(warnings)} 件)。"
+                        f"構築が完了しました(Markdown 下書き v{draft_ontology.revision.version}"
+                        + (f"、警告 {len(actionable_warnings)} 件" if actionable_warnings else "")
+                        + (f"、採用外 {len(proposal_rejections)} 件" if proposal_rejections else "")
+                        + ")。"
                     )
                 )
             )
