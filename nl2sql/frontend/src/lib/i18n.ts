@@ -1103,6 +1103,16 @@ const nl2sqlJa = {
   "profiles.ontologyBuild.savedFilesList": "保存済みファイル一覧",
   "profiles.ontologyBuild.savedFilesLoading": "保存済みファイルを読み込んでいます…",
   "profiles.ontologyBuild.savedFilesEmpty": "保存済みファイルはまだありません。",
+  "profiles.ontologyBuild.savedFileDelete": "削除",
+  "profiles.ontologyBuild.savedFileDeleteAria": "{name} を保存済みファイルから削除",
+  "profiles.ontologyBuild.savedFileDeleteDisabledDuringBuild":
+    "構築中は完了後に保存済みファイルを削除できます。",
+  "profiles.ontologyBuild.savedFileDeleteConfirm.title":
+    "保存済みファイルを削除しますか",
+  "profiles.ontologyBuild.savedFileDeleteConfirm.description":
+    "「{name}」をこのプロファイルの保存済みファイルから削除します。この操作は元に戻せません。",
+  "profiles.ontologyBuild.savedFileDeleted":
+    "「{name}」を保存済みファイルから削除しました。",
   "profiles.ontologyBuild.qaFileSelected": "選択済み: {name}",
   "profiles.ontologyBuild.run": "AI 構築を実行",
   "profiles.ontologyBuild.running": "構築中…",
@@ -1232,6 +1242,8 @@ const nl2sqlJa = {
   "profiles.ontologyBuild.error.saveDraft": "Markdown 下書きを保存できませんでした。",
   "profiles.ontologyBuild.error.saveDraftNoDraft": "保存できる Markdown 下書きがありません。AI 構築を実行してください。",
   "profiles.ontologyBuild.error.publish": "オントロジーの公開に失敗しました。",
+  "profiles.ontologyBuild.error.deleteSavedFile":
+    "保存済みファイルを削除できませんでした。表示を更新して対象を確認してください。",
   "profiles.ontologyBuild.error.retryHint":
     "入力内容を確認して「AI 構築を実行」で再実行してください。解消しない場合は接続設定を確認してください。",
   "profiles.ontologyBuild.schemaRecoveryTitle":

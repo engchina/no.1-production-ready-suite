@@ -341,6 +341,27 @@ def _request_with_principal(principal: Principal | None) -> Any:
     return SimpleNamespace(state=SimpleNamespace(principal=principal))
 
 
+def _source_document(
+    source_id: str,
+    filename: str,
+    *,
+    profile_id: str = "sales",
+    content: bytes = b"# rules",
+    source_role: OntologySourceRole = OntologySourceRole.SOURCE,
+) -> OntologySourceDocument:
+    return OntologySourceDocument(
+        id=source_id,
+        profile_id=profile_id,
+        filename=filename,
+        media_type="text/markdown",
+        size_bytes=len(content),
+        sha256=hashlib.sha256(content).hexdigest(),
+        storage_uri=f"memory://{profile_id}/{source_id}",
+        status=OntologySourceStatus.STORED,
+        source_role=source_role,
+    )
+
+
 def test_router_declares_complete_query_session_and_profile_view_api() -> None:
     declared_paths = {str(getattr(route, "path", "")) for route in router.routes}
     assert "/nl2sql/query-sessions" in declared_paths
@@ -356,6 +377,11 @@ def test_router_declares_complete_query_session_and_profile_view_api() -> None:
     assert "/nl2sql/ontology/revisions/current" in declared_paths
     assert "/nl2sql/ontology/revisions/{revision_id}/drafts" in declared_paths
     assert "/nl2sql/ontology/revisions/{revision_id}/publish" in declared_paths
+    assert "/nl2sql/profiles/{profile_id}/ontology-source-documents" in declared_paths
+    assert (
+        "/nl2sql/profiles/{profile_id}/ontology-source-documents/{source_document_id}"
+        in declared_paths
+    )
 
 
 def test_initial_profile_view_persists_graph_in_collection_batches() -> None:
@@ -1509,6 +1535,60 @@ async def test_http_ontology_build_persists_current_form_inputs(
     }
     assert all("storage_uri" not in document for document in listed_sources)
     assert all("sha256" not in document for document in listed_sources)
+
+
+@pytest.mark.asyncio
+async def test_http_delete_profile_source_document_removes_only_matching_profile_file(
+    runtime: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api, store, _legacy = runtime
+
+    class _RecordingSourceStorage:
+        def __init__(self) -> None:
+            self.deleted: list[str] = []
+
+        def delete(self, source: OntologySourceDocument) -> None:
+            self.deleted.append(source.id)
+
+    source_storage = _RecordingSourceStorage()
+    build_service = OntologyBuildService(api, source_storage=source_storage)  # type: ignore[arg-type]
+    sales_source = _source_document("ontology_source_delete", "delete-me.md")
+    sales_keep = _source_document("ontology_source_keep", "keep-me.md")
+    finance_source = _source_document(
+        "ontology_source_finance",
+        "finance.md",
+        profile_id="finance",
+    )
+    for source in (sales_source, sales_keep, finance_source):
+        build_service._save_source_document(source)  # noqa: SLF001 - API cleanup contract setup
+    settings = get_settings()
+    monkeypatch.setattr(settings, "app_auth_enabled", False)
+    monkeypatch.setattr(ontology_router_module, "ontology_runtime", api)
+    monkeypatch.setattr(ontology_router_module, "ontology_build_service", build_service)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.delete(
+            "/api/nl2sql/profiles/sales/ontology-source-documents/ontology_source_delete"
+        )
+        cross_profile_response = await client.delete(
+            "/api/nl2sql/profiles/sales/ontology-source-documents/ontology_source_finance"
+        )
+
+    assert response.status_code == 200
+    assert response.json()["data"] == {
+        "source_document_id": "ontology_source_delete",
+        "deleted": True,
+    }
+    assert cross_profile_response.status_code == 404
+    assert source_storage.deleted == ["ontology_source_delete"]
+    assert store.get_document("source_documents", {"source_document_id": sales_source.id}) is None
+    assert store.get_document("source_documents", {"source_document_id": sales_keep.id}) is not None
+    assert (
+        store.get_document("source_documents", {"source_document_id": finance_source.id})
+        is not None
+    )
 
 
 @pytest.mark.asyncio

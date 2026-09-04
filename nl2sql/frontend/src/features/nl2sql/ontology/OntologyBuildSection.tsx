@@ -16,6 +16,7 @@ import {
   RefreshCw,
   Save,
   Sparkles,
+  Trash2,
   UploadCloud,
   X,
 } from "lucide-react";
@@ -54,6 +55,7 @@ import {
 import {
   ApiError,
   cancelOntologyBuildJob,
+  deleteOntologySourceDocument,
   getOntologyBuildJob,
   getOntologyMarkdownState,
   getOntologyPublishJob,
@@ -405,14 +407,28 @@ function sourceDocumentMeta(source: OntologySourceDocument): string {
   ].join(" · ");
 }
 
+const SOURCE_DOCUMENT_DELETE_BUSY_PREFIX = "source-document-delete:";
+
+function sourceDocumentDeleteBusyKey(sourceDocumentId: string): string {
+  return `${SOURCE_DOCUMENT_DELETE_BUSY_PREFIX}${sourceDocumentId}`;
+}
+
 function SavedSourceDocumentsList({
   documents,
   loading,
   profileLabel,
+  deletingSourceDocumentId = "",
+  deleteDisabled = false,
+  deleteDisabledTitle = "",
+  onDelete,
 }: {
   documents: OntologySourceDocument[];
   loading: boolean;
   profileLabel?: string;
+  deletingSourceDocumentId?: string;
+  deleteDisabled?: boolean;
+  deleteDisabledTitle?: string;
+  onDelete?: (source: OntologySourceDocument) => void;
 }) {
   return (
     <section
@@ -440,37 +456,58 @@ function SavedSourceDocumentsList({
       {documents.length > 0 ? (
         <ul className="grid gap-1" aria-label={t("profiles.ontologyBuild.savedFilesList")}>
           {documents.map((source) => (
-            <li
-              key={source.id}
-              className="grid min-w-0 gap-2 rounded-md border border-border bg-background px-3 py-2 text-sm sm:grid-cols-[minmax(0,1fr)_auto]"
-            >
-              <span className="min-w-0">
-                <span className="block break-all font-semibold text-foreground">
-                  {source.filename}
-                </span>
-                <span className="block text-xs leading-5 text-muted">
-                  {sourceDocumentMeta(source)}
-                </span>
-              </span>
-              <span className="flex flex-wrap items-center gap-2 sm:justify-end">
-                <StatusBadge
-                  variant="neutral"
-                  label={t(
-                    `profiles.ontologyBuild.sourceRole.${source.source_role ?? "source"}`
-                  )}
-                />
-                <StatusBadge
-                  variant={sourceStatusVariant(source.status)}
-                  label={t(`profiles.ontologyBuild.sourceStatus.${source.status}`)}
-                />
-                {(source.extracted_chunk_count ?? 0) > 0 ? (
-                  <span className="text-xs tabular-nums text-muted">
-                    {t("profiles.ontologyBuild.sourceChunks", {
-                      count: source.extracted_chunk_count ?? 0,
-                    })}
+            <li key={source.id} className="rounded-md border border-border bg-background px-3 py-2 text-sm">
+              <div className="grid min-w-0 gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+                <span className="min-w-0">
+                  <span className="block break-all font-semibold text-foreground">
+                    {source.filename}
                   </span>
-                ) : null}
-              </span>
+                  <span className="block text-xs leading-5 text-muted">
+                    {sourceDocumentMeta(source)}
+                  </span>
+                </span>
+                <span className="flex min-w-0 flex-wrap items-center gap-2 sm:justify-end">
+                  <StatusBadge
+                    variant="neutral"
+                    label={t(
+                      `profiles.ontologyBuild.sourceRole.${source.source_role ?? "source"}`
+                    )}
+                  />
+                  <StatusBadge
+                    variant={sourceStatusVariant(source.status)}
+                    label={t(`profiles.ontologyBuild.sourceStatus.${source.status}`)}
+                  />
+                  {(source.extracted_chunk_count ?? 0) > 0 ? (
+                    <span className="text-xs tabular-nums text-muted">
+                      {t("profiles.ontologyBuild.sourceChunks", {
+                        count: source.extracted_chunk_count ?? 0,
+                      })}
+                    </span>
+                  ) : null}
+                  {onDelete ? (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="text-danger hover:text-danger focus-visible:ring-danger/30"
+                      loading={deletingSourceDocumentId === source.id}
+                      disabled={
+                        loading ||
+                        deleteDisabled ||
+                        Boolean(deletingSourceDocumentId && deletingSourceDocumentId !== source.id)
+                      }
+                      title={deleteDisabledTitle || undefined}
+                      aria-label={t("profiles.ontologyBuild.savedFileDeleteAria", {
+                        name: source.filename,
+                      })}
+                      onClick={() => onDelete(source)}
+                    >
+                      <Trash2 size={15} aria-hidden="true" />
+                      <span>{t("profiles.ontologyBuild.savedFileDelete")}</span>
+                    </Button>
+                  ) : null}
+                </span>
+              </div>
             </li>
           ))}
         </ul>
@@ -551,6 +588,11 @@ export function OntologyBuildSection({
   const publishRunning =
     publishJob !== null &&
     ["queued", "materializing", "validating"].includes(publishJob.status);
+  const deletingSourceDocumentId = busy.startsWith(SOURCE_DOCUMENT_DELETE_BUSY_PREFIX)
+    ? busy.slice(SOURCE_DOCUMENT_DELETE_BUSY_PREFIX.length)
+    : "";
+  const savedSourceDocumentDeleteDisabled =
+    jobRunning || publishRunning || (busy !== "" && !deletingSourceDocumentId);
   const jobId = job?.id ?? null;
   const publishJobId = publishJob?.id ?? null;
   // 新 backend は機械可読 error_code(SCHEMA_SCOPE_*)を返す。文言一致は旧 job 互換。
@@ -1207,6 +1249,47 @@ export function OntologyBuildSection({
     }
   };
 
+  const deleteSavedSourceDocument = async (source: OntologySourceDocument) => {
+    if (!profileId || jobRunning || publishRunning || busy) return;
+    const ok = await confirm({
+      title: t("profiles.ontologyBuild.savedFileDeleteConfirm.title"),
+      description: t("profiles.ontologyBuild.savedFileDeleteConfirm.description", {
+        name: source.filename,
+      }),
+      confirmLabel: t("profiles.ontologyBuild.savedFileDelete"),
+      tone: "danger",
+      dismissOnOverlay: false,
+    });
+    if (!ok) return;
+
+    const targetProfileId = profileId;
+    const busyKey = sourceDocumentDeleteBusyKey(source.id);
+    setBusy(busyKey);
+    clearNotice();
+    try {
+      await deleteOntologySourceDocument(targetProfileId, source.id);
+      if (profileIdRef.current !== targetProfileId) return;
+      setSavedSourceDocuments((current) => current.filter((item) => item.id !== source.id));
+      toast.success(
+        t("profiles.ontologyBuild.savedFileDeleted", {
+          name: source.filename,
+        })
+      );
+      void refreshSourceDocuments(targetProfileId);
+    } catch (err) {
+      if (profileIdRef.current !== targetProfileId) return;
+      showNotice(
+        "danger",
+        err instanceof Error
+          ? err.message
+          : t("profiles.ontologyBuild.error.deleteSavedFile")
+      );
+      void refreshSourceDocuments(targetProfileId);
+    } finally {
+      setBusy((current) => (current === busyKey ? "" : current));
+    }
+  };
+
   const saveDraftMarkdown = async ({ silent = false }: { silent?: boolean } = {}) => {
     const currentMarkdownState = markdownStateRef.current;
     const currentDraftRevision = draftRevisionRef.current;
@@ -1388,6 +1471,14 @@ export function OntologyBuildSection({
             documents={savedSourceDocuments}
             loading={savedSourceDocumentsLoading}
             profileLabel={profileLabel}
+            deletingSourceDocumentId={deletingSourceDocumentId}
+            deleteDisabled={savedSourceDocumentDeleteDisabled}
+            deleteDisabledTitle={
+              jobRunning
+                ? t("profiles.ontologyBuild.savedFileDeleteDisabledDuringBuild")
+                : ""
+            }
+            onDelete={(source) => void deleteSavedSourceDocument(source)}
           />
         </div>
 
