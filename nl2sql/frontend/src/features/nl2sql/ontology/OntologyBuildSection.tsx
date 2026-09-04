@@ -354,6 +354,22 @@ function buildProgressMessage(status: OntologyBuildJob["status"]) {
   return t("profiles.ontologyBuild.progress.pending");
 }
 
+function isNonActionableOntologyBuildRejection(warning: string): boolean {
+  if (warning.includes("Q/A の SQL に")) {
+    return warning.includes("現れないため提案化しません");
+  }
+  return (
+    warning.includes("profile 範囲外のため提案化しません") ||
+    warning.includes("profile 範囲内に解決できません")
+  );
+}
+
+function visibleOntologyBuildWarnings(job: OntologyBuildJob): string[] {
+  const warnings = job.warnings_ja.map((warning) => warning.trim()).filter(Boolean);
+  if (job.status !== "succeeded") return warnings;
+  return warnings.filter((warning) => !isNonActionableOntologyBuildRejection(warning));
+}
+
 function normalizeBuildStepStatus(status: OntologyBuildStep["status"]): WorkflowProgressStepStatus {
   if (status === "succeeded") return "done";
   if (status === "failed") return "error";
@@ -555,6 +571,7 @@ export function OntologyBuildSection({
     job?.status === "failed" && !schemaScopeFailure && job.error_message_ja
       ? `${job.error_message_ja} ${t("profiles.ontologyBuild.error.retryHint")}`
       : "";
+  const buildWarnings = job ? visibleOntologyBuildWarnings(job) : [];
   const publishedMarkdown = markdownState?.published_markdown ?? "";
   const publishedRevision = markdownState?.published_revision ?? null;
   const publishedAt = publishedRevision?.published_at ?? markdownState?.published_at ?? null;
@@ -1498,7 +1515,7 @@ export function OntologyBuildSection({
             schemaScopeFailure ||
             unscopedBuildError ||
             markdownDraftStale ||
-            job.warnings_ja.length > 0 ||
+            buildWarnings.length > 0 ||
             (job.sources?.length ?? 0) > 0 ? (
               <div className="mx-4 mb-4 grid gap-2">
                 {schemaScopeFailure ? (
@@ -1553,19 +1570,19 @@ export function OntologyBuildSection({
                     {t("profiles.ontologyBuild.markdownStaleWarning")}
                   </Banner>
                 ) : null}
-                {job.warnings_ja.length > 0 ? (
+                {buildWarnings.length > 0 ? (
                   <details
                     open={job.status === "failed"}
                     className="group/disclosure rounded-md border border-warning/30 bg-warning-bg p-2 text-sm text-warning"
                   >
                     <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 [&::-webkit-details-marker]:hidden">
                       <span>
-                        {t("profiles.ontologyBuild.warningsTitle")} ({job.warnings_ja.length})
+                        {t("profiles.ontologyBuild.warningsTitle")} ({buildWarnings.length})
                       </span>
                       <DisclosureChevron expanded="group" size={15} />
                     </summary>
                     <ul className="mt-2 grid gap-1 pl-4">
-                      {job.warnings_ja.map((warning) => (
+                      {buildWarnings.map((warning) => (
                         <li key={warning} className="list-disc">
                           {warning}
                         </li>
