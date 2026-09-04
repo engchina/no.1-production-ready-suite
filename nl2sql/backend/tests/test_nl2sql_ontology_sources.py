@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import json
 import tempfile
 from pathlib import Path
 from typing import BinaryIO, cast
@@ -83,7 +84,7 @@ def _docx_bytes() -> bytes:
         (
             "qa.csv",
             "QUESTION,SQL\n受注件数,SELECT COUNT(*) FROM APP.ORDERS\n".encode(),
-            OntologyEvidenceLocatorKind.LINE,
+            OntologyEvidenceLocatorKind.QA_ROW,
         ),
         ("model.xlsx", _workbook_bytes(), OntologyEvidenceLocatorKind.SHEET_ROW),
         ("model.xlsm", _workbook_bytes(), OntologyEvidenceLocatorKind.SHEET_ROW),
@@ -104,6 +105,65 @@ def test_supported_sources_preserve_locator_and_hash(
     assert len(evidence.excerpt_hash) == 64
     if filename.endswith((".csv", ".xlsx", ".xlsm")):
         assert extracted.qa_pairs[0].question == "受注件数"
+
+
+def test_qa_csv_source_extracts_jsonl_chunk_per_data_row() -> None:
+    content = (
+        "QUESTION,SQL,NOTE\n"
+        "受注件数,SELECT COUNT(*) FROM APP.ORDERS,件数確認\n"
+        "顧客一覧,SELECT * FROM APP.CUSTOMERS,一覧確認\n"
+    ).encode()
+
+    extracted = extract_ontology_source(_source("qa_cases.csv", content), content)
+
+    assert [pair.question for pair in extracted.qa_pairs] == ["受注件数", "顧客一覧"]
+    assert [chunk.locator for chunk in extracted.chunks] == ["row:2", "row:3"]
+    assert all(
+        chunk.locator_kind == OntologyEvidenceLocatorKind.QA_ROW for chunk in extracted.chunks
+    )
+    blocks = [json.loads(chunk.text) for chunk in extracted.chunks]
+    assert [block["block_type"] for block in blocks] == ["qa_pair", "qa_pair"]
+    assert [block["source_file"] for block in blocks] == ["qa_cases.csv", "qa_cases.csv"]
+    assert [block["source_type"] for block in blocks] == ["csv", "csv"]
+    assert [block["row_start"] for block in blocks] == [2, 3]
+    assert blocks[0]["question"] == "受注件数"
+    assert blocks[0]["sql"] == "SELECT COUNT(*) FROM APP.ORDERS"
+    assert blocks[0]["fields"] == {
+        "QUESTION": "受注件数",
+        "SQL": "SELECT COUNT(*) FROM APP.ORDERS",
+        "NOTE": "件数確認",
+    }
+
+
+def test_qa_workbook_source_extracts_jsonl_chunks_with_sheet_metadata() -> None:
+    content = _multi_sheet_qa_workbook_bytes()
+
+    extracted = extract_ontology_source(_source("qa.xlsx", content), content)
+
+    assert [pair.question for pair in extracted.qa_pairs] == ["受注件数", "顧客一覧"]
+    assert [chunk.locator for chunk in extracted.chunks] == [
+        "sheet:Q&A-1;row:2",
+        "sheet:Q&A-2;row:2",
+    ]
+    blocks = [json.loads(chunk.text) for chunk in extracted.chunks]
+    assert [block["sheet"] for block in blocks] == ["Q&A-1", "Q&A-2"]
+    assert all(block["source_file"] == "qa.xlsx" for block in blocks)
+    assert all(block["source_type"] == "excel" for block in blocks)
+    assert all(block["block_type"] == "qa_pair" for block in blocks)
+
+
+def test_qa_jsonl_chunks_keep_duplicate_and_blank_headers_traceable() -> None:
+    content = (
+        "QUESTION,SQL,,担当,担当\n"
+        "売上合計,SELECT SUM(AMOUNT) FROM APP.ORDERS,優先,運用担当,購買担当\n"
+    ).encode()
+
+    extracted = extract_ontology_source(_source("qa_cases.csv", content), content)
+    block = json.loads(extracted.chunks[0].text)
+
+    assert block["fields"]["column_C"] == "優先"
+    assert block["fields"]["担当"] == "運用担当"
+    assert block["fields"]["担当__E"] == "購買担当"
 
 
 def test_tsv_source_is_rejected() -> None:

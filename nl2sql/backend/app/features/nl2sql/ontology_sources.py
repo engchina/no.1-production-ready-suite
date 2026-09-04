@@ -42,6 +42,8 @@ SUPPORTED_ONTOLOGY_SOURCE_SUFFIXES = frozenset(
     {".pdf", ".docx", ".txt", ".md", ".csv", ".xlsx", ".xls", ".xlsm"}
 )
 _CHUNK_SIZE = 1024 * 1024
+_QA_QUESTION_KEYS = {"QUESTION", "質問", "TEXT", "PROMPT"}
+_QA_SQL_KEYS = {"SQL", "ANSWERSQL", "回答SQL", "正解SQL"}
 _ALLOWED_MEDIA_TYPES: dict[str, frozenset[str]] = {
     ".pdf": frozenset({"application/pdf"}),
     ".docx": frozenset({"application/vnd.openxmlformats-officedocument.wordprocessingml.document"}),
@@ -361,7 +363,7 @@ def extract_ontology_source(
     if suffix in {".txt", ".md"}:
         return _extract_text(content)
     if suffix == ".csv":
-        return _extract_delimited(content, delimiter=",")
+        return _extract_delimited(source.filename, content, delimiter=",")
     if suffix in WORKBOOK_SUFFIXES:
         return _extract_workbook(source.filename, content)
     if suffix == ".docx":
@@ -381,16 +383,28 @@ def _extract_text(content: bytes) -> ExtractedOntologySource:
     return ExtractedOntologySource(chunks=chunks, qa_pairs=[], warnings_ja=[])
 
 
+def _header_key(value: str) -> str:
+    return value.strip().upper().replace("_", "")
+
+
+def _qa_header_indexes(headers: list[str]) -> tuple[int, int] | None:
+    normalized = [_header_key(value) for value in headers]
+    question_index = next(
+        (i for i, value in enumerate(normalized) if value in _QA_QUESTION_KEYS), None
+    )
+    sql_index = next((i for i, value in enumerate(normalized) if value in _QA_SQL_KEYS), None)
+    if question_index is None or sql_index is None:
+        return None
+    return question_index, sql_index
+
+
 def _qa_pairs_from_rows(rows: list[list[str]]) -> list[QaPair]:
     if not rows:
         return []
-    headers = [value.strip().upper().replace("_", "") for value in rows[0]]
-    question_keys = {"QUESTION", "質問", "TEXT", "PROMPT"}
-    sql_keys = {"SQL", "ANSWERSQL", "回答SQL", "正解SQL"}
-    question_index = next((i for i, value in enumerate(headers) if value in question_keys), None)
-    sql_index = next((i for i, value in enumerate(headers) if value in sql_keys), None)
-    if question_index is None or sql_index is None:
+    qa_indexes = _qa_header_indexes(rows[0])
+    if qa_indexes is None:
         return []
+    question_index, sql_index = qa_indexes
     result: list[QaPair] = []
     for row in rows[1:]:
         question = row[question_index].strip() if len(row) > question_index else ""
@@ -400,12 +414,114 @@ def _qa_pairs_from_rows(rows: list[list[str]]) -> list[QaPair]:
     return result
 
 
-def _extract_delimited(content: bytes, *, delimiter: str) -> ExtractedOntologySource:
+def _column_letter(index: int) -> str:
+    """0-origin の列番号を Excel と同じ A/B/.../AA 形式へ変換する。"""
+
+    number = index + 1
+    letters = ""
+    while number:
+        number, remainder = divmod(number - 1, 26)
+        letters = chr(ord("A") + remainder) + letters
+    return letters
+
+
+def _tabular_headers(raw_headers: list[str]) -> list[str]:
+    headers: list[str] = []
+    seen_base: set[str] = set()
+    seen_labels: set[str] = set()
+    for index, raw_header in enumerate(raw_headers):
+        column = _column_letter(index)
+        base = normalize_source_text(raw_header) or f"column_{column}"
+        label = base
+        if base in seen_base:
+            label = f"{base}__{column}"
+            suffix = 2
+            while label in seen_labels:
+                label = f"{base}__{column}_{suffix}"
+                suffix += 1
+        seen_base.add(base)
+        seen_labels.add(label)
+        headers.append(label)
+    return headers
+
+
+def _row_fields(headers: list[str], row: list[str]) -> dict[str, str]:
+    fields: dict[str, str] = {}
+    for index, value in enumerate(row):
+        normalized = normalize_source_text(value)
+        if not normalized:
+            continue
+        header = headers[index] if index < len(headers) else f"column_{_column_letter(index)}"
+        fields[header] = normalized
+    return fields
+
+
+def _json_line(value: dict[str, Any]) -> str:
+    return json.dumps(
+        {key: item for key, item in value.items() if item not in ("", None, [], {})},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
+def _qa_jsonl_chunks_from_rows(
+    rows: list[list[str]],
+    *,
+    source_file: str,
+    source_type: str,
+    sheet: str = "",
+    locator_kind: OntologyEvidenceLocatorKind,
+) -> list[ExtractedSourceChunk] | None:
+    if not rows:
+        return None
+    qa_indexes = _qa_header_indexes(rows[0])
+    if qa_indexes is None:
+        return None
+    question_index, sql_index = qa_indexes
+    headers = _tabular_headers(rows[0])
+    chunks: list[ExtractedSourceChunk] = []
+    for row_number, row in enumerate(rows[1:], start=2):
+        question = row[question_index].strip() if len(row) > question_index else ""
+        sql = row[sql_index].strip() if len(row) > sql_index else ""
+        if not (question and sql and sql.split(None, 1)[0].upper() in {"SELECT", "WITH"}):
+            continue
+        block = {
+            "source_file": source_file,
+            "source_type": source_type,
+            "block_type": "qa_pair",
+            "sheet": sheet,
+            "row_start": row_number,
+            "row_end": row_number,
+            "question": question,
+            "sql": sql,
+            "fields": _row_fields(headers, row),
+        }
+        locator = f"sheet:{sheet};row:{row_number}" if sheet else f"row:{row_number}"
+        chunks.append(ExtractedSourceChunk(_json_line(block), locator_kind, locator))
+    return chunks
+
+
+def _extract_delimited(
+    filename: str,
+    content: bytes,
+    *,
+    delimiter: str,
+) -> ExtractedOntologySource:
     text = decode_source_text(content)
     rows = [
         [normalize_source_text(value) for value in row]
         for row in csv.reader(io.StringIO(text), delimiter=delimiter)
     ]
+    qa_chunks = _qa_jsonl_chunks_from_rows(
+        rows,
+        source_file=filename,
+        source_type="csv",
+        locator_kind=OntologyEvidenceLocatorKind.QA_ROW,
+    )
+    if qa_chunks is not None:
+        return ExtractedOntologySource(
+            chunks=qa_chunks, qa_pairs=_qa_pairs_from_rows(rows), warnings_ja=[]
+        )
     chunks = [
         ExtractedSourceChunk(
             json.dumps(row, ensure_ascii=False),
@@ -433,6 +549,16 @@ def _extract_workbook(filename: str, content: bytes) -> ExtractedOntologySource:
             for row in sheet.rows
         ]
         qa_pairs.extend(_qa_pairs_from_rows(rows))
+        qa_chunks = _qa_jsonl_chunks_from_rows(
+            rows,
+            source_file=filename,
+            source_type="excel",
+            sheet=sheet.title,
+            locator_kind=OntologyEvidenceLocatorKind.SHEET_ROW,
+        )
+        if qa_chunks is not None:
+            chunks.extend(qa_chunks)
+            continue
         chunks.extend(
             ExtractedSourceChunk(
                 json.dumps(row, ensure_ascii=False),
