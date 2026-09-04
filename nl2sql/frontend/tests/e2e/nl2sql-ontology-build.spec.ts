@@ -196,38 +196,38 @@ const ontologyView = {
 };
 
 const generatedDraftMarkdown = [
-  "# Ontology Draft",
+  "# オントロジー下書き",
   "",
-  "## Input Summary",
-  "- Profile: `default`",
-  "- DB schema objects: 2",
+  "## 入力サマリー",
+  "- プロファイル: `default`",
+  "- DB スキーマオブジェクト: 2",
   "",
-  "## Physical Objects",
+  "## 物理オブジェクト",
   "- `APP.ORDERS` (table)",
-  "  - business_name: 受注",
-  "  - usage: 確定済み受注の売上分析に使用",
+  "  - 業務名: 受注",
+  "  - 用途: 確定済み受注の売上分析に使用",
   "- `APP.CUSTOMERS` (table)",
-  "  - business_name: 顧客",
+  "  - 業務名: 顧客",
   "",
-  "## Entities",
+  "## 業務エンティティ",
   "- 受注 (`APP.ORDERS`)",
   "",
-  "## Relationships / Join",
-  "- 受注 (`APP.ORDERS`) -> 顧客 (`APP.CUSTOMERS`): 顧客を参照",
-  "  - allowed_path: true",
-  "  - join_conditions:",
+  "## 関係 / Join",
+  "- 受注 (`APP.ORDERS`) → 顧客 (`APP.CUSTOMERS`): 顧客を参照",
+  "  - 検索利用: 利用可",
+  "  - Join 条件:",
   "    - `APP.ORDERS.CUSTOMER_ID = APP.CUSTOMERS.ID`",
   "",
-  "## Metrics",
+  "## 指標",
   "- 受注金額合計",
   "",
-  "## Business Rules / Enum Values",
+  "## 業務ルール / 列挙値",
   "- なし",
   "",
-  "## Synonyms",
-  "- target: `APP.ORDERS`",
+  "## 同義語",
+  "- 対象: `APP.ORDERS`",
   "",
-  "## Evidence / Warnings",
+  "## 証拠 / 警告",
   "- 命名候補 APP.SECRET を profile 範囲内に解決できません。",
 ].join("\n");
 
@@ -280,11 +280,11 @@ function buildJob(status: string, stepStatus: string, proposalIds: string[] = []
             ? [
                 {
                   at: "2026-07-12T00:00:08Z",
-                  message_ja: "Markdown Draft v4 を生成しました(候補 2 件、警告 1 件)。",
+                  message_ja: "Markdown 下書き v4 を生成しました(候補 2 件、警告 1 件)。",
                 },
                 {
                   at: "2026-07-12T00:00:09Z",
-                  message_ja: "構築が完了しました(Markdown Draft v4、警告 1 件)。",
+                  message_ja: "構築が完了しました(Markdown 下書き v4、警告 1 件)。",
                 },
               ]
             : []),
@@ -308,7 +308,7 @@ function buildJob(status: string, stepStatus: string, proposalIds: string[] = []
           status: stepStatus,
           detail_ja:
             stepStatus === "succeeded"
-              ? "Markdown Draft v4 を生成しました(候補 2 件、警告 1 件)。"
+              ? "Markdown 下書き v4 を生成しました(候補 2 件、警告 1 件)。"
               : "",
           ...stepTimes,
         },
@@ -613,7 +613,7 @@ async function mockApi(page: Page) {
   return state;
 }
 
-test("AI オントロジー構築の実行 → 進捗 → Markdown Draft 編集 → 公開の導線が機能する", async ({ context, page }, testInfo) => {
+test("AI オントロジー構築の実行 → 進捗 → Markdown 下書き編集 → 公開の導線が機能する", async ({ context, page }, testInfo) => {
   await context.grantPermissions(["clipboard-read", "clipboard-write"], {
     origin: `http://127.0.0.1:${process.env.PLAYWRIGHT_PORT ?? "3101"}`,
   });
@@ -622,7 +622,7 @@ test("AI オントロジー構築の実行 → 進捗 → Markdown Draft 編集 
 
   const section = page.getByTestId("profile-ontology-build");
   await expect(section.getByRole("heading", { name: "オントロジー構築" })).toBeVisible();
-  await expect(page.getByRole("button", { name: /Ontology view を/ })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /オントロジー view を/ })).toHaveCount(0);
   await expect(page.getByText("オントロジー連携", { exact: true })).toHaveCount(0);
   await expect(page.getByText("業種テンプレート", { exact: true })).toHaveCount(0);
   await expect(page.getByText("OWL(RDF)エクスポート / インポート", { exact: true })).toHaveCount(
@@ -635,9 +635,9 @@ test("AI オントロジー構築の実行 → 進捗 → Markdown Draft 編集 
 
   // 初期状態では Draft / Published とも空
   await expect(section.getByTestId("ontology-markdown-draft-empty")).toBeVisible();
-  await section.getByRole("tab", { name: "Markdown Ontology Published" }).click();
+  await section.getByRole("tab", { name: "公開済み Markdown オントロジー" }).click();
   await expect(section.getByText("公開済み Markdown はまだありません。")).toBeVisible();
-  await section.getByRole("tab", { name: "Markdown Ontology Draft" }).click();
+  await section.getByRole("tab", { name: "Markdown オントロジー下書き" }).click();
   await expect(page.getByTestId("ontology-build-source-files-input")).toHaveAttribute(
     "accept",
     ".pdf,.docx,.txt,.md,.csv,.xlsx,.xls,.xlsm"
@@ -789,7 +789,7 @@ test("AI オントロジー構築の実行 → 進捗 → Markdown Draft 編集 
   await expect(schemaStep.getByText("スキーマ情報を準備しました", { exact: false })).toBeVisible();
   const proposalStep = page.getByTestId("ontology-build-step-proposal_registration");
   await expect(proposalStep).toHaveAttribute("data-step-status", "succeeded");
-  await expect(steps.getByText("Markdown Draft v4 を生成しました", { exact: false })).toBeVisible();
+  await expect(steps.getByText("Markdown 下書き v4 を生成しました", { exact: false })).toBeVisible();
   await expect(steps.getByText("構築リクエストを受け付けました", { exact: false })).toHaveCount(0);
   await expect(steps.getByText("AI オントロジー構築を開始しました", { exact: false })).toHaveCount(0);
   await expect(steps.getByText("構築が完了しました", { exact: false })).toHaveCount(0);
@@ -803,31 +803,31 @@ test("AI オントロジー構築の実行 → 進捗 → Markdown Draft 編集 
 
   const markdown = page.getByTestId("ontology-build-markdown");
   await expect(
-    markdown.getByTestId("ontology-build-markdown-actions").getByText("Markdown Ontology", {
+    markdown.getByTestId("ontology-build-markdown-actions").getByText("Markdown オントロジー", {
       exact: true,
     })
   ).toBeVisible();
-  await expect(markdown.getByRole("tab", { name: "Markdown Ontology Draft" })).toBeVisible();
-  await expect(markdown.getByRole("tab", { name: "Markdown Ontology Published" })).toBeVisible();
+  await expect(markdown.getByRole("tab", { name: "Markdown オントロジー下書き" })).toBeVisible();
+  await expect(markdown.getByRole("tab", { name: "公開済み Markdown オントロジー" })).toBeVisible();
   await expect(markdown.getByTestId("ontology-markdown-tab-draft-meta")).toHaveText("v4");
   await expect(markdown.getByTestId("ontology-markdown-tab-published-meta")).toHaveText("未公開");
   const draftEditor = markdown.getByTestId("ontology-markdown-draft-editor");
-  await expect(draftEditor).toHaveValue(/# Ontology Draft/);
-  await expect(draftEditor).toHaveValue(/## Relationships \/ Join/);
+  await expect(draftEditor).toHaveValue(/# オントロジー下書き/);
+  await expect(draftEditor).toHaveValue(/## 関係 \/ Join/);
   await markdown.getByRole("button", { name: "Markdown をコピー" }).click();
   await expect(page.getByText("コピーしました")).toBeVisible();
 
-  await markdown.getByRole("tab", { name: "Markdown Ontology Published" }).click();
+  await markdown.getByRole("tab", { name: "公開済み Markdown オントロジー" }).click();
   await expect(markdown.getByTestId("ontology-markdown-published-viewer")).toContainText(
     "公開済み Markdown はまだありません。"
   );
-  await markdown.getByRole("tab", { name: "Markdown Ontology Draft" }).click();
+  await markdown.getByRole("tab", { name: "Markdown オントロジー下書き" }).click();
 
   // 標準図示は質問の接地確認グラフへ一本化され、公開後は同じ公開 revision へ更新される
   const ontologyQueryPanel = page.locator("#ontology-query-playground-panel");
   await expect(page.getByTestId("ontology-mermaid-panel")).toHaveCount(0);
   await expect(
-    ontologyQueryPanel.getByRole("heading", { name: "質問の Ontology 接地確認用グラフ" })
+    ontologyQueryPanel.getByRole("heading", { name: "質問のオントロジー接地確認用グラフ" })
   ).toBeVisible();
   await expect(ontologyQueryPanel.getByTestId("ontology-playground-revision-id")).toContainText(
     "revision-1"
@@ -838,7 +838,7 @@ test("AI オントロジー構築の実行 → 進捗 → Markdown Draft 編集 
   }
   await expect(ontologyQueryPanel.getByTestId("ontology-graph-mode-physical_er")).toBeVisible();
 
-  await draftEditor.fill(`${generatedDraftMarkdown}\n\n## Manual Notes\n- 公開確認済み`);
+  await draftEditor.fill(`${generatedDraftMarkdown}\n\n## 手動メモ\n- 公開確認済み`);
   await expect(markdown.getByText("未保存")).toBeVisible();
   const ontologyViewCallsBeforePublish = state.ontologyViewCalls;
 
@@ -847,12 +847,12 @@ test("AI オントロジー構築の実行 → 進捗 → Markdown Draft 編集 
   await expect(page.getByRole("button", { name: /却下/ })).toHaveCount(0);
 
   const publishActions = page.getByTestId("ontology-publish-actions");
-  const publishButton = publishActions.getByRole("button", { name: "Ontology を公開" });
+  const publishButton = publishActions.getByRole("button", { name: "オントロジーを公開" });
   await expectButtonLabelFits(publishButton);
   await publishButton.click();
   // 公開完了の“瞬間”は toast(document.body 直下)で通知する(spec §9)。section 外なので page スコープで確認。
-  await expect(page.getByText("Ontology を公開しました。")).toBeVisible();
-  expect(state.savedDraftMarkdown).toContain("Manual Notes");
+  await expect(page.getByText("オントロジーを公開しました。")).toBeVisible();
+  expect(state.savedDraftMarkdown).toContain("手動メモ");
   expect(state.published).toBe(true);
   await expect(page.getByTestId("ontology-publish-status")).toContainText("完了");
   await expect.poll(() => state.ontologyViewCalls).toBeGreaterThan(ontologyViewCallsBeforePublish);
@@ -860,24 +860,24 @@ test("AI オントロジー構築の実行 → 進捗 → Markdown Draft 編集 
     "revision-draft-4"
   );
   await expect(page.getByTestId("ontology-mermaid-panel")).toHaveCount(0);
-  await markdown.getByRole("tab", { name: "Markdown Ontology Published" }).click();
+  await markdown.getByRole("tab", { name: "公開済み Markdown オントロジー" }).click();
   await expect(markdown.getByTestId("ontology-markdown-published-viewer")).toContainText(
-    "Manual Notes"
+    "手動メモ"
   );
   await expect(markdown.getByTestId("ontology-markdown-tab-published-meta")).toHaveText("v4");
   await expect(markdown.getByTestId("ontology-markdown-published-meta")).toContainText(
     /公開日時: 07\/12 \d{2}:00/u
   );
 
-  // 旧「物理・業務モデル編集」は Markdown Draft に統合され、別編集 UI は表示しない
+  // 旧「物理・業務モデル編集」は Markdown 下書きに統合され、別編集 UI は表示しない
   await expect(page.locator('section[aria-label="物理・業務モデル編集"]')).toHaveCount(0);
   await expect(page.getByText("Inspector", { exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Draft を保存", exact: true })).toHaveCount(0);
-  await expect(markdown.getByRole("button", { name: "Markdown Draft を保存" })).toBeVisible();
+  await expect(markdown.getByRole("button", { name: "Markdown 下書きを保存" })).toBeVisible();
   await expect(markdown.getByRole("tab")).toHaveCount(2);
-  await markdown.getByRole("tab", { name: "Markdown Ontology Draft" }).click();
-  await expect(draftEditor).toHaveValue(/## Physical Objects/);
-  await expect(draftEditor).toHaveValue(/## Business Rules \/ Enum Values/);
+  await markdown.getByRole("tab", { name: "Markdown オントロジー下書き" }).click();
+  await expect(draftEditor).toHaveValue(/## 物理オブジェクト/);
+  await expect(draftEditor).toHaveValue(/## 業務ルール \/ 列挙値/);
   await expect(page.getByTestId("ontology-build-mermaid")).toHaveCount(0);
   await expect(section).toBeVisible();
 
@@ -922,33 +922,33 @@ test("公開完了後は Published を表示し、公開済み revision を Draf
 
   const markdown = page.getByTestId("ontology-build-markdown");
   const draftEditor = markdown.getByTestId("ontology-markdown-draft-editor");
-  await expect(draftEditor).toHaveValue(/# Ontology Draft/);
-  await draftEditor.fill(`${generatedDraftMarkdown}\n\n## Manual Notes\n- 公開確認済み`);
+  await expect(draftEditor).toHaveValue(/# オントロジー下書き/);
+  await draftEditor.fill(`${generatedDraftMarkdown}\n\n## 手動メモ\n- 公開確認済み`);
 
   await markdown
     .getByTestId("ontology-publish-actions")
-    .getByRole("button", { name: "Ontology を公開" })
+    .getByRole("button", { name: "オントロジーを公開" })
     .click();
 
-  await expect(page.getByText("Ontology を公開しました。")).toBeVisible();
+  await expect(page.getByText("オントロジーを公開しました。")).toBeVisible();
   await expect(page.getByTestId("ontology-publish-status")).toContainText("完了");
   await expect(markdown.getByTestId("ontology-markdown-tab-published-meta")).toHaveText("v4");
 
-  await markdown.getByRole("tab", { name: "Markdown Ontology Published" }).click();
+  await markdown.getByRole("tab", { name: "公開済み Markdown オントロジー" }).click();
   await expect(markdown.getByTestId("ontology-markdown-published-viewer")).toContainText(
-    "Manual Notes"
+    "手動メモ"
   );
   await expect(markdown.getByTestId("ontology-markdown-published-meta")).toContainText(
     /公開日時: 07\/12 \d{2}:00/u
   );
 
-  await markdown.getByRole("tab", { name: "Markdown Ontology Draft" }).click();
+  await markdown.getByRole("tab", { name: "Markdown オントロジー下書き" }).click();
   await expect(markdown.getByTestId("ontology-markdown-tab-draft-meta")).toHaveText("未生成");
   await expect(markdown.getByTestId("ontology-markdown-draft-empty")).toBeVisible();
   await expect(
     markdown
       .getByTestId("ontology-publish-actions")
-      .getByRole("button", { name: "Ontology を公開" })
+      .getByRole("button", { name: "オントロジーを公開" })
   ).toBeDisabled();
 });
 
@@ -1077,7 +1077,7 @@ test("実行する抽出 UI は表示せず、入力有無から抽出対象を�
   });
 });
 
-test("送信直後にプレースホルダーが出て、完了後は Markdown Draft を表示する", async ({ page }) => {
+test("送信直後にプレースホルダーが出て、完了後は Markdown 下書きを表示する", async ({ page }) => {
   await mockApi(page);
   // POST を遅らせて「送信中」プレースホルダーを観測できるようにする
   await page.route("**/api/nl2sql/profiles/*/ontology-build", async (route) => {
@@ -1096,14 +1096,14 @@ test("送信直後にプレースホルダーが出て、完了後は Markdown D
 
   const markdown = page.getByTestId("ontology-build-markdown");
   await expect(markdown.getByTestId("ontology-markdown-draft-editor")).toHaveValue(
-    /# Ontology Draft/,
+    /# オントロジー下書き/,
     { timeout: 15000 }
   );
   await expect(page.getByTestId("ontology-build-proposals")).toHaveCount(0);
   await expect(page.getByRole("button", { name: /すべて承認/ })).toHaveCount(0);
 });
 
-test("Draft artifact 保存後は job 完了前でも Markdown Draft を表示する", async ({ page }) => {
+test("下書き成果物の保存後は job 完了前でも Markdown 下書きを表示する", async ({ page }) => {
   await mockApi(page);
   let artifactSaved = false;
   await page.unroute("**/api/nl2sql/profiles/*/ontology-markdown");
@@ -1119,7 +1119,7 @@ test("Draft artifact 保存後は job 完了前でも Markdown Draft を表示�
         ? {
             ...step,
             status: "running",
-            detail_ja: "Draft revision v4 を保存しました。Markdown artifact を保存しました。",
+            detail_ja: "下書き revision v4 を保存しました。Markdown 成果物を保存しました。",
             started_at: "2026-07-12T00:00:03Z",
             finished_at: null,
           }
@@ -1127,7 +1127,7 @@ test("Draft artifact 保存後は job 完了前でも Markdown Draft を表示�
     );
     running.events = [
       ...running.events,
-      { at: "2026-07-12T00:00:04Z", message_ja: "Markdown artifact を保存しました。" },
+      { at: "2026-07-12T00:00:04Z", message_ja: "Markdown 成果物を保存しました。" },
     ];
     running.draft_revision_id = "revision-draft-4";
     running.draft_etag = "markdown-etag-1";
@@ -1148,15 +1148,15 @@ test("Draft artifact 保存後は job 完了前でも Markdown Draft を表示�
     { timeout: 15000 }
   );
   await expect(page.getByTestId("ontology-markdown-draft-editor")).toHaveValue(
-    /# Ontology Draft/,
+    /# オントロジー下書き/,
     { timeout: 15000 }
   );
   await expect(page.getByTestId("ontology-markdown-draft-editor")).toHaveValue(
-    /## Relationships \/ Join/
+    /## 関係 \/ Join/
   );
 });
 
-test("Markdown Draft 保存後は stale refresh でエディタ値を戻さない", async ({ page }) => {
+test("Markdown 下書き保存後は stale refresh でエディタ値を戻さない", async ({ page }) => {
   await mockApi(page);
   let saved = false;
   let markdownReadsAfterSave = 0;
@@ -1187,8 +1187,8 @@ test("Markdown Draft 保存後は stale refresh でエディタ値を戻さな�
     buildPolls += 1;
     const running = buildJob("running", "running").job;
     const signal = saved
-      ? `Markdown artifact を保存しました。stale refresh ${buildPolls}`
-      : "Markdown artifact を保存しました。";
+      ? `Markdown 成果物を保存しました。stale refresh ${buildPolls}`
+      : "Markdown 成果物を保存しました。";
     running.steps = running.steps.map((step) =>
       step.name === "proposal_registration"
         ? {
@@ -1213,21 +1213,21 @@ test("Markdown Draft 保存後は stale refresh でエディタ値を戻さな�
   const markdown = page.getByTestId("ontology-build-markdown");
   const draftEditor = markdown.getByTestId("ontology-markdown-draft-editor");
   await expect(markdown).toBeVisible({ timeout: 20000 });
-  await expect(draftEditor).toHaveValue(/# Ontology Draft/, { timeout: 20000 });
+  await expect(draftEditor).toHaveValue(/# オントロジー下書き/, { timeout: 20000 });
   await expect(draftEditor).toBeEnabled({ timeout: 20000 });
-  const savedMarkdown = `${generatedDraftMarkdown}\n\n## Manual Notes\n- 保存後も保持`;
+  const savedMarkdown = `${generatedDraftMarkdown}\n\n## 手動メモ\n- 保存後も保持`;
   await draftEditor.fill(savedMarkdown);
   await expect(markdown.getByText("未保存")).toBeVisible();
-  await markdown.getByRole("button", { name: "Markdown Draft を保存" }).click();
+  await markdown.getByRole("button", { name: "Markdown 下書きを保存" }).click();
 
-  await expect(page.getByText("Markdown Draft を保存しました。")).toBeVisible();
+  await expect(page.getByText("Markdown 下書きを保存しました。")).toBeVisible();
   await expect(draftEditor).toHaveValue(savedMarkdown);
   await expect(markdown.getByText("未保存")).toHaveCount(0);
   await expect.poll(() => markdownReadsAfterSave).toBeGreaterThan(0);
   await expect(draftEditor).toHaveValue(savedMarkdown);
 });
 
-test("Profile と Markdown Ontology の初期読込では loading を表示する", async ({ page }) => {
+test("Profile と Markdown オントロジーの初期読込では loading を表示する", async ({ page }) => {
   await page.clock.install({ time: new Date("2026-07-29T00:00:00.000Z") });
   await mockApi(page);
   const profilesGate = createRequestGate();
@@ -1301,7 +1301,7 @@ test("Profile と Markdown Ontology の初期読込では loading を表示す�
   await expect(page.getByTestId("ontology-markdown-draft-empty")).toBeVisible();
 });
 
-test("Markdown Ontology の初期読込はキャンセルでき、取消後の応答で上書きしない", async ({ page }) => {
+test("Markdown オントロジーの初期読込はキャンセルでき、取消後の応答で上書きしない", async ({ page }) => {
   await mockApi(page);
   const markdownGate = createRequestGate();
   await page.unroute("**/api/nl2sql/profiles/*/ontology-markdown");
@@ -1320,7 +1320,7 @@ test("Markdown Ontology の初期読込はキャンセルでき、取消後の�
   await skeleton.getByRole("button", { name: "キャンセル" }).click();
 
   await expect(skeleton).toHaveCount(0);
-  await expect(page.getByText("Markdown Ontology を読み込めませんでした。")).toHaveCount(0);
+  await expect(page.getByText("Markdown オントロジーを読み込めませんでした。")).toHaveCount(0);
   await expect(page.getByTestId("ontology-markdown-draft-empty")).toBeVisible();
   markdownGate.release();
   await page.waitForTimeout(50);
@@ -1371,7 +1371,7 @@ test("Profile の読込失敗から再試行できる", async ({ page }) => {
   await expect(page.getByTestId("ontology-build-profile-select")).toBeVisible();
 });
 
-test("Markdown Ontology の読込失敗から再試行できる", async ({ page }) => {
+test("Markdown オントロジーの読込失敗から再試行できる", async ({ page }) => {
   await mockApi(page);
   let allowMarkdown = false;
   await page.unroute("**/api/nl2sql/profiles/*/ontology-markdown");
@@ -1397,7 +1397,7 @@ test("Markdown Ontology の読込失敗から再試行できる", async ({ page 
   await page.goto("/ontology-build?profile=default");
 
   const markdownPanel = page.getByTestId("ontology-build-markdown");
-  await expect(markdownPanel.getByText("Markdown Ontology を読み込めませんでした。")).toBeVisible();
+  await expect(markdownPanel.getByText("Markdown オントロジーを読み込めませんでした。")).toBeVisible();
   allowMarkdown = true;
   await markdownPanel.getByRole("button", { name: "再試行" }).click();
   await expect(page.getByTestId("ontology-markdown-draft-empty")).toBeVisible();
@@ -1412,16 +1412,16 @@ test("AI 提案レビュー UI は表示せず Markdown タブだけを表示す
   await expect(page.getByRole("button", { name: /すべて承認/ })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "承認", exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "却下", exact: true })).toHaveCount(0);
-  await expect(page.getByRole("tab", { name: "Markdown Ontology Draft" })).toBeVisible();
-  await expect(page.getByRole("tab", { name: "Markdown Ontology Published" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Markdown オントロジー下書き" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "公開済み Markdown オントロジー" })).toBeVisible();
 });
 
-test("Markdown Ontology tabs はキーボードで切り替えできる", async ({ page }) => {
+test("Markdown オントロジー tabs はキーボードで切り替えできる", async ({ page }) => {
   await mockApi(page);
   await page.goto("/ontology-build?profile=default");
 
-  const draftTab = page.getByRole("tab", { name: "Markdown Ontology Draft" });
-  const publishedTab = page.getByRole("tab", { name: "Markdown Ontology Published" });
+  const draftTab = page.getByRole("tab", { name: "Markdown オントロジー下書き" });
+  const publishedTab = page.getByRole("tab", { name: "公開済み Markdown オントロジー" });
   await expect(draftTab).toHaveAttribute("aria-selected", "true");
   await draftTab.focus();
   await page.keyboard.press("ArrowRight");
@@ -1432,7 +1432,7 @@ test("Markdown Ontology tabs はキーボードで切り替えできる", async 
   await expect(page.getByTestId("ontology-markdown-draft-empty")).toBeVisible();
 });
 
-test("Markdown Ontology tabs は profile 別 version を優先して表示する", async ({ page }) => {
+test("Markdown オントロジー tabs は profile 別 version を優先して表示する", async ({ page }) => {
   await mockApi(page);
   await page.unroute("**/api/nl2sql/profiles/*/ontology-markdown");
   await page.route("**/api/nl2sql/profiles/*/ontology-markdown", (route) =>
@@ -1461,7 +1461,7 @@ test("Markdown Ontology tabs は profile 別 version を優先して表示する
   await expect(markdown.getByTestId("ontology-markdown-tab-published-meta")).toHaveText("未公開");
 });
 
-test("未公開 Markdown Draft はリロード後も公開ボタンが表示される", async ({ page }) => {
+test("未公開 Markdown 下書きはリロード後も公開ボタンが表示される", async ({ page }) => {
   await mockApi(page);
   await page.unroute("**/api/nl2sql/profiles/*/ontology-markdown");
   await page.route("**/api/nl2sql/profiles/*/ontology-markdown", (route) =>
@@ -1486,8 +1486,8 @@ test("未公開 Markdown Draft はリロード後も公開ボタンが表示さ�
   const markdown = page.getByTestId("ontology-build-markdown");
   await expect(markdown.getByTestId("ontology-markdown-tab-draft-meta")).toHaveText("v4");
   await expect(markdown.getByTestId("ontology-markdown-tab-published-meta")).toHaveText("未公開");
-  await expect(page.getByTestId("ontology-publish-actions").getByText("Draft v4")).toHaveCount(0);
-  await expect(page.getByTestId("ontology-publish-actions").getByRole("button", { name: "Ontology を公開" })).toBeVisible();
+  await expect(page.getByTestId("ontology-publish-actions").getByText("下書き v4")).toHaveCount(0);
+  await expect(page.getByTestId("ontology-publish-actions").getByRole("button", { name: "オントロジーを公開" })).toBeVisible();
 });
 
 test("SHACL Violation で公開を止め、修正後の再公開で復旧できる", async ({ page }) => {
@@ -1541,7 +1541,7 @@ test("SHACL Violation で公開を止め、修正後の再公開で復旧でき�
   await page.goto("/ontology-build?profile=default");
   const publish = page
     .getByTestId("ontology-publish-actions")
-    .getByRole("button", { name: "Ontology を公開" });
+    .getByRole("button", { name: "オントロジーを公開" });
   await publish.click();
   await expect(
     page.getByText("SHACL Core の Violation があるため公開を中止しました。")
@@ -1549,7 +1549,7 @@ test("SHACL Violation で公開を止め、修正後の再公開で復旧でき�
   await expect(publish).toBeEnabled();
 
   await publish.click();
-  await expect(page.getByText("Ontology を公開しました。")).toBeVisible();
+  await expect(page.getByText("オントロジーを公開しました。")).toBeVisible();
   expect(publishAttempt).toBe(2);
 });
 
@@ -1586,13 +1586,13 @@ test("公開ポーリングは一時エラー後も進行状態を維持して�
   await page.goto("/ontology-build?profile=default");
   const publish = page
     .getByTestId("ontology-publish-actions")
-    .getByRole("button", { name: "Ontology を公開" });
+    .getByRole("button", { name: "オントロジーを公開" });
   await publish.click();
 
   const status = page.getByTestId("ontology-publish-status");
   await expect(status).toContainText("待機中");
   await expect(status).toContainText("公開完了", { timeout: 7000 });
-  await expect(page.getByText("Ontology を公開しました。")).toBeVisible();
+  await expect(page.getByText("オントロジーを公開しました。")).toBeVisible();
   expect(publishPolls).toBeGreaterThanOrEqual(2);
 });
 
@@ -1697,7 +1697,7 @@ test("旧 tab URL を正規化し、モバイルでは単一ページを縦積�
   expect(overflow).toBe(false);
 });
 
-test("Ontology View の API エラーを表示し、キーボードで再試行して復旧する", async ({
+test("オントロジー View の API エラーを表示し、キーボードで再試行して復旧する", async ({
   page,
 }) => {
   await mockApi(page);
@@ -1780,7 +1780,7 @@ test("リロード後も実行中の構築ジョブを復元して進捗を追�
   }));
   expect(mobileOverflow.scrollWidth).toBeLessThanOrEqual(mobileOverflow.clientWidth + 1);
   await expect(steps).toHaveAttribute("data-job-status", "succeeded", { timeout: 15000 });
-  await expect(steps.getByText("Markdown Draft v4 を生成しました", { exact: false })).toBeVisible();
+  await expect(steps.getByText("Markdown 下書き v4 を生成しました", { exact: false })).toBeVisible();
   await expect(steps.getByText("構築が完了しました", { exact: false })).toHaveCount(0);
   await expect(page.locator('[aria-label="構築ジョブの補足ログ"]')).toHaveCount(0);
   await expect(page.getByTestId("ontology-build-timeline")).toHaveCount(0);
@@ -1820,7 +1820,7 @@ test("実行中の構築ジョブを確認ダイアログ経由で中止でき�
   expect(cancelCalls).toBe(1);
 });
 
-test("Markdown Draft 生成が長時間更新されない場合に警告を表示する", async ({ page }) => {
+test("Markdown 下書き生成が長時間更新されない場合に警告を表示する", async ({ page }) => {
   await mockApi(page);
   await page.unroute("**/api/nl2sql/ontology-build/*");
   await page.route("**/api/nl2sql/ontology-build/*", (route) => {
@@ -1830,7 +1830,7 @@ test("Markdown Draft 生成が長時間更新されない場合に警告を表�
         ? {
             ...step,
             status: "running",
-            detail_ja: "Draft revision を保存しています…",
+            detail_ja: "下書き revision を保存しています…",
             started_at: "2026-07-12T00:00:03Z",
             finished_at: null,
           }
@@ -1838,7 +1838,7 @@ test("Markdown Draft 生成が長時間更新されない場合に警告を表�
     );
     stale.job.events = [
       ...stale.job.events,
-      { at: "2026-07-12T00:00:03Z", message_ja: "Draft revision を保存しています…" },
+      { at: "2026-07-12T00:00:03Z", message_ja: "下書き revision を保存しています…" },
     ];
     stale.job.finished_at = null;
     return fulfillJson(route, stale);
@@ -1850,12 +1850,12 @@ test("Markdown Draft 生成が長時間更新されない場合に警告を表�
   await section.getByRole("button", { name: "AI 構築を実行" }).click();
 
   await expect(
-    page.getByText("60 分以上、Markdown Draft 生成の更新がありません。", { exact: false })
+    page.getByText("60 分以上、Markdown 下書き生成の更新がありません。", { exact: false })
   ).toBeVisible();
   await expect(page.getByTestId("ontology-build-cancel")).toBeVisible();
 });
 
-test("完了 job に実行中 step が混在しても Markdown Draft 生成を完了表示に寄せる", async ({ page }) => {
+test("完了 job に実行中 step が混在しても Markdown 下書き生成を完了表示に寄せる", async ({ page }) => {
   const state = await mockApi(page);
   await page.unroute("**/api/nl2sql/ontology-build/*");
   await page.route("**/api/nl2sql/ontology-build/*", (route) => {
@@ -1925,7 +1925,7 @@ test("profile scope の schema 解決失敗から DB 構造を再取得できる
   const steps = page.getByTestId("ontology-build-steps");
   await expect(steps.getByText("Profile 範囲の DB schema を解決できません")).toBeVisible();
   await expect(steps.getByText("DB 構造を再取得してから", { exact: false })).toBeVisible();
-  await expect(steps.getByText("公開 Ontology", { exact: false })).toHaveCount(0);
+  await expect(steps.getByText("公開オントロジー", { exact: false })).toHaveCount(0);
   await expect(page.getByTestId("ontology-build-retry")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "AI 構築を実行" })).toBeEnabled();
   await page.getByTestId("ontology-build-schema-refresh").click();
@@ -1990,7 +1990,7 @@ test("失敗した構築後は主ボタンで現在の入力を再送信でき�
   });
   const steps = page.getByTestId("ontology-build-steps");
   await expect(steps).toHaveAttribute("data-job-status", "succeeded", { timeout: 15000 });
-  await expect(steps.getByText("Markdown Draft v4 を生成しました", { exact: false })).toBeVisible();
+  await expect(steps.getByText("Markdown 下書き v4 を生成しました", { exact: false })).toBeVisible();
   await expect(steps.getByText("構築が完了しました", { exact: false })).toHaveCount(0);
   await expect(page.locator('[aria-label="構築ジョブの補足ログ"]')).toHaveCount(0);
   await expect(page.getByTestId("ontology-build-timeline")).toHaveCount(0);
@@ -2051,7 +2051,7 @@ test("公開済み Markdown が無いときは公開日時を表示しない(rev
 
   await page.goto("/ontology-build?profile=default");
   const markdown = page.getByTestId("ontology-build-markdown");
-  await markdown.getByRole("tab", { name: "Markdown Ontology Published" }).click();
+  await markdown.getByRole("tab", { name: "公開済み Markdown オントロジー" }).click();
   await expect(markdown.getByTestId("ontology-markdown-published-viewer")).toContainText(
     "公開済み Markdown はまだありません。"
   );

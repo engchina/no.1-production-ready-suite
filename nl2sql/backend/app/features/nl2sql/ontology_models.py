@@ -398,7 +398,7 @@ class MetricAdditivity(StrEnum):
 
 
 class MetricDefinition(OntologyContract):
-    """公開 Ontology で確認済みとして扱う正式指標定義。"""
+    """公開オントロジーで確認済みとして扱う正式指標定義。"""
 
     id: str = Field(min_length=1)
     metric_node_id: str = Field(min_length=1)
@@ -831,7 +831,7 @@ class OntologyBuildStatus(StrEnum):
     QUEUED = "queued"
     RUNNING = "running"
     SUCCEEDED = "succeeded"
-    # 一部の LLM 抽出 batch が失敗したが、成功分で Markdown Draft を生成できた状態
+    # 一部の LLM 抽出 batch が失敗したが、成功分で Markdown 下書きを生成できた状態
     SUCCEEDED_WITH_WARNINGS = "succeeded_with_warnings"
     FAILED = "failed"
     CANCELLED = "cancelled"

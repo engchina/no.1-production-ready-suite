@@ -2,12 +2,12 @@
 
 OCI Enterprise AI の入力 schema は Profile + DB schema catalog から直接作る。
 出力は Pydantic(:class:`OntologyBuildExtraction`)で検証し、profile スコープ外の
-owner/object/column を参照する候補は Markdown Draft へ入れず warnings に落とす。
-生成物は承認済み draft revision と Markdown Draft artifact として保存され、
+owner/object/column を参照する候補は Markdown 下書きへ入れず warnings に落とす。
+生成物は承認済み draft revision と Markdown 下書き artifact として保存され、
 publish で Published Markdown へコピーされるまで SQL 生成には使われない。
 
 job と実行入力は Oracle store に永続化する。local は thread、production は独立 worker が
-同じ処理を実行し、成果物は Markdown Draft の確認ゲートを通る。
+同じ処理を実行し、成果物は Markdown 下書きの確認ゲートを通る。
 """
 
 from __future__ import annotations
@@ -301,7 +301,7 @@ def build_schema_context_from_catalog(
                 "source_object": f"{source_owner}.{source_name}",
                 "target_object": f"{target_owner}.{target_name}",
                 "relationship_name_ja": "参照",
-                "description_ja": "Oracle view dependency",
+                "description_ja": "Oracle ビュー依存関係",
                 "cardinality": "unknown",
                 "review_status": "approved",
                 "allowed_path": True,
@@ -1003,14 +1003,14 @@ def _node_markdown_lines(node: OntologyNode, view: ProfileOntologyView | None) -
     usage = _effective_table_usage(node, view)
     lines = [
         f"- {_effective_business_name(node, view)} ({_md_code(_physical_mapping_label(node))})",
-        f"  - kind: {node.kind.value}",
-        f"  - description: {_md_text(node.description_ja)}",
-        f"  - aliases: {aliases}",
+        f"  - 種別: {node.kind.value}",
+        f"  - 説明: {_md_text(node.description_ja)}",
+        f"  - 別名: {aliases}",
     ]
     if usage:
-        lines.append(f"  - usage: {_md_text(usage)}")
+        lines.append(f"  - 用途: {_md_text(usage)}")
     if node.provenance.evidence:
-        lines.append("  - evidence:")
+        lines.append("  - 証拠:")
         for evidence in node.provenance.evidence[:5]:
             # OntologyEvidence の実フィールドは excerpt_ja / locator / source_document_id。
             # (旧 label/location/source_id は存在せず AttributeError になっていた)
@@ -1041,14 +1041,14 @@ def _edge_markdown_lines(
         else _md_code(edge.target_node_id)
     )
     lines = [
-        f"- {source_label} -> {target_label}: {_md_text(edge.relationship_name_ja)}",
-        f"  - kind: {edge.kind.value}",
-        f"  - cardinality: {_effective_edge_cardinality(edge, view)}",
-        f"  - allowed_path: {'true' if _effective_edge_allowed(edge, view) else 'false'}",
-        f"  - evidence: {_md_text(edge.description_ja)}",
+        f"- {source_label} → {target_label}: {_md_text(edge.relationship_name_ja)}",
+        f"  - 種別: {edge.kind.value}",
+        f"  - 多重度: {_effective_edge_cardinality(edge, view)}",
+        f"  - 検索利用: {'利用可' if _effective_edge_allowed(edge, view) else '利用不可'}",
+        f"  - 証拠: {_md_text(edge.description_ja)}",
     ]
     if edge.join_conditions:
-        lines.append("  - join_conditions:")
+        lines.append("  - Join 条件:")
         lines.extend(
             f"    - {_md_code(_join_condition_label(condition))}"
             for condition in sorted(edge.join_conditions, key=lambda item: item.ordinal)
@@ -1076,9 +1076,9 @@ def _physical_object_lines(
             lines.extend(
                 [
                     f"- {_md_code(f'{ref.owner}.{ref.object_name}')} ({ref.object_type})",
-                    f"  - business_name: {_md_text(business_name)}",
-                    f"  - description: {description}",
-                    f"  - usage: {_md_text(usage, '未設定')}",
+                    f"  - 業務名: {_md_text(business_name)}",
+                    f"  - 説明: {description}",
+                    f"  - 用途: {_md_text(usage, '未設定')}",
                 ]
             )
         return lines
@@ -1096,9 +1096,9 @@ def _physical_object_lines(
         lines.extend(
             [
                 f"- {_md_code(object_name)} ({_md_text(object_type)})",
-                f"  - business_name: {_md_text(logical_name)}",
-                f"  - description: {_md_text(comment)}",
-                f"  - columns: {len(columns)}",
+                f"  - 業務名: {_md_text(logical_name)}",
+                f"  - 説明: {_md_text(comment)}",
+                f"  - 列数: {len(columns)}",
             ]
         )
     return lines
@@ -1163,9 +1163,9 @@ def _profile_metric_lines(
             lines.extend(_node_markdown_lines(node, view))
             definition = node.metadata.get("metric_definition")
             if isinstance(definition, dict):
-                lines.append(f"  - expression_sql: {_md_code(definition.get('expression_sql'))}")
-                lines.append(f"  - aggregation: {_md_text(definition.get('aggregation'))}")
-                lines.append(f"  - unit: {_md_text(definition.get('unit'), 'なし')}")
+                lines.append(f"  - 定義 SQL: {_md_code(definition.get('expression_sql'))}")
+                lines.append(f"  - 集計: {_md_text(definition.get('aggregation'))}")
+                lines.append(f"  - 単位: {_md_text(definition.get('unit'), 'なし')}")
     return lines
 
 
@@ -1191,11 +1191,11 @@ def _profile_rule_enum_lines(
             lines.extend(
                 [
                     f"- {_effective_business_name(node, view)}",
-                    "  - type: business_rule",
-                    f"  - statement: {_md_text(rule.statement_ja)}",
-                    f"  - applies_to: {_md_text(applies_to, '未設定')}",
-                    f"  - severity: {rule.severity.value}",
-                    f"  - execution_mode: {rule.execution_mode.value}",
+                    "  - 種別: 業務ルール",
+                    f"  - ルール文: {_md_text(rule.statement_ja)}",
+                    f"  - 適用対象: {_md_text(applies_to, '未設定')}",
+                    f"  - 重大度: {rule.severity.value}",
+                    f"  - 実行方式: {rule.execution_mode.value}",
                 ]
             )
         elif node.enum_value_definition is not None:
@@ -1209,12 +1209,12 @@ def _profile_rule_enum_lines(
             lines.extend(
                 [
                     f"- {_effective_business_name(node, view)}",
-                    "  - type: enum_value",
-                    f"  - code: {_md_text(enum_value.code)}",
-                    f"  - literal: {_md_code(enum_value.physical_literal)}",
-                    f"  - label: {_md_text(enum_value.label_ja)}",
-                    f"  - property: {_md_text(property_label)}",
-                    f"  - aliases: {', '.join(enum_value.aliases) or 'なし'}",
+                    "  - 種別: 列挙値",
+                    f"  - コード: {_md_text(enum_value.code)}",
+                    f"  - 物理値: {_md_code(enum_value.physical_literal)}",
+                    f"  - 表示名: {_md_text(enum_value.label_ja)}",
+                    f"  - 属性: {_md_text(property_label)}",
+                    f"  - 別名: {', '.join(enum_value.aliases) or 'なし'}",
                 ]
             )
     return lines
@@ -1232,7 +1232,7 @@ def render_ontology_build_markdown(
     ontology: SchemaOntology | None = None,
     profile_view: ProfileOntologyView | None = None,
 ) -> str:
-    """AI 構築結果から、確認・編集用 Markdown Draft を決定論生成する。"""
+    """AI 構築結果から、確認・編集用 Markdown 下書きを決定論生成する。"""
 
     try:
         schema = json.loads(schema_context)
@@ -1258,24 +1258,24 @@ def render_ontology_build_markdown(
     profile_rule_enum_lines = _profile_rule_enum_lines(ontology, profile_view)
 
     lines = [
-        "# Ontology Draft",
+        "# オントロジー下書き",
         "",
-        "## Input Summary",
-        f"- Profile: {_md_code(profile_id)}",
-        f"- Business description: {'あり' if business_text_present else 'なし'}",
-        f"- Q/A pairs: {qa_pair_count}",
-        f"- Source documents: {source_count}",
-        f"- DB schema objects: {object_count}",
-        f"- DB schema columns: {column_count}",
-        f"- Existing schema relationships: {relationship_count}",
+        "## 入力サマリー",
+        f"- プロファイル: {_md_code(profile_id)}",
+        f"- 業務説明: {'あり' if business_text_present else 'なし'}",
+        f"- Q/A 件数: {qa_pair_count}",
+        f"- 構築資料: {source_count}",
+        f"- DB スキーマオブジェクト: {object_count}",
+        f"- DB スキーマ列: {column_count}",
+        f"- 既存スキーマ関係: {relationship_count}",
         "",
-        "## Physical Objects",
+        "## 物理オブジェクト",
     ]
     lines.extend(physical_lines or ["- なし"])
     lines.extend(
         [
             "",
-            "## Entities",
+            "## 業務エンティティ",
         ]
     )
 
@@ -1295,17 +1295,17 @@ def render_ontology_build_markdown(
                 entity_lines.extend(
                     [
                         f"- {node.business_name_ja} ({_md_code(_physical_mapping_label(node))})",
-                        f"  - description: {_md_text(node.description_ja)}",
-                        f"  - aliases: {aliases}",
-                        f"  - confidence: {node.confidence:.2f}",
+                        f"  - 説明: {_md_text(node.description_ja)}",
+                        f"  - 別名: {aliases}",
+                        f"  - 信頼度: {node.confidence:.2f}",
                     ]
                 )
                 if node.aliases:
                     synonym_lines.extend(
                         [
-                            f"- target: {_md_code(_physical_mapping_label(node))}",
-                            f"  - aliases: {aliases}",
-                            f"  - evidence: {_md_text(node.description_ja)}",
+                            f"- 対象: {_md_code(_physical_mapping_label(node))}",
+                            f"  - 別名: {aliases}",
+                            f"  - 証拠: {_md_text(node.description_ja)}",
                         ]
                     )
         elif draft.kind == OntologyProposalKind.RELATIONSHIP:
@@ -1327,14 +1327,14 @@ def render_ontology_build_markdown(
                 )
                 relationship_lines.extend(
                     [
-                        f"- {source_label} -> {target_label}: {edge.relationship_name_ja}",
-                        f"  - cardinality: {edge.cardinality.value}",
-                        f"  - evidence: {_md_text(edge.description_ja)}",
-                        f"  - confidence: {edge.confidence:.2f}",
+                        f"- {source_label} → {target_label}: {edge.relationship_name_ja}",
+                        f"  - 多重度: {edge.cardinality.value}",
+                        f"  - 証拠: {_md_text(edge.description_ja)}",
+                        f"  - 信頼度: {edge.confidence:.2f}",
                     ]
                 )
                 if edge.join_conditions:
-                    relationship_lines.append("  - join_conditions:")
+                    relationship_lines.append("  - Join 条件:")
                     relationship_lines.extend(
                         f"    - {_md_code(_join_condition_label(condition))}"
                         for condition in sorted(edge.join_conditions, key=lambda item: item.ordinal)
@@ -1359,12 +1359,12 @@ def render_ontology_build_markdown(
                 metric_lines.extend(
                     [
                         f"- {node.business_name_ja}",
-                        f"  - expression_sql: {_md_code(expression)}",
-                        f"  - base_columns: {base_columns or 'なし'}",
-                        f"  - aggregation: {_md_text(aggregation)}",
-                        f"  - unit: {_md_text(unit, 'なし')}",
-                        f"  - description: {_md_text(node.description_ja)}",
-                        f"  - confidence: {node.confidence:.2f}",
+                        f"  - 定義 SQL: {_md_code(expression)}",
+                        f"  - 元列: {base_columns or 'なし'}",
+                        f"  - 集計: {_md_text(aggregation)}",
+                        f"  - 単位: {_md_text(unit, 'なし')}",
+                        f"  - 説明: {_md_text(node.description_ja)}",
+                        f"  - 信頼度: {node.confidence:.2f}",
                     ]
                 )
         elif draft.kind == OntologyProposalKind.ALIAS:
@@ -1372,24 +1372,24 @@ def render_ontology_build_markdown(
                 aliases = ", ".join(sorted(set(node.aliases))) or "なし"
                 synonym_lines.extend(
                     [
-                        f"- target: {_md_code(_physical_mapping_label(node))}",
-                        f"  - aliases: {aliases}",
-                        f"  - evidence: {_md_text(node.description_ja)}",
+                        f"- 対象: {_md_code(_physical_mapping_label(node))}",
+                        f"  - 別名: {aliases}",
+                        f"  - 証拠: {_md_text(node.description_ja)}",
                     ]
                 )
 
     merged_entity_lines = [*profile_entity_lines, *entity_lines]
     merged_relationship_lines = [*profile_relationship_lines, *relationship_lines]
     lines.extend(merged_entity_lines or ["- なし"])
-    lines.extend(["", "## Relationships / Join"])
+    lines.extend(["", "## 関係 / Join"])
     lines.extend(merged_relationship_lines or ["- なし"])
-    lines.extend(["", "## Metrics"])
+    lines.extend(["", "## 指標"])
     lines.extend([*profile_metric_lines, *metric_lines] or ["- なし"])
-    lines.extend(["", "## Business Rules / Enum Values"])
+    lines.extend(["", "## 業務ルール / 列挙値"])
     lines.extend(profile_rule_enum_lines or ["- なし"])
-    lines.extend(["", "## Synonyms"])
+    lines.extend(["", "## 同義語"])
     lines.extend(synonym_lines or ["- なし"])
-    lines.extend(["", "## Evidence / Warnings"])
+    lines.extend(["", "## 証拠 / 警告"])
     unique_warnings = list(dict.fromkeys(warning for warning in warnings if warning.strip()))
     lines.extend(f"- {warning}" for warning in unique_warnings)
     if not unique_warnings:
@@ -1400,7 +1400,7 @@ def render_ontology_build_markdown(
 # --- LLM 呼び出し -----------------------------------------------------------------------------
 
 _EXTRACTION_SYSTEM_PROMPT = (
-    "あなたは NL2SQL 用オントロジーの構築支援器です。JSON object だけを返し、"
+    "あなたは NL2SQL 用オントロジーの構築支援器です。JSON オブジェクトだけを返し、"
     "説明文や Markdown を付けないでください。返す JSON は次の形式です: "
     '{"entities": [{"object_name": "OWNER.OBJECT", "business_name_ja": "...", '
     '"description_ja": "...", "aliases": ["..."], "confidence": 0.0}], '
@@ -1419,9 +1419,10 @@ _EXTRACTION_SYSTEM_PROMPT = (
     "必ず選ぶ。判断できない場合のみ unknown とし、理由を warnings_ja に 1 行残す。"
     "(3) 各エンティティの主識別子(主キーに相当する列)を description_ja に明記する。"
     "(4) 各エンティティ・同義語には、利用者が質問で使いそうな言い回し"
-    "(短縮形・ひらがな表記・英語名・現場用語)を 2〜5 個 aliases として提案する。"
+    "(短縮形・ひらがな表記・別表記・現場用語)を 2〜5 個 aliases として提案する。"
     "確信が持てない候補は confidence を下げるか warnings_ja に残してください。"
-    "文言はすべて日本語にしてください。"
+    "出力に含める業務名・説明・証拠・警告・同義語の文言はすべて日本語にしてください。"
+    "汎用的な英語ラベルや説明文をそのまま出さないでください。"
     # schema-guided few-shot(1 例)。研究では few-shot 付き schema 誘導が最高精度。
     "\n\n例 — schema_context: "
     '{"objects":[{"owner":"APP","object_name":"ORDERS",'
@@ -1445,7 +1446,7 @@ _EXTRACTION_SYSTEM_PROMPT = (
     '"aggregation":"sum","base_columns":["APP.ORDERS.AMOUNT"],"unit":"円",'
     '"description_ja":"確定済み受注の受注金額の合計",'
     '"evidence_ja":"売上は確定済み受注の受注金額の合計","confidence":0.8}],'
-    '"synonyms":[{"target":"APP.CUSTOMERS","aliases":["得意先","客先","customer"],'
+    '"synonyms":[{"target":"APP.CUSTOMERS","aliases":["得意先","客先","顧客"],'
     '"evidence_ja":"業務慣用表現"}],"warnings_ja":[]}'
 )
 
@@ -1809,7 +1810,7 @@ _STEP_LABELS_JA: dict[OntologyBuildStepName, str] = {
     OntologyBuildStepName.SCHEMA_NAMING: "業務エンティティ命名",
     OntologyBuildStepName.QA_EXTRACTION: "Q/A からの抽出",
     OntologyBuildStepName.TEXT_EXTRACTION: "業務説明からの抽出",
-    OntologyBuildStepName.PROPOSAL_REGISTRATION: "Markdown Draft 生成",
+    OntologyBuildStepName.PROPOSAL_REGISTRATION: "Markdown 下書き生成",
 }
 _MAX_JOB_EVENTS = 100
 # 完了(succeeded/failed/cancelled)job の in-memory 保持上限。超過分は start 時に古い順へ破棄する
@@ -2442,7 +2443,7 @@ class OntologyBuildService:
         # code=FINALIZING は「完了状態の保存中」を表す機械可読コード。文言一致は旧データ互換。
         legacy_finalizing = "構築 job の完了状態" in step.detail_ja
         if not step.detail_ja or step.code == "FINALIZING" or legacy_finalizing:
-            step.detail_ja = "Markdown Draft を生成しました。"
+            step.detail_ja = "Markdown 下書きを生成しました。"
             step.code = ""
         step.finished_at = normalized.finished_at or step.finished_at or step.started_at
         return normalized
@@ -2650,13 +2651,13 @@ class OntologyBuildService:
                 return current
             seen_summary = json.dumps(
                 {
-                    "entities": [item.object_name for item in current.entities],
-                    "relationships": [
+                    "抽出済みエンティティ": [item.object_name for item in current.entities],
+                    "抽出済み関係": [
                         f"{item.source_object}->{item.target_object}"
                         for item in current.relationships
                     ],
-                    "metrics": [item.metric_name_ja for item in current.metrics],
-                    "synonyms": [item.target for item in current.synonyms],
+                    "抽出済み指標": [item.metric_name_ja for item in current.metrics],
+                    "抽出済み同義語": [item.target for item in current.synonyms],
                 },
                 ensure_ascii=False,
             )
@@ -3137,11 +3138,12 @@ class OntologyBuildService:
                 )
             else:
                 prompt = (
-                    "qa_pairs の質問と正解 SQL から、実際に使われた JOIN パス"
-                    "(relationships)と業務指標(metrics)を抽出してください。"
+                    "入力 JSON の qa_pairs にある質問と正解 SQL から、実際に使われた "
+                    "JOIN パスを relationships に、業務指標を metrics に抽出してください。"
                     "SQL に現れない関係を推測しないでください。"
-                    "cardinality は schema_context の constraints(主キー P / 一意 U)から"
-                    "判断してください(JOIN 先の列が主キー・一意キーなら many_to_one など)。"
+                    "cardinality フィールドは schema_context の constraints"
+                    "(主キー P / 一意 U)から判断してください"
+                    "(JOIN 先の列が主キー・一意キーなら many_to_one など)。"
                 )
                 try:
                     qa_batches = _batch_qa_pairs(schema_payload, qa_pairs, prompt)
@@ -3180,8 +3182,9 @@ class OntologyBuildService:
                 )
             else:
                 prompt = (
-                    "business_text_chunks の全項目を読み、関係候補(relationships)・同義語"
-                    "(synonyms)・業務指標(metrics)を抽出してください。名詞をエンティティ、"
+                    "入力 JSON の business_text_chunks をすべて読み、関係候補を "
+                    "relationships に、同義語を synonyms に、業務指標を metrics に"
+                    "抽出してください。名詞をエンティティ、"
                     "動詞・述語を関係の手がかりとして読み取り、schema_context に対応づかない"
                     "内容は warnings_ja に残してください。"
                 )
@@ -3335,7 +3338,7 @@ class OntologyBuildService:
                 job_id,
                 OntologyBuildStepName.PROPOSAL_REGISTRATION,
                 OntologyBuildStepStatus.RUNNING,
-                "Markdown Draft 生成用の DB schema revision を準備中…",
+                "Markdown 下書き生成用の DB schema revision を準備中…",
             )
             try:
                 view, ontology = self._runtime.build_proposal_scope(
@@ -3348,7 +3351,7 @@ class OntologyBuildService:
                     job_id,
                     OntologyBuildStepName.PROPOSAL_REGISTRATION,
                     OntologyBuildStepStatus.FAILED,
-                    "Markdown Draft 生成用の DB schema revision 準備に失敗しました。",
+                    "Markdown 下書き生成用の DB schema revision 準備に失敗しました。",
                 )
                 self._fail(job_id, message)
                 return
@@ -3359,7 +3362,7 @@ class OntologyBuildService:
             job_id,
             OntologyBuildStepName.PROPOSAL_REGISTRATION,
             OntologyBuildStepStatus.RUNNING,
-            f"候補 {len(drafts)} 件から Markdown Draft を生成中…",
+            f"候補 {len(drafts)} 件から Markdown 下書きを生成中…",
         )
         draft_inputs: list[ProposalDraft] = []
         # 同一 run 内で複数ステップが同じ候補を出した場合の dedup。provenance の
@@ -3383,9 +3386,9 @@ class OntologyBuildService:
             job_id,
             OntologyBuildStepName.PROPOSAL_REGISTRATION,
             OntologyBuildStepStatus.RUNNING,
-            "Markdown Draft をレンダリング中…",
+            "Markdown 下書きをレンダリング中…",
         )
-        self._emit(job_id, "Markdown Draft をレンダリングしています。")
+        self._emit(job_id, "Markdown 下書きをレンダリングしています。")
         try:
             markdown_output = render_ontology_build_markdown(
                 profile_id=job.profile_id,
@@ -3404,21 +3407,21 @@ class OntologyBuildService:
                 job_id,
                 OntologyBuildStepName.PROPOSAL_REGISTRATION,
                 OntologyBuildStepStatus.FAILED,
-                "Markdown Draft のレンダリングに失敗しました。",
+                "Markdown 下書きのレンダリングに失敗しました。",
             )
-            self._fail(job_id, f"Markdown Draft のレンダリングに失敗しました: {exc}")
+            self._fail(job_id, f"Markdown 下書きのレンダリングに失敗しました: {exc}")
             return
         self._set_step(
             job_id,
             OntologyBuildStepName.PROPOSAL_REGISTRATION,
             OntologyBuildStepStatus.RUNNING,
-            f"Markdown Draft をレンダリングしました({len(markdown_output)} 文字)。",
+            f"Markdown 下書きをレンダリングしました({len(markdown_output)} 文字)。",
         )
-        self._emit(job_id, f"Markdown Draft をレンダリングしました({len(markdown_output)} 文字)。")
+        self._emit(job_id, f"Markdown 下書きをレンダリングしました({len(markdown_output)} 文字)。")
 
         def save_progress(message_ja: str) -> None:
             # 保存完了イベントには機械可読コードを付け、frontend は文言正規表現ではなく
-            # このコードで Markdown Draft の再取得を判断できるようにする。
+            # このコードで Markdown 下書きの再取得を判断できるようにする。
             code = "MARKDOWN_DRAFT_UPDATED" if "保存しました" in message_ja else ""
             self._set_step(
                 job_id,
@@ -3441,7 +3444,7 @@ class OntologyBuildService:
                 payloads=[draft.payload for draft in draft_inputs],
                 titles=[draft.title_ja for draft in draft_inputs],
                 markdown=markdown_output,
-                note=f"AI 構築 Markdown Draft: {len(draft_inputs)} 件",
+                note=f"AI 構築 Markdown 下書き: {len(draft_inputs)} 件",
                 on_progress=save_progress,
             )
         except Exception as exc:
@@ -3451,12 +3454,12 @@ class OntologyBuildService:
                 job_id,
                 OntologyBuildStepName.PROPOSAL_REGISTRATION,
                 OntologyBuildStepStatus.FAILED,
-                "Markdown Draft の保存に失敗しました。",
+                "Markdown 下書きの保存に失敗しました。",
             )
             self._fail(job_id, message)
             return
         registered_note = (
-            f"Markdown Draft v{draft_ontology.revision.version} を生成しました"
+            f"Markdown 下書き v{draft_ontology.revision.version} を生成しました"
             f"(候補 {len(draft_inputs)} 件、警告 {len(warnings)} 件)。"
         )
         self._set_step(
@@ -3505,7 +3508,7 @@ class OntologyBuildService:
             job.events.append(
                 OntologyBuildEvent(
                     message_ja=(
-                        f"構築が完了しました(Markdown Draft v{draft_ontology.revision.version}、"
+                        f"構築が完了しました(Markdown 下書き v{draft_ontology.revision.version}、"
                         f"警告 {len(warnings)} 件)。"
                     )
                 )

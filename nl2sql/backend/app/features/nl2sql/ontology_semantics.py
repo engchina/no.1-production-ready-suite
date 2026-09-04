@@ -31,6 +31,30 @@ _PREFIXES = """@prefix ont: <urn:nl2sql:ontology:> .
 @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
 """
 
+_NODE_KIND_LABELS_JA: dict[OntologyNodeKind, str] = {
+    OntologyNodeKind.BUSINESS_ENTITY: "業務エンティティ",
+    OntologyNodeKind.BUSINESS_EVENT: "業務イベント",
+    OntologyNodeKind.PROPERTY: "属性",
+    OntologyNodeKind.METRIC: "指標",
+    OntologyNodeKind.BUSINESS_TERM: "業務用語",
+    OntologyNodeKind.BUSINESS_RULE: "業務ルール",
+    OntologyNodeKind.ENUM_VALUE: "列挙値",
+}
+
+_EDGE_KIND_LABELS_JA: dict[OntologyEdgeKind, str] = {
+    OntologyEdgeKind.FOREIGN_KEY: "外部キー",
+    OntologyEdgeKind.BUSINESS_RELATIONSHIP: "業務関係",
+    OntologyEdgeKind.JOINS: "Join",
+}
+
+
+def _node_kind_label_ja(kind: OntologyNodeKind) -> str:
+    return _NODE_KIND_LABELS_JA.get(kind, kind.value)
+
+
+def _edge_kind_label_ja(kind: OntologyEdgeKind) -> str:
+    return _EDGE_KIND_LABELS_JA.get(kind, kind.value)
+
 
 @dataclass(frozen=True)
 class OntologySemanticArtifacts:
@@ -270,11 +294,11 @@ def render_llm_markdown(ontology: SchemaOntology, view: ProfileOntologyView) -> 
         if edge.id in set(view.edge_ids) and edge.review_status == OntologyReviewStatus.APPROVED
     ]
     lines = [
-        "# NL2SQL Ontology Context",
+        "# NL2SQL オントロジーコンテキスト",
         "",
-        f"- Profile: `{view.profile_id}`",
-        f"- Revision: `{ontology.revision.id}`",
-        f"- Renderer: `{ONTOLOGY_RENDERER_VERSION}`",
+        f"- プロファイル: `{view.profile_id}`",
+        f"- リビジョン: `{ontology.revision.id}`",
+        f"- レンダラー: `{ONTOLOGY_RENDERER_VERSION}`",
         "",
         "## 適用場面",
     ]
@@ -294,22 +318,24 @@ def render_llm_markdown(ontology: SchemaOntology, view: ProfileOntologyView) -> 
         }:
             continue
         aliases = f" (別名: {', '.join(sorted(set(node.aliases)))})" if node.aliases else ""
-        lines.append(f"- [{node.kind.value}] {node.business_name_ja}{aliases} `#{node.id}`")
+        lines.append(
+            f"- [{_node_kind_label_ja(node.kind)}] {node.business_name_ja}{aliases} `#{node.id}`"
+        )
         if node.description_ja:
             lines.append(f"  - {node.description_ja}")
         if node.enum_value_definition is not None:
             enum_definition = node.enum_value_definition
             lines.append(
-                f"  - code=`{enum_definition.code}` / "
-                f"value=`{enum_definition.physical_literal}` / "
-                f"property=`#{enum_definition.property_node_id}`"
+                f"  - コード=`{enum_definition.code}` / "
+                f"物理値=`{enum_definition.physical_literal}` / "
+                f"属性=`#{enum_definition.property_node_id}`"
             )
         if node.business_rule_definition is not None:
             rule_definition = node.business_rule_definition
             lines.append(
                 f"  - {rule_definition.statement_ja} "
-                f"(severity={rule_definition.severity.value}, "
-                f"mode={rule_definition.execution_mode.value})"
+                f"(重大度={rule_definition.severity.value}, "
+                f"実行方式={rule_definition.execution_mode.value})"
             )
     lines.extend(["", "## 指標"])
     metric_nodes = [node for node in scoped_nodes if node.kind == OntologyNodeKind.METRIC]
@@ -319,15 +345,16 @@ def render_llm_markdown(ontology: SchemaOntology, view: ProfileOntologyView) -> 
         lines.append(f"- {node.business_name_ja} `#{node.id}`")
         metric_definition = node.metadata.get("metric_definition")
         if isinstance(metric_definition, dict) and metric_definition.get("expression_sql"):
-            lines.append(f"  - controlled SQL: `{metric_definition['expression_sql']}`")
+            lines.append(f"  - 管理 SQL: `{metric_definition['expression_sql']}`")
     lines.extend(["", "## 承認済み関係・Join"])
     for edge in scoped_edges:
         source = node_by_id.get(edge.source_node_id)
         target = node_by_id.get(edge.target_node_id)
         if source is None or target is None:
             continue
+        edge_label = _edge_kind_label_ja(edge.kind)
         lines.append(
-            f"- {source.business_name_ja} --{edge.relationship_name_ja}/{edge.kind.value}--> "
+            f"- {source.business_name_ja} --{edge.relationship_name_ja}/{edge_label}--> "
             f"{target.business_name_ja}"
         )
         for condition in edge.join_conditions:

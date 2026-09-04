@@ -158,6 +158,7 @@ def test_semantic_artifacts_are_deterministic_and_use_stable_iris() -> None:
     assert "## 指標" in first.llm_markdown
     assert "## SHACL 摘要" in first.llm_markdown
     assert "## Mermaid" in first.llm_markdown
+    assert "# NL2SQL オントロジーコンテキスト" in first.llm_markdown
     assert (
         first.hashes["owl_turtle"] == hashlib.sha256(first.owl_turtle.encode("utf-8")).hexdigest()
     )

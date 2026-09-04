@@ -102,7 +102,7 @@ interface LocalSavedDraft {
 }
 
 const MARKDOWN_DRAFT_REFRESH_SIGNAL_PATTERN =
-  /(?:Draft\s*revision.*保存しました|Markdown\s*artifact.*保存しました|Markdown\s*Draft.*生成しました)/iu;
+  /(?:Draft\s*revision.*保存しました|下書き\s*revision.*保存しました|Markdown\s*(?:artifact|成果物).*保存しました|Markdown\s*(?:Draft|下書き).*生成しました)/iu;
 
 function formatElapsed(startIso: string | null | undefined, endIso: string | null | undefined, now: number): string {
   const elapsed = elapsedMsBetween(startIso, endIso, now);
@@ -222,7 +222,7 @@ function stepIndexForEventMessage(
     [
       "proposal_registration",
       (value) =>
-        /Markdown Draft|Draft revision|Markdown artifact|markdown artifact|構築 job の完了状態/iu.test(
+        /Markdown Draft|Markdown 下書き|Draft revision|下書き revision|Markdown artifact|Markdown 成果物|構築 job の完了状態/iu.test(
           value
         ),
     ],
@@ -877,7 +877,7 @@ export function OntologyBuildSection({
     };
   }, [onMarkdownStateChange, profileId, refreshMarkdown, refreshSourceDocuments]);
 
-  // job ポーリング(1s)。完了で停止し、Markdown Draft を更新する。
+  // job ポーリング(1s)。完了で停止し、Markdown 下書きを更新する。
   // 依存は jobId(文字列)なので毎秒の setJob で interval は再生成されない。
   useEffect(() => {
     if (!jobRunning || !jobId || !profileId) return;

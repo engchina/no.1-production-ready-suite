@@ -42,7 +42,7 @@ function listLoadMoreErrorMessage(error: unknown, fallbackKey: Parameters<typeof
 }
 
 /**
- * AI 構築、Markdown Draft 確認、質問の接地確認を一続きで扱う単一ページ。
+ * AI 構築、Markdown 下書き確認、質問の接地確認を一続きで扱う単一ページ。
  * 旧 tab URL は profile だけを残す正規 URL へ置き換える。
  */
 export function OntologyBuildPage() {

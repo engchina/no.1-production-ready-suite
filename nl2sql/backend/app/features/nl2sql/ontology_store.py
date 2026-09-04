@@ -145,7 +145,7 @@ def deserialize_json(value: str | bytes | Mapping[str, Any] | Any) -> dict[str, 
             raw = raw.decode("utf-8")
         decoded = json.loads(str(raw))
     if not isinstance(decoded, dict):
-        raise ValueError("Ontology persisted payload must be a JSON object.")
+        raise ValueError("永続化されたオントロジー payload が JSON オブジェクトではありません。")
     return cast(dict[str, Any], decoded)
 
 

@@ -641,7 +641,7 @@ async function mockApi(page: Page) {
             referenced_tables: ["APP.ORDERS"],
             referenced_columns: [],
           },
-          recommendations: ["公開済み Ontology context を利用しました。"],
+          recommendations: ["公開済みオントロジー context を利用しました。"],
           repaired_sql: "",
           optimization_hints: [],
           results: {
@@ -728,7 +728,7 @@ async function mockApi(page: Page) {
     if (path.endsWith("/ontology-markdown") && request.method() === "GET") {
       // draft が空だと editor でなく空状態 placeholder が出るため、編集入口検証用に本文を持たせる。
       return fulfill(route, {
-        draft_markdown: "# Ontology Draft\n\n- APP.DEPARTMENT: 部門\n",
+        draft_markdown: "# オントロジー下書き\n\n- APP.DEPARTMENT: 部門\n",
         published_markdown: "",
         draft_revision: null,
         published_revision: null,
@@ -766,7 +766,7 @@ async function runCurrentOntologySearch(page: Page) {
   await expect(page.getByRole("columnheader", { name: "ORDER_COUNT" })).toBeVisible();
 }
 
-test("検索を実行すると公開済み Ontology context を使って結果と解釈を表示する", async ({ page }, testInfo) => {
+test("検索を実行すると公開済みオントロジー context を使って結果と解釈を表示する", async ({ page }, testInfo) => {
   const payloads = await mockApi(page);
   await page.goto("/query");
 
@@ -789,7 +789,7 @@ test("検索を実行すると公開済み Ontology context を使って結果�
   });
 });
 
-test("検索実行は明示操作後だけ現在の質問と Ontology 利用設定を送信する", async ({ page }, testInfo) => {
+test("検索実行は明示操作後だけ現在の質問とオントロジー利用設定を送信する", async ({ page }, testInfo) => {
   const payloads = await mockApi(page);
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto("/query");
@@ -810,7 +810,7 @@ test("検索実行は明示操作後だけ現在の質問と Ontology 利用設�
   await page.screenshot({ path: testInfo.outputPath("ontology-intent-editor.png"), fullPage: true });
 });
 
-test("対象オブジェクトは業務プロファイル、構築と Markdown Draft は専用の単一ページに分離される", async ({ page }, testInfo) => {
+test("対象オブジェクトは業務プロファイル、構築と Markdown 下書きは専用の単一ページに分離される", async ({ page }, testInfo) => {
   await mockApi(page);
 
   // 業務プロファイル編集: 対象オブジェクト一覧は常時表示、オントロジー構築は非表示。
@@ -820,7 +820,7 @@ test("対象オブジェクトは業務プロファイル、構築と Markdown D
   await expect(page.getByTestId("profile-ontology-build")).toHaveCount(0);
   await expect(page.locator('section[aria-label="物理・業務モデル編集"]')).toHaveCount(0);
 
-  // 旧 tab URL は正規化され、構築と Markdown Draft が同じ専用ページに表示される。
+  // 旧 tab URL は正規化され、構築と Markdown 下書きが同じ専用ページに表示される。
   await page.goto("/ontology-build?profile=default&tab=model");
   await expect(page).toHaveURL(/\/ontology-build\?profile=default$/);
   await expect(page.getByTestId("profile-ontology-build")).toBeVisible();
@@ -833,7 +833,7 @@ test("対象オブジェクトは業務プロファイル、構築と Markdown D
   expect(overflow).toBe(false);
 });
 
-test("旧モデル編集 UI は表示せず Markdown Draft を唯一の編集入口にする", async ({
+test("旧モデル編集 UI は表示せず Markdown 下書きを唯一の編集入口にする", async ({
   page,
 }) => {
   await mockApi(page);
@@ -841,11 +841,11 @@ test("旧モデル編集 UI は表示せず Markdown Draft を唯一の編集入
   await expect(page).toHaveURL(/\/ontology-build\?profile=default$/);
 
   await expect(page.getByTestId("ontology-build-markdown")).toBeVisible();
-  await expect(page.getByRole("tab", { name: "Markdown Ontology Draft" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Markdown オントロジー下書き" })).toBeVisible();
   await expect(page.getByTestId("ontology-markdown-draft-editor")).toBeVisible();
   await expect(page.locator('section[aria-label="物理・業務モデル編集"]')).toHaveCount(0);
   await expect(page.getByLabel("Inspector の編集対象")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Draft を保存", exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "意味定義を Draft に保存" })).toHaveCount(0);
-  await expect(page.getByRole("region", { name: "質問の Ontology 接地確認" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "質問のオントロジー接地確認" })).toBeVisible();
 });

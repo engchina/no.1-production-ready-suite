@@ -318,7 +318,7 @@ class ProfileOntologyViewData(OntologyContract):
     ontology_graph: OntologyGraphData
     materialized: bool = False
     stale: bool = False
-    # 公開 Ontology に解決できなかった対象オブジェクト名の診断(応答のみ、永続化しない)
+    # 公開オントロジーに解決できなかった対象オブジェクト名の診断(応答のみ、永続化しない)
     warnings_ja: list[str] = Field(default_factory=list)
 
 
@@ -707,7 +707,7 @@ class OntologyApiRuntime:
             # 無条件上書きすると並行編集の lost update になるため conflict にする。
             raise OntologyVersionConflictError(
                 "ONTOLOGY_MARKDOWN_ARTIFACT_MISSING",
-                "Markdown artifact が見つからないため保存できません。"
+                "Markdown 成果物が見つからないため保存できません。"
                 "再読込して再実行してください。",
             )
         now = utc_now()
@@ -821,7 +821,7 @@ class OntologyApiRuntime:
             if state.draft_revision is None or not state.draft_etag:
                 raise OntologyStateConflictError(
                     "ONTOLOGY_MARKDOWN_DRAFT_NOT_FOUND",
-                    "保存できる Markdown Draft がありません。AI 構築を実行してください。",
+                    "保存できる Markdown 下書きがありません。AI 構築を実行してください。",
                 )
             self._save_markdown_artifact(
                 profile_id=profile_id,
@@ -1588,7 +1588,7 @@ class OntologyApiRuntime:
         profile: Nl2SqlProfile,
         view: ProfileOntologyView,
         *,
-        source_label: str = "公開済み Ontology(スキーマ情報)",
+        source_label: str = "公開済みオントロジー(スキーマ情報)",
     ) -> list[str]:
         resolved = {item.object_name.upper() for item in view.physical_objects} | {
             f"{item.owner}.{item.object_name}".upper() for item in view.physical_objects
@@ -1655,7 +1655,7 @@ class OntologyApiRuntime:
             return True, stale
 
     def profile_view_warnings(self, profile_id: str, view: ProfileOntologyView) -> list[str]:
-        """公開 Ontology に解決できなかった対象オブジェクト名の診断 warning(応答用)。"""
+        """公開オントロジーに解決できなかった対象オブジェクト名の診断 warning(応答用)。"""
 
         with self._lock:
             profile = self._strict_profile(profile_id)
@@ -2086,7 +2086,7 @@ class OntologyApiRuntime:
             ):
                 raise OntologyVersionConflictError(
                     "ONTOLOGY_CONTEXT_REVISION_CHANGED",
-                    "指定した公開 Ontology revision は現在有効ではありません。",
+                    "指定した公開オントロジー revision は現在有効ではありません。",
                 )
             view = self._base_profile_view(profile, ontology)
         retrieval_hits = retrieve_ontology_nodes(
@@ -2822,7 +2822,7 @@ class OntologyApiRuntime:
             sort_keys=True,
         )
         system_prompt = (
-            "あなたは NL2SQL の質問解釈器です。QuestionIntentGraph の JSON object だけを返し、"
+            "あなたは NL2SQL の質問解釈器です。QuestionIntentGraph の JSON オブジェクトだけを返し、"
             "説明文や Markdown を付けないでください。allowed_nodes / allowed_relationships にない "
             "ID を作らず、業務上確定できない内容は blocking ambiguity として残してください。"
             "profile_view_id と ontology_revision_id は入力値を厳密に維持してください。"
@@ -3592,21 +3592,21 @@ class OntologyApiRuntime:
             self._ensure_store()
             self._strict_profile(profile_id)
             if on_progress is not None:
-                on_progress("Markdown Draft の基準 revision を確認しています…")
+                on_progress("Markdown 下書きの基準 revision を確認しています…")
             base = self._load_ontology_revision(base_revision_id)
             if base is None:
                 raise OntologyNotFoundError(
                     "ONTOLOGY_REVISION_NOT_FOUND",
-                    "Markdown Draft の基準 Ontology revision が見つかりません。",
+                    "Markdown 下書きの基準オントロジー revision が見つかりません。",
                 )
             request = self._proposal_payloads_upsert_draft_request(
                 payloads,
                 base,
                 titles=titles,
-                note=note or "AI 構築から Markdown Draft を生成",
+                note=note or "AI 構築から Markdown 下書きを生成",
             )
             if on_progress is not None:
-                on_progress("Draft revision を保存しています…")
+                on_progress("下書き revision を保存しています…")
             draft = self.create_ontology_draft(
                 base.revision.id,
                 request,
@@ -3614,8 +3614,8 @@ class OntologyApiRuntime:
             )
             if on_progress is not None:
                 on_progress(
-                    f"Draft revision v{draft.revision.version} を保存しました。"
-                    "Markdown artifact を保存しています…"
+                    f"下書き revision v{draft.revision.version} を保存しました。"
+                    "Markdown 成果物を保存しています…"
                 )
             artifact = self._save_markdown_artifact(
                 profile_id=profile_id,
@@ -3624,7 +3624,7 @@ class OntologyApiRuntime:
                 markdown=markdown,
             )
             if on_progress is not None:
-                on_progress("Markdown artifact を保存しました。")
+                on_progress("Markdown 成果物を保存しました。")
             return draft, artifact
 
     def accept_proposals(
@@ -4241,7 +4241,7 @@ class OntologyApiRuntime:
         if not isinstance(payload, Mapping):
             raise OntologyIntegrityError(
                 "ONTOLOGY_STORE_PAYLOAD_INVALID",
-                f"永続化された {collection} payload が JSON object ではありません。",
+                f"永続化された {collection} payload が JSON オブジェクトではありません。",
             )
         return payload
 

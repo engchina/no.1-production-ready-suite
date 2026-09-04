@@ -1,6 +1,6 @@
 """AI オントロジー構築(ontology_build)のテスト。
 
-LLM は fake、store は InMemoryOntologyStore。job → Markdown Draft → publish と、
+LLM は fake、store は InMemoryOntologyStore。job → Markdown 下書き → publish と、
 既存 proposal endpoint の accept → publish 経路、スコープ外候補の warnings 落ちを検証する。
 """
 
@@ -480,7 +480,7 @@ def test_build_schema_context_fails_ambiguous_unqualified_profile_object() -> No
     assert any("複数 object" in error for error in prepared.errors)
 
 
-# --- job → Markdown Draft ---------------------------------------------------------------------
+# --- job → Markdown 下書き ---------------------------------------------------------------------
 
 
 def test_build_job_creates_markdown_draft_and_drops_outside_candidates(
@@ -516,7 +516,7 @@ def test_build_job_creates_markdown_draft_and_drops_outside_candidates(
     event_times = [event.at for event in finished.events]
     assert event_times == sorted(event_times)
     assert any("スキーマ情報を準備しました" in event.message_ja for event in finished.events)
-    assert any("Markdown Draft" in event.message_ja for event in finished.events)
+    assert any("Markdown 下書き" in event.message_ja for event in finished.events)
     # スコープ外(APP.SECRET)は draft graph 化されず warnings に落ちる
     assert any("APP.SECRET" in warning for warning in finished.warnings_ja)
     assert finished.proposal_ids == []
@@ -539,23 +539,23 @@ def test_build_job_creates_markdown_draft_and_drops_outside_candidates(
         == "APP.ORDERS.CUSTOMER_ID = APP.CUSTOMERS.ID"
         for relationship in schema_context["relationships"]
     )
-    assert finished.markdown_output.startswith("# Ontology Draft")
-    assert "## Physical Objects" in finished.markdown_output
+    assert finished.markdown_output.startswith("# オントロジー下書き")
+    assert "## 物理オブジェクト" in finished.markdown_output
     assert "`APP.ORDERS` (table)" in finished.markdown_output
-    assert "business_name: 受注" in finished.markdown_output
-    assert "## Entities" in finished.markdown_output
+    assert "業務名: 受注" in finished.markdown_output
+    assert "## 業務エンティティ" in finished.markdown_output
     assert "受注 (`APP.ORDERS`)" in finished.markdown_output
-    assert "## Relationships / Join" in finished.markdown_output
+    assert "## 関係 / Join" in finished.markdown_output
     assert "顧客を参照" in finished.markdown_output
-    assert "allowed_path: true" in finished.markdown_output
+    assert "検索利用: 利用可" in finished.markdown_output
     assert "`APP.ORDERS.CUSTOMER_ID = APP.CUSTOMERS.ID`" in finished.markdown_output
-    assert "## Metrics" in finished.markdown_output
+    assert "## 指標" in finished.markdown_output
     assert "受注金額合計" in finished.markdown_output
     assert "APP.ORDERS.AMOUNT" in finished.markdown_output
-    assert "## Business Rules / Enum Values" in finished.markdown_output
-    assert "## Synonyms" in finished.markdown_output
+    assert "## 業務ルール / 列挙値" in finished.markdown_output
+    assert "## 同義語" in finished.markdown_output
     assert "オーダー" in finished.markdown_output
-    assert "## Evidence / Warnings" in finished.markdown_output
+    assert "## 証拠 / 警告" in finished.markdown_output
     assert "APP.SECRET" in finished.markdown_output
 
     assert runtime.list_profile_proposals("sales") == []
@@ -567,12 +567,12 @@ def test_build_job_creates_markdown_draft_and_drops_outside_candidates(
     saved_state = runtime.save_ontology_markdown_draft(
         "sales",
         OntologyMarkdownDraftPatch(
-            markdown=f"{state.draft_markdown}\n## Manual Notes\n- 確認済み\n",
+            markdown=f"{state.draft_markdown}\n## 手動メモ\n- 確認済み\n",
             base_etag=state.draft_etag,
         ),
     )
     assert saved_state.draft_etag != state.draft_etag
-    assert "Manual Notes" in saved_state.draft_markdown
+    assert "手動メモ" in saved_state.draft_markdown
     with pytest.raises(OntologyVersionConflict):
         runtime.save_ontology_markdown_draft(
             "sales",
@@ -882,7 +882,7 @@ def test_markdown_draft_merges_profile_view_overrides_rules_and_enums() -> None:
         profile_id="sales",
         schema_context=json.dumps({"objects": [], "relationships": []}),
         drafts=[],
-        warnings=["APP.MISSING を公開 Ontology に解決できません。"],
+        warnings=["APP.MISSING を公開オントロジーに解決できません。"],
         source_count=0,
         qa_pair_count=0,
         business_text_present=False,
@@ -890,21 +890,21 @@ def test_markdown_draft_merges_profile_view_overrides_rules_and_enums() -> None:
         profile_view=view,
     )
 
-    assert "## Physical Objects" in markdown
+    assert "## 物理オブジェクト" in markdown
     assert "`APP.ORDERS` (table)" in markdown
-    assert "business_name: 受注明細" in markdown
-    assert "usage: 受注分析の主表" in markdown
+    assert "業務名: 受注明細" in markdown
+    assert "用途: 受注分析の主表" in markdown
     assert "受注明細 (`APP.ORDERS`)" in markdown
-    assert "## Relationships / Join" in markdown
-    assert "cardinality: one_to_many" in markdown
-    assert "allowed_path: true" in markdown
+    assert "## 関係 / Join" in markdown
+    assert "多重度: one_to_many" in markdown
+    assert "検索利用: 利用可" in markdown
     assert "`APP.ORDERS.CUSTOMER_ID = APP.CUSTOMERS.ID`" in markdown
-    assert "## Business Rules / Enum Values" in markdown
-    assert "statement: 受注状態を必須にします。" in markdown
-    assert "applies_to: 受注明細" in markdown
-    assert "code: CONFIRMED" in markdown
-    assert "literal: `C`" in markdown
-    assert "property: 受注状態" in markdown
+    assert "## 業務ルール / 列挙値" in markdown
+    assert "ルール文: 受注状態を必須にします。" in markdown
+    assert "適用対象: 受注明細" in markdown
+    assert "コード: CONFIRMED" in markdown
+    assert "物理値: `C`" in markdown
+    assert "属性: 受注状態" in markdown
     assert "APP.MISSING" in markdown
 
 
@@ -1023,7 +1023,7 @@ def test_build_job_fails_gracefully_when_markdown_draft_save_times_out(
     def fail_create_build_markdown_draft(**kwargs: Any) -> Any:
         on_progress = kwargs.get("on_progress")
         if callable(on_progress):
-            on_progress("Draft revision を保存しています…")
+            on_progress("下書き revision を保存しています…")
         raise TimeoutError("Oracle round-trip timeout")
 
     monkeypatch.setattr(
@@ -1040,9 +1040,9 @@ def test_build_job_fails_gracefully_when_markdown_draft_save_times_out(
         step for step in finished.steps if step.name == OntologyBuildStepName.PROPOSAL_REGISTRATION
     )
     assert registration.status == OntologyBuildStepStatus.FAILED
-    assert registration.detail_ja == "Markdown Draft の保存に失敗しました。"
+    assert registration.detail_ja == "Markdown 下書きの保存に失敗しました。"
     assert "Oracle round-trip timeout" in finished.error_message_ja
-    assert any("Draft revision を保存しています" in event.message_ja for event in finished.events)
+    assert any("下書き revision を保存しています" in event.message_ja for event in finished.events)
 
 
 def test_build_job_fails_gracefully_when_final_status_save_times_out(
@@ -1099,7 +1099,7 @@ def test_get_build_job_normalizes_succeeded_markdown_job_with_running_final_step
         ],
         draft_revision_id="ontology_revision_draft_stuck",
         draft_etag="markdown-etag-stuck",
-        markdown_output="# Ontology Draft\n",
+        markdown_output="# オントロジー下書き\n",
     )
     stuck.started_at = stuck.created_at
     stuck.finished_at = stuck.created_at
@@ -1128,7 +1128,7 @@ def test_get_build_job_normalizes_succeeded_markdown_job_with_running_final_step
         if step.name == OntologyBuildStepName.PROPOSAL_REGISTRATION
     )
     assert registration.status == OntologyBuildStepStatus.SUCCEEDED
-    assert registration.detail_ja == "Markdown Draft を生成しました。"
+    assert registration.detail_ja == "Markdown 下書きを生成しました。"
     assert registration.finished_at == normalized.finished_at
     raw_document = store.get_document("jobs", {"job_id": stuck.id})
     assert raw_document is not None
@@ -1667,8 +1667,8 @@ def test_build_job_uses_latest_schema_when_published_profile_scope_is_stale(
     finished = _wait_for_job(service, job.id)
 
     assert finished.status == OntologyBuildStatus.SUCCEEDED
-    assert not any("公開 Ontology" in warning for warning in finished.warnings_ja)
-    assert not any("公開 Ontology" in event.message_ja for event in finished.events)
+    assert not any("公開オントロジー" in warning for warning in finished.warnings_ja)
+    assert not any("公開オントロジー" in event.message_ja for event in finished.events)
     assert any("DB から profile 範囲" in event.message_ja for event in finished.events)
     schema_context = json.loads(client.contexts[0])
     assert {item["object"] for item in schema_context["objects"]} == {"APP.INVOICES"}
@@ -1861,7 +1861,7 @@ def test_batch_accept_dedupes_proposal_ids(
 def test_rerun_replaces_markdown_draft_without_creating_proposals(
     harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
 ) -> None:
-    """AI 構築を再実行すると proposal は作らず、最新 Markdown Draft が差し替わる。"""
+    """AI 構築を再実行すると proposal は作らず、最新 Markdown 下書きが差し替わる。"""
 
     runtime, store, legacy = harness
     legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_FENCED_PAYLOAD)
@@ -2333,7 +2333,7 @@ def test_gleaning_pass_recovers_missed_candidates(
     assert finished.status == OntologyBuildStatus.SUCCEEDED
     assert client.gleaning_calls >= 1
     assert any(event.code == "EXTRACTION_GLEANING" for event in finished.events)
-    # 追加パスで回収した指標が Markdown Draft に含まれる
+    # 追加パスで回収した指標が Markdown 下書きに含まれる
     assert "受注件数" in (finished.markdown_output or "")
 
 

@@ -105,7 +105,7 @@ test("Grounding graph remains the single user-facing ontology graph", () => {
   assert.match(ontologyQueryPlayground, /OntologyGraphCanvas/u);
   assert.match(ontologyQueryPlayground, /OntologyErDetailsPanel/u);
   assert.match(ontologyQueryPlayground, /graphViewMode/u);
-  assert.match(messages, /質問の Ontology 接地確認用グラフ/u);
+  assert.match(messages, /質問のオントロジー接地確認用グラフ/u);
   assert.match(messages, /物理 ER/u);
   assert.match(messages, /グラフを拡大/u);
   assert.match(messages, /グラフを縮小/u);

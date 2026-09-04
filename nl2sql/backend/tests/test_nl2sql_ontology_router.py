@@ -1801,7 +1801,7 @@ def test_profile_view_warnings_report_unresolved_objects(
 
     assert len(warnings) == 1
     assert "APP.MISSING_TABLE" in warnings[0]
-    assert "公開済み Ontology(スキーマ情報)" in warnings[0]
+    assert "公開済みオントロジー(スキーマ情報)" in warnings[0]
 
 
 def test_profile_recommendation_requires_explicit_confirmation_and_binds_token(
