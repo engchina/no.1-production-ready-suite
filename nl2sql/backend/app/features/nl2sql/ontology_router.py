@@ -38,7 +38,12 @@ from .models import (
     PreviewRequest,
     QueryResults,
 )
-from .ontology_build import OntologyBuildService, build_schema_context_from_catalog
+from .ontology_build import (
+    OntologyBuildService,
+    build_schema_context_from_catalog,
+    qa_sql_patterns_from_pairs,
+    select_qa_sql_examples_from_markdown,
+)
 from .ontology_catalog import (
     SchemaOntology,
     build_schema_ontology,
@@ -2748,6 +2753,12 @@ class OntologyApiRuntime:
             ontology.revision.id,
             profile_id=session.profile_id,
         )
+        qa_sql_examples = select_qa_sql_examples_from_markdown(
+            published_markdown,
+            intent.question_effective,
+        )
+        payload["qa_sql_examples"] = [item.model_dump(mode="json") for item in qa_sql_examples]
+        payload["qa_sql_patterns"] = qa_sql_patterns_from_pairs(qa_sql_examples)
         payload["llm_markdown"] = (
             published_markdown
             or build_semantic_artifacts(

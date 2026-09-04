@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import threading
 import time
 from collections.abc import Mapping, Sequence
@@ -875,6 +876,64 @@ def test_runtime_executes_two_confirmation_flow_and_persists_every_artifact(
     assert persisted_session["profile_view_snapshot"]["profile_id"] == "sales"
     assert store.get_query_session(created.session.id) is not None
     assert store.get_artifact(generated.session.sql_artifacts[-1].id) is not None
+
+
+def test_generate_sql_includes_published_qa_sql_examples(
+    runtime: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+) -> None:
+    api, _store, legacy = runtime
+    example_sql = "SELECT AMOUNT FROM APP.ORDERS ORDER BY ID"
+    markdown = "\n".join(
+        [
+            "# Confirmed Markdown",
+            "",
+            "## Q/A SQL 例",
+            "```jsonl",
+            json.dumps(
+                {
+                    "question": "受注金額を確認したい",
+                    "sql": example_sql,
+                    "note_ja": "回帰テスト用の標準 SQL",
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+            "```",
+            "",
+        ]
+    )
+    base = api.current_ontology().revision
+    draft, _artifact = api.create_build_markdown_draft(
+        profile_id="sales",
+        base_revision_id=base.id,
+        payloads=[],
+        titles=[],
+        markdown=markdown,
+        note="QA SQL example context test",
+    )
+    api.publish_ontology_revision(
+        draft.revision.id,
+        OntologyPublishRequest(etag=draft.revision.etag),
+    )
+    api.copy_draft_markdown_to_published(draft.revision.id)
+
+    created = api.create_session(
+        QuerySessionApiCreate(
+            question="受注金額を確認したい",
+            profile_id="sales",
+            allowed_objects=AllowedObjects(table_names=["APP.ORDERS"]),
+        )
+    )
+    generated = api.generate_sql(created.session.id, _generate_request(created))
+    context = legacy.preview_requests[-1].ontology_context
+
+    assert generated.session.status == QuerySessionStatus.AWAITING_SQL_CONFIRMATION
+    assert context is not None
+    assert context.qa_sql_examples[0].question == "受注金額を確認したい"
+    assert context.qa_sql_examples[0].sql == example_sql
+    assert context.qa_sql_patterns[0]["physical_tables"] == ["APP.ORDERS"]
+    assert context.qa_sql_patterns[0]["order_by"] == ["ID asc"]
+    assert context.context_hash == generated.session.sql_artifacts[-1].generation_context_hash
 
 
 def test_stale_session_cache_reloads_store_state_before_execute(

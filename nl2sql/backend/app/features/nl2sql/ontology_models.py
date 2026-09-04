@@ -1011,6 +1011,8 @@ class OntologySqlGenerationContext(OntologyContract):
     approved_join_edge_ids: list[str] = Field(default_factory=list)
     join_condition_summaries: list[str] = Field(default_factory=list)
     metric_definitions: list[MetricDefinition] = Field(default_factory=list)
+    qa_sql_examples: list[QaPair] = Field(default_factory=list)
+    qa_sql_patterns: list[dict[str, Any]] = Field(default_factory=list)
     warnings_ja: list[str] = Field(default_factory=list)
     llm_markdown: str = ""
     # LLM プロンプト用の erDiagram 表現。context_hash の計算対象には含めない

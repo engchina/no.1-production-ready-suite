@@ -16,6 +16,7 @@ import hashlib
 import inspect
 import json
 import logging
+import re
 import threading
 import time
 from collections.abc import Mapping, Sequence
@@ -82,6 +83,14 @@ _DANGEROUS_EXPRESSION_TOKENS = (";", "--", "/*")
 _ONTOLOGY_BUILD_LLM_CONTEXT_MAX_CHARS = 100_000
 _LLM_CONTEXT_HEADROOM_CHARS = 512
 _ORACLE_PSEUDO_COLUMNS = {"LEVEL", "ORA_ROWSCN", "ROWID", "ROWNUM"}
+_QA_SQL_EXAMPLE_SECTION_TITLE = "## Q/A SQL 例"
+_QA_SQL_PATTERN_SECTION_TITLE = "## Q/A SQL 構造パターン"
+_QA_SQL_EXAMPLE_BLOCK_RE = re.compile(
+    rf"^{re.escape(_QA_SQL_EXAMPLE_SECTION_TITLE)}\s*\n```jsonl?\s*\n(?P<body>.*?)\n```",
+    flags=re.MULTILINE | re.DOTALL,
+)
+_QA_SQL_EXAMPLE_MAX_PROMPT_COUNT = 3
+_QA_SQL_PATTERN_MAX_PROMPT_COUNT = 3
 
 
 # --- DB schema scope / profile view スコープの解決 -------------------------------------------
@@ -977,6 +986,225 @@ def _md_code(value: Any, fallback: str = "未設定") -> str:
     return f"`{text}`"
 
 
+def _qa_pair_from_markdown_payload(payload: object) -> QaPair | None:
+    if not isinstance(payload, Mapping):
+        return None
+    question = str(payload.get("question") or "").strip()
+    sql = str(payload.get("sql") or "").strip()
+    note_ja = str(payload.get("note_ja") or "").strip()
+    if not question or not sql:
+        return None
+    if sql.split(None, 1)[0].upper() not in {"SELECT", "WITH"}:
+        return None
+    return QaPair(question=question, sql=sql, note_ja=note_ja)
+
+
+def _qa_sql_example_markdown_lines(qa_pairs: Sequence[QaPair]) -> list[str]:
+    deduped: list[QaPair] = []
+    seen: set[tuple[str, str]] = set()
+    for pair in qa_pairs:
+        question = pair.question.strip()
+        sql = pair.sql.strip()
+        if not question or not sql:
+            continue
+        key = (question, sql)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(QaPair(question=question, sql=sql, note_ja=pair.note_ja.strip()))
+    if not deduped:
+        return ["- なし"]
+    lines = ["```jsonl"]
+    for pair in deduped:
+        lines.append(
+            json.dumps(
+                pair.model_dump(mode="json"),
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+        )
+    lines.append("```")
+    return lines
+
+
+def qa_sql_examples_from_markdown(markdown: str) -> list[QaPair]:
+    """Published Markdown に保存された Q/A SQL 例を、指示ではなくデータとして復元する。"""
+
+    examples: list[QaPair] = []
+    seen: set[tuple[str, str]] = set()
+    for match in _QA_SQL_EXAMPLE_BLOCK_RE.finditer(markdown):
+        body = match.group("body").strip()
+        if not body:
+            continue
+        payloads: list[object]
+        if body.startswith("["):
+            try:
+                loaded = json.loads(body)
+            except json.JSONDecodeError:
+                continue
+            payloads = loaded if isinstance(loaded, list) else []
+        else:
+            payloads = []
+            for line in body.splitlines():
+                cleaned = line.strip()
+                if not cleaned:
+                    continue
+                try:
+                    payloads.append(json.loads(cleaned))
+                except json.JSONDecodeError:
+                    continue
+        for payload in payloads:
+            pair = _qa_pair_from_markdown_payload(payload)
+            if pair is None:
+                continue
+            key = (pair.question, pair.sql)
+            if key in seen:
+                continue
+            seen.add(key)
+            examples.append(pair)
+    return examples
+
+
+def _normalize_question_for_example_match(value: str) -> str:
+    return "".join(character.lower() for character in value if not character.isspace())
+
+
+def _question_ngrams(value: str) -> set[str]:
+    normalized = _normalize_question_for_example_match(value)
+    if not normalized:
+        return set()
+    if len(normalized) == 1:
+        return {normalized}
+    return {normalized[index : index + 2] for index in range(len(normalized) - 1)}
+
+
+def _question_example_score(question: str, example_question: str) -> float:
+    left = _normalize_question_for_example_match(question)
+    right = _normalize_question_for_example_match(example_question)
+    if not left or not right:
+        return 0.0
+    if left == right:
+        return 1.0
+    if left in right or right in left:
+        return 0.92
+    left_terms = _question_ngrams(left)
+    right_terms = _question_ngrams(right)
+    if not left_terms or not right_terms:
+        return 0.0
+    return len(left_terms & right_terms) / len(left_terms | right_terms)
+
+
+def select_qa_sql_examples_from_markdown(
+    markdown: str,
+    question: str,
+    *,
+    limit: int = _QA_SQL_EXAMPLE_MAX_PROMPT_COUNT,
+    min_score: float = 0.2,
+) -> list[QaPair]:
+    """現在の質問に近い Q/A SQL 例だけを SQL 生成 context 用に選ぶ。"""
+
+    ranked: list[tuple[float, int, QaPair]] = []
+    for index, pair in enumerate(qa_sql_examples_from_markdown(markdown)):
+        score = _question_example_score(question, pair.question)
+        if score >= min_score:
+            ranked.append((score, index, pair))
+    ranked.sort(key=lambda item: (-item[0], item[1]))
+    return [pair for _score, _index, pair in ranked[: max(0, limit)]]
+
+
+def _unique_values(values: Sequence[str], *, limit: int) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        cleaned = " ".join(str(value or "").split())
+        if not cleaned or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        result.append(cleaned)
+        if len(result) >= limit:
+            break
+    return result
+
+
+def _qa_sql_pattern_from_pair(pair: QaPair) -> dict[str, Any]:
+    try:
+        analysis = parse_oracle_sql(
+            pair.sql,
+            intent_version=1,
+            ontology_revision_id="qa_sql_pattern",
+        )
+    except Exception as exc:
+        return {
+            "question": pair.question,
+            "parse_complete": False,
+            "warnings_ja": [f"SQL 構造を解析できませんでした: {type(exc).__name__}"],
+        }
+    graph = analysis.graph
+    if graph is None:
+        return {
+            "question": pair.question,
+            "parse_complete": False,
+            "warnings_ja": [finding.message_ja for finding in analysis.validation.findings[:5]],
+        }
+    return {
+        "question": pair.question,
+        "statement_type": graph.statement_type,
+        "physical_tables": _unique_values(
+            [
+                table.qualified_name or table.name
+                for table in graph.tables
+                if not table.is_cte and (table.qualified_name or table.name)
+            ],
+            limit=20,
+        ),
+        "cte_names": _unique_values([cte.name for cte in graph.ctes], limit=20),
+        "set_operations": _unique_values(
+            [operation.operator for operation in graph.set_operations],
+            limit=20,
+        ),
+        "join_conditions": _unique_values(
+            [join.condition_sql for join in graph.joins if join.condition_sql],
+            limit=40,
+        ),
+        "filters": _unique_values(
+            [predicate.expression_sql for predicate in [*graph.filters, *graph.having]],
+            limit=40,
+        ),
+        "projections": _unique_values(
+            [projection.expression_sql for projection in graph.projections],
+            limit=40,
+        ),
+        "aggregates": _unique_values(
+            [aggregate.expression_sql for aggregate in graph.aggregates],
+            limit=20,
+        ),
+        "group_by": _unique_values([group.expression_sql for group in graph.groups], limit=20),
+        "order_by": _unique_values(
+            [f"{order.expression_sql} {order.direction}".strip() for order in graph.orders],
+            limit=20,
+        ),
+    }
+
+
+def qa_sql_patterns_from_pairs(
+    pairs: Sequence[QaPair],
+    *,
+    limit: int = _QA_SQL_PATTERN_MAX_PROMPT_COUNT,
+) -> list[dict[str, Any]]:
+    return [_qa_sql_pattern_from_pair(pair) for pair in pairs[: max(0, limit)]]
+
+
+def _qa_sql_pattern_markdown_lines(qa_pairs: Sequence[QaPair]) -> list[str]:
+    patterns = qa_sql_patterns_from_pairs(qa_pairs, limit=20)
+    if not patterns:
+        return ["- なし"]
+    lines = ["```jsonl"]
+    for pattern in patterns:
+        lines.append(json.dumps(pattern, ensure_ascii=False, separators=(",", ":")))
+    lines.append("```")
+    return lines
+
+
 def _draft_nodes(draft: ProposalDraft) -> list[OntologyNode]:
     nodes: list[OntologyNode] = []
     for value in draft.payload.values.get("node_upserts") or []:
@@ -1289,6 +1517,7 @@ def render_ontology_build_markdown(
     source_count: int,
     qa_pair_count: int,
     business_text_present: bool,
+    qa_pairs: list[QaPair] | None = None,
     ontology: SchemaOntology | None = None,
     profile_view: ProfileOntologyView | None = None,
 ) -> str:
@@ -1329,8 +1558,12 @@ def render_ontology_build_markdown(
         f"- DB スキーマ列: {column_count}",
         f"- 既存スキーマ関係: {relationship_count}",
         "",
-        "## 物理オブジェクト",
+        _QA_SQL_EXAMPLE_SECTION_TITLE,
     ]
+    lines.extend(_qa_sql_example_markdown_lines(qa_pairs or []))
+    lines.extend(["", _QA_SQL_PATTERN_SECTION_TITLE])
+    lines.extend(_qa_sql_pattern_markdown_lines(qa_pairs or []))
+    lines.extend(["", "## 物理オブジェクト"])
     lines.extend(physical_lines or ["- なし"])
     lines.extend(
         [
@@ -3737,6 +3970,7 @@ class OntologyBuildService:
                 source_count=len(job.source_document_ids),
                 qa_pair_count=len(qa_pairs),
                 business_text_present=bool(text_units),
+                qa_pairs=qa_pairs,
                 ontology=ontology,
                 profile_view=view,
             )

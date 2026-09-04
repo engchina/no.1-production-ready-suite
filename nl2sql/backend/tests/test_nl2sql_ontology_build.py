@@ -27,7 +27,10 @@ from app.features.nl2sql.models import (
 from app.features.nl2sql.ontology_build import (
     OntologyBuildService,
     build_schema_context_from_catalog,
+    qa_sql_examples_from_markdown,
+    qa_sql_patterns_from_pairs,
     render_ontology_build_markdown,
+    select_qa_sql_examples_from_markdown,
 )
 from app.features.nl2sql.ontology_catalog import SchemaOntology, catalog_schema_fingerprint
 from app.features.nl2sql.ontology_models import (
@@ -601,6 +604,46 @@ def test_convert_extraction_resolves_alias_columns_from_qa_sql(
 # --- job → Markdown 下書き ---------------------------------------------------------------------
 
 
+def test_markdown_persists_and_ranks_qa_sql_examples() -> None:
+    primary_sql = (
+        "WITH CURRENT_FACTS AS ("
+        "SELECT A.RESOURCE_ID, SUM(A.AMOUNT) AS TOTAL_AMOUNT "
+        "FROM APP.FACT_VALUES A WHERE A.STATUS_CODE = 'ACTIVE' GROUP BY A.RESOURCE_ID"
+        ") SELECT A.RESOURCE_ID, B.RESOURCE_NAME, A.TOTAL_AMOUNT "
+        "FROM CURRENT_FACTS A, APP.RESOURCES B "
+        "WHERE B.RESOURCE_ID = A.RESOURCE_ID ORDER BY A.RESOURCE_ID"
+    )
+    markdown = render_ontology_build_markdown(
+        profile_id="HR",
+        schema_context=json.dumps({"objects": [], "relationships": []}),
+        drafts=[],
+        warnings=[],
+        source_count=1,
+        qa_pair_count=2,
+        business_text_present=False,
+        qa_pairs=[
+            QaPair(question="有効な金額集計を確認したい", sql=primary_sql),
+            QaPair(question="リソース一覧", sql="SELECT RESOURCE_ID FROM APP.RESOURCES"),
+            QaPair(question="有効な金額集計を確認したい", sql=primary_sql),
+        ],
+    )
+
+    examples = qa_sql_examples_from_markdown(markdown)
+    selected = select_qa_sql_examples_from_markdown(markdown, "有効金額の集計を見たい")
+
+    assert "## Q/A SQL 例" in markdown
+    assert "## Q/A SQL 構造パターン" in markdown
+    assert len(examples) == 2
+    assert selected[0].question == "有効な金額集計を確認したい"
+    assert "APP.FACT_VALUES" in selected[0].sql
+    assert "ACTIVE" in selected[0].sql
+    patterns = qa_sql_patterns_from_pairs(selected)
+    assert set(patterns[0]["physical_tables"]) == {"APP.FACT_VALUES", "APP.RESOURCES"}
+    assert "ACTIVE" in " ".join(patterns[0]["filters"])
+    assert patterns[0]["cte_names"] == ["CURRENT_FACTS"]
+    assert select_qa_sql_examples_from_markdown(markdown, "別件", min_score=0.9) == []
+
+
 def test_build_job_creates_markdown_draft_and_drops_outside_candidates(
     harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
 ) -> None:
@@ -658,6 +701,8 @@ def test_build_job_creates_markdown_draft_and_drops_outside_candidates(
         for relationship in schema_context["relationships"]
     )
     assert finished.markdown_output.startswith("# オントロジー下書き")
+    assert "## Q/A SQL 例" in finished.markdown_output
+    assert qa_sql_examples_from_markdown(finished.markdown_output)[0].question == "顧客別売上"
     assert "## 物理オブジェクト" in finished.markdown_output
     assert "`APP.ORDERS` (table)" in finished.markdown_output
     assert "業務名: 受注" in finished.markdown_output
