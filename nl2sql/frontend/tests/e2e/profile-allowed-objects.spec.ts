@@ -2174,3 +2174,40 @@ test("Ontology 構築はプロファイルごとの保存済みファイルを�
   await expect(savedFiles).toContainText("Q/A");
   await expect(savedFiles).toContainText("保存済み");
 });
+
+test("検索フィルタ適用中のスキーマ一括操作はヒットした object だけに作用する", async ({ page }) => {
+  await mockProfileApi(page, {
+    profileItems: [{ ...profiles[0], allowed_tables: [], allowed_views: [] }],
+  });
+
+  await page.goto("/profiles?profile=default");
+
+  const tableList = page.getByTestId("profile-allowed-table-list");
+  const objectSearch = page.getByRole("searchbox", { name: "オブジェクト検索" });
+  const appBulkActions = tableList.getByTestId(
+    "profile-allowed-table-list-app-schema-bulk-actions",
+  );
+
+  await expect(tableList.getByLabel("APP.TABLE_01")).not.toBeChecked();
+
+  // 絞り込み中の「すべて選択」はスキーマ全体へ波及しない。
+  await objectSearch.fill("TABLE_01");
+  await expect(tableList.getByLabel("APP.TABLE_02")).toHaveCount(0);
+  await appBulkActions.getByRole("button", { name: "APP をすべて選択" }).click();
+  await expect(tableList.getByLabel("APP.TABLE_01")).toBeChecked();
+
+  await objectSearch.fill("");
+  await expect(tableList.getByLabel("APP.TABLE_01")).toBeChecked();
+  await expect(tableList.getByLabel("APP.TABLE_02")).not.toBeChecked();
+
+  // 絞り込み中の「すべて解除」もヒットした object だけを外す。
+  await appBulkActions.getByRole("button", { name: "APP をすべて選択" }).click();
+  await expect(tableList.getByLabel("APP.TABLE_02")).toBeChecked();
+  await objectSearch.fill("TABLE_01");
+  await appBulkActions.getByRole("button", { name: "APP の選択をすべて解除" }).click();
+  await expect(tableList.getByLabel("APP.TABLE_01")).not.toBeChecked();
+
+  await objectSearch.fill("");
+  await expect(tableList.getByLabel("APP.TABLE_01")).not.toBeChecked();
+  await expect(tableList.getByLabel("APP.TABLE_02")).toBeChecked();
+});

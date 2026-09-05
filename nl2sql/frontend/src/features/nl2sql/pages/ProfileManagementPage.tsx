@@ -61,6 +61,7 @@ import {
   useStartSelectAiDbProfileRefresh,
 } from "../incrementalQueries";
 import { isUserVisibleObjectName } from "../objectVisibility";
+import { applySchemaBulkSelection } from "../profileObjectSelection";
 import {
   sortProfileSummariesForDisplay,
   type ProfileListSortKey,
@@ -99,20 +100,6 @@ const SELECT_AI_REGION_OPTIONS = [
   { value: "us-chicago-1", label: "us-chicago-1" },
 ] as const satisfies readonly SelectFieldOption<string>[];
 const PROFILE_NAME_PATTERN = /^[A-Z][A-Z0-9_]*$/u;
-
-function filterProfileObjects(objects: SchemaTable[], query: string) {
-  const normalized = query.trim().toLowerCase();
-  if (!normalized) return objects;
-  return objects.filter((object) =>
-    [
-      object.owner,
-      object.table_name,
-      schemaTableQualifiedName(object),
-      object.logical_name,
-      object.comment,
-    ].some((value) => value.toLowerCase().includes(normalized))
-  );
-}
 
 interface ProfileFormState {
   name: string;
@@ -1459,14 +1446,6 @@ export function ProfileManagementPage() {
         .map(schemaSummaryToTable),
     [viewObjectsQuery.data]
   );
-  const filteredTableObjects = useMemo(
-    () => filterProfileObjects(tableObjects, objectFilter),
-    [objectFilter, tableObjects]
-  );
-  const filteredViewObjects = useMemo(
-    () => filterProfileObjects(viewObjects, objectFilter),
-    [objectFilter, viewObjects]
-  );
   const tableObjectTotal = schemaObjectQueryTotal(tableObjectsQuery.data?.pages, tableObjects.length);
   const viewObjectTotal = schemaObjectQueryTotal(viewObjectsQuery.data?.pages, viewObjects.length);
   const profileTotal = schemaObjectQueryTotal(profilesQuery.data?.pages, profiles.length);
@@ -1761,20 +1740,25 @@ export function ProfileManagementPage() {
     select: boolean
   ) => {
     const key = kind === "table" ? "allowedTables" : "allowedViews";
-    const ownerPrefix = `${owner.toUpperCase()}.`;
+    const filter = objectFilter.trim();
+    const filtered = Boolean(filter);
     try {
-      const snapshot = select
-        ? await getSchemaObjectSnapshot(owner, kind === "table" ? "TABLE" : "VIEW")
-        : [];
-      setForm((current) => {
-        const retained = current[key].filter(
-          (name) => !name.replaceAll('"', "").toUpperCase().startsWith(ownerPrefix)
-        );
-        return {
-          ...current,
-          [key]: select ? [...retained, ...snapshot] : retained,
-        };
-      });
+      // フィルタ適用中は「表示されている(=ヒットした)object」だけを一括対象にする。
+      // 解除もスキーマ全体へ波及させないため、この場合は snapshot が必要。
+      const snapshot =
+        select || filtered
+          ? await getSchemaObjectSnapshot(owner, kind === "table" ? "TABLE" : "VIEW", filter)
+          : [];
+      setForm((current) => ({
+        ...current,
+        [key]: applySchemaBulkSelection({
+          current: current[key],
+          snapshot,
+          ownerPrefix: `${owner}.`,
+          select,
+          filtered,
+        }),
+      }));
     } catch (error) {
       toastError(error instanceof Error ? error.message : t("profiles.error.load"));
     }
@@ -1967,8 +1951,8 @@ export function ProfileManagementPage() {
       selectedProfile={selectedProfile}
       profileAccessProfile={selectedProfileAccessProfile}
       form={form}
-      tableObjects={filteredTableObjects}
-      viewObjects={filteredViewObjects}
+      tableObjects={tableObjects}
+      viewObjects={viewObjects}
       tableObjectTotal={tableObjectTotal}
       viewObjectTotal={viewObjectTotal}
       tableOwnerTotals={tableOwnerTotals}

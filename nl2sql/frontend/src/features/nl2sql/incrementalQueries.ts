@@ -12,6 +12,7 @@ import type {
   SchemaCatalog,
   SchemaObjectPage,
   SchemaObjectDetail,
+  SchemaTable,
   SchemaRefreshActiveJobData,
   SchemaRefreshJob,
   SelectAiDbProfileRefreshJobData,
@@ -318,11 +319,29 @@ export function useDbAdminObjects(
   });
 }
 
+/** Catalog 検索と同じ突合対象で 1 object を判定する(legacy fallback 用)。 */
+function legacySchemaObjectMatchesQuery(table: SchemaTable, query: string) {
+  if (!query) return true;
+  return [
+    table.owner,
+    table.table_name,
+    table.logical_name,
+    table.comment,
+    ...table.columns.map((column) => column.column_name),
+    ...table.columns.map((column) => column.logical_name),
+  ]
+    .join(" ")
+    .toLowerCase()
+    .includes(query);
+}
+
 export async function getSchemaObjectSnapshot(
   owner: string,
   objectType: string,
+  query = "",
   signal?: AbortSignal
 ) {
+  const normalizedQuery = query.trim();
   const names = new Set<string>();
   let cursor = "";
   const seenCursors = new Set<string>();
@@ -332,6 +351,7 @@ export async function getSchemaObjectSnapshot(
         limit: "100",
         owner: owner.trim().toUpperCase(),
         type: objectType.trim().toUpperCase(),
+        q: normalizedQuery,
         include_counts: "false",
       });
       if (cursor) params.set("cursor", cursor);
@@ -352,6 +372,7 @@ export async function getSchemaObjectSnapshot(
   } catch (error) {
     if (!isLegacyCompatibilityError(error)) throw error;
     const catalog = await legacyCatalog(signal);
+    const legacyQuery = normalizedQuery.toLowerCase();
     return catalog.tables
       .filter(
         (table) =>
@@ -359,7 +380,8 @@ export async function getSchemaObjectSnapshot(
           table.owner.toUpperCase() === owner.trim().toUpperCase() &&
           (objectType.toUpperCase() === "VIEW"
             ? ["VIEW", "MATERIALIZED VIEW"].includes(table.table_type.toUpperCase())
-            : table.table_type.toUpperCase() === objectType.toUpperCase())
+            : table.table_type.toUpperCase() === objectType.toUpperCase()) &&
+          legacySchemaObjectMatchesQuery(table, legacyQuery)
       )
       .map((table) => `${table.owner}.${table.table_name}`.toUpperCase())
       .sort();
