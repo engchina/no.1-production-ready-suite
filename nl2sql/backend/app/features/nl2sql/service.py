@@ -33,7 +33,11 @@ from dotenv import dotenv_values
 from pydantic import BaseModel, ValidationError
 from pydantic import Field as PydanticField
 
-from app.security.request_actor import actor_scope, current_actor_is_system_admin
+from app.security.request_actor import (
+    actor_scope,
+    current_actor_context,
+    current_actor_is_system_admin,
+)
 from app.settings import BACKEND_ENV_FILE, get_settings
 
 from .embedding_client import (
@@ -909,6 +913,7 @@ _IMPLICIT_COMMIT_STATEMENT_TYPES = frozenset(
     {"CREATE", "ALTER", "DROP", "TRUNCATE", "COMMENT", "RENAME", "FLASHBACK", "PURGE"}
 )
 _ROLLBACKABLE_DML_STATEMENT_TYPES = frozenset({"INSERT", "UPDATE", "DELETE", "MERGE"})
+_ADMIN_AUDIT_SQL_PREVIEW_CHARS = 500
 _SQL_RESERVED_OR_FUNCTIONS = {
     "AS",
     "CASE",
@@ -2374,6 +2379,24 @@ def _column_allowed(
 
 def one_line_sql(sql: str) -> str:
     return re.sub(r"\s+", " ", sql).strip()
+
+
+def _sha256_text(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _admin_sql_audit_detail(sql: str, statements: Sequence[str]) -> dict[str, Any]:
+    normalized_sql = _normalize_oracle_sql_text(sql)
+    normalized_statements = [_normalize_oracle_sql_text(statement) for statement in statements]
+    return {
+        "sql_sha256": _sha256_text(normalized_sql),
+        "sql_preview": one_line_sql(normalized_sql)[:_ADMIN_AUDIT_SQL_PREVIEW_CHARS],
+        "statement_hashes": [_sha256_text(statement) for statement in normalized_statements],
+        "statement_previews": [
+            one_line_sql(statement)[:_ADMIN_AUDIT_SQL_PREVIEW_CHARS]
+            for statement in normalized_statements
+        ],
+    }
 
 
 def normalize_executable_sql(sql: str) -> str:
@@ -12661,6 +12684,7 @@ class Nl2SqlService:
                         "statement_count": len(statements),
                         "success_count": len(successful_statement_indexes),
                         "types": statement_types,
+                        **_admin_sql_audit_detail(request.sql, statements),
                     },
                 )
             except (Nl2SqlPersistenceUnavailable, Nl2SqlRepositoryOperationFailed) as exc:
@@ -13081,6 +13105,7 @@ class Nl2SqlService:
                     "statement_count": len(statements),
                     "success_count": success_count,
                     "types": statement_types,
+                    **_admin_sql_audit_detail(request.sql, statements),
                 },
             )
         except (Nl2SqlPersistenceUnavailable, Nl2SqlRepositoryOperationFailed) as exc:
@@ -13685,6 +13710,7 @@ class Nl2SqlService:
         reason: str,
         detail: dict[str, Any],
     ) -> None:
+        actor = current_actor_context()
         with self._lock:
             self._admin_audit.append(
                 {
@@ -13694,6 +13720,8 @@ class Nl2SqlService:
                     "target": target,
                     "executed": executed,
                     "reason": reason,
+                    "actor_user_uuid": actor.user_uuid,
+                    "actor_is_system_admin": actor.is_system_admin,
                     "detail": detail,
                 }
             )
