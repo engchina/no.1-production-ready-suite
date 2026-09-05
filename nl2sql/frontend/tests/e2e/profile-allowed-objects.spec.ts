@@ -2498,3 +2498,27 @@ test("チェックを付け外しして元に戻したら未保存確認を出�
   await expect(page.getByRole("alertdialog")).toHaveCount(0);
   await expect(page.getByTestId("profile-management-list")).toBeVisible();
 });
+
+test("未保存のままサイドナビで離脱しようとすると確認を挟む", async ({ page }) => {
+  await mockProfileApi(page);
+
+  await page.goto("/profiles?profile=default");
+
+  await page.getByLabel("カテゴリ").fill("finance");
+
+  const otherPageLink = page.getByRole("link", { name: "オントロジー構築" }).first();
+  await otherPageLink.click();
+
+  // 確認ダイアログを挟み、キャンセルすれば編集画面に留まる。
+  const dialog = page.getByRole("alertdialog");
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "キャンセル" }).click();
+  await expect(page).toHaveURL(/\/profiles\?profile=default/);
+  await expect(page.getByLabel("カテゴリ")).toHaveValue("finance");
+
+  // 承認したときだけ遷移する。
+  await otherPageLink.click();
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "破棄して戻る" }).click();
+  await expect(page).toHaveURL(/\/ontology-build/);
+});

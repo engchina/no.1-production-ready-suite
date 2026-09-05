@@ -212,3 +212,23 @@ test("編集画面の dirty 判定は順序非依存の比較を使う", () => {
   assert.match(profilePage, /return !profileFormEquals\(form, baseline\);/u);
   assert.doesNotMatch(profilePage, /JSON\.stringify\(form\) !== JSON\.stringify\(baseline\)/u);
 });
+
+test("編集画面はルート遷移とタブ離脱の両方を未保存ガードで保護する", () => {
+  const guard = readFileSync(
+    new URL("../src/lib/useUnsavedChangesGuard.ts", import.meta.url),
+    "utf8",
+  );
+  // BrowserRouter では useBlocker(data router 専用)が使えないため、
+  // 内部リンクの click を capture 段階で受ける。
+  assert.doesNotMatch(guard, /useBlocker\(/u);
+  assert.match(guard, /document\.addEventListener\("click", handleClick, true\)/u);
+  assert.match(guard, /window\.addEventListener\("beforeunload", handleBeforeUnload\)/u);
+  assert.match(guard, /url\.origin !== window\.location\.origin/u);
+
+  assert.match(
+    profilePage,
+    /useUnsavedChangesGuard\(activeView === "editor" && isDirty, confirmDiscard\)/u,
+  );
+  // 「一覧に戻る」も同じ確認ダイアログを共有する。
+  assert.match(profilePage, /if \(isDirty && !\(await confirmDiscard\(\)\)\) return;/u);
+});

@@ -31,6 +31,7 @@ import { t } from "@/lib/i18n";
 import { INFORMATION_TABLE_FOCUS_CLASS } from "@/lib/list-density";
 import { toastError } from "@/lib/toast";
 import { LIST_SEARCH_DEBOUNCE_MS, useDebouncedValue } from "@/lib/useDebouncedValue";
+import { useUnsavedChangesGuard } from "@/lib/useUnsavedChangesGuard";
 import { useSchemaOwners, useSelectAiCredential } from "@/lib/queries";
 import { API_TIMEOUT_MS, requestTimeoutSeconds } from "@/lib/requestPolicy";
 import { useAuth } from "@/features/security/AuthProvider";
@@ -1720,17 +1721,23 @@ export function ProfileManagementPage() {
     return !profileFormEquals(form, baseline);
   }, [form, selectedProfile, selectAiCredentialQuery.data?.region]);
 
-  const backToList = async () => {
-    if (isDirty) {
-      const ok = await confirm({
+  const confirmDiscard = useCallback(
+    () =>
+      confirm({
         title: t("profiles.discard.confirm.title"),
         description: t("profiles.discard.confirm.description"),
         confirmLabel: t("profiles.discard.confirm.confirm"),
         tone: "danger",
         dismissOnOverlay: false,
-      });
-      if (!ok) return;
-    }
+      }),
+    [confirm]
+  );
+
+  // 「一覧に戻る」だけでなく、サイドナビ等のルート遷移とタブを閉じる操作も保護する。
+  useUnsavedChangesGuard(activeView === "editor" && isDirty, confirmDiscard);
+
+  const backToList = async () => {
+    if (isDirty && !(await confirmDiscard())) return;
     setSearchParams({});
   };
 
