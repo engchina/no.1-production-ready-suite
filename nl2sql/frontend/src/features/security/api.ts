@@ -123,7 +123,6 @@ export const securityApi = {
       display_name: role.display_name,
       description: role.description,
       permissions: role.permissions,
-      data_entitlements: role.data_entitlements,
       allowed_profile_ids: role.allowed_profile_ids,
     }),
   archiveRole: (role: SecurityRole) =>

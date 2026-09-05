@@ -413,10 +413,6 @@ def update_role(
         display_name=payload.display_name,
         description=payload.description,
         permissions=set(payload.permissions),
-        entitlements=[
-            (item.resource_code, item.scope_code, item.capability)
-            for item in payload.data_entitlements
-        ],
         allowed_profile_ids=(
             set(payload.allowed_profile_ids) if payload.allowed_profile_ids is not None else None
         ),

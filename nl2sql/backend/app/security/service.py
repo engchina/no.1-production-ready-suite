@@ -637,7 +637,6 @@ class SecurityService:
         display_name: str,
         description: str,
         permissions: set[str],
-        entitlements: list[DataEntitlementDraft],
         allowed_profile_ids: set[str] | None = None,
         actor: Principal,
         request_id: str = "",
@@ -661,7 +660,8 @@ class SecurityService:
             display_name=display_name,
             description=description,
             permissions=permissions,
-            entitlements=entitlements,
+            # Data Grant は DeepSec 画面のみが管理するため、ロール編集では現在値を保持する。
+            entitlements=list(current.entitlements),
             allowed_profile_ids=requested_profile_ids,
             version=current.version,
         )

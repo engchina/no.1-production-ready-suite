@@ -1362,7 +1362,6 @@ def test_non_system_admin_cannot_change_role_profile_access() -> None:
             display_name=target.display_name,
             description=target.description,
             permissions=set(target.permissions),
-            entitlements=[],
             allowed_profile_ids=set(),
             actor=manager,
         )
@@ -1374,7 +1373,6 @@ def test_non_system_admin_cannot_change_role_profile_access() -> None:
         display_name="業務 profile 対象更新",
         description=target.description,
         permissions=set(target.permissions),
-        entitlements=[],
         allowed_profile_ids=None,
         actor=manager,
     )
@@ -3855,6 +3853,98 @@ def test_user_manager_can_assign_subset_role_and_runtime_access_matches(
         reset_security_service()
 
 
+def test_role_patch_preserves_deepsec_entitlements(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ロール画面の保存(PATCH)は DeepSec の Data Grant 定義を一切変更しない。"""
+    service = _configure_memory_api_auth(monkeypatch)
+    admin, _, _ = service.login("ADMIN", "BootstrapPass!123")
+    service.store.set_password(
+        admin.user_uuid, hash_password("BootstrapPass!123"), force_change=False
+    )
+    role = service.create_role(
+        role_code="SALES_VIEWER",
+        display_name="営業閲覧",
+        description="",
+        permissions={"menu.query"},
+        entitlements=[],
+        actor=admin,
+    )
+    role = service.update_role_data_entitlements(
+        role.role_id,
+        expected_version=role.version,
+        entitlements=[
+            DataEntitlementRecord(
+                entitlement_id="",
+                role_id=role.role_id,
+                resource_code="SALES.ORDERS",
+                scope_code="",
+                capability="SELECT",
+                target_owner="SALES",
+                target_object="ORDERS",
+                column_names=["ORDER_ID", "REGION"],
+                scope_mode="FILTERS",
+                scope_filters=[
+                    DataEntitlementScopeFilter(column_name="REGION", operator="EQ", value="JP")
+                ],
+                data_grant_name="NL2SQL_DG_TEST",
+                apply_status="APPLIED",
+            )
+        ],
+        actor=admin,
+    )
+    # DeepSec apply 完了後の状態(APPLIED + grant 名 + checksum)を再現する
+    service.store.set_deepsec_entitlement_apply_state(
+        role.entitlements[0].entitlement_id,
+        status="APPLIED",
+        data_grant_name="NL2SQL_DG_TEST",
+        sql_checksum="checksum-test",
+    )
+    applied_role = service.get_role(role.role_id)
+    assert applied_role is not None
+    before = applied_role.entitlements[0]
+    assert before.apply_status == "APPLIED"
+
+    async def exercise() -> None:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            _, csrf = await _login_api(client, "ADMIN", "BootstrapPass!123")
+            response = await client.patch(
+                f"/api/security/roles/{role.role_id}",
+                headers={"X-CSRF-Token": csrf},
+                json={
+                    "version": applied_role.version,
+                    "display_name": "営業閲覧(改名)",
+                    "description": "",
+                    "permissions": ["menu.query", "menu.history"],
+                    # 旧 frontend が送っていた項目は無視される
+                    "data_entitlements": [
+                        {"resource_code": "SALES.ORDERS", "scope_code": "*", "capability": "SELECT"}
+                    ],
+                    "allowed_profile_ids": [],
+                },
+            )
+            assert response.status_code == 200, response.text
+            data = response.json()["data"]
+            assert data["display_name"] == "営業閲覧(改名)"
+            assert data["permissions"] == ["menu.history", "menu.query"]
+            assert len(data["data_entitlements"]) == 1
+            after = data["data_entitlements"][0]
+            assert after["entitlement_id"] == before.entitlement_id
+            assert after["target_owner"] == "SALES"
+            assert after["target_object"] == "ORDERS"
+            assert after["column_names"] == ["ORDER_ID", "REGION"]
+            assert after["scope_mode"] == "FILTERS"
+            assert after["scope_code"] == before.scope_code
+            assert [item["column_name"] for item in after["scope_filters"]] == ["REGION"]
+            assert after["data_grant_name"] == "NL2SQL_DG_TEST"
+            assert after["sql_checksum"] == "checksum-test"
+            assert after["apply_status"] == "APPLIED"
+
+    try:
+        asyncio.run(exercise())
+    finally:
+        reset_security_service()
+
+
 def test_role_permission_change_reflects_on_existing_session_next_request(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3890,7 +3980,6 @@ def test_role_permission_change_reflects_on_existing_session_next_request(
                 display_name=dynamic_role.display_name,
                 description=dynamic_role.description,
                 permissions={"menu.security_users"},
-                entitlements=[],
                 actor=admin,
             )
 

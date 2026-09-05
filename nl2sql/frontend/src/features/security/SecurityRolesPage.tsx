@@ -426,7 +426,6 @@ export function SecurityRolesPage() {
           description: draft.description,
           permissions: draft.permissions,
           allowed_profile_ids: draftGrantsAllProfileAccess ? [] : draft.allowedProfileIds,
-          data_entitlements: editingRole.data_entitlements,
         });
         const nextRole = normalizedRole(updated);
         setRoles((rows) => rows.map((row) => (row.role_id === nextRole.role_id ? nextRole : row)));

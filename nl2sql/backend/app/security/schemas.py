@@ -280,7 +280,6 @@ class RoleUpdateRequest(BaseModel):
     display_name: str = Field(min_length=1, max_length=256)
     description: str = Field(default="", max_length=1000)
     permissions: list[str] = Field(default_factory=list)
-    data_entitlements: list[DataEntitlementInput] = Field(default_factory=list)
     allowed_profile_ids: list[str] | None = None
 
 
