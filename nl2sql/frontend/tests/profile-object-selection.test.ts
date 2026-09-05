@@ -4,6 +4,7 @@ import test from "node:test";
 
 import {
   applySchemaBulkSelection,
+  profileFormEquals,
   selectedObjectKeys,
   toggleObjectSelection,
 } from "../src/features/nl2sql/profileObjectSelection.ts";
@@ -173,4 +174,41 @@ test("保存成功時に実行確認語をクリアして破壊的操作のゲ�
     profilePage,
     /setRequiredErrors\(\{\}\);\n\s*\/\/[^\n]*\n\s*\/\/[^\n]*\n\s*setOracleConfirmation\(""\);/u,
   );
+});
+
+test("未保存判定は許可オブジェクトの並び順で変化しない", () => {
+  const baseline = {
+    name: "SALES",
+    category: "販売",
+    allowedTables: ["APP.T1", "APP.T2"],
+    allowedViews: ["APP.V1"],
+  };
+  // チェックを外して付け直すと末尾に回るだけで、内容は同じ。
+  const reordered = { ...baseline, allowedTables: ["APP.T2", "APP.T1"] };
+  assert.equal(profileFormEquals(baseline, reordered), true);
+  // 表記揺れも同一とみなす。
+  assert.equal(
+    profileFormEquals(baseline, { ...baseline, allowedTables: ['"APP"."T1"', "app.t2"] }),
+    true,
+  );
+});
+
+test("未保存判定は実際の差分を見逃さない", () => {
+  const baseline = {
+    name: "SALES",
+    category: "販売",
+    allowedTables: ["APP.T1"],
+    allowedViews: [],
+  };
+  assert.equal(profileFormEquals(baseline, { ...baseline, category: "財務" }), false);
+  assert.equal(
+    profileFormEquals(baseline, { ...baseline, allowedTables: ["APP.T1", "APP.T2"] }),
+    false,
+  );
+  assert.equal(profileFormEquals(baseline, { ...baseline, allowedViews: ["APP.V1"] }), false);
+});
+
+test("編集画面の dirty 判定は順序非依存の比較を使う", () => {
+  assert.match(profilePage, /return !profileFormEquals\(form, baseline\);/u);
+  assert.doesNotMatch(profilePage, /JSON\.stringify\(form\) !== JSON\.stringify\(baseline\)/u);
 });

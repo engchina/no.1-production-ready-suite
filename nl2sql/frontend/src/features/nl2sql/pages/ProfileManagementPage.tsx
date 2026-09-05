@@ -65,6 +65,7 @@ import { isUserVisibleObjectName } from "../objectVisibility";
 import {
   applySchemaBulkSelection,
   normalizeObjectKey,
+  profileFormEquals,
   selectedObjectKeys,
   toggleObjectSelection,
 } from "../profileObjectSelection";
@@ -1710,12 +1711,13 @@ export function ProfileManagementPage() {
     setSearchParams({ profile: "new" });
   };
 
-  // dirty 判定: 読み込み時と同じ変換を再計算して比較する(追加 state 不要)
+  // dirty 判定: 読み込み時と同じ変換を再計算して比較する(追加 state 不要)。
+  // 許可オブジェクトは選択順で配列が入れ替わるため集合として比較する。
   const isDirty = useMemo(() => {
     const baseline = selectedProfile
       ? profileToForm(selectedProfile)
       : emptyProfileForm(selectAiCredentialQuery.data?.region);
-    return JSON.stringify(form) !== JSON.stringify(baseline);
+    return !profileFormEquals(form, baseline);
   }, [form, selectedProfile, selectAiCredentialQuery.data?.region]);
 
   const backToList = async () => {

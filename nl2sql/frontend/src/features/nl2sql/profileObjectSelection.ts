@@ -61,3 +61,30 @@ export function toggleObjectSelection(current: readonly string[], name: string):
 export function selectedObjectKeys(selected: readonly string[]): Set<string> {
   return new Set(selected.map(normalizeObjectKey));
 }
+
+/** 未保存判定で比較する編集フォームの最小形。 */
+export interface ProfileFormComparable {
+  allowedTables: readonly string[];
+  allowedViews: readonly string[];
+}
+
+function withOrderInsensitiveSelection<T extends ProfileFormComparable>(form: T) {
+  return {
+    ...form,
+    allowedTables: [...form.allowedTables].map(normalizeObjectKey).sort(),
+    allowedViews: [...form.allowedViews].map(normalizeObjectKey).sort(),
+  };
+}
+
+/**
+ * 編集フォームが読込時と同一かを判定する。
+ *
+ * 許可オブジェクトはチェックの付け外しで配列順が変わるため、集合として比較する。
+ * 単純な JSON 比較のままだと「付けて外して元に戻した」だけで未保存扱いになる。
+ */
+export function profileFormEquals<T extends ProfileFormComparable>(left: T, right: T): boolean {
+  return (
+    JSON.stringify(withOrderInsensitiveSelection(left)) ===
+    JSON.stringify(withOrderInsensitiveSelection(right))
+  );
+}

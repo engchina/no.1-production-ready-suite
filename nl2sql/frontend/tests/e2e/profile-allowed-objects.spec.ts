@@ -2475,3 +2475,26 @@ test("保存が成功したら実行確認語をクリアして保存ボタン�
   await expect(confirmationField).toHaveValue("");
   await expect(saveButton).toBeDisabled();
 });
+
+test("チェックを付け外しして元に戻したら未保存確認を出さない", async ({ page }) => {
+  await mockProfileApi(page, {
+    profileItems: [
+      { ...profiles[0], allowed_tables: ["APP.TABLE_01", "APP.TABLE_02"], allowed_views: [] },
+    ],
+  });
+
+  await page.goto("/profiles?profile=default");
+
+  const tableList = page.getByTestId("profile-allowed-table-list");
+  const table01 = tableList.getByLabel("APP.TABLE_01");
+
+  // 先頭の選択を外して付け直すと末尾へ回る。内容は読込時と同じ。
+  await table01.uncheck();
+  await expect(table01).not.toBeChecked();
+  await table01.check();
+  await expect(table01).toBeChecked();
+
+  await page.getByRole("button", { name: "一覧に戻る" }).click();
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+  await expect(page.getByTestId("profile-management-list")).toBeVisible();
+});
