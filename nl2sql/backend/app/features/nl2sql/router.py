@@ -170,6 +170,7 @@ from .service import (
     _SCHEMA_EMPTY_MESSAGE,
     ProfileNameConflict,
     ProfileOracleCleanupFailed,
+    ProfileScopePermissionError,
     SchemaCatalogEmptyError,
     nl2sql_service,
 )
@@ -1358,9 +1359,12 @@ def feedback(req: FeedbackRequest, request: Request) -> ApiResponse[FeedbackData
             req.comment,
             actor_user_uuid=access.actor_user_uuid,
             actor_can_manage=access.actor_can_manage,
+            allowed_profile_ids=_allowed_profile_ids_for_request(request),
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="対象の SQL 履歴が見つかりません。") from exc
+    except ProfileScopePermissionError as exc:
+        raise _profile_access_denied() from exc
     except PermissionError as exc:
         raise HTTPException(
             status_code=403,
@@ -1426,9 +1430,12 @@ def clear_feedback(history_id: str, request: Request) -> ApiResponse[FeedbackCle
             history_id,
             actor_user_uuid=access.actor_user_uuid,
             actor_can_manage=access.actor_can_manage,
+            allowed_profile_ids=_allowed_profile_ids_for_request(request),
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="対象の SQL 履歴が見つかりません。") from exc
+    except ProfileScopePermissionError as exc:
+        raise _profile_access_denied() from exc
     except PermissionError as exc:
         raise HTTPException(
             status_code=403,

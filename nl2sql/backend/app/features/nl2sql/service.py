@@ -370,6 +370,14 @@ class ProfileNotFoundError(KeyError, ValueError):
         return "指定された profile が見つからないか、利用できません。"
 
 
+class ProfileScopePermissionError(PermissionError):
+    """Actor に対象 history の profile scope が無い。"""
+
+    def __init__(self, profile_id: str) -> None:
+        self.profile_id = profile_id or "default"
+        super().__init__(self.profile_id)
+
+
 class DbAdminOperationFailed(RuntimeError):
     """DB 管理画面向けに、復旧可能な情報を保持する公開例外。"""
 
@@ -7102,10 +7110,15 @@ class Nl2SqlService:
         *,
         actor_user_uuid: str = "",
         actor_can_manage: bool = False,
+        allowed_profile_ids: set[str] | None = None,
     ) -> FeedbackData:
         current = self._history_by_id(history_id)
         if current is None:
             raise KeyError(history_id)
+        if actor_can_manage and not self._profile_in_allowed_profile_ids(
+            current.profile_id, allowed_profile_ids
+        ):
+            raise ProfileScopePermissionError(current.profile_id)
         if (
             not actor_can_manage
             and actor_user_uuid
@@ -7315,10 +7328,15 @@ class Nl2SqlService:
         *,
         actor_user_uuid: str = "",
         actor_can_manage: bool = False,
+        allowed_profile_ids: set[str] | None = None,
     ) -> FeedbackClearData:
         current = self._history_by_id(history_id)
         if current is None:
             raise KeyError(history_id)
+        if actor_can_manage and not self._profile_in_allowed_profile_ids(
+            current.profile_id, allowed_profile_ids
+        ):
+            raise ProfileScopePermissionError(current.profile_id)
         if (
             not actor_can_manage
             and actor_user_uuid
