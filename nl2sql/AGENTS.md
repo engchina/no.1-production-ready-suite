@@ -210,6 +210,34 @@ npm run lint && npm run build
 
 取込 API は HTTP リクエスト内で Docling/OCR/embedding/indexing を実行しない。`POST /api/documents/{id}/ingest` と `/ingestion-jobs` は永続 job を投入して即時に返し、既定のローカル開発では in-process dispatcher が `python -m app.rag.ingestion_job_runner <job_id>` subprocess へ job 本体を隔離する。Docker Compose / 本番では `ingestion-worker` service がキューを消費し、API service は job 投入と閲覧系 API に専念する。
 
+## 横断的な保守・セキュリティ契約
+
+> 本節は [Issue #168](https://github.com/engchina/no.1-production-ready-nl2sql/issues/168) / [PR #178](https://github.com/engchina/no.1-production-ready-nl2sql/pull/178)、[Issue #169](https://github.com/engchina/no.1-production-ready-nl2sql/issues/169) / [PR #179](https://github.com/engchina/no.1-production-ready-nl2sql/pull/179)、[Issue #170](https://github.com/engchina/no.1-production-ready-nl2sql/issues/170) / [PR #180](https://github.com/engchina/no.1-production-ready-nl2sql/pull/180)、[Issue #181](https://github.com/engchina/no.1-production-ready-nl2sql/issues/181) / [PR #182](https://github.com/engchina/no.1-production-ready-nl2sql/pull/182)、[Issue #183](https://github.com/engchina/no.1-production-ready-nl2sql/issues/183) / [PR #189](https://github.com/engchina/no.1-production-ready-nl2sql/pull/189)、[Issue #184](https://github.com/engchina/no.1-production-ready-nl2sql/issues/184)、[Issue #185](https://github.com/engchina/no.1-production-ready-nl2sql/issues/185) で得た再発防止策を、実装時に検証可能な契約としてまとめたものである。
+
+### 更新 API とデータ所有境界
+
+- `PATCH` / `PUT` の request schema と frontend payload には、**そのユースケースが所有して更新する field だけ**を含める。別画面・別 endpoint が管理する subresource を「現在値の送り返し」で兼用しない。受信した未所有 field を tuple や簡略 DTO に射影して再構築してはならない。
+- 更新対象外の subresource は永続化済み record をそのまま保持する。特に `entitlement_id`、対象 owner/object、列、filter、外部 resource 名、checksum、apply/lifecycle 状態のような identity・適用状態を、欠落した DTO や既定値で `DELETE → INSERT` 置換しない。
+- identity から Oracle 側 resource 名を導出する object を変更・再採番するときは、既存 resource の cleanup / migration / orphan 検出を同じ変更で設計する。外部 resource を残したまま UI・管理 record から不可視にしてはならない。
+- 部分更新の回帰テストは「変更した field」だけでなく、**所有外 field の全不変条件**を更新前後で検証する。API request/response、domain service、InMemory/Oracle store の各境界を横断して lossy conversion が起きないことを固定する。
+
+### 認可・状態遷移の server-side 強制
+
+- ボタン非表示・disabled は UX であり認可境界ではない。すべての mutation は store 更新前の backend domain service で actor の実効権限と resource 状態を検証し、API 直呼びでも迂回できないようにする。InMemory と Oracle で判定・status code・状態保持を一致させる。
+- archive 済み resource は、明示的な restore/delete フローを除いて immutable とする。通常の更新 endpoint は `409` で拒否し、更新による暗黙 restore や、一部 field だけの書換えを許可しない。
+- `SYSTEM_ADMIN` 以外が role を更新するとき、追加される実効権限 `expand_permissions(new) - expand_permissions(current)` は actor 自身の実効権限の部分集合でなければならず、違反は `403` で拒否する。暗黙 permission と `grants_all_profile_access` 相当の profile 管理権限も展開後に評価し、自分・他人いずれの role 経由でも権限昇格を許可しない。未保持の既存権限を削除する操作は妨げない。
+- role 作成は未割当のため現行どおり許可できるが、user への role 割当では既存の実効権限部分集合 check を必須とする。role/assignment 変更が次 request から再計算される前提で、変更直後の許可・拒否まで API 回帰テストに含める。
+
+### i18n 変更と E2E locator
+
+- i18n の key/value 改名は UI 変更として扱う。translation diff から旧文言を列挙し、実装だけでなく `frontend/tests` 全体を検索して、`getByRole` / `getByLabel` / region / empty-state 等の locator と期待文言を同じ変更で更新する。一部 spec の追随だけで完了としない。
+- 文言変更の検証では、該当 locator を使う Playwright spec を desktop と `mobile-375` の両方で実行する。既存 skip は理由を明記し、`build` / logic test だけでは locator の陳腐化を検出できないことを前提にする。
+
+### 未保存変更の保護
+
+- `isDirty` を使う編集画面は、画面内の「戻る」だけでなく、side navigation・内部 link・reload・tab close を含む**すべての離脱経路**を共通 guard で保護する。dirty 判定は順序に意味のない集合/配列を canonicalize して比較し、保存成功後は保存済み baseline と確認状態を更新する。
+- 現行の `<BrowserRouter>` では内部 link の capture と `beforeunload` を共通 hook に集約する。修飾 key 付き click、`target="_blank"`、download、外部 origin、同一 URL は妨げない。browser の back/forward(`popstate`)を完全に保護する必要が生じた場合は、不完全な履歴差し戻しを追加せず `createBrowserRouter` への移行を別 Issue で設計する。
+
 ## テスト/検証方針
 
 - 開発時は実装と同時に対応するテストコードを追加・更新する。バックエンドは pytest、フロントエンドのロジックは Vitest、UI/UX とユーザー操作は Playwright を基本とする。
