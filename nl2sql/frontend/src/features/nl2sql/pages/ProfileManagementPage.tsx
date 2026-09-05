@@ -63,6 +63,11 @@ import {
 import { isUserVisibleObjectName } from "../objectVisibility";
 import { applySchemaBulkSelection } from "../profileObjectSelection";
 import {
+  SCHEMA_OPTION_ROW_HEIGHT,
+  SCHEMA_OPTION_VIEWPORT_HEIGHT,
+  schemaOptionWindow,
+} from "../profileVirtualList";
+import {
   sortProfileSummariesForDisplay,
   type ProfileListSortKey,
   type ProfileListSortState,
@@ -717,7 +722,8 @@ function SchemaObjectOption({
   const qualified = schemaTableQualifiedName(object);
   return (
     <label
-      className={`flex min-h-11 cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 hover:bg-primary/5 focus-within:ring-2 focus-within:ring-ring/40 ${className}`}
+      className={`flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 hover:bg-primary/5 focus-within:ring-2 focus-within:ring-ring/40 ${className}`}
+      style={{ height: SCHEMA_OPTION_ROW_HEIGHT }}
     >
       <input
         type="checkbox"
@@ -747,24 +753,22 @@ function VirtualizedSchemaOptions({
   selectedSet: Set<string>;
   onToggle: (name: string) => void;
 }) {
-  const rowHeight = 52;
-  const viewportHeight = 320;
   const [scrollTop, setScrollTop] = useState(0);
-  const start = Math.max(0, Math.floor(scrollTop / rowHeight) - 5);
-  const visibleCount = Math.ceil(viewportHeight / rowHeight) + 10;
-  const visible = entries.slice(start, start + visibleCount);
+  const { start, end, offset, totalHeight } = schemaOptionWindow(scrollTop, entries.length);
+  const visible = entries.slice(start, end);
 
   return (
     <div
-      className="relative overflow-y-auto"
-      style={{ height: viewportHeight }}
+      className="relative overflow-y-auto px-1"
+      style={{ height: SCHEMA_OPTION_VIEWPORT_HEIGHT }}
       onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
       data-testid="schema-object-virtual-list"
     >
-      <div style={{ height: entries.length * rowHeight }} aria-hidden="true" />
+      <div style={{ height: totalHeight }} aria-hidden="true" />
+      {/* 行は固定高。padding を挟むと offset と実描画位置がずれるため付けない。 */}
       <div
-        className="absolute inset-x-0 top-0 grid p-1"
-        style={{ transform: `translateY(${start * rowHeight}px)` }}
+        className="absolute inset-x-0 top-0 grid"
+        style={{ transform: `translateY(${offset}px)` }}
       >
         {visible.map((object) => {
           const qualified = schemaTableQualifiedName(object);

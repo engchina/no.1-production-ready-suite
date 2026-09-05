@@ -2175,6 +2175,7 @@ test("Ontology 構築はプロファイルごとの保存済みファイルを�
   await expect(savedFiles).toContainText("保存済み");
 });
 
+
 test("検索フィルタ適用中のスキーマ一括操作はヒットした object だけに作用する", async ({ page }) => {
   await mockProfileApi(page, {
     profileItems: [{ ...profiles[0], allowed_tables: [], allowed_views: [] }],
@@ -2210,4 +2211,50 @@ test("検索フィルタ適用中のスキーマ一括操作はヒットした o
   await objectSearch.fill("");
   await expect(tableList.getByLabel("APP.TABLE_01")).not.toBeChecked();
   await expect(tableList.getByLabel("APP.TABLE_02")).toBeChecked();
+});
+
+test("50 件超のスキーマでも仮想スクロールの行位置がずれない", async ({ page }) => {
+  const manyTables = {
+    refreshed_at: schemaCatalog.refreshed_at,
+    tables: Array.from({ length: 120 }, (_, index) => {
+      const count = String(index + 1).padStart(3, "0");
+      return {
+        table_name: `TABLE_${count}`,
+        logical_name: `表論理名_${count}`,
+        owner: "APP",
+        table_type: "TABLE",
+        comment: `表コメント_${count}`,
+        row_count: null,
+        columns: [],
+        constraints: [],
+      };
+    }),
+  };
+  await mockProfileApi(page, {
+    catalog: manyTables as typeof schemaCatalog,
+    profileItems: [{ ...profiles[0], allowed_tables: [], allowed_views: [] }],
+  });
+
+  await page.goto("/profiles?profile=default");
+
+  const virtualList = page
+    .getByTestId("profile-allowed-table-list")
+    .getByTestId("schema-object-virtual-list");
+  await expect(virtualList).toBeVisible();
+
+  await virtualList.evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+  });
+
+  const lastRow = virtualList.locator('label:has(input[aria-label="APP.TABLE_120"])');
+  await expect(lastRow).toBeVisible();
+
+  // 行高の定数と実描画が一致していれば、末尾までスクロールした時点で
+  // 最終行の下端とリスト下端が揃う(ずれていると末尾に空白が残る)。
+  const listBox = await virtualList.boundingBox();
+  const lastBox = await lastRow.boundingBox();
+  expect(listBox).not.toBeNull();
+  expect(lastBox).not.toBeNull();
+  const gap = listBox!.y + listBox!.height - (lastBox!.y + lastBox!.height);
+  expect(Math.abs(gap)).toBeLessThan(4);
 });
