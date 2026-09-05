@@ -271,7 +271,7 @@ export function SecurityRolesPage() {
         }
         return compareText(left.display_name, right.display_name, sort.direction);
       });
-  }, [permissionByCode, roles, search, sort]);
+  }, [permissionByCode, profileAccessProfiles, roles, search, sort]);
 
   const visibleSelectedId =
     activeView === "list"
