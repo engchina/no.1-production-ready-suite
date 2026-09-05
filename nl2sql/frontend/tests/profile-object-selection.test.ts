@@ -85,3 +85,38 @@ test("表示一覧はサーバ検索結果をそのまま使い二重フィル�
   assert.match(profilePage, /tableObjects=\{tableObjects\}/u);
   assert.match(profilePage, /viewObjects=\{viewObjects\}/u);
 });
+
+test("業務プロファイル画面の検索は共有デバウンス hook を通す", () => {
+  const debounceHook = readFileSync(
+    new URL("../src/lib/useDebouncedValue.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(debounceHook, /export function useDebouncedValue<T>/u);
+  assert.match(debounceHook, /export const LIST_SEARCH_DEBOUNCE_MS = 250;/u);
+
+  assert.match(
+    profilePage,
+    /useDebouncedValue\(profileSearch, LIST_SEARCH_DEBOUNCE_MS\)/u,
+  );
+  assert.match(profilePage, /useDebouncedValue\(objectFilter, LIST_SEARCH_DEBOUNCE_MS\)/u);
+  assert.match(profilePage, /useSchemaObjects\(debouncedObjectFilter, "TABLE"\)/u);
+  assert.match(profilePage, /useSchemaObjects\(debouncedObjectFilter, "VIEW"\)/u);
+  // 一括操作も表示中の一覧と同じ条件を使う。
+  assert.match(profilePage, /const filter = debouncedObjectFilter\.trim\(\);/u);
+});
+
+test("管理系一覧ページはデバウンス hook を重複定義しない", () => {
+  for (const page of [
+    "TableManagementPage",
+    "ViewManagementPage",
+    "MetadataSqlManagementPage",
+    "DataManagementPage",
+  ]) {
+    const source = readFileSync(
+      new URL(`../src/features/nl2sql/pages/${page}.tsx`, import.meta.url),
+      "utf8",
+    );
+    assert.doesNotMatch(source, /(const|function) useDebouncedValue/u, page);
+    assert.match(source, /from "@\/lib\/useDebouncedValue"/u, page);
+  }
+});

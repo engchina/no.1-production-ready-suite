@@ -2198,6 +2198,8 @@ test("検索フィルタ適用中のスキーマ一括操作はヒットした o
   await expect(tableList.getByLabel("APP.TABLE_01")).toBeChecked();
 
   await objectSearch.fill("");
+  // 検索はデバウンスされるため、絞り込み解除後の一覧描画を待ってから検証する。
+  await expect(tableList.getByLabel("APP.TABLE_02")).toBeVisible();
   await expect(tableList.getByLabel("APP.TABLE_01")).toBeChecked();
   await expect(tableList.getByLabel("APP.TABLE_02")).not.toBeChecked();
 
@@ -2205,10 +2207,12 @@ test("検索フィルタ適用中のスキーマ一括操作はヒットした o
   await appBulkActions.getByRole("button", { name: "APP をすべて選択" }).click();
   await expect(tableList.getByLabel("APP.TABLE_02")).toBeChecked();
   await objectSearch.fill("TABLE_01");
+  await expect(tableList.getByLabel("APP.TABLE_02")).toHaveCount(0);
   await appBulkActions.getByRole("button", { name: "APP の選択をすべて解除" }).click();
   await expect(tableList.getByLabel("APP.TABLE_01")).not.toBeChecked();
 
   await objectSearch.fill("");
+  await expect(tableList.getByLabel("APP.TABLE_02")).toBeVisible();
   await expect(tableList.getByLabel("APP.TABLE_01")).not.toBeChecked();
   await expect(tableList.getByLabel("APP.TABLE_02")).toBeChecked();
 });
@@ -2353,4 +2357,30 @@ test("業務プロファイル一覧の並べ替えはサーバ順をそのま�
   await expect
     .poll(() => requestedSorts.at(-1))
     .toBe("tables:desc");
+});
+
+test("業務プロファイル検索は打鍵ごとに API を呼ばない", async ({ page }) => {
+  let searchRequests = 0;
+  let objectRequests = 0;
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (url.pathname === "/api/nl2sql/profiles/search") searchRequests += 1;
+    if (url.pathname === "/api/schema/objects") objectRequests += 1;
+  });
+  await mockProfileApi(page);
+
+  await page.goto("/profiles?profile=default");
+  await expect(page.getByTestId("profile-allowed-table-list")).toBeVisible();
+
+  const initialSearchRequests = searchRequests;
+  const initialObjectRequests = objectRequests;
+
+  await page.getByRole("searchbox", { name: "オブジェクト検索" }).pressSequentially("TABLE_01", {
+    delay: 20,
+  });
+  await expect(page.getByTestId("profile-allowed-table-list").getByLabel("APP.TABLE_01")).toBeVisible();
+
+  // 8 打鍵に対して TABLE / VIEW 各 1 回(= 2 リクエスト)程度に収まる。
+  expect(objectRequests - initialObjectRequests).toBeLessThanOrEqual(6);
+  expect(searchRequests).toBe(initialSearchRequests);
 });

@@ -30,6 +30,7 @@ import { ApiError, apiDelete, apiGet, apiPatch, apiPost, isTimeoutError } from "
 import { t } from "@/lib/i18n";
 import { INFORMATION_TABLE_FOCUS_CLASS } from "@/lib/list-density";
 import { toastError } from "@/lib/toast";
+import { LIST_SEARCH_DEBOUNCE_MS, useDebouncedValue } from "@/lib/useDebouncedValue";
 import { useSchemaOwners, useSelectAiCredential } from "@/lib/queries";
 import { API_TIMEOUT_MS, requestTimeoutSeconds } from "@/lib/requestPolicy";
 import { useAuth } from "@/features/security/AuthProvider";
@@ -1377,10 +1378,13 @@ export function ProfileManagementPage() {
   const syncJobParam = searchParams.get("syncJobId") ?? "";
   const activeView: ActiveView = profileParam ? "editor" : "list";
   const selectedProfileId = profileParam && profileParam !== "new" ? profileParam : "";
-  const profilesQuery = useProfileSummaries(profileSearch, profileSort);
+  // 1 打鍵ごとに一覧 / オブジェクト検索 API を叩かないよう、query key へはデバウンス値を渡す。
+  const debouncedProfileSearch = useDebouncedValue(profileSearch, LIST_SEARCH_DEBOUNCE_MS);
+  const debouncedObjectFilter = useDebouncedValue(objectFilter, LIST_SEARCH_DEBOUNCE_MS);
+  const profilesQuery = useProfileSummaries(debouncedProfileSearch, profileSort);
   const profileDetailQuery = useProfileDetail(selectedProfileId);
-  const tableObjectsQuery = useSchemaObjects(objectFilter, "TABLE");
-  const viewObjectsQuery = useSchemaObjects(objectFilter, "VIEW");
+  const tableObjectsQuery = useSchemaObjects(debouncedObjectFilter, "TABLE");
+  const viewObjectsQuery = useSchemaObjects(debouncedObjectFilter, "VIEW");
   const schemaOwnersQuery = useSchemaOwners();
   const selectAiCredentialQuery = useSelectAiCredential();
   const schemaHeadQuery = useSchemaCatalogHead();
@@ -1736,7 +1740,8 @@ export function ProfileManagementPage() {
     select: boolean
   ) => {
     const key = kind === "table" ? "allowedTables" : "allowedViews";
-    const filter = objectFilter.trim();
+    // 表示中の一覧と同じ条件で一括操作するため、デバウンス後の値を使う。
+    const filter = debouncedObjectFilter.trim();
     const filtered = Boolean(filter);
     try {
       // フィルタ適用中は「表示されている(=ヒットした)object」だけを一括対象にする。

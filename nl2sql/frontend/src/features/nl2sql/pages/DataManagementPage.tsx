@@ -20,6 +20,7 @@ import { RequiredFieldsNote, RequiredIndicator } from "@/components/ui/required-
 import { apiFetch, apiGet, apiPost, isTimeoutError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
+import { useDebouncedValue } from "@/lib/useDebouncedValue";
 import { toastError } from "@/lib/toast";
 import { INFORMATION_COMPACT_LIST_FIVE_ROW_SCROLL_CLASS } from "@/lib/list-density";
 import { API_TIMEOUT_MS, requestTimeoutSeconds } from "@/lib/requestPolicy";
@@ -1331,15 +1332,6 @@ function filterPreviewObjects(
     if (!q) return true;
     return [item.name, item.comment].join(" ").toLowerCase().includes(q);
   });
-}
-
-function useDebouncedValue<T>(value: T, delayMs: number) {
-  const [debounced, setDebounced] = useState(value);
-  useEffect(() => {
-    const timeoutId = window.setTimeout(() => setDebounced(value), delayMs);
-    return () => window.clearTimeout(timeoutId);
-  }, [delayMs, value]);
-  return debounced;
 }
 
 function apiErrorMessage(

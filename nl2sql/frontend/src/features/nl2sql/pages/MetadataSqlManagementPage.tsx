@@ -22,6 +22,7 @@ import { ErrorState } from "@/components/StateViews";
 import { apiGet, apiPost, isTimeoutError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
+import { useDebouncedValue } from "@/lib/useDebouncedValue";
 import { INFORMATION_TABLE_FIVE_ROW_SCROLL_CLASS } from "@/lib/list-density";
 import { API_TIMEOUT_MS, requestTimeoutSeconds } from "@/lib/requestPolicy";
 import {
@@ -89,15 +90,6 @@ const ANNOTATION_EXTRA_TEXT =
   "- 値内の'は''へエスケープし、予約語や空白を含むannotation名は二重引用符で囲む\n" +
   "例(表): ALTER TABLE USERS ANNOTATIONS (ADD OR REPLACE UI_Display 'Users');\n" +
   "例(列): ALTER TABLE USERS MODIFY (ID ANNOTATIONS (ADD OR REPLACE UI_Display 'ID'));";
-
-const useDebouncedValue = <T,>(value: T, delayMs: number) => {
-  const [debounced, setDebounced] = useState(value);
-  useEffect(() => {
-    const timeoutId = window.setTimeout(() => setDebounced(value), delayMs);
-    return () => window.clearTimeout(timeoutId);
-  }, [delayMs, value]);
-  return debounced;
-};
 
 export function CommentManagementPage() {
   return <MetadataSqlManagementPage mode="comment" />;

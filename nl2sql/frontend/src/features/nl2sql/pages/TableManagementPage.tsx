@@ -13,6 +13,7 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { apiFetch, apiGet, apiPost, isTimeoutError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
+import { useDebouncedValue } from "@/lib/useDebouncedValue";
 import { API_TIMEOUT_MS, requestTimeoutSeconds } from "@/lib/requestPolicy";
 import { CORE_TABULAR_FILE_FORMATS } from "@/lib/tabular-file-formats";
 import { selectedVisibleStringKey } from "@/lib/visible-selection";
@@ -64,15 +65,6 @@ type ImportStep = "file" | "execute";
 const importFieldClass = "grid min-w-0 gap-1 text-sm font-medium leading-5 text-foreground";
 const importControlClass =
   "h-11 w-full rounded-md border border-border bg-card px-3 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-ring/40";
-
-const useDebouncedValue = <T,>(value: T, delayMs: number) => {
-  const [debounced, setDebounced] = useState(value);
-  useEffect(() => {
-    const timeoutId = window.setTimeout(() => setDebounced(value), delayMs);
-    return () => window.clearTimeout(timeoutId);
-  }, [delayMs, value]);
-  return debounced;
-};
 
 function ImportResultPanel({ result }: { result: DbAdminImportTabularData }) {
   return (

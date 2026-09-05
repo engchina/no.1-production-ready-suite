@@ -13,6 +13,7 @@ import { PageNotice } from "@/components/page-notice";
 import { apiFetch, apiPost, isTimeoutError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
+import { useDebouncedValue } from "@/lib/useDebouncedValue";
 import { API_TIMEOUT_MS, requestTimeoutSeconds } from "@/lib/requestPolicy";
 import { selectedVisibleStringKey } from "@/lib/visible-selection";
 import {
@@ -54,15 +55,6 @@ type ActiveView = "list" | "create" | "joinWhere";
 const VIEW_MANAGEMENT_ID = "view-management";
 const JOIN_WHERE_PROMPT_PROFILE: DbAdminJoinWherePromptProfile = "sql_structure";
 const JOIN_WHERE_OUTPUT_SCOPE_KEYS = ["join", "where", "structure"] as const;
-
-const useDebouncedValue = <T,>(value: T, delayMs: number) => {
-  const [debounced, setDebounced] = useState(value);
-  useEffect(() => {
-    const timeoutId = window.setTimeout(() => setDebounced(value), delayMs);
-    return () => window.clearTimeout(timeoutId);
-  }, [delayMs, value]);
-  return debounced;
-};
 
 function joinWherePromptProfileLabel() {
   return t("viewMgmt.joinWhere.profile.sqlStructure");

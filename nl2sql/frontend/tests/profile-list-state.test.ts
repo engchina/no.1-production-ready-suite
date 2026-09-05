@@ -121,5 +121,5 @@ test("業務プロファイル一覧の並べ替えはサーバへ委譲する",
   );
   // ページを跨いだ順序が壊れるため、一覧側では client 再ソートしない。
   assert.doesNotMatch(profilePage, /sortProfileSummariesForDisplay/u);
-  assert.match(profilePage, /useProfileSummaries\(profileSearch, profileSort\)/u);
+  assert.match(profilePage, /useProfileSummaries\(debouncedProfileSearch, profileSort\)/u);
 });
