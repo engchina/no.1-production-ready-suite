@@ -2134,7 +2134,7 @@ export function ProfileManagementPage() {
                 profiles={filteredProfiles}
                 totalCount={profileTotal}
                 selectedProfileId={selectedProfileId}
-                loading={loading === "load" && profiles.length === 0}
+                loading={!profilesLoaded || (loading === "load" && profiles.length === 0)}
                 search={profileSearch}
                 sort={profileSort}
                 onSearchChange={setProfileSearch}

@@ -2258,3 +2258,45 @@ test("50 件超のスキーマでも仮想スクロールの行位置がずれ�
   const gap = listBox!.y + listBox!.height - (lastBox!.y + lastBox!.height);
   expect(Math.abs(gap)).toBeLessThan(4);
 });
+
+test("業務プロファイル一覧の初回ロード中は空状態ではなくスケルトンを表示する", async ({ page }) => {
+  await mockProfileApi(page);
+
+  let releaseSearch: () => void = () => {};
+  const searchGate = new Promise<void>((resolve) => {
+    releaseSearch = resolve;
+  });
+  // mockProfileApi より後に登録した route が優先されるため、一覧応答だけを保留する。
+  await page.route("**/api/nl2sql/profiles/search?*", async (route) => {
+    await searchGate;
+    await fulfillJson(route, {
+      items: profiles.map((profile) => ({
+        id: profile.id,
+        name: profile.name,
+        category: profile.category,
+        description: profile.description,
+        archived: profile.archived,
+        allowed_table_count: profile.allowed_tables.length,
+        allowed_view_count: profile.allowed_views.length,
+        glossary_count: 0,
+        few_shot_count: 0,
+        version: 1,
+        etag: `etag-${profile.id}`,
+        updated_at: "2026-07-19T00:00:00Z",
+      })),
+      next_cursor: null,
+      total: profiles.length,
+      change_token: 1,
+    });
+  });
+
+  await page.goto("/profiles");
+
+  await expect(page.getByTestId("profile-list-skeleton")).toBeVisible();
+  await expect(page.getByText("プロファイルがありません")).toHaveCount(0);
+
+  releaseSearch();
+
+  await expect(page.getByTestId("profile-management-list")).toBeVisible();
+  await expect(page.getByTestId("profile-list-skeleton")).toHaveCount(0);
+});
