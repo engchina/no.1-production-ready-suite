@@ -667,6 +667,7 @@ class SecurityService:
             allowed_profile_ids=requested_profile_ids,
             version=current.version,
         )
+        self._assert_actor_can_add_permissions(actor, current, role)
         try:
             updated = self.store.update_role(role, expected_version=expected_version)
         except (SecurityConflict, SecurityNotFound) as exc:
@@ -1099,6 +1100,22 @@ class SecurityService:
             entitlements=data_records,
             allowed_profile_ids=normalized_allowed_profile_ids,
         )
+
+    @staticmethod
+    def _assert_actor_can_add_permissions(
+        actor: Principal,
+        current: RoleRecord,
+        updated: RoleRecord,
+    ) -> None:
+        """ロール編集経由の昇格を防ぐ。追加分の実効権限は actor 自身の権限に収まること。"""
+        if actor.is_system_admin:
+            return
+        added = expand_permissions(updated.permissions) - expand_permissions(current.permissions)
+        if not added.issubset(actor.permissions):
+            raise SecurityApiError(
+                403,
+                "自分が持たない権限をロールに追加することはできません。",
+            )
 
     @staticmethod
     def _assert_actor_can_manage_profile_access(

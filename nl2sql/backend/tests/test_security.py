@@ -3853,6 +3853,89 @@ def test_user_manager_can_assign_subset_role_and_runtime_access_matches(
         reset_security_service()
 
 
+def test_role_manager_cannot_add_permissions_beyond_own(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ロール編集経由で自分が持たない権限を(自分にも他人にも)付与できない。"""
+    service = _configure_memory_api_auth(monkeypatch)
+    admin, _, _ = service.login("ADMIN", "BootstrapPass!123")
+    manager_role = service.create_role(
+        role_code="ROLE_MANAGER_HISTORY",
+        display_name="ロール管理 + 実行履歴",
+        description="",
+        permissions={"menu.security_roles", "menu.history"},
+        entitlements=[],
+        actor=admin,
+    )
+    other_role = service.create_role(
+        role_code="ADMIN_SQL_ONLY",
+        display_name="管理 SQL",
+        description="",
+        permissions={"menu.admin_sql"},
+        entitlements=[],
+        actor=admin,
+    )
+    _create_active_user(
+        service,
+        admin,
+        login_user_id="role.manager",
+        display_name="ロール管理者",
+        role_ids=[manager_role.role_id],
+        password="RoleManagerPass!123",
+    )
+
+    async def patch_permissions(
+        client: httpx.AsyncClient, csrf: str, role_id: str, permissions: list[str]
+    ) -> httpx.Response:
+        current = service.get_role(role_id)
+        assert current is not None
+        return await client.patch(
+            f"/api/security/roles/{role_id}",
+            headers={"X-CSRF-Token": csrf},
+            json={
+                "version": current.version,
+                "display_name": current.display_name,
+                "description": current.description,
+                "permissions": permissions,
+            },
+        )
+
+    async def exercise() -> None:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            _, csrf = await _login_api(client, "role.manager", "RoleManagerPass!123")
+            assert (await client.get("/api/security/users")).status_code == 403
+
+            # 自分のロールへ未保持の権限を追加 → 403、実効権限も変わらない
+            self_escalation = await patch_permissions(
+                client,
+                csrf,
+                manager_role.role_id,
+                ["menu.security_roles", "menu.history", "menu.security_users"],
+            )
+            assert self_escalation.status_code == 403
+            assert "自分が持たない権限" in self_escalation.json()["error_messages"][0]
+            assert (await client.get("/api/security/users")).status_code == 403
+
+            # 他人のロールへ未保持の権限を追加 → 403
+            other_escalation = await patch_permissions(
+                client, csrf, other_role.role_id, ["menu.admin_sql", "menu.security_deepsec"]
+            )
+            assert other_escalation.status_code == 403
+
+            # 自分が持つ権限の追加と、未保持でも既存権限の削除は可能
+            allowed = await patch_permissions(client, csrf, other_role.role_id, ["menu.history"])
+            assert allowed.status_code == 200, allowed.text
+            assert allowed.json()["data"]["permissions"] == ["menu.history"]
+
+    try:
+        asyncio.run(exercise())
+    finally:
+        reset_security_service()
+
+    manager_after = service.get_role(manager_role.role_id)
+    assert manager_after is not None
+    assert manager_after.permissions == {"menu.security_roles", "menu.history"}
+
+
 def test_archived_role_cannot_be_updated(monkeypatch: pytest.MonkeyPatch) -> None:
     """アーカイブ済みロールは PATCH で編集(や黙った復元)ができない。"""
     service = _configure_memory_api_auth(monkeypatch)
