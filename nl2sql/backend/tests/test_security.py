@@ -810,6 +810,15 @@ def test_data_entitlement_capability_is_structured() -> None:
         )
 
 
+@pytest.mark.parametrize("resource_code", ["SALES.ORDER$HIST", "APP#DATA.T#1"])
+def test_data_entitlement_input_accepts_oracle_identifier_special_chars(
+    resource_code: str,
+) -> None:
+    """DeepSec は resource_code に OWNER.OBJECT を入れるため $ # を含む Oracle 名も受理する。"""
+    record = DataEntitlementInput(resource_code=resource_code.lower(), capability="select")
+    assert record.resource_code == resource_code
+
+
 def test_data_entitlement_input_generates_scope_filter_code() -> None:
     record = DataEntitlementInput(
         resource_code="HR.ORDERS",

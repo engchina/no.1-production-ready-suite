@@ -180,7 +180,8 @@ class DataEntitlementInput(BaseModel):
         normalized = value.strip().upper()
         if not normalized:
             return ""
-        if not re.fullmatch(r"[A-Z][A-Z0-9_.-]{0,260}", normalized):
+        # Oracle identifier(_ORACLE_IDENTIFIER_RE)と同じ文字集合 + OWNER.OBJECT の区切り
+        if not re.fullmatch(r"[A-Z][A-Z0-9_$#.-]{0,260}", normalized):
             raise ValueError("英大文字・数字・アンダースコア等で指定してください。")
         return normalized
 
