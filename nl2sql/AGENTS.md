@@ -11,6 +11,92 @@
 - merge は CI/checks が成功したことを確認してから行う。必須 CI が存在しない場合は、PR 上で checks 状態を確認し、実行した代替検証を明記してから merge 判断する。
 - docs-only の小さな変更や緊急修正も原則として同じ Issue → branch → PR → CI/checks → main merge の流れに従う。例外が必要な場合は、理由を添えてユーザ確認を取る。
 
+### GitHub Issue / Pull Request の記述規約
+
+#### 共通
+
+- Issue / PR のタイトルと本文は**原則として日本語**で記述する。code identifier、API path、file path、command、製品・ライブラリの固有名詞は英語のままでよい。
+- タイトルは対象と事象が分かる具体的な文にする。「不具合」「修正」「対応」だけの曖昧なタイトルにしない。
+- 本文は Markdown 見出しで構造化し、確認した事実と推測を区別する。未調査・未確定の項目は断定せず「調査中」「未確認」と明記し、判明後に本文を更新する。
+- API、関数、設定 key、status code、error message、再現値など、調査・レビュー・回帰テストに必要な具体情報を記載する。secret、token、個人情報、実 credential は記載しない。
+
+#### Issue
+
+- bug Issue は原則として次の見出しを使用する。初回登録時に原因が未確定でも `原因` を省略せず、現時点の仮説または「調査中」を記載する。
+
+```markdown
+## 症状
+
+観測された現在の挙動を、画面/API/状態/エラーなどの事実で記載する。
+
+## 原因
+
+確認済みの根因と、問題が発生する code path / data flow を記載する。未確定なら「調査中」とする。
+
+## 影響
+
+利用者、データ、認可、外部 resource、互換性などへの影響範囲を記載する。
+
+## 再現手順
+
+1. 前提条件を用意する
+2. 操作または API call を実行する
+3. 実際の結果を確認する
+
+## 期待動作
+
+正しい状態・応答・画面挙動を記載する。
+
+## 修正方針
+
+責務境界を含む修正方法と、変更しない範囲を記載する。
+
+## 完了条件
+
+- 実装上の完了条件
+- 回帰テストと検証上の完了条件
+```
+
+- 必要に応じて `該当箇所`、`補足`、`ログ`、`スクリーンショット`、`代替案`を追加する。長い log は必要箇所だけを抜粋し、再現に不要な出力を貼らない。
+- feature / docs / refactor / investigation Issue は、無理に `症状` を使わず、`背景`、`目的`、`対応内容` または `調査項目`、`影響範囲`、`完了条件`を基本構成とする。
+- `完了条件`は「対応する」のような作業表現だけにせず、期待状態と必要な test / lint / build / 手動確認を判定可能な形で列挙する。
+
+#### Pull Request
+
+- PR title は原則として `<type>: <日本語の要約> (#<issue-number>)` とする。`type` は変更内容に合わせて `feat` / `fix` / `docs` / `test` / `refactor` / `chore` 等を使用する。
+- PR 本文は原則として次の見出しを使用する。
+
+```markdown
+## 関連 Issue
+
+Closes #<issue-number>
+
+## 背景 / 原因
+
+Issue の要点と、この変更が必要な理由を記載する。bug fix では根因を記載する。
+
+## 変更内容
+
+- 変更した責務・挙動を具体的に記載する
+- schema / API / UI / data migration / compatibility への影響を記載する
+
+## 検証結果
+
+- `<実行した command>` — pass / fail / skip と件数
+- 手動確認または Playwright の対象 flow / viewport / 状態
+
+## 既知の制約・残課題
+
+- 未対応範囲、既知の制約、follow-up Issue を記載する。なければ「なし」と記載する。
+```
+
+- `関連 Issue` には、merge で完了する Issue は `Closes #N`、参照のみは `Refs #N` と記載する。複数ある場合はすべて列挙する。
+- `変更内容` は commit の羅列ではなく、reviewer が挙動差分と責務境界を判断できる粒度で記載する。変更していない重要範囲や backward compatibility も必要に応じて明記する。
+- `検証結果` には実行した正確な command と結果を記載する。失敗・skip・未実行を隠さず、今回の変更によるものか既存問題かを分ける。実行できない test がある場合は理由と代替確認を記載する。
+- UI/UX 変更では、対象 Playwright spec、desktop / mobile viewport、主要導線と重要状態の結果を記載する。見た目を変更した場合は必要に応じて screenshot または visual check の結果を添える。
+- docs-only など test 対象外の場合も `検証結果` を省略せず、`git diff --check` 等の実施結果と、コード test を実行しない理由を記載する。
+- PR 作成後に追加修正や検証結果の変化があった場合は、コメントだけで済ませず PR 本文を最終状態へ更新してから review / merge する。
+
 ## プロジェクト概要
 
 > **製品名と固有 namespace は `Production Ready NL2SQL` / `NL2SQL` を正とする。**
