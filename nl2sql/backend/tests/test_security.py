@@ -3853,6 +3853,54 @@ def test_user_manager_can_assign_subset_role_and_runtime_access_matches(
         reset_security_service()
 
 
+def test_archived_role_cannot_be_updated(monkeypatch: pytest.MonkeyPatch) -> None:
+    """アーカイブ済みロールは PATCH で編集(や黙った復元)ができない。"""
+    service = _configure_memory_api_auth(monkeypatch)
+    admin, _, _ = service.login("ADMIN", "BootstrapPass!123")
+    service.store.set_password(
+        admin.user_uuid, hash_password("BootstrapPass!123"), force_change=False
+    )
+    role = service.create_role(
+        role_code="OLD_ROLE",
+        display_name="旧ロール",
+        description="",
+        permissions={"menu.query"},
+        entitlements=[],
+        actor=admin,
+    )
+    role = service.archive_role(role.role_id, expected_version=role.version, actor=admin)
+    assert role.archived
+
+    async def exercise() -> None:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            _, csrf = await _login_api(client, "ADMIN", "BootstrapPass!123")
+            response = await client.patch(
+                f"/api/security/roles/{role.role_id}",
+                headers={"X-CSRF-Token": csrf},
+                json={
+                    "version": role.version,
+                    "display_name": "旧ロール(編集)",
+                    "description": "",
+                    "permissions": ["menu.query", "menu.security_users"],
+                },
+            )
+            assert response.status_code == 409
+            assert "アーカイブ済みロールは変更できません" in response.json()["error_messages"][0]
+
+    try:
+        asyncio.run(exercise())
+    finally:
+        reset_security_service()
+
+    unchanged = service.get_role(role.role_id)
+    assert unchanged is not None
+    assert unchanged.archived is True
+    assert unchanged.display_name == "旧ロール"
+    assert unchanged.permissions == {"menu.query"}
+    assert unchanged.version == role.version
+
+
 def test_role_patch_preserves_deepsec_entitlements(monkeypatch: pytest.MonkeyPatch) -> None:
     """ロール画面の保存(PATCH)は DeepSec の Data Grant 定義を一切変更しない。"""
     service = _configure_memory_api_auth(monkeypatch)

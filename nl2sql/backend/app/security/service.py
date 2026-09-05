@@ -647,6 +647,8 @@ class SecurityService:
             raise SecurityApiError(404, "ロールが見つかりません。")
         if current.is_built_in:
             raise SecurityApiError(409, "組み込み SYSTEM_ADMIN ロールは変更できません。")
+        if current.archived:
+            raise SecurityApiError(409, "アーカイブ済みロールは変更できません。")
         requested_profile_ids = (
             allowed_profile_ids
             if allowed_profile_ids is not None
