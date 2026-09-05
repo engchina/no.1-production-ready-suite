@@ -863,6 +863,10 @@ _SYSTEM_OBJECT_BLOCKED_MESSAGE = (
     "NL2SQL_ で始まる表/VIEW は NL2SQL システム object です。"
     "システムテーブル管理からのみ管理できます。"
 )
+_PLSQL_DYNAMIC_SQL_BLOCKED_MESSAGE = (
+    "PL/SQL の動的 SQL は管理 SQL 実行では使用できません。"
+    "DDL/DML を個別の SQL statement として実行してください。"
+)
 
 _FORBIDDEN_PREFIXES = (
     "insert",
@@ -892,6 +896,11 @@ _FROM_JOIN_WITH_ALIAS = re.compile(
 _SYSTEM_OBJECT_TOKEN = re.compile(
     r'(?<![A-Z0-9_$#])"?NL2SQL_[A-Z0-9_$#]*"?',
     re.IGNORECASE,
+)
+_PLSQL_DYNAMIC_SQL_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\bexecute\s+immediate\b", re.IGNORECASE),
+    re.compile(r"\bdbms_sql\s*\.\s*parse\b", re.IGNORECASE),
+    re.compile(r"\bopen\s+[^;]+?\s+for\b", re.IGNORECASE | re.DOTALL),
 )
 _SELECT_TOKEN = re.compile(r"\bselect\b", re.IGNORECASE)
 _SQL_IDENTIFIER = re.compile(r"[a-zA-Z_][\w$#]*")
@@ -1799,6 +1808,15 @@ def _db_admin_policy_error(statement: str, policy: str) -> str:
 def _db_admin_system_object_error(statement: str, *, current_owner: str) -> str:
     hidden = _admin_statement_hidden_object_names(statement, current_owner=current_owner)
     return _system_object_blocked_message(hidden) if hidden else ""
+
+
+def _db_admin_dynamic_sql_error(statement: str) -> str:
+    if _admin_statement_type(statement) not in {"PLSQL", "UNKNOWN"}:
+        return ""
+    masked = _mask_sql_literals_and_comments(statement)
+    if any(pattern.search(masked) for pattern in _PLSQL_DYNAMIC_SQL_PATTERNS):
+        return _PLSQL_DYNAMIC_SQL_BLOCKED_MESSAGE
+    return ""
 
 
 def _annotation_statement_error(statement: str) -> str:
@@ -12492,6 +12510,27 @@ class Nl2SqlService:
                 warnings=warnings,
                 timing=self._timing(created_at, started, "db_admin_execute"),
             )
+        dynamic_sql_errors = [_db_admin_dynamic_sql_error(statement) for statement in statements]
+        if any(dynamic_sql_errors):
+            warnings.append(_PLSQL_DYNAMIC_SQL_BLOCKED_MESSAGE)
+            return DbAdminExecuteData(
+                executed=False,
+                runtime=runtime,
+                execution_context="admin_control_plane",
+                statements=[
+                    DbAdminStatementResult(
+                        index=index + 1,
+                        statement_type=statement_types[index],
+                        status="blocked",
+                        sql=statements[index],
+                        error_message=dynamic_sql_errors[index]
+                        or _PLSQL_DYNAMIC_SQL_BLOCKED_MESSAGE,
+                    )
+                    for index in range(len(statements))
+                ],
+                warnings=warnings,
+                timing=self._timing(created_at, started, "db_admin_execute"),
+            )
         if len(statements) > 1 and select_count > 0:
             warnings.append("複数 statement 実行に SELECT は含められません。")
             return DbAdminExecuteData(
@@ -12978,6 +13017,27 @@ class Nl2SqlService:
                         status="blocked",
                         sql=statements[index],
                         error_message=system_object_errors[index] or _SYSTEM_OBJECT_BLOCKED_MESSAGE,
+                    )
+                    for index in range(len(statements))
+                ],
+                warnings=warnings,
+                timing=self._timing(created_at, started, "db_admin_statements"),
+            )
+        dynamic_sql_errors = [_db_admin_dynamic_sql_error(statement) for statement in statements]
+        if any(dynamic_sql_errors):
+            warnings.append(_PLSQL_DYNAMIC_SQL_BLOCKED_MESSAGE)
+            return DbAdminExecuteData(
+                executed=False,
+                runtime=runtime,
+                execution_context="admin_control_plane",
+                statements=[
+                    DbAdminStatementResult(
+                        index=index + 1,
+                        statement_type=statement_types[index],
+                        status="blocked",
+                        sql=statements[index],
+                        error_message=dynamic_sql_errors[index]
+                        or _PLSQL_DYNAMIC_SQL_BLOCKED_MESSAGE,
                     )
                     for index in range(len(statements))
                 ],
