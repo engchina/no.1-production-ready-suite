@@ -2416,3 +2416,39 @@ test("引用符付きで保存された許可オブジェクトもチェック�
   await expect(view02).not.toBeChecked();
   await expect(viewList).toContainText("選択 0 件");
 });
+
+test("手動更新の失敗通知はクエリ再描画で消えない", async ({ page }) => {
+  await mockProfileApi(page);
+
+  let headRequests = 0;
+  // mockProfileApi より後に登録した route が優先される。
+  // 初回ロードは成功させ、更新操作の再取得だけ失敗させる。
+  await page.route("**/api/schema/catalog/head", async (route) => {
+    headRequests += 1;
+    if (headRequests === 1) {
+      await fulfillJson(route, {
+        catalog_version: 1,
+        schema_fingerprint: "fingerprint",
+        refreshed_at: schemaCatalog.refreshed_at,
+        object_count: schemaCatalog.tables.length,
+        column_count: 0,
+        change_token: 1,
+        etag: "head-etag",
+      });
+      return;
+    }
+    await route.fulfill({ status: 500, contentType: "application/json", body: "{}" });
+  });
+
+  await page.goto("/profiles");
+  await expect(page.getByTestId("profile-management-list")).toBeVisible();
+
+  await page.getByRole("button", { name: "表示を更新" }).click();
+
+  const notice = page.getByText("プロファイルの読込に失敗しました。");
+  await expect(notice).toBeVisible();
+  // 再取得完了後の再描画でも保持され続ける(別 state で持つ)。
+  await expect(notice).toBeVisible({ timeout: 3_000 });
+  await page.waitForTimeout(1_000);
+  await expect(notice).toBeVisible();
+});

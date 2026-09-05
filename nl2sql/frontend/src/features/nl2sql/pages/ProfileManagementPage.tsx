@@ -1371,8 +1371,12 @@ export function ProfileManagementPage() {
   const [dbProfileRefreshError, setDbProfileRefreshError] = useState("");
   const [dbProfileRefreshNeedsFull, setDbProfileRefreshNeedsFull] = useState(false);
   const [loading, setLoading] = useState("");
-  // message は初回ロード失敗の常設 Banner 専用。保存/削除の成否は toast、名前検証は nameError で扱う。
+  // message は初回ロード失敗の常設 Banner 専用(クエリ状態を監視する effect が所有する)。
+  // 保存/削除の成否は toast、名前検証は nameError で扱う。
   const [message, setMessage] = useState("");
+  // 手動更新の失敗は message とは別に保持する。同じ state に載せると、
+  // 直後に走るクエリ監視 effect が空文字で上書きして警告が消えてしまう。
+  const [refreshError, setRefreshError] = useState("");
   const [nameError, setNameError] = useState<ProfileNameError>(null);
   const [requiredErrors, setRequiredErrors] = useState<ProfileRequiredErrors>({});
 
@@ -1490,6 +1494,7 @@ export function ProfileManagementPage() {
   );
   const selectProfile = (profile: ProfileSummary) => {
     setMessage("");
+    setRefreshError("");
     setOracleSyncJobId("");
     setOracleSyncProfileId("");
     setOracleSyncSubmissionError("");
@@ -1500,7 +1505,7 @@ export function ProfileManagementPage() {
 
   const load = async (announce = false) => {
     setLoading("load");
-    setMessage("");
+    setRefreshError("");
     const results = await Promise.allSettled([
       profilesQuery.refetch(),
       tableObjectsQuery.refetch(),
@@ -1513,7 +1518,7 @@ export function ProfileManagementPage() {
       (result) => result.status === "fulfilled" && !result.value.isError
     );
     if (!succeeded) {
-      setMessage(t("profiles.error.load"));
+      setRefreshError(t("profiles.error.load"));
     } else if (announce) {
       toast.success(t("common.action.refreshed"));
     }
@@ -1696,6 +1701,7 @@ export function ProfileManagementPage() {
 
   const startNew = () => {
     setMessage("");
+    setRefreshError("");
     setOracleSyncJobId("");
     setOracleSyncProfileId("");
     setOracleSyncSubmissionError("");
@@ -2033,6 +2039,8 @@ export function ProfileManagementPage() {
     ? { tone: "danger" as const, message: dbProfileRefreshError }
     : sharedSchemaRefresh.error
       ? { tone: "danger" as const, message: sharedSchemaRefresh.error }
+    : refreshError
+      ? { tone: "danger" as const, message: `${refreshError} ${t("profiles.error.retryHint")}` }
     : message
       ? { tone: "danger" as const, message: `${message} ${t("profiles.error.retryHint")}` }
       : null;

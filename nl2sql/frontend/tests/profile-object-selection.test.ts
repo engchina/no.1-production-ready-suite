@@ -158,3 +158,12 @@ test("チェック判定・トグル・件数が同じ正規化キーを共有�
   assert.match(profilePage, /const ownerKeyPrefix = normalizeObjectKey\(`\$\{owner\}\.`\);/u);
   assert.doesNotMatch(profilePage, /current\[key\]\.includes\(name\)/u);
 });
+
+test("手動更新の失敗は初回ロード用 Banner state と分離して保持する", () => {
+  // クエリ状態を監視する effect は message を空文字で上書きするため、
+  // 手動更新の失敗を同じ state に載せると通知が消える。
+  assert.match(profilePage, /const \[refreshError, setRefreshError\] = useState\(""\);/u);
+  assert.match(profilePage, /setRefreshError\(t\("profiles\.error\.load"\)\);/u);
+  assert.doesNotMatch(profilePage, /setMessage\(t\("profiles\.error\.load"\)\);/u);
+  assert.match(profilePage, /: refreshError\n\s*\? \{ tone: "danger" as const/u);
+});
