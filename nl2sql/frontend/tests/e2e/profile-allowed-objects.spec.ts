@@ -2067,7 +2067,7 @@ test("未解決オブジェクトの警告からスキーマ情報を更新し�
   await expect(page).toHaveURL(/\/ontology-build\?profile=default$/);
 
   const unresolved = page.getByTestId("profile-ontology-unresolved");
-  const playground = page.getByRole("region", { name: "質問の Ontology 接地確認" });
+  const playground = page.getByRole("region", { name: "質問のオントロジー接地確認用グラフ" });
   await expect(unresolved).toBeVisible();
   await expect(playground.getByTestId("profile-ontology-unresolved")).toBeVisible();
   await expect(unresolved.getByText("TABLE_01", { exact: false })).toBeVisible();
@@ -2084,7 +2084,7 @@ test("未解決オブジェクトの警告からスキーマ情報を更新し�
   await expect(page.getByText(/DB 構造(再取得|差分同期): 完了/)).toHaveCount(0);
   await expect(page.getByTestId("profile-ontology-build")).toBeVisible();
   await expect(page.getByTestId("ontology-build-markdown")).toBeVisible();
-  await expect(page.getByRole("region", { name: "質問の Ontology 接地確認" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "質問のオントロジー接地確認用グラフ" })).toBeVisible();
   expect(schemaRefreshed).toBe(true);
   expect(ontologyViewCalls).toBeGreaterThanOrEqual(2);
 });
@@ -2125,8 +2125,8 @@ test("Ontology 未公開のとき旧モデル編集は出さず Markdown Draft �
   await expect(page.getByTestId("profile-ontology-build")).toBeVisible();
   await expect(page.getByTestId("ontology-build-markdown")).toBeVisible();
   await expect(page.getByTestId("ontology-markdown-draft-editor")).toBeVisible();
-  await expect(page.getByRole("region", { name: "質問の Ontology 接地確認" })).toBeVisible();
-  await expect(page.getByText("公開済み Ontology がまだありません")).toBeVisible();
+  await expect(page.getByRole("region", { name: "質問のオントロジー接地確認用グラフ" })).toBeVisible();
+  await expect(page.getByText("公開済みオントロジーがまだありません")).toBeVisible();
   await expect(page.getByTestId("profile-ontology-unresolved")).toHaveCount(0);
 });
 

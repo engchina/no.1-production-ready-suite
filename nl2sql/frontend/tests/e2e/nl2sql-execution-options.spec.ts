@@ -324,7 +324,7 @@ test("unified execute button runs SQL and renders execution artifacts", async ({
   await expect(executionOptionsDisclosure).toHaveAttribute("aria-expanded", "false");
   await expect(executionOptionsChevron).toHaveAttribute("data-state", "collapsed");
   await expect(executionOptionsChevron).toHaveClass(/rotate-90/);
-  await expect(page.getByLabel("Ontology を使う")).toBeHidden();
+  await expect(page.getByLabel("オントロジーを使う")).toBeHidden();
   await executionOptionsDisclosure.focus();
   await page.keyboard.press("Enter");
   await expect(executionOptionsDisclosure).toHaveAttribute("aria-expanded", "true");
@@ -334,7 +334,7 @@ test("unified execute button runs SQL and renders execution artifacts", async ({
   // 用語・同義語は既定 off。ON にしたときだけ「条件あり」バッジが出る。
   await expect(glossaryOption).not.toBeChecked();
   await expect(page.getByLabel("Schema を使う")).toHaveCount(0);
-  await expect(page.getByLabel("Ontology を使う")).toBeChecked();
+  await expect(page.getByLabel("オントロジーを使う")).toBeChecked();
   await expect(page.getByLabel("処理手順を表示")).toBeChecked();
   // Show Prompt は追加の Select AI 呼び出しを伴うため既定 off。
   const showPromptOption = page.getByLabel("Show Prompt を表示");
@@ -421,7 +421,7 @@ test("unified execute button runs SQL and renders execution artifacts", async ({
   await expect(showPromptChevron).toHaveAttribute("data-state", "collapsed");
   await expect(showPromptChevron).toHaveClass(/rotate-90/);
 
-  const ontologyOption = page.getByLabel("Ontology を使う");
+  const ontologyOption = page.getByLabel("オントロジーを使う");
   await ontologyOption.focus();
   await expect(ontologyOption).toBeFocused();
   await page.keyboard.press("Space");
@@ -437,9 +437,9 @@ test("unified execute button runs SQL and renders execution artifacts", async ({
   await expect(resetButton).toBeEnabled();
   await resetButton.click();
   await expect(executionOptionsDisclosure).toHaveAttribute("aria-expanded", "false");
-  await expect(page.getByLabel("Ontology を使う")).toBeHidden();
+  await expect(page.getByLabel("オントロジーを使う")).toBeHidden();
   await executionOptionsDisclosure.click();
-  await expect(page.getByLabel("Ontology を使う")).toBeChecked();
+  await expect(page.getByLabel("オントロジーを使う")).toBeChecked();
   // リセットで用語・同義語は既定の off に戻る。
   await expect(page.getByLabel("用語・同義語を使う")).not.toBeChecked();
   await expect(page.getByLabel("Schema を使う")).toHaveCount(0);
@@ -455,7 +455,7 @@ test("execution options keep ontology toggle usable at mobile width", async ({ p
 
   const options = page.getByTestId("nl2sql-execution-options");
   const executionOptionsDisclosure = page.getByRole("button", { name: /実行オプション/ });
-  const ontologyOption = page.getByLabel("Ontology を使う");
+  const ontologyOption = page.getByLabel("オントロジーを使う");
   await expect(options).toBeVisible();
   await expect(executionOptionsDisclosure).toHaveAttribute("aria-expanded", "false");
   await expect(ontologyOption).toBeHidden();

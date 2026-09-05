@@ -577,7 +577,7 @@ test("グラフはカード表示 + 検索 + 詳細ノードの折畳ができ�
   await page.goto("/ontology-build?profile=default");
   await expect(page.locator("html")).toHaveClass(/dark/);
 
-  const playground = page.getByRole("region", { name: "質問の Ontology 接地確認" });
+  const playground = page.getByRole("region", { name: "質問のオントロジー接地確認用グラフ" });
   await playground.scrollIntoViewIfNeeded();
   await expect(
     playground.getByText("質問を入力すると、一致したノードと関係をグラフで強調表示します。")
@@ -647,7 +647,7 @@ test("同じ物理名の業務概念と物理表をカード上で区別でき�
   await mockApi(page, { ontologyGraph: employeeOntologyGraph });
   await page.goto("/ontology-build?profile=default");
 
-  const playground = page.getByRole("region", { name: "質問の Ontology 接地確認" });
+  const playground = page.getByRole("region", { name: "質問のオントロジー接地確認用グラフ" });
   await playground.scrollIntoViewIfNeeded();
   await openGraphIfCollapsed(page, playground);
 
@@ -676,7 +676,7 @@ test("質問接地グラフで選択した物理オブジェクトの ER 詳細�
   await mockApi(page, { ontologyGraph: erDetailOntologyGraph });
   await page.goto("/ontology-build?profile=default");
 
-  const playground = page.getByRole("region", { name: "質問の Ontology 接地確認" });
+  const playground = page.getByRole("region", { name: "質問のオントロジー接地確認用グラフ" });
   await playground.scrollIntoViewIfNeeded();
   await openGraphIfCollapsed(page, playground);
   await expect(playground.getByTestId("ontology-er-details-panel")).toHaveCount(0);
@@ -720,7 +720,7 @@ test("質問を接地すると分類とグラフ強調が表示され、入力�
   await mockApi(page);
   await page.goto("/ontology-build?profile=default");
 
-  const playground = page.getByRole("region", { name: "質問の Ontology 接地確認" });
+  const playground = page.getByRole("region", { name: "質問のオントロジー接地確認用グラフ" });
   await playground.scrollIntoViewIfNeeded();
   await openGraphIfCollapsed(page, playground);
   await expect(playground.getByTestId("ontology-playground-clear")).toBeDisabled();
@@ -787,13 +787,13 @@ test("公開済み Ontology がない場合は準備手順を表示する", asyn
   await mockApi(page, { ontologyGraph: { nodes: [], edges: [] } });
   await page.goto("/ontology-build?profile=default");
 
-  const playground = page.getByRole("region", { name: "質問の Ontology 接地確認" });
+  const playground = page.getByRole("region", { name: "質問のオントロジー接地確認用グラフ" });
   await playground.scrollIntoViewIfNeeded();
-  await expect(playground.getByText("公開済み Ontology がまだありません")).toBeVisible();
+  await expect(playground.getByText("公開済みオントロジーがまだありません")).toBeVisible();
   await expect(
-    playground.getByText("AI 構築の Markdown Draft を確認して公開すると、質問がどの業務モデルに接地するかをここで確認できます。")
+    playground.getByText("AI 構築の Markdown 下書きを確認して公開すると、質問がどの業務モデルに接地するかをここで確認できます。")
   ).toBeVisible();
-  await expect(playground.getByText("準備: AI 構築 → Markdown Draft 確認 → Ontology 公開")).toBeVisible();
+  await expect(playground.getByText("準備: AI 構築 → Markdown 下書き確認 → オントロジー公開")).toBeVisible();
   await expect(playground.getByTestId("ontology-playground-question")).toHaveCount(0);
   await expectNoHorizontalScroll(page);
 });
@@ -804,7 +804,7 @@ test("Ontology グラフはデスクトップとモバイルで主要ノード�
   await mockApi(page);
   await page.goto("/ontology-build?profile=default");
 
-  const playground = page.getByRole("region", { name: "質問の Ontology 接地確認" });
+  const playground = page.getByRole("region", { name: "質問のオントロジー接地確認用グラフ" });
   await playground.scrollIntoViewIfNeeded();
   await expect(playground.getByTestId("ontology-playground-inspector")).toBeVisible();
   await openGraphIfCollapsed(page, playground);
@@ -821,7 +821,7 @@ test("Ontology グラフはデスクトップとモバイルで主要ノード�
 test("業務概念→物理表の対応エッジは縦ハンドルで自己ループしない + FK はカーディナリティ常時表示", async ({ page }) => {
   await mockApi(page, { ontologyGraph: employeeOntologyGraph });
   await page.goto("/ontology-build?profile=default");
-  const playground = page.getByRole("region", { name: "質問の Ontology 接地確認" });
+  const playground = page.getByRole("region", { name: "質問のオントロジー接地確認用グラフ" });
   await playground.scrollIntoViewIfNeeded();
   await openGraphIfCollapsed(page, playground);
 
@@ -846,7 +846,7 @@ test("業務概念→物理表の対応エッジは縦ハンドルで自己ル�
 test("FK エッジは hover なしでカーディナリティ短縮ラベルを常時表示する", async ({ page }) => {
   await mockApi(page, { ontologyGraph: erDetailOntologyGraph });
   await page.goto("/ontology-build?profile=default");
-  const playground = page.getByRole("region", { name: "質問の Ontology 接地確認" });
+  const playground = page.getByRole("region", { name: "質問のオントロジー接地確認用グラフ" });
   await playground.scrollIntoViewIfNeeded();
   await openGraphIfCollapsed(page, playground);
 
@@ -968,7 +968,7 @@ test("schema→表エッジは縦 smoothstep で貫通せず、並行エッジ�
 }) => {
   await mockApi(page, { ontologyGraph: schemaContainsOntologyGraph });
   await page.goto("/ontology-build?profile=default");
-  const playground = page.getByRole("region", { name: "質問の Ontology 接地確認" });
+  const playground = page.getByRole("region", { name: "質問のオントロジー接地確認用グラフ" });
   await playground.scrollIntoViewIfNeeded();
   await openGraphIfCollapsed(page, playground);
 
@@ -1024,7 +1024,7 @@ test("schema→表エッジは縦 smoothstep で貫通せず、並行エッジ�
 test("Join 条件を持たない関係カードは空枠ではなく物理対応名を表示する", async ({ page }) => {
   await mockApi(page, { ontologyGraph: schemaContainsOntologyGraph });
   await page.goto("/ontology-build?profile=default");
-  const playground = page.getByRole("region", { name: "質問の Ontology 接地確認" });
+  const playground = page.getByRole("region", { name: "質問のオントロジー接地確認用グラフ" });
   await playground.scrollIntoViewIfNeeded();
 
   const containsCard = playground.getByTestId("ontology-inspector-relationship-contains-employee");
@@ -1050,7 +1050,7 @@ test("ノードはドラッグで移動でき、リセットで決定論レイ�
   test.skip(testInfo.project.name === "mobile-375", "ドラッグ検証はデスクトップのみ");
   await mockApi(page, { ontologyGraph: employeeOntologyGraph });
   await page.goto("/ontology-build?profile=default");
-  const playground = page.getByRole("region", { name: "質問の Ontology 接地確認" });
+  const playground = page.getByRole("region", { name: "質問のオントロジー接地確認用グラフ" });
   await playground.scrollIntoViewIfNeeded();
   await openGraphIfCollapsed(page, playground);
 
@@ -1098,7 +1098,7 @@ test("ノードを hover してもエッジが 1 フレームも消えない(点
   test.skip(testInfo.project.name === "mobile-375", "hover 検証はマウス前提のためデスクトップのみ");
   await mockApi(page, { ontologyGraph: schemaContainsOntologyGraph });
   await page.goto("/ontology-build?profile=default");
-  const playground = page.getByRole("region", { name: "質問の Ontology 接地確認" });
+  const playground = page.getByRole("region", { name: "質問のオントロジー接地確認用グラフ" });
   await playground.scrollIntoViewIfNeeded();
   await openGraphIfCollapsed(page, playground);
   const node = playground.locator('.react-flow__node[data-id="employee-table"]');
@@ -1160,7 +1160,7 @@ test("サーバ検索結果のヒット一覧は最大高さを超えると縦�
     })
   );
   await page.goto("/ontology-build?profile=default");
-  const playground = page.getByRole("region", { name: "質問の Ontology 接地確認" });
+  const playground = page.getByRole("region", { name: "質問のオントロジー接地確認用グラフ" });
   await playground.scrollIntoViewIfNeeded();
   await playground.getByTestId("ontology-playground-question").fill("従業員");
   await playground.getByTestId("ontology-playground-server-search").click();
