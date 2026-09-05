@@ -911,10 +911,6 @@ _FORBIDDEN_PREFIXES = (
     "declare",
     "call",
 )
-_DANGEROUS_TOKENS = re.compile(
-    r"\b(insert|update|delete|merge|drop|alter|create|truncate|grant|revoke|begin|declare|call)\b",
-    re.IGNORECASE,
-)
 _DANGEROUS_ORACLE_FUNCTION_ROOTS = frozenset(
     {
         "DBMS_JAVA",
@@ -2328,9 +2324,14 @@ def is_select_only(sql: str) -> bool:
     """SELECT/WITH のみを許可し、DDL/DML/PLSQL と複数 statement を拒否する。
 
     先頭コメントは読み飛ばし、文字列リテラル・引用識別子・コメントの中身は
-    危険語 / `;` の判定対象から外す(値に `'delete'` が入った SELECT は実行可)。
+    先頭語 / `;` の判定対象から外す(値に `'delete'` が入った SELECT は実行可)。
+    本文中の語は列名・別名として使えるため、read-only 性は sqlglot AST に委ねる。
     """
-    stripped = _strip_leading_sql_comments(sql).strip()
+    statements = _split_sql_statements(sql)
+    if len(statements) != 1:
+        return False
+    statement = statements[0]
+    stripped = _strip_leading_sql_comments(statement).strip()
     if not stripped:
         return False
     masked = _mask_sql_literals_and_comments(stripped)
@@ -2339,9 +2340,38 @@ def is_select_only(sql: str) -> bool:
         return False
     if ";" in masked.rstrip().rstrip(";"):
         return False
-    if _DANGEROUS_TOKENS.search(masked):
+    if not (head.startswith("select") or head.startswith("with")):
         return False
-    return head.startswith("select") or head.startswith("with")
+    return parse_oracle_sql(_replace_q_quoted_literals_for_parser(stripped)).graph is not None
+
+
+def _replace_q_quoted_literals_for_parser(sql: str) -> str:
+    text = str(sql or "")
+    length = len(text)
+    out: list[str] = []
+    index = 0
+    while index < length:
+        char = text[index]
+        next_char = text[index + 1] if index + 1 < length else ""
+        previous = text[index - 1] if index > 0 else ""
+        if (
+            char in {"q", "Q"}
+            and next_char == "'"
+            and index + 2 < length
+            and not (previous.isalnum() or previous in {"_", "$", "#"})
+        ):
+            opener = text[index + 2]
+            closer = _Q_QUOTE_CLOSERS.get(opener, opener)
+            end = text.find(f"{closer}'", index + 3)
+            if end < 0:
+                out.append(text[index:])
+                break
+            out.append("''")
+            index = end + 2
+            continue
+        out.append(char)
+        index += 1
+    return "".join(out)
 
 
 def _sqlglot_name(value: Any) -> str:
