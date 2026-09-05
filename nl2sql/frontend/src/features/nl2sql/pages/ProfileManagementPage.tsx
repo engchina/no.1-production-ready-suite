@@ -1802,6 +1802,9 @@ export function ProfileManagementPage() {
       setForm(profileToForm(normalizeProfile(saved)));
       setOracleSyncProfileId(saved.id);
       setRequiredErrors({});
+      // 破壊的操作のゲートなので、保存が通ったら必ず再入力を求める
+      // (既存 profile の保存では編集対象が変わらず初期化 effect が走らない)。
+      setOracleConfirmation("");
       if (!selectedProfile) {
         setSearchParams({ profile: saved.id }, { replace: true });
       }

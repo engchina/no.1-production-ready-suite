@@ -167,3 +167,10 @@ test("手動更新の失敗は初回ロード用 Banner state と分離して保
   assert.doesNotMatch(profilePage, /setMessage\(t\("profiles\.error\.load"\)\);/u);
   assert.match(profilePage, /: refreshError\n\s*\? \{ tone: "danger" as const/u);
 });
+
+test("保存成功時に実行確認語をクリアして破壊的操作のゲートを再武装する", () => {
+  assert.match(
+    profilePage,
+    /setRequiredErrors\(\{\}\);\n\s*\/\/[^\n]*\n\s*\/\/[^\n]*\n\s*setOracleConfirmation\(""\);/u,
+  );
+});

@@ -1202,7 +1202,9 @@ test("Oracle 反映失敗を明示し Ontology に触れず再試行できる", 
   await page.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
   const save = page.getByRole("button", { name: "保存", exact: true });
   await save.click();
-  await expect(save).toBeEnabled();
+  // 保存が通ると実行確認語はクリアされ、破壊的操作のゲートが再武装する。
+  await expect(page.getByLabel("実行確認語")).toHaveValue("");
+  await expect(save).toBeDisabled();
 
   const status = page.getByTestId("profile-save-progress");
   await expect(status).toContainText(
@@ -2451,4 +2453,25 @@ test("手動更新の失敗通知はクエリ再描画で消えない", async ({
   await expect(notice).toBeVisible({ timeout: 3_000 });
   await page.waitForTimeout(1_000);
   await expect(notice).toBeVisible();
+});
+
+test("保存が成功したら実行確認語をクリアして保存ボタンを再ゲートする", async ({ page }) => {
+  await mockProfileApi(page);
+
+  await page.goto("/profiles?profile=default");
+
+  const confirmationField = page.getByLabel("実行確認語");
+  const saveButton = page.getByRole("button", { name: "保存", exact: true });
+
+  await page.getByLabel("名称").fill("sales_profile");
+  await page.getByLabel("カテゴリ").fill("finance");
+  await expect(saveButton).toBeDisabled();
+  await confirmationField.fill("ADMIN_EXECUTE");
+  await expect(saveButton).toBeEnabled();
+  await saveButton.click();
+
+  await expect(page.getByTestId("profile-save-progress")).toBeVisible();
+  // 破壊的操作のゲートなので、保存成功後は再入力を求める。
+  await expect(confirmationField).toHaveValue("");
+  await expect(saveButton).toBeDisabled();
 });
