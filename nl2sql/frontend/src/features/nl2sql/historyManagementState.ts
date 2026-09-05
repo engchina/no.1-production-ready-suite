@@ -50,18 +50,23 @@ function createdAtValue(item: HistoryItem) {
 
 export function filterAndSortHistory(items: HistoryItem[], query: HistoryManagementQuery) {
   const search = query.search.trim().toLocaleLowerCase("ja-JP");
-  return items
-    .filter((item) => {
+  return sortHistory(
+    items.filter((item) => {
       if (!matchesFeedback(item, query.feedback) || !matchesSafety(item, query.safety)) return false;
       return !search || normalizedSearchText(item).includes(search);
-    })
-    .sort((left, right) => {
-      const comparison =
-        query.sort.key === "question"
-          ? left.question.localeCompare(right.question, "ja")
-          : createdAtValue(left) - createdAtValue(right);
-      return query.sort.direction === "asc" ? comparison : -comparison;
-    });
+    }),
+    query.sort
+  );
+}
+
+export function sortHistory(items: HistoryItem[], sort: HistorySortState) {
+  return [...items].sort((left, right) => {
+    const comparison =
+      sort.key === "question"
+        ? left.question.localeCompare(right.question, "ja")
+        : createdAtValue(left) - createdAtValue(right);
+    return sort.direction === "asc" ? comparison : -comparison;
+  });
 }
 
 export function selectedVisibleHistoryId(items: HistoryItem[], selectedId: string) {

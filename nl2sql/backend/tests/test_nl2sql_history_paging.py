@@ -9,7 +9,7 @@ from fastapi import HTTPException
 
 from app.features.nl2sql import router as nl2sql_router
 from app.features.nl2sql.incremental_store import MemoryIncrementalNl2SqlRepository
-from app.features.nl2sql.models import HistoryItem, Nl2SqlEngine
+from app.features.nl2sql.models import FeedbackRating, HistoryItem, Nl2SqlEngine
 from app.features.nl2sql.service import Nl2SqlService
 from app.features.nl2sql.store import MemoryNl2SqlStore
 from app.security.domain import SYSTEM_ADMIN_ROLE_CODE, Principal
@@ -37,7 +37,11 @@ def _incremental_service(items: list[HistoryItem]) -> Nl2SqlService:
     repository = MemoryIncrementalNl2SqlRepository(seed_default=False)
     for item in items:
         repository.put_document(
-            "history", item.id, item.model_dump(mode="json"), profile_id=item.profile_id
+            "history",
+            item.id,
+            item.model_dump(mode="json"),
+            profile_id=item.profile_id,
+            status=item.feedback_rating.value if item.feedback_rating else "unrated",
         )
     service = Nl2SqlService(store=MemoryNl2SqlStore())
     service._incremental_repository = repository  # noqa: SLF001
@@ -109,6 +113,48 @@ def test_list_history_keeps_actor_filter_across_pages(factory: object) -> None:
     assert second.next_cursor == ""
 
 
+@pytest.mark.parametrize("factory", [_memory_service, _incremental_service])
+def test_list_history_filters_query_rating_and_safety_before_paging(factory: object) -> None:
+    items = [
+        _history(1, "user-1").model_copy(
+            update={
+                "feedback_rating": FeedbackRating.GOOD,
+                "feedback_comment": "期待通り",
+                "safety_is_safe": True,
+            }
+        ),
+        _history(2, "user-1").model_copy(
+            update={
+                "question": "監査ログを削除",
+                "generated_sql": "DELETE FROM AUDIT_LOG",
+                "feedback_rating": None,
+                "safety_is_safe": False,
+            }
+        ),
+        _history(3, "user-2").model_copy(
+            update={
+                "question": "監査ログを確認",
+                "generated_sql": "SELECT * FROM AUDIT_LOG",
+                "feedback_rating": None,
+                "safety_is_safe": False,
+            }
+        ),
+    ]
+    service = factory(items)  # type: ignore[operator]
+
+    page = service.list_history(
+        actor_user_uuid="user-1",
+        limit=10,
+        query="AUDIT_LOG",
+        rating="unrated",
+        safety="blocked",
+    )
+
+    assert [item.id for item in page.items] == ["hist-002"]
+    assert page.total == 1
+    assert page.next_cursor == ""
+
+
 def test_list_history_clamps_limit() -> None:
     service = _memory_service([_history(index, "user-1") for index in range(1, 260)])
 
@@ -141,6 +187,57 @@ def test_history_route_scopes_non_admin_and_passes_cursor(monkeypatch: pytest.Mo
     unauthenticated = nl2sql_router.history(_request(None))  # type: ignore[arg-type]
     assert unauthenticated.data is not None
     assert unauthenticated.data.total == 5
+
+
+def test_history_route_accepts_server_side_filters(monkeypatch: pytest.MonkeyPatch) -> None:
+    service = _memory_service(
+        [
+            _history(1, "user-1").model_copy(
+                update={
+                    "question": "請求金額を確認",
+                    "feedback_rating": FeedbackRating.BAD,
+                    "safety_is_safe": True,
+                }
+            ),
+            _history(2, "user-1").model_copy(
+                update={
+                    "question": "監査ログを削除",
+                    "generated_sql": "DELETE FROM AUDIT_LOG",
+                    "feedback_rating": None,
+                    "safety_is_safe": False,
+                }
+            ),
+        ]
+    )
+    monkeypatch.setattr(nl2sql_router, "nl2sql_service", service)
+
+    blocked = nl2sql_router.history(
+        _request(_principal(admin=False)),  # type: ignore[arg-type]
+        limit=10,
+        q="AUDIT_LOG",
+        rating="unrated",
+        safety="blocked",
+    )
+
+    assert blocked.data is not None
+    assert [item.id for item in blocked.data.items] == ["hist-002"]
+
+
+@pytest.mark.parametrize(
+    ("rating", "safety"),
+    [
+        ("needs_review", "all"),
+        ("all", "unknown"),
+    ],
+)
+def test_history_route_rejects_invalid_filters(rating: str, safety: str) -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        nl2sql_router.history(
+            _request(_principal(admin=True)),  # type: ignore[arg-type]
+            rating=rating,
+            safety=safety,
+        )
+    assert exc_info.value.status_code == 422
 
 
 def test_history_route_rejects_broken_cursor(monkeypatch: pytest.MonkeyPatch) -> None:

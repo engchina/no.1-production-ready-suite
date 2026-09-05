@@ -17,13 +17,7 @@ import {
 import { useNavigate } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
-import {
-  DEFAULT_PAGE_SIZE,
-  EmptyState,
-  Pagination,
-  toast,
-  usePagination,
-} from "@engchina/production-ready-ui";
+import { EmptyState, toast } from "@engchina/production-ready-ui";
 
 import { StatusBadge, type StatusVariant } from "@/components/ui/status-badge";
 import { PageHeader } from "@/components/PageHeader";
@@ -38,8 +32,8 @@ import { useRequestScope } from "@/lib/useRequestScope";
 import { DbManagementSearchField, DbObjectManagementPanelShell, DbObjectPanelHeader } from "../components/DbObjectManagementShared";
 import { QuestionText } from "../components/QuestionText";
 import {
-  filterAndSortHistory,
   selectedVisibleHistoryId,
+  sortHistory,
   type HistoryFeedbackFilter,
   type HistorySafetyFilter,
   type HistorySortKey,
@@ -204,7 +198,7 @@ function HistoryGrid({
   loadingMore: boolean;
   onLoadMore: () => void;
 }) {
-  const { page, setPage, totalPages, pageItems, range } = usePagination(items, DEFAULT_PAGE_SIZE);
+  const count = total ?? items.length;
   return (
     <section className="grid min-w-0 content-start gap-3" aria-labelledby="history-grid-heading">
       <DbObjectPanelHeader
@@ -212,7 +206,7 @@ function HistoryGrid({
         icon={History}
         title={t("history.list.title")}
         description={t("history.list.hint")}
-        action={<StatusBadge variant="info" label={t("history.list.count", { count: items.length })} />}
+        action={<StatusBadge variant="info" label={t("history.list.count", { count })} />}
       />
 
       <div className="grid gap-2 rounded-md border border-border bg-background p-3">
@@ -283,7 +277,7 @@ function HistoryGrid({
             </div>
             <div className="max-h-[42rem] overflow-x-hidden overflow-y-auto" data-testid="history-list">
               <ul className="divide-y divide-border/70" aria-label={t("history.list.title")} data-testid="history-grid">
-                {pageItems.map((item) => {
+                {items.map((item) => {
                   const selected = item.id === selectedId;
                   return (
                     <li key={item.id} className="min-w-0" data-testid="history-row">
@@ -337,20 +331,8 @@ function HistoryGrid({
               </ul>
             </div>
           </div>
-          <Pagination
-            page={page}
-            totalPages={totalPages}
-            onPageChange={setPage}
-            summary={t("history.pagination.range", { start: range.start, end: range.end, total: range.total })}
-            pageIndicator={t("history.pagination.page", { page, total: totalPages })}
-            prevLabel={t("history.pagination.prev")}
-            nextLabel={t("history.pagination.next")}
-            ariaLabel={t("history.pagination.label")}
-            testId="history-pagination"
-          />
         </div>
       )}
-      {/* サーバ側の続き。検索・絞り込みは読込済み分にしか効かないことを明示する。 */}
       <div
         className="flex flex-col gap-2 rounded-md border border-border bg-background p-3 sm:flex-row sm:items-center sm:justify-between"
         data-testid="history-load-more"
@@ -395,6 +377,27 @@ function HistoryFilterSelect({
       </select>
     </label>
   );
+}
+
+function historyRequestUrl({
+  cursor,
+  search,
+  feedback,
+  safety,
+}: {
+  cursor?: string;
+  search: string;
+  feedback: HistoryFeedbackFilter;
+  safety: HistorySafetyFilter;
+}) {
+  const params = new URLSearchParams();
+  if (cursor) params.set("cursor", cursor);
+  const trimmedSearch = search.trim();
+  if (trimmedSearch) params.set("q", trimmedSearch);
+  if (feedback !== "all") params.set("rating", feedback);
+  if (safety !== "all") params.set("safety", safety);
+  const query = params.toString();
+  return query ? `/api/nl2sql/history?${query}` : "/api/nl2sql/history";
 }
 
 function HistoryDetailPanel({
@@ -667,9 +670,13 @@ export function HistoryPage() {
     loadSequence.current = sequence;
     setLoading(true);
     setMessage("");
+    setNextCursor("");
     try {
       await runScopedRequest(async (signal) => {
-        const data = await apiGet<HistoryData>("/api/nl2sql/history", { signal });
+        const data = await apiGet<HistoryData>(
+          historyRequestUrl({ search, feedback: feedbackFilter, safety: safetyFilter }),
+          { signal }
+        );
         if (signal.aborted || sequence !== loadSequence.current) return;
         setItems(data.items);
         setNextCursor(data.next_cursor ?? "");
@@ -696,8 +703,15 @@ export function HistoryPage() {
     setLoadingMore(true);
     try {
       await runScopedRequest(async (signal) => {
-        const params = new URLSearchParams({ cursor: nextCursor });
-        const data = await apiGet<HistoryData>(`/api/nl2sql/history?${params}`, { signal });
+        const data = await apiGet<HistoryData>(
+          historyRequestUrl({
+            cursor: nextCursor,
+            search,
+            feedback: feedbackFilter,
+            safety: safetyFilter,
+          }),
+          { signal }
+        );
         if (signal.aborted || sequence !== loadSequence.current) return;
         setItems((current) => {
           const seen = new Set(current.map((item) => item.id));
@@ -720,22 +734,19 @@ export function HistoryPage() {
       loadSequence.current += 1;
       abortAll();
     };
-  }, []);
+  }, [feedbackFilter, safetyFilter, search]);
 
-  const filteredItems = useMemo(
-    () => filterAndSortHistory(items, { search, feedback: feedbackFilter, safety: safetyFilter, sort }),
-    [feedbackFilter, items, safetyFilter, search, sort]
-  );
+  const sortedItems = useMemo(() => sortHistory(items, sort), [items, sort]);
 
   useEffect(() => {
-    setSelectedId((current) => selectedVisibleHistoryId(filteredItems, current));
-  }, [filteredItems]);
+    setSelectedId((current) => selectedVisibleHistoryId(sortedItems, current));
+  }, [sortedItems]);
 
   useEffect(() => {
     setDetailTab("overview");
   }, [selectedId]);
 
-  const selectedItem = filteredItems.find((item) => item.id === selectedId) ?? filteredItems[0] ?? null;
+  const selectedItem = sortedItems.find((item) => item.id === selectedId) ?? sortedItems[0] ?? null;
   const hasActiveFilters = Boolean(search.trim()) || feedbackFilter !== "all" || safetyFilter !== "all";
 
   const toggleSort = (key: HistorySortKey) => {
@@ -821,7 +832,7 @@ export function HistoryPage() {
             }
           >
             <HistoryGrid
-              items={filteredItems}
+              items={sortedItems}
               selectedId={selectedItem?.id ?? ""}
               search={search}
               feedbackFilter={feedbackFilter}

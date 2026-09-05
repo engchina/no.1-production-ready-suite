@@ -145,6 +145,12 @@ def _memory_document_payload(value: Mapping[str, Any]) -> dict[str, Any]:
 _HISTORY_QUERY_FIELDS = ("question", "generated_sql", "feedback_comment")
 
 
+def _state_document_filter_value(value: object) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value or "")
+
+
 def _state_document_sort_value(collection: str, value: Mapping[str, Any]) -> str:
     if collection == "history":
         return str(value.get("created_at") or value.get("_updated_at") or "")
@@ -1124,7 +1130,10 @@ class MemoryIncrementalNl2SqlRepository:
                 and (not profile_id or value.get("_profile_id") == profile_id)
                 and (not status or value.get("_status") == status)
                 and _state_document_matches_query(collection, value, query_key)
-                and all(str(value.get(key) or "") == expected for key, expected in filters.items())
+                and all(
+                    _state_document_filter_value(value.get(key)) == expected
+                    for key, expected in filters.items()
+                )
             ]
             values.sort(
                 key=lambda item: (
