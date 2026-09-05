@@ -43,6 +43,7 @@ def _settings(
     deepsec_enabled: bool = True,
     data_user_password: str = "DeepSecret!123",
     wallet_dir: str = "",
+    call_timeout_seconds: float = 120.0,
 ) -> Settings:
     return Settings.model_construct(
         oracle_user="APP_OWNER",
@@ -58,6 +59,7 @@ def _settings(
         oracle_deepsec_enabled=deepsec_enabled,
         oracle_deepsec_data_user="DEEPSEC_DATA_USER",
         oracle_deepsec_data_user_password=data_user_password,
+        nl2sql_oracle_call_timeout_seconds=call_timeout_seconds,
         nl2sql_persistence_mode="memory",
         app_auth_password_min_length=12,
         app_auth_password_max_length=128,
@@ -2804,6 +2806,7 @@ class _FakeConnection:
         self.fail_clear = fail_clear
         self.fail_close = fail_close
         self.closed = 0
+        self.call_timeout = 0
 
     def cursor(self) -> _FakeCursor:
         return _FakeCursor(self.calls, fail_clear=self.fail_clear)
@@ -3026,7 +3029,7 @@ def test_data_pool_sets_and_clears_each_actor_without_cross_user_leak(
     calls: list[tuple[str, list[str]]] = []
     connection = _FakeConnection(calls)
     pool = _FakePool(connection)
-    manager = OraclePoolManager(_settings())
+    manager = OraclePoolManager(_settings(call_timeout_seconds=7.5))
     monkeypatch.setattr(manager, "_get_pool", lambda *, data_plane: pool)
 
     with manager.data_connection("user-a"):
@@ -3040,6 +3043,22 @@ def test_data_pool_sets_and_clears_each_actor_without_cross_user_leak(
         ("NL2SQL_DEEPSEC_CTX_PKG.SET_APP_USER_UUID", ["user-b"]),
         ("NL2SQL_DEEPSEC_CTX_PKG.CLEAR_APP_USER", []),
     ]
+    assert connection.call_timeout == 7_500
+
+
+def test_unscoped_data_connection_applies_call_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, list[str]]] = []
+    connection = _FakeConnection(calls)
+    pool = _FakePool(connection)
+    manager = OraclePoolManager(_settings(call_timeout_seconds=2.25))
+    monkeypatch.setattr(manager, "_get_pool", lambda *, data_plane: pool)
+
+    with manager.unscoped_data_connection():
+        assert connection.call_timeout == 2_250
+
+    assert calls == [("NL2SQL_DEEPSEC_CTX_PKG.CLEAR_APP_USER", [])]
 
 
 def test_context_clear_failure_drops_connection_and_fails_closed(

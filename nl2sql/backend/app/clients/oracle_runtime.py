@@ -114,6 +114,7 @@ class OraclePoolManager:
             raise OracleAdapterError("Deep Data Security が有効ではありません。")
         pool = self._get_pool(data_plane=True)
         connection = pool.acquire()
+        self._apply_call_timeout(connection)
         try:
             yield connection
         finally:
@@ -174,6 +175,13 @@ class OraclePoolManager:
             return
         if getattr(oracledb, "is_thin_mode", lambda: True)():
             oracledb.init_oracle_client(lib_dir=self.settings.oracle_client_lib_dir)
+
+    def _apply_call_timeout(self, connection: Any) -> None:
+        call_timeout_ms = int(
+            max(1.0, float(self.settings.nl2sql_oracle_call_timeout_seconds)) * 1000
+        )
+        if hasattr(connection, "call_timeout"):
+            connection.call_timeout = call_timeout_ms
 
     def _clear_context_or_drop(self, connection: Any) -> None:
         try:
