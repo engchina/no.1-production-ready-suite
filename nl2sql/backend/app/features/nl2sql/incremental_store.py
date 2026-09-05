@@ -14,7 +14,7 @@ import json
 import threading
 import time
 from collections import OrderedDict
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import AbstractContextManager
 from datetime import UTC, datetime
 from importlib import import_module
@@ -149,6 +149,12 @@ def _state_document_filter_value(value: object) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
     return str(value or "")
+
+
+def _normalize_profile_id_filter(profile_ids: Iterable[str] | None) -> set[str] | None:
+    if profile_ids is None:
+        return None
+    return {str(item or "").strip() for item in profile_ids if str(item or "").strip()}
 
 
 def _state_document_sort_value(collection: str, value: Mapping[str, Any]) -> str:
@@ -554,6 +560,7 @@ class IncrementalNl2SqlRepository(Protocol):
         status: str = "",
         query: str = "",
         payload_filters: Mapping[str, str] | None = None,
+        profile_ids: Iterable[str] | None = None,
     ) -> tuple[list[dict[str, Any]], str | None, int]: ...
 
 
@@ -1118,16 +1125,24 @@ class MemoryIncrementalNl2SqlRepository:
         status: str = "",
         query: str = "",
         payload_filters: Mapping[str, str] | None = None,
+        profile_ids: Iterable[str] | None = None,
     ) -> tuple[list[dict[str, Any]], str | None, int]:
         decoded = _decode_cursor(cursor, 2)
         query_key = query.casefold().strip()
         filters = {key: value for key, value in (payload_filters or {}).items() if value}
+        scoped_profile_ids = _normalize_profile_id_filter(profile_ids)
+        if scoped_profile_ids is not None and not scoped_profile_ids:
+            return [], None, 0
         with self._lock:
             values = [
                 value
                 for (item_collection, _entity_id), value in self._documents.items()
                 if item_collection == collection
                 and (not profile_id or value.get("_profile_id") == profile_id)
+                and (
+                    scoped_profile_ids is None
+                    or str(value.get("_profile_id") or "") in scoped_profile_ids
+                )
                 and (not status or value.get("_status") == status)
                 and _state_document_matches_query(collection, value, query_key)
                 and all(
@@ -2235,6 +2250,7 @@ class OracleIncrementalNl2SqlRepository:
         status: str = "",
         query: str = "",
         payload_filters: Mapping[str, str] | None = None,
+        profile_ids: Iterable[str] | None = None,
     ) -> tuple[list[dict[str, Any]], str | None, int]:
         decoded = _decode_cursor(cursor, 2)
         where = ["COLLECTION = :collection"]
@@ -2242,6 +2258,16 @@ class OracleIncrementalNl2SqlRepository:
         if profile_id:
             where.append("PROFILE_ID = :profile_id")
             filter_binds["profile_id"] = profile_id
+        elif profile_ids is not None:
+            scoped_profile_ids = sorted(_normalize_profile_id_filter(profile_ids) or set())
+            if not scoped_profile_ids:
+                return [], None, 0
+            profile_binds: list[str] = []
+            for index, scoped_profile_id in enumerate(scoped_profile_ids):
+                bind_name = f"profile_id_{index}"
+                profile_binds.append(f":{bind_name}")
+                filter_binds[bind_name] = scoped_profile_id
+            where.append(f"PROFILE_ID IN ({', '.join(profile_binds)})")  # nosec B608
         if status:
             where.append("STATUS = :status")
             filter_binds["status"] = status
