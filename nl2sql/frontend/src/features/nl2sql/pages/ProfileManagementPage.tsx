@@ -62,7 +62,12 @@ import {
   useStartSelectAiDbProfileRefresh,
 } from "../incrementalQueries";
 import { isUserVisibleObjectName } from "../objectVisibility";
-import { applySchemaBulkSelection } from "../profileObjectSelection";
+import {
+  applySchemaBulkSelection,
+  normalizeObjectKey,
+  selectedObjectKeys,
+  toggleObjectSelection,
+} from "../profileObjectSelection";
 import {
   SCHEMA_OPTION_ROW_HEIGHT,
   SCHEMA_OPTION_VIEWPORT_HEIGHT,
@@ -773,7 +778,7 @@ function VirtualizedSchemaOptions({
             <SchemaObjectOption
               key={qualified}
               object={object}
-              selected={selectedSet.has(qualified)}
+              selected={selectedSet.has(normalizeObjectKey(qualified))}
               onToggle={onToggle}
             />
           );
@@ -819,10 +824,7 @@ function SchemaGroupedSelectionPanel({
   onToggleSchema: (owner: string, select: boolean) => Promise<void>;
 }) {
   const [schemaSelectionOwner, setSchemaSelectionOwner] = useState("");
-  const selectedSet = useMemo(
-    () => new Set(selectedItems.map((name) => name.replaceAll('"', "").toUpperCase())),
-    [selectedItems]
-  );
+  const selectedSet = useMemo(() => selectedObjectKeys(selectedItems), [selectedItems]);
   const groups = useMemo(() => {
     const grouped = new Map<string, SchemaTable[]>();
     for (const object of objects) {
@@ -873,8 +875,9 @@ function SchemaGroupedSelectionPanel({
           data-testid={`${dataTestId}-scroll-region`}
         >
           {groups.map(({ owner, entries }) => {
+            const ownerKeyPrefix = normalizeObjectKey(`${owner}.`);
             const selectedCount = [...selectedSet].filter((name) =>
-              name.startsWith(`${owner}.`)
+              name.startsWith(ownerKeyPrefix)
             ).length;
             const total = ownerTotals[owner] ?? entries.length;
             const allSelected = total > 0 && selectedCount >= total;
@@ -927,7 +930,7 @@ function SchemaGroupedSelectionPanel({
                         <SchemaObjectOption
                           key={qualified}
                           object={object}
-                          selected={selectedSet.has(qualified)}
+                          selected={selectedSet.has(normalizeObjectKey(qualified))}
                           onToggle={onToggle}
                         />
                       );
@@ -1726,11 +1729,7 @@ export function ProfileManagementPage() {
   const toggleObject = (kind: "table" | "view", name: string) => {
     setForm((current) => {
       const key = kind === "table" ? "allowedTables" : "allowedViews";
-      const selected = current[key].includes(name);
-      return {
-        ...current,
-        [key]: selected ? current[key].filter((item) => item !== name) : [...current[key], name],
-      };
+      return { ...current, [key]: toggleObjectSelection(current[key], name) };
     });
   };
 

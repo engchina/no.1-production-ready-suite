@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { applySchemaBulkSelection } from "../src/features/nl2sql/profileObjectSelection.ts";
+import {
+  applySchemaBulkSelection,
+  selectedObjectKeys,
+  toggleObjectSelection,
+} from "../src/features/nl2sql/profileObjectSelection.ts";
 
 const profilePage = readFileSync(
   new URL("../src/features/nl2sql/pages/ProfileManagementPage.tsx", import.meta.url),
@@ -119,4 +123,38 @@ test("管理系一覧ページはデバウンス hook を重複定義しない",
     assert.doesNotMatch(source, /(const|function) useDebouncedValue/u, page);
     assert.match(source, /from "@\/lib\/useDebouncedValue"/u, page);
   }
+});
+
+test("トグルは表記が違う保存値でも同じ object として外せる", () => {
+  assert.deepEqual(toggleObjectSelection(['"APP"."TABLE_01"'], "APP.TABLE_01"), []);
+  assert.deepEqual(toggleObjectSelection(["app.table_01"], "APP.TABLE_01"), []);
+  assert.deepEqual(toggleObjectSelection(["APP.TABLE_02"], "APP.TABLE_01"), [
+    "APP.TABLE_02",
+    "APP.TABLE_01",
+  ]);
+});
+
+test("トグルは重複を積み上げない", () => {
+  let selection: string[] = [];
+  for (let index = 0; index < 3; index += 1) {
+    selection = toggleObjectSelection(selection, "APP.TABLE_01");
+    selection = toggleObjectSelection(selection, '"APP"."TABLE_01"');
+  }
+  assert.deepEqual(selection, []);
+  assert.deepEqual(toggleObjectSelection(selection, "app.table_01"), ["APP.TABLE_01"]);
+});
+
+test("突合用集合は引用符と大文字小文字を吸収する", () => {
+  assert.deepEqual(
+    [...selectedObjectKeys(['"APP"."TABLE_01"', "app.table_02"])].sort(),
+    ["APP.TABLE_01", "APP.TABLE_02"],
+  );
+});
+
+test("チェック判定・トグル・件数が同じ正規化キーを共有する", () => {
+  assert.match(profilePage, /selectedObjectKeys\(selectedItems\)/u);
+  assert.match(profilePage, /toggleObjectSelection\(current\[key\], name\)/u);
+  assert.match(profilePage, /selected=\{selectedSet\.has\(normalizeObjectKey\(qualified\)\)\}/u);
+  assert.match(profilePage, /const ownerKeyPrefix = normalizeObjectKey\(`\$\{owner\}\.`\);/u);
+  assert.doesNotMatch(profilePage, /current\[key\]\.includes\(name\)/u);
 });

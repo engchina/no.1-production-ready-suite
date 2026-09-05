@@ -2384,3 +2384,35 @@ test("業務プロファイル検索は打鍵ごとに API を呼ばない", asy
   expect(objectRequests - initialObjectRequests).toBeLessThanOrEqual(6);
   expect(searchRequests).toBe(initialSearchRequests);
 });
+
+test("引用符付きで保存された許可オブジェクトもチェックを外せる", async ({ page }) => {
+  await mockProfileApi(page, {
+    profileItems: [
+      {
+        ...profiles[0],
+        // 旧データや手入力で入り得る表記揺れ。
+        allowed_tables: ['"APP"."TABLE_01"'],
+        allowed_views: ["app.view_02"],
+      },
+    ],
+  });
+
+  await page.goto("/profiles?profile=default");
+
+  const tableList = page.getByTestId("profile-allowed-table-list");
+  const viewList = page.getByTestId("profile-allowed-view-list");
+  const table01 = tableList.getByLabel("APP.TABLE_01");
+  const view02 = viewList.getByLabel("APP.VIEW_02");
+
+  await expect(table01).toBeChecked();
+  await expect(view02).toBeChecked();
+  await expect(tableList).toContainText("選択 1 件");
+
+  await table01.uncheck();
+  await expect(table01).not.toBeChecked();
+  await expect(tableList).toContainText("選択 0 件");
+
+  await view02.uncheck();
+  await expect(view02).not.toBeChecked();
+  await expect(viewList).toContainText("選択 0 件");
+});

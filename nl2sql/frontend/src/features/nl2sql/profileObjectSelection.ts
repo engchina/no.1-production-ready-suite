@@ -43,3 +43,21 @@ export function applySchemaBulkSelection({
   });
   return select ? [...retained, ...snapshot] : retained;
 }
+
+/**
+ * 1 object の選択をトグルする。
+ *
+ * 保存済みの値は引用符付き・大文字小文字混在(`"APP"."ORDERS"` / `app.orders`)の
+ * ことがある。チェック表示は正規化キーで判定しているため、トグル側も同じキーで
+ * 突合しないと「チェックは付くのに外せず、重複が積まれる」状態になる。
+ */
+export function toggleObjectSelection(current: readonly string[], name: string): string[] {
+  const key = normalizeObjectKey(name);
+  const next = current.filter((item) => normalizeObjectKey(item) !== key);
+  return next.length === current.length ? [...current, key] : next;
+}
+
+/** 選択済みの突合用集合(表示・件数・一括操作で共有する)。 */
+export function selectedObjectKeys(selected: readonly string[]): Set<string> {
+  return new Set(selected.map(normalizeObjectKey));
+}
