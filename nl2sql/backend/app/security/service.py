@@ -611,8 +611,6 @@ class SecurityService:
                     },
                 ),
             )
-        if allowed_profile_ids:
-            self._assert_actor_can_manage_profile_access(actor)
         role = self._build_role(
             role_id=str(uuid4()),
             role_code=normalized_role_code,
@@ -623,6 +621,9 @@ class SecurityService:
             allowed_profile_ids=allowed_profile_ids or set(),
             version=1,
         )
+        # 全プロファイル権限を含むロールは _build_role で allowed_profile_ids が空になる
+        if role.allowed_profile_ids:
+            self._assert_actor_can_manage_profile_access(actor)
         try:
             created = self.store.create_role(role)
         except SecurityConflict as exc:
@@ -654,8 +655,6 @@ class SecurityService:
             if allowed_profile_ids is not None
             else set(current.allowed_profile_ids)
         )
-        if requested_profile_ids != current.allowed_profile_ids:
-            self._assert_actor_can_manage_profile_access(actor)
         role = self._build_role(
             role_id=role_id,
             role_code=current.role_code,
@@ -668,6 +667,12 @@ class SecurityService:
             version=current.version,
         )
         self._assert_actor_can_add_permissions(actor, current, role)
+        # 全プロファイル権限になる場合は allowed_profile_ids がどのみち空になるため差分検査しない
+        if (
+            role.allowed_profile_ids != current.allowed_profile_ids
+            and not grants_all_profile_access(role.permissions)
+        ):
+            self._assert_actor_can_manage_profile_access(actor)
         try:
             updated = self.store.update_role(role, expected_version=expected_version)
         except (SecurityConflict, SecurityNotFound) as exc:

@@ -3853,6 +3853,79 @@ def test_user_manager_can_assign_subset_role_and_runtime_access_matches(
         reset_security_service()
 
 
+def test_role_manager_can_add_profile_manage_to_role_with_explicit_profiles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """全プロファイル権限を含意する menu.profiles の追加は profile 差分検査を受けない。"""
+    service = _configure_memory_api_auth(monkeypatch)
+    admin, _, _ = service.login("ADMIN", "BootstrapPass!123")
+    manager_role = service.create_role(
+        role_code="ROLE_MANAGER_PROFILES",
+        display_name="ロール管理 + 業務プロファイル",
+        description="",
+        permissions={"menu.security_roles", "menu.profiles"},
+        entitlements=[],
+        actor=admin,
+    )
+    target = service.create_role(
+        role_code="PROFILE_SCOPED",
+        display_name="個別プロファイル",
+        description="",
+        permissions={"menu.query"},
+        entitlements=[],
+        allowed_profile_ids={"default"},
+        actor=admin,
+    )
+    _create_active_user(
+        service,
+        admin,
+        login_user_id="role.manager",
+        display_name="ロール管理者",
+        role_ids=[manager_role.role_id],
+        password="RoleManagerPass!123",
+    )
+
+    async def patch_target(
+        client: httpx.AsyncClient,
+        csrf: str,
+        permissions: list[str],
+        allowed_profile_ids: list[str],
+    ) -> httpx.Response:
+        current = service.get_role(target.role_id)
+        assert current is not None
+        return await client.patch(
+            f"/api/security/roles/{target.role_id}",
+            headers={"X-CSRF-Token": csrf},
+            json={
+                "version": current.version,
+                "display_name": current.display_name,
+                "description": current.description,
+                "permissions": permissions,
+                "allowed_profile_ids": allowed_profile_ids,
+            },
+        )
+
+    async def exercise() -> None:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            _, csrf = await _login_api(client, "role.manager", "RoleManagerPass!123")
+
+            # 個別プロファイルの変更自体は SYSTEM_ADMIN のみ(従来どおり)
+            denied = await patch_target(client, csrf, ["menu.query"], [])
+            assert denied.status_code == 403
+
+            # frontend と同じく空配列で送っても、全プロファイル権限になるなら受理される
+            granted = await patch_target(client, csrf, ["menu.query", "menu.profiles"], [])
+            assert granted.status_code == 200, granted.text
+            assert granted.json()["data"]["allowed_profile_ids"] == []
+            assert "menu.profiles" in granted.json()["data"]["permissions"]
+
+    try:
+        asyncio.run(exercise())
+    finally:
+        reset_security_service()
+
+
 def test_role_manager_cannot_add_permissions_beyond_own(monkeypatch: pytest.MonkeyPatch) -> None:
     """ロール編集経由で自分が持たない権限を(自分にも他人にも)付与できない。"""
     service = _configure_memory_api_auth(monkeypatch)
