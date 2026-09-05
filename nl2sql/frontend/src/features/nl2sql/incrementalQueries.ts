@@ -23,7 +23,7 @@ import {
   filterUserVisibleSchemaObjectPage,
   isUserVisibleSchemaObject,
 } from "./objectVisibility";
-import { profileSummaryPageFromLegacyList } from "./profileListState";
+import { profileSummaryPageFromLegacyList, type ProfileListSortState } from "./profileListState";
 import type { ProfileOntologyViewData } from "./ontology/types";
 
 const LEGACY_COMPATIBILITY_STATUSES = new Set([404, 410, 501]);
@@ -44,7 +44,8 @@ async function legacyCatalog(signal?: AbortSignal): Promise<SchemaCatalog> {
 }
 
 export const nl2sqlIncrementalKeys = {
-  profiles: (query: string) => ["nl2sql", "profiles", "search", query] as const,
+  profiles: (query: string, sort: string, direction: string) =>
+    ["nl2sql", "profiles", "search", query, sort, direction] as const,
   profile: (profileId: string) => ["nl2sql", "profiles", "detail", profileId] as const,
   profileUsageContext: (profileId: string) =>
     ["nl2sql", "profiles", "usage-context", profileId] as const,
@@ -90,12 +91,22 @@ function retryTransientOnly(failureCount: number, error: unknown): boolean {
   return true;
 }
 
-export function useProfileSummaries(query: string) {
+const DEFAULT_PROFILE_SORT: ProfileListSortState = { key: "name", direction: "asc" };
+
+export function useProfileSummaries(
+  query: string,
+  sort: ProfileListSortState = DEFAULT_PROFILE_SORT
+) {
   return useInfiniteQuery({
-    queryKey: nl2sqlIncrementalKeys.profiles(query.trim()),
+    queryKey: nl2sqlIncrementalKeys.profiles(query.trim(), sort.key, sort.direction),
     initialPageParam: "",
     queryFn: ({ pageParam, signal }) => {
-      const params = new URLSearchParams({ limit: "50", q: query.trim() });
+      const params = new URLSearchParams({
+        limit: "50",
+        q: query.trim(),
+        sort: sort.key,
+        direction: sort.direction,
+      });
       if (pageParam) params.set("cursor", pageParam);
       return apiGet<ProfileSummaryPage>(`/api/nl2sql/profiles/search?${params}`, {
         signal,
@@ -107,7 +118,8 @@ export function useProfileSummaries(query: string) {
             signal,
             timeoutMs: API_TIMEOUT_MS.interactiveList,
           });
-          return profileSummaryPageFromLegacyList(profiles, query);
+          // legacy 一覧 API は sort 非対応。全件返るためこの経路のみ client 側で並べる。
+          return profileSummaryPageFromLegacyList(profiles, query, sort);
         }
       );
     },

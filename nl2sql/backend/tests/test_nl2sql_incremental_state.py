@@ -1806,6 +1806,104 @@ def test_profile_search_memory_paths_share_order_and_literal_query_matching() ->
     assert [item.id for item in service_wildcard.items] == ["profile-a-b"]
 
 
+def test_profile_search_sorts_across_pages_by_allowed_object_counts() -> None:
+    profiles = [
+        Nl2SqlProfile(
+            id=f"profile-{index}",
+            name=f"P{index}",
+            allowed_tables=[f"APP.T{index}_{seq}" for seq in range(index)],
+            allowed_views=[f"APP.V{index}_{seq}" for seq in range(5 - index)],
+        )
+        for index in range(5)
+    ]
+    repository = MemoryIncrementalNl2SqlRepository(seed_default=False)
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service.delete_profile("default")
+    for profile in profiles:
+        repository.save_profile(profile, expected_etag=None)
+        service.create_profile(profile)
+
+    def collect(source: object, **kwargs: object) -> list[str]:
+        # keyset cursor を辿り、ページを跨いで並びが一貫することを確認する。
+        ids: list[str] = []
+        cursor: str | None = None
+        while True:
+            page = source.search_profiles(  # type: ignore[attr-defined]
+                cursor=cursor,
+                limit=2,
+                query="",
+                include_archived=False,
+                **kwargs,
+            )
+            ids.extend(item.id for item in page.items)
+            cursor = page.next_cursor
+            if not cursor:
+                return ids
+
+    descending_tables = collect(repository, sort_key="tables", direction="desc")
+    assert descending_tables == [
+        "profile-4",
+        "profile-3",
+        "profile-2",
+        "profile-1",
+        "profile-0",
+    ]
+    assert collect(service, sort="tables", direction="desc") == descending_tables
+
+    ascending_views = collect(repository, sort_key="views", direction="asc")
+    assert ascending_views == [
+        "profile-4",
+        "profile-3",
+        "profile-2",
+        "profile-1",
+        "profile-0",
+    ]
+    assert collect(service, sort="views", direction="asc") == ascending_views
+
+    assert collect(repository, sort_key="name", direction="asc") == [
+        f"profile-{index}" for index in range(5)
+    ]
+
+
+def test_profile_search_rejects_unknown_sort_key() -> None:
+    repository = MemoryIncrementalNl2SqlRepository(seed_default=False)
+    service = _incremental_service(repository)
+
+    with pytest.raises(ValueError):
+        service.search_profiles(
+            cursor=None,
+            limit=10,
+            query="",
+            include_archived=False,
+            sort="updated_at",
+        )
+    with pytest.raises(ValueError):
+        service.search_profiles(
+            cursor=None,
+            limit=10,
+            query="",
+            include_archived=False,
+            direction="sideways",
+        )
+
+
+def test_oracle_profile_search_orders_and_pages_by_requested_sort() -> None:
+    repository, connections = _oracle_repository([[], [(0,)], [(7,)]])
+
+    repository.search_profiles(
+        cursor=None,
+        limit=10,
+        query="",
+        include_archived=False,
+        sort_key="tables",
+        direction="desc",
+    )
+
+    select_sql, _ = connections[0].executed[0]
+    assert "ORDER BY LPAD(TO_CHAR(NVL(ALLOWED_TABLE_COUNT, 0)), 12, '0') DESC" in select_sql
+    assert "PROFILE_ID DESC" in select_sql
+
+
 def test_oracle_profile_search_escapes_like_wildcards() -> None:
     repository, connections = _oracle_repository([[], [(0,)], [(7,)]])
 

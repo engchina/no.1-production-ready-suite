@@ -544,6 +544,8 @@ def search_profiles(
     limit: int = 50,
     q: str = "",
     include_archived: bool = False,
+    sort: str = "name",
+    direction: str = "asc",
     if_none_match: Annotated[str | None, Header(alias="If-None-Match")] = None,
 ) -> ApiResponse[ProfileSummaryPage] | Response:
     """Full payload を返さない業務 profile keyset page。"""
@@ -556,10 +558,14 @@ def search_profiles(
             query=q,
             include_archived=include_archived,
             allowed_profile_ids=_allowed_profile_ids_for_request(request),
+            sort=sort,
+            direction=direction,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    quoted_etag = f'"profiles-{page.change_token}-{_profile_access_digest(request)}"'
+    # sort 指定ごとに並びが変わるため ETag にも含める。
+    access_digest = _profile_access_digest(request)
+    quoted_etag = f'"profiles-{page.change_token}-{sort}-{direction}-{access_digest}"'
     if if_none_match == quoted_etag:
         return Response(status_code=304, headers={"ETag": quoted_etag})
     response.headers["ETag"] = quoted_etag

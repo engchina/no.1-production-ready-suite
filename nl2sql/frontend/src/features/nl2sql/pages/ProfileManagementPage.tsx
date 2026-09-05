@@ -67,11 +67,7 @@ import {
   SCHEMA_OPTION_VIEWPORT_HEIGHT,
   schemaOptionWindow,
 } from "../profileVirtualList";
-import {
-  sortProfileSummariesForDisplay,
-  type ProfileListSortKey,
-  type ProfileListSortState,
-} from "../profileListState";
+import type { ProfileListSortKey, ProfileListSortState } from "../profileListState";
 import { BUSINESS_SELECT_AI_DB_PROFILES_URL } from "../selectAiProfileUrls";
 import { schemaTableQualifiedName } from "../workbenchState";
 import type {
@@ -1381,7 +1377,7 @@ export function ProfileManagementPage() {
   const syncJobParam = searchParams.get("syncJobId") ?? "";
   const activeView: ActiveView = profileParam ? "editor" : "list";
   const selectedProfileId = profileParam && profileParam !== "new" ? profileParam : "";
-  const profilesQuery = useProfileSummaries(profileSearch);
+  const profilesQuery = useProfileSummaries(profileSearch, profileSort);
   const profileDetailQuery = useProfileDetail(selectedProfileId);
   const tableObjectsQuery = useSchemaObjects(objectFilter, "TABLE");
   const viewObjectsQuery = useSchemaObjects(objectFilter, "VIEW");
@@ -1485,10 +1481,6 @@ export function ProfileManagementPage() {
       ),
     [schemaOwnersQuery.data]
   );
-  const filteredProfiles = useMemo(() => {
-    return sortProfileSummariesForDisplay(profiles, profileSort);
-  }, [profileSort, profiles]);
-
   const selectProfile = (profile: ProfileSummary) => {
     setMessage("");
     setOracleSyncJobId("");
@@ -2131,7 +2123,7 @@ export function ProfileManagementPage() {
               processing={showProfileWorkspaceProcessing ? profileWorkspaceProcessing : undefined}
             >
               <ProfileList
-                profiles={filteredProfiles}
+                profiles={profiles}
                 totalCount={profileTotal}
                 selectedProfileId={selectedProfileId}
                 loading={!profilesLoaded || (loading === "load" && profiles.length === 0)}

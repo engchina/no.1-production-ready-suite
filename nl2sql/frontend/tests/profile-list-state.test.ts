@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
@@ -86,4 +87,39 @@ test("legacy profile summary fallback filters active profiles by name and catego
     ["dept"]
   );
   assert.equal(page.next_cursor, null);
+});
+
+test("legacy 一覧 API 経路だけは client 側で並べ替える", () => {
+  const page = profileSummaryPageFromLegacyList(
+    [
+      profile({ id: "a", name: "A", allowed_tables: ["T1"] }),
+      profile({ id: "b", name: "B", allowed_tables: ["T1", "T2", "T3"] }),
+      profile({ id: "c", name: "C", allowed_tables: [] }),
+    ],
+    "",
+    { key: "tables", direction: "desc" },
+  );
+  assert.deepEqual(
+    page.items.map((item) => item.id),
+    ["b", "a", "c"],
+  );
+});
+
+test("業務プロファイル一覧の並べ替えはサーバへ委譲する", () => {
+  const incrementalQueries = readFileSync(
+    new URL("../src/features/nl2sql/incrementalQueries.ts", import.meta.url),
+    "utf8",
+  );
+  const profilePage = readFileSync(
+    new URL("../src/features/nl2sql/pages/ProfileManagementPage.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(incrementalQueries, /sort: sort\.key,\s*\n\s*direction: sort\.direction,/u);
+  assert.match(
+    incrementalQueries,
+    /nl2sqlIncrementalKeys\.profiles\(query\.trim\(\), sort\.key, sort\.direction\)/u,
+  );
+  // ページを跨いだ順序が壊れるため、一覧側では client 再ソートしない。
+  assert.doesNotMatch(profilePage, /sortProfileSummariesForDisplay/u);
+  assert.match(profilePage, /useProfileSummaries\(profileSearch, profileSort\)/u);
 });

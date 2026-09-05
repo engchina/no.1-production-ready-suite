@@ -2300,3 +2300,57 @@ test("業務プロファイル一覧の初回ロード中は空状態ではな�
   await expect(page.getByTestId("profile-management-list")).toBeVisible();
   await expect(page.getByTestId("profile-list-skeleton")).toHaveCount(0);
 });
+
+test("業務プロファイル一覧の並べ替えはサーバ順をそのまま表示する", async ({ page }) => {
+  await mockProfileApi(page);
+
+  const requestedSorts: string[] = [];
+  // mockProfileApi より後に登録した route が優先される。
+  // サーバ順が client 再ソートで崩れないよう、意図的に名前順と異なる順序を返す。
+  await page.route("**/api/nl2sql/profiles/search?*", async (route) => {
+    const params = new URL(route.request().url()).searchParams;
+    requestedSorts.push(`${params.get("sort")}:${params.get("direction")}`);
+    await fulfillJson(route, {
+      items: [
+        { name: "ZETA", allowed_table_count: 9 },
+        { name: "ALPHA", allowed_table_count: 5 },
+        { name: "MIKE", allowed_table_count: 1 },
+      ].map((item, index) => ({
+        id: `profile-${index}`,
+        name: item.name,
+        category: "sales",
+        description: "",
+        archived: false,
+        allowed_table_count: item.allowed_table_count,
+        allowed_view_count: 0,
+        glossary_count: 0,
+        few_shot_count: 0,
+        version: 1,
+        etag: `etag-${index}`,
+        updated_at: "2026-07-19T00:00:00Z",
+      })),
+      next_cursor: null,
+      total: 3,
+      change_token: 1,
+    });
+  });
+
+  await page.goto("/profiles");
+
+  const rows = page.getByTestId("profile-management-grid").locator("tbody tr");
+  await expect(rows).toHaveCount(3);
+  await expect(rows.nth(0)).toContainText("ZETA");
+  await expect(rows.nth(1)).toContainText("ALPHA");
+  await expect(rows.nth(2)).toContainText("MIKE");
+  expect(requestedSorts.at(0)).toBe("name:asc");
+
+  await page.getByRole("button", { name: "許可表" }).click();
+  await expect
+    .poll(() => requestedSorts.at(-1))
+    .toBe("tables:asc");
+
+  await page.getByRole("button", { name: "許可表" }).click();
+  await expect
+    .poll(() => requestedSorts.at(-1))
+    .toBe("tables:desc");
+});

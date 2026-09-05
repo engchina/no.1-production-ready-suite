@@ -67,9 +67,10 @@ from .incremental_store import (
     OracleIncrementalNl2SqlRepository,
     VersionedTtlCache,
     _decode_cursor,
-    _encode_cursor,
     _profile_matches_query,
     _profile_search_key,
+    normalize_profile_sort,
+    paginate_sorted_profiles,
 )
 from .logical_steps import (
     LabelResolver,
@@ -5236,8 +5237,11 @@ class Nl2SqlService:
         query: str,
         include_archived: bool,
         allowed_profile_ids: set[str] | None = None,
+        sort: str = "name",
+        direction: str = "asc",
     ) -> ProfileSummaryPage:
         _decode_cursor(cursor, 2)
+        sort_key, sort_direction = normalize_profile_sort(sort, direction)
         if allowed_profile_ids is not None:
             profiles = [
                 profile
@@ -5251,6 +5255,8 @@ class Nl2SqlService:
                 query=query,
                 include_archived=include_archived,
                 change_token=self._profile_summary_change_token(profiles),
+                sort_key=sort_key,
+                direction=sort_direction,
             )
         repository = self._incremental_repository
         if repository is None:
@@ -5262,6 +5268,8 @@ class Nl2SqlService:
                 query=query,
                 include_archived=include_archived,
                 change_token=self._profile_summary_change_token(profiles),
+                sort_key=sort_key,
+                direction=sort_direction,
             )
         try:
             return repository.search_profiles(
@@ -5269,6 +5277,8 @@ class Nl2SqlService:
                 limit=limit,
                 query=query,
                 include_archived=include_archived,
+                sort_key=sort_key,
+                direction=sort_direction,
             )
         except ValueError:
             raise
@@ -5288,6 +5298,8 @@ class Nl2SqlService:
         query: str,
         include_archived: bool,
         change_token: int,
+        sort_key: str = "name",
+        direction: str = "asc",
     ) -> ProfileSummaryPage:
         after = _decode_cursor(cursor, 2)
         query_key = _profile_search_key(query.strip())
@@ -5297,22 +5309,14 @@ class Nl2SqlService:
             if (include_archived or not profile.archived)
             and _profile_matches_query(profile, query_key)
         ]
-        filtered.sort(key=lambda profile: (_profile_search_key(profile.name), profile.id))
         total = len(filtered)
-        if after:
-            after_key = (_profile_search_key(after[0]), after[1])
-            filtered = [
-                profile
-                for profile in filtered
-                if (_profile_search_key(profile.name), profile.id) > after_key
-            ]
-        selected = filtered[: limit + 1]
-        has_more = len(selected) > limit
-        selected = selected[:limit]
-        next_cursor = None
-        if has_more and selected:
-            last = selected[-1]
-            next_cursor = _encode_cursor(_profile_search_key(last.name), last.id)
+        selected, next_cursor = paginate_sorted_profiles(
+            filtered,
+            after=after,
+            limit=limit,
+            sort_key=sort_key,
+            direction=direction,
+        )
         return ProfileSummaryPage(
             items=[self._profile_summary(profile) for profile in selected],
             next_cursor=next_cursor,

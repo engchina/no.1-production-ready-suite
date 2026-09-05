@@ -27,7 +27,8 @@ export function profileSummary(profile: Nl2SqlProfile): ProfileSummary {
 
 export function profileSummaryPageFromLegacyList(
   profiles: Nl2SqlProfile[],
-  query: string
+  query: string,
+  sort: ProfileListSortState = { key: "name", direction: "asc" }
 ): ProfileSummaryPage {
   const normalizedQuery = query.trim().toLowerCase();
   const items = profiles
@@ -39,7 +40,13 @@ export function profileSummaryPageFromLegacyList(
           (profile.category ?? "").toLowerCase().includes(normalizedQuery))
     )
     .map(profileSummary);
-  return { items, next_cursor: null, total: items.length, change_token: 0 };
+  // legacy 一覧 API は 1 ページで全件返るため、ここでの並べ替えは全体順になる。
+  return {
+    items: sortProfileSummariesForDisplay(items, sort),
+    next_cursor: null,
+    total: items.length,
+    change_token: 0,
+  };
 }
 
 function profileSortValue(profile: ProfileSummary, key: ProfileListSortKey) {

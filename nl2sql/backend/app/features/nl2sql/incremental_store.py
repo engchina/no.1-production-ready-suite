@@ -283,6 +283,82 @@ def _profile_search_key(value: str) -> str:
     return str(value or "").upper()
 
 
+PROFILE_SORT_KEYS = ("name", "tables", "views")
+PROFILE_SORT_DIRECTIONS = ("asc", "desc")
+# 件数 sort でも cursor を文字列 tuple のまま扱えるようゼロ埋めする(辞書順=数値順)。
+_PROFILE_COUNT_SORT_WIDTH = 12
+
+
+def normalize_profile_sort(sort: str | None, direction: str | None) -> tuple[str, str]:
+    """一覧 sort 指定を検証して (key, direction) に正規化する。"""
+
+    sort_key = (sort or "name").strip().lower()
+    if sort_key not in PROFILE_SORT_KEYS:
+        raise ValueError("sort は name / tables / views のいずれかで指定してください。")
+    sort_direction = (direction or "asc").strip().lower()
+    if sort_direction not in PROFILE_SORT_DIRECTIONS:
+        raise ValueError("direction は asc / desc のいずれかで指定してください。")
+    return sort_key, sort_direction
+
+
+def _profile_count_sort_key(count: int) -> str:
+    return f"{max(0, int(count)):0{_PROFILE_COUNT_SORT_WIDTH}d}"
+
+
+def _profile_summary_sort_key(summary: ProfileSummary, sort_key: str) -> str:
+    if sort_key == "tables":
+        return _profile_count_sort_key(summary.allowed_table_count)
+    if sort_key == "views":
+        return _profile_count_sort_key(summary.allowed_view_count)
+    return _profile_search_key(summary.name)
+
+
+def profile_sort_key(profile: Nl2SqlProfile, sort_key: str) -> str:
+    """cursor と in-memory sort が共有する並び替えキー。"""
+
+    if sort_key == "tables":
+        return _profile_count_sort_key(len(profile.allowed_tables))
+    if sort_key == "views":
+        return _profile_count_sort_key(len(profile.allowed_views))
+    return _profile_search_key(profile.name)
+
+
+def paginate_sorted_profiles(
+    profiles: list[Nl2SqlProfile],
+    *,
+    after: tuple[str, ...] | None,
+    limit: int,
+    sort_key: str,
+    direction: str,
+) -> tuple[list[Nl2SqlProfile], str | None]:
+    """sort 指定に沿って keyset ページングする(memory / legacy 経路の共通処理)。"""
+
+    descending = direction == "desc"
+    profiles.sort(
+        key=lambda item: (profile_sort_key(item, sort_key), item.id),
+        reverse=descending,
+    )
+    if after:
+        after_key = (after[0], after[1])
+        profiles = [
+            item
+            for item in profiles
+            if (
+                (profile_sort_key(item, sort_key), item.id) < after_key
+                if descending
+                else (profile_sort_key(item, sort_key), item.id) > after_key
+            )
+        ]
+    selected = profiles[: limit + 1]
+    has_more = len(selected) > limit
+    selected = selected[:limit]
+    next_cursor = None
+    if has_more and selected:
+        last = selected[-1]
+        next_cursor = _encode_cursor(profile_sort_key(last, sort_key), last.id)
+    return selected, next_cursor
+
+
 def _profile_matches_query(profile: Nl2SqlProfile, query_key: str) -> bool:
     if not query_key:
         return True
@@ -349,6 +425,8 @@ class IncrementalNl2SqlRepository(Protocol):
         limit: int,
         query: str,
         include_archived: bool,
+        sort_key: str = "name",
+        direction: str = "asc",
     ) -> ProfileSummaryPage: ...
 
     def get_profile(self, profile_id: str) -> Nl2SqlProfile | None: ...
@@ -554,6 +632,8 @@ class MemoryIncrementalNl2SqlRepository:
         limit: int,
         query: str,
         include_archived: bool,
+        sort_key: str = "name",
+        direction: str = "asc",
     ) -> ProfileSummaryPage:
         after = _decode_cursor(cursor, 2)
         query_key = _profile_search_key(query.strip())
@@ -564,22 +644,14 @@ class MemoryIncrementalNl2SqlRepository:
                 if (include_archived or not profile.archived)
                 and _profile_matches_query(profile, query_key)
             ]
-            profiles.sort(key=lambda item: (_profile_search_key(item.name), item.id))
             total = len(profiles)
-            if after:
-                after_key = (_profile_search_key(after[0]), after[1])
-                profiles = [
-                    item
-                    for item in profiles
-                    if (_profile_search_key(item.name), item.id) > after_key
-                ]
-            selected = profiles[: limit + 1]
-            has_more = len(selected) > limit
-            selected = selected[:limit]
-            next_cursor = None
-            if has_more and selected:
-                last = selected[-1]
-                next_cursor = _encode_cursor(_profile_search_key(last.name), last.id)
+            selected, next_cursor = paginate_sorted_profiles(
+                profiles,
+                after=after,
+                limit=limit,
+                sort_key=sort_key,
+                direction=direction,
+            )
             return ProfileSummaryPage(
                 items=[_profile_summary(item) for item in selected],
                 next_cursor=next_cursor,
@@ -1138,6 +1210,14 @@ class OracleIncrementalNl2SqlRepository:
         record_repository("change_token", rows=1 if row else 0)
         return int(row[0]) if row else 0
 
+    # sort key を文字列式で統一し、cursor(文字列 tuple)を memory 実装と共通化する。
+    # NL2SQL_PROFILES は小規模のため LPAD による index 非利用は許容する。
+    _PROFILE_SORT_EXPRESSIONS = {
+        "name": "UPPER(NAME)",
+        "tables": "LPAD(TO_CHAR(NVL(ALLOWED_TABLE_COUNT, 0)), 12, '0')",
+        "views": "LPAD(TO_CHAR(NVL(ALLOWED_VIEW_COUNT, 0)), 12, '0')",
+    }
+
     def search_profiles(
         self,
         *,
@@ -1145,8 +1225,15 @@ class OracleIncrementalNl2SqlRepository:
         limit: int,
         query: str,
         include_archived: bool,
+        sort_key: str = "name",
+        direction: str = "asc",
     ) -> ProfileSummaryPage:
         after = _decode_cursor(cursor, 2)
+        sort_key, direction = normalize_profile_sort(sort_key, direction)
+        sort_expression = self._PROFILE_SORT_EXPRESSIONS[sort_key]
+        descending = direction == "desc"
+        order = "DESC" if descending else "ASC"
+        comparison = "<" if descending else ">"
         where = ["(:include_archived = 1 OR ARCHIVED = 0)"]
         binds: dict[str, Any] = {
             "include_archived": 1 if include_archived else 0,
@@ -1161,16 +1248,17 @@ class OracleIncrementalNl2SqlRepository:
             binds["query"] = f"%{_escape_oracle_like_pattern(query.strip())}%"
         if after:
             where.append(
-                "(UPPER(NAME) > :after_name OR "
-                "(UPPER(NAME) = :after_name AND PROFILE_ID > :after_id))"
+                f"({sort_expression} {comparison} :after_sort OR "
+                f"({sort_expression} = :after_sort AND PROFILE_ID {comparison} :after_id))"
             )
-            binds.update(after_name=after[0].upper(), after_id=after[1])
+            binds.update(after_sort=after[0], after_id=after[1])
         sql = (
             "SELECT PROFILE_ID, NAME, CATEGORY, DESCRIPTION, ARCHIVED, "  # nosec B608
             "ALLOWED_TABLE_COUNT, ALLOWED_VIEW_COUNT, GLOSSARY_COUNT, FEW_SHOT_COUNT, "
             "VERSION_NO, ETAG, UPDATED_AT FROM NL2SQL_PROFILES WHERE "
             + " AND ".join(where)
-            + " ORDER BY UPPER(NAME), PROFILE_ID FETCH FIRST :limit ROWS ONLY"
+            + f" ORDER BY {sort_expression} {order}, PROFILE_ID {order}"
+            + " FETCH FIRST :limit ROWS ONLY"
         )
         with self._connection_factory() as connection, connection.cursor() as db_cursor:
             db_cursor.execute(sql, binds)
@@ -1198,7 +1286,7 @@ class OracleIncrementalNl2SqlRepository:
         next_cursor = None
         if has_more and items:
             last = items[-1]
-            next_cursor = _encode_cursor(last.name.upper(), last.id)
+            next_cursor = _encode_cursor(_profile_summary_sort_key(last, sort_key), last.id)
         return ProfileSummaryPage(
             items=items,
             next_cursor=next_cursor,

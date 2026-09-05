@@ -197,6 +197,32 @@ def test_profile_search_invalid_cursor_returns_422_without_persistence_failure(
     assert persistence_failures == []
 
 
+def test_profile_search_router_rejects_unknown_sort(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = MemoryIncrementalNl2SqlRepository(seed_default=False)
+    repository.save_profile(Nl2SqlProfile(id="profile-a", name="PROFILE_A"), expected_etag=None)
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service._incremental_repository = repository  # noqa: SLF001
+    monkeypatch.setattr(nl2sql_router, "nl2sql_service", service)
+
+    with pytest.raises(HTTPException) as exc_info:
+        nl2sql_router.search_profiles(_anon_request(), Response(), sort="updated_at")
+
+    assert exc_info.value.status_code == 422
+
+    response = Response()
+    page = nl2sql_router.search_profiles(
+        _anon_request(),
+        response,
+        sort="tables",
+        direction="desc",
+    )
+    assert not isinstance(page, Response)
+    # sort ごとに並びが変わるため ETag も分岐する。
+    assert "tables-desc" in response.headers["etag"]
+
+
 def test_profile_requests_reject_blank_glossary_keys_and_control_characters() -> None:
     with pytest.raises(ValidationError, match="用語キー"):
         ProfileUpsertRequest(name="sales_profile", glossary={"  ": "INVOICES.TOTAL_AMOUNT"})
