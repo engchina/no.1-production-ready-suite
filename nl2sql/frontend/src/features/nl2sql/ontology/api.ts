@@ -1,4 +1,5 @@
 import type {
+  ClarificationAnswerRequest,
   GraphPatch,
   OntologyBuildJob,
   OntologyContextSearchResult,
@@ -81,8 +82,14 @@ function normalizeQuerySession(value: unknown): QuerySession {
     profile_ontology_view: profileView as QuerySession["profile_ontology_view"],
     ontology_graph: ontologyGraph as QuerySession["ontology_graph"],
     result: isRecord(value.result) ? (value.result as QuerySession["result"]) : null,
+    preview: isRecord(value.preview)
+      ? (value.preview as unknown as QuerySession["preview"])
+      : null,
     performance_check: isRecord(value.performance_check)
       ? (value.performance_check as unknown as QuerySession["performance_check"])
+      : null,
+    clarification: isRecord(value.clarification)
+      ? (value.clarification as unknown as QuerySession["clarification"])
       : null,
   };
 }
@@ -192,6 +199,25 @@ export function patchQuerySessionIntent(
   options?: RequestOptions
 ): Promise<QuerySession> {
   return request<unknown>(querySessionPath(sessionId, "intent"), "PATCH", patch, options).then(normalizeQuerySession);
+}
+
+export function answerQuerySessionClarification(
+  sessionId: string,
+  payload: ClarificationAnswerRequest,
+  options?: RequestOptions
+): Promise<QuerySession> {
+  return request<unknown>(querySessionPath(sessionId, "clarification-answers"), "POST", payload, options).then(
+    normalizeQuerySession
+  );
+}
+
+export function cancelQuerySession(
+  sessionId: string,
+  options?: RequestOptions
+): Promise<QuerySession> {
+  return request<unknown>(querySessionPath(sessionId, "cancel"), "POST", undefined, options).then(
+    normalizeQuerySession
+  );
 }
 
 export function generateQuerySessionSql(

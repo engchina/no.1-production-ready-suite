@@ -825,4 +825,12 @@ test("patch conflict and query-session path helpers are deterministic", () => {
     querySessionPath("session/with spaces", "generate-sql"),
     "/api/nl2sql/query-sessions/session%2Fwith%20spaces/generate-sql"
   );
+  assert.equal(
+    querySessionPath("guided-1", "clarification-answers"),
+    "/api/nl2sql/query-sessions/guided-1/clarification-answers"
+  );
+  assert.equal(
+    querySessionPath("guided-1", "cancel"),
+    "/api/nl2sql/query-sessions/guided-1/cancel"
+  );
 });

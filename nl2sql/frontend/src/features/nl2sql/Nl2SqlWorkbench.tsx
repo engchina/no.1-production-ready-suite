@@ -27,6 +27,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { PageNotice } from "@/components/page-notice";
 import { EmptyState } from "@/components/StateViews";
 import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
+import { FieldError } from "@/components/ui/field-error";
 import { FieldLabel } from "@/components/ui/required-field";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { useAuth } from "@/features/security/AuthProvider";
@@ -41,6 +42,7 @@ import { formatDateTime } from "@/lib/format";
 import { API_TIMEOUT_MS, requestTimeoutSeconds } from "@/lib/requestPolicy";
 import { DbObjectPanelHeader } from "./components/DbObjectManagementShared";
 import { EngineSelector } from "./components/EngineSelector";
+import { GuidedClarificationPanel } from "./components/GuidedClarificationPanel";
 import { Nl2SqlExecutionOptionsPanel } from "./components/Nl2SqlExecutionOptionsPanel";
 import { Nl2SqlResultTable } from "./components/Nl2SqlResultTable";
 import { OperationStatusStrip } from "./components/OperationStatusStrip";
@@ -75,6 +77,7 @@ import type {
   SimilarHistoryData,
   SimilarHistoryItem,
 } from "./types";
+import type { QuerySession } from "./ontology/types";
 import { useNl2SqlJobPolling } from "./useNl2SqlJobPolling";
 import {
   emptySelection,
@@ -191,6 +194,7 @@ function ExecutableNl2SqlWorkbench() {
   const [actionOperationKey, setActionOperationKey] = useState(0);
   const [importingSample, setImportingSample] = useState(false);
   const [detecting, setDetecting] = useState(false);
+  const [guidedClarificationOpen, setGuidedClarificationOpen] = useState(false);
   const questionTextareaRef = useRef<HTMLTextAreaElement>(null);
   const schemaDetailRequests = useRef(new Set<string>());
 
@@ -453,7 +457,7 @@ function ExecutableNl2SqlWorkbench() {
     setActionError("");
   }, [clearTrackedJob]);
   const jobActive = isJobInFlight(job?.status) || submitting;
-  const active = jobActive;
+  const active = jobActive || guidedClarificationOpen;
   const actionBusy = submitting;
   const showSimilarHistoryPanel =
     similarHistoryPanelVisible ||
@@ -798,6 +802,65 @@ function ExecutableNl2SqlWorkbench() {
     }
   };
 
+  const handleGuidedExecutionCompleted = (session: QuerySession) => {
+    const preview = session.preview;
+    const rawResults = session.result;
+    if (
+      !preview ||
+      !rawResults ||
+      !Array.isArray(rawResults.columns) ||
+      !Array.isArray(rawResults.rows) ||
+      typeof rawResults.total !== "number"
+    ) {
+      setActionError(t("nl2sql.clarification.error.execute"));
+      setActionOperationKey((current) => current + 1);
+      return;
+    }
+    const currentIntent = [...(session.intents ?? [])]
+      .reverse()
+      .find((item) => item.version === session.current_intent_version);
+    const generatedSql =
+      session.sql_artifacts?.find((item) => item.id === session.current_sql_artifact_id)?.sql ??
+      preview.sql;
+    const now = new Date().toISOString();
+    clearTrackedJob();
+    setActionError("");
+    setResult({
+      engine: preview.engine ?? engine,
+      engine_meta: preview.engine_meta ?? {},
+      fallback_reason: preview.fallback_reason ?? "",
+      original_question: session.original_question ?? question,
+      rewritten_question: currentIntent?.question_effective ?? preview.rewritten_question ?? question,
+      generated_sql: generatedSql,
+      executable_sql: preview.executable_sql || generatedSql,
+      explanation: preview.note ?? "",
+      safety: {
+        is_safe: preview.is_safe,
+        is_select_only: preview.is_safe,
+        row_limit_applied: preview.row_limit,
+        blocked_reason: "",
+        warnings: [],
+        referenced_tables: selection.tableNames,
+        referenced_columns: Object.values(selection.columns).flat(),
+      },
+      recommendations: preview.recommendations ?? [],
+      repaired_sql: preview.repaired_sql ?? "",
+      optimization_hints: preview.optimization_hints ?? [],
+      results: {
+        columns: rawResults.columns.map(String),
+        rows: rawResults.rows as Array<Record<string, unknown>>,
+        total: rawResults.total,
+      },
+      timing: {
+        created_at: now,
+        started_at: now,
+        finished_at: now,
+        stage_timings: [],
+      },
+    });
+    void refreshHistory().catch(handleHistoryRefreshFailed);
+  };
+
   return (
     <>
       <PageHeader
@@ -1080,6 +1143,42 @@ function ExecutableNl2SqlWorkbench() {
                           className="min-h-36 max-h-[16.625rem] resize-none rounded-md border border-border bg-card px-3 py-2 text-sm leading-6 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40"
                           placeholder={t("nl2sql.question.placeholder")}
                         />
+                        {guidedClarificationOpen ? (
+                          <GuidedClarificationPanel
+                            question={question.trim()}
+                            profileId={profileId}
+                            engine={engine}
+                            allowedObjects={toAllowedObjects(selection)}
+                            onClose={() => setGuidedClarificationOpen(false)}
+                            onCompleted={handleGuidedExecutionCompleted}
+                          />
+                        ) : (
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              size="md"
+                              className="min-h-11"
+                              disabled={!question.trim() || jobActive || !profileSelectionReady}
+                              onClick={() => {
+                                setActionError("");
+                                setGuidedClarificationOpen(true);
+                              }}
+                            >
+                              <Sparkles size={16} aria-hidden="true" />
+                              <span>{t("nl2sql.clarification.start")}</span>
+                            </Button>
+                            <span className="text-xs leading-5 text-muted">
+                              {t("nl2sql.clarification.description")}
+                            </span>
+                          </div>
+                        )}
+                        {!question.trim() && !guidedClarificationOpen ? (
+                          <FieldError
+                            id="nl2sql-guided-query-required"
+                            message={t("nl2sql.clarification.queryRequired")}
+                          />
+                        ) : null}
                         {engine === "select_ai" && (
                           <section className="overflow-hidden rounded-md border border-dashed border-border bg-background">
                             <Button
@@ -1391,6 +1490,7 @@ function ExecutableNl2SqlWorkbench() {
                         setPageError(null);
                         setSchemaDetailError("");
                         setActionError("");
+                        setGuidedClarificationOpen(false);
                       }}
                     >
                       <RotateCcw size={16} aria-hidden="true" />

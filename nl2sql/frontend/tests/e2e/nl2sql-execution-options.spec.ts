@@ -312,6 +312,256 @@ async function expectNoHorizontalOverflow(page: Page) {
     .toBeLessThanOrEqual(2);
 }
 
+const guidedRevision = {
+  id: "ontology-guided-r1",
+  version: 1,
+  status: "published",
+  schema_fingerprint: "schema-fixture",
+  etag: "ontology-etag",
+};
+
+const guidedProfileView = {
+  id: "profile-view-guided",
+  profile_id: "default",
+  ontology_revision_id: guidedRevision.id,
+  node_ids: [],
+  edge_ids: [],
+  allowed_path_ids: [],
+};
+
+const guidedQuestion = {
+  id: "clarification-question-time",
+  ambiguity_id: "ambiguity-time",
+  category: "time_range",
+  prompt_ja: "どの期間を対象にしますか？",
+  reason_ja: "期間が未指定の集計は、期待と異なる範囲を集計する可能性があります。",
+  answer_kind: "single_select",
+  options: [
+    {
+      id: "option-this-month",
+      label_ja: "今月",
+      structured_value: { relative_expression: "今月" },
+      source: "default",
+      evidence_ja: "既定の期間候補",
+    },
+  ],
+  allow_free_text: true,
+  blocking: true,
+};
+
+const guidedRecommendation = {
+  id: "recommendation-guided-1",
+  question_hash: "question-hash-guided",
+  ontology_revision_id: guidedRevision.id,
+  candidates: [
+    {
+      profile_id: "default",
+      profile_name: "既定プロファイル",
+      ontology_revision_id: guidedRevision.id,
+      score: 0.95,
+      matched_scenarios_ja: ["受注分析"],
+      matched_terms: ["受注"],
+      reasons_ja: ["質問が既定プロファイルの受注分析に一致します。"],
+    },
+  ],
+  selected_profile_id: "default",
+  selected_revision_id: guidedRevision.id,
+  expires_at: "2026-09-06T00:10:00.000Z",
+};
+
+function guidedQuerySessionData(
+  state: "needs_answer" | "ready" | "generated" | "done",
+) {
+  const currentIntentVersion = state === "needs_answer" ? 1 : 2;
+  const currentIntent = {
+    version: currentIntentVersion,
+    question_original: "受注件数を表示",
+    question_effective:
+      state === "needs_answer"
+        ? "受注件数を表示"
+        : "受注件数を表示\n確認事項（どの期間を対象にしますか？）：今月",
+    profile_view_id: guidedProfileView.id,
+    ontology_revision_id: guidedRevision.id,
+    entities: [],
+    metrics: [{ id: "intent-metric-orders", name_ja: "受注件数" }],
+    dimensions: [],
+    filters: [],
+    time_range:
+      state === "needs_answer"
+        ? null
+        : { label_ja: "期間", relative_expression: "今月", timezone: "Asia/Tokyo" },
+    granularity: "",
+    sorts: [],
+    limit: 100,
+    candidate_paths: [],
+    selected_path_id: null,
+    ambiguities:
+      state === "needs_answer"
+        ? [
+            {
+              id: "ambiguity-time",
+              code: "time_range_required",
+              message_ja: "集計対象の期間を確認してください。",
+              options: ["今月", "先月"],
+              blocking: true,
+              resolved: false,
+            },
+          ]
+        : [
+            {
+              id: "ambiguity-time",
+              code: "time_range_required",
+              message_ja: "集計対象の期間を確認してください。",
+              options: ["今月", "先月"],
+              resolution: "今月",
+              blocking: true,
+              resolved: true,
+            },
+          ],
+    confidence: state === "needs_answer" ? 0.6 : 0.8,
+  };
+  const session = {
+    id: "guided-session-1",
+    profile_id: "default",
+    profile_view_id: guidedProfileView.id,
+    ontology_revision_id: guidedRevision.id,
+    status:
+      state === "generated"
+        ? "awaiting_sql_confirmation"
+        : state === "done"
+          ? "done"
+          : "awaiting_intent_confirmation",
+    original_question: "受注件数を表示",
+    current_intent_version: currentIntentVersion,
+    intents:
+      state === "needs_answer"
+        ? [currentIntent]
+        : [
+            {
+              ...currentIntent,
+              version: 1,
+              question_effective: "受注件数を表示",
+              time_range: null,
+            },
+            currentIntent,
+          ],
+    sql_artifacts:
+      state === "generated" || state === "done"
+        ? [
+            {
+              id: "artifact-guided-1",
+              intent_version: 2,
+              ontology_revision_id: guidedRevision.id,
+              sql: "SELECT COUNT(*) AS ORDER_COUNT FROM APP.ORDERS",
+              sql_hash: "sql-hash-guided",
+              generation_context_hash: "context-hash-guided",
+              semantic_graph: {
+                dialect: "oracle",
+                ctes: [],
+                tables: [],
+                columns: [],
+                joins: [],
+                filters: [],
+                aggregates: [],
+                having: [],
+                windows: [],
+              },
+              validation_report: {
+                id: "validation-guided-1",
+                is_valid: true,
+                findings: [],
+                intent_coverage: 1,
+                validation_hash: "validation-hash-guided",
+              },
+            },
+          ]
+        : [],
+    current_sql_artifact_id: state === "generated" || state === "done" ? "artifact-guided-1" : null,
+    clarification_mode: "guided",
+    clarification_turns:
+      state === "needs_answer"
+        ? []
+        : [
+            {
+              question: guidedQuestion,
+              answer: {
+                question_id: guidedQuestion.id,
+                selected_option_ids: ["option-this-month"],
+                free_text: "",
+              },
+              intent_version: 2,
+            },
+          ],
+  };
+  return {
+    session,
+    profile_ontology_view: guidedProfileView,
+    ontology_graph: {
+      revision_id: guidedRevision.id,
+      revision: guidedRevision,
+      nodes: [],
+      edges: [],
+    },
+    preview:
+      state === "done"
+        ? {
+            engine: "select_ai",
+            sql: "SELECT COUNT(*) AS ORDER_COUNT FROM APP.ORDERS",
+            executable_sql: "SELECT COUNT(*) AS ORDER_COUNT FROM APP.ORDERS FETCH FIRST 100 ROWS ONLY",
+            is_safe: true,
+            row_limit: 100,
+            note: "SQL を生成しました。",
+            engine_meta: { runtime: "oracle" },
+            fallback_reason: "",
+            recommendations: [],
+            repaired_sql: "",
+            optimization_hints: [],
+          }
+        : null,
+    result:
+      state === "done"
+        ? {
+            columns: ["ORDER_COUNT"],
+            rows: [{ ORDER_COUNT: 42 }],
+            total: 1,
+          }
+        : null,
+    clarification:
+      state === "needs_answer"
+        ? {
+            status: "needs_answer",
+            current_question: guidedQuestion,
+            intent_summary: [{ key: "metrics", label_ja: "指標", value_ja: "受注件数", source: "ontology", confirmed: false }],
+            required_total: 1,
+            required_confirmed: 0,
+            missing_required: ["集計対象の期間を確認してください。"],
+            assumptions: [],
+            turn_count: 0,
+            manual_completion_required: false,
+            can_generate_sql: false,
+            schema_version: "guided_clarification_v1",
+            message_ja: "SQL を正しく生成するため、必要な条件を確認します。",
+          }
+        : {
+            status: "ready_to_confirm",
+            current_question: null,
+            intent_summary: [
+              { key: "metrics", label_ja: "指標", value_ja: "受注件数", source: "ontology", confirmed: false },
+              { key: "time_range", label_ja: "期間", value_ja: "今月", source: "user", confirmed: true },
+            ],
+            required_total: 1,
+            required_confirmed: 1,
+            missing_required: [],
+            assumptions: ["結果は最大 100 件に制限します。"],
+            turn_count: 1,
+            manual_completion_required: false,
+            can_generate_sql: true,
+            schema_version: "guided_clarification_v1",
+            message_ja: "SQL 生成に必要な情報を確認できました。",
+          },
+  };
+}
+
 test("unified execute button runs SQL and renders execution artifacts", async ({ page }) => {
   const api = await mockNl2SqlWorkbenchApi(page);
   await page.goto("/query");
@@ -446,6 +696,120 @@ test("unified execute button runs SQL and renders execution artifacts", async ({
   await expect(page.getByLabel("処理手順を表示")).toBeChecked();
   await expect(page.getByLabel("Show Prompt を表示")).not.toBeChecked();
   await expectNoHorizontalOverflow(page);
+});
+
+test("AI要件確認は質問を補完してSQL生成と実行へ進める", async ({ page }) => {
+  await mockNl2SqlWorkbenchApi(page);
+  const calls: Record<string, Record<string, unknown> | null> = {
+    recommendationPayload: null,
+    confirmationPayload: null,
+    createPayload: null,
+    answerPayload: null,
+    generatePayload: null,
+    confirmPayload: null,
+    executePayload: null,
+  };
+
+  await page.route("**/api/nl2sql/ontology/profile-recommendations", (route) => {
+    calls.recommendationPayload = route.request().postDataJSON() as Record<string, unknown>;
+    return fulfillJson(route, { recommendation: guidedRecommendation });
+  });
+  await page.route(
+    "**/api/nl2sql/ontology/profile-recommendations/recommendation-guided-1/confirm",
+    (route) => {
+      calls.confirmationPayload = route.request().postDataJSON() as Record<string, unknown>;
+      return fulfillJson(route, {
+        recommendation: guidedRecommendation,
+        confirmation_token: "profile-confirmation-token",
+      });
+    }
+  );
+  await page.route("**/api/nl2sql/query-sessions", (route) => {
+    calls.createPayload = route.request().postDataJSON() as Record<string, unknown>;
+    return fulfillJson(route, guidedQuerySessionData("needs_answer"));
+  });
+  await page.route("**/api/nl2sql/query-sessions/guided-session-1/clarification-answers", (route) => {
+    calls.answerPayload = route.request().postDataJSON() as Record<string, unknown>;
+    return fulfillJson(route, guidedQuerySessionData("ready"));
+  });
+  await page.route("**/api/nl2sql/query-sessions/guided-session-1/generate-sql", (route) => {
+    calls.generatePayload = route.request().postDataJSON() as Record<string, unknown>;
+    return fulfillJson(route, guidedQuerySessionData("generated"));
+  });
+  await page.route("**/api/nl2sql/query-sessions/guided-session-1/confirm-sql", (route) => {
+    calls.confirmPayload = route.request().postDataJSON() as Record<string, unknown>;
+    return fulfillJson(route, guidedQuerySessionData("generated"));
+  });
+  await page.route("**/api/nl2sql/query-sessions/guided-session-1/execute", (route) => {
+    calls.executePayload = route.request().postDataJSON() as Record<string, unknown>;
+    return fulfillJson(route, guidedQuerySessionData("done"));
+  });
+
+  await page.goto("/query");
+  await page.locator("#nl2sql-question-input").fill("受注件数を表示");
+  const startButton = page.getByRole("button", { name: "AI要件確認" });
+  await expect(startButton).toBeEnabled();
+  await startButton.click();
+
+  const panel = page.getByTestId("nl2sql-guided-clarification");
+  await expect(panel).toBeVisible();
+  await expect(page.getByRole("heading", { name: "どの期間を対象にしますか？" })).toBeVisible();
+  await page.getByLabel("今月").check();
+  await page.getByRole("button", { name: "回答して次へ" }).click();
+
+  await expect(
+    panel.locator('[data-status-variant="success"]').filter({ hasText: "確認完了" })
+  ).toBeVisible();
+  await expect(panel.getByText("期間")).toBeVisible();
+  await expect(panel.getByText("今月")).toBeVisible();
+  await page.getByRole("button", { name: "この意図でSQLを生成" }).click();
+
+  await expect(panel.getByText("生成したSQL")).toBeVisible();
+  await expect(panel.getByText("SELECT COUNT(*) AS ORDER_COUNT FROM APP.ORDERS")).toBeVisible();
+  await page.getByRole("button", { name: "このSQLを実行" }).click();
+
+  await expect(panel.getByText("確認済みの意図とSQLで検索を実行しました。")).toBeVisible();
+  await expect(page.getByText("42")).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+
+  expect(calls.recommendationPayload).toMatchObject({
+    question: "受注件数を表示",
+    limit: 3,
+  });
+  expect(calls.confirmationPayload).toMatchObject({
+    selected_profile_id: "default",
+    selected_revision_id: guidedRevision.id,
+  });
+  expect(calls.createPayload).toMatchObject({
+    question: "受注件数を表示",
+    profile_id: "default",
+    engine: "select_ai",
+    profile_confirmation_token: "profile-confirmation-token",
+    clarification_mode: "guided",
+  });
+  expect(calls.answerPayload).toMatchObject({
+    base_version: 1,
+    question_id: guidedQuestion.id,
+    selected_option_ids: ["option-this-month"],
+    free_text: "",
+  });
+  expect(calls.generatePayload).toMatchObject({
+    base_version: 2,
+    intent_version: 2,
+    ontology_revision_id: guidedRevision.id,
+    confirm_intent: true,
+  });
+  const expectedBinding = {
+    artifact_id: "artifact-guided-1",
+    ontology_revision_id: guidedRevision.id,
+    intent_version: 2,
+    sql_hash: "sql-hash-guided",
+    validation_hash: "validation-hash-guided",
+    generation_context_hash: "context-hash-guided",
+    confirm_sql: true,
+  };
+  expect(calls.confirmPayload).toMatchObject(expectedBinding);
+  expect(calls.executePayload).toMatchObject(expectedBinding);
 });
 
 test("execution options keep ontology toggle usable at mobile width", async ({ page }) => {

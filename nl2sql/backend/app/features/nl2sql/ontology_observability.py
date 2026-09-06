@@ -57,6 +57,16 @@ ONTOLOGY_CONTEXT_HITS = Histogram(
     "Number of nodes returned by bounded ontology context retrieval.",
     buckets=(0, 1, 2, 4, 8, 12, 16, 24),
 )
+ONTOLOGY_CLARIFICATION_EVENTS = Counter(
+    "nl2sql_ontology_clarification_events_total",
+    "Guided clarification lifecycle events by controlled outcome and category.",
+    ("outcome", "category"),
+)
+ONTOLOGY_CLARIFICATION_TURNS = Histogram(
+    "nl2sql_ontology_clarification_turns",
+    "Number of guided clarification turns when the flow reaches a terminal action.",
+    buckets=(0, 1, 2, 3, 4, 5, 8, 12),
+)
 
 _JOB_TYPES = frozenset({"build", "publish", "profile_sync"})
 _JOB_STATUSES = frozenset({"succeeded", "failed", "cancelled"})
@@ -64,6 +74,10 @@ _SOURCE_FORMATS = frozenset({"pdf", "docx", "txt", "md", "csv", "xlsx", "xls", "
 _SOURCE_STATUSES = frozenset({"extracted", "failed", "duplicate"})
 _RECOMMENDATION_OUTCOMES = frozenset(
     {"with_candidates", "no_candidates", "accepted", "manually_changed"}
+)
+_CLARIFICATION_OUTCOMES = frozenset({"started", "answered", "ready", "cancelled"})
+_CLARIFICATION_CATEGORIES = frozenset(
+    {"business_meaning", "relationship_path", "filter_value", "time_range", "granularity", "output"}
 )
 
 
@@ -130,6 +144,19 @@ def record_profile_recommendation(outcome: str) -> None:
 
 def record_context_hits(count: int) -> None:
     ONTOLOGY_CONTEXT_HITS.observe(max(0, count))
+
+
+def record_clarification(*, outcome: str, category: str = "none", turns: int | None = None) -> None:
+    """質問本文・回答値を含めず、制御済み label の lifecycle だけを記録する。"""
+
+    normalized_outcome = outcome if outcome in _CLARIFICATION_OUTCOMES else "unknown"
+    normalized_category = category if category in _CLARIFICATION_CATEGORIES else "none"
+    ONTOLOGY_CLARIFICATION_EVENTS.labels(
+        outcome=normalized_outcome,
+        category=normalized_category,
+    ).inc()
+    if turns is not None:
+        ONTOLOGY_CLARIFICATION_TURNS.observe(max(0, turns))
 
 
 @contextmanager
