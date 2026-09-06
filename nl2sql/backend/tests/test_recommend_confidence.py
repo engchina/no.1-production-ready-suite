@@ -18,6 +18,9 @@ from app.features.nl2sql.models import (
     ClassifierTrainRequest,
     Nl2SqlProfile,
     ProfileRecommendationRequest,
+    SchemaCatalog,
+    SchemaColumn,
+    SchemaTable,
 )
 from app.features.nl2sql.service import Nl2SqlService
 from app.features.nl2sql.store import MemoryNl2SqlStore
@@ -60,6 +63,41 @@ class _FakeEmbeddingClient:
             vector[1 if ("入金" in text or "支払" in text) else 2] = 1.0
             vectors.append(vector)
         return vectors
+
+
+def _employee_project_catalog() -> SchemaCatalog:
+    return SchemaCatalog(
+        refreshed_at="2026-09-06T00:00:00.000Z",
+        current_owner="ADMIN",
+        tables=[
+            SchemaTable(
+                owner="ADMIN",
+                table_name="EMPLOYEE",
+                logical_name="従業員情報",
+                comment="従業員情報",
+                columns=[
+                    SchemaColumn(
+                        column_name="EMPLOYEE_NAME",
+                        logical_name="従業員名",
+                        data_type="VARCHAR2",
+                        comment="従業員名",
+                    )
+                ],
+            ),
+            SchemaTable(
+                owner="ADMIN",
+                table_name="DEPARTMENT",
+                logical_name="部署情報",
+                comment="部署情報",
+            ),
+            SchemaTable(
+                owner="ADMIN",
+                table_name="PROJECT",
+                logical_name="プロジェクト情報",
+                comment="プロジェクト情報",
+            ),
+        ],
+    )
 
 
 def test_relative_confidence_math() -> None:
@@ -114,6 +152,52 @@ def test_deterministic_recommend_confident_for_matching_question() -> None:
     # 候補スコアは 0..1 の相対シェア（「スコア X%」が 0-100% に収まる）
     assert all(0.0 <= c.score <= 1.0 for c in recommendation.candidates)
     assert recommendation.recommendation_source == "deterministic"
+
+
+def test_deterministic_recommend_prefers_narrow_scope_over_all_scope_for_table_name() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service._catalog = _employee_project_catalog()  # noqa: SLF001 - recommendation fixture
+    wide_scope = ["ADMIN.EMPLOYEE", "ADMIN.DEPARTMENT", "ADMIN.PROJECT"]
+    service.create_profile(
+        Nl2SqlProfile(
+            id="all",
+            name="ALL",
+            category="ALL",
+            allowed_tables=wide_scope,
+            object_scope_version=2,
+        )
+    )
+    service.create_profile(
+        Nl2SqlProfile(
+            id="default",
+            name="既定プロファイル",
+            category="既定",
+            allowed_tables=wide_scope,
+            object_scope_version=2,
+        )
+    )
+    service.create_profile(
+        Nl2SqlProfile(
+            id="hr",
+            name="人事プロファイル",
+            category="人事",
+            allowed_tables=["ADMIN.EMPLOYEE"],
+            object_scope_version=2,
+        )
+    )
+
+    recommendation = service.recommend_profile(
+        ProfileRecommendationRequest(
+            question='対象テーブル："従業員情報"\n抽出項目：\n抽出条件：',
+            current_profile_id="all",
+        )
+    )
+
+    assert recommendation.recommended_profile_id == "hr"
+    assert recommendation.confidence >= 0.3
+    scores = {candidate.profile_id: candidate.score for candidate in recommendation.candidates}
+    assert scores["hr"] > scores["all"]
+    assert scores["hr"] > scores["default"]
 
 
 def test_current_profile_bias_does_not_affect_deterministic_confidence() -> None:
@@ -173,6 +257,57 @@ def test_few_shot_partial_overlap_contributes_to_deterministic_score() -> None:
     )
     assert payment.score == 1.0
     assert {"入金", "未入"} & set(payment.matched_terms)
+
+
+def test_template_labels_only_do_not_create_few_shot_overlap_score() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service.create_profile(
+        Nl2SqlProfile(
+            id="template",
+            name="テンプレ学習",
+            few_shot_examples=[
+                {
+                    "question": "対象テーブル：\n抽出項目：\n抽出条件：",
+                    "sql": "SELECT * FROM CUSTOMERS",
+                }
+            ],
+        )
+    )
+
+    recommendation = service.recommend_profile(
+        ProfileRecommendationRequest(question="対象テーブル：\n抽出項目：\n抽出条件：")
+    )
+
+    assert recommendation.confidence == 0.0
+    template = next(
+        candidate for candidate in recommendation.candidates if candidate.profile_id == "template"
+    )
+    assert template.score == 0.0
+    assert template.matched_terms == []
+
+
+def test_empty_v2_scope_profile_recommendation_keeps_allowed_objects_empty() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service._catalog = _employee_project_catalog()  # noqa: SLF001 - recommendation fixture
+    service.create_profile(
+        Nl2SqlProfile(
+            id="empty",
+            name="空スコープ",
+            category="検証",
+            allowed_tables=[],
+            allowed_views=[],
+            glossary={"空スコープ": "EMPTY_SCOPE"},
+            object_scope_version=2,
+        )
+    )
+
+    recommendation = service.recommend_profile(
+        ProfileRecommendationRequest(question="空スコープの profile を確認したい")
+    )
+
+    assert recommendation.recommended_profile_id == "empty"
+    assert recommendation.recommended_allowed_objects.table_names == []
+    assert recommendation.recommended_allowed_objects.columns == {}
 
 
 def test_classifier_confidence_uses_probability_not_divided_by_six() -> None:

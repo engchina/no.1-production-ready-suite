@@ -662,9 +662,18 @@ _PROFILE_RECOMMENDATION_STOPWORDS = {
     "あり",
     "いた",
     "一覧",
+    "項目",
+    "条件",
     "確認",
     "検索",
     "する",
+    "対象",
+    "対象表",
+    "対象テーブル",
+    "抽出",
+    "抽出項目",
+    "抽出条件",
+    "テーブル",
     "たい",
     "です",
     "ます",
@@ -672,6 +681,10 @@ _PROFILE_RECOMMENDATION_STOPWORDS = {
     "プロファイル",
     "profile",
 }
+_PROFILE_RECOMMENDATION_TEMPLATE_LABEL_RE = re.compile(
+    r"(?:対象\s*テーブル|対象\s*表|抽出\s*項目|抽出\s*条件)\s*[：:]*",
+    flags=re.I,
+)
 _SAMPLE_OBJECTS = [
     "DEPARTMENT",
     "EMPLOYEE",
@@ -2270,8 +2283,13 @@ def _similarity_tokens(value: str) -> set[str]:
     return {token for token in tokens if token.strip()}
 
 
-def _profile_recommendation_tokens(value: str) -> set[str]:
+def _strip_profile_recommendation_template_labels(value: str) -> str:
     normalized = unicodedata.normalize("NFKC", str(value or ""))
+    return _PROFILE_RECOMMENDATION_TEMPLATE_LABEL_RE.sub(" ", normalized)
+
+
+def _profile_recommendation_tokens(value: str) -> set[str]:
+    normalized = _strip_profile_recommendation_template_labels(value)
     return {
         token
         for token in _similarity_tokens(normalized)
@@ -16186,9 +16204,7 @@ class Nl2SqlService:
         candidates: list[ProfileRecommendationCandidate],
     ) -> ProfileRecommendationData:
         confidence = round(confidence, 3)
-        allowed_tables = self.profile_allowed_object_names(profile) or [
-            table.table_name for table in self._catalog.tables
-        ]
+        allowed_tables = self.profile_allowed_object_names(profile)
         reason_terms = "、".join(matched_terms[:4]) if matched_terms else profile.name
         return ProfileRecommendationData(
             recommended_profile_id=profile.id,
@@ -16230,7 +16246,8 @@ class Nl2SqlService:
             add_match(token.strip(), 0.6)
         for example in profile.few_shot_examples:
             example_question = str(example.get("question", "")).strip()
-            if add_match(example_question, 1.2):
+            example_match_text = _strip_profile_recommendation_template_labels(example_question)
+            if add_match(example_match_text, 1.2):
                 continue
             overlap = sorted(question_tokens & _profile_recommendation_tokens(example_question))
             if overlap:
@@ -16238,18 +16255,24 @@ class Nl2SqlService:
                 for token in overlap[:3]:
                     remember_match(token)
 
-        allowed_tables = {
-            _normalize_identifier(table) for table in self.profile_allowed_object_names(profile)
-        }
+        allowed_table_names = self.profile_allowed_object_names(profile)
+        if not allowed_table_names:
+            return score, matched_terms
+        allowed_tables = {_normalize_identifier(table) for table in allowed_table_names}
+        schema_match_weight = 1.0 / math.pow(len(allowed_tables), 1.5)
         for table in self._catalog.tables:
-            if allowed_tables and table.table_name not in allowed_tables:
+            table_names = {
+                _normalize_identifier(table.table_name),
+                _normalize_identifier(self._catalog_qualified_name(table)),
+            }
+            if table_names.isdisjoint(allowed_tables):
                 continue
-            add_match(table.table_name, 1.6)
-            add_match(table.logical_name, 1.6)
-            add_match(table.comment, 0.8)
+            add_match(table.table_name, 1.8 * schema_match_weight)
+            add_match(table.logical_name, 1.8 * schema_match_weight)
+            add_match(table.comment, 0.8 * schema_match_weight)
             for column in table.columns:
-                add_match(column.column_name, 0.9)
-                add_match(column.logical_name, 0.9)
+                add_match(column.column_name, 0.9 * schema_match_weight)
+                add_match(column.logical_name, 0.9 * schema_match_weight)
         return score, matched_terms
 
     @staticmethod

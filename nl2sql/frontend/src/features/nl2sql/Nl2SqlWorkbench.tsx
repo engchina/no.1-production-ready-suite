@@ -85,7 +85,6 @@ import {
   isSchemaEmptyError,
   leadingNewlinePrefix,
   toAllowedObjects,
-  toSchemaSelection,
   type SchemaSelection,
 } from "./workbenchState";
 
@@ -94,6 +93,10 @@ import {
 function lastMatchingHistory(history: HistoryItem[], result: Nl2SqlResult | null) {
   if (!result?.history_id) return null;
   return history.find((item) => item.id === result.history_id) ?? null;
+}
+
+function profileRecommendationSignature(question: string, profileId: string) {
+  return `${question}\u0000${profileId}`;
 }
 
 function goodFeedbackSimilarHistory(items: SimilarHistoryItem[]): SimilarHistoryItem[] {
@@ -201,6 +204,7 @@ function ExecutableNl2SqlWorkbench() {
   const [guidedClarificationOpen, setGuidedClarificationOpen] = useState(false);
   const questionTextareaRef = useRef<HTMLTextAreaElement>(null);
   const schemaDetailRequests = useRef(new Set<string>());
+  const suppressedRecommendationSignaturesRef = useRef(new Set<string>());
 
   useLayoutEffect(() => {
     const textarea = questionTextareaRef.current;
@@ -225,6 +229,28 @@ function ExecutableNl2SqlWorkbench() {
   const noProfiles = profilesQuery.isSuccess && profiles.length === 0;
   const selectedProfileQuery = useProfileUsageContext(profileId);
   const selectedProfile = selectedProfileQuery.data?.profile ?? null;
+  const profileOptions = useMemo(() => {
+    if (!selectedProfile || profiles.some((profile) => profile.id === selectedProfile.id)) {
+      return profiles;
+    }
+    return [
+      ...profiles,
+      {
+        id: selectedProfile.id,
+        name: selectedProfile.name,
+        category: selectedProfile.category,
+        description: selectedProfile.description,
+        archived: selectedProfile.archived,
+        allowed_table_count: selectedProfile.allowed_tables.length,
+        allowed_view_count: selectedProfile.allowed_views.length,
+        glossary_count: 0,
+        few_shot_count: 0,
+        version: selectedProfile.version,
+        etag: selectedProfile.etag,
+        updated_at: selectedProfile.updated_at,
+      },
+    ];
+  }, [profiles, selectedProfile]);
   const canManageProfiles = hasPermission(CAPABILITY_PERMISSIONS.profilesManage);
   const canRefreshSchema = hasPermission(CAPABILITY_PERMISSIONS.schemaRefresh);
   const canImportSampleData = hasPermission(CAPABILITY_PERMISSIONS.sampleDataManage);
@@ -547,11 +573,17 @@ function ExecutableNl2SqlWorkbench() {
     setAutoDetectLowConfidence(false);
     if (trimmed.length < 4 || profiles.length === 0) {
       setRecommendation(null);
+      suppressedRecommendationSignaturesRef.current.clear();
+      return undefined;
+    }
+    const signature = profileRecommendationSignature(trimmed, profileId);
+    if (suppressedRecommendationSignaturesRef.current.delete(signature)) {
       return undefined;
     }
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
       if (activeRef.current) return;
+      if (suppressedRecommendationSignaturesRef.current.delete(signature)) return;
       void apiPost<ProfileRecommendationData>("/api/nl2sql/recommend-profile", {
         question: trimmed,
         current_profile_id: profileId || null,
@@ -685,9 +717,15 @@ function ExecutableNl2SqlWorkbench() {
   const applyRecommendation = () => {
     if (!recommendation) return;
     setAutoDetectLowConfidence(false);
+    const trimmed = question.trim();
+    if (trimmed) {
+      suppressedRecommendationSignaturesRef.current.add(
+        profileRecommendationSignature(trimmed, recommendation.recommended_profile_id)
+      );
+    }
     setProfileId(recommendation.recommended_profile_id);
-    setSelection(toSchemaSelection(recommendation.recommended_allowed_objects));
-    setPageError(null);
+    setSelection(emptySelection());
+    setActionError("");
     setSchemaDetailError("");
   };
 
@@ -695,6 +733,9 @@ function ExecutableNl2SqlWorkbench() {
   const detectProfile = useCallback(async () => {
     const trimmed = question.trim();
     if (!trimmed || active || !profileSelectionReady) return;
+    suppressedRecommendationSignaturesRef.current.add(
+      profileRecommendationSignature(trimmed, profileId)
+    );
     setDetecting(true);
     try {
       const data = await apiPost<ProfileRecommendationData>("/api/nl2sql/recommend-profile", {
@@ -702,8 +743,6 @@ function ExecutableNl2SqlWorkbench() {
         current_profile_id: profileId || null,
       });
       setRecommendation(data);
-      setPageError(null);
-      setSchemaDetailError("");
       const recommendedProfileLabel = profileDisplayLabel({
         name: data.recommended_profile_name,
         category: data.recommended_profile_category,
@@ -717,8 +756,27 @@ function ExecutableNl2SqlWorkbench() {
         return;
       }
       setAutoDetectLowConfidence(false);
+      if (data.recommended_profile_id === profileId) {
+        const sourceLabel =
+          data.recommendation_source === "classifier"
+            ? t("nl2sql.recommend.sourceClassifier")
+            : t("nl2sql.recommend.sourceDeterministic");
+        toast.info(
+          t("nl2sql.recommend.autoDetectAlreadySelected", {
+            name: recommendedProfileLabel,
+            source: sourceLabel,
+            confidence: Math.round(data.confidence * 100),
+          })
+        );
+        return;
+      }
+      suppressedRecommendationSignaturesRef.current.add(
+        profileRecommendationSignature(trimmed, data.recommended_profile_id)
+      );
       setProfileId(data.recommended_profile_id);
-      setSelection(toSchemaSelection(data.recommended_allowed_objects));
+      setSelection(emptySelection());
+      setActionError("");
+      setSchemaDetailError("");
       const sourceLabel =
         data.recommendation_source === "classifier"
           ? t("nl2sql.recommend.sourceClassifier")
@@ -990,6 +1048,8 @@ function ExecutableNl2SqlWorkbench() {
                       value={profileId}
                       onChange={(event) => {
                         setProfileId(event.currentTarget.value);
+                        suppressedRecommendationSignaturesRef.current.clear();
+                        setSelection(emptySelection());
                         setAutoDetectLowConfidence(false);
                         setActionError("");
                         setPageError(null);
@@ -1001,7 +1061,7 @@ function ExecutableNl2SqlWorkbench() {
                       {profilesQuery.isPending && (
                         <option value={profileId}>{t("profiles.summary.loading")}</option>
                       )}
-                      {profiles.map((profile) => (
+                      {profileOptions.map((profile) => (
                         <option key={profile.id} value={profile.id}>
                           {profileDisplayLabel(profile)}
                         </option>

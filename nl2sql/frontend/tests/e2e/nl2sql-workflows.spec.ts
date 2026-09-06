@@ -3436,7 +3436,7 @@ test("質問から業務プロファイルを自動判定して選択できる",
   await page.unroute("**/api/nl2sql/profiles/search?*");
   await page.route("**/api/nl2sql/profiles/search?*", (route) =>
     fulfillJson(route, {
-      items: [profiles[0], paymentProfile].map((profile) => ({
+      items: [profiles[0]].map((profile) => ({
         id: profile.id,
         name: profile.name,
         category: profile.category,
@@ -3451,14 +3451,36 @@ test("質問から業務プロファイルを自動判定して選択できる",
         updated_at: "2026-06-21T10:00:00.000Z",
       })),
       next_cursor: null,
-      total: 2,
+      total: 1,
       change_token: 1,
     })
   );
+  await page.unroute("**/api/nl2sql/profiles/*/usage-context");
+  await page.route("**/api/nl2sql/profiles/*/usage-context", (route) => {
+    const profileId = decodeURIComponent(
+      new URL(route.request().url()).pathname.split("/").at(-2) ?? ""
+    );
+    const profile = profileId === "payment" ? paymentProfile : profiles[0];
+    return fulfillJson(route, {
+      id: profile.id,
+      name: profile.name,
+      category: profile.category,
+      description: profile.description,
+      allowed_tables: profile.allowed_tables,
+      allowed_views: profile.allowed_views,
+      archived: profile.archived,
+      object_scope_version: profileId === "payment" ? 2 : 1,
+      version: 1,
+      etag: `etag-${profile.id}`,
+      updated_at: "2026-06-21T10:00:00.000Z",
+    });
+  });
   await page.route("**/api/nl2sql/profiles/payment", (route) => fulfillJson(route, paymentProfile));
+  let recommendRequests = 0;
   await page.unroute("**/api/nl2sql/recommend-profile");
-  await page.route("**/api/nl2sql/recommend-profile", (route) =>
-    fulfillJson(route, {
+  await page.route("**/api/nl2sql/recommend-profile", (route) => {
+    recommendRequests += 1;
+    return fulfillJson(route, {
       recommended_profile_id: "payment",
       recommended_profile_name: "入金管理",
       recommended_profile_category: "入金管理",
@@ -3468,8 +3490,8 @@ test("質問から業務プロファイルを自動判定して選択できる",
       recommended_allowed_objects: { table_names: ["INVOICES"], columns: {} },
       candidates: [],
       recommendation_source: "classifier",
-    })
-  );
+    });
+  });
 
   await page.goto("/query");
   const profileSelect = page.locator("#nl2sql-profile-select");
@@ -3478,11 +3500,137 @@ test("質問から業務プロファイルを自動判定して選択できる",
   const detect = page.getByRole("button", { name: "プロファイルを自動判定" });
   await expect(detect).toBeDisabled(); // 質問未入力では押せない
   await nl2sqlQuestionInput(page).fill("未入金の請求を確認したい");
-  await expect(detect).toBeEnabled();
   await detect.click();
 
   await expect(profileSelect).toHaveValue("payment");
+  await expect(profileSelect.locator('option[value="payment"]')).toHaveText("入金管理（入金管理）");
+  await expect(page.getByText("選択中の表 0")).toBeVisible();
   await expect(page.getByText(/入金管理（入金管理） を選択しました/)).toBeVisible();
+  await page.waitForTimeout(700);
+  expect(recommendRequests).toBe(1);
+});
+
+test("業務プロファイル自動判定が現在の profile と同じなら selection を変更しない", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  await page.unroute("**/api/nl2sql/recommend-profile");
+  await page.route("**/api/nl2sql/recommend-profile", (route) =>
+    fulfillJson(route, {
+      recommended_profile_id: "default",
+      recommended_profile_name: "既定プロファイル",
+      recommended_profile_category: "既定プロファイル",
+      confidence: 0.91,
+      reason: "請求関連の語彙に一致しました。",
+      rewritten_question: "",
+      recommended_allowed_objects: { table_names: ["INVOICES"], columns: {} },
+      candidates: [],
+      recommendation_source: "deterministic",
+    })
+  );
+
+  await page.goto("/query");
+  await expect(page.locator("#nl2sql-profile-select")).toHaveValue("default");
+  await expect(page.getByText("選択中の表 0")).toBeVisible();
+
+  await nl2sqlQuestionInput(page).fill("請求金額を一覧で確認したい");
+  await page.getByRole("button", { name: "プロファイルを自動判定" }).click();
+
+  await expect(page.locator("#nl2sql-profile-select")).toHaveValue("default");
+  await expect(page.getByText("選択中の表 0")).toBeVisible();
+  await expect(page.getByText(/既定プロファイル（既定プロファイル） は既に選択されています/)).toBeVisible();
+  await expect(page.getByText(/既定プロファイル（既定プロファイル） を選択しました/)).toHaveCount(0);
+});
+
+test("推薦適用後に手動で profile を切り替えると古い選択表を送信しない", async ({ page }) => {
+  const api = await mockNl2SqlApi(page);
+  const hrProfile = {
+    ...profiles[0],
+    id: "hr",
+    name: "人事プロファイル",
+    category: "人事",
+    allowed_tables: ["APP.EMPLOYEE"],
+    allowed_views: [],
+  };
+  const projectProfile = {
+    ...profiles[0],
+    id: "pm",
+    name: "プロジェクト管理",
+    category: "案件",
+    allowed_tables: ["APP.PROJECT"],
+    allowed_views: [],
+  };
+  const customProfiles = [profiles[0], hrProfile, projectProfile];
+  await page.unroute("**/api/nl2sql/profiles/search?*");
+  await page.route("**/api/nl2sql/profiles/search?*", (route) =>
+    fulfillJson(route, {
+      items: customProfiles.map((profile) => ({
+        id: profile.id,
+        name: profile.name,
+        category: profile.category,
+        description: profile.description,
+        archived: false,
+        allowed_table_count: profile.allowed_tables.length,
+        allowed_view_count: profile.allowed_views.length,
+        glossary_count: Object.keys(profile.glossary).length,
+        few_shot_count: profile.few_shot_examples.length,
+        version: 1,
+        etag: `etag-${profile.id}`,
+        updated_at: "2026-06-21T10:00:00.000Z",
+      })),
+      next_cursor: null,
+      total: customProfiles.length,
+      change_token: 1,
+    })
+  );
+  await page.unroute("**/api/nl2sql/profiles/*/usage-context");
+  await page.route("**/api/nl2sql/profiles/*/usage-context", (route) => {
+    const profileId = decodeURIComponent(
+      new URL(route.request().url()).pathname.split("/").at(-2) ?? ""
+    );
+    const profile = customProfiles.find((item) => item.id === profileId) ?? profiles[0];
+    return fulfillJson(route, {
+      id: profile.id,
+      name: profile.name,
+      category: profile.category,
+      description: profile.description,
+      allowed_tables: profile.allowed_tables,
+      allowed_views: profile.allowed_views,
+      archived: profile.archived,
+      object_scope_version: 2,
+      version: 1,
+      etag: `etag-${profile.id}`,
+      updated_at: "2026-06-21T10:00:00.000Z",
+    });
+  });
+  await page.unroute("**/api/nl2sql/recommend-profile");
+  await page.route("**/api/nl2sql/recommend-profile", (route) =>
+    fulfillJson(route, {
+      recommended_profile_id: "hr",
+      recommended_profile_name: "人事プロファイル",
+      recommended_profile_category: "人事",
+      confidence: 0.84,
+      reason: "従業員情報に一致しました。",
+      rewritten_question: "",
+      recommended_allowed_objects: { table_names: ["APP.EMPLOYEE"], columns: {} },
+      candidates: [],
+      recommendation_source: "deterministic",
+    })
+  );
+
+  await page.goto("/query");
+  const profileSelect = page.locator("#nl2sql-profile-select");
+  await nl2sqlQuestionInput(page).fill("従業員情報の一覧");
+  await page.getByRole("button", { name: "プロファイルを自動判定" }).click();
+  await expect(profileSelect).toHaveValue("hr");
+  await expect(page.getByText("選択中の表 0")).toBeVisible();
+
+  await profileSelect.selectOption("pm");
+  await expect(profileSelect).toHaveValue("pm");
+  await expect(page.getByText("選択中の表 0")).toBeVisible();
+  await nl2sqlQuestionInput(page).fill("プロジェクト情報の一覧");
+  await page.getByRole("button", { name: "検索を実行" }).click();
+
+  await expect.poll(() => api.jobPayload?.profile_id).toBe("pm");
+  expect(api.jobPayload?.allowed_objects).toEqual({ table_names: [], columns: {} });
 });
 
 test("低信頼度の業務プロファイル自動判定は選択を変更しない", async ({ page }) => {
