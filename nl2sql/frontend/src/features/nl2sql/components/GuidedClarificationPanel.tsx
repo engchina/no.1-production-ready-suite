@@ -318,13 +318,35 @@ export function GuidedClarificationPanel({
     }
   };
 
+  const renderCloseButton = (size: "md" | "lg" = "md") => (
+    <Button
+      type="button"
+      variant="ghost"
+      size={size}
+      className="min-h-11"
+      loading={busyAction === "cancel"}
+      disabled={Boolean(busyAction && busyAction !== "cancel")}
+      onClick={() => void closePanel()}
+    >
+      <X size={16} aria-hidden="true" />
+      {t("nl2sql.clarification.close")}
+    </Button>
+  );
+
+  const hasStepAction = Boolean(
+    (recommendation && !session)
+      || (currentQuestion && !clarification?.manual_completion_required)
+      || clarification?.manual_completion_required
+      || clarification?.can_generate_sql
+  );
+
   return (
     <section
       aria-labelledby="nl2sql-guided-clarification-title"
       className="grid gap-4 rounded-md border border-primary/30 bg-card p-4"
       data-testid="nl2sql-guided-clarification"
     >
-      <div className="flex flex-wrap items-start justify-between gap-3">
+      <div className="flex flex-wrap items-start gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <Sparkles size={18} className="text-primary" aria-hidden="true" />
@@ -342,18 +364,6 @@ export function GuidedClarificationPanel({
             {clarification?.message_ja || t("nl2sql.clarification.description")}
           </p>
         </div>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className="min-h-11"
-          loading={busyAction === "cancel"}
-          disabled={Boolean(busyAction && busyAction !== "cancel")}
-          onClick={() => void closePanel()}
-        >
-          <X size={16} aria-hidden="true" />
-          {t("nl2sql.clarification.close")}
-        </Button>
       </div>
 
       <div aria-live="polite" aria-atomic="true" className="sr-only">
@@ -418,7 +428,7 @@ export function GuidedClarificationPanel({
               </label>
             ))}
           </div>
-          <div className="flex justify-end">
+          <div className="flex flex-wrap justify-end gap-2">
             <Button
               type="button"
               variant="primary"
@@ -429,6 +439,7 @@ export function GuidedClarificationPanel({
             >
               {t("nl2sql.clarification.confirmProfile")}
             </Button>
+            {renderCloseButton()}
           </div>
         </fieldset>
       ) : null}
@@ -531,6 +542,7 @@ export function GuidedClarificationPanel({
             >
               {t("nl2sql.clarification.answerNext")}
             </Button>
+            {renderCloseButton()}
           </div>
         </fieldset>
       ) : null}
@@ -607,7 +619,7 @@ export function GuidedClarificationPanel({
               </fieldset>
             );
           })}
-          <div className="flex justify-end">
+          <div className="flex flex-wrap justify-end gap-2">
             <Button
               type="button"
               variant="primary"
@@ -619,6 +631,7 @@ export function GuidedClarificationPanel({
             >
               {t("nl2sql.clarification.confirmRemaining")}
             </Button>
+            {renderCloseButton()}
           </div>
         </section>
       ) : null}
@@ -666,16 +679,26 @@ export function GuidedClarificationPanel({
             <CheckCircle2 size={16} aria-hidden="true" />
             {t("nl2sql.clarification.ready")}
           </span>
-          <Button
-            type="button"
-            variant="primary"
-            size="lg"
-            disabled={Boolean(busyAction)}
-            onClick={applyQuestion}
-          >
-            <Sparkles size={16} aria-hidden="true" />
-            {t("nl2sql.clarification.apply")}
-          </Button>
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <Button
+              type="button"
+              variant="primary"
+              size="lg"
+              className="min-h-11"
+              disabled={Boolean(busyAction)}
+              onClick={applyQuestion}
+            >
+              <Sparkles size={16} aria-hidden="true" />
+              {t("nl2sql.clarification.apply")}
+            </Button>
+            {renderCloseButton("lg")}
+          </div>
+        </div>
+      ) : null}
+
+      {!hasStepAction ? (
+        <div className="flex flex-wrap justify-end border-t border-border pt-4">
+          {renderCloseButton()}
         </div>
       ) : null}
     </section>

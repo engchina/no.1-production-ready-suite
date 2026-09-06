@@ -752,7 +752,7 @@ const nl2sqlJa = {
   "nl2sql.clarification.start": "AI要件確認",
   "nl2sql.clarification.title": "AI要件確認",
   "nl2sql.clarification.description": "対話しながら検索条件を整理します。",
-  "nl2sql.clarification.close": "確認を終了",
+  "nl2sql.clarification.close": "確認を中止して閉じる",
   "nl2sql.clarification.loading.recommendProfile": "質問に合う業務プロファイルを確認しています",
   "nl2sql.clarification.loading.confirmProfile": "利用する業務プロファイルを確定しています",
   "nl2sql.clarification.loading.prepareQuestions": "検索条件の候補を整理しています",
@@ -791,7 +791,8 @@ const nl2sqlJa = {
   "nl2sql.clarification.error.answer": "回答を反映できませんでした。",
   "nl2sql.clarification.error.apply":
     "確認内容からクエリを作成できませんでした。AI要件確認をやり直してください。",
-  "nl2sql.clarification.error.cancel": "AI 要件確認を終了できませんでした。再度お試しください。",
+  "nl2sql.clarification.error.cancel":
+    "AI 要件確認を中止して閉じられませんでした。再度お試しください。",
   "nl2sql.questionText.expand": "全文表示",
   "nl2sql.questionText.collapse": "閉じる",
   "nl2sql.sqlRunner.description": "ログインユーザーの DeepSec context で SELECT/WITH のみ実行できます。",

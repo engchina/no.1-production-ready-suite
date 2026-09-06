@@ -38,6 +38,24 @@ CLARIFICATION_SCHEMA_VERSION = "guided_clarification_v1"
 CLARIFICATION_PROMPT_VERSION = "deterministic_first_v2"
 MAX_GUIDED_TURNS = 4
 
+_REQUEST_ACTION_MARKERS = (
+    "表示",
+    "検索",
+    "集計",
+    "確認",
+    "取得",
+    "抽出",
+    "一覧",
+    "教えて",
+    "求め",
+    "知り",
+    "比較",
+    "並べ",
+    "ランキング",
+    "計算",
+)
+_REQUEST_STEMS = ("表示", "検索", "集計", "確認", "取得", "抽出", "比較", "計算")
+
 _PRIORITY: dict[ClarificationCategory, int] = {
     ClarificationCategory.BUSINESS_MEANING: 0,
     ClarificationCategory.RELATIONSHIP_PATH: 1,
@@ -142,8 +160,11 @@ def apply_clarification_answer(
 ) -> QuestionIntentGraph:
     """現在表示中の question に対する検証済み回答だけを intent へ反映する。"""
 
-    selected = [item for item in question.options if item.id in answer.selected_option_ids]
-    unknown_ids = set(answer.selected_option_ids) - {item.id for item in question.options}
+    option_by_id = {item.id: item for item in question.options}
+    selected = [
+        option_by_id[item_id] for item_id in answer.selected_option_ids if item_id in option_by_id
+    ]
+    unknown_ids = set(answer.selected_option_ids) - option_by_id.keys()
     if unknown_ids:
         raise ValueError("表示されていない選択肢は回答に利用できません。")
     free_text = answer.free_text.strip()
@@ -204,11 +225,79 @@ def apply_clarification_answer(
         updated.granularity = "" if value in {None, "none"} else str(value)
 
     if resolution:
-        updated.question_effective = (
-            f"{updated.question_effective}\n確認事項（{question.prompt_ja}）：{resolution}"
+        updated.question_effective = _render_clarified_question(
+            updated.question_effective,
+            question.category,
+            resolution,
         )
     updated.confidence = min(1.0, updated.confidence + 0.1)
     return updated
+
+
+def _render_clarified_question(
+    current_question: str,
+    category: ClarificationCategory,
+    resolution: str,
+) -> str:
+    """確認回答を、単独で再検索できる自然な要求文へ反映する。"""
+
+    base = _clean_question_text(current_question)
+    answer = resolution.strip().rstrip("。！？!?")
+    if not answer:
+        return _request_sentence(base)
+
+    is_fragment = not any(marker in base for marker in _REQUEST_ACTION_MARKERS)
+    if category == ClarificationCategory.OUTPUT and is_fragment:
+        return f"{base}について、検索結果には{answer}を表示してください。"
+
+    request = _request_sentence(base)
+    if category == ClarificationCategory.TIME_RANGE:
+        return f"{answer}を対象に、{request}"
+
+    detail = {
+        ClarificationCategory.BUSINESS_MEANING: f"対象とする業務上の意味は{answer}です。",
+        ClarificationCategory.RELATIONSHIP_PATH: (
+            f"業務対象の関連付けには{answer}を使用してください。"
+        ),
+        ClarificationCategory.FILTER_VALUE: f"絞り込み条件は{answer}です。",
+        ClarificationCategory.GRANULARITY: (
+            "期間全体を一つに集計してください。"
+            if answer == "集計のみ"
+            else f"集計単位は{answer}です。"
+        ),
+        ClarificationCategory.OUTPUT: f"検索結果には{answer}を表示してください。",
+    }.get(category, "")
+    return f"{request}{detail}"
+
+
+def _clean_question_text(value: str) -> str:
+    """旧形式の確認メモと、入力全体を囲む引用符を除去する。"""
+
+    lines = [
+        line.strip()
+        for line in value.splitlines()
+        if line.strip() and not line.strip().startswith("確認事項（")
+    ]
+    cleaned = " ".join(lines).strip()
+    quote_pairs = (('"', '"'), ("'", "'"), ("“", "”"), ("「", "」"))
+    for opening, closing in quote_pairs:
+        if len(cleaned) >= 2 and cleaned.startswith(opening) and cleaned.endswith(closing):
+            cleaned = cleaned[len(opening) : -len(closing)].strip()
+            break
+    return cleaned.rstrip("。！？!?")
+
+
+def _request_sentence(value: str) -> str:
+    """元入力を、確認結果と連結できる完結した依頼文へ整える。"""
+
+    question = value.strip().rstrip("。！？!?")
+    if question.endswith(("ください", "下さい", "したい", "ほしい")):
+        return f"{question}。"
+    if question.endswith("する"):
+        return f"{question[:-2]}してください。"
+    if question.endswith(_REQUEST_STEMS):
+        return f"{question}してください。"
+    return f"{question}を表示してください。"
 
 
 def merge_free_text_reinterpretation(

@@ -377,7 +377,7 @@ function guidedQuerySessionData(
     question_effective:
       state === "needs_answer"
         ? "受注件数を表示"
-        : "受注件数を表示\n確認事項（どの期間を対象にしますか？）：今月",
+        : "今月を対象に、受注件数を表示してください。",
     profile_view_id: guidedProfileView.id,
     ontology_revision_id: guidedRevision.id,
     entities: [],
@@ -763,8 +763,7 @@ test("AI要件確認は確認内容をクエリへ反映し、通常の検索実
   await page.getByRole("button", { name: "確認内容をクエリに反映" }).click();
 
   const questionInput = page.locator("#nl2sql-question-input");
-  const clarifiedQuestion =
-    "受注件数を表示\n確認事項（どの期間を対象にしますか？）：今月";
+  const clarifiedQuestion = "今月を対象に、受注件数を表示してください。";
   await expect(panel).toHaveCount(0);
   await expect(questionInput).toHaveValue(clarifiedQuestion);
   await expect(questionInput).toBeFocused();

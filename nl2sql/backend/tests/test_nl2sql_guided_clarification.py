@@ -27,6 +27,7 @@ from app.features.nl2sql.ontology_models import (
     ClarificationAnswerKind,
     ClarificationCategory,
     ClarificationMode,
+    ClarificationOption,
     ClarificationQuestion,
     ClarificationStatus,
     ClarificationTurn,
@@ -473,13 +474,59 @@ def test_embedding_column_ambiguity_is_presented_as_business_output_selection() 
         "APP.ORDERS.ORDER_ID",
     }
 
+    option_id_by_label = {option.label_ja: option.id for option in question.options}
     answer = ClarificationAnswer(
         question_id=question.id,
-        selected_option_ids=[option.id for option in question.options],
+        selected_option_ids=[
+            option_id_by_label["受注状態"],
+            option_id_by_label["受注ID"],
+        ],
     )
     updated_intent = apply_clarification_answer(intent, question, answer, ontology)
 
     assert {item.name_ja for item in updated_intent.dimensions} == {"受注状態", "受注ID"}
+    assert updated_intent.question_effective == (
+        "受注件数を表示してください。検索結果には受注状態、受注IDを表示してください。"
+    )
+    assert "確認事項" not in updated_intent.question_effective
+
+
+def test_guided_output_answer_replaces_quoted_fragment_with_natural_query() -> None:
+    runtime = _runtime()
+    created = _create_guided(runtime)
+    ontology = runtime.ontology_revision(created.session.ontology_revision_id)
+    intent = created.session.intents[-1].model_copy(
+        deep=True,
+        update={
+            "question_original": '"部署情報"',
+            "question_effective": (
+                '"部署情報"\n確認事項（検索結果に表示する項目を選んでください。）：部署名'
+            ),
+        },
+    )
+    question = ClarificationQuestion(
+        id="question-all-columns",
+        category=ClarificationCategory.OUTPUT,
+        prompt_ja="検索結果に表示する項目を選んでください。",
+        answer_kind=ClarificationAnswerKind.SINGLE_SELECT,
+        options=[ClarificationOption(id="option-all-columns", label_ja="すべての列")],
+    )
+
+    updated = apply_clarification_answer(
+        intent,
+        question,
+        ClarificationAnswer(
+            question_id=question.id,
+            selected_option_ids=["option-all-columns"],
+        ),
+        ontology,
+    )
+
+    assert updated.question_effective == (
+        "部署情報について、検索結果にはすべての列を表示してください。"
+    )
+    assert "確認事項" not in updated.question_effective
+    assert "検索結果に表示する項目を選んでください" not in updated.question_effective
 
 
 def test_guided_output_multi_select_answer_rebuilds_and_persists_session_state() -> None:
@@ -666,6 +713,10 @@ def test_guided_answer_is_idempotent_and_rejects_stale_version() -> None:
 
     assert first.session.current_intent_version == 2
     assert replay.session.current_intent_version == 2
+    assert first.session.intents[-1].question_effective == (
+        "今月を対象に、受注件数を表示してください。"
+    )
+    assert "確認事項" not in first.session.intents[-1].question_effective
     assert runtime.store.list_documents("idempotency")[0]["idempotency_key"] == "answer-1"
     with pytest.raises(OntologyVersionConflictError):
         runtime.answer_clarification_idempotent(
