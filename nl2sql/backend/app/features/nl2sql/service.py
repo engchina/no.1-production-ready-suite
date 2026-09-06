@@ -33,7 +33,11 @@ from dotenv import dotenv_values
 from pydantic import BaseModel, ValidationError
 from pydantic import Field as PydanticField
 
-from app.security.request_actor import actor_scope, current_actor_is_system_admin
+from app.security.request_actor import (
+    actor_scope,
+    current_actor_context,
+    current_actor_is_system_admin,
+)
 from app.settings import BACKEND_ENV_FILE, get_settings
 
 from .embedding_client import (
@@ -863,6 +867,10 @@ _SYSTEM_OBJECT_BLOCKED_MESSAGE = (
     "NL2SQL_ で始まる表/VIEW は NL2SQL システム object です。"
     "システムテーブル管理からのみ管理できます。"
 )
+_PLSQL_DYNAMIC_SQL_BLOCKED_MESSAGE = (
+    "PL/SQL の動的 SQL は管理 SQL 実行では使用できません。"
+    "DDL/DML を個別の SQL statement として実行してください。"
+)
 
 _FORBIDDEN_PREFIXES = (
     "insert",
@@ -883,15 +891,47 @@ _DANGEROUS_TOKENS = re.compile(
     r"\b(insert|update|delete|merge|drop|alter|create|truncate|grant|revoke|begin|declare|call)\b",
     re.IGNORECASE,
 )
+_DANGEROUS_ORACLE_FUNCTION_ROOTS = frozenset(
+    {
+        "DBMS_JAVA",
+        "DBMS_LDAP",
+        "DBMS_METADATA",
+        "DBMS_SCHEDULER",
+        "DBMS_SQL",
+        "DBMS_XMLGEN",
+        "DBMS_XMLQUERY",
+        "DBMS_XMLSAVE",
+        "DBMS_XMLSTORE",
+        "HTTPURITYPE",
+        "UTL_FILE",
+        "UTL_HTTP",
+        "UTL_INADDR",
+        "UTL_SMTP",
+        "UTL_TCP",
+    }
+)
+_DANGEROUS_ORACLE_FUNCTION_MESSAGE = "危険な Oracle 関数は SELECT SQL 実行では使用できません。"
 _SQL_OBJECT_REF = r'(?:"[^"]+"|[a-zA-Z_][\w$#]*)(?:\s*\.\s*(?:"[^"]+"|[a-zA-Z_][\w$#]*))?'
 _FROM_JOIN_TABLE = re.compile(rf"\b(?:from|join)\s+({_SQL_OBJECT_REF})", re.IGNORECASE)
 _FROM_JOIN_WITH_ALIAS = re.compile(
     rf"\b(?:from|join)\s+({_SQL_OBJECT_REF})(?:\s+(?:as\s+)?([a-zA-Z_][\w$#]*))?",
     re.IGNORECASE,
 )
+_GRANT_REVOKE_TARGET = re.compile(
+    rf"\bon\s+(?:(?:directory|edition|function|index|indextype|"
+    rf"java\s+(?:source|resource|class)|library|materialized\s+view|"
+    rf"mining\s+model|operator|package|procedure|sequence|table|type|view)\s+)?"
+    rf"({_SQL_OBJECT_REF})\s+\b(?:to|from)\b",
+    re.IGNORECASE | re.DOTALL,
+)
 _SYSTEM_OBJECT_TOKEN = re.compile(
     r'(?<![A-Z0-9_$#])"?NL2SQL_[A-Z0-9_$#]*"?',
     re.IGNORECASE,
+)
+_PLSQL_DYNAMIC_SQL_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\bexecute\s+immediate\b", re.IGNORECASE),
+    re.compile(r"\bdbms_sql\s*\.\s*parse\b", re.IGNORECASE),
+    re.compile(r"\bopen\s+[^;]+?\s+for\b", re.IGNORECASE | re.DOTALL),
 )
 _SELECT_TOKEN = re.compile(r"\bselect\b", re.IGNORECASE)
 _SQL_IDENTIFIER = re.compile(r"[a-zA-Z_][\w$#]*")
@@ -909,6 +949,7 @@ _IMPLICIT_COMMIT_STATEMENT_TYPES = frozenset(
     {"CREATE", "ALTER", "DROP", "TRUNCATE", "COMMENT", "RENAME", "FLASHBACK", "PURGE"}
 )
 _ROLLBACKABLE_DML_STATEMENT_TYPES = frozenset({"INSERT", "UPDATE", "DELETE", "MERGE"})
+_ADMIN_AUDIT_SQL_PREVIEW_CHARS = 500
 _SQL_RESERVED_OR_FUNCTIONS = {
     "AS",
     "CASE",
@@ -1632,6 +1673,12 @@ def _dml_target_refs(statement: str) -> list[str]:
     return refs
 
 
+def _grant_revoke_target_refs(statement: str) -> list[str]:
+    stripped = _strip_leading_sql_comments(statement).strip().rstrip(";")
+    match = _GRANT_REVOKE_TARGET.search(stripped)
+    return [match.group(1)] if match else []
+
+
 def _admin_statement_hidden_object_names(
     statement: str,
     *,
@@ -1650,6 +1697,8 @@ def _admin_statement_hidden_object_names(
     elif statement_type in {"INSERT", "UPDATE", "DELETE", "MERGE", "TRUNCATE"}:
         refs.extend(_dml_target_refs(statement))
         refs.extend(_extract_referenced_tables(statement, current_owner=current_owner))
+    elif statement_type in {"GRANT", "REVOKE"}:
+        refs.extend(_grant_revoke_target_refs(statement))
     elif statement_type in {"PLSQL", "UNKNOWN"} and _SYSTEM_OBJECT_TOKEN.search(statement):
         return [
             _normalize_identifier(match.group(0))
@@ -1799,6 +1848,15 @@ def _db_admin_policy_error(statement: str, policy: str) -> str:
 def _db_admin_system_object_error(statement: str, *, current_owner: str) -> str:
     hidden = _admin_statement_hidden_object_names(statement, current_owner=current_owner)
     return _system_object_blocked_message(hidden) if hidden else ""
+
+
+def _db_admin_dynamic_sql_error(statement: str) -> str:
+    if _admin_statement_type(statement) not in {"PLSQL", "UNKNOWN"}:
+        return ""
+    masked = _mask_sql_literals_and_comments(statement)
+    if any(pattern.search(masked) for pattern in _PLSQL_DYNAMIC_SQL_PATTERNS):
+        return _PLSQL_DYNAMIC_SQL_BLOCKED_MESSAGE
+    return ""
 
 
 def _annotation_statement_error(statement: str) -> str:
@@ -2166,6 +2224,75 @@ def is_select_only(sql: str) -> bool:
     return head.startswith("select") or head.startswith("with")
 
 
+def _sqlglot_name(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        raw = value
+    else:
+        name = getattr(value, "name", None)
+        if isinstance(name, str) and name:
+            raw = name
+        else:
+            this = getattr(value, "this", None)
+            raw = this if isinstance(this, str) else str(this or "")
+    return _normalize_identifier(raw)
+
+
+def _sqlglot_dotted_name_parts(value: Any, dot_type: type[Any]) -> list[str]:
+    if isinstance(value, dot_type):
+        return [
+            *_sqlglot_dotted_name_parts(value.this, dot_type),
+            *_sqlglot_dotted_name_parts(value.expression, dot_type),
+        ]
+    name = _sqlglot_name(value)
+    return [name] if name else []
+
+
+def _dangerous_oracle_function_names(sql: str) -> list[str]:
+    try:
+        import sqlglot
+        from sqlglot import exp
+        from sqlglot.errors import ErrorLevel
+    except ImportError:
+        return []
+
+    try:
+        statements = sqlglot.parse(sql, read="oracle", error_level=ErrorLevel.RAISE)
+    except Exception:
+        return []
+
+    dangerous: list[str] = []
+    seen: set[str] = set()
+    for statement in [item for item in statements if item is not None]:
+        for node in statement.walk():
+            expression = node[0] if isinstance(node, tuple) else node
+            if isinstance(expression, exp.Dot):
+                parts = _sqlglot_dotted_name_parts(expression, exp.Dot)
+                candidates = [
+                    ".".join(parts[index : index + 2])
+                    for index, part in enumerate(parts)
+                    if part in _DANGEROUS_ORACLE_FUNCTION_ROOTS
+                ]
+            elif isinstance(expression, exp.Anonymous):
+                name = _sqlglot_name(expression)
+                candidates = [name] if name in _DANGEROUS_ORACLE_FUNCTION_ROOTS else []
+            else:
+                candidates = []
+            for candidate in candidates:
+                if candidate and candidate not in seen:
+                    seen.add(candidate)
+                    dangerous.append(candidate)
+    return dangerous
+
+
+def _dangerous_oracle_function_blocked_message(names: Sequence[str]) -> str:
+    unique = sorted({name for name in names if name})
+    if not unique:
+        return _DANGEROUS_ORACLE_FUNCTION_MESSAGE
+    return f"{', '.join(unique)}: {_DANGEROUS_ORACLE_FUNCTION_MESSAGE}"
+
+
 def _extract_referenced_tables(sql: str, *, current_owner: str = "") -> list[str]:
     semantic = parse_oracle_sql(sql)
     if semantic.graph is not None:
@@ -2374,6 +2501,24 @@ def _column_allowed(
 
 def one_line_sql(sql: str) -> str:
     return re.sub(r"\s+", " ", sql).strip()
+
+
+def _sha256_text(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _admin_sql_audit_detail(sql: str, statements: Sequence[str]) -> dict[str, Any]:
+    normalized_sql = _normalize_oracle_sql_text(sql)
+    normalized_statements = [_normalize_oracle_sql_text(statement) for statement in statements]
+    return {
+        "sql_sha256": _sha256_text(normalized_sql),
+        "sql_preview": one_line_sql(normalized_sql)[:_ADMIN_AUDIT_SQL_PREVIEW_CHARS],
+        "statement_hashes": [_sha256_text(statement) for statement in normalized_statements],
+        "statement_previews": [
+            one_line_sql(statement)[:_ADMIN_AUDIT_SQL_PREVIEW_CHARS]
+            for statement in normalized_statements
+        ],
+    }
 
 
 def normalize_executable_sql(sql: str) -> str:
@@ -6379,6 +6524,9 @@ class Nl2SqlService:
             graph and any("*" in projection.expression_sql for projection in graph.projections)
         )
         select_only = graph is not None and is_select_only(sql)
+        dangerous_function_names = (
+            _dangerous_oracle_function_names(sql) if graph is not None and select_only else []
+        )
         warnings: list[str] = []
         blocked_reason = ""
         if graph is None:
@@ -6387,12 +6535,18 @@ class Nl2SqlService:
             blocked_reason = (
                 "SELECT/WITH 以外、複数 statement、または危険語を含む SQL は実行できません。"
             )
+        elif dangerous_function_names:
+            blocked_reason = _dangerous_oracle_function_blocked_message(dangerous_function_names)
         hidden_referenced = _hidden_schema_object_names(referenced, current_owner=current_owner)
-        if hidden_referenced:
+        if not blocked_reason and hidden_referenced:
             blocked_reason = _system_object_blocked_message(hidden_referenced)
-        elif not _table_allowed(referenced, allowed, current_owner=current_owner):
+        elif not blocked_reason and not _table_allowed(
+            referenced,
+            allowed,
+            current_owner=current_owner,
+        ):
             blocked_reason = "許可されていない表を参照しています。"
-        elif not _column_allowed(
+        elif not blocked_reason and not _column_allowed(
             referenced_columns,
             has_wildcard,
             referenced,
@@ -12492,6 +12646,27 @@ class Nl2SqlService:
                 warnings=warnings,
                 timing=self._timing(created_at, started, "db_admin_execute"),
             )
+        dynamic_sql_errors = [_db_admin_dynamic_sql_error(statement) for statement in statements]
+        if any(dynamic_sql_errors):
+            warnings.append(_PLSQL_DYNAMIC_SQL_BLOCKED_MESSAGE)
+            return DbAdminExecuteData(
+                executed=False,
+                runtime=runtime,
+                execution_context="admin_control_plane",
+                statements=[
+                    DbAdminStatementResult(
+                        index=index + 1,
+                        statement_type=statement_types[index],
+                        status="blocked",
+                        sql=statements[index],
+                        error_message=dynamic_sql_errors[index]
+                        or _PLSQL_DYNAMIC_SQL_BLOCKED_MESSAGE,
+                    )
+                    for index in range(len(statements))
+                ],
+                warnings=warnings,
+                timing=self._timing(created_at, started, "db_admin_execute"),
+            )
         if len(statements) > 1 and select_count > 0:
             warnings.append("複数 statement 実行に SELECT は含められません。")
             return DbAdminExecuteData(
@@ -12661,6 +12836,7 @@ class Nl2SqlService:
                         "statement_count": len(statements),
                         "success_count": len(successful_statement_indexes),
                         "types": statement_types,
+                        **_admin_sql_audit_detail(request.sql, statements),
                     },
                 )
             except (Nl2SqlPersistenceUnavailable, Nl2SqlRepositoryOperationFailed) as exc:
@@ -12984,6 +13160,27 @@ class Nl2SqlService:
                 warnings=warnings,
                 timing=self._timing(created_at, started, "db_admin_statements"),
             )
+        dynamic_sql_errors = [_db_admin_dynamic_sql_error(statement) for statement in statements]
+        if any(dynamic_sql_errors):
+            warnings.append(_PLSQL_DYNAMIC_SQL_BLOCKED_MESSAGE)
+            return DbAdminExecuteData(
+                executed=False,
+                runtime=runtime,
+                execution_context="admin_control_plane",
+                statements=[
+                    DbAdminStatementResult(
+                        index=index + 1,
+                        statement_type=statement_types[index],
+                        status="blocked",
+                        sql=statements[index],
+                        error_message=dynamic_sql_errors[index]
+                        or _PLSQL_DYNAMIC_SQL_BLOCKED_MESSAGE,
+                    )
+                    for index in range(len(statements))
+                ],
+                warnings=warnings,
+                timing=self._timing(created_at, started, "db_admin_statements"),
+            )
         if any(policy_errors):
             warnings.append("禁止された操作が含まれるため実行しませんでした。")
             return DbAdminExecuteData(
@@ -13081,6 +13278,7 @@ class Nl2SqlService:
                     "statement_count": len(statements),
                     "success_count": success_count,
                     "types": statement_types,
+                    **_admin_sql_audit_detail(request.sql, statements),
                 },
             )
         except (Nl2SqlPersistenceUnavailable, Nl2SqlRepositoryOperationFailed) as exc:
@@ -13685,6 +13883,7 @@ class Nl2SqlService:
         reason: str,
         detail: dict[str, Any],
     ) -> None:
+        actor = current_actor_context()
         with self._lock:
             self._admin_audit.append(
                 {
@@ -13694,6 +13893,8 @@ class Nl2SqlService:
                     "target": target,
                     "executed": executed,
                     "reason": reason,
+                    "actor_user_uuid": actor.user_uuid,
+                    "actor_is_system_admin": actor.is_system_admin,
                     "detail": detail,
                 }
             )
