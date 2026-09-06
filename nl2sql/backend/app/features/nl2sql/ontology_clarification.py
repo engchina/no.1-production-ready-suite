@@ -35,6 +35,7 @@ from .ontology_models import (
 from .ontology_store import stable_ontology_id
 
 CLARIFICATION_SCHEMA_VERSION = "guided_clarification_v1"
+CLARIFICATION_PROMPT_VERSION = "deterministic_first_v2"
 MAX_GUIDED_TURNS = 4
 
 _PRIORITY: dict[ClarificationCategory, int] = {
@@ -92,7 +93,9 @@ def build_clarification_state(
         for turn in session.clarification_turns
         if turn.question.blocking and turn.question.ambiguity_id
     }
-    missing = [item.message_ja for item in unresolved]
+    # LLM / retrieval の診断文は利用者向けではないため、未確認一覧にも
+    # 実際に回答できる形へ変換した質問文だけを公開する。
+    missing = [question.prompt_ja for question in questions]
     required_total = len(answered_ids) + len(unresolved)
     unanswerable = any(
         question.category == ClarificationCategory.RELATIONSHIP_PATH and not question.options
@@ -173,7 +176,10 @@ def apply_clarification_answer(
         for node_id in option.ontology_node_ids
         if node_id in node_by_id
     ]
-    if question.category == ClarificationCategory.BUSINESS_MEANING:
+    if question.category in {
+        ClarificationCategory.BUSINESS_MEANING,
+        ClarificationCategory.OUTPUT,
+    }:
         _append_selected_concepts(updated, selected_nodes)
     elif question.category == ClarificationCategory.RELATIONSHIP_PATH:
         path_id = next(
@@ -239,6 +245,9 @@ def merge_free_text_reinterpretation(
     elif question.category == ClarificationCategory.GRANULARITY and reinterpreted.granularity:
         updated.granularity = reinterpreted.granularity
     elif question.category == ClarificationCategory.OUTPUT:
+        append_unique(updated.entities, reinterpreted.entities)
+        append_unique(updated.metrics, reinterpreted.metrics)
+        append_unique(updated.dimensions, reinterpreted.dimensions)
         updated.sorts = [item.model_copy(deep=True) for item in reinterpreted.sorts]
         if reinterpreted.limit is not None:
             updated.limit = reinterpreted.limit
@@ -275,19 +284,20 @@ def _question_for_ambiguity(
     view: ProfileOntologyView,
 ) -> ClarificationQuestion:
     category = _category(ambiguity.code)
-    options = _options_for(category, ambiguity, intent, ontology, view)
-    prompt = ambiguity.message_ja
-    reason = "この確認結果は、生成 SQL の対象・条件・集計方法を確定するために使用します。"
-    answer_kind = ClarificationAnswerKind.SINGLE_SELECT
-    if category == ClarificationCategory.TIME_RANGE:
-        prompt = "どの期間を対象にしますか？"
-        reason = "期間が未指定の集計は、期待と異なる範囲を集計する可能性があります。"
-    elif category == ClarificationCategory.GRANULARITY:
-        prompt = "どの単位で集計しますか？"
-        reason = "日別・月別などの集計単位によって SQL の GROUP BY が変わります。"
-    elif category == ClarificationCategory.RELATIONSHIP_PATH:
-        prompt = "業務対象をどの関係で結びますか？"
-        reason = "複数表の結び方によって結果の意味と件数が変わります。"
+    candidate_nodes = _candidate_nodes_for_ambiguity(category, ambiguity, ontology, view)
+    if (
+        category == ClarificationCategory.BUSINESS_MEANING
+        and candidate_nodes
+        and all(
+            node.kind in {OntologyNodeKind.PROPERTY, OntologyNodeKind.COLUMN}
+            for node in candidate_nodes
+        )
+    ):
+        # 埋め込み検索の列候補は「意味を一つ選ぶ」質問ではなく、利用者が
+        # 検索結果へ必要な項目を選ぶ質問として提示する。
+        category = ClarificationCategory.OUTPUT
+    options = _options_for(category, ambiguity, intent, candidate_nodes)
+    prompt, reason, answer_kind = _question_copy(category, candidate_nodes)
     return ClarificationQuestion(
         id=stable_ontology_id("clarification_question", ambiguity.id),
         ambiguity_id=ambiguity.id,
@@ -305,8 +315,7 @@ def _options_for(
     category: ClarificationCategory,
     ambiguity: IntentAmbiguity,
     intent: QuestionIntentGraph,
-    ontology: SchemaOntology,
-    view: ProfileOntologyView,
+    candidate_nodes: Sequence[OntologyNode],
 ) -> list[ClarificationOption]:
     if category == ClarificationCategory.TIME_RANGE:
         return [
@@ -336,6 +345,25 @@ def _options_for(
             if path.approved
         ]
 
+    if candidate_nodes:
+        return [_node_option(ambiguity, node, category) for node in candidate_nodes]
+    # LLM が任意の option を作っても選択肢として公開しない。Ontology / Profile scope
+    # 内で検証できない値は自由入力として受け、再解釈・scope 検証を通す。
+    return []
+
+
+def _candidate_nodes_for_ambiguity(
+    category: ClarificationCategory,
+    ambiguity: IntentAmbiguity,
+    ontology: SchemaOntology,
+    view: ProfileOntologyView,
+) -> list[OntologyNode]:
+    if category in {
+        ClarificationCategory.TIME_RANGE,
+        ClarificationCategory.GRANULARITY,
+        ClarificationCategory.RELATIONSHIP_PATH,
+    }:
+        return []
     visible = [node for node in ontology.nodes if node.id in view.node_ids]
     candidates = [
         node
@@ -362,11 +390,73 @@ def _options_for(
                 OntologyNodeKind.VIEW,
             }
         ][:5]
-    if candidates:
-        return [_node_option(ambiguity, node) for node in _unique_nodes(candidates)]
-    # LLM が任意の option を作っても選択肢として公開しない。Ontology / Profile scope
-    # 内で検証できない値は自由入力として受け、再解釈・scope 検証を通す。
-    return []
+    return _unique_nodes(candidates)
+
+
+def _question_copy(
+    category: ClarificationCategory,
+    candidate_nodes: Sequence[OntologyNode],
+) -> tuple[str, str, ClarificationAnswerKind]:
+    if category == ClarificationCategory.TIME_RANGE:
+        return (
+            "どの期間を対象にしますか？",
+            "期間によって集計対象が変わるため、必要な範囲を選んでください。",
+            ClarificationAnswerKind.SINGLE_SELECT,
+        )
+    if category == ClarificationCategory.GRANULARITY:
+        return (
+            "どの単位で集計しますか？",
+            "日別・月別など、選んだ単位で結果のまとまり方が変わります。",
+            ClarificationAnswerKind.SINGLE_SELECT,
+        )
+    if category == ClarificationCategory.RELATIONSHIP_PATH:
+        return (
+            "業務対象をどの関係で結びますか？",
+            "対象同士の関係によって、結果の意味や件数が変わります。",
+            ClarificationAnswerKind.SINGLE_SELECT,
+        )
+    if category == ClarificationCategory.FILTER_VALUE:
+        return (
+            "どの条件で絞り込みますか？",
+            "必要なデータだけを検索するため、絞り込み条件を確認します。",
+            ClarificationAnswerKind.SINGLE_SELECT,
+        )
+    if category == ClarificationCategory.OUTPUT:
+        if candidate_nodes:
+            return (
+                "検索結果に表示する項目を選んでください。",
+                "検索クエリだけでは必要な表示項目を絞れませんでした。必要な項目をすべて選んでください。",
+                ClarificationAnswerKind.MULTI_SELECT,
+            )
+        return (
+            "検索結果に何を表示しますか？",
+            "必要な結果を作るため、表示内容を確認します。",
+            ClarificationAnswerKind.SINGLE_SELECT,
+        )
+
+    kinds = {node.kind for node in candidate_nodes}
+    if kinds and kinds <= {OntologyNodeKind.METRIC}:
+        return (
+            "どの指標を使いますか？",
+            "似た名前の指標で計算方法が異なるため、意図した指標を一つ選んでください。",
+            ClarificationAnswerKind.SINGLE_SELECT,
+        )
+    if kinds and kinds <= {
+        OntologyNodeKind.BUSINESS_ENTITY,
+        OntologyNodeKind.BUSINESS_EVENT,
+        OntologyNodeKind.TABLE,
+        OntologyNodeKind.VIEW,
+    }:
+        return (
+            "どの業務対象について調べますか？",
+            "検索対象の候補が複数あるため、意図した対象を一つ選んでください。",
+            ClarificationAnswerKind.SINGLE_SELECT,
+        )
+    return (
+        "検索対象として意図しているものを選んでください。",
+        "検索クエリだけでは候補を一つに絞れなかったため、最も近いものを選んでください。",
+        ClarificationAnswerKind.SINGLE_SELECT,
+    )
 
 
 def _value_option(label: str, value: Any) -> ClarificationOption:
@@ -378,17 +468,24 @@ def _value_option(label: str, value: Any) -> ClarificationOption:
     )
 
 
-def _node_option(ambiguity: IntentAmbiguity, node: OntologyNode) -> ClarificationOption:
-    evidence = node.technical_name
-    if node.description_ja:
-        evidence = f"{evidence} — {node.description_ja}" if evidence else node.description_ja
+def _node_option(
+    ambiguity: IntentAmbiguity,
+    node: OntologyNode,
+    category: ClarificationCategory,
+) -> ClarificationOption:
+    if category == ClarificationCategory.OUTPUT:
+        description = f"検索結果に「{node.business_name_ja}」を表示します。"
+    elif node.kind == OntologyNodeKind.METRIC:
+        description = f"「{node.business_name_ja}」の定義で集計します。"
+    else:
+        description = f"「{node.business_name_ja}」を検索対象として扱います。"
     return ClarificationOption(
         id=stable_ontology_id("clarification_option", ambiguity.id, node.id),
         label_ja=node.business_name_ja,
-        description_ja=node.description_ja,
+        description_ja=description,
         ontology_node_ids=[node.id],
         source=ClarificationEvidenceSource.ONTOLOGY,
-        evidence_ja=evidence,
+        evidence_ja=node.technical_name,
     )
 
 
@@ -488,7 +585,7 @@ def _intent_summary(
     if intent.entities:
         add(
             "entities",
-            "業務対象",
+            "対象",
             "、".join(item.name_ja for item in intent.entities),
             ClarificationCategory.BUSINESS_MEANING,
             "、".join(item.ontology_node_id for item in intent.entities if item.ontology_node_id),
@@ -496,7 +593,7 @@ def _intent_summary(
     if intent.metrics:
         add(
             "metrics",
-            "指標",
+            "集計する指標",
             "、".join(item.name_ja for item in intent.metrics),
             ClarificationCategory.BUSINESS_MEANING,
             "、".join(item.ontology_node_id for item in intent.metrics if item.ontology_node_id),
@@ -504,9 +601,9 @@ def _intent_summary(
     if intent.dimensions:
         add(
             "dimensions",
-            "分類・項目",
+            "表示する項目",
             "、".join(item.name_ja for item in intent.dimensions),
-            ClarificationCategory.GRANULARITY,
+            ClarificationCategory.OUTPUT,
             "、".join(item.ontology_node_id for item in intent.dimensions if item.ontology_node_id),
         )
     if intent.time_range is not None:

@@ -54,6 +54,7 @@ from .ontology_catalog import (
     retrieve_ontology_nodes,
 )
 from .ontology_clarification import (
+    CLARIFICATION_PROMPT_VERSION,
     apply_clarification_answer,
     build_clarification_state,
     enrich_guided_intent,
@@ -3501,6 +3502,7 @@ class OntologyApiRuntime:
                     question=question,
                     answer=answer,
                     intent_version=request.base_version + 1,
+                    prompt_version=CLARIFICATION_PROMPT_VERSION,
                 ),
             )
             self._previews.pop(session_id, None)
