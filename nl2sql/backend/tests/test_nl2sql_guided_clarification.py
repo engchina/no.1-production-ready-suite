@@ -455,7 +455,6 @@ def test_embedding_column_ambiguity_is_presented_as_business_output_selection() 
         deep=True,
         update={"intents": [intent], "clarification_turns": []},
     )
-
     state = build_clarification_state(session, ontology, created.profile_ontology_view)
 
     question = state.current_question
@@ -488,6 +487,75 @@ def test_embedding_column_ambiguity_is_presented_as_business_output_selection() 
     assert updated_intent.question_effective == (
         "受注件数を表示してください。検索結果には受注状態、受注IDを表示してください。"
     )
+    assert "確認事項" not in updated_intent.question_effective
+
+
+def test_business_target_ambiguity_accepts_multiple_ontology_concepts() -> None:
+    runtime = _runtime()
+    runtime.legacy_service.profile.allowed_tables.append("APP.CUSTOMERS")
+    runtime.legacy_service.catalog.tables.append(
+        SchemaTable(
+            table_name="CUSTOMERS",
+            owner="APP",
+            table_type="table",
+            logical_name="顧客",
+            comment="顧客データ",
+            columns=[
+                SchemaColumn(
+                    column_name="CUSTOMER_ID",
+                    logical_name="顧客 ID",
+                    data_type="NUMBER",
+                )
+            ],
+        )
+    )
+    created = _create_guided(runtime)
+    ontology = runtime.ontology_revision(created.session.ontology_revision_id)
+    candidates = [node for node in ontology.nodes if node.kind == OntologyNodeKind.TABLE]
+    assert len(candidates) == 2
+    intent = created.session.intents[-1].model_copy(deep=True)
+    intent.entities = []
+    intent.metrics = []
+    intent.ambiguities = [
+        IntentAmbiguity(
+            id="business-targets",
+            code="business_meaning_required",
+            message_ja="検索対象を確認してください。",
+            options=[node.technical_name for node in candidates],
+            blocking=True,
+        )
+    ]
+    session = created.session.model_copy(
+        deep=True,
+        update={"intents": [intent], "clarification_turns": []},
+    )
+    view = created.profile_ontology_view.model_copy(deep=True)
+    view.node_ids = list(dict.fromkeys([*view.node_ids, *(node.id for node in candidates)]))
+
+    state = build_clarification_state(session, ontology, view)
+
+    question = state.current_question
+    assert question is not None
+    assert question.category == ClarificationCategory.BUSINESS_MEANING
+    assert question.answer_kind == ClarificationAnswerKind.MULTI_SELECT
+    assert question.prompt_ja == "どの業務対象について調べますか？"
+    assert "意図した対象をすべて選んでください" in question.reason_ja
+    assert len(question.options) == 2
+
+    updated_intent = apply_clarification_answer(
+        intent,
+        question,
+        ClarificationAnswer(
+            question_id=question.id,
+            selected_option_ids=[option.id for option in question.options],
+        ),
+        ontology,
+    )
+
+    selected_node_ids = {node.id for node in candidates}
+    applied_node_ids = {item.ontology_node_id for item in updated_intent.entities}
+    assert selected_node_ids <= applied_node_ids
+    assert "、" in updated_intent.question_effective
     assert "確認事項" not in updated_intent.question_effective
 
 

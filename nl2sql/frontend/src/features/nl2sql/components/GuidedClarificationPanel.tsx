@@ -7,6 +7,7 @@ import { ProcessingIndicator } from "@/components/ProcessingState";
 import { Button } from "@/components/ui/button";
 import { FieldError } from "@/components/ui/field-error";
 import { StatusBadge } from "@/components/ui/status-badge";
+import { isAbortError } from "@/lib/api";
 import { t } from "@/lib/i18n";
 
 import {
@@ -108,6 +109,7 @@ export function GuidedClarificationPanel({
   const [busyAction, setBusyAction] = useState<"start" | "answer" | "cancel" | "">("start");
   const [startPhase, setStartPhase] = useState<ClarificationStartPhase>("recommend_profile");
   const startedRef = useRef(false);
+  const startControllerRef = useRef<AbortController | null>(null);
   const questionHeadingRef = useRef<HTMLHeadingElement>(null);
 
   const clarification = session?.clarification ?? null;
@@ -116,7 +118,8 @@ export function GuidedClarificationPanel({
 
   const startSession = async (
     currentRecommendation: OntologyProfileRecommendation,
-    targetProfileId: string
+    targetProfileId: string,
+    signal: AbortSignal
   ) => {
     const candidate = currentRecommendation.candidates.find(
       (item) => item.profile_id === targetProfileId
@@ -126,7 +129,8 @@ export function GuidedClarificationPanel({
     const { confirmation_token } = await confirmOntologyProfileRecommendation(
       currentRecommendation.id,
       targetProfileId,
-      revisionId
+      revisionId,
+      { signal }
     );
     setStartPhase("prepare_questions");
     const created = await createQuerySession({
@@ -136,7 +140,8 @@ export function GuidedClarificationPanel({
       engine,
       profile_confirmation_token: confirmation_token,
       clarification_mode: "guided",
-    });
+    }, { signal });
+    if (signal.aborted) return;
     setSession(created);
     setRecommendation(null);
     setError("");
@@ -145,8 +150,11 @@ export function GuidedClarificationPanel({
   useEffect(() => {
     if (startedRef.current) return;
     startedRef.current = true;
-    void recommendOntologyProfiles(question)
+    const controller = new AbortController();
+    startControllerRef.current = controller;
+    void recommendOntologyProfiles(question, { signal: controller.signal })
       .then(async (result) => {
+        if (controller.signal.aborted) return;
         if (profileId.toLowerCase() === "all") {
           setRecommendation(result);
           setSelectedProfileId(result.candidates[0]?.profile_id ?? "");
@@ -155,24 +163,34 @@ export function GuidedClarificationPanel({
           }
           return;
         }
-        await startSession(result, profileId);
+        await startSession(result, profileId, controller.signal);
       })
       .catch((cause: unknown) => {
-        setError(cause instanceof Error ? cause.message : t("nl2sql.clarification.error.start"));
+        if (!controller.signal.aborted && !isAbortError(cause)) {
+          setError(cause instanceof Error ? cause.message : t("nl2sql.clarification.error.start"));
+        }
       })
-      .finally(() => setBusyAction(""));
+      .finally(() => {
+        if (startControllerRef.current === controller) startControllerRef.current = null;
+        if (!controller.signal.aborted) setBusyAction("");
+      });
   }, [allowedObjects, engine, profileId, question]);
 
   const confirmRecommendedProfile = async () => {
     if (!recommendation || !selectedProfileId || busyAction) return;
+    const controller = new AbortController();
+    startControllerRef.current = controller;
     setBusyAction("start");
     setError("");
     try {
-      await startSession(recommendation, selectedProfileId);
+      await startSession(recommendation, selectedProfileId, controller.signal);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : t("nl2sql.clarification.error.start"));
+      if (!controller.signal.aborted && !isAbortError(cause)) {
+        setError(cause instanceof Error ? cause.message : t("nl2sql.clarification.error.start"));
+      }
     } finally {
-      setBusyAction("");
+      if (startControllerRef.current === controller) startControllerRef.current = null;
+      if (!controller.signal.aborted) setBusyAction("");
     }
   };
 
@@ -301,6 +319,11 @@ export function GuidedClarificationPanel({
   };
 
   const closePanel = async () => {
+    if (busyAction === "start") {
+      startControllerRef.current?.abort();
+      onClose();
+      return;
+    }
     if (busyAction) return;
     if (!session || session.status === "done" || session.status === "cancelled") {
       onClose();
@@ -325,7 +348,7 @@ export function GuidedClarificationPanel({
       size={size}
       className="min-h-11"
       loading={busyAction === "cancel"}
-      disabled={Boolean(busyAction && busyAction !== "cancel")}
+      disabled={busyAction === "answer"}
       onClick={() => void closePanel()}
     >
       <X size={16} aria-hidden="true" />

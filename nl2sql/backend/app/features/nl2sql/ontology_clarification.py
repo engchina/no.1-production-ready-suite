@@ -527,8 +527,8 @@ def _question_copy(
     if kinds and kinds <= {OntologyNodeKind.METRIC}:
         return (
             "どの指標を使いますか？",
-            "似た名前の指標で計算方法が異なるため、意図した指標を一つ選んでください。",
-            ClarificationAnswerKind.SINGLE_SELECT,
+            "似た名前の指標で計算方法が異なるため、必要な指標をすべて選んでください。",
+            ClarificationAnswerKind.MULTI_SELECT,
         )
     if kinds and kinds <= {
         OntologyNodeKind.BUSINESS_ENTITY,
@@ -538,13 +538,13 @@ def _question_copy(
     }:
         return (
             "どの業務対象について調べますか？",
-            "検索対象の候補が複数あるため、意図した対象を一つ選んでください。",
-            ClarificationAnswerKind.SINGLE_SELECT,
+            "検索対象の候補が複数あるため、意図した対象をすべて選んでください。",
+            ClarificationAnswerKind.MULTI_SELECT,
         )
     return (
         "検索対象として意図しているものを選んでください。",
-        "クエリだけでは候補を一つに絞れなかったため、最も近いものを選んでください。",
-        ClarificationAnswerKind.SINGLE_SELECT,
+        "クエリだけでは必要な候補を絞れなかったため、意図したものをすべて選んでください。",
+        ClarificationAnswerKind.MULTI_SELECT,
     )
 
 

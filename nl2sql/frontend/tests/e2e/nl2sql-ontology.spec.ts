@@ -602,6 +602,54 @@ function guidedOutputSessionData(ready: boolean) {
   return data;
 }
 
+function guidedBusinessTargetSessionData(ready: boolean) {
+  const data = guidedSessionData(ready);
+  const businessTargetQuestion = {
+    id: "question-business-targets",
+    ambiguity_id: "ambiguity-business-targets",
+    category: "business_meaning",
+    prompt_ja: "どの業務対象について調べますか？",
+    reason_ja: "検索対象の候補が複数あるため、意図した対象をすべて選んでください。",
+    answer_kind: "multi_select",
+    options: [
+      {
+        id: "option-orders",
+        label_ja: "受注",
+        description_ja: "「受注」を検索対象として扱います。",
+        source: "ontology",
+        evidence_ja: "APP.ORDERS",
+      },
+      {
+        id: "option-customers",
+        label_ja: "顧客",
+        description_ja: "「顧客」を検索対象として扱います。",
+        source: "ontology",
+        evidence_ja: "APP.CUSTOMERS",
+      },
+    ],
+    allow_free_text: true,
+    blocking: true,
+  };
+  if (!ready) {
+    data.clarification = {
+      status: "needs_answer",
+      current_question: businessTargetQuestion,
+      remaining_questions: [businessTargetQuestion],
+      intent_summary: [],
+      required_total: 1,
+      required_confirmed: 0,
+      missing_required: [businessTargetQuestion.prompt_ja],
+      assumptions: [],
+      turn_count: 0,
+      manual_completion_required: false,
+      can_generate_sql: false,
+      schema_version: "guided_clarification_v1",
+      message_ja: "SQL を正しく生成するため、必要な条件を確認します。",
+    };
+  }
+  return data;
+}
+
 function guidedLimitSessionData(withSql = false, confirmed = false, executed = false) {
   const data = guidedSessionData(true, withSql, confirmed, executed);
   const question = "受注件数を上位 10 件表示";
@@ -677,7 +725,7 @@ async function waitForMockDelay(delayMs: number) {
 
 async function mockApi(
   page: Page,
-  guidedQuestion: "time" | "output" = "time",
+  guidedQuestion: "time" | "output" | "business" = "time",
   options: MockApiOptions = {},
 ) {
   const payloads: Record<string, unknown> = {};
@@ -982,19 +1030,23 @@ async function mockApi(
       if ((payloads.create as { clarification_mode?: string }).clarification_mode === "guided") {
         await waitForMockDelay(guidedStartDelayMs);
         if (isGuidedLimitRequest()) return fulfill(route, guidedLimitSessionData());
-        return fulfill(
-          route,
-          guidedQuestion === "output" ? guidedOutputSessionData(false) : guidedSessionData(false)
-        );
+        const guidedData = guidedQuestion === "output"
+          ? guidedOutputSessionData(false)
+          : guidedQuestion === "business"
+            ? guidedBusinessTargetSessionData(false)
+            : guidedSessionData(false);
+        return fulfill(route, guidedData);
       }
       return fulfill(route, sessionData("awaiting_intent_confirmation"));
     }
     if (path.endsWith("/clarification-answers") && request.method() === "POST") {
       payloads.clarificationAnswer = request.postDataJSON();
-      return fulfill(
-        route,
-        guidedQuestion === "output" ? guidedOutputSessionData(true) : guidedSessionData(true)
-      );
+      const guidedData = guidedQuestion === "output"
+        ? guidedOutputSessionData(true)
+        : guidedQuestion === "business"
+          ? guidedBusinessTargetSessionData(true)
+          : guidedSessionData(true);
+      return fulfill(route, guidedData);
     }
     if (path.endsWith("/cancel") && request.method() === "POST") {
       payloads.cancel = true;
@@ -1211,6 +1263,31 @@ test("AI要件確認の開始中は実処理に合わせて案内を切り替え
   expect(overflow).toBe(false);
 });
 
+test("AI要件確認は開始処理の途中でも中止して閉じられる", async ({ page }, testInfo) => {
+  const payloads = await mockApi(page, "time", { guidedStartDelayMs: 1_500 });
+  await page.goto("/query");
+
+  const originalQuestion = "受注件数を表示";
+  const questionInput = page.locator("#nl2sql-question-input");
+  await questionInput.fill(originalQuestion);
+  await page.getByRole("button", { name: "AI要件確認" }).click();
+
+  const panel = page.getByTestId("nl2sql-guided-clarification");
+  await expect(panel.getByTestId("nl2sql-guided-start-progress")).toBeVisible();
+  const closeButton = panel.getByRole("button", { name: "確認を中止して閉じる" });
+  await expect(closeButton).toBeEnabled();
+  await page.screenshot({
+    path: testInfo.outputPath("guided-clarification-interruptible-start.png"),
+    fullPage: true,
+  });
+  await closeButton.click();
+
+  await expect(panel).toHaveCount(0);
+  await expect(questionInput).toHaveValue(originalQuestion);
+  expect(payloads.create).toBeUndefined();
+  expect(payloads.clarificationAnswer).toBeUndefined();
+});
+
 test("AI要件確認は利用者が明示した最大件数を保ったままクエリへ反映する", async ({ page }) => {
   const payloads = await mockApi(page);
   await page.emulateMedia({ reducedMotion: "reduce" });
@@ -1291,6 +1368,35 @@ test("AI要件確認は内部診断を見せず表示項目を自然なクエリ
   });
   await runCurrentOntologySearch(page);
   expect(payloads.job).toMatchObject({ question: clarifiedQuestion });
+});
+
+test("AI要件確認は複数の業務対象をCheckboxで選択できる", async ({ page }, testInfo) => {
+  const payloads = await mockApi(page, "business");
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto("/query");
+
+  await page.locator("#nl2sql-question-input").fill("情報を表示");
+  await page.getByRole("button", { name: "AI要件確認" }).click();
+
+  const panel = page.getByTestId("nl2sql-guided-clarification");
+  await expect(
+    panel.getByRole("heading", { name: "どの業務対象について調べますか？" })
+  ).toBeFocused();
+  await expect(panel.getByText("意図した対象をすべて選んでください。", { exact: false })).toBeVisible();
+  await expect(panel.getByRole("radio")).toHaveCount(0);
+
+  await panel.getByRole("checkbox", { name: /受注/ }).check();
+  await panel.getByRole("checkbox", { name: /顧客/ }).check();
+  await page.screenshot({
+    path: testInfo.outputPath("guided-business-target-multiselect.png"),
+    fullPage: true,
+  });
+  await panel.getByRole("button", { name: "選んだ内容で次へ" }).click();
+
+  expect(payloads.clarificationAnswer).toMatchObject({
+    question_id: "question-business-targets",
+    selected_option_ids: ["option-orders", "option-customers"],
+  });
 });
 
 test("AI要件確認の中止は主操作の右側から元のクエリを保って閉じる", async ({ page }) => {
