@@ -3505,7 +3505,8 @@ test("質問から業務プロファイルを自動判定して選択できる",
 
   await expect(profileSelect).toHaveValue("payment");
   await expect(profileSelect.locator('option[value="payment"]')).toHaveText("入金管理（入金管理）");
-  await expect(page.getByText("選択中の表 0")).toBeVisible();
+  await expect(page.getByText(/^選択中の表/)).toHaveCount(0);
+  await expect(page.getByText(/^参照可能な表/)).toHaveCount(0);
   await expect(page.getByText(/入金管理（入金管理） を選択しました/)).toBeVisible();
   await page.waitForTimeout(700);
   expect(recommendRequests).toBe(1);
@@ -3530,13 +3531,13 @@ test("業務プロファイル自動判定が現在の profile と同じなら s
 
   await page.goto("/query");
   await expect(page.locator("#nl2sql-profile-select")).toHaveValue("default");
-  await expect(page.getByText("選択中の表 0")).toBeVisible();
+  await expect(page.getByText(/^選択中の表/)).toHaveCount(0);
 
   await nl2sqlQuestionInput(page).fill("請求金額を一覧で確認したい");
   await page.getByRole("button", { name: "プロファイルを自動判定" }).click();
 
   await expect(page.locator("#nl2sql-profile-select")).toHaveValue("default");
-  await expect(page.getByText("選択中の表 0")).toBeVisible();
+  await expect(page.getByText(/^選択中の表/)).toHaveCount(0);
   await expect(page.getByText(/既定プロファイル（既定プロファイル） は既に選択されています/)).toBeVisible();
   await expect(page.getByText(/既定プロファイル（既定プロファイル） を選択しました/)).toHaveCount(0);
 });
@@ -3622,11 +3623,11 @@ test("推薦適用後に手動で profile を切り替えると古い選択表�
   await nl2sqlQuestionInput(page).fill("従業員情報の一覧");
   await page.getByRole("button", { name: "プロファイルを自動判定" }).click();
   await expect(profileSelect).toHaveValue("hr");
-  await expect(page.getByText("選択中の表 0")).toBeVisible();
+  await expect(page.getByText(/^選択中の表/)).toHaveCount(0);
 
   await profileSelect.selectOption("pm");
   await expect(profileSelect).toHaveValue("pm");
-  await expect(page.getByText("選択中の表 0")).toBeVisible();
+  await expect(page.getByText(/^選択中の表/)).toHaveCount(0);
   await nl2sqlQuestionInput(page).fill("プロジェクト情報の一覧");
   await page.getByRole("button", { name: "検索を実行" }).click();
 
@@ -4116,7 +4117,7 @@ test("TTL を超えた job スナップショットは復元ポーリング自�
   });
 
   await page.goto("/query");
-  await expect(page.getByTestId("nl2sql-schema-reference")).toContainText("参照可能な表");
+  await expect(page.getByTestId("nl2sql-schema-reference")).toBeVisible();
 
   expect(staleJobRequests).toBe(0);
   await expect(page.getByTestId("nl2sql-job-progress")).toHaveCount(0);
@@ -4176,7 +4177,7 @@ test("Enterprise AI Direct job does not show schema-empty when schema reference 
   const api = await mockNl2SqlApi(page);
 
   await page.goto("/query");
-  await expect(page.getByTestId("nl2sql-schema-reference")).toContainText("参照可能な表");
+  await expect(page.getByTestId("nl2sql-schema-reference")).toBeVisible();
   await page.getByRole("button", { name: /Enterprise AI Direct/ }).click();
   await nl2sqlQuestionInput(page).fill("請求金額を一覧で見たい");
   await page.getByRole("button", { name: "検索を実行" }).click();

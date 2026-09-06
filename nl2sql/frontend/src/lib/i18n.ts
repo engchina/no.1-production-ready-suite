@@ -707,8 +707,6 @@ const nl2sqlJa = {
   "nl2sql.intentEditor.reset": "変更を戻す",
   "nl2sql.workspace.label": "SQL 生成ワークスペース",
   "nl2sql.workspace.statusLabel": "SQL 生成の現在設定",
-  "nl2sql.workspace.availableTables": "参照可能な表",
-  "nl2sql.workspace.selectedTables": "選択中の表",
   "nl2sql.workspace.tableCount": "{count} 件",
   "nl2sql.workspace.profileUnavailable": "未選択",
   "nl2sql.mode.label": "入力モード",

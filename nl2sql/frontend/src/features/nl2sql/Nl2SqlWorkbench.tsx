@@ -1310,10 +1310,6 @@ function ExecutableNl2SqlWorkbench() {
                         catalog={catalog}
                         loading={loadingCatalog}
                         disabled={active}
-                        availableTableCount={
-                          schemaHeadQuery.data?.object_count ?? catalog.tables.length
-                        }
-                        selectedTableCount={selection.tableNames.length}
                         insertMode="logical"
                         allowedTableNames={profileAllowedTableNames}
                         listMaxHeightClass="max-h-[30rem]"
