@@ -39,6 +39,24 @@ async function expectNoHorizontalScroll(page: Page) {
   expect(size.scrollWidth).toBeLessThanOrEqual(size.width + 1);
 }
 
+async function expectMainScrollDoesNotExposeTrailingBlank(panel: Locator) {
+  const metrics = await panel.evaluate((node) => {
+    const main = document.querySelector<HTMLElement>('main[aria-label="メイン領域"]');
+    if (!main) return null;
+    main.scrollTop = main.scrollHeight;
+    const mainRect = main.getBoundingClientRect();
+    const panelRect = node.getBoundingClientRect();
+    const panelBottomInScrollContent = panelRect.bottom - mainRect.top + main.scrollTop;
+    return {
+      clientHeight: main.clientHeight,
+      scrollHeight: main.scrollHeight,
+      trailingBlank: main.scrollHeight - panelBottomInScrollContent,
+    };
+  });
+  expect(metrics).not.toBeNull();
+  expect(metrics!.trailingBlank).toBeLessThanOrEqual(48);
+}
+
 async function dispatchDevToolsWebVitalsStartTimeError(page: Page) {
   return page.evaluate(() => {
     const error = new Error("Cannot read properties of undefined (reading 'startTime')");
@@ -2537,7 +2555,7 @@ test("テーブル管理はアクションボタンで作成・取込を開閉�
 });
 
 for (const scenario of metadataScenarios) {
-  test(`${scenario.title}は共通カード枠と工程ステッパーで表示する`, async ({ page }) => {
+  test(`${scenario.title}は共通タブと単一カード枠で工程を切り替える`, async ({ page }) => {
     await mockMetadataManagementApi(page);
     await page.goto(scenario.path);
 
@@ -2546,19 +2564,36 @@ for (const scenario of metadataScenarios) {
     expect(targetsStyle.borderTopWidth).toBe("1px");
     expect(Number.parseFloat(targetsStyle.paddingTop)).toBeGreaterThan(0);
 
-    // タブではなく工程ステッパー。3 工程セクションは常時縦積みで同じカード枠を共有する。
+    // データ管理系と同じく、工程はタブで切り替えてページ末尾の余分なスクロール余白を防ぐ。
     await expect(page.getByTestId(`${scenario.idPrefix}-steps`)).toBeVisible();
-    await expect(page.getByRole("tab")).toHaveCount(0);
+    await expect(page.getByRole("tab")).toHaveCount(3);
+    await expect(page.getByRole("tab", { name: "対象選択", exact: true })).toHaveAttribute("aria-selected", "true");
+    await expect(page.locator(`#${scenario.idPrefix}-panel-input`)).toBeHidden();
+    await expect(page.locator(`#${scenario.idPrefix}-panel-execute`)).toBeHidden();
 
-    for (const id of ["targets", "input", "execute"] as const) {
+    for (const target of [
+      { id: "input", tabName: "入力確認・SQL生成" },
+      { id: "execute", tabName: "SQL実行" },
+    ] as const) {
+      await page.getByRole("tab", { name: target.tabName, exact: true }).click();
+      const panel = page.locator(`#${scenario.idPrefix}-panel-${target.id}`);
+      await expect(panel).toBeVisible();
+      expect(await topLevelPanelStyle(page, target.id, scenario.idPrefix)).toEqual(targetsStyle);
+      await expect(page.locator(`#${scenario.idPrefix}-panel-targets`)).toBeHidden();
+    }
+
+    await page.getByRole("tab", { name: "SQL実行", exact: true }).click();
+    const executePanel = page.locator(`#${scenario.idPrefix}-panel-execute`);
+    await expect(executePanel.getByRole("button", { name: "SQL プレビュー" })).toHaveCount(0);
+    await expect(executePanel.getByLabel("Oracle に実行する")).toHaveCount(0);
+    await expect(executePanel.getByRole("button", { name: "SQL 実行" })).toBeDisabled();
+    await expectMainScrollDoesNotExposeTrailingBlank(executePanel);
+
+    await page.getByRole("tab", { name: "対象選択", exact: true }).click();
+    for (const id of ["targets"] as const) {
       const panel = page.locator(`#${scenario.idPrefix}-panel-${id}`);
       await expect(panel).toBeVisible();
       expect(await topLevelPanelStyle(page, id, scenario.idPrefix)).toEqual(targetsStyle);
-      if (id === "execute") {
-        await expect(panel.getByRole("button", { name: "SQL プレビュー" })).toHaveCount(0);
-        await expect(panel.getByLabel("Oracle に実行する")).toHaveCount(0);
-        await expect(panel.getByRole("button", { name: "SQL 実行" })).toBeDisabled();
-      }
     }
 
     const hasPageHorizontalScroll = await page.evaluate(
