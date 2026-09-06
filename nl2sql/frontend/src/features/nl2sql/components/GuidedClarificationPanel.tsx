@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { CheckCircle2, Play, Sparkles, X } from "lucide-react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { CheckCircle2, ChevronDown, Play, Sparkles, X } from "lucide-react";
 
 import { Banner } from "@engchina/production-ready-ui";
 
@@ -49,6 +49,40 @@ const SOURCE_LABELS: Record<ClarificationEvidenceSource, string> = {
 interface ManualAnswerValue {
   optionIds: string[];
   freeText: string;
+}
+
+function TechnicalEvidence({ name, evidence }: { name: string; evidence: string }) {
+  const [open, setOpen] = useState(false);
+  const contentId = useId();
+  return (
+    <div className="text-xs text-muted">
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        aria-label={t("nl2sql.clarification.evidenceFor", { name })}
+        aria-expanded={open}
+        aria-controls={contentId}
+        className="-ml-2 min-h-11 px-2 text-xs font-normal text-muted"
+        onClick={() => setOpen((current) => !current)}
+      >
+        {t("nl2sql.clarification.evidence")}
+        <ChevronDown
+          size={14}
+          aria-hidden="true"
+          className={open ? "rotate-180" : ""}
+        />
+      </Button>
+      {open ? (
+        <div id={contentId} className="pb-2">
+          <span className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-muted">
+            {t("nl2sql.clarification.evidenceAudience")}
+          </span>
+          <span className="block break-all font-mono">{evidence}</span>
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function latestIntent(session: QuerySession | null) {
@@ -475,34 +509,35 @@ export function GuidedClarificationPanel({
               {currentQuestion.options.map((option) => {
                 const checked = selectedOptionIds.includes(option.id);
                 return (
-                  <label
+                  <div
                     key={option.id}
-                    className="flex min-h-11 cursor-pointer items-start gap-3 rounded-md border border-control-border bg-card px-3 py-2 text-sm text-foreground has-[:checked]:border-primary has-[:checked]:bg-primary/5"
+                    className="rounded-md border border-control-border bg-card text-sm text-foreground has-[:checked]:border-primary has-[:checked]:bg-primary/5"
                   >
-                    <input
-                      type={currentQuestion.answer_kind === "multi_select" ? "checkbox" : "radio"}
-                      name={`clarification-${currentQuestion.id}`}
-                      value={option.id}
-                      checked={checked}
-                      disabled={Boolean(busyAction)}
-                      onChange={() => selectOption(option.id)}
-                      className="mt-1 h-4 w-4 accent-primary"
-                    />
-                    <span className="min-w-0">
-                      <span className="block font-medium">{option.label_ja}</span>
-                      {option.description_ja ? (
-                        <span className="mt-0.5 block text-xs leading-5 text-muted">
-                          {option.description_ja}
-                        </span>
-                      ) : null}
-                      {option.evidence_ja ? (
-                        <details className="mt-1 text-xs text-muted">
-                          <summary className="cursor-pointer">{t("nl2sql.clarification.evidence")}</summary>
-                          <span className="mt-1 block break-all">{option.evidence_ja}</span>
-                        </details>
-                      ) : null}
-                    </span>
-                  </label>
+                    <label className="flex min-h-11 cursor-pointer items-start gap-3 px-3 py-2">
+                      <input
+                        type={currentQuestion.answer_kind === "multi_select" ? "checkbox" : "radio"}
+                        name={`clarification-${currentQuestion.id}`}
+                        value={option.id}
+                        checked={checked}
+                        disabled={Boolean(busyAction)}
+                        onChange={() => selectOption(option.id)}
+                        className="mt-1 h-4 w-4 accent-primary"
+                      />
+                      <span className="min-w-0">
+                        <span className="block font-medium">{option.label_ja}</span>
+                        {option.description_ja ? (
+                          <span className="mt-0.5 block text-xs leading-5 text-muted">
+                            {option.description_ja}
+                          </span>
+                        ) : null}
+                      </span>
+                    </label>
+                    {option.evidence_ja ? (
+                      <div className="border-t border-border/70 px-3 pl-10">
+                        <TechnicalEvidence name={option.label_ja} evidence={option.evidence_ja} />
+                      </div>
+                    ) : null}
+                  </div>
                 );
               })}
             </div>
@@ -566,25 +601,42 @@ export function GuidedClarificationPanel({
                 <legend className="px-1 text-sm font-medium leading-6 text-foreground">
                   {question.prompt_ja}
                 </legend>
+                {question.reason_ja ? (
+                  <p className="text-xs leading-5 text-muted">{question.reason_ja}</p>
+                ) : null}
                 {question.options.map((option) => (
-                  <label key={option.id} className="flex min-h-11 items-center gap-3 text-sm text-foreground">
-                    <input
-                      type={question.answer_kind === "multi_select" ? "checkbox" : "radio"}
-                      name={`manual-${question.id}`}
-                      checked={value.optionIds.includes(option.id)}
-                      disabled={Boolean(busyAction)}
-                      onChange={() => {
-                        const optionIds = question.answer_kind === "multi_select"
-                          ? (value.optionIds.includes(option.id)
-                              ? value.optionIds.filter((item) => item !== option.id)
-                              : [...value.optionIds, option.id])
-                          : [option.id];
-                        updateManualAnswer(question, { optionIds });
-                      }}
-                      className="h-4 w-4 accent-primary"
-                    />
-                    <span>{option.label_ja}</span>
-                  </label>
+                  <div key={option.id} className="rounded-md border border-control-border bg-background has-[:checked]:border-primary has-[:checked]:bg-primary/5">
+                    <label className="flex min-h-11 cursor-pointer items-start gap-3 px-3 py-2 text-sm text-foreground">
+                      <input
+                        type={question.answer_kind === "multi_select" ? "checkbox" : "radio"}
+                        name={`manual-${question.id}`}
+                        checked={value.optionIds.includes(option.id)}
+                        disabled={Boolean(busyAction)}
+                        onChange={() => {
+                          const optionIds = question.answer_kind === "multi_select"
+                            ? (value.optionIds.includes(option.id)
+                                ? value.optionIds.filter((item) => item !== option.id)
+                                : [...value.optionIds, option.id])
+                            : [option.id];
+                          updateManualAnswer(question, { optionIds });
+                        }}
+                        className="mt-1 h-4 w-4 accent-primary"
+                      />
+                      <span className="min-w-0">
+                        <span className="block font-medium">{option.label_ja}</span>
+                        {option.description_ja ? (
+                          <span className="mt-0.5 block text-xs leading-5 text-muted">
+                            {option.description_ja}
+                          </span>
+                        ) : null}
+                      </span>
+                    </label>
+                    {option.evidence_ja ? (
+                      <div className="border-t border-border/70 px-3 pl-10">
+                        <TechnicalEvidence name={option.label_ja} evidence={option.evidence_ja} />
+                      </div>
+                    ) : null}
+                  </div>
                 ))}
                 {question.allow_free_text ? (
                   <label className="grid gap-1 text-sm text-foreground">
@@ -637,10 +689,7 @@ export function GuidedClarificationPanel({
                 </dt>
                 <dd className="mt-1 text-sm font-medium leading-6 text-foreground">{item.value_ja}</dd>
                 {item.technical_evidence_ja ? (
-                  <details className="mt-1 text-xs text-muted">
-                    <summary className="cursor-pointer">{t("nl2sql.clarification.evidence")}</summary>
-                    <span className="mt-1 block break-all">{item.technical_evidence_ja}</span>
-                  </details>
+                  <TechnicalEvidence name={item.label_ja} evidence={item.technical_evidence_ja} />
                 ) : null}
               </div>
             ))}

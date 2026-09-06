@@ -754,8 +754,8 @@ test("AI要件確認は質問を補完してSQL生成と実行へ進める", asy
   const panel = page.getByTestId("nl2sql-guided-clarification");
   await expect(panel).toBeVisible();
   await expect(page.getByRole("heading", { name: "どの期間を対象にしますか？" })).toBeVisible();
-  await page.getByLabel("今月").check();
-  await page.getByRole("button", { name: "回答して次へ" }).click();
+  await page.getByRole("radio", { name: "今月", exact: true }).check();
+  await page.getByRole("button", { name: "選んだ内容で次へ" }).click();
 
   await expect(
     panel.locator('[data-status-variant="success"]').filter({ hasText: "確認完了" })

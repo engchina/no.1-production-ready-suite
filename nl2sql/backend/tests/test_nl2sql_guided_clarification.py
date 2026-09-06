@@ -16,13 +16,19 @@ from app.features.nl2sql.models import (
     SchemaColumn,
     SchemaTable,
 )
-from app.features.nl2sql.ontology_clarification import build_clarification_state
+from app.features.nl2sql.ontology_clarification import (
+    apply_clarification_answer,
+    build_clarification_state,
+)
 from app.features.nl2sql.ontology_models import (
     ClarificationAnswer,
+    ClarificationAnswerKind,
+    ClarificationCategory,
     ClarificationMode,
     ClarificationStatus,
     ClarificationTurn,
     ColumnQueryPolicy,
+    IntentAmbiguity,
     OntologyNodeKind,
     QuerySession,
     QuerySessionStatus,
@@ -80,7 +86,14 @@ class _GuidedLegacyService:
                             data_type="VARCHAR2",
                             comment="受注の状態",
                             sample_values=["CONFIRMED", "SECRET_VALUE"],
-                        )
+                        ),
+                        SchemaColumn(
+                            column_name="ORDER_ID",
+                            logical_name="受注ID",
+                            data_type="NUMBER",
+                            comment="受注を識別する主キー",
+                            sample_values=["1001", "1002"],
+                        ),
                     ],
                 )
             ],
@@ -313,11 +326,108 @@ def test_guided_session_asks_for_missing_time_and_accepts_scoped_option() -> Non
 
     assert updated.session.current_intent_version == 2
     assert len(updated.session.clarification_turns) == 1
+    assert updated.session.clarification_turns[0].prompt_version == "deterministic_first_v2"
     assert updated.session.intents[-1].time_range is not None
     assert updated.session.intents[-1].time_range.relative_expression == "今月"
     assert updated.clarification is not None
     assert updated.clarification.status == ClarificationStatus.READY_TO_CONFIRM
     assert updated.clarification.can_generate_sql is True
+
+
+def test_embedding_column_ambiguity_is_presented_as_business_output_selection() -> None:
+    runtime = _runtime()
+    created = _create_guided(runtime)
+    ontology = runtime.ontology_revision(created.session.ontology_revision_id)
+    columns = [
+        node
+        for node in ontology.nodes
+        if node.kind == OntologyNodeKind.COLUMN
+        and node.technical_name in {"APP.ORDERS.STATUS", "APP.ORDERS.ORDER_ID"}
+    ]
+    assert len(columns) == 2
+    intent = created.session.intents[-1].model_copy(deep=True)
+    intent.metrics = []
+    intent.dimensions = []
+    intent.ambiguities = [
+        IntentAmbiguity(
+            id="embedding-columns",
+            code="ontology_embedding_ambiguous",
+            message_ja="Embedding 検索だけでは業務要素を一意に確定できません。",
+            options=[node.technical_name for node in columns],
+            blocking=True,
+        )
+    ]
+    session = created.session.model_copy(
+        deep=True,
+        update={"intents": [intent], "clarification_turns": []},
+    )
+
+    state = build_clarification_state(session, ontology, created.profile_ontology_view)
+
+    question = state.current_question
+    assert question is not None
+    assert question.category == ClarificationCategory.OUTPUT
+    assert question.answer_kind == ClarificationAnswerKind.MULTI_SELECT
+    assert question.prompt_ja == "検索結果に表示する項目を選んでください。"
+    assert "必要な項目をすべて選んでください" in question.reason_ja
+    assert state.missing_required == [question.prompt_ja]
+    assert "Embedding" not in f"{question.prompt_ja}{question.reason_ja}{state.missing_required}"
+    assert {option.label_ja for option in question.options} == {"受注状態", "受注ID"}
+    assert all("検索結果に" in option.description_ja for option in question.options)
+    assert all("主キー" not in option.description_ja for option in question.options)
+    assert {option.evidence_ja for option in question.options} == {
+        "APP.ORDERS.STATUS",
+        "APP.ORDERS.ORDER_ID",
+    }
+
+    answer = ClarificationAnswer(
+        question_id=question.id,
+        selected_option_ids=[option.id for option in question.options],
+    )
+    updated_intent = apply_clarification_answer(intent, question, answer, ontology)
+
+    assert {item.name_ja for item in updated_intent.dimensions} == {"受注状態", "受注ID"}
+
+
+@pytest.mark.parametrize(
+    ("code", "expected_prompt"),
+    [
+        ("business_meaning_required", "どの業務対象について調べますか？"),
+        ("relationship_path_required", "業務対象をどの関係で結びますか？"),
+        ("filter_value_required", "どの条件で絞り込みますか？"),
+        ("time_range_required", "どの期間を対象にしますか？"),
+        ("granularity_required", "どの単位で集計しますか？"),
+        ("output_format_required", "検索結果に何を表示しますか？"),
+    ],
+)
+def test_clarification_categories_use_answerable_business_copy(
+    code: str,
+    expected_prompt: str,
+) -> None:
+    runtime = _runtime()
+    created = _create_guided(runtime)
+    ontology = runtime.ontology_revision(created.session.ontology_revision_id)
+    intent = created.session.intents[-1].model_copy(deep=True)
+    intent.metrics = []
+    intent.ambiguities = [
+        IntentAmbiguity(
+            id=f"ambiguity-{code}",
+            code=code,
+            message_ja="Embedding / Ontology / Schema の内部診断です。",
+            blocking=True,
+        )
+    ]
+    session = created.session.model_copy(deep=True, update={"intents": [intent]})
+
+    state = build_clarification_state(session, ontology, created.profile_ontology_view)
+
+    assert state.remaining_questions
+    question = state.remaining_questions[0]
+    assert question.prompt_ja == expected_prompt
+    assert not any(
+        term in f"{question.prompt_ja}{question.reason_ja}"
+        for term in ("Embedding", "Ontology", "Schema", "GROUP BY")
+    )
 
 
 def test_guided_answer_rejects_option_not_returned_by_current_question() -> None:
