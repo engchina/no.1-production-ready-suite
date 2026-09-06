@@ -7,6 +7,7 @@ import { Banner, toast } from "@engchina/production-ready-ui";
 import { PageHeader } from "@/components/PageHeader";
 import { ProcessingIndicator } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";
+import { ClearActionButton } from "@/components/ui/clear-action-button";
 import { FileDropzone } from "@/components/ui/file-dropzone";
 import { FieldLabel, RequiredFieldsNote } from "@/components/ui/required-field";
 import { StatusBadge } from "@/components/ui/status-badge";
@@ -104,11 +105,13 @@ function ImportWizard({
   table,
   sheet,
   filename,
+  fileResetSignal,
   fileReady,
   result,
   step,
   confirmation,
   loading,
+  canClear,
   error,
   schemaRefreshError,
   schemaRefreshNeedsFull,
@@ -116,6 +119,7 @@ function ImportWizard({
   onSheetChange,
   onFilePick,
   onFileClear,
+  onClear,
   onExecute,
   onConfirmationChange,
   onReturnToList,
@@ -124,11 +128,13 @@ function ImportWizard({
   table: string;
   sheet: string;
   filename: string;
+  fileResetSignal: number;
   fileReady: boolean;
   result: DbAdminImportTabularData | null;
   step: ImportStep;
   confirmation: string;
   loading: boolean;
+  canClear: boolean;
   error: unknown;
   schemaRefreshError: string;
   schemaRefreshNeedsFull: boolean;
@@ -136,6 +142,7 @@ function ImportWizard({
   onSheetChange: (value: string) => void;
   onFilePick: (file: File | undefined) => void;
   onFileClear: () => void;
+  onClear: () => void;
   onExecute: () => void;
   onConfirmationChange: (value: string) => void;
   onReturnToList: () => void;
@@ -212,6 +219,7 @@ function ImportWizard({
         accept={CORE_TABULAR_FILE_FORMATS.accept}
         selectedText={filename ? t("tableMgmt.importWizard.selectedFile", { filename }) : ""}
         formatLabel={CORE_TABULAR_FILE_FORMATS.formatLabel}
+        resetSignal={fileResetSignal}
         required
         actionText={t("common.fileDropzone.action")}
         replaceText={t("tableMgmt.importWizard.fileReplace")}
@@ -249,6 +257,12 @@ function ImportWizard({
                 <Upload size={15} aria-hidden="true" />
                 <span>{t("dataTools.dbAdmin.import")}</span>
               </Button>
+              <ClearActionButton
+                label={t("dbAdmin.runner.clear")}
+                className="w-full sm:w-auto"
+                disabled={!canClear || loading}
+                onClick={onClear}
+              />
               <div className="w-full">
                 {Boolean(error) && <DbAdminErrorNotice error={error} onReturnToList={onReturnToList} />}
               </div>
@@ -329,6 +343,7 @@ export function TableManagementPage() {
   const [dropError, setDropError] = useState("");
   const [importTable, setImportTable] = useState("");
   const [importFilename, setImportFilename] = useState("");
+  const [importFileResetSignal, setImportFileResetSignal] = useState(0);
   const [importBase64, setImportBase64] = useState("");
   const [importSheet, setImportSheet] = useState("");
   const [importStep, setImportStep] = useState<ImportStep>("file");
@@ -604,6 +619,27 @@ export function TableManagementPage() {
     setImportSchemaRefreshNeedsFull(false);
     completedImportSchemaRefreshJob.current = "";
     setImportStep("file");
+    setImportFileResetSignal((value) => value + 1);
+  };
+
+  const canClearImportWizard = Boolean(
+    importTable ||
+      importSheet ||
+      importFilename ||
+      importBase64 ||
+      importConfirmation ||
+      importResult ||
+      importError ||
+      importSchemaRefreshJobId ||
+      importSchemaRefreshError ||
+      importSchemaRefreshNeedsFull
+  );
+
+  const clearImportWizard = () => {
+    setImportTable("");
+    setImportSheet("");
+    setImportConfirmation("");
+    clearImportFile();
   };
 
   const importTabular = async () => {
@@ -731,11 +767,13 @@ export function TableManagementPage() {
         table={importTable}
         sheet={importSheet}
         filename={importFilename}
+        fileResetSignal={importFileResetSignal}
         fileReady={Boolean(importBase64)}
         result={importResult}
         step={importStep}
         confirmation={importConfirmation}
         loading={loading === "import-tabular"}
+        canClear={canClearImportWizard}
         error={importError}
         schemaRefreshError={visibleImportSchemaRefreshError}
         schemaRefreshNeedsFull={importSchemaRefreshNeedsFull}
@@ -761,6 +799,7 @@ export function TableManagementPage() {
         }}
         onFilePick={(file) => void pickImportFile(file)}
         onFileClear={clearImportFile}
+        onClear={clearImportWizard}
         onExecute={() => void importTabular()}
         onConfirmationChange={(value) => {
           setImportConfirmation(value);

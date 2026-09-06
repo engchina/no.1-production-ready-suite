@@ -2462,10 +2462,21 @@ test("保存が成功したら実行確認語をクリアして保存ボタン�
 
   const confirmationField = page.getByLabel("実行確認語");
   const saveButton = page.getByRole("button", { name: "保存", exact: true });
+  const clearButton = page
+    .getByTestId("execution-confirmation-field")
+    .getByRole("button", { name: "クリア", exact: true });
 
   await page.getByLabel("名称").fill("sales_profile");
   await page.getByLabel("カテゴリ").fill("finance");
   await expect(saveButton).toBeDisabled();
+  await expect(clearButton).toBeDisabled();
+  await confirmationField.fill("ADMIN_EXECUTE");
+  await expect(saveButton).toBeEnabled();
+  await expect(clearButton).toBeEnabled();
+  await clearButton.click();
+  await expect(confirmationField).toHaveValue("");
+  await expect(saveButton).toBeDisabled();
+  await expect(clearButton).toBeDisabled();
   await confirmationField.fill("ADMIN_EXECUTE");
   await expect(saveButton).toBeEnabled();
   await saveButton.click();
