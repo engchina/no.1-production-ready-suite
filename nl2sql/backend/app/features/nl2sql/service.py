@@ -712,6 +712,8 @@ _HISTORY_PAGE_DEFAULT_LIMIT = 50
 _HISTORY_PAGE_MAX_LIMIT = 200
 # 類似履歴 / few-shot の母集団上限(管理者 GOOD の履歴を新しい順にこの件数まで読む)。
 _SIMILAR_HISTORY_POOL_LIMIT = 1000
+_PROFILE_FEW_SHOT_EXAMPLE_LIMIT = 3
+_LEARNING_EXAMPLE_LIMIT = 5
 _FEEDBACK_INDEX_OPERATION_LOCK = threading.RLock()
 # 別プロセス(gunicorn worker)からのキャンセル要求を伝える repository 上の専用 collection。
 # owner の _persist_job が job 本体を丸ごと上書きしても失われない別ドキュメントにする。
@@ -7581,16 +7583,21 @@ class Nl2SqlService:
         *,
         allowed_profile_ids: set[str] | None = None,
     ) -> SimilarHistoryData:
-        ranked = self._similar_history_candidates(
+        engine = request.engine or Nl2SqlEngine.ENTERPRISE_AI_DIRECT
+        profile = self._similar_history_profile_for_examples(request.profile_id)
+        items = self._similar_history_candidates_for_generation(
             question=request.question,
-            profile_id=request.profile_id,
+            profile=profile,
+            engine=engine,
+            candidate_profile_id=request.profile_id,
             allowed_profile_ids=allowed_profile_ids,
-            include_bad=False,
+            limit=request.limit,
         )
-        limit = request.limit or self._feedback_match_limit
-        threshold = self._feedback_similarity_threshold
-        filtered = [item for item in ranked if item.score >= threshold]
-        return SimilarHistoryData(items=filtered[:limit])
+        return SimilarHistoryData(
+            items=items,
+            used_for_generation=self._engine_uses_similar_history_few_shot(engine),
+            engine=engine,
+        )
 
     def list_feedback_entries(
         self,
@@ -16006,11 +16013,19 @@ class Nl2SqlService:
             cleaned = re.sub(r"\s*```$", "", cleaned)
         return cleaned.strip().strip('"')
 
-    def _learning_examples_for_generation(
-        self, *, question: str, profile: Nl2SqlProfile
-    ) -> list[LearningExample]:
+    def _similar_history_profile_for_examples(self, profile_id: str | None) -> Nl2SqlProfile | None:
+        try:
+            return self.get_profile(profile_id)
+        except (KeyError, ValueError):
+            return None
+
+    @staticmethod
+    def _engine_uses_similar_history_few_shot(engine: Nl2SqlEngine) -> bool:
+        return engine not in {Nl2SqlEngine.SELECT_AI, Nl2SqlEngine.SELECT_AI_AGENT}
+
+    def _profile_learning_examples(self, profile: Nl2SqlProfile) -> list[LearningExample]:
         examples: list[LearningExample] = []
-        for profile_example in profile.few_shot_examples[:3]:
+        for profile_example in profile.few_shot_examples[:_PROFILE_FEW_SHOT_EXAMPLE_LIMIT]:
             example_question = str(profile_example.get("question") or "").strip()
             sql = str(
                 profile_example.get("sql") or profile_example.get("expected_sql") or ""
@@ -16023,11 +16038,52 @@ class Nl2SqlService:
                         sql=sql,
                     )
                 )
-        for history_candidate in self._similar_history_candidates(
+        return examples
+
+    def _similar_history_candidates_for_generation(
+        self,
+        *,
+        question: str,
+        profile: Nl2SqlProfile | None,
+        engine: Nl2SqlEngine,
+        candidate_profile_id: str | None,
+        allowed_profile_ids: set[str] | None = None,
+        limit: int | None = None,
+    ) -> list[SimilarHistoryItem]:
+        if not self._engine_uses_similar_history_few_shot(engine):
+            return []
+        profile_example_count = len(self._profile_learning_examples(profile)) if profile else 0
+        remaining_slots = max(0, _LEARNING_EXAMPLE_LIMIT - profile_example_count)
+        configured_limit = max(0, self._feedback_match_limit)
+        requested_limit = configured_limit if limit is None else limit
+        effective_limit = max(0, min(requested_limit, remaining_slots))
+        if effective_limit <= 0:
+            return []
+        ranked = self._similar_history_candidates(
             question=question,
-            profile_id=profile.id,
+            profile_id=candidate_profile_id,
+            allowed_profile_ids=allowed_profile_ids,
             include_bad=False,
-        )[:3]:
+        )
+        threshold = self._feedback_similarity_threshold
+        return [
+            candidate
+            for candidate in ranked
+            if candidate.score >= threshold and candidate.item.generated_sql.strip()
+        ][:effective_limit]
+
+    def _learning_examples_for_generation(
+        self, *, question: str, profile: Nl2SqlProfile, engine: Nl2SqlEngine
+    ) -> list[LearningExample]:
+        if not self._engine_uses_similar_history_few_shot(engine):
+            return []
+        examples = self._profile_learning_examples(profile)
+        for history_candidate in self._similar_history_candidates_for_generation(
+            question=question,
+            profile=profile,
+            engine=engine,
+            candidate_profile_id=profile.id,
+        ):
             if history_candidate.item.generated_sql.strip():
                 examples.append(
                     LearningExample(
@@ -16044,7 +16100,7 @@ class Nl2SqlService:
                         reason=history_candidate.reason,
                     )
                 )
-        return examples[:5]
+        return examples[:_LEARNING_EXAMPLE_LIMIT]
 
     def _learning_example_meta(self, example: LearningExample) -> dict[str, Any]:
         data: dict[str, Any] = {
@@ -17246,6 +17302,7 @@ class Nl2SqlService:
             else self._learning_examples_for_generation(
                 question=effective_question,
                 profile=profile,
+                engine=engine,
             )
         )
         history_examples = [

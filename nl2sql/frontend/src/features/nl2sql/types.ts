@@ -716,6 +716,8 @@ export interface SimilarHistoryItem {
 
 export interface SimilarHistoryData {
   items: SimilarHistoryItem[];
+  used_for_generation?: boolean;
+  engine?: Nl2SqlEngine | null;
 }
 
 export type QualityEvaluationEngine = Exclude<Nl2SqlEngine, "auto">;

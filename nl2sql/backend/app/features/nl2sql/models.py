@@ -1340,6 +1340,7 @@ class SimilarHistoryRequest(BaseModel):
 
     question: str = Field(min_length=1)
     profile_id: str | None = None
+    engine: Nl2SqlEngine | None = None
     limit: int | None = Field(default=None, ge=1, le=20)
 
 
@@ -1355,6 +1356,8 @@ class SimilarHistoryData(BaseModel):
     """類似履歴検索 response."""
 
     items: list[SimilarHistoryItem] = Field(default_factory=list)
+    used_for_generation: bool = True
+    engine: Nl2SqlEngine | None = None
 
 
 class ProfileRecommendationRequest(BaseModel):

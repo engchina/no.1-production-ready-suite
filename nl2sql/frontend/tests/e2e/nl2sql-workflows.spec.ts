@@ -4289,23 +4289,53 @@ test("検索実行開始時に前回の生成結果を先に消し、現在の�
 
 test("参考履歴は件数を表示し、候補があれば自動で展開する", async ({ page }) => {
   await mockNl2SqlApi(page);
+  let similarHistoryPayload: Record<string, unknown> | null = null;
+  await page.unroute("**/api/nl2sql/similar-history");
+  await page.route("**/api/nl2sql/similar-history", (route) => {
+    similarHistoryPayload = route.request().postDataJSON() as Record<string, unknown>;
+    return fulfillJson(route, {
+      used_for_generation: true,
+      engine: "enterprise_ai_direct",
+      items: [0.9, 0.88, 0.86].map((score, index) => ({
+        item: {
+          ...historyItem,
+          id: `hist-direct-${index + 1}`,
+          question: `Direct 参考履歴 ${index + 1}`,
+          admin_feedback_rating: "good",
+          admin_feedback_content: "管理者確認済み",
+        },
+        score,
+        reason: "請求金額の履歴と近い質問です。",
+      })),
+    });
+  });
 
   await page.goto("/query");
   await expect(page.getByRole("region", { name: "SQL 生成ワークスペース" })).toBeVisible();
+  await page.getByRole("button", { name: /Enterprise AI Direct/ }).click();
 
   // 4 文字以上の質問を入力すると参考履歴を取得する（debounce 650ms）。
   await nl2sqlQuestionInput(page).fill("請求金額を一覧で見たい");
+  await expect.poll(() => similarHistoryPayload).toMatchObject({
+    question: "請求金額を一覧で見たい",
+    profile_id: "default",
+    engine: "enterprise_ai_direct",
+  });
+  expect(similarHistoryPayload ?? {}).not.toHaveProperty("limit");
 
   const header = page.getByRole("button", { name: /参考履歴/ });
   await expect(header).toBeVisible();
-  await expect(header).toContainText("1 件");
+  await expect(header).toContainText("3 件");
   await expect(header).toContainText("管理者レビュー結果: 良いのみ");
   // 候補がある検索完了後は自動で展開する。
   await expect(header).toHaveAttribute("aria-expanded", "true");
   await expect(page.getByTestId("nl2sql-similar-history")).toBeAttached();
   await expect(page.getByTestId("nl2sql-similar-history")).toBeVisible();
   await expect(page.getByText("類似度 90%")).toBeVisible();
-  await expect(page.getByText("請求金額の履歴と近い質問です。")).toBeVisible();
+  await expect(page.getByText("類似度 88%")).toBeVisible();
+  await expect(page.getByText("類似度 86%")).toBeVisible();
+  await expect(page.getByTestId("nl2sql-similar-history-item")).toHaveCount(3);
+  await expect(page.getByText("請求金額の履歴と近い質問です。")).toHaveCount(3);
   await header.click();
   await expect(header).toHaveAttribute("aria-expanded", "false");
   await expect(page.getByTestId("nl2sql-similar-history")).toBeHidden();
@@ -4327,6 +4357,43 @@ test("参考履歴は件数を表示し、候補があれば自動で展開す�
   await expect(page.getByText("類似度 90%")).toBeVisible();
   await expectNoHorizontalScroll(page);
   jobsGate.release();
+});
+
+test("Select AI 系では参考履歴を few-shot に使わない注記を表示する", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  let similarHistoryPayload: Record<string, unknown> | null = null;
+  await page.unroute("**/api/nl2sql/similar-history");
+  await page.route("**/api/nl2sql/similar-history", (route) => {
+    similarHistoryPayload = route.request().postDataJSON() as Record<string, unknown>;
+    return fulfillJson(route, {
+      used_for_generation: false,
+      engine: "select_ai",
+      items: [
+        {
+          item: { ...historyItem, admin_feedback_rating: "good", admin_feedback_content: "管理者確認済み" },
+          score: 0.9,
+          reason: "Select AI では表示しない履歴です。",
+        },
+      ],
+    });
+  });
+
+  await page.goto("/query");
+  await expect(page.getByRole("region", { name: "SQL 生成ワークスペース" })).toBeVisible();
+  await nl2sqlQuestionInput(page).fill("請求金額を一覧で見たい");
+
+  await expect.poll(() => similarHistoryPayload).toMatchObject({
+    question: "請求金額を一覧で見たい",
+    profile_id: "default",
+    engine: "select_ai",
+  });
+  const header = page.getByRole("button", { name: /参考履歴/ });
+  await expect(header).toContainText("few-shot 不使用");
+
+  await header.click();
+  const panel = page.getByTestId("nl2sql-similar-history");
+  await expect(panel).toContainText("このエンジンでは参考履歴を few-shot として SQL 生成へ注入しません。");
+  await expect(panel.getByTestId("nl2sql-similar-history-item")).toHaveCount(0);
 });
 
 test("参考履歴は API が空の場合も表示し、空状態を展開できる", async ({ page }) => {
@@ -4474,6 +4541,7 @@ test("参考履歴は管理者レビュー結果が良い履歴だけを表示�
   const workspace = page.getByRole("region", { name: "SQL 生成ワークスペース" });
   await expect(workspace).toBeVisible();
 
+  await page.getByRole("button", { name: /Enterprise AI Direct/ }).click();
   await nl2sqlQuestionInput(page).fill("請求金額を一覧で見たい");
   const header = page.getByRole("button", { name: /参考履歴/ });
   await expect(header).toBeVisible();
@@ -7668,6 +7736,7 @@ test("admin good feedback is available as similar history without manual index r
   expect(rebuildRequested).toBe(false);
 
   await page.goto("/query");
+  await page.getByRole("button", { name: /Enterprise AI Direct/ }).click();
   await nl2sqlQuestionInput(page).fill("履歴から再実行したい請求金額");
   const similarHistoryHeader = page.getByRole("button", { name: /参考履歴/ });
   await expect(similarHistoryHeader).toBeVisible();

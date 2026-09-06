@@ -100,6 +100,10 @@ function goodFeedbackSimilarHistory(items: SimilarHistoryItem[]): SimilarHistory
   return items.filter((entry) => entry.item.admin_feedback_rating === "good");
 }
 
+function engineUsesSimilarHistoryFewShot(engine: Nl2SqlEngine): boolean {
+  return engine !== "select_ai" && engine !== "select_ai_agent";
+}
+
 type PageErrorSource = "profile-load" | "schema-load" | "schema-refresh" | "sample-import";
 type PageError = { source: PageErrorSource; message: string; code?: string } | null;
 
@@ -171,6 +175,7 @@ function ExecutableNl2SqlWorkbench() {
   const [similarHistoryLoading, setSimilarHistoryLoading] = useState(false);
   const [similarHistorySearchCompleted, setSimilarHistorySearchCompleted] = useState(false);
   const [similarHistoryPanelVisible, setSimilarHistoryPanelVisible] = useState(false);
+  const [similarHistoryUsedForGeneration, setSimilarHistoryUsedForGeneration] = useState(true);
   const [rewriteData, setRewriteData] = useState<RewriteData | null>(null);
   const [rewriteUseGlossary, setRewriteUseGlossary] = useState(false);
   const [useOntologyContext, setUseOntologyContext] = useState(true);
@@ -574,6 +579,7 @@ function ExecutableNl2SqlWorkbench() {
       setSimilarHistoryPanelVisible(false);
       setSimilarHistoryLoading(false);
       setSimilarHistoryOpen(false);
+      setSimilarHistoryUsedForGeneration(true);
       return undefined;
     }
     if (active) {
@@ -589,13 +595,16 @@ function ExecutableNl2SqlWorkbench() {
       void apiPost<SimilarHistoryData>("/api/nl2sql/similar-history", {
         question: trimmed,
         profile_id: profileId || null,
-        limit: 3,
+        engine,
       }, { signal: controller.signal })
         .then((data) => {
           if (!controller.signal.aborted) {
-            const goodHistory = goodFeedbackSimilarHistory(data.items);
+            const usedForGeneration =
+              data.used_for_generation ?? engineUsesSimilarHistoryFewShot(engine);
+            const goodHistory = usedForGeneration ? goodFeedbackSimilarHistory(data.items) : [];
             setSimilarHistory(goodHistory);
-            if (goodHistory.length > 0) setSimilarHistoryOpen(true);
+            setSimilarHistoryUsedForGeneration(usedForGeneration);
+            setSimilarHistoryOpen(goodHistory.length > 0);
             setSimilarHistorySearchCompleted(true);
             setSimilarHistoryPanelVisible(true);
           }
@@ -606,6 +615,7 @@ function ExecutableNl2SqlWorkbench() {
             setSimilarHistorySearchCompleted(false);
             setSimilarHistoryPanelVisible(false);
             setSimilarHistoryOpen(false);
+            setSimilarHistoryUsedForGeneration(true);
           }
         })
         .finally(() => {
@@ -616,7 +626,7 @@ function ExecutableNl2SqlWorkbench() {
       controller.abort();
       window.clearTimeout(timer);
     };
-  }, [active, profileId, profiles.length, question]);
+  }, [active, engine, profileId, profiles.length, question]);
 
   const insertSchemaText = (text: string) => {
     setRewriteData(null);
@@ -1403,6 +1413,9 @@ function ExecutableNl2SqlWorkbench() {
                             label={t("nl2sql.similar.count", { count: similarHistory.length })}
                           />
                           <StatusBadge variant="success" label={t("nl2sql.similar.goodOnly")} />
+                          {!similarHistoryUsedForGeneration && (
+                            <StatusBadge variant="warning" label={t("nl2sql.similar.notUsedBadge")} />
+                          )}
                         </span>
                         <DisclosureChevron
                           expanded={similarHistoryOpen}
@@ -1416,13 +1429,16 @@ function ExecutableNl2SqlWorkbench() {
                         hidden={!similarHistoryOpen}
                         className="grid gap-3 border-t border-border p-3 text-sm text-foreground"
                       >
+                        {!similarHistoryUsedForGeneration && !similarHistoryLoading && (
+                          <Banner severity="info">{t("nl2sql.similar.notUsedHint")}</Banner>
+                        )}
                         {similarHistory.length === 0 && !similarHistoryLoading ? (
                           <EmptyState
                             title={t("nl2sql.similar.emptyTitle")}
                             hint={t("nl2sql.similar.emptyHint")}
                           />
                         ) : (
-                          similarHistory.slice(0, 2).map((entry) => (
+                          similarHistory.map((entry) => (
                             <article
                               key={entry.item.id}
                               data-testid="nl2sql-similar-history-item"

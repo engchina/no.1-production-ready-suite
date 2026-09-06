@@ -19,6 +19,7 @@ from app.features.nl2sql.models import (
     HistoryItem,
     Nl2SqlEngine,
     Nl2SqlProfile,
+    SimilarHistoryItem,
     SimilarHistoryRequest,
 )
 from app.features.nl2sql.service import Nl2SqlService
@@ -246,9 +247,134 @@ def test_few_shot_examples_do_not_cross_profiles() -> None:
     examples = service._learning_examples_for_generation(  # noqa: SLF001
         question="請求金額を確認したい",
         profile=Nl2SqlProfile(id="sales", name="sales profile"),
+        engine=Nl2SqlEngine.ENTERPRISE_AI_DIRECT,
     )
 
     assert [example.history_id for example in examples] == ["hist-001"]
+
+
+def test_similar_history_and_generation_share_threshold_and_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service._feedback_similarity_threshold = 0.75  # noqa: SLF001
+    service._feedback_match_limit = 2  # noqa: SLF001
+    ranked = [
+        SimilarHistoryItem(item=_history(1, admin=FeedbackRating.GOOD), score=0.92, reason="high"),
+        SimilarHistoryItem(item=_history(2, admin=FeedbackRating.GOOD), score=0.81, reason="mid"),
+        SimilarHistoryItem(item=_history(3, admin=FeedbackRating.GOOD), score=0.74, reason="low"),
+    ]
+    monkeypatch.setattr(
+        service,
+        "_similar_history_candidates",
+        lambda **_kwargs: ranked,
+    )
+
+    request = SimilarHistoryRequest(
+        question="請求金額を確認したい",
+        profile_id="default",
+        engine=Nl2SqlEngine.ENTERPRISE_AI_DIRECT,
+    )
+    data = service.similar_history(request)
+    examples = service._learning_examples_for_generation(  # noqa: SLF001
+        question=request.question,
+        profile=Nl2SqlProfile(id="default", name="default profile"),
+        engine=Nl2SqlEngine.ENTERPRISE_AI_DIRECT,
+    )
+
+    assert data.used_for_generation is True
+    assert [entry.item.id for entry in data.items] == ["hist-001", "hist-002"]
+    assert [example.history_id for example in examples] == ["hist-001", "hist-002"]
+
+
+def test_similar_history_generation_reserves_profile_few_shot_slots(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service._feedback_similarity_threshold = 0.0  # noqa: SLF001
+    service._feedback_match_limit = 3  # noqa: SLF001
+    ranked = [
+        SimilarHistoryItem(item=_history(1, admin=FeedbackRating.GOOD), score=0.92, reason="1"),
+        SimilarHistoryItem(item=_history(2, admin=FeedbackRating.GOOD), score=0.91, reason="2"),
+        SimilarHistoryItem(item=_history(3, admin=FeedbackRating.GOOD), score=0.9, reason="3"),
+    ]
+    profile = Nl2SqlProfile(
+        id="default",
+        name="default profile",
+        few_shot_examples=[
+            {"question": "固定例1", "sql": "SELECT 1 FROM DUAL"},
+            {"question": "固定例2", "sql": "SELECT 2 FROM DUAL"},
+            {"question": "固定例3", "sql": "SELECT 3 FROM DUAL"},
+        ],
+    )
+    monkeypatch.setattr(
+        service,
+        "_similar_history_candidates",
+        lambda **_kwargs: ranked,
+    )
+    monkeypatch.setattr(service, "get_profile", lambda _profile_id=None: profile)
+
+    data = service.similar_history(
+        SimilarHistoryRequest(
+            question="請求金額を確認したい",
+            profile_id="default",
+            engine=Nl2SqlEngine.ENTERPRISE_AI_DIRECT,
+        )
+    )
+    examples = service._learning_examples_for_generation(  # noqa: SLF001
+        question="請求金額を確認したい",
+        profile=profile,
+        engine=Nl2SqlEngine.ENTERPRISE_AI_DIRECT,
+    )
+
+    assert [entry.item.id for entry in data.items] == ["hist-001", "hist-002"]
+    assert [example.source for example in examples] == [
+        "profile_few_shot",
+        "profile_few_shot",
+        "profile_few_shot",
+        "similar_history",
+        "similar_history",
+    ]
+    assert [example.history_id for example in examples if example.history_id] == [
+        "hist-001",
+        "hist-002",
+    ]
+
+
+def test_select_ai_engines_do_not_surface_similar_history_for_few_shot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    profile = Nl2SqlProfile(
+        id="default",
+        name="default profile",
+        few_shot_examples=[{"question": "固定例", "sql": "SELECT 1 FROM DUAL"}],
+    )
+    monkeypatch.setattr(service, "get_profile", lambda _profile_id=None: profile)
+    monkeypatch.setattr(
+        service,
+        "_similar_history_candidates",
+        lambda **_kwargs: pytest.fail("Select AI 系では類似履歴を few-shot 候補化しない"),
+    )
+
+    for engine in (Nl2SqlEngine.SELECT_AI, Nl2SqlEngine.SELECT_AI_AGENT):
+        data = service.similar_history(
+            SimilarHistoryRequest(
+                question="請求金額を確認したい",
+                profile_id="default",
+                engine=engine,
+            )
+        )
+        examples = service._learning_examples_for_generation(  # noqa: SLF001
+            question="請求金額を確認したい",
+            profile=profile,
+            engine=engine,
+        )
+
+        assert data.items == []
+        assert data.used_for_generation is False
+        assert data.engine == engine
+        assert examples == []
 
 
 def test_oracle_vector_history_receives_allowed_profile_scope(
