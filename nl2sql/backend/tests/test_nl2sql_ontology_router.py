@@ -29,6 +29,8 @@ from app.features.nl2sql.models import (
     SchemaCatalogHead,
     SchemaColumn,
     SchemaTable,
+    StageTiming,
+    TimingEnvelope,
 )
 from app.features.nl2sql.ontology_build import OntologyBuildService
 from app.features.nl2sql.ontology_models import (
@@ -166,6 +168,22 @@ class _FakeLegacyNl2SqlService:
             is_safe=True,
             row_limit=limit,
             note="deterministic",
+            engine_meta={
+                "generation_elapsed_ms": 42,
+                "engine_timings": [
+                    {
+                        "engine": "select_ai_agent",
+                        "elapsed_ms": 42,
+                        "status": "success",
+                        "error": "",
+                    }
+                ],
+            },
+            timing=TimingEnvelope(
+                created_at="2026-09-06T00:00:00+00:00",
+                elapsed_ms=55,
+                stage_timings=[StageTiming(stage="generate", elapsed_ms=55)],
+            ),
         )
 
     def execute_sql(
@@ -894,6 +912,9 @@ def test_runtime_executes_two_confirmation_flow_and_persists_every_artifact(
     assert legacy.recorded_history[0]["session_id"] == created.session.id
     assert legacy.recorded_history[0]["actor_user_uuid"] == "user-1"
     assert legacy.recorded_history[0]["ontology_trace_summary"]["validation_hash"]
+    assert legacy.recorded_history[0]["generation_elapsed_ms"] == 42
+    assert legacy.recorded_history[0]["engine_timings"][0]["engine"] == "select_ai_agent"
+    assert legacy.recorded_history[0]["stage_timings"][0].stage == "generate"
 
     assert len(store.list_revisions()) == 1
     assert len(store.list_nodes(generated.session.ontology_revision_id)) >= 4

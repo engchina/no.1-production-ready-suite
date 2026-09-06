@@ -20,6 +20,28 @@ const historyItems = [
     executable_sql: "SELECT CUSTOMER_NAME FROM INVOICES WHERE PAID_AT IS NULL",
     created_at: "2026-06-22T10:00:00.000Z",
     elapsed_ms: 250,
+    generation_elapsed_ms: 180,
+    engine_timings: [
+      {
+        engine: "select_ai_agent",
+        elapsed_ms: 80,
+        status: "failed",
+        error: "team execution failed",
+      },
+      {
+        engine: "enterprise_ai_direct",
+        elapsed_ms: 180,
+        status: "success",
+        error: "",
+      },
+    ],
+    stage_timings: [
+      { stage: "prepare_context", elapsed_ms: 20 },
+      { stage: "generate_sql", elapsed_ms: 190 },
+      { stage: "safety_check", elapsed_ms: 15 },
+      { stage: "execute_sql", elapsed_ms: 25 },
+      { stage: "format_results", elapsed_ms: 5 },
+    ],
     feedback_rating: "good",
     profile_id: "finance",
     profile_name: "経理プロファイル",
@@ -263,7 +285,19 @@ test("実行履歴は管理一覧で検索・絞り込み・並べ替え・詳�
   await expect(page.getByTestId("history-detail-question")).toContainText("未入金の顧客を確認");
   await expect(page.getByTestId("history-detail").getByText("安全", { exact: true })).toBeVisible();
   await expect(historyRows(page).first().getByText("利用者評価: 良い", { exact: true })).toBeVisible();
+  await expect(historyRows(page).first().getByText("生成 180ms", { exact: true })).toBeVisible();
   await expect(page.getByTestId("history-detail").getByText("利用者評価: 良い", { exact: true })).toBeVisible();
+  const timingBreakdown = page.getByTestId("history-timing-breakdown");
+  await expect(timingBreakdown).toContainText("処理時間");
+  await expect(timingBreakdown).toContainText("合計");
+  await expect(timingBreakdown).toContainText("250ms");
+  await expect(timingBreakdown).toContainText("生成");
+  await expect(timingBreakdown).toContainText("安全確認");
+  await expect(timingBreakdown).toContainText("実行");
+  await expect(timingBreakdown).toContainText("Select AI Agent");
+  await expect(timingBreakdown).toContainText("失敗");
+  await expect(timingBreakdown).toContainText("Enterprise AI Direct");
+  await expect(timingBreakdown).toContainText("成功");
 
   const search = page.getByRole("searchbox", { name: "履歴検索" });
   await search.fill("集計条件が違います");

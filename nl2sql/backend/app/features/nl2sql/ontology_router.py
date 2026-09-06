@@ -3268,6 +3268,19 @@ class OntologyApiRuntime:
                         * 1000
                     ),
                 )
+            generation_elapsed_ms: int | None = None
+            engine_timings: list[dict[str, object]] = []
+            stage_timings: list[object] = []
+            preview = self._previews.get(session.id)
+            if preview is not None:
+                raw_generation_elapsed_ms = preview.engine_meta.get("generation_elapsed_ms")
+                if isinstance(raw_generation_elapsed_ms, int):
+                    generation_elapsed_ms = raw_generation_elapsed_ms
+                raw_engine_timings = preview.engine_meta.get("engine_timings")
+                if isinstance(raw_engine_timings, list):
+                    engine_timings = [item for item in raw_engine_timings if isinstance(item, dict)]
+                if preview.timing is not None:
+                    stage_timings = list(preview.timing.stage_timings)
             try:
                 record_history(
                     session_id=session.id,
@@ -3280,6 +3293,9 @@ class OntologyApiRuntime:
                     result=result,
                     ontology_trace_summary=data.ontology_trace_summary,
                     elapsed_ms=elapsed_ms,
+                    generation_elapsed_ms=generation_elapsed_ms,
+                    engine_timings=engine_timings,
+                    stage_timings=stage_timings,
                     actor_user_uuid=actor_user_uuid,
                 )
             except Exception:
