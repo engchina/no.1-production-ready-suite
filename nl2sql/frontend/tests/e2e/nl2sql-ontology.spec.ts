@@ -466,7 +466,7 @@ function guidedSessionData(
         current_question: null,
         remaining_questions: [],
         intent_summary: [
-          { key: "entities", label_ja: "業務対象", value_ja: "受注", source: "ontology", confirmed: false },
+          { key: "entities", label_ja: "業務対象", value_ja: "受注", source: "user", confirmed: true },
           { key: "time_range", label_ja: "期間", value_ja: "今月", source: "user", confirmed: true },
         ],
         required_total: 1,
@@ -502,7 +502,7 @@ function guidedSessionData(
         },
         remaining_questions: [],
         intent_summary: [
-          { key: "entities", label_ja: "業務対象", value_ja: "受注", source: "ontology", confirmed: false },
+          { key: "entities", label_ja: "業務対象", value_ja: "受注", source: "user", confirmed: true },
         ],
         required_total: 1,
         required_confirmed: 0,
@@ -561,7 +561,7 @@ function guidedOutputSessionData(ready: boolean) {
       current_question: outputQuestion,
       remaining_questions: [outputQuestion],
       intent_summary: [
-        { key: "entities", label_ja: "対象", value_ja: "受注", source: "ontology", confirmed: false },
+        { key: "entities", label_ja: "対象", value_ja: "受注", source: "user", confirmed: true },
       ],
       required_total: 1,
       required_confirmed: 0,
@@ -580,7 +580,7 @@ function guidedOutputSessionData(ready: boolean) {
     current_question: null,
     remaining_questions: [],
     intent_summary: [
-      { key: "entities", label_ja: "対象", value_ja: "受注", source: "ontology", confirmed: false },
+      { key: "entities", label_ja: "対象", value_ja: "受注", source: "user", confirmed: true },
       {
         key: "dimensions",
         label_ja: "表示する項目",
@@ -647,6 +647,108 @@ function guidedBusinessTargetSessionData(ready: boolean) {
       message_ja: "SQL を正しく生成するため、必要な条件を確認します。",
     };
   }
+  return data;
+}
+
+function guidedInferredTargetSessionData(ready: boolean) {
+  const data = guidedSessionData(ready);
+  const originalQuestion = "一覧を表示";
+  const targetQuestion = {
+    id: "question-confirm-inferred-target",
+    summary_key: "entities",
+    category: "business_meaning",
+    prompt_ja: "検索対象は「部署」で合っていますか？",
+    reason_ja:
+      "AI がクエリから補った解釈です。内容を確認し、異なる場合は正しい条件を入力してください。",
+    answer_kind: "single_select",
+    options: [
+      {
+        id: "option-confirm-inferred-target",
+        label_ja: "はい、この内容で進める",
+        description_ja: "部署",
+        source: "ontology",
+        evidence_ja: "physical_67c53135ab4290e53f2e7fef",
+      },
+    ],
+    allow_free_text: true,
+    blocking: true,
+  };
+  data.session.original_question = originalQuestion;
+  data.session.intents = data.session.intents.map((item) => ({
+    ...item,
+    question_original: originalQuestion,
+    question_effective: originalQuestion,
+    entities: [
+      {
+        id: "intent-department",
+        ontology_node_id: "business_entity_9531b8867ab66ed5de76d7bd",
+        name_ja: "部署",
+        role: "subject",
+        physical_object_ids: ["physical_67c53135ab4290e53f2e7fef"],
+      },
+    ],
+    metrics: [],
+    time_range: null,
+  }));
+  const inferredSession = {
+    ...data.session,
+    current_intent_version: ready ? 2 : 1,
+    clarification_turns: ready
+      ? [{
+          question: targetQuestion,
+          answer: {
+            question_id: targetQuestion.id,
+            selected_option_ids: [targetQuestion.options[0].id],
+            free_text: "",
+          },
+          intent_version: 2,
+        }]
+      : [],
+  };
+  data.session = inferredSession;
+  data.clarification = ready
+    ? {
+        status: "ready_to_confirm",
+        current_question: null,
+        remaining_questions: [],
+        intent_summary: [
+          { key: "entities", label_ja: "対象", value_ja: "部署", source: "user", confirmed: true },
+        ],
+        required_total: 1,
+        required_confirmed: 1,
+        missing_required: [],
+        assumptions: [],
+        turn_count: 1,
+        manual_completion_required: false,
+        can_generate_sql: true,
+        schema_version: "guided_clarification_v1",
+        message_ja: "SQL 生成に必要な情報を確認できました。",
+      }
+    : {
+        status: "needs_answer",
+        current_question: targetQuestion,
+        remaining_questions: [targetQuestion],
+        intent_summary: [
+          {
+            key: "entities",
+            label_ja: "対象",
+            value_ja: "部署",
+            source: "ontology",
+            confirmed: false,
+            technical_evidence_ja:
+              "business_entity_9531b8867ab66ed5de76d7bd, physical_67c53135ab4290e53f2e7fef",
+          },
+        ],
+        required_total: 1,
+        required_confirmed: 0,
+        missing_required: [targetQuestion.prompt_ja],
+        assumptions: [],
+        turn_count: 0,
+        manual_completion_required: false,
+        can_generate_sql: false,
+        schema_version: "guided_clarification_v1",
+        message_ja: "SQL を正しく生成するため、必要な条件を確認します。",
+      };
   return data;
 }
 
@@ -725,7 +827,7 @@ async function waitForMockDelay(delayMs: number) {
 
 async function mockApi(
   page: Page,
-  guidedQuestion: "time" | "output" | "business" = "time",
+  guidedQuestion: "time" | "output" | "business" | "inferred" = "time",
   options: MockApiOptions = {},
 ) {
   const payloads: Record<string, unknown> = {};
@@ -1034,7 +1136,9 @@ async function mockApi(
           ? guidedOutputSessionData(false)
           : guidedQuestion === "business"
             ? guidedBusinessTargetSessionData(false)
-            : guidedSessionData(false);
+            : guidedQuestion === "inferred"
+              ? guidedInferredTargetSessionData(false)
+              : guidedSessionData(false);
         return fulfill(route, guidedData);
       }
       return fulfill(route, sessionData("awaiting_intent_confirmation"));
@@ -1045,7 +1149,9 @@ async function mockApi(
         ? guidedOutputSessionData(true)
         : guidedQuestion === "business"
           ? guidedBusinessTargetSessionData(true)
-          : guidedSessionData(true);
+          : guidedQuestion === "inferred"
+            ? guidedInferredTargetSessionData(true)
+            : guidedSessionData(true);
       return fulfill(route, guidedData);
     }
     if (path.endsWith("/cancel") && request.method() === "POST") {
@@ -1313,6 +1419,46 @@ test("AI要件確認は利用者が明示した最大件数を保ったままク
   });
 });
 
+test("AI要件確認は推測した検索対象を利用者へ質問し内部IDを表示しない", async ({ page }, testInfo) => {
+  const payloads = await mockApi(page, "inferred");
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto("/query");
+
+  await page.locator("#nl2sql-question-input").fill("一覧を表示");
+  await page.getByRole("button", { name: "AI要件確認" }).click();
+
+  const panel = page.getByTestId("nl2sql-guided-clarification");
+  await expect(
+    panel.getByRole("heading", { name: "検索対象は「部署」で合っていますか？" })
+  ).toBeFocused();
+  await expect(panel.getByText("AIの推定（回答してください）")).toBeVisible();
+  await expect(panel.getByText("確認完了")).toHaveCount(0);
+  await expect(panel.getByRole("button", { name: "確認内容をクエリに反映" })).toHaveCount(0);
+  await expect(panel.getByText(/business_entity_|physical_/)).toHaveCount(0);
+  await expect(panel.getByText("管理者・開発者向け")).toHaveCount(0);
+  await page.screenshot({
+    path: testInfo.outputPath("guided-inferred-target-pending.png"),
+    fullPage: true,
+  });
+
+  await panel.getByRole("radio", { name: /はい、この内容で進める/ }).check();
+  await panel.getByRole("button", { name: "選んだ内容で次へ" }).click();
+
+  await expect(panel.getByText("確認完了").first()).toBeVisible();
+  await expect(panel.getByText("確認済み", { exact: true }).first()).toBeVisible();
+  await expect(panel.getByRole("button", { name: "確認内容をクエリに反映" })).toBeEnabled();
+  expect(payloads.clarificationAnswer).toMatchObject({
+    question_id: "question-confirm-inferred-target",
+    selected_option_ids: ["option-confirm-inferred-target"],
+  });
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
+  expect(overflow).toBe(false);
+  await page.screenshot({
+    path: testInfo.outputPath("guided-inferred-target-confirmation.png"),
+    fullPage: true,
+  });
+});
+
 test("AI要件確認は内部診断を見せず表示項目を自然なクエリへ完全反映できる", async ({ page }, testInfo) => {
   const payloads = await mockApi(page, "output");
   await page.emulateMedia({ reducedMotion: "reduce" });
@@ -1327,17 +1473,12 @@ test("AI要件確認は内部診断を見せず表示項目を自然なクエリ
   ).toBeFocused();
   await expect(panel.getByText(/Embedding|Ontology|Schema/)).toHaveCount(0);
   await expect(panel.getByRole("heading", { name: "確認中の検索条件" })).toBeVisible();
-  await expect(panel.getByText("AIの推定（要確認）")).toBeVisible();
+  await expect(panel.getByText("確認済み", { exact: true })).toBeVisible();
 
   await panel.getByRole("checkbox", { name: /受注状態/ }).check();
   await panel.getByRole("checkbox", { name: /受注ID/ }).check();
-  const evidence = panel.getByRole("button", { name: "受注IDのデータ項目の詳細" });
-  await expect(evidence).toHaveAttribute("aria-expanded", "false");
-  await evidence.click();
-  await expect(evidence).toHaveAttribute("aria-expanded", "true");
-  const evidenceDetails = evidence.locator("..");
-  await expect(evidenceDetails.getByText("管理者・開発者向け")).toBeVisible();
-  await expect(evidenceDetails.getByText("APP.ORDERS.ORDER_ID")).toBeVisible();
+  await expect(panel.getByText(/APP\.ORDERS/)).toHaveCount(0);
+  await expect(panel.getByText("管理者・開発者向け")).toHaveCount(0);
   const outputNextButton = panel.getByRole("button", { name: "選んだ内容で次へ" });
   await outputNextButton.scrollIntoViewIfNeeded();
   await page.screenshot({
@@ -1348,7 +1489,7 @@ test("AI要件確認は内部診断を見せず表示項目を自然なクエリ
 
   await expect(panel.getByText("表示する項目")).toBeVisible();
   await expect(panel.getByText("受注状態、受注ID")).toBeVisible();
-  await expect(panel.getByText("確認済み")).toBeVisible();
+  await expect(panel.getByText("確認済み", { exact: true }).first()).toBeVisible();
   expect(payloads.clarificationAnswer).toMatchObject({
     question_id: "question-output-columns",
     selected_option_ids: ["option-order-status", "option-order-id"],

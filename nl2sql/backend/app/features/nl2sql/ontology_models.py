@@ -537,6 +537,7 @@ class ClarificationOption(OntologyContract):
 class ClarificationQuestion(OntologyContract):
     id: str = Field(min_length=1)
     ambiguity_id: str = ""
+    summary_key: str = ""
     category: ClarificationCategory
     prompt_ja: str = Field(min_length=1)
     reason_ja: str = ""

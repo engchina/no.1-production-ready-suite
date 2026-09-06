@@ -2510,7 +2510,7 @@ class OntologyApiRuntime:
                 include_guided_context=request.clarification_mode == ClarificationMode.GUIDED,
             )
             if request.clarification_mode == ClarificationMode.GUIDED:
-                intent = enrich_guided_intent(intent)
+                intent = enrich_guided_intent(intent, ontology)
         with self._lock:
             # LLM 呼び出し中に revision が公開・置換されていたら stale session を作らない
             current_ontology = self._query_ontology()
@@ -3442,7 +3442,7 @@ class OntologyApiRuntime:
                 )
                 updated_intent = merge_free_text_reinterpretation(
                     updated_intent,
-                    enrich_guided_intent(reinterpreted),
+                    enrich_guided_intent(reinterpreted, ontology),
                     question,
                 )
             session = self.sessions.apply_clarification(

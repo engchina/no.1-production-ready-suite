@@ -21,6 +21,7 @@ from app.features.nl2sql.models import (
 from app.features.nl2sql.ontology_clarification import (
     apply_clarification_answer,
     build_clarification_state,
+    enrich_guided_intent,
 )
 from app.features.nl2sql.ontology_models import (
     ClarificationAnswer,
@@ -33,7 +34,10 @@ from app.features.nl2sql.ontology_models import (
     ClarificationTurn,
     ColumnQueryPolicy,
     IntentAmbiguity,
+    IntentEntity,
     OntologyNodeKind,
+    PhysicalMapping,
+    PhysicalObjectRef,
     QuerySession,
     QuerySessionStatus,
 )
@@ -405,6 +409,136 @@ def test_guided_session_asks_for_missing_time_and_accepts_scoped_option() -> Non
     assert updated.clarification.can_generate_sql is True
     assert all(item.key != "limit" for item in updated.clarification.intent_summary)
     assert updated.clarification.assumptions == []
+
+
+def test_inferred_summary_requires_an_explicit_answer_before_ready() -> None:
+    runtime = _runtime()
+    created = _create_guided(runtime)
+    ontology = runtime.ontology_revision(created.session.ontology_revision_id)
+    intent = created.session.intents[-1].model_copy(
+        deep=True,
+        update={
+            "question_original": "一覧を表示",
+            "question_effective": "一覧を表示",
+            "metrics": [],
+            "ambiguities": [],
+        },
+    )
+    session = created.session.model_copy(
+        deep=True,
+        update={"intents": [intent], "clarification_turns": []},
+    )
+
+    pending = build_clarification_state(session, ontology, created.profile_ontology_view)
+
+    assert pending.status == ClarificationStatus.NEEDS_ANSWER
+    assert pending.can_generate_sql is False
+    assert pending.current_question is not None
+    assert pending.current_question.summary_key == "entities"
+    assert pending.current_question.prompt_ja == "検索対象は「受注」で合っていますか？"
+    assert pending.current_question.options[0].label_ja == "はい、この内容で進める"
+    assert pending.current_question.options[0].evidence_ja == ""
+    summary = next(item for item in pending.intent_summary if item.key == "entities")
+    assert summary.confirmed is False
+    assert summary.technical_evidence_ja == ""
+
+    answer = ClarificationAnswer(
+        question_id=pending.current_question.id,
+        selected_option_ids=[pending.current_question.options[0].id],
+    )
+    confirmed_session = session.model_copy(
+        deep=True,
+        update={
+            "clarification_turns": [
+                ClarificationTurn(
+                    question=pending.current_question,
+                    answer=answer,
+                    intent_version=2,
+                )
+            ]
+        },
+    )
+    confirmed = build_clarification_state(
+        confirmed_session,
+        ontology,
+        created.profile_ontology_view,
+    )
+
+    assert confirmed.status == ClarificationStatus.READY_TO_CONFIRM
+    assert confirmed.can_generate_sql is True
+    assert confirmed.current_question is None
+    assert confirmed.required_total == 1
+    assert confirmed.required_confirmed == 1
+    confirmed_summary = next(item for item in confirmed.intent_summary if item.key == "entities")
+    assert confirmed_summary.confirmed is True
+    assert confirmed_summary.source == "user"
+
+
+def test_guided_intent_prefers_business_entity_over_duplicate_physical_entity() -> None:
+    runtime = _runtime()
+    created = _create_guided(runtime)
+    ontology = runtime.ontology_revision(created.session.ontology_revision_id)
+    table_node = next(node for node in ontology.nodes if node.kind == OntologyNodeKind.TABLE)
+    business_node = table_node.model_copy(
+        deep=True,
+        update={
+            "id": "business_entity_internal_hash",
+            "kind": OntologyNodeKind.BUSINESS_ENTITY,
+            "technical_name": "business_entity_internal_hash",
+            "business_name_ja": "受注",
+            "physical_mappings": [
+                PhysicalMapping(
+                    object_ref=PhysicalObjectRef(
+                        node_id=table_node.id,
+                        owner="APP",
+                        object_name="ORDERS",
+                    )
+                )
+            ],
+        },
+    )
+    related_business_node = business_node.model_copy(
+        deep=True,
+        update={
+            "id": "business_event_internal_hash",
+            "kind": OntologyNodeKind.BUSINESS_EVENT,
+            "technical_name": "business_event_internal_hash",
+            "business_name_ja": "受注処理",
+        },
+    )
+    ontology.nodes.extend([business_node, related_business_node])
+    intent = created.session.intents[-1].model_copy(
+        deep=True,
+        update={
+            "entities": [
+                IntentEntity(
+                    id="physical-intent",
+                    ontology_node_id=table_node.id,
+                    name_ja="受注情報",
+                    physical_object_ids=[table_node.id],
+                ),
+                IntentEntity(
+                    id="business-intent",
+                    ontology_node_id=business_node.id,
+                    name_ja="受注",
+                    physical_object_ids=[table_node.id],
+                ),
+                IntentEntity(
+                    id="related-business-intent",
+                    ontology_node_id=related_business_node.id,
+                    name_ja="受注処理",
+                    physical_object_ids=[table_node.id],
+                ),
+            ]
+        },
+    )
+
+    normalized = enrich_guided_intent(intent, ontology)
+
+    assert [(item.ontology_node_id, item.name_ja) for item in normalized.entities] == [
+        (business_node.id, "受注"),
+        (related_business_node.id, "受注処理"),
+    ]
 
 
 def test_guided_session_keeps_user_specified_limit_as_user_evidence() -> None:

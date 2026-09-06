@@ -66,10 +66,15 @@ _PRIORITY: dict[ClarificationCategory, int] = {
 }
 
 
-def enrich_guided_intent(intent: QuestionIntentGraph) -> QuestionIntentGraph:
+def enrich_guided_intent(
+    intent: QuestionIntentGraph,
+    ontology: SchemaOntology | None = None,
+) -> QuestionIntentGraph:
     """SQL への影響が大きい不足だけを blocking ambiguity として追加する。"""
 
     updated = intent.model_copy(deep=True)
+    if ontology is not None:
+        updated.entities = _deduplicate_guided_entities(updated.entities, ontology)
     codes = {item.code for item in updated.ambiguities}
     if updated.metrics and updated.time_range is None and "time_range_required" not in codes:
         updated.ambiguities.append(
@@ -105,20 +110,25 @@ def build_clarification_state(
     intent = session.intents[-1]
     unresolved = [item for item in intent.ambiguities if item.blocking and not item.resolved]
     questions = [_question_for_ambiguity(item, intent, ontology, view) for item in unresolved]
+    intent_summary = _intent_summary(session, intent)
+    covered_summary_keys = {question.summary_key for question in questions if question.summary_key}
+    questions.extend(
+        _confirmation_question(item)
+        for item in intent_summary
+        if not item.confirmed and item.key not in covered_summary_keys
+    )
     questions.sort(key=lambda item: (_PRIORITY[item.category], item.id))
-    answered_ids = {
-        turn.question.ambiguity_id
-        for turn in session.clarification_turns
-        if turn.question.blocking and turn.question.ambiguity_id
+    answered_question_ids = {
+        turn.question.id for turn in session.clarification_turns if turn.question.blocking
     }
     # LLM / retrieval の診断文は利用者向けではないため、未確認一覧にも
     # 実際に回答できる形へ変換した質問文だけを公開する。
     missing = [question.prompt_ja for question in questions]
-    required_total = len(answered_ids) + len(unresolved)
+    required_total = len(answered_question_ids) + len(questions)
     unanswerable = any(
         question.category == ClarificationCategory.RELATIONSHIP_PATH and not question.options
         for question in questions
-    ) or (not view.node_ids and bool(unresolved))
+    ) or (not view.node_ids and bool(questions))
     if unanswerable:
         status = ClarificationStatus.UNANSWERABLE
         message = (
@@ -138,14 +148,14 @@ def build_clarification_state(
         status=status,
         current_question=current_question,
         remaining_questions=questions,
-        intent_summary=_intent_summary(session, intent),
+        intent_summary=intent_summary,
         required_total=required_total,
-        required_confirmed=len(answered_ids),
+        required_confirmed=len(answered_question_ids),
         missing_required=missing,
         assumptions=_assumptions(session, intent),
         turn_count=len(session.clarification_turns),
         manual_completion_required=len(session.clarification_turns) >= MAX_GUIDED_TURNS
-        and bool(unresolved),
+        and bool(questions),
         can_generate_sql=status == ClarificationStatus.READY_TO_CONFIRM,
         schema_version=CLARIFICATION_SCHEMA_VERSION,
         message_ja=message,
@@ -390,6 +400,7 @@ def _question_for_ambiguity(
     return ClarificationQuestion(
         id=stable_ontology_id("clarification_question", ambiguity.id),
         ambiguity_id=ambiguity.id,
+        summary_key=_summary_key_for_question(category, candidate_nodes),
         category=category,
         prompt_ja=prompt,
         reason_ja=reason,
@@ -397,6 +408,67 @@ def _question_for_ambiguity(
         options=options[:5],
         allow_free_text=category != ClarificationCategory.RELATIONSHIP_PATH,
         blocking=ambiguity.blocking,
+    )
+
+
+def _summary_key_for_question(
+    category: ClarificationCategory,
+    candidate_nodes: Sequence[OntologyNode],
+) -> str:
+    if category == ClarificationCategory.BUSINESS_MEANING:
+        if candidate_nodes and all(
+            node.kind == OntologyNodeKind.METRIC for node in candidate_nodes
+        ):
+            return "metrics"
+        return "entities"
+    return {
+        ClarificationCategory.RELATIONSHIP_PATH: "relationship",
+        ClarificationCategory.FILTER_VALUE: "filters",
+        ClarificationCategory.TIME_RANGE: "time_range",
+        ClarificationCategory.GRANULARITY: "granularity",
+        ClarificationCategory.OUTPUT: "dimensions",
+    }.get(category, "")
+
+
+def _confirmation_question(item: IntentSummaryItem) -> ClarificationQuestion:
+    category = {
+        "entities": ClarificationCategory.BUSINESS_MEANING,
+        "metrics": ClarificationCategory.BUSINESS_MEANING,
+        "dimensions": ClarificationCategory.OUTPUT,
+        "filters": ClarificationCategory.FILTER_VALUE,
+        "time_range": ClarificationCategory.TIME_RANGE,
+        "relationship": ClarificationCategory.RELATIONSHIP_PATH,
+        "granularity": ClarificationCategory.GRANULARITY,
+    }[item.key]
+    prompt = {
+        "entities": f"検索対象は「{item.value_ja}」で合っていますか？",
+        "metrics": f"集計する指標は「{item.value_ja}」で合っていますか？",
+        "dimensions": f"表示する項目は「{item.value_ja}」で合っていますか？",
+        "filters": f"絞り込み条件は「{item.value_ja}」で合っていますか？",
+        "time_range": f"対象期間は「{item.value_ja}」で合っていますか？",
+        "relationship": f"データの関係は「{item.value_ja}」で合っていますか？",
+        "granularity": f"集計単位は「{item.value_ja}」で合っていますか？",
+    }[item.key]
+    return ClarificationQuestion(
+        id=stable_ontology_id("clarification_question", "confirm", item.key, item.value_ja),
+        summary_key=item.key,
+        category=category,
+        prompt_ja=prompt,
+        reason_ja=(
+            "AI がクエリから補った解釈です。内容を確認し、"
+            "異なる場合は正しい条件を入力してください。"
+        ),
+        answer_kind=ClarificationAnswerKind.SINGLE_SELECT,
+        options=[
+            ClarificationOption(
+                id=stable_ontology_id("clarification_option", "confirm", item.key, item.value_ja),
+                label_ja="はい、この内容で進める",
+                description_ja=item.value_ja,
+                source=ClarificationEvidenceSource.ONTOLOGY,
+            )
+        ],
+        allow_free_text=True,
+        blocking=True,
     )
 
 
@@ -588,6 +660,76 @@ def _unique_nodes(nodes: Sequence[OntologyNode]) -> list[OntologyNode]:
     return result
 
 
+def _deduplicate_guided_entities(
+    entities: Sequence[IntentEntity],
+    ontology: SchemaOntology,
+) -> list[IntentEntity]:
+    """同じ物理 object を指す業務 node / 物理 node は業務 node へ統合する。"""
+
+    node_by_id = {node.id: node for node in ontology.nodes}
+    business_kinds = {OntologyNodeKind.BUSINESS_ENTITY, OntologyNodeKind.BUSINESS_EVENT}
+    physical_kinds = {OntologyNodeKind.TABLE, OntologyNodeKind.VIEW}
+
+    def object_ids(entity: IntentEntity) -> set[str]:
+        result = set(entity.physical_object_ids)
+        node = node_by_id.get(entity.ontology_node_id)
+        if node is None:
+            return result
+        if node.kind in physical_kinds:
+            result.add(node.id)
+        result.update(
+            mapping.object_ref.node_id
+            for mapping in node.physical_mappings
+            if mapping.object_ref.node_id
+        )
+        return result
+
+    result: list[IntentEntity] = []
+    result_object_ids: list[set[str]] = []
+    for entity in entities:
+        node = node_by_id.get(entity.ontology_node_id)
+        current_ids = object_ids(entity)
+        if entity.ontology_node_id and any(
+            entity.ontology_node_id == existing.ontology_node_id for existing in result
+        ):
+            continue
+        duplicate_index = next(
+            (
+                index
+                for index, (existing, existing_ids) in enumerate(
+                    zip(result, result_object_ids, strict=True)
+                )
+                if current_ids
+                and existing_ids
+                and not current_ids.isdisjoint(existing_ids)
+                and (
+                    node is not None
+                    and node.kind in business_kinds
+                    and node_by_id.get(existing.ontology_node_id) is not None
+                    and node_by_id[existing.ontology_node_id].kind in physical_kinds
+                    or node is not None
+                    and node.kind in physical_kinds
+                    and node_by_id.get(existing.ontology_node_id) is not None
+                    and node_by_id[existing.ontology_node_id].kind in business_kinds
+                )
+            ),
+            None,
+        )
+        if duplicate_index is None:
+            result.append(entity)
+            result_object_ids.append(current_ids)
+            continue
+        existing_node = node_by_id.get(result[duplicate_index].ontology_node_id)
+        if (
+            node is not None
+            and node.kind in business_kinds
+            and (existing_node is None or existing_node.kind in physical_kinds)
+        ):
+            result[duplicate_index] = entity
+            result_object_ids[duplicate_index] = current_ids
+    return result
+
+
 def _physical_object_ids(node: OntologyNode) -> list[str]:
     if node.kind in {OntologyNodeKind.TABLE, OntologyNodeKind.VIEW}:
         return [node.id]
@@ -645,17 +787,43 @@ def _intent_summary(
     session: QuerySession,
     intent: QuestionIntentGraph,
 ) -> list[IntentSummaryItem]:
-    answered_categories = {turn.question.category for turn in session.clarification_turns}
+    answered_summary_keys = {
+        turn.question.summary_key
+        for turn in session.clarification_turns
+        if turn.question.summary_key
+    }
+    legacy_answered_categories = {
+        turn.question.category
+        for turn in session.clarification_turns
+        if not turn.question.summary_key
+    }
     result: list[IntentSummaryItem] = []
+
+    def explicitly_stated(*values: object) -> bool:
+        normalized_question = "".join(
+            character for character in intent.question_original.casefold() if character.isalnum()
+        )
+        normalized_values = [
+            "".join(character for character in str(value).casefold() if character.isalnum())
+            for value in values
+            if str(value).strip()
+        ]
+        return bool(normalized_values) and all(
+            value in normalized_question for value in normalized_values
+        )
 
     def add(
         key: str,
         label: str,
         value: str,
         category: ClarificationCategory,
-        evidence: str,
+        explicit_values: Sequence[object],
     ) -> None:
-        confirmed = category in answered_categories
+        confirmed = (
+            key in answered_summary_keys
+            or category in legacy_answered_categories
+            or explicitly_stated(*explicit_values)
+        )
         result.append(
             IntentSummaryItem(
                 key=key,
@@ -667,7 +835,6 @@ def _intent_summary(
                     else ClarificationEvidenceSource.ONTOLOGY
                 ),
                 confirmed=confirmed,
-                technical_evidence_ja=evidence,
             )
         )
 
@@ -677,7 +844,7 @@ def _intent_summary(
             "対象",
             "、".join(item.name_ja for item in intent.entities),
             ClarificationCategory.BUSINESS_MEANING,
-            "、".join(item.ontology_node_id for item in intent.entities if item.ontology_node_id),
+            [item.name_ja for item in intent.entities],
         )
     if intent.metrics:
         add(
@@ -685,7 +852,7 @@ def _intent_summary(
             "集計する指標",
             "、".join(item.name_ja for item in intent.metrics),
             ClarificationCategory.BUSINESS_MEANING,
-            "、".join(item.ontology_node_id for item in intent.metrics if item.ontology_node_id),
+            [item.name_ja for item in intent.metrics],
         )
     if intent.dimensions:
         add(
@@ -693,20 +860,26 @@ def _intent_summary(
             "表示する項目",
             "、".join(item.name_ja for item in intent.dimensions),
             ClarificationCategory.OUTPUT,
-            "、".join(item.ontology_node_id for item in intent.dimensions if item.ontology_node_id),
+            [item.name_ja for item in intent.dimensions],
         )
     if intent.time_range is not None:
         value = intent.time_range.relative_expression or " ～ ".join(
             filter(None, (intent.time_range.start, intent.time_range.end))
         )
-        add("time_range", "期間", value or "指定済み", ClarificationCategory.TIME_RANGE, "")
+        add(
+            "time_range",
+            "期間",
+            value or "指定済み",
+            ClarificationCategory.TIME_RANGE,
+            [value],
+        )
     if intent.filters:
         add(
             "filters",
             "絞り込み",
             "、".join(f"{item.label_ja} {item.operator} {item.value}" for item in intent.filters),
             ClarificationCategory.FILTER_VALUE,
-            "、".join(item.property_node_id for item in intent.filters if item.property_node_id),
+            [part for item in intent.filters for part in (item.label_ja, item.value)],
         )
     selected_path = next(
         (item for item in intent.candidate_paths if item.id == intent.selected_path_id), None
@@ -717,10 +890,16 @@ def _intent_summary(
             "関係",
             selected_path.name_ja,
             ClarificationCategory.RELATIONSHIP_PATH,
-            "、".join(selected_path.edge_ids),
+            [selected_path.name_ja],
         )
     if intent.granularity:
-        add("granularity", "集計単位", intent.granularity, ClarificationCategory.GRANULARITY, "")
+        add(
+            "granularity",
+            "集計単位",
+            intent.granularity,
+            ClarificationCategory.GRANULARITY,
+            [intent.granularity],
+        )
     if intent.limit is not None:
         result.append(
             IntentSummaryItem(
