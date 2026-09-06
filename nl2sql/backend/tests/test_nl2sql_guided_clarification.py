@@ -22,6 +22,7 @@ from app.features.nl2sql.ontology_clarification import (
     apply_clarification_answer,
     build_clarification_state,
     enrich_guided_intent,
+    merge_free_text_reinterpretation,
 )
 from app.features.nl2sql.ontology_models import (
     ClarificationAnswer,
@@ -34,7 +35,12 @@ from app.features.nl2sql.ontology_models import (
     ClarificationTurn,
     ColumnQueryPolicy,
     IntentAmbiguity,
+    IntentDimension,
     IntentEntity,
+    IntentFilter,
+    IntentMetric,
+    IntentSort,
+    IntentTimeRange,
     OntologyNodeKind,
     PhysicalMapping,
     PhysicalObjectRef,
@@ -619,7 +625,7 @@ def test_embedding_column_ambiguity_is_presented_as_business_output_selection() 
 
     assert {item.name_ja for item in updated_intent.dimensions} == {"受注状態", "受注ID"}
     assert updated_intent.question_effective == (
-        "受注件数を表示してください。検索結果には受注状態、受注IDを表示してください。"
+        "受注を対象に、検索結果には受注状態、受注IDを表示してください。"
     )
     assert "確認事項" not in updated_intent.question_effective
 
@@ -704,6 +710,9 @@ def test_guided_output_answer_replaces_quoted_fragment_with_natural_query() -> N
             "question_effective": (
                 '"部署情報"\n確認事項（検索結果に表示する項目を選んでください。）：部署名'
             ),
+            "entities": [IntentEntity(id="department", name_ja="部署")],
+            "metrics": [],
+            "dimensions": [],
         },
     )
     question = ClarificationQuestion(
@@ -725,10 +734,157 @@ def test_guided_output_answer_replaces_quoted_fragment_with_natural_query() -> N
     )
 
     assert updated.question_effective == (
-        "部署情報について、検索結果にはすべての列を表示してください。"
+        "部署を対象に、検索結果にはすべての列を表示してください。"
     )
     assert "確認事項" not in updated.question_effective
     assert "検索結果に表示する項目を選んでください" not in updated.question_effective
+
+
+def test_guided_answer_rebuilds_complete_user_friendly_query_from_intent() -> None:
+    runtime = _runtime()
+    created = _create_guided(runtime)
+    ontology = runtime.ontology_revision(created.session.ontology_revision_id)
+    intent = created.session.intents[-1].model_copy(
+        deep=True,
+        update={
+            "question_original": "確定した受注の売上を確認",
+            "question_effective": "確定した受注の売上を確認",
+            "entities": [
+                IntentEntity(
+                    id="entity-orders",
+                    ontology_node_id="business_entity_deadbeef",
+                    name_ja="受注",
+                    physical_object_ids=["physical_deadbeef"],
+                )
+            ],
+            "dimensions": [IntentDimension(id="dimension-customer", name_ja="顧客名")],
+            "metrics": [IntentMetric(id="metric-sales", name_ja="売上金額", aggregation="sum")],
+            "filters": [
+                IntentFilter(
+                    id="filter-status",
+                    property_node_id="property_deadbeef",
+                    label_ja="受注状態",
+                    operator="=",
+                    value="確定",
+                )
+            ],
+            "time_range": None,
+            "granularity": "month",
+            "sorts": [
+                IntentSort(target_id="metric-sales", direction="desc"),
+                IntentSort(target_id="physical_deadbeef", direction="asc"),
+            ],
+            "limit": 10,
+        },
+    )
+    question = ClarificationQuestion(
+        id="question-time-range",
+        category=ClarificationCategory.TIME_RANGE,
+        prompt_ja="どの期間を対象にしますか？",
+        answer_kind=ClarificationAnswerKind.SINGLE_SELECT,
+        options=[
+            ClarificationOption(
+                id="option-this-month",
+                label_ja="今月",
+                structured_value={"label_ja": "受注日", "relative_expression": "今月"},
+            )
+        ],
+    )
+
+    updated = apply_clarification_answer(
+        intent,
+        question,
+        ClarificationAnswer(
+            question_id=question.id,
+            selected_option_ids=["option-this-month"],
+        ),
+        ontology,
+    )
+
+    assert updated.time_range == IntentTimeRange(label_ja="受注日", relative_expression="今月")
+    assert updated.question_effective == (
+        "受注のうち、受注日が今月、かつ受注状態が「確定」のデータを対象に、"
+        "検索結果には顧客名、売上金額を表示してください。"
+        "集計単位は月別です。"
+        "表示結果は売上金額の降順で並べ、上位10件を取得してください。"
+    )
+    assert "business_entity_" not in updated.question_effective
+    assert "physical_" not in updated.question_effective
+    assert "property_" not in updated.question_effective
+
+
+def test_guided_metric_confirmation_keeps_metric_in_output_not_target() -> None:
+    runtime = _runtime()
+    created = _create_guided(runtime)
+    ontology = runtime.ontology_revision(created.session.ontology_revision_id)
+    intent = created.session.intents[-1].model_copy(deep=True)
+    question = ClarificationQuestion(
+        id="question-confirm-metric",
+        summary_key="metrics",
+        category=ClarificationCategory.BUSINESS_MEANING,
+        prompt_ja="集計する指標は「受注件数」で合っていますか？",
+        answer_kind=ClarificationAnswerKind.SINGLE_SELECT,
+        options=[
+            ClarificationOption(
+                id="option-confirm-metric",
+                label_ja="はい、この内容で進める",
+                description_ja="受注件数",
+            )
+        ],
+    )
+
+    updated = apply_clarification_answer(
+        intent,
+        question,
+        ClarificationAnswer(
+            question_id=question.id,
+            selected_option_ids=["option-confirm-metric"],
+        ),
+        ontology,
+    )
+
+    assert updated.question_effective == ("受注を対象に、検索結果には受注件数を表示してください。")
+    assert "受注と受注件数を対象" not in updated.question_effective
+
+
+def test_free_text_reinterpretation_rebuilds_query_without_duplicate_condition() -> None:
+    runtime = _runtime()
+    created = _create_guided(runtime)
+    intent = created.session.intents[-1].model_copy(deep=True)
+    reinterpreted = intent.model_copy(
+        deep=True,
+        update={
+            "filters": [
+                IntentFilter(
+                    id="filter-status",
+                    label_ja="受注状態",
+                    operator="=",
+                    value="確定",
+                )
+            ]
+        },
+    )
+    question = ClarificationQuestion(
+        id="question-filter",
+        summary_key="filters",
+        category=ClarificationCategory.FILTER_VALUE,
+        prompt_ja="絞り込み条件を入力してください。",
+        answer_kind=ClarificationAnswerKind.FREE_TEXT,
+        allow_free_text=True,
+    )
+
+    updated = merge_free_text_reinterpretation(
+        intent,
+        reinterpreted,
+        question,
+        "受注状態が確定",
+    )
+
+    assert updated.question_effective == (
+        "受注のうち、受注状態が「確定」のデータを対象に、"
+        "検索結果には受注件数を表示してください。"
+    )
+    assert updated.question_effective.count("受注状態") == 1
 
 
 def test_guided_output_multi_select_answer_rebuilds_and_persists_session_state() -> None:
@@ -916,7 +1072,7 @@ def test_guided_answer_is_idempotent_and_rejects_stale_version() -> None:
     assert first.session.current_intent_version == 2
     assert replay.session.current_intent_version == 2
     assert first.session.intents[-1].question_effective == (
-        "今月を対象に、受注件数を表示してください。"
+        "今月の受注を対象に、検索結果には受注件数を表示してください。"
     )
     assert "確認事項" not in first.session.intents[-1].question_effective
     assert runtime.store.list_documents("idempotency")[0]["idempotency_key"] == "answer-1"
