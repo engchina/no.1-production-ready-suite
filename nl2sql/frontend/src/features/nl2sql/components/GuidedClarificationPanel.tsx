@@ -1,5 +1,5 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { CheckCircle2, ChevronDown, Sparkles, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { CheckCircle2, Sparkles, X } from "lucide-react";
 
 import { Banner } from "@engchina/production-ready-ui";
 
@@ -50,40 +50,6 @@ interface ManualAnswerValue {
 }
 
 type ClarificationStartPhase = "recommend_profile" | "confirm_profile" | "prepare_questions";
-
-function TechnicalEvidence({ name, evidence }: { name: string; evidence: string }) {
-  const [open, setOpen] = useState(false);
-  const contentId = useId();
-  return (
-    <div className="text-xs text-muted">
-      <Button
-        type="button"
-        variant="ghost"
-        size="sm"
-        aria-label={t("nl2sql.clarification.evidenceFor", { name })}
-        aria-expanded={open}
-        aria-controls={contentId}
-        className="-ml-2 min-h-11 px-2 text-xs font-normal text-muted"
-        onClick={() => setOpen((current) => !current)}
-      >
-        {t("nl2sql.clarification.evidence")}
-        <ChevronDown
-          size={14}
-          aria-hidden="true"
-          className={open ? "rotate-180" : ""}
-        />
-      </Button>
-      {open ? (
-        <div id={contentId} className="pb-2">
-          <span className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-muted">
-            {t("nl2sql.clarification.evidenceAudience")}
-          </span>
-          <span className="block break-all font-mono">{evidence}</span>
-        </div>
-      ) : null}
-    </div>
-  );
-}
 
 function latestIntent(session: QuerySession | null) {
   if (!session?.intents?.length) return null;
@@ -520,11 +486,6 @@ export function GuidedClarificationPanel({
                         ) : null}
                       </span>
                     </label>
-                    {option.evidence_ja ? (
-                      <div className="border-t border-border/70 px-3 pl-10">
-                        <TechnicalEvidence name={option.label_ja} evidence={option.evidence_ja} />
-                      </div>
-                    ) : null}
                   </div>
                 );
               })}
@@ -620,11 +581,6 @@ export function GuidedClarificationPanel({
                         ) : null}
                       </span>
                     </label>
-                    {option.evidence_ja ? (
-                      <div className="border-t border-border/70 px-3 pl-10">
-                        <TechnicalEvidence name={option.label_ja} evidence={option.evidence_ja} />
-                      </div>
-                    ) : null}
                   </div>
                 ))}
                 {question.allow_free_text ? (
@@ -678,9 +634,6 @@ export function GuidedClarificationPanel({
                   />
                 </dt>
                 <dd className="mt-1 text-sm font-medium leading-6 text-foreground">{item.value_ja}</dd>
-                {item.technical_evidence_ja ? (
-                  <TechnicalEvidence name={item.label_ja} evidence={item.technical_evidence_ja} />
-                ) : null}
               </div>
             ))}
           </dl>

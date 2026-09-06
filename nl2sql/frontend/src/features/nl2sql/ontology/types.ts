@@ -346,6 +346,7 @@ export interface ClarificationOption {
 export interface ClarificationQuestion {
   id: string;
   ambiguity_id?: string;
+  summary_key?: string;
   category: ClarificationCategory;
   prompt_ja: string;
   reason_ja?: string;
