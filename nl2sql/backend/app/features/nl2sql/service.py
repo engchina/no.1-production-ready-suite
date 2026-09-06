@@ -887,6 +887,26 @@ _DANGEROUS_TOKENS = re.compile(
     r"\b(insert|update|delete|merge|drop|alter|create|truncate|grant|revoke|begin|declare|call)\b",
     re.IGNORECASE,
 )
+_DANGEROUS_ORACLE_FUNCTION_ROOTS = frozenset(
+    {
+        "DBMS_JAVA",
+        "DBMS_LDAP",
+        "DBMS_METADATA",
+        "DBMS_SCHEDULER",
+        "DBMS_SQL",
+        "DBMS_XMLGEN",
+        "DBMS_XMLQUERY",
+        "DBMS_XMLSAVE",
+        "DBMS_XMLSTORE",
+        "HTTPURITYPE",
+        "UTL_FILE",
+        "UTL_HTTP",
+        "UTL_INADDR",
+        "UTL_SMTP",
+        "UTL_TCP",
+    }
+)
+_DANGEROUS_ORACLE_FUNCTION_MESSAGE = "危険な Oracle 関数は SELECT SQL 実行では使用できません。"
 _SQL_OBJECT_REF = r'(?:"[^"]+"|[a-zA-Z_][\w$#]*)(?:\s*\.\s*(?:"[^"]+"|[a-zA-Z_][\w$#]*))?'
 _FROM_JOIN_TABLE = re.compile(rf"\b(?:from|join)\s+({_SQL_OBJECT_REF})", re.IGNORECASE)
 _FROM_JOIN_WITH_ALIAS = re.compile(
@@ -2197,6 +2217,75 @@ def is_select_only(sql: str) -> bool:
     if _DANGEROUS_TOKENS.search(masked):
         return False
     return head.startswith("select") or head.startswith("with")
+
+
+def _sqlglot_name(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        raw = value
+    else:
+        name = getattr(value, "name", None)
+        if isinstance(name, str) and name:
+            raw = name
+        else:
+            this = getattr(value, "this", None)
+            raw = this if isinstance(this, str) else str(this or "")
+    return _normalize_identifier(raw)
+
+
+def _sqlglot_dotted_name_parts(value: Any, dot_type: type[Any]) -> list[str]:
+    if isinstance(value, dot_type):
+        return [
+            *_sqlglot_dotted_name_parts(value.this, dot_type),
+            *_sqlglot_dotted_name_parts(value.expression, dot_type),
+        ]
+    name = _sqlglot_name(value)
+    return [name] if name else []
+
+
+def _dangerous_oracle_function_names(sql: str) -> list[str]:
+    try:
+        import sqlglot
+        from sqlglot import exp
+        from sqlglot.errors import ErrorLevel
+    except ImportError:
+        return []
+
+    try:
+        statements = sqlglot.parse(sql, read="oracle", error_level=ErrorLevel.RAISE)
+    except Exception:
+        return []
+
+    dangerous: list[str] = []
+    seen: set[str] = set()
+    for statement in [item for item in statements if item is not None]:
+        for node in statement.walk():
+            expression = node[0] if isinstance(node, tuple) else node
+            if isinstance(expression, exp.Dot):
+                parts = _sqlglot_dotted_name_parts(expression, exp.Dot)
+                candidates = [
+                    ".".join(parts[index : index + 2])
+                    for index, part in enumerate(parts)
+                    if part in _DANGEROUS_ORACLE_FUNCTION_ROOTS
+                ]
+            elif isinstance(expression, exp.Anonymous):
+                name = _sqlglot_name(expression)
+                candidates = [name] if name in _DANGEROUS_ORACLE_FUNCTION_ROOTS else []
+            else:
+                candidates = []
+            for candidate in candidates:
+                if candidate and candidate not in seen:
+                    seen.add(candidate)
+                    dangerous.append(candidate)
+    return dangerous
+
+
+def _dangerous_oracle_function_blocked_message(names: Sequence[str]) -> str:
+    unique = sorted({name for name in names if name})
+    if not unique:
+        return _DANGEROUS_ORACLE_FUNCTION_MESSAGE
+    return f"{', '.join(unique)}: {_DANGEROUS_ORACLE_FUNCTION_MESSAGE}"
 
 
 def _extract_referenced_tables(sql: str, *, current_owner: str = "") -> list[str]:
@@ -6412,6 +6501,9 @@ class Nl2SqlService:
             graph and any("*" in projection.expression_sql for projection in graph.projections)
         )
         select_only = graph is not None and is_select_only(sql)
+        dangerous_function_names = (
+            _dangerous_oracle_function_names(sql) if graph is not None and select_only else []
+        )
         warnings: list[str] = []
         blocked_reason = ""
         if graph is None:
@@ -6420,12 +6512,18 @@ class Nl2SqlService:
             blocked_reason = (
                 "SELECT/WITH 以外、複数 statement、または危険語を含む SQL は実行できません。"
             )
+        elif dangerous_function_names:
+            blocked_reason = _dangerous_oracle_function_blocked_message(dangerous_function_names)
         hidden_referenced = _hidden_schema_object_names(referenced, current_owner=current_owner)
-        if hidden_referenced:
+        if not blocked_reason and hidden_referenced:
             blocked_reason = _system_object_blocked_message(hidden_referenced)
-        elif not _table_allowed(referenced, allowed, current_owner=current_owner):
+        elif not blocked_reason and not _table_allowed(
+            referenced,
+            allowed,
+            current_owner=current_owner,
+        ):
             blocked_reason = "許可されていない表を参照しています。"
-        elif not _column_allowed(
+        elif not blocked_reason and not _column_allowed(
             referenced_columns,
             has_wildcard,
             referenced,
