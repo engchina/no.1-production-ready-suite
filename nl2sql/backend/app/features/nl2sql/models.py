@@ -1347,7 +1347,11 @@ class SimilarHistoryRequest(BaseModel):
 class SimilarHistoryItem(BaseModel):
     """類似履歴の 1 件。"""
 
-    item: HistoryItem
+    history_id: str
+    question: str
+    sql: str
+    profile_id: str = ""
+    profile_name: str = ""
     score: float
     reason: str
 

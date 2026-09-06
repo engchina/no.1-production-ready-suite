@@ -2186,7 +2186,11 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
     fulfillJson(route, {
       items: [
         {
-          item: { ...historyItem, admin_feedback_rating: "good", admin_feedback_content: "管理者確認済み" },
+          history_id: historyItem.id,
+          question: historyItem.question,
+          sql: historyItem.executable_sql || historyItem.generated_sql,
+          profile_id: historyItem.profile_id,
+          profile_name: historyItem.profile_name,
           score: 0.9,
           reason: "請求金額の履歴と近い質問です。管理者レビュー結果が良い履歴です。",
         },
@@ -4490,48 +4494,13 @@ test("参考履歴は管理者レビュー結果が良い履歴だけを表示�
     fulfillJson(route, {
       items: [
         {
-          item: {
-            ...longHistoryItem,
-            id: "hist-good",
-            feedback_rating: "good",
-            admin_feedback_rating: "good",
-            admin_feedback_content: "管理者が確認しました。",
-          },
+          history_id: "hist-good",
+          question: longHistoryItem.question,
+          sql: longHistoryItem.executable_sql || longHistoryItem.generated_sql,
+          profile_id: longHistoryItem.profile_id,
+          profile_name: longHistoryItem.profile_name,
           score: 0.92,
           reason: "請求金額が一致し、管理者レビュー結果が良い履歴です。",
-        },
-        {
-          item: {
-            ...historyItem,
-            feedback_rating: "good",
-            admin_feedback_rating: null,
-            admin_feedback_content: "",
-            id: "hist-user-good",
-            question: "利用者だけ良い評価の請求金額",
-          },
-          score: 0.98,
-          reason: "利用者評価のみのため表示しません。",
-        },
-        {
-          item: {
-            ...historyItem,
-            id: "hist-bad",
-            question: "違う評価の請求金額",
-            feedback_rating: "bad",
-            admin_feedback_rating: "bad",
-          },
-          score: 0.96,
-          reason: "高スコアでも bad のため表示しません。",
-        },
-        {
-          item: {
-            ...historyItem,
-            id: "hist-unrated",
-            question: "未評価の請求金額",
-            feedback_rating: null,
-          },
-          score: 0.94,
-          reason: "未評価のため表示しません。",
         },
       ],
     })

@@ -709,7 +709,11 @@ export interface DemoLearningData {
 }
 
 export interface SimilarHistoryItem {
-  item: HistoryItem;
+  history_id: string;
+  question: string;
+  sql: string;
+  profile_id: string;
+  profile_name: string;
   score: number;
   reason: string;
 }

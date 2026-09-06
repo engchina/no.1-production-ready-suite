@@ -19,10 +19,9 @@ from app.features.nl2sql.models import (
     HistoryItem,
     Nl2SqlEngine,
     Nl2SqlProfile,
-    SimilarHistoryItem,
     SimilarHistoryRequest,
 )
-from app.features.nl2sql.service import Nl2SqlService
+from app.features.nl2sql.service import Nl2SqlService, SimilarHistoryCandidate
 from app.features.nl2sql.store import MemoryNl2SqlStore
 from app.security.domain import Principal
 from app.security.permissions import QUERY_GENERATE_PERMISSION
@@ -181,7 +180,7 @@ def test_similar_history_only_surfaces_admin_good_items() -> None:
         SimilarHistoryRequest(question="請求金額を確認したい", profile_id=None, limit=5)
     )
 
-    assert [entry.item.id for entry in data.items] == ["hist-001"]
+    assert [entry.history_id for entry in data.items] == ["hist-001"]
 
 
 def test_similar_history_filters_to_requested_profile() -> None:
@@ -195,7 +194,7 @@ def test_similar_history_filters_to_requested_profile() -> None:
         SimilarHistoryRequest(question="請求金額を確認したい", profile_id="sales", limit=5)
     )
 
-    assert [entry.item.profile_id for entry in data.items] == ["sales"]
+    assert [entry.profile_id for entry in data.items] == ["sales"]
 
 
 def test_similar_history_without_profile_filters_to_allowed_profiles() -> None:
@@ -214,7 +213,7 @@ def test_similar_history_without_profile_filters_to_allowed_profiles() -> None:
         allowed_profile_ids=set(),
     )
 
-    assert [entry.item.profile_id for entry in data.items] == ["sales"]
+    assert [entry.profile_id for entry in data.items] == ["sales"]
     assert empty.items == []
 
 
@@ -234,7 +233,44 @@ def test_similar_history_route_scopes_empty_profile_to_principal_allowed_profile
     )
 
     assert response.data is not None
-    assert [entry.item.profile_id for entry in response.data.items] == ["sales"]
+    assert [entry.profile_id for entry in response.data.items] == ["sales"]
+
+
+def test_similar_history_response_projects_private_history_fields() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service._history = [  # noqa: SLF001
+        _history(1, admin=FeedbackRating.GOOD, profile_id="sales").model_copy(
+            update={
+                "actor_user_uuid": "other-user",
+                "feedback_comment": "利用者だけのコメント",
+                "admin_feedback_content": "管理者レビュー詳細",
+                "session_id": "session-secret",
+                "rewritten_question": "書き換え済み質問",
+            }
+        )
+    ]
+
+    data = service.similar_history(
+        SimilarHistoryRequest(question="請求金額を確認したい", profile_id="sales", limit=5)
+    )
+
+    assert len(data.items) == 1
+    payload = data.items[0].model_dump(mode="json")
+    assert payload == {
+        "history_id": "hist-001",
+        "question": "請求金額を確認したい",
+        "sql": "SELECT TOTAL_AMOUNT FROM APP.INVOICES",
+        "profile_id": "sales",
+        "profile_name": "sales profile",
+        "score": data.items[0].score,
+        "reason": data.items[0].reason,
+    }
+    assert "item" not in payload
+    assert "actor_user_uuid" not in payload
+    assert "feedback_comment" not in payload
+    assert "admin_feedback_content" not in payload
+    assert "session_id" not in payload
+    assert "rewritten_question" not in payload
 
 
 def test_few_shot_examples_do_not_cross_profiles() -> None:
@@ -260,9 +296,15 @@ def test_similar_history_and_generation_share_threshold_and_limit(
     service._feedback_similarity_threshold = 0.75  # noqa: SLF001
     service._feedback_match_limit = 2  # noqa: SLF001
     ranked = [
-        SimilarHistoryItem(item=_history(1, admin=FeedbackRating.GOOD), score=0.92, reason="high"),
-        SimilarHistoryItem(item=_history(2, admin=FeedbackRating.GOOD), score=0.81, reason="mid"),
-        SimilarHistoryItem(item=_history(3, admin=FeedbackRating.GOOD), score=0.74, reason="low"),
+        SimilarHistoryCandidate(
+            item=_history(1, admin=FeedbackRating.GOOD), score=0.92, reason="high"
+        ),
+        SimilarHistoryCandidate(
+            item=_history(2, admin=FeedbackRating.GOOD), score=0.81, reason="mid"
+        ),
+        SimilarHistoryCandidate(
+            item=_history(3, admin=FeedbackRating.GOOD), score=0.74, reason="low"
+        ),
     ]
     monkeypatch.setattr(
         service,
@@ -283,7 +325,7 @@ def test_similar_history_and_generation_share_threshold_and_limit(
     )
 
     assert data.used_for_generation is True
-    assert [entry.item.id for entry in data.items] == ["hist-001", "hist-002"]
+    assert [entry.history_id for entry in data.items] == ["hist-001", "hist-002"]
     assert [example.history_id for example in examples] == ["hist-001", "hist-002"]
 
 
@@ -294,9 +336,13 @@ def test_similar_history_generation_reserves_profile_few_shot_slots(
     service._feedback_similarity_threshold = 0.0  # noqa: SLF001
     service._feedback_match_limit = 3  # noqa: SLF001
     ranked = [
-        SimilarHistoryItem(item=_history(1, admin=FeedbackRating.GOOD), score=0.92, reason="1"),
-        SimilarHistoryItem(item=_history(2, admin=FeedbackRating.GOOD), score=0.91, reason="2"),
-        SimilarHistoryItem(item=_history(3, admin=FeedbackRating.GOOD), score=0.9, reason="3"),
+        SimilarHistoryCandidate(
+            item=_history(1, admin=FeedbackRating.GOOD), score=0.92, reason="1"
+        ),
+        SimilarHistoryCandidate(
+            item=_history(2, admin=FeedbackRating.GOOD), score=0.91, reason="2"
+        ),
+        SimilarHistoryCandidate(item=_history(3, admin=FeedbackRating.GOOD), score=0.9, reason="3"),
     ]
     profile = Nl2SqlProfile(
         id="default",
@@ -327,7 +373,7 @@ def test_similar_history_generation_reserves_profile_few_shot_slots(
         engine=Nl2SqlEngine.ENTERPRISE_AI_DIRECT,
     )
 
-    assert [entry.item.id for entry in data.items] == ["hist-001", "hist-002"]
+    assert [entry.history_id for entry in data.items] == ["hist-001", "hist-002"]
     assert [example.source for example in examples] == [
         "profile_few_shot",
         "profile_few_shot",
@@ -400,7 +446,7 @@ def test_oracle_vector_history_receives_allowed_profile_scope(
 
     assert adapter.search_kwargs is not None
     assert adapter.search_kwargs["profile_ids"] == {"sales", "finance"}
-    assert {entry.item.profile_id for entry in data.items} == {"sales", "finance"}
+    assert {entry.profile_id for entry in data.items} == {"sales", "finance"}
 
 
 def test_oracle_vector_history_embeds_template_values_without_labels(
@@ -508,8 +554,8 @@ def test_similar_history_ignores_question_template_labels_for_scoring() -> None:
         )
     )
 
-    assert [entry.item.id for entry in data.items[:2]] == ["hist-003", "hist-001"]
-    scores = {entry.item.id: entry.score for entry in data.items}
+    assert [entry.history_id for entry in data.items[:2]] == ["hist-003", "hist-001"]
+    scores = {entry.history_id: entry.score for entry in data.items}
     assert scores["hist-003"] > scores["hist-001"]
     assert "hist-002" not in scores
     reasons = " ".join(entry.reason for entry in data.items)
