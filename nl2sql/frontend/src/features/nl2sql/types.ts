@@ -1,6 +1,6 @@
 import type { OntologyGraph } from "./ontology/types";
 
-export type Nl2SqlEngine = "auto" | "select_ai" | "select_ai_agent" | "enterprise_ai_direct";
+export type Nl2SqlEngine = "select_ai" | "select_ai_agent" | "enterprise_ai_direct";
 
 export type JobStatus = "pending" | "running" | "done" | "error";
 export type JobStepStatus = "pending" | "running" | "done" | "error" | "skipped";
@@ -727,7 +727,7 @@ export interface SimilarHistoryData {
   engine?: Nl2SqlEngine | null;
 }
 
-export type QualityEvaluationEngine = Exclude<Nl2SqlEngine, "auto">;
+export type QualityEvaluationEngine = Nl2SqlEngine;
 export type QualityEvaluationStatus =
   | "pending"
   | "running"

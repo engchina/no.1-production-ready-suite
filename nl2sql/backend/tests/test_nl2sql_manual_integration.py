@@ -31,7 +31,7 @@ class _UnconfiguredEnterpriseAiClient:
         raise AssertionError("Enterprise AI must not be called in smoke tests")
 
 
-def test_parse_engines_rejects_auto() -> None:
+def test_parse_engines_rejects_unknown_engine() -> None:
     with pytest.raises(argparse.ArgumentTypeError):
         script._parse_engines("auto")
 

@@ -234,7 +234,7 @@ def test_query_session_history_keeps_trace_and_is_idempotent() -> None:
         session_id="session-1",
         question="受注件数を表示",
         rewritten_question="受注の件数を表示",
-        engine=Nl2SqlEngine.AUTO,
+        engine=Nl2SqlEngine.SELECT_AI,
         generated_sql="SELECT COUNT(*) FROM ORDERS",
         executable_sql="SELECT COUNT(*) FROM ORDERS FETCH FIRST 100 ROWS ONLY",
         profile_id="default",

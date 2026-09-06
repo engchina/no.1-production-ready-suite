@@ -669,7 +669,7 @@ async def test_sample_import_enables_preview_and_delete() -> None:
     data = resp.json()["data"]
     assert data["is_safe"] is True
     assert data["sql"].lower().startswith("select")
-    assert data["engine"] == "select_ai_agent"
+    assert data["engine"] == "select_ai"
     assert data["timing"]["elapsed_ms"] >= 0
     assert delete_resp.status_code == 200
     assert delete_resp.json()["data"]["executed"] is True
@@ -1160,14 +1160,14 @@ def test_job_create_request_artifact_flags_default_false() -> None:
     assert request.include_show_prompt is False
 
 
-def test_job_ontology_context_disabled_passes_none_to_generation(
+def test_job_published_ontology_disabled_passes_none_to_generation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
     _import_sample_with_profile(service)
     captured_contexts: list[Any | None] = []
 
-    def fake_generate_with_fallback(*_args: Any, **kwargs: Any) -> GeneratedSql:
+    def fake_generate_selected_engine(*_args: Any, **kwargs: Any) -> GeneratedSql:
         captured_contexts.append(kwargs.get("ontology_context"))
         return GeneratedSql(
             engine=Nl2SqlEngine.SELECT_AI,
@@ -1177,7 +1177,7 @@ def test_job_ontology_context_disabled_passes_none_to_generation(
             schema_catalog=service.get_catalog(),
         )
 
-    monkeypatch.setattr(service, "_generate_with_fallback", fake_generate_with_fallback)
+    monkeypatch.setattr(service, "_generate_selected_engine", fake_generate_selected_engine)
     created = service.start_job(
         JobCreateRequest(
             question="社員一覧を確認したい",
@@ -1192,7 +1192,7 @@ def test_job_ontology_context_disabled_passes_none_to_generation(
     assert captured_contexts == [None]
 
 
-def test_job_ontology_context_unavailable_returns_none(
+def test_job_published_ontology_unavailable_returns_none(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from app.features.nl2sql import ontology_router
@@ -1200,33 +1200,72 @@ def test_job_ontology_context_unavailable_returns_none(
     service = Nl2SqlService(store=MemoryNl2SqlStore())
     _import_sample_with_profile(service)
     profile = service.get_profile("sql_assist_sample")
-    allowed = service.resolve_allowed_objects("sql_assist_sample", AllowedObjects())
 
-    def fail_context_resolution(**_kwargs: Any) -> None:
+    def fail_markdown_resolution(_profile_id: str) -> None:
         raise RuntimeError("ontology is unavailable")
 
     monkeypatch.setattr(
         ontology_router.ontology_runtime,
-        "compile_generation_context_for_job",
-        fail_context_resolution,
+        "ontology_markdown_state",
+        fail_markdown_resolution,
     )
 
-    context = service._job_ontology_context(
+    context = service._job_published_ontology_markdown(
         request=JobCreateRequest(
             question="社員一覧を確認したい",
             profile_id="sql_assist_sample",
             use_ontology_context=True,
         ),
-        question="社員一覧を確認したい",
         profile=profile,
-        allowed=allowed,
-        row_limit=None,
     )
 
     assert context is None
 
 
-def test_job_ontology_context_empty_runtime_passes_none_to_generation(
+def test_job_ontology_uses_only_selected_profile_published_markdown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.features.nl2sql import ontology_router
+
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    _import_sample_with_profile(service)
+    profile = service.get_profile("sql_assist_sample")
+    requested_profile_ids: list[str] = []
+    published_markdown = "# 公開版\n\n- 社員は EMPLOYEE に対応する。"
+
+    def markdown_state(profile_id: str) -> SimpleNamespace:
+        requested_profile_ids.append(profile_id)
+        return SimpleNamespace(
+            draft_markdown="# 下書き",
+            published_markdown=published_markdown,
+        )
+
+    monkeypatch.setattr(ontology_router.ontology_runtime, "ontology_markdown_state", markdown_state)
+    monkeypatch.setattr(
+        ontology_router.ontology_runtime,
+        "_interpret_question",
+        lambda *_args, **_kwargs: pytest.fail("通常 job で intent 解析してはならない"),
+    )
+    monkeypatch.setattr(
+        ontology_router.ontology_runtime,
+        "_embedding_hits",
+        lambda *_args, **_kwargs: pytest.fail("通常 job で embedding 検索してはならない"),
+    )
+
+    context = service._job_published_ontology_markdown(
+        request=JobCreateRequest(
+            question="社員一覧を確認したい",
+            profile_id=profile.id,
+            use_ontology_context=True,
+        ),
+        profile=profile,
+    )
+
+    assert context == published_markdown
+    assert requested_profile_ids == [profile.id]
+
+
+def test_job_empty_published_ontology_passes_none_to_generation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from app.features.nl2sql import ontology_router
@@ -1237,11 +1276,11 @@ def test_job_ontology_context_empty_runtime_passes_none_to_generation(
 
     monkeypatch.setattr(
         ontology_router.ontology_runtime,
-        "compile_generation_context_for_job",
-        lambda **_kwargs: None,
+        "ontology_markdown_state",
+        lambda _profile_id: SimpleNamespace(published_markdown=""),
     )
 
-    def fake_generate_with_fallback(*_args: Any, **kwargs: Any) -> GeneratedSql:
+    def fake_generate_selected_engine(*_args: Any, **kwargs: Any) -> GeneratedSql:
         captured_contexts.append(kwargs.get("ontology_context"))
         return GeneratedSql(
             engine=Nl2SqlEngine.SELECT_AI,
@@ -1251,7 +1290,7 @@ def test_job_ontology_context_empty_runtime_passes_none_to_generation(
             schema_catalog=service.get_catalog(),
         )
 
-    monkeypatch.setattr(service, "_generate_with_fallback", fake_generate_with_fallback)
+    monkeypatch.setattr(service, "_generate_selected_engine", fake_generate_selected_engine)
     created = service.start_job(
         JobCreateRequest(
             question="社員一覧を確認したい",
@@ -1292,9 +1331,11 @@ def test_job_applies_ontology_context_when_available(
 ) -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
     _import_sample_with_profile(service)
-    context = _simple_ontology_context()
+    published_markdown = "# 社員オントロジー\n\n- 社員は EMPLOYEE に対応する。"
 
-    monkeypatch.setattr(service, "_job_ontology_context", lambda **_kwargs: context)
+    monkeypatch.setattr(
+        service, "_job_published_ontology_markdown", lambda **_kwargs: published_markdown
+    )
     created = service.start_job(
         JobCreateRequest(
             question="社員一覧を確認したい",
@@ -1308,8 +1349,7 @@ def test_job_applies_ontology_context_when_available(
     assert job.status == JobStatus.DONE
     assert job.result is not None
     assert job.result.engine_meta["ontology_context_applied"] is True
-    assert job.result.engine_meta["ontology_context_hash"] == "context-hash-001"
-    assert job.result.engine_meta["ontology_context_instruction_length"] > 0
+    assert job.result.engine_meta["ontology_context_instruction_length"] == len(published_markdown)
 
 
 def test_select_ai_showprompt_uses_ontology_attributes(
@@ -1317,7 +1357,7 @@ def test_select_ai_showprompt_uses_ontology_attributes(
 ) -> None:
     adapter = _QuestionCaptureOracleAdapter(_FakeOracleDb())
     service = _OracleRuntimeNl2SqlService(adapter)
-    context = _simple_ontology_context("context-hash-showprompt")
+    published_markdown = "# 請求オントロジー\n\n- 請求金額は INVOICES.TOTAL_AMOUNT。"
     profile = service.create_profile(
         Nl2SqlProfile(
             id="ontology_showprompt_profile",
@@ -1325,7 +1365,9 @@ def test_select_ai_showprompt_uses_ontology_attributes(
             allowed_tables=["INVOICES"],
         )
     )
-    monkeypatch.setattr(service, "_job_ontology_context", lambda **_kwargs: context)
+    monkeypatch.setattr(
+        service, "_job_published_ontology_markdown", lambda **_kwargs: published_markdown
+    )
 
     created = service.start_job(
         JobCreateRequest(
@@ -1349,7 +1391,8 @@ def test_select_ai_showprompt_uses_ontology_attributes(
         instructions = attributes["additional_instructions"]
         assert "## 今回の追加指示" not in instructions
         assert "確認済み Ontology コンテキスト" in instructions
-        assert "context-hash-showprompt" in instructions
+        assert published_markdown in instructions
+        assert "question_effective:" not in instructions
     assert job.result.engine_meta["select_ai_additional_instructions_applied"] is False
     assert job.result.engine_meta["select_ai_additional_instructions_length"] == 0
 
@@ -1359,7 +1402,7 @@ def test_select_ai_request_and_ontology_instructions_are_separate(
 ) -> None:
     adapter = _QuestionCaptureOracleAdapter(_FakeOracleDb())
     service = _OracleRuntimeNl2SqlService(adapter)
-    context = _simple_ontology_context("context-hash-user-and-ontology")
+    published_markdown = "# 請求オントロジー\n\n- 請求金額は INVOICES.TOTAL_AMOUNT。"
     profile = service.create_profile(
         Nl2SqlProfile(
             id="ontology_request_profile",
@@ -1367,7 +1410,9 @@ def test_select_ai_request_and_ontology_instructions_are_separate(
             allowed_tables=["INVOICES"],
         )
     )
-    monkeypatch.setattr(service, "_job_ontology_context", lambda **_kwargs: context)
+    monkeypatch.setattr(
+        service, "_job_published_ontology_markdown", lambda **_kwargs: published_markdown
+    )
 
     created = service.start_job(
         JobCreateRequest(
@@ -1393,11 +1438,71 @@ def test_select_ai_request_and_ontology_instructions_are_separate(
     assert instructions.index("## 今回の追加指示") < instructions.index(
         "## 確認済み Ontology コンテキスト"
     )
-    assert "context-hash-user-and-ontology" in instructions
+    assert published_markdown in instructions
     assert job.result.engine_meta["select_ai_additional_instructions_applied"] is True
     assert job.result.engine_meta["select_ai_additional_instructions_length"] == len(
         "最新月だけを対象にする。"
     )
+
+
+def test_select_ai_agent_receives_published_markdown_in_user_prompt() -> None:
+    adapter = _QuestionCaptureOracleAdapter(_FakeOracleDb())
+    service = _OracleRuntimeNl2SqlService(adapter)
+    profile = service.create_profile(
+        Nl2SqlProfile(
+            id="agent_markdown_profile",
+            name="Agent Markdown profile",
+            allowed_tables=["INVOICES"],
+        )
+    )
+    published_markdown = "# 請求オントロジー\n\n- 請求金額は INVOICES.TOTAL_AMOUNT。"
+
+    generated = service._generate_oracle_sql(  # noqa: SLF001
+        engine=Nl2SqlEngine.SELECT_AI_AGENT,
+        question="請求金額を確認したい",
+        profile=profile,
+        fallback_messages=[],
+        meta={},
+        learning_examples=[],
+        ontology_context=published_markdown,
+    )
+
+    assert generated.engine == Nl2SqlEngine.SELECT_AI_AGENT
+    assert adapter.questions == [
+        "請求金額を確認したい\n\n確認済み Ontology コンテキスト:\n\n" + published_markdown
+    ]
+    assert "question_effective:" not in adapter.questions[0]
+
+
+def test_enterprise_ai_direct_receives_published_markdown_in_context() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    _import_sample_with_profile(service)
+    fake_client = _FakeEnterpriseAiClient(
+        '{"sql":"SELECT TOTAL_AMOUNT FROM INVOICES","explanation":"請求金額"}'
+    )
+    service._enterprise_ai_client = fake_client  # noqa: SLF001
+    profile = service.get_profile("sql_assist_sample")
+    allowed = service.resolve_allowed_objects(profile.id, AllowedObjects())
+    published_markdown = "# 請求オントロジー\n\n- 請求金額は INVOICES.TOTAL_AMOUNT。"
+
+    generated = service._generate_enterprise_ai_direct_sql(  # noqa: SLF001
+        question="請求金額を確認したい",
+        profile=profile,
+        allowed=allowed,
+        row_limit=100,
+        fallback_messages=[],
+        meta={},
+        learning_examples=[],
+        catalog=service.get_catalog(),
+        ontology_context=published_markdown,
+    )
+
+    assert generated.engine == Nl2SqlEngine.ENTERPRISE_AI_DIRECT
+    assert len(fake_client.calls) == 1
+    assert fake_client.calls[0]["context"].endswith(
+        "ontology_generation_context:\n" + published_markdown
+    )
+    assert "question_effective:" not in fake_client.calls[0]["context"]
 
 
 def test_ontology_generation_context_prompt_includes_qa_sql_examples() -> None:
@@ -1685,7 +1790,7 @@ def test_job_marks_execution_skipped_when_safety_check_blocks_sql() -> None:
             allowed_tables=["EMPLOYEE"],
         )
     )
-    service._generate_with_fallback = lambda **_kwargs: GeneratedSql(  # type: ignore[method-assign]
+    service._generate_selected_engine = lambda **_kwargs: GeneratedSql(  # type: ignore[method-assign]
         engine=Nl2SqlEngine.SELECT_AI,
         generated_sql="SELECT PROJECT_ID FROM PROJECT",
         explanation="許可範囲外の表を参照するテスト SQL",
@@ -1808,7 +1913,7 @@ async def test_select_ai_overrides_require_select_ai_engine() -> None:
             "/api/nl2sql/preview",
             json={
                 "question": "売上を確認したい",
-                "engine": "auto",
+                "engine": "select_ai_agent",
                 "select_ai_overrides": {"role": "財務アシスタント"},
             },
         )
@@ -1819,6 +1924,21 @@ async def test_select_ai_overrides_require_select_ai_engine() -> None:
                 "engine": "enterprise_ai_direct",
                 "select_ai_overrides": {"additional_instructions": "円で表示"},
             },
+        )
+
+    assert preview_resp.status_code == 422
+    assert job_resp.status_code == 422
+
+
+async def test_auto_engine_is_not_accepted_by_preview_or_job_api() -> None:
+    async with httpx.AsyncClient(transport=_transport(), base_url="http://test") as client:
+        preview_resp = await client.post(
+            "/api/nl2sql/preview",
+            json={"question": "売上を確認したい", "engine": "auto"},
+        )
+        job_resp = await client.post(
+            "/api/nl2sql/jobs",
+            json={"question": "売上を確認したい", "engine": "auto"},
         )
 
     assert preview_resp.status_code == 422
@@ -1990,13 +2110,13 @@ def test_job_cancel_requested_stops_at_stage_boundary(
     service = Nl2SqlService(store=MemoryNl2SqlStore())
     _import_sample(service)
     release = threading.Event()
-    original = service._generate_with_fallback  # noqa: SLF001
+    original = service._generate_selected_engine  # noqa: SLF001
 
     def blocking_generate(*args: Any, **kwargs: Any) -> Any:
         release.wait(timeout=5)
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(service, "_generate_with_fallback", blocking_generate)
+    monkeypatch.setattr(service, "_generate_selected_engine", blocking_generate)
     created = service.start_job(JobCreateRequest(question="請求金額を確認したい"))
 
     cancelled = service.request_job_cancel(created.job_id)
@@ -2303,14 +2423,14 @@ def test_sample_data_import_does_not_create_profile_in_deterministic_runtime() -
     assert service.sample_data_info().profile_id == ""
 
 
-def test_auto_job_supports_select_ai_agent_and_timing() -> None:
+def test_explicit_select_ai_job_tracks_timing() -> None:
     service = Nl2SqlService()
     _import_sample(service)
 
     created = service.start_job(
         JobCreateRequest(
             question="社員一覧を見たい",
-            engine=Nl2SqlEngine.AUTO,
+            engine=Nl2SqlEngine.SELECT_AI,
             allowed_objects={
                 "table_names": ["EMPLOYEE"],
                 "columns": {"EMPLOYEE": ["EMPLOYEE_ID"]},
@@ -2325,8 +2445,7 @@ def test_auto_job_supports_select_ai_agent_and_timing() -> None:
     assert [step.status for step in data.steps] == [JobStepStatus.DONE] * 5
     assert all(step.elapsed_ms is not None for step in data.steps)
     assert data.result is not None
-    assert data.result.engine == Nl2SqlEngine.SELECT_AI_AGENT
-    assert data.result.engine_meta["team_name"].endswith("_TEAM")
+    assert data.result.engine == Nl2SqlEngine.SELECT_AI
     assert data.result.engine_meta["engine_timings"][0]["engine"] == "deterministic"
     assert data.result.engine_meta["engine_timings"][0]["status"] == "success"
     assert data.result.engine_meta["generation_elapsed_ms"] >= 0
@@ -2337,18 +2456,6 @@ def test_auto_job_supports_select_ai_agent_and_timing() -> None:
         item.model_dump(mode="json") for item in history_item.engine_timings
     ] == data.result.engine_meta["engine_timings"]
     assert [item.stage for item in history_item.stage_timings] == EXPECTED_NL2SQL_JOB_STAGES
-
-
-def test_auto_falls_back_from_agent_to_select_ai() -> None:
-    service = Nl2SqlService()
-    _import_sample(service)
-
-    data = service.preview(
-        PreviewRequest(question="select_ai_agent_fail 社員一覧", engine=Nl2SqlEngine.AUTO)
-    )
-
-    assert data.engine == Nl2SqlEngine.SELECT_AI
-    assert "select_ai_agent" in data.fallback_reason
 
 
 def test_schema_objects_invalid_profile_returns_400() -> None:
@@ -2775,7 +2882,7 @@ async def test_feedback_history_is_retrieved_as_similar_few_shot() -> None:
         await _api_import_sample(client)
         job_resp = await client.post(
             "/api/nl2sql/jobs",
-            json={"question": "社員一覧を確認したい", "engine": "auto"},
+            json={"question": "社員一覧を確認したい", "engine": "select_ai"},
         )
         assert job_resp.status_code == 200
         job_id = job_resp.json()["data"]["job_id"]
@@ -3069,7 +3176,7 @@ async def test_nl2sql_store_persists_profiles_jobs_history_and_feedback() -> Non
     job_info = service.start_job(
         JobCreateRequest(
             question="社員一覧を確認したい",
-            engine=Nl2SqlEngine.AUTO,
+            engine=Nl2SqlEngine.SELECT_AI,
             profile_id=profile.id,
         )
     )

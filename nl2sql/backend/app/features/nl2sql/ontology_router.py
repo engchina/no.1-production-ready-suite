@@ -337,7 +337,7 @@ class QuerySessionApiCreate(OntologyContract):
     profile_id: str = Field(min_length=1)
     allowed_objects: AllowedObjects = Field(default_factory=AllowedObjects)
     row_limit: int | None = Field(default=None, ge=1, le=5000)
-    engine: Nl2SqlEngine = Nl2SqlEngine.AUTO
+    engine: Nl2SqlEngine = Nl2SqlEngine.SELECT_AI
     profile_confirmation_token: str = ""
     clarification_mode: ClarificationMode = ClarificationMode.REVIEW_ONLY
 
@@ -465,7 +465,7 @@ class ProfileOntologyViewPatch(OntologyContract):
 class QueryRuntimeContext(OntologyContract):
     allowed_objects: AllowedObjects
     row_limit: int | None = Field(default=None, ge=1, le=5000)
-    engine: Nl2SqlEngine = Nl2SqlEngine.AUTO
+    engine: Nl2SqlEngine = Nl2SqlEngine.SELECT_AI
     retrieved_node_ids: list[str] = Field(default_factory=list)
     profile_recommendation_id: str = ""
     profile_selection_source: str = "legacy"
@@ -2621,65 +2621,6 @@ class OntologyApiRuntime:
             {"session_id": session_id, "request": request.model_dump(mode="json")},
             lambda: self.generate_sql(session_id, request),
         )
-
-    def compile_generation_context_for_job(
-        self,
-        *,
-        question: str,
-        profile: Nl2SqlProfile,
-        allowed: AllowedObjects,
-        row_limit: int | None,
-        engine: Nl2SqlEngine,
-    ) -> OntologySqlGenerationContext | None:
-        """通常 NL2SQL job 用に確認済み相当の Ontology context を一時構築する。"""
-
-        with self._lock, observe_stage("compile_job_ontology_context"):
-            ontology = self._query_ontology()
-            if not self._has_business_elements(ontology):
-                return None
-            base_view = self._base_profile_view(profile, ontology)
-            view = self._narrow_profile_view(base_view, ontology, allowed)
-            node_by_id = {node.id: node for node in ontology.nodes}
-            edge_by_id = {edge.id: edge for edge in ontology.edges}
-            has_scoped_business_content = any(
-                (node := node_by_id.get(node_id)) is not None and node.kind in _BUSINESS_NODE_KINDS
-                for node_id in view.node_ids
-            ) or any(
-                (edge := edge_by_id.get(edge_id)) is not None and edge.kind in _BUSINESS_EDGE_KINDS
-                for edge_id in view.edge_ids
-            )
-            if not has_scoped_business_content:
-                return None
-            intent = self._interpret_question(question, profile, ontology, view)
-            if intent.limit is None and row_limit is not None:
-                intent.limit = row_limit
-            session = QuerySession(
-                id=f"query_job_{uuid4().hex}",
-                profile_id=profile.id,
-                profile_view_id=view.id,
-                ontology_revision_id=ontology.revision.id,
-                original_question=question,
-                current_intent_version=intent.version,
-                intents=[intent],
-            )
-            runtime_context = QueryRuntimeContext(
-                allowed_objects=allowed,
-                row_limit=row_limit,
-                engine=engine,
-                retrieved_node_ids=sorted(
-                    {item.ontology_node_id for item in intent.entities if item.ontology_node_id}
-                    | {item.ontology_node_id for item in intent.metrics if item.ontology_node_id}
-                    | {item.ontology_node_id for item in intent.dimensions if item.ontology_node_id}
-                ),
-                profile_selection_source="legacy_job",
-            )
-            return self._compile_sql_generation_context(
-                session=session,
-                intent=intent,
-                view=view,
-                ontology=ontology,
-                runtime_context=runtime_context,
-            )
 
     def profile_scoped_graph_snapshot_for_job(
         self,

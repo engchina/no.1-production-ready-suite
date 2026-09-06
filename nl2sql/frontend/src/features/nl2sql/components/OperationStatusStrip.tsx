@@ -166,6 +166,10 @@ export function OperationStatusStrip({
                     />
                   </dd>
                 </div>
+              </dl>
+            )}
+            {step.stage === "safety_check" && job.result && (
+              <dl className="mt-2 grid gap-2 border-l border-border pl-3 text-xs">
                 <div className="grid gap-0.5">
                   <dt className="font-medium text-muted">{t("nl2sql.result.tables")}</dt>
                   <dd className="break-words font-mono leading-5 text-foreground">

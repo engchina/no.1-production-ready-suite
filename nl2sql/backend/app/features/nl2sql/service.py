@@ -6545,7 +6545,7 @@ class Nl2SqlService:
             use_glossary=request.use_glossary,
         )
         allowed = self._resolve_allowed_objects(request.profile_id, request.allowed_objects)
-        generated = self._generate_with_fallback(
+        generated = self._generate_selected_engine(
             question=request.question,
             engine=request.engine,
             profile=profile,
@@ -14502,12 +14502,9 @@ class Nl2SqlService:
                     engine_meta={"runtime": "deterministic"},
                 )
                 for engine in engines
-                if engine != Nl2SqlEngine.AUTO
             ]
         cleaned: list[AssetCleanupData] = []
         for engine in engines:
-            if engine == Nl2SqlEngine.AUTO:
-                continue
             if engine == Nl2SqlEngine.SELECT_AI:
                 cleaned.append(self._cleanup_select_ai_profile(profile_id))
             elif engine == Nl2SqlEngine.SELECT_AI_AGENT:
@@ -16965,31 +16962,27 @@ class Nl2SqlService:
                 warnings=[str(exc)],
             )
 
-    def _job_ontology_context(
+    def _job_published_ontology_markdown(
         self,
         *,
         request: JobCreateRequest,
-        question: str,
         profile: Nl2SqlProfile,
-        allowed: AllowedObjects,
-        row_limit: int | None,
-    ) -> Any | None:
+    ) -> str | None:
+        """選択中 Profile の公開版 Markdown を SQL 生成 prompt 用に返す。"""
+
         if not request.use_ontology_context:
             return None
         try:
             # ontology_router imports nl2sql_service at module load time, so keep this lazy.
             from app.features.nl2sql.ontology_router import ontology_runtime
 
-            return ontology_runtime.compile_generation_context_for_job(
-                question=question,
-                profile=profile,
-                allowed=allowed,
-                row_limit=row_limit,
-                engine=request.engine,
-            )
+            markdown = ontology_runtime.ontology_markdown_state(
+                profile.id
+            ).published_markdown.strip()
+            return markdown or None
         except Exception:
             logger.info(
-                "nl2sql_job_ontology_context_unavailable",
+                "nl2sql_job_published_ontology_markdown_unavailable",
                 exc_info=True,
                 extra={
                     "profile_id": profile.id,
@@ -17022,12 +17015,9 @@ class Nl2SqlService:
         )
         allowed = self._resolve_allowed_objects(request.profile_id, request.allowed_objects)
         row_limit = self._resolve_row_limit(request.profile_id, request.row_limit)
-        ontology_context = self._job_ontology_context(
+        ontology_context = self._job_published_ontology_markdown(
             request=request,
-            question=rewritten,
             profile=profile,
-            allowed=allowed,
-            row_limit=row_limit,
         )
         stage_elapsed = _elapsed_ms(stage_started)
         stage_timings.append(StageTiming(stage="prepare_context", elapsed_ms=stage_elapsed))
@@ -17040,7 +17030,7 @@ class Nl2SqlService:
 
         self._raise_if_job_cancelled(job_id)
         stage_started = time.monotonic()
-        generated = self._generate_with_fallback(
+        generated = self._generate_selected_engine(
             question=request.question,
             engine=request.engine,
             profile=profile,
@@ -17279,7 +17269,7 @@ class Nl2SqlService:
             self._history.append(history_item)
             self._prune_history_locked()
 
-    def _generate_with_fallback(
+    def _generate_selected_engine(
         self,
         question: str,
         engine: Nl2SqlEngine,
@@ -17297,40 +17287,20 @@ class Nl2SqlService:
             and not self._catalog.tables
         ):
             raise SchemaCatalogEmptyError(_SCHEMA_EMPTY_MESSAGE)
-        candidates = (
-            [
-                Nl2SqlEngine.SELECT_AI_AGENT,
-                Nl2SqlEngine.SELECT_AI,
-                Nl2SqlEngine.ENTERPRISE_AI_DIRECT,
-            ]
-            if engine == Nl2SqlEngine.AUTO
-            else [engine]
-        )
-        fallback_messages: list[str] = []
         engine_timings: list[dict[str, Any]] = []
-        for candidate in candidates:
-            allow_deterministic_fallback = not (
-                engine == Nl2SqlEngine.SELECT_AI_AGENT and candidate == Nl2SqlEngine.SELECT_AI_AGENT
-            )
-            try:
-                return self._generate_sql(
-                    candidate,
-                    question,
-                    profile,
-                    allowed,
-                    row_limit,
-                    fallback_messages,
-                    select_ai_overrides,
-                    ontology_context,
-                    use_glossary=use_glossary,
-                    allow_deterministic_fallback=allow_deterministic_fallback,
-                    engine_timings=engine_timings,
-                )
-            except RuntimeError as exc:
-                fallback_messages.append(f"{candidate.value}: {exc}")
-                if engine != Nl2SqlEngine.AUTO:
-                    raise RuntimeError(str(exc)) from exc
-        raise RuntimeError("すべての NL2SQL エンジンが失敗しました。")
+        return self._generate_sql(
+            engine,
+            question,
+            profile,
+            allowed,
+            row_limit,
+            [],
+            select_ai_overrides,
+            ontology_context,
+            use_glossary=use_glossary,
+            allow_deterministic_fallback=engine != Nl2SqlEngine.SELECT_AI_AGENT,
+            engine_timings=engine_timings,
+        )
 
     def _generate_sql(
         self,
@@ -17415,13 +17385,14 @@ class Nl2SqlService:
                 for example in history_examples
             ]
         if ontology_context is not None:
+            ontology_instructions = self._ontology_generation_context_prompt(ontology_context)
             meta.update(
                 {
-                    "ontology_context_hash": getattr(ontology_context, "context_hash", ""),
+                    "ontology_context_hash": hashlib.sha256(
+                        ontology_instructions.encode("utf-8")
+                    ).hexdigest(),
                     "ontology_context_applied": True,
-                    "ontology_context_instruction_length": len(
-                        self._ontology_generation_context_prompt(ontology_context)
-                    ),
+                    "ontology_context_instruction_length": len(ontology_instructions),
                 }
             )
         if self._use_oracle_runtime() and engine in {
@@ -17692,8 +17663,6 @@ class Nl2SqlService:
     ) -> GeneratedSql:
         """fallback を一切許さず、選択された engine だけで SQL を生成する。"""
 
-        if engine == Nl2SqlEngine.AUTO:
-            raise ValueError("SQL生成評価で auto engine は使用できません。")
         ready, reason = self.quality_evaluation_engine_readiness(profile_id=profile_id).get(
             engine, (False, "未対応の engine です。")
         )
@@ -18049,6 +18018,10 @@ class Nl2SqlService:
 
         if context is None:
             return ""
+        # 通常 NL2SQL job は、選択中 Profile の公開版 Markdown を加工せず渡す。
+        # 構造化 context の変換は明示的な guided clarification flow だけで使う。
+        if isinstance(context, str):
+            return context.strip()
         lines = [
             f"context_hash: {getattr(context, 'context_hash', '')}",
             f"ontology_revision_id: {getattr(context, 'ontology_revision_id', '')}",

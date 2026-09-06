@@ -1,7 +1,6 @@
 import type { HistoryItem, Nl2SqlEngine } from "./types";
 
-// URL prefill で受け付けるのは画面(EngineSelector)で選べるエンジンだけ。
-// "auto" は選択肢に無く、受理すると何も選ばれていない表示のまま実行されてしまう。
+// URL prefill で受け付けるのは画面(EngineSelector)で選べる明示エンジンだけ。
 const ENGINES: readonly Nl2SqlEngine[] = ["select_ai", "select_ai_agent", "enterprise_ai_direct"];
 
 export interface QueryPrefill {

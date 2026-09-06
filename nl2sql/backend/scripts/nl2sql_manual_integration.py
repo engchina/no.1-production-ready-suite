@@ -73,8 +73,6 @@ def _parse_engines(value: str) -> list[Nl2SqlEngine]:
             raise argparse.ArgumentTypeError(
                 f"Unknown engine '{normalized}'. Choose from: {allowed}"
             ) from exc
-        if engine == Nl2SqlEngine.AUTO:
-            raise argparse.ArgumentTypeError("Use concrete engines for manual integration.")
         engines.append(engine)
     if not engines:
         raise argparse.ArgumentTypeError("At least one engine is required.")

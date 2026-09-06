@@ -1,8 +1,7 @@
-"""エンジン失敗時の fallback 方針の回帰テスト。
+"""明示選択したエンジンの失敗境界に関する回帰テスト。
 
 本番(oracle runtime)では、Select AI / Enterprise AI の失敗を質問を無視したテンプレート
-SQL で埋めない。`auto` は失敗した候補から次のエンジンへ進み、全候補失敗ならエラーにする
-(Issue: oracle runtime で deterministic fallback が成功として返る)。
+SQL で埋めず、別エンジンへ暗黙 fallback しない。
 local/CI の deterministic runtime は従来どおりテンプレート SQL でデモできる。
 """
 
@@ -117,7 +116,7 @@ def _oracle_runtime_service(
 
 
 def _generate(service: Nl2SqlService, engine: Nl2SqlEngine) -> Any:
-    return service._generate_with_fallback(  # noqa: SLF001
+    return service._generate_selected_engine(  # noqa: SLF001
         question="社員一覧を確認したい",
         engine=engine,
         profile=service.get_profile(None),
@@ -145,51 +144,6 @@ def test_explicit_enterprise_ai_failure_is_an_error_in_oracle_runtime(
 
     with pytest.raises(RuntimeError, match="Enterprise AI から応答がありません"):
         _generate(service, Nl2SqlEngine.ENTERPRISE_AI_DIRECT)
-
-
-def test_auto_advances_to_next_engine_after_oracle_failures(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    direct = _FakeEnterpriseAiClient(_DIRECT_SQL)
-    service = _oracle_runtime_service(monkeypatch, direct=direct)
-
-    generated = _generate(service, Nl2SqlEngine.AUTO)
-
-    # 旧実装は select_ai_agent の失敗をテンプレート SQL で即 return し、後続候補に進まなかった。
-    assert generated.engine == Nl2SqlEngine.ENTERPRISE_AI_DIRECT
-    assert generated.generated_sql == "SELECT EMPLOYEE_ID FROM APP.EMPLOYEE"
-    assert "select_ai_agent:" in generated.fallback_reason
-    assert "select_ai:" in generated.fallback_reason
-    assert direct.calls == 1
-    assert [item["engine"] for item in generated.engine_meta["engine_timings"]] == [
-        "select_ai_agent",
-        "select_ai",
-        "enterprise_ai_direct",
-    ]
-    assert [item["status"] for item in generated.engine_meta["engine_timings"]] == [
-        "failed",
-        "failed",
-        "success",
-    ]
-    assert all(
-        isinstance(item["elapsed_ms"], int) and item["elapsed_ms"] >= 0
-        for item in generated.engine_meta["engine_timings"]
-    )
-    assert (
-        generated.engine_meta["generation_elapsed_ms"]
-        == generated.engine_meta["engine_timings"][-1]["elapsed_ms"]
-    )
-
-
-def test_auto_fails_when_every_engine_fails_in_oracle_runtime(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    service = _oracle_runtime_service(
-        monkeypatch, direct=_FakeEnterpriseAiClient(_DIRECT_SQL, fail=True)
-    )
-
-    with pytest.raises(RuntimeError, match="すべての NL2SQL エンジンが失敗しました"):
-        _generate(service, Nl2SqlEngine.AUTO)
 
 
 def test_unconfigured_enterprise_ai_is_an_error_in_oracle_runtime(

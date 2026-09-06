@@ -53,7 +53,7 @@ function columnsLabel(item: HistoryItem) {
 }
 
 function isKnownEngine(engine: string): engine is Nl2SqlEngine {
-  return ["auto", "select_ai", "select_ai_agent", "enterprise_ai_direct"].includes(engine);
+  return ["select_ai", "select_ai_agent", "enterprise_ai_direct"].includes(engine);
 }
 
 function engineTimingLabel(engine: string) {

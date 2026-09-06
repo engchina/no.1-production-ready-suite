@@ -779,7 +779,7 @@ export interface QuerySessionPreview {
   is_safe: boolean;
   row_limit: number;
   note?: string;
-  engine?: "auto" | "select_ai" | "select_ai_agent" | "enterprise_ai_direct";
+  engine?: "select_ai" | "select_ai_agent" | "enterprise_ai_direct";
   engine_meta?: Record<string, OntologyJsonValue>;
   fallback_reason?: string;
   rewritten_question?: string;
@@ -842,7 +842,7 @@ export interface QuerySessionCreateRequest {
   };
   profile_confirmation_token?: string;
   row_limit?: number;
-  engine?: "auto" | "select_ai" | "select_ai_agent" | "enterprise_ai_direct";
+  engine?: "select_ai" | "select_ai_agent" | "enterprise_ai_direct";
   clarification_mode?: ClarificationMode;
 }
 

@@ -490,7 +490,7 @@ test("history rerun URL and query prefill preserve question, engine, and profile
     profileId: "finance",
   });
   assert.equal(parseNl2SqlEngine("bad_engine"), null);
-  // "auto" は画面で選べないため prefill では受理しない(既定エンジンに倒す)。
+  // 廃止済みの "auto" は prefill でも受理しない(既定エンジンに倒す)。
   assert.equal(parseNl2SqlEngine("auto"), null);
 });
 

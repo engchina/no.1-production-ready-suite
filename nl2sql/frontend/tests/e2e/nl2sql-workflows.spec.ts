@@ -2271,7 +2271,7 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
         evaluation_set_name: payload.evaluation_set_id ? "請求ベンチマーク" : "",
         profile_id: payload.profile_id ?? "default",
         profile_name: "既定プロファイル",
-        engine: payload.engine ?? "auto",
+        engine: payload.engine ?? "select_ai",
         cases: payload.cases ?? [],
         result,
         report: "NL2SQL deterministic evaluation\nSuite: deterministic_mock\nCases: 1",
@@ -4898,8 +4898,10 @@ test("検索を実行すると実処理の段階別進捗と結果を表示す�
   await expect(progress.getByRole("timer")).toHaveAccessibleName("処理時間 00:00");
   await prepare.locator("summary").click();
   await expect(prepare).toContainText("今月の請求金額を確認したい");
-  await expect(prepare).toContainText("INVOICES");
-  await expect(prepare).toContainText("TOTAL_AMOUNT");
+  // 参照表・列は生成前の推測ではなく、生成 SQL を解析した safety step に表示する。
+  await safetyStep.locator("summary").click();
+  await expect(safetyStep).toContainText("INVOICES");
+  await expect(safetyStep).toContainText("TOTAL_AMOUNT");
   // 生成 SQL は「SQL を生成」ステップ内(自動展開)に一本化して表示する。
   await expect(generate).toContainText("SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES");
   await expect(generate).toContainText("請求情報を取得します。");

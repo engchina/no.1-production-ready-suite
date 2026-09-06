@@ -22,7 +22,6 @@ _CONTROL_CHARACTER_RE = re.compile(r"[\x00-\x08\x0B-\x0C\x0E-\x1F]")
 class Nl2SqlEngine(StrEnum):
     """NL2SQL 実行エンジン。"""
 
-    AUTO = "auto"
     SELECT_AI = "select_ai"
     SELECT_AI_AGENT = "select_ai_agent"
     ENTERPRISE_AI_DIRECT = "enterprise_ai_direct"
@@ -1019,7 +1018,7 @@ class Nl2SqlShowPromptArtifact(BaseModel):
     """Select AI showprompt の表示用 artifact。"""
 
     available: bool = False
-    engine: Nl2SqlEngine = Nl2SqlEngine.AUTO
+    engine: Nl2SqlEngine = Nl2SqlEngine.SELECT_AI
     action: str = "showprompt"
     prompt: str = ""
     unavailable_reason: str = ""
@@ -1047,7 +1046,7 @@ class PreviewRequest(BaseModel):
     """自然言語から SQL を生成し、実行せずに safety を返す。"""
 
     question: str = Field(min_length=1)
-    engine: Nl2SqlEngine = Nl2SqlEngine.AUTO
+    engine: Nl2SqlEngine = Nl2SqlEngine.SELECT_AI
     profile_id: str | None = None
     allowed_objects: AllowedObjects = Field(default_factory=AllowedObjects)
     row_limit: int | None = Field(default=None, ge=1, le=5000)
@@ -1071,7 +1070,7 @@ class PreviewData(BaseModel):
     is_safe: bool
     row_limit: int
     note: str
-    engine: Nl2SqlEngine = Nl2SqlEngine.AUTO
+    engine: Nl2SqlEngine = Nl2SqlEngine.SELECT_AI
     engine_meta: dict[str, Any] = Field(default_factory=dict)
     fallback_reason: str = ""
     rewritten_question: str = ""
@@ -1102,7 +1101,7 @@ class JobCreateRequest(BaseModel):
     """非同期 NL2SQL job create request."""
 
     question: str = Field(min_length=1)
-    engine: Nl2SqlEngine = Nl2SqlEngine.AUTO
+    engine: Nl2SqlEngine = Nl2SqlEngine.SELECT_AI
     profile_id: str | None = None
     allowed_objects: AllowedObjects = Field(default_factory=AllowedObjects)
     row_limit: int | None = Field(default=None, ge=1, le=5000)
