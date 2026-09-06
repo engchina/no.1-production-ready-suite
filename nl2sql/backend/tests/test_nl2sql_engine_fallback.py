@@ -161,6 +161,24 @@ def test_auto_advances_to_next_engine_after_oracle_failures(
     assert "select_ai_agent:" in generated.fallback_reason
     assert "select_ai:" in generated.fallback_reason
     assert direct.calls == 1
+    assert [item["engine"] for item in generated.engine_meta["engine_timings"]] == [
+        "select_ai_agent",
+        "select_ai",
+        "enterprise_ai_direct",
+    ]
+    assert [item["status"] for item in generated.engine_meta["engine_timings"]] == [
+        "failed",
+        "failed",
+        "success",
+    ]
+    assert all(
+        isinstance(item["elapsed_ms"], int) and item["elapsed_ms"] >= 0
+        for item in generated.engine_meta["engine_timings"]
+    )
+    assert (
+        generated.engine_meta["generation_elapsed_ms"]
+        == generated.engine_meta["engine_timings"][-1]["elapsed_ms"]
+    )
 
 
 def test_auto_fails_when_every_engine_fails_in_oracle_runtime(
@@ -184,6 +202,25 @@ def test_unconfigured_enterprise_ai_is_an_error_in_oracle_runtime(
     with pytest.raises(RuntimeError, match="構成されていません"):
         _generate(service, Nl2SqlEngine.ENTERPRISE_AI_DIRECT)
 
+    engine_timings: list[dict[str, object]] = []
+    with pytest.raises(RuntimeError, match="構成されていません"):
+        service._generate_sql(  # noqa: SLF001
+            Nl2SqlEngine.ENTERPRISE_AI_DIRECT,
+            "社員一覧を確認したい",
+            service.get_profile(None),
+            AllowedObjects(),
+            10,
+            [],
+            allow_deterministic_fallback=False,
+            engine_timings=engine_timings,
+        )
+    assert len(engine_timings) == 1
+    assert engine_timings[0]["engine"] == "enterprise_ai_direct"
+    assert engine_timings[0]["status"] == "skipped"
+    assert engine_timings[0]["error"] == "OCI Enterprise AI Direct が構成されていません。"
+    assert isinstance(engine_timings[0]["elapsed_ms"], int)
+    assert engine_timings[0]["elapsed_ms"] >= 0
+
 
 def test_deterministic_runtime_keeps_template_fallback_for_demo() -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
@@ -198,3 +235,11 @@ def test_deterministic_runtime_keeps_template_fallback_for_demo() -> None:
     assert generated.engine == Nl2SqlEngine.SELECT_AI
     assert generated.generated_sql.upper().startswith("SELECT")
     assert generated.fallback_reason == ""
+    assert generated.engine_meta["engine_timings"] == [
+        {
+            "engine": "deterministic",
+            "elapsed_ms": generated.engine_meta["generation_elapsed_ms"],
+            "status": "success",
+            "error": "",
+        }
+    ]

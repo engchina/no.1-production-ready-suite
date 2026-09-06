@@ -2153,23 +2153,26 @@ def test_auto_job_supports_select_ai_agent_and_timing() -> None:
             },
         )
     )
-    data = service.get_job(created.job_id)
-    for _ in range(10):
-        if data and data.status == JobStatus.DONE:
-            break
-        time.sleep(0.01)
-        data = service.get_job(created.job_id)
+    data = _wait_for_job(service, created.job_id)
 
     assert data is not None
-    assert data.status in {JobStatus.DONE, JobStatus.RUNNING, JobStatus.PENDING}
+    assert data.status == JobStatus.DONE
     assert [step.stage for step in data.steps] == EXPECTED_NL2SQL_JOB_STAGES
-    if data.status == JobStatus.DONE:
-        assert [step.status for step in data.steps] == [JobStepStatus.DONE] * 5
-        assert all(step.elapsed_ms is not None for step in data.steps)
-        assert data.result is not None
-        assert data.result.engine == Nl2SqlEngine.SELECT_AI_AGENT
-        assert data.result.engine_meta["team_name"].endswith("_TEAM")
-        assert data.result.timing.elapsed_ms >= 0  # type: ignore[operator]
+    assert [step.status for step in data.steps] == [JobStepStatus.DONE] * 5
+    assert all(step.elapsed_ms is not None for step in data.steps)
+    assert data.result is not None
+    assert data.result.engine == Nl2SqlEngine.SELECT_AI_AGENT
+    assert data.result.engine_meta["team_name"].endswith("_TEAM")
+    assert data.result.engine_meta["engine_timings"][0]["engine"] == "deterministic"
+    assert data.result.engine_meta["engine_timings"][0]["status"] == "success"
+    assert data.result.engine_meta["generation_elapsed_ms"] >= 0
+    assert data.result.timing.elapsed_ms >= 0
+    history_item = service.list_history().items[0]
+    assert history_item.generation_elapsed_ms == data.result.engine_meta["generation_elapsed_ms"]
+    assert [
+        item.model_dump(mode="json") for item in history_item.engine_timings
+    ] == data.result.engine_meta["engine_timings"]
+    assert [item.stage for item in history_item.stage_timings] == EXPECTED_NL2SQL_JOB_STAGES
 
 
 def test_auto_falls_back_from_agent_to_select_ai() -> None:
@@ -2916,6 +2919,9 @@ async def test_nl2sql_store_persists_profiles_jobs_history_and_feedback() -> Non
     assert job.timing is not None
     assert [item.stage for item in job.timing.stage_timings] == EXPECTED_NL2SQL_JOB_STAGES
     history_item = service.list_history().items[0]
+    assert history_item.generation_elapsed_ms is not None
+    assert history_item.engine_timings
+    assert [item.stage for item in history_item.stage_timings] == EXPECTED_NL2SQL_JOB_STAGES
     service.save_feedback(history_item.id, FeedbackRating.GOOD, "永続化された feedback")
     service.save_admin_feedback_review(
         AdminFeedbackReviewRequest(
@@ -2934,6 +2940,9 @@ async def test_nl2sql_store_persists_profiles_jobs_history_and_feedback() -> Non
     ]
     restored_history = reloaded.list_history().items[0]
     assert restored_history.id == history_item.id
+    assert restored_history.generation_elapsed_ms == history_item.generation_elapsed_ms
+    assert restored_history.engine_timings == history_item.engine_timings
+    assert restored_history.stage_timings == history_item.stage_timings
     assert restored_history.feedback_rating == FeedbackRating.GOOD
     assert restored_history.feedback_comment == "永続化された feedback"
     assert restored_history.admin_feedback_rating == FeedbackRating.GOOD

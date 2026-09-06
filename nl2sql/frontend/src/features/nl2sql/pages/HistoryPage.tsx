@@ -3,6 +3,7 @@ import {
   ArrowDown,
   ArrowDownUp,
   ArrowUp,
+  Clock3,
   Code2,
   Columns3,
   Database,
@@ -24,7 +25,7 @@ import {
   usePagination,
 } from "@engchina/production-ready-ui";
 
-import { StatusBadge } from "@/components/ui/status-badge";
+import { StatusBadge, type StatusVariant } from "@/components/ui/status-badge";
 import { PageHeader } from "@/components/PageHeader";
 import { PageNotice } from "@/components/page-notice";
 import { ProcessingIndicator, TimedLoadingState } from "@/components/ProcessingState";
@@ -47,7 +48,7 @@ import {
 import { engineLabel } from "../labels";
 import { profileRecordDisplayLabel } from "../profileDisplay";
 import { historyRerunUrl } from "../queryPrefillState";
-import type { HistoryData, HistoryItem } from "../types";
+import type { EngineTiming, HistoryData, HistoryItem, Nl2SqlEngine, StageTiming } from "../types";
 import { userFeedbackRatingBadgeLabel } from "../feedbackLabels";
 
 type HistoryDetailTab = "overview" | "sql";
@@ -55,6 +56,32 @@ type HistoryDetailTab = "overview" | "sql";
 function columnsLabel(item: HistoryItem) {
   if (item.result_columns.length === 0) return "—";
   return item.result_columns.join(", ");
+}
+
+function isKnownEngine(engine: string): engine is Nl2SqlEngine {
+  return ["auto", "select_ai", "select_ai_agent", "enterprise_ai_direct"].includes(engine);
+}
+
+function engineTimingLabel(engine: string) {
+  if (engine === "deterministic") return t("history.timing.engine.deterministic");
+  if (isKnownEngine(engine)) return engineLabel(engine);
+  return engine || t("history.timing.engine.unknown");
+}
+
+function stageTimingValue(stages: StageTiming[], stage: string) {
+  return stages.find((item) => item.stage === stage)?.elapsed_ms ?? null;
+}
+
+function engineTimingStatusLabel(status: EngineTiming["status"]) {
+  if (status === "success") return t("history.timing.status.success");
+  if (status === "failed") return t("history.timing.status.failed");
+  return t("history.timing.status.skipped");
+}
+
+function engineTimingStatusVariant(status: EngineTiming["status"]): StatusVariant {
+  if (status === "success") return "success";
+  if (status === "failed") return "danger";
+  return "warning";
 }
 
 function focusHistoryTab(id: string) {
@@ -286,6 +313,14 @@ function HistoryGrid({
                             {engineLabel(item.engine)}
                           </span>
                           <StatusBadge variant="neutral" label={formatElapsed(item.elapsed_ms)} />
+                          {item.generation_elapsed_ms !== null && item.generation_elapsed_ms !== undefined && (
+                            <StatusBadge
+                              variant="info"
+                              label={t("history.timing.generationBadge", {
+                                elapsed: formatElapsed(item.generation_elapsed_ms),
+                              })}
+                            />
+                          )}
                           <StatusBadge
                             variant={item.feedback_rating ? "success" : "neutral"}
                             label={userFeedbackRatingBadgeLabel(item.feedback_rating)}
@@ -441,6 +476,14 @@ function HistoryDetailPanel({
           <span className="font-mono text-xs tabular-nums text-muted">{formatDateTime(item.created_at)}</span>
           <StatusBadge variant="info" label={engineLabel(item.engine)} />
           <StatusBadge variant="neutral" label={formatElapsed(item.elapsed_ms)} />
+          {item.generation_elapsed_ms !== null && item.generation_elapsed_ms !== undefined && (
+            <StatusBadge
+              variant="info"
+              label={t("history.timing.generationBadge", {
+                elapsed: formatElapsed(item.generation_elapsed_ms),
+              })}
+            />
+          )}
           <StatusBadge variant={item.feedback_rating ? "success" : "neutral"} label={userFeedbackRatingBadgeLabel(item.feedback_rating)} />
           <StatusBadge
             variant={item.safety_is_safe ? "success" : "danger"}
@@ -485,6 +528,7 @@ function HistoryDetailPanel({
             <HistoryFact icon={Rows3} label={t("history.rows")} value={formatNumber(item.result_row_count)} />
             <HistoryFact icon={Columns3} label={t("history.columns")} value={formatNumber(item.result_columns.length)} />
           </div>
+          <HistoryTimingBreakdown item={item} />
           <HistoryDetailSection title={t("history.rewritten")} value={item.rewritten_question || "—"} testId="history-detail-rewritten-block" />
           <HistoryDetailSection title={t("history.resultColumns")} value={columnsLabel(item)} mono />
           <div className="rounded-md border border-border bg-card p-3">
@@ -504,6 +548,74 @@ function HistoryDetailPanel({
         </section>
       )}
     </section>
+  );
+}
+
+function HistoryTimingMetric({ label, value }: { label: string; value?: number | null }) {
+  if (value === null || value === undefined) return null;
+  return (
+    <div className="min-w-0">
+      <p className="text-xs font-medium text-muted">{label}</p>
+      <p className="mt-1 font-mono text-sm font-semibold tabular-nums text-foreground">
+        {formatElapsed(value)}
+      </p>
+    </div>
+  );
+}
+
+function HistoryTimingBreakdown({ item }: { item: HistoryItem }) {
+  const stageTimings = item.stage_timings ?? [];
+  const engineTimings = item.engine_timings ?? [];
+  const generationElapsed =
+    item.generation_elapsed_ms ?? stageTimingValue(stageTimings, "generate_sql");
+  const safetyElapsed = stageTimingValue(stageTimings, "safety_check");
+  const executeElapsed = stageTimingValue(stageTimings, "execute_sql");
+  const hasBreakdown =
+    generationElapsed !== null ||
+    safetyElapsed !== null ||
+    executeElapsed !== null ||
+    engineTimings.length > 0;
+  if (!hasBreakdown) return null;
+
+  return (
+    <div className="min-w-0 rounded-md border border-border bg-card p-3" data-testid="history-timing-breakdown">
+      <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
+        <Clock3 size={16} className="text-primary" aria-hidden="true" />
+        <span>{t("history.timing.title")}</span>
+      </div>
+      <div className="mt-3 grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(min(100%,7rem),1fr))]">
+        <HistoryTimingMetric label={t("history.timing.total")} value={item.elapsed_ms} />
+        <HistoryTimingMetric label={t("history.timing.generation")} value={generationElapsed} />
+        <HistoryTimingMetric label={t("history.timing.safety")} value={safetyElapsed} />
+        <HistoryTimingMetric label={t("history.timing.execute")} value={executeElapsed} />
+      </div>
+      {engineTimings.length > 0 && (
+        <ul className="mt-3 grid gap-2" aria-label={t("history.timing.engineAttempts")}>
+          {engineTimings.map((timing, index) => (
+            <li
+              key={`${timing.engine}-${index}`}
+              className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-border bg-background px-2.5 py-2"
+            >
+              <span className="min-w-0 break-words text-xs font-semibold text-foreground [overflow-wrap:anywhere]">
+                {engineTimingLabel(timing.engine)}
+              </span>
+              <StatusBadge
+                variant={engineTimingStatusVariant(timing.status)}
+                label={engineTimingStatusLabel(timing.status)}
+              />
+              <span className="font-mono text-xs tabular-nums text-muted">
+                {formatElapsed(timing.elapsed_ms)}
+              </span>
+              {timing.error ? (
+                <span className="min-w-0 break-words text-xs text-muted [overflow-wrap:anywhere]">
+                  {timing.error}
+                </span>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 

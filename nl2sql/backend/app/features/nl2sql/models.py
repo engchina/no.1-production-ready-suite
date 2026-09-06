@@ -70,6 +70,15 @@ class StageTiming(BaseModel):
     elapsed_ms: int
 
 
+class EngineTiming(BaseModel):
+    """SQL 生成エンジンの試行ごとの経過時間。"""
+
+    engine: str
+    elapsed_ms: int
+    status: Literal["success", "failed", "skipped"]
+    error: str = ""
+
+
 class JobStepData(BaseModel):
     """UI へ公開する非同期ジョブの段階別進捗。"""
 
@@ -1142,6 +1151,9 @@ class HistoryItem(BaseModel):
     generated_sql: str
     created_at: str
     elapsed_ms: int | None = None
+    generation_elapsed_ms: int | None = None
+    engine_timings: list[EngineTiming] = Field(default_factory=list)
+    stage_timings: list[StageTiming] = Field(default_factory=list)
     feedback_rating: FeedbackRating | None = None
     profile_id: str = ""
     profile_name: str = ""

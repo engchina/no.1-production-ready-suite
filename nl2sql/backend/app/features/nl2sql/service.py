@@ -156,6 +156,7 @@ from .models import (
     DiagnosticReadiness,
     DiagnosticsData,
     DiagnosticSmokeCheck,
+    EngineTiming,
     ExplainPlanData,
     FeedbackClearData,
     FeedbackData,
@@ -2046,6 +2047,78 @@ def _utc_now() -> str:
 
 def _elapsed_ms(started: float) -> int:
     return int((time.monotonic() - started) * 1000)
+
+
+def _record_engine_timing(
+    engine_timings: list[dict[str, Any]],
+    *,
+    engine: str,
+    started: float,
+    status: Literal["success", "failed", "skipped"],
+    error: str = "",
+) -> None:
+    engine_timings.append(
+        EngineTiming(
+            engine=engine,
+            elapsed_ms=_elapsed_ms(started),
+            status=status,
+            error=error,
+        ).model_dump(mode="json")
+    )
+
+
+def _normalize_engine_timings(raw: object) -> list[EngineTiming]:
+    if not isinstance(raw, list):
+        return []
+    timings: list[EngineTiming] = []
+    for item in raw:
+        try:
+            timings.append(EngineTiming.model_validate(item))
+        except ValidationError:
+            continue
+    return timings
+
+
+def _normalize_stage_timings(raw: object) -> list[StageTiming]:
+    if not isinstance(raw, list):
+        return []
+    timings: list[StageTiming] = []
+    for item in raw:
+        try:
+            timings.append(StageTiming.model_validate(item))
+        except ValidationError:
+            continue
+    return timings
+
+
+def _successful_engine_elapsed_ms(raw: object) -> int | None:
+    for timing in reversed(_normalize_engine_timings(raw)):
+        if timing.status == "success":
+            return timing.elapsed_ms
+    return None
+
+
+def _generation_elapsed_ms_from_meta(meta: Mapping[str, Any]) -> int | None:
+    raw_elapsed = meta.get("generation_elapsed_ms")
+    if isinstance(raw_elapsed, int) and raw_elapsed >= 0:
+        return raw_elapsed
+    return _successful_engine_elapsed_ms(meta.get("engine_timings"))
+
+
+def _engine_meta_with_timings(
+    meta: Mapping[str, Any],
+    engine_timings: list[dict[str, Any]],
+) -> dict[str, Any]:
+    enriched = dict(meta)
+    timings = [
+        timing.model_dump(mode="json") for timing in _normalize_engine_timings(engine_timings)
+    ]
+    if timings:
+        enriched["engine_timings"] = timings
+        generation_elapsed_ms = _successful_engine_elapsed_ms(timings)
+        if generation_elapsed_ms is not None:
+            enriched["generation_elapsed_ms"] = generation_elapsed_ms
+    return enriched
 
 
 def _coerce_bool(value: object) -> bool:
@@ -6947,6 +7020,9 @@ class Nl2SqlService:
         result: QueryResults,
         ontology_trace_summary: dict[str, Any],
         elapsed_ms: int | None = None,
+        generation_elapsed_ms: int | None = None,
+        engine_timings: list[EngineTiming | dict[str, Any]] | None = None,
+        stage_timings: list[StageTiming | dict[str, Any]] | None = None,
         actor_user_uuid: str = "",
     ) -> HistoryItem:
         """Query Session 実行を legacy history へ一度だけ投影する。"""
@@ -6966,6 +7042,9 @@ class Nl2SqlService:
                 generated_sql=generated_sql,
                 created_at=_utc_now(),
                 elapsed_ms=elapsed_ms,
+                generation_elapsed_ms=generation_elapsed_ms,
+                engine_timings=_normalize_engine_timings(engine_timings or []),
+                stage_timings=_normalize_stage_timings(stage_timings or []),
                 profile_id=profile.id,
                 profile_name=profile.name,
                 profile_category=profile.category,
@@ -16952,6 +17031,9 @@ class Nl2SqlService:
             generated_sql=result.generated_sql,
             created_at=finished,
             elapsed_ms=timing.elapsed_ms,
+            generation_elapsed_ms=_generation_elapsed_ms_from_meta(result.engine_meta),
+            engine_timings=_normalize_engine_timings(result.engine_meta.get("engine_timings")),
+            stage_timings=timing.stage_timings,
             profile_id=profile.id,
             profile_name=profile.name,
             profile_category=profile.category,
@@ -17038,6 +17120,7 @@ class Nl2SqlService:
             else [engine]
         )
         fallback_messages: list[str] = []
+        engine_timings: list[dict[str, Any]] = []
         for candidate in candidates:
             allow_deterministic_fallback = not (
                 engine == Nl2SqlEngine.SELECT_AI_AGENT and candidate == Nl2SqlEngine.SELECT_AI_AGENT
@@ -17053,6 +17136,7 @@ class Nl2SqlService:
                     select_ai_overrides,
                     ontology_context,
                     allow_deterministic_fallback=allow_deterministic_fallback,
+                    engine_timings=engine_timings,
                 )
             except RuntimeError as exc:
                 fallback_messages.append(f"{candidate.value}: {exc}")
@@ -17074,10 +17158,20 @@ class Nl2SqlService:
         allow_deterministic_fallback: bool = True,
         runtime_timeout_seconds: float | None = None,
         runtime_max_retries: int | None = None,
+        engine_timings: list[dict[str, Any]] | None = None,
     ) -> GeneratedSql:
+        engine_timings = engine_timings if engine_timings is not None else []
         # テスト/デモ用の明示的 failure trigger。deterministic runtime 限定で有効化し、
         # 本番(oracle runtime)ではユーザ入力に反応させない。
         if not self._use_oracle_runtime() and f"{engine.value}_fail" in question.lower():
+            failure_started = time.monotonic()
+            _record_engine_timing(
+                engine_timings,
+                engine=engine.value,
+                started=failure_started,
+                status="failed",
+                error="明示的な fallback テスト要求",
+            )
             raise RuntimeError("明示的な fallback テスト要求")
         # 本番(oracle runtime)では、エンジン失敗時に質問を無視したテンプレート SQL を
         # 「生成結果」として返さない(deterministic fallback は local/CI デモ専用)。
@@ -17144,8 +17238,9 @@ class Nl2SqlService:
             Nl2SqlEngine.SELECT_AI,
             Nl2SqlEngine.SELECT_AI_AGENT,
         }:
+            timing_count = len(engine_timings)
             try:
-                return self._generate_oracle_sql(
+                generated = self._generate_oracle_sql(
                     engine=engine,
                     question=runtime_question,
                     profile=profile,
@@ -17155,22 +17250,46 @@ class Nl2SqlService:
                     select_ai_overrides=select_ai_overrides,
                     ontology_context=ontology_context,
                     runtime_timeout_seconds=runtime_timeout_seconds,
+                    engine_timings=engine_timings,
                 )
+                generated.engine_meta = _engine_meta_with_timings(
+                    generated.engine_meta,
+                    engine_timings,
+                )
+                return generated
             except OracleAdapterError as exc:
+                if len(engine_timings) == timing_count:
+                    skipped_started = time.monotonic()
+                    _record_engine_timing(
+                        engine_timings,
+                        engine=engine.value,
+                        started=skipped_started,
+                        status="skipped",
+                        error=str(exc),
+                    )
                 fallback_messages.append(f"{engine.value}: {exc}")
                 if not allow_deterministic_fallback:
                     raise RuntimeError(str(exc)) from exc
         elif engine in {Nl2SqlEngine.SELECT_AI, Nl2SqlEngine.SELECT_AI_AGENT} and not (
             allow_deterministic_fallback
         ):
+            skipped_started = time.monotonic()
+            _record_engine_timing(
+                engine_timings,
+                engine=engine.value,
+                started=skipped_started,
+                status="skipped",
+                error="Oracle runtime が構成されていません。",
+            )
             raise RuntimeError("Oracle runtime が構成されていません。")
         generation_catalog = self._generation_schema_catalog(profile, allowed)
         table = self._choose_table(effective_question, profile, allowed, generation_catalog)
         columns = self._choose_columns(table, allowed)
         direct_configured = self._enterprise_ai_client.is_configured()
         if engine == Nl2SqlEngine.ENTERPRISE_AI_DIRECT and direct_configured:
+            timing_count = len(engine_timings)
             try:
-                return self._generate_enterprise_ai_direct_sql(
+                generated = self._generate_enterprise_ai_direct_sql(
                     question=runtime_question,
                     profile=profile,
                     allowed=allowed,
@@ -17182,17 +17301,41 @@ class Nl2SqlService:
                     catalog=generation_catalog,
                     runtime_timeout_seconds=runtime_timeout_seconds,
                     runtime_max_retries=runtime_max_retries,
+                    engine_timings=engine_timings,
                 )
+                generated.engine_meta = _engine_meta_with_timings(
+                    generated.engine_meta,
+                    engine_timings,
+                )
+                return generated
             except EnterpriseAiDirectError as exc:
+                if len(engine_timings) == timing_count:
+                    skipped_started = time.monotonic()
+                    _record_engine_timing(
+                        engine_timings,
+                        engine=engine.value,
+                        started=skipped_started,
+                        status="failed",
+                        error=str(exc),
+                    )
                 fallback_messages.append(f"{engine.value}: {exc}")
                 if not allow_deterministic_fallback:
                     raise RuntimeError(str(exc)) from exc
         elif engine == Nl2SqlEngine.ENTERPRISE_AI_DIRECT and not (allow_deterministic_fallback):
+            skipped_started = time.monotonic()
+            _record_engine_timing(
+                engine_timings,
+                engine=engine.value,
+                started=skipped_started,
+                status="skipped",
+                error="OCI Enterprise AI Direct が構成されていません。",
+            )
             raise RuntimeError("OCI Enterprise AI Direct が構成されていません。")
 
         if not allow_deterministic_fallback:
             raise RuntimeError(f"{engine.value} の実行結果を取得できませんでした。")
 
+        deterministic_started = time.monotonic()
         sql = self._compose_select_sql(self._catalog_qualified_name(table), columns)
         if engine == Nl2SqlEngine.SELECT_AI:
             meta.update({"select_ai_profile": self._select_ai_profile_name(profile)})
@@ -17206,11 +17349,17 @@ class Nl2SqlService:
             )
         else:
             meta.update({"provider": "oci_enterprise_ai", "mode": "direct"})
+        _record_engine_timing(
+            engine_timings,
+            engine="deterministic",
+            started=deterministic_started,
+            status="success",
+        )
         return GeneratedSql(
             engine=engine,
             generated_sql=sql,
             explanation=f"{table.logical_name} を対象に、許可された列のみを取得します。",
-            engine_meta=meta,
+            engine_meta=_engine_meta_with_timings(meta, engine_timings),
             fallback_reason="; ".join(fallback_messages),
             schema_catalog=generation_catalog,
         )
@@ -17388,7 +17537,9 @@ class Nl2SqlService:
         ontology_context: Any | None = None,
         runtime_timeout_seconds: float | None = None,
         runtime_max_retries: int | None = None,
+        engine_timings: list[dict[str, Any]] | None = None,
     ) -> GeneratedSql:
+        engine_timings = engine_timings if engine_timings is not None else []
         context = self._enterprise_ai_schema_context(
             profile=profile,
             allowed=allowed,
@@ -17413,10 +17564,34 @@ class Nl2SqlService:
             generate_kwargs["timeout_seconds"] = runtime_timeout_seconds
         if runtime_max_retries is not None:
             generate_kwargs["max_retries"] = runtime_max_retries
-        raw_text = self._enterprise_ai_client.generate(**generate_kwargs)
+        call_started = time.monotonic()
+        try:
+            raw_text = self._enterprise_ai_client.generate(**generate_kwargs)
+        except EnterpriseAiDirectError as exc:
+            _record_engine_timing(
+                engine_timings,
+                engine=Nl2SqlEngine.ENTERPRISE_AI_DIRECT.value,
+                started=call_started,
+                status="failed",
+                error=str(exc),
+            )
+            raise
         sql, explanation = self._extract_enterprise_ai_sql(raw_text)
         if not sql:
+            _record_engine_timing(
+                engine_timings,
+                engine=Nl2SqlEngine.ENTERPRISE_AI_DIRECT.value,
+                started=call_started,
+                status="failed",
+                error="OCI Enterprise AI response から SQL を抽出できません。",
+            )
             raise EnterpriseAiDirectError("OCI Enterprise AI response から SQL を抽出できません。")
+        _record_engine_timing(
+            engine_timings,
+            engine=Nl2SqlEngine.ENTERPRISE_AI_DIRECT.value,
+            started=call_started,
+            status="success",
+        )
         meta.update(
             {
                 "provider": "oci_enterprise_ai",
@@ -17547,7 +17722,9 @@ class Nl2SqlService:
         select_ai_overrides: SelectAiRequestOverrides | None = None,
         ontology_context: Any | None = None,
         runtime_timeout_seconds: float | None = None,
+        engine_timings: list[dict[str, Any]] | None = None,
     ) -> GeneratedSql:
+        engine_timings = engine_timings if engine_timings is not None else []
         self._assert_select_ai_scope_ready(profile)
         asset_meta = self._asset_meta.get(engine)
         expected_profile_name = self._select_ai_profile_name(profile)
@@ -17586,7 +17763,18 @@ class Nl2SqlService:
                 }
             if runtime_timeout_seconds is not None:
                 select_ai_kwargs["call_timeout_seconds"] = runtime_timeout_seconds
-            sql = self._oracle_adapter.generate_select_ai_sql(**select_ai_kwargs)
+            call_started = time.monotonic()
+            try:
+                sql = self._oracle_adapter.generate_select_ai_sql(**select_ai_kwargs)
+            except OracleAdapterError as exc:
+                _record_engine_timing(
+                    engine_timings,
+                    engine=engine.value,
+                    started=call_started,
+                    status="failed",
+                    error=str(exc),
+                )
+                raise
             meta.update({"select_ai_profile": profile_name, "runtime": "oracle"})
             if attributes:
                 meta.update(
@@ -17619,7 +17807,18 @@ class Nl2SqlService:
             }
             if runtime_timeout_seconds is not None:
                 agent_kwargs["call_timeout_seconds"] = runtime_timeout_seconds
-            sql, conversation_id = self._oracle_adapter.run_select_ai_agent_team(**agent_kwargs)
+            call_started = time.monotonic()
+            try:
+                sql, conversation_id = self._oracle_adapter.run_select_ai_agent_team(**agent_kwargs)
+            except OracleAdapterError as exc:
+                _record_engine_timing(
+                    engine_timings,
+                    engine=engine.value,
+                    started=call_started,
+                    status="failed",
+                    error=str(exc),
+                )
+                raise
             meta.update(
                 {
                     "select_ai_profile": self._select_ai_profile_name(profile),
@@ -17629,7 +17828,20 @@ class Nl2SqlService:
                 }
             )
         if not sql:
+            _record_engine_timing(
+                engine_timings,
+                engine=engine.value,
+                started=call_started,
+                status="failed",
+                error="Oracle engine から SQL を取得できませんでした。",
+            )
             raise OracleAdapterError("Oracle engine から SQL を取得できませんでした。")
+        _record_engine_timing(
+            engine_timings,
+            engine=engine.value,
+            started=call_started,
+            status="success",
+        )
         return GeneratedSql(
             engine=engine,
             generated_sql=sql,
