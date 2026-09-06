@@ -485,6 +485,109 @@ class IntentAmbiguity(OntologyContract):
     resolved: bool = False
 
 
+class ClarificationMode(StrEnum):
+    """QuerySession の質問確認方式。既存 client は review_only を維持する。"""
+
+    REVIEW_ONLY = "review_only"
+    GUIDED = "guided"
+
+
+class ClarificationStatus(StrEnum):
+    NEEDS_ANSWER = "needs_answer"
+    READY_TO_CONFIRM = "ready_to_confirm"
+    UNANSWERABLE = "unanswerable"
+
+
+class ClarificationCategory(StrEnum):
+    BUSINESS_MEANING = "business_meaning"
+    RELATIONSHIP_PATH = "relationship_path"
+    FILTER_VALUE = "filter_value"
+    TIME_RANGE = "time_range"
+    GRANULARITY = "granularity"
+    OUTPUT = "output"
+
+
+class ClarificationAnswerKind(StrEnum):
+    SINGLE_SELECT = "single_select"
+    MULTI_SELECT = "multi_select"
+    DATE_RANGE = "date_range"
+    NUMBER = "number"
+    FREE_TEXT = "free_text"
+
+
+class ClarificationEvidenceSource(StrEnum):
+    USER = "user"
+    PROFILE = "profile"
+    ONTOLOGY = "ontology"
+    SCHEMA = "schema"
+    DEFAULT = "default"
+
+
+class ClarificationOption(OntologyContract):
+    id: str = Field(min_length=1)
+    label_ja: str = Field(min_length=1)
+    description_ja: str = ""
+    ontology_node_ids: list[str] = Field(default_factory=list)
+    relationship_path_id: str = ""
+    structured_value: Any = None
+    source: ClarificationEvidenceSource = ClarificationEvidenceSource.ONTOLOGY
+    evidence_ja: str = ""
+
+
+class ClarificationQuestion(OntologyContract):
+    id: str = Field(min_length=1)
+    ambiguity_id: str = ""
+    category: ClarificationCategory
+    prompt_ja: str = Field(min_length=1)
+    reason_ja: str = ""
+    answer_kind: ClarificationAnswerKind = ClarificationAnswerKind.SINGLE_SELECT
+    options: list[ClarificationOption] = Field(default_factory=list)
+    allow_free_text: bool = True
+    blocking: bool = True
+
+
+class ClarificationAnswer(OntologyContract):
+    question_id: str = Field(min_length=1)
+    selected_option_ids: list[str] = Field(default_factory=list)
+    free_text: str = Field(default="", max_length=2000)
+    structured_value: Any = None
+    answered_at: datetime = Field(default_factory=utc_now)
+
+
+class ClarificationTurn(OntologyContract):
+    question: ClarificationQuestion
+    answer: ClarificationAnswer
+    intent_version: int = Field(ge=1)
+    schema_version: str = "guided_clarification_v1"
+    prompt_version: str = "deterministic_first_v1"
+    model: str = ""
+
+
+class IntentSummaryItem(OntologyContract):
+    key: str = Field(min_length=1)
+    label_ja: str = Field(min_length=1)
+    value_ja: str = Field(min_length=1)
+    source: ClarificationEvidenceSource
+    confirmed: bool = False
+    technical_evidence_ja: str = ""
+
+
+class ClarificationState(OntologyContract):
+    status: ClarificationStatus
+    current_question: ClarificationQuestion | None = None
+    remaining_questions: list[ClarificationQuestion] = Field(default_factory=list)
+    intent_summary: list[IntentSummaryItem] = Field(default_factory=list)
+    required_total: int = Field(default=0, ge=0)
+    required_confirmed: int = Field(default=0, ge=0)
+    missing_required: list[str] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
+    turn_count: int = Field(default=0, ge=0)
+    manual_completion_required: bool = False
+    can_generate_sql: bool = False
+    schema_version: str = "guided_clarification_v1"
+    message_ja: str = ""
+
+
 class QuestionIntentGraph(OntologyContract):
     """自然言語質問を SQL より前に確認する業務意味 graph。"""
 
@@ -1030,6 +1133,7 @@ class QuerySessionStatus(StrEnum):
     EXECUTING = "executing"
     DONE = "done"
     ERROR = "error"
+    CANCELLED = "cancelled"
 
 
 class SqlArtifact(OntologyContract):
@@ -1078,6 +1182,8 @@ class QuerySession(OntologyContract):
     intent_confirmed_version: int | None = None
     sql_confirmation: SqlConfirmationBinding | None = None
     execution: QueryExecutionRecord | None = None
+    clarification_mode: ClarificationMode = ClarificationMode.REVIEW_ONLY
+    clarification_turns: list[ClarificationTurn] = Field(default_factory=list)
     proposal_ids: list[str] = Field(default_factory=list)
     actor_user_uuid: str = ""
     actor_is_system_admin: bool = False
@@ -1085,6 +1191,7 @@ class QuerySession(OntologyContract):
     updated_at: datetime = Field(default_factory=utc_now)
     error_code: str = ""
     error_message_ja: str = ""
+    cancelled_at: datetime | None = None
 
 
 class QuerySessionCreate(OntologyContract):
@@ -1093,6 +1200,7 @@ class QuerySessionCreate(OntologyContract):
     profile_view_id: str = Field(min_length=1)
     ontology_revision_id: str = Field(min_length=1)
     intent: QuestionIntentGraph | None = None
+    clarification_mode: ClarificationMode = ClarificationMode.REVIEW_ONLY
     actor_user_uuid: str = ""
     actor_is_system_admin: bool = False
 

@@ -19,6 +19,8 @@ from uuid import uuid4
 from pydantic import BaseModel, ValidationError
 
 from .ontology_models import (
+    ClarificationMode,
+    ClarificationTurn,
     GraphPatch,
     GraphPatchOperation,
     IntentAmbiguity,
@@ -43,6 +45,7 @@ from .ontology_models import (
     QuerySession,
     QuerySessionCreate,
     QuerySessionStatus,
+    QuestionIntentGraph,
     RelationshipCardinality,
     SqlArtifact,
     SqlConfirmationBinding,
@@ -834,6 +837,7 @@ class OntologyQuerySessionService:
                 original_question=request.question,
                 current_intent_version=1,
                 intents=[intent],
+                clarification_mode=request.clarification_mode,
                 actor_user_uuid=request.actor_user_uuid,
                 actor_is_system_admin=request.actor_is_system_admin,
             )
@@ -914,6 +918,65 @@ class OntologyQuerySessionService:
             session.sql_confirmation = None
             session.execution = None
             session.status = QuerySessionStatus.AWAITING_INTENT_CONFIRMATION
+            session.updated_at = utc_now()
+            return _copy_model(session)
+
+    def apply_clarification(
+        self,
+        session_id: str,
+        *,
+        base_version: int,
+        intent: QuestionIntentGraph,
+        turn: ClarificationTurn,
+    ) -> QuerySession:
+        """検証済みの guided 回答を新しい intent version として保存する。"""
+
+        with self._lock:
+            session = self._require_session(session_id)
+            self._assert_session_mutable(session)
+            if session.clarification_mode != ClarificationMode.GUIDED:
+                raise OntologyStateConflictError(
+                    "GUIDED_CLARIFICATION_NOT_ENABLED",
+                    "この query session では AI 要件確認を開始していません。",
+                )
+            if base_version != session.current_intent_version:
+                raise OntologyVersionConflictError(
+                    "INTENT_VERSION_CONFLICT",
+                    "質問の解釈が別の操作で更新されています。最新版を再読込してください。",
+                )
+            updated = _copy_model(intent)
+            updated.version = base_version + 1
+            updated.question_original = session.original_question
+            updated.profile_view_id = session.profile_view_id
+            updated.ontology_revision_id = session.ontology_revision_id
+            updated.created_at = utc_now()
+            turn_copy = _copy_model(turn)
+            turn_copy.intent_version = updated.version
+            session.intents.append(updated)
+            session.current_intent_version = updated.version
+            session.clarification_turns.append(turn_copy)
+            session.intent_confirmed_version = None
+            session.current_sql_artifact_id = None
+            session.sql_confirmation = None
+            session.execution = None
+            session.status = QuerySessionStatus.AWAITING_INTENT_CONFIRMATION
+            session.updated_at = utc_now()
+            return _copy_model(session)
+
+    def cancel_session(self, session_id: str) -> QuerySession:
+        """利用者が終了した未実行 session を明示的な終端状態へ遷移させる。"""
+
+        with self._lock:
+            session = self._require_session(session_id)
+            if session.status == QuerySessionStatus.CANCELLED:
+                return _copy_model(session)
+            if session.status in {QuerySessionStatus.EXECUTING, QuerySessionStatus.DONE}:
+                raise OntologyStateConflictError(
+                    "SESSION_CANNOT_BE_CANCELLED",
+                    "実行中または完了済みの query session は終了できません。",
+                )
+            session.status = QuerySessionStatus.CANCELLED
+            session.cancelled_at = utc_now()
             session.updated_at = utc_now()
             return _copy_model(session)
 
@@ -1112,7 +1175,7 @@ class OntologyQuerySessionService:
     def fail_session(self, session_id: str, *, code: str, message_ja: str) -> QuerySession:
         with self._lock:
             session = self._require_session(session_id)
-            if session.status == QuerySessionStatus.DONE:
+            if session.status in {QuerySessionStatus.DONE, QuerySessionStatus.CANCELLED}:
                 raise OntologyStateConflictError(
                     "SESSION_ALREADY_DONE", "完了済み query session は error に変更できません。"
                 )
@@ -2457,6 +2520,7 @@ class OntologyQuerySessionService:
             QuerySessionStatus.EXECUTING,
             QuerySessionStatus.DONE,
             QuerySessionStatus.ERROR,
+            QuerySessionStatus.CANCELLED,
         }:
             raise OntologyStateConflictError(
                 "SESSION_NOT_MUTABLE", "実行中または終了済みの query session は変更できません。"
