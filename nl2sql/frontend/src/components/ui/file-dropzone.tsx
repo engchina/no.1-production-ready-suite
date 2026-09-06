@@ -49,6 +49,7 @@ export interface FileDropzoneProps {
   disabled?: boolean;
   loading?: boolean;
   clearDisabled?: boolean;
+  resetSignal?: string | number;
   className?: string;
   dataTestId?: string;
   onFiles: (files: File[]) => void | Promise<void>;
@@ -79,6 +80,7 @@ export function FileDropzone({
   disabled = false,
   loading = false,
   clearDisabled,
+  resetSignal = 0,
   className,
   dataTestId,
   onFiles,
@@ -106,6 +108,12 @@ export function FileDropzone({
       setIsDragActive(false);
     }
   }, [interactionDisabled]);
+
+  useEffect(() => {
+    dragDepthRef.current = 0;
+    setIsDragActive(false);
+    setValidationError("");
+  }, [resetSignal]);
 
   const acceptFiles = (files: FileList | File[]) => {
     const candidates = Array.from(files);

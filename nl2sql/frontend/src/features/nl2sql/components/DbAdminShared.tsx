@@ -1,4 +1,5 @@
 import { Button } from "@/components/ui/button";
+import { ClearActionButton } from "@/components/ui/clear-action-button";
 import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
 import {
   useEffect,
@@ -945,7 +946,17 @@ export function StatementRunnerCard({
 
   const isConfirmed = confirmation.trim() === "ADMIN_EXECUTE";
   const canRun = Boolean(sql.trim()) && isConfirmed;
+  const canClearRunner = Boolean(sql || confirmation || result || message || executionRun);
   const progressNode = progress?.({ hasSql: Boolean(sql.trim()), isConfirmed, canRun });
+
+  const clearRunner = () => {
+    setSql("");
+    setConfirmation("");
+    setResult(null);
+    setMessage("");
+    setExecutionRun(null);
+    setSqlFileResetSignal((value) => value + 1);
+  };
 
   const header = executeOnly ? (
     <div className="min-w-0">
@@ -985,7 +996,17 @@ export function StatementRunnerCard({
       placeholder="ADMIN_EXECUTE"
       expectedLabel="ADMIN_EXECUTE"
       helper={t("dbAdmin.confirmation.adminHelper")}
-      actions={runButton}
+      actions={
+        <>
+          {runButton}
+          <ClearActionButton
+            label={t("dbAdmin.runner.clear")}
+            className="w-full sm:w-auto"
+            disabled={!canClearRunner || loading}
+            onClick={clearRunner}
+          />
+        </>
+      }
     />
   );
 

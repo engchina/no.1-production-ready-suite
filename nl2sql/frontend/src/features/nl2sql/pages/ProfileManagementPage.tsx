@@ -22,6 +22,7 @@ import { ObjectActionBar } from "@/components/ObjectActions";
 import { PageHeader, PageHeaderStatusBadge } from "@/components/PageHeader";
 import { ProcessingIndicator } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";
+import { ClearActionButton } from "@/components/ui/clear-action-button";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { FieldLabel } from "@/components/ui/required-field";
 import { SelectField, type SelectFieldOption } from "@/components/ui/select-field";
@@ -984,6 +985,7 @@ function ProfileEditor({
   requiredErrors,
   oracleConfirmation,
   rebuildAgentAssets,
+  canClearOracleExecution,
   oracleSyncJob,
   oracleSyncSubmissionError,
   retryingOracleSync,
@@ -1003,6 +1005,7 @@ function ProfileEditor({
   onSave,
   onDelete,
   onOracleConfirmationChange,
+  onOracleExecutionClear,
   onRebuildAgentAssetsChange,
   onRetryOracleSync,
 }: {
@@ -1029,6 +1032,7 @@ function ProfileEditor({
   requiredErrors: ProfileRequiredErrors;
   oracleConfirmation: string;
   rebuildAgentAssets: boolean;
+  canClearOracleExecution: boolean;
   oracleSyncJob: ProfileSyncJobData | null;
   oracleSyncSubmissionError: string;
   retryingOracleSync: boolean;
@@ -1048,6 +1052,7 @@ function ProfileEditor({
   onSave: () => void;
   onDelete: () => void;
   onOracleConfirmationChange: (value: string) => void;
+  onOracleExecutionClear: () => void;
   onRebuildAgentAssetsChange: (value: boolean) => void;
   onRetryOracleSync: () => void;
 }) {
@@ -1271,17 +1276,25 @@ function ProfileEditor({
         expectedLabel="ADMIN_EXECUTE"
         helper={t("profiles.oracle.executeHint")}
         actions={
-          <Button
-            type="button"
-            variant="primary"
-            size="md"
-            loading={saving}
-            disabled={!oracleConfirmed || saving}
-            onClick={onSave}
-          >
-            <Save size={15} aria-hidden="true" />
-            <span>{t("profiles.action.save")}</span>
-          </Button>
+          <>
+            <Button
+              type="button"
+              variant="primary"
+              size="md"
+              loading={saving}
+              disabled={!oracleConfirmed || saving}
+              onClick={onSave}
+            >
+              <Save size={15} aria-hidden="true" />
+              <span>{t("profiles.action.save")}</span>
+            </Button>
+            <ClearActionButton
+              label={t("dbAdmin.runner.clear")}
+              className="w-full sm:w-auto"
+              disabled={!canClearOracleExecution || saving}
+              onClick={onOracleExecutionClear}
+            />
+          </>
         }
       />
 
@@ -1963,6 +1976,30 @@ export function ProfileManagementPage() {
       return next;
     });
   }, []);
+  const canClearOracleExecution = Boolean(
+    oracleConfirmation ||
+      rebuildAgentAssets ||
+      oracleSyncJobId ||
+      oracleSyncProfileId ||
+      oracleSyncJob ||
+      oracleSyncSubmissionError ||
+      syncJobParam
+  );
+
+  const clearOracleExecution = () => {
+    setOracleConfirmation("");
+    setRebuildAgentAssets(false);
+    setOracleSyncJobId("");
+    setOracleSyncProfileId("");
+    setOracleSyncSubmissionError("");
+    lastOracleConfirmationRef.current = "";
+    reportedOracleSyncJobId.current = "";
+    if (syncJobParam) {
+      const nextParams = new URLSearchParams(searchParams);
+      nextParams.delete("syncJobId");
+      setSearchParams(nextParams, { replace: true });
+    }
+  };
 
   const editor = (
     <ProfileEditor
@@ -1989,6 +2026,7 @@ export function ProfileManagementPage() {
       requiredErrors={requiredErrors}
       oracleConfirmation={oracleConfirmation}
       rebuildAgentAssets={rebuildAgentAssets}
+      canClearOracleExecution={canClearOracleExecution}
       oracleSyncJob={oracleSyncJob}
       oracleSyncSubmissionError={oracleSyncSubmissionError}
       retryingOracleSync={loading === "retry-oracle-sync"}
@@ -2014,6 +2052,7 @@ export function ProfileManagementPage() {
         if (selectedProfile) void deleteProfile(selectedProfile);
       }}
       onOracleConfirmationChange={setOracleConfirmation}
+      onOracleExecutionClear={clearOracleExecution}
       onRebuildAgentAssetsChange={setRebuildAgentAssets}
       onRetryOracleSync={() => void retryOracleSync()}
     />

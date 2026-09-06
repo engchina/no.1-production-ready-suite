@@ -15,6 +15,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { ProcessingIndicator } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";
 import { ErrorState } from "@/components/StateViews";
+import { ClearActionButton } from "@/components/ui/clear-action-button";
 import { FileDropzone } from "@/components/ui/file-dropzone";
 import { RequiredFieldsNote, RequiredIndicator } from "@/components/ui/required-field";
 import { apiFetch, apiGet, apiPost, isTimeoutError } from "@/lib/api";
@@ -139,6 +140,7 @@ export function DataManagementPage() {
   const [csvTableSearch, setCsvTableSearch] = useState("");
   const [csvTableSort, setCsvTableSort] = useState<DbObjectPickerSortState>(DEFAULT_OBJECT_PICKER_SORT);
   const [csvFilename, setCsvFilename] = useState("");
+  const [csvFileResetSignal, setCsvFileResetSignal] = useState(0);
   const [csvBase64, setCsvBase64] = useState("");
   const [csvMode, setCsvMode] = useState<CsvMode>("insert");
   const [csvStep, setCsvStep] = useState<CsvStep>("file");
@@ -314,11 +316,33 @@ export function DataManagementPage() {
   // (複数テーブル指定は単一対象名が無いため ADMIN_EXECUTE)。backend の検証と一致させる。
   const csvConfirmed = Boolean(csvTable.trim()) && csvConfirmation.trim() === csvTable.trim();
   const canUploadCsv = Boolean(csvTable && csvBase64 && csvConfirmed);
+  const canClearCsvUpload = Boolean(
+    csvFilename ||
+      csvBase64 ||
+      csvConfirmation ||
+      csvUploadResult ||
+      csvUploadError ||
+      csvMode !== "insert"
+  );
   const syntheticExpectedConfirmation =
     syntheticSelectedTables.length === 1 ? syntheticSelectedTables[0] : "ADMIN_EXECUTE";
   const syntheticDataConfirmed = syntheticConfirmation.trim() === syntheticExpectedConfirmation;
   const canGenerateSyntheticData = Boolean(
     syntheticProfileName.trim() && syntheticSelectedTables.length > 0 && syntheticDataConfirmed
+  );
+  const canClearSyntheticGeneration = Boolean(
+    syntheticSelectedTables.length > 0 ||
+      syntheticPrompt ||
+      syntheticConfirmation ||
+      syntheticData ||
+      syntheticDataResults ||
+      syntheticError ||
+      syntheticErrorOperation ||
+      syntheticRows !== 1 ||
+      syntheticSampleRows !== 5 ||
+      !syntheticUseComments ||
+      executedSyntheticResultLimit !== null ||
+      syntheticResultLimitInput !== String(DEFAULT_SYNTHETIC_RESULT_LIMIT)
   );
   const parsedSyntheticResultLimit = parseSqlRowLimit(syntheticResultLimitInput);
   const syntheticResultLimit =
@@ -674,6 +698,14 @@ export function DataManagementPage() {
     setCsvBase64("");
     setCsvUploadResult(null);
     setCsvStep("file");
+    setCsvFileResetSignal((value) => value + 1);
+  };
+
+  const clearCsvUpload = () => {
+    clearCsvFile();
+    setCsvMode("insert");
+    setCsvConfirmation("");
+    setCsvUploadError("");
   };
 
   const uploadCsv = async () => {
@@ -780,6 +812,20 @@ export function DataManagementPage() {
     } finally {
       setSyntheticLoading("");
     }
+  };
+
+  const clearSyntheticGeneration = () => {
+    setSyntheticSelectedTables([]);
+    setSyntheticPrompt("");
+    setSyntheticConfirmation("");
+    setSyntheticRows(1);
+    setSyntheticSampleRows(5);
+    setSyntheticUseComments(true);
+    setSyntheticResultTable("");
+    setSyntheticData(null);
+    clearSyntheticResultState({ resetLimit: true });
+    setSyntheticError("");
+    setSyntheticErrorOperation("");
   };
 
   const loadSyntheticDataResults = async () => {
@@ -1012,11 +1058,13 @@ export function DataManagementPage() {
               tableSearch={csvTableSearch}
               tableSort={csvTableSort}
               filename={csvFilename}
+              fileResetSignal={csvFileResetSignal}
               mode={csvMode}
               step={csvStep}
               confirmation={csvConfirmation}
               confirmed={csvConfirmed}
               canUpload={canUploadCsv}
+              canClearUpload={canClearCsvUpload}
               result={csvUploadResult}
               loading={csvUploading}
               error={csvUploadError}
@@ -1044,6 +1092,7 @@ export function DataManagementPage() {
               }}
               onFilePick={(file) => void pickCsvFile(file)}
               onFileClear={clearCsvFile}
+              onClearUpload={clearCsvUpload}
               onConfirmationChange={(value) => {
                 setCsvConfirmation(value);
                 if (value.trim()) setCsvStep("execute");
@@ -1087,6 +1136,7 @@ export function DataManagementPage() {
               syntheticConfirmation={syntheticConfirmation}
               syntheticDataConfirmed={syntheticDataConfirmed}
               canGenerateSyntheticData={canGenerateSyntheticData}
+              canClearSyntheticGeneration={canClearSyntheticGeneration}
               syntheticRows={syntheticRows}
               syntheticSampleRows={syntheticSampleRows}
               syntheticUseComments={syntheticUseComments}
@@ -1144,6 +1194,7 @@ export function DataManagementPage() {
                 clearSyntheticResultState();
               }}
               onGenerateSyntheticData={() => void generateSyntheticData()}
+              onClearSyntheticGeneration={clearSyntheticGeneration}
               onLoadSyntheticDataResults={() => void loadSyntheticDataResults()}
               onClearSyntheticDataResults={() => clearSyntheticResultState({ resetLimit: true })}
               onRetry={() => {
@@ -1579,11 +1630,13 @@ function CsvUploadWorkspace({
   tableSearch,
   tableSort,
   filename,
+  fileResetSignal,
   mode,
   step,
   confirmation,
   confirmed,
   canUpload,
+  canClearUpload,
   result,
   loading,
   error,
@@ -1598,6 +1651,7 @@ function CsvUploadWorkspace({
   onModeChange,
   onFilePick,
   onFileClear,
+  onClearUpload,
   onConfirmationChange,
   onUpload,
   onRetry,
@@ -1610,11 +1664,13 @@ function CsvUploadWorkspace({
   tableSearch: string;
   tableSort: DbObjectPickerSortState;
   filename: string;
+  fileResetSignal: number;
   mode: CsvMode;
   step: CsvStep;
   confirmation: string;
   confirmed: boolean;
   canUpload: boolean;
+  canClearUpload: boolean;
   result: DbAdminCsvUploadData | null;
   loading: boolean;
   error: string;
@@ -1629,6 +1685,7 @@ function CsvUploadWorkspace({
   onModeChange: (value: CsvMode) => void;
   onFilePick: (file: File) => void;
   onFileClear: () => void;
+  onClearUpload: () => void;
   onConfirmationChange: (value: string) => void;
   onUpload: () => void;
   onRetry: () => void;
@@ -1722,6 +1779,7 @@ function CsvUploadWorkspace({
         accept={CORE_TABULAR_FILE_FORMATS.accept}
         selectedText={filename ? t("tableMgmt.importWizard.selectedFile", { filename }) : ""}
         formatLabel={CORE_TABULAR_FILE_FORMATS.formatLabel}
+        resetSignal={fileResetSignal}
         actionText={t("common.fileDropzone.action")}
         replaceText={t("dataMgmt.csv.fileReplace")}
         clearAriaLabel={t("dataMgmt.csv.clearFile")}
@@ -1766,18 +1824,26 @@ function CsvUploadWorkspace({
           )}
           tone={mode === "truncate_insert" ? "danger" : "neutral"}
           actions={
-            <Button
-              type="button"
-              variant={mode === "truncate_insert" ? "danger" : "primary"}
-              size="sm"
-              className="w-full sm:w-auto"
-              loading={loading}
-              disabled={!canUpload}
-              onClick={onUpload}
-            >
-              <Upload size={15} aria-hidden="true" />
-              <span>{t("dataMgmt.csv.upload")}</span>
-            </Button>
+            <>
+              <Button
+                type="button"
+                variant={mode === "truncate_insert" ? "danger" : "primary"}
+                size="sm"
+                className="w-full sm:w-auto"
+                loading={loading}
+                disabled={!canUpload}
+                onClick={onUpload}
+              >
+                <Upload size={15} aria-hidden="true" />
+                <span>{t("dataMgmt.csv.upload")}</span>
+              </Button>
+              <ClearActionButton
+                label={t("dbAdmin.runner.clear")}
+                className="w-full sm:w-auto"
+                disabled={!canClearUpload || loading}
+                onClick={onClearUpload}
+              />
+            </>
           }
         />
       </fieldset>
@@ -1855,6 +1921,7 @@ function SyntheticWorkspace({
   syntheticConfirmation,
   syntheticDataConfirmed,
   canGenerateSyntheticData,
+  canClearSyntheticGeneration,
   syntheticRows,
   syntheticSampleRows,
   syntheticUseComments,
@@ -1884,6 +1951,7 @@ function SyntheticWorkspace({
   onSyntheticResultTableChange,
   onSyntheticResultLimitChange,
   onGenerateSyntheticData,
+  onClearSyntheticGeneration,
   onLoadSyntheticDataResults,
   onClearSyntheticDataResults,
   onRetry,
@@ -1899,6 +1967,7 @@ function SyntheticWorkspace({
   syntheticConfirmation: string;
   syntheticDataConfirmed: boolean;
   canGenerateSyntheticData: boolean;
+  canClearSyntheticGeneration: boolean;
   syntheticRows: number;
   syntheticSampleRows: number;
   syntheticUseComments: boolean;
@@ -1928,6 +1997,7 @@ function SyntheticWorkspace({
   onSyntheticResultTableChange: (value: string) => void;
   onSyntheticResultLimitChange: (value: string) => void;
   onGenerateSyntheticData: () => void;
+  onClearSyntheticGeneration: () => void;
   onLoadSyntheticDataResults: () => void;
   onClearSyntheticDataResults: () => void;
   onRetry: () => void;
@@ -2202,18 +2272,31 @@ function SyntheticWorkspace({
             })}
             tone="danger"
             actions={
-              <Button
-                type="button"
-                variant="danger"
-                size="sm"
-                className="w-full sm:w-auto"
-                loading={loading === "generate"}
-                disabled={!canGenerateSyntheticData || dbProfileRefreshRequired || dbProfileRefreshing}
-                onClick={onGenerateSyntheticData}
-              >
-                <Database size={15} aria-hidden="true" />
-                <span>{t("dataTools.syntheticData.generate")}</span>
-              </Button>
+              <>
+                <Button
+                  type="button"
+                  variant="danger"
+                  size="sm"
+                  className="w-full sm:w-auto"
+                  loading={loading === "generate"}
+                  disabled={!canGenerateSyntheticData || dbProfileRefreshRequired || dbProfileRefreshing}
+                  onClick={onGenerateSyntheticData}
+                >
+                  <Database size={15} aria-hidden="true" />
+                  <span>{t("dataTools.syntheticData.generate")}</span>
+                </Button>
+                <ClearActionButton
+                  label={t("dbAdmin.runner.clear")}
+                  className="w-full sm:w-auto"
+                  disabled={
+                    !canClearSyntheticGeneration ||
+                    Boolean(loading) ||
+                    dbProfileRefreshRequired ||
+                    dbProfileRefreshing
+                  }
+                  onClick={onClearSyntheticGeneration}
+                />
+              </>
             }
           />
         </fieldset>

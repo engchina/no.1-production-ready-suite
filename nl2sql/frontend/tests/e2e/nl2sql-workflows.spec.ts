@@ -6523,13 +6523,13 @@ test("AI 活用の SELECT SQL 画面は通常 API だけを使用し、更新 SQ
   await expect(directSql.getByRole("alert")).toContainText("1〜100000 の整数で入力してください。");
   await expect(directSql.getByRole("button", { name: "SQL 実行" })).toBeDisabled();
 
-  await page.getByRole("button", { name: "クリア" }).click();
+  await clearButton.click();
   await rowLimitInput.fill("1");
   await sqlInput.fill("SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES");
   await page.getByRole("button", { name: "SQL 実行" }).click();
   await expect(directSql.getByTestId("query-result-summary")).toContainText("上限到達");
 
-  await page.getByRole("button", { name: "クリア" }).click();
+  await clearButton.click();
   await rowLimitInput.fill("100");
   await sqlInput.fill("UPDATE INVOICES SET STATUS = 'REVIEWED' WHERE INVOICE_ID = 1");
   await page.getByRole("button", { name: "SQL 実行" }).click();
@@ -6539,7 +6539,7 @@ test("AI 活用の SELECT SQL 画面は通常 API だけを使用し、更新 SQ
   );
   expect(api.adminExecutePayload).toBeNull();
 
-  await page.getByRole("button", { name: "クリア" }).click();
+  await clearButton.click();
   await rowLimitInput.fill("100");
   await sqlInput.fill("select * from employee");
   await page.getByRole("button", { name: "SQL 実行" }).click();
@@ -7364,7 +7364,7 @@ test("AI 活用の 4 画面はナビ切替で入力を保持し、リセット�
   await expect(directSqlInput(page)).toHaveValue("SELECT CUSTOMER_NAME FROM INVOICES");
 
   // クリアは明示ボタンでのみ行われる(ナビ切替では消えない)。
-  await page.getByRole("button", { name: "クリア" }).click();
+  await page.getByTestId("nl2sql-direct-sql").getByRole("button", { name: "クリア" }).click();
   await expect(directSqlInput(page)).toHaveValue("");
 
   await page.getByRole("link", { name: /SQL 生成/ }).first().click();
@@ -10949,7 +10949,18 @@ test("sample data and data management run imported workflows", async ({ page }) 
   await expect(csvPanel.getByText("APP.PAYMENTS", { exact: true }).first()).toBeVisible();
   await csvTableSearch.clear();
   await expect(csvPanel.getByTestId("data-csv-table-list").getByText("APP.INVOICES", { exact: true })).toBeVisible();
-  await csvPanel.getByLabel("実行確認語").fill("APP.PAYMENTS");
+  const csvConfirmationInput = csvPanel.getByLabel("実行確認語");
+  await csvConfirmationInput.fill("APP.PAYMENTS");
+  await expect(csvPanel.getByText("確認済み", { exact: true })).toHaveCount(1);
+  const csvUploadClearButton = csvPanel
+    .getByTestId("execution-confirmation-field")
+    .getByRole("button", { name: "クリア", exact: true });
+  await expect(csvUploadClearButton).toBeEnabled();
+  await csvUploadClearButton.click();
+  await expect(csvConfirmationInput).toHaveValue("");
+  await expect(csvPanel.getByText("APP.PAYMENTS", { exact: true }).first()).toBeVisible();
+  await expect(csvUploadClearButton).toBeDisabled();
+  await csvConfirmationInput.fill("APP.PAYMENTS");
   await expect(csvPanel.getByText("確認済み", { exact: true })).toHaveCount(1);
   await csvPanel.getByTestId("data-csv-table-footer").getByRole("button", { name: "さらに読み込む" }).click();
   await expect(csvPanel.getByTestId("data-csv-table-list").getByText("APP.AUDIT_LOG", { exact: true })).toBeVisible();
@@ -10975,6 +10986,12 @@ test("sample data and data management run imported workflows", async ({ page }) 
   expect(api.csvUploadPayload?.mode).toBe("insert");
   expect(api.csvUploadPayload?.confirmation).toBe("APP.PAYMENTS");
   expect(api.csvUploadPayload?.filename).toBe("invoices.XLS");
+  await expect(csvUploadClearButton).toBeEnabled();
+  await csvUploadClearButton.click();
+  await expect(csvConfirmationInput).toHaveValue("");
+  await expect(page.getByText("選択中: invoices.XLS")).toHaveCount(0);
+  await expect(page.getByText("UNKNOWN_COLUMN", { exact: false })).toHaveCount(0);
+  await expect(csvPanel.getByRole("button", { name: "アップロード実行" })).toBeDisabled();
 
   await dataSyntheticTab.click();
   await expect(dataSyntheticTab).toHaveAttribute("aria-selected", "true");
@@ -11000,7 +11017,20 @@ test("sample data and data management run imported workflows", async ({ page }) 
   await syntheticPanel.getByLabel("APP.INVOICES を選択").check();
   await expect(syntheticPanel.getByText("選択 1 件", { exact: true })).toBeVisible();
   await expect(syntheticGenerateButton).toBeDisabled();
-  await syntheticPanel.getByLabel("実行確認語").fill("APP.INVOICES");
+  const syntheticConfirmationInput = syntheticPanel.getByLabel("実行確認語");
+  await syntheticConfirmationInput.fill("APP.INVOICES");
+  await expect(syntheticPanel.getByText("確認済み", { exact: true })).toHaveCount(1);
+  const syntheticClearButton = syntheticPanel
+    .getByTestId("execution-confirmation-field")
+    .getByRole("button", { name: "クリア", exact: true });
+  await expect(syntheticClearButton).toBeEnabled();
+  await syntheticClearButton.click();
+  await expect(syntheticPanel.getByLabel("APP.INVOICES を選択")).not.toBeChecked();
+  await expect(syntheticConfirmationInput).toHaveValue("");
+  await expect(syntheticGenerateButton).toBeDisabled();
+  await expect(syntheticClearButton).toBeDisabled();
+  await syntheticPanel.getByLabel("APP.INVOICES を選択").check();
+  await syntheticConfirmationInput.fill("APP.INVOICES");
   await expect(syntheticPanel.getByText("確認済み", { exact: true })).toHaveCount(1);
   await expect(syntheticGenerateButton).toBeEnabled();
   await syntheticGenerateButton.click();
@@ -11018,6 +11048,11 @@ test("sample data and data management run imported workflows", async ({ page }) 
   expect(api.syntheticDataPayload?.rows_per_table).toBe(1);
   expect(api.syntheticDataPayload?.sample_rows).toBe(5);
   expect(api.syntheticDataPayload?.use_comments).toBe(true);
+  await expect(syntheticClearButton).toBeEnabled();
+  await syntheticClearButton.click();
+  await expect(syntheticPanel.getByRole("cell", { name: "synthetic-customer" })).toHaveCount(0);
+  await expect(syntheticPanel.getByLabel("APP.INVOICES を選択")).not.toBeChecked();
+  await expect(syntheticConfirmationInput).toHaveValue("");
   await expectNoHorizontalScroll(page);
 });
 
@@ -12489,12 +12524,26 @@ test("table and view management pages run guarded DDL and AI workflows", async (
   await expect(page.getByTestId("table-management-grid")).toHaveCount(0);
   await expect(page.getByTestId("db-admin-detail-columns")).toHaveCount(0);
   await expect(createPanel).toBeVisible();
-  await createPanel.getByLabel("SQL(セミコロン区切りで複数文を入力可能)").fill("CREATE TABLE T1 (ID NUMBER)");
+  const createSqlInput = createPanel.getByLabel("SQL(セミコロン区切りで複数文を入力可能)");
+  const createConfirmationInput = createPanel.getByLabel("実行確認語");
+  await createSqlInput.fill("CREATE TABLE T1 (ID NUMBER)");
   await expect(createPanel.getByText("ADMIN_EXECUTE を入力すると実行できます。")).toBeVisible();
   await expect(createPanel.getByRole("button", { name: "SQL プレビュー" })).toHaveCount(0);
   await expect(createPanel.getByLabel("Oracle に実行する")).toHaveCount(0);
   await expect(createPanel.getByText("入力条件: ADMIN_EXECUTE")).toBeVisible();
-  await createPanel.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
+  await createConfirmationInput.fill("ADMIN_EXECUTE");
+  await expect(createPanel.getByText("確認済み", { exact: true })).toHaveCount(1);
+  const createClearButton = createPanel
+    .getByTestId("execution-confirmation-field")
+    .getByRole("button", { name: "クリア", exact: true });
+  await expect(createClearButton).toBeEnabled();
+  await createClearButton.click();
+  await expect(createSqlInput).toHaveValue("");
+  await expect(createConfirmationInput).toHaveValue("");
+  await expect(createPanel.getByRole("button", { name: "SQL 実行" })).toBeDisabled();
+  await expect(createClearButton).toBeDisabled();
+  await createSqlInput.fill("CREATE TABLE T1 (ID NUMBER)");
+  await createConfirmationInput.fill("ADMIN_EXECUTE");
   await expect(createPanel.getByText("確認済み", { exact: true })).toHaveCount(1);
   await createPanel.getByRole("button", { name: "SQL 実行" }).click();
   await expect.poll(() => api.statementsPayload?.policy).toBe("table_ddl");
@@ -12513,7 +12562,18 @@ test("table and view management pages run guarded DDL and AI workflows", async (
   await expect(importPanel.getByText(/必須入力項目です。/)).toBeVisible();
   const importExecuteButton = importPanel.getByRole("button", { name: "取込を実行" });
   await expect(importPanel.getByText("入力条件: ADMIN_EXECUTE")).toBeVisible();
-  await importPanel.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
+  const importConfirmationInput = importPanel.getByLabel("実行確認語");
+  await importConfirmationInput.fill("ADMIN_EXECUTE");
+  await expect(importPanel.getByText("確認済み", { exact: true })).toHaveCount(1);
+  const importActionClearButton = importPanel
+    .getByTestId("table-import-execution-fieldset")
+    .getByRole("button", { name: "クリア", exact: true });
+  await expect(importActionClearButton).toBeEnabled();
+  await importActionClearButton.click();
+  await expect(importConfirmationInput).toHaveValue("");
+  await expect(importExecuteButton).toBeDisabled();
+  await expect(importActionClearButton).toBeDisabled();
+  await importConfirmationInput.fill("ADMIN_EXECUTE");
   await expect(importPanel.getByText("確認済み", { exact: true })).toHaveCount(1);
   await expect(importExecuteButton).toBeDisabled();
   await importPanel.getByLabel("Oracle 表名").fill("IMPORTED_ORDERS");
