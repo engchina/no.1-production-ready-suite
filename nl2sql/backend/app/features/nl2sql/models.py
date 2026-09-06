@@ -1044,6 +1044,7 @@ class PreviewRequest(BaseModel):
     row_limit: int | None = Field(default=None, ge=1, le=5000)
     select_ai_overrides: SelectAiRequestOverrides | None = None
     ontology_context: OntologySqlGenerationContext | None = None
+    use_glossary: bool = False
 
     @model_validator(mode="after")
     def validate_select_ai_overrides(self) -> PreviewRequest:
@@ -1105,6 +1106,7 @@ class JobCreateRequest(BaseModel):
     allowed_objects: AllowedObjects = Field(default_factory=AllowedObjects)
     row_limit: int | None = Field(default=None, ge=1, le=5000)
     select_ai_overrides: SelectAiRequestOverrides | None = None
+    use_glossary: bool = False
     use_ontology_context: bool = True
     include_interpretation: bool = False
     include_show_prompt: bool = False

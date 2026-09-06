@@ -28,7 +28,7 @@ Classifier model は `classifier_artifact` 1 件のみを保存する。学習�
 ## 管理 UI
 
 - `Learning`: LogisticRegression 分類器の training import/train/predict と単一 model 状態、feedback vector entries/config/rebuild を扱う。
-- `Query Workbench`: Query Rewrite パネルを持つ。glossary/schema/extra prompt の使用有無を切り替える。
+- `Query Workbench`: 実行オプション内で glossary(用語・同義語)の使用有無を切り替える。
 - `Engine Operations`: Select AI / Agent assets の refresh/cleanup、DB profile 一覧、DB profile 単体 drop、Agent run/conversations/privileges、manual integration report import を扱う。
 - `Data Tools`: Excel/CSV import/export、COMMENT ON、annotations、DBMS_CLOUD_AI synthetic data を扱う。
 - `SQL Analysis`: deterministic analysis/reverse と Enterprise AI deep reverse を扱う。

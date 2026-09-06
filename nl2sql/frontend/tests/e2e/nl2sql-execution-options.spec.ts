@@ -222,7 +222,7 @@ async function mockNl2SqlWorkbenchApi(page: Page) {
         engine: "select_ai",
         engine_meta: { runtime: "oracle", select_ai_profile: "NL2SQL_DEFAULT_PROFILE" },
         fallback_reason: "",
-        original_question: "書き換え後の請求金額",
+        original_question: "請求金額を確認したい",
         rewritten_question: "書き換え後の請求金額",
         generated_sql: "SELECT TOTAL_AMOUNT FROM INVOICES",
         executable_sql: "SELECT TOTAL_AMOUNT FROM INVOICES FETCH FIRST 100 ROWS ONLY",
@@ -242,7 +242,7 @@ async function mockNl2SqlWorkbenchApi(page: Page) {
           question: {
             available: true,
             source: "deterministic",
-            original_question: "書き換え後の請求金額",
+            original_question: "請求金額を確認したい",
             rewritten_question: "書き換え後の請求金額",
             profile_id: "default",
             profile_name: "既定プロファイル",
@@ -608,11 +608,11 @@ test("unified execute button runs SQL and renders execution artifacts", async ({
     question: "請求金額を確認したい",
     profile_id: "default",
     use_glossary: true,
-    extra_prompt: "",
   });
   await expect.poll(() => api.jobPayload).not.toBeNull();
   expect(api.jobPayload).toMatchObject({
-    question: "書き換え後の請求金額",
+    question: "請求金額を確認したい",
+    use_glossary: true,
     use_ontology_context: true,
     include_interpretation: true,
     include_show_prompt: true,
@@ -812,6 +812,89 @@ test("AI要件確認は質問を補完してSQL生成と実行へ進める", asy
   expect(calls.executePayload).toMatchObject(expectedBinding);
 });
 
+test("glossary option off skips rewrite and sends the original question", async ({ page }) => {
+  const api = await mockNl2SqlWorkbenchApi(page);
+  await page.goto("/query");
+
+  await page.locator("#nl2sql-question-input").fill("請求金額を確認したい");
+  await page.getByRole("button", { name: "検索を実行" }).click();
+
+  await expect.poll(() => api.jobPayload).not.toBeNull();
+  expect(api.rewritePayload).toBeNull();
+  expect(api.jobPayload).toMatchObject({
+    question: "請求金額を確認したい",
+    use_glossary: false,
+  });
+  await expect(page.getByText("生成に使用される質問")).toHaveCount(0);
+  await expectNoHorizontalOverflow(page);
+});
+
+test("editing the question clears the previous rewrite card", async ({ page }) => {
+  await mockNl2SqlWorkbenchApi(page);
+  await page.goto("/query");
+
+  await page.getByRole("button", { name: /実行オプション/ }).click();
+  await page.getByLabel("用語・同義語を使う").check();
+  const questionInput = page.locator("#nl2sql-question-input");
+  await questionInput.fill("請求金額を確認したい");
+  await page.getByRole("button", { name: "検索を実行" }).click();
+
+  const rewriteCard = page.getByTestId("nl2sql-rewrite-card");
+  await expect(rewriteCard.getByText("生成に使用される質問")).toBeVisible();
+  await expect(rewriteCard.getByText("書き換え後の請求金額")).toBeVisible();
+
+  await questionInput.fill("社員の一覧");
+
+  await expect(page.getByTestId("nl2sql-rewrite-card")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "適用" })).toHaveCount(0);
+  await expectNoHorizontalOverflow(page);
+});
+
+test("select ai overrides show inactive notice for other engines and role can collapse", async ({
+  page,
+}) => {
+  const api = await mockNl2SqlWorkbenchApi(page);
+  await page.goto("/query");
+
+  const overridesDisclosure = page.getByRole("button", { name: /今回だけの生成条件/ });
+  await overridesDisclosure.click();
+  await page.getByLabel("今回の追加条件").fill("最新月だけを対象にする。");
+  const roleDisclosure = page.getByRole("button", { name: /ロールを上書き/ });
+  await roleDisclosure.click();
+  await page.getByLabel("アシスタントロール").fill("財務 SQL アシスタントとして回答する。");
+  await expect(roleDisclosure).toHaveAttribute("aria-expanded", "true");
+
+  await roleDisclosure.click();
+  await expect(roleDisclosure).toHaveAttribute("aria-expanded", "false");
+  await expect(page.getByLabel("アシスタントロール")).toBeHidden();
+
+  await page.getByRole("button", { name: /Enterprise AI Direct/ }).click();
+  const executionOptionsDisclosure = page.getByRole("button", { name: /実行オプション/ });
+  await expect(executionOptionsDisclosure).toContainText("条件あり");
+  await executionOptionsDisclosure.click();
+  await expect(page.getByText("今回だけの生成条件は Select AI 実行時のみ適用されます。")).toBeVisible();
+  await page.locator("#nl2sql-question-input").fill("請求金額を確認したい");
+  await page.getByRole("button", { name: "検索を実行" }).click();
+  await expect.poll(() => api.jobPayload).not.toBeNull();
+  expect(api.jobPayload).toMatchObject({
+    engine: "enterprise_ai_direct",
+    select_ai_overrides: null,
+  });
+
+  api.jobPayload = null;
+  await page.getByRole("button", { name: /Select AI DBMS_CLOUD_AI profile/ }).click();
+  await page.getByRole("button", { name: "検索を実行" }).click();
+  await expect.poll(() => api.jobPayload).not.toBeNull();
+  expect(api.jobPayload).toMatchObject({
+    engine: "select_ai",
+    select_ai_overrides: {
+      role: "財務 SQL アシスタントとして回答する。",
+      additional_instructions: "最新月だけを対象にする。",
+    },
+  });
+  await expectNoHorizontalOverflow(page);
+});
+
 test("execution options keep ontology toggle usable at mobile width", async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 900 });
   await mockNl2SqlWorkbenchApi(page);
@@ -861,7 +944,7 @@ test("用語置換が起きないときは書き換えカードを表示せず�
 
   await expect.poll(() => api.jobPayload).not.toBeNull();
   // 「先頭100件」のような件数表現を足さず、入力そのままが job へ渡る。
-  expect(api.jobPayload).toMatchObject({ question });
+  expect(api.jobPayload).toMatchObject({ question, use_glossary: true });
   await expect(page.getByText("生成に使用される質問")).toHaveCount(0);
   await expect(page.getByText("変更前の質問")).toHaveCount(0);
 });
