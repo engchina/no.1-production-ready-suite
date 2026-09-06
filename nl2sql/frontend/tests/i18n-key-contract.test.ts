@@ -7,18 +7,23 @@ import { fileURLToPath } from "node:url";
 import { t } from "../src/lib/i18n.ts";
 
 const frontendRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const repositoryRoot = resolve(frontendRoot, "..");
 const sourceRoot = resolve(frontendRoot, "src");
 const dictionaryPaths = [
   resolve(sourceRoot, "lib/i18n.ts"),
   resolve(sourceRoot, "lib/nl2sql-base-i18n.ts"),
 ];
 
-function sourceFiles(directory: string): string[] {
+function filesMatching(directory: string, fileNamePattern: RegExp): string[] {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
     const path = resolve(directory, entry.name);
-    if (entry.isDirectory()) return sourceFiles(path);
-    return /\.tsx?$/u.test(entry.name) ? [path] : [];
+    if (entry.isDirectory()) return filesMatching(path, fileNamePattern);
+    return fileNamePattern.test(entry.name) ? [path] : [];
   });
+}
+
+function sourceFiles(directory: string): string[] {
+  return filesMatching(directory, /\.tsx?$/u);
 }
 
 function lineNumber(source: string, index: number): number {
@@ -70,4 +75,25 @@ test("一括選択は範囲が明確な共通文言を返す", () => {
   assert.equal(t("profiles.objects.clearSchema"), "選択をすべて解除");
   assert.equal(t("knowledgeBasePicker.selectAll"), "すべて選択");
   assert.equal(t("knowledgeBasePicker.clear"), "選択をすべて解除");
+});
+
+test("SQL生成画面の自然言語入力名は「クエリ」に統一されている", () => {
+  const forbiddenTerm = /検索\s*クエリ/u;
+  const checkedFiles = [
+    ...filesMatching(sourceRoot, /\.tsx?$/u),
+    ...filesMatching(resolve(repositoryRoot, "backend/app"), /\.py$/u),
+  ];
+  const violations = checkedFiles.flatMap((path) => {
+    const source = readFileSync(path, "utf8");
+    const match = forbiddenTerm.exec(source);
+    return match
+      ? [`${relative(repositoryRoot, path)}:${lineNumber(source, match.index)}`]
+      : [];
+  });
+
+  assert.equal(
+    violations.length,
+    0,
+    `自然言語入力の旧称が残っています。正規名称「クエリ」へ変更してください:\n${violations.join("\n")}`
+  );
 });
