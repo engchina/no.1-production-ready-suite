@@ -544,10 +544,16 @@ def test_db_admin_executor_requires_confirmation_for_non_select() -> None:
 
 
 def test_sql_execute_row_limit_is_bounded_1_to_100000() -> None:
-    assert ExecuteRequest(sql="SELECT * FROM INVOICES").row_limit == 100
+    assert ExecuteRequest(sql="SELECT * FROM INVOICES").row_limit is None
+    assert (
+        ExecuteRequest.model_validate(
+            {"sql": "SELECT * FROM INVOICES", "row_limit": None}
+        ).row_limit
+        is None
+    )
     assert ExecuteRequest(sql="SELECT * FROM INVOICES", row_limit=1).row_limit == 1
     assert ExecuteRequest(sql="SELECT * FROM INVOICES", row_limit=100000).row_limit == 100000
-    # 0(無制限 fetch)は許可しない。無制限は db-admin 専用。
+    # 0(無制限指定)は許可しない。未指定/null だけが「total maximum なし」を表す。
     with pytest.raises(ValidationError):
         ExecuteRequest(sql="SELECT * FROM INVOICES", row_limit=0)
     with pytest.raises(ValidationError):

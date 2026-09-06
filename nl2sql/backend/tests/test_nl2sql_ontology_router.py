@@ -125,6 +125,7 @@ class _FakeLegacyNl2SqlService:
         )
         self.preview_requests: list[PreviewRequest] = []
         self.executed_sql: list[str] = []
+        self.executed_row_limits: list[int | None] = []
         self.recorded_history: list[dict[str, Any]] = []
 
     def get_catalog(self) -> SchemaCatalog:
@@ -160,13 +161,15 @@ class _FakeLegacyNl2SqlService:
 
     def preview(self, request: PreviewRequest) -> PreviewData:
         self.preview_requests.append(request)
-        limit = request.row_limit or 100
-        sql = f"SELECT COUNT(*) AS ORDER_COUNT FROM APP.ORDERS FETCH FIRST {limit} ROWS ONLY"
+        limit = request.row_limit
+        sql = "SELECT COUNT(*) AS ORDER_COUNT FROM APP.ORDERS"
+        if limit is not None:
+            sql = f"{sql} FETCH FIRST {limit} ROWS ONLY"
         return PreviewData(
             sql=sql,
             executable_sql=sql,
             is_safe=True,
-            row_limit=limit,
+            row_limit=limit or 0,
             note="deterministic",
             engine_meta={
                 "generation_elapsed_ms": 42,
@@ -193,13 +196,13 @@ class _FakeLegacyNl2SqlService:
         row_limit: int | None,
     ) -> tuple[SafetyReport, str, QueryResults]:
         assert allowed.table_names == ["APP.ORDERS"]
-        assert row_limit == 100
         self.executed_sql.append(sql)
+        self.executed_row_limits.append(row_limit)
         return (
             SafetyReport(
                 is_safe=True,
                 is_select_only=True,
-                row_limit_applied=row_limit,
+                row_limit_applied=row_limit or 0,
                 referenced_tables=["APP.ORDERS"],
             ),
             sql,
@@ -923,6 +926,59 @@ def test_runtime_executes_two_confirmation_flow_and_persists_every_artifact(
     assert persisted_session["profile_view_snapshot"]["profile_id"] == "sales"
     assert store.get_query_session(created.session.id) is not None
     assert store.get_artifact(generated.session.sql_artifacts[-1].id) is not None
+
+
+def test_runtime_keeps_unspecified_row_limit_out_of_intent_preview_and_execute(
+    runtime: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+) -> None:
+    api, _store, legacy = runtime
+    created = api.create_session(
+        QuerySessionApiCreate(
+            question="受注件数を表示",
+            profile_id="sales",
+            allowed_objects=AllowedObjects(table_names=["APP.ORDERS"]),
+        )
+    )
+
+    assert created.session.intents[-1].limit is None
+
+    generated = api.generate_sql(created.session.id, _generate_request(created))
+    confirmation = _confirmation(generated)
+    api.confirm_sql(created.session.id, confirmation)
+    executed = api.execute(created.session.id, confirmation, actor_user_uuid="user-1")
+
+    assert generated.preview is not None
+    assert generated.preview.row_limit == 0
+    assert legacy.preview_requests[-1].row_limit is None
+    assert legacy.executed_row_limits == [None]
+    assert executed.result.has_more is False
+    assert executed.result.truncated is False
+
+
+def test_runtime_propagates_explicit_intent_limit_to_preview_and_execute(
+    runtime: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+) -> None:
+    api, _store, legacy = runtime
+    created = api.create_session(
+        QuerySessionApiCreate(
+            question="受注件数を上位 10 件表示",
+            profile_id="sales",
+            allowed_objects=AllowedObjects(table_names=["APP.ORDERS"]),
+        )
+    )
+
+    assert created.session.intents[-1].limit == 10
+
+    generated = api.generate_sql(created.session.id, _generate_request(created))
+    confirmation = _confirmation(generated)
+    api.confirm_sql(created.session.id, confirmation)
+    api.execute(created.session.id, confirmation, actor_user_uuid="user-1")
+
+    assert generated.preview is not None
+    assert generated.preview.row_limit == 10
+    assert "FETCH FIRST 10 ROWS ONLY" in generated.preview.sql
+    assert legacy.preview_requests[-1].row_limit == 10
+    assert legacy.executed_row_limits == [10]
 
 
 def test_generate_sql_includes_published_qa_sql_examples(

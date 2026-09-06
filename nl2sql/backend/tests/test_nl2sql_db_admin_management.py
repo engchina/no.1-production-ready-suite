@@ -48,6 +48,7 @@ from app.features.nl2sql.models import (
     SelectAiDbProfileUpsertRequest,
 )
 from app.features.nl2sql.oracle_adapter import (
+    SELECT_FETCH_BATCH_SIZE,
     OracleAdapterError,
     OracleNl2SqlAdapter,
     TabularImportValidationError,
@@ -2862,6 +2863,105 @@ def test_oracle_adapter_system_admin_select_uses_normal_connection(
     assert result.rows == [{"ID": 1}]
     assert result.execution_context == "oracle_data_plane"
     assert result.vpd_context_enforced is False
+
+
+def test_oracle_adapter_unbounded_select_fetches_all_rows_in_batches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Cursor:
+        description = [("ID",)]
+
+        def __init__(self) -> None:
+            self.remaining = [(index,) for index in range(125)]
+            self.fetchmany_calls: list[int] = []
+
+        def __enter__(self) -> _Cursor:
+            return self
+
+        def __exit__(self, *_exc: object) -> None:
+            return None
+
+        def execute(self, _sql: str) -> None:
+            return None
+
+        def fetchmany(self, max_rows: int) -> list[tuple[int]]:
+            self.fetchmany_calls.append(max_rows)
+            batch = self.remaining[:50]
+            self.remaining = self.remaining[50:]
+            return batch
+
+        def fetchall(self) -> list[tuple[int]]:
+            raise AssertionError("row_limit 未指定でも fetchall は使わない")
+
+    class _Connection:
+        def __init__(self, cursor: _Cursor) -> None:
+            self._cursor = cursor
+
+        def cursor(self) -> _Cursor:
+            return self._cursor
+
+    cursor = _Cursor()
+
+    @contextmanager
+    def normal_connection() -> Iterator[_Connection]:
+        yield _Connection(cursor)
+
+    adapter = OracleNl2SqlAdapter(get_settings())
+    monkeypatch.setattr(adapter, "connection", normal_connection)
+
+    with actor_scope("system-admin", is_system_admin=True):
+        result = adapter.execute_select("SELECT ID FROM T1", None)
+
+    assert result.total == 125
+    assert result.returned_count == 125
+    assert result.has_more is False
+    assert result.truncated is False
+    assert cursor.fetchmany_calls == [
+        SELECT_FETCH_BATCH_SIZE,
+        SELECT_FETCH_BATCH_SIZE,
+        SELECT_FETCH_BATCH_SIZE,
+        SELECT_FETCH_BATCH_SIZE,
+    ]
+
+
+def test_oracle_adapter_explicit_select_limit_reports_truncation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Cursor:
+        description = [("ID",)]
+
+        def __enter__(self) -> _Cursor:
+            return self
+
+        def __exit__(self, *_exc: object) -> None:
+            return None
+
+        def execute(self, _sql: str) -> None:
+            return None
+
+        def fetchmany(self, max_rows: int) -> list[tuple[int]]:
+            assert max_rows == 4
+            return [(1,), (2,), (3,), (4,)]
+
+    class _Connection:
+        def cursor(self) -> _Cursor:
+            return _Cursor()
+
+    @contextmanager
+    def normal_connection() -> Iterator[_Connection]:
+        yield _Connection()
+
+    adapter = OracleNl2SqlAdapter(get_settings())
+    monkeypatch.setattr(adapter, "connection", normal_connection)
+
+    with actor_scope("system-admin", is_system_admin=True):
+        result = adapter.execute_select("SELECT ID FROM T1", 3)
+
+    assert result.rows == [{"ID": 1}, {"ID": 2}, {"ID": 3}]
+    assert result.total == 3
+    assert result.returned_count == 3
+    assert result.has_more is True
+    assert result.truncated is True
 
 
 def test_oracle_adapter_non_admin_select_uses_deepsec_data_connection(

@@ -441,6 +441,9 @@ export interface QueryResults {
   columns: string[];
   rows: Array<Record<string, unknown>>;
   total: number;
+  returned_count?: number | null;
+  has_more?: boolean;
+  truncated?: boolean;
   execution_context?: "deterministic" | "oracle_data_plane" | "deepsec_data_plane" | "admin_control_plane";
   vpd_context_enforced?: boolean;
 }

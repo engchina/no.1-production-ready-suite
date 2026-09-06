@@ -16852,6 +16852,7 @@ class Nl2SqlService:
                 semantic_graph=graph_dump,
                 warnings=warnings,
             )
+            applied_row_limit = safety.row_limit_applied or row_limit
             question_interpretation = Nl2SqlQuestionInterpretation(
                 available=True,
                 source="deterministic",
@@ -16865,7 +16866,7 @@ class Nl2SqlService:
                 group_by=analysis.group_by,
                 order_by=analysis.order_by,
                 aggregations=analysis.aggregations,
-                row_limit=safety.row_limit_applied or row_limit,
+                row_limit=applied_row_limit,
                 confidence=0.9 if safety.is_safe else 0.4,
                 warnings=warnings,
             )
@@ -17700,7 +17701,7 @@ class Nl2SqlService:
             raise RuntimeError(reason)
         profile = self.get_profile(profile_id)
         allowed = self._resolve_allowed_objects(profile_id, AllowedObjects())
-        row_limit = self._resolve_row_limit(profile_id, profile.default_row_limit)
+        row_limit = self._resolve_row_limit(profile_id, None)
         return self._generate_sql(
             engine,
             question,
@@ -18380,18 +18381,13 @@ class Nl2SqlService:
             enforce_table_scope=requested.enforce_table_scope or profile_scope is not None,
         )
 
-    def _resolve_row_limit(self, profile_id: str | None, requested: int | None) -> int:
-        """request 明示 > profile 既定 > グローバル既定の順で row limit を解決する。
+    def _resolve_row_limit(self, _profile_id: str | None, requested: int | None) -> int | None:
+        """利用者/request が明示した total result maximum だけを返す。
 
-        None のまま返すと execute_select が無制限 fetchall になるため、必ず正の値へ落とす。
+        Profile/system の default_row_limit は page size や表示初期値の互換 field であり、
+        件数未指定の NL2SQL 実行を暗黙に 100 件で打ち切る根拠にはしない。
         """
-        if requested:
-            return requested
-        try:
-            profile_default = self.get_profile(profile_id).default_row_limit
-        except ValueError:
-            profile_default = None
-        return profile_default or get_settings().nl2sql_default_row_limit
+        return requested if requested is not None else None
 
     def _generation_schema_catalog(
         self,

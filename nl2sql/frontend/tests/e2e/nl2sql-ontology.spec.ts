@@ -219,7 +219,7 @@ const intent = {
   filters: [],
   granularity: "",
   sorts: [],
-  limit: 100,
+  limit: null as number | null,
   candidate_paths: [
     {
       id: "path-order-customer",
@@ -262,7 +262,7 @@ const artifact = {
   id: "artifact-1",
   intent_version: 1,
   ontology_revision_id: "revision-1",
-  sql: "SELECT COUNT(*) AS ORDER_COUNT FROM APP.ORDERS FETCH FIRST 100 ROWS ONLY",
+  sql: "SELECT COUNT(*) AS ORDER_COUNT FROM APP.ORDERS",
   sql_hash: "sql-hash",
   generation_context_hash: "context-hash",
   semantic_graph: {
@@ -270,7 +270,7 @@ const artifact = {
     sql_hash: "sql-hash",
     dialect: "oracle",
     statement_type: "SELECT",
-    raw_sql: "SELECT COUNT(*) AS ORDER_COUNT FROM APP.ORDERS FETCH FIRST 100 ROWS ONLY",
+    raw_sql: "SELECT COUNT(*) AS ORDER_COUNT FROM APP.ORDERS",
     parse_complete: true,
     ctes: [],
     tables: [
@@ -310,7 +310,7 @@ const artifact = {
     groups: [],
     having: [],
     orders: [],
-    limit: 100,
+    limit: null as number | null,
     windows: [],
     set_operations: [],
     subqueries: [],
@@ -448,7 +448,7 @@ function guidedSessionData(
       sql: artifact.sql,
       executable_sql: artifact.sql,
       is_safe: true,
-      row_limit: 100,
+      row_limit: 0,
       note: "受注件数を集計します。",
       recommendations: [],
       rewritten_question: "受注件数を表示。期間は今月。",
@@ -462,12 +462,11 @@ function guidedSessionData(
         intent_summary: [
           { key: "entities", label_ja: "業務対象", value_ja: "受注", source: "ontology", confirmed: false },
           { key: "time_range", label_ja: "期間", value_ja: "今月", source: "user", confirmed: true },
-          { key: "limit", label_ja: "最大件数", value_ja: "100 件", source: "default", confirmed: false },
         ],
         required_total: 1,
         required_confirmed: 1,
         missing_required: [],
-        assumptions: ["結果は最大 100 件に制限します。"],
+        assumptions: [],
         turn_count: 1,
         manual_completion_required: false,
         can_generate_sql: true,
@@ -498,12 +497,11 @@ function guidedSessionData(
         remaining_questions: [],
         intent_summary: [
           { key: "entities", label_ja: "業務対象", value_ja: "受注", source: "ontology", confirmed: false },
-          { key: "limit", label_ja: "最大件数", value_ja: "100 件", source: "default", confirmed: false },
         ],
         required_total: 1,
         required_confirmed: 0,
         missing_required: ["集計対象の期間を確認してください。"],
-        assumptions: ["結果は最大 100 件に制限します。"],
+        assumptions: [],
         turn_count: 0,
         manual_completion_required: false,
         can_generate_sql: false,
@@ -549,12 +547,11 @@ function guidedOutputSessionData(ready: boolean) {
       remaining_questions: [outputQuestion],
       intent_summary: [
         { key: "entities", label_ja: "対象", value_ja: "受注", source: "ontology", confirmed: false },
-        { key: "limit", label_ja: "最大件数", value_ja: "100 件", source: "default", confirmed: false },
       ],
       required_total: 1,
       required_confirmed: 0,
       missing_required: [outputQuestion.prompt_ja],
-      assumptions: ["結果は最大 100 件に制限します。"],
+      assumptions: [],
       turn_count: 0,
       manual_completion_required: false,
       can_generate_sql: false,
@@ -576,13 +573,68 @@ function guidedOutputSessionData(ready: boolean) {
         source: "user",
         confirmed: true,
       },
-      { key: "limit", label_ja: "最大件数", value_ja: "100 件", source: "default", confirmed: false },
     ],
     required_total: 1,
     required_confirmed: 1,
     missing_required: [],
-    assumptions: ["結果は最大 100 件に制限します。"],
+    assumptions: [],
     turn_count: 1,
+    manual_completion_required: false,
+    can_generate_sql: true,
+    schema_version: "guided_clarification_v1",
+    message_ja: "SQL 生成に必要な情報を確認できました。",
+  };
+  return data;
+}
+
+function guidedLimitSessionData(withSql = false, confirmed = false, executed = false) {
+  const data = guidedSessionData(true, withSql, confirmed, executed);
+  const question = "受注件数を上位 10 件表示";
+  const limitedIntent = {
+    ...intent,
+    question_original: question,
+    question_effective: question,
+    limit: 10,
+  };
+  const limitedArtifact = {
+    ...artifact,
+    sql: "SELECT COUNT(*) AS ORDER_COUNT FROM APP.ORDERS FETCH FIRST 10 ROWS ONLY",
+    semantic_graph: {
+      ...artifact.semantic_graph,
+      raw_sql: "SELECT COUNT(*) AS ORDER_COUNT FROM APP.ORDERS FETCH FIRST 10 ROWS ONLY",
+      limit: 10,
+    },
+  };
+  data.session.original_question = question;
+  data.session.intents = [limitedIntent];
+  data.session.sql_artifacts = withSql ? [limitedArtifact] : [];
+  data.session.current_sql_artifact_id = withSql ? limitedArtifact.id : null;
+  data.preview = withSql
+    ? {
+        engine: "select_ai",
+        engine_meta: { profile: "NL2SQL_DEFAULT_PROFILE" },
+        sql: limitedArtifact.sql,
+        executable_sql: limitedArtifact.sql,
+        is_safe: true,
+        row_limit: 10,
+        note: "受注件数を集計します。",
+        recommendations: [],
+        rewritten_question: question,
+      }
+    : null;
+  data.clarification = {
+    status: "ready_to_confirm",
+    current_question: null,
+    remaining_questions: [],
+    intent_summary: [
+      { key: "entities", label_ja: "業務対象", value_ja: "受注", source: "ontology", confirmed: false },
+      { key: "limit", label_ja: "最大件数", value_ja: "10 件", source: "user", confirmed: true },
+    ],
+    required_total: 0,
+    required_confirmed: 0,
+    missing_required: [],
+    assumptions: [],
+    turn_count: 0,
     manual_completion_required: false,
     can_generate_sql: true,
     schema_version: "guided_clarification_v1",
@@ -601,6 +653,10 @@ async function fulfill(route: Route, data: unknown) {
 
 async function mockApi(page: Page, guidedQuestion: "time" | "output" = "time") {
   const payloads: Record<string, unknown> = {};
+  const isGuidedLimitRequest = () =>
+    String((payloads.create as { question?: unknown } | undefined)?.question ?? "").includes(
+      "上位 10"
+    );
   await page.route("**/api/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -821,13 +877,13 @@ async function mockApi(page: Page, guidedQuestion: "time" | "output" = "time") {
           fallback_reason: "",
           original_question: question,
           rewritten_question: question,
-          generated_sql: "SELECT COUNT(*) AS ORDER_COUNT FROM APP.ORDERS FETCH FIRST 100 ROWS ONLY",
-          executable_sql: "SELECT COUNT(*) AS ORDER_COUNT FROM APP.ORDERS FETCH FIRST 100 ROWS ONLY",
+          generated_sql: "SELECT COUNT(*) AS ORDER_COUNT FROM APP.ORDERS",
+          executable_sql: "SELECT COUNT(*) AS ORDER_COUNT FROM APP.ORDERS",
           explanation: "受注件数を集計します。",
           safety: {
             is_safe: true,
             is_select_only: true,
-            row_limit_applied: 100,
+            row_limit_applied: 0,
             blocked_reason: "",
             warnings: [],
             referenced_tables: ["APP.ORDERS"],
@@ -863,7 +919,7 @@ async function mockApi(page: Page, guidedQuestion: "time" | "output" = "time") {
               group_by: [],
               order_by: [],
               aggregations: ["COUNT"],
-              row_limit: 100,
+              row_limit: null,
               confidence: 0.9,
               warnings: [],
             },
@@ -879,7 +935,7 @@ async function mockApi(page: Page, guidedQuestion: "time" | "output" = "time") {
               aggregations: ["COUNT"],
               group_by: [],
               order_by: [],
-              limit: 100,
+              limit: null,
               semantic_graph: artifact.semantic_graph,
               warnings: [],
             },
@@ -893,6 +949,7 @@ async function mockApi(page: Page, guidedQuestion: "time" | "output" = "time") {
     if (path === "/api/nl2sql/query-sessions" && request.method() === "POST") {
       payloads.create = request.postDataJSON();
       if ((payloads.create as { clarification_mode?: string }).clarification_mode === "guided") {
+        if (isGuidedLimitRequest()) return fulfill(route, guidedLimitSessionData());
         return fulfill(
           route,
           guidedQuestion === "output" ? guidedOutputSessionData(false) : guidedSessionData(false)
@@ -920,6 +977,7 @@ async function mockApi(page: Page, guidedQuestion: "time" | "output" = "time") {
     if (path.endsWith("/generate-sql")) {
       payloads.generate = request.postDataJSON();
       if ((payloads.create as { clarification_mode?: string } | undefined)?.clarification_mode === "guided") {
+        if (isGuidedLimitRequest()) return fulfill(route, guidedLimitSessionData(true));
         return fulfill(route, guidedSessionData(true, true));
       }
       return fulfill(route, sessionData("awaiting_sql_confirmation", true));
@@ -927,6 +985,7 @@ async function mockApi(page: Page, guidedQuestion: "time" | "output" = "time") {
     if (path.endsWith("/confirm-sql")) {
       payloads.confirm = request.postDataJSON();
       if ((payloads.create as { clarification_mode?: string } | undefined)?.clarification_mode === "guided") {
+        if (isGuidedLimitRequest()) return fulfill(route, guidedLimitSessionData(true, true));
         return fulfill(route, guidedSessionData(true, true, true));
       }
       return fulfill(route, sessionData("awaiting_sql_confirmation", true, true));
@@ -934,6 +993,7 @@ async function mockApi(page: Page, guidedQuestion: "time" | "output" = "time") {
     if (path.endsWith("/execute")) {
       payloads.execute = request.postDataJSON();
       if ((payloads.create as { clarification_mode?: string } | undefined)?.clarification_mode === "guided") {
+        if (isGuidedLimitRequest()) return fulfill(route, guidedLimitSessionData(true, true, true));
         return fulfill(route, guidedSessionData(true, true, true, true));
       }
       return fulfill(route, sessionData("done", true, true, true));
@@ -1048,8 +1108,11 @@ test("AI要件確認は一問ずつ意図を確認してからSQLを生成・実
   await expect(panel.getByText("確認完了").first()).toBeVisible();
   await expect(panel.getByRole("heading", { name: "確認中の検索条件" })).toBeVisible();
   await expect(panel.getByText("今月", { exact: true })).toBeVisible();
+  await expect(panel.getByText("最大件数")).toHaveCount(0);
+  await expect(panel.getByText("結果は最大 100 件に制限します。")).toHaveCount(0);
   await panel.getByRole("button", { name: "この意図でSQLを生成" }).click();
   await expect(panel.getByRole("heading", { name: "生成したSQL" })).toBeVisible();
+  await expect(panel.getByText("FETCH FIRST 100 ROWS ONLY")).toHaveCount(0);
   await panel.getByRole("button", { name: "このSQLを実行" }).click();
 
   await expect(page.getByRole("columnheader", { name: "ORDER_COUNT" })).toBeVisible();
@@ -1066,6 +1129,31 @@ test("AI要件確認は一問ずつ意図を確認してからSQLを生成・実
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
   expect(overflow).toBe(false);
   await page.screenshot({ path: testInfo.outputPath("guided-clarification.png"), fullPage: true });
+});
+
+test("AI要件確認は利用者が明示した最大件数だけを表示する", async ({ page }) => {
+  const payloads = await mockApi(page);
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto("/query");
+
+  await page.locator("#nl2sql-question-input").fill("受注件数を上位 10 件表示");
+  await page.getByRole("button", { name: "AI要件確認" }).click();
+
+  const panel = page.getByTestId("nl2sql-guided-clarification");
+  await expect(panel.getByText("確認完了").first()).toBeVisible();
+  await expect(panel.getByText("最大件数")).toBeVisible();
+  await expect(panel.getByText("10 件", { exact: true })).toBeVisible();
+  await expect(panel.getByText("結果は最大 100 件に制限します。")).toHaveCount(0);
+  await panel.getByRole("button", { name: "この意図でSQLを生成" }).click();
+  await expect(panel.getByText("FETCH FIRST 10 ROWS ONLY")).toBeVisible();
+  await panel.getByRole("button", { name: "このSQLを実行" }).click();
+
+  await expect(page.getByRole("columnheader", { name: "ORDER_COUNT" })).toBeVisible();
+  expect(payloads.create).toMatchObject({
+    question: "受注件数を上位 10 件表示",
+    profile_id: "default",
+    clarification_mode: "guided",
+  });
 });
 
 test("AI要件確認は内部診断を見せず表示項目を業務用語で複数選択できる", async ({ page }, testInfo) => {

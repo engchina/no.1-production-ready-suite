@@ -91,6 +91,7 @@ FEEDBACK_VECTOR_DB_LOCK_ID = (
     int(hashlib.sha256(b"nl2sql_feedback_vector_index").hexdigest()[:12], 16) % 1_073_741_823
 ) + 1
 FEEDBACK_VECTOR_DB_LOCK_TIMEOUT_SECONDS = 60
+SELECT_FETCH_BATCH_SIZE = 1000
 
 
 def ensure_deepsec_thin_mode(settings: Settings) -> None:
@@ -1186,7 +1187,18 @@ class OracleNl2SqlAdapter:
                 cursor.execute(sql)
                 columns = [description[0] for description in cursor.description or []]
                 rows: list[dict[str, Any]] = []
-                fetched_rows = cursor.fetchmany(max_rows) if max_rows else cursor.fetchall()
+                has_more = False
+                if max_rows is not None and max_rows > 0:
+                    fetched_rows = cursor.fetchmany(max_rows + 1)
+                    has_more = len(fetched_rows) > max_rows
+                    fetched_rows = fetched_rows[:max_rows]
+                else:
+                    fetched_rows = []
+                    while True:
+                        batch = cursor.fetchmany(SELECT_FETCH_BATCH_SIZE)
+                        if not batch:
+                            break
+                        fetched_rows.extend(batch)
                 for row in fetched_rows:
                     rows.append(
                         {
@@ -1206,6 +1218,9 @@ class OracleNl2SqlAdapter:
                 columns=columns,
                 rows=rows,
                 total=len(rows),
+                returned_count=len(rows),
+                has_more=has_more,
+                truncated=has_more,
                 execution_context=(
                     "deepsec_data_plane" if vpd_context_enforced else "oracle_data_plane"
                 ),

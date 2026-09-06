@@ -313,6 +313,8 @@ def test_guided_session_asks_for_missing_time_and_accepts_scoped_option() -> Non
     assert created.clarification.current_question is not None
     assert created.clarification.current_question.category.value == "time_range"
     assert created.clarification.can_generate_sql is False
+    assert all(item.key != "limit" for item in created.clarification.intent_summary)
+    assert created.clarification.assumptions == []
     option = created.clarification.current_question.options[0]
 
     updated = runtime.answer_clarification(
@@ -332,6 +334,29 @@ def test_guided_session_asks_for_missing_time_and_accepts_scoped_option() -> Non
     assert updated.clarification is not None
     assert updated.clarification.status == ClarificationStatus.READY_TO_CONFIRM
     assert updated.clarification.can_generate_sql is True
+    assert all(item.key != "limit" for item in updated.clarification.intent_summary)
+    assert updated.clarification.assumptions == []
+
+
+def test_guided_session_keeps_user_specified_limit_as_user_evidence() -> None:
+    runtime = _runtime()
+
+    created = runtime.create_session(
+        QuerySessionApiCreate(
+            question="受注を上位 10 件表示",
+            profile_id="sales",
+            clarification_mode=ClarificationMode.GUIDED,
+        ),
+        actor_user_uuid="user-1",
+    )
+
+    assert created.clarification is not None
+    limit_item = next(item for item in created.clarification.intent_summary if item.key == "limit")
+    assert created.session.intents[-1].limit == 10
+    assert limit_item.value_ja == "10 件"
+    assert limit_item.source == "user"
+    assert limit_item.confirmed is True
+    assert created.clarification.assumptions == []
 
 
 def test_embedding_column_ambiguity_is_presented_as_business_output_selection() -> None:

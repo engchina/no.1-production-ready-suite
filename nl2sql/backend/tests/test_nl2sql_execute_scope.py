@@ -1,8 +1,8 @@
-"""POST /nl2sql/execute の実行スコープと row_limit 正規化の回帰テスト。
+"""POST /nl2sql/execute の実行スコープと row_limit 契約の回帰テスト。
 
 - 非 system admin の principal は、許可された業務プロファイル群の許可オブジェクトの
   和集合を越えて SELECT できない(Issue: /execute がプロファイルスコープを強制しない)
-- `row_limit: null` は既定値へ倒し、無制限 fetchall にしない(Issue: row_limit null)
+- `row_limit: null` / omitted は未指定のまま保持し、fetchall 回避は adapter batch fetch で担う
 """
 
 from __future__ import annotations
@@ -16,7 +16,6 @@ from pydantic import ValidationError
 from app.features.nl2sql import router as nl2sql_router
 from app.features.nl2sql.incremental_store import MemoryIncrementalNl2SqlRepository
 from app.features.nl2sql.models import (
-    DIRECT_SQL_DEFAULT_ROW_LIMIT,
     AllowedObjects,
     AnalyzeRequest,
     ExecuteRequest,
@@ -113,12 +112,12 @@ def _request(principal: Principal | None) -> SimpleNamespace:
     return SimpleNamespace(state=SimpleNamespace(principal=principal))
 
 
-def test_execute_request_null_row_limit_falls_back_to_default() -> None:
+def test_execute_request_missing_or_null_row_limit_stays_unspecified() -> None:
     assert (
         ExecuteRequest.model_validate({"sql": "SELECT 1 FROM DUAL", "row_limit": None}).row_limit
-        == DIRECT_SQL_DEFAULT_ROW_LIMIT
+        is None
     )
-    assert ExecuteRequest(sql="SELECT 1 FROM DUAL").row_limit == DIRECT_SQL_DEFAULT_ROW_LIMIT
+    assert ExecuteRequest(sql="SELECT 1 FROM DUAL").row_limit is None
     assert ExecuteRequest(sql="SELECT 1 FROM DUAL", row_limit=5000).row_limit == 5000
 
 

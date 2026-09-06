@@ -4,7 +4,7 @@ import { mockDatabaseGateReady } from "./_helpers/database-gate";
 const safety = {
   is_safe: true,
   is_select_only: true,
-  row_limit_applied: 100,
+  row_limit_applied: 0,
   blocked_reason: "",
   warnings: [],
   referenced_tables: ["APP.INVOICES"],
@@ -225,7 +225,7 @@ async function mockNl2SqlWorkbenchApi(page: Page) {
         original_question: "請求金額を確認したい",
         rewritten_question: "書き換え後の請求金額",
         generated_sql: "SELECT TOTAL_AMOUNT FROM INVOICES",
-        executable_sql: "SELECT TOTAL_AMOUNT FROM INVOICES FETCH FIRST 100 ROWS ONLY",
+        executable_sql: "SELECT TOTAL_AMOUNT FROM INVOICES",
         explanation: "SQL を生成しました。",
         safety,
         recommendations: [],
@@ -251,7 +251,7 @@ async function mockNl2SqlWorkbenchApi(page: Page) {
             group_by: [],
             order_by: [],
             aggregations: ["SUM"],
-            row_limit: 100,
+            row_limit: null,
             confidence: 0.9,
             warnings: [],
           },
@@ -267,11 +267,10 @@ async function mockNl2SqlWorkbenchApi(page: Page) {
             aggregations: ["SUM"],
             group_by: [],
             order_by: [],
-            limit: 100,
+            limit: null,
             logical_steps: [
               "APP.INVOICES を参照し、SELECT 操作を行います。",
               "集計: SUM",
-              "件数制限: 上位100件",
             ],
             logical_step_details: [
               {
@@ -280,7 +279,6 @@ async function mockNl2SqlWorkbenchApi(page: Page) {
                 technical: "APP.INVOICES を参照し、SELECT 操作を行います。",
               },
               { kind: "aggregation", business: "合計を計算します", technical: "集計: SUM" },
-              { kind: "limit", business: "先頭 100 件だけ取り出します", technical: "件数制限: 上位100件" },
             ],
             semantic_graph: {},
             warnings: [],
@@ -392,7 +390,7 @@ function guidedQuerySessionData(
         : { label_ja: "期間", relative_expression: "今月", timezone: "Asia/Tokyo" },
     granularity: "",
     sorts: [],
-    limit: 100,
+    limit: null,
     candidate_paths: [],
     selected_path_id: null,
     ambiguities:
@@ -507,9 +505,9 @@ function guidedQuerySessionData(
         ? {
             engine: "select_ai",
             sql: "SELECT COUNT(*) AS ORDER_COUNT FROM APP.ORDERS",
-            executable_sql: "SELECT COUNT(*) AS ORDER_COUNT FROM APP.ORDERS FETCH FIRST 100 ROWS ONLY",
+            executable_sql: "SELECT COUNT(*) AS ORDER_COUNT FROM APP.ORDERS",
             is_safe: true,
-            row_limit: 100,
+            row_limit: 0,
             note: "SQL を生成しました。",
             engine_meta: { runtime: "oracle" },
             fallback_reason: "",
@@ -552,7 +550,7 @@ function guidedQuerySessionData(
             required_total: 1,
             required_confirmed: 1,
             missing_required: [],
-            assumptions: ["結果は最大 100 件に制限します。"],
+            assumptions: [],
             turn_count: 1,
             manual_completion_required: false,
             can_generate_sql: true,
@@ -628,10 +626,10 @@ test("unified execute button runs SQL and renders execution artifacts", async ({
   // 各手順は業務者向けの説明を主、技術詳細(SQL 断片)を副として併記する。
   await expect(logicalStepsPanel).toContainText("請求情報を対象に、一覧の取得・集計を行います。");
   await expect(logicalStepsPanel).toContainText("合計を計算します");
-  await expect(logicalStepsPanel).toContainText("先頭 100 件だけ取り出します");
   await expect(logicalStepsPanel).toContainText("集計: SUM");
-  await expect(logicalStepsPanel).toContainText("件数制限: 上位100件");
-  await expect(logicalStepsPanel.locator("ol > li")).toHaveCount(3);
+  await expect(logicalStepsPanel).not.toContainText("先頭 100 件だけ取り出します");
+  await expect(logicalStepsPanel).not.toContainText("件数制限: 上位100件");
+  await expect(logicalStepsPanel.locator("ol > li")).toHaveCount(2);
   await expect(logicalStepsPanel.getByText("技術詳細").first()).toBeAttached();
   await expect(page.getByText("入力と生成 SQL の対応")).toHaveCount(0);
   await expect(page.getByText("入力テンプレート")).toHaveCount(0);
