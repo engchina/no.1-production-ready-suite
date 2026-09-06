@@ -1314,11 +1314,18 @@ def history(
     request: Request,
     cursor: str | None = None,
     limit: int = 50,
+    q: str = "",
+    rating: str = "all",
+    safety: str = "all",
 ) -> ApiResponse[HistoryData]:
     """NL2SQL 検索履歴(新しい順の cursor page)。
 
     非 system admin は自分の履歴だけ。`next_cursor` が非空なら続きがある。
     """
+    if rating not in {"all", "good", "bad", "unrated"}:
+        raise HTTPException(status_code=422, detail="rating が不正です。")
+    if safety not in {"all", "safe", "blocked"}:
+        raise HTTPException(status_code=422, detail="safety が不正です。")
     principal = getattr(request.state, "principal", None)
     actor_user_uuid = ""
     if principal is not None and not bool(getattr(principal, "is_system_admin", False)):
@@ -1331,6 +1338,9 @@ def history(
                 actor_user_uuid=actor_user_uuid,
                 cursor=cursor,
                 limit=max(1, min(limit, 200)),
+                rating=rating,
+                safety=safety,
+                query=q.strip(),
             )
         )
     except ValueError as exc:

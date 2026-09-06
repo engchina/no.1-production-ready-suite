@@ -2800,7 +2800,19 @@ def _history_item_matches_payload_filters(item: HistoryItem, filters: Mapping[st
     if not filters:
         return True
     payload = item.model_dump(mode="json")
-    return all(str(payload.get(key) or "") == value for key, value in filters.items())
+    return all(
+        _history_payload_filter_value(payload.get(key)) == value for key, value in filters.items()
+    )
+
+
+def _history_payload_filter_value(value: object) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value or "")
+
+
+def _history_item_search_text(item: HistoryItem) -> str:
+    return " ".join([item.question, item.generated_sql, item.feedback_comment])
 
 
 # reverse deep で LLM から受け取る処理手順の上限(長大な配列をそのまま保持しない)。
@@ -6847,11 +6859,7 @@ class Nl2SqlService:
                     not status
                     or (item.feedback_rating.value if item.feedback_rating else "unrated") == status
                 )
-                and (
-                    not query_key
-                    or query_key
-                    in f"{item.question} {item.generated_sql} {item.feedback_comment}".casefold()
-                )
+                and (not query_key or query_key in _history_item_search_text(item).casefold())
                 and _history_item_matches_payload_filters(item, filters)
                 and self._profile_in_allowed_profile_ids(item.profile_id, allowed_profile_ids)
             ]
@@ -7040,14 +7048,27 @@ class Nl2SqlService:
         actor_user_uuid: str = "",
         cursor: str | None = None,
         limit: int = _HISTORY_PAGE_DEFAULT_LIMIT,
+        rating: str = "all",
+        safety: str = "all",
+        query: str = "",
     ) -> HistoryData:
         """検索履歴を新しい順に cursor page で返す(actor 制限は呼び出し側が決める)。"""
 
+        if rating not in {"all", "good", "bad", "unrated"}:
+            raise ValueError("rating が不正です。")
+        if safety not in {"all", "safe", "blocked"}:
+            raise ValueError("safety が不正です。")
         page_limit = max(1, min(int(limit), _HISTORY_PAGE_MAX_LIMIT))
+        payload_filters: dict[str, str] = {}
+        if safety != "all":
+            payload_filters["safety_is_safe"] = "true" if safety == "safe" else "false"
         items, next_cursor, total = self._history_page(
             cursor=cursor or None,
             limit=page_limit,
+            status=rating if rating != "all" else "",
+            query=query,
             actor_user_uuid=actor_user_uuid,
+            payload_filters=payload_filters,
         )
         return HistoryData(items=items, next_cursor=next_cursor, total=total)
 
