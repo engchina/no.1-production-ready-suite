@@ -34,6 +34,7 @@ from app.features.nl2sql.models import (
     Nl2SqlProfile,
     PreviewRequest,
     QueryResults,
+    RewriteRequest,
     SafetyReport,
     SampleDataMutationRequest,
     SampleDataStep,
@@ -705,6 +706,47 @@ def test_enterprise_ai_direct_preview_uses_configured_client() -> None:
     assert "勝手に付けないでください" in fake_client.calls[0]["system_prompt"]
 
 
+def test_enterprise_ai_direct_preview_respects_use_glossary_flag() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    _import_sample(service)
+    profile = service.create_profile(
+        Nl2SqlProfile(
+            id="direct_glossary",
+            name="Direct glossary",
+            allowed_tables=["EMPLOYEE"],
+            glossary={"社員": "EMPLOYEE.EMPLOYEE_NAME"},
+        )
+    )
+    fake_client = _FakeEnterpriseAiClient(
+        '{"sql":"SELECT EMPLOYEE_NAME FROM EMPLOYEE","explanation":"社員を取得します。"}'
+    )
+    service._enterprise_ai_client = fake_client
+
+    off = service.preview(
+        PreviewRequest(
+            question="社員一覧を見たい",
+            engine=Nl2SqlEngine.ENTERPRISE_AI_DIRECT,
+            profile_id=profile.id,
+            use_glossary=False,
+        )
+    )
+    on = service.preview(
+        PreviewRequest(
+            question="社員一覧を見たい",
+            engine=Nl2SqlEngine.ENTERPRISE_AI_DIRECT,
+            profile_id=profile.id,
+            use_glossary=True,
+        )
+    )
+
+    assert off.rewritten_question == "社員一覧を見たい"
+    assert on.rewritten_question == "社員一覧を見たい（社員=EMPLOYEE.EMPLOYEE_NAME）"
+    assert fake_client.calls[0]["prompt"] == "社員一覧を見たい"
+    assert "- 社員: EMPLOYEE.EMPLOYEE_NAME" not in fake_client.calls[0]["context"]
+    assert fake_client.calls[1]["prompt"] == "社員一覧を見たい（社員=EMPLOYEE.EMPLOYEE_NAME）"
+    assert "- 社員: EMPLOYEE.EMPLOYEE_NAME" in fake_client.calls[1]["context"]
+
+
 def test_oracle_runtime_question_does_not_include_custom_learning_examples() -> None:
     adapter = _QuestionCaptureOracleAdapter(_FakeOracleDb())
     service = _OracleRuntimeNl2SqlService(adapter)
@@ -988,7 +1030,10 @@ def test_select_ai_request_overrides_use_effective_profile_context() -> None:
     assert "日付は DATE 型で返す" in instructions
     assert instructions.endswith("## 今回の追加指示\n現在日付を基準にしてください。")
     assert preview.engine_meta["select_ai_role_applied"] is True
-    assert preview.engine_meta["select_ai_additional_instructions_length"] == len(instructions)
+    assert preview.engine_meta["select_ai_additional_instructions_applied"] is True
+    assert preview.engine_meta["select_ai_additional_instructions_length"] == len(
+        "現在日付を基準にしてください。"
+    )
     assert "現在日付を基準にしてください。" not in str(preview.engine_meta)
 
 
@@ -1037,9 +1082,79 @@ def test_select_ai_job_passes_request_overrides_to_oracle() -> None:
     )
 
 
+def test_select_ai_job_respects_use_glossary_false() -> None:
+    adapter = _QuestionCaptureOracleAdapter(
+        _FakeOracleDb(),
+        generated_sql="SELECT TOTAL_AMOUNT FROM INVOICES",
+    )
+    service = _OracleRuntimeNl2SqlService(adapter)
+    profile = service.create_profile(
+        Nl2SqlProfile(
+            id="job_glossary_off",
+            name="ジョブ glossary off",
+            allowed_tables=["INVOICES"],
+            glossary={"社員": "従業員"},
+        )
+    )
+
+    created = service.start_job(
+        JobCreateRequest(
+            question="社員の一覧",
+            engine=Nl2SqlEngine.SELECT_AI,
+            profile_id=profile.id,
+            use_glossary=False,
+        )
+    )
+    job = _wait_for_job(service, created.job_id)
+
+    assert job is not None
+    assert job.status == JobStatus.DONE
+    assert job.result is not None
+    assert adapter.questions[0] == "社員の一覧"
+    assert job.result.rewritten_question == "社員の一覧"
+
+
+def test_select_ai_job_applies_chained_glossary_once() -> None:
+    adapter = _QuestionCaptureOracleAdapter(
+        _FakeOracleDb(),
+        generated_sql="SELECT TOTAL_AMOUNT FROM INVOICES",
+    )
+    service = _OracleRuntimeNl2SqlService(adapter)
+    profile = service.create_profile(
+        Nl2SqlProfile(
+            id="job_glossary_once",
+            name="ジョブ glossary once",
+            allowed_tables=["INVOICES"],
+            glossary={"社員": "従業員", "従業員": "EMPLOYEE"},
+        )
+    )
+    preview = service.rewrite(
+        RewriteRequest(question="社員の一覧", profile_id=profile.id, use_glossary=True)
+    )
+
+    created = service.start_job(
+        JobCreateRequest(
+            question="社員の一覧",
+            engine=Nl2SqlEngine.SELECT_AI,
+            profile_id=profile.id,
+            use_glossary=True,
+        )
+    )
+    job = _wait_for_job(service, created.job_id)
+
+    assert job is not None
+    assert job.status == JobStatus.DONE
+    assert job.result is not None
+    assert preview.rewritten_question == "社員の一覧（社員=従業員）"
+    assert adapter.questions[0] == preview.rewritten_question
+    assert job.result.rewritten_question == preview.rewritten_question
+    assert "従業員=EMPLOYEE" not in adapter.questions[0]
+
+
 def test_job_create_request_artifact_flags_default_false() -> None:
     request = JobCreateRequest(question="社員一覧を確認したい")
 
+    assert request.use_glossary is False
     assert request.use_ontology_context is True
     assert request.include_interpretation is False
     assert request.include_show_prompt is False
@@ -1232,8 +1347,57 @@ def test_select_ai_showprompt_uses_ontology_attributes(
     for attributes in adapter.attributes:
         assert attributes is not None
         instructions = attributes["additional_instructions"]
+        assert "## 今回の追加指示" not in instructions
         assert "確認済み Ontology コンテキスト" in instructions
         assert "context-hash-showprompt" in instructions
+    assert job.result.engine_meta["select_ai_additional_instructions_applied"] is False
+    assert job.result.engine_meta["select_ai_additional_instructions_length"] == 0
+
+
+def test_select_ai_request_and_ontology_instructions_are_separate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = _QuestionCaptureOracleAdapter(_FakeOracleDb())
+    service = _OracleRuntimeNl2SqlService(adapter)
+    context = _simple_ontology_context("context-hash-user-and-ontology")
+    profile = service.create_profile(
+        Nl2SqlProfile(
+            id="ontology_request_profile",
+            name="Ontology request profile",
+            allowed_tables=["INVOICES"],
+        )
+    )
+    monkeypatch.setattr(service, "_job_ontology_context", lambda **_kwargs: context)
+
+    created = service.start_job(
+        JobCreateRequest(
+            question="請求金額を確認したい",
+            engine=Nl2SqlEngine.SELECT_AI,
+            profile_id=profile.id,
+            select_ai_overrides={"additional_instructions": "最新月だけを対象にする。"},
+            use_ontology_context=True,
+            include_show_prompt=True,
+        )
+    )
+    job = _wait_for_job(service, created.job_id)
+
+    assert job is not None
+    assert job.status == JobStatus.DONE
+    assert job.result is not None
+    assert adapter.attributes[0] == adapter.attributes[1]
+    select_ai_attributes = adapter.attributes[0]
+    assert select_ai_attributes is not None
+    instructions = select_ai_attributes["additional_instructions"]
+    assert "## 今回の追加指示\n最新月だけを対象にする。" in instructions
+    assert "## 確認済み Ontology コンテキスト\n" in instructions
+    assert instructions.index("## 今回の追加指示") < instructions.index(
+        "## 確認済み Ontology コンテキスト"
+    )
+    assert "context-hash-user-and-ontology" in instructions
+    assert job.result.engine_meta["select_ai_additional_instructions_applied"] is True
+    assert job.result.engine_meta["select_ai_additional_instructions_length"] == len(
+        "最新月だけを対象にする。"
+    )
 
 
 def test_ontology_generation_context_prompt_includes_qa_sql_examples() -> None:
@@ -2153,23 +2317,26 @@ def test_auto_job_supports_select_ai_agent_and_timing() -> None:
             },
         )
     )
-    data = service.get_job(created.job_id)
-    for _ in range(10):
-        if data and data.status == JobStatus.DONE:
-            break
-        time.sleep(0.01)
-        data = service.get_job(created.job_id)
+    data = _wait_for_job(service, created.job_id)
 
     assert data is not None
-    assert data.status in {JobStatus.DONE, JobStatus.RUNNING, JobStatus.PENDING}
+    assert data.status == JobStatus.DONE
     assert [step.stage for step in data.steps] == EXPECTED_NL2SQL_JOB_STAGES
-    if data.status == JobStatus.DONE:
-        assert [step.status for step in data.steps] == [JobStepStatus.DONE] * 5
-        assert all(step.elapsed_ms is not None for step in data.steps)
-        assert data.result is not None
-        assert data.result.engine == Nl2SqlEngine.SELECT_AI_AGENT
-        assert data.result.engine_meta["team_name"].endswith("_TEAM")
-        assert data.result.timing.elapsed_ms >= 0  # type: ignore[operator]
+    assert [step.status for step in data.steps] == [JobStepStatus.DONE] * 5
+    assert all(step.elapsed_ms is not None for step in data.steps)
+    assert data.result is not None
+    assert data.result.engine == Nl2SqlEngine.SELECT_AI_AGENT
+    assert data.result.engine_meta["team_name"].endswith("_TEAM")
+    assert data.result.engine_meta["engine_timings"][0]["engine"] == "deterministic"
+    assert data.result.engine_meta["engine_timings"][0]["status"] == "success"
+    assert data.result.engine_meta["generation_elapsed_ms"] >= 0
+    assert data.result.timing.elapsed_ms >= 0
+    history_item = service.list_history().items[0]
+    assert history_item.generation_elapsed_ms == data.result.engine_meta["generation_elapsed_ms"]
+    assert [
+        item.model_dump(mode="json") for item in history_item.engine_timings
+    ] == data.result.engine_meta["engine_timings"]
+    assert [item.stage for item in history_item.stage_timings] == EXPECTED_NL2SQL_JOB_STAGES
 
 
 def test_auto_falls_back_from_agent_to_select_ai() -> None:
@@ -2916,6 +3083,9 @@ async def test_nl2sql_store_persists_profiles_jobs_history_and_feedback() -> Non
     assert job.timing is not None
     assert [item.stage for item in job.timing.stage_timings] == EXPECTED_NL2SQL_JOB_STAGES
     history_item = service.list_history().items[0]
+    assert history_item.generation_elapsed_ms is not None
+    assert history_item.engine_timings
+    assert [item.stage for item in history_item.stage_timings] == EXPECTED_NL2SQL_JOB_STAGES
     service.save_feedback(history_item.id, FeedbackRating.GOOD, "永続化された feedback")
     service.save_admin_feedback_review(
         AdminFeedbackReviewRequest(
@@ -2934,6 +3104,9 @@ async def test_nl2sql_store_persists_profiles_jobs_history_and_feedback() -> Non
     ]
     restored_history = reloaded.list_history().items[0]
     assert restored_history.id == history_item.id
+    assert restored_history.generation_elapsed_ms == history_item.generation_elapsed_ms
+    assert restored_history.engine_timings == history_item.engine_timings
+    assert restored_history.stage_timings == history_item.stage_timings
     assert restored_history.feedback_rating == FeedbackRating.GOOD
     assert restored_history.feedback_comment == "永続化された feedback"
     assert restored_history.admin_feedback_rating == FeedbackRating.GOOD

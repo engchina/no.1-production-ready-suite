@@ -70,6 +70,15 @@ class StageTiming(BaseModel):
     elapsed_ms: int
 
 
+class EngineTiming(BaseModel):
+    """SQL 生成エンジンの試行ごとの経過時間。"""
+
+    engine: str
+    elapsed_ms: int
+    status: Literal["success", "failed", "skipped"]
+    error: str = ""
+
+
 class JobStepData(BaseModel):
     """UI へ公開する非同期ジョブの段階別進捗。"""
 
@@ -1035,6 +1044,7 @@ class PreviewRequest(BaseModel):
     row_limit: int | None = Field(default=None, ge=1, le=5000)
     select_ai_overrides: SelectAiRequestOverrides | None = None
     ontology_context: OntologySqlGenerationContext | None = None
+    use_glossary: bool = False
 
     @model_validator(mode="after")
     def validate_select_ai_overrides(self) -> PreviewRequest:
@@ -1096,6 +1106,7 @@ class JobCreateRequest(BaseModel):
     allowed_objects: AllowedObjects = Field(default_factory=AllowedObjects)
     row_limit: int | None = Field(default=None, ge=1, le=5000)
     select_ai_overrides: SelectAiRequestOverrides | None = None
+    use_glossary: bool = False
     use_ontology_context: bool = True
     include_interpretation: bool = False
     include_show_prompt: bool = False
@@ -1142,6 +1153,9 @@ class HistoryItem(BaseModel):
     generated_sql: str
     created_at: str
     elapsed_ms: int | None = None
+    generation_elapsed_ms: int | None = None
+    engine_timings: list[EngineTiming] = Field(default_factory=list)
+    stage_timings: list[StageTiming] = Field(default_factory=list)
     feedback_rating: FeedbackRating | None = None
     profile_id: str = ""
     profile_name: str = ""

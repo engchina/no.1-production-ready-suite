@@ -41,6 +41,7 @@ export function Nl2SqlExecutionOptionsPanel({
   includeInterpretation,
   includeShowPrompt,
   open,
+  selectAiOverridesInactive,
   useOntologyContext,
   onIncludeInterpretationChange,
   onIncludeShowPromptChange,
@@ -54,6 +55,7 @@ export function Nl2SqlExecutionOptionsPanel({
   includeInterpretation: boolean;
   includeShowPrompt: boolean;
   open: boolean;
+  selectAiOverridesInactive: boolean;
   useOntologyContext: boolean;
   onIncludeInterpretationChange: (checked: boolean) => void;
   onIncludeShowPromptChange: (checked: boolean) => void;
@@ -66,6 +68,7 @@ export function Nl2SqlExecutionOptionsPanel({
   // 既定値からの変更有無でバッジを出す。用語・同義語と Show Prompt は既定 off なので ON が「変更あり」。
   const hasChangedOptions =
     rewriteUseGlossary ||
+    selectAiOverridesInactive ||
     !useOntologyContext ||
     !includeInterpretation ||
     includeShowPrompt;
@@ -144,6 +147,11 @@ export function Nl2SqlExecutionOptionsPanel({
         {showPromptUnavailable ? (
           <p className="rounded-md border border-border bg-card px-3 py-2 text-xs leading-5 text-muted">
             {t("nl2sql.executionOptions.showPromptUnsupported")}
+          </p>
+        ) : null}
+        {selectAiOverridesInactive ? (
+          <p className="rounded-md border border-border bg-card px-3 py-2 text-xs leading-5 text-muted">
+            {t("nl2sql.executionOptions.selectAiOverridesUnsupported")}
           </p>
         ) : null}
       </div>

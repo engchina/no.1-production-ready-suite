@@ -77,6 +77,7 @@ class OciEnterpriseAiDirectClient:
         timeout_seconds: float | None = None,
         max_output_tokens: int | None = None,
         max_retries: int | None = None,
+        response_format: Mapping[str, Any] | None = None,
     ) -> str:
         if not self.is_configured():
             raise EnterpriseAiDirectError("OCI Enterprise AI Direct が未設定です。")
@@ -87,6 +88,7 @@ class OciEnterpriseAiDirectClient:
             context=context,
             system_prompt=system_prompt,
             max_output_tokens=max_output_tokens,
+            response_format=response_format,
         )
         response = self._post_json(
             payload,
@@ -211,6 +213,7 @@ def _build_payload(
     context: str,
     system_prompt: str,
     max_output_tokens: int | None = None,
+    response_format: Mapping[str, Any] | None = None,
 ) -> Mapping[str, Any]:
     values: dict[str, Any] = {
         "model": model_id,
@@ -225,19 +228,23 @@ def _build_payload(
             else settings.oci_enterprise_ai_llm_max_output_tokens
         ),
         "temperature": 0,
+        "response_format": dict(response_format) if response_format is not None else "",
     }
     if settings.oci_enterprise_ai_llm_payload_template.strip():
         return _render_payload_template(
             settings.oci_enterprise_ai_llm_payload_template,
             values,
         )
-    return {
+    payload: dict[str, Any] = {
         "model": model_id,
         "instructions": system_prompt,
         "input": [{"role": "user", "content": values["user_message"]}],
         "temperature": values["temperature"],
         "max_output_tokens": values["max_output_tokens"],
     }
+    if response_format is not None:
+        payload["text"] = {"format": dict(response_format)}
+    return payload
 
 
 def _build_image_payload(

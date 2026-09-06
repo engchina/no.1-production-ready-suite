@@ -16,6 +16,13 @@ export interface StageTiming {
   elapsed_ms: number;
 }
 
+export interface EngineTiming {
+  engine: string;
+  elapsed_ms: number;
+  status: "success" | "failed" | "skipped";
+  error?: string;
+}
+
 export interface TimingEnvelope {
   created_at: string;
   started_at?: string | null;
@@ -593,6 +600,9 @@ export interface HistoryItem {
   generated_sql: string;
   created_at: string;
   elapsed_ms?: number | null;
+  generation_elapsed_ms?: number | null;
+  engine_timings?: EngineTiming[];
+  stage_timings?: StageTiming[];
   feedback_rating?: "good" | "bad" | null;
   profile_id: string;
   profile_name: string;

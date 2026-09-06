@@ -315,6 +315,88 @@ export interface IntentAmbiguity {
   resolved?: boolean;
 }
 
+export type ClarificationMode = "review_only" | "guided";
+export type ClarificationStatus = "needs_answer" | "ready_to_confirm" | "unanswerable";
+export type ClarificationCategory =
+  | "business_meaning"
+  | "relationship_path"
+  | "filter_value"
+  | "time_range"
+  | "granularity"
+  | "output";
+export type ClarificationAnswerKind =
+  | "single_select"
+  | "multi_select"
+  | "date_range"
+  | "number"
+  | "free_text";
+export type ClarificationEvidenceSource = "user" | "profile" | "ontology" | "schema" | "default";
+
+export interface ClarificationOption {
+  id: string;
+  label_ja: string;
+  description_ja?: string;
+  ontology_node_ids?: string[];
+  relationship_path_id?: string;
+  structured_value?: OntologyJsonValue;
+  source: ClarificationEvidenceSource;
+  evidence_ja?: string;
+}
+
+export interface ClarificationQuestion {
+  id: string;
+  ambiguity_id?: string;
+  category: ClarificationCategory;
+  prompt_ja: string;
+  reason_ja?: string;
+  answer_kind: ClarificationAnswerKind;
+  options: ClarificationOption[];
+  allow_free_text: boolean;
+  blocking: boolean;
+}
+
+export interface ClarificationAnswer {
+  question_id: string;
+  selected_option_ids: string[];
+  free_text?: string;
+  structured_value?: OntologyJsonValue;
+  answered_at?: string;
+}
+
+export interface ClarificationTurn {
+  question: ClarificationQuestion;
+  answer: ClarificationAnswer;
+  intent_version: number;
+  schema_version?: string;
+  prompt_version?: string;
+  model?: string;
+}
+
+export interface IntentSummaryItem {
+  key: string;
+  label_ja: string;
+  value_ja: string;
+  source: ClarificationEvidenceSource;
+  confirmed: boolean;
+  technical_evidence_ja?: string;
+}
+
+export interface ClarificationState {
+  status: ClarificationStatus;
+  current_question?: ClarificationQuestion | null;
+  remaining_questions: ClarificationQuestion[];
+  intent_summary: IntentSummaryItem[];
+  required_total: number;
+  required_confirmed: number;
+  missing_required: string[];
+  assumptions: string[];
+  turn_count: number;
+  manual_completion_required: boolean;
+  can_generate_sql: boolean;
+  schema_version: string;
+  message_ja?: string;
+}
+
 export interface QuestionIntentGraph {
   version: number;
   question_original?: string;
@@ -670,7 +752,8 @@ export type QuerySessionState =
   | "awaiting_sql_confirmation"
   | "executing"
   | "done"
-  | "error";
+  | "error"
+  | "cancelled";
 
 export interface QuerySessionExecutionBinding {
   session_id?: string;
@@ -690,6 +773,23 @@ export interface OntologyPerformanceCheck {
   warning?: string;
 }
 
+export interface QuerySessionPreview {
+  sql: string;
+  executable_sql?: string;
+  is_safe: boolean;
+  row_limit: number;
+  note?: string;
+  engine?: "auto" | "select_ai" | "select_ai_agent" | "enterprise_ai_direct";
+  engine_meta?: Record<string, OntologyJsonValue>;
+  fallback_reason?: string;
+  rewritten_question?: string;
+  safety?: Record<string, OntologyJsonValue> | null;
+  recommendations?: string[];
+  repaired_sql?: string;
+  optimization_hints?: string[];
+  timing?: Record<string, OntologyJsonValue> | null;
+}
+
 export interface QuerySession {
   id: string;
   profile_id: string;
@@ -706,6 +806,9 @@ export interface QuerySession {
   intent_confirmed_version?: number | null;
   sql_confirmation?: QuerySessionExecutionBinding | null;
   execution?: Record<string, OntologyJsonValue> | null;
+  clarification_mode?: ClarificationMode;
+  clarification_turns?: ClarificationTurn[];
+  clarification?: ClarificationState | null;
   proposal_ids?: string[];
   suggested_question?: string | null;
   intent_version?: number;
@@ -717,6 +820,7 @@ export interface QuerySession {
   validation_report?: OntologyValidationReport | null;
   execution_binding?: QuerySessionExecutionBinding | null;
   result?: Record<string, OntologyJsonValue> | null;
+  preview?: QuerySessionPreview | null;
   performance_check?: OntologyPerformanceCheck | null;
   proposals?: OntologyProposal[];
   created_at?: string;
@@ -724,6 +828,7 @@ export interface QuerySession {
   error_code?: string | null;
   error_message?: string | null;
   error_message_ja?: string | null;
+  cancelled_at?: string | null;
 }
 
 export interface QuerySessionCreateRequest {
@@ -736,6 +841,17 @@ export interface QuerySessionCreateRequest {
     columns: Record<string, string[]>;
   };
   profile_confirmation_token?: string;
+  row_limit?: number;
+  engine?: "auto" | "select_ai" | "select_ai_agent" | "enterprise_ai_direct";
+  clarification_mode?: ClarificationMode;
+}
+
+export interface ClarificationAnswerRequest {
+  base_version: number;
+  question_id: string;
+  selected_option_ids: string[];
+  free_text?: string;
+  structured_value?: OntologyJsonValue;
 }
 
 export interface QuerySessionIntentPatchRequest extends GraphPatch {}
