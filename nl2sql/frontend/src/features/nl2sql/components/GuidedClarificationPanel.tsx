@@ -20,7 +20,6 @@ import {
   recommendOntologyProfiles,
 } from "../ontology/api";
 import type {
-  ClarificationEvidenceSource,
   ClarificationQuestion,
   OntologyProfileRecommendation,
   QuerySession,
@@ -35,14 +34,6 @@ interface GuidedClarificationPanelProps {
   onClose: () => void;
   onApplyQuestion: (question: string) => void;
 }
-
-const SOURCE_LABELS: Record<ClarificationEvidenceSource, string> = {
-  user: "nl2sql.clarification.source.user",
-  profile: "nl2sql.clarification.source.profile",
-  ontology: "nl2sql.clarification.source.ontology",
-  schema: "nl2sql.clarification.source.schema",
-  default: "nl2sql.clarification.source.default",
-};
 
 interface ManualAnswerValue {
   optionIds: string[];
@@ -81,6 +72,7 @@ export function GuidedClarificationPanel({
   const clarification = session?.clarification ?? null;
   const currentQuestion = clarification?.current_question ?? null;
   const intent = latestIntent(session);
+  const confirmedIntentSummary = clarification?.intent_summary.filter((item) => item.confirmed) ?? [];
 
   const startSession = async (
     currentRecommendation: OntologyProfileRecommendation,
@@ -615,7 +607,7 @@ export function GuidedClarificationPanel({
         </section>
       ) : null}
 
-      {clarification && clarification.intent_summary.length > 0 ? (
+      {clarification && confirmedIntentSummary.length > 0 ? (
         <section aria-labelledby="nl2sql-intent-summary-title" className="grid gap-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h4 id="nl2sql-intent-summary-title" className="text-sm font-semibold text-foreground">
@@ -624,13 +616,13 @@ export function GuidedClarificationPanel({
             <span className="text-xs text-muted">{completenessLabel}</span>
           </div>
           <dl className="grid gap-2 sm:grid-cols-2">
-            {clarification.intent_summary.map((item) => (
+            {confirmedIntentSummary.map((item) => (
               <div key={item.key} className="rounded-md border border-border bg-background p-3">
                 <dt className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted">
                   <span>{item.label_ja}</span>
                   <StatusBadge
-                    variant={item.confirmed ? "success" : "neutral"}
-                    label={t(SOURCE_LABELS[item.source] as Parameters<typeof t>[0])}
+                    variant="success"
+                    label={t("nl2sql.clarification.confirmed")}
                   />
                 </dt>
                 <dd className="mt-1 text-sm font-medium leading-6 text-foreground">{item.value_ja}</dd>

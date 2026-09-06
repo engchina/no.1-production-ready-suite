@@ -1301,7 +1301,7 @@ test("AI要件確認は一問ずつ確認した内容でクエリを置き換え
   await nextButton.click();
 
   await expect(panel.getByText("確認完了").first()).toBeVisible();
-  await expect(panel.getByRole("heading", { name: "確認中の検索条件" })).toBeVisible();
+  await expect(panel.getByRole("heading", { name: "確認した検索条件" })).toBeVisible();
   await expect(panel.getByText("今月", { exact: true })).toBeVisible();
   await expect(panel.getByText("最大件数")).toHaveCount(0);
   await expect(panel.getByText("結果は最大 100 件に制限します。")).toHaveCount(0);
@@ -1431,10 +1431,13 @@ test("AI要件確認は推測した検索対象を利用者へ質問し内部ID�
   await expect(
     panel.getByRole("heading", { name: "検索対象は「部署」で合っていますか？" })
   ).toBeFocused();
-  await expect(panel.getByText("AIの推定（回答してください）")).toBeVisible();
+  await expect(panel.getByRole("heading", { name: "確認した検索条件" })).toHaveCount(0);
+  await expect(panel.getByText("対象", { exact: true })).toHaveCount(0);
+  await expect(panel.getByText(/要確認|AIの推定/)).toHaveCount(0);
   await expect(panel.getByText("確認完了")).toHaveCount(0);
   await expect(panel.getByRole("button", { name: "確認内容をクエリに反映" })).toHaveCount(0);
   await expect(panel.getByText(/business_entity_|physical_/)).toHaveCount(0);
+  await expect(panel.getByText("データ項目の詳細")).toHaveCount(0);
   await expect(panel.getByText("管理者・開発者向け")).toHaveCount(0);
   await page.screenshot({
     path: testInfo.outputPath("guided-inferred-target-pending.png"),
@@ -1445,7 +1448,11 @@ test("AI要件確認は推測した検索対象を利用者へ質問し内部ID�
   await panel.getByRole("button", { name: "選んだ内容で次へ" }).click();
 
   await expect(panel.getByText("確認完了").first()).toBeVisible();
+  await expect(panel.getByRole("heading", { name: "確認した検索条件" })).toBeVisible();
+  await expect(panel.getByText("対象", { exact: true })).toBeVisible();
+  await expect(panel.getByText("部署", { exact: true })).toBeVisible();
   await expect(panel.getByText("確認済み", { exact: true }).first()).toBeVisible();
+  await expect(panel.getByText(/要確認|AIの推定|business_entity_|physical_/)).toHaveCount(0);
   await expect(panel.getByRole("button", { name: "確認内容をクエリに反映" })).toBeEnabled();
   expect(payloads.clarificationAnswer).toMatchObject({
     question_id: "question-confirm-inferred-target",
@@ -1472,7 +1479,7 @@ test("AI要件確認は内部診断を見せず表示項目を自然なクエリ
     panel.getByRole("heading", { name: "検索結果に表示する項目を選んでください。" })
   ).toBeFocused();
   await expect(panel.getByText(/Embedding|Ontology|Schema/)).toHaveCount(0);
-  await expect(panel.getByRole("heading", { name: "確認中の検索条件" })).toBeVisible();
+  await expect(panel.getByRole("heading", { name: "確認した検索条件" })).toBeVisible();
   await expect(panel.getByText("確認済み", { exact: true })).toBeVisible();
 
   await panel.getByRole("checkbox", { name: /受注状態/ }).check();
