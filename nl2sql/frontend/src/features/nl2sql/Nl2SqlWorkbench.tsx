@@ -570,6 +570,7 @@ function ExecutableNl2SqlWorkbench() {
       setSimilarHistorySearchCompleted(false);
       setSimilarHistoryPanelVisible(false);
       setSimilarHistoryLoading(false);
+      setSimilarHistoryOpen(false);
       return undefined;
     }
     if (active) {
@@ -589,7 +590,9 @@ function ExecutableNl2SqlWorkbench() {
       }, { signal: controller.signal })
         .then((data) => {
           if (!controller.signal.aborted) {
-            setSimilarHistory(goodFeedbackSimilarHistory(data.items));
+            const goodHistory = goodFeedbackSimilarHistory(data.items);
+            setSimilarHistory(goodHistory);
+            if (goodHistory.length > 0) setSimilarHistoryOpen(true);
             setSimilarHistorySearchCompleted(true);
             setSimilarHistoryPanelVisible(true);
           }
@@ -599,6 +602,7 @@ function ExecutableNl2SqlWorkbench() {
             setSimilarHistory([]);
             setSimilarHistorySearchCompleted(false);
             setSimilarHistoryPanelVisible(false);
+            setSimilarHistoryOpen(false);
           }
         })
         .finally(() => {
@@ -1294,6 +1298,10 @@ function ExecutableNl2SqlWorkbench() {
                                 : t("nl2sql.similar.title")}
                             </span>
                           </span>
+                          <StatusBadge
+                            variant={similarHistory.length > 0 ? "info" : "neutral"}
+                            label={t("nl2sql.similar.count", { count: similarHistory.length })}
+                          />
                           <StatusBadge variant="success" label={t("nl2sql.similar.goodOnly")} />
                         </span>
                         <DisclosureChevron
