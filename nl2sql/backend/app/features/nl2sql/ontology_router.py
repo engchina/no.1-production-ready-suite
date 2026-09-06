@@ -3444,6 +3444,7 @@ class OntologyApiRuntime:
                     updated_intent,
                     enrich_guided_intent(reinterpreted, ontology),
                     question,
+                    request.free_text.strip(),
                 )
             session = self.sessions.apply_clarification(
                 session_id,

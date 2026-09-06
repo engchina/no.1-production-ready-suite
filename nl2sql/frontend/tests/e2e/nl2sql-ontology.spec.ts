@@ -405,7 +405,8 @@ function guidedSessionData(
   confirmed = false,
   done = false
 ) {
-  const clarifiedQuestion = "今月を対象に、受注件数を表示してください。";
+  const clarifiedQuestion =
+    "今月の受注を対象に、検索結果には受注件数を表示してください。";
   const data: ReturnType<typeof sessionData> & { clarification?: unknown; preview?: unknown } = sessionData(
     ready ? (withSql ? "awaiting_sql_confirmation" : "awaiting_intent_confirmation") : "awaiting_intent_confirmation",
     withSql,
@@ -521,7 +522,7 @@ function guidedOutputSessionData(ready: boolean) {
   const data = guidedSessionData(ready);
   const originalQuestion = "受注情報";
   const clarifiedQuestion =
-    "受注情報について、検索結果には受注状態、受注IDを表示してください。";
+    "受注を対象に、検索結果には受注状態、受注IDを表示してください。";
   data.session.original_question = originalQuestion;
   data.session.intents = data.session.intents.map((item) => ({
     ...item,
@@ -1307,7 +1308,8 @@ test("AI要件確認は一問ずつ確認した内容でクエリを置き換え
   await expect(panel.getByText("結果は最大 100 件に制限します。")).toHaveCount(0);
   await panel.getByRole("button", { name: "確認内容をクエリに反映" }).click();
 
-  const clarifiedQuestion = "今月を対象に、受注件数を表示してください。";
+  const clarifiedQuestion =
+    "今月の受注を対象に、検索結果には受注件数を表示してください。";
   const questionInput = page.locator("#nl2sql-question-input");
   await expect(panel).toHaveCount(0);
   await expect(questionInput).toHaveValue(clarifiedQuestion);
@@ -1506,7 +1508,7 @@ test("AI要件確認は内部診断を見せず表示項目を自然なクエリ
   await page.screenshot({ path: testInfo.outputPath("guided-output-selection.png"), fullPage: true });
   await panel.getByRole("button", { name: "確認内容をクエリに反映" }).click();
   const clarifiedQuestion =
-    "受注情報について、検索結果には受注状態、受注IDを表示してください。";
+    "受注を対象に、検索結果には受注状態、受注IDを表示してください。";
   const questionInput = page.locator("#nl2sql-question-input");
   await expect(questionInput).toHaveValue(clarifiedQuestion);
   await questionInput.scrollIntoViewIfNeeded();

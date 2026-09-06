@@ -7,7 +7,7 @@ LLM は ``ontology_router._interpret_question`` で構造化 intent を作る責
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from typing import Any
 
 from .ontology_catalog import SchemaOntology
@@ -38,22 +38,6 @@ CLARIFICATION_SCHEMA_VERSION = "guided_clarification_v1"
 CLARIFICATION_PROMPT_VERSION = "deterministic_first_v2"
 MAX_GUIDED_TURNS = 4
 
-_REQUEST_ACTION_MARKERS = (
-    "表示",
-    "検索",
-    "集計",
-    "確認",
-    "取得",
-    "抽出",
-    "一覧",
-    "教えて",
-    "求め",
-    "知り",
-    "比較",
-    "並べ",
-    "ランキング",
-    "計算",
-)
 _REQUEST_STEMS = ("表示", "検索", "集計", "確認", "取得", "抽出", "比較", "計算")
 
 _PRIORITY: dict[ClarificationCategory, int] = {
@@ -191,7 +175,14 @@ def apply_clarification_answer(
         raise ValueError("この質問では自由入力を利用できません。")
 
     updated = intent.model_copy(deep=True)
-    resolution_parts = [item.label_ja for item in selected]
+    resolution_parts = [
+        (
+            item.description_ja
+            if question.summary_key and not question.ambiguity_id and item.description_ja
+            else item.label_ja
+        )
+        for item in selected
+    ]
     if free_text:
         resolution_parts.append(free_text)
     resolution = "、".join(resolution_parts) or str(answer.structured_value)
@@ -236,48 +227,249 @@ def apply_clarification_answer(
 
     if resolution:
         updated.question_effective = _render_clarified_question(
-            updated.question_effective,
+            updated,
             question.category,
             resolution,
+            question.summary_key,
         )
     updated.confidence = min(1.0, updated.confidence + 0.1)
     return updated
 
 
 def _render_clarified_question(
-    current_question: str,
+    intent: QuestionIntentGraph,
     category: ClarificationCategory,
     resolution: str,
+    summary_key: str = "",
 ) -> str:
-    """確認回答を、単独で再検索できる自然な要求文へ反映する。"""
+    """構造化 intent 全体を、利用者が確認できる自然な検索要求へ再構成する。"""
 
-    base = _clean_question_text(current_question)
     answer = resolution.strip().rstrip("。！？!?")
-    if not answer:
-        return _request_sentence(base)
+    target_names = _unique_business_names(item.name_ja for item in intent.entities)
+    output_names = _unique_business_names(
+        [*(item.name_ja for item in intent.dimensions), *(item.name_ja for item in intent.metrics)]
+    )
+    answer_parts = _unique_business_names(part.strip() for part in answer.split("、"))
+    if category == ClarificationCategory.BUSINESS_MEANING and summary_key == "metrics":
+        output_names = _unique_business_names([*output_names, *answer_parts])
+    elif category == ClarificationCategory.BUSINESS_MEANING:
+        target_names = _unique_business_names([*target_names, *answer_parts])
+    elif category == ClarificationCategory.OUTPUT:
+        output_names = _unique_business_names([*output_names, *answer_parts])
 
-    is_fragment = not any(marker in base for marker in _REQUEST_ACTION_MARKERS)
-    if category == ClarificationCategory.OUTPUT and is_fragment:
-        return f"{base}について、検索結果には{answer}を表示してください。"
+    conditions = _unique_business_names(
+        condition
+        for item in intent.filters
+        if (condition := _format_filter_condition(item.label_ja, item.operator, item.value))
+    )
+    resolved_filter_answers = [
+        item.resolution or ""
+        for item in intent.ambiguities
+        if item.resolved
+        and item.resolution
+        and _category(item.code) == ClarificationCategory.FILTER_VALUE
+    ]
+    conditions = _unique_business_names([*conditions, *resolved_filter_answers])
+    if (
+        category == ClarificationCategory.FILTER_VALUE
+        and answer
+        and (normalized_answer := _normalized_business_text(answer))
+        and not any(
+            normalized_answer in _normalized_business_text(condition) for condition in conditions
+        )
+    ):
+        conditions.append(answer)
 
-    request = _request_sentence(base)
-    if category == ClarificationCategory.TIME_RANGE:
-        return f"{answer}を対象に、{request}"
+    time_scope = _format_time_scope(intent.time_range)
+    if category == ClarificationCategory.TIME_RANGE and answer and not time_scope:
+        time_scope = answer
+    if (
+        intent.time_range is not None
+        and time_scope
+        and _is_business_name(intent.time_range.label_ja)
+        and intent.time_range.label_ja != "期間"
+    ):
+        conditions.insert(0, f"{intent.time_range.label_ja}が{time_scope}")
+        time_scope = ""
 
-    detail = {
-        ClarificationCategory.BUSINESS_MEANING: f"対象とする業務上の意味は{answer}です。",
-        ClarificationCategory.RELATIONSHIP_PATH: (
-            f"業務対象の関連付けには{answer}を使用してください。"
-        ),
-        ClarificationCategory.FILTER_VALUE: f"絞り込み条件は{answer}です。",
-        ClarificationCategory.GRANULARITY: (
+    target = _join_natural(target_names)
+    scope = f"{time_scope}の{target}" if target and time_scope else target or time_scope
+    if conditions:
+        condition_text = "、かつ".join(conditions)
+        scope = f"{scope}のうち、{condition_text}のデータ" if scope else f"{condition_text}のデータ"
+
+    if output_names:
+        request = f"検索結果には{'、'.join(output_names)}を表示してください。"
+    else:
+        original = _clean_question_text(intent.question_original)
+        request = _request_sentence(original) if original else "該当する情報を表示してください。"
+    sentences = [f"{scope}を対象に、{request}" if scope else request]
+
+    granularity = _display_granularity(intent.granularity)
+    if category == ClarificationCategory.GRANULARITY and answer and not granularity:
+        granularity = answer
+    if granularity:
+        sentences.append(
             "期間全体を一つに集計してください。"
-            if answer == "集計のみ"
-            else f"集計単位は{answer}です。"
-        ),
-        ClarificationCategory.OUTPUT: f"検索結果には{answer}を表示してください。",
-    }.get(category, "")
-    return f"{request}{detail}"
+            if granularity == "集計のみ"
+            else f"集計単位は{granularity}です。"
+        )
+
+    selected_path = next(
+        (item for item in intent.candidate_paths if item.id == intent.selected_path_id), None
+    )
+    relationship = selected_path.name_ja if selected_path is not None else ""
+    if category == ClarificationCategory.RELATIONSHIP_PATH and answer and not relationship:
+        relationship = answer
+    if _is_business_name(relationship):
+        sentences.append(f"データの関連付けには「{relationship}」を使用してください。")
+
+    resolved_sorts = _resolved_sorts(intent)
+    if resolved_sorts:
+        sort_text = "、".join(
+            f"{label}の{'昇順' if direction == 'asc' else '降順'}"
+            for label, direction in resolved_sorts
+        )
+        if intent.limit is not None:
+            rank_label = "上位" if resolved_sorts[0][1] == "desc" else "先頭"
+            sentences.append(
+                f"表示結果は{sort_text}で並べ、{rank_label}{intent.limit}件を取得してください。"
+            )
+        else:
+            sentences.append(f"表示結果は{sort_text}で並べてください。")
+    elif intent.limit is not None:
+        sentences.append(f"表示件数は最大{intent.limit}件にしてください。")
+    return "".join(sentences)
+
+
+def _unique_business_names(values: Iterable[object]) -> list[str]:
+    result: list[str] = []
+    for value in values:
+        label = str(value).strip()
+        if _is_business_name(label) and label not in result:
+            result.append(label)
+    return result
+
+
+def _is_business_name(value: str) -> bool:
+    lowered = value.casefold()
+    internal_prefixes = (
+        "business_entity_",
+        "physical_",
+        "property_",
+        "intent_",
+        "clarification_",
+    )
+    return bool(value) and not lowered.startswith(internal_prefixes)
+
+
+def _normalized_business_text(value: str) -> str:
+    return "".join(character for character in value.casefold() if character.isalnum())
+
+
+def _join_natural(values: Sequence[str]) -> str:
+    if len(values) <= 1:
+        return "".join(values)
+    return "、".join(values[:-1]) + f"と{values[-1]}"
+
+
+def _display_filter_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "はい" if value else "いいえ"
+    if isinstance(value, (list, tuple, set)):
+        items = sorted(value, key=str) if isinstance(value, set) else value
+        return "、".join(rendered for item in items if (rendered := _display_filter_value(item)))
+    if isinstance(value, (int, float)):
+        return str(value)
+    rendered = str(value).strip()
+    if not rendered or not _is_business_name(rendered):
+        return ""
+    return f"「{rendered}」"
+
+
+def _format_filter_condition(label: str, operator: str, value: Any) -> str:
+    field = label.strip()
+    if not _is_business_name(field):
+        return ""
+    normalized_operator = operator.strip().casefold().replace("_", " ")
+    if normalized_operator in {"is null", "null"}:
+        return f"{field}が未設定"
+    if normalized_operator in {"is not null", "not null"}:
+        return f"{field}が設定済み"
+    rendered = _display_filter_value(value)
+    if not rendered:
+        return ""
+    templates = {
+        "=": "{field}が{value}",
+        "==": "{field}が{value}",
+        "eq": "{field}が{value}",
+        "!=": "{field}が{value}以外",
+        "<>": "{field}が{value}以外",
+        "ne": "{field}が{value}以外",
+        ">": "{field}が{value}より大きい",
+        "gt": "{field}が{value}より大きい",
+        ">=": "{field}が{value}以上",
+        "gte": "{field}が{value}以上",
+        "<": "{field}が{value}より小さい",
+        "lt": "{field}が{value}より小さい",
+        "<=": "{field}が{value}以下",
+        "lte": "{field}が{value}以下",
+        "in": "{field}が{value}のいずれか",
+        "not in": "{field}が{value}のいずれでもない",
+        "like": "{field}が{value}に一致",
+        "contains": "{field}に{value}を含む",
+    }
+    template = templates.get(normalized_operator, "{field}の条件値が{value}")
+    return template.format(field=field, value=rendered)
+
+
+def _format_time_scope(time_range: IntentTimeRange | None) -> str:
+    if time_range is None:
+        return ""
+    relative = time_range.relative_expression.strip()
+    if relative:
+        return relative
+    if time_range.start and time_range.end:
+        return f"{time_range.start}から{time_range.end}まで"
+    if time_range.start:
+        return f"{time_range.start}以降"
+    if time_range.end:
+        return f"{time_range.end}まで"
+    return ""
+
+
+def _display_granularity(value: str) -> str:
+    normalized = value.strip().casefold()
+    return {
+        "day": "日別",
+        "month": "月別",
+        "year": "年別",
+        "none": "集計のみ",
+    }.get(normalized, value.strip())
+
+
+def _resolved_sorts(intent: QuestionIntentGraph) -> list[tuple[str, str]]:
+    labels_by_id: dict[str, str] = {}
+
+    def add_label(item_id: str, ontology_node_id: str, name_ja: str) -> None:
+        if _is_business_name(name_ja):
+            labels_by_id[item_id] = name_ja
+            if ontology_node_id:
+                labels_by_id[ontology_node_id] = name_ja
+
+    for dimension in intent.dimensions:
+        add_label(dimension.id, dimension.ontology_node_id, dimension.name_ja)
+    for metric in intent.metrics:
+        add_label(metric.id, metric.ontology_node_id, metric.name_ja)
+    for entity in intent.entities:
+        add_label(entity.id, entity.ontology_node_id, entity.name_ja)
+    return [
+        (label, item.direction)
+        for item in intent.sorts
+        if (label := labels_by_id.get(item.target_id))
+    ]
 
 
 def _clean_question_text(value: str) -> str:
@@ -314,6 +506,7 @@ def merge_free_text_reinterpretation(
     intent: QuestionIntentGraph,
     reinterpreted: QuestionIntentGraph,
     question: ClarificationQuestion,
+    resolution: str = "",
 ) -> QuestionIntentGraph:
     """自由入力から再解釈できた現在 slot と依存 ambiguity だけを取り込む。"""
 
@@ -358,6 +551,12 @@ def merge_free_text_reinterpretation(
         if item.blocking and not item.resolved and item.code not in existing_codes
     )
     updated.confidence = max(updated.confidence, reinterpreted.confidence)
+    updated.question_effective = _render_clarified_question(
+        updated,
+        question.category,
+        resolution,
+        question.summary_key,
+    )
     return updated
 
 
