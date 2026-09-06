@@ -5325,6 +5325,8 @@ class Nl2SqlService:
         self,
         profile: Nl2SqlProfile,
         request_instructions: str = "",
+        *,
+        ontology_instructions: str = "",
     ) -> str:
         """業務 profile の文脈を Select AI 用の決定論的な指示へまとめる。"""
         sections: list[str] = []
@@ -5342,48 +5344,39 @@ class Nl2SqlService:
         request_value = request_instructions.strip()
         if request_value:
             sections.append(f"## 今回の追加指示\n{request_value}")
+        ontology_value = ontology_instructions.strip()
+        if ontology_value:
+            sections.append(f"## 確認済み Ontology コンテキスト\n{ontology_value}")
         return "\n\n".join(sections)
 
     def _select_ai_generate_attributes(
         self,
         profile: Nl2SqlProfile,
         overrides: SelectAiRequestOverrides | None,
+        ontology_context: Any | None = None,
     ) -> dict[str, str] | None:
-        if overrides is None or not overrides.has_values():
+        ontology_instructions = (
+            self._ontology_generation_context_prompt(ontology_context)
+            if ontology_context is not None
+            else ""
+        )
+        if (overrides is None or not overrides.has_values()) and not ontology_instructions:
             return None
         attributes: dict[str, str] = {}
-        role = overrides.role.strip() or profile.select_ai_config.role.strip()
+        request_instructions = overrides.additional_instructions if overrides is not None else ""
+        role = (
+            overrides.role.strip() if overrides is not None else ""
+        ) or profile.select_ai_config.role.strip()
         instructions = self.build_select_ai_additional_instructions(
             profile,
-            overrides.additional_instructions,
+            request_instructions,
+            ontology_instructions=ontology_instructions,
         )
         if role:
             attributes["role"] = role
         if instructions:
             attributes["additional_instructions"] = instructions
         return attributes or None
-
-    def _select_ai_overrides_with_ontology_context(
-        self,
-        overrides: SelectAiRequestOverrides | None,
-        ontology_context: Any | None,
-    ) -> SelectAiRequestOverrides | None:
-        ontology_instructions = self._ontology_generation_context_prompt(ontology_context)
-        if not ontology_instructions:
-            return overrides
-        merged_instructions = "\n\n".join(
-            part
-            for part in [
-                overrides.additional_instructions if overrides is not None else "",
-                "## 確認済み Ontology コンテキスト",
-                ontology_instructions,
-            ]
-            if part.strip()
-        )
-        return SelectAiRequestOverrides(
-            role=overrides.role if overrides is not None else "",
-            additional_instructions=merged_instructions,
-        )
 
     def _redact_select_ai_context_attributes(self, attributes: dict[str, Any]) -> dict[str, Any]:
         """監査・engine meta から業務 prompt 本文を除外する。"""
@@ -6449,15 +6442,22 @@ class Nl2SqlService:
     def preview(self, request: PreviewRequest) -> PreviewData:
         started = time.monotonic()
         created_at = _utc_now()
+        profile = self.get_profile(request.profile_id)
+        rewritten = self._rewrite_question_for_generation(
+            request.question,
+            profile,
+            use_glossary=request.use_glossary,
+        )
         allowed = self._resolve_allowed_objects(request.profile_id, request.allowed_objects)
         generated = self._generate_with_fallback(
             question=request.question,
             engine=request.engine,
-            profile=self.get_profile(request.profile_id),
+            profile=profile,
             allowed=allowed,
             row_limit=request.row_limit,
             select_ai_overrides=request.select_ai_overrides,
             ontology_context=request.ontology_context,
+            use_glossary=request.use_glossary,
         )
         row_limit = self._resolve_row_limit(request.profile_id, request.row_limit)
         analysis = self.analyze_sql(
@@ -6466,7 +6466,7 @@ class Nl2SqlService:
             row_limit,
             catalog=generated.schema_catalog,
         )
-        analysis = self._apply_empty_filter_generation_guard(request.question, analysis)
+        analysis = self._apply_empty_filter_generation_guard(rewritten, analysis)
         timing = TimingEnvelope(
             created_at=created_at,
             started_at=created_at,
@@ -6482,9 +6482,7 @@ class Nl2SqlService:
             engine=generated.engine,
             engine_meta=generated.engine_meta,
             fallback_reason=generated.fallback_reason,
-            rewritten_question=self._rewrite_question_preserving_empty_filter(
-                request.question, self.get_profile(request.profile_id)
-            ),
+            rewritten_question=rewritten,
             executable_sql=analysis.executable_sql,
             safety=analysis.safety,
             recommendations=analysis.recommendations,
@@ -15938,6 +15936,17 @@ class Nl2SqlService:
             return question.strip()
         return self.rewrite_question(question, profile)
 
+    def _rewrite_question_for_generation(
+        self,
+        question: str,
+        profile: Nl2SqlProfile,
+        *,
+        use_glossary: bool,
+    ) -> str:
+        if not use_glossary:
+            return question.strip()
+        return self._rewrite_question_preserving_empty_filter(question, profile)
+
     def _apply_empty_filter_generation_guard(
         self, question: str, analysis: AnalyzeData
     ) -> AnalyzeData:
@@ -16752,11 +16761,11 @@ class Nl2SqlService:
                 ),
             )
         try:
-            effective_overrides = self._select_ai_overrides_with_ontology_context(
+            attributes = self._select_ai_generate_attributes(
+                profile,
                 request.select_ai_overrides,
-                ontology_context,
+                ontology_context=ontology_context,
             )
-            attributes = self._select_ai_generate_attributes(profile, effective_overrides)
             prompt = self._oracle_adapter.generate_select_ai_prompt(
                 profile_name=str(
                     generated.engine_meta.get("select_ai_profile")
@@ -16835,7 +16844,11 @@ class Nl2SqlService:
 
         self._raise_if_job_cancelled(job_id)
         stage_started = time.monotonic()
-        rewritten = self._rewrite_question_preserving_empty_filter(request.question, profile)
+        rewritten = self._rewrite_question_for_generation(
+            request.question,
+            profile,
+            use_glossary=request.use_glossary,
+        )
         allowed = self._resolve_allowed_objects(request.profile_id, request.allowed_objects)
         row_limit = self._resolve_row_limit(request.profile_id, request.row_limit)
         ontology_context = self._job_ontology_context(
@@ -16857,13 +16870,14 @@ class Nl2SqlService:
         self._raise_if_job_cancelled(job_id)
         stage_started = time.monotonic()
         generated = self._generate_with_fallback(
-            question=rewritten,
+            question=request.question,
             engine=request.engine,
             profile=profile,
             allowed=allowed,
             row_limit=row_limit,
             select_ai_overrides=request.select_ai_overrides,
             ontology_context=ontology_context,
+            use_glossary=request.use_glossary,
         )
         stage_elapsed = _elapsed_ms(stage_started)
         stage_timings.append(StageTiming(stage="generate_sql", elapsed_ms=stage_elapsed))
@@ -17103,6 +17117,8 @@ class Nl2SqlService:
         row_limit: int | None,
         select_ai_overrides: SelectAiRequestOverrides | None = None,
         ontology_context: Any | None = None,
+        *,
+        use_glossary: bool = False,
     ) -> GeneratedSql:
         if (
             self._incremental_repository is None
@@ -17135,6 +17151,7 @@ class Nl2SqlService:
                     fallback_messages,
                     select_ai_overrides,
                     ontology_context,
+                    use_glossary=use_glossary,
                     allow_deterministic_fallback=allow_deterministic_fallback,
                     engine_timings=engine_timings,
                 )
@@ -17155,6 +17172,7 @@ class Nl2SqlService:
         select_ai_overrides: SelectAiRequestOverrides | None = None,
         ontology_context: Any | None = None,
         *,
+        use_glossary: bool = False,
         allow_deterministic_fallback: bool = True,
         runtime_timeout_seconds: float | None = None,
         runtime_max_retries: int | None = None,
@@ -17179,13 +17197,13 @@ class Nl2SqlService:
         allow_deterministic_fallback = (
             allow_deterministic_fallback and not self._use_oracle_runtime()
         )
-        is_select_ai_engine = engine in {Nl2SqlEngine.SELECT_AI, Nl2SqlEngine.SELECT_AI_AGENT}
-        effective_question = (
-            question.strip()
-            if is_select_ai_engine
-            else self._rewrite_question_preserving_empty_filter(question, profile)
+        effective_question = self._rewrite_question_for_generation(
+            question,
+            profile,
+            use_glossary=use_glossary,
         )
         runtime_question = _question_with_empty_filter_guard(effective_question)
+        is_select_ai_engine = engine in {Nl2SqlEngine.SELECT_AI, Nl2SqlEngine.SELECT_AI_AGENT}
         meta: dict[str, Any] = {
             "profile_id": profile.id,
             "profile_name": profile.name,
@@ -17299,6 +17317,7 @@ class Nl2SqlService:
                     learning_examples=learning_examples,
                     ontology_context=ontology_context,
                     catalog=generation_catalog,
+                    use_glossary=use_glossary,
                     runtime_timeout_seconds=runtime_timeout_seconds,
                     runtime_max_retries=runtime_max_retries,
                     engine_timings=engine_timings,
@@ -17535,6 +17554,7 @@ class Nl2SqlService:
         learning_examples: list[LearningExample],
         catalog: SchemaCatalog,
         ontology_context: Any | None = None,
+        use_glossary: bool = False,
         runtime_timeout_seconds: float | None = None,
         runtime_max_retries: int | None = None,
         engine_timings: list[dict[str, Any]] | None = None,
@@ -17545,6 +17565,7 @@ class Nl2SqlService:
             allowed=allowed,
             catalog=catalog,
             learning_examples=learning_examples,
+            use_glossary=use_glossary,
         )
         if ontology_context is not None:
             context = "\n".join(
@@ -17745,11 +17766,11 @@ class Nl2SqlService:
         )
         if engine == Nl2SqlEngine.SELECT_AI:
             profile_name = self._select_ai_profile_name(profile)
-            effective_overrides = self._select_ai_overrides_with_ontology_context(
+            attributes = self._select_ai_generate_attributes(
+                profile,
                 select_ai_overrides,
-                ontology_context,
+                ontology_context=ontology_context,
             )
-            attributes = self._select_ai_generate_attributes(profile, effective_overrides)
             if attributes:
                 select_ai_kwargs: dict[str, Any] = {
                     "profile_name": profile_name,
@@ -17777,16 +17798,17 @@ class Nl2SqlService:
                 raise
             meta.update({"select_ai_profile": profile_name, "runtime": "oracle"})
             if attributes:
+                request_instructions = (
+                    select_ai_overrides.additional_instructions.strip()
+                    if select_ai_overrides is not None
+                    else ""
+                )
                 meta.update(
                     {
                         "select_ai_role_applied": "role" in attributes,
                         "select_ai_role_length": len(attributes.get("role", "")),
-                        "select_ai_additional_instructions_applied": (
-                            "additional_instructions" in attributes
-                        ),
-                        "select_ai_additional_instructions_length": len(
-                            attributes.get("additional_instructions", "")
-                        ),
+                        "select_ai_additional_instructions_applied": bool(request_instructions),
+                        "select_ai_additional_instructions_length": len(request_instructions),
                     }
                 )
         else:

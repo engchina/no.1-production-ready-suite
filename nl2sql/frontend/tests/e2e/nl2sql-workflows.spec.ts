@@ -4690,11 +4690,12 @@ test("検索を実行すると実処理の段階別進捗と結果を表示す�
     expect(await runningIcon.evaluate((element) => getComputedStyle(element).animationName)).toBe("none");
     await expect(safetyStep).toHaveAttribute("data-step-status", "pending");
     expect(jobPayload).toMatchObject({
-      // 用語・同義語を ON にしたため job には辞書適用後の質問が渡る。
-      question: `${questionText}（請求金額=INVOICES.TOTAL_AMOUNT）`,
+      // 用語・同義語を ON にしたため、job runner 側で一度だけ辞書適用する。
+      question: questionText,
       engine: "select_ai",
       profile_id: "default",
       allowed_objects: { table_names: [], columns: {} },
+      use_glossary: true,
     });
   } finally {
     finishJob();
@@ -4947,7 +4948,7 @@ test("Query Rewrite の用語・同義語は既定 off で、Schema オプショ
   await expect(page.getByRole("button", { name: "請求 を開閉" })).toBeVisible();
 });
 
-test("補助フラグ ON のとき、検索を実行すると書き換え後の質問でジョブを投入する", async ({ page }) => {
+test("補助フラグ ON のとき、検索を実行すると原文と glossary flag でジョブを投入する", async ({ page }) => {
   await mockNl2SqlApi(page);
   const questionText = "請求金額を一覧で見たい";
   const rewrittenText = "請求金額を一覧で見たい（請求金額=INVOICES.TOTAL_AMOUNT）";
@@ -5010,8 +5011,12 @@ test("補助フラグ ON のとき、検索を実行すると書き換え後の�
   await page.getByRole("button", { name: "検索を実行" }).click();
 
   await expect(page.getByTestId("nl2sql-job-progress")).toHaveAttribute("data-job-status", "done");
-  // ジョブへ渡す question が書き換え後の文になっている
-  expect(jobPayload).toMatchObject({ question: rewrittenText, engine: "select_ai" });
+  // ジョブへ渡す question は原文のままにし、server 側で 1 回だけ glossary を適用する。
+  expect(jobPayload).toMatchObject({
+    question: questionText,
+    engine: "select_ai",
+    use_glossary: true,
+  });
   // 入力欄は書き換えずユーザー入力のまま保持する
   await expect(nl2sqlQuestionInput(page)).toHaveValue(questionText);
 });
@@ -5139,7 +5144,11 @@ test("空の抽出条件では rewrite カードを出さず、条件を増や�
   await expect(page.getByText("生成に使用される質問")).toHaveCount(0);
   await expect(page.getByText(warning)).toHaveCount(0);
   await expect(page.getByText("deterministic", { exact: true })).toHaveCount(0);
-  expect(jobPayload).toMatchObject({ question: questionText, engine: "select_ai" });
+  expect(jobPayload).toMatchObject({
+    question: questionText,
+    engine: "select_ai",
+    use_glossary: true,
+  });
   const submittedJobPayload = jobPayload as Record<string, unknown> | null;
   expect(String(submittedJobPayload?.question ?? "")).not.toContain("管理部門");
   const interpretation = page.getByTestId("nl2sql-interpretation-panel");
@@ -6198,6 +6207,33 @@ test("Select AI の今回だけの生成条件を job に渡し、reset で消�
       additional_instructions: "現在日付を基準に四半期を計算する。",
     },
   });
+  await expect(page.getByTestId("nl2sql-job-progress")).toHaveAttribute("data-job-status", "done");
+
+  api.jobPayload = null;
+  await page.getByRole("button", { name: /Enterprise AI Direct/ }).click();
+  const executionOptionsDisclosure = page.getByRole("button", { name: /実行オプション/ });
+  await expect(executionOptionsDisclosure).toContainText("条件あり");
+  await executionOptionsDisclosure.click();
+  await expect(page.getByText("今回だけの生成条件は Select AI 実行時のみ適用されます。")).toBeVisible();
+  await nl2sqlQuestionInput(page).fill("請求金額を一覧で見たい");
+  await page.getByRole("button", { name: "検索を実行" }).click();
+  await expect.poll(() => api.jobPayload?.engine).toBe("enterprise_ai_direct");
+  expect(api.jobPayload).toMatchObject({
+    engine: "enterprise_ai_direct",
+    select_ai_overrides: null,
+  });
+
+  api.jobPayload = null;
+  await page.getByRole("button", { name: /Select AI DBMS_CLOUD_AI profile/ }).click();
+  await page.getByRole("button", { name: "検索を実行" }).click();
+  await expect.poll(() => api.jobPayload?.engine).toBe("select_ai");
+  expect(api.jobPayload).toMatchObject({
+    engine: "select_ai",
+    select_ai_overrides: {
+      role: "CFO 向け財務 SQL アシスタント",
+      additional_instructions: "現在日付を基準に四半期を計算する。",
+    },
+  });
 
   await page.getByRole("button", { name: "リセット" }).click();
   await expect(disclosure).toHaveAttribute("aria-expanded", "false");
@@ -6206,15 +6242,6 @@ test("Select AI の今回だけの生成条件を job に渡し、reset で消�
   await expect(page.getByRole("button", { name: "ロールを上書き" })).toHaveAttribute("aria-expanded", "false");
   await page.getByRole("button", { name: "ロールを上書き" }).click();
   await expect(page.getByLabel("アシスタントロール")).toHaveValue("");
-
-  await page.getByRole("button", { name: /Enterprise AI Direct/ }).click();
-  await nl2sqlQuestionInput(page).fill("請求金額を一覧で見たい");
-  await page.getByRole("button", { name: "検索を実行" }).click();
-  await expect.poll(() => api.jobPayload?.engine).toBe("enterprise_ai_direct");
-  expect(api.jobPayload).toMatchObject({
-    engine: "enterprise_ai_direct",
-    select_ai_overrides: null,
-  });
   await expectNoHorizontalScroll(page);
 });
 

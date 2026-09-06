@@ -173,7 +173,6 @@ function ExecutableNl2SqlWorkbench() {
   const [similarHistoryPanelVisible, setSimilarHistoryPanelVisible] = useState(false);
   const [rewriteData, setRewriteData] = useState<RewriteData | null>(null);
   const [rewriteUseGlossary, setRewriteUseGlossary] = useState(false);
-  const [rewriteExtraPrompt, setRewriteExtraPrompt] = useState("");
   const [useOntologyContext, setUseOntologyContext] = useState(true);
   const [includeInterpretation, setIncludeInterpretation] = useState(true);
   // Show Prompt は Select AI への追加 round-trip を伴うため既定 OFF(必要な人だけ ON にする)。
@@ -488,7 +487,7 @@ function ExecutableNl2SqlWorkbench() {
     () => Boolean(selectAiRoleHasOverride || selectAiInstructionsOverride.trim()),
     [selectAiInstructionsOverride, selectAiRoleHasOverride]
   );
-  const selectAiRolePanelOpen = selectAiRoleAdvancedOpen || selectAiRoleHasOverride;
+  const selectAiRolePanelOpen = selectAiRoleAdvancedOpen;
   const profileAllowedTableNames = useMemo(() => {
     if (!selectedProfile) return null;
     const names = [...selectedProfile.allowed_tables, ...selectedProfile.allowed_views];
@@ -616,6 +615,7 @@ function ExecutableNl2SqlWorkbench() {
   }, [active, profileId, profiles.length, question]);
 
   const insertSchemaText = (text: string) => {
+    setRewriteData(null);
     const el = questionTextareaRef.current;
     if (!el) {
       // ref 未取得（フォーカス外）のときは末尾へ追記。各項目を改行区切りにする。
@@ -752,6 +752,7 @@ function ExecutableNl2SqlWorkbench() {
   const applyRewrittenQuestion = async () => {
     if (!rewriteData) return;
     setQuestion(rewriteData.rewritten_question);
+    setRewriteData(null);
   };
 
   // 用語・同義語の置換が起きていない（= 無変換）ときはカードを出さない。
@@ -768,24 +769,22 @@ function ExecutableNl2SqlWorkbench() {
     setSubmitting(true);
     const startedAt = Date.now();
     try {
-      // チェックが ON のときだけ質問を書き換えてから検索する（入力欄は変えず job にだけ反映）。
-      let effectiveQuestion = trimmed;
+      // チェックが ON のときだけ書き換えプレビューを表示する。生成側の適用は job runner が 1 回だけ行う。
       if (rewriteUseGlossary) {
         const rewrite = await apiPost<RewriteData>("/api/nl2sql/rewrite", {
           question: trimmed,
           profile_id: profileId || null,
           use_glossary: rewriteUseGlossary,
-          extra_prompt: rewriteExtraPrompt,
         });
         setRewriteData(rewrite);
-        effectiveQuestion = rewrite.rewritten_question.trim() || trimmed;
       }
       const data = await apiPost<JobCreateData>("/api/nl2sql/jobs", {
-        question: effectiveQuestion,
+        question: trimmed,
         engine,
         profile_id: profileId || null,
         allowed_objects: toAllowedObjects(selection),
         select_ai_overrides: selectAiOverrides,
+        use_glossary: rewriteUseGlossary,
         use_ontology_context: useOntologyContext,
         include_interpretation: includeInterpretation,
         include_show_prompt: includeShowPrompt,
@@ -1105,6 +1104,7 @@ function ExecutableNl2SqlWorkbench() {
                             disabled={active}
                             onClick={() => {
                               setQuestion(template.body);
+                              setRewriteData(null);
                               setActionError("");
                               const el = questionTextareaRef.current;
                               if (el) {
@@ -1134,6 +1134,7 @@ function ExecutableNl2SqlWorkbench() {
                           value={question}
                           onChange={(event) => {
                             setQuestion(event.currentTarget.value);
+                            setRewriteData(null);
                             setActionError("");
                           }}
                           disabled={active}
@@ -1236,11 +1237,7 @@ function ExecutableNl2SqlWorkbench() {
                                     className="min-h-10 w-full justify-between rounded-none px-3 text-left"
                                     aria-expanded={selectAiRolePanelOpen}
                                     aria-controls="select-ai-role-override"
-                                    onClick={() =>
-                                      setSelectAiRoleAdvancedOpen((current) =>
-                                        selectAiRoleHasOverride ? true : !current
-                                      )
-                                    }
+                                    onClick={() => setSelectAiRoleAdvancedOpen((current) => !current)}
                                     disabled={active}
                                   >
                                     <span className="flex min-w-0 items-center gap-2">
@@ -1325,9 +1322,13 @@ function ExecutableNl2SqlWorkbench() {
                     onRewriteUseGlossaryChange={setRewriteUseGlossary}
                     onUseOntologyContextChange={setUseOntologyContext}
                     rewriteUseGlossary={rewriteUseGlossary}
+                    selectAiOverridesInactive={engine !== "select_ai" && hasSelectAiOverrideInputs}
                   />
                   {rewriteData && rewriteChanged && (
-                    <div className="grid gap-3 rounded-md border border-primary/30 bg-card p-3">
+                    <div
+                      className="grid gap-3 rounded-md border border-primary/30 bg-card p-3"
+                      data-testid="nl2sql-rewrite-card"
+                    >
                       <dl className="grid gap-2 text-sm">
                         <div>
                           <dt className="font-medium text-muted">{t("nl2sql.session.originalQuestion")}</dt>
@@ -1477,7 +1478,6 @@ function ExecutableNl2SqlWorkbench() {
                         setResult(null);
                         setRewriteData(null);
                         setRewriteUseGlossary(false);
-                        setRewriteExtraPrompt("");
                         setUseOntologyContext(true);
                         setIncludeInterpretation(true);
                         setIncludeShowPrompt(false);
