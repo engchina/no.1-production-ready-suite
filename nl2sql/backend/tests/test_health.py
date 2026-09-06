@@ -2835,8 +2835,12 @@ async def test_feedback_history_is_retrieved_as_similar_few_shot() -> None:
         assert similar_resp.status_code == 200
         similar = similar_resp.json()["data"]["items"]
         assert similar
-        assert similar[0]["item"]["feedback_rating"] == "good"
-        assert similar[0]["item"]["admin_feedback_rating"] == "good"
+        assert similar[0]["history_id"] == history_item["id"]
+        assert similar[0]["question"] == history_item["question"]
+        assert similar[0]["sql"]
+        assert "item" not in similar[0]
+        assert "feedback_rating" not in similar[0]
+        assert "admin_feedback_rating" not in similar[0]
         assert similar[0]["score"] > 0
 
         preview_resp = await client.post(
@@ -3316,7 +3320,7 @@ def test_similar_history_returns_only_admin_good_feedback() -> None:
         SimilarHistoryRequest(question="請求金額をもう一度確認したい", profile_id="default")
     ).items
 
-    assert [entry.item.id for entry in items] == ["hist-admin-good"]
+    assert [entry.history_id for entry in items] == ["hist-admin-good"]
 
 
 def test_similar_history_excludes_admin_good_when_target_table_mismatches() -> None:
@@ -3370,7 +3374,7 @@ def test_similar_history_keeps_matching_project_without_good_profile_score_infla
         )
     ).items
 
-    assert [entry.item.id for entry in items] == ["hist-project-good"]
+    assert [entry.history_id for entry in items] == ["hist-project-good"]
     assert 0 < items[0].score < 1.0
     assert "対象テーブルが一致" in items[0].reason
 
@@ -3399,7 +3403,7 @@ def test_similar_history_resolves_target_table_from_catalog_comment() -> None:
         )
     ).items
 
-    assert [entry.item.id for entry in items] == ["hist-department-comment"]
+    assert [entry.history_id for entry in items] == ["hist-department-comment"]
 
 
 def test_service_similar_history_filters_oracle_vector_result_by_target_table(
@@ -3458,7 +3462,7 @@ def test_service_similar_history_filters_oracle_vector_result_by_target_table(
         )
     )
 
-    assert [entry.item.id for entry in similar.items] == ["hist-project-vector"]
+    assert [entry.history_id for entry in similar.items] == ["hist-project-vector"]
     assert similar.items[0].score == 0.8
 
 
@@ -3649,7 +3653,7 @@ def test_admin_good_feedback_publish_warning_keeps_deterministic_similar_history
     similar = service.similar_history(
         SimilarHistoryRequest(question="請求金額を見たい", profile_id="default")
     )
-    assert [item.item.id for item in similar.items] == ["hist-warning-001"]
+    assert [item.history_id for item in similar.items] == ["hist-warning-001"]
 
 
 def test_service_select_ai_feedback_management_uses_dbms_cloud_ai() -> None:
@@ -3891,10 +3895,10 @@ def test_service_similar_history_uses_oracle_vector_search(
     )
 
     assert similar.items
-    assert similar.items[0].item.id == "hist-vector-001"
+    assert similar.items[0].history_id == "hist-vector-001"
     assert similar.items[0].score == 0.92
     assert "Oracle 26ai vector search" in similar.items[0].reason
-    assert "hist-deterministic-001" in [item.item.id for item in similar.items]
+    assert "hist-deterministic-001" in [item.history_id for item in similar.items]
     assert any("VECTOR_DISTANCE" in sql for sql in fake_db.executed)
     vector_queries = [sql for sql in fake_db.executed if "VECTOR_DISTANCE" in sql]
     assert vector_queries

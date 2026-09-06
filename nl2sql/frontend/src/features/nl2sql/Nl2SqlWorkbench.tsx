@@ -97,7 +97,7 @@ function lastMatchingHistory(history: HistoryItem[], result: Nl2SqlResult | null
 }
 
 function goodFeedbackSimilarHistory(items: SimilarHistoryItem[]): SimilarHistoryItem[] {
-  return items.filter((entry) => entry.item.admin_feedback_rating === "good");
+  return items;
 }
 
 function engineUsesSimilarHistoryFewShot(engine: Nl2SqlEngine): boolean {
@@ -1440,14 +1440,14 @@ function ExecutableNl2SqlWorkbench() {
                         ) : (
                           similarHistory.map((entry) => (
                             <article
-                              key={entry.item.id}
+                              key={entry.history_id}
                               data-testid="nl2sql-similar-history-item"
                               className="grid w-full min-w-0 max-w-full gap-2 overflow-hidden rounded-md bg-background p-3"
                             >
                               <div className="grid w-full min-w-0 max-w-full gap-2 sm:flex sm:flex-wrap sm:items-start sm:justify-between">
                                 <div className="min-w-0 sm:flex-1 sm:basis-0">
                                   <QuestionText
-                                    value={entry.item.question}
+                                    value={entry.question}
                                     variant="select"
                                     maxLines={1}
                                     testId="nl2sql-similar-history-question"
@@ -1468,7 +1468,7 @@ function ExecutableNl2SqlWorkbench() {
                                 aria-label={t("nl2sql.similar.title")}
                                 className="max-h-28 overflow-auto rounded-md border border-border bg-card p-2 text-sm leading-6 text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
                               >
-                                <code>{entry.item.executable_sql || entry.item.generated_sql}</code>
+                                <code>{entry.sql}</code>
                               </pre>
                             </article>
                           ))

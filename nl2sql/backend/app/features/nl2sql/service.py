@@ -2652,6 +2652,13 @@ class LearningExample:
     reason: str = ""
 
 
+@dataclass(frozen=True)
+class SimilarHistoryCandidate:
+    item: HistoryItem
+    score: float
+    reason: str
+
+
 @dataclass
 class StoredJob:
     job_id: str
@@ -7585,7 +7592,7 @@ class Nl2SqlService:
     ) -> SimilarHistoryData:
         engine = request.engine or Nl2SqlEngine.ENTERPRISE_AI_DIRECT
         profile = self._similar_history_profile_for_examples(request.profile_id)
-        items = self._similar_history_candidates_for_generation(
+        candidates = self._similar_history_candidates_for_generation(
             question=request.question,
             profile=profile,
             engine=engine,
@@ -7594,9 +7601,21 @@ class Nl2SqlService:
             limit=request.limit,
         )
         return SimilarHistoryData(
-            items=items,
+            items=[self._similar_history_item(candidate) for candidate in candidates],
             used_for_generation=self._engine_uses_similar_history_few_shot(engine),
             engine=engine,
+        )
+
+    def _similar_history_item(self, candidate: SimilarHistoryCandidate) -> SimilarHistoryItem:
+        item = candidate.item
+        return SimilarHistoryItem(
+            history_id=item.id,
+            question=item.question,
+            sql=(item.executable_sql or item.generated_sql).strip(),
+            profile_id=item.profile_id,
+            profile_name=item.profile_name or item.profile_id,
+            score=candidate.score,
+            reason=candidate.reason,
         )
 
     def list_feedback_entries(
@@ -16049,7 +16068,7 @@ class Nl2SqlService:
         candidate_profile_id: str | None,
         allowed_profile_ids: set[str] | None = None,
         limit: int | None = None,
-    ) -> list[SimilarHistoryItem]:
+    ) -> list[SimilarHistoryCandidate]:
         if not self._engine_uses_similar_history_few_shot(engine):
             return []
         profile_example_count = len(self._profile_learning_examples(profile)) if profile else 0
@@ -16306,7 +16325,7 @@ class Nl2SqlService:
         profile_id: str | None,
         allowed_profile_ids: set[str] | None = None,
         include_bad: bool,
-    ) -> list[SimilarHistoryItem]:
+    ) -> list[SimilarHistoryCandidate]:
         self._load_feedback_state()
         profile_scope = self._similar_history_profile_scope(profile_id, allowed_profile_ids)
         if profile_scope is not None and not profile_scope:
@@ -16334,10 +16353,10 @@ class Nl2SqlService:
 
     def _merge_similar_history_rankings(
         self,
-        vector_ranked: list[SimilarHistoryItem],
-        deterministic_ranked: list[SimilarHistoryItem],
-    ) -> list[SimilarHistoryItem]:
-        by_history_id: dict[str, SimilarHistoryItem] = {}
+        vector_ranked: list[SimilarHistoryCandidate],
+        deterministic_ranked: list[SimilarHistoryCandidate],
+    ) -> list[SimilarHistoryCandidate]:
+        by_history_id: dict[str, SimilarHistoryCandidate] = {}
         for candidate in [*vector_ranked, *deterministic_ranked]:
             history_id = candidate.item.id
             current = by_history_id.get(history_id)
@@ -16440,7 +16459,7 @@ class Nl2SqlService:
         include_bad: bool,
         limit: int,
         target_objects: set[str],
-    ) -> list[SimilarHistoryItem]:
+    ) -> list[SimilarHistoryCandidate]:
         if not history:
             return []
         settings = get_settings()
@@ -16470,7 +16489,7 @@ class Nl2SqlService:
             logger.warning("oracle feedback vector search fallback: %s", exc)
             return []
         history_by_id = {item.id: item for item in history}
-        ranked: list[SimilarHistoryItem] = []
+        ranked: list[SimilarHistoryCandidate] = []
         for row in rows:
             history_id = str(row.get("history_id") or "")
             if not history_id:
@@ -16489,7 +16508,7 @@ class Nl2SqlService:
                 continue
             score = float(row.get("score") or 0)
             ranked.append(
-                SimilarHistoryItem(
+                SimilarHistoryCandidate(
                     item=item,
                     score=round(max(0.0, min(score, 1.0)), 3),
                     reason="Oracle 26ai vector search で質問意味が近い履歴です。",
@@ -16513,13 +16532,13 @@ class Nl2SqlService:
         history: list[HistoryItem],
         include_bad: bool,
         target_objects: set[str],
-    ) -> list[SimilarHistoryItem]:
+    ) -> list[SimilarHistoryCandidate]:
         del include_bad
         query_tokens = _similar_history_question_tokens(question)
         if not query_tokens:
             return []
         query_similarity_text = _similar_history_question_text_for_similarity(question)
-        scored: list[SimilarHistoryItem] = []
+        scored: list[SimilarHistoryCandidate] = []
         for item in history:
             # 管理者が GOOD にした履歴だけを検索・few-shot 対象にする。
             if item.admin_feedback_rating != FeedbackRating.GOOD:
@@ -16554,7 +16573,7 @@ class Nl2SqlService:
             reason = (
                 f"{target_reason}{reason_terms} が一致し、管理者の良い feedback が付いています。"
             )
-            scored.append(SimilarHistoryItem(item=item, score=score, reason=reason))
+            scored.append(SimilarHistoryCandidate(item=item, score=score, reason=reason))
         scored.sort(
             key=lambda candidate: (
                 candidate.score,
