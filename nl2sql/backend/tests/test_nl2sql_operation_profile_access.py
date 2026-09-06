@@ -23,6 +23,7 @@ from app.features.nl2sql.models import (
     FeedbackEntriesDeleteRequest,
     FeedbackIndexRequest,
     FeedbackRating,
+    FeedbackRequest,
     HistoryItem,
     Nl2SqlEngine,
     Nl2SqlProfile,
@@ -45,6 +46,7 @@ from app.features.nl2sql.quality_evaluation_service import QualityEvaluationJobN
 from app.features.nl2sql.service import Nl2SqlService
 from app.features.nl2sql.store import MemoryNl2SqlStore
 from app.security.domain import Principal
+from app.security.permissions import FEEDBACK_MANAGE_PERMISSION
 
 
 class _DisabledEmbeddingClient:
@@ -55,7 +57,11 @@ class _DisabledEmbeddingClient:
         raise AssertionError("deterministic fallback should be used")
 
 
-def _principal(allowed_profile_ids: set[str]) -> Principal:
+def _principal(
+    allowed_profile_ids: set[str],
+    *,
+    permissions: set[str] | None = None,
+) -> Principal:
     return Principal(
         user_uuid="user-1",
         login_user_id="user1",
@@ -63,7 +69,7 @@ def _principal(allowed_profile_ids: set[str]) -> Principal:
         status="ACTIVE",
         force_password_change=False,
         role_codes=["GENERAL"],
-        permissions=set(),
+        permissions=set(permissions or ()),
         data_entitlements=[],
         allowed_profile_ids=allowed_profile_ids,
         session_id="session-1",
@@ -72,9 +78,18 @@ def _principal(allowed_profile_ids: set[str]) -> Principal:
     )
 
 
-def _request(allowed_profile_ids: set[str]) -> Request:
+def _request(
+    allowed_profile_ids: set[str],
+    *,
+    permissions: set[str] | None = None,
+) -> Request:
     return cast(
-        Request, SimpleNamespace(state=SimpleNamespace(principal=_principal(allowed_profile_ids)))
+        Request,
+        SimpleNamespace(
+            state=SimpleNamespace(
+                principal=_principal(allowed_profile_ids, permissions=permissions)
+            )
+        ),
     )
 
 
@@ -313,6 +328,54 @@ def test_feedback_learning_routes_enforce_profile_access(
     nl2sql_router.rebuild_feedback_index(FeedbackIndexRequest(), request)
     nl2sql_router.clear_feedback_index(FeedbackIndexRequest(), request)
     assert service.list_feedback_entries().total == 2
+
+
+def test_feedback_write_routes_enforce_profile_access_for_scoped_manager(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    with service._lock:  # noqa: SLF001
+        service._history = [  # noqa: SLF001
+            _history_item("history-a", "profile-a"),
+            _history_item("history-b", "profile-b"),
+        ]
+    monkeypatch.setattr(nl2sql_router, "nl2sql_service", service)
+    request = _request(
+        {"profile-a"},
+        permissions={FEEDBACK_MANAGE_PERMISSION},
+    )
+
+    saved = nl2sql_router.feedback(
+        FeedbackRequest(
+            history_id="history-a",
+            rating=FeedbackRating.BAD,
+            comment="担当内 profile",
+        ),
+        request,
+    )
+    assert saved.data is not None
+    assert saved.data.saved is True
+
+    with pytest.raises(HTTPException) as save_exc:
+        nl2sql_router.feedback(
+            FeedbackRequest(
+                history_id="history-b",
+                rating=FeedbackRating.BAD,
+                comment="担当外 profile",
+            ),
+            request,
+        )
+    with pytest.raises(HTTPException) as clear_exc:
+        nl2sql_router.clear_feedback("history-b", request)
+
+    assert save_exc.value.status_code == 403
+    assert clear_exc.value.status_code == 403
+    outside_history = service._history_by_id("history-b")  # noqa: SLF001
+    assert outside_history is not None
+    assert outside_history.feedback_rating is FeedbackRating.GOOD
+    cleared = nl2sql_router.clear_feedback("history-a", request)
+    assert cleared.data is not None
+    assert cleared.data.history_id == "history-a"
 
 
 def test_select_ai_refresh_and_cleanup_require_default_profile_access(
