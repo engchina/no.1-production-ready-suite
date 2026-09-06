@@ -325,8 +325,10 @@ def _profile_access_denied() -> HTTPException:
 
 def _allowed_profile_ids_for_request(request: Request) -> set[str] | None:
     principal = _principal_from_request(request)
-    if principal is None or principal.has_permission(PROFILE_MANAGE_PERMISSION):
+    if principal is None or principal.is_system_admin:
         return None
+    if principal.has_permission(PROFILE_MANAGE_PERMISSION):
+        return {profile.id for profile in nl2sql_service.list_profiles(include_archived=False)}
     return set(principal.allowed_profile_ids)
 
 
@@ -431,8 +433,9 @@ def preview(req: PreviewRequest, request: Request) -> ApiResponse[PreviewData]:
 def execute(req: ExecuteRequest, request: Request) -> ApiResponse[QueryResults]:
     """SELECT/WITH のみを安全に実行する。
 
-    実行スコープは principal に許可された業務プロファイル群の許可オブジェクトへ強制する
-    (system admin / 認証無効時は request の allowed_objects のみ)。
+    実行スコープは principal に許可された業務プロファイル群の許可オブジェクトへ強制する。
+    profile manager は全有効プロファイルの和集合、system admin / 認証無効時は
+    request の allowed_objects のみを使う。
     local skeleton は deterministic mock result を返す。
     実運用では Oracle 実行 adapter へ差し替える。
     """
