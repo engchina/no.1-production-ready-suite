@@ -33,7 +33,11 @@ from dotenv import dotenv_values
 from pydantic import BaseModel, ValidationError
 from pydantic import Field as PydanticField
 
-from app.security.request_actor import actor_scope, current_actor_is_system_admin
+from app.security.request_actor import (
+    actor_scope,
+    current_actor_context,
+    current_actor_is_system_admin,
+)
 from app.settings import BACKEND_ENV_FILE, get_settings
 
 from .embedding_client import (
@@ -152,6 +156,7 @@ from .models import (
     DiagnosticReadiness,
     DiagnosticsData,
     DiagnosticSmokeCheck,
+    EngineTiming,
     ExplainPlanData,
     FeedbackClearData,
     FeedbackData,
@@ -863,6 +868,10 @@ _SYSTEM_OBJECT_BLOCKED_MESSAGE = (
     "NL2SQL_ で始まる表/VIEW は NL2SQL システム object です。"
     "システムテーブル管理からのみ管理できます。"
 )
+_PLSQL_DYNAMIC_SQL_BLOCKED_MESSAGE = (
+    "PL/SQL の動的 SQL は管理 SQL 実行では使用できません。"
+    "DDL/DML を個別の SQL statement として実行してください。"
+)
 
 _FORBIDDEN_PREFIXES = (
     "insert",
@@ -883,15 +892,47 @@ _DANGEROUS_TOKENS = re.compile(
     r"\b(insert|update|delete|merge|drop|alter|create|truncate|grant|revoke|begin|declare|call)\b",
     re.IGNORECASE,
 )
+_DANGEROUS_ORACLE_FUNCTION_ROOTS = frozenset(
+    {
+        "DBMS_JAVA",
+        "DBMS_LDAP",
+        "DBMS_METADATA",
+        "DBMS_SCHEDULER",
+        "DBMS_SQL",
+        "DBMS_XMLGEN",
+        "DBMS_XMLQUERY",
+        "DBMS_XMLSAVE",
+        "DBMS_XMLSTORE",
+        "HTTPURITYPE",
+        "UTL_FILE",
+        "UTL_HTTP",
+        "UTL_INADDR",
+        "UTL_SMTP",
+        "UTL_TCP",
+    }
+)
+_DANGEROUS_ORACLE_FUNCTION_MESSAGE = "危険な Oracle 関数は SELECT SQL 実行では使用できません。"
 _SQL_OBJECT_REF = r'(?:"[^"]+"|[a-zA-Z_][\w$#]*)(?:\s*\.\s*(?:"[^"]+"|[a-zA-Z_][\w$#]*))?'
 _FROM_JOIN_TABLE = re.compile(rf"\b(?:from|join)\s+({_SQL_OBJECT_REF})", re.IGNORECASE)
 _FROM_JOIN_WITH_ALIAS = re.compile(
     rf"\b(?:from|join)\s+({_SQL_OBJECT_REF})(?:\s+(?:as\s+)?([a-zA-Z_][\w$#]*))?",
     re.IGNORECASE,
 )
+_GRANT_REVOKE_TARGET = re.compile(
+    rf"\bon\s+(?:(?:directory|edition|function|index|indextype|"
+    rf"java\s+(?:source|resource|class)|library|materialized\s+view|"
+    rf"mining\s+model|operator|package|procedure|sequence|table|type|view)\s+)?"
+    rf"({_SQL_OBJECT_REF})\s+\b(?:to|from)\b",
+    re.IGNORECASE | re.DOTALL,
+)
 _SYSTEM_OBJECT_TOKEN = re.compile(
     r'(?<![A-Z0-9_$#])"?NL2SQL_[A-Z0-9_$#]*"?',
     re.IGNORECASE,
+)
+_PLSQL_DYNAMIC_SQL_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\bexecute\s+immediate\b", re.IGNORECASE),
+    re.compile(r"\bdbms_sql\s*\.\s*parse\b", re.IGNORECASE),
+    re.compile(r"\bopen\s+[^;]+?\s+for\b", re.IGNORECASE | re.DOTALL),
 )
 _SELECT_TOKEN = re.compile(r"\bselect\b", re.IGNORECASE)
 _SQL_IDENTIFIER = re.compile(r"[a-zA-Z_][\w$#]*")
@@ -909,6 +950,7 @@ _IMPLICIT_COMMIT_STATEMENT_TYPES = frozenset(
     {"CREATE", "ALTER", "DROP", "TRUNCATE", "COMMENT", "RENAME", "FLASHBACK", "PURGE"}
 )
 _ROLLBACKABLE_DML_STATEMENT_TYPES = frozenset({"INSERT", "UPDATE", "DELETE", "MERGE"})
+_ADMIN_AUDIT_SQL_PREVIEW_CHARS = 500
 _SQL_RESERVED_OR_FUNCTIONS = {
     "AS",
     "CASE",
@@ -1632,6 +1674,12 @@ def _dml_target_refs(statement: str) -> list[str]:
     return refs
 
 
+def _grant_revoke_target_refs(statement: str) -> list[str]:
+    stripped = _strip_leading_sql_comments(statement).strip().rstrip(";")
+    match = _GRANT_REVOKE_TARGET.search(stripped)
+    return [match.group(1)] if match else []
+
+
 def _admin_statement_hidden_object_names(
     statement: str,
     *,
@@ -1650,6 +1698,8 @@ def _admin_statement_hidden_object_names(
     elif statement_type in {"INSERT", "UPDATE", "DELETE", "MERGE", "TRUNCATE"}:
         refs.extend(_dml_target_refs(statement))
         refs.extend(_extract_referenced_tables(statement, current_owner=current_owner))
+    elif statement_type in {"GRANT", "REVOKE"}:
+        refs.extend(_grant_revoke_target_refs(statement))
     elif statement_type in {"PLSQL", "UNKNOWN"} and _SYSTEM_OBJECT_TOKEN.search(statement):
         return [
             _normalize_identifier(match.group(0))
@@ -1799,6 +1849,15 @@ def _db_admin_policy_error(statement: str, policy: str) -> str:
 def _db_admin_system_object_error(statement: str, *, current_owner: str) -> str:
     hidden = _admin_statement_hidden_object_names(statement, current_owner=current_owner)
     return _system_object_blocked_message(hidden) if hidden else ""
+
+
+def _db_admin_dynamic_sql_error(statement: str) -> str:
+    if _admin_statement_type(statement) not in {"PLSQL", "UNKNOWN"}:
+        return ""
+    masked = _mask_sql_literals_and_comments(statement)
+    if any(pattern.search(masked) for pattern in _PLSQL_DYNAMIC_SQL_PATTERNS):
+        return _PLSQL_DYNAMIC_SQL_BLOCKED_MESSAGE
+    return ""
 
 
 def _annotation_statement_error(statement: str) -> str:
@@ -1988,6 +2047,78 @@ def _utc_now() -> str:
 
 def _elapsed_ms(started: float) -> int:
     return int((time.monotonic() - started) * 1000)
+
+
+def _record_engine_timing(
+    engine_timings: list[dict[str, Any]],
+    *,
+    engine: str,
+    started: float,
+    status: Literal["success", "failed", "skipped"],
+    error: str = "",
+) -> None:
+    engine_timings.append(
+        EngineTiming(
+            engine=engine,
+            elapsed_ms=_elapsed_ms(started),
+            status=status,
+            error=error,
+        ).model_dump(mode="json")
+    )
+
+
+def _normalize_engine_timings(raw: object) -> list[EngineTiming]:
+    if not isinstance(raw, list):
+        return []
+    timings: list[EngineTiming] = []
+    for item in raw:
+        try:
+            timings.append(EngineTiming.model_validate(item))
+        except ValidationError:
+            continue
+    return timings
+
+
+def _normalize_stage_timings(raw: object) -> list[StageTiming]:
+    if not isinstance(raw, list):
+        return []
+    timings: list[StageTiming] = []
+    for item in raw:
+        try:
+            timings.append(StageTiming.model_validate(item))
+        except ValidationError:
+            continue
+    return timings
+
+
+def _successful_engine_elapsed_ms(raw: object) -> int | None:
+    for timing in reversed(_normalize_engine_timings(raw)):
+        if timing.status == "success":
+            return timing.elapsed_ms
+    return None
+
+
+def _generation_elapsed_ms_from_meta(meta: Mapping[str, Any]) -> int | None:
+    raw_elapsed = meta.get("generation_elapsed_ms")
+    if isinstance(raw_elapsed, int) and raw_elapsed >= 0:
+        return raw_elapsed
+    return _successful_engine_elapsed_ms(meta.get("engine_timings"))
+
+
+def _engine_meta_with_timings(
+    meta: Mapping[str, Any],
+    engine_timings: list[dict[str, Any]],
+) -> dict[str, Any]:
+    enriched = dict(meta)
+    timings = [
+        timing.model_dump(mode="json") for timing in _normalize_engine_timings(engine_timings)
+    ]
+    if timings:
+        enriched["engine_timings"] = timings
+        generation_elapsed_ms = _successful_engine_elapsed_ms(timings)
+        if generation_elapsed_ms is not None:
+            enriched["generation_elapsed_ms"] = generation_elapsed_ms
+    return enriched
 
 
 def _coerce_bool(value: object) -> bool:
@@ -2183,6 +2314,75 @@ def is_select_only(sql: str) -> bool:
     if _DANGEROUS_TOKENS.search(masked):
         return False
     return head.startswith("select") or head.startswith("with")
+
+
+def _sqlglot_name(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        raw = value
+    else:
+        name = getattr(value, "name", None)
+        if isinstance(name, str) and name:
+            raw = name
+        else:
+            this = getattr(value, "this", None)
+            raw = this if isinstance(this, str) else str(this or "")
+    return _normalize_identifier(raw)
+
+
+def _sqlglot_dotted_name_parts(value: Any, dot_type: type[Any]) -> list[str]:
+    if isinstance(value, dot_type):
+        return [
+            *_sqlglot_dotted_name_parts(value.this, dot_type),
+            *_sqlglot_dotted_name_parts(value.expression, dot_type),
+        ]
+    name = _sqlglot_name(value)
+    return [name] if name else []
+
+
+def _dangerous_oracle_function_names(sql: str) -> list[str]:
+    try:
+        import sqlglot
+        from sqlglot import exp
+        from sqlglot.errors import ErrorLevel
+    except ImportError:
+        return []
+
+    try:
+        statements = sqlglot.parse(sql, read="oracle", error_level=ErrorLevel.RAISE)
+    except Exception:
+        return []
+
+    dangerous: list[str] = []
+    seen: set[str] = set()
+    for statement in [item for item in statements if item is not None]:
+        for node in statement.walk():
+            expression = node[0] if isinstance(node, tuple) else node
+            if isinstance(expression, exp.Dot):
+                parts = _sqlglot_dotted_name_parts(expression, exp.Dot)
+                candidates = [
+                    ".".join(parts[index : index + 2])
+                    for index, part in enumerate(parts)
+                    if part in _DANGEROUS_ORACLE_FUNCTION_ROOTS
+                ]
+            elif isinstance(expression, exp.Anonymous):
+                name = _sqlglot_name(expression)
+                candidates = [name] if name in _DANGEROUS_ORACLE_FUNCTION_ROOTS else []
+            else:
+                candidates = []
+            for candidate in candidates:
+                if candidate and candidate not in seen:
+                    seen.add(candidate)
+                    dangerous.append(candidate)
+    return dangerous
+
+
+def _dangerous_oracle_function_blocked_message(names: Sequence[str]) -> str:
+    unique = sorted({name for name in names if name})
+    if not unique:
+        return _DANGEROUS_ORACLE_FUNCTION_MESSAGE
+    return f"{', '.join(unique)}: {_DANGEROUS_ORACLE_FUNCTION_MESSAGE}"
 
 
 def _extract_referenced_tables(sql: str, *, current_owner: str = "") -> list[str]:
@@ -2393,6 +2593,24 @@ def _column_allowed(
 
 def one_line_sql(sql: str) -> str:
     return re.sub(r"\s+", " ", sql).strip()
+
+
+def _sha256_text(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _admin_sql_audit_detail(sql: str, statements: Sequence[str]) -> dict[str, Any]:
+    normalized_sql = _normalize_oracle_sql_text(sql)
+    normalized_statements = [_normalize_oracle_sql_text(statement) for statement in statements]
+    return {
+        "sql_sha256": _sha256_text(normalized_sql),
+        "sql_preview": one_line_sql(normalized_sql)[:_ADMIN_AUDIT_SQL_PREVIEW_CHARS],
+        "statement_hashes": [_sha256_text(statement) for statement in normalized_statements],
+        "statement_previews": [
+            one_line_sql(statement)[:_ADMIN_AUDIT_SQL_PREVIEW_CHARS]
+            for statement in normalized_statements
+        ],
+    }
 
 
 def normalize_executable_sql(sql: str) -> str:
@@ -5126,6 +5344,8 @@ class Nl2SqlService:
         self,
         profile: Nl2SqlProfile,
         request_instructions: str = "",
+        *,
+        ontology_instructions: str = "",
     ) -> str:
         """業務 profile の文脈を Select AI 用の決定論的な指示へまとめる。"""
         sections: list[str] = []
@@ -5143,48 +5363,39 @@ class Nl2SqlService:
         request_value = request_instructions.strip()
         if request_value:
             sections.append(f"## 今回の追加指示\n{request_value}")
+        ontology_value = ontology_instructions.strip()
+        if ontology_value:
+            sections.append(f"## 確認済み Ontology コンテキスト\n{ontology_value}")
         return "\n\n".join(sections)
 
     def _select_ai_generate_attributes(
         self,
         profile: Nl2SqlProfile,
         overrides: SelectAiRequestOverrides | None,
+        ontology_context: Any | None = None,
     ) -> dict[str, str] | None:
-        if overrides is None or not overrides.has_values():
+        ontology_instructions = (
+            self._ontology_generation_context_prompt(ontology_context)
+            if ontology_context is not None
+            else ""
+        )
+        if (overrides is None or not overrides.has_values()) and not ontology_instructions:
             return None
         attributes: dict[str, str] = {}
-        role = overrides.role.strip() or profile.select_ai_config.role.strip()
+        request_instructions = overrides.additional_instructions if overrides is not None else ""
+        role = (
+            overrides.role.strip() if overrides is not None else ""
+        ) or profile.select_ai_config.role.strip()
         instructions = self.build_select_ai_additional_instructions(
             profile,
-            overrides.additional_instructions,
+            request_instructions,
+            ontology_instructions=ontology_instructions,
         )
         if role:
             attributes["role"] = role
         if instructions:
             attributes["additional_instructions"] = instructions
         return attributes or None
-
-    def _select_ai_overrides_with_ontology_context(
-        self,
-        overrides: SelectAiRequestOverrides | None,
-        ontology_context: Any | None,
-    ) -> SelectAiRequestOverrides | None:
-        ontology_instructions = self._ontology_generation_context_prompt(ontology_context)
-        if not ontology_instructions:
-            return overrides
-        merged_instructions = "\n\n".join(
-            part
-            for part in [
-                overrides.additional_instructions if overrides is not None else "",
-                "## 確認済み Ontology コンテキスト",
-                ontology_instructions,
-            ]
-            if part.strip()
-        )
-        return SelectAiRequestOverrides(
-            role=overrides.role if overrides is not None else "",
-            additional_instructions=merged_instructions,
-        )
 
     def _redact_select_ai_context_attributes(self, attributes: dict[str, Any]) -> dict[str, Any]:
         """監査・engine meta から業務 prompt 本文を除外する。"""
@@ -6250,15 +6461,22 @@ class Nl2SqlService:
     def preview(self, request: PreviewRequest) -> PreviewData:
         started = time.monotonic()
         created_at = _utc_now()
+        profile = self.get_profile(request.profile_id)
+        rewritten = self._rewrite_question_for_generation(
+            request.question,
+            profile,
+            use_glossary=request.use_glossary,
+        )
         allowed = self._resolve_allowed_objects(request.profile_id, request.allowed_objects)
         generated = self._generate_with_fallback(
             question=request.question,
             engine=request.engine,
-            profile=self.get_profile(request.profile_id),
+            profile=profile,
             allowed=allowed,
             row_limit=request.row_limit,
             select_ai_overrides=request.select_ai_overrides,
             ontology_context=request.ontology_context,
+            use_glossary=request.use_glossary,
         )
         row_limit = self._resolve_row_limit(request.profile_id, request.row_limit)
         analysis = self.analyze_sql(
@@ -6267,7 +6485,7 @@ class Nl2SqlService:
             row_limit,
             catalog=generated.schema_catalog,
         )
-        analysis = self._apply_empty_filter_generation_guard(request.question, analysis)
+        analysis = self._apply_empty_filter_generation_guard(rewritten, analysis)
         timing = TimingEnvelope(
             created_at=created_at,
             started_at=created_at,
@@ -6283,9 +6501,7 @@ class Nl2SqlService:
             engine=generated.engine,
             engine_meta=generated.engine_meta,
             fallback_reason=generated.fallback_reason,
-            rewritten_question=self._rewrite_question_preserving_empty_filter(
-                request.question, self.get_profile(request.profile_id)
-            ),
+            rewritten_question=rewritten,
             executable_sql=analysis.executable_sql,
             safety=analysis.safety,
             recommendations=analysis.recommendations,
@@ -6398,6 +6614,9 @@ class Nl2SqlService:
             graph and any("*" in projection.expression_sql for projection in graph.projections)
         )
         select_only = graph is not None and is_select_only(sql)
+        dangerous_function_names = (
+            _dangerous_oracle_function_names(sql) if graph is not None and select_only else []
+        )
         warnings: list[str] = []
         blocked_reason = ""
         if graph is None:
@@ -6406,12 +6625,18 @@ class Nl2SqlService:
             blocked_reason = (
                 "SELECT/WITH 以外、複数 statement、または危険語を含む SQL は実行できません。"
             )
+        elif dangerous_function_names:
+            blocked_reason = _dangerous_oracle_function_blocked_message(dangerous_function_names)
         hidden_referenced = _hidden_schema_object_names(referenced, current_owner=current_owner)
-        if hidden_referenced:
+        if not blocked_reason and hidden_referenced:
             blocked_reason = _system_object_blocked_message(hidden_referenced)
-        elif not _table_allowed(referenced, allowed, current_owner=current_owner):
+        elif not blocked_reason and not _table_allowed(
+            referenced,
+            allowed,
+            current_owner=current_owner,
+        ):
             blocked_reason = "許可されていない表を参照しています。"
-        elif not _column_allowed(
+        elif not blocked_reason and not _column_allowed(
             referenced_columns,
             has_wildcard,
             referenced,
@@ -6812,6 +7037,9 @@ class Nl2SqlService:
         result: QueryResults,
         ontology_trace_summary: dict[str, Any],
         elapsed_ms: int | None = None,
+        generation_elapsed_ms: int | None = None,
+        engine_timings: list[EngineTiming | dict[str, Any]] | None = None,
+        stage_timings: list[StageTiming | dict[str, Any]] | None = None,
         actor_user_uuid: str = "",
     ) -> HistoryItem:
         """Query Session 実行を legacy history へ一度だけ投影する。"""
@@ -6831,6 +7059,9 @@ class Nl2SqlService:
                 generated_sql=generated_sql,
                 created_at=_utc_now(),
                 elapsed_ms=elapsed_ms,
+                generation_elapsed_ms=generation_elapsed_ms,
+                engine_timings=_normalize_engine_timings(engine_timings or []),
+                stage_timings=_normalize_stage_timings(stage_timings or []),
                 profile_id=profile.id,
                 profile_name=profile.name,
                 profile_category=profile.category,
@@ -12512,6 +12743,27 @@ class Nl2SqlService:
                 warnings=warnings,
                 timing=self._timing(created_at, started, "db_admin_execute"),
             )
+        dynamic_sql_errors = [_db_admin_dynamic_sql_error(statement) for statement in statements]
+        if any(dynamic_sql_errors):
+            warnings.append(_PLSQL_DYNAMIC_SQL_BLOCKED_MESSAGE)
+            return DbAdminExecuteData(
+                executed=False,
+                runtime=runtime,
+                execution_context="admin_control_plane",
+                statements=[
+                    DbAdminStatementResult(
+                        index=index + 1,
+                        statement_type=statement_types[index],
+                        status="blocked",
+                        sql=statements[index],
+                        error_message=dynamic_sql_errors[index]
+                        or _PLSQL_DYNAMIC_SQL_BLOCKED_MESSAGE,
+                    )
+                    for index in range(len(statements))
+                ],
+                warnings=warnings,
+                timing=self._timing(created_at, started, "db_admin_execute"),
+            )
         if len(statements) > 1 and select_count > 0:
             warnings.append("複数 statement 実行に SELECT は含められません。")
             return DbAdminExecuteData(
@@ -12681,6 +12933,7 @@ class Nl2SqlService:
                         "statement_count": len(statements),
                         "success_count": len(successful_statement_indexes),
                         "types": statement_types,
+                        **_admin_sql_audit_detail(request.sql, statements),
                     },
                 )
             except (Nl2SqlPersistenceUnavailable, Nl2SqlRepositoryOperationFailed) as exc:
@@ -13004,6 +13257,27 @@ class Nl2SqlService:
                 warnings=warnings,
                 timing=self._timing(created_at, started, "db_admin_statements"),
             )
+        dynamic_sql_errors = [_db_admin_dynamic_sql_error(statement) for statement in statements]
+        if any(dynamic_sql_errors):
+            warnings.append(_PLSQL_DYNAMIC_SQL_BLOCKED_MESSAGE)
+            return DbAdminExecuteData(
+                executed=False,
+                runtime=runtime,
+                execution_context="admin_control_plane",
+                statements=[
+                    DbAdminStatementResult(
+                        index=index + 1,
+                        statement_type=statement_types[index],
+                        status="blocked",
+                        sql=statements[index],
+                        error_message=dynamic_sql_errors[index]
+                        or _PLSQL_DYNAMIC_SQL_BLOCKED_MESSAGE,
+                    )
+                    for index in range(len(statements))
+                ],
+                warnings=warnings,
+                timing=self._timing(created_at, started, "db_admin_statements"),
+            )
         if any(policy_errors):
             warnings.append("禁止された操作が含まれるため実行しませんでした。")
             return DbAdminExecuteData(
@@ -13101,6 +13375,7 @@ class Nl2SqlService:
                     "statement_count": len(statements),
                     "success_count": success_count,
                     "types": statement_types,
+                    **_admin_sql_audit_detail(request.sql, statements),
                 },
             )
         except (Nl2SqlPersistenceUnavailable, Nl2SqlRepositoryOperationFailed) as exc:
@@ -13705,6 +13980,7 @@ class Nl2SqlService:
         reason: str,
         detail: dict[str, Any],
     ) -> None:
+        actor = current_actor_context()
         with self._lock:
             self._admin_audit.append(
                 {
@@ -13714,6 +13990,8 @@ class Nl2SqlService:
                     "target": target,
                     "executed": executed,
                     "reason": reason,
+                    "actor_user_uuid": actor.user_uuid,
+                    "actor_is_system_admin": actor.is_system_admin,
                     "detail": detail,
                 }
             )
@@ -15678,6 +15956,17 @@ class Nl2SqlService:
             return question.strip()
         return self.rewrite_question(question, profile)
 
+    def _rewrite_question_for_generation(
+        self,
+        question: str,
+        profile: Nl2SqlProfile,
+        *,
+        use_glossary: bool,
+    ) -> str:
+        if not use_glossary:
+            return question.strip()
+        return self._rewrite_question_preserving_empty_filter(question, profile)
+
     def _apply_empty_filter_generation_guard(
         self, question: str, analysis: AnalyzeData
     ) -> AnalyzeData:
@@ -16502,11 +16791,11 @@ class Nl2SqlService:
                 ),
             )
         try:
-            effective_overrides = self._select_ai_overrides_with_ontology_context(
+            attributes = self._select_ai_generate_attributes(
+                profile,
                 request.select_ai_overrides,
-                ontology_context,
+                ontology_context=ontology_context,
             )
-            attributes = self._select_ai_generate_attributes(profile, effective_overrides)
             prompt = self._oracle_adapter.generate_select_ai_prompt(
                 profile_name=str(
                     generated.engine_meta.get("select_ai_profile")
@@ -16585,7 +16874,11 @@ class Nl2SqlService:
 
         self._raise_if_job_cancelled(job_id)
         stage_started = time.monotonic()
-        rewritten = self._rewrite_question_preserving_empty_filter(request.question, profile)
+        rewritten = self._rewrite_question_for_generation(
+            request.question,
+            profile,
+            use_glossary=request.use_glossary,
+        )
         allowed = self._resolve_allowed_objects(request.profile_id, request.allowed_objects)
         row_limit = self._resolve_row_limit(request.profile_id, request.row_limit)
         ontology_context = self._job_ontology_context(
@@ -16607,13 +16900,14 @@ class Nl2SqlService:
         self._raise_if_job_cancelled(job_id)
         stage_started = time.monotonic()
         generated = self._generate_with_fallback(
-            question=rewritten,
+            question=request.question,
             engine=request.engine,
             profile=profile,
             allowed=allowed,
             row_limit=row_limit,
             select_ai_overrides=request.select_ai_overrides,
             ontology_context=ontology_context,
+            use_glossary=request.use_glossary,
         )
         stage_elapsed = _elapsed_ms(stage_started)
         stage_timings.append(StageTiming(stage="generate_sql", elapsed_ms=stage_elapsed))
@@ -16781,6 +17075,9 @@ class Nl2SqlService:
             generated_sql=result.generated_sql,
             created_at=finished,
             elapsed_ms=timing.elapsed_ms,
+            generation_elapsed_ms=_generation_elapsed_ms_from_meta(result.engine_meta),
+            engine_timings=_normalize_engine_timings(result.engine_meta.get("engine_timings")),
+            stage_timings=timing.stage_timings,
             profile_id=profile.id,
             profile_name=profile.name,
             profile_category=profile.category,
@@ -16850,6 +17147,8 @@ class Nl2SqlService:
         row_limit: int | None,
         select_ai_overrides: SelectAiRequestOverrides | None = None,
         ontology_context: Any | None = None,
+        *,
+        use_glossary: bool = False,
     ) -> GeneratedSql:
         if (
             self._incremental_repository is None
@@ -16867,6 +17166,7 @@ class Nl2SqlService:
             else [engine]
         )
         fallback_messages: list[str] = []
+        engine_timings: list[dict[str, Any]] = []
         for candidate in candidates:
             allow_deterministic_fallback = not (
                 engine == Nl2SqlEngine.SELECT_AI_AGENT and candidate == Nl2SqlEngine.SELECT_AI_AGENT
@@ -16881,7 +17181,9 @@ class Nl2SqlService:
                     fallback_messages,
                     select_ai_overrides,
                     ontology_context,
+                    use_glossary=use_glossary,
                     allow_deterministic_fallback=allow_deterministic_fallback,
+                    engine_timings=engine_timings,
                 )
             except RuntimeError as exc:
                 fallback_messages.append(f"{candidate.value}: {exc}")
@@ -16900,13 +17202,24 @@ class Nl2SqlService:
         select_ai_overrides: SelectAiRequestOverrides | None = None,
         ontology_context: Any | None = None,
         *,
+        use_glossary: bool = False,
         allow_deterministic_fallback: bool = True,
         runtime_timeout_seconds: float | None = None,
         runtime_max_retries: int | None = None,
+        engine_timings: list[dict[str, Any]] | None = None,
     ) -> GeneratedSql:
+        engine_timings = engine_timings if engine_timings is not None else []
         # テスト/デモ用の明示的 failure trigger。deterministic runtime 限定で有効化し、
         # 本番(oracle runtime)ではユーザ入力に反応させない。
         if not self._use_oracle_runtime() and f"{engine.value}_fail" in question.lower():
+            failure_started = time.monotonic()
+            _record_engine_timing(
+                engine_timings,
+                engine=engine.value,
+                started=failure_started,
+                status="failed",
+                error="明示的な fallback テスト要求",
+            )
             raise RuntimeError("明示的な fallback テスト要求")
         # 本番(oracle runtime)では、エンジン失敗時に質問を無視したテンプレート SQL を
         # 「生成結果」として返さない(deterministic fallback は local/CI デモ専用)。
@@ -16914,13 +17227,13 @@ class Nl2SqlService:
         allow_deterministic_fallback = (
             allow_deterministic_fallback and not self._use_oracle_runtime()
         )
-        is_select_ai_engine = engine in {Nl2SqlEngine.SELECT_AI, Nl2SqlEngine.SELECT_AI_AGENT}
-        effective_question = (
-            question.strip()
-            if is_select_ai_engine
-            else self._rewrite_question_preserving_empty_filter(question, profile)
+        effective_question = self._rewrite_question_for_generation(
+            question,
+            profile,
+            use_glossary=use_glossary,
         )
         runtime_question = _question_with_empty_filter_guard(effective_question)
+        is_select_ai_engine = engine in {Nl2SqlEngine.SELECT_AI, Nl2SqlEngine.SELECT_AI_AGENT}
         meta: dict[str, Any] = {
             "profile_id": profile.id,
             "profile_name": profile.name,
@@ -16973,8 +17286,9 @@ class Nl2SqlService:
             Nl2SqlEngine.SELECT_AI,
             Nl2SqlEngine.SELECT_AI_AGENT,
         }:
+            timing_count = len(engine_timings)
             try:
-                return self._generate_oracle_sql(
+                generated = self._generate_oracle_sql(
                     engine=engine,
                     question=runtime_question,
                     profile=profile,
@@ -16984,22 +17298,46 @@ class Nl2SqlService:
                     select_ai_overrides=select_ai_overrides,
                     ontology_context=ontology_context,
                     runtime_timeout_seconds=runtime_timeout_seconds,
+                    engine_timings=engine_timings,
                 )
+                generated.engine_meta = _engine_meta_with_timings(
+                    generated.engine_meta,
+                    engine_timings,
+                )
+                return generated
             except OracleAdapterError as exc:
+                if len(engine_timings) == timing_count:
+                    skipped_started = time.monotonic()
+                    _record_engine_timing(
+                        engine_timings,
+                        engine=engine.value,
+                        started=skipped_started,
+                        status="skipped",
+                        error=str(exc),
+                    )
                 fallback_messages.append(f"{engine.value}: {exc}")
                 if not allow_deterministic_fallback:
                     raise RuntimeError(str(exc)) from exc
         elif engine in {Nl2SqlEngine.SELECT_AI, Nl2SqlEngine.SELECT_AI_AGENT} and not (
             allow_deterministic_fallback
         ):
+            skipped_started = time.monotonic()
+            _record_engine_timing(
+                engine_timings,
+                engine=engine.value,
+                started=skipped_started,
+                status="skipped",
+                error="Oracle runtime が構成されていません。",
+            )
             raise RuntimeError("Oracle runtime が構成されていません。")
         generation_catalog = self._generation_schema_catalog(profile, allowed)
         table = self._choose_table(effective_question, profile, allowed, generation_catalog)
         columns = self._choose_columns(table, allowed)
         direct_configured = self._enterprise_ai_client.is_configured()
         if engine == Nl2SqlEngine.ENTERPRISE_AI_DIRECT and direct_configured:
+            timing_count = len(engine_timings)
             try:
-                return self._generate_enterprise_ai_direct_sql(
+                generated = self._generate_enterprise_ai_direct_sql(
                     question=runtime_question,
                     profile=profile,
                     allowed=allowed,
@@ -17009,19 +17347,44 @@ class Nl2SqlService:
                     learning_examples=learning_examples,
                     ontology_context=ontology_context,
                     catalog=generation_catalog,
+                    use_glossary=use_glossary,
                     runtime_timeout_seconds=runtime_timeout_seconds,
                     runtime_max_retries=runtime_max_retries,
+                    engine_timings=engine_timings,
                 )
+                generated.engine_meta = _engine_meta_with_timings(
+                    generated.engine_meta,
+                    engine_timings,
+                )
+                return generated
             except EnterpriseAiDirectError as exc:
+                if len(engine_timings) == timing_count:
+                    skipped_started = time.monotonic()
+                    _record_engine_timing(
+                        engine_timings,
+                        engine=engine.value,
+                        started=skipped_started,
+                        status="failed",
+                        error=str(exc),
+                    )
                 fallback_messages.append(f"{engine.value}: {exc}")
                 if not allow_deterministic_fallback:
                     raise RuntimeError(str(exc)) from exc
         elif engine == Nl2SqlEngine.ENTERPRISE_AI_DIRECT and not (allow_deterministic_fallback):
+            skipped_started = time.monotonic()
+            _record_engine_timing(
+                engine_timings,
+                engine=engine.value,
+                started=skipped_started,
+                status="skipped",
+                error="OCI Enterprise AI Direct が構成されていません。",
+            )
             raise RuntimeError("OCI Enterprise AI Direct が構成されていません。")
 
         if not allow_deterministic_fallback:
             raise RuntimeError(f"{engine.value} の実行結果を取得できませんでした。")
 
+        deterministic_started = time.monotonic()
         sql = self._compose_select_sql(self._catalog_qualified_name(table), columns)
         if engine == Nl2SqlEngine.SELECT_AI:
             meta.update({"select_ai_profile": self._select_ai_profile_name(profile)})
@@ -17035,11 +17398,17 @@ class Nl2SqlService:
             )
         else:
             meta.update({"provider": "oci_enterprise_ai", "mode": "direct"})
+        _record_engine_timing(
+            engine_timings,
+            engine="deterministic",
+            started=deterministic_started,
+            status="success",
+        )
         return GeneratedSql(
             engine=engine,
             generated_sql=sql,
             explanation=f"{table.logical_name} を対象に、許可された列のみを取得します。",
-            engine_meta=meta,
+            engine_meta=_engine_meta_with_timings(meta, engine_timings),
             fallback_reason="; ".join(fallback_messages),
             schema_catalog=generation_catalog,
         )
@@ -17215,14 +17584,18 @@ class Nl2SqlService:
         learning_examples: list[LearningExample],
         catalog: SchemaCatalog,
         ontology_context: Any | None = None,
+        use_glossary: bool = False,
         runtime_timeout_seconds: float | None = None,
         runtime_max_retries: int | None = None,
+        engine_timings: list[dict[str, Any]] | None = None,
     ) -> GeneratedSql:
+        engine_timings = engine_timings if engine_timings is not None else []
         context = self._enterprise_ai_schema_context(
             profile=profile,
             allowed=allowed,
             catalog=catalog,
             learning_examples=learning_examples,
+            use_glossary=use_glossary,
         )
         if ontology_context is not None:
             context = "\n".join(
@@ -17242,10 +17615,34 @@ class Nl2SqlService:
             generate_kwargs["timeout_seconds"] = runtime_timeout_seconds
         if runtime_max_retries is not None:
             generate_kwargs["max_retries"] = runtime_max_retries
-        raw_text = self._enterprise_ai_client.generate(**generate_kwargs)
+        call_started = time.monotonic()
+        try:
+            raw_text = self._enterprise_ai_client.generate(**generate_kwargs)
+        except EnterpriseAiDirectError as exc:
+            _record_engine_timing(
+                engine_timings,
+                engine=Nl2SqlEngine.ENTERPRISE_AI_DIRECT.value,
+                started=call_started,
+                status="failed",
+                error=str(exc),
+            )
+            raise
         sql, explanation = self._extract_enterprise_ai_sql(raw_text)
         if not sql:
+            _record_engine_timing(
+                engine_timings,
+                engine=Nl2SqlEngine.ENTERPRISE_AI_DIRECT.value,
+                started=call_started,
+                status="failed",
+                error="OCI Enterprise AI response から SQL を抽出できません。",
+            )
             raise EnterpriseAiDirectError("OCI Enterprise AI response から SQL を抽出できません。")
+        _record_engine_timing(
+            engine_timings,
+            engine=Nl2SqlEngine.ENTERPRISE_AI_DIRECT.value,
+            started=call_started,
+            status="success",
+        )
         meta.update(
             {
                 "provider": "oci_enterprise_ai",
@@ -17376,7 +17773,9 @@ class Nl2SqlService:
         select_ai_overrides: SelectAiRequestOverrides | None = None,
         ontology_context: Any | None = None,
         runtime_timeout_seconds: float | None = None,
+        engine_timings: list[dict[str, Any]] | None = None,
     ) -> GeneratedSql:
+        engine_timings = engine_timings if engine_timings is not None else []
         self._assert_select_ai_scope_ready(profile)
         asset_meta = self._asset_meta.get(engine)
         expected_profile_name = self._select_ai_profile_name(profile)
@@ -17397,11 +17796,11 @@ class Nl2SqlService:
         )
         if engine == Nl2SqlEngine.SELECT_AI:
             profile_name = self._select_ai_profile_name(profile)
-            effective_overrides = self._select_ai_overrides_with_ontology_context(
+            attributes = self._select_ai_generate_attributes(
+                profile,
                 select_ai_overrides,
-                ontology_context,
+                ontology_context=ontology_context,
             )
-            attributes = self._select_ai_generate_attributes(profile, effective_overrides)
             if attributes:
                 select_ai_kwargs: dict[str, Any] = {
                     "profile_name": profile_name,
@@ -17415,19 +17814,31 @@ class Nl2SqlService:
                 }
             if runtime_timeout_seconds is not None:
                 select_ai_kwargs["call_timeout_seconds"] = runtime_timeout_seconds
-            sql = self._oracle_adapter.generate_select_ai_sql(**select_ai_kwargs)
+            call_started = time.monotonic()
+            try:
+                sql = self._oracle_adapter.generate_select_ai_sql(**select_ai_kwargs)
+            except OracleAdapterError as exc:
+                _record_engine_timing(
+                    engine_timings,
+                    engine=engine.value,
+                    started=call_started,
+                    status="failed",
+                    error=str(exc),
+                )
+                raise
             meta.update({"select_ai_profile": profile_name, "runtime": "oracle"})
             if attributes:
+                request_instructions = (
+                    select_ai_overrides.additional_instructions.strip()
+                    if select_ai_overrides is not None
+                    else ""
+                )
                 meta.update(
                     {
                         "select_ai_role_applied": "role" in attributes,
                         "select_ai_role_length": len(attributes.get("role", "")),
-                        "select_ai_additional_instructions_applied": (
-                            "additional_instructions" in attributes
-                        ),
-                        "select_ai_additional_instructions_length": len(
-                            attributes.get("additional_instructions", "")
-                        ),
+                        "select_ai_additional_instructions_applied": bool(request_instructions),
+                        "select_ai_additional_instructions_length": len(request_instructions),
                     }
                 )
         else:
@@ -17448,7 +17859,18 @@ class Nl2SqlService:
             }
             if runtime_timeout_seconds is not None:
                 agent_kwargs["call_timeout_seconds"] = runtime_timeout_seconds
-            sql, conversation_id = self._oracle_adapter.run_select_ai_agent_team(**agent_kwargs)
+            call_started = time.monotonic()
+            try:
+                sql, conversation_id = self._oracle_adapter.run_select_ai_agent_team(**agent_kwargs)
+            except OracleAdapterError as exc:
+                _record_engine_timing(
+                    engine_timings,
+                    engine=engine.value,
+                    started=call_started,
+                    status="failed",
+                    error=str(exc),
+                )
+                raise
             meta.update(
                 {
                     "select_ai_profile": self._select_ai_profile_name(profile),
@@ -17458,7 +17880,20 @@ class Nl2SqlService:
                 }
             )
         if not sql:
+            _record_engine_timing(
+                engine_timings,
+                engine=engine.value,
+                started=call_started,
+                status="failed",
+                error="Oracle engine から SQL を取得できませんでした。",
+            )
             raise OracleAdapterError("Oracle engine から SQL を取得できませんでした。")
+        _record_engine_timing(
+            engine_timings,
+            engine=engine.value,
+            started=call_started,
+            status="success",
+        )
         return GeneratedSql(
             engine=engine,
             generated_sql=sql,

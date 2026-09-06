@@ -27,6 +27,7 @@ from app.features.nl2sql.models import (
 from app.features.nl2sql.service import Nl2SqlService
 from app.features.nl2sql.store import MemoryNl2SqlStore
 from app.security.domain import SYSTEM_ADMIN_ROLE_CODE, Principal
+from app.security.permissions import PROFILE_MANAGE_PERMISSION
 
 
 def _table(name: str) -> SchemaTable:
@@ -86,7 +87,12 @@ def _service(repository: MemoryIncrementalNl2SqlRepository) -> Nl2SqlService:
     return service
 
 
-def _principal(allowed_profile_ids: set[str], *, admin: bool = False) -> Principal:
+def _principal(
+    allowed_profile_ids: set[str],
+    *,
+    admin: bool = False,
+    permissions: set[str] | None = None,
+) -> Principal:
     return Principal(
         user_uuid="user-1",
         login_user_id="user1",
@@ -94,7 +100,7 @@ def _principal(allowed_profile_ids: set[str], *, admin: bool = False) -> Princip
         status="ACTIVE",
         force_password_change=False,
         role_codes=[SYSTEM_ADMIN_ROLE_CODE] if admin else ["ANALYST"],
-        permissions={"menu.query", "nl2sql.sql.execute"},
+        permissions={"menu.query", "nl2sql.sql.execute", *(permissions or set())},
         data_entitlements=[],
         allowed_profile_ids=set(allowed_profile_ids),
         session_id="session-1",
@@ -202,6 +208,28 @@ def test_execute_route_scopes_non_admin_principal_to_allowed_profiles(
     permitted = nl2sql_router.execute(
         ExecuteRequest(sql="SELECT ID FROM APP.ORDERS"),
         _request(_principal({"sales"})),  # type: ignore[arg-type]
+    )
+    assert permitted.data is not None and permitted.data.columns
+
+
+def test_execute_route_scopes_profile_manager_to_all_active_profiles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(_repository())
+    monkeypatch.setattr(nl2sql_router, "nl2sql_service", service)
+    manager = _principal(set(), permissions={PROFILE_MANAGE_PERMISSION})
+
+    with pytest.raises(HTTPException) as denied:
+        nl2sql_router.execute(
+            ExecuteRequest(sql="SELECT ID FROM APP.SALARY"),
+            _request(manager),  # type: ignore[arg-type]
+        )
+    assert denied.value.status_code == 400
+    assert "許可されていない表" in str(denied.value.detail)
+
+    permitted = nl2sql_router.execute(
+        ExecuteRequest(sql="SELECT ID FROM APP.INVOICES"),
+        _request(manager),  # type: ignore[arg-type]
     )
     assert permitted.data is not None and permitted.data.columns
 

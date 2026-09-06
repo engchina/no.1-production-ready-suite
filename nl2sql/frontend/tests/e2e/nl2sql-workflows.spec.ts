@@ -4287,7 +4287,7 @@ test("検索実行開始時に前回の生成結果を先に消し、現在の�
   });
 });
 
-test("参考履歴は既定で折りたたまれ、ヘッダークリックで過去 SQL を展開できる", async ({ page }) => {
+test("参考履歴は件数を表示し、候補があれば自動で展開する", async ({ page }) => {
   await mockNl2SqlApi(page);
 
   await page.goto("/query");
@@ -4298,18 +4298,19 @@ test("参考履歴は既定で折りたたまれ、ヘッダークリックで�
 
   const header = page.getByRole("button", { name: /参考履歴/ });
   await expect(header).toBeVisible();
+  await expect(header).toContainText("1 件");
   await expect(header).toContainText("管理者レビュー結果: 良いのみ");
-  // 既定は折りたたみ: 中身（類似度・過去 SQL）は表示されない。
-  // aria-controls の参照先(#nl2sql-similar-history)は常時レンダされ、閉時は hidden。
-  await expect(header).toHaveAttribute("aria-expanded", "false");
-  await expect(page.getByTestId("nl2sql-similar-history")).toBeAttached();
-  await expect(page.getByTestId("nl2sql-similar-history")).toBeHidden();
-  await expect(page.getByText("類似度 90%")).toBeHidden();
-
-  await header.click();
+  // 候補がある検索完了後は自動で展開する。
   await expect(header).toHaveAttribute("aria-expanded", "true");
+  await expect(page.getByTestId("nl2sql-similar-history")).toBeAttached();
+  await expect(page.getByTestId("nl2sql-similar-history")).toBeVisible();
   await expect(page.getByText("類似度 90%")).toBeVisible();
   await expect(page.getByText("請求金額の履歴と近い質問です。")).toBeVisible();
+  await header.click();
+  await expect(header).toHaveAttribute("aria-expanded", "false");
+  await expect(page.getByTestId("nl2sql-similar-history")).toBeHidden();
+  await header.click();
+  await expect(header).toHaveAttribute("aria-expanded", "true");
 
   const jobsGate = createRequestGate();
   await page.unroute("**/api/nl2sql/jobs");
@@ -4345,6 +4346,7 @@ test("参考履歴は API が空の場合も表示し、空状態を展開でき
   await expect.poll(() => requested).toBe(true);
   const header = page.getByRole("button", { name: /参考履歴/ });
   await expect(header).toBeVisible();
+  await expect(header).toContainText("0 件");
   await expect(header).toContainText("管理者レビュー結果: 良いのみ");
   await expect(header).toHaveAttribute("aria-expanded", "false");
 
@@ -4357,7 +4359,7 @@ test("参考履歴は API が空の場合も表示し、空状態を展開でき
   await expect(header).toHaveAttribute("aria-expanded", "true");
   await expect(panel).toBeVisible();
   await expect(panel).toContainText("参考履歴はありません");
-  await expect(panel).toContainText("管理者レビュー結果が良い履歴は見つかりませんでした。");
+  await expect(panel).toContainText("質問またはプロファイルを変更すると自動で再検索します。");
   await expect(panel.getByTestId("nl2sql-similar-history-item")).toHaveCount(0);
 
   const jobsGate = createRequestGate();
@@ -4476,7 +4478,7 @@ test("参考履歴は管理者レビュー結果が良い履歴だけを表示�
   const header = page.getByRole("button", { name: /参考履歴/ });
   await expect(header).toBeVisible();
   await expect(header).toContainText("管理者レビュー結果: 良いのみ");
-  await header.click();
+  await expect(header).toHaveAttribute("aria-expanded", "true");
 
   const panel = page.getByTestId("nl2sql-similar-history");
   const rows = panel.getByTestId("nl2sql-similar-history-item");
@@ -4690,11 +4692,12 @@ test("検索を実行すると実処理の段階別進捗と結果を表示す�
     expect(await runningIcon.evaluate((element) => getComputedStyle(element).animationName)).toBe("none");
     await expect(safetyStep).toHaveAttribute("data-step-status", "pending");
     expect(jobPayload).toMatchObject({
-      // 用語・同義語を ON にしたため job には辞書適用後の質問が渡る。
-      question: `${questionText}（請求金額=INVOICES.TOTAL_AMOUNT）`,
+      // 用語・同義語を ON にしたため、job runner 側で一度だけ辞書適用する。
+      question: questionText,
       engine: "select_ai",
       profile_id: "default",
       allowed_objects: { table_names: [], columns: {} },
+      use_glossary: true,
     });
   } finally {
     finishJob();
@@ -4947,7 +4950,7 @@ test("Query Rewrite の用語・同義語は既定 off で、Schema オプショ
   await expect(page.getByRole("button", { name: "請求 を開閉" })).toBeVisible();
 });
 
-test("補助フラグ ON のとき、検索を実行すると書き換え後の質問でジョブを投入する", async ({ page }) => {
+test("補助フラグ ON のとき、検索を実行すると原文と glossary flag でジョブを投入する", async ({ page }) => {
   await mockNl2SqlApi(page);
   const questionText = "請求金額を一覧で見たい";
   const rewrittenText = "請求金額を一覧で見たい（請求金額=INVOICES.TOTAL_AMOUNT）";
@@ -5010,8 +5013,12 @@ test("補助フラグ ON のとき、検索を実行すると書き換え後の�
   await page.getByRole("button", { name: "検索を実行" }).click();
 
   await expect(page.getByTestId("nl2sql-job-progress")).toHaveAttribute("data-job-status", "done");
-  // ジョブへ渡す question が書き換え後の文になっている
-  expect(jobPayload).toMatchObject({ question: rewrittenText, engine: "select_ai" });
+  // ジョブへ渡す question は原文のままにし、server 側で 1 回だけ glossary を適用する。
+  expect(jobPayload).toMatchObject({
+    question: questionText,
+    engine: "select_ai",
+    use_glossary: true,
+  });
   // 入力欄は書き換えずユーザー入力のまま保持する
   await expect(nl2sqlQuestionInput(page)).toHaveValue(questionText);
 });
@@ -5139,7 +5146,11 @@ test("空の抽出条件では rewrite カードを出さず、条件を増や�
   await expect(page.getByText("生成に使用される質問")).toHaveCount(0);
   await expect(page.getByText(warning)).toHaveCount(0);
   await expect(page.getByText("deterministic", { exact: true })).toHaveCount(0);
-  expect(jobPayload).toMatchObject({ question: questionText, engine: "select_ai" });
+  expect(jobPayload).toMatchObject({
+    question: questionText,
+    engine: "select_ai",
+    use_glossary: true,
+  });
   const submittedJobPayload = jobPayload as Record<string, unknown> | null;
   expect(String(submittedJobPayload?.question ?? "")).not.toContain("管理部門");
   const interpretation = page.getByTestId("nl2sql-interpretation-panel");
@@ -6198,6 +6209,33 @@ test("Select AI の今回だけの生成条件を job に渡し、reset で消�
       additional_instructions: "現在日付を基準に四半期を計算する。",
     },
   });
+  await expect(page.getByTestId("nl2sql-job-progress")).toHaveAttribute("data-job-status", "done");
+
+  api.jobPayload = null;
+  await page.getByRole("button", { name: /Enterprise AI Direct/ }).click();
+  const executionOptionsDisclosure = page.getByRole("button", { name: /実行オプション/ });
+  await expect(executionOptionsDisclosure).toContainText("条件あり");
+  await executionOptionsDisclosure.click();
+  await expect(page.getByText("今回だけの生成条件は Select AI 実行時のみ適用されます。")).toBeVisible();
+  await nl2sqlQuestionInput(page).fill("請求金額を一覧で見たい");
+  await page.getByRole("button", { name: "検索を実行" }).click();
+  await expect.poll(() => api.jobPayload?.engine).toBe("enterprise_ai_direct");
+  expect(api.jobPayload).toMatchObject({
+    engine: "enterprise_ai_direct",
+    select_ai_overrides: null,
+  });
+
+  api.jobPayload = null;
+  await page.getByRole("button", { name: /Select AI DBMS_CLOUD_AI profile/ }).click();
+  await page.getByRole("button", { name: "検索を実行" }).click();
+  await expect.poll(() => api.jobPayload?.engine).toBe("select_ai");
+  expect(api.jobPayload).toMatchObject({
+    engine: "select_ai",
+    select_ai_overrides: {
+      role: "CFO 向け財務 SQL アシスタント",
+      additional_instructions: "現在日付を基準に四半期を計算する。",
+    },
+  });
 
   await page.getByRole("button", { name: "リセット" }).click();
   await expect(disclosure).toHaveAttribute("aria-expanded", "false");
@@ -6206,15 +6244,6 @@ test("Select AI の今回だけの生成条件を job に渡し、reset で消�
   await expect(page.getByRole("button", { name: "ロールを上書き" })).toHaveAttribute("aria-expanded", "false");
   await page.getByRole("button", { name: "ロールを上書き" }).click();
   await expect(page.getByLabel("アシスタントロール")).toHaveValue("");
-
-  await page.getByRole("button", { name: /Enterprise AI Direct/ }).click();
-  await nl2sqlQuestionInput(page).fill("請求金額を一覧で見たい");
-  await page.getByRole("button", { name: "検索を実行" }).click();
-  await expect.poll(() => api.jobPayload?.engine).toBe("enterprise_ai_direct");
-  expect(api.jobPayload).toMatchObject({
-    engine: "enterprise_ai_direct",
-    select_ai_overrides: null,
-  });
   await expectNoHorizontalScroll(page);
 });
 
@@ -7642,7 +7671,7 @@ test("admin good feedback is available as similar history without manual index r
   await nl2sqlQuestionInput(page).fill("履歴から再実行したい請求金額");
   const similarHistoryHeader = page.getByRole("button", { name: /参考履歴/ });
   await expect(similarHistoryHeader).toBeVisible();
-  await similarHistoryHeader.click();
+  await expect(similarHistoryHeader).toHaveAttribute("aria-expanded", "true");
   await expect(page.getByTestId("nl2sql-similar-history-item")).toContainText(historySql);
   expect(rebuildRequested).toBe(false);
 });

@@ -55,8 +55,10 @@ test("execution options default to showing interpretation and show prompt artifa
     /const \[executionOptionsOpen, setExecutionOptionsOpen\] = useState\(false\);/
   );
   assert.match(workbenchSource, /use_ontology_context: useOntologyContext/);
+  assert.match(workbenchSource, /use_glossary: rewriteUseGlossary/);
   assert.match(workbenchSource, /include_interpretation: includeInterpretation/);
   assert.match(workbenchSource, /include_show_prompt: includeShowPrompt/);
+  assert.doesNotMatch(workbenchSource, /rewriteExtraPrompt|setRewriteExtraPrompt|extra_prompt/);
 });
 
 test("execution options panel keeps glossary rewrite and removes schema rewrite", () => {
@@ -66,6 +68,7 @@ test("execution options panel keeps glossary rewrite and removes schema rewrite"
   assert.match(optionsPanelSource, /nl2sql\.executionOptions\.useOntology/);
   assert.match(optionsPanelSource, /nl2sql\.executionOptions\.includeInterpretation/);
   assert.match(optionsPanelSource, /nl2sql\.executionOptions\.includeShowPrompt/);
+  assert.match(optionsPanelSource, /nl2sql\.executionOptions\.selectAiOverridesUnsupported/);
   assert.match(optionsPanelSource, /aria-expanded=\{open\}/);
   assert.match(optionsPanelSource, /aria-controls="nl2sql-execution-options-body"/);
   assert.match(optionsPanelSource, /engine !== "select_ai"/);

@@ -1914,6 +1914,7 @@ def test_enterprise_ai_direct_uses_global_and_profile_learning_material() -> Non
             question="売上と請求金額を確認したい",
             engine=Nl2SqlEngine.ENTERPRISE_AI_DIRECT,
             profile_id="billing-direct",
+            use_glossary=True,
         )
     )
 

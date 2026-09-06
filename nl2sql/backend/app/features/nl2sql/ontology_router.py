@@ -21,7 +21,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Request, UploadFile
 from pr_backend_core import ApiResponse
-from pydantic import Field
+from pydantic import Field, ValidationError
 
 from app.api.concurrency import run_sync_io
 from app.security.domain import Principal
@@ -53,8 +53,18 @@ from .ontology_catalog import (
     migrate_profile_ontology_view,
     retrieve_ontology_nodes,
 )
+from .ontology_clarification import (
+    apply_clarification_answer,
+    build_clarification_state,
+    enrich_guided_intent,
+    merge_free_text_reinterpretation,
+)
 from .ontology_mermaid import render_mermaid_er
 from .ontology_models import (
+    ClarificationAnswer,
+    ClarificationMode,
+    ClarificationState,
+    ClarificationTurn,
     ColumnQueryPolicy,
     GraphPatch,
     MetricDefinition,
@@ -92,6 +102,7 @@ from .ontology_models import (
 )
 from .ontology_observability import (
     observe_stage,
+    record_clarification,
     record_context_hits,
     record_findings,
     record_profile_recommendation,
@@ -172,6 +183,143 @@ _MARKDOWN_DRAFT_ARTIFACT_TYPE = "ontology_markdown_draft"
 _MARKDOWN_PUBLISHED_ARTIFACT_TYPE = "ontology_markdown_published"
 _MARKDOWN_LLM_ARTIFACT_TYPE = "ontology_llm_markdown"
 _MARKDOWN_RENDERER_VERSION = "markdown_ontology_v1"
+_QUESTION_INTENT_SCHEMA_VERSION = "question_intent_graph_v1"
+_QUESTION_INTENT_PROMPT_VERSION = "question_intent_interpreter_v2"
+_INTENT_FALLBACK_LOG_MAX_FIELDS = 20
+_LEGACY_AMBIGUITY_KIND_CODES: Mapping[str, str] = {
+    "extract_items": "OUTPUT_UNCLEAR",
+    "output": "OUTPUT_UNCLEAR",
+    "outputs": "OUTPUT_UNCLEAR",
+    "conditions": "FILTER_VALUE_UNCLEAR",
+    "condition": "FILTER_VALUE_UNCLEAR",
+    "filter": "FILTER_VALUE_UNCLEAR",
+    "filters": "FILTER_VALUE_UNCLEAR",
+    "time_range": "TIME_RANGE_UNCLEAR",
+    "date_range": "TIME_RANGE_UNCLEAR",
+    "granularity": "GRANULARITY_UNCLEAR",
+    "relationship_path": "RELATIONSHIP_PATH_UNCLEAR",
+    "relationship": "RELATIONSHIP_PATH_UNCLEAR",
+    "business_meaning": "BUSINESS_MEANING_UNCLEAR",
+}
+
+
+def _question_intent_json_schema() -> dict[str, Any]:
+    schema = QuestionIntentGraph.model_json_schema()
+    schema["additionalProperties"] = False
+    return schema
+
+
+def _question_intent_response_format() -> dict[str, Any]:
+    return {
+        "type": "json_schema",
+        "name": _QUESTION_INTENT_SCHEMA_VERSION,
+        "schema": _question_intent_json_schema(),
+        "strict": True,
+    }
+
+
+def _question_intent_minimum_example(
+    *,
+    question: str,
+    ontology_revision_id: str,
+    profile_view_id: str,
+) -> dict[str, Any]:
+    return {
+        "version": 1,
+        "question_original": question,
+        "question_effective": question,
+        "profile_view_id": profile_view_id,
+        "ontology_revision_id": ontology_revision_id,
+        "entities": [],
+        "metrics": [],
+        "dimensions": [],
+        "filters": [],
+        "time_range": None,
+        "granularity": "",
+        "sorts": [],
+        "limit": None,
+        "candidate_paths": [],
+        "selected_path_id": None,
+        "ambiguities": [],
+        "confidence": 0.0,
+    }
+
+
+def _normalize_question_intent_payload(payload: object) -> object:
+    if not isinstance(payload, Mapping):
+        return payload
+    normalized = dict(payload)
+    ambiguities = normalized.get("ambiguities")
+    if isinstance(ambiguities, list):
+        normalized["ambiguities"] = [_normalize_intent_ambiguity(item) for item in ambiguities]
+    return normalized
+
+
+def _normalize_intent_ambiguity(value: object) -> object:
+    if not isinstance(value, Mapping):
+        return value
+    normalized = dict(value)
+    raw_kind = normalized.get("kind")
+    if isinstance(raw_kind, str):
+        kind = raw_kind.strip()
+        if kind in _LEGACY_AMBIGUITY_KIND_CODES:
+            normalized.pop("kind", None)
+            raw_code = normalized.get("code")
+            if not isinstance(raw_code, str) or not raw_code.strip():
+                normalized["code"] = _LEGACY_AMBIGUITY_KIND_CODES[kind]
+    options = normalized.get("options")
+    if isinstance(options, list):
+        normalized["options"] = [_normalize_intent_ambiguity_option(item) for item in options]
+    return normalized
+
+
+def _normalize_intent_ambiguity_option(value: object) -> object:
+    if isinstance(value, str):
+        return value
+    if not isinstance(value, Mapping):
+        return value
+    if not set(value).issubset({"label_ja", "value"}):
+        return value
+    label = value.get("label_ja")
+    if isinstance(label, str) and label.strip():
+        return label.strip()
+    return value
+
+
+def _validation_error_paths(exc: ValidationError) -> list[str]:
+    paths: list[str] = []
+    for item in exc.errors(include_input=False):
+        loc = item.get("loc", ())
+        if isinstance(loc, tuple | list):
+            paths.append(".".join(str(part) for part in loc))
+        else:
+            paths.append(str(loc))
+    return paths
+
+
+def _log_intent_enterprise_ai_fallback(
+    *,
+    reason: str,
+    model: str,
+    exc: BaseException | None = None,
+    violation_kind: str = "",
+    violation_count: int = 0,
+) -> None:
+    extra: dict[str, Any] = {
+        "fallback_reason": reason,
+        "error_type": exc.__class__.__name__ if exc is not None else "",
+        "model": model,
+        "prompt_version": _QUESTION_INTENT_PROMPT_VERSION,
+        "schema_version": _QUESTION_INTENT_SCHEMA_VERSION,
+    }
+    if isinstance(exc, ValidationError):
+        paths = _validation_error_paths(exc)
+        extra["field_error_count"] = len(paths)
+        extra["field_paths"] = paths[:_INTENT_FALLBACK_LOG_MAX_FIELDS]
+    if violation_kind:
+        extra["scope_violation_kind"] = violation_kind
+        extra["scope_violation_count"] = violation_count
+    logger.warning("ontology_intent_enterprise_ai_fallback", extra=extra)
 
 
 class QuerySessionApiCreate(OntologyContract):
@@ -181,6 +329,15 @@ class QuerySessionApiCreate(OntologyContract):
     row_limit: int | None = Field(default=None, ge=1, le=5000)
     engine: Nl2SqlEngine = Nl2SqlEngine.AUTO
     profile_confirmation_token: str = ""
+    clarification_mode: ClarificationMode = ClarificationMode.REVIEW_ONLY
+
+
+class ClarificationAnswerRequest(OntologyContract):
+    base_version: int = Field(ge=1)
+    question_id: str = Field(min_length=1)
+    selected_option_ids: list[str] = Field(default_factory=list)
+    free_text: str = Field(default="", max_length=2000)
+    structured_value: Any = None
 
 
 class OntologyProfileRecommendationRequest(OntologyContract):
@@ -336,6 +493,7 @@ class QuerySessionData(OntologyContract):
     result: QueryResults | None = None
     performance_check: ExplainPlanData | None = None
     ontology_trace_summary: dict[str, Any] = Field(default_factory=dict)
+    clarification: ClarificationState | None = None
 
 
 class QueryExecutionData(QuerySessionData):
@@ -2334,7 +2492,15 @@ class OntologyApiRuntime:
             view = self._narrow_profile_view(base_view, ontology, allowed)
             self.sessions.register_profile_view(view)
         with observe_stage("interpret"):
-            intent = self._interpret_question(request.question, profile, ontology, view)
+            intent = self._interpret_question(
+                request.question,
+                profile,
+                ontology,
+                view,
+                include_guided_context=request.clarification_mode == ClarificationMode.GUIDED,
+            )
+            if request.clarification_mode == ClarificationMode.GUIDED:
+                intent = enrich_guided_intent(intent)
         with self._lock:
             # LLM 呼び出し中に revision が公開・置換されていたら stale session を作らない
             current_ontology = self._query_ontology()
@@ -2353,6 +2519,7 @@ class OntologyApiRuntime:
                     profile_view_id=view.id,
                     ontology_revision_id=ontology.revision.id,
                     intent=intent,
+                    clarification_mode=request.clarification_mode,
                     actor_user_uuid=actor_user_uuid,
                     actor_is_system_admin=actor_is_system_admin,
                 )
@@ -2377,6 +2544,8 @@ class OntologyApiRuntime:
                 revision_id=session.ontology_revision_id,
                 state=session.status.value,
             )
+            if request.clarification_mode == ClarificationMode.GUIDED:
+                record_clarification(outcome="started")
             return self._session_data(session)
 
     def create_session_idempotent(
@@ -2400,6 +2569,33 @@ class OntologyApiRuntime:
                 actor_user_uuid=actor_user_uuid,
                 actor_is_system_admin=actor_is_system_admin,
             ),
+        )
+
+    def answer_clarification_idempotent(
+        self,
+        session_id: str,
+        request: ClarificationAnswerRequest,
+        *,
+        idempotency_key: str,
+    ) -> QuerySessionData:
+        return self._run_session_idempotent(
+            "answer_query_clarification",
+            idempotency_key,
+            {"session_id": session_id, "request": request.model_dump(mode="json")},
+            lambda: self.answer_clarification(session_id, request),
+        )
+
+    def cancel_session_idempotent(
+        self,
+        session_id: str,
+        *,
+        idempotency_key: str,
+    ) -> QuerySessionData:
+        return self._run_session_idempotent(
+            "cancel_query_session",
+            idempotency_key,
+            {"session_id": session_id},
+            lambda: self.cancel_session(session_id),
         )
 
     def generate_sql_idempotent(
@@ -2787,6 +2983,8 @@ class OntologyApiRuntime:
         profile: Nl2SqlProfile,
         ontology: SchemaOntology,
         view: ProfileOntologyView,
+        *,
+        include_guided_context: bool = False,
     ) -> QuestionIntentGraph:
         """Enterprise AI structured intent。障害時は決定論 draft をそのまま返す。"""
 
@@ -2810,33 +3008,57 @@ class OntologyApiRuntime:
 
         visible_nodes = [node for node in ontology.nodes if node.id in view.node_ids]
         visible_edges = [edge for edge in ontology.edges if edge.id in view.edge_ids]
-        context = json.dumps(
-            {
-                "profile_id": profile.id,
-                "ontology_revision_id": ontology.revision.id,
-                "profile_view_id": view.id,
-                "allowed_nodes": [
-                    {
-                        "id": node.id,
-                        "kind": node.kind.value,
-                        "business_name_ja": node.business_name_ja,
-                        "technical_name": node.technical_name,
-                        "aliases": node.aliases,
-                    }
-                    for node in visible_nodes
-                ],
-                "allowed_relationships": [
-                    {
-                        "id": edge.id,
-                        "source_node_id": edge.source_node_id,
-                        "target_node_id": edge.target_node_id,
-                        "name_ja": edge.relationship_name_ja,
-                        "approved": edge.id in view.allowed_path_ids,
-                    }
-                    for edge in visible_edges
-                ],
-                "deterministic_draft": deterministic.model_dump(mode="json"),
+        context_payload: dict[str, Any] = {
+            "profile_id": profile.id,
+            "ontology_revision_id": ontology.revision.id,
+            "profile_view_id": view.id,
+            "intent_contract": {
+                "schema_version": _QUESTION_INTENT_SCHEMA_VERSION,
+                "prompt_version": _QUESTION_INTENT_PROMPT_VERSION,
+                "json_schema": _question_intent_json_schema(),
+                "valid_minimum_example": _question_intent_minimum_example(
+                    question=question,
+                    ontology_revision_id=ontology.revision.id,
+                    profile_view_id=view.id,
+                ),
             },
+            "allowed_nodes": [
+                {
+                    "id": node.id,
+                    "kind": node.kind.value,
+                    "business_name_ja": node.business_name_ja,
+                    "technical_name": node.technical_name,
+                    "aliases": node.aliases,
+                }
+                for node in visible_nodes
+            ],
+            "allowed_relationships": [
+                {
+                    "id": edge.id,
+                    "source_node_id": edge.source_node_id,
+                    "target_node_id": edge.target_node_id,
+                    "name_ja": edge.relationship_name_ja,
+                    "approved": edge.id in view.allowed_path_ids,
+                }
+                for edge in visible_edges
+            ],
+            "deterministic_draft": deterministic.model_dump(mode="json"),
+        }
+        if include_guided_context:
+            context_payload["profile_context"] = {
+                "description": profile.description,
+                "glossary": profile.glossary,
+                "sql_rules": profile.sql_rules,
+                "few_shot_examples": profile.few_shot_examples[:5],
+            }
+            context_payload["schema_context"] = self._guided_schema_context(
+                profile,
+                ontology,
+                view,
+                question=question,
+            )
+        context = json.dumps(
+            context_payload,
             ensure_ascii=False,
             sort_keys=True,
         )
@@ -2845,26 +3067,82 @@ class OntologyApiRuntime:
             "説明文や Markdown を付けないでください。allowed_nodes / allowed_relationships にない "
             "ID を作らず、業務上確定できない内容は blocking ambiguity として残してください。"
             "profile_view_id と ontology_revision_id は入力値を厳密に維持してください。"
+            f"intent_contract.schema_version={_QUESTION_INTENT_SCHEMA_VERSION} の JSON Schema に"
+            "従い、"
+            "ambiguities[] は id/code/message_ja/options を必ず使ってください。"
+            "kind field は使わず、options は string 配列だけにしてください。"
         )
+        if include_guided_context:
+            system_prompt += (
+                " schema_context と profile_context は候補の根拠にだけ使い、複数候補や推測だけで"
+                "確定できない項目は ambiguity.options に業務利用者が選べる"
+                "短い候補を設定してください。"
+                "masked または非公開の値を推測・生成しないでください。"
+            )
+        model_id = ""
+        model_id_fn = getattr(client, "model_id", None)
+        if callable(model_id_fn):
+            try:
+                model_id = str(model_id_fn())
+            except Exception:
+                model_id = ""
         try:
             with observe_stage("interpret_enterprise_ai"):
-                raw = generate(prompt=question, context=context, system_prompt=system_prompt)
+                raw = generate(
+                    prompt=question,
+                    context=context,
+                    system_prompt=system_prompt,
+                    response_format=_question_intent_response_format(),
+                )
             cleaned = str(raw).strip()
             if "{" in cleaned and "}" in cleaned:
                 cleaned = cleaned[cleaned.find("{") : cleaned.rfind("}") + 1]
-            intent = QuestionIntentGraph.model_validate(json.loads(cleaned))
+            try:
+                parsed = json.loads(cleaned)
+            except json.JSONDecodeError as exc:
+                _log_intent_enterprise_ai_fallback(
+                    reason="invalid_json",
+                    model=model_id,
+                    exc=exc,
+                )
+                return deterministic
+            try:
+                intent = QuestionIntentGraph.model_validate(
+                    _normalize_question_intent_payload(parsed)
+                )
+            except ValidationError as exc:
+                _log_intent_enterprise_ai_fallback(
+                    reason="schema_validation",
+                    model=model_id,
+                    exc=exc,
+                )
+                return deterministic
             referenced_node_ids = (
                 {item.ontology_node_id for item in intent.entities if item.ontology_node_id}
                 | {item.ontology_node_id for item in intent.metrics if item.ontology_node_id}
                 | {item.ontology_node_id for item in intent.dimensions if item.ontology_node_id}
             )
-            if referenced_node_ids - set(view.node_ids):
-                raise ValueError("Enterprise AI intent referenced nodes outside profile view")
+            node_scope_violations = referenced_node_ids - set(view.node_ids)
+            if node_scope_violations:
+                _log_intent_enterprise_ai_fallback(
+                    reason="scope_violation",
+                    model=model_id,
+                    violation_kind="node",
+                    violation_count=len(node_scope_violations),
+                )
+                return deterministic
             referenced_edge_ids = {
                 edge_id for path in intent.candidate_paths for edge_id in path.edge_ids
             }
-            if referenced_edge_ids - set(view.edge_ids):
-                raise ValueError("Enterprise AI intent referenced edges outside profile view")
+            edge_scope_violations = referenced_edge_ids - set(view.edge_ids)
+            if edge_scope_violations:
+                _log_intent_enterprise_ai_fallback(
+                    reason="scope_violation",
+                    model=model_id,
+                    violation_kind="edge",
+                    violation_count=len(edge_scope_violations),
+                )
+                return deterministic
             return intent.model_copy(
                 update={
                     "version": 1,
@@ -2874,9 +3152,124 @@ class OntologyApiRuntime:
                 },
                 deep=True,
             )
-        except Exception:
-            logger.warning("ontology_intent_enterprise_ai_fallback", exc_info=True)
+        except Exception as exc:
+            _log_intent_enterprise_ai_fallback(
+                reason="enterprise_ai_error",
+                model=model_id,
+                exc=exc,
+            )
             return deterministic
+
+    def _guided_schema_context(
+        self,
+        profile: Nl2SqlProfile,
+        ontology: SchemaOntology,
+        view: ProfileOntologyView,
+        *,
+        question: str = "",
+    ) -> list[dict[str, Any]]:
+        """Profile scope 内の必要最小限 schema context を構築する。
+
+        catalog に保持された代表値だけを使用し、Oracle への追加 scan は行わない。
+        column policy が masked または filterable=false の列は代表値を送らない。
+        """
+
+        allowed = {
+            value.replace('"', "").strip().upper()
+            for value in [*profile.allowed_tables, *profile.allowed_views]
+            if value.strip()
+        }
+        node_by_id = {node.id: node for node in ontology.nodes}
+        node_by_technical = {node.technical_name.upper(): node for node in ontology.nodes}
+        policy_by_column: dict[tuple[str, str, str], ColumnQueryPolicy] = {}
+        for key, column_policy in view.column_policies.items():
+            node = node_by_id.get(key) or node_by_technical.get(key.upper())
+            if node is None:
+                continue
+            for mapping in node.physical_mappings:
+                for column in mapping.column_refs:
+                    key_tuple = (
+                        column.owner.upper(),
+                        column.object_name.upper(),
+                        column.column_name.upper(),
+                    )
+                    policy_by_column[key_tuple] = column_policy
+
+        relevant_objects: set[str] = set()
+        normalized_question = question.casefold()
+        if normalized_question:
+            for node in ontology.nodes:
+                if node.id not in view.node_ids:
+                    continue
+                terms = [node.business_name_ja, *node.aliases]
+                if not any(term and term.casefold() in normalized_question for term in terms):
+                    continue
+                if node.kind in {OntologyNodeKind.TABLE, OntologyNodeKind.VIEW}:
+                    relevant_objects.add(node.technical_name.upper())
+                for mapping in node.physical_mappings:
+                    object_ref = mapping.object_ref
+                    if object_ref.object_name:
+                        relevant_objects.add(object_ref.object_name.upper())
+                        relevant_objects.add(f"{object_ref.owner}.{object_ref.object_name}".upper())
+
+        result: list[dict[str, Any]] = []
+        remaining_columns = 40
+        try:
+            tables = self.legacy_service.get_catalog().tables
+        except Exception:
+            logger.warning("guided_clarification_catalog_context_unavailable", exc_info=True)
+            return result
+        catalog_objects = {
+            name
+            for table in tables
+            for name in (
+                table.table_name.upper(),
+                f"{table.owner}.{table.table_name}".upper(),
+            )
+        }
+        if relevant_objects and not relevant_objects & catalog_objects:
+            relevant_objects.clear()
+        for table in tables:
+            short_name = table.table_name.upper()
+            qualified_name = f"{table.owner}.{table.table_name}".upper()
+            if allowed and short_name not in allowed and qualified_name not in allowed:
+                continue
+            if relevant_objects and not {short_name, qualified_name} & relevant_objects:
+                continue
+            columns: list[dict[str, Any]] = []
+            for column in table.columns:
+                if remaining_columns <= 0:
+                    break
+                current_policy = policy_by_column.get(
+                    (table.owner.upper(), table.table_name.upper(), column.column_name.upper())
+                )
+                samples = []
+                if current_policy is None or (
+                    current_policy.filterable and not current_policy.masked
+                ):
+                    samples = [str(value)[:64] for value in column.sample_values[:3]]
+                columns.append(
+                    {
+                        "name": column.column_name,
+                        "logical_name": column.logical_name,
+                        "data_type": column.data_type,
+                        "comment": column.comment,
+                        "sample_values": samples,
+                    }
+                )
+                remaining_columns -= 1
+            result.append(
+                {
+                    "owner": table.owner,
+                    "object_name": table.table_name,
+                    "logical_name": table.logical_name,
+                    "comment": table.comment,
+                    "columns": columns,
+                }
+            )
+            if len(result) >= 8 or remaining_columns <= 0:
+                break
+        return result
 
     def _embedding_hits(
         self,
@@ -3045,6 +3438,105 @@ class OntologyApiRuntime:
             )
             return self._session_data(session)
 
+    def answer_clarification(
+        self,
+        session_id: str,
+        request: ClarificationAnswerRequest,
+    ) -> QuerySessionData:
+        with self._lock:
+            self._ensure_store()
+            current = self._ensure_session_loaded(session_id)
+            if request.base_version != current.current_intent_version:
+                raise OntologyVersionConflictError(
+                    "INTENT_VERSION_CONFLICT",
+                    "質問の解釈が別の操作で更新されています。最新版を再読込してください。",
+                )
+            view = self._session_views.get(session_id)
+            if view is None:
+                view = self.sessions.get_profile_view(current.profile_view_id)
+            ontology = self._ontologies.get(current.ontology_revision_id)
+            if ontology is None:
+                ontology = self.ontology_revision(current.ontology_revision_id)
+            state = build_clarification_state(current, ontology, view)
+            question = state.current_question
+            if question is None or question.id != request.question_id:
+                raise OntologyStateConflictError(
+                    "CLARIFICATION_QUESTION_CHANGED",
+                    "確認項目が更新されています。最新版を再読込してください。",
+                )
+            answer = ClarificationAnswer(
+                question_id=request.question_id,
+                selected_option_ids=request.selected_option_ids,
+                free_text=request.free_text,
+                structured_value=request.structured_value,
+            )
+            try:
+                updated_intent = apply_clarification_answer(
+                    current.intents[-1], question, answer, ontology
+                )
+            except ValueError as exc:
+                raise OntologyIntegrityError(
+                    "CLARIFICATION_ANSWER_INVALID",
+                    str(exc),
+                ) from exc
+            if request.free_text.strip():
+                profile = self._strict_profile(current.profile_id)
+                reinterpreted = self._interpret_question(
+                    updated_intent.question_effective,
+                    profile,
+                    ontology,
+                    view,
+                    include_guided_context=True,
+                )
+                updated_intent = merge_free_text_reinterpretation(
+                    updated_intent,
+                    enrich_guided_intent(reinterpreted),
+                    question,
+                )
+            session = self.sessions.apply_clarification(
+                session_id,
+                base_version=request.base_version,
+                intent=updated_intent,
+                turn=ClarificationTurn(
+                    question=question,
+                    answer=answer,
+                    intent_version=request.base_version + 1,
+                ),
+            )
+            self._previews.pop(session_id, None)
+            self._results.pop(session_id, None)
+            self._plans.pop(session_id, None)
+            self._persist_session(session)
+            record_transition(
+                session_id=session.id,
+                revision_id=session.ontology_revision_id,
+                state=session.status.value,
+            )
+            next_state = build_clarification_state(session, ontology, view)
+            record_clarification(
+                outcome=("ready" if next_state.can_generate_sql else "answered"),
+                category=question.category.value,
+                turns=next_state.turn_count if next_state.can_generate_sql else None,
+            )
+            return self._session_data(session)
+
+    def cancel_session(self, session_id: str) -> QuerySessionData:
+        with self._lock:
+            self._ensure_store()
+            self._ensure_session_loaded(session_id)
+            session = self.sessions.cancel_session(session_id)
+            self._persist_session(session)
+            record_transition(
+                session_id=session.id,
+                revision_id=session.ontology_revision_id,
+                state=session.status.value,
+            )
+            record_clarification(
+                outcome="cancelled",
+                turns=len(session.clarification_turns),
+            )
+            return self._session_data(session)
+
     def generate_sql(
         self,
         session_id: str,
@@ -3063,6 +3555,20 @@ class OntologyApiRuntime:
                     "ONTOLOGY_REVISION_MISMATCH",
                     "確認対象の Ontology revision が query session と一致しません。",
                 )
+            if current.clarification_mode == ClarificationMode.GUIDED:
+                view = self._session_views.get(session_id)
+                if view is None:
+                    view = self.sessions.get_profile_view(current.profile_view_id)
+                ontology = self._ontologies.get(current.ontology_revision_id)
+                if ontology is None:
+                    ontology = self.ontology_revision(current.ontology_revision_id)
+                clarification = build_clarification_state(current, ontology, view)
+                if not clarification.can_generate_sql:
+                    raise OntologyGateBlockedError(
+                        "GUIDED_CLARIFICATION_INCOMPLETE",
+                        clarification.message_ja,
+                        finding_codes=clarification.missing_required,
+                    )
             confirmed = self.sessions.confirm_intent(
                 session_id,
                 intent_version=request.intent_version,
@@ -3268,6 +3774,19 @@ class OntologyApiRuntime:
                         * 1000
                     ),
                 )
+            generation_elapsed_ms: int | None = None
+            engine_timings: list[dict[str, object]] = []
+            stage_timings: list[object] = []
+            preview = self._previews.get(session.id)
+            if preview is not None:
+                raw_generation_elapsed_ms = preview.engine_meta.get("generation_elapsed_ms")
+                if isinstance(raw_generation_elapsed_ms, int):
+                    generation_elapsed_ms = raw_generation_elapsed_ms
+                raw_engine_timings = preview.engine_meta.get("engine_timings")
+                if isinstance(raw_engine_timings, list):
+                    engine_timings = [item for item in raw_engine_timings if isinstance(item, dict)]
+                if preview.timing is not None:
+                    stage_timings = list(preview.timing.stage_timings)
             try:
                 record_history(
                     session_id=session.id,
@@ -3280,6 +3799,9 @@ class OntologyApiRuntime:
                     result=result,
                     ontology_trace_summary=data.ontology_trace_summary,
                     elapsed_ms=elapsed_ms,
+                    generation_elapsed_ms=generation_elapsed_ms,
+                    engine_timings=engine_timings,
+                    stage_timings=stage_timings,
                     actor_user_uuid=actor_user_uuid,
                 )
             except Exception:
@@ -4008,6 +4530,11 @@ class OntologyApiRuntime:
         artifact = session.sql_artifacts[-1] if session.sql_artifacts else None
         report = artifact.validation_report if artifact is not None else None
         context = self._contexts.get(session.id)
+        clarification = (
+            build_clarification_state(session, ontology, view)
+            if session.clarification_mode == ClarificationMode.GUIDED
+            else None
+        )
         return QuerySessionData(
             session=session,
             profile_ontology_view=view,
@@ -4019,6 +4546,7 @@ class OntologyApiRuntime:
             preview=self._previews.get(session.id),
             result=self._results.get(session.id),
             performance_check=self._plans.get(session.id),
+            clarification=clarification,
             ontology_trace_summary={
                 "session_id": session.id,
                 "ontology_revision_id": session.ontology_revision_id,
@@ -5074,6 +5602,66 @@ def create_query_session(
 def get_query_session(session_id: str, http_request: Request) -> ApiResponse[QuerySessionData]:
     try:
         return ApiResponse(data=_load_authorized_query_session(session_id, http_request))
+    except Exception as exc:
+        _raise_domain_error(exc)
+
+
+@router.post(
+    "/query-sessions/{session_id}/clarification-answers",
+    response_model=ApiResponse[QuerySessionData],
+)
+def answer_query_clarification(
+    session_id: str,
+    request: ClarificationAnswerRequest,
+    http_request: Request,
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+) -> ApiResponse[QuerySessionData]:
+    try:
+        _load_authorized_query_session(session_id, http_request)
+        return ApiResponse(
+            data=_run_runtime_sync(
+                ontology_runtime.answer_clarification_idempotent,
+                session_id,
+                request,
+                idempotency_key=idempotency_key,
+            )
+        )
+    except OntologyVersionConflictError as exc:
+        try:
+            current = (_run_runtime_sync(ontology_runtime.get_session, session_id)).session
+        except Exception:
+            _raise_domain_error(exc)
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": exc.code,
+                "message_ja": exc.message_ja,
+                "current_version": current.current_intent_version,
+                "session": current.model_dump(mode="json"),
+            },
+        ) from exc
+    except Exception as exc:
+        _raise_domain_error(exc)
+
+
+@router.post(
+    "/query-sessions/{session_id}/cancel",
+    response_model=ApiResponse[QuerySessionData],
+)
+def cancel_query_session(
+    session_id: str,
+    http_request: Request,
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+) -> ApiResponse[QuerySessionData]:
+    try:
+        _load_authorized_query_session(session_id, http_request)
+        return ApiResponse(
+            data=_run_runtime_sync(
+                ontology_runtime.cancel_session_idempotent,
+                session_id,
+                idempotency_key=idempotency_key,
+            )
+        )
     except Exception as exc:
         _raise_domain_error(exc)
 
