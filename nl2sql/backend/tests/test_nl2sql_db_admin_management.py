@@ -1470,14 +1470,16 @@ def test_statements_partial_success_commits_and_records_audit() -> None:
         ]
     )
     service = _OracleRuntimeService(adapter)
+    sql = "CREATE TABLE T1 (ID NUMBER); COMMENT ON TABLE MISSING IS 'x'"
 
-    result = service.execute_db_admin_statements(
-        DbAdminStatementsRequest(
-            sql="CREATE TABLE T1 (ID NUMBER); COMMENT ON TABLE MISSING IS 'x'",
-            policy="table_ddl",
-            confirmation="ADMIN_EXECUTE",
+    with actor_scope("audit-user-uuid", is_system_admin=True):
+        result = service.execute_db_admin_statements(
+            DbAdminStatementsRequest(
+                sql=sql,
+                policy="table_ddl",
+                confirmation="ADMIN_EXECUTE",
+            )
         )
-    )
 
     assert adapter.calls and adapter.calls[0][1] is False  # atomic=False
     assert result.executed is True
@@ -1485,9 +1487,66 @@ def test_statements_partial_success_commits_and_records_audit() -> None:
     assert result.rolled_back is False
     assert result.execution_context == "admin_control_plane"
     assert any("部分的に成功" in warning for warning in result.warnings)
-    assert any(
-        item["operation"] == "db_admin_statements_table_ddl" for item in service._admin_audit
+    audit = next(
+        item
+        for item in service._admin_audit
+        if item["operation"] == "db_admin_statements_table_ddl"
     )
+    assert audit["actor_user_uuid"] == "audit-user-uuid"
+    assert audit["actor_is_system_admin"] is True
+    assert audit["detail"]["statement_count"] == 2
+    assert audit["detail"]["success_count"] == 1
+    assert len(audit["detail"]["sql_sha256"]) == 64
+    assert audit["detail"]["sql_preview"] == sql
+    assert len(audit["detail"]["statement_hashes"]) == 2
+    assert audit["detail"]["statement_previews"] == [
+        "CREATE TABLE T1 (ID NUMBER)",
+        "COMMENT ON TABLE MISSING IS 'x'",
+    ]
+
+
+def test_admin_sql_execute_audit_records_actor_and_sql_hash(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sql = "CREATE TABLE AUDIT_DIRECT (ID NUMBER)"
+    adapter = _FakeStatementsAdapter(
+        [
+            {
+                "index": 1,
+                "statement_type": "CREATE",
+                "status": "success",
+                "sql": sql,
+                "message": "OK",
+            }
+        ]
+    )
+    service = _OracleRuntimeService(adapter)
+    monkeypatch.setattr(
+        service,
+        "_submit_schema_refresh_after_admin_mutation",
+        lambda **_kwargs: SchemaRefreshMutationSync(job_id="refresh-job-audit"),
+    )
+
+    with actor_scope("direct-audit-user", is_system_admin=False):
+        result = service.execute_db_admin_sql(
+            DbAdminExecuteRequest(
+                sql=sql,
+                confirmation="ADMIN_EXECUTE",
+                reason="admin-sql-admin",
+            )
+        )
+
+    assert result.executed is True
+    audit = service._admin_audit[-1]
+    assert audit["operation"] == "db_admin_execute"
+    assert audit["actor_user_uuid"] == "direct-audit-user"
+    assert audit["actor_is_system_admin"] is False
+    assert audit["detail"]["statement_count"] == 1
+    assert audit["detail"]["success_count"] == 1
+    assert audit["detail"]["types"] == ["CREATE"]
+    assert len(audit["detail"]["sql_sha256"]) == 64
+    assert audit["detail"]["sql_preview"] == sql
+    assert audit["detail"]["statement_previews"] == [sql]
 
 
 def test_admin_sql_delegates_data_dml_batch_to_partial_commit_policy() -> None:
