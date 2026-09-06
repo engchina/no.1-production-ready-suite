@@ -818,6 +818,8 @@ const nl2sqlJa = {
   "nl2sql.recommend.switchApply": "切替",
   "nl2sql.recommend.autoDetect": "プロファイルを自動判定",
   "nl2sql.recommend.autoDetectApplied": "{name} を選択しました（{source}・信頼度 {confidence}%）",
+  "nl2sql.recommend.autoDetectAlreadySelected":
+    "{name} は既に選択されています（{source}・信頼度 {confidence}%）",
   "nl2sql.recommend.autoDetectLowConfidence":
     "十分な信頼度で自動判定できませんでした（候補: {name}・信頼度 {confidence}%）。候補を確認して手動で選択してください。",
   "nl2sql.recommend.autoDetectFailed": "プロファイルの自動判定に失敗しました。",
