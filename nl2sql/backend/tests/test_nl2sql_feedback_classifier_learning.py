@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import io
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 from typing import Any, cast
@@ -53,6 +53,7 @@ class _CountingIncrementalRepository(MemoryIncrementalNl2SqlRepository):
         status: str = "",
         query: str = "",
         payload_filters: Mapping[str, str] | None = None,
+        profile_ids: Iterable[str] | None = None,
     ) -> tuple[list[dict[str, Any]], str | None, int]:
         if collection == "classifier_examples":
             self.classifier_example_page_reads += 1
@@ -64,6 +65,7 @@ class _CountingIncrementalRepository(MemoryIncrementalNl2SqlRepository):
             status=status,
             query=query,
             payload_filters=payload_filters,
+            profile_ids=profile_ids,
         )
 
     def get_document(self, collection: str, entity_id: str) -> dict[str, Any] | None:
@@ -331,6 +333,42 @@ def test_incremental_feedback_pagination_is_not_limited_to_recent_fifty() -> Non
     assert len(second_page.items) == 18
     assert second_page.next_cursor == ""
     assert candidates.total == 38
+
+
+def test_feedback_list_builds_classifier_profile_lookup_once_per_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service()
+    for index in range(3):
+        item = _history(f"history-{index}", f"候補質問 {index}").model_copy(
+            update={
+                "feedback_rating": FeedbackRating.GOOD,
+                "feedback_comment": "採用候補",
+            }
+        )
+        _append_history(service, item)
+
+    list_profile_calls = 0
+
+    def list_profiles(*, include_archived: bool = False) -> list[Nl2SqlProfile]:
+        nonlocal list_profile_calls
+        assert include_archived is False
+        list_profile_calls += 1
+        return [Nl2SqlProfile(id="default", name="標準プロファイル")]
+
+    monkeypatch.setattr(service, "list_profiles", list_profiles)
+
+    feedback = service.list_feedback(
+        cursor=None,
+        limit=20,
+        rating="good",
+        profile_id="",
+        query="",
+    )
+
+    assert len(feedback.items) == 3
+    assert {item.training_status for item in feedback.items} == {"pending"}
+    assert list_profile_calls == 1
 
 
 def test_failed_retraining_preserves_the_active_model(monkeypatch: pytest.MonkeyPatch) -> None:

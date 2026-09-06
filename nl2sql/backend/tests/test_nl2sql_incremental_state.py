@@ -8,7 +8,7 @@ import json
 import sys
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -754,6 +754,64 @@ def test_incremental_feedback_review_keeps_created_at_order_and_cursor_page() ->
     assert [item.id for item in first_after.items] == ["hist-002", "hist-001"]
     assert [item.id for item in second_after.items] == ["hist-000"]
     assert second_after.items[0].admin_feedback_content == "2 ページ目で確認"
+
+
+def test_incremental_feedback_list_pushes_allowed_profiles_into_page_query() -> None:
+    class _ScopedPageRepository(MemoryIncrementalNl2SqlRepository):
+        def __init__(self) -> None:
+            super().__init__(seed_default=False)
+            self.history_page_calls = 0
+            self.profile_id_scopes: list[set[str] | None] = []
+
+        def list_documents_page(  # type: ignore[override]
+            self,
+            collection: str,
+            *,
+            cursor: str | None,
+            limit: int,
+            profile_id: str = "",
+            status: str = "",
+            query: str = "",
+            payload_filters: dict[str, str] | None = None,
+            profile_ids: Iterable[str] | None = None,
+        ) -> tuple[list[dict[str, object]], str | None, int]:
+            if collection == "history":
+                self.history_page_calls += 1
+                self.profile_id_scopes.append(None if profile_ids is None else set(profile_ids))
+            return super().list_documents_page(
+                collection,
+                cursor=cursor,
+                limit=limit,
+                profile_id=profile_id,
+                status=status,
+                query=query,
+                payload_filters=payload_filters,
+                profile_ids=profile_ids,
+            )
+
+    repository = _ScopedPageRepository()
+    histories = [
+        _history(0).model_copy(update={"profile_id": "profile-a", "profile_name": "A"}),
+        _history(1).model_copy(update={"profile_id": "profile-b", "profile_name": "B"}),
+        _history(2).model_copy(update={"profile_id": "profile-a", "profile_name": "A"}),
+    ]
+    _seed_history(repository, histories)
+    service = _incremental_service(repository)
+
+    page = service.list_feedback(
+        cursor=None,
+        limit=1,
+        rating="",
+        profile_id="",
+        query="",
+        allowed_profile_ids={"profile-a"},
+    )
+
+    assert [item.id for item in page.items] == ["hist-002"]
+    assert page.total == 2
+    assert page.next_cursor
+    assert repository.history_page_calls == 1
+    assert repository.profile_id_scopes == [{"profile-a"}]
 
 
 def test_incremental_singleton_save_does_not_overwrite_feedback_config() -> None:
@@ -1539,6 +1597,46 @@ def test_oracle_state_document_page_filters_payload_before_paging() -> None:
         for connection in connections
         for _sql, binds in connection.executed
     )
+
+
+def test_oracle_state_document_page_filters_profile_ids_before_paging() -> None:
+    payload = '{"id":"history-sales","question":"営業の履歴","profile_id":"sales"}'
+    repository, connections = _oracle_repository(
+        [
+            [(2,)],
+            [
+                (
+                    _LobPayload(payload),
+                    datetime(2026, 7, 20, tzinfo=UTC),
+                    "history-sales",
+                ),
+                (
+                    _LobPayload('{"id":"history-finance","profile_id":"finance"}'),
+                    datetime(2026, 7, 19, tzinfo=UTC),
+                    "history-finance",
+                ),
+            ],
+        ]
+    )
+
+    page, next_cursor, total = repository.list_documents_page(
+        "history",
+        cursor=None,
+        limit=1,
+        profile_ids={"sales", "finance"},
+    )
+
+    assert [item["id"] for item in page] == ["history-sales"]
+    assert next_cursor is not None
+    assert total == 2
+    count_sql, count_binds = connections[0].executed[0]
+    page_sql, page_binds = connections[0].executed[1]
+    assert "PROFILE_ID IN (:profile_id_0, :profile_id_1)" in count_sql
+    assert "PROFILE_ID IN (:profile_id_0, :profile_id_1)" in page_sql
+    assert count_binds["profile_id_0"] == "finance"
+    assert count_binds["profile_id_1"] == "sales"
+    assert page_binds["profile_id_0"] == "finance"
+    assert page_binds["profile_id_1"] == "sales"
 
 
 @pytest.mark.asyncio

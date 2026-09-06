@@ -6789,44 +6789,6 @@ class Nl2SqlService:
             filters["actor_user_uuid"] = actor_user_uuid
         repository = self._incremental_repository
         if repository is not None:
-            if allowed_profile_ids is not None and not profile_id:
-                offset = self._decode_page_cursor(cursor)
-                items: list[HistoryItem] = []
-                repo_cursor: str | None = ""
-                while True:
-                    try:
-                        documents, repo_cursor, _total = repository.list_documents_page(
-                            "history",
-                            cursor=repo_cursor or None,
-                            limit=500,
-                            status=status,
-                            query=query,
-                            payload_filters=filters or None,
-                        )
-                    except Exception as exc:
-                        self._raise_incremental_repository_failure(
-                            operation="history_search",
-                            exc=exc,
-                            operation_error_code="history_query_failed",
-                        )
-                    page_items = [HistoryItem.model_validate(document) for document in documents]
-                    items.extend(
-                        item
-                        for item in page_items
-                        if self._profile_in_allowed_profile_ids(
-                            item.profile_id, allowed_profile_ids
-                        )
-                    )
-                    if not repo_cursor or not documents:
-                        break
-                total = len(items)
-                selected = items[offset : offset + limit]
-                next_offset = offset + len(selected)
-                return (
-                    [item.model_copy(deep=True) for item in selected],
-                    self._encode_page_cursor(next_offset) if next_offset < total else "",
-                    total,
-                )
             try:
                 documents, next_cursor, total = repository.list_documents_page(
                     "history",
@@ -6836,6 +6798,11 @@ class Nl2SqlService:
                     status=status,
                     query=query,
                     payload_filters=filters or None,
+                    profile_ids=(
+                        allowed_profile_ids
+                        if allowed_profile_ids is not None and not profile_id
+                        else None
+                    ),
                 )
             except Exception as exc:
                 self._raise_incremental_repository_failure(
@@ -7390,8 +7357,16 @@ class Nl2SqlService:
             allowed_profile_ids=allowed_profile_ids,
         )
         records: list[FeedbackRecord] = []
+        profiles_by_id = (
+            {profile.id: profile for profile in self.list_profiles(include_archived=False)}
+            if any(item.feedback_rating == FeedbackRating.GOOD for item in items)
+            else None
+        )
         for item in items:
-            candidate = self._classifier_candidate_from_history(item)
+            candidate = self._classifier_candidate_from_history(
+                item,
+                profiles_by_id=profiles_by_id,
+            )
             records.append(
                 FeedbackRecord(
                     **item.model_dump(mode="json"),
@@ -7410,7 +7385,10 @@ class Nl2SqlService:
         return " ".join(normalized.split()).casefold()
 
     def _classifier_candidate_from_history(
-        self, history: HistoryItem
+        self,
+        history: HistoryItem,
+        *,
+        profiles_by_id: Mapping[str, Nl2SqlProfile] | None = None,
     ) -> ClassifierTrainingCandidate | None:
         with self._lock:
             examples = list(self._classifier_examples)
@@ -7441,14 +7419,9 @@ class Nl2SqlService:
             )
         if history.feedback_rating != FeedbackRating.GOOD:
             return None
-        profile = next(
-            (
-                item
-                for item in self.list_profiles(include_archived=False)
-                if item.id == history.profile_id
-            ),
-            None,
-        )
+        if profiles_by_id is None:
+            profiles_by_id = {item.id: item for item in self.list_profiles(include_archived=False)}
+        profile = profiles_by_id.get(history.profile_id)
         if profile is None:
             return ClassifierTrainingCandidate(
                 history_id=history.id,
