@@ -1826,12 +1826,16 @@ def rewrite(req: RewriteRequest, request: Request) -> ApiResponse[RewriteData]:
 
 
 @router.post("/analyze", response_model=ApiResponse[AnalyzeData])
-def analyze(req: AnalyzeRequest) -> ApiResponse[AnalyzeData]:
+def analyze(req: AnalyzeRequest, request: Request) -> ApiResponse[AnalyzeData]:
     """SQL の安全性・参照表・推奨修正を返す。"""
+    allowed = nl2sql_service.resolve_direct_sql_allowed_objects(
+        req.allowed_objects,
+        profile_ids=_allowed_profile_ids_for_request(request),
+    )
     return ApiResponse(
         data=nl2sql_service.analyze_sql(
             req.sql,
-            req.allowed_objects,
+            allowed,
             req.row_limit,
             use_llm=req.use_llm,
         )

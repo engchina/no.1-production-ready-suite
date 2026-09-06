@@ -18,6 +18,7 @@ from app.features.nl2sql.incremental_store import MemoryIncrementalNl2SqlReposit
 from app.features.nl2sql.models import (
     DIRECT_SQL_DEFAULT_ROW_LIMIT,
     AllowedObjects,
+    AnalyzeRequest,
     ExecuteRequest,
     Nl2SqlProfile,
     SchemaCatalog,
@@ -232,6 +233,31 @@ def test_execute_route_scopes_profile_manager_to_all_active_profiles(
         _request(manager),  # type: ignore[arg-type]
     )
     assert permitted.data is not None and permitted.data.columns
+
+
+def test_analyze_route_scopes_non_admin_principal_to_allowed_profiles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(_repository())
+    monkeypatch.setattr(nl2sql_router, "nl2sql_service", service)
+
+    blocked = nl2sql_router.analyze(
+        AnalyzeRequest(
+            sql="SELECT ID FROM APP.SALARY",
+            allowed_objects=AllowedObjects(table_names=["APP.SALARY"]),
+        ),
+        _request(_principal({"sales"})),  # type: ignore[arg-type]
+    )
+    assert blocked.data is not None
+    assert blocked.data.safety.is_safe is False
+    assert "許可されていない表" in blocked.data.safety.blocked_reason
+
+    permitted = nl2sql_router.analyze(
+        AnalyzeRequest(sql="SELECT ID FROM APP.ORDERS"),
+        _request(_principal({"sales"})),  # type: ignore[arg-type]
+    )
+    assert permitted.data is not None
+    assert permitted.data.safety.is_safe is True
 
 
 def test_execute_route_keeps_request_scope_for_admin_and_unauthenticated(
