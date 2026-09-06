@@ -405,6 +405,8 @@ function guidedSessionData(
   confirmed = false,
   done = false
 ) {
+  const clarifiedQuestion =
+    "受注件数を表示\n確認事項（どの期間を対象にしますか？）：今月";
   const data: ReturnType<typeof sessionData> & { clarification?: unknown; preview?: unknown } = sessionData(
     ready ? (withSql ? "awaiting_sql_confirmation" : "awaiting_intent_confirmation") : "awaiting_intent_confirmation",
     withSql,
@@ -417,7 +419,12 @@ function guidedSessionData(
     clarification_mode: "guided",
     current_intent_version: ready ? 2 : 1,
     intents: ready
-      ? [{ ...intent, version: 2 }]
+      ? [{
+          ...intent,
+          version: 2,
+          question_effective: clarifiedQuestion,
+          time_range: { relative_expression: "今月" },
+        }]
       : [intent],
     clarification_turns: ready
       ? [{
@@ -519,7 +526,7 @@ function guidedOutputSessionData(ready: boolean) {
     category: "output",
     prompt_ja: "検索結果に表示する項目を選んでください。",
     reason_ja:
-      "検索クエリだけでは必要な表示項目を絞れませんでした。必要な項目をすべて選んでください。",
+      "クエリだけでは必要な表示項目を絞れませんでした。必要な項目をすべて選んでください。",
     answer_kind: "multi_select",
     options: [
       {
@@ -1107,7 +1114,7 @@ test("検索実行は明示操作後だけ現在の質問とオントロジー�
   await page.screenshot({ path: testInfo.outputPath("ontology-intent-editor.png"), fullPage: true });
 });
 
-test("AI要件確認は一問ずつ意図を確認してからSQLを生成・実行する", async ({ page }, testInfo) => {
+test("AI要件確認は一問ずつ確認した内容でクエリを置き換える", async ({ page }, testInfo) => {
   const payloads = await mockApi(page);
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto("/query");
@@ -1127,12 +1134,18 @@ test("AI要件確認は一問ずつ意図を確認してからSQLを生成・実
   await expect(panel.getByText("今月", { exact: true })).toBeVisible();
   await expect(panel.getByText("最大件数")).toHaveCount(0);
   await expect(panel.getByText("結果は最大 100 件に制限します。")).toHaveCount(0);
-  await panel.getByRole("button", { name: "この意図でSQLを生成" }).click();
-  await expect(panel.getByRole("heading", { name: "生成したSQL" })).toBeVisible();
-  await expect(panel.getByText("FETCH FIRST 100 ROWS ONLY")).toHaveCount(0);
-  await panel.getByRole("button", { name: "このSQLを実行" }).click();
+  await panel.getByRole("button", { name: "確認内容をクエリに反映" }).click();
 
-  await expect(page.getByRole("columnheader", { name: "ORDER_COUNT" })).toBeVisible();
+  const clarifiedQuestion =
+    "受注件数を表示\n確認事項（どの期間を対象にしますか？）：今月";
+  const questionInput = page.locator("#nl2sql-question-input");
+  await expect(panel).toHaveCount(0);
+  await expect(questionInput).toHaveValue(clarifiedQuestion);
+  await expect(questionInput).toBeFocused();
+  await expect(page.getByText("確認内容をクエリに反映しました。内容を確認して検索を実行してください。")).toBeVisible();
+  expect(payloads.generate).toBeUndefined();
+  expect(payloads.confirm).toBeUndefined();
+  expect(payloads.execute).toBeUndefined();
   expect(payloads.create).toMatchObject({
     question: "受注件数を表示",
     profile_id: "default",
@@ -1143,6 +1156,8 @@ test("AI要件確認は一問ずつ意図を確認してからSQLを生成・実
     question_id: "question-time-range",
     selected_option_ids: ["option-this-month"],
   });
+  await runCurrentOntologySearch(page);
+  expect(payloads.job).toMatchObject({ question: clarifiedQuestion });
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
   expect(overflow).toBe(false);
   await page.screenshot({ path: testInfo.outputPath("guided-clarification.png"), fullPage: true });
@@ -1184,7 +1199,7 @@ test("AI要件確認の開始中は実処理に合わせて案内を切り替え
   expect(overflow).toBe(false);
 });
 
-test("AI要件確認は利用者が明示した最大件数だけを表示する", async ({ page }) => {
+test("AI要件確認は利用者が明示した最大件数を保ったままクエリへ反映する", async ({ page }) => {
   const payloads = await mockApi(page);
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto("/query");
@@ -1197,11 +1212,11 @@ test("AI要件確認は利用者が明示した最大件数だけを表示する
   await expect(panel.getByText("最大件数")).toBeVisible();
   await expect(panel.getByText("10 件", { exact: true })).toBeVisible();
   await expect(panel.getByText("結果は最大 100 件に制限します。")).toHaveCount(0);
-  await panel.getByRole("button", { name: "この意図でSQLを生成" }).click();
-  await expect(panel.getByText("FETCH FIRST 10 ROWS ONLY")).toBeVisible();
-  await panel.getByRole("button", { name: "このSQLを実行" }).click();
-
-  await expect(page.getByRole("columnheader", { name: "ORDER_COUNT" })).toBeVisible();
+  await panel.getByRole("button", { name: "確認内容をクエリに反映" }).click();
+  await expect(page.locator("#nl2sql-question-input")).toHaveValue("受注件数を上位 10 件表示");
+  expect(payloads.generate).toBeUndefined();
+  expect(payloads.confirm).toBeUndefined();
+  expect(payloads.execute).toBeUndefined();
   expect(payloads.create).toMatchObject({
     question: "受注件数を上位 10 件表示",
     profile_id: "default",

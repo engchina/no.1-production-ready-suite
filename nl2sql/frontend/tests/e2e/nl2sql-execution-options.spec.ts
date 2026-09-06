@@ -696,8 +696,8 @@ test("unified execute button runs SQL and renders execution artifacts", async ({
   await expectNoHorizontalOverflow(page);
 });
 
-test("AI要件確認は質問を補完してSQL生成と実行へ進める", async ({ page }) => {
-  await mockNl2SqlWorkbenchApi(page);
+test("AI要件確認は確認内容をクエリへ反映し、通常の検索実行へ戻す", async ({ page }) => {
+  const api = await mockNl2SqlWorkbenchApi(page);
   const calls: Record<string, Record<string, unknown> | null> = {
     recommendationPayload: null,
     confirmationPayload: null,
@@ -760,14 +760,17 @@ test("AI要件確認は質問を補完してSQL生成と実行へ進める", asy
   ).toBeVisible();
   await expect(panel.getByText("期間")).toBeVisible();
   await expect(panel.getByText("今月")).toBeVisible();
-  await page.getByRole("button", { name: "この意図でSQLを生成" }).click();
+  await page.getByRole("button", { name: "確認内容をクエリに反映" }).click();
 
-  await expect(panel.getByText("生成したSQL")).toBeVisible();
-  await expect(panel.getByText("SELECT COUNT(*) AS ORDER_COUNT FROM APP.ORDERS")).toBeVisible();
-  await page.getByRole("button", { name: "このSQLを実行" }).click();
-
-  await expect(panel.getByText("確認済みの意図とSQLで検索を実行しました。")).toBeVisible();
-  await expect(page.getByText("42")).toBeVisible();
+  const questionInput = page.locator("#nl2sql-question-input");
+  const clarifiedQuestion =
+    "受注件数を表示\n確認事項（どの期間を対象にしますか？）：今月";
+  await expect(panel).toHaveCount(0);
+  await expect(questionInput).toHaveValue(clarifiedQuestion);
+  await expect(questionInput).toBeFocused();
+  await expect(page.getByText("確認内容をクエリに反映しました。内容を確認して検索を実行してください。")).toBeVisible();
+  await expect(page.getByText("生成したSQL")).toHaveCount(0);
+  expect(api.jobPayload).toBeNull();
   await expectNoHorizontalOverflow(page);
 
   expect(calls.recommendationPayload).toMatchObject({
@@ -791,23 +794,13 @@ test("AI要件確認は質問を補完してSQL生成と実行へ進める", asy
     selected_option_ids: ["option-this-month"],
     free_text: "",
   });
-  expect(calls.generatePayload).toMatchObject({
-    base_version: 2,
-    intent_version: 2,
-    ontology_revision_id: guidedRevision.id,
-    confirm_intent: true,
-  });
-  const expectedBinding = {
-    artifact_id: "artifact-guided-1",
-    ontology_revision_id: guidedRevision.id,
-    intent_version: 2,
-    sql_hash: "sql-hash-guided",
-    validation_hash: "validation-hash-guided",
-    generation_context_hash: "context-hash-guided",
-    confirm_sql: true,
-  };
-  expect(calls.confirmPayload).toMatchObject(expectedBinding);
-  expect(calls.executePayload).toMatchObject(expectedBinding);
+  expect(calls.generatePayload).toBeNull();
+  expect(calls.confirmPayload).toBeNull();
+  expect(calls.executePayload).toBeNull();
+
+  await page.getByRole("button", { name: "検索を実行" }).click();
+  await expect.poll(() => api.jobPayload).not.toBeNull();
+  expect(api.jobPayload).toMatchObject({ question: clarifiedQuestion });
 });
 
 test("glossary option off skips rewrite and sends the original question", async ({ page }) => {

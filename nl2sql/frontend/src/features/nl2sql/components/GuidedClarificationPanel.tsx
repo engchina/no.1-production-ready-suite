@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { CheckCircle2, ChevronDown, Play, Sparkles, X } from "lucide-react";
+import { CheckCircle2, ChevronDown, Sparkles, X } from "lucide-react";
 
 import { Banner } from "@engchina/production-ready-ui";
 
@@ -13,10 +13,7 @@ import {
   answerQuerySessionClarification,
   cancelQuerySession,
   confirmOntologyProfileRecommendation,
-  confirmQuerySessionSql,
   createQuerySession,
-  executeQuerySession,
-  generateQuerySessionSql,
   getQuerySession,
   QuerySessionVersionConflictError,
   recommendOntologyProfiles,
@@ -26,7 +23,6 @@ import type {
   ClarificationQuestion,
   OntologyProfileRecommendation,
   QuerySession,
-  QuerySessionExecutionBinding,
 } from "../ontology/types";
 import type { Nl2SqlEngine } from "../types";
 
@@ -36,7 +32,7 @@ interface GuidedClarificationPanelProps {
   engine: Nl2SqlEngine;
   allowedObjects: { table_names: string[]; columns: Record<string, string[]> };
   onClose: () => void;
-  onCompleted: (session: QuerySession) => void;
+  onApplyQuestion: (question: string) => void;
 }
 
 const SOURCE_LABELS: Record<ClarificationEvidenceSource, string> = {
@@ -94,39 +90,13 @@ function latestIntent(session: QuerySession | null) {
   return [...session.intents].reverse().find((item) => item.version === version) ?? null;
 }
 
-function executionBinding(session: QuerySession): QuerySessionExecutionBinding | null {
-  const artifact = session.sql_artifacts?.find(
-    (item) => item.id === session.current_sql_artifact_id
-  );
-  const report = artifact?.validation_report;
-  if (
-    !artifact?.id ||
-    !artifact.ontology_revision_id ||
-    !artifact.intent_version ||
-    !artifact.sql_hash ||
-    !artifact.generation_context_hash ||
-    !report?.validation_hash
-  ) {
-    return null;
-  }
-  return {
-    session_id: session.id,
-    artifact_id: artifact.id,
-    ontology_revision_id: artifact.ontology_revision_id,
-    intent_version: artifact.intent_version,
-    sql_hash: artifact.sql_hash,
-    validation_hash: report.validation_hash,
-    generation_context_hash: artifact.generation_context_hash,
-  };
-}
-
 export function GuidedClarificationPanel({
   question,
   profileId,
   engine,
   allowedObjects,
   onClose,
-  onCompleted,
+  onApplyQuestion,
 }: GuidedClarificationPanelProps) {
   const [session, setSession] = useState<QuerySession | null>(null);
   const [recommendation, setRecommendation] = useState<OntologyProfileRecommendation | null>(null);
@@ -135,7 +105,7 @@ export function GuidedClarificationPanel({
   const [freeText, setFreeText] = useState("");
   const [manualAnswers, setManualAnswers] = useState<Record<string, ManualAnswerValue>>({});
   const [error, setError] = useState("");
-  const [busyAction, setBusyAction] = useState<"start" | "answer" | "generate" | "execute" | "cancel" | "">("start");
+  const [busyAction, setBusyAction] = useState<"start" | "answer" | "cancel" | "">("start");
   const [startPhase, setStartPhase] = useState<ClarificationStartPhase>("recommend_profile");
   const startedRef = useRef(false);
   const questionHeadingRef = useRef<HTMLHeadingElement>(null);
@@ -143,9 +113,6 @@ export function GuidedClarificationPanel({
   const clarification = session?.clarification ?? null;
   const currentQuestion = clarification?.current_question ?? null;
   const intent = latestIntent(session);
-  const generatedSql = session?.sql_artifacts?.find(
-    (item) => item.id === session.current_sql_artifact_id
-  )?.sql;
 
   const startSession = async (
     currentRecommendation: OntologyProfileRecommendation,
@@ -322,49 +289,15 @@ export function GuidedClarificationPanel({
     }
   };
 
-  const generateSql = async () => {
-    if (!session || !clarification?.can_generate_sql || busyAction) return;
-    const intentVersion = session.current_intent_version ?? intent?.version;
-    if (!intentVersion) return;
-    setBusyAction("generate");
-    setError("");
-    try {
-      const updated = await generateQuerySessionSql(session.id, {
-        base_version: intentVersion,
-        intent_version: intentVersion,
-        ontology_revision_id: session.ontology_revision_id,
-        confirm_intent: true,
-      });
-      setSession(updated);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : t("nl2sql.clarification.error.generate"));
-    } finally {
-      setBusyAction("");
-    }
-  };
-
-  const executeSql = async () => {
-    if (!session || busyAction) return;
-    const binding = executionBinding(session);
-    if (!binding) {
-      setError(t("nl2sql.clarification.error.binding"));
+  const applyQuestion = () => {
+    if (!clarification?.can_generate_sql || busyAction) return;
+    const clarifiedQuestion = intent?.question_effective?.trim();
+    if (!clarifiedQuestion) {
+      setError(t("nl2sql.clarification.error.apply"));
       return;
     }
-    setBusyAction("execute");
     setError("");
-    try {
-      await confirmQuerySessionSql(session.id, { ...binding, confirm_sql: true });
-      const completed = await executeQuerySession(session.id, {
-        ...binding,
-        confirm_sql: true,
-      });
-      setSession(completed);
-      onCompleted(completed);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : t("nl2sql.clarification.error.execute"));
-    } finally {
-      setBusyAction("");
-    }
+    onApplyQuestion(clarifiedQuestion);
   };
 
   const closePanel = async () => {
@@ -727,7 +660,7 @@ export function GuidedClarificationPanel({
         </div>
       ) : null}
 
-      {clarification?.can_generate_sql && !generatedSql ? (
+      {clarification?.can_generate_sql ? (
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
           <span className="flex items-center gap-2 text-sm text-success">
             <CheckCircle2 size={16} aria-hidden="true" />
@@ -737,45 +670,13 @@ export function GuidedClarificationPanel({
             type="button"
             variant="primary"
             size="lg"
-            loading={busyAction === "generate"}
-            disabled={Boolean(busyAction && busyAction !== "generate")}
-            onClick={() => void generateSql()}
+            disabled={Boolean(busyAction)}
+            onClick={applyQuestion}
           >
             <Sparkles size={16} aria-hidden="true" />
-            {t("nl2sql.clarification.generate")}
+            {t("nl2sql.clarification.apply")}
           </Button>
         </div>
-      ) : null}
-
-      {generatedSql && session?.status !== "done" ? (
-        <section className="grid gap-3 border-t border-border pt-4" aria-labelledby="nl2sql-guided-sql-title">
-          <h4 id="nl2sql-guided-sql-title" className="text-sm font-semibold text-foreground">
-            {t("nl2sql.clarification.generatedSql")}
-          </h4>
-          <pre
-            tabIndex={0}
-            className="max-h-64 overflow-auto rounded-md border border-border bg-background p-3 text-sm leading-6 text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
-          >
-            <code>{generatedSql}</code>
-          </pre>
-          <div className="flex justify-end">
-            <Button
-              type="button"
-              variant="primary"
-              size="lg"
-              loading={busyAction === "execute"}
-              disabled={Boolean(busyAction && busyAction !== "execute")}
-              onClick={() => void executeSql()}
-            >
-              <Play size={16} aria-hidden="true" />
-              {t("nl2sql.clarification.execute")}
-            </Button>
-          </div>
-        </section>
-      ) : null}
-
-      {session?.status === "done" ? (
-        <Banner severity="success">{t("nl2sql.clarification.executed")}</Banner>
       ) : null}
     </section>
   );

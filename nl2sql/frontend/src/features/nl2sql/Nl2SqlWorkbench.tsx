@@ -77,7 +77,6 @@ import type {
   SimilarHistoryData,
   SimilarHistoryItem,
 } from "./types";
-import type { QuerySession } from "./ontology/types";
 import { useNl2SqlJobPolling } from "./useNl2SqlJobPolling";
 import {
   emptySelection,
@@ -873,64 +872,21 @@ function ExecutableNl2SqlWorkbench() {
     }
   };
 
-  const handleGuidedExecutionCompleted = (session: QuerySession) => {
-    const preview = session.preview;
-    const rawResults = session.result;
-    if (
-      !preview ||
-      !rawResults ||
-      !Array.isArray(rawResults.columns) ||
-      !Array.isArray(rawResults.rows) ||
-      typeof rawResults.total !== "number"
-    ) {
-      setActionError(t("nl2sql.clarification.error.execute"));
-      setActionOperationKey((current) => current + 1);
-      return;
-    }
-    const currentIntent = [...(session.intents ?? [])]
-      .reverse()
-      .find((item) => item.version === session.current_intent_version);
-    const generatedSql =
-      session.sql_artifacts?.find((item) => item.id === session.current_sql_artifact_id)?.sql ??
-      preview.sql;
-    const now = new Date().toISOString();
-    clearTrackedJob();
+  const handleApplyClarifiedQuestion = useCallback((clarifiedQuestion: string) => {
+    setQuestion(clarifiedQuestion);
+    setRewriteData(null);
     setActionError("");
-    setResult({
-      engine: preview.engine ?? engine,
-      engine_meta: preview.engine_meta ?? {},
-      fallback_reason: preview.fallback_reason ?? "",
-      original_question: session.original_question ?? question,
-      rewritten_question: currentIntent?.question_effective ?? preview.rewritten_question ?? question,
-      generated_sql: generatedSql,
-      executable_sql: preview.executable_sql || generatedSql,
-      explanation: preview.note ?? "",
-      safety: {
-        is_safe: preview.is_safe,
-        is_select_only: preview.is_safe,
-        row_limit_applied: preview.row_limit,
-        blocked_reason: "",
-        warnings: [],
-        referenced_tables: selection.tableNames,
-        referenced_columns: Object.values(selection.columns).flat(),
-      },
-      recommendations: preview.recommendations ?? [],
-      repaired_sql: preview.repaired_sql ?? "",
-      optimization_hints: preview.optimization_hints ?? [],
-      results: {
-        columns: rawResults.columns.map(String),
-        rows: rawResults.rows as Array<Record<string, unknown>>,
-        total: rawResults.total,
-      },
-      timing: {
-        created_at: now,
-        started_at: now,
-        finished_at: now,
-        stage_timings: [],
-      },
+    setGuidedClarificationOpen(false);
+    toast.success(t("nl2sql.clarification.applied"));
+    requestAnimationFrame(() => {
+      const textarea = questionTextareaRef.current;
+      if (!textarea) return;
+      textarea.focus({ preventScroll: true });
+      const caret = clarifiedQuestion.length;
+      textarea.setSelectionRange(caret, caret);
+      textarea.scrollTop = textarea.scrollHeight;
     });
-    void refreshHistory().catch(handleHistoryRefreshFailed);
-  };
+  }, []);
 
   return (
     <>
@@ -1163,10 +1119,10 @@ function ExecutableNl2SqlWorkbench() {
                   )}
               </div>
 
-                  {/* 検索クエリ（左）× スキーマ参照（右・常時表示）: 書きながら参照して即クリック挿入。 */}
+                  {/* クエリ（左）× スキーマ参照（右・常時表示）: 書きながら参照して即クリック挿入。 */}
                   <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] lg:items-start">
                     <div className="grid gap-2">
-                      {/* 検索クエリの入力を補助するテンプレート行（選択時は全文置換）。 */}
+                      {/* クエリの入力を補助するテンプレート行（選択時は全文置換）。 */}
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="text-xs font-medium text-muted">{t("dbAdmin.runner.templates")}</span>
                         {QUESTION_TEMPLATES.map((template) => (
@@ -1225,7 +1181,7 @@ function ExecutableNl2SqlWorkbench() {
                             engine={engine}
                             allowedObjects={toAllowedObjects(selection)}
                             onClose={() => setGuidedClarificationOpen(false)}
-                            onCompleted={handleGuidedExecutionCompleted}
+                            onApplyQuestion={handleApplyClarifiedQuestion}
                           />
                         ) : (
                           <div className="flex flex-wrap items-center gap-2">

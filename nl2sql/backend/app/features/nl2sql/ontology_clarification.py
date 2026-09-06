@@ -425,7 +425,7 @@ def _question_copy(
         if candidate_nodes:
             return (
                 "検索結果に表示する項目を選んでください。",
-                "検索クエリだけでは必要な表示項目を絞れませんでした。必要な項目をすべて選んでください。",
+                "クエリだけでは必要な表示項目を絞れませんでした。必要な項目をすべて選んでください。",
                 ClarificationAnswerKind.MULTI_SELECT,
             )
         return (
@@ -454,7 +454,7 @@ def _question_copy(
         )
     return (
         "検索対象として意図しているものを選んでください。",
-        "検索クエリだけでは候補を一つに絞れなかったため、最も近いものを選んでください。",
+        "クエリだけでは候補を一つに絞れなかったため、最も近いものを選んでください。",
         ClarificationAnswerKind.SINGLE_SELECT,
     )
 

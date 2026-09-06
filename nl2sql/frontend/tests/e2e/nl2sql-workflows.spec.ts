@@ -2903,7 +2903,7 @@ async function useOverflowSchemaCatalog(page: Page) {
 }
 
 async function openSchemaPicker(page: Page) {
-  // スキーマ参照は検索クエリの右に常時表示（トグルなし）。可視確認のみ行う。
+  // スキーマ参照はクエリの右に常時表示（トグルなし）。可視確認のみ行う。
   await expect(page.getByTestId("nl2sql-schema-reference")).toBeVisible();
 }
 
@@ -2913,7 +2913,7 @@ async function expectQuerySingleColumnLayout(page: Page) {
   const shell = page.getByTestId("nl2sql-workspace-shell");
   await expect(shell).toBeVisible();
 
-  // スキーマ参照は検索クエリ直下の折りたたみ補助ツール。開いて内容を検証。
+  // スキーマ参照はクエリ直下の折りたたみ補助ツール。開いて内容を検証。
   await openSchemaPicker(page);
   const schema = page.getByTestId("nl2sql-schema-reference");
   const firstTable = page.getByTestId("nl2sql-schema-table-item").first();
@@ -3125,7 +3125,7 @@ test("SQL 系の必須入力欄は既存の必須マークと required 属性で
 
   await page.goto("/query");
   await expect(page.locator("#nl2sql-profile-select")).toHaveValue("default");
-  await expectRequiredTextarea(page, "nl2sql-question-input", "検索クエリ");
+  await expectRequiredTextarea(page, "nl2sql-question-input", "クエリ");
   const runQueryButton = page.getByRole("button", { name: "検索を実行" });
   await expect(runQueryButton).toBeDisabled();
   await nl2sqlQuestionInput(page).fill("未入金の請求を確認したい");
@@ -3177,7 +3177,7 @@ test("スキーマ参照から連続挿入すると各項目が改行区切り�
   await expect(question).toHaveValue("\"請求\".\"請求金額\"\n\"請求\".\"請求金額\"");
 });
 
-test("検索クエリのテンプレートボタンで穴埋めテンプレートを全置換挿入できる", async ({ page }) => {
+test("クエリのテンプレートボタンで穴埋めテンプレートを全置換挿入できる", async ({ page }) => {
   await mockNl2SqlApi(page);
   await page.goto("/query");
   const question = nl2sqlQuestionInput(page);
@@ -3272,7 +3272,7 @@ test("スキーマ参照はアコーディオンで、表名クリックで表�
   await expect(question).toHaveValue("\"請求\""); // chevron では変化しない
 });
 
-test("検索クエリとスキーマ参照は desktop で左右並置、mobile で縦積みになる", async ({ page }) => {
+test("クエリとスキーマ参照は desktop で左右並置、mobile で縦積みになる", async ({ page }) => {
   await mockNl2SqlApi(page);
   await page.goto("/query");
   const question = nl2sqlQuestionInput(page);
@@ -3297,7 +3297,7 @@ test("検索クエリとスキーマ参照は desktop で左右並置、mobile �
   await expectNoHorizontalScroll(page);
 });
 
-test("検索クエリは内容に応じて最大10行まで自動拡張し、挿入行へ内部スクロールする", async ({ page }) => {
+test("クエリは内容に応じて最大10行まで自動拡張し、挿入行へ内部スクロールする", async ({ page }) => {
   await mockNl2SqlApi(page);
   await page.goto("/query");
   const question = nl2sqlQuestionInput(page);
@@ -7340,7 +7340,7 @@ test("AI 活用の 4 画面はナビ切替で入力を保持し、リセット�
   await mockNl2SqlApi(page);
   await page.goto("/query");
 
-  // SQL 生成に検索クエリを入力する。
+  // SQL 生成にクエリを入力する。
   const question = nl2sqlQuestionInput(page);
   await question.fill("保持テスト: 未入金の請求金額を確認したい");
 
