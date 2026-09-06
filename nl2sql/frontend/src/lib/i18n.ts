@@ -831,7 +831,8 @@ const nl2sqlJa = {
   "nl2sql.similar.goodOnly": "管理者レビュー結果: 良いのみ",
   "nl2sql.similar.emptyTitle": "参考履歴はありません",
   "nl2sql.similar.emptyHint":
-    "管理者レビュー結果が良い履歴は見つかりませんでした。質問を調整するか、レビュー済み履歴を追加してから再検索してください。",
+    "管理者レビュー結果が良い履歴は見つかりませんでした。質問またはプロファイルを変更すると自動で再検索します。",
+  "nl2sql.similar.count": "{count} 件",
   "nl2sql.similar.score": "類似度 {score}%",
   "nl2sql.action.run": "検索を実行",
   "nl2sql.action.preview": "SQL プレビュー",

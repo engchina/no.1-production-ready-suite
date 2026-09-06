@@ -4287,7 +4287,7 @@ test("検索実行開始時に前回の生成結果を先に消し、現在の�
   });
 });
 
-test("参考履歴は既定で折りたたまれ、ヘッダークリックで過去 SQL を展開できる", async ({ page }) => {
+test("参考履歴は件数を表示し、候補があれば自動で展開する", async ({ page }) => {
   await mockNl2SqlApi(page);
 
   await page.goto("/query");
@@ -4298,18 +4298,19 @@ test("参考履歴は既定で折りたたまれ、ヘッダークリックで�
 
   const header = page.getByRole("button", { name: /参考履歴/ });
   await expect(header).toBeVisible();
+  await expect(header).toContainText("1 件");
   await expect(header).toContainText("管理者レビュー結果: 良いのみ");
-  // 既定は折りたたみ: 中身（類似度・過去 SQL）は表示されない。
-  // aria-controls の参照先(#nl2sql-similar-history)は常時レンダされ、閉時は hidden。
-  await expect(header).toHaveAttribute("aria-expanded", "false");
-  await expect(page.getByTestId("nl2sql-similar-history")).toBeAttached();
-  await expect(page.getByTestId("nl2sql-similar-history")).toBeHidden();
-  await expect(page.getByText("類似度 90%")).toBeHidden();
-
-  await header.click();
+  // 候補がある検索完了後は自動で展開する。
   await expect(header).toHaveAttribute("aria-expanded", "true");
+  await expect(page.getByTestId("nl2sql-similar-history")).toBeAttached();
+  await expect(page.getByTestId("nl2sql-similar-history")).toBeVisible();
   await expect(page.getByText("類似度 90%")).toBeVisible();
   await expect(page.getByText("請求金額の履歴と近い質問です。")).toBeVisible();
+  await header.click();
+  await expect(header).toHaveAttribute("aria-expanded", "false");
+  await expect(page.getByTestId("nl2sql-similar-history")).toBeHidden();
+  await header.click();
+  await expect(header).toHaveAttribute("aria-expanded", "true");
 
   const jobsGate = createRequestGate();
   await page.unroute("**/api/nl2sql/jobs");
@@ -4345,6 +4346,7 @@ test("参考履歴は API が空の場合も表示し、空状態を展開でき
   await expect.poll(() => requested).toBe(true);
   const header = page.getByRole("button", { name: /参考履歴/ });
   await expect(header).toBeVisible();
+  await expect(header).toContainText("0 件");
   await expect(header).toContainText("管理者レビュー結果: 良いのみ");
   await expect(header).toHaveAttribute("aria-expanded", "false");
 
@@ -4357,7 +4359,7 @@ test("参考履歴は API が空の場合も表示し、空状態を展開でき
   await expect(header).toHaveAttribute("aria-expanded", "true");
   await expect(panel).toBeVisible();
   await expect(panel).toContainText("参考履歴はありません");
-  await expect(panel).toContainText("管理者レビュー結果が良い履歴は見つかりませんでした。");
+  await expect(panel).toContainText("質問またはプロファイルを変更すると自動で再検索します。");
   await expect(panel.getByTestId("nl2sql-similar-history-item")).toHaveCount(0);
 
   const jobsGate = createRequestGate();
@@ -4476,7 +4478,7 @@ test("参考履歴は管理者レビュー結果が良い履歴だけを表示�
   const header = page.getByRole("button", { name: /参考履歴/ });
   await expect(header).toBeVisible();
   await expect(header).toContainText("管理者レビュー結果: 良いのみ");
-  await header.click();
+  await expect(header).toHaveAttribute("aria-expanded", "true");
 
   const panel = page.getByTestId("nl2sql-similar-history");
   const rows = panel.getByTestId("nl2sql-similar-history-item");
@@ -7669,7 +7671,7 @@ test("admin good feedback is available as similar history without manual index r
   await nl2sqlQuestionInput(page).fill("履歴から再実行したい請求金額");
   const similarHistoryHeader = page.getByRole("button", { name: /参考履歴/ });
   await expect(similarHistoryHeader).toBeVisible();
-  await similarHistoryHeader.click();
+  await expect(similarHistoryHeader).toHaveAttribute("aria-expanded", "true");
   await expect(page.getByTestId("nl2sql-similar-history-item")).toContainText(historySql);
   expect(rebuildRequested).toBe(false);
 });
