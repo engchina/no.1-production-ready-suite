@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowRightLeft, BookOpen, Database, FileText, RefreshCw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -15,7 +15,13 @@ import { apiGet, apiPost, isAbortError } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { API_TIMEOUT_MS } from "@/lib/requestPolicy";
 import { useRequestScope } from "@/lib/useRequestScope";
-import { DbObjectPanelHeader, DbObjectStepIndicator } from "../components/DbObjectManagementShared";
+import {
+  DbObjectManagementPanelShell,
+  DbObjectManagementTabs,
+  DbObjectPanelHeader,
+  DbObjectStepIndicator,
+  type DbObjectTab,
+} from "../components/DbObjectManagementShared";
 import { QuestionText } from "../components/QuestionText";
 import { FixedSplitPane } from "@/components/layout/FixedSplitPane";
 import { profileDisplayLabel } from "../profileDisplay";
@@ -31,10 +37,10 @@ import type {
   SchemaTable,
 } from "../types";
 
-// タブではなく 1 画面スクロール + ステッパー。各工程セクションの共通カード枠。
-const PANEL_CLASS = "grid gap-4 rounded-md border border-border bg-card p-4 shadow-sm";
+type SqlToQuestionPanel = "input" | "structure" | "result";
 
 export function SqlToQuestionPage() {
+  const [activePanel, setActivePanel] = useState<SqlToQuestionPanel>("input");
   const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
   const [selectedProfile, setSelectedProfile] = useState<ProfileUsageContext | null>(null);
   const [schemaTables, setSchemaTables] = useState<SchemaTable[]>([]);
@@ -160,6 +166,7 @@ export function SqlToQuestionPage() {
       setReverse(data);
       if (data.logical_structure) setStructureText(data.logical_structure);
       setStructureItems(data.logical_structure_items ?? []);
+      setActivePanel("result");
     } catch (err) {
       setActionError(actionableError(err, t("sqlToQuestion.error.reverse")));
     } finally {
@@ -168,8 +175,28 @@ export function SqlToQuestionPage() {
   };
 
   const actionBusy = reverseLoading;
-  const hasStructure = structureItems.length > 0 || Boolean(structureText);
-  const stepIndex = reverse ? 3 : hasStructure ? 1 : 0;
+  const panels = useMemo(
+    () =>
+      [
+        { id: "input", label: t("sqlToQuestion.tabs.input"), icon: ArrowRightLeft },
+        { id: "structure", label: t("sqlToQuestion.tabs.structure"), icon: FileText },
+        { id: "result", label: t("sqlToQuestion.tabs.result"), icon: BookOpen },
+      ] satisfies Array<DbObjectTab<SqlToQuestionPanel>>,
+    []
+  );
+  const activePanelIndex = Math.max(
+    0,
+    panels.findIndex((panel) => panel.id === activePanel)
+  );
+  const renderStepIndicator = (panel: SqlToQuestionPanel) =>
+    activePanel === panel ? (
+      <DbObjectStepIndicator
+        steps={panels.map((item) => item.label)}
+        activeIndex={activePanelIndex}
+        ariaLabel={t("sqlToQuestion.tabs.label")}
+        dataTestId="sql-to-question-steps"
+      />
+    ) : null;
 
   return (
     <>
@@ -204,21 +231,21 @@ export function SqlToQuestionPage() {
           }
         />
 
-        <DbObjectStepIndicator
-          steps={[
-            t("sqlToQuestion.tabs.input"),
-            t("sqlToQuestion.tabs.structure"),
-            t("sqlToQuestion.tabs.result"),
-          ]}
-          activeIndex={stepIndex}
+        <DbObjectManagementTabs
+          activeView={activePanel}
+          tabs={panels}
+          idPrefix="sql-to-question"
           ariaLabel={t("sqlToQuestion.tabs.label")}
-          dataTestId="sql-to-question-steps"
+          onViewChange={setActivePanel}
         />
 
-        <section
+        <DbObjectManagementPanelShell
           id="sql-to-question-panel-input"
-          aria-labelledby="sql-to-question-input-heading"
-          className={PANEL_CLASS}
+          labelledBy="sql-to-question-tab-input"
+          idPrefix="sql-to-question"
+          ariaLabel={t("sqlToQuestion.input.title")}
+          className={activePanel === "input" ? "" : "hidden"}
+          topContent={renderStepIndicator("input")}
         >
           <FixedSplitPane
             splitId="sql-to-question-input"
@@ -240,6 +267,7 @@ export function SqlToQuestionPage() {
                     setSelectedProfileId(event.currentTarget.value);
                     setReverse(null);
                     setActionError("");
+                    setActivePanel("input");
                   }}
                   className="min-h-11 min-w-0 rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:outline-none focus:ring-2 focus:ring-ring/40 disabled:cursor-not-allowed disabled:bg-muted/30 disabled:text-muted"
                   disabled={loading || actionBusy || profiles.length === 0}
@@ -267,6 +295,7 @@ export function SqlToQuestionPage() {
                     setStructureItems([]);
                     setReverse(null);
                     setActionError("");
+                    setActivePanel("input");
                   }}
                   rows={9}
                   required
@@ -284,6 +313,7 @@ export function SqlToQuestionPage() {
                     setUseGlossary(event.currentTarget.checked);
                     setReverse(null);
                     setActionError("");
+                    setActivePanel("input");
                   }}
                   disabled={actionBusy}
                   className="h-4 w-4 rounded border-border text-primary focus:ring-ring/40"
@@ -326,12 +356,15 @@ export function SqlToQuestionPage() {
               />
             }
           />
-        </section>
+        </DbObjectManagementPanelShell>
 
-        <section
+        <DbObjectManagementPanelShell
           id="sql-to-question-panel-structure"
-          aria-labelledby="sql-to-question-structure-heading"
-          className={PANEL_CLASS}
+          labelledBy="sql-to-question-tab-structure"
+          idPrefix="sql-to-question"
+          ariaLabel={t("sqlToQuestion.structure.title")}
+          className={activePanel === "structure" ? "" : "hidden"}
+          topContent={renderStepIndicator("structure")}
         >
           <DbObjectPanelHeader
             headingId="sql-to-question-structure-heading"
@@ -351,12 +384,15 @@ export function SqlToQuestionPage() {
               hint={t("sqlToQuestion.structure.emptyHint")}
             />
           )}
-        </section>
+        </DbObjectManagementPanelShell>
 
-        <section
+        <DbObjectManagementPanelShell
           id="sql-to-question-panel-result"
-          aria-labelledby="sql-to-question-result-heading"
-          className={PANEL_CLASS}
+          labelledBy="sql-to-question-tab-result"
+          idPrefix="sql-to-question"
+          ariaLabel={t("sqlToQuestion.result.title")}
+          className={activePanel === "result" ? "" : "hidden"}
+          topContent={renderStepIndicator("result")}
         >
           <DbObjectPanelHeader
             headingId="sql-to-question-result-heading"
@@ -404,7 +440,7 @@ export function SqlToQuestionPage() {
               hint={t("sqlToQuestion.result.emptyHint")}
             />
           )}
-        </section>
+        </DbObjectManagementPanelShell>
       </main>
     </>
   );

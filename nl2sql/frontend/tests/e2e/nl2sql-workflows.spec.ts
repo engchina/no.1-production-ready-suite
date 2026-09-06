@@ -72,6 +72,14 @@ async function expectButtonBelowInput(input: Locator, button: Locator) {
   expect(buttonBox!.y).toBeGreaterThan(inputBox!.y + inputBox!.height);
 }
 
+async function dismissToasts(page: Page) {
+  const closeButtons = page.getByRole("region", { name: "通知" }).getByRole("button", { name: "閉じる" });
+  for (let index = 0; index < 5; index += 1) {
+    if ((await closeButtons.count()) === 0) return;
+    await closeButtons.first().click();
+  }
+}
+
 async function expectOneLineWithoutOverflow(locator: Locator) {
   await expect(locator).toBeVisible();
   const metrics = await locator.evaluate((node) => {
@@ -2670,6 +2678,26 @@ async function expectNoHorizontalScroll(page: Page) {
     scrollWidth: document.documentElement.scrollWidth,
   }));
   expect(size.scrollWidth).toBeLessThanOrEqual(size.width + 1);
+}
+
+async function expectMainScrollDoesNotExposeTrailingBlank(panel: Locator) {
+  const metrics = await panel.evaluate((node) => {
+    const main = document.querySelector<HTMLElement>('main[aria-label="メイン領域"]');
+    if (!main) return null;
+    main.scrollTop = main.scrollHeight;
+    const mainRect = main.getBoundingClientRect();
+    const panelRect = node.getBoundingClientRect();
+    const panelBottomInScrollContent = panelRect.bottom - mainRect.top + main.scrollTop;
+    return {
+      clientHeight: main.clientHeight,
+      scrollHeight: main.scrollHeight,
+      trailingBlank: main.scrollHeight - panelBottomInScrollContent,
+    };
+  });
+  expect(metrics).not.toBeNull();
+  if (metrics!.scrollHeight > metrics!.clientHeight + 48) {
+    expect(metrics!.trailingBlank).toBeLessThanOrEqual(48);
+  }
 }
 
 async function expectNoElementHorizontalOverflow(locator: Locator) {
@@ -7512,17 +7540,21 @@ test("sql to question page reverse-generates a business question with one primar
   await expect(page.locator("#sql-to-question-panel-result")).toBeVisible();
   await expect(page.getByText("請求金額を条件付きで一覧確認したい")).toBeVisible();
 
-  await expect(page.getByText("SQL 論理構造").first()).toBeVisible();
+  await page.getByRole("tab", { name: "SQL論理構造" }).click();
+  const structurePanel = page.locator("#sql-to-question-panel-structure");
+  await expect(structurePanel.getByText("SQL 論理構造").first()).toBeVisible();
   // SQL 論理構造は「見出し + 業務者向け説明 + 技術詳細」で併記する。
-  const structureList = page.getByTestId("sql-to-question-structure-list");
+  const structureList = structurePanel.getByTestId("sql-to-question-structure-list");
   await expect(structureList).toBeVisible();
   await expect(structureList).toContainText("SQL 種別");
   await expect(structureList).toContainText("データを取り出すだけの参照 SQL です");
   await expect(structureList.getByText("SELECT").first()).toBeVisible();
   // 処理手順は「SQL の処理手順」ラベルの番号付きリストで、業務文と技術行を併記する。
+  await page.getByRole("tab", { name: "質問候補" }).click();
   const resultPanel = page.locator("#sql-to-question-panel-result");
+  await expect(resultPanel).toBeVisible();
   await expect(resultPanel.getByText("SQL の処理手順", { exact: true })).toBeVisible();
-  await expect(resultPanel.locator("ol > li")).toHaveCount(2);
+  await expect(resultPanel.locator('[data-testid="nl2sql-logical-steps-list"] > li')).toHaveCount(2);
   await expect(resultPanel).toContainText("請求情報を対象に、一覧の取得を行います。");
   await expect(resultPanel).toContainText("合計を計算します");
   await expect(resultPanel.getByText("INVOICES を参照")).toBeVisible();
@@ -7537,7 +7569,7 @@ test("sql to question page reverse-generates a business question with one primar
   await expectNoHorizontalScroll(page);
 });
 
-test("sql to question page uses the shared panel styling and a step indicator", async ({ page }) => {
+test("sql to question page uses shared tabs, panel styling and a step indicator", async ({ page }) => {
   await mockNl2SqlApi(page);
 
   await page.goto("/table-management");
@@ -7567,16 +7599,29 @@ test("sql to question page uses the shared panel styling and a step indicator", 
   });
   expect(inputPanelStyle).toEqual(tablePanelStyle);
 
-  // タブではなく工程ステッパー。3 工程セクションは常に縦積みで表示される。
+  const tabs = page.getByRole("tab");
+  await expect(tabs).toHaveText(["SQL入力・生成", "SQL論理構造", "質問候補"]);
+  await expect(page.getByRole("tab", { name: "SQL入力・生成" })).toHaveAttribute("aria-selected", "true");
+
   const steps = page.getByTestId("sql-to-question-steps");
   await expect(steps).toBeVisible();
   await expect(steps.getByText("SQL入力・生成")).toBeVisible();
   await expect(steps.getByText("SQL論理構造")).toBeVisible();
   await expect(steps.getByText("質問候補")).toBeVisible();
-  await expect(page.getByRole("tab")).toHaveCount(0);
+  await expect(page.locator("#sql-to-question-panel-structure")).toBeHidden();
+  await expect(page.locator("#sql-to-question-panel-result")).toBeHidden();
+
+  await page.getByRole("tab", { name: "SQL論理構造" }).click();
   await expect(page.locator("#sql-to-question-panel-structure")).toBeVisible();
+  await expect(page.locator("#sql-to-question-panel-input")).toBeHidden();
+  await expect(page.getByText("SQL 構造は未分析です")).toBeVisible();
+
+  await page.getByRole("tab", { name: "質問候補" }).click();
   await expect(page.locator("#sql-to-question-panel-result")).toBeVisible();
+  await expect(page.locator("#sql-to-question-panel-input")).toBeHidden();
+  await expect(page.locator("#sql-to-question-panel-structure")).toBeHidden();
   await expect(page.getByText("質問候補は未生成です")).toBeVisible();
+  await expectMainScrollDoesNotExposeTrailingBlank(page.locator("#sql-to-question-panel-result"));
   await expectNoHorizontalScroll(page);
 });
 
@@ -7690,14 +7735,20 @@ test("sql to question page invalidates stale results when inputs change", async 
   await expect(page.getByText("請求金額を条件付きで一覧確認したい")).toBeVisible();
 
   // 入力を変えると生成済み結果は無効化され、質問セクションは空状態へ戻る。
+  await page.getByRole("tab", { name: "SQL入力・生成" }).click();
   await page.getByRole("combobox", { name: "業務プロファイル" }).selectOption("alternate");
+  await page.getByRole("tab", { name: "質問候補" }).click();
   await expect(page.getByText("質問候補は未生成です")).toBeVisible();
 
+  await page.getByRole("tab", { name: "SQL入力・生成" }).click();
   await page.getByRole("button", { name: "業務質問を生成" }).click();
   await expect(page.getByText("請求金額を条件付きで一覧確認したい")).toBeVisible();
+  await page.getByRole("tab", { name: "SQL入力・生成" }).click();
   await sqlToQuestionInput(page).fill("SELECT TOTAL_AMOUNT FROM INVOICES WHERE TOTAL_AMOUNT > 0");
   await expect(page.getByRole("button", { name: "業務質問を生成" })).toBeEnabled();
+  await page.getByRole("tab", { name: "SQL論理構造" }).click();
   await expect(page.getByText("SQL 構造は未分析です")).toBeVisible();
+  await page.getByRole("tab", { name: "質問候補" }).click();
   await expect(page.getByText("質問候補は未生成です")).toBeVisible();
 });
 
@@ -9621,6 +9672,7 @@ test("JOIN WHERE and metadata read result branches replace their result areas wi
   await expect(page.getByTestId("comment-management-target-footer")).toContainText("選択 0 件");
   await commentTargetToolbar.getByRole("searchbox", { name: "検索" }).fill("INVO");
   await expect(page.getByRole("checkbox", { name: /INVOICES/ })).toBeVisible();
+  await expect(page.getByTestId("comment-management-target-footer")).toContainText("1 / 1 件を表示");
   const commentBulkActions = page.getByTestId("comment-management-target-selection-actions");
   const commentTargetList = page.getByTestId("db-admin-object-list");
   await expect
@@ -9647,13 +9699,16 @@ test("JOIN WHERE and metadata read result branches replace their result areas wi
   await expectButtonBelowInput(page.getByTestId("comment-management-target-footer"), commentFetchButton);
   await commentFetchButton.click();
   const commentInputSkeleton = page.getByTestId("comment-management-input-detail-skeleton");
+  await expect(page.getByRole("tab", { name: "入力確認・SQL生成", exact: true })).toHaveAttribute("aria-selected", "true");
   await expect(commentInputSkeleton).toBeVisible();
-  await expect(commentFetchButton.locator("svg.animate-spin")).toHaveCount(1);
   await expect(commentInputSkeleton.locator("svg.animate-spin")).toHaveCount(0);
   await expect(page.locator("#comment-management-panel-input").getByText("対象情報が未取得です")).toHaveCount(0);
   commentDetailGate.release();
   await expect(page.getByLabel("構造情報")).toHaveValue(/OBJECT: APP\.INVOICES/);
   await expect(page.getByRole("region", { name: "通知" })).toContainText("対象情報を取得しました。1 件を確認できます。");
+  await dismissToasts(page);
+  const commentInputPanel = page.locator("#comment-management-panel-input");
+  await expect(commentInputPanel).toBeVisible();
 
   const commentGenerateGate = createRequestGate();
   await page.route("**/api/nl2sql/metadata-samples", async (route) => {
@@ -9665,12 +9720,12 @@ test("JOIN WHERE and metadata read result branches replace their result areas wi
       warnings: [],
     });
   });
-  const commentGenerateButton = page.getByRole("button", { name: "SQL 生成" });
-  await expectButtonBelowInput(page.getByLabel("追加入力"), commentGenerateButton);
+  const commentGenerateButton = commentInputPanel.getByRole("button", { name: "SQL 生成" });
+  await expectButtonBelowInput(commentInputPanel.getByLabel("追加入力"), commentGenerateButton);
   await commentGenerateButton.click();
   const commentExecuteSkeleton = page.getByTestId("comment-management-execute-result-detail-skeleton");
+  await expect(page.getByRole("tab", { name: "SQL実行", exact: true })).toHaveAttribute("aria-selected", "true");
   await expect(commentExecuteSkeleton).toBeVisible();
-  await expect(commentGenerateButton.locator("svg.animate-spin")).toHaveCount(1);
   await expect(commentExecuteSkeleton.locator("svg.animate-spin")).toHaveCount(0);
   await expect(page.locator("#comment-management-panel-execute").getByText("生成済み SQL がありません")).toHaveCount(0);
   commentGenerateGate.release();
@@ -9682,8 +9737,12 @@ test("JOIN WHERE and metadata read result branches replace their result areas wi
   const annotationFetchButton = page.getByRole("button", { name: "情報を取得" });
   await expectButtonBelowInput(page.getByTestId("annotation-management-target-footer"), annotationFetchButton);
   await annotationFetchButton.click();
+  await expect(page.getByRole("tab", { name: "入力確認・SQL生成", exact: true })).toHaveAttribute("aria-selected", "true");
   await expect(page.getByLabel("構造情報")).toHaveValue(/OBJECT: APP\.INVOICES/);
   await expect(page.getByRole("region", { name: "通知" })).toContainText("対象情報を取得しました。1 件を確認できます。");
+  await dismissToasts(page);
+  const annotationInputPanel = page.locator("#annotation-management-panel-input");
+  await expect(annotationInputPanel).toBeVisible();
   const annotationGenerateGate = createRequestGate();
   await page.route("**/api/nl2sql/annotations/generate-sql", async (route) => {
     await annotationGenerateGate.promise;
@@ -9694,12 +9753,12 @@ test("JOIN WHERE and metadata read result branches replace their result areas wi
       timing,
     });
   });
-  const annotationGenerateButton = page.getByRole("button", { name: "SQL 生成" });
-  await expectButtonBelowInput(page.getByLabel("追加入力"), annotationGenerateButton);
+  const annotationGenerateButton = annotationInputPanel.getByRole("button", { name: "SQL 生成" });
+  await expectButtonBelowInput(annotationInputPanel.getByLabel("追加入力"), annotationGenerateButton);
   await annotationGenerateButton.click();
   const annotationExecuteSkeleton = page.getByTestId("annotation-management-execute-result-detail-skeleton");
+  await expect(page.getByRole("tab", { name: "SQL実行", exact: true })).toHaveAttribute("aria-selected", "true");
   await expect(annotationExecuteSkeleton).toBeVisible();
-  await expect(annotationGenerateButton.locator("svg.animate-spin")).toHaveCount(1);
   await expect(annotationExecuteSkeleton.locator("svg.animate-spin")).toHaveCount(0);
   annotationGenerateGate.release();
   await expect(page.locator("#annotation-management-panel-execute").getByLabel("SQL(セミコロン区切りで複数文を入力可能)")).toHaveValue(/ALTER TABLE/);
@@ -9867,6 +9926,7 @@ test("metadata management target lists load more tables and views before SQL gen
   await page.getByRole("checkbox", { name: /PAGE_101_TABLE/ }).check();
   await page.getByRole("button", { name: "情報を取得" }).click();
   await expect(page.getByLabel("構造情報")).toHaveValue(/OBJECT: APP\.PAGE_101_TABLE/);
+  await dismissToasts(page);
   await page.getByRole("button", { name: "SQL 生成" }).click();
   await expect(page.locator("#comment-management-panel-execute").getByLabel("SQL(セミコロン区切りで複数文を入力可能)")).toHaveValue(/COMMENT ON COLUMN/);
   expect(api.metadataSamplesPayload?.targets).toEqual([
@@ -9894,6 +9954,7 @@ test("metadata management target lists load more tables and views before SQL gen
   await page.getByRole("checkbox", { name: /V_PAGE_101_VIEW/ }).check();
   await page.getByRole("button", { name: "情報を取得" }).click();
   await expect(page.getByLabel("構造情報")).toHaveValue(/OBJECT: APP\.V_PAGE_101_VIEW/);
+  await dismissToasts(page);
   await page.getByRole("button", { name: "SQL 生成" }).click();
   await expect(page.locator("#annotation-management-panel-execute").getByLabel("SQL(セミコロン区切りで複数文を入力可能)")).toHaveValue(/ALTER TABLE/);
 });
@@ -9918,14 +9979,21 @@ test("metadata SQL regeneration resets the edited execution SQL", async ({ page 
   await page.goto("/comment-management");
   await page.getByRole("checkbox", { name: /INVOICES/ }).check();
   await page.getByRole("button", { name: "情報を取得" }).click();
-  await page.getByRole("button", { name: "SQL 生成" }).click();
+  await expect(page.getByLabel("構造情報")).toHaveValue(/OBJECT: APP\.INVOICES/);
+  await dismissToasts(page);
+  const inputPanel = page.locator("#comment-management-panel-input");
+  await expect(inputPanel).toBeVisible();
+  await inputPanel.getByRole("button", { name: "SQL 生成" }).click();
 
   const sqlTextarea = page.locator("#comment-management-panel-execute").getByLabel(
     "SQL(セミコロン区切りで複数文を入力可能)"
   );
   await expect(sqlTextarea).toHaveValue(generatedSql);
   await sqlTextarea.fill("COMMENT ON TABLE BROKEN IS '手編集';");
+  await dismissToasts(page);
+  await page.getByRole("tab", { name: "入力確認・SQL生成", exact: true }).click();
   await page.getByRole("button", { name: "SQL 生成" }).click();
+  await expect(page.getByRole("tab", { name: "SQL実行", exact: true })).toHaveAttribute("aria-selected", "true");
   await expect.poll(() => generationCount).toBe(2);
   await expect(sqlTextarea).toHaveValue(generatedSql);
 });
@@ -9939,7 +10007,10 @@ test("コメント管理は画面遷移後も生成 SQL と実行結果を保持
   await page.getByRole("checkbox", { name: /INVOICES/ }).check();
   await page.getByRole("button", { name: "情報を取得" }).click();
   await expect(page.getByLabel("構造情報")).toHaveValue(/OBJECT: APP\.INVOICES/);
-  await page.getByRole("button", { name: "SQL 生成" }).click();
+  await dismissToasts(page);
+  const inputPanel = page.locator("#comment-management-panel-input");
+  await expect(inputPanel).toBeVisible();
+  await inputPanel.getByRole("button", { name: "SQL 生成" }).click();
 
   const executePanel = page.locator("#comment-management-panel-execute");
   const sqlTextarea = executePanel.getByLabel("SQL(セミコロン区切りで複数文を入力可能)");
@@ -12592,6 +12663,7 @@ test("table and view management pages run guarded DDL and AI workflows", async (
   await page.getByRole("button", { name: "情報を取得" }).click();
   await expect(page.getByLabel("構造情報")).toHaveValue(/OBJECT: APP\.INVOICES/);
   await page.getByLabel("サンプル件数").fill("10");
+  await dismissToasts(page);
   await page.getByRole("button", { name: "SQL 生成" }).click();
   await expect.poll(() => api.metadataSamplesPayload?.sample_limit).toBe(10);
   await expect.poll(() => api.commentGeneratePayload?.sample_text).toContain(
@@ -12616,7 +12688,10 @@ test("table and view management pages run guarded DDL and AI workflows", async (
   await page.getByRole("checkbox", { name: /INVOICES/ }).check();
   await page.getByRole("button", { name: "情報を取得" }).click();
   await expect(page.getByLabel("構造情報")).toHaveValue(/OBJECT: APP\.INVOICES/);
-  await page.getByRole("button", { name: "SQL 生成" }).click();
+  await dismissToasts(page);
+  const inputPanel = page.locator("#annotation-management-panel-input");
+  await expect(inputPanel).toBeVisible();
+  await inputPanel.getByRole("button", { name: "SQL 生成" }).click();
   const annotationExecutePanel = page.locator("#annotation-management-panel-execute");
   await expect(page.getByLabel("SQL(セミコロン区切りで複数文を入力可能)")).toHaveValue(
     /ALTER TABLE "APP"\."INVOICES" MODIFY/
@@ -12841,6 +12916,8 @@ test("annotation management explains ORA-11548 before Oracle execution", async (
   await page.goto("/annotation-management");
   await page.getByRole("checkbox", { name: /INVOICES/ }).check();
   await page.getByRole("button", { name: "情報を取得" }).click();
+  await expect(page.getByLabel("構造情報")).toHaveValue(/OBJECT: APP\.INVOICES/);
+  await dismissToasts(page);
   await page.getByRole("button", { name: "SQL 生成" }).click();
 
   const executePanel = page.locator("#annotation-management-panel-execute");
@@ -12882,7 +12959,10 @@ test("metadata sample limit zero omits samples and reports retrieval errors", as
   await page.getByRole("checkbox", { name: /INVOICES/ }).check();
   await page.getByRole("button", { name: "情報を取得" }).click();
   await page.getByLabel("サンプル件数").fill("0");
-  await page.getByRole("button", { name: "SQL 生成" }).click();
+  await dismissToasts(page);
+  const commentInputPanel = page.locator("#comment-management-panel-input");
+  await expect(commentInputPanel).toBeVisible();
+  await commentInputPanel.getByRole("button", { name: "SQL 生成" }).click();
 
   await expect.poll(() => api.metadataSamplesPayload?.sample_limit).toBe(0);
   await expect.poll(() => api.commentGeneratePayload?.sample_text).toBe("");
@@ -12897,7 +12977,11 @@ test("metadata sample limit zero omits samples and reports retrieval errors", as
   await page.goto("/annotation-management");
   await page.getByRole("checkbox", { name: /INVOICES/ }).check();
   await page.getByRole("button", { name: "情報を取得" }).click();
-  await page.getByRole("button", { name: "SQL 生成" }).click();
+  await expect(page.getByLabel("構造情報")).toHaveValue(/OBJECT: APP\.INVOICES/);
+  await dismissToasts(page);
+  const annotationInputPanel = page.locator("#annotation-management-panel-input");
+  await expect(annotationInputPanel).toBeVisible();
+  await annotationInputPanel.getByRole("button", { name: "SQL 生成" }).click();
   await expect(page.getByRole("alert")).toBeVisible();
 });
 
