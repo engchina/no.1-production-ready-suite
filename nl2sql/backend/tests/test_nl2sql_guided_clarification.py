@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Any
+import json
+import logging
+from collections.abc import Callable
+from typing import Any, cast
 
 import pytest
 
@@ -82,6 +85,7 @@ class _GuidedLegacyService:
                 )
             ],
         )
+        self._enterprise_ai_client: Any = None
 
     def get_catalog(self) -> SchemaCatalog:
         return self.catalog.model_copy(deep=True)
@@ -114,6 +118,41 @@ def _runtime() -> OntologyApiRuntime:
     )
 
 
+class _IntentEnterpriseAiClient:
+    def __init__(self, response_factory: Callable[[dict[str, Any]], str | Exception]) -> None:
+        self.response_factory = response_factory
+        self.calls: list[dict[str, Any]] = []
+
+    def is_configured(self) -> bool:
+        return True
+
+    def model_id(self) -> str:
+        return "fake-enterprise-ai-intent"
+
+    def generate(
+        self,
+        *,
+        prompt: str,
+        context: str,
+        system_prompt: str,
+        response_format: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> str:
+        self.calls.append(
+            {
+                "prompt": prompt,
+                "context": context,
+                "system_prompt": system_prompt,
+                "response_format": response_format,
+                **kwargs,
+            }
+        )
+        response = self.response_factory(json.loads(context))
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+
 def _create_guided(runtime: OntologyApiRuntime) -> QuerySessionData:
     return runtime.create_session(
         QuerySessionApiCreate(
@@ -123,6 +162,132 @@ def _create_guided(runtime: OntologyApiRuntime) -> QuerySessionData:
         ),
         actor_user_uuid="user-1",
     )
+
+
+def _legacy_ambiguity_intent_response(context: dict[str, Any]) -> str:
+    draft = dict(context["deterministic_draft"])
+    draft["confidence"] = 0.91
+    draft["ambiguities"] = [
+        {
+            "id": "ai-output-ambiguity",
+            "kind": "extract_items",
+            "message_ja": "表示する指標を確認してください。",
+            "options": [
+                {"label_ja": "受注件数", "value": "order_count"},
+                {"label_ja": "受注金額", "value": "order_amount"},
+            ],
+            "blocking": True,
+        }
+    ]
+    return json.dumps(draft, ensure_ascii=False)
+
+
+def _invalid_secret_intent_response(context: dict[str, Any]) -> str:
+    draft = dict(context["deterministic_draft"])
+    draft["confidence"] = 0.92
+    draft["ambiguities"] = [
+        {
+            "id": "secret-ambiguity",
+            "kind": "unknown_secret_shape",
+            "message_ja": "SECRET_FREE_TEXT を含む確認です。",
+            "options": [{"label_ja": "SECRET_SAMPLE_VALUE", "value": "secret"}],
+            "blocking": True,
+        }
+    ]
+    return json.dumps(draft, ensure_ascii=False)
+
+
+def _outside_scope_node_response(context: dict[str, Any]) -> str:
+    draft = dict(context["deterministic_draft"])
+    draft["confidence"] = 0.93
+    draft["entities"] = [
+        {
+            "id": "outside-entity",
+            "ontology_node_id": "node-outside-profile-view",
+            "name_ja": "SECRET_SCOPE_ENTITY",
+            "role": "subject",
+            "physical_object_ids": [],
+        }
+    ]
+    return json.dumps(draft, ensure_ascii=False)
+
+
+def test_guided_enterprise_ai_intent_uses_schema_and_accepts_legacy_ambiguity_shape() -> None:
+    runtime = _runtime()
+    fake_client = _IntentEnterpriseAiClient(_legacy_ambiguity_intent_response)
+    runtime.legacy_service._enterprise_ai_client = fake_client  # noqa: SLF001
+
+    created = _create_guided(runtime)
+
+    call = fake_client.calls[0]
+    assert call["response_format"]["type"] == "json_schema"
+    assert call["response_format"]["name"] == "question_intent_graph_v1"
+    assert call["response_format"]["strict"] is True
+    contract = json.loads(call["context"])["intent_contract"]
+    assert contract["schema_version"] == "question_intent_graph_v1"
+    assert contract["valid_minimum_example"]["profile_view_id"] == created.session.profile_view_id
+    assert "kind field は使わず" in call["system_prompt"]
+    intent = created.session.intents[-1]
+    assert intent.confidence == 0.91
+    ambiguity = next(item for item in intent.ambiguities if item.id == "ai-output-ambiguity")
+    assert ambiguity.code == "OUTPUT_UNCLEAR"
+    assert ambiguity.options == ["受注件数", "受注金額"]
+
+
+def test_guided_enterprise_ai_intent_schema_failure_log_is_sanitized(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    runtime = _runtime()
+    runtime.legacy_service._enterprise_ai_client = _IntentEnterpriseAiClient(  # noqa: SLF001
+        _invalid_secret_intent_response
+    )
+
+    with caplog.at_level(logging.WARNING, logger="app.features.nl2sql.ontology_router"):
+        created = _create_guided(runtime)
+
+    assert all(item.id != "secret-ambiguity" for item in created.session.intents[-1].ambiguities)
+    records = [
+        record
+        for record in caplog.records
+        if record.getMessage() == "ontology_intent_enterprise_ai_fallback"
+    ]
+    assert len(records) == 1
+    record = cast(Any, records[0])
+    assert record.exc_info is None
+    assert record.fallback_reason == "schema_validation"
+    assert record.schema_version == "question_intent_graph_v1"
+    assert record.prompt_version == "question_intent_interpreter_v2"
+    assert record.field_error_count >= 1
+    assert "SECRET" not in caplog.text
+    assert "input_value" not in caplog.text
+
+
+def test_guided_enterprise_ai_intent_outside_scope_falls_back_without_logging_candidates(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    runtime = _runtime()
+    runtime.legacy_service._enterprise_ai_client = _IntentEnterpriseAiClient(  # noqa: SLF001
+        _outside_scope_node_response
+    )
+
+    with caplog.at_level(logging.WARNING, logger="app.features.nl2sql.ontology_router"):
+        created = _create_guided(runtime)
+
+    assert all(
+        item.ontology_node_id != "node-outside-profile-view"
+        for item in created.session.intents[-1].entities
+    )
+    records = [
+        record
+        for record in caplog.records
+        if record.getMessage() == "ontology_intent_enterprise_ai_fallback"
+    ]
+    assert len(records) == 1
+    record = cast(Any, records[0])
+    assert record.fallback_reason == "scope_violation"
+    assert record.scope_violation_kind == "node"
+    assert record.scope_violation_count == 1
+    assert "SECRET_SCOPE_ENTITY" not in caplog.text
 
 
 def test_guided_session_asks_for_missing_time_and_accepts_scoped_option() -> None:

@@ -21,7 +21,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Request, UploadFile
 from pr_backend_core import ApiResponse
-from pydantic import Field
+from pydantic import Field, ValidationError
 
 from app.api.concurrency import run_sync_io
 from app.security.domain import Principal
@@ -183,6 +183,143 @@ _MARKDOWN_DRAFT_ARTIFACT_TYPE = "ontology_markdown_draft"
 _MARKDOWN_PUBLISHED_ARTIFACT_TYPE = "ontology_markdown_published"
 _MARKDOWN_LLM_ARTIFACT_TYPE = "ontology_llm_markdown"
 _MARKDOWN_RENDERER_VERSION = "markdown_ontology_v1"
+_QUESTION_INTENT_SCHEMA_VERSION = "question_intent_graph_v1"
+_QUESTION_INTENT_PROMPT_VERSION = "question_intent_interpreter_v2"
+_INTENT_FALLBACK_LOG_MAX_FIELDS = 20
+_LEGACY_AMBIGUITY_KIND_CODES: Mapping[str, str] = {
+    "extract_items": "OUTPUT_UNCLEAR",
+    "output": "OUTPUT_UNCLEAR",
+    "outputs": "OUTPUT_UNCLEAR",
+    "conditions": "FILTER_VALUE_UNCLEAR",
+    "condition": "FILTER_VALUE_UNCLEAR",
+    "filter": "FILTER_VALUE_UNCLEAR",
+    "filters": "FILTER_VALUE_UNCLEAR",
+    "time_range": "TIME_RANGE_UNCLEAR",
+    "date_range": "TIME_RANGE_UNCLEAR",
+    "granularity": "GRANULARITY_UNCLEAR",
+    "relationship_path": "RELATIONSHIP_PATH_UNCLEAR",
+    "relationship": "RELATIONSHIP_PATH_UNCLEAR",
+    "business_meaning": "BUSINESS_MEANING_UNCLEAR",
+}
+
+
+def _question_intent_json_schema() -> dict[str, Any]:
+    schema = QuestionIntentGraph.model_json_schema()
+    schema["additionalProperties"] = False
+    return schema
+
+
+def _question_intent_response_format() -> dict[str, Any]:
+    return {
+        "type": "json_schema",
+        "name": _QUESTION_INTENT_SCHEMA_VERSION,
+        "schema": _question_intent_json_schema(),
+        "strict": True,
+    }
+
+
+def _question_intent_minimum_example(
+    *,
+    question: str,
+    ontology_revision_id: str,
+    profile_view_id: str,
+) -> dict[str, Any]:
+    return {
+        "version": 1,
+        "question_original": question,
+        "question_effective": question,
+        "profile_view_id": profile_view_id,
+        "ontology_revision_id": ontology_revision_id,
+        "entities": [],
+        "metrics": [],
+        "dimensions": [],
+        "filters": [],
+        "time_range": None,
+        "granularity": "",
+        "sorts": [],
+        "limit": None,
+        "candidate_paths": [],
+        "selected_path_id": None,
+        "ambiguities": [],
+        "confidence": 0.0,
+    }
+
+
+def _normalize_question_intent_payload(payload: object) -> object:
+    if not isinstance(payload, Mapping):
+        return payload
+    normalized = dict(payload)
+    ambiguities = normalized.get("ambiguities")
+    if isinstance(ambiguities, list):
+        normalized["ambiguities"] = [_normalize_intent_ambiguity(item) for item in ambiguities]
+    return normalized
+
+
+def _normalize_intent_ambiguity(value: object) -> object:
+    if not isinstance(value, Mapping):
+        return value
+    normalized = dict(value)
+    raw_kind = normalized.get("kind")
+    if isinstance(raw_kind, str):
+        kind = raw_kind.strip()
+        if kind in _LEGACY_AMBIGUITY_KIND_CODES:
+            normalized.pop("kind", None)
+            raw_code = normalized.get("code")
+            if not isinstance(raw_code, str) or not raw_code.strip():
+                normalized["code"] = _LEGACY_AMBIGUITY_KIND_CODES[kind]
+    options = normalized.get("options")
+    if isinstance(options, list):
+        normalized["options"] = [_normalize_intent_ambiguity_option(item) for item in options]
+    return normalized
+
+
+def _normalize_intent_ambiguity_option(value: object) -> object:
+    if isinstance(value, str):
+        return value
+    if not isinstance(value, Mapping):
+        return value
+    if not set(value).issubset({"label_ja", "value"}):
+        return value
+    label = value.get("label_ja")
+    if isinstance(label, str) and label.strip():
+        return label.strip()
+    return value
+
+
+def _validation_error_paths(exc: ValidationError) -> list[str]:
+    paths: list[str] = []
+    for item in exc.errors(include_input=False):
+        loc = item.get("loc", ())
+        if isinstance(loc, tuple | list):
+            paths.append(".".join(str(part) for part in loc))
+        else:
+            paths.append(str(loc))
+    return paths
+
+
+def _log_intent_enterprise_ai_fallback(
+    *,
+    reason: str,
+    model: str,
+    exc: BaseException | None = None,
+    violation_kind: str = "",
+    violation_count: int = 0,
+) -> None:
+    extra: dict[str, Any] = {
+        "fallback_reason": reason,
+        "error_type": exc.__class__.__name__ if exc is not None else "",
+        "model": model,
+        "prompt_version": _QUESTION_INTENT_PROMPT_VERSION,
+        "schema_version": _QUESTION_INTENT_SCHEMA_VERSION,
+    }
+    if isinstance(exc, ValidationError):
+        paths = _validation_error_paths(exc)
+        extra["field_error_count"] = len(paths)
+        extra["field_paths"] = paths[:_INTENT_FALLBACK_LOG_MAX_FIELDS]
+    if violation_kind:
+        extra["scope_violation_kind"] = violation_kind
+        extra["scope_violation_count"] = violation_count
+    logger.warning("ontology_intent_enterprise_ai_fallback", extra=extra)
 
 
 class QuerySessionApiCreate(OntologyContract):
@@ -2875,6 +3012,16 @@ class OntologyApiRuntime:
             "profile_id": profile.id,
             "ontology_revision_id": ontology.revision.id,
             "profile_view_id": view.id,
+            "intent_contract": {
+                "schema_version": _QUESTION_INTENT_SCHEMA_VERSION,
+                "prompt_version": _QUESTION_INTENT_PROMPT_VERSION,
+                "json_schema": _question_intent_json_schema(),
+                "valid_minimum_example": _question_intent_minimum_example(
+                    question=question,
+                    ontology_revision_id=ontology.revision.id,
+                    profile_view_id=view.id,
+                ),
+            },
             "allowed_nodes": [
                 {
                     "id": node.id,
@@ -2920,6 +3067,10 @@ class OntologyApiRuntime:
             "説明文や Markdown を付けないでください。allowed_nodes / allowed_relationships にない "
             "ID を作らず、業務上確定できない内容は blocking ambiguity として残してください。"
             "profile_view_id と ontology_revision_id は入力値を厳密に維持してください。"
+            f"intent_contract.schema_version={_QUESTION_INTENT_SCHEMA_VERSION} の JSON Schema に"
+            "従い、"
+            "ambiguities[] は id/code/message_ja/options を必ず使ってください。"
+            "kind field は使わず、options は string 配列だけにしてください。"
         )
         if include_guided_context:
             system_prompt += (
@@ -2928,25 +3079,70 @@ class OntologyApiRuntime:
                 "短い候補を設定してください。"
                 "masked または非公開の値を推測・生成しないでください。"
             )
+        model_id = ""
+        model_id_fn = getattr(client, "model_id", None)
+        if callable(model_id_fn):
+            try:
+                model_id = str(model_id_fn())
+            except Exception:
+                model_id = ""
         try:
             with observe_stage("interpret_enterprise_ai"):
-                raw = generate(prompt=question, context=context, system_prompt=system_prompt)
+                raw = generate(
+                    prompt=question,
+                    context=context,
+                    system_prompt=system_prompt,
+                    response_format=_question_intent_response_format(),
+                )
             cleaned = str(raw).strip()
             if "{" in cleaned and "}" in cleaned:
                 cleaned = cleaned[cleaned.find("{") : cleaned.rfind("}") + 1]
-            intent = QuestionIntentGraph.model_validate(json.loads(cleaned))
+            try:
+                parsed = json.loads(cleaned)
+            except json.JSONDecodeError as exc:
+                _log_intent_enterprise_ai_fallback(
+                    reason="invalid_json",
+                    model=model_id,
+                    exc=exc,
+                )
+                return deterministic
+            try:
+                intent = QuestionIntentGraph.model_validate(
+                    _normalize_question_intent_payload(parsed)
+                )
+            except ValidationError as exc:
+                _log_intent_enterprise_ai_fallback(
+                    reason="schema_validation",
+                    model=model_id,
+                    exc=exc,
+                )
+                return deterministic
             referenced_node_ids = (
                 {item.ontology_node_id for item in intent.entities if item.ontology_node_id}
                 | {item.ontology_node_id for item in intent.metrics if item.ontology_node_id}
                 | {item.ontology_node_id for item in intent.dimensions if item.ontology_node_id}
             )
-            if referenced_node_ids - set(view.node_ids):
-                raise ValueError("Enterprise AI intent referenced nodes outside profile view")
+            node_scope_violations = referenced_node_ids - set(view.node_ids)
+            if node_scope_violations:
+                _log_intent_enterprise_ai_fallback(
+                    reason="scope_violation",
+                    model=model_id,
+                    violation_kind="node",
+                    violation_count=len(node_scope_violations),
+                )
+                return deterministic
             referenced_edge_ids = {
                 edge_id for path in intent.candidate_paths for edge_id in path.edge_ids
             }
-            if referenced_edge_ids - set(view.edge_ids):
-                raise ValueError("Enterprise AI intent referenced edges outside profile view")
+            edge_scope_violations = referenced_edge_ids - set(view.edge_ids)
+            if edge_scope_violations:
+                _log_intent_enterprise_ai_fallback(
+                    reason="scope_violation",
+                    model=model_id,
+                    violation_kind="edge",
+                    violation_count=len(edge_scope_violations),
+                )
+                return deterministic
             return intent.model_copy(
                 update={
                     "version": 1,
@@ -2956,8 +3152,12 @@ class OntologyApiRuntime:
                 },
                 deep=True,
             )
-        except Exception:
-            logger.warning("ontology_intent_enterprise_ai_fallback", exc_info=True)
+        except Exception as exc:
+            _log_intent_enterprise_ai_fallback(
+                reason="enterprise_ai_error",
+                model=model_id,
+                exc=exc,
+            )
             return deterministic
 
     def _guided_schema_context(
