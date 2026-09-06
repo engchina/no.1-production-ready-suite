@@ -29,10 +29,13 @@ import {
   DB_OBJECT_GRID_ROW_CLASS,
   DbManagementLoadingSkeleton,
   DbManagementSelectField,
+  DbObjectManagementPanelShell,
+  DbObjectManagementTabs,
   DbObjectSelectorFooter,
   DbObjectSelectorToolbar,
   DbObjectPanelHeader,
   DbObjectStepIndicator,
+  type DbObjectTab,
   dbAdminObjectQualifiedName,
   parseDbAdminObjectTarget,
 } from "../components/DbObjectManagementShared";
@@ -46,8 +49,6 @@ import {
   SchemaRefreshProcessing,
 } from "../components/SchemaRefreshFeedback";
 
-// タブではなく 1 画面スクロール + トップステッパー。各工程セクションの共通カード枠。
-const PANEL_CLASS = "grid gap-4 rounded-md border border-border bg-card p-4 shadow-sm";
 const METADATA_TARGET_LIMIT = 100;
 const METADATA_DETAIL_FETCH_BATCH_SIZE = 10;
 import type {
@@ -64,6 +65,7 @@ import type {
 } from "../types";
 
 type MetadataMode = "comment" | "annotation";
+type MetadataPanel = "targets" | "input" | "execute";
 type TargetFilter = "all" | "table" | "view";
 type TargetSortKey = "name" | "object_type" | "owner";
 type TargetSortDirection = "asc" | "desc";
@@ -144,6 +146,7 @@ function objectListLoadMoreErrorMessage(error: unknown, fallbackKey: Parameters<
 
 function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
   const pageId = mode === "comment" ? "comment-management" : "annotation-management";
+  const [activePanel, setActivePanel] = useState<MetadataPanel>("targets");
   const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
   const [details, setDetails] = useState<DbAdminObjectDetail[]>([]);
   const [sampleLimit, setSampleLimit] = useState(10);
@@ -194,7 +197,28 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
     [details, sampleLimit]
   );
   const policy: DbAdminStatementPolicy = mode === "comment" ? "comment_sql" : "annotation_sql";
-  const stepIndex = generated ? 2 : details.length > 0 ? 1 : 0;
+  const panels = useMemo(
+    () =>
+      [
+        { id: "targets", label: t("metadataSql.tabs.targets"), icon: Table2 },
+        { id: "input", label: t("metadataSql.tabs.input"), icon: FileText },
+        { id: "execute", label: t("metadataSql.tabs.execute"), icon: Code2 },
+      ] satisfies Array<DbObjectTab<MetadataPanel>>,
+    []
+  );
+  const activePanelIndex = Math.max(
+    0,
+    panels.findIndex((panel) => panel.id === activePanel)
+  );
+  const renderStepIndicator = (panel: MetadataPanel) =>
+    activePanel === panel ? (
+      <DbObjectStepIndicator
+        steps={panels.map((item) => item.label)}
+        activeIndex={activePanelIndex}
+        ariaLabel={t("metadataSql.steps.label")}
+        dataTestId={`${pageId}-steps`}
+      />
+    ) : null;
 
   const filteredTargets = useMemo(() => {
     const q = targetSearch.trim().toLowerCase();
@@ -338,6 +362,7 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
       setMessage(t("metadataSql.error.targetLimit", { limit: METADATA_TARGET_LIMIT }));
       return;
     }
+    setActivePanel("input");
     setLoading("details");
     setMessage("");
     try {
@@ -376,6 +401,7 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
       setMessage(t("metadataSql.error.targetLimit", { limit: METADATA_TARGET_LIMIT }));
       return;
     }
+    setActivePanel("execute");
     setLoading("generate");
     setMessage("");
     try {
@@ -493,18 +519,22 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
           />
         ) : null}
 
-        <DbObjectStepIndicator
-          steps={[
-            t("metadataSql.steps.targets"),
-            t("metadataSql.steps.input"),
-            t("metadataSql.steps.execute"),
-          ]}
-          activeIndex={stepIndex}
-          ariaLabel={t("metadataSql.steps.label")}
-          dataTestId={`${pageId}-steps`}
+        <DbObjectManagementTabs
+          activeView={activePanel}
+          tabs={panels}
+          idPrefix={pageId}
+          ariaLabel={t("metadataSql.tabs.label")}
+          onViewChange={setActivePanel}
         />
 
-        <section id={`${pageId}-panel-targets`} aria-labelledby={`${pageId}-targets-heading`} className={PANEL_CLASS}>
+        <DbObjectManagementPanelShell
+          id={`${pageId}-panel-targets`}
+          labelledBy={`${pageId}-tab-targets`}
+          idPrefix={pageId}
+          ariaLabel={t("metadataSql.workspace.targets")}
+          className={activePanel === "targets" ? "" : "hidden"}
+          topContent={renderStepIndicator("targets")}
+        >
           <MetadataTargetGrid
             pageId={pageId}
             items={filteredTargets}
@@ -539,9 +569,16 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
             onFetchDetails={() => void fetchDetails()}
             fetchingDetails={loading === "details"}
           />
-        </section>
+        </DbObjectManagementPanelShell>
 
-        <section id={`${pageId}-panel-input`} className={PANEL_CLASS}>
+        <DbObjectManagementPanelShell
+          id={`${pageId}-panel-input`}
+          labelledBy={`${pageId}-tab-input`}
+          idPrefix={pageId}
+          ariaLabel={t("metadataSql.workspace.input")}
+          className={activePanel === "input" ? "" : "hidden"}
+          topContent={renderStepIndicator("input")}
+        >
           <MetadataInputPanel
             pageId={pageId}
             inputTexts={inputTexts}
@@ -559,9 +596,16 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
             onExtraTextChange={setExtraText}
             onGenerate={() => void generateSql()}
           />
-        </section>
+        </DbObjectManagementPanelShell>
 
-        <section id={`${pageId}-panel-execute`} className={PANEL_CLASS}>
+        <DbObjectManagementPanelShell
+          id={`${pageId}-panel-execute`}
+          labelledBy={`${pageId}-tab-execute`}
+          idPrefix={pageId}
+          ariaLabel={t("metadataSql.workspace.execute")}
+          className={activePanel === "execute" ? "" : "hidden"}
+          topContent={renderStepIndicator("execute")}
+        >
           <MetadataExecutePanel
             pageId={pageId}
             mode={mode}
@@ -571,7 +615,7 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
             resetSignal={generationResetSignal}
             onExecuted={reloadAfterMutation}
           />
-        </section>
+        </DbObjectManagementPanelShell>
       </main>
     </>
   );
