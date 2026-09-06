@@ -651,8 +651,22 @@ async function fulfill(route: Route, data: unknown) {
   });
 }
 
-async function mockApi(page: Page, guidedQuestion: "time" | "output" = "time") {
+interface MockApiOptions {
+  guidedStartDelayMs?: number;
+}
+
+async function waitForMockDelay(delayMs: number) {
+  if (delayMs <= 0) return;
+  await new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
+async function mockApi(
+  page: Page,
+  guidedQuestion: "time" | "output" = "time",
+  options: MockApiOptions = {},
+) {
   const payloads: Record<string, unknown> = {};
+  const guidedStartDelayMs = options.guidedStartDelayMs ?? 0;
   const isGuidedLimitRequest = () =>
     String((payloads.create as { question?: unknown } | undefined)?.question ?? "").includes(
       "上位 10"
@@ -794,6 +808,7 @@ async function mockApi(page: Page, guidedQuestion: "time" | "output" = "time") {
     }
     if (path === "/api/nl2sql/similar-history") return fulfill(route, { items: [] });
     if (path === "/api/nl2sql/ontology/profile-recommendations") {
+      await waitForMockDelay(guidedStartDelayMs);
       return fulfill(route, {
         recommendation: {
           id: "recommendation-1",
@@ -815,6 +830,7 @@ async function mockApi(page: Page, guidedQuestion: "time" | "output" = "time") {
       });
     }
     if (path.endsWith("/ontology/profile-recommendations/recommendation-1/confirm")) {
+      await waitForMockDelay(guidedStartDelayMs);
       return fulfill(route, {
         recommendation: {
           id: "recommendation-1",
@@ -949,6 +965,7 @@ async function mockApi(page: Page, guidedQuestion: "time" | "output" = "time") {
     if (path === "/api/nl2sql/query-sessions" && request.method() === "POST") {
       payloads.create = request.postDataJSON();
       if ((payloads.create as { clarification_mode?: string }).clarification_mode === "guided") {
+        await waitForMockDelay(guidedStartDelayMs);
         if (isGuidedLimitRequest()) return fulfill(route, guidedLimitSessionData());
         return fulfill(
           route,
@@ -1129,6 +1146,42 @@ test("AI要件確認は一問ずつ意図を確認してからSQLを生成・実
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
   expect(overflow).toBe(false);
   await page.screenshot({ path: testInfo.outputPath("guided-clarification.png"), fullPage: true });
+});
+
+test("AI要件確認の開始中は実処理に合わせて案内を切り替え経過時間を表示する", async ({ page }, testInfo) => {
+  await mockApi(page, "time", { guidedStartDelayMs: 1_500 });
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto("/query");
+
+  await page.locator("#nl2sql-question-input").fill("受注件数を表示");
+  await page.getByRole("button", { name: "AI要件確認" }).click();
+
+  const panel = page.getByTestId("nl2sql-guided-clarification");
+  const progress = panel.getByTestId("nl2sql-guided-start-progress");
+  const timer = panel.getByTestId("nl2sql-guided-start-progress-timer");
+  await expect(progress).toBeVisible();
+  await expect(progress).toHaveAttribute("data-processing-placement", "panel");
+  await expect(progress).toHaveAttribute("aria-busy", "true");
+  const visibleProgressLabel = progress.locator("span.min-w-0.break-words");
+  await expect(visibleProgressLabel).toHaveText("質問に合う業務プロファイルを確認しています");
+  await expect(timer).toContainText("経過時間");
+  await expect(timer).toHaveAttribute("role", "timer");
+  await expect(timer).toHaveAttribute("aria-live", "off");
+  await expect(progress.locator('[data-loading-icon="true"]')).toHaveCSS("animation-name", "none");
+
+  await expect(timer).toContainText(/00:0[1-9]/);
+  await expect(visibleProgressLabel).toHaveText("利用する業務プロファイルを確定しています");
+  await expect(visibleProgressLabel).toHaveText("検索条件の候補を整理しています");
+  await expect(timer).toContainText(/00:0[2-9]/);
+  await page.screenshot({
+    path: testInfo.outputPath("guided-clarification-progress.png"),
+    fullPage: true,
+  });
+
+  await expect(panel.getByRole("heading", { name: "どの期間を対象にしますか？" })).toBeVisible();
+  await expect(progress).toHaveCount(0);
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
+  expect(overflow).toBe(false);
 });
 
 test("AI要件確認は利用者が明示した最大件数だけを表示する", async ({ page }) => {

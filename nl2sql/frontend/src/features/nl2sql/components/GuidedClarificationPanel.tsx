@@ -3,6 +3,7 @@ import { CheckCircle2, ChevronDown, Play, Sparkles, X } from "lucide-react";
 
 import { Banner } from "@engchina/production-ready-ui";
 
+import { ProcessingIndicator } from "@/components/ProcessingState";
 import { Button } from "@/components/ui/button";
 import { FieldError } from "@/components/ui/field-error";
 import { StatusBadge } from "@/components/ui/status-badge";
@@ -50,6 +51,8 @@ interface ManualAnswerValue {
   optionIds: string[];
   freeText: string;
 }
+
+type ClarificationStartPhase = "recommend_profile" | "confirm_profile" | "prepare_questions";
 
 function TechnicalEvidence({ name, evidence }: { name: string; evidence: string }) {
   const [open, setOpen] = useState(false);
@@ -133,6 +136,7 @@ export function GuidedClarificationPanel({
   const [manualAnswers, setManualAnswers] = useState<Record<string, ManualAnswerValue>>({});
   const [error, setError] = useState("");
   const [busyAction, setBusyAction] = useState<"start" | "answer" | "generate" | "execute" | "cancel" | "">("start");
+  const [startPhase, setStartPhase] = useState<ClarificationStartPhase>("recommend_profile");
   const startedRef = useRef(false);
   const questionHeadingRef = useRef<HTMLHeadingElement>(null);
 
@@ -151,11 +155,13 @@ export function GuidedClarificationPanel({
       (item) => item.profile_id === targetProfileId
     );
     const revisionId = candidate?.ontology_revision_id || currentRecommendation.ontology_revision_id;
+    setStartPhase("confirm_profile");
     const { confirmation_token } = await confirmOntologyProfileRecommendation(
       currentRecommendation.id,
       targetProfileId,
       revisionId
     );
+    setStartPhase("prepare_questions");
     const created = await createQuerySession({
       question,
       profile_id: targetProfileId,
@@ -424,8 +430,23 @@ export function GuidedClarificationPanel({
       {error ? <Banner severity="danger">{error}</Banner> : null}
 
       {busyAction === "start" ? (
-        <div className="rounded-md border border-border bg-background p-4 text-sm text-muted" role="status">
-          {t("nl2sql.clarification.loading")}
+        <div
+          className="rounded-md border border-border bg-background p-4"
+          data-start-phase={startPhase}
+        >
+          <ProcessingIndicator
+            active
+            operationKey="guided-clarification-start"
+            label={
+              startPhase === "recommend_profile"
+                ? t("nl2sql.clarification.loading.recommendProfile")
+                : startPhase === "confirm_profile"
+                  ? t("nl2sql.clarification.loading.confirmProfile")
+                  : t("nl2sql.clarification.loading.prepareQuestions")
+            }
+            placement="panel"
+            testId="nl2sql-guided-start-progress"
+          />
         </div>
       ) : null}
 
