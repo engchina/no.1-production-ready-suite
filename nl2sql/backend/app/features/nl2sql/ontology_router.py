@@ -2510,8 +2510,8 @@ class OntologyApiRuntime:
                     "ONTOLOGY_REVISION_CHANGED",
                     "Ontology revision が更新されました。もう一度実行してください。",
                 )
-            row_limit = request.row_limit or profile.default_row_limit
-            if intent.limit is None:
+            row_limit = request.row_limit
+            if intent.limit is None and row_limit is not None:
                 intent.limit = row_limit
             session = self.sessions.create_session(
                 QuerySessionCreate(
@@ -2642,7 +2642,7 @@ class OntologyApiRuntime:
             if not has_scoped_business_content:
                 return None
             intent = self._interpret_question(question, profile, ontology, view)
-            if intent.limit is None:
+            if intent.limit is None and row_limit is not None:
                 intent.limit = row_limit
             session = QuerySession(
                 id=f"query_job_{uuid4().hex}",
@@ -2947,7 +2947,7 @@ class OntologyApiRuntime:
             "time_range_summary_ja": time_summary,
             "granularity": intent.granularity,
             "sort_summaries_ja": sort_summaries,
-            "limit": intent.limit or runtime_context.row_limit,
+            "limit": (intent.limit if intent.limit is not None else runtime_context.row_limit),
             "selected_path_id": intent.selected_path_id or "",
             "approved_join_edge_ids": approved_join_edge_ids,
             "join_condition_summaries": join_summaries,
@@ -3604,7 +3604,7 @@ class OntologyApiRuntime:
                     engine=context.engine,
                     profile_id=confirmed.profile_id,
                     allowed_objects=context.allowed_objects,
-                    row_limit=intent.limit or context.row_limit,
+                    row_limit=(intent.limit if intent.limit is not None else context.row_limit),
                     ontology_context=generation_context,
                 )
             )
@@ -3686,6 +3686,16 @@ class OntologyApiRuntime:
                     "SQL を生成・確認してから実行してください。",
                 )
             context = self._require_context(session_id)
+            confirmed_intent_version = before.intent_confirmed_version
+            current_intent = next(
+                (item for item in before.intents if item.version == confirmed_intent_version),
+                before.intents[-1] if before.intents else None,
+            )
+            execution_row_limit = (
+                current_intent.limit
+                if current_intent is not None and current_intent.limit is not None
+                else context.row_limit
+            )
             self.sessions.authorize_execution(session_id, request, sql=artifact.sql)
             executing = self.sessions.get_session(session_id)
             self._persist_session(executing)
@@ -3708,7 +3718,7 @@ class OntologyApiRuntime:
                     safety, executable_sql, result = self.legacy_service.execute_sql(
                         sql=artifact.sql,
                         allowed=allowed,
-                        row_limit=context.row_limit,
+                        row_limit=execution_row_limit,
                     )
             if not safety.is_safe:
                 with self._lock:

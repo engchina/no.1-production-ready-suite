@@ -696,7 +696,7 @@ def test_enterprise_ai_direct_preview_uses_configured_client() -> None:
     assert preview.sql == "SELECT EMPLOYEE_NAME, DEPARTMENT_NAME FROM V_EMP_DEPT"
     assert preview.engine_meta["runtime"] == "oci_enterprise_ai"
     assert preview.engine_meta["model"] == "enterprise-nl2sql-model"
-    # row_limit(既定 100)は取得時の fetch 上限だけで効かせ、SQL へは書き足さない。
+    # 件数未指定時は total result maximum を設定せず、SQL にも fetch 上限を足さない。
     assert preview.executable_sql == "SELECT EMPLOYEE_NAME, DEPARTMENT_NAME FROM V_EMP_DEPT"
     assert fake_client.calls
     assert "EMPLOYEE" in fake_client.calls[0]["context"]
@@ -1936,7 +1936,7 @@ def test_fail_trigger_words_in_question_are_ignored_on_oracle_runtime() -> None:
     assert preview.fallback_reason == ""
 
 
-def test_preview_without_row_limit_applies_profile_default() -> None:
+def test_preview_without_row_limit_stays_unspecified() -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
     _import_sample_with_profile(service)
 
@@ -1944,11 +1944,11 @@ def test_preview_without_row_limit_applies_profile_default() -> None:
         PreviewRequest(question="請求金額を確認したい", profile_id="sql_assist_sample")
     )
 
-    assert preview.row_limit == 100
+    assert preview.row_limit == 0
     assert "FETCH FIRST" not in preview.executable_sql
 
 
-def test_preview_without_row_limit_uses_custom_profile_default() -> None:
+def test_preview_without_row_limit_ignores_custom_profile_default() -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
     _import_sample_with_profile(service)
     profile = service.create_profile(
@@ -1964,7 +1964,7 @@ def test_preview_without_row_limit_uses_custom_profile_default() -> None:
         PreviewRequest(question="請求金額を確認したい", profile_id=profile.id)
     )
 
-    assert preview.row_limit == 25
+    assert preview.row_limit == 0
     assert "FETCH FIRST" not in preview.executable_sql
 
 
@@ -2441,12 +2441,12 @@ def test_direct_sql_execute_ignores_legacy_profile_id(monkeypatch: pytest.Monkey
         ) -> tuple[SafetyReport, str, QueryResults]:
             assert sql == "SELECT EMPLOYEE_ID FROM EMPLOYEE"
             assert allowed.table_names == ["EMPLOYEE"]
-            assert row_limit == 100
+            assert row_limit is None
             return (
                 SafetyReport(
                     is_safe=True,
                     is_select_only=True,
-                    row_limit_applied=100,
+                    row_limit_applied=0,
                     referenced_tables=["APP.EMPLOYEE"],
                 ),
                 sql,

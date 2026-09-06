@@ -638,17 +638,13 @@ def _intent_summary(
                 key="limit",
                 label_ja="最大件数",
                 value_ja=f"{intent.limit} 件",
-                source=ClarificationEvidenceSource.DEFAULT,
-                confirmed=False,
+                source=ClarificationEvidenceSource.USER,
+                confirmed=True,
             )
         )
     return result
 
 
 def _assumptions(session: QuerySession, intent: QuestionIntentGraph) -> list[str]:
-    assumptions: list[str] = []
-    if intent.limit is not None and not any(
-        token in session.original_question for token in ("件", "上位", "トップ")
-    ):
-        assumptions.append(f"結果は最大 {intent.limit} 件に制限します。")
-    return assumptions
+    del session, intent
+    return []

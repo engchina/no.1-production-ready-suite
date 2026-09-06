@@ -75,14 +75,19 @@ export function QueryResultSummary({
   rowLimit?: number | null;
 }) {
   const hasRowLimit = typeof rowLimit === "number";
-  const reachedRowLimit = hasRowLimit && rowLimit > 0 && results.total === rowLimit;
+  const returnedCount =
+    typeof results.returned_count === "number" ? results.returned_count : results.total;
+  const hasIncompleteResults = Boolean(results.has_more || results.truncated);
+  const reachedRowLimit =
+    hasRowLimit && rowLimit > 0 && (hasIncompleteResults || returnedCount === rowLimit);
+  const hasMoreWithoutLimit = hasIncompleteResults && !reachedRowLimit;
   const executionContext = results.execution_context ?? "deterministic";
   const showExecutionContext =
     executionContext !== "deterministic" || Boolean(results.vpd_context_enforced);
 
   return (
     <div className="flex flex-wrap items-center gap-2" data-testid="query-result-summary">
-      <StatusBadge variant="neutral" label={t("queryResults.fetchedCount", { count: results.total })} />
+      <StatusBadge variant="neutral" label={t("queryResults.fetchedCount", { count: returnedCount })} />
       {showExecutionContext ? (
         <StatusBadge
           variant={results.vpd_context_enforced ? "info" : "neutral"}
@@ -101,6 +106,9 @@ export function QueryResultSummary({
       )}
       {reachedRowLimit && (
         <StatusBadge variant="warning" label={t("queryResults.rowLimit.reached")} />
+      )}
+      {hasMoreWithoutLimit && (
+        <StatusBadge variant="warning" label={t("queryResults.rowLimit.partial")} />
       )}
     </div>
   );

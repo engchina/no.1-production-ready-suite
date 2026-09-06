@@ -593,6 +593,9 @@ class QueryResults(BaseModel):
     columns: list[str]
     rows: list[dict[str, Any]]
     total: int
+    returned_count: int | None = None
+    has_more: bool = False
+    truncated: bool = False
     execution_context: Literal[
         "deterministic",
         "oracle_data_plane",
@@ -600,6 +603,12 @@ class QueryResults(BaseModel):
         "admin_control_plane",
     ] = "deterministic"
     vpd_context_enforced: bool = False
+
+    @model_validator(mode="after")
+    def fill_returned_count(self) -> QueryResults:
+        if self.returned_count is None:
+            self.returned_count = len(self.rows)
+        return self
 
 
 class ExplainPlanOperation(BaseModel):
@@ -1074,9 +1083,6 @@ class PreviewData(BaseModel):
     timing: TimingEnvelope | None = None
 
 
-DIRECT_SQL_DEFAULT_ROW_LIMIT = 100
-
-
 class ExecuteRequest(BaseModel):
     """Profile と独立した SQL execution request.
 
@@ -1087,14 +1093,9 @@ class ExecuteRequest(BaseModel):
 
     sql: str = Field(min_length=1)
     allowed_objects: AllowedObjects = Field(default_factory=AllowedObjects)
-    # Direct SQL execute は 1..100000。0(無制限)は db-admin 専用(DbAdminExecuteRequest)。
-    # null は「未指定」として既定値へ倒す(None のまま adapter へ渡すと fetchall になる)。
-    row_limit: int = Field(default=DIRECT_SQL_DEFAULT_ROW_LIMIT, ge=1, le=100000)
-
-    @field_validator("row_limit", mode="before")
-    @classmethod
-    def _default_row_limit_when_null(cls, value: object) -> object:
-        return DIRECT_SQL_DEFAULT_ROW_LIMIT if value is None else value
+    # 未指定/null は「total result maximum なし」として保持する。
+    # driver memory 保護は Oracle adapter の batch fetch で行い、100 件へ暗黙正規化しない。
+    row_limit: int | None = Field(default=None, ge=1, le=100000)
 
 
 class JobCreateRequest(BaseModel):

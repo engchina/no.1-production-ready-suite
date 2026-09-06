@@ -3137,6 +3137,7 @@ test("SQL 系の必須入力欄は既存の必須マークと required 属性で
   const directExecuteButton = directSql.getByRole("button", { name: "SQL 実行" });
   await expect(directExecuteButton).toBeDisabled();
   await directSqlInput(directSql).fill("SELECT 1 FROM DUAL");
+  await directSql.getByLabel("取得件数上限").fill("100");
   await expect(directExecuteButton).toBeEnabled();
 
   await page.goto("/sql-to-question");
@@ -6474,11 +6475,16 @@ test("AI 活用の SELECT SQL 画面は通常 API だけを使用し、更新 SQ
 
   const sqlInput = directSqlInput(page);
   const rowLimitInput = directSql.getByLabel("取得件数上限");
-  const rowLimitHelper = directSql.getByText("1〜100000 の整数。取得上限なしは指定できません。");
-  await expect(rowLimitInput).toHaveValue("100");
+  const rowLimitHelper = directSql.getByText(
+    "1〜100000 の整数。直接 SQL 実行では取得上限を明示してください。"
+  );
+  await expect(rowLimitInput).toHaveValue("");
   await expectOneLineWithoutOverflow(rowLimitHelper);
   await expectButtonBelowInput(rowLimitInput, directSql.getByRole("button", { name: "SQL 実行" }));
   await sqlInput.fill("SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES");
+  await expect(directSql.getByRole("button", { name: "SQL 実行" })).toBeDisabled();
+  await expect(directSql.getByRole("alert")).toHaveCount(0);
+  await rowLimitInput.fill("100");
   await page.getByRole("button", { name: "SQL 実行" }).click();
 
   await expect(page.getByText("検索結果（1件）")).toBeVisible();
@@ -6498,11 +6504,11 @@ test("AI 活用の SELECT SQL 画面は通常 API だけを使用し、更新 SQ
   await expect(directSql.getByTestId("direct-sql-execution-activity")).toBeVisible();
   await clearButton.click();
   await expect(sqlInput).toHaveValue("");
-  await expect(rowLimitInput).toHaveValue("100");
+  await expect(rowLimitInput).toHaveValue("");
   await expect(page.getByText("検索結果（1件）")).toHaveCount(0);
   await expect(directSql.getByTestId("direct-sql-execution-activity")).toHaveCount(0);
 
-  // /api/nl2sql/execute は 1..100000 のみ受理(0=無制限 fetch は db-admin 専用で、この画面では送信不可)。
+  // この画面は直接 SQL 実行のため、利用者が取得上限を明示してから /api/nl2sql/execute へ送る。
   await rowLimitInput.fill("-1");
   await expect(directSql.getByRole("alert")).toContainText("1〜100000 の整数で入力してください。");
   await expect(directSql.getByRole("button", { name: "SQL 実行" })).toBeDisabled();
@@ -6521,6 +6527,7 @@ test("AI 活用の SELECT SQL 画面は通常 API だけを使用し、更新 SQ
   await expect(directSql.getByTestId("query-result-summary")).toContainText("上限到達");
 
   await page.getByRole("button", { name: "クリア" }).click();
+  await rowLimitInput.fill("100");
   await sqlInput.fill("UPDATE INVOICES SET STATUS = 'REVIEWED' WHERE INVOICE_ID = 1");
   await page.getByRole("button", { name: "SQL 実行" }).click();
   await expect(page.getByRole("alert")).toContainText("SELECT/WITH のみ実行できます。");
@@ -6530,6 +6537,7 @@ test("AI 活用の SELECT SQL 画面は通常 API だけを使用し、更新 SQ
   expect(api.adminExecutePayload).toBeNull();
 
   await page.getByRole("button", { name: "クリア" }).click();
+  await rowLimitInput.fill("100");
   await sqlInput.fill("select * from employee");
   await page.getByRole("button", { name: "SQL 実行" }).click();
   await expect(page).toHaveURL(/\/direct-sql$/);
@@ -6562,6 +6570,7 @@ test("SQL 実行中は主ボタンだけが動的 spinner を表示する", asyn
   await page.goto("/direct-sql");
   const directSql = page.getByTestId("nl2sql-direct-sql");
   await directSqlInput(directSql).fill("SELECT CUSTOMER_NAME FROM INVOICES");
+  await directSql.getByLabel("取得件数上限").fill("100");
   const directExecuteButton = directSql.getByRole("button", { name: "SQL 実行" });
   const directRequest = page.waitForRequest("**/api/nl2sql/execute");
   await directExecuteButton.click();
@@ -6668,6 +6677,7 @@ test("SQL 再実行は main スクロールを先頭へ戻さず結果領域を�
   await page.goto("/direct-sql");
   const directSql = page.getByTestId("nl2sql-direct-sql");
   await directSqlInput(directSql).fill("SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES");
+  await directSql.getByLabel("取得件数上限").fill("100");
   const directExecuteButton = directSql.getByRole("button", { name: "SQL 実行" });
   await directExecuteButton.click();
   await expect(directSql.getByText("検索結果（16件）")).toBeVisible();
