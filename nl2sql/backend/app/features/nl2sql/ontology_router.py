@@ -122,6 +122,7 @@ from .ontology_service import (
 )
 from .ontology_sources import OntologySourceStorage
 from .ontology_store import (
+    IDEMPOTENCY_KEY_STORAGE_MAX_BYTES,
     InMemoryOntologyStore,
     OntologyCollection,
     OntologyStore,
@@ -202,6 +203,14 @@ _LEGACY_AMBIGUITY_KIND_CODES: Mapping[str, str] = {
     "relationship": "RELATIONSHIP_PATH_UNCLEAR",
     "business_meaning": "BUSINESS_MEANING_UNCLEAR",
 }
+
+
+def _idempotency_storage_key(request_key: str) -> str:
+    """Oracle の key 列へ収まる決定論的な storage identity を返す。"""
+
+    if len(request_key.encode("utf-8")) <= IDEMPOTENCY_KEY_STORAGE_MAX_BYTES:
+        return request_key
+    return f"sha256:{hashlib.sha256(request_key.encode('utf-8')).hexdigest()}"
 
 
 def _question_intent_json_schema() -> dict[str, Any]:
@@ -2748,12 +2757,13 @@ class OntologyApiRuntime:
         request_payload: Mapping[str, Any],
         callback: Callable[[], QuerySessionData],
     ) -> QuerySessionData:
-        key = idempotency_key.strip()
-        if not key:
+        request_key = idempotency_key.strip()
+        if not request_key:
             raise OntologyIntegrityError(
                 "IDEMPOTENCY_KEY_REQUIRED",
                 "Idempotency-Key header を指定してください。",
             )
+        key = _idempotency_storage_key(request_key)
         self._ensure_store()
         request_hash = hashlib.sha256(
             canonical_json({"operation": operation, "payload": request_payload}).encode("utf-8")

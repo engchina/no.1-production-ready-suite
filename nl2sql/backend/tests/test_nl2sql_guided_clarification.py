@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any, cast
 
+import httpx
 import pytest
 
+import app.features.nl2sql.ontology_router as ontology_router_module
 from app.features.nl2sql.models import (
     AllowedObjects,
     Nl2SqlProfile,
@@ -25,6 +27,7 @@ from app.features.nl2sql.ontology_models import (
     ClarificationAnswerKind,
     ClarificationCategory,
     ClarificationMode,
+    ClarificationQuestion,
     ClarificationStatus,
     ClarificationTurn,
     ColumnQueryPolicy,
@@ -46,7 +49,12 @@ from app.features.nl2sql.ontology_service import (
     OntologyStateConflictError,
     OntologyVersionConflictError,
 )
-from app.features.nl2sql.ontology_store import InMemoryOntologyStore
+from app.features.nl2sql.ontology_store import (
+    IDEMPOTENCY_KEY_STORAGE_MAX_BYTES,
+    InMemoryOntologyStore,
+    OntologyCollection,
+)
+from app.main import app
 from app.settings import get_settings
 
 
@@ -124,6 +132,23 @@ class _GuidedLegacyService:
         )
 
 
+class _OracleSizedIdempotencyStore(InMemoryOntologyStore):
+    """Oracle schema の IDEMPOTENCY_KEY VARCHAR2(160) 制約を再現する。"""
+
+    def save_document(
+        self,
+        collection: OntologyCollection,
+        document: Mapping[str, Any] | Any,
+        *,
+        expected_etag: str | None = None,
+    ) -> dict[str, Any]:
+        if collection == "idempotency":
+            storage_key = str(document["idempotency_key"])
+            if len(storage_key.encode("utf-8")) > IDEMPOTENCY_KEY_STORAGE_MAX_BYTES:
+                raise RuntimeError("ORA-12899: value too large for IDEMPOTENCY_KEY")
+        return super().save_document(collection, document, expected_etag=expected_etag)
+
+
 def _runtime() -> OntologyApiRuntime:
     return OntologyApiRuntime(
         legacy_service=_GuidedLegacyService(),
@@ -174,6 +199,49 @@ def _create_guided(runtime: OntologyApiRuntime) -> QuerySessionData:
             clarification_mode=ClarificationMode.GUIDED,
         ),
         actor_user_uuid="user-1",
+    )
+
+
+def _prepare_guided_output_question(
+    runtime: OntologyApiRuntime,
+) -> tuple[QuerySessionData, QuerySession, ClarificationQuestion]:
+    created = _create_guided(runtime)
+    ontology = runtime.ontology_revision(created.session.ontology_revision_id)
+    columns = [
+        node
+        for node in ontology.nodes
+        if node.kind == OntologyNodeKind.COLUMN
+        and node.technical_name in {"APP.ORDERS.STATUS", "APP.ORDERS.ORDER_ID"}
+    ]
+    intent = created.session.intents[-1].model_copy(deep=True)
+    intent.metrics = []
+    intent.dimensions = []
+    intent.ambiguities = [
+        IntentAmbiguity(
+            id="embedding-columns-runtime",
+            code="ontology_embedding_ambiguous",
+            message_ja="Embedding 検索だけでは業務要素を一意に確定できません。",
+            options=[node.technical_name for node in columns],
+            blocking=True,
+        )
+    ]
+    session = created.session.model_copy(
+        deep=True,
+        update={"intents": [intent], "clarification_turns": []},
+    )
+    runtime.sessions.replace_session(session)
+    runtime._persist_session(session)
+    state = build_clarification_state(session, ontology, created.profile_ontology_view)
+    question = state.current_question
+    assert question is not None
+    return created, session, question
+
+
+def _frontend_clarification_idempotency_key(session_id: str) -> str:
+    return (
+        f"nl2sql:/api/nl2sql/query-sessions/{session_id}/clarification-answers:"
+        "base_version.free_text.question_id.selected_option_ids:"
+        "00000000-0000-0000-0000-000000000000"
     )
 
 
@@ -414,6 +482,107 @@ def test_embedding_column_ambiguity_is_presented_as_business_output_selection() 
     assert {item.name_ja for item in updated_intent.dimensions} == {"受注状態", "受注ID"}
 
 
+def test_guided_output_multi_select_answer_rebuilds_and_persists_session_state() -> None:
+    store = _OracleSizedIdempotencyStore()
+    runtime = OntologyApiRuntime(
+        legacy_service=_GuidedLegacyService(),
+        store=store,
+    )
+    _created, session, question = _prepare_guided_output_question(runtime)
+    idempotency_key = _frontend_clarification_idempotency_key(session.id)
+    assert len(idempotency_key.encode("utf-8")) > IDEMPOTENCY_KEY_STORAGE_MAX_BYTES
+    updated = runtime.answer_clarification_idempotent(
+        session.id,
+        ClarificationAnswerRequest(
+            base_version=1,
+            question_id=question.id,
+            selected_option_ids=[option.id for option in question.options],
+        ),
+        idempotency_key=idempotency_key,
+    )
+    replay = runtime.answer_clarification_idempotent(
+        session.id,
+        ClarificationAnswerRequest(
+            base_version=1,
+            question_id=question.id,
+            selected_option_ids=[option.id for option in question.options],
+        ),
+        idempotency_key=idempotency_key,
+    )
+    with pytest.raises(OntologyVersionConflictError, match="異なる payload"):
+        runtime.answer_clarification_idempotent(
+            session.id,
+            ClarificationAnswerRequest(
+                base_version=1,
+                question_id=question.id,
+                selected_option_ids=[question.options[0].id],
+            ),
+            idempotency_key=idempotency_key,
+        )
+
+    assert updated.session.current_intent_version == 2
+    assert replay.session.current_intent_version == 2
+    assert updated.clarification is not None
+    assert updated.clarification.status == ClarificationStatus.READY_TO_CONFIRM
+    assert {item.name_ja for item in updated.session.intents[-1].dimensions} == {
+        "受注状態",
+        "受注ID",
+    }
+    summary = next(
+        item for item in updated.clarification.intent_summary if item.key == "dimensions"
+    )
+    assert summary.confirmed is True
+    stored_idempotency = store.list_documents("idempotency")
+    assert len(stored_idempotency) == 1
+    assert stored_idempotency[0]["idempotency_key"].startswith("sha256:")
+    assert (
+        len(stored_idempotency[0]["idempotency_key"].encode("utf-8"))
+        <= IDEMPOTENCY_KEY_STORAGE_MAX_BYTES
+    )
+
+
+@pytest.mark.asyncio
+async def test_guided_output_multi_select_accepts_frontend_idempotency_key_over_http(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _OracleSizedIdempotencyStore()
+    runtime = OntologyApiRuntime(
+        legacy_service=_GuidedLegacyService(),
+        store=store,
+    )
+    _created, session, question = _prepare_guided_output_question(runtime)
+    idempotency_key = _frontend_clarification_idempotency_key(session.id)
+    monkeypatch.setattr(ontology_router_module, "ontology_runtime", runtime)
+    transport = httpx.ASGITransport(app=app)
+    payload = {
+        "base_version": 1,
+        "question_id": question.id,
+        "selected_option_ids": [option.id for option in question.options],
+        "free_text": "",
+    }
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            f"/api/nl2sql/query-sessions/{session.id}/clarification-answers",
+            headers={"Idempotency-Key": idempotency_key},
+            json=payload,
+        )
+        replay = await client.post(
+            f"/api/nl2sql/query-sessions/{session.id}/clarification-answers",
+            headers={"Idempotency-Key": idempotency_key},
+            json=payload,
+        )
+
+    assert response.status_code == 200
+    assert replay.status_code == 200
+    response_data = response.json()["data"]
+    assert response_data["clarification"]["status"] == "ready_to_confirm"
+    assert {item["name_ja"] for item in response_data["session"]["intents"][-1]["dimensions"]} == {
+        "受注状態",
+        "受注ID",
+    }
+
+
 @pytest.mark.parametrize(
     ("code", "expected_prompt"),
     [
@@ -497,6 +666,7 @@ def test_guided_answer_is_idempotent_and_rejects_stale_version() -> None:
 
     assert first.session.current_intent_version == 2
     assert replay.session.current_intent_version == 2
+    assert runtime.store.list_documents("idempotency")[0]["idempotency_key"] == "answer-1"
     with pytest.raises(OntologyVersionConflictError):
         runtime.answer_clarification_idempotent(
             created.session.id,

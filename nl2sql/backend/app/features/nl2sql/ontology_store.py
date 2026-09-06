@@ -58,6 +58,7 @@ ONTOLOGY_COLLECTIONS: tuple[OntologyCollection, ...] = (
     "jobs",
     "recommendations",
 )
+IDEMPOTENCY_KEY_STORAGE_MAX_BYTES = 160
 
 _ID_KIND = re.compile(r"[^a-z0-9_]+")
 _UNORDERED_SCHEMA_COLLECTIONS = frozenset(
@@ -462,10 +463,10 @@ ONTOLOGY_TABLE_DDL: dict[OntologyCollection, str] = {
             UPDATED_AT TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
         )
     """,
-    "idempotency": """
+    "idempotency": f"""
         CREATE TABLE NL2SQL_ONTOLOGY_IDEMPOTENCY (
             OPERATION VARCHAR2(96) NOT NULL,
-            IDEMPOTENCY_KEY VARCHAR2(160) NOT NULL,
+            IDEMPOTENCY_KEY VARCHAR2({IDEMPOTENCY_KEY_STORAGE_MAX_BYTES}) NOT NULL,
             REQUEST_HASH VARCHAR2(64) NOT NULL,
             RESOURCE_ID VARCHAR2(160) NOT NULL,
             STATUS VARCHAR2(32) NOT NULL,
