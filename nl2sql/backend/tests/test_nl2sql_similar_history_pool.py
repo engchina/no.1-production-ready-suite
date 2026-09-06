@@ -33,16 +33,19 @@ def _history(
     *,
     admin: FeedbackRating | None,
     profile_id: str = "default",
+    question: str = "請求金額を確認したい",
+    rewritten_question: str | None = None,
     generated_sql: str = "SELECT TOTAL_AMOUNT FROM APP.INVOICES",
 ) -> HistoryItem:
     return HistoryItem(
         id=f"hist-{index:03d}",
-        question="請求金額を確認したい",
+        question=question,
         engine=Nl2SqlEngine.ENTERPRISE_AI_DIRECT,
         generated_sql=generated_sql,
         created_at=f"2026-09-02T00:00:{index:02d}+00:00",
         profile_id=profile_id,
         profile_name=f"{profile_id} profile",
+        rewritten_question=rewritten_question if rewritten_question is not None else question,
         safety_is_safe=True,
         admin_feedback_rating=admin,
         admin_feedback_updated_at=f"2026-09-02T01:00:{index:02d}+00:00" if admin else "",
@@ -91,6 +94,9 @@ def _request(principal: Principal | None) -> Any:
 
 
 class _FakeEmbeddingClient:
+    def __init__(self) -> None:
+        self.texts: list[str] = []
+
     def is_configured(self) -> bool:
         return True
 
@@ -98,6 +104,7 @@ class _FakeEmbeddingClient:
         return True
 
     def embed_texts(self, texts: list[str]) -> list[list[float]]:
+        self.texts.extend(texts)
         return [[1.0 if index == 0 else 0.0 for index in range(1536)] for _text in texts]
 
 
@@ -268,6 +275,149 @@ def test_oracle_vector_history_receives_allowed_profile_scope(
     assert adapter.search_kwargs is not None
     assert adapter.search_kwargs["profile_ids"] == {"sales", "finance"}
     assert {entry.item.profile_id for entry in data.items} == {"sales", "finance"}
+
+
+def test_oracle_vector_history_embeds_template_values_without_labels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "nl2sql_feedback_embedding_enabled", True)
+    monkeypatch.setattr(settings, "nl2sql_runtime_mode", "oracle")
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    adapter = _RecordingOracleAdapter()
+    embedding_client = _FakeEmbeddingClient()
+    service._oracle_adapter = cast(Any, adapter)  # noqa: SLF001
+    service._embedding_client = cast(Any, embedding_client)  # noqa: SLF001
+    service._history = [  # noqa: SLF001
+        _history(1, admin=FeedbackRating.GOOD),
+    ]
+
+    service.similar_history(
+        SimilarHistoryRequest(
+            question="対象テーブル：\n抽出項目：従業員情報\n抽出条件：",
+            profile_id="default",
+            limit=5,
+        )
+    )
+
+    assert embedding_client.texts[0] == "従業員情報"
+
+
+def test_feedback_embedding_text_ignores_question_template_labels() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    text = service._feedback_embedding_text(  # noqa: SLF001
+        _history(
+            1,
+            admin=FeedbackRating.GOOD,
+            question="対象テーブル：\n抽出項目：従業員情報\n抽出条件：",
+            generated_sql="SELECT EMPLOYEE_NAME FROM APP.EMPLOYEE",
+        )
+    )
+
+    assert "question: 従業員情報" in text
+    assert "対象テーブル" not in text
+    assert "抽出項目" not in text
+    assert "抽出条件" not in text
+
+
+def test_oracle_vector_empty_template_does_not_embed_labels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "nl2sql_feedback_embedding_enabled", True)
+    monkeypatch.setattr(settings, "nl2sql_runtime_mode", "oracle")
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    embedding_client = _FakeEmbeddingClient()
+    service._oracle_adapter = cast(Any, _RecordingOracleAdapter())  # noqa: SLF001
+    service._embedding_client = cast(Any, embedding_client)  # noqa: SLF001
+    service._history = [  # noqa: SLF001
+        _history(
+            1,
+            admin=FeedbackRating.GOOD,
+            question="対象テーブル：\n抽出項目：\n抽出条件：",
+            generated_sql="SELECT 1 FROM DUAL",
+        ),
+    ]
+
+    data = service.similar_history(
+        SimilarHistoryRequest(
+            question="対象テーブル：\n抽出項目：\n抽出条件：",
+            profile_id="default",
+            limit=5,
+        )
+    )
+
+    assert embedding_client.texts == []
+    assert data.items == []
+
+
+def test_similar_history_ignores_question_template_labels_for_scoring() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service._history = [  # noqa: SLF001
+        _history(
+            1,
+            admin=FeedbackRating.GOOD,
+            question="対象テーブル：\n抽出項目：部署情報\n抽出条件：",
+            generated_sql="SELECT DEPARTMENT_NAME FROM APP.DEPARTMENT",
+        ),
+        _history(
+            2,
+            admin=FeedbackRating.GOOD,
+            question="対象テーブル：\n抽出項目：\n抽出条件：",
+            generated_sql="SELECT 1 FROM DUAL",
+        ),
+        _history(
+            3,
+            admin=FeedbackRating.GOOD,
+            question="従業員情報から氏名と入社日を確認したい",
+            generated_sql="SELECT EMPLOYEE_NAME, HIRE_DATE FROM APP.EMPLOYEE",
+        ),
+    ]
+
+    data = service.similar_history(
+        SimilarHistoryRequest(
+            question="対象テーブル：\n抽出項目：従業員情報\n抽出条件：",
+            profile_id="default",
+            limit=5,
+        )
+    )
+
+    assert [entry.item.id for entry in data.items[:2]] == ["hist-003", "hist-001"]
+    scores = {entry.item.id: entry.score for entry in data.items}
+    assert scores["hist-003"] > scores["hist-001"]
+    assert "hist-002" not in scores
+    reasons = " ".join(entry.reason for entry in data.items)
+    assert "対象テーブル" not in reasons
+    assert "抽出項目" not in reasons
+    assert "抽出条件" not in reasons
+
+
+def test_empty_question_template_does_not_match_similar_history_by_labels() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service._history = [  # noqa: SLF001
+        _history(
+            1,
+            admin=FeedbackRating.GOOD,
+            question="対象テーブル：\n抽出項目：\n抽出条件：",
+            generated_sql="SELECT 1 FROM DUAL",
+        ),
+        _history(
+            2,
+            admin=FeedbackRating.GOOD,
+            question='対象テーブル："部署情報"\n抽出項目：\n抽出条件：',
+            generated_sql="SELECT DEPARTMENT_NAME FROM APP.DEPARTMENT",
+        ),
+    ]
+
+    data = service.similar_history(
+        SimilarHistoryRequest(
+            question="対象テーブル：\n抽出項目：\n抽出条件：",
+            profile_id="default",
+            limit=5,
+        )
+    )
+
+    assert data.items == []
 
 
 def test_memory_pool_matches_repository_semantics() -> None:

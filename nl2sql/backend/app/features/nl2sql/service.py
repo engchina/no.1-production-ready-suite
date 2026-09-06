@@ -2146,6 +2146,25 @@ def _profile_recommendation_tokens(value: str) -> set[str]:
     }
 
 
+def _similar_history_question_text_for_similarity(value: str) -> str:
+    normalized = unicodedata.normalize("NFKC", str(value or ""))
+    slots = _parse_structured_question_slots(normalized)
+    if not slots.has_template:
+        return normalized
+    parts: list[str] = []
+    for slot_value in slots.slots.values():
+        for line in slot_value.splitlines():
+            cleaned = re.sub(r"^\s*[-*・]\s*", "", line).strip()
+            cleaned = cleaned.strip("\"'`“”‘’「」『』")
+            if cleaned:
+                parts.append(cleaned)
+    return " ".join(parts)
+
+
+def _similar_history_question_tokens(value: str) -> set[str]:
+    return _similarity_tokens(_similar_history_question_text_for_similarity(value))
+
+
 def is_select_only(sql: str) -> bool:
     """SELECT/WITH のみを許可し、DDL/DML/PLSQL と複数 statement を拒否する。
 
@@ -9212,8 +9231,9 @@ class Nl2SqlService:
         user_feedback = item.feedback_rating.value if item.feedback_rating else ""
         return "\n".join(
             [
-                f"question: {item.question}",
-                f"rewritten_question: {item.rewritten_question}",
+                f"question: {_similar_history_question_text_for_similarity(item.question)}",
+                "rewritten_question: "
+                f"{_similar_history_question_text_for_similarity(item.rewritten_question)}",
                 f"sql: {item.generated_sql}",
                 f"admin_feedback: {admin_feedback}",
                 f"admin_feedback_content: {item.admin_feedback_content}",
@@ -16085,8 +16105,11 @@ class Nl2SqlService:
             or not self._embedding_client.is_configured()
         ):
             return []
+        embedding_text = _similar_history_question_text_for_similarity(question).strip()
+        if not embedding_text:
+            return []
         try:
-            embedding = self._embedding_client.embed_texts([question])[0]
+            embedding = self._embedding_client.embed_texts([embedding_text])[0]
             rows = self._oracle_adapter.search_feedback_vector_index(
                 table_name=settings.nl2sql_feedback_vector_table,
                 embedding=embedding,
@@ -16147,9 +16170,10 @@ class Nl2SqlService:
         target_objects: set[str],
     ) -> list[SimilarHistoryItem]:
         del include_bad
-        query_tokens = _similarity_tokens(question)
+        query_tokens = _similar_history_question_tokens(question)
         if not query_tokens:
             return []
+        query_similarity_text = _similar_history_question_text_for_similarity(question)
         scored: list[SimilarHistoryItem] = []
         for item in history:
             # 管理者が GOOD にした履歴だけを検索・few-shot 対象にする。
@@ -16164,8 +16188,8 @@ class Nl2SqlService:
             item_tokens = _similarity_tokens(
                 " ".join(
                     [
-                        item.question,
-                        item.rewritten_question,
+                        _similar_history_question_text_for_similarity(item.question),
+                        _similar_history_question_text_for_similarity(item.rewritten_question),
                         item.generated_sql,
                         item.profile_name,
                         " ".join(item.result_columns),
@@ -16179,7 +16203,7 @@ class Nl2SqlService:
             item_overlap = len(overlap) / max(len(item_tokens), 1)
             base_score = (query_overlap * 0.75) + (item_overlap * 0.25)
             score = round(min(base_score, 1.0), 3)
-            visible_terms = self._visible_similarity_terms(question, item, overlap)
+            visible_terms = self._visible_similarity_terms(query_similarity_text, item, overlap)
             reason_terms = "、".join(visible_terms[:4] or overlap[:4])
             target_reason = "対象テーブルが一致し、" if target_objects else ""
             reason = (
@@ -16200,7 +16224,13 @@ class Nl2SqlService:
     def _visible_similarity_terms(
         self, question: str, item: HistoryItem, overlap: list[str]
     ) -> list[str]:
-        compared = f"{item.question} {item.rewritten_question} {item.generated_sql}".upper()
+        compared = " ".join(
+            [
+                _similar_history_question_text_for_similarity(item.question),
+                _similar_history_question_text_for_similarity(item.rewritten_question),
+                item.generated_sql,
+            ]
+        ).upper()
         candidates: list[str] = []
         for profile in self.list_profiles():
             glossary = self._effective_glossary(profile)
