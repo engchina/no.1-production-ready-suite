@@ -488,7 +488,7 @@ def test_admin_mutation_submits_schema_job_only_for_schema_changes(
     assert submitted_targets == [[("APP", "ORDERS_ARCHIVE", "present")]]
 
 
-def test_admin_plsql_success_requires_manual_schema_refresh() -> None:
+def test_admin_plsql_dynamic_sql_is_blocked_before_oracle() -> None:
     adapter = _FakeStatementsAdapter(
         [
             {
@@ -508,11 +508,53 @@ def test_admin_plsql_success_requires_manual_schema_refresh() -> None:
         )
     )
 
-    assert result.executed is True
+    assert result.executed is False
+    assert adapter.calls == []
+    assert result.statements[0].status == "blocked"
+    assert "PL/SQL の動的 SQL" in result.statements[0].error_message
     assert result.schema_refresh_job_id == ""
-    assert result.schema_refresh_required is True
-    assert result.schema_refresh_reason_code == "schema_refresh_target_unresolved"
-    assert any("DB 構造を再取得" in warning for warning in result.warnings)
+    assert result.schema_refresh_required is False
+    assert result.schema_refresh_reason_code == ""
+
+
+def test_admin_plsql_dynamic_sql_concatenated_system_object_is_blocked() -> None:
+    adapter = _FakeAdminSqlAdapter()
+    service = _OracleRuntimeService(adapter)
+
+    result = service.execute_db_admin_sql(
+        DbAdminExecuteRequest(
+            sql="BEGIN EXECUTE IMMEDIATE 'DROP TABLE NL2' || 'SQL_APP_USERS'; END;",
+            confirmation="ADMIN_EXECUTE",
+        )
+    )
+
+    assert result.executed is False
+    assert result.runtime == "oracle"
+    assert result.execution_context == "admin_control_plane"
+    assert result.statements[0].statement_type == "PLSQL"
+    assert result.statements[0].status == "blocked"
+    assert "PL/SQL の動的 SQL" in result.statements[0].error_message
+    assert adapter.select_calls == []
+    assert adapter.calls == []
+
+
+def test_admin_statements_dynamic_sql_is_blocked_before_policy_and_oracle() -> None:
+    adapter = _FakeStatementsAdapter([])
+    service = _OracleRuntimeService(adapter)
+
+    result = service.execute_db_admin_statements(
+        DbAdminStatementsRequest(
+            sql="BEGIN DBMS_SQL.PARSE(v_cursor, 'DROP TABLE NL2' || 'SQL_APP_USERS', 1); END;",
+            policy="table_ddl",
+            confirmation="ADMIN_EXECUTE",
+        )
+    )
+
+    assert result.executed is False
+    assert result.statements[0].statement_type == "PLSQL"
+    assert result.statements[0].status == "blocked"
+    assert "PL/SQL の動的 SQL" in result.statements[0].error_message
+    assert adapter.calls == []
 
 
 def test_select_ai_db_profiles_include_detail_enriches_objects_and_models() -> None:
@@ -1043,11 +1085,27 @@ def test_db_admin_execute_blocks_nl2sql_select_dml_and_plsql_before_oracle() -> 
             confirmation="ADMIN_EXECUTE",
         )
     )
+    grant_result = service.execute_db_admin_sql(
+        DbAdminExecuteRequest(
+            sql="GRANT SELECT ON NL2SQL_APP_USERS TO PUBLIC",
+            confirmation="ADMIN_EXECUTE",
+        )
+    )
+    revoke_result = service.execute_db_admin_sql(
+        DbAdminExecuteRequest(
+            sql='REVOKE SELECT ON APP."NL2SQL_AUTH_SESSIONS" FROM PUBLIC',
+            confirmation="ADMIN_EXECUTE",
+        )
+    )
 
     assert [item.status for item in select_result.statements] == ["blocked"]
     assert [item.status for item in dml_result.statements] == ["blocked"]
     assert [item.status for item in plsql_result.statements] == ["blocked"]
+    assert [item.status for item in grant_result.statements] == ["blocked"]
+    assert [item.status for item in revoke_result.statements] == ["blocked"]
     assert "システムテーブル管理" in select_result.statements[0].error_message
+    assert "システムテーブル管理" in grant_result.statements[0].error_message
+    assert "システムテーブル管理" in revoke_result.statements[0].error_message
     assert adapter.select_calls == []
     assert adapter.calls == []
 
