@@ -6492,10 +6492,15 @@ test("AI 活用の SELECT SQL 画面は通常 API だけを使用し、更新 SQ
   });
   expect(api.adminExecutePayload).toBeNull();
 
-  await page.getByRole("button", { name: "クリア" }).click();
+  await sqlInput.fill("");
+  const clearButton = directSql.getByRole("button", { name: "クリア" });
+  await expect(clearButton).toBeEnabled();
+  await expect(directSql.getByTestId("direct-sql-execution-activity")).toBeVisible();
+  await clearButton.click();
   await expect(sqlInput).toHaveValue("");
   await expect(rowLimitInput).toHaveValue("100");
   await expect(page.getByText("検索結果（1件）")).toHaveCount(0);
+  await expect(directSql.getByTestId("direct-sql-execution-activity")).toHaveCount(0);
 
   // /api/nl2sql/execute は 1..100000 のみ受理(0=無制限 fetch は db-admin 専用で、この画面では送信不可)。
   await rowLimitInput.fill("-1");

@@ -77,6 +77,7 @@ function ExecutableDirectSqlPage() {
       : null;
   const rowLimitError = rowLimit === null ? t("queryResults.rowLimit.errorBounded") : "";
   const canExecute = Boolean(sqlText.trim()) && !loading && rowLimit !== null;
+  const canClear = Boolean(sqlText || results || executionRun);
 
   const execute = async () => {
     const trimmedSql = sqlText.trim();
@@ -192,7 +193,7 @@ function ExecutableDirectSqlPage() {
                 variant="secondary"
                 size="lg"
                 className="w-full sm:w-auto"
-                disabled={!sqlText || loading}
+                disabled={!canClear || loading}
                 onClick={clear}
               >
                 <X size={16} aria-hidden="true" />
