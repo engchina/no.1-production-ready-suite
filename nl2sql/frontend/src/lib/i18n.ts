@@ -829,6 +829,9 @@ const nl2sqlJa = {
   "nl2sql.similar.loading": "参考履歴を検索中",
   "nl2sql.similar.title": "参考履歴",
   "nl2sql.similar.goodOnly": "管理者レビュー結果: 良いのみ",
+  "nl2sql.similar.notUsedBadge": "few-shot 不使用",
+  "nl2sql.similar.notUsedHint":
+    "このエンジンでは参考履歴を few-shot として SQL 生成へ注入しません。Select AI / Agent は Select AI feedback を使用します。",
   "nl2sql.similar.emptyTitle": "参考履歴はありません",
   "nl2sql.similar.emptyHint":
     "管理者レビュー結果が良い履歴は見つかりませんでした。質問またはプロファイルを変更すると自動で再検索します。",
