@@ -893,6 +893,13 @@ _FROM_JOIN_WITH_ALIAS = re.compile(
     rf"\b(?:from|join)\s+({_SQL_OBJECT_REF})(?:\s+(?:as\s+)?([a-zA-Z_][\w$#]*))?",
     re.IGNORECASE,
 )
+_GRANT_REVOKE_TARGET = re.compile(
+    rf"\bon\s+(?:(?:directory|edition|function|index|indextype|"
+    rf"java\s+(?:source|resource|class)|library|materialized\s+view|"
+    rf"mining\s+model|operator|package|procedure|sequence|table|type|view)\s+)?"
+    rf"({_SQL_OBJECT_REF})\s+\b(?:to|from)\b",
+    re.IGNORECASE | re.DOTALL,
+)
 _SYSTEM_OBJECT_TOKEN = re.compile(
     r'(?<![A-Z0-9_$#])"?NL2SQL_[A-Z0-9_$#]*"?',
     re.IGNORECASE,
@@ -1641,6 +1648,12 @@ def _dml_target_refs(statement: str) -> list[str]:
     return refs
 
 
+def _grant_revoke_target_refs(statement: str) -> list[str]:
+    stripped = _strip_leading_sql_comments(statement).strip().rstrip(";")
+    match = _GRANT_REVOKE_TARGET.search(stripped)
+    return [match.group(1)] if match else []
+
+
 def _admin_statement_hidden_object_names(
     statement: str,
     *,
@@ -1659,6 +1672,8 @@ def _admin_statement_hidden_object_names(
     elif statement_type in {"INSERT", "UPDATE", "DELETE", "MERGE", "TRUNCATE"}:
         refs.extend(_dml_target_refs(statement))
         refs.extend(_extract_referenced_tables(statement, current_owner=current_owner))
+    elif statement_type in {"GRANT", "REVOKE"}:
+        refs.extend(_grant_revoke_target_refs(statement))
     elif statement_type in {"PLSQL", "UNKNOWN"} and _SYSTEM_OBJECT_TOKEN.search(statement):
         return [
             _normalize_identifier(match.group(0))

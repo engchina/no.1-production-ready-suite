@@ -1085,11 +1085,27 @@ def test_db_admin_execute_blocks_nl2sql_select_dml_and_plsql_before_oracle() -> 
             confirmation="ADMIN_EXECUTE",
         )
     )
+    grant_result = service.execute_db_admin_sql(
+        DbAdminExecuteRequest(
+            sql="GRANT SELECT ON NL2SQL_APP_USERS TO PUBLIC",
+            confirmation="ADMIN_EXECUTE",
+        )
+    )
+    revoke_result = service.execute_db_admin_sql(
+        DbAdminExecuteRequest(
+            sql='REVOKE SELECT ON APP."NL2SQL_AUTH_SESSIONS" FROM PUBLIC',
+            confirmation="ADMIN_EXECUTE",
+        )
+    )
 
     assert [item.status for item in select_result.statements] == ["blocked"]
     assert [item.status for item in dml_result.statements] == ["blocked"]
     assert [item.status for item in plsql_result.statements] == ["blocked"]
+    assert [item.status for item in grant_result.statements] == ["blocked"]
+    assert [item.status for item in revoke_result.statements] == ["blocked"]
     assert "システムテーブル管理" in select_result.statements[0].error_message
+    assert "システムテーブル管理" in grant_result.statements[0].error_message
+    assert "システムテーブル管理" in revoke_result.statements[0].error_message
     assert adapter.select_calls == []
     assert adapter.calls == []
 
