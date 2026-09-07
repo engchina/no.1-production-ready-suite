@@ -43,7 +43,10 @@ class _SchemaCursor:
 
     def execute(self, sql: str, _binds: dict[str, Any] | None = None) -> None:
         self._assert_input_sizes_match(sql)
-        self.database.executed.append(" ".join(sql.split()))
+        normalized = " ".join(sql.split())
+        self.database.executed.append(normalized)
+        if self.database.raise_row_lock_timeout and " FOR UPDATE WAIT " in normalized:
+            raise RuntimeError("ORA-30006: resource busy; acquire with WAIT timeout expired")
 
     def executemany(self, sql: str, rows: list[dict[str, Any]]) -> None:
         self._assert_input_sizes_match(sql)
@@ -94,6 +97,7 @@ class _SchemaDatabase:
         self.executed_many: list[tuple[str, list[dict[str, Any]]]] = []
         self.commits = 0
         self.rollbacks = 0
+        self.raise_row_lock_timeout = False
 
     @contextmanager
     def connection(self) -> Iterator[_SchemaConnection]:
@@ -311,6 +315,28 @@ def test_oracle_store_applies_round_trip_timeout_to_connections(
 
     assert database.connections
     assert {connection.call_timeout for connection in database.connections} == {7500}
+    assert any("FOR UPDATE WAIT 7" in sql for sql in database.executed)
+
+
+def test_oracle_store_row_lock_wait_is_bounded_and_reported(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(get_settings(), "nl2sql_oracle_call_timeout_seconds", 120.0)
+    database = _SchemaDatabase()
+    database.raise_row_lock_timeout = True
+    store = OracleOntologyStore(connection_factory=database.connection)
+
+    with pytest.raises(TimeoutError, match="行ロック待ちが 30 秒を超えました"):
+        store.save_document(
+            "revisions",
+            {
+                "revision_id": "rev-locked",
+                "status": "draft",
+                "schema_fingerprint": "b" * 64,
+            },
+        )
+
+    assert any("FOR UPDATE WAIT 30" in sql for sql in database.executed)
 
 
 def test_memory_atomic_save_rolls_back_entire_revision_switch_on_conflict() -> None:

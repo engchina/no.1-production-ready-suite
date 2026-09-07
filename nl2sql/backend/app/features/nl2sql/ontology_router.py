@@ -4093,6 +4093,7 @@ class OntologyApiRuntime:
         titles: list[str],
         markdown: str,
         note: str,
+        prepared_base: SchemaOntology | None = None,
         on_progress: Callable[[str], None] | None = None,
     ) -> tuple[SchemaOntology, dict[str, Any]]:
         """AI 構築結果を proposal 登録せず、承認済み draft revision として保存する。"""
@@ -4102,7 +4103,11 @@ class OntologyApiRuntime:
             self._strict_profile(profile_id)
             if on_progress is not None:
                 on_progress("Markdown 下書きの基準 revision を確認しています…")
-            base = self._load_ontology_revision(base_revision_id)
+            base = (
+                prepared_base
+                if prepared_base is not None and prepared_base.revision.id == base_revision_id
+                else self._load_ontology_revision(base_revision_id)
+            )
             if base is None:
                 raise OntologyNotFoundError(
                     "ONTOLOGY_REVISION_NOT_FOUND",

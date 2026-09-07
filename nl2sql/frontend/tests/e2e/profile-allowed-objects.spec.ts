@@ -2143,6 +2143,8 @@ test("Ontology 未公開のとき旧モデル編集は出さず Markdown Draft �
   await expect(page.getByTestId("ontology-build-markdown")).toBeVisible();
   await expect(page.getByTestId("ontology-markdown-draft-editor")).toBeVisible();
   await expect(page.getByRole("region", { name: "質問のオントロジー接地確認用グラフ" })).toBeVisible();
+  await expect(page.getByText("オントロジー情報は未取得です")).toBeVisible();
+  await page.getByTestId("ontology-view-fetch").click();
   await expect(page.getByText("公開済みオントロジーがまだありません")).toBeVisible();
   await expect(page.getByTestId("profile-ontology-unresolved")).toHaveCount(0);
 });

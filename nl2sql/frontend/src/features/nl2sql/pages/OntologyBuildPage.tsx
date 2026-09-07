@@ -1,6 +1,5 @@
 import { Button } from "@/components/ui/button";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
 import { RefreshCw, Target } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 
@@ -21,7 +20,6 @@ import {
 } from "../components/SchemaRefreshFeedback";
 import { useSchemaRefreshCoordinator } from "../SchemaRefreshCoordinator";
 import {
-  nl2sqlIncrementalKeys,
   useProfileDetail,
   useProfileOntologyView,
   useProfileSummaries,
@@ -52,7 +50,7 @@ export function OntologyBuildPage() {
     profileId: string;
     hasPublished: boolean;
   }>({ profileId: "", hasPublished: false });
-  const queryClient = useQueryClient();
+  const [ontologyViewRequestedProfileId, setOntologyViewRequestedProfileId] = useState("");
   const sharedSchemaRefresh = useSchemaRefreshCoordinator();
   const handledSchemaRefreshJob = useRef("");
 
@@ -76,10 +74,17 @@ export function OntologyBuildPage() {
   }, [activeProfiles, profileParam, profilesQuery.hasNextPage]);
   const selectedProfileId = selectedProfileSummary?.id ?? "";
   const profileDetailQuery = useProfileDetail(selectedProfileId);
-  const ontologyViewQuery = useProfileOntologyView(selectedProfileId);
+  const ontologyViewRequested =
+    Boolean(selectedProfileId) && ontologyViewRequestedProfileId === selectedProfileId;
+  const ontologyViewQuery = useProfileOntologyView(selectedProfileId, false);
+  const { refetch: refetchOntologyView } = ontologyViewQuery;
   const selectedProfile = profileDetailQuery.data?.profile ?? null;
-  const ontologyGraph = ontologyViewQuery.data?.ontology_graph ?? null;
-  const ontologyWarnings = ontologyViewQuery.data?.warnings_ja ?? [];
+  const ontologyGraph = ontologyViewRequested
+    ? ontologyViewQuery.data?.ontology_graph ?? null
+    : null;
+  const ontologyWarnings = ontologyViewRequested
+    ? ontologyViewQuery.data?.warnings_ja ?? []
+    : [];
   const hasPublishedOntology =
     publishedMarkdownState.profileId === selectedProfileId &&
     publishedMarkdownState.hasPublished;
@@ -105,12 +110,24 @@ export function OntologyBuildPage() {
     }
   }, [activeProfiles, profileParam, profilesQuery.hasNextPage, profilesQuery.isFetchingNextPage]);
 
+  useEffect(() => {
+    setOntologyViewRequestedProfileId((current) =>
+      current === selectedProfileId ? current : ""
+    );
+  }, [selectedProfileId]);
+
   const refreshOntologyView = useCallback(async () => {
     if (!selectedProfileId) return;
-    await queryClient.invalidateQueries({
-      queryKey: nl2sqlIncrementalKeys.profileOntologyView(selectedProfileId),
-    });
-  }, [queryClient, selectedProfileId]);
+    if (ontologyViewRequestedProfileId !== selectedProfileId) return;
+    await refetchOntologyView();
+  }, [ontologyViewRequestedProfileId, refetchOntologyView, selectedProfileId]);
+
+  const handleLoadOntologyView = useCallback(() => {
+    if (!selectedProfileId) return;
+    setPageError("");
+    setOntologyViewRequestedProfileId(selectedProfileId);
+    void refetchOntologyView();
+  }, [refetchOntologyView, selectedProfileId]);
 
   const refreshSchema = async () => {
     setPageError("");
@@ -136,6 +153,7 @@ export function OntologyBuildPage() {
 
   const selectProfile = (id: string) => {
     setPageError(""); // 前 profile のスキーマ更新エラーを持ち越さない
+    setOntologyViewRequestedProfileId("");
     const next = new URLSearchParams();
     if (id) next.set("profile", id);
     setSearchParams(next, { replace: true });
@@ -154,26 +172,38 @@ export function OntologyBuildPage() {
     await refreshOntologyView();
   }, [refreshOntologyView]);
 
-  const workspaceFailure = classifyOntologyWorkspaceError(
-    profileDetailQuery.error,
-    ontologyViewQuery.error
+  const workspaceFailure = classifyOntologyWorkspaceError(profileDetailQuery.error, null);
+  const ontologyFailure = classifyOntologyWorkspaceError(
+    null,
+    ontologyViewRequested ? ontologyViewQuery.error : null
   );
   const workspaceRefreshingAfterFailure =
-    Boolean(workspaceFailure) && (profileDetailQuery.isFetching || ontologyViewQuery.isFetching);
+    Boolean(workspaceFailure) && profileDetailQuery.isFetching;
   const workspaceLoading =
     Boolean(selectedProfileId) &&
-    (profileDetailQuery.isLoading ||
-      ontologyViewQuery.isLoading ||
-      workspaceRefreshingAfterFailure);
+    (profileDetailQuery.isLoading || workspaceRefreshingAfterFailure);
   const workspaceErrorPresentation = workspaceFailure
     ? ontologyWorkspaceErrorPresentation(workspaceFailure)
+    : null;
+  const ontologyErrorPresentation = ontologyFailure
+    ? ontologyWorkspaceErrorPresentation(ontologyFailure)
     : null;
   const workspaceErrorMessage = workspaceErrorPresentation
     ? t(workspaceErrorPresentation.key, workspaceErrorPresentation.params)
     : "";
+  const ontologyErrorMessage = ontologyErrorPresentation
+    ? t(ontologyErrorPresentation.key, ontologyErrorPresentation.params)
+    : "";
   const handleWorkspaceRetry = useCallback(() => {
-    void Promise.allSettled([profileDetailQuery.refetch(), ontologyViewQuery.refetch()]);
-  }, [ontologyViewQuery, profileDetailQuery]);
+    void profileDetailQuery.refetch();
+  }, [profileDetailQuery]);
+  const ontologyLoadState = !ontologyViewRequested
+    ? "not_loaded"
+    : ontologyViewQuery.isFetching && !ontologyViewQuery.data
+      ? "loading"
+      : ontologyFailure
+        ? "error"
+        : "ready";
   return (
     <>
       <PageHeader
@@ -212,35 +242,52 @@ export function OntologyBuildPage() {
           ) : activeProfiles.length === 0 ? (
             <EmptyState title={t("ontologyBuild.empty.title")} hint={t("ontologyBuild.empty.hint")} />
           ) : (
-            <div className="grid items-end gap-3 sm:grid-cols-[minmax(0,24rem)_auto]">
-              <label className="grid min-w-0 gap-1 text-sm font-medium text-foreground">
-                <span>{t("ontologyBuild.profile.selectLabel")}</span>
-                <select
-                  value={selectedProfileId}
-                  onChange={(event) => selectProfile(event.currentTarget.value)}
-                  className="min-h-11 min-w-0 rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:outline-none focus:ring-2 focus:ring-ring/40"
-                  data-testid="ontology-build-profile-select"
-                >
-                  {activeProfiles.map((profile) => (
-                    <option key={profile.id} value={profile.id}>
-                      {profileDisplayLabel(profile)}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              {profilesQuery.hasNextPage ? (
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  loading={profilesQuery.isFetchingNextPage}
-                  onClick={() => void profilesQuery.fetchNextPage()}
-                >
-                  {t("profiles.action.loadMore")}
-                </Button>
-              ) : null}
+            <div className="grid gap-3">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+                <label className="grid min-w-0 gap-1 text-sm font-medium text-foreground">
+                  <span>{t("ontologyBuild.profile.selectLabel")}</span>
+                  <select
+                    value={selectedProfileId}
+                    onChange={(event) => selectProfile(event.currentTarget.value)}
+                    className="min-h-11 min-w-0 rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:outline-none focus:ring-2 focus:ring-ring/40"
+                    data-testid="ontology-build-profile-select"
+                  >
+                    {activeProfiles.map((profile) => (
+                      <option key={profile.id} value={profile.id}>
+                        {profileDisplayLabel(profile)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {profilesQuery.hasNextPage ? (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    loading={profilesQuery.isFetchingNextPage}
+                    onClick={() => void profilesQuery.fetchNextPage()}
+                  >
+                    {t("profiles.action.loadMore")}
+                  </Button>
+                ) : null}
+                <div className="sm:ml-auto">
+                  <Button
+                    type="button"
+                    variant="primary"
+                    size="sm"
+                    className="w-full sm:w-auto"
+                    loading={ontologyViewRequested && ontologyViewQuery.isFetching}
+                    disabled={!selectedProfileId || profileDetailQuery.isLoading}
+                    data-testid="ontology-view-fetch"
+                    onClick={handleLoadOntologyView}
+                  >
+                    <RefreshCw size={15} aria-hidden="true" />
+                    <span>{t("ontologyBuild.workspace.fetchAction")}</span>
+                  </Button>
+                </div>
+              </div>
               {profileLoadMoreError ? (
-                <div className="sm:col-span-2">
+                <div>
                   <Banner
                     severity="danger"
                     action={
@@ -296,6 +343,9 @@ export function OntologyBuildPage() {
               graph={ontologyGraph}
               profileId={selectedProfileId}
               warningsJa={visibleOntologyWarnings}
+              loadState={ontologyLoadState}
+              loadErrorMessage={ontologyErrorMessage}
+              onRetryLoad={handleLoadOntologyView}
               onRefreshSchema={refreshSchema}
               refreshingSchema={refreshing}
             />

@@ -4311,6 +4311,7 @@ class OntologyBuildService:
                 titles=[draft.title_ja for draft in draft_inputs],
                 markdown=markdown_output,
                 note=f"AI 構築 Markdown 下書き: {len(draft_inputs)} 件",
+                prepared_base=ontology,
                 on_progress=save_progress,
             )
         except Exception as exc:
