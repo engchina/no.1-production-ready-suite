@@ -3,6 +3,89 @@
 > このファイルは **Claude Code と Codex の両方が参照する正本(single source of truth)** です。
 > `CLAUDE.md` はこのファイルを `@AGENTS.md` で取り込みます。ルールを変更する際は **必ずこのファイルを編集**してください。
 
+## 開発ワークフロー / GitHub 運用
+
+- **`main` ブランチへ直接 commit / push / 変更しない。** すべての変更は GitHub Issue を先に作成し、Issue に紐づく作業ブランチで行う。
+- 作業ブランチ名は既定で `codex/<issue-number>-<short-topic>` とする。既存 ref との衝突などで使用できない場合も、Issue 番号と作業内容が分かる名前を使う。
+- 変更後は Pull Request を作成し、関連 Issue、変更内容、検証結果を PR description に明記する。
+- merge は CI/checks が成功したことを確認してから行う。必須 CI が存在しない場合は、PR 上で checks 状態を確認し、実行した代替検証を明記してから merge 判断する。
+- docs-only の小さな変更や緊急修正も原則として同じ Issue → branch → PR → CI/checks → main merge の流れに従う。例外が必要な場合は、理由を添えてユーザ確認を取る。
+
+### GitHub Issue / Pull Request の記述規約
+
+#### 共通
+
+- Issue / PR のタイトルと本文は**原則として日本語**で記述する。code identifier、API path、file path、command、製品・ライブラリの固有名詞は英語のままでよい。
+- タイトルは対象と事象が分かる具体的な文にする。「不具合」「修正」「対応」だけの曖昧なタイトルにしない。
+- 本文は Markdown 見出しで構造化し、確認した事実と推測を区別する。未調査・未確定の項目は断定せず「調査中」「未確認」と明記し、判明後に本文を更新する。
+- API、関数、設定 key、status code、error message、再現値など、調査・レビュー・回帰テストに必要な具体情報を記載する。secret、token、個人情報、実 credential は記載しない。
+- ユーザー向け概念は `ナレッジ構築` / `業務ビュー` / `検索・回答設定` を使い、`pipeline` / `adapter` / `profile` などの工程語は code identifier を指す場合に限る。
+
+#### Issue
+
+- Issue の種別にかかわらず、最低でも `問題`、`症状`、`原因`、`修正方針` の4項目を含める。初回登録時に原因が未確定でも `原因` を省略せず、現時点の仮説または「調査中」と記載する。
+
+```markdown
+## 問題
+
+何が問題なのかを記載する。
+
+## 症状
+
+どのような入力や条件で何が起きるのかを、画面/API/状態/error message などの観測事実に基づいて記載する。
+
+## 原因
+
+どの code path、data flow、または設計が原因と考えられるかを記載する。未確定の場合は仮説と未確認事項を区別する。
+
+## 修正方針
+
+どこを、どのような考え方で修正するかを、責務境界と変更しない範囲を含めて記載する。
+```
+
+- 可能であれば `影響範囲`、`再現手順`、`関連ファイル`、`必要なテスト` も追加する。必要に応じて `期待動作`、`完了条件`、`補足`、`ログ`、`スクリーンショット`、`代替案`を追加する。
+- feature / docs / refactor / investigation Issue では、`問題` に背景や現在の不足、`症状` に現状の制約や具体例、`原因` に設計上の理由または調査対象を記載し、4項目を Issue の性質に合わせて具体化する。
+- 3 層モデル(文書レシピ / KB スコープ / Business View)に関わる Issue では、どの層の責務かを明記し、責務越境になっていないかを `修正方針` に記載する。
+- 長い log は必要箇所だけを抜粋し、再現に不要な出力を貼らない。
+- `完了条件`は「対応する」のような作業表現だけにせず、期待状態と必要な test / lint / build / 手動確認を判定可能な形で列挙する。
+
+#### Pull Request
+
+- PR title は原則として `<type>: <日本語の要約> (#<issue-number>)` とする。`type` は変更内容に合わせて `feat` / `fix` / `docs` / `test` / `refactor` / `chore` 等を使用する。
+- PR 本文は原則として次の見出しを使用する。
+
+```markdown
+## 関連 Issue
+
+Closes #<issue-number>
+
+## 背景 / 原因
+
+Issue の要点と、この変更が必要な理由を記載する。bug fix では根因を記載する。
+
+## 変更内容
+
+- 変更した責務・挙動を具体的に記載する
+- schema / API / UI / data migration / compatibility への影響を記載する
+
+## 検証結果
+
+- `<実行した command>` — pass / fail / skip と件数
+- 手動確認または Playwright の対象 flow / viewport / 状態
+
+## 既知の制約・残課題
+
+- 未対応範囲、既知の制約、follow-up Issue を記載する。なければ「なし」と記載する。
+```
+
+- `関連 Issue` には、merge で完了する Issue は `Closes #N`、参照のみは `Refs #N` と記載する。複数ある場合はすべて列挙する。
+- `変更内容` は commit の羅列ではなく、reviewer が挙動差分と責務境界を判断できる粒度で記載する。変更していない重要範囲や backward compatibility も必要に応じて明記する。
+- `検証結果` には実行した正確な command と結果を記載する。失敗・skip・未実行を隠さず、今回の変更によるものか既存問題かを分ける。実行できない test がある場合は理由と代替確認を記載する。backend は `uv run pytest` / `uv run ruff check .` / `uv run mypy .`、frontend は `npm run lint` / `npm run build` / `npm run test` を基本とする。
+- UI/UX 変更では、対象 Playwright spec、desktop / 375px viewport、主要導線と重要状態(空/読込/エラー/ブロック)の結果を記載する。見た目を変更した場合は必要に応じて screenshot または visual check の結果を添える。
+- OCI / Oracle / LLM を呼ぶ範囲の変更では、CI 上の決定論スタブによる確認と、手動/ステージングでの実サービス確認をそれぞれ区別して記載する。
+- docs-only など test 対象外の場合も `検証結果` を省略せず、`git diff --check` 等の実施結果と、コード test を実行しない理由を記載する。
+- PR 作成後に追加修正や検証結果の変化があった場合は、コメントだけで済ませず PR 本文を最終状態へ更新してから review / merge する。
+
 ## プロジェクト概要
 
 **A production-ready RAG reference implementation for enterprise knowledge search, document ingestion, grounding, answer generation, evaluation, observability, and deployment on Oracle / OCI.**
@@ -183,3 +266,4 @@ npm run dev
 9. 機能開発では、既存パターン・既存 API・既存 UI コンポーネントを優先する。
 10. UI 作業は `ui-ux-pro-max` skill を使用する。
 11. 変更後は該当 lint・型チェック・テストを実行してから完了する。
+12. `main` へ直接 commit / push しない。Issue → 作業ブランチ → PR → CI/checks → merge の流れと、Issue / PR の記述規約([開発ワークフロー / GitHub 運用](#開発ワークフロー--github-運用))に従う。
