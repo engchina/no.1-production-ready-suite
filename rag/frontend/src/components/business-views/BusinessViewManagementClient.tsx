@@ -222,8 +222,10 @@ export function BusinessViewManagementClient() {
               </ToggleChip>
             ))}
           </div>
+          {/* 375px 幅では入力欄の固定 w-56 と検索ボタンが収まらず親を押し広げるため、
+              狭い幅では行いっぱいに伸ばし、sm 以上で従来の固定幅へ戻す。 */}
           <form
-            className="flex items-center gap-2"
+            className="flex w-full min-w-0 items-center gap-2 sm:w-auto"
             onSubmit={(event) => {
               event.preventDefault();
               setQ(search.trim());
@@ -235,9 +237,9 @@ export function BusinessViewManagementClient() {
               onChange={(event) => setSearch(event.target.value)}
               placeholder={t("businessViews.search.placeholder")}
               aria-label={t("businessViews.search.placeholder")}
-              className="h-9 w-56 rounded-md border border-border bg-background px-3 text-sm outline-none focus-visible:border-primary"
+              className="h-9 w-full min-w-0 rounded-md border border-border bg-background px-3 text-sm outline-none focus-visible:border-primary sm:w-56"
             />
-            <Button size="sm" variant="secondary" type="submit">
+            <Button size="sm" variant="secondary" type="submit" className="shrink-0">
               {t("businessViews.search.placeholder")}
             </Button>
           </form>

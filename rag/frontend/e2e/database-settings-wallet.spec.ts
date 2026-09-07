@@ -1,5 +1,7 @@
 import { expect, type Page, test } from "@playwright/test";
 
+import { SYSTEM_TABLES_STATUS_OK } from "./_helpers";
+
 interface DatabaseSettingsData {
   user: string;
   dsn: string;
@@ -231,6 +233,11 @@ async function mockDatabaseSettings(
 ) {
   await page.route("**/api/settings/database**", async (route) => {
     const url = new URL(route.request().url());
+    if (url.pathname === "/api/settings/database/system-tables") {
+      await route.fulfill({ json: SYSTEM_TABLES_STATUS_OK });
+      return;
+    }
+
     if (url.pathname.startsWith("/api/settings/database/adb")) {
       await route.fulfill({
         json: {

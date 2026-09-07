@@ -1,5 +1,7 @@
 import { expect, type Page, test } from "@playwright/test";
 
+import { SYSTEM_TABLES_STATUS_OK } from "./_helpers";
+
 type AdbStatus =
   | "success"
   | "not_configured"
@@ -98,6 +100,10 @@ async function mockDatabaseAndAdb(page: Page, handlers: AdbMockHandlers) {
     if (url.pathname === "/api/settings/database/adb/settings") {
       const payload = JSON.parse(route.request().postData() || "{}");
       await route.fulfill(envelope(handlers.onSaveSettings?.(payload) ?? handlers.info()));
+      return;
+    }
+    if (url.pathname === "/api/settings/database/system-tables") {
+      await route.fulfill({ json: SYSTEM_TABLES_STATUS_OK });
       return;
     }
     if (url.pathname === "/api/settings/database/adb") {

@@ -17,6 +17,40 @@ export async function mockDatabaseReady(page: Page): Promise<void> {
 }
 
 /**
+ * `/settings/database` の SystemTablesCard 用 status stub。
+ *
+ * `/api/settings/database/system-tables` は `**\/api/settings/database**` に一致するため、
+ * 設定ページの mock が catch-all で別 payload を返すとカードがエラー表示になる。
+ * 同じページの他カード(ADB 管理・Wallet)を検証する spec は、この stub を明示 route する。
+ */
+export const SYSTEM_TABLES_STATUS_OK = {
+  data: {
+    status: "ready",
+    schema_version: "0003",
+    schema_head: "0003",
+    applied_versions: ["0001", "0002", "0003"],
+    pending_versions: [],
+    expected_object_count: 96,
+    existing_object_count: 96,
+    expected_table_count: 24,
+    existing_table_count: 24,
+    missing_objects: [],
+    retired_objects: [],
+    tables: [],
+    operation_state: {
+      status: "idle",
+      operation_kind: null,
+      lease_expires_at: null,
+      last_error_code: null,
+      schema_epoch: 3,
+      updated_at: "2026-07-23T00:00:00+09:00",
+    },
+  },
+  error_messages: [],
+  warning_messages: [],
+};
+
+/**
  * ページ全体が横スクロールせず、document に第2の縦スクロールがないことを検証する。
  *
  * `documentElement` だけでなく **`main`(`overflow-y-auto` で overflow-x も auto になる

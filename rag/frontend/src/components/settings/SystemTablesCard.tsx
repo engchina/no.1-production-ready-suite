@@ -28,6 +28,7 @@ import {
 import {
   RECREATE_RAG_SYSTEM_TABLES_CONFIRMATION,
   isSystemTableRecreateConfirmationValid,
+  isSystemTablesStatusData,
   systemTableControlsBusy,
 } from "@/lib/system-tables";
 import { toast } from "@/lib/toast";
@@ -68,7 +69,13 @@ export function SystemTablesCard() {
   const [recreateConfirmation, setRecreateConfirmation] = useState("");
   const operationErrorRef = useRef<HTMLDivElement>(null);
 
-  const data = statusQuery.data;
+  // 想定外の形の payload をそのまま描画すると throw し、error boundary が無いため
+  // 兄弟カード（ADB 管理など）ごとページが空になる。描画前に弾いてエラー表示へ落とす。
+  const data = isSystemTablesStatusData(statusQuery.data)
+    ? statusQuery.data
+    : undefined;
+  const malformedStatus = statusQuery.data !== undefined && data === undefined;
+  const statusUnavailable = statusQuery.isError || malformedStatus;
   const schemaOperationRunning = data?.operation_state.status === "running";
   const busy = systemTableControlsBusy(
     operation.isPending,
@@ -164,7 +171,7 @@ export function SystemTablesCard() {
       <CardContent className="min-w-0 space-y-5 p-6">
         {statusQuery.isPending ? <SystemTablesSkeleton /> : null}
 
-        {statusQuery.isError ? (
+        {statusUnavailable ? (
           <Banner
             severity="danger"
             title={t("settings.database.systemTables.error.statusTitle")}
