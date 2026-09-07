@@ -107,9 +107,7 @@ async def test_worker_pauses_until_system_schema_is_ready(
     assert [record.message for record in caplog.records].count(
         "ingestion_worker_schema_setup_required"
     ) == 1
-    assert [record.message for record in caplog.records].count(
-        "ingestion_worker_schema_ready"
-    ) == 1
+    assert [record.message for record in caplog.records].count("ingestion_worker_schema_ready") == 1
 
 
 async def test_worker_respects_concurrency_limit() -> None:

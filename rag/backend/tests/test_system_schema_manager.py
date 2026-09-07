@@ -165,8 +165,7 @@ class _FakeCursor:
                     "status": "RUNNING",
                     "operation_kind": params["operation_kind"],
                     "lease_owner": owner,
-                    "lease_expires_at": now
-                    + timedelta(seconds=int(params["lease_seconds"])),
+                    "lease_expires_at": now + timedelta(seconds=int(params["lease_seconds"])),
                     "last_error_code": None,
                     "updated_at": now,
                 }
@@ -203,9 +202,7 @@ class _FakeCursor:
             )
             self.rowcount = 1
             return
-        operation["lease_expires_at"] = now + timedelta(
-            seconds=int(params["lease_seconds"])
-        )
+        operation["lease_expires_at"] = now + timedelta(seconds=int(params["lease_seconds"]))
         operation["updated_at"] = now
         self.rowcount = 1
 

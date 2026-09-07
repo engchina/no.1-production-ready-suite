@@ -24,6 +24,7 @@ _REAL_SETTINGS = Settings()
 _BASELINE_DOCUMENT_IDS: set[str] = set()
 _BASELINE_KNOWLEDGE_BASE_IDS: set[str] = set()
 
+
 def real_oracle_connection_kwargs() -> dict[str, Any]:
     """実 Oracle へ直接 connect するための kwargs を返す。"""
     return _oracle_connect_kwargs(_REAL_SETTINGS)
