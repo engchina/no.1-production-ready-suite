@@ -837,6 +837,36 @@ def test_build_job_creates_markdown_draft_and_drops_outside_candidates(
     assert set(orders_entity.aliases) >= {"注文", "オーダー"}
 
 
+def test_build_job_reuses_prepared_scope_revision_when_saving_markdown_draft(
+    harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, _store, legacy = harness
+    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_FENCED_PAYLOAD)
+    original_create_build_markdown_draft = runtime.create_build_markdown_draft
+    prepared_bases: list[SchemaOntology | None] = []
+
+    def capture_create_build_markdown_draft(**kwargs: Any) -> Any:
+        prepared_base = kwargs.get("prepared_base")
+        prepared_bases.append(prepared_base)
+        if prepared_base is None:
+            raise TimeoutError("unexpected baseline revision reload")
+        assert prepared_base.revision.id == kwargs["base_revision_id"]
+        return original_create_build_markdown_draft(**kwargs)
+
+    monkeypatch.setattr(
+        runtime,
+        "create_build_markdown_draft",
+        capture_create_build_markdown_draft,
+    )
+    service = OntologyBuildService(runtime)
+    job = service.start("sales", business_text="受注は顧客に紐づく。", run_schema_naming=False)
+    finished = _wait_for_job(service, job.id)
+
+    assert finished.status == OntologyBuildStatus.SUCCEEDED
+    assert prepared_bases and prepared_bases[0] is not None
+
+
 def test_build_job_batches_all_source_chunks_without_omission(
     harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
     monkeypatch: pytest.MonkeyPatch,
