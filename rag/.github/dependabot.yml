@@ -1,14 +1,17 @@
 # 依存の定期更新（#69）。
 #
-# 目的は「advisory 公開から取り込みまでの遅延をなくす」こと。CI は `pip-audit` と
-# `npm audit --audit-level=moderate` を必須 step にしているため、更新を放置すると
-# 無関係な PR の CI まで red になる（実例: #57 が #58 / #59 / #61 に巻き込まれた）。
+# 目的は「advisory 公開から取り込みまでの遅延をなくす」こと。backend は CI の
+# `pip-audit` が必須 step のため、更新を放置すると無関係な PR の CI まで red になる
+# （実例: #57 が #58 / #59 / #61 に巻き込まれた）。frontend の `npm audit` は #74 で
+# CI から外したが、advisory の取り込み遅延そのものは同じく避けたい。
 #
 # ノイズ抑制の方針:
 #   - weekly。patch/minor は ecosystem ごとに 1 本へまとめる（grouping）。
 #   - open-pull-requests-limit で同時に開く PR 数を絞る。
 #   - 確定スタックの中核（oci / oracledb / fastapi / react / react-router / vite）は
 #     major を無視する。破壊的変更の取り込みは Issue を立てて個別に判断する。
+#   - patch/minor は required checks 成功後に自動 merge する（#76、
+#     .github/workflows/dependabot-auto-merge.yml）。major は手動レビューで判断する。
 #
 # 対象範囲は段階導入。まず CI が検証している backend / frontend / actions から始める。
 # services/*（22 個の pyproject.toml と 24 個の Dockerfile）は CI 検証対象外で PR 数も

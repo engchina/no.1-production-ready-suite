@@ -112,3 +112,7 @@ CI(`secret-scan` ジョブ)でも同じ `.gitleaks.toml` で full history を走
 `.github/workflows/ci.yml` で secret-scan(gitleaks)/ backend / frontend / Docker Compose の品質門を固定している。Pull Request と `main` への push で、gitleaks による full history シークレット走査、backend の format・lint・type check・test・security/dependency audit、frontend の unit test・build、`docker compose config` を実行する。
 
 frontend の lint(`npm run lint`)、dependency audit(`npm audit`)、Playwright E2E(`npm run test:e2e`)は sibling repo `no.1-production-ready-nl2sql` と同じく CI では実行せず、ローカル検証と PR review で確認する。型検査は `npm run build` の `tsc --noEmit` が CI 上で兼ねる。
+
+`main` の branch protection では `Backend` / `Frontend` / `Docker Compose` / `Secret scan (gitleaks)` を required check にし、branch を最新化してから merge する(strict)設定にしている。
+
+`.github/workflows/dependabot-auto-merge.yml` は Dependabot PR の patch / minor 更新だけを required checks 成功後に自動 merge する。major 更新と、major を含む grouped PR は自動 merge せず手動レビューで判断する。人間が作成した PR には作用しない。
