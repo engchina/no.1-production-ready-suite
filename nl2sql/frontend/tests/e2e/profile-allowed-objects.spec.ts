@@ -1,7 +1,24 @@
-import { expect, test, type Page, type Route } from "@playwright/test";
+import { expect, test, type Locator, type Page, type Route } from "@playwright/test";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
 
 test.beforeEach(async ({ page }) => mockDatabaseGateReady(page));
+
+async function expectButtonsSameHeight(primary: Locator, secondary: Locator) {
+  await expect(primary).toBeVisible();
+  await expect(secondary).toBeVisible();
+  await expect
+    .poll(async () => {
+      const [primaryBox, secondaryBox] = await Promise.all([
+        primary.boundingBox(),
+        secondary.boundingBox(),
+      ]);
+      if (!primaryBox || !secondaryBox) {
+        return Number.POSITIVE_INFINITY;
+      }
+      return Math.abs(primaryBox.height - secondaryBox.height);
+    })
+    .toBeLessThanOrEqual(1);
+}
 
 async function fulfillJson(route: Route, data: unknown) {
   await route.fulfill({
@@ -2473,6 +2490,7 @@ test("保存が成功したら実行確認語をクリアして保存ボタン�
   await confirmationField.fill("ADMIN_EXECUTE");
   await expect(saveButton).toBeEnabled();
   await expect(clearButton).toBeEnabled();
+  await expectButtonsSameHeight(saveButton, clearButton);
   await clearButton.click();
   await expect(confirmationField).toHaveValue("");
   await expect(saveButton).toBeDisabled();

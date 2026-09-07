@@ -1290,6 +1290,8 @@ function ProfileEditor({
             </Button>
             <ClearActionButton
               label={t("dbAdmin.runner.clear")}
+              matchButtonHeight
+              size="md"
               className="w-full sm:w-auto"
               disabled={!canClearOracleExecution || saving}
               onClick={onOracleExecutionClear}
