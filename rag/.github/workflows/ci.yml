@@ -84,9 +84,9 @@ jobs:
         run: uv run bandit -c pyproject.toml -r app
 
       - name: Dependency audit
-        # GHSA-537c-gmf6-5ccf(cryptography): fix は 48.0.1 だが oci SDK が cryptography を
-        # 上位制約するため bump 不可。OCI は確定スタックのため当面 ignore する。
-        run: uv run pip-audit --ignore-vuln GHSA-537c-gmf6-5ccf
+        # oci 2.185.1 が cryptography<51.0.0 へ制約を緩和したため cryptography 50 系へ更新でき、
+        # GHSA-537c-gmf6-5ccf の ignore は不要になった。ignore を戻す場合は理由をここへ明記する。
+        run: uv run pip-audit
 
   frontend:
     name: Frontend

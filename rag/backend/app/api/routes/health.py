@@ -102,10 +102,7 @@ async def database_status() -> ApiResponse[DatabaseStatusData]:
         )
 
     schema_status = schema["status"]
-    if (
-        schema_status != "ready"
-        or schema["operation_state"]["status"] == "running"
-    ):
+    if schema_status != "ready" or schema["operation_state"]["status"] == "running":
         return ApiResponse(
             data=DatabaseStatusData(
                 status="setup_required",

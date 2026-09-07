@@ -267,10 +267,7 @@ def classify_system_schema_status(
         return "partial"
     if set(RETIRED_MANAGED_OBJECTS).intersection(objects):
         return "outdated"
-    if any(
-        applied_checksums.get(migration.name) != migration.checksum
-        for migration in MIGRATIONS
-    ):
+    if any(applied_checksums.get(migration.name) != migration.checksum for migration in MIGRATIONS):
         return "outdated"
     return "ready"
 
@@ -322,10 +319,7 @@ class SystemSchemaManager:
         """worker / readiness gate 向けの副作用なし判定。"""
 
         data = self.status()
-        return bool(
-            data["status"] == "ready"
-            and data["operation_state"]["status"] != "running"
-        )
+        return bool(data["status"] == "ready" and data["operation_state"]["status"] != "running")
 
     def initialize(
         self,
@@ -473,9 +467,7 @@ class SystemSchemaManager:
             "expected_object_count": len(expected),
             "existing_object_count": len(existing),
             "expected_table_count": len(MANAGED_TABLES),
-            "existing_table_count": sum(
-                (name, "TABLE") in objects for name in MANAGED_TABLES
-            ),
+            "existing_table_count": sum((name, "TABLE") in objects for name in MANAGED_TABLES),
             "missing_objects": [
                 {"name": name, "object_type": object_type}
                 for name, object_type in sorted(
@@ -504,8 +496,7 @@ class SystemSchemaManager:
                 binds,
             )
             objects = {
-                (str(row[0]).upper(), str(row[1]).upper()): row[2]
-                for row in cursor.fetchall()
+                (str(row[0]).upper(), str(row[1]).upper()): row[2] for row in cursor.fetchall()
             }
         with connection.cursor() as cursor:
             cursor.execute(
@@ -553,9 +544,7 @@ class SystemSchemaManager:
                     f"WHERE TABLE_NAME IN ({placeholders})",  # nosec B608 - fixed binds
                     binds,
                 )
-                metadata = {
-                    str(row[0]).upper(): (row[1], row[2]) for row in cursor.fetchall()
-                }
+                metadata = {str(row[0]).upper(): (row[1], row[2]) for row in cursor.fetchall()}
         return [
             {
                 "name": name,
@@ -741,9 +730,7 @@ class SystemSchemaManager:
 
     def _apply_missing_indexes(self, connection: Any) -> None:
         objects = self._load_objects(connection)
-        missing = {
-            name for name in MANAGED_INDEXES if (name, "INDEX") not in objects
-        }
+        missing = {name for name in MANAGED_INDEXES if (name, "INDEX") not in objects}
         statements = [
             statement
             for section in oracle_schema_sections()
@@ -827,9 +814,7 @@ class SystemSchemaManager:
         objects = self._load_objects(connection)
         dropped = 0
         retired_indexes = tuple(
-            name
-            for name, object_type in RETIRED_MANAGED_OBJECTS
-            if object_type == "INDEX"
+            name for name, object_type in RETIRED_MANAGED_OBJECTS if object_type == "INDEX"
         )
         for index_name in reversed((*MANAGED_INDEXES, *retired_indexes)):
             if (index_name, "INDEX") not in objects:
@@ -838,9 +823,7 @@ class SystemSchemaManager:
             self._heartbeat(connection, owner)
         dropped += self._drop_text_objects(connection, objects)
         retired_tables = tuple(
-            name
-            for name, object_type in RETIRED_MANAGED_OBJECTS
-            if object_type == "TABLE"
+            name for name, object_type in RETIRED_MANAGED_OBJECTS if object_type == "TABLE"
         )
         for table_name in reversed((*MANAGED_TABLES, *retired_tables)):
             if table_name == CONTROL_TABLE or (table_name, "TABLE") not in objects:
