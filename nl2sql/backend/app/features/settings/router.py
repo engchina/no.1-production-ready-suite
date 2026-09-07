@@ -1955,9 +1955,9 @@ def _oci_settings_data(settings: Settings) -> OciSettingsData:
 
 def _select_ai_region(settings: Settings) -> Literal["ap-osaka-1", "us-chicago-1"]:
     candidate = (
-        settings.nl2sql_select_ai_region.strip() or settings.oci_region.strip() or "ap-osaka-1"
+        settings.nl2sql_select_ai_region.strip() or settings.oci_region.strip() or "us-chicago-1"
     )
-    return "us-chicago-1" if candidate == "us-chicago-1" else "ap-osaka-1"
+    return "ap-osaka-1" if candidate == "ap-osaka-1" else "us-chicago-1"
 
 
 def _load_select_ai_signing_material(settings: Settings) -> _SelectAiSigningMaterial:

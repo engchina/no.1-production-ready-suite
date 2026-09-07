@@ -260,7 +260,7 @@ async function mockProfileApi(
       credential_name: "OCI_CRED",
       schema_name: "ADMIN",
       exists: false,
-      region: "ap-osaka-1",
+      region: "us-chicago-1",
       oci_auth_ready: true,
       missing_fields: [],
       operation: null,
@@ -1739,7 +1739,7 @@ test("Select AI 設定は requested order で並び狭い幅でも重ならな�
   const embeddingModel = page.getByLabel("Embedding Model");
   await expect(region).toBeVisible();
   await expect(region).toHaveAttribute("aria-required", "true");
-  await expect(region).toContainText("ap-osaka-1");
+  await expect(region).toContainText("us-chicago-1");
   await region.click();
   await expect(page.getByRole("option", { name: "ap-osaka-1" })).toBeVisible();
   await expect(page.getByRole("option", { name: "us-chicago-1" })).toBeVisible();

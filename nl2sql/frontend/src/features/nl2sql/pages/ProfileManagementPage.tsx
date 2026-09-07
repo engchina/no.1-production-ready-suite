@@ -104,10 +104,10 @@ type DbProfileRefreshSignal = {
 
 const SELECT_AI_MAX_TOKENS_MIN = 4096;
 const SELECT_AI_MAX_TOKENS_MAX = 32000;
-const SELECT_AI_DEFAULT_REGION = "ap-osaka-1";
+const SELECT_AI_DEFAULT_REGION = "us-chicago-1";
 const SELECT_AI_REGION_OPTIONS = [
-  { value: "ap-osaka-1", label: "ap-osaka-1" },
   { value: "us-chicago-1", label: "us-chicago-1" },
+  { value: "ap-osaka-1", label: "ap-osaka-1" },
 ] as const satisfies readonly SelectFieldOption<string>[];
 const PROFILE_NAME_PATTERN = /^[A-Z][A-Z0-9_]*$/u;
 

@@ -29,6 +29,7 @@ from app.features.nl2sql.oracle_adapter import (
 )
 from app.features.settings import router as settings_router
 from app.main import app
+from app.schemas.settings import SelectAiCredentialCreateRequest
 from app.settings import Settings, get_settings, load_persisted_model_settings
 
 
@@ -393,6 +394,17 @@ def test_select_ai_credential_create_reports_incomplete_oci_config(
 def test_select_ai_credential_routes_keep_sync_oracle_io_off_asgi_event_loop() -> None:
     assert asyncio.iscoroutinefunction(settings_router.get_select_ai_credential) is False
     assert asyncio.iscoroutinefunction(settings_router.create_select_ai_credential) is False
+
+
+def test_select_ai_credential_defaults_to_chicago_when_unconfigured(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "nl2sql_select_ai_region", "")
+    monkeypatch.setattr(settings, "oci_region", "")
+
+    assert settings_router._select_ai_region(settings) == "us-chicago-1"
+    assert SelectAiCredentialCreateRequest().region == "us-chicago-1"
 
 
 def test_read_object_storage_namespace_uses_oci_sdk(

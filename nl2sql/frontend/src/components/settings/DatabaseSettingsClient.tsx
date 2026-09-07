@@ -534,8 +534,8 @@ export function DatabaseSettingsClient() {
 
 const SELECT_AI_CREDENTIAL_CONFIRMATION = "ADMIN_EXECUTE";
 const SELECT_AI_CREDENTIAL_REGION_OPTIONS = [
-  { value: "ap-osaka-1", label: "ap-osaka-1" },
   { value: "us-chicago-1", label: "us-chicago-1" },
+  { value: "ap-osaka-1", label: "ap-osaka-1" },
 ] satisfies SelectFieldOption<SelectAiCredentialRegion>[];
 
 const SELECT_AI_MISSING_FIELD_KEYS: Record<string, I18nKey> = {
@@ -553,7 +553,7 @@ const SELECT_AI_MISSING_FIELD_KEYS: Record<string, I18nKey> = {
 function SelectAiCredentialCard() {
   const status = useSelectAiCredential();
   const changeCredential = useCreateSelectAiCredential();
-  const [region, setRegion] = useState<SelectAiCredentialRegion>("ap-osaka-1");
+  const [region, setRegion] = useState<SelectAiCredentialRegion>("us-chicago-1");
   const [confirmation, setConfirmation] = useState("");
   const data = status.data;
   const confirmed = confirmation.trim() === SELECT_AI_CREDENTIAL_CONFIRMATION;
