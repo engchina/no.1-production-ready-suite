@@ -90,6 +90,15 @@ test("Grounding graph displays revision identity and supports reset", () => {
   assert.doesNotMatch(messages, /SQL 生成用 Mermaid ER 技術表現/u);
 });
 
+test("Ontology node picker uses the shared bounded list standard", () => {
+  assert.match(ontologyQueryPlayground, /ONTOLOGY_NODE_PICKER_MAX_ITEMS = 12/u);
+  assert.match(ontologyQueryPlayground, /INFORMATION_LIST_SCROLL_CLASS/u);
+  assert.match(ontologyQueryPlayground, /INFORMATION_LIST_ROW_CLASS/u);
+  assert.match(ontologyQueryPlayground, /INFORMATION_TABLE_FOCUS_CLASS/u);
+  assert.match(ontologyQueryPlayground, /data-testid="ontology-inspector-node-picker-scroll-region"/u);
+  assert.match(ontologyQueryPlayground, /role="region"/u);
+});
+
 test("Grounding graph and file dropzones share the clear button implementation", () => {
   assert.match(clearActionButton, /export function ClearActionButton/u);
   assert.match(clearActionButton, /variant="secondary"/u);

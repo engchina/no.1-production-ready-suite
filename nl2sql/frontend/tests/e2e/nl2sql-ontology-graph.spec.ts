@@ -323,6 +323,17 @@ const relationshipRows = Array.from({ length: 30 }, (_, index) => {
   };
 });
 
+const nodePickerOverflowGraph = {
+  nodes: Array.from({ length: 14 }, (_, index) => ({
+    id: `picker-node-${index + 1}`,
+    kind: index % 3 === 0 ? "business_entity" : index % 3 === 1 ? "business_term" : "metric",
+    business_name_ja: `選択候補 ${index + 1}`,
+    technical_name: `ADMIN.PICKER_NODE_${index + 1}`,
+    review_status: "approved",
+  })),
+  edges: [],
+};
+
 async function expectNoHorizontalScroll(page: Page) {
   const size = await page.evaluate(() => ({
     width: document.documentElement.clientWidth,
@@ -780,6 +791,41 @@ test("質問を接地すると分類とグラフ強調が表示され、入力�
   );
   await expect(playground.getByTestId("ontology-playground-clear")).toBeVisible();
   await expect(playground.getByTestId("ontology-playground-clear")).toBeDisabled();
+  await expectNoHorizontalScroll(page);
+});
+
+test("選択候補一覧は標準の最大表示件数で縦スクロールする", async ({ page }, testInfo) => {
+  await mockApi(page, { ontologyGraph: nodePickerOverflowGraph });
+  await page.goto("/ontology-build?profile=default");
+
+  const playground = page.getByRole("region", { name: "質問のオントロジー接地確認用グラフ" });
+  await playground.scrollIntoViewIfNeeded();
+  const nodePicker = playground.getByTestId("ontology-inspector-node-picker");
+  await expect(nodePicker).toBeVisible();
+  const scrollRegion = nodePicker.getByTestId("ontology-inspector-node-picker-scroll-region");
+  await expect(scrollRegion).toHaveAttribute("role", "region");
+  await expect(scrollRegion).toHaveAttribute("aria-label", "選択候補");
+  await expect(scrollRegion.getByRole("button")).toHaveCount(12);
+  await expect(playground.getByTestId("ontology-inspector-node-picker-node-13")).toHaveCount(0);
+
+  const metrics = await scrollRegion.evaluate((el) => ({
+    clientHeight: el.clientHeight,
+    scrollHeight: el.scrollHeight,
+    overflowY: getComputedStyle(el).overflowY,
+    maxHeightPx: Number.parseFloat(getComputedStyle(el).maxHeight),
+    remPx: Number.parseFloat(getComputedStyle(document.documentElement).fontSize),
+  }));
+  const expectedVisibleRows = testInfo.project.name === "mobile-375" ? 5 : 8;
+  expect(metrics.overflowY).toBe("auto");
+  expect(metrics.maxHeightPx).toBeCloseTo(expectedVisibleRows * 3.5 * metrics.remPx, 0);
+  expect(metrics.clientHeight).toBeLessThanOrEqual(metrics.maxHeightPx + 1);
+  expect(metrics.scrollHeight).toBeGreaterThan(metrics.clientHeight);
+  await scrollRegion.focus();
+  await expect(scrollRegion).toBeFocused();
+  await scrollRegion.evaluate((el) => {
+    el.scrollTop = el.scrollHeight;
+  });
+  expect(await scrollRegion.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
   await expectNoHorizontalScroll(page);
 });
 
