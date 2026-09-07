@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState, type DragEvent, type RefObject } from "react";
 
+import { CardErrorBoundary } from "@/components/CardErrorBoundary";
 import { ErrorState } from "@/components/StateViews";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -311,8 +312,13 @@ export function DatabaseSettingsClient() {
           </Card>
         </form>
 
-          <SystemTablesCard />
-          <AdbManagementCard settings={settings} />
+          {/* カードごとに描画例外を閉じ込め、1 枚の失敗で他カードが消えないようにする(#67)。 */}
+          <CardErrorBoundary label={t("settings.database.systemTables.title")}>
+            <SystemTablesCard />
+          </CardErrorBoundary>
+          <CardErrorBoundary label={t("settings.adb.title")}>
+            <AdbManagementCard settings={settings} />
+          </CardErrorBoundary>
         </div>
 
         <SettingsSupplementalPanels
