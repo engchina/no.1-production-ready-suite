@@ -235,7 +235,7 @@ class SelectAiCredentialData(BaseModel):
 class SelectAiCredentialCreateRequest(BaseModel):
     """Credential 作成・再作成の明示操作 payload。"""
 
-    region: SelectAiCredentialRegion = "ap-osaka-1"
+    region: SelectAiCredentialRegion = "us-chicago-1"
     confirmation: str = Field(default="", max_length=64)
     recreate: bool = False
 

@@ -81,6 +81,14 @@ test("Ontology publish refreshes the grounding graph without a Mermaid UI export
   assert.match(ontologyBuildSection, /void onPublished\?\.\(\)/u);
 });
 
+test("Ontology view is loaded only by the explicit fetch action", () => {
+  assert.match(ontologyPage, /useProfileOntologyView\(selectedProfileId, false\)/u);
+  assert.match(ontologyPage, /data-testid="ontology-view-fetch"/u);
+  assert.match(ontologyPage, /setOntologyViewRequestedProfileId\(""\)/u);
+  assert.match(ontologyQueryPlayground, /loadState === "not_loaded"/u);
+  assert.match(messages, /オントロジー情報は未取得です/u);
+});
+
 test("Grounding graph displays revision identity and supports reset", () => {
   assert.match(ontologyQueryPlayground, /graphRevisionId/u);
   assert.match(ontologyQueryPlayground, /ontology-playground-revision-id/u);

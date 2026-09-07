@@ -193,7 +193,7 @@ export function useProfileUsageContext(profileId: string) {
   });
 }
 
-export function useProfileOntologyView(profileId: string) {
+export function useProfileOntologyView(profileId: string, enabled = true) {
   return useQuery({
     queryKey: nl2sqlIncrementalKeys.profileOntologyView(profileId),
     queryFn: ({ signal }) =>
@@ -201,7 +201,7 @@ export function useProfileOntologyView(profileId: string) {
         `/api/nl2sql/profiles/${encodeURIComponent(profileId)}/ontology-view`,
         { signal, timeoutMs: API_TIMEOUT_MS.interactiveDetail }
       ),
-    enabled: Boolean(profileId),
+    enabled: Boolean(profileId) && enabled,
     staleTime: 5_000,
     retry: retryTransientOnly,
   });

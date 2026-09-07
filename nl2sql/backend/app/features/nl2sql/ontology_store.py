@@ -59,6 +59,7 @@ ONTOLOGY_COLLECTIONS: tuple[OntologyCollection, ...] = (
     "recommendations",
 )
 IDEMPOTENCY_KEY_STORAGE_MAX_BYTES = 160
+_ORACLE_ROW_LOCK_WAIT_MAX_SECONDS = 30
 
 _ID_KIND = re.compile(r"[^a-z0-9_]+")
 _UNORDERED_SCHEMA_COLLECTIONS = frozenset(
@@ -218,6 +219,22 @@ def compute_etag(document: Mapping[str, Any], version: int) -> str:
     payload.pop("etag", None)
     payload["version"] = version
     return hashlib.sha256(canonical_json(payload).encode("utf-8")).hexdigest()
+
+
+def _oracle_row_lock_wait_seconds() -> int:
+    """Bound Oracle row-lock waits independently from driver-level call_timeout."""
+
+    return max(
+        1,
+        min(
+            _ORACLE_ROW_LOCK_WAIT_MAX_SECONDS,
+            int(float(get_settings().nl2sql_oracle_call_timeout_seconds)),
+        ),
+    )
+
+
+def _is_oracle_row_lock_timeout(exc: Exception) -> bool:
+    return "ORA-30006" in str(exc).upper()
 
 
 def next_versioned_document(
@@ -1229,11 +1246,20 @@ class OracleOntologyStore(_ConvenienceMethods):
         select_columns = "PAYLOAD_JSON, VERSION_NO, ETAG"
         if spec.has_embedding:
             select_columns += ", EMBEDDING"
+        wait_seconds = _oracle_row_lock_wait_seconds()
         sql = (
             f"SELECT {select_columns} FROM {spec.table_name} "  # nosec B608
-            f"WHERE {where_sql} FOR UPDATE"
+            f"WHERE {where_sql} FOR UPDATE WAIT {wait_seconds}"
         )
-        cursor.execute(sql, binds)
+        try:
+            cursor.execute(sql, binds)
+        except Exception as exc:
+            if _is_oracle_row_lock_timeout(exc):
+                raise TimeoutError(
+                    f"Ontology store の行ロック待ちが {wait_seconds} 秒を超えました。"
+                    "実行中の job または別操作を確認して再実行してください。"
+                ) from exc
+            raise
         row = cursor.fetchone()
         return _decode_row(row, has_embedding=spec.has_embedding) if row else None
 

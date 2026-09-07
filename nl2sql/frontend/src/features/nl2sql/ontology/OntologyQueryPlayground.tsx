@@ -13,6 +13,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { ClearActionButton } from "@/components/ui/clear-action-button";
 import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
+import { ErrorState } from "@/components/StateViews";
 import { Banner, EmptyState } from "@engchina/production-ready-ui";
 
 import { StatusBadge } from "@/components/ui/status-badge";
@@ -56,6 +57,9 @@ export interface OntologyQueryPlaygroundProps {
   /** サーバ検索(実際の SQL 生成と同じ ontology-context 検索)に使う profile。 */
   profileId?: string;
   warningsJa?: string[];
+  loadState?: "not_loaded" | "loading" | "error" | "ready";
+  loadErrorMessage?: string;
+  onRetryLoad?: () => void;
   onRefreshSchema?: () => void | Promise<void>;
   refreshingSchema?: boolean;
 }
@@ -700,6 +704,9 @@ export function OntologyQueryPlayground({
   graph,
   profileId = "",
   warningsJa = [],
+  loadState = "ready",
+  loadErrorMessage = "",
+  onRetryLoad,
   onRefreshSchema,
   refreshingSchema = false,
 }: OntologyQueryPlaygroundProps) {
@@ -887,7 +894,24 @@ export function OntologyQueryPlayground({
           </Banner>
         </div>
       ) : null}
-      {!hasGraph ? (
+      {loadState === "not_loaded" ? (
+        <EmptyState
+          title={t("ontologyBuild.workspace.notLoadedTitle")}
+          hint={t("ontologyBuild.workspace.notLoadedHint")}
+        />
+      ) : loadState === "loading" ? (
+        <DbManagementLoadingSkeleton
+          idPrefix="ontology-view"
+          ariaLabel={t("ontologyBuild.workspace.ontologyLoading")}
+          variant="detail"
+          testId="ontology-view-loading"
+        />
+      ) : loadState === "error" ? (
+        <ErrorState
+          message={loadErrorMessage || t("ontologyBuild.workspace.error")}
+          onRetry={onRetryLoad}
+        />
+      ) : !hasGraph ? (
         <EmptyState
           title={t("ontologyPlayground.emptyTitle")}
           hint={t("ontologyPlayground.emptyHint")}

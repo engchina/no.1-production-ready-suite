@@ -260,7 +260,7 @@ async function mockProfileApi(
       credential_name: "OCI_CRED",
       schema_name: "ADMIN",
       exists: false,
-      region: "ap-osaka-1",
+      region: "us-chicago-1",
       oci_auth_ready: true,
       missing_fields: [],
       operation: null,
@@ -1739,7 +1739,7 @@ test("Select AI 設定は requested order で並び狭い幅でも重ならな�
   const embeddingModel = page.getByLabel("Embedding Model");
   await expect(region).toBeVisible();
   await expect(region).toHaveAttribute("aria-required", "true");
-  await expect(region).toContainText("ap-osaka-1");
+  await expect(region).toContainText("us-chicago-1");
   await region.click();
   await expect(page.getByRole("option", { name: "ap-osaka-1" })).toBeVisible();
   await expect(page.getByRole("option", { name: "us-chicago-1" })).toBeVisible();
@@ -2143,6 +2143,8 @@ test("Ontology 未公開のとき旧モデル編集は出さず Markdown Draft �
   await expect(page.getByTestId("ontology-build-markdown")).toBeVisible();
   await expect(page.getByTestId("ontology-markdown-draft-editor")).toBeVisible();
   await expect(page.getByRole("region", { name: "質問のオントロジー接地確認用グラフ" })).toBeVisible();
+  await expect(page.getByText("オントロジー情報は未取得です")).toBeVisible();
+  await page.getByTestId("ontology-view-fetch").click();
   await expect(page.getByText("公開済みオントロジーがまだありません")).toBeVisible();
   await expect(page.getByTestId("profile-ontology-unresolved")).toHaveCount(0);
 });
