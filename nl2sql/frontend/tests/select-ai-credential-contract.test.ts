@@ -32,6 +32,10 @@ test("Select AI Credential API keeps the fixed name and supported region contrac
 test("database settings exposes create, explicit recreate, readiness and fixed feedback", () => {
   assert.match(databaseSettingsSource, /data-testid="select-ai-credential-card"/u);
   assert.match(databaseSettingsSource, /SELECT_AI_CREDENTIAL_CONFIRMATION = "ADMIN_EXECUTE"/u);
+  assert.match(
+    databaseSettingsSource,
+    /useState<SelectAiCredentialRegion>\("us-chicago-1"\)/u,
+  );
   assert.match(databaseSettingsSource, /data\.oci_auth_ready/u);
   assert.match(databaseSettingsSource, /data\.exists \? "danger" : "primary"/u);
   assert.doesNotMatch(databaseSettingsSource, /useConfirm/u);
@@ -46,6 +50,7 @@ test("database settings exposes create, explicit recreate, readiness and fixed f
 
 test("new Profiles use the Select AI default while existing explicit regions remain mapped", () => {
   assert.match(profilePageSource, /useSelectAiCredential\(\)/u);
+  assert.match(profilePageSource, /const SELECT_AI_DEFAULT_REGION = "us-chicago-1"/u);
   assert.match(
     profilePageSource,
     /emptyProfileForm\(selectAiCredentialQuery\.data\?\.region\)/u,

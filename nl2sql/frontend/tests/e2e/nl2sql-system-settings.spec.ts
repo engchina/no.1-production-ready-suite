@@ -158,7 +158,7 @@ async function mockNl2sqlSettingsApi(page: Page) {
     credential_name: "OCI_CRED" as const,
     schema_name: "ADMIN",
     exists: false,
-    region: "ap-osaka-1",
+    region: "us-chicago-1",
     oci_auth_ready: true,
     missing_fields: [] as string[],
     operation: null as "created" | "recreated" | null,

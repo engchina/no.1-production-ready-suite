@@ -210,7 +210,7 @@ The stack reserves a fixed Oracle Select AI credential name and the default
 Select AI region:
 
 - `NL2SQL_SELECT_AI_CREDENTIAL_NAME=OCI_CRED`
-- `NL2SQL_SELECT_AI_REGION=ap-osaka-1`
+- `NL2SQL_SELECT_AI_REGION=us-chicago-1`
 
 After deployment, open `システム設定 > データベース設定 > Select AI Credential`.
 The administrator explicitly creates `OCI_CRED` for the current Oracle schema
