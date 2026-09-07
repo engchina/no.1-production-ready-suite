@@ -1,0 +1,90 @@
+# 依存の定期更新（#69）。
+#
+# 目的は「advisory 公開から取り込みまでの遅延をなくす」こと。CI は `pip-audit` と
+# `npm audit --audit-level=moderate` を必須 step にしているため、更新を放置すると
+# 無関係な PR の CI まで red になる（実例: #57 が #58 / #59 / #61 に巻き込まれた）。
+#
+# ノイズ抑制の方針:
+#   - weekly。patch/minor は ecosystem ごとに 1 本へまとめる（grouping）。
+#   - open-pull-requests-limit で同時に開く PR 数を絞る。
+#   - 確定スタックの中核（oci / oracledb / fastapi / react / react-router / vite）は
+#     major を無視する。破壊的変更の取り込みは Issue を立てて個別に判断する。
+#
+# 対象範囲は段階導入。まず CI が検証している backend / frontend / actions から始める。
+# services/*（22 個の pyproject.toml と 24 個の Dockerfile）は CI 検証対象外で PR 数も
+# 多くなるため、本設定には含めない。運用が安定してから ecosystem を追加する。
+version: 2
+updates:
+  # backend: uv ecosystem は pyproject.toml と uv.lock を直接扱う。
+  # 注意: pyproject.toml に version 制約が無い依存は lock 更新の PR が作られない。
+  - package-ecosystem: uv
+    directory: /backend
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Asia/Tokyo
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      backend-patch-minor:
+        patterns:
+          - "*"
+        update-types:
+          - patch
+          - minor
+    ignore:
+      # 確定スタックの中核。major は挙動と接続互換に直結するため個別判断する。
+      - dependency-name: oci
+        update-types: ["version-update:semver-major"]
+      - dependency-name: oracledb
+        update-types: ["version-update:semver-major"]
+      - dependency-name: fastapi
+        update-types: ["version-update:semver-major"]
+
+  # frontend
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Asia/Tokyo
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      frontend-patch-minor:
+        patterns:
+          - "*"
+        update-types:
+          - patch
+          - minor
+    ignore:
+      # UI/routing/ビルドの中核。major は画面全体へ影響するため個別判断する。
+      - dependency-name: react
+        update-types: ["version-update:semver-major"]
+      - dependency-name: react-dom
+        update-types: ["version-update:semver-major"]
+      - dependency-name: react-router-dom
+        update-types: ["version-update:semver-major"]
+      - dependency-name: vite
+        update-types: ["version-update:semver-major"]
+
+  # GitHub Actions。actions/checkout@v4 などが Node 20 非推奨の警告を出しているため、
+  # actions 自体の更新も追随する。
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Asia/Tokyo
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      actions-all:
+        patterns:
+          - "*"
