@@ -20,6 +20,9 @@ import { StatusBadge } from "@/components/ui/status-badge";
 
 import { t } from "@/lib/i18n";
 import {
+  INFORMATION_LIST_ROW_CLASS,
+  INFORMATION_LIST_SCROLL_CLASS,
+  INFORMATION_TABLE_FOCUS_CLASS,
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_SCROLL_CLASS,
 } from "@/lib/list-density";
@@ -69,6 +72,7 @@ const STAGE_LABEL_KEYS = {
   aggregate: "ontologyPlayground.stage.aggregate",
   no_match: "ontologyPlayground.stage.noMatch",
 } as const;
+const ONTOLOGY_NODE_PICKER_MAX_ITEMS = 12;
 
 function erKeyRoleLabel(role: OntologyErKeyRole): string {
   switch (role) {
@@ -447,7 +451,10 @@ function OntologyNodeDetailsPanel({
   onSelectNode: (nodeId: string) => void;
 }) {
   const selectableNodes = useMemo(
-    () => graph.nodes.filter((item) => !isOntologyDetailNodeKind(item.kind)).slice(0, 12),
+    () =>
+      graph.nodes
+        .filter((item) => !isOntologyDetailNodeKind(item.kind))
+        .slice(0, ONTOLOGY_NODE_PICKER_MAX_ITEMS),
     [graph.nodes]
   );
   return (
@@ -465,14 +472,20 @@ function OntologyNodeDetailsPanel({
             <p className="text-xs font-semibold text-muted">
               {t("ontologyPlayground.inspector.nodePicker")}
             </p>
-            <div className="grid gap-1.5">
+            <div
+              className={`grid min-w-0 content-start gap-1.5 pr-1 ${INFORMATION_LIST_SCROLL_CLASS} ${INFORMATION_TABLE_FOCUS_CLASS}`}
+              role="region"
+              aria-label={t("ontologyPlayground.inspector.nodePicker")}
+              tabIndex={0}
+              data-testid="ontology-inspector-node-picker-scroll-region"
+            >
               {selectableNodes.map((item) => {
                 const display = ontologyNodeDisplay(item);
                 return (
                   <button
                     key={item.id}
                     type="button"
-                    className="grid cursor-pointer gap-0.5 rounded-md border border-border bg-background px-3 py-2 text-left outline-none transition-colors hover:border-primary/50 focus-visible:ring-2 focus-visible:ring-ring/40 motion-reduce:transition-none"
+                    className={`grid min-w-0 cursor-pointer gap-0.5 rounded-md border border-border bg-background px-3 py-2 text-left outline-none transition-colors hover:border-primary/50 focus-visible:ring-2 focus-visible:ring-ring/40 motion-reduce:transition-none ${INFORMATION_LIST_ROW_CLASS}`}
                     onClick={() => onSelectNode(item.id)}
                     data-testid={`ontology-inspector-node-${item.id}`}
                   >
