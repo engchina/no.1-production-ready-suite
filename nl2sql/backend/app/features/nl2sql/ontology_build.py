@@ -84,9 +84,14 @@ _ONTOLOGY_BUILD_LLM_CONTEXT_MAX_CHARS = 100_000
 _LLM_CONTEXT_HEADROOM_CHARS = 512
 _ORACLE_PSEUDO_COLUMNS = {"LEVEL", "ORA_ROWSCN", "ROWID", "ROWNUM"}
 _QA_SQL_EXAMPLE_SECTION_TITLE = "## Q/A SQL 例"
+_QA_SQL_RULE_SECTION_TITLE = "## Q/A 由来 SQL 生成ルール"
 _QA_SQL_PATTERN_SECTION_TITLE = "## Q/A SQL 構造パターン"
 _QA_SQL_EXAMPLE_BLOCK_RE = re.compile(
     rf"^{re.escape(_QA_SQL_EXAMPLE_SECTION_TITLE)}\s*\n```jsonl?\s*\n(?P<body>.*?)\n```",
+    flags=re.MULTILINE | re.DOTALL,
+)
+_QA_SQL_PATTERN_BLOCK_RE = re.compile(
+    rf"^{re.escape(_QA_SQL_PATTERN_SECTION_TITLE)}\s*\n```jsonl?\s*\n(?P<body>.*?)\n```",
     flags=re.MULTILINE | re.DOTALL,
 )
 _QA_SQL_EXAMPLE_MAX_PROMPT_COUNT = 3
@@ -1036,6 +1041,31 @@ def _md_code(value: Any, fallback: str = "未設定") -> str:
     return f"`{text}`"
 
 
+def _markdown_json_payloads(markdown: str, block_pattern: re.Pattern[str]) -> list[object]:
+    payloads: list[object] = []
+    for match in block_pattern.finditer(markdown):
+        body = match.group("body").strip()
+        if not body:
+            continue
+        if body.startswith("["):
+            try:
+                loaded = json.loads(body)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(loaded, list):
+                payloads.extend(loaded)
+            continue
+        for line in body.splitlines():
+            cleaned = line.strip()
+            if not cleaned:
+                continue
+            try:
+                payloads.append(json.loads(cleaned))
+            except json.JSONDecodeError:
+                continue
+    return payloads
+
+
 def _qa_pair_from_markdown_payload(payload: object) -> QaPair | None:
     if not isinstance(payload, Mapping):
         return None
@@ -1082,36 +1112,15 @@ def qa_sql_examples_from_markdown(markdown: str) -> list[QaPair]:
 
     examples: list[QaPair] = []
     seen: set[tuple[str, str]] = set()
-    for match in _QA_SQL_EXAMPLE_BLOCK_RE.finditer(markdown):
-        body = match.group("body").strip()
-        if not body:
+    for payload in _markdown_json_payloads(markdown, _QA_SQL_EXAMPLE_BLOCK_RE):
+        pair = _qa_pair_from_markdown_payload(payload)
+        if pair is None:
             continue
-        payloads: list[object]
-        if body.startswith("["):
-            try:
-                loaded = json.loads(body)
-            except json.JSONDecodeError:
-                continue
-            payloads = loaded if isinstance(loaded, list) else []
-        else:
-            payloads = []
-            for line in body.splitlines():
-                cleaned = line.strip()
-                if not cleaned:
-                    continue
-                try:
-                    payloads.append(json.loads(cleaned))
-                except json.JSONDecodeError:
-                    continue
-        for payload in payloads:
-            pair = _qa_pair_from_markdown_payload(payload)
-            if pair is None:
-                continue
-            key = (pair.question, pair.sql)
-            if key in seen:
-                continue
-            seen.add(key)
-            examples.append(pair)
+        key = (pair.question, pair.sql)
+        if key in seen:
+            continue
+        seen.add(key)
+        examples.append(pair)
     return examples
 
 
@@ -1176,6 +1185,50 @@ def _unique_values(values: Sequence[str], *, limit: int) -> list[str]:
     return result
 
 
+def _qa_sql_pattern_id(pattern: Mapping[str, Any]) -> str:
+    payload = {key: value for key, value in pattern.items() if key != "pattern_id"}
+    canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
+    return f"qa_pattern_{hashlib.sha256(canonical.encode('utf-8')).hexdigest()[:12]}"
+
+
+def _format_pattern_values(values: object, *, limit: int = 5) -> str:
+    if not isinstance(values, Sequence) or isinstance(values, str):
+        return ""
+    cleaned = _unique_values([str(value) for value in values], limit=limit)
+    return ", ".join(cleaned)
+
+
+def _qa_sql_generation_rules_from_pattern(pattern: Mapping[str, Any]) -> list[str]:
+    rules: list[str] = []
+    tables = _format_pattern_values(pattern.get("physical_tables"))
+    if tables:
+        rules.append(f"使用表候補は {tables} を優先して確認する。")
+    joins = _format_pattern_values(pattern.get("join_conditions"), limit=8)
+    if joins:
+        rules.append(f"JOIN 条件候補は {joins} を再利用候補として確認する。")
+    filters = _format_pattern_values(pattern.get("filters"), limit=8)
+    if filters:
+        rules.append(f"WHERE/HAVING 条件候補は {filters} を業務制約として確認する。")
+    aggregates = _format_pattern_values(pattern.get("aggregates"))
+    if aggregates:
+        rules.append(f"集計式候補は {aggregates} を同じ業務意図の算出式として確認する。")
+    group_by = _format_pattern_values(pattern.get("group_by"))
+    if group_by:
+        rules.append(f"集計粒度候補は {group_by} を優先して確認する。")
+    order_by = _format_pattern_values(pattern.get("order_by"))
+    if order_by:
+        rules.append(f"並び順候補は {order_by} を必要に応じて再利用する。")
+    ctes = _format_pattern_values(pattern.get("cte_names"))
+    if ctes:
+        rules.append(f"CTE 構造を使う場合は {ctes} を中間集合の役割候補として扱う。")
+    set_operations = _format_pattern_values(pattern.get("set_operations"))
+    if set_operations:
+        rules.append(f"集合演算候補は {set_operations} を同種の比較・統合要件で確認する。")
+    if not rules and pattern.get("parse_complete") is False:
+        rules.append("Q/A 由来 SQL の構造解析が不完全なため、公開済みオントロジーを優先する。")
+    return rules
+
+
 def _qa_sql_pattern_from_pair(pair: QaPair) -> dict[str, Any]:
     try:
         analysis = parse_oracle_sql(
@@ -1184,20 +1237,27 @@ def _qa_sql_pattern_from_pair(pair: QaPair) -> dict[str, Any]:
             ontology_revision_id="qa_sql_pattern",
         )
     except Exception as exc:
-        return {
-            "question": pair.question,
+        pattern = {
+            "source_role": "qa_sql_structure",
             "parse_complete": False,
             "warnings_ja": [f"SQL 構造を解析できませんでした: {type(exc).__name__}"],
         }
+        pattern["generation_rules_ja"] = _qa_sql_generation_rules_from_pattern(pattern)
+        pattern["pattern_id"] = _qa_sql_pattern_id(pattern)
+        return pattern
     graph = analysis.graph
     if graph is None:
-        return {
-            "question": pair.question,
+        pattern = {
+            "source_role": "qa_sql_structure",
             "parse_complete": False,
             "warnings_ja": [finding.message_ja for finding in analysis.validation.findings[:5]],
         }
-    return {
-        "question": pair.question,
+        pattern["generation_rules_ja"] = _qa_sql_generation_rules_from_pattern(pattern)
+        pattern["pattern_id"] = _qa_sql_pattern_id(pattern)
+        return pattern
+    pattern = {
+        "source_role": "qa_sql_structure",
+        "parse_complete": True,
         "statement_type": graph.statement_type,
         "physical_tables": _unique_values(
             [
@@ -1234,6 +1294,9 @@ def _qa_sql_pattern_from_pair(pair: QaPair) -> dict[str, Any]:
             limit=20,
         ),
     }
+    pattern["generation_rules_ja"] = _qa_sql_generation_rules_from_pattern(pattern)
+    pattern["pattern_id"] = _qa_sql_pattern_id(pattern)
+    return pattern
 
 
 def qa_sql_patterns_from_pairs(
@@ -1241,7 +1304,99 @@ def qa_sql_patterns_from_pairs(
     *,
     limit: int = _QA_SQL_PATTERN_MAX_PROMPT_COUNT,
 ) -> list[dict[str, Any]]:
-    return [_qa_sql_pattern_from_pair(pair) for pair in pairs[: max(0, limit)]]
+    max_patterns = max(0, limit)
+    if max_patterns == 0:
+        return []
+    patterns: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for pair in pairs:
+        pattern = _qa_sql_pattern_from_pair(pair)
+        pattern_id = str(pattern.get("pattern_id") or "")
+        if pattern_id and pattern_id in seen:
+            continue
+        if pattern_id:
+            seen.add(pattern_id)
+        patterns.append(pattern)
+        if len(patterns) >= max_patterns:
+            break
+    return patterns
+
+
+def _qa_sql_pattern_from_markdown_payload(payload: object) -> dict[str, Any] | None:
+    if not isinstance(payload, Mapping):
+        return None
+    pattern: dict[str, Any] = {}
+    for key in (
+        "pattern_id",
+        "source_role",
+        "parse_complete",
+        "statement_type",
+    ):
+        if key in payload:
+            pattern[key] = payload[key]
+    for key in (
+        "physical_tables",
+        "cte_names",
+        "set_operations",
+        "join_conditions",
+        "filters",
+        "projections",
+        "aggregates",
+        "group_by",
+        "order_by",
+        "generation_rules_ja",
+        "warnings_ja",
+    ):
+        values = payload.get(key)
+        if not isinstance(values, Sequence) or isinstance(values, str):
+            continue
+        cleaned = _unique_values([str(value) for value in values], limit=40)
+        if cleaned:
+            pattern[key] = cleaned
+    useful_keys = set(pattern) - {"pattern_id", "source_role", "parse_complete", "statement_type"}
+    if not useful_keys:
+        return None
+    pattern.pop("question", None)
+    if "generation_rules_ja" not in pattern:
+        pattern["generation_rules_ja"] = _qa_sql_generation_rules_from_pattern(pattern)
+    if "pattern_id" not in pattern:
+        pattern["pattern_id"] = _qa_sql_pattern_id(pattern)
+    return pattern
+
+
+def qa_sql_patterns_from_markdown(
+    markdown: str,
+    *,
+    limit: int = _QA_SQL_PATTERN_MAX_PROMPT_COUNT,
+) -> list[dict[str, Any]]:
+    max_patterns = max(0, limit)
+    if max_patterns == 0:
+        return []
+    patterns: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for payload in _markdown_json_payloads(markdown, _QA_SQL_PATTERN_BLOCK_RE):
+        pattern = _qa_sql_pattern_from_markdown_payload(payload)
+        if pattern is None:
+            continue
+        pattern_id = str(pattern.get("pattern_id") or "")
+        if pattern_id and pattern_id in seen:
+            continue
+        if pattern_id:
+            seen.add(pattern_id)
+        patterns.append(pattern)
+        if len(patterns) >= max_patterns:
+            break
+    return patterns
+
+
+def _qa_sql_rule_markdown_lines(qa_pairs: Sequence[QaPair]) -> list[str]:
+    rules: list[str] = []
+    for pattern in qa_sql_patterns_from_pairs(qa_pairs, limit=20):
+        rules.extend(_qa_sql_generation_rules_from_pattern(pattern))
+    unique_rules = _unique_values(rules, limit=40)
+    if not unique_rules:
+        return ["- なし"]
+    return [f"- {rule}" for rule in unique_rules]
 
 
 def _qa_sql_pattern_markdown_lines(qa_pairs: Sequence[QaPair]) -> list[str]:
@@ -1609,9 +1764,9 @@ def render_ontology_build_markdown(
         f"- DB スキーマ列: {column_count}",
         f"- 既存スキーマ関係: {relationship_count}",
         "",
-        _QA_SQL_EXAMPLE_SECTION_TITLE,
+        _QA_SQL_RULE_SECTION_TITLE,
     ]
-    lines.extend(_qa_sql_example_markdown_lines(qa_pairs or []))
+    lines.extend(_qa_sql_rule_markdown_lines(qa_pairs or []))
     lines.extend(["", _QA_SQL_PATTERN_SECTION_TITLE])
     lines.extend(_qa_sql_pattern_markdown_lines(qa_pairs or []))
     lines.extend(["", "## 物理オブジェクト"])

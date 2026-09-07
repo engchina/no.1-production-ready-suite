@@ -28,7 +28,7 @@ from app.features.nl2sql.ontology_build import (
     OntologyBuildService,
     build_schema_context_from_catalog,
     qa_sql_examples_from_markdown,
-    qa_sql_patterns_from_pairs,
+    qa_sql_patterns_from_markdown,
     render_ontology_build_markdown,
     select_qa_sql_examples_from_markdown,
 )
@@ -604,7 +604,7 @@ def test_convert_extraction_resolves_alias_columns_from_qa_sql(
 # --- job → Markdown 下書き ---------------------------------------------------------------------
 
 
-def test_markdown_persists_and_ranks_qa_sql_examples() -> None:
+def test_markdown_summarizes_qa_sql_without_fixed_examples() -> None:
     primary_sql = (
         "WITH CURRENT_FACTS AS ("
         "SELECT A.RESOURCE_ID, SUM(A.AMOUNT) AS TOTAL_AMOUNT "
@@ -629,18 +629,64 @@ def test_markdown_persists_and_ranks_qa_sql_examples() -> None:
     )
 
     examples = qa_sql_examples_from_markdown(markdown)
-    selected = select_qa_sql_examples_from_markdown(markdown, "有効金額の集計を見たい")
+    patterns = qa_sql_patterns_from_markdown(markdown, limit=20)
 
-    assert "## Q/A SQL 例" in markdown
+    assert "## Q/A SQL 例" not in markdown
+    assert "## Q/A 由来 SQL 生成ルール" in markdown
     assert "## Q/A SQL 構造パターン" in markdown
-    assert len(examples) == 2
-    assert selected[0].question == "有効な金額集計を確認したい"
-    assert "APP.FACT_VALUES" in selected[0].sql
-    assert "ACTIVE" in selected[0].sql
-    patterns = qa_sql_patterns_from_pairs(selected)
+    assert primary_sql not in markdown
+    assert "SELECT RESOURCE_ID FROM APP.RESOURCES" not in markdown
+    assert examples == []
+    assert len(patterns) == 2
+    assert "question" not in patterns[0]
     assert set(patterns[0]["physical_tables"]) == {"APP.FACT_VALUES", "APP.RESOURCES"}
     assert "ACTIVE" in " ".join(patterns[0]["filters"])
     assert patterns[0]["cte_names"] == ["CURRENT_FACTS"]
+    assert any("使用表候補" in rule for rule in patterns[0]["generation_rules_ja"])
+
+
+def test_legacy_markdown_qa_sql_examples_remain_readable() -> None:
+    primary_sql = (
+        "WITH CURRENT_FACTS AS ("
+        "SELECT A.RESOURCE_ID, SUM(A.AMOUNT) AS TOTAL_AMOUNT "
+        "FROM APP.FACT_VALUES A WHERE A.STATUS_CODE = 'ACTIVE' GROUP BY A.RESOURCE_ID"
+        ") SELECT A.RESOURCE_ID, B.RESOURCE_NAME, A.TOTAL_AMOUNT "
+        "FROM CURRENT_FACTS A, APP.RESOURCES B "
+        "WHERE B.RESOURCE_ID = A.RESOURCE_ID ORDER BY A.RESOURCE_ID"
+    )
+    markdown = "\n".join(
+        [
+            "# Confirmed Markdown",
+            "",
+            "## Q/A SQL 例",
+            "```jsonl",
+            json.dumps(
+                {
+                    "question": "有効な金額集計を確認したい",
+                    "sql": primary_sql,
+                    "note_ja": "旧 Markdown 互換",
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+            json.dumps(
+                {
+                    "question": "リソース一覧",
+                    "sql": "SELECT RESOURCE_ID FROM APP.RESOURCES",
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+            "```",
+            "",
+        ]
+    )
+
+    selected = select_qa_sql_examples_from_markdown(markdown, "有効金額の集計を見たい")
+
+    assert selected[0].question == "有効な金額集計を確認したい"
+    assert "APP.FACT_VALUES" in selected[0].sql
+    assert "ACTIVE" in selected[0].sql
     assert select_qa_sql_examples_from_markdown(markdown, "別件", min_score=0.9) == []
 
 
@@ -727,8 +773,14 @@ def test_build_job_creates_markdown_draft_and_drops_outside_candidates(
         for relationship in schema_context["relationships"]
     )
     assert finished.markdown_output.startswith("# オントロジー下書き")
-    assert "## Q/A SQL 例" in finished.markdown_output
-    assert qa_sql_examples_from_markdown(finished.markdown_output)[0].question == "顧客別売上"
+    assert "## Q/A SQL 例" not in finished.markdown_output
+    assert "## Q/A 由来 SQL 生成ルール" in finished.markdown_output
+    assert _QA_SQL not in finished.markdown_output
+    assert qa_sql_examples_from_markdown(finished.markdown_output) == []
+    qa_patterns = qa_sql_patterns_from_markdown(finished.markdown_output)
+    assert qa_patterns
+    assert "question" not in qa_patterns[0]
+    assert "APP.ORDERS" in qa_patterns[0]["physical_tables"]
     assert "## 物理オブジェクト" in finished.markdown_output
     assert "`APP.ORDERS` (table)" in finished.markdown_output
     assert "業務名: 受注" in finished.markdown_output
