@@ -83,12 +83,12 @@ jobs:
         working-directory: no.1-production-ready-rag/backend
     steps:
       - name: Checkout app
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: no.1-production-ready-rag
 
       - name: Checkout shared platform packages
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: engchina/no.1-production-ready-platform
           ref: main
@@ -96,13 +96,13 @@ jobs:
           token: ${{ secrets.SHARED_UI_REPO_TOKEN || github.token }}
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
           cache-dependency-glob: no.1-production-ready-rag/backend/uv.lock
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -328,7 +328,7 @@ jobs:
 
       - name: Upload RAG gate artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: rag-evaluation-nightly
           path: no.1-production-ready-rag/artifacts/
