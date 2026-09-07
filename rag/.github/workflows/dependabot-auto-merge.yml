@@ -1,0 +1,58 @@
+name: Dependabot auto-merge
+
+# Dependabot の patch / minor 更新を、required checks の成功後に自動 merge する(#76)。
+# major は auto-merge せず手動レビューで判断する(実例: #73 の actions/checkout 4→7、
+# gitleaks-action 2→3)。grouped PR では group 内で最大の semver 変更が update-type に
+# なるため、major を 1 件でも含む group は自動 merge されない。
+#
+# 前提となる repo 設定（この workflow だけでは有効にならない）:
+#   - Settings > General > Allow auto-merge が有効であること。
+#   - main の branch protection の required checks に Backend / Frontend /
+#     Docker Compose / Secret scan (gitleaks) が入っていること。auto-merge は
+#     required checks の成功だけを待つため、必須から外れた job の失敗は merge を止めない。
+#   - required checks は strict（branch を最新化してから merge）のため、main が進むと
+#     Dependabot の rebase 完了まで auto-merge は待機する。
+#
+# checks が失敗した PR は merge されず open のまま残る。
+
+on: pull_request
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: dependabot-auto-merge-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  auto-merge:
+    name: Auto merge
+    runs-on: ubuntu-latest
+    # 人間の PR では実行しない。
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
+    steps:
+      - name: Fetch Dependabot metadata
+        id: metadata
+        uses: dependabot/fetch-metadata@v2
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Enable auto-merge for patch / minor updates
+        if: >-
+          steps.metadata.outputs.update-type == 'version-update:semver-patch' ||
+          steps.metadata.outputs.update-type == 'version-update:semver-minor'
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh pr merge --auto --merge "$PR_URL"
+
+      - name: Report skipped update
+        if: >-
+          steps.metadata.outputs.update-type != 'version-update:semver-patch' &&
+          steps.metadata.outputs.update-type != 'version-update:semver-minor'
+        env:
+          UPDATE_TYPE: ${{ steps.metadata.outputs.update-type }}
+          DEPENDENCY_NAMES: ${{ steps.metadata.outputs.dependency-names }}
+        run: |
+          echo "::notice::auto-merge しません (update-type=${UPDATE_TYPE:-unknown}, dependencies=${DEPENDENCY_NAMES:-unknown})。手動レビューで判断してください。"
