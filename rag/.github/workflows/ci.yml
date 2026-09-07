@@ -16,13 +16,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           # full history を走査して過去コミットの混入も検出する
           fetch-depth: 0
 
       - name: Run gitleaks
-        uses: gitleaks/gitleaks-action@v2
+        uses: gitleaks/gitleaks-action@v3
         env:
           # gitleaks-action@v2 は PR スキャンに GITHUB_TOKEN を要求する(未指定だと失敗する)。
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -42,12 +42,12 @@ jobs:
       # 依存するため、platform を sibling に checkout してから uv sync する。
       # （配布へ切替後はこの sibling checkout を削除できる。）
       - name: Checkout app
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: no.1-production-ready-rag
 
       - name: Checkout shared platform packages
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: engchina/no.1-production-ready-platform
           ref: main
@@ -55,13 +55,13 @@ jobs:
           token: ${{ secrets.SHARED_UI_REPO_TOKEN || github.token }}
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
           cache-dependency-glob: no.1-production-ready-rag/backend/uv.lock
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -101,12 +101,12 @@ jobs:
       # （GitHub Packages へ切替後はこの sibling checkout / build を削除し、npm ci のみにする。
       #  docs: no.1-production-ready-platform/docs/consume-in-ci.md）
       - name: Checkout app
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: no.1-production-ready-rag
 
       - name: Checkout shared UI package
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: engchina/no.1-production-ready-platform
           ref: main
@@ -116,7 +116,7 @@ jobs:
           token: ${{ secrets.SHARED_UI_REPO_TOKEN || github.token }}
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
@@ -147,7 +147,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Validate compose config
         run: docker compose config --quiet
