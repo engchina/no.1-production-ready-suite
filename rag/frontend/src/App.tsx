@@ -12,6 +12,7 @@ import {
 import { ChevronLeft } from "lucide-react";
 
 import { LoginPage } from "@/components/auth/LoginPage";
+import { CardErrorBoundary } from "@/components/CardErrorBoundary";
 import { DashboardClient } from "@/components/dashboard/DashboardClient";
 import { DocumentWorkspace } from "@/components/documents/DocumentWorkspace";
 import { EvaluationClient } from "@/components/evaluation/EvaluationClient";
@@ -147,7 +148,11 @@ function ProtectedLayout() {
         tabIndex={-1}
       >
         <DatabaseGate>
-          <Outlet />
+          {/* ページ本体の描画例外を main 内に閉じ込め、サイドナビと画面遷移を維持する(#67)。
+              location をキーにして、別ページへ移動したらエラー状態を自動で解除する。 */}
+          <CardErrorBoundary key={location.pathname}>
+            <Outlet />
+          </CardErrorBoundary>
         </DatabaseGate>
       </main>
     </div>
