@@ -77,8 +77,9 @@ jobs:
       - name: Type check
         run: uv run mypy .
 
+      # coverage threshold を gate にしていないため CI では計測しない(nl2sql と同一構成)。
       - name: Test
-        run: uv run pytest --cov=app
+        run: uv run pytest
 
       - name: Security scan
         run: uv run bandit -c pyproject.toml -r app
@@ -132,26 +133,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Lint
-        run: npm run lint
-
-      - name: Type check
-        run: npm run typecheck
-
+      # lint / type check / dependency audit / Playwright E2E は CI では実行しない
+      # (sibling repo no.1-production-ready-nl2sql と同一構成)。型検査は build の
+      # `tsc --noEmit` が兼ねる。lint / audit / E2E はローカル検証と PR review で確認する。
       - name: Unit test
         run: npm test
 
-      - name: Dependency audit
-        run: npm audit --audit-level=moderate
-
       - name: Build
         run: npm run build
-
-      - name: Install Playwright
-        run: npx playwright install --with-deps chromium
-
-      - name: E2E test
-        run: npm run test:e2e
 
   compose:
     name: Docker Compose

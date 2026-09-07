@@ -57,8 +57,8 @@ cd backend
 uv run ruff check .
 uv run black --check .
 uv run mypy .
-uv run pytest --cov=app
-uv run bandit -r app
+uv run pytest
+uv run bandit -c pyproject.toml -r app
 uv run pip-audit
 ```
 
@@ -66,9 +66,7 @@ frontend:
 
 ```bash
 cd frontend
-npm run lint
-npm run typecheck
-npm audit --audit-level=moderate
+npm test
 npm run build
 ```
 
@@ -76,6 +74,15 @@ container:
 
 ```bash
 docker compose config
+```
+
+frontend の lint / dependency audit / Playwright E2E は sibling repo `no.1-production-ready-nl2sql` と同じく CI では実行しない。UI/UX を変更した PR では以下をローカルで実行し、結果を PR の `検証結果` に記載する(型検査は `npm run build` の `tsc --noEmit` が CI 上でも走る)。
+
+```bash
+cd frontend
+npm run lint
+npm audit --audit-level=moderate
+npm run test:e2e
 ```
 
 RAG 品質:

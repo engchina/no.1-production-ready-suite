@@ -109,4 +109,6 @@ CI(`secret-scan` ジョブ)でも同じ `.gitleaks.toml` で full history を走
 
 ## CI
 
-`.github/workflows/ci.yml` で secret-scan(gitleaks)/ backend / frontend / Docker Compose の品質門を固定している。Pull Request と `main` への push で、gitleaks による full history シークレット走査、backend の format・lint・type check・test・security/dependency audit、frontend の lint・type check・dependency audit・build、`docker compose config` を実行する。
+`.github/workflows/ci.yml` で secret-scan(gitleaks)/ backend / frontend / Docker Compose の品質門を固定している。Pull Request と `main` への push で、gitleaks による full history シークレット走査、backend の format・lint・type check・test・security/dependency audit、frontend の unit test・build、`docker compose config` を実行する。
+
+frontend の lint(`npm run lint`)、dependency audit(`npm audit`)、Playwright E2E(`npm run test:e2e`)は sibling repo `no.1-production-ready-nl2sql` と同じく CI では実行せず、ローカル検証と PR review で確認する。型検査は `npm run build` の `tsc --noEmit` が CI 上で兼ねる。
