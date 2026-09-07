@@ -427,7 +427,7 @@ async function mockApi(page: Page) {
         ? {
             id: "revision-draft-4",
             version: 4,
-            status: "draft",
+            status: state.published ? "published" : "draft",
             schema_fingerprint: "fp",
             etag: "draft-etag-4",
           }
@@ -1209,7 +1209,7 @@ test("オントロジー構築の保存済みファイルは確認付きで削�
   expect(overflow).toBe(false);
 });
 
-test("公開完了後は Published を表示し、公開済み revision を Draft として保持しない", async ({ page }) => {
+test("公開完了後も下書き版を前の version のまま保持する", async ({ page }) => {
   const state = await mockApi(page);
   state.jobPolls = 2;
   await page.unroute("**/api/nl2sql/profiles/*/ontology-markdown");
@@ -1218,9 +1218,16 @@ test("公開完了後は Published を表示し、公開済み revision を Draf
       route,
       state.published
         ? {
-            draft_markdown: "",
+            draft_markdown: state.draftMarkdown,
             published_markdown: state.publishedMarkdown || state.draftMarkdown,
-            draft_revision: null,
+            draft_revision: {
+              id: "revision-draft-4",
+              version: 4,
+              status: "published",
+              schema_fingerprint: "fp",
+              etag: "draft-etag-4",
+              published_at: "2026-07-12T00:00:20Z",
+            },
             published_revision: {
               id: "revision-draft-4",
               version: 4,
@@ -1229,7 +1236,7 @@ test("公開完了後は Published を表示し、公開済み revision を Draf
               etag: "draft-etag-4",
               published_at: "2026-07-12T00:00:20Z",
             },
-            draft_etag: "",
+            draft_etag: state.draftMarkdownEtag,
             published_at: "2026-07-12T00:00:20Z",
           }
         : markdownDraftPayload(state.draftMarkdown)
@@ -1262,8 +1269,12 @@ test("公開完了後は Published を表示し、公開済み revision を Draf
   );
 
   await markdown.getByRole("tab", { name: "Markdown オントロジー下書き" }).click();
-  await expect(markdown.getByTestId("ontology-markdown-tab-draft-meta")).toHaveText("未生成");
-  await expect(markdown.getByTestId("ontology-markdown-draft-empty")).toBeVisible();
+  await expect(markdown.getByTestId("ontology-markdown-tab-draft-meta")).toHaveText("v4");
+  await expect(markdown.getByTestId("ontology-markdown-draft-editor")).toHaveValue(/手動メモ/);
+  await expect(markdown.getByTestId("ontology-markdown-draft-editor")).toHaveAttribute(
+    "readonly",
+    ""
+  );
   await expect(
     markdown
       .getByTestId("ontology-publish-actions")
@@ -1289,9 +1300,16 @@ test("公開直後の Markdown 再読込が一時失敗しても公開済み内�
       route,
       state.published
         ? {
-            draft_markdown: "",
+            draft_markdown: state.draftMarkdown,
             published_markdown: state.publishedMarkdown || state.draftMarkdown,
-            draft_revision: null,
+            draft_revision: {
+              id: "revision-draft-4",
+              version: 4,
+              status: "published",
+              schema_fingerprint: "fp",
+              etag: "draft-etag-4",
+              published_at: "2026-07-12T00:00:20Z",
+            },
             published_revision: {
               id: "revision-draft-4",
               version: 4,
@@ -1300,7 +1318,7 @@ test("公開直後の Markdown 再読込が一時失敗しても公開済み内�
               etag: "draft-etag-4",
               published_at: "2026-07-12T00:00:20Z",
             },
-            draft_etag: "",
+            draft_etag: state.draftMarkdownEtag,
             published_at: "2026-07-12T00:00:20Z",
           }
         : markdownDraftPayload(state.draftMarkdown)
@@ -1331,6 +1349,15 @@ test("公開直後の Markdown 再読込が一時失敗しても公開済み内�
   );
   await expect(markdown.getByTestId("ontology-markdown-published-viewer")).toContainText(
     "公開直後の再読込に失敗しても保持"
+  );
+  await markdown.getByRole("tab", { name: "Markdown オントロジー下書き" }).click();
+  await expect(markdown.getByTestId("ontology-markdown-tab-draft-meta")).toHaveText("v4");
+  await expect(markdown.getByTestId("ontology-markdown-draft-editor")).toHaveValue(
+    /公開直後の再読込に失敗しても保持/
+  );
+  await expect(markdown.getByTestId("ontology-markdown-draft-editor")).toHaveAttribute(
+    "readonly",
+    ""
   );
 });
 

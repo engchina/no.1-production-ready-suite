@@ -58,6 +58,7 @@ from app.features.nl2sql.ontology_router import (
     OntologyApiRuntime,
     OntologyContextSearchRequest,
     OntologyDraftRequest,
+    OntologyMarkdownDraftPatch,
     OntologyProfileRecommendationRequest,
     OntologyPublishRequest,
     ProfileOntologyViewPatch,
@@ -2313,11 +2314,23 @@ def test_async_semantic_publish_succeeds_and_is_idempotent(
         api.published_markdown_for_revision(revision.id, profile_id="sales") == confirmed_markdown
     )
     state = api.ontology_markdown_state("sales")
-    assert state.draft_revision is None
-    assert state.draft_markdown == ""
+    assert state.draft_revision is not None
+    assert state.draft_revision.id == revision.id
+    assert state.draft_revision.status == OntologyRevisionStatus.PUBLISHED
+    assert state.draft_version == 1
+    assert state.draft_markdown == confirmed_markdown
     assert state.published_revision is not None
     assert state.published_revision.id == revision.id
+    assert state.published_version == 1
     assert state.published_markdown == confirmed_markdown
+    with pytest.raises(OntologyStateConflictError):
+        api.save_ontology_markdown_draft(
+            "sales",
+            OntologyMarkdownDraftPatch(
+                markdown="# Published revision must stay immutable",
+                base_etag=state.draft_etag,
+            ),
+        )
     with pytest.raises(OntologyStateConflictError):
         publisher.start(revision.id, etag=revision.etag, idempotency_key="publish-after-ready")
     ignored = api.update_reasoning_status(revision.id, OntologyReasoningStatus.FAILED)

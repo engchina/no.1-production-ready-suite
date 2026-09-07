@@ -1010,7 +1010,7 @@ const nl2sqlJa = {
   "ontologyPlayground.run": "接地を確認",
   "ontologyPlayground.clear": "クリア",
   "ontologyPlayground.clearAriaLabel": "接地確認をクリア",
-  "ontologyPlayground.graphRevision": "revision: {revision}",
+  "ontologyPlayground.graphRevision": "公開済み revision: {revision}",
   "ontologyPlayground.suggestions": "候補",
   "ontologyPlayground.stage.entityDefinition": "エンティティの一致",
   "ontologyPlayground.stage.listAll": "一覧照会",

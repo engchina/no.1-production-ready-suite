@@ -354,6 +354,11 @@ def test_markdown_state_uses_profile_local_versions_for_draft_and_publish(
     )
     runtime.copy_draft_markdown_to_published(first_state.draft_revision.id)
     published_state = runtime.ontology_markdown_state("sales")
+    assert published_state.draft_revision is not None
+    assert published_state.draft_revision.id == first_state.draft_revision.id
+    assert published_state.draft_revision.status == OntologyRevisionStatus.PUBLISHED
+    assert published_state.draft_version == 1
+    assert published_state.draft_markdown == first_state.draft_markdown
     assert published_state.published_revision is not None
     assert published_state.published_revision.id == first_state.draft_revision.id
     assert published_state.published_version == 1

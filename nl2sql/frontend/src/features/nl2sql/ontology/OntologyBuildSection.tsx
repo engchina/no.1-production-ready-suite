@@ -676,7 +676,7 @@ export function OntologyBuildSection({
   );
   const activeMarkdown =
     activeMarkdownTab === "draft" ? draftMarkdown : publishedMarkdown;
-  const hasDraftRevision = draftRevision?.status === "draft";
+  const canEditDraftRevision = draftRevision?.status === "draft";
 
   const applyMarkdownState = useCallback((
     next: OntologyMarkdownState,
@@ -886,9 +886,10 @@ export function OntologyBuildSection({
     applyMarkdownState(
       {
         ...currentState,
-        draft_markdown: "",
-        draft_revision: null,
-        draft_etag: "",
+        draft_markdown: currentDraftMarkdown,
+        draft_revision: publishedRevision,
+        draft_version: currentState.draft_version ?? currentDraftRevision.version,
+        draft_etag: currentState.draft_etag,
         published_markdown: currentDraftMarkdown,
         published_revision: publishedRevision,
         published_version: currentState.draft_version ?? currentDraftRevision.version,
@@ -1331,7 +1332,7 @@ export function OntologyBuildSection({
   };
 
   const publish = async () => {
-    if (!draftRevision || !hasDraftRevision) return;
+    if (!draftRevision || !canEditDraftRevision) return;
     setBusy("publish");
     clearNotice();
     try {
@@ -1770,7 +1771,7 @@ export function OntologyBuildSection({
             loading={busy === "save-draft"}
             disabled={
               activeMarkdownTab !== "draft" ||
-              !hasDraftRevision ||
+              !canEditDraftRevision ||
               !draftDirty ||
               publishRunning ||
               (busy !== "" && busy !== "save-draft")
@@ -1837,7 +1838,7 @@ export function OntologyBuildSection({
             aria-labelledby="ontology-markdown-tab-draft"
             className="grid min-w-0 gap-2"
           >
-            {!hasDraftRevision && !draftMarkdown.trim() ? (
+            {!canEditDraftRevision && !draftMarkdown.trim() ? (
               // Draft 未生成時は巨大なコードエディタ枠を出さず、簡潔な空状態にする
               <div
                 data-testid="ontology-markdown-draft-empty"
@@ -1860,8 +1861,10 @@ export function OntologyBuildSection({
                   rows={18}
                   spellCheck={false}
                   placeholder={t("profiles.ontologyBuild.markdownDraftPlaceholder")}
-                  disabled={!hasDraftRevision || busy === "save-draft"}
+                  readOnly={!canEditDraftRevision}
+                  disabled={busy === "save-draft"}
                   onChange={(event) => {
+                    if (!canEditDraftRevision) return;
                     const nextDraftMarkdown = event.currentTarget.value;
                     draftMarkdownRef.current = nextDraftMarkdown;
                     draftDirtyRef.current = true;
@@ -1916,7 +1919,7 @@ export function OntologyBuildSection({
               className="w-full sm:w-auto"
               loading={busy === "publish"}
               disabled={
-                !hasDraftRevision ||
+                !canEditDraftRevision ||
                 publishRunning ||
                 (busy !== "" && busy !== "publish")
               }

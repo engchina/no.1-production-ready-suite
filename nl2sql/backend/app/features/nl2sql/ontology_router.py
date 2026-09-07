@@ -953,10 +953,11 @@ class OntologyApiRuntime:
             self._strict_profile(profile_id)
             self._load_published_revision()
             self._load_revision_headers()
+            # 公開元の Markdown 下書きは、公開後も version 表示用の履歴として残す。
             draft_match = self._latest_profile_markdown_artifact(
                 profile_id=profile_id,
                 artifact_type=_MARKDOWN_DRAFT_ARTIFACT_TYPE,
-                statuses={OntologyRevisionStatus.DRAFT},
+                statuses={OntologyRevisionStatus.DRAFT, OntologyRevisionStatus.PUBLISHED},
             )
             draft_document: dict[str, Any] | None = None
             draft_revision: OntologyRevision | None = None
@@ -993,7 +994,11 @@ class OntologyApiRuntime:
     ) -> OntologyMarkdownState:
         with self._lock:
             state = self.ontology_markdown_state(profile_id)
-            if state.draft_revision is None or not state.draft_etag:
+            if (
+                state.draft_revision is None
+                or state.draft_revision.status != OntologyRevisionStatus.DRAFT
+                or not state.draft_etag
+            ):
                 raise OntologyStateConflictError(
                     "ONTOLOGY_MARKDOWN_DRAFT_NOT_FOUND",
                     "保存できる Markdown 下書きがありません。AI 構築を実行してください。",
