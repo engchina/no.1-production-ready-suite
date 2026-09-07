@@ -41,6 +41,7 @@ import {
   previewToJob,
   sqlExecutePayload,
 } from "../src/features/nl2sql/previewState.ts";
+import { normalizeNl2SqlJobSteps } from "../src/features/nl2sql/jobProgressState.ts";
 import {
   historyRerunUrl,
   parseNl2SqlEngine,
@@ -51,7 +52,7 @@ import {
   selectedVisibleHistoryId,
 } from "../src/features/nl2sql/historyManagementState.ts";
 import { formatSampleValues, formatSchemaCount } from "../src/features/nl2sql/schemaDisplayCore.ts";
-import type { HistoryItem, PreviewData, SchemaColumn, SchemaTable } from "../src/features/nl2sql/types.ts";
+import type { HistoryItem, JobData, PreviewData, SchemaColumn, SchemaTable } from "../src/features/nl2sql/types.ts";
 import {
   buildSchemaInsertText,
   buildSchemaSqlIdentifierText,
@@ -445,6 +446,87 @@ test("preview response maps to a synthetic timeline job", () => {
   assert.equal(job.result?.safety.is_select_only, true);
   // まだ実行していないため結果は空。
   assert.deepEqual(job.result?.results, { columns: [], rows: [], total: 0 });
+});
+
+test("job progress normalization completes unfinished predecessors before formatted results", () => {
+  const job: JobData = {
+    job_id: "job-inconsistent-steps",
+    status: "done",
+    created_at: "2026-06-21T10:00:00.000Z",
+    result: {
+      engine: "select_ai",
+      engine_meta: {},
+      fallback_reason: "",
+      original_question: "該当データを確認したい",
+      rewritten_question: "該当データを確認したい",
+      generated_sql: "SELECT TOTAL_AMOUNT FROM INVOICES",
+      executable_sql: "SELECT TOTAL_AMOUNT FROM INVOICES",
+      explanation: "請求金額を取得します。",
+      safety: {
+        is_safe: true,
+        is_select_only: true,
+        row_limit_applied: 100,
+        blocked_reason: "",
+        warnings: [],
+        referenced_tables: ["INVOICES"],
+        referenced_columns: ["TOTAL_AMOUNT"],
+      },
+      recommendations: [],
+      repaired_sql: "",
+      optimization_hints: [],
+      results: { columns: ["TOTAL_AMOUNT"], rows: [], total: 0 },
+      timing: {
+        created_at: "2026-06-21T10:00:00.000Z",
+        elapsed_ms: 1900,
+        stage_timings: [{ stage: "format_results", elapsed_ms: 1900 }],
+      },
+    },
+    steps: [
+      { stage: "prepare_context", status: "done", elapsed_ms: 20 },
+      { stage: "generate_sql", status: "done", elapsed_ms: 1200 },
+      { stage: "safety_check", status: "done", elapsed_ms: 114 },
+      { stage: "execute_sql", status: "running", elapsed_ms: null },
+      { stage: "format_results", status: "done", elapsed_ms: 1900 },
+    ],
+  };
+
+  assert.deepEqual(
+    normalizeNl2SqlJobSteps(job).map((step) => [step.stage, step.status]),
+    [
+      ["prepare_context", "done"],
+      ["generate_sql", "done"],
+      ["safety_check", "done"],
+      ["execute_sql", "done"],
+      ["format_results", "done"],
+    ]
+  );
+});
+
+test("job progress normalization does not complete steps past an error boundary", () => {
+  const job: JobData = {
+    job_id: "job-error-format-done",
+    status: "error",
+    created_at: "2026-06-21T10:00:00.000Z",
+    error_message: "SQL の安全性を確認できませんでした。",
+    steps: [
+      { stage: "prepare_context", status: "done", elapsed_ms: 20 },
+      { stage: "generate_sql", status: "done", elapsed_ms: 1200 },
+      { stage: "safety_check", status: "error", elapsed_ms: 114 },
+      { stage: "execute_sql", status: "pending", elapsed_ms: null },
+      { stage: "format_results", status: "done", elapsed_ms: 40 },
+    ],
+  };
+
+  assert.deepEqual(
+    normalizeNl2SqlJobSteps(job).map((step) => [step.stage, step.status]),
+    [
+      ["prepare_context", "done"],
+      ["generate_sql", "done"],
+      ["safety_check", "error"],
+      ["execute_sql", "pending"],
+      ["format_results", "done"],
+    ]
+  );
 });
 
 test("preview execute payload preserves selected allowed objects", () => {

@@ -2764,6 +2764,41 @@ def _job_failure_step_index(steps: list[JobStepData]) -> int | None:
     return None
 
 
+def _normalize_terminal_step_order(steps: list[JobStepData]) -> list[JobStepData]:
+    """後続 done の手前に残った in-flight 表示を工程順に完了へ寄せる(error 境界は越えない)。"""
+
+    last_done_index = max(
+        (index for index, step in enumerate(steps) if step.status == JobStepStatus.DONE),
+        default=-1,
+    )
+    if last_done_index <= 0:
+        return steps
+    first_error_index = next(
+        (index for index, step in enumerate(steps) if step.status == JobStepStatus.ERROR),
+        -1,
+    )
+    fill_until_index = (
+        first_error_index if 0 <= first_error_index < last_done_index else last_done_index
+    )
+    normalized: list[JobStepData] = []
+    for index, step in enumerate(steps):
+        if index < fill_until_index and step.status in {
+            JobStepStatus.PENDING,
+            JobStepStatus.RUNNING,
+        }:
+            step = step.model_copy(update={"status": JobStepStatus.DONE})
+        normalized.append(step)
+    return normalized
+
+
+def _restore_job_status(status: JobStatus, result: Nl2SqlResult | None) -> JobStatus:
+    """result 済み snapshot が in-flight のまま残った場合は終端状態へ復元する。"""
+
+    if result is None or status not in _IN_FLIGHT_JOB_STATUSES:
+        return status
+    return JobStatus.DONE if result.safety.is_safe else JobStatus.ERROR
+
+
 def _restore_job_steps(
     raw_steps: list[dict[str, Any]],
     *,
@@ -2829,7 +2864,7 @@ def _restore_job_steps(
                 restored[failure_index] = restored[failure_index].model_copy(
                     update={"status": JobStepStatus.ERROR}
                 )
-    return restored
+    return _normalize_terminal_step_order(restored)
 
 
 def _history_item_matches_payload_filters(item: HistoryItem, filters: Mapping[str, str]) -> bool:
@@ -3823,6 +3858,7 @@ class Nl2SqlService:
         status = JobStatus(data.get("status", JobStatus.PENDING))
         timing = TimingEnvelope.model_validate(data["timing"]) if data.get("timing") else None
         result = Nl2SqlResult.model_validate(data["result"]) if data.get("result") else None
+        status = _restore_job_status(status, result)
         try:
             attempt = int(data.get("attempt") or 0)
         except (TypeError, ValueError):

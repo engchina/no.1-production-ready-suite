@@ -5,18 +5,11 @@ import { Banner } from "@engchina/production-ready-ui";
 
 import { t } from "@/lib/i18n";
 import { formatElapsedDuration as formatElapsed } from "@/lib/operationTiming";
-import type { JobData, JobStatus, JobStepData, JobStepStatus } from "../types";
+import { normalizeNl2SqlJobSteps } from "../jobProgressState";
+import type { JobData, JobStatus, JobStepStatus } from "../types";
 import { GeneratedSqlSummary } from "./GeneratedSqlPanel";
 import { QuestionText } from "./QuestionText";
 import { WorkflowProgressStrip, type WorkflowProgressStepStatus } from "./WorkflowProgressStrip";
-
-const JOB_STAGES = [
-  "prepare_context",
-  "generate_sql",
-  "safety_check",
-  "execute_sql",
-  "format_results",
-] as const;
 
 function statusLabel(status: JobStatus) {
   if (status === "done") return t("nl2sql.status.done");
@@ -39,22 +32,6 @@ function stepLabel(stage: string) {
 
 function stepDescription(stage: string) {
   return t(`nl2sql.progress.${stage}.description`);
-}
-
-function normalizeSteps(job: JobData): JobStepData[] {
-  const reported = new Map((job.steps ?? []).map((step) => [step.stage, step]));
-  return JOB_STAGES.map((stage, index) => {
-    const step = reported.get(stage);
-    if (step) return step;
-    if (job.status === "done") return { stage, status: "done" };
-    if (job.status === "running" && reported.size === 0 && index === 0) {
-      return { stage, status: "running" };
-    }
-    if (job.status === "error" && reported.size === 0 && index === 0) {
-      return { stage, status: "error" };
-    }
-    return { stage, status: "pending" };
-  });
 }
 
 function progressMessage(status: JobStatus) {
@@ -106,7 +83,7 @@ export function OperationStatusStrip({
   if (!job) return null;
 
   const variant = job.status === "done" ? "success" : job.status === "error" ? "danger" : "pending";
-  const steps = normalizeSteps(job);
+  const steps = normalizeNl2SqlJobSteps(job);
   // プレビュー経路: execute/format 未実行(skipped)。「完了」ではなく確認を促す文言に差し替える。
   const isPreview = Boolean(onPreviewExecute);
   const warningMessage = job.warning_message?.trim();

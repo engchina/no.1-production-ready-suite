@@ -5024,6 +5024,92 @@ test("検索を実行すると実処理の段階別進捗と結果を表示す�
   await expectNoHorizontalScroll(page);
 });
 
+test("結果整形が完了した job は SQL 実行ステップを処理中のまま残さない", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  const questionText = "該当データがない条件で請求金額を確認したい";
+  const createdAt = "2026-06-21T10:00:00.000Z";
+
+  await page.unroute("**/api/nl2sql/jobs");
+  await page.route("**/api/nl2sql/jobs", (route) =>
+    fulfillJson(route, {
+      job_id: "job-format-done-execute-running",
+      status: "running",
+      created_at: createdAt,
+      steps: [
+        { stage: "prepare_context", status: "done", elapsed_ms: 8 },
+        { stage: "generate_sql", status: "running", elapsed_ms: null },
+        { stage: "safety_check", status: "pending", elapsed_ms: null },
+        { stage: "execute_sql", status: "pending", elapsed_ms: null },
+        { stage: "format_results", status: "pending", elapsed_ms: null },
+      ],
+    })
+  );
+  await page.route("**/api/nl2sql/jobs/job-format-done-execute-running", (route) =>
+    fulfillJson(route, {
+      job_id: "job-format-done-execute-running",
+      status: "done",
+      created_at: createdAt,
+      started_at: createdAt,
+      finished_at: "2026-06-21T10:00:01.900Z",
+      elapsed_ms: 1900,
+      error_message: null,
+      steps: [
+        { stage: "prepare_context", status: "done", elapsed_ms: 20 },
+        { stage: "generate_sql", status: "done", elapsed_ms: 1200 },
+        { stage: "safety_check", status: "done", elapsed_ms: 114 },
+        { stage: "execute_sql", status: "running", elapsed_ms: null },
+        { stage: "format_results", status: "done", elapsed_ms: 1900 },
+      ],
+      timing: {
+        created_at: createdAt,
+        started_at: createdAt,
+        finished_at: "2026-06-21T10:00:01.900Z",
+        elapsed_ms: 1900,
+        stage_timings: [
+          { stage: "prepare_context", elapsed_ms: 20 },
+          { stage: "generate_sql", elapsed_ms: 1200 },
+          { stage: "safety_check", elapsed_ms: 114 },
+          { stage: "format_results", elapsed_ms: 1900 },
+        ],
+      },
+      result: {
+        history_id: "hist-format-done-execute-running",
+        engine: "select_ai",
+        engine_meta: { profile: "mock_agent_profile" },
+        fallback_reason: "",
+        original_question: questionText,
+        rewritten_question: questionText,
+        generated_sql: "SELECT TOTAL_AMOUNT FROM INVOICES WHERE CUSTOMER_NAME = '該当なし'",
+        executable_sql: "SELECT TOTAL_AMOUNT FROM INVOICES WHERE CUSTOMER_NAME = '該当なし'",
+        explanation: "条件に一致する請求金額を取得します。",
+        safety,
+        recommendations: [],
+        repaired_sql: "",
+        optimization_hints: [],
+        results: { columns: ["TOTAL_AMOUNT"], rows: [], total: 0 },
+        timing,
+      },
+    })
+  );
+
+  await page.goto("/query");
+  await nl2sqlQuestionInput(page).fill(questionText);
+  await page.getByRole("button", { name: "検索を実行" }).click();
+
+  const progress = page.getByTestId("nl2sql-job-progress");
+  const executeStep = page.getByTestId("nl2sql-job-step-execute_sql");
+  const formatStep = page.getByTestId("nl2sql-job-step-format_results");
+
+  await expect(progress).toHaveAttribute("data-job-status", "done");
+  await expect(executeStep).toHaveAttribute("data-step-status", "done");
+  await expect(executeStep).not.toHaveAttribute("aria-current", "step");
+  await expect(executeStep.locator("svg.animate-spin")).toHaveCount(0);
+  await expect(executeStep).toContainText("完了");
+  await expect(formatStep).toHaveAttribute("data-step-status", "done");
+  await expect(page.getByText("検索結果（0件）")).toBeVisible();
+  await expectNoHorizontalScroll(page);
+});
+
 test("保存警告がある完了 job は結果を表示し、赤エラーではなく黄色 warning を出す", async ({ page }) => {
   await page.unroute("**/api/auth/me").catch(() => undefined);
   await page.route("**/api/auth/me**", (route) => fulfillJson(route, systemAdminMe));

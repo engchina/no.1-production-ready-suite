@@ -27,6 +27,7 @@ from app.features.nl2sql.models import (
     SchemaTable,
 )
 from app.features.nl2sql.service import (
+    _NL2SQL_JOB_STAGES,
     JOB_CANCELLED_ERROR_CODE,
     Nl2SqlService,
     StoredJob,
@@ -357,6 +358,54 @@ def test_expired_running_snapshot_is_reclaimed_and_completed() -> None:
     assert persisted["status"] == "done"
     assert persisted["worker_id"] == ""
     assert persisted["attempt"] == 2
+
+
+def test_result_snapshot_restores_terminal_status_and_step_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(get_settings(), "nl2sql_job_worker_mode", "external")
+    repository = _repository()
+    owner = _worker(repository)
+    created = owner.start_job(_request(), actor_user_uuid="user-1", actor_is_system_admin=True)
+
+    assert owner.run_next_nl2sql_job(job_id=created.job_id, worker_id="worker-owner") is True
+    finished = owner.get_job(created.job_id)
+    assert finished is not None
+    assert finished.status == JobStatus.DONE
+
+    snapshot = repository.get_document("jobs", created.job_id)
+    assert snapshot is not None
+    inconsistent_steps = [
+        {
+            **step,
+            **(
+                {"status": JobStepStatus.RUNNING.value, "elapsed_ms": None}
+                if step["stage"] == "execute_sql"
+                else {}
+            ),
+        }
+        for step in snapshot["steps"]
+    ]
+    repository.put_document(
+        "jobs",
+        created.job_id,
+        {
+            **snapshot,
+            "status": JobStatus.RUNNING.value,
+            "steps": inconsistent_steps,
+            "worker_id": "",
+            "lease_expires_at": None,
+        },
+        status="running",
+    )
+
+    observer = _worker(repository)
+    restored = observer.get_job(created.job_id)
+
+    assert restored is not None
+    assert restored.status == JobStatus.DONE
+    assert [step.stage for step in restored.steps] == list(_NL2SQL_JOB_STAGES)
+    assert [step.status for step in restored.steps] == [JobStepStatus.DONE] * 5
 
 
 def test_fresh_in_flight_snapshot_from_other_worker_stays_running() -> None:
