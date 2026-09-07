@@ -321,7 +321,13 @@ function buildJob(status: string, stepStatus: string, proposalIds: string[] = []
       draft_revision_id: status === "succeeded" ? "revision-draft-4" : "",
       draft_etag: status === "succeeded" ? "markdown-etag-1" : "",
       markdown_output: status === "succeeded" ? generatedDraftMarkdown : "",
-      warnings_ja: status === "succeeded" ? ["命名候補 APP.SECRET を profile 範囲内に解決できません。"] : [],
+      warnings_ja:
+        status === "succeeded"
+          ? [
+              "命名候補 APP.SECRET を profile 範囲内に解決できません。",
+              "schema_resolved_join_conditionsが空のため自己結合は明示せず。",
+            ]
+          : [],
       error_message_ja: "",
       created_at: "2026-07-12T00:00:00Z",
       started_at: stepStatus === "pending" ? null : "2026-07-12T00:00:01Z",
@@ -990,6 +996,7 @@ test("AI オントロジー構築の実行 → 進捗 → Markdown 下書き編�
   // スコープ外候補は正常な採用外判定なので、成功 job の警告枠には出さない。
   await expect(steps.locator("summary").filter({ hasText: "警告" })).toHaveCount(0);
   await expect(steps.getByText("APP.SECRET", { exact: false })).toHaveCount(0);
+  await expect(steps.getByText("schema_resolved_join_conditions", { exact: false })).toHaveCount(0);
 
   const markdown = page.getByTestId("ontology-build-markdown");
   await expect(
