@@ -93,8 +93,11 @@ test("Grounding graph displays revision identity and supports reset", () => {
 test("Grounding graph and file dropzones share the clear button implementation", () => {
   assert.match(clearActionButton, /export function ClearActionButton/u);
   assert.match(clearActionButton, /variant="secondary"/u);
-  assert.match(clearActionButton, /size="sm"/u);
-  assert.match(clearActionButton, /h-\[44px\] whitespace-nowrap/u);
+  assert.match(clearActionButton, /size = "sm"/u);
+  assert.match(clearActionButton, /matchButtonHeight\?: boolean/u);
+  assert.match(clearActionButton, /matchButtonHeight = false/u);
+  assert.match(clearActionButton, /!matchButtonHeight && "h-\[44px\]"/u);
+  assert.match(clearActionButton, /"whitespace-nowrap"/u);
   assert.match(fileDropzone, /<ClearActionButton/u);
   assert.match(ontologyQueryPlayground, /<ClearActionButton/u);
   assert.doesNotMatch(ontologyQueryPlayground, /variant="ghost"[\s\S]*ontology-playground-clear/u);

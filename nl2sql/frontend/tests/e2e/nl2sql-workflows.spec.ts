@@ -80,6 +80,23 @@ async function dismissToasts(page: Page) {
   }
 }
 
+async function expectButtonsSameHeight(primary: Locator, secondary: Locator) {
+  await expect(primary).toBeVisible();
+  await expect(secondary).toBeVisible();
+  await expect
+    .poll(async () => {
+      const [primaryBox, secondaryBox] = await Promise.all([
+        primary.boundingBox(),
+        secondary.boundingBox(),
+      ]);
+      if (!primaryBox || !secondaryBox) {
+        return Number.POSITIVE_INFINITY;
+      }
+      return Math.abs(primaryBox.height - secondaryBox.height);
+    })
+    .toBeLessThanOrEqual(1);
+}
+
 async function expectOneLineWithoutOverflow(locator: Locator) {
   await expect(locator).toBeVisible();
   const metrics = await locator.evaluate((node) => {
@@ -11021,12 +11038,14 @@ test("sample data and data management run imported workflows", async ({ page }) 
   await csvTableSearch.clear();
   await expect(csvPanel.getByTestId("data-csv-table-list").getByText("APP.INVOICES", { exact: true })).toBeVisible();
   const csvConfirmationInput = csvPanel.getByLabel("実行確認語");
+  const csvUploadButton = csvPanel.getByRole("button", { name: "アップロード実行" });
   await csvConfirmationInput.fill("APP.PAYMENTS");
   await expect(csvPanel.getByText("確認済み", { exact: true })).toHaveCount(1);
   const csvUploadClearButton = csvPanel
     .getByTestId("execution-confirmation-field")
     .getByRole("button", { name: "クリア", exact: true });
   await expect(csvUploadClearButton).toBeEnabled();
+  await expectButtonsSameHeight(csvUploadButton, csvUploadClearButton);
   await csvUploadClearButton.click();
   await expect(csvConfirmationInput).toHaveValue("");
   await expect(csvPanel.getByText("APP.PAYMENTS", { exact: true }).first()).toBeVisible();
@@ -11048,7 +11067,6 @@ test("sample data and data management run imported workflows", async ({ page }) 
     },
   ]);
   await expect(page.getByText("選択中: invoices.XLS")).toBeVisible();
-  const csvUploadButton = page.getByRole("button", { name: "アップロード実行" });
   await expect(csvUploadButton).toBeEnabled();
   await csvUploadButton.click();
   await expect(page.getByText("UNKNOWN_COLUMN", { exact: false }).first()).toBeVisible();
@@ -11095,6 +11113,7 @@ test("sample data and data management run imported workflows", async ({ page }) 
     .getByTestId("execution-confirmation-field")
     .getByRole("button", { name: "クリア", exact: true });
   await expect(syntheticClearButton).toBeEnabled();
+  await expectButtonsSameHeight(syntheticGenerateButton, syntheticClearButton);
   await syntheticClearButton.click();
   await expect(syntheticPanel.getByLabel("APP.INVOICES を選択")).not.toBeChecked();
   await expect(syntheticConfirmationInput).toHaveValue("");
@@ -12604,19 +12623,21 @@ test("table and view management pages run guarded DDL and AI workflows", async (
   await expect(createPanel.getByText("入力条件: ADMIN_EXECUTE")).toBeVisible();
   await createConfirmationInput.fill("ADMIN_EXECUTE");
   await expect(createPanel.getByText("確認済み", { exact: true })).toHaveCount(1);
+  const createExecuteButton = createPanel.getByRole("button", { name: "SQL 実行" });
   const createClearButton = createPanel
     .getByTestId("execution-confirmation-field")
     .getByRole("button", { name: "クリア", exact: true });
   await expect(createClearButton).toBeEnabled();
+  await expectButtonsSameHeight(createExecuteButton, createClearButton);
   await createClearButton.click();
   await expect(createSqlInput).toHaveValue("");
   await expect(createConfirmationInput).toHaveValue("");
-  await expect(createPanel.getByRole("button", { name: "SQL 実行" })).toBeDisabled();
+  await expect(createExecuteButton).toBeDisabled();
   await expect(createClearButton).toBeDisabled();
   await createSqlInput.fill("CREATE TABLE T1 (ID NUMBER)");
   await createConfirmationInput.fill("ADMIN_EXECUTE");
   await expect(createPanel.getByText("確認済み", { exact: true })).toHaveCount(1);
-  await createPanel.getByRole("button", { name: "SQL 実行" }).click();
+  await createExecuteButton.click();
   await expect.poll(() => api.statementsPayload?.policy).toBe("table_ddl");
   expect(api.statementsPayload?.confirmation).toBe("ADMIN_EXECUTE");
 
@@ -12640,6 +12661,7 @@ test("table and view management pages run guarded DDL and AI workflows", async (
     .getByTestId("table-import-execution-fieldset")
     .getByRole("button", { name: "クリア", exact: true });
   await expect(importActionClearButton).toBeEnabled();
+  await expectButtonsSameHeight(importExecuteButton, importActionClearButton);
   await importActionClearButton.click();
   await expect(importConfirmationInput).toHaveValue("");
   await expect(importExecuteButton).toBeDisabled();

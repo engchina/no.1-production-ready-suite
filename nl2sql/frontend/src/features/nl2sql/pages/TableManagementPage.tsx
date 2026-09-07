@@ -259,6 +259,7 @@ function ImportWizard({
               </Button>
               <ClearActionButton
                 label={t("dbAdmin.runner.clear")}
+                matchButtonHeight
                 className="w-full sm:w-auto"
                 disabled={!canClear || loading}
                 onClick={onClear}

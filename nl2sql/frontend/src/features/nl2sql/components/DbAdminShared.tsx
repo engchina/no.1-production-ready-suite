@@ -1001,6 +1001,7 @@ export function StatementRunnerCard({
           {runButton}
           <ClearActionButton
             label={t("dbAdmin.runner.clear")}
+            matchButtonHeight
             className="w-full sm:w-auto"
             disabled={!canClearRunner || loading}
             onClick={clearRunner}

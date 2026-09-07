@@ -1839,6 +1839,7 @@ function CsvUploadWorkspace({
               </Button>
               <ClearActionButton
                 label={t("dbAdmin.runner.clear")}
+                matchButtonHeight
                 className="w-full sm:w-auto"
                 disabled={!canClearUpload || loading}
                 onClick={onClearUpload}
@@ -2287,6 +2288,7 @@ function SyntheticWorkspace({
                 </Button>
                 <ClearActionButton
                   label={t("dbAdmin.runner.clear")}
+                  matchButtonHeight
                   className="w-full sm:w-auto"
                   disabled={
                     !canClearSyntheticGeneration ||
