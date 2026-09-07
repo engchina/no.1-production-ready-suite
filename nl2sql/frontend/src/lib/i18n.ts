@@ -976,6 +976,10 @@ const nl2sqlJa = {
   "ontologyBuild.profile.hint": "構築・レビュー・編集の対象を選択します。選択内容は URL に保持されます。",
   "ontologyBuild.profile.selectLabel": "プロファイルを選択",
   "ontologyBuild.profile.loading": "対象プロファイルを読み込んでいます",
+  "ontologyBuild.workspace.fetchAction": "情報を取得",
+  "ontologyBuild.workspace.ontologyLoading": "オントロジー情報を読み込んでいます",
+  "ontologyBuild.workspace.notLoadedTitle": "オントロジー情報は未取得です",
+  "ontologyBuild.workspace.notLoadedHint": "対象プロファイルを確認してから取得できます。",
   "ontologyBuild.workspace.loading": "オントロジー作業領域を読み込んでいます",
   "ontologyBuild.workspace.error":
     "オントロジー作業領域を読み込めませんでした。接続状態を確認して再試行してください。",

@@ -828,6 +828,11 @@ test("AI オントロジー構築の実行 → 進捗 → Markdown 下書き編�
   await expectBuildPanelsStackedFullWidth(page);
   await expectSourceDropzoneMatchesQaStyle(page);
   await expectExtractionTargetsHidden(page);
+  await expect(page.getByTestId("ontology-view-fetch")).toBeVisible();
+  await expect(page.getByTestId("ontology-view-fetch").locator("span").first()).toHaveText(
+    "情報を取得"
+  );
+  expect(state.ontologyViewCalls).toBe(0);
 
   // 初期状態では Draft / Published とも空
   await expect(section.getByTestId("ontology-markdown-draft-empty")).toBeVisible();
@@ -1027,6 +1032,9 @@ test("AI オントロジー構築の実行 → 進捗 → Markdown 下書き編�
   await expect(
     ontologyQueryPanel.getByRole("heading", { name: "質問のオントロジー接地確認用グラフ" })
   ).toBeVisible();
+  await expect(ontologyQueryPanel.getByText("オントロジー情報は未取得です")).toBeVisible();
+  await page.getByTestId("ontology-view-fetch").click();
+  await expect.poll(() => state.ontologyViewCalls).toBe(1);
   await expect(ontologyQueryPanel.getByTestId("ontology-playground-revision-id")).toContainText(
     "revision-1"
   );
@@ -2066,6 +2074,9 @@ test("オントロジー View の API エラーを表示し、キーボードで
   });
 
   await page.goto("/ontology-build?profile=default");
+  await expect(page.getByText("オントロジー情報は未取得です")).toBeVisible();
+  expect(ontologyViewReads).toBe(0);
+  await page.getByTestId("ontology-view-fetch").click();
 
   const alert = page.getByRole("alert");
   await expect(alert).toContainText("プロファイル範囲の準備に失敗しました。");
@@ -2076,7 +2087,7 @@ test("オントロジー View の API エラーを表示し、キーボードで
   await page.keyboard.press("Enter");
 
   await retryOntologyViewStarted;
-  await expect(page.getByTestId("ontology-workspace-detail-skeleton")).toBeVisible();
+  await expect(page.getByTestId("ontology-view-loading")).toBeVisible();
   await expect(alert).toHaveCount(0);
   releaseRetryOntologyView();
   await expect(page.getByTestId("profile-ontology-build")).toBeVisible();
