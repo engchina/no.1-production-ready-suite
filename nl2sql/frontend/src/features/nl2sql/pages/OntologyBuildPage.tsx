@@ -73,16 +73,19 @@ export function OntologyBuildPage() {
     );
   }, [activeProfiles, profileParam, profilesQuery.hasNextPage]);
   const selectedProfileId = selectedProfileSummary?.id ?? "";
-  const profileDetailQuery = useProfileDetail(selectedProfileId);
-  const ontologyViewRequested =
+  const workspaceRequested =
     Boolean(selectedProfileId) && ontologyViewRequestedProfileId === selectedProfileId;
-  const ontologyViewQuery = useProfileOntologyView(selectedProfileId, false);
+  const profileDetailQuery = useProfileDetail(workspaceRequested ? selectedProfileId : "");
+  const ontologyViewQuery = useProfileOntologyView(selectedProfileId, workspaceRequested);
+  const workspaceButtonLoading =
+    workspaceRequested && (profileDetailQuery.isFetching || ontologyViewQuery.isFetching);
   const { refetch: refetchOntologyView } = ontologyViewQuery;
+  const { refetch: refetchProfileDetail } = profileDetailQuery;
   const selectedProfile = profileDetailQuery.data?.profile ?? null;
-  const ontologyGraph = ontologyViewRequested
+  const ontologyGraph = workspaceRequested
     ? ontologyViewQuery.data?.ontology_graph ?? null
     : null;
-  const ontologyWarnings = ontologyViewRequested
+  const ontologyWarnings = workspaceRequested
     ? ontologyViewQuery.data?.warnings_ja ?? []
     : [];
   const hasPublishedOntology =
@@ -118,16 +121,19 @@ export function OntologyBuildPage() {
 
   const refreshOntologyView = useCallback(async () => {
     if (!selectedProfileId) return;
-    if (ontologyViewRequestedProfileId !== selectedProfileId) return;
+    if (!workspaceRequested) return;
     await refetchOntologyView();
-  }, [ontologyViewRequestedProfileId, refetchOntologyView, selectedProfileId]);
+  }, [refetchOntologyView, selectedProfileId, workspaceRequested]);
 
   const handleLoadOntologyView = useCallback(() => {
     if (!selectedProfileId) return;
     setPageError("");
+    if (workspaceRequested) {
+      void Promise.all([refetchProfileDetail(), refetchOntologyView()]);
+      return;
+    }
     setOntologyViewRequestedProfileId(selectedProfileId);
-    void refetchOntologyView();
-  }, [refetchOntologyView, selectedProfileId]);
+  }, [refetchOntologyView, refetchProfileDetail, selectedProfileId, workspaceRequested]);
 
   const refreshSchema = async () => {
     setPageError("");
@@ -172,16 +178,26 @@ export function OntologyBuildPage() {
     await refreshOntologyView();
   }, [refreshOntologyView]);
 
-  const workspaceFailure = classifyOntologyWorkspaceError(profileDetailQuery.error, null);
+  const workspaceFailure = workspaceRequested
+    ? classifyOntologyWorkspaceError(profileDetailQuery.error, null)
+    : null;
   const ontologyFailure = classifyOntologyWorkspaceError(
     null,
-    ontologyViewRequested ? ontologyViewQuery.error : null
+    workspaceRequested ? ontologyViewQuery.error : null
   );
   const workspaceRefreshingAfterFailure =
     Boolean(workspaceFailure) && profileDetailQuery.isFetching;
+  const workspaceInitialOntologyLoading =
+    workspaceRequested &&
+    ontologyViewQuery.isFetching &&
+    !ontologyViewQuery.data &&
+    !ontologyFailure;
   const workspaceLoading =
+    workspaceRequested &&
     Boolean(selectedProfileId) &&
-    (profileDetailQuery.isLoading || workspaceRefreshingAfterFailure);
+    (profileDetailQuery.isLoading ||
+      workspaceRefreshingAfterFailure ||
+      workspaceInitialOntologyLoading);
   const workspaceErrorPresentation = workspaceFailure
     ? ontologyWorkspaceErrorPresentation(workspaceFailure)
     : null;
@@ -195,9 +211,9 @@ export function OntologyBuildPage() {
     ? t(ontologyErrorPresentation.key, ontologyErrorPresentation.params)
     : "";
   const handleWorkspaceRetry = useCallback(() => {
-    void profileDetailQuery.refetch();
-  }, [profileDetailQuery]);
-  const ontologyLoadState = !ontologyViewRequested
+    void Promise.all([refetchProfileDetail(), refetchOntologyView()]);
+  }, [refetchOntologyView, refetchProfileDetail]);
+  const ontologyLoadState = !workspaceRequested
     ? "not_loaded"
     : ontologyViewQuery.isFetching && !ontologyViewQuery.data
       ? "loading"
@@ -276,7 +292,7 @@ export function OntologyBuildPage() {
                     variant="primary"
                     size="sm"
                     className="w-full sm:w-auto"
-                    loading={ontologyViewRequested && ontologyViewQuery.isFetching}
+                    loading={workspaceButtonLoading}
                     disabled={!selectedProfileId || profileDetailQuery.isLoading}
                     data-testid="ontology-view-fetch"
                     onClick={handleLoadOntologyView}
@@ -312,11 +328,25 @@ export function OntologyBuildPage() {
           )}
         </DbObjectManagementPanelShell>
 
-        {workspaceLoading ? (
+        {selectedProfileId && !workspaceRequested ? (
+          <DbObjectManagementPanelShell
+            id="ontology-workspace-not-loaded"
+            role="region"
+            ariaLabel={t("ontologyBuild.workspace.notLoadedTitle")}
+            idPrefix="ontology-workspace-not-loaded"
+          >
+            <EmptyState
+              title={t("ontologyBuild.workspace.notLoadedTitle")}
+              hint={t("ontologyBuild.workspace.notLoadedHint")}
+            />
+          </DbObjectManagementPanelShell>
+        ) : workspaceLoading ? (
           <DbManagementLoadingSkeleton
             idPrefix="ontology-workspace"
             ariaLabel={t("ontologyBuild.workspace.loading")}
             variant="detail"
+            operationKey={selectedProfileId}
+            testId="ontology-workspace-loading"
           />
         ) : workspaceFailure ? (
           <ErrorState
