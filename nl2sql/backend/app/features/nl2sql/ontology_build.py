@@ -668,6 +668,9 @@ _NON_ACTIONABLE_PROPOSAL_WARNING_FRAGMENTS = (
     "profile 範囲外のため提案化しません",
     "profile 範囲内に解決できません",
 )
+_INTERNAL_DIAGNOSTIC_WARNING_PATTERNS = (
+    re.compile(r"(?:^|[^A-Za-z0-9_])schema_resolved_[A-Za-z0-9_]*"),
+)
 
 
 def _unique_non_empty_messages(messages: Iterable[str]) -> list[str]:
@@ -680,10 +683,16 @@ def _is_non_actionable_proposal_rejection(message: str) -> bool:
     return any(fragment in message for fragment in _NON_ACTIONABLE_PROPOSAL_WARNING_FRAGMENTS)
 
 
+def _is_internal_diagnostic_warning(message: str) -> bool:
+    return any(pattern.search(message) for pattern in _INTERNAL_DIAGNOSTIC_WARNING_PATTERNS)
+
+
 def _split_ontology_build_warnings(messages: Iterable[str]) -> tuple[list[str], list[str]]:
     actionable: list[str] = []
     proposal_rejections: list[str] = []
     for message in _unique_non_empty_messages(messages):
+        if _is_internal_diagnostic_warning(message):
+            continue
         if _is_non_actionable_proposal_rejection(message):
             proposal_rejections.append(message)
         else:

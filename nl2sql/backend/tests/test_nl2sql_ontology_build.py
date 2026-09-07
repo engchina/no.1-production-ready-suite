@@ -644,6 +644,32 @@ def test_markdown_persists_and_ranks_qa_sql_examples() -> None:
     assert select_qa_sql_examples_from_markdown(markdown, "別件", min_score=0.9) == []
 
 
+def test_internal_schema_resolved_diagnostics_are_not_user_warnings() -> None:
+    internal_warning = "schema_resolved_join_conditionsが空のため自己結合は明示せず。"
+    actionable_warning = "cardinality が未確定のため確認してください。"
+    rejection_warning = "命名候補 APP.SECRET を profile 範囲内に解決できません。"
+
+    actionable, rejections = ontology_build_module._split_ontology_build_warnings(
+        [internal_warning, actionable_warning, rejection_warning]
+    )
+    markdown = render_ontology_build_markdown(
+        profile_id="HR",
+        schema_context=json.dumps({"objects": [], "relationships": []}),
+        drafts=[],
+        warnings=actionable,
+        proposal_rejections=rejections,
+        source_count=0,
+        qa_pair_count=0,
+        business_text_present=False,
+    )
+
+    assert actionable == [actionable_warning]
+    assert rejections == [rejection_warning]
+    assert "schema_resolved_join_conditions" not in markdown
+    assert actionable_warning in markdown
+    assert rejection_warning in markdown
+
+
 def test_build_job_creates_markdown_draft_and_drops_outside_candidates(
     harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
 ) -> None:

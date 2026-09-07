@@ -366,9 +366,16 @@ function isNonActionableOntologyBuildRejection(warning: string): boolean {
   );
 }
 
+function isInternalOntologyBuildDiagnostic(warning: string): boolean {
+  return /(?:^|[^A-Za-z0-9_])schema_resolved_[A-Za-z0-9_]*/u.test(warning);
+}
+
 function visibleOntologyBuildWarnings(job: OntologyBuildJob): string[] {
-  const warnings = job.warnings_ja.map((warning) => warning.trim()).filter(Boolean);
-  if (job.status !== "succeeded") return warnings;
+  const warnings = job.warnings_ja
+    .map((warning) => warning.trim())
+    .filter(Boolean)
+    .filter((warning) => !isInternalOntologyBuildDiagnostic(warning));
+  if (job.status !== "succeeded" && job.status !== "succeeded_with_warnings") return warnings;
   return warnings.filter((warning) => !isNonActionableOntologyBuildRejection(warning));
 }
 
