@@ -41,6 +41,7 @@ from .models import (
 from .ontology_build import (
     OntologyBuildService,
     build_schema_context_from_catalog,
+    qa_sql_patterns_from_markdown,
     qa_sql_patterns_from_pairs,
     select_qa_sql_examples_from_markdown,
 )
@@ -2913,8 +2914,11 @@ class OntologyApiRuntime:
             published_markdown,
             intent.question_effective,
         )
+        qa_sql_patterns = qa_sql_patterns_from_markdown(published_markdown)
+        if not qa_sql_patterns:
+            qa_sql_patterns = qa_sql_patterns_from_pairs(qa_sql_examples)
         payload["qa_sql_examples"] = [item.model_dump(mode="json") for item in qa_sql_examples]
-        payload["qa_sql_patterns"] = qa_sql_patterns_from_pairs(qa_sql_examples)
+        payload["qa_sql_patterns"] = qa_sql_patterns
         payload["llm_markdown"] = (
             published_markdown
             or build_semantic_artifacts(
