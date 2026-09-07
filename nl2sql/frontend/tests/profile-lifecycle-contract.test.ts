@@ -81,8 +81,16 @@ test("Ontology publish refreshes the grounding graph without a Mermaid UI export
   assert.match(ontologyBuildSection, /void onPublished\?\.\(\)/u);
 });
 
-test("Ontology view is loaded only by the explicit fetch action", () => {
-  assert.match(ontologyPage, /useProfileOntologyView\(selectedProfileId, false\)/u);
+test("Ontology workspace is loaded only by the explicit fetch action", () => {
+  assert.match(ontologyPage, /const workspaceRequested =/u);
+  assert.match(
+    ontologyPage,
+    /useProfileDetail\(workspaceRequested \? selectedProfileId : ""\)/u
+  );
+  assert.match(ontologyPage, /useProfileOntologyView\(selectedProfileId, workspaceRequested\)/u);
+  assert.doesNotMatch(ontologyPage, /useProfileDetail\(selectedProfileId\)/u);
+  assert.match(ontologyPage, /id="ontology-workspace-not-loaded"/u);
+  assert.match(ontologyPage, /testId="ontology-workspace-loading"/u);
   assert.match(ontologyPage, /data-testid="ontology-view-fetch"/u);
   assert.match(ontologyPage, /setOntologyViewRequestedProfileId\(""\)/u);
   assert.match(ontologyQueryPlayground, /loadState === "not_loaded"/u);
