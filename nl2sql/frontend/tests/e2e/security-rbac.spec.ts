@@ -1095,7 +1095,7 @@ test("SQL 生成だけのユーザーは profile を利用できるが管理メ�
   await page.goto("/query");
   const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
   await expect(sidebar.getByRole("link", { name: "SQL 生成" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "検索を実行" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "SQL を生成して実行" })).toBeVisible();
   await expect(page.locator("#nl2sql-profile-select")).toContainText("標準プロファイル");
   await expect(page).toHaveURL(/\/query$/);
   await expect(sidebar.getByText("業務プロファイル", { exact: true })).toHaveCount(0);
@@ -1441,7 +1441,7 @@ test("SQL 生成だけのユーザーは結果接地で ontology 管理 API の 
   await page.goto("/query");
   await expect(page.locator("#nl2sql-profile-select")).toContainText("標準プロファイル");
   await page.locator("#nl2sql-question-input").fill(question);
-  await page.getByRole("button", { name: "検索を実行" }).click();
+  await page.getByRole("button", { name: "SQL を生成して実行" }).click();
 
   await expect(page).toHaveURL(/\/query$/);
   await expect(page.getByText("開発部")).toBeVisible();
@@ -1626,7 +1626,7 @@ test("SQL 生成だけのユーザーは空 schema 失敗時にサンプルデ�
   await page.goto("/query");
   await expect(page.locator("#nl2sql-profile-select")).toContainText("標準プロファイル");
   await page.locator("#nl2sql-question-input").fill("すべてプロジェクトを教えてください。");
-  await page.getByRole("button", { name: "検索を実行" }).click();
+  await page.getByRole("button", { name: "SQL を生成して実行" }).click();
 
   const progress = page.getByTestId("nl2sql-job-progress");
   await expect(progress).toHaveAttribute("data-job-status", "error");

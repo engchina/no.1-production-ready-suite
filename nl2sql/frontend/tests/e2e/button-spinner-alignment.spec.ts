@@ -157,9 +157,9 @@ async function startPendingRun(page: Page) {
   await mockWorkbenchWithPendingJob(page);
   await page.goto("/query");
   await page.locator("#nl2sql-question-input").fill("請求金額を確認したい");
-  await page.getByRole("button", { name: "検索を実行" }).click();
+  await page.getByRole("button", { name: "SQL を生成して実行" }).click();
 
-  const button = page.getByRole("button", { name: "検索を実行" });
+  const button = page.getByRole("button", { name: "SQL を生成して実行" });
   const spinner = button.locator(LOADING_ICON_SELECTOR);
   await expect(spinner).toBeVisible();
   return { button, spinner };

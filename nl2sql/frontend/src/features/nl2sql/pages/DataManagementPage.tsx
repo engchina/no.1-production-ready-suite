@@ -1925,7 +1925,7 @@ function CsvUploadWorkspace({
                 <span>{t("dataMgmt.csv.upload")}</span>
               </Button>
               <ClearActionButton size="lg"
-                label={t("dbAdmin.runner.clear")}
+                label={t("dbAdmin.import.actions.clear")}
                 matchButtonHeight
                 className="w-full sm:w-auto"
                 disabled={!canClearUpload || loading}
@@ -2381,7 +2381,7 @@ function SyntheticWorkspace({
                   <span>{t("dataTools.syntheticData.generate")}</span>
                 </Button>
                 <ClearActionButton size="lg"
-                  label={t("dbAdmin.runner.clear")}
+                  label={t("dataTools.syntheticData.actions.clear")}
                   matchButtonHeight
                   className="w-full sm:w-auto"
                   disabled={

@@ -1289,7 +1289,7 @@ function ProfileEditor({
               <span>{t("profiles.action.save")}</span>
             </Button>
             <ClearActionButton
-              label={t("dbAdmin.runner.clear")}
+              label={t("profiles.oracle.actions.clear")}
               matchButtonHeight
               size="lg"
               className="w-full sm:w-auto"

@@ -1203,7 +1203,7 @@ test("データプレビューは検索・所有者・種別フィルタを共�
   await kindFilter.selectOption("all");
   await page.getByRole("button", { name: "APP.TABLE_01 を選択" }).click();
   const previewShowButton = page.getByRole("button", { name: "データを表示", exact: true });
-  const previewClearButton = page.getByRole("button", { name: "クリア", exact: true });
+  const previewClearButton = page.getByRole("button", { name: "表示結果をクリア", exact: true });
   await expect(previewShowButton).toBeEnabled();
   await expect(previewClearButton).toBeDisabled();
   await previewShowButton.click();

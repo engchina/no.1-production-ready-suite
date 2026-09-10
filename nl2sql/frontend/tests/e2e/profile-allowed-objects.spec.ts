@@ -2483,7 +2483,7 @@ test("保存が成功したら実行確認語をクリアして保存ボタン�
   const saveButton = page.getByRole("button", { name: "保存", exact: true });
   const clearButton = page
     .getByTestId("execution-confirmation-field")
-    .getByRole("button", { name: "クリア", exact: true });
+    .getByRole("button", { name: "実行確認をクリア", exact: true });
 
   await page.getByLabel("名称").fill("sales_profile");
   await page.getByLabel("カテゴリ").fill("finance");

@@ -1048,7 +1048,7 @@ export function StatementRunnerCard({
         <>
           {runButton}
           <ClearActionButton
-            label={t("workspace.clearInput")}
+            label={t("nl2sql.action.clearSql")}
             matchButtonHeight
             size="lg"
             className="w-full sm:w-auto"
@@ -1099,7 +1099,7 @@ export function StatementRunnerCard({
           }}
         >
           <X size={15} aria-hidden="true" />
-          <span>{t("workspace.clearInput")}</span>
+          <span>{t("nl2sql.action.clearSql")}</span>
         </Button>
       </div>
       <div className="grid gap-3">
