@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from datetime import datetime
 from typing import Any
@@ -30,6 +31,23 @@ def capture_session(conn: Any) -> dict[str, Any]:
         }
 
 
+def is_prompt_validation_rejection(message: str) -> bool:
+    """今回確認した JSON null の引数拒否だけを識別。一般の ORA-20000 は含めない。"""
+    match = re.search(
+        r"ORA-20000: Missing value for user_prompt in (\{[^\n]+\}) in argument object_list(?:\n|$)",
+        message,
+    )
+    if not match:
+        return False
+    try:
+        argument = json.loads(match.group(1))
+    except (ValueError, TypeError):
+        return False
+    return (
+        isinstance(argument, dict) and "user_prompt" in argument and argument["user_prompt"] is None
+    )
+
+
 def inspect_operation(adapter: OracleNl2SqlAdapter, run: SyntheticRun) -> SyntheticRun:
     """別接続から対象 session の operation/chunk を読み、実数だけを反映する。"""
     if not run.session:
@@ -43,6 +61,25 @@ def inspect_operation(adapter: OracleNl2SqlAdapter, run: SyntheticRun) -> Synthe
         )
         operations = cur.fetchall()
         if not operations:
+            # 引数拒否で戻り、対応 operation がなく元 session も終了したものだけを確定する。
+            # timeout / 切断 / worker 消失 / 一般的な Oracle エラーの lock は解除しない。
+            if (
+                run.execution_returned
+                and not run.operation_ids
+                and all(target.loaded_rows is None for target in run.targets)
+                and is_prompt_validation_rejection(run.message)
+            ):
+                cur.execute(
+                    "SELECT STATUS FROM V$SESSION WHERE SID=:sid AND SERIAL#=:serial",
+                    {"sid": run.session["sid"], "serial": run.session["serial"]},
+                )
+                if cur.fetchone() is None:
+                    run.status = "failed"
+                    run.failure_phase = "validation"
+                    for target in run.targets:
+                        target.status = "failed"
+                        target.loaded_rows = 0
+                        target.error = "Oracle に生成要求が受理されませんでした。"
             return run
         # 単一呼出しに対応しない曖昧な記録を流用しない。
         if len(operations) != 1:

@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 from pr_backend_core import ApiResponse
 
 from .synthetic_models import SyntheticRunRequest
@@ -12,8 +12,11 @@ router = APIRouter(prefix="/synthetic-data", tags=["synthetic-data"])
 
 
 @router.post("/runs", status_code=202, response_model=ApiResponse[dict[str, Any]])
-def create_run(req: SyntheticRunRequest, request: Request) -> ApiResponse[dict[str, Any]]:
+def create_run(
+    req: SyntheticRunRequest, request: Request, response: Response
+) -> ApiResponse[dict[str, Any]]:
     run = get_synthetic_service().create(req, getattr(request.state, "principal", None))
+    response.headers["Location"] = f"/api/nl2sql/synthetic-data/runs/{run.run_id}"
     return ApiResponse(data=run.public())
 
 

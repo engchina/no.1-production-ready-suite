@@ -2659,7 +2659,7 @@ class OracleNl2SqlAdapter:
                                     "owner": identity.owner,
                                     "name": identity.object_name,
                                     "record_count": int(row_count),
-                                    "user_prompt": user_prompt or None,
+                                    **({"user_prompt": user_prompt} if user_prompt.strip() else {}),
                                 }
                                 for identity in object_identities
                             ],

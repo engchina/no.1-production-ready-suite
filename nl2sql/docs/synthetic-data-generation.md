@@ -82,3 +82,24 @@ Playwright は desktop / mobile-375 で再読込、状態、通知、空結果�
 `NL2SQL_SYNTHETIC_LIVE_TEST=1 uv run pytest tests/test_nl2sql_synthetic_oracle_live.py`
 は独立した一時メタデータ表を作成・削除し、実 Oracle の CLOB/JSON、CAS、lock 競合 rollback を検証する。
 このテストは業務表・生成プロシージャを変更/実行しない。
+
+## 生成番号と引数拒否の追跡
+
+受理時に生成番号 (`run_id`) を払い出し、202 応答の body と `Location` header の
+`/api/nl2sql/synthetic-data/runs/{run_id}` から個別状況を取得できる。画面では生成番号と
+最終 Oracle 確認時刻を折りたたまず表示する。HTTP 200 は取得成功だけを意味し、
+生成が続いているかどうかは `status` / `checked_at` / `operation_ids` で判断する。
+backend は受理・開始・結果変化時に `synthetic_run_state run_id=... status=...`
+を記録し、prompt や credential は log に含めない。
+
+[No.1-SQL-Assist の固定版](https://github.com/engchina/No.1-SQL-Assist/blob/cacd0959a5fa2a279cb1147de2d04e5a9b01815f/utils/selectai_util.py#L6542)
+と [Oracle のパラメータ仕様](https://docs.oracle.com/en/database/oracle/oracle-database/19/arpls/dbms_cloud_ai1.html)
+に合わせ、複数表の `object_list` で空の `user_prompt` はキーごと省略する。指定された
+プロンプトは各対象に保持する。JSON null を含めると Oracle は
+`Missing value for user_prompt ... in argument object_list` で拒否する。
+
+過去の `unknown` も、この特定の引数拒否・呼出しからの戻り・対応 operation の不在・
+元 session の終了を確認でき、過去に operation / 書込み件数を観測していない場合に限り
+`failed` / 0 件 (`failure_phase=validation`) に確定する。これにより重複防止 lock を
+通常の終端処理で解放する。汎用 ORA-20000・timeout・監視失敗はこの処理の対象外。
+新規生成はユーザーの再実行操作を必要とし、worker は失敗記録を自動再送しない。

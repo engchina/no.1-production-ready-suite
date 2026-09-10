@@ -21,6 +21,7 @@ export interface SyntheticRun {
   checked_at: string | null;
   message: string;
   operation_ids: number[];
+  failure_phase?: "validation" | null;
 }
 export const runFinished = (run: SyntheticRun) => ["completed", "partial", "failed", "no_data"].includes(run.status);
 export const runLabel = (run: SyntheticRun) => t(`syntheticRun.status.${run.status}`);
@@ -93,21 +94,27 @@ export function SyntheticRunPanel({ run, runs, onSelect, error, onRefresh, onVie
         placement="job"
         testId="synthetic-run-processing"
       />}
+      <p className="break-all text-sm" data-testid="synthetic-run-reference">{t("syntheticRun.reference", { id: run.run_id })}</p>
+      <p className="text-sm text-muted-foreground" data-testid="synthetic-run-checked">
+        {t("syntheticRun.checkedAt", { time: formatDateTime(run.checked_at) })}
+      </p>
       {run.status === "unknown" && <p className="text-sm text-muted-foreground">{t("syntheticRun.unknownHint")}</p>}
       {!runFinished(run) && !error && run.status !== "unknown" && <p className="text-sm text-muted-foreground">{t("syntheticRun.continues")}</p>}
       <div className="grid gap-2">
         {run.targets.map((target) => <div key={target.table_name} className="grid min-w-0 gap-1 rounded border border-border bg-card p-3 text-sm">
           <strong className="break-all">{target.table_name}</strong>
           <span>{t("syntheticRun.count", { requested: target.requested_rows, loaded: target.loaded_rows ?? t("syntheticRun.unverified") })}</span>
-          <span>{t("syntheticRun.targetStatus", { status: targetStatusLabel(target.status) })}</span>
+          <span>{t("syntheticRun.targetStatus", { status: targetStatusLabel(run.status === "unknown" && target.status === "pending" ? "unknown" : target.status) })}</span>
           {target.error && <p className="break-words text-danger">{target.error}</p>}
         </div>)}
       </div>
-      {run.message && <Banner severity="warning">{run.message}</Banner>}
+      {run.failure_phase === "validation" && <Banner severity="danger">{t("syntheticRun.validationFailed")}</Banner>}
+      {run.message && !run.failure_phase && <Banner severity={run.status === "failed" ? "danger" : "warning"}>{run.message}</Banner>}
       {run.finished_at && <p className="text-sm text-muted-foreground">{t("syntheticRun.finishedAt", { time: formatDateTime(run.finished_at) })}</p>}
       <details className="text-sm"><summary className="cursor-pointer">{t("syntheticRun.details")}</summary>
-        <p className="break-all">{t("syntheticRun.reference", { id: run.run_id })}</p>
-        <p>{t("syntheticRun.oracleReference", { id: run.operation_ids.join(", ") || t("syntheticRun.unverified") })}</p>
+        <p>{t("syntheticRun.oracleReference", { id: run.operation_ids.join(", ") || t(run.failure_phase === "validation" ? "syntheticRun.notAccepted" : "syntheticRun.unverified") })}</p>
+        {run.failure_phase === "validation" && <p className="break-words">{run.message}</p>}
+        <Link className="text-primary underline" to={`/data-management?synthetic_run=${encodeURIComponent(run.run_id)}`}>{t("syntheticRun.openRecord")}</Link>
       </details>
     </>}
     {runs.length > 0 && <label className="grid gap-1 text-sm">{t("syntheticRun.history")}

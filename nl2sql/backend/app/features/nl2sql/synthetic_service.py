@@ -182,7 +182,9 @@ class SyntheticService:
             ],
         )
         try:
-            return self.store.create(run)
+            saved = self.store.create(run)
+            self.log_state(saved)
+            return saved
         except SyntheticConflict as exc:
             raise HTTPException(409, str(exc)) from exc
 
@@ -197,13 +199,26 @@ class SyntheticService:
         actor = authorize(principal)
         return self.store.list(self.context, actor.user_uuid)
 
+    @staticmethod
+    def log_state(run: SyntheticRun) -> None:
+        logger.info(
+            "synthetic_run_state run_id=%s status=%s oracle_operation_ids=%s",
+            run.run_id,
+            run.status,
+            run.operation_ids,
+            extra={"run_id": run.run_id, "status": run.status, "operation_ids": run.operation_ids},
+        )
+
     def update(self, run_id: str, fn: Callable[[SyntheticRun], None]) -> None:
         for _ in range(10):
             run = self.store.get(run_id)
             if not run or run.status in TERMINAL:
                 return
+            previous_status = run.status
             fn(run)
             if self.store.save(run):
+                if run.status != previous_status:
+                    self.log_state(run)
                 return
         raise RuntimeError("生成状態の競合により更新できません。")
 
@@ -268,6 +283,7 @@ class SyntheticService:
     def reconcile(self, run: SyntheticRun) -> None:
         if run.status == "pending" or run.status in TERMINAL:
             return
+        previous_state = (run.status, tuple(run.operation_ids))
         try:
             latest = inspect_operation(self.adapter, run)
             latest.checked_at = now()
@@ -285,12 +301,20 @@ class SyntheticService:
                     or "対応する Oracle 実行結果を確認できません。"
                     "再生成せず状態を再確認してください。"
                 )
-            self.store.save(latest)
+            if self.store.save(latest) and previous_state != (
+                latest.status,
+                tuple(latest.operation_ids),
+            ):
+                self.log_state(latest)
         except Exception:
             logger.warning("synthetic_run_reconciliation_failed", extra={"run_id": run.run_id})
             run.status = "unknown"
-            run.message = "Oracle の生成状況を取得できません。処理を再送せず確認を続けています。"
-            self.store.save(run)
+            run.message = (
+                run.message
+                or "Oracle の生成状況を取得できません。処理を再送せず確認を続けています。"
+            )
+            if self.store.save(run) and previous_state[0] != run.status:
+                self.log_state(run)
 
     def tick(self) -> None:
         # CAS で pending→running を一度だけ claim。期限切れでも生成を再実行しない。
@@ -300,6 +324,7 @@ class SyntheticService:
                 if run.status == "pending" and len(self._threads) < 2:
                     run.status, run.started_at = "running", now()
                     if self.store.save(run):
+                        self.log_state(run)
                         thread = threading.Thread(
                             target=self.execute, args=(run.run_id,), daemon=True
                         )

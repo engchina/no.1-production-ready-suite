@@ -45,6 +45,7 @@ class SyntheticRun(BaseModel):
     message: str = ""
     session: dict[str, Any] = Field(default_factory=dict)
     operation_ids: list[int] = Field(default_factory=list)
+    failure_phase: Literal["validation"] | None = None
     execution_returned: bool = False
     version: int = 0
 

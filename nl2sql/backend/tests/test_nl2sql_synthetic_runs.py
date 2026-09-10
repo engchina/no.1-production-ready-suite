@@ -1,16 +1,19 @@
 """受付の幂等性・再認可・回復・Oracle の実件数を境界から検証する。"""
 
+import json
+import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any, cast
-from unittest.mock import Mock
+from unittest.mock import MagicMock, Mock
 
 import pytest
 from fastapi import HTTPException
 
 from app.features.nl2sql import synthetic_service as module
+from app.features.nl2sql.oracle_adapter import OracleNl2SqlAdapter
 from app.features.nl2sql.synthetic_models import SyntheticRun, SyntheticRunRequest, SyntheticTarget
 from app.features.nl2sql.synthetic_oracle import inspect_operation
 from app.features.nl2sql.synthetic_service import SyntheticService
@@ -91,6 +94,9 @@ class OracleFixture:
 
     def execute(self, sql: Any, params: Any = None) -> Any:
         self.calls.append((sql, params))
+
+    def fetchone(self) -> Any:
+        return None
 
     def fetchall(self) -> Any:
         return self.operations if len(self.calls) % 2 else self.chunks
@@ -305,6 +311,7 @@ async def test_api_returns_202_without_work_and_scopes_reads(
         replay = await client.post("/api/nl2sql/synthetic-data/runs", json=request().model_dump())
         assert replay.json()["data"]["run_id"] == body["run_id"]
         path = "/api/nl2sql/synthetic-data/runs/" + body["run_id"]
+        assert response.headers["Location"] == path
         assert (await client.get(path)).status_code == 200
         assert (await client.get(path + "/results?table_name=APP.OTHER")).status_code == 400
         assert (await client.get(path + "/results?table_name=APP.T&limit=0")).status_code == 422
@@ -370,3 +377,109 @@ def test_worker_debug_identity_requires_current_explicit_debug_mode(
     monkeypatch.setattr(security, "get_settings", lambda: Mock(local_debug_enabled=False))
     with pytest.raises(security.SecurityApiError):
         resolver.principal_for_worker(LOCAL_DEBUG_USER_UUID)
+
+
+@pytest.mark.parametrize("prompt", ["", "  \n ", "日本語の部署名を生成してください。"])
+@pytest.mark.parametrize("multiple", [False, True])
+def test_oracle_synthetic_optional_prompt_contract(
+    monkeypatch: pytest.MonkeyPatch, prompt: str, multiple: bool
+) -> None:
+    adapter = OracleNl2SqlAdapter(Settings(_env_file=None, oracle_user="APP"))
+    conn = MagicMock()
+    cursor = conn.cursor.return_value.__enter__.return_value
+
+    @contextmanager
+    def connection() -> Iterator[Any]:
+        yield conn
+
+    monkeypatch.setattr(adapter, "connection", connection)
+    adapter.generate_synthetic_data(
+        table_name="" if multiple else "APP.T",
+        object_list=["APP.T", "APP.U"] if multiple else [],
+        row_count=2,
+        profile_name="P",
+        user_prompt=prompt,
+        sample_rows=5,
+    )
+    sql, binds = cursor.execute.call_args.args
+    if multiple:
+        assert "object_list => :object_list" in sql
+        objects = json.loads(binds["object_list"])
+        assert [value["name"] for value in objects] == ["T", "U"]
+        for value in objects:
+            assert value["owner"] == "APP" and value["record_count"] == 2
+            if prompt.strip():
+                assert value["user_prompt"] == prompt
+            else:
+                assert "user_prompt" not in value
+    else:
+        assert binds["user_prompt"] == (prompt or None)
+    assert json.loads(binds["params"]) == {"comments": True, "sample_rows": 5}
+    conn.commit.assert_called_once()
+
+
+PROMPT_REJECTION = (
+    "DBMS_CLOUD_AI.GENERATE_SYNTHETIC_DATA に失敗しました: "
+    "ORA-20000: Missing value for user_prompt in "
+    '{"owner":"APP","name":"T","record_count":2,"user_prompt":null} '
+    "in argument object_list\nORA-06512: at line 2"
+)
+
+
+@pytest.mark.parametrize(
+    "evidence",
+    [
+        "rejected",
+        "active_session",
+        "no_return",
+        "other_error",
+        "unreadable",
+        "observed_operation",
+        "observed_rows",
+    ],
+)
+def test_recover_only_proven_prompt_rejection_without_operation_or_session(
+    service: Any, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, evidence: str
+) -> None:
+    caplog.set_level(logging.INFO)
+    created = service.create(request(), actor())
+    created.status = "unknown"
+    created.execution_returned = evidence != "no_return"
+    if evidence == "observed_operation":
+        created.operation_ids = [42]
+    if evidence == "observed_rows":
+        created.targets[0].loaded_rows = 1
+    created.message = (
+        PROMPT_REJECTION if evidence != "other_error" else "ORA-20000: Operation failed"
+    )
+    created.session = {
+        "sid": 7,
+        "serial": 9,
+        "username": "APP",
+        "since": datetime.now(UTC).isoformat(),
+    }
+    service.store.save(created)
+    adapter = OracleFixture([], [])
+    if evidence == "active_session":
+        monkeypatch.setattr(adapter, "fetchone", lambda: ("ACTIVE",))
+    elif evidence == "unreadable":
+        monkeypatch.setattr(adapter, "fetchone", Mock(side_effect=RuntimeError("unavailable")))
+    service.adapter = adapter
+    service.reconcile(service.store.get(created.run_id))
+    result = service.store.get(created.run_id)
+    assert result.operation_ids == ([42] if evidence == "observed_operation" else [])
+    if evidence == "rejected":
+        assert result.status == "failed" and result.failure_phase == "validation"
+        assert result.targets[0].loaded_rows == 0 and result.targets[0].status == "failed"
+        assert result.finished_at and result.checked_at
+        service.store.create(created.model_copy(update={"run_id": "new", "idempotency_key": "new"}))
+        assert f"run_id={result.run_id} status=failed" in caplog.text
+        assert "user_prompt" not in caplog.text
+    else:
+        assert result.status == "unknown" and result.failure_phase is None
+        assert result.targets[0].loaded_rows == (1 if evidence == "observed_rows" else None)
+        assert result.finished_at is None
+        with pytest.raises(SyntheticConflict):
+            service.store.create(
+                created.model_copy(update={"run_id": "new", "idempotency_key": "new"})
+            )

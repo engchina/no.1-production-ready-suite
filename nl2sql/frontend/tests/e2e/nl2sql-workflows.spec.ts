@@ -10397,6 +10397,8 @@ test("synthetic waiting uses shared live timing beside the action and freezes du
   const processing = page.getByTestId("synthetic-run-processing");
   const timer = processing.getByRole("timer");
   await expect(panel.getByTestId("synthetic-run-status")).toHaveText("受付済み・開始を待っています");
+  await expect(panel.getByTestId("synthetic-run-reference")).toHaveText("生成番号: run-001");
+  await expect(panel.getByTestId("synthetic-run-checked")).toBeVisible();
   await expect(timer).toBeInViewport();
   await expect(processing).toHaveAttribute("data-processing-placement", "job");
   await expect(timer).toHaveAttribute("aria-live", "off");
@@ -10470,6 +10472,34 @@ test("synthetic new submission replaces a history link and history keeps its own
   await panel.getByLabel("生成履歴").selectOption("run-002");
   await expect(panel.getByRole("timer")).toHaveAccessibleName(/経過時間 01:/);
   expect(writes).toBe(1);
+});
+
+test("synthetic validation rejection shows its reference and zero rows without an active job", async ({ page }, testInfo) => {
+  await mockNl2SqlApi(page);
+  const run = {
+    ...syntheticRunFixture("failed"),
+    run_id: "a3a76960-5e1a-459c-80b2-1ba182796b65",
+    operation_ids: [], failure_phase: "validation",
+    message: 'ORA-20000: Missing value for user_prompt in {"user_prompt":null} in argument object_list',
+  };
+  await page.route("**/api/nl2sql/synthetic-data/runs", (route) => fulfillJson(route, [run]));
+  await page.goto(`/data-management?synthetic_run=${run.run_id}`);
+  const panel = page.getByTestId("synthetic-run-panel");
+  await expect(panel.getByTestId("synthetic-run-reference")).toHaveText(`生成番号: ${run.run_id}`);
+  await expect(panel.getByTestId("synthetic-run-checked")).toContainText("生成状況の最終確認:");
+  await expect(panel.getByTestId("synthetic-run-status")).toHaveText("データを生成できませんでした");
+  await expect(panel).toContainText("今回の追加件数: 0 件");
+  await expect(panel.getByRole("alert")).toContainText("データは追加されませんでした");
+  await expect(panel.locator('[data-loading-icon="true"]')).toHaveCount(0);
+  await expect(panel.getByText(run.message)).not.toBeVisible();
+  await panel.locator("summary").focus();
+  await page.keyboard.press("Enter");
+  await expect(panel.getByText(run.message)).toBeVisible();
+  await expect(panel).toContainText("Oracle 実行番号: 未受理（実行記録なし）");
+  await expect(panel.getByRole("link", { name: "この生成記録を開く" })).toHaveAttribute("href", `/data-management?synthetic_run=${run.run_id}`);
+  await panel.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("synthetic-validation-rejected.png") });
+  await expectNoHorizontalScroll(page);
 });
 
 test("synthetic run status outage keeps prior state and never resubmits", async ({ page }) => {
