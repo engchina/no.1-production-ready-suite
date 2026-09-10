@@ -26,6 +26,7 @@ export interface SyntheticRun {
   failure_phase?: "validation" | null;
 }
 export const runFinished = (run: SyntheticRun) => ["completed", "partial", "failed", "no_data"].includes(run.status);
+export const historyExpired = (run: SyntheticRun) => runFinished(run) && Date.parse(run.finished_at ?? run.created_at) < Date.now() - 24 * 60 * 60_000;
 export const runLabel = (run: SyntheticRun) => t(`syntheticRun.status.${run.status}`);
 
 export function useSyntheticRuns() {
@@ -74,6 +75,7 @@ export function SyntheticRunPanel({ run, runs, onSelect, error, onRefresh, onVie
   run: SyntheticRun | null; runs: SyntheticRun[]; onSelect: (id: string) => void;
   error: boolean; submitting?: boolean; onRefresh: () => Promise<SyntheticRun | null>; onViewResults?: () => void;
 }) {
+  const history = runs.filter((item) => !historyExpired(item));
   const [refresh, setRefresh] = useState<{ scope: string; pending: boolean; failed: boolean; message: string } | null>(null);
   const scope = `${run?.run_id ?? ""}:${submitting}`;
   const refreshSequence = useRef(0);
@@ -159,11 +161,13 @@ export function SyntheticRunPanel({ run, runs, onSelect, error, onRefresh, onVie
       </details>
     </>}
     {runs.some((item) => !runFinished(item)) && <p className="text-sm text-muted-foreground">{t("syntheticRun.independentRuns")}</p>}
-    {runs.length > 0 && <label className="grid gap-1 text-sm">{t("syntheticRun.history")}
+    {history.length > 0 && <label className="grid gap-1 text-sm">{t("syntheticRun.history")}
       <select disabled={submitting} value={run?.run_id ?? ""} onChange={(e) => onSelect(e.target.value)} className="h-11 min-w-0 rounded-md border border-border bg-card px-3">
-        {runs.map((r) => <option key={r.run_id} value={r.run_id}>{formatDateTime(r.created_at)} · {runLabel(r)} · {r.targets.map((target) => target.table_name).join(", ")} · {r.run_id.slice(0, 8)}</option>)}
+        {!run && <option value="" disabled>{t("syntheticRun.selectHistory")}</option>}
+        {history.map((r) => <option key={r.run_id} value={r.run_id}>{formatDateTime(r.created_at)} · {runLabel(r)} · {r.targets.map((target) => target.table_name).join(", ")} · {r.run_id.slice(0, 8)}</option>)}
       </select>
     </label>}
+    <p className="text-xs text-muted-foreground">{t("syntheticRun.retention")}</p>
     <div className="flex flex-wrap gap-2">
       {!submitting && run && runFinished(run) && onViewResults && <Button variant="primary" size="sm" onClick={onViewResults}>{t("syntheticRun.goToResults")}</Button>}
       <Button variant="secondary" size="sm" loading={feedback?.pending} aria-busy={feedback?.pending || undefined} onClick={() => void refreshStatus()}>{t(feedback?.pending ? "syntheticRun.refreshing" : "syntheticRun.refresh")}</Button>

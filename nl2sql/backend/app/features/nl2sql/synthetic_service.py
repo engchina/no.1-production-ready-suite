@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import threading
+import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
@@ -72,6 +73,7 @@ class SyntheticService:
         )
         self._threads: dict[str, threading.Thread] = {}
         self._thread_lock = threading.Lock()
+        self._last_history_cleanup = float("-inf")
 
     def preflight(self, names: list[str], profile_name: str) -> dict[str, int]:
         if self.settings.nl2sql_persistence_mode != "oracle":
@@ -161,6 +163,7 @@ class SyntheticService:
         digest = hashlib.sha256(
             json.dumps(payload, sort_keys=True, ensure_ascii=False).encode()
         ).hexdigest()
+        self.store.purge_expired(self.context, actor.user_uuid)
         old = self.store.by_key(actor.user_uuid, self.context, request.idempotency_key)
         if old:
             if old.request_hash != digest:
@@ -193,10 +196,13 @@ class SyntheticService:
         run = self.store.get(run_id)
         if not run or run.actor_id != actor.user_uuid or run.context_id != self.context:
             raise HTTPException(404, "生成記録が見つかりません。")
+        if run.history_expired():
+            raise HTTPException(404, "生成記録の保存期間（処理終了から24時間）を過ぎています。")
         return run
 
     def list(self, principal: Principal | None) -> list[SyntheticRun]:
         actor = authorize(principal)
+        self.store.purge_expired(self.context, actor.user_uuid)
         return self.store.list(self.context, actor.user_uuid)
 
     @staticmethod
@@ -319,6 +325,9 @@ class SyntheticService:
     def tick(self) -> None:
         # CAS で pending→running を一度だけ claim。期限切れでも生成を再実行しない。
         with self._thread_lock:
+            if time.monotonic() - self._last_history_cleanup >= 60:
+                self.store.purge_expired(self.context)
+                self._last_history_cleanup = time.monotonic()
             self._threads = {k: t for k, t in self._threads.items() if t.is_alive()}
             for run in reversed(self.store.list(self.context, active=True)):
                 if run.status == "pending" and len(self._threads) < 2:

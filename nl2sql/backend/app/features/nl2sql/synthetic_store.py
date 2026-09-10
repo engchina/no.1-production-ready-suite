@@ -5,6 +5,7 @@ from __future__ import annotations
 import threading
 from collections.abc import Callable
 from contextlib import AbstractContextManager
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from .synthetic_models import TERMINAL, SyntheticRun
@@ -63,6 +64,53 @@ class SyntheticStore:
         with self._lock:
             r = self._runs.get(run_id)
             return r.model_copy(deep=True) if r else None
+
+    def purge_expired(
+        self, context: str, actor: str | None = None, *, at: datetime | None = None
+    ) -> int:
+        at = at or datetime.now(UTC)
+        if self.connection:
+            with self.connection() as conn, conn.cursor() as cur:
+                cur.execute(
+                    "SELECT PAYLOAD FROM NL2SQL_SYNTHETIC_RUNS WHERE CONTEXT_ID=:ctx "
+                    "AND (:actor IS NULL OR ACTOR_ID=:actor) "
+                    "AND STATUS IN ('completed','partial','failed','no_data') "
+                    "AND CREATED_AT < :cutoff",
+                    {
+                        "ctx": context,
+                        "actor": actor,
+                        "cutoff": (at - timedelta(hours=24)).isoformat(),
+                    },
+                )
+                expired = [self.decode(row[0]) for row in cur.fetchall()]
+                deleted = 0
+                for run in expired:
+                    if not run.history_expired(at):
+                        continue
+                    cur.execute(
+                        "DELETE FROM NL2SQL_SYNTHETIC_LOCKS WHERE RUN_ID=:id",
+                        {"id": run.run_id},
+                    )
+                    cur.execute(
+                        "DELETE FROM NL2SQL_SYNTHETIC_RUNS WHERE RUN_ID=:id "
+                        "AND VERSION_NO=:version AND STATUS IN "
+                        "('completed','partial','failed','no_data')",
+                        {"id": run.run_id, "version": run.version},
+                    )
+                    deleted += cur.rowcount
+                conn.commit()
+                return deleted
+        with self._lock:
+            expired_ids = [
+                run.run_id
+                for run in self._runs.values()
+                if run.context_id == context
+                and (actor is None or run.actor_id == actor)
+                and run.history_expired(at)
+            ]
+            for run_id in expired_ids:
+                del self._runs[run_id]
+            return len(expired_ids)
 
     def by_key(self, actor: str, context: str, key: str) -> SyntheticRun | None:
         if self.connection:

@@ -3,6 +3,7 @@
 import os
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -114,6 +115,43 @@ def test_oracle_persistence_roundtrip_and_conflict_rollback() -> None:
         assert not store.save(value)  # compare-and-swap fencing
         assert store.get(independent.run_id).status == "pending"
         assert len(store.list("test")) == 2
+        with connection() as conn, conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM NL2SQL_SYNTHETIC_LOCKS")
+            assert cur.fetchone()[0] == 0
+        at = datetime.now(UTC)
+        old = (at - timedelta(days=3)).isoformat()
+        cutoff = (at - timedelta(hours=24)).isoformat()
+        for name, status, finished, context in [
+            ("expired", "completed", old, "test"),
+            ("boundary", "failed", cutoff, "test"),
+            ("recent-finish", "partial", at.isoformat(), "test"),
+            ("unknown", "unknown", None, "test"),
+            ("other", "no_data", old, "other"),
+        ]:
+            store.create(
+                value.model_copy(
+                    update={
+                        "run_id": name,
+                        "idempotency_key": name,
+                        "status": status,
+                        "created_at": old,
+                        "finished_at": finished,
+                        "context_id": context,
+                    }
+                )
+            )
+        with connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO NL2SQL_SYNTHETIC_LOCKS (CONTEXT_ID,TARGET_NAME,RUN_ID) "
+                "VALUES ('test','APP.EXPIRED_FIXTURE','expired')"
+            )
+            conn.commit()
+        assert store.purge_expired("test", "test", at=at) == 1
+        assert store.get("expired") is None
+        assert store.by_key("test", "test", "expired") is None
+        for name in ["boundary", "recent-finish", "unknown", "other"]:
+            assert store.get(name) is not None
+        assert store.purge_expired("test", at=at + timedelta(microseconds=1)) == 1
         with connection() as conn, conn.cursor() as cur:
             cur.execute("SELECT COUNT(*) FROM NL2SQL_SYNTHETIC_LOCKS")
             assert cur.fetchone()[0] == 0

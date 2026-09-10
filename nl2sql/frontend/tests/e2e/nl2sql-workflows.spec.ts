@@ -14210,3 +14210,36 @@ test("synthetic manual refresh discards feedback after switching history", async
   await panel.getByRole("button", { name: "状況を再確認", exact: true }).click();
   await expect(panel.getByText(/生成状況に変更はありません/)).toBeVisible();
 });
+
+test("synthetic history keeps the last 24 hours after completion and preserves unfinished runs", async ({ page }, testInfo) => {
+  await mockNl2SqlApi(page);
+  const at = Date.now();
+  const old = new Date(at - 3 * 24 * 60 * 60_000).toISOString();
+  const recent = syntheticRunFixture("completed");
+  const expired = { ...recent, run_id: "expired-run", created_at: old, finished_at: old };
+  const longRun = { ...recent, run_id: "recent-finish", created_at: old };
+  const active = { ...syntheticRunFixture("unknown"), run_id: "old-unknown", created_at: old };
+  let runs = [recent, expired, longRun, active];
+  await page.route("**/api/nl2sql/synthetic-data/runs", (route) => fulfillJson(route, runs));
+  await page.route("**/api/nl2sql/synthetic-data/runs/expired-run", (route) => route.fulfill({ status: 404, body: "expired" }));
+  await page.goto("/data-management?synthetic_run=run-001");
+  const panel = page.getByTestId("synthetic-run-panel");
+  const history = panel.getByRole("combobox", { name: "生成履歴", exact: true });
+  await expect(history.locator("option")).toHaveCount(3);
+  await expect(history.locator('option[value="expired-run"]')).toHaveCount(0);
+  await expect(history.locator('option[value="recent-finish"]')).toHaveCount(1);
+  await expect(history.locator('option[value="old-unknown"]')).toHaveCount(1);
+  await expect(panel).toContainText("履歴は処理終了から24時間保存します");
+  await history.selectOption("old-unknown");
+  await expect(panel.getByTestId("synthetic-run-status")).toHaveText("生成結果を確認できていません");
+  await history.selectOption("recent-finish");
+  await expect(panel.getByTestId("synthetic-run-status")).toHaveText("合成データの生成が完了しました");
+  await history.scrollIntoViewIfNeeded();
+  await expectNoHorizontalScroll(page);
+  await page.screenshot({ path: testInfo.outputPath("synthetic-history-retention.png") });
+  // 保存済みの期限切れ ID を開いても、別の run を黙って選択しない。
+  runs = [recent, longRun, active];
+  await page.goto("/data-management?synthetic_run=expired-run");
+  await expect(history).toHaveValue("");
+  await expect(panel.getByTestId("synthetic-run-reference")).toHaveCount(0);
+});

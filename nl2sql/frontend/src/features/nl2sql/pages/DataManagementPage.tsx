@@ -7,7 +7,7 @@ import { ArrowRight, Database, Eye, FileSpreadsheet, Play, RefreshCw, Table2, Tr
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Banner, EmptyState, toast } from "@engchina/production-ready-ui";
 
-import { SyntheticRunPanel, useSyntheticRuns, runFinished, type SyntheticRun } from "../syntheticRuns";
+import { SyntheticRunPanel, useSyntheticRuns, runFinished, historyExpired, type SyntheticRun } from "../syntheticRuns";
 
 import { StatusBadge } from "@/components/ui/status-badge";
 
@@ -165,7 +165,8 @@ export function DataManagementPage() {
     refetchInterval: (query) => query.state.data && !runFinished(query.state.data) ? 2_000 : false,
     retry: false,
   });
-  const selectedRun = listedRun ?? (requestedRunId ? historicalRun.data : null) ?? null;
+  const candidateRun = listedRun ?? (requestedRunId ? historicalRun.data : null) ?? null;
+  const selectedRun = candidateRun && !historyExpired(candidateRun) ? candidateRun : null;
   const [syntheticQueryTime, setSyntheticQueryTime] = useState("");
   const resultRequest = useRef(0);
   const [resultGeneratedRows, setResultGeneratedRows] = useState<number | null>(null);
@@ -935,6 +936,7 @@ export function DataManagementPage() {
 
   const syntheticProgress = (
     <>
+      {candidateRun && historyExpired(candidateRun) && <Banner severity="info">{t("syntheticRun.expired")}</Banner>}
       <SyntheticRunPanel
         run={selectedRun}
         runs={selectedRun && !listedRun ? [selectedRun, ...syntheticRuns.data ?? []] : syntheticRuns.data ?? []}

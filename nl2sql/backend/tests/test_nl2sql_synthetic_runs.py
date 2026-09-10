@@ -537,3 +537,73 @@ def test_worker_runs_same_table_requests_independently_without_replaying_claims(
     assert service.store.get(second.run_id).status == "verifying"
     service.update(first.run_id, lambda value: setattr(value, "status", "completed"))
     assert service.store.get(second.run_id).status == "verifying"
+
+
+@pytest.mark.parametrize("status", ["completed", "partial", "failed", "no_data"])
+def test_history_retention_boundary_and_active_context_isolation(status: Any) -> None:
+    from datetime import timedelta
+
+    at = datetime.now(UTC)
+    old = (at - timedelta(days=3)).isoformat()
+    cutoff = (at - timedelta(hours=24)).isoformat()
+    store = SyntheticStore()
+    values = [
+        run(
+            run_id="expired",
+            idempotency_key="expired",
+            status=status,
+            created_at=old,
+            finished_at=old,
+        ),
+        run(
+            run_id="boundary",
+            idempotency_key="boundary",
+            status=status,
+            created_at=old,
+            finished_at=cutoff,
+        ),
+        run(
+            run_id="recent-finish",
+            idempotency_key="recent",
+            status=status,
+            created_at=old,
+            finished_at=at.isoformat(),
+        ),
+        run(run_id="legacy", idempotency_key="legacy", status=status, created_at=old),
+        run(run_id="other-actor", actor_id="other", status=status, created_at=old),
+        run(run_id="other-db", context_id="other", status=status, created_at=old),
+        *[
+            run(run_id=s, idempotency_key=s, status=s, created_at=old)
+            for s in ["pending", "running", "verifying", "unknown"]
+        ],
+    ]
+    for value in values:
+        store.create(value)
+    assert store.purge_expired("db", "owner", at=at) == 2
+    assert store.get("expired") is None
+    assert store.by_key("owner", "db", "expired") is None
+    assert store.get("legacy") is None
+    for value in values[1:]:
+        if value.run_id != "legacy":
+            assert store.get(value.run_id) == value
+    assert store.purge_expired("db", "owner", at=at) == 0
+    assert store.purge_expired("db", "owner", at=at + timedelta(microseconds=1)) == 1
+
+
+def test_service_hides_expired_history_and_worker_cleans_without_browser(
+    service: SyntheticService,
+) -> None:
+    from datetime import timedelta
+
+    old = (datetime.now(UTC) - timedelta(days=2)).isoformat()
+    value = run(context_id=service.context, status="completed", created_at=old, finished_at=old)
+    service.store.create(value)
+    with pytest.raises(HTTPException) as exc:
+        service.get(value.run_id, actor())
+    assert exc.value.status_code == 404
+    assert service.list(actor()) == []
+    assert service.store.get(value.run_id) is None
+    service.store.create(value)
+    service.tick()
+    assert service.store.get(value.run_id) is None
+    service.adapter.generate_synthetic_data.assert_not_called()  # type: ignore[attr-defined]

@@ -1,6 +1,6 @@
 """合成データ生成の永続状態。要求件数と確認済み書込み件数を分離する。"""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -48,6 +48,14 @@ class SyntheticRun(BaseModel):
     failure_phase: Literal["validation"] | None = None
     execution_returned: bool = False
     version: int = 0
+
+    def history_expired(self, at: datetime | None = None) -> bool:
+        if self.status not in TERMINAL:
+            return False
+        ended = datetime.fromisoformat(self.finished_at or self.created_at)
+        if ended.tzinfo is None:
+            ended = ended.replace(tzinfo=UTC)
+        return ended < (at or datetime.now(UTC)) - timedelta(hours=24)
 
     def public(self) -> dict[str, Any]:
         return self.model_dump(

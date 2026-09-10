@@ -19,11 +19,16 @@ Issue #305。UI の `生成開始` は永続記録の受理であり、書込み
 ## API
 
 - `POST /api/nl2sql/synthetic-data/runs` → 202。既存生成条件に `idempotency_key`（16〜128 文字）を追加する。
-- `GET /api/nl2sql/synthetic-data/runs` → 同一 actor / DB context の直近 100 件。
-- `GET /api/nl2sql/synthetic-data/runs/{run_id}` → 保存済み状態。履歴一覧に無い古い run も ID で参照できる。
+- `GET /api/nl2sql/synthetic-data/runs` → 同一 actor / DB context の保持期間内の直近 100 件。
+- `GET /api/nl2sql/synthetic-data/runs/{run_id}` → 保存済み状態。保持期間内の run は一覧に無くても ID で参照できる。期限切れ・清掃済みは 404。
 - `GET /api/nl2sql/synthetic-data/runs/{run_id}/results?table_name=...&limit=100` → 今回の対象だけを現在の actor の参照権限で取得。上限 1〜10000。
 
 同一 actor・context・受付キーで同じ条件なら既存 run を返す。条件が変われば 409。
+終端記録（completed / partial / failed / no_data）は処理終了から 24 時間保存し、
+24 時間を超えると一覧取得・新規受付時と worker の定期清掃（約 60 秒間隔）で削除する。
+旧終端記録に終了日時が無い場合は受付日時を基準とする。pending / running / verifying / unknown は
+期限で削除しない。削除対象は生成記録と旧 lock のみで、生成した業務テーブルのデータや Oracle の
+operation 記録は削除しない。受付キーの幂等保証も記録保持期間内に限る。
 同じ表・別の表に未終了 run があっても、新しい受付キーの生成を独立した run として受理する。
 受理リクエストの処理中だけ二重クリックを防ぎ、受理後は確認語を解除して次の入力・生成・参照を許可する。
 旧 `POST /synthetic-data/generate` も同じ永続受理を使う（202、`executed=false`、`status=accepted`、
