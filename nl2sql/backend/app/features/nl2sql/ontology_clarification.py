@@ -223,7 +223,11 @@ def apply_clarification_answer(
             (item.structured_value for item in selected if item.structured_value is not None),
             answer.structured_value,
         )
-        updated.granularity = "" if value in {None, "none"} else str(value)
+        # 「はい」は現在値の承認。構造値のない承認で既存の粒度を消さない。
+        if value is not None:
+            updated.granularity = str(value)
+        elif free_text:
+            updated.granularity = free_text
 
     if resolution:
         updated.question_effective = _render_clarified_question(
@@ -247,12 +251,19 @@ def _render_clarified_question(
     answer = resolution.strip().rstrip("。！？!?")
     target_names = _unique_business_names(item.name_ja for item in intent.entities)
     output_names = _unique_business_names(
-        [*(item.name_ja for item in intent.dimensions), *(item.name_ja for item in intent.metrics)]
+        [
+            *(item.name_ja for item in intent.dimensions),
+            *(_metric_label(item) for item in intent.metrics),
+        ]
     )
     answer_parts = _unique_business_names(part.strip() for part in answer.split("、"))
-    if category == ClarificationCategory.BUSINESS_MEANING and summary_key == "metrics":
+    if (
+        category == ClarificationCategory.BUSINESS_MEANING
+        and summary_key == "metrics"
+        and not intent.metrics
+    ):
         output_names = _unique_business_names([*output_names, *answer_parts])
-    elif category == ClarificationCategory.BUSINESS_MEANING:
+    elif category == ClarificationCategory.BUSINESS_MEANING and summary_key != "metrics":
         target_names = _unique_business_names([*target_names, *answer_parts])
     elif category == ClarificationCategory.OUTPUT:
         output_names = _unique_business_names([*output_names, *answer_parts])
@@ -340,6 +351,22 @@ def _render_clarified_question(
     elif intent.limit is not None:
         sentences.append(f"表示件数は最大{intent.limit}件にしてください。")
     return "".join(sentences)
+
+
+def _metric_label(metric: IntentMetric) -> str:
+    """SQL に渡す文章にも集計方式を残す（構造化 intent は直接渡されない）。"""
+    operation = metric.aggregation.strip().casefold()
+    label = {
+        "count": "件数",
+        "count_distinct": "重複を除いた件数",
+        "sum": "合計",
+        "avg": "平均",
+        "min": "最小値",
+        "max": "最大値",
+    }.get(operation, "")
+    if not label or label in metric.name_ja:
+        return metric.name_ja
+    return f"{metric.name_ja}の{label}"
 
 
 def _unique_business_names(values: Iterable[object]) -> list[str]:
@@ -512,20 +539,20 @@ def merge_free_text_reinterpretation(
 
     updated = intent.model_copy(deep=True)
 
-    def append_unique(target: list[Any], candidates: Sequence[Any]) -> None:
-        existing = {
-            (getattr(item, "ontology_node_id", ""), getattr(item, "name_ja", "")) for item in target
-        }
-        for item in candidates:
-            identity = (getattr(item, "ontology_node_id", ""), getattr(item, "name_ja", ""))
-            if identity not in existing:
-                target.append(item.model_copy(deep=True))
-                existing.add(identity)
-
-    if question.category == ClarificationCategory.BUSINESS_MEANING:
-        append_unique(updated.entities, reinterpreted.entities)
-        append_unique(updated.metrics, reinterpreted.metrics)
-        append_unique(updated.dimensions, reinterpreted.dimensions)
+    # 確認項目が所有する slot だけを置換する。訂正前の推測を append で残さない。
+    if question.summary_key in {"entities", "metrics", "dimensions"}:
+        field = question.summary_key
+        setattr(
+            updated, field, [item.model_copy(deep=True) for item in getattr(reinterpreted, field)]
+        )
+    elif question.category == ClarificationCategory.BUSINESS_MEANING:
+        updated.entities = [item.model_copy(deep=True) for item in reinterpreted.entities]
+        updated.metrics = [item.model_copy(deep=True) for item in reinterpreted.metrics]
+    elif question.category == ClarificationCategory.OUTPUT:
+        updated.dimensions = [item.model_copy(deep=True) for item in reinterpreted.dimensions]
+        updated.metrics = [item.model_copy(deep=True) for item in reinterpreted.metrics]
+        updated.sorts = [item.model_copy(deep=True) for item in reinterpreted.sorts]
+        updated.limit = reinterpreted.limit
     elif question.category == ClarificationCategory.RELATIONSHIP_PATH:
         approved_paths = [item for item in reinterpreted.candidate_paths if item.approved]
         if len(approved_paths) == 1:
@@ -536,13 +563,6 @@ def merge_free_text_reinterpretation(
         updated.time_range = reinterpreted.time_range.model_copy(deep=True)
     elif question.category == ClarificationCategory.GRANULARITY and reinterpreted.granularity:
         updated.granularity = reinterpreted.granularity
-    elif question.category == ClarificationCategory.OUTPUT:
-        append_unique(updated.entities, reinterpreted.entities)
-        append_unique(updated.metrics, reinterpreted.metrics)
-        append_unique(updated.dimensions, reinterpreted.dimensions)
-        updated.sorts = [item.model_copy(deep=True) for item in reinterpreted.sorts]
-        if reinterpreted.limit is not None:
-            updated.limit = reinterpreted.limit
 
     existing_codes = {item.code for item in updated.ambiguities}
     updated.ambiguities.extend(
@@ -554,7 +574,12 @@ def merge_free_text_reinterpretation(
     updated.question_effective = _render_clarified_question(
         updated,
         question.category,
-        resolution,
+        (
+            ""
+            if question.category
+            in {ClarificationCategory.BUSINESS_MEANING, ClarificationCategory.OUTPUT}
+            else resolution
+        ),
         question.summary_key,
     )
     return updated
@@ -1049,9 +1074,9 @@ def _intent_summary(
         add(
             "metrics",
             "集計する指標",
-            "、".join(item.name_ja for item in intent.metrics),
+            "、".join(_metric_label(item) for item in intent.metrics),
             ClarificationCategory.BUSINESS_MEANING,
-            [item.name_ja for item in intent.metrics],
+            [_metric_label(item) for item in intent.metrics],
         )
     if intent.dimensions:
         add(

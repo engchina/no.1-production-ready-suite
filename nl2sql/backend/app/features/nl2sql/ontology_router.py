@@ -3440,21 +3440,36 @@ class OntologyApiRuntime:
                     "CLARIFICATION_ANSWER_INVALID",
                     str(exc),
                 ) from exc
-            if request.free_text.strip():
-                profile = self._strict_profile(current.profile_id)
-                reinterpreted = self._interpret_question(
-                    updated_intent.question_effective,
-                    profile,
-                    ontology,
-                    view,
-                    include_guided_context=True,
-                )
-                updated_intent = merge_free_text_reinterpretation(
-                    updated_intent,
-                    enrich_guided_intent(reinterpreted, ontology),
-                    question,
-                    request.free_text.strip(),
-                )
+            profile = (
+                self._strict_profile(current.profile_id) if request.free_text.strip() else None
+            )
+
+        # AI 応答待ちで別 session の閲覧・取消を止めない。解釈対象は上記の snapshot。
+        if profile is not None:
+            correction_prompt = (
+                f"{current.intents[-1].question_effective}\n"
+                f"確認項目: {question.prompt_ja}\n"
+                f"利用者の訂正: {request.free_text.strip()}\n"
+                "確認項目の以前の解釈を訂正内容で置き換え、他の確認済み条件は保持してください。"
+            )
+            reinterpreted = self._interpret_question(
+                correction_prompt,
+                profile,
+                ontology,
+                view,
+                include_guided_context=True,
+            )
+            updated_intent = merge_free_text_reinterpretation(
+                updated_intent,
+                enrich_guided_intent(reinterpreted, ontology),
+                question,
+                request.free_text.strip(),
+            )
+
+        with self._lock:
+            # 別 request / worker が更新・取消した状態を読み直す。
+            # apply_clarification が mutable 状態と base_version を再検証してから保存する。
+            self._ensure_session_loaded(session_id)
             session = self.sessions.apply_clarification(
                 session_id,
                 base_version=request.base_version,
