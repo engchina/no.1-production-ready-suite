@@ -1091,6 +1091,7 @@ export interface DbAdminStatementResult {
   message: string;
   elapsed_ms: number;
   error_message: string;
+  error_code?: string;
 }
 
 export interface DbAdminExecuteData {

@@ -985,6 +985,7 @@ export const ja = {
   "settings.model.enterprise.endpoint": "Endpoint URL",
   "settings.model.enterprise.endpointHelp":
     "公式 docs の OpenAI-compatible base URL を指定します。Responses API path は /responses です。",
+  "settings.model.enterprise.endpointDocs": "公式ドキュメント（新しいタブで開く）",
   "settings.model.enterprise.project": "Project OCID",
   "settings.model.enterprise.projectHelp":
     "OCI OpenAI-compatible API 呼び出しに必要な Generative AI project OCID。",

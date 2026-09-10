@@ -1130,6 +1130,7 @@ def test_statement_policy_comment_and_annotation_sql() -> None:
         DbAdminStatementsRequest(sql="COMMENT ON VIEW V1 IS 'ビュー'", policy="comment_sql")
     )
     assert comment_view_ng.statements[0].status == "blocked"
+    assert comment_view_ng.statements[0].error_code == "DB_ADMIN_COMMENT_SQL_POLICY_VIOLATION"
 
     comment_ng = service.execute_db_admin_statements(
         DbAdminStatementsRequest(sql="CREATE TABLE T1 (ID NUMBER)", policy="comment_sql")
@@ -1156,6 +1157,50 @@ def test_statement_policy_comment_and_annotation_sql() -> None:
         DbAdminStatementsRequest(sql="ALTER TABLE T1 ADD C1 NUMBER", policy="annotation_sql")
     )
     assert annotation_ng.statements[0].status == "blocked"
+    assert annotation_ng.statements[0].error_code == "DB_ADMIN_ANNOTATION_SQL_POLICY_VIOLATION"
+
+
+@pytest.mark.parametrize("oracle_runtime", [False, True])
+def test_comment_policy_error_code_survives_api_without_executing_batch(
+    monkeypatch: pytest.MonkeyPatch, oracle_runtime: bool
+) -> None:
+    adapter = _FakeStatementsAdapter([])
+    service = (
+        _OracleRuntimeService(adapter)
+        if oracle_runtime
+        else Nl2SqlService(store=MemoryNl2SqlStore())
+    )
+    router = importlib.import_module("app.features.nl2sql.router")
+    monkeypatch.setattr(router, "nl2sql_service", service)
+    response = router.db_admin_statements(
+        DbAdminStatementsRequest(
+            sql="COMMENT ON TABLE V1 IS '説明'; COMMENT ON VIEW V2 IS '説明'",
+            policy="comment_sql",
+            confirmation="ADMIN_EXECUTE",
+        )
+    ).model_dump(mode="json")["data"]
+
+    assert response["executed"] is False
+    assert response["committed"] is False
+    assert [item["status"] for item in response["statements"]] == ["blocked", "blocked"]
+    assert [item["error_code"] for item in response["statements"]] == [
+        "",
+        "DB_ADMIN_COMMENT_SQL_POLICY_VIOLATION",
+    ]
+    assert response["statements"][0]["error_message"] == ""
+    assert "COMMENT ON TABLE/COLUMN/MATERIALIZED VIEW" in response["statements"][1]["error_message"]
+    assert adapter.calls == []
+
+    corrected = service.execute_db_admin_statements(
+        DbAdminStatementsRequest(
+            sql="COMMENT ON TABLE V2 IS '説明'",
+            policy="comment_sql",
+        )
+    )
+    assert corrected.executed is False
+    assert corrected.statements[0].status == "confirmation_required"
+    assert corrected.statements[0].error_code == ""
+    assert adapter.calls == []
 
 
 def test_annotation_comment_name_is_blocked_before_oracle_execution() -> None:
@@ -1186,6 +1231,7 @@ def test_annotation_comment_name_is_blocked_before_oracle_execution() -> None:
     assert adapter.calls == []
     assert {item.status for item in result.statements} == {"blocked"}
     assert all("ORA-11548" in item.error_message for item in result.statements)
+    assert all(item.error_code == "ORA-11548" for item in result.statements)
     assert all("UI_Display" in item.error_message for item in result.statements)
 
 

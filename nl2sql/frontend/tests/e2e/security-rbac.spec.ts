@@ -4247,8 +4247,8 @@ test("DeepSec は DATA USER password をページから保存し再起動なし�
   } else {
     expect(saveButtonBox!.width).toBeLessThan(actionsBox!.width);
     expect(syncButtonBox!.width).toBeLessThan(actionsBox!.width);
-    expect(saveButtonBox!.height).toBeLessThanOrEqual(40);
-    expect(syncButtonBox!.height).toBeLessThanOrEqual(40);
+    expect(saveButtonBox!.height).toBe(40);
+    expect(syncButtonBox!.height).toBe(40);
   }
   await expectNoPageHorizontalScroll(page);
 

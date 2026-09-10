@@ -11,6 +11,11 @@ export type ButtonProps = BaseButtonProps;
 
 const BUTTON_TEXT_LAYOUT_CLASSNAME = "leading-5";
 
+function sizeClass(size: ButtonProps["size"]) {
+  // 日本語テーマは root=14px。主操作は rem 換算で縮めず、mobile のタッチ領域も確保する。
+  return size === "lg" ? "h-[44px] sm:h-[40px]" : undefined;
+}
+
 function semanticVariantClass(variant: ButtonProps["variant"]) {
   if (variant === "danger") {
     return "bg-danger-fill text-white hover:bg-danger-fill/90";
@@ -28,6 +33,7 @@ export function buttonVariants(options?: Parameters<typeof sharedButtonVariants>
   return cn(
     sharedButtonVariants(options),
     BUTTON_TEXT_LAYOUT_CLASSNAME,
+    sizeClass(options?.size),
     semanticVariantClass(options?.variant),
     "disabled:border-border disabled:bg-disabled-bg disabled:text-disabled disabled:opacity-100"
   );
@@ -38,16 +44,18 @@ export function buttonVariants(options?: Parameters<typeof sharedButtonVariants>
  * Defaulting to type="button" prevents accidental form submit/page scroll when
  * action buttons are placed inside forms. Explicit submit/reset types are kept.
  */
-export function Button({ type = "button", variant, className, ...props }: ButtonProps) {
+export function Button({ type = "button", variant, size, className, ...props }: ButtonProps) {
   const { loading, disabled, children, ...buttonProps } = props;
 
   return (
     <BaseButton
       type={type}
       variant={variant}
+      size={size}
       disabled={disabled || loading}
       className={cn(
         BUTTON_TEXT_LAYOUT_CLASSNAME,
+        sizeClass(size),
         semanticVariantClass(variant),
         loading && "[&>svg:not([data-loading-icon])]:hidden",
         "disabled:border-border disabled:bg-disabled-bg disabled:text-disabled disabled:opacity-100",

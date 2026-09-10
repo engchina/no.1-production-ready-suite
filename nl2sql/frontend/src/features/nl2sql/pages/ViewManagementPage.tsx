@@ -184,7 +184,7 @@ function ViewJoinWherePanel({
           <Button
             type="button"
             variant="secondary"
-            size="sm"
+            size="lg"
             className="w-full sm:w-auto"
             disabled={ddlLoading}
             onClick={onRetryDdl}
@@ -196,7 +196,7 @@ function ViewJoinWherePanel({
         <Button
           type="button"
           variant="secondary"
-          size="sm"
+          size="lg"
           className="w-full sm:w-auto"
           loading={loading}
           disabled={!ddlReady || ddlLoading}

@@ -73,7 +73,7 @@ function VisibleAction({
   action: FormActionDescriptor;
   variant: "primary" | "secondary";
 }) {
-  const className = "h-[44px] w-full whitespace-nowrap sm:h-10 sm:w-auto";
+  const className = "w-full whitespace-nowrap sm:w-auto";
 
   if (action.href) {
     const enabled = actionEnabled(action);
@@ -246,7 +246,7 @@ function DangerActionsMenu({ actions }: { actions: readonly FormActionDescriptor
         type="button"
         variant="secondary"
         size="lg"
-        className="h-[44px] w-full whitespace-nowrap sm:h-10 sm:w-auto"
+        className="w-full whitespace-nowrap sm:w-auto"
         aria-expanded={open}
         aria-controls={menuId}
         aria-haspopup="menu"

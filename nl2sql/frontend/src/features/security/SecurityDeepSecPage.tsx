@@ -1721,7 +1721,7 @@ export function SecurityDeepSecPage() {
                   size="lg"
                   loading={configSaving}
                   disabled={!dataUserPassword || configSaving || configSyncing}
-                  className="h-[44px] w-full whitespace-nowrap sm:h-10 sm:w-auto"
+                  className="w-full whitespace-nowrap sm:w-auto"
                 >
                   <Save size={15} aria-hidden />
                   {t("security.deepsec.config.save")}
@@ -1732,7 +1732,7 @@ export function SecurityDeepSecPage() {
                   size="lg"
                   loading={configSyncing}
                   disabled={passwordSyncDisabled}
-                  className="h-[44px] w-full whitespace-nowrap sm:h-10 sm:w-auto"
+                  className="w-full whitespace-nowrap sm:w-auto"
                   onClick={() => void handleSyncConfig()}
                 >
                   <RefreshCw size={15} aria-hidden />

@@ -878,7 +878,7 @@ function MetadataTargetGrid({
           <Button
             type="button"
             variant="primary"
-            size="sm"
+            size="lg"
             className="w-full sm:w-auto"
             loading={fetchingDetails}
             disabled={selectedKeys.length === 0}
@@ -991,7 +991,7 @@ function MetadataInputPanel({
             <Button
               type="button"
               variant="primary"
-              size="sm"
+              size="lg"
               className="w-full sm:w-auto"
               loading={loading}
               disabled={!detailsReady}

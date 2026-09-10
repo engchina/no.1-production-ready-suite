@@ -1,6 +1,7 @@
 import { expect, test, type Locator, type Page, type Route } from "@playwright/test";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
 import { dropFiles } from "./_helpers/file-dropzone";
+import { expectLargeActionButton } from "./_helpers/action-button";
 
 test.beforeEach(async ({ page }) => mockDatabaseGateReady(page));
 
@@ -862,6 +863,7 @@ test("AI オントロジー構築の実行 → 進捗 → Markdown 下書き編�
   await expectSourceDropzoneMatchesQaStyle(page);
   await expectExtractionTargetsHidden(page);
   await expect(page.getByTestId("ontology-view-fetch")).toBeVisible();
+  await expectLargeActionButton(page.getByTestId("ontology-view-fetch"));
   await expect(page.getByTestId("ontology-view-fetch").locator("span").first()).toHaveText(
     "情報を取得"
   );
@@ -2186,8 +2188,10 @@ test("オントロジー View の API エラーを表示し、キーボードで
 
   await page.goto("/ontology-build?profile=default");
   await expect(page.getByText("オントロジー情報は未取得です")).toBeVisible();
+  await expectLargeActionButton(page.getByTestId("ontology-view-fetch"));
   expect(ontologyViewReads).toBe(0);
-  await page.getByTestId("ontology-view-fetch").click();
+  await page.getByTestId("ontology-view-fetch").focus();
+  await page.getByTestId("ontology-view-fetch").press("Enter");
 
   const alert = page.getByRole("alert");
   await expect(alert).toContainText("プロファイル範囲の準備に失敗しました。");

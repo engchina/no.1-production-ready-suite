@@ -5,6 +5,7 @@ import {
   expectSplitPaneStacked,
 } from "./_helpers/fixed-split-pane";
 import { dropFiles } from "./_helpers/file-dropzone";
+import { expectLargeActionButton } from "./_helpers/action-button";
 
 test.beforeEach(async ({ page }) => mockDatabaseGateReady(page));
 
@@ -1162,6 +1163,7 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
           error_message: invalidAnnotationName
             ? "ORA-11548 相当: annotation 名 COMMENT は Oracle の予約語です。説明には UI_Display を使用するか、意図的な名前であれば \"COMMENT\" と二重引用符で囲んでください。"
             : "",
+          error_code: invalidAnnotationName ? "ORA-11548" : "",
         },
       ],
       committed: invalidAnnotationName ? false : executed,
@@ -9754,6 +9756,37 @@ test("data preparation read results use the shared detail skeleton without stale
   await expect(page.getByText('CREATE TABLE "INVOICES"')).toHaveCount(0);
 });
 
+for (const pageId of ["comment-management", "annotation-management"]) {
+  test(`${pageId} の取得・SQL 生成ボタンは共通の主操作サイズでキーボード実行できる`, async ({ page }, testInfo) => {
+    await mockNl2SqlApi(page);
+    await page.goto(`/${pageId}`);
+    const fetchButton = page.getByRole("button", { name: "情報を取得", exact: true });
+    await expectLargeActionButton(fetchButton);
+    await expect(fetchButton).toBeDisabled();
+    await page.getByRole("checkbox", { name: /INVOICES/ }).check();
+    await expect(fetchButton).toBeEnabled();
+    await fetchButton.focus();
+    await expect(fetchButton).toBeFocused();
+    await fetchButton.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath(`${pageId}-fetch.png`) });
+    await fetchButton.press("Enter");
+    const inputPanel = page.locator(`#${pageId}-panel-input`);
+    await expect(inputPanel.getByLabel("構造情報")).toHaveValue(/APP\.INVOICES/);
+    await dismissToasts(page);
+    const generateButton = inputPanel.getByRole("button", { name: "SQL 生成", exact: true });
+    await expectLargeActionButton(generateButton);
+    await generateButton.focus();
+    await expect(generateButton).toBeFocused();
+    await generateButton.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath(`${pageId}-generate.png`) });
+    await generateButton.press("Enter");
+    const executePanel = page.locator(`#${pageId}-panel-execute`);
+    await expect(executePanel.getByLabel("SQL(セミコロン区切りで複数文を入力可能)")).toHaveValue(/COMMENT ON|ALTER TABLE/);
+    await expectLargeActionButton(executePanel.getByRole("button", { name: "SQL 実行", exact: true }));
+    await expectNoHorizontalScroll(page);
+  });
+}
+
 test("JOIN WHERE and metadata read result branches replace their result areas with shared skeletons", async ({ page }) => {
   await mockNl2SqlApi(page);
   await page.setViewportSize({ width: 1280, height: 900 });
@@ -9900,16 +9933,19 @@ test("JOIN WHERE and metadata read result branches replace their result areas wi
     });
   });
   const joinWhereButton = page.getByRole("button", { name: "AI で抽出" });
+  await expectLargeActionButton(joinWhereButton);
   await expectButtonBelowInput(page.getByTestId("view-join-where-advanced-settings"), joinWhereButton);
   await joinWhereButton.click();
   const joinWhereSkeleton = page.getByTestId("view-join-where-result-detail-skeleton");
   await expect(joinWhereSkeleton).toBeVisible();
   await expect(joinWhereButton.locator("svg.animate-spin")).toHaveCount(1);
+  await expectLargeActionButton(joinWhereButton);
   await expect(joinWhereSkeleton.locator("svg.animate-spin")).toHaveCount(0);
   await expect(page.getByLabel("結合条件 (JOIN)")).toHaveCount(0);
   joinWhereGate.release();
   await expect(page.getByLabel("結合条件 (JOIN)")).toHaveValue(/EMPLOYEE/);
   await page.setViewportSize({ width: 375, height: 900 });
+  await expectLargeActionButton(joinWhereButton);
   joinWhereGate = createRequestGate();
   await joinWhereButton.click();
   const mobileJoinWhereSkeleton = page.getByTestId("view-join-where-result-detail-skeleton");
@@ -10325,10 +10361,12 @@ test("synthetic data table bulk selection and results use the shared skeleton pr
     });
   });
   const refreshTablesButton = syntheticPanel.getByRole("button", { name: "テーブル一覧を取得" });
+  await expectLargeActionButton(refreshTablesButton);
   await refreshTablesButton.click();
   const syntheticTablesSkeleton = page.getByTestId("data-synthetic-tables-list-skeleton");
   await expect(syntheticTablesSkeleton).toBeVisible();
   await expect(refreshTablesButton.locator("svg.animate-spin")).toHaveCount(1);
+  await expectLargeActionButton(refreshTablesButton);
   await expect(syntheticTablesSkeleton.locator("svg.animate-spin")).toHaveCount(0);
   await expect(syntheticPanel.getByText("対象テーブルが未取得です")).toHaveCount(0);
   tablesGate.release();
@@ -13133,6 +13171,102 @@ test("annotation management explains ORA-11548 before Oracle execution", async (
   await expectNoHorizontalScroll(page);
   await expect(executePanel.getByText("説明用の annotation 名は UI_Display に変更してください。"))
     .toBeVisible();
+});
+
+for (const scenario of [
+  {
+    pageId: "comment-management",
+    code: "DB_ADMIN_COMMENT_SQL_POLICY_VIOLATION",
+    message: "禁止された操作です。COMMENT ON TABLE/COLUMN/MATERIALIZED VIEW のみ実行できます。",
+    sql: "COMMENT ON VIEW APP.V_EMP_DEPT IS '社員と部署';",
+    exampleLabel: "テーブル・ビューのコメント",
+    exampleSql: 'COMMENT ON TABLE "EXAMPLE_SCHEMA"."EXAMPLE_TABLE_OR_VIEW"\n  IS \'対象の説明\';',
+    count: 3,
+  },
+  {
+    pageId: "annotation-management",
+    code: "DB_ADMIN_ANNOTATION_SQL_POLICY_VIOLATION",
+    message: "この文はアノテーション管理で実行できません。",
+    sql: "ALTER TABLE APP.INVOICES ADD X NUMBER;",
+    exampleLabel: "テーブルのアノテーション",
+    exampleSql: 'ALTER TABLE "EXAMPLE_SCHEMA"."EXAMPLE_TABLE"\n  ANNOTATIONS (ADD IF NOT EXISTS UI_Display \'対象の説明\');',
+    count: 2,
+  },
+]) {
+  test(`${scenario.pageId} の拒否理由とコピー可能な SQL 例で具体的な復旧方法を示す`, async ({ page, context }, testInfo) => {
+    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+    await mockNl2SqlApi(page);
+    let executions = 0;
+    await page.route("**/api/nl2sql/db-admin/statements", (route) => {
+      executions += 1;
+      return fulfillJson(route, {
+        executed: false,
+        committed: false,
+        runtime: "oracle",
+        statements: [{ index: 1, status: "blocked", statement_type: "UNKNOWN", sql: scenario.sql, error_message: scenario.message, error_code: scenario.code }],
+        warnings: [],
+        timing,
+      });
+    });
+    await page.goto(`/${scenario.pageId}`);
+    await page.getByRole("tab", { name: "SQL実行", exact: true }).click();
+    const panel = page.locator(`#${scenario.pageId}-panel-execute`);
+    const sqlInput = panel.getByLabel("SQL(セミコロン区切りで複数文を入力可能)");
+    await sqlInput.fill(scenario.sql);
+    await panel.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
+    await panel.getByRole("button", { name: "SQL 実行", exact: true }).click();
+    const examples = panel.getByRole("region", { name: "具体的な対応例" });
+    await expect(examples).toBeVisible();
+    await expect(examples.locator("pre")).toHaveCount(scenario.count);
+    await expect(examples).toContainText("以下は構文例です。");
+    await expect(examples).toContainText("実際の内容に置き換え");
+    if (scenario.pageId === "comment-management") {
+      await expect(panel).toContainText("ビューのコメントも COMMENT ON TABLE を使用します。");
+      await expect(panel).not.toContainText("SQL 実行または Oracle 側の処理でエラーが発生しました。");
+    }
+    const copyButton = examples.getByRole("button", { name: `${scenario.exampleLabel}の SQL 例をコピー`, exact: true });
+    await copyButton.focus();
+    await copyButton.press("Enter");
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(scenario.exampleSql);
+    await expect(page.getByRole("region", { name: "通知" })).toContainText("コピーしました");
+    await dismissToasts(page);
+    await copyButton.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath(`${scenario.pageId}-sql-recovery.png`) });
+    await expect(sqlInput).toHaveValue(scenario.sql);
+    expect(executions).toBe(1);
+    await expectNoHorizontalScroll(page);
+
+    await page.evaluate(() => {
+      Object.defineProperty(navigator.clipboard, "writeText", {
+        configurable: true,
+        value: () => Promise.reject(new Error("clipboard unavailable")),
+      });
+    });
+    await copyButton.click();
+    await expect(page.getByRole("region", { name: "通知" })).toContainText("コピーできませんでした");
+    await expect(copyButton).toBeEnabled();
+    await expect(sqlInput).toHaveValue(scenario.sql);
+    expect(executions).toBe(1);
+  });
+}
+
+test("未知の実行エラーでは SQL の修正例を推測表示しない", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  await page.route("**/api/nl2sql/db-admin/statements", (route) => fulfillJson(route, {
+    executed: false,
+    runtime: "oracle",
+    statements: [{ index: 1, status: "blocked", statement_type: "UNKNOWN", sql: "SELECT 1 FROM DUAL", error_message: "禁止された操作です。COMMENT ON TABLE/COLUMN/MATERIALIZED VIEW のみ実行できます。", error_code: "UNRECOGNIZED_ERROR" }],
+    warnings: [],
+    timing,
+  }));
+  await page.goto("/comment-management");
+  await page.getByRole("tab", { name: "SQL実行", exact: true }).click();
+  const panel = page.locator("#comment-management-panel-execute");
+  await panel.getByLabel("SQL(セミコロン区切りで複数文を入力可能)").fill("SELECT 1 FROM DUAL");
+  await panel.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
+  await panel.getByRole("button", { name: "SQL 実行", exact: true }).click();
+  await expect(panel.getByRole("alert")).toBeVisible();
+  await expect(panel.getByRole("region", { name: "具体的な対応例" })).toHaveCount(0);
 });
 
 test("metadata sample limit zero omits samples and reports retrieval errors", async ({ page }) => {
