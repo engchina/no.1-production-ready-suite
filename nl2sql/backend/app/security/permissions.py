@@ -548,6 +548,8 @@ def permission_for_route(method: str, route_path: str) -> frozenset[str] | None:
     if route_path.startswith("/settings/oci"):
         return _allowed("menu.settings_oci")
     if route_path.startswith("/settings/upload-storage"):
+        if method == "GET":
+            return _allowed("menu.settings_upload_storage", "menu.settings_oci")
         return _allowed("menu.settings_upload_storage")
     if route_path.startswith("/settings/model"):
         return _allowed("menu.settings_model")

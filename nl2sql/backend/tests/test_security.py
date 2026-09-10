@@ -5098,3 +5098,49 @@ def test_role_restore_validates_access_before_store_write(
         assert error.value.status_code == 403
         assert writes == []
         assert store.get_role(target.role_id) == target
+
+
+@pytest.mark.parametrize(
+    "permission, expected_read", [("menu.settings_oci", 200), ("menu.settings_appearance", 403)]
+)
+def test_oci_settings_can_read_shared_storage_without_write_permission(
+    monkeypatch: pytest.MonkeyPatch, permission: str, expected_read: int
+) -> None:
+    service = _configure_memory_api_auth(monkeypatch)
+    admin, _, _ = service.login("ADMIN", "BootstrapPass!123")
+    role = service.create_role(
+        role_code="SETTINGS_REVIEW",
+        display_name="設定レビュー",
+        description="",
+        permissions={permission},
+        entitlements=[],
+        actor=admin,
+    )
+    _create_active_user(
+        service,
+        admin,
+        login_user_id="settings.review",
+        display_name="設定担当",
+        role_ids=[role.role_id],
+        password="SettingsReview!123",
+    )
+    before = get_settings().model_dump()
+
+    async def exercise() -> None:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            _, csrf = await _login_api(client, "settings.review", "SettingsReview!123")
+            assert (await client.get("/api/settings/upload-storage")).status_code == expected_read
+            response = await client.patch(
+                "/api/settings/upload-storage",
+                headers={"X-CSRF-Token": csrf},
+                json={
+                    "backend": "local",
+                    "local_storage_dir": "/tmp/forbidden-review",
+                    "object_storage_bucket": "review",
+                },
+            )
+            assert response.status_code == 403
+            assert get_settings().model_dump() == before
+
+    asyncio.run(exercise())
