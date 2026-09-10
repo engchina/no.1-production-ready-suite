@@ -5,6 +5,7 @@ import {
   expectSplitPaneStacked,
 } from "./_helpers/fixed-split-pane";
 import { dropFiles } from "./_helpers/file-dropzone";
+import { expectLargeActionButton } from "./_helpers/action-button";
 
 test.beforeEach(async ({ page }) => mockDatabaseGateReady(page));
 
@@ -9751,6 +9752,37 @@ test("data preparation read results use the shared detail skeleton without stale
   await expect(page.getByText('CREATE TABLE "INVOICES"')).toHaveCount(0);
 });
 
+for (const pageId of ["comment-management", "annotation-management"]) {
+  test(`${pageId} の取得・SQL 生成ボタンは共通の主操作サイズでキーボード実行できる`, async ({ page }, testInfo) => {
+    await mockNl2SqlApi(page);
+    await page.goto(`/${pageId}`);
+    const fetchButton = page.getByRole("button", { name: "情報を取得", exact: true });
+    await expectLargeActionButton(fetchButton);
+    await expect(fetchButton).toBeDisabled();
+    await page.getByRole("checkbox", { name: /INVOICES/ }).check();
+    await expect(fetchButton).toBeEnabled();
+    await fetchButton.focus();
+    await expect(fetchButton).toBeFocused();
+    await fetchButton.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath(`${pageId}-fetch.png`) });
+    await fetchButton.press("Enter");
+    const inputPanel = page.locator(`#${pageId}-panel-input`);
+    await expect(inputPanel.getByLabel("構造情報")).toHaveValue(/APP\.INVOICES/);
+    await dismissToasts(page);
+    const generateButton = inputPanel.getByRole("button", { name: "SQL 生成", exact: true });
+    await expectLargeActionButton(generateButton);
+    await generateButton.focus();
+    await expect(generateButton).toBeFocused();
+    await generateButton.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath(`${pageId}-generate.png`) });
+    await generateButton.press("Enter");
+    const executePanel = page.locator(`#${pageId}-panel-execute`);
+    await expect(executePanel.getByLabel("SQL(セミコロン区切りで複数文を入力可能)")).toHaveValue(/COMMENT ON|ALTER TABLE/);
+    await expectLargeActionButton(executePanel.getByRole("button", { name: "SQL 実行", exact: true }));
+    await expectNoHorizontalScroll(page);
+  });
+}
+
 test("JOIN WHERE and metadata read result branches replace their result areas with shared skeletons", async ({ page }) => {
   await mockNl2SqlApi(page);
   await page.setViewportSize({ width: 1280, height: 900 });
@@ -9897,16 +9929,19 @@ test("JOIN WHERE and metadata read result branches replace their result areas wi
     });
   });
   const joinWhereButton = page.getByRole("button", { name: "AI で抽出" });
+  await expectLargeActionButton(joinWhereButton);
   await expectButtonBelowInput(page.getByTestId("view-join-where-advanced-settings"), joinWhereButton);
   await joinWhereButton.click();
   const joinWhereSkeleton = page.getByTestId("view-join-where-result-detail-skeleton");
   await expect(joinWhereSkeleton).toBeVisible();
   await expect(joinWhereButton.locator("svg.animate-spin")).toHaveCount(1);
+  await expectLargeActionButton(joinWhereButton);
   await expect(joinWhereSkeleton.locator("svg.animate-spin")).toHaveCount(0);
   await expect(page.getByLabel("結合条件 (JOIN)")).toHaveCount(0);
   joinWhereGate.release();
   await expect(page.getByLabel("結合条件 (JOIN)")).toHaveValue(/EMPLOYEE/);
   await page.setViewportSize({ width: 375, height: 900 });
+  await expectLargeActionButton(joinWhereButton);
   joinWhereGate = createRequestGate();
   await joinWhereButton.click();
   const mobileJoinWhereSkeleton = page.getByTestId("view-join-where-result-detail-skeleton");
@@ -10322,10 +10357,12 @@ test("synthetic data table bulk selection and results use the shared skeleton pr
     });
   });
   const refreshTablesButton = syntheticPanel.getByRole("button", { name: "テーブル一覧を取得" });
+  await expectLargeActionButton(refreshTablesButton);
   await refreshTablesButton.click();
   const syntheticTablesSkeleton = page.getByTestId("data-synthetic-tables-list-skeleton");
   await expect(syntheticTablesSkeleton).toBeVisible();
   await expect(refreshTablesButton.locator("svg.animate-spin")).toHaveCount(1);
+  await expectLargeActionButton(refreshTablesButton);
   await expect(syntheticTablesSkeleton.locator("svg.animate-spin")).toHaveCount(0);
   await expect(syntheticPanel.getByText("対象テーブルが未取得です")).toHaveCount(0);
   tablesGate.release();
