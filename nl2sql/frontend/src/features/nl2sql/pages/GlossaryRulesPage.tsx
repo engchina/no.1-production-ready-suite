@@ -52,6 +52,8 @@ export function GlossaryRulesPage() {
   );
 
   const load = async (announce = false) => {
+    if (loading || legacyBusy) return;
+    loadControllerRef.current?.abort();
     const sequence = loadSequence.current + 1;
     loadSequence.current = sequence;
     setLoading(true);
@@ -70,7 +72,7 @@ export function GlossaryRulesPage() {
         toast.success(t("glossary.message.serverLoaded"));
       }
     } catch (err) {
-      if (isAbortError(err)) {
+      if (isAbortError(err) || controller.signal.aborted || sequence !== loadSequence.current) {
         return;
       }
       setErrorText(err instanceof Error ? err.message : t("glossary.error.load"));
@@ -99,12 +101,16 @@ export function GlossaryRulesPage() {
   }, []);
 
   const importLegacyTerms = async (file: File) => {
+    if (loading || legacyBusy) return;
+    loadSequence.current += 1;
+    loadControllerRef.current?.abort();
     setLegacyTermsFilename(file.name);
     setLegacyBusy(true);
     setErrorText(null);
     try {
       const data = await uploadLegacyLearningMaterialFile(file);
       setLegacyMaterial(data);
+      setLastLoadedAt(new Date().toISOString());
       toast.success(t("glossary.message.legacyImported", { terms: Object.keys(data.glossary).length }));
     } catch (err) {
       setErrorText(err instanceof Error ? err.message : t("glossary.error.importMaterial"));
@@ -114,6 +120,7 @@ export function GlossaryRulesPage() {
   };
 
   const exportLegacyTerms = async () => {
+    if (loading || legacyBusy) return;
     setLegacyBusy(true);
     setErrorText(null);
     try {
@@ -144,6 +151,7 @@ export function GlossaryRulesPage() {
             icon: RefreshCw,
             onClick: () => load(true),
             loading,
+            disabled: legacyBusy,
           },
         ]}
       />
@@ -178,6 +186,7 @@ export function GlossaryRulesPage() {
             exportLabel={t("glossary.globalTerms.export")}
             filename={legacyTermsFilename}
             busy={legacyBusy}
+            disabled={loading || legacyBusy}
             loading={loading && !lastLoadedAt}
             rows={legacyTerms}
             onImport={(file) => void importLegacyTerms(file)}
@@ -231,6 +240,7 @@ function GlobalMaterialPanel({
   exportLabel,
   filename,
   busy,
+  disabled,
   loading,
   rows,
   onImport,
@@ -244,6 +254,7 @@ function GlobalMaterialPanel({
   exportLabel: string;
   filename: string;
   busy: boolean;
+  disabled: boolean;
   loading: boolean;
   rows: Array<{ term: string; definition: string }>;
   onImport: (file: File) => void;
@@ -268,7 +279,7 @@ function GlobalMaterialPanel({
           replaceText={t("glossary.file.replaceWorkbook")}
           icon="spreadsheet"
           required
-          disabled={busy}
+          disabled={disabled}
           loading={busy}
           dataTestId={`${headingId}-file`}
           onFiles={([file]) => onImport(file)}
@@ -279,6 +290,7 @@ function GlobalMaterialPanel({
           size="sm"
           touchTarget className="md:self-end"
           loading={busy}
+          disabled={disabled}
           onClick={onExport}
         >
           <Download size={15} aria-hidden="true" />

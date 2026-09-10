@@ -14740,3 +14740,51 @@ for (const mode of ["comment", "annotation"] as const) {
     });
   }
 }
+
+for (const material of [
+  { path: "/glossary-rules", fileId: "glossary-rules-panel-heading-file-input", exportLabel: "用語・同義語 Excel 出力", importPath: "terms", preview: "glossary-terms-preview" },
+  { path: "/global-rules", fileId: "global-rules-file-input", exportLabel: "共通ルール Excel 出力", importPath: "rules", preview: "global-rules-preview" },
+]) {
+  test(`${material.path} の読込と取込は競合せず失敗後も再試行できる`, async ({ page }) => {
+    await mockNl2SqlApi(page);
+    const readGate = createRequestGate();
+    await page.route("**/api/nl2sql/legacy-learning-material", async (route) => {
+      await readGate.promise;
+      await fulfillJson(route, { glossary: { OLD: "古い定義" }, rules: ["古いルール"] });
+    });
+    await page.goto(material.path);
+    const file = page.getByTestId(material.fileId);
+    const refresh = page.getByRole("button", { name: "表示を更新", exact: true });
+    const download = page.getByRole("button", { name: material.exportLabel, exact: true });
+    try {
+      await expect(file).toBeDisabled();
+      await expect(download).toBeDisabled();
+    } finally { readGate.release(); }
+    await expect(file).toBeEnabled();
+    const importGate = createRequestGate();
+    let attempts = 0;
+    await page.route(`**/api/nl2sql/legacy-learning-material/${material.importPath}/import`, async (route) => {
+      attempts += 1;
+      if (attempts === 1) {
+        await importGate.promise;
+        await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "取込を再試行してください" }) });
+      } else {
+        await fulfillJson(route, { glossary: { NEW: "新しい定義" }, rules: ["新しいルール"] });
+      }
+    });
+    const workbook = { name: "replacement.xlsx", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", buffer: Buffer.from("fixture") };
+    await file.setInputFiles(workbook);
+    try {
+      await expect(refresh).toBeDisabled();
+      await expect(file).toBeDisabled();
+      await expect(download).toBeDisabled();
+    } finally { importGate.release(); }
+    await expect(file).toBeEnabled();
+    await expect(page.getByText("取込を再試行してください", { exact: true })).toBeVisible();
+    await file.setInputFiles(workbook);
+    await expect(page.getByTestId(material.preview)).toContainText("新しい");
+    await expect(page.getByTestId(material.preview)).not.toContainText("古い");
+    await expect(refresh).toBeEnabled();
+    expect(attempts).toBe(2);
+  });
+}

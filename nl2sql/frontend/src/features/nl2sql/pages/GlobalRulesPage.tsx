@@ -40,6 +40,8 @@ export function GlobalRulesPage() {
   const cleanupTimerRef = useRef<number | null>(null);
 
   const load = async (announce = false) => {
+    if (loading || busy) return;
+    loadControllerRef.current?.abort();
     const sequence = loadSequence.current + 1;
     loadSequence.current = sequence;
     setLoading(true);
@@ -58,7 +60,7 @@ export function GlobalRulesPage() {
         toast.success(t("globalRules.message.serverLoaded"));
       }
     } catch (err) {
-      if (isAbortError(err)) {
+      if (isAbortError(err) || controller.signal.aborted || sequence !== loadSequence.current) {
         return;
       }
       setErrorText(err instanceof Error ? err.message : t("globalRules.error.load"));
@@ -87,12 +89,16 @@ export function GlobalRulesPage() {
   }, []);
 
   const importRules = async (file: File) => {
+    if (loading || busy) return;
+    loadSequence.current += 1;
+    loadControllerRef.current?.abort();
     setFilename(file.name);
     setBusy(true);
     setErrorText(null);
     try {
       const data = await uploadRulesFile(file);
       setRules(data.rules);
+      setLastLoadedAt(new Date().toISOString());
       toast.success(t("globalRules.message.imported", { count: data.rules.length }));
     } catch (err) {
       setErrorText(err instanceof Error ? err.message : t("globalRules.error.import"));
@@ -102,6 +108,7 @@ export function GlobalRulesPage() {
   };
 
   const exportRules = async () => {
+    if (loading || busy) return;
     setBusy(true);
     setErrorText(null);
     try {
@@ -131,6 +138,7 @@ export function GlobalRulesPage() {
             icon: RefreshCw,
             onClick: () => load(true),
             loading,
+            disabled: busy,
           },
         ]}
       />
@@ -179,7 +187,7 @@ export function GlobalRulesPage() {
                 replaceText={t("glossary.file.replaceWorkbook")}
                 icon="spreadsheet"
                 required
-                disabled={busy}
+                disabled={busy || loading}
                 loading={busy}
                 dataTestId="global-rules-file"
                 onFiles={([file]) => void importRules(file)}
@@ -190,6 +198,7 @@ export function GlobalRulesPage() {
                 size="sm"
                 touchTarget className="md:self-end"
                 loading={busy}
+                disabled={loading}
                 onClick={() => void exportRules()}
               >
                 <Download size={15} aria-hidden="true" />
