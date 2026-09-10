@@ -5945,3 +5945,138 @@ test("ロール管理レビュー: 選択順を除いて未保存変更を保護
   await expect(page.getByTestId("security-roles-grid")).toBeVisible();
   await expect(page.getByRole("alertdialog")).toHaveCount(0);
 });
+
+async function mockReviewedDeepSec(page: Page) {
+  await mockDatabaseGateReady(page);
+  const grant = { entitlement_id: "review-grant", resource_code: "HR.EMPLOYEES", scope_code: "*", capability: "SELECT", target_owner: "HR", target_object: "EMPLOYEES", target_type: "TABLE", column_names: ["EMPLOYEE_ID"], scope_mode: "ALL", scope_column: "", scope_filters: [] };
+  const role = { ...systemRole, role_id: "review-a", role_code: "REVIEW_A", display_name: "A レビュー", is_built_in: false, archived: false, version: 1, data_entitlements: [grant] };
+  const other = { ...role, role_id: "review-b", role_code: "REVIEW_B", display_name: "B レビュー", data_entitlements: [] };
+  const status = { configured: true, driver_mode: "thin", connection_security: "wallet_mtls", deepsec_enabled: true, data_user: "DEEPSEC_DATA_USER", has_data_user_password: true, objects: {}, message: "構成済みです。" };
+  await page.route("**/api/security/deepsec/status", route => fulfill(route, status));
+  await page.route("**/api/security/deepsec/plan", route => fulfill(route, deepSecPlan(true)));
+  await mockDeepSecDataEntitlements(page, [role, other]);
+  return { role, other, grant, status };
+}
+
+test("DeepSec レビュー: プレビュー待機中は対象と列を固定する", async ({ page }, testInfo) => {
+  const { role, grant } = await mockReviewedDeepSec(page);
+  let pending: Route | undefined;
+  await page.route("**/api/security/deepsec/data-entitlements/review-a/preview", route => { pending = route; });
+  await page.goto("/settings/security/deepsec");
+  await page.getByRole("tab", { name: "データ権限", exact: true }).click();
+  await page.getByText("ロール全体の SQL プレビュー", { exact: true }).click();
+  await page.getByTestId("security-deepsec-sql-preview-generate").click();
+  await expect.poll(() => Boolean(pending)).toBe(true);
+  await expect(page.getByTestId("security-deepsec-entitlement-role-review-b")).toBeDisabled();
+  await expect(page.getByRole("checkbox", { name: /DISPLAY_NAME/ })).toBeDisabled();
+  await expect(page.getByRole("tab", { name: "基盤構成", exact: true })).toBeDisabled();
+  await page.screenshot({ path: testInfo.outputPath("deepsec-preview-pending.png"), fullPage: true });
+  await fulfill(pending!, { role_id: role.role_id, version: role.version, data_entitlements: [{ ...grant, sql: ["SELECT EMPLOYEE_ID FROM HR.EMPLOYEES"], checksum: "review" }], cleanup_sql: [], checksum: "review" });
+  await expect(page.getByTestId("security-deepsec-entitlement-role-review-a")).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("checkbox", { name: /EMPLOYEE_ID/ })).toBeChecked();
+  await expect(page.getByRole("checkbox", { name: /DISPLAY_NAME/ })).toBeEnabled();
+});
+
+test("DeepSec レビュー: 列とタブの変更で実行確認を解除する", async ({ page }) => {
+  await mockReviewedDeepSec(page);
+  await page.goto("/settings/security/deepsec");
+  await page.getByRole("tab", { name: "データ権限", exact: true }).click();
+  const confirmation = page.getByRole("textbox", { name: "実行確認語" });
+  await confirmation.fill("ADMIN_EXECUTE");
+  await page.getByRole("checkbox", { name: /DISPLAY_NAME/ }).check();
+  await expect(confirmation).toHaveValue("");
+  await expect(page.getByRole("button", { name: "Data Grant を適用", exact: true })).toBeDisabled();
+  await confirmation.fill("ADMIN_EXECUTE");
+  await page.getByRole("tab", { name: "基盤構成", exact: true }).click();
+  await page.getByRole("tab", { name: "データ権限", exact: true }).click();
+  await expect(confirmation).toHaveValue("");
+  await expect(page.getByRole("checkbox", { name: /DISPLAY_NAME/ })).toBeChecked();
+});
+
+test("DeepSec レビュー: 未保存権限は検索と再取得で保持しロール切替で破棄確認する", async ({ page }, testInfo) => {
+  const { role, other } = await mockReviewedDeepSec(page);
+  await page.goto("/settings/security/deepsec");
+  await page.getByRole("tab", { name: "データ権限", exact: true }).click();
+  await page.getByRole("checkbox", { name: /DISPLAY_NAME/ }).check();
+  await page.getByTestId("security-deepsec-entitlement-search").fill("B レビュー");
+  await expect(page.getByRole("checkbox", { name: /DISPLAY_NAME/ })).toBeChecked();
+  await page.getByTestId("security-deepsec-entitlement-search").fill("");
+  await page.route("**/api/security/deepsec/data-entitlements", route => fulfill(route, [{ ...role, version: 2 }, other]));
+  const refresh = page.getByRole("button", { name: "表示を更新", exact: true });
+  await refresh.click();
+  await expect(page.getByRole("checkbox", { name: /DISPLAY_NAME/ })).toBeChecked();
+  let pendingApply: Route | undefined;
+  await page.route("**/api/security/deepsec/data-entitlements/review-a/apply", route => { pendingApply = route; });
+  await page.getByRole("textbox", { name: "実行確認語" }).fill("ADMIN_EXECUTE");
+  await page.getByRole("button", { name: "Data Grant を適用", exact: true }).click();
+  await expect.poll(() => Boolean(pendingApply)).toBe(true);
+  expect(pendingApply!.request().postDataJSON().version).toBe(1);
+  await expect(page.getByRole("checkbox", { name: /DISPLAY_NAME/ })).toBeDisabled();
+  await expect(page.getByTestId("security-deepsec-entitlement-role-review-b")).toBeDisabled();
+  await fulfill(pendingApply!, "ロールが別の操作で更新されています。", 409);
+  await expect(page.getByText("ロールが別の操作で更新されています。", { exact: true })).toBeVisible();
+  await expect(page.getByRole("checkbox", { name: /DISPLAY_NAME/ })).toBeChecked();
+  const restart = page.getByRole("button", { name: "最新設定で編集をやり直す", exact: true });
+  await restart.click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "キャンセル" }).click();
+  await expect(page.getByRole("checkbox", { name: /DISPLAY_NAME/ })).toBeChecked();
+  await restart.click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "最新設定で編集をやり直す" }).click();
+  await expect(page.getByRole("checkbox", { name: /DISPLAY_NAME/ })).not.toBeChecked();
+  await page.getByRole("checkbox", { name: /DISPLAY_NAME/ }).check();
+  await page.getByRole("textbox", { name: "実行確認語" }).fill("ADMIN_EXECUTE");
+  pendingApply = undefined;
+  await page.getByRole("button", { name: "Data Grant を適用", exact: true }).click();
+  await expect.poll(() => Boolean(pendingApply)).toBe(true);
+  expect(pendingApply!.request().postDataJSON().version).toBe(2);
+  const appliedRole = { ...role, version: 3, data_entitlements: pendingApply!.request().postDataJSON().data_entitlements };
+  await page.route("**/api/security/deepsec/data-entitlements", route => fulfill(route, [appliedRole, other]));
+  await fulfill(pendingApply!, { role: appliedRole, status: "APPLIED", checksum: "review", cleanup_count: 0, applied_count: 1 });
+  await expect(page.getByRole("checkbox", { name: /DISPLAY_NAME/ })).toBeEnabled();
+  // 保存後は新しい baseline から次の編集を始める。
+  await page.getByRole("checkbox", { name: /DEPARTMENT_CODE/ }).check();
+  await page.getByTestId("security-deepsec-entitlement-role-review-b").click();
+  await page.screenshot({ path: testInfo.outputPath("deepsec-discard-dialog.png"), fullPage: true });
+  await page.getByRole("alertdialog").getByRole("button", { name: "キャンセル" }).click();
+  await expect(page.getByRole("checkbox", { name: /DISPLAY_NAME/ })).toBeChecked();
+  await page.getByTestId("security-deepsec-entitlement-role-review-b").click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "破棄して移動" }).click();
+  await expect(page.getByTestId("security-deepsec-entitlement-role-review-b")).toHaveAttribute("aria-pressed", "true");
+});
+
+test("DeepSec レビュー: パスワード保存中は後続入力と他の操作を固定する", async ({ page }) => {
+  const { status } = await mockReviewedDeepSec(page);
+  let pending: Route | undefined;
+  await page.route("**/api/security/deepsec/config", route => { pending = route; });
+  await page.goto("/settings/security/deepsec");
+  const password = page.locator("#deepsec-data-user-password");
+  await password.fill("SyntheticOnly!123");
+  await page.getByTestId("security-deepsec-config-actions").getByRole("button", { name: /保存/ }).click();
+  await expect.poll(() => Boolean(pending)).toBe(true);
+  await expect(password).toBeDisabled();
+  await expect(page.getByRole("tab", { name: "基盤構成", exact: true })).toBeDisabled();
+  await fulfill(pending!, status);
+  await expect(password).toHaveValue("");
+  await expect(password).toBeEnabled();
+});
+
+
+test("DeepSec レビュー: 取得対象から消えたロールの草稿は読み取り専用で保護する", async ({ page }) => {
+  const { other } = await mockReviewedDeepSec(page);
+  await page.goto("/settings/security/deepsec");
+  await page.getByRole("tab", { name: "データ権限", exact: true }).click();
+  const column = page.getByRole("checkbox", { name: /DISPLAY_NAME/ });
+  await column.check();
+  await page.route("**/api/security/deepsec/data-entitlements", route => fulfill(route, [other]));
+  await page.getByRole("button", { name: "表示を更新", exact: true }).click();
+  await expect(page.getByText("選択していたロールを取得できません。", { exact: false })).toBeVisible();
+  await expect(column).toBeChecked();
+  await expect(column).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Data Grant を適用", exact: true })).toBeDisabled();
+  await page.getByTestId("security-deepsec-entitlement-role-review-b").click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "キャンセル" }).click();
+  await expect(column).toBeChecked();
+  await page.getByTestId("security-deepsec-entitlement-role-review-b").click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "破棄して移動" }).click();
+  await expect(page.getByTestId("security-deepsec-entitlement-role-review-b")).toHaveAttribute("aria-pressed", "true");
+});

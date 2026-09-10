@@ -136,7 +136,7 @@ test("DeepSec DATA USER password sync button は保存 action と独立してい
   assert.match(dataUserPanel, /<RefreshCw size=\{15\} aria-hidden \/>/u);
   assert.match(
     dataUserPanel,
-    /type="button"[\s\S]*variant="secondary"[\s\S]*loading=\{configSyncing\}[\s\S]*disabled=\{passwordSyncDisabled\}/u
+    /type="button"[\s\S]*variant="secondary"[\s\S]*loading=\{configSyncing\}[\s\S]*disabled=\{passwordSyncDisabled \|\| actionBlocked\}/u
   );
   assert.match(
     pageSource,

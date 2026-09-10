@@ -44,6 +44,7 @@ import {
 import { isAbortError } from "@/lib/api";
 import { formatDateTimeWithYear } from "@/lib/format";
 import { t } from "@/lib/i18n";
+import { useUnsavedChangesGuard } from "@/lib/useUnsavedChangesGuard";
 import { useRequestScope } from "@/lib/useRequestScope";
 import { cn } from "@/lib/utils";
 import { selectedVisibleKey } from "@/lib/visible-selection";
@@ -412,6 +413,16 @@ function normalizeEntitlementRows(rows: DataEntitlement[]) {
     }));
 }
 
+function entitlementSignature(rows: DataEntitlement[]) {
+  return JSON.stringify(normalizeEntitlementRows(rows).map((item) => ({
+    ...item,
+    column_names: [...item.column_names].sort(),
+    scope_filters: item.scope_filters.map((filter) => ({
+      ...filter, values: [...(filter.values ?? [])].sort(),
+    })).sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))),
+  })).sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))));
+}
+
 function DeepSecTargetObjectPicker({
   index,
   value,
@@ -698,6 +709,7 @@ export function SecurityDeepSecPage() {
   const [status, setStatus] = useState<DeepSecStatus | null>(null);
   const [plan, setPlan] = useState<DeepSecPlan | null>(null);
   const [verification, setVerification] = useState<DeepSecVerification | null>(null);
+  const [entitlementBaseline, setEntitlementBaseline] = useState<DeepSecRoleEntitlements | null>(null);
   const [entitlementRoles, setEntitlementRoles] = useState<DeepSecRoleEntitlements[]>([]);
   const [selectedEntitlementRoleId, setSelectedEntitlementRoleId] = useState<string | null>(null);
   const [entitlementDraftRows, setEntitlementDraftRows] = useState<DataEntitlementDraft[]>([]);
@@ -760,6 +772,10 @@ export function SecurityDeepSecPage() {
     targetObjectsLoading ||
     targetObjectsLoadingMore;
 
+  const operationBusy = foundationApplying || resetting || verifying || entitlementPreviewing ||
+    entitlementApplying || configSaving || configSyncing;
+  const actionBlocked = operationBusy || statusLoading || planLoading || entitlementLoading;
+
   const filteredEntitlementRoles = useMemo(() => {
     const q = entitlementSearch.trim().toLowerCase();
     return entitlementRoles
@@ -768,11 +784,15 @@ export function SecurityDeepSecPage() {
   }, [entitlementRoles, entitlementSearch]);
   const visibleSelectedEntitlementRoleId =
     activeView === "data-permissions"
-      ? selectedVisibleKey(filteredEntitlementRoles, selectedEntitlementRoleId, (role) => role.role_id)
+      ? selectedEntitlementRoleId ?? selectedVisibleKey(filteredEntitlementRoles, null, (role) => role.role_id)
       : selectedEntitlementRoleId;
-  const selectedEntitlementRole = useMemo(
+  const currentEntitlementRole = useMemo(
     () => entitlementRoles.find((role) => role.role_id === visibleSelectedEntitlementRoleId) ?? null,
     [entitlementRoles, visibleSelectedEntitlementRoleId]
+  );
+  const selectedRoleMissing = Boolean(visibleSelectedEntitlementRoleId && !currentEntitlementRole);
+  const selectedEntitlementRole = currentEntitlementRole ?? (
+    entitlementBaseline?.role_id === visibleSelectedEntitlementRoleId ? entitlementBaseline : null
   );
   const targetObjectMap = useMemo(() => {
     return new Map(targetObjects.map((item) => [targetQualifiedName(item), item]));
@@ -793,18 +813,56 @@ export function SecurityDeepSecPage() {
     [targetObjects]
   );
   const entitlementReadOnly = Boolean(
-    !mayManageEntitlements || selectedEntitlementRole?.is_built_in || selectedEntitlementRole?.archived
+    !mayManageEntitlements || selectedRoleMissing || selectedEntitlementRole?.is_built_in || selectedEntitlementRole?.archived
   );
   const normalizedEntitlementDraftRows = useMemo(
     () => normalizeEntitlementRows(entitlementDraftRows),
     [entitlementDraftRows]
   );
   const savedEntitlementRows = useMemo(
-    () => normalizeEntitlementRows(selectedEntitlementRole?.data_entitlements ?? []),
-    [selectedEntitlementRole]
+    () => normalizeEntitlementRows(entitlementBaseline?.data_entitlements ?? []),
+    [entitlementBaseline]
   );
-  const entitlementDraftChanged =
-    JSON.stringify(normalizedEntitlementDraftRows) !== JSON.stringify(savedEntitlementRows);
+  const draftSignature = entitlementSignature(entitlementDraftRows);
+  const entitlementDraftChanged = draftSignature !== entitlementSignature(savedEntitlementRows);
+  const confirmDiscard = (confirmLabel = t("security.common.discardConfirm")) => confirm({
+    title: t("security.common.discardTitle"),
+    description: t("security.common.discardDescription"),
+    confirmLabel,
+    tone: "danger",
+    dismissOnOverlay: false,
+  });
+  useUnsavedChangesGuard(operationBusy || entitlementDraftChanged || Boolean(dataUserPassword), async () =>
+    !operationBusy && (!(entitlementDraftChanged || dataUserPassword) || await confirmDiscard())
+  );
+  const selectEntitlementRole = async (roleId: string) => {
+    if (operationBusy || roleId === visibleSelectedEntitlementRoleId) return;
+    if (entitlementDraftChanged && !(await confirmDiscard())) return;
+    setSelectedEntitlementRoleId(roleId);
+    setEntitlementFormError("");
+  };
+  const draftVersionChanged = Boolean(entitlementDraftChanged && currentEntitlementRole &&
+    entitlementBaseline?.role_id === currentEntitlementRole.role_id &&
+    entitlementBaseline.version !== currentEntitlementRole.version);
+  const restartEntitlementDraft = async () => {
+    if (actionBlocked || !currentEntitlementRole || !(await confirmDiscard(t("security.deepsec.entitlements.restartDraft")))) return;
+    const rows = entitlementDraft(currentEntitlementRole);
+    setEntitlementBaseline(currentEntitlementRole);
+    setEntitlementDraftRows(rows);
+    setSelectedEntitlementDraftKey(rows[0]?.client_key ?? null);
+    setEntitlementPreview(null);
+    setEntitlementSqlPreviewOpen(false);
+    setEntitlementFormError("");
+    setEntitlementApplyConfirmation("");
+  };
+  const planSignature = JSON.stringify(plan?.steps.map((step) => [step.checksum, step.status]));
+  useEffect(() => {
+    setEntitlementApplyConfirmation("");
+  }, [draftSignature, visibleSelectedEntitlementRoleId, selectedEntitlementRole?.version, activeView]);
+  useEffect(() => {
+    setFoundationApplyConfirmation("");
+    setResetConfirmation("");
+  }, [activeView, planSignature]);
   const entitlementApplyConfirmed =
     entitlementApplyConfirmation.trim() === ADMIN_EXECUTE_CONFIRMATION;
   const selectedRolePreviewRows = entitlementPreview?.data_entitlements ?? [];
@@ -943,11 +1001,6 @@ export function SecurityDeepSecPage() {
         const rows = await securityApi.deepSecDataEntitlements({ signal });
         if (signal.aborted || sequence !== entitlementLoadSequence.current) return;
         setEntitlementRoles(rows);
-        setSelectedEntitlementRoleId((current) =>
-          current && rows.some((role) => role.role_id === current)
-            ? current
-            : null
-        );
         completed = true;
       });
     } catch (cause) {
@@ -1060,7 +1113,7 @@ export function SecurityDeepSecPage() {
   useEffect(() => {
     if (activeView !== "data-permissions" || entitlementLoading) return;
     setSelectedEntitlementRoleId((current) =>
-      selectedVisibleKey(filteredEntitlementRoles, current, (role) => role.role_id)
+      current ?? selectedVisibleKey(filteredEntitlementRoles, null, (role) => role.role_id)
     );
   }, [activeView, entitlementLoading, filteredEntitlementRoles]);
 
@@ -1076,7 +1129,10 @@ export function SecurityDeepSecPage() {
   }, [targetObjectSearch, targetObjectOwnerPrefix]);
 
   useEffect(() => {
+    // 背景再取得は編集中の baseline/version を更新しない。適用時は旧 version で競合を検出する。
+    if (entitlementDraftChanged && entitlementBaseline?.role_id === visibleSelectedEntitlementRoleId) return;
     const nextDraftRows = entitlementDraft(selectedEntitlementRole);
+    setEntitlementBaseline(selectedEntitlementRole);
     setEntitlementDraftRows(nextDraftRows);
     setSelectedEntitlementDraftKey(nextDraftRows[0]?.client_key ?? null);
     setEntitlementPreview(null);
@@ -1132,7 +1188,7 @@ export function SecurityDeepSecPage() {
   };
 
   const handleSaveConfig = async () => {
-    if (configSaving || configSyncing) return;
+    if (actionBlocked) return;
     const validationError = validateConfigForm();
     if (validationError) {
       setConfigError(validationError);
@@ -1155,7 +1211,7 @@ export function SecurityDeepSecPage() {
   };
 
   const handleSyncConfig = async () => {
-    if (configSaving || configSyncing) return;
+    if (actionBlocked) return;
     if (!hasSavedDataUserPassword) {
       setConfigError(t("security.deepsec.config.syncMissing"));
       return;
@@ -1177,7 +1233,7 @@ export function SecurityDeepSecPage() {
   };
 
   const handleApplyFoundation = async () => {
-    if (!plan) return;
+    if (!plan || actionBlocked) return;
     const confirmation = foundationApplyConfirmation.trim();
     if (confirmation !== ADMIN_EXECUTE_CONFIRMATION) {
       setFoundationApplyError(t("security.deepsec.applyFoundationConfirmationRequired"));
@@ -1206,7 +1262,7 @@ export function SecurityDeepSecPage() {
   };
 
   const handleReset = async () => {
-    if (!plan) return;
+    if (!plan || actionBlocked) return;
     if (resetConfirmation.trim() !== ADMIN_RESET_CONFIRMATION) {
       setResetError(t("security.deepsec.resetConfirmationRequired"));
       return;
@@ -1228,6 +1284,7 @@ export function SecurityDeepSecPage() {
   };
 
   const handleVerify = async () => {
+    if (actionBlocked) return;
     if (
       !(await confirm({
         title: t("security.deepsec.verify"),
@@ -1518,7 +1575,7 @@ export function SecurityDeepSecPage() {
   };
 
   const handlePreviewEntitlements = async () => {
-    if (!selectedEntitlementRole || entitlementReadOnly) return;
+    if (!selectedEntitlementRole || entitlementReadOnly || actionBlocked) return;
     const validationError = validateEntitlements();
     if (validationError) {
       setEntitlementFormError(validationError);
@@ -1531,6 +1588,7 @@ export function SecurityDeepSecPage() {
       const preview = await securityApi.previewDeepSecDataEntitlements(
         {
           ...selectedEntitlementRole,
+          version: entitlementBaseline?.version ?? selectedEntitlementRole.version,
           data_entitlements: normalizedEntitlementDraftRows,
         }
       );
@@ -1555,7 +1613,7 @@ export function SecurityDeepSecPage() {
   };
 
   const handleApplyEntitlements = async () => {
-    if (!selectedEntitlementRole || entitlementReadOnly) return;
+    if (!selectedEntitlementRole || entitlementReadOnly || actionBlocked) return;
     const validationError = validateEntitlements();
     if (validationError) {
       setEntitlementFormError(validationError);
@@ -1572,11 +1630,16 @@ export function SecurityDeepSecPage() {
       const result = await securityApi.applyDeepSecDataEntitlements(
         {
           ...selectedEntitlementRole,
+          version: entitlementBaseline?.version ?? selectedEntitlementRole.version,
           data_entitlements: normalizedEntitlementDraftRows,
         },
         entitlementApplyConfirmation.trim()
       );
       const updated = result.role;
+      const nextDraftRows = entitlementDraft(updated);
+      setEntitlementBaseline(updated);
+      setEntitlementDraftRows(nextDraftRows);
+      setSelectedEntitlementDraftKey(nextDraftRows[0]?.client_key ?? null);
       setEntitlementRoles((rows) =>
         rows.map((role) => (role.role_id === updated.role_id ? updated : role))
       );
@@ -1615,12 +1678,14 @@ export function SecurityDeepSecPage() {
             kind: "utility",
             label: t("common.action.refresh"),
             icon: RefreshCw,
-            onClick: () => load(true),
+            disabled: actionBlocked,
+            onClick: () => { if (!actionBlocked) return load(true); },
             loading: refreshing,
           },
         ]}
       />
       <main className="grid gap-4 p-4 lg:p-8">
+        <fieldset disabled={operationBusy} className="contents" aria-busy={operationBusy} data-testid="security-deepsec-controls">
         <PageNotice
           notice={statusLoadError ? { tone: "danger", message: statusLoadError } : null}
           action={
@@ -1720,7 +1785,7 @@ export function SecurityDeepSecPage() {
                   type="submit"
                   size="lg"
                   loading={configSaving}
-                  disabled={!dataUserPassword || configSaving || configSyncing}
+                  disabled={!dataUserPassword || actionBlocked}
                   className="w-full whitespace-nowrap sm:w-auto"
                 >
                   <Save size={15} aria-hidden />
@@ -1731,7 +1796,7 @@ export function SecurityDeepSecPage() {
                   variant="secondary"
                   size="lg"
                   loading={configSyncing}
-                  disabled={passwordSyncDisabled}
+                  disabled={passwordSyncDisabled || actionBlocked}
                   className="w-full whitespace-nowrap sm:w-auto"
                   onClick={() => void handleSyncConfig()}
                 >
@@ -1805,7 +1870,7 @@ export function SecurityDeepSecPage() {
                         phrase: ADMIN_EXECUTE_CONFIRMATION,
                       })}
                       tone="neutral"
-                      disabled={foundationApplyBlocked || foundationApplying || resetting}
+                      disabled={foundationApplyBlocked || actionBlocked}
                       actions={
                         <>
                           <Button
@@ -1816,8 +1881,7 @@ export function SecurityDeepSecPage() {
                             disabled={
                               !foundationApplyConfirmed ||
                               foundationApplyBlocked ||
-                              foundationApplying ||
-                              resetting
+                              actionBlocked
                             }
                             onClick={() => void handleApplyFoundation()}
                           >
@@ -1885,7 +1949,7 @@ export function SecurityDeepSecPage() {
                             size="lg"
                             className="w-full sm:w-auto"
                             loading={resetting}
-                            disabled={!resetConfirmed || resetting || foundationApplying}
+                            disabled={!resetConfirmed || actionBlocked}
                             onClick={() => void handleReset()}
                           >
                             <Trash2 size={15} aria-hidden />
@@ -1948,6 +2012,17 @@ export function SecurityDeepSecPage() {
               </CardHeader>
               <CardContent className="space-y-4">
                 {entitlementLoadError ? <Banner severity="danger">{entitlementLoadError}</Banner> : null}
+                {!entitlementLoading && selectedRoleMissing ? (
+                  <Banner severity="warning">{t("security.deepsec.entitlements.selectionMissing")}</Banner>
+                ) : null}
+                {draftVersionChanged ? (
+                  <Banner severity="warning">
+                    <p>{t("security.deepsec.entitlements.versionChanged")}</p>
+                    <Button type="button" variant="secondary" size="sm" disabled={actionBlocked} onClick={() => void restartEntitlementDraft()}>
+                      {t("security.deepsec.entitlements.restartDraft")}
+                    </Button>
+                  </Banner>
+                ) : null}
                 <div className="grid gap-4 xl:grid-cols-[minmax(15rem,22rem)_minmax(0,1fr)]">
                   <section className="grid min-w-0 content-start gap-3" aria-labelledby="deepsec-entitlement-role-list-title">
                     <h3 id="deepsec-entitlement-role-list-title" className="text-sm font-semibold">
@@ -1992,10 +2067,7 @@ export function SecurityDeepSecPage() {
                             )}
                             aria-pressed={selected}
                             data-testid={`security-deepsec-entitlement-role-${role.role_id}`}
-                            onClick={() => {
-                              setSelectedEntitlementRoleId(role.role_id);
-                              setEntitlementFormError("");
-                            }}
+                            onClick={() => void selectEntitlementRole(role.role_id)}
                           >
                             <span className="flex min-w-0 flex-wrap items-start justify-between gap-2">
                               <span className="min-w-0">
@@ -2246,14 +2318,14 @@ export function SecurityDeepSecPage() {
                                             selectLabel={t("common.selection.selectAll")}
                                             clearLabel={t("common.selection.clearAll")}
                                             selectDisabled={
-                                              entitlementReadOnly ||
+                                              entitlementReadOnly || actionBlocked ||
                                               loadingDetail ||
                                               Boolean(detailError) ||
                                               availableColumnNames.length === 0 ||
                                               selectedAvailableColumnCount === availableColumnNames.length
                                             }
                                             clearDisabled={
-                                              entitlementReadOnly ||
+                                              entitlementReadOnly || actionBlocked ||
                                               loadingDetail ||
                                               Boolean(detailError) ||
                                               availableColumnNames.length === 0 ||
@@ -2375,7 +2447,7 @@ export function SecurityDeepSecPage() {
                                             variant="secondary"
                                             className="w-full sm:w-auto"
                                             disabled={
-                                              entitlementReadOnly ||
+                                              entitlementReadOnly || actionBlocked ||
                                               loadingDetail ||
                                               supportedScopeColumns.length === 0
                                             }
@@ -2750,7 +2822,7 @@ export function SecurityDeepSecPage() {
                                     className="w-full min-w-0 justify-center lg:w-auto"
                                     loading={entitlementPreviewing}
                                     disabled={
-                                      entitlementReadOnly ||
+                                      entitlementReadOnly || actionBlocked ||
                                       entitlementPreviewing ||
                                       entitlementApplying ||
                                       (normalizedEntitlementDraftRows.length === 0 &&
@@ -2867,7 +2939,7 @@ export function SecurityDeepSecPage() {
                             })}
                             tone="danger"
                             disabled={
-                              entitlementReadOnly ||
+                              entitlementReadOnly || actionBlocked ||
                               entitlementPreviewing ||
                               entitlementApplying ||
                               !status?.configured
@@ -2880,7 +2952,7 @@ export function SecurityDeepSecPage() {
                                 className="w-full sm:w-auto"
                                 loading={entitlementApplying}
                                 disabled={
-                                  entitlementReadOnly ||
+                                  entitlementReadOnly || actionBlocked ||
                                   entitlementPreviewing ||
                                   entitlementApplying ||
                                   !status?.configured ||
@@ -2923,7 +2995,7 @@ export function SecurityDeepSecPage() {
                       size="sm"
                       className="w-full sm:w-auto"
                       loading={verifying}
-                      disabled={!status?.configured || verifying}
+                      disabled={!status?.configured || actionBlocked}
                       data-testid="security-deepsec-verify-action"
                       onClick={() => void handleVerify()}
                     >
@@ -2964,6 +3036,7 @@ export function SecurityDeepSecPage() {
             ) : null}
           </ManagementPanelShell>
         ) : null}
+        </fieldset>
       </main>
     </>
   );
