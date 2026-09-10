@@ -35,7 +35,7 @@ export function Toaster({
       aria-label={regionLabel}
       aria-live="polite"
       aria-relevant="additions"
-      className="pointer-events-none fixed z-[1000] flex max-h-[calc(100dvh-2rem)] w-[min(92vw,22rem)] flex-col gap-2 overflow-y-auto"
+      className="pointer-events-none fixed z-[45] flex max-h-[calc(100dvh-2rem)] w-[min(92vw,22rem)] flex-col gap-2 overflow-y-auto"
       style={{
         bottom: "max(1rem, env(safe-area-inset-bottom))",
         ...(placement === "bottom-left"

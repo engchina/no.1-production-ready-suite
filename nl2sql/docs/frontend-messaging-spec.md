@@ -99,7 +99,7 @@
 
 ### 3.1 Toast
 
-- **配置**: NL2SQL では画面右下にスタック。`z-index` は `1000`(§6 参照)。共有 UI の `<Toaster/>` は `placement?: "bottom-left" | "bottom-right"` を受け取り、互換性のため既定は `bottom-right` とする。`bottom-left` は明示指定したコンシューマのみで使用する。
+- **配置**: NL2SQL では画面右下にスタック。`z-index` は app-local Toaster で `45` とし、共通 modal (`50`) の背後に置く(§6 参照)。通知が確認ボタンを覆ってはならない。共有 UI の `<Toaster/>` は `placement?: "bottom-left" | "bottom-right"` を受け取り、互換性のため既定は `bottom-right` とする。`bottom-left` は明示指定したコンシューマのみで使用する。
 - **合成データ生成の終了通知**: 終端遷移を観測したときだけ、表名と「結果を確認」action を共通 Toast に表示する。ページ上部に終了履歴の Banner を表示せず、初回取得・再読込・同一状態の再取得では通知を再送しない。履歴と詳細はデータ管理画面で確認する。
 - **a11y**: コンテナは `role="region"` + `aria-live="polite"`、フォーカスを奪わない(`toast-accessibility`)。`danger` は `role="alert"`。
 - **自動消滅**: success/info/warning は既定 4 秒(`toast-dismiss`: 3–5s)。`danger` は
@@ -172,7 +172,7 @@ toastError(message, opts?)      // = danger トーン。固定面がない場合
 - **a11y / 操作**:
   - フォーカストラップ + 開いたら確認ボタンへフォーカス、閉じたらトリガーへ復帰。
   - `Esc` とオーバーレイクリックでキャンセル(`escape-routes` / `modal-escape`)。破棄系は誤操作防止のためオーバーレイクリック無効可。
-  - scrim は 40–60% black。`z-index` 1000。
+  - scrim は 40–60% black。NL2SQL の共通 overlay は `z-index` 50（Toast の 45 より上）。
   - 確認ボタンは操作トーンに合わせる(削除なら `danger`)。キャンセルが既定フォーカスでもよい。
   - enter は trigger 起点の scale+fade(`modal-motion`)、`prefers-reduced-motion` でフェードのみ。
 - **API(実装規約)**:
@@ -331,8 +331,8 @@ if (!query.data?.length) return <EmptyState title={…} hint={…} />;          
 | 通常コンテンツ | 0 |
 | sticky header / sideTabBar | 20–40 |
 | Banner(sticky 時) | 40 |
-| ConfirmDialog overlay/scrim | 1000 |
-| Toast スタック | 1000 |
+| ConfirmDialog overlay/scrim | 50 |
+| Toast スタック（NL2SQL app-local） | 45 |
 
 - アニメーション: micro 150–300ms、exit は enter の 60–70%、`transform`/`opacity` のみ、`ease-out`(enter)/`ease-in`(exit)。すべて `prefers-reduced-motion` 対応。
 

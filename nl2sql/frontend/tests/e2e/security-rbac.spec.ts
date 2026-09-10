@@ -6036,7 +6036,8 @@ test("DeepSec レビュー: 未保存権限は検索と再取得で保持しロ�
   // 保存後は新しい baseline から次の編集を始める。
   await page.getByRole("checkbox", { name: /DEPARTMENT_CODE/ }).check();
   await page.getByTestId("security-deepsec-entitlement-role-review-b").click();
-  await page.screenshot({ path: testInfo.outputPath("deepsec-discard-dialog.png"), fullPage: true });
+  await expect(page.getByRole("alertdialog")).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("deepsec-discard-dialog.png"), fullPage: true, animations: "disabled" });
   await page.getByRole("alertdialog").getByRole("button", { name: "キャンセル" }).click();
   await expect(page.getByRole("checkbox", { name: /DISPLAY_NAME/ })).toBeChecked();
   await page.getByTestId("security-deepsec-entitlement-role-review-b").click();
@@ -6079,4 +6080,44 @@ test("DeepSec レビュー: 取得対象から消えたロールの草稿は読�
   await page.getByTestId("security-deepsec-entitlement-role-review-b").click();
   await page.getByRole("alertdialog").getByRole("button", { name: "破棄して移動" }).click();
   await expect(page.getByTestId("security-deepsec-entitlement-role-review-b")).toHaveAttribute("aria-pressed", "true");
+});
+
+test("セキュリティレビュー: 成功通知が残っていても確認ダイアログを即座に操作できる", async ({ page }, testInfo) => {
+  const { status } = await mockReviewedDeepSec(page);
+  await page.route("**/api/security/deepsec/config", route => fulfill(route, status));
+  await page.goto("/settings/security/deepsec");
+  const password = page.locator("#deepsec-data-user-password");
+  await password.fill("SyntheticOnly!123");
+  await page.getByTestId("security-deepsec-config-actions").getByRole("button", { name: /保存/ }).click();
+  await expect(password).toHaveValue("");
+  await password.fill("UnsavedSynthetic!123");
+  await page.evaluate(() => {
+    const link = document.createElement("a");
+    link.href = "/settings/security/users";
+    link.textContent = "セキュリティ画面へ移動";
+    document.body.append(link);
+  });
+  await page.getByRole("link", { name: "セキュリティ画面へ移動" }).click();
+  const dialog = page.getByRole("alertdialog");
+  await expect(dialog).toBeVisible();
+  await dialog.evaluate(async node => {
+    await Promise.all(node.getAnimations({ subtree: true }).map(animation => animation.finished));
+  });
+  const notification = page.getByRole("region", { name: "通知", exact: true });
+  await expect(notification.getByRole("status")).toBeVisible();
+  const dialogLayer = await page.getByTestId("app-dialog-overlay").evaluate(node => Number(getComputedStyle(node).zIndex));
+  const toastLayer = await notification.evaluate(node => Number(getComputedStyle(node).zIndex));
+  expect(dialogLayer).toBeGreaterThan(toastLayer);
+  for (const button of await dialog.getByRole("button").all()) {
+    expect(await button.evaluate(node => {
+      const rect = node.getBoundingClientRect();
+      const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+      return hit === node || node.contains(hit);
+    })).toBe(true);
+  }
+  await page.screenshot({ path: testInfo.outputPath("toast-below-confirmation.png"), animations: "disabled" });
+  await dialog.getByRole("button", { name: "キャンセル" }).click();
+  await expect(password).toHaveValue("UnsavedSynthetic!123");
+  await expect(notification.getByRole("status")).toBeVisible();
+  await expect(page.getByRole("link", { name: "セキュリティ画面へ移動" })).toBeFocused();
 });
