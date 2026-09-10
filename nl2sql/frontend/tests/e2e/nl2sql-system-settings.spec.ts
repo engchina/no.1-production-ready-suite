@@ -2585,3 +2585,40 @@ test("OCI 初期取得失敗は編集を許可せず、再試行後の遅延保�
   await expect(user).toHaveValue("ocid1.user.oc1..edited");
   await expectNoHorizontalOverflow(page);
 });
+
+test("アップロード保存先は保存中の編集と重複要求を止め、成功後の入力を保持する", async ({ page }) => {
+  let persisted = uploadStorageFixture();
+  const gate = createRequestGate();
+  let saves = 0;
+  let reads = 0;
+  await page.route("**/api/settings/upload-storage", async (route) => {
+    if (route.request().method() === "PATCH") {
+      saves += 1;
+      await gate.promise;
+      persisted = { ...persisted, ...route.request().postDataJSON() };
+    }
+    if (route.request().method() === "GET") reads += 1;
+    await fulfillJson(route, persisted);
+  });
+  await page.goto("/settings/upload-storage");
+  const path = page.locator("#upload-storage-local-dir");
+  await path.fill("/tmp/review-draft");
+  persisted = { ...persisted, local_storage_dir: "/tmp/server-update" };
+  const initialReads = reads;
+  await page.evaluate(() => window.dispatchEvent(new Event("visibilitychange")));
+  await expect.poll(() => reads).toBeGreaterThan(initialReads);
+  await expect(path).toHaveValue("/tmp/review-draft");
+  expect(await page.evaluate(() => {
+    const event = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(event);
+    return event.defaultPrevented;
+  })).toBe(true);
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+  await expect.poll(() => saves).toBe(1);
+  await expect(path).toBeDisabled();
+  await expect(page.locator("#upload-storage-oci")).toBeDisabled();
+  gate.release();
+  await expect(path).toBeEnabled();
+  await expect(path).toHaveValue("/tmp/review-draft");
+  await expectNoHorizontalOverflow(page);
+});

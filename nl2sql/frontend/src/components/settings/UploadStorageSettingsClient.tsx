@@ -6,7 +6,7 @@ import {
   Save,
   Settings2,
 } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "@engchina/production-ready-ui";
 
@@ -28,6 +28,7 @@ import {
 import { t } from "@/lib/i18n";
 import { useUpdateUploadStorageSettings, useUploadStorageSettings } from "@/lib/queries";
 import { APP_ROUTES } from "@/lib/routes";
+import { useSettingsDraftGuard } from "@/lib/useSettingsDraftGuard";
 import { cn } from "@/lib/utils";
 
 interface UploadStorageForm {
@@ -65,14 +66,26 @@ export function UploadStorageSettingsClient() {
   const [form, setForm] = useState<UploadStorageForm>(EMPTY_FORM);
   const [errors, setErrors] = useState<FieldErrors>({});
 
+  const baseline = useRef(EMPTY_FORM);
+  const confirmLeave = useSettingsDraftGuard(
+    JSON.stringify(form) !== JSON.stringify(baseline.current), save.isPending
+  );
+
   useEffect(() => {
-    if (query.data) {
-      setForm(formFromSettings(query.data));
-      setErrors({});
-    }
+    if (!query.data) return;
+    const next = formFromSettings(query.data);
+    const previous = baseline.current;
+    baseline.current = next;
+    setForm((current) => Object.fromEntries(
+      Object.keys(next).map((key) => {
+        const field = key as keyof UploadStorageForm;
+        return [field, current[field] === previous[field] ? next[field] : current[field]];
+      })
+    ) as unknown as UploadStorageForm);
   }, [query.data]);
 
   function updateForm(update: Partial<UploadStorageForm>) {
+    if (save.isPending) return;
     setForm((current) => ({ ...current, ...update }));
     setErrors((current) => {
       const next = { ...current };
@@ -86,6 +99,7 @@ export function UploadStorageSettingsClient() {
   }
 
   function submit() {
+    if (save.isPending || !query.data) return;
     const validationErrors = validateUploadStorageForm(form);
     if (Object.keys(validationErrors).length > 0) {
       setErrors(validationErrors);
@@ -96,7 +110,8 @@ export function UploadStorageSettingsClient() {
     setErrors({});
     save.mutate(payloadFromForm(form), {
       onSuccess: (data) => {
-        setForm(formFromSettings(data));
+        baseline.current = formFromSettings(data);
+        setForm(baseline.current);
         setErrors({});
         toast.success(t("settings.uploadStorage.actions.saved"));
       },
@@ -152,6 +167,7 @@ export function UploadStorageSettingsClient() {
           submit();
         }}
       >
+        <fieldset disabled={save.isPending} aria-busy={save.isPending} className="min-w-0 space-y-5">
         <Card>
           <CardHeader>
             <div className="flex items-start gap-3">
@@ -258,7 +274,7 @@ export function UploadStorageSettingsClient() {
                       variant="secondary"
                       size="lg"
 
-                      onClick={() => navigate(APP_ROUTES.settingsOci)}
+                      onClick={async () => { if (await confirmLeave()) navigate(APP_ROUTES.settingsOci); }}
                     >
                       <Settings2 size={15} aria-hidden />
                       {t("settings.uploadStorage.actions.openOciSettings")}
@@ -279,6 +295,7 @@ export function UploadStorageSettingsClient() {
           </Button>
           {save.isError ? <FormStatus tone="danger" message={saveError} /> : null}
         </div>
+        </fieldset>
       </form>
     </div>
   );
