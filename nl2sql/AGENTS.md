@@ -8,7 +8,9 @@
 - **`main` ブランチへ直接 commit / push / 変更しない。** すべての変更は GitHub Issue を先に作成し、Issue に紐づく作業ブランチで行う。
 - 作業ブランチ名は既定で `codex/<issue-number>-<short-topic>` とする。既存 ref との衝突などで使用できない場合も、Issue 番号と作業内容が分かる名前を使う。
 - 変更後は Pull Request を作成し、関連 Issue、変更内容、検証結果を PR description に明記する。
-- merge は CI/checks が成功したことを確認してから行う。必須 CI が存在しない場合は、PR 上で checks 状態を確認し、実行した代替検証を明記してから merge 判断する。
+- **変更・必要な検証・PR 本文の更新が完了し、PR の最新 commit に対する CI/checks が成功したら、追加のユーザ確認を求めず自動で `main` へ merge する。** PR 作成や CI 成功の報告だけで作業を終了しない。必須 CI が存在しない場合は、PR 上で checks 状態を確認し、成功した代替検証を PR 本文に明記してから merge する。
+- CI/checks の失敗や merge conflict がある場合は、原因を修正・解消し、最新 commit を再検証してから merge する。branch protection を迂回した強制 merge は行わない。解消できない場合は原因と未完了の操作を明示する。
+- **merge 後はローカルブランチを必ず `main` に切り替え、`origin/main` へ fast-forward 同期してから完了を報告する。** PR の merge 状態、ローカルブランチ、同期状態を確認する。ユーザの未保存変更を破棄する `reset --hard` 等は使わず、変更を保持したまま安全に同期する。同期できない場合は理由と残作業を明示する。
 - docs-only の小さな変更や緊急修正も原則として同じ Issue → branch → PR → CI/checks → main merge の流れに従う。例外が必要な場合は、理由を添えてユーザ確認を取る。
 
 ### GitHub Issue / Pull Request の記述規約
