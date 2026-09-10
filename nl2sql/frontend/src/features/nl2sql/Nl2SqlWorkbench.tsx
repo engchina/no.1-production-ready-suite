@@ -883,8 +883,17 @@ function ExecutableNl2SqlWorkbench() {
     }
   };
 
-  const handleApplyClarifiedQuestion = useCallback((clarifiedQuestion: string) => {
-    setQuestion(clarifiedQuestion);
+  const handleApplyClarifiedQuestion = useCallback((clarifiedQuestion: string, confirmedProfileId: string) => {
+    if (confirmedProfileId !== profileId) {
+      // Profile ごとの草稿を先に書き、切替時の復元が確認結果を上書きしないようにする。
+      if (!writeDraft(`question:${confirmedProfileId}`, clarifiedQuestion)) {
+        setActionError(t("workspace.storageFailed"));
+        return;
+      }
+      setProfileId(confirmedProfileId);
+    } else {
+      setQuestion(clarifiedQuestion);
+    }
     setRewriteData(null);
     setActionError("");
     setGuidedClarificationOpen(false);
@@ -897,7 +906,7 @@ function ExecutableNl2SqlWorkbench() {
       textarea.setSelectionRange(caret, caret);
       textarea.scrollTop = textarea.scrollHeight;
     });
-  }, []);
+  }, [profileId, setProfileId, setQuestion, writeDraft]);
 
   return (
     <>
