@@ -1933,11 +1933,16 @@ def test_every_api_route_is_classified_by_manifest() -> None:
     assert permission_for_route(
         "POST", "/nl2sql/query-sessions/{session_id}/generate-sql"
     ) == frozenset({QUERY_GENERATE_PERMISSION})
-    assert permission_for_route("POST", "/nl2sql/db-admin/execute") == frozenset(
-        {"menu.admin_sql", "menu.comment_management", "menu.annotation_management"}
-    )
+    assert permission_for_route("POST", "/nl2sql/db-admin/execute") == frozenset({"menu.admin_sql"})
     assert permission_for_route("POST", "/nl2sql/db-admin/statements") == frozenset(
-        {"menu.admin_sql", "menu.comment_management", "menu.annotation_management"}
+        {
+            "menu.admin_sql",
+            "menu.table_management",
+            "menu.view_management",
+            "menu.data_management",
+            "menu.comment_management",
+            "menu.annotation_management",
+        }
     )
     assert permission_for_route("GET", "/nl2sql/db-admin/tables/{table_name}") == frozenset(
         {"menu.table_management", "menu.comment_management", "menu.annotation_management"}
@@ -4806,5 +4811,168 @@ def test_nested_synthetic_routes_use_authenticated_effective_path(
                 },
             )
             assert response.status_code == (403 if actor_kind == "denied" else 400), response.text
+
+    asyncio.run(exercise())
+
+
+def test_data_preparation_actions_enforce_policy_and_revalidate_roles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import base64
+    import importlib
+
+    from app.features.nl2sql.models import (
+        DbAdminExecuteData,
+        DbAdminStatementsRequest,
+        TimingEnvelope,
+    )
+    from app.features.nl2sql.service import Nl2SqlService
+    from app.features.nl2sql.store import MemoryNl2SqlStore
+    from app.security.request_actor import actor_scope
+
+    security = _configure_memory_api_auth(monkeypatch)
+    admin, _, _ = _login(security)
+    nl2sql = Nl2SqlService(store=MemoryNl2SqlStore())
+    router = importlib.import_module("app.features.nl2sql.router")
+    monkeypatch.setattr(router, "nl2sql_service", nl2sql)
+    monkeypatch.setattr(nl2sql, "_use_oracle_runtime", lambda: False)
+    monkeypatch.setattr(nl2sql, "_current_schema_owner", lambda: "APP")
+    monkeypatch.setattr(nl2sql, "_db_admin_truncate_target_type", lambda *_: "table")
+    executed: list[str] = []
+
+    def execute(request: object) -> DbAdminExecuteData:
+        executed.append(str(getattr(request, "policy", "admin_sql")))
+        return DbAdminExecuteData(
+            executed=True,
+            runtime="deterministic",
+            timing=TimingEnvelope(created_at="2026-09-11T00:00:00Z", elapsed_ms=0),
+        )
+
+    monkeypatch.setattr(nl2sql, "_execute_db_admin_statements", execute, raising=False)
+    monkeypatch.setattr(nl2sql, "_execute_db_admin_sql", execute, raising=False)
+    policies = {
+        "table_ddl": "table_management",
+        "view_ddl": "view_management",
+        "data_dml": "data_management",
+        "comment_sql": "comment_management",
+        "annotation_sql": "annotation_management",
+    }
+
+    async def exercise() -> None:
+        for index, menu in enumerate([*policies.values(), "admin_sql", "history"]):
+            role = security.create_role(
+                role_code=f"PREP_{index}",
+                display_name=menu,
+                description="操作権限テスト",
+                permissions={f"menu.{menu}"},
+                entitlements=[],
+                actor=admin,
+            )
+            user = _create_active_user(
+                security,
+                admin,
+                login_user_id=f"prep_{index}",
+                display_name=menu,
+                role_ids=[role.role_id],
+                password="PreparePass!123",
+            )
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                _, csrf = await _login_api(client, f"prep_{index}", "PreparePass!123")
+                headers = {"X-CSRF-Token": csrf}
+                for policy, required_menu in policies.items():
+                    allowed = menu in {required_menu, "admin_sql"}
+                    before = len(executed)
+                    response = await client.post(
+                        "/api/nl2sql/db-admin/statements",
+                        headers=headers,
+                        json={
+                            "policy": policy,
+                            "sql": "SELECT 1 FROM DUAL",
+                            "confirmation": "ADMIN_EXECUTE",
+                        },
+                    )
+                    assert response.status_code == (200 if allowed else 403), (
+                        menu,
+                        policy,
+                        response.text,
+                    )
+                    assert len(executed) == before + int(allowed)
+                    # API の coarse check を通さない domain 直呼びも同じ判定になる。
+                    with actor_scope(user.user_uuid):
+                        request = DbAdminStatementsRequest(policy=policy, sql="SELECT 1 FROM DUAL")
+                        if allowed:
+                            nl2sql.execute_db_admin_statements(request)
+                        else:
+                            with pytest.raises(SecurityApiError) as denied:
+                                nl2sql.execute_db_admin_statements(request)
+                            assert denied.value.status_code == 403
+                before = len(executed)
+                response = await client.post(
+                    "/api/nl2sql/db-admin/execute",
+                    headers=headers,
+                    json={"sql": "SELECT 1 FROM DUAL"},
+                )
+                assert response.status_code == (200 if menu == "admin_sql" else 403)
+                assert len(executed) == before + int(menu == "admin_sql")
+                for mode in ["create", "replace", "append", "truncate"]:
+                    allowed = menu == "data_management" or (
+                        menu == "table_management" and mode == "create"
+                    )
+                    response = await client.post(
+                        "/api/nl2sql/db-admin/import-tabular",
+                        headers=headers,
+                        json={
+                            "table_name": "REVIEW_TEST",
+                            "filename": "test.csv",
+                            "mode": mode,
+                            "content_base64": base64.b64encode(b"ID\n1\n").decode(),
+                            "confirmation": "ADMIN_EXECUTE",
+                        },
+                    )
+                    assert response.status_code == (200 if allowed else 403), (
+                        menu,
+                        mode,
+                        response.text,
+                    )
+                before = len(executed)
+                response = await client.post(
+                    "/api/nl2sql/db-admin/truncate-table",
+                    headers=headers,
+                    json={
+                        "table_name": "REVIEW_TEST",
+                        "owner": "APP",
+                        "confirmation": "APP.REVIEW_TEST",
+                    },
+                )
+                allowed = menu in {"table_management", "data_management"}
+                assert response.status_code == (200 if allowed else 403), (menu, response.text)
+                assert len(executed) == before + int(allowed)
+                if menu == "comment_management":
+                    # 同じ cookie / actor でもロール削除は次の実行から拒否する。
+                    security.update_role(
+                        role.role_id,
+                        expected_version=role.version,
+                        display_name=role.display_name,
+                        description=role.description,
+                        permissions={"menu.history"},
+                        allowed_profile_ids=role.allowed_profile_ids,
+                        actor=admin,
+                    )
+                    revoked = await client.post(
+                        "/api/nl2sql/db-admin/statements",
+                        headers=headers,
+                        json={"policy": "comment_sql", "sql": "COMMENT ON TABLE X IS 'x'"},
+                    )
+                    assert revoked.status_code == 403
+                    with actor_scope(user.user_uuid):
+                        with pytest.raises(SecurityApiError) as denied:
+                            nl2sql.execute_db_admin_statements(
+                                DbAdminStatementsRequest(
+                                    policy="comment_sql", sql="COMMENT ON TABLE X IS 'x'"
+                                )
+                            )
+                        assert denied.value.status_code == 403
 
     asyncio.run(exercise())

@@ -12802,7 +12802,19 @@ class Nl2SqlService:
         detail = detail.model_copy(update=updates)
         return detail
 
+    @staticmethod
+    def _require_db_admin_permission(*permissions: str) -> None:
+        """画面共用 API の操作権限を、DB 操作前に現在のロールから再検証する。"""
+        if not get_settings().app_auth_enabled:
+            return
+        from app.security.service import SecurityApiError, get_security_service
+
+        principal = get_security_service().principal_for_worker(current_actor_context().user_uuid)
+        if not principal.has_any_permission({"menu.admin_sql", *permissions}):
+            raise SecurityApiError(403, "このデータ準備操作を実行する権限がありません。")
+
     def drop_db_admin_table(self, request: DbAdminDropTableRequest) -> DbAdminExecuteData:
+        self._require_db_admin_permission("menu.table_management")
         identity = self._db_admin_object_identity(request.table_name, request.owner)
         table_name = identity.object_name
         target_name = identity.qualified_name
@@ -12832,7 +12844,7 @@ class Nl2SqlService:
                 warnings=[confirmation_error],
                 timing=self._timing(_utc_now(), time.monotonic(), "db_admin_drop_table"),
             )
-        execution = self.execute_db_admin_sql(
+        execution = self._execute_db_admin_sql(
             DbAdminExecuteRequest(
                 sql=sql,
                 confirmation="ADMIN_EXECUTE",
@@ -12842,6 +12854,7 @@ class Nl2SqlService:
         return execution
 
     def truncate_db_admin_table(self, request: DbAdminTruncateTableRequest) -> DbAdminExecuteData:
+        self._require_db_admin_permission("menu.table_management", "menu.data_management")
         identity = self._db_admin_object_identity(request.table_name, request.owner)
         table_name = identity.object_name
         target_name = identity.qualified_name
@@ -12889,7 +12902,7 @@ class Nl2SqlService:
                 warnings=[confirmation_error],
                 timing=self._timing(_utc_now(), time.monotonic(), "db_admin_truncate_table"),
             )
-        return self.execute_db_admin_statements(
+        return self._execute_db_admin_statements(
             DbAdminStatementsRequest(
                 sql=sql,
                 policy="data_dml",
@@ -12912,6 +12925,10 @@ class Nl2SqlService:
             return ""
 
     def execute_db_admin_sql(self, request: DbAdminExecuteRequest) -> DbAdminExecuteData:
+        self._require_db_admin_permission("menu.admin_sql")
+        return self._execute_db_admin_sql(request)
+
+    def _execute_db_admin_sql(self, request: DbAdminExecuteRequest) -> DbAdminExecuteData:
         started = time.monotonic()
         created_at = _utc_now()
         warnings: list[str] = []
@@ -13229,6 +13246,10 @@ class Nl2SqlService:
     def import_db_admin_tabular(
         self, request: DbAdminImportTabularRequest
     ) -> DbAdminImportTabularData:
+        if request.mode.strip().lower() == "create":
+            self._require_db_admin_permission("menu.table_management", "menu.data_management")
+        else:
+            self._require_db_admin_permission("menu.data_management")
         started = time.monotonic()
         created_at = _utc_now()
         warnings: list[str] = []
@@ -13426,6 +13447,17 @@ class Nl2SqlService:
         )
 
     def execute_db_admin_statements(self, request: DbAdminStatementsRequest) -> DbAdminExecuteData:
+        permissions = {
+            "table_ddl": "menu.table_management",
+            "view_ddl": "menu.view_management",
+            "data_dml": "menu.data_management",
+            "comment_sql": "menu.comment_management",
+            "annotation_sql": "menu.annotation_management",
+        }
+        self._require_db_admin_permission(permissions[request.policy])
+        return self._execute_db_admin_statements(request)
+
+    def _execute_db_admin_statements(self, request: DbAdminStatementsRequest) -> DbAdminExecuteData:
         """文種 whitelist 付き複数 statement 実行(SQL Assist のテーブル/ビュー/データ SQL 実行)。"""
         started = time.monotonic()
         created_at = _utc_now()
@@ -13641,6 +13673,7 @@ class Nl2SqlService:
         )
 
     def drop_db_admin_view(self, request: DbAdminDropViewRequest) -> DbAdminExecuteData:
+        self._require_db_admin_permission("menu.view_management")
         identity = self._db_admin_object_identity(request.view_name, request.owner)
         view_name = identity.object_name
         target_name = identity.qualified_name

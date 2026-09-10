@@ -574,11 +574,15 @@ def permission_for_route(method: str, route_path: str) -> frozenset[str] | None:
                 "menu.comment_management",
                 "menu.annotation_management",
             )
-        if route_path.endswith("/drop-table") or route_path.endswith("/truncate-table"):
+        if route_path.endswith("/truncate-table"):
+            return _allowed("menu.table_management", "menu.data_management")
+        if route_path.endswith("/drop-table"):
             return _allowed("menu.table_management")
         if route_path.endswith("/drop-view"):
             return _allowed("menu.view_management")
-        if route_path.endswith("/upload-csv") or route_path.endswith("/import-tabular"):
+        if route_path.endswith("/import-tabular"):
+            return _allowed("menu.table_management", "menu.data_management")
+        if route_path.endswith("/upload-csv"):
             return _allowed("menu.data_management")
         if route_path.endswith("/preview-data") or route_path.endswith("/preview-data/export.xlsx"):
             return _allowed(
@@ -588,9 +592,14 @@ def permission_for_route(method: str, route_path: str) -> frozenset[str] | None:
                 "menu.comment_management",
                 "menu.annotation_management",
             )
-        if route_path.endswith("/execute") or route_path.endswith("/statements"):
+        if route_path.endswith("/execute"):
+            return _allowed("menu.admin_sql")
+        if route_path.endswith("/statements"):
             return _allowed(
                 "menu.admin_sql",
+                "menu.table_management",
+                "menu.view_management",
+                "menu.data_management",
                 "menu.comment_management",
                 "menu.annotation_management",
             )
