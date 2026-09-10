@@ -2,7 +2,11 @@ import { expect, test, type Locator, type Page, type Route, type TestInfo } from
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
 import { expectCompactSortHeaders } from "./_helpers/sort-header";
 
-test.beforeEach(async ({ page }) => mockDatabaseGateReady(page));
+test.beforeEach(async ({ page }) => {
+  await mockDatabaseGateReady(page);
+  // 共通 job 表示が購読する API も隔離し、未 mock の 404 を console 検証に混ぜない。
+  await page.route("**/api/nl2sql/synthetic-data/runs", (route) => fulfillJson(route, []));
+});
 
 async function fulfillJson(route: Route, data: unknown) {
   await route.fulfill({
