@@ -98,24 +98,6 @@ async function expectButtonsSameHeight(primary: Locator, secondary: Locator) {
     .toBeLessThanOrEqual(1);
 }
 
-async function expectOneLineWithoutOverflow(locator: Locator) {
-  await expect(locator).toBeVisible();
-  const metrics = await locator.evaluate((node) => {
-    const element = node as HTMLElement;
-    const style = window.getComputedStyle(element);
-    return {
-      clientWidth: element.clientWidth,
-      lineHeight: Number.parseFloat(style.lineHeight),
-      offsetHeight: element.offsetHeight,
-      scrollWidth: element.scrollWidth,
-      whiteSpace: style.whiteSpace,
-    };
-  });
-  expect(metrics.whiteSpace).toBe("nowrap");
-  expect(metrics.offsetHeight).toBeLessThanOrEqual(metrics.lineHeight + 1);
-  expect(metrics.scrollWidth).toBeLessThanOrEqual(metrics.clientWidth + 1);
-}
-
 async function expectEqualFilterWidths(search: Locator, owner: Locator) {
   await expect
     .poll(async () => {
@@ -6605,7 +6587,14 @@ test("AI 活用の SELECT SQL 画面は通常 API だけを使用し、更新 SQ
     "1〜100000 の整数。直接 SQL 実行では取得上限を明示してください。"
   );
   await expect(rowLimitInput).toHaveValue("");
-  await expectOneLineWithoutOverflow(rowLimitHelper);
+  await expect(rowLimitHelper).toBeVisible();
+  for (const field of [rowLimitInput, rowLimitHelper]) {
+    const bounds = await field.boundingBox();
+    const panelBounds = await directSql.boundingBox();
+    expect(bounds).not.toBeNull();
+    expect(panelBounds).not.toBeNull();
+    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(panelBounds!.x + panelBounds!.width);
+  }
   await expectButtonBelowInput(rowLimitInput, directSql.getByRole("button", { name: "SQL 実行" }));
   await sqlInput.fill("SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES");
   await expect(directSql.getByRole("button", { name: "SQL 実行" })).toBeDisabled();
@@ -6675,7 +6664,14 @@ test("AI 活用の SELECT SQL 画面は通常 API だけを使用し、更新 SQ
 
   await expectNoHorizontalScroll(page);
   await page.setViewportSize({ width: 375, height: 900 });
-  await expectOneLineWithoutOverflow(rowLimitHelper);
+  await expect(rowLimitHelper).toBeVisible();
+  for (const field of [rowLimitInput, rowLimitHelper]) {
+    const bounds = await field.boundingBox();
+    const panelBounds = await directSql.boundingBox();
+    expect(bounds).not.toBeNull();
+    expect(panelBounds).not.toBeNull();
+    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(panelBounds!.x + panelBounds!.width);
+  }
   await expectNoHorizontalScroll(page);
 });
 

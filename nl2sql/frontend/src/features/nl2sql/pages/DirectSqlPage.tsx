@@ -176,7 +176,6 @@ function ExecutableDirectSqlPage() {
               min={1}
               max={DIRECT_SQL_MAX_ROW_LIMIT}
               helper={t("queryResults.rowLimit.helperDirectSql")}
-              helperClassName="whitespace-nowrap"
             />
             <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
               <Button
