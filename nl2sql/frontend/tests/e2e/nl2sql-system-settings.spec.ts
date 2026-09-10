@@ -1406,6 +1406,76 @@ test("非正常な readiness 値も設定画面には表示しない", async ({ 
   await expectNoHorizontalOverflow(page);
 });
 
+test("Endpoint URL の公式ドキュメントをキーボードで開き、未保存入力を保持する", async ({
+  page,
+  context,
+}, testInfo) => {
+  const docsUrl = "https://docs.oracle.com/en-us/iaas/Content/generative-ai/openai-compatible-api.htm";
+  // 外部サイトへ接続せず、新しいタブの遷移先を検証する。
+  await context.route(docsUrl, (route) => route.fulfill({
+    contentType: "text/html",
+    body: "<title>OCI OpenAI-Compatible Endpoints</title>",
+  }));
+  const mutations: string[] = [];
+  page.on("request", (request) => {
+    if (request.url().includes("/api/settings/model") && request.method() !== "GET") {
+      mutations.push(request.method());
+    }
+  });
+
+  await page.goto("/settings/model");
+  const endpoint = page.getByRole("textbox", { name: "Endpoint URL" });
+  const docsLink = page.getByRole("link", { name: "公式ドキュメント（新しいタブで開く）" });
+  await expect(docsLink).toBeVisible();
+  await expect(docsLink).toHaveAttribute("href", docsUrl);
+  await expect(docsLink).toHaveAttribute("target", "_blank");
+  await expect(docsLink).toHaveAttribute("rel", "noopener noreferrer");
+  await expect(endpoint).toHaveAccessibleDescription(/OpenAI-compatible base URL.*\/responses.*公式ドキュメント/);
+  await endpoint.fill("https://unsaved.example.com/openai/v1");
+  await endpoint.press("Tab");
+  await expect(docsLink).toBeFocused();
+  await expectNoHorizontalOverflow(page);
+  await page.screenshot({ path: testInfo.outputPath("endpoint-docs-link.png") });
+
+  const popupPromise = page.waitForEvent("popup");
+  await docsLink.press("Enter");
+  const popup = await popupPromise;
+  await expect(popup).toHaveURL(docsUrl);
+  await popup.close();
+  await expect(page).toHaveURL(/\/settings\/model$/);
+  await expect(endpoint).toHaveValue("https://unsaved.example.com/openai/v1");
+  expect(mutations).toEqual([]);
+});
+
+test("モデル設定の読込失敗から再試行し、未設定 Endpoint URL の説明リンクを表示する", async ({ page }) => {
+  await page.unroute("**/api/settings/model");
+  const gate = createRequestGate();
+  let fail = true;
+  await page.route("**/api/settings/model", async (route) => {
+    if (fail) {
+      await gate.promise;
+      await route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({ detail: "モデル設定を取得できませんでした。" }),
+      });
+      return;
+    }
+    const fixture = modelSettingsFixture();
+    fixture.settings.enterprise_ai.endpoint = "";
+    await fulfillJson(route, fixture);
+  });
+  await page.goto("/settings/model");
+  await expect(page.getByTestId("settings-model-loading")).toBeVisible();
+  gate.release();
+  await expect(page.getByRole("button", { name: "再試行" })).toBeVisible();
+  fail = false;
+  await page.getByRole("button", { name: "再試行" }).click();
+  await expect(page.getByRole("textbox", { name: "Endpoint URL" })).toHaveValue("");
+  await expect(page.getByRole("link", { name: "公式ドキュメント（新しいタブで開く）" })).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+});
+
 test("モデル設定を3カードごとに独立保存し、非表示設定と未保存入力を保持する", async ({
   page,
 }) => {
