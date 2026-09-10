@@ -14923,3 +14923,30 @@ test("SQL ファイルの遅延読込はクリアと再選択を巻き戻さな�
   await select("retry.sql", 6);
   await expect(sql).toHaveValue("SELECT 6 FROM DUAL");
 });
+
+
+test("論理構造の再生成不能理由を表示し編集内容を保持して再試行できる", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  let calls = 0;
+  await page.route("**/api/nl2sql/reverse/sql", async (route) => {
+    calls += 1;
+    if (calls === 1) return route.fulfill({ status: 400, contentType: "application/json", body: JSON.stringify({ detail: "対象の列名を論理構造に追加してください。" }) });
+    await fulfillJson(route, { sql: "SELECT ID FROM APP.INVOICES", explanation: "指定された列を取得します。", source: "oci_enterprise_ai", warnings: [] });
+  });
+  await page.goto("/sql-to-question");
+  await sqlToQuestionInput(page).fill("select * from INVOICES");
+  await page.getByRole("button", { name: "業務質問を生成" }).click();
+  const editor = page.getByRole("textbox", { name: "再生成に使う SQL 論理構造" });
+  await editor.fill("請求の一覧を取得");
+  const generate = page.getByRole("button", { name: "論理構造から SQL を生成" });
+  await generate.press("Enter");
+  await expect(page.getByRole("alert")).toContainText("対象の列名を論理構造に追加してください。");
+  await expect(page.getByRole("alert")).not.toContainText("validation error");
+  await expect(editor).toHaveValue("請求の一覧を取得");
+  await editor.fill("APP.INVOICES の ID を取得");
+  await generate.press("Enter");
+  await expect(page.getByRole("region", { name: "再生成 SQL", exact: true })).toContainText("SELECT ID FROM APP.INVOICES");
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  expect(calls).toBe(2);
+  await expectNoHorizontalScroll(page);
+});

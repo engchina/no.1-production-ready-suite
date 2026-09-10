@@ -34,7 +34,14 @@ def stage_prompt(name: str, response_contract: str) -> str:
 
 STRUCTURE_TO_SQL_PROMPT = (
     "SQL論理構造から Oracle 26ai の SELECT/WITH 1 文を再構築する。"
+    '出力は JSON object のみ: {"sql":"...", "explanation":"日本語の説明"}。'
+    "参照先は schema context で許可された表と列に限定する。"
+    "新しく解決する物理 object は OWNER.OBJECT で修飾する。"
     "構造を唯一の生成要件とし、schema context で業務名を物理名へ解決する。"
-    "情報不足・曖昧な対応、簡易構造と埋め込まれた元SQLの矛盾がある場合は、"
+    "簡易構造で省略された詳細は埋め込まれた元 SQL から補う。省略だけを矛盾としない。"
+    "情報不足・曖昧な対応、簡易構造と埋め込まれた元SQLの明示的な矛盾がある場合は、"
     "推測せず sql を空にし explanation に不足情報・矛盾を書く。" + SEMANTIC_CORRECTIONS
 )
+
+
+RECONSTRUCTION_SQL_PREFIX = "\n\n### 再構築用の元 SQL（簡易分析で省略された詳細を保持）\n```sql\n"

@@ -259,6 +259,7 @@ from .models import (
     SimilarHistoryRequest,
     StageTiming,
     StructureToSqlData,
+    StructureToSqlOutput,
     StructureToSqlRequest,
     SyntheticDataGenerateRequest,
     SyntheticDataOperationData,
@@ -283,7 +284,12 @@ from .oracle_adapter import (
     SelectAiCredentialMissingError,
     TabularImportValidationError,
 )
-from .reverse_prompts import STRUCTURE_TO_SQL_PROMPT, source_prompt, stage_prompt
+from .reverse_prompts import (
+    RECONSTRUCTION_SQL_PREFIX,
+    STRUCTURE_TO_SQL_PROMPT,
+    source_prompt,
+    stage_prompt,
+)
 from .sql_semantics import parse_oracle_sql
 from .store import MemoryNl2SqlStore, Nl2SqlStore, OracleJsonNl2SqlStore
 from .tabular_files import (
@@ -9855,11 +9861,7 @@ class Nl2SqlService:
             profile=profile,
             enabled=request.use_glossary,
         )
-        logical_structure += (
-            "\n\n### 再構築用の元 SQL（簡易分析で省略された詳細を保持）\n```sql\n"
-            + request.sql
-            + "\n```"
-        )
+        logical_structure += RECONSTRUCTION_SQL_PREFIX + request.sql + "\n```"
         return ReverseSqlData(
             question=question,
             explanation=self._reverse_business_explanation(structure, table_labels),
@@ -9981,9 +9983,31 @@ class Nl2SqlService:
         allowed = self._resolve_allowed_objects(request.profile_id, AllowedObjects())
         if not allowed.table_names:
             raise ValueError("選択したプロファイルで参照できる表がありません。")
+        catalog = self._generation_schema_catalog(profile, allowed)
+        # 自分で生成した未編集の簡易構造だけは、保持した SQL を損失なく復元できる。
+        # フェンス内 SQL の抽出だけで返すと編集を無視するため、全文の再計算一致も必要。
+        _, separator, embedded = structure.rpartition(RECONSTRUCTION_SQL_PREFIX)
+        if separator and embedded.endswith("\n```"):
+            original_sql = embedded[:-4]
+            analysis = self.analyze_sql(original_sql, allowed, None, catalog=catalog)
+            if not analysis.safety.is_safe:
+                raise ValueError(analysis.safety.blocked_reason)
+            expected = self.reverse_sql(
+                ReverseSqlRequest(
+                    sql=original_sql,
+                    profile_id=request.profile_id,
+                    use_glossary=request.use_glossary,
+                )
+            ).logical_structure.strip()
+            if structure == expected:
+                return StructureToSqlData(
+                    sql=original_sql,
+                    explanation="未編集の簡易論理構造から、保持されていた元 SQL を復元しました。",
+                    source="preserved_original",
+                    warnings=analysis.safety.warnings,
+                )
         if not self._enterprise_ai_client.is_configured():
             raise ValueError("OCI Enterprise AI を設定してから SQL を再生成してください。")
-        catalog = self._generation_schema_catalog(profile, allowed)
         raw = self._enterprise_ai_client.generate(
             prompt=structure,
             context=self._enterprise_ai_schema_context(
@@ -9992,22 +10016,32 @@ class Nl2SqlService:
                 catalog=catalog,
                 use_glossary=request.use_glossary,
             ),
-            system_prompt=STRUCTURE_TO_SQL_PROMPT + self._enterprise_ai_sql_system_prompt(),
+            system_prompt=STRUCTURE_TO_SQL_PROMPT,
         )
         # 先頭 SELECT の抽出やセミコロンで切断すると不正な複文を隠すため、全 SQL を検証する。
-        output = StructureToSqlData.model_validate(self._json_object_from_text(raw))
+        try:
+            output = StructureToSqlOutput.model_validate(self._json_object_from_text(raw))
+        except (ValidationError, ValueError) as exc:
+            raise EnterpriseAiDirectError(
+                "SQL 生成応答の形式が不正です。再試行してください。"
+            ) from exc
         sql = output.sql.strip()
         if not sql:
-            raise ValueError(output.explanation or "SQL を再生成できませんでした。")
+            raise ValueError(
+                output.explanation.strip()
+                or (
+                    "SQL を再生成できませんでした。"
+                    "論理構造の対象表・列・条件を確認して再試行してください。"
+                )
+            )
         analysis = self.analyze_sql(sql, allowed, None, catalog=catalog)
         if not analysis.safety.is_safe:
             raise ValueError(analysis.safety.blocked_reason)
-        return output.model_copy(
-            update={
-                "sql": sql,
-                "source": "oci_enterprise_ai",
-                "warnings": analysis.safety.warnings,
-            }
+        return StructureToSqlData(
+            sql=sql,
+            explanation=output.explanation.strip(),
+            source="oci_enterprise_ai",
+            warnings=analysis.safety.warnings,
         )
 
     def _reverse_sql_catalog(

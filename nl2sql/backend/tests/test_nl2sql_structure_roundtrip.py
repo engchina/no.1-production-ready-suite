@@ -106,7 +106,7 @@ def test_regeneration_rejects_unsafe_or_out_of_profile_sql(sql: str) -> None:
 def test_regeneration_rejects_invalid_response(output: dict[str, Any]) -> None:
     service = _service()
     cast(Any, service)._enterprise_ai_client = StagedClient([output])
-    with pytest.raises(ValueError):
+    with pytest.raises((ValueError, EnterpriseAiDirectError)):
         service.structure_to_sql(
             StructureToSqlRequest(logical_structure="請求一覧", profile_id="finance")
         )
@@ -198,3 +198,99 @@ def test_structure_endpoint_handles_provider_failure_and_retains_menu_permission
     assert permission_for_route("POST", "/nl2sql/reverse/sql") == frozenset(
         {"menu.sql_to_question"}
     )
+
+
+@pytest.mark.parametrize("configured", [False, True])
+@pytest.mark.parametrize("sql", ["select * from INVOICES", "select * from APP.INVOICES"])
+def test_unchanged_simple_structure_restores_exact_sql_without_llm(
+    configured: bool, sql: str
+) -> None:
+    service = _service()
+    client = StagedClient([], configured=configured)
+    cast(Any, service)._enterprise_ai_client = client
+    structure = service.reverse_sql(ReverseSqlRequest(sql=sql, profile_id="finance"))
+    result = service.structure_to_sql(
+        StructureToSqlRequest(logical_structure=structure.logical_structure, profile_id="finance")
+    )
+    assert result.sql == sql
+    assert result.source == "preserved_original"
+    assert "元 SQL" in result.explanation
+    assert client.calls == []
+
+
+def test_empty_regeneration_explains_missing_information_without_validation_internals(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service()
+    cast(Any, service)._enterprise_ai_client = StagedClient(
+        [{"sql": "", "explanation": "対象の列名を論理構造に追加してください。"}]
+    )
+    monkeypatch.setattr(router, "nl2sql_service", service)
+    with pytest.raises(HTTPException) as error:
+        router.structure_to_sql(
+            StructureToSqlRequest(logical_structure="請求一覧", profile_id="finance"),
+            cast(Request, _request(_principal({"finance"}))),
+        )
+    assert error.value.status_code == 400
+    assert error.value.detail == "対象の列名を論理構造に追加してください。"
+
+
+@pytest.mark.parametrize("use_glossary", [True, False])
+def test_edited_simple_structure_never_silently_restores_old_sql(use_glossary: bool) -> None:
+    service = _service()
+    original = "SELECT ID FROM APP.INVOICES WHERE ID > 1"
+    updated = original.replace("ID > 1", "ID > 2")
+    structure = service.reverse_sql(
+        ReverseSqlRequest(sql=original, profile_id="finance", use_glossary=use_glossary)
+    ).logical_structure
+    structure += "\n追加要件: ID は 2 より大きいものに変更"
+    client = StagedClient([{"sql": updated}])
+    cast(Any, service)._enterprise_ai_client = client
+    result = service.structure_to_sql(
+        StructureToSqlRequest(
+            logical_structure=structure, profile_id="finance", use_glossary=use_glossary
+        )
+    )
+    assert result.sql == updated
+    assert result.source == "oci_enterprise_ai"
+    assert client.calls[0]["prompt"] == structure
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT * FROM APP.ORDERS",
+        "DELETE FROM APP.INVOICES",
+        "SELECT * FROM APP.INVOICES; DELETE FROM APP.INVOICES",
+    ],
+)
+def test_embedded_original_sql_cannot_bypass_profile_or_safety(sql: str) -> None:
+    service = _service()
+    structure = service.reverse_sql(
+        ReverseSqlRequest(sql=sql, profile_id="finance")
+    ).logical_structure
+    client = StagedClient([])
+    cast(Any, service)._enterprise_ai_client = client
+    with pytest.raises(ValueError):
+        service.structure_to_sql(
+            StructureToSqlRequest(logical_structure=structure, profile_id="finance")
+        )
+    assert client.calls == []
+
+
+@pytest.mark.parametrize("output", [{}, {"sql": []}, {"sql": None}, "not JSON"])
+def test_malformed_generation_is_readable_provider_error(
+    output: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = _service()
+    cast(Any, service)._enterprise_ai_client = StagedClient([output])
+    monkeypatch.setattr(router, "nl2sql_service", service)
+    with pytest.raises(HTTPException) as error:
+        router.structure_to_sql(
+            StructureToSqlRequest(logical_structure="請求一覧", profile_id="finance"),
+            cast(Request, _request(_principal({"finance"}))),
+        )
+    assert error.value.status_code == 502
+    assert "再試行" in error.value.detail
+    assert "validation" not in error.value.detail
+    assert "pydantic" not in error.value.detail

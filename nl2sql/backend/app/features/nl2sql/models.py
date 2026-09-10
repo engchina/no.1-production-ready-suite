@@ -2099,6 +2099,13 @@ class StructureToSqlRequest(BaseModel):
     use_glossary: bool = True
 
 
+class StructureToSqlOutput(BaseModel):
+    """LLM は再構築不能の場合に空 SQL と理由を返す。成功 API 応答とは分離する。"""
+
+    sql: str
+    explanation: str = ""
+
+
 class StructureToSqlData(BaseModel):
     sql: str = Field(min_length=1)
     explanation: str = ""
