@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { expectCompactSortHeaders } from "./_helpers/sort-header";
 
 for (const theme of ["light", "dark"]) {
   test(`${theme}: 共通ボタンの実寸・状態・配置・キーボード操作`, async ({ page }, testInfo) => {
@@ -27,6 +28,16 @@ for (const theme of ["light", "dark"]) {
         }
       }
     }
+    const sortTable = page.getByTestId("sort-header-table");
+    await expectCompactSortHeaders(sortTable);
+    const sortButton = sortTable.getByRole("button", { name: "名称" });
+    await sortButton.focus();
+    await expect(sortButton).toBeFocused();
+    await sortButton.press("Enter");
+    await expect(sortTable.getByRole("columnheader", { name: "名称" })).toHaveAttribute("aria-sort", "descending");
+    await expect(sortTable.locator("tbody tr").first()).toContainText("B");
+    await sortTable.locator("thead").screenshot({ path: testInfo.outputPath(`column-font-${theme}.png`) });
+
     // 実際に合成された色を sRGB に変換して通常文字の 4.5:1 を検証する。
     const contrasts = await page.locator(".nl2sql-button:not(:disabled)").evaluateAll(buttons => {
       const canvas = document.createElement("canvas");

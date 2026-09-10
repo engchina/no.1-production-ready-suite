@@ -420,8 +420,8 @@ function ProfileList({
             <table className="w-full max-w-[34rem] table-fixed divide-y divide-border text-left text-sm" data-testid="profile-management-grid">
               <colgroup>
                 <col />
-                <col className="w-[6.5rem]" />
-                <col className="w-[6.5rem]" />
+                <col className="w-[7rem]" />
+                <col className="w-[7rem]" />
               </colgroup>
               <thead className="sticky top-0 z-10 bg-background text-xs text-muted">
                 <tr>

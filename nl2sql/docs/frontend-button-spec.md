@@ -47,7 +47,7 @@
 - 日本語ラベルは全 size で **14px / line-height 20px / weight 500**、アイコンは **16px**、ラベルとの gap は **8px**。角丸は **6px**、border は全 variant **1px**（塗り・ghost は transparent）。root font-size に依存しない。
 - ボタン間隔は **8px 以上**。通常の `gap-2` は root=14px で 7px のため、アクション群は `gap-[8px]` を使用する。
 - グラフの排他選択バーは `data-button-layout="segmented"` で左右 padding 8px、操作高さ 40/44px を維持し、375px でもラベルを切らない。
-- 表ヘッダーの sort は列のフォントを継承し、padding-inline=0 / gap=4px。ヘッダー高は desktop 35px / touch 47px とし、一覧の可視 8行/5行を維持する。
+- 表ヘッダー・一覧の並べ替え見出しは共通 sort layout で **text-xs 相当（0.75rem / line-height 1rem）・weight 600** に固定する。親の本文字号や `th` の既定 bold を継承せず、ページ側で文字サイズを上書きしない。padding-inline=0 / gap=4px。操作高さは desktop 32px / touch 44px、表ヘッダー高は desktop 35px / touch 47px とし、一覧の可視 8行/5行を維持する。
 - 説明文を含む選択カードは `data-button-layout="choice"` で最小 64px + 内容に応じた自動高さ。menu item / disclosure / sort / field-icon / segmented は共通 CSS の named layout に限る。
 
 ---
