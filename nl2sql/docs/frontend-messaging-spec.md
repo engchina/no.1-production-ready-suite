@@ -100,6 +100,7 @@
 ### 3.1 Toast
 
 - **配置**: NL2SQL では画面右下にスタック。`z-index` は `1000`(§6 参照)。共有 UI の `<Toaster/>` は `placement?: "bottom-left" | "bottom-right"` を受け取り、互換性のため既定は `bottom-right` とする。`bottom-left` は明示指定したコンシューマのみで使用する。
+- **合成データ生成の終了通知**: 終端遷移を観測したときだけ、表名と「結果を確認」action を共通 Toast に表示する。ページ上部に終了履歴の Banner を表示せず、初回取得・再読込・同一状態の再取得では通知を再送しない。履歴と詳細はデータ管理画面で確認する。
 - **a11y**: コンテナは `role="region"` + `aria-live="polite"`、フォーカスを奪わない(`toast-accessibility`)。`danger` は `role="alert"`。
 - **自動消滅**: success/info/warning は既定 4 秒(`toast-dismiss`: 3–5s)。`danger` は
   `src/lib/toast.ts` の `toastError()` を通し、既定 `duration: 0`（利用者が閉じるまで保持）とする。閉じる × ボタン必須。
