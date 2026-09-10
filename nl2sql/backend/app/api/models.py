@@ -11,3 +11,4 @@ class DatabaseStatusData(BaseModel):
     status: Literal["ok", "not_configured", "setup_required", "unreachable"]
     check: str
     detail: str | None = None
+    context_id: str = ""

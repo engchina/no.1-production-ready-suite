@@ -1,3 +1,4 @@
+import { useWorkspaceState } from "@/components/WorkspaceState";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import {
   ArrowDown,
@@ -653,12 +654,12 @@ export function HistoryPage() {
   const [items, setItems] = useState<HistoryItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
-  const [search, setSearch] = useState("");
-  const [feedbackFilter, setFeedbackFilter] = useState<HistoryFeedbackFilter>("all");
-  const [safetyFilter, setSafetyFilter] = useState<HistorySafetyFilter>("all");
-  const [sort, setSort] = useState<HistorySortState>({ key: "created_at", direction: "desc" });
+  const [search, setSearch] = useWorkspaceState("search", "");
+  const [feedbackFilter, setFeedbackFilter] = useWorkspaceState<HistoryFeedbackFilter>("feedbackFilter", "all");
+  const [safetyFilter, setSafetyFilter] = useWorkspaceState<HistorySafetyFilter>("safetyFilter", "all");
+  const [sort, setSort] = useWorkspaceState<HistorySortState>("sort", { key: "created_at", direction: "desc" });
   const [selectedId, setSelectedId] = useState("");
-  const [detailTab, setDetailTab] = useState<HistoryDetailTab>("overview");
+  const [detailTab, setDetailTab] = useWorkspaceState<HistoryDetailTab>("detailTab", "overview");
   const [nextCursor, setNextCursor] = useState("");
   const [total, setTotal] = useState<number | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);

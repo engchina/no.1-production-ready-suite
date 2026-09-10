@@ -314,6 +314,7 @@ export type DatabaseConnectionTestStatus = "success" | "failed";
 export type OciConfigTestStatus = "success" | "failed";
 
 export interface DatabaseStatusData {
+  context_id?: string;
   status: "ok" | "not_configured" | "setup_required" | "unreachable";
   check: string;
   detail: string | null;

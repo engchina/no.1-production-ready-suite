@@ -1,3 +1,4 @@
+import { useWorkspaceState, useWorkspaceRevalidation, useResetExecutionConsent, useTransientDraftGuard } from "@/components/WorkspaceState";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Code2, RefreshCw, Table2, Upload } from "lucide-react";
 
@@ -334,15 +335,16 @@ function objectListLoadMoreErrorMessage(error: unknown, fallbackKey: Parameters<
 }
 
 export function TableManagementPage() {
-  const [detailTab, setDetailTab] = useState<DbObjectDetailTab>("columns");
-  const [activeView, setActiveView] = useState<ActiveView>("list");
-  const [tableSearch, setTableSearch] = useState("");
-  const [tableOwnerPrefix, setTableOwnerPrefix] = useState<DbObjectOwnerPrefix>("");
-  const [tableSort, setTableSort] = useState<DbObjectSortState>({ key: "name", direction: "asc" });
+  useWorkspaceRevalidation();
+  const [detailTab, setDetailTab] = useWorkspaceState<DbObjectDetailTab>("detailTab", "columns");
+  const [activeView, setActiveView] = useWorkspaceState<ActiveView>("activeView", "list");
+  const [tableSearch, setTableSearch] = useWorkspaceState("tableSearch", "");
+  const [tableOwnerPrefix, setTableOwnerPrefix] = useWorkspaceState<DbObjectOwnerPrefix>("tableOwnerPrefix", "");
+  const [tableSort, setTableSort] = useWorkspaceState<DbObjectSortState>("tableSort", { key: "name", direction: "asc" });
   const [dropTargetName, setDropTargetName] = useState("");
   const [dropConfirmation, setDropConfirmation] = useState("");
   const [dropError, setDropError] = useState("");
-  const [importTable, setImportTable] = useState("");
+  const [importTable, setImportTable] = useWorkspaceState("importTable", "");
   const [importFilename, setImportFilename] = useState("");
   const [importFileResetSignal, setImportFileResetSignal] = useState(0);
   const [importBase64, setImportBase64] = useState("");
@@ -350,6 +352,7 @@ export function TableManagementPage() {
   const [importStep, setImportStep] = useState<ImportStep>("file");
   const [importConfirmation, setImportConfirmation] = useState("");
   const [importResult, setImportResult] = useState<DbAdminImportTabularData | null>(null);
+  useTransientDraftGuard(Boolean(importBase64) && !importResult?.executed);
   const [importError, setImportError] = useState<unknown>(null);
   const [schemaRefreshJobId, setSchemaRefreshJobId] = useState("");
   const [schemaRefreshError, setSchemaRefreshError] = useState("");
@@ -359,6 +362,7 @@ export function TableManagementPage() {
   const [importSchemaRefreshNeedsFull, setImportSchemaRefreshNeedsFull] = useState(false);
   const [loading, setLoading] = useState("");
   const [message, setMessage] = useState("");
+  useResetExecutionConsent(() => { setDropConfirmation(""); setDropTargetName(""); setImportConfirmation(""); }, JSON.stringify([importTable, importBase64, importSheet]));
   const completedSchemaRefreshJob = useRef("");
   const completedImportSchemaRefreshJob = useRef("");
   const sharedSchemaRefresh = useSchemaRefreshCoordinator();
