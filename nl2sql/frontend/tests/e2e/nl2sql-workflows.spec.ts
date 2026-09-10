@@ -3157,7 +3157,7 @@ test("SQL 系の必須入力欄は既存の必須マークと required 属性で
   await page.goto("/query");
   await expect(page.locator("#nl2sql-profile-select")).toHaveValue("default");
   await expectRequiredTextarea(page, "nl2sql-question-input", "クエリ");
-  const runQueryButton = page.getByRole("button", { name: "検索を実行" });
+  const runQueryButton = page.getByRole("button", { name: "SQL を生成して実行" });
   await expect(runQueryButton).toBeDisabled();
   await nl2sqlQuestionInput(page).fill("未入金の請求を確認したい");
   await expect(runQueryButton).toBeEnabled();
@@ -3433,7 +3433,7 @@ test("最後のプロファイル削除後は作成案内を表示して検索�
   await page.goto("/query");
   await expect(page.getByText("業務プロファイルがありません")).toBeVisible();
   await expect(
-    page.getByText("検索を実行するには、先に業務プロファイルを作成してください。")
+    page.getByText("SQL を生成して実行するには、先に業務プロファイルを作成してください。")
   ).toBeVisible();
 
   const workspace = page.getByTestId("nl2sql-workspace-shell");
@@ -3443,7 +3443,7 @@ test("最後のプロファイル削除後は作成案内を表示して検索�
   ).toBeDisabled();
   await expect(workspace.getByRole("button", { name: "SQL プレビュー" })).toHaveCount(0);
   await expect(workspace.getByRole("button", { name: "質問を解釈" })).toHaveCount(0);
-  await expect(workspace.getByRole("button", { name: "検索を実行" })).toBeDisabled();
+  await expect(workspace.getByRole("button", { name: "SQL を生成して実行" })).toBeDisabled();
 
   await page.setViewportSize({ width: 375, height: 812 });
   await expectNoHorizontalScroll(page);
@@ -3660,7 +3660,7 @@ test("推薦適用後に手動で profile を切り替えると古い選択表�
   await expect(profileSelect).toHaveValue("pm");
   await expect(page.getByText(/^選択中の表/)).toHaveCount(0);
   await nl2sqlQuestionInput(page).fill("プロジェクト情報の一覧");
-  await page.getByRole("button", { name: "検索を実行" }).click();
+  await page.getByRole("button", { name: "SQL を生成して実行" }).click();
 
   await expect.poll(() => api.jobPayload?.profile_id).toBe("pm");
   expect(api.jobPayload?.allowed_objects).toEqual({ table_names: [], columns: {} });
@@ -3870,7 +3870,7 @@ test("owner 付きの許可表でもスキーマ参照が対象表に絞り込�
   await expect(page.getByRole("button", { name: "請求 を開閉" })).toBeVisible();
 });
 
-test("query workbench generates SQL through the job flow and shows results", async ({ page }) => {
+test("query workbench generates SQL through the job flow and shows results", async ({ page }, testInfo) => {
   const api = await mockNl2SqlApi(page);
 
   await page.goto("/query");
@@ -3899,7 +3899,12 @@ test("query workbench generates SQL through the job flow and shows results", asy
   // 推薦は現在の profile（default）と同一のため、progressive-disclosure によりヒントは出さない。
   await expect(page.getByTestId("nl2sql-recommend-hint")).toHaveCount(0);
 
-  await page.getByRole("button", { name: "検索を実行" }).click();
+  const generateAndExecuteButton = page.getByRole("button", { name: "SQL を生成して実行", exact: true });
+  await expectLargeActionButton(generateAndExecuteButton);
+  await generateAndExecuteButton.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("generate-and-execute-button.png") });
+  await generateAndExecuteButton.focus();
+  await page.keyboard.press("Enter");
 
   const generatedSqlStep = page.getByTestId("nl2sql-job-step-generate_sql");
   await expect(generatedSqlStep).toContainText("SQL を生成");
@@ -3972,7 +3977,7 @@ test("query workbench shows job action errors below the execution buttons", asyn
   await page.goto("/query");
   await page.getByRole("button", { name: /Select AI Agent/ }).click();
   await nl2sqlQuestionInput(page).fill("請求金額を一覧で見たい");
-  const runButton = page.getByRole("button", { name: "検索を実行" });
+  const runButton = page.getByRole("button", { name: "SQL を生成して実行" });
   await runButton.click();
 
   const actionError = page.getByTestId("nl2sql-action-feedback-error");
@@ -3985,7 +3990,7 @@ test("query workbench shows job action errors below the execution buttons", asyn
     .poll(() =>
       page.evaluate(() => {
         const buttons = Array.from(document.querySelectorAll("button"));
-        const run = buttons.find((el) => el.textContent?.includes("検索を実行"));
+        const run = buttons.find((el) => el.textContent?.includes("SQL を生成して実行"));
         const error = document.querySelector('[data-testid="nl2sql-action-feedback-error"]');
         if (!run || !error) return "missing";
         const runBox = run.getBoundingClientRect();
@@ -4038,7 +4043,7 @@ test("実行中の job は「実行を中止」でキャンセルでき、警告
 
   await page.goto("/query");
   await nl2sqlQuestionInput(page).fill("請求金額を一覧で見たい");
-  const runButton = page.getByRole("button", { name: "検索を実行" });
+  const runButton = page.getByRole("button", { name: "SQL を生成して実行" });
   await runButton.click();
 
   const cancelButton = page.getByRole("button", { name: "実行を中止" });
@@ -4063,7 +4068,7 @@ test("job ポーリングの通信断が続くと追跡を停止しエラー表�
 
   await page.goto("/query");
   await nl2sqlQuestionInput(page).fill("請求金額を一覧で見たい");
-  const runButton = page.getByRole("button", { name: "検索を実行" });
+  const runButton = page.getByRole("button", { name: "SQL を生成して実行" });
   const resetButton = page.getByRole("button", { name: "新しいクエリを開始", exact: true });
   await runButton.click();
 
@@ -4091,7 +4096,7 @@ test("job が 404 のときは即座に追跡を解除して案内を表示す�
 
   await page.goto("/query");
   await nl2sqlQuestionInput(page).fill("請求金額を一覧で見たい");
-  const runButton = page.getByRole("button", { name: "検索を実行" });
+  const runButton = page.getByRole("button", { name: "SQL を生成して実行" });
   await runButton.click();
 
   const actionError = page.getByTestId("nl2sql-action-feedback-error");
@@ -4167,7 +4172,7 @@ test("履歴更新の失敗は warning に留め、成功した検索結果を�
 
   await page.goto("/query");
   await nl2sqlQuestionInput(page).fill("請求金額を一覧で見たい");
-  await page.getByRole("button", { name: "検索を実行" }).click();
+  await page.getByRole("button", { name: "SQL を生成して実行" }).click();
 
   // 結果領域が正本: job は成功しているので結果表と進捗はそのまま表示される。
   await expect(page.getByTestId("nl2sql-job-progress")).toContainText(
@@ -4211,7 +4216,7 @@ test("Enterprise AI Direct job does not show schema-empty when schema reference 
   await expect(page.getByTestId("nl2sql-schema-reference")).toBeVisible();
   await page.getByRole("button", { name: /Enterprise AI Direct/ }).click();
   await nl2sqlQuestionInput(page).fill("請求金額を一覧で見たい");
-  await page.getByRole("button", { name: "検索を実行" }).click();
+  await page.getByRole("button", { name: "SQL を生成して実行" }).click();
 
   await expect.poll(() => api.jobPayload?.engine).toBe("enterprise_ai_direct");
   await expect(page.getByTestId("nl2sql-job-progress")).toContainText(
@@ -4228,7 +4233,7 @@ test("検索実行開始時に前回の生成 SQL・実行結果を先に消す"
   await page.goto("/query");
   const question = nl2sqlQuestionInput(page);
   await question.fill("請求金額を一覧で見たい");
-  await page.getByRole("button", { name: "検索を実行" }).click();
+  await page.getByRole("button", { name: "SQL を生成して実行" }).click();
   await expect(page.getByTestId("nl2sql-job-progress")).toContainText(
     "SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES"
   );
@@ -4286,7 +4291,7 @@ test("検索実行開始時に前回の生成 SQL・実行結果を先に消す"
   );
 
   await question.fill("請求金額だけを確認したい");
-  await page.getByRole("button", { name: "検索を実行" }).click();
+  await page.getByRole("button", { name: "SQL を生成して実行" }).click();
 
   await expect(page.getByTestId("nl2sql-job-progress")).toHaveCount(0);
   await expect(page.getByText("検索結果（1件）")).toHaveCount(0);
@@ -4306,7 +4311,7 @@ test("検索実行開始時に前回の結果表を先に消す", async ({ page 
   await page.goto("/query");
   const question = nl2sqlQuestionInput(page);
   await question.fill("請求金額を一覧で見たい");
-  await page.getByRole("button", { name: "検索を実行" }).click();
+  await page.getByRole("button", { name: "SQL を生成して実行" }).click();
   await expect(page.getByText("検索結果（1件）")).toBeVisible();
   await expect(page.getByRole("heading", { name: "アプリ内フィードバック" })).toBeVisible();
 
@@ -4370,7 +4375,7 @@ test("検索実行開始時に前回の結果表を先に消す", async ({ page 
   );
 
   await question.fill("請求件数を数えたい");
-  await page.getByRole("button", { name: "検索を実行" }).click();
+  await page.getByRole("button", { name: "SQL を生成して実行" }).click();
 
   // 用語・同義語は既定 off なので、入力そのままの質問で job を作る。
   await expect.poll(() => jobPayload?.question).toBe("請求件数を数えたい");
@@ -4393,7 +4398,7 @@ test("検索実行開始時に前回の生成結果を先に消し、現在の�
   await page.goto("/query");
   const question = nl2sqlQuestionInput(page);
   await question.fill("請求金額を一覧で見たい");
-  await page.getByRole("button", { name: "検索を実行" }).click();
+  await page.getByRole("button", { name: "SQL を生成して実行" }).click();
   await expect(page.getByText("検索結果（1件）")).toBeVisible();
   await expect(page.getByRole("heading", { name: "アプリ内フィードバック" })).toBeVisible();
 
@@ -4454,7 +4459,7 @@ test("検索実行開始時に前回の生成結果を先に消し、現在の�
   );
 
   await question.fill("請求金額を業務用語で解釈したい");
-  await page.getByRole("button", { name: "検索を実行" }).click();
+  await page.getByRole("button", { name: "SQL を生成して実行" }).click();
 
   await expect(page.getByTestId("nl2sql-job-progress")).toHaveCount(0);
   await expect(page.getByText("検索結果（1件）")).toHaveCount(0);
@@ -4534,7 +4539,7 @@ test("参考履歴は件数を表示し、候補があれば自動で展開す�
     return fulfillJson(route, { job_id: "job-default-001", status: "running", steps: [] });
   });
 
-  await page.getByRole("button", { name: "検索を実行" }).click();
+  await page.getByRole("button", { name: "SQL を生成して実行" }).click();
   await expect(nl2sqlQuestionInput(page)).toBeDisabled();
   await expect(header).toBeVisible();
   await expect(header).toBeDisabled();
@@ -4621,7 +4626,7 @@ test("参考履歴は API が空の場合も表示し、空状態を展開でき
     return fulfillJson(route, { job_id: "job-default-001", status: "running", steps: [] });
   });
 
-  await page.getByRole("button", { name: "検索を実行" }).click();
+  await page.getByRole("button", { name: "SQL を生成して実行" }).click();
   await expect(nl2sqlQuestionInput(page)).toBeDisabled();
   await expect(header).toBeVisible();
   await expect(header).toBeDisabled();
@@ -4653,7 +4658,7 @@ test("参考履歴の「検索中」は SQL 生成の実行中に固まって残
   const header = page.getByRole("button", { name: /参考履歴/ });
   await expect(header).toContainText("参考履歴を検索中");
 
-  await page.getByRole("button", { name: "検索を実行" }).click();
+  await page.getByRole("button", { name: "SQL を生成して実行" }).click();
   // 実行中は入力系が無効化される。参考履歴は「検索中」のまま残らず、非活性で表示を維持する。
   await expect(nl2sqlQuestionInput(page)).toBeDisabled();
   await expect(page.getByText("参考履歴を検索中")).toHaveCount(0);
@@ -4767,7 +4772,7 @@ test("検索結果は 10 件ごとにページングする", async ({ page }) =>
 
   await page.goto("/query");
   await nl2sqlQuestionInput(page).fill("請求金額を一覧で見たい");
-  await page.getByRole("button", { name: "検索を実行" }).click();
+  await page.getByRole("button", { name: "SQL を生成して実行" }).click();
 
   await expect(page.getByText("検索結果（12件）")).toBeVisible();
   // 1 ページ目 = 先頭 10 件。11 件目以降は次ページ。
@@ -4790,7 +4795,7 @@ test("検索結果は 10 件ごとにページングする", async ({ page }) =>
   await expect(page.getByRole("cell", { name: "顧客01" })).toBeVisible();
 });
 
-test("検索を実行すると実処理の段階別進捗と結果を表示する", async ({ page, context }) => {
+test("SQL を生成して実行すると実処理の段階別進捗と結果を表示する", async ({ page, context }) => {
   const api = await mockNl2SqlApi(page);
   await page.emulateMedia({ reducedMotion: "reduce" });
   await context.grantPermissions(["clipboard-read", "clipboard-write"], {
@@ -4888,7 +4893,7 @@ test("検索を実行すると実処理の段階別進捗と結果を表示す�
   // 用語・同義語は既定 off のため、書き換え後の質問を検証する本テストでは明示 ON にする。
   await openNl2SqlExecutionOptions(page);
   await page.getByLabel("用語・同義語を使う").check();
-  await page.getByRole("button", { name: "検索を実行" }).click();
+  await page.getByRole("button", { name: "SQL を生成して実行" }).click();
 
   const progress = page.getByTestId("nl2sql-job-progress");
   const prepare = page.getByTestId("nl2sql-job-step-prepare_context");
@@ -5080,7 +5085,7 @@ test("結果整形が完了した job は SQL 実行ステップを処理中の�
 
   await page.goto("/query");
   await nl2sqlQuestionInput(page).fill(questionText);
-  await page.getByRole("button", { name: "検索を実行" }).click();
+  await page.getByRole("button", { name: "SQL を生成して実行" }).click();
 
   const progress = page.getByTestId("nl2sql-job-progress");
   const executeStep = page.getByTestId("nl2sql-job-step-execute_sql");
@@ -5171,7 +5176,7 @@ test("保存警告がある完了 job は結果を表示し、赤エラーでは
   }
   await expect(nl2sqlQuestionInput(page)).toBeVisible();
   await nl2sqlQuestionInput(page).fill(questionText);
-  await page.getByRole("button", { name: "検索を実行" }).click();
+  await page.getByRole("button", { name: "SQL を生成して実行" }).click();
 
   const progress = page.getByTestId("nl2sql-job-progress");
   await expect(progress).toHaveAttribute("data-job-status", "done");
@@ -5224,7 +5229,7 @@ test("検索ジョブの失敗段階を示し、入力を保持して再実行�
   await page.goto("/query");
   const question = nl2sqlQuestionInput(page);
   await question.fill(questionText);
-  await page.getByRole("button", { name: "検索を実行" }).click();
+  await page.getByRole("button", { name: "SQL を生成して実行" }).click();
 
   const progress = page.getByTestId("nl2sql-job-progress");
   await expect(progress).toHaveAttribute("data-job-status", "error");
@@ -5236,7 +5241,7 @@ test("検索ジョブの失敗段階を示し、入力を保持して再実行�
   );
   await expect(progress).toContainText("SQL 生成サービスに接続できませんでした。");
   await expect(question).toHaveValue(questionText);
-  await expect(page.getByRole("button", { name: "検索を実行" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "SQL を生成して実行" })).toBeEnabled();
   await expectNoHorizontalScroll(page);
 });
 
@@ -5256,7 +5261,7 @@ test("Query Rewrite の用語・同義語は既定 off で、Schema オプショ
   await expect(page.getByRole("button", { name: "請求 を開閉" })).toBeVisible();
 });
 
-test("補助フラグ ON のとき、検索を実行すると原文と glossary flag でジョブを投入する", async ({ page }) => {
+test("補助フラグ ON のとき、SQL を生成して実行すると原文と glossary flag でジョブを投入する", async ({ page }) => {
   await mockNl2SqlApi(page);
   const questionText = "請求金額を一覧で見たい";
   const rewrittenText = "請求金額を一覧で見たい（請求金額=INVOICES.TOTAL_AMOUNT）";
@@ -5316,7 +5321,7 @@ test("補助フラグ ON のとき、検索を実行すると原文と glossary 
   await nl2sqlQuestionInput(page).fill(questionText);
   await openNl2SqlExecutionOptions(page);
   await page.getByLabel("用語・同義語を使う").check();
-  await page.getByRole("button", { name: "検索を実行" }).click();
+  await page.getByRole("button", { name: "SQL を生成して実行" }).click();
 
   await expect(page.getByTestId("nl2sql-job-progress")).toHaveAttribute("data-job-status", "done");
   // ジョブへ渡す question は原文のままにし、server 側で 1 回だけ glossary を適用する。
@@ -5446,7 +5451,7 @@ test("空の抽出条件では rewrite カードを出さず、条件を増や�
   await nl2sqlQuestionInput(page).fill(questionText);
   await openNl2SqlExecutionOptions(page);
   await page.getByLabel("用語・同義語を使う").check();
-  await page.getByRole("button", { name: "検索を実行" }).click();
+  await page.getByRole("button", { name: "SQL を生成して実行" }).click();
 
   // 質問が無変換のときは rewrite カード自体を出さない（内部処理の warning も表に出さない）。
   await expect(page.getByText("生成に使用される質問")).toHaveCount(0);
@@ -5919,7 +5924,7 @@ test("生成 SQL を読み取り専用 Ontology グラフへ接地して確認�
 
   await page.goto("/query");
   await nl2sqlQuestionInput(page).fill(questionText);
-  await page.getByRole("button", { name: "検索を実行" }).click();
+  await page.getByRole("button", { name: "SQL を生成して実行" }).click();
 
   const panel = page.getByTestId("nl2sql-sql-grounding-panel");
   await expect(panel).toBeVisible();
@@ -5977,7 +5982,7 @@ test("生成 SQL を読み取り専用 Ontology グラフへ接地して確認�
       },
     })
   );
-  await page.getByRole("button", { name: "検索を実行" }).click();
+  await page.getByRole("button", { name: "SQL を生成して実行" }).click();
   await expect(page.getByTestId("nl2sql-sql-grounding-panel")).toHaveCount(0);
   await expect(stepsPanel).toBeVisible();
   await expect(stepsPanel).toContainText("SQL の処理手順");
@@ -6240,7 +6245,7 @@ test("未修飾列の単一表 SELECT は FROM 句の表だけを接地する", 
 
   await page.goto("/query");
   await nl2sqlQuestionInput(page).fill(questionText);
-  await page.getByRole("button", { name: "検索を実行" }).click();
+  await page.getByRole("button", { name: "SQL を生成して実行" }).click();
 
   const panel = page.getByTestId("nl2sql-sql-grounding-panel");
   await expect(panel).toBeVisible();
@@ -6379,7 +6384,7 @@ test("schema catalog が空のとき、ジョブ失敗からサンプルデー�
   await expect(page.getByText(/スキーマ未取得/)).toBeVisible();
 
   await nl2sqlQuestionInput(page).fill("すべてプロジェクトを教えてください。");
-  await page.getByRole("button", { name: "検索を実行" }).click();
+  await page.getByRole("button", { name: "SQL を生成して実行" }).click();
 
   const progress = page.getByTestId("nl2sql-job-progress");
   await expect(progress).toHaveAttribute("data-job-status", "error");
@@ -6465,7 +6470,7 @@ test("Workbench のサンプルデータ投入は executed=false を成功表示
 
   await page.goto("/query");
   await nl2sqlQuestionInput(page).fill("すべてプロジェクトを教えてください。");
-  await page.getByRole("button", { name: "検索を実行" }).click();
+  await page.getByRole("button", { name: "SQL を生成して実行" }).click();
 
   const progress = page.getByTestId("nl2sql-job-progress");
   await expect(progress).toHaveAttribute("data-job-status", "error");
@@ -6504,7 +6509,7 @@ test("Select AI の今回だけの生成条件を job に渡し、reset で消�
   await page.getByLabel("アシスタントロール").fill("CFO 向け財務 SQL アシスタント");
   await expect(disclosure.getByText("条件あり")).toBeVisible();
   await nl2sqlQuestionInput(page).fill("前四半期の売上を確認したい");
-  await page.getByRole("button", { name: "検索を実行" }).click();
+  await page.getByRole("button", { name: "SQL を生成して実行" }).click();
 
   // 用語・同義語は既定 off なので、入力そのままの質問で job を作る。
   await expect.poll(() => api.jobPayload?.question).toBe("前四半期の売上を確認したい");
@@ -6524,7 +6529,7 @@ test("Select AI の今回だけの生成条件を job に渡し、reset で消�
   await executionOptionsDisclosure.click();
   await expect(page.getByText("今回だけの生成条件は Select AI 実行時のみ適用されます。")).toBeVisible();
   await nl2sqlQuestionInput(page).fill("請求金額を一覧で見たい");
-  await page.getByRole("button", { name: "検索を実行" }).click();
+  await page.getByRole("button", { name: "SQL を生成して実行" }).click();
   await expect.poll(() => api.jobPayload?.engine).toBe("enterprise_ai_direct");
   expect(api.jobPayload).toMatchObject({
     engine: "enterprise_ai_direct",
@@ -6533,7 +6538,7 @@ test("Select AI の今回だけの生成条件を job に渡し、reset で消�
 
   api.jobPayload = null;
   await page.getByRole("button", { name: /Select AI DBMS_CLOUD_AI profile/ }).click();
-  await page.getByRole("button", { name: "検索を実行" }).click();
+  await page.getByRole("button", { name: "SQL を生成して実行" }).click();
   await expect.poll(() => api.jobPayload?.engine).toBe("select_ai");
   expect(api.jobPayload).toMatchObject({
     engine: "select_ai",
@@ -7580,7 +7585,7 @@ test("dark theme keeps the SQL workbench text, controls and active states legibl
   const selectedEngine = page.getByRole("button", {
     name: /Select AI DBMS_CLOUD_AI profile/u,
   });
-  const executeButton = page.getByRole("button", { name: "検索を実行" });
+  const executeButton = page.getByRole("button", { name: "SQL を生成して実行" });
   const activeQueryLink = page
     .getByRole("complementary", { name: "サイドナビゲーション" })
     .getByRole("link", { name: "SQL 生成" });

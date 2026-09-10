@@ -843,6 +843,7 @@ async function mockApi(
     const path = url.pathname;
     // 共通 helper の認証 mock を優先し、catch-all で CurrentUser を空 object にしない。
     if (path === "/api/auth/me") return route.fallback();
+    if (path === "/api/nl2sql/synthetic-data/runs") return fulfill(route, []);
     // profile-access 一覧(配列)は共通 helper の mock([])へ委譲する。
     if (path === "/api/security/profile-access/profiles") return route.fallback();
     if (path === "/api/nl2sql/rewrite") {
@@ -1233,11 +1234,11 @@ async function mockApi(
 }
 
 async function runCurrentOntologySearch(page: Page) {
-  await page.getByRole("button", { name: "検索を実行" }).click();
+  await page.getByRole("button", { name: "SQL を生成して実行" }).click();
   await expect(page.getByRole("columnheader", { name: "ORDER_COUNT" })).toBeVisible();
 }
 
-test("検索を実行すると公開済みオントロジー context を使って結果と解釈を表示する", async ({ page }, testInfo) => {
+test("SQL を生成して実行すると公開済みオントロジー context を使って結果と解釈を表示する", async ({ page }, testInfo) => {
   const payloads = await mockApi(page);
   await page.goto("/query");
 
@@ -1319,7 +1320,7 @@ test("AI要件確認は一問ずつ確認した内容でクエリを置き換え
   await expect(panel).toHaveCount(0);
   await expect(questionInput).toHaveValue(clarifiedQuestion);
   await expect(questionInput).toBeFocused();
-  await expect(page.getByText("確認内容をクエリに反映しました。内容を確認して検索を実行してください。")).toBeVisible();
+  await expect(page.getByText("確認内容をクエリに反映しました。内容を確認して「SQL を生成して実行」を押してください。")).toBeVisible();
   expect(payloads.generate).toBeUndefined();
   expect(payloads.confirm).toBeUndefined();
   expect(payloads.execute).toBeUndefined();
