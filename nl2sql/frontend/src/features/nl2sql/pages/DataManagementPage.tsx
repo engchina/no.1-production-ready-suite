@@ -712,15 +712,31 @@ export function DataManagementPage() {
     setPreviewRowLimitInput(String(DEFAULT_DATA_PREVIEW_ROW_LIMIT));
   };
 
+  const csvReadSequence = useRef(0);
+  useEffect(() => {
+    return () => { csvReadSequence.current += 1; };
+  }, []);
+
   const pickCsvFile = async (file: File | undefined) => {
     if (!file) return;
+    const sequence = ++csvReadSequence.current;
     setCsvFilename(file.name);
-    setCsvBase64(await fileToBase64(file));
+    setCsvConfirmation("");
+    setCsvBase64("");
+    setCsvUploadError("");
     setCsvUploadResult(null);
     setCsvStep("file");
+    try {
+      const content = await fileToBase64(file);
+      if (sequence === csvReadSequence.current) setCsvBase64(content);
+    } catch {
+      if (sequence === csvReadSequence.current) setCsvUploadError(t("dbAdmin.runner.fileErrorRead"));
+    }
   };
 
   const clearCsvFile = () => {
+    csvReadSequence.current += 1;
+    setCsvConfirmation("");
     setCsvFilename("");
     setCsvBase64("");
     setCsvUploadResult(null);

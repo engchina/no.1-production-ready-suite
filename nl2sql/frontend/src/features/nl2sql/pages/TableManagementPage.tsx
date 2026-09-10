@@ -604,11 +604,17 @@ export function TableManagementPage() {
     }));
   };
 
+  const importReadSequence = useRef(0);
+  useEffect(() => {
+    return () => { importReadSequence.current += 1; };
+  }, []);
+
   const pickImportFile = async (file: File | undefined) => {
     if (!file) return;
+    const sequence = ++importReadSequence.current;
     setImportFilename(file.name);
+    setImportConfirmation("");
     setImportBase64("");
-    setImportBase64(await fileToBase64(file));
     setImportResult(null);
     setImportError(null);
     setImportSchemaRefreshJobId("");
@@ -616,9 +622,17 @@ export function TableManagementPage() {
     setImportSchemaRefreshNeedsFull(false);
     completedImportSchemaRefreshJob.current = "";
     setImportStep("file");
+    try {
+      const content = await fileToBase64(file);
+      if (sequence === importReadSequence.current) setImportBase64(content);
+    } catch {
+      if (sequence === importReadSequence.current) setImportError(t("dbAdmin.runner.fileErrorRead"));
+    }
   };
 
   const clearImportFile = () => {
+    importReadSequence.current += 1;
+    setImportConfirmation("");
     setImportFilename("");
     setImportBase64("");
     setImportResult(null);

@@ -14831,3 +14831,95 @@ test("サンプルの操作・対象変更で確認を解除し実行中は競�
   await expect.poll(() => api.samplePayload).toMatchObject({ step: "tables", confirmation: "SQL_ASSIST_SAMPLE" });
   expect(attempts).toBe(2);
 });
+
+async function delayReviewFileReads(page: Page) {
+  await page.addInitScript(() => {
+    const original = File.prototype.arrayBuffer;
+    File.prototype.arrayBuffer = async function () {
+      if (this.name.startsWith("broken")) throw new Error("file access failed");
+      const bytes = await original.call(this);
+      if (this.name.startsWith("slow")) {
+        await new Promise<void>((resolve) => {
+          (window as unknown as { releaseReviewRead: () => void }).releaseReviewRead = resolve;
+        });
+      }
+      return bytes;
+    };
+  });
+}
+
+async function releaseReviewFileRead(page: Page) {
+  await page.waitForFunction(() => typeof (window as unknown as { releaseReviewRead?: unknown }).releaseReviewRead === "function");
+  await page.evaluate(async () => {
+    const state = window as unknown as { releaseReviewRead?: () => void };
+    state.releaseReviewRead?.();
+    delete state.releaseReviewRead;
+    await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+  });
+}
+
+for (const kind of ["table", "data"] as const) {
+  test(`${kind} 取込ファイルの遅延読込はクリアや別ファイル選択を巻き戻さない`, async ({ page }) => {
+    const api = await mockNl2SqlApi(page);
+    await delayReviewFileReads(page);
+    await page.goto(`/${kind}-management`);
+    if (kind === "table") await clickPageHeaderAction(page, "table-management-actions", "Excel/CSV 取込(新規テーブル)");
+    else await page.getByRole("tab", { name: "Excel/CSV アップロード(既存テーブル)", exact: true }).click();
+    const panel = page.locator(kind === "table" ? "#table-management-panel-import" : "#data-management-panel-csv");
+    if (kind === "table") await panel.getByLabel("Oracle 表名").fill("REVIEW_FILES");
+    else await panel.getByRole("button", { name: "APP.INVOICES を選択", exact: true }).click();
+    const file = panel.getByTestId(kind === "table" ? "table-import-file-field-input" : "data-csv-file-field-input");
+    const consent = panel.getByLabel("実行確認語");
+    const phrase = kind === "table" ? "ADMIN_EXECUTE" : "APP.INVOICES";
+    const execute = panel.getByRole("button", { name: kind === "table" ? "取込を実行" : "アップロード実行", exact: true });
+    const select = async (name: string, value: number) => file.setInputFiles({ name, mimeType: "text/csv", buffer: Buffer.from(`ID\n${value}\n`) });
+    await select("old.csv", 1);
+    await consent.fill(phrase);
+    await expect(execute).toBeEnabled();
+    await select("slow.csv", 2);
+    await expect(consent).toHaveValue("");
+    await consent.fill(phrase);
+    await expect(execute).toBeDisabled();
+    await panel.getByRole("button", { name: "取込ファイルをクリア", exact: true }).click();
+    await releaseReviewFileRead(page);
+    await expect(panel.getByText("選択中: slow.csv")).toHaveCount(0);
+    await expect(execute).toBeDisabled();
+    await select("slow-again.csv", 3);
+    await select("new.csv", 4);
+    await consent.fill(phrase);
+    await expect(execute).toBeEnabled();
+    await releaseReviewFileRead(page);
+    await execute.click();
+    await expect.poll(() => kind === "table" ? api.importTabularPayload : api.csvUploadPayload).toMatchObject({ filename: "new.csv", content_base64: Buffer.from("ID\n4\n").toString("base64") });
+    await expect(file).toBeEnabled();
+    await select("broken.csv", 5);
+    await expect(panel.getByText(/ファイルを読み込めませんでした/)).toBeVisible();
+    await expect(execute).toBeDisabled();
+    await select("retry.csv", 6);
+    await consent.fill(phrase);
+    await expect(execute).toBeEnabled();
+  });
+}
+
+test("SQL ファイルの遅延読込はクリアと再選択を巻き戻さない", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  await delayReviewFileReads(page);
+  await page.goto("/admin-sql");
+  const sql = page.locator("#admin-sql-input");
+  await sql.fill("SELECT 1 FROM DUAL");
+  const file = page.getByTestId("sql-file-input-input");
+  const select = async (name: string, value: number) => file.setInputFiles({ name, mimeType: "text/plain", buffer: Buffer.from(`SELECT ${value} FROM DUAL`) });
+  await select("slow.sql", 2);
+  await page.getByRole("button", { name: "SQL をクリア", exact: true }).click();
+  await releaseReviewFileRead(page);
+  await expect(sql).toHaveValue("");
+  await select("slow-again.sql", 3);
+  await select("new.sql", 4);
+  await expect(sql).toHaveValue("SELECT 4 FROM DUAL");
+  await releaseReviewFileRead(page);
+  await expect(sql).toHaveValue("SELECT 4 FROM DUAL");
+  await select("broken.sql", 5);
+  await expect(page.getByText(/ファイルを読み込めませんでした/)).toBeVisible();
+  await select("retry.sql", 6);
+  await expect(sql).toHaveValue("SELECT 6 FROM DUAL");
+});

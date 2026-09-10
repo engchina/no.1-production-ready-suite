@@ -839,9 +839,15 @@ export function SqlFileInput({
   disabled?: boolean;
 }) {
   const [filename, setFilename] = useState("");
+  const readSequence = useRef(0);
+  useEffect(() => {
+    return () => { readSequence.current += 1; };
+  }, []);
+  useEffect(() => { if (disabled) readSequence.current += 1; }, [disabled]);
   const [errorText, setErrorText] = useState("");
 
   useEffect(() => {
+    readSequence.current += 1;
     setFilename("");
     setErrorText("");
   }, [resetSignal]);
@@ -860,6 +866,7 @@ export function SqlFileInput({
       activeText={t("dbAdmin.runner.fileDropActive")}
       errorText={errorText}
       onReject={(reason) => {
+        readSequence.current += 1;
         setErrorText(
           reason === "multiple-files"
             ? t("dbAdmin.runner.fileErrorMultiple")
@@ -867,6 +874,7 @@ export function SqlFileInput({
         );
       }}
       onFiles={async ([file]) => {
+        const sequence = ++readSequence.current;
         setErrorText("");
         if (file.size > MAX_SQL_FILE_BYTES) {
           setErrorText(
@@ -876,9 +884,11 @@ export function SqlFileInput({
         }
         try {
           const text = await readTextFileSmart(file);
+          if (sequence !== readSequence.current) return;
           onLoad(text);
           setFilename(file.name);
         } catch {
+          if (sequence !== readSequence.current) return;
           setErrorText(t("dbAdmin.runner.fileErrorRead"));
         }
       }}
