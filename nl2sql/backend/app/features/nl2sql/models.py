@@ -2091,6 +2091,31 @@ class ReverseSqlRequest(BaseModel):
     use_glossary: bool = True
 
 
+class StructureToSqlRequest(BaseModel):
+    """編集した論理構造のみを SQL 生成要件として受け付ける。"""
+
+    logical_structure: str = Field(min_length=1, max_length=100_000)
+    profile_id: str | None = None
+    use_glossary: bool = True
+
+
+class StructureToSqlData(BaseModel):
+    sql: str = Field(min_length=1)
+    explanation: str = ""
+    source: str = "oci_enterprise_ai"
+    warnings: list[str] = Field(default_factory=list)
+
+
+class ReverseStructureOutput(BaseModel):
+    logical_structure: str = Field(min_length=1, max_length=100_000)
+
+
+class ReverseQuestionOutput(BaseModel):
+    question: str = Field(min_length=1, max_length=100_000)
+    explanation: str = ""
+    logical_steps: list[str] = Field(default_factory=list, max_length=20)
+
+
 class ReverseSqlData(BaseModel):
     """SQL reverse explanation response."""
 

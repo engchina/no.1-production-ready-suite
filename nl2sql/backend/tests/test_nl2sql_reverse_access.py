@@ -106,6 +106,7 @@ def _request(principal: Principal | None) -> SimpleNamespace:
 @pytest.fixture
 def service(monkeypatch: pytest.MonkeyPatch) -> Nl2SqlService:
     instance = _service()
+    monkeypatch.setattr(instance._enterprise_ai_client, "is_configured", lambda: False)
     monkeypatch.setattr(nl2sql_router, "nl2sql_service", instance)
     return instance
 

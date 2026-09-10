@@ -55,3 +55,7 @@ Wallet ZIP の手動アップロードを復旧経路として使う。
 - Select AI Agent package/tool/team/conversation 実行。
 - DBMS_CLOUD_AI synthetic data 実 execute/status/result。
 - OCI Database API による実 ADB Wallet 生成（対象環境の IAM policy と永続 Wallet volume が必要）。
+
+## SQL 論理構造からの往復生成（Issue #321）
+
+固定 revision の `utils/selectai_util.py` にある物理構造分析・業務論理構造・質問・用語正規化の4プロンプトを原文保存し、3段階の Enterprise AI 呼び出しに再マッピングした。`/reverse/deep` の AI 構造表示を同期し、編集した構造から `/reverse/sql` で安全検証済みの SELECT/WITH を再生成する。対応表、修正点、検証範囲と同値性の限界は [SQL 論理構造の再生成](./sql-structure-roundtrip.md) を参照。

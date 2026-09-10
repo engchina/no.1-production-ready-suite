@@ -27,6 +27,7 @@ from app.security.domain import Principal
 from app.security.permissions import FEEDBACK_MANAGE_PERMISSION, PROFILE_MANAGE_PERMISSION
 from app.settings import get_settings
 
+from .enterprise_ai_client import EnterpriseAiDirectError
 from .incremental_store import IncrementalVersionConflict
 from .models import (
     AdminFeedbackReviewData,
@@ -145,6 +146,8 @@ from .models import (
     SelectAiProfilesImportRequest,
     SimilarHistoryData,
     SimilarHistoryRequest,
+    StructureToSqlData,
+    StructureToSqlRequest,
     SyntheticDataGenerateRequest,
     SyntheticDataOperationData,
     SyntheticDataResultsData,
@@ -2040,6 +2043,23 @@ def reverse_deep(req: ReverseSqlRequest, request: Request) -> ApiResponse[Revers
     _assert_profile_access(request, req.profile_id, default_profile=True)
     try:
         return ApiResponse(data=nl2sql_service.reverse_sql_deep(req))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/reverse/sql", response_model=ApiResponse[StructureToSqlData])
+def structure_to_sql(
+    req: StructureToSqlRequest, request: Request
+) -> ApiResponse[StructureToSqlData]:
+    """論理構造から SQL を生成する。DB 実行・履歴保存は行わない。"""
+    _assert_profile_access(request, req.profile_id, default_profile=True)
+    try:
+        return ApiResponse(data=nl2sql_service.structure_to_sql(req))
+    except EnterpriseAiDirectError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="OCI Enterprise AI で SQL を生成できませんでした。再試行してください。",
+        ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

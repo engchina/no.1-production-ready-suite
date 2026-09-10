@@ -2136,6 +2136,7 @@ def test_reverse_deep_uses_enterprise_ai_and_falls_back_on_invalid_json() -> Non
         '"logical_structure":"SQL 論理構造",'
         '"logical_steps":["INVOICES を参照","TOTAL_AMOUNT を選択"]}'
     )
+    fake.responses = fake.responses * 3
     cast(Any, service)._enterprise_ai_client = fake
 
     reversed_sql = service.reverse_sql_deep(request)
@@ -2145,8 +2146,9 @@ def test_reverse_deep_uses_enterprise_ai_and_falls_back_on_invalid_json() -> Non
     assert reversed_sql.logical_structure == "SQL 論理構造"
     assert reversed_sql.logical_steps == ["INVOICES を参照", "TOTAL_AMOUNT を選択"]
     assert fake.calls
-    assert "業務担当者が検索欄に入力しそうな1文" in fake.calls[0]["system_prompt"]
-    assert "業務語彙を優先" in fake.calls[0]["system_prompt"]
+    assert len(fake.calls) == 3
+    assert "100% of SQL information" in fake.calls[0]["system_prompt"]
+    assert "情報の完全性を最優先" in fake.calls[2]["system_prompt"]
 
     cast(Any, service)._enterprise_ai_client = FakeEnterpriseAiClient("not json")
 
@@ -2328,6 +2330,7 @@ def test_reverse_deep_uses_profile_context_and_glossary() -> None:
     )
     cast(Any, service)._enterprise_ai_client = fake
 
+    fake.responses = fake.responses * 3
     reversed_sql = service.reverse_sql_deep(
         ReverseSqlRequest(
             sql="SELECT TOTAL_AMOUNT FROM INVOICES",

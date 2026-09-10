@@ -205,8 +205,10 @@ from .models import (
     ProfileSummary,
     ProfileSummaryPage,
     QueryResults,
+    ReverseQuestionOutput,
     ReverseSqlData,
     ReverseSqlRequest,
+    ReverseStructureOutput,
     RewriteData,
     RewriteRequest,
     SafetyReport,
@@ -256,6 +258,8 @@ from .models import (
     SimilarHistoryPublishData,
     SimilarHistoryRequest,
     StageTiming,
+    StructureToSqlData,
+    StructureToSqlRequest,
     SyntheticDataGenerateRequest,
     SyntheticDataOperationData,
     SyntheticDataResultsData,
@@ -279,6 +283,7 @@ from .oracle_adapter import (
     SelectAiCredentialMissingError,
     TabularImportValidationError,
 )
+from .reverse_prompts import STRUCTURE_TO_SQL_PROMPT, source_prompt, stage_prompt
 from .sql_semantics import parse_oracle_sql
 from .store import MemoryNl2SqlStore, Nl2SqlStore, OracleJsonNl2SqlStore
 from .tabular_files import (
@@ -9850,6 +9855,11 @@ class Nl2SqlService:
             profile=profile,
             enabled=request.use_glossary,
         )
+        logical_structure += (
+            "\n\n### 再構築用の元 SQL（簡易分析で省略された詳細を保持）\n```sql\n"
+            + request.sql
+            + "\n```"
+        )
         return ReverseSqlData(
             question=question,
             explanation=self._reverse_business_explanation(structure, table_labels),
@@ -9870,60 +9880,135 @@ class Nl2SqlService:
                     ]
                 }
             )
+        result = deterministic
         try:
             profile = self.get_profile(request.profile_id)
-            context_profile = (
-                profile if request.use_glossary else profile.model_copy(update={"glossary": {}})
-            )
             catalog = self._reverse_sql_catalog(profile, deterministic.referenced_tables)
             allowed = AllowedObjects(table_names=deterministic.referenced_tables)
-            context_catalog = catalog or SchemaCatalog(refreshed_at=_utc_now(), tables=[])
-            raw = self._enterprise_ai_client.generate(
+            context = self._enterprise_ai_schema_context(
+                profile=profile,
+                allowed=allowed,
+                catalog=catalog or SchemaCatalog(refreshed_at=_utc_now(), tables=[]),
+                use_glossary=request.use_glossary,
+            )
+            # 原版と同じ三段階。各段階の出力を検証してから次段階へ渡す。
+            physical = self._enterprise_ai_client.generate(
                 prompt=request.sql,
-                context=self._enterprise_ai_schema_context(
-                    profile=context_profile,
-                    allowed=allowed,
-                    catalog=context_catalog,
-                    use_glossary=request.use_glossary,
+                context=context,
+                system_prompt=stage_prompt(
+                    "structure_analysis",
+                    "JSON object の logical_structure (Markdown文字列) だけを返す。",
                 ),
-                system_prompt=(
-                    "Oracle SQL を日本語の自然な業務質問へ逆生成してください。"
-                    "question はSQLの説明文ではなく、"
-                    "業務担当者が検索欄に入力しそうな1文にしてください。"
-                    "物理テーブル名・列名よりも、schema の logical name、comment、"
-                    "glossary の業務語彙を優先してください。"
-                    "SQL の列・条件・集計・結合・並び順を省略しないでください。"
-                    "JSON object で question, explanation, logical_structure, logical_steps "
-                    "を返してください。"
+            )
+            physical_structure = ReverseStructureOutput.model_validate(
+                self._json_object_from_text(physical)
+            ).logical_structure.strip()
+            if not physical_structure:
+                raise ValueError("SQL 構造分析結果が空です。")
+            raw = self._enterprise_ai_client.generate(
+                prompt=json.dumps(
+                    {"sql_structure": physical_structure, "sql": request.sql}, ensure_ascii=False
+                ),
+                context=context,
+                system_prompt=stage_prompt(
+                    "logical_structure",
+                    "JSON object の logical_structure (Markdown文字列) だけを返す。",
+                ),
+            )
+            logical_structure = ReverseStructureOutput.model_validate(
+                self._json_object_from_text(raw)
+            ).logical_structure.strip()
+            if not logical_structure:
+                raise ValueError("SQL 論理構造が空です。")
+            # 決定論の部分要約で AI の完全な構造を覆い隠さない。
+            result = deterministic.model_copy(
+                update={
+                    "logical_structure": logical_structure,
+                    "logical_structure_items": [],
+                    "source": "oci_enterprise_ai",
+                }
+            )
+            raw = self._enterprise_ai_client.generate(
+                prompt=logical_structure,
+                context=context,
+                system_prompt=stage_prompt(
+                    "business_question",
+                    "JSON object で question, explanation, logical_steps (文字列配列) を返す。"
+                    "logical_structure プレースホルダーは入力本文を参照する。",
+                )
+                + (
+                    "\n語彙の正規化は質問生成と同時に行う。terms_text は context の glossary、"
+                    "question_text は生成中の質問を指す。文字列リテラルは変更しない。\n"
+                    + source_prompt("glossary_question")
+                    + "\n最終出力は引き続き question, explanation, logical_steps の "
+                    "JSON object とする。"
+                    if request.use_glossary
+                    else ""
                 ),
             )
             payload = self._json_object_from_text(raw)
-            question = str(payload.get("question") or deterministic.question).strip()
-            explanation = str(payload.get("explanation") or deterministic.explanation).strip()
-            logical_structure = str(
-                payload.get("logical_structure") or deterministic.logical_structure
-            ).strip()
-            steps = _reverse_deep_steps(payload.get("logical_steps"))
+            payload["logical_steps"] = _reverse_deep_steps(payload.get("logical_steps"))
+            question = ReverseQuestionOutput.model_validate(payload)
+            if not question.question.strip():
+                raise ValueError("業務質問が空です。")
             update: dict[str, Any] = {
-                "question": question,
-                "explanation": explanation,
-                "logical_structure": logical_structure,
-                "source": "oci_enterprise_ai",
+                "question": question.question.strip(),
+                "explanation": question.explanation or deterministic.explanation,
             }
-            if steps:
-                # UI は logical_step_details を優先して描画するため、文字列だけ差し替えると
-                # LLM の手順が表示されない。details にも写す(技術行は決定論版を対応付け)。
-                update["logical_steps"] = steps
+            if question.logical_steps:
+                update["logical_steps"] = question.logical_steps
                 update["logical_step_details"] = _reverse_deep_step_details(
-                    steps, deterministic.logical_step_details
+                    question.logical_steps, deterministic.logical_step_details
                 )
-            return deterministic.model_copy(update=update)
-        except (EnterpriseAiDirectError, ValueError) as exc:
-            return deterministic.model_copy(
+            return result.model_copy(update=update)
+        except (EnterpriseAiDirectError, ValueError):
+            logger.warning("reverse_sql_deep_fallback", exc_info=True)
+            return result.model_copy(
                 update={
-                    "warnings": [f"Enterprise AI reverse に失敗したため fallback しました: {exc}"]
+                    "warnings": [
+                        "Enterprise AI の生成を完了できませんでした。"
+                        "完了済みの論理構造または元 SQL を含む簡易構造を表示しています。"
+                        "質問候補は簡易生成です。再試行してください。"
+                    ]
                 }
             )
+
+    def structure_to_sql(self, request: StructureToSqlRequest) -> StructureToSqlData:
+        structure = request.logical_structure.strip()
+        if not structure:
+            raise ValueError("SQL 論理構造を入力してください。")
+        profile = self.get_profile(request.profile_id)
+        allowed = self._resolve_allowed_objects(request.profile_id, AllowedObjects())
+        if not allowed.table_names:
+            raise ValueError("選択したプロファイルで参照できる表がありません。")
+        if not self._enterprise_ai_client.is_configured():
+            raise ValueError("OCI Enterprise AI を設定してから SQL を再生成してください。")
+        catalog = self._generation_schema_catalog(profile, allowed)
+        raw = self._enterprise_ai_client.generate(
+            prompt=structure,
+            context=self._enterprise_ai_schema_context(
+                profile=profile,
+                allowed=allowed,
+                catalog=catalog,
+                use_glossary=request.use_glossary,
+            ),
+            system_prompt=STRUCTURE_TO_SQL_PROMPT + self._enterprise_ai_sql_system_prompt(),
+        )
+        # 先頭 SELECT の抽出やセミコロンで切断すると不正な複文を隠すため、全 SQL を検証する。
+        output = StructureToSqlData.model_validate(self._json_object_from_text(raw))
+        sql = output.sql.strip()
+        if not sql:
+            raise ValueError(output.explanation or "SQL を再生成できませんでした。")
+        analysis = self.analyze_sql(sql, allowed, None, catalog=catalog)
+        if not analysis.safety.is_safe:
+            raise ValueError(analysis.safety.blocked_reason)
+        return output.model_copy(
+            update={
+                "sql": sql,
+                "source": "oci_enterprise_ai",
+                "warnings": analysis.safety.warnings,
+            }
+        )
 
     def _reverse_sql_catalog(
         self,

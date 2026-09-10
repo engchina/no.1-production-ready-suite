@@ -7648,8 +7648,9 @@ test("sql to question page reverse-generates a business question with one primar
   await expect(sqlToQuestionInput(page)).toHaveValue("SELECT TOTAL_AMOUNT FROM INVOICES");
   await expect(page.getByLabel("用語・同義語を使う")).toBeChecked();
   await generateButton.click();
-  await expect(page.locator("#sql-to-question-panel-result")).toBeVisible();
-  await expect(page.getByText("請求金額を条件付きで一覧確認したい")).toBeVisible();
+  await expect(page.locator("#sql-to-question-panel-structure")).toBeVisible();
+  await expect(page.getByRole("tab", { name: "SQL論理構造" })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tab", { name: "SQL論理構造" })).toBeFocused();
 
   await page.getByRole("tab", { name: "SQL論理構造" }).click();
   const structurePanel = page.locator("#sql-to-question-panel-structure");
@@ -7843,6 +7844,8 @@ test("sql to question page invalidates stale results when inputs change", async 
 
   await sqlToQuestionInput(page).fill("SELECT TOTAL_AMOUNT FROM INVOICES");
   await page.getByRole("button", { name: "業務質問を生成" }).click();
+  await expect(page.locator("#sql-to-question-panel-structure")).toBeVisible();
+  await page.getByRole("tab", { name: "質問候補" }).click();
   await expect(page.getByText("請求金額を条件付きで一覧確認したい")).toBeVisible();
 
   // 入力を変えると生成済み結果は無効化され、質問セクションは空状態へ戻る。
@@ -7855,6 +7858,8 @@ test("sql to question page invalidates stale results when inputs change", async 
 
   await page.getByRole("tab", { name: "SQL入力・生成" }).click();
   await page.getByRole("button", { name: "業務質問を生成" }).click();
+  await expect(page.locator("#sql-to-question-panel-structure")).toBeVisible();
+  await page.getByRole("tab", { name: "質問候補" }).click();
   await expect(page.getByText("請求金額を条件付きで一覧確認したい")).toBeVisible();
   await page.getByRole("tab", { name: "SQL入力・生成" }).click();
   await sqlToQuestionInput(page).fill("SELECT TOTAL_AMOUNT FROM INVOICES WHERE TOTAL_AMOUNT > 0");
@@ -14322,4 +14327,57 @@ test("synthetic history keeps the last 24 hours after completion and preserves u
   await page.goto("/data-management?synthetic_run=expired-run");
   await expect(history).toHaveValue("");
   await expect(panel.getByTestId("synthetic-run-reference")).toHaveCount(0);
+});
+
+
+test("sql to question roundtrip uses the edited structure and preserves drafts on failure and reload", async ({ page }, testInfo) => {
+  await mockNl2SqlApi(page);
+  let payload: Record<string, unknown> | null = null;
+  let fail = false;
+  let calls = 0;
+  let executeCalls = 0;
+  page.on("request", (request) => { if (/\/api\/nl2sql\/(execute|jobs)$/.test(request.url())) executeCalls += 1; });
+  await page.route("**/api/nl2sql/reverse/sql", async (route) => {
+    calls += 1;
+    payload = route.request().postDataJSON();
+    if (fail) return route.fulfill({ status: 400, contentType: "application/json", body: JSON.stringify({ detail: "許可されていない表を参照しています。" }) });
+    return fulfillJson(route, { sql: "SELECT TOTAL_AMOUNT FROM APP.INVOICES WHERE TOTAL_AMOUNT >= 100", explanation: "100 以上の請求金額を取得します。", warnings: [] });
+  });
+  await page.goto("/sql-to-question");
+  await sqlToQuestionInput(page).fill("SELECT TOTAL_AMOUNT FROM INVOICES");
+  await page.getByRole("button", { name: "業務質問を生成" }).click();
+  const editor = page.getByRole("textbox", { name: "再生成に使う SQL 論理構造" });
+  await expect(editor).toHaveValue(/SELECT: 請求金額/);
+  const edited = "SELECT: 請求金額\nFROM: INVOICES\nWHERE: 請求金額 >= 100";
+  await editor.fill(edited);
+  const generate = page.getByRole("button", { name: "論理構造から SQL を生成" });
+  await generate.focus();
+  await page.keyboard.press("Enter");
+  const output = page.getByRole("region", { name: "再生成 SQL", exact: true });
+  await expect(output).toContainText("WHERE TOTAL_AMOUNT >= 100");
+  await expect(output).toContainText("未実行");
+  expect(payload).toEqual({ logical_structure: edited, profile_id: "default", use_glossary: false });
+  await editor.fill(edited + " AND 請求金額 < 500");
+  await expect(output).toContainText("変更前の生成結果");
+  fail = true;
+  await generate.click();
+  await expect(page.getByRole("alert")).toContainText("許可されていない表");
+  await expect(editor).toHaveValue(edited + " AND 請求金額 < 500");
+  await expect(output).toContainText("WHERE TOTAL_AMOUNT >= 100");
+  await expectNoHorizontalScroll(page);
+  await output.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("sql-structure-roundtrip.png"), fullPage: true });
+  await page.getByRole("button", { name: "質問候補を確認" }).click();
+  await expect(page.getByText("論理構造が編集されています。この質問候補は編集前の SQL から生成したものです。")).toBeVisible();
+  await page.getByRole("tab", { name: "SQL論理構造" }).click();
+  await page.reload();
+  await expect(editor).toHaveValue(edited + " AND 請求金額 < 500");
+  await expect(generate).toBeEnabled();
+  expect(calls).toBe(2);
+  expect(executeCalls).toBe(0);
+  await editor.fill("");
+  await expect(editor).toBeVisible();
+  await expect(generate).toBeDisabled();
+  await editor.fill(edited);
+  await expect(generate).toBeEnabled();
 });

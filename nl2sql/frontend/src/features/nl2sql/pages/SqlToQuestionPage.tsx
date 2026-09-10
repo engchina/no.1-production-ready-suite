@@ -1,4 +1,4 @@
-import { useWorkspaceState, useWorkspaceRevalidation, useWorkspaceActivation, WorkspaceResultNotice } from "@/components/WorkspaceState";
+import { useWorkspaceState, useWorkspaceRevalidation, useWorkspaceActivation, useWorkspaceActive, WorkspaceResultNotice } from "@/components/WorkspaceState";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowRightLeft, BookOpen, Database, FileText, RefreshCw } from "lucide-react";
 
@@ -49,10 +49,25 @@ export function SqlToQuestionPage() {
   const [selectedProfileId, setSelectedProfileId] = useWorkspaceState("selectedProfileId", "");
   const [sql, setSql] = useWorkspaceState(`sql:${selectedProfileId}`, "");
   const [useGlossary, setUseGlossary] = useWorkspaceState("useGlossary", false);
-  const [structureText, setStructureText] = useState("");
+  const [structureText, setStructureText] = useWorkspaceState(`structureText:${selectedProfileId}`, "");
+  const [editingStructure, setEditingStructure] = useState(false);
+  const [sqlGenerationLoading, setSqlGenerationLoading] = useState(false);
+  const [sqlGenerationError, setSqlGenerationError] = useState("");
+  const [regenerated, setRegenerated] = useState<{ sql: string; explanation: string; warnings: string[]; signature: string; at: string } | null>(null);
+  const structureSignature = JSON.stringify([selectedProfileId, structureText, useGlossary]);
+  const workspaceActive = useWorkspaceActive();
+  const activeRef = useRef(workspaceActive);
+  activeRef.current = workspaceActive;
+  const focusStructure = useRef(false);
+  useEffect(() => {
+    if (activePanel === "structure" && focusStructure.current && workspaceActive) {
+      focusStructure.current = false;
+      document.getElementById("sql-to-question-tab-structure")?.focus();
+    }
+  }, [activePanel, workspaceActive]);
   const [structureItems, setStructureItems] = useState<Nl2SqlLogicalStructureItem[]>([]);
   const [reverse, setReverse] = useState<ReverseSqlData | null>(null);
-  useEffect(() => { setReverse(null); setStructureText(""); setStructureItems([]); }, [selectedProfileId]);
+  useEffect(() => { setReverse(null); setStructureItems([]); setEditingStructure(false); setRegenerated(null); setSqlGenerationError(""); }, [selectedProfileId]);
   const [loading, setLoading] = useState(false);
   const [reverseLoading, setReverseLoading] = useState(false);
   const [loadError, setLoadError] = useState("");
@@ -164,23 +179,51 @@ export function SqlToQuestionPage() {
     setReverseLoading(true);
     setActionError("");
     try {
-      const data = await apiPost<ReverseSqlData>("/api/nl2sql/reverse/deep", {
-        sql: trimmedSql,
-        profile_id: selectedProfileId || undefined,
-        use_glossary: useGlossary,
+      await runScopedRequest(async (signal) => {
+        const data = await apiPost<ReverseSqlData>("/api/nl2sql/reverse/deep", {
+          sql: trimmedSql,
+          profile_id: selectedProfileId || undefined,
+          use_glossary: useGlossary,
+        }, { signal, timeoutMs: API_TIMEOUT_MS.longRunningJob });
+        if (signal.aborted) return;
+        setReverse(data);
+        setStructureText(data.logical_structure ?? "");
+        setRegenerated(null);
+        setSqlGenerationError("");
+        setStructureItems(data.logical_structure_items ?? []);
+        focusStructure.current = activeRef.current;
+        setActivePanel("structure");
       });
-      setReverse(data);
-      if (data.logical_structure) setStructureText(data.logical_structure);
-      setStructureItems(data.logical_structure_items ?? []);
-      setActivePanel("result");
     } catch (err) {
+      if (isAbortError(err)) return;
       setActionError(actionableError(err, t("sqlToQuestion.error.reverse")));
     } finally {
       setReverseLoading(false);
     }
   };
 
-  const actionBusy = reverseLoading;
+  const generateSql = async () => {
+    if (!structureText.trim() || sqlGenerationLoading) return;
+    setSqlGenerationLoading(true);
+    setSqlGenerationError("");
+    try {
+      await runScopedRequest(async (signal) => {
+        const data = await apiPost<{ sql: string; explanation: string; warnings: string[] }>(
+          "/api/nl2sql/reverse/sql",
+          { logical_structure: structureText, profile_id: selectedProfileId || undefined, use_glossary: useGlossary },
+          { signal, timeoutMs: API_TIMEOUT_MS.longRunningJob }
+        );
+        if (signal.aborted) return;
+        setRegenerated({ ...data, signature: structureSignature, at: new Date().toLocaleString("ja-JP") });
+      });
+    } catch (err) {
+      if (!isAbortError(err)) setSqlGenerationError(actionableError(err, t("sqlToQuestion.error.regenerate")));
+    } finally {
+      setSqlGenerationLoading(false);
+    }
+  };
+
+  const actionBusy = reverseLoading || sqlGenerationLoading;
   const panels = useMemo(
     () =>
       [
@@ -298,7 +341,9 @@ export function SqlToQuestionPage() {
                   onChange={(event) => {
                     setSql(event.currentTarget.value);
                     setStructureText("");
+                    setEditingStructure(false);
                     setStructureItems([]);
+                    setRegenerated(null);
                     setReverse(null);
                     setActionError("");
                     setActivePanel("input");
@@ -317,6 +362,10 @@ export function SqlToQuestionPage() {
                   checked={useGlossary}
                   onChange={(event) => {
                     setUseGlossary(event.currentTarget.checked);
+                    setStructureText("");
+                    setEditingStructure(false);
+                    setStructureItems([]);
+                    setRegenerated(null);
                     setReverse(null);
                     setActionError("");
                     setActivePanel("input");
@@ -334,7 +383,7 @@ export function SqlToQuestionPage() {
                   size="lg"
                   className="w-full whitespace-nowrap sm:w-auto"
                   loading={reverseLoading}
-                  disabled={!sql.trim()}
+                  disabled={!sql.trim() || actionBusy || loading || !!loadError || !selectedProfile}
                   onClick={() => void generateQuestion()}
                 >
                   <ArrowRightLeft size={16} aria-hidden="true" />
@@ -342,7 +391,7 @@ export function SqlToQuestionPage() {
                 </Button>
                 <FormStatus tone="danger" message={actionError} className="sm:ml-auto" />
               </div>
-              {actionBusy ? (
+              {reverseLoading ? (
                 <ProcessingIndicator
                   active
                   label={t("sqlToQuestion.action.generate")}
@@ -378,17 +427,47 @@ export function SqlToQuestionPage() {
             title={t("sqlToQuestion.structure.title")}
             description={t("sqlToQuestion.structure.hint")}
           />
-          {structureItems.length > 0 ? (
-            <LogicalStructureList items={structureItems} />
-          ) : structureText ? (
-            <pre className="max-h-96 overflow-auto rounded-md border border-border bg-code p-4 text-sm leading-6 text-code-fg">
-              <code>{structureText}</code>
-            </pre>
+          {structureText || reverse || structureItems.length > 0 || regenerated || editingStructure ? (
+            <section className="grid min-w-0 gap-4">
+              <TextList label={t("sqlToQuestion.result.warnings")} items={reverse?.warnings ?? []} />
+              <div className="grid min-w-0 gap-1">
+                <FieldLabel htmlFor="sql-to-question-structure-input" label={t("sqlToQuestion.structure.editor")} required />
+                <textarea
+                  id="sql-to-question-structure-input"
+                  value={structureText}
+                  onChange={(event) => { setEditingStructure(true); setStructureText(event.currentTarget.value); setStructureItems([]); setSqlGenerationError(""); }}
+                  rows={16}
+                  required
+                  aria-required="true"
+                  disabled={actionBusy}
+                  className="min-h-64 min-w-0 w-full resize-y rounded-md border border-border bg-card px-3 py-2 font-mono text-sm leading-6 focus:outline-none focus:ring-2 focus:ring-ring/40"
+                />
+              </div>
+              {structureItems.length > 0 && <LogicalStructureList items={structureItems} />}
+              <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
+                <Button size="lg" loading={sqlGenerationLoading} disabled={actionBusy || !structureText.trim() || loading || !!loadError || !selectedProfile} onClick={() => void generateSql()}>
+                  <ArrowRightLeft size={16} aria-hidden="true" />
+                  {t("sqlToQuestion.actions.regenerateSql")}
+                </Button>
+                <Button size="lg" variant="secondary" onClick={() => setActivePanel("result")}>
+                  {t("sqlToQuestion.actions.viewQuestion")}
+                </Button>
+              </div>
+              <FormStatus tone="danger" message={sqlGenerationError} />
+              {sqlGenerationLoading && <ProcessingIndicator active label={t("sqlToQuestion.actions.regenerateSql")} operationKey="structure-to-sql" placement="action" activityIcon="none" />}
+              {regenerated && (
+                <section className="grid min-w-0 gap-2" aria-label={t("sqlToQuestion.regenerated.title")}>
+                  <h3 className="font-semibold">{t("sqlToQuestion.regenerated.title")}</h3>
+                  <p className="text-sm text-muted">{t("sqlToQuestion.regenerated.at", { at: regenerated.at })}</p>
+                  {regenerated.signature !== structureSignature && <FormStatus tone="warning" message={t("sqlToQuestion.regenerated.stale")} />}
+                  <pre className="max-h-96 overflow-auto rounded-md border border-border bg-code p-4 text-sm leading-6 text-code-fg"><code>{regenerated.sql}</code></pre>
+                  <p className="text-sm">{regenerated.explanation}</p>
+                  <TextList label={t("sqlToQuestion.result.warnings")} items={regenerated.warnings ?? []} />
+                </section>
+              )}
+            </section>
           ) : (
-            <EmptyState
-              title={t("sqlToQuestion.structure.emptyTitle")}
-              hint={t("sqlToQuestion.structure.emptyHint")}
-            />
+            <EmptyState title={t("sqlToQuestion.structure.emptyTitle")} hint={t("sqlToQuestion.structure.emptyHint")} />
           )}
         </DbObjectManagementPanelShell>
 
@@ -408,6 +487,7 @@ export function SqlToQuestionPage() {
           />
           {reverse ? (
             <section className="grid content-start gap-3 text-sm">
+              {structureText !== reverse.logical_structure && <FormStatus tone="warning" message={t("sqlToQuestion.result.staleStructure")} />}
               <WorkspaceResultNotice result={reverse} inputSignature={JSON.stringify([selectedProfileId, sql, useGlossary])} />
               <div className="flex flex-wrap gap-2">
                 <StatusBadge variant="neutral" label={reverse.source ?? "deterministic"} />

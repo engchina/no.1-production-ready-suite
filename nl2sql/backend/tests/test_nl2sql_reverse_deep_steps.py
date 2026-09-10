@@ -47,7 +47,10 @@ class _FakeEnterpriseAiClient:
         max_retries: int | None = None,
     ) -> str:
         del prompt, context, system_prompt, timeout_seconds, max_output_tokens, max_retries
-        return json.dumps(self.payload, ensure_ascii=False)
+        return json.dumps(
+            {"logical_structure": "SQL 論理構造\n- SELECT: 給与", **self.payload},
+            ensure_ascii=False,
+        )
 
 
 def _service(payload: dict[str, object]) -> Nl2SqlService:
@@ -97,8 +100,9 @@ def test_deep_steps_are_projected_into_details_when_counts_differ() -> None:
     # UI が優先する details にも LLM の手順が業務行として入る。
     assert [step.business for step in data.logical_step_details] == data.logical_steps
     assert all(step.kind == "llm" and step.technical == "" for step in data.logical_step_details)
-    # 構造化 items は決定論版のまま(UI は items を優先して描画する)。
-    assert data.logical_structure_items
+    # AI の構造を決定論の部分要約で隠さない。
+    assert not data.logical_structure_items
+    assert "給与" in data.logical_structure
 
 
 def test_deep_steps_keep_technical_rows_when_counts_align() -> None:
