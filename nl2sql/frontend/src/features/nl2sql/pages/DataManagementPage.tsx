@@ -342,7 +342,7 @@ export function DataManagementPage() {
   // 対象名確認: CSV は選択テーブル名、synthetic は単一テーブル指定時のみ対象名
   // (複数テーブル指定は単一対象名が無いため ADMIN_EXECUTE)。backend の検証と一致させる。
   const csvConfirmed = Boolean(csvTable.trim()) && csvConfirmation.trim() === csvTable.trim();
-  const canUploadCsv = Boolean(csvTable && csvBase64 && csvConfirmed);
+  const canUploadCsv = Boolean(csvTable && csvBase64 && csvConfirmed && !csvUploading);
   const canClearCsvUpload = Boolean(
     csvFilename ||
       csvBase64 ||
@@ -1782,7 +1782,7 @@ function CsvUploadWorkspace({
   const activeIndex = step === "execute" ? 1 : 0;
   const hasTableFilter = Boolean(tableSearch.trim());
   return (
-    <div className="grid gap-4">
+    <fieldset disabled={loading} className="grid min-w-0 gap-4">
       <DbObjectPanelHeader
         icon={Upload}
         title={t("dataMgmt.csv.title")}
@@ -1873,6 +1873,7 @@ function CsvUploadWorkspace({
         icon="spreadsheet"
         required
         dataTestId="data-csv-file-field"
+        disabled={loading}
         onFiles={([file]) => onFilePick(file)}
         onClear={onFileClear}
       />
@@ -1993,7 +1994,7 @@ function CsvUploadWorkspace({
           )}
         </section>
       )}
-    </div>
+    </fieldset>
   );
 }
 

@@ -14663,3 +14663,44 @@ test("ビュー抽出の旧応答は選択変更後に表示せず再抽出失�
   await expect(page.getByText(/抽出サービスを利用できません/)).toBeVisible();
   await expect(page.getByLabel("結合条件 (JOIN)")).toHaveCount(0);
 });
+
+test("データ取込中は対象・ファイル・モードを固定し失敗後に再試行できる", async ({ page }, testInfo) => {
+  await mockNl2SqlApi(page);
+  await page.goto("/data-management");
+  await page.getByRole("tab", { name: "Excel/CSV アップロード(既存テーブル)", exact: true }).click();
+  const panel = page.locator("#data-management-panel-csv");
+  const target = panel.getByRole("button", { name: "APP.INVOICES を選択", exact: true });
+  await target.click();
+  const file = panel.getByTestId("data-csv-file-field-input");
+  await file.setInputFiles({ name: "orders.csv", mimeType: "text/csv", buffer: Buffer.from("ID\n1\n") });
+  const confirmation = panel.getByLabel("実行確認語");
+  await confirmation.fill("APP.INVOICES");
+  const execute = panel.getByRole("button", { name: "アップロード実行", exact: true });
+  const gate = createRequestGate();
+  await page.route("**/api/nl2sql/db-admin/upload-csv", async (route) => {
+    await gate.promise;
+    await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "取込サービスは一時停止中です" }) });
+  });
+  await execute.click();
+  try {
+    await expect(target).toBeDisabled();
+    await expect(file).toBeDisabled();
+    await expect(panel.getByTestId("data-csv-mode-field").getByRole("combobox")).toBeDisabled();
+    await expect(confirmation).toBeDisabled();
+    await expect(panel.getByRole("button", { name: "取込ファイルをクリア" })).toBeDisabled();
+    await expect(execute).toBeDisabled();
+    await page.screenshot({ path: testInfo.outputPath("data-upload-pending.png") });
+  } finally { gate.release(); }
+  await expect(target).toBeEnabled();
+  await expect(confirmation).toHaveValue("APP.INVOICES");
+  await expect(execute).toBeEnabled();
+  await page.unroute("**/api/nl2sql/db-admin/upload-csv");
+  let retryPayload: Record<string, unknown> | null = null;
+  await page.route("**/api/nl2sql/db-admin/upload-csv", (route) => {
+    retryPayload = route.request().postDataJSON();
+    return fulfillJson(route, { executed: true, runtime: "oracle", table_name: "INVOICES", mode: "insert", row_count: 1, success_count: 1, error_count: 0, matched_columns: ["ID"], unmatched_csv_columns: [], row_errors: [], sample_rows: [], warnings: [] });
+  });
+  await execute.press("Enter");
+  await expect.poll(() => retryPayload).toMatchObject({ table_name: "INVOICES", owner: "APP", mode: "insert", confirmation: "APP.INVOICES", filename: "orders.csv" });
+  await expect(panel.getByText("executed", { exact: true })).toBeVisible();
+});
