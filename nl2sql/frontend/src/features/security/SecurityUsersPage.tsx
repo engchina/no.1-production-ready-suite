@@ -52,6 +52,7 @@ import {
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_SCROLL_CLASS,
 } from "@/lib/list-density";
+import { useUnsavedChangesGuard } from "@/lib/useUnsavedChangesGuard";
 import { useRequestScope } from "@/lib/useRequestScope";
 import { cn } from "@/lib/utils";
 import { selectedVisibleKey } from "@/lib/visible-selection";
@@ -130,6 +131,8 @@ export function SecurityUsersPage() {
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState<DataTableSort>({ key: "user", direction: "asc" });
   const [draft, setDraft] = useState<UserDraftState>(EMPTY_DRAFT);
+  const [baseline, setBaseline] = useState<UserDraftState>(EMPTY_DRAFT);
+  const [unlockingUserId, setUnlockingUserId] = useState<string | null>(null);
   const [copyPasswordError, setCopyPasswordError] = useState("");
   const [resettingUserId, setResettingUserId] = useState<string | null>(null);
   const [statusChangingUserId, setStatusChangingUserId] = useState<string | null>(null);
@@ -157,7 +160,22 @@ export function SecurityUsersPage() {
   const userFormReadOnly = activeView === "edit" && editingUser?.status !== "ACTIVE";
   const canSubmitUserForm = !userFormReadOnly;
   const accountActionBusy =
-    resettingUserId !== null || statusChangingUserId !== null || deletingUserId !== null;
+    resettingUserId !== null || statusChangingUserId !== null || deletingUserId !== null || unlockingUserId !== null;
+  const operationBusy = busy || accountActionBusy || loading;
+  const inputReadOnly = userFormReadOnly || operationBusy;
+  const isDirty = activeView !== "list" && (
+    draft.loginUserId !== baseline.loginUserId || draft.displayName !== baseline.displayName ||
+    draft.selectedRoleId !== baseline.selectedRoleId ||
+    (activeView === "create" && draft.temporaryPassword !== baseline.temporaryPassword)
+  );
+  const confirmLeave = async () => !operationBusy && (!isDirty || await confirm({
+    title: t("security.common.discardTitle"),
+    description: t("security.common.discardDescription"),
+    confirmLabel: t("security.common.discardConfirm"),
+    tone: "danger",
+    dismissOnOverlay: false,
+  }));
+  useUnsavedChangesGuard(isDirty || busy || accountActionBusy, confirmLeave);
   const assignedRoles = (user: SecurityUser): AssignedRole[] => {
     if (user.assigned_roles?.length) return user.assigned_roles;
     return user.role_ids.map((id) => {
@@ -233,6 +251,7 @@ export function SecurityUsersPage() {
   const selectedUser = users.find((user) => user.user_uuid === visibleSelectedId) ?? null;
 
   const load = async (announce = false) => {
+    if (busy || accountActionBusy) return;
     const sequence = loadSequence.current + 1;
     loadSequence.current = sequence;
     setLoading(true);
@@ -331,6 +350,7 @@ export function SecurityUsersPage() {
     setActiveView("create");
     setEditingId(null);
     setDraft(EMPTY_DRAFT);
+    setBaseline(EMPTY_DRAFT);
     setFormError("");
     setFieldErrors({});
     setActionError("");
@@ -343,12 +363,14 @@ export function SecurityUsersPage() {
     setSelectedId(user.user_uuid);
     setEditingId(user.user_uuid);
     setActiveView("edit");
-    setDraft({
+    const nextDraft = {
       loginUserId: user.login_user_id,
       displayName: user.display_name,
       selectedRoleId: selectKnownRoleId(user.role_ids),
       temporaryPassword,
-    });
+    };
+    setDraft(nextDraft);
+    setBaseline(nextDraft);
     setFormError("");
     setFieldErrors({});
     setActionError("");
@@ -356,7 +378,10 @@ export function SecurityUsersPage() {
     setResetPasswordError(null);
   };
 
-  const returnToList = () => {
+  const returnToList = async () => {
+    if (!(await confirmLeave())) return;
+    setDraft(EMPTY_DRAFT);
+    setBaseline(EMPTY_DRAFT);
     setActiveView("list");
     setEditingId(null);
     setFormError("");
@@ -368,7 +393,7 @@ export function SecurityUsersPage() {
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
-    if (busy || accountActionBusy || !canSubmitUserForm) return;
+    if (operationBusy || !canSubmitUserForm) return;
     setFormError("");
     setFieldErrors({});
     setActionError("");
@@ -391,6 +416,11 @@ export function SecurityUsersPage() {
         setUsers((rows) => rows.map((row) => (row.user_uuid === updated.user_uuid ? updated : row)));
         selectedUserManualSelection.current = true;
         setSelectedId(updated.user_uuid);
+        setBaseline((current) => ({
+          ...current,
+          displayName: updated.display_name,
+          selectedRoleId: selectKnownRoleId(updated.role_ids),
+        }));
         setDraft((current) => ({
           ...current,
           displayName: updated.display_name,
@@ -431,7 +461,7 @@ export function SecurityUsersPage() {
   };
 
   const handleToggleStatus = async (user: SecurityUser) => {
-    if (accountActionBusy || busy) return;
+    if (operationBusy) return;
     const enabling = user.status !== "ACTIVE";
     if (
       !enabling &&
@@ -462,7 +492,7 @@ export function SecurityUsersPage() {
   };
 
   const handleResetPassword = async (user: SecurityUser) => {
-    if (user.status !== "ACTIVE" || accountActionBusy || busy) return;
+    if (user.status !== "ACTIVE" || operationBusy) return;
     if (
       !(await confirm({
         title: t("security.users.resetPassword"),
@@ -504,6 +534,9 @@ export function SecurityUsersPage() {
   };
 
   const handleUnlock = async (user: SecurityUser) => {
+    if (operationBusy) return;
+    setUnlockingUserId(user.user_uuid);
+    setActionError("");
     try {
       const updated = await securityApi.unlockUser(user.user_uuid);
       setUsers((rows) => rows.map((row) => (row.user_uuid === updated.user_uuid ? updated : row)));
@@ -512,6 +545,8 @@ export function SecurityUsersPage() {
       toast.success(t("security.common.saved"));
     } catch (cause) {
       setActionError(cause instanceof Error ? cause.message : t("security.common.saveError"));
+    } finally {
+      setUnlockingUserId(null);
     }
   };
 
@@ -521,7 +556,7 @@ export function SecurityUsersPage() {
     currentUser?.user_uuid !== user.user_uuid;
 
   const handleDelete = async (user: SecurityUser) => {
-    if (accountActionBusy || busy || !canDeleteUser(user)) return;
+    if (operationBusy || !canDeleteUser(user)) return;
     selectedUserManualSelection.current = true;
     setSelectedId(user.user_uuid);
     if (
@@ -575,7 +610,7 @@ export function SecurityUsersPage() {
     onSelect: () => handleResetPassword(user),
     visible: user.status === "ACTIVE" && !user.is_bootstrap_admin,
     loading: resettingUserId === user.user_uuid,
-    disabled: busy || accountActionBusy,
+    disabled: operationBusy,
   });
 
   const userActions = (user: SecurityUser): EntityAction[] =>
@@ -585,14 +620,16 @@ export function SecurityUsersPage() {
             id: "edit",
             label: t("security.common.edit"),
             icon: Pencil,
-            onSelect: () => startEdit(user),
+            disabled: operationBusy,
+            onSelect: () => { if (!operationBusy) startEdit(user); },
           },
           resetPasswordAction(user),
           {
             id: "unlock",
             label: t("security.users.unlock"),
             visible: Boolean(user.locked_until),
-            disabled: accountActionBusy || busy,
+            loading: unlockingUserId === user.user_uuid,
+            disabled: operationBusy,
             onSelect: () => handleUnlock(user),
           },
           {
@@ -601,7 +638,7 @@ export function SecurityUsersPage() {
             icon: user.status === "ACTIVE" ? UserX : UserCheck,
             tone: user.status === "ACTIVE" ? "danger" : "default",
             loading: statusChangingUserId === user.user_uuid,
-            disabled: busy || accountActionBusy,
+            disabled: operationBusy,
             onSelect: () => handleToggleStatus(user),
           },
           {
@@ -611,7 +648,7 @@ export function SecurityUsersPage() {
             tone: "danger",
             visible: canDeleteUser(user),
             loading: deletingUserId === user.user_uuid,
-            disabled: accountActionBusy || busy,
+            disabled: operationBusy,
             onSelect: () => handleDelete(user),
           },
         ]
@@ -651,6 +688,7 @@ export function SecurityUsersPage() {
             aria-current={selected ? "true" : undefined}
             onClick={(event) => {
               event.stopPropagation();
+              if (operationBusy) return;
               selectedUserManualSelection.current = true;
               setSelectedId(user.user_uuid);
             }}
@@ -694,6 +732,7 @@ export function SecurityUsersPage() {
                         kind: "primary" as const,
                         label: t("security.common.create"),
                         icon: Plus,
+                        disabled: operationBusy,
                         onClick: startCreate,
                       },
                     ]
@@ -703,6 +742,7 @@ export function SecurityUsersPage() {
                   kind: "utility",
                   label: t("common.action.refresh"),
                   icon: RefreshCw,
+                  disabled: operationBusy,
                   onClick: () => load(true),
                   loading,
                 },
@@ -742,6 +782,7 @@ export function SecurityUsersPage() {
                     placeholder={t("security.users.searchPlaceholder")}
                     value={search}
                     testId="security-users-search"
+                    disabled={operationBusy}
                     onChange={setSearch}
                   />
                 </div>
@@ -760,9 +801,10 @@ export function SecurityUsersPage() {
                   loading={loading}
                   rows={filteredUsers}
                   sort={sort}
-                  onSortChange={setSort}
+                  onSortChange={(next) => { if (!operationBusy) setSort(next); }}
                   selectedRowKey={visibleSelectedId}
                   onRowSelect={(user) => {
+                    if (operationBusy) return;
                     selectedUserManualSelection.current = true;
                     setSelectedId(user.user_uuid);
                   }}
@@ -797,7 +839,7 @@ export function SecurityUsersPage() {
         ) : (
           <>
             <div>
-              <Button type="button" variant="ghost" size="sm" onClick={returnToList}>
+              <Button type="button" variant="ghost" size="sm" disabled={operationBusy} onClick={returnToList}>
                 <ArrowLeft size={15} aria-hidden="true" />
                 <span>{t("security.common.backToList")}</span>
               </Button>
@@ -828,7 +870,7 @@ export function SecurityUsersPage() {
                       id="security-user-login-user-id"
                       required
                       maxLength={64}
-                      disabled={activeView === "edit"}
+                      disabled={activeView === "edit" || operationBusy}
                       className={cn(INPUT_CLASS, fieldErrors.loginUserId && "border-danger")}
                       aria-invalid={fieldErrors.loginUserId ? "true" : undefined}
                       aria-describedby={fieldErrors.loginUserId ? "security-user-login-user-id-error" : undefined}
@@ -844,7 +886,7 @@ export function SecurityUsersPage() {
                       ref={displayNameRef}
                       id="security-user-display-name"
                       required
-                      disabled={userFormReadOnly}
+                      disabled={inputReadOnly}
                       className={cn(INPUT_CLASS, fieldErrors.displayName && "border-danger")}
                       aria-invalid={fieldErrors.displayName ? "true" : undefined}
                       aria-describedby={fieldErrors.displayName ? "security-user-display-name-error" : undefined}
@@ -875,7 +917,7 @@ export function SecurityUsersPage() {
                           id="security-user-temporary-password"
                           type={activeView === "create" ? "password" : "text"}
                           readOnly={activeView === "edit"}
-                          disabled={userFormReadOnly}
+                          disabled={inputReadOnly}
                           className={cn(INPUT_CLASS, fieldErrors.temporaryPassword && "border-danger")}
                           aria-invalid={fieldErrors.temporaryPassword ? "true" : undefined}
                           aria-describedby={
@@ -932,7 +974,7 @@ export function SecurityUsersPage() {
                         </div>
                       ) : null}
                     </div>
-                    <fieldset className="grid gap-2" disabled={userFormReadOnly}>
+                    <fieldset className="grid gap-2" disabled={inputReadOnly}>
                   <FieldLegend id="security-users-role-legend" required>{t("security.users.roles")}</FieldLegend>
                   {roles.length === 0 ? (
                     <p className="text-sm text-muted">{t("security.users.noRole")}</p>
@@ -1000,7 +1042,7 @@ export function SecurityUsersPage() {
                                     ? t("security.common.save")
                                     : t("security.common.create"),
                                 loading: busy,
-                                disabled: accountActionBusy,
+                                disabled: operationBusy,
                                 onClick: () => formRef.current?.requestSubmit(),
                               },
                             ]
@@ -1013,7 +1055,7 @@ export function SecurityUsersPage() {
                         {
                           id: "cancel",
                           label: t("security.common.cancel"),
-                          disabled: busy || accountActionBusy,
+                          disabled: operationBusy,
                           onClick: returnToList,
                         },
                       ]}

@@ -12,7 +12,7 @@ test("ユーザー作成後は値を保持して編集 view へ遷移する", ()
   assert.match(usersPage, /type UserPanelView = "list" \| "create" \| "edit"/u);
   assert.match(
     usersPage,
-    /if \(busy \|\| accountActionBusy \|\| !canSubmitUserForm\) return/u
+    /if \(operationBusy \|\| !canSubmitUserForm\) return/u
   );
   assert.match(usersPage, /startEdit\(created\.user, created\.temporary_password\)/u);
   assert.doesNotMatch(usersPage, /OneTimePasswordResult|security-users-create-password/u);
@@ -36,11 +36,11 @@ test("無効ユーザーは保存とパスワードリセットを表示・実�
   assert.match(usersPage, /const canSubmitUserForm = !userFormReadOnly/u);
   assert.match(
     usersPage,
-    /if \(busy \|\| accountActionBusy \|\| !canSubmitUserForm\) return/u
+    /if \(operationBusy \|\| !canSubmitUserForm\) return/u
   );
   assert.match(
     usersPage,
-    /if \(user\.status !== "ACTIVE" \|\| accountActionBusy \|\| busy\) return/u
+    /if \(user\.status !== "ACTIVE" \|\| operationBusy\) return/u
   );
   assert.match(
     usersPage,
@@ -55,14 +55,14 @@ test("無効ユーザーの編集内容は選択状態を表示したまま読�
     usersPage,
     /activeView !== "edit" \|\| userFormReadOnly \|\| !draft\.temporaryPassword/u
   );
-  assert.match(usersPage, /disabled=\{userFormReadOnly\}/u);
+  assert.match(usersPage, /disabled=\{inputReadOnly\}/u);
   assert.match(
     usersPage,
     /disabled=\{userFormReadOnly \|\| !draft\.temporaryPassword\}/u
   );
   assert.match(
     usersPage,
-    /<fieldset className="grid gap-2" disabled=\{userFormReadOnly\}>/u
+    /<fieldset className="grid gap-2" disabled=\{inputReadOnly\}>/u
   );
   assert.match(
     usersPage,

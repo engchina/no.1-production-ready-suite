@@ -5795,3 +5795,77 @@ test("DeepSec 基盤構成の一括適用は step 失敗時に後続を実行し
   await expect(applySection).toBeVisible();
   await expectNoPageHorizontalScroll(page);
 });
+
+async function mockReviewedUsers(page: Page, locked = false) {
+  await mockDatabaseGateReady(page);
+  const role = { ...systemRole, role_id: "review-role", role_code: "REVIEW", display_name: "レビュー", is_built_in: false };
+  const user = { user_uuid: "review-user", login_user_id: "review.user", display_name: "レビュー利用者", status: "ACTIVE", force_password_change: false, locked_until: locked ? "2099-01-01T00:00:00Z" : null, version: 1, role_ids: [role.role_id], is_bootstrap_admin: false };
+  await page.route("**/api/security/roles?include_archived=false", route => fulfill(route, [role]));
+  await page.route("**/api/security/users", route => fulfill(route, [user]));
+  return user;
+}
+
+test("ユーザー管理レビュー: リセット待機中は編集対象と入力を固定する", async ({ page }) => {
+  const user = await mockReviewedUsers(page);
+  let pending: Route | undefined;
+  await page.route("**/api/security/users/review-user/reset-password", route => { pending = route; });
+  await page.goto("/settings/security/users");
+  await page.getByTestId("security-users-detail-actions").getByRole("button", { name: "編集", exact: true }).click();
+  await page.getByRole("button", { name: "パスワードをリセット", exact: true }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "実行", exact: true }).click();
+  await expect.poll(() => Boolean(pending)).toBe(true);
+  await expect(page.getByRole("button", { name: "一覧に戻る" })).toBeDisabled();
+  await expect(page.getByLabel("表示名", { exact: false })).toBeDisabled();
+  await fulfill(pending!, { user, temporary_password: "SyntheticOnly!123" });
+  await expect(page.getByLabel("一時パスワード", { exact: true })).toHaveValue("SyntheticOnly!123");
+  await expect(page.getByLabel("ログインユーザーID")).toHaveValue("review.user");
+  await expect(page.getByRole("button", { name: "一覧に戻る" })).toBeEnabled();
+});
+
+test("ユーザー管理レビュー: ロック解除の重複送信を抑止し失敗後に再試行する", async ({ page }) => {
+  const user = await mockReviewedUsers(page, true);
+  let pending: Route | undefined;
+  let calls = 0;
+  await page.route("**/api/security/users/review-user/unlock", route => { pending = route; calls += 1; });
+  await page.goto("/settings/security/users");
+  const actions = page.getByTestId("security-users-detail-actions");
+  await actions.getByRole("button", { name: "その他の操作" }).click();
+  await page.getByRole("menuitem", { name: "ロック解除" }).click();
+  await expect.poll(() => calls).toBe(1);
+  await expect(actions.getByRole("button", { name: "編集", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "新規作成", exact: true })).toBeDisabled();
+  await fulfill(pending!, "解除に失敗しました", 503);
+  await expect(page.getByText("解除に失敗しました", { exact: true })).toBeVisible();
+  await actions.getByRole("button", { name: "その他の操作" }).click();
+  await page.getByRole("menuitem", { name: "ロック解除" }).click();
+  await expect.poll(() => calls).toBe(2);
+  await fulfill(pending!, { ...user, locked_until: null });
+  await expect(page.getByText("解除に失敗しました", { exact: true })).toHaveCount(0);
+  await expect(actions.getByRole("button", { name: "編集", exact: true })).toBeEnabled();
+});
+
+test("ユーザー管理レビュー: 未保存入力は戻ると内部リンクで破棄を確認する", async ({ page }) => {
+  await mockReviewedUsers(page);
+  await page.goto("/settings/security/users");
+  await page.getByRole("button", { name: "新規作成", exact: true }).click();
+  await page.getByLabel("表示名", { exact: false }).fill("未保存の利用者");
+  await page.getByRole("button", { name: "一覧に戻る" }).click();
+  await expect(page.getByRole("alertdialog")).toBeVisible();
+  await page.getByRole("alertdialog").getByRole("button", { name: "キャンセル" }).click();
+  await expect(page.getByLabel("表示名", { exact: false })).toHaveValue("未保存の利用者");
+  await page.evaluate(() => {
+    const link = document.createElement("a");
+    link.href = "/settings/security/roles";
+    link.textContent = "レビュー用内部リンク";
+    document.body.append(link);
+  });
+  await page.getByRole("link", { name: "レビュー用内部リンク" }).click();
+  await expect(page.getByRole("alertdialog")).toBeVisible();
+  await page.getByRole("alertdialog").getByRole("button", { name: "キャンセル" }).click();
+  await expect(page).toHaveURL(/security\/users/);
+  const protectedReload = await page.evaluate(() => !window.dispatchEvent(new Event("beforeunload", { cancelable: true })));
+  expect(protectedReload).toBe(true);
+  await page.getByRole("button", { name: "一覧に戻る" }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "破棄して移動" }).click();
+  await expect(page.getByTestId("security-users-grid")).toBeVisible();
+});
