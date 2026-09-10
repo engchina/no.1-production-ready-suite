@@ -141,6 +141,7 @@ class Settings(BaseServiceSettings):
     # in-process queue worker 数をこの値で抑え、Oracle セッションの枯渇を防ぐ。
     nl2sql_job_max_concurrency: int = Field(default=4, ge=1, le=64)
     # inprocess: local/CI 用 bounded worker、external: API は永続 queue への投入だけを行う。
+    nl2sql_synthetic_worker_mode: Literal["inprocess", "external"] = "inprocess"
     nl2sql_job_worker_mode: Literal["inprocess", "external"] = "inprocess"
     nl2sql_job_worker_poll_seconds: float = 1.0
     nl2sql_job_lease_seconds: float = 900.0

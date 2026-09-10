@@ -2336,15 +2336,43 @@ def db_admin_export_view_xlsx(view_name: str, limit: int = 1000, owner: str = ""
     )
 
 
-@router.post("/synthetic-data/generate", response_model=ApiResponse[SyntheticDataOperationData])
+@router.post(
+    "/synthetic-data/generate",
+    status_code=202,
+    deprecated=True,
+    response_model=ApiResponse[SyntheticDataOperationData],
+)
 def generate_synthetic_data(
     req: SyntheticDataGenerateRequest,
+    request: Request,
 ) -> ApiResponse[SyntheticDataOperationData]:
-    """DBMS_CLOUD_AI synthetic table data generation execution。"""
-    try:
-        return ApiResponse(data=nl2sql_service.generate_synthetic_data(req))
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    """旧クライアントも永続受理へ統合し、手続き応答を生成成功と扱わない。"""
+    from uuid import uuid4
+
+    from .models import TimingEnvelope
+    from .synthetic_models import SyntheticRunRequest
+    from .synthetic_service import get_synthetic_service
+
+    run = get_synthetic_service().create(
+        SyntheticRunRequest(**req.model_dump(), idempotency_key=str(uuid4())),
+        getattr(request.state, "principal", None),
+    )
+    return ApiResponse(
+        data=SyntheticDataOperationData(
+            table_name=run.targets[0].table_name,
+            object_list=[target.table_name for target in run.targets],
+            row_count=run.targets[0].requested_rows,
+            executed=False,
+            runtime="oracle",
+            status="accepted",
+            message="生成を受け付けました。生成状況で完了と追加件数を確認してください。",
+            engine_meta={
+                "run_id": run.run_id,
+                "status_url": f"/api/nl2sql/synthetic-data/runs/{run.run_id}",
+            },
+            timing=TimingEnvelope(created_at=run.created_at, stage_timings=[]),
+        )
+    )
 
 
 @router.get("/synthetic-data/results", response_model=ApiResponse[SyntheticDataResultsData])
@@ -2368,3 +2396,8 @@ def synthetic_data_results(
 def diagnostics() -> ApiResponse[DiagnosticsData]:
     """OCI / Oracle / NL2SQL エンジン設定の非 secret 診断を返す。"""
     return ApiResponse(data=nl2sql_service.diagnostics())
+
+
+from .synthetic_router import router as synthetic_router  # noqa: E402
+
+router.include_router(synthetic_router)

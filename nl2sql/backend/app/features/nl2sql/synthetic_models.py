@@ -1,0 +1,70 @@
+"""合成データ生成の永続状態。要求件数と確認済み書込み件数を分離する。"""
+
+from datetime import UTC, datetime, timedelta
+from typing import Any, Literal
+
+from pydantic import BaseModel, Field
+
+from .models import SyntheticDataGenerateRequest
+
+RunStatus = Literal[
+    "pending", "running", "verifying", "completed", "partial", "failed", "no_data", "unknown"
+]
+TERMINAL = {"completed", "partial", "failed", "no_data"}
+
+
+def now() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+class SyntheticRunRequest(SyntheticDataGenerateRequest):
+    idempotency_key: str = Field(min_length=16, max_length=128)
+
+
+class SyntheticTarget(BaseModel):
+    table_name: str
+    requested_rows: int
+    loaded_rows: int | None = None
+    status: str = "pending"
+    error: str = ""
+
+
+class SyntheticRun(BaseModel):
+    run_id: str
+    actor_id: str
+    context_id: str
+    idempotency_key: str
+    request_hash: str
+    request: dict[str, Any] = Field(default_factory=dict)
+    status: RunStatus = "pending"
+    targets: list[SyntheticTarget]
+    created_at: str = Field(default_factory=now)
+    started_at: str | None = None
+    finished_at: str | None = None
+    checked_at: str | None = None
+    message: str = ""
+    session: dict[str, Any] = Field(default_factory=dict)
+    operation_ids: list[int] = Field(default_factory=list)
+    failure_phase: Literal["validation"] | None = None
+    execution_returned: bool = False
+    version: int = 0
+
+    def history_expired(self, at: datetime | None = None) -> bool:
+        if self.status not in TERMINAL:
+            return False
+        ended = datetime.fromisoformat(self.finished_at or self.created_at)
+        if ended.tzinfo is None:
+            ended = ended.replace(tzinfo=UTC)
+        return ended < (at or datetime.now(UTC)) - timedelta(hours=24)
+
+    def public(self) -> dict[str, Any]:
+        return self.model_dump(
+            exclude={
+                "actor_id",
+                "context_id",
+                "idempotency_key",
+                "request_hash",
+                "request",
+                "session",
+            }
+        )

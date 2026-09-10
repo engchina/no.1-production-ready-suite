@@ -481,6 +481,7 @@ WorkingDirectory=${BACKEND_DIR}
 Environment=HOME=/home/${APP_USER}
 Environment=PYTHONUNBUFFERED=1
 Environment=UV_NO_PROGRESS=1
+Environment=NL2SQL_SYNTHETIC_WORKER_MODE=external
 ExecStart=${exec_start}
 Restart=always
 RestartSec=5
@@ -512,17 +513,24 @@ configure_systemd() {
     "/usr/local/bin/uv run python -m app.features.nl2sql.ontology_worker" \
     "Production Ready NL2SQL ontology worker"
 
+  write_systemd_unit \
+    "${SYSTEMD_UNIT_DIR}/production-ready-nl2sql-synthetic-worker.service" \
+    "/usr/local/bin/uv run python -m app.cli.nl2sql_synthetic_worker" \
+    "Production Ready NL2SQL synthetic data worker"
+
   systemctl daemon-reload
   systemctl enable production-ready-nl2sql-backend.service
   systemctl restart production-ready-nl2sql-backend.service
   if [ "${DATABASE_INITIALIZATION_READY}" = "true" ]; then
     systemctl enable --now \
       production-ready-nl2sql-schema-refresh-worker.service \
+      production-ready-nl2sql-synthetic-worker.service \
       production-ready-nl2sql-quality-evaluation-worker.service \
       production-ready-nl2sql-ontology-worker.service
   else
     systemctl disable --now \
       production-ready-nl2sql-schema-refresh-worker.service \
+      production-ready-nl2sql-synthetic-worker.service \
       production-ready-nl2sql-quality-evaluation-worker.service \
       production-ready-nl2sql-ontology-worker.service || true
   fi

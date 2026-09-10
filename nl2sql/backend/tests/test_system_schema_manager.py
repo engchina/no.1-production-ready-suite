@@ -90,10 +90,10 @@ def test_manifest_covers_every_core_create_and_excludes_preserved_tables() -> No
     assert created["TABLE"] == set(MANAGED_TABLES)
     assert created["INDEX"] == set(MANAGED_INDEXES)
     assert created["SEQUENCE"] == set(MANAGED_SEQUENCES)
-    assert len(MANAGED_TABLES) == 27
-    assert len(MANAGED_INDEXES) == 24
+    assert len(MANAGED_TABLES) == 29
+    assert len(MANAGED_INDEXES) == 25
     assert len(MANAGED_SEQUENCES) == 1
-    assert len(MANAGED_OBJECTS) == 52
+    assert len(MANAGED_OBJECTS) == 55
     assert [migration.version for migration in MIGRATIONS] == [
         0,
         1,
@@ -107,6 +107,7 @@ def test_manifest_covers_every_core_create_and_excludes_preserved_tables() -> No
         15,
         17,
         18,
+        19,
     ]
     assert all("security" not in migration.filename for migration in MIGRATIONS)
     assert set(MANAGED_TABLES).isdisjoint(PRESERVED_TABLES)
@@ -137,8 +138,8 @@ def test_object_metadata_covers_manifest_order_and_marks_missing_objects() -> No
     metadata = manager._build_object_metadata(existing_objects, table_metadata)
 
     assert [(item["name"], item["object_type"]) for item in metadata] == list(MANAGED_OBJECTS)
-    assert sum(item["object_type"] == "TABLE" for item in metadata) == 27
-    assert sum(item["object_type"] == "INDEX" for item in metadata) == 24
+    assert sum(item["object_type"] == "TABLE" for item in metadata) == 29
+    assert sum(item["object_type"] == "INDEX" for item in metadata) == 25
     assert sum(item["object_type"] == "SEQUENCE" for item in metadata) == 1
     assert metadata[0] == {
         "name": MANAGED_TABLES[0],
@@ -502,7 +503,7 @@ class _IncrementalWorkflowManager(_WorkflowManager):
         super().__init__("partial")
         self.before = _partial_status(
             applied_versions=[0, 1, 2, 3, 5, 6],
-            pending_versions=[7, 8, 9, 15, 17, 18],
+            pending_versions=[7, 8, 9, 15, 17, 18, 19],
             missing_objects=[
                 ("NL2SQL_EVALUATION_JOBS", "TABLE"),
                 ("NL2SQL_EVALUATION_RESULTS", "TABLE"),
@@ -521,7 +522,7 @@ def test_incremental_update_reaches_ready_without_replaying_old_migrations() -> 
 
     result = manager.initialize()
 
-    assert manager.applied_migrations == [7, 8, 9, 15, 17, 18]
+    assert manager.applied_migrations == [7, 8, 9, 15, 17, 18, 19]
     assert result["operation"] == "migrated"
     assert result["status"] == "ready"
     assert result["existing_object_count"] == len(MANAGED_OBJECTS)
@@ -585,7 +586,7 @@ def test_apply_migration_sends_plsql_blocks_with_terminating_semicolon() -> None
 
 
 def test_v7_resume_skips_matching_first_foreign_key_and_creates_second() -> None:
-    first, second = MANAGED_FOREIGN_KEYS
+    first, second = MANAGED_FOREIGN_KEYS[:2]
     manager = _ForeignKeyStateManager(
         {
             first.name: "matching",
@@ -604,7 +605,7 @@ def test_v7_resume_skips_matching_first_foreign_key_and_creates_second() -> None
 
 
 def test_v7_resume_rejects_same_name_with_wrong_foreign_key_definition() -> None:
-    first, second = MANAGED_FOREIGN_KEYS
+    first, second = MANAGED_FOREIGN_KEYS[:2]
     manager = _ForeignKeyStateManager(
         {
             first.name: "matching",
@@ -741,6 +742,7 @@ class _ActiveJobConnection(_RecordingConnection):
         "NL2SQL_SCHEMA_REFRESH_JOBS",
         "NL2SQL_ONTOLOGY_JOBS",
         "NL2SQL_EVALUATION_JOBS",
+        "NL2SQL_SYNTHETIC_RUNS",
     ],
 )
 def test_recreate_rejects_each_active_persistent_job_type(
@@ -755,6 +757,7 @@ def test_recreate_rejects_each_active_persistent_job_type(
             "NL2SQL_SCHEMA_REFRESH_JOBS",
             "NL2SQL_ONTOLOGY_JOBS",
             "NL2SQL_EVALUATION_JOBS",
+            "NL2SQL_SYNTHETIC_RUNS",
         )
     }
     monkeypatch.setattr(manager, "_load_objects", lambda _connection: existing_job_tables)

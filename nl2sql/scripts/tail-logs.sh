@@ -9,6 +9,7 @@ set -Eeuo pipefail
 BACKEND_SERVICE="production-ready-nl2sql-backend.service"
 WORKER_SERVICES=(
   "production-ready-nl2sql-schema-refresh-worker.service"
+  "production-ready-nl2sql-synthetic-worker.service"
   "production-ready-nl2sql-quality-evaluation-worker.service"
   "production-ready-nl2sql-ontology-worker.service"
 )

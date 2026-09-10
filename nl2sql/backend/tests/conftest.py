@@ -16,6 +16,7 @@ from typing import Any
 
 os.environ["ENABLE_METRICS"] = "false"
 os.environ["DEBUG"] = "false"
+os.environ["NL2SQL_SYNTHETIC_WORKER_MODE"] = "external"
 os.environ["NL2SQL_RUNTIME_MODE"] = "deterministic"
 os.environ["NL2SQL_PERSISTENCE_MODE"] = "memory"
 os.environ["NL2SQL_SELECT_AI_CREDENTIAL_NAME"] = ""

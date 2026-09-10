@@ -23,6 +23,7 @@ import { AppSidebar } from "@/components/layout/AppSidebar";
 import { PageHeader } from "@/components/PageHeader";
 import { TimedLoadingState } from "@/components/ProcessingState";
 import { DatabaseGate } from "@/components/system/DatabaseGate";
+import { SyntheticRunNotifications } from "@/features/nl2sql/syntheticRuns";
 import { SchemaRefreshCoordinator } from "@/features/nl2sql/SchemaRefreshCoordinator";
 import { APP_ROUTES } from "@/lib/routes";
 import { t } from "@/lib/i18n";
@@ -297,6 +298,7 @@ function AuthenticatedApplication() {
           <ScopedWorkspace>
           <Suspense fallback={<RouteLoadingFallback />}>
             <WorkspaceDraftWarning />
+            <SyntheticRunNotifications />
             <KeepAlivePages />
             <Routes>
             <Route path={APP_ROUTES.home} element={<Navigate to={firstAllowedRoute(auth.hasPermission)} replace />} />

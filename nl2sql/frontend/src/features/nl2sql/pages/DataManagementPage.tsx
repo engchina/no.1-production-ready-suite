@@ -1,11 +1,13 @@
-import { useWorkspaceState, useWorkspaceRevalidation, useResetExecutionConsent, useTransientDraftGuard } from "@/components/WorkspaceState";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useWorkspaceActive, useWorkspaceState, useWorkspaceRevalidation, useResetExecutionConsent, useTransientDraftGuard } from "@/components/WorkspaceState";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { ArrowRight, Database, Eye, FileSpreadsheet, Play, RefreshCw, Table2, Trash2, Upload, X } from "lucide-react";
 
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Banner, EmptyState, toast } from "@engchina/production-ready-ui";
+
+import { SyntheticRunPanel, useSyntheticRuns, runFinished, historyExpired, type SyntheticRun } from "../syntheticRuns";
 
 import { StatusBadge } from "@/components/ui/status-badge";
 
@@ -129,6 +131,7 @@ function nextObjectPickerSort(
 export function DataManagementPage() {
   const queryClient = useQueryClient();
   useWorkspaceRevalidation();
+  const workspaceActive = useWorkspaceActive();
   const [activeView, setActiveView] = useWorkspaceState<ActiveView>("activeView", "preview");
   const [previewObject, setPreviewObject] = useWorkspaceState("previewObject", "");
   const [previewObjectSearch, setPreviewObjectSearch] = useWorkspaceState("previewObjectSearch", "");
@@ -149,6 +152,26 @@ export function DataManagementPage() {
   const [csvConfirmation, setCsvConfirmation] = useState("");
   const [csvUploadResult, setCsvUploadResult] = useState<DbAdminCsvUploadData | null>(null);
   useTransientDraftGuard(Boolean(csvBase64) && !csvUploadResult?.executed);
+  const syntheticRuns = useSyntheticRuns();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [syntheticRunId, setSyntheticRunId] = useWorkspaceState("syntheticRunId", "");
+  const [submissionKey, setSubmissionKey] = useWorkspaceState("syntheticSubmission", { signature: "", key: "" });
+  const requestedRunId = searchParams.get("synthetic_run") || syntheticRunId;
+  const listedRun = requestedRunId ? syntheticRuns.data?.find((r) => r.run_id === requestedRunId) : syntheticRuns.data?.[0];
+  const historicalRun = useQuery({
+    queryKey: [...syntheticRuns.key, requestedRunId],
+    queryFn: ({ signal }) => apiGet<SyntheticRun>(`/api/nl2sql/synthetic-data/runs/${encodeURIComponent(requestedRunId)}`, { signal, timeoutMs: API_TIMEOUT_MS.interactiveDetail }),
+    enabled: Boolean(requestedRunId) && !listedRun && syntheticRuns.isSuccess,
+    refetchInterval: (query) => query.state.data && !runFinished(query.state.data) ? 2_000 : false,
+    retry: false,
+  });
+  const candidateRun = listedRun ?? (requestedRunId ? historicalRun.data : null) ?? null;
+  const selectedRun = candidateRun && !historyExpired(candidateRun) ? candidateRun : null;
+  const [syntheticQueryTime, setSyntheticQueryTime] = useState("");
+  const resultRequest = useRef(0);
+  const [resultGeneratedRows, setResultGeneratedRows] = useState<number | null>(null);
+  const autoPreviewed = useRef(new Set<string>());
+  const resultSelectionEdited = useRef(false);
   const [syntheticData, setSyntheticData] = useState<SyntheticDataOperationData | null>(null);
   const [syntheticDataResults, setSyntheticDataResults] = useState<SyntheticDataResultsData | null>(null);
   const [syntheticProfileName, setSyntheticProfileName] = useState("");
@@ -360,7 +383,7 @@ export function DataManagementPage() {
   const syntheticResultError = syntheticErrorOperation === "results" ? syntheticError : "";
   const syntheticWorkspaceError = syntheticErrorOperation === "results" ? "" : syntheticError;
   const canLoadSyntheticDataResults = Boolean(
-    syntheticAvailableTables.includes(syntheticResultTable) && syntheticResultLimit !== null && !syntheticLoading
+    (selectedRun ? selectedRun.targets.some((target) => target.table_name === syntheticResultTable) : syntheticAvailableTables.includes(syntheticResultTable)) && syntheticResultLimit !== null && !syntheticLoading
   );
   const canClearSyntheticDataResults = Boolean(
     syntheticDataResults ||
@@ -786,34 +809,28 @@ export function DataManagementPage() {
     toast.info(t("dataTools.syntheticData.toast.generateStarted"));
     try {
       clearSyntheticResultState();
-      // job 投入ではなく Oracle の同期生成完了まで待つ endpoint。
-      const result = await apiPost<SyntheticDataOperationData>("/api/nl2sql/synthetic-data/generate", {
-        table_name: singleTable ? selectedTables[0] : "",
-        object_list: singleTable ? [] : selectedTables,
-        row_count: syntheticRows,
-        rows_per_table: syntheticRows,
-        profile_name: syntheticProfileName,
-        user_prompt: syntheticPrompt,
-        sample_rows: syntheticSampleRows,
-        use_comments: syntheticUseComments,
-        confirmation: syntheticConfirmation,
+      const body = {
+        table_name: singleTable ? selectedTables[0] : "", object_list: singleTable ? [] : selectedTables,
+        row_count: syntheticRows, rows_per_table: syntheticRows, profile_name: syntheticProfileName,
+        user_prompt: syntheticPrompt, sample_rows: syntheticSampleRows, use_comments: syntheticUseComments,
         reason: "ui-synthetic-data",
-      }, { timeoutMs: API_TIMEOUT_MS.longRunningJob });
-      setSyntheticData(result);
-      setSyntheticResultTable((current) => {
-        const allowedTables = syntheticAvailableTables;
-        if (current && allowedTables.includes(current)) return current;
-        if (result.table_name && allowedTables.includes(result.table_name)) return result.table_name;
-        return selectedTables.find((tableName) => allowedTables.includes(tableName)) ?? allowedTables[0] ?? "";
-      });
-      if (isSyntheticDataExecuted(result)) {
-        toast.success(t("dataTools.syntheticData.toast.generated"));
-      } else {
-        setSyntheticError(syntheticDataOperationMessage(result));
-        setSyntheticErrorOperation("generate");
-      }
+      };
+      const signature = JSON.stringify(body);
+      const key = submissionKey.signature === signature ? submissionKey.key : crypto.randomUUID();
+      setSubmissionKey({ signature, key });
+      const run = await apiPost<SyntheticRun>("/api/nl2sql/synthetic-data/runs", {
+        ...body, confirmation: syntheticConfirmation, idempotency_key: key,
+      }, { timeoutMs: API_TIMEOUT_MS.interactiveDetail });
+      queryClient.setQueryData<SyntheticRun[]>(syntheticRuns.key, (old = []) => [run, ...old.filter((r) => r.run_id !== run.run_id)]);
+      setSyntheticRunId(run.run_id);
+      setSearchParams((params) => { params.delete("synthetic_run"); return params; }, { replace: true });
+      setSyntheticConfirmation("");
+      setSubmissionKey({ signature: "", key: "" });
+      resultSelectionEdited.current = false;
+      setSyntheticResultTable(run.targets[0]?.table_name ?? "");
+      toast.info(t("syntheticRun.accepted"));
     } catch (err) {
-      setSyntheticError(apiErrorMessage(err, "dataTools.error.syntheticData", "dataTools.syntheticData.timeout"));
+      setSyntheticError(apiErrorMessage(err, "dataTools.error.syntheticData", "syntheticRun.submitUnknown"));
       setSyntheticErrorOperation("generate");
     } finally {
       setSyntheticLoading("");
@@ -821,6 +838,7 @@ export function DataManagementPage() {
   };
 
   const clearSyntheticGeneration = () => {
+    setSubmissionKey({ signature: "", key: "" });
     setSyntheticSelectedTables([]);
     setSyntheticPrompt("");
     setSyntheticConfirmation("");
@@ -837,7 +855,9 @@ export function DataManagementPage() {
   const loadSyntheticDataResults = async () => {
     const tableName = syntheticResultTable.trim();
     const rowLimit = syntheticResultLimit;
-    if (!tableName || !syntheticAvailableTables.includes(tableName) || rowLimit === null) return;
+    if (!tableName || !(selectedRun ? selectedRun.targets.some((target) => target.table_name === tableName) : syntheticAvailableTables.includes(tableName)) || rowLimit === null) return;
+    const requestVersion = ++resultRequest.current;
+    const generatedRows = selectedRun?.targets.find((target) => target.table_name === tableName)?.loaded_rows ?? null;
     setSyntheticLoading("results");
     setSyntheticError("");
     setSyntheticErrorOperation("");
@@ -845,19 +865,43 @@ export function DataManagementPage() {
     setExecutedSyntheticResultLimit(null);
     try {
       const result = await apiGet<SyntheticDataResultsData>(
-        `/api/nl2sql/synthetic-data/results?table_name=${encodeURIComponent(tableName)}&limit=${rowLimit}`,
+        `/api/nl2sql/synthetic-data/${selectedRun ? `runs/${selectedRun.run_id}/results` : "results"}?table_name=${encodeURIComponent(tableName)}&limit=${rowLimit}`,
         { timeoutMs: API_TIMEOUT_MS.interactiveDetail }
       );
+      if (requestVersion !== resultRequest.current) return;
+      setResultGeneratedRows(generatedRows);
       setSyntheticDataResults(result);
+      setSyntheticQueryTime(new Date().toISOString());
       setExecutedSyntheticResultLimit(rowLimit);
       toast.success(t("dataTools.syntheticData.toast.resultsLoaded", { name: result.table_name }));
     } catch (err) {
+      if (requestVersion !== resultRequest.current) return;
       setSyntheticError(apiErrorMessage(err, "dataTools.error.syntheticResults"));
       setSyntheticErrorOperation("results");
     } finally {
-      setSyntheticLoading("");
+      if (requestVersion === resultRequest.current) setSyntheticLoading("");
     }
   };
+
+  useEffect(() => {
+    resultRequest.current += 1;
+    setSyntheticDataResults(null);
+    setSyntheticLoading((value) => value === "results" ? "" : value);
+  }, [selectedRun?.run_id]);
+
+  useEffect(() => {
+    if (!selectedRun) return;
+    if (searchParams.has("synthetic_run")) setActiveView("synthetic");
+    setSyntheticRunId(selectedRun.run_id);
+    setSyntheticData({ table_name: selectedRun.targets[0]?.table_name ?? "", object_list: selectedRun.targets.map((target) => target.table_name), row_count: 0, status: selectedRun.status, executed: selectedRun.status === "completed", runtime: "oracle", message: selectedRun.message, warnings: [], engine_meta: {}, timing: { created_at: selectedRun.created_at, stage_timings: [] } });
+    setSyntheticResultTable((current) => selectedRun.targets.some((target) => target.table_name === current) ? current : selectedRun.targets[0]?.table_name ?? "");
+  }, [selectedRun?.run_id, selectedRun?.status]);
+
+  useEffect(() => {
+    if (!selectedRun || !["completed", "partial"].includes(selectedRun.status) || autoPreviewed.current.has(selectedRun.run_id) || activeView !== "synthetic" || !workspaceActive || resultSelectionEdited.current || !canLoadSyntheticDataResults) return;
+    autoPreviewed.current.add(selectedRun.run_id);
+    void loadSyntheticDataResults();
+  }, [selectedRun?.run_id, selectedRun?.status, canLoadSyntheticDataResults, activeView, workspaceActive]);
 
   const previewObjectErrorMessage =
     previewObjectsQuery.error && !previewObjectsQuery.data
@@ -889,6 +933,37 @@ export function DataManagementPage() {
     (baseObjectsQuery.isFetching && !baseObjectsQuery.isFetchingNextPage) ||
     (previewObjectsQuery.isFetching && !previewObjectsQuery.isFetchingNextPage) ||
     (csvTablesQuery.isFetching && !csvTablesQuery.isFetchingNextPage);
+
+  const syntheticProgress = (
+    <>
+      {candidateRun && historyExpired(candidateRun) && <Banner severity="info">{t("syntheticRun.expired")}</Banner>}
+      <SyntheticRunPanel
+        run={selectedRun}
+        runs={selectedRun && !listedRun ? [selectedRun, ...syntheticRuns.data ?? []] : syntheticRuns.data ?? []}
+        submitting={syntheticLoading === "generate"}
+        error={Boolean(syntheticRuns.error || historicalRun.error)}
+        onSelect={(id) => {
+          setSyntheticRunId(id);
+          setSearchParams((params) => { params.delete("synthetic_run"); return params; }, { replace: true });
+          clearSyntheticResultState();
+          resultSelectionEdited.current = false;
+        }}
+        onRefresh={async () => {
+          const [list, history] = await Promise.all([
+            syntheticRuns.refetch({ cancelRefetch: false }),
+            requestedRunId && !listedRun ? historicalRun.refetch({ cancelRefetch: false }) : Promise.resolve(null),
+          ]);
+          if (list.isError || history?.isError) throw new Error("synthetic run refresh failed");
+          const latest = list.data?.find((item) => item.run_id === selectedRun?.run_id) ?? history?.data ?? null;
+          if (selectedRun && !latest) throw new Error("synthetic run missing");
+          return latest;
+        }}
+      />
+      {historicalRun.error && requestedRunId && !listedRun && (
+        <Banner severity="warning">{apiErrorMessage(historicalRun.error, "syntheticRun.missing")}</Banner>
+      )}
+    </>
+  );
 
   return (
     <>
@@ -1118,6 +1193,7 @@ export function DataManagementPage() {
             idPrefix={DATA_MANAGEMENT_ID}
             ariaLabel={t("dataMgmt.workspace.synthetic")}
           >
+            {(selectAiProfilesQuery.isPending || selectAiProfilesQuery.error) && syntheticProgress}
             {selectAiProfilesQuery.isPending ? (
               <DbManagementLoadingSkeleton
                 idPrefix="data-synthetic-profiles"
@@ -1131,12 +1207,15 @@ export function DataManagementPage() {
               />
             ) : (
             <SyntheticWorkspace
+              generationProgress={syntheticProgress}
+              submitting={syntheticLoading === "generate"}
               selectAiDbProfiles={selectAiDbProfiles}
               selectedSyntheticProfile={selectedSyntheticProfile}
               syntheticData={syntheticData}
               syntheticDataResults={syntheticDataResults}
               syntheticProfileName={syntheticProfileName}
               syntheticAvailableTables={syntheticAvailableTables}
+              syntheticResultTables={selectedRun ? selectedRun.targets.map((target) => target.table_name) : syntheticAvailableTables}
               syntheticSelectedTables={syntheticSelectedTables}
               syntheticPrompt={syntheticPrompt}
               syntheticConfirmation={syntheticConfirmation}
@@ -1191,11 +1270,13 @@ export function DataManagementPage() {
               onSyntheticSampleRowsChange={(value) => setSyntheticSampleRows(clampNumber(value, 0, 100))}
               onSyntheticUseCommentsChange={setSyntheticUseComments}
               onSyntheticResultTableChange={(value) => {
-                if (!syntheticAvailableTables.includes(value)) return;
+                if (!(selectedRun ? selectedRun.targets.some((target) => target.table_name === value) : syntheticAvailableTables.includes(value))) return;
+                resultSelectionEdited.current = true;
                 setSyntheticResultTable(value);
                 clearSyntheticResultState();
               }}
               onSyntheticResultLimitChange={(value) => {
+                resultSelectionEdited.current = true;
                 setSyntheticResultLimitInput(value);
                 clearSyntheticResultState();
               }}
@@ -1210,6 +1291,11 @@ export function DataManagementPage() {
               }}
             />
             )}
+            {syntheticDataResults && <Banner severity={syntheticDataResults.results.rows.length === 0 ? "warning" : "info"}>
+              <p>{t("syntheticRun.currentData")}</p>
+              <p>{t("syntheticRun.queryTime", { time: formatDateTime(syntheticQueryTime) })}</p>
+              {syntheticDataResults.results.rows.length === 0 && <p>{t(resultGeneratedRows === null ? "syntheticRun.unverifiedResult" : resultGeneratedRows > 0 ? "syntheticRun.mismatch" : "syntheticRun.zero")}</p>}
+            </Banner>}
           </DbObjectManagementPanelShell>
         )}
       </main>
@@ -1417,11 +1503,6 @@ function isSyntheticDataExecuted(result: SyntheticDataOperationData) {
   return result.executed === true || (result.status ?? "").toLowerCase() === "executed";
 }
 
-function syntheticDataOperationMessage(result: SyntheticDataOperationData) {
-  const warnings = (result.warnings ?? []).map((warning) => warning.trim()).filter(Boolean);
-  if (warnings.length > 0) return warnings.join(" ");
-  return result.message?.trim() || t("dataTools.error.syntheticData");
-}
 
 function schemaJobRequiresFull(job: SchemaRefreshJob | null) {
   if (!job) return false;
@@ -1917,12 +1998,15 @@ function CsvUploadWorkspace({
 }
 
 function SyntheticWorkspace({
+  generationProgress,
+  submitting,
   selectAiDbProfiles,
   selectedSyntheticProfile,
   syntheticData,
   syntheticDataResults,
   syntheticProfileName,
   syntheticAvailableTables,
+  syntheticResultTables,
   syntheticSelectedTables,
   syntheticPrompt,
   syntheticConfirmation,
@@ -1963,12 +2047,15 @@ function SyntheticWorkspace({
   onClearSyntheticDataResults,
   onRetry,
 }: {
+  generationProgress: ReactNode;
+  submitting: boolean;
   selectAiDbProfiles: SelectAiDbProfilesData | null;
   selectedSyntheticProfile: SelectAiDbProfile | null;
   syntheticData: SyntheticDataOperationData | null;
   syntheticDataResults: SyntheticDataResultsData | null;
   syntheticProfileName: string;
   syntheticAvailableTables: string[];
+  syntheticResultTables: string[];
   syntheticSelectedTables: string[];
   syntheticPrompt: string;
   syntheticConfirmation: string;
@@ -2015,7 +2102,7 @@ function SyntheticWorkspace({
   // 親の syntheticDataConfirmed と同じ規則(単一テーブル=対象名 / 複数=ADMIN_EXECUTE)。
   const syntheticExpectedConfirmation =
     syntheticSelectedTables.length === 1 ? syntheticSelectedTables[0] : "ADMIN_EXECUTE";
-  const resultTableOptions = syntheticAvailableTables;
+  const resultTableOptions = syntheticResultTables;
   const hasValidResultTable = resultTableOptions.includes(syntheticResultTable);
   const normalizedSyntheticTableSearch = syntheticTableSearch.trim().toLowerCase();
   const filteredSyntheticTables = normalizedSyntheticTableSearch
@@ -2286,7 +2373,7 @@ function SyntheticWorkspace({
                   variant="danger"
                   size="sm"
                   className="w-full sm:w-auto"
-                  loading={loading === "generate"}
+                  loading={submitting}
                   disabled={!canGenerateSyntheticData || dbProfileRefreshRequired || dbProfileRefreshing}
                   onClick={onGenerateSyntheticData}
                 >
@@ -2309,21 +2396,10 @@ function SyntheticWorkspace({
             }
           />
         </fieldset>
-        {loading === "generate" && (
-          <ProcessingIndicator
-            active
-            label={t("dataTools.syntheticData.generating")}
-            placement="action"
-            testId="data-synthetic-generation-processing"
-            activityIcon="none"
-          />
-        )}
-        {generationSucceeded && (
-          <Banner severity="success" title={t("dataTools.syntheticData.toast.generated")}>
-            {t("dataTools.syntheticData.generatedHint", { tables: syntheticData.object_list?.join(", ") || syntheticData.table_name })}
-          </Banner>
-        )}
+
       </fieldset>
+
+      {generationProgress}
 
       <section className="grid min-w-0 content-start gap-3 rounded-md border border-border bg-background p-4" aria-labelledby="synthetic-results-heading">
         <DbObjectPanelHeader

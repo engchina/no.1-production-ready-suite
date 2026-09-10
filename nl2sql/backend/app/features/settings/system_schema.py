@@ -126,6 +126,7 @@ MIGRATIONS: tuple[MigrationArtifact, ...] = (
         "018_unique_profile_names.sql",
         "case-insensitive unique NL2SQL profile names",
     ),
+    MigrationArtifact(19, "019_synthetic_runs.sql", "durable synthetic data runs"),
 )
 
 # DROP 対象は必ずこの manifest に明記する。NL2SQL_* の prefix scan は使用しない。
@@ -157,6 +158,8 @@ MANAGED_TABLES: tuple[str, ...] = (
     "NL2SQL_ONTOLOGY_PROFILE_VIEW_REVISIONS",
     "NL2SQL_EVALUATION_JOBS",
     "NL2SQL_EVALUATION_RESULTS",
+    "NL2SQL_SYNTHETIC_LOCKS",
+    "NL2SQL_SYNTHETIC_RUNS",
 )
 
 MANAGED_INDEXES: tuple[str, ...] = (
@@ -184,6 +187,7 @@ MANAGED_INDEXES: tuple[str, ...] = (
     "IX_NL2SQL_EVAL_JOB_STATE",
     "IX_NL2SQL_EVAL_JOB_LEASE",
     "UX_NL2SQL_PROFILES_NAME",
+    "IX_NL2SQL_SYNTHETIC_STATE",
 )
 
 MANAGED_SEQUENCES: tuple[str, ...] = ("NL2SQL_MIGRATION_SNAPSHOT_SEQ",)
@@ -224,6 +228,13 @@ MANAGED_FOREIGN_KEYS: tuple[ManagedForeignKey, ...] = (
         columns=("PROFILE_ID",),
         referenced_table_name="NL2SQL_PROFILES",
         referenced_columns=("PROFILE_ID",),
+    ),
+    ManagedForeignKey(
+        name="FK_NL2SQL_SYNTHETIC_RUN",
+        table_name="NL2SQL_SYNTHETIC_LOCKS",
+        columns=("RUN_ID",),
+        referenced_table_name="NL2SQL_SYNTHETIC_RUNS",
+        referenced_columns=("RUN_ID",),
     ),
 )
 _MANAGED_FOREIGN_KEYS_BY_NAME = {constraint.name: constraint for constraint in MANAGED_FOREIGN_KEYS}
@@ -1020,10 +1031,12 @@ class SystemSchemaManager:
             "NL2SQL_SCHEMA_REFRESH_JOBS",
             "NL2SQL_ONTOLOGY_JOBS",
             "NL2SQL_EVALUATION_JOBS",
+            "NL2SQL_SYNTHETIC_RUNS",
         ):
             if (table_name, "TABLE") not in objects:
                 continue
-            placeholders, binds = _bind_list("job_state_", _ACTIVE_JOB_STATES)
+            states = (*_ACTIVE_JOB_STATES, "VERIFYING", "UNKNOWN")
+            placeholders, binds = _bind_list("job_state_", states)
             with connection.cursor() as cursor:
                 cursor.execute(
                     f"SELECT COUNT(*) FROM {table_name} "  # nosec B608 - fixed manifest value
