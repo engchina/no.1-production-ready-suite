@@ -190,6 +190,7 @@ function ImportWizard({
           <input
             id="table-import-table-name"
             value={table}
+            disabled={loading}
             required
             aria-required="true"
             onChange={(event) => onTableChange(event.currentTarget.value)}
@@ -206,6 +207,7 @@ function ImportWizard({
           <input
             id="table-import-sheet-name"
             value={sheet}
+            disabled={loading}
             required={sheetRequired}
             aria-required={sheetRequired}
             onChange={(event) => onSheetChange(event.currentTarget.value)}
@@ -228,6 +230,7 @@ function ImportWizard({
         icon="spreadsheet"
         className="w-full"
         dataTestId="table-import-file-field"
+        disabled={loading}
         onFiles={([file]) => onFilePick(file)}
         onClear={onFileClear}
       />
@@ -239,6 +242,7 @@ function ImportWizard({
         <legend className="px-1 text-sm font-semibold text-foreground">{t("tableMgmt.importWizard.executeTitle")}</legend>
         <ExecutionConfirmationField
           value={confirmation}
+          disabled={loading}
           onChange={onConfirmationChange}
           confirmed={isConfirmed}
           placeholder="ADMIN_EXECUTE"
@@ -648,7 +652,11 @@ export function TableManagementPage() {
   };
 
   const importTabular = async () => {
-    if (!importTable.trim() || !importBase64) return;
+    if (
+      loading === "import-tabular" || !importTable.trim() || !importBase64 ||
+      importConfirmation.trim() !== "ADMIN_EXECUTE" ||
+      (!importFilename.toLowerCase().endsWith(".csv") && !importSheet.trim())
+    ) return;
     setLoading("import-tabular");
     setMessage("");
     setImportError(null);

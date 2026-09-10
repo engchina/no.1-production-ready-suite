@@ -14577,3 +14577,47 @@ test("管理 SQL の上限変更はクリアでき前回結果の条件と区別
   await clear.click();
   await expect(activity).toHaveCount(0);
 });
+
+test("テーブル取込中は対象とファイルの変更を停止し失敗後に再試行できる", async ({ page }, testInfo) => {
+  const api = await mockNl2SqlApi(page);
+  await page.goto("/table-management");
+  await clickPageHeaderAction(page, "table-management-actions", "Excel/CSV 取込(新規テーブル)");
+  const panel = page.locator("#table-management-panel-import");
+  const table = panel.getByLabel("Oracle 表名");
+  const sheet = panel.getByLabel("Sheet 名");
+  const file = panel.getByTestId("table-import-file-field-input");
+  const consent = panel.getByLabel("実行確認語");
+  const execute = panel.getByRole("button", { name: "取込を実行", exact: true });
+  await table.fill("IMPORTED_ORDERS");
+  await file.setInputFiles({ name: "orders.csv", mimeType: "text/csv", buffer: Buffer.from("ID\n1\n") });
+  await expect(panel.getByText("選択中: orders.csv")).toBeVisible();
+  await consent.fill("ADMIN_EXECUTE");
+  const gate = createRequestGate();
+  await page.route("**/api/nl2sql/db-admin/import-tabular", async (route) => {
+    await gate.promise;
+    await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "取込サービスは一時停止中です" }) });
+  });
+  await execute.click();
+  try {
+    await expect(table).toBeDisabled();
+    await expect(sheet).toBeDisabled();
+    await expect(file).toBeDisabled();
+    await expect(consent).toBeDisabled();
+    await expect(panel.getByRole("button", { name: "取込ファイルをクリア" })).toBeDisabled();
+    await expect(panel.getByRole("button", { name: "取込条件をクリア" })).toBeDisabled();
+    await expect(execute).toBeDisabled();
+    await page.screenshot({ path: testInfo.outputPath("table-import-pending.png") });
+  } finally { gate.release(); }
+  await expect(table).toBeEnabled();
+  await expect(table).toHaveValue("IMPORTED_ORDERS");
+  await expect(file).toBeEnabled();
+  await expect(consent).toHaveValue("ADMIN_EXECUTE");
+  await page.unroute("**/api/nl2sql/db-admin/import-tabular");
+  await page.route("**/api/nl2sql/db-admin/import-tabular", (route) => fulfillJson(route, {
+    executed: true, table_name: "IMPORTED_ORDERS", row_count: 1, mode: "create", warnings: [],
+    ddl: "CREATE TABLE IMPORTED_ORDERS (ID NUMBER)", insert_sql: "INSERT INTO IMPORTED_ORDERS VALUES (1)", sample_rows: [{ ID: 1 }],
+  }));
+  await execute.press("Enter");
+  await expect(panel.getByTestId("table-import-result-panel")).toContainText("IMPORTED_ORDERS");
+  expect(api.importTabularPayload).toBeNull();
+});
