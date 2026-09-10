@@ -947,9 +947,15 @@ export function DataManagementPage() {
           resultSelectionEdited.current = false;
         }}
         onViewResults={() => document.getElementById("synthetic-results-heading")?.scrollIntoView({ block: "start" })}
-        onRefresh={() => {
-          void syntheticRuns.refetch();
-          if (requestedRunId && !listedRun) void historicalRun.refetch();
+        onRefresh={async () => {
+          const [list, history] = await Promise.all([
+            syntheticRuns.refetch({ cancelRefetch: false }),
+            requestedRunId && !listedRun ? historicalRun.refetch({ cancelRefetch: false }) : Promise.resolve(null),
+          ]);
+          if (list.isError || history?.isError) throw new Error("synthetic run refresh failed");
+          const latest = list.data?.find((item) => item.run_id === selectedRun?.run_id) ?? history?.data ?? null;
+          if (selectedRun && !latest) throw new Error("synthetic run missing");
+          return latest;
         }}
       />
       {historicalRun.error && requestedRunId && !listedRun && (

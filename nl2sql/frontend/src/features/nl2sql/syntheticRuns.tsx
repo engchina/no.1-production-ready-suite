@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Banner, toast } from "@engchina/production-ready-ui";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { Button } from "@/components/ui/button";
+import { FormStatus } from "@/components/ui/form-status";
 import { ProcessingIndicator } from "@/components/ProcessingState";
 import { apiGet } from "@/lib/api";
 import { useDatabaseStatus } from "@/lib/queries";
@@ -71,12 +72,41 @@ export function SyntheticRunNotifications() {
 
 export function SyntheticRunPanel({ run, runs, onSelect, error, onRefresh, onViewResults, submitting = false }: {
   run: SyntheticRun | null; runs: SyntheticRun[]; onSelect: (id: string) => void;
-  error: boolean; submitting?: boolean; onRefresh: () => void; onViewResults?: () => void;
+  error: boolean; submitting?: boolean; onRefresh: () => Promise<SyntheticRun | null>; onViewResults?: () => void;
 }) {
+  const [refresh, setRefresh] = useState<{ scope: string; pending: boolean; failed: boolean; message: string } | null>(null);
+  const scope = `${run?.run_id ?? ""}:${submitting}`;
+  const refreshSequence = useRef(0);
+  useEffect(() => {
+    refreshSequence.current += 1;
+    setRefresh(null);
+    return () => { refreshSequence.current += 1; };
+  }, [scope]);
+  const feedback = refresh?.scope === scope ? refresh : null;
+  const refreshStatus = async () => {
+    if (feedback?.pending) return;
+    const sequence = ++refreshSequence.current;
+    setRefresh({ scope, pending: true, failed: false, message: "" });
+    try {
+      const latest = await onRefresh();
+      if (sequence !== refreshSequence.current) return;
+      // worker の確認日時を除き、利用者に見える生成結果の変化を比較する。
+      const snapshot = (value: SyntheticRun | null) => value && JSON.stringify({
+        status: value.status, targets: value.targets, message: value.message,
+        finished_at: value.finished_at, operation_ids: value.operation_ids, failure_phase: value.failure_phase,
+      });
+      const unchanged = snapshot(run) === snapshot(latest);
+      const time = new Date().toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+      setRefresh({ scope, pending: false, failed: false, message: t(unchanged ? "syntheticRun.refreshUnchanged" : "syntheticRun.refreshUpdated", { time }) });
+    } catch {
+      if (sequence !== refreshSequence.current) return;
+      setRefresh({ scope, pending: false, failed: true, message: t("syntheticRun.refreshFailed") });
+    }
+  };
   return <section aria-label={t("syntheticRun.title")} className="grid min-w-0 gap-3 rounded-md border border-border bg-background p-4" data-testid="synthetic-run-panel">
     <h3 className="font-semibold">{t("syntheticRun.title")}</h3>
     {submitting && <ProcessingIndicator active label={t("syntheticRun.submitting")} activityIcon="none" placement="action" testId="synthetic-submitting" />}
-    {error && <Banner severity="warning">{t("syntheticRun.stale")}{run?.checked_at ? ` ${formatDateTime(run.checked_at)}` : ""}</Banner>}
+    {error && !feedback?.failed && <Banner severity="warning">{t("syntheticRun.stale")}{run?.checked_at ? ` ${formatDateTime(run.checked_at)}` : ""}</Banner>}
     {submitting ? null : !run ? !error && <p className="text-sm text-muted-foreground">{t("syntheticRun.notStarted")}</p> : <>
       <div role="status" data-testid="synthetic-run-status">
         <StatusBadge className="max-w-full whitespace-normal text-left" variant={run.status === "completed" ? "success" : run.status === "failed" ? "danger" : error || ["unknown", "partial", "no_data"].includes(run.status) ? "warning" : "pending"} label={runLabel(run)} />
@@ -136,8 +166,9 @@ export function SyntheticRunPanel({ run, runs, onSelect, error, onRefresh, onVie
     </label>}
     <div className="flex flex-wrap gap-2">
       {!submitting && run && runFinished(run) && onViewResults && <Button variant="primary" size="sm" onClick={onViewResults}>{t("syntheticRun.goToResults")}</Button>}
-      <Button variant="secondary" size="sm" onClick={onRefresh}>{t("syntheticRun.refresh")}</Button>
+      <Button variant="secondary" size="sm" loading={feedback?.pending} aria-busy={feedback?.pending || undefined} onClick={() => void refreshStatus()}>{t(feedback?.pending ? "syntheticRun.refreshing" : "syntheticRun.refresh")}</Button>
     </div>
+    {feedback?.message && (feedback.failed || !error) && <FormStatus tone={feedback.failed ? "danger" : "success"} message={feedback.message} />}
   </section>;
 }
 function targetStatusLabel(status: string) {

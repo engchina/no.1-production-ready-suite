@@ -14139,3 +14139,74 @@ for (const targetCount of [1, 12]) {
     await page.screenshot({ path: testInfo.outputPath(`synthetic-targets-${targetCount}.png`) });
   });
 }
+
+test("synthetic manual refresh shows pending unchanged updated and retry feedback", async ({ page }, testInfo) => {
+  await mockNl2SqlApi(page);
+  let run = syntheticRunFixture("completed");
+  let fail = false;
+  let gate: ReturnType<typeof createRequestGate> | null = null;
+  let mutations = 0;
+  await page.route("**/api/nl2sql/synthetic-data/runs", async (route) => {
+    if (route.request().method() !== "GET") mutations++;
+    if (gate) await gate.promise;
+    return fail ? route.fulfill({ status: 503, body: "unavailable" }) : fulfillJson(route, [run]);
+  });
+  await page.goto("/data-management?synthetic_run=run-001");
+  const panel = page.getByTestId("synthetic-run-panel");
+  await expect(panel.getByTestId("synthetic-run-status")).toHaveText("合成データの生成が完了しました");
+  const checked = await panel.getByTestId("synthetic-run-checked").textContent();
+  await expect(panel.getByText(/最新の状況を取得しました/)).toHaveCount(0);
+  gate = createRequestGate();
+  await panel.getByRole("button", { name: "状況を再確認", exact: true }).focus();
+  await page.keyboard.press("Enter");
+  const pending = panel.getByRole("button", { name: "状況を確認中…", exact: true });
+  await expect(pending).toBeDisabled();
+  await expect(pending).toHaveAttribute("aria-busy", "true");
+  await expect(pending.locator('[data-loading-icon="true"]')).toHaveCount(1);
+  await expect(panel.getByTestId("synthetic-run-status")).toHaveText("合成データの生成が完了しました");
+  await page.screenshot({ path: testInfo.outputPath("synthetic-refresh-pending.png") });
+  gate.release();
+  gate = null;
+  await expect(panel.getByRole("status").filter({ hasText: /生成状況に変更はありません/ })).toContainText(/\d{2}:\d{2}:\d{2}/);
+  await expect(panel.getByTestId("synthetic-run-checked")).toHaveText(checked!);
+  await expect(panel.getByRole("button", { name: "状況を再確認", exact: true })).toBeEnabled();
+  await page.screenshot({ path: testInfo.outputPath("synthetic-refresh-unchanged.png") });
+  fail = true;
+  await panel.getByRole("button", { name: "状況を再確認", exact: true }).click();
+  await expect(panel.getByRole("alert")).toContainText("前回の情報を表示しています");
+  await expect(panel.getByText(/生成状況に変更はありません/)).toHaveCount(0);
+  await expect(panel.getByTestId("synthetic-run-status")).toHaveText("合成データの生成が完了しました");
+  fail = false;
+  run = { ...run, targets: [{ ...run.targets[0]!, loaded_rows: 3 }] };
+  await panel.getByRole("button", { name: "状況を再確認", exact: true }).click();
+  await expect(panel.getByRole("status").filter({ hasText: /生成状況を更新しました/ })).toBeVisible();
+  await expect(panel.getByTestId("synthetic-run-targets")).toContainText("今回の追加件数: 3 件");
+  await expect(panel.getByRole("alert")).toHaveCount(0);
+  await expectNoHorizontalScroll(page);
+  expect(mutations).toBe(0);
+});
+
+test("synthetic manual refresh discards feedback after switching history", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  const first = syntheticRunFixture("completed");
+  const second = { ...syntheticRunFixture("failed"), run_id: "run-002" };
+  let gate: ReturnType<typeof createRequestGate> | null = null;
+  await page.route("**/api/nl2sql/synthetic-data/runs", async (route) => {
+    if (gate) await gate.promise;
+    return fulfillJson(route, [first, second]);
+  });
+  await page.goto("/data-management?synthetic_run=run-001");
+  const panel = page.getByTestId("synthetic-run-panel");
+  await expect(panel.getByTestId("synthetic-run-reference")).toContainText("run-001");
+  gate = createRequestGate();
+  await panel.getByRole("button", { name: "状況を再確認", exact: true }).click();
+  await expect(panel.getByRole("button", { name: "状況を確認中…" })).toBeDisabled();
+  await panel.getByLabel("生成履歴").selectOption("run-002");
+  await expect(panel.getByTestId("synthetic-run-reference")).toContainText("run-002");
+  gate.release();
+  gate = null;
+  await expect(panel.getByRole("button", { name: "状況を再確認", exact: true })).toBeEnabled();
+  await expect(panel.getByText(/最新の状況を取得しました/)).toHaveCount(0);
+  await panel.getByRole("button", { name: "状況を再確認", exact: true }).click();
+  await expect(panel.getByText(/生成状況に変更はありません/)).toBeVisible();
+});
