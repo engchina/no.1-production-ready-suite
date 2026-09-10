@@ -10348,6 +10348,8 @@ for (const outcome of ["completed", "failed", "partial", "no_data", "unknown"] a
       await expect(panel).toContainText("生成記録はありますが、現在の接続ではデータを確認できません");
     } else if (outcome === "unknown") {
       await expect(status).toContainText("未確認");
+      await expect(status.getByRole("timer")).toHaveCount(0);
+      await expect(status.locator('[data-loading-icon="true"]')).toHaveCount(0);
       await expect(panel.getByRole("button", { name: "生成開始" })).toBeDisabled();
       expect(reads).toBe(0);
     } else {
@@ -10359,6 +10361,116 @@ for (const outcome of ["completed", "failed", "partial", "no_data", "unknown"] a
     expect(submitted).toBe(1);
   });
 }
+
+test("synthetic waiting uses shared live timing beside the action and freezes duration", async ({ page }, testInfo) => {
+  await mockNl2SqlApi(page);
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  const gate = createRequestGate();
+  let run: ReturnType<typeof syntheticRunFixture> | null = null;
+  let writes = 0;
+  await page.route("**/api/nl2sql/synthetic-data/runs", async (route) => {
+    if (route.request().method() === "GET") return fulfillJson(route, run ? [run] : []);
+    writes++;
+    await gate.promise;
+    run = { ...syntheticRunFixture("pending"), created_at: new Date(Date.now() - 65_000).toISOString() };
+    return fulfillJson(route, run);
+  });
+  await page.goto("/data-management");
+  await page.getByRole("tab", { name: "合成データ生成" }).click();
+  const workspace = page.locator("#data-management-panel-synthetic");
+  const panel = page.getByTestId("synthetic-run-panel");
+  await expect(panel).toContainText("生成はまだ開始されていません。");
+  await workspace.getByRole("button", { name: "テーブル一覧を取得" }).click();
+  await workspace.getByLabel("APP.INVOICES を選択").check();
+  await workspace.getByLabel("実行確認語").fill("APP.INVOICES");
+  const generate = workspace.getByRole("button", { name: "生成開始" });
+  await generate.focus();
+  await page.keyboard.press("Enter");
+  const submitting = page.getByTestId("synthetic-submitting");
+  await expect(submitting).toBeVisible();
+  await expect(submitting).toContainText("生成を受け付けています。");
+  await expect(submitting.getByRole("timer")).toBeInViewport();
+  await expect(workspace.locator('[data-loading-icon="true"]')).toHaveCount(1);
+  const firstSubmissionTime = await submitting.getByRole("timer").textContent();
+  await expect.poll(() => submitting.getByRole("timer").textContent()).not.toBe(firstSubmissionTime);
+  gate.release();
+  const processing = page.getByTestId("synthetic-run-processing");
+  const timer = processing.getByRole("timer");
+  await expect(panel.getByTestId("synthetic-run-status")).toHaveText("受付済み・開始を待っています");
+  await expect(timer).toBeInViewport();
+  await expect(processing).toHaveAttribute("data-processing-placement", "job");
+  await expect(timer).toHaveAttribute("aria-live", "off");
+  await expect(workspace.locator('[data-loading-icon="true"]')).toHaveCount(1);
+  await expect(processing.locator('[data-loading-icon="true"]')).toHaveCSS("animation-name", "none");
+  const elapsedSeconds = async () => {
+    const text = (await timer.textContent()) ?? "";
+    const [, minutes, seconds] = text.match(/(\d+):(\d+)/) ?? [];
+    return Number(minutes) * 60 + Number(seconds);
+  };
+  const pendingElapsed = await elapsedSeconds();
+  expect(pendingElapsed).toBeGreaterThanOrEqual(65);
+  await expect.poll(elapsedSeconds).toBeGreaterThan(pendingElapsed);
+  await expect(processing).toContainText("通常より時間がかかっています");
+  const createdAt = run!.created_at;
+  run = { ...run!, status: "running", started_at: new Date().toISOString() };
+  // Polling updates the phase; no manual refresh or repeated generation is needed.
+  await expect(panel.getByTestId("synthetic-run-status")).toHaveText("生成中");
+  await expect(processing).toContainText("Oracle でデータを生成しています。");
+  expect(await elapsedSeconds()).toBeGreaterThanOrEqual(pendingElapsed);
+  await page.reload();
+  await expect(panel.getByTestId("synthetic-run-status")).toHaveText("生成中");
+  expect(await elapsedSeconds()).toBeGreaterThanOrEqual(pendingElapsed);
+  await expect(generate).toBeDisabled();
+  run = { ...run!, status: "verifying" };
+  await expect(panel.getByTestId("synthetic-run-status")).toHaveText("結果を確認中");
+  await expect(processing).toContainText("追加されたデータの件数と生成結果を確認しています。");
+  await panel.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("synthetic-waiting.png"), fullPage: false });
+  await expectNoHorizontalScroll(page);
+  run = { ...syntheticRunFixture("completed"), created_at: createdAt, finished_at: new Date(Date.parse(createdAt) + 80_000).toISOString() };
+  await expect(panel.getByTestId("synthetic-run-status")).toHaveText("合成データの生成が完了しました");
+  await expect(timer).toHaveAccessibleName("処理時間 01:20");
+  await expect(processing.locator('[data-loading-icon="true"]')).toHaveCount(0);
+  await page.clock.install();
+  await page.clock.fastForward(5_000);
+  await expect(timer).toHaveAccessibleName("処理時間 01:20");
+  await expect(panel.getByRole("button", { name: "結果データを確認" })).toBeVisible();
+  expect(writes).toBe(1);
+});
+
+test("synthetic new submission replaces a history link and history keeps its own duration", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  const oldRun = {
+    ...syntheticRunFixture("completed"),
+    created_at: new Date(Date.now() - 7_200_000).toISOString(),
+    finished_at: new Date(Date.now() - 3_600_000).toISOString(),
+  };
+  let runs: ReturnType<typeof syntheticRunFixture>[] = [oldRun];
+  let writes = 0;
+  await page.route("**/api/nl2sql/synthetic-data/runs", (route) => {
+    if (route.request().method() === "GET") return fulfillJson(route, runs);
+    writes++;
+    const next = { ...syntheticRunFixture("pending"), run_id: "run-002", created_at: new Date(Date.now() - 65_000).toISOString() };
+    runs = [next, oldRun];
+    return fulfillJson(route, next);
+  });
+  await page.goto("/data-management?synthetic_run=run-001");
+  const panel = page.getByTestId("synthetic-run-panel");
+  await expect(panel.getByRole("timer")).toHaveAccessibleName("処理時間 1:00:00");
+  const workspace = page.locator("#data-management-panel-synthetic");
+  await workspace.getByRole("button", { name: "テーブル一覧を取得" }).click();
+  await workspace.getByLabel("APP.INVOICES を選択").check();
+  await workspace.getByLabel("実行確認語").fill("APP.INVOICES");
+  await workspace.getByRole("button", { name: "生成開始" }).click();
+  await expect(panel.getByTestId("synthetic-run-status")).toHaveText("受付済み・開始を待っています");
+  await expect(page).not.toHaveURL(/synthetic_run=run-001/);
+  await expect(panel.getByRole("timer")).toHaveAccessibleName(/経過時間 01:/);
+  await panel.getByLabel("生成履歴").selectOption("run-001");
+  await expect(panel.getByRole("timer")).toHaveAccessibleName("処理時間 1:00:00");
+  await panel.getByLabel("生成履歴").selectOption("run-002");
+  await expect(panel.getByRole("timer")).toHaveAccessibleName(/経過時間 01:/);
+  expect(writes).toBe(1);
+});
 
 test("synthetic run status outage keeps prior state and never resubmits", async ({ page }) => {
   await mockNl2SqlApi(page);
@@ -10374,6 +10486,8 @@ test("synthetic run status outage keeps prior state and never resubmits", async 
   unavailable = true;
   await panel.getByRole("button", { name: "状況を再確認" }).click();
   await expect(panel).toContainText("最新の状況を取得できません");
+  await expect(panel.locator('[data-loading-icon="true"]')).toHaveCount(0);
+  await expect(panel).toContainText("現在の処理状況は未確認です。");
   await expect(panel.getByTestId("synthetic-run-status")).toHaveText("生成中");
   expect(submits).toBe(0);
 });

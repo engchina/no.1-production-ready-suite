@@ -59,6 +59,22 @@ Oracle が結果を一意に返せない場合は自動再実行・lock 解除�
 worker: `uv run python -m app.cli.nl2sql_synthetic_worker`。
 システム表の再作成は未終了・未確認 run があれば拒否する。
 
+## 待機表示と時間
+
+生成状況は「生成開始」の直下、結果データ領域の手前に配置する。送信中は共通
+`ProcessingIndicator` の受付表示とボタン内の spinner、受理後は状態パネル内の spinner
+1 個に切り替える。状態ラベルは `StatusBadge`、計時は `useOperationTiming` を再利用する。
+
+受付待ち・生成中・結果確認はサーバー状態の polling に追従する。経過時間は受付時刻
+`created_at` から毎秒更新し、待機時間を含む。開始への遷移や再読込でリセットしない。
+終了後は `finished_at - created_at` を「処理時間」として保持する。表示は共通規約の
+`mm:ss` / `h:mm:ss`、読み上げは `role="timer" aria-live="off"`、reduced motion に対応する。
+
+状態取得失敗時は直前の情報と「現在の処理状況は未確認」を表示し、spinner を停止する。
+この場合の時計は受付からの経過であり、処理継続の証拠ではない。結果不明 (`unknown`) は
+終了を断定せず、計時表示を外して再確認を案内する。新規生成を受理したら過去結果の
+URL 選択を解除し、新しい生成状態を表示する。
+
 ## 検証
 
 pytest は受理、認可、再起動、CAS、部分/0/null 件、API の隔離を検証する。

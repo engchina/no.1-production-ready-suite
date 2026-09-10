@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { Banner, toast } from "@engchina/production-ready-ui";
+import { StatusBadge } from "@/components/ui/status-badge";
 import { Button } from "@/components/ui/button";
 import { ProcessingIndicator } from "@/components/ProcessingState";
 import { apiGet } from "@/lib/api";
@@ -66,21 +67,34 @@ export function SyntheticRunNotifications() {
   </Banner>;
 }
 
-export function SyntheticRunPanel({ run, runs, onSelect, error, onRefresh, onViewResults }: {
+export function SyntheticRunPanel({ run, runs, onSelect, error, onRefresh, onViewResults, submitting = false }: {
   run: SyntheticRun | null; runs: SyntheticRun[]; onSelect: (id: string) => void;
-  error: boolean; onRefresh: () => void; onViewResults?: () => void;
+  error: boolean; submitting?: boolean; onRefresh: () => void; onViewResults?: () => void;
 }) {
   return <section aria-label={t("syntheticRun.title")} className="grid min-w-0 gap-3 rounded-md border border-border bg-background p-4" data-testid="synthetic-run-panel">
     <h3 className="font-semibold">{t("syntheticRun.title")}</h3>
-    {runs.length > 0 && <label className="grid gap-1 text-sm">{t("syntheticRun.history")}
-      <select value={run?.run_id ?? ""} onChange={(e) => onSelect(e.target.value)} className="h-11 min-w-0 rounded-md border border-border bg-card px-3">
-        {runs.map((r) => <option key={r.run_id} value={r.run_id}>{formatDateTime(r.created_at)} · {runLabel(r)}</option>)}
-      </select>
-    </label>}
+    {submitting && <ProcessingIndicator active label={t("syntheticRun.submitting")} activityIcon="none" placement="action" testId="synthetic-submitting" />}
     {error && <Banner severity="warning">{t("syntheticRun.stale")}{run?.checked_at ? ` ${formatDateTime(run.checked_at)}` : ""}</Banner>}
-    {!run ? <p className="text-sm text-muted-foreground">{t("syntheticRun.notStarted")}</p> : <>
-      <div role="status" data-testid="synthetic-run-status" className="font-medium">{runLabel(run)}</div>
-      {!runFinished(run) && run.status !== "unknown" && <ProcessingIndicator active label={t("syntheticRun.continues")} startedAt={run.started_at ?? run.created_at} activityIcon="none" announceActivity={false} placement="panel" />}
+    {submitting ? null : !run ? !error && <p className="text-sm text-muted-foreground">{t("syntheticRun.notStarted")}</p> : <>
+      <div role="status" data-testid="synthetic-run-status">
+        <StatusBadge className="max-w-full whitespace-normal text-left" variant={run.status === "completed" ? "success" : run.status === "failed" ? "danger" : error || ["unknown", "partial", "no_data"].includes(run.status) ? "warning" : "pending"} label={runLabel(run)} />
+      </div>
+      {(run.status !== "unknown" && (!runFinished(run) || run.finished_at)) && <ProcessingIndicator
+        active={!runFinished(run)}
+        operationKey={run.run_id}
+        startedAt={run.created_at}
+        finishedAt={run.finished_at}
+        label={t(error ? "syntheticRun.elapsedUnverified" : runFinished(run) ? "syntheticRun.durationHint" : `syntheticRun.progress.${run.status}`)}
+        finalLabel={t("syntheticRun.durationHint")}
+        activityIcon={error ? "none" : "spinner"}
+        announceActivity={false}
+        announceSlow={false}
+        showSlowMessage={!error}
+        placement="job"
+        testId="synthetic-run-processing"
+      />}
+      {run.status === "unknown" && <p className="text-sm text-muted-foreground">{t("syntheticRun.unknownHint")}</p>}
+      {!runFinished(run) && !error && run.status !== "unknown" && <p className="text-sm text-muted-foreground">{t("syntheticRun.continues")}</p>}
       <div className="grid gap-2">
         {run.targets.map((target) => <div key={target.table_name} className="grid min-w-0 gap-1 rounded border border-border bg-card p-3 text-sm">
           <strong className="break-all">{target.table_name}</strong>
@@ -96,8 +110,13 @@ export function SyntheticRunPanel({ run, runs, onSelect, error, onRefresh, onVie
         <p>{t("syntheticRun.oracleReference", { id: run.operation_ids.join(", ") || t("syntheticRun.unverified") })}</p>
       </details>
     </>}
+    {runs.length > 0 && <label className="grid gap-1 text-sm">{t("syntheticRun.history")}
+      <select disabled={submitting} value={run?.run_id ?? ""} onChange={(e) => onSelect(e.target.value)} className="h-11 min-w-0 rounded-md border border-border bg-card px-3">
+        {runs.map((r) => <option key={r.run_id} value={r.run_id}>{formatDateTime(r.created_at)} · {runLabel(r)}</option>)}
+      </select>
+    </label>}
     <div className="flex flex-wrap gap-2">
-      {run && runFinished(run) && onViewResults && <Button variant="primary" size="sm" onClick={onViewResults}>{t("syntheticRun.goToResults")}</Button>}
+      {!submitting && run && runFinished(run) && onViewResults && <Button variant="primary" size="sm" onClick={onViewResults}>{t("syntheticRun.goToResults")}</Button>}
       <Button variant="secondary" size="sm" onClick={onRefresh}>{t("syntheticRun.refresh")}</Button>
     </div>
   </section>;

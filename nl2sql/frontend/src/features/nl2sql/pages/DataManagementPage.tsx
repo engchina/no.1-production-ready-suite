@@ -1,5 +1,5 @@
 import { useWorkspaceActive, useWorkspaceState, useWorkspaceRevalidation, useResetExecutionConsent, useTransientDraftGuard } from "@/components/WorkspaceState";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router-dom";
 import { ArrowRight, Database, Eye, FileSpreadsheet, Play, RefreshCw, Table2, Trash2, Upload, X } from "lucide-react";
@@ -823,6 +823,7 @@ export function DataManagementPage() {
       }, { timeoutMs: API_TIMEOUT_MS.interactiveDetail });
       queryClient.setQueryData<SyntheticRun[]>(syntheticRuns.key, (old = []) => [run, ...old.filter((r) => r.run_id !== run.run_id)]);
       setSyntheticRunId(run.run_id);
+      setSearchParams((params) => { params.delete("synthetic_run"); return params; }, { replace: true });
       setSyntheticConfirmation("");
       setSubmissionKey({ signature: "", key: "" });
       resultSelectionEdited.current = false;
@@ -932,6 +933,31 @@ export function DataManagementPage() {
     (baseObjectsQuery.isFetching && !baseObjectsQuery.isFetchingNextPage) ||
     (previewObjectsQuery.isFetching && !previewObjectsQuery.isFetchingNextPage) ||
     (csvTablesQuery.isFetching && !csvTablesQuery.isFetchingNextPage);
+
+  const syntheticProgress = (
+    <>
+      <SyntheticRunPanel
+        run={selectedRun}
+        runs={selectedRun && !listedRun ? [selectedRun, ...syntheticRuns.data ?? []] : syntheticRuns.data ?? []}
+        submitting={syntheticLoading === "generate"}
+        error={Boolean(syntheticRuns.error || historicalRun.error)}
+        onSelect={(id) => {
+          setSyntheticRunId(id);
+          setSearchParams((params) => { params.delete("synthetic_run"); return params; }, { replace: true });
+          clearSyntheticResultState();
+          resultSelectionEdited.current = false;
+        }}
+        onViewResults={() => document.getElementById("synthetic-results-heading")?.scrollIntoView({ block: "start" })}
+        onRefresh={() => {
+          void syntheticRuns.refetch();
+          if (requestedRunId && !listedRun) void historicalRun.refetch();
+        }}
+      />
+      {historicalRun.error && requestedRunId && !listedRun && (
+        <Banner severity="warning">{apiErrorMessage(historicalRun.error, "syntheticRun.missing")}</Banner>
+      )}
+    </>
+  );
 
   return (
     <>
@@ -1161,11 +1187,7 @@ export function DataManagementPage() {
             idPrefix={DATA_MANAGEMENT_ID}
             ariaLabel={t("dataMgmt.workspace.synthetic")}
           >
-            <SyntheticRunPanel run={selectedRun} runs={selectedRun && !listedRun ? [selectedRun, ...syntheticRuns.data ?? []] : syntheticRuns.data ?? []}
-              onSelect={(id) => { setSyntheticRunId(id); setSearchParams((params) => { params.delete("synthetic_run"); return params; }, { replace: true }); clearSyntheticResultState(); resultSelectionEdited.current = false; }}
-              onViewResults={() => document.getElementById("synthetic-results-heading")?.scrollIntoView({ block: "start" })}
-              error={Boolean(syntheticRuns.error)} onRefresh={() => { void syntheticRuns.refetch(); if (requestedRunId && !listedRun) void historicalRun.refetch(); }} />
-            {historicalRun.error && requestedRunId && !listedRun && <Banner severity="warning">{apiErrorMessage(historicalRun.error, "syntheticRun.missing")}</Banner>}
+            {(selectAiProfilesQuery.isPending || selectAiProfilesQuery.error) && syntheticProgress}
             {selectAiProfilesQuery.isPending ? (
               <DbManagementLoadingSkeleton
                 idPrefix="data-synthetic-profiles"
@@ -1179,6 +1201,8 @@ export function DataManagementPage() {
               />
             ) : (
             <SyntheticWorkspace
+              generationProgress={syntheticProgress}
+              submitting={syntheticLoading === "generate"}
               selectAiDbProfiles={selectAiDbProfiles}
               selectedSyntheticProfile={selectedSyntheticProfile}
               syntheticData={syntheticData}
@@ -1968,6 +1992,8 @@ function CsvUploadWorkspace({
 }
 
 function SyntheticWorkspace({
+  generationProgress,
+  submitting,
   selectAiDbProfiles,
   selectedSyntheticProfile,
   syntheticData,
@@ -2015,6 +2041,8 @@ function SyntheticWorkspace({
   onClearSyntheticDataResults,
   onRetry,
 }: {
+  generationProgress: ReactNode;
+  submitting: boolean;
   selectAiDbProfiles: SelectAiDbProfilesData | null;
   selectedSyntheticProfile: SelectAiDbProfile | null;
   syntheticData: SyntheticDataOperationData | null;
@@ -2339,7 +2367,7 @@ function SyntheticWorkspace({
                   variant="danger"
                   size="sm"
                   className="w-full sm:w-auto"
-                  loading={loading === "generate"}
+                  loading={submitting}
                   disabled={!canGenerateSyntheticData || dbProfileRefreshRequired || dbProfileRefreshing}
                   onClick={onGenerateSyntheticData}
                 >
@@ -2364,6 +2392,8 @@ function SyntheticWorkspace({
         </fieldset>
 
       </fieldset>
+
+      {generationProgress}
 
       <section className="grid min-w-0 content-start gap-3 rounded-md border border-border bg-background p-4" aria-labelledby="synthetic-results-heading">
         <DbObjectPanelHeader
