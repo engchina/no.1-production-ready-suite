@@ -14704,3 +14704,39 @@ test("データ取込中は対象・ファイル・モードを固定し失敗�
   await expect.poll(() => retryPayload).toMatchObject({ table_name: "INVOICES", owner: "APP", mode: "insert", confirmation: "APP.INVOICES", filename: "orders.csv" });
   await expect(panel.getByText("executed", { exact: true })).toBeVisible();
 });
+
+for (const mode of ["comment", "annotation"] as const) {
+  for (const phase of ["samples", "generation"] as const) {
+    test(`${mode} SQL生成の${phase}待機中に入力が変われば旧応答を破棄する`, async ({ page }) => {
+      await mockNl2SqlApi(page);
+      await page.goto(`/${mode}-management`);
+      await page.getByRole("checkbox", { name: /INVOICES/ }).check();
+      await page.getByRole("button", { name: "情報を取得", exact: true }).click();
+      await expect(page.getByLabel("構造情報")).toHaveValue(/INVOICES/);
+      const gate = createRequestGate();
+      const generationPath = `/api/nl2sql/${mode === "comment" ? "comments" : "annotations"}/generate-sql`;
+      const delayedPath = phase === "samples" ? "/api/nl2sql/metadata-samples" : generationPath;
+      let calls = 0;
+      page.on("request", (request) => { if (request.url().endsWith(generationPath)) calls += 1; });
+      await page.route(`**${delayedPath}`, async (route) => { await gate.promise; await route.fallback(); });
+      const request = page.waitForRequest(`**${delayedPath}`);
+      await page.getByRole("button", { name: "SQL 生成", exact: true }).click();
+      await request;
+      if (phase === "samples") {
+        await page.getByRole("tab", { name: "対象選択", exact: true }).click();
+        await page.getByRole("checkbox", { name: /INVOICES/ }).uncheck();
+      } else {
+        await page.getByRole("tab", { name: "入力確認・SQL生成", exact: true }).click();
+        await page.getByLabel("追加入力").fill("入力を変更したので旧結果を採用しない");
+      }
+      const response = page.waitForResponse(`**${delayedPath}`);
+      gate.release();
+      await response;
+      await page.getByRole("tab", { name: "SQL実行", exact: true }).click();
+      await expect(page.getByTestId(`${mode}-management-execute-result-detail-skeleton`)).toHaveCount(0);
+      await expect(page.getByLabel("SQL(セミコロン区切りで複数文を入力可能)")).toHaveValue("");
+      if (phase === "samples") expect(calls).toBe(0);
+      await expect(page.getByRole("button", { name: "SQL 実行", exact: true })).toBeDisabled();
+    });
+  }
+}

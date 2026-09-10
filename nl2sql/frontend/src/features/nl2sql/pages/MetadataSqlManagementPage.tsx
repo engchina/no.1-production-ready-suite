@@ -206,6 +206,15 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
     () => buildMetadataInputTexts(details, sampleLimit),
     [details, sampleLimit]
   );
+  const generationSequence = useRef(0);
+  const generationSignature = JSON.stringify([selectionSignature, inputTexts, sampleLimit, extraText]);
+  const currentGenerationSignature = useRef(generationSignature);
+  currentGenerationSignature.current = generationSignature;
+  useEffect(() => {
+    generationSequence.current += 1;
+    setLoading((current) => current === "generate" ? "" : current);
+  }, [generationSignature]);
+  useEffect(() => () => { generationSequence.current += 1; }, []);
   const policy: DbAdminStatementPolicy = mode === "comment" ? "comment_sql" : "annotation_sql";
   const panels = useMemo(
     () =>
@@ -366,6 +375,7 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
   };
 
   const fetchDetails = async (preserveWork = false) => {
+    generationSequence.current += 1;
     if (selectedTargets.length === 0) {
       setMessage(t("metadataSql.error.noTarget"));
       return;
@@ -415,6 +425,7 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
   });
 
   const generateSql = async () => {
+    if (loading || !validated) return;
     if (selectedTargets.length === 0) {
       setMessage(t("metadataSql.error.noTarget"));
       return;
@@ -423,6 +434,10 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
       setMessage(t("metadataSql.error.targetLimit", { limit: METADATA_TARGET_LIMIT }));
       return;
     }
+    const sequence = ++generationSequence.current;
+    const submittedSignature = generationSignature;
+    const isCurrent = () => sequence === generationSequence.current &&
+      submittedSignature === currentGenerationSignature.current;
     setActivePanel("execute");
     setLoading("generate");
     setMessage("");
@@ -437,6 +452,7 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
         sample_limit: sampleLimit,
       };
       const samples = await apiPost<MetadataSqlSampleData>("/api/nl2sql/metadata-samples", samplePayload);
+      if (!isCurrent()) return;
       setRefreshedSampleText(samples.sample_text);
       const payload: MetadataSqlGeneratePayload = {
         targets: selectedTargets,
@@ -451,13 +467,14 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
           ? "/api/nl2sql/comments/generate-sql"
           : "/api/nl2sql/annotations/generate-sql";
       const generatedSql = await apiPost<MetadataSqlGenerateData>(path, payload);
+      if (!isCurrent()) return;
       setGenerated({ ...generatedSql, warnings: [...samples.warnings, ...generatedSql.warnings] });
       setGenerationResetSignal((value) => value + 1);
       toast.success(t("metadataSql.toast.generated"));
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : t("metadataSql.error.generate"));
+      if (isCurrent()) setMessage(err instanceof Error ? err.message : t("metadataSql.error.generate"));
     } finally {
-      setLoading("");
+      if (sequence === generationSequence.current) setLoading("");
     }
   };
 
@@ -613,7 +630,7 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
           <MetadataInputPanel
             pageId={pageId}
             inputTexts={inputTexts}
-            detailsReady={details.length > 0}
+            detailsReady={validated && details.length > 0}
             detailsLoading={loading === "details"}
             selectedCount={selectedTargets.length}
             sampleLimit={sampleLimit}
