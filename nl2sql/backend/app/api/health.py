@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import re
 
@@ -35,17 +37,33 @@ def _safe_database_error_detail(exc: Exception) -> str:
 async def database_status() -> ApiResponse[DatabaseStatusData]:
     """DB gate が使用する設定確認と bounded connection probe。常に HTTP 200。"""
     settings = get_settings()
+    # 公開 readiness では接続先・ユーザー名・credential の生値を公開しない。
+    context_id = hashlib.sha256(
+        json.dumps(
+            [
+                settings.nl2sql_runtime_mode,
+                settings.nl2sql_persistence_mode,
+                settings.oracle_dsn,
+                settings.oracle_user,
+                settings.oracle_wallet_dir,
+            ]
+        ).encode()
+    ).hexdigest()
     runtime = settings.nl2sql_runtime_mode.strip().lower()
     persistence = settings.nl2sql_persistence_mode.strip().lower()
     if runtime == "deterministic" and persistence == "memory":
         record_ready_once()
         return ApiResponse(
-            data=DatabaseStatusData(status="ok", check=READINESS_OK, detail="memory"),
+            data=DatabaseStatusData(
+                context_id=context_id, status="ok", check=READINESS_OK, detail="memory"
+            ),
         )
 
     check = oracle_readiness_check(settings)
     if check != READINESS_OK:
-        return ApiResponse(data=DatabaseStatusData(status="not_configured", check=check))
+        return ApiResponse(
+            data=DatabaseStatusData(context_id=context_id, status="not_configured", check=check)
+        )
 
     try:
         await test_oracle_connection(settings)
@@ -56,6 +74,7 @@ async def database_status() -> ApiResponse[DatabaseStatusData]:
         )
         return ApiResponse(
             data=DatabaseStatusData(
+                context_id=context_id,
                 status="unreachable",
                 check=check,
                 detail=_safe_database_error_detail(exc),
@@ -72,6 +91,7 @@ async def database_status() -> ApiResponse[DatabaseStatusData]:
             )
             return ApiResponse(
                 data=DatabaseStatusData(
+                    context_id=context_id,
                     status="unreachable",
                     check="migration_check_failed",
                     detail=_safe_database_error_detail(exc),
@@ -80,6 +100,7 @@ async def database_status() -> ApiResponse[DatabaseStatusData]:
         if not migrated:
             return ApiResponse(
                 data=DatabaseStatusData(
+                    context_id=context_id,
                     # DB 接続設定は有効で probe も成功している。migration 未適用を
                     # 接続情報の未設定として扱うと、設定画面の接続成功表示と矛盾する。
                     status="setup_required",
@@ -97,4 +118,4 @@ async def database_status() -> ApiResponse[DatabaseStatusData]:
             )
 
     record_ready_once()
-    return ApiResponse(data=DatabaseStatusData(status="ok", check=check))
+    return ApiResponse(data=DatabaseStatusData(context_id=context_id, status="ok", check=check))

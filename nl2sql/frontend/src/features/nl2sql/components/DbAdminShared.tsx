@@ -1,3 +1,4 @@
+import { useWorkspaceState, useResetExecutionConsent } from "@/components/WorkspaceState";
 import { Button } from "@/components/ui/button";
 import { ClearActionButton } from "@/components/ui/clear-action-button";
 import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
@@ -5,12 +6,14 @@ import {
   useEffect,
   useId,
   useMemo,
+  useRef,
   useState,
   type KeyboardEvent,
   type ReactNode,
 } from "react";
 import {
   Code2,
+  Copy,
   Download,
   Play,
   Search,
@@ -64,6 +67,7 @@ import type {
   SchemaCatalog,
 } from "../types";
 import { QueryResultSummary } from "./SqlRowLimitControls";
+import { dbAdminErrorRecovery } from "../dbAdminErrorRecovery";
 
 /** テキストファイルを SQL としてダウンロードする。 */
 export function downloadText(filename: string, text: string) {
@@ -551,16 +555,6 @@ function oracleErrorGuidance(code: string | null) {
   if (code === "ORA-00054") {
     return { cause: "対象が他の処理で使用中です。", actions: ["他の更新処理の完了後に再試行してください。"] };
   }
-  if (code === "ORA-11548") {
-    return {
-      cause: t("dbAdmin.result.error.ora11548.cause"),
-      actions: [
-        t("dbAdmin.result.error.ora11548.action.name"),
-        t("dbAdmin.result.error.ora11548.action.quote"),
-        t("dbAdmin.result.error.ora11548.action.regenerate"),
-      ],
-    };
-  }
   return {
     cause: t("dbAdmin.result.error.generic.cause"),
     actions: [
@@ -575,21 +569,25 @@ function parseDbAdminError(message: string, details?: ApiErrorDetails, errorCode
   const summary = message.replace(/\s*Help:\s*https?:\/\/\S+/i, "").trim();
   const code = errorCode || summary.match(/\bORA-\d{5}\b/)?.[0] || null;
   const guidance = oracleErrorGuidance(code);
+  const recovery = dbAdminErrorRecovery(code);
   return {
     code,
     summary: details?.summary || summary || message,
     helpUrl,
-    cause: details?.cause || guidance.cause,
-    actions: details?.actions?.length ? details.actions : guidance.actions,
+    cause: details?.cause || recovery?.cause || guidance.cause,
+    actions: details?.actions?.length ? details.actions : recovery?.actions ?? guidance.actions,
+    examples: recovery?.examples ?? [],
     rawMessage: details?.raw_message || message,
   };
 }
 
 export function DbAdminErrorNotice({
   error: sourceError,
+  errorCode,
   onReturnToList,
 }: {
   error: unknown;
+  errorCode?: string;
   onReturnToList?: () => void;
 }) {
   const message = sourceError instanceof Error ? sourceError.message : String(sourceError || "");
@@ -597,7 +595,7 @@ export function DbAdminErrorNotice({
   const error = parseDbAdminError(
     message,
     details,
-    sourceError instanceof ApiError ? sourceError.errorCode : undefined
+    errorCode || (sourceError instanceof ApiError ? sourceError.errorCode : undefined)
   );
   if (!message) return null;
   const requestId = sourceError instanceof ApiError ? sourceError.requestId : undefined;
@@ -632,6 +630,7 @@ export function DbAdminErrorNotice({
             ))}
           </ul>
         </div>
+        {error.examples.length > 0 ? <SqlRecoveryExamples examples={error.examples} /> : null}
         {hasDetail ? (
           <details className="group/disclosure rounded-md border border-border bg-card/70">
             <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-sm font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
@@ -658,8 +657,47 @@ export function DbAdminErrorNotice({
   );
 }
 
+function SqlRecoveryExamples({ examples }: { examples: { label: string; sql: string }[] }) {
+  const [copying, setCopying] = useState<string | null>(null);
+  const copyExample = async (example: { label: string; sql: string }) => {
+    setCopying(example.label);
+    try {
+      await copyTextToClipboard(example.sql);
+      toast.success(t("common.action.copied"));
+    } catch {
+      toastError(t("common.action.copyFailed"));
+    } finally {
+      setCopying(null);
+    }
+  };
+  return (
+    <section className="grid min-w-0 gap-3" aria-label={t("dbAdmin.result.error.examples")}>
+      <p className="text-xs font-semibold text-danger">{t("dbAdmin.result.error.examples")}</p>
+      <p className="text-sm leading-6 text-foreground/90">{t("dbAdmin.result.error.examples.hint")}</p>
+      {examples.map((example) => (
+        <div key={example.label} className="grid min-w-0 gap-2 rounded-md border border-border bg-card p-3">
+          <ContentActionBar ariaLabel={example.label} title={example.label}>
+            <Button
+              variant="secondary"
+              size="sm"
+              aria-label={t("dbAdmin.result.error.example.copyAria", { name: example.label })}
+              loading={copying === example.label}
+              disabled={copying !== null}
+              onClick={() => void copyExample(example)}
+            >
+              <Copy size={14} aria-hidden />
+              {t("dbAdmin.result.error.example.copy")}
+            </Button>
+          </ContentActionBar>
+          <pre className="min-w-0 whitespace-pre-wrap break-all text-xs leading-6 text-foreground"><code>{example.sql}</code></pre>
+        </div>
+      ))}
+    </section>
+  );
+}
+
 function DbAdminStatementError({ statement }: { statement: DbAdminStatementResult }) {
-  return <DbAdminErrorNotice error={statement.error_message} />;
+  return <DbAdminErrorNotice error={statement.error_message} errorCode={statement.error_code} />;
 }
 
 export function DbAdminExecutionResult({
@@ -873,6 +911,8 @@ export function StatementRunnerCard({
   progress,
   confirmationTitle,
   footerProcessing,
+  executionBlocked = false,
+  draftScope = "",
   executeOnly = false,
   framed = true,
   onExecuted,
@@ -886,11 +926,13 @@ export function StatementRunnerCard({
   progress?: (state: { hasSql: boolean; isConfirmed: boolean; canRun: boolean }) => ReactNode;
   confirmationTitle?: string;
   footerProcessing?: ReactNode;
+  executionBlocked?: boolean;
+  draftScope?: string;
   executeOnly?: boolean;
   framed?: boolean;
   onExecuted?: (result: DbAdminExecuteData) => void | Promise<void>;
 }) {
-  const [sql, setSql] = useState("");
+  const [sql, setSql] = useWorkspaceState(`runner-${policy}-${draftScope}-sql`, initialSql ?? "");
   const [confirmation, setConfirmation] = useState("");
   const [result, setResult] = useState<DbAdminExecuteData | null>(null);
   const [loading, setLoading] = useState(false);
@@ -898,12 +940,18 @@ export function StatementRunnerCard({
   const [sqlFileResetSignal, setSqlFileResetSignal] = useState(0);
   const [executionRun, setExecutionRun] = useState<DbAdminExecutionRunState | null>(null);
 
+  useResetExecutionConsent(() => setConfirmation(""), JSON.stringify([sql, resetSignal, executionBlocked]));
+  const [appliedRevision, setAppliedRevision] = useWorkspaceState(`runner-${policy}-${draftScope}-revision`, String(resetSignal ?? ""));
+  const previousInitialSql = useRef({ initialSql, resetSignal });
   useEffect(() => {
+    if (appliedRevision === String(resetSignal ?? "") && previousInitialSql.current.initialSql === initialSql && previousInitialSql.current.resetSignal === resetSignal) return;
+    setAppliedRevision(String(resetSignal ?? ""));
+    previousInitialSql.current = { initialSql, resetSignal };
     if (initialSql !== undefined) setSql(initialSql);
   }, [initialSql, resetSignal]);
 
   const run = async () => {
-    if (!sql.trim()) return;
+    if (!sql.trim() || executionBlocked) return;
     if (!confirmation.trim()) return;
     const startedAt = Date.now();
     const operationKey = `statement-runner-${policy}-${startedAt}`;
@@ -980,7 +1028,7 @@ export function StatementRunnerCard({
       size="lg"
       className="w-full sm:w-auto"
       loading={loading}
-      disabled={!canRun}
+      disabled={!canRun || executionBlocked}
       onClick={() => void run()}
     >
       <Play size={15} aria-hidden="true" />
@@ -1000,7 +1048,7 @@ export function StatementRunnerCard({
         <>
           {runButton}
           <ClearActionButton
-            label={t("dbAdmin.runner.clear")}
+            label={t("workspace.clearInput")}
             matchButtonHeight
             size="lg"
             className="w-full sm:w-auto"
@@ -1051,7 +1099,7 @@ export function StatementRunnerCard({
           }}
         >
           <X size={15} aria-hidden="true" />
-          <span>{t("dbAdmin.runner.clear")}</span>
+          <span>{t("workspace.clearInput")}</span>
         </Button>
       </div>
       <div className="grid gap-3">
@@ -1070,6 +1118,7 @@ export function StatementRunnerCard({
         <ExecutionActivityPanel
           status={executionRun.status}
           label={executionActivityLabel(executionRun.status)}
+          inputSignature={sql}
           operationKey={executionRun.operationKey}
           startedAt={executionRun.startedAt}
           finishedAt={executionRun.finishedAt}

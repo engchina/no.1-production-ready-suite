@@ -1,3 +1,4 @@
+import { useWorkspaceState, useWorkspaceRevalidation, useResetExecutionConsent } from "@/components/WorkspaceState";
 import { useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Play, RefreshCw, X } from "lucide-react";
@@ -189,11 +190,12 @@ function schemaRefreshErrorMessage(job: SchemaRefreshJob) {
 /** 管理者向け SQL 実行ページ。更新系 SQL は確認語・RBAC・監査を必須とする。 */
 export function AdminSqlPage() {
   const queryClient = useQueryClient();
-  const [sqlText, setSqlText] = useState("");
+  useWorkspaceRevalidation();
+  const [sqlText, setSqlText] = useWorkspaceState("sqlText", "");
   const [sqlFileResetSignal, setSqlFileResetSignal] = useState(0);
   const [confirmation, setConfirmation] = useState("");
   const [result, setResult] = useState<DbAdminExecuteData | null>(null);
-  const [rowLimitInput, setRowLimitInput] = useState(String(DEFAULT_SQL_ROW_LIMIT));
+  const [rowLimitInput, setRowLimitInput] = useWorkspaceState("rowLimitInput", String(DEFAULT_SQL_ROW_LIMIT));
   const [executedRowLimit, setExecutedRowLimit] = useState<number | null>(null);
   const [executionRun, setExecutionRun] = useState<ExecutionRunState | null>(null);
   const [schemaRefreshJobId, setSchemaRefreshJobId] = useState("");
@@ -201,6 +203,7 @@ export function AdminSqlPage() {
   const [schemaRefreshNeedsFull, setSchemaRefreshNeedsFull] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  useResetExecutionConsent(() => { setConfirmation(""); }, JSON.stringify([sqlText, rowLimitInput]));
   const completedSchemaRefreshJob = useRef("");
   const sharedSchemaRefresh = useSchemaRefreshCoordinator();
   const schemaRefreshJobQuery = useSchemaRefreshJob(schemaRefreshJobId);
@@ -383,7 +386,7 @@ export function AdminSqlPage() {
         onClick={clear}
       >
         <X size={16} aria-hidden="true" />
-        <span>{t("nl2sql.action.clearSql")}</span>
+        <span>{t("workspace.clearInput")}</span>
       </Button>
     </>
   );
@@ -477,6 +480,7 @@ export function AdminSqlPage() {
           )}
           {executionRun && (
             <ExecutionActivityPanel
+              inputSignature={sqlText}
               status={executionRun.status}
               label={executionLabel(executionRun.status)}
               operationKey={executionRun.operationKey}

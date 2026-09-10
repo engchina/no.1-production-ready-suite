@@ -1854,6 +1854,16 @@ def _align_admin_statement_results(
     return aligned
 
 
+def _db_admin_policy_error_code(message: str, policy: str) -> str:
+    if not message:
+        return ""
+    # 既存の事前検証が返す Oracle コードは、一般的な policy コードで上書きしない。
+    oracle_code = _ORACLE_ERROR_CODE_RE.match(message)
+    if oracle_code:
+        return oracle_code.group(0).upper()
+    return f"DB_ADMIN_{policy.upper()}_POLICY_VIOLATION"
+
+
 def _db_admin_policy_error(statement: str, policy: str) -> str:
     """policy に反する statement なら日本語エラーを返す(許可なら空文字)。"""
     stripped = _strip_leading_sql_comments(statement).strip()
@@ -13413,6 +13423,9 @@ class Nl2SqlService:
                         status="blocked",
                         sql=statements[index],
                         error_message=policy_errors[index],
+                        error_code=_db_admin_policy_error_code(
+                            policy_errors[index], request.policy
+                        ),
                     )
                     for index in range(len(statements))
                 ],

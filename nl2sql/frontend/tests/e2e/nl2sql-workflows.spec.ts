@@ -1163,6 +1163,7 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
           error_message: invalidAnnotationName
             ? "ORA-11548 相当: annotation 名 COMMENT は Oracle の予約語です。説明には UI_Display を使用するか、意図的な名前であれば \"COMMENT\" と二重引用符で囲んでください。"
             : "",
+          error_code: invalidAnnotationName ? "ORA-11548" : "",
         },
       ],
       committed: invalidAnnotationName ? false : executed,
@@ -4079,7 +4080,7 @@ test("job ポーリングの通信断が続くと追跡を停止しエラー表�
   await page.goto("/query");
   await nl2sqlQuestionInput(page).fill("請求金額を一覧で見たい");
   const runButton = page.getByRole("button", { name: "検索を実行" });
-  const resetButton = page.getByRole("button", { name: "リセット" });
+  const resetButton = page.getByRole("button", { name: "新しい作業を開始", exact: true });
   await runButton.click();
 
   // 2.5s 間隔 × 連続 3 回失敗(即時 tick 含む)で追跡を断念する。
@@ -6558,7 +6559,8 @@ test("Select AI の今回だけの生成条件を job に渡し、reset で消�
     },
   });
 
-  await page.getByRole("button", { name: "リセット" }).click();
+  await page.getByRole("button", { name: "新しい作業を開始", exact: true }).click();
+  await page.getByRole("alertdialog", { name: "未保存の入力を破棄しますか？" }).getByRole("button", { name: "新しい作業を開始" }).click();
   await expect(disclosure).toHaveAttribute("aria-expanded", "false");
   await disclosure.click();
   await expect(page.getByLabel("今回の追加条件")).toHaveValue("");
@@ -6634,7 +6636,7 @@ test("AI 活用の SELECT SQL 画面は通常 API だけを使用し、更新 SQ
   expect(api.adminExecutePayload).toBeNull();
 
   await sqlInput.fill("");
-  const clearButton = directSql.getByRole("button", { name: "クリア" });
+  const clearButton = directSql.getByRole("button", { name: "入力をクリア" });
   await expect(clearButton).toBeEnabled();
   await expect(directSql.getByTestId("direct-sql-execution-activity")).toBeVisible();
   await clearButton.click();
@@ -6918,7 +6920,7 @@ test("データ準備の管理 SQL 画面は SELECT と確認済み更新 SQL �
     reason: "admin-sql-select",
   });
 
-  await adminSql.getByRole("button", { name: "クリア" }).click();
+  await adminSql.getByRole("button", { name: "入力をクリア" }).click();
   await expect(sqlInput).toHaveValue("");
   await expect(rowLimitInput).toHaveValue("100");
   await expect(adminSql.getByTestId("query-results-table")).toHaveCount(0);
@@ -6934,7 +6936,7 @@ test("データ準備の管理 SQL 画面は SELECT と確認済み更新 SQL �
     reason: "admin-sql-select",
   });
 
-  await adminSql.getByRole("button", { name: "クリア" }).click();
+  await adminSql.getByRole("button", { name: "入力をクリア" }).click();
   const literalSelectSql =
     "SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES " +
     "WHERE MEMO = 'a;b' AND STATUS = 'delete'";
@@ -6951,7 +6953,7 @@ test("データ準備の管理 SQL 画面は SELECT と確認済み更新 SQL �
     reason: "admin-sql-select",
   });
 
-  await adminSql.getByRole("button", { name: "クリア" }).click();
+  await adminSql.getByRole("button", { name: "入力をクリア" }).click();
   await expect(rowLimitInput).toHaveValue("100");
   await adminSql.getByLabel("SQL ファイル読込 (.sql/.txt)").setInputFiles({
     name: "review-invoices.sql",
@@ -6991,7 +6993,7 @@ test("データ準備の管理 SQL 画面は SELECT と確認済み更新 SQL �
     reason: "admin-sql-admin",
   });
 
-  await adminSql.getByRole("button", { name: "クリア" }).click();
+  await adminSql.getByRole("button", { name: "入力をクリア" }).click();
   const withUpdateSql =
     "WITH TARGET AS (SELECT INVOICE_ID FROM INVOICES WHERE STATUS = 'NEW') " +
     "UPDATE INVOICES SET STATUS = 'REVIEWED' WHERE INVOICE_ID IN (SELECT INVOICE_ID FROM TARGET)";
@@ -7012,7 +7014,7 @@ test("データ準備の管理 SQL 画面は SELECT と確認済み更新 SQL �
     "CREATE TABLE REVIEW_QUEUE (ID NUMBER)",
     "UPDATE INVOICES SET STATUS = 'REVIEWED'; DELETE FROM REVIEW_QUEUE WHERE ID = 1",
   ]) {
-    await adminSql.getByRole("button", { name: "クリア" }).click();
+    await adminSql.getByRole("button", { name: "入力をクリア" }).click();
     await sqlInput.fill(managedSql);
     await expect(removedAdminHint).toHaveCount(0);
     await expect(adminSql.getByLabel("実行確認語")).toBeVisible();
@@ -7496,11 +7498,12 @@ test("AI 活用の 4 画面はナビ切替で入力を保持し、リセット�
   await expect(directSqlInput(page)).toHaveValue("SELECT CUSTOMER_NAME FROM INVOICES");
 
   // クリアは明示ボタンでのみ行われる(ナビ切替では消えない)。
-  await page.getByTestId("nl2sql-direct-sql").getByRole("button", { name: "クリア" }).click();
+  await page.getByTestId("nl2sql-direct-sql").getByRole("button", { name: "入力をクリア" }).click();
   await expect(directSqlInput(page)).toHaveValue("");
 
   await page.getByRole("link", { name: /SQL 生成/ }).first().click();
-  await page.getByRole("button", { name: "リセット" }).click();
+  await page.getByRole("button", { name: "新しい作業を開始", exact: true }).click();
+  await page.getByRole("alertdialog", { name: "未保存の入力を破棄しますか？" }).getByRole("button", { name: "新しい作業を開始" }).click();
   await expect(nl2sqlQuestionInput(page)).toHaveValue("");
 });
 
@@ -7841,6 +7844,8 @@ test("sql to question page invalidates stale results when inputs change", async 
   // 入力を変えると生成済み結果は無効化され、質問セクションは空状態へ戻る。
   await page.getByRole("tab", { name: "SQL入力・生成" }).click();
   await page.getByRole("combobox", { name: "業務プロファイル" }).selectOption("alternate");
+  await expect(sqlToQuestionInput(page)).toHaveValue("");
+  await sqlToQuestionInput(page).fill("SELECT TOTAL_AMOUNT FROM INVOICES");
   await page.getByRole("tab", { name: "質問候補" }).click();
   await expect(page.getByText("質問候補は未生成です")).toBeVisible();
 
@@ -9830,7 +9835,7 @@ test("JOIN WHERE and metadata read result branches replace their result areas wi
   await expect(page.getByTestId("comment-management-target-footer")).toContainText("選択 0 件");
   await page.getByRole("checkbox", { name: /INVOICES/ }).check();
   await expect(page.getByTestId("comment-management-target-footer")).toContainText("選択 1 件");
-  const commentFetchButton = page.getByRole("button", { name: "情報を取得" });
+  const commentFetchButton = page.getByRole("button", { name: "情報を取得", exact: true });
   await expectButtonBelowInput(page.getByTestId("comment-management-target-footer"), commentFetchButton);
   await commentFetchButton.click();
   const commentInputSkeleton = page.getByTestId("comment-management-input-detail-skeleton");
@@ -9869,7 +9874,7 @@ test("JOIN WHERE and metadata read result branches replace their result areas wi
 
   await page.goto("/annotation-management");
   await page.getByRole("checkbox", { name: /INVOICES/ }).check();
-  const annotationFetchButton = page.getByRole("button", { name: "情報を取得" });
+  const annotationFetchButton = page.getByRole("button", { name: "情報を取得", exact: true });
   await expectButtonBelowInput(page.getByTestId("annotation-management-target-footer"), annotationFetchButton);
   await annotationFetchButton.click();
   await expect(page.getByRole("tab", { name: "入力確認・SQL生成", exact: true })).toHaveAttribute("aria-selected", "true");
@@ -10062,7 +10067,7 @@ test("metadata management target lists load more tables and views before SQL gen
   await commentBulkActions.getByRole("button", { name: "表示中の選択をすべて解除" }).click();
   await expect(commentFooter).toContainText("選択 0 件");
   await page.getByRole("checkbox", { name: /PAGE_101_TABLE/ }).check();
-  await page.getByRole("button", { name: "情報を取得" }).click();
+  await page.getByRole("button", { name: "情報を取得", exact: true }).click();
   await expect(page.getByLabel("構造情報")).toHaveValue(/OBJECT: APP\.PAGE_101_TABLE/);
   await dismissToasts(page);
   await page.getByRole("button", { name: "SQL 生成" }).click();
@@ -10090,7 +10095,7 @@ test("metadata management target lists load more tables and views before SQL gen
   await annotationToolbar.getByRole("searchbox", { name: "検索" }).fill("V_PAGE_101_VIEW");
   await expect(annotationFooter).toContainText("1 / 1 件を表示");
   await page.getByRole("checkbox", { name: /V_PAGE_101_VIEW/ }).check();
-  await page.getByRole("button", { name: "情報を取得" }).click();
+  await page.getByRole("button", { name: "情報を取得", exact: true }).click();
   await expect(page.getByLabel("構造情報")).toHaveValue(/OBJECT: APP\.V_PAGE_101_VIEW/);
   await dismissToasts(page);
   await page.getByRole("button", { name: "SQL 生成" }).click();
@@ -10116,7 +10121,7 @@ test("metadata SQL regeneration resets the edited execution SQL", async ({ page 
 
   await page.goto("/comment-management");
   await page.getByRole("checkbox", { name: /INVOICES/ }).check();
-  await page.getByRole("button", { name: "情報を取得" }).click();
+  await page.getByRole("button", { name: "情報を取得", exact: true }).click();
   await expect(page.getByLabel("構造情報")).toHaveValue(/OBJECT: APP\.INVOICES/);
   await dismissToasts(page);
   const inputPanel = page.locator("#comment-management-panel-input");
@@ -10143,7 +10148,7 @@ test("コメント管理は画面遷移後も生成 SQL と実行結果を保持
   await page.goto("/comment-management");
   await expect(page.getByRole("heading", { name: "コメント管理" })).toBeVisible();
   await page.getByRole("checkbox", { name: /INVOICES/ }).check();
-  await page.getByRole("button", { name: "情報を取得" }).click();
+  await page.getByRole("button", { name: "情報を取得", exact: true }).click();
   await expect(page.getByLabel("構造情報")).toHaveValue(/OBJECT: APP\.INVOICES/);
   await dismissToasts(page);
   const inputPanel = page.locator("#comment-management-panel-input");
@@ -10947,6 +10952,8 @@ test("data management CSV upload hides unmatched columns when Oracle reports non
     },
   ]);
 
+  await expect(csvPanel.getByLabel("実行確認語")).toHaveValue("");
+  await csvPanel.getByLabel("実行確認語").fill("APP.INVOICES");
   await csvPanel.getByRole("button", { name: "アップロード実行" }).click();
 
   await expect(csvPanel.getByText(/一致列:\s*ID, NAME/)).toBeVisible();
@@ -11272,6 +11279,8 @@ test("sample data and data management run imported workflows", async ({ page }) 
     },
   ]);
   await expect(page.getByText("選択中: invoices.XLS")).toBeVisible();
+  await expect(csvConfirmationInput).toHaveValue("");
+  await csvConfirmationInput.fill("APP.PAYMENTS");
   await expect(csvUploadButton).toBeEnabled();
   await csvUploadButton.click();
   await expect(page.getByText("UNKNOWN_COLUMN", { exact: false }).first()).toBeVisible();
@@ -11650,7 +11659,7 @@ test("DB 構造再取得は旧30秒上限を超えても三つの管理画面で
     const processing = page.getByTestId(target.processing);
     await expect(processing).toBeVisible();
     await expect(processing).toContainText("DB 構造を再取得しています");
-    await expect(page.getByText("DB 構造再取得: 保存中 218/218", { exact: true })).toBeVisible();
+    await expect(page.getByText("DB 構造再取得: 保存中 218/218", { exact: true }).filter({ visible: true })).toBeVisible();
 
     await page.clock.fastForward(31_000);
     await expect(processing).toBeVisible();
@@ -11918,9 +11927,11 @@ test("data management avoids full catalog and tracks schema refresh jobs", async
 test("data management keeps loaded object rows when load more times out and retries in place", async ({ page }) => {
   await page.addInitScript(() => {
     const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
+    let shortenTimeouts = false;
+    window.addEventListener("test-enable-short-timeout", () => { shortenTimeouts = true; });
     Object.defineProperty(AbortSignal, "timeout", {
       configurable: true,
-      value: (delay: number) => nativeTimeout(delay === 60_000 ? 150 : delay),
+      value: (delay: number) => nativeTimeout(shortenTimeouts && delay === 60_000 ? 150 : delay),
     });
   });
   await mockNl2SqlApi(page);
@@ -11977,6 +11988,7 @@ test("data management keeps loaded object rows when load more times out and retr
 
   await page.goto("/data-management");
   await expect(page.getByRole("button", { name: "APP.INVOICES を選択" })).toBeVisible();
+  await page.evaluate(() => window.dispatchEvent(new Event("test-enable-short-timeout")));
   await page.getByTestId("data-preview-object-footer").getByRole("button", { name: "さらに読み込む" }).click();
   await expect(page.getByRole("button", { name: "APP.INVOICES を選択" })).toBeVisible();
   await expect(page.getByText(/追加読み込みが60秒以内に完了しませんでした/)).toBeVisible();
@@ -12218,6 +12230,8 @@ test("Excel/CSV取込はSheet不一致をエラーで止め旧結果を残さな
   );
 
   await importPanel.getByLabel("Sheet 名").fill("Shell1");
+  await expect(importPanel.getByLabel("実行確認語")).toHaveValue("");
+  await importPanel.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
   await importPanel.getByRole("button", { name: "取込を実行" }).click();
 
   const alert = importPanel.getByRole("alert").filter({ hasText: "Sheet が見つかりません" });
@@ -12831,7 +12845,7 @@ test("table and view management pages run guarded DDL and AI workflows", async (
   const createExecuteButton = createPanel.getByRole("button", { name: "SQL 実行" });
   const createClearButton = createPanel
     .getByTestId("execution-confirmation-field")
-    .getByRole("button", { name: "クリア", exact: true });
+    .getByRole("button", { name: "入力をクリア", exact: true });
   await expect(createClearButton).toBeEnabled();
   await expectButtonsSameHeight(createExecuteButton, createClearButton);
   await createClearButton.click();
@@ -12924,6 +12938,8 @@ test("table and view management pages run guarded DDL and AI workflows", async (
   // すなわち実行確認語 input の下に置く(CSV/Sample 取込パネルと統一)。
   expect(importExecuteButtonBox!.y).toBeGreaterThan(importConfirmationBox!.y);
   await expect(importPanel.getByRole("button", { name: "確認語に表名を入れる" })).toHaveCount(0);
+  await expect(importConfirmationInput).toHaveValue("");
+  await importConfirmationInput.fill("ADMIN_EXECUTE");
   await expect(importPanel.getByText("入力条件: ADMIN_EXECUTE")).toBeVisible();
   await expect(importPanel.getByText("確認済み", { exact: true })).toHaveCount(1);
   await expect(importExecuteButton).toBeEnabled();
@@ -12947,7 +12963,7 @@ test("table and view management pages run guarded DDL and AI workflows", async (
   await expect(page.getByRole("heading", { name: "コメント管理" })).toBeVisible();
   await expect(page.getByTestId("comment-management-steps")).toBeVisible();
   await page.getByRole("checkbox", { name: /INVOICES/ }).check();
-  await page.getByRole("button", { name: "情報を取得" }).click();
+  await page.getByRole("button", { name: "情報を取得", exact: true }).click();
   await expect(page.getByLabel("構造情報")).toHaveValue(/OBJECT: APP\.INVOICES/);
   await page.getByLabel("サンプル件数").fill("10");
   await dismissToasts(page);
@@ -12973,7 +12989,7 @@ test("table and view management pages run guarded DDL and AI workflows", async (
   await expect(page.getByRole("heading", { name: "アノテーション管理" })).toBeVisible();
   await expect(page.getByTestId("annotation-management-steps")).toBeVisible();
   await page.getByRole("checkbox", { name: /INVOICES/ }).check();
-  await page.getByRole("button", { name: "情報を取得" }).click();
+  await page.getByRole("button", { name: "情報を取得", exact: true }).click();
   await expect(page.getByLabel("構造情報")).toHaveValue(/OBJECT: APP\.INVOICES/);
   await dismissToasts(page);
   const inputPanel = page.locator("#annotation-management-panel-input");
@@ -13202,7 +13218,7 @@ test("annotation management explains ORA-11548 before Oracle execution", async (
 
   await page.goto("/annotation-management");
   await page.getByRole("checkbox", { name: /INVOICES/ }).check();
-  await page.getByRole("button", { name: "情報を取得" }).click();
+  await page.getByRole("button", { name: "情報を取得", exact: true }).click();
   await expect(page.getByLabel("構造情報")).toHaveValue(/OBJECT: APP\.INVOICES/);
   await dismissToasts(page);
   await page.getByRole("button", { name: "SQL 生成" }).click();
@@ -13239,12 +13255,108 @@ test("annotation management explains ORA-11548 before Oracle execution", async (
     .toBeVisible();
 });
 
+for (const scenario of [
+  {
+    pageId: "comment-management",
+    code: "DB_ADMIN_COMMENT_SQL_POLICY_VIOLATION",
+    message: "禁止された操作です。COMMENT ON TABLE/COLUMN/MATERIALIZED VIEW のみ実行できます。",
+    sql: "COMMENT ON VIEW APP.V_EMP_DEPT IS '社員と部署';",
+    exampleLabel: "テーブル・ビューのコメント",
+    exampleSql: 'COMMENT ON TABLE "EXAMPLE_SCHEMA"."EXAMPLE_TABLE_OR_VIEW"\n  IS \'対象の説明\';',
+    count: 3,
+  },
+  {
+    pageId: "annotation-management",
+    code: "DB_ADMIN_ANNOTATION_SQL_POLICY_VIOLATION",
+    message: "この文はアノテーション管理で実行できません。",
+    sql: "ALTER TABLE APP.INVOICES ADD X NUMBER;",
+    exampleLabel: "テーブルのアノテーション",
+    exampleSql: 'ALTER TABLE "EXAMPLE_SCHEMA"."EXAMPLE_TABLE"\n  ANNOTATIONS (ADD IF NOT EXISTS UI_Display \'対象の説明\');',
+    count: 2,
+  },
+]) {
+  test(`${scenario.pageId} の拒否理由とコピー可能な SQL 例で具体的な復旧方法を示す`, async ({ page, context }, testInfo) => {
+    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+    await mockNl2SqlApi(page);
+    let executions = 0;
+    await page.route("**/api/nl2sql/db-admin/statements", (route) => {
+      executions += 1;
+      return fulfillJson(route, {
+        executed: false,
+        committed: false,
+        runtime: "oracle",
+        statements: [{ index: 1, status: "blocked", statement_type: "UNKNOWN", sql: scenario.sql, error_message: scenario.message, error_code: scenario.code }],
+        warnings: [],
+        timing,
+      });
+    });
+    await page.goto(`/${scenario.pageId}`);
+    await page.getByRole("tab", { name: "SQL実行", exact: true }).click();
+    const panel = page.locator(`#${scenario.pageId}-panel-execute`);
+    const sqlInput = panel.getByLabel("SQL(セミコロン区切りで複数文を入力可能)");
+    await sqlInput.fill(scenario.sql);
+    await panel.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
+    await panel.getByRole("button", { name: "SQL 実行", exact: true }).click();
+    const examples = panel.getByRole("region", { name: "具体的な対応例" });
+    await expect(examples).toBeVisible();
+    await expect(examples.locator("pre")).toHaveCount(scenario.count);
+    await expect(examples).toContainText("以下は構文例です。");
+    await expect(examples).toContainText("実際の内容に置き換え");
+    if (scenario.pageId === "comment-management") {
+      await expect(panel).toContainText("ビューのコメントも COMMENT ON TABLE を使用します。");
+      await expect(panel).not.toContainText("SQL 実行または Oracle 側の処理でエラーが発生しました。");
+    }
+    const copyButton = examples.getByRole("button", { name: `${scenario.exampleLabel}の SQL 例をコピー`, exact: true });
+    await copyButton.focus();
+    await copyButton.press("Enter");
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(scenario.exampleSql);
+    await expect(page.getByRole("region", { name: "通知" })).toContainText("コピーしました");
+    await dismissToasts(page);
+    await copyButton.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath(`${scenario.pageId}-sql-recovery.png`) });
+    await expect(sqlInput).toHaveValue(scenario.sql);
+    expect(executions).toBe(1);
+    await expectNoHorizontalScroll(page);
+
+    await page.evaluate(() => {
+      Object.defineProperty(navigator.clipboard, "writeText", {
+        configurable: true,
+        value: () => Promise.reject(new Error("clipboard unavailable")),
+      });
+    });
+    await copyButton.click();
+    await expect(page.getByRole("region", { name: "通知" })).toContainText("コピーできませんでした");
+    await expect(copyButton).toBeEnabled();
+    await expect(sqlInput).toHaveValue(scenario.sql);
+    expect(executions).toBe(1);
+  });
+}
+
+test("未知の実行エラーでは SQL の修正例を推測表示しない", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  await page.route("**/api/nl2sql/db-admin/statements", (route) => fulfillJson(route, {
+    executed: false,
+    runtime: "oracle",
+    statements: [{ index: 1, status: "blocked", statement_type: "UNKNOWN", sql: "SELECT 1 FROM DUAL", error_message: "禁止された操作です。COMMENT ON TABLE/COLUMN/MATERIALIZED VIEW のみ実行できます。", error_code: "UNRECOGNIZED_ERROR" }],
+    warnings: [],
+    timing,
+  }));
+  await page.goto("/comment-management");
+  await page.getByRole("tab", { name: "SQL実行", exact: true }).click();
+  const panel = page.locator("#comment-management-panel-execute");
+  await panel.getByLabel("SQL(セミコロン区切りで複数文を入力可能)").fill("SELECT 1 FROM DUAL");
+  await panel.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
+  await panel.getByRole("button", { name: "SQL 実行", exact: true }).click();
+  await expect(panel.getByRole("alert")).toBeVisible();
+  await expect(panel.getByRole("region", { name: "具体的な対応例" })).toHaveCount(0);
+});
+
 test("metadata sample limit zero omits samples and reports retrieval errors", async ({ page }) => {
   const api = await mockNl2SqlApi(page);
 
   await page.goto("/comment-management");
   await page.getByRole("checkbox", { name: /INVOICES/ }).check();
-  await page.getByRole("button", { name: "情報を取得" }).click();
+  await page.getByRole("button", { name: "情報を取得", exact: true }).click();
   await page.getByLabel("サンプル件数").fill("0");
   await dismissToasts(page);
   const commentInputPanel = page.locator("#comment-management-panel-input");
@@ -13263,7 +13375,7 @@ test("metadata sample limit zero omits samples and reports retrieval errors", as
   );
   await page.goto("/annotation-management");
   await page.getByRole("checkbox", { name: /INVOICES/ }).check();
-  await page.getByRole("button", { name: "情報を取得" }).click();
+  await page.getByRole("button", { name: "情報を取得", exact: true }).click();
   await expect(page.getByLabel("構造情報")).toHaveValue(/OBJECT: APP\.INVOICES/);
   await dismissToasts(page);
   const annotationInputPanel = page.locator("#annotation-management-panel-input");
@@ -13655,4 +13767,139 @@ test("全 NL2SQL ルートのページヘッダーは 1440px / 375px で横方�
     ).toBeLessThanOrEqual(1);
     await expectNoHorizontalScroll(page);
   }
+});
+
+// Issue #298: 入力・閲覧位置と実行意思を別々に復元する。
+test("workspace: 管理 SQL の草稿を往復と再読込で復元し確認と実行結果を区別する", async ({ page }, testInfo) => {
+  await mockNl2SqlApi(page);
+  let executions = 0;
+  await page.route("**/api/nl2sql/db-admin/execute", (route) => {
+    executions += 1;
+    return fulfillJson(route, { executed: true, runtime: "oracle", committed: true, statements: [], warnings: [], timing });
+  });
+  await page.goto("/admin-sql");
+  const input = adminSqlInput(page);
+  const panel = page.getByTestId("nl2sql-admin-sql");
+  const confirmation = panel.getByLabel("実行確認語");
+  const sql = "UPDATE INVOICES SET TOTAL_AMOUNT = 100 WHERE INVOICE_ID = 1";
+  await input.fill(sql);
+  await confirmation.fill("ADMIN_EXECUTE");
+  await input.fill(sql + ";");
+  await expect(confirmation).toHaveValue("");
+  await confirmation.fill("ADMIN_EXECUTE");
+  await panel.getByRole("button", { name: "SQL 実行", exact: true }).click();
+  await expect.poll(() => executions).toBe(1);
+  await expect(panel.getByTestId("admin-sql-execution-activity")).toContainText("実行日時:");
+  await page.locator('a[href="/table-management"]').first().click();
+  await page.locator('a[href="/admin-sql"]').first().click();
+  await expect(input).toHaveValue(sql + ";");
+  await expect(confirmation).toHaveValue("");
+  await expect(panel.getByTestId("admin-sql-execution-activity")).toContainText("前回の実行結果");
+  await input.fill(sql + " -- 編集");
+  await expect(panel).toContainText("現在の入力は未実行です。");
+  await panel.getByTestId("admin-sql-execution-activity").scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("workspace-previous-result.png") });
+  await page.reload();
+  await expect(input).toHaveValue(sql + " -- 編集");
+  await expect(confirmation).toHaveValue("");
+  await expect(panel.getByTestId("admin-sql-execution-activity")).toHaveCount(0);
+  expect(executions).toBe(1);
+  const stored = await page.evaluate(() => Object.entries(sessionStorage).filter(([key]) => key.startsWith("production-ready-nl2sql.draft.v1:")));
+  expect(JSON.stringify(stored)).not.toContain("ADMIN_EXECUTE");
+  expect(JSON.stringify(stored)).not.toContain('"committed"');
+  await expectNoHorizontalScroll(page);
+});
+
+test("workspace: コメントの手編集を保持して対象の失効を再検証し自動実行しない", async ({ page }, testInfo) => {
+  const api = await mockNl2SqlApi(page);
+  await page.goto("/comment-management");
+  await page.getByRole("checkbox", { name: /INVOICES/ }).check();
+  await page.getByRole("button", { name: "情報を取得", exact: true }).click();
+  await expect(page.getByLabel("構造情報")).toHaveValue(/INVOICES/);
+  await dismissToasts(page);
+  await page.getByRole("button", { name: "SQL 生成", exact: true }).click();
+  const panel = page.locator("#comment-management-panel-execute");
+  const sql = panel.getByLabel("SQL(セミコロン区切りで複数文を入力可能)");
+  await expect(sql).toHaveValue(/COMMENT ON/);
+  await sql.fill("COMMENT ON TABLE APP.INVOICES IS '作業中の説明';");
+  await panel.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
+  await page.locator('a[href="/table-management"]').first().click();
+  await page.route("**/api/nl2sql/db-admin/tables/INVOICES**", (route) => route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ detail: "対象が見つかりません。最新の対象を確認してください。" }) }));
+  await page.locator('a[href="/comment-management"]').first().click();
+  await expect(sql).toHaveValue("COMMENT ON TABLE APP.INVOICES IS '作業中の説明';");
+  await expect(page.getByText(/対象が見つかりません。最新の対象を確認してください。/).first()).toBeVisible();
+  await expect(panel.getByLabel("実行確認語")).toHaveValue("");
+  await panel.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
+  await expect(panel.getByRole("button", { name: "SQL 実行", exact: true })).toBeDisabled();
+  expect(api.statementsPayload).toBeNull();
+  await page.screenshot({ path: testInfo.outputPath("workspace-target-unavailable.png") });
+  await page.reload();
+  await expect(sql).toHaveValue("COMMENT ON TABLE APP.INVOICES IS '作業中の説明';");
+  await expect(panel.getByLabel("実行確認語")).toHaveValue("");
+  await expectNoHorizontalScroll(page);
+});
+
+test("workspace: 一覧の検索条件は戻る・進む・再読込でも保持する", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  await page.goto("/table-management");
+  const search = page.getByRole("searchbox", { name: "検索", exact: true });
+  await search.fill("INVOICES");
+  await page.getByTestId("fixed-split-pane-table-management-list-left").getByLabel("所有者", { exact: true }).fill("APP");
+  await page.locator('a[href="/view-management"]').first().click();
+  await page.goBack();
+  await expect(search).toHaveValue("INVOICES");
+  await expect(page.getByTestId("fixed-split-pane-table-management-list-left").getByLabel("所有者", { exact: true })).toHaveValue("APP");
+  await page.goForward();
+  await page.locator('a[href="/table-management"]').first().click();
+  await expect(search).toHaveValue("INVOICES");
+  await page.reload();
+  await expect(search).toHaveValue("INVOICES");
+  await expect(page.getByTestId("fixed-split-pane-table-management-list-left").getByLabel("所有者", { exact: true })).toHaveValue("APP");
+  await expectNoHorizontalScroll(page);
+});
+
+test("workspace: DB context とアカウントを跨いで SQL 草稿と確認を流用しない", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  let database = "database-a";
+  let user = systemAdminMe;
+  await page.route("**/api/ready/database", (route) => fulfillJson(route, { status: "ok", check: "ok", detail: null, context_id: database }));
+  await page.route("**/api/auth/me", (route) => fulfillJson(route, user));
+  await page.goto("/admin-sql");
+  await adminSqlInput(page).fill("DELETE FROM APP.INVOICES WHERE INVOICE_ID = 1");
+  database = "database-b";
+  await page.reload();
+  await expect(adminSqlInput(page)).toHaveValue("");
+  await adminSqlInput(page).fill("SELECT 2 FROM DUAL");
+  database = "database-a";
+  await page.reload();
+  await expect(adminSqlInput(page)).toHaveValue("DELETE FROM APP.INVOICES WHERE INVOICE_ID = 1");
+  await expect(page.getByTestId("nl2sql-admin-sql").getByLabel("実行確認語")).toHaveValue("");
+  user = { ...systemAdminMe, user_uuid: "other-user", login_user_id: "OTHER" };
+  await page.reload();
+  await expect(adminSqlInput(page)).toHaveValue("");
+  await adminSqlInput(page).fill("SELECT 3 FROM DUAL");
+  await page.evaluate(() => window.dispatchEvent(new Event("app-auth-unauthorized")));
+  await expect(page).toHaveURL(/\/login/);
+  expect(await page.evaluate(() => Object.keys(sessionStorage).filter((key) => key.startsWith("production-ready-nl2sql.draft.v1:")))).toEqual([]);
+});
+
+test("workspace: 一時保存不可を明示し再読込で入力を失う前に確認する", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  await page.addInitScript(() => {
+    const setItem = Storage.prototype.setItem;
+    Storage.prototype.setItem = function (key: string, value: string) {
+      if (key.startsWith("production-ready-nl2sql.draft.v1:")) throw new DOMException("quota", "QuotaExceededError");
+      setItem.call(this, key, value);
+    };
+  });
+  await page.goto("/admin-sql");
+  await adminSqlInput(page).fill("SELECT 1 FROM DUAL");
+  await expect(page.getByText(/このタブへの下書き保存ができません/)).toBeVisible();
+  const dialog = page.waitForEvent("dialog");
+  await page.evaluate(() => { setTimeout(() => window.location.reload(), 0); });
+  const prompt = await dialog;
+  expect(prompt.type()).toBe("beforeunload");
+  await prompt.dismiss();
+
+  await expect(adminSqlInput(page)).toHaveValue("SELECT 1 FROM DUAL");
 });

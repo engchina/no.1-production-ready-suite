@@ -1,3 +1,5 @@
+import { useConfirm } from "@/components/ui/confirm-dialog";
+import { useWorkspaceState, useWorkspaceRevalidation, useWorkspaceDraftWriter, WorkspaceResultNotice } from "@/components/WorkspaceState";
 import { Button } from "@/components/ui/button";
 import {
   useCallback,
@@ -163,15 +165,19 @@ export function Nl2SqlWorkbench() {
 }
 
 function ExecutableNl2SqlWorkbench() {
+  const confirmDiscard = useConfirm();
+  const writeDraft = useWorkspaceDraftWriter();
   const { hasPermission } = useAuth();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [history, setHistory] = useState<HistoryItem[]>([]);
-  const [engine, setEngine] = useState<Nl2SqlEngine>("select_ai");
-  const [profileId, setProfileId] = useState("");
-  const [question, setQuestion] = useState("");
+  useWorkspaceRevalidation();
+  const [engine, setEngine] = useWorkspaceState<Nl2SqlEngine>("engine", "select_ai");
+  const [profileId, setProfileId] = useWorkspaceState("profileId", "");
+  const [question, setQuestion] = useWorkspaceState(`question:${profileId}`, "");
   const [selection, setSelection] = useState<SchemaSelection>(() => emptySelection());
   const [result, setResult] = useState<Nl2SqlResult | null>(null);
+  useEffect(() => { setResult(null); setSelection(emptySelection()); }, [profileId]);
   const [recommendation, setRecommendation] = useState<ProfileRecommendationData | null>(null);
   const [similarHistory, setSimilarHistory] = useState<SimilarHistoryItem[]>([]);
   const [similarHistoryLoading, setSimilarHistoryLoading] = useState(false);
@@ -179,18 +185,18 @@ function ExecutableNl2SqlWorkbench() {
   const [similarHistoryPanelVisible, setSimilarHistoryPanelVisible] = useState(false);
   const [similarHistoryUsedForGeneration, setSimilarHistoryUsedForGeneration] = useState(true);
   const [rewriteData, setRewriteData] = useState<RewriteData | null>(null);
-  const [rewriteUseGlossary, setRewriteUseGlossary] = useState(false);
-  const [useOntologyContext, setUseOntologyContext] = useState(true);
-  const [includeInterpretation, setIncludeInterpretation] = useState(true);
+  const [rewriteUseGlossary, setRewriteUseGlossary] = useWorkspaceState("rewriteUseGlossary", false);
+  const [useOntologyContext, setUseOntologyContext] = useWorkspaceState("useOntologyContext", true);
+  const [includeInterpretation, setIncludeInterpretation] = useWorkspaceState("includeInterpretation", true);
   // Show Prompt は Select AI への追加 round-trip を伴うため既定 OFF(必要な人だけ ON にする)。
-  const [includeShowPrompt, setIncludeShowPrompt] = useState(false);
-  const [executionOptionsOpen, setExecutionOptionsOpen] = useState(false);
-  const [selectAiAdvancedOpen, setSelectAiAdvancedOpen] = useState(false);
-  const [selectAiRoleAdvancedOpen, setSelectAiRoleAdvancedOpen] = useState(false);
+  const [includeShowPrompt, setIncludeShowPrompt] = useWorkspaceState("includeShowPrompt", false);
+  const [executionOptionsOpen, setExecutionOptionsOpen] = useWorkspaceState("executionOptionsOpen", false);
+  const [selectAiAdvancedOpen, setSelectAiAdvancedOpen] = useWorkspaceState("selectAiAdvancedOpen", false);
+  const [selectAiRoleAdvancedOpen, setSelectAiRoleAdvancedOpen] = useWorkspaceState("selectAiRoleAdvancedOpen", false);
   const [similarHistoryOpen, setSimilarHistoryOpen] = useState(false);
-  const [selectAiRoleOverride, setSelectAiRoleOverride] = useState("");
-  const [selectAiInstructionsOverride, setSelectAiInstructionsOverride] = useState("");
-  const [schemaSearch, setSchemaSearch] = useState("");
+  const [selectAiRoleOverride, setSelectAiRoleOverride] = useWorkspaceState(`selectAiRoleOverride:${profileId}`, "");
+  const [selectAiInstructionsOverride, setSelectAiInstructionsOverride] = useWorkspaceState(`selectAiInstructionsOverride:${profileId}`, "");
+  const [schemaSearch, setSchemaSearch] = useWorkspaceState("schemaSearch", "");
   const [schemaDetails, setSchemaDetails] = useState<Record<string, SchemaObjectDetail>>({});
   const [submitting, setSubmitting] = useState(false);
   const [pageError, setPageError] = useState<PageError>(null);
@@ -526,7 +532,10 @@ function ExecutableNl2SqlWorkbench() {
 
   useEffect(() => {
     const prefill = prefillFromSearchParams(searchParams);
-    if (prefill.question) setQuestion(prefill.question);
+    if (prefill.question) {
+      if (prefill.profileId && prefill.profileId !== profileId) writeDraft(`question:${prefill.profileId}`, prefill.question);
+      else setQuestion(prefill.question);
+    }
     if (prefill.engine) setEngine(prefill.engine);
     if (prefill.profileId) setProfileId(prefill.profileId);
   }, [searchParams]);
@@ -534,7 +543,7 @@ function ExecutableNl2SqlWorkbench() {
   useEffect(() => {
     if (profilesQuery.isPending) return;
     if (noProfiles) {
-      if (profileId) setProfileId("");
+
       setSelection(emptySelection());
       setRecommendation(null);
       return;
@@ -551,7 +560,7 @@ function ExecutableNl2SqlWorkbench() {
     ) {
       return;
     }
-    setProfileId(profiles[0]?.id ?? "");
+    // 選択済み Profile の失効はエラーとして表示し、別 Profile へ黙って切り替えない。
     setSelection(emptySelection());
     setRecommendation(null);
   }, [
@@ -722,6 +731,7 @@ function ExecutableNl2SqlWorkbench() {
         profileRecommendationSignature(trimmed, recommendation.recommended_profile_id)
       );
     }
+    writeDraft(`question:${recommendation.recommended_profile_id}`, question);
     setProfileId(recommendation.recommended_profile_id);
     setSelection(emptySelection());
     setActionError("");
@@ -772,6 +782,7 @@ function ExecutableNl2SqlWorkbench() {
       suppressedRecommendationSignaturesRef.current.add(
         profileRecommendationSignature(trimmed, data.recommended_profile_id)
       );
+      writeDraft(`question:${data.recommended_profile_id}`, question);
       setProfileId(data.recommended_profile_id);
       setSelection(emptySelection());
       setActionError("");
@@ -1508,7 +1519,8 @@ function ExecutableNl2SqlWorkbench() {
                       variant="secondary"
                       size="lg"
                       disabled={active}
-                      onClick={() => {
+                      onClick={async () => {
+                        if ((question.trim() || selectAiRoleOverride || selectAiInstructionsOverride) && !await confirmDiscard({ title: t("workspace.discardTitle"), description: t("workspace.discardDescription"), confirmLabel: t("workspace.newWork"), tone: "warning" })) return;
                         setSelection(emptySelection());
                         setQuestion("");
                         setResult(null);
@@ -1530,7 +1542,7 @@ function ExecutableNl2SqlWorkbench() {
                       }}
                     >
                       <RotateCcw size={16} aria-hidden="true" />
-                      <span>{t("nl2sql.action.reset")}</span>
+                      <span>{t("workspace.newWork")}</span>
                     </Button>
                   </div>
 
@@ -1584,6 +1596,7 @@ function ExecutableNl2SqlWorkbench() {
           cancelRequesting={cancelRequesting}
         />
 
+        <WorkspaceResultNotice result={result} inputSignature={JSON.stringify([profileId, engine, question])} finishedAt={result?.timing?.finished_at} />
         <Nl2SqlResultTable results={result?.results ?? null} />
         <SelectAiFeedbackAddPanel
           result={result}

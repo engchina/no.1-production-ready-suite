@@ -36,23 +36,23 @@ test("execution options default to showing interpretation and show prompt artifa
   // 用語・同義語は既定 off(明示 ON のときだけ質問を書き換える)。
   assert.match(
     workbenchSource,
-    /const \[rewriteUseGlossary, setRewriteUseGlossary\] = useState\(false\);/
+    /const \[rewriteUseGlossary, setRewriteUseGlossary\] = useWorkspaceState\("rewriteUseGlossary", false\);/
   );
   assert.match(
     workbenchSource,
-    /const \[useOntologyContext, setUseOntologyContext\] = useState\(true\);/
+    /const \[useOntologyContext, setUseOntologyContext\] = useWorkspaceState\("useOntologyContext", true\);/
   );
   assert.match(
     workbenchSource,
-    /const \[includeInterpretation, setIncludeInterpretation\] = useState\(true\);/
+    /const \[includeInterpretation, setIncludeInterpretation\] = useWorkspaceState\("includeInterpretation", true\);/
   );
   assert.match(
     workbenchSource,
-    /const \[includeShowPrompt, setIncludeShowPrompt\] = useState\(false\);/
+    /const \[includeShowPrompt, setIncludeShowPrompt\] = useWorkspaceState\("includeShowPrompt", false\);/
   );
   assert.match(
     workbenchSource,
-    /const \[executionOptionsOpen, setExecutionOptionsOpen\] = useState\(false\);/
+    /const \[executionOptionsOpen, setExecutionOptionsOpen\] = useWorkspaceState\("executionOptionsOpen", false\);/
   );
   assert.match(workbenchSource, /use_ontology_context: useOntologyContext/);
   assert.match(workbenchSource, /use_glossary: rewriteUseGlossary/);

@@ -11,6 +11,8 @@ import {
 
 import { MessageText, toneIcon, type FeedbackTone } from "@engchina/production-ready-ui";
 
+import { useLocation } from "react-router-dom";
+
 import { Button } from "@/components/ui/button";
 import { DialogOverlayPortal } from "@/components/ui/dialog-overlay";
 import { t } from "@/lib/i18n";
@@ -61,6 +63,7 @@ export function ConfirmProvider({
   labels?: ConfirmDefaultLabels;
 }) {
   const [state, setState] = useState<DialogState | null>(null);
+  const location = useLocation();
 
   const confirm = useCallback<ConfirmFn>((options) => {
     return new Promise<boolean>((resolve) => {
@@ -82,6 +85,8 @@ export function ConfirmProvider({
       return null;
     });
   }, []);
+
+  useEffect(() => { settle(false); }, [location.key, settle]);
 
   return (
     <ConfirmContext.Provider value={confirm}>
