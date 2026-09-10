@@ -1,3 +1,4 @@
+import { SortHeader } from "@/components/SortHeader";
 import { Children, type KeyboardEvent, type ReactNode } from "react";
 import {
   ArrowDownUp,
@@ -597,17 +598,14 @@ function PickerSortHeader({
   return (
     <span role="columnheader" aria-sort={ariaSort}>
       {sort && onSortChange ? (
-        <Button
-          variant="ghost"
-          size="sm"
-          data-button-layout="sort"
+        <SortHeader
           type="button"
           aria-label={t("objectSelector.sort.button", { label, direction })}
           onClick={() => onSortChange(sortKey)}
         >
           <span>{label}</span>
           <ArrowDownUp size={13} className={active ? "text-primary" : "text-muted"} aria-hidden="true" />
-        </Button>
+        </SortHeader>
       ) : (
         label
       )}
@@ -1015,17 +1013,14 @@ function SortButton({
 }) {
   const active = sort.key === sortKey;
   return (
-    <Button
-      variant="ghost"
-      size="sm"
-      data-button-layout="sort"
+    <SortHeader
       type="button"
       aria-sort={active ? (sort.direction === "asc" ? "ascending" : "descending") : "none"}
       onClick={() => onToggle(sortKey)}
     >
       <span>{label}</span>
       <ArrowDownUp size={13} className={active ? "text-primary" : "text-muted"} aria-hidden="true" />
-    </Button>
+    </SortHeader>
   );
 }
 

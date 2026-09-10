@@ -1,9 +1,19 @@
 import { expect, type Locator } from "@playwright/test";
 
+export async function expectPlainSortHeader(header: Locator) {
+  await expect(header).not.toHaveClass(/nl2sql-button/);
+  await expect(header).toHaveCSS("border-width", "0px");
+  await expect(header).toHaveCSS("border-radius", "0px");
+  await expect(header).toHaveCSS("box-shadow", "none");
+  await expect(header).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+  await expect(header).toHaveCSS("outline-style", "none");
+}
+
 export async function expectCompactSortHeaders(container: Locator) {
-  const buttons = container.locator('[data-button-layout="sort"]');
+  const buttons = container.locator('[data-sort-header]');
   expect(await buttons.count()).toBeGreaterThan(0);
   for (const button of await buttons.all()) {
+    await expectPlainSortHeader(button);
     const metrics = await button.evaluate((node) => ({
       rootFontSize: Number.parseFloat(getComputedStyle(document.documentElement).fontSize),
       touch: matchMedia("(max-width: 639px), (pointer: coarse)").matches,

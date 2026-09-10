@@ -1,0 +1,40 @@
+.nl2sql-sort-header {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 4px;
+  height: 32px;
+  min-width: 32px;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  appearance: none;
+  color: var(--foreground);
+  font-family: inherit;
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1rem;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.nl2sql-sort-header > svg { width: 16px; height: 16px; flex-shrink: 0; }
+.nl2sql-sort-header:focus { outline: none; }
+/* キーボード位置は枠ではなく列名の下線で示す。 */
+.nl2sql-sort-header:focus-visible > span {
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
+}
+@media (hover: hover) {
+  .nl2sql-sort-header:hover { color: var(--primary); }
+}
+.nl2sql-sort-header:disabled { color: var(--disabled); cursor: not-allowed; }
+th:has(> .nl2sql-sort-header),
+th:has(> span > .nl2sql-sort-header) { padding-block: 1px; }
+@media (max-width: 639px), (pointer: coarse) {
+  .nl2sql-sort-header { height: 44px; min-width: 44px; }
+}

@@ -409,7 +409,7 @@ test("プロファイルの並べ替え列名は小字号を維持してキー�
   const grid = page.getByTestId("profile-management-grid");
   await expect(grid).toBeVisible();
   await expectCompactSortHeaders(grid);
-  const nameSort = grid.locator('[data-button-layout="sort"]').first();
+  const nameSort = grid.locator('[data-sort-header]').first();
   await nameSort.focus();
   await expect(nameSort).toBeFocused();
   const before = await nameSort.getAttribute("aria-sort");

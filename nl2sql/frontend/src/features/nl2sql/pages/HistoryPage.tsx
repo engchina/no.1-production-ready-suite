@@ -1,3 +1,4 @@
+import { SortHeader } from "@/components/SortHeader";
 import { useWorkspaceState } from "@/components/WorkspaceState";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import {
@@ -145,10 +146,7 @@ function HistorySortButton({
     : t("history.sort.inactive");
   const SortIcon = active ? (sort.direction === "asc" ? ArrowUp : ArrowDown) : ArrowDownUp;
   return (
-    <Button
-      variant="ghost"
-      size="sm"
-      data-button-layout="sort"
+    <SortHeader
       type="button"
       aria-label={t("history.sort.button", { label, direction })}
       aria-pressed={active}
@@ -156,7 +154,7 @@ function HistorySortButton({
     >
       <span>{label}</span>
       <SortIcon size={13} aria-hidden="true" />
-    </Button>
+    </SortHeader>
   );
 }
 
