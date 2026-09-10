@@ -41,6 +41,21 @@ def local_debug_principal() -> Principal:
     )
 
 
+def permission_route_path(request: Request) -> str:
+    """多重 include の prefix を含む、ルーターが照合済みの template を使用する。"""
+    # FastAPI の遅延 include では scope['route'] は元の APIRoute のまま。
+    # OpenAPI と同じ完全な path は effective route context に保存される。
+    fastapi_scope = request.scope.get("fastapi")
+    effective = (
+        fastapi_scope.get("effective_route_context") if isinstance(fastapi_scope, dict) else None
+    )
+    path = getattr(effective, "path", None)
+    if not isinstance(path, str):
+        route = request.scope.get("route")
+        path = str(getattr(route, "path", request.url.path))
+    return path.removeprefix("/api")
+
+
 async def authorize_api_request(request: Request) -> AsyncIterator[None]:
     settings = get_settings()
     if settings.local_debug_enabled:
@@ -58,8 +73,7 @@ async def authorize_api_request(request: Request) -> AsyncIterator[None]:
     if not settings.app_auth_enabled:
         yield
         return
-    route = request.scope.get("route")
-    route_path = str(getattr(route, "path", request.url.path)).removeprefix("/api")
+    route_path = permission_route_path(request)
     if route_path in PUBLIC_API_PATHS:
         yield
         return

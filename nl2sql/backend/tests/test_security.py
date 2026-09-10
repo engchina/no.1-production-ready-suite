@@ -4743,3 +4743,68 @@ def test_history_api_scopes_items_to_actor_except_system_admin(
         asyncio.run(exercise())
     finally:
         reset_security_service()
+
+
+@pytest.mark.parametrize("actor_kind", ["system_admin", "data_operator", "denied"])
+def test_nested_synthetic_routes_use_authenticated_effective_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, actor_kind: str
+) -> None:
+    """実 app の login→多重 include router→RBAC を通し、principal 注入で迂回しない。"""
+    from app.features.nl2sql import synthetic_router
+    from app.features.nl2sql.service import nl2sql_service
+    from app.features.nl2sql.synthetic_service import SyntheticService
+    from app.features.nl2sql.synthetic_store import SyntheticStore
+
+    _patch_app_admin_env(monkeypatch, tmp_path)
+    security = _configure_memory_api_auth(monkeypatch)
+    synthetic = SyntheticService(get_settings(), store=SyntheticStore())
+    monkeypatch.setattr(synthetic_router, "get_synthetic_service", lambda: synthetic)
+    monkeypatch.setattr(nl2sql_service, "ensure_persistence_available", lambda: None)
+    login_id, password = "system_admin", "AppAdminPass123"
+    if actor_kind != "system_admin":
+        admin, _, _ = security.login(login_id, password)
+        role = security.create_role(
+            role_code="SYNTHETIC_READER",
+            display_name="生成状態参照",
+            description="",
+            permissions=(
+                {"menu.data_management"} if actor_kind == "data_operator" else {"menu.query"}
+            ),
+            entitlements=[],
+            actor=admin,
+        )
+        login_id, password = "synthetic-reader", "SyntheticReaderPass!123"
+        _create_active_user(
+            security,
+            admin,
+            login_user_id=login_id,
+            display_name="生成状態参照",
+            role_ids=[role.role_id],
+            password=password,
+        )
+
+    async def exercise() -> None:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            current, csrf = await _login_api(client, login_id, password)
+            assert (await client.get("/api/auth/me")).status_code == 200
+            if actor_kind == "system_admin":
+                assert current["is_system_admin"] is True
+            response = await client.get("/api/nl2sql/synthetic-data/runs")
+            assert response.status_code == (403 if actor_kind == "denied" else 200), response.text
+            if actor_kind != "denied":
+                assert response.json()["data"] == []
+            # 有効な role でも確認語の検証は省略しない。未認可は domain mutation 前に拒否。
+            response = await client.post(
+                "/api/nl2sql/synthetic-data/runs",
+                headers={"X-CSRF-Token": csrf},
+                json={
+                    "table_name": "APP.T",
+                    "profile_name": "P",
+                    "idempotency_key": "nested-route-key-001",
+                },
+            )
+            assert response.status_code == (403 if actor_kind == "denied" else 400), response.text
+
+    asyncio.run(exercise())
