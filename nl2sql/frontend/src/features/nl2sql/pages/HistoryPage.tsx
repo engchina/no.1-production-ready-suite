@@ -259,7 +259,7 @@ function HistoryGrid({
             data-testid="history-list-surface"
           >
             <div
-              className="flex flex-wrap items-center gap-1 border-b border-border bg-background px-2 py-1.5"
+              className="flex flex-wrap items-center gap-1 border-b border-border bg-background px-2 py-1.5 text-xs font-semibold"
               role="group"
               aria-label={t("history.sort.label")}
             >
