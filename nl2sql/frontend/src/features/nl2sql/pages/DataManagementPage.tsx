@@ -2134,7 +2134,7 @@ function SyntheticWorkspace({
           <Button
             type="button"
             variant="secondary"
-            size="sm"
+            size="lg"
             className="w-full sm:w-auto"
             loading={loading === "tables"}
             disabled={!syntheticProfileName || dbProfileRefreshRequired || dbProfileRefreshing}

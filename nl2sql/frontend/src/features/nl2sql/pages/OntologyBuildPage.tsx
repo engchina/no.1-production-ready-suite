@@ -290,7 +290,7 @@ export function OntologyBuildPage() {
                   <Button
                     type="button"
                     variant="primary"
-                    size="sm"
+                    size="lg"
                     className="w-full sm:w-auto"
                     loading={workspaceButtonLoading}
                     disabled={!selectedProfileId || profileDetailQuery.isLoading}

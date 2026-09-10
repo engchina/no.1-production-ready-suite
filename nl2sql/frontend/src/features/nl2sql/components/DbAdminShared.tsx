@@ -977,7 +977,7 @@ export function StatementRunnerCard({
     <Button
       type="button"
       variant="danger"
-      size="sm"
+      size="lg"
       className="w-full sm:w-auto"
       loading={loading}
       disabled={!canRun}
@@ -1002,6 +1002,7 @@ export function StatementRunnerCard({
           <ClearActionButton
             label={t("dbAdmin.runner.clear")}
             matchButtonHeight
+            size="lg"
             className="w-full sm:w-auto"
             disabled={!canClearRunner || loading}
             onClick={clearRunner}
