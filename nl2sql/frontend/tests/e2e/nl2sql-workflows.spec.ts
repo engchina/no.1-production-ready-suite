@@ -14488,6 +14488,32 @@ test("自動判定中はクエリの競合操作を停止し、失敗後に再�
   await expect(page.getByRole("button", { name: "プロファイルを自動判定", exact: true })).toBeEnabled();
 });
 
+test("分類結果は入力変更時に前回結果を明示し再予測失敗時に残さない", async ({ page }, testInfo) => {
+  await mockNl2SqlApi(page);
+  let fail = false;
+  await page.route("**/api/nl2sql/classifier/predict", async (route) => {
+    if (fail) return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "予測サービスを利用できません" }) });
+    return fulfillJson(route, { recommendation_source: "classifier", classifier_version: "classifier-001", predicted_category: "確認用カテゴリ", confidence: 0.91, candidates: [], warnings: [] });
+  });
+  await page.goto("/question-classifier-models?tab=test");
+  await page.getByRole("tab", { name: "モデルテスト", exact: true }).click();
+  const input = page.getByRole("textbox", { name: "テキスト", exact: true });
+  await input.fill("最初の分類対象");
+  const predict = page.getByRole("button", { name: "分類を試す", exact: true });
+  await predict.click();
+  await expect(page.getByText("信頼度 91%", { exact: true })).toBeVisible();
+  await input.fill("次の分類対象");
+  await expect(page.getByText(/現在の入力は未実行です/)).toBeVisible();
+  await page.getByText(/現在の入力は未実行です/).scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("classifier-previous-result.png") });
+  fail = true;
+  await predict.press("Enter");
+  await expect(page.getByText(/予測サービスを利用できません/)).toBeVisible();
+  await expect(page.getByText("信頼度 91%", { exact: true })).toHaveCount(0);
+  await expect(input).toHaveValue("次の分類対象");
+  await expect(predict).toBeEnabled();
+});
+
 test("フィードバックの前ページ取得失敗後も同じボタンで再試行できる", async ({ page }, testInfo) => {
   await mockNl2SqlApi(page);
   let rejectPrevious = false;

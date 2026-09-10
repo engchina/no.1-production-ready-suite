@@ -24,6 +24,7 @@ import { useSearchParams } from "react-router-dom";
 
 import { buttonVariants } from "@/components/ui/button";
 import {
+  Banner,
   EmptyState,
   FormStatus,
   SelectField,
@@ -79,6 +80,11 @@ import type {
 } from "../types";
 
 type ActiveView = "trainingData" | "train" | "test" | "candidates";
+type ClassifierPredictionSnapshot = ClassifierPredictionData & {
+  inputQuestion: string;
+  modelVersion: string;
+  finishedAt: string;
+};
 
 const fieldClass = "grid min-w-0 gap-1 text-sm font-medium leading-5 text-foreground";
 const controlClass =
@@ -127,7 +133,7 @@ export function QuestionClassifierModelsPage() {
   const [selectedCandidates, setSelectedCandidates] = useState<Set<string>>(new Set());
   const [candidateProfileOverrides, setCandidateProfileOverrides] = useState<Record<string, string>>({});
   const [classifierImport, setClassifierImport] = useState<ClassifierImportData | null>(null);
-  const [classifierPrediction, setClassifierPrediction] = useState<ClassifierPredictionData | null>(null);
+  const [classifierPrediction, setClassifierPrediction] = useState<ClassifierPredictionSnapshot | null>(null);
   const [classifierReplace, setClassifierReplace] = useState(false);
   const [trainingSearch, setTrainingSearch] = useState("");
   const [trainingFilename, setTrainingFilename] = useState("");
@@ -375,16 +381,21 @@ export function QuestionClassifierModelsPage() {
 
   const predictClassifier = async () => {
     const text = question.trim();
-    if (!text) return;
+    if (!text || loading) return;
     setLoading("classifier-predict");
     setMessage("");
+    setClassifierPrediction(null);
     try {
-      setClassifierPrediction(
-        await apiPost<ClassifierPredictionData>("/api/nl2sql/classifier/predict", {
+      const prediction = await apiPost<ClassifierPredictionData>("/api/nl2sql/classifier/predict", {
           question: text,
           top_k: 3,
-        })
-      );
+        });
+      setClassifierPrediction({
+        ...prediction,
+        inputQuestion: question,
+        modelVersion: classifierStatus?.classifier_version ?? "",
+        finishedAt: new Date().toISOString(),
+      });
     } catch (err) {
       setMessage(err instanceof Error ? err.message : t("learning.error.classifier"));
     } finally {
@@ -587,6 +598,7 @@ export function QuestionClassifierModelsPage() {
             <ModelTestPanel
               question={question}
               prediction={classifierPrediction}
+              modelVersion={classifierStatus?.classifier_version ?? ""}
               loading={loading === "classifier-predict"}
               ready={Boolean(classifierStatus?.ready)}
               onQuestionChange={setQuestion}
@@ -1027,13 +1039,15 @@ function ModelTrainPanel({
 function ModelTestPanel({
   question,
   prediction,
+  modelVersion,
   loading,
   ready,
   onQuestionChange,
   onPredict,
 }: {
   question: string;
-  prediction: ClassifierPredictionData | null;
+  prediction: ClassifierPredictionSnapshot | null;
+  modelVersion: string;
   loading: boolean;
   ready: boolean;
   onQuestionChange: (value: string) => void;
@@ -1047,7 +1061,7 @@ function ModelTestPanel({
           title={t("qcm.test.title")}
           description={t("qcm.test.hint")}
           action={
-            <Button type="button" size="sm" loading={loading} disabled={!question.trim() || !ready} onClick={onPredict}>
+            <Button type="button" size="sm" loading={loading} disabled={loading || !question.trim() || !ready} onClick={onPredict}>
               <Search size={15} aria-hidden="true" />
               <span>{t("learning.classifier.predict")}</span>
             </Button>
@@ -1057,6 +1071,7 @@ function ModelTestPanel({
           <span>{t("qcm.test.text")}</span>
           <textarea
             value={question}
+            disabled={loading}
             onChange={(event) => onQuestionChange(event.currentTarget.value)}
             rows={6}
             className={`${controlClass} min-h-36 leading-6`}
@@ -1067,6 +1082,12 @@ function ModelTestPanel({
         <h3 className="text-sm font-semibold text-foreground">{t("qcm.test.result")}</h3>
         {prediction ? (
           <>
+            {(prediction.inputQuestion !== question || prediction.modelVersion !== modelVersion) && (
+              <Banner severity="info" title={t("workspace.previousResult")}>
+                {t("workspace.executedAt", { date: formatDateTime(prediction.finishedAt) })}
+                {" — "}{t("workspace.inputChanged")}
+              </Banner>
+            )}
             <div className="flex flex-wrap gap-2">
               <StatusBadge variant={prediction.recommendation_source === "classifier" ? "success" : "neutral"} label={prediction.recommendation_source} />
               <StatusBadge variant="info" label={t("learning.classifier.confidence", { confidence: Math.round(prediction.confidence * 100) })} />
