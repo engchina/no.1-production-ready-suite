@@ -2716,3 +2716,106 @@ test("Credential 確認は region 変更と実行失敗で解除し、処理中�
   await expect(field).toHaveValue("");
   await expect(create).toBeDisabled();
 });
+
+test("レビュー補完: OCI config 反映・namespace 取得・保存の action を確認する", async ({ page }) => {
+  let saved: Record<string, unknown> | null = null;
+  await page.route("**/api/settings/oci/object-storage", async (route) => {
+    saved = route.request().postDataJSON();
+    await fulfillJson(route, uploadStorageFixture(saved ?? {}));
+  });
+  await page.goto("/settings/oci");
+  await page.locator("#oci-user-ocid").fill("ocid1.user.oc1..draft");
+  await page.getByRole("button", { name: /config から反映/ }).click();
+  await expect(page.locator("#oci-user-ocid")).toHaveValue("ocid1.user.oc1..example");
+  await page.getByRole("button", { name: /Object Storage ネームスペース: 取得/ }).click();
+  await expect(page.locator("#oci-object-storage-namespace")).toHaveValue("exampletenancy");
+  await expect(page.locator("#oci-object-storage-namespace")).toHaveAttribute("readonly", "");
+  await page.getByRole("button", { name: "Object Storage: 保存", exact: true }).click();
+  await expect.poll(() => saved).toEqual({ object_storage_region: "ap-osaka-1", object_storage_namespace: "exampletenancy" });
+  await expect(page.getByText("Object Storage 設定を保存しました。", { exact: true })).toBeVisible();
+});
+
+test("レビュー補完: モデル追加・既定・Vision・削除確認を保存 payload まで確認する", async ({ page }) => {
+  let persisted = modelSettingsFixture();
+  const writes: Array<Record<string, any>> = [];
+  await page.route("**/api/settings/model", async (route) => {
+    if (route.request().method() === "PATCH") {
+      const payload = route.request().postDataJSON();
+      writes.push(payload);
+      persisted = modelSettingsFixture({ settings: payload });
+    }
+    await fulfillJson(route, persisted);
+  });
+  await page.goto("/settings/model");
+  await page.getByRole("button", { name: "追加", exact: true }).click();
+  await page.getByRole("textbox", { name: "モデル ID 3", exact: true }).fill("review-model");
+  await page.getByRole("textbox", { name: "表示名 3", exact: true }).fill("レビュー用");
+  await page.getByRole("radio", { name: "既定 3", exact: true }).check();
+  await page.getByRole("switch", { name: "Vision 3", exact: true }).click();
+  await page.getByRole("button", { name: "登録モデル: 保存", exact: true }).click();
+  await expect.poll(() => writes.length).toBe(1);
+  expect(writes[0].enterprise_ai.default_model_id).toBe("review-model");
+  expect(writes[0].enterprise_ai.models[2]).toEqual({ model_id: "review-model", display_name: "レビュー用", vision_enabled: true });
+  const remove = page.getByRole("button", { name: "モデルを削除 3", exact: true });
+  await expect(remove).toBeEnabled();
+  await remove.click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "キャンセル", exact: true }).click();
+  await expect(page.getByRole("textbox", { name: "モデル ID 3", exact: true })).toHaveValue("review-model");
+  await remove.click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "削除", exact: true }).click();
+  await expect(page.getByRole("textbox", { name: "モデル ID 3", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("radio", { name: "既定 1", exact: true })).toBeChecked();
+  expect(writes).toHaveLength(1);
+  await page.getByRole("button", { name: "登録モデル: 保存", exact: true }).click();
+  await expect.poll(() => writes.length).toBe(2);
+  expect(writes[1].enterprise_ai.models).toHaveLength(2);
+});
+
+test("レビュー補完: 保存先の失敗再試行と OCI への離脱確認を確認する", async ({ page }) => {
+  let failSave = true;
+  let persisted = uploadStorageFixture({ object_storage_namespace: "" });
+  await page.route("**/api/settings/upload-storage", async (route) => {
+    if (route.request().method() === "PATCH") {
+      if (failSave) {
+        await route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ detail: "保存先の書込失敗" }) });
+        return;
+      }
+      persisted = { ...persisted, ...route.request().postDataJSON() };
+    }
+    await fulfillJson(route, persisted);
+  });
+  await page.goto("/settings/upload-storage");
+  const path = page.locator("#upload-storage-local-dir");
+  await path.fill("/tmp/review-retry");
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(page.getByText("保存先の書込失敗", { exact: true })).toBeVisible();
+  await expect(path).toHaveValue("/tmp/review-retry");
+  failSave = false;
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(page.getByText("保存先の書込失敗", { exact: true })).toHaveCount(0);
+  await page.getByRole("radio", { name: /OCI Object Storage/ }).check();
+  await page.getByRole("button", { name: "OCI 認証設定を開く", exact: true }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "キャンセル", exact: true }).click();
+  await expect(page).toHaveURL(/settings\/upload-storage$/);
+  await page.getByRole("button", { name: "OCI 認証設定を開く", exact: true }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "破棄して移動", exact: true }).click();
+  await expect(page).toHaveURL(/settings\/oci$/);
+});
+
+test("レビュー補完: システム設定6画面の表示とキーボード・横幅を記録する", async ({ page }, testInfo) => {
+  for (const slug of ["oci", "upload-storage", "model", "database", "system-tables", "appearance"]) {
+    await page.goto(`/settings/${slug}`);
+    await expect(page.locator("main")).toBeVisible();
+    const ready = slug === "oci" ? page.locator("#oci-user-ocid")
+      : slug === "upload-storage" ? page.locator("#upload-storage-local-dir")
+      : slug === "model" ? page.locator("#enterprise-endpoint")
+      : slug === "database" ? page.locator("#oracle-user")
+      : slug === "system-tables" ? page.locator("#system-tables").getByRole("button", { name: "状態を再取得" })
+      : page.getByRole("button", { name: "ライト", exact: true });
+    await expect(ready).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+    await ready.focus();
+    await expect(ready).toBeFocused();
+    await page.screenshot({ path: testInfo.outputPath(`settings-${slug}.png`), fullPage: true });
+  }
+});
