@@ -10315,6 +10315,88 @@ test("table and view management object lists load more and find unloaded objects
   await expect(page.getByRole("button", { name: "V_PAGE_VIEW_101 を表示" })).toBeVisible();
 });
 
+for (const outcome of ["success", "error"] as const) {
+  test(`synthetic generation waits beyond five seconds for ${outcome}`, async ({ page }, testInfo) => {
+    await mockNl2SqlApi(page);
+    let generationRequests = 0;
+    await page.route("**/api/nl2sql/synthetic-data/generate", async (route) => {
+      generationRequests += 1;
+      // Oracle の実測時間に合わせ、旧 jobControl の 5 秒を確実に超える。
+      await new Promise((resolve) => setTimeout(resolve, 5_500));
+      await fulfillJson(route, {
+        table_name: "APP.INVOICES",
+        object_list: ["APP.INVOICES"],
+        row_count: 1,
+        executed: outcome === "success",
+        runtime: "oracle",
+        status: outcome === "success" ? "executed" : "error",
+        message: outcome === "success" ? "生成を実行しました。" : "生成に失敗しました。",
+        warnings: outcome === "success" ? [] : ["ORA-01031: 権限が不足しています。"],
+        engine_meta: {},
+        timing,
+      });
+    });
+    await page.goto("/data-management");
+    await page.getByRole("tab", { name: "合成データ生成" }).click();
+    const panel = page.locator("#data-management-panel-synthetic");
+    await panel.getByRole("button", { name: "テーブル一覧を取得" }).click();
+    await panel.getByLabel("APP.INVOICES を選択").check();
+    await panel.getByLabel("実行確認語").fill("APP.INVOICES");
+    const generateButton = panel.getByRole("button", { name: "生成開始" });
+    await generateButton.focus();
+    await page.keyboard.press("Enter");
+    await expect(generateButton).toBeDisabled();
+    await expect(panel.getByTestId("data-synthetic-generation-processing")).toBeVisible();
+    await expect(panel.getByLabel("APP.INVOICES を選択")).toBeDisabled();
+    await expect(panel.getByRole("button", { name: "テーブル一覧を取得" })).toBeDisabled();
+    await expect(panel.getByRole("button", { name: "データを表示" })).toBeDisabled();
+    await page.screenshot({ path: testInfo.outputPath("synthetic-generating.png"), fullPage: true });
+    if (outcome === "success") {
+      await expect(page.getByRole("region", { name: "通知" })).toContainText("Synthetic data 生成が完了しました。", { timeout: 10_000 });
+      await expect(panel.getByText("対象: APP.INVOICES。結果テーブルを選択し、「データを表示」で内容を確認してください。")).toBeVisible();
+      await expect(panel.getByTestId("synthetic-result-table-select")).toHaveValue("APP.INVOICES");
+      await panel.getByRole("button", { name: "データを表示" }).click();
+      await expect(panel.getByRole("cell", { name: "synthetic-customer" })).toBeVisible();
+    } else {
+      await expect(panel.getByText("ORA-01031: 権限が不足しています。")).toBeVisible({ timeout: 10_000 });
+      await expect(page.getByRole("region", { name: "通知" })).not.toContainText("Synthetic data 生成が完了しました。");
+    }
+    await expect(panel.getByTestId("data-synthetic-generation-processing")).toHaveCount(0);
+    await page.screenshot({ path: testInfo.outputPath(`synthetic-${outcome}.png`), fullPage: true });
+    expect(generationRequests).toBe(1);
+    await expectNoHorizontalScroll(page);
+  });
+}
+
+test("synthetic generation timeout offers result verification without replaying generation", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  await page.addInitScript(() => {
+    const timeout = AbortSignal.timeout.bind(AbortSignal);
+    AbortSignal.timeout = (milliseconds: number) => timeout(milliseconds === 65 * 60_000 ? 100 : milliseconds);
+  });
+  let generationRequests = 0;
+  await page.route("**/api/nl2sql/synthetic-data/generate", async (route) => {
+    generationRequests += 1;
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    await route.abort();
+  });
+  await page.goto("/data-management");
+  await page.getByRole("tab", { name: "合成データ生成" }).click();
+  const panel = page.locator("#data-management-panel-synthetic");
+  await panel.getByRole("button", { name: "テーブル一覧を取得" }).click();
+  await panel.getByLabel("APP.INVOICES を選択").check();
+  await panel.getByLabel("実行確認語").fill("APP.INVOICES");
+  await panel.getByRole("button", { name: "生成開始" }).click();
+  await expect(panel.getByText(/Oracle 側では処理が継続している可能性があります/)).toBeVisible();
+  await expect(panel.getByTestId("data-synthetic-generation-processing")).toHaveCount(0);
+  await expect(panel.getByLabel("APP.INVOICES を選択")).toBeChecked();
+  await expect(panel.getByRole("button", { name: "データを表示" })).toBeEnabled();
+  await panel.getByRole("button", { name: "データを表示" }).click();
+  await expect(panel.getByRole("cell", { name: "synthetic-customer" })).toBeVisible();
+  expect(generationRequests).toBe(1);
+  await expectNoHorizontalScroll(page);
+});
+
 test("synthetic data table bulk selection and results use the shared skeleton preset", async ({ page }) => {
   await mockNl2SqlApi(page);
   await page.setViewportSize({ width: 1280, height: 900 });

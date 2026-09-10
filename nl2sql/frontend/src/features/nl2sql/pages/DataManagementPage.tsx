@@ -328,7 +328,7 @@ export function DataManagementPage() {
     syntheticSelectedTables.length === 1 ? syntheticSelectedTables[0] : "ADMIN_EXECUTE";
   const syntheticDataConfirmed = syntheticConfirmation.trim() === syntheticExpectedConfirmation;
   const canGenerateSyntheticData = Boolean(
-    syntheticProfileName.trim() && syntheticSelectedTables.length > 0 && syntheticDataConfirmed
+    syntheticProfileName.trim() && syntheticSelectedTables.length > 0 && syntheticDataConfirmed && !syntheticLoading
   );
   const canClearSyntheticGeneration = Boolean(
     syntheticSelectedTables.length > 0 ||
@@ -356,7 +356,7 @@ export function DataManagementPage() {
   const syntheticResultError = syntheticErrorOperation === "results" ? syntheticError : "";
   const syntheticWorkspaceError = syntheticErrorOperation === "results" ? "" : syntheticError;
   const canLoadSyntheticDataResults = Boolean(
-    syntheticAvailableTables.includes(syntheticResultTable) && syntheticResultLimit !== null && syntheticLoading !== "results"
+    syntheticAvailableTables.includes(syntheticResultTable) && syntheticResultLimit !== null && !syntheticLoading
   );
   const canClearSyntheticDataResults = Boolean(
     syntheticDataResults ||
@@ -776,11 +776,13 @@ export function DataManagementPage() {
     const selectedTables = syntheticSelectedTables;
     const singleTable = selectedTables.length === 1;
     setSyntheticLoading("generate");
+    setSyntheticData(null);
     setSyntheticError("");
     setSyntheticErrorOperation("");
     toast.info(t("dataTools.syntheticData.toast.generateStarted"));
     try {
       clearSyntheticResultState();
+      // job 投入ではなく Oracle の同期生成完了まで待つ endpoint。
       const result = await apiPost<SyntheticDataOperationData>("/api/nl2sql/synthetic-data/generate", {
         table_name: singleTable ? selectedTables[0] : "",
         object_list: singleTable ? [] : selectedTables,
@@ -792,7 +794,7 @@ export function DataManagementPage() {
         use_comments: syntheticUseComments,
         confirmation: syntheticConfirmation,
         reason: "ui-synthetic-data",
-      }, { timeoutMs: API_TIMEOUT_MS.jobControl });
+      }, { timeoutMs: API_TIMEOUT_MS.longRunningJob });
       setSyntheticData(result);
       setSyntheticResultTable((current) => {
         const allowedTables = syntheticAvailableTables;
@@ -807,7 +809,7 @@ export function DataManagementPage() {
         setSyntheticErrorOperation("generate");
       }
     } catch (err) {
-      setSyntheticError(apiErrorMessage(err, "dataTools.error.syntheticData"));
+      setSyntheticError(apiErrorMessage(err, "dataTools.error.syntheticData", "dataTools.syntheticData.timeout"));
       setSyntheticErrorOperation("generate");
     } finally {
       setSyntheticLoading("");
@@ -2003,7 +2005,8 @@ function SyntheticWorkspace({
   onClearSyntheticDataResults: () => void;
   onRetry: () => void;
 }) {
-  const activeStep = syntheticData || syntheticDataResults ? 1 : 0;
+  const generationSucceeded = syntheticData !== null && isSyntheticDataExecuted(syntheticData);
+  const activeStep = generationSucceeded || syntheticDataResults ? 1 : 0;
   const [syntheticTableSearch, setSyntheticTableSearch] = useState("");
   // 親の syntheticDataConfirmed と同じ規則(単一テーブル=対象名 / 複数=ADMIN_EXECUTE)。
   const syntheticExpectedConfirmation =
@@ -2055,7 +2058,7 @@ function SyntheticWorkspace({
         dataTestId="data-synthetic-steps"
       />
 
-      <section className="grid min-w-0 gap-3 rounded-md border border-border bg-background p-3" aria-labelledby="synthetic-target-heading">
+      <fieldset disabled={loading === "generate"} className="grid min-w-0 gap-3 rounded-md border border-border bg-background p-3" aria-labelledby="synthetic-target-heading">
         <DbObjectPanelHeader
           headingId="synthetic-target-heading"
           icon={Database}
@@ -2302,7 +2305,21 @@ function SyntheticWorkspace({
             }
           />
         </fieldset>
-      </section>
+        {loading === "generate" && (
+          <ProcessingIndicator
+            active
+            label={t("dataTools.syntheticData.generating")}
+            placement="action"
+            testId="data-synthetic-generation-processing"
+            activityIcon="none"
+          />
+        )}
+        {generationSucceeded && (
+          <Banner severity="success" title={t("dataTools.syntheticData.toast.generated")}>
+            {t("dataTools.syntheticData.generatedHint", { tables: syntheticData.object_list?.join(", ") || syntheticData.table_name })}
+          </Banner>
+        )}
+      </fieldset>
 
       <section className="grid min-w-0 content-start gap-3 rounded-md border border-border bg-background p-4" aria-labelledby="synthetic-results-heading">
         <DbObjectPanelHeader
