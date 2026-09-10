@@ -11,7 +11,7 @@ import {
   TestTube2,
   Trash2,
 } from "lucide-react";
-import { type FormEvent, useEffect, useState } from "react";
+import { type FormEvent, type ReactNode, useEffect, useState } from "react";
 import { FormStatus, toast } from "@engchina/production-ready-ui";
 
 import { PageHeader } from "@/components/PageHeader";
@@ -340,7 +340,19 @@ export function ModelSettingsClient() {
                     badge={t("settings.model.requiredInOci")}
                     value={draft.enterprise_ai.endpoint}
                     placeholder={t("settings.model.placeholder.endpoint")}
-                    helper={t("settings.model.enterprise.endpointHelp")}
+                    helper={
+                      <>
+                        <span className="block">{t("settings.model.enterprise.endpointHelp")}</span>
+                        <a
+                          href="https://docs.oracle.com/en-us/iaas/Content/generative-ai/openai-compatible-api.htm"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex min-h-11 items-center rounded-sm text-primary underline underline-offset-4 hover:text-primary/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
+                        >
+                          {t("settings.model.enterprise.endpointDocs")}
+                        </a>
+                      </>
+                    }
                     onChange={(value) => updateEnterprise("endpoint", value)}
                     className="md:col-span-2"
                   />
@@ -823,7 +835,7 @@ function TextField({
   label: string;
   value: string;
   placeholder?: string;
-  helper?: string;
+  helper?: ReactNode;
   badge?: string;
   className?: string;
   onChange: (value: string) => void;
@@ -836,10 +848,11 @@ function TextField({
         type="text"
         value={value}
         placeholder={placeholder}
+        aria-describedby={helper ? `${id}-helper` : undefined}
         onChange={(event) => onChange(event.target.value)}
         className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted/70 focus-visible:border-primary"
       />
-      {helper ? <p className="text-xs leading-relaxed text-muted">{helper}</p> : null}
+      {helper ? <p id={`${id}-helper`} className="text-xs leading-relaxed text-muted">{helper}</p> : null}
     </div>
   );
 }
