@@ -343,6 +343,9 @@ export function FeedbackManagementPage() {
       } else if (direction === "current") {
         setFeedbackCursor(cursor);
       } else {
+        setFeedbackCursorStack((current) =>
+          direction === "next" ? [...current, feedbackCursor] : current.slice(0, -1)
+        );
         setFeedbackCursor(cursor);
         setFeedbackPage((current) => Math.max(1, current + (direction === "next" ? 1 : -1)));
       }
@@ -355,14 +358,12 @@ export function FeedbackManagementPage() {
 
   const nextAppFeedbackPage = () => {
     if (!feedbackNextCursor) return;
-    setFeedbackCursorStack((current) => [...current, feedbackCursor]);
     void refreshAppFeedback(feedbackNextCursor, "next");
   };
 
   const previousAppFeedbackPage = () => {
     const previous = feedbackCursorStack.at(-1);
     if (previous === undefined) return;
-    setFeedbackCursorStack((current) => current.slice(0, -1));
     void refreshAppFeedback(previous, "prev");
   };
 

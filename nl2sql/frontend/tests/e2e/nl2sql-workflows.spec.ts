@@ -14487,3 +14487,33 @@ test("自動判定中はクエリの競合操作を停止し、失敗後に再�
   await expect(input).toHaveValue("従業員一覧を取得");
   await expect(page.getByRole("button", { name: "プロファイルを自動判定", exact: true })).toBeEnabled();
 });
+
+test("フィードバックの前ページ取得失敗後も同じボタンで再試行できる", async ({ page }, testInfo) => {
+  await mockNl2SqlApi(page);
+  let rejectPrevious = false;
+  let failed = false;
+  await page.route(/\/api\/nl2sql\/feedback(?:\?.*)?$/, (route) => {
+    const second = new URL(route.request().url()).searchParams.get("cursor") === "next";
+    if (!second && rejectPrevious) {
+      rejectPrevious = false;
+      failed = true;
+      return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "一時的な一覧取得エラー" }) });
+    }
+    return fulfillJson(route, { items: [{ ...historyItem, id: second ? "second" : "first", question: second ? "2ページ目の質問" : "1ページ目の質問" }], total: 21, next_cursor: second ? "" : "next" });
+  });
+  await page.goto("/feedback-management?tab=appFeedback");
+  const pagination = page.getByTestId("app-feedback-pagination");
+  await pagination.getByRole("button", { name: "次へ", exact: true }).click();
+  await expect(pagination).toContainText("2 / 2 ページ");
+  rejectPrevious = true;
+  const previous = pagination.getByRole("button", { name: "前へ", exact: true });
+  await previous.click();
+  await expect.poll(() => failed).toBe(true);
+  await expect(page.getByText(/一時的な一覧取得エラー/)).toBeVisible();
+  await expect(pagination).toContainText("2 / 2 ページ");
+  await previous.press("Enter");
+  await expect(pagination).toContainText("1 / 2 ページ");
+  await expect(page.getByTestId("app-feedback-selected-question")).toContainText("1ページ目の質問");
+  await pagination.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("feedback-page-recovered.png") });
+});
