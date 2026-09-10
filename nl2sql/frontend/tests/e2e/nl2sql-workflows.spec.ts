@@ -1163,6 +1163,7 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
           error_message: invalidAnnotationName
             ? "ORA-11548 相当: annotation 名 COMMENT は Oracle の予約語です。説明には UI_Display を使用するか、意図的な名前であれば \"COMMENT\" と二重引用符で囲んでください。"
             : "",
+          error_code: invalidAnnotationName ? "ORA-11548" : "",
         },
       ],
       committed: invalidAnnotationName ? false : executed,
@@ -13155,6 +13156,102 @@ test("annotation management explains ORA-11548 before Oracle execution", async (
   await expectNoHorizontalScroll(page);
   await expect(executePanel.getByText("説明用の annotation 名は UI_Display に変更してください。"))
     .toBeVisible();
+});
+
+for (const scenario of [
+  {
+    pageId: "comment-management",
+    code: "DB_ADMIN_COMMENT_SQL_POLICY_VIOLATION",
+    message: "禁止された操作です。COMMENT ON TABLE/COLUMN/MATERIALIZED VIEW のみ実行できます。",
+    sql: "COMMENT ON VIEW APP.V_EMP_DEPT IS '社員と部署';",
+    exampleLabel: "テーブル・ビューのコメント",
+    exampleSql: 'COMMENT ON TABLE "EXAMPLE_SCHEMA"."EXAMPLE_TABLE_OR_VIEW"\n  IS \'対象の説明\';',
+    count: 3,
+  },
+  {
+    pageId: "annotation-management",
+    code: "DB_ADMIN_ANNOTATION_SQL_POLICY_VIOLATION",
+    message: "この文はアノテーション管理で実行できません。",
+    sql: "ALTER TABLE APP.INVOICES ADD X NUMBER;",
+    exampleLabel: "テーブルのアノテーション",
+    exampleSql: 'ALTER TABLE "EXAMPLE_SCHEMA"."EXAMPLE_TABLE"\n  ANNOTATIONS (ADD IF NOT EXISTS UI_Display \'対象の説明\');',
+    count: 2,
+  },
+]) {
+  test(`${scenario.pageId} の拒否理由とコピー可能な SQL 例で具体的な復旧方法を示す`, async ({ page, context }, testInfo) => {
+    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+    await mockNl2SqlApi(page);
+    let executions = 0;
+    await page.route("**/api/nl2sql/db-admin/statements", (route) => {
+      executions += 1;
+      return fulfillJson(route, {
+        executed: false,
+        committed: false,
+        runtime: "oracle",
+        statements: [{ index: 1, status: "blocked", statement_type: "UNKNOWN", sql: scenario.sql, error_message: scenario.message, error_code: scenario.code }],
+        warnings: [],
+        timing,
+      });
+    });
+    await page.goto(`/${scenario.pageId}`);
+    await page.getByRole("tab", { name: "SQL実行", exact: true }).click();
+    const panel = page.locator(`#${scenario.pageId}-panel-execute`);
+    const sqlInput = panel.getByLabel("SQL(セミコロン区切りで複数文を入力可能)");
+    await sqlInput.fill(scenario.sql);
+    await panel.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
+    await panel.getByRole("button", { name: "SQL 実行", exact: true }).click();
+    const examples = panel.getByRole("region", { name: "具体的な対応例" });
+    await expect(examples).toBeVisible();
+    await expect(examples.locator("pre")).toHaveCount(scenario.count);
+    await expect(examples).toContainText("以下は構文例です。");
+    await expect(examples).toContainText("実際の内容に置き換え");
+    if (scenario.pageId === "comment-management") {
+      await expect(panel).toContainText("ビューのコメントも COMMENT ON TABLE を使用します。");
+      await expect(panel).not.toContainText("SQL 実行または Oracle 側の処理でエラーが発生しました。");
+    }
+    const copyButton = examples.getByRole("button", { name: `${scenario.exampleLabel}の SQL 例をコピー`, exact: true });
+    await copyButton.focus();
+    await copyButton.press("Enter");
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(scenario.exampleSql);
+    await expect(page.getByRole("region", { name: "通知" })).toContainText("コピーしました");
+    await dismissToasts(page);
+    await copyButton.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath(`${scenario.pageId}-sql-recovery.png`) });
+    await expect(sqlInput).toHaveValue(scenario.sql);
+    expect(executions).toBe(1);
+    await expectNoHorizontalScroll(page);
+
+    await page.evaluate(() => {
+      Object.defineProperty(navigator.clipboard, "writeText", {
+        configurable: true,
+        value: () => Promise.reject(new Error("clipboard unavailable")),
+      });
+    });
+    await copyButton.click();
+    await expect(page.getByRole("region", { name: "通知" })).toContainText("コピーできませんでした");
+    await expect(copyButton).toBeEnabled();
+    await expect(sqlInput).toHaveValue(scenario.sql);
+    expect(executions).toBe(1);
+  });
+}
+
+test("未知の実行エラーでは SQL の修正例を推測表示しない", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  await page.route("**/api/nl2sql/db-admin/statements", (route) => fulfillJson(route, {
+    executed: false,
+    runtime: "oracle",
+    statements: [{ index: 1, status: "blocked", statement_type: "UNKNOWN", sql: "SELECT 1 FROM DUAL", error_message: "禁止された操作です。COMMENT ON TABLE/COLUMN/MATERIALIZED VIEW のみ実行できます。", error_code: "UNRECOGNIZED_ERROR" }],
+    warnings: [],
+    timing,
+  }));
+  await page.goto("/comment-management");
+  await page.getByRole("tab", { name: "SQL実行", exact: true }).click();
+  const panel = page.locator("#comment-management-panel-execute");
+  await panel.getByLabel("SQL(セミコロン区切りで複数文を入力可能)").fill("SELECT 1 FROM DUAL");
+  await panel.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
+  await panel.getByRole("button", { name: "SQL 実行", exact: true }).click();
+  await expect(panel.getByRole("alert")).toBeVisible();
+  await expect(panel.getByRole("region", { name: "具体的な対応例" })).toHaveCount(0);
 });
 
 test("metadata sample limit zero omits samples and reports retrieval errors", async ({ page }) => {

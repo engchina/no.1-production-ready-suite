@@ -724,6 +724,7 @@ class DbAdminStatementResult(BaseModel):
     message: str = ""
     elapsed_ms: int = 0
     error_message: str = ""
+    error_code: str = ""
 
 
 class DbAdminExecuteRequest(AdminExecutionConfirmation):
