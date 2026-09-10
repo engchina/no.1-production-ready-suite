@@ -1,3 +1,4 @@
+import { useResetExecutionConsent } from "@/components/WorkspaceState";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Database, FileSpreadsheet, RefreshCw, Trash2 } from "lucide-react";
 
@@ -149,7 +150,10 @@ export function SampleDataPage() {
     return joinSql(steps.flatMap((step) => sampleInfo.sql[step] ?? []));
   }, [activeAction, sampleInfo, sampleStep]);
 
+  useResetExecutionConsent(() => setSampleConfirmation(""), JSON.stringify([activeAction, sampleStep, sampleSqlPreview, expectedConfirmation]));
+
   const load = async (announce = false) => {
+    if (loading) return;
     const sequence = loadSequence.current + 1;
     loadSequence.current = sequence;
     setLoading("load");
@@ -185,6 +189,7 @@ export function SampleDataPage() {
   };
 
   const refreshSchema = async () => {
+    if (loading || schemaRefreshing) return;
     completedSchemaRefreshJob.current = "";
     try {
       const job = await sharedSchemaRefresh.start();
@@ -209,7 +214,9 @@ export function SampleDataPage() {
       completedSchemaRefreshJob.current = reportKey;
       setSchemaRefreshError("");
       setSchemaRefreshNeedsFull(false);
-      void reloadSampleState();
+      void reloadSampleState().catch((err: unknown) => {
+        setMessage(err instanceof Error ? err.message : t("dataTools.error.sample"));
+      });
     } else if (job.status === "error") {
       completedSchemaRefreshJob.current = reportKey;
       const needsFull = schemaRefreshRequiresFull(job);
@@ -234,6 +241,8 @@ export function SampleDataPage() {
   };
 
   const importSampleData = async () => {
+    if (loading || !confirmationMatched || !sampleInfo) return;
+    setSampleResult(null);
     setLoading("sample-import");
     setMessage("");
     try {
@@ -253,6 +262,8 @@ export function SampleDataPage() {
   };
 
   const deleteSampleData = async () => {
+    if (loading || !confirmationMatched || !sampleInfo) return;
+    setSampleResult(null);
     setLoading("sample-delete");
     setMessage("");
     try {
@@ -295,6 +306,7 @@ export function SampleDataPage() {
             icon: RefreshCw,
             onClick: () => load(true),
             loading: loading === "load",
+            disabled: Boolean(loading),
           },
         ]}
       />
@@ -313,7 +325,7 @@ export function SampleDataPage() {
               variant="secondary"
               size="sm"
               loading={pageNoticeActionLoading}
-              disabled={pageNoticeActionDisabled}
+              disabled={pageNoticeActionDisabled || Boolean(loading)}
               onClick={
                 schemaRefreshNeedsFull
                   ? () => void refreshSchema()
@@ -332,6 +344,7 @@ export function SampleDataPage() {
 
         <DbObjectManagementTabs
           activeView={activeAction}
+          disabled={Boolean(loading)}
           tabs={[
             { id: "import", label: t("dataTools.sample.import"), icon: FileSpreadsheet },
             { id: "delete", label: t("dataTools.sample.delete"), icon: Trash2 },
@@ -381,6 +394,7 @@ export function SampleDataPage() {
                   <span>{t("dataTools.sample.step")}</span>
                   <select
                     value={sampleStep}
+                    disabled={Boolean(loading)}
                     onChange={(event) => setSampleStep(event.currentTarget.value as SampleStep)}
                     className="min-h-11 rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:ring-2 focus:ring-ring/40"
                   >
@@ -395,6 +409,7 @@ export function SampleDataPage() {
 
               <ExecutionConfirmationField
                 value={sampleConfirmation}
+                disabled={Boolean(loading)}
                 onChange={setSampleConfirmation}
                 confirmed={confirmationMatched}
                 placeholder={expectedConfirmation}
@@ -408,7 +423,7 @@ export function SampleDataPage() {
                     size="lg"
                     className="w-full sm:w-auto"
                     loading={loading === (isDeleteAction ? "sample-delete" : "sample-import")}
-                    disabled={!confirmationMatched}
+                    disabled={Boolean(loading) || !confirmationMatched || !sampleInfo}
                     onClick={() => void (isDeleteAction ? deleteSampleData() : importSampleData())}
                   >
                     {isDeleteAction ? <Trash2 size={15} aria-hidden="true" /> : <FileSpreadsheet size={15} aria-hidden="true" />}

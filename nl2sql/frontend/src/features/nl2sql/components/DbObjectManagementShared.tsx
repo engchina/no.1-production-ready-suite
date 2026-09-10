@@ -1498,14 +1498,17 @@ export function DbObjectManagementTabs<T extends string>({
   activeView,
   ariaLabel,
   onViewChange,
+  disabled = false,
 }: {
   idPrefix: string;
   tabs: Array<DbObjectTab<T>>;
   activeView: T;
   ariaLabel: string;
   onViewChange: (view: T) => void;
+  disabled?: boolean;
 }) {
   const handleKeyDown = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
+    if (disabled) return;
     const keyMap: Record<string, number | undefined> = {
       ArrowRight: (index + 1) % tabs.length,
       ArrowLeft: (index - 1 + tabs.length) % tabs.length,
@@ -1534,6 +1537,7 @@ export function DbObjectManagementTabs<T extends string>({
               id={`${idPrefix}-tab-${tab.id}`}
               type="button"
               role="tab"
+              disabled={disabled}
               aria-selected={selected}
               aria-controls={`${idPrefix}-panel-${tab.id}`}
               className={`group inline-flex min-h-11 shrink-0 items-center gap-2 whitespace-nowrap border-b-2 px-4 text-sm font-semibold transition-colors focus:outline-none focus-visible:bg-primary/10 focus-visible:shadow-[inset_0_-3px_0_0_var(--primary)] ${

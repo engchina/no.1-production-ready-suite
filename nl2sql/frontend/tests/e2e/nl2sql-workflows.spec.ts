@@ -11276,6 +11276,9 @@ test("sample data and data management run imported workflows", async ({ page }) 
   const deletePanel = page.locator("#sample-data-panel-delete");
   const deleteConfirmationField = deletePanel.getByTestId("execution-confirmation-field");
   await expectExecutionConfirmationFieldNoLeftAccent(deleteConfirmationField);
+  await expect(page.getByLabel("実行確認語")).toHaveValue("");
+  await expect(page.getByRole("button", { name: "削除実行", exact: true })).toBeDisabled();
+  await page.getByLabel("実行確認語").fill("SQL_ASSIST_SAMPLE");
   await expect(deleteConfirmationField.getByText("確認済み", { exact: true })).toBeVisible();
   await expect(deletePanel.getByText("確認済み", { exact: true })).toHaveCount(1);
   const deleteButton = page.getByRole("button", { name: "削除実行" }).last();
@@ -14788,3 +14791,43 @@ for (const material of [
     expect(attempts).toBe(2);
   });
 }
+
+test("サンプルの操作・対象変更で確認を解除し実行中は競合操作を停止する", async ({ page }) => {
+  const api = await mockNl2SqlApi(page);
+  await page.goto("/sample-data");
+  const confirmation = page.getByLabel("実行確認語");
+  const step = page.getByRole("combobox", { name: /^取り込み対象/ });
+  await confirmation.fill("SQL_ASSIST_SAMPLE");
+  await page.getByRole("tab", { name: "削除実行", exact: true }).click();
+  await expect(confirmation).toHaveValue("");
+  await expect(page.getByRole("button", { name: "削除実行", exact: true })).toBeDisabled();
+  await confirmation.fill("SQL_ASSIST_SAMPLE");
+  await page.getByRole("tab", { name: "取り込み実行", exact: true }).press("Home");
+  await expect(confirmation).toHaveValue("");
+  await confirmation.fill("SQL_ASSIST_SAMPLE");
+  await step.selectOption("tables");
+  await expect(confirmation).toHaveValue("");
+  await confirmation.fill("SQL_ASSIST_SAMPLE");
+  const gate = createRequestGate();
+  let attempts = 0;
+  await page.route("**/api/nl2sql/sample-data/import", async (route) => {
+    attempts += 1;
+    if (attempts === 1) {
+      await gate.promise;
+      await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "サンプル処理を再試行してください" }) });
+    } else await route.fallback();
+  });
+  const execute = page.getByRole("button", { name: "取り込み実行", exact: true });
+  await execute.click();
+  try {
+    await expect(page.getByRole("tab", { name: "削除実行", exact: true })).toBeDisabled();
+    await expect(step).toBeDisabled();
+    await expect(confirmation).toBeDisabled();
+    await expect(page.getByRole("button", { name: "表示を更新", exact: true })).toBeDisabled();
+  } finally { gate.release(); }
+  await expect(page.getByText("サンプル処理を再試行してください", { exact: true })).toBeVisible();
+  await expect(step).toBeEnabled();
+  await execute.press("Enter");
+  await expect.poll(() => api.samplePayload).toMatchObject({ step: "tables", confirmation: "SQL_ASSIST_SAMPLE" });
+  expect(attempts).toBe(2);
+});
