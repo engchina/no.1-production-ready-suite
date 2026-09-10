@@ -4976,3 +4976,125 @@ def test_data_preparation_actions_enforce_policy_and_revalidate_roles(
                         assert denied.value.status_code == 403
 
     asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("assigned_to_actor", [True, False])
+def test_role_restore_api_rejects_permission_escalation(
+    monkeypatch: pytest.MonkeyPatch, assigned_to_actor: bool
+) -> None:
+    service = _configure_memory_api_auth(monkeypatch)
+    admin, _, _ = service.login("ADMIN", "BootstrapPass!123")
+    manager = service.create_role(
+        role_code="RESTORE_REVIEW_MANAGER",
+        display_name="ロール管理",
+        description="",
+        permissions={"menu.security_roles"},
+        entitlements=[],
+        actor=admin,
+    )
+    target = service.create_role(
+        role_code="RESTORE_REVIEW_TARGET",
+        display_name="検索権限",
+        description="",
+        permissions={"menu.query"},
+        entitlements=[],
+        actor=admin,
+    )
+    actor_user = _create_active_user(
+        service,
+        admin,
+        login_user_id="restore.review.manager",
+        display_name="管理者",
+        role_ids=[manager.role_id, target.role_id] if assigned_to_actor else [manager.role_id],
+        password="ReviewManager!123",
+    )
+    other = _create_active_user(
+        service,
+        admin,
+        login_user_id="restore.review.other",
+        display_name="別ユーザー",
+        role_ids=[target.role_id],
+        password="ReviewOther!123",
+    )
+    archived = service.archive_role(target.role_id, expected_version=target.version, actor=admin)
+
+    async def exercise() -> None:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            _, csrf = await _login_api(client, "restore.review.manager", "ReviewManager!123")
+            response = await client.post(
+                f"/api/security/roles/{target.role_id}/restore",
+                headers={"X-CSRF-Token": csrf},
+                json={"version": archived.version},
+            )
+            assert response.status_code == 403
+            assert service.store.get_role(target.role_id) == archived
+            assert (await client.get("/api/nl2sql/history")).status_code == 403
+            for user in [actor_user, other]:
+                assert not service.principal_for_worker(user.user_uuid).has_permission("menu.query")
+            restored = service.restore_role(
+                target.role_id, expected_version=archived.version, actor=admin
+            )
+            assert not restored.archived
+            assert service.principal_for_worker(other.user_uuid).has_permission("menu.query")
+
+    try:
+        asyncio.run(exercise())
+    finally:
+        reset_security_service()
+
+
+@pytest.mark.parametrize("store_kind", ["memory", "oracle"])
+@pytest.mark.parametrize("target_kind", ["implied", "profile", "allowed"])
+def test_role_restore_validates_access_before_store_write(
+    monkeypatch: pytest.MonkeyPatch, store_kind: str, target_kind: str
+) -> None:
+    from dataclasses import replace
+
+    service = _configure_memory_api_auth(monkeypatch)
+    admin, _, _ = service.login("ADMIN", "BootstrapPass!123")
+    manager = service.create_role(
+        role_code="RESTORE_LIMITED",
+        display_name="管理",
+        description="",
+        permissions={"menu.security_roles", "menu.query"},
+        entitlements=[],
+        actor=admin,
+    )
+    user = _create_active_user(
+        service,
+        admin,
+        login_user_id="restore.limited",
+        display_name="管理",
+        role_ids=[manager.role_id],
+        password="ReviewManager!123",
+    )
+    actor = service.principal_for_worker(user.user_uuid)
+    target = replace(
+        manager,
+        role_id="restore-target",
+        archived=True,
+        permissions={"menu.profiles"} if target_kind == "implied" else {"menu.query"},
+        allowed_profile_ids={"profile-review"} if target_kind == "profile" else set(),
+    )
+    store = service.store if store_kind == "memory" else OracleSecurityStore(_settings())
+    monkeypatch.setattr(store, "get_role", lambda _id: target)
+    writes: list[str] = []
+
+    def restore(role_id: str, *, expected_version: int) -> RoleRecord:
+        writes.append(role_id)
+        return replace(target, archived=False, version=expected_version + 1)
+
+    monkeypatch.setattr(store, "restore_role", restore)
+    service = SecurityService(store, service.settings)
+    if target_kind == "allowed":
+        assert not service.restore_role(
+            target.role_id, expected_version=target.version, actor=actor
+        ).archived
+        assert writes == [target.role_id]
+    else:
+        with pytest.raises(SecurityApiError) as error:
+            service.restore_role(target.role_id, expected_version=target.version, actor=actor)
+        assert error.value.status_code == 403
+        assert writes == []
+        assert store.get_role(target.role_id) == target

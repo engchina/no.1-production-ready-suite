@@ -794,6 +794,13 @@ class SecurityService:
             raise SecurityApiError(409, "組み込み SYSTEM_ADMIN ロールは復元できません。")
         if not role.archived:
             raise SecurityApiError(409, "ロールはアーカイブされていません。")
+        # アーカイブ中の実効権限は空。復元は全権限の再付与として検証する。
+        if not actor.is_system_admin and not expand_permissions(role.permissions).issubset(
+            actor.permissions
+        ):
+            raise SecurityApiError(403, "自分が持たない権限を含むロールは復元できません。")
+        if role.allowed_profile_ids:
+            self._assert_actor_can_manage_profile_access(actor)
         try:
             restored = self.store.restore_role(role_id, expected_version=expected_version)
         except (SecurityConflict, SecurityNotFound) as exc:
