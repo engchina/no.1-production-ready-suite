@@ -2434,3 +2434,33 @@ def _wallet_zip_bytes() -> bytes:
         archive.writestr("Wallet_MYDB/ewallet.pem", "dummy")
         archive.writestr("Wallet_MYDB/readme", "skip me")
     return buffer.getvalue()
+
+
+@pytest.mark.parametrize("target", ["object_storage", "adb"])
+def test_failed_settings_persistence_preserves_runtime(
+    monkeypatch: MonkeyPatch, target: str
+) -> None:
+    settings = get_settings()
+    before = settings.model_dump()
+
+    def fail_persist(candidate: Settings) -> None:
+        assert candidate is not settings
+        raise HTTPException(status_code=500, detail="設定を保存できませんでした。")
+
+    if target == "object_storage":
+        monkeypatch.setattr(settings_router, "_persist_oci_object_storage_settings", fail_persist)
+        response = client.patch(
+            "/api/settings/oci/object-storage",
+            json={
+                "object_storage_region": "ap-tokyo-1",
+                "object_storage_namespace": "newnamespace",
+            },
+        )
+    else:
+        monkeypatch.setattr(settings_router, "_persist_adb_settings", fail_persist)
+        response = client.post(
+            "/api/settings/database/adb/settings",
+            json={"adb_ocid": "ocid1.autonomousdatabase.oc1..changed", "region": "ap-tokyo-1"},
+        )
+    assert response.status_code == 500
+    assert settings.model_dump() == before

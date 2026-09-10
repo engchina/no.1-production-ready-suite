@@ -696,8 +696,10 @@ async def get_adb_info() -> ApiResponse[AdbInfoData]:
 @router.post("/database/adb/settings", response_model=ApiResponse[AdbInfoData])
 async def update_adb_settings(payload: AdbSettingsUpdate) -> ApiResponse[AdbInfoData]:
     settings = get_settings()
+    candidate = settings.model_copy(deep=True)
+    _apply_adb_settings(candidate, payload)
+    await run_sync_io(_persist_adb_settings, candidate)
     _apply_adb_settings(settings, payload)
-    await run_sync_io(_persist_adb_settings, settings)
     return ApiResponse(data=await _load_adb_info(settings))
 
 
@@ -747,9 +749,15 @@ def update_oci_object_storage_settings(
     payload: OciObjectStorageSettingsUpdate,
 ) -> ApiResponse[UploadStorageSettingsData]:
     settings = get_settings()
-    settings.object_storage_region = payload.object_storage_region.strip()
-    settings.object_storage_namespace = payload.object_storage_namespace.strip()
-    _persist_oci_object_storage_settings(settings)
+    candidate = settings.model_copy(
+        update={
+            "object_storage_region": payload.object_storage_region.strip(),
+            "object_storage_namespace": payload.object_storage_namespace.strip(),
+        }
+    )
+    _persist_oci_object_storage_settings(candidate)
+    settings.object_storage_region = candidate.object_storage_region
+    settings.object_storage_namespace = candidate.object_storage_namespace
     return ApiResponse(data=_upload_storage_settings_data(settings))
 
 
