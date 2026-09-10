@@ -68,8 +68,7 @@ export function OntologyBuildPage() {
     if (activeProfiles.length === 0) return null;
     if (!profileParam) return activeProfiles[0];
     return (
-      activeProfiles.find((profile) => profile.id === profileParam) ??
-      (profilesQuery.hasNextPage ? null : activeProfiles[0])
+      activeProfiles.find((profile) => profile.id === profileParam) ?? null
     );
   }, [activeProfiles, profileParam, profilesQuery.hasNextPage]);
   const selectedProfileId = selectedProfileSummary?.id ?? "";
@@ -107,11 +106,12 @@ export function OntologyBuildPage() {
       profileParam &&
       !activeProfiles.some((profile) => profile.id === profileParam) &&
       profilesQuery.hasNextPage &&
-      !profilesQuery.isFetchingNextPage
+      !profilesQuery.isFetchingNextPage &&
+      !profilesQuery.isFetchNextPageError
     ) {
       void profilesQuery.fetchNextPage();
     }
-  }, [activeProfiles, profileParam, profilesQuery.hasNextPage, profilesQuery.isFetchingNextPage]);
+  }, [activeProfiles, profileParam, profilesQuery.hasNextPage, profilesQuery.isFetchingNextPage, profilesQuery.isFetchNextPageError]);
 
   useEffect(() => {
     setOntologyViewRequestedProfileId((current) =>
@@ -268,6 +268,7 @@ export function OntologyBuildPage() {
                     className="min-h-11 min-w-0 rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:outline-none focus:ring-2 focus:ring-ring/40"
                     data-testid="ontology-build-profile-select"
                   >
+                    {!selectedProfileId && <option value="" disabled>{t("nl2sql.workspace.profileUnavailable")}</option>}
                     {activeProfiles.map((profile) => (
                       <option key={profile.id} value={profile.id}>
                         {profileDisplayLabel(profile)}
@@ -302,6 +303,9 @@ export function OntologyBuildPage() {
                   </Button>
                 </div>
               </div>
+              {profileParam && !selectedProfileId && !profilesQuery.hasNextPage && (
+                <Banner severity="danger">{t("profiles.error.notFound")}</Banner>
+              )}
               {profileLoadMoreError ? (
                 <div>
                   <Banner

@@ -2523,3 +2523,18 @@ test("公開済み Markdown が無いときは公開日時を表示しない(rev
   );
   await expect(markdown.getByTestId("ontology-markdown-published-meta")).toHaveCount(0);
 });
+
+test("失効したProfile URLでは別Profileの情報を取得せず明示選択を待つ", async ({ page }, testInfo) => {
+  const state = await mockApi(page);
+  await page.goto("/ontology-build?profile=missing");
+  const fetch = page.getByRole("button", { name: "情報を取得", exact: true });
+  await expect(fetch).toBeDisabled();
+  await expect(page.getByText("指定された profile が見つかりません。")).toBeVisible();
+  expect(state.profileDetailCalls).toEqual([]);
+  expect(state.ontologyViewCalls).toBe(0);
+  await page.screenshot({ path: testInfo.outputPath("ontology-missing-profile.png") });
+  await page.getByTestId("ontology-build-profile-select").selectOption("default");
+  await fetch.press("Enter");
+  await expect(page.getByTestId("profile-ontology-build")).toBeVisible();
+  expect(state.profileDetailCalls).toEqual(["default"]);
+});
