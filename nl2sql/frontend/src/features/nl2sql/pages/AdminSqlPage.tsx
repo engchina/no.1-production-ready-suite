@@ -224,6 +224,9 @@ export function AdminSqlPage() {
     !loading &&
     (requiresConfirmation || rowLimit !== null) &&
     (!requiresConfirmation || confirmed);
+  const canClear = Boolean(
+    sqlText || rowLimitInput !== String(DEFAULT_SQL_ROW_LIMIT) || result || executionRun
+  );
 
   const refreshSchemaReadModels = () => {
     void queryClient.invalidateQueries({ queryKey: ["schema", "objects"] });
@@ -382,7 +385,7 @@ export function AdminSqlPage() {
         variant="secondary"
         size="lg"
         className="w-full sm:w-auto"
-        disabled={!sqlText || loading}
+        disabled={!canClear || loading}
         onClick={clear}
       >
         <X size={16} aria-hidden="true" />
@@ -480,7 +483,7 @@ export function AdminSqlPage() {
           )}
           {executionRun && (
             <ExecutionActivityPanel
-              inputSignature={sqlText}
+              inputSignature={JSON.stringify([sqlText, requiresConfirmation ? null : rowLimit])}
               status={executionRun.status}
               label={executionLabel(executionRun.status)}
               operationKey={executionRun.operationKey}

@@ -14543,3 +14543,37 @@ test("フィードバックの前ページ取得失敗後も同じボタンで�
   await pagination.scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath("feedback-page-recovered.png") });
 });
+
+test("管理 SQL の上限変更はクリアでき前回結果の条件と区別する", async ({ page }, testInfo) => {
+  await mockNl2SqlApi(page);
+  await page.goto("/admin-sql");
+  const scope = page.getByTestId("nl2sql-admin-sql");
+  const limit = scope.getByLabel("取得件数上限");
+  const clear = scope.getByRole("button", { name: "SQL をクリア", exact: true });
+  await expect(clear).toBeDisabled();
+  await limit.fill("200");
+  await expect(clear).toBeEnabled();
+  await clear.press("Enter");
+  await expect(limit).toHaveValue("100");
+  await expect(clear).toBeDisabled();
+  await adminSqlInput(scope).fill("SELECT CUSTOMER_NAME FROM INVOICES");
+  let calls = 0;
+  page.on("request", (request) => {
+    if (request.url().endsWith("/api/nl2sql/db-admin/execute")) calls += 1;
+  });
+  await scope.getByRole("button", { name: "SQL 実行", exact: true }).click();
+  const activity = scope.getByTestId("admin-sql-execution-activity");
+  await expect(activity).toHaveAttribute("data-execution-activity-status", "success");
+  await limit.fill("200");
+  await expect(activity).toContainText("現在の入力は未実行です");
+  await expect(scope.getByTestId("query-result-summary")).toContainText("取得上限 100 件");
+  await activity.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("admin-limit-changed.png") });
+  await limit.fill("100");
+  await expect(activity).not.toContainText("現在の入力は未実行です");
+  expect(calls).toBe(1);
+  await adminSqlInput(scope).fill("");
+  await expect(clear).toBeEnabled();
+  await clear.click();
+  await expect(activity).toHaveCount(0);
+});
