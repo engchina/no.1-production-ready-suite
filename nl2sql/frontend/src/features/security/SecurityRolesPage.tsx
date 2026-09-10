@@ -51,6 +51,7 @@ import {
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_TABLE_SCROLL_CLASS,
 } from "@/lib/list-density";
+import { useUnsavedChangesGuard } from "@/lib/useUnsavedChangesGuard";
 import { useRequestScope } from "@/lib/useRequestScope";
 import { cn } from "@/lib/utils";
 import { selectedVisibleKey } from "@/lib/visible-selection";
@@ -186,6 +187,8 @@ export function SecurityRolesPage() {
   const [profileAccessSearch, setProfileAccessSearch] = useState("");
   const [sort, setSort] = useState<DataTableSort>({ key: "role", direction: "asc" });
   const [draft, setDraft] = useState<RoleDraftState>(EMPTY_DRAFT);
+  const [baseline, setBaseline] = useState<RoleDraftState>(EMPTY_DRAFT);
+  const [changingRoleId, setChangingRoleId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [deletingRoleId, setDeletingRoleId] = useState<string | null>(null);
@@ -203,6 +206,23 @@ export function SecurityRolesPage() {
 
   const editingRole = roles.find((role) => role.role_id === editingId) ?? null;
   const readOnly = Boolean(!canManage || editingRole?.is_built_in || editingRole?.archived);
+  const mutationBusy = busy || deletingRoleId !== null || changingRoleId !== null;
+  const operationBusy = mutationBusy || loading;
+  const inputReadOnly = readOnly || operationBusy;
+  const canonicalDraft = (value: RoleDraftState) => JSON.stringify({
+    ...value,
+    permissions: [...new Set(value.permissions)].sort(),
+    allowedProfileIds: [...new Set(value.allowedProfileIds)].sort(),
+  });
+  const isDirty = activeView !== "list" && canonicalDraft(draft) !== canonicalDraft(baseline);
+  const confirmLeave = async () => !operationBusy && (!isDirty || await confirm({
+    title: t("security.common.discardTitle"),
+    description: t("security.common.discardDescription"),
+    confirmLabel: t("security.common.discardConfirm"),
+    tone: "danger",
+    dismissOnOverlay: false,
+  }));
+  useUnsavedChangesGuard(isDirty || mutationBusy, confirmLeave);
   const permissionByCode = useMemo(
     () => new Map(permissions.map((permission) => [permission.code, permission])),
     [permissions]
@@ -229,7 +249,7 @@ export function SecurityRolesPage() {
   const draftGrantsAllProfileAccess =
     editingRole?.role_code === SYSTEM_ADMIN_ROLE_CODE ||
     draftEffectivePermissionCodes.has(PROFILE_MANAGE_PERMISSION);
-  const profileAccessReadOnly = readOnly || draftGrantsAllProfileAccess;
+  const profileAccessReadOnly = inputReadOnly || draftGrantsAllProfileAccess;
 
   const rolePermissionText = (role: SecurityRole) =>
     [...effectivePermissionCodes(role.permissions, permissionByCode)]
@@ -282,6 +302,7 @@ export function SecurityRolesPage() {
   const selectedRole = roles.find((role) => role.role_id === visibleSelectedId) ?? null;
 
   const load = async (announce = false) => {
+    if (mutationBusy) return;
     const sequence = loadSequence.current + 1;
     loadSequence.current = sequence;
     setLoading(true);
@@ -374,6 +395,7 @@ export function SecurityRolesPage() {
     setActiveView("create");
     setEditingId(null);
     setDraft(EMPTY_DRAFT);
+    setBaseline(EMPTY_DRAFT);
     setProfileAccessSearch("");
     setFormError("");
     setFieldErrors({});
@@ -384,28 +406,36 @@ export function SecurityRolesPage() {
     setSelectedId(role.role_id);
     setEditingId(role.role_id);
     setActiveView("edit");
-    setDraft({
+    const nextDraft = {
       roleCode: role.role_code,
       displayName: role.display_name,
       description: role.description,
       permissions: role.permissions,
       allowedProfileIds: role.allowed_profile_ids,
-    });
+    };
+    setDraft(nextDraft);
+    setBaseline(nextDraft);
     setProfileAccessSearch("");
     setFormError("");
     setFieldErrors({});
   };
 
-  const returnToList = () => {
+  const finishToList = () => {
+    setDraft(EMPTY_DRAFT);
+    setBaseline(EMPTY_DRAFT);
     setActiveView("list");
     setEditingId(null);
     setFormError("");
     setFieldErrors({});
   };
 
+  const returnToList = async () => {
+    if (await confirmLeave()) finishToList();
+  };
+
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
-    if (busy || readOnly) return;
+    if (inputReadOnly) return;
     const normalizedRoleCode = draft.roleCode.trim().toUpperCase();
     if (activeView === "create" && normalizedRoleCode === SYSTEM_ADMIN_ROLE_CODE) {
       const nextErrors = { roleCode: t("security.roles.codeReserved") };
@@ -470,6 +500,7 @@ export function SecurityRolesPage() {
   };
 
   const handleArchive = async (role: SecurityRole) => {
+    if (!(await confirmLeave())) return;
     if (
       !(await confirm({
         title: t("security.roles.archive"),
@@ -479,19 +510,24 @@ export function SecurityRolesPage() {
     ) {
       return;
     }
+    setChangingRoleId(role.role_id);
+    setActionError("");
     try {
       const archived = await securityApi.archiveRole(role);
       setRoles((rows) => rows.map((row) => (row.role_id === archived.role_id ? archived : row)));
       selectedRoleManualSelection.current = true;
       setSelectedId(archived.role_id);
-      returnToList();
+      finishToList();
       toast.success(t("security.common.saved"));
     } catch (cause) {
       setActionError(cause instanceof Error ? cause.message : t("security.common.saveError"));
+    } finally {
+      setChangingRoleId(null);
     }
   };
 
   const handleRestore = async (role: SecurityRole) => {
+    if (!(await confirmLeave())) return;
     if (
       !(await confirm({
         title: t("security.roles.restore"),
@@ -501,22 +537,26 @@ export function SecurityRolesPage() {
     ) {
       return;
     }
+    setChangingRoleId(role.role_id);
+    setActionError("");
     try {
       const restored = await securityApi.restoreRole(role);
       setRoles((rows) => rows.map((row) => (row.role_id === restored.role_id ? restored : row)));
       selectedRoleManualSelection.current = true;
       setSelectedId(restored.role_id);
-      returnToList();
+      finishToList();
       toast.success(t("security.common.saved"));
     } catch (cause) {
       setActionError(cause instanceof Error ? cause.message : t("security.common.saveError"));
+    } finally {
+      setChangingRoleId(null);
     }
   };
 
   const canDeleteRole = (role: SecurityRole) => !role.is_built_in && role.archived;
 
   const handleDelete = async (role: SecurityRole) => {
-    if (busy || deletingRoleId !== null || !canDeleteRole(role)) return;
+    if (operationBusy || !canDeleteRole(role)) return;
     selectedRoleManualSelection.current = true;
     setSelectedId(role.role_id);
     if (
@@ -567,7 +607,8 @@ export function SecurityRolesPage() {
             id: "edit",
             label: t("security.common.edit"),
             icon: Pencil,
-            onSelect: () => startEdit(role),
+            disabled: operationBusy,
+            onSelect: () => { if (!operationBusy) startEdit(role); },
           },
           {
             id: "archive",
@@ -575,7 +616,8 @@ export function SecurityRolesPage() {
             icon: Archive,
             tone: "danger",
             visible: !role.is_built_in && !role.archived,
-            disabled: busy || deletingRoleId !== null,
+            disabled: operationBusy,
+            loading: changingRoleId === role.role_id,
             onSelect: () => handleArchive(role),
           },
           {
@@ -583,7 +625,8 @@ export function SecurityRolesPage() {
             label: t("security.roles.restore"),
             icon: ArchiveRestore,
             visible: !role.is_built_in && role.archived,
-            disabled: busy || deletingRoleId !== null,
+            disabled: operationBusy,
+            loading: changingRoleId === role.role_id,
             onSelect: () => handleRestore(role),
           },
           {
@@ -593,7 +636,7 @@ export function SecurityRolesPage() {
             tone: "danger",
             visible: canDeleteRole(role),
             loading: deletingRoleId === role.role_id,
-            disabled: busy || deletingRoleId !== null,
+            disabled: operationBusy,
             onSelect: () => handleDelete(role),
           },
         ]
@@ -611,7 +654,7 @@ export function SecurityRolesPage() {
   };
 
   const togglePermission = (code: string) => {
-    if (readOnly) return;
+    if (inputReadOnly) return;
     setDraft((current) => ({
       ...current,
       permissions: current.permissions.includes(code)
@@ -624,14 +667,14 @@ export function SecurityRolesPage() {
     draft.permissions.includes(code)
   ).length;
   const selectPermissions = (codes: string[]) => {
-    if (readOnly) return;
+    if (inputReadOnly) return;
     setDraft((current) => ({
       ...current,
       permissions: [...new Set([...current.permissions, ...codes])],
     }));
   };
   const clearPermissions = (codes: string[]) => {
-    if (readOnly) return;
+    if (inputReadOnly) return;
     const codeSet = new Set(codes);
     setDraft((current) => ({
       ...current,
@@ -697,6 +740,7 @@ export function SecurityRolesPage() {
             aria-current={selected ? "true" : undefined}
             onClick={(event) => {
               event.stopPropagation();
+              if (operationBusy) return;
               selectedRoleManualSelection.current = true;
               setSelectedId(role.role_id);
             }}
@@ -741,6 +785,7 @@ export function SecurityRolesPage() {
                         kind: "primary" as const,
                         label: t("security.common.create"),
                         icon: Plus,
+                        disabled: operationBusy,
                         onClick: startCreate,
                       },
                     ]
@@ -750,6 +795,7 @@ export function SecurityRolesPage() {
                   kind: "utility",
                   label: t("common.action.refresh"),
                   icon: RefreshCw,
+                  disabled: operationBusy,
                   onClick: () => load(true),
                   loading,
                 },
@@ -788,6 +834,7 @@ export function SecurityRolesPage() {
                     placeholder={t("security.roles.searchPlaceholder")}
                     value={search}
                     testId="security-roles-search"
+                    disabled={operationBusy}
                     onChange={setSearch}
                   />
                 </div>
@@ -806,9 +853,10 @@ export function SecurityRolesPage() {
                   loading={loading}
                   rows={filteredRoles}
                   sort={sort}
-                  onSortChange={setSort}
+                  onSortChange={(next) => { if (!operationBusy) setSort(next); }}
                   selectedRowKey={visibleSelectedId}
                   onRowSelect={(role) => {
+                    if (operationBusy) return;
                     selectedRoleManualSelection.current = true;
                     setSelectedId(role.role_id);
                   }}
@@ -839,7 +887,7 @@ export function SecurityRolesPage() {
         ) : (
           <>
             <div>
-              <Button type="button" variant="ghost" size="sm" onClick={returnToList}>
+              <Button type="button" variant="ghost" size="sm" disabled={operationBusy} onClick={returnToList}>
                 <ArrowLeft size={15} aria-hidden="true" />
                 <span>{t("security.common.backToList")}</span>
               </Button>
@@ -872,13 +920,13 @@ export function SecurityRolesPage() {
                       ref={roleCodeRef}
                       id="security-role-code"
                       required
-                      disabled={activeView === "edit"}
+                      disabled={activeView === "edit" || inputReadOnly}
                       className={cn(INPUT_CLASS, fieldErrors.roleCode && "border-danger")}
                       aria-invalid={fieldErrors.roleCode ? "true" : undefined}
                       aria-describedby={fieldErrors.roleCode ? "security-role-code-error" : undefined}
                       value={draft.roleCode}
                       onChange={(event) => {
-                        if (readOnly) return;
+                        if (inputReadOnly) return;
                         setDraft((current) => ({
                           ...current,
                           roleCode: event.target.value.toUpperCase(),
@@ -894,13 +942,13 @@ export function SecurityRolesPage() {
                       ref={displayNameRef}
                       id="security-role-name"
                       required
-                      disabled={readOnly}
+                      disabled={inputReadOnly}
                       className={cn(INPUT_CLASS, fieldErrors.displayName && "border-danger")}
                       aria-invalid={fieldErrors.displayName ? "true" : undefined}
                       aria-describedby={fieldErrors.displayName ? "security-role-name-error" : undefined}
                       value={draft.displayName}
                       onChange={(event) => {
-                        if (readOnly) return;
+                        if (inputReadOnly) return;
                         setDraft((current) => ({ ...current, displayName: event.target.value }));
                         clearFieldError("displayName");
                       }}
@@ -911,17 +959,17 @@ export function SecurityRolesPage() {
                 <label className="grid gap-1.5 text-sm font-medium">
                   <span>{t("security.roles.description")}</span>
                   <textarea
-                    disabled={readOnly}
+                    disabled={inputReadOnly}
                     className="min-h-24 w-full rounded-md border border-border bg-card px-3 py-2 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-ring/30 disabled:cursor-not-allowed disabled:bg-muted/20 disabled:text-muted"
                     value={draft.description}
                     onChange={(event) => {
-                      if (readOnly) return;
+                      if (inputReadOnly) return;
                       setDraft((current) => ({ ...current, description: event.target.value }));
                     }}
                   />
                 </label>
 
-                <fieldset className="grid gap-3" disabled={readOnly}>
+                <fieldset className="grid gap-3" disabled={inputReadOnly}>
                   <legend className="text-base font-semibold">{t("security.roles.permissions")}</legend>
                   <p className="text-sm text-muted">{t("security.roles.permissionsHint")}</p>
                   {permissions.length > 0 ? (
@@ -979,7 +1027,7 @@ export function SecurityRolesPage() {
                                       className="mt-0.5 h-4 w-4 accent-primary disabled:cursor-not-allowed"
                                       type="checkbox"
                                       checked={checkedDirect || inherited}
-                                      disabled={readOnly || inherited}
+                                      disabled={inputReadOnly || inherited}
                                       onChange={() => {
                                         if (!inherited) togglePermission(permission.code);
                                       }}
@@ -1111,6 +1159,7 @@ export function SecurityRolesPage() {
                             id: "save",
                             label: activeView === "edit" ? t("security.common.save") : t("security.common.create"),
                             loading: busy,
+                            disabled: operationBusy,
                             onClick: () => {
                               formRef.current?.requestSubmit();
                             },
@@ -1123,7 +1172,7 @@ export function SecurityRolesPage() {
                     {
                       id: "cancel",
                       label: t("security.common.cancel"),
-                      disabled: busy || deletingRoleId !== null,
+                      disabled: operationBusy,
                       onClick: returnToList,
                     },
                   ]}

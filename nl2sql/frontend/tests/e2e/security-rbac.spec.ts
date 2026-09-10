@@ -2894,6 +2894,7 @@ test("ロール・権限管理はカード型リストではなくテーブル�
   await expect(page.getByRole("checkbox", { name: /ユーザー管理/ })).not.toBeChecked();
   await expect(page.getByRole("checkbox", { name: /ロール・権限管理/ })).not.toBeChecked();
   await page.getByRole("button", { name: "一覧に戻る" }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "破棄して移動" }).click();
   await expect(page.locator("#security-roles-panel-list")).toBeVisible();
 
   const systemRoleRow = grid.locator("tbody tr").filter({ hasText: "システム管理者" });
@@ -5868,4 +5869,79 @@ test("ユーザー管理レビュー: 未保存入力は戻ると内部リンク
   await page.getByRole("button", { name: "一覧に戻る" }).click();
   await page.getByRole("alertdialog").getByRole("button", { name: "破棄して移動" }).click();
   await expect(page.getByTestId("security-users-grid")).toBeVisible();
+});
+
+async function mockReviewedRoles(page: Page, archived = false) {
+  await mockDatabaseGateReady(page);
+  const role = { ...systemRole, role_id: "review-role", role_code: "REVIEW", display_name: "レビュー役割", is_built_in: false, archived, permissions: ["menu.query", "menu.history"], allowed_profile_ids: [] };
+  await page.route("**/api/security/roles?include_archived=true", route => fulfill(route, [role]));
+  await page.route("**/api/security/permissions", route => fulfill(route, [
+    { code: "menu.query", label: "SQL 生成", group: "AI 活用", description: "", implies: [] },
+    { code: "menu.history", label: "実行履歴", group: "AI 活用", description: "", implies: [] },
+  ]));
+  return role;
+}
+
+for (const action of ["archive", "restore"] as const) {
+  test(`ロール管理レビュー: ${action} 待機中の対象固定と失敗後の再試行`, async ({ page }) => {
+    const role = await mockReviewedRoles(page, action === "restore");
+    const label = action === "archive" ? "アーカイブ" : "復元";
+    let pending: Route | undefined;
+    let calls = 0;
+    await page.route(`**/api/security/roles/review-role/${action}`, route => { pending = route; calls += 1; });
+    await page.goto("/settings/security/roles");
+    const actions = page.getByTestId("security-roles-detail-actions");
+    const invoke = async () => {
+      const direct = actions.getByRole("button", { name: label, exact: true });
+      if (await direct.count()) await direct.click();
+      else {
+        await actions.getByRole("button", { name: "その他の操作" }).click();
+        await page.getByRole("menuitem", { name: label, exact: true }).click();
+      }
+      await page.getByRole("alertdialog").getByRole("button", { name: "実行", exact: true }).click();
+    };
+    await expect(actions).toBeVisible();
+    await invoke();
+    await expect.poll(() => calls).toBe(1);
+    await expect(actions.getByRole("button", { name: "編集", exact: true })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "新規作成", exact: true })).toBeDisabled();
+    await fulfill(pending!, "ロール操作に失敗しました", 503);
+    await expect(page.getByText("ロール操作に失敗しました", { exact: true })).toBeVisible();
+    await invoke();
+    await expect.poll(() => calls).toBe(2);
+    await fulfill(pending!, { ...role, archived: action === "archive", version: role.version + 1 });
+    await expect(actions.getByRole("button", { name: "編集", exact: true })).toBeEnabled();
+    await expect(page.getByText("ロール操作に失敗しました", { exact: true })).toHaveCount(0);
+  });
+}
+
+test("ロール管理レビュー: 選択順を除いて未保存変更を保護し保存中は入力を固定する", async ({ page }) => {
+  const role = await mockReviewedRoles(page);
+  let pending: Route | undefined;
+  await page.route("**/api/security/roles/review-role", route => { pending = route; });
+  await page.goto("/settings/security/roles");
+  const edit = () => page.getByTestId("security-roles-detail-actions").getByRole("button", { name: "編集", exact: true }).click();
+  await edit();
+  const query = page.getByRole("checkbox", { name: /SQL 生成/ });
+  await query.uncheck();
+  await query.check();
+  await page.getByRole("button", { name: "一覧に戻る" }).click();
+  await expect(page.getByTestId("security-roles-grid")).toBeVisible();
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+  await edit();
+  const name = page.getByLabel("ロール名", { exact: false });
+  await name.fill("未保存ロール");
+  await page.getByRole("button", { name: "一覧に戻る" }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "キャンセル" }).click();
+  await expect(name).toHaveValue("未保存ロール");
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+  await expect.poll(() => Boolean(pending)).toBe(true);
+  await expect(name).toBeDisabled();
+  await expect(query).toBeDisabled();
+  await expect(page.getByRole("button", { name: "一覧に戻る" })).toBeDisabled();
+  await fulfill(pending!, { ...role, display_name: "未保存ロール", version: role.version + 1 });
+  await expect(name).toBeEnabled();
+  await page.getByRole("button", { name: "一覧に戻る" }).click();
+  await expect(page.getByTestId("security-roles-grid")).toBeVisible();
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
 });

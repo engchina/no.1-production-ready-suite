@@ -96,12 +96,12 @@ test("archived role editor keeps permission and profile options visible but read
     rolesPageSource,
     /const readOnly = Boolean\(!canManage \|\| editingRole\?\.is_built_in \|\| editingRole\?\.archived\)/u
   );
-  assert.match(rolesPageSource, /if \(busy \|\| readOnly\) return/u);
+  assert.match(rolesPageSource, /if \(inputReadOnly\) return/u);
   assert.match(
     rolesPageSource,
-    /<fieldset className="grid gap-3" disabled=\{readOnly\}>/u
+    /<fieldset className="grid gap-3" disabled=\{inputReadOnly\}>/u
   );
-  assert.match(rolesPageSource, /disabled=\{readOnly \|\| inherited\}/u);
+  assert.match(rolesPageSource, /disabled=\{inputReadOnly \|\| inherited\}/u);
   assert.match(
     rolesPageSource,
     /disabled=\{profileAccessReadOnly\}\s*onChange=\{\(value\) => \{\s*if \(profileAccessReadOnly\) return;\s*setProfileAccessSearch\(value\);/u
@@ -109,6 +109,6 @@ test("archived role editor keeps permission and profile options visible but read
   assert.match(rolesPageSource, /disabled=\{profileAccessReadOnly\}\s*onChange=\{\(\) => toggleProfileAccess/u);
   assert.match(securityManagementSharedSource, /disabled\?: boolean/u);
   assert.match(securityManagementSharedSource, /disabled:bg-muted\/20 disabled:text-muted/u);
-  assert.ok((rolesPageSource.match(/if \(readOnly\) return;/gu) ?? []).length >= 6);
+  assert.ok((rolesPageSource.match(/if \(inputReadOnly\) return;/gu) ?? []).length >= 6);
   assert.ok((rolesPageSource.match(/if \(profileAccessReadOnly\) return;/gu) ?? []).length >= 4);
 });
