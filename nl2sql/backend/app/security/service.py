@@ -1053,7 +1053,7 @@ class SecurityService:
             return self._configured_system_admin_principal(
                 login_user_id=login_user_id,
                 session_id="configured-system-admin:worker",
-                csrf_token_hash="",
+                csrf_token_hash="",  # nosec B106 - worker は browser session を作成しない
             )
         user = self.store.get_user(user_uuid)
         if user is None or user.status != "ACTIVE" or user.force_password_change:
@@ -1064,8 +1064,8 @@ class SecurityService:
             SessionRecord(
                 session_id="worker",
                 user_uuid=user_uuid,
-                token_hash="",
-                csrf_token_hash="",
+                token_hash="",  # nosec B106 - 認証 token として保存・使用しない
+                csrf_token_hash="",  # nosec B106 - worker は browser session を作成しない
                 idle_expires_at=current,
                 absolute_expires_at=current,
                 last_seen_at=current,

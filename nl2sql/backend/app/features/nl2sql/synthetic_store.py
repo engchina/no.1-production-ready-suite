@@ -32,7 +32,7 @@ class SyntheticStore:
         if self.connection:
             with self.connection() as conn, conn.cursor() as cur:
                 cur.execute(
-                    "SELECT PAYLOAD FROM NL2SQL_SYNTHETIC_RUNS WHERE CONTEXT_ID=:ctx "
+                    "SELECT PAYLOAD FROM NL2SQL_SYNTHETIC_RUNS WHERE CONTEXT_ID=:ctx "  # nosec B608
                     "AND (:actor IS NULL OR ACTOR_ID=:actor) "
                     "AND (:active=0 OR STATUS IN ('pending','running','verifying','unknown')) "
                     "ORDER BY CREATED_AT DESC" + ("" if active else " FETCH FIRST 100 ROWS ONLY"),

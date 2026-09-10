@@ -57,9 +57,9 @@ def inspect_operation(adapter: OracleNl2SqlAdapter, run: SyntheticRun) -> Synthe
         owner = str(run.session["username"])
         owner = owner.replace('"', '""')
         cur.execute(
-            f"SELECT NAME, STATUS, ROWS_LOADED, ERROR_CODE, ERROR_MESSAGE "
+            "SELECT NAME, STATUS, ROWS_LOADED, ERROR_CODE, ERROR_MESSAGE "  # nosec B608
             f'FROM "{owner}"."{status_table}"'
-        )  # nosec B608 - dictionary + allowlist
+        )  # owner is quoted, status table is restricted to Oracle-generated names
         chunks = cur.fetchall()
     run.operation_ids = [int(operation_id)]
     by_table: dict[str, list[Any]] = {}

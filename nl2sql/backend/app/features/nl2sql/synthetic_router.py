@@ -53,8 +53,8 @@ def get_results(
     quoted_owner = identity.owner.replace('"', '""')
     quoted_name = identity.object_name.replace('"', '""')
     result = service.adapter.execute_select(
-        f'SELECT * FROM "{quoted_owner}"."{quoted_name}"', limit
-    )  # nosec B608 - validated Oracle identity
+        f'SELECT * FROM "{quoted_owner}"."{quoted_name}"', limit  # nosec B608
+    )  # both identifiers escape embedded double quotes
     return ApiResponse(
         data={
             "table_name": table_name,
