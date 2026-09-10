@@ -1040,6 +1040,38 @@ class SecurityService:
             and principal.session_id.startswith("configured-system-admin:")
         )
 
+    def principal_for_worker(self, user_uuid: str) -> Principal:
+        """受理後の非対話実行でも現在の user/role 権限を再計算する。"""
+        from app.security.dependencies import LOCAL_DEBUG_USER_UUID, local_debug_principal
+
+        if user_uuid == LOCAL_DEBUG_USER_UUID:
+            if not get_settings().local_debug_enabled:
+                raise SecurityApiError(403, "ローカル DEBUG の実行権限は解除されています。")
+            return local_debug_principal()
+        if user_uuid == _CONFIGURED_SYSTEM_ADMIN_USER_UUID:
+            login_user_id, _ = self._ensure_configured_system_admin_ready()
+            return self._configured_system_admin_principal(
+                login_user_id=login_user_id,
+                session_id="configured-system-admin:worker",
+                csrf_token_hash="",
+            )
+        user = self.store.get_user(user_uuid)
+        if user is None or user.status != "ACTIVE" or user.force_password_change:
+            raise SecurityApiError(403, "生成を受け付けたユーザーの実行権限を確認できません。")
+        current = _now()
+        return self._principal_for(
+            user,
+            SessionRecord(
+                session_id="worker",
+                user_uuid=user_uuid,
+                token_hash="",
+                csrf_token_hash="",
+                idle_expires_at=current,
+                absolute_expires_at=current,
+                last_seen_at=current,
+            ),
+        )
+
     def _principal_for(self, user: UserRecord, session: SessionRecord) -> Principal:
         roles = [self.get_role(role_id) for role_id in user.role_ids]
         active_roles = [role for role in roles if role is not None and not role.archived]

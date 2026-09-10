@@ -2,6 +2,7 @@
 
 import logging
 import re
+import threading
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -25,6 +26,7 @@ from app.features.nl2sql.service import (
     SchemaCatalogEmptyError,
     nl2sql_service,
 )
+from app.features.nl2sql.synthetic_service import worker_loop
 from app.features.settings.errors import DatabaseWalletOperationError
 from app.readiness import readiness_checks
 from app.security.permissions import UNCLASSIFIED_PERMISSION, permission_for_route
@@ -65,9 +67,13 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     runtime_settings = get_settings()
     if runtime_settings.local_debug_enabled:
         logger.warning("local_debug_auth_bypass_enabled")
+    synthetic_stop = threading.Event()
+    if runtime_settings.nl2sql_synthetic_worker_mode == "inprocess":
+        threading.Thread(target=worker_loop, args=(synthetic_stop,), daemon=True).start()
     try:
         yield
     finally:
+        synthetic_stop.set()
         close_oracle_pools()
 
 

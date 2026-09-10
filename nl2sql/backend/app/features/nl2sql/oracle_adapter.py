@@ -11,7 +11,7 @@ import importlib
 import json
 import logging
 import re
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager, suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -2615,6 +2615,7 @@ class OracleNl2SqlAdapter:
         user_prompt: str = "",
         sample_rows: int = 0,
         use_comments: bool = True,
+        on_connection: Callable[[Any], None] | None = None,
     ) -> dict[str, Any]:
         """Call DBMS_CLOUD_AI.GENERATE_SYNTHETIC_DATA for a validated table."""
         normalized_profile_name = profile_name.strip()
@@ -2695,6 +2696,8 @@ class OracleNl2SqlAdapter:
             )
         errors: list[str] = []
         with self.connection() as conn, conn.cursor() as cursor:
+            if on_connection is not None:
+                on_connection(conn)
             for sql, params in procedure_candidates:
                 try:
                     cursor.execute(sql, params)

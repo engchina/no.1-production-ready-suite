@@ -602,6 +602,12 @@ function fulfillJson(route: Route, data: JsonValue) {
   });
 }
 
+function syntheticRunFixture(status: string) {
+  const terminal = ["completed", "partial", "failed", "no_data"].includes(status);
+  return { run_id: "run-001", status, created_at: new Date().toISOString(), started_at: new Date().toISOString(), finished_at: terminal ? new Date().toISOString() : null, checked_at: new Date().toISOString(), message: "", operation_ids: [42],
+    targets: [{ table_name: "APP.INVOICES", requested_rows: 2, loaded_rows: status === "completed" ? 2 : status === "partial" ? 1 : terminal ? 0 : null, status: terminal ? (status === "failed" ? "failed" : "completed") : "running", error: status === "failed" ? "ORA-01031: 権限が不足しています。" : "" }] };
+}
+
 function createRequestGate() {
   let release: () => void = () => undefined;
   const promise = new Promise<void>((resolve) => {
@@ -2460,43 +2466,21 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
       ],
     })
   );
-  await page.route("**/api/nl2sql/synthetic-data/generate", (route) => {
+  let syntheticRun: ReturnType<typeof syntheticRunFixture> | null = null;
+  await page.route("**/api/nl2sql/synthetic-data/runs", (route) => {
+    if (route.request().method() === "GET") return fulfillJson(route, syntheticRun ? [syntheticRun] : []);
     state.syntheticDataPayload = route.request().postDataJSON() as Record<string, unknown>;
-    const executed = true;
-    const objectList = Array.isArray(state.syntheticDataPayload.object_list)
-      ? state.syntheticDataPayload.object_list.filter((item): item is string => typeof item === "string")
-      : [];
-    const selectedTables =
-      objectList.length > 0
-        ? objectList
-        : typeof state.syntheticDataPayload.table_name === "string" && state.syntheticDataPayload.table_name
-          ? [state.syntheticDataPayload.table_name]
-          : [];
-    const rowCount = Number(state.syntheticDataPayload.rows_per_table ?? state.syntheticDataPayload.row_count ?? 1);
-    return fulfillJson(route, {
-      table_name: selectedTables[0] ?? "APP.INVOICES",
-      object_list: selectedTables,
-      row_count: rowCount,
-      executed,
-      runtime: "deterministic",
-      status: "executed",
-      message: executed
-        ? "DBMS_CLOUD_AI synthetic data generation を実行しました。"
-        : "INVOICES に 1 行の synthetic data を生成する plan です。",
-      warnings: executed ? [] : ["ADMIN_EXECUTE が必要です。"],
-      engine_meta: {},
-      timing,
-    });
+    const payload = state.syntheticDataPayload;
+    const tables = payload.table_name ? [String(payload.table_name)] : payload.object_list as string[];
+    syntheticRun = syntheticRunFixture("completed");
+    syntheticRun.targets = tables.map((table_name) => ({ table_name, status: "completed", requested_rows: Number(payload.row_count), loaded_rows: Number(payload.row_count), error: "" }));
+    return fulfillJson(route, syntheticRun);
   });
-  await page.route("**/api/nl2sql/synthetic-data/results**", (route) =>
+  await page.route("**/api/nl2sql/synthetic-data/**results**", (route) =>
     fulfillJson(route, {
-      table_name: "APP.INVOICES",
-      runtime: "deterministic",
-      results: {
-        columns: ["CUSTOMER_NAME", "TOTAL_AMOUNT"],
-        rows: [{ CUSTOMER_NAME: "synthetic-customer", TOTAL_AMOUNT: 12345 }],
-        total: 1,
-      },
+      table_name: new URL(route.request().url()).searchParams.get("table_name") ?? "APP.INVOICES",
+      runtime: "oracle",
+      results: { columns: ["CUSTOMER_NAME", "TOTAL_AMOUNT"], rows: [{ CUSTOMER_NAME: "synthetic-customer", TOTAL_AMOUNT: 12345 }], total: 1 },
       warnings: [],
     })
   );
@@ -10320,26 +10304,21 @@ test("table and view management object lists load more and find unloaded objects
   await expect(page.getByRole("button", { name: "V_PAGE_VIEW_101 を表示" })).toBeVisible();
 });
 
-for (const outcome of ["success", "error"] as const) {
-  test(`synthetic generation waits beyond five seconds for ${outcome}`, async ({ page }, testInfo) => {
+for (const outcome of ["completed", "failed", "partial", "no_data", "unknown"] as const) {
+  test(`synthetic run restores progress and explains ${outcome}`, async ({ page }, testInfo) => {
     await mockNl2SqlApi(page);
-    let generationRequests = 0;
-    await page.route("**/api/nl2sql/synthetic-data/generate", async (route) => {
-      generationRequests += 1;
-      // Oracle の実測時間に合わせ、旧 jobControl の 5 秒を確実に超える。
-      await new Promise((resolve) => setTimeout(resolve, 5_500));
-      await fulfillJson(route, {
-        table_name: "APP.INVOICES",
-        object_list: ["APP.INVOICES"],
-        row_count: 1,
-        executed: outcome === "success",
-        runtime: "oracle",
-        status: outcome === "success" ? "executed" : "error",
-        message: outcome === "success" ? "生成を実行しました。" : "生成に失敗しました。",
-        warnings: outcome === "success" ? [] : ["ORA-01031: 権限が不足しています。"],
-        engine_meta: {},
-        timing,
-      });
+    let submitted = 0;
+    let run: ReturnType<typeof syntheticRunFixture> | null = null;
+    let reads = 0;
+    await page.route("**/api/nl2sql/synthetic-data/runs", (route) => {
+      if (route.request().method() === "GET") return fulfillJson(route, run ? [run] : []);
+      submitted += 1;
+      run = syntheticRunFixture("running");
+      return route.fulfill({ status: 202, contentType: "application/json", body: JSON.stringify({ data: run }) });
+    });
+    await page.route("**/api/nl2sql/synthetic-data/runs/*/results**", (route) => {
+      reads += 1;
+      return fulfillJson(route, { table_name: "APP.INVOICES", runtime: "oracle", results: { columns: ["ID"], rows: [], total: 0 }, warnings: [] });
     });
     await page.goto("/data-management");
     await page.getByRole("tab", { name: "合成データ生成" }).click();
@@ -10347,59 +10326,83 @@ for (const outcome of ["success", "error"] as const) {
     await panel.getByRole("button", { name: "テーブル一覧を取得" }).click();
     await panel.getByLabel("APP.INVOICES を選択").check();
     await panel.getByLabel("実行確認語").fill("APP.INVOICES");
-    const generateButton = panel.getByRole("button", { name: "生成開始" });
-    await generateButton.focus();
+    await panel.getByRole("button", { name: "生成開始" }).focus();
     await page.keyboard.press("Enter");
-    await expect(generateButton).toBeDisabled();
-    await expect(panel.getByTestId("data-synthetic-generation-processing")).toBeVisible();
-    await expect(panel.getByLabel("APP.INVOICES を選択")).toBeDisabled();
-    await expect(panel.getByRole("button", { name: "テーブル一覧を取得" })).toBeDisabled();
-    await expect(panel.getByRole("button", { name: "データを表示" })).toBeDisabled();
-    await page.screenshot({ path: testInfo.outputPath("synthetic-generating.png"), fullPage: true });
-    if (outcome === "success") {
-      await expect(page.getByRole("region", { name: "通知" })).toContainText("Synthetic data 生成が完了しました。", { timeout: 10_000 });
-      await expect(panel.getByText("対象: APP.INVOICES。結果テーブルを選択し、「データを表示」で内容を確認してください。")).toBeVisible();
-      await expect(panel.getByTestId("synthetic-result-table-select")).toHaveValue("APP.INVOICES");
-      await panel.getByRole("button", { name: "データを表示" }).click();
-      await expect(panel.getByRole("cell", { name: "synthetic-customer" })).toBeVisible();
+    const status = page.getByTestId("synthetic-run-panel");
+    await expect(status.getByTestId("synthetic-run-status")).toHaveText("生成中");
+    await expect(status).toContainText("今回の追加件数: 未確認 件");
+    await expect(panel.getByRole("button", { name: "生成開始" })).toBeDisabled();
+    await page.reload();
+    await expect(status.getByTestId("synthetic-run-status")).toHaveText("生成中");
+    await expect(panel.getByLabel("実行確認語")).toHaveValue("");
+    expect(submitted).toBe(1);
+    expect(reads).toBe(0);
+    run = syntheticRunFixture(outcome);
+    await status.getByRole("button", { name: "状況を再確認" }).click();
+    const labels = { completed: "合成データの生成が完了しました", failed: "データを生成できませんでした", partial: "一部のデータを生成しました", no_data: "処理は終了しましたが、データは追加されていません", unknown: "生成結果を確認できていません" };
+    await expect(status.getByTestId("synthetic-run-status")).toHaveText(labels[outcome]);
+    if (["completed", "partial"].includes(outcome)) {
+      await expect.poll(() => reads).toBe(1);
+      await expect(panel).toContainText("生成記録はありますが、現在の接続ではデータを確認できません");
+    } else if (outcome === "unknown") {
+      await expect(status).toContainText("未確認");
+      await expect(panel.getByRole("button", { name: "生成開始" })).toBeDisabled();
+      expect(reads).toBe(0);
     } else {
-      await expect(panel.getByText("ORA-01031: 権限が不足しています。")).toBeVisible({ timeout: 10_000 });
-      await expect(page.getByRole("region", { name: "通知" })).not.toContainText("Synthetic data 生成が完了しました。");
+      await panel.getByRole("button", { name: "データを表示" }).click();
+      await expect(panel).toContainText("今回の追加は 0 件です");
     }
-    await expect(panel.getByTestId("data-synthetic-generation-processing")).toHaveCount(0);
     await page.screenshot({ path: testInfo.outputPath(`synthetic-${outcome}.png`), fullPage: true });
-    expect(generationRequests).toBe(1);
     await expectNoHorizontalScroll(page);
+    expect(submitted).toBe(1);
   });
 }
 
-test("synthetic generation timeout offers result verification without replaying generation", async ({ page }) => {
+test("synthetic run status outage keeps prior state and never resubmits", async ({ page }) => {
   await mockNl2SqlApi(page);
-  await page.addInitScript(() => {
-    const timeout = AbortSignal.timeout.bind(AbortSignal);
-    AbortSignal.timeout = (milliseconds: number) => timeout(milliseconds === 65 * 60_000 ? 100 : milliseconds);
+  let unavailable = false;
+  let submits = 0;
+  await page.route("**/api/nl2sql/synthetic-data/runs", (route) => {
+    if (route.request().method() !== "GET") submits++;
+    return unavailable ? route.fulfill({ status: 503, body: "unavailable" }) : fulfillJson(route, [syntheticRunFixture("running")]);
   });
-  let generationRequests = 0;
-  await page.route("**/api/nl2sql/synthetic-data/generate", async (route) => {
-    generationRequests += 1;
-    await new Promise((resolve) => setTimeout(resolve, 1_000));
-    await route.abort();
+  await page.goto("/data-management?synthetic_run=run-001");
+  const panel = page.getByTestId("synthetic-run-panel");
+  await expect(panel.getByTestId("synthetic-run-status")).toHaveText("生成中");
+  unavailable = true;
+  await panel.getByRole("button", { name: "状況を再確認" }).click();
+  await expect(panel).toContainText("最新の状況を取得できません");
+  await expect(panel.getByTestId("synthetic-run-status")).toHaveText("生成中");
+  expect(submits).toBe(0);
+});
+
+test("synthetic completion on another page links to its result without another generation", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  let status = "running";
+  let writes = 0;
+  await page.route("**/api/nl2sql/synthetic-data/runs", (route) => {
+    if (route.request().method() !== "GET") writes++;
+    return fulfillJson(route, [syntheticRunFixture(status)]);
   });
-  await page.goto("/data-management");
+  await page.goto("/");
+  await expect.poll(() => page.getByRole("link", { name: "結果を確認" }).count()).toBe(0);
+  status = "completed";
+  const link = page.getByRole("link", { name: "結果を確認" });
+  await expect(link).toBeVisible({ timeout: 20_000 });
+  await link.click();
+  await expect(page.getByTestId("synthetic-run-status")).toHaveText("合成データの生成が完了しました");
+  await expect(page.getByRole("cell", { name: "synthetic-customer" })).toBeVisible();
+  expect(writes).toBe(0);
+});
+
+test("synthetic missing history does not silently select another run", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  await page.route("**/api/nl2sql/synthetic-data/runs", (route) => fulfillJson(route, [syntheticRunFixture("completed")]));
+  await page.route("**/api/nl2sql/synthetic-data/runs/deleted", (route) => route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ detail: "選択した生成記録は存在しません。" }) }));
+  await page.goto("/data-management?synthetic_run=deleted");
   await page.getByRole("tab", { name: "合成データ生成" }).click();
-  const panel = page.locator("#data-management-panel-synthetic");
-  await panel.getByRole("button", { name: "テーブル一覧を取得" }).click();
-  await panel.getByLabel("APP.INVOICES を選択").check();
-  await panel.getByLabel("実行確認語").fill("APP.INVOICES");
-  await panel.getByRole("button", { name: "生成開始" }).click();
-  await expect(panel.getByText(/Oracle 側では処理が継続している可能性があります/)).toBeVisible();
-  await expect(panel.getByTestId("data-synthetic-generation-processing")).toHaveCount(0);
-  await expect(panel.getByLabel("APP.INVOICES を選択")).toBeChecked();
-  await expect(panel.getByRole("button", { name: "データを表示" })).toBeEnabled();
-  await panel.getByRole("button", { name: "データを表示" }).click();
-  await expect(panel.getByRole("cell", { name: "synthetic-customer" })).toBeVisible();
-  expect(generationRequests).toBe(1);
-  await expectNoHorizontalScroll(page);
+  await expect(page.getByText("選択した生成記録は存在しません。")).toBeVisible();
+  await expect(page.getByTestId("synthetic-run-status")).toHaveCount(0);
 });
 
 test("synthetic data table bulk selection and results use the shared skeleton preset", async ({ page }) => {
@@ -10476,36 +10479,18 @@ test("synthetic data table bulk selection and results use the shared skeleton pr
   await expect(syntheticPanel.getByText("選択 0 件", { exact: true })).toBeVisible();
   await syntheticPanel.getByLabel("APP.INVOICES を選択").check();
   await syntheticPanel.getByLabel("実行確認語").fill("APP.INVOICES");
-  const generateGate = createRequestGate();
-  await page.unroute("**/api/nl2sql/synthetic-data/generate");
-  await page.route("**/api/nl2sql/synthetic-data/generate", async (route) => {
-    await generateGate.promise;
-    return fulfillJson(route, {
-      table_name: "APP.INVOICES",
-      object_list: ["APP.INVOICES"],
-      row_count: 1,
-      runtime: "oracle",
-      status: "executed",
-      message: "DBMS_CLOUD_AI synthetic data generation を実行しました。",
-      warnings: [],
-      engine_meta: {},
-      timing,
-    });
-  });
   await syntheticPanel.getByRole("button", { name: "生成開始" }).click();
-  await expect(page.getByRole("region", { name: "通知" })).toContainText("Synthetic data 生成を開始しました。");
-  await expectToastStackBottomRight(page);
-  generateGate.release();
-  await expect(syntheticPanel.getByText("operation-001")).toHaveCount(0);
+  await expect(syntheticPanel.getByTestId("synthetic-run-panel").getByTestId("synthetic-run-status")).toHaveText("合成データの生成が完了しました");
+  await expect(syntheticPanel.getByRole("cell", { name: "synthetic-customer" })).toBeVisible();
+  await syntheticPanel.getByTestId("data-synthetic-results-actions").getByRole("button", { name: "クリア" }).click();
   const syntheticResultsSection = syntheticPanel.locator("section[aria-labelledby='synthetic-results-heading']");
   await expect(syntheticResultsSection.getByRole("heading", { name: "生成結果データの表示" })).toBeVisible();
   await expect(syntheticResultsSection.getByText("生成後に結果テーブルを選択すると表示できます。").first()).toBeVisible();
-  await expect(page.getByRole("region", { name: "通知" })).toContainText("Synthetic data 生成が完了しました。");
   await expectToastStackBottomRight(page);
 
   const resultsGate = createRequestGate();
   const syntheticResultsRequests: URL[] = [];
-  await page.route("**/api/nl2sql/synthetic-data/results**", async (route) => {
+  await page.route("**/api/nl2sql/synthetic-data/**results**", async (route) => {
     syntheticResultsRequests.push(new URL(route.request().url()));
     await resultsGate.promise;
     return fulfillJson(route, {
@@ -10563,26 +10548,12 @@ test("synthetic data table bulk selection and results use the shared skeleton pr
   await expectNoHorizontalScroll(page);
 });
 
-test("synthetic data reports non-executed 200 responses beside the generate action", async ({ page }) => {
+test("synthetic data reports preflight rejection beside the generate action", async ({ page }) => {
   await mockNl2SqlApi(page);
   await page.setViewportSize({ width: 1280, height: 900 });
-  await page.unroute("**/api/nl2sql/synthetic-data/generate");
-  await page.route("**/api/nl2sql/synthetic-data/generate", (route) =>
-    fulfillJson(route, {
-      table_name: "APP.INVOICES",
-      object_list: ["APP.INVOICES"],
-      row_count: 1,
-      executed: false,
-      runtime: "deterministic",
-      status: "requires_oracle",
-      message: "INVOICES に 1 行/表の synthetic data を生成する plan です。",
-      warnings: [
-        "DBMS_CLOUD_AI.GENERATE_SYNTHETIC_DATA の実行には NL2SQL_RUNTIME_MODE=oracle が必要です。",
-      ],
-      engine_meta: {},
-      timing,
-    })
-  );
+  await page.route("**/api/nl2sql/synthetic-data/runs", (route) => route.request().method() === "GET"
+    ? fulfillJson(route, [])
+    : route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ detail: "DBMS_CLOUD_AI.GENERATE_SYNTHETIC_DATA の実行には NL2SQL_RUNTIME_MODE=oracle が必要です。" }) }));
 
   await page.goto("/data-management");
   await page.getByRole("tab", { name: "合成データ生成" }).click();
@@ -10595,7 +10566,7 @@ test("synthetic data reports non-executed 200 responses beside the generate acti
   await syntheticPanel.getByRole("button", { name: "生成開始" }).click();
 
   await expect(page.getByRole("region", { name: "通知" })).toContainText("Synthetic data 生成を開始しました。");
-  await expect(page.getByRole("region", { name: "通知" })).not.toContainText("Synthetic data 生成が完了しました。");
+  await expect(page.getByRole("region", { name: "通知" })).not.toContainText("合成データの生成が完了しました");
   await expect(
     syntheticPanel.getByText(
       "DBMS_CLOUD_AI.GENERATE_SYNTHETIC_DATA の実行には NL2SQL_RUNTIME_MODE=oracle が必要です。"

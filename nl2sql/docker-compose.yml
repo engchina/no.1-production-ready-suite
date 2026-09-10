@@ -11,6 +11,7 @@ services:
       CORS_ORIGINS: '["http://localhost:3001","http://127.0.0.1:3001"]'
       NL2SQL_RUNTIME_MODE: ${NL2SQL_RUNTIME_MODE:-deterministic}
       NL2SQL_PERSISTENCE_MODE: ${NL2SQL_PERSISTENCE_MODE:-oracle}
+      NL2SQL_SYNTHETIC_WORKER_MODE: external
       NL2SQL_JOB_WORKER_MODE: ${NL2SQL_JOB_WORKER_MODE:-external}
       NL2SQL_ONTOLOGY_WORKER_MODE: ${NL2SQL_ONTOLOGY_WORKER_MODE:-inprocess}
       NL2SQL_SCHEMA_REFRESH_WORKER_MODE: ${NL2SQL_SCHEMA_REFRESH_WORKER_MODE:-external}
@@ -75,6 +76,18 @@ services:
       NL2SQL_RUNTIME_MODE: ${NL2SQL_RUNTIME_MODE:-oracle}
       NL2SQL_PERSISTENCE_MODE: ${NL2SQL_PERSISTENCE_MODE:-oracle}
       NL2SQL_QUALITY_EVALUATION_WORKER_MODE: external
+
+  synthetic-data-worker:
+    build:
+      context: ..
+      dockerfile: no.1-production-ready-nl2sql/backend/Dockerfile
+    command: ["python", "-m", "app.cli.nl2sql_synthetic_worker"]
+    env_file:
+      - backend/.env.example
+    environment:
+      NL2SQL_RUNTIME_MODE: ${NL2SQL_RUNTIME_MODE:-oracle}
+      NL2SQL_PERSISTENCE_MODE: ${NL2SQL_PERSISTENCE_MODE:-oracle}
+      NL2SQL_SYNTHETIC_WORKER_MODE: external
 
   frontend:
     build:
