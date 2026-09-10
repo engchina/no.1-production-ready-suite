@@ -17,7 +17,7 @@ import {
   Server,
   XCircle,
 } from "lucide-react";
-import { useEffect, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import { toast } from "@engchina/production-ready-ui";
 
 import { ErrorState } from "@/components/StateViews";
@@ -63,6 +63,7 @@ import {
   useUpdateDatabaseSettings,
   useUploadDatabaseWallet,
 } from "@/lib/queries";
+import { useSettingsDraftGuard } from "@/lib/useSettingsDraftGuard";
 import { cn } from "@/lib/utils";
 import { ExecutionConfirmationField } from "@/features/nl2sql/components/DbAdminShared";
 
@@ -136,16 +137,28 @@ export function DatabaseSettingsClient() {
   const autoWalletAttemptedRef = useRef<Set<string>>(new Set());
   const resetPasswordReveal = passwordReveal.reset;
 
+  const baseline = useRef(EMPTY_FORM);
+  const operationBusy = save.isPending || test.isPending || walletUpload.isPending ||
+    walletDownload.isPending || passwordReveal.isPending;
+  useSettingsDraftGuard(JSON.stringify(form) !== JSON.stringify(baseline.current), operationBusy);
+  const acceptSettings = useCallback((data: DatabaseSettingsData, saved = false) => {
+    const next = formFromSettings(data);
+    const previous = baseline.current;
+    baseline.current = next;
+    setForm((current) => saved ? next : Object.fromEntries(
+      Object.keys(next).map((key) => {
+        const field = key as keyof DatabaseSettingsForm;
+        return [field, current[field] === previous[field] ? next[field] : current[field]];
+      })
+    ) as unknown as DatabaseSettingsForm);
+  }, []);
+
   useEffect(() => {
     if (query.data) {
-      setForm(formFromSettings(query.data));
-      setErrors({});
-      setPasswordVisible(false);
-      setWalletPasswordVisible(false);
+      acceptSettings(query.data);
       setOptimisticSettings(null);
-      resetPasswordReveal();
     }
-  }, [query.data, resetPasswordReveal]);
+  }, [acceptSettings, query.data]);
 
   const downloadWallet = walletDownload.mutate;
   const downloadWalletAsync = walletDownload.mutateAsync;
@@ -168,14 +181,14 @@ export function DatabaseSettingsClient() {
   useEffect(() => {
     const result = walletDownload.data;
     if (!result) return;
-    setForm(formFromSettings(result.settings));
+    acceptSettings(result.settings);
     setOptimisticSettings(result.settings);
     resetTest();
     if (result.status === "downloaded") {
       toast.success(t("settings.database.wallet.autoDownload.success"));
     }
     setWalletDownloadSource(null);
-  }, [resetTest, walletDownload.data]);
+  }, [acceptSettings, resetTest, walletDownload.data]);
 
   function updateForm(update: Partial<DatabaseSettingsForm>) {
     if ("password" in update || "clearPassword" in update) resetPasswordReveal();
@@ -216,10 +229,14 @@ export function DatabaseSettingsClient() {
   }
 
   function submit(settings: DatabaseSettingsData) {
+    if (operationBusy) return;
     if (!validateForm(settings, true)) return;
     save.mutate(payloadFromForm(form, settings), {
       onSuccess: (data) => {
-        setForm(formFromSettings(data));
+        acceptSettings(data, true);
+        setPasswordVisible(false);
+        setWalletPasswordVisible(false);
+        resetPasswordReveal();
         setOptimisticSettings(data);
         setErrors({});
         toast.success(t("settings.database.actions.saved"));
@@ -228,6 +245,7 @@ export function DatabaseSettingsClient() {
   }
 
   function runTest(settings: DatabaseSettingsData) {
+    if (operationBusy) return;
     if (!validateForm(settings, false)) return;
     test.reset();
     test.mutate(payloadFromForm(form, settings));
@@ -259,6 +277,7 @@ export function DatabaseSettingsClient() {
   }
 
   function uploadWallet(file: File) {
+    if (operationBusy) return;
     if (!file.name.toLowerCase().endsWith(".zip")) {
       setErrors((current) => ({
         ...current,
@@ -273,7 +292,7 @@ export function DatabaseSettingsClient() {
     resetTest();
     walletUpload.mutate(file, {
       onSuccess: (data) => {
-        setForm(formFromSettings(data));
+        acceptSettings(data);
         setOptimisticSettings(data);
         setPasswordVisible(false);
         setWalletPasswordVisible(false);
@@ -344,7 +363,7 @@ export function DatabaseSettingsClient() {
 
   return (
     <div className="p-8">
-      <div className="space-y-6">
+      <fieldset disabled={operationBusy} aria-busy={operationBusy} className="min-w-0 space-y-6">
         <AdbManagementCard
           settings={settings}
           ensureWalletFromOci={ensureWalletFromOci}
@@ -429,6 +448,7 @@ export function DatabaseSettingsClient() {
               {form.connectionSecurity === "wallet_mtls" ? (
                 <div className="space-y-4">
                   <WalletUploadField
+                    disabled={operationBusy}
                     settings={settings}
                     uploadPending={walletUpload.isPending}
                     autoDownloadPending={walletDownload.isPending && walletFieldDownloadActive}
@@ -527,7 +547,7 @@ export function DatabaseSettingsClient() {
         </form>
 
         <SelectAiCredentialCard />
-      </div>
+      </fieldset>
     </div>
   );
 }
@@ -1425,6 +1445,7 @@ function RequiredLabel({
 }
 
 function WalletUploadField({
+  disabled,
   settings,
   uploadPending,
   autoDownloadPending,
@@ -1435,6 +1456,7 @@ function WalletUploadField({
   onUpload,
   onRetryDownload,
 }: {
+  disabled?: boolean;
   settings: DatabaseSettingsData;
   uploadPending: boolean;
   autoDownloadPending: boolean;
@@ -1459,7 +1481,7 @@ function WalletUploadField({
         errorText={validationError}
         loading={uploadPending}
         loadingText={t("settings.database.actions.uploadingWallet")}
-        disabled={autoDownloadPending}
+        disabled={disabled || autoDownloadPending}
         dataTestId="oracle-wallet-upload"
         onFiles={([file]) => onUpload(file)}
       />

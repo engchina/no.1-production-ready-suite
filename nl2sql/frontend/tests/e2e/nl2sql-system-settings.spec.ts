@@ -2653,3 +2653,35 @@ test("モデルのテスト中は編集・削除・別テスト・保存を止�
   await expect(page.getByText("レビュー対象モデルの確認成功")).toHaveCount(0);
   await expectNoHorizontalOverflow(page);
 });
+
+test("Wallet 更新は未保存 DB ユーザーとパスワードを保持し、接続テスト中は入力を固定する", async ({ page }) => {
+  const gate = createRequestGate();
+  let tests = 0;
+  await page.route("**/api/settings/database/test", async (route) => {
+    tests += 1;
+    await gate.promise;
+    await fulfillJson(route, { status: "success", readiness: "ok", message: "編集済み接続の確認成功",
+      elapsed_ms: 5, checked_at: "2026-09-11T00:00:00Z", troubleshooting: [], details: {} });
+  });
+  await page.goto("/settings/database");
+  const user = page.locator("#oracle-user");
+  const password = page.getByLabel("データベースパスワード", { exact: true });
+  await user.fill("REVIEW_DRAFT_USER");
+  await password.fill("new-draft-secret-fixture");
+  await page.getByTestId("oracle-wallet-upload").locator('input[type="file"]').setInputFiles({
+    name: "review.zip", mimeType: "application/zip", buffer: Buffer.from("fixture-wallet"),
+  });
+  await expect(page.getByText(/review.zip.*アップロード|Wallet.*アップロードしました/)).toBeVisible();
+  await expect(user).toHaveValue("REVIEW_DRAFT_USER");
+  await expect(password).toHaveValue("new-draft-secret-fixture");
+  await page.getByRole("button", { name: "DB接続テスト", exact: true }).click();
+  await expect.poll(() => tests).toBe(1);
+  await expect(user).toBeDisabled();
+  await expect(password).toBeDisabled();
+  gate.release();
+  await expect(page.getByText("編集済み接続の確認成功")).toBeVisible();
+  await expect(user).toBeEnabled();
+  await user.fill("NEXT_DRAFT_USER");
+  await expect(page.getByText("編集済み接続の確認成功")).toHaveCount(0);
+  await expectNoHorizontalOverflow(page);
+});
