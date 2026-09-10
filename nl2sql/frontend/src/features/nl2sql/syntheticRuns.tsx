@@ -71,9 +71,9 @@ export function SyntheticRunNotifications() {
   </Banner>;
 }
 
-export function SyntheticRunPanel({ run, runs, onSelect, error, onRefresh, onViewResults, submitting = false }: {
+export function SyntheticRunPanel({ run, runs, onSelect, error, onRefresh, submitting = false }: {
   run: SyntheticRun | null; runs: SyntheticRun[]; onSelect: (id: string) => void;
-  error: boolean; submitting?: boolean; onRefresh: () => Promise<SyntheticRun | null>; onViewResults?: () => void;
+  error: boolean; submitting?: boolean; onRefresh: () => Promise<SyntheticRun | null>;
 }) {
   const history = runs.filter((item) => !historyExpired(item));
   const [refresh, setRefresh] = useState<{ scope: string; pending: boolean; failed: boolean; message: string } | null>(null);
@@ -154,11 +154,6 @@ export function SyntheticRunPanel({ run, runs, onSelect, error, onRefresh, onVie
       {run.failure_phase === "validation" && <Banner severity="danger">{t("syntheticRun.validationFailed")}</Banner>}
       {run.message && !run.failure_phase && <Banner severity={run.status === "failed" ? "danger" : "warning"}>{run.message}</Banner>}
       {run.finished_at && <p className="text-sm text-muted-foreground">{t("syntheticRun.finishedAt", { time: formatDateTime(run.finished_at) })}</p>}
-      <details className="text-sm"><summary className="cursor-pointer">{t("syntheticRun.details")}</summary>
-        <p>{t("syntheticRun.oracleReference", { id: run.operation_ids.join(", ") || t(run.failure_phase === "validation" ? "syntheticRun.notAccepted" : "syntheticRun.unverified") })}</p>
-        {run.failure_phase === "validation" && <p className="break-words">{run.message}</p>}
-        <Link className="text-primary underline" to={`/data-management?synthetic_run=${encodeURIComponent(run.run_id)}`}>{t("syntheticRun.openRecord")}</Link>
-      </details>
     </>}
     {runs.some((item) => !runFinished(item)) && <p className="text-sm text-muted-foreground">{t("syntheticRun.independentRuns")}</p>}
     {history.length > 0 && <label className="grid gap-1 text-sm">{t("syntheticRun.history")}
@@ -169,7 +164,6 @@ export function SyntheticRunPanel({ run, runs, onSelect, error, onRefresh, onVie
     </label>}
     <p className="text-xs text-muted-foreground">{t("syntheticRun.retention")}</p>
     <div className="flex flex-wrap gap-2">
-      {!submitting && run && runFinished(run) && onViewResults && <Button variant="primary" size="sm" onClick={onViewResults}>{t("syntheticRun.goToResults")}</Button>}
       <Button variant="secondary" size="sm" loading={feedback?.pending} aria-busy={feedback?.pending || undefined} onClick={() => void refreshStatus()}>{t(feedback?.pending ? "syntheticRun.refreshing" : "syntheticRun.refresh")}</Button>
     </div>
     {feedback?.message && (feedback.failed || !error) && <FormStatus tone={feedback.failed ? "danger" : "success"} message={feedback.message} />}

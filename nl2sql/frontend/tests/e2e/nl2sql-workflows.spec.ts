@@ -10343,7 +10343,11 @@ for (const outcome of ["completed", "failed", "partial", "no_data", "unknown"] a
     await expect(status.getByTestId("synthetic-run-status")).toHaveText(labels[outcome]);
     if (["completed", "partial"].includes(outcome)) {
       await expect.poll(() => reads).toBe(1);
-      await status.getByRole("button", { name: "結果データを確認" }).click();
+      await expect(status.getByRole("button", { name: "結果データを確認" })).toHaveCount(0);
+      await expect(status.locator("details")).toHaveCount(0);
+      await panel.getByRole("heading", { name: "生成結果データの表示" }).scrollIntoViewIfNeeded();
+      await panel.getByRole("button", { name: "データを表示", exact: true }).click();
+      await expect.poll(() => reads).toBe(2);
       await expect(panel.getByRole("heading", { name: "生成結果データの表示" })).toBeInViewport();
       await expect(panel).toContainText("生成記録はありますが、現在の接続ではデータを確認できません");
     } else if (outcome === "unknown") {
@@ -10436,7 +10440,8 @@ test("synthetic waiting uses shared live timing beside the action and freezes du
   await page.clock.install();
   await page.clock.fastForward(5_000);
   await expect(timer).toHaveAccessibleName("処理時間 01:20");
-  await expect(panel.getByRole("button", { name: "結果データを確認" })).toBeVisible();
+  await expect(panel.getByRole("button", { name: "結果データを確認" })).toHaveCount(0);
+  await expect(panel.locator("details")).toHaveCount(0);
   expect(writes).toBe(1);
 });
 
@@ -10492,11 +10497,9 @@ test("synthetic validation rejection shows its reference and zero rows without a
   await expect(panel.getByRole("alert")).toContainText("データは追加されませんでした");
   await expect(panel.locator('[data-loading-icon="true"]')).toHaveCount(0);
   await expect(panel.getByText(run.message)).not.toBeVisible();
-  await panel.locator("summary").focus();
-  await page.keyboard.press("Enter");
-  await expect(panel.getByText(run.message)).toBeVisible();
-  await expect(panel).toContainText("Oracle 実行番号: 未受理（実行記録なし）");
-  await expect(panel.getByRole("link", { name: "この生成記録を開く" })).toHaveAttribute("href", `/data-management?synthetic_run=${run.run_id}`);
+  await expect(panel).not.toContainText("Oracle 実行番号");
+  await expect(panel.getByRole("link", { name: "この生成記録を開く" })).toHaveCount(0);
+  await expect(panel.locator("details")).toHaveCount(0);
   await panel.scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath("synthetic-validation-rejected.png") });
   await expectNoHorizontalScroll(page);

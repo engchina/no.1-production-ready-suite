@@ -948,7 +948,6 @@ export function DataManagementPage() {
           clearSyntheticResultState();
           resultSelectionEdited.current = false;
         }}
-        onViewResults={() => document.getElementById("synthetic-results-heading")?.scrollIntoView({ block: "start" })}
         onRefresh={async () => {
           const [list, history] = await Promise.all([
             syntheticRuns.refetch({ cancelRefetch: false }),
