@@ -117,9 +117,10 @@ export function SyntheticRunPanel({ run, runs, onSelect, error, onRefresh, onVie
         <Link className="text-primary underline" to={`/data-management?synthetic_run=${encodeURIComponent(run.run_id)}`}>{t("syntheticRun.openRecord")}</Link>
       </details>
     </>}
+    {runs.some((item) => !runFinished(item)) && <p className="text-sm text-muted-foreground">{t("syntheticRun.independentRuns")}</p>}
     {runs.length > 0 && <label className="grid gap-1 text-sm">{t("syntheticRun.history")}
       <select disabled={submitting} value={run?.run_id ?? ""} onChange={(e) => onSelect(e.target.value)} className="h-11 min-w-0 rounded-md border border-border bg-card px-3">
-        {runs.map((r) => <option key={r.run_id} value={r.run_id}>{formatDateTime(r.created_at)} · {runLabel(r)}</option>)}
+        {runs.map((r) => <option key={r.run_id} value={r.run_id}>{formatDateTime(r.created_at)} · {runLabel(r)} · {r.targets.map((target) => target.table_name).join(", ")} · {r.run_id.slice(0, 8)}</option>)}
       </select>
     </label>}
     <div className="flex flex-wrap gap-2">

@@ -2419,6 +2419,7 @@ const nl2sqlJa = {
   "syntheticRun.dismiss": "通知を閉じる",
   "syntheticRun.missing": "選択した生成記録を取得できません。状況を再確認するか、履歴から選び直してください。",
   "syntheticRun.goToResults": "結果データを確認",
+  "syntheticRun.independentRuns": "同じテーブルも含め、別の生成を開始できます。生成番号ごとに状況を確認できます。",
   "syntheticRun.checkedAt": "生成状況の最終確認: {time}",
   "syntheticRun.notAccepted": "未受理（実行記録なし）",
   "syntheticRun.openRecord": "この生成記録を開く",

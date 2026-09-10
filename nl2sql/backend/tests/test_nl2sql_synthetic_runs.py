@@ -42,28 +42,28 @@ def run(**values: Any) -> SyntheticRun:
     )
 
 
-def test_idempotency_lock_cas_and_context_isolation() -> None:
+def test_independent_same_table_runs_keep_idempotency_cas_and_context_isolation() -> None:
     store: Any = SyntheticStore()
     first = store.create(run())
     assert store.create(run(run_id="duplicate")).run_id == "one"
-    with pytest.raises(SyntheticConflict):
-        store.create(run(run_id="two", idempotency_key="key-two"))
+    second = store.create(run(run_id="two", idempotency_key="key-two"))
+    assert second.status == "pending"
     with pytest.raises(SyntheticConflict):
         store.create(run(request_hash="changed"))
     assert store.create(run(run_id="other-db", context_id="db2")).run_id == "other-db"
     first.status = "unknown"
     assert store.save(first)
     assert not store.save(first)  # stale worker cannot overwrite a newer state
-    with pytest.raises(SyntheticConflict):
-        store.create(run(run_id="two", idempotency_key="key-two"))
+    assert store.create(run(run_id="three", idempotency_key="key-three")).run_id == "three"
     latest = store.get("one")
     latest.status = "no_data"
     assert store.save(latest)
-    assert store.create(run(run_id="two", idempotency_key="key-two")).run_id == "two"
+    assert store.get("two").status == "pending"
+    assert store.get("three").status == "pending"
     assert store.get("one").targets[0].loaded_rows is None
 
 
-def test_idempotency_and_locks_survive_more_than_100_records() -> None:
+def test_idempotency_survives_more_than_100_records() -> None:
     store: Any = SyntheticStore()
     store.create(run())
     for i in range(101):
@@ -76,7 +76,7 @@ def test_idempotency_and_locks_survive_more_than_100_records() -> None:
         )
     assert store.by_key("owner", "db", "key-one").run_id == "one"
     with pytest.raises(SyntheticConflict):
-        store.create(run(run_id="duplicate", idempotency_key="new"))
+        store.create(run(run_id="duplicate", request_hash="changed"))
 
 
 class OracleFixture:
@@ -313,6 +313,16 @@ async def test_api_returns_202_without_work_and_scopes_reads(
         path = "/api/nl2sql/synthetic-data/runs/" + body["run_id"]
         assert response.headers["Location"] == path
         assert (await client.get(path)).status_code == 200
+        next_response = await client.post(
+            "/api/nl2sql/synthetic-data/runs",
+            json=request(idempotency_key="independent-request-2").model_dump(),
+        )
+        assert next_response.status_code == 202
+        assert next_response.json()["data"]["run_id"] != body["run_id"]
+        changed_replay = await client.post(
+            "/api/nl2sql/synthetic-data/runs", json=request(row_count=9).model_dump()
+        )
+        assert changed_replay.status_code == 409
         assert (await client.get(path + "/results?table_name=APP.OTHER")).status_code == 400
         assert (await client.get(path + "/results?table_name=APP.T&limit=0")).status_code == 422
         current = actor("other")
@@ -479,7 +489,51 @@ def test_recover_only_proven_prompt_rejection_without_operation_or_session(
         assert result.status == "unknown" and result.failure_phase is None
         assert result.targets[0].loaded_rows == (1 if evidence == "observed_rows" else None)
         assert result.finished_at is None
-        with pytest.raises(SyntheticConflict):
-            service.store.create(
-                created.model_copy(update={"run_id": "new", "idempotency_key": "new"})
-            )
+        # 新しい明示的な生成は受理できるが、旧 unknown 自体は再送・成功扱いしない。
+        service.store.create(created.model_copy(update={"run_id": "new", "idempotency_key": "new"}))
+        assert service.store.get(created.run_id).status == "unknown"
+
+
+def test_worker_runs_same_table_requests_independently_without_replaying_claims(
+    service: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import threading
+
+    first = service.create(request(), actor())
+    second = service.create(request(idempotency_key="independent-request-2"), actor())
+    sessions = [
+        {"sid": sid, "serial": 9, "username": "APP", "since": datetime.now(UTC).isoformat()}
+        for sid in [1, 2]
+    ]
+    monkeypatch.setattr(module, "capture_session", Mock(side_effect=sessions))
+    monkeypatch.setattr(module, "inspect_operation", lambda _, value: value)
+    lock, both_entered, release = threading.Lock(), threading.Event(), threading.Event()
+    entered = []
+
+    def write(**kwargs: Any) -> None:
+        kwargs["on_connection"](None)
+        with lock:
+            entered.append(True)
+            if len(entered) == 2:
+                both_entered.set()
+        assert release.wait(5)
+
+    service.adapter.generate_synthetic_data.side_effect = write
+    service.tick()
+    try:
+        assert both_entered.wait(3)
+        assert service.store.get(first.run_id).session != service.store.get(second.run_id).session
+        other_worker = SyntheticService(
+            service.settings, store=service.store, adapter=service.adapter
+        )
+        other_worker.tick()
+        assert service.adapter.generate_synthetic_data.call_count == 2
+    finally:
+        release.set()
+        for thread in service._threads.values():
+            thread.join(3)
+    assert service.store.get(first.run_id).status == "verifying"
+    assert service.store.get(second.run_id).status == "verifying"
+    service.update(first.run_id, lambda value: setattr(value, "status", "completed"))
+    assert service.store.get(second.run_id).status == "verifying"

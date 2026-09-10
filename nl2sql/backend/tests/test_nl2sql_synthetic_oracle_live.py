@@ -90,15 +90,33 @@ def test_oracle_persistence_roundtrip_and_conflict_rollback() -> None:
         store.create(value)
         assert store.get(value.run_id).request == value.request
         assert store.by_key("test", "test", "key").run_id == value.run_id
-        conflict = value.model_copy(update={"run_id": str(uuid4()), "idempotency_key": "another"})
+        # 旧版の表 lock が残っていても新しい受付を阻害しない。
+        with connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO NL2SQL_SYNTHETIC_LOCKS (CONTEXT_ID,TARGET_NAME,RUN_ID) "
+                "VALUES (:ctx,:target,:id)",
+                {"ctx": "test", "target": "APP.FIXTURE_ONLY", "id": value.run_id},
+            )
+            conn.commit()
+        independent = value.model_copy(
+            update={"run_id": str(uuid4()), "idempotency_key": "another"}
+        )
+        assert store.create(independent).run_id == independent.run_id
+        replay = value.model_copy(update={"run_id": str(uuid4())})
+        assert store.create(replay).run_id == value.run_id
+        assert store.get(replay.run_id) is None
+        conflict = value.model_copy(update={"run_id": str(uuid4()), "request_hash": "changed"})
         with pytest.raises(SyntheticConflict):
             store.create(conflict)
-        assert store.get(conflict.run_id) is None  # run INSERT was rolled back along with lock
+        assert store.get(conflict.run_id) is None
         value.status = "completed"
         assert store.save(value)
         assert not store.save(value)  # compare-and-swap fencing
-        assert store.create(conflict).run_id == conflict.run_id
+        assert store.get(independent.run_id).status == "pending"
         assert len(store.list("test")) == 2
+        with connection() as conn, conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM NL2SQL_SYNTHETIC_LOCKS")
+            assert cur.fetchone()[0] == 0
     finally:
         with adapter.connection() as conn, conn.cursor() as cur:
             for name in reversed(created):

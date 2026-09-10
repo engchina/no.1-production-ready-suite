@@ -166,7 +166,6 @@ export function DataManagementPage() {
     retry: false,
   });
   const selectedRun = listedRun ?? (requestedRunId ? historicalRun.data : null) ?? null;
-  const syntheticBusy = Boolean(syntheticRuns.data?.some((r) => !runFinished(r)));
   const [syntheticQueryTime, setSyntheticQueryTime] = useState("");
   const resultRequest = useRef(0);
   const [resultGeneratedRows, setResultGeneratedRows] = useState<number | null>(null);
@@ -355,7 +354,7 @@ export function DataManagementPage() {
     syntheticSelectedTables.length === 1 ? syntheticSelectedTables[0] : "ADMIN_EXECUTE";
   const syntheticDataConfirmed = syntheticConfirmation.trim() === syntheticExpectedConfirmation;
   const canGenerateSyntheticData = Boolean(
-    syntheticProfileName.trim() && syntheticSelectedTables.length > 0 && syntheticDataConfirmed && !syntheticLoading && !syntheticBusy
+    syntheticProfileName.trim() && syntheticSelectedTables.length > 0 && syntheticDataConfirmed && !syntheticLoading
   );
   const canClearSyntheticGeneration = Boolean(
     syntheticSelectedTables.length > 0 ||
@@ -383,7 +382,7 @@ export function DataManagementPage() {
   const syntheticResultError = syntheticErrorOperation === "results" ? syntheticError : "";
   const syntheticWorkspaceError = syntheticErrorOperation === "results" ? "" : syntheticError;
   const canLoadSyntheticDataResults = Boolean(
-    (selectedRun ? selectedRun.targets.some((target) => target.table_name === syntheticResultTable) : syntheticAvailableTables.includes(syntheticResultTable)) && syntheticResultLimit !== null && !syntheticLoading && !syntheticBusy
+    (selectedRun ? selectedRun.targets.some((target) => target.table_name === syntheticResultTable) : syntheticAvailableTables.includes(syntheticResultTable)) && syntheticResultLimit !== null && !syntheticLoading
   );
   const canClearSyntheticDataResults = Boolean(
     syntheticDataResults ||
@@ -1225,7 +1224,7 @@ export function DataManagementPage() {
               executedSyntheticResultLimit={executedSyntheticResultLimit}
               canLoadSyntheticDataResults={canLoadSyntheticDataResults}
               canClearSyntheticDataResults={canClearSyntheticDataResults}
-              loading={syntheticBusy && selectedRun?.status !== "unknown" ? "generate" : syntheticLoading}
+              loading={syntheticLoading}
               error={syntheticWorkspaceError}
               resultError={syntheticResultError}
               dbProfileRefreshRequired={dbProfileRefreshRequired}

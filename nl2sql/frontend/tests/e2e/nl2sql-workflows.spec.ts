@@ -10502,6 +10502,74 @@ test("synthetic validation rejection shows its reference and zero rows without a
   await expectNoHorizontalScroll(page);
 });
 
+test("synthetic active runs allow independent same-table and other-table generation and reads", async ({ page }, testInfo) => {
+  await mockNl2SqlApi(page);
+  await page.route("**/api/nl2sql/select-ai/db-profiles/NL2SQL_DEFAULT_PROFILE", (route) => fulfillJson(route, {
+    runtime: "deterministic", warnings: [],
+    profile: { name: "NL2SQL_DEFAULT_PROFILE", status: "ready", owner: "APP", object_list: ["APP.INVOICES", "APP.PAYMENTS"], attributes: {} },
+  }));
+  const original = syntheticRunFixture("running");
+  const runs = [original];
+  const bodies: Record<string, unknown>[] = [];
+  const readIds: string[] = [];
+  await page.route("**/api/nl2sql/synthetic-data/runs", (route) => {
+    if (route.request().method() === "GET") return fulfillJson(route, runs);
+    const body = route.request().postDataJSON() as Record<string, unknown>;
+    bodies.push(body);
+    const next = { ...syntheticRunFixture("running"), run_id: `run-00${bodies.length + 1}`, targets: [{ ...original.targets[0], table_name: String(body.table_name) }] };
+    runs.unshift(next);
+    return fulfillJson(route, next);
+  });
+  await page.route("**/api/nl2sql/synthetic-data/runs/*/results**", (route) => {
+    const url = new URL(route.request().url());
+    readIds.push(url.pathname.split("/").at(-2)!);
+    return fulfillJson(route, { table_name: url.searchParams.get("table_name"), runtime: "oracle", results: { columns: ["ID"], rows: [{ ID: "existing" }], total: 1 }, warnings: [] });
+  });
+  await page.goto("/data-management?synthetic_run=run-001");
+  const workspace = page.locator("#data-management-panel-synthetic");
+  const panel = page.getByTestId("synthetic-run-panel");
+  await expect(panel.getByTestId("synthetic-run-status")).toHaveText("生成中");
+  await workspace.getByRole("button", { name: "データを表示" }).click();
+  await expect(workspace.getByRole("cell", { name: "existing" })).toBeVisible();
+  expect(readIds).toEqual(["run-001"]);
+  await workspace.getByRole("button", { name: "テーブル一覧を取得" }).click();
+  await workspace.getByLabel("APP.INVOICES を選択").check();
+  const prompt = workspace.getByRole("textbox", { name: "追加 prompt", exact: true });
+  await expect(prompt).toBeEditable();
+  await prompt.fill("部署名は日本語にしてください。");
+  const confirmation = workspace.getByLabel("実行確認語");
+  const generate = workspace.getByRole("button", { name: "生成開始" });
+  await confirmation.fill("APP.INVOICES");
+  await expect(generate).toBeEnabled();
+  await generate.focus();
+  await page.keyboard.press("Enter");
+  await expect(panel.getByTestId("synthetic-run-reference")).toHaveText("生成番号: run-002");
+  await expect(confirmation).toHaveValue("");
+  await expect(prompt).toHaveValue("部署名は日本語にしてください。");
+  expect(bodies[0].user_prompt).toBe("部署名は日本語にしてください。");
+  expect(original.status).toBe("running");
+  original.status = "unknown";
+  await workspace.getByLabel("APP.INVOICES を選択").uncheck();
+  await workspace.getByLabel("APP.PAYMENTS を選択").check();
+  await confirmation.fill("APP.PAYMENTS");
+  await expect(generate).toBeEnabled();
+  await generate.click();
+  await expect(panel.getByTestId("synthetic-run-reference")).toHaveText("生成番号: run-003");
+  expect(bodies.map((body) => body.table_name)).toEqual(["APP.INVOICES", "APP.PAYMENTS"]);
+  expect(bodies[0].idempotency_key).not.toBe(bodies[1].idempotency_key);
+  await expect(panel.getByLabel("生成履歴").getByRole("option")).toHaveCount(3);
+  await expect(panel.getByLabel("生成履歴").getByRole("option", { name: /APP.PAYMENTS.*run-003/ })).toHaveCount(1);
+  await workspace.getByRole("button", { name: "データを表示" }).click();
+  await expect.poll(() => readIds.at(-1)).toBe("run-003");
+  await panel.getByLabel("生成履歴").selectOption("run-002");
+  await expect(panel.getByTestId("synthetic-run-status")).toHaveText("生成中");
+  await expect(panel.getByTestId("synthetic-run-reference")).toHaveText("生成番号: run-002");
+  expect(bodies).toHaveLength(2);
+  await panel.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("synthetic-concurrent.png") });
+  await expectNoHorizontalScroll(page);
+});
+
 test("synthetic run status outage keeps prior state and never resubmits", async ({ page }) => {
   await mockNl2SqlApi(page);
   let unavailable = false;

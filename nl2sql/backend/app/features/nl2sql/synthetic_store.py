@@ -103,12 +103,6 @@ class SyntheticStore:
                             "payload": run.model_dump_json(),
                         },
                     )
-                    for target in sorted(run.targets, key=lambda t: t.table_name):
-                        cur.execute(
-                            "INSERT INTO NL2SQL_SYNTHETIC_LOCKS (CONTEXT_ID,TARGET_NAME,RUN_ID) "
-                            "VALUES (:ctx,:target,:id)",
-                            {"ctx": run.context_id, "target": target.table_name, "id": run.run_id},
-                        )
                     conn.commit()
                     return run
             except Exception as exc:
@@ -117,21 +111,15 @@ class SyntheticStore:
                 existing = self.by_key(run.actor_id, run.context_id, run.idempotency_key)
                 if existing and existing.request_hash == run.request_hash:
                     return existing
-                raise SyntheticConflict(
-                    "同じ対象の生成が進行中、または同じ受付キーの条件が異なります。"
-                ) from exc
+                raise SyntheticConflict("同じ生成番号または受付キーの条件が異なります。") from exc
         with self._lock:
             existing = self.by_key(run.actor_id, run.context_id, run.idempotency_key)
             if existing:
                 if existing.request_hash != run.request_hash:
                     raise SyntheticConflict("同じ受付キーの条件が異なります。")
                 return existing
-            targets = {t.table_name for t in run.targets}
-            if any(
-                targets.intersection(t.table_name for t in r.targets)
-                for r in self.list(run.context_id, active=True)
-            ):
-                raise SyntheticConflict("同じ対象の生成が進行中、または結果が未確認です。")
+            if run.run_id in self._runs:
+                raise SyntheticConflict("同じ生成番号の記録が既に存在します。")
             self._runs[run.run_id] = run.model_copy(deep=True)
             return run
 
@@ -151,6 +139,7 @@ class SyntheticStore:
                     },
                 )
                 saved = bool(cur.rowcount == 1)
+                # 旧版が作成した表ロックは終端時に片付ける。新規受理では使用しない。
                 if saved and updated.status in TERMINAL:
                     cur.execute(
                         "DELETE FROM NL2SQL_SYNTHETIC_LOCKS WHERE RUN_ID=:id", {"id": run.run_id}
