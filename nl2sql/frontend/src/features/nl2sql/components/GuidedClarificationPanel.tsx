@@ -32,7 +32,7 @@ interface GuidedClarificationPanelProps {
   engine: Nl2SqlEngine;
   allowedObjects: { table_names: string[]; columns: Record<string, string[]> };
   onClose: () => void;
-  onApplyQuestion: (question: string) => void;
+  onApplyQuestion: (question: string, profileId: string) => void;
 }
 
 interface ManualAnswerValue {
@@ -266,14 +266,14 @@ export function GuidedClarificationPanel({
   };
 
   const applyQuestion = () => {
-    if (!clarification?.can_generate_sql || busyAction) return;
+    if (!session || !clarification?.can_generate_sql || busyAction) return;
     const clarifiedQuestion = intent?.question_effective?.trim();
     if (!clarifiedQuestion) {
       setError(t("nl2sql.clarification.error.apply"));
       return;
     }
     setError("");
-    onApplyQuestion(clarifiedQuestion);
+    onApplyQuestion(clarifiedQuestion, session.profile_id);
   };
 
   const closePanel = async () => {
