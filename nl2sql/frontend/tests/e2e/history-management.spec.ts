@@ -658,3 +658,28 @@ test("実行履歴は続きがあるとき「さらに読み込む」で追加�
   await expect(page.getByTestId("history-load-more")).toContainText("4 / 4 件を読込済み");
   await expect(page.getByRole("button", { name: "さらに読み込む" })).toHaveCount(0);
 });
+
+test("履歴の選択とSQLタブを往復・再読込で復元し失効時は別履歴へ切り替えない", async ({ page }, testInfo) => {
+  let items = [...historyItems];
+  await page.route("**/api/nl2sql/history**", (route) => fulfillJson(route, { items, next_cursor: "", total: items.length }));
+  await page.goto("/history");
+  await page.getByRole("button", { name: "請求金額を確認 の履歴を表示", exact: true }).click();
+  const sqlTab = page.getByRole("tab", { name: "SQL", exact: true });
+  await sqlTab.click();
+  await page.getByRole("link", { name: "SELECT SQL を実行", exact: true }).click();
+  await expect(page).toHaveURL(/\/direct-sql$/);
+  await page.goBack();
+  await expect(page.getByTestId("history-detail-question")).toContainText("請求金額を確認");
+  await expect(sqlTab).toHaveAttribute("aria-selected", "true");
+  await page.reload();
+  await expect(page.getByTestId("history-detail-question")).toContainText("請求金額を確認");
+  await expect(sqlTab).toHaveAttribute("aria-selected", "true");
+  await sqlTab.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("history-restored-sql-tab.png") });
+  items = items.filter((item) => item.question !== "請求金額を確認");
+  await page.reload();
+  await expect(page.getByText("選択した履歴は現在の一覧にありません。追加読込するか、一覧から履歴を選択してください。")).toBeVisible();
+  await expect(page.getByTestId("history-detail")).toHaveCount(0);
+  await page.getByRole("button", { name: "未入金の顧客を確認 の履歴を表示", exact: true }).click();
+  await expect(page.getByRole("tab", { name: "概要", exact: true })).toHaveAttribute("aria-selected", "true");
+});

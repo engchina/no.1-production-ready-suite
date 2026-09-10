@@ -34,7 +34,6 @@ import { useRequestScope } from "@/lib/useRequestScope";
 import { DbManagementSearchField, DbObjectManagementPanelShell, DbObjectPanelHeader } from "../components/DbObjectManagementShared";
 import { QuestionText } from "../components/QuestionText";
 import {
-  selectedVisibleHistoryId,
   sortHistory,
   type HistoryFeedbackFilter,
   type HistorySafetyFilter,
@@ -402,12 +401,14 @@ function historyRequestUrl({
 function HistoryDetailPanel({
   item,
   tab,
+  selectionMissing = false,
   headingRef,
   onTabChange,
   onRerun,
 }: {
   item: HistoryItem | null;
   tab: HistoryDetailTab;
+  selectionMissing?: boolean;
   headingRef: RefObject<HTMLHeadingElement | null>;
   onTabChange: (tab: HistoryDetailTab) => void;
   onRerun: (item: HistoryItem) => void;
@@ -415,7 +416,7 @@ function HistoryDetailPanel({
   if (!item) {
     return (
       <section className="grid min-w-0 content-start gap-3 rounded-md border border-border bg-background p-4">
-        <EmptyState title={t("history.detail.emptyTitle")} hint={t("history.detail.emptyHint")} />
+        <EmptyState title={t("history.detail.emptyTitle")} hint={t(selectionMissing ? "history.detail.selectionMissing" : "history.detail.emptyHint")} />
       </section>
     );
   }
@@ -656,12 +657,14 @@ export function HistoryPage() {
   const [feedbackFilter, setFeedbackFilter] = useWorkspaceState<HistoryFeedbackFilter>("feedbackFilter", "all");
   const [safetyFilter, setSafetyFilter] = useWorkspaceState<HistorySafetyFilter>("safetyFilter", "all");
   const [sort, setSort] = useWorkspaceState<HistorySortState>("sort", { key: "created_at", direction: "desc" });
-  const [selectedId, setSelectedId] = useState("");
+  const [selectedId, setSelectedId] = useWorkspaceState("selectedId", "");
   const [detailTab, setDetailTab] = useWorkspaceState<HistoryDetailTab>("detailTab", "overview");
   const [nextCursor, setNextCursor] = useState("");
   const [total, setTotal] = useState<number | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const loadSequence = useRef(0);
+  const filterSignature = JSON.stringify([feedbackFilter, safetyFilter, search]);
+  const previousFilters = useRef(filterSignature);
   const { abortAll, run: runScopedRequest } = useRequestScope();
 
   const load = async (announce = false) => {
@@ -680,7 +683,7 @@ export function HistoryPage() {
         setItems(data.items);
         setNextCursor(data.next_cursor ?? "");
         setTotal(data.total ?? null);
-        setSelectedId((current) => selectedVisibleHistoryId(data.items, current));
+        setSelectedId((current) => current || data.items[0]?.id || "");
       });
       if (announce && sequence === loadSequence.current) {
         toast.success(t("common.action.refreshed"));
@@ -728,6 +731,11 @@ export function HistoryPage() {
   };
 
   useEffect(() => {
+    if (previousFilters.current !== filterSignature) {
+      previousFilters.current = filterSignature;
+      setSelectedId("");
+      setDetailTab("overview");
+    }
     void load();
     return () => {
       loadSequence.current += 1;
@@ -737,15 +745,7 @@ export function HistoryPage() {
 
   const sortedItems = useMemo(() => sortHistory(items, sort), [items, sort]);
 
-  useEffect(() => {
-    setSelectedId((current) => selectedVisibleHistoryId(sortedItems, current));
-  }, [sortedItems]);
-
-  useEffect(() => {
-    setDetailTab("overview");
-  }, [selectedId]);
-
-  const selectedItem = sortedItems.find((item) => item.id === selectedId) ?? sortedItems[0] ?? null;
+  const selectedItem = sortedItems.find((item) => item.id === selectedId) ?? null;
   const hasActiveFilters = Boolean(search.trim()) || feedbackFilter !== "all" || safetyFilter !== "all";
 
   const toggleSort = (key: HistorySortKey) => {
@@ -762,6 +762,7 @@ export function HistoryPage() {
   };
 
   const selectItem = (item: HistoryItem) => {
+    if (item.id !== selectedId) setDetailTab("overview");
     setSelectedId(item.id);
   };
 
@@ -851,6 +852,7 @@ export function HistoryPage() {
             />
             <HistoryDetailPanel
               item={selectedItem}
+              selectionMissing={Boolean(selectedId) && !selectedItem}
               tab={detailTab}
               headingRef={detailHeadingRef}
               onTabChange={setDetailTab}

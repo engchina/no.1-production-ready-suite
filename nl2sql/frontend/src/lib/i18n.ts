@@ -1977,6 +1977,7 @@ const nl2sqlJa = {
   "history.detail.loading": "履歴詳細を読み込んでいます",
   "history.detail.emptyTitle": "表示する履歴がありません",
   "history.detail.emptyHint": "一覧から履歴を選択してください。",
+  "history.detail.selectionMissing": "選択した履歴は現在の一覧にありません。追加読込するか、一覧から履歴を選択してください。",
   "history.detail.tabsLabel": "履歴詳細の表示切替",
   "history.detail.overview": "概要",
   "history.detail.sql": "SQL",
