@@ -1,5 +1,6 @@
 import { expect, test, type Locator, type Page, type Route } from "@playwright/test";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
+import { expectCompactSortHeaders } from "./_helpers/sort-header";
 
 test.beforeEach(async ({ page }) => mockDatabaseGateReady(page));
 
@@ -400,6 +401,22 @@ test("リセットとアーカイブ関連 UI は表示しない", async ({ page
 
   const viewport = await page.evaluate(() => ({ body: document.body.scrollWidth, window: window.innerWidth }));
   expect(viewport.body).toBeLessThanOrEqual(viewport.window);
+});
+
+test("プロファイルの並べ替え列名は小字号を維持してキーボードで操作できる", async ({ page }, testInfo) => {
+  await mockProfileManagement(page);
+  await page.goto("/profiles");
+  const grid = page.getByTestId("profile-management-grid");
+  await expect(grid).toBeVisible();
+  await expectCompactSortHeaders(grid);
+  const nameSort = grid.locator('[data-sort-header]').first();
+  await nameSort.focus();
+  await expect(nameSort).toBeFocused();
+  const before = await nameSort.getAttribute("aria-sort");
+  await nameSort.press("Enter");
+  await expect(nameSort).not.toHaveAttribute("aria-sort", before!);
+  await expectProfileListNoHorizontalOverflow(page);
+  await grid.locator("thead").screenshot({ path: testInfo.outputPath("profile-column-font.png") });
 });
 
 test("標準プロファイルも一覧と編集画面から確認付きで削除できる", async ({ page }) => {

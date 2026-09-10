@@ -1,5 +1,6 @@
 import { expect, test, type Locator, type Page, type Route, type TestInfo } from "@playwright/test";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
+import { expectCompactSortHeaders } from "./_helpers/sort-header";
 
 test.beforeEach(async ({ page }) => mockDatabaseGateReady(page));
 
@@ -896,6 +897,7 @@ for (const scenario of scenarios) {
       await expect(grid.locator("tbody tr")).toHaveCount(30);
       await expect(grid.locator("tbody tr").first()).toHaveAttribute("data-selected", "true");
       await expect(detailHeader).toContainText(`${scenario.prefix}_01`);
+      await expectCompactSortHeaders(grid);
 
       await expectObjectListRowLimit(list, "tbody tr", expectedObjectListRows(testInfo));
 
@@ -1008,6 +1010,7 @@ for (const scenario of metadataScenarios) {
 
     const list = page.getByTestId("db-admin-object-list");
     await expect(page.getByTestId(`${scenario.idPrefix}-target-grid`).locator("tbody tr")).toHaveCount(30);
+    await expectCompactSortHeaders(list);
 
     await expectObjectListRowLimit(list, "tbody tr", fixedTargetVisibleRows);
   });
@@ -1242,9 +1245,11 @@ test("データ管理の対象ピッカーはヘッダーで並び替えでき�
   await expectNoHorizontalScroll(page);
 
   if (testInfo.project.name === "mobile-375") {
+    await expect(previewList.getByRole("columnheader")).toHaveCount(0);
     return;
   }
 
+  await expectCompactSortHeaders(previewList);
   await expect.poll(() => pickerRowNames(previewList)).toEqual([
     "APP.A_VIEW",
     "APP.B_AUDIT",

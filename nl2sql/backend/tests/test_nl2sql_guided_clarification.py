@@ -804,7 +804,7 @@ def test_guided_answer_rebuilds_complete_user_friendly_query_from_intent() -> No
     assert updated.time_range == IntentTimeRange(label_ja="受注日", relative_expression="今月")
     assert updated.question_effective == (
         "受注のうち、受注日が今月、かつ受注状態が「確定」のデータを対象に、"
-        "検索結果には顧客名、売上金額を表示してください。"
+        "検索結果には顧客名、売上金額の合計を表示してください。"
         "集計単位は月別です。"
         "表示結果は売上金額の降順で並べ、上位10件を取得してください。"
     )
@@ -1235,3 +1235,224 @@ def test_legacy_query_session_payload_uses_review_only_defaults() -> None:
     assert restored.clarification_mode == ClarificationMode.REVIEW_ONLY
     assert restored.clarification_turns == []
     assert restored.cancelled_at is None
+
+
+@pytest.mark.parametrize("concurrent_action", ["read", "cancel", "answer"])
+def test_guided_free_text_releases_lock_and_rechecks_session(
+    monkeypatch: pytest.MonkeyPatch, concurrent_action: str
+) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    runtime = _runtime()
+    created = _create_guided(runtime)
+    other = _create_guided(runtime)
+    assert created.clarification and created.clarification.current_question
+    question = created.clarification.current_question
+    entered, release = Event(), Event()
+    interpreted = created.session.intents[-1].model_copy(deep=True)
+    interpreted.time_range = IntentTimeRange(relative_expression="今月")
+
+    def interpret(*args: Any, **kwargs: Any) -> Any:
+        entered.set()
+        assert release.wait(5), "test did not release interpretation"
+        return interpreted
+
+    monkeypatch.setattr(runtime, "_interpret_question", interpret)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        pending = pool.submit(
+            runtime.answer_clarification,
+            created.session.id,
+            ClarificationAnswerRequest(base_version=1, question_id=question.id, free_text="今月"),
+        )
+        try:
+            assert entered.wait(3)
+            if concurrent_action == "read":
+                independent = pool.submit(runtime.get_session, other.session.id)
+            elif concurrent_action == "cancel":
+                independent = pool.submit(runtime.cancel_session, created.session.id)
+            else:
+                independent = pool.submit(
+                    runtime.answer_clarification,
+                    created.session.id,
+                    ClarificationAnswerRequest(
+                        base_version=1,
+                        question_id=question.id,
+                        selected_option_ids=[question.options[1].id],
+                    ),
+                )
+            independent.result(timeout=2)
+        finally:
+            release.set()
+        if concurrent_action == "read":
+            assert pending.result(timeout=3).session.current_intent_version == 2
+        else:
+            error = (
+                OntologyStateConflictError
+                if concurrent_action == "cancel"
+                else OntologyVersionConflictError
+            )
+            with pytest.raises(error):
+                pending.result(timeout=3)
+            saved = runtime.get_session(created.session.id).session
+            if concurrent_action == "cancel":
+                assert saved.status == QuerySessionStatus.CANCELLED
+                assert saved.current_intent_version == 1
+                assert not saved.clarification_turns
+            else:
+                assert saved.current_intent_version == 2
+                assert len(saved.clarification_turns) == 1
+                assert saved.intents[-1].time_range == IntentTimeRange(relative_expression="先月")
+
+
+@pytest.mark.parametrize("granularity", ["day", "month", "year", "none"])
+def test_accept_inferred_granularity_survives_following_answer(granularity: str) -> None:
+    runtime = _runtime()
+    created = _create_guided(runtime)
+    ontology = runtime.ontology_revision(created.session.ontology_revision_id)
+    intent = created.session.intents[-1].model_copy(deep=True)
+    intent.granularity = granularity
+    session = created.session.model_copy(deep=True, update={"intents": [intent]})
+    state = build_clarification_state(session, ontology, created.profile_ontology_view)
+    question = next(q for q in state.remaining_questions if q.summary_key == "granularity")
+    updated = apply_clarification_answer(
+        intent,
+        question,
+        ClarificationAnswer(question_id=question.id, selected_option_ids=[question.options[0].id]),
+        ontology,
+    )
+    assert updated.granularity == granularity
+    assert created.clarification and created.clarification.current_question
+    next_question = created.clarification.current_question
+    updated = apply_clarification_answer(
+        updated,
+        next_question,
+        ClarificationAnswer(
+            question_id=next_question.id, selected_option_ids=[next_question.options[0].id]
+        ),
+        ontology,
+    )
+    assert updated.granularity == granularity
+    expected = {"day": "日別", "month": "月別", "year": "年別", "none": "期間全体を一つに集計"}
+    assert expected[granularity] in updated.question_effective
+
+
+@pytest.mark.parametrize(
+    ("aggregation", "label"),
+    [
+        ("avg", "平均"),
+        ("SUM", "合計"),
+        ("min", "最小値"),
+        ("max", "最大値"),
+        ("count", "件数"),
+        ("count_distinct", "重複を除いた件数"),
+    ],
+)
+def test_clarified_question_keeps_metric_aggregation(aggregation: str, label: str) -> None:
+    runtime = _runtime()
+    created = _create_guided(runtime)
+    ontology = runtime.ontology_revision(created.session.ontology_revision_id)
+    intent = created.session.intents[-1].model_copy(deep=True)
+    intent.metrics = [IntentMetric(id="amount", name_ja="受注金額", aggregation=aggregation)]
+    assert created.clarification and created.clarification.current_question
+    question = created.clarification.current_question
+    updated = apply_clarification_answer(
+        intent,
+        question,
+        ClarificationAnswer(question_id=question.id, selected_option_ids=[question.options[0].id]),
+        ontology,
+    )
+    assert f"受注金額の{label}" in updated.question_effective
+    state = build_clarification_state(
+        created.session.model_copy(update={"intents": [updated]}),
+        ontology,
+        created.profile_ontology_view,
+    )
+    metric_summary = next(item for item in state.intent_summary if item.key == "metrics")
+    assert metric_summary.value_ja == f"受注金額の{label}"
+    assert not metric_summary.confirmed
+
+
+@pytest.mark.parametrize("slot", ["entities", "metrics", "dimensions"])
+def test_free_text_replaces_only_the_confirmed_slot(slot: str) -> None:
+    runtime = _runtime()
+    created = _create_guided(runtime)
+    intent = created.session.intents[-1].model_copy(deep=True)
+    intent.entities = [IntentEntity(id="old-entity", name_ja="旧対象")]
+    intent.metrics = [IntentMetric(id="old-metric", name_ja="旧指標", aggregation="avg")]
+    intent.dimensions = [IntentDimension(id="old-column", name_ja="旧項目")]
+    reinterpretation = intent.model_copy(deep=True)
+    reinterpretation.entities = [IntentEntity(id="new-entity", name_ja="新対象")]
+    reinterpretation.metrics = [IntentMetric(id="new-metric", name_ja="新指標", aggregation="sum")]
+    reinterpretation.dimensions = [IntentDimension(id="new-column", name_ja="新項目")]
+    reinterpretation.limit = 1
+    category = (
+        ClarificationCategory.OUTPUT
+        if slot == "dimensions"
+        else ClarificationCategory.BUSINESS_MEANING
+    )
+    question = ClarificationQuestion(
+        id="correction",
+        category=category,
+        summary_key=slot,
+        prompt_ja="正しい内容を入力",
+    )
+    updated = merge_free_text_reinterpretation(
+        intent,
+        reinterpretation,
+        question,
+        "以前の内容ではなく新しい内容だけ",
+    )
+    assert getattr(updated, slot) == getattr(reinterpretation, slot)
+    for other_slot in (
+        "entities",
+        "metrics",
+        "dimensions",
+        "filters",
+        "time_range",
+        "sorts",
+        "limit",
+    ):
+        if other_slot != slot:
+            assert getattr(updated, other_slot) == getattr(intent, other_slot)
+    assert "以前の内容ではなく" not in updated.question_effective
+    assert getattr(intent, slot)[0].name_ja not in updated.question_effective
+
+
+def test_runtime_free_text_output_correction_is_persisted_without_old_column(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = _runtime()
+    created, session, _question = _prepare_guided_output_question(runtime)
+    intent = session.intents[-1].model_copy(deep=True)
+    intent.ambiguities = []
+    intent.dimensions = [IntentDimension(id="status", name_ja="受注状態")]
+    session.intents = [intent]
+    runtime.sessions.replace_session(session)
+    runtime._persist_session(session)
+    current = runtime.get_session(session.id)
+    assert current.clarification and current.clarification.current_question
+    question = current.clarification.current_question
+    assert question.summary_key == "dimensions"
+    correction = "受注状態ではなく受注IDだけ"
+    parsed = intent.model_copy(deep=True)
+    parsed.dimensions = [IntentDimension(id="order-id", name_ja="受注ID")]
+
+    def interpret(prompt: str, *args: Any, **kwargs: Any) -> Any:
+        assert f"利用者の訂正: {correction}" in prompt
+        assert question.prompt_ja in prompt
+        return parsed
+
+    monkeypatch.setattr(runtime, "_interpret_question", interpret)
+    result = runtime.answer_clarification(
+        session.id,
+        ClarificationAnswerRequest(
+            base_version=1,
+            question_id=question.id,
+            free_text=correction,
+        ),
+    )
+    assert result.clarification and result.clarification.can_generate_sql
+    saved = runtime.get_session(session.id)
+    assert [d.name_ja for d in saved.session.intents[-1].dimensions] == ["受注ID"]
+    assert "受注状態" not in saved.session.intents[-1].question_effective

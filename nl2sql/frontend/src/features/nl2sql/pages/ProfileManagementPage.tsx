@@ -1,3 +1,4 @@
+import { SortHeader } from "@/components/SortHeader";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -323,17 +324,14 @@ function SortButton({
 }) {
   const active = sort.key === sortKey;
   return (
-    <Button
-      variant="ghost"
-      size="sm"
-      data-button-layout="sort"
+    <SortHeader
       type="button"
       aria-sort={active ? (sort.direction === "asc" ? "ascending" : "descending") : "none"}
       onClick={() => onToggle(sortKey)}
     >
       <span>{label}</span>
       <ArrowDownUp size={13} className={active ? "text-primary" : "text-muted"} aria-hidden="true" />
-    </Button>
+    </SortHeader>
   );
 }
 
@@ -420,8 +418,8 @@ function ProfileList({
             <table className="w-full max-w-[34rem] table-fixed divide-y divide-border text-left text-sm" data-testid="profile-management-grid">
               <colgroup>
                 <col />
-                <col className="w-[6.5rem]" />
-                <col className="w-[6.5rem]" />
+                <col className="w-[7rem]" />
+                <col className="w-[7rem]" />
               </colgroup>
               <thead className="sticky top-0 z-10 bg-background text-xs text-muted">
                 <tr>

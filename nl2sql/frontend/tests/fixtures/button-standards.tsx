@@ -1,6 +1,8 @@
 import { toast } from "@engchina/production-ready-ui";
 import { Toaster } from "../../src/components/ui/toaster";
 import { MemoryRouter } from "react-router-dom";
+import type { DataTableSort } from "@engchina/production-ready-ui";
+import { MasterDetailDataTable } from "../../src/components/MasterDetailDataTable";
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { Copy, Plus, Trash2 } from "lucide-react";
@@ -17,6 +19,7 @@ function Standards() {
   const [count, setCount] = useState(0);
   const [page, setPage] = useState(1);
   const [selected, setSelected] = useState(false);
+  const [sort, setSort] = useState<DataTableSort>({ key: "name", direction: "asc" });
   const confirm = useConfirm();
   return <>
     <PageHeader title="ボタン UI 標準" subtitle="位置と機能に応じた共通アクション"
@@ -57,6 +60,18 @@ function Standards() {
       <Button variant="secondary" onClick={() => toast.success("保存しました", { duration: 0 })}>保存通知</Button>
       <Toaster />
       <output id="results">操作回数: {count}</output>
+      <MasterDetailDataTable
+        ariaLabel="一覧の列名"
+        testId="sort-header-table"
+        columns={[
+          { key: "name", header: "名称", sortable: true, render: (row: { name: string }) => row.name },
+          { key: "description", header: "説明", render: () => "確認用の項目" },
+        ]}
+        rows={(sort.direction === "asc" ? ["A", "B"] : ["B", "A"]).map(name => ({ name }))}
+        getRowKey={row => row.name}
+        sort={sort}
+        onSortChange={setSort}
+      />
     </main>
   </>;
 }

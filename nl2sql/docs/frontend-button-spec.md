@@ -37,7 +37,7 @@
 
 | size | desktop 実寸 | 左右 padding | 使う場面 |
 |---|---|---|---|
-| `sm` | 32px | 12px | ページヘッダー、一覧行、局所ツール、並べ替え、ページング、一括選択、確認ダイアログ |
+| `sm` | 32px | 12px | ページヘッダー、一覧行、局所ツール、ページング、一括選択、確認ダイアログ |
 | `md` | 36px | 16px | 既定。カード内の単発操作・選択切替 |
 | `lg` | 40px | 20px | 主フォームの保存・生成・実行と、同じバーのキャンセル・入力クリア |
 
@@ -47,8 +47,8 @@
 - 日本語ラベルは全 size で **14px / line-height 20px / weight 500**、アイコンは **16px**、ラベルとの gap は **8px**。角丸は **6px**、border は全 variant **1px**（塗り・ghost は transparent）。root font-size に依存しない。
 - ボタン間隔は **8px 以上**。通常の `gap-2` は root=14px で 7px のため、アクション群は `gap-[8px]` を使用する。
 - グラフの排他選択バーは `data-button-layout="segmented"` で左右 padding 8px、操作高さ 40/44px を維持し、375px でもラベルを切らない。
-- 表ヘッダーの sort は列のフォントを継承し、padding-inline=0 / gap=4px。ヘッダー高は desktop 35px / touch 47px とし、一覧の可視 8行/5行を維持する。
-- 説明文を含む選択カードは `data-button-layout="choice"` で最小 64px + 内容に応じた自動高さ。menu item / disclosure / sort / field-icon / segmented は共通 CSS の named layout に限る。
+- 並べ替え列頭は Action Button の対象外とし、専用 `SortHeader`（§6.1）を使用する。
+- 説明文を含む選択カードは `data-button-layout="choice"` で最小 64px + 内容に応じた自動高さ。menu item / disclosure / field-icon / segmented は共通 CSS の named layout に限る。
 
 ---
 
@@ -174,7 +174,17 @@
 フィルタ・モード・対象切替は `<Button variant="secondary" aria-pressed={selected}>` を使う。
 同じグループは `role="group"` + `aria-label` + `gap-[8px]` でまとめる。説明を含む選択カードは `data-button-layout="choice"` を指定する。
 
-タブ (`role="tab"`)、combobox、listbox option、情報一覧の選択行、Sidebar navigation はアクションボタンとは構造が異なるため、各共通部品のレイアウトと ARIA を維持する。これらの生 `<button>` は明示的な適用除外であり、保存・コピー・並べ替え・開閉・削除を独自 CSS で実装する例外ではない。
+タブ (`role="tab"`)、combobox、listbox option、情報一覧の選択行、Sidebar navigation はアクションボタンとは構造が異なるため、各共通部品のレイアウトと ARIA を維持する。これらの生 `<button>` は明示的な適用除外であり、保存・コピー・開閉・削除を独自 CSS で実装する例外ではない。
+
+---
+
+## 6.1 並べ替え列頭
+
+- 全画面の並べ替え列頭は [`SortHeader`](../frontend/src/components/SortHeader.tsx) と専用 CSS を正本とする。通常アクションの `Button` / `buttonVariants` / 選択トグル外観を使用しない。
+- 文字と並べ替えアイコンだけを表示し、通常・選択・hover・active・focus 状態でも外枠・角丸・影・塗り背景を付けない。選択中の方向は矢印とアクセシブルな状態で示す。
+- 文字組みは **0.75rem / line-height 1rem / weight 600**、gap 4px、padding 0。操作領域は desktop 32px / touch 44px、表ヘッダー高は35px / 47pxを維持し、一覧の可視行数を変えない。
+- Enter / Space / Tab とネイティブの disabled を維持するため、内部は意味上の `<button type="button">` を使用する。これは列頭専用の構造コントロールとしての明示的な適用除外である。
+- キーボードフォーカスは列名の2px下線（offset 3px）で示す。ボタン式の外枠を復活させない。
 
 ---
 
