@@ -67,7 +67,8 @@ test("FormActionBar の danger menu は shared floating menu で viewport 内に
   assert.doesNotMatch(floatingSource, /"fixed[^"]*overflow-y-auto/u);
 });
 
-test("FormActionBar は mobile で全幅 44px、desktop で通常 action bar 高さに戻す", () => {
-  assert.match(source, /h-\[44px\] w-full whitespace-nowrap sm:h-10 sm:w-auto/u);
+test("FormActionBar は mobile で全幅にし、主操作の高さは共通 Button に委譲する", () => {
+  assert.match(source, /w-full whitespace-nowrap sm:w-auto/u);
+  assert.doesNotMatch(source, /sm:h-10/u);
   assert.match(source, /flex min-w-0 flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center/u);
 });

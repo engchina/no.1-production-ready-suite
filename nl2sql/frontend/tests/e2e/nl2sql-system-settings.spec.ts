@@ -1,6 +1,7 @@
 import { expect, test, type Locator, type Page, type Route } from "@playwright/test";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
 import { dropFiles } from "./_helpers/file-dropzone";
+import { expectLargeActionButton } from "./_helpers/action-button";
 
 function settingsEnvelope(data: unknown) {
   return {
@@ -1463,10 +1464,12 @@ test("モデル設定を3カードごとに独立保存し、非表示設定と�
   await page.getByRole("textbox", { name: "モデル ID 1" }).fill("enterprise-unsaved-model");
   await page.locator("#genai-embedding-model").fill("cohere.unsaved-embed");
 
+  await expectLargeActionButton(page.getByRole("button", { name: "OCI Enterprise AI: 保存" }));
   await page.getByRole("button", { name: "OCI Enterprise AI: 保存" }).click();
   await expect(
     page.getByRole("button", { name: "OCI Enterprise AI: 保存中…" })
   ).toBeDisabled();
+  await expectLargeActionButton(page.getByRole("button", { name: "OCI Enterprise AI: 保存中…" }));
   await expect(page.getByRole("button", { name: "登録モデル: 保存" })).toBeDisabled();
   await expect(page.getByRole("button", { name: "OCI Generative AI: 保存" })).toBeDisabled();
   firstSaveGate.release();
