@@ -14439,3 +14439,29 @@ test("sql to question merges candidates after structure and restores the legacy 
   expect(generationRequests).toBe(0);
   await expectNoHorizontalScroll(page);
 });
+
+test("自動判定中はクエリの競合操作を停止し、失敗後に再試行できる", async ({ page }, testInfo) => {
+  await mockNl2SqlApi(page);
+  await page.goto("/query");
+  const input = nl2sqlQuestionInput(page);
+  await input.fill("従業員一覧を取得");
+  await page.waitForTimeout(800);
+  let release!: () => void;
+  const pending = new Promise<void>((resolve) => { release = resolve; });
+  await page.route("**/api/nl2sql/recommend-profile", async (route) => {
+    await pending;
+    await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "分類サービスを利用できません" }) });
+  });
+  await page.getByRole("button", { name: "プロファイルを自動判定", exact: true }).click();
+  await page.screenshot({ path: testInfo.outputPath("profile-detect-pending.png") });
+  try {
+    await expect(input).toBeDisabled();
+    await expect(page.getByRole("button", { name: "AI要件確認", exact: true })).toBeDisabled();
+    await expect(page.locator("#nl2sql-profile-select")).toBeDisabled();
+    await expect(page.getByRole("button", { name: "SQL を生成して実行", exact: true })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "新しいクエリを開始", exact: true })).toBeDisabled();
+  } finally { release(); }
+  await expect(input).toBeEnabled();
+  await expect(input).toHaveValue("従業員一覧を取得");
+  await expect(page.getByRole("button", { name: "プロファイルを自動判定", exact: true })).toBeEnabled();
+});

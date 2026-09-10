@@ -492,7 +492,7 @@ function ExecutableNl2SqlWorkbench() {
     setActionError("");
   }, [clearTrackedJob]);
   const jobActive = isJobInFlight(job?.status) || submitting;
-  const active = jobActive || guidedClarificationOpen;
+  const active = jobActive || detecting || guidedClarificationOpen;
   const actionBusy = submitting;
   const showSimilarHistoryPanel =
     similarHistoryPanelVisible ||
@@ -738,6 +738,9 @@ function ExecutableNl2SqlWorkbench() {
     setSchemaDetailError("");
   };
 
+  const detectionContext = useRef("");
+  detectionContext.current = profileRecommendationSignature(question, profileId);
+
   // 質問から業務プロファイルを自動判定（学習済み分類器 → 決定論フォールバック）して選択する。
   const detectProfile = useCallback(async () => {
     const trimmed = question.trim();
@@ -746,11 +749,13 @@ function ExecutableNl2SqlWorkbench() {
       profileRecommendationSignature(trimmed, profileId)
     );
     setDetecting(true);
+    const submittedContext = detectionContext.current;
     try {
       const data = await apiPost<ProfileRecommendationData>("/api/nl2sql/recommend-profile", {
         question: trimmed,
         current_profile_id: profileId || null,
       });
+      if (detectionContext.current !== submittedContext) return;
       setRecommendation(data);
       const recommendedProfileLabel = profileDisplayLabel({
         name: data.recommended_profile_name,
@@ -1210,7 +1215,7 @@ function ExecutableNl2SqlWorkbench() {
                               variant="secondary"
                               size="md"
 
-                              disabled={!question.trim() || jobActive || !profileSelectionReady}
+                              disabled={!question.trim() || active || !profileSelectionReady}
                               onClick={() => {
                                 setActionError("");
                                 setGuidedClarificationOpen(true);
