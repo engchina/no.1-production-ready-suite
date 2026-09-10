@@ -550,6 +550,17 @@ function OntologyFlow({
   onViewModeChange,
 }: OntologyGraphCanvasProps) {
   const flow = useReactFlow();
+  const canvasRef = useRef<HTMLDivElement | null>(null);
+  const [canvasVisible, setCanvasVisible] = useState(false);
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const observer = new ResizeObserver(([entry]) => {
+      setCanvasVisible(entry.contentRect.width > 0 && entry.contentRect.height > 0);
+    });
+    observer.observe(canvas);
+    return () => observer.disconnect();
+  }, []);
   const [search, setSearch] = useState("");
   const [searchCursor, setSearchCursor] = useState(0);
   const [showDetails, setShowDetails] = useState(false);
@@ -768,6 +779,7 @@ function OntologyFlow({
   const highlightNodeIdsRef = useRef(highlightNodeIds);
   highlightNodeIdsRef.current = highlightNodeIds;
   useEffect(() => {
+    if (!canvasVisible) return;
     // React Flow が新しいノード集合を測り終えるのを待ってからフィットする
     const timer = window.setTimeout(() => {
       const highlightTargets = (highlightNodeIdsRef.current ?? []).filter((id) =>
@@ -782,13 +794,12 @@ function OntologyFlow({
       });
     }, 80);
     return () => window.clearTimeout(timer);
-  }, [visibleSignature, highlightSignature, flow]);
+  }, [visibleSignature, highlightSignature, flow, canvasVisible]);
 
   // インスペクタ等の外部選択で対象が画面外のときだけ、そのノードへセンタリングする
   // (fitView での全体リセットはしない。ズームは現状維持ベース)。
-  const canvasRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
-    if (!selectedNodeId) return;
+    if (!selectedNodeId || !canvasVisible) return;
     const position = layoutPositionsRef.current.get(selectedNodeId);
     const container = canvasRef.current;
     if (!position || !container) return;
@@ -807,7 +818,7 @@ function OntologyFlow({
       zoom: Math.max(flow.getZoom(), 0.8),
       duration: prefersReducedMotion() ? 0 : 250,
     });
-  }, [selectedNodeId, flow]);
+  }, [selectedNodeId, flow, canvasVisible]);
 
   // スクリーンリーダー向けの選択通知文(aria-live)。選択解除時は空にする
   const selectedNodeAnnouncement = useMemo(() => {
@@ -1087,7 +1098,7 @@ function OntologyFlow({
         ref={canvasRef}
         className="relative h-[32rem] min-h-80 overflow-hidden rounded-md border border-border bg-background"
       >
-      <ReactFlow
+      {canvasVisible && <ReactFlow
         nodes={nodes}
         edges={edges}
         nodeTypes={NODE_TYPES}
@@ -1136,7 +1147,7 @@ function OntologyFlow({
           />
         ) : null}
         <FlowControls onResetLayout={resetLayout} resetDisabled={positionOverrides.size === 0} />
-      </ReactFlow>
+      </ReactFlow>}
       <OntologyGraphLegend
         presentGroupIds={presentLegendGroupIds}
         disabledGroupIds={disabledLegendGroups}

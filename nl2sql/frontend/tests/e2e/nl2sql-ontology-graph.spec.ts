@@ -1200,7 +1200,9 @@ test("ノードを hover してもエッジが 1 フレームも消えない(点
   expect(Math.max(...counts)).toBe(4);
 });
 
-test("サーバ検索結果のヒット一覧は最大高さを超えると縦スクロールになる", async ({ page }) => {
+test("サーバ検索結果のヒット一覧は最大高さを超えると縦スクロールになる", async ({ page }, testInfo) => {
+  const invalidCoordinates: string[] = [];
+  page.on("console", (message) => { if (message.type() === "error" && /NaN|Infinity/.test(message.text())) invalidCoordinates.push(message.text()); });
   await mockApi(page, { ontologyGraph: employeeOntologyGraph });
   await page.route("**/api/nl2sql/profiles/*/ontology-context/search", (route) =>
     fulfillJson(route, {
@@ -1256,4 +1258,16 @@ test("サーバ検索結果のヒット一覧は最大高さを超えると縦�
   await expect(
     playground.getByTestId("ontology-playground-server-result").getByText("8 件ヒット")
   ).toBeVisible();
+  expect(invalidCoordinates).toEqual([]);
+  const expand = playground.getByRole("button", { name: "グラフを表示", exact: true });
+  if (await expand.isVisible()) {
+    await expand.click();
+    await expect(playground.locator(".react-flow__viewport")).toBeVisible();
+    await playground.getByRole("button", { name: "グラフを隠す", exact: true }).click();
+    await expand.click();
+    await expect(playground.locator(".react-flow__viewport")).toBeVisible();
+  }
+  await expect(playground.locator(".react-flow__viewport")).not.toHaveAttribute("style", /NaN|Infinity/);
+  await playground.getByTestId("ontology-playground-graph-region").screenshot({ path: testInfo.outputPath("ontology-visible-viewport.png") });
+  expect(invalidCoordinates).toEqual([]);
 });
