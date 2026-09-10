@@ -146,6 +146,13 @@ toastError(message, opts?)      // = danger トーン。固定面がない場合
 - TanStack Query の `mutation.isSuccess` / `isError` と連動させる。`isError` の文言は `error instanceof ApiError ? error.message : t("...loadError")` を基本形にする。
 - 成功表示は数秒後にフェードしてよいが、エラーは次操作まで残す。
 
+#### SQL 実行エラーの具体的な対応例
+
+- `DbAdminErrorNotice` は概要・原因候補・次の対応に加え、既知のエラーにはコピー可能な構文例を同じ結果領域に表示する。分類は statement の `error_code` を優先し、従来の Oracle メッセージは `ORA-xxxxx` を補助的に使う。日本語メッセージの部分一致で分類しない。
+- `DB_ADMIN_COMMENT_SQL_POLICY_VIOLATION` は `COMMENT ON TABLE`（ビューも同じ構文）/ `COLUMN` / `MATERIALIZED VIEW`、`DB_ADMIN_ANNOTATION_SQL_POLICY_VIOLATION` と `ORA-11548` は表・列の `ANNOTATIONS` 例を共通の `dbAdminErrorRecovery` で管理する。未知のエラーには修正 SQL を推測表示しない。
+- 構文例と対象に適用済みの修正 SQL を区別する。例の所有者・対象・列・説明文は利用者が実際の値へ置換する必要があることを明記し、コピーで入力変更・自動実行・確認ゲートの省略を行わない。
+- コピーには共通 `Button` の `secondary` / `sm` を使い、例の名前を含む `aria-label` を付ける。SQL はモバイル幅で折り返して表示し、コピー成功・失敗は既存 Toast で通知する。
+
 ### 3.4 Banner(Alert)
 
 - セクション/ページ先頭に常設する横長の通知。トーン §2、左にアイコン、任意で閉じる ×・action ボタン。
