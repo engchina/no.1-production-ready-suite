@@ -14440,6 +14440,32 @@ test("sql to question merges candidates after structure and restores the legacy 
   await expectNoHorizontalScroll(page);
 });
 
+test("SELECT SQL の上限だけの入力をクリアでき、上限変更は未実行と表示する", async ({ page }, testInfo) => {
+  await mockNl2SqlApi(page);
+  await page.goto("/direct-sql");
+  const limit = page.getByLabel("取得件数上限");
+  const clear = page.getByRole("button", { name: "SQL をクリア", exact: true });
+  await limit.fill("100");
+  await expect(clear).toBeEnabled();
+  await clear.press("Enter");
+  await expect(limit).toHaveValue("");
+  await directSqlInput(page).fill("SELECT CUSTOMER_NAME FROM INVOICES");
+  await limit.fill("100");
+  let calls = 0;
+  page.on("request", (request) => { if (request.url().endsWith("/api/nl2sql/execute")) calls += 1; });
+  await page.getByRole("button", { name: "SQL 実行", exact: true }).click();
+  const activity = page.getByTestId("direct-sql-execution-activity");
+  await expect(activity).toHaveAttribute("data-execution-activity-status", "success");
+  await limit.fill("200");
+  await expect(activity).toContainText("現在の入力は未実行です");
+  await expect(page.getByTestId("query-result-summary")).toContainText("取得上限 100 件");
+  await activity.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("direct-sql-limit-changed.png") });
+  await limit.fill("100");
+  await expect(activity).not.toContainText("現在の入力は未実行です");
+  expect(calls).toBe(1);
+});
+
 test("自動判定中はクエリの競合操作を停止し、失敗後に再試行できる", async ({ page }, testInfo) => {
   await mockNl2SqlApi(page);
   await page.goto("/query");

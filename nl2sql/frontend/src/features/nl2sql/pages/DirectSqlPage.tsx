@@ -80,7 +80,7 @@ function ExecutableDirectSqlPage() {
   const rowLimitError =
     rowLimitInput.trim() && rowLimit === null ? t("queryResults.rowLimit.errorBounded") : "";
   const canExecute = Boolean(sqlText.trim()) && !loading && rowLimit !== null;
-  const canClear = Boolean(sqlText || results || executionRun);
+  const canClear = Boolean(sqlText || rowLimitInput || results || executionRun);
 
   const execute = async () => {
     const trimmedSql = sqlText.trim();
@@ -206,7 +206,7 @@ function ExecutableDirectSqlPage() {
           </div>
           {executionRun && (
             <ExecutionActivityPanel
-              inputSignature={sqlText}
+              inputSignature={JSON.stringify([sqlText, rowLimit])}
               status={executionRun.status}
               label={executionLabel(executionRun.status)}
               operationKey={executionRun.operationKey}
