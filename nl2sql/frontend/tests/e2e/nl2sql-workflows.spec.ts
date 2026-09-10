@@ -14088,3 +14088,54 @@ test("workspace: 一時保存不可を明示し再読込で入力を失う前に
 
   await expect(adminSqlInput(page)).toHaveValue("SELECT 1 FROM DUAL");
 });
+
+for (const targetCount of [1, 12]) {
+  test(`synthetic target list uses shared bounded density with ${targetCount} targets`, async ({ page }, testInfo) => {
+    await mockNl2SqlApi(page);
+    const run = syntheticRunFixture("failed");
+    const longError = `ORA-20000: ${"生成条件を確認してください。".repeat(8)} ${"X".repeat(180)}`;
+    run.targets = Array.from({ length: targetCount }, (_, index) => ({
+      ...run.targets[0]!,
+      table_name: `APP.TABLE_${index + 1}_${"LONG_NAME_".repeat(8)}`,
+      error: targetCount === 1 ? "権限が不足しています。" : longError,
+    }));
+    await page.route("**/api/nl2sql/synthetic-data/runs", (route) => fulfillJson(route, [run]));
+    await page.goto("/data-management?synthetic_run=run-001");
+    const panel = page.getByTestId("synthetic-run-panel");
+    const targets = panel.getByRole("region", { name: "テーブル別の生成状況" });
+    await expect(targets.getByRole("listitem")).toHaveCount(targetCount);
+    await expect(panel.getByText(`対象テーブル: ${targetCount} 件`, { exact: true })).toBeVisible();
+    await targets.scrollIntoViewIfNeeded();
+    const metrics = await targets.evaluate((node) => ({
+      maxHeight: Number.parseFloat(getComputedStyle(node).maxHeight),
+      height: node.clientHeight,
+      scrollHeight: node.scrollHeight,
+      width: node.clientWidth,
+      scrollWidth: node.scrollWidth,
+      rem: Number.parseFloat(getComputedStyle(document.documentElement).fontSize),
+      desktop: matchMedia("(min-width: 768px)").matches,
+    }));
+    expect(metrics.maxHeight).toBeCloseTo((metrics.desktop ? 28 : 17.5) * metrics.rem, 0);
+    expect(metrics.height).toBeLessThanOrEqual(metrics.maxHeight + 1);
+    expect(metrics.scrollWidth).toBeLessThanOrEqual(metrics.width + 1);
+    await expectNoHorizontalScroll(page);
+    await targets.focus();
+    await expect(targets).toBeFocused();
+    if (targetCount > 1) {
+      expect(metrics.scrollHeight).toBeGreaterThan(metrics.height);
+      await page.keyboard.press("End");
+      await expect.poll(() => targets.evaluate((node) => node.scrollTop + node.clientHeight >= node.scrollHeight - 2)).toBe(true);
+      await expect(targets.getByRole("listitem").last()).toContainText(longError);
+      const scrollTop = await targets.evaluate((node) => node.scrollTop);
+      await panel.getByRole("button", { name: "状況を再確認" }).click();
+      await expect.poll(() => targets.evaluate((node) => node.scrollTop)).toBeCloseTo(scrollTop, 0);
+      await targets.scrollIntoViewIfNeeded();
+    } else {
+      expect(metrics.scrollHeight).toBeLessThanOrEqual(metrics.height + 1);
+      expect(metrics.height).toBeLessThan(metrics.maxHeight);
+    }
+    await expect(targets.getByTestId("synthetic-run-status")).toHaveCount(0);
+    await expect(targets.getByRole("button")).toHaveCount(0);
+    await page.screenshot({ path: testInfo.outputPath(`synthetic-targets-${targetCount}.png`) });
+  });
+}

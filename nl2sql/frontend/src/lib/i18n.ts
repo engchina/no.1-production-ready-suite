@@ -2448,6 +2448,8 @@ const nl2sqlJa = {
   "syntheticRun.continues": "この画面を離れても処理は続きます。",
   "syntheticRun.count": "今回の追加件数: {loaded} 件 ／ 予定 {requested} 件",
   "syntheticRun.targetStatus": "状態: {status}",
+  "syntheticRun.targets": "テーブル別の生成状況",
+  "syntheticRun.targetCount": "対象テーブル: {count} 件",
   "syntheticRun.unverified": "未確認",
   "syntheticRun.finishedAt": "処理終了: {time}",
   "syntheticRun.details": "詳細",

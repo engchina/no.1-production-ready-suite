@@ -9,6 +9,7 @@ import { apiGet } from "@/lib/api";
 import { useDatabaseStatus } from "@/lib/queries";
 import { t } from "@/lib/i18n";
 import { formatDateTime } from "@/lib/format";
+import { INFORMATION_LIST_SCROLL_CLASS, INFORMATION_TABLE_FOCUS_CLASS } from "@/lib/list-density";
 import { useAuth } from "@/features/security/AuthProvider";
 
 export interface SyntheticRun {
@@ -100,13 +101,23 @@ export function SyntheticRunPanel({ run, runs, onSelect, error, onRefresh, onVie
       </p>
       {run.status === "unknown" && <p className="text-sm text-muted-foreground">{t("syntheticRun.unknownHint")}</p>}
       {!runFinished(run) && !error && run.status !== "unknown" && <p className="text-sm text-muted-foreground">{t("syntheticRun.continues")}</p>}
-      <div className="grid gap-2">
-        {run.targets.map((target) => <div key={target.table_name} className="grid min-w-0 gap-1 rounded border border-border bg-card p-3 text-sm">
-          <strong className="break-all">{target.table_name}</strong>
-          <span>{t("syntheticRun.count", { requested: target.requested_rows, loaded: target.loaded_rows ?? t("syntheticRun.unverified") })}</span>
-          <span>{t("syntheticRun.targetStatus", { status: targetStatusLabel(run.status === "unknown" && target.status === "pending" ? "unknown" : target.status) })}</span>
-          {target.error && <p className="break-words text-danger">{target.error}</p>}
-        </div>)}
+      <p className="text-xs text-muted-foreground">{t("syntheticRun.targetCount", { count: run.targets.length })}</p>
+      <div
+        key={run.run_id}
+        role="region"
+        aria-label={t("syntheticRun.targets")}
+        tabIndex={0}
+        className={`min-w-0 pr-1 ${INFORMATION_LIST_SCROLL_CLASS} ${INFORMATION_TABLE_FOCUS_CLASS}`}
+        data-testid="synthetic-run-targets"
+      >
+        <ul className="grid min-w-0 content-start gap-2">
+          {run.targets.map((target) => <li key={target.table_name} className="grid min-w-0 gap-1 rounded border border-border bg-card p-3 text-sm [overflow-wrap:anywhere]">
+            <strong className="break-all">{target.table_name}</strong>
+            <span>{t("syntheticRun.count", { requested: target.requested_rows, loaded: target.loaded_rows ?? t("syntheticRun.unverified") })}</span>
+            <span>{t("syntheticRun.targetStatus", { status: targetStatusLabel(run.status === "unknown" && target.status === "pending" ? "unknown" : target.status) })}</span>
+            {target.error && <p className="text-danger">{target.error}</p>}
+          </li>)}
+        </ul>
       </div>
       {run.failure_phase === "validation" && <Banner severity="danger">{t("syntheticRun.validationFailed")}</Banner>}
       {run.message && !run.failure_phase && <Banner severity={run.status === "failed" ? "danger" : "warning"}>{run.message}</Banner>}
