@@ -107,8 +107,15 @@
   .nl2sql-button:disabled { border-color: GrayText; color: GrayText; }
   .nl2sql-button[aria-pressed="true"] { outline: 2px solid Highlight; }
 }
-/* 密な表ヘッダーは列の文字組みを継承し、32px target を内側に確保する。 */
-.nl2sql-button[data-button-layout="sort"] { padding-inline: 0; font: inherit; gap: 4px; }
+/* 並べ替え列名は移行前の text-xs / font-semibold に統一し、操作高さを維持する。 */
+.nl2sql-button[data-button-layout="sort"] {
+  padding-inline: 0;
+  font-family: inherit;
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1rem;
+  gap: 4px;
+}
 th:has(> .nl2sql-button[data-button-layout="sort"]),
 th:has(> span > .nl2sql-button[data-button-layout="sort"]) { padding-block: 1px; }
 
