@@ -2418,6 +2418,7 @@ const nl2sqlJa = {
   "dataTools.syntheticData.executeTitle": "Oracle への synthetic data 生成",
   "syntheticRun.dismiss": "通知を閉じる",
   "syntheticRun.missing": "選択した生成記録を取得できません。状況を再確認するか、履歴から選び直してください。",
+  "syntheticRun.goToResults": "結果データを確認",
   "syntheticRun.title": "生成状況",
   "syntheticRun.history": "生成履歴",
   "syntheticRun.status.pending": "受付済み・開始を待っています",

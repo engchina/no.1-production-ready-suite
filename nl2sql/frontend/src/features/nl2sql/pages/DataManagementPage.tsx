@@ -1163,6 +1163,7 @@ export function DataManagementPage() {
           >
             <SyntheticRunPanel run={selectedRun} runs={selectedRun && !listedRun ? [selectedRun, ...syntheticRuns.data ?? []] : syntheticRuns.data ?? []}
               onSelect={(id) => { setSyntheticRunId(id); setSearchParams((params) => { params.delete("synthetic_run"); return params; }, { replace: true }); clearSyntheticResultState(); resultSelectionEdited.current = false; }}
+              onViewResults={() => document.getElementById("synthetic-results-heading")?.scrollIntoView({ block: "start" })}
               error={Boolean(syntheticRuns.error)} onRefresh={() => { void syntheticRuns.refetch(); if (requestedRunId && !listedRun) void historicalRun.refetch(); }} />
             {historicalRun.error && requestedRunId && !listedRun && <Banner severity="warning">{apiErrorMessage(historicalRun.error, "syntheticRun.missing")}</Banner>}
             {selectAiProfilesQuery.isPending ? (

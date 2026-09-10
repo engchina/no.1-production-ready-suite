@@ -10343,6 +10343,8 @@ for (const outcome of ["completed", "failed", "partial", "no_data", "unknown"] a
     await expect(status.getByTestId("synthetic-run-status")).toHaveText(labels[outcome]);
     if (["completed", "partial"].includes(outcome)) {
       await expect.poll(() => reads).toBe(1);
+      await status.getByRole("button", { name: "結果データを確認" }).click();
+      await expect(panel.getByRole("heading", { name: "生成結果データの表示" })).toBeInViewport();
       await expect(panel).toContainText("生成記録はありますが、現在の接続ではデータを確認できません");
     } else if (outcome === "unknown") {
       await expect(status).toContainText("未確認");

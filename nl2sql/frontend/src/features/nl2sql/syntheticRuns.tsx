@@ -66,9 +66,9 @@ export function SyntheticRunNotifications() {
   </Banner>;
 }
 
-export function SyntheticRunPanel({ run, runs, onSelect, error, onRefresh }: {
+export function SyntheticRunPanel({ run, runs, onSelect, error, onRefresh, onViewResults }: {
   run: SyntheticRun | null; runs: SyntheticRun[]; onSelect: (id: string) => void;
-  error: boolean; onRefresh: () => void;
+  error: boolean; onRefresh: () => void; onViewResults?: () => void;
 }) {
   return <section aria-label={t("syntheticRun.title")} className="grid min-w-0 gap-3 rounded-md border border-border bg-background p-4" data-testid="synthetic-run-panel">
     <h3 className="font-semibold">{t("syntheticRun.title")}</h3>
@@ -96,7 +96,10 @@ export function SyntheticRunPanel({ run, runs, onSelect, error, onRefresh }: {
         <p>{t("syntheticRun.oracleReference", { id: run.operation_ids.join(", ") || t("syntheticRun.unverified") })}</p>
       </details>
     </>}
-    <Button variant="secondary" size="sm" onClick={onRefresh}>{t("syntheticRun.refresh")}</Button>
+    <div className="flex flex-wrap gap-2">
+      {run && runFinished(run) && onViewResults && <Button variant="primary" size="sm" onClick={onViewResults}>{t("syntheticRun.goToResults")}</Button>}
+      <Button variant="secondary" size="sm" onClick={onRefresh}>{t("syntheticRun.refresh")}</Button>
+    </div>
   </section>;
 }
 function targetStatusLabel(status: string) {
