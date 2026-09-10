@@ -257,7 +257,7 @@ export function UploadStorageSettingsClient() {
                       type="button"
                       variant="secondary"
                       size="lg"
-                      className="min-h-[44px]"
+
                       onClick={() => navigate(APP_ROUTES.settingsOci)}
                     >
                       <Settings2 size={15} aria-hidden />

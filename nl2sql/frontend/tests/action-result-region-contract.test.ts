@@ -54,7 +54,7 @@ test("app button variants restore safe Japanese text line height", () => {
   );
   assert.match(
     buttonSource,
-    /className=\{cn\([\s\S]*BUTTON_TEXT_LAYOUT_CLASSNAME[\s\S]*semanticVariantClass\(variant\)[\s\S]*className/u
+    /className=\{cn\([\s\S]*buttonVariants\(\{ variant, size, iconOnly, touchTarget, tone \}\)[\s\S]*className/u
   );
   assert.match(buttonSource, /bg-primary-fill text-primary-fill-foreground/u);
   assert.match(buttonSource, /bg-danger-fill text-white/u);

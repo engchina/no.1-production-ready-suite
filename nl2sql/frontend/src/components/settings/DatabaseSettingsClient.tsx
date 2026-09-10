@@ -732,7 +732,7 @@ function SelectAiCredentialCard() {
               disabled={changeCredential.isPending || !data.oci_auth_ready}
               actions={
                 <Button
-                  size="sm"
+                  size="lg"
                   variant={data.exists ? "danger" : "primary"}
                   className="w-full sm:w-auto"
                   loading={changeCredential.isPending}
@@ -1377,13 +1377,18 @@ function PasswordField({
             error ? "border-danger" : "border-border"
           )}
         />
-        <button
+        <Button
+          variant="ghost"
+          size="sm"
+          iconOnly
+          touchTarget
+          data-button-layout="field-icon"
           type="button"
           onClick={onToggleVisible}
           disabled={disabled || revealPending}
           aria-busy={revealPending}
           aria-label={revealButtonLabel}
-          className="absolute right-0 top-0 flex h-11 w-11 cursor-pointer items-center justify-center rounded-r-md text-muted transition-colors hover:bg-background hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-50"
+          className="absolute right-0 top-0"
         >
           {revealPending ? (
             <StableLoadingIcon size={16} />
@@ -1392,7 +1397,7 @@ function PasswordField({
           ) : (
             <Eye size={16} aria-hidden />
           )}
-        </button>
+        </Button>
       </div>
       <p id={hintId} className="text-xs leading-relaxed text-muted">
         {helperText}

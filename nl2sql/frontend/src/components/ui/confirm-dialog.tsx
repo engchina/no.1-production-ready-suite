@@ -203,7 +203,7 @@ function ConfirmDialog({
             ) : null}
           </div>
         </div>
-        <div className="mt-5 flex justify-end gap-2 border-t border-border bg-background px-5 py-4">
+        <div className="mt-5 flex justify-end gap-[8px] border-t border-border bg-background px-5 py-4">
           <Button variant="secondary" size="sm" onClick={onCancel}>
             {options.cancelLabel ?? labels.cancel}
           </Button>

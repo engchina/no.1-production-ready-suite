@@ -751,7 +751,7 @@ test("quality evaluation job detail stops polling after the job is deleted", asy
 
   await page.goto("/evaluation?job=job-001");
 
-  await expect(page.getByText("実行中")).toBeVisible();
+  await expect(page.getByText("実行中", { exact: true })).toBeVisible();
   await expect.poll(() => jobReads, { timeout: 6_000 }).toBe(2);
   await expect(page.getByText("SQL生成評価データを読み込めませんでした。")).toBeVisible();
   await page.waitForTimeout(2_200);

@@ -597,15 +597,17 @@ function PickerSortHeader({
   return (
     <span role="columnheader" aria-sort={ariaSort}>
       {sort && onSortChange ? (
-        <button
+        <Button
+          variant="ghost"
+          size="sm"
+          data-button-layout="sort"
           type="button"
-          className="inline-flex items-center gap-1 whitespace-nowrap text-left font-semibold text-foreground hover:text-foreground focus:outline-none focus:ring-2 focus:ring-ring/40"
           aria-label={t("objectSelector.sort.button", { label, direction })}
           onClick={() => onSortChange(sortKey)}
         >
           <span>{label}</span>
           <ArrowDownUp size={13} className={active ? "text-primary" : "text-muted"} aria-hidden="true" />
-        </button>
+        </Button>
       ) : (
         label
       )}
@@ -1013,15 +1015,17 @@ function SortButton({
 }) {
   const active = sort.key === sortKey;
   return (
-    <button
+    <Button
+      variant="ghost"
+      size="sm"
+      data-button-layout="sort"
       type="button"
-      className="inline-flex items-center gap-1 whitespace-nowrap text-left font-semibold text-foreground hover:text-foreground focus:outline-none focus:ring-2 focus:ring-ring/40"
       aria-sort={active ? (sort.direction === "asc" ? "ascending" : "descending") : "none"}
       onClick={() => onToggle(sortKey)}
     >
       <span>{label}</span>
       <ArrowDownUp size={13} className={active ? "text-primary" : "text-muted"} aria-hidden="true" />
-    </button>
+    </Button>
   );
 }
 
@@ -1621,11 +1625,11 @@ export function DropDbObjectDialog({
               tone="danger"
               actions={
                 <>
-                  <Button type="button" variant="danger" size="sm" loading={loading} disabled={!canExecute} onClick={onExecute}>
+                  <Button type="button" variant="danger" size="lg" loading={loading} disabled={!canExecute} onClick={onExecute}>
                     <Trash2 size={15} aria-hidden="true" />
                     <span>{labels.run}</span>
                   </Button>
-                  <Button type="button" variant="secondary" size="sm" onClick={onClose}>
+                  <Button type="button" variant="secondary" size="lg" onClick={onClose}>
                     <span>{labels.cancel}</span>
                   </Button>
                 </>

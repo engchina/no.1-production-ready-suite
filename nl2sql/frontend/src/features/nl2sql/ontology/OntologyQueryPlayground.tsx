@@ -961,7 +961,7 @@ export function OntologyQueryPlayground({
                 type="submit"
                 variant="primary"
                 size="lg"
-                className="h-11 min-h-[44px] w-full whitespace-nowrap sm:w-auto"
+                touchTarget className="w-full whitespace-nowrap sm:w-auto"
                 disabled={!question.trim()}
                 data-testid="ontology-playground-run"
               >
@@ -972,7 +972,7 @@ export function OntologyQueryPlayground({
                 type="button"
                 variant="secondary"
                 size="lg"
-                className="h-11 min-h-[44px] w-full whitespace-nowrap sm:w-auto"
+                touchTarget className="w-full whitespace-nowrap sm:w-auto"
                 disabled={!canServerSearch || serverSearch.status === "loading"}
                 loading={serverSearch.status === "loading"}
                 onClick={() => void runServerSearch()}

@@ -83,7 +83,7 @@ export function Nl2SqlExecutionOptionsPanel({
         type="button"
         variant="ghost"
         size="md"
-        className="min-h-11 w-full justify-between rounded-none px-3 text-left"
+        data-button-layout="disclosure"
         aria-expanded={open}
         aria-controls="nl2sql-execution-options-body"
         onClick={() => onOpenChange(!open)}

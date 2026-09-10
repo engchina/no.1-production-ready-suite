@@ -496,7 +496,7 @@ function SavedSourceDocumentsList({
                       type="button"
                       variant="ghost"
                       size="sm"
-                      className="text-danger hover:text-danger focus-visible:ring-danger/30"
+                      tone="danger"
                       loading={deletingSourceDocumentId === source.id}
                       disabled={
                         loading ||
@@ -1444,6 +1444,7 @@ export function OntologyBuildSection({
                       {Math.max(1, Math.ceil(file.size / 1024))} KB
                     </span>
                     <Button
+                      iconOnly
                       type="button"
                       variant="ghost"
                       size="sm"

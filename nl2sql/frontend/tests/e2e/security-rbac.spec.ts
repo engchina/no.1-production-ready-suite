@@ -147,7 +147,7 @@ async function expectBoundedSecurityTableScroll(
     };
   }, visibleRowLimit);
 
-  const expectedMaxHeight = metrics.rootFontSize * (2.5 + 3.5 * metrics.expectedRows);
+  const expectedMaxHeight = (await scrollRegion.evaluate(() => window.matchMedia("(max-width: 639px), (pointer: coarse)").matches) ? 47 : 35) + metrics.rootFontSize * 3.5 * metrics.expectedRows;
   expect(metrics.maxHeight).toBeGreaterThanOrEqual(expectedMaxHeight - 2);
   expect(metrics.maxHeight).toBeLessThanOrEqual(expectedMaxHeight + 2);
   expect(metrics.scrollHeight).toBeGreaterThan(metrics.clientHeight);
@@ -3841,6 +3841,7 @@ test("ロール・権限管理はオントロジー提案取得が遅延して�
 
   try {
     await page.goto("/ontology-build?profile=default");
+    await page.getByRole("button", { name: "情報を取得", exact: true }).click();
     await expect(page.getByTestId("profile-ontology-build")).toBeVisible({
       timeout: 30_000,
     });

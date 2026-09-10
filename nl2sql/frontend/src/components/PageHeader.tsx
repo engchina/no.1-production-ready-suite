@@ -87,6 +87,8 @@ function PageActionButton({
       type="button"
       size="sm"
       variant={menuItem ? "ghost" : actionVariant(action.kind)}
+      touchTarget={mobile || menuItem}
+      tone={menuItem && action.kind === "danger" ? "danger" : "default"}
       loading={action.loading}
       disabled={action.disabled}
       aria-label={action.ariaLabel}
@@ -95,8 +97,8 @@ function PageActionButton({
       data-page-action-id={action.id}
       data-page-action-kind={action.kind}
       className={cn(
-        mobile && "h-[44px] min-w-0 flex-1 whitespace-nowrap px-3",
-        menuItem && "h-[44px] w-full justify-start whitespace-nowrap px-3"
+        mobile && "min-w-0 flex-1 whitespace-nowrap",
+        menuItem && "w-full justify-start whitespace-nowrap"
       )}
       onClick={handleClick}
     >
@@ -186,7 +188,7 @@ export function PageActionBar({
       aria-label={ariaLabel}
       data-testid={testId}
     >
-      <div className="hidden flex-wrap items-center justify-end gap-2 lg:flex">
+      <div className="hidden flex-wrap items-center justify-end gap-[8px] lg:flex">
         {ordered.map((action, index) => {
           const group = actionGroup(action.kind);
           const previousKind = ordered[index - 1]?.kind;
@@ -204,7 +206,7 @@ export function PageActionBar({
         })}
       </div>
 
-      <div className="flex w-full min-w-0 items-center justify-end gap-2 lg:hidden">
+      <div className="flex w-full min-w-0 items-center justify-end gap-[8px] lg:hidden">
         {collapseInCompactHeader ? (
           <>
             <PageActionButton action={compactPrimaryAction} mobile />
@@ -213,7 +215,8 @@ export function PageActionBar({
               type="button"
               size="sm"
               variant="secondary"
-              className="h-[44px] min-w-0 flex-1 whitespace-nowrap px-3"
+              touchTarget
+              className="min-w-0 flex-1"
               aria-expanded={menuOpen}
               aria-controls={menuId}
               aria-haspopup="menu"
@@ -322,7 +325,7 @@ export function PageHeader({
       )}
     >
       <div className="min-w-0">
-        <div className="flex min-w-0 flex-wrap items-center gap-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-[8px]">
           <h1 className="min-w-0 break-words text-xl font-bold text-foreground">{title}</h1>
           {status}
         </div>

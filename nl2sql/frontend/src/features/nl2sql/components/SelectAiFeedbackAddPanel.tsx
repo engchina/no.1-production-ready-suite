@@ -145,11 +145,7 @@ export function SelectAiFeedbackAddPanel({
               type="button"
               variant="secondary"
               size="sm"
-              className={
-                history?.feedback_rating === "good"
-                  ? "border-primary bg-primary/10 ring-1 ring-primary"
-                  : ""
-              }
+
               aria-pressed={history?.feedback_rating === "good"}
               loading={savingRating === "good"}
               disabled={savingRating !== null}
@@ -162,11 +158,7 @@ export function SelectAiFeedbackAddPanel({
               type="button"
               variant="secondary"
               size="sm"
-              className={
-                history?.feedback_rating === "bad"
-                  ? "border-primary bg-primary/10 ring-1 ring-primary"
-                  : ""
-              }
+
               aria-pressed={history?.feedback_rating === "bad"}
               loading={savingRating === "bad"}
               disabled={savingRating !== null}

@@ -22,7 +22,7 @@ test("InputActionField uses the shared Button and 44px input/action sizing", () 
   assert.match(source, /"h-11 w-full min-h-\[44px\] rounded-md border/u);
   assert.match(
     source,
-    /<Button[\s\S]*size="lg"[\s\S]*className=\{cn\("h-11 w-full whitespace-nowrap min-h-\[44px\]"/u
+    /<Button[\s\S]*size="lg"[\s\S]*touchTarget[\s\S]*className=\{cn\("w-full"/u
   );
   assert.match(source, /min-h-\[44px\]/u);
   assert.match(source, /Button spec/u);

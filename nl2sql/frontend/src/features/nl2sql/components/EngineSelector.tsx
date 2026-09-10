@@ -53,9 +53,7 @@ export function EngineSelector({
               variant="secondary"
               size="md"
               disabled={disabled}
-              className={`h-auto min-h-16 justify-start gap-3 whitespace-normal text-left ${
-                selected ? "border-primary bg-primary/10 ring-1 ring-primary" : ""
-              }`}
+              data-button-layout="choice"
               aria-pressed={selected}
               onClick={() => onChange(option.value)}
             >

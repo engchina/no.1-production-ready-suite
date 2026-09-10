@@ -304,7 +304,7 @@ export function GuidedClarificationPanel({
       type="button"
       variant="ghost"
       size={size}
-      className="min-h-11"
+
       loading={busyAction === "cancel"}
       disabled={busyAction === "answer"}
       onClick={() => void closePanel()}
@@ -414,7 +414,7 @@ export function GuidedClarificationPanel({
               type="button"
               variant="primary"
               size="md"
-              className="min-h-11"
+
               disabled={!selectedProfileId || Boolean(busyAction)}
               onClick={() => void confirmRecommendedProfile()}
             >
@@ -511,7 +511,7 @@ export function GuidedClarificationPanel({
               type="button"
               variant="primary"
               size="md"
-              className="min-h-11"
+
               loading={busyAction === "answer"}
               disabled={!answerReady || Boolean(busyAction && busyAction !== "answer")}
               onClick={() => void answerCurrentQuestion()}
@@ -595,7 +595,7 @@ export function GuidedClarificationPanel({
               type="button"
               variant="primary"
               size="md"
-              className="min-h-11"
+
               loading={busyAction === "answer"}
               disabled={!manualAnswersReady || Boolean(busyAction && busyAction !== "answer")}
               onClick={() => void submitManualAnswers()}
@@ -652,7 +652,7 @@ export function GuidedClarificationPanel({
               type="button"
               variant="primary"
               size="lg"
-              className="min-h-11"
+
               disabled={Boolean(busyAction)}
               onClick={applyQuestion}
             >

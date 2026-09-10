@@ -405,7 +405,7 @@ export function SampleDataPage() {
                   <Button
                     type="button"
                     variant={isDeleteAction ? "danger" : "primary"}
-                    size="sm"
+                    size="lg"
                     className="w-full sm:w-auto"
                     loading={loading === (isDeleteAction ? "sample-delete" : "sample-import")}
                     disabled={!confirmationMatched}

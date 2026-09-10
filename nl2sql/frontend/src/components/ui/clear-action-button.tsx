@@ -26,7 +26,8 @@ export function ClearActionButton({
       type="button"
       variant="secondary"
       size={size}
-      className={cn(!matchButtonHeight && "h-[44px]", "whitespace-nowrap", className)}
+      touchTarget={!matchButtonHeight}
+      className={cn("whitespace-nowrap", className)}
       aria-label={ariaLabel ?? label}
       data-testid={dataTestId}
       {...props}

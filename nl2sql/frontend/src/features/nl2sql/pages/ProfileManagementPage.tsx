@@ -323,15 +323,17 @@ function SortButton({
 }) {
   const active = sort.key === sortKey;
   return (
-    <button
+    <Button
+      variant="ghost"
+      size="sm"
+      data-button-layout="sort"
       type="button"
-      className="inline-flex items-center gap-1 whitespace-nowrap text-left font-semibold text-foreground hover:text-foreground focus:outline-none focus:ring-2 focus:ring-ring/40"
       aria-sort={active ? (sort.direction === "asc" ? "ascending" : "descending") : "none"}
       onClick={() => onToggle(sortKey)}
     >
       <span>{label}</span>
       <ArrowDownUp size={13} className={active ? "text-primary" : "text-muted"} aria-hidden="true" />
-    </button>
+    </Button>
   );
 }
 
@@ -1280,7 +1282,7 @@ function ProfileEditor({
             <Button
               type="button"
               variant="primary"
-              size="md"
+              size="lg"
               loading={saving}
               disabled={!oracleConfirmed || saving}
               onClick={onSave}
@@ -1291,7 +1293,7 @@ function ProfileEditor({
             <ClearActionButton
               label={t("dbAdmin.runner.clear")}
               matchButtonHeight
-              size="md"
+              size="lg"
               className="w-full sm:w-auto"
               disabled={!canClearOracleExecution || saving}
               onClick={onOracleExecutionClear}

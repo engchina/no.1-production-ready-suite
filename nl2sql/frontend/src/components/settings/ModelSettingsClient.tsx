@@ -671,7 +671,7 @@ function ModelCatalogEditor({
                 type="button"
                 variant="ghost"
                 size="sm"
-                className="h-10 w-full px-2 text-danger hover:bg-danger-bg md:w-10"
+                iconOnly tone="danger"
                 aria-label={`${t("settings.model.enterprise.removeModel")} ${modelNumber}`}
                 onClick={() => onRemove(index)}
               >
@@ -907,20 +907,26 @@ function SecretField({
           placeholder={placeholder}
           aria-describedby={hintId}
           onChange={(event) => onChange(event.target.value)}
-          className="h-10 w-full rounded-md border border-border bg-card px-3 pr-12 text-sm text-foreground outline-none transition-colors placeholder:text-muted/70 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:border-primary"
+          className="h-[44px] w-full rounded-md border border-border bg-card px-3 pr-12 text-sm text-foreground outline-none transition-colors placeholder:text-muted/70 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:border-primary"
         />
-        <button
+        <Button
+          variant="ghost"
+          size="sm"
+          iconOnly
+          touchTarget
+          data-button-layout="field-icon"
           type="button"
           onClick={onToggleVisible}
+          disabled={disabled}
           aria-label={
             visible
               ? t("settings.model.enterprise.apiKeyHide")
               : t("settings.model.enterprise.apiKeyShow")
           }
-          className="absolute right-0 top-0 flex h-10 w-10 cursor-pointer items-center justify-center rounded-r-md text-muted transition-colors hover:bg-background hover:text-foreground"
+          className="absolute right-0 top-0"
         >
           {visible ? <EyeOff size={16} aria-hidden /> : <Eye size={16} aria-hidden />}
-        </button>
+        </Button>
       </div>
       {helper ? <p id={hintId} className="text-xs leading-relaxed text-muted">{helper}</p> : null}
     </div>

@@ -2784,7 +2784,7 @@ async function expectInformationTableRowLimit(
     { rowSelector, visibleRows }
   );
 
-  const expectedMaxHeight = fit.rootFontSize * (2.5 + 3.5 * visibleRows);
+  const expectedMaxHeight = (await list.evaluate(() => window.matchMedia("(max-width: 639px), (pointer: coarse)").matches) ? 47 : 35) + fit.rootFontSize * 3.5 * visibleRows;
   expect(fit.maxHeight).toBeGreaterThanOrEqual(expectedMaxHeight - 2);
   expect(fit.maxHeight).toBeLessThanOrEqual(expectedMaxHeight + 2);
   expect(Math.abs(fit.listHeight - fit.maxHeight)).toBeLessThanOrEqual(2);

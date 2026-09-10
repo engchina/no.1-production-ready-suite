@@ -249,7 +249,7 @@ function ImportWizard({
               <Button
                 type="button"
                 variant="danger"
-                size="sm"
+                size="lg"
                 className="w-full sm:w-auto"
                 loading={loading}
                 disabled={!canExecute}
@@ -258,7 +258,7 @@ function ImportWizard({
                 <Upload size={15} aria-hidden="true" />
                 <span>{t("dataTools.dbAdmin.import")}</span>
               </Button>
-              <ClearActionButton
+              <ClearActionButton size="lg"
                 label={t("dbAdmin.runner.clear")}
                 matchButtonHeight
                 className="w-full sm:w-auto"

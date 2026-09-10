@@ -126,7 +126,7 @@ function DangerMenuItem({
   onInvoked: () => void;
 }) {
   const className =
-    "h-[44px] w-full justify-start whitespace-nowrap px-3 text-left text-danger hover:bg-danger-bg hover:text-danger sm:h-8";
+    "w-full";
 
   if (action.href) {
     const enabled = actionEnabled(action);
@@ -139,7 +139,7 @@ function DangerMenuItem({
         data-testid={action.testId}
         data-form-action-id={action.id}
         data-form-action-tone="danger"
-        className={cn(buttonVariants({ variant: "ghost", size: "sm" }), className, !enabled && "pointer-events-none opacity-50")}
+        className={cn(buttonVariants({ variant: "ghost", size: "sm", tone: "danger" }), className, !enabled && "pointer-events-none opacity-50")}
         onClick={(event) => {
           if (!enabled) {
             event.preventDefault();
@@ -157,6 +157,7 @@ function DangerMenuItem({
     <Button
       type="button"
       role="menuitem"
+      tone="danger"
       variant="ghost"
       size="sm"
       className={className}
@@ -294,9 +295,9 @@ export function FormActionBar({
       role="group"
       aria-label={ariaLabel}
       data-testid={testId}
-      className="grid min-w-0 gap-2 border-t border-border pt-4"
+      className="grid min-w-0 gap-[8px] border-t border-border pt-4"
     >
-      <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+      <div className="flex min-w-0 flex-col gap-[8px] sm:flex-row sm:flex-wrap sm:items-center">
         {primaryActions.map((action) => (
           <VisibleAction key={action.id} action={action} variant="primary" />
         ))}

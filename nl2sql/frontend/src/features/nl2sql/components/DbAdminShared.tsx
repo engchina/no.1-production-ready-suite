@@ -1,3 +1,4 @@
+import { Pagination } from "@/components/Pagination";
 import { useWorkspaceState, useResetExecutionConsent } from "@/components/WorkspaceState";
 import { Button } from "@/components/ui/button";
 import { ClearActionButton } from "@/components/ui/clear-action-button";
@@ -30,7 +31,6 @@ import {
   DEFAULT_PAGE_SIZE,
   DataTable,
   EmptyState,
-  Pagination,
   toast,
   usePagination,
 } from "@engchina/production-ready-ui";
@@ -362,7 +362,7 @@ export function ExecutionConfirmationField({
       ? t("dbAdmin.confirmation.status.mismatch")
       : t("dbAdmin.confirmation.status.pending");
   const isDanger = tone === "danger";
-  const containerClass = "grid gap-2 rounded-md border border-border bg-background p-3";
+  const containerClass = "grid min-w-0 gap-2 rounded-md border border-border bg-background p-3";
   const inputClass = [
     "h-11 w-full rounded-md border border-border bg-card px-3 py-2 text-sm outline-none transition-colors placeholder:text-muted disabled:cursor-not-allowed disabled:bg-muted/30 disabled:text-muted",
     isDanger
@@ -418,7 +418,7 @@ export function ExecutionConfirmationField({
       </p>
       {actions && (
         <div
-          className={`flex flex-col gap-2 border-t pt-3 sm:flex-row sm:flex-wrap sm:items-center ${
+          className={`flex min-w-0 flex-col gap-[8px] border-t pt-3 sm:flex-row sm:flex-wrap sm:items-center ${
             isDanger ? "border-danger/20" : "border-border"
           }`}
         >
@@ -1088,7 +1088,7 @@ export function StatementRunnerCard({
           type="button"
           variant="secondary"
           size="sm"
-          className="min-h-11 sm:self-end"
+          touchTarget className="sm:self-end"
           disabled={!sql}
           onClick={() => {
             setSql("");

@@ -29,7 +29,7 @@ export function ContentActionBar({
   return (
     <div
       className={cn(
-        "flex min-w-0 max-w-full flex-wrap items-start justify-between gap-2",
+        "flex min-w-0 max-w-full flex-wrap items-start justify-between gap-[8px]",
         !hasInfo && "items-center justify-end",
         className
       )}
@@ -50,7 +50,7 @@ export function ContentActionBar({
         role="group"
         aria-label={ariaLabel}
         className={cn(
-          "flex min-w-0 max-w-full shrink-0 flex-wrap items-center justify-end gap-2",
+          "flex min-w-0 max-w-full shrink-0 flex-wrap items-center justify-end gap-[8px]",
           hasInfo && "ml-auto",
           !hasInfo && "w-full",
           actionsClassName

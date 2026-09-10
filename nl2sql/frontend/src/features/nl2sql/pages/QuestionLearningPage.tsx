@@ -1,3 +1,5 @@
+import { ErrorState } from "@/components/StateViews";
+import { Pagination } from "@/components/Pagination";
 import { Button } from "@/components/ui/button";
 import {
   useEffect,
@@ -23,9 +25,7 @@ import { useSearchParams } from "react-router-dom";
 import { buttonVariants } from "@/components/ui/button";
 import {
   EmptyState,
-  ErrorState,
   FormStatus,
-  Pagination,
   SelectField,
   toast,
   usePagination,
@@ -1257,7 +1257,7 @@ function TrainingCandidatesPanel({
           type="submit"
           variant="secondary"
           size="lg"
-          className="h-11 w-full whitespace-nowrap md:w-auto"
+          touchTarget className="w-full whitespace-nowrap md:w-auto"
           loading={loading === "candidates-load"}
         >
           <RefreshCw size={15} aria-hidden="true" />
@@ -1299,7 +1299,7 @@ function TrainingCandidatesPanel({
               <Button
                 type="button"
                 size="sm"
-                className="min-h-11 w-full whitespace-nowrap sm:min-h-8 sm:w-auto"
+                className="w-full sm:w-auto"
                 loading={loading === "candidates-import"}
                 disabled={selected.size === 0}
                 onClick={onAddSelected}
@@ -1429,7 +1429,7 @@ function TrainingCandidatesPanel({
 
                   <div className="min-w-0 xl:justify-self-end xl:pt-1">
                     <a
-                      className={`${buttonVariants({ variant: "secondary", size: "sm" })} min-h-11 w-full whitespace-nowrap sm:min-h-8 sm:w-auto`}
+                      className={`${buttonVariants({ variant: "secondary", size: "sm" })} w-full sm:w-auto`}
                       href={`${APP_ROUTES.feedbackManagement}?tab=appFeedback&history_id=${encodeURIComponent(item.history_id)}`}
                     >
                       <Link2 size={15} aria-hidden="true" />

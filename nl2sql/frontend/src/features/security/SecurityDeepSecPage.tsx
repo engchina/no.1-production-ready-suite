@@ -1810,7 +1810,7 @@ export function SecurityDeepSecPage() {
                         <>
                           <Button
                             type="button"
-                            size="sm"
+                            size="lg"
                             className="w-full sm:w-auto"
                             loading={foundationApplying}
                             disabled={
@@ -1827,7 +1827,7 @@ export function SecurityDeepSecPage() {
                           <Button
                             type="button"
                             variant="secondary"
-                            size="sm"
+                            size="lg"
                             className="w-full sm:w-auto"
                             disabled={foundationApplying}
                             onClick={() => {
@@ -1882,7 +1882,7 @@ export function SecurityDeepSecPage() {
                           <Button
                             type="button"
                             variant="danger"
-                            size="sm"
+                            size="lg"
                             className="w-full sm:w-auto"
                             loading={resetting}
                             disabled={!resetConfirmed || resetting || foundationApplying}
@@ -1894,7 +1894,7 @@ export function SecurityDeepSecPage() {
                           <Button
                             type="button"
                             variant="secondary"
-                            size="sm"
+                            size="lg"
                             className="w-full sm:w-auto"
                             disabled={resetting}
                             onClick={() => {
@@ -2674,6 +2674,7 @@ export function SecurityDeepSecPage() {
                                                       </p>
                                                     )}
                                                     <Button
+                                                      iconOnly
                                                       type="button"
                                                       size="sm"
                                                       variant="ghost"
@@ -2710,7 +2711,7 @@ export function SecurityDeepSecPage() {
                           )}
                         </div>
                         <div
-                          className="grid min-h-0 gap-3 border-t border-border bg-card/60 pt-3"
+                          className="grid min-h-0 min-w-0 gap-3 border-t border-border bg-card/60 pt-3"
                           data-testid="security-deepsec-entitlement-action-region"
                         >
                           {entitlementFormError ? <FormStatus tone="danger" message={entitlementFormError} /> : null}
@@ -2875,7 +2876,7 @@ export function SecurityDeepSecPage() {
                               <Button
                                 type="button"
                                 variant="danger"
-                                size="sm"
+                                size="lg"
                                 className="w-full sm:w-auto"
                                 loading={entitlementApplying}
                                 disabled={

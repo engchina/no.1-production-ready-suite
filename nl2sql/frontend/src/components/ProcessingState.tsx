@@ -181,7 +181,7 @@ export function ProcessingIndicator({
               type="button"
               variant="ghost"
               size="sm"
-              className="min-h-11"
+
               onClick={onCancel}
             >
               {t("common.cancel")}

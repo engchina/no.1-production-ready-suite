@@ -6,8 +6,8 @@ export const INFORMATION_LIST_VISIBLE_ROWS = {
 } as const;
 
 export const INFORMATION_TABLE_ROW_CLASS = "h-[3.5rem]";
-export const INFORMATION_TABLE_SCROLL_CLASS = "max-h-[20rem] max-w-full overflow-auto md:max-h-[30.5rem]";
-export const INFORMATION_TABLE_FIVE_ROW_SCROLL_CLASS = "h-[20rem] max-h-[20rem] max-w-full overflow-auto";
+export const INFORMATION_TABLE_SCROLL_CLASS = "max-h-[calc(17.5rem+var(--button-table-header))] max-w-full overflow-auto md:max-h-[calc(28rem+var(--button-table-header))]";
+export const INFORMATION_TABLE_FIVE_ROW_SCROLL_CLASS = "h-[calc(17.5rem+var(--button-table-header))] max-h-[calc(17.5rem+var(--button-table-header))] max-w-full overflow-auto";
 export const INFORMATION_LIST_ROW_CLASS = "min-h-[3.5rem]";
 export const INFORMATION_LIST_SCROLL_CLASS = "max-h-[17.5rem] overflow-auto md:max-h-[28rem]";
 export const INFORMATION_LIST_SHORT_SCROLL_CLASS = "max-h-[17.5rem] overflow-auto";

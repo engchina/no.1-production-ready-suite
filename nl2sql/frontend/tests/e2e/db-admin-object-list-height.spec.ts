@@ -821,6 +821,7 @@ async function expectObjectListRowLimit(
         listHeight: listBox.height,
         maxHeight,
         rootFontSize,
+        touchTarget: window.matchMedia("(max-width: 639px), (pointer: coarse)").matches,
         firstInside: rows[0].top >= listBox.top - 1 && rows[0].bottom <= listBox.bottom + 1,
         limitInside: Boolean(limitRow && limitRow.bottom <= listBox.bottom + 1),
         nextBelow: Boolean(nextRow && nextRow.bottom > listBox.bottom + 1),
@@ -830,10 +831,13 @@ async function expectObjectListRowLimit(
     { rowSelector, visibleRows }
   );
 
-  const expectedMaxHeight =
-    fit.rootFontSize *
-    (options.expectedHeightRem ??
-      (options.headerHeightRem ?? 2.5) + (options.rowHeightRem ?? 3.5) * visibleRows);
+  // 44px のモバイル並べ替えボタン + padding/border 3px を含め、本文の可視行数は維持する。
+  const headerHeight = options.headerHeightRem != null
+    ? options.headerHeightRem * fit.rootFontSize
+    : fit.touchTarget ? 47 : 35;
+  const expectedMaxHeight = options.expectedHeightRem != null
+    ? options.expectedHeightRem * fit.rootFontSize
+    : headerHeight + fit.rootFontSize * (options.rowHeightRem ?? 3.5) * visibleRows;
   expect(fit.maxHeight).toBeGreaterThanOrEqual(expectedMaxHeight - 2);
   expect(fit.maxHeight).toBeLessThanOrEqual(expectedMaxHeight + 2);
   expect(Math.abs(fit.listHeight - fit.maxHeight)).toBeLessThanOrEqual(2);

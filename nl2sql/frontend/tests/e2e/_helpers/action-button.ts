@@ -7,7 +7,7 @@ export async function expectLargeActionButton(button: Locator) {
     const rect = element.getBoundingClientRect();
     return {
       height: rect.height,
-      expectedHeight: window.innerWidth < 640 ? 44 : 40,
+      expectedHeight: window.matchMedia("(max-width: 639px), (pointer: coarse)").matches ? 44 : 40,
       clipped: element.scrollWidth > element.clientWidth,
     };
   });
