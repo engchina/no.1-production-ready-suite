@@ -321,6 +321,8 @@ export function ViewManagementPage() {
   const [dropError, setDropError] = useState("");
   useResetExecutionConsent(() => { setDropConfirmation(""); setDropTargetName(""); }, "");
   const [joinWhere, setJoinWhere] = useState<DbAdminJoinWhereData | null>(null);
+  const joinWhereRequest = useRef(0);
+  useEffect(() => () => { joinWhereRequest.current += 1; }, []);
   const [schemaRefreshJobId, setSchemaRefreshJobId] = useState("");
   const [schemaRefreshError, setSchemaRefreshError] = useState("");
   const [schemaRefreshNeedsFull, setSchemaRefreshNeedsFull] = useState(false);
@@ -361,6 +363,8 @@ export function ViewManagementPage() {
   const selectedViewManualSelection = useRef(false);
 
   const fetchDetail = async (name: string, options: { manualSelection?: boolean } = {}) => {
+    joinWhereRequest.current += 1;
+    setLoading((current) => current === "join-where" ? "" : current);
     if (options.manualSelection) selectedViewManualSelection.current = true;
     autoJoinWhereDdlName.current = "";
     setDetailTab("columns");
@@ -592,20 +596,23 @@ export function ViewManagementPage() {
   };
 
   const extractJoinWhere = async () => {
-    if (!detail?.ddl) return;
+    if (!detail?.ddl || loading === "join-where") return;
+    const sequence = ++joinWhereRequest.current;
     setLoading("join-where");
     setMessage("");
+    setJoinWhere(null);
     try {
-      setJoinWhere(
-        await apiPost<DbAdminJoinWhereData>("/api/nl2sql/db-admin/extract-join-where", {
+      const result = await apiPost<DbAdminJoinWhereData>("/api/nl2sql/db-admin/extract-join-where", {
           ddl: detail.ddl,
           prompt_profile: JOIN_WHERE_PROMPT_PROFILE,
-        })
-      );
+        });
+      if (sequence === joinWhereRequest.current) setJoinWhere(result);
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : t("viewMgmt.error.extract"));
+      if (sequence === joinWhereRequest.current) {
+        setMessage(err instanceof Error ? err.message : t("viewMgmt.error.extract"));
+      }
     } finally {
-      setLoading("");
+      if (sequence === joinWhereRequest.current) setLoading("");
     }
   };
 

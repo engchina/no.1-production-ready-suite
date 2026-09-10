@@ -14621,3 +14621,45 @@ test("テーブル取込中は対象とファイルの変更を停止し失敗�
   await expect(panel.getByTestId("table-import-result-panel")).toContainText("IMPORTED_ORDERS");
   expect(api.importTabularPayload).toBeNull();
 });
+
+test("ビュー抽出の旧応答は選択変更後に表示せず再抽出失敗時も旧結果を残さない", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  await page.route("**/api/nl2sql/db-admin/objects?*", (route) => fulfillJson(route, {
+    items: ["V_EMP_DEPT", "V_OTHER"].map((name) => ({ name, owner: "APP", qualified_name: `APP.${name}`, object_type: "view", row_count: null, comment: name })),
+    total: 2, next_cursor: null, runtime: "oracle", refreshed_at: "2026-09-11T00:00:00Z",
+  }));
+  await page.route("**/api/nl2sql/db-admin/views/V_OTHER?*", (route) => fulfillJson(route, {
+    name: "V_OTHER", owner: "APP", qualified_name: "APP.V_OTHER", object_type: "view", row_count: null, comment: "別ビュー",
+    columns: [{ column_name: "ID", logical_name: "ID", data_type: "NUMBER", nullable: false, comment: "", sample_values: [] }],
+    ddl: new URL(route.request().url()).searchParams.get("include_ddl") === "1" ? "CREATE VIEW V_OTHER AS SELECT ID FROM PROJECT" : "", warnings: [],
+  }));
+  const gate = createRequestGate();
+  let calls = 0;
+  await page.route("**/api/nl2sql/db-admin/extract-join-where", async (route) => {
+    calls += 1;
+    if (calls === 1) await gate.promise;
+    if (calls === 3) {
+      await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "抽出サービスを利用できません" }) });
+      return;
+    }
+    await fulfillJson(route, { join_text: calls === 1 ? "OLD_VIEW_JOIN" : "CURRENT_VIEW_JOIN", where_text: "", source: "deterministic", warnings: [], prompt_profile: "sql_structure", structure_markdown: "構造" });
+  });
+  await page.goto("/view-management");
+  await page.getByRole("button", { name: "APP.V_EMP_DEPT を表示", exact: true }).click();
+  await clickPageHeaderAction(page, "view-management-actions", "JOIN/WHERE 条件抽出");
+  await page.getByRole("button", { name: "AI で抽出", exact: true }).click();
+  await expect.poll(() => calls).toBe(1);
+  await page.getByRole("button", { name: "一覧に戻る" }).click();
+  await page.getByRole("button", { name: "APP.V_OTHER を表示", exact: true }).click();
+  await clickPageHeaderAction(page, "view-management-actions", "JOIN/WHERE 条件抽出");
+  const response = page.waitForResponse("**/api/nl2sql/db-admin/extract-join-where");
+  gate.release();
+  await response;
+  await expect(page.getByRole("button", { name: "AI で抽出", exact: true })).toBeEnabled();
+  await expect(page.getByLabel("結合条件 (JOIN)")).toHaveCount(0);
+  await page.getByRole("button", { name: "AI で抽出", exact: true }).click();
+  await expect(page.getByLabel("結合条件 (JOIN)")).toHaveValue("CURRENT_VIEW_JOIN");
+  await page.getByRole("button", { name: "AI で抽出", exact: true }).click();
+  await expect(page.getByText(/抽出サービスを利用できません/)).toBeVisible();
+  await expect(page.getByLabel("結合条件 (JOIN)")).toHaveCount(0);
+});
