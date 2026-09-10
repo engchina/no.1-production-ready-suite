@@ -7649,10 +7649,10 @@ test("sql to question page reverse-generates a business question with one primar
   await expect(page.getByLabel("用語・同義語を使う")).toBeChecked();
   await generateButton.click();
   await expect(page.locator("#sql-to-question-panel-structure")).toBeVisible();
-  await expect(page.getByRole("tab", { name: "SQL論理構造" })).toHaveAttribute("aria-selected", "true");
-  await expect(page.getByRole("tab", { name: "SQL論理構造" })).toBeFocused();
+  await expect(page.getByRole("tab", { name: "SQL分析・質問候補" })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tab", { name: "SQL分析・質問候補" })).toBeFocused();
 
-  await page.getByRole("tab", { name: "SQL論理構造" }).click();
+  await page.getByRole("tab", { name: "SQL分析・質問候補" }).click();
   const structurePanel = page.locator("#sql-to-question-panel-structure");
   await expect(structurePanel.getByText("SQL 論理構造").first()).toBeVisible();
   // SQL 論理構造は「見出し + 業務者向け説明 + 技術詳細」で併記する。
@@ -7662,8 +7662,8 @@ test("sql to question page reverse-generates a business question with one primar
   await expect(structureList).toContainText("データを取り出すだけの参照 SQL です");
   await expect(structureList.getByText("SELECT").first()).toBeVisible();
   // 処理手順は「SQL の処理手順」ラベルの番号付きリストで、業務文と技術行を併記する。
-  await page.getByRole("tab", { name: "質問候補" }).click();
-  const resultPanel = page.locator("#sql-to-question-panel-result");
+  await page.getByRole("tab", { name: "SQL分析・質問候補" }).click();
+  const resultPanel = page.getByRole("region", { name: "質問候補", exact: true });
   await expect(resultPanel).toBeVisible();
   await expect(resultPanel.getByText("SQL の処理手順", { exact: true })).toBeVisible();
   await expect(resultPanel.locator('[data-testid="nl2sql-logical-steps-list"] > li')).toHaveCount(2);
@@ -7712,28 +7712,36 @@ test("sql to question page uses shared tabs, panel styling and a step indicator"
   expect(inputPanelStyle).toEqual(tablePanelStyle);
 
   const tabs = page.getByRole("tab");
-  await expect(tabs).toHaveText(["SQL入力・生成", "SQL論理構造", "質問候補"]);
+  await expect(tabs).toHaveText(["SQL入力・生成", "SQL分析・質問候補"]);
   await expect(page.getByRole("tab", { name: "SQL入力・生成" })).toHaveAttribute("aria-selected", "true");
 
   const steps = page.getByTestId("sql-to-question-steps");
   await expect(steps).toBeVisible();
   await expect(steps.getByText("SQL入力・生成")).toBeVisible();
-  await expect(steps.getByText("SQL論理構造")).toBeVisible();
-  await expect(steps.getByText("質問候補")).toBeVisible();
+  await expect(steps.getByText("SQL分析・質問候補")).toBeVisible();
+  await expect(steps.locator(":scope > li")).toHaveCount(2);
+  await expect(page.getByRole("tab", { name: "質問候補", exact: true })).toHaveCount(0);
   await expect(page.locator("#sql-to-question-panel-structure")).toBeHidden();
-  await expect(page.locator("#sql-to-question-panel-result")).toBeHidden();
+  await expect(page.getByRole("region", { name: "質問候補", exact: true })).toBeHidden();
 
-  await page.getByRole("tab", { name: "SQL論理構造" }).click();
+  await page.getByRole("tab", { name: "SQL入力・生成" }).focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(page.getByRole("tab", { name: "SQL分析・質問候補" })).toBeFocused();
   await expect(page.locator("#sql-to-question-panel-structure")).toBeVisible();
   await expect(page.locator("#sql-to-question-panel-input")).toBeHidden();
   await expect(page.getByText("SQL 構造は未分析です")).toBeVisible();
 
-  await page.getByRole("tab", { name: "質問候補" }).click();
-  await expect(page.locator("#sql-to-question-panel-result")).toBeVisible();
+  await page.getByRole("tab", { name: "SQL分析・質問候補" }).click();
+  await expect(page.getByRole("region", { name: "質問候補", exact: true })).toBeVisible();
   await expect(page.locator("#sql-to-question-panel-input")).toBeHidden();
-  await expect(page.locator("#sql-to-question-panel-structure")).toBeHidden();
+  await expect(page.locator("#sql-to-question-panel-structure")).toBeVisible();
   await expect(page.getByText("質問候補は未生成です")).toBeVisible();
-  await expectMainScrollDoesNotExposeTrailingBlank(page.locator("#sql-to-question-panel-result"));
+  await expectMainScrollDoesNotExposeTrailingBlank(page.locator("#sql-to-question-panel-structure"));
+  await expect(page.locator('[role="tabpanel"][id^="sql-to-question-panel-"]')).toHaveCount(2);
+  await expect(page.locator("#sql-to-question-panel-result")).toHaveCount(0);
+  await page.getByRole("tab", { name: "SQL分析・質問候補" }).focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(page.getByRole("tab", { name: "SQL入力・生成" })).toHaveAttribute("aria-selected", "true");
   await expectNoHorizontalScroll(page);
 });
 
@@ -7845,7 +7853,7 @@ test("sql to question page invalidates stale results when inputs change", async 
   await sqlToQuestionInput(page).fill("SELECT TOTAL_AMOUNT FROM INVOICES");
   await page.getByRole("button", { name: "業務質問を生成" }).click();
   await expect(page.locator("#sql-to-question-panel-structure")).toBeVisible();
-  await page.getByRole("tab", { name: "質問候補" }).click();
+  await page.getByRole("tab", { name: "SQL分析・質問候補" }).click();
   await expect(page.getByText("請求金額を条件付きで一覧確認したい")).toBeVisible();
 
   // 入力を変えると生成済み結果は無効化され、質問セクションは空状態へ戻る。
@@ -7853,20 +7861,20 @@ test("sql to question page invalidates stale results when inputs change", async 
   await page.getByRole("combobox", { name: "業務プロファイル" }).selectOption("alternate");
   await expect(sqlToQuestionInput(page)).toHaveValue("");
   await sqlToQuestionInput(page).fill("SELECT TOTAL_AMOUNT FROM INVOICES");
-  await page.getByRole("tab", { name: "質問候補" }).click();
+  await page.getByRole("tab", { name: "SQL分析・質問候補" }).click();
   await expect(page.getByText("質問候補は未生成です")).toBeVisible();
 
   await page.getByRole("tab", { name: "SQL入力・生成" }).click();
   await page.getByRole("button", { name: "業務質問を生成" }).click();
   await expect(page.locator("#sql-to-question-panel-structure")).toBeVisible();
-  await page.getByRole("tab", { name: "質問候補" }).click();
+  await page.getByRole("tab", { name: "SQL分析・質問候補" }).click();
   await expect(page.getByText("請求金額を条件付きで一覧確認したい")).toBeVisible();
   await page.getByRole("tab", { name: "SQL入力・生成" }).click();
   await sqlToQuestionInput(page).fill("SELECT TOTAL_AMOUNT FROM INVOICES WHERE TOTAL_AMOUNT > 0");
   await expect(page.getByRole("button", { name: "業務質問を生成" })).toBeEnabled();
-  await page.getByRole("tab", { name: "SQL論理構造" }).click();
+  await page.getByRole("tab", { name: "SQL分析・質問候補" }).click();
   await expect(page.getByText("SQL 構造は未分析です")).toBeVisible();
-  await page.getByRole("tab", { name: "質問候補" }).click();
+  await page.getByRole("tab", { name: "SQL分析・質問候補" }).click();
   await expect(page.getByText("質問候補は未生成です")).toBeVisible();
 });
 
@@ -7898,7 +7906,7 @@ test("sql to question page remains usable at 150 percent zoom", async ({ page })
   await sqlToQuestionInput(page).fill("SELECT TOTAL_AMOUNT FROM INVOICES");
   await expect(page.getByLabel("用語・同義語を使う")).toBeVisible();
   const steps = page.getByTestId("sql-to-question-steps");
-  for (const label of ["SQL入力・生成", "SQL論理構造", "質問候補"]) {
+  for (const label of ["SQL入力・生成", "SQL分析・質問候補"]) {
     await expect(steps.getByText(label)).toBeVisible();
   }
   const generateButton = page.getByRole("button", { name: "業務質問を生成" });
@@ -14367,9 +14375,9 @@ test("sql to question roundtrip uses the edited structure and preserves drafts o
   await expectNoHorizontalScroll(page);
   await output.scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath("sql-structure-roundtrip.png"), fullPage: true });
-  await page.getByRole("button", { name: "質問候補を確認" }).click();
+  await page.getByRole("region", { name: "質問候補", exact: true }).scrollIntoViewIfNeeded();
   await expect(page.getByText("論理構造が編集されています。この質問候補は編集前の SQL から生成したものです。")).toBeVisible();
-  await page.getByRole("tab", { name: "SQL論理構造" }).click();
+  await page.getByRole("tab", { name: "SQL分析・質問候補" }).click();
   await page.reload();
   await expect(editor).toHaveValue(edited + " AND 請求金額 < 500");
   await expect(generate).toBeEnabled();
@@ -14380,4 +14388,54 @@ test("sql to question roundtrip uses the edited structure and preserves drafts o
   await expect(generate).toBeDisabled();
   await editor.fill(edited);
   await expect(generate).toBeEnabled();
+});
+
+
+test("sql to question merges candidates after structure and restores the legacy result tab", async ({ page }, testInfo) => {
+  await mockNl2SqlApi(page);
+  await page.goto("/sql-to-question");
+  await sqlToQuestionInput(page).fill("SELECT TOTAL_AMOUNT FROM INVOICES");
+  await page.getByRole("button", { name: "業務質問を生成" }).click();
+  const panel = page.locator("#sql-to-question-panel-structure");
+  const candidates = panel.getByRole("region", { name: "質問候補", exact: true });
+  const editor = panel.getByRole("textbox", { name: "再生成に使う SQL 論理構造" });
+  await expect(page.getByRole("tab")).toHaveText(["SQL入力・生成", "SQL分析・質問候補"]);
+  await expect(candidates).toContainText("請求金額を条件付きで一覧確認したい");
+  await expect(page.getByRole("button", { name: "質問候補を確認" })).toHaveCount(0);
+  expect(await candidates.evaluate((element) => {
+    const structure = document.getElementById("sql-to-question-structure-input");
+    return !!structure && !!(structure.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING)
+      && element.parentElement?.lastElementChild === element;
+  })).toBe(true);
+  await expectNoHorizontalScroll(page);
+  await page.screenshot({ path: testInfo.outputPath("sql-analysis-tabs.png") });
+  await candidates.scrollIntoViewIfNeeded();
+  await candidates.screenshot({ path: testInfo.outputPath("sql-analysis-candidates.png") });
+
+  const draft = "SELECT: 請求金額\nFROM: INVOICES\nWHERE: 請求金額 >= 100";
+  await editor.fill(draft);
+  await page.getByRole("tab", { name: "SQL入力・生成" }).click();
+  await page.getByRole("tab", { name: "SQL分析・質問候補" }).click();
+  await expect(editor).toHaveValue(draft);
+  await expect.poll(() => page.evaluate(() => {
+    const prefix = "production-ready-nl2sql.draft.v1:";
+    const key = Object.keys(sessionStorage).find((key) => {
+      if (!key.startsWith(prefix) || key.endsWith("owner")) return false;
+      const parts = JSON.parse(key.slice(prefix.length)) as string[];
+      return parts[2] === "/sql-to-question" && parts[3] === "activePanel";
+    });
+    if (!key) return false;
+    const saved = JSON.parse(sessionStorage.getItem(key)!);
+    sessionStorage.setItem(key, JSON.stringify({ ...saved, value: "result" }));
+    return true;
+  })).toBe(true);
+  let generationRequests = 0;
+  page.on("request", (request) => { if (/\/api\/nl2sql\/reverse\/(deep|sql)$/.test(request.url())) generationRequests += 1; });
+  await page.reload();
+  await expect(page.getByRole("tab", { name: "SQL分析・質問候補" })).toHaveAttribute("aria-selected", "true");
+  await expect(editor).toHaveValue(draft);
+  await expect(candidates.getByText("質問候補は未生成です")).toBeVisible();
+  await expect(page.getByRole("button", { name: "論理構造から SQL を生成" })).toBeEnabled();
+  expect(generationRequests).toBe(0);
+  await expectNoHorizontalScroll(page);
 });

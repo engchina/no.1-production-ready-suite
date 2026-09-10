@@ -38,11 +38,16 @@ import type {
   SchemaTable,
 } from "../types";
 
-type SqlToQuestionPanel = "input" | "structure" | "result";
+type SqlToQuestionPanel = "input" | "structure";
 
 export function SqlToQuestionPage() {
   useWorkspaceRevalidation();
-  const [activePanel, setActivePanel] = useWorkspaceState<SqlToQuestionPanel>("activePanel", "input");
+  const [savedPanel, setActivePanel] = useWorkspaceState<SqlToQuestionPanel | "result">("activePanel", "input");
+  // 旧3タブ版で保存した質問候補の選択を、草稿を維持して統合先へ移行する。
+  const activePanel: SqlToQuestionPanel = savedPanel === "input" ? "input" : "structure";
+  useEffect(() => {
+    if (savedPanel === "result") setActivePanel("structure");
+  }, [savedPanel, setActivePanel]);
   const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
   const [selectedProfile, setSelectedProfile] = useState<ProfileUsageContext | null>(null);
   const [schemaTables, setSchemaTables] = useState<SchemaTable[]>([]);
@@ -229,7 +234,6 @@ export function SqlToQuestionPage() {
       [
         { id: "input", label: t("sqlToQuestion.tabs.input"), icon: ArrowRightLeft },
         { id: "structure", label: t("sqlToQuestion.tabs.structure"), icon: FileText },
-        { id: "result", label: t("sqlToQuestion.tabs.result"), icon: BookOpen },
       ] satisfies Array<DbObjectTab<SqlToQuestionPanel>>,
     []
   );
@@ -417,7 +421,7 @@ export function SqlToQuestionPage() {
           id="sql-to-question-panel-structure"
           labelledBy="sql-to-question-tab-structure"
           idPrefix="sql-to-question"
-          ariaLabel={t("sqlToQuestion.structure.title")}
+          ariaLabel={t("sqlToQuestion.tabs.structure")}
           className={activePanel === "structure" ? "" : "hidden"}
           topContent={renderStepIndicator("structure")}
         >
@@ -449,9 +453,6 @@ export function SqlToQuestionPage() {
                   <ArrowRightLeft size={16} aria-hidden="true" />
                   {t("sqlToQuestion.actions.regenerateSql")}
                 </Button>
-                <Button size="lg" variant="secondary" onClick={() => setActivePanel("result")}>
-                  {t("sqlToQuestion.actions.viewQuestion")}
-                </Button>
               </div>
               <FormStatus tone="danger" message={sqlGenerationError} />
               {sqlGenerationLoading && <ProcessingIndicator active label={t("sqlToQuestion.actions.regenerateSql")} operationKey="structure-to-sql" placement="action" activityIcon="none" />}
@@ -469,64 +470,59 @@ export function SqlToQuestionPage() {
           ) : (
             <EmptyState title={t("sqlToQuestion.structure.emptyTitle")} hint={t("sqlToQuestion.structure.emptyHint")} />
           )}
-        </DbObjectManagementPanelShell>
-
-        <DbObjectManagementPanelShell
-          id="sql-to-question-panel-result"
-          labelledBy="sql-to-question-tab-result"
-          idPrefix="sql-to-question"
-          ariaLabel={t("sqlToQuestion.result.title")}
-          className={activePanel === "result" ? "" : "hidden"}
-          topContent={renderStepIndicator("result")}
-        >
-          <DbObjectPanelHeader
-            headingId="sql-to-question-result-heading"
-            icon={BookOpen}
-            title={t("sqlToQuestion.result.title")}
-            description={t("sqlToQuestion.result.hint")}
-          />
-          {reverse ? (
-            <section className="grid content-start gap-3 text-sm">
-              {structureText !== reverse.logical_structure && <FormStatus tone="warning" message={t("sqlToQuestion.result.staleStructure")} />}
-              <WorkspaceResultNotice result={reverse} inputSignature={JSON.stringify([selectedProfileId, sql, useGlossary])} />
-              <div className="flex flex-wrap gap-2">
-                <StatusBadge variant="neutral" label={reverse.source ?? "deterministic"} />
-                {useGlossary && <StatusBadge variant="info" label={t("sqlToQuestion.glossaryApplied")} />}
-              </div>
-              <div className="min-w-0 rounded-md border border-border bg-card p-3">
-                <p className="text-xs font-medium text-muted">{t("sqlToQuestion.result.question")}</p>
-                <QuestionText
-                  value={reverse.question}
-                  variant="detail"
-                  maxLines={3}
-                  expandable
-                  className="mt-1 font-semibold"
-                />
-              </div>
-              <CompactFact label={t("sqlToQuestion.result.explanation")} value={reverse.explanation} />
-              <CompactFact
-                label={t("sqlToQuestion.result.tables")}
-                value={reverse.referenced_tables.join(", ") || "-"}
-              />
-              <div>
-                <p className="mb-1 text-xs font-medium text-muted">
-                  {t("sqlToQuestion.result.steps")}
-                </p>
-                <LogicalStepsList
-                  steps={reverse.logical_step_details}
-                  fallbackSteps={reverse.logical_steps}
-                  surface="card"
-                  listAriaLabel={t("nl2sql.logicalSteps.listAria")}
-                />
-              </div>
-              <TextList label={t("sqlToQuestion.result.warnings")} items={reverse.warnings ?? []} />
-            </section>
-          ) : (
-            <EmptyState
-              title={t("sqlToQuestion.result.emptyTitle")}
-              hint={t("sqlToQuestion.result.emptyHint")}
+          <section
+            id="sql-to-question-results"
+            aria-labelledby="sql-to-question-result-heading"
+            className="grid min-w-0 gap-4 border-t border-border pt-4"
+          >
+            <DbObjectPanelHeader
+              headingId="sql-to-question-result-heading"
+              icon={BookOpen}
+              title={t("sqlToQuestion.result.title")}
+              description={t("sqlToQuestion.result.hint")}
             />
-          )}
+            {reverse ? (
+              <section className="grid content-start gap-3 text-sm">
+                {structureText !== reverse.logical_structure && <FormStatus tone="warning" message={t("sqlToQuestion.result.staleStructure")} />}
+                <WorkspaceResultNotice result={reverse} inputSignature={JSON.stringify([selectedProfileId, sql, useGlossary])} />
+                <div className="flex flex-wrap gap-2">
+                  <StatusBadge variant="neutral" label={reverse.source ?? "deterministic"} />
+                  {useGlossary && <StatusBadge variant="info" label={t("sqlToQuestion.glossaryApplied")} />}
+                </div>
+                <div className="min-w-0 rounded-md border border-border bg-card p-3">
+                  <p className="text-xs font-medium text-muted">{t("sqlToQuestion.result.question")}</p>
+                  <QuestionText
+                    value={reverse.question}
+                    variant="detail"
+                    maxLines={3}
+                    expandable
+                    className="mt-1 font-semibold"
+                  />
+                </div>
+                <CompactFact label={t("sqlToQuestion.result.explanation")} value={reverse.explanation} />
+                <CompactFact
+                  label={t("sqlToQuestion.result.tables")}
+                  value={reverse.referenced_tables.join(", ") || "-"}
+                />
+                <div>
+                  <p className="mb-1 text-xs font-medium text-muted">
+                    {t("sqlToQuestion.result.steps")}
+                  </p>
+                  <LogicalStepsList
+                    steps={reverse.logical_step_details}
+                    fallbackSteps={reverse.logical_steps}
+                    surface="card"
+                    listAriaLabel={t("nl2sql.logicalSteps.listAria")}
+                  />
+                </div>
+              </section>
+            ) : (
+              <EmptyState
+                title={t("sqlToQuestion.result.emptyTitle")}
+                hint={t("sqlToQuestion.result.emptyHint")}
+              />
+            )}
+          </section>
         </DbObjectManagementPanelShell>
       </main>
     </>
