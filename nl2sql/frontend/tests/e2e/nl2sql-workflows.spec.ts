@@ -4795,11 +4795,11 @@ test("検索結果は 10 件ごとにページングする", async ({ page }) =>
   await expect(page.getByRole("cell", { name: "顧客01" })).toBeVisible();
 });
 
-test("SQL を生成して実行すると実処理の段階別進捗と結果を表示する", async ({ page, context }) => {
+test("SQL を生成して実行すると実処理の段階別進捗と結果を表示する", async ({ page, context, baseURL }) => {
   const api = await mockNl2SqlApi(page);
   await page.emulateMedia({ reducedMotion: "reduce" });
   await context.grantPermissions(["clipboard-read", "clipboard-write"], {
-    origin: "http://127.0.0.1:3101",
+    origin: new URL(baseURL!).origin,
   });
 
   const questionText = "今月の請求金額を確認したい";

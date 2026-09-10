@@ -1688,6 +1688,7 @@ test("対象オブジェクトは業務プロファイル、構築と Markdown �
   // 旧 tab URL は正規化され、構築と Markdown 下書きが同じ専用ページに表示される。
   await page.goto("/ontology-build?profile=default&tab=model");
   await expect(page).toHaveURL(/\/ontology-build\?profile=default$/);
+  await page.getByRole("button", { name: "情報を取得", exact: true }).click();
   await expect(page.getByTestId("profile-ontology-build")).toBeVisible();
   await expect(page.getByTestId("ontology-build-markdown")).toBeVisible();
   await expect(page.locator('section[aria-label="物理・業務モデル編集"]')).toHaveCount(0);
@@ -1705,6 +1706,7 @@ test("旧モデル編集 UI は表示せず Markdown 下書きを唯一の編集
   await page.goto("/ontology-build?profile=default&tab=model");
   await expect(page).toHaveURL(/\/ontology-build\?profile=default$/);
 
+  await page.getByRole("button", { name: "情報を取得", exact: true }).click();
   await expect(page.getByTestId("ontology-build-markdown")).toBeVisible();
   await expect(page.getByRole("tab", { name: "Markdown オントロジー下書き" })).toBeVisible();
   await expect(page.getByTestId("ontology-markdown-draft-editor")).toBeVisible();
