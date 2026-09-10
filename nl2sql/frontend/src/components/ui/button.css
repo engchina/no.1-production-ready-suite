@@ -95,7 +95,6 @@
 }
 .nl2sql-button[data-button-layout="choice"] > span { white-space: normal; overflow: visible; }
 .nl2sql-button[data-button-layout="field-icon"] { border-radius: 0 var(--button-radius) var(--button-radius) 0; }
-.nl2sql-button[data-button-layout="sort"] { justify-content: flex-start; text-align: left; }
 @media (max-width: 639px), (pointer: coarse) {
   .nl2sql-button { --button-height: 44px; --button-padding: 12px; min-width: 44px; }
 }
@@ -107,17 +106,6 @@
   .nl2sql-button:disabled { border-color: GrayText; color: GrayText; }
   .nl2sql-button[aria-pressed="true"] { outline: 2px solid Highlight; }
 }
-/* 並べ替え列名は移行前の text-xs / font-semibold に統一し、操作高さを維持する。 */
-.nl2sql-button[data-button-layout="sort"] {
-  padding-inline: 0;
-  font-family: inherit;
-  font-size: 0.75rem;
-  font-weight: 600;
-  line-height: 1rem;
-  gap: 4px;
-}
-th:has(> .nl2sql-button[data-button-layout="sort"]),
-th:has(> span > .nl2sql-button[data-button-layout="sort"]) { padding-block: 1px; }
 
 @media (max-width: 639px), (pointer: coarse) {
   :root { --button-table-header: 47px; }

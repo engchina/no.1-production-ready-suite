@@ -26,7 +26,8 @@ test("アクションはアプリ共通 Button を使い、raw button は選択�
       }
       if ((ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) && node.tagName.getText(source) === "button") {
         const attributes = node.attributes.getText(source);
-        const structuralControl = /role="(?:tab|combobox|option|listitem)"|aria-current=|aria-pressed=|onSelect(?:Node|Edge)?(?:\?\.)?\(/u.test(attributes);
+        const structuralControl = /role="(?:tab|combobox|option|listitem)"|aria-current=|aria-pressed=|onSelect(?:Node|Edge)?(?:\?\.)?\(/u.test(attributes)
+          || (path === "components/SortHeader.tsx" && attributes.includes('data-sort-header="true"'));
         if (!structuralControl) violations.push(`${path}: raw action button`);
       }
       ts.forEachChild(node, visit);

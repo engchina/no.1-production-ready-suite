@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { expectCompactSortHeaders } from "./_helpers/sort-header";
+import { expectCompactSortHeaders, expectPlainSortHeader } from "./_helpers/sort-header";
 
 for (const theme of ["light", "dark"]) {
   test(`${theme}: 共通ボタンの実寸・状態・配置・キーボード操作`, async ({ page }, testInfo) => {
@@ -33,9 +33,20 @@ for (const theme of ["light", "dark"]) {
     const sortButton = sortTable.getByRole("button", { name: "名称" });
     await sortButton.focus();
     await expect(sortButton).toBeFocused();
+    await expect(sortButton.locator("span")).toHaveCSS("text-decoration-line", "underline");
     await sortButton.press("Enter");
     await expect(sortTable.getByRole("columnheader", { name: "名称" })).toHaveAttribute("aria-sort", "descending");
     await expect(sortTable.locator("tbody tr").first()).toContainText("B");
+    await expectPlainSortHeader(sortButton);
+    if (!mobile) {
+      await sortButton.hover();
+      await page.mouse.down();
+      await expectPlainSortHeader(sortButton);
+      await page.mouse.up();
+    } else {
+      await sortButton.tap();
+      await expectPlainSortHeader(sortButton);
+    }
     await sortTable.locator("thead").screenshot({ path: testInfo.outputPath(`column-font-${theme}.png`) });
 
     // 実際に合成された色を sRGB に変換して通常文字の 4.5:1 を検証する。
