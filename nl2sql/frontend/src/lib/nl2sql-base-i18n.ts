@@ -877,7 +877,12 @@ export const ja = {
   "settings.oci.env.title": ".env プレビュー",
   "settings.oci.env.description":
     "保存時に backend/.env へ反映される OCI 共通設定です。",
-  "settings.oci.hint": "保存した設定は、AI分析やObject Storage接続に反映されます。",
+  "settings.oci.hint": "保存した設定は、AI分析やObject Storage接続に反映されます。接続テストはサーバーに保存済みの設定を確認します。変更後は先に保存してください。",
+  "settings.oci.loading": "OCI 設定を読み込み中…",
+  "settings.oci.loadError": "OCI 設定を取得できませんでした。再試行してください。",
+  "settings.draft.discardTitle": "変更を破棄しますか",
+  "settings.draft.discardDescription": "保存されていない変更があります。移動すると編集内容は破棄されます。",
+  "settings.draft.discardConfirm": "破棄して移動",
   "settings.oci.configFileInput.aria": "OCI config ファイルを選択",
   "settings.oci.keyFileInput.aria": "秘密鍵ファイルを選択",
   "settings.oci.validation.required": "値を入力してください。",

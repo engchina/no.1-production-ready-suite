@@ -128,8 +128,8 @@ function createRequestGate() {
   return { promise, release };
 }
 
-async function mockNl2sqlSettingsApi(page: Page) {
-  const ociSettings = {
+function ociSettingsFixture() {
+  return {
     config_file: "~/.oci/config",
     profile: "DEFAULT",
     user: "ocid1.user.oc1..example",
@@ -141,6 +141,10 @@ async function mockNl2sqlSettingsApi(page: Page) {
     config_file_exists: true,
     config_source: "runtime",
   };
+}
+
+async function mockNl2sqlSettingsApi(page: Page) {
+  const ociSettings = ociSettingsFixture();
 
   const uploadStorage = uploadStorageFixture();
 
@@ -2550,4 +2554,34 @@ test("外観設定でダーク/ライト/自動テーマを切り替えられる
   await page.getByTestId("appearance-theme-toggle").getByRole("button", { name: "ライト" }).click();
   await expect(page.locator("html")).not.toHaveClass(/dark/);
   expect(await bgVar()).toBe("#f7f8fa");
+});
+
+test("OCI 初期取得失敗は編集を許可せず、再試行後の遅延保存中も入力と重複操作を防ぐ", async ({ page }) => {
+  let failLoad = true;
+  let saves = 0;
+  const gate = createRequestGate();
+  await page.route("**/api/settings/oci", async (route) => {
+    if (route.request().method() === "PATCH") {
+      saves += 1;
+      await gate.promise;
+      await fulfillJson(route, { ...ociSettingsFixture(), ...route.request().postDataJSON() });
+    } else if (failLoad) {
+      await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "OCI 設定取得失敗" }) });
+    } else await fulfillJson(route, ociSettingsFixture());
+  });
+  await page.goto("/settings/oci");
+  await expect(page.getByText("OCI 設定取得失敗")).toBeVisible();
+  await expect(page.locator("#oci-user-ocid")).toHaveCount(0);
+  failLoad = false;
+  await page.getByRole("button", { name: /再試行/ }).click();
+  const user = page.locator("#oci-user-ocid");
+  await user.fill("ocid1.user.oc1..edited");
+  await page.getByRole("button", { name: "OCI 認証設定: OCI 設定を保存" }).click();
+  await expect.poll(() => saves).toBe(1);
+  await expect(user).toBeDisabled();
+  await expect(page.locator("#oci-object-storage-region")).toBeDisabled();
+  gate.release();
+  await expect(user).toBeEnabled();
+  await expect(user).toHaveValue("ocid1.user.oc1..edited");
+  await expectNoHorizontalOverflow(page);
 });

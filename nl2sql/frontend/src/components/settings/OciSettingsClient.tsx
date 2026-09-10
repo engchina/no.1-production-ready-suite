@@ -15,6 +15,9 @@ import {
   SettingsTestResultPanel,
   toSettingsTestResultDetails,
 } from "@/components/settings/SettingsTestResultPanel";
+import { ErrorState } from "@/components/StateViews";
+import { TimedLoadingState } from "@/components/ProcessingState";
+import { useSettingsDraftGuard } from "@/lib/useSettingsDraftGuard";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { FieldError } from "@/components/ui/field-error";
@@ -93,48 +96,39 @@ export function OciSettingsClient() {
   const [configTestState, setConfigTestState] = useState<ConfigTestState>({ phase: "idle" });
   const { abortAll, run: runScopedRequest } = useRequestScope();
 
-  useEffect(() => {
-    const storedDraft = readStoredOciSettingsDraft();
-    setDraft(storedDraft);
+  const [baseline, setBaseline] = useState<OciSettingsDraft | null>(null);
+  const [loadState, setLoadState] = useState<FeedbackState>("loading");
+  const [loadError, setLoadError] = useState("");
+  const [loadAttempt, setLoadAttempt] = useState(0);
+  const busy = [authSaveState, storageSaveState, configImportState, keyFileState,
+    namespaceFetchState, configTestState.phase].includes("loading");
+  useSettingsDraftGuard(Boolean(baseline && !sameDraft(draft, baseline)), busy);
 
-    void runScopedRequest(async (signal) => {
-      const [ociResult, storageResult] = await Promise.allSettled([
-        api.getOciSettings({ signal }),
-        api.getUploadStorageSettings({ signal }),
+  useEffect(() => {
+    setLoadState("loading");
+    runScopedRequest(async (signal) => {
+      const [oci, storage] = await Promise.all([
+        api.getOciSettings({ signal }), api.getUploadStorageSettings({ signal }),
       ]);
       if (signal.aborted) return;
-
-      setDraft((current) => {
-        let next = current;
-        if (ociResult.status === "fulfilled" && ociResult.value) {
-          next = normalizeOciSettingsDraft({
-            ...next,
-            ...runtimeOciSettingsToDraft(ociResult.value),
-          });
-        }
-        if (storageResult.status === "fulfilled" && storageResult.value) {
-          next = normalizeOciSettingsDraft({
-            ...next,
-            ...runtimeObjectStorageSettingsToDraft(storageResult.value),
-          });
-        }
-        return next;
+      const loaded = normalizeOciSettingsDraft({
+        ...DEFAULT_OCI_SETTINGS, ...runtimeOciSettingsToDraft(oci),
+        ...runtimeObjectStorageSettingsToDraft(storage),
       });
-
-      if (ociResult.status === "fulfilled" && ociResult.value) {
-        setKeyFileExists(ociResult.value.key_file_exists);
-      }
+      setDraft(loaded);
+      setBaseline(loaded);
+      setKeyFileExists(oci.key_file_exists);
+      setLoadState("success");
     }).catch((cause: unknown) => {
       if (isAbortError(cause)) return;
+      setLoadError(cause instanceof ApiError ? cause.message : t("settings.oci.loadError"));
+      setLoadState("error");
     });
-
-    return () => {
-      abortAll();
-    };
-  }, []);
+    return () => abortAll();
+  }, [abortAll, runScopedRequest, loadAttempt]);
 
   function updateDraft<K extends OciSettingsField>(field: K, value: OciSettingsDraft[K]) {
-    if (field === "objectStorageNamespace") return;
+    if (busy || loadState !== "success" || field === "objectStorageNamespace") return;
     setDraft((current) => ({ ...current, [field]: value }));
     setErrors((current) => {
       if (!current[field]) return current;
@@ -156,6 +150,7 @@ export function OciSettingsClient() {
   }
 
   async function saveAuthDraft() {
+    if (busy || loadState !== "success") return;
     const validationErrors = validationErrorsForFields(draft, AUTH_PROFILE_FIELDS);
     if (hasValidationErrors(validationErrors)) {
       setErrors((current) => ({
@@ -170,13 +165,14 @@ export function OciSettingsClient() {
     setErrors((current) => clearSectionErrors(current, AUTH_PROFILE_FIELDS));
     setAuthSaveState("loading");
     try {
-      persistDraftFields(AUTH_PROFILE_FIELDS, draft);
       const saved = await api.updateOciSettings({
         user: draft.userOcid,
         fingerprint: draft.fingerprint,
         tenancy: draft.tenancyOcid,
         region: draft.region,
       });
+      persistDraftFields(AUTH_PROFILE_FIELDS, draft);
+      setBaseline((current) => current && normalizeOciSettingsDraft({ ...current, ...runtimeOciSettingsToDraft(saved) }));
       setKeyFileExists(saved.key_file_exists);
       setDraft((current) =>
         normalizeOciSettingsDraft({
@@ -193,6 +189,7 @@ export function OciSettingsClient() {
   }
 
   async function testAuthConfig() {
+    if (busy || loadState !== "success") return;
     setErrors((current) => clearSectionErrors(current, AUTH_PROFILE_FIELDS));
     setConfigTestState({ phase: "loading" });
     try {
@@ -209,6 +206,7 @@ export function OciSettingsClient() {
   }
 
   async function saveStorageDraft() {
+    if (busy || loadState !== "success") return;
     const validationErrors = validationErrorsForFields(draft, OBJECT_STORAGE_FIELDS);
     if (hasValidationErrors(validationErrors)) {
       setErrors((current) => ({
@@ -226,6 +224,7 @@ export function OciSettingsClient() {
         object_storage_region: draft.objectStorageRegion,
         object_storage_namespace: draft.objectStorageNamespace,
       });
+      setBaseline((current) => current && normalizeOciSettingsDraft({ ...current, ...runtimeObjectStorageSettingsToDraft(saved) }));
       persistDraftFields(OBJECT_STORAGE_FIELDS, draft);
       setDraft((current) =>
         normalizeOciSettingsDraft({
@@ -241,6 +240,7 @@ export function OciSettingsClient() {
   }
 
   async function importConfigFromPath() {
+    if (busy || loadState !== "success") return;
     const pathAndProfileErrors: OciValidationResult = {};
     if (!draft.configFile.trim()) pathAndProfileErrors.configFile = "required";
     if (Object.keys(pathAndProfileErrors).length > 0) {
@@ -285,7 +285,7 @@ export function OciSettingsClient() {
   }
 
   async function selectKeyFile(file: File | undefined) {
-    if (!file) return;
+    if (!file || busy || loadState !== "success") return;
     if (!/\.(pem|key)$/i.test(file.name)) {
       setKeyFileState("error");
       setKeyFileMessage(t("settings.oci.validation.invalidKeyFile"));
@@ -309,6 +309,7 @@ export function OciSettingsClient() {
   }
 
   async function fetchObjectStorageNamespace() {
+    if (busy || loadState !== "success") return;
     if (!draft.objectStorageRegion.trim()) {
       setErrors((current) => ({ ...current, objectStorageRegion: "required" }));
       setNamespaceFetchState("error");
@@ -352,9 +353,16 @@ export function OciSettingsClient() {
     }
   }
 
+  if (loadState === "loading") return <div className="p-8"><TimedLoadingState
+    label={t("settings.oci.loading")} operationKey="settings-oci-load" placement="page"
+  /></div>;
+  if (loadState === "error") return <div className="p-8"><ErrorState
+    message={loadError} onRetry={() => setLoadAttempt((current) => current + 1)}
+  /></div>;
+
   return (
     <div className="p-8">
-      <div className="space-y-6">
+      <fieldset disabled={busy} aria-busy={busy} className="min-w-0 space-y-6">
         <Card className="rounded-md">
           <CardHeader className="p-6 pb-0">
             <div className="flex items-center gap-2 border-b border-border pb-5">
@@ -438,6 +446,7 @@ export function OciSettingsClient() {
               label={t("settings.oci.field.keyFile")}
               value={draft.keyFile}
               error={errorText(errors.keyFile)}
+              disabled={busy}
               fileState={keyFileState}
               fileMessage={keyFileMessage}
               keyFileExists={keyFileExists}
@@ -510,7 +519,7 @@ export function OciSettingsClient() {
             />
           </CardContent>
         </Card>
-      </div>
+      </fieldset>
     </div>
   );
 }
@@ -802,6 +811,7 @@ function NamespaceField({
 }
 
 function PrivateKeyDropzoneField({
+  disabled,
   id,
   label,
   value,
@@ -812,6 +822,7 @@ function PrivateKeyDropzoneField({
   onFileChange,
   required,
 }: {
+  disabled?: boolean;
   id: string;
   label: string;
   value: string;
@@ -839,6 +850,7 @@ function PrivateKeyDropzoneField({
   return (
     <div id={id} className="space-y-2">
       <FileDropzone
+        disabled={disabled}
         label={label}
         ariaLabel={t("settings.oci.keyFileInput.aria")}
         accept=".pem,.key"
