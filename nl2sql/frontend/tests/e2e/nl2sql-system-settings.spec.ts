@@ -462,6 +462,10 @@ async function expectModelSaveButtonsUsePrimaryStyle(page: Page) {
     page.getByRole("button", { name: "登録モデル: 保存" }),
     page.getByRole("button", { name: "OCI Generative AI: 保存" }),
   ];
+  await page.mouse.move(0, 0);
+  await Promise.all(buttons.map((button) => button.evaluate(async (element) => {
+    await Promise.all(element.getAnimations().map((animation) => animation.finished.catch(() => undefined)));
+  })));
   const styles = await Promise.all(buttons.map((button) => getActionButtonStyle(button)));
   const baseline = styles[0];
 
@@ -2620,5 +2624,32 @@ test("アップロード保存先は保存中の編集と重複要求を止め�
   gate.release();
   await expect(path).toBeEnabled();
   await expect(path).toHaveValue("/tmp/review-draft");
+  await expectNoHorizontalOverflow(page);
+});
+
+test("モデルのテスト中は編集・削除・別テスト・保存を止め、編集後は旧結果を消す", async ({ page }) => {
+  const gate = createRequestGate();
+  let tests = 0;
+  await page.route("**/api/settings/model/test", async (route) => {
+    tests += 1;
+    await gate.promise;
+    const body = route.request().postDataJSON();
+    await fulfillJson(route, { status: "success", target_type: body.target_type,
+      model_id: body.model_id, message: "レビュー対象モデルの確認成功", elapsed_ms: 10,
+      checked_at: "2026-09-11T00:00:00Z", troubleshooting: [], details: {}, raw_error: null, error_type: null });
+  });
+  await page.goto("/settings/model");
+  const model = page.getByRole("textbox", { name: "モデル ID 1" });
+  const testButton = page.getByRole("button", { name: /enterprise-nl2sql-llm.*テスト|テスト.*enterprise-nl2sql-llm/ });
+  await testButton.click();
+  await expect.poll(() => tests).toBe(1);
+  await expect(model).toBeDisabled();
+  await expect(page.getByRole("button", { name: "OCI Enterprise AI: 保存" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: /モデルを削除 1/ })).toBeDisabled();
+  gate.release();
+  await expect(page.getByText("レビュー対象モデルの確認成功")).toBeVisible();
+  await expect(model).toBeEnabled();
+  await model.fill("different-model");
+  await expect(page.getByText("レビュー対象モデルの確認成功")).toHaveCount(0);
   await expectNoHorizontalOverflow(page);
 });

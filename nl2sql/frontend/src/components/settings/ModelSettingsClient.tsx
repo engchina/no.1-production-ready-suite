@@ -43,6 +43,7 @@ import {
 } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { useModelSettings, useTestModelSettings, useUpdateModelSettings } from "@/lib/queries";
+import { useSettingsDraftGuard } from "@/lib/useSettingsDraftGuard";
 import { cn } from "@/lib/utils";
 
 type ModelTestKey = `enterprise:${number}` | "embedding" | "rerank";
@@ -76,6 +77,9 @@ export function ModelSettingsClient() {
 
   const canSubmit = Boolean(draft);
   const saveInProgress = activeSaveSection !== null;
+  const operationBusy = saveInProgress || testingKey !== null;
+  useSettingsDraftGuard(Boolean(draft && baselineData &&
+    JSON.stringify(draft) !== JSON.stringify(cloneSettings(baselineData.settings))), operationBusy);
   const legacySecretDetected =
     checkData?.legacy_secret_detected ??
     baselineData?.legacy_secret_detected ??
@@ -227,7 +231,7 @@ export function ModelSettingsClient() {
     key: ModelTestKey,
     target: Omit<ModelSettingsTestRequest, "settings">
   ) => {
-    if (!draft) return;
+    if (!draft || operationBusy) return;
     setTestResults((current) => ({ ...current, [key]: undefined }));
     setTestingKey(key);
     try {
@@ -249,7 +253,7 @@ export function ModelSettingsClient() {
     section: ModelSaveSection
   ) => {
     event.preventDefault();
-    if (!draft || !baselineData || activeSaveSection) return;
+    if (!draft || !baselineData || operationBusy) return;
     clearSaveError(section);
     setActiveSaveSection(section);
     try {
@@ -320,7 +324,7 @@ export function ModelSettingsClient() {
             {t("settings.model.legacySecret.description")}
           </Banner>
         ) : null}
-        <div className="space-y-6">
+        <fieldset disabled={operationBusy} aria-busy={operationBusy} className="min-w-0 space-y-6">
           <form
             onSubmit={(event) => void handleSubmit(event, "enterprise_connection")}
           >
@@ -507,7 +511,7 @@ export function ModelSettingsClient() {
               </CardContent>
             </Card>
           </form>
-        </div>
+        </fieldset>
       </div>
     </div>
   );
