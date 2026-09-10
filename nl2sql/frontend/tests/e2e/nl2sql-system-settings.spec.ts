@@ -2685,3 +2685,34 @@ test("Wallet 更新は未保存 DB ユーザーとパスワードを保持し、
   await expect(page.getByText("編集済み接続の確認成功")).toHaveCount(0);
   await expectNoHorizontalOverflow(page);
 });
+
+test("Credential 確認は region 変更と実行失敗で解除し、処理中は region を固定する", async ({ page }) => {
+  const gate = createRequestGate();
+  let creates = 0;
+  await page.route("**/api/settings/database/select-ai-credential", async (route) => {
+    if (route.request().method() === "POST") {
+      creates += 1;
+      await gate.promise;
+      await route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ detail: "Credential 操作失敗" }) });
+    } else await fulfillJson(route, { credential_name: "OCI_CRED", schema_name: "ADMIN", exists: false,
+      region: "us-chicago-1", oci_auth_ready: true, missing_fields: [], operation: null });
+  });
+  await page.goto("/settings/database#select-ai-credential");
+  const card = page.getByTestId("select-ai-credential-card");
+  const field = card.getByRole("textbox", { name: "実行確認語" });
+  const region = card.getByRole("combobox", { name: "Select AI 既定リージョン" });
+  const create = card.getByRole("button", { name: "Credential を作成" });
+  await field.fill("ADMIN_EXECUTE");
+  await region.click();
+  await page.getByRole("option", { name: "ap-osaka-1" }).click();
+  await expect(field).toHaveValue("");
+  await expect(create).toBeDisabled();
+  await field.fill("ADMIN_EXECUTE");
+  await create.click();
+  await expect.poll(() => creates).toBe(1);
+  await expect(region).toBeDisabled();
+  gate.release();
+  await expect(card.getByText("Credential 操作失敗", { exact: true })).toBeVisible();
+  await expect(field).toHaveValue("");
+  await expect(create).toBeDisabled();
+});

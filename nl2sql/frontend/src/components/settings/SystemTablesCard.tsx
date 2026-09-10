@@ -81,7 +81,7 @@ export function SystemTablesCard() {
   const data = statusQuery.data;
   const mayExecute = hasPermission(MENU_PERMISSIONS.settingsSystemTables);
   const schemaOperationRunning = data?.operation_state.status === "running";
-  const busy = systemTableControlsBusy(
+  const busy = statusQuery.isFetching || statusQuery.isError || !data || systemTableControlsBusy(
     operation.isPending,
     data?.operation_state.status
   );
@@ -92,8 +92,13 @@ export function SystemTablesCard() {
     }
   }, [operationError]);
 
+  useEffect(() => {
+    if (statusQuery.isFetching) setRecreateConfirmation("");
+  }, [statusQuery.isFetching]);
+
   const execute = (recreate: boolean) => {
-    if (busy) return;
+    if (busy || !mayExecute || (recreate && !recreateConfirmed)) return;
+    setRecreateConfirmation("");
     setOperationError("");
     operation.mutate(
       {
@@ -119,6 +124,7 @@ export function SystemTablesCard() {
   };
 
   const refreshStatus = async () => {
+    setRecreateConfirmation("");
     setOperationError("");
     const result = await statusQuery.refetch();
     if (!result.error) {

@@ -576,18 +576,29 @@ function SelectAiCredentialCard() {
   const [region, setRegion] = useState<SelectAiCredentialRegion>("us-chicago-1");
   const [confirmation, setConfirmation] = useState("");
   const data = status.data;
+  const busy = status.isFetching || status.isError || changeCredential.isPending;
   const confirmed = confirmation.trim() === SELECT_AI_CREDENTIAL_CONFIRMATION;
 
   useEffect(() => {
     if (data?.region) setRegion(data.region);
   }, [data?.region]);
 
+  useEffect(() => {
+    setConfirmation("");
+  }, [status.isFetching, data?.schema_name, data?.exists, data?.oci_auth_ready]);
+
+  const refresh = () => {
+    setConfirmation("");
+    return status.refetch();
+  };
+
   const resetFeedback = () => {
     changeCredential.reset();
   };
 
   const execute = () => {
-    if (!data || !confirmed || !data.oci_auth_ready) return;
+    if (busy || !data || !confirmed || !data.oci_auth_ready) return;
+    setConfirmation("");
     changeCredential.mutate(
       {
         region,
@@ -652,7 +663,7 @@ function SelectAiCredentialCard() {
         ) : !data ? (
           <ErrorState
             message={statusError}
-            onRetry={() => void status.refetch()}
+            onRetry={() => void refresh()}
             retryLabel={t("settings.database.selectAiCredential.action.refresh")}
           />
         ) : (
@@ -666,7 +677,7 @@ function SelectAiCredentialCard() {
                     variant="secondary"
                     loading={status.isFetching}
                     disabled={status.isFetching}
-                    onClick={() => void status.refetch()}
+                    onClick={() => void refresh()}
                   >
                     <RefreshCw size={15} aria-hidden />
                     {t("settings.database.selectAiCredential.action.refresh")}
@@ -690,18 +701,21 @@ function SelectAiCredentialCard() {
               />
             </dl>
 
+            <fieldset disabled={status.isFetching || changeCredential.isPending} className="min-w-0">
             <SelectField<SelectAiCredentialRegion>
               id="select-ai-credential-region"
               label={t("settings.database.selectAiCredential.field.region")}
               value={region}
               options={SELECT_AI_CREDENTIAL_REGION_OPTIONS}
               onValueChange={(value) => {
+                setConfirmation("");
                 setRegion(value);
                 resetFeedback();
               }}
               helper={t("settings.database.selectAiCredential.field.regionHelper")}
               buttonClassName="h-11"
             />
+            </fieldset>
 
             {data.oci_auth_ready ? (
               <FormStatus
@@ -724,7 +738,7 @@ function SelectAiCredentialCard() {
                     variant="secondary"
                     loading={status.isFetching}
                     disabled={status.isFetching}
-                    onClick={() => void status.refetch()}
+                    onClick={() => void refresh()}
                   >
                     <RefreshCw size={15} aria-hidden />
                     {t("settings.database.selectAiCredential.action.refresh")}
@@ -749,14 +763,14 @@ function SelectAiCredentialCard() {
                 { phrase: SELECT_AI_CREDENTIAL_CONFIRMATION }
               )}
               tone={data.exists ? "danger" : "neutral"}
-              disabled={changeCredential.isPending || !data.oci_auth_ready}
+              disabled={busy || !data.oci_auth_ready}
               actions={
                 <Button
                   size="lg"
                   variant={data.exists ? "danger" : "primary"}
                   className="w-full sm:w-auto"
                   loading={changeCredential.isPending}
-                  disabled={!confirmed || !data.oci_auth_ready || changeCredential.isPending}
+                  disabled={busy || !confirmed || !data.oci_auth_ready}
                   onClick={() => void execute()}
                 >
                   {data.exists ? (

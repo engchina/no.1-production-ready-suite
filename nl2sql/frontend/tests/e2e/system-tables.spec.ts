@@ -791,3 +791,31 @@ test("接続・操作失敗を操作領域で通知し、復旧方法を提示�
   await expect(operationAlert.locator("[data-message-sentence]")).not.toHaveCount(0);
   await expectNoPageOverflow(page);
 });
+
+test("再作成確認は再取得・失敗時に解除し、取得失敗中は操作しない", async ({ page }) => {
+  let failStatus = false;
+  let operations = 0;
+  await page.route("**/api/settings/database/system-tables", (route) => failStatus
+    ? route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "状態取得失敗" }) })
+    : fulfill(route, systemTables("ready")));
+  await page.route("**/api/settings/database/system-tables/initialize", async (route) => {
+    operations += 1;
+    await route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ detail: "再作成失敗" }) });
+  });
+  await page.goto("/settings/system-tables");
+  const card = page.locator("#system-tables");
+  const field = card.getByRole("textbox", { name: "実行確認語" });
+  const recreate = card.getByRole("button", { name: "すべて再作成" });
+  await field.fill("RECREATE_NL2SQL_SYSTEM_TABLES");
+  await recreate.click();
+  await expect.poll(() => operations).toBe(1);
+  await expect(field).toHaveValue("");
+  await expect(recreate).toBeDisabled();
+  await expect(field).toBeEnabled();
+  await field.fill("RECREATE_NL2SQL_SYSTEM_TABLES");
+  failStatus = true;
+  await card.getByRole("button", { name: "状態を再取得" }).click();
+  await expect(field).toHaveValue("");
+  await expect(recreate).toBeDisabled();
+  await expect(card.getByRole("button", { name: "作成・更新" })).toBeDisabled();
+});
