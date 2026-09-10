@@ -1,3 +1,4 @@
+import { useWorkspaceState, useWorkspaceRevalidation } from "@/components/WorkspaceState";
 import { useState } from "react";
 import { Play, X } from "lucide-react";
 
@@ -61,10 +62,11 @@ export function DirectSqlPage() {
 }
 
 function ExecutableDirectSqlPage() {
-  const [sqlText, setSqlText] = useState("");
+  useWorkspaceRevalidation();
+  const [sqlText, setSqlText] = useWorkspaceState("sqlText", "");
   const [sqlFileResetSignal, setSqlFileResetSignal] = useState(0);
   const [results, setResults] = useState<QueryResults | null>(null);
-  const [rowLimitInput, setRowLimitInput] = useState("");
+  const [rowLimitInput, setRowLimitInput] = useWorkspaceState("rowLimitInput", "");
   const [executedRowLimit, setExecutedRowLimit] = useState<number | null>(null);
   const [executionRun, setExecutionRun] = useState<ExecutionRunState | null>(null);
   const [loading, setLoading] = useState(false);
@@ -198,12 +200,13 @@ function ExecutableDirectSqlPage() {
                 onClick={clear}
               >
                 <X size={16} aria-hidden="true" />
-                <span>{t("nl2sql.action.clearSql")}</span>
+                <span>{t("workspace.clearInput")}</span>
               </Button>
             </div>
           </div>
           {executionRun && (
             <ExecutionActivityPanel
+              inputSignature={sqlText}
               status={executionRun.status}
               label={executionLabel(executionRun.status)}
               operationKey={executionRun.operationKey}

@@ -1,7 +1,10 @@
-import { useId } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { CheckCircle2, CircleAlert, Clock3 } from "lucide-react";
 
 import { useOperationTiming, type UseOperationTimingOptions } from "@/components/ProcessingState";
+import { useWorkspaceActive } from "@/components/WorkspaceState";
+import { formatDateTime } from "@/lib/format";
+
 import { t } from "@/lib/i18n";
 
 export type ExecutionActivityStatus = "running" | "success" | "error";
@@ -12,6 +15,7 @@ export interface ExecutionActivityPanelProps
     UseOperationTimingOptions,
     "operationKey" | "startedAt" | "finishedAt" | "elapsedMs"
   > {
+  inputSignature?: string;
   status: ExecutionActivityStatus;
   label: string;
   testId?: string;
@@ -49,8 +53,17 @@ export function ExecutionActivityPanel({
   finishedAt,
   elapsedMs,
   testId,
+  inputSignature,
 }: ExecutionActivityPanelProps) {
   const titleId = useId();
+  const pageActive = useWorkspaceActive();
+  const [previousRun, setPreviousRun] = useState<unknown>(null);
+  const submitted = useRef({ operationKey, inputSignature });
+  if (submitted.current.operationKey !== operationKey) submitted.current = { operationKey, inputSignature };
+  const inputChanged = inputSignature !== undefined && inputSignature !== submitted.current.inputSignature;
+  useEffect(() => { if (!pageActive) setPreviousRun(operationKey); }, [operationKey, pageActive]);
+  const historical = status !== "running" && (previousRun === operationKey || inputChanged);
+
   const active = status === "running";
   const timing = useOperationTiming({
     active,
@@ -82,9 +95,11 @@ export function ExecutionActivityPanel({
           </span>
           <div className="min-w-0">
             <h3 id={titleId} className="text-sm font-semibold text-foreground">
-              {t("executionActivity.title")}
+              {t(historical ? "workspace.previousResult" : "executionActivity.title")}
             </h3>
             <p className="mt-0.5 break-words text-sm text-foreground">{label}</p>
+            {!active && finishedAt ? <p className="mt-1 text-xs text-muted">{t("workspace.executedAt", { date: formatDateTime(new Date(finishedAt).toISOString()) })}</p> : null}
+            {inputChanged && !active ? <p className="mt-1 text-sm text-muted">{t("workspace.inputChanged")}</p> : null}
           </div>
         </div>
         <div className="flex shrink-0 flex-wrap items-center gap-2 sm:justify-end">

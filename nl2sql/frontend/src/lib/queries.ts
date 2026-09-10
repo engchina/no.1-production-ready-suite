@@ -42,9 +42,19 @@ function adbIsTransitioning(state: string | null | undefined): boolean {
 }
 
 export function useDatabaseStatus({ enabled = true }: { enabled?: boolean } = {}) {
+  const qc = useQueryClient();
   return useQuery({
     queryKey: queryKeys.databaseStatus,
-    queryFn: ({ signal }) => api.getDatabaseStatus({ signal }),
+    queryFn: async ({ signal }) => {
+      const next = await api.getDatabaseStatus({ signal });
+      const previous = qc.getQueryData<import("@/lib/api").DatabaseStatusData>(queryKeys.databaseStatus);
+      if (previous?.context_id && next.context_id && previous.context_id !== next.context_id) {
+        const business = { predicate: (query: { queryKey: readonly unknown[] }) => ["nl2sql", "schema"].includes(String(query.queryKey[0])) };
+        await qc.cancelQueries(business);
+        qc.removeQueries(business);
+      }
+      return next;
+    },
     enabled,
     staleTime: 15_000,
     retry: false,
@@ -161,7 +171,8 @@ export function useUpdateDatabaseSettings() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (payload: DatabaseSettingsUpdate) => api.updateDatabaseSettings(payload),
-    onSuccess: () => {
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: queryKeys.databaseStatus });
       qc.invalidateQueries({ queryKey: queryKeys.databaseSettings });
     },
   });

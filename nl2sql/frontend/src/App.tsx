@@ -16,6 +16,9 @@ import {
   useNavigationType,
 } from "react-router-dom";
 
+import { WorkspaceBoundary, WorkspaceDraftWarning, WorkspacePage } from "@/components/WorkspaceState";
+import { useDatabaseStatus } from "@/lib/queries";
+
 import { AppSidebar } from "@/components/layout/AppSidebar";
 import { PageHeader } from "@/components/PageHeader";
 import { TimedLoadingState } from "@/components/ProcessingState";
@@ -191,6 +194,9 @@ const KEEP_ALIVE_PAGES = [
   { path: APP_ROUTES.adminSql, element: <AdminSqlPage /> },
   { path: APP_ROUTES.commentManagement, element: <CommentManagementPage /> },
   { path: APP_ROUTES.annotationManagement, element: <AnnotationManagementPage /> },
+  { path: APP_ROUTES.tableManagement, element: <TableManagementPage /> },
+  { path: APP_ROUTES.viewManagement, element: <ViewManagementPage /> },
+  { path: APP_ROUTES.dataManagement, element: <DataManagementPage /> },
 ];
 const KEEP_ALIVE_PATHS = new Set<string>(KEEP_ALIVE_PAGES.map((page) => page.path));
 
@@ -283,18 +289,17 @@ function AuthenticatedApplication() {
   }
 
   return (
-    <AppLayout>
+    <AppLayout key={JSON.stringify([auth.user?.user_uuid, auth.user?.permissions, auth.user?.data_entitlements, auth.user?.allowed_profile_ids])}>
       <DatabaseGate>
         <SchemaRefreshCoordinator
           discoveryEnabled={auth.hasPermission("nl2sql.schema.read")}
         >
+          <ScopedWorkspace>
           <Suspense fallback={<RouteLoadingFallback />}>
+            <WorkspaceDraftWarning />
             <KeepAlivePages />
             <Routes>
             <Route path={APP_ROUTES.home} element={<Navigate to={firstAllowedRoute(auth.hasPermission)} replace />} />
-            <Route path={APP_ROUTES.tableManagement} element={<TableManagementPage />} />
-            <Route path={APP_ROUTES.viewManagement} element={<ViewManagementPage />} />
-            <Route path={APP_ROUTES.dataManagement} element={<DataManagementPage />} />
             <Route path={APP_ROUTES.sampleData} element={<SampleDataPage />} />
             {/* 旧ルート互換: スキーマ管理はテーブルの管理へ、データ投入はデータの管理へ */}
             <Route path="/schema" element={<Navigate to={APP_ROUTES.tableManagement} replace />} />
@@ -339,6 +344,7 @@ function AuthenticatedApplication() {
             <Route path="*" element={<Navigate to={defaultEntryRoute(auth.hasPermission)} replace />} />
             </Routes>
           </Suspense>
+          </ScopedWorkspace>
         </SchemaRefreshCoordinator>
       </DatabaseGate>
     </AppLayout>
@@ -349,6 +355,11 @@ function AuthenticatedApplication() {
  * 対象画面を lazy-mount(初回訪問時のみ mount)し、以後は unmount せず `display` で表示を切替える。
  * 未訪問ページは描画しないので初回ロードでの eager fetch を避けられる。
  */
+function ScopedWorkspace({ children }: { children: ReactNode }) {
+  const database = useDatabaseStatus({ enabled: false });
+  return <WorkspaceBoundary contextId={database.data?.context_id || "legacy"}>{children}</WorkspaceBoundary>;
+}
+
 function KeepAlivePages() {
   const { pathname } = useLocation();
   const auth = useAuth();
@@ -366,9 +377,9 @@ function KeepAlivePages() {
         (page) =>
           mounted.current.has(page.path) && auth.hasPermission(ROUTE_PERMISSIONS[page.path])
       ).map((page) => (
-        <div key={page.path} style={{ display: page.path === pathname ? undefined : "none" }}>
-          {page.element}
-        </div>
+        <WorkspacePage key={page.path} page={page.path} active={page.path === pathname}>
+          <Suspense fallback={<RouteLoadingFallback />}>{page.element}</Suspense>
+        </WorkspacePage>
       ))}
     </>
   );
@@ -380,6 +391,7 @@ function AppLayout({ children }: { children: ReactNode }) {
   const mainRef = useRef<HTMLElement | null>(null);
   const setSidebarCollapsed = useUiStore((state) => state.setSidebarCollapsed);
 
+  useEffect(() => () => { mainScrollPositions.clear(); }, []);
   useCollapseSidebarOnNarrowViewport(setSidebarCollapsed);
   useMainScrollRestoration(mainRef, location, navigationType);
 
@@ -450,7 +462,7 @@ function useMainScrollRestoration(
     if (!pathnameChanged && !hashChanged && navigationType !== "POP") return;
 
     const nextTop =
-      navigationType === "POP" ? mainScrollPositions.get(scrollKey) ?? 0 : 0;
+      mainScrollPositions.get(scrollKey) ?? 0;
     const scroll = () => {
       if (location.hash && scrollHashTargetIntoView(location.hash)) return;
       main.scrollTo({ top: nextTop, left: 0, behavior: "auto" });

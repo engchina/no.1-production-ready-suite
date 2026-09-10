@@ -1,3 +1,4 @@
+import { useWorkspaceActive } from "@/components/WorkspaceState";
 import { useInfiniteQuery, useMutation, useQuery } from "@tanstack/react-query";
 
 import { ApiError, apiGet, apiGetWithMetadata, apiPost } from "@/lib/api";
@@ -97,7 +98,9 @@ export function useProfileSummaries(
   query: string,
   sort: ProfileListSortState = DEFAULT_PROFILE_SORT
 ) {
+  const workspaceActive = useWorkspaceActive();
   return useInfiniteQuery({
+    enabled: workspaceActive,
     queryKey: nl2sqlIncrementalKeys.profiles(query.trim(), sort.key, sort.direction),
     initialPageParam: "",
     queryFn: ({ pageParam, signal }) => {
@@ -129,6 +132,7 @@ export function useProfileSummaries(
 }
 
 export function useProfileDetail(profileId: string) {
+  const workspaceActive = useWorkspaceActive();
   return useQuery({
     queryKey: nl2sqlIncrementalKeys.profile(profileId),
     queryFn: async ({ signal }) => {
@@ -147,13 +151,14 @@ export function useProfileDetail(profileId: string) {
       });
       return { profile: response.data, etag: response.etag || response.data.etag };
     },
-    enabled: Boolean(profileId),
+    enabled: workspaceActive && Boolean(profileId),
     staleTime: 5_000,
     retry: retryTransientOnly,
   });
 }
 
 export function useProfileUsageContext(profileId: string) {
+  const workspaceActive = useWorkspaceActive();
   return useQuery({
     queryKey: nl2sqlIncrementalKeys.profileUsageContext(profileId),
     queryFn: async ({ signal }) => {
@@ -187,13 +192,14 @@ export function useProfileUsageContext(profileId: string) {
       });
       return { profile: response.data, etag: response.etag || response.data.etag };
     },
-    enabled: Boolean(profileId),
+    enabled: workspaceActive && Boolean(profileId),
     staleTime: 5_000,
     retry: false,
   });
 }
 
 export function useProfileOntologyView(profileId: string, enabled = true) {
+  const workspaceActive = useWorkspaceActive();
   return useQuery({
     queryKey: nl2sqlIncrementalKeys.profileOntologyView(profileId),
     queryFn: ({ signal }) =>
@@ -201,14 +207,16 @@ export function useProfileOntologyView(profileId: string, enabled = true) {
         `/api/nl2sql/profiles/${encodeURIComponent(profileId)}/ontology-view`,
         { signal, timeoutMs: API_TIMEOUT_MS.interactiveDetail }
       ),
-    enabled: Boolean(profileId) && enabled,
+    enabled: workspaceActive && Boolean(profileId) && enabled,
     staleTime: 5_000,
     retry: retryTransientOnly,
   });
 }
 
 export function useSchemaCatalogHead() {
+  const workspaceActive = useWorkspaceActive();
   return useQuery({
+    enabled: workspaceActive,
     queryKey: nl2sqlIncrementalKeys.schemaHead,
     queryFn: ({ signal }) =>
       apiGet<SchemaCatalogHead>("/api/schema/catalog/head", {
@@ -238,7 +246,9 @@ export function useSchemaObjects(
   rowState = "",
   enabled = true
 ) {
+  const workspaceActive = useWorkspaceActive();
   return useInfiniteQuery({
+    enabled: workspaceActive && enabled,
     queryKey: nl2sqlIncrementalKeys.schemaObjects(query.trim(), objectType, profileId, rowState),
     initialPageParam: "",
     queryFn: ({ pageParam, signal }) => {
@@ -287,7 +297,6 @@ export function useSchemaObjects(
       });
     },
     getNextPageParam: (page) => page.next_cursor ?? undefined,
-    enabled,
     staleTime: 5_000,
   });
 }
@@ -299,7 +308,9 @@ export function useDbAdminObjects(
   ownerPrefix = "",
   queryScope: DbAdminObjectQueryScope = "all"
 ) {
+  const workspaceActive = useWorkspaceActive();
   return useInfiniteQuery({
+    enabled: workspaceActive,
     queryKey: nl2sqlIncrementalKeys.dbAdminObjects(
       query.trim(),
       objectType,

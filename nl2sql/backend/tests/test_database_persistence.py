@@ -91,7 +91,9 @@ async def test_database_ready_allows_deterministic_memory_without_probe(
     response = await _get_database_status()
 
     assert response.status_code == 200
-    assert response.json()["data"] == {"status": "ok", "check": "ok", "detail": "memory"}
+    assert {
+        key: value for key, value in response.json()["data"].items() if key != "context_id"
+    } == {"status": "ok", "check": "ok", "detail": "memory"}
     assert called is False
 
 
@@ -120,7 +122,9 @@ async def test_database_ready_reports_not_configured_without_probe(
     response = await _get_database_status()
 
     assert response.status_code == 200
-    assert response.json()["data"] == {
+    assert {
+        key: value for key, value in response.json()["data"].items() if key != "context_id"
+    } == {
         "status": "not_configured",
         "check": "missing",
         "detail": None,
@@ -203,7 +207,9 @@ async def test_database_ready_wallet_mtls_missing_files_skips_probe(
     response = await _get_database_status()
 
     assert response.status_code == 200
-    assert response.json()["data"] == {
+    assert {
+        key: value for key, value in response.json()["data"].items() if key != "context_id"
+    } == {
         "status": "not_configured",
         "check": READINESS_WALLET_NOT_FOUND,
         "detail": None,
@@ -250,7 +256,9 @@ async def test_database_ready_redacts_probe_failures(
     response = await _get_database_status()
 
     assert response.status_code == 200
-    assert response.json()["data"] == {
+    assert {
+        key: value for key, value in response.json()["data"].items() if key != "context_id"
+    } == {
         "status": "unreachable",
         "check": "ok",
         "detail": detail,
@@ -287,7 +295,9 @@ async def test_database_ready_reports_successful_oracle_probe(
     response = await _get_database_status()
 
     assert response.status_code == 200
-    assert response.json()["data"] == {"status": "ok", "check": "ok", "detail": None}
+    assert {
+        key: value for key, value in response.json()["data"].items() if key != "context_id"
+    } == {"status": "ok", "check": "ok", "detail": None}
 
 
 @pytest.mark.asyncio
@@ -322,7 +332,9 @@ async def test_database_ready_distinguishes_pending_migration_from_connection_se
     response = await _get_database_status()
 
     assert response.status_code == 200
-    assert response.json()["data"] == {
+    assert {
+        key: value for key, value in response.json()["data"].items() if key != "context_id"
+    } == {
         "status": "setup_required",
         "check": "migration_required",
         "detail": "migration 3 is required",
@@ -516,3 +528,27 @@ async def test_db_admin_objects_route_passes_owner_filter(
 
     assert response.status_code == 200
     assert service.kwargs["owner"] == "ADMIN"
+
+
+@pytest.mark.asyncio
+async def test_workspace_context_changes_only_with_connection_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings(
+        nl2sql_runtime_mode="deterministic",
+        nl2sql_persistence_mode="memory",
+        oracle_user="OWNER_A",
+        oracle_dsn="db-a/service",
+    )
+    monkeypatch.setattr(health_routes, "get_settings", lambda: settings)
+    first = (await _get_database_status()).json()["data"]
+    assert len(first["context_id"]) == 64
+    assert "OWNER_A" not in str(first)
+    assert "db-a/service" not in str(first)
+    settings.oracle_password = "changed-test-value"
+    assert (await _get_database_status()).json()["data"]["context_id"] == first["context_id"]
+    settings.oracle_user = "OWNER_B"
+    assert (await _get_database_status()).json()["data"]["context_id"] != first["context_id"]
+    settings.oracle_user = "OWNER_A"
+    settings.oracle_dsn = "db-b/service"
+    assert (await _get_database_status()).json()["data"]["context_id"] != first["context_id"]

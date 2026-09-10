@@ -1,3 +1,4 @@
+import { useWorkspaceState, useWorkspaceRevalidation, useResetExecutionConsent } from "@/components/WorkspaceState";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Code2, Eye, RefreshCw, Sparkles } from "lucide-react";
 
@@ -309,14 +310,16 @@ function objectListLoadMoreErrorMessage(error: unknown, fallbackKey: Parameters<
 }
 
 export function ViewManagementPage() {
-  const [detailTab, setDetailTab] = useState<DbObjectDetailTab>("columns");
-  const [activeView, setActiveView] = useState<ActiveView>("list");
-  const [viewSearch, setViewSearch] = useState("");
-  const [viewOwnerPrefix, setViewOwnerPrefix] = useState<DbObjectOwnerPrefix>("");
-  const [viewSort, setViewSort] = useState<DbObjectSortState>({ key: "name", direction: "asc" });
+  useWorkspaceRevalidation();
+  const [detailTab, setDetailTab] = useWorkspaceState<DbObjectDetailTab>("detailTab", "columns");
+  const [activeView, setActiveView] = useWorkspaceState<ActiveView>("activeView", "list");
+  const [viewSearch, setViewSearch] = useWorkspaceState("viewSearch", "");
+  const [viewOwnerPrefix, setViewOwnerPrefix] = useWorkspaceState<DbObjectOwnerPrefix>("viewOwnerPrefix", "");
+  const [viewSort, setViewSort] = useWorkspaceState<DbObjectSortState>("viewSort", { key: "name", direction: "asc" });
   const [dropTargetName, setDropTargetName] = useState("");
   const [dropConfirmation, setDropConfirmation] = useState("");
   const [dropError, setDropError] = useState("");
+  useResetExecutionConsent(() => { setDropConfirmation(""); setDropTargetName(""); }, "");
   const [joinWhere, setJoinWhere] = useState<DbAdminJoinWhereData | null>(null);
   const [schemaRefreshJobId, setSchemaRefreshJobId] = useState("");
   const [schemaRefreshError, setSchemaRefreshError] = useState("");

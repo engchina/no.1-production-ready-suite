@@ -1,3 +1,4 @@
+import { useWorkspaceState, useWorkspaceRevalidation, useWorkspaceActivation } from "@/components/WorkspaceState";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowDownUp,
@@ -9,7 +10,7 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { EmptyState, toast } from "@engchina/production-ready-ui";
+import { Banner, EmptyState, toast } from "@engchina/production-ready-ui";
 
 import { StatusBadge } from "@/components/ui/status-badge";
 
@@ -146,18 +147,19 @@ function objectListLoadMoreErrorMessage(error: unknown, fallbackKey: Parameters<
 
 function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
   const pageId = mode === "comment" ? "comment-management" : "annotation-management";
-  const [activePanel, setActivePanel] = useState<MetadataPanel>("targets");
-  const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
+  useWorkspaceRevalidation();
+  const [activePanel, setActivePanel] = useWorkspaceState<MetadataPanel>("activePanel", "targets");
+  const [selectedKeys, setSelectedKeys] = useWorkspaceState<string[]>("selectedKeys", []);
   const [details, setDetails] = useState<DbAdminObjectDetail[]>([]);
-  const [sampleLimit, setSampleLimit] = useState(10);
+  const [sampleLimit, setSampleLimit] = useWorkspaceState("sampleLimit", 10);
   const [refreshedSampleText, setRefreshedSampleText] = useState<string | null>(null);
-  const [extraText, setExtraText] = useState(mode === "annotation" ? ANNOTATION_EXTRA_TEXT : "");
+  const [extraText, setExtraText] = useWorkspaceState("extraText", mode === "annotation" ? ANNOTATION_EXTRA_TEXT : "");
   const [generated, setGenerated] = useState<MetadataSqlGenerateData | null>(null);
-  const [generationResetSignal, setGenerationResetSignal] = useState(0);
-  const [targetSearch, setTargetSearch] = useState("");
-  const [targetOwnerPrefix, setTargetOwnerPrefix] = useState("");
-  const [targetFilter, setTargetFilter] = useState<TargetFilter>("all");
-  const [targetSort, setTargetSort] = useState<TargetSortState>({ key: "name", direction: "asc" });
+  const [generationResetSignal, setGenerationResetSignal] = useWorkspaceState("generationResetSignal", 0);
+  const [targetSearch, setTargetSearch] = useWorkspaceState("targetSearch", "");
+  const [targetOwnerPrefix, setTargetOwnerPrefix] = useWorkspaceState("targetOwnerPrefix", "");
+  const [targetFilter, setTargetFilter] = useWorkspaceState<TargetFilter>("targetFilter", "all");
+  const [targetSort, setTargetSort] = useWorkspaceState<TargetSortState>("targetSort", { key: "name", direction: "asc" });
   const debouncedTargetSearch = useDebouncedValue(targetSearch, 250);
   const debouncedTargetOwnerPrefix = useDebouncedValue(targetOwnerPrefix, 250);
   const objectsQuery = useDbAdminObjects(
@@ -173,6 +175,13 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
   );
   const firstObjectPage = objectsQuery.data?.pages[0];
   const totalTargetCount = dbAdminObjectCountsFromPage(firstObjectPage, objectItems).totalCount;
+  const validationSequence = useRef(0);
+  const selectionSignature = JSON.stringify([...selectedKeys].sort());
+  const currentSelection = useRef(selectionSignature);
+  currentSelection.current = selectionSignature;
+  useEffect(() => () => { validationSequence.current += 1; }, []);
+  const [validated, setValidated] = useState(false);
+  const [checkedAt, setCheckedAt] = useState("");
   const [loading, setLoading] = useState("");
   const [message, setMessage] = useState("");
   const [schemaRefreshJobId, setSchemaRefreshJobId] = useState("");
@@ -318,6 +327,7 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
     setSelectedKeys((current) =>
       current.includes(key) ? current.filter((item) => item !== key) : [...current, key]
     );
+    setValidated(false);
     setDetails([]);
     setRefreshedSampleText(null);
     setGenerated(null);
@@ -341,6 +351,7 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
       setSelectedKeys(selectedKeys.filter((key) => !targetKeySet.has(key)));
       setMessage("");
     }
+    setValidated(false);
     setDetails([]);
     setRefreshedSampleText(null);
     setGenerated(null);
@@ -353,7 +364,7 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
     }));
   };
 
-  const fetchDetails = async () => {
+  const fetchDetails = async (preserveWork = false) => {
     if (selectedTargets.length === 0) {
       setMessage(t("metadataSql.error.noTarget"));
       return;
@@ -362,7 +373,10 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
       setMessage(t("metadataSql.error.targetLimit", { limit: METADATA_TARGET_LIMIT }));
       return;
     }
-    setActivePanel("input");
+    const sequence = ++validationSequence.current;
+    const validatingSelection = selectionSignature;
+    if (!preserveWork) setActivePanel("input");
+    setValidated(false);
     setLoading("details");
     setMessage("");
     try {
@@ -381,16 +395,23 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
         }));
         nextDetails.push(...batchDetails);
       }
+      if (sequence !== validationSequence.current || validatingSelection !== currentSelection.current) return;
       setDetails(nextDetails);
-      setRefreshedSampleText(null);
-      setGenerated(null);
-      toast.success(t("metadataSql.toast.detailsLoaded", { count: nextDetails.length }));
+      setValidated(true);
+      setCheckedAt(new Date().toISOString());
+      if (!preserveWork) { setRefreshedSampleText(null); setGenerated(null); }
+      if (!preserveWork) toast.success(t("metadataSql.toast.detailsLoaded", { count: nextDetails.length }));
     } catch (err) {
+      if (sequence !== validationSequence.current || validatingSelection !== currentSelection.current) return;
       setMessage(err instanceof Error ? err.message : t("metadataSql.error.details"));
     } finally {
-      setLoading("");
+      if (sequence === validationSequence.current) setLoading("");
     }
   };
+
+  useWorkspaceActivation(() => {
+    if (selectedTargets.length > 0) void fetchDetails(true);
+  });
 
   const generateSql = async () => {
     if (selectedTargets.length === 0) {
@@ -476,6 +497,15 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
           },
         ]}
       />
+      {selectedTargets.length > 0 && (checkedAt || activePanel !== "targets") ? (
+        <div className="px-4 pb-3 lg:px-8">
+          <Banner severity={validated ? "info" : "warning"} action={
+            <Button variant="secondary" size="sm" disabled={Boolean(loading)} onClick={() => void fetchDetails(true)}>{t("workspace.refresh")}</Button>
+          }>
+            {t(checkedAt ? "workspace.snapshot" : "workspace.unverified")}{checkedAt ? ` (${formatDateTime(checkedAt)})` : ""}
+          </Banner>
+        </div>
+      ) : null}
       <main className="grid gap-4 p-4 lg:p-8">
         <PageNotice
           notice={
@@ -610,6 +640,8 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
             pageId={pageId}
             mode={mode}
             generated={generated}
+            executionBlocked={selectedTargets.length > 0 && !validated}
+            draftScope={selectionSignature}
             loading={loading === "generate"}
             policy={policy}
             resetSignal={generationResetSignal}
@@ -979,6 +1011,8 @@ function MetadataExecutePanel({
   pageId,
   mode,
   generated,
+  executionBlocked,
+  draftScope,
   loading,
   policy,
   resetSignal,
@@ -990,6 +1024,8 @@ function MetadataExecutePanel({
   loading: boolean;
   policy: DbAdminStatementPolicy;
   resetSignal: number;
+  executionBlocked: boolean;
+  draftScope: string;
   onExecuted: (result: DbAdminExecuteData) => void | Promise<void>;
 }) {
   return (
@@ -1026,13 +1062,15 @@ function MetadataExecutePanel({
 
           <StatementRunnerCard
             policy={policy}
+            executionBlocked={executionBlocked}
+            draftScope={draftScope}
             title={t(mode === "comment" ? "metadataSql.comment.runner" : "metadataSql.annotation.runner")}
             placeholder={t(
               mode === "comment"
                 ? "metadataSql.comment.placeholder"
                 : "metadataSql.annotation.placeholder"
             )}
-            initialSql={generated?.sql ?? ""}
+            initialSql={generated?.sql}
             resetSignal={resetSignal}
             executeOnly
             framed={false}

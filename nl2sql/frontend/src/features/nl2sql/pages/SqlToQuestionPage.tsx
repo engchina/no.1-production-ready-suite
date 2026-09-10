@@ -1,3 +1,4 @@
+import { useWorkspaceState, useWorkspaceRevalidation, useWorkspaceActivation, WorkspaceResultNotice } from "@/components/WorkspaceState";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowRightLeft, BookOpen, Database, FileText, RefreshCw } from "lucide-react";
 
@@ -40,16 +41,18 @@ import type {
 type SqlToQuestionPanel = "input" | "structure" | "result";
 
 export function SqlToQuestionPage() {
-  const [activePanel, setActivePanel] = useState<SqlToQuestionPanel>("input");
+  useWorkspaceRevalidation();
+  const [activePanel, setActivePanel] = useWorkspaceState<SqlToQuestionPanel>("activePanel", "input");
   const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
   const [selectedProfile, setSelectedProfile] = useState<ProfileUsageContext | null>(null);
   const [schemaTables, setSchemaTables] = useState<SchemaTable[]>([]);
-  const [selectedProfileId, setSelectedProfileId] = useState("");
-  const [sql, setSql] = useState("");
-  const [useGlossary, setUseGlossary] = useState(false);
+  const [selectedProfileId, setSelectedProfileId] = useWorkspaceState("selectedProfileId", "");
+  const [sql, setSql] = useWorkspaceState(`sql:${selectedProfileId}`, "");
+  const [useGlossary, setUseGlossary] = useWorkspaceState("useGlossary", false);
   const [structureText, setStructureText] = useState("");
   const [structureItems, setStructureItems] = useState<Nl2SqlLogicalStructureItem[]>([]);
   const [reverse, setReverse] = useState<ReverseSqlData | null>(null);
+  useEffect(() => { setReverse(null); setStructureText(""); setStructureItems([]); }, [selectedProfileId]);
   const [loading, setLoading] = useState(false);
   const [reverseLoading, setReverseLoading] = useState(false);
   const [loadError, setLoadError] = useState("");
@@ -73,9 +76,7 @@ export function SqlToQuestionPage() {
         if (signal.aborted || sequence !== loadSequence.current) return;
         setProfiles(profilePage.items);
         setSelectedProfileId((current) =>
-          profilePage.items.some((profile) => profile.id === current)
-            ? current
-            : (profilePage.items[0]?.id ?? "")
+          current || profilePage.items[0]?.id || ""
         );
         setReferenceRefreshVersion((current) => current + 1);
       });
@@ -144,6 +145,11 @@ export function SqlToQuestionPage() {
     });
   }, [referenceRefreshVersion, runScopedRequest, selectedProfileId]);
 
+  const referenceVisited = useRef(false);
+  useWorkspaceActivation(() => {
+    if (referenceVisited.current) void loadReferenceData();
+    referenceVisited.current = true;
+  });
   useEffect(() => {
     void loadReferenceData();
     return () => {
@@ -402,6 +408,7 @@ export function SqlToQuestionPage() {
           />
           {reverse ? (
             <section className="grid content-start gap-3 text-sm">
+              <WorkspaceResultNotice result={reverse} inputSignature={JSON.stringify([selectedProfileId, sql, useGlossary])} />
               <div className="flex flex-wrap gap-2">
                 <StatusBadge variant="neutral" label={reverse.source ?? "deterministic"} />
                 {useGlossary && <StatusBadge variant="info" label={t("sqlToQuestion.glossaryApplied")} />}

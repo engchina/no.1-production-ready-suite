@@ -50,7 +50,7 @@ test("DDL/comment/annotation runners expose a shared clear action that resets gu
   );
   assert.match(
     runner,
-    /<ClearActionButton[\s\S]*label=\{t\("dbAdmin\.runner\.clear"\)\}[\s\S]*matchButtonHeight[\s\S]*disabled=\{!canClearRunner \|\| loading\}[\s\S]*onClick=\{clearRunner\}/u,
+    /<ClearActionButton[\s\S]*label=\{t\("workspace\.clearInput"\)\}[\s\S]*matchButtonHeight[\s\S]*disabled=\{!canClearRunner \|\| loading\}[\s\S]*onClick=\{clearRunner\}/u,
   );
 });
 

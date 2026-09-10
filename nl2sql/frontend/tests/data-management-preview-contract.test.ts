@@ -127,7 +127,7 @@ test("データプレビューと COMMENT/ANNOTATION は name_comment scope を�
 
 test("データ管理プレビューは取得件数上限を指定でき、詳細条件入力を出さない", () => {
   assert.match(dataManagementSource, /const DEFAULT_DATA_PREVIEW_ROW_LIMIT = DEFAULT_SQL_ROW_LIMIT/u);
-  assert.match(dataManagementSource, /useState\(String\(DEFAULT_DATA_PREVIEW_ROW_LIMIT\)\)/u);
+  assert.match(dataManagementSource, /useWorkspaceState\("previewRowLimitInput", String\(DEFAULT_DATA_PREVIEW_ROW_LIMIT\)\)/u);
   assert.match(dataManagementSource, /parseSqlRowLimit\(previewRowLimitInput\)/u);
   assert.match(dataManagementSource, /limit: rowLimit/u);
   assert.match(dataManagementSource, /<RowLimitField/u);

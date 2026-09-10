@@ -2616,7 +2616,7 @@ for (const scenario of metadataScenarios) {
     await expectSingleLine(grid.getByRole("columnheader", { name: /種類/ }).locator("span").first());
     await expectSingleLine(grid.getByRole("columnheader", { name: /所有者/ }).locator("span").first());
     await expectSingleLine(grid.getByText("META_TABLE_01"));
-    await expectSingleLine(page.getByRole("button", { name: "情報を取得" }).locator("span").first());
+    await expectSingleLine(page.getByRole("button", { name: "情報を取得", exact: true }).locator("span").first());
 
     const scroll = await page.getByTestId("db-admin-object-list").evaluate((node) => ({
       internalWidthStable: node.scrollWidth >= node.clientWidth,

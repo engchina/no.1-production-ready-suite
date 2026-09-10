@@ -1,3 +1,4 @@
+import { useWorkspaceState, useWorkspaceActivation } from "@/components/WorkspaceState";
 import {
   useCallback,
   useEffect,
@@ -60,7 +61,7 @@ export function useDbObjectDetailRequest({
   loadErrorMessage,
   timeoutErrorMessage,
 }: DbObjectDetailRequestOptions): DbObjectDetailRequestState {
-  const [selectedName, setSelectedName] = useState("");
+  const [selectedName, setSelectedName] = useWorkspaceState(`detail:${collectionPath}`, "");
   const [detail, setDetail] = useState<DbAdminObjectDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [ddlLoading, setDdlLoading] = useState(false);
@@ -103,7 +104,7 @@ export function useDbObjectDetailRequest({
       const controller = new AbortController();
       controllerRef.current = controller;
       setSelectedName(name);
-      setDetail(null);
+      setDetail((current) => current && (current.qualified_name || `${current.owner}.${current.name}`) === name ? current : null);
       setError("");
       setDdlError("");
       setLoading(true);
@@ -203,6 +204,8 @@ export function useDbObjectDetailRequest({
   );
 
   const requestVersion = useCallback(() => sequenceRef.current, []);
+
+  useWorkspaceActivation(() => { if (selectedName) void load(selectedName); });
 
   return {
     selectedName,

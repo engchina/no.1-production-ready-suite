@@ -1,3 +1,4 @@
+import { useWorkspaceState, useResetExecutionConsent } from "@/components/WorkspaceState";
 import { Button } from "@/components/ui/button";
 import { ClearActionButton } from "@/components/ui/clear-action-button";
 import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
@@ -5,6 +6,7 @@ import {
   useEffect,
   useId,
   useMemo,
+  useRef,
   useState,
   type KeyboardEvent,
   type ReactNode,
@@ -909,6 +911,8 @@ export function StatementRunnerCard({
   progress,
   confirmationTitle,
   footerProcessing,
+  executionBlocked = false,
+  draftScope = "",
   executeOnly = false,
   framed = true,
   onExecuted,
@@ -922,11 +926,13 @@ export function StatementRunnerCard({
   progress?: (state: { hasSql: boolean; isConfirmed: boolean; canRun: boolean }) => ReactNode;
   confirmationTitle?: string;
   footerProcessing?: ReactNode;
+  executionBlocked?: boolean;
+  draftScope?: string;
   executeOnly?: boolean;
   framed?: boolean;
   onExecuted?: (result: DbAdminExecuteData) => void | Promise<void>;
 }) {
-  const [sql, setSql] = useState("");
+  const [sql, setSql] = useWorkspaceState(`runner-${policy}-${draftScope}-sql`, initialSql ?? "");
   const [confirmation, setConfirmation] = useState("");
   const [result, setResult] = useState<DbAdminExecuteData | null>(null);
   const [loading, setLoading] = useState(false);
@@ -934,12 +940,18 @@ export function StatementRunnerCard({
   const [sqlFileResetSignal, setSqlFileResetSignal] = useState(0);
   const [executionRun, setExecutionRun] = useState<DbAdminExecutionRunState | null>(null);
 
+  useResetExecutionConsent(() => setConfirmation(""), JSON.stringify([sql, resetSignal, executionBlocked]));
+  const [appliedRevision, setAppliedRevision] = useWorkspaceState(`runner-${policy}-${draftScope}-revision`, String(resetSignal ?? ""));
+  const previousInitialSql = useRef({ initialSql, resetSignal });
   useEffect(() => {
+    if (appliedRevision === String(resetSignal ?? "") && previousInitialSql.current.initialSql === initialSql && previousInitialSql.current.resetSignal === resetSignal) return;
+    setAppliedRevision(String(resetSignal ?? ""));
+    previousInitialSql.current = { initialSql, resetSignal };
     if (initialSql !== undefined) setSql(initialSql);
   }, [initialSql, resetSignal]);
 
   const run = async () => {
-    if (!sql.trim()) return;
+    if (!sql.trim() || executionBlocked) return;
     if (!confirmation.trim()) return;
     const startedAt = Date.now();
     const operationKey = `statement-runner-${policy}-${startedAt}`;
@@ -1016,7 +1028,7 @@ export function StatementRunnerCard({
       size="lg"
       className="w-full sm:w-auto"
       loading={loading}
-      disabled={!canRun}
+      disabled={!canRun || executionBlocked}
       onClick={() => void run()}
     >
       <Play size={15} aria-hidden="true" />
@@ -1036,7 +1048,7 @@ export function StatementRunnerCard({
         <>
           {runButton}
           <ClearActionButton
-            label={t("dbAdmin.runner.clear")}
+            label={t("workspace.clearInput")}
             matchButtonHeight
             size="lg"
             className="w-full sm:w-auto"
@@ -1087,7 +1099,7 @@ export function StatementRunnerCard({
           }}
         >
           <X size={15} aria-hidden="true" />
-          <span>{t("dbAdmin.runner.clear")}</span>
+          <span>{t("workspace.clearInput")}</span>
         </Button>
       </div>
       <div className="grid gap-3">
@@ -1106,6 +1118,7 @@ export function StatementRunnerCard({
         <ExecutionActivityPanel
           status={executionRun.status}
           label={executionActivityLabel(executionRun.status)}
+          inputSignature={sql}
           operationKey={executionRun.operationKey}
           startedAt={executionRun.startedAt}
           finishedAt={executionRun.finishedAt}
