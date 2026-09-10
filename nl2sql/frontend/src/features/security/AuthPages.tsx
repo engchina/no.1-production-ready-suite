@@ -131,7 +131,7 @@ export function LoginPage() {
               />
             </div>
             {/* 認証の主導線はモバイルでも 44px のタッチ領域を確保する。 */}
-            <Button className="h-11 w-full" loading={busy} type="submit">
+            <Button size="lg" touchTarget className="w-full" loading={busy} type="submit">
               <LogIn size={16} aria-hidden />
               {t("auth.login.submit")}
             </Button>
@@ -219,11 +219,11 @@ export function PasswordChangePage() {
           <CardContent className="space-y-5">
             <Banner severity="warning">{t("auth.password.notAllowed")}</Banner>
             <div className="grid gap-2 sm:grid-cols-2">
-              <Button className="h-11 w-full whitespace-nowrap" variant="secondary" onClick={handleBack}>
+              <Button size="lg" touchTarget className="w-full whitespace-nowrap" variant="secondary" onClick={handleBack}>
                 <ArrowLeft size={16} aria-hidden />
                 {t("auth.password.back")}
               </Button>
-              <Button className="h-11 w-full whitespace-nowrap" onClick={handleLogout}>
+              <Button size="lg" touchTarget className="w-full whitespace-nowrap" onClick={handleLogout}>
                 <LogOut size={16} aria-hidden />
                 {t("auth.sidebar.logout")}
               </Button>
@@ -268,7 +268,7 @@ export function PasswordChangePage() {
             <div className="border-t border-border pt-4">
               <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.35fr)]">
                 <Button
-                  className="h-11 w-full whitespace-nowrap"
+                  size="lg" touchTarget className="w-full whitespace-nowrap"
                   disabled={busy}
                   type="button"
                   variant="secondary"
@@ -277,7 +277,7 @@ export function PasswordChangePage() {
                   <ArrowLeft size={16} aria-hidden />
                   {auth.user?.force_password_change ? t("auth.password.backToLogin") : t("auth.password.back")}
                 </Button>
-                <Button className="h-11 w-full whitespace-nowrap" loading={busy} type="submit">
+                <Button size="lg" touchTarget className="w-full whitespace-nowrap" loading={busy} type="submit">
                   <KeyRound size={16} aria-hidden />
                   {t("auth.password.submit")}
                 </Button>

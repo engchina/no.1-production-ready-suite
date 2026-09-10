@@ -145,18 +145,18 @@ function HistorySortButton({
     : t("history.sort.inactive");
   const SortIcon = active ? (sort.direction === "asc" ? ArrowUp : ArrowDown) : ArrowDownUp;
   return (
-    <button
+    <Button
+      variant="ghost"
+      size="sm"
+      data-button-layout="sort"
       type="button"
       aria-label={t("history.sort.button", { label, direction })}
       aria-pressed={active}
-      className={`inline-flex min-h-11 items-center gap-1.5 rounded-md px-2 text-left text-xs font-semibold transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 sm:min-h-9 ${
-        active ? "bg-primary/10 text-primary" : "text-muted hover:bg-background hover:text-foreground"
-      }`}
       onClick={() => onToggle(sortKey)}
     >
       <span>{label}</span>
       <SortIcon size={13} aria-hidden="true" />
-    </button>
+    </Button>
   );
 }
 

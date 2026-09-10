@@ -20,7 +20,7 @@ const sources = tsxFiles(sourceRoot).map((url) => ({
 
 test("business pages do not create raw alert live regions", () => {
   const violations = sources.flatMap(({ path, source }) =>
-    /role\s*=\s*(?:"alert"|\{[^}]*["']alert["'][^}]*\})/gu.test(source) ? [path] : []
+    path !== "src/components/StateViews.tsx" && /role\s*=\s*(?:"alert"|\{[^}]*["']alert["'][^}]*\})/gu.test(source) ? [path] : []
   );
   assert.deepEqual(
     violations,
@@ -38,7 +38,7 @@ test("handwritten danger surfaces stay limited to structured state and field con
     ["src/features/nl2sql/components/DbAdminShared.tsx", 2],
     ["src/features/nl2sql/components/WorkflowProgressStrip.tsx", 1],
     ["src/features/nl2sql/pages/DataManagementPage.tsx", 1],
-    ["src/features/nl2sql/pages/EvaluationPage.tsx", 3],
+    ["src/components/StateViews.tsx", 1],
     ["src/features/security/SecurityDeepSecPage.tsx", 2],
   ]);
   const dangerSurface = /(?:border-danger[^"'\n]*bg-danger|bg-danger[^"'\n]*border-danger)/gu;

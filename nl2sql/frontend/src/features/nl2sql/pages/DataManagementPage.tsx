@@ -1915,7 +1915,7 @@ function CsvUploadWorkspace({
               <Button
                 type="button"
                 variant={mode === "truncate_insert" ? "danger" : "primary"}
-                size="sm"
+                size="lg"
                 className="w-full sm:w-auto"
                 loading={loading}
                 disabled={!canUpload}
@@ -1924,7 +1924,7 @@ function CsvUploadWorkspace({
                 <Upload size={15} aria-hidden="true" />
                 <span>{t("dataMgmt.csv.upload")}</span>
               </Button>
-              <ClearActionButton
+              <ClearActionButton size="lg"
                 label={t("dbAdmin.runner.clear")}
                 matchButtonHeight
                 className="w-full sm:w-auto"
@@ -2371,7 +2371,7 @@ function SyntheticWorkspace({
                 <Button
                   type="button"
                   variant="danger"
-                  size="sm"
+                  size="lg"
                   className="w-full sm:w-auto"
                   loading={submitting}
                   disabled={!canGenerateSyntheticData || dbProfileRefreshRequired || dbProfileRefreshing}
@@ -2380,7 +2380,7 @@ function SyntheticWorkspace({
                   <Database size={15} aria-hidden="true" />
                   <span>{t("dataTools.syntheticData.generate")}</span>
                 </Button>
-                <ClearActionButton
+                <ClearActionButton size="lg"
                   label={t("dbAdmin.runner.clear")}
                   matchButtonHeight
                   className="w-full sm:w-auto"

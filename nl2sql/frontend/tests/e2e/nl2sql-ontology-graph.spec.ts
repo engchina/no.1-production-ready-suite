@@ -586,6 +586,7 @@ test("グラフはカード表示 + 検索 + 詳細ノードの折畳ができ�
   });
   await mockApi(page);
   await page.goto("/ontology-build?profile=default");
+  await page.getByRole("button", { name: "情報を取得", exact: true }).click();
   await expect(page.locator("html")).toHaveClass(/dark/);
 
   const playground = page.getByRole("region", { name: "質問のオントロジー接地確認用グラフ" });
@@ -649,14 +650,23 @@ test("グラフはカード表示 + 検索 + 詳細ノードの折畳ができ�
   await playground.getByTestId("ontology-graph-search").fill("");
   await expect(orderCard).toHaveCSS("opacity", "1");
 
-  await playground.screenshot({
-    path: testInfo.outputPath(`ontology-graph-dark-${testInfo.project.name}.png`),
-  });
+  const modeButtons = playground.getByTestId("ontology-graph-view-mode").getByRole("button");
+  for (const button of await modeButtons.all()) {
+    const geometry = await button.evaluate(node => ({
+      right: node.getBoundingClientRect().right,
+      clipped: node.scrollWidth > node.clientWidth,
+      viewport: window.innerWidth,
+    }));
+    expect(geometry.right).toBeLessThanOrEqual(geometry.viewport);
+    expect(geometry.clipped).toBe(false);
+  }
+  await page.screenshot({ path: testInfo.outputPath(`ontology-graph-dark-${testInfo.project.name}.png`) });
 });
 
 test("同じ物理名の業務概念と物理表をカード上で区別できる", async ({ page }) => {
   await mockApi(page, { ontologyGraph: employeeOntologyGraph });
   await page.goto("/ontology-build?profile=default");
+  await page.getByRole("button", { name: "情報を取得", exact: true }).click();
 
   const playground = page.getByRole("region", { name: "質問のオントロジー接地確認用グラフ" });
   await playground.scrollIntoViewIfNeeded();
@@ -686,6 +696,7 @@ test("同じ物理名の業務概念と物理表をカード上で区別でき�
 test("質問接地グラフで選択した物理オブジェクトの ER 詳細を段階表示する", async ({ page }) => {
   await mockApi(page, { ontologyGraph: erDetailOntologyGraph });
   await page.goto("/ontology-build?profile=default");
+  await page.getByRole("button", { name: "情報を取得", exact: true }).click();
 
   const playground = page.getByRole("region", { name: "質問のオントロジー接地確認用グラフ" });
   await playground.scrollIntoViewIfNeeded();
@@ -730,6 +741,7 @@ test("質問を接地すると分類とグラフ強調が表示され、入力�
   await page.setViewportSize({ width: 375, height: 812 });
   await mockApi(page);
   await page.goto("/ontology-build?profile=default");
+  await page.getByRole("button", { name: "情報を取得", exact: true }).click();
 
   const playground = page.getByRole("region", { name: "質問のオントロジー接地確認用グラフ" });
   await playground.scrollIntoViewIfNeeded();
@@ -797,6 +809,7 @@ test("質問を接地すると分類とグラフ強調が表示され、入力�
 test("選択候補一覧は標準の最大表示件数で縦スクロールする", async ({ page }, testInfo) => {
   await mockApi(page, { ontologyGraph: nodePickerOverflowGraph });
   await page.goto("/ontology-build?profile=default");
+  await page.getByRole("button", { name: "情報を取得", exact: true }).click();
 
   const playground = page.getByRole("region", { name: "質問のオントロジー接地確認用グラフ" });
   await playground.scrollIntoViewIfNeeded();
@@ -832,6 +845,7 @@ test("選択候補一覧は標準の最大表示件数で縦スクロールす�
 test("公開済み Ontology がない場合は準備手順を表示する", async ({ page }) => {
   await mockApi(page, { ontologyGraph: { nodes: [], edges: [] } });
   await page.goto("/ontology-build?profile=default");
+  await page.getByRole("button", { name: "情報を取得", exact: true }).click();
 
   const playground = page.getByRole("region", { name: "質問のオントロジー接地確認用グラフ" });
   await playground.scrollIntoViewIfNeeded();
@@ -849,6 +863,7 @@ test("Ontology グラフはデスクトップとモバイルで主要ノード�
 }) => {
   await mockApi(page);
   await page.goto("/ontology-build?profile=default");
+  await page.getByRole("button", { name: "情報を取得", exact: true }).click();
 
   const playground = page.getByRole("region", { name: "質問のオントロジー接地確認用グラフ" });
   await playground.scrollIntoViewIfNeeded();
@@ -867,6 +882,7 @@ test("Ontology グラフはデスクトップとモバイルで主要ノード�
 test("業務概念→物理表の対応エッジは縦ハンドルで自己ループしない + FK はカーディナリティ常時表示", async ({ page }) => {
   await mockApi(page, { ontologyGraph: employeeOntologyGraph });
   await page.goto("/ontology-build?profile=default");
+  await page.getByRole("button", { name: "情報を取得", exact: true }).click();
   const playground = page.getByRole("region", { name: "質問のオントロジー接地確認用グラフ" });
   await playground.scrollIntoViewIfNeeded();
   await openGraphIfCollapsed(page, playground);
@@ -892,6 +908,7 @@ test("業務概念→物理表の対応エッジは縦ハンドルで自己ル�
 test("FK エッジは hover なしでカーディナリティ短縮ラベルを常時表示する", async ({ page }) => {
   await mockApi(page, { ontologyGraph: erDetailOntologyGraph });
   await page.goto("/ontology-build?profile=default");
+  await page.getByRole("button", { name: "情報を取得", exact: true }).click();
   const playground = page.getByRole("region", { name: "質問のオントロジー接地確認用グラフ" });
   await playground.scrollIntoViewIfNeeded();
   await openGraphIfCollapsed(page, playground);
@@ -1014,6 +1031,7 @@ test("schema→表エッジは縦 smoothstep で貫通せず、並行エッジ�
 }) => {
   await mockApi(page, { ontologyGraph: schemaContainsOntologyGraph });
   await page.goto("/ontology-build?profile=default");
+  await page.getByRole("button", { name: "情報を取得", exact: true }).click();
   const playground = page.getByRole("region", { name: "質問のオントロジー接地確認用グラフ" });
   await playground.scrollIntoViewIfNeeded();
   await openGraphIfCollapsed(page, playground);
@@ -1070,6 +1088,7 @@ test("schema→表エッジは縦 smoothstep で貫通せず、並行エッジ�
 test("Join 条件を持たない関係カードは空枠ではなく物理対応名を表示する", async ({ page }) => {
   await mockApi(page, { ontologyGraph: schemaContainsOntologyGraph });
   await page.goto("/ontology-build?profile=default");
+  await page.getByRole("button", { name: "情報を取得", exact: true }).click();
   const playground = page.getByRole("region", { name: "質問のオントロジー接地確認用グラフ" });
   await playground.scrollIntoViewIfNeeded();
 
@@ -1096,6 +1115,7 @@ test("ノードはドラッグで移動でき、リセットで決定論レイ�
   test.skip(testInfo.project.name === "mobile-375", "ドラッグ検証はデスクトップのみ");
   await mockApi(page, { ontologyGraph: employeeOntologyGraph });
   await page.goto("/ontology-build?profile=default");
+  await page.getByRole("button", { name: "情報を取得", exact: true }).click();
   const playground = page.getByRole("region", { name: "質問のオントロジー接地確認用グラフ" });
   await playground.scrollIntoViewIfNeeded();
   await openGraphIfCollapsed(page, playground);
@@ -1144,6 +1164,7 @@ test("ノードを hover してもエッジが 1 フレームも消えない(点
   test.skip(testInfo.project.name === "mobile-375", "hover 検証はマウス前提のためデスクトップのみ");
   await mockApi(page, { ontologyGraph: schemaContainsOntologyGraph });
   await page.goto("/ontology-build?profile=default");
+  await page.getByRole("button", { name: "情報を取得", exact: true }).click();
   const playground = page.getByRole("region", { name: "質問のオントロジー接地確認用グラフ" });
   await playground.scrollIntoViewIfNeeded();
   await openGraphIfCollapsed(page, playground);
@@ -1206,6 +1227,7 @@ test("サーバ検索結果のヒット一覧は最大高さを超えると縦�
     })
   );
   await page.goto("/ontology-build?profile=default");
+  await page.getByRole("button", { name: "情報を取得", exact: true }).click();
   const playground = page.getByRole("region", { name: "質問のオントロジー接地確認用グラフ" });
   await playground.scrollIntoViewIfNeeded();
   await playground.getByTestId("ontology-playground-question").fill("従業員");

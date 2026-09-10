@@ -459,7 +459,7 @@ test("詳細表はデスクトップ8行・モバイル5行の高さに収め、
       rootFontSize,
     };
   });
-  const expectedMaxHeight = exactRows.rootFontSize * (2.5 + 3.5 * expectedRows);
+  const expectedMaxHeight = (await scrollRegion.evaluate(() => window.matchMedia("(max-width: 639px), (pointer: coarse)").matches) ? 47 : 35) + exactRows.rootFontSize * 3.5 * expectedRows;
   expect(exactRows.maxHeight).toBeGreaterThanOrEqual(expectedMaxHeight - 2);
   expect(exactRows.maxHeight).toBeLessThanOrEqual(expectedMaxHeight + 2);
   expect(exactRows.scrollHeight).toBeLessThanOrEqual(exactRows.clientHeight + 2);

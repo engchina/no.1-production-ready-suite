@@ -27,7 +27,7 @@ test("ConfirmDialog keeps the compact alert layout with DB object delete dialog 
   assert.match(source, /max-w-md overflow-auto rounded-md border border-border bg-card shadow-xl/u);
   assert.match(source, /flex items-start gap-3 bg-card px-5 pt-5/u);
   assert.match(source, /rounded-full border bg-background \$\{iconClass\}/u);
-  assert.match(source, /mt-5 flex justify-end gap-2 border-t border-border bg-background px-5 py-4/u);
+  assert.match(source, /mt-5 flex justify-end gap-\[8px\] border-t border-border bg-background px-5 py-4/u);
   assert.match(source, /tone === "danger" \? "danger" : "primary"/u);
   assert.match(source, /const Icon = toneIcon\[tone\]/u);
   assert.match(source, /<Button variant="secondary" size="sm" onClick=\{onCancel\}>/u);

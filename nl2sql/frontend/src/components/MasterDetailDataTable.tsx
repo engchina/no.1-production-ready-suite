@@ -1,3 +1,4 @@
+import { Button } from "@/components/ui/button";
 import type { MouseEvent, ReactNode } from "react";
 import { ChevronDown } from "lucide-react";
 
@@ -119,13 +120,11 @@ export function MasterDetailDataTable<T>({
                     )}
                   >
                     {column.sortable && onSortChange ? (
-                      <button
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        data-button-layout="sort"
                         type="button"
-                        className={cn(
-                          "inline-flex items-center gap-1 font-semibold text-foreground hover:text-foreground focus:outline-none focus:ring-2 focus:ring-ring/40",
-                          column.align === "right" && "ml-auto",
-                          column.align === "center" && "mx-auto"
-                        )}
                         onClick={() => onSortChange(nextSort(sort, column.key))}
                       >
                         <span>{column.header}</span>
@@ -138,7 +137,7 @@ export function MasterDetailDataTable<T>({
                           )}
                           aria-hidden="true"
                         />
-                      </button>
+                      </Button>
                     ) : (
                       column.header
                     )}

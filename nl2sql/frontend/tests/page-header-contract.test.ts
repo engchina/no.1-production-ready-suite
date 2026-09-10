@@ -70,7 +70,7 @@ test("PageAction descriptor と固定優先順位をローカル実装が保持�
 });
 
 test("compact 操作メニューは lg 未満で 44px とキーボード・ARIA 契約を持つ", () => {
-  assert.match(source, /h-\[44px\]/u);
+  assert.match(source, /touchTarget=\{mobile \|\| menuItem\}/u);
   assert.match(source, /lg:flex/u);
   assert.match(source, /lg:hidden/u);
   assert.match(source, /aria-expanded=\{menuOpen\}/u);

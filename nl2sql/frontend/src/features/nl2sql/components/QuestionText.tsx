@@ -1,3 +1,4 @@
+import { Button } from "@/components/ui/button";
 import { useMemo, useState } from "react";
 
 import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
@@ -85,15 +86,17 @@ export function QuestionText({
         {displayValue}
       </span>
       {canExpand ? (
-        <button
+        <Button
+          variant="ghost"
+          size="sm"
           type="button"
-          className="inline-flex min-h-8 w-fit items-center gap-1 rounded-md px-2 text-xs font-semibold text-primary underline-offset-2 transition-colors hover:bg-primary/10 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+          className="w-fit"
           aria-expanded={expanded}
           onClick={() => setExpanded((current) => !current)}
         >
           <span>{expanded ? t("nl2sql.questionText.collapse") : t("nl2sql.questionText.expand")}</span>
           <DisclosureChevron expanded={expanded} size={14} />
-        </button>
+        </Button>
       ) : null}
     </span>
   );

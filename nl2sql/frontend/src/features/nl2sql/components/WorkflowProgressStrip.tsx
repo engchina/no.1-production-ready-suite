@@ -208,7 +208,7 @@ export function WorkflowProgressStrip({
               type="button"
               variant="ghost"
               size="sm"
-              className="min-h-11 min-w-11 p-0 text-muted hover:text-foreground"
+              iconOnly
               aria-label={toggleLabel}
               aria-expanded={!collapsed}
               aria-controls={bodyId}

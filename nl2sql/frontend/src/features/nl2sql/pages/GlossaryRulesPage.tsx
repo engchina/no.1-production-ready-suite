@@ -1,10 +1,10 @@
+import { Pagination } from "@/components/Pagination";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { BookOpen, Download, RefreshCw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
   EmptyState,
-  Pagination,
   toast,
   usePagination,
 } from "@engchina/production-ready-ui";
@@ -277,7 +277,7 @@ function GlobalMaterialPanel({
           type="button"
           variant="secondary"
           size="sm"
-          className="min-h-11 md:self-end"
+          touchTarget className="md:self-end"
           loading={busy}
           onClick={onExport}
         >

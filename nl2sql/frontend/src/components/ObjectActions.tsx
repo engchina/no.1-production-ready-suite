@@ -110,6 +110,7 @@ function MenuItems({
             <Button
               type="button"
               role="menuitem"
+              tone={danger ? "danger" : "default"}
               size="sm"
               variant="ghost"
               loading={action.loading}
@@ -118,10 +119,7 @@ function MenuItems({
               data-testid={action.testId}
               data-entity-action-id={action.id}
               data-entity-action-tone={action.tone ?? "default"}
-              className={cn(
-                "h-[44px] w-full justify-start whitespace-nowrap px-3 text-left sm:h-8",
-                danger && "text-danger hover:bg-danger-bg hover:text-danger"
-              )}
+              className="w-full"
               onClick={(event) => {
                 event.stopPropagation();
                 onActionClick?.(event);
@@ -172,7 +170,7 @@ export function RowActionMenu({
         type="button"
         size="sm"
         variant="ghost"
-        className="h-9 w-9 px-0"
+        iconOnly
         loading={loading}
         disabled={disabled}
         aria-label={ariaLabel}
@@ -221,7 +219,7 @@ export function ObjectActionBar({
   return (
     <div
       ref={containerRef}
-      className="relative flex flex-col gap-2 sm:flex-row sm:flex-wrap xl:justify-end"
+      className="relative flex flex-col gap-[8px] sm:flex-row sm:flex-wrap xl:justify-end"
       role="group"
       aria-label={ariaLabel}
       data-testid={testId}

@@ -1038,7 +1038,7 @@ function ExecutableNl2SqlWorkbench() {
                       type="button"
                       variant="secondary"
                       size="md"
-                      className="min-h-11 shrink-0"
+                      className="shrink-0"
                       loading={detecting}
                       disabled={!question.trim() || active || !profileSelectionReady}
                       onClick={() => void detectProfile()}
@@ -1200,7 +1200,7 @@ function ExecutableNl2SqlWorkbench() {
                               type="button"
                               variant="secondary"
                               size="md"
-                              className="min-h-11"
+
                               disabled={!question.trim() || jobActive || !profileSelectionReady}
                               onClick={() => {
                                 setActionError("");
@@ -1227,7 +1227,7 @@ function ExecutableNl2SqlWorkbench() {
                               type="button"
                               variant="ghost"
                               size="md"
-                              className="min-h-11 w-full justify-between rounded-none px-3 text-left"
+                              data-button-layout="disclosure"
                               aria-expanded={selectAiAdvancedOpen}
                               aria-controls="select-ai-request-overrides"
                               onClick={() => setSelectAiAdvancedOpen((current) => !current)}
@@ -1275,7 +1275,7 @@ function ExecutableNl2SqlWorkbench() {
                                     type="button"
                                     variant="ghost"
                                     size="sm"
-                                    className="min-h-10 w-full justify-between rounded-none px-3 text-left"
+                                    data-button-layout="disclosure"
                                     aria-expanded={selectAiRolePanelOpen}
                                     aria-controls="select-ai-role-override"
                                     onClick={() => setSelectAiRoleAdvancedOpen((current) => !current)}
@@ -1416,7 +1416,7 @@ function ExecutableNl2SqlWorkbench() {
                         type="button"
                         variant="ghost"
                         size="md"
-                        className="min-h-11 w-full min-w-0 max-w-full justify-between rounded-none px-4 text-left"
+                        data-button-layout="disclosure"
                         aria-expanded={similarHistoryOpen}
                         aria-controls="nl2sql-similar-history"
                         onClick={() => setSimilarHistoryOpen((current) => !current)}

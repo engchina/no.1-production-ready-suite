@@ -1,3 +1,4 @@
+import { Pagination } from "@/components/Pagination";
 import {
   useEffect,
   useMemo,
@@ -20,7 +21,6 @@ import { Button } from "@/components/ui/button";
 import {
   Banner,
   EmptyState,
-  Pagination,
   Skeleton,
   toast,
   type DataTableColumn,
@@ -671,7 +671,7 @@ export function FeedbackManagementPage() {
                     type="button"
                     variant="secondary"
                     size="lg"
-                    className="h-[44px] w-full whitespace-nowrap sm:w-auto"
+                    touchTarget className="w-full whitespace-nowrap sm:w-auto"
                     loading={loading === "feedback"}
                     disabled={!profileName.trim()}
                     onClick={() => void refreshSelectAiFeedback()}
@@ -891,7 +891,7 @@ export function FeedbackManagementPage() {
                   type="submit"
                   variant="secondary"
                   size="lg"
-                  className="h-[44px] w-full whitespace-nowrap md:w-auto"
+                  touchTarget className="w-full whitespace-nowrap md:w-auto"
                   loading={loading === "app-feedback-load"}
                 >
                   <RefreshCw size={16} aria-hidden="true" />

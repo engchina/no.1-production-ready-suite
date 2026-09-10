@@ -90,5 +90,5 @@ test("危険操作は menu 内で tone と区切りを持つ", () => {
   assert.match(source, /data-entity-action-tone/u);
   assert.match(source, /danger &&/u);
   assert.match(source, /border-t border-border/u);
-  assert.match(source, /text-danger/u);
+  assert.match(source, /tone=/u);
 });

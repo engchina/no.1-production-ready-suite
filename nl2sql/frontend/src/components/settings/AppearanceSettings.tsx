@@ -1,4 +1,5 @@
-import { ToggleChip, type ThemePreference } from "@engchina/production-ready-ui";
+import { Button } from "@/components/ui/button";
+import { type ThemePreference } from "@engchina/production-ready-ui";
 
 import { PageHeader } from "@/components/PageHeader";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -33,13 +34,13 @@ export function AppearanceSettings() {
               data-testid="appearance-theme-toggle"
             >
               {THEME_OPTIONS.map((option) => (
-                <ToggleChip
+                <Button variant="secondary" size="md"
                   key={option.value}
-                  selected={theme === option.value}
+                  aria-pressed={theme === option.value}
                   onClick={() => setTheme(option.value)}
                 >
                   {t(option.labelKey)}
-                </ToggleChip>
+                </Button>
               ))}
             </div>
           </CardContent>

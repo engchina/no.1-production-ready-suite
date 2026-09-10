@@ -869,7 +869,7 @@ export function EvaluationPage() {
                               type="button"
                               size="sm"
                               variant="secondary"
-                              className="border-danger/30 text-danger hover:bg-danger/10 hover:text-danger focus-visible:ring-danger/30"
+                              tone="danger"
                               disabled={cancelJobMutation.isPending}
                               loading={
                                 cancelJobMutation.isPending &&
@@ -888,7 +888,7 @@ export function EvaluationPage() {
                             type="button"
                             size="sm"
                             variant="secondary"
-                            className="border-danger/30 text-danger hover:bg-danger/10 hover:text-danger focus-visible:ring-danger/30"
+                            tone="danger"
                             disabled={
                               !TERMINAL_STATUSES.has(job.status) ||
                               deleteJobMutation.isPending
@@ -1012,7 +1012,7 @@ function JobProgress({
             type="button"
             size="sm"
             variant="secondary"
-            className="border-danger/30 text-danger hover:bg-danger/10 hover:text-danger focus-visible:ring-danger/30"
+            tone="danger"
             loading={cancelling}
             disabled={cancelling}
             onClick={() => void onCancel(job)}

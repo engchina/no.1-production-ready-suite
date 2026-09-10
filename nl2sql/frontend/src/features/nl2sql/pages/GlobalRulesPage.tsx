@@ -1,10 +1,10 @@
+import { Pagination } from "@/components/Pagination";
 import { useEffect, useRef, useState } from "react";
 import { Download, Layers3, RefreshCw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
   EmptyState,
-  Pagination,
   toast,
   usePagination,
 } from "@engchina/production-ready-ui";
@@ -188,7 +188,7 @@ export function GlobalRulesPage() {
                 type="button"
                 variant="secondary"
                 size="sm"
-                className="min-h-11 md:self-end"
+                touchTarget className="md:self-end"
                 loading={busy}
                 onClick={() => void exportRules()}
               >

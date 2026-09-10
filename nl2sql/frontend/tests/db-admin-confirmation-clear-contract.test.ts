@@ -58,7 +58,7 @@ test("new guarded clear actions can opt in to same-row button height", () => {
   assert.match(clearActionButton, /matchButtonHeight\?: boolean/u);
   assert.match(clearActionButton, /matchButtonHeight = false/u);
   assert.match(clearActionButton, /size = "sm"/u);
-  assert.match(clearActionButton, /!matchButtonHeight && "h-\[44px\]"/u);
+  assert.match(clearActionButton, /touchTarget=\{!matchButtonHeight\}/u);
 });
 
 test("table import wizard clear action resets import form, result, and dropzone validation state", () => {
@@ -118,7 +118,7 @@ test("business profile clear action resets only the Oracle execution gate and jo
   assert.match(editor, /onOracleExecutionClear: \(\) => void/u);
   assert.match(
     editor,
-    /<ClearActionButton[\s\S]*label=\{t\("dbAdmin\.runner\.clear"\)\}[\s\S]*matchButtonHeight[\s\S]*size="md"[\s\S]*disabled=\{!canClearOracleExecution \|\| saving\}[\s\S]*onClick=\{onOracleExecutionClear\}/u,
+    /<ClearActionButton[\s\S]*label=\{t\("dbAdmin\.runner\.clear"\)\}[\s\S]*matchButtonHeight[\s\S]*size="lg"[\s\S]*disabled=\{!canClearOracleExecution \|\| saving\}[\s\S]*onClick=\{onOracleExecutionClear\}/u,
   );
   assert.match(profileManagementPage, /const canClearOracleExecution = Boolean\([\s\S]*oracleConfirmation[\s\S]*syncJobParam/u);
   assert.match(

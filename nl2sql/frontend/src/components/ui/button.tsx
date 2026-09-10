@@ -7,13 +7,19 @@ import {
 
 import { StableLoadingIcon } from "./stable-loading-icon";
 
-export type ButtonProps = BaseButtonProps;
+export type ButtonProps = BaseButtonProps & {
+  /** アイコンだけの操作。aria-label を必ず指定する。 */
+  iconOnly?: boolean;
+  /** 入力横・compact ヘッダーは desktop でも 44px に揃える。 */
+  touchTarget?: boolean;
+  /** 確認前の危険操作。塗りの danger と視覚的強度を区別する。 */
+  tone?: "default" | "danger";
+};
 
 const BUTTON_TEXT_LAYOUT_CLASSNAME = "leading-5";
 
 function sizeClass(size: ButtonProps["size"]) {
-  // 日本語テーマは root=14px。主操作は rem 換算で縮めず、mobile のタッチ領域も確保する。
-  return size === "lg" ? "h-[44px] sm:h-[40px]" : undefined;
+  return `nl2sql-button--${size ?? "md"}`;
 }
 
 function semanticVariantClass(variant: ButtonProps["variant"]) {
@@ -29,10 +35,18 @@ function semanticVariantClass(variant: ButtonProps["variant"]) {
   return undefined;
 }
 
-export function buttonVariants(options?: Parameters<typeof sharedButtonVariants>[0]) {
+type ButtonVariantOptions = NonNullable<Parameters<typeof sharedButtonVariants>[0]> &
+  Pick<ButtonProps, "iconOnly" | "touchTarget" | "tone">;
+
+export function buttonVariants(options?: ButtonVariantOptions) {
   return cn(
     sharedButtonVariants(options),
     BUTTON_TEXT_LAYOUT_CLASSNAME,
+    "nl2sql-button",
+    `nl2sql-button--${options?.variant ?? "primary"}`,
+    options?.iconOnly && "nl2sql-button--icon",
+    options?.touchTarget && "nl2sql-button--touch",
+    options?.tone === "danger" && "nl2sql-button--danger-tone",
     sizeClass(options?.size),
     semanticVariantClass(options?.variant),
     "disabled:border-border disabled:bg-disabled-bg disabled:text-disabled disabled:opacity-100"
@@ -44,7 +58,7 @@ export function buttonVariants(options?: Parameters<typeof sharedButtonVariants>
  * Defaulting to type="button" prevents accidental form submit/page scroll when
  * action buttons are placed inside forms. Explicit submit/reset types are kept.
  */
-export function Button({ type = "button", variant, size, className, ...props }: ButtonProps) {
+export function Button({ type = "button", variant, size, className, iconOnly, touchTarget, tone, ...props }: ButtonProps) {
   const { loading, disabled, children, ...buttonProps } = props;
 
   return (
@@ -53,10 +67,9 @@ export function Button({ type = "button", variant, size, className, ...props }: 
       variant={variant}
       size={size}
       disabled={disabled || loading}
+      aria-busy={loading || undefined}
       className={cn(
-        BUTTON_TEXT_LAYOUT_CLASSNAME,
-        sizeClass(size),
-        semanticVariantClass(variant),
+        buttonVariants({ variant, size, iconOnly, touchTarget, tone }),
         loading && "[&>svg:not([data-loading-icon])]:hidden",
         "disabled:border-border disabled:bg-disabled-bg disabled:text-disabled disabled:opacity-100",
         className

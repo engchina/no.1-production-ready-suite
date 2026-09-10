@@ -121,7 +121,7 @@ test("Grounding graph and file dropzones share the clear button implementation",
   assert.match(clearActionButton, /size = "sm"/u);
   assert.match(clearActionButton, /matchButtonHeight\?: boolean/u);
   assert.match(clearActionButton, /matchButtonHeight = false/u);
-  assert.match(clearActionButton, /!matchButtonHeight && "h-\[44px\]"/u);
+  assert.match(clearActionButton, /touchTarget=\{!matchButtonHeight\}/u);
   assert.match(clearActionButton, /"whitespace-nowrap"/u);
   assert.match(fileDropzone, /<ClearActionButton/u);
   assert.match(ontologyQueryPlayground, /<ClearActionButton/u);

@@ -41,7 +41,7 @@ test("ContentActionBar は内容内ツール操作を右寄せし、ARIA group �
   assert.match(componentSource, /role="group"/u);
   assert.match(componentSource, /aria-label=\{ariaLabel\}/u);
   assert.match(componentSource, /justify-end/u);
-  assert.match(componentSource, /flex min-w-0 max-w-full flex-wrap items-start justify-between gap-2/u);
+  assert.match(componentSource, /flex min-w-0 max-w-full flex-wrap items-start justify-between gap-\[8px\]/u);
   assert.doesNotMatch(componentSource, /sm:flex-row/u);
 });
 
@@ -50,7 +50,7 @@ test("ContentActionBar は左側情報と右側操作を分離できる", () => 
     assert.match(componentSource, new RegExp(prop, "u"));
   }
   assert.match(componentSource, /const infoClassName = "min-w-0 max-w-full flex-1 basis-64"/u);
-  assert.match(componentSource, /flex min-w-0 max-w-full shrink-0 flex-wrap items-center justify-end gap-2/u);
+  assert.match(componentSource, /flex min-w-0 max-w-full shrink-0 flex-wrap items-center justify-end gap-\[8px\]/u);
   assert.match(componentSource, /hasInfo && "ml-auto"/u);
   assert.match(componentSource, /actionsClassName/u);
   assert.match(componentSource, /data-testid=\{testId\}/u);
@@ -122,10 +122,10 @@ test("DDL パネルは copy/download ボタンを手書き左寄せ flex に戻�
   assert.notEqual(dbAdminCopyIndex, -1);
   assert.doesNotMatch(
     dbObjectSource.slice(Math.max(0, dbObjectCopyIndex - 300), dbObjectCopyIndex),
-    /flex flex-col gap-2 sm:flex-row sm:flex-wrap/u
+    /flex flex-col gap-\[8px\] sm:flex-row sm:flex-wrap/u
   );
   assert.doesNotMatch(
     dbAdminSource.slice(Math.max(0, dbAdminCopyIndex - 300), dbAdminCopyIndex),
-    /flex flex-wrap gap-2/u
+    /flex flex-wrap gap-\[8px\]/u
   );
 });

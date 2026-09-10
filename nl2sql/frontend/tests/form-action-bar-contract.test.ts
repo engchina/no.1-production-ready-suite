@@ -27,7 +27,7 @@ test("FormActionBar は primary / secondary / danger を descriptor で分離す
 test("FormActionBar は danger を通常の赤ボタンとして直置きしない", () => {
   assert.doesNotMatch(source, /variant="danger"/u);
   assert.match(source, /data-form-action-tone="danger"/u);
-  assert.match(source, /text-danger/u);
+  assert.match(source, /tone=/u);
   assert.match(source, /border-t border-border pt-1/u);
   assert.match(source, /t\("common\.actions\.more"\)/u);
 });
@@ -70,5 +70,5 @@ test("FormActionBar の danger menu は shared floating menu で viewport 内に
 test("FormActionBar は mobile で全幅にし、主操作の高さは共通 Button に委譲する", () => {
   assert.match(source, /w-full whitespace-nowrap sm:w-auto/u);
   assert.doesNotMatch(source, /sm:h-10/u);
-  assert.match(source, /flex min-w-0 flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center/u);
+  assert.match(source, /flex min-w-0 flex-col gap-\[8px\] sm:flex-row sm:flex-wrap sm:items-center/u);
 });

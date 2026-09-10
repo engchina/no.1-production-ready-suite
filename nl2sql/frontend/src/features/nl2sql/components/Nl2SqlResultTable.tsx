@@ -1,3 +1,4 @@
+import { Pagination } from "@/components/Pagination";
 import {
   Card,
   CardContent,
@@ -5,7 +6,6 @@ import {
   CardTitle,
   DataTable,
   DEFAULT_PAGE_SIZE,
-  Pagination,
   usePagination,
 } from "@engchina/production-ready-ui";
 

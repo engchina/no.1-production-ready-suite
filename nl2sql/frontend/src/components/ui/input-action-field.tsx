@@ -109,7 +109,8 @@ export function InputActionField({
           type={action.type ?? "button"}
           variant={action.variant ?? "secondary"}
           size="lg"
-          className={cn("h-11 w-full whitespace-nowrap min-h-[44px]", action.className)}
+          touchTarget
+          className={cn("w-full", action.className)}
           aria-label={action.ariaLabel}
           aria-describedby={actionError ? actionErrorId : undefined}
           loading={action.loading}

@@ -287,7 +287,7 @@ export function SystemTablesCard() {
                   disabled={busy}
                   actions={
                     <Button
-                      size="sm"
+                      size="lg"
                       variant="danger"
                       className="w-full sm:w-auto"
                       onClick={() => execute(true)}

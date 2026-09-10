@@ -308,21 +308,27 @@ function SchemaTableItem({
     >
       <div className="flex min-h-9 w-full min-w-0 items-stretch">
         {/* chevron=展開/折りたたみ、表名クリック=挿入（列行と同じ「クリック=挿入」で一貫）。 */}
-        <button
+        <Button
+          variant="ghost"
+          size="sm"
+          iconOnly
           type="button"
-          className="flex shrink-0 items-center px-2 text-muted hover:bg-muted/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+          className="shrink-0"
           aria-expanded={expanded}
           aria-label={t("nl2sql.schema.toggleTable", { name: table.logical_name })}
           onClick={() => onToggleExpanded(schemaTableQualifiedName(table))}
         >
           <DisclosureChevron expanded={expanded} size={15} />
-        </button>
-        <button
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          data-button-layout="disclosure"
           type="button"
           disabled={disabled}
           title={table.comment || table.table_name}
           onClick={() => onInsert(tableInsertText)}
-          className="group flex min-w-0 flex-1 items-center gap-2 py-1.5 pr-2.5 text-left hover:bg-primary/5 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 disabled:opacity-50"
+          className="group w-full min-w-0 flex-1"
         >
           <span className="min-w-0 truncate text-sm font-medium text-foreground">
             {table.logical_name}
@@ -339,7 +345,7 @@ function SchemaTableItem({
               aria-hidden="true"
             />
           </span>
-        </button>
+        </Button>
       </div>
       {expanded && (
         <ul className="grid min-w-0 content-start gap-0.5 border-t border-border p-1">
@@ -389,12 +395,15 @@ function SchemaColumnItem({
       : buildSchemaInsertText(table, column);
   return (
     <li className="min-w-0">
-      <button
+      <Button
+        variant="ghost"
+        size="sm"
+        data-button-layout="disclosure"
         type="button"
         disabled={disabled}
         title={columnTooltip(table, column)}
         onClick={() => onInsert(insertText)}
-        className="group flex min-h-9 w-full min-w-0 items-center gap-2 rounded-md px-2 py-1 text-left hover:bg-primary/5 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 disabled:opacity-50"
+        className="group w-full min-w-0 flex-1"
       >
         <span className="min-w-0 truncate text-sm text-foreground">{column.logical_name}</span>
         <span className="min-w-0 truncate font-mono text-xs text-muted">
@@ -405,7 +414,7 @@ function SchemaColumnItem({
           className="ml-auto shrink-0 text-primary opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100 motion-reduce:transition-none"
           aria-hidden="true"
         />
-      </button>
+      </Button>
     </li>
   );
 }
