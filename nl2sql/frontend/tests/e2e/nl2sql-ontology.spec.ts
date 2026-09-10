@@ -1010,6 +1010,7 @@ async function mockApi(
         confirmation_token: "profile-confirmation-token",
       });
     }
+    if (path === "/api/nl2sql/synthetic-data/runs") return fulfill(route, []);
     if (path === "/api/nl2sql/jobs" && request.method() === "POST") {
       payloads.job = request.postDataJSON();
       return fulfill(route, {
@@ -1578,7 +1579,8 @@ test("AI要件確認の中止は主操作の右側から元のクエリを保っ
   expect(payloads.clarificationAnswer).toBeUndefined();
 });
 
-test("ALLではおすすめ業務プロファイルを利用者が確認してから要件確認を始める", async ({ page }) => {
+for (const storageBlocked of [false, true]) {
+test(`ALLの要件確認はProfileとクエリを引き継ぐ（保存不可=${storageBlocked}）`, async ({ page }, testInfo) => {
   const payloads = await mockApi(page);
   const allProfile = {
     ...profile,
@@ -1672,7 +1674,46 @@ test("ALLではおすすめ業務プロファイルを利用者が確認して�
   await expect(panel.getByRole("heading", { name: "どの期間を対象にしますか？" })).toBeVisible();
   expect(payloads.profileConfirmation).toMatchObject({ selected_profile_id: "default" });
   expect(payloads.create).toMatchObject({ profile_id: "default", clarification_mode: "guided" });
+  await panel.getByRole("radio", { name: /今月/ }).check();
+  await panel.getByRole("button", { name: "選んだ内容で次へ" }).click();
+  if (storageBlocked) {
+    await page.evaluate(() => {
+      const original = Storage.prototype.setItem;
+      Storage.prototype.setItem = function(key, value) {
+        if (this === window.sessionStorage) throw new DOMException("unavailable", "QuotaExceededError");
+        return original.call(this, key, value);
+      };
+    });
+  }
+  await panel.getByRole("button", { name: "確認内容をクエリに反映" }).click();
+  if (storageBlocked) {
+    await expect(panel).toBeVisible();
+    await expect(page.locator("#nl2sql-profile-select")).toHaveValue("all");
+    await expect(page.locator("#nl2sql-question-input")).toHaveValue("受注件数を表示");
+    expect(payloads.job).toBeUndefined();
+    await expect(page.getByText("確認内容をクエリに反映しました。内容を確認して検索を実行してください。")).toHaveCount(0);
+    await page.screenshot({ path: testInfo.outputPath("guided-profile-storage-error.png"), fullPage: true });
+    return;
+  }
+  await expect(page.locator("#nl2sql-profile-select")).toHaveValue("default");
+  const clarified = "今月の受注を対象に、検索結果には受注件数を表示してください。";
+  await expect(page.locator("#nl2sql-question-input")).toHaveValue(clarified);
+  await expect(page.locator("#nl2sql-question-input")).toBeFocused();
+  expect(payloads.job).toBeUndefined();
+  // Profile ごとの草稿を維持し、確認した Profile のクエリを再読込でも復元する。
+  await page.locator("#nl2sql-profile-select").selectOption("all");
+  await expect(page.locator("#nl2sql-question-input")).toHaveValue("受注件数を表示");
+  await page.locator("#nl2sql-profile-select").selectOption("default");
+  await expect(page.locator("#nl2sql-question-input")).toHaveValue(clarified);
+  await page.reload();
+  await expect(page.locator("#nl2sql-profile-select")).toHaveValue("default");
+  await expect(page.locator("#nl2sql-question-input")).toHaveValue(clarified);
+  expect(payloads.job).toBeUndefined();
+  await runCurrentOntologySearch(page);
+  expect(payloads.job).toMatchObject({ profile_id: "default", question: clarified });
+  await page.screenshot({ path: testInfo.outputPath("guided-profile-applied.png"), fullPage: true });
 });
+}
 
 test("対象オブジェクトは業務プロファイル、構築と Markdown 下書きは専用の単一ページに分離される", async ({ page }, testInfo) => {
   await mockApi(page);
