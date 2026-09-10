@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Link, useLocation } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { Banner, toast } from "@engchina/production-ready-ui";
 import { StatusBadge } from "@/components/ui/status-badge";
@@ -46,29 +46,31 @@ export function useSyntheticRuns() {
 
 export function SyntheticRunNotifications() {
   const query = useSyntheticRuns();
-  const location = useLocation();
+  const navigate = useNavigate();
   const observed = useRef(new Map<string, string>());
-  const [dismissed, setDismissed] = useState(new Set<string>());
   const scope = JSON.stringify(query.key);
   const previousScope = useRef(scope);
-  if (previousScope.current !== scope) { observed.current.clear(); previousScope.current = scope; setDismissed(new Set()); }
+  if (previousScope.current !== scope) { observed.current.clear(); previousScope.current = scope; }
   useEffect(() => {
     for (const run of query.data ?? []) {
       const previous = observed.current.get(run.run_id);
       if (previous && previous !== run.status && runFinished(run)) {
         const label = runLabel(run);
-        if (run.status === "completed") toast.success(label);
-        else toast.info(label);
+        const options = {
+          duration: 4000,
+          description: run.targets.map((target) => target.table_name).join(", "),
+          action: {
+            label: t("syntheticRun.viewResult"),
+            onClick: () => navigate(`/data-management?synthetic_run=${encodeURIComponent(run.run_id)}`),
+          },
+        };
+        if (run.status === "completed") toast.success(label, options);
+        else toast.warning(label, options);
       }
       observed.current.set(run.run_id, run.status);
     }
-  }, [query.data]);
-  const latest = query.data?.find((run) => runFinished(run) && !dismissed.has(run.run_id) && run.finished_at && Date.now() - Date.parse(run.finished_at) < 24 * 60 * 60_000);
-  if (!latest || !runFinished(latest) || dismissed.has(latest.run_id) || location.pathname === "/data-management") return null;
-  return <Banner severity={latest.status === "completed" ? "success" : "warning"}
-    action={<div className="flex flex-wrap items-center gap-3"><Link to={`/data-management?synthetic_run=${encodeURIComponent(latest.run_id)}`} onClick={() => setDismissed((old) => new Set(old).add(latest.run_id))}>{t("syntheticRun.viewResult")}</Link><Button size="sm" variant="ghost" onClick={() => setDismissed((old) => new Set(old).add(latest.run_id))}>{t("syntheticRun.dismiss")}</Button></div>}>
-    {runLabel(latest)} <span className="break-all">{latest.targets.map((target) => target.table_name).join(", ")}</span>
-  </Banner>;
+  }, [query.data, navigate]);
+  return null;
 }
 
 export function SyntheticRunPanel({ run, runs, onSelect, error, onRefresh, submitting = false }: {
