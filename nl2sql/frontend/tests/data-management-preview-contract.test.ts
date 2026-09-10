@@ -140,7 +140,7 @@ test("データ管理プレビューは取得件数上限を指定でき、詳�
   assert.match(dataManagementSource, /<QueryResultsTable results=\{preview\.results\} rowLimit=\{executedRowLimit\} \/>/u);
   assert.match(dataManagementSource, /where_clause: ""/u);
   assert.equal(t("queryResults.rowLimit.helper"), "0 は取得上限なし。");
-  assert.equal(t("dataMgmt.preview.clear"), "クリア");
+  assert.equal(t("dataMgmt.preview.clear"), "表示結果をクリア");
   assert.doesNotMatch(dataManagementSource, /const DATA_PREVIEW_ROW_LIMIT/u);
   assert.doesNotMatch(dataManagementSource, /limit: DATA_PREVIEW_ROW_LIMIT/u);
   assert.doesNotMatch(dataManagementSource, /dataMgmt\.preview\.fixedLimit/u);

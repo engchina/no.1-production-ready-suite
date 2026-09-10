@@ -259,7 +259,7 @@ function ImportWizard({
                 <span>{t("dataTools.dbAdmin.import")}</span>
               </Button>
               <ClearActionButton size="lg"
-                label={t("dbAdmin.runner.clear")}
+                label={t("dbAdmin.import.actions.clear")}
                 matchButtonHeight
                 className="w-full sm:w-auto"
                 disabled={!canClear || loading}

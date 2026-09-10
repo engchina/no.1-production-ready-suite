@@ -386,7 +386,7 @@ export function AdminSqlPage() {
         onClick={clear}
       >
         <X size={16} aria-hidden="true" />
-        <span>{t("workspace.clearInput")}</span>
+        <span>{t("nl2sql.action.clearSql")}</span>
       </Button>
     </>
   );

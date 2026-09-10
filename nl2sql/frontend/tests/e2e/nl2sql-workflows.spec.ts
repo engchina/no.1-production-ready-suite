@@ -4064,7 +4064,7 @@ test("job ポーリングの通信断が続くと追跡を停止しエラー表�
   await page.goto("/query");
   await nl2sqlQuestionInput(page).fill("請求金額を一覧で見たい");
   const runButton = page.getByRole("button", { name: "検索を実行" });
-  const resetButton = page.getByRole("button", { name: "新しい作業を開始", exact: true });
+  const resetButton = page.getByRole("button", { name: "新しいクエリを開始", exact: true });
   await runButton.click();
 
   // 2.5s 間隔 × 連続 3 回失敗(即時 tick 含む)で追跡を断念する。
@@ -6543,8 +6543,8 @@ test("Select AI の今回だけの生成条件を job に渡し、reset で消�
     },
   });
 
-  await page.getByRole("button", { name: "新しい作業を開始", exact: true }).click();
-  await page.getByRole("alertdialog", { name: "未保存の入力を破棄しますか？" }).getByRole("button", { name: "新しい作業を開始" }).click();
+  await page.getByRole("button", { name: "新しいクエリを開始", exact: true }).click();
+  await page.getByRole("alertdialog", { name: "未保存の入力を破棄しますか？" }).getByRole("button", { name: "新しいクエリを開始" }).click();
   await expect(disclosure).toHaveAttribute("aria-expanded", "false");
   await disclosure.click();
   await expect(page.getByLabel("今回の追加条件")).toHaveValue("");
@@ -6620,7 +6620,7 @@ test("AI 活用の SELECT SQL 画面は通常 API だけを使用し、更新 SQ
   expect(api.adminExecutePayload).toBeNull();
 
   await sqlInput.fill("");
-  const clearButton = directSql.getByRole("button", { name: "入力をクリア" });
+  const clearButton = directSql.getByRole("button", { name: "SQL をクリア" });
   await expect(clearButton).toBeEnabled();
   await expect(directSql.getByTestId("direct-sql-execution-activity")).toBeVisible();
   await clearButton.click();
@@ -6904,7 +6904,7 @@ test("データ準備の管理 SQL 画面は SELECT と確認済み更新 SQL �
     reason: "admin-sql-select",
   });
 
-  await adminSql.getByRole("button", { name: "入力をクリア" }).click();
+  await adminSql.getByRole("button", { name: "SQL をクリア" }).click();
   await expect(sqlInput).toHaveValue("");
   await expect(rowLimitInput).toHaveValue("100");
   await expect(adminSql.getByTestId("query-results-table")).toHaveCount(0);
@@ -6920,7 +6920,7 @@ test("データ準備の管理 SQL 画面は SELECT と確認済み更新 SQL �
     reason: "admin-sql-select",
   });
 
-  await adminSql.getByRole("button", { name: "入力をクリア" }).click();
+  await adminSql.getByRole("button", { name: "SQL をクリア" }).click();
   const literalSelectSql =
     "SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES " +
     "WHERE MEMO = 'a;b' AND STATUS = 'delete'";
@@ -6937,7 +6937,7 @@ test("データ準備の管理 SQL 画面は SELECT と確認済み更新 SQL �
     reason: "admin-sql-select",
   });
 
-  await adminSql.getByRole("button", { name: "入力をクリア" }).click();
+  await adminSql.getByRole("button", { name: "SQL をクリア" }).click();
   await expect(rowLimitInput).toHaveValue("100");
   await adminSql.getByLabel("SQL ファイル読込 (.sql/.txt)").setInputFiles({
     name: "review-invoices.sql",
@@ -6977,7 +6977,7 @@ test("データ準備の管理 SQL 画面は SELECT と確認済み更新 SQL �
     reason: "admin-sql-admin",
   });
 
-  await adminSql.getByRole("button", { name: "入力をクリア" }).click();
+  await adminSql.getByRole("button", { name: "SQL をクリア" }).click();
   const withUpdateSql =
     "WITH TARGET AS (SELECT INVOICE_ID FROM INVOICES WHERE STATUS = 'NEW') " +
     "UPDATE INVOICES SET STATUS = 'REVIEWED' WHERE INVOICE_ID IN (SELECT INVOICE_ID FROM TARGET)";
@@ -6998,7 +6998,7 @@ test("データ準備の管理 SQL 画面は SELECT と確認済み更新 SQL �
     "CREATE TABLE REVIEW_QUEUE (ID NUMBER)",
     "UPDATE INVOICES SET STATUS = 'REVIEWED'; DELETE FROM REVIEW_QUEUE WHERE ID = 1",
   ]) {
-    await adminSql.getByRole("button", { name: "入力をクリア" }).click();
+    await adminSql.getByRole("button", { name: "SQL をクリア" }).click();
     await sqlInput.fill(managedSql);
     await expect(removedAdminHint).toHaveCount(0);
     await expect(adminSql.getByLabel("実行確認語")).toBeVisible();
@@ -7457,8 +7457,8 @@ test("SQL ファイル入力は 44px のまま選択とドラッグ＆ドロッ�
     .not.toBe(lightBackground);
 });
 
-test("AI 活用の 4 画面はナビ切替で入力を保持し、リセットで消える", async ({ page }) => {
-  await mockNl2SqlApi(page);
+test("AI 活用の 4 画面はナビ切替で入力を保持し、リセットで消える", async ({ page }, testInfo) => {
+  const api = await mockNl2SqlApi(page);
   await page.goto("/query");
 
   // SQL 生成にクエリを入力する。
@@ -7482,13 +7482,28 @@ test("AI 活用の 4 画面はナビ切替で入力を保持し、リセット�
   await expect(directSqlInput(page)).toHaveValue("SELECT CUSTOMER_NAME FROM INVOICES");
 
   // クリアは明示ボタンでのみ行われる(ナビ切替では消えない)。
-  await page.getByTestId("nl2sql-direct-sql").getByRole("button", { name: "入力をクリア" }).click();
+  await page.getByTestId("nl2sql-direct-sql").getByRole("button", { name: "SQL をクリア" }).click();
   await expect(directSqlInput(page)).toHaveValue("");
 
   await page.getByRole("link", { name: /SQL 生成/ }).first().click();
-  await page.getByRole("button", { name: "新しい作業を開始", exact: true }).click();
-  await page.getByRole("alertdialog", { name: "未保存の入力を破棄しますか？" }).getByRole("button", { name: "新しい作業を開始" }).click();
+  const newQueryButton = page.getByRole("button", { name: "新しいクエリを開始", exact: true });
+  await expectLargeActionButton(newQueryButton);
+  await newQueryButton.focus();
+  await page.keyboard.press("Enter");
+  const discardDialog = page.getByRole("alertdialog", { name: "未保存の入力を破棄しますか？" });
+  await expect(discardDialog).toContainText("入力したクエリと表示中の結果をクリアし、今回の生成条件・実行オプションを初期値に戻します。");
+  await page.keyboard.press("Escape");
+  await expect(discardDialog).toBeHidden();
+  await expect(nl2sqlQuestionInput(page)).toHaveValue("保持テスト: 未入金の請求金額を確認したい");
+  await expect(newQueryButton).toBeFocused();
+  await page.keyboard.press("Enter");
+  await discardDialog.getByRole("button", { name: "新しいクエリを開始" }).click();
   await expect(nl2sqlQuestionInput(page)).toHaveValue("");
+  expect(api.jobPayload).toBeNull();
+  expect(api.executePayload).toBeNull();
+  await expectNoHorizontalScroll(page);
+  await newQueryButton.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("contextual-new-query.png") });
 });
 
 test("history rerun deep-links back to query with question, engine, and profile", async ({ page }) => {
@@ -10756,7 +10771,7 @@ test("synthetic data table bulk selection and results use the shared skeleton pr
   await syntheticPanel.getByRole("button", { name: "生成開始" }).click();
   await expect(syntheticPanel.getByTestId("synthetic-run-panel").getByTestId("synthetic-run-status")).toHaveText("合成データの生成が完了しました");
   await expect(syntheticPanel.getByRole("cell", { name: "synthetic-customer" })).toBeVisible();
-  await syntheticPanel.getByTestId("data-synthetic-results-actions").getByRole("button", { name: "クリア" }).click();
+  await syntheticPanel.getByTestId("data-synthetic-results-actions").getByRole("button", { name: "表示結果をクリア" }).click();
   const syntheticResultsSection = syntheticPanel.locator("section[aria-labelledby='synthetic-results-heading']");
   await expect(syntheticResultsSection.getByRole("heading", { name: "生成結果データの表示" })).toBeVisible();
   await expect(syntheticResultsSection.getByText("生成後に結果テーブルを選択すると表示できます。").first()).toBeVisible();
@@ -11344,7 +11359,7 @@ test("sample data and data management run imported workflows", async ({ page }) 
   await expect(dataPreviewPanel.getByRole("button", { name: / を選択$/ })).toHaveCount(4);
   await expect(dataPreviewPanel.getByRole("button", { name: / のデータを表示$/ })).toHaveCount(0);
   const previewShowButton = dataPreviewPanel.getByRole("button", { name: "データを表示", exact: true });
-  const previewClearButton = dataPreviewPanel.getByRole("button", { name: "クリア", exact: true });
+  const previewClearButton = dataPreviewPanel.getByRole("button", { name: "表示結果をクリア", exact: true });
   const previewResultsActions = dataPreviewPanel.getByTestId("data-preview-results-actions");
   const previewExportButton = previewResultsActions.getByRole("button", { name: "XLSX ダウンロード" });
   const previewMoreButton = previewResultsActions.getByRole("button", { name: "その他の操作" });
@@ -11500,7 +11515,7 @@ test("sample data and data management run imported workflows", async ({ page }) 
   await expect(csvPanel.getByText("確認済み", { exact: true })).toHaveCount(1);
   const csvUploadClearButton = csvPanel
     .getByTestId("execution-confirmation-field")
-    .getByRole("button", { name: "クリア", exact: true });
+    .getByRole("button", { name: "取込条件をクリア", exact: true });
   await expect(csvUploadClearButton).toBeEnabled();
   await expectButtonsSameHeight(csvUploadButton, csvUploadClearButton);
   await csvUploadClearButton.click();
@@ -11570,7 +11585,7 @@ test("sample data and data management run imported workflows", async ({ page }) 
   await expect(syntheticPanel.getByText("確認済み", { exact: true })).toHaveCount(1);
   const syntheticClearButton = syntheticPanel
     .getByTestId("execution-confirmation-field")
-    .getByRole("button", { name: "クリア", exact: true });
+    .getByRole("button", { name: "生成条件をクリア", exact: true });
   await expect(syntheticClearButton).toBeEnabled();
   await expectButtonsSameHeight(syntheticGenerateButton, syntheticClearButton);
   await syntheticClearButton.click();
@@ -13090,7 +13105,7 @@ test("table and view management pages run guarded DDL and AI workflows", async (
   const createExecuteButton = createPanel.getByRole("button", { name: "SQL 実行" });
   const createClearButton = createPanel
     .getByTestId("execution-confirmation-field")
-    .getByRole("button", { name: "入力をクリア", exact: true });
+    .getByRole("button", { name: "SQL をクリア", exact: true });
   await expect(createClearButton).toBeEnabled();
   await expectButtonsSameHeight(createExecuteButton, createClearButton);
   await createClearButton.click();
@@ -13123,7 +13138,7 @@ test("table and view management pages run guarded DDL and AI workflows", async (
   await expect(importPanel.getByText("確認済み", { exact: true })).toHaveCount(1);
   const importActionClearButton = importPanel
     .getByTestId("table-import-execution-fieldset")
-    .getByRole("button", { name: "クリア", exact: true });
+    .getByRole("button", { name: "取込条件をクリア", exact: true });
   await expect(importActionClearButton).toBeEnabled();
   await expectButtonsSameHeight(importExecuteButton, importActionClearButton);
   await importActionClearButton.click();

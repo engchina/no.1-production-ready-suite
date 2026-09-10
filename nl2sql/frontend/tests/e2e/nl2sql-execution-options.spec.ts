@@ -681,10 +681,10 @@ test("unified execute button runs SQL and renders execution artifacts", async ({
     use_ontology_context: false,
   });
   await expect(executionOptionsDisclosure).toContainText("条件あり");
-  const resetButton = page.getByRole("button", { name: "新しい作業を開始", exact: true });
+  const resetButton = page.getByRole("button", { name: "新しいクエリを開始", exact: true });
   await expect(resetButton).toBeEnabled();
   await resetButton.click();
-  await page.getByRole("alertdialog", { name: "未保存の入力を破棄しますか？" }).getByRole("button", { name: "新しい作業を開始" }).click();
+  await page.getByRole("alertdialog", { name: "未保存の入力を破棄しますか？" }).getByRole("button", { name: "新しいクエリを開始" }).click();
   await expect(executionOptionsDisclosure).toHaveAttribute("aria-expanded", "false");
   await expect(page.getByLabel("公開版オントロジーを使う")).toBeHidden();
   await executionOptionsDisclosure.click();

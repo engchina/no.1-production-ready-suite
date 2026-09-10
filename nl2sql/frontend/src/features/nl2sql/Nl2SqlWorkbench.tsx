@@ -1520,7 +1520,7 @@ function ExecutableNl2SqlWorkbench() {
                       size="lg"
                       disabled={active}
                       onClick={async () => {
-                        if ((question.trim() || selectAiRoleOverride || selectAiInstructionsOverride) && !await confirmDiscard({ title: t("workspace.discardTitle"), description: t("workspace.discardDescription"), confirmLabel: t("workspace.newWork"), tone: "warning" })) return;
+                        if ((question.trim() || selectAiRoleOverride || selectAiInstructionsOverride) && !await confirmDiscard({ title: t("workspace.discardTitle"), description: t("nl2sql.query.discardDescription"), confirmLabel: t("nl2sql.query.actions.startNew"), tone: "warning" })) return;
                         setSelection(emptySelection());
                         setQuestion("");
                         setResult(null);
@@ -1542,7 +1542,7 @@ function ExecutableNl2SqlWorkbench() {
                       }}
                     >
                       <RotateCcw size={16} aria-hidden="true" />
-                      <span>{t("workspace.newWork")}</span>
+                      <span>{t("nl2sql.query.actions.startNew")}</span>
                     </Button>
                   </div>
 

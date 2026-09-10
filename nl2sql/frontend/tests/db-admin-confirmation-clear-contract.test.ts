@@ -50,7 +50,7 @@ test("DDL/comment/annotation runners expose a shared clear action that resets gu
   );
   assert.match(
     runner,
-    /<ClearActionButton[\s\S]*label=\{t\("workspace\.clearInput"\)\}[\s\S]*matchButtonHeight[\s\S]*disabled=\{!canClearRunner \|\| loading\}[\s\S]*onClick=\{clearRunner\}/u,
+    /<ClearActionButton[\s\S]*label=\{t\("nl2sql\.action\.clearSql"\)\}[\s\S]*matchButtonHeight[\s\S]*disabled=\{!canClearRunner \|\| loading\}[\s\S]*onClick=\{clearRunner\}/u,
   );
 });
 
@@ -68,7 +68,7 @@ test("table import wizard clear action resets import form, result, and dropzone 
   assert.match(importWizard, /resetSignal=\{fileResetSignal\}/u);
   assert.match(
     importWizard,
-    /<ClearActionButton[\s\S]*label=\{t\("dbAdmin\.runner\.clear"\)\}[\s\S]*matchButtonHeight[\s\S]*disabled=\{!canClear \|\| loading\}[\s\S]*onClick=\{onClear\}/u,
+    /<ClearActionButton[\s\S]*label=\{t\("dbAdmin\.import\.actions\.clear"\)\}[\s\S]*matchButtonHeight[\s\S]*disabled=\{!canClear \|\| loading\}[\s\S]*onClick=\{onClear\}/u,
   );
   assert.match(
     tableManagementPage,
@@ -88,7 +88,7 @@ test("data management CSV and synthetic guarded actions expose clear buttons", (
   assert.match(csvWorkspace, /resetSignal=\{fileResetSignal\}/u);
   assert.match(
     csvWorkspace,
-    /<ClearActionButton[\s\S]*label=\{t\("dbAdmin\.runner\.clear"\)\}[\s\S]*matchButtonHeight[\s\S]*disabled=\{!canClearUpload \|\| loading\}[\s\S]*onClick=\{onClearUpload\}/u,
+    /<ClearActionButton[\s\S]*label=\{t\("dbAdmin\.import\.actions\.clear"\)\}[\s\S]*matchButtonHeight[\s\S]*disabled=\{!canClearUpload \|\| loading\}[\s\S]*onClick=\{onClearUpload\}/u,
   );
   assert.match(
     dataManagementPage,
@@ -97,7 +97,7 @@ test("data management CSV and synthetic guarded actions expose clear buttons", (
   assert.match(dataManagementPage, /const canClearSyntheticGeneration = Boolean\([\s\S]*syntheticSelectedTables[\s\S]*syntheticConfirmation[\s\S]*syntheticResultLimitInput/u);
   assert.match(
     syntheticWorkspace,
-    /<ClearActionButton[\s\S]*label=\{t\("dbAdmin\.runner\.clear"\)\}[\s\S]*matchButtonHeight[\s\S]*!canClearSyntheticGeneration[\s\S]*onClick=\{onClearSyntheticGeneration\}/u,
+    /<ClearActionButton[\s\S]*label=\{t\("dataTools\.syntheticData\.actions\.clear"\)\}[\s\S]*matchButtonHeight[\s\S]*!canClearSyntheticGeneration[\s\S]*onClick=\{onClearSyntheticGeneration\}/u,
   );
   assert.match(
     dataManagementPage,
@@ -118,7 +118,7 @@ test("business profile clear action resets only the Oracle execution gate and jo
   assert.match(editor, /onOracleExecutionClear: \(\) => void/u);
   assert.match(
     editor,
-    /<ClearActionButton[\s\S]*label=\{t\("dbAdmin\.runner\.clear"\)\}[\s\S]*matchButtonHeight[\s\S]*size="lg"[\s\S]*disabled=\{!canClearOracleExecution \|\| saving\}[\s\S]*onClick=\{onOracleExecutionClear\}/u,
+    /<ClearActionButton[\s\S]*label=\{t\("profiles\.oracle\.actions\.clear"\)\}[\s\S]*matchButtonHeight[\s\S]*size="lg"[\s\S]*disabled=\{!canClearOracleExecution \|\| saving\}[\s\S]*onClick=\{onOracleExecutionClear\}/u,
   );
   assert.match(profileManagementPage, /const canClearOracleExecution = Boolean\([\s\S]*oracleConfirmation[\s\S]*syncJobParam/u);
   assert.match(
