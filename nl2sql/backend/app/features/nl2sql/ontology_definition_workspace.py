@@ -15,7 +15,11 @@ from app.settings import get_settings
 
 from .ontology_definition_service import ProfileOntologyDefinitionService, definition_fingerprint
 from .ontology_definition_validation import validate_definitions
-from .ontology_definitions import BusinessDefinition, ProfileOntologyBundle
+from .ontology_definitions import (
+    BusinessDefinition,
+    DefinitionChangeExtraction,
+    ProfileOntologyBundle,
+)
 from .ontology_service import (
     OntologyGateBlockedError,
     OntologyNotFoundError,
@@ -175,6 +179,10 @@ class ProfileOntologyWorkspaceService(ProfileOntologyDefinitionService):
             item.id = item.id or stable_ontology_id(
                 "profile_concept", profile_id, item.kind, item.api_name
             )
+            if any(existing.id == item.id for existing in updated):
+                raise OntologyGateBlockedError(
+                    "DUPLICATE_DEFINITION_ID", "同じ概念 ID を複数の定義に使用できません。"
+                )
             if item.id in old and item.model_dump() == old[item.id].model_dump():
                 updated.append(old[item.id])
                 continue
@@ -329,8 +337,6 @@ class ProfileOntologyWorkspaceService(ProfileOntologyDefinitionService):
                     "IDEMPOTENCY_KEY_REUSED", "同じキーを別の解析に使用できません。"
                 )
             return result
-        from .ontology_build import parse_extraction
-        from .ontology_models import OntologyBuildExtraction
         from .structured_outputs import response_format
 
         client = getattr(self.runtime.legacy_service, "_enterprise_ai_client", None)
@@ -344,15 +350,29 @@ class ProfileOntologyWorkspaceService(ProfileOntologyDefinitionService):
             system_prompt=(
                 "日本語の変更指示を型付き definitions の差分候補へ変換する。"
                 "変更する定義のみ返す。ID と api_name は維持し、権限やコードは創作しない。"
+                "削除指示は deleted_definition_ids に既存 ID を明示する。"
+                "削除と更新を同じ ID に指定しない。依存する定義も指示に応じて更新する。"
                 "これは解析でありレビュー・公開ではない。"
             ),
-            response_format=response_format(OntologyBuildExtraction),
+            response_format=response_format(DefinitionChangeExtraction),
         )
-        extraction = parse_extraction(str(output))
+        extraction = DefinitionChangeExtraction.model_validate_json(str(output))
+        deleted = set(extraction.deleted_definition_ids)
+        by_id = {d.id: d for d in bundle.definitions}
+        if not deleted <= by_id.keys() or any(
+            d.id in deleted or d.api_name in {by_id[i].api_name for i in deleted}
+            for d in extraction.definitions
+        ):
+            raise OntologyGateBlockedError(
+                "CHANGE_DELETE_INVALID", "削除対象が存在しないか、同じ定義の更新と競合しています。"
+            )
+        if len({d.api_name for d in extraction.definitions}) != len(extraction.definitions):
+            raise OntologyGateBlockedError("DUPLICATE_NAME", "変更候補の概念名が重複しています。")
         candidates = {d.api_name: d for d in extraction.definitions}
         merged = [
             candidates.pop(d.api_name, d).model_copy(update={"id": d.id})
             for d in bundle.definitions
+            if d.id not in deleted
         ]
         merged.extend(d.model_copy(update={"id": ""}) for d in candidates.values())
         result = {
@@ -361,6 +381,7 @@ class ProfileOntologyWorkspaceService(ProfileOntologyDefinitionService):
             "base_etag": etag,
             "request_hash": request_hash,
             "instruction_ja": instruction,
+            "deleted_definition_ids": sorted(deleted),
             "before": [
                 d.model_dump(mode="json", exclude={"review_status"}) for d in bundle.definitions
             ],

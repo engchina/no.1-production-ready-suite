@@ -10,7 +10,10 @@ from test_nl2sql_ontology_definitions import definition_payload, runtime
 
 from app.features.nl2sql.ontology_build import OntologyBuildService, _OntologyBuildLlmTask
 from app.features.nl2sql.ontology_definition_quality import inspect_definition_quality
-from app.features.nl2sql.ontology_definition_service import ProfileOntologyDefinitionService
+from app.features.nl2sql.ontology_definition_service import (
+    ProfileOntologyDefinitionService,
+    definition_fingerprint,
+)
 from app.features.nl2sql.ontology_definitions import (
     DefinitionEvidence,
     DefinitionSource,
@@ -75,6 +78,13 @@ def test_rebuild_keeps_reviewed_identity_and_manual_edits_even_when_unchanged() 
     )
     first.definitions[0].origin = "manual"
     first.definitions[0].review_status = "reviewed"
+    first.review_records = [
+        {
+            "definition_id": first.definitions[0].id,
+            "hash": definition_fingerprint(first.definitions[0].model_dump(mode="json")),
+            "actor": "reviewer",
+        }
+    ]
     record = rt.store.get_artifact(first.id)
     assert record is not None
     record["content"] = first.model_dump_json()
@@ -88,6 +98,7 @@ def test_rebuild_keeps_reviewed_identity_and_manual_edits_even_when_unchanged() 
     )
     assert second.definitions[0].origin == "manual"
     assert second.definitions[0].review_status == "reviewed"
+    assert second.review_records == first.review_records
     assert not second.conflicts
     third = service.save_build(
         profile_id="sales",

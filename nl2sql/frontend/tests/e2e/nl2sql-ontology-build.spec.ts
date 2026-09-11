@@ -2825,3 +2825,62 @@ test("公開関数の型付き入力で呼出し、過去結果を保持して�
   await expect(region.locator("pre")).toContainText('"result": 42');
   expect(calls).toBe(1);
 });
+
+for (const committedBeforeDisconnect of [true, false]) {
+  test(`操作の応答喪失後に元の結果を照会し同じ確認だけを再試行する (${committedBeforeDisconnect ? "commit 済み" : "未実行"})`, async ({ page }, testInfo) => {
+    await mockApi(page);
+    await page.route("**/api/nl2sql/profiles/*/ontology-results", route => fulfillJson(route, { results: [{ ...typedBundle("default"), status: "published" }] }));
+    let calls = 0, mutations = 0, previews = 0, lookupAvailable = false;
+    let originalKey = "";
+    const result = { id: "recovered-execution", release_id: "release-default", at: "2026-09-11T05:00:00Z", status: "succeeded", before: { count: 0 }, after: { count: 1 } };
+    await page.route("**/api/nl2sql/profiles/default/ontology-capabilities**", async route => {
+      const path = new URL(route.request().url()).pathname;
+      if (path.endsWith("ontology-capabilities")) return fulfillJson(route, { release_id: "release-default", implementations: { functions: [], actions: [] }, capabilities: [{ definition: { id: "increment", kind: "action_type", name_ja: "加算", api_name: "increment", description_ja: "一度だけ加算する", parameters: [] }, target_parameters: [], status: "available", reason_ja: "", binding: { kind: "backend", etag: "binding", expression_sql: "", implementation_key: "increment", state_requirements: [], reviewed_rules_ja: "一度だけ加算", enabled: true } }] });
+      if (path.endsWith("/preview")) { previews++; return fulfillJson(route, { id: "original-preview", before: { count: 0 }, after: { count: 1 }, expires_at: "2026-09-11T05:10:00Z" }); }
+      if (path.endsWith("/execute")) {
+        calls++;
+        expect(route.request().postDataJSON()).toEqual({ preview_id: "original-preview", confirmed: true });
+        const key = route.request().headers()["idempotency-key"];
+        if (calls === 1) { originalKey = key; if (committedBeforeDisconnect) mutations++; return route.abort("connectionreset"); }
+        expect(key).toBe(originalKey);
+        if (!mutations) mutations++;
+        return fulfillJson(route, result);
+      }
+      if (path.endsWith("/outcome")) {
+        expect(path).toContain("/previews/original-preview/outcome");
+        if (!lookupAvailable) return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "照会は一時的に利用できません" }) });
+        return fulfillJson(route, mutations ? { status: "succeeded", execution: result } : { status: "unresolved" });
+      }
+      return fulfillJson(route, result);
+    });
+    await page.goto("/ontology-build?profile=default"); await loadOntologyBuildWorkspace(page);
+    await page.getByRole("tab", { name: "能力の利用（Capabilities）", exact: true }).click();
+    const region = page.getByRole("region", { name: "公開能力（Published Capabilities）", exact: true });
+    const preview = region.getByRole("button", { name: "変更をプレビュー（Preview Changes）", exact: true });
+    await preview.click();
+    await region.getByRole("button", { name: "確認して実行（Confirm & Execute）", exact: true }).click();
+    await page.getByRole("button", { name: "確認して実行（Confirm）", exact: true }).click();
+    await expect(region.getByText(/元の操作の結果を確認中/)).toBeVisible();
+    await expect(preview).toBeDisabled();
+    const retry = region.getByRole("button", { name: "元の操作を再試行（Retry Original）", exact: true });
+    await expect(retry).toBeDisabled();
+    await page.reload(); await loadOntologyBuildWorkspace(page);
+    await expect(region.getByText(/元の操作の結果を確認中/)).toBeVisible();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    expect(calls).toBe(1); expect(previews).toBe(1);
+    lookupAvailable = true;
+    await region.getByRole("button", { name: "元の結果を照会（Check Original Result）", exact: true }).click();
+    if (!committedBeforeDisconnect) {
+      await expect(retry).toBeEnabled();
+      for (const button of await region.getByRole("button").all()) if (await button.isVisible()) await expectButtonLabelFits(button);
+      await region.screenshot({ path: testInfo.outputPath("ontology-original-action-recovery.png") });
+      await retry.focus(); await page.keyboard.press("Enter");
+      expect(calls).toBe(1);
+      await page.getByRole("button", { name: "確認して実行（Confirm）", exact: true }).click();
+    }
+    await expect(region.getByText(/前回の実行結果（Previous Result）/)).toBeVisible();
+    await expect(region.locator("pre")).toContainText("recovered-execution");
+    expect(mutations).toBe(1); expect(calls).toBe(committedBeforeDisconnect ? 1 : 2); expect(previews).toBe(1);
+    await expect(region.getByText(/元の操作の結果を確認中/)).toHaveCount(0);
+  });
+}

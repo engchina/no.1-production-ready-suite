@@ -95,6 +95,22 @@ def create_capability_router(runtime: Any, raise_error: Any) -> APIRouter:
             raise_error(exc)
             raise
 
+    @router.get(
+        "/profiles/{profile_id}/ontology-capabilities/{definition_id}/previews/{preview_id}/outcome"
+    )
+    def outcome(
+        profile_id: str, definition_id: str, preview_id: str, request: Request
+    ) -> ApiResponse[Any]:
+        try:
+            return ApiResponse(
+                data=service(request, profile_id).outcome(
+                    profile_id, definition_id, preview_id, principal_from_request(request)
+                )
+            )
+        except Exception as exc:
+            raise_error(exc)
+            raise
+
     @router.post("/profiles/{profile_id}/ontology-capabilities/{definition_id}/execute")
     def execute(
         profile_id: str,

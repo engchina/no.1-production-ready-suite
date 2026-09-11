@@ -5,11 +5,12 @@ from __future__ import annotations
 import json
 import threading
 import time
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from pyshacl import validate as shacl_validate
-from rdflib import RDF, Graph, Literal, Namespace, URIRef
+from rdflib import RDF, XSD, Graph, Literal, Namespace, URIRef
 
 from app.security.domain import Principal
 from app.security.permissions import SQL_EXECUTE_PERMISSION
@@ -40,6 +41,31 @@ def quote_identifier(value: str) -> str:
     return '"' + value.replace('"', '""') + '"'
 
 
+def property_literal(value: Any, data_type: str) -> Literal:
+    """Oracle/JSON の正常な値だけを契約の RDF datatype に変換する。"""
+    try:
+        if data_type == "number" and type(value) in (int, float, Decimal):
+            number = Decimal(str(value))
+            if number.is_finite():
+                return Literal(number, datatype=XSD.decimal)
+        if data_type == "date":
+            parsed = datetime.fromisoformat(value) if isinstance(value, str) else value
+            if isinstance(parsed, datetime) and parsed.time().isoformat() == "00:00:00":
+                parsed = parsed.date()
+            if type(parsed) is date:
+                return Literal(parsed, datatype=XSD.date)
+        if data_type == "datetime":
+            parsed = (
+                datetime.fromisoformat(value) if isinstance(value, str) and "T" in value else value
+            )
+            if isinstance(parsed, datetime):
+                return Literal(parsed, datatype=XSD.dateTime)
+    except (ValueError, InvalidOperation):
+        pass
+    # 不正な文字列・真偽値等を期待型へ強制すると SHACL が見逃すため元の型を残す。
+    return Literal(value)
+
+
 def check_data(
     runtime: Any, bundle: ProfileOntologyBundle, request: DefinitionDataValidationRequest
 ) -> dict[str, Any]:
@@ -65,6 +91,13 @@ def check_data(
             len(obj.mappings) != 1
             or not props
             or any(not isinstance(p, PropertyDefinition) or len(p.mappings) != 1 for p in props)
+            or any(
+                m.expression_sql
+                for p in props
+                if isinstance(p, PropertyDefinition)
+                for m in p.mappings
+            )
+            or any(m.expression_sql for m in obj.mappings)
         ):
             skipped.append(
                 {
@@ -101,7 +134,9 @@ def check_data(
             for prop in mapped:
                 value = row.get(prop.id)
                 if value is not None:
-                    graph.add((subject, URIRef(ns[prop.id]), Literal(value)))
+                    graph.add(
+                        (subject, URIRef(ns[prop.id]), property_literal(value, prop.data_type))
+                    )
     artifacts = render_definition_artifacts(bundle)
     conforms, _report_graph, report_text = shacl_validate(
         graph,

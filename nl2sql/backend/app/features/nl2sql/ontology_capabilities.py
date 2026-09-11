@@ -767,6 +767,29 @@ class ProfileOntologyCapabilityService(ProfileOntologyWorkspaceService):
         )
         return result
 
+    def outcome(
+        self, profile_id: str, definition_id: str, preview_id: str, actor: Principal | None
+    ) -> dict[str, Any]:
+        """応答喪失後の読み取り専用照会。公開版変更後も元の実行結果を参照する。"""
+        who = authorize_definition_operation(profile_id, refreshed_actor(actor), ACTION_EXECUTE)
+        preview = json.loads(
+            self.document(profile_id, preview_id, "ontology_action_preview")["content"]
+        )
+        if preview["actor"] != who or preview["definition_id"] != definition_id:
+            blocked("この操作の確認は現在のユーザーに属していません。")
+        identity = stable_ontology_id("ontology_action_execution", profile_id, preview_id)
+        if self.store.get_artifact(identity):
+            result = self._replay(
+                profile_id,
+                identity,
+                "ontology_action_execution",
+                who,
+                definition_fingerprint({"preview_id": preview_id, "actor": who}),
+            )
+            return {"status": "succeeded", "execution": result}
+        # 未記録は未実行の証明ではない。再試行時にも同じ preview を使用する。
+        return {"status": "unresolved"}
+
     def execute(
         self,
         profile_id: str,

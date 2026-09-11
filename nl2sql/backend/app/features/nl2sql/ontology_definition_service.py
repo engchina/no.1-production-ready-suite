@@ -199,6 +199,19 @@ class ProfileOntologyDefinitionService:
                 "message_ja": "定義のみを検証しました。データインスタンスは未検証です。",
                 "errors": sum(f.severity == "error" for f in bundle.findings),
             }
+        # 根拠の再照合後も内容が同じ場合だけレビューを継承する。
+        # 新しい根拠・変更・旧形式の記録欠落は未レビューへ戻す。
+        for item in bundle.definitions:
+            records = [
+                record
+                for record in (prior.review_records if prior else [])
+                if record.get("definition_id") == item.id
+                and record.get("hash") == definition_fingerprint(item.model_dump(mode="json"))
+            ]
+            if item.review_status == "reviewed" and records:
+                bundle.review_records.extend(records)
+            else:
+                item.review_status = "unreviewed"
         bundle.etag = definition_fingerprint(bundle.model_dump(mode="json", exclude={"etag"}))
         self.store.save_artifact(
             {

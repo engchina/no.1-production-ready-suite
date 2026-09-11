@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import sqlglot
 from sqlglot import exp
 
 from .ontology_definition_service import definition_fingerprint
@@ -12,6 +13,7 @@ from .ontology_definition_validation import checked_expression, interface_contra
 from .ontology_definition_workspace import ProfileOntologyWorkspaceService
 from .ontology_definitions import ProfileOntologyBundle
 from .ontology_service import OntologyGateBlockedError
+from .ontology_sql_validation import validated_sql
 from .ontology_store import canonical_json
 
 
@@ -36,29 +38,28 @@ def require_current_scope(
 
 
 def _expressions_visible(definition: Any, allowed: dict[str, set[str]]) -> bool:
-    for field in ("expression_sql", "filter_sql", "predicate_sql", "join_expression_sql"):
-        sql = getattr(definition, field, "")
+    expressions = [
+        (getattr(definition, field, ""), allowed)
+        for field in ("expression_sql", "filter_sql", "predicate_sql", "join_expression_sql")
+    ]
+    expressions.extend(
+        (
+            m.expression_sql,
+            {
+                f"{m.owner}.{m.object_name}".upper(): allowed.get(
+                    f"{m.owner}.{m.object_name}".upper(), set()
+                )
+            },
+        )
+        for m in definition.mappings
+    )
+    for sql, local_scope in expressions:
         if not sql:
             continue
         try:
             tree = checked_expression(sql)
-            aliases = {}
-            for table in tree.find_all(exp.Table):
-                physical = f"{table.db}.{table.name}".upper()
-                if physical not in allowed or table.catalog:
-                    return False
-                aliases[table.alias_or_name.upper()] = physical
-            for column in tree.find_all(exp.Column):
-                if column.db:
-                    physical = f"{column.db}.{column.table}".upper()
-                else:
-                    physical = aliases.get(column.table.upper(), "")
-                if physical:
-                    if column.name.upper() not in allowed.get(physical, set()):
-                        return False
-                elif column.name.upper() not in {col for cols in allowed.values() for col in cols}:
-                    return False
-        except ValueError:
+            validated_sql(tree, allowed if isinstance(tree, exp.Query) else local_scope)
+        except (ValueError, sqlglot.errors.SqlglotError):
             return False
     return True
 

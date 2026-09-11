@@ -309,6 +309,13 @@ class DefinitionAnalyzeRequest(DefinitionContract):
     instruction_ja: str = Field(min_length=1, max_length=12000)
 
 
+class DefinitionChangeExtraction(DefinitionContract):
+    """変更だけを返し、削除は既存 ID を明示する。空配列は削除と解釈しない。"""
+
+    definitions: list[BusinessDefinition] = Field(default_factory=list)
+    deleted_definition_ids: list[str] = Field(default_factory=list)
+
+
 class DefinitionApplyRequest(DefinitionContract):
     confirmed: Literal[True]
 

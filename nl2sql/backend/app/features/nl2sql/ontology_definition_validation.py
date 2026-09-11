@@ -6,6 +6,7 @@ from typing import Any, cast
 
 import sqlglot
 from sqlglot import exp
+from sqlglot.optimizer.scope import build_scope
 
 from .ontology_definition_quality import inspect_definition_quality
 from .ontology_definitions import (
@@ -19,6 +20,7 @@ from .ontology_definitions import (
     ProfileOntologyBundle,
     PropertyDefinition,
 )
+from .ontology_sql_validation import canonical_expression, validated_sql
 
 
 def schema_objects(payload: dict[str, Any]) -> dict[str, set[str]]:
@@ -89,6 +91,8 @@ def validate_definitions(
 
         if sum(d.api_name == item.api_name for d in bundle.definitions) > 1:
             error("DUPLICATE_NAME", "api_name", "概念名が重複しています。")
+        if not item.id or sum(d.id == item.id for d in bundle.definitions) > 1:
+            error("DUPLICATE_DEFINITION_ID", "id", "概念 ID は空でない一意な値が必要です。")
         refs: list[tuple[str, str, set[str]]] = []
         if isinstance(item, ObjectTypeDefinition):
             refs.extend(
@@ -222,39 +226,31 @@ def validate_definitions(
                     "mappings",
                     f"{key}.{mapping.column_name} は現在の Profile 範囲にありません。",
                 )
-        for field in ("expression_sql", "filter_sql", "predicate_sql", "join_expression_sql"):
-            sql = getattr(item, field, "")
+        expressions = [
+            (field, getattr(item, field, ""), physical)
+            for field in ("expression_sql", "filter_sql", "predicate_sql", "join_expression_sql")
+        ]
+        expressions.extend(
+            (
+                f"mappings.{index}.expression_sql",
+                mapping.expression_sql,
+                {
+                    f"{mapping.owner}.{mapping.object_name}".upper(): physical.get(
+                        f"{mapping.owner}.{mapping.object_name}".upper(), set()
+                    )
+                },
+            )
+            for index, mapping in enumerate(item.mappings)
+            if mapping.expression_sql
+        )
+        for field, sql, expression_scope in expressions:
             if not sql:
                 continue
             try:
-                tree = checked_expression(sql)
-                for table in tree.find_all(exp.Table):
-                    matches = [key for key in physical if key.split(".")[-1] == table.name.upper()]
-                    if table.db:
-                        matches = [
-                            key for key in matches if key == f"{table.db}.{table.name}".upper()
-                        ]
-                    if len(matches) != 1:
-                        error(
-                            "SQL_TABLE_INVALID",
-                            field,
-                            f"SQL 表 {table.sql()} を Profile 内で一意に解決できません。",
-                        )
-                for column in tree.find_all(exp.Column):
-                    if column.db:
-                        key = f"{column.db}.{column.table}".upper()
-                        if key not in physical or column.name.upper() not in physical[key]:
-                            error(
-                                "SQL_REFERENCE_INVALID",
-                                field,
-                                f"SQL 列 {column.sql()} が範囲外です。",
-                            )
-                    elif not any(column.name.upper() in columns for columns in physical.values()):
-                        error(
-                            "SQL_REFERENCE_INVALID",
-                            field,
-                            f"SQL 列 {column.sql()} を解決できません。",
-                        )
+                parsed = checked_expression(sql)
+                tree = validated_sql(
+                    parsed, physical if isinstance(parsed, exp.Query) else expression_scope
+                )
                 if item.kind == "metric" and field == "expression_sql":
                     aggregates = list(tree.find_all(exp.AggFunc))
                     if item.aggregation and not any(
@@ -265,36 +261,90 @@ def validate_definitions(
                             field,
                             "宣言した集約関数と SQL が一致しません。",
                         )
+                    scope = build_scope(tree) if isinstance(tree, exp.Query) else None
                     if item.filter_sql:
                         predicate = checked_expression(item.filter_sql)
-                        normalized = {node.sql(dialect="oracle") for node in tree.walk()}
-                        if predicate.sql(dialect="oracle") not in normalized:
+                        try:
+                            expected_filter = canonical_expression(predicate, physical, scope)
+                        except ValueError:
+                            expected_filter = ""
+                        # SELECT に表示するだけ、または OR の片側だけでは必須フィルタにならない。
+                        clauses = [tree.args.get(name) for name in ("where", "having")]
+                        pending_conditions: list[exp.Expression] = [
+                            clause.this for clause in clauses if clause is not None
+                        ]
+                        guaranteed = set()
+                        while pending_conditions:
+                            condition = cast(exp.Expression, pending_conditions.pop().unnest())
+                            guaranteed.add(canonical_expression(condition, physical, scope))
+                            if isinstance(condition, exp.And):
+                                pending_conditions.extend([condition.this, condition.expression])
+                        if expected_filter not in guaranteed:
                             error(
                                 "METRIC_FILTER_MISMATCH",
                                 "filter_sql",
-                                "業務フィルタが指標 SQL に含まれていません。",
+                                "業務フィルタが指標 SQL の必須条件に含まれていません。",
                             )
-                    if item.distinct_keys and not any(
-                        isinstance(node, exp.Distinct) for node in tree.walk()
-                    ):
-                        error(
-                            "METRIC_DISTINCT_MISMATCH",
-                            "distinct_keys",
-                            "重複排除キーが宣言されていますが SQL に DISTINCT がありません。",
+
+                    def declared_keys(names: list[str]) -> set[str]:
+                        result = set()
+                        for name in names:
+                            prop = definitions.get(name)
+                            if not isinstance(prop, PropertyDefinition) or len(prop.mappings) != 1:
+                                raise ValueError(
+                                    f"{name} の集約キー mapping が一意ではありません。"
+                                )
+                            mapping = prop.mappings[0]
+                            value = (
+                                checked_expression(mapping.expression_sql)
+                                if mapping.expression_sql
+                                else exp.column(
+                                    mapping.column_name, table=mapping.object_name, db=mapping.owner
+                                )
+                            )
+                            result.add(canonical_expression(value, physical))
+                        return result
+
+                    if item.distinct_keys:
+                        expected = declared_keys(item.distinct_keys)
+                        distincts = [
+                            node.this
+                            for node in aggregates
+                            if isinstance(node.this, exp.Distinct)
+                            and (
+                                not item.aggregation or node.key.lower() == item.aggregation.lower()
+                            )
+                        ]
+                        if not distincts or any(
+                            {canonical_expression(e, physical, scope) for e in distinct.expressions}
+                            != expected
+                            for distinct in distincts
+                        ):
+                            error(
+                                "METRIC_DISTINCT_MISMATCH",
+                                "distinct_keys",
+                                "SQL の重複排除列が宣言したキーと一致しません。",
+                            )
+                    if item.grain and isinstance(tree, exp.Query):
+                        group = tree.args.get("group")
+                        actual = (
+                            {canonical_expression(e, physical, scope) for e in group.expressions}
+                            if group
+                            else set()
                         )
-                    if isinstance(tree, exp.Select) and item.grain and not tree.args.get("group"):
-                        error(
-                            "METRIC_GRAIN_MISMATCH",
-                            "grain",
-                            "集約粒度に対応する GROUP BY を確認してください。",
-                        )
+                        if actual != declared_keys(item.grain):
+                            error(
+                                "METRIC_GRAIN_MISMATCH",
+                                "grain",
+                                "SQL の GROUP BY が宣言した集約粒度と一致しません。",
+                            )
                     if any(True for _ in tree.find_all(exp.Join)) and aggregates:
                         error(
                             "JOIN_GRAIN_REVIEW_REQUIRED",
                             "expression_sql",
                             "結合後集計の重複を防ぐ事前集計または粒度検証が必要です。",
                         )
-            except (ValueError, sqlglot.errors.ParseError) as exc:
+            except (ValueError, sqlglot.errors.SqlglotError) as exc:
                 error(
                     "SQL_EXPRESSION_INVALID",
                     field,
