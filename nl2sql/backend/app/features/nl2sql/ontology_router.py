@@ -6224,3 +6224,29 @@ __all__ = [
     "ontology_runtime",
     "router",
 ]
+
+
+@router.get("/profiles/{profile_id}/ontology-results")
+def get_profile_ontology_results(profile_id: str, request: Request) -> ApiResponse[Any]:
+    from .ontology_definition_service import ProfileOntologyDefinitionService
+
+    assert_profile_access(request, profile_id)
+    try:
+        results = ProfileOntologyDefinitionService(ontology_runtime).list_results(profile_id)
+        return ApiResponse(data={"results": results})
+    except Exception as exc:
+        _raise_domain_error(exc)
+
+
+@router.get("/profiles/{profile_id}/ontology-results/{result_id}")
+def get_profile_ontology_result(
+    profile_id: str, result_id: str, request: Request
+) -> ApiResponse[Any]:
+    from .ontology_definition_service import ProfileOntologyDefinitionService
+
+    assert_profile_access(request, profile_id)
+    try:
+        result = ProfileOntologyDefinitionService(ontology_runtime).get(profile_id, result_id)
+        return ApiResponse(data=result)
+    except Exception as exc:
+        _raise_domain_error(exc)

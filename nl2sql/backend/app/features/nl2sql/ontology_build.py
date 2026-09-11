@@ -1957,6 +1957,16 @@ _EXTRACTION_SYSTEM_PROMPT = (
 )
 
 
+_EXTRACTION_SYSTEM_PROMPT += (
+    "\n互換フィールドに加え、応答 JSON Schema の definitions で型付き定義を返す。"
+    "Object Type/Property/Link Type/Function/Action Type/Interface と補助概念を対象とし、"
+    "api_name は英語の安定識別子、概念参照は同一 definitions 内の api_name とする。"
+    "物理表と業務オブジェクトを一対一と決めつけない。根拠は evidence の資料 ID と位置に記録する。"
+    "不足項目は missing_information_ja、未生成の種類は coverage に理由を残す。"
+    "実装キー・権限・アルゴリズムを推測せず、SQL 条件を業務定義と一致させる。"
+)
+
+
 def _proposal_payload_key(kind_value: str, values: dict[str, Any]) -> str:
     """提案の同一性判定キー(kind + 安定 node/edge ID)。実行を跨いだ dedup に使う。"""
 
@@ -2031,6 +2041,8 @@ def merge_build_extractions(
         synonyms.append(synonym)
         added += 1
 
+    definitions = [*base.definitions, *addition.definitions]
+    added += len(addition.definitions)
     warnings_ja = [*base.warnings_ja]
     for warning in addition.warnings_ja:
         if warning not in warnings_ja:
@@ -2038,6 +2050,8 @@ def merge_build_extractions(
 
     return (
         OntologyBuildExtraction(
+            definitions=definitions,
+            coverage=[*base.coverage, *addition.coverage],
             entities=entities,
             relationships=relationships,
             metrics=metrics,
@@ -4345,6 +4359,21 @@ class OntologyBuildService:
         )
         self._emit(job_id, "構築 job の完了状態を保存しています。", code="FINALIZING")
 
+        from .ontology_definition_service import ProfileOntologyDefinitionService
+
+        bundle = ProfileOntologyDefinitionService(self._runtime).save_build(
+            profile_id=job.profile_id,
+            job_id=job_id,
+            definitions=[
+                item for result in validated_extractions for item in result.extraction.definitions
+            ],
+            coverage=[
+                item for result in validated_extractions for item in result.extraction.coverage
+            ],
+            schema_fingerprint=ontology.revision.schema_fingerprint,
+            source_revision_id=draft_ontology.revision.id,
+        )
+
         def finish(job: OntologyBuildJob) -> None:
             finished_at = utc_now()
             for step in job.steps:
@@ -4367,6 +4396,7 @@ class OntologyBuildService:
             else:
                 job.status = OntologyBuildStatus.FAILED
             job.proposal_ids = []
+            job.result_bundle_id = bundle.id
             job.draft_revision_id = draft_ontology.revision.id
             job.draft_etag = str(markdown_artifact.get("etag") or "")
             job.markdown_output = markdown_output

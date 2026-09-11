@@ -612,6 +612,7 @@ export interface OntologyBuildEvent {
 }
 
 export interface OntologyBuildJob {
+  result_bundle_id?: string;
   id: string;
   profile_id: string;
   status: OntologyBuildStatus;

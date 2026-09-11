@@ -1,3 +1,4 @@
+import { ProfileOntologyResults } from "./ProfileOntologyResults";
 import { Button } from "@/components/ui/button";
 import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
 import {
@@ -1739,6 +1740,8 @@ export function OntologyBuildSection({
           }
         />
       ) : null}
+
+      <ProfileOntologyResults key={profileId} profileId={profileId} buildId={job?.result_bundle_id} />
 
       <section
         className="grid min-w-0 gap-3 rounded-md border border-border bg-background p-3"

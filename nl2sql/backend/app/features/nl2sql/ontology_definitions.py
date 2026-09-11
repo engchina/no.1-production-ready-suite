@@ -1,0 +1,266 @@
+"""Profile 所有の業務定義。物理 graph・表示文書から独立した v2 契約。"""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from typing import Annotated, Literal
+
+from pydantic import BaseModel, ConfigDict, Field
+
+DefinitionKind = Literal[
+    "object_type",
+    "property",
+    "link_type",
+    "function",
+    "action_type",
+    "interface",
+    "shared_property",
+    "value_type",
+    "metric",
+    "business_rule",
+    "enumeration",
+    "business_event",
+    "object_set",
+]
+DEFINITION_KINDS: tuple[DefinitionKind, ...] = (
+    "object_type",
+    "property",
+    "link_type",
+    "function",
+    "action_type",
+    "interface",
+    "shared_property",
+    "value_type",
+    "metric",
+    "business_rule",
+    "enumeration",
+    "business_event",
+    "object_set",
+)
+
+
+class DefinitionContract(BaseModel):
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+
+
+class DefinitionEvidence(DefinitionContract):
+    source_id: str
+    locator: str
+    excerpt_ja: str = ""
+    source_sha256: str = ""
+    verified: bool = False
+
+
+class DefinitionMapping(DefinitionContract):
+    owner: str
+    object_name: str
+    column_name: str = ""
+    expression_sql: str = ""
+
+
+class TypedParameter(DefinitionContract):
+    api_name: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9_]*$")
+    name_ja: str
+    data_type: Literal["string", "integer", "number", "boolean", "date", "datetime", "object"]
+    required: bool = True
+
+
+class DefinitionBase(DefinitionContract):
+    api_name: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z][A-Za-z0-9_.]*$")
+    name_ja: str = Field(min_length=1)
+    description_ja: str = ""
+    id: str = ""
+    aliases: list[str] = Field(default_factory=list)
+    evidence: list[DefinitionEvidence] = Field(default_factory=list)
+    missing_information_ja: list[str] = Field(default_factory=list)
+    mappings: list[DefinitionMapping] = Field(default_factory=list)
+    review_status: Literal["unreviewed", "reviewed"] = "unreviewed"
+    origin: Literal["ai", "manual", "legacy"] = "ai"
+
+
+class PropertyBinding(DefinitionContract):
+    interface_property: str
+    property: str
+
+
+class ActionAssignment(DefinitionContract):
+    property: str
+    parameter: str
+
+
+class EnumMember(DefinitionContract):
+    code: str
+    label_ja: str
+
+
+class InterfaceImplementation(DefinitionContract):
+    interface: str
+    property_mapping: list[PropertyBinding] = Field(default_factory=list)
+
+
+class ObjectTypeDefinition(DefinitionBase):
+    kind: Literal["object_type"] = "object_type"
+    primary_key: list[str] = Field(default_factory=list)
+    title_property: str = ""
+    grain_ja: str = ""
+    properties: list[str] = Field(default_factory=list)
+    implements: list[InterfaceImplementation] = Field(default_factory=list)
+    lifecycle_ja: str = ""
+
+
+class PropertyDefinition(DefinitionBase):
+    kind: Literal["property", "shared_property", "value_type"] = "property"
+    object_type: str = ""
+    data_type: str = ""
+    required: bool = False
+    unit: str = ""
+    currency: str = ""
+    timezone: str = ""
+    allowed_values: list[str] = Field(default_factory=list)
+    shared_property: str = ""
+    value_type: str = ""
+    writable: bool = False
+
+
+class LinkTypeDefinition(DefinitionBase):
+    kind: Literal["link_type"] = "link_type"
+    source: str
+    target: str
+    inverse_name_ja: str = ""
+    cardinality: Literal["one_to_one", "one_to_many", "many_to_one", "many_to_many", "unknown"] = (
+        "unknown"
+    )
+    optional: bool = True
+    join_expression_sql: str = ""
+    intermediary_object: str = ""
+    valid_time_ja: str = ""
+
+
+class FunctionDefinition(DefinitionBase):
+    kind: Literal["function"] = "function"
+    parameters: list[TypedParameter] = Field(default_factory=list)
+    return_type: str = ""
+    dependencies: list[str] = Field(default_factory=list)
+    expression_sql: str = ""
+    implementation_key: str = ""
+    null_policy_ja: str = ""
+    error_policy_ja: str = ""
+
+
+class ActionTypeDefinition(DefinitionBase):
+    kind: Literal["action_type"] = "action_type"
+    object_type: str
+    parameters: list[TypedParameter] = Field(default_factory=list)
+    assignments: list[ActionAssignment] = Field(default_factory=list)
+    preconditions_ja: list[str] = Field(default_factory=list)
+    implementation_key: str = ""
+    affected_properties: list[str] = Field(default_factory=list)
+    permission_requirement_ja: str = ""
+    failure_policy_ja: str = ""
+
+
+class InterfaceDefinition(DefinitionBase):
+    kind: Literal["interface"] = "interface"
+    properties: list[TypedParameter] = Field(default_factory=list)
+    extends: list[str] = Field(default_factory=list)
+    required_links: list[str] = Field(default_factory=list)
+    required_actions: list[str] = Field(default_factory=list)
+
+
+class MetricDefinitionV2(DefinitionBase):
+    kind: Literal["metric"] = "metric"
+    expression_sql: str = ""
+    filter_sql: str = ""
+    aggregation: str = ""
+    grain: list[str] = Field(default_factory=list)
+    distinct_keys: list[str] = Field(default_factory=list)
+    time_property: str = ""
+    time_policy_ja: str = ""
+    unit: str = ""
+    currency: str = ""
+    additivity: Literal["additive", "semi_additive", "non_additive", "unknown"] = "unknown"
+    null_policy_ja: str = ""
+    dependencies: list[str] = Field(default_factory=list)
+
+
+class BusinessRuleDefinitionV2(DefinitionBase):
+    kind: Literal["business_rule"] = "business_rule"
+    applies_to: list[str] = Field(default_factory=list)
+    predicate_sql: str = ""
+    severity: Literal["warning", "error"] = "error"
+
+
+class EnumerationDefinition(DefinitionBase):
+    kind: Literal["enumeration"] = "enumeration"
+    property: str
+    values: list[EnumMember] = Field(default_factory=list)
+
+
+class BusinessEventDefinition(DefinitionBase):
+    kind: Literal["business_event"] = "business_event"
+    object_type: str
+    timestamp_property: str = ""
+    properties: list[str] = Field(default_factory=list)
+
+
+class ObjectSetDefinition(DefinitionBase):
+    kind: Literal["object_set"] = "object_set"
+    object_type: str
+    filter_sql: str = ""
+    parameters: list[TypedParameter] = Field(default_factory=list)
+
+
+BusinessDefinition = Annotated[
+    ObjectTypeDefinition
+    | PropertyDefinition
+    | LinkTypeDefinition
+    | FunctionDefinition
+    | ActionTypeDefinition
+    | InterfaceDefinition
+    | MetricDefinitionV2
+    | BusinessRuleDefinitionV2
+    | EnumerationDefinition
+    | BusinessEventDefinition
+    | ObjectSetDefinition,
+    Field(discriminator="kind"),
+]
+
+
+class ConceptCoverage(DefinitionContract):
+    kind: DefinitionKind
+    status: Literal["generated", "insufficient_evidence", "not_applicable", "failed"]
+    count: int = Field(default=0, ge=0)
+    reason_ja: str = ""
+
+
+class DefinitionFinding(DefinitionContract):
+    code: str
+    severity: Literal["warning", "error"]
+    definition_id: str = ""
+    field: str = ""
+    message_ja: str
+
+
+class DefinitionConflict(DefinitionContract):
+    definition_id: str
+    current: BusinessDefinition
+    proposed: BusinessDefinition
+
+
+class ProfileOntologyBundle(DefinitionContract):
+    format_version: Literal[2] = 2
+    id: str
+    profile_id: str
+    job_id: str
+    schema_fingerprint: str
+    profile_fingerprint: str
+    source_revision_id: str = ""
+    parent_id: str = ""
+    etag: str = ""
+    status: Literal["draft", "published"] = "draft"
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    definitions: list[BusinessDefinition] = Field(default_factory=list)
+    coverage: list[ConceptCoverage] = Field(default_factory=list)
+    findings: list[DefinitionFinding] = Field(default_factory=list)
+    conflicts: list[DefinitionConflict] = Field(default_factory=list)
+    notes_ja: str = ""

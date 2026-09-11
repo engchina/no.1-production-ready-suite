@@ -372,6 +372,7 @@ const proposalsPending = [
 ];
 
 async function mockApi(page: Page) {
+  await page.route("**/api/nl2sql/profiles/*/ontology-results", route => fulfillJson(route, { results: [] }));
   const state = {
     jobPolls: 0,
     accepted: new Set<string>(),
@@ -2580,4 +2581,67 @@ test("公開前の草稿保存中は編集と構築を固定し失敗後に草�
   await expect.poll(() => publishes).toBe(1);
   await expect(page.getByText("オントロジーを公開しました。", { exact: true })).toBeVisible();
   expect(saves).toBe(2);
+});
+
+function typedBundle(profileId: string) {
+  const kinds = ["object_type", "property", "link_type", "function", "action_type", "interface"];
+  return {
+    id: `bundle-${profileId}`, profile_id: profileId, etag: "bundle-etag", status: "draft",
+    created_at: "2026-09-11T00:00:00Z", parent_id: "", findings: [], conflicts: [],
+    definitions: kinds.map(kind => ({ id: `${profileId}-${kind}`, api_name: `${profileId}_${kind}`,
+      kind, name_ja: `${profileId}の定義`, description_ja: "業務資料から構築した定義です。",
+      review_status: "unreviewed", missing_information_ja: [], evidence: [], mappings: [],
+      ...(kind === "object_type" ? { primary_key: ["orderId"], grain_ja: "受注単位" } : {}),
+    })),
+    coverage: kinds.map(kind => ({ kind, count: 1, status: "generated", reason_ja: "" })),
+  };
+}
+
+test("型付き構築結果の六概念を日英併記で閲覧し、検索・キーボード・再読込を利用できる", async ({ page }, testInfo) => {
+  await mockApi(page);
+  await page.route("**/api/nl2sql/profiles/*/ontology-results", route => fulfillJson(route, { results: [typedBundle("default")] }));
+  await page.goto("/ontology-build?profile=default");
+  await loadOntologyBuildWorkspace(page);
+  const panel = page.getByTestId("ontology-typed-results");
+  await expect(panel.getByRole("heading", { name: "構築結果（Build Results）" })).toBeVisible();
+  for (const label of ["オブジェクト型（Object Type）", "プロパティ（Property）", "リンク型（Link Type）", "関数（Function）", "アクション型（Action Type）", "インターフェース（Interface）"]) {
+    const button = panel.getByRole("button", { name: `${label} (1)`, exact: true });
+    await expect(button).toBeVisible();
+    const fits = await button.evaluate(el => el.scrollWidth <= el.clientWidth);
+    expect(fits).toBeTruthy();
+    await button.focus();
+    await page.keyboard.press("Enter");
+    await expect(button).toHaveAttribute("aria-pressed", "true");
+    await panel.locator("summary").click();
+    await expect(panel.getByText("根拠・来歴（Evidence & Provenance）", { exact: true })).toBeVisible();
+  }
+  await panel.getByLabel("定義を検索（Search Definitions）").fill("見つからない定義");
+  await expect(panel.getByText("該当する定義がありません。", { exact: true })).toBeVisible();
+  await panel.getByLabel("定義を検索（Search Definitions）").clear();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
+  await panel.screenshot({ path: testInfo.outputPath("ontology-concepts.png") });
+  await page.reload();
+  await loadOntologyBuildWorkspace(page);
+  await expect(page.getByTestId("ontology-typed-results").getByRole("button", { name: "オブジェクト型（Object Type） (1)", exact: true })).toBeVisible();
+});
+
+test("型付き結果の取得失敗は再試行でき、Profile 切替で前の定義を表示しない", async ({ page }) => {
+  await mockProfileScopedApi(page);
+  let failed = true;
+  await page.route("**/api/nl2sql/profiles/*/ontology-results", async route => {
+    if (failed) return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ detail: "failed" }) });
+    const id = new URL(route.request().url()).pathname.split("/")[4];
+    await fulfillJson(route, { results: [typedBundle(id)] });
+  });
+  await page.goto("/ontology-build?profile=sales");
+  await loadOntologyBuildWorkspace(page);
+  const panel = page.getByTestId("ontology-typed-results");
+  await expect(panel.getByRole("alert")).toBeVisible();
+  failed = false;
+  await panel.getByRole("button", { name: "最新情報を取得（Refresh）" }).click();
+  await expect(panel.locator("summary")).toContainText("salesの定義");
+  await page.getByTestId("ontology-build-profile-select").selectOption("finance");
+  await loadOntologyBuildWorkspace(page);
+  await expect(panel.locator("summary")).toContainText("financeの定義");
+  await expect(panel.getByText("salesの定義", { exact: false })).toHaveCount(0);
 });

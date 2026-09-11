@@ -13,6 +13,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from .ontology_definitions import BusinessDefinition, ConceptCoverage
+
 
 def utc_now() -> datetime:
     """UTC の timezone-aware timestamp を返す。"""
@@ -903,6 +905,8 @@ class OntologyBuildExtraction(OntologyContract):
     relationships: list[OntologyRelationshipCandidate] = Field(default_factory=list)
     metrics: list[OntologyMetricCandidate] = Field(default_factory=list)
     synonyms: list[OntologySynonymCandidate] = Field(default_factory=list)
+    definitions: list[BusinessDefinition] = Field(default_factory=list)
+    coverage: list[ConceptCoverage] = Field(default_factory=list)
     warnings_ja: list[str] = Field(default_factory=list)
 
 
@@ -1011,6 +1015,7 @@ class OntologyBuildJob(OntologyContract):
     proposal_ids: list[str] = Field(default_factory=list)
     draft_revision_id: str = ""
     draft_etag: str = ""
+    result_bundle_id: str = ""
     source_document_ids: list[str] = Field(default_factory=list)
     sources: list[OntologySourceProgress] = Field(default_factory=list)
     markdown_output: str = ""
