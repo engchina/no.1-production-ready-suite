@@ -240,11 +240,10 @@ function GroupEditor({
   const changeChildren = (children: ScopeNode[], focusLast = false) => {
     onChange({ ...group, children });
     requestAnimationFrame(() => {
-      if (focusLast)
-        container.current
-          ?.querySelector<HTMLElement>("[data-scope-child]:last-of-type select")
-          ?.focus();
-      else
+      if (focusLast) {
+        const children = container.current?.querySelectorAll<HTMLElement>(":scope > [data-scope-child]");
+        children?.item(children.length - 1)?.querySelector<HTMLSelectElement>("select")?.focus();
+      } else
         container.current?.querySelector<HTMLSelectElement>("select")?.focus();
     });
   };

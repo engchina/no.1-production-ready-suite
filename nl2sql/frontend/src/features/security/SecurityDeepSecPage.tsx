@@ -5,6 +5,8 @@ import { BulkSelectionActions } from "@/components/BulkSelectionActions";
 import { Button } from "@/components/ui/button";
 import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { useDatabaseStatus } from "@/lib/queries";
 import {
   CheckCircle2,
   Clock3,
@@ -707,7 +709,9 @@ function DeepSecPlanSteps({
 
 export function SecurityDeepSecPage() {
   const confirm = useConfirm();
-  const { hasPermission } = useAuth();
+  const { user, hasPermission } = useAuth();
+  const queryClient = useQueryClient();
+  const { data: database } = useDatabaseStatus({ enabled: false });
   const mayApply = hasPermission(MENU_PERMISSIONS.securityDeepSec);
   const mayVerify = hasPermission(MENU_PERMISSIONS.securityDeepSec);
   const mayManageEntitlements = hasPermission(MENU_PERMISSIONS.securityDeepSec);
@@ -751,6 +755,7 @@ export function SecurityDeepSecPage() {
   const [entitlementLoading, setEntitlementLoading] = useState(true);
   const [targetObjectsLoading, setTargetObjectsLoading] = useState(true);
   const [targetObjectsLoadingMore, setTargetObjectsLoadingMore] = useState(false);
+  const [relatedMetadataRefreshing, setRelatedMetadataRefreshing] = useState(false);
   const [foundationApplying, setFoundationApplying] = useState(false);
   const [resetting, setResetting] = useState(false);
   const [verifying, setVerifying] = useState(false);
@@ -790,11 +795,11 @@ export function SecurityDeepSecPage() {
     planLoading ||
     entitlementLoading ||
     targetObjectsLoading ||
-    targetObjectsLoadingMore;
+    targetObjectsLoadingMore || relatedMetadataRefreshing;
 
   const operationBusy = foundationApplying || resetting || verifying || entitlementPreviewing ||
     entitlementApplying || configSaving || configSyncing;
-  const actionBlocked = operationBusy || statusLoading || planLoading || entitlementLoading;
+  const actionBlocked = operationBusy || statusLoading || planLoading || entitlementLoading || relatedMetadataRefreshing;
 
   const filteredEntitlementRoles = useMemo(() => {
     const q = entitlementSearch.trim().toLowerCase();
@@ -1133,6 +1138,22 @@ export function SecurityDeepSecPage() {
     }
   };
 
+  const refreshRelatedMetadata = async () => {
+    const queryKey = ["nl2sql", "deepsec", user?.user_uuid, database?.context_id];
+    setRelatedMetadataRefreshing(true);
+    setEntitlementApplyConfirmation("");
+    setEntitlementPreview(null);
+    try {
+      // 非表示ルールのキャッシュも無効化し、表示中の全問い合わせの完了を待つ。
+      // 個別の取得エラーはカード内に表示し、更新全体を成功として通知しない。
+      await queryClient.invalidateQueries({ queryKey, refetchType: "active" });
+      return queryClient.getQueryCache().findAll({ queryKey, type: "active" })
+        .every((query) => query.state.status !== "error");
+    } finally {
+      setRelatedMetadataRefreshing(false);
+    }
+  };
+
   const load = async (announce = false) => {
     setActionError("");
     const results = await Promise.all([
@@ -1140,6 +1161,7 @@ export function SecurityDeepSecPage() {
       loadPlan(),
       loadEntitlements(),
       loadTargetObjects(),
+      announce ? refreshRelatedMetadata() : Promise.resolve(true),
     ]);
     if (announce && results.every(Boolean)) {
       toast.success(t("common.action.refreshed"));
