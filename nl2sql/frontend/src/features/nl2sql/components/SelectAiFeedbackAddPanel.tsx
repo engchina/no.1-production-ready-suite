@@ -125,8 +125,8 @@ export function SelectAiFeedbackAddPanel({
           <textarea
             value={generatedSql}
             readOnly
-            rows={5}
-            className="min-h-32 rounded-md border border-border bg-code px-3 py-2 font-mono text-sm leading-6 text-code-fg outline-none"
+            rows={12}
+            className="min-h-72 rounded-md border border-border bg-code px-3 py-2 font-mono text-sm leading-6 text-code-fg outline-none"
             placeholder={t("nl2sql.selectAiFeedbackAdd.responsePlaceholder")}
           />
         </label>

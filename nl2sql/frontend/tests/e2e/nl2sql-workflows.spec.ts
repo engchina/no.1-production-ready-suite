@@ -4000,6 +4000,18 @@ test("query workbench generates SQL through the job flow and shows results", asy
   // 結果フィードバックカードは廃止され、良い/違うボタンへ統合された。
   await expect(page.getByRole("heading", { name: "結果フィードバック" })).toHaveCount(0);
   await expect(feedbackResponse).toHaveJSProperty("readOnly", true);
+  await feedbackResponse.scrollIntoViewIfNeeded();
+  await feedbackResponse.focus();
+  await expect(feedbackResponse).toBeFocused();
+  const sqlDisplayBox = await feedbackResponse.boundingBox();
+  expect(sqlDisplayBox).not.toBeNull();
+  const minimumSqlHeight = await page.evaluate(
+    () => 18 * Number.parseFloat(getComputedStyle(document.documentElement).fontSize)
+  );
+  expect(sqlDisplayBox!.height).toBeGreaterThanOrEqual(minimumSqlHeight);
+  expect(sqlDisplayBox!.x).toBeGreaterThanOrEqual(0);
+  expect(sqlDisplayBox!.x + sqlDisplayBox!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
+  await feedbackResponse.screenshot({ path: testInfo.outputPath("generated-sql-height.png") });
 
   // 「良い」は利用者からの評価としてアプリ DB にだけ保存する。
   await page.getByLabel("利用者コメント（feedback_content）").fill("期待どおりの SQL です");
