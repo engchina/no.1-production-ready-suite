@@ -137,22 +137,21 @@ export function SqlToQuestionPage() {
           }),
         ]);
         const visibleDetails = await Promise.all(
-          page.items.slice(0, 8).map((item) =>
-            apiGet<SchemaObjectDetail>(
+          page.items.slice(0, 8).map(async (item) => {
+            const detail = await apiGet<SchemaObjectDetail>(
               `/api/schema/objects/${encodeURIComponent(item.owner)}/${encodeURIComponent(item.object_name)}`,
               { signal, timeoutMs: API_TIMEOUT_MS.interactiveDetail }
-            )
-          )
+            );
+            return [JSON.stringify([item.owner, item.object_name]), detail.table] as const;
+          })
         );
         if (signal.aborted || sequence !== detailSequence.current) return;
-        const detailsByName = new Map(
-          visibleDetails.map((detail) => [detail.table.table_name.toUpperCase(), detail.table])
-        );
+        const detailsByName = new Map(visibleDetails);
         setSelectedProfile(profile);
         setSchemaTables(
           page.items.map(
             (item) =>
-              detailsByName.get(item.object_name.toUpperCase()) ?? schemaSummaryTable(item)
+              detailsByName.get(JSON.stringify([item.owner, item.object_name])) ?? schemaSummaryTable(item)
           )
         );
       } catch (error) {
@@ -574,10 +573,10 @@ function SchemaPreview({
       ) : (
         <div className="grid max-h-96 gap-2 overflow-auto pr-1">
           {tables.map((table) => (
-            <section key={table.table_name} className="rounded-md border border-border bg-card p-3">
+            <section key={JSON.stringify([table.owner, table.table_name])} className="rounded-md border border-border bg-card p-3">
               <p className="font-semibold text-foreground">
                 {table.logical_name || table.table_name}
-                <span className="ml-2 font-mono text-xs text-muted">{table.table_name}</span>
+                <span className="ml-2 font-mono text-xs text-muted">{table.qualified_name || `${table.owner}.${table.table_name}`}</span>
               </p>
               <p className="mt-1 text-xs leading-5 text-muted">{table.comment || "-"}</p>
               <p className="mt-2 break-words font-mono text-xs leading-5 text-foreground">

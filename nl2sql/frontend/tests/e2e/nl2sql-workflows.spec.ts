@@ -15007,3 +15007,32 @@ test("SELECT SQL の遅延ファイル読込は手入力を上書きしない", 
   await expectNoHorizontalScroll(page);
   await page.screenshot({ path: testInfo.outputPath("direct-sql-file-edit.png") });
 });
+
+test("SQL から質問のスキーマ参照は別 owner の同名表を区別する", async ({ page }, testInfo) => {
+  await mockNl2SqlApi(page);
+  const tables = ["A", "B"].map((owner) => ({ ...schemaCatalog.tables[0], owner, table_name: "EMPLOYEE", qualified_name: `${owner}.EMPLOYEE`, logical_name: `${owner} 部門の従業員`, columns: [{ ...schemaCatalog.tables[0].columns[0], column_name: `${owner}_ID`, logical_name: `${owner} 部門の識別子` }] }));
+  let reversed = false;
+  await page.route("**/api/schema/objects?*", (route) => fulfillJson(route, {
+    items: (reversed ? [...tables].reverse() : tables).map((table) => ({ owner: table.owner, object_name: table.table_name, object_type: table.table_type, logical_name: table.logical_name, column_count: 1 })),
+    next_cursor: null, total: 2, catalog_version: 1,
+  }));
+  await page.route("**/api/schema/objects/*/*", (route) => {
+    const owner = new URL(route.request().url()).pathname.split("/").at(-2);
+    return fulfillJson(route, { table: tables.find((table) => table.owner === owner), dependencies: [], catalog_version: 1 });
+  });
+  await page.goto("/sql-to-question");
+  const checkTables = async () => {
+    for (const owner of ["A", "B"]) {
+      const card = page.locator("section").filter({ has: page.getByText(`${owner} 部門の従業員`, { exact: false }) }).last();
+      await expect(card).toContainText(`${owner}.EMPLOYEE`);
+      await expect(card).toContainText(`${owner} 部門の識別子`);
+      await expect(card).not.toContainText(`${owner === "A" ? "B" : "A"} 部門の識別子`);
+    }
+  };
+  await checkTables();
+  reversed = true;
+  await page.getByRole("button", { name: "表示を更新", exact: true }).click();
+  await checkTables();
+  await expectNoHorizontalScroll(page);
+  await page.screenshot({ path: testInfo.outputPath("sql-question-qualified-schema.png") });
+});
