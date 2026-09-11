@@ -533,6 +533,7 @@ function SavedSourceDocumentsList({
 }
 
 export interface OntologyBuildSectionProps {
+  resultRequest?: {tab:"model"|"review";sequence:number};
   profileId: string | null;
   profileLabel?: string;
   hasProfileSchemaInput: boolean;
@@ -543,6 +544,7 @@ export interface OntologyBuildSectionProps {
 }
 
 export function OntologyBuildSection({
+  resultRequest,
   profileId,
   profileLabel,
   hasProfileSchemaInput,
@@ -1393,7 +1395,7 @@ export function OntologyBuildSection({
       <SectionHeading profileLabel={profileLabel} />
       <PageNotice notice={notice} />
       <section
-        className="grid w-full min-w-0 content-start gap-4 rounded-md border border-border bg-background p-3"
+        className={hasTypedResult ? "grid w-full min-w-0 content-start gap-4" : "grid w-full min-w-0 content-start gap-4 rounded-md border border-border bg-background p-3"}
         aria-label={t("profiles.ontologyBuild.setupTitle")}
         data-testid="ontology-build-setup-panel"
       >
@@ -1516,15 +1518,15 @@ export function OntologyBuildSection({
       </section>
 
       <section
-        className="grid w-full min-w-0 content-start gap-4 rounded-md border border-border bg-background p-3"
+        className={hasTypedResult ? "grid w-full min-w-0 content-start gap-4" : "grid w-full min-w-0 content-start gap-4 rounded-md border border-border bg-background p-3"}
         aria-label={t(hasTypedResult ? "ontologyWorkspace.workTitle" : "profiles.ontologyBuild.reviewTitle")}
         data-testid="ontology-build-review-panel"
       >
-        <DbObjectPanelHeader
+        {!hasTypedResult ? <DbObjectPanelHeader
           icon={FileText}
           title={t(hasTypedResult ? "ontologyWorkspace.workTitle" : "profiles.ontologyBuild.reviewTitle")}
-          description={t(hasTypedResult ? "ontologyWorkspace.canonical" : "profiles.ontologyBuild.reviewHint")}
-        />
+          description={t("profiles.ontologyBuild.reviewHint")}
+        /> : null}
       {!job && busy === "start" ? (
         <TimedLoadingState
           label={t("profiles.ontologyBuild.submitting")}
@@ -1591,7 +1593,7 @@ export function OntologyBuildSection({
               </Button>
             ) : null
           }
-          steps={job.steps.map((step, stepIndex) => {
+          steps={[...job.steps.map((step, stepIndex) => {
             const displayStatus = effectiveBuildStepStatus(job.status, step.status);
             const displayFinishedAt =
               displayStatus !== step.status && job.finished_at ? job.finished_at : step.finished_at;
@@ -1629,7 +1631,7 @@ export function OntologyBuildSection({
                 </>
               ),
             };
-          })}
+          }), ...((job.definition_phases ?? []).map(phase => ({ id: phase.name, label: t(`ontologyResults.phase.${phase.name}`), status: normalizeBuildStepStatus(phase.status), statusLabel: t(`ontologyResults.phaseStatus.${phase.status}`), description: phase.detail_ja })))] }
           footer={
             schemaScopeFailure ||
             unscopedBuildError ||
@@ -1742,7 +1744,7 @@ export function OntologyBuildSection({
         />
       ) : null}
 
-      <ProfileOntologyResults key={profileId} profileId={profileId} buildId={job?.result_bundle_id} phases={job?.definition_phases} onTypedResult={setHasTypedResult} />
+      <ProfileOntologyResults resultRequest={resultRequest} key={profileId} profileId={profileId} buildId={job?.result_bundle_id} profileLabel={profileLabel} onPublished={onPublished} onTypedResult={setHasTypedResult} />
 
       <section
         className="grid min-w-0 gap-3 rounded-md border border-border bg-background p-3"

@@ -19,6 +19,7 @@ from .ontology_definitions import (
     DefinitionResolveRequest,
     DefinitionReviewRequest,
 )
+from .ontology_presentation import bundle_view, release_view
 from .ontology_service import OntologyVersionConflictError
 from .profile_access import assert_profile_access, principal_from_request
 
@@ -37,15 +38,22 @@ def create_workspace_router(runtime: Any, raise_error: Any) -> APIRouter:
         try:
             svc = service(request, profile_id)
             bundle = svc.get(profile_id, result_id)
+            published = release_view(svc, profile_id)
             return ApiResponse(
                 data={
-                    "bundle": bundle,
+                    "bundle": bundle_view(svc.store, bundle),
                     "artifacts": render_definition_artifacts(bundle),
-                    "head": svc.head(profile_id),
+                    "head": {
+                        **svc.head(profile_id),
+                        "display_version": published["display_version"] if published else None,
+                    },
                     "releases": [
                         {
                             "id": json.loads(record["content"])["id"],
                             "published_at": json.loads(record["content"])["published_at"],
+                            "display_version": bundle_view(
+                                svc.store, json.loads(record["content"])["bundle"]
+                            )["display_version"],
                         }
                         for record in svc.store.list_artifacts(svc._session(profile_id))
                         if record.get("artifact_type") == "ontology_release_v2"
@@ -239,7 +247,7 @@ def create_workspace_router(runtime: Any, raise_error: Any) -> APIRouter:
     @router.get("/profiles/{profile_id}/ontology-published")
     def published(profile_id: str, request: Request) -> ApiResponse[Any]:
         try:
-            return ApiResponse(data=service(request, profile_id).release(profile_id))
+            return ApiResponse(data=release_view(service(request, profile_id), profile_id))
         except Exception as exc:
             raise_error(exc)
             raise
@@ -247,7 +255,9 @@ def create_workspace_router(runtime: Any, raise_error: Any) -> APIRouter:
     @router.get("/profiles/{profile_id}/ontology-releases/{release_id}")
     def release(profile_id: str, release_id: str, request: Request) -> ApiResponse[Any]:
         try:
-            return ApiResponse(data=service(request, profile_id).release(profile_id, release_id))
+            return ApiResponse(
+                data=release_view(service(request, profile_id), profile_id, release_id)
+            )
         except Exception as exc:
             raise_error(exc)
             raise

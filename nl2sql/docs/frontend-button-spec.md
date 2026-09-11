@@ -303,3 +303,10 @@ Issue #435 のユーザー指定により、`OntologyGraphCanvas` の操作部�
 適用: PageHeader / ObjectActions / FormActionBar / ContentActionBar / BulkSelectionActions、確認ダイアログ、入力横、ログイン、各設定、クエリ・生成 SQL・結果、データ/テーブル/ビュー、Profile、学習・履歴・評価、権限、グラフ操作、ページング、エラー再試行、通知内操作。共有パッケージの状態 hook/store はそのまま使い、アクションを含む Pagination / ErrorState / Toaster の表示はアプリ共通 Button を使う。
 
 `tests/e2e/button-standards.spec.ts` は実 React 部品を使って light/dark × desktop/mobile-375 の寸法・状態・操作・focus・danger 確認・overflow・ページング・再試行を検証する。各機能の既存 Playwright spec はユーザーフローの回帰を担当する。
+
+### 構築結果と公開能力（Issue #485）
+
+- 構築結果の五つの表示切替は `ManagementTabs` を使う。操作ボタンでタブを模倣しない。
+- 構築結果・公開能力は独立した管理パネルとし、それぞれのヘッダー右側に `secondary/sm` の「最新情報を取得」を置く。
+- 変更解析・検証・実装設定・呼出し・プレビューは `ContentActionBar` 内の `secondary/lg`、公開・実行確定は `primary/lg`。共通サイズを子要素 CSS で上書きしない。
+- 定義／能力一覧の選択は一覧行として扱い、選択状態とフォーカスを示す。カテゴリ／版の選択は `SelectField`、マッピングからの詳細表示は局所操作とする。

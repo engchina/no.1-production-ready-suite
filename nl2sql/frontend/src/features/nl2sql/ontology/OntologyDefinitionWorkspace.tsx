@@ -1,112 +1,647 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { ErrorState, LoadingState } from "@/components/StateViews";
+import { useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { FormStatus } from "@/components/ui/form-status";
-import { useConfirm } from "@/components/ui/confirm-dialog";
-import { useResetExecutionConsent, useWorkspaceState } from "@/components/WorkspaceState";
-import { apiGet, apiPost } from "@/lib/api";
+import { formatDateTimeWithYear } from "@/lib/format";
+import { ContentActionBar } from "@/components/ContentActionBar";
 import { t } from "@/lib/i18n";
-import { OntologyCapabilities } from "./OntologyCapabilities";
+import { LayoutList, Boxes, Link2, ShieldCheck, Send } from "lucide-react";
+import { ManagementTabs } from "../components/DbAdminShared";
+import { SelectField } from "@/components/ui/select-field";
+import { FieldError } from "@/components/ui/field-error";
+import { OntologyModel } from "./ProfileOntologyResults";
+import {
+  ChangesTable,
+  DataTable,
+  TechnicalDetails,
+  ResultStatus,
+  versionLabel,
+  versionOption,
+} from "./ontologyResultPresentation";
 import { ProfileOntologyGraph } from "./ProfileOntologyGraph";
-import type { ProfileOntologyBundle } from "./ProfileOntologyResults";
+import { ProfileOntologyBundle } from "./ProfileOntologyResults";
 
-const tabs = ["overview", "model", "mapping", "validation", "review", "capabilities"] as const;
-type Tab = typeof tabs[number];
-interface Workspace { bundle: ProfileOntologyBundle; artifacts: Record<string, string>; head: { release_id: string; etag: string }; releases?: { id: string; published_at: string }[] }
-interface Changes { id: string; base_etag: string; before: Record<string, unknown>[]; after: Record<string, unknown>[] }
-interface ValidationJob { job_id: string; status: string; error_message_ja?: string; report?: Record<string, unknown> }
-
-export function OntologyDefinitionWorkspace({ bundle, profileId, onChanged, children }: { bundle: ProfileOntologyBundle; profileId: string; onChanged: () => Promise<unknown>; children: ReactNode }) {
-  const prefix = `ontology-v2:${profileId}:${bundle.id}`;
-  const [tab, setTab] = useWorkspaceState<Tab>(`${prefix}:tab`, "overview");
-  const [instruction, setInstruction] = useWorkspaceState(`${prefix}:instruction`, "");
-  const [notes, setNotes] = useWorkspaceState(`${prefix}:notes`, bundle.notes_ja ?? "");
-  const [acceptance, setAcceptance] = useWorkspaceState(`${prefix}:acceptance`, "");
-  const [validationJobId, setValidationJobId] = useWorkspaceState(`${prefix}:validation-job`, "");
-  const [busy, setBusy] = useState("");
-  const [error, setError] = useState("");
-  const [changes, setChanges] = useState<Changes | null>(null);
-  const [rollbackId, setRollbackId] = useState("");
-  const confirm = useConfirm();
-  const consentVersion = useRef(0);
-  useResetExecutionConsent(() => { setChanges(null); setRollbackId(""); consentVersion.current += 1; }, `${profileId}:${bundle.etag}`);
-  const workspace = useQuery({ queryKey: ["nl2sql", "profiles", "ontology-workspace", profileId, bundle.id, bundle.etag], queryFn: ({ signal }) => apiGet<Workspace>(`/api/nl2sql/profiles/${encodeURIComponent(profileId)}/ontology-results/${encodeURIComponent(bundle.id)}/workspace`, { signal }), retry: false });
-  const job = useQuery({ queryKey: ["nl2sql", "profiles", "ontology-validation-job", profileId, validationJobId], queryFn: ({ signal }) => apiGet<ValidationJob>(`/api/nl2sql/profiles/${encodeURIComponent(profileId)}/ontology-validation-jobs/${encodeURIComponent(validationJobId)}`, { signal }), enabled: !!validationJobId, retry: false, refetchInterval: query => query.state.data && ["succeeded", "failed", "cancelled"].includes(query.state.data.status) ? false : 1000 });
-  const handledJob = useRef("");
+import {
+  tabs,
+  useOntologyDefinitionWorkspace,
+} from "./useOntologyDefinitionWorkspace";
+export function OntologyDefinitionWorkspace({
+  bundle,
+  profileId,
+  profileLabel,
+  onChanged,
+  onPublished,
+  resultRequest,
+}: {
+  bundle: ProfileOntologyBundle;
+  profileId: string;
+  onChanged: () => Promise<unknown>;
+  profileLabel?: string;
+  onPublished?: () => void;
+  resultRequest?: { tab: "model" | "review"; sequence: number };
+}) {
+  const {
+    prefix,
+    tab,
+    setTab,
+    focusId,
+    setFocusId,
+    success,
+    acceptanceError,
+    setAcceptanceError,
+    instruction,
+    setInstruction,
+    notes,
+    setNotes,
+    acceptance,
+    setAcceptance,
+    busy,
+    error,
+    changes,
+    setChanges,
+    rollbackId,
+    setRollbackId,
+    workspace,
+    job,
+    readOnly,
+    run,
+  } = useOntologyDefinitionWorkspace({
+    bundle,
+    profileId,
+    profileLabel,
+    onChanged,
+    onPublished,
+  });
   useEffect(() => {
-    if (job.data?.status === "succeeded" && handledJob.current !== job.data.job_id) {
-      handledJob.current = job.data.job_id;
-      void onChanged();
+    if (resultRequest) {
+      setTab(resultRequest.tab);
+      requestAnimationFrame(() =>
+        document.getElementById(`${prefix}-tab-${resultRequest.tab}`)?.focus(),
+      );
     }
-  }, [job.data, onChanged]);
-  const endpoint = `/api/nl2sql/profiles/${encodeURIComponent(profileId)}/ontology-results/${encodeURIComponent(bundle.id)}`;
-  const readOnly = bundle.status === "published";
-  const headers = () => ({ "If-Match": `"${bundle.etag}"`, "Idempotency-Key": crypto.randomUUID() });
-  const run = async (action: string, body?: unknown, needsConfirmation = false) => {
-    const consent = consentVersion.current;
-    if (needsConfirmation && !await confirm({ title: t(`ontologyWorkspace.action.${action}` as Parameters<typeof t>[0]), description: t("ontologyWorkspace.confirmScope", { profile: profileId, version: bundle.id }), confirmLabel: t("ontologyWorkspace.confirm"), tone: "info" })) return;
-    if (consent !== consentVersion.current) return;
-    setBusy(action); setError("");
-    try {
-      if (action === "analyze") setChanges(await apiPost<Changes>(`${endpoint}/analyze`, { instruction_ja: instruction }, { headers: headers() }));
-      else if (action === "rollback") {
-        await apiPost(`/api/nl2sql/profiles/${encodeURIComponent(profileId)}/ontology-releases/${encodeURIComponent(rollbackId)}/rollback`, { expected_head: workspace.data?.head?.release_id ?? "", confirmed: true }, { headers: { ...headers(), "If-Match": workspace.data?.head?.etag ?? "" } });
-        setRollbackId(""); await workspace.refetch(); await onChanged();
-      } else if (action === "data") {
-        const cases: unknown = acceptance.trim() ? JSON.parse(acceptance) : [];
-        const result = await apiPost<ValidationJob>(`${endpoint}/validation-jobs`, { confirmed: true, sample_limit: 50, acceptance_cases: cases }, { headers: headers() });
-        setValidationJobId(result.job_id);
-      } else {
-        const suffix = action === "apply" && changes ? `changes/${encodeURIComponent(changes.id)}/apply` : action;
-        await apiPost(`${endpoint}/${suffix}`, body, { headers: headers() });
-        setChanges(null);
-        await onChanged();
-        await workspace.refetch();
-      }
-    } catch (cause) { setError(cause instanceof Error ? cause.message : t("ontologyWorkspace.failed")); }
-    finally { setBusy(""); }
-  };
-  const renderJson = (value: unknown) => <pre className="max-h-96 min-w-0 overflow-auto whitespace-pre-wrap break-words rounded border border-border p-3 text-xs [overflow-wrap:anywhere]">{JSON.stringify(value, null, 2)}</pre>;
-  return <div className="grid min-w-0 grid-cols-1 gap-3 [overflow-wrap:anywhere] [&_button]:h-auto [&_button]:min-h-11 [&_button]:max-w-full [&_button]:whitespace-normal [&_button]:py-2 [&_button>span]:whitespace-normal [&_button>span]:text-clip" data-testid="ontology-definition-workspace">
-    <div role="tablist" aria-label={t("ontologyWorkspace.tabs")} className="flex min-w-0 flex-wrap gap-2">{tabs.map(name => <Button key={name} className="w-full sm:w-auto" id={`${prefix}-${name}-tab`} role="tab" aria-selected={tab === name} aria-controls={`${prefix}-panel`} variant={tab === name ? "primary" : "secondary"} size="sm" onClick={() => setTab(name)}>{t(`ontologyWorkspace.tab.${name}`)}</Button>)}</div>
-    {error ? <FormStatus tone="danger" message={error} /> : null}
-    {workspace.isError ? <FormStatus tone="danger" message={t("ontologyWorkspace.loadError")} /> : null}
-    <div role="tabpanel" id={`${prefix}-panel`} aria-labelledby={`${prefix}-${tab}-tab`} className="grid min-w-0 grid-cols-1 gap-3">
-      {tab === "model" ? children : null}
-      {tab === "capabilities" ? <OntologyCapabilities profileId={profileId} /> : null}
-      {tab === "overview" ? <>
-        <p>{t("ontologyWorkspace.overview", { count: bundle.definitions.length, unreviewed: bundle.definitions.filter(d => d.review_status === "unreviewed").length, conflicts: bundle.conflicts.length })}</p>
-        <p className="break-all text-sm">{t("ontologyWorkspace.version")}: {bundle.id}</p>
-        <p className="break-all text-sm">{t("ontologyWorkspace.published")}: {workspace.data?.head?.release_id || t("ontologyResults.unspecified")}</p>
-        <p className="text-sm text-muted">{t("ontologyWorkspace.canonical")}</p>
-        {workspace.data?.releases?.length ? <div className="grid gap-2"><label className="grid gap-1">{t("ontologyWorkspace.rollbackVersion")}<select value={rollbackId} onChange={e => setRollbackId(e.target.value)} className="min-w-0 rounded border border-border bg-background p-2"><option value="">{t("ontologyResults.unspecified")}</option>{workspace.data.releases.map(release => <option key={release.id} value={release.id}>{release.published_at} · {release.id}</option>)}</select></label><Button size="sm" variant="secondary" disabled={!rollbackId || !!busy || rollbackId === workspace.data?.head?.release_id} onClick={() => void run("rollback", undefined, true)}>{t("ontologyWorkspace.action.rollback")}</Button></div> : null}
-        {workspace.data?.artifacts?.graph_json ? <ProfileOntologyGraph artifact={workspace.data.artifacts.graph_json} /> : null}
-        {workspace.data?.artifacts ? <details><summary>{t("ontologyWorkspace.artifacts")}</summary>{Object.entries(workspace.data.artifacts).map(([name, content]) => <details key={name}><summary>{name}</summary><pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words text-xs">{content}</pre></details>)}</details> : null}
-      </> : null}
-      {tab === "mapping" ? <ul className="grid gap-3">{bundle.definitions.filter(d => d.mappings.length).map(d => <li key={d.id} className="min-w-0 rounded border border-border p-3"><strong>{d.name_ja} ({d.api_name})</strong>{d.mappings.map((mapping, index) => <p key={index} className="break-all text-sm">{[mapping.owner, mapping.object_name, mapping.column_name].filter(Boolean).join(".")}{mapping.expression_sql ? `: ${mapping.expression_sql}` : ""}</p>)}</li>)}</ul> : null}
-      {tab === "validation" ? <>
-        <p>{t("ontologyResults.staticOnly")}</p>
-        <Button size="md" variant="secondary" disabled={readOnly || !!busy} loading={busy === "validate"} onClick={() => void run("validate")}>{t("ontologyWorkspace.action.validate")}</Button>
-        {bundle.findings.length ? <ul className="grid gap-2">{bundle.findings.map((finding, index) => <li key={index} className="rounded border border-border p-2 text-sm"><strong>{finding.severity === "error" ? t("ontologyWorkspace.blocker") : t("ontologyWorkspace.warning")}</strong> · {finding.message_ja}<p className="break-all text-muted">{bundle.definitions.find(d => d.id === finding.definition_id)?.name_ja ?? finding.definition_id} · {finding.code}</p></li>)}</ul> : <p>{t("ontologyWorkspace.noFindings")}</p>}
-        {bundle.validation_report ? renderJson(bundle.validation_report) : null}
-        <details><summary>{t("ontologyWorkspace.acceptance")}</summary><p className="text-sm">{t("ontologyWorkspace.acceptanceHint")}</p><label className="grid gap-1">{t("ontologyWorkspace.acceptanceInput")}<textarea className="min-h-28 w-full rounded border border-border bg-background p-2" value={acceptance} onChange={e => setAcceptance(e.target.value)} /></label></details>
-        <Button size="md" variant="secondary" disabled={readOnly || !!busy || !!job.data && ["queued", "claimed", "running"].includes(job.data.status)} onClick={() => void run("data", undefined, true)}>{t("ontologyWorkspace.action.data")}</Button>
-        {job.data ? <p role="status">{t("ontologyWorkspace.dataJob")}: {t(`ontologyWorkspace.job.${job.data.status}` as Parameters<typeof t>[0])}</p> : null}
-        {job.data?.error_message_ja ? <FormStatus tone="danger" message={job.data.error_message_ja} /> : null}
-        {job.isError ? <FormStatus tone="danger" message={t("ontologyWorkspace.loadError")} /> : null}
-      </> : null}
-      {tab === "review" ? <>
-        <label className="grid gap-1">{t("ontologyWorkspace.instruction")}<textarea value={instruction} onChange={e => { setInstruction(e.target.value); setChanges(null); }} className="min-h-28 w-full rounded border border-border bg-background p-2" disabled={readOnly || !!busy} /></label>
-        <Button size="md" variant="secondary" disabled={readOnly || !!busy || !instruction.trim()} loading={busy === "analyze"} onClick={() => void run("analyze")}>{t("ontologyWorkspace.action.analyze")}</Button>
-        {changes ? <div className="grid min-w-0 gap-3"><div className="grid min-w-0 gap-3 sm:grid-cols-2"><div className="min-w-0"><h4>{t("ontologyResults.current")}</h4>{renderJson(changes.before)}</div><div className="min-w-0"><h4>{t("ontologyResults.proposed")}</h4>{renderJson(changes.after)}</div></div><Button size="md" variant="secondary" disabled={!!busy || changes.base_etag.replaceAll('"', '') !== bundle.etag} onClick={() => void run("apply", { confirmed: true }, true)}>{t("ontologyWorkspace.action.apply")}</Button></div> : null}
-        {bundle.conflicts.map((conflict, index) => <div key={index} className="grid min-w-0 gap-2 rounded border border-border p-3"><p>{conflict.current.name_ja} → {conflict.proposed.name_ja}</p><div className="flex flex-wrap gap-2">{(["current", "proposed"] as const).map(choice => <Button key={choice} size="sm" variant="secondary" disabled={readOnly || !!busy} onClick={() => void run(`conflicts/${index}/resolve`, { choice })}>{t(`ontologyResults.${choice}`)}</Button>)}</div></div>)}
-        <label className="grid gap-1">{t("ontologyWorkspace.notes")}<textarea value={notes} onChange={e => setNotes(e.target.value)} className="min-h-20 rounded border border-border bg-background p-2" disabled={readOnly || !!busy} /></label>
-        <Button size="sm" variant="secondary" disabled={readOnly || !!busy || notes === (bundle.notes_ja ?? "")} onClick={() => void run("notes", { notes_ja: notes })}>{t("ontologyWorkspace.action.notes")}</Button>
-        <Button size="md" variant="secondary" disabled={readOnly || !!busy || !!bundle.conflicts.length} onClick={() => void run("review", { definition_ids: bundle.definitions.map(d => d.id), confirmed: true }, true)}>{t("ontologyWorkspace.action.review")}</Button>
-        <Button size="md" variant="secondary" disabled={readOnly || !!busy} onClick={() => void run("validate")}>{t("ontologyWorkspace.action.validate")}</Button>
-        <Button size="lg" variant="primary" disabled={readOnly || !!busy || workspace.isError || !workspace.data || bundle.definitions.some(d => d.review_status !== "reviewed") || !!bundle.conflicts.length || !!bundle.requires_revalidation || !bundle.validation_report?.kind || !!bundle.validation_report.errors} loading={busy === "publish"} onClick={() => void run("publish", { expected_head: workspace.data?.head?.release_id ?? "", confirmed: true }, true)}>{t("ontologyWorkspace.action.publish")}</Button>
-        <p className="text-sm text-muted">{t("ontologyWorkspace.publishHint")}</p>
-      </> : null}
+  }, [resultRequest?.sequence]);
+  const unavailable =
+    workspace.isError || workspace.isFetching || !workspace.data;
+  const renderJson = (value: unknown) => <TechnicalDetails value={value} />;
+  const dataReport = bundle.validation_report?.data_validation as
+    Record<string, unknown> | undefined;
+  const blockers = [
+    bundle.definitions.some((d) => d.review_status !== "reviewed")
+      ? t("ontologyUi.needsReview", {
+          count: bundle.definitions.filter(
+            (d) => d.review_status !== "reviewed",
+          ).length,
+        })
+      : "",
+    bundle.conflicts.length
+      ? t("ontologyUi.needsConflict", { count: bundle.conflicts.length })
+      : "",
+    bundle.requires_revalidation || !bundle.validation_report?.kind
+      ? t("ontologyUi.needsValidation")
+      : "",
+    bundle.validation_report?.errors ? t("ontologyUi.validationErrors") : "",
+  ].filter(Boolean);
+  return (
+    <div
+      className="grid min-w-0 grid-cols-1 gap-4 [overflow-wrap:anywhere]"
+      data-testid="ontology-definition-workspace"
+    >
+      <ManagementTabs
+        activeView={tab}
+        tabs={tabs.map((id, i) => ({
+          id,
+          label: t(`ontologyWorkspace.tab.${id}`),
+          icon: [LayoutList, Boxes, Link2, ShieldCheck, Send][i],
+        }))}
+        idPrefix={prefix}
+        ariaLabel={t("ontologyWorkspace.tabs")}
+        onViewChange={setTab}
+      />
+      {success ? <FormStatus tone="success" message={success} /> : null}
+      {error ? <FormStatus tone="danger" message={error} /> : null}
+      {workspace.isPending ? (
+        <LoadingState
+          label={t("ontologyResults.loading")}
+          operationKey={bundle.id}
+        />
+      ) : null}
+      {workspace.isError ? (
+        <ErrorState
+          message={t(
+            workspace.data ? "ontologyUi.stale" : "ontologyWorkspace.loadError",
+          )}
+          onRetry={() => void workspace.refetch()}
+        />
+      ) : null}
+      <div
+        role="tabpanel"
+        id={`${prefix}-panel-${tab}`}
+        aria-labelledby={`${prefix}-tab-${tab}`}
+        className="grid min-w-0 grid-cols-1 gap-3"
+      >
+        {tab === "model" ? (
+          <OntologyModel
+            bundle={bundle}
+            profileId={profileId}
+            focusId={focusId}
+          />
+        ) : null}
+        {tab === "overview" ? (
+          <>
+            <p>
+              {t("ontologyWorkspace.overview", {
+                count: bundle.definitions.length,
+                unreviewed: bundle.definitions.filter(
+                  (d) => d.review_status === "unreviewed",
+                ).length,
+                conflicts: bundle.conflicts.length,
+              })}
+            </p>
+            <p className="break-all text-sm">
+              {t("ontologyWorkspace.version")}:{" "}
+              {versionLabel(bundle.display_version)} ·{" "}
+              <ResultStatus status={bundle.status} />
+            </p>
+            <p className="break-all text-sm">
+              {t("ontologyWorkspace.published")}:{" "}
+              {workspace.data?.head?.release_id
+                ? versionLabel(workspace.data.head.display_version)
+                : t("ontologyUi.noRelease")}
+            </p>
+            <p className="text-sm text-muted">
+              {t("ontologyWorkspace.canonical")}
+            </p>
+            {workspace.data?.releases?.length ? (
+              <div className="grid gap-2">
+                <SelectField
+                  id={`${prefix}-rollback`}
+                  label={t("ontologyWorkspace.rollbackVersion")}
+                  value={rollbackId}
+                  onValueChange={setRollbackId}
+                  options={[
+                    { value: "", label: t("ontologyResults.unspecified") },
+                    ...workspace.data.releases.map((r) => ({
+                      value: r.id,
+                      label: versionOption(r),
+                    })),
+                  ]}
+                />
+                <ContentActionBar ariaLabel={t("ontologyUi.refreshActions")}>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={
+                      !rollbackId ||
+                      !!busy ||
+                      rollbackId === workspace.data?.head?.release_id
+                    }
+                    onClick={() => void run("rollback", undefined, true)}
+                  >
+                    {t("ontologyWorkspace.action.rollback")}
+                  </Button>
+                </ContentActionBar>
+              </div>
+            ) : null}
+            {workspace.data?.artifacts?.graph_json ? (
+              <ProfileOntologyGraph
+                artifact={workspace.data.artifacts.graph_json}
+              />
+            ) : null}
+            {workspace.data?.artifacts ? (
+              <details>
+                <summary>{t("ontologyWorkspace.artifacts")}</summary>
+                {Object.entries(workspace.data.artifacts).map(
+                  ([name, content]) => (
+                    <details key={name}>
+                      <summary>{name}</summary>
+                      <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words text-xs">
+                        {content}
+                      </pre>
+                    </details>
+                  ),
+                )}
+              </details>
+            ) : null}
+          </>
+        ) : null}
+        {tab === "mapping" ? (
+          <DataTable
+            label={t("ontologyResults.mapping")}
+            headers={[
+              t("ontologyResults.definition"),
+              t("ontologyResults.field.owner"),
+              t("ontologyResults.field.object_name" as Parameters<typeof t>[0]),
+              t("ontologyResults.field.column_name" as Parameters<typeof t>[0]),
+              t("ontologyCapability.expression"),
+            ]}
+          >
+            {bundle.definitions.flatMap((d) =>
+              d.mappings.map((mapping, i) => (
+                <tr key={`${d.id}:${i}`}>
+                  <td>
+                    <ContentActionBar
+                      ariaLabel={t("ontologyUi.refreshActions")}
+                    >
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => {
+                          setFocusId(d.id);
+                          setTab("model");
+                        }}
+                      >
+                        {d.name_ja} ({d.api_name})
+                      </Button>
+                    </ContentActionBar>
+                  </td>
+                  <td>{mapping.owner}</td>
+                  <td>{mapping.object_name}</td>
+                  <td>{mapping.column_name}</td>
+                  <td>{mapping.expression_sql}</td>
+                </tr>
+              )),
+            )}
+          </DataTable>
+        ) : null}
+        {tab === "validation" ? (
+          <>
+            <h3 className="font-semibold">
+              {t("ontologyUi.staticValidation")}
+            </h3>
+            <p>
+              {bundle.validation_report?.kind
+                ? t("ontologyUi.validationSummary", {
+                    count: bundle.definitions.length,
+                    errors: Number(bundle.validation_report.errors ?? 0),
+                    warnings: bundle.findings.filter(
+                      (f) => f.severity !== "error",
+                    ).length,
+                  })
+                : t("ontologyUi.notRun")}
+            </p>
+            <ContentActionBar ariaLabel={t("ontologyUi.refreshActions")}>
+              <Button
+                size="lg"
+                variant="secondary"
+                disabled={unavailable || readOnly || !!busy}
+                loading={busy === "validate"}
+                onClick={() => void run("validate")}
+              >
+                {t("ontologyWorkspace.action.validate")}
+              </Button>
+            </ContentActionBar>
+            {bundle.findings.length ? (
+              <ul className="grid gap-2">
+                {bundle.findings.map((finding, index) => (
+                  <li
+                    key={index}
+                    className="rounded border border-border p-2 text-sm"
+                  >
+                    <strong>
+                      {finding.severity === "error"
+                        ? t("ontologyWorkspace.blocker")
+                        : t("ontologyWorkspace.warning")}
+                    </strong>{" "}
+                    · {finding.message_ja}
+                    <p className="break-all text-muted">
+                      {bundle.definitions.find(
+                        (d) => d.id === finding.definition_id,
+                      )?.name_ja ?? finding.definition_id}{" "}
+                      · {finding.code}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p>{t("ontologyWorkspace.noFindings")}</p>
+            )}
+            {bundle.validation_report?.checked_at ? (
+              <p className="text-sm text-muted">
+                {t("ontologyUi.checkedAt")}:{" "}
+                {formatDateTimeWithYear(
+                  String(bundle.validation_report.checked_at),
+                )}
+              </p>
+            ) : null}
+            {bundle.validation_report
+              ? renderJson(bundle.validation_report)
+              : null}
+            <h3 className="mt-4 font-semibold">
+              {t("ontologyUi.dataValidation")}
+            </h3>
+            <p>
+              {job.data ? (
+                <ResultStatus status={job.data.status} />
+              ) : !!dataReport ? (
+                t("ontologyUi.success")
+              ) : (
+                t("ontologyUi.notRun")
+              )}
+            </p>
+            {dataReport ? (
+              <div className="grid gap-2 text-sm">
+                <p>
+                  {t("ontologyUi.checkedAt")}:{" "}
+                  {formatDateTimeWithYear(String(dataReport.checked_at ?? ""))}
+                </p>
+                <p>
+                  {t("ontologyUi.dataSummary", {
+                    count: Number(dataReport.instance_count ?? 0),
+                  })}{" "}
+                  · {t("ontologyUi.errors")}: {Number(dataReport.errors ?? 0)}
+                </p>
+                <p>
+                  {t("ontologyUi.sampleScope", {
+                    limit: Number(dataReport.sample_limit ?? 0),
+                    coverage: Math.round(
+                      Number(dataReport.instance_coverage ?? 0) * 100,
+                    ),
+                  })}
+                </p>
+                {Array.isArray(dataReport.skipped_targets) ? (
+                  <ul className="grid gap-2">
+                    {dataReport.skipped_targets.map((item, index) => (
+                      <li key={index} className="text-warning">
+                        {bundle.definitions.find((d) => d.id === item.target)
+                          ?.name_ja ?? t("ontologyResults.unspecified")}{" "}
+                        · {item.reason_ja}
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+                {Array.isArray(dataReport.acceptance_cases) ? (
+                  <ul className="grid gap-2">
+                    {dataReport.acceptance_cases.map((item, index) => (
+                      <li key={index} className="flex gap-2">
+                        <ResultStatus
+                          status={item.passed ? "succeeded" : "failed"}
+                        />
+                        <span>{item.question_ja}</span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+                <TechnicalDetails value={dataReport} />
+              </div>
+            ) : null}
+            <details open={!!acceptanceError || undefined}>
+              <summary>{t("ontologyWorkspace.acceptance")}</summary>
+              <p className="text-sm">{t("ontologyWorkspace.acceptanceHint")}</p>
+              <label className="grid gap-1">
+                {t("ontologyWorkspace.acceptanceInput")}
+                <textarea
+                  className="min-h-28 w-full rounded border border-border bg-background p-2"
+                  aria-describedby={
+                    acceptanceError ? `${prefix}-acceptance-error` : undefined
+                  }
+                  aria-invalid={!!acceptanceError}
+                  value={acceptance}
+                  onChange={(e) => {
+                    setAcceptance(e.target.value);
+                    setAcceptanceError("");
+                  }}
+                />
+              </label>
+              {acceptanceError ? (
+                <FieldError
+                  id={`${prefix}-acceptance-error`}
+                  message={acceptanceError}
+                />
+              ) : null}
+            </details>
+            <ContentActionBar ariaLabel={t("ontologyUi.refreshActions")}>
+              <Button
+                size="lg"
+                variant="secondary"
+                disabled={
+                  unavailable ||
+                  readOnly ||
+                  !!busy ||
+                  (!!job.data &&
+                    ["queued", "claimed", "running"].includes(job.data.status))
+                }
+                onClick={() => void run("data", undefined, true)}
+              >
+                {t("ontologyWorkspace.action.data")}
+              </Button>
+            </ContentActionBar>
+            {job.data ? (
+              <p role="status">
+                {t("ontologyWorkspace.dataJob")}:{" "}
+                {t(
+                  `ontologyWorkspace.job.${job.data.status}` as Parameters<
+                    typeof t
+                  >[0],
+                )}
+              </p>
+            ) : null}
+            {job.data?.error_message_ja ? (
+              <FormStatus tone="danger" message={job.data.error_message_ja} />
+            ) : null}
+            {job.isError ? (
+              <FormStatus
+                tone="danger"
+                message={t("ontologyWorkspace.loadError")}
+              />
+            ) : null}
+          </>
+        ) : null}
+        {tab === "review" ? (
+          <>
+            <label className="grid gap-1">
+              {t("ontologyWorkspace.instruction")}
+              <textarea
+                value={instruction}
+                onChange={(e) => {
+                  setInstruction(e.target.value);
+                  setChanges(null);
+                }}
+                className="min-h-28 w-full rounded border border-border bg-background p-2"
+                disabled={unavailable || readOnly || !!busy}
+              />
+            </label>
+            <ContentActionBar ariaLabel={t("ontologyUi.refreshActions")}>
+              <Button
+                size="lg"
+                variant="secondary"
+                disabled={
+                  unavailable || readOnly || !!busy || !instruction.trim()
+                }
+                loading={busy === "analyze"}
+                onClick={() => void run("analyze")}
+              >
+                {t("ontologyWorkspace.action.analyze")}
+              </Button>
+            </ContentActionBar>
+            {changes ? (
+              <div className="grid min-w-0 gap-3">
+                <ChangesTable before={changes.before} after={changes.after} />
+                <TechnicalDetails value={changes} />
+                <ContentActionBar ariaLabel={t("ontologyUi.refreshActions")}>
+                  <Button
+                    size="lg"
+                    variant="secondary"
+                    disabled={
+                      !!busy ||
+                      changes.base_etag.replaceAll('"', "") !== bundle.etag
+                    }
+                    onClick={() => void run("apply", { confirmed: true }, true)}
+                  >
+                    {t("ontologyWorkspace.action.apply")}
+                  </Button>
+                </ContentActionBar>
+              </div>
+            ) : null}
+            {bundle.conflicts.map((conflict, index) => (
+              <div
+                key={index}
+                className="grid min-w-0 gap-2 rounded border border-border p-3"
+              >
+                <p>
+                  {conflict.current.name_ja} → {conflict.proposed.name_ja}
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {(["current", "proposed"] as const).map((choice) => (
+                    <ContentActionBar
+                      key={choice}
+                      ariaLabel={t("ontologyUi.refreshActions")}
+                    >
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        disabled={unavailable || readOnly || !!busy}
+                        onClick={() =>
+                          void run(`conflicts/${index}/resolve`, { choice })
+                        }
+                      >
+                        {t(`ontologyResults.${choice}`)}
+                      </Button>
+                    </ContentActionBar>
+                  ))}
+                </div>
+              </div>
+            ))}
+            <label className="grid gap-1">
+              {t("ontologyWorkspace.notes")}
+              <textarea
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                className="min-h-20 rounded border border-border bg-background p-2"
+                disabled={unavailable || readOnly || !!busy}
+              />
+            </label>
+            <ContentActionBar ariaLabel={t("ontologyUi.refreshActions")}>
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={
+                  unavailable ||
+                  readOnly ||
+                  !!busy ||
+                  notes === (bundle.notes_ja ?? "")
+                }
+                onClick={() => void run("notes", { notes_ja: notes })}
+              >
+                {t("ontologyWorkspace.action.notes")}
+              </Button>
+            </ContentActionBar>
+            <ContentActionBar ariaLabel={t("ontologyUi.refreshActions")}>
+              <Button
+                size="lg"
+                variant="secondary"
+                disabled={
+                  unavailable || readOnly || !!busy || !!bundle.conflicts.length
+                }
+                onClick={() =>
+                  void run(
+                    "review",
+                    {
+                      definition_ids: bundle.definitions.map((d) => d.id),
+                      confirmed: true,
+                    },
+                    true,
+                  )
+                }
+              >
+                {t("ontologyWorkspace.action.review")}
+              </Button>
+            </ContentActionBar>
+            <ContentActionBar ariaLabel={t("ontologyUi.refreshActions")}>
+              <Button
+                size="lg"
+                variant="secondary"
+                disabled={unavailable || readOnly || !!busy}
+                onClick={() => void run("validate")}
+              >
+                {t("ontologyWorkspace.action.validate")}
+              </Button>
+            </ContentActionBar>
+            <div className="grid gap-2 rounded-md bg-background p-4">
+              <h3 className="font-semibold">
+                {t("ontologyUi.publishRequirements")}
+              </h3>
+              {readOnly ? (
+                <p>{t("ontologyUi.publishedReadOnly")}</p>
+              ) : blockers.length ? (
+                <ul className="grid gap-2">
+                  {blockers.map((message) => (
+                    <li key={message} className="text-sm text-warning">
+                      {message}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p>{t("ontologyUi.readyToPublish")}</p>
+              )}
+              <ContentActionBar ariaLabel={t("ontologyUi.refreshActions")}>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setTab("validation")}
+                >
+                  {t("ontologyUi.staticValidation")}
+                </Button>
+              </ContentActionBar>
+            </div>
+            <ContentActionBar ariaLabel={t("ontologyUi.refreshActions")}>
+              <Button
+                size="lg"
+                variant="primary"
+                disabled={
+                  unavailable ||
+                  readOnly ||
+                  !!busy ||
+                  workspace.isError ||
+                  !workspace.data ||
+                  bundle.definitions.some(
+                    (d) => d.review_status !== "reviewed",
+                  ) ||
+                  !!bundle.conflicts.length ||
+                  !!bundle.requires_revalidation ||
+                  !bundle.validation_report?.kind ||
+                  !!bundle.validation_report.errors
+                }
+                loading={busy === "publish"}
+                onClick={() =>
+                  void run(
+                    "publish",
+                    {
+                      expected_head: workspace.data?.head?.release_id ?? "",
+                      confirmed: true,
+                    },
+                    true,
+                  )
+                }
+              >
+                {t("ontologyWorkspace.action.publish")}
+              </Button>
+            </ContentActionBar>
+            <p className="text-sm text-muted">
+              {t("ontologyWorkspace.publishHint")}
+            </p>
+          </>
+        ) : null}
+      </div>
     </div>
-  </div>;
+  );
 }

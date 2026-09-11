@@ -14,6 +14,7 @@ from .ontology_capabilities import (
     CapabilityExecuteRequest,
     ProfileOntologyCapabilityService,
 )
+from .ontology_presentation import execution_view
 from .ontology_service import OntologyGateBlockedError
 from .profile_access import assert_profile_access, principal_from_request
 
@@ -28,7 +29,8 @@ def create_capability_router(runtime: Any, raise_error: Any) -> APIRouter:
     @router.get("/profiles/{profile_id}/ontology-capabilities")
     def catalog(profile_id: str, request: Request) -> ApiResponse[Any]:
         try:
-            return ApiResponse(data=service(request, profile_id).catalog(profile_id))
+            svc = service(request, profile_id)
+            return ApiResponse(data=execution_view(svc, profile_id, svc.catalog(profile_id)))
         except Exception as exc:
             raise_error(exc)
             raise
@@ -102,11 +104,13 @@ def create_capability_router(runtime: Any, raise_error: Any) -> APIRouter:
         profile_id: str, definition_id: str, preview_id: str, request: Request
     ) -> ApiResponse[Any]:
         try:
-            return ApiResponse(
-                data=service(request, profile_id).outcome(
-                    profile_id, definition_id, preview_id, principal_from_request(request)
-                )
+            svc = service(request, profile_id)
+            value = svc.outcome(
+                profile_id, definition_id, preview_id, principal_from_request(request)
             )
+            if value.get("execution"):
+                value = {**value, "execution": execution_view(svc, profile_id, value["execution"])}
+            return ApiResponse(data=value)
         except Exception as exc:
             raise_error(exc)
             raise
@@ -152,7 +156,7 @@ def create_capability_router(runtime: Any, raise_error: Any) -> APIRouter:
                 raise OntologyGateBlockedError(
                     "EXECUTION_NOT_FOUND", "この実行記録の参照権限がありません。"
                 )
-            return ApiResponse(data=value)
+            return ApiResponse(data=execution_view(svc, profile_id, value))
         except Exception as exc:
             raise_error(exc)
             raise

@@ -6271,7 +6271,11 @@ def get_profile_ontology_results(profile_id: str, request: Request) -> ApiRespon
     assert_profile_access(request, profile_id)
     try:
         results = ProfileOntologyDefinitionService(ontology_runtime).list_results(profile_id)
-        return ApiResponse(data={"results": results})
+        from .ontology_presentation import bundle_view
+
+        return ApiResponse(
+            data={"results": [bundle_view(ontology_runtime.store, item) for item in results]}
+        )
     except Exception as exc:
         _raise_domain_error(exc)
 
@@ -6285,7 +6289,9 @@ def get_profile_ontology_result(
     assert_profile_access(request, profile_id)
     try:
         result = ProfileOntologyDefinitionService(ontology_runtime).get(profile_id, result_id)
-        return ApiResponse(data=result)
+        from .ontology_presentation import bundle_view
+
+        return ApiResponse(data=bundle_view(ontology_runtime.store, result))
     except Exception as exc:
         _raise_domain_error(exc)
 
