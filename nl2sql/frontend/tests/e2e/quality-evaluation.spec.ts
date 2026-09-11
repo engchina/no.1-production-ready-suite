@@ -1102,3 +1102,41 @@ test("form errors, unavailable engines, Judge readiness and failed jobs are expl
     page.getByText("worker の初期化に失敗しました。").filter({ visible: true }).first()
   ).toBeVisible();
 });
+
+test("evaluation submission locks conditions and preserves them after rejection", async ({ page }, testInfo) => {
+  await mockQualityApi(page);
+  const gate = createRequestGate();
+  let calls = 0;
+  await page.route(`**${basePath}`, async (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    calls += 1;
+    await gate.promise;
+    await route.fulfill({ status: 503, json: { detail: "評価の開始に失敗しました" } });
+  });
+  await page.goto("/evaluation");
+  const repeat = page.getByLabel("繰り返し回数");
+  await repeat.fill("2");
+  await dropFiles(page, page.getByTestId("quality-evaluation-file-dropzone"), [{
+    name: "pending-cases.xlsx", type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    content: "mock xlsx",
+  }]);
+  await page.getByTestId("quality-evaluation-engine-fieldset").getByRole("checkbox").first().check();
+  const start = page.getByRole("button", { name: "評価を開始", exact: true });
+  await start.click();
+  await expect(repeat).toBeDisabled();
+  await expect(page.getByTestId("quality-evaluation-profile-field").getByRole("combobox")).toBeDisabled();
+  await expect(page.getByTestId("quality-evaluation-engine-fieldset").getByRole("checkbox").first()).toBeDisabled();
+  await expect(page.getByTestId("quality-evaluation-file-input")).toBeDisabled();
+  await expect(start).toBeDisabled();
+  gate.release();
+  await expect(start).toBeEnabled();
+  await expect(repeat).toBeEnabled();
+  await expect(repeat).toHaveValue("2");
+  await expect(page.getByText("pending-cases.xlsx", { exact: false }).first()).toBeVisible();
+  expect(calls).toBe(1);
+  await start.focus();
+  await page.keyboard.press("Enter");
+  await expect.poll(() => calls).toBe(2);
+  await expect(start).toBeEnabled();
+  await page.screenshot({ path: testInfo.outputPath("evaluation-submission-recovery.png"), fullPage: true });
+});

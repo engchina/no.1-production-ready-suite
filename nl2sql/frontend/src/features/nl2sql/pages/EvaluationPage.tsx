@@ -267,6 +267,7 @@ export function EvaluationPage() {
   ).length;
   const selectedUnavailable = selectedCapabilities.some((item) => !item.available);
   const running = Boolean(currentJob && ACTIVE_STATUSES.has(currentJob.status));
+  const conditionsLocked = running || startMutation.isPending;
   const pageLoading = capabilitiesQuery.isLoading || profilesQuery.isLoading;
   const pageError = capabilitiesQuery.error || profilesQuery.error;
 
@@ -290,6 +291,7 @@ export function EvaluationPage() {
   };
 
   const startEvaluation = () => {
+    if (conditionsLocked) return;
     clearNotice();
     setStartError("");
     if (validate()) startMutation.mutate();
@@ -431,7 +433,7 @@ export function EvaluationPage() {
                     }}
                     aria-invalid={Boolean(formErrors.profile)}
                     aria-describedby={formErrors.profile ? "quality-profile-error" : undefined}
-                    disabled={running}
+                    disabled={conditionsLocked}
                   >
                     <option value="">{t("qualityEvaluation.profile.placeholder")}</option>
                     {(profilesQuery.data?.items ?? [])
@@ -457,7 +459,7 @@ export function EvaluationPage() {
                     errorText={formErrors.file}
                     icon="spreadsheet"
                     required
-                    disabled={running}
+                    disabled={conditionsLocked}
                     dataTestId="quality-evaluation-file"
                     onReject={(reason) =>
                       setFormErrors((current) => ({
@@ -497,7 +499,7 @@ export function EvaluationPage() {
 
               <fieldset
                 className="grid min-w-0 gap-3 border-t border-border pt-4"
-                disabled={running}
+                disabled={conditionsLocked}
                 aria-describedby="quality-engines-hint quality-engines-error"
                 data-testid="quality-evaluation-engine-fieldset"
               >
@@ -515,9 +517,9 @@ export function EvaluationPage() {
                     selectLabel={t("common.selection.selectAll")}
                     clearLabel={t("common.selection.clearAll")}
                     selectDisabled={
-                      running || selectedAvailableEngineCount === availableEngineIds.length
+                      conditionsLocked || selectedAvailableEngineCount === availableEngineIds.length
                     }
-                    clearDisabled={running || selectedAvailableEngineCount === 0}
+                    clearDisabled={conditionsLocked || selectedAvailableEngineCount === 0}
                     dataTestId="quality-evaluation-engine-selection-actions"
                     onSelectAll={selectAllEngines}
                     onClearAll={clearAllEngines}
@@ -545,7 +547,7 @@ export function EvaluationPage() {
                             type="checkbox"
                             className="mt-0.5 size-4 accent-primary"
                             checked={selected}
-                            disabled={!capability.available || running}
+                            disabled={!capability.available || conditionsLocked}
                             onChange={() => toggleEngine(capability.engine)}
                           />
                           <span className="min-w-0">
@@ -596,7 +598,7 @@ export function EvaluationPage() {
                     inputMode="numeric"
                     className={controlClass}
                     value={repeatCount}
-                    disabled={running}
+                    disabled={conditionsLocked}
                     aria-invalid={Boolean(formErrors.repeat)}
                     aria-describedby="quality-repeat-hint quality-repeat-error"
                     onChange={(event) => {
