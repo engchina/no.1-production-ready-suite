@@ -130,7 +130,7 @@ const DEFAULT_SELECT_AI_CONFIG: ProfileSelectAiConfig = {
   enforce_object_list: true,
   comments: true,
   annotations: false,
-  constraints: false,
+  constraints: true,
   role: "",
   additional_instructions: "",
 };

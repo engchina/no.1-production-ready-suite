@@ -1261,6 +1261,7 @@ test("新規保存直後の Oracle 反映再試行は保存時の確認語を再
       ...selectAiConfig,
       profile_name: "SALES_PROFILE",
       model: "xai.grok-4.6",
+      constraints: true,
     },
     etag: "etag-sales-profile",
   };
@@ -1341,7 +1342,10 @@ test("新規保存直後の Oracle 反映再試行は保存時の確認語を再
   await page.getByRole("button", { name: "保存", exact: true }).click();
 
   await expect(page).toHaveURL(/profile=sales-profile/);
-  expect(savedPayload?.select_ai_config).toMatchObject({ model: "xai.grok-4.6" });
+  expect(savedPayload?.select_ai_config).toMatchObject({
+    model: "xai.grok-4.6",
+    constraints: true,
+  });
   const status = page.getByTestId("profile-save-progress");
   await expect(status).toHaveAttribute("data-job-status", "submission_failed");
   await expect(status).toContainText(
@@ -1393,6 +1397,7 @@ test("保存済み Region は Osaka を保持しキーボードで変更でき�
   await mockProfileApi(page);
   await page.goto("/profiles?profile=default");
   await expect(page.getByLabel("LLM Model")).toHaveValue(selectAiConfig.model);
+  await expect(page.getByRole("checkbox", { name: "制約を利用", exact: true })).not.toBeChecked();
   const region = page.getByRole("combobox", { name: "Region" });
   await expect(region).toContainText("ap-osaka-1");
   await region.focus();
@@ -1767,6 +1772,13 @@ test("Select AI 設定は requested order で並び狭い幅でも重ならな�
   await expect(region).toContainText("us-chicago-1");
   await expect(model).toBeVisible();
   await expect(model).toHaveValue("xai.grok-4.6");
+  const constraints = page.getByRole("checkbox", { name: "制約を利用", exact: true });
+  await expect(constraints).toBeChecked();
+  await constraints.focus();
+  await constraints.press("Space");
+  await expect(constraints).not.toBeChecked();
+  await constraints.press("Space");
+  await expect(constraints).toBeChecked();
   await expect(maxTokens).toBeVisible();
   await expect(embeddingModel).toBeVisible();
   await expect(maxTokens).toHaveAttribute("min", "4096");
