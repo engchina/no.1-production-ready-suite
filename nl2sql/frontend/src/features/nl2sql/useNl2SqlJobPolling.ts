@@ -63,9 +63,11 @@ export function useNl2SqlJobPolling({
   const [jobStartedAt, setJobStartedAt] = useState<number | null>(null);
   const [jobStorageUnavailable, setJobStorageUnavailable] = useState(false);
   const consecutiveFailuresRef = useRef(0);
+  const trackedJobIdRef = useRef<string | null>(null);
 
   const stopTracking = useCallback(() => {
-    withBrowserStorage(clearActiveJobSnapshot);
+    withBrowserStorage((storage) => clearActiveJobSnapshot(storage, trackedJobIdRef.current));
+    trackedJobIdRef.current = null;
     consecutiveFailuresRef.current = 0;
     setJob(null);
     setJobStartedAt(null);
@@ -81,7 +83,7 @@ export function useNl2SqlJobPolling({
       consecutiveFailuresRef.current = 0;
       setJob(data);
       if (isJobTerminal(data.status)) {
-        withBrowserStorage(clearActiveJobSnapshot);
+        withBrowserStorage((storage) => clearActiveJobSnapshot(storage, jobId));
         if (data.result) onResult(data.result);
         if (data.error_message) onJobFailed(data.error_message);
         if (signal?.aborted) return data;
@@ -110,8 +112,9 @@ export function useNl2SqlJobPolling({
   );
 
   const trackJob = useCallback((data: JobCreateData, startedAtMs: number) => {
+    trackedJobIdRef.current = data.job_id;
     const saved = withBrowserStorage((storage) => persistActiveJobSnapshot(storage, data.job_id, startedAtMs));
-    if (!saved) withBrowserStorage(clearActiveJobSnapshot);
+    if (!saved) withBrowserStorage((storage) => clearActiveJobSnapshot(storage, data.job_id));
     setJobStorageUnavailable(!saved);
     consecutiveFailuresRef.current = 0;
     setJobStartedAt(startedAtMs);
@@ -128,6 +131,7 @@ export function useNl2SqlJobPolling({
     withBrowserStorage((storage) => {
       const snapshot = readActiveJobSnapshot(storage, Date.now());
       if (!snapshot) return;
+      trackedJobIdRef.current = snapshot.jobId;
       setJobStartedAt(snapshot.startedAtMs);
       setJob(syntheticInFlightJob(snapshot.jobId, snapshot.startedAtMs));
     });

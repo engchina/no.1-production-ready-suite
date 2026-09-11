@@ -38,7 +38,7 @@ export function readActiveJobSnapshot(
   const storedStartedAt = Number(storage.getItem(ACTIVE_JOB_STARTED_AT_KEY));
   const startedAtValid = Number.isFinite(storedStartedAt) && storedStartedAt > 0;
   if (startedAtValid && nowMs - storedStartedAt > ACTIVE_JOB_SNAPSHOT_TTL_MS) {
-    clearActiveJobSnapshot(storage);
+    clearActiveJobSnapshot(storage, jobId);
     return null;
   }
   if (!startedAtValid) {
@@ -60,7 +60,9 @@ export function persistActiveJobSnapshot(
   storage.setItem(ACTIVE_JOB_STARTED_AT_KEY, String(startedAtMs));
 }
 
-export function clearActiveJobSnapshot(storage: ActiveJobStorage) {
+export function clearActiveJobSnapshot(storage: ActiveJobStorage, expectedJobId: string | null) {
+  // localStorage はタブ間で共有される。未追跡ページや旧 job から別 job を削除しない。
+  if (!expectedJobId || storage.getItem(ACTIVE_JOB_ID_KEY) !== expectedJobId) return;
   storage.removeItem(ACTIVE_JOB_ID_KEY);
   storage.removeItem(ACTIVE_JOB_STARTED_AT_KEY);
 }

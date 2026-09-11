@@ -350,9 +350,20 @@ test("active job persistence restores and clears polling state", () => {
   // 欠損した startedAt は現在時刻で書き戻され、以後 TTL 判定が効く。
   assert.equal(storage.getItem(ACTIVE_JOB_STARTED_AT_KEY), "555");
 
-  clearActiveJobSnapshot(storage);
+  clearActiveJobSnapshot(storage, "job-123");
   assert.equal(storage.getItem(ACTIVE_JOB_ID_KEY), null);
   assert.equal(storage.getItem(ACTIVE_JOB_STARTED_AT_KEY), null);
+});
+
+test("cleanup from an idle page or an older job preserves another job snapshot", () => {
+  const storage = new MemoryStorage();
+  persistActiveJobSnapshot(storage, "job-other-tab", 1_700_000);
+
+  for (const expectedJobId of [null, "job-completed"]) {
+    clearActiveJobSnapshot(storage, expectedJobId);
+    assert.equal(storage.getItem(ACTIVE_JOB_ID_KEY), "job-other-tab");
+    assert.equal(storage.getItem(ACTIVE_JOB_STARTED_AT_KEY), "1700000");
+  }
 });
 
 test("schema-empty error is detected by error_code first, message fragment as fallback", () => {

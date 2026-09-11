@@ -16016,3 +16016,123 @@ test("query recovery: 状態取得の timeout が続くと追跡を解除する"
   expect(reads).toBe(3);
   expect(await page.evaluate(() => localStorage.getItem("nl2sql.activeJobId"))).toBeNull();
 });
+
+// Issue #479: origin 共通の復元情報を、未追跡ページや別 job から削除しない。
+test.describe("query snapshot ownership", () => {
+  async function openIdleTabs(page: Page) {
+    const other = await page.context().newPage();
+    await mockDatabaseGateReady(other);
+    for (const tab of [page, other]) {
+      await mockNl2SqlApi(tab);
+      await tab.route("**/api/nl2sql/profiles/search?*", (route) => fulfillJson(route, {
+        items: [
+          { ...profiles[0], allowed_table_count: 1, allowed_view_count: 0 },
+          { ...profiles[0], id: "other", name: "別プロファイル", category: "別プロファイル", allowed_table_count: 1, allowed_view_count: 0 },
+        ], next_cursor: null, total: 2,
+      }));
+      await tab.goto("/query");
+      await expect(tab.getByRole("combobox", { name: "業務プロファイル", exact: true })).toHaveValue("default");
+    }
+    return other;
+  }
+
+  const runningJob = (jobId: string) => ({
+    job_id: jobId, status: "running", created_at: new Date().toISOString(),
+    result: null, error_message: null, warning_message: null, timing: null, steps: [],
+  });
+  const readSnapshot = (page: Page) => page.evaluate(() => ({
+    jobId: localStorage.getItem("nl2sql.activeJobId"),
+    startedAt: localStorage.getItem("nl2sql.activeJobStartedAt"),
+  }));
+  async function startJob(page: Page) {
+    await nl2sqlQuestionInput(page).fill("請求金額を一覧で見たい");
+    const run = page.getByRole("button", { name: "SQL を生成して実行", exact: true });
+    await run.focus();
+    await run.press("Enter");
+    await expect(page.getByTestId("nl2sql-job-progress")).toHaveAttribute("data-job-status", "running");
+    await expect(run).toBeDisabled();
+  }
+
+  test("待機中タブの Profile 切替後も実行タブの再読込で job を復元する", async ({ page }, testInfo) => {
+    const other = await openIdleTabs(page);
+    let creates = 0;
+    let reads = 0;
+    for (const tab of [page, other]) {
+      tab.on("request", (request) => {
+        if (request.method() === "POST" && new URL(request.url()).pathname === "/api/nl2sql/jobs") creates += 1;
+      });
+    }
+    await page.route("**/api/nl2sql/jobs/job-default-001", (route) => {
+      reads += 1;
+      return fulfillJson(route, runningJob("job-default-001"));
+    });
+    await startJob(page);
+    const snapshot = await readSnapshot(page);
+    expect(snapshot.jobId).toBe("job-default-001");
+    expect(snapshot.startedAt).not.toBeNull();
+    for (const profileId of ["other", "default"]) {
+      await other.getByRole("combobox", { name: "業務プロファイル", exact: true }).selectOption(profileId);
+      await expect(other.getByTestId("nl2sql-job-progress")).toHaveCount(0);
+      expect(await readSnapshot(other)).toEqual(snapshot);
+    }
+    const readsBeforeReload = reads;
+    await page.reload();
+    await expect(page.getByTestId("nl2sql-job-progress")).toHaveAttribute("data-job-status", "running");
+    await expect.poll(() => reads).toBeGreaterThan(readsBeforeReload);
+    await expect(page.getByRole("button", { name: "SQL を生成して実行", exact: true })).toBeDisabled();
+    expect(creates).toBe(1);
+    expect(await readSnapshot(page)).toEqual(snapshot);
+    await expectNoHorizontalScroll(page);
+    await page.getByTestId("nl2sql-job-progress").screenshot({ path: testInfo.outputPath("cross-tab-job-restored.png") });
+    await other.close();
+  });
+
+  test("旧 job の完了と Profile 切替が別タブの新 job を削除しない", async ({ page }) => {
+    const other = await openIdleTabs(page);
+    let release!: () => void;
+    const completion = new Promise<void>((resolve) => { release = resolve; });
+    await page.route("**/api/nl2sql/jobs/job-default-001", async (route) => {
+      await completion;
+      await route.fallback();
+    });
+    await startJob(page);
+    await other.route("**/api/nl2sql/jobs", (route) => fulfillJson(route, runningJob("job-other-tab")));
+    await other.route("**/api/nl2sql/jobs/job-other-tab", (route) => fulfillJson(route, runningJob("job-other-tab")));
+    await startJob(other);
+    const snapshot = await readSnapshot(other);
+    expect(snapshot.jobId).toBe("job-other-tab");
+    release();
+    await expect(page.getByRole("cell", { name: "青山商事" })).toBeVisible();
+    expect(await readSnapshot(page)).toEqual(snapshot);
+    await page.getByRole("combobox", { name: "業務プロファイル", exact: true }).selectOption("other");
+    await expect(page.getByTestId("nl2sql-job-progress")).toHaveCount(0);
+    expect(await readSnapshot(page)).toEqual(snapshot);
+    await other.reload();
+    await expect(other.getByTestId("nl2sql-job-progress")).toHaveAttribute("data-job-status", "running");
+    await expect(other.getByRole("button", { name: "SQL を生成して実行", exact: true })).toBeDisabled();
+    await other.close();
+  });
+
+  test("別タブの保存失敗 cleanup が既存 job の復元情報を削除しない", async ({ page }) => {
+    const other = await openIdleTabs(page);
+    await page.route("**/api/nl2sql/jobs/job-default-001", (route) => fulfillJson(route, runningJob("job-default-001")));
+    await startJob(page);
+    const snapshot = await readSnapshot(page);
+    await other.evaluate(() => {
+      const original = Storage.prototype.setItem;
+      Storage.prototype.setItem = function (key: string, value: string) {
+        if (this === localStorage && key === "nl2sql.activeJobId") throw new DOMException("blocked", "QuotaExceededError");
+        return original.call(this, key, value);
+      };
+    });
+    await other.route("**/api/nl2sql/jobs", (route) => fulfillJson(route, runningJob("job-other-tab")));
+    await other.route("**/api/nl2sql/jobs/job-other-tab", (route) => fulfillJson(route, runningJob("job-other-tab")));
+    await startJob(other);
+    await expect(other.getByText(/実行中のジョブをブラウザに保存できません/)).toBeVisible();
+    expect(await readSnapshot(page)).toEqual(snapshot);
+    await page.reload();
+    await expect(page.getByTestId("nl2sql-job-progress")).toHaveAttribute("data-job-status", "running");
+    await expect(page.getByRole("button", { name: "SQL を生成して実行", exact: true })).toBeDisabled();
+    await other.close({ runBeforeUnload: false });
+  });
+});
