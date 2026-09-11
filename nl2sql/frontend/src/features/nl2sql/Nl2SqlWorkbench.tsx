@@ -464,7 +464,7 @@ function ExecutableNl2SqlWorkbench() {
     toast.warning(t("nl2sql.history.refreshFailed"));
   }, []);
 
-  const { job, jobStartedAt, jobStorageUnavailable, trackJob, clearTrackedJob } = useNl2SqlJobPolling({
+  const { job, jobStartedAt, jobStorageUnavailable, legacyJobSnapshotIgnored, trackJob, clearTrackedJob } = useNl2SqlJobPolling({
     onResult: handleJobResult,
     onJobFailed: handleJobFailed,
     onPollingLost: handlePollingLost,
@@ -1621,6 +1621,9 @@ function ExecutableNl2SqlWorkbench() {
           />
         ) : null}
 
+        {legacyJobSnapshotIgnored && !job && (
+          <Banner severity="info">{t("nl2sql.job.legacySnapshotIgnored")}</Banner>
+        )}
         {showJobStorageWarning && (
           <Banner severity="warning">{t("nl2sql.job.storageUnavailable")}</Banner>
         )}

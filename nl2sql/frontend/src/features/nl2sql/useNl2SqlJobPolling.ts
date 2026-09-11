@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { useWorkspaceIdentity } from "@/components/WorkspaceState";
 import { apiGet, isAbortError } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { API_TIMEOUT_MS } from "@/lib/requestPolicy";
 import {
   clearActiveJobSnapshot,
+  hasLegacyActiveJobSnapshot,
+  scopedActiveJobStorage,
   isJobInFlight,
   isJobTerminal,
   persistActiveJobSnapshot,
@@ -27,10 +30,10 @@ interface UseNl2SqlJobPollingOptions {
 }
 
 // ブラウザ保存は復元用の補助。getter / 読込 / 書込 / 削除の失敗で実行追跡を止めない。
-function withBrowserStorage(action: (storage: ActiveJobStorage) => void): boolean {
+function withBrowserStorage(owner: string, context: string, action: (storage: ActiveJobStorage) => void): boolean {
   try {
     if (typeof window === "undefined") return false;
-    action(window.localStorage);
+    action(scopedActiveJobStorage(window.sessionStorage, owner, context));
     return true;
   } catch {
     return false;
@@ -59,19 +62,25 @@ export function useNl2SqlJobPolling({
   onHistoryRefreshFailed,
   pollIntervalMs = 2500,
 }: UseNl2SqlJobPollingOptions) {
+  const { owner, context } = useWorkspaceIdentity();
+  const withStorage = useCallback(
+    (action: (storage: ActiveJobStorage) => void) => withBrowserStorage(owner, context, action),
+    [owner, context]
+  );
   const [job, setJob] = useState<JobData | null>(null);
   const [jobStartedAt, setJobStartedAt] = useState<number | null>(null);
   const [jobStorageUnavailable, setJobStorageUnavailable] = useState(false);
+  const [legacyJobSnapshotIgnored, setLegacyJobSnapshotIgnored] = useState(false);
   const consecutiveFailuresRef = useRef(0);
   const trackedJobIdRef = useRef<string | null>(null);
 
   const stopTracking = useCallback(() => {
-    withBrowserStorage((storage) => clearActiveJobSnapshot(storage, trackedJobIdRef.current));
+    withStorage((storage) => clearActiveJobSnapshot(storage, trackedJobIdRef.current));
     trackedJobIdRef.current = null;
     consecutiveFailuresRef.current = 0;
     setJob(null);
     setJobStartedAt(null);
-  }, []);
+  }, [withStorage]);
 
   const pollJob = useCallback(
     async (jobId: string, signal?: AbortSignal) => {
@@ -83,7 +92,7 @@ export function useNl2SqlJobPolling({
       consecutiveFailuresRef.current = 0;
       setJob(data);
       if (isJobTerminal(data.status)) {
-        withBrowserStorage((storage) => clearActiveJobSnapshot(storage, jobId));
+        withStorage((storage) => clearActiveJobSnapshot(storage, jobId));
         if (data.result) onResult(data.result);
         if (data.error_message) onJobFailed(data.error_message);
         if (signal?.aborted) return data;
@@ -95,7 +104,7 @@ export function useNl2SqlJobPolling({
       }
       return data;
     },
-    [onHistoryRefresh, onHistoryRefreshFailed, onJobFailed, onResult]
+    [onHistoryRefresh, onHistoryRefreshFailed, onJobFailed, onResult, withStorage]
   );
 
   // ポーリング失敗を分類し、断念時は追跡を解除して UI ロックを解く。
@@ -113,13 +122,13 @@ export function useNl2SqlJobPolling({
 
   const trackJob = useCallback((data: JobCreateData, startedAtMs: number) => {
     trackedJobIdRef.current = data.job_id;
-    const saved = withBrowserStorage((storage) => persistActiveJobSnapshot(storage, data.job_id, startedAtMs));
-    if (!saved) withBrowserStorage((storage) => clearActiveJobSnapshot(storage, data.job_id));
+    const saved = withStorage((storage) => persistActiveJobSnapshot(storage, data.job_id, startedAtMs));
+    if (!saved) withStorage((storage) => clearActiveJobSnapshot(storage, data.job_id));
     setJobStorageUnavailable(!saved);
     consecutiveFailuresRef.current = 0;
     setJobStartedAt(startedAtMs);
     setJob({ ...data, result: null, error_message: null, warning_message: null, timing: null });
-  }, []);
+  }, [withStorage]);
 
   const clearTrackedJob = useCallback(() => {
     stopTracking();
@@ -128,14 +137,22 @@ export function useNl2SqlJobPolling({
   // 再訪時の復元は合成 in-flight job を置くだけにし、実際の取得・失敗処理は
   // 下の interval effect に一本化する(失効 job への失敗リクエスト連発を防ぐ)。
   useEffect(() => {
-    withBrowserStorage((storage) => {
+    trackedJobIdRef.current = null;
+    setJob(null);
+    setJobStartedAt(null);
+    setJobStorageUnavailable(false);
+    consecutiveFailuresRef.current = 0;
+    withStorage((storage) => {
       const snapshot = readActiveJobSnapshot(storage, Date.now());
       if (!snapshot) return;
       trackedJobIdRef.current = snapshot.jobId;
       setJobStartedAt(snapshot.startedAtMs);
       setJob(syntheticInFlightJob(snapshot.jobId, snapshot.startedAtMs));
     });
-  }, []);
+    try {
+      setLegacyJobSnapshotIgnored(hasLegacyActiveJobSnapshot(window.localStorage, Date.now()));
+    } catch { setLegacyJobSnapshotIgnored(false); }
+  }, [withStorage]);
 
   // job オブジェクトではなく「in-flight な job_id」へ依存させる。
   // 未完了の取得がある tick はスキップし、遅い応答を次の tick で中断しない。
@@ -165,6 +182,7 @@ export function useNl2SqlJobPolling({
     job,
     jobStartedAt,
     jobStorageUnavailable,
+    legacyJobSnapshotIgnored,
     pollJob,
     trackJob,
     clearTrackedJob,

@@ -1,3 +1,4 @@
+import { bindWorkspaceOwner, clearWorkspaceDrafts } from "../src/lib/workspace-drafts";
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -6,6 +7,8 @@ import {
   ACTIVE_JOB_SNAPSHOT_TTL_MS,
   ACTIVE_JOB_STARTED_AT_KEY,
   clearActiveJobSnapshot,
+  scopedActiveJobStorage,
+  hasLegacyActiveJobSnapshot,
   isJobInFlight,
   isJobTerminal,
   persistActiveJobSnapshot,
@@ -91,6 +94,8 @@ const invoiceTable: SchemaTable = {
 
 class MemoryStorage implements ActiveJobStorage {
   readonly items = new Map<string, string>();
+  get length() { return this.items.size; }
+  key(index: number) { return [...this.items.keys()][index] ?? null; }
 
   getItem(key: string): string | null {
     return this.items.get(key) ?? null;
@@ -673,4 +678,37 @@ test("history management preserves a visible selection and falls back to the fir
   assert.equal(selectedVisibleHistoryId(historyManagementItems, "h-old"), "h-old");
   assert.equal(selectedVisibleHistoryId(historyManagementItems, "missing"), "h-new");
   assert.equal(selectedVisibleHistoryId([], "h-old"), "");
+});
+
+
+test("job snapshots isolate owners and databases and cannot return after logout", () => {
+  const session = new MemoryStorage();
+  bindWorkspaceOwner(session, "alice");
+  const aliceDb1 = scopedActiveJobStorage(session, "alice", "db1");
+  const aliceDb2 = scopedActiveJobStorage(session, "alice", "db2");
+  persistActiveJobSnapshot(aliceDb1, "job-db1", 1000);
+  persistActiveJobSnapshot(aliceDb2, "job-db2", 1001);
+  assert.equal(readActiveJobSnapshot(aliceDb1, 1100)?.jobId, "job-db1");
+  assert.equal(readActiveJobSnapshot(aliceDb2, 1100)?.jobId, "job-db2");
+  clearActiveJobSnapshot(aliceDb2, "job-db2");
+  assert.equal(readActiveJobSnapshot(aliceDb1, 1100)?.jobId, "job-db1");
+  bindWorkspaceOwner(session, "bob");
+  const bob = scopedActiveJobStorage(session, "bob", "db1");
+  assert.equal(readActiveJobSnapshot(bob, 1100), null);
+  assert.equal(readActiveJobSnapshot(aliceDb1, 1100), null);
+  assert.throws(() => persistActiveJobSnapshot(aliceDb1, "late-job", 1100));
+  persistActiveJobSnapshot(bob, "bob-job", 1200);
+  clearWorkspaceDrafts(session);
+  assert.equal(session.length, 0);
+  assert.throws(() => persistActiveJobSnapshot(bob, "late-job", 1300));
+});
+
+test("legacy detection is read-only and excludes expired shared records", () => {
+  const local = new MemoryStorage();
+  assert.equal(hasLegacyActiveJobSnapshot(local, 1000), false);
+  persistActiveJobSnapshot(local, "legacy-job", 1000);
+  assert.equal(hasLegacyActiveJobSnapshot(local, 1001), true);
+  assert.equal(hasLegacyActiveJobSnapshot(local, 1001 + ACTIVE_JOB_SNAPSHOT_TTL_MS), false);
+  assert.equal(local.getItem(ACTIVE_JOB_ID_KEY), "legacy-job");
+  assert.equal(local.getItem(ACTIVE_JOB_STARTED_AT_KEY), "1000");
 });

@@ -1,4 +1,5 @@
 // node:test(jiti)から直接 import されるため、"@/" alias でなく相対 path を使う。
+import { draftKey, isWorkspaceOwner } from "../../lib/workspace-drafts";
 import { API_TIMEOUT_MS } from "../../lib/requestPolicy";
 
 import type { JobStatus } from "./types";
@@ -19,6 +20,27 @@ export interface ActiveJobStorage {
 export interface ActiveJobSnapshot {
   jobId: string;
   startedAtMs: number;
+}
+
+/** sessionStorage を渡す。workspace prefix に含め、logout 時に草稿と一緒に消去する。 */
+export function scopedActiveJobStorage(storage: ActiveJobStorage, owner: string, context: string): ActiveJobStorage {
+  const keyFor = (key: string) => draftKey(owner, context, "/query", key);
+  return {
+    getItem: (key) => isWorkspaceOwner(storage, owner) ? storage.getItem(keyFor(key)) : null,
+    setItem: (key, value) => {
+      // logout 後に完了した非同期リクエストが旧ユーザーの情報を復活させない。
+      if (!isWorkspaceOwner(storage, owner)) throw new Error("Workspace owner changed");
+      storage.setItem(keyFor(key), value);
+    },
+    removeItem: (key) => storage.removeItem(keyFor(key)),
+  };
+}
+
+/** 旧共有記録は所有タブが不明。案内だけに使い、元のタブの記録も変更しない。 */
+export function hasLegacyActiveJobSnapshot(storage: ActiveJobStorage, nowMs: number): boolean {
+  if (!storage.getItem(ACTIVE_JOB_ID_KEY)) return false;
+  const startedAt = Number(storage.getItem(ACTIVE_JOB_STARTED_AT_KEY));
+  return !Number.isFinite(startedAt) || startedAt <= 0 || nowMs - startedAt <= ACTIVE_JOB_SNAPSHOT_TTL_MS;
 }
 
 export function isJobInFlight(status: JobStatus | null | undefined): boolean {
@@ -61,7 +83,7 @@ export function persistActiveJobSnapshot(
 }
 
 export function clearActiveJobSnapshot(storage: ActiveJobStorage, expectedJobId: string | null) {
-  // localStorage はタブ間で共有される。未追跡ページや旧 job から別 job を削除しない。
+  // 旧 job の遅延 cleanup が、このタブで新しく開始した job を削除しない。
   if (!expectedJobId || storage.getItem(ACTIVE_JOB_ID_KEY) !== expectedJobId) return;
   storage.removeItem(ACTIVE_JOB_ID_KEY);
   storage.removeItem(ACTIVE_JOB_STARTED_AT_KEY);

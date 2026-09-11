@@ -27,6 +27,12 @@ export function WorkspacePage({ active, page, children }: { active: boolean; pag
 }
 export function useWorkspaceActive() { return useContext(ActivityContext).active; }
 
+/** タブ内の一時保存は草稿と同じユーザー・DB 境界に合わせる。 */
+export function useWorkspaceIdentity() {
+  const { user } = useAuth();
+  return { owner: user?.user_uuid ?? "", context: useContext(WorkspaceContext) };
+}
+
 /** keep-alive 内でも離脱時に確認・破壊的選択だけを破棄する。 */
 export function useResetExecutionConsent(reset: () => void, signature: string) {
   const active = useWorkspaceActive();

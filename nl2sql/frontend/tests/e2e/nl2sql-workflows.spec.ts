@@ -1,3 +1,4 @@
+import { draftKey, WORKSPACE_DRAFT_PREFIX } from "../../src/lib/workspace-drafts";
 import { expectLocalUiFonts } from "./_helpers/local-fonts";
 import { expect, test, type Locator, type Page, type Route, type TestInfo } from "@playwright/test";
 import { mockDatabaseGateReady, systemAdminMe } from "./_helpers/database-gate";
@@ -10,6 +11,21 @@ import { expectLargeActionButton } from "./_helpers/action-button";
 import { expectLegacyOntologyControls } from "./_helpers/ontology-controls";
 
 test.beforeEach(async ({ page }) => mockDatabaseGateReady(page));
+
+const jobSnapshotKeys = {
+  id: draftKey(systemAdminMe.user_uuid, "legacy", "/query", "nl2sql.activeJobId"),
+  startedAt: draftKey(systemAdminMe.user_uuid, "legacy", "/query", "nl2sql.activeJobStartedAt"),
+};
+async function readActiveJobState(page: Page) {
+  return page.evaluate((keys) => ({ jobId: sessionStorage.getItem(keys.id), startedAt: sessionStorage.getItem(keys.startedAt) }), jobSnapshotKeys);
+}
+async function seedActiveJob(page: Page, jobId: string, ageMs = 0) {
+  await page.addInitScript(({ keys, owner, ownerKey, jobId, ageMs }) => {
+    sessionStorage.setItem(ownerKey, owner);
+    sessionStorage.setItem(keys.id, jobId);
+    sessionStorage.setItem(keys.startedAt, String(Date.now() - ageMs));
+  }, { keys: jobSnapshotKeys, owner: systemAdminMe.user_uuid, ownerKey: WORKSPACE_DRAFT_PREFIX + "owner", jobId, ageMs });
+}
 
 async function expectBoundedRowLimit(input: Locator, action: Locator) {
   await expect(input).toHaveAttribute("min", "1");
@@ -4165,8 +4181,8 @@ test("job ポーリングの通信断が続くと追跡を停止しエラー表�
   await expect(page.getByTestId("nl2sql-job-progress")).toHaveCount(0);
   await expect(runButton).toBeEnabled();
   await expect(resetButton).toBeEnabled();
-  // 追跡解除後は localStorage の snapshot も消え、リロードで復元されない。
-  expect(await page.evaluate(() => window.localStorage.getItem("nl2sql.activeJobId"))).toBeNull();
+  // 追跡解除後は sessionStorage の snapshot も消え、リロードで復元されない。
+  expect((await readActiveJobState(page)).jobId).toBeNull();
 });
 
 test("job が 404 のときは即座に追跡を解除して案内を表示する", async ({ page }) => {
@@ -4201,19 +4217,16 @@ test("失効した job スナップショットは復元時の 404 で破棄さ�
       body: JSON.stringify({ detail: "job not found" }),
     });
   });
-  await page.addInitScript(() => {
-    window.localStorage.setItem("nl2sql.activeJobId", "job-stale-001");
-    window.localStorage.setItem("nl2sql.activeJobStartedAt", String(Date.now() - 1_000));
-  });
+  await seedActiveJob(page, "job-stale-001", 1000);
 
   await page.goto("/query");
 
   const actionError = page.getByTestId("nl2sql-action-feedback-error");
   await expect(actionError).toContainText("実行中のジョブが見つかりませんでした");
   expect(staleJobRequests).toBe(1);
-  expect(await page.evaluate(() => window.localStorage.getItem("nl2sql.activeJobId"))).toBeNull();
+  expect((await readActiveJobState(page)).jobId).toBeNull();
   expect(
-    await page.evaluate(() => window.localStorage.getItem("nl2sql.activeJobStartedAt"))
+    (await readActiveJobState(page)).startedAt
   ).toBeNull();
 });
 
@@ -4228,21 +4241,14 @@ test("TTL を超えた job スナップショットは復元ポーリング自�
       body: JSON.stringify({ detail: "job not found" }),
     });
   });
-  await page.addInitScript(() => {
-    window.localStorage.setItem("nl2sql.activeJobId", "job-expired-001");
-    // 66 分前開始 = longRunningJob(65 分)の TTL 超過。
-    window.localStorage.setItem(
-      "nl2sql.activeJobStartedAt",
-      String(Date.now() - 66 * 60_000)
-    );
-  });
+  await seedActiveJob(page, "job-expired-001", 3960000);
 
   await page.goto("/query");
   await expect(page.getByTestId("nl2sql-schema-reference")).toBeVisible();
 
   expect(staleJobRequests).toBe(0);
   await expect(page.getByTestId("nl2sql-job-progress")).toHaveCount(0);
-  expect(await page.evaluate(() => window.localStorage.getItem("nl2sql.activeJobId"))).toBeNull();
+  expect((await readActiveJobState(page)).jobId).toBeNull();
 });
 
 test("履歴更新の失敗は warning に留め、成功した検索結果を失敗表示に変えない", async ({ page }) => {
@@ -15819,7 +15825,7 @@ test("query recovery: 2.5秒より遅い状態取得を中断せず結果を表�
 });
 
 for (const failure of ["get", "set", "remove"] as const) {
-  test(`query recovery: localStorage ${failure} 失敗でも作成済み job を追跡する`, async ({ page }, testInfo) => {
+  test(`query recovery: sessionStorage ${failure} 失敗でも作成済み job を追跡する`, async ({ page }, testInfo) => {
     await mockNl2SqlApi(page);
     let release!: () => void;
     const completion = new Promise<void>((resolve) => { release = resolve; });
@@ -15833,13 +15839,13 @@ for (const failure of ["get", "set", "remove"] as const) {
     });
     await page.addInitScript((failure) => {
       if (failure === "get") {
-        Object.defineProperty(window, "localStorage", { get() { throw new DOMException("blocked", "SecurityError"); } });
+        Object.defineProperty(window, "sessionStorage", { get() { throw new DOMException("blocked", "SecurityError"); } });
         return;
       }
       const method = failure === "set" ? "setItem" : "removeItem";
       const original = Storage.prototype[method];
       Object.defineProperty(Storage.prototype, method, { value: function (key: string, value?: string) {
-        if (this === window.localStorage && key.startsWith("nl2sql.activeJob")) {
+        if (this === window.sessionStorage && key.includes("nl2sql.activeJob")) {
           throw new DOMException("blocked", "QuotaExceededError");
         }
         return original.call(this, key, value!);
@@ -15873,7 +15879,8 @@ for (const failure of ["get", "set", "remove"] as const) {
       const event = new Event("beforeunload", { cancelable: true });
       window.dispatchEvent(event);
       return event.defaultPrevented;
-    })).toBe(false);
+    // sessionStorage getter 全体の障害では job 完了後も未保存草稿の離脱保護を残す。
+    })).toBe(failure === "get");
     expect(creates).toBe(1);
     expect(pageErrors).toEqual([]);
     await expectNoHorizontalScroll(page);
@@ -15977,10 +15984,7 @@ test("query recovery: 初回 Profile 選択でも保存された進行中 job �
   page.on("request", (request) => {
     if (request.method() === "POST" && new URL(request.url()).pathname === "/api/nl2sql/jobs") creates += 1;
   });
-  await page.addInitScript(() => {
-    window.localStorage.setItem("nl2sql.activeJobId", "job-default-001");
-    window.localStorage.setItem("nl2sql.activeJobStartedAt", String(Date.now()));
-  });
+  await seedActiveJob(page, "job-default-001", 0);
   await page.route("**/api/nl2sql/jobs/job-default-001", async (route) => {
     await new Promise((resolve) => setTimeout(resolve, 500));
     await route.fallback();
@@ -16014,10 +16018,10 @@ test("query recovery: 状態取得の timeout が続くと追跡を解除する"
   await expect(nl2sqlQuestionInput(page)).toHaveValue("応答 timeout 時も入力を保持する");
   await expect(page.getByTestId("nl2sql-job-progress")).toHaveCount(0);
   expect(reads).toBe(3);
-  expect(await page.evaluate(() => localStorage.getItem("nl2sql.activeJobId"))).toBeNull();
+  expect((await readActiveJobState(page)).jobId).toBeNull();
 });
 
-// Issue #479: origin 共通の復元情報を、未追跡ページや別 job から削除しない。
+// Issue #479 / #481: タブごとの復元情報を、別タブや旧 job の cleanup から保護する。
 test.describe("query snapshot ownership", () => {
   async function openIdleTabs(page: Page) {
     const other = await page.context().newPage();
@@ -16040,10 +16044,7 @@ test.describe("query snapshot ownership", () => {
     job_id: jobId, status: "running", created_at: new Date().toISOString(),
     result: null, error_message: null, warning_message: null, timing: null, steps: [],
   });
-  const readSnapshot = (page: Page) => page.evaluate(() => ({
-    jobId: localStorage.getItem("nl2sql.activeJobId"),
-    startedAt: localStorage.getItem("nl2sql.activeJobStartedAt"),
-  }));
+  const readSnapshot = readActiveJobState;
   async function startJob(page: Page) {
     await nl2sqlQuestionInput(page).fill("請求金額を一覧で見たい");
     const run = page.getByRole("button", { name: "SQL を生成して実行", exact: true });
@@ -16073,7 +16074,8 @@ test.describe("query snapshot ownership", () => {
     for (const profileId of ["other", "default"]) {
       await other.getByRole("combobox", { name: "業務プロファイル", exact: true }).selectOption(profileId);
       await expect(other.getByTestId("nl2sql-job-progress")).toHaveCount(0);
-      expect(await readSnapshot(other)).toEqual(snapshot);
+      expect(await readSnapshot(other)).toEqual({ jobId: null, startedAt: null });
+      expect(await readSnapshot(page)).toEqual(snapshot);
     }
     const readsBeforeReload = reads;
     await page.reload();
@@ -16103,10 +16105,12 @@ test.describe("query snapshot ownership", () => {
     expect(snapshot.jobId).toBe("job-other-tab");
     release();
     await expect(page.getByRole("cell", { name: "青山商事" })).toBeVisible();
-    expect(await readSnapshot(page)).toEqual(snapshot);
+    expect(await readSnapshot(page)).toEqual({ jobId: null, startedAt: null });
+    expect(await readSnapshot(other)).toEqual(snapshot);
     await page.getByRole("combobox", { name: "業務プロファイル", exact: true }).selectOption("other");
     await expect(page.getByTestId("nl2sql-job-progress")).toHaveCount(0);
-    expect(await readSnapshot(page)).toEqual(snapshot);
+    expect(await readSnapshot(page)).toEqual({ jobId: null, startedAt: null });
+    expect(await readSnapshot(other)).toEqual(snapshot);
     await other.reload();
     await expect(other.getByTestId("nl2sql-job-progress")).toHaveAttribute("data-job-status", "running");
     await expect(other.getByRole("button", { name: "SQL を生成して実行", exact: true })).toBeDisabled();
@@ -16121,7 +16125,7 @@ test.describe("query snapshot ownership", () => {
     await other.evaluate(() => {
       const original = Storage.prototype.setItem;
       Storage.prototype.setItem = function (key: string, value: string) {
-        if (this === localStorage && key === "nl2sql.activeJobId") throw new DOMException("blocked", "QuotaExceededError");
+        if (this === sessionStorage && key.includes("nl2sql.activeJobId")) throw new DOMException("blocked", "QuotaExceededError");
         return original.call(this, key, value);
       };
     });
@@ -16135,4 +16139,134 @@ test.describe("query snapshot ownership", () => {
     await expect(page.getByRole("button", { name: "SQL を生成して実行", exact: true })).toBeDisabled();
     await other.close({ runBeforeUnload: false });
   });
+  test("双タブの別 job は再読込・往復後も独立して進捗と結果を復元する", async ({ page }, testInfo) => {
+    const other = await openIdleTabs(page);
+    const done = new Set<string>();
+    const seen: string[][] = [[], []];
+    let creates = 0;
+    for (const [index, tab] of [page, other].entries()) {
+      const jobId = `job-tab-${index}`;
+      tab.on("request", (request) => {
+        if (request.method() === "POST" && new URL(request.url()).pathname === "/api/nl2sql/jobs") creates += 1;
+      });
+      await tab.route("**/api/nl2sql/jobs", (route) => fulfillJson(route, runningJob(jobId)));
+      await tab.route("**/api/nl2sql/jobs/*", (route) => {
+        const requested = new URL(route.request().url()).pathname.split("/").pop()!;
+        seen[index].push(requested);
+        return fulfillJson(route, {
+          ...runningJob(requested), status: done.has(requested) ? "done" : "running",
+          result: done.has(requested) ? {
+            engine: "select_ai", engine_meta: {}, fallback_reason: "", original_question: "請求金額を一覧で見たい",
+            rewritten_question: "請求金額を一覧で見たい", generated_sql: "SELECT CUSTOMER_NAME FROM INVOICES",
+            executable_sql: "SELECT CUSTOMER_NAME FROM INVOICES", explanation: "請求情報", safety, timing,
+            recommendations: [], repaired_sql: "", optimization_hints: [],
+            results: { columns: ["CUSTOMER_NAME"], rows: [{ CUSTOMER_NAME: `タブ${index}の結果` }], total: 1 },
+          } : null,
+        });
+      });
+      await startJob(tab);
+    }
+    // 既に job がある状態で開く新規タブも、他タブの追跡を引き継がない。
+    const fresh = await page.context().newPage();
+    await mockDatabaseGateReady(fresh);
+    await mockNl2SqlApi(fresh);
+    await fresh.goto("/query");
+    await expect(fresh.getByRole("combobox", { name: "業務プロファイル", exact: true })).toHaveValue("default");
+    await expect(fresh.getByTestId("nl2sql-job-progress")).toHaveCount(0);
+    expect(await readSnapshot(fresh)).toEqual({ jobId: null, startedAt: null });
+    await fresh.close();
+    for (const [index, tab] of [page, other].entries()) {
+      expect((await readSnapshot(tab)).jobId).toBe(`job-tab-${index}`);
+      await tab.reload();
+      await expect(tab.getByTestId("nl2sql-job-progress")).toHaveAttribute("data-job-status", "running");
+      await tab.locator('a[href="/history"]').first().click();
+      await tab.goBack();
+      await expect(tab.getByTestId("nl2sql-job-progress")).toHaveAttribute("data-job-status", "running");
+      await tab.goForward();
+      await tab.goBack();
+      await expect(tab.getByRole("button", { name: "SQL を生成して実行", exact: true })).toBeDisabled();
+      expect((await readSnapshot(tab)).jobId).toBe(`job-tab-${index}`);
+    }
+    done.add("job-tab-0");
+    await expect(page.getByRole("cell", { name: "タブ0の結果", exact: true })).toBeVisible();
+    expect((await readSnapshot(page)).jobId).toBeNull();
+    expect((await readSnapshot(other)).jobId).toBe("job-tab-1");
+    await other.reload();
+    await expect(other.getByTestId("nl2sql-job-progress")).toHaveAttribute("data-job-status", "running");
+    done.add("job-tab-1");
+    await expect(other.getByRole("cell", { name: "タブ1の結果", exact: true })).toBeVisible();
+    await expect(page.getByRole("cell", { name: "タブ1の結果", exact: true })).toHaveCount(0);
+    await expect(other.getByRole("cell", { name: "タブ0の結果", exact: true })).toHaveCount(0);
+    expect((await readSnapshot(other)).jobId).toBeNull();
+    expect(creates).toBe(2);
+    expect(new Set(seen[0])).toEqual(new Set(["job-tab-0"]));
+    expect(new Set(seen[1])).toEqual(new Set(["job-tab-1"]));
+    for (const [index, tab] of [page, other].entries()) {
+      await expectNoHorizontalScroll(tab);
+      await tab.getByRole("cell", { name: `タブ${index}の結果`, exact: true }).scrollIntoViewIfNeeded();
+      await tab.screenshot({ path: testInfo.outputPath(`independent-tab-${index}.png`) });
+    }
+    await other.close();
+  });
+
+  test("旧共有記録を自動復元せず理由を案内する", async ({ page }, testInfo) => {
+    await mockNl2SqlApi(page);
+    let reads = 0;
+    await page.addInitScript(() => {
+      localStorage.setItem("nl2sql.activeJobId", "legacy-job");
+      localStorage.setItem("nl2sql.activeJobStartedAt", String(Date.now()));
+    });
+    await page.route("**/api/nl2sql/jobs/*", (route) => {
+      reads += 1;
+      return fulfillJson(route, runningJob("legacy-job"));
+    });
+    await page.goto("/query");
+    const notice = page.getByText(/旧バージョンの共有ジョブ記録があります/);
+    await expect(notice).toBeVisible();
+    await expect(page.getByTestId("nl2sql-job-progress")).toHaveCount(0);
+    expect(reads).toBe(0);
+    expect((await readSnapshot(page)).jobId).toBeNull();
+    expect(await page.evaluate(() => localStorage.getItem("nl2sql.activeJobId"))).toBe("legacy-job");
+    await notice.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath("legacy-job-notice.png") });
+    await expectNoHorizontalScroll(page);
+  });
+
+  test("job 復元は DB・ユーザーを分離し認証失効時に消去する", async ({ page }) => {
+    await mockNl2SqlApi(page);
+    let database = "db-a";
+    let user = systemAdminMe;
+    const reads: string[] = [];
+    await page.route("**/api/ready/database", (route) => fulfillJson(route, { status: "ok", check: "ok", detail: null, context_id: database }));
+    await page.route("**/api/auth/me", (route) => fulfillJson(route, user));
+    await page.route("**/api/nl2sql/jobs", (route) => fulfillJson(route, runningJob(`job-${database}`)));
+    await page.route("**/api/nl2sql/jobs/*", (route) => {
+      const id = new URL(route.request().url()).pathname.split("/").pop()!;
+      reads.push(id);
+      return fulfillJson(route, runningJob(id));
+    });
+    await page.goto("/query");
+    await expect(page.getByRole("combobox", { name: "業務プロファイル", exact: true })).toHaveValue("default");
+    await startJob(page);
+    database = "db-b";
+    await page.reload();
+    await expect(page.getByRole("combobox", { name: "業務プロファイル", exact: true })).toHaveValue("default");
+    await expect(page.getByTestId("nl2sql-job-progress")).toHaveCount(0);
+    await startJob(page);
+    database = "db-a";
+    reads.length = 0;
+    await page.reload();
+    await expect(page.getByTestId("nl2sql-job-progress")).toHaveAttribute("data-job-status", "running");
+    await expect.poll(() => reads.includes("job-db-a")).toBe(true);
+    expect(reads).not.toContain("job-db-b");
+    user = { ...systemAdminMe, user_uuid: "other-user" };
+    await page.reload();
+    await expect(page.getByRole("combobox", { name: "業務プロファイル", exact: true })).toHaveValue("default");
+    await expect(page.getByTestId("nl2sql-job-progress")).toHaveCount(0);
+    await startJob(page);
+    await page.evaluate(() => window.dispatchEvent(new Event("app-auth-unauthorized")));
+    await expect(page).toHaveURL(/\/login/);
+    expect(await page.evaluate(() => Object.keys(sessionStorage).filter((key) => key.includes("nl2sql.activeJob")))).toEqual([]);
+  });
+
 });

@@ -19,6 +19,9 @@ export function bindWorkspaceOwner(storage: DraftStorage, owner: string): void {
   if (storage.getItem(OWNER_KEY) !== owner) clearWorkspaceDrafts(storage);
   storage.setItem(OWNER_KEY, owner);
 }
+export function isWorkspaceOwner(storage: Pick<DraftStorage, "getItem">, owner: string): boolean {
+  return Boolean(owner) && storage.getItem(OWNER_KEY) === owner;
+}
 export function draftKey(owner: string, context: string, page: string, field: string): string {
   return WORKSPACE_DRAFT_PREFIX + JSON.stringify([owner, context, page, field]);
 }
@@ -48,7 +51,7 @@ export function readDraft<T>(storage: DraftStorage, key: string, initial: T, now
 export function writeDraft(storage: DraftStorage, owner: string, key: string, value: unknown, now = Date.now()): boolean {
   try {
     // logout 後の非同期完了による草稿の復活も拒否する。
-    if (storage.getItem(OWNER_KEY) !== owner) return false;
+    if (!isWorkspaceOwner(storage, owner)) return false;
     const encoded = JSON.stringify({ at: now, value });
     if (encoded.length > 200_000) return false;
     storage.setItem(key, encoded);
