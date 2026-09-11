@@ -136,6 +136,7 @@ from .ontology_store import (
 )
 from .profile_access import assert_profile_access
 from .service import nl2sql_service
+from .structured_outputs import format_schema, strict_schema
 
 logger = logging.getLogger(__name__)
 
@@ -216,17 +217,31 @@ def _idempotency_storage_key(request_key: str) -> str:
 
 def _question_intent_json_schema() -> dict[str, Any]:
     schema = QuestionIntentGraph.model_json_schema()
-    schema["additionalProperties"] = False
-    return schema
+    schema["properties"].pop("created_at", None)
+    # Any の filter 値は wire では JSON 文字列。domain へ戻す際に型を復元する。
+    fields = schema["$defs"]["IntentFilter"]["properties"]
+    fields.pop("value")
+    fields["value_json"] = {
+        "type": "string",
+        "description": "JSON encoded filter value: string, number, boolean, null, array or object.",
+    }
+    return strict_schema(schema)
 
 
 def _question_intent_response_format() -> dict[str, Any]:
-    return {
-        "type": "json_schema",
-        "name": _QUESTION_INTENT_SCHEMA_VERSION,
-        "schema": _question_intent_json_schema(),
-        "strict": True,
-    }
+    return format_schema(_question_intent_json_schema(), _QUESTION_INTENT_SCHEMA_VERSION)
+
+
+def _decode_question_intent_output(raw: str) -> dict[str, Any]:
+    parsed = json.loads(raw)
+    if not isinstance(parsed, dict):
+        raise ValueError("intent must be an object")
+    for item in parsed.get("filters", []):
+        if not isinstance(item, dict):
+            raise ValueError("filter must be an object")
+        if "value_json" in item:
+            item["value"] = json.loads(item.pop("value_json"))
+    return parsed
 
 
 def _question_intent_minimum_example(
@@ -3032,6 +3047,7 @@ class OntologyApiRuntime:
             "従い、"
             "ambiguities[] は id/code/message_ja/options を必ず使ってください。"
             "kind field は使わず、options は string 配列だけにしてください。"
+            "filters の値は value_json に JSON 文字列として格納してください。"
         )
         if include_guided_context:
             system_prompt += (
@@ -3056,11 +3072,9 @@ class OntologyApiRuntime:
                     response_format=_question_intent_response_format(),
                 )
             cleaned = str(raw).strip()
-            if "{" in cleaned and "}" in cleaned:
-                cleaned = cleaned[cleaned.find("{") : cleaned.rfind("}") + 1]
             try:
-                parsed = json.loads(cleaned)
-            except json.JSONDecodeError as exc:
+                parsed = _decode_question_intent_output(cleaned)
+            except (ValueError, TypeError) as exc:
                 _log_intent_enterprise_ai_fallback(
                     reason="invalid_json",
                     model=model_id,

@@ -147,7 +147,6 @@ def test_failed_stage_preserves_completed_structure_or_exact_original_sql(fail_a
     )
 
 
-@pytest.mark.parametrize("fenced", [False, True])
 @pytest.mark.parametrize(
     "physical",
     [
@@ -157,7 +156,6 @@ def test_failed_stage_preserves_completed_structure_or_exact_original_sql(fail_a
     ],
 )
 def test_sql_assist_markdown_response_is_preserved_without_business_name_substitution(
-    fenced: bool,
     physical: str,
 ) -> None:
     service = _service()
@@ -168,7 +166,7 @@ def test_sql_assist_markdown_response_is_preserved_without_business_name_substit
             if len(self.calls) < 2:
                 output = physical if not self.calls else logical
                 self.calls.append(kwargs)
-                return f"```markdown\n{output}\n```" if fenced else output
+                return json.dumps({"logical_structure": output}, ensure_ascii=False)
             return super().generate(**kwargs)
 
     client = MarkdownClient([{"question": "従業員情報を取得したい"}])

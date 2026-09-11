@@ -48,6 +48,7 @@ from .quality_evaluation_store import (
     QualityEvaluationRepository,
 )
 from .service import GeneratedSql, Nl2SqlService, is_select_only, nl2sql_service
+from .structured_outputs import response_format
 
 logger = logging.getLogger(__name__)
 
@@ -1378,6 +1379,7 @@ class QualityEvaluationService:
             prompt=prompt,
             context=schema_context,
             system_prompt=system_prompt,
+            response_format=response_format(QualityEvaluationJudge),
             timeout_seconds=timeout_seconds,
             max_retries=max_retries,
         )

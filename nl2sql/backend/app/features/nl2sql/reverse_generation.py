@@ -7,6 +7,7 @@ import time
 from collections.abc import Callable
 
 from .enterprise_ai_client import EnterpriseAiDirectClient, EnterpriseAiDirectError
+from .structured_outputs import QuestionOutput, StructureOutput, response_format
 
 logger = logging.getLogger(__name__)
 STAGE_LABELS = {
@@ -24,6 +25,8 @@ REASONS = {
     "request": "Enterprise AI のモデル・リクエスト設定を確認してください",
     "response_format": "応答が空、または必要な形式を満たしていませんでした",
     "provider_error": "Enterprise AI が生成エラーを返しました",
+    "incomplete": "応答が未完了です。出力上限とモデル設定を確認してください",
+    "refusal": "Enterprise AI が応答を拒否しました。入力内容を確認してください",
 }
 
 
@@ -67,6 +70,9 @@ def generate_stage[T](
             raise ReverseStageError(stage, "deadline", attempt - 1)
         try:
             raw = client.generate(
+                response_format=response_format(
+                    QuestionOutput if stage == "business_question" else StructureOutput
+                ),
                 prompt=prompt,
                 context=context,
                 system_prompt=system_prompt,

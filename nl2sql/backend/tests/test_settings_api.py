@@ -2000,6 +2000,7 @@ def test_model_settings_test_enterprise_vision_uses_smoke_image_payload(
             prompt: str,
             *,
             mime_type: str,
+            response_format: object | None = None,
         ) -> str:
             observed.append((self.settings, image_bytes, prompt, mime_type))
             return "画像を確認しました。"

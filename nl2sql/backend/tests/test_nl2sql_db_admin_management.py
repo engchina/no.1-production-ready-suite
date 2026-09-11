@@ -6,7 +6,8 @@ import base64
 import csv
 import importlib
 import io
-from collections.abc import Iterator
+import json
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Any, cast
@@ -93,6 +94,7 @@ class FakeEnterpriseAiClient:
         timeout_seconds: float | None = None,
         max_output_tokens: int | None = None,
         max_retries: int | None = None,
+        response_format: Mapping[str, Any] | None = None,
     ) -> str:
         del timeout_seconds, max_retries
         self.calls.append({"prompt": prompt, "context": context, "system_prompt": system_prompt})
@@ -101,7 +103,18 @@ class FakeEnterpriseAiClient:
         response = self.responses.pop(0)
         if isinstance(response, Exception):
             raise response
-        return response
+        assert response_format is not None
+        assert response_format["strict"] is True
+        name = response_format["name"]
+        field = {
+            "SqlOutput": "sql",
+            "AnalysisOutput": "analysis",
+            "StructureOutput": "logical_structure",
+        }[name]
+        payload = {field: response}
+        if field == "sql":
+            payload["explanation"] = ""
+        return json.dumps(payload, ensure_ascii=False)
 
 
 class _FakeStatementsAdapter:

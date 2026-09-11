@@ -295,6 +295,13 @@ from .reverse_prompts import (
 )
 from .sql_semantics import parse_oracle_sql
 from .store import MemoryNl2SqlStore, Nl2SqlStore, OracleJsonNl2SqlStore
+from .structured_outputs import (
+    AnalysisOutput,
+    CommentsOutput,
+    SqlOutput,
+    StructureOutput,
+    response_format,
+)
 from .tabular_files import (
     WORKBOOK_SUFFIXES,
     normalize_workbook_scalar,
@@ -9953,14 +9960,14 @@ class Nl2SqlService:
                 context=context,
                 system_prompt=stage_prompt(
                     "business_question",
-                    "自然言語の質問文だけを返す。JSON・説明・前置きは不要。"
+                    "指定された JSON Schema に従い、question に自然言語の質問文を入れる。"
                     "logical_structure プレースホルダーは入力本文を参照する。",
                 )
                 + (
                     "\n語彙の正規化は質問生成と同時に行う。terms_text は context の glossary、"
                     "question_text は生成中の質問を指す。文字列リテラルは変更しない。\n"
                     + source_prompt("glossary_question")
-                    + "\n最終出力は自然言語の質問文だけとする。"
+                    + "\n最終出力は question を持つ JSON object とする。"
                     if request.use_glossary
                     else ""
                 ),
@@ -10064,6 +10071,7 @@ class Nl2SqlService:
         if not self._enterprise_ai_client.is_configured():
             raise ValueError("OCI Enterprise AI を設定してから SQL を再生成してください。")
         raw = self._enterprise_ai_client.generate(
+            response_format=response_format(SqlOutput),
             prompt=text,
             context=self._enterprise_ai_schema_context(
                 profile=profile,
@@ -10517,6 +10525,7 @@ class Nl2SqlService:
         try:
             profile = self.get_profile(None)
             raw = self._enterprise_ai_client.generate(
+                response_format=response_format(_SqlAnalysisLlmPayload),
                 prompt=sql,
                 context=self._enterprise_ai_schema_context(
                     profile=profile,
@@ -10579,43 +10588,19 @@ class Nl2SqlService:
         return [value.strip()] if value.strip() else []
 
     def _reverse_structure_from_text(self, raw: str) -> str:
-        """原文指定の Markdown と実行時指定の JSON を構造応答に正規化する。"""
-        cleaned = raw.strip()
-        if cleaned.startswith("```"):
-            cleaned = re.sub(r"^```(?:markdown|md)?\s*\n", "", cleaned)
-            cleaned = re.sub(r"\n```$", "", cleaned).strip()
-        # 原文プロンプトの Markdown 指定に従うモデルもある。一般の文章・エラーは
-        # 構造として扱わず、見出しと箇条書きを持つ結果だけを Pydantic へ渡す。
-        if re.match(r"#{1,3}\s+[^\n]*SQL[^\n]*構造", cleaned) and re.search(
-            r"^\s*-\s+\S", cleaned, re.MULTILINE
-        ):
-            payload = {"logical_structure": cleaned}
-        else:
-            payload = self._json_object_from_text(raw)
-        structure = ReverseStructureOutput.model_validate(payload).logical_structure.strip()
+        structure = ReverseStructureOutput.model_validate_json(raw).logical_structure.strip()
         if not structure:
             raise ValueError("SQL 構造が空です。")
         return structure
 
     def _reverse_question_from_text(self, raw: str) -> ReverseQuestionOutput:
-        # SQL Assist の質問段階は自然言語を返す。従来の JSON 応答も受理するが、
-        # 壊れた JSON やコードを自然言語として扱って失敗を隠さない。
-        cleaned = raw.strip()
-        if cleaned.startswith(("{", "[", "```")):
-            payload = self._json_object_from_text(cleaned)
-            payload["logical_steps"] = _reverse_deep_steps(payload.get("logical_steps"))
-        else:
-            payload = {"question": cleaned}
-        question = ReverseQuestionOutput.model_validate(payload)
+        question = ReverseQuestionOutput.model_validate_json(raw)
         if not question.question.strip():
             raise ValueError("業務質問が空です。")
         return question
 
     def _json_object_from_text(self, raw: str) -> dict[str, Any]:
-        cleaned = self._strip_code_fence(raw)
-        if "{" in cleaned and "}" in cleaned:
-            cleaned = cleaned[cleaned.find("{") : cleaned.rfind("}") + 1]
-        payload = json.loads(cleaned)
+        payload = json.loads(raw)
         if not isinstance(payload, dict):
             raise ValueError("JSON object ではありません。")
         return payload
@@ -10641,6 +10626,7 @@ class Nl2SqlService:
             )
         try:
             raw = self._enterprise_ai_client.generate(
+                response_format=response_format(CommentsOutput),
                 prompt=(
                     "表・列・ビュー・マテリアライズドビューの COMMENT ON 候補を"
                     "日本語で生成してください。"
@@ -10810,6 +10796,7 @@ class Nl2SqlService:
 
         try:
             raw = self._enterprise_ai_client.generate(
+                response_format=response_format(SqlOutput),
                 prompt=(
                     "以下の情報に基づき、Oracle COMMENT ON 文のみを生成してください。"
                     "説明文、前置き、markdown code fence は出力しないでください。"
@@ -10823,6 +10810,7 @@ class Nl2SqlService:
                     "表・ビューはA-Z順、列は定義順、各説明文は200字以内です。"
                 ),
             )
+            raw = SqlOutput.model_validate_json(raw).sql
             sql = self._clean_generated_metadata_sql(raw, "comment_sql")
             if not self._metadata_sql_preserves_targets(sql, request):
                 warning = (
@@ -10952,6 +10940,7 @@ class Nl2SqlService:
         try:
             has_samples = bool(request.sample_text.strip())
             raw = self._enterprise_ai_client.generate(
+                response_format=response_format(SqlOutput),
                 prompt=(
                     "以下の情報に基づき、Oracle ALTER TABLE/ALTER VIEW/"
                     "ALTER MATERIALIZED VIEW の ANNOTATIONS 文のみを"
@@ -10999,6 +10988,7 @@ class Nl2SqlService:
                     "複数 annotation は同じ括弧内へカンマ区切りで指定できます。"
                 ),
             )
+            raw = SqlOutput.model_validate_json(raw).sql
             sql = self._clean_generated_metadata_sql(
                 raw,
                 "annotation_sql",
@@ -14044,6 +14034,7 @@ class Nl2SqlService:
         }[request.target]
         try:
             raw = self._enterprise_ai_client.generate(
+                response_format=response_format(AnalysisOutput),
                 prompt=(
                     f"以下は Oracle Database での {target_label} SQL とその実行結果です。"
                     "出力は次の 3 点のみに限定してください。"
@@ -14055,7 +14046,7 @@ class Nl2SqlService:
                     "エラー原因と実行可能な修復策のみを日本語で簡潔に提示してください。"
                 ),
             )
-            analysis = self._strip_code_fence(raw).strip()
+            analysis = AnalysisOutput.model_validate_json(raw).analysis.strip()
             if not analysis:
                 raise ValueError("AI 分析結果が空です。")
             return DbAdminAiAnalysisData(analysis=analysis, source="oci_enterprise_ai")
@@ -14145,11 +14136,16 @@ class Nl2SqlService:
             )
         try:
             raw = self._enterprise_ai_client.generate(
+                response_format=response_format(StructureOutput),
                 prompt=_SQL_STRUCTURE_ANALYSIS_PROMPT.format(sql=view_sql),
                 context="",
                 system_prompt=_SQL_STRUCTURE_SYSTEM_PROMPT,
             )
-            return self._parse_structure_join_where(raw, deterministic, prompt_profile)
+            return self._parse_structure_join_where(
+                StructureOutput.model_validate_json(raw).logical_structure,
+                deterministic,
+                prompt_profile,
+            )
         except (EnterpriseAiDirectError, ValueError) as exc:
             return deterministic.model_copy(
                 update={
@@ -18007,6 +18003,7 @@ class Nl2SqlService:
             "prompt": question,
             "context": context,
             "system_prompt": system_prompt,
+            "response_format": response_format(SqlOutput),
         }
         if runtime_timeout_seconds is not None:
             generate_kwargs["timeout_seconds"] = runtime_timeout_seconds
@@ -18046,7 +18043,7 @@ class Nl2SqlService:
                 "mode": "direct",
                 "runtime": "oci_enterprise_ai",
                 "model": self._enterprise_ai_client.model_id(),
-                "response_format": "json_or_sql_text",
+                "response_format": "json_schema",
             }
         )
         return GeneratedSql(
@@ -18131,26 +18128,15 @@ class Nl2SqlService:
         )
 
     def _extract_enterprise_ai_sql(self, raw_text: str) -> tuple[str, str]:
-        cleaned = raw_text.strip()
-        fence_match = re.match(
-            r"^\s*```(?:json|sql)?\s*(.*?)\s*```\s*$",
-            cleaned,
-            flags=re.IGNORECASE | re.DOTALL,
-        )
-        if fence_match:
-            cleaned = fence_match.group(1).strip()
-        explanation = ""
         try:
-            payload = json.loads(cleaned)
-        except json.JSONDecodeError:
-            payload = None
-        if isinstance(payload, dict):
-            explanation = str(payload.get("explanation") or "")
-            for key in ("sql", "generated_sql", "query", "result"):
-                candidate = str(payload.get(key) or "").strip()
-                if candidate:
-                    return self._extract_select_from_text(candidate), explanation
-        return self._extract_select_from_text(cleaned), explanation
+            output = SqlOutput.model_validate_json(raw_text)
+        except ValueError as exc:
+            raise EnterpriseAiDirectError(
+                "SQL 生成応答が指定 JSON Schema を満たしていません。",
+                code="response_format",
+                retryable=True,
+            ) from exc
+        return output.sql.strip(), output.explanation.strip()
 
     def _extract_select_from_text(self, text: str) -> str:
         match = re.search(r"\b(with|select)\b.+", text.strip(), flags=re.IGNORECASE | re.DOTALL)

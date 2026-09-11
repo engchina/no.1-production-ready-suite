@@ -18,6 +18,8 @@ import httpx
 
 from app.settings import Settings, enterprise_ai_default_model_id, enterprise_ai_vision_model_id
 
+from .structured_outputs import validate_json_output
+
 
 class EnterpriseAiDirectError(RuntimeError):
     """Enterprise AI direct 呼び出しの実行時エラー。"""
@@ -50,6 +52,7 @@ class EnterpriseAiDirectClient(Protocol):
         timeout_seconds: float | None = None,
         max_output_tokens: int | None = None,
         max_retries: int | None = None,
+        response_format: Mapping[str, Any] | None = None,
     ) -> str:
         """Return raw generated text from Enterprise AI."""
         ...
@@ -103,9 +106,10 @@ class OciEnterpriseAiDirectClient:
             timeout_seconds=timeout_seconds,
             max_retries=max_retries,
         )
-        return _parse_generated_text(
+        return _parse_response(
             response,
             response_path=self.settings.oci_enterprise_ai_llm_response_path,
+            response_format=response_format,
         )
 
     def vision_model_id(self) -> str:
@@ -117,6 +121,7 @@ class OciEnterpriseAiDirectClient:
         prompt: str,
         *,
         mime_type: str = "image/jpeg",
+        response_format: Mapping[str, Any] | None = None,
     ) -> str:
         if not self.is_configured():
             raise EnterpriseAiDirectError("OCI Enterprise AI Direct が未設定です。")
@@ -129,15 +134,17 @@ class OciEnterpriseAiDirectClient:
             image_bytes=image_bytes,
             prompt=prompt,
             mime_type=mime_type,
+            response_format=response_format,
         )
         response = self._post_json(
             payload,
             path=getattr(self.settings, "oci_enterprise_ai_vlm_path", "")
             or self.settings.oci_enterprise_ai_llm_path,
         )
-        return _parse_generated_text(
+        return _parse_response(
             response,
             response_path=self.settings.oci_enterprise_ai_vlm_response_path,
+            response_format=response_format,
         )
 
     def _post_json(
@@ -244,6 +251,12 @@ def _build_payload(
     max_output_tokens: int | None = None,
     response_format: Mapping[str, Any] | None = None,
 ) -> Mapping[str, Any]:
+    if response_format is not None:
+        system_prompt += (
+            "\n出力形式は text.format の JSON Schema を最優先する。"
+            "指定された JSON object だけを返す。"
+            "SQL・Markdown・自然言語は対応する文字列 field 内に格納する。"
+        )
     values: dict[str, Any] = {
         "model": model_id,
         "prompt": prompt,
@@ -260,9 +273,12 @@ def _build_payload(
         "response_format": dict(response_format) if response_format is not None else "",
     }
     if settings.oci_enterprise_ai_llm_payload_template.strip():
-        return _render_payload_template(
-            settings.oci_enterprise_ai_llm_payload_template,
-            values,
+        return _with_output_format(
+            _render_payload_template(
+                settings.oci_enterprise_ai_llm_payload_template,
+                values,
+            ),
+            response_format,
         )
     payload: dict[str, Any] = {
         "model": model_id,
@@ -271,9 +287,7 @@ def _build_payload(
         "temperature": values["temperature"],
         "max_output_tokens": values["max_output_tokens"],
     }
-    if response_format is not None:
-        payload["text"] = {"format": dict(response_format)}
-    return payload
+    return _with_output_format(payload, response_format)
 
 
 def _build_image_payload(
@@ -283,12 +297,19 @@ def _build_image_payload(
     image_bytes: bytes,
     prompt: str,
     mime_type: str,
+    response_format: Mapping[str, Any] | None = None,
 ) -> Mapping[str, Any]:
+    if response_format is not None:
+        prompt += (
+            "\n出力形式は text.format の JSON Schema を最優先する。"
+            "抽出した全文を text に格納した JSON object だけを返す。"
+        )
     image_base64 = b64encode(image_bytes).decode("ascii")
     data_url = f"data:{mime_type};base64,{image_base64}"
     values: dict[str, Any] = {
         "model": model_id,
         "prompt": prompt,
+        "response_format": dict(response_format) if response_format is not None else "",
         "image_base64": image_base64,
         "image_data_url": data_url,
         "mime_type": mime_type,
@@ -298,21 +319,39 @@ def _build_image_payload(
         "temperature": 0,
     }
     if settings.oci_enterprise_ai_vlm_payload_template.strip():
-        return _render_payload_template(settings.oci_enterprise_ai_vlm_payload_template, values)
-    return {
-        "model": model_id,
-        "input": [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "input_text", "text": prompt},
-                    {"type": "input_image", "image_url": data_url},
-                ],
-            }
-        ],
-        "temperature": values["temperature"],
-        "max_output_tokens": values["max_output_tokens"],
-    }
+        return _with_output_format(
+            _render_payload_template(settings.oci_enterprise_ai_vlm_payload_template, values),
+            response_format,
+        )
+    return _with_output_format(
+        {
+            "model": model_id,
+            "input": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": prompt},
+                        {"type": "input_image", "image_url": data_url},
+                    ],
+                }
+            ],
+            "temperature": values["temperature"],
+            "max_output_tokens": values["max_output_tokens"],
+        },
+        response_format,
+    )
+
+
+def _with_output_format(
+    payload: Mapping[str, Any], response_format: Mapping[str, Any] | None
+) -> Mapping[str, Any]:
+    if response_format is None:
+        return payload
+    result = dict(payload)
+    text = dict(result.get("text") or {})
+    text["format"] = dict(response_format)
+    result["text"] = text
+    return result
 
 
 def _render_payload_template(template: str, values: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -343,6 +382,55 @@ def _render_template_value(value: object, values: Mapping[str, Any]) -> object:
     if isinstance(value, Mapping):
         return {str(key): _render_template_value(item, values) for key, item in value.items()}
     return value
+
+
+def _parse_response(
+    response: Mapping[str, Any], *, response_path: str, response_format: Mapping[str, Any] | None
+) -> str:
+    if response_format is None:
+        return _parse_generated_text(response, response_path=response_path)
+    _raise_for_response_error(response)
+    if response.get("status") in {"incomplete", "failed", "cancelled", "queued", "in_progress"}:
+        raise EnterpriseAiDirectError(
+            "Structured Outputs の応答が未完了です。出力上限とモデル設定を確認してください。",
+            code="incomplete",
+        )
+
+    def check_refusal(value: object) -> None:
+        if isinstance(value, Mapping):
+            if value.get("type") == "refusal" or value.get("refusal"):
+                raise EnterpriseAiDirectError(
+                    "Enterprise AI が応答を拒否しました。入力内容を確認してください。",
+                    code="refusal",
+                )
+            for key in ("output", "content", "choices", "message"):
+                check_refusal(value.get(key))
+        elif isinstance(value, list):
+            for item in value:
+                check_refusal(item)
+
+    check_refusal(response)
+    candidate = _select_response_path(response, response_path)
+
+    def text(value: object) -> str:
+        if isinstance(value, str):
+            return value
+        if isinstance(value, Mapping):
+            if value.get("type") in {"reasoning", "function_call", "tool_call"}:
+                return ""
+            for key in ("output_text", "text", "content", "output", "choices", "message"):
+                if key in value:
+                    found = text(value[key])
+                    if found:
+                        return found
+        if isinstance(value, list):
+            return "".join(text(item) for item in value)
+        return ""
+
+    try:
+        return validate_json_output(text(candidate), response_format)
+    except ValueError as exc:
+        raise EnterpriseAiDirectError(str(exc), code="response_format", retryable=True) from exc
 
 
 def _parse_generated_text(response: Mapping[str, Any], *, response_path: str) -> str:

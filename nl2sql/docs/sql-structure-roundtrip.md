@@ -27,7 +27,7 @@ Issue #321。対象は「SQL から質問を生成」の SQL → 物理構造 �
 
 - `質問を生成` 完了後は `SQL分析・質問候補` タブへ移り、表示中の作業ではタブへフォーカスを移す。画面は `SQL入力・生成` / `SQL分析・質問候補` の2タブ・2ステップで、質問候補は論理構造・再生成 SQL の後に表示する（Issue #325）。旧 `result` タブの保存状態は草稿を保持して統合先へ移行する。
 - SQL Assist の「質問を生成」に相当する第二段階の `logical_structure` を編集欄へ表示し、質問生成・SQL 再生成に使用する（Issue #423）。スキーマ情報の論理名・COMMENT に基づく業務名で表示する。第一段階の `sql_structure` は物理識別子・alias・式・条件を後段へ伝える内部の中間結果として保持し、編集欄へ代入しない。
-- 各生成段階を Pydantic で検証する。構造生成は JSON envelope に加え、原文指定に従うモデルの Markdown（SQL 構造見出しと箇条書きを持つ本文、外側の Markdown fence を含む）を受理する。一般の文章・不正 JSON・空結果は成功として扱わない。後段が失敗しても完成した `sql_structure` は残し、簡易質問であることを警告する。
+- 各生成段階は Responses API Structured Outputs（`text.format` の `json_schema` / `strict:true`）を使用する。JSON 全文を送信した Schema と Pydantic で検証し、Markdown は `logical_structure`、自然言語は `question` に格納する。JSON 外の本文・fence・不正 JSON・空結果は成功として扱わない（Issue #431）。後段が失敗しても完成した `sql_structure` は残し、簡易質問であることを警告する。
 - 未設定・前段失敗時は簡易構造に元 SQL 全文を保持し、正規表現の要約で CTE・関数・リテラル等が失われないようにする。埋め込まれた元 SQL と編集した要約が矛盾する場合、再生成時に推測で解決しないよう指定する。
 - 原版の `LIKE → を含む` の一律変換を補正し、前方/後方/部分一致、`%` / `_` / `ESCAPE` を区別する。括弧、AND/OR/NOT、JOIN ON / WHERE、関数引数、CASE、window frame、bind 変数、引用符等の保存も追加で指定する。
 - この画面ではスキーマ情報を常に利用し、用語集の選択肢を設けず生成・再生成とも `use_glossary=false` を送信する。`ReverseSqlRequest` / `StructureToSqlRequest` の既定値も false。既存 API の明示 true は互換性を維持する。
@@ -62,10 +62,12 @@ Issue #321。対象は「SQL から質問を生成」の SQL → 物理構造 �
 
 ### 生成失敗の分類と段階 retry（Issue #429）
 
-質問段階の原文は自然言語の質問のみを要求するが、旧実装は JSON object だけを受理していた。架空 EMPLOYEE の実接続で 3.68 秒後に正常な日本語質問が返っても JSON 検証失敗になることを再現した。質問段階の実行時指示を原文と同じ自然言語出力に統一し、自然言語および従来の JSON `question` を受理する。壊れた JSON、空文字、型不正は成功として扱わない。
+質問段階の原文は自然言語の質問のみを要求するが、旧実装は JSON object だけを受理していた。架空 EMPLOYEE の実接続で 3.68 秒後に正常な日本語質問が返っても JSON 検証失敗になることを再現した。Issue #429 では一旦自然言語と JSON の両方を受理した。Issue #431 で送信時の形式を Structured Outputs に統一し、現在は Schema に従う JSON `question` のみを受理する。原文の自然言語本文はこの field 内に保持する。壊れた JSON、空文字、型不正は成功として扱わない。
 
-各段階の空・形式不正、接続失敗、timeout、429/500/502/503/504 は同じ段階だけを再試行する。回数は設定 `oci_enterprise_ai_max_retries` に従い、最大2 retry（合計3回）、1秒/2秒の待機。HTTP 層の retry をこのフローでは0にして多重 retry を避ける。401/403、その他の非一時的な HTTP エラーは retry しない。全3段階で最大30分（設定 timeout × 3 が短ければその時間）の予算を共有し、各呼出しへ残り時間以下の timeout を渡す。完了した段階は再送しない。
+各段階の空・形式不正、接続失敗、timeout、429/500/502/503/504 は同じ段階だけを再試行する。回数は設定 `oci_enterprise_ai_max_retries` に従い、最大2 retry（合計3回）、1秒/2秒の待機。HTTP 層の retry をこのフローでは0にして多重 retry を避ける。401/403、その他の非一時的な HTTP エラー、refusal、未完了応答は retry しない。全3段階で最大30分（設定 timeout × 3 が短ければその時間）の予算を共有し、各呼出しへ残り時間以下の timeout を渡す。完了した段階は再送しない。
 
 警告は失敗段階、原因、試行回数、保持している結果、再試行方法を示す。質問だけ失敗した場合、生成済み SQL 論理構造を保持する。ログ `reverse_sql_stage_failed` には stage / reason / attempt / elapsed_ms を記録し、SQL・schema・生応答・credential を含めない。
 
 主ボタンは `SQL 分析・質問生成`。押下時に `SQL分析・質問候補` タブへ移り、全結果領域を共通 Skeleton と処理時間表示に切り替える。旧結果・草稿は保持したまま非表示にし、操作と二重送信を抑止する。API 失敗時は入力タブの action error へ戻り、結果タブで前回の内容も確認できる。
+
+全生成機能の Schema と互換性境界は [Responses Structured Outputs](./enterprise-ai-structured-outputs.md) を参照。

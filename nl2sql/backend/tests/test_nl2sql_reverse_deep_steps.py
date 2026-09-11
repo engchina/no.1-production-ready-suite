@@ -45,6 +45,7 @@ class _FakeEnterpriseAiClient:
         timeout_seconds: float | None = None,
         max_output_tokens: int | None = None,
         max_retries: int | None = None,
+        response_format: object | None = None,
     ) -> str:
         del prompt, context, system_prompt, timeout_seconds, max_output_tokens, max_retries
         return json.dumps(

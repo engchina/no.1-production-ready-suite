@@ -27,7 +27,14 @@ class _UnconfiguredEnterpriseAiClient:
     def model_id(self) -> str:
         return ""
 
-    def generate(self, *, prompt: str, context: str, system_prompt: str) -> str:
+    def generate(
+        self,
+        *,
+        prompt: str,
+        context: str,
+        system_prompt: str,
+        response_format: object | None = None,
+    ) -> str:
         raise AssertionError("Enterprise AI must not be called in smoke tests")
 
 

@@ -75,6 +75,7 @@ from app.features.nl2sql.ontology_store import (
     stable_ontology_id,
 )
 from app.features.nl2sql.sql_semantics import parse_oracle_sql
+from app.features.nl2sql.structured_outputs import TextOutput, response_format
 from app.settings import get_settings
 
 logger = logging.getLogger(__name__)
@@ -2048,11 +2049,9 @@ def merge_build_extractions(
 
 
 def parse_extraction(raw: str) -> OntologyBuildExtraction:
-    """LLM 応答から JSON 部分を抽出し、契約 schema で検証する。"""
+    """Structured Outputs の JSON 全文を契約 schema で検証する。"""
 
     cleaned = str(raw).strip()
-    if "{" in cleaned and "}" in cleaned:
-        cleaned = cleaned[cleaned.find("{") : cleaned.rfind("}") + 1]
     return OntologyBuildExtraction.model_validate(json.loads(cleaned))
 
 
@@ -3466,6 +3465,7 @@ class OntologyBuildService:
                     prompt=task.prompt,
                     context=task.context,
                     system_prompt=_EXTRACTION_SYSTEM_PROMPT,
+                    response_format=response_format(OntologyBuildExtraction),
                     max_output_tokens=budget,
                 )
             )
@@ -3474,6 +3474,7 @@ class OntologyBuildService:
                 prompt=task.prompt,
                 context=task.context,
                 system_prompt=_EXTRACTION_SYSTEM_PROMPT,
+                response_format=response_format(OntologyBuildExtraction),
             )
         )
 
@@ -3749,14 +3750,15 @@ class OntologyBuildService:
                             page: int,
                             _generate_image: Any = generate_image,
                         ) -> str:
-                            return str(
+                            return TextOutput.model_validate_json(
                                 _generate_image(
                                     image,
                                     f"この資料の {page} ページ目を日本語で正確に"
                                     "文字起こししてください。",
                                     mime_type="image/jpeg",
+                                    response_format=response_format(TextOutput),
                                 )
-                            )
+                            ).text
 
                     extracted = extract_ontology_source(
                         source,

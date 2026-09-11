@@ -164,7 +164,14 @@ class _FakeEnterpriseAiClient:
     def model_id(self) -> str:
         return "fake-enterprise-ai"
 
-    def generate(self, *, prompt: str, context: str, system_prompt: str) -> str:
+    def generate(
+        self,
+        *,
+        prompt: str,
+        context: str,
+        system_prompt: str,
+        response_format: object | None = None,
+    ) -> str:
         self.calls.append(prompt)
         self.contexts.append(context)
         return self.payload
@@ -228,7 +235,7 @@ _EXTRACTION = {
     "synonyms": [{"target": "APP.ORDERS", "aliases": ["オーダー"], "evidence_ja": ""}],
     "warnings_ja": [],
 }
-_FENCED_PAYLOAD = "以下が抽出結果です。\n" + json.dumps(_EXTRACTION, ensure_ascii=False) + "\n以上"
+_STRUCTURED_PAYLOAD = json.dumps(_EXTRACTION, ensure_ascii=False)
 
 _QA_SQL = (
     "SELECT C.NAME, SUM(O.AMOUNT) FROM APP.ORDERS O "
@@ -272,7 +279,7 @@ def _seed_build_proposals(runtime: OntologyApiRuntime) -> list[Any]:
 
     view, ontology = runtime.profile_view("sales")
     drafts, warnings = convert_extraction_to_proposals(
-        parse_extraction(_FENCED_PAYLOAD),
+        parse_extraction(_STRUCTURED_PAYLOAD),
         ontology=ontology,
         view=view,
         job_id="seed-job",
@@ -299,7 +306,7 @@ def test_profile_delete_cancels_queued_build_and_worker_cannot_restart_it(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runtime, store, legacy = harness
-    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_FENCED_PAYLOAD)
+    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_STRUCTURED_PAYLOAD)
     monkeypatch.setattr(get_settings(), "nl2sql_ontology_worker_mode", "external")
     service = OntologyBuildService(runtime)
     started = service.start("sales", business_text="販売業務")
@@ -339,7 +346,7 @@ def test_markdown_state_uses_profile_local_versions_for_draft_and_publish(
     harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
 ) -> None:
     runtime, _store, legacy = harness
-    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_FENCED_PAYLOAD)
+    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_STRUCTURED_PAYLOAD)
     service = OntologyBuildService(runtime)
 
     first = _wait_for_job(service, service.start("sales", business_text="受注は顧客に紐づく。").id)
@@ -725,7 +732,7 @@ def test_build_job_creates_markdown_draft_and_drops_outside_candidates(
     harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
 ) -> None:
     runtime, _store, legacy = harness
-    client = _FakeEnterpriseAiClient(_FENCED_PAYLOAD)
+    client = _FakeEnterpriseAiClient(_STRUCTURED_PAYLOAD)
     legacy._enterprise_ai_client = client
     service = OntologyBuildService(runtime)
 
@@ -847,7 +854,7 @@ def test_build_job_reuses_prepared_scope_revision_when_saving_markdown_draft(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runtime, _store, legacy = harness
-    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_FENCED_PAYLOAD)
+    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_STRUCTURED_PAYLOAD)
     original_create_build_markdown_draft = runtime.create_build_markdown_draft
     prepared_bases: list[SchemaOntology | None] = []
 
@@ -877,7 +884,7 @@ def test_build_job_batches_all_source_chunks_without_omission(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runtime, _store, legacy = harness
-    client = _FakeEnterpriseAiClient(_FENCED_PAYLOAD)
+    client = _FakeEnterpriseAiClient(_STRUCTURED_PAYLOAD)
     legacy._enterprise_ai_client = client
     monkeypatch.setattr(ontology_build_module, "_ONTOLOGY_BUILD_LLM_CONTEXT_MAX_CHARS", 7_000)
     # このテストは「全 chunk が漏れなく 1 回処理される」ことの契約。gleaning の追加パスは
@@ -933,7 +940,7 @@ def test_build_job_batches_more_than_two_hundred_qa_pairs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runtime, _store, legacy = harness
-    client = _FakeEnterpriseAiClient(_FENCED_PAYLOAD)
+    client = _FakeEnterpriseAiClient(_STRUCTURED_PAYLOAD)
     legacy._enterprise_ai_client = client
     monkeypatch.setattr(ontology_build_module, "_ONTOLOGY_BUILD_LLM_CONTEXT_MAX_CHARS", 30_000)
     qa_pairs = [
@@ -972,7 +979,7 @@ def test_build_job_fails_when_pdf_page_requires_ocr_without_image_runner(
     from pypdf import PdfWriter
 
     runtime, _store, legacy = harness
-    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_FENCED_PAYLOAD)
+    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_STRUCTURED_PAYLOAD)
     writer = PdfWriter()
     writer.add_blank_page(width=100, height=100)
     buffer = io.BytesIO()
@@ -1191,7 +1198,7 @@ def test_build_job_uses_ontology_schema_fingerprint_for_registration_conflict(
     """catalog head の fingerprint 口径差だけでは schema drift 扱いにしない。"""
 
     runtime, _store, legacy = harness
-    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_FENCED_PAYLOAD)
+    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_STRUCTURED_PAYLOAD)
     legacy.catalog = legacy.catalog.model_copy(
         update={"schema_fingerprint": "oracle-style-different-hash"},
         deep=True,
@@ -1295,7 +1302,7 @@ def test_build_job_fails_gracefully_when_markdown_draft_save_times_out(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runtime, _store, legacy = harness
-    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_FENCED_PAYLOAD)
+    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_STRUCTURED_PAYLOAD)
 
     def fail_create_build_markdown_draft(**kwargs: Any) -> Any:
         on_progress = kwargs.get("on_progress")
@@ -1327,7 +1334,7 @@ def test_build_job_fails_gracefully_when_final_status_save_times_out(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runtime, store, legacy = harness
-    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_FENCED_PAYLOAD)
+    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_STRUCTURED_PAYLOAD)
     original_save_document = store.save_document
 
     def fail_final_status_save(
@@ -1564,7 +1571,7 @@ def test_cancel_single_job_is_idempotent_and_blocks_worker(
 ) -> None:
 
     runtime, store, legacy = harness
-    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_FENCED_PAYLOAD)
+    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_STRUCTURED_PAYLOAD)
     monkeypatch.setattr(get_settings(), "nl2sql_ontology_worker_mode", "external")
     service = OntologyBuildService(runtime)
     job = service.start("sales", business_text="販売業務")
@@ -1589,7 +1596,7 @@ def test_cancel_finished_or_missing_job_raises(
     )
 
     runtime, _store, legacy = harness
-    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_FENCED_PAYLOAD)
+    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_STRUCTURED_PAYLOAD)
     service = OntologyBuildService(runtime)
     job = service.start("sales", business_text="販売業務")
     _wait_for_job(service, job.id)
@@ -1615,7 +1622,7 @@ def test_retry_reuses_persisted_inputs_and_toggles(
     assert finished.status == OntologyBuildStatus.FAILED
 
     # 設定を直して retry → 保存済み入力(業務テキスト・トグル)で新規 job が成功する
-    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_FENCED_PAYLOAD)
+    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_STRUCTURED_PAYLOAD)
     retried = service.retry(failed.id)
     assert retried.id != failed.id
     result = _wait_for_job(service, retried.id)
@@ -1652,7 +1659,7 @@ def test_retry_rejects_non_terminal_and_missing_jobs(
     )
 
     runtime, _store, legacy = harness
-    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_FENCED_PAYLOAD)
+    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_STRUCTURED_PAYLOAD)
     monkeypatch.setattr(get_settings(), "nl2sql_ontology_worker_mode", "external")
     service = OntologyBuildService(runtime)
     queued = service.start("sales", business_text="販売業務")
@@ -1870,7 +1877,7 @@ def test_build_job_fails_fast_when_db_profile_scope_is_empty(
     """DB catalog で profile scope が空のときは LLM を呼ばずに明確なエラーで失敗する。"""
 
     runtime, _store, legacy = harness
-    client = _FakeEnterpriseAiClient(_FENCED_PAYLOAD)
+    client = _FakeEnterpriseAiClient(_STRUCTURED_PAYLOAD)
     legacy._enterprise_ai_client = client
     # 空カタログ → profile の対象オブジェクトが DB schema catalog に解決できない状態
     legacy.catalog = SchemaCatalog(refreshed_at="2026-07-12T00:00:00Z", tables=[])
@@ -1977,9 +1984,7 @@ def test_build_job_uses_latest_schema_when_published_profile_scope_is_stale(
         "synonyms": [],
         "warnings_ja": [],
     }
-    client = _FakeEnterpriseAiClient(
-        "抽出結果:\n" + json.dumps(invoice_extraction, ensure_ascii=False)
-    )
+    client = _FakeEnterpriseAiClient(json.dumps(invoice_extraction, ensure_ascii=False))
     legacy._enterprise_ai_client = client
     service = OntologyBuildService(runtime)
     job = service.start("sales", business_text="請求は顧客への請求金額を管理する。")
@@ -2010,7 +2015,7 @@ def test_build_job_does_not_read_profile_view_for_ai_schema_input(
     """AI input の schema は DB catalog 直読みにし、profile view API へ依存しない。"""
 
     runtime, _store, legacy = harness
-    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_FENCED_PAYLOAD)
+    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_STRUCTURED_PAYLOAD)
 
     class _NoProfileViewRuntime:
         def __getattr__(self, name: str) -> Any:
@@ -2039,7 +2044,7 @@ def test_start_returns_immediately_even_if_build_schema_context_is_slow(
     import threading as _threading
 
     runtime, _store, legacy = harness
-    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_FENCED_PAYLOAD)
+    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_STRUCTURED_PAYLOAD)
     release = _threading.Event()
     original_prepare_build_schema_context = runtime.prepare_build_schema_context
 
@@ -2082,7 +2087,7 @@ def test_accept_ignores_stale_drafts_from_previous_schema_generations(
     """過去スキーマ世代の draft が store に残っていても accept が 409 にならない。"""
 
     runtime, _store, legacy = harness
-    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_FENCED_PAYLOAD)
+    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_STRUCTURED_PAYLOAD)
     # 旧スキーマ世代で提案を承認して draft を作る(store に残留する)
     old_proposal = _seed_build_proposals(runtime)[0]
     runtime.accept_proposal(old_proposal.id)
@@ -2183,7 +2188,7 @@ def test_rerun_replaces_markdown_draft_without_creating_proposals(
     """AI 構築を再実行すると proposal は作らず、最新 Markdown 下書きが差し替わる。"""
 
     runtime, store, legacy = harness
-    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_FENCED_PAYLOAD)
+    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_STRUCTURED_PAYLOAD)
     service = OntologyBuildService(runtime)
 
     first = _wait_for_job(service, service.start("sales", business_text="受注は顧客に紐づく。").id)
@@ -2217,7 +2222,7 @@ def test_start_prunes_oldest_finished_jobs(
     from app.features.nl2sql.ontology_models import OntologyBuildJob, utc_now
 
     runtime, _store, legacy = harness
-    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_FENCED_PAYLOAD)
+    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_STRUCTURED_PAYLOAD)
     service = OntologyBuildService(runtime)
 
     # 完了 job を上限 +2 件、実行中 job を 1 件直接注入する(実 job を回すと遅いため)。
@@ -2254,7 +2259,7 @@ def test_external_worker_rehydrates_persisted_build_input(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runtime, store, legacy = harness
-    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_FENCED_PAYLOAD)
+    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_STRUCTURED_PAYLOAD)
     monkeypatch.setattr(get_settings(), "nl2sql_ontology_worker_mode", "external")
     api_service = OntologyBuildService(runtime)
     queued = api_service.start(
@@ -2389,7 +2394,14 @@ class _SelectiveFailClient(_FakeEnterpriseAiClient):
         super().__init__(payload)
         self.fail_when = fail_when
 
-    def generate(self, *, prompt: str, context: str, system_prompt: str) -> str:
+    def generate(
+        self,
+        *,
+        prompt: str,
+        context: str,
+        system_prompt: str,
+        response_format: object | None = None,
+    ) -> str:
         self.calls.append(prompt)
         self.contexts.append(context)
         if self.fail_when in prompt or self.fail_when in context:
@@ -2411,6 +2423,7 @@ class _BudgetRecordingClient(_FakeEnterpriseAiClient):
         context: str,
         system_prompt: str,
         max_output_tokens: int | None = None,
+        response_format: object | None = None,
     ) -> str:
         self.calls.append(prompt)
         self.budgets.append(max_output_tokens)
@@ -2424,7 +2437,7 @@ def test_partial_batch_failure_completes_with_warnings(
 
     runtime, _store, legacy = harness
     # qa_pairs を含む呼び出しだけ失敗し、schema_naming は成功する
-    legacy._enterprise_ai_client = _SelectiveFailClient(_FENCED_PAYLOAD, fail_when="qa_pairs")
+    legacy._enterprise_ai_client = _SelectiveFailClient(_STRUCTURED_PAYLOAD, fail_when="qa_pairs")
     service = OntologyBuildService(runtime)
     job = service.start(
         "sales",
@@ -2452,7 +2465,7 @@ def test_batch_split_recovers_good_half(
     """壊れた行を含む batch は二分割し、正常な半分の成果を保存する。"""
 
     runtime, _store, legacy = harness
-    legacy._enterprise_ai_client = _SelectiveFailClient(_FENCED_PAYLOAD, fail_when="毒入り質問")
+    legacy._enterprise_ai_client = _SelectiveFailClient(_STRUCTURED_PAYLOAD, fail_when="毒入り質問")
     service = OntologyBuildService(runtime)
     job = service.start(
         "sales",
@@ -2489,7 +2502,7 @@ def test_schema_scope_failure_sets_error_codes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runtime, _store, legacy = harness
-    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_FENCED_PAYLOAD)
+    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_STRUCTURED_PAYLOAD)
     from app.features.nl2sql.ontology_build import OntologyBuildSchemaContext
 
     monkeypatch.setattr(
@@ -2520,7 +2533,7 @@ def test_extraction_budget_passed_to_supporting_client(
     """max_output_tokens 対応クライアントには抽出用の出力予算を渡す。"""
 
     runtime, _store, legacy = harness
-    client = _BudgetRecordingClient(_FENCED_PAYLOAD)
+    client = _BudgetRecordingClient(_STRUCTURED_PAYLOAD)
     legacy._enterprise_ai_client = client
     service = OntologyBuildService(runtime)
     job = service.start("sales", business_text="受注は顧客に紐づく。", run_schema_naming=False)
@@ -2540,7 +2553,7 @@ def test_build_draft_preserves_inferred_provenance(
     """AI 構築由来の provenance(INFERRED + ontology_build:<job_id>)を draft 作成で保持する。"""
 
     runtime, _store, legacy = harness
-    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_FENCED_PAYLOAD)
+    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_STRUCTURED_PAYLOAD)
     service = OntologyBuildService(runtime)
     job = service.start("sales", business_text="受注は顧客に紐づく。", run_schema_naming=True)
     finished = _wait_for_job(service, job.id)
@@ -2607,7 +2620,14 @@ class _GleaningAwareClient(_FakeEnterpriseAiClient):
         self.gleaning_payload = gleaning_payload
         self.gleaning_calls = 0
 
-    def generate(self, *, prompt: str, context: str, system_prompt: str) -> str:
+    def generate(
+        self,
+        *,
+        prompt: str,
+        context: str,
+        system_prompt: str,
+        response_format: object | None = None,
+    ) -> str:
         self.calls.append(prompt)
         self.contexts.append(context)
         if "追加パス" in prompt:
@@ -2643,7 +2663,7 @@ def test_gleaning_pass_recovers_missed_candidates(
     harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
 ) -> None:
     runtime, _store, legacy = harness
-    client = _GleaningAwareClient(_FENCED_PAYLOAD, _GLEANING_ADDITION)
+    client = _GleaningAwareClient(_STRUCTURED_PAYLOAD, _GLEANING_ADDITION)
     legacy._enterprise_ai_client = client
     service = OntologyBuildService(runtime)
     job = service.start("sales", business_text="受注は顧客に紐づく。", run_schema_naming=False)
@@ -2660,7 +2680,7 @@ def test_gleaning_failure_keeps_primary_extraction(
     harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
 ) -> None:
     runtime, _store, legacy = harness
-    client = _GleaningAwareClient(_FENCED_PAYLOAD, "これは JSON ではありません")
+    client = _GleaningAwareClient(_STRUCTURED_PAYLOAD, "これは JSON ではありません")
     legacy._enterprise_ai_client = client
     service = OntologyBuildService(runtime)
     job = service.start("sales", business_text="受注は顧客に紐づく。", run_schema_naming=False)
@@ -2674,7 +2694,7 @@ def test_gleaning_failure_keeps_primary_extraction(
 def test_merge_build_extractions_dedupes_by_stable_keys() -> None:
     from app.features.nl2sql.ontology_build import merge_build_extractions, parse_extraction
 
-    base = parse_extraction(_FENCED_PAYLOAD)
+    base = parse_extraction(_STRUCTURED_PAYLOAD)
     duplicated, added_dup = merge_build_extractions(base, base)
     assert added_dup == 0
     assert len(duplicated.entities) == len(base.entities)
@@ -2690,7 +2710,7 @@ def test_partial_source_failure_continues_with_warnings(
     """1 資料の抽出失敗はジョブを止めず、残り資料で succeeded_with_warnings になる。"""
 
     runtime, _store, legacy = harness
-    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_FENCED_PAYLOAD)
+    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_STRUCTURED_PAYLOAD)
     good = "受注は顧客に紐づく。".encode()
     broken = b"not-a-workbook"
     good_source = _source_document("ontology_source_good", "rules.md", good)

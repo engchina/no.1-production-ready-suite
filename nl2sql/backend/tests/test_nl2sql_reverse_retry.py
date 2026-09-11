@@ -28,13 +28,13 @@ class RawClient(StagedClient):
         return cast(str, output)
 
 
-def test_real_plain_question_response_is_success_without_retry() -> None:
+def test_structured_question_response_is_success_without_retry() -> None:
     service = _service()
     client = RawClient(
         [
             '{"logical_structure":"physical"}',
             '{"logical_structure":"logical"}',
-            "すべての従業員情報を教えてください。",
+            '{"question":"すべての従業員情報を教えてください。"}',
         ]
     )
     cast(Any, service)._enterprise_ai_client = client
@@ -45,13 +45,14 @@ def test_real_plain_question_response_is_success_without_retry() -> None:
     assert result.warnings == []
     assert result.source == "oci_enterprise_ai"
     assert len(client.calls) == 3
-    assert "自然言語の質問文だけを返す" in client.calls[-1]["system_prompt"]
+    assert "指定された JSON Schema に従い" in client.calls[-1]["system_prompt"]
 
 
 @pytest.mark.parametrize(
     "failure",
     [
         "",
+        "すべての情報を教えてください。",
         '{"question":',
         '{"question":[]}',
         EnterpriseAiDirectError("timeout", code="timeout", retryable=True),
@@ -67,7 +68,7 @@ def test_only_failed_question_stage_is_retried(
             '{"logical_structure":"physical"}',
             '{"logical_structure":"logical"}',
             failure,
-            "すべての請求情報を教えてください。",
+            '{"question":"すべての請求情報を教えてください。"}',
         ]
     )
     cast(Any, service)._enterprise_ai_client = client
