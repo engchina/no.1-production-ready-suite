@@ -1123,6 +1123,33 @@ def test_deepsec_expression_only_isolated_objects() -> None:
             cursor.execute(f"SELECT ID FROM {owner}.{employee} ORDER BY ID")
             assert cursor.fetchall() == [("1",), ("3",)]
         with service.pools.control_connection() as conn, conn.cursor() as cursor:
+            from app.security.scope_relations import DependencyPlan, validate_relation_dependency
+
+            # E→D を同じバッチで E の固定条件 + D→E に変更する予定を検証する。
+            # 旧 grant を含む現在状態では循環するが、置換後の状態では循環しない。
+            with pytest.raises(SecurityApiError, match="循環"):
+                validate_relation_dependency(cursor, f"{owner}.{department}", f"{owner}.{employee}")
+            dependency_plan = DependencyPlan(
+                replaced_grants=frozenset({(owner, grant), (owner, parent_grant)}),
+                edges={f"{owner}.{department}": {f"{owner}.{employee}"}},
+            )
+            validate_relation_dependency(
+                cursor, f"{owner}.{department}", f"{owner}.{employee}", dependency_plan
+            )
+            cursor.execute(
+                f"CREATE OR REPLACE DATA GRANT {grant} AS SELECT (ID, DEPT) "
+                f"ON {owner}.{employee} WHERE ID = '3' TO {DEEPSEC_DATA_ROLE}"
+            )
+            cursor.execute(
+                f"CREATE OR REPLACE DATA GRANT {parent_grant} AS SELECT ON {owner}.{department} "
+                f"WHERE EXISTS (SELECT 1 FROM {owner}.{employee} E "
+                f"WHERE E.DEPT = {department}.ID) TO {DEEPSEC_DATA_ROLE}"
+            )
+            validate_relation_dependency(cursor, f"{owner}.{department}", f"{owner}.{employee}")
+        with service.pools.unscoped_data_connection() as conn, conn.cursor() as cursor:
+            cursor.execute(f"SELECT ID FROM {owner}.{department}")
+            assert cursor.fetchall() == [("D3",)]
+        with service.pools.control_connection() as conn, conn.cursor() as cursor:
             # 新規 CLOB migration を隔離した旧構造へ適用して 4KB 超の JSON を roundtrip。
             cursor.execute(
                 f"CREATE TABLE {storage}(SCOPE_MODE VARCHAR2(32), CONSTRAINT {check_name} "

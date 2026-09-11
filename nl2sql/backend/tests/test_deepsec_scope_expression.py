@@ -433,3 +433,135 @@ def test_ontology_candidates_require_published_approved_profile_edges(
     revision["status"] = "published"
     view["archived"] = True
     assert candidates() == []
+
+
+class PlannedDependencyCursor(MetadataCursor):
+    def __init__(self) -> None:
+        super().__init__()
+        self.grants: dict[str, list[tuple[str, str, str]]] = {}
+        self.view_dependencies: dict[str, list[tuple[str, str, str | None]]] = {}
+
+    def execute(self, sql: str, params: Any = None) -> None:
+        super().execute(sql, params)
+        target = f"{params['owner']}.{params['object_name']}" if params else ""
+        if "FROM ALL_TAB_COLUMNS" in sql:
+            self.rows = [("ID", "VARCHAR2"), ("STATUS", "VARCHAR2")]
+        elif "FROM ALL_DEPENDENCIES" in sql:
+            self.rows = self.view_dependencies.get(target, [])
+        elif "FROM DBA_DATA_GRANTS" in sql:
+            self.rows = self.grants.get(target, [])
+
+
+def policy_edge(source: str, target: str, role_id: str = "r") -> DataEntitlementRecord:
+    node = related(condition())
+    node.update(target_object=target, join_keys=[{"source_column": "ID", "target_column": "ID"}])
+    return replace(
+        record(group(node)),
+        entitlement_id=f"e-{source}",
+        role_id=role_id,
+        resource_code=f"HR.{source}",
+        target_object=source,
+        column_names=["ID"],
+        data_grant_name=f"DG_{source}",
+    )
+
+
+@pytest.fixture
+def planned_dependencies(
+    relation_validation: tuple[DeepSecService, MetadataCursor], monkeypatch: pytest.MonkeyPatch
+) -> tuple[DeepSecService, PlannedDependencyCursor]:
+    from app.security import scope_relations
+
+    service, _ = relation_validation
+    monkeypatch.setattr(
+        scope_relations,
+        "relation_catalog",
+        lambda service, profile_id, target, **kwargs: {
+            "object_scope_version": 1,
+            "objects": ["HR.A", "HR.B", "HR.C", "HR.D"],
+            "relations": [],
+        },
+    )
+    return service, PlannedDependencyCursor()
+
+
+@pytest.mark.parametrize("archived", [False, True])
+def test_unrelated_unapplied_cycles_do_not_block_planning(
+    planned_dependencies: tuple[DeepSecService, PlannedDependencyCursor],
+    monkeypatch: pytest.MonkeyPatch,
+    archived: bool,
+) -> None:
+    from app.security.domain import RoleRecord
+
+    service, cursor = planned_dependencies
+    other = RoleRecord(
+        "other",
+        "OTHER",
+        "other",
+        "",
+        False,
+        archived,
+        1,
+        entitlements=[policy_edge("A", "B", "other"), policy_edge("B", "A", "other")],
+    )
+    monkeypatch.setattr(service.security, "list_roles", lambda **kwargs: [other])
+    role = RoleRecord("r", "R", "role", "", False, False, 1)
+    assert service._build_data_entitlement_sync_plan(
+        role, [policy_edge("C", "D")], cursor=cursor
+    ).entries
+    assert not service._build_data_entitlement_sync_plan(role, [], cursor=cursor).entries
+
+
+@pytest.mark.parametrize("remove_old", [False, True])
+def test_same_batch_replacement_or_removal_uses_final_dependency_graph(
+    planned_dependencies: tuple[DeepSecService, PlannedDependencyCursor],
+    remove_old: bool,
+) -> None:
+    from app.security.domain import RoleRecord
+
+    service, cursor = planned_dependencies
+    old = replace(policy_edge("A", "B"), apply_status="APPLIED")
+    role = RoleRecord("r", "R", "role", "", False, False, 1, entitlements=[old])
+    cursor.grants["HR.A"] = [("APP", "DG_A", "EXISTS (SELECT 1 FROM HR.B)")]
+    all_rows = replace(
+        old, scope_mode="ALL", scope_code="*", scope_expression=None, scope_expression_version=1
+    )
+    desired = [policy_edge("B", "A")] + ([] if remove_old else [all_rows])
+    plan = service._build_data_entitlement_sync_plan(role, desired, cursor=cursor)
+    assert len(plan.entries) == len(desired)
+    assert plan.entries[0].entitlement.data_grant_name == "DG_B"
+    if remove_old:
+        assert any("DROP DATA GRANT IF EXISTS APP.DG_A" in sql for sql in plan.cleanup_statements)
+    else:
+        assert plan.entries[1].entitlement.entitlement_id == old.entitlement_id
+        assert plan.entries[1].entitlement.data_grant_name == old.data_grant_name
+
+
+@pytest.mark.parametrize("remaining_dependency", ["other_role", "other_owner", "view", "planned"])
+def test_final_graph_still_rejects_cycles_from_remaining_dependencies(
+    planned_dependencies: tuple[DeepSecService, PlannedDependencyCursor],
+    remaining_dependency: str,
+) -> None:
+    from app.security.domain import RoleRecord
+
+    service, cursor = planned_dependencies
+    old = replace(policy_edge("A", "B"), apply_status="APPLIED")
+    role = RoleRecord("r", "R", "role", "", False, False, 1, entitlements=[old])
+    cursor.grants["HR.A"] = [("APP", "DG_A", "EXISTS (SELECT 1 FROM HR.B)")]
+    if remaining_dependency == "other_role":
+        cursor.grants["HR.A"].append(("APP", "OTHER_GRANT", "EXISTS (SELECT 1 FROM HR.B)"))
+    elif remaining_dependency == "other_owner":
+        cursor.grants["HR.A"].append(("OTHER", "DG_A", "EXISTS (SELECT 1 FROM HR.B)"))
+    elif remaining_dependency == "view":
+        cursor.view_dependencies["HR.A"] = [("HR", "B", None)]
+    replacement = (
+        old
+        if remaining_dependency == "planned"
+        else replace(
+            old, scope_mode="ALL", scope_code="*", scope_expression=None, scope_expression_version=1
+        )
+    )
+    with pytest.raises(SecurityApiError, match="循環"):
+        service._build_data_entitlement_sync_plan(
+            role, [replacement, policy_edge("B", "A")], cursor=cursor
+        )

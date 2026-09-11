@@ -35,6 +35,7 @@ from .domain import (
     scope_filter_payload,
     scope_filters_scope_code,
 )
+from .scope_relations import DependencyPlan
 from .service import (
     _BACKEND_ENV_FILE,
     SecurityApiError,
@@ -1449,36 +1450,27 @@ class DeepSecService:
         from .scope_expression import parse_expression, related_nodes
 
         graph: dict[str, set[str]] = {}
-        policies = records + [
-            item
-            for other in self.security.list_roles(include_archived=True)
-            if other.role_id != role.role_id
-            for item in other.entitlements
-        ]
-        for policy in policies:
-            if policy.scope_mode != "EXPRESSION":
-                continue
-            target_key = _qualified(policy.target_owner, policy.target_object)
-            graph.setdefault(target_key, set()).update(
-                _qualified(node.target_owner, node.target_object)
-                for node in related_nodes(parse_expression(policy.scope_expression))
-            )
-
-        visited: set[str] = set()
-
-        def visit(key: str, path: set[str]) -> None:
-            if len(path) > 64:
-                raise SecurityApiError(400, "参照依存が複雑なため検証できません。")
-            if key in path:
-                raise SecurityApiError(400, "関連条件がポリシー間で循環参照します。")
-            if key in visited:
-                return
-            for child in graph.get(key, set()):
-                visit(child, path | {key})
-            visited.add(key)
-
-        for key in graph:
-            visit(key, set())
+        for policy in records:
+            if policy.scope_mode == "EXPRESSION":
+                graph.setdefault(
+                    _qualified(policy.target_owner, policy.target_object), set()
+                ).update(
+                    _qualified(node.target_owner, node.target_object)
+                    for node in related_nodes(parse_expression(policy.scope_expression))
+                )
+        # 他ロールの草稿ではなく、DB に残る grant と今回の予定参照を検証する。
+        # 除外は owner/name 単位とし、同じ対象の他ロール・外部 grant は必ず検査する。
+        dependency_plan = DependencyPlan(
+            replaced_grants=frozenset(
+                (
+                    _strict_identifier(self.settings.oracle_user),
+                    _strict_identifier(item.data_grant_name or _data_grant_name(item)),
+                )
+                for item in [*role.entitlements, *records]
+                if _is_real_data_entitlement(item)
+            ),
+            edges=graph,
+        )
         entries: list[DataEntitlementSyncEntry] = []
         for entitlement in records:
             normalized = replace(
@@ -1501,7 +1493,11 @@ class DeepSecService:
                 normalized,
                 data_grant_name=normalized.data_grant_name or _data_grant_name(normalized),
             )
-            column_types = self._validate_data_entitlement(cursor, normalized)
+            column_types = (
+                self._validate_data_entitlement(cursor, normalized, dependency_plan=dependency_plan)
+                if normalized.scope_mode == "EXPRESSION"
+                else self._validate_data_entitlement(cursor, normalized)
+            )
             statements = tuple(
                 _preview_statement(statement)
                 for statement in build_data_entitlement_statements(
@@ -2130,6 +2126,8 @@ class DeepSecService:
         self,
         cursor: Any,
         entitlement: DataEntitlementRecord,
+        *,
+        dependency_plan: DependencyPlan | None = None,
     ) -> dict[str, str]:
         target_owner = _strict_identifier(entitlement.target_owner)
         target_object = _strict_identifier(entitlement.target_object)
@@ -2194,7 +2192,7 @@ class DeepSecService:
 
             if entitlement.scope_column or entitlement.scope_filters:
                 raise SecurityApiError(400, "EXPRESSION は条件ツリーのみ指定してください。")
-            validate_expression_metadata(self, cursor, entitlement, columns)
+            validate_expression_metadata(self, cursor, entitlement, columns, dependency_plan)
             return columns
         if entitlement.scope_expression is not None:
             raise SecurityApiError(400, "条件ツリーには EXPRESSION モードを指定してください。")

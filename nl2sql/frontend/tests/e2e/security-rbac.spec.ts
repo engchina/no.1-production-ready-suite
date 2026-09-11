@@ -6236,3 +6236,132 @@ test("DeepSec 関連条件: 候補の読込・失敗再試行と手動複合キ�
   expect(submitted.data_entitlements[0].scope_expression.root.children[1]).toMatchObject({ relation_source: "MANUAL", join_keys: [{ source_column: "DEPARTMENT_CODE", target_column: "CODE" }, { source_column: "DISPLAY_NAME", target_column: "TENANT" }] });
   await expectNoPageHorizontalScroll(page);
 });
+
+for (const dirty of [false, true]) {
+  test(`DeepSec 修正回帰: ${dirty ? "未保存草稿は旧版を保持" : "未編集の復元は最新サーバー版を使用"}`, async ({ page }) => {
+    const { role, other } = await mockReviewedDeepSec(page);
+    await page.goto("/settings/security/deepsec");
+    await page.getByRole("tab", { name: "データ権限", exact: true }).click();
+    const displayName = page.getByRole("checkbox", { name: /DISPLAY_NAME/ });
+    await expect(displayName).toBeEnabled();
+    if (dirty) await displayName.check();
+    await page.route("**/api/security/deepsec/data-entitlements", route => fulfill(route, [{
+      ...role, version: 2,
+      data_entitlements: [{ ...role.data_entitlements[0], column_names: ["EMPLOYEE_ID", "DEPARTMENT_CODE"] }],
+    }, other]));
+    const versions: number[] = [];
+    await page.route("**/api/security/deepsec/data-entitlements/review-a/preview", route => {
+      const payload = route.request().postDataJSON();
+      versions.push(payload.version);
+      return fulfill(route, { role_id: role.role_id, version: payload.version, data_entitlements: payload.data_entitlements, cleanup_sql: [], checksum: "latest" });
+    });
+    page.on("dialog", dialog => dialog.accept());
+    await page.reload();
+    await expect(displayName).toBeChecked({ checked: dirty });
+    await expect(page.getByRole("checkbox", { name: /DEPARTMENT_CODE/ })).toBeChecked({ checked: !dirty });
+    const restart = page.getByRole("button", { name: "最新設定で編集をやり直す", exact: true });
+    if (dirty) await expect(restart).toBeVisible();
+    else await expect(restart).not.toBeVisible();
+    await page.getByText("ロール全体の SQL プレビュー", { exact: true }).click();
+    await page.getByTestId("security-deepsec-sql-preview-generate").click();
+    await expect.poll(() => versions.length).toBe(1);
+    expect(versions).toEqual([dirty ? 1 : 2]);
+    await page.getByRole("button", { name: "表示を更新", exact: true }).click();
+    await page.getByTestId("security-deepsec-sql-preview-generate").click();
+    await expect.poll(() => versions.length).toBe(2);
+    expect(versions).toEqual(dirty ? [1, 1] : [2, 2]);
+  });
+}
+
+test("DeepSec 修正回帰: 新規草稿を復元した後もルールを独立して追加・選択できる", async ({ page }) => {
+  await mockReviewedDeepSec(page);
+  await page.goto("/settings/security/deepsec");
+  await page.getByRole("tab", { name: "データ権限", exact: true }).click();
+  const add = page.getByRole("button", { name: "データ権限を追加", exact: true });
+  await add.click();
+  await expect(page.getByTestId("security-deepsec-entitlement-rule-1")).toBeVisible();
+  page.on("dialog", dialog => dialog.accept());
+  await page.reload();
+  await expect(page.getByTestId("security-deepsec-entitlement-rule-tab-1")).toBeVisible();
+  await add.focus();
+  await add.press("Enter");
+  await expect(page.getByTestId("security-deepsec-entitlement-rule-2")).toBeVisible();
+  await expect(page.getByTestId("security-deepsec-entitlement-rule-tab-1")).toHaveAttribute("aria-pressed", "false");
+  await expect(page.getByTestId("security-deepsec-entitlement-rule-tab-2")).toHaveAttribute("aria-pressed", "true");
+  await page.getByTestId("security-deepsec-entitlement-rule-tab-1").click();
+  await expect(page.getByTestId("security-deepsec-entitlement-rule-1")).toBeVisible();
+  await expect(page.getByTestId("security-deepsec-entitlement-rule-tab-2")).toHaveAttribute("aria-pressed", "false");
+  await page.getByRole("button", { name: "データ権限を削除", exact: true }).click();
+  await expect(page.getByTestId("security-deepsec-entitlement-rule-tab-2")).toHaveCount(0);
+  await expect(page.getByTestId("security-deepsec-entitlement-rule-1")).toBeVisible();
+  await expectNoPageHorizontalScroll(page);
+});
+
+test("DeepSec 修正回帰: 離脱のキャンセルは保持し明示的な破棄は草稿からも消す", async ({ page }) => {
+  await mockReviewedDeepSec(page);
+  await page.goto("/settings/security/deepsec");
+  await page.getByRole("tab", { name: "データ権限", exact: true }).click();
+  const column = page.getByRole("checkbox", { name: /DISPLAY_NAME/ });
+  await column.check();
+  await page.evaluate(() => {
+    const link = document.createElement("a");
+    link.href = "/settings/security/users";
+    link.textContent = "レビュー用の内部リンク";
+    document.body.append(link);
+  });
+  const link = page.getByRole("link", { name: "レビュー用の内部リンク" });
+  await link.click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "キャンセル" }).click();
+  await expect(column).toBeChecked();
+  await link.click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "破棄して移動" }).click();
+  await expect(page).toHaveURL(/\/settings\/security\/users$/);
+  await page.goBack();
+  await expect(column).not.toBeChecked();
+  await page.reload();
+  await expect(column).not.toBeChecked();
+  await column.check();
+  page.on("dialog", dialog => dialog.accept());
+  await page.reload();
+  await expect(column).toBeChecked();
+});
+
+test("DeepSec 修正回帰: 関連 VIEW と TABLE の実種別で列と送信内容を更新する", async ({ page }, testInfo) => {
+  await mockReviewedDeepSec(page);
+  const objects = ["HR.DEPARTMENTS_VIEW", "HR.DEPARTMENTS"];
+  await page.route("**/api/security/deepsec/scope-profiles", route => fulfill(route, [{ id: "hr", name: "人事", object_scope_version: 1, objects: ["HR.EMPLOYEES", ...objects] }]));
+  await page.route("**/api/security/deepsec/relations?*", route => fulfill(route, { profile_id: "hr", object_scope_version: 1, objects, relations: [] }));
+  for (const name of ["DEPARTMENTS_VIEW", "DEPARTMENTS"]) {
+    await page.route(`**/api/security/deepsec/target-objects/HR/${name}?*`, route => {
+      const type = name.endsWith("_VIEW") ? "VIEW" : "TABLE";
+      const requestedType = new URL(route.request().url()).searchParams.get("object_type");
+      if (requestedType && requestedType !== type) return fulfill(route, "対象 object が見つかりません。", 404);
+      return fulfill(route, { owner: "HR", name, object_type: type, comment: "", columns: ["CODE", "LOCATION"].map(column_name => ({ column_name, data_type: "VARCHAR2", nullable: false, logical_name: "", comment: "" })) });
+    });
+  }
+  let submitted: any;
+  await page.route("**/api/security/deepsec/data-entitlements/review-a/preview", route => {
+    submitted = route.request().postDataJSON();
+    return fulfill(route, { role_id: "review-a", version: 1, data_entitlements: submitted.data_entitlements, cleanup_sql: [], checksum: "view" });
+  });
+  await page.goto("/settings/security/deepsec");
+  await page.getByRole("tab", { name: "データ権限", exact: true }).click();
+  await page.locator("#deepsec-entitlement-scope-mode-0").selectOption("FILTERS");
+  await page.getByTestId("security-deepsec-scope-filter-0-0").getByLabel("値の種類").selectOption("LOGIN_USER_ID");
+  await page.getByRole("button", { name: "関連テーブル条件を追加", exact: true }).click();
+  const related = page.getByTestId("scope-related-0-1");
+  await related.getByLabel("候補を選ぶ Profile").selectOption("hr");
+  for (const target of objects) {
+    await related.getByLabel("関連テーブル", { exact: true }).selectOption(target);
+    await related.getByLabel("対象テーブルの列").selectOption("DEPARTMENT_CODE");
+    await related.getByLabel("関連テーブルの列").selectOption("CODE");
+    await related.getByLabel("列", { exact: true }).selectOption("LOCATION");
+    await related.getByLabel("値", { exact: true }).fill("東京");
+    await page.getByText("ロール全体の SQL プレビュー", { exact: true }).click();
+    await page.getByTestId("security-deepsec-sql-preview-generate").click();
+    await expect.poll(() => submitted?.data_entitlements[0].scope_expression.root.children[1].target_object).toBe(target.split(".")[1]);
+    expect(submitted.data_entitlements[0].scope_expression.root.children[1].target_type).toBe(target.endsWith("_VIEW") ? "VIEW" : "TABLE");
+  }
+  await expectNoPageHorizontalScroll(page);
+  await page.screenshot({ path: testInfo.outputPath("related-object-types.png"), fullPage: true });
+});

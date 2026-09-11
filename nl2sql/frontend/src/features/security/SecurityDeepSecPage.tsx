@@ -1,4 +1,4 @@
-import { useWorkspaceState, useResetExecutionConsent } from "@/components/WorkspaceState";
+import { useWorkspaceState, useWorkspaceDraftWriter, useResetExecutionConsent } from "@/components/WorkspaceState";
 import { ScopeExpressionEditor } from "./ScopeExpressionEditor";
 import { canonicalExpression, entitlementExpression, expressionError, expressionCounts } from "./scope-expression";
 import { BulkSelectionActions } from "@/components/BulkSelectionActions";
@@ -713,6 +713,7 @@ export function SecurityDeepSecPage() {
   const mayManageEntitlements = hasPermission(MENU_PERMISSIONS.securityDeepSec);
   const [activeView, setActiveView] = useWorkspaceState<DeepSecView>("deepsec-view", "data-user");
   const [storedDraft, setStoredDraft] = useWorkspaceState("deepsec-rule-draft", "");
+  const writeWorkspaceDraft = useWorkspaceDraftWriter();
   const restoredDraft = useRef<{
     roleId: string; version: number; rows: DataEntitlementDraft[]; baseline: DataEntitlement[];
   } | null>(null);
@@ -851,9 +852,28 @@ export function SecurityDeepSecPage() {
     tone: "danger",
     dismissOnOverlay: false,
   });
-  useUnsavedChangesGuard(operationBusy || entitlementDraftChanged || Boolean(dataUserPassword), async () =>
-    !operationBusy && (!(entitlementDraftChanged || dataUserPassword) || await confirmDiscard())
-  );
+  useUnsavedChangesGuard(operationBusy || entitlementDraftChanged || Boolean(dataUserPassword), async () => {
+    if (operationBusy) return false;
+    if (!(entitlementDraftChanged || dataUserPassword)) return true;
+    if (!(await confirmDiscard())) return false;
+    // 明示的な破棄は一時保存と現在の入力の両方へ反映する。
+    // setState の effect は直後の unmount で実行されない場合があるため、先に同期保存する。
+    if (!writeWorkspaceDraft("deepsec-rule-draft", "")) {
+      setEntitlementFormError(t("workspace.storageFailed"));
+      return false;
+    }
+    const baseline = currentEntitlementRole ?? entitlementBaseline;
+    const rows = entitlementDraft(baseline);
+    setEntitlementBaseline(baseline);
+    setEntitlementDraftRows(rows);
+    setSelectedEntitlementDraftKey(rows[0]?.client_key ?? null);
+    setEntitlementPreview(null);
+    setEntitlementSqlPreviewOpen(false);
+    setEntitlementApplyConfirmation("");
+    setDataUserPassword("");
+    setStoredDraft("");
+    return true;
+  });
   const selectEntitlementRole = async (roleId: string) => {
     if (operationBusy || roleId === visibleSelectedEntitlementRoleId) return;
     if (entitlementDraftChanged && !(await confirmDiscard())) return;
@@ -1164,11 +1184,14 @@ export function SecurityDeepSecPage() {
     if (selectedEntitlementRole && restoredDraft.current?.roleId === selectedEntitlementRole.role_id) {
       const saved = restoredDraft.current;
       restoredDraft.current = null;
-      setEntitlementBaseline({ ...selectedEntitlementRole, version: saved.version, data_entitlements: saved.baseline });
-      setEntitlementDraftRows(saved.rows);
-      setSelectedEntitlementDraftKey(saved.rows[0]?.client_key ?? null);
-      setEntitlementApplyConfirmation("");
-      return;
+      // 未編集の保存状態は最新のサーバー設定を使う。実際の草稿だけ旧 version を保持する。
+      if (entitlementSignature(saved.rows) !== entitlementSignature(saved.baseline)) {
+        setEntitlementBaseline({ ...selectedEntitlementRole, version: saved.version, data_entitlements: saved.baseline });
+        setEntitlementDraftRows(saved.rows);
+        setSelectedEntitlementDraftKey(saved.rows[0]?.client_key ?? null);
+        setEntitlementApplyConfirmation("");
+        return;
+      }
     }
     const nextDraftRows = entitlementDraft(selectedEntitlementRole);
     setEntitlementBaseline(selectedEntitlementRole);
@@ -1347,10 +1370,12 @@ export function SecurityDeepSecPage() {
   };
 
   const addEntitlement = () => {
-    entitlementDraftKeySequence.current += 1;
-    const nextDraft = blankEntitlementDraft(
-      `new:${selectedEntitlementRole?.role_id ?? "role"}:${entitlementDraftKeySequence.current}`
-    );
+    const prefix = `new:${selectedEntitlementRole?.role_id ?? "role"}:`;
+    let clientKey: string;
+    do {
+      clientKey = `${prefix}${++entitlementDraftKeySequence.current}`;
+    } while (entitlementDraftRows.some((row) => row.client_key === clientKey));
+    const nextDraft = blankEntitlementDraft(clientKey);
     setEntitlementPreview(null);
     setEntitlementSqlPreviewOpen(false);
     setEntitlementDraftRows((current) => [...current, nextDraft]);

@@ -9,6 +9,7 @@ from pydantic import ValidationError
 
 from .domain import DataEntitlementRecord
 from .schemas import ScopeCondition, ScopeExpression, ScopeGroup, ScopeRelatedExists
+from .scope_relations import DependencyPlan
 from .service import SecurityApiError
 
 
@@ -108,7 +109,11 @@ def compile_expression(
 
 
 def validate_expression_metadata(
-    service: Any, cursor: Any, entitlement: DataEntitlementRecord, columns: dict[str, str]
+    service: Any,
+    cursor: Any,
+    entitlement: DataEntitlementRecord,
+    columns: dict[str, str],
+    dependency_plan: DependencyPlan | None = None,
 ) -> None:
     from .deepsec import _qualified, _scope_value_type
     from .scope_relations import relation_catalog, validate_relation_dependency
@@ -139,7 +144,7 @@ def validate_expression_metadata(
                 raise SecurityApiError(
                     409, "関連定義が変更されました。関連条件を再選択してください。"
                 )
-        validate_relation_dependency(cursor, target, related_target)
+        validate_relation_dependency(cursor, target, related_target, dependency_plan)
         related_entitlement = DataEntitlementRecord(
             entitlement_id="",
             role_id="",

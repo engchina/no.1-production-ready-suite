@@ -5,6 +5,7 @@ import { ErrorState } from "@/components/StateViews";
 import {
   cloneElement,
   useId,
+  useEffect,
   useRef,
   type ReactElement,
   type ReactNode,
@@ -508,13 +509,19 @@ function RelatedEditor({
       securityApi.deepSecTargetObjectDetail({
         owner: node.target_owner,
         name: node.target_object,
-        object_type: node.target_type,
+        object_type: "",
         comment: "",
       }),
     enabled: active && Boolean(node.target_object),
   });
   const patch = (change: Partial<ScopeRelatedExists>) =>
     onChange({ ...node, ...change });
+  useEffect(() => {
+    const type = detail.data?.object_type;
+    if (active && (type === "TABLE" || type === "VIEW" || type === "MATERIALIZED VIEW") && type !== node.target_type) {
+      onChange({ ...node, target_type: type });
+    }
+  }, [active, detail.data, node, onChange]);
   const eligible =
     profiles.data?.filter((p) =>
       p.objects.includes(`${owner}.${objectName}`),

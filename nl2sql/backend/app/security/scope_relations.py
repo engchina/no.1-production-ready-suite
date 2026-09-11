@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import dataclass
 from typing import Any
 
 from .service import SecurityApiError
@@ -155,7 +156,17 @@ def _ontology_relations(profile_id: str, target: str, objects: list[str]) -> lis
     return result
 
 
-def validate_relation_dependency(cursor: Any, target: str, related: str) -> None:
+@dataclass(frozen=True)
+class DependencyPlan:
+    """今回のバッチが置換する grant と、適用後に追加される直接参照。"""
+
+    replaced_grants: frozenset[tuple[str, str]]
+    edges: dict[str, set[str]]
+
+
+def validate_relation_dependency(
+    cursor: Any, target: str, related: str, plan: DependencyPlan | None = None
+) -> None:
     """View / grant 子問い合わせの依存を辿る。確認不能・遠隔・循環は適用しない。"""
     import sqlglot
     from sqlglot import exp
@@ -171,6 +182,8 @@ def validate_relation_dependency(cursor: Any, target: str, related: str) -> None
         seen.add(current)
         if len(seen) > 64:
             raise SecurityApiError(400, "参照依存が複雑なため関連条件を検証できません。")
+        if plan is not None:
+            pending.extend((child, ancestors | {current}) for child in plan.edges.get(current, ()))
         owner, name = current.split(".")
         cursor.execute(
             """SELECT REFERENCED_OWNER, REFERENCED_NAME, REFERENCED_LINK_NAME
@@ -183,11 +196,16 @@ def validate_relation_dependency(cursor: Any, target: str, related: str) -> None
                 raise SecurityApiError(400, "DB link を参照する関連条件は指定できません。")
             pending.append((f"{row[0]}.{row[1]}", ancestors | {current}))
         cursor.execute(
-            """SELECT OWNER, PREDICATE FROM DBA_DATA_GRANTS
+            """SELECT OWNER, GRANT_NAME, PREDICATE FROM DBA_DATA_GRANTS
             WHERE OBJECT_OWNER = :owner AND OBJECT_NAME = :object_name""",
             {"owner": owner, "object_name": name},
         )
-        for grant_owner, predicate in cursor.fetchall():
+        for grant_owner, grant_name, predicate in cursor.fetchall():
+            if (
+                plan is not None
+                and (str(grant_owner).upper(), str(grant_name).upper()) in plan.replaced_grants
+            ):
+                continue
             if not predicate:
                 continue
             try:
