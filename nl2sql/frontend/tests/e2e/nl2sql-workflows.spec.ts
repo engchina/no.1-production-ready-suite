@@ -15789,3 +15789,230 @@ test.afterEach(async ({ page }, testInfo) => {
   if (testInfo.status === "skipped") return;
   await expectLocalUiFonts(page);
 });
+
+// Issue #477: SQL 生成の非同期回復と結果の条件・Profile 境界。
+test("query recovery: 2.5秒より遅い状態取得を中断せず結果を表示する", async ({ page }, testInfo) => {
+  await mockNl2SqlApi(page);
+  let reads = 0;
+  let creates = 0;
+  page.on("request", (request) => {
+    if (request.method() === "POST" && new URL(request.url()).pathname === "/api/nl2sql/jobs") creates += 1;
+  });
+  await page.route("**/api/nl2sql/jobs/job-default-001", async (route) => {
+    reads += 1;
+    await new Promise((resolve) => setTimeout(resolve, 3200));
+    await route.fallback();
+  });
+  await page.goto("/query");
+  await expect(page.getByRole("combobox", { name: "業務プロファイル", exact: true })).toHaveValue("default");
+  await nl2sqlQuestionInput(page).fill("請求金額を一覧で見たい");
+  const run = page.getByRole("button", { name: "SQL を生成して実行", exact: true });
+  await run.focus();
+  await run.press("Enter");
+  await expect(run).toBeDisabled();
+  await expect(page.getByRole("cell", { name: "青山商事" })).toBeVisible({ timeout: 12_000 });
+  await expect(run).toBeEnabled();
+  expect(reads).toBe(1);
+  expect(creates).toBe(1);
+  await expectNoHorizontalScroll(page);
+  await page.getByTestId("nl2sql-job-progress").screenshot({ path: testInfo.outputPath("query-slow-poll-completed.png") });
+});
+
+for (const failure of ["get", "set", "remove"] as const) {
+  test(`query recovery: localStorage ${failure} 失敗でも作成済み job を追跡する`, async ({ page }, testInfo) => {
+    await mockNl2SqlApi(page);
+    let release!: () => void;
+    const completion = new Promise<void>((resolve) => { release = resolve; });
+    let creates = 0;
+    page.on("request", (request) => {
+      if (request.method() === "POST" && new URL(request.url()).pathname === "/api/nl2sql/jobs") creates += 1;
+    });
+    await page.route("**/api/nl2sql/jobs/job-default-001", async (route) => {
+      await completion;
+      await route.fallback();
+    });
+    await page.addInitScript((failure) => {
+      if (failure === "get") {
+        Object.defineProperty(window, "localStorage", { get() { throw new DOMException("blocked", "SecurityError"); } });
+        return;
+      }
+      const method = failure === "set" ? "setItem" : "removeItem";
+      const original = Storage.prototype[method];
+      Object.defineProperty(Storage.prototype, method, { value: function (key: string, value?: string) {
+        if (this === window.localStorage && key.startsWith("nl2sql.activeJob")) {
+          throw new DOMException("blocked", "QuotaExceededError");
+        }
+        return original.call(this, key, value!);
+      } });
+    }, failure);
+    const pageErrors: string[] = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    await page.goto("/query");
+    await expect(page.getByRole("combobox", { name: "業務プロファイル", exact: true })).toHaveValue("default");
+    await nl2sqlQuestionInput(page).fill("請求金額を一覧で見たい");
+    const run = page.getByRole("button", { name: "SQL を生成して実行", exact: true });
+    await run.click();
+    await expect(page.getByTestId("nl2sql-job-progress")).toHaveAttribute("data-job-status", "running");
+    await expect(run).toBeDisabled();
+    if (failure !== "remove") {
+      await expect(page.getByText(/実行中のジョブをブラウザに保存できません/)).toBeVisible();
+      expect(await page.evaluate(() => {
+        const event = new Event("beforeunload", { cancelable: true });
+        window.dispatchEvent(event);
+        return event.defaultPrevented;
+      })).toBe(true);
+      await page.getByText(/実行中のジョブをブラウザに保存できません/).scrollIntoViewIfNeeded();
+      await page.screenshot({ path: testInfo.outputPath(`query-storage-${failure}.png`) });
+    }
+    release();
+    await expect(page.getByRole("cell", { name: "青山商事" })).toBeVisible();
+    await expect(run).toBeEnabled();
+    await expect(page.getByTestId("nl2sql-action-feedback-error")).toHaveCount(0);
+    await expect(page.getByText(/実行中のジョブをブラウザに保存できません/)).toHaveCount(0);
+    expect(await page.evaluate(() => {
+      const event = new Event("beforeunload", { cancelable: true });
+      window.dispatchEvent(event);
+      return event.defaultPrevented;
+    })).toBe(false);
+    expect(creates).toBe(1);
+    expect(pageErrors).toEqual([]);
+    await expectNoHorizontalScroll(page);
+  });
+}
+
+test("query recovery: Profile 切替で旧 SQL・進捗・結果を破棄し草稿は保持する", async ({ page }) => {
+  const api = await mockNl2SqlApi(page);
+  await page.route("**/api/nl2sql/profiles/search?*", (route) => fulfillJson(route, {
+    items: [
+      { ...profiles[0], allowed_table_count: 1, allowed_view_count: 0 },
+      { ...profiles[0], id: "other", name: "別プロファイル", category: "別プロファイル", allowed_table_count: 1, allowed_view_count: 0 },
+    ], next_cursor: null, total: 2,
+  }));
+  await page.goto("/query");
+  await expect(page.getByRole("combobox", { name: "業務プロファイル", exact: true })).toHaveValue("default");
+  await nl2sqlQuestionInput(page).fill("Profile A の請求を確認");
+  await page.getByRole("button", { name: "SQL を生成して実行", exact: true }).click();
+  await expect(page.getByRole("cell", { name: "青山商事" })).toBeVisible();
+  api.jobPayload = null;
+  await page.getByRole("combobox", { name: "業務プロファイル", exact: true }).selectOption("other");
+  await expect(page.getByTestId("nl2sql-job-progress")).toHaveCount(0);
+  await expect(page.getByRole("textbox", { name: "生成 SQL", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("cell", { name: "青山商事" })).toHaveCount(0);
+  await expect(nl2sqlQuestionInput(page)).toHaveValue("");
+  await nl2sqlQuestionInput(page).fill("Profile B の草稿");
+  await page.getByRole("combobox", { name: "業務プロファイル", exact: true }).selectOption("default");
+  await expect(nl2sqlQuestionInput(page)).toHaveValue("Profile A の請求を確認");
+  await expect(page.getByTestId("nl2sql-job-progress")).toHaveCount(0);
+  expect(api.jobPayload).toBeNull();
+});
+
+test("query recovery: usage-context の再試行で失敗した Profile だけでなく参照情報も回復する", async ({ page }, testInfo) => {
+  await mockNl2SqlApi(page);
+  let reads = 0;
+  let failing = true;
+  await page.route("**/api/nl2sql/profiles/default/usage-context", async (route) => {
+    reads += 1;
+    if (failing) {
+      await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "Profile の一時取得エラー" }) });
+    } else await route.fallback();
+  });
+  await page.goto("/query");
+  await expect(page.getByRole("combobox", { name: "業務プロファイル", exact: true })).toHaveValue("default");
+  await nl2sqlQuestionInput(page).fill("再試行で消してはいけない草稿");
+  const error = page.getByRole("alert").filter({ hasText: "Profile の一時取得エラー" });
+  await expect(error).toBeVisible();
+  await error.screenshot({ path: testInfo.outputPath("query-profile-retry-error.png") });
+  await error.getByRole("button").click();
+  await expect.poll(() => reads).toBe(2);
+  await expect(error).toBeVisible();
+  failing = false;
+  await error.getByRole("button").focus();
+  await error.getByRole("button").press("Enter");
+  await expect.poll(() => reads).toBe(3);
+  await expect(error).toHaveCount(0);
+  await expect(nl2sqlQuestionInput(page)).toHaveValue("再試行で消してはいけない草稿");
+  await expectNoHorizontalScroll(page);
+});
+
+test("query recovery: すべての生成条件変更で前回結果と未実行を区別する", async ({ page }, testInfo) => {
+  const api = await mockNl2SqlApi(page);
+  await page.goto("/query");
+  await expect(page.getByRole("combobox", { name: "業務プロファイル", exact: true })).toHaveValue("default");
+  await nl2sqlQuestionInput(page).fill("請求金額を一覧で見たい");
+  await page.getByRole("button", { name: "SQL を生成して実行", exact: true }).click();
+  await expect(page.getByRole("cell", { name: "青山商事" })).toBeVisible();
+  api.jobPayload = null;
+  const changed = page.getByText(/入力が変更されています。現在の入力は未実行です。/);
+  await page.getByRole("button", { name: /実行オプション/ }).click();
+  await expect(changed).toHaveCount(0);
+  for (const label of ["用語・同義語を使う", "公開版オントロジーを使う", "処理手順を表示", "Show Prompt を表示"]) {
+    const option = page.getByRole("checkbox", { name: label, exact: true });
+    const initial = await option.isChecked();
+    await option.setChecked(!initial);
+    await expect(changed).toBeVisible();
+    await option.setChecked(initial);
+    await expect(changed).toHaveCount(0);
+  }
+  await page.getByRole("button", { name: "今回だけの生成条件", exact: true }).click();
+  await expect(changed).toHaveCount(0);
+  const additional = page.getByRole("textbox", { name: "今回の追加条件", exact: true });
+  await additional.fill("今月だけ表示する");
+  await expect(changed).toBeVisible();
+  await changed.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("query-previous-conditions.png") });
+  await additional.fill("");
+  await expect(changed).toHaveCount(0);
+  await page.getByRole("button", { name: "ロールを上書き", exact: true }).click();
+  await page.getByRole("textbox", { name: "アシスタントロール", exact: true }).fill("経理担当");
+  await expect(changed).toBeVisible();
+  await page.getByRole("textbox", { name: "アシスタントロール", exact: true }).fill("");
+  await expect(changed).toHaveCount(0);
+  expect(api.jobPayload).toBeNull();
+  await expect(page.getByRole("cell", { name: "青山商事" })).toBeVisible();
+});
+
+test("query recovery: 初回 Profile 選択でも保存された進行中 job を復元する", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  let creates = 0;
+  page.on("request", (request) => {
+    if (request.method() === "POST" && new URL(request.url()).pathname === "/api/nl2sql/jobs") creates += 1;
+  });
+  await page.addInitScript(() => {
+    window.localStorage.setItem("nl2sql.activeJobId", "job-default-001");
+    window.localStorage.setItem("nl2sql.activeJobStartedAt", String(Date.now()));
+  });
+  await page.route("**/api/nl2sql/jobs/job-default-001", async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    await route.fallback();
+  });
+  await page.goto("/query");
+  await expect(page.getByRole("combobox", { name: "業務プロファイル", exact: true })).toHaveValue("default");
+  await expect(page.getByRole("cell", { name: "青山商事" })).toBeVisible();
+  expect(creates).toBe(0);
+});
+
+test("query recovery: 状態取得の timeout が続くと追跡を解除する", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  let reads = 0;
+  await page.route("**/api/nl2sql/jobs/job-default-001", async (route) => {
+    reads += 1;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    await route.fallback();
+  });
+  await page.goto("/query");
+  await expect(page.getByRole("combobox", { name: "業務プロファイル", exact: true })).toHaveValue("default");
+  // 30秒の HTTP deadline だけ短縮する。polling 自体は実際の2.5秒間隔を使う。
+  await page.evaluate(() => {
+    const timeout = AbortSignal.timeout.bind(AbortSignal);
+    AbortSignal.timeout = (ms) => timeout(ms === 30_000 ? 100 : ms);
+  });
+  await nl2sqlQuestionInput(page).fill("応答 timeout 時も入力を保持する");
+  const run = page.getByRole("button", { name: "SQL を生成して実行", exact: true });
+  await run.click();
+  await expect(page.getByTestId("nl2sql-action-feedback-error")).toContainText("ジョブの状態確認に連続して失敗したため", { timeout: 15_000 });
+  await expect(run).toBeEnabled();
+  await expect(nl2sqlQuestionInput(page)).toHaveValue("応答 timeout 時も入力を保持する");
+  await expect(page.getByTestId("nl2sql-job-progress")).toHaveCount(0);
+  expect(reads).toBe(3);
+  expect(await page.evaluate(() => localStorage.getItem("nl2sql.activeJobId"))).toBeNull();
+});

@@ -745,6 +745,7 @@ test("AI要件確認は確認内容をクエリへ反映し、通常の検索実
   });
 
   await page.goto("/query");
+  await expect(page.getByRole("combobox", { name: "業務プロファイル", exact: true })).toHaveValue("default");
   await page.locator("#nl2sql-question-input").fill("受注件数を表示");
   const startButton = page.getByRole("button", { name: "AI要件確認" });
   await expect(startButton).toBeEnabled();

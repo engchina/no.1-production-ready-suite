@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { apiGet, isAbortError } from "@/lib/api";
 import { t } from "@/lib/i18n";
+import { API_TIMEOUT_MS } from "@/lib/requestPolicy";
 import {
   clearActiveJobSnapshot,
   isJobInFlight,
@@ -25,8 +26,15 @@ interface UseNl2SqlJobPollingOptions {
   pollIntervalMs?: number;
 }
 
-function getBrowserStorage(): ActiveJobStorage | null {
-  return typeof window === "undefined" ? null : window.localStorage;
+// ブラウザ保存は復元用の補助。getter / 読込 / 書込 / 削除の失敗で実行追跡を止めない。
+function withBrowserStorage(action: (storage: ActiveJobStorage) => void): boolean {
+  try {
+    if (typeof window === "undefined") return false;
+    action(window.localStorage);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** 復元直後に表示する in-flight プレースホルダ。実データは次のポーリングで上書きされる。 */
@@ -53,11 +61,11 @@ export function useNl2SqlJobPolling({
 }: UseNl2SqlJobPollingOptions) {
   const [job, setJob] = useState<JobData | null>(null);
   const [jobStartedAt, setJobStartedAt] = useState<number | null>(null);
+  const [jobStorageUnavailable, setJobStorageUnavailable] = useState(false);
   const consecutiveFailuresRef = useRef(0);
 
   const stopTracking = useCallback(() => {
-    const storage = getBrowserStorage();
-    if (storage) clearActiveJobSnapshot(storage);
+    withBrowserStorage(clearActiveJobSnapshot);
     consecutiveFailuresRef.current = 0;
     setJob(null);
     setJobStartedAt(null);
@@ -65,13 +73,15 @@ export function useNl2SqlJobPolling({
 
   const pollJob = useCallback(
     async (jobId: string, signal?: AbortSignal) => {
-      const data = await apiGet<JobData>(`/api/nl2sql/jobs/${jobId}`, { signal });
+      const data = await apiGet<JobData>(`/api/nl2sql/jobs/${jobId}`, {
+        signal,
+        timeoutMs: API_TIMEOUT_MS.interactiveDetail,
+      });
       if (signal?.aborted) return data;
       consecutiveFailuresRef.current = 0;
       setJob(data);
       if (isJobTerminal(data.status)) {
-        const storage = getBrowserStorage();
-        if (storage) clearActiveJobSnapshot(storage);
+        withBrowserStorage(clearActiveJobSnapshot);
         if (data.result) onResult(data.result);
         if (data.error_message) onJobFailed(data.error_message);
         if (signal?.aborted) return data;
@@ -100,8 +110,9 @@ export function useNl2SqlJobPolling({
   );
 
   const trackJob = useCallback((data: JobCreateData, startedAtMs: number) => {
-    const storage = getBrowserStorage();
-    if (storage) persistActiveJobSnapshot(storage, data.job_id, startedAtMs);
+    const saved = withBrowserStorage((storage) => persistActiveJobSnapshot(storage, data.job_id, startedAtMs));
+    if (!saved) withBrowserStorage(clearActiveJobSnapshot);
+    setJobStorageUnavailable(!saved);
     consecutiveFailuresRef.current = 0;
     setJobStartedAt(startedAtMs);
     setJob({ ...data, result: null, error_message: null, warning_message: null, timing: null });
@@ -114,24 +125,29 @@ export function useNl2SqlJobPolling({
   // 再訪時の復元は合成 in-flight job を置くだけにし、実際の取得・失敗処理は
   // 下の interval effect に一本化する(失効 job への失敗リクエスト連発を防ぐ)。
   useEffect(() => {
-    const storage = getBrowserStorage();
-    if (!storage) return;
-    const snapshot = readActiveJobSnapshot(storage, Date.now());
-    if (!snapshot) return;
-    setJobStartedAt(snapshot.startedAtMs);
-    setJob(syntheticInFlightJob(snapshot.jobId, snapshot.startedAtMs));
+    withBrowserStorage((storage) => {
+      const snapshot = readActiveJobSnapshot(storage, Date.now());
+      if (!snapshot) return;
+      setJobStartedAt(snapshot.startedAtMs);
+      setJob(syntheticInFlightJob(snapshot.jobId, snapshot.startedAtMs));
+    });
   }, []);
 
   // job オブジェクトではなく「in-flight な job_id」へ依存させる。
-  // 各ポーリング応答(setJob)で effect を張り直さず、即時 tick + 固定間隔で追跡できる。
+  // 未完了の取得がある tick はスキップし、遅い応答を次の tick で中断しない。
   const activeJobId = job && isJobInFlight(job.status) ? job.job_id : null;
   useEffect(() => {
     if (!activeJobId) return undefined;
     let controller: AbortController | null = null;
     const tick = () => {
-      controller?.abort();
+      if (controller) return;
       controller = new AbortController();
-      void pollJob(activeJobId, controller.signal).catch(handlePollFailure);
+      const signal = controller.signal;
+      void pollJob(activeJobId, signal)
+        .catch((cause: unknown) => {
+          if (!signal.aborted) handlePollFailure(cause);
+        })
+        .finally(() => { controller = null; });
     };
     tick();
     const timer = window.setInterval(tick, pollIntervalMs);
@@ -144,6 +160,7 @@ export function useNl2SqlJobPolling({
   return {
     job,
     jobStartedAt,
+    jobStorageUnavailable,
     pollJob,
     trackJob,
     clearTrackedJob,

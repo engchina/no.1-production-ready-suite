@@ -1,5 +1,5 @@
 import { useConfirm } from "@/components/ui/confirm-dialog";
-import { useWorkspaceState, useWorkspaceRevalidation, useWorkspaceDraftWriter, useWorkspaceActive, WorkspaceResultNotice } from "@/components/WorkspaceState";
+import { useWorkspaceState, useWorkspaceRevalidation, useWorkspaceDraftWriter, useWorkspaceActive, useTransientDraftGuard, WorkspaceResultNotice } from "@/components/WorkspaceState";
 import { Button } from "@/components/ui/button";
 import {
   useCallback,
@@ -178,7 +178,6 @@ function ExecutableNl2SqlWorkbench() {
   const [question, setQuestion] = useWorkspaceState(`question:${profileId}`, "");
   const [selection, setSelection] = useState<SchemaSelection>(() => emptySelection());
   const [result, setResult] = useState<Nl2SqlResult | null>(null);
-  useEffect(() => { setResult(null); setSelection(emptySelection()); }, [profileId]);
   const [recommendation, setRecommendation] = useState<ProfileRecommendationData | null>(null);
   const [similarHistory, setSimilarHistory] = useState<SimilarHistoryItem[]>([]);
   const [similarHistoryLoading, setSimilarHistoryLoading] = useState(false);
@@ -328,6 +327,7 @@ function ExecutableNl2SqlWorkbench() {
           schemaObjectsQuery.refetch(),
           schemaHeadQuery.refetch(),
           profilesQuery.refetch(),
+          ...(profileId ? [selectedProfileQuery.refetch()] : []),
         ]);
         const failedResult = results.find(
           (result) => result.status === "rejected" || result.value.isError
@@ -335,11 +335,11 @@ function ExecutableNl2SqlWorkbench() {
         if (failedResult) {
           const failedIndex = results.indexOf(failedResult);
           const fallback =
-            failedIndex === 2 ? t("profiles.error.load") : t("nl2sql.error.loadFailed");
+            failedIndex >= 2 ? t("profiles.error.load") : t("nl2sql.error.loadFailed");
           const cause =
             failedResult.status === "rejected" ? failedResult.reason : failedResult.value.error;
           setPageError({
-            source: failedIndex === 2 ? "profile-load" : "schema-load",
+            source: failedIndex >= 2 ? "profile-load" : "schema-load",
             message: messageFromError(cause, fallback),
             code: codeFromError(cause),
           });
@@ -362,7 +362,7 @@ function ExecutableNl2SqlWorkbench() {
         });
       }
     },
-    [profilesQuery, schemaHeadQuery, schemaObjectsQuery, schemaRefresh]
+    [profileId, profilesQuery, selectedProfileQuery, schemaHeadQuery, schemaObjectsQuery, schemaRefresh]
   );
 
   useEffect(() => {
@@ -464,7 +464,7 @@ function ExecutableNl2SqlWorkbench() {
     toast.warning(t("nl2sql.history.refreshFailed"));
   }, []);
 
-  const { job, jobStartedAt, trackJob, clearTrackedJob } = useNl2SqlJobPolling({
+  const { job, jobStartedAt, jobStorageUnavailable, trackJob, clearTrackedJob } = useNl2SqlJobPolling({
     onResult: handleJobResult,
     onJobFailed: handleJobFailed,
     onPollingLost: handlePollingLost,
@@ -492,7 +492,18 @@ function ExecutableNl2SqlWorkbench() {
     setRewriteData(null);
     setActionError("");
   }, [clearTrackedJob]);
+  const previousProfileId = useRef(profileId);
+  useEffect(() => {
+    const previous = previousProfileId.current;
+    previousProfileId.current = profileId;
+    if (previous === profileId) return;
+    setSelection(emptySelection());
+    // 初回の自動選択では再読込から復元した進行中 job を消さない。
+    if (previous) clearGeneratedOutput();
+  }, [clearGeneratedOutput, profileId]);
   const jobActive = isJobInFlight(job?.status) || submitting;
+  const showJobStorageWarning = jobStorageUnavailable && jobActive;
+  useTransientDraftGuard(showJobStorageWarning);
   const active = jobActive || detecting || guidedClarificationOpen;
   const actionBusy = submitting;
   const showSimilarHistoryPanel =
@@ -520,6 +531,18 @@ function ExecutableNl2SqlWorkbench() {
       additional_instructions: additionalInstructions,
     };
   }, [engine, selectAiInstructionsOverride, selectAiRoleOverride]);
+  // 送信 payload と結果の比較条件を同じ値から作り、実行条件の追加漏れを防ぐ。
+  const generationRequest = {
+    question: question.trim(),
+    engine,
+    profile_id: profileId || null,
+    allowed_objects: toAllowedObjects(selection),
+    select_ai_overrides: selectAiOverrides,
+    use_glossary: rewriteUseGlossary,
+    use_ontology_context: useOntologyContext,
+    include_interpretation: includeInterpretation,
+    include_show_prompt: includeShowPrompt,
+  };
   const selectAiRoleHasOverride = Boolean(selectAiRoleOverride.trim());
   const hasSelectAiOverrideInputs = useMemo(
     () => Boolean(selectAiRoleHasOverride || selectAiInstructionsOverride.trim()),
@@ -877,17 +900,7 @@ function ExecutableNl2SqlWorkbench() {
         });
         setRewriteData(rewrite);
       }
-      const data = await apiPost<JobCreateData>("/api/nl2sql/jobs", {
-        question: trimmed,
-        engine,
-        profile_id: profileId || null,
-        allowed_objects: toAllowedObjects(selection),
-        select_ai_overrides: selectAiOverrides,
-        use_glossary: rewriteUseGlossary,
-        use_ontology_context: useOntologyContext,
-        include_interpretation: includeInterpretation,
-        include_show_prompt: includeShowPrompt,
-      });
+      const data = await apiPost<JobCreateData>("/api/nl2sql/jobs", generationRequest);
       // 追跡開始後の取得・リトライ・断念は useNl2SqlJobPolling が担う。
       // ここで初回 poll を await すると、その失敗が「検索開始失敗」と誤表示され
       // 成功した job の追跡まで破棄されるため、try 節は job 作成までとする。
@@ -1608,6 +1621,9 @@ function ExecutableNl2SqlWorkbench() {
           />
         ) : null}
 
+        {showJobStorageWarning && (
+          <Banner severity="warning">{t("nl2sql.job.storageUnavailable")}</Banner>
+        )}
         <OperationStatusStrip
           job={job}
           profileId={profileId}
@@ -1622,7 +1638,7 @@ function ExecutableNl2SqlWorkbench() {
           cancelRequesting={cancelRequesting}
         />
 
-        <WorkspaceResultNotice result={result} inputSignature={JSON.stringify([profileId, engine, question])} finishedAt={result?.timing?.finished_at} />
+        <WorkspaceResultNotice result={result} inputSignature={JSON.stringify(generationRequest)} finishedAt={result?.timing?.finished_at} />
         <Nl2SqlResultTable results={result?.results ?? null} />
         <SelectAiFeedbackAddPanel
           result={result}
