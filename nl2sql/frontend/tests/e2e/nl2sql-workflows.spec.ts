@@ -15062,3 +15062,53 @@ test("クエリ初期値だけを消費し他の URL 条件と編集後の草稿
   await expectNoHorizontalScroll(page);
   await page.screenshot({ path: testInfo.outputPath("query-prefill-draft-reload.png") });
 });
+
+test("feedback refresh preserves drafts and pending review locks competing actions", async ({ page }, testInfo) => {
+  await mockNl2SqlApi(page);
+  await page.goto("/feedback-management");
+  const comment = page.getByLabel("管理者レビューコメント（feedback_content）");
+  await comment.fill("未保存のレビューを保持");
+  await clickPageHeaderAction(page, "feedback-management-actions", "表示を更新");
+  await expect(comment).toHaveValue("未保存のレビューを保持");
+  await page.getByRole("tab", { name: "類似検索インデックス", exact: true }).click();
+  await page.getByLabel("最大候補数", { exact: true }).fill("7");
+  await clickPageHeaderAction(page, "feedback-management-actions", "表示を更新");
+  await expect(page.getByLabel("最大候補数", { exact: true })).toHaveValue("7");
+  await page.getByRole("tab", { name: "アプリ内フィードバック" }).click();
+  await page.getByRole("link", { name: "学習候補で確認" }).click();
+  await expect(page.getByRole("alertdialog")).toBeVisible();
+  await page.getByRole("alertdialog").getByRole("button", { name: "キャンセル" }).click();
+  await expect(comment).toHaveValue("未保存のレビューを保持");
+  const gate = createRequestGate();
+  await page.route("**/api/nl2sql/feedback/admin-review", async (route) => {
+    await gate.promise;
+    await route.fulfill({ status: 503, json: { detail: "レビュー保存失敗" } });
+  });
+  await page.getByRole("button", { name: "フィードバック保存", exact: true }).click();
+  await expect(comment).toBeDisabled();
+  await expect(page.getByRole("tab", { name: "類似検索インデックス", exact: true })).toBeDisabled();
+  gate.release();
+  await expect(page.getByText("レビュー保存失敗", { exact: true })).toBeVisible();
+  await expect(comment).toBeEnabled();
+  await expect(comment).toHaveValue("未保存のレビューを保持");
+  await page.getByLabel("利用者評価フィルター").selectOption("bad");
+  await page.getByRole("alertdialog").getByRole("button", { name: "キャンセル" }).click();
+  await expect(page.getByLabel("利用者評価フィルター")).toHaveValue("all");
+  await expect(comment).toHaveValue("未保存のレビューを保持");
+  await expectNoHorizontalScroll(page);
+  await page.screenshot({ path: testInfo.outputPath("feedback-draft-protection.png"), fullPage: true });
+  await page.unroute("**/api/nl2sql/feedback/admin-review");
+  await page.route("**/api/nl2sql/feedback/admin-review", (route) => fulfillJson(route, {
+    history_id: "hist-001", rating: "good", feedback_content: "未保存のレビューを保持",
+    select_ai_feedback: null,
+  }));
+  await page.getByRole("button", { name: "フィードバック保存", exact: true }).click();
+  await expect(page.getByText("管理者レビューを保存し、類似検索に公開しました。", { exact: true })).toBeVisible();
+  await page.getByRole("tab", { name: "類似検索インデックス", exact: true }).click();
+  await page.getByRole("button", { name: "設定保存", exact: true }).click();
+  await expect(page.getByText("Feedback 類似検索設定を保存しました。", { exact: true })).toBeVisible();
+  await page.getByRole("tab", { name: "アプリ内フィードバック" }).click();
+  await page.getByRole("link", { name: "学習候補で確認" }).click();
+  await expect(page).toHaveURL(/question-classifier-models/);
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+});

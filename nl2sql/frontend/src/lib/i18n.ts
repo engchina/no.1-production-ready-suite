@@ -1591,6 +1591,10 @@ const nl2sqlJa = {
   "sqlToQuestion.error.reverse": "SQL から質問を生成できませんでした。",
   "sqlToQuestion.error.retryHint": "接続状態と入力内容を確認して再試行してください。",
 
+  "feedbackManagement.discard.title": "未保存の変更を破棄しますか？",
+  "feedbackManagement.discard.description": "編集したレビューまたは設定が保存されていません。移動すると変更は破棄されます。",
+  "feedbackManagement.discard.confirm": "破棄して移動",
+  "feedbackManagement.discard.missing": "編集中の履歴を取得できませんでした。前回の一覧と未保存の編集を保持しています。再度取得してください。",
   "feedbackManagement.subtitle": "Select AI feedback、アプリ内フィードバック、類似検索用 Feedback Vector Index を管理します。",
   "feedbackManagement.status.aria": "フィードバック管理ステータス",
   "feedbackManagement.metric.entries": "Select AI entries",

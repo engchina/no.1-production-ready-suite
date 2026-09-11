@@ -43,6 +43,7 @@ import { t } from "@/lib/i18n";
 import { INFORMATION_TABLE_SCROLL_CLASS } from "@/lib/list-density";
 import { APP_ROUTES } from "@/lib/routes";
 import { selectedVisibleStringKey } from "@/lib/visible-selection";
+import { useUnsavedChangesGuard } from "@/lib/useUnsavedChangesGuard";
 import { useRequestScope } from "@/lib/useRequestScope";
 import {
   DbManagementLoadingSkeleton,
@@ -164,6 +165,8 @@ export function FeedbackManagementPage() {
   const [feedbackNextCursor, setFeedbackNextCursor] = useState("");
   const [feedbackConfig, setFeedbackConfig] = useState<FeedbackSearchConfigData | null>(null);
   const [savedFeedbackConfig, setSavedFeedbackConfig] = useState<FeedbackSearchConfigData | null>(null);
+  const [savedReview, setSavedReview] = useState("");
+  const reviewDirtyRef = useRef(false);
   const [loading, setLoading] = useState("");
   const [message, setMessage] = useState("");
   const loadSequence = useRef(0);
@@ -202,6 +205,25 @@ export function FeedbackManagementPage() {
     () => appFeedbackItems.find((item) => item.id === visibleSelectedFeedbackId) ?? null,
     [appFeedbackItems, visibleSelectedFeedbackId]
   );
+  const reviewSignature = JSON.stringify([selectedAppFeedback?.id, adminFeedbackRating,
+    adminFeedbackContent, registerSelectAiFeedback, selectAiResponse]);
+  const reviewDirty = Boolean(selectedAppFeedback && savedReview && reviewSignature !== savedReview);
+  reviewDirtyRef.current = reviewDirty;
+  const confirmDiscard = () => confirm({
+    title: t("feedbackManagement.discard.title"),
+    description: t("feedbackManagement.discard.description"),
+    confirmLabel: t("feedbackManagement.discard.confirm"),
+    tone: "danger",
+    dismissOnOverlay: false,
+  });
+  useUnsavedChangesGuard(reviewDirty || feedbackConfigDirty, confirmDiscard);
+  const selectReview = async (id: string) => {
+    if (loading || id === selectedFeedbackId) return;
+    if (reviewDirty && !(await confirmDiscard())) return;
+    reviewDirtyRef.current = false;
+    setSelectedFeedbackId(id);
+  };
+
   const feedbackHistoryOptions = useMemo(
     () =>
       appFeedbackItems.map((item) => ({
@@ -242,6 +264,7 @@ export function FeedbackManagementPage() {
   };
 
   const load = async (announce = false) => {
+    if (loading) return;
     const sequence = loadSequence.current + 1;
     loadSequence.current = sequence;
     setLoading("load");
@@ -260,7 +283,7 @@ export function FeedbackManagementPage() {
           apiGet<ProfileSummaryPage>("/api/nl2sql/profiles/search?limit=100", {
             signal,
           }),
-          fetchAppFeedback("", signal),
+          fetchAppFeedback(feedbackCursor, signal),
           apiGet<FeedbackSearchConfigData>("/api/nl2sql/feedback-config", { signal }),
         ]);
         const hasCurrentProfile = dbProfileData.profiles.some(
@@ -280,14 +303,18 @@ export function FeedbackManagementPage() {
         setFeedback(feedbackData);
         setSelectedIndex(0);
         setAppProfiles(appProfileData.items);
+        if (reviewDirtyRef.current && selectedAppFeedback &&
+            !appFeedbackData.items.some((item) => item.id === selectedAppFeedback.id)) {
+          setMessage(t("feedbackManagement.discard.missing"));
+          return;
+        }
         setHistory(appFeedbackData.items);
         setFeedbackTotal(appFeedbackData.total);
         setFeedbackNextCursor(appFeedbackData.next_cursor);
-        setFeedbackCursor("");
-        setFeedbackCursorStack([]);
-        setFeedbackPage(1);
-        setFeedbackConfig(configData);
-        setSavedFeedbackConfig(configData);
+        if (!feedbackConfigDirty) {
+          setFeedbackConfig(configData);
+          setSavedFeedbackConfig(configData);
+        }
         setSelectedFeedbackId((current) =>
           appFeedbackData.items.some((item) => item.id === current)
             ? current
@@ -326,10 +353,14 @@ export function FeedbackManagementPage() {
     direction: AppFeedbackRefreshDirection = "reset",
     filters: AppFeedbackFilters = {}
   ) => {
+    if (direction !== "current" && reviewDirty && !(await confirmDiscard())) return;
     setLoading("app-feedback-load");
     setMessage("");
     try {
       const data = await fetchAppFeedback(cursor, undefined, filters);
+      reviewDirtyRef.current = false;
+      if (filters.rating !== undefined) setFeedbackFilter(filters.rating);
+      if (filters.profileId !== undefined) setAppProfileFilter(filters.profileId);
       setHistory(data.items);
       setFeedbackTotal(data.total);
       setFeedbackNextCursor(data.next_cursor);
@@ -373,6 +404,7 @@ export function FeedbackManagementPage() {
   };
 
   const deleteSelectedFeedback = async () => {
+    if (loading) return;
     if (!selectedSelectAiFeedback || !profileName.trim()) return;
     const ok = await confirm({
       title: t("feedbackManagement.deleteConfirmTitle"),
@@ -402,6 +434,7 @@ export function FeedbackManagementPage() {
   };
 
   const updateVectorIndex = async () => {
+    if (loading) return;
     if (!profileName.trim()) return;
     setLoading("vector-index");
     setMessage("");
@@ -424,6 +457,7 @@ export function FeedbackManagementPage() {
   };
 
   const saveAppFeedback = async () => {
+    if (loading) return;
     if (!selectedAppFeedback) return;
     const trimmedAdminFeedbackContent = adminFeedbackContent.trim();
     if (adminFeedbackRating === "bad" && !trimmedAdminFeedbackContent) {
@@ -446,6 +480,8 @@ export function FeedbackManagementPage() {
         select_ai_response: selectAiResponse.trim(),
         select_ai_profile_name: profileName.trim(),
       });
+      reviewDirtyRef.current = false;
+      setSavedReview(reviewSignature);
       await refreshAppFeedback(feedbackCursor, "current");
       const publishWarnings = data.similar_history_publish?.warnings ?? [];
       if (publishWarnings.length > 0) {
@@ -477,8 +513,8 @@ export function FeedbackManagementPage() {
   };
 
   const clearAppFeedback = async () => {
+    if (loading) return;
     if (!selectedAppFeedback) return;
-    const defaultResponse = defaultSelectAiResponse(selectedAppFeedback);
     const ok = await confirm({
       title: t("feedbackManagement.appFeedback.clearTitle"),
       description: t("feedbackManagement.appFeedback.clearDescription"),
@@ -490,9 +526,10 @@ export function FeedbackManagementPage() {
     setMessage("");
     try {
       await apiDelete<FeedbackClearData>(`/api/nl2sql/feedback/${selectedAppFeedback.id}`);
+      syncedAppFeedbackId.current = null;
+      reviewDirtyRef.current = false;
+      setSavedReview(reviewSignature);
       await refreshAppFeedback(feedbackCursor, "current");
-      setRegisterSelectAiFeedback(false);
-      setSelectAiResponse(defaultResponse);
       toast.success(t("feedbackManagement.appFeedback.cleared"));
     } catch (err) {
       setMessage(err instanceof Error ? err.message : t("feedbackManagement.error.appFeedback"));
@@ -502,6 +539,7 @@ export function FeedbackManagementPage() {
   };
 
   const saveFeedbackConfig = async () => {
+    if (loading) return;
     if (!feedbackConfig) return;
     setLoading("feedback-config");
     setMessage("");
@@ -539,6 +577,7 @@ export function FeedbackManagementPage() {
   useEffect(() => {
     if (!selectedAppFeedback) {
       syncedAppFeedbackId.current = null;
+      setSavedReview("");
       setAdminFeedbackRating("good");
       setAdminFeedbackContent("");
       setRegisterSelectAiFeedback(false);
@@ -546,7 +585,13 @@ export function FeedbackManagementPage() {
       return;
     }
     const switchedFeedback = syncedAppFeedbackId.current !== selectedAppFeedback.id;
+    if (!switchedFeedback && reviewDirtyRef.current) return;
     syncedAppFeedbackId.current = selectedAppFeedback.id;
+    setSavedReview(JSON.stringify([selectedAppFeedback.id,
+      selectedAppFeedback.admin_feedback_rating ?? "good",
+      selectedAppFeedback.admin_feedback_content ?? "",
+      switchedFeedback ? false : registerSelectAiFeedback,
+      switchedFeedback ? defaultSelectAiResponse(selectedAppFeedback) : selectAiResponse]));
     setAdminFeedbackRating(selectedAppFeedback.admin_feedback_rating ?? "good");
     setAdminFeedbackContent(selectedAppFeedback.admin_feedback_content ?? "");
     if (switchedFeedback) {
@@ -587,11 +632,13 @@ export function FeedbackManagementPage() {
             icon: RefreshCw,
             onClick: () => load(true),
             loading: loading === "load",
+            disabled: Boolean(loading),
           },
         ]}
       />
 
-      <main className="grid gap-4 p-4 lg:p-8">
+      <main className="p-4 lg:p-8">
+        <fieldset disabled={Boolean(loading)} className="m-0 grid min-w-0 gap-4 border-0 p-0">
         <PageNotice
           notice={message ? { tone: "danger", message } : null}
           action={
@@ -858,7 +905,6 @@ export function FeedbackManagementPage() {
                     value={feedbackFilter}
                     onChange={(event) => {
                       const rating = event.currentTarget.value as AppFeedbackFilter;
-                      setFeedbackFilter(rating);
                       void refreshAppFeedback("", "reset", { rating });
                     }}
                     className="min-h-[44px] w-full min-w-0 max-w-full rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:ring-2 focus:ring-ring/40"
@@ -876,7 +922,6 @@ export function FeedbackManagementPage() {
                     value={appProfileFilter}
                     onChange={(event) => {
                       const profileId = event.currentTarget.value;
-                      setAppProfileFilter(profileId);
                       void refreshAppFeedback("", "reset", { profileId });
                     }}
                     className="min-h-[44px] w-full min-w-0 max-w-full rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:ring-2 focus:ring-ring/40"
@@ -906,7 +951,7 @@ export function FeedbackManagementPage() {
                       key={item.id}
                       item={item}
                       selected={selectedAppFeedback?.id === item.id}
-                      onSelect={() => setSelectedFeedbackId(item.id)}
+                      onSelect={() => void selectReview(item.id)}
                     />
                   ))
                 ) : (
@@ -954,7 +999,7 @@ export function FeedbackManagementPage() {
                     label={t("feedbackManagement.appFeedback.history")}
                     value={selectedAppFeedback.id}
                     options={feedbackHistoryOptions}
-                    onValueChange={setSelectedFeedbackId}
+                    onValueChange={(id) => void selectReview(id)}
                     className="min-w-0"
                     buttonClassName="h-11"
                   />
@@ -1201,6 +1246,7 @@ export function FeedbackManagementPage() {
             />
           </DbObjectManagementPanelShell>
         )}
+        </fieldset>
       </main>
     </>
   );
