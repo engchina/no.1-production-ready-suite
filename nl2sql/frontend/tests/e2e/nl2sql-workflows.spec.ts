@@ -15156,3 +15156,42 @@ test("learning candidate failed previous page preserves the cursor for retry", a
   await expectNoHorizontalScroll(page);
   await page.screenshot({ path: testInfo.outputPath("classifier-cursor-recovery.png"), fullPage: true });
 });
+
+test("classifier training save locks edits and retains draft after failure", async ({ page }, testInfo) => {
+  await mockNl2SqlApi(page);
+  await page.goto("/question-classifier-models");
+  await clickRowAction(page, "qcm-training-row-actions-example-001", "編集");
+  const input = page.getByLabel("訓練データの質問", { exact: true });
+  await input.fill("保存前の訓練データ");
+  const gate = createRequestGate();
+  await page.route("**/api/nl2sql/classifier/training-data/example-001", async (route) => {
+    await gate.promise;
+    await route.fulfill({ status: 503, json: { detail: "訓練データ保存失敗" } });
+  });
+  const row = page.getByTestId("qcm-training-data-table").locator("tbody tr").filter({ has: input });
+  await row.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(input).toBeDisabled();
+  await expect(row.getByRole("button", { name: "キャンセル", exact: true })).toBeDisabled();
+  await expect(page.getByRole("tab", { name: "モデル学習", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "訓練データ一覧を取得", exact: true })).toBeDisabled();
+  gate.release();
+  await expect(page.getByText("訓練データ保存失敗", { exact: true })).toBeVisible();
+  await expect(input).toHaveValue("保存前の訓練データ");
+  await expect(input).toBeEnabled();
+  await row.getByRole("button", { name: "キャンセル", exact: true }).click();
+  await expect(page.getByRole("alertdialog")).toBeVisible();
+  await page.getByRole("alertdialog").getByRole("button", { name: "キャンセル", exact: true }).click();
+  await expect(input).toHaveValue("保存前の訓練データ");
+  await expectNoHorizontalScroll(page);
+  await page.screenshot({ path: testInfo.outputPath("classifier-edit-protection.png"), fullPage: true });
+  await page.getByRole("tab", { name: "学習候補", exact: true }).click();
+  await page.getByRole("link", { name: "フィードバック管理で確認", exact: true }).first().click();
+  await expect(page.getByRole("alertdialog")).toBeVisible();
+  await page.getByRole("alertdialog").getByRole("button", { name: "キャンセル", exact: true }).click();
+  await page.getByRole("tab", { name: "訓練データ", exact: true }).click();
+  await expect(input).toHaveValue("保存前の訓練データ");
+  await page.unroute("**/api/nl2sql/classifier/training-data/example-001");
+  await page.route("**/api/nl2sql/classifier/training-data/example-001", (route) => fulfillJson(route, {}));
+  await row.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(input).toHaveCount(0);
+});

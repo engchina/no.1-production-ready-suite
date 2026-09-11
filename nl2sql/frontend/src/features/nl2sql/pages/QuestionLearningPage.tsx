@@ -38,6 +38,7 @@ import { RowActionMenu, type EntityAction } from "@/components/ObjectActions";
 import { PageHeader, PageHeaderStatusBadge } from "@/components/PageHeader";
 import { ProcessingIndicator } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";
+import { useUnsavedChangesGuard } from "@/lib/useUnsavedChangesGuard";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { FileDropzone } from "@/components/ui/file-dropzone";
 import { formatDateTime, formatNumber } from "@/lib/format";
@@ -142,6 +143,21 @@ export function QuestionClassifierModelsPage() {
   const [editingProfileId, setEditingProfileId] = useState("");
   const [loading, setLoading] = useState("");
   const [message, setMessage] = useState("");
+  const [editingBaseline, setEditingBaseline] = useState("");
+  const editingDirty = Boolean(editingExampleId &&
+    JSON.stringify([editingText, editingProfileId]) !== editingBaseline);
+  const confirmDiscard = () => confirm({
+    title: t("qcm.training.discard.title"),
+    description: t("qcm.training.discard.description"),
+    confirmLabel: t("qcm.training.discard.confirm"),
+    tone: "danger",
+    dismissOnOverlay: false,
+  });
+  useUnsavedChangesGuard(editingDirty, confirmDiscard);
+  const cancelEditing = async () => {
+    if (loading || (editingDirty && !(await confirmDiscard()))) return;
+    setEditingExampleId("");
+  };
   const loadSequence = useRef(0);
   const retryCandidates = useRef<(() => void) | null>(null);
   const { abortAll, run: runScopedRequest } = useRequestScope();
@@ -160,6 +176,7 @@ export function QuestionClassifierModelsPage() {
   }, [classifierTrainingData, trainingSearch]);
 
   const load = async (announce = false) => {
+    if (loading) return;
     const sequence = loadSequence.current + 1;
     loadSequence.current = sequence;
     setLoading("load");
@@ -207,6 +224,7 @@ export function QuestionClassifierModelsPage() {
   }, []);
 
   const refreshTrainingData = async (announce = false) => {
+    if (loading) return;
     setLoading("training-load");
     setMessage("");
     try {
@@ -287,6 +305,7 @@ export function QuestionClassifierModelsPage() {
   };
 
   const importSelectedCandidates = async () => {
+    if (loading) return;
     const selected = candidates?.items.filter((item) => selectedCandidates.has(item.history_id)) ?? [];
     if (selected.length === 0) return;
     const ok = await confirm({
@@ -324,6 +343,8 @@ export function QuestionClassifierModelsPage() {
   };
 
   const importClassifierTraining = async (file: File) => {
+    if (loading) return;
+    if (editingDirty && !(await confirmDiscard())) return;
     setTrainingFilename(file.name);
     if (classifierReplace) {
       const currentCount = classifierTrainingData?.total_examples ?? 0;
@@ -346,6 +367,7 @@ export function QuestionClassifierModelsPage() {
     try {
       const data = await uploadClassifierTrainingFile(file, classifierReplace);
       setClassifierImport(data);
+      setEditingExampleId("");
       setClassifierStatus(await apiGet<ClassifierStatusData>("/api/nl2sql/classifier"));
       setClassifierTrainingData(await apiGet<ClassifierTrainingDataData>("/api/nl2sql/classifier/training-data"));
       toast.success(t("learning.classifier.imported", { count: data.imported_count }));
@@ -357,6 +379,7 @@ export function QuestionClassifierModelsPage() {
   };
 
   const trainClassifier = async () => {
+    if (loading) return;
     setLoading("classifier-train");
     setMessage("");
     const previousVersion = classifierStatus?.classifier_version ?? "";
@@ -406,13 +429,16 @@ export function QuestionClassifierModelsPage() {
     }
   };
 
-  const startEditingExample = (example: ClassifierTrainingExample) => {
+  const startEditingExample = async (example: ClassifierTrainingExample) => {
+    if (loading || (editingDirty && !(await confirmDiscard()))) return;
+    setEditingBaseline(JSON.stringify([example.text, example.profile_id]));
     setEditingExampleId(example.id);
     setEditingText(example.text);
     setEditingProfileId(example.profile_id);
   };
 
   const saveTrainingExample = async () => {
+    if (loading) return;
     if (!editingExampleId || !editingText.trim() || !editingProfileId) return;
     setLoading(`training-save-${editingExampleId}`);
     setMessage("");
@@ -437,6 +463,7 @@ export function QuestionClassifierModelsPage() {
   };
 
   const deleteTrainingExample = async (example: ClassifierTrainingExample) => {
+    if (loading) return;
     const ok = await confirm({
       title: t("qcm.training.deleteTitle"),
       description: t("qcm.training.deleteDescription"),
@@ -499,10 +526,12 @@ export function QuestionClassifierModelsPage() {
             icon: RefreshCw,
             onClick: () => load(true),
             loading: loading === "load",
+            disabled: Boolean(loading),
           },
         ]}
       />
-      <main className="grid gap-4 p-4 lg:p-8">
+      <main className="p-4 lg:p-8">
+        <fieldset disabled={Boolean(loading)} className="m-0 grid min-w-0 gap-4 border-0 p-0">
         <PageNotice
           notice={message ? { tone: "danger", message } : null}
           action={
@@ -568,7 +597,7 @@ export function QuestionClassifierModelsPage() {
               onStartEdit={startEditingExample}
               onEditTextChange={setEditingText}
               onEditProfileChange={setEditingProfileId}
-              onCancelEdit={() => setEditingExampleId("")}
+              onCancelEdit={() => void cancelEditing()}
               onSaveEdit={() => void saveTrainingExample()}
               onDelete={(example) => void deleteTrainingExample(example)}
             />
@@ -647,6 +676,7 @@ export function QuestionClassifierModelsPage() {
             />
           </DbObjectManagementPanelShell>
         )}
+        </fieldset>
       </main>
 
     </>
