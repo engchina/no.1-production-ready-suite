@@ -4557,6 +4557,7 @@ class OntologyBuildService:
             schema_fingerprint=ontology.revision.schema_fingerprint,
             source_revision_id=draft_ontology.revision.id,
             sources=definition_sources,
+            schema_context_fingerprint=context_fingerprint,
             profile_fingerprint=job.profile_fingerprint,
             requires_revalidation=(
                 job.profile_fingerprint

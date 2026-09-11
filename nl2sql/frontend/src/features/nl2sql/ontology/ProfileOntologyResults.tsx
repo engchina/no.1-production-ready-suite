@@ -1,5 +1,7 @@
 import type { OntologyBuildJob } from "./types";
-import { useState } from "react";
+import { useEffect } from "react";
+import { useWorkspaceState } from "@/components/WorkspaceState";
+import { OntologyDefinitionWorkspace } from "./OntologyDefinitionWorkspace";
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { FormStatus } from "@/components/ui/form-status";
@@ -32,6 +34,8 @@ export interface ProfileOntologyBundle {
   findings: { code: string; message_ja: string; definition_id: string; severity: string }[];
   conflicts: { definition_id: string; current: BusinessDefinition; proposed: BusinessDefinition }[];
   requires_revalidation?: boolean;
+  notes_ja?: string;
+  validation_report?: Record<string, unknown>;
 }
 
 export function useProfileOntologyResults(profileId: string, buildId?: string) {
@@ -60,11 +64,14 @@ function fieldLabel(field: string) {
   return translated === key ? field : translated;
 }
 
-export function ProfileOntologyResults({ profileId, buildId, phases }: { profileId: string; buildId?: string; phases?: OntologyBuildJob["definition_phases"] }) {
+export function ProfileOntologyResults({ profileId, buildId, phases, onTypedResult }: { profileId: string; buildId?: string; phases?: OntologyBuildJob["definition_phases"]; onTypedResult?: (hasDefinitions: boolean) => void }) {
   const query = useProfileOntologyResults(profileId, buildId);
-  const [kind, setKind] = useState<ConceptKind>("object_type");
-  const [search, setSearch] = useState("");
-  const bundle = query.data?.results[0];
+  const [kind, setKind] = useWorkspaceState<ConceptKind>(`ontology-v2:${profileId}:kind`, "object_type");
+  const [search, setSearch] = useWorkspaceState(`ontology-v2:${profileId}:search`, "");
+  const [selectedId, setSelectedId] = useWorkspaceState(`ontology-v2:${profileId}:selected`, "");
+  const bundle = selectedId ? query.data?.results.find(result => result.id === selectedId) : query.data?.results[0];
+  const [expandedIds, setExpandedIds] = useWorkspaceState<string[]>(`ontology-v2:${profileId}:${bundle?.id ?? ""}:expanded`, []);
+  useEffect(() => { onTypedResult?.(!!query.data?.results[0]?.definitions.length); }, [query.data, onTypedResult]);
   const items = bundle?.definitions.filter(item => item.kind === kind && `${item.name_ja} ${item.api_name} ${item.description_ja}`.toLowerCase().includes(search.toLowerCase())) ?? [];
   return <section className="grid min-w-0 gap-3 rounded-md border border-border bg-background p-3" aria-label={t("ontologyResults.title")} data-testid="ontology-typed-results">
     <div className="flex flex-wrap items-center justify-between gap-2">
@@ -72,6 +79,8 @@ export function ProfileOntologyResults({ profileId, buildId, phases }: { profile
       <Button variant="secondary" size="sm" onClick={() => void query.refetch()} disabled={query.isFetching}>{t("ontologyResults.refresh")}</Button>
     </div>
     {phases?.length ? <ol className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3" aria-label={t("ontologyResults.phases.title")}>{phases.map((phase, index) => <li key={phase.name} className="rounded border border-border p-2 text-sm"><span className="font-medium">{index + 1}. {t(`ontologyResults.phase.${phase.name}`)}</span><p>{t(`ontologyResults.phaseStatus.${phase.status}`)}</p>{phase.detail_ja ? <p className="text-muted">{phase.detail_ja}</p> : null}</li>)}</ol> : null}
+    {query.data?.results.length ? <label className="grid gap-1 text-sm">{t("ontologyResults.selectVersion")}<select className="min-w-0 w-full rounded border border-border bg-background p-2" value={selectedId} onChange={event => setSelectedId(event.target.value)}><option value="">{t("ontologyResults.latestVersion")}</option>{query.data.results.map(result => <option key={result.id} value={result.id}>{new Date(result.created_at).toLocaleString("ja-JP")} · {result.id}</option>)}</select></label> : null}
+    {selectedId && query.data && !bundle ? <FormStatus tone="warning" message={t("ontologyResults.versionMissing")} /> : null}
     {query.isPending ? <p role="status">{t("ontologyResults.loading")}</p> : null}
     {query.isError ? <FormStatus tone="danger" message={t("ontologyResults.error")} /> : null}
     {!query.isPending && !query.isError && !bundle ? <p>{t("ontologyResults.empty")}</p> : null}
@@ -80,12 +89,13 @@ export function ProfileOntologyResults({ profileId, buildId, phases }: { profile
       {bundle.conflicts.length ? <details className="rounded border border-border p-3"><summary>{t("ontologyResults.conflicts")} ({bundle.conflicts.length})</summary>{bundle.conflicts.map((conflict, i) => <div key={i} className="mt-2 grid min-w-0 gap-2 sm:grid-cols-2"><div className="min-w-0"><h4>{t("ontologyResults.current")}</h4><DefinitionValue value={conflict.current} /></div><div className="min-w-0"><h4>{t("ontologyResults.proposed")}</h4><DefinitionValue value={conflict.proposed} /></div></div>)}</details> : null}
       <details><summary>{t("ontologyResults.history")} ({query.data?.results.length})</summary><ul className="text-sm">{query.data?.results.map(result => <li key={result.id} className="break-all">{new Date(result.created_at).toLocaleString("ja-JP")} · {result.id} · {t(`ontologyResults.status.${result.status}`)}</li>)}</ul></details>
       <p className="text-sm text-muted">{t(`ontologyResults.status.${bundle.status}`)} · {new Date(bundle.created_at).toLocaleString("ja-JP")}</p>
+      <OntologyDefinitionWorkspace key={bundle.id} bundle={bundle} profileId={profileId} onChanged={query.refetch}>
       <div className="flex flex-wrap gap-2" role="group" aria-label={t("ontologyResults.categories")}>
         {conceptKinds.map(item => <Button className="h-auto min-h-11 w-full whitespace-normal py-2 sm:w-auto [&>span]:whitespace-normal [&>span]:text-clip" key={item} variant={kind === item ? "primary" : "secondary"} size="sm" aria-pressed={kind === item} onClick={() => setKind(item)}><span>{kindLabel(item)} ({bundle.coverage.find(c => c.kind === item)?.count ?? 0})</span></Button>)}
       </div>
       <label className="grid gap-1 text-sm">{t("ontologyResults.search")}<input value={search} onChange={event => setSearch(event.target.value)} className="w-full rounded-md border border-border bg-background p-2" /></label>
       {!items.length ? <p>{bundle.coverage.find(item => item.kind === kind)?.reason_ja || t("ontologyResults.noMatch")}</p> : null}
-      {items.map(item => <details key={item.id} data-testid="ontology-definition-detail" className="min-w-0 rounded-md border border-border p-3">
+      {items.map(item => <details key={item.id} open={expandedIds.includes(item.id)} onToggle={event => { const open = event.currentTarget.open; setExpandedIds(ids => open ? ids.includes(item.id) ? ids : [...ids, item.id] : ids.filter(id => id !== item.id)); }} data-testid="ontology-definition-detail" className="min-w-0 rounded-md border border-border p-3">
         <summary className="cursor-pointer break-words font-medium">{item.name_ja} ({item.api_name})</summary>
         <div className="mt-3 grid min-w-0 gap-3 text-sm">
           <p>{item.description_ja}</p>
@@ -102,6 +112,7 @@ export function ProfileOntologyResults({ profileId, buildId, phases }: { profile
           <p className="text-muted">{t("ontologyResults.staticOnly")}</p>
         </div>
       </details>)}
+      </OntologyDefinitionWorkspace>
     </> : null}
   </section>;
 }

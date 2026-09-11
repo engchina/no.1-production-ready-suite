@@ -120,7 +120,10 @@ class JoinType(StrEnum):
 
 
 class OntologyRevision(OntologyContract):
-    """共有 Ontology の不変 revision header。"""
+    """Ontology の不変 revision header。空の所有者は旧共有版。"""
+
+    profile_id: str = ""
+    format_version: int = 1
 
     id: str = Field(min_length=1)
     version: int = Field(ge=1)

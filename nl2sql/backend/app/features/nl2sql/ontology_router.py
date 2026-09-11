@@ -1497,6 +1497,18 @@ class OntologyApiRuntime:
         semantic_metadata: Mapping[str, Any] | None = None,
     ) -> SchemaOntology:
         with self._lock:
+            # 新形式の候補を旧 Markdown/global 公開入口でレビュー迂回させない。
+            for document in self.store.list_documents(
+                "artifacts", {"artifact_type": "profile_ontology_bundle_v2"}
+            ):
+                definition_bundle = json.loads(document["content"])
+                if definition_bundle.get(
+                    "source_revision_id"
+                ) == revision_id and definition_bundle.get("definitions"):
+                    raise OntologyGateBlockedError(
+                        "TYPED_REVIEW_REQUIRED",
+                        "型付き作業領域でこの版をレビュー・公開してください。",
+                    )
             ontology = self.validate_ontology_for_publish(revision_id, etag=request.etag)
             self._load_revision_headers(force=True)
             refreshed = self._load_ontology_revision(revision_id)
@@ -6250,3 +6262,8 @@ def get_profile_ontology_result(
         return ApiResponse(data=result)
     except Exception as exc:
         _raise_domain_error(exc)
+
+
+from .ontology_workspace_router import create_workspace_router  # noqa: E402
+
+router.include_router(create_workspace_router(lambda: ontology_runtime, _raise_domain_error))

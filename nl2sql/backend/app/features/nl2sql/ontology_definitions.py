@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -282,3 +282,50 @@ class ProfileOntologyBundle(DefinitionContract):
     notes_ja: str = ""
     sources: list[DefinitionSource] = Field(default_factory=list)
     requires_revalidation: bool = False
+    schema_context_fingerprint: str = ""
+    validation_report: dict[str, Any] = Field(default_factory=dict)
+    review_records: list[dict[str, str]] = Field(default_factory=list)
+
+
+class DefinitionEditRequest(DefinitionContract):
+    definitions: list[BusinessDefinition]
+
+
+class DefinitionNotesRequest(DefinitionContract):
+    notes_ja: str = Field(max_length=50000)
+
+
+class DefinitionReviewRequest(DefinitionContract):
+    definition_ids: list[str]
+    confirmed: Literal[True]
+
+
+class DefinitionPublishRequest(DefinitionContract):
+    expected_head: str
+    confirmed: Literal[True]
+
+
+class DefinitionAnalyzeRequest(DefinitionContract):
+    instruction_ja: str = Field(min_length=1, max_length=12000)
+
+
+class DefinitionApplyRequest(DefinitionContract):
+    confirmed: Literal[True]
+
+
+class DefinitionResolveRequest(DefinitionContract):
+    choice: Literal["current", "proposed"]
+
+
+class DefinitionAcceptanceCase(DefinitionContract):
+    question_ja: str = Field(min_length=1, max_length=2000)
+    expected_concepts: list[str] = Field(default_factory=list)
+    expected_path: list[str] = Field(default_factory=list)
+    sql: str = Field(default="", max_length=12000)
+    expected_rows: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class DefinitionDataValidationRequest(DefinitionContract):
+    confirmed: Literal[True]
+    sample_limit: int = Field(default=50, ge=1, le=200)
+    acceptance_cases: list[DefinitionAcceptanceCase] = Field(default_factory=list, max_length=30)

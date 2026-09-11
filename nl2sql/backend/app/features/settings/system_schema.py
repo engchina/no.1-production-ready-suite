@@ -127,6 +127,9 @@ MIGRATIONS: tuple[MigrationArtifact, ...] = (
         "case-insensitive unique NL2SQL profile names",
     ),
     MigrationArtifact(19, "019_synthetic_runs.sql", "durable synthetic data runs"),
+    MigrationArtifact(
+        21, "021_profile_ontology_revisions.sql", "profile-owned ontology publication"
+    ),
 )
 
 # DROP 対象は必ずこの manifest に明記する。NL2SQL_* の prefix scan は使用しない。

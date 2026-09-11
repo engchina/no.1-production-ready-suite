@@ -551,6 +551,7 @@ export function OntologyBuildSection({
   onRefreshSchema,
   refreshingSchema = false,
 }: OntologyBuildSectionProps) {
+  const [hasTypedResult, setHasTypedResult] = useState(false);
   const [businessText, setBusinessText] = useState("");
   const [qaFile, setQaFile] = useState<File | null>(null);
   const [sourceFiles, setSourceFiles] = useState<File[]>([]);
@@ -1516,13 +1517,13 @@ export function OntologyBuildSection({
 
       <section
         className="grid w-full min-w-0 content-start gap-4 rounded-md border border-border bg-background p-3"
-        aria-label={t("profiles.ontologyBuild.reviewTitle")}
+        aria-label={t(hasTypedResult ? "ontologyWorkspace.workTitle" : "profiles.ontologyBuild.reviewTitle")}
         data-testid="ontology-build-review-panel"
       >
         <DbObjectPanelHeader
           icon={FileText}
-          title={t("profiles.ontologyBuild.reviewTitle")}
-          description={t("profiles.ontologyBuild.reviewHint")}
+          title={t(hasTypedResult ? "ontologyWorkspace.workTitle" : "profiles.ontologyBuild.reviewTitle")}
+          description={t(hasTypedResult ? "ontologyWorkspace.canonical" : "profiles.ontologyBuild.reviewHint")}
         />
       {!job && busy === "start" ? (
         <TimedLoadingState
@@ -1741,12 +1742,13 @@ export function OntologyBuildSection({
         />
       ) : null}
 
-      <ProfileOntologyResults key={profileId} profileId={profileId} buildId={job?.result_bundle_id} phases={job?.definition_phases} />
+      <ProfileOntologyResults key={profileId} profileId={profileId} buildId={job?.result_bundle_id} phases={job?.definition_phases} onTypedResult={setHasTypedResult} />
 
       <section
         className="grid min-w-0 gap-3 rounded-md border border-border bg-background p-3"
         aria-label={t("profiles.ontologyBuild.markdownTitle")}
         data-testid="ontology-build-markdown"
+        style={hasTypedResult ? { display: "none" } : undefined}
       >
         <ContentActionBar
           ariaLabel={t("profiles.ontologyBuild.markdownActions")}

@@ -327,6 +327,7 @@ function buildJob(status: string, stepStatus: string, proposalIds: string[] = []
       ],
       events,
       proposal_ids: proposalIds,
+      result_bundle_id: status === "succeeded" ? "bundle-default" : "",
       draft_revision_id: status === "succeeded" ? "revision-draft-4" : "",
       draft_etag: status === "succeeded" ? "markdown-etag-1" : "",
       markdown_output: status === "succeeded" ? generatedDraftMarkdown : "",
@@ -373,6 +374,7 @@ const proposalsPending = [
 ];
 
 async function mockApi(page: Page) {
+  await page.route("**/api/nl2sql/profiles/*/ontology-results/*/workspace", route => fulfillJson(route, { bundle: typedBundle("default"), artifacts: { markdown: "# 型付き定義", mermaid: "graph LR" }, head: { release_id: "", etag: "" } }));
   await page.route("**/api/nl2sql/profiles/*/ontology-results", route => fulfillJson(route, { results: [] }));
   const state = {
     jobPolls: 0,
@@ -2605,6 +2607,7 @@ test("型付き構築結果の六概念を日英併記で閲覧し、検索・�
   await page.goto("/ontology-build?profile=default");
   await loadOntologyBuildWorkspace(page);
   const panel = page.getByTestId("ontology-typed-results");
+  await panel.getByRole("tab", { name: "モデル（Model）", exact: true }).click();
   await expect(panel.getByRole("heading", { name: "構築結果（Build Results）" })).toBeVisible();
   for (const label of ["オブジェクト型（Object Type）", "プロパティ（Property）", "リンク型（Link Type）", "関数（Function）", "アクション型（Action Type）", "インターフェース（Interface）"]) {
     const button = panel.getByRole("button", { name: `${label} (1)`, exact: true });
@@ -2641,9 +2644,11 @@ test("型付き結果の取得失敗は再試行でき、Profile 切替で前の
   await expect(panel.getByRole("alert")).toBeVisible();
   failed = false;
   await panel.getByRole("button", { name: "最新情報を取得（Refresh）" }).click();
+  await panel.getByRole("tab", { name: "モデル（Model）", exact: true }).click();
   await expect(panel.getByTestId("ontology-definition-detail").locator("summary")).toContainText("salesの定義");
   await page.getByTestId("ontology-build-profile-select").selectOption("finance");
   await loadOntologyBuildWorkspace(page);
+  await panel.getByRole("tab", { name: "モデル（Model）", exact: true }).click();
   await expect(panel.getByTestId("ontology-definition-detail").locator("summary")).toContainText("financeの定義");
   await expect(panel.getByText("salesの定義", { exact: false })).toHaveCount(0);
 });
@@ -2660,8 +2665,68 @@ test("型付き構築の証拠・競合・再検証状態を確認できる", as
   await panel.getByText("競合する変更（Conflicting Changes） (1)", { exact: true }).click();
   await expect(panel.getByText("AI の変更案", { exact: true })).toBeVisible();
   await panel.getByText("競合する変更（Conflicting Changes） (1)", { exact: true }).click();
+  await panel.getByRole("tab", { name: "モデル（Model）", exact: true }).click();
   await panel.getByTestId("ontology-definition-detail").locator("summary").filter({ hasText: "defaultの定義" }).click();
   await expect(panel.getByText("受注は顧客に属します。", { exact: true }).last()).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await panel.screenshot({ path: testInfo.outputPath("ontology-evidence-conflicts.png") });
+});
+
+test("型付き AI 構築から変更解析・独立レビュー・検証・Profile 公開へ進める", async ({ page }, testInfo) => {
+  const state = await mockApi(page);
+  let bundle = { ...typedBundle("default"), notes_ja: "", validation_report: {} as Record<string, unknown> };
+  let head = "";
+  let publishCount = 0;
+  await page.route("**/api/nl2sql/profiles/default/ontology-results", route => fulfillJson(route, { results: state.jobPolls >= 2 ? [bundle] : [] }));
+  await page.route("**/api/nl2sql/profiles/default/ontology-results/bundle-default/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/workspace")) return fulfillJson(route, { bundle, artifacts: { markdown: "# default の業務定義", mermaid: "graph LR", manifest: "同じ版の hash", graph_json: JSON.stringify({ version_id: bundle.id, nodes: bundle.definitions.map(d => ({ id: d.id, name_ja: d.name_ja, kind: d.kind })), edges: [] }) }, head: { release_id: head, etag: "head-etag" } });
+    expect(route.request().headers()["if-match"]).toBe(`"${bundle.etag}"`);
+    if (path.endsWith("/analyze")) return fulfillJson(route, { id: "change-1", base_etag: bundle.etag, before: bundle.definitions, after: [{ ...bundle.definitions[0], name_ja: "顧客契約" }] });
+    if (path.endsWith("/apply")) bundle = { ...bundle, etag: `${bundle.etag}-edit`, definitions: bundle.definitions.map((d, i) => i ? d : { ...d, name_ja: "顧客契約" }) };
+    if (path.endsWith("/review")) bundle = { ...bundle, etag: `${bundle.etag}-review`, definitions: bundle.definitions.map(d => ({ ...d, review_status: "reviewed" })) };
+    if (path.endsWith("/validate")) bundle = { ...bundle, etag: `${bundle.etag}-validate`, validation_report: { errors: 0, kind: "static", instance_count: 0, instance_status: "not_run" } };
+    if (path.endsWith("/publish")) { expect(route.request().postDataJSON().confirmed).toBe(true); expect(route.request().headers()["idempotency-key"]).toBeTruthy(); publishCount++; head = "release-default"; bundle = { ...bundle, status: "published", etag: "published-etag" }; }
+    return fulfillJson(route, bundle);
+  });
+  await page.goto("/ontology-build?profile=default");
+  await loadOntologyBuildWorkspace(page);
+  await page.getByLabel("業務説明(自然言語)").fill("資料の定義と契約を抽出してください。");
+  await page.getByRole("button", { name: "AI 構築を実行", exact: true }).click();
+  const panel = page.getByTestId("ontology-typed-results");
+  await expect(panel.getByRole("tab", { name: "概要（Overview）", exact: true })).toBeVisible();
+  await expect(page.getByTestId("ontology-build-markdown")).toBeHidden();
+  await panel.getByRole("tab", { name: "レビュー・公開（Review & Publish）", exact: true }).click();
+  const publish = panel.getByRole("button", { name: "この版を公開（Publish Version）", exact: true });
+  await expect(publish).toBeDisabled();
+  await panel.getByLabel("変更したい業務説明（Change Request）").fill("顧客契約という業務名に変更する。");
+  await panel.getByRole("button", { name: "変更を解析（Analyze Changes）", exact: true }).click();
+  await expect(panel.getByText(/顧客契約/).last()).toBeVisible();
+  expect(bundle.definitions[0].name_ja).toBe("defaultの定義");
+  await panel.getByRole("button", { name: "変更を適用（Apply Changes）", exact: true }).click();
+  await page.getByRole("button", { name: "確認して実行（Confirm）", exact: true }).click();
+  await expect.poll(() => bundle.definitions[0].name_ja).toBe("顧客契約");
+  await panel.getByRole("button", { name: "定義をレビュー済みにする（Review Definitions）", exact: true }).click();
+  await page.getByRole("button", { name: "確認して実行（Confirm）", exact: true }).click();
+  await panel.getByRole("button", { name: "定義を検証（Validate Definitions）", exact: true }).click();
+  await expect(publish).toBeEnabled();
+  await page.reload();
+  await loadOntologyBuildWorkspace(page);
+  await expect(panel.getByRole("tab", { name: "レビュー・公開（Review & Publish）", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(panel.getByLabel("変更したい業務説明（Change Request）")).toHaveValue("顧客契約という業務名に変更する。");
+  expect(publishCount).toBe(0);
+  await publish.press("Enter");
+  await page.getByRole("button", { name: "確認して実行（Confirm）", exact: true }).click();
+  await expect.poll(() => publishCount).toBe(1);
+  await expect(publish).toBeDisabled();
+  await panel.getByRole("tab", { name: "概要（Overview）", exact: true }).click();
+  await expect(panel.getByText(/release-default/)).toBeVisible();
+  await expect(panel.getByRole("region", { name: "同一版の概念グラフ（Concept Graph）", exact: true })).toBeVisible();
+  await panel.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("ontology-profile-published.png") });
+  for (const tab of await panel.getByRole("tab").all()) {
+    const bounds = await tab.boundingBox();
+    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
+  }
+  await page.screenshot({ path: testInfo.outputPath("ontology-profile-published.png") });
 });

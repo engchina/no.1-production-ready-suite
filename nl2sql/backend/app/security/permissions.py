@@ -624,6 +624,20 @@ def permission_for_route(method: str, route_path: str) -> frozenset[str] | None:
         return _allowed(PROFILE_READ_PERMISSION)
     if "/learning-material/" in route_path and route_path.startswith("/nl2sql/profiles/"):
         return _allowed(PROFILE_MANAGE_PERMISSION, LEARNING_MATERIAL_MANAGE_PERMISSION)
+    if route_path.startswith("/nl2sql/profiles/") and any(
+        part in route_path
+        for part in (
+            "/ontology-results",
+            "/ontology-published",
+            "/ontology-releases",
+            "/ontology-validation-jobs",
+        )
+    ):
+        if method == "GET":
+            return _allowed(
+                "menu.ontology_build", PROFILE_READ_PERMISSION, QUERY_GENERATE_PERMISSION
+            )
+        return _allowed("menu.ontology_build", PROFILE_MANAGE_PERMISSION)
     if route_path.startswith("/nl2sql/profiles"):
         return _allowed(PROFILE_MANAGE_PERMISSION)
     if route_path.startswith("/nl2sql/legacy-learning-material"):

@@ -289,7 +289,11 @@ _SPECS: dict[OntologyCollection, _CollectionSpec] = {
     "revisions": _CollectionSpec(
         "NL2SQL_ONTOLOGY_REVISIONS",
         ("revision_id",),
-        {"status": "STATUS", "schema_fingerprint": "SCHEMA_FINGERPRINT"},
+        {
+            "status": "STATUS",
+            "schema_fingerprint": "SCHEMA_FINGERPRINT",
+            "profile_id": "PROFILE_ID",
+        },
     ),
     "nodes": _CollectionSpec(
         "NL2SQL_ONTOLOGY_NODES",
@@ -387,6 +391,7 @@ ONTOLOGY_TABLE_DDL: dict[OntologyCollection, str] = {
     "revisions": """
         CREATE TABLE NL2SQL_ONTOLOGY_REVISIONS (
             REVISION_ID VARCHAR2(128) PRIMARY KEY,
+            PROFILE_ID VARCHAR2(128),
             STATUS VARCHAR2(32) NOT NULL,
             SCHEMA_FINGERPRINT VARCHAR2(64) NOT NULL,
             VERSION_NO NUMBER(19) NOT NULL,
@@ -557,7 +562,7 @@ ONTOLOGY_INDEX_DDL: tuple[str, ...] = (
     "CREATE INDEX IX_NL2SQL_ONT_REC_QUESTION ON NL2SQL_ONTOLOGY_RECOMMENDATIONS "
     "(QUESTION_HASH, STATUS)",
     "CREATE UNIQUE INDEX UX_NL2SQL_ONT_ONE_PUBLISHED ON NL2SQL_ONTOLOGY_REVISIONS "
-    "(CASE WHEN STATUS = 'published' THEN 1 END)",
+    "(CASE WHEN STATUS = 'published' THEN NVL(PROFILE_ID, '__legacy__') END)",
 )
 
 ONTOLOGY_DDL_STATEMENTS: tuple[str, ...] = (

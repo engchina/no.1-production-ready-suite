@@ -73,6 +73,10 @@ class OntologyWorker:
             self.build_service.run_persisted(job_id)
         elif job_type == "publish":
             self.publish_service.run_persisted(job_id)
+        elif job_type == "definition_validation":
+            from .ontology_definition_data_validation import run_validation_job
+
+            run_validation_job(self.runtime, job_id)
         elif job_type == "profile_sync" and self.profile_sync_service is not None:
             self.profile_sync_service.run_persisted(job_id)
         else:

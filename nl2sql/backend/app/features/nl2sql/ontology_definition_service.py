@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from typing import Any
 
 from .ontology_definitions import (
@@ -64,6 +65,7 @@ class ProfileOntologyDefinitionService:
         sources: list[DefinitionSource] | None = None,
         profile_fingerprint: str = "",
         requires_revalidation: bool = False,
+        schema_context_fingerprint: str = "",
     ) -> ProfileOntologyBundle:
         session = self._session(profile_id)
         bundle_id = stable_ontology_id("profile_ontology_bundle", profile_id, job_id)
@@ -161,6 +163,7 @@ class ProfileOntologyDefinitionService:
             or definition_fingerprint(profile.model_dump(mode="json")),
             sources=sources or [],
             requires_revalidation=requires_revalidation,
+            schema_context_fingerprint=schema_context_fingerprint,
             source_revision_id=source_revision_id,
             parent_id=prior.id if prior else "",
             definitions=list(normalized.values()),
@@ -170,6 +173,32 @@ class ProfileOntologyDefinitionService:
         from .ontology_definition_quality import inspect_definition_quality
 
         bundle.findings = inspect_definition_quality(bundle.definitions, bundle.sources)
+        if schema_context_fingerprint:
+            from datetime import UTC, datetime
+
+            from .ontology_definition_validation import validate_definitions
+
+            schema = json.loads(
+                str(self.runtime.prepare_build_schema_context(profile_id).schema_context)
+            )
+            bundle.findings = validate_definitions(bundle, schema)
+            bundle.validation_report = {
+                "checked_at": datetime.now(UTC).isoformat(),
+                "kind": "static",
+                "definition_count": len(bundle.definitions),
+                "definition_hash": definition_fingerprint(
+                    [
+                        d.model_dump(mode="json", exclude={"review_status"})
+                        for d in bundle.definitions
+                    ]
+                ),
+                "target_nodes": [d.id for d in bundle.definitions if d.kind == "object_type"],
+                "instance_count": 0,
+                "instance_coverage": 0,
+                "instance_status": "not_run",
+                "message_ja": "定義のみを検証しました。データインスタンスは未検証です。",
+                "errors": sum(f.severity == "error" for f in bundle.findings),
+            }
         bundle.etag = definition_fingerprint(bundle.model_dump(mode="json", exclude={"etag"}))
         self.store.save_artifact(
             {
