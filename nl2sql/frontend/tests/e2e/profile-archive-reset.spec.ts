@@ -344,9 +344,10 @@ test("URL 深リンクでエディタを直接開ける", async ({ page }) => {
   await expect(page.getByLabel("名称")).toHaveValue("");
 
   await page.goto("/profiles?profile=missing");
-  await expect(
-    page.locator("#profile-management-panel-list").getByRole("heading", { name: "プロファイル" })
-  ).toBeVisible();
+  await expect(page.getByText("指定された profile が見つかりません。", { exact: true })).toBeVisible();
+  await expect(page).toHaveURL(/profile=missing/);
+  await page.getByRole("button", { name: "一覧に戻る", exact: true }).click();
+  await expect(page.locator("#profile-management-panel-list")).toBeVisible();
   await expect(page).not.toHaveURL(/profile=/);
 });
 

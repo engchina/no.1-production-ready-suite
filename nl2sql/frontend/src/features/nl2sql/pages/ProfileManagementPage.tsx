@@ -14,6 +14,7 @@ import {
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
+import { ErrorState } from "@/components/StateViews";
 import { FieldError } from "@/components/ui/field-error";
 import { Banner, EmptyState, toast } from "@engchina/production-ready-ui";
 
@@ -1657,12 +1658,7 @@ export function ProfileManagementPage() {
     }
   }, [oracleSyncJobQuery.data, queryClient, trackDbProfileRefreshSignal]);
 
-  // 無効な id(削除済み等)の deep link は一覧へ縮退
-  useEffect(() => {
-    if (selectedProfileId && profileDetailQuery.isError) {
-      setSearchParams({}, { replace: true });
-    }
-  }, [profileDetailQuery.isError, selectedProfileId, setSearchParams]);
+
 
   useEffect(() => {
     const error =
@@ -2247,6 +2243,11 @@ export function ProfileManagementPage() {
             >
               {selectedProfile || profileParam === "new" ? (
                 editor
+              ) : profileDetailQuery.isError ? (
+                <ErrorState
+                  message={profileDetailQuery.error instanceof Error ? profileDetailQuery.error.message : t("profiles.error.load")}
+                  onRetry={() => void profileDetailQuery.refetch()}
+                />
               ) : (
                 <div
                   className="grid gap-2"

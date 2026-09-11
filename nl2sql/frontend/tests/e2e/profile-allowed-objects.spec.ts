@@ -2605,3 +2605,25 @@ test("スキーマ一括選択中は保存と対象切替を固定する", async
   await expect(list.getByLabel("APP.TABLE_01")).toBeChecked();
   await expect(page.getByRole("button", { name: "保存", exact: true })).toBeEnabled();
 });
+
+test("プロファイル詳細取得失敗は選択 URL を保持し再試行できる", async ({ page }, testInfo) => {
+  await mockProfileApi(page);
+  let failed = true;
+  await page.route("**/api/nl2sql/profiles/default", async (route) => {
+    if (!failed) return route.fallback();
+    return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "プロファイル詳細テストエラー" }) });
+  });
+  await page.goto("/profiles?profile=default");
+  await expect(page.getByText("プロファイル詳細テストエラー", { exact: true })).toBeVisible({ timeout: 15000 });
+  await expect(page).toHaveURL(/profile=default/);
+  await expect(page.getByRole("button", { name: "保存", exact: true })).toHaveCount(0);
+  await page.screenshot({ path: testInfo.outputPath("profile-detail-retry.png") });
+  failed = false;
+  await page.getByRole("button", { name: "再試行", exact: true }).press("Enter");
+  await expect(page.locator("#profile-name")).toBeVisible();
+  await expect(page).toHaveURL(/profile=default/);
+  await page.route("**/api/nl2sql/profiles/missing", (route) => route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ detail: "not found" }) }));
+  await page.goto("/profiles?profile=missing");
+  await expect(page.getByText("指定された profile が見つかりません。", { exact: true })).toBeVisible({ timeout: 15000 });
+  await expect(page).toHaveURL(/profile=missing/);
+});
