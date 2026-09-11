@@ -4470,13 +4470,11 @@ test("参考履歴は件数を表示し、候補があれば自動で展開す�
       used_for_generation: true,
       engine: "enterprise_ai_direct",
       items: [0.9, 0.88, 0.86].map((score, index) => ({
-        item: {
-          ...historyItem,
-          id: `hist-direct-${index + 1}`,
-          question: `Direct 参考履歴 ${index + 1}`,
-          admin_feedback_rating: "good",
-          admin_feedback_content: "管理者確認済み",
-        },
+        history_id: `hist-direct-${index + 1}`,
+        question: `Direct 参考履歴 ${index + 1}`,
+        sql: historySql,
+        profile_id: historyItem.profile_id,
+        profile_name: historyItem.profile_name,
         score,
         reason: "請求金額の履歴と近い質問です。",
       })),
@@ -4532,42 +4530,118 @@ test("参考履歴は件数を表示し、候補があれば自動で展開す�
   jobsGate.release();
 });
 
-test("Select AI 系では参考履歴を few-shot に使わない注記を表示する", async ({ page }) => {
-  await mockNl2SqlApi(page);
-  let similarHistoryPayload: Record<string, unknown> | null = null;
-  await page.unroute("**/api/nl2sql/similar-history");
-  await page.route("**/api/nl2sql/similar-history", (route) => {
-    similarHistoryPayload = route.request().postDataJSON() as Record<string, unknown>;
-    return fulfillJson(route, {
-      used_for_generation: false,
-      engine: "select_ai",
-      items: [
-        {
-          item: { ...historyItem, admin_feedback_rating: "good", admin_feedback_content: "管理者確認済み" },
+for (const { engine, name } of [
+  { engine: "select_ai", name: /Select AI DBMS_CLOUD_AI profile/ },
+  { engine: "select_ai_agent", name: /Select AI Agent/ },
+]) {
+  test(`${engine} は参考履歴を表示・取得せず、Direct への切替で再開する`, async ({ page }, testInfo) => {
+    await mockNl2SqlApi(page);
+    const requests: Record<string, unknown>[] = [];
+    await page.unroute("**/api/nl2sql/similar-history");
+    await page.route("**/api/nl2sql/similar-history", (route) => {
+      requests.push(route.request().postDataJSON() as Record<string, unknown>);
+      return fulfillJson(route, {
+        used_for_generation: true,
+        engine: "enterprise_ai_direct",
+        items: [{
+          history_id: "hist-direct",
+          question: "請求金額の参考例",
+          sql: "SELECT 1 FROM DUAL",
+          profile_id: "default",
+          profile_name: "既定",
           score: 0.9,
-          reason: "Select AI では表示しない履歴です。",
-        },
-      ],
+          reason: "管理者確認済み",
+        }],
+      });
+    });
+
+    await page.goto("/query");
+    const engineButton = page.getByRole("button", { name });
+    await engineButton.focus();
+    await page.keyboard.press("Enter");
+    await expect(engineButton).toHaveAttribute("aria-pressed", "true");
+    const question = nl2sqlQuestionInput(page);
+    await question.fill("請求金額を一覧で見たい");
+    // debounce (650ms) を超えても送信されないことを確認する。
+    await page.waitForTimeout(900);
+    expect(requests).toEqual([]);
+    const header = page.getByRole("button", { name: /参考履歴/ });
+    await expect(header).toHaveCount(0);
+    await expect(page.getByTestId("nl2sql-similar-history")).toHaveCount(0);
+
+    await page.reload();
+    await expect(question).toHaveValue("請求金額を一覧で見たい");
+    await expect(engineButton).toHaveAttribute("aria-pressed", "true");
+    await page.waitForTimeout(900);
+    expect(requests).toEqual([]);
+    await expect(header).toHaveCount(0);
+
+    await page.getByRole("button", { name: /Enterprise AI Direct/ }).click();
+    await expect(header).toContainText("1 件");
+    await expect(header).toHaveAttribute("aria-expanded", "true");
+    await expect(page.getByTestId("nl2sql-similar-history-item")).toHaveCount(1);
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({ engine: "enterprise_ai_direct" });
+
+    await engineButton.click();
+    await expect(header).toHaveCount(0);
+    await question.fill("部署情報を一覧で見たい");
+    await page.waitForTimeout(900);
+    expect(requests).toHaveLength(1);
+    await expect(page.getByTestId("nl2sql-similar-history")).toHaveCount(0);
+    await expectNoHorizontalScroll(page);
+    await question.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath(`${engine}-without-similar-history.png`) });
+
+    await page.getByRole("button", { name: /Enterprise AI Direct/ }).click();
+    await expect.poll(() => requests.length).toBe(2);
+    await expect(header).toContainText("1 件");
+    expect(requests[1]).toMatchObject({
+      question: "部署情報を一覧で見たい",
+      engine: "enterprise_ai_direct",
     });
   });
 
-  await page.goto("/query");
-  await expect(page.getByRole("region", { name: "SQL 生成ワークスペース" })).toBeVisible();
-  await nl2sqlQuestionInput(page).fill("請求金額を一覧で見たい");
+  test(`${engine} への切替は参考履歴の debounce と進行中リクエストをキャンセルする`, async ({ page }) => {
+    await mockNl2SqlApi(page);
+    let requestCount = 0;
+    const gate = createRequestGate();
+    await page.unroute("**/api/nl2sql/similar-history");
+    await page.route("**/api/nl2sql/similar-history", async (route) => {
+      requestCount += 1;
+      await gate.promise;
+      return fulfillJson(route, { items: [], used_for_generation: true });
+    });
+    await page.goto("/query");
+    await expect(nl2sqlQuestionInput(page)).toBeVisible();
+    await page.clock.install();
+    await page.clock.pauseAt(new Date());
+    const direct = page.getByRole("button", { name: /Enterprise AI Direct/ });
+    const selectAi = page.getByRole("button", { name });
+    await direct.click();
+    await nl2sqlQuestionInput(page).fill("請求金額を一覧で見たい");
+    await selectAi.click();
+    await page.clock.runFor(900);
+    expect(requestCount).toBe(0);
 
-  await expect.poll(() => similarHistoryPayload).toMatchObject({
-    question: "請求金額を一覧で見たい",
-    profile_id: "default",
-    engine: "select_ai",
+    await direct.click();
+    await page.clock.runFor(900);
+    await expect.poll(() => requestCount).toBe(1);
+    const header = page.getByRole("button", { name: /参考履歴/ });
+    await expect(header).toContainText("参考履歴を検索中");
+    const failedRequest = page.waitForEvent("requestfailed", {
+      predicate: (request) => request.url().endsWith("/api/nl2sql/similar-history"),
+    });
+    await selectAi.click();
+    await failedRequest;
+    await expect(header).toHaveCount(0);
+    gate.release();
+    await page.clock.runFor(900);
+    expect(requestCount).toBe(1);
+    await expect(page.getByTestId("nl2sql-similar-history")).toHaveCount(0);
+    await expect(page.getByText("参考履歴を検索中")).toHaveCount(0);
   });
-  const header = page.getByRole("button", { name: /参考履歴/ });
-  await expect(header).toContainText("few-shot 不使用");
-
-  await header.click();
-  const panel = page.getByTestId("nl2sql-similar-history");
-  await expect(panel).toContainText("このエンジンでは参考履歴を few-shot として SQL 生成へ注入しません。");
-  await expect(panel.getByTestId("nl2sql-similar-history-item")).toHaveCount(0);
-});
+}
 
 test("参考履歴は API が空の場合も表示し、空状態を展開できる", async ({ page }) => {
   await mockNl2SqlApi(page);
@@ -4580,6 +4654,7 @@ test("参考履歴は API が空の場合も表示し、空状態を展開でき
 
   await page.goto("/query");
   await expect(page.getByRole("region", { name: "SQL 生成ワークスペース" })).toBeVisible();
+  await page.getByRole("button", { name: /Enterprise AI Direct/ }).click();
 
   await nl2sqlQuestionInput(page).fill('対象テーブル："PROJECT"\n抽出項目：PROJECT_ID\n抽出条件：');
 
@@ -4636,6 +4711,7 @@ test("参考履歴の「検索中」は SQL 生成の実行中に固まって残
 
   await page.goto("/query");
   await expect(page.getByRole("region", { name: "SQL 生成ワークスペース" })).toBeVisible();
+  await page.getByRole("button", { name: /Enterprise AI Direct/ }).click();
 
   await nl2sqlQuestionInput(page).fill("請求金額を一覧で見たい");
   const header = page.getByRole("button", { name: /参考履歴/ });
@@ -4653,6 +4729,38 @@ test("参考履歴の「検索中」は SQL 生成の実行中に固まって残
 
   similarGate.release();
   jobsGate.release();
+});
+
+test("参考履歴の取得失敗後も Select AI 系では取得せず、Direct に戻ると再取得する", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  const requests: string[] = [];
+  await page.unroute("**/api/nl2sql/similar-history");
+  await page.route("**/api/nl2sql/similar-history", (route) => {
+    requests.push(route.request().postDataJSON().engine as string);
+    if (requests.length === 1) {
+      return route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({ detail: "取得失敗" }),
+      });
+    }
+    return fulfillJson(route, { items: [] });
+  });
+  await page.goto("/query");
+  await page.getByRole("button", { name: /Enterprise AI Direct/ }).click();
+  await nl2sqlQuestionInput(page).fill("請求金額を一覧で見たい");
+  await expect.poll(() => requests.length).toBe(1);
+  const header = page.getByRole("button", { name: /参考履歴/ });
+  await expect(header).toHaveCount(0);
+  for (const name of [/Select AI DBMS_CLOUD_AI profile/, /Select AI Agent/]) {
+    await page.getByRole("button", { name }).click();
+    await page.waitForTimeout(900);
+    expect(requests).toEqual(["enterprise_ai_direct"]);
+    await expect(header).toHaveCount(0);
+  }
+  await page.getByRole("button", { name: /Enterprise AI Direct/ }).click();
+  await expect(header).toContainText("0 件");
+  expect(requests).toEqual(["enterprise_ai_direct", "enterprise_ai_direct"]);
 });
 
 test("参考履歴は管理者レビュー結果が良い履歴だけを表示する", async ({ page }) => {

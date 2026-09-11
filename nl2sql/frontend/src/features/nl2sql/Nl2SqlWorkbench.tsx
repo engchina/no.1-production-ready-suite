@@ -496,10 +496,11 @@ function ExecutableNl2SqlWorkbench() {
   const active = jobActive || detecting || guidedClarificationOpen;
   const actionBusy = submitting;
   const showSimilarHistoryPanel =
-    similarHistoryPanelVisible ||
-    similarHistoryLoading ||
-    similarHistorySearchCompleted ||
-    similarHistory.length > 0;
+    engineUsesSimilarHistoryFewShot(engine) &&
+    (similarHistoryPanelVisible ||
+      similarHistoryLoading ||
+      similarHistorySearchCompleted ||
+      similarHistory.length > 0);
   const beginActionFeedback = useCallback(() => {
     setActionError("");
     setActionOperationKey((current) => current + 1);
@@ -624,7 +625,7 @@ function ExecutableNl2SqlWorkbench() {
 
   useEffect(() => {
     const trimmed = question.trim();
-    if (trimmed.length < 4 || profiles.length === 0) {
+    if (!engineUsesSimilarHistoryFewShot(engine) || trimmed.length < 4 || profiles.length === 0) {
       setSimilarHistory([]);
       setSimilarHistorySearchCompleted(false);
       setSimilarHistoryPanelVisible(false);
