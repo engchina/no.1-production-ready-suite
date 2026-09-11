@@ -146,7 +146,10 @@ function ExecutableDirectSqlPage() {
             <textarea
               id="direct-sql-input"
               value={sqlText}
-              onChange={(event) => setSqlText(event.currentTarget.value)}
+              onChange={(event) => {
+                setSqlFileResetSignal((current) => current + 1);
+                setSqlText(event.currentTarget.value);
+              }}
               disabled={loading}
               rows={12}
               required

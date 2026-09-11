@@ -14987,3 +14987,23 @@ test("フィードバック保存成功と履歴再取得失敗を分離し送�
   await expect(comment).toHaveValue("保存するコメント");
   await expect(comment).toBeEnabled();
 });
+
+test("SELECT SQL の遅延ファイル読込は手入力を上書きしない", async ({ page }, testInfo) => {
+  const api = await mockNl2SqlApi(page);
+  await delayReviewFileReads(page);
+  await page.goto("/direct-sql");
+  const sql = directSqlInput(page);
+  const file = page.getByTestId("sql-file-input-input");
+  await file.setInputFiles({ name: "slow.sql", mimeType: "text/plain", buffer: Buffer.from("SELECT 2 FROM DUAL") });
+  await sql.fill("SELECT 3 FROM DUAL");
+  await releaseReviewFileRead(page);
+  await expect(sql).toHaveValue("SELECT 3 FROM DUAL");
+  await page.getByLabel("取得件数上限").fill("10");
+  await page.getByRole("button", { name: "SQL 実行", exact: true }).press("Enter");
+  await expect.poll(() => api.executePayload).toMatchObject({ sql: "SELECT 3 FROM DUAL", row_limit: 10 });
+  await expect(file).toBeEnabled();
+  await file.setInputFiles({ name: "new.sql", mimeType: "text/plain", buffer: Buffer.from("SELECT 4 FROM DUAL") });
+  await expect(sql).toHaveValue("SELECT 4 FROM DUAL");
+  await expectNoHorizontalScroll(page);
+  await page.screenshot({ path: testInfo.outputPath("direct-sql-file-edit.png") });
+});
