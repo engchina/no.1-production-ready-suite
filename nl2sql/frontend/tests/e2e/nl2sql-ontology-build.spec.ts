@@ -2538,3 +2538,42 @@ test("失効したProfile URLでは別Profileの情報を取得せず明示選�
   await expect(page.getByTestId("profile-ontology-build")).toBeVisible();
   expect(state.profileDetailCalls).toEqual(["default"]);
 });
+
+test("公開前の草稿保存中は編集と構築を固定し失敗後に草稿を保持する", async ({ page }, testInfo) => {
+  await mockApi(page);
+  await page.route("**/api/nl2sql/profiles/*/ontology-markdown", (route) => fulfillJson(route, markdownDraftPayload(generatedDraftMarkdown)));
+  await page.goto("/ontology-build?profile=default");
+  await loadOntologyBuildWorkspace(page);
+  const editor = page.getByTestId("ontology-markdown-draft-editor");
+  const draft = `${generatedDraftMarkdown}\n\n## 公開対象\n保存して公開する草稿`;
+  await editor.fill(draft);
+  let release: (() => void) | undefined;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let saves = 0;
+  let publishes = 0;
+  await page.route("**/api/nl2sql/profiles/*/ontology-markdown/draft", async (route) => {
+    saves += 1;
+    if (saves === 1) {
+      await gate;
+      return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "草稿保存テストエラー" }) });
+    }
+    return fulfillJson(route, markdownDraftPayload(draft, "markdown-etag-2"));
+  });
+  await page.route("**/api/nl2sql/ontology/revisions/*/publish", async (route) => { publishes += 1; await route.fallback(); });
+  const publish = page.getByRole("button", { name: "オントロジーを公開", exact: true });
+  await publish.click();
+  try {
+    await expect(editor).toBeDisabled();
+    await expect(page.getByRole("button", { name: "AI 構築を実行", exact: true })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Markdown 下書きを保存", exact: true })).toBeDisabled();
+  } finally { release?.(); }
+  await expect(page.getByText("草稿保存テストエラー", { exact: true })).toBeVisible();
+  await expect(editor).toBeEnabled();
+  await expect(editor).toHaveValue(draft);
+  expect(publishes).toBe(0);
+  await page.screenshot({ path: testInfo.outputPath("ontology-publish-save-recovery.png") });
+  await publish.press("Enter");
+  await expect.poll(() => publishes).toBe(1);
+  await expect(page.getByText("オントロジーを公開しました。", { exact: true })).toBeVisible();
+  expect(saves).toBe(2);
+});

@@ -1160,6 +1160,7 @@ export function OntologyBuildSection({
   }
 
   const startBuild = async () => {
+    if (busy || jobRunning || publishRunning) return;
     const targetProfileId = profileId;
     const hasBusinessTextInput = businessText.trim().length > 0;
     const hasSourceFilesInput = sourceFiles.length > 0;
@@ -1209,7 +1210,7 @@ export function OntologyBuildSection({
   /** failed/cancelled job を保存済み入力から再実行する(既存 retry API を利用)。 */
   const retryBuild = async () => {
     const targetJobId = jobId;
-    if (!targetJobId || busy) return;
+    if (!targetJobId || busy || publishRunning) return;
     setBusy("retry");
     try {
       const next = await retryOntologyBuildJob(targetJobId);
@@ -1299,6 +1300,7 @@ export function OntologyBuildSection({
   };
 
   const saveDraftMarkdown = async ({ silent = false }: { silent?: boolean } = {}) => {
+    if (!silent && (busy || publishRunning)) return null;
     const currentMarkdownState = markdownStateRef.current;
     const currentDraftRevision = draftRevisionRef.current;
     if (!profileId || !currentMarkdownState?.draft_etag || currentDraftRevision?.status !== "draft") {
@@ -1332,7 +1334,7 @@ export function OntologyBuildSection({
   };
 
   const publish = async () => {
-    if (!draftRevision || !canEditDraftRevision) return;
+    if (!draftRevision || !canEditDraftRevision || busy || publishRunning) return;
     setBusy("publish");
     clearNotice();
     try {
@@ -1498,7 +1500,7 @@ export function OntologyBuildSection({
             size="lg"
             className="w-full sm:w-auto"
             loading={busy === "start" || jobRunning}
-            disabled={busy === "start" || jobRunning}
+            disabled={busy !== "" || jobRunning || publishRunning}
             onClick={() => void startBuild()}
           >
             <UploadCloud size={15} aria-hidden="true" />
@@ -1863,7 +1865,7 @@ export function OntologyBuildSection({
                   spellCheck={false}
                   placeholder={t("profiles.ontologyBuild.markdownDraftPlaceholder")}
                   readOnly={!canEditDraftRevision}
-                  disabled={busy === "save-draft"}
+                  disabled={busy !== "" || publishRunning}
                   onChange={(event) => {
                     if (!canEditDraftRevision) return;
                     const nextDraftMarkdown = event.currentTarget.value;
