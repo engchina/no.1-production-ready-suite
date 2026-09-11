@@ -2082,6 +2082,7 @@ test("未解決オブジェクトの警告からスキーマ情報を更新し�
 
   await page.goto("/ontology-build?profile=default&tab=model");
   await expect(page).toHaveURL(/\/ontology-build\?profile=default$/);
+  await page.getByRole("button", { name: "情報を取得", exact: true }).click();
 
   const unresolved = page.getByTestId("profile-ontology-unresolved");
   const playground = page.getByRole("region", { name: "質問のオントロジー接地確認用グラフ" });
@@ -2136,6 +2137,7 @@ test("Ontology 未公開のとき旧モデル編集は出さず Markdown Draft �
 
   await page.goto("/ontology-build?profile=default&tab=model");
   await expect(page).toHaveURL(/\/ontology-build\?profile=default$/);
+  await page.getByRole("button", { name: "情報を取得", exact: true }).click();
 
   await expect(page.getByTestId("profile-ontology-empty")).toHaveCount(0);
   await expect(page.locator('section[aria-label="物理・業務モデル編集"]')).toHaveCount(0);
@@ -2143,8 +2145,6 @@ test("Ontology 未公開のとき旧モデル編集は出さず Markdown Draft �
   await expect(page.getByTestId("ontology-build-markdown")).toBeVisible();
   await expect(page.getByTestId("ontology-markdown-draft-editor")).toBeVisible();
   await expect(page.getByRole("region", { name: "質問のオントロジー接地確認用グラフ" })).toBeVisible();
-  await expect(page.getByText("オントロジー情報は未取得です")).toBeVisible();
-  await page.getByTestId("ontology-view-fetch").click();
   await expect(page.getByText("公開済みオントロジーがまだありません")).toBeVisible();
   await expect(page.getByTestId("profile-ontology-unresolved")).toHaveCount(0);
 });
@@ -2183,6 +2183,7 @@ test("Ontology 構築はプロファイルごとの保存済みファイルを�
   );
 
   await page.goto("/ontology-build?profile=default");
+  await page.getByRole("button", { name: "情報を取得", exact: true }).click();
 
   const savedFiles = page.getByTestId("ontology-build-saved-files");
   await expect(savedFiles).toBeVisible();
