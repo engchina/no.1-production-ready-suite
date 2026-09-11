@@ -1,5 +1,5 @@
 import { useConfirm } from "@/components/ui/confirm-dialog";
-import { useWorkspaceState, useWorkspaceRevalidation, useWorkspaceDraftWriter, WorkspaceResultNotice } from "@/components/WorkspaceState";
+import { useWorkspaceState, useWorkspaceRevalidation, useWorkspaceDraftWriter, useWorkspaceActive, WorkspaceResultNotice } from "@/components/WorkspaceState";
 import { Button } from "@/components/ui/button";
 import {
   useCallback,
@@ -169,7 +169,8 @@ function ExecutableNl2SqlWorkbench() {
   const writeDraft = useWorkspaceDraftWriter();
   const { hasPermission } = useAuth();
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const workspaceActive = useWorkspaceActive();
   const [history, setHistory] = useState<HistoryItem[]>([]);
   useWorkspaceRevalidation();
   const [engine, setEngine] = useWorkspaceState<Nl2SqlEngine>("engine", "select_ai");
@@ -531,14 +532,24 @@ function ExecutableNl2SqlWorkbench() {
   }, [selectedProfile]);
 
   useEffect(() => {
+    const prefillKeys = ["question", "engine", "profile_id"];
+    if (!workspaceActive || !prefillKeys.some((key) => searchParams.has(key))) return;
     const prefill = prefillFromSearchParams(searchParams);
     if (prefill.question) {
-      if (prefill.profileId && prefill.profileId !== profileId) writeDraft(`question:${prefill.profileId}`, prefill.question);
-      else setQuestion(prefill.question);
+      if (prefill.profileId && prefill.profileId !== profileId) {
+        if (!writeDraft(`question:${prefill.profileId}`, prefill.question)) {
+          setActionError(t("workspace.storageFailed"));
+          return;
+        }
+      } else setQuestion(prefill.question);
     }
     if (prefill.engine) setEngine(prefill.engine);
     if (prefill.profileId) setProfileId(prefill.profileId);
-  }, [searchParams]);
+    // 初期値は一度だけ適用し、以降の再読込ではユーザーの草稿を復元する。
+    const remainingParams = new URLSearchParams(searchParams);
+    prefillKeys.forEach((key) => remainingParams.delete(key));
+    setSearchParams(remainingParams, { replace: true });
+  }, [searchParams, workspaceActive]);
 
   useEffect(() => {
     if (profilesQuery.isPending) return;
