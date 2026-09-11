@@ -285,6 +285,7 @@ from .oracle_adapter import (
     SelectAiCredentialMissingError,
     TabularImportValidationError,
 )
+from .reverse_generation import ReverseStageError, generate_stage
 from .reverse_prompts import (
     QUESTION_TO_SQL_PROMPT,
     RECONSTRUCTION_SQL_PREFIX,
@@ -9885,6 +9886,9 @@ class Nl2SqlService:
                 }
             )
         result = deterministic
+        settings = get_settings()
+        timeout = max(1.0, settings.oci_enterprise_ai_timeout_seconds)
+        deadline = time.monotonic() + min(1800.0, timeout * 3)
         try:
             profile = self.get_profile(request.profile_id)
             catalog = self._reverse_sql_catalog(profile, deterministic.referenced_tables)
@@ -9896,7 +9900,13 @@ class Nl2SqlService:
                 use_glossary=request.use_glossary,
             )
             # 原版と同じ三段階。各段階の出力を検証してから次段階へ渡す。
-            physical = self._enterprise_ai_client.generate(
+            physical_structure = generate_stage(
+                client=self._enterprise_ai_client,
+                stage="structure_analysis",
+                parse=self._reverse_structure_from_text,
+                timeout_seconds=timeout,
+                max_retries=settings.oci_enterprise_ai_max_retries,
+                deadline=deadline,
                 prompt=request.sql,
                 context=context,
                 system_prompt=stage_prompt(
@@ -9904,14 +9914,17 @@ class Nl2SqlService:
                     "JSON object の logical_structure (Markdown文字列) だけを返す。",
                 ),
             )
-            physical_structure = self._reverse_structure_from_text(physical)
-            if not physical_structure:
-                raise ValueError("SQL 構造分析結果が空です。")
             # SQL Assist の「AI分析」に相当する出力を後段の成否に関係なく保持する。
             result = deterministic.model_copy(
                 update={"sql_structure": physical_structure, "logical_structure_items": []}
             )
-            raw = self._enterprise_ai_client.generate(
+            logical_structure = generate_stage(
+                client=self._enterprise_ai_client,
+                stage="logical_structure",
+                parse=self._reverse_structure_from_text,
+                timeout_seconds=timeout,
+                max_retries=settings.oci_enterprise_ai_max_retries,
+                deadline=deadline,
                 prompt=json.dumps(
                     {"sql_structure": physical_structure, "sql": request.sql}, ensure_ascii=False
                 ),
@@ -9921,9 +9934,6 @@ class Nl2SqlService:
                     "JSON object の logical_structure (Markdown文字列) だけを返す。",
                 ),
             )
-            logical_structure = self._reverse_structure_from_text(raw)
-            if not logical_structure:
-                raise ValueError("SQL 論理構造が空です。")
             # 決定論の部分要約で AI の完全な構造を覆い隠さない。
             result = result.model_copy(
                 update={
@@ -9932,28 +9942,29 @@ class Nl2SqlService:
                     "source": "oci_enterprise_ai",
                 }
             )
-            raw = self._enterprise_ai_client.generate(
+            question = generate_stage(
+                client=self._enterprise_ai_client,
+                stage="business_question",
+                parse=self._reverse_question_from_text,
+                timeout_seconds=timeout,
+                max_retries=settings.oci_enterprise_ai_max_retries,
+                deadline=deadline,
                 prompt=logical_structure,
                 context=context,
                 system_prompt=stage_prompt(
                     "business_question",
-                    "JSON object の question に自然言語の質問文だけを返す。"
+                    "自然言語の質問文だけを返す。JSON・説明・前置きは不要。"
                     "logical_structure プレースホルダーは入力本文を参照する。",
                 )
                 + (
                     "\n語彙の正規化は質問生成と同時に行う。terms_text は context の glossary、"
                     "question_text は生成中の質問を指す。文字列リテラルは変更しない。\n"
                     + source_prompt("glossary_question")
-                    + "\n最終出力は引き続き question の JSON object とする。"
+                    + "\n最終出力は自然言語の質問文だけとする。"
                     if request.use_glossary
                     else ""
                 ),
             )
-            payload = self._json_object_from_text(raw)
-            payload["logical_steps"] = _reverse_deep_steps(payload.get("logical_steps"))
-            question = ReverseQuestionOutput.model_validate(payload)
-            if not question.question.strip():
-                raise ValueError("業務質問が空です。")
             update: dict[str, Any] = {
                 "question": question.question.strip(),
                 "explanation": question.explanation or deterministic.explanation,
@@ -9964,14 +9975,16 @@ class Nl2SqlService:
                     question.logical_steps, deterministic.logical_step_details
                 )
             return result.model_copy(update=update)
+        except ReverseStageError as exc:
+            return result.model_copy(update={"warnings": [exc.warning()]})
         except (EnterpriseAiDirectError, ValueError):
-            logger.warning("reverse_sql_deep_fallback", exc_info=True)
+            logger.warning("reverse_sql_context_failed")
             return result.model_copy(
                 update={
                     "warnings": [
-                        "Enterprise AI の生成を完了できませんでした。"
-                        "完了済みの SQL 論理構造または元 SQL を含む簡易論理構造を表示しています。"
-                        "質問候補は簡易生成です。再試行してください。"
+                        "スキーマ情報の準備を完了できませんでした。"
+                        "Profile とスキーマ設定を確認してください。"
+                        "元 SQL を含む簡易論理構造と簡易生成した質問候補を表示しています。"
                     ]
                 }
             )
@@ -10579,7 +10592,24 @@ class Nl2SqlService:
             payload = {"logical_structure": cleaned}
         else:
             payload = self._json_object_from_text(raw)
-        return ReverseStructureOutput.model_validate(payload).logical_structure.strip()
+        structure = ReverseStructureOutput.model_validate(payload).logical_structure.strip()
+        if not structure:
+            raise ValueError("SQL 構造が空です。")
+        return structure
+
+    def _reverse_question_from_text(self, raw: str) -> ReverseQuestionOutput:
+        # SQL Assist の質問段階は自然言語を返す。従来の JSON 応答も受理するが、
+        # 壊れた JSON やコードを自然言語として扱って失敗を隠さない。
+        cleaned = raw.strip()
+        if cleaned.startswith(("{", "[", "```")):
+            payload = self._json_object_from_text(cleaned)
+            payload["logical_steps"] = _reverse_deep_steps(payload.get("logical_steps"))
+        else:
+            payload = {"question": cleaned}
+        question = ReverseQuestionOutput.model_validate(payload)
+        if not question.question.strip():
+            raise ValueError("業務質問が空です。")
+        return question
 
     def _json_object_from_text(self, raw: str) -> dict[str, Any]:
         cleaned = self._strip_code_fence(raw)

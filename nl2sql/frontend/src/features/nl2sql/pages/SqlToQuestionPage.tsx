@@ -85,6 +85,7 @@ export function SqlToQuestionPage() {
   useEffect(() => { setStructureItems([]); setEditingStructure(false); setRegenerated(null); setSqlGenerationError(""); }, [selectedProfileId]);
   const [loading, setLoading] = useState(false);
   const [reverseLoading, setReverseLoading] = useState(false);
+  const reverseInFlight = useRef(false);
   const [loadError, setLoadError] = useState("");
   const [actionError, setActionError] = useState("");
   const [referenceRefreshVersion, setReferenceRefreshVersion] = useState(0);
@@ -189,8 +190,11 @@ export function SqlToQuestionPage() {
 
   const generateQuestion = async () => {
     const trimmedSql = sql.trim();
-    if (!trimmedSql) return;
+    if (!trimmedSql || actionBusy || reverseInFlight.current) return;
+    reverseInFlight.current = true;
     setReverseLoading(true);
+    focusStructure.current = activeRef.current;
+    setActivePanel("structure");
     setActionError("");
     try {
       await runScopedRequest(async (signal) => {
@@ -219,7 +223,9 @@ export function SqlToQuestionPage() {
     } catch (err) {
       if (isAbortError(err)) return;
       setActionError(actionableError(err, t("sqlToQuestion.error.reverse")));
+      if (activeRef.current) setActivePanel("input");
     } finally {
+      reverseInFlight.current = false;
       setReverseLoading(false);
     }
   };
@@ -445,6 +451,18 @@ export function SqlToQuestionPage() {
           className={activePanel === "structure" ? "" : "hidden"}
           topContent={renderStepIndicator("structure")}
         >
+          <div aria-busy={reverseLoading} className="grid min-w-0 gap-4" data-testid="sql-to-question-analysis-content">
+          {reverseLoading && (
+            <TimedLoadingState label={t("sqlToQuestion.analysis.loading")} placement="result" framed={false} testId="sql-to-question-analysis-loading">
+              <Skeleton className="h-5 w-40" aria-hidden="true" />
+              <Skeleton className="h-8 w-full" aria-hidden="true" />
+              <Skeleton className="h-80 w-full" aria-hidden="true" />
+              <Skeleton className="h-11 w-56 max-w-full" aria-hidden="true" />
+              <Skeleton className="h-5 w-32" aria-hidden="true" />
+              <Skeleton className="h-28 w-full" aria-hidden="true" />
+            </TimedLoadingState>
+          )}
+          <div hidden={reverseLoading} className="grid min-w-0 gap-4">
           <DbObjectPanelHeader
             headingId="sql-to-question-structure-heading"
             icon={FileText}
@@ -539,6 +557,8 @@ export function SqlToQuestionPage() {
               />
             )}
           </section>
+          </div>
+          </div>
         </DbObjectManagementPanelShell>
       </main>
     </>

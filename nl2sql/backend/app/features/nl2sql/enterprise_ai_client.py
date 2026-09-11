@@ -22,6 +22,13 @@ from app.settings import Settings, enterprise_ai_default_model_id, enterprise_ai
 class EnterpriseAiDirectError(RuntimeError):
     """Enterprise AI direct 呼び出しの実行時エラー。"""
 
+    def __init__(
+        self, message: str, *, code: str = "provider_error", retryable: bool = False
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.retryable = retryable
+
 
 class EnterpriseAiDirectClient(Protocol):
     """Service が必要とする Enterprise AI direct 境界。"""
@@ -176,30 +183,52 @@ class OciEnterpriseAiDirectClient:
                     if attempt < retry_count:
                         time.sleep(min(0.2 * (attempt + 1), 1.0))
                         continue
-                    raise EnterpriseAiDirectError(last_error) from exc
+                    raise EnterpriseAiDirectError(
+                        last_error, code="timeout", retryable=True
+                    ) from exc
                 except httpx.HTTPError as exc:
                     last_error = str(exc)
                     if attempt < retry_count:
                         time.sleep(min(0.2 * (attempt + 1), 1.0))
                         continue
-                    raise EnterpriseAiDirectError(f"OCI Enterprise AI HTTP error: {exc}") from exc
+                    raise EnterpriseAiDirectError(
+                        f"OCI Enterprise AI HTTP error: {exc}", code="connection", retryable=True
+                    ) from exc
                 if response.status_code in retryable and attempt < retry_count:
                     last_error = f"HTTP {response.status_code}: {response.text[:300]}"
                     time.sleep(min(0.2 * (attempt + 1), 1.0))
                     continue
                 if response.status_code >= 400:
                     raise EnterpriseAiDirectError(
-                        f"OCI Enterprise AI HTTP {response.status_code}: {response.text[:500]}"
+                        f"OCI Enterprise AI HTTP {response.status_code}: {response.text[:500]}",
+                        code=(
+                            "authentication"
+                            if response.status_code in {401, 403}
+                            else (
+                                "rate_limit"
+                                if response.status_code == 429
+                                else (
+                                    "unavailable"
+                                    if response.status_code in retryable
+                                    else "request"
+                                )
+                            )
+                        ),
+                        retryable=response.status_code in retryable,
                     )
                 try:
                     parsed = response.json()
                 except ValueError as exc:
                     raise EnterpriseAiDirectError(
-                        "OCI Enterprise AI response が JSON ではありません。"
+                        "OCI Enterprise AI response が JSON ではありません。",
+                        code="response_format",
+                        retryable=True,
                     ) from exc
                 if not isinstance(parsed, Mapping):
                     raise EnterpriseAiDirectError(
-                        "OCI Enterprise AI response が object ではありません。"
+                        "OCI Enterprise AI response が object ではありません。",
+                        code="response_format",
+                        retryable=True,
                     )
                 return parsed
         raise EnterpriseAiDirectError(last_error or "OCI Enterprise AI call failed.")
@@ -322,7 +351,11 @@ def _parse_generated_text(response: Mapping[str, Any], *, response_path: str) ->
     text = _extract_text_candidate(candidate)
     if text.strip():
         return text.strip()
-    raise EnterpriseAiDirectError("OCI Enterprise AI response に text がありません。")
+    raise EnterpriseAiDirectError(
+        "OCI Enterprise AI response に text がありません。",
+        code="response_format",
+        retryable=True,
+    )
 
 
 def _select_response_path(payload: object, path: str) -> object:
