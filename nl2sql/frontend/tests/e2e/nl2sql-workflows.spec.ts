@@ -15195,3 +15195,39 @@ test("classifier training save locks edits and retains draft after failure", asy
   await row.getByRole("button", { name: "保存", exact: true }).click();
   await expect(input).toHaveCount(0);
 });
+
+test("classifier refresh retains the applied candidate filter and current page", async ({ page }, testInfo) => {
+  await mockNl2SqlApi(page);
+  const requests: URL[] = [];
+  await page.route("**/api/nl2sql/classifier/training-candidates*", (route) => {
+    const url = new URL(route.request().url());
+    requests.push(url);
+    const second = url.searchParams.get("cursor") === "cursor-2";
+    return fulfillJson(route, {
+      items: [{ history_id: second ? "history-21" : "history-1", question: second ? "請求 21" : "請求 1",
+        profile_id: "default", profile_name: "既定プロファイル", profile_category: "請求",
+        feedback_rating: "good", feedback_comment: "", created_at: historyItem.created_at,
+        status: "pending", training_example_id: "", conflict_profile_ids: [] }],
+      total: 21, next_cursor: second ? "" : "cursor-2", pending_count: 21, added_count: 0, attention_count: 0,
+    });
+  });
+  await page.goto("/question-classifier-models?tab=candidates");
+  await page.getByLabel("候補検索", { exact: true }).fill("請求");
+  await page.getByRole("button", { name: "絞り込み", exact: true }).click();
+  const pagination = page.getByTestId("qcm-candidate-pagination");
+  await pagination.getByRole("button", { name: "次へ" }).click();
+  await expect(pagination).toContainText("2 / 2 ページ");
+  await page.getByLabel("候補検索", { exact: true }).fill("未適用の検索");
+  await page.getByRole("button", { name: "表示を更新", exact: true }).click();
+  await expect(page.getByText("最新の状態に更新しました。", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("qcm-training-candidate")).toContainText("請求 21");
+  await expect(pagination).toContainText("2 / 2 ページ");
+  expect(requests.at(-1)?.searchParams.get("cursor")).toBe("cursor-2");
+  expect(requests.at(-1)?.searchParams.get("q")).toBe("請求");
+  await expect(page.getByLabel("候補検索", { exact: true })).toHaveValue("未適用の検索");
+  await expectNoHorizontalScroll(page);
+  await page.screenshot({ path: testInfo.outputPath("classifier-refresh-page.png"), fullPage: true });
+  await pagination.getByRole("button", { name: "前へ" }).click();
+  await expect(pagination).toContainText("1 / 2 ページ");
+  expect(requests.at(-1)?.searchParams.get("q")).toBe("請求");
+});

@@ -125,6 +125,9 @@ export function QuestionClassifierModelsPage() {
   const [candidateSearch, setCandidateSearch] = useState("");
   const [candidateStatus, setCandidateStatus] = useState("all");
   const [candidateProfileId, setCandidateProfileId] = useState("");
+  const [candidateAppliedFilters, setCandidateAppliedFilters] = useState<CandidateFilters>({
+    search: "", status: "all", profileId: "",
+  });
   const [candidateCursor, setCandidateCursor] = useState("");
   const [candidateCursorStack, setCandidateCursorStack] = useState<string[]>([]);
   const [candidatePage, setCandidatePage] = useState(1);
@@ -175,6 +178,15 @@ export function QuestionClassifierModelsPage() {
     );
   }, [classifierTrainingData, trainingSearch]);
 
+  const candidateUrl = (cursor: string, filters: CandidateFilters) => {
+    const params = new URLSearchParams({ limit: String(CANDIDATE_PAGE_SIZE), status: filters.status });
+    if (cursor) params.set("cursor", cursor);
+    if (filters.profileId) params.set("profile_id", filters.profileId);
+    if (filters.search.trim()) params.set("q", filters.search.trim());
+    if (focusedCandidateHistoryId) params.set("history_id", focusedCandidateHistoryId);
+    return `/api/nl2sql/classifier/training-candidates?${params.toString()}`;
+  };
+
   const load = async (announce = false) => {
     if (loading) return;
     const sequence = loadSequence.current + 1;
@@ -193,7 +205,7 @@ export function QuestionClassifierModelsPage() {
             signal,
           }),
           apiGet<ClassifierTrainingCandidatesData>(
-            `/api/nl2sql/classifier/training-candidates?limit=${CANDIDATE_PAGE_SIZE}${focusedCandidateHistoryId ? `&history_id=${encodeURIComponent(focusedCandidateHistoryId)}` : ""}`,
+            candidateUrl(candidateCursor, candidateAppliedFilters),
             { signal }
           ),
         ]);
@@ -202,7 +214,7 @@ export function QuestionClassifierModelsPage() {
         setClassifierStatus(classifierData);
         setClassifierTrainingData(trainingData);
         setCandidates(candidateData);
-        setCandidateHasActiveFilters(false);
+
         if (announce) toast.success(t("common.action.refreshed"));
       });
     } catch (err) {
@@ -251,17 +263,8 @@ export function QuestionClassifierModelsPage() {
     setCandidateError("");
     setCandidateActionError("");
     try {
-      const params = new URLSearchParams({
-        limit: String(CANDIDATE_PAGE_SIZE),
-        status: filters.status,
-      });
-      if (cursor) params.set("cursor", cursor);
-      if (filters.profileId) params.set("profile_id", filters.profileId);
-      if (filters.search.trim()) params.set("q", filters.search.trim());
-      if (focusedCandidateHistoryId) params.set("history_id", focusedCandidateHistoryId);
-      const data = await apiGet<ClassifierTrainingCandidatesData>(
-        `/api/nl2sql/classifier/training-candidates?${params.toString()}`
-      );
+      const data = await apiGet<ClassifierTrainingCandidatesData>(candidateUrl(cursor, filters));
+      setCandidateAppliedFilters(filters);
       setCandidates(data);
       setCandidateHasActiveFilters(
         Boolean(filters.search.trim()) || filters.status !== "all" || Boolean(filters.profileId)
@@ -295,13 +298,13 @@ export function QuestionClassifierModelsPage() {
 
   const goToNextCandidatePage = () => {
     if (!candidates?.next_cursor) return;
-    void loadCandidates(candidates.next_cursor, "next");
+    void loadCandidates(candidates.next_cursor, "next", candidateAppliedFilters);
   };
 
   const goToPreviousCandidatePage = () => {
     const previous = candidateCursorStack.at(-1);
     if (previous === undefined) return;
-    void loadCandidates(previous, "prev");
+    void loadCandidates(previous, "prev", candidateAppliedFilters);
   };
 
   const importSelectedCandidates = async () => {
