@@ -124,7 +124,7 @@ interface ProfileFormState {
 const DEFAULT_SELECT_AI_CONFIG: ProfileSelectAiConfig = {
   profile_name: "",
   region: SELECT_AI_DEFAULT_REGION,
-  model: "xai.grok-4.3",
+  model: "xai.grok-4.6",
   embedding_model: "cohere.embed-v4.0",
   max_tokens: SELECT_AI_MAX_TOKENS_MAX,
   enforce_object_list: true,

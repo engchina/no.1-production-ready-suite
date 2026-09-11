@@ -1260,16 +1260,19 @@ test("新規保存直後の Oracle 反映再試行は保存時の確認語を再
     select_ai_config: {
       ...selectAiConfig,
       profile_name: "SALES_PROFILE",
+      model: "xai.grok-4.6",
     },
     etag: "etag-sales-profile",
   };
   const syncSubmissions: Record<string, unknown>[] = [];
+  let savedPayload: Record<string, unknown> | undefined;
 
   await page.route("**/api/nl2sql/profiles", async (route) => {
     if (route.request().method() !== "POST") {
       await route.fallback();
       return;
     }
+    savedPayload = route.request().postDataJSON() as Record<string, unknown>;
     await fulfillJson(route, savedProfile);
   });
   await page.route("**/api/nl2sql/profiles/sales-profile", async (route) => {
@@ -1338,6 +1341,7 @@ test("新規保存直後の Oracle 反映再試行は保存時の確認語を再
   await page.getByRole("button", { name: "保存", exact: true }).click();
 
   await expect(page).toHaveURL(/profile=sales-profile/);
+  expect(savedPayload?.select_ai_config).toMatchObject({ model: "xai.grok-4.6" });
   const status = page.getByTestId("profile-save-progress");
   await expect(status).toHaveAttribute("data-job-status", "submission_failed");
   await expect(status).toContainText(
@@ -1388,6 +1392,7 @@ test("Credential が Osaka でも新規 Region は Chicago で未編集の破棄
 test("保存済み Region は Osaka を保持しキーボードで変更できる", async ({ page }) => {
   await mockProfileApi(page);
   await page.goto("/profiles?profile=default");
+  await expect(page.getByLabel("LLM Model")).toHaveValue(selectAiConfig.model);
   const region = page.getByRole("combobox", { name: "Region" });
   await expect(region).toContainText("ap-osaka-1");
   await region.focus();
@@ -1761,6 +1766,7 @@ test("Select AI 設定は requested order で並び狭い幅でも重ならな�
   await page.getByRole("option", { name: "us-chicago-1" }).click();
   await expect(region).toContainText("us-chicago-1");
   await expect(model).toBeVisible();
+  await expect(model).toHaveValue("xai.grok-4.6");
   await expect(maxTokens).toBeVisible();
   await expect(embeddingModel).toBeVisible();
   await expect(maxTokens).toHaveAttribute("min", "4096");
