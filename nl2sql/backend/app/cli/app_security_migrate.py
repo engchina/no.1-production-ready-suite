@@ -93,6 +93,9 @@ def apply_security_migrations() -> tuple[int, ...]:
     user_uuid_data_statements = user_uuid_statements[7:]
     role_profiles_migration = migration_dir / "016_app_role_profiles.sql"
     role_profiles_statements = split_ddl(role_profiles_migration.read_text(encoding="utf-8"))
+    scope_expression_statements = split_ddl(
+        (migration_dir / "020_deepsec_scope_expression.sql").read_text(encoding="utf-8")
+    )
 
     with get_oracle_pool_manager().control_connection() as connection:
         _assert_no_namespace_conflicts(connection)
@@ -163,9 +166,19 @@ def apply_security_migrations() -> tuple[int, ...]:
             include_sql=False,
         )
         _with_migration_label("011", deepsec_target_width_results)
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT COLUMN_NAME FROM USER_TAB_COLUMNS WHERE "
+                "TABLE_NAME = 'NL2SQL_APP_DATA_ENTITLEMENTS' AND COLUMN_NAME = 'SCOPE_EXPRESSION'"
+            )
+            has_scope_expression = bool(cursor.fetchall())
         deepsec_scope_filters_results = oracle_statement_executor.execute(
             connection,
-            deepsec_scope_filters_statements,
+            (
+                deepsec_scope_filters_statements[:2]
+                if has_scope_expression
+                else deepsec_scope_filters_statements
+            ),
             atomic=False,
             include_sql=False,
             ignored_error_codes=frozenset({"ORA-00957", "ORA-01430", "ORA-02264", "ORA-02443"}),
@@ -195,6 +208,14 @@ def apply_security_migrations() -> tuple[int, ...]:
             ignored_error_codes=frozenset({"ORA-00001", "ORA-00942", "ORA-00955"}),
         )
         _with_migration_label("016", role_profiles_results)
+        scope_expression_results = oracle_statement_executor.execute(
+            connection,
+            scope_expression_statements,
+            atomic=False,
+            include_sql=False,
+            ignored_error_codes=frozenset({"ORA-01430", "ORA-02443", "ORA-02264"}),
+        )
+        _with_migration_label("020", scope_expression_results)
     errors = [
         result
         for result in (
@@ -209,6 +230,7 @@ def apply_security_migrations() -> tuple[int, ...]:
             *login_user_id_data_results,
             *user_uuid_data_results,
             *role_profiles_results,
+            *scope_expression_results,
         )
         if result["status"] == "error"
     ]
@@ -231,6 +253,7 @@ def apply_security_migrations() -> tuple[int, ...]:
         len(login_user_id_statements),
         len(user_uuid_statements),
         len(role_profiles_statements),
+        len(scope_expression_statements),
     )
 
 
@@ -268,6 +291,9 @@ def main() -> int:
     user_uuid_statements = split_ddl(user_uuid_migration.read_text(encoding="utf-8"))
     role_profiles_migration = migration_dir / "016_app_role_profiles.sql"
     role_profiles_statements = split_ddl(role_profiles_migration.read_text(encoding="utf-8"))
+    scope_expression_statements = split_ddl(
+        (migration_dir / "020_deepsec_scope_expression.sql").read_text(encoding="utf-8")
+    )
     if not args.apply:
         print(
             f"migration=005 statements={len(namespace_statements)} mode=preview "
@@ -278,7 +304,8 @@ def main() -> int:
             f"migration=012 statements={len(deepsec_scope_filters_statements)} "
             f"migration=013 statements={len(login_user_id_statements)} "
             f"migration=014 statements={len(user_uuid_statements)} "
-            f"migration=016 statements={len(role_profiles_statements)}"
+            f"migration=016 statements={len(role_profiles_statements)} "
+            f"migration=020 statements={len(scope_expression_statements)}"
         )
         return 0
 
@@ -298,6 +325,7 @@ def main() -> int:
         f"migration=013 statements={len(login_user_id_statements)} "
         f"migration=014 statements={len(user_uuid_statements)} "
         f"migration=016 statements={len(role_profiles_statements)} "
+        f"migration=020 statements={len(scope_expression_statements)} "
         f"bootstrap_created={str(bootstrapped).lower()}"
     )
     return 0

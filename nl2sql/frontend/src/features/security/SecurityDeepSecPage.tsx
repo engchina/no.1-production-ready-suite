@@ -1,3 +1,6 @@
+import { useWorkspaceState, useResetExecutionConsent } from "@/components/WorkspaceState";
+import { ScopeExpressionEditor } from "./ScopeExpressionEditor";
+import { canonicalExpression, entitlementExpression, expressionError, expressionCounts } from "./scope-expression";
 import { BulkSelectionActions } from "@/components/BulkSelectionActions";
 import { Button } from "@/components/ui/button";
 import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
@@ -70,7 +73,7 @@ import type {
 } from "./types";
 
 const ENTITLEMENT_CAPABILITIES = ["SELECT"] as const;
-const SCOPE_MODES = ["ALL", "FILTERS"] as const;
+const SCOPE_MODES = ["ALL", "FILTERS", "EXPRESSION"] as const;
 const NULL_SCOPE_OPERATORS = ["IS_NULL", "IS_NOT_NULL"] as const;
 const LITERAL_SCOPE_VALUE_SOURCE = "LITERAL";
 const LOGIN_USER_ID_SCOPE_VALUE_SOURCE = "LOGIN_USER_ID";
@@ -90,8 +93,6 @@ type ScrollPositionSnapshot = {
 
 const INPUT_CLASS =
   "h-11 min-w-0 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 disabled:bg-muted/20 disabled:text-muted";
-const COMPACT_INPUT_CLASS =
-  "h-9 min-w-0 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 disabled:bg-muted/20 disabled:text-muted";
 const ADMIN_EXECUTE_CONFIRMATION = "ADMIN_EXECUTE";
 const ADMIN_RESET_CONFIRMATION = "ADMIN_RESET";
 const TARGET_OBJECT_PAGE_SIZE = 50;
@@ -191,6 +192,7 @@ function blankEntitlementDraft(clientKey: string): DataEntitlementDraft {
     scope_mode: "ALL",
     scope_column: "",
     scope_filters: [],
+    scope_expression: null,
   };
 }
 
@@ -213,6 +215,7 @@ function entitlementColumnsSummary(
 }
 
 function entitlementScopeSummary(entitlement: DataEntitlement) {
+  if (entitlement.scope_expression) return t("security.deepsec.entitlements.scopeFilterCount", { count: expressionCounts(entitlement.scope_expression.root).conditions });
   if ((entitlement.scope_mode ?? "ALL") === "FILTERS") {
     return t("security.deepsec.entitlements.scopeFilterCount", {
       count: entitlement.scope_filters?.length ?? 0,
@@ -405,11 +408,13 @@ function normalizeEntitlementRows(rows: DataEntitlement[]) {
         scope_mode: scopeMode,
         scope_column: "",
         scope_filters: scopeMode === "FILTERS" ? normalizeScopeFilters(legacyFilters) : [],
+        scope_expression: scopeMode === "EXPRESSION" ? item.scope_expression : null,
+        ...(item.scope_expression_version ? { scope_expression_version: item.scope_expression_version } : {}),
       };
     })
     .map((item) => ({
       ...item,
-      scope_code: item.scope_mode === "ALL" ? "*" : "FILTERS",
+      scope_code: item.scope_mode === "ALL" ? "*" : item.scope_mode === "EXPRESSION" ? "EXPRESSION" : "FILTERS",
     }));
 }
 
@@ -417,6 +422,7 @@ function entitlementSignature(rows: DataEntitlement[]) {
   return JSON.stringify(normalizeEntitlementRows(rows).map((item) => ({
     ...item,
     column_names: [...item.column_names].sort(),
+    scope_expression: canonicalExpression(item.scope_expression),
     scope_filters: item.scope_filters.map((filter) => ({
       ...filter, values: [...(filter.values ?? [])].sort(),
     })).sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))),
@@ -705,13 +711,26 @@ export function SecurityDeepSecPage() {
   const mayApply = hasPermission(MENU_PERMISSIONS.securityDeepSec);
   const mayVerify = hasPermission(MENU_PERMISSIONS.securityDeepSec);
   const mayManageEntitlements = hasPermission(MENU_PERMISSIONS.securityDeepSec);
-  const [activeView, setActiveView] = useState<DeepSecView>("data-user");
+  const [activeView, setActiveView] = useWorkspaceState<DeepSecView>("deepsec-view", "data-user");
+  const [storedDraft, setStoredDraft] = useWorkspaceState("deepsec-rule-draft", "");
+  const restoredDraft = useRef<{
+    roleId: string; version: number; rows: DataEntitlementDraft[]; baseline: DataEntitlement[];
+  } | null>(null);
+  const draftRead = useRef(false);
+  if (!draftRead.current) {
+    draftRead.current = true;
+    try {
+      const candidate = JSON.parse(storedDraft);
+      if (typeof candidate.roleId === "string" && Number.isInteger(candidate.version) &&
+          Array.isArray(candidate.rows) && Array.isArray(candidate.baseline)) restoredDraft.current = candidate;
+    } catch { /* 草稿がない場合はサーバーの現行設定を使う。 */ }
+  }
   const [status, setStatus] = useState<DeepSecStatus | null>(null);
   const [plan, setPlan] = useState<DeepSecPlan | null>(null);
   const [verification, setVerification] = useState<DeepSecVerification | null>(null);
   const [entitlementBaseline, setEntitlementBaseline] = useState<DeepSecRoleEntitlements | null>(null);
   const [entitlementRoles, setEntitlementRoles] = useState<DeepSecRoleEntitlements[]>([]);
-  const [selectedEntitlementRoleId, setSelectedEntitlementRoleId] = useState<string | null>(null);
+  const [selectedEntitlementRoleId, setSelectedEntitlementRoleId] = useState<string | null>(restoredDraft.current?.roleId ?? null);
   const [entitlementDraftRows, setEntitlementDraftRows] = useState<DataEntitlementDraft[]>([]);
   const [selectedEntitlementDraftKey, setSelectedEntitlementDraftKey] = useState<string | null>(null);
   const [entitlementPreview, setEntitlementPreview] =
@@ -841,6 +860,17 @@ export function SecurityDeepSecPage() {
     setSelectedEntitlementRoleId(roleId);
     setEntitlementFormError("");
   };
+  useResetExecutionConsent(() => setEntitlementApplyConfirmation(""), draftSignature);
+  useEffect(() => {
+    if (!entitlementBaseline || entitlementLoading) return;
+    // 一時保存はルール入力と比較 baseline のみ。SQL preview・credential・確認語は除外する。
+    setStoredDraft(JSON.stringify({
+      roleId: entitlementBaseline.role_id,
+      version: entitlementBaseline.version,
+      rows: normalizeEntitlementRows(entitlementDraftRows).map((row, i) => ({ ...row, client_key: entitlementDraftRows[i].client_key })),
+      baseline: normalizeEntitlementRows(entitlementBaseline.data_entitlements),
+    }));
+  }, [draftSignature, entitlementBaseline, entitlementLoading, setStoredDraft]);
   const draftVersionChanged = Boolean(entitlementDraftChanged && currentEntitlementRole &&
     entitlementBaseline?.role_id === currentEntitlementRole.role_id &&
     entitlementBaseline.version !== currentEntitlementRole.version);
@@ -1131,6 +1161,15 @@ export function SecurityDeepSecPage() {
   useEffect(() => {
     // 背景再取得は編集中の baseline/version を更新しない。適用時は旧 version で競合を検出する。
     if (entitlementDraftChanged && entitlementBaseline?.role_id === visibleSelectedEntitlementRoleId) return;
+    if (selectedEntitlementRole && restoredDraft.current?.roleId === selectedEntitlementRole.role_id) {
+      const saved = restoredDraft.current;
+      restoredDraft.current = null;
+      setEntitlementBaseline({ ...selectedEntitlementRole, version: saved.version, data_entitlements: saved.baseline });
+      setEntitlementDraftRows(saved.rows);
+      setSelectedEntitlementDraftKey(saved.rows[0]?.client_key ?? null);
+      setEntitlementApplyConfirmation("");
+      return;
+    }
     const nextDraftRows = entitlementDraft(selectedEntitlementRole);
     setEntitlementBaseline(selectedEntitlementRole);
     setEntitlementDraftRows(nextDraftRows);
@@ -1340,6 +1379,8 @@ export function SecurityDeepSecPage() {
         scope_mode: "ALL",
         scope_column: "",
         scope_filters: [],
+        scope_expression: null,
+        ...(entitlementDraftRows[index]?.scope_mode === "EXPRESSION" ? { scope_expression_version: 1 as const } : {}),
         scope_code: "*",
       });
       return;
@@ -1353,6 +1394,8 @@ export function SecurityDeepSecPage() {
       scope_mode: "ALL",
       scope_column: "",
       scope_filters: [],
+      scope_expression: null,
+      ...(entitlementDraftRows[index]?.scope_mode === "EXPRESSION" ? { scope_expression_version: 1 as const } : {}),
       scope_code: "*",
       capability: "SELECT",
     });
@@ -1409,96 +1452,6 @@ export function SecurityDeepSecPage() {
     setEntitlementColumns(index, columnNames);
   };
 
-  const addScopeFilter = (index: number, columns: DeepSecTargetColumn[]) => {
-    setEntitlementPreview(null);
-    setEntitlementDraftRows((current) =>
-      current.map((item, itemIndex) =>
-        itemIndex === index
-          ? {
-              ...item,
-              scope_filters: [...(item.scope_filters ?? []), blankScopeFilter(columns)],
-            }
-          : item
-      )
-    );
-    setEntitlementFormError("");
-  };
-
-  const removeScopeFilter = (index: number, filterIndex: number) => {
-    setEntitlementPreview(null);
-    setEntitlementDraftRows((current) =>
-      current.map((item, itemIndex) =>
-        itemIndex === index
-          ? {
-              ...item,
-              scope_filters: (item.scope_filters ?? []).filter(
-                (_filter, currentFilterIndex) => currentFilterIndex !== filterIndex
-              ),
-            }
-          : item
-      )
-    );
-    setEntitlementFormError("");
-  };
-
-  const patchScopeFilter = (
-    index: number,
-    filterIndex: number,
-    patch: Partial<DataEntitlementScopeFilter>
-  ) => {
-    setEntitlementPreview(null);
-    setEntitlementDraftRows((current) =>
-      current.map((item, itemIndex) =>
-        itemIndex === index
-          ? {
-              ...item,
-              scope_filters: (item.scope_filters ?? []).map((filter, currentFilterIndex) =>
-                currentFilterIndex === filterIndex ? { ...filter, ...patch } : filter
-              ),
-            }
-          : item
-      )
-    );
-    setEntitlementFormError("");
-  };
-
-  const updateScopeFilterColumn = (
-    index: number,
-    filterIndex: number,
-    columnName: string,
-    columns: DeepSecTargetColumn[]
-  ) => {
-    const column = columns.find(
-      (item) => item.column_name.toUpperCase() === columnName.toUpperCase()
-    );
-    const valueType = column ? scopeValueType(column.data_type) ?? "TEXT" : "TEXT";
-    patchScopeFilter(index, filterIndex, {
-      column_name: columnName,
-      value_type: valueType,
-      operator: defaultScopeOperator(valueType),
-      value_source: LITERAL_SCOPE_VALUE_SOURCE,
-      value: "",
-      value_to: "",
-      values: [],
-    });
-  };
-
-  const updateScopeFilterOperator = (
-    index: number,
-    filterIndex: number,
-    operator: string,
-    valueType: DataEntitlementScopeValueType
-  ) => {
-    patchScopeFilter(index, filterIndex, {
-      operator,
-      value: "",
-      value_to: "",
-      values: [],
-      value_type: valueType,
-      value_source: LITERAL_SCOPE_VALUE_SOURCE,
-    });
-  };
-
   const removeEntitlement = (index: number) => {
     const nextRows = entitlementDraftRows.filter((_, itemIndex) => itemIndex !== index);
     const removedKey = entitlementDraftRows[index]?.client_key ?? null;
@@ -1528,6 +1481,10 @@ export function SecurityDeepSecPage() {
         !SCOPE_MODES.includes(item.scope_mode as (typeof SCOPE_MODES)[number])
       ) {
         return t("security.deepsec.entitlements.validation");
+      }
+      if (item.scope_mode === "EXPRESSION") {
+        const error = expressionError(item.scope_expression);
+        if (error) return t(`security.deepsec.entitlements.${error}`);
       }
       if (item.scope_mode === "FILTERS") {
         if (!item.scope_filters.length) {
@@ -2251,7 +2208,6 @@ export function SecurityDeepSecPage() {
                                   const statusBadge = entitlementApplyStatus(entitlement);
                                   const supportedScopeColumns =
                                     detail?.columns.filter(isSupportedScopeColumn) ?? [];
-                                  const scopeFilters = entitlement.scope_filters ?? [];
                                   const ruleTitle =
                                     targetKey || t("security.deepsec.entitlements.ruleTitle");
                                 return (
@@ -2406,19 +2362,16 @@ export function SecurityDeepSecPage() {
                                         id={`deepsec-entitlement-scope-mode-${index}`}
                                         className={cn(INPUT_CLASS, "mt-1 block")}
                                         disabled={entitlementReadOnly}
-                                        value={entitlement.scope_mode ?? "ALL"}
+                                        value={entitlement.scope_mode === "EXPRESSION" ? "FILTERS" : entitlement.scope_mode ?? "ALL"}
                                         onChange={(event) => {
                                           const nextMode = event.target.value;
                                           patchEntitlement(index, {
-                                            scope_mode: nextMode,
+                                            scope_mode: nextMode === "ALL" ? "ALL" : "EXPRESSION",
+                                            ...(entitlement.scope_mode === "EXPRESSION" && nextMode === "ALL" ? { scope_expression_version: 1 } : {}),
+                                            scope_expression: nextMode === "ALL" ? null : { version: 1, root: { kind: "group", operator: "AND", children: [{ kind: "condition", filter: blankScopeFilter(supportedScopeColumns) }] } },
                                             scope_code: nextMode === "ALL" ? "*" : nextMode === "FILTERS" ? "FILTERS" : "",
                                             scope_column: "",
-                                            scope_filters:
-                                              nextMode === "FILTERS"
-                                                ? entitlement.scope_filters?.length
-                                                  ? entitlement.scope_filters
-                                                  : [blankScopeFilter(supportedScopeColumns)]
-                                                : [],
+                                            scope_filters: [],
                                           });
                                         }}
                                       >
@@ -2430,340 +2383,16 @@ export function SecurityDeepSecPage() {
                                         </option>
                                       </select>
                                     </FieldLabel>
-                                    {entitlement.scope_mode === "FILTERS" ? (
-                                      <div
-                                        className="grid gap-2 rounded-md border border-border bg-background p-3"
-                                        data-testid={`security-deepsec-scope-filters-${index}`}
-                                      >
-                                        <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                                          <p className="text-xs font-medium">
-                                            {t("security.deepsec.entitlements.scopeFilters")}
-                                          </p>
-                                          <Button
-                                            type="button"
-                                            size="sm"
-                                            variant="secondary"
-                                            className="w-full sm:w-auto"
-                                            disabled={
-                                              entitlementReadOnly || actionBlocked ||
-                                              loadingDetail ||
-                                              supportedScopeColumns.length === 0
-                                            }
-                                            onClick={() => addScopeFilter(index, supportedScopeColumns)}
-                                          >
-                                            <Plus size={14} aria-hidden />
-                                            {t("security.deepsec.entitlements.scopeFilterAdd")}
-                                          </Button>
-                                        </div>
-                                        {loadingDetail ? (
-                                          <p className="rounded-md border border-dashed border-border p-3 text-sm text-muted">
-                                            {t("security.deepsec.entitlements.columnsLoading")}
-                                          </p>
-                                        ) : detailError ? (
-                                          <p className="rounded-md border border-danger/30 bg-danger-bg p-3 text-sm text-danger">
-                                            {detailError}
-                                          </p>
-                                        ) : !detail ? (
-                                          <p className="rounded-md border border-dashed border-border p-3 text-sm text-muted">
-                                            {t("security.deepsec.entitlements.scopeFilterSelectObject")}
-                                          </p>
-                                        ) : supportedScopeColumns.length === 0 ? (
-                                          <p className="rounded-md border border-dashed border-border p-3 text-sm text-muted">
-                                            {t("security.deepsec.entitlements.scopeFilterUnsupported")}
-                                          </p>
-                                        ) : scopeFilters.length === 0 ? (
-                                          <p className="rounded-md border border-dashed border-border p-3 text-sm text-muted">
-                                            {t("security.deepsec.entitlements.scopeFilterEmpty")}
-                                          </p>
-                                        ) : (
-                                          <div className="grid gap-2">
-                                            {scopeFilters.map((filter, filterIndex) => {
-                                              const selectedColumn = supportedScopeColumns.find(
-                                                (column) =>
-                                                  column.column_name.toUpperCase() ===
-                                                  filter.column_name.toUpperCase()
-                                              );
-                                              const valueType =
-                                                selectedColumn
-                                                  ? scopeValueType(selectedColumn.data_type) ?? "TEXT"
-                                                  : (filter.value_type as DataEntitlementScopeValueType);
-                                              const operators =
-                                                SCOPE_OPERATORS_BY_VALUE_TYPE[valueType] ??
-                                                SCOPE_OPERATORS_BY_VALUE_TYPE.TEXT;
-                                              const selectedOperator = operators.includes(
-                                                filter.operator as DataEntitlementScopeOperator
-                                              )
-                                                ? (filter.operator as DataEntitlementScopeOperator)
-                                                : operators[0];
-                                              const inputMode =
-                                                valueType === "NUMBER" && selectedOperator === "EQ"
-                                                  ? "numeric"
-                                                  : valueType === "NUMBER"
-                                                    ? "decimal"
-                                                    : "text";
-                                              const selectedValueSource = scopeFilterSupportsValueSource(
-                                                selectedOperator,
-                                                valueType
-                                              )
-                                                ? normalizeScopeFilterValueSource(filter.value_source)
-                                                : LITERAL_SCOPE_VALUE_SOURCE;
-                                              return (
-                                                <div
-                                                  key={`${index}-${filterIndex}-${filter.column_name}`}
-                                                  className="grid gap-2 rounded-md border border-border/80 bg-card/20 p-2"
-                                                  data-testid={`security-deepsec-scope-filter-${index}-${filterIndex}`}
-                                                >
-                                                  <div className="grid min-w-0 gap-2 md:grid-cols-2 2xl:grid-cols-[minmax(0,1.25fr)_minmax(0,0.75fr)_minmax(0,0.8fr)_minmax(0,1fr)_auto]">
-                                                    <label
-                                                      className="grid min-w-0 gap-1 text-xs font-medium"
-                                                      htmlFor={`deepsec-scope-filter-column-${index}-${filterIndex}`}
-                                                    >
-                                                      <span>
-                                                        {t("security.deepsec.entitlements.scopeFilterColumn")}
-                                                      </span>
-                                                      <select
-                                                        id={`deepsec-scope-filter-column-${index}-${filterIndex}`}
-                                                        className={COMPACT_INPUT_CLASS}
-                                                        disabled={entitlementReadOnly}
-                                                        value={filter.column_name}
-                                                        onChange={(event) =>
-                                                          updateScopeFilterColumn(
-                                                            index,
-                                                            filterIndex,
-                                                            event.target.value,
-                                                            supportedScopeColumns
-                                                          )
-                                                        }
-                                                      >
-                                                        <option value="">
-                                                          {t(
-                                                            "security.deepsec.entitlements.scopeFilterColumnPlaceholder"
-                                                          )}
-                                                        </option>
-                                                        {supportedScopeColumns.map((column) => (
-                                                          <option
-                                                            key={column.column_name}
-                                                            value={column.column_name}
-                                                          >
-                                                            {column.column_name} · {column.data_type}
-                                                          </option>
-                                                        ))}
-                                                      </select>
-                                                    </label>
-                                                    <label
-                                                      className="grid min-w-0 gap-1 text-xs font-medium"
-                                                      htmlFor={`deepsec-scope-filter-operator-${index}-${filterIndex}`}
-                                                    >
-                                                      <span>
-                                                        {t("security.deepsec.entitlements.scopeFilterOperator")}
-                                                      </span>
-                                                      <select
-                                                        id={`deepsec-scope-filter-operator-${index}-${filterIndex}`}
-                                                        className={COMPACT_INPUT_CLASS}
-                                                        disabled={entitlementReadOnly}
-                                                        value={selectedOperator}
-                                                        onChange={(event) =>
-                                                          updateScopeFilterOperator(
-                                                            index,
-                                                            filterIndex,
-                                                            event.target.value,
-                                                            valueType
-                                                          )
-                                                        }
-                                                      >
-                                                        {operators.map((operator) => (
-                                                          <option key={operator} value={operator}>
-                                                            {t(
-                                                              `security.deepsec.entitlements.operator.${operator}`
-                                                            )}
-                                                          </option>
-                                                        ))}
-                                                      </select>
-                                                    </label>
-                                                    {scopeFilterSupportsValueSource(
-                                                      selectedOperator,
-                                                      valueType
-                                                    ) ? (
-                                                      <label
-                                                        className="grid min-w-0 gap-1 text-xs font-medium"
-                                                        htmlFor={`deepsec-scope-filter-value-source-${index}-${filterIndex}`}
-                                                      >
-                                                        <span>
-                                                          {t("security.deepsec.entitlements.scopeFilterValueSource")}
-                                                        </span>
-                                                        <select
-                                                          id={`deepsec-scope-filter-value-source-${index}-${filterIndex}`}
-                                                          className={COMPACT_INPUT_CLASS}
-                                                          disabled={entitlementReadOnly}
-                                                          value={selectedValueSource}
-                                                          onChange={(event) =>
-                                                            patchScopeFilter(index, filterIndex, {
-                                                              value_source: event.target.value,
-                                                              value: "",
-                                                              value_to: "",
-                                                              values: [],
-                                                              value_type: valueType,
-                                                            })
-                                                          }
-                                                        >
-                                                          <option value={LITERAL_SCOPE_VALUE_SOURCE}>
-                                                            {t(
-                                                              "security.deepsec.entitlements.scopeFilterValueLiteral"
-                                                            )}
-                                                          </option>
-                                                          <option value={LOGIN_USER_ID_SCOPE_VALUE_SOURCE}>
-                                                            {t(
-                                                              "security.deepsec.entitlements.scopeFilterValueLoginUserId"
-                                                            )}
-                                                          </option>
-                                                        </select>
-                                                      </label>
-                                                    ) : null}
-                                                    {scopeFilterNeedsValues(selectedOperator) ? (
-                                                      <label
-                                                        className="grid min-w-0 gap-1 text-xs font-medium"
-                                                        htmlFor={`deepsec-scope-filter-values-${index}-${filterIndex}`}
-                                                      >
-                                                        <span>
-                                                          {t("security.deepsec.entitlements.scopeFilterValues")}
-                                                        </span>
-                                                        <input
-                                                          id={`deepsec-scope-filter-values-${index}-${filterIndex}`}
-                                                          className={COMPACT_INPUT_CLASS}
-                                                          disabled={entitlementReadOnly}
-                                                          inputMode={inputMode}
-                                                          value={(filter.values ?? []).join(", ")}
-                                                          onChange={(event) =>
-                                                            patchScopeFilter(index, filterIndex, {
-                                                              value: "",
-                                                              value_to: "",
-                                                              values: event.target.value
-                                                                .split(",")
-                                                                .map((value) => value.trim())
-                                                                .filter(Boolean),
-                                                              value_type: valueType,
-                                                            })
-                                                          }
-                                                        />
-                                                      </label>
-                                                    ) : scopeFilterNeedsValueTo(selectedOperator) ? (
-                                                      <div className="grid min-w-0 gap-2 sm:grid-cols-2">
-                                                        <label
-                                                          className="grid min-w-0 gap-1 text-xs font-medium"
-                                                          htmlFor={`deepsec-scope-filter-value-${index}-${filterIndex}`}
-                                                        >
-                                                          <span>
-                                                            {t("security.deepsec.entitlements.scopeFilterValue")}
-                                                          </span>
-                                                          <input
-                                                            id={`deepsec-scope-filter-value-${index}-${filterIndex}`}
-                                                            className={COMPACT_INPUT_CLASS}
-                                                            disabled={entitlementReadOnly}
-                                                            inputMode={inputMode}
-                                                            value={filter.value ?? ""}
-                                                            onChange={(event) =>
-                                                              patchScopeFilter(index, filterIndex, {
-                                                                value: event.target.value,
-                                                                values: [],
-                                                                value_type: valueType,
-                                                              })
-                                                            }
-                                                          />
-                                                        </label>
-                                                        <label
-                                                          className="grid min-w-0 gap-1 text-xs font-medium"
-                                                          htmlFor={`deepsec-scope-filter-value-to-${index}-${filterIndex}`}
-                                                        >
-                                                          <span>
-                                                            {t("security.deepsec.entitlements.scopeFilterValueTo")}
-                                                          </span>
-                                                          <input
-                                                            id={`deepsec-scope-filter-value-to-${index}-${filterIndex}`}
-                                                            className={COMPACT_INPUT_CLASS}
-                                                            disabled={entitlementReadOnly}
-                                                            inputMode={inputMode}
-                                                            value={filter.value_to ?? ""}
-                                                            onChange={(event) =>
-                                                              patchScopeFilter(index, filterIndex, {
-                                                                value_to: event.target.value,
-                                                                values: [],
-                                                                value_type: valueType,
-                                                              })
-                                                            }
-                                                          />
-                                                        </label>
-                                                      </div>
-                                                    ) : scopeFilterNeedsValue(selectedOperator) &&
-                                                      selectedValueSource === LOGIN_USER_ID_SCOPE_VALUE_SOURCE ? (
-                                                      <div className="grid min-w-0 gap-1 text-xs font-medium">
-                                                        <span>
-                                                          {t("security.deepsec.entitlements.scopeFilterValue")}
-                                                        </span>
-                                                        <p
-                                                          className="min-h-9 rounded-md border border-border bg-muted/20 px-3 py-2 text-xs font-normal text-muted"
-                                                          data-testid={`security-deepsec-scope-filter-login-user-id-${index}-${filterIndex}`}
-                                                        >
-                                                          {t(
-                                                            "security.deepsec.entitlements.scopeFilterValueLoginUserIdHelper"
-                                                          )}
-                                                        </p>
-                                                      </div>
-                                                    ) : scopeFilterNeedsValue(selectedOperator) ? (
-                                                      <label
-                                                        className="grid min-w-0 gap-1 text-xs font-medium"
-                                                        htmlFor={`deepsec-scope-filter-value-${index}-${filterIndex}`}
-                                                      >
-                                                        <span>
-                                                          {t("security.deepsec.entitlements.scopeFilterValue")}
-                                                        </span>
-                                                        <input
-                                                          id={`deepsec-scope-filter-value-${index}-${filterIndex}`}
-                                                          className={COMPACT_INPUT_CLASS}
-                                                          disabled={entitlementReadOnly}
-                                                          inputMode={inputMode}
-                                                          pattern={
-                                                            valueType === "NUMBER" &&
-                                                            selectedOperator === "EQ"
-                                                              ? "[0-9]*"
-                                                              : undefined
-                                                          }
-                                                          value={filter.value ?? ""}
-                                                          onChange={(event) =>
-                                                            patchScopeFilter(index, filterIndex, {
-                                                              value: event.target.value,
-                                                              value_to: "",
-                                                              values: [],
-                                                              value_type: valueType,
-                                                            })
-                                                          }
-                                                        />
-                                                      </label>
-                                                    ) : (
-                                                      <p className="self-end rounded-md border border-dashed border-border px-3 py-2 text-xs text-muted md:col-span-2 2xl:col-span-1">
-                                                        {t("security.deepsec.entitlements.scopeFilterNoValue")}
-                                                      </p>
-                                                    )}
-                                                    <Button
-                                                      iconOnly
-                                                      type="button"
-                                                      size="sm"
-                                                      variant="ghost"
-                                                      className="justify-self-end self-end md:col-span-2 2xl:col-span-1"
-                                                      aria-label={t(
-                                                        "security.deepsec.entitlements.scopeFilterRemove"
-                                                      )}
-                                                      disabled={entitlementReadOnly}
-                                                      onClick={() => removeScopeFilter(index, filterIndex)}
-                                                    >
-                                                      <Trash2 size={14} aria-hidden />
-                                                    </Button>
-                                                  </div>
-                                                </div>
-                                              );
-                                            })}
-                                          </div>
-                                        )}
-                                      </div>
+                                    {["FILTERS", "EXPRESSION"].includes(entitlement.scope_mode ?? "") ? (
+                                      <ScopeExpressionEditor
+                                        expression={entitlementExpression(entitlement)}
+                                        columns={supportedScopeColumns}
+                                        owner={entitlement.target_owner ?? ""}
+                                        objectName={entitlement.target_object ?? ""}
+                                        disabled={entitlementReadOnly}
+                                        index={index}
+                                        onChange={(scope_expression) => patchEntitlement(index, { scope_mode: "EXPRESSION", scope_expression, scope_filters: [], scope_column: "", scope_code: "EXPRESSION" })}
+                                      />
                                     ) : null}
                                   </div>
                                   </section>
@@ -2820,7 +2449,7 @@ export function SecurityDeepSecPage() {
                                     className="w-full min-w-0 justify-center lg:w-auto"
                                     loading={entitlementPreviewing}
                                     disabled={
-                                      entitlementReadOnly || actionBlocked ||
+                                      entitlementReadOnly || actionBlocked || Boolean(validateEntitlements()) ||
                                       entitlementPreviewing ||
                                       entitlementApplying ||
                                       (normalizedEntitlementDraftRows.length === 0 &&
@@ -2953,7 +2582,7 @@ export function SecurityDeepSecPage() {
                                   entitlementPreviewing ||
                                   entitlementApplying ||
                                   !status?.configured ||
-                                  !entitlementApplyConfirmed
+                                  !entitlementApplyConfirmed || Boolean(validateEntitlements())
                                 }
                                 onClick={() => void handleApplyEntitlements()}
                               >

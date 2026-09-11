@@ -21,6 +21,8 @@ from .domain import (
     RoleRecord,
     SessionRecord,
     UserRecord,
+    scope_expression_canonical_json,
+    scope_expression_from_json,
     scope_filters_canonical_json,
     scope_filters_from_json,
 )
@@ -937,7 +939,7 @@ class OracleSecurityStore:
             SELECT ENTITLEMENT_ID, RESOURCE_CODE, SCOPE_CODE, CAPABILITY,
                    TARGET_OWNER, TARGET_OBJECT, TARGET_TYPE, COLUMN_NAMES,
                    SCOPE_MODE, SCOPE_COLUMN, SCOPE_FILTERS, DATA_GRANT_NAME, SQL_CHECKSUM,
-                   APPLY_STATUS, APPLY_ERROR_MESSAGE, APPLIED_AT
+                   APPLY_STATUS, APPLY_ERROR_MESSAGE, APPLIED_AT, SCOPE_EXPRESSION
               FROM NL2SQL_APP_DATA_ENTITLEMENTS
              WHERE ROLE_ID = :role_id
              ORDER BY TARGET_OWNER, TARGET_OBJECT, SCOPE_CODE, CAPABILITY, ENTITLEMENT_ID
@@ -963,6 +965,7 @@ class OracleSecurityStore:
                 apply_status="PENDING" if item[13] is None else str(item[13]),
                 apply_error_message="" if item[14] in (None, "-") else str(item[14]),
                 applied_at=item[15],
+                scope_expression=scope_expression_from_json(item[16]),
             )
             for item in cursor.fetchall()
         ]
@@ -1384,18 +1387,22 @@ class OracleSecurityStore:
             {"role_id": role.role_id},
         )
         for entitlement in role.entitlements:
+            if entitlement.scope_expression is not None and hasattr(cursor, "setinputsizes"):
+                import oracledb
+
+                cursor.setinputsizes(scope_expression=oracledb.DB_TYPE_CLOB)
             cursor.execute(
                 """
                 INSERT INTO NL2SQL_APP_DATA_ENTITLEMENTS
                   (ENTITLEMENT_ID, ROLE_ID, RESOURCE_CODE, SCOPE_CODE, CAPABILITY,
                    TARGET_OWNER, TARGET_OBJECT, TARGET_TYPE, COLUMN_NAMES,
                    SCOPE_MODE, SCOPE_COLUMN, SCOPE_FILTERS, DATA_GRANT_NAME, SQL_CHECKSUM,
-                   APPLY_STATUS, APPLY_ERROR_MESSAGE, APPLIED_AT)
+                   APPLY_STATUS, APPLY_ERROR_MESSAGE, APPLIED_AT, SCOPE_EXPRESSION)
                 VALUES
                   (:entitlement_id, :role_id, :resource_code, :scope_code, :capability_code,
                    :target_owner, :target_object, :target_type, :column_names,
                    :scope_mode, :scope_column, :scope_filters, :data_grant_name, :sql_checksum,
-                   :apply_status, :apply_error_message, :applied_at)
+                   :apply_status, :apply_error_message, :applied_at, :scope_expression)
                 """,
                 {
                     "entitlement_id": entitlement.entitlement_id,
@@ -1414,6 +1421,11 @@ class OracleSecurityStore:
                     "scope_mode": entitlement.scope_mode or "ALL",
                     "scope_column": entitlement.scope_column or None,
                     "scope_filters": scope_filters_canonical_json(entitlement.scope_filters),
+                    "scope_expression": (
+                        scope_expression_canonical_json(entitlement.scope_expression)
+                        if entitlement.scope_expression is not None
+                        else None
+                    ),
                     "data_grant_name": entitlement.data_grant_name or None,
                     "sql_checksum": entitlement.sql_checksum or None,
                     "apply_status": entitlement.apply_status or "PENDING",

@@ -535,6 +535,25 @@ def list_deepsec_data_entitlements() -> ApiResponse[list[DeepSecRoleEntitlements
     return ApiResponse(data=get_deepsec_service().data_entitlements())
 
 
+@router.get("/security/deepsec/scope-profiles")
+def list_deepsec_scope_profiles() -> ApiResponse[list[dict[str, object]]]:
+    from .scope_relations import scope_profiles
+
+    return ApiResponse(data=scope_profiles())
+
+
+@router.get("/security/deepsec/relations")
+def list_deepsec_relations(
+    profile_id: str, owner: str, object_name: str
+) -> ApiResponse[dict[str, object]]:
+    from .deepsec import _qualified
+    from .scope_relations import relation_catalog
+
+    return ApiResponse(
+        data=relation_catalog(get_deepsec_service(), profile_id, _qualified(owner, object_name))
+    )
+
+
 @router.get(
     "/security/deepsec/target-objects",
     response_model=ApiResponse[DeepSecTargetObjectPageData],
@@ -545,6 +564,7 @@ def list_deepsec_target_objects(
     q: Annotated[str, Query(max_length=128)] = "",
     owner_prefix: Annotated[str, Query(max_length=128)] = "",
     include_counts: bool = False,
+    profile_id: str | None = None,
 ) -> ApiResponse[DeepSecTargetObjectPageData]:
     return ApiResponse(
         data=get_deepsec_service().target_objects(
@@ -553,6 +573,7 @@ def list_deepsec_target_objects(
             q=q,
             owner_prefix=owner_prefix,
             include_counts=include_counts,
+            **({"profile_id": profile_id} if profile_id else {}),
         )
     )
 

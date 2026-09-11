@@ -182,9 +182,9 @@ Data Grant SQL は backend が固定生成する。`NL2SQL_DEEPSEC_CTX_PKG.SET_A
 行 scope で値ソース「ログインユーザーID」を選んだ場合は、
 `SYS_CONTEXT('NL2SQL_APP_USER_CTX', 'LOGIN_USER_ID')` を業務列と比較する。
 
-V1 の capability は SELECT Data Grant のみを対象にする。行 scope の UI は `ALL` と structured filter
-(`FILTERS`) で指定する。旧 UI の文字列系 column 値一致 (`COLUMN_EQUALS`) は互換入力として backend に
-残すが、画面では `FILTERS` の `EQ + 固定値` 条件へ統合する。`FILTERS` は UI/API から列・operator・
+capability は SELECT Data Grant のみを対象にする。行 scope の UI は `ALL` と条件ツリー
+(`EXPRESSION`) で指定する。従来の structured filter (`FILTERS`) は互換読み取りする。旧 UI の文字列系 column 値一致 (`COLUMN_EQUALS`) は互換入力として backend に
+残すが、画面では AND グループ内の `EQ + 固定値` 条件へ統合する。`FILTERS` は UI/API から列・operator・
 値ソース・値を JSON として受け付け、backend が AND predicate へ固定生成する。`EQ` の文字列列と
 NUMBER 列では、値ソースとして固定値またはログインユーザーIDを選べる。ログインユーザーIDは
 `ORA_END_USER_CONTEXT.CLIENT_IDENTIFIER` を使い、現在の application user id と対象列を比較する。
@@ -216,6 +216,74 @@ direct logon と対象 object 参照に必要な DB role を有効化する。�
 `SYSTEM_ADMIN` は application feature permission では将来権限を含む wildcard だが、data entitlement では
 wildcard ではない。実データへのアクセス範囲は、他の role と同じく `データ権限` workflow で明示的に
 設定・適用する。
+
+## 条件グループと関連テーブル条件（Issue #447）
+
+行条件は `すべて満たす（AND）` / `いずれかを満たす（OR）` のグループで編集する。
+各グループが括弧に相当し、文字要約と読み取り専用 SQL preview で確認できる。
+根を含む 3 階層、ルール全体で 20 フィールド条件・3 関連カード、関連キーは 8 組を製品上限とする。
+関連カード内の条件グループも階層数に含める。空グループ、空値、未完了の関連は保存・preview・apply
+できず、最後の条件を削除しても `ALL` に切り替わらない。既存の型別 operator とログインユーザーIDを継続する。
+
+関連カードは同じ DB の Profile、関連テーブル、等値キー、関連レコードの条件を指定する。
+確認済み外部キー（enabled / validated）と公開 revision / view の承認済み Ontology edge を候補にし、
+管理者による実在列の手動指定も可能。複合キーを保持し、一つのカードは一つの相関 `EXISTS` に変換する。
+同一カードの条件は同一の関連レコードで満たす必要があり、別レコードの部分一致を合成しない。
+自関連、多段関連、関連カード内の関連、DB link、任意 SQL、NOT グループ、NOT EXISTS、集約・関数編集、
+`WHEN … GRANTED ON` による権限継承、書込み権限は対象外。
+
+Profile は設定候補の範囲のみを定める。Data Grant は物理オブジェクトに対して全 Profile で有効となる。
+Profile の変更・削除で既存の DB grant を自動削除しない。保存した Profile 範囲 version と関係の ID/version、
+実在列・型・参照権限・既存 grant/view の依存を preview/apply 時に再検証する。変更や検証不能はエラーで止め、
+別オブジェクトへの置換、利用者権限の自動拡大、長い条件の複数 grant への自動分割は行わない。
+
+Oracle の predicate は最大 4,000 文字で、参照権限は Data Grant owner、循環は query runtime でも確認される。
+アプリ側は認可のガードを含む完全な predicate で文字数を検証する。
+[Oracle CREATE DATA GRANT](https://docs.oracle.com/en/database/oracle/oracle-database/26/sqlrf/create-data-grant.html)
+に従い、固定のユーザー・active role・適用済み entitlement の条件の内側に括弧付きユーザー条件を置く。
+OR はこのガードを迂回できない。複数 Data Grant の実効権限は和集合なので、追加した「制限ルール」で
+既存許可を狭めることはできない。AND が必要な条件は同じルールへまとめる。
+[Oracle About Data Grants](https://docs.oracle.com/en/database/oracle/oracle-database/26/ddscg/data-grants.html)
+
+関連条件は関連テーブルへの読み取り権限を自動付与しない。関連テーブル自身の DeepSec/VPD 設定によって
+照合できる行が制限される可能性がある。2026-09-11 の隔離 Oracle 実機検証では、関連表を
+`USE DATA GRANTS ONLY` で保護すると、関連表の grant が D3 のみの時は本人分（ID=3）のみ、
+D1/D3 に変更すると関連条件に一致する ID=1 も返った。これは検証環境で観測した結果であり、
+任意の権限構成の最終可視行を継承する機能としては提供しない。
+
+### API・移行・状態保持
+
+`scope_mode: EXPRESSION` / `scope_expression: {version: 1, root: ...}` を entitlement API に追加した。
+ノードは `group`、`condition`、`related_exists` の discriminated union で、SQL 断片は受け付けない。
+`GET /api/security/deepsec/scope-profiles` と `GET /api/security/deepsec/relations` が設定候補を返す。
+対象一覧の `profile_id` は候補を絞る任意パラメーターで、runtime 認可には追加しない。
+
+デプロイ時は `backend` で `uv run python -m app.cli.app_security_migrate --apply` を実行し、
+migration `020_deepsec_scope_expression.sql` の nullable `SCOPE_EXPRESSION` CLOB と mode 制約を適用する。
+旧 `FILTERS` / `COLUMN_EQUALS` はそのまま読み、編集・保存したルールのみ新形式にする。
+既存 entitlement ID / Data Grant 名 / checksum / apply 状態は未変更時に保持する。
+複雑ルールへの旧形式上書きは拒否する。新 UI が明示的に全行へ変更する場合のみ
+`scope_expression_version: 1` で対応クライアントであることを示す。
+
+草稿は既存 WorkspaceState により同一ユーザー・DB の同一タブ sessionStorage に期限付きで保持する。
+確認語・SQL preview は復元せず、ルール変更や画面復帰で実行同意を解除する。
+再取得は草稿を上書きせず、保存時に元の role version を用いて競合を検出する。
+
+### 回帰検証
+
+`test_deepsec_scope_expression.py` は括弧の違い、OR の認可ガード、同一関連行、重複、NULL、複合キー、
+旧形式互換・所有フィールド・CLOB 契約、範囲/型/権限/循環/長さの拒否を検証する。
+`security-rbac.spec.ts` は desktop と mobile-375 で編集・preview・草稿復元・確認解除・空条件・レイアウトを検証する。
+実機の opt-in `test_deepsec_expression_only_isolated_objects` は新規隔離テーブルと grant のみを作り、
+実 SELECT の結果、保護された関連表、4KB 超 CLOB、runtime `ORA-52561` を確認し、finally で削除する。
+
+```bash
+NL2SQL_RUN_DEEPSEC_INTEGRATION=1 \
+NL2SQL_DEEPSEC_INTEGRATION_CONFIRM=I_UNDERSTAND_DEEPSEC_DB_MUTATION \
+uv run pytest tests/test_deepsec_real_oracle_integration.py -k expression_only
+```
+
+70–80% は常用シナリオの設計目標であり、計測済み業務カバレッジではない。
 
 ## SQL 実行画面の安全境界
 

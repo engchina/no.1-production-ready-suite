@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from datetime import datetime
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
 
@@ -16,6 +17,7 @@ from .domain import (
     Principal,
     RoleRecord,
     UserRecord,
+    scope_expression_scope_code,
     scope_filters_scope_code,
 )
 from .permissions import PermissionDefinition, normalize_permission_codes
@@ -66,6 +68,7 @@ class PasswordChangeRequest(BaseModel):
 
 
 class DataEntitlementScopeFilterInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     column_name: str = Field(min_length=1, max_length=128)
     operator: str = Field(min_length=1, max_length=32)
     value_type: str = Field(default="TEXT", max_length=32)
@@ -158,6 +161,89 @@ class DataEntitlementScopeFilterInput(BaseModel):
         )
 
 
+class ScopeCondition(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["condition"]
+    filter: DataEntitlementScopeFilterInput
+
+
+class ScopeJoinKey(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    source_column: str
+    target_column: str
+
+    @field_validator("source_column", "target_column")
+    @classmethod
+    def identifier(cls, value: str) -> str:
+        return _normalize_oracle_identifier(value, "関連キー")
+
+
+class ScopeGroup(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["group"]
+    operator: Literal["AND", "OR"]
+    children: list[
+        Annotated[ScopeCondition | ScopeGroup | ScopeRelatedExists, Field(discriminator="kind")]
+    ] = Field(min_length=1, max_length=23)
+
+
+class ScopeRelatedExists(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["related_exists"]
+    profile_id: str = Field(min_length=1, max_length=128)
+    object_scope_version: int = Field(ge=1)
+    target_owner: str
+    target_object: str
+    target_type: Literal["TABLE", "VIEW", "MATERIALIZED VIEW"] = "TABLE"
+    relation_source: Literal["MANUAL", "FOREIGN_KEY", "ONTOLOGY"] = "MANUAL"
+    relation_id: str = Field(default="", max_length=256)
+    relation_version: str = Field(default="", max_length=128)
+    join_keys: list[ScopeJoinKey] = Field(min_length=1, max_length=8)
+    condition: ScopeGroup
+
+    @field_validator("target_owner", "target_object")
+    @classmethod
+    def identifier(cls, value: str) -> str:
+        return _normalize_oracle_identifier(value, "関連テーブル")
+
+
+ScopeGroup.model_rebuild()
+ScopeRelatedExists.model_rebuild()
+
+
+class ScopeExpression(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    version: Literal[1] = 1
+    root: ScopeGroup
+
+    @model_validator(mode="after")
+    def validate_limits(self) -> ScopeExpression:
+        conditions = 0
+        related = 0
+
+        def visit(
+            node: ScopeCondition | ScopeGroup | ScopeRelatedExists, depth: int, in_relation: bool
+        ) -> None:
+            nonlocal conditions, related
+            if isinstance(node, ScopeGroup):
+                if depth > 3:
+                    raise ValueError("条件グループは最大 3 階層です。")
+                for child in node.children:
+                    visit(child, depth + (1 if isinstance(child, ScopeGroup) else 0), in_relation)
+            elif isinstance(node, ScopeCondition):
+                conditions += 1
+            else:
+                if in_relation:
+                    raise ValueError("関連テーブルの多段参照は指定できません。")
+                related += 1
+                visit(node.condition, depth + 1, True)
+
+        visit(self.root, 1, False)
+        if conditions > 20 or related > 3:
+            raise ValueError("条件は 20 件、関連テーブル条件は 3 件以内にしてください。")
+        return self
+
+
 class DataEntitlementInput(BaseModel):
     entitlement_id: str | None = Field(default=None, max_length=36)
     resource_code: str = Field(default="", max_length=261)
@@ -169,6 +255,8 @@ class DataEntitlementInput(BaseModel):
     column_names: list[str] = Field(default_factory=list)
     scope_mode: str = Field(default="ALL", max_length=32)
     scope_column: str = Field(default="", max_length=128)
+    scope_expression: ScopeExpression | None = None
+    scope_expression_version: Literal[1] | None = None
     scope_filters: list[DataEntitlementScopeFilterInput] = Field(
         default_factory=list,
         max_length=_MAX_SCOPE_FILTERS,
@@ -232,15 +320,30 @@ class DataEntitlementInput(BaseModel):
     @classmethod
     def normalize_scope_mode(cls, value: str) -> str:
         normalized = value.strip().upper() or "ALL"
-        if normalized not in {"ALL", "COLUMN_EQUALS", "FILTERS"}:
-            raise ValueError("scope_mode は ALL、COLUMN_EQUALS、FILTERS のいずれかです。")
+        if normalized not in {"ALL", "COLUMN_EQUALS", "FILTERS", "EXPRESSION"}:
+            raise ValueError(
+                "scope_mode は ALL、COLUMN_EQUALS、FILTERS、EXPRESSION のいずれかです。"
+            )
         return normalized
+
+    @model_validator(mode="after")
+    def validate_expression_mode(self) -> DataEntitlementInput:
+        if self.scope_mode == "EXPRESSION":
+            if self.scope_expression is None or self.scope_filters or self.scope_column:
+                raise ValueError("EXPRESSION は条件ツリーのみ指定してください。")
+        elif self.scope_expression is not None:
+            raise ValueError("条件ツリーには EXPRESSION モードを指定してください。")
+        return self
 
     def to_record(self, role_id: str) -> DataEntitlementRecord:
         scope_filters = [item.to_record() for item in self.scope_filters]
         scope_code = self.scope_code
         if self.scope_mode == "ALL":
             scope_code = "*"
+        elif self.scope_mode == "EXPRESSION":
+            if self.scope_expression is None:
+                raise ValueError("条件ツリーを指定してください。")
+            scope_code = scope_expression_scope_code(self.scope_expression.model_dump())
         elif self.scope_mode == "FILTERS":
             scope_code = scope_filters_scope_code(scope_filters)
         return DataEntitlementRecord(
@@ -256,6 +359,8 @@ class DataEntitlementInput(BaseModel):
             scope_mode=self.scope_mode,
             scope_column=self.scope_column,
             scope_filters=scope_filters,
+            scope_expression=self.scope_expression.model_dump() if self.scope_expression else None,
+            scope_expression_version=self.scope_expression_version,
         )
 
 
@@ -367,6 +472,7 @@ class DataEntitlementData(BaseModel):
     column_names: list[str] = Field(default_factory=list)
     scope_mode: str = "ALL"
     scope_column: str = ""
+    scope_expression: ScopeExpression | None = None
     scope_filters: list[DataEntitlementScopeFilterInput] = Field(default_factory=list)
     data_grant_name: str = ""
     sql_checksum: str = ""
@@ -395,6 +501,11 @@ class DataEntitlementData(BaseModel):
             column_names=list(record.column_names),
             scope_mode=record.scope_mode,
             scope_column=record.scope_column,
+            scope_expression=(
+                ScopeExpression.model_validate(record.scope_expression)
+                if record.scope_expression
+                else None
+            ),
             scope_filters=[
                 DataEntitlementScopeFilterInput(
                     column_name=item.column_name,

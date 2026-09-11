@@ -1217,6 +1217,7 @@ def test_oracle_role_access_uses_safe_data_entitlement_bind_names() -> None:
         "scope_mode": "COLUMN_EQUALS",
         "scope_column": "DEPARTMENT_CODE",
         "scope_filters": "[]",
+        "scope_expression": None,
         "data_grant_name": None,
         "sql_checksum": None,
         "apply_status": "PENDING",
@@ -2550,6 +2551,7 @@ def test_security_migration_preview_includes_audit_cleanup(
     assert "migration=009" in output
     assert "migration=012" in output
     assert "migration=016" in output
+    assert "migration=020" in output
 
 
 def test_security_migration_user_uuid_rename_ignores_missing_constraint() -> None:

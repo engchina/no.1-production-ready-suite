@@ -221,32 +221,11 @@ test("DeepSec Data Grant 行削除は icon-only ではなく短い削除ラベ�
   assert.equal(t("security.deepsec.entitlements.removeButtonLabel"), "削除");
 });
 
-test("DeepSec 条件 filter row は mobile/tablet で重ならない responsive grid を使う", () => {
-  assert.match(pageSource, /const INPUT_CLASS =\s*"h-11 min-w-0 w-full/u);
-  assert.match(pageSource, /const COMPACT_INPUT_CLASS =\s*"h-9 min-w-0 w-full/u);
-  assert.match(
-    entitlementsPanel,
-    /className="grid min-w-0 gap-2 md:grid-cols-2 2xl:grid-cols-\[minmax\(0,1\.25fr\)_minmax\(0,0\.75fr\)_minmax\(0,0\.8fr\)_minmax\(0,1fr\)_auto\]"/u
-  );
-  assert.doesNotMatch(
-    entitlementsPanel,
-    /2xl:grid-cols-\[minmax\(15rem,1\.25fr\)_minmax\(9rem,0\.75fr\)_minmax\(10rem,0\.8fr\)_minmax\(12rem,1fr\)_auto\]/u
-  );
-  assert.match(entitlementsPanel, /className="justify-self-end self-end md:col-span-2 2xl:col-span-1"/u);
-});
-
-test("DeepSec 行 scope は 条件で制限 に列値制限とログインユーザーIDを統合する", () => {
-  assert.match(pageSource, /const SCOPE_MODES = \["ALL", "FILTERS"\] as const/u);
-  assert.doesNotMatch(entitlementsPanel, /security\.deepsec\.entitlements\.scopeColumnEquals/u);
+test("DeepSec 条件は専用の条件グループ editor で表示する", () => {
+  assert.match(pageSource, /ScopeExpressionEditor/u);
+  assert.match(pageSource, /canonicalExpression/u);
+  assert.match(pageSource, /expressionError/u);
   assert.doesNotMatch(entitlementsPanel, /<option value="COLUMN_EQUALS">/u);
-  assert.match(entitlementsPanel, /security\.deepsec\.entitlements\.scopeFilterValueSource/u);
-  assert.match(entitlementsPanel, /security\.deepsec\.entitlements\.scopeFilterValueLoginUserId/u);
-  assert.match(pageSource, /LOGIN_USER_ID_SCOPE_VALUE_SOURCE = "LOGIN_USER_ID"/u);
-  assert.match(entitlementsPanel, /value_source: event\.target\.value/u);
-  assert.match(pageSource, /normalizeScopeFilterValueSource/u);
-  assert.match(pageSource, /function scopeFilterSupportsValueSource\(operator: string, valueType: string\)/u);
-  assert.match(pageSource, /\["TEXT", "NUMBER"\]\.includes\(valueType\)/u);
-  assert.match(pageSource, /scopeFilterPositiveIntegerValidation/u);
 });
 
 test("DeepSec Data Grant editor はロール全体を preview と apply に渡す", () => {

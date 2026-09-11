@@ -39,7 +39,7 @@ test("handwritten danger surfaces stay limited to structured state and field con
     ["src/features/nl2sql/components/WorkflowProgressStrip.tsx", 1],
     ["src/features/nl2sql/pages/DataManagementPage.tsx", 1],
     ["src/components/StateViews.tsx", 1],
-    ["src/features/security/SecurityDeepSecPage.tsx", 2],
+    ["src/features/security/SecurityDeepSecPage.tsx", 1],
   ]);
   const dangerSurface = /(?:border-danger[^"'\n]*bg-danger|bg-danger[^"'\n]*border-danger)/gu;
   const actual = new Map<string, number>();

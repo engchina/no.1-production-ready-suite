@@ -4939,7 +4939,7 @@ test("DeepSec は構造化データ権限をロール別に編集する", async 
     });
   await filterRow.locator("#deepsec-scope-filter-operator-0-0").selectOption("IN");
   await filterRow.locator("#deepsec-scope-filter-values-0-0").fill("SALES, HR");
-  await entitlementForm.getByRole("button", { name: "条件を追加" }).click();
+  await entitlementForm.getByRole("button", { name: "条件を追加", exact: true }).click();
   const numberFilterRow = entitlementForm.getByTestId("security-deepsec-scope-filter-0-1");
   await expect(numberFilterRow.locator("#deepsec-scope-filter-column-0-1")).toContainText(
     "ORDER_ID · NUMBER"
@@ -4995,15 +4995,16 @@ test("DeepSec は構造化データ権限をロール別に編集する", async 
     data_entitlements: [
       {
         resource_code: "SALES.ORDERS",
-        scope_code: "FILTERS",
+        scope_code: "EXPRESSION",
         capability: "SELECT",
         target_owner: "SALES",
         target_object: "ORDERS",
         target_type: "TABLE",
         column_names: ["CUSTOMER_NAME", "REGION_CODE"],
-        scope_mode: "FILTERS",
+        scope_mode: "EXPRESSION",
         scope_column: "",
-        scope_filters: expectedScopeFilters,
+        scope_filters: [],
+        scope_expression: { version: 1, root: { kind: "group", operator: "AND", children: expectedScopeFilters.map((filter) => ({ kind: "condition", filter })) } },
       },
     ],
   });
@@ -5024,15 +5025,16 @@ test("DeepSec は構造化データ権限をロール別に編集する", async 
       {
         entitlement_id: "preview-0",
         resource_code: "SALES.ORDERS",
-        scope_code: "FILTERS",
+        scope_code: "EXPRESSION",
         capability: "SELECT",
         target_owner: "SALES",
         target_object: "ORDERS",
         target_type: "TABLE",
         column_names: ["CUSTOMER_NAME", "REGION_CODE"],
-        scope_mode: "FILTERS",
+        scope_mode: "EXPRESSION",
         scope_column: "",
-        scope_filters: expectedScopeFilters,
+        scope_filters: [],
+        scope_expression: { version: 1, root: { kind: "group", operator: "AND", children: expectedScopeFilters.map((filter) => ({ kind: "condition", filter })) } },
       },
     ],
   });
@@ -5385,7 +5387,8 @@ test("DeepSec Data Grant は3件追加しても下部操作と選択編集を維
   const applyButton = actionRegion.getByRole("button", { name: "Data Grant を適用" });
   await expect(applyButton).toBeVisible();
   await applyField.getByRole("textbox", { name: "実行確認語" }).fill("ADMIN_EXECUTE");
-  await expect(applyButton).toBeEnabled();
+  // 未完成の3件目が残る間は、確認語を入力しても適用できない。
+  await expect(applyButton).toBeDisabled();
   await expectElementCenterUnobscured(applyButton);
   await expect
     .poll(() =>
@@ -6127,4 +6130,109 @@ test("セキュリティレビュー: 成功通知が残っていても確認ダ
 test.afterEach(async ({ page }, testInfo) => {
   if (testInfo.status === "skipped") return;
   await expectLocalUiFonts(page);
+});
+
+test("DeepSec 条件グループ: OR・括弧・関連条件・草稿復元と確認解除", async ({ page }, testInfo) => {
+  const { role } = await mockReviewedDeepSec(page);
+  await page.route("**/api/security/deepsec/scope-profiles", route => fulfill(route, [{ id: "hr", name: "人事", object_scope_version: 1, objects: ["HR.EMPLOYEES", "HR.DEPARTMENTS"] }]));
+  await page.route("**/api/security/deepsec/relations?*", route => fulfill(route, { profile_id: "hr", object_scope_version: 1, objects: ["HR.DEPARTMENTS"], relations: [{ id: "HR.FK_DEPT", source: "FOREIGN_KEY", version: "fk-v1", target: "HR.DEPARTMENTS", join_keys: [{ source_column: "DEPARTMENT_CODE", target_column: "CODE" }] }] }));
+  await page.route("**/api/security/deepsec/target-objects/HR/DEPARTMENTS?*", route => fulfill(route, { owner: "HR", name: "DEPARTMENTS", object_type: "TABLE", comment: "部署", columns: [{ column_name: "CODE", data_type: "VARCHAR2", logical_name: "", nullable: false, comment: "" }, { column_name: "LOCATION", data_type: "VARCHAR2", logical_name: "", nullable: true, comment: "" }] }));
+  let submitted: Record<string, any> | null = null;
+  await page.route("**/api/security/deepsec/data-entitlements/review-a/preview", route => {
+    submitted = route.request().postDataJSON();
+    return fulfill(route, { role_id: role.role_id, version: 1, data_entitlements: submitted!.data_entitlements.map((item: object) => ({ ...item, sql: ["SELECT 1"], checksum: "expression" })), cleanup_sql: [], checksum: "expression" });
+  });
+  await page.goto("/settings/security/deepsec");
+  await page.getByRole("tab", { name: "データ権限", exact: true }).click();
+  await page.locator("#deepsec-entitlement-scope-mode-0").selectOption("FILTERS");
+  const root = page.getByTestId("scope-group-0");
+  await root.getByLabel("条件の組み合わせ").selectOption("OR");
+  const first = page.getByTestId("security-deepsec-scope-filter-0-0");
+  await first.getByLabel("値の種類").selectOption("LOGIN_USER_ID");
+  await root.getByRole("button", { name: "グループを追加", exact: true }).click();
+  const nested = page.getByTestId("scope-group-0-1");
+  await nested.getByLabel("列", { exact: true }).selectOption("DEPARTMENT_CODE");
+  await nested.getByLabel("値", { exact: true }).fill("SALES");
+  await nested.getByRole("button", { name: "関連テーブル条件を追加" }).click();
+  const related = page.getByTestId("scope-related-0-1-1");
+  await related.getByLabel("候補を選ぶ Profile").selectOption("hr");
+  await related.getByLabel("関連テーブル", { exact: true }).selectOption("HR.DEPARTMENTS");
+  await related.getByLabel("関連キーの設定方法").selectOption("HR.FK_DEPT");
+  await expect(related.getByLabel("対象テーブルの列")).toHaveValue("DEPARTMENT_CODE");
+  await expect(related.getByLabel("関連テーブルの列")).toHaveValue("CODE");
+  await related.getByLabel("列", { exact: true }).selectOption("LOCATION");
+  await related.getByLabel("値", { exact: true }).fill("東京");
+  await expect(page.getByTestId("scope-expression-summary")).toContainText("OR");
+  await expect(page.getByTestId("scope-expression-summary")).toContainText("AND");
+  await expect(page.getByTestId("scope-expression-summary")).toContainText("東京");
+  await page.getByRole("textbox", { name: "実行確認語" }).fill("ADMIN_EXECUTE");
+  await related.getByLabel("値", { exact: true }).fill("大阪");
+  await expect(page.getByRole("textbox", { name: "実行確認語" })).toHaveValue("");
+  await expectNoPageHorizontalScroll(page);
+  await page.screenshot({ path: testInfo.outputPath("deepsec-expression.png"), fullPage: true });
+  await expectNoElementHorizontalOverflow(root);
+  await page.getByText("ロール全体の SQL プレビュー", { exact: true }).click();
+  await page.getByTestId("security-deepsec-sql-preview-generate").click();
+  await expect.poll(() => submitted?.data_entitlements[0].scope_expression.root.operator).toBe("OR");
+  const tree = submitted!.data_entitlements[0].scope_expression;
+  expect(tree.root.children[1].children[1].join_keys).toEqual([{ source_column: "DEPARTMENT_CODE", target_column: "CODE" }]);
+  // reload で SQL preview・確認語は再利用せず、入力ツリーと baseline/version のみ復元。
+  page.on("dialog", dialog => dialog.accept());
+  await page.reload();
+  await expect(page.getByTestId("scope-expression-summary")).toContainText("大阪");
+  await expect(page.getByRole("textbox", { name: "実行確認語" })).toHaveValue("");
+  await expect(page.getByTestId("scope-group-0").getByLabel("条件の組み合わせ").first()).toHaveValue("OR");
+  await page.getByTestId("security-deepsec-scope-filter-0-0").getByRole("button", { name: "条件を削除" }).click();
+  await page.getByTestId("scope-group-0").getByRole("button", { name: "グループを削除" }).last().click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "グループを削除" }).click();
+  await expect(page.getByTestId("scope-group-0").getByText("条件を 1 件以上追加してください。空の条件では保存・適用できません。", { exact: true })).toBeVisible();
+  await page.getByText("ロール全体の SQL プレビュー", { exact: true }).click();
+  await expect(page.getByTestId("security-deepsec-sql-preview-generate")).toBeDisabled();
+});
+
+
+test("DeepSec 関連条件: 候補の読込・失敗再試行と手動複合キー", async ({ page }) => {
+  await mockReviewedDeepSec(page);
+  let pending: Route | undefined;
+  let attempts = 0;
+  await page.route("**/api/security/deepsec/scope-profiles", route => {
+    attempts += 1;
+    if (attempts === 1) { pending = route; return; }
+    return fulfill(route, [{ id: "hr", name: "人事", object_scope_version: 1, objects: ["HR.EMPLOYEES", "HR.DEPARTMENTS"] }]);
+  });
+  await page.route("**/api/security/deepsec/relations?*", route => fulfill(route, { profile_id: "hr", object_scope_version: 1, objects: ["HR.DEPARTMENTS"], relations: [] }));
+  await page.route("**/api/security/deepsec/target-objects/HR/DEPARTMENTS?*", route => fulfill(route, { owner: "HR", name: "DEPARTMENTS", object_type: "TABLE", comment: "", columns: ["CODE", "TENANT", "LOCATION"].map(column_name => ({ column_name, data_type: "VARCHAR2", nullable: false, logical_name: "", comment: "" })) }));
+  let submitted: any;
+  await page.route("**/api/security/deepsec/data-entitlements/review-a/preview", route => {
+    submitted = route.request().postDataJSON();
+    return fulfill(route, { role_id: "review-a", version: 1, data_entitlements: submitted.data_entitlements, cleanup_sql: [], checksum: "manual" });
+  });
+  await page.goto("/settings/security/deepsec");
+  await page.getByRole("tab", { name: "データ権限", exact: true }).click();
+  await page.locator("#deepsec-entitlement-scope-mode-0").selectOption("FILTERS");
+  await page.getByTestId("security-deepsec-scope-filter-0-0").getByLabel("値の種類").selectOption("LOGIN_USER_ID");
+  const addRelated = page.getByRole("button", { name: "関連テーブル条件を追加", exact: true });
+  await addRelated.focus();
+  await addRelated.press("Enter");
+  const related = page.getByTestId("scope-related-0-1");
+  await expect(related.getByRole("status")).toBeVisible();
+  await expect.poll(() => Boolean(pending)).toBe(true);
+  await fulfill(pending!, "関連候補を取得できませんでした", 503);
+  await expect(related.getByText("関連候補を取得できませんでした", { exact: true })).toBeVisible();
+  await related.getByRole("button", { name: "再試行", exact: true }).click();
+  await related.getByLabel("候補を選ぶ Profile").selectOption("hr");
+  await related.getByLabel("関連テーブル", { exact: true }).selectOption("HR.DEPARTMENTS");
+  await expect(related.getByLabel("関連キーの設定方法")).toHaveValue("");
+  await related.getByLabel("対象テーブルの列").selectOption("DEPARTMENT_CODE");
+  await related.getByLabel("関連テーブルの列").selectOption("CODE");
+  await related.getByRole("button", { name: "関連キーを追加", exact: true }).click();
+  await related.getByLabel("対象テーブルの列").nth(1).selectOption("DISPLAY_NAME");
+  await related.getByLabel("関連テーブルの列").nth(1).selectOption("TENANT");
+  await related.getByLabel("列", { exact: true }).selectOption("LOCATION");
+  await related.getByLabel("値", { exact: true }).fill("東京");
+  await page.getByText("ロール全体の SQL プレビュー", { exact: true }).click();
+  await page.getByTestId("security-deepsec-sql-preview-generate").click();
+  await expect.poll(() => submitted?.data_entitlements[0].scope_expression.root.children[1].join_keys.length).toBe(2);
+  expect(submitted.data_entitlements[0].scope_expression.root.children[1]).toMatchObject({ relation_source: "MANUAL", join_keys: [{ source_column: "DEPARTMENT_CODE", target_column: "CODE" }, { source_column: "DISPLAY_NAME", target_column: "TENANT" }] });
+  await expectNoPageHorizontalScroll(page);
 });

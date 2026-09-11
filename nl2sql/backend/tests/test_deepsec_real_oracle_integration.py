@@ -984,3 +984,185 @@ def test_deepsec_real_oracle_full_flow(
         finally:
             _REPORT.append(report.asdict())
             _write_report()
+
+
+def test_deepsec_expression_only_isolated_objects() -> None:
+    """現行基盤を再構成せず、専用 table/grant のみ作成して実述語を照合する。"""
+    import oracledb
+
+    from app.cli.app_security_migrate import split_ddl
+    from app.security.deepsec import DEEPSEC_DATA_ROLE, DEEPSEC_DB_ROLE
+    from app.security.scope_expression import compile_expression
+
+    service = _service()
+    owner = _ident(get_settings().oracle_user)
+    suffix = uuid.uuid4().hex[:8].upper()
+    employee = f"CX_DSE_{suffix}_E"
+    department = f"CX_DSE_{suffix}_D"
+    storage = f"CX_DSE_{suffix}_S"
+    grant = f"CX_DSE_{suffix}_G"
+    parent_grant = f"CX_DSE_{suffix}_P"
+    check_name = f"CX_DSE_{suffix}_CK"
+    created: list[str] = []
+    granted: list[str] = []
+
+    def condition(column: str, value: str) -> dict[str, Any]:
+        return {
+            "kind": "condition",
+            "filter": {
+                "column_name": column,
+                "operator": "EQ",
+                "value_type": "TEXT",
+                "value": value,
+            },
+        }
+
+    root = {
+        "kind": "group",
+        "operator": "OR",
+        "children": [
+            {
+                "kind": "group",
+                "operator": "AND",
+                "children": [
+                    condition("STATUS", "ACTIVE"),
+                    {
+                        "kind": "related_exists",
+                        "profile_id": "isolated-test",
+                        "object_scope_version": 1,
+                        "target_owner": owner,
+                        "target_object": department,
+                        "join_keys": [
+                            {"source_column": "DEPT", "target_column": "ID"},
+                            {"source_column": "TENANT", "target_column": "TENANT"},
+                        ],
+                        "condition": {
+                            "kind": "group",
+                            "operator": "AND",
+                            "children": [
+                                condition("LOCATION", "TOKYO"),
+                                condition("ENABLED", "YES"),
+                            ],
+                        },
+                    },
+                ],
+            },
+            condition("ID", "3"),
+        ],
+    }
+    entitlement = DataEntitlementInput.model_validate(
+        {
+            "capability": "SELECT",
+            "resource_code": f"{owner}.{employee}",
+            "target_owner": owner,
+            "target_object": employee,
+            "column_names": ["ID"],
+            "scope_mode": "EXPRESSION",
+            "scope_expression": {"version": 1, "root": root},
+        }
+    ).to_record("isolated")
+    try:
+        with service.pools.control_connection() as conn, conn.cursor() as cursor:
+            cursor.execute(
+                f"CREATE TABLE {employee}(ID VARCHAR2(8), STATUS VARCHAR2(20), "
+                "DEPT VARCHAR2(8), TENANT VARCHAR2(8))"
+            )
+            created.append(employee)
+            cursor.execute(
+                f"CREATE TABLE {department}(ID VARCHAR2(8), LOCATION VARCHAR2(20), "
+                "ENABLED VARCHAR2(8), TENANT VARCHAR2(8))"
+            )
+            created.append(department)
+            cursor.executemany(
+                f"INSERT INTO {employee} VALUES (:1,:2,:3,:4)",
+                [
+                    ("1", "ACTIVE", "D1", "T"),
+                    ("2", "ACTIVE", "D2", "T"),
+                    ("3", "INACTIVE", "D3", "T"),
+                    ("4", "ACTIVE", None, "T"),
+                    ("5", "ACTIVE", "D1", "OTHER"),
+                ],
+            )
+            cursor.executemany(
+                f"INSERT INTO {department} VALUES (:1,:2,:3,:4)",
+                [
+                    ("D1", "TOKYO", "YES", "T"),
+                    ("D1", "TOKYO", "YES", "T"),
+                    ("D2", "TOKYO", "NO", "T"),
+                    ("D2", "OSAKA", "YES", "T"),
+                    ("D3", "OSAKA", "YES", "T"),
+                ],
+            )
+            conn.commit()
+            for obj in (employee, department):
+                cursor.execute(f"GRANT SELECT ON {obj} TO {DEEPSEC_DB_ROLE}")
+                cursor.execute(f"SET USE DATA GRANTS ONLY ON {obj} ENABLED")
+            predicate = compile_expression(entitlement, {})
+            cursor.execute(
+                f"CREATE DATA GRANT {grant} AS SELECT (ID) ON {owner}.{employee} "
+                f"WHERE {predicate} TO {DEEPSEC_DATA_ROLE}"
+            )
+            granted.append(grant)
+            # 関連表も DeepSec 保護し、条件参照と利用者の直接参照の違いを固定する。
+            cursor.execute(
+                f"CREATE DATA GRANT {parent_grant} AS SELECT ON {owner}.{department} "
+                f"WHERE ID = 'D3' TO {DEEPSEC_DATA_ROLE}"
+            )
+            granted.append(parent_grant)
+        with service.pools.unscoped_data_connection() as conn, conn.cursor() as cursor:
+            cursor.execute(f"SELECT ID FROM {owner}.{employee} ORDER BY ID")
+            assert cursor.fetchall() == [("3",)]
+            cursor.execute(f"SELECT ID FROM {owner}.{department}")
+            assert cursor.fetchall() == [("D3",)]
+        with service.pools.control_connection() as conn, conn.cursor() as cursor:
+            cursor.execute(
+                f"CREATE OR REPLACE DATA GRANT {parent_grant} AS SELECT "
+                f"ON {owner}.{department} WHERE ID IN ('D1','D3') TO {DEEPSEC_DATA_ROLE}"
+            )
+        with service.pools.unscoped_data_connection() as conn, conn.cursor() as cursor:
+            cursor.execute(f"SELECT ID FROM {owner}.{employee} ORDER BY ID")
+            assert cursor.fetchall() == [("1",), ("3",)]
+        with service.pools.control_connection() as conn, conn.cursor() as cursor:
+            # 新規 CLOB migration を隔離した旧構造へ適用して 4KB 超の JSON を roundtrip。
+            cursor.execute(
+                f"CREATE TABLE {storage}(SCOPE_MODE VARCHAR2(32), CONSTRAINT {check_name} "
+                "CHECK (SCOPE_MODE IN ('ALL','FILTERS'))) "
+                "COLUMN STORE COMPRESS FOR QUERY HIGH ROW LEVEL LOCKING"
+            )
+            created.append(storage)
+            migration = (
+                (BACKEND_DIR / "migrations/020_deepsec_scope_expression.sql")
+                .read_text()
+                .replace("NL2SQL_APP_DATA_ENTITLEMENTS", storage)
+                .replace("CK_NL2SQL_APP_DE_SCOPE_MODE", check_name)
+            )
+            for statement in split_ddl(migration):
+                cursor.execute(statement)
+            cursor.setinputsizes(payload=oracledb.DB_TYPE_CLOB)
+            payload = json.dumps({"root": root, "padding": "x" * 5000}, ensure_ascii=False)
+            cursor.execute(
+                f"INSERT INTO {storage}(SCOPE_MODE,SCOPE_EXPRESSION) "
+                "VALUES ('EXPRESSION',:payload)",
+                {"payload": payload},
+            )
+            cursor.execute(f"SELECT SCOPE_EXPRESSION FROM {storage}")
+            raw = cursor.fetchone()[0]
+            assert (raw.read() if hasattr(raw, "read") else raw) == payload
+            cursor.execute(
+                f"CREATE OR REPLACE DATA GRANT {grant} AS SELECT (ID) ON {owner}.{employee} "
+                f"WHERE ID IN (SELECT ID FROM {owner}.{employee}) TO {DEEPSEC_DATA_ROLE}"
+            )
+        with (
+            service.pools.unscoped_data_connection() as conn,
+            conn.cursor() as cursor,
+            pytest.raises(oracledb.DatabaseError, match="ORA-52561"),
+        ):
+            cursor.execute(f"SELECT ID FROM {owner}.{employee}")
+            cursor.fetchall()
+    finally:
+        with service.pools.control_connection() as conn, conn.cursor() as cursor:
+            for name in reversed(granted):
+                cursor.execute(f"DROP DATA GRANT IF EXISTS {owner}.{name}")
+            for name in reversed(created):
+                cursor.execute(f"DROP TABLE {owner}.{name} PURGE")
+        close_oracle_pools()

@@ -1,3 +1,17 @@
+export type ScopeNode = ScopeGroup | { kind: "condition"; filter: DataEntitlementScopeFilter } | ScopeRelatedExists;
+export interface ScopeGroup { kind: "group"; operator: "AND" | "OR"; children: ScopeNode[] }
+export interface ScopeExpression { version: 1; root: ScopeGroup }
+export interface ScopeJoinKey { source_column: string; target_column: string }
+export interface ScopeRelatedExists {
+  kind: "related_exists"; profile_id: string; object_scope_version: number;
+  target_owner: string; target_object: string; target_type: "TABLE" | "VIEW" | "MATERIALIZED VIEW";
+  relation_source: "MANUAL" | "FOREIGN_KEY" | "ONTOLOGY"; relation_id: string; relation_version: string;
+  join_keys: ScopeJoinKey[]; condition: ScopeGroup;
+}
+export interface ScopeProfile { id: string; name: string; object_scope_version: number; objects: string[] }
+export interface ScopeRelation { id: string; source: "FOREIGN_KEY" | "ONTOLOGY"; version: string; target: string; join_keys: ScopeJoinKey[] }
+export interface ScopeRelationCatalog { profile_id: string; object_scope_version: number; objects: string[]; relations: ScopeRelation[] }
+
 export type DataEntitlementScopeValueType = "TEXT" | "NUMBER" | "TEMPORAL";
 export type DataEntitlementScopeValueSource = "LITERAL" | "LOGIN_USER_ID";
 export type DataEntitlementScopeOperator =
@@ -39,6 +53,8 @@ export interface DataEntitlement {
   column_names?: string[];
   scope_mode?: "ALL" | "COLUMN_EQUALS" | "FILTERS" | string;
   scope_column?: string;
+  scope_expression?: ScopeExpression | null;
+  scope_expression_version?: 1;
   scope_filters?: DataEntitlementScopeFilter[];
   data_grant_name?: string;
   sql_checksum?: string;

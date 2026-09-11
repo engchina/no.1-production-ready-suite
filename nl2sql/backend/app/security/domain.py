@@ -41,6 +41,8 @@ class DataEntitlementRecord:
     scope_mode: str = "ALL"
     scope_column: str = ""
     scope_filters: list[DataEntitlementScopeFilter] = field(default_factory=list)
+    scope_expression: dict[str, Any] | None = None
+    scope_expression_version: int | None = None
     data_grant_name: str = ""
     sql_checksum: str = ""
     apply_status: str = "PENDING"
@@ -183,3 +185,25 @@ def scope_filters_from_json(value: object) -> list[DataEntitlementScopeFilter]:
         if isinstance(item, Mapping):
             filters.append(scope_filter_from_mapping(item))
     return filters
+
+
+def scope_expression_canonical_json(expression: dict[str, Any] | None) -> str:
+    return json.dumps(expression, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def scope_expression_scope_code(expression: dict[str, Any] | None) -> str:
+    return (
+        "EXPRESSION:"
+        + hashlib.sha256(scope_expression_canonical_json(expression).encode()).hexdigest()
+    )
+
+
+def scope_expression_from_json(value: object) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if hasattr(value, "read"):
+        value = value.read()
+    parsed = json.loads(str(value))
+    if parsed is not None and not isinstance(parsed, dict):
+        raise ValueError("保存済み条件ツリーが不正です。")
+    return parsed

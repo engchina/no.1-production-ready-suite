@@ -12,6 +12,7 @@ import re
 import secrets
 import threading
 from collections.abc import Iterable, Mapping, Sequence
+from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
@@ -30,6 +31,8 @@ from .domain import (
     RoleRecord,
     SessionRecord,
     UserRecord,
+    scope_expression_canonical_json,
+    scope_expression_scope_code,
     scope_filters_canonical_json,
     scope_filters_scope_code,
 )
@@ -1174,7 +1177,7 @@ class SecurityService:
     @staticmethod
     def _data_entitlement_policy_signature(
         entitlement: DataEntitlementRecord,
-    ) -> tuple[str, str, str, str, str, str, tuple[str, ...], str, str, str]:
+    ) -> tuple[object, ...]:
         return (
             entitlement.resource_code.strip().upper(),
             entitlement.scope_code.strip(),
@@ -1186,6 +1189,7 @@ class SecurityService:
             entitlement.scope_mode.strip().upper(),
             entitlement.scope_column.strip().upper(),
             scope_filters_canonical_json(entitlement.scope_filters),
+            scope_expression_canonical_json(entitlement.scope_expression),
         )
 
     @classmethod
@@ -1226,13 +1230,40 @@ class SecurityService:
                     scope_mode=entitlement.scope_mode,
                     scope_column=entitlement.scope_column,
                     scope_filters=list(entitlement.scope_filters),
+                    scope_expression=deepcopy(entitlement.scope_expression),
+                    scope_expression_version=entitlement.scope_expression_version,
                     data_grant_name=entitlement.data_grant_name,
                     sql_checksum=entitlement.sql_checksum,
                     apply_status=entitlement.apply_status,
                     apply_error_message=entitlement.apply_error_message,
                     applied_at=entitlement.applied_at,
                 )
+                if record.scope_mode == "EXPRESSION":
+                    from .schemas import DataEntitlementInput
+
+                    validated = DataEntitlementInput.model_validate(
+                        {
+                            "capability": record.capability,
+                            "scope_mode": record.scope_mode,
+                            "scope_expression": record.scope_expression,
+                            "scope_filters": record.scope_filters,
+                            "scope_column": record.scope_column,
+                        }
+                    )
+                    if validated.scope_expression is None:
+                        raise SecurityApiError(400, "条件ツリーを指定してください。")
+                    record.scope_expression = validated.scope_expression.model_dump()
+                    record.scope_code = scope_expression_scope_code(record.scope_expression)
                 current = current_by_id.get(record.entitlement_id)
+                if (
+                    current is not None
+                    and current.scope_mode == "EXPRESSION"
+                    and record.scope_mode != "EXPRESSION"
+                    and not (record.scope_mode == "ALL" and record.scope_expression_version == 1)
+                ):
+                    raise SecurityApiError(
+                        409, "条件ツリーを旧形式で上書きできません。最新画面で編集してください。"
+                    )
                 if current is not None:
                     if cls._data_entitlement_policy_signature(
                         record

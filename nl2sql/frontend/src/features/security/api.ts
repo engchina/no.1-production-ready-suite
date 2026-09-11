@@ -1,7 +1,10 @@
+import { normalizeExpression } from "./scope-expression";
 import { apiDelete, apiGet, apiPatch, apiPost, type ApiRequestOptions } from "@/lib/api";
 
 import type {
   CurrentUser,
+  ScopeProfile,
+  ScopeRelationCatalog,
   DataEntitlement,
   DeepSecDataEntitlementApplyResult,
   DeepSecDataEntitlementPreview,
@@ -51,6 +54,8 @@ function dataEntitlementPayload(role: Pick<DeepSecRoleEntitlements, "data_entitl
       scope_mode,
       scope_column,
       scope_filters,
+      scope_expression,
+      scope_expression_version,
     }) => ({
       ...(entitlement_id ? { entitlement_id } : {}),
       resource_code,
@@ -63,6 +68,8 @@ function dataEntitlementPayload(role: Pick<DeepSecRoleEntitlements, "data_entitl
       scope_mode,
       scope_column,
       scope_filters: scope_filters ?? [],
+      ...(scope_expression ? { scope_expression: normalizeExpression(scope_expression) } : {}),
+      ...(scope_expression_version ? { scope_expression_version } : {}),
     })
   );
 }
@@ -75,6 +82,9 @@ export interface DeepSecTargetObjectsQuery extends ApiRequestOptions {
 }
 
 export const securityApi = {
+  deepSecScopeProfiles: () => apiGet<ScopeProfile[]>("/api/security/deepsec/scope-profiles"),
+  deepSecRelations: (profileId: string, owner: string, objectName: string) => apiGet<ScopeRelationCatalog>(
+    "/api/security/deepsec/relations?" + new URLSearchParams({ profile_id: profileId, owner, object_name: objectName })),
   login: (loginUserId: string, password: string) =>
     apiPost<CurrentUser>("/api/auth/login", { login_user_id: loginUserId, password }),
   me: (options: ApiRequestOptions = {}) => apiGet<CurrentUser>("/api/auth/me", options),

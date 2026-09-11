@@ -59,7 +59,7 @@ _DEEPSEC_NUMBER_TYPES = frozenset({"NUMBER", "FLOAT", "BINARY_FLOAT", "BINARY_DO
 _DEEPSEC_TEMPORAL_TYPES = frozenset({"DATE", "TIMESTAMP"})
 _DEEPSEC_SCOPE_VALUE_TYPES = frozenset({"TEXT", "NUMBER", "TEMPORAL"})
 _DEEPSEC_SCOPE_VALUE_SOURCES = frozenset({"LITERAL", LOGIN_USER_ID_SCOPE_VALUE_SOURCE})
-_DEEPSEC_SCOPE_MODES = frozenset({"ALL", "COLUMN_EQUALS", "FILTERS"})
+_DEEPSEC_SCOPE_MODES = frozenset({"ALL", "COLUMN_EQUALS", "FILTERS", "EXPRESSION"})
 _DEEPSEC_NULL_OPERATORS = frozenset({"IS_NULL", "IS_NOT_NULL"})
 _DEEPSEC_TEXT_OPERATORS = frozenset(
     {"EQ", "NE", "CONTAINS", "STARTS_WITH", "IN", *_DEEPSEC_NULL_OPERATORS}
@@ -161,7 +161,9 @@ def _is_oracle_password_reuse_error(exc: Exception) -> bool:
 
 def _looks_like_missing_scope_filters_column(exc: Exception) -> bool:
     message = str(exc).upper()
-    return "ORA-00904" in message and "SCOPE_FILTERS" in message
+    return "ORA-00904" in message and any(
+        name in message for name in ("SCOPE_FILTERS", "SCOPE_EXPRESSION")
+    )
 
 
 def _write_deepsec_config_env_locked(settings: Settings, env_path: Path) -> None:
@@ -568,6 +570,8 @@ def _is_complete_data_entitlement(entitlement: DataEntitlementRecord) -> bool:
         return False
     if not entitlement.column_names:
         return False
+    if entitlement.scope_mode == "EXPRESSION":
+        return bool(entitlement.scope_expression)
     if entitlement.scope_mode == "FILTERS":
         return bool(entitlement.scope_filters)
     return not (
@@ -577,6 +581,10 @@ def _is_complete_data_entitlement(entitlement: DataEntitlementRecord) -> bool:
 
 
 def _uses_login_user_id_scope(entitlement: DataEntitlementRecord) -> bool:
+    if entitlement.scope_mode == "EXPRESSION":
+        from .scope_expression import expression_uses_login
+
+        return expression_uses_login(entitlement.scope_expression)
     return any(
         (filter_item.value_source.strip().upper() or "LITERAL")
         in {LOGIN_USER_ID_SCOPE_VALUE_SOURCE, LEGACY_APP_USER_ID_SCOPE_VALUE_SOURCE}
@@ -634,8 +642,14 @@ def build_data_entitlement_statements(
                 data_type=data_type,
             )
             predicate += f"\n             AND {filter_predicate}"
+    elif scope_mode == "EXPRESSION":
+        from .scope_expression import compile_expression
+
+        predicate += "\n             AND " + compile_expression(entitlement, column_types or {})
     elif scope_mode != "ALL":
-        raise SecurityApiError(400, "scope_mode は ALL、COLUMN_EQUALS、FILTERS のいずれかです。")
+        raise SecurityApiError(
+            400, "scope_mode は ALL、COLUMN_EQUALS、FILTERS、EXPRESSION のいずれかです。"
+        )
     predicate += "\n        )"
     if len(predicate.strip()) > DATA_GRANT_PREDICATE_MAX_LENGTH:
         raise SecurityApiError(
@@ -1021,7 +1035,8 @@ class DeepSecService:
                 raise SecurityApiError(
                     409,
                     "DeepSec Data Grant の schema migration が未適用です。"
-                    "app_security_migrate を実行して SCOPE_FILTERS 列を作成してください。",
+                    "app_security_migrate を実行して "
+                    "SCOPE_FILTERS / SCOPE_EXPRESSION 列を作成してください。",
                 ) from exc
             raise
         return [self._role_entitlements_payload(role) for role in roles]
@@ -1037,6 +1052,7 @@ class DeepSecService:
         q: str = "",
         owner_prefix: str = "",
         include_counts: bool = False,
+        profile_id: str | None = None,
     ) -> dict[str, object]:
         normalized_limit = min(max(limit, 1), 100)
         owner_filter, owner_binds = self._target_object_owner_filter("o.owner")
@@ -1053,6 +1069,18 @@ class DeepSecService:
             "o.object_name NOT LIKE 'NL2SQL\\_%' ESCAPE '\\'",
         ]
         binds: dict[str, object] = dict(owner_binds)
+        if profile_id:
+            from .scope_relations import scope_profiles
+
+            profiles = [p for p in scope_profiles() if p["id"] == profile_id]
+            if not profiles:
+                raise SecurityApiError(404, "有効な Profile が見つかりません。")
+            names = profiles[0]["objects"]
+            terms = []
+            for i, name in enumerate(names):
+                binds[f"profile_object_{i}"] = name
+                terms.append(f"o.owner || '.' || o.object_name = :profile_object_{i}")
+            filters.append("(" + " OR ".join(terms) + ")" if terms else "1 = 0")
         normalized_owner_prefix = owner_prefix.strip().upper()
         if normalized_owner_prefix:
             filters.append("UPPER(o.owner) LIKE :owner_prefix ESCAPE '\\'")
@@ -1418,6 +1446,39 @@ class DeepSecService:
             entitlements,
             current_entitlements=role.entitlements,
         )
+        from .scope_expression import parse_expression, related_nodes
+
+        graph: dict[str, set[str]] = {}
+        policies = records + [
+            item
+            for other in self.security.list_roles(include_archived=True)
+            if other.role_id != role.role_id
+            for item in other.entitlements
+        ]
+        for policy in policies:
+            if policy.scope_mode != "EXPRESSION":
+                continue
+            target_key = _qualified(policy.target_owner, policy.target_object)
+            graph.setdefault(target_key, set()).update(
+                _qualified(node.target_owner, node.target_object)
+                for node in related_nodes(parse_expression(policy.scope_expression))
+            )
+
+        visited: set[str] = set()
+
+        def visit(key: str, path: set[str]) -> None:
+            if len(path) > 64:
+                raise SecurityApiError(400, "参照依存が複雑なため検証できません。")
+            if key in path:
+                raise SecurityApiError(400, "関連条件がポリシー間で循環参照します。")
+            if key in visited:
+                return
+            for child in graph.get(key, set()):
+                visit(child, path | {key})
+            visited.add(key)
+
+        for key in graph:
+            visit(key, set())
         entries: list[DataEntitlementSyncEntry] = []
         for entitlement in records:
             normalized = replace(
@@ -1551,6 +1612,7 @@ class DeepSecService:
             "scope_mode": entitlement.scope_mode,
             "scope_column": entitlement.scope_column,
             "scope_filters": [scope_filter_payload(item) for item in entitlement.scope_filters],
+            "scope_expression": entitlement.scope_expression,
             "data_grant_name": entitlement.data_grant_name,
             "sql_checksum": entry.checksum,
             "apply_status": entitlement.apply_status,
@@ -1993,6 +2055,7 @@ class DeepSecService:
                         scope_filter_payload(item) for item in entitlement.scope_filters
                     ],
                     "data_grant_name": data_grant_name,
+                    "scope_expression": entitlement.scope_expression,
                     "sql_checksum": entitlement.sql_checksum,
                     "apply_status": entitlement.apply_status,
                     "apply_error_message": entitlement.apply_error_message,
@@ -2085,7 +2148,7 @@ class DeepSecService:
         scope_mode = entitlement.scope_mode.strip().upper() or "ALL"
         if scope_mode not in _DEEPSEC_SCOPE_MODES:
             raise SecurityApiError(
-                400, "scope_mode は ALL、COLUMN_EQUALS、FILTERS のいずれかです。"
+                400, "scope_mode は ALL、COLUMN_EQUALS、FILTERS、EXPRESSION のいずれかです。"
             )
         if not entitlement.column_names:
             raise SecurityApiError(400, "Data Grant に含める列を選択してください。")
@@ -2126,6 +2189,15 @@ class DeepSecService:
                 400,
                 "対象 object に存在しない列です: " + ", ".join(sorted(missing_columns)),
             )
+        if scope_mode == "EXPRESSION":
+            from .scope_expression import validate_expression_metadata
+
+            if entitlement.scope_column or entitlement.scope_filters:
+                raise SecurityApiError(400, "EXPRESSION は条件ツリーのみ指定してください。")
+            validate_expression_metadata(self, cursor, entitlement, columns)
+            return columns
+        if entitlement.scope_expression is not None:
+            raise SecurityApiError(400, "条件ツリーには EXPRESSION モードを指定してください。")
         if scope_mode == "ALL":
             if entitlement.scope_code != "*":
                 raise SecurityApiError(400, "ALL scope の scope_code は * にしてください。")
