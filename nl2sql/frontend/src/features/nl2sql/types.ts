@@ -862,6 +862,7 @@ export interface ReverseSqlData {
   question: string;
   explanation: string;
   referenced_tables: string[];
+  sql_structure?: string;
   logical_structure?: string;
   logical_structure_items?: Nl2SqlLogicalStructureItem[];
   logical_steps?: string[];

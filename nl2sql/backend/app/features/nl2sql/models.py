@@ -2129,6 +2129,7 @@ class ReverseSqlData(BaseModel):
     question: str
     explanation: str
     referenced_tables: list[str]
+    sql_structure: str = ""
     logical_structure: str = ""
     logical_structure_items: list[Nl2SqlLogicalStructureItem] = Field(default_factory=list)
     logical_steps: list[str] = Field(default_factory=list)

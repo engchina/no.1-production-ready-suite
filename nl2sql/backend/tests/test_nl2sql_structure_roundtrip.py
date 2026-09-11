@@ -68,6 +68,7 @@ def test_three_stages_pass_complete_outputs_and_regeneration_uses_only_edited_st
     cast(Any, service)._enterprise_ai_client = client
     data = service.reverse_sql_deep(ReverseSqlRequest(sql=sql, profile_id="finance"))
     assert data.logical_structure == logical
+    assert data.sql_structure == physical
     assert data.logical_structure_items == []
     assert client.calls[0]["prompt"] == sql
     assert json.loads(client.calls[1]["prompt"]) == {"sql_structure": physical, "sql": sql}
@@ -133,11 +134,70 @@ def test_failed_stage_preserves_completed_structure_or_exact_original_sql(fail_a
     cast(Any, service)._enterprise_ai_client = StagedClient(outputs)
     result = service.reverse_sql_deep(ReverseSqlRequest(sql=sql, profile_id="finance"))
     assert result.warnings
+    assert result.sql_structure == ("physical" if fail_at > 0 else "")
     assert (
         (result.logical_structure == "logical")
         if fail_at == 2
         else (sql in result.logical_structure)
     )
+
+
+@pytest.mark.parametrize("fenced", [False, True])
+@pytest.mark.parametrize(
+    "physical",
+    [
+        "## 📊 SQL構造分析\n\n### 📋 SELECT句\n- *\n\n### 📁 FROM句\n- employee",
+        '## SQL構造分析\n\n### SELECT句\n- \'{"key":"value"}\' AS "Label"'
+        '\n\n### FROM句\n- "employee"',
+    ],
+)
+def test_sql_assist_markdown_response_is_preserved_without_business_name_substitution(
+    fenced: bool,
+    physical: str,
+) -> None:
+    service = _service()
+    logical = physical.replace("SQL構造分析", "SQL論理構造").replace("employee", "従業員情報")
+
+    class MarkdownClient(StagedClient):
+        def generate(self, **kwargs: Any) -> str:
+            if len(self.calls) < 2:
+                output = physical if not self.calls else logical
+                self.calls.append(kwargs)
+                return f"```markdown\n{output}\n```" if fenced else output
+            return super().generate(**kwargs)
+
+    client = MarkdownClient([{"question": "従業員情報を取得したい"}])
+    cast(Any, service)._enterprise_ai_client = client
+    result = service.reverse_sql_deep(
+        ReverseSqlRequest(sql="select * from employee", profile_id="finance")
+    )
+    assert result.sql_structure == physical
+    assert result.logical_structure == logical
+    assert result.logical_structure_items == []
+    assert result.source == "oci_enterprise_ai"
+    assert not result.warnings
+    assert client.calls[2]["prompt"] == logical
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ["", "not JSON", "## SQL構造分析\n情報を抽出できませんでした。", '{"logical_structure": []}'],
+)
+def test_invalid_analysis_response_remains_a_visible_fallback(raw: str) -> None:
+    service = _service()
+
+    class InvalidClient(StagedClient):
+        def generate(self, **kwargs: Any) -> str:
+            return raw
+
+    cast(Any, service)._enterprise_ai_client = InvalidClient([])
+    result = service.reverse_sql_deep(
+        ReverseSqlRequest(sql="select * from employee", profile_id="finance")
+    )
+    assert result.sql_structure == ""
+    assert "select * from employee" in result.logical_structure
+    assert result.warnings
+    assert result.source == "deterministic"
 
 
 def test_structure_endpoint_requires_profile_access_before_llm(

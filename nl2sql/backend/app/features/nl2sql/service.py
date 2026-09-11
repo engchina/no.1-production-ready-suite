@@ -9902,11 +9902,13 @@ class Nl2SqlService:
                     "JSON object の logical_structure (Markdown文字列) だけを返す。",
                 ),
             )
-            physical_structure = ReverseStructureOutput.model_validate(
-                self._json_object_from_text(physical)
-            ).logical_structure.strip()
+            physical_structure = self._reverse_structure_from_text(physical)
             if not physical_structure:
                 raise ValueError("SQL 構造分析結果が空です。")
+            # SQL Assist の「AI分析」に相当する出力を後段の成否に関係なく保持する。
+            result = deterministic.model_copy(
+                update={"sql_structure": physical_structure, "logical_structure_items": []}
+            )
             raw = self._enterprise_ai_client.generate(
                 prompt=json.dumps(
                     {"sql_structure": physical_structure, "sql": request.sql}, ensure_ascii=False
@@ -9917,13 +9919,11 @@ class Nl2SqlService:
                     "JSON object の logical_structure (Markdown文字列) だけを返す。",
                 ),
             )
-            logical_structure = ReverseStructureOutput.model_validate(
-                self._json_object_from_text(raw)
-            ).logical_structure.strip()
+            logical_structure = self._reverse_structure_from_text(raw)
             if not logical_structure:
                 raise ValueError("SQL 論理構造が空です。")
             # 決定論の部分要約で AI の完全な構造を覆い隠さない。
-            result = deterministic.model_copy(
+            result = result.model_copy(
                 update={
                     "logical_structure": logical_structure,
                     "logical_structure_items": [],
@@ -9969,7 +9969,7 @@ class Nl2SqlService:
                 update={
                     "warnings": [
                         "Enterprise AI の生成を完了できませんでした。"
-                        "完了済みの論理構造または元 SQL を含む簡易構造を表示しています。"
+                        "完了済みの SQL 構造分析または元 SQL を含む簡易構造を表示しています。"
                         "質問候補は簡易生成です。再試行してください。"
                     ]
                 }
@@ -10525,6 +10525,22 @@ class Nl2SqlService:
                 value = value[: end.start()]
                 break
         return [value.strip()] if value.strip() else []
+
+    def _reverse_structure_from_text(self, raw: str) -> str:
+        """原文指定の Markdown と実行時指定の JSON を構造応答に正規化する。"""
+        cleaned = raw.strip()
+        if cleaned.startswith("```"):
+            cleaned = re.sub(r"^```(?:markdown|md)?\s*\n", "", cleaned)
+            cleaned = re.sub(r"\n```$", "", cleaned).strip()
+        # 原文プロンプトの Markdown 指定に従うモデルもある。一般の文章・エラーは
+        # 構造として扱わず、見出しと箇条書きを持つ結果だけを Pydantic へ渡す。
+        if re.match(r"#{1,3}\s+[^\n]*SQL[^\n]*構造", cleaned) and re.search(
+            r"^\s*-\s+\S", cleaned, re.MULTILINE
+        ):
+            payload = {"logical_structure": cleaned}
+        else:
+            payload = self._json_object_from_text(raw)
+        return ReverseStructureOutput.model_validate(payload).logical_structure.strip()
 
     def _json_object_from_text(self, raw: str) -> dict[str, Any]:
         cleaned = self._strip_code_fence(raw)

@@ -191,10 +191,10 @@ export function SqlToQuestionPage() {
         }, { signal, timeoutMs: API_TIMEOUT_MS.longRunningJob });
         if (signal.aborted) return;
         setReverse(data);
-        setStructureText(data.logical_structure ?? "");
+        setStructureText(data.sql_structure || data.logical_structure || "");
         setRegenerated(null);
         setSqlGenerationError("");
-        setStructureItems(data.logical_structure_items ?? []);
+        setStructureItems(data.sql_structure ? [] : (data.logical_structure_items ?? []));
         focusStructure.current = activeRef.current;
         setActivePanel("structure");
       });
@@ -482,7 +482,7 @@ export function SqlToQuestionPage() {
             />
             {reverse ? (
               <section className="grid content-start gap-3 text-sm">
-                {structureText !== reverse.logical_structure && <FormStatus tone="warning" message={t("sqlToQuestion.result.staleStructure")} />}
+                {structureText !== (reverse.sql_structure || reverse.logical_structure) && <FormStatus tone="warning" message={t("sqlToQuestion.result.staleStructure")} />}
                 <WorkspaceResultNotice result={reverse} inputSignature={JSON.stringify([selectedProfileId, sql, useGlossary])} />
                 <div className="flex flex-wrap gap-2">
                   <StatusBadge variant="neutral" label={reverse.source ?? "deterministic"} />
