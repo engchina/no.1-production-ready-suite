@@ -683,3 +683,35 @@ test("履歴の選択とSQLタブを往復・再読込で復元し失効時は�
   await page.getByRole("button", { name: "未入金の顧客を確認 の履歴を表示", exact: true }).click();
   await expect(page.getByRole("tab", { name: "概要", exact: true })).toHaveAttribute("aria-selected", "true");
 });
+
+test("履歴の更新失敗後も続きが読めて条件変更では旧 cursor を使わない", async ({ page }, testInfo) => {
+  const requests: URL[] = [];
+  const extra = { ...historyItems[0], id: "hist-extra", question: "追加履歴" };
+  let failRefresh = false;
+  let releaseRefresh: (() => void) | undefined;
+  const gate = new Promise<void>((resolve) => { releaseRefresh = resolve; });
+  await page.route("**/api/nl2sql/history**", async (route) => {
+    const url = new URL(route.request().url());
+    requests.push(url);
+    if (url.searchParams.get("cursor") === "next-1") return fulfillJson(route, { items: [extra], next_cursor: "next-2", total: 5 });
+    if (!failRefresh) return fulfillJson(route, { items: historyItems, next_cursor: "next-1", total: 5 });
+    await gate;
+    await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "履歴更新テストエラー" }) });
+  });
+  await page.goto("/history");
+  await expect(historyRows(page)).toHaveCount(3);
+  const more = page.getByRole("button", { name: "さらに読み込む", exact: true });
+  failRefresh = true;
+  await page.getByRole("button", { name: "表示を更新", exact: true }).click();
+  try { await expect(more).toBeDisabled(); } finally { releaseRefresh?.(); }
+  await expect(page.getByText(/履歴更新テストエラー/)).toBeVisible();
+  await expect(more).toBeEnabled();
+  await more.press("Enter");
+  await expect(historyRows(page)).toHaveCount(4);
+  await expect(more).toBeEnabled();
+  await page.screenshot({ path: testInfo.outputPath("history-refresh-recovery.png") });
+  await page.getByLabel("利用者評価フィルター").selectOption("unrated");
+  await expect.poll(() => requests.at(-1)?.searchParams.get("rating")).toBe("unrated");
+  await expect(more).toHaveCount(0);
+  expect(requests.filter((url) => url.searchParams.has("cursor")).map((url) => url.searchParams.get("cursor"))).toEqual(["next-1"]);
+});

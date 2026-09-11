@@ -174,6 +174,7 @@ function HistoryGrid({
   total,
   hasMore,
   loadingMore,
+  refreshing,
   onLoadMore,
 }: {
   items: HistoryItem[];
@@ -194,6 +195,7 @@ function HistoryGrid({
   total: number | null;
   hasMore: boolean;
   loadingMore: boolean;
+  refreshing: boolean;
   onLoadMore: () => void;
 }) {
   const count = total ?? items.length;
@@ -341,7 +343,7 @@ function HistoryGrid({
             : t("history.list.loaded", { loaded: loadedCount, total })}
         </p>
         {hasMore && (
-          <Button type="button" variant="secondary" size="sm" loading={loadingMore} onClick={onLoadMore}>
+          <Button type="button" variant="secondary" size="sm" loading={loadingMore} disabled={refreshing} onClick={onLoadMore}>
             {t("history.action.loadMore")}
           </Button>
         )}
@@ -660,6 +662,7 @@ export function HistoryPage() {
   const [selectedId, setSelectedId] = useWorkspaceState("selectedId", "");
   const [detailTab, setDetailTab] = useWorkspaceState<HistoryDetailTab>("detailTab", "overview");
   const [nextCursor, setNextCursor] = useState("");
+  const [loadedFilters, setLoadedFilters] = useState("");
   const [total, setTotal] = useState<number | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const loadSequence = useRef(0);
@@ -672,7 +675,7 @@ export function HistoryPage() {
     loadSequence.current = sequence;
     setLoading(true);
     setMessage("");
-    setNextCursor("");
+    setLoadingMore(false);
     try {
       await runScopedRequest(async (signal) => {
         const data = await apiGet<HistoryData>(
@@ -681,6 +684,7 @@ export function HistoryPage() {
         );
         if (signal.aborted || sequence !== loadSequence.current) return;
         setItems(data.items);
+        setLoadedFilters(filterSignature);
         setNextCursor(data.next_cursor ?? "");
         setTotal(data.total ?? null);
         setSelectedId((current) => current || data.items[0]?.id || "");
@@ -689,7 +693,7 @@ export function HistoryPage() {
         toast.success(t("common.action.refreshed"));
       }
     } catch (err) {
-      if (isAbortError(err)) {
+      if (isAbortError(err) || sequence !== loadSequence.current) {
         return;
       }
       setMessage(err instanceof Error ? err.message : t("history.error.load"));
@@ -700,7 +704,7 @@ export function HistoryPage() {
 
   // 続きページを読込済みの末尾へ追加する(再読込は load() で先頭からやり直す)。
   const loadMore = async () => {
-    if (!nextCursor || loadingMore) return;
+    if (!nextCursor || loadingMore || loading || loadedFilters !== filterSignature) return;
     const sequence = loadSequence.current;
     setLoadingMore(true);
     try {
@@ -723,10 +727,10 @@ export function HistoryPage() {
         setTotal(data.total ?? null);
       });
     } catch (err) {
-      if (isAbortError(err)) return;
+      if (isAbortError(err) || sequence !== loadSequence.current) return;
       toast.warning(t("history.error.loadMore"));
     } finally {
-      setLoadingMore(false);
+      if (sequence === loadSequence.current) setLoadingMore(false);
     }
   };
 
@@ -846,8 +850,9 @@ export function HistoryPage() {
               onClearFilters={clearFilters}
               loadedCount={items.length}
               total={total}
-              hasMore={Boolean(nextCursor)}
+              hasMore={Boolean(nextCursor) && loadedFilters === filterSignature}
               loadingMore={loadingMore}
+              refreshing={loading}
               onLoadMore={() => void loadMore()}
             />
             <HistoryDetailPanel
