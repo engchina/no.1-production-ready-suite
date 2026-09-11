@@ -843,6 +843,21 @@ def build_v001_plan(settings: Settings) -> tuple[DeepSecStep, ...]:
             context_package_compile_check,
             f"CREATE OR REPLACE CONTEXT NL2SQL_APP_USER_CTX USING {owner}.NL2SQL_DEEPSEC_CTX_PKG",
             f"GRANT EXECUTE ON {owner}.NL2SQL_DEEPSEC_CTX_PKG TO {role}",
+            _trusted_identifier_sql(
+                """
+            DECLARE v_package NUMBER;
+            BEGIN
+              SELECT COUNT(*) INTO v_package FROM ALL_OBJECTS
+               WHERE OWNER = '{owner}' AND OBJECT_NAME = 'NL2SQL_ONT_ACTION_TX'
+                 AND OBJECT_TYPE = 'PACKAGE';
+              IF v_package > 0 THEN
+                EXECUTE IMMEDIATE 'GRANT EXECUTE ON {owner}.NL2SQL_ONT_ACTION_TX TO {role}';
+              END IF;
+            END;
+            """,
+                owner=owner,
+                role=role,
+            ),
         ),
     )
     return (role_step, context_step)

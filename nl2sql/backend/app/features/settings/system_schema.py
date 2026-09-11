@@ -38,7 +38,8 @@ _IGNORED_APPLY_CODES = frozenset(
 _IGNORED_DROP_CODES = frozenset({"ORA-00942", "ORA-01418", "ORA-02289"})
 _ACTIVE_JOB_STATES = ("ACCEPTED", "PENDING", "QUEUED", "RUNNING", "PROCESSING")
 _CREATE_OBJECT_PATTERN = re.compile(
-    r"\bCREATE\s+(?:UNIQUE\s+|VECTOR\s+)?" r"(TABLE|INDEX|SEQUENCE)\s+([A-Z][A-Z0-9_$#]*)",
+    r"\bCREATE\s+(?:OR\s+REPLACE\s+|UNIQUE\s+|VECTOR\s+)?"
+    r"(TABLE|INDEX|SEQUENCE|PACKAGE(?:\s+BODY)?)\s+([A-Z][A-Z0-9_$#]*)",
     flags=re.IGNORECASE,
 )
 _ADD_CONSTRAINT_PATTERN = re.compile(
@@ -130,6 +131,9 @@ MIGRATIONS: tuple[MigrationArtifact, ...] = (
     MigrationArtifact(
         21, "021_profile_ontology_revisions.sql", "profile-owned ontology publication"
     ),
+    MigrationArtifact(
+        22, "022_ontology_capability_transaction.sql", "atomic capability execution audit"
+    ),
 )
 
 # DROP 対象は必ずこの manifest に明記する。NL2SQL_* の prefix scan は使用しない。
@@ -195,10 +199,14 @@ MANAGED_INDEXES: tuple[str, ...] = (
 
 MANAGED_SEQUENCES: tuple[str, ...] = ("NL2SQL_MIGRATION_SNAPSHOT_SEQ",)
 
+MANAGED_PACKAGES: tuple[str, ...] = ("NL2SQL_ONT_ACTION_TX",)
+
 MANAGED_OBJECTS: tuple[tuple[str, str], ...] = (
     *((name, "TABLE") for name in MANAGED_TABLES),
     *((name, "INDEX") for name in MANAGED_INDEXES),
     *((name, "SEQUENCE") for name in MANAGED_SEQUENCES),
+    *((name, "PACKAGE") for name in MANAGED_PACKAGES),
+    *((name, "PACKAGE BODY") for name in MANAGED_PACKAGES),
 )
 DOMAIN_TABLES = frozenset(MANAGED_TABLES) - {CONTROL_TABLE, MIGRATION_TABLE}
 
@@ -296,7 +304,9 @@ def split_migration_sql(sql: str) -> list[str]:
         current.append(line)
         statement = "\n".join(current).strip()
         if in_plsql:
-            if _plsql_block_complete(statement):
+            if not re.match(r"^CREATE\s", statement, re.IGNORECASE) and _plsql_block_complete(
+                statement
+            ):
                 statements.append(statement)
                 current = []
                 in_plsql = False
@@ -322,7 +332,14 @@ def _strip_sql_statement_terminator(statement: str) -> str:
 
 
 def _is_plsql_block_start(stripped_line: str) -> bool:
-    return re.match(r"^(BEGIN|DECLARE)\b", stripped_line, flags=re.IGNORECASE) is not None
+    return (
+        re.match(
+            r"^(BEGIN|DECLARE|CREATE\s+(?:OR\s+REPLACE\s+)?PACKAGE)\b",
+            stripped_line,
+            flags=re.IGNORECASE,
+        )
+        is not None
+    )
 
 
 def _plsql_block_complete(statement: str) -> bool:
@@ -631,7 +648,7 @@ class SystemSchemaManager:
             cursor.execute(
                 "SELECT OBJECT_NAME, OBJECT_TYPE, CREATED FROM USER_OBJECTS "
                 f"WHERE OBJECT_NAME IN ({placeholders}) "  # nosec B608 - fixed manifest binds
-                "AND OBJECT_TYPE IN ('TABLE', 'INDEX', 'SEQUENCE')",
+                "AND OBJECT_TYPE IN ('TABLE', 'INDEX', 'SEQUENCE', 'PACKAGE', 'PACKAGE BODY')",
                 binds,
             )
             return {(str(row[0]).upper(), str(row[1]).upper()): row[2] for row in cursor.fetchall()}
@@ -1053,6 +1070,10 @@ class SystemSchemaManager:
     def _drop_managed_objects(self, connection: Any, owner: str) -> int:
         objects = self._load_objects(connection)
         dropped = 0
+        for package_name in reversed(MANAGED_PACKAGES):
+            if (package_name, "PACKAGE") in objects:
+                dropped += self._execute_drop(connection, f"DROP PACKAGE {package_name}")
+                self._heartbeat(connection, owner)
         for index_name in reversed(MANAGED_INDEXES):
             if (index_name, "INDEX") not in objects:
                 continue

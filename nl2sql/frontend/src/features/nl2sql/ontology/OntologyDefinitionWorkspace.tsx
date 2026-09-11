@@ -6,10 +6,11 @@ import { useConfirm } from "@/components/ui/confirm-dialog";
 import { useResetExecutionConsent, useWorkspaceState } from "@/components/WorkspaceState";
 import { apiGet, apiPost } from "@/lib/api";
 import { t } from "@/lib/i18n";
+import { OntologyCapabilities } from "./OntologyCapabilities";
 import { ProfileOntologyGraph } from "./ProfileOntologyGraph";
 import type { ProfileOntologyBundle } from "./ProfileOntologyResults";
 
-const tabs = ["overview", "model", "mapping", "validation", "review"] as const;
+const tabs = ["overview", "model", "mapping", "validation", "review", "capabilities"] as const;
 type Tab = typeof tabs[number];
 interface Workspace { bundle: ProfileOntologyBundle; artifacts: Record<string, string>; head: { release_id: string; etag: string }; releases?: { id: string; published_at: string }[] }
 interface Changes { id: string; base_etag: string; before: Record<string, unknown>[]; after: Record<string, unknown>[] }
@@ -72,6 +73,7 @@ export function OntologyDefinitionWorkspace({ bundle, profileId, onChanged, chil
     {workspace.isError ? <FormStatus tone="danger" message={t("ontologyWorkspace.loadError")} /> : null}
     <div role="tabpanel" id={`${prefix}-panel`} aria-labelledby={`${prefix}-${tab}-tab`} className="grid min-w-0 grid-cols-1 gap-3">
       {tab === "model" ? children : null}
+      {tab === "capabilities" ? <OntologyCapabilities profileId={profileId} /> : null}
       {tab === "overview" ? <>
         <p>{t("ontologyWorkspace.overview", { count: bundle.definitions.length, unreviewed: bundle.definitions.filter(d => d.review_status === "unreviewed").length, conflicts: bundle.conflicts.length })}</p>
         <p className="break-all text-sm">{t("ontologyWorkspace.version")}: {bundle.id}</p>

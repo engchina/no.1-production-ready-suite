@@ -1094,6 +1094,7 @@ class OntologyContextSearchResult(OntologyContract):
     profile_id: str = Field(min_length=1)
     profile_view_id: str = Field(min_length=1)
     ontology_revision_id: str = Field(min_length=1)
+    business_release_id: str = ""
     hits: list[OntologyContextHit] = Field(default_factory=list)
     nodes: list[OntologyNode] = Field(default_factory=list)
     edges: list[OntologyEdge] = Field(default_factory=list)
@@ -1111,6 +1112,7 @@ class OntologySqlGenerationContext(OntologyContract):
     profile_id: str = Field(min_length=1)
     profile_view_id: str = Field(min_length=1)
     ontology_revision_id: str = Field(min_length=1)
+    business_release_id: str = ""
     intent_version: int = Field(ge=1)
     question_effective: str = Field(min_length=1)
     allowed_object_names: list[str] = Field(default_factory=list)
@@ -1185,6 +1187,7 @@ class QuerySession(OntologyContract):
     profile_id: str = Field(min_length=1)
     profile_view_id: str = Field(min_length=1)
     ontology_revision_id: str = Field(min_length=1)
+    business_release_id: str = ""
     status: QuerySessionStatus = QuerySessionStatus.INTERPRETING
     original_question: str = Field(min_length=1)
     current_intent_version: int = Field(default=1, ge=1)
@@ -1211,6 +1214,7 @@ class QuerySessionCreate(OntologyContract):
     profile_id: str = Field(min_length=1)
     profile_view_id: str = Field(min_length=1)
     ontology_revision_id: str = Field(min_length=1)
+    business_release_id: str = ""
     intent: QuestionIntentGraph | None = None
     clarification_mode: ClarificationMode = ClarificationMode.REVIEW_ONLY
     actor_user_uuid: str = ""

@@ -112,6 +112,7 @@ def check_data(
     allowed = schema_objects(schema)
     for case in request.acceptance_cases:
         independent = not any(case.question_ja in source.text for source in bundle.sources)
+        has_assertions = bool(case.expected_concepts or case.expected_path or case.sql)
         resolved = all(name in by_name for name in case.expected_concepts)
         path_ok = all(name in by_name for name in case.expected_path) and all(
             any(
@@ -140,7 +141,12 @@ def check_data(
                 "concepts_pass": resolved,
                 "path_pass": path_ok,
                 "sql_pass": sql_ok,
-                "passed": independent and resolved and path_ok and sql_ok is not False,
+                "has_assertions": has_assertions,
+                "passed": has_assertions
+                and independent
+                and resolved
+                and path_ok
+                and sql_ok is not False,
             }
         )
     return {

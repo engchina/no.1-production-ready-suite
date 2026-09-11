@@ -2730,3 +2730,98 @@ test("型付き AI 構築から変更解析・独立レビュー・検証・Prof
   }
   await page.screenshot({ path: testInfo.outputPath("ontology-profile-published.png") });
 });
+
+test("公開能力を明示的に設定し、プレビュー確認・実行・再読込を Profile 内で利用する", async ({ page }, testInfo) => {
+  await mockApi(page);
+  await page.route("**/api/nl2sql/profiles/*/ontology-results", route => fulfillJson(route, { results: [{ ...typedBundle("default"), status: "published" }] }));
+  let bound = false, executions = 0, previews = 0;
+  const definition = { id: "action-1", kind: "action_type", name_ja: "承認", api_name: "approve", description_ja: "下書きの受注を承認", parameters: [{ api_name: "status", name_ja: "承認状態", data_type: "string", required: true }] };
+  const result = { id: "execution-1", release_id: "release-default", at: "2026-09-11T05:00:00Z", status: "succeeded", before: { "Order.status": "DRAFT" }, after: { "Order.status": "CONFIRMED" } };
+  await page.route("**/api/nl2sql/profiles/default/ontology-capabilities**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("ontology-capabilities")) return fulfillJson(route, { release_id: "release-default", implementations: { functions: [], actions: [] }, capabilities: [{ definition, target_parameters: [{ api_name: "Order.id", name_ja: "受注番号", data_type: "integer", required: true }], status: bound ? "available" : "configuration_required", reason_ja: bound ? "" : "実装 binding を設定してください。", binding: bound ? { kind: "property_update", etag: "binding-etag", expression_sql: "", implementation_key: "", state_requirements: [{ property: "Order.status", value: "DRAFT" }], reviewed_rules_ja: "下書きのみ承認", enabled: true } : null }] });
+    if (path.endsWith("/binding")) { expect(route.request().headers()["if-match"]).toBe("*"); bound = true; return fulfillJson(route, { etag: "binding-etag" }); }
+    if (path.endsWith("/preview")) { previews++; const input = route.request().postDataJSON(); expect(input.target).toEqual({ "Order.id": 1 }); return fulfillJson(route, { id: `preview-${previews}`, before: { "Order.status": "DRAFT" }, after: { "Order.status": input.parameters.status }, expires_at: "2026-09-11T05:10:00Z" }); }
+    if (path.endsWith("/execute")) { expect(route.request().postDataJSON().confirmed).toBe(true); expect(route.request().headers()["idempotency-key"]).toBeTruthy(); executions++; return fulfillJson(route, result); }
+    return fulfillJson(route, result);
+  });
+  await page.goto("/ontology-build?profile=default"); await loadOntologyBuildWorkspace(page);
+  await page.getByRole("tab", { name: "能力の利用（Capabilities）", exact: true }).click();
+  const region = page.getByRole("region", { name: "公開能力（Published Capabilities）", exact: true });
+  await expect(region.getByText("設定が必要（Configuration Required）", { exact: true })).toBeVisible();
+  await region.getByText("実装設定（Implementation Binding）", { exact: true }).click();
+  await region.getByLabel("確認済み業務条件（Reviewed Business Rules）").fill("下書きのみ承認");
+  await region.getByLabel("状態条件（State Requirements）").fill('[{"property":"Order.status","value":"DRAFT"}]');
+  await region.getByRole("button", { name: "実装を設定（Bind Implementation）", exact: true }).click();
+  await page.getByRole("button", { name: "確認して実行（Confirm）", exact: true }).click();
+  await expect(region.getByText("利用可能（Available）", { exact: true })).toBeVisible();
+  await region.getByLabel(/承認状態 \(status\)/).fill("CONFIRMED");
+  await region.getByLabel(/受注番号 \(Order.id\)/).fill("1");
+  await region.getByRole("button", { name: "変更をプレビュー（Preview Changes）", exact: true }).click();
+  await expect(region.getByRole("cell", { name: "CONFIRMED", exact: true })).toBeVisible();
+  expect(executions).toBe(0);
+  await region.getByLabel(/承認状態 \(status\)/).fill("APPROVED");
+  await expect(region.getByRole("button", { name: "確認して実行（Confirm & Execute）", exact: true })).toHaveCount(0);
+  await region.getByLabel(/承認状態 \(status\)/).fill("CONFIRMED");
+  await region.getByRole("button", { name: "変更をプレビュー（Preview Changes）", exact: true }).click();
+  await page.reload(); await loadOntologyBuildWorkspace(page);
+  await expect(region.getByLabel(/承認状態 \(status\)/)).toHaveValue("CONFIRMED");
+  await expect(region.getByRole("button", { name: "確認して実行（Confirm & Execute）", exact: true })).toHaveCount(0);
+  expect(executions).toBe(0);
+  await region.getByRole("button", { name: "変更をプレビュー（Preview Changes）", exact: true }).click();
+  const execute = region.getByRole("button", { name: "確認して実行（Confirm & Execute）", exact: true });
+  await execute.focus(); await page.keyboard.press("Enter");
+  await page.getByRole("button", { name: "確認して実行（Confirm）", exact: true }).click();
+  await expect.poll(() => executions).toBe(1);
+  await expect(region.getByText(/前回の実行結果（Previous Result）/)).toBeVisible();
+  await page.reload(); await loadOntologyBuildWorkspace(page);
+  await expect(region.getByText(/前回の実行結果（Previous Result）/)).toBeVisible();
+  expect(executions).toBe(1);
+  await region.getByLabel(/承認状態 \(status\)/).fill("NEW");
+  await expect(region.getByText("現在の入力は未実行です（Current Input Not Executed）", { exact: true })).toBeVisible();
+  const box = await region.boundingBox(); expect(box!.x + box!.width).toBeLessThanOrEqual(page.viewportSize()!.width + 1);
+  for (const button of await region.getByRole("button").all()) if (await button.isVisible()) await expectButtonLabelFits(button);
+  await region.screenshot({ path: testInfo.outputPath("ontology-capabilities.png") });
+});
+
+test("公開能力の空・読込・取得失敗を表示し再試行できる", async ({ page }) => {
+  await mockApi(page);
+  await page.route("**/api/nl2sql/profiles/*/ontology-results", route => fulfillJson(route, { results: [typedBundle("default")] }));
+  let mode = "loading";
+  const gate = createRequestGate();
+  await page.route("**/api/nl2sql/profiles/default/ontology-capabilities", async route => { if (mode === "loading") await gate.promise; if (mode === "error") return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "fixture unavailable" }) }); return fulfillJson(route, { release_id: "", capabilities: [], implementations: { functions: [], actions: [] } }); });
+  await page.goto("/ontology-build?profile=default"); await loadOntologyBuildWorkspace(page);
+  await page.getByRole("tab", { name: "能力の利用（Capabilities）", exact: true }).click();
+  const region = page.getByRole("region", { name: "公開能力（Published Capabilities）", exact: true });
+  await expect(region.getByText("能力を読み込み中（Loading Capabilities）", { exact: true })).toBeVisible();
+  mode = "empty"; gate.release();
+  await expect(region.getByText("公開済みの関数・操作がありません（No Published Capabilities）", { exact: true })).toBeVisible();
+  mode = "error"; await region.getByRole("button", { name: "最新情報を取得（Refresh）", exact: true }).click();
+  await expect(region.getByRole("alert")).toBeVisible();
+  mode = "empty"; await region.getByRole("button", { name: "最新情報を取得（Refresh）", exact: true }).click();
+  await expect(region.getByRole("alert")).toHaveCount(0);
+});
+
+test("公開関数の型付き入力で呼出し、過去結果を保持して再実行は確認する", async ({ page }) => {
+  await mockApi(page);
+  await page.route("**/api/nl2sql/profiles/*/ontology-results", route => fulfillJson(route, { results: [{ ...typedBundle("default"), status: "published" }] }));
+  let calls = 0;
+  await page.route("**/api/nl2sql/profiles/default/ontology-capabilities**", route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("ontology-capabilities")) return fulfillJson(route, { release_id: "release-default", implementations: { functions: [], actions: [] }, capabilities: [{ definition: { id: "fn", kind: "function", name_ja: "金額計算", api_name: "calculate", description_ja: "定義された計算を実行", parameters: [{ api_name: "amount", name_ja: "金額", data_type: "number", required: true }] }, target_parameters: [], status: "available", reason_ja: "", binding: { etag: "binding", kind: "expression", expression_sql: ":amount * 2", implementation_key: "", state_requirements: [], reviewed_rules_ja: "", enabled: true } }] });
+    if (path.endsWith("/invoke")) { calls++; expect(route.request().postDataJSON().parameters).toEqual({ amount: 21 }); }
+    return fulfillJson(route, { id: "function-call", release_id: "release-default", at: "2026-09-11T01:00:00Z", status: "succeeded", result: 42 });
+  });
+  await page.goto("/ontology-build?profile=default"); await loadOntologyBuildWorkspace(page);
+  await page.getByRole("tab", { name: "能力の利用（Capabilities）", exact: true }).click();
+  const region = page.getByRole("region", { name: "公開能力（Published Capabilities）", exact: true });
+  await region.getByLabel(/金額 \(amount\)/).fill("21");
+  await region.getByRole("button", { name: "関数を呼出（Invoke Function）", exact: true }).click();
+  expect(calls).toBe(0);
+  await page.getByRole("button", { name: "確認して実行（Confirm）", exact: true }).click();
+  await expect(region.locator("pre")).toContainText('"result": 42');
+  await page.reload(); await loadOntologyBuildWorkspace(page);
+  await expect(region.getByLabel(/金額 \(amount\)/)).toHaveValue("21");
+  await expect(region.locator("pre")).toContainText('"result": 42');
+  expect(calls).toBe(1);
+});

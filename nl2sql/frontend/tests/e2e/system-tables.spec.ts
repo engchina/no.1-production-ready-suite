@@ -56,10 +56,10 @@ const adbInfo = {
 };
 
 type SchemaStatus = "missing" | "partial" | "outdated" | "ready";
-type SystemObjectType = "TABLE" | "INDEX" | "SEQUENCE";
+type SystemObjectType = "TABLE" | "INDEX" | "SEQUENCE" | "PACKAGE" | "PACKAGE BODY";
 
 const SCHEMA_HEAD = 17;
-const EXPECTED_OBJECT_COUNT = 51;
+const EXPECTED_OBJECT_COUNT = 53;
 const EXPECTED_TABLE_COUNT = 27;
 const APPLIED_VERSIONS = [0, 1, 2, 3, 5, 6, 7, 8, 9, 15, 17] as const;
 
@@ -126,6 +126,8 @@ const SYSTEM_REQUIRED_OBJECTS: ReadonlyArray<{
   ...SYSTEM_TABLE_NAMES.map((name) => ({ name, object_type: "TABLE" as const })),
   ...SYSTEM_INDEX_NAMES.map((name) => ({ name, object_type: "INDEX" as const })),
   { name: "NL2SQL_MIGRATION_SNAPSHOT_SEQ", object_type: "SEQUENCE" },
+  { name: "NL2SQL_ONT_ACTION_TX", object_type: "PACKAGE" },
+  { name: "NL2SQL_ONT_ACTION_TX", object_type: "PACKAGE BODY" },
 ];
 
 const PARTIAL_MISSING_NAMES = new Set([
@@ -362,15 +364,17 @@ test("四つの schema 状態を再取得し、詳細表を局所スクロール
   await expect(card.getByRole("table")).toBeVisible();
   await expect(card.getByText("NL2SQL_PROFILES", { exact: true })).toBeVisible();
   await expect(card.getByText("27 / 27", { exact: true })).toBeVisible();
-  await expect(card.getByText("51 / 51", { exact: true })).toBeVisible();
+  await expect(card.getByText("53 / 53", { exact: true })).toBeVisible();
   await expect(
-    card.getByText("テーブル・索引・シーケンスの合計", { exact: true })
+    card.getByText("テーブル・索引・シーケンス・パッケージの合計", { exact: true })
   ).toBeVisible();
   const objectRows = card.getByTestId("system-tables-scroll-region").locator("tbody tr");
   await expect(objectRows).toHaveCount(EXPECTED_OBJECT_COUNT);
   await expect(card.getByRole("cell", { name: "テーブル", exact: true })).toHaveCount(27);
   await expect(card.getByRole("cell", { name: "索引", exact: true })).toHaveCount(23);
   await expect(card.getByRole("cell", { name: "シーケンス", exact: true })).toHaveCount(1);
+  await expect(card.getByRole("cell", { name: "パッケージ（Package）", exact: true })).toHaveCount(1);
+  await expect(card.getByRole("cell", { name: "パッケージ本体（Package Body）", exact: true })).toHaveCount(1);
   await expectNoPageOverflow(page);
 });
 
@@ -441,7 +445,7 @@ test("詳細表はデスクトップ8行・モバイル5行の高さに収め、
   await expect(scrollRegion).toHaveAttribute("role", "region");
   await expect(scrollRegion).toHaveAttribute(
     "aria-label",
-    "管理オブジェクト一覧（存在 51 / 必須 51）。必要に応じて縦方向または横方向にスクロールできます。"
+    "管理オブジェクト一覧（存在 53 / 必須 53）。必要に応じて縦方向または横方向にスクロールできます。"
   );
   await expect(scrollRegion.locator("tbody tr")).toHaveCount(expectedRows);
 
@@ -552,7 +556,7 @@ test("初期化中は重複操作を無効化し、成功後に Toast と ready 
   await expect(card.getByRole("button", { name: "状態を再取得" })).toBeDisabled();
   await expect(page.getByText("システムテーブルを初期作成しました。")).toBeVisible();
   await expect(card.getByText("初期化済み", { exact: true })).toBeVisible();
-  await expect(card.getByText("51 / 51", { exact: true })).toBeVisible();
+  await expect(card.getByText("53 / 53", { exact: true })).toBeVisible();
   await card.getByText(/管理オブジェクトの詳細を表示/).click();
   await expect(card.getByText(/適用済み version: 0, 1, 2, 3, 5, 6, 7, 8, 9, 15, 17/)).toBeVisible();
   await expect(

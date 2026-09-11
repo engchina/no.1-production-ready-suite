@@ -19,6 +19,7 @@ from app.features.settings.system_schema import (
     MANAGED_FOREIGN_KEYS,
     MANAGED_INDEXES,
     MANAGED_OBJECTS,
+    MANAGED_PACKAGES,
     MANAGED_SEQUENCES,
     MANAGED_TABLES,
     MIGRATIONS,
@@ -93,7 +94,7 @@ def test_manifest_covers_every_core_create_and_excludes_preserved_tables() -> No
     assert len(MANAGED_TABLES) == 29
     assert len(MANAGED_INDEXES) == 25
     assert len(MANAGED_SEQUENCES) == 1
-    assert len(MANAGED_OBJECTS) == 55
+    assert len(MANAGED_OBJECTS) == 57
     assert [migration.version for migration in MIGRATIONS] == [
         0,
         1,
@@ -109,6 +110,7 @@ def test_manifest_covers_every_core_create_and_excludes_preserved_tables() -> No
         18,
         19,
         21,
+        22,
     ]
     assert all("security" not in migration.filename for migration in MIGRATIONS)
     assert set(MANAGED_TABLES).isdisjoint(PRESERVED_TABLES)
@@ -155,7 +157,7 @@ def test_object_metadata_covers_manifest_order_and_marks_missing_objects() -> No
     assert first_index["exists"] is True
     assert first_index["estimated_rows"] is None
     assert first_index["last_analyzed_at"] is None
-    assert metadata[-1] == {
+    assert metadata[-3] == {
         "name": MANAGED_SEQUENCES[0],
         "object_type": "SEQUENCE",
         "exists": False,
@@ -351,7 +353,8 @@ def test_recreate_drop_statements_only_use_manifest_allowlist(
 
     dropped = manager._drop_managed_objects(object(), "owner")
 
-    assert dropped == len(MANAGED_INDEXES) + len(MANAGED_TABLES) - 1 + len(MANAGED_SEQUENCES)
+    assert dropped == len(MANAGED_OBJECTS) - 1 - len(MANAGED_PACKAGES)
+    assert f"DROP PACKAGE {MANAGED_PACKAGES[0]}" in statements
     assert all("USER_BUSINESS_SENTINEL" not in statement for statement in statements)
     assert all("NL2SQL_AUTH_" not in statement for statement in statements)
     assert all("NL2SQL_FEEDBACK_VECTORS" not in statement for statement in statements)
@@ -504,7 +507,7 @@ class _IncrementalWorkflowManager(_WorkflowManager):
         super().__init__("partial")
         self.before = _partial_status(
             applied_versions=[0, 1, 2, 3, 5, 6],
-            pending_versions=[7, 8, 9, 15, 17, 18, 19, 21],
+            pending_versions=[7, 8, 9, 15, 17, 18, 19, 21, 22],
             missing_objects=[
                 ("NL2SQL_EVALUATION_JOBS", "TABLE"),
                 ("NL2SQL_EVALUATION_RESULTS", "TABLE"),
@@ -523,7 +526,7 @@ def test_incremental_update_reaches_ready_without_replaying_old_migrations() -> 
 
     result = manager.initialize()
 
-    assert manager.applied_migrations == [7, 8, 9, 15, 17, 18, 19, 21]
+    assert manager.applied_migrations == [7, 8, 9, 15, 17, 18, 19, 21, 22]
     assert result["operation"] == "migrated"
     assert result["status"] == "ready"
     assert result["existing_object_count"] == len(MANAGED_OBJECTS)
@@ -978,3 +981,18 @@ async def test_system_table_post_requires_csrf_and_sql_execute_permission(
     )
     await anext(dependency)
     await dependency.aclose()
+
+
+def test_action_package_migration_preserves_complete_plsql_and_transaction() -> None:
+    migration = MIGRATIONS[-1]
+    assert migration.created_objects == frozenset(
+        {("NL2SQL_ONT_ACTION_TX", "PACKAGE"), ("NL2SQL_ONT_ACTION_TX", "PACKAGE BODY")}
+    )
+    statements = split_migration_sql(migration.path.read_text())
+    assert len(statements) == 3
+    assert statements[0].startswith("CREATE OR REPLACE PACKAGE ")
+    assert statements[1].startswith("CREATE OR REPLACE PACKAGE BODY ")
+    assert statements[1].endswith("END NL2SQL_ONT_ACTION_TX;")
+    assert "COMMIT;" not in statements[1] and "AUTONOMOUS_TRANSACTION" not in statements[1]
+    assert "FOR UPDATE WAIT 5" in statements[1]
+    assert "CLIENT_IDENTIFIER" in statements[1]

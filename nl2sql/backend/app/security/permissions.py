@@ -60,6 +60,18 @@ PERSISTENCE_RECOVER_PERMISSION = "nl2sql.persistence.recover"
 
 
 PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
+    _permission(
+        "nl2sql.ontology.capabilities.manage",
+        "Ontology",
+        "能力設定（Capability Binding）",
+        "公開済みの関数・操作に実装を明示的に設定します。",
+    ),
+    _permission(
+        "nl2sql.ontology.actions.execute",
+        "Ontology",
+        "操作実行（Action Execution）",
+        "許可された Profile の操作をプレビューして確認後に実行します。",
+    ),
     _menu_permission(
         "menu.query",
         "AI 活用",
@@ -624,6 +636,19 @@ def permission_for_route(method: str, route_path: str) -> frozenset[str] | None:
         return _allowed(PROFILE_READ_PERMISSION)
     if "/learning-material/" in route_path and route_path.startswith("/nl2sql/profiles/"):
         return _allowed(PROFILE_MANAGE_PERMISSION, LEARNING_MATERIAL_MANAGE_PERMISSION)
+    if "/ontology-capabilities" in route_path and route_path.startswith("/nl2sql/profiles/"):
+        if method == "GET":
+            return _allowed(
+                PROFILE_READ_PERMISSION,
+                "menu.ontology_build",
+                "nl2sql.ontology.actions.execute",
+                SQL_EXECUTE_PERMISSION,
+            )
+        if route_path.endswith("/binding"):
+            return _allowed("nl2sql.ontology.capabilities.manage")
+        if route_path.endswith("/invoke"):
+            return _allowed(SQL_EXECUTE_PERMISSION)
+        return _allowed("nl2sql.ontology.actions.execute")
     if route_path.startswith("/nl2sql/profiles/") and any(
         part in route_path
         for part in (

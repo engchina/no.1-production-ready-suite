@@ -2402,6 +2402,14 @@ class OntologyApiRuntime:
             ontology.revision.id,
             profile_id=profile_id,
         )
+        from .ontology_definition_workspace import ProfileOntologyWorkspaceService
+        from .ontology_published_context import published_context
+
+        business_release_id = str(
+            ProfileOntologyWorkspaceService(self).head(profile_id)["release_id"]
+        )
+        if business_release_id:
+            published_markdown = published_context(self, profile_id, business_release_id)
         context_hash = hashlib.sha256(
             canonical_json(
                 {
@@ -2423,6 +2431,7 @@ class OntologyApiRuntime:
             profile_id=profile_id,
             profile_view_id=view.id,
             ontology_revision_id=ontology.revision.id,
+            business_release_id=business_release_id,
             hits=hits,
             nodes=nodes,
             edges=edges,
@@ -2518,6 +2527,14 @@ class OntologyApiRuntime:
         # スナップショット(ロック下)→ LLM 解釈(ロック外)→ 書き戻し(ロック下+再検証)。
         # Enterprise AI 呼び出し中にグローバルロックを保持すると、1 つのハング呼び出しが
         # 全 ontology API を最大 timeout×retry 分塞ぐため、HTTP はロック外で行う。
+        from .ontology_definition_workspace import ProfileOntologyWorkspaceService
+        from .ontology_published_context import published_context
+
+        business_release_id = str(
+            ProfileOntologyWorkspaceService(self).head(request.profile_id)["release_id"]
+        )
+        if business_release_id:
+            published_context(self, request.profile_id, business_release_id)
         with self._lock:
             profile = self._strict_profile(request.profile_id)
             ontology = self._query_ontology()
@@ -2561,6 +2578,7 @@ class OntologyApiRuntime:
                     profile_id=profile.id,
                     profile_view_id=view.id,
                     ontology_revision_id=ontology.revision.id,
+                    business_release_id=business_release_id,
                     intent=intent,
                     clarification_mode=request.clarification_mode,
                     actor_user_uuid=actor_user_uuid,
@@ -2942,6 +2960,13 @@ class OntologyApiRuntime:
             ontology.revision.id,
             profile_id=session.profile_id,
         )
+        if session.business_release_id:
+            from .ontology_published_context import published_context
+
+            published_markdown = published_context(
+                self, session.profile_id, session.business_release_id, allowed_column_names
+            )
+        payload["business_release_id"] = session.business_release_id
         qa_sql_examples = select_qa_sql_examples_from_markdown(
             published_markdown,
             intent.question_effective,
@@ -4569,6 +4594,7 @@ class OntologyApiRuntime:
             ontology_trace_summary={
                 "session_id": session.id,
                 "ontology_revision_id": session.ontology_revision_id,
+                "business_release_id": session.business_release_id,
                 "intent_version": session.current_intent_version,
                 "sql_artifact_id": session.current_sql_artifact_id,
                 "sql_hash": artifact.sql_hash if artifact else "",
@@ -6267,3 +6293,7 @@ def get_profile_ontology_result(
 from .ontology_workspace_router import create_workspace_router  # noqa: E402
 
 router.include_router(create_workspace_router(lambda: ontology_runtime, _raise_domain_error))
+
+from .ontology_capability_router import create_capability_router  # noqa: E402
+
+router.include_router(create_capability_router(lambda: ontology_runtime, _raise_domain_error))

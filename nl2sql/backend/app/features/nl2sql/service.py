@@ -2752,6 +2752,7 @@ class StoredJob:
     request: JobCreateRequest
     actor_user_uuid: str = ""
     actor_is_system_admin: bool = False
+    business_release_id: str = ""
     status: JobStatus = JobStatus.PENDING
     created_at: str = field(default_factory=_utc_now)
     started_at: str | None = None
@@ -3771,6 +3772,7 @@ class Nl2SqlService:
         return {
             "job_id": job.job_id,
             "request": job.request.model_dump(mode="json"),
+            "business_release_id": job.business_release_id,
             "actor_user_uuid": job.actor_user_uuid,
             "actor_is_system_admin": job.actor_is_system_admin,
             "status": job.status.value,
@@ -3897,6 +3899,7 @@ class Nl2SqlService:
         return StoredJob(
             job_id=str(data["job_id"]),
             request=JobCreateRequest.model_validate(data["request"]),
+            business_release_id=str(data.get("business_release_id") or ""),
             actor_user_uuid=str(data.get("actor_user_uuid") or ""),
             actor_is_system_admin=_coerce_bool(data.get("actor_is_system_admin", False)),
             status=status,
@@ -6308,9 +6311,21 @@ class Nl2SqlService:
         job_id = str(uuid.uuid4())
         if self._deepsec_enabled and not actor_user_uuid:
             raise ValueError("DeepSec 有効時のジョブには認証済み actor が必要です。")
+        business_release_id = ""
+        if request.use_ontology_context:
+            from .ontology_definition_workspace import ProfileOntologyWorkspaceService
+            from .ontology_router import ontology_runtime
+
+            if ontology_runtime.legacy_service is self:
+                business_release_id = str(
+                    ProfileOntologyWorkspaceService(ontology_runtime).head(
+                        request.profile_id or "default"
+                    )["release_id"]
+                )
         job = StoredJob(
             job_id=job_id,
             request=request,
+            business_release_id=business_release_id,
             actor_user_uuid=actor_user_uuid,
             actor_is_system_admin=actor_is_system_admin,
             steps=_new_job_steps(),
@@ -6589,6 +6604,7 @@ class Nl2SqlService:
         with self._lock:
             return JobData(
                 job_id=job.job_id,
+                business_release_id=job.business_release_id,
                 status=job.status,
                 created_at=job.created_at,
                 started_at=job.started_at,
@@ -7173,6 +7189,7 @@ class Nl2SqlService:
                 return existing.model_copy(deep=True)
             profile = self.get_profile(profile_id)
             item = HistoryItem(
+                business_release_id=str(ontology_trace_summary.get("business_release_id") or ""),
                 id=str(uuid.uuid4()),
                 question=question,
                 engine=engine,
@@ -17249,11 +17266,42 @@ class Nl2SqlService:
         *,
         request: JobCreateRequest,
         profile: Nl2SqlProfile,
+        business_release_id: str = "",
+        allowed: AllowedObjects | None = None,
     ) -> str | None:
         """選択中 Profile の公開版 Markdown を SQL 生成 prompt 用に返す。"""
 
         if not request.use_ontology_context:
             return None
+        if business_release_id:
+            import json
+
+            from .ontology_definition_validation import schema_objects
+            from .ontology_published_context import published_context
+            from .ontology_router import ontology_runtime
+
+            columns = schema_objects(
+                json.loads(
+                    str(ontology_runtime.prepare_build_schema_context(profile.id).schema_context)
+                )
+            )
+            if allowed is not None:
+                permitted = {name.upper() for name in allowed.table_names}
+                columns = {name: cols for name, cols in columns.items() if name in permitted}
+                if allowed.columns:
+                    column_scope = {
+                        name.upper(): {col.upper() for col in cols}
+                        for name, cols in allowed.columns.items()
+                    }
+                    columns = {
+                        name: cols & column_scope.get(name, set()) for name, cols in columns.items()
+                    }
+            return published_context(
+                ontology_runtime,
+                profile.id,
+                business_release_id,
+                {name: list(cols) for name, cols in columns.items()},
+            )
         try:
             # ontology_router imports nl2sql_service at module load time, so keep this lazy.
             from app.features.nl2sql.ontology_router import ontology_runtime
@@ -17300,6 +17348,8 @@ class Nl2SqlService:
         ontology_context = self._job_published_ontology_markdown(
             request=request,
             profile=profile,
+            business_release_id=job.business_release_id,
+            allowed=allowed,
         )
         stage_elapsed = _elapsed_ms(stage_started)
         stage_timings.append(StageTiming(stage="prepare_context", elapsed_ms=stage_elapsed))
@@ -17437,6 +17487,7 @@ class Nl2SqlService:
                 )
         history_id = str(uuid.uuid4())
         result = Nl2SqlResult(
+            business_release_id=job.business_release_id,
             history_id=history_id,
             engine=generated.engine,
             engine_meta=generated.engine_meta,
@@ -17482,6 +17533,7 @@ class Nl2SqlService:
         final_status = JobStatus.DONE if safety.is_safe else JobStatus.ERROR
         final_error_message = None if safety.is_safe else safety.blocked_reason
         history_item = HistoryItem(
+            business_release_id=job.business_release_id,
             id=history_id,
             question=request.question,
             engine=result.engine,

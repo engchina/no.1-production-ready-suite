@@ -2820,3 +2820,63 @@ def test_execute_without_generated_sql_raises_state_conflict(
         )
 
     assert exc_info.value.code == "SQL_ARTIFACT_NOT_GENERATED"
+
+
+def test_typed_business_release_is_frozen_in_query_session_and_generation_context(
+    runtime: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+) -> None:
+    from app.features.nl2sql.ontology_definition_workspace import ProfileOntologyWorkspaceService
+    from app.features.nl2sql.ontology_definitions import (
+        BusinessDefinition,
+        DefinitionMapping,
+        ObjectTypeDefinition,
+        PropertyDefinition,
+    )
+
+    api, _, legacy = runtime
+    svc = ProfileOntologyWorkspaceService(api)
+    definitions: list[BusinessDefinition] = [
+        ObjectTypeDefinition(
+            api_name="Contract",
+            name_ja="顧客契約",
+            primary_key=["Contract.id"],
+            properties=["Contract.id"],
+            grain_ja="契約",
+            mappings=[DefinitionMapping(owner="APP", object_name="ORDERS")],
+        ),
+        PropertyDefinition(
+            api_name="Contract.id",
+            name_ja="契約番号",
+            object_type="Contract",
+            data_type="integer",
+            required=True,
+            mappings=[DefinitionMapping(owner="APP", object_name="ORDERS", column_name="ID")],
+        ),
+    ]
+
+    def publish(job: str) -> dict[str, Any]:
+        bundle = svc.save_build(
+            profile_id="sales",
+            job_id=job,
+            definitions=definitions,
+            schema_fingerprint="schema",
+            source_revision_id="legacy",
+        )
+        bundle = svc.validate("sales", bundle.id, bundle.etag, None)
+        bundle = svc.review(
+            "sales", bundle.id, bundle.etag, [d.id for d in bundle.definitions], None
+        )
+        return svc.publish(
+            "sales", bundle.id, bundle.etag, svc.head("sales")["release_id"], job, None
+        )
+
+    first = publish("first")
+    session = api.create_session(QuerySessionApiCreate(profile_id="sales", question="受注を表示"))
+    assert session.session.business_release_id == first["id"]
+    second = publish("second")
+    assert second["id"] != first["id"]
+    api.generate_sql(session.session.id, _generate_request(session))
+    context = legacy.preview_requests[-1].ontology_context
+    assert context is not None and context.business_release_id == first["id"]
+    assert "顧客契約" in context.llm_markdown
+    assert second["id"] not in context.llm_markdown

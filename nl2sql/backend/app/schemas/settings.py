@@ -320,7 +320,7 @@ class SystemTableMissingObject(BaseModel):
     """不足している manifest object。"""
 
     name: str
-    object_type: Literal["TABLE", "INDEX", "SEQUENCE"]
+    object_type: Literal["TABLE", "INDEX", "SEQUENCE", "PACKAGE", "PACKAGE BODY"]
 
 
 class SystemTableMetadata(BaseModel):
@@ -337,7 +337,7 @@ class SystemObjectMetadata(BaseModel):
     """必須の table / index / sequence を統一表示する metadata。"""
 
     name: str
-    object_type: Literal["TABLE", "INDEX", "SEQUENCE"]
+    object_type: Literal["TABLE", "INDEX", "SEQUENCE", "PACKAGE", "PACKAGE BODY"]
     exists: bool
     estimated_rows: int | None = None
     created_at: str | None = None

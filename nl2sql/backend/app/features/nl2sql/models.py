@@ -915,6 +915,7 @@ class DbAdminJoinWhereData(BaseModel):
 class Nl2SqlResult(BaseModel):
     """NL2SQL job result."""
 
+    business_release_id: str = ""
     history_id: str = ""
     engine: Nl2SqlEngine
     engine_meta: dict[str, Any] = Field(default_factory=dict)
@@ -1130,6 +1131,7 @@ class JobCreateData(BaseModel):
 class JobData(BaseModel):
     """非同期 job status response."""
 
+    business_release_id: str = ""
     job_id: str
     status: JobStatus
     created_at: str
@@ -1148,6 +1150,7 @@ class JobData(BaseModel):
 class HistoryItem(BaseModel):
     """検索履歴。"""
 
+    business_release_id: str = ""
     id: str
     question: str
     engine: Nl2SqlEngine

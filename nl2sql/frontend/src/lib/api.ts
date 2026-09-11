@@ -459,7 +459,7 @@ export type SystemTableOperationResult =
 
 export interface SystemTableMissingObject {
   name: string;
-  object_type: "TABLE" | "INDEX" | "SEQUENCE";
+  object_type: "TABLE" | "INDEX" | "SEQUENCE" | "PACKAGE" | "PACKAGE BODY";
 }
 
 export interface SystemTableMetadata {
@@ -470,7 +470,7 @@ export interface SystemTableMetadata {
   last_analyzed_at: string | null;
 }
 
-export type SystemObjectType = "TABLE" | "INDEX" | "SEQUENCE";
+export type SystemObjectType = "TABLE" | "INDEX" | "SEQUENCE" | "PACKAGE" | "PACKAGE BODY";
 
 export interface SystemObjectMetadata {
   name: string;

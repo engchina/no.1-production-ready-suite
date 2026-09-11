@@ -833,6 +833,7 @@ class OntologyQuerySessionService:
                 profile_id=request.profile_id,
                 profile_view_id=request.profile_view_id,
                 ontology_revision_id=request.ontology_revision_id,
+                business_release_id=request.business_release_id,
                 status=QuerySessionStatus.AWAITING_INTENT_CONFIRMATION,
                 original_question=request.question,
                 current_intent_version=1,
