@@ -49,11 +49,11 @@ test("database settings exposes create, explicit recreate, readiness and fixed f
 });
 
 test("new Profiles use the Select AI default while existing explicit regions remain mapped", () => {
-  assert.match(profilePageSource, /useSelectAiCredential\(\)/u);
+  assert.doesNotMatch(profilePageSource, /useSelectAiCredential\(\)/u);
   assert.match(profilePageSource, /const SELECT_AI_DEFAULT_REGION = "us-chicago-1"/u);
   assert.match(
     profilePageSource,
-    /emptyProfileForm\(selectAiCredentialQuery\.data\?\.region\)/u,
+    /function emptyProfileForm\(\)/u,
   );
   assert.match(profilePageSource, /selectedProfile\s*\? profileToForm\(selectedProfile\)/u);
 });

@@ -1359,7 +1359,7 @@ test("新規保存直後の Oracle 反映再試行は保存時の確認語を再
   });
 });
 
-test("Credential region の新規フォームは未編集で一覧へ戻っても破棄確認を出さない", async ({
+test("Credential が Osaka でも新規 Region は Chicago で未編集の破棄確認を出さない", async ({
   page,
 }) => {
   await mockProfileApi(page);
@@ -1368,7 +1368,7 @@ test("Credential region の新規フォームは未編集で一覧へ戻って�
       credential_name: "OCI_CRED",
       schema_name: "ADMIN",
       exists: true,
-      region: "us-chicago-1",
+      region: "ap-osaka-1",
       oci_auth_ready: true,
       missing_fields: [],
       operation: null,
@@ -1383,6 +1383,20 @@ test("Credential region の新規フォームは未編集で一覧へ戻って�
   await expect(page.getByRole("alertdialog", { name: "変更を破棄しますか" })).toHaveCount(0);
   await expect(page.locator("#profile-management-panel-list")).toBeVisible();
   await expect(page).toHaveURL(/\/profiles$/);
+});
+
+test("保存済み Region は Osaka を保持しキーボードで変更できる", async ({ page }) => {
+  await mockProfileApi(page);
+  await page.goto("/profiles?profile=default");
+  const region = page.getByRole("combobox", { name: "Region" });
+  await expect(region).toContainText("ap-osaka-1");
+  await region.focus();
+  await region.press("Enter");
+  await page.keyboard.press("Home");
+  await page.keyboard.press("Enter");
+  await expect(region).toContainText("us-chicago-1");
+  await page.getByRole("button", { name: "一覧に戻る", exact: true }).click();
+  await expect(page.getByRole("alertdialog", { name: "変更を破棄しますか" })).toBeVisible();
 });
 
 test("Credential 不足からデータベース設定で作成し、履歴 job を自動再試行しない", async ({

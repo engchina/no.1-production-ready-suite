@@ -35,7 +35,7 @@ import { INFORMATION_TABLE_FOCUS_CLASS } from "@/lib/list-density";
 import { toastError } from "@/lib/toast";
 import { LIST_SEARCH_DEBOUNCE_MS, useDebouncedValue } from "@/lib/useDebouncedValue";
 import { useUnsavedChangesGuard } from "@/lib/useUnsavedChangesGuard";
-import { useSchemaOwners, useSelectAiCredential } from "@/lib/queries";
+import { useSchemaOwners } from "@/lib/queries";
 import { API_TIMEOUT_MS, requestTimeoutSeconds } from "@/lib/requestPolicy";
 import { useAuth } from "@/features/security/AuthProvider";
 import { MENU_PERMISSIONS } from "@/features/security/menu-permissions";
@@ -143,12 +143,12 @@ const EMPTY_FORM: ProfileFormState = {
   selectAiConfig: DEFAULT_SELECT_AI_CONFIG,
 };
 
-function emptyProfileForm(region = SELECT_AI_DEFAULT_REGION): ProfileFormState {
+function emptyProfileForm(): ProfileFormState {
   return {
     ...EMPTY_FORM,
     allowedTables: [],
     allowedViews: [],
-    selectAiConfig: { ...DEFAULT_SELECT_AI_CONFIG, region: normalizeSelectAiRegion(region) },
+    selectAiConfig: { ...DEFAULT_SELECT_AI_CONFIG },
   };
 }
 
@@ -1419,7 +1419,6 @@ export function ProfileManagementPage() {
   const tableObjectsQuery = useSchemaObjects(debouncedObjectFilter, "TABLE");
   const viewObjectsQuery = useSchemaObjects(debouncedObjectFilter, "VIEW");
   const schemaOwnersQuery = useSchemaOwners();
-  const selectAiCredentialQuery = useSelectAiCredential();
   const schemaHeadQuery = useSchemaCatalogHead();
   const sharedSchemaRefresh = useSchemaRefreshCoordinator();
   const startDbProfileRefresh = useStartSelectAiDbProfileRefresh();
@@ -1629,14 +1628,13 @@ export function ProfileManagementPage() {
 
   // 編集対象の切替時にフォームと編集付帯 state を同期する(deep link 初回ロード後も含む)
   const editTargetKey = selectedProfile?.id ?? (profileParam === "new" ? "new" : "");
-  const formInitializationKey =
-    editTargetKey === "new" && selectAiCredentialQuery.isPending ? "" : editTargetKey;
+  const formInitializationKey = editTargetKey;
   useEffect(() => {
     if (!formInitializationKey) return;
     setForm(
       selectedProfile
         ? profileToForm(selectedProfile)
-        : emptyProfileForm(selectAiCredentialQuery.data?.region)
+        : emptyProfileForm()
     );
     setOracleConfirmation("");
     setNameError(null);
@@ -1736,9 +1734,9 @@ export function ProfileManagementPage() {
   const isDirty = useMemo(() => {
     const baseline = selectedProfile
       ? profileToForm(selectedProfile)
-      : emptyProfileForm(selectAiCredentialQuery.data?.region);
+      : emptyProfileForm();
     return !profileFormEquals(form, baseline);
-  }, [form, selectedProfile, selectAiCredentialQuery.data?.region]);
+  }, [form, selectedProfile]);
 
   const confirmDiscard = useCallback(
     () =>
