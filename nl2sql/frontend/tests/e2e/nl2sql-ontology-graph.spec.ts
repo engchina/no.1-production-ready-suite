@@ -486,6 +486,7 @@ async function expectGraphSearchFieldLayout(page: Page, playground: Locator) {
 }
 
 type MockApiOptions = {
+  revisionVersion?: number;
   ontologyGraph?: {
     nodes: unknown[];
     edges: unknown[];
@@ -541,7 +542,7 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
       ontology_graph: {
         revision: {
           id: "rev1",
-          version: 1,
+          version: options.revisionVersion ?? 1,
           status: "published",
           schema_fingerprint: "fp",
           etag: "re",
@@ -573,6 +574,19 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
   await page.route("**/api/nl2sql/profiles/*/ontology-source-documents**", (route) =>
     fulfillJson(route, { source_documents: [] })
   );
+}
+
+for (const version of [1, 2]) {
+  test(`公開版を内部 ID ではなく v${version} と表示する`, async ({ page }, testInfo) => {
+    await mockApi(page, { revisionVersion: version });
+    await page.goto("/ontology-build?profile=default");
+    await page.getByTestId("ontology-view-fetch").click();
+    const summary = page.getByTestId("ontology-playground-graph-summary");
+    await expect(summary.getByTestId("ontology-playground-version")).toHaveText(`公開済みバージョン: v${version}`);
+    await expect(summary).not.toContainText("rev1");
+    await expectNoHorizontalScroll(page);
+    await summary.screenshot({ path: testInfo.outputPath(`published-v${version}.png`) });
+  });
 }
 
 test("グラフ操作部は旧版の外観でモード・凡例・ズーム・検索を操作できる", async ({ page }, testInfo) => {
@@ -641,7 +655,7 @@ test("グラフはカード表示 + 検索 + 詳細ノードの折畳ができ�
   await expect(playground.getByTestId("ontology-playground-graph-summary")).toContainText(
     "確認対象: 5 ノード / 30 関係"
   );
-  await expect(playground.getByTestId("ontology-playground-revision-id")).toContainText("rev1");
+  await expect(playground.getByTestId("ontology-playground-version")).toHaveText("公開済みバージョン: v1");
   await expect(playground.getByTestId("ontology-playground-clear")).toBeDisabled();
   await expectQuestionActionLayoutWithClear(page, playground);
   await expectNoHorizontalScroll(page);

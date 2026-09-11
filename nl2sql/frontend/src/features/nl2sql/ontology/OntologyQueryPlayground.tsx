@@ -925,11 +925,11 @@ export function OntologyQueryPlayground({
         <div className="grid gap-3">
           <div className="flex flex-wrap items-center gap-2" data-testid="ontology-playground-graph-summary">
             <StatusBadge variant="neutral" label={graphStats} />
-            {graphRevisionId ? (
-              <span data-testid="ontology-playground-revision-id">
+            {graph?.revision?.version ? (
+              <span data-testid="ontology-playground-version">
                 <StatusBadge
                   variant="neutral"
-                  label={t("ontologyPlayground.graphRevision", { revision: graphRevisionId })}
+                  label={t("ontologyPlayground.graphRevision", { version: graph.revision.version })}
                 />
               </span>
             ) : null}

@@ -1017,7 +1017,7 @@ test("AI オントロジー構築の実行 → 進捗 → Markdown 下書き編�
   // 完了は工程ステッパーの「完了」バッジ(永続)で判定する。完了の“瞬間”通知は toast のため
   // section スコープには残らない(spec §9: 完了は状態表示が担い、瞬間だけ toast)。
   await expect(steps.getByText("完了").first()).toBeVisible({ timeout: 15000 });
-  await expect(page.getByRole("list", { name: "構築段階（Build Stages）" }).getByRole("listitem")).toHaveCount(6);
+  await expect(page.getByRole("list", { name: "構築段階" }).getByRole("listitem")).toHaveCount(6);
   expect(state.startPayloadSeen).toBe(true);
   expect(state.idempotencySeen).toBe(true);
   expect(state.latestRunOptions).toEqual({
@@ -1075,8 +1075,8 @@ test("AI オントロジー構築の実行 → 進捗 → Markdown 下書き編�
     ontologyQueryPanel.getByRole("heading", { name: "質問のオントロジー接地確認用グラフ" })
   ).toBeVisible();
   await expect.poll(() => state.ontologyViewCalls).toBe(1);
-  await expect(ontologyQueryPanel.getByTestId("ontology-playground-revision-id")).toContainText(
-    "revision-1"
+  await expect(ontologyQueryPanel.getByTestId("ontology-playground-version")).toHaveText(
+    "公開済みバージョン: v3"
   );
   const graphExpandButton = ontologyQueryPanel.getByRole("button", { name: "グラフを表示" });
   if (await graphExpandButton.isVisible()) {
@@ -1103,8 +1103,8 @@ test("AI オントロジー構築の実行 → 進捗 → Markdown 下書き編�
   expect(state.publishPayload).toMatchObject({ etag: "draft-etag-4", profile_id: "default" });
   await expect(page.getByTestId("ontology-publish-status")).toContainText("完了");
   await expect.poll(() => state.ontologyViewCalls).toBeGreaterThan(ontologyViewCallsBeforePublish);
-  await expect(ontologyQueryPanel.getByTestId("ontology-playground-revision-id")).toContainText(
-    "revision-draft-4"
+  await expect(ontologyQueryPanel.getByTestId("ontology-playground-version")).toHaveText(
+    "公開済みバージョン: v4"
   );
   await expect(page.getByTestId("ontology-mermaid-panel")).toHaveCount(0);
   await markdown.getByRole("tab", { name: "公開済み Markdown オントロジー" }).click();
@@ -2601,14 +2601,44 @@ function typedBundle(profileId: string) {
   };
 }
 
+test("構築段階は一般状態を日本語だけで表示し専門概念の併記を維持する", async ({ page }, testInfo) => {
+  await mockApi(page);
+  const payload = buildJob("running", "running");
+  const statuses = ["succeeded", "succeeded", "running", "skipped", "pending", "failed"];
+  payload.job.definition_phases.forEach((phase, index) => { phase.status = statuses[index]; });
+  await page.route("**/api/nl2sql/ontology-build/*", route => fulfillJson(route, payload));
+  await page.goto("/ontology-build?profile=default");
+  await loadOntologyBuildWorkspace(page);
+  await page.getByLabel("業務説明(自然言語)").fill("受注と顧客の関係を構築してください。");
+  await page.getByRole("button", { name: "AI 構築を実行", exact: true }).click();
+  const panel = page.getByTestId("ontology-typed-results");
+  const phases = panel.getByRole("list", { name: "構築段階", exact: true });
+  await expect(phases.getByRole("listitem")).toHaveCount(6);
+  for (const status of ["完了", "処理中", "省略", "待機中", "失敗"]) {
+    await expect(phases.getByText(status, { exact: true }).first()).toBeVisible();
+  }
+  await expect(phases).not.toContainText(/Completed|Running|Skipped|Pending|Failed/);
+  await expect(phases).toContainText("オブジェクト・関係（Objects & Links）");
+  await expect(phases).toContainText("共有定義（Shared Definitions）");
+  await expect(phases).toContainText("能力の契約（Capability Contracts）");
+  await expect(panel.getByRole("heading", { name: "構築結果", exact: true })).toBeVisible();
+  const refresh = panel.getByRole("button", { name: "最新情報を取得", exact: true });
+  await refresh.focus();
+  await expect(refresh).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(refresh).toBeEnabled();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await panel.screenshot({ path: testInfo.outputPath("ontology-build-statuses.png") });
+});
+
 test("型付き構築結果の六概念を日英併記で閲覧し、検索・キーボード・再読込を利用できる", async ({ page }, testInfo) => {
   await mockApi(page);
   await page.route("**/api/nl2sql/profiles/*/ontology-results", route => fulfillJson(route, { results: [typedBundle("default")] }));
   await page.goto("/ontology-build?profile=default");
   await loadOntologyBuildWorkspace(page);
   const panel = page.getByTestId("ontology-typed-results");
-  await panel.getByRole("tab", { name: "モデル（Model）", exact: true }).click();
-  await expect(panel.getByRole("heading", { name: "構築結果（Build Results）" })).toBeVisible();
+  await panel.getByRole("tab", { name: "モデル", exact: true }).click();
+  await expect(panel.getByRole("heading", { name: "構築結果" })).toBeVisible();
   for (const label of ["オブジェクト型（Object Type）", "プロパティ（Property）", "リンク型（Link Type）", "関数（Function）", "アクション型（Action Type）", "インターフェース（Interface）"]) {
     const button = panel.getByRole("button", { name: `${label} (1)`, exact: true });
     await expect(button).toBeVisible();
@@ -2620,9 +2650,9 @@ test("型付き構築結果の六概念を日英併記で閲覧し、検索・�
     await panel.getByTestId("ontology-definition-detail").locator("summary").click();
     await expect(panel.getByText("根拠・来歴（Evidence & Provenance）", { exact: true })).toBeVisible();
   }
-  await panel.getByLabel("定義を検索（Search Definitions）").fill("見つからない定義");
+  await panel.getByLabel("定義を検索").fill("見つからない定義");
   await expect(panel.getByText("該当する定義がありません。", { exact: true })).toBeVisible();
-  await panel.getByLabel("定義を検索（Search Definitions）").clear();
+  await panel.getByLabel("定義を検索").clear();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
   await panel.screenshot({ path: testInfo.outputPath("ontology-concepts.png") });
   await page.reload();
@@ -2643,12 +2673,12 @@ test("型付き結果の取得失敗は再試行でき、Profile 切替で前の
   const panel = page.getByTestId("ontology-typed-results");
   await expect(panel.getByRole("alert")).toBeVisible();
   failed = false;
-  await panel.getByRole("button", { name: "最新情報を取得（Refresh）" }).click();
-  await panel.getByRole("tab", { name: "モデル（Model）", exact: true }).click();
+  await panel.getByRole("button", { name: "最新情報を取得" }).click();
+  await panel.getByRole("tab", { name: "モデル", exact: true }).click();
   await expect(panel.getByTestId("ontology-definition-detail").locator("summary")).toContainText("salesの定義");
   await page.getByTestId("ontology-build-profile-select").selectOption("finance");
   await loadOntologyBuildWorkspace(page);
-  await panel.getByRole("tab", { name: "モデル（Model）", exact: true }).click();
+  await panel.getByRole("tab", { name: "モデル", exact: true }).click();
   await expect(panel.getByTestId("ontology-definition-detail").locator("summary")).toContainText("financeの定義");
   await expect(panel.getByText("salesの定義", { exact: false })).toHaveCount(0);
 });
@@ -2662,10 +2692,10 @@ test("型付き構築の証拠・競合・再検証状態を確認できる", as
   await loadOntologyBuildWorkspace(page);
   const panel = page.getByTestId("ontology-typed-results");
   await expect(panel.getByText(/Profile または Schema が変更されました/)).toBeVisible();
-  await panel.getByText("競合する変更（Conflicting Changes） (1)", { exact: true }).click();
+  await panel.getByText("競合する変更 (1)", { exact: true }).click();
   await expect(panel.getByText("AI の変更案", { exact: true })).toBeVisible();
-  await panel.getByText("競合する変更（Conflicting Changes） (1)", { exact: true }).click();
-  await panel.getByRole("tab", { name: "モデル（Model）", exact: true }).click();
+  await panel.getByText("競合する変更 (1)", { exact: true }).click();
+  await panel.getByRole("tab", { name: "モデル", exact: true }).click();
   await panel.getByTestId("ontology-definition-detail").locator("summary").filter({ hasText: "defaultの定義" }).click();
   await expect(panel.getByText("受注は顧客に属します。", { exact: true }).last()).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
@@ -2694,32 +2724,32 @@ test("型付き AI 構築から変更解析・独立レビュー・検証・Prof
   await page.getByLabel("業務説明(自然言語)").fill("資料の定義と契約を抽出してください。");
   await page.getByRole("button", { name: "AI 構築を実行", exact: true }).click();
   const panel = page.getByTestId("ontology-typed-results");
-  await expect(panel.getByRole("tab", { name: "概要（Overview）", exact: true })).toBeVisible();
+  await expect(panel.getByRole("tab", { name: "概要", exact: true })).toBeVisible();
   await expect(page.getByTestId("ontology-build-markdown")).toBeHidden();
-  await panel.getByRole("tab", { name: "レビュー・公開（Review & Publish）", exact: true }).click();
-  const publish = panel.getByRole("button", { name: "この版を公開（Publish Version）", exact: true });
+  await panel.getByRole("tab", { name: "レビュー・公開", exact: true }).click();
+  const publish = panel.getByRole("button", { name: "この版を公開", exact: true });
   await expect(publish).toBeDisabled();
-  await panel.getByLabel("変更したい業務説明（Change Request）").fill("顧客契約という業務名に変更する。");
-  await panel.getByRole("button", { name: "変更を解析（Analyze Changes）", exact: true }).click();
+  await panel.getByLabel("変更したい業務説明").fill("顧客契約という業務名に変更する。");
+  await panel.getByRole("button", { name: "変更を解析", exact: true }).click();
   await expect(panel.getByText(/顧客契約/).last()).toBeVisible();
   expect(bundle.definitions[0].name_ja).toBe("defaultの定義");
-  await panel.getByRole("button", { name: "変更を適用（Apply Changes）", exact: true }).click();
-  await page.getByRole("button", { name: "確認して実行（Confirm）", exact: true }).click();
+  await panel.getByRole("button", { name: "変更を適用", exact: true }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "確認して実行", exact: true }).click();
   await expect.poll(() => bundle.definitions[0].name_ja).toBe("顧客契約");
-  await panel.getByRole("button", { name: "定義をレビュー済みにする（Review Definitions）", exact: true }).click();
-  await page.getByRole("button", { name: "確認して実行（Confirm）", exact: true }).click();
-  await panel.getByRole("button", { name: "定義を検証（Validate Definitions）", exact: true }).click();
+  await panel.getByRole("button", { name: "定義をレビュー済みにする", exact: true }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "確認して実行", exact: true }).click();
+  await panel.getByRole("button", { name: "定義を検証", exact: true }).click();
   await expect(publish).toBeEnabled();
   await page.reload();
   await loadOntologyBuildWorkspace(page);
-  await expect(panel.getByRole("tab", { name: "レビュー・公開（Review & Publish）", exact: true })).toHaveAttribute("aria-selected", "true");
-  await expect(panel.getByLabel("変更したい業務説明（Change Request）")).toHaveValue("顧客契約という業務名に変更する。");
+  await expect(panel.getByRole("tab", { name: "レビュー・公開", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(panel.getByLabel("変更したい業務説明")).toHaveValue("顧客契約という業務名に変更する。");
   expect(publishCount).toBe(0);
   await publish.press("Enter");
-  await page.getByRole("button", { name: "確認して実行（Confirm）", exact: true }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "確認して実行", exact: true }).click();
   await expect.poll(() => publishCount).toBe(1);
   await expect(publish).toBeDisabled();
-  await panel.getByRole("tab", { name: "概要（Overview）", exact: true }).click();
+  await panel.getByRole("tab", { name: "概要", exact: true }).click();
   await expect(panel.getByText(/release-default/)).toBeVisible();
   await expect(panel.getByRole("region", { name: "同一版の概念グラフ（Concept Graph）", exact: true })).toBeVisible();
   await panel.scrollIntoViewIfNeeded();
@@ -2748,37 +2778,37 @@ test("公開能力を明示的に設定し、プレビュー確認・実行・�
   await page.goto("/ontology-build?profile=default"); await loadOntologyBuildWorkspace(page);
   await page.getByRole("tab", { name: "能力の利用（Capabilities）", exact: true }).click();
   const region = page.getByRole("region", { name: "公開能力（Published Capabilities）", exact: true });
-  await expect(region.getByText("設定が必要（Configuration Required）", { exact: true })).toBeVisible();
+  await expect(region.getByText("設定が必要", { exact: true })).toBeVisible();
   await region.getByText("実装設定（Implementation Binding）", { exact: true }).click();
   await region.getByLabel("確認済み業務条件（Reviewed Business Rules）").fill("下書きのみ承認");
   await region.getByLabel("状態条件（State Requirements）").fill('[{"property":"Order.status","value":"DRAFT"}]');
   await region.getByRole("button", { name: "実装を設定（Bind Implementation）", exact: true }).click();
-  await page.getByRole("button", { name: "確認して実行（Confirm）", exact: true }).click();
-  await expect(region.getByText("利用可能（Available）", { exact: true })).toBeVisible();
+  await page.getByRole("alertdialog").getByRole("button", { name: "確認して実行", exact: true }).click();
+  await expect(region.getByText("利用可能", { exact: true })).toBeVisible();
   await region.getByLabel(/承認状態 \(status\)/).fill("CONFIRMED");
   await region.getByLabel(/受注番号 \(Order.id\)/).fill("1");
-  await region.getByRole("button", { name: "変更をプレビュー（Preview Changes）", exact: true }).click();
+  await region.getByRole("button", { name: "変更をプレビュー", exact: true }).click();
   await expect(region.getByRole("cell", { name: "CONFIRMED", exact: true })).toBeVisible();
   expect(executions).toBe(0);
   await region.getByLabel(/承認状態 \(status\)/).fill("APPROVED");
-  await expect(region.getByRole("button", { name: "確認して実行（Confirm & Execute）", exact: true })).toHaveCount(0);
+  await expect(region.getByRole("button", { name: "確認して実行", exact: true })).toHaveCount(0);
   await region.getByLabel(/承認状態 \(status\)/).fill("CONFIRMED");
-  await region.getByRole("button", { name: "変更をプレビュー（Preview Changes）", exact: true }).click();
+  await region.getByRole("button", { name: "変更をプレビュー", exact: true }).click();
   await page.reload(); await loadOntologyBuildWorkspace(page);
   await expect(region.getByLabel(/承認状態 \(status\)/)).toHaveValue("CONFIRMED");
-  await expect(region.getByRole("button", { name: "確認して実行（Confirm & Execute）", exact: true })).toHaveCount(0);
+  await expect(region.getByRole("button", { name: "確認して実行", exact: true })).toHaveCount(0);
   expect(executions).toBe(0);
-  await region.getByRole("button", { name: "変更をプレビュー（Preview Changes）", exact: true }).click();
-  const execute = region.getByRole("button", { name: "確認して実行（Confirm & Execute）", exact: true });
+  await region.getByRole("button", { name: "変更をプレビュー", exact: true }).click();
+  const execute = region.getByRole("button", { name: "確認して実行", exact: true });
   await execute.focus(); await page.keyboard.press("Enter");
-  await page.getByRole("button", { name: "確認して実行（Confirm）", exact: true }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "確認して実行", exact: true }).click();
   await expect.poll(() => executions).toBe(1);
-  await expect(region.getByText(/前回の実行結果（Previous Result）/)).toBeVisible();
+  await expect(region.getByText(/前回の実行結果/)).toBeVisible();
   await page.reload(); await loadOntologyBuildWorkspace(page);
-  await expect(region.getByText(/前回の実行結果（Previous Result）/)).toBeVisible();
+  await expect(region.getByText(/前回の実行結果/)).toBeVisible();
   expect(executions).toBe(1);
   await region.getByLabel(/承認状態 \(status\)/).fill("NEW");
-  await expect(region.getByText("現在の入力は未実行です（Current Input Not Executed）", { exact: true })).toBeVisible();
+  await expect(region.getByText("現在の入力は未実行です", { exact: true })).toBeVisible();
   const box = await region.boundingBox(); expect(box!.x + box!.width).toBeLessThanOrEqual(page.viewportSize()!.width + 1);
   for (const button of await region.getByRole("button").all()) if (await button.isVisible()) await expectButtonLabelFits(button);
   await region.screenshot({ path: testInfo.outputPath("ontology-capabilities.png") });
@@ -2793,12 +2823,12 @@ test("公開能力の空・読込・取得失敗を表示し再試行できる",
   await page.goto("/ontology-build?profile=default"); await loadOntologyBuildWorkspace(page);
   await page.getByRole("tab", { name: "能力の利用（Capabilities）", exact: true }).click();
   const region = page.getByRole("region", { name: "公開能力（Published Capabilities）", exact: true });
-  await expect(region.getByText("能力を読み込み中（Loading Capabilities）", { exact: true })).toBeVisible();
+  await expect(region.getByText("能力を読み込み中", { exact: true })).toBeVisible();
   mode = "empty"; gate.release();
-  await expect(region.getByText("公開済みの関数・操作がありません（No Published Capabilities）", { exact: true })).toBeVisible();
-  mode = "error"; await region.getByRole("button", { name: "最新情報を取得（Refresh）", exact: true }).click();
+  await expect(region.getByText("公開済みの関数・操作がありません", { exact: true })).toBeVisible();
+  mode = "error"; await region.getByRole("button", { name: "最新情報を取得", exact: true }).click();
   await expect(region.getByRole("alert")).toBeVisible();
-  mode = "empty"; await region.getByRole("button", { name: "最新情報を取得（Refresh）", exact: true }).click();
+  mode = "empty"; await region.getByRole("button", { name: "最新情報を取得", exact: true }).click();
   await expect(region.getByRole("alert")).toHaveCount(0);
 });
 
@@ -2818,7 +2848,7 @@ test("公開関数の型付き入力で呼出し、過去結果を保持して�
   await region.getByLabel(/金額 \(amount\)/).fill("21");
   await region.getByRole("button", { name: "関数を呼出（Invoke Function）", exact: true }).click();
   expect(calls).toBe(0);
-  await page.getByRole("button", { name: "確認して実行（Confirm）", exact: true }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "確認して実行", exact: true }).click();
   await expect(region.locator("pre")).toContainText('"result": 42');
   await page.reload(); await loadOntologyBuildWorkspace(page);
   await expect(region.getByLabel(/金額 \(amount\)/)).toHaveValue("21");
@@ -2856,29 +2886,29 @@ for (const committedBeforeDisconnect of [true, false]) {
     await page.goto("/ontology-build?profile=default"); await loadOntologyBuildWorkspace(page);
     await page.getByRole("tab", { name: "能力の利用（Capabilities）", exact: true }).click();
     const region = page.getByRole("region", { name: "公開能力（Published Capabilities）", exact: true });
-    const preview = region.getByRole("button", { name: "変更をプレビュー（Preview Changes）", exact: true });
+    const preview = region.getByRole("button", { name: "変更をプレビュー", exact: true });
     await preview.click();
-    await region.getByRole("button", { name: "確認して実行（Confirm & Execute）", exact: true }).click();
-    await page.getByRole("button", { name: "確認して実行（Confirm）", exact: true }).click();
+    await region.getByRole("button", { name: "確認して実行", exact: true }).click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "確認して実行", exact: true }).click();
     await expect(region.getByText(/元の操作の結果を確認中/)).toBeVisible();
     await expect(preview).toBeDisabled();
-    const retry = region.getByRole("button", { name: "元の操作を再試行（Retry Original）", exact: true });
+    const retry = region.getByRole("button", { name: "元の操作を再試行", exact: true });
     await expect(retry).toBeDisabled();
     await page.reload(); await loadOntologyBuildWorkspace(page);
     await expect(region.getByText(/元の操作の結果を確認中/)).toBeVisible();
     await expect(page.getByRole("dialog")).toHaveCount(0);
     expect(calls).toBe(1); expect(previews).toBe(1);
     lookupAvailable = true;
-    await region.getByRole("button", { name: "元の結果を照会（Check Original Result）", exact: true }).click();
+    await region.getByRole("button", { name: "元の結果を照会", exact: true }).click();
     if (!committedBeforeDisconnect) {
       await expect(retry).toBeEnabled();
       for (const button of await region.getByRole("button").all()) if (await button.isVisible()) await expectButtonLabelFits(button);
       await region.screenshot({ path: testInfo.outputPath("ontology-original-action-recovery.png") });
       await retry.focus(); await page.keyboard.press("Enter");
       expect(calls).toBe(1);
-      await page.getByRole("button", { name: "確認して実行（Confirm）", exact: true }).click();
+      await page.getByRole("alertdialog").getByRole("button", { name: "確認して実行", exact: true }).click();
     }
-    await expect(region.getByText(/前回の実行結果（Previous Result）/)).toBeVisible();
+    await expect(region.getByText(/前回の実行結果/)).toBeVisible();
     await expect(region.locator("pre")).toContainText("recovered-execution");
     expect(mutations).toBe(1); expect(calls).toBe(committedBeforeDisconnect ? 1 : 2); expect(previews).toBe(1);
     await expect(region.getByText(/元の操作の結果を確認中/)).toHaveCount(0);
@@ -2907,14 +2937,14 @@ for (const lostFailureResponse of [false, true]) {
     await page.goto("/ontology-build?profile=default"); await loadOntologyBuildWorkspace(page);
     await page.getByRole("tab", { name: "能力の利用（Capabilities）", exact: true }).click();
     const region = page.getByRole("region", { name: "公開能力（Published Capabilities）", exact: true });
-    const preview = region.getByRole("button", { name: "変更をプレビュー（Preview Changes）", exact: true });
+    const preview = region.getByRole("button", { name: "変更をプレビュー", exact: true });
     await region.getByLabel(/状態 \(status\)/).fill("CONFIRMED"); await preview.click();
-    await region.getByRole("button", { name: "確認して実行（Confirm & Execute）", exact: true }).click();
-    await page.getByRole("button", { name: "確認して実行（Confirm）", exact: true }).click();
+    await region.getByRole("button", { name: "確認して実行", exact: true }).click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "確認して実行", exact: true }).click();
     if (lostFailureResponse) {
       await expect(region.getByText(/元の操作の結果を確認中/)).toBeVisible(); await expect(preview).toBeDisabled();
       await page.reload(); await loadOntologyBuildWorkspace(page); expect(calls).toBe(1);
-      const checkOriginal = region.getByRole("button", { name: "元の結果を照会（Check Original Result）", exact: true });
+      const checkOriginal = region.getByRole("button", { name: "元の結果を照会", exact: true });
       await expect(checkOriginal).toBeEnabled();
       outcomeAvailable = true;
       await checkOriginal.click();
@@ -2926,8 +2956,8 @@ for (const lostFailureResponse of [false, true]) {
     await page.reload(); await loadOntologyBuildWorkspace(page); await expect(preview).toBeEnabled(); expect(calls).toBe(1);
     await expect(page.getByRole("dialog")).toHaveCount(0);
     await region.getByLabel(/状態 \(status\)/).fill("APPROVED"); await preview.click();
-    await region.getByRole("button", { name: "確認して実行（Confirm & Execute）", exact: true }).focus(); await page.keyboard.press("Enter");
-    expect(calls).toBe(1); await page.getByRole("button", { name: "確認して実行（Confirm）", exact: true }).click();
+    await region.getByRole("button", { name: "確認して実行", exact: true }).focus(); await page.keyboard.press("Enter");
+    expect(calls).toBe(1); await page.getByRole("alertdialog").getByRole("button", { name: "確認して実行", exact: true }).click();
     await expect(region.locator("pre")).toContainText("new-execution"); expect(calls).toBe(2); expect(mutations).toBe(1); expect(previews).toBe(2);
     await expect(region.getByRole("alert")).toHaveCount(0);
   });
