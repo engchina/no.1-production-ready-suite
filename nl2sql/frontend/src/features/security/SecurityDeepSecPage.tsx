@@ -1869,7 +1869,6 @@ export function SecurityDeepSecPage() {
                       helper={t("security.deepsec.applyFoundationHelper", {
                         phrase: ADMIN_EXECUTE_CONFIRMATION,
                       })}
-                      tone="neutral"
                       disabled={foundationApplyBlocked || actionBlocked}
                       actions={
                         <>
@@ -1939,7 +1938,6 @@ export function SecurityDeepSecPage() {
                       helper={t("security.deepsec.resetHelper", {
                         phrase: ADMIN_RESET_CONFIRMATION,
                       })}
-                      tone="danger"
                       disabled={resetting}
                       actions={
                         <>
@@ -2937,7 +2935,6 @@ export function SecurityDeepSecPage() {
                             helper={t("security.deepsec.entitlements.applyHelper", {
                               phrase: ADMIN_EXECUTE_CONFIRMATION,
                             })}
-                            tone="danger"
                             disabled={
                               entitlementReadOnly || actionBlocked ||
                               entitlementPreviewing ||

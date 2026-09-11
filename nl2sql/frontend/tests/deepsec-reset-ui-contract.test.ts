@@ -72,7 +72,6 @@ test("DeepSec foundation apply は step card 内ではなく外側 neutral secti
 
   assert.match(applySectionSource, /security\.deepsec\.applySectionTitle/u);
   assert.match(applySectionSource, /ExecutionConfirmationField/u);
-  assert.match(applySectionSource, /tone="neutral"/u);
   assert.doesNotMatch(applyOpeningSource, /tone="danger"/u);
 });
 

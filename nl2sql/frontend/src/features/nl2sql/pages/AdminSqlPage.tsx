@@ -463,7 +463,6 @@ export function AdminSqlPage() {
               placeholder={ADMIN_EXECUTE_CONFIRMATION}
               expectedLabel={ADMIN_EXECUTE_CONFIRMATION}
               helper={t("nl2sql.adminSqlRunner.adminHelper")}
-              tone="danger"
               disabled={loading}
               actions={actionButtons}
             />

@@ -338,7 +338,6 @@ export function ExecutionConfirmationField({
   placeholder,
   expectedLabel,
   helper,
-  tone = "neutral",
   disabled = false,
   actions,
 }: {
@@ -348,8 +347,6 @@ export function ExecutionConfirmationField({
   placeholder: string;
   expectedLabel: string;
   helper: string;
-  /** danger は不可逆操作の強調用。入力値の検証失敗は status badge と aria-invalid で表現する。 */
-  tone?: "neutral" | "danger";
   disabled?: boolean;
   /** 確認語入力の直下に描画する実行/キャンセル等のアクションバー。primary/danger → secondary の順で渡す。 */
   actions?: ReactNode;
@@ -361,13 +358,10 @@ export function ExecutionConfirmationField({
     : value.trim()
       ? t("dbAdmin.confirmation.status.mismatch")
       : t("dbAdmin.confirmation.status.pending");
-  const isDanger = tone === "danger";
   const containerClass = "grid min-w-0 gap-2 rounded-md border border-border bg-background p-3";
   const inputClass = [
-    "h-11 w-full rounded-md border border-border bg-card px-3 py-2 text-sm outline-none transition-colors placeholder:text-muted disabled:cursor-not-allowed disabled:bg-muted/30 disabled:text-muted",
-    isDanger
-      ? "focus:border-danger focus:ring-2 focus:ring-danger/40"
-      : "focus:border-primary focus:ring-2 focus:ring-ring/40",
+    "h-[44px] w-full rounded-md border border-border bg-card px-3 py-2 text-sm outline-none transition-colors placeholder:text-muted disabled:cursor-not-allowed disabled:bg-muted/30 disabled:text-muted",
+    "focus:border-danger focus:ring-2 focus:ring-danger/40",
   ].join(" ");
   const statusClass = [
     "inline-flex min-h-6 items-center rounded-full border px-2 py-0.5 text-xs font-semibold",
@@ -380,12 +374,12 @@ export function ExecutionConfirmationField({
 
   return (
     <div className={containerClass} data-testid="execution-confirmation-field">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <FieldLabel
           htmlFor={id}
           label={t("dbAdmin.confirmation.label")}
           required
-          className={`font-semibold ${isDanger ? "text-danger" : "text-foreground"}`}
+          className="font-semibold text-danger"
         />
         <div className="flex flex-wrap items-center gap-2">
           <span className="max-w-full break-all rounded-md bg-card px-2 py-1 font-mono text-xs text-foreground">
@@ -413,14 +407,12 @@ export function ExecutionConfirmationField({
           spellCheck={false}
         />
       </div>
-      <p id={helperId} className={`text-xs leading-5 ${isDanger ? "text-danger" : "text-muted"}`}>
+      <p id={helperId} className="break-words text-xs leading-5 text-danger">
         {helper}
       </p>
       {actions && (
         <div
-          className={`flex min-w-0 flex-col gap-[8px] border-t pt-3 sm:flex-row sm:flex-wrap sm:items-center ${
-            isDanger ? "border-danger/20" : "border-border"
-          }`}
+          className="flex min-w-0 flex-col gap-[8px] border-t border-danger/20 pt-3 sm:flex-row sm:flex-wrap sm:items-center"
         >
           {actions}
         </div>

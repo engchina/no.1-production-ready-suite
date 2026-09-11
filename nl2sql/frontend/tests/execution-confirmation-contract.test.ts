@@ -32,7 +32,7 @@ test("ExecutionConfirmationField uses a stable neutral surface without a left da
   assert.doesNotMatch(component, /bg-danger-bg\/70/u);
   assert.match(component, /border border-border bg-card/u);
   assert.match(component, /focus:border-danger focus:ring-2 focus:ring-danger\/40/u);
-  assert.match(component, /focus:border-primary focus:ring-2 focus:ring-ring\/40/u);
+  assert.doesNotMatch(component, /tone\??:|isDanger/u);
 });
 
 test("ExecutionConfirmationField keeps empty, mismatch, and confirmed status tones distinct", () => {
@@ -67,7 +67,6 @@ test("Drop object dialog does not wrap the confirmation field in a second danger
   assert.match(component, /text-xs font-semibold text-foreground/u);
   assert.match(component, /fieldset className="grid gap-3 rounded-md border border-border bg-background p-3"/u);
   assert.match(component, /legend className="px-1 text-sm font-semibold text-foreground"/u);
-  assert.match(component, /tone="danger"/u);
   assert.doesNotMatch(component, /border-l-4 border-l-danger/u);
   assert.doesNotMatch(component, /bg-danger-bg/u);
 });

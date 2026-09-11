@@ -415,7 +415,6 @@ export function SampleDataPage() {
                 placeholder={expectedConfirmation}
                 expectedLabel={expectedConfirmation}
                 helper={t("dataTools.sample.confirmationHelper", { phrase: expectedConfirmation })}
-                tone={isDeleteAction ? "danger" : "neutral"}
                 actions={
                   <Button
                     type="button"

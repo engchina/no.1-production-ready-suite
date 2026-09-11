@@ -289,7 +289,6 @@ export function SystemTablesCard() {
                   helper={t("dbAdmin.confirmation.helper.danger", {
                     phrase: RECREATE_CONFIRMATION,
                   })}
-                  tone="danger"
                   disabled={busy}
                   actions={
                     <Button

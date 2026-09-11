@@ -1926,7 +1926,6 @@ function CsvUploadWorkspace({
               : "dbAdmin.confirmation.helper.execute",
             { phrase: table || "-" }
           )}
-          tone={mode === "truncate_insert" ? "danger" : "neutral"}
           actions={
             <>
               <Button
@@ -2382,7 +2381,6 @@ function SyntheticWorkspace({
             helper={t("dbAdmin.confirmation.helper.danger", {
               phrase: syntheticExpectedConfirmation,
             })}
-            tone="danger"
             actions={
               <>
                 <Button

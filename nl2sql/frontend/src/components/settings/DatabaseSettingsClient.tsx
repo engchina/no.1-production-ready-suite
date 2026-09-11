@@ -762,7 +762,6 @@ function SelectAiCredentialCard() {
                   : "settings.database.selectAiCredential.confirmation.createHelper",
                 { phrase: SELECT_AI_CREDENTIAL_CONFIRMATION }
               )}
-              tone={data.exists ? "danger" : "neutral"}
               disabled={busy || !data.oci_auth_ready}
               actions={
                 <Button

@@ -1621,7 +1621,6 @@ export function DropDbObjectDialog({
               placeholder={objectName}
               expectedLabel={objectName}
               helper={labels.executeHint}
-              tone="danger"
               actions={
                 <>
                   <Button type="button" variant="danger" size="lg" loading={loading} disabled={!canExecute} onClick={onExecute}>
