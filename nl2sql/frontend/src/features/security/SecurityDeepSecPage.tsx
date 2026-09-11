@@ -639,7 +639,7 @@ function DeepSecPlanSteps({
               className="flex min-w-0 flex-wrap items-center gap-2"
               aria-label={`${versionLabel} ${step.title}`}
             >
-              <span className="inline-flex shrink-0 items-center rounded-md border border-border bg-muted/30 px-2 py-0.5 font-mono text-xs font-semibold leading-5 tabular-nums text-muted">
+              <span className="inline-flex shrink-0 items-center rounded-md border border-border bg-muted/30 px-2 py-0.5 font-sans text-xs font-semibold leading-5 tabular-nums text-muted">
                 {versionLabel}
               </span>
               <span className="min-w-0 break-words">{step.title}</span>
@@ -653,7 +653,7 @@ function DeepSecPlanSteps({
                 <Clock3 size={14} className="shrink-0" aria-hidden />
                 <span>{t("security.deepsec.appliedAt")}</span>
                 <time
-                  className="whitespace-nowrap font-mono tabular-nums text-foreground"
+                  className="whitespace-nowrap font-sans tabular-nums text-foreground"
                   dateTime={step.executed_at}
                 >
                   {formatDateTimeWithYear(step.executed_at)}

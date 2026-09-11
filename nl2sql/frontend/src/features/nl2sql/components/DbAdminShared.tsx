@@ -382,7 +382,7 @@ export function ExecutionConfirmationField({
           className="font-semibold text-danger"
         />
         <div className="flex flex-wrap items-center gap-2">
-          <span className="max-w-full break-all rounded-md bg-card px-2 py-1 font-mono text-xs text-foreground">
+          <span className="max-w-full break-all rounded-md bg-card px-2 py-1 font-sans text-xs text-foreground">
             {t("dbAdmin.confirmation.expected", { phrase: expectedLabel })}
           </span>
           <span className={statusClass} aria-live="polite">
@@ -1315,7 +1315,7 @@ export function ObjectDetailPanel({
                   <td className="px-3 py-2">{column.logical_name}</td>
                   <td className="px-3 py-2">{column.data_type}</td>
                   <td className="px-3 py-2">{column.nullable ? "YES" : "NO"}</td>
-                  <td className="break-words px-3 py-2 font-mono text-xs text-muted">
+                  <td className="break-words px-3 py-2 font-sans text-xs text-muted">
                     {sampleByColumn.get(column.column_name.toUpperCase()) || "-"}
                   </td>
                 </tr>

@@ -1,3 +1,4 @@
+import { expectLocalUiFonts } from "./_helpers/local-fonts";
 import { expect, test, type Page, type Route } from "@playwright/test";
 
 function envelope(data: unknown) {
@@ -617,4 +618,10 @@ test("Profile 保存が 503 のとき成功通知を出さず失敗を通知す�
     page.getByText("業務データを永続化するデータベースを利用できません。")
   ).toBeVisible();
   await expect(page.getByText("プロファイルを保存しました。")).toHaveCount(0);
+});
+
+// 各主要導線の最終状態で全テキスト・入力欄の字体継承を確認する。
+test.afterEach(async ({ page }, testInfo) => {
+  if (testInfo.status === "skipped") return;
+  await expectLocalUiFonts(page);
 });

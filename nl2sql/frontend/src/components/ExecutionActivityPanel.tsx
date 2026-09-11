@@ -117,7 +117,7 @@ export function ExecutionActivityPanel({
           >
             <Clock3 size={14} aria-hidden="true" />
             <span>{timerLabel}</span>
-            <span className="min-w-[3.25rem] text-right font-mono tabular-nums text-foreground">
+            <span className="min-w-[3.25rem] text-right font-sans tabular-nums text-foreground">
               {timing.elapsedClock}
             </span>
           </span>

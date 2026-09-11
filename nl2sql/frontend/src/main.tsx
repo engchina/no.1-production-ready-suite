@@ -20,6 +20,10 @@ import "@fontsource/roboto/400.css";
 import "@fontsource/roboto/500.css";
 import "@fontsource/roboto/600.css";
 import "@fontsource/roboto/700.css";
+import "@fontsource/google-sans-code/400.css";
+import "@fontsource/google-sans-code/500.css";
+import "@fontsource/google-sans-code/600.css";
+import "@fontsource/google-sans-code/700.css";
 // globals.css が tailwindcss + 共有 tokens.css + @source を取り込む（単一エントリ）。
 import "./globals.css";
 

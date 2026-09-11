@@ -768,7 +768,7 @@ export function DbSingleObjectPickerList({
                   <span className="text-xs text-muted">-</span>
                 )}
               </span>
-              <span className="flex items-center gap-2 font-mono text-xs text-foreground md:block">
+              <span className="flex items-center gap-2 font-sans text-xs text-foreground md:block">
                 <span className="font-sans font-medium text-muted md:hidden">{t("objectSelector.column.rows")}</span>
                 {item.rowCountLabel || "-"}
               </span>
@@ -1160,7 +1160,7 @@ export function DbObjectGrid({
                           {qualifiedName}
                         </button>
                       </td>
-                      <td className="whitespace-nowrap px-3 py-2 font-mono text-xs text-foreground">{rowCountLabel(item.row_count)}</td>
+                      <td className="whitespace-nowrap px-3 py-2 font-sans text-xs text-foreground">{rowCountLabel(item.row_count)}</td>
                       <td className="hidden whitespace-nowrap px-3 py-2 font-mono text-xs text-muted lg:table-cell">{item.owner || "-"}</td>
                     </tr>
                   );
@@ -1422,7 +1422,7 @@ export function DbObjectDetailPanel({
                   <td className="break-words px-3 py-2 text-muted">{(column.comment ?? "").trim() || "-"}</td>
                   <td className="px-3 py-2">{column.data_type}</td>
                   <td className="px-3 py-2">{column.nullable ? "YES" : "NO"}</td>
-                  <td className="break-words px-3 py-2 font-mono text-xs text-muted">
+                  <td className="break-words px-3 py-2 font-sans text-xs text-muted">
                     {column.sample_values.join(", ") || "-"}
                   </td>
                 </tr>

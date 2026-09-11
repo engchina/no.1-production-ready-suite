@@ -1,3 +1,4 @@
+import { expectLocalUiFonts } from "./_helpers/local-fonts";
 import {
   expect,
   test,
@@ -6120,4 +6121,10 @@ test("セキュリティレビュー: 成功通知が残っていても確認ダ
   await expect(password).toHaveValue("UnsavedSynthetic!123");
   await expect(notification.getByRole("status")).toBeVisible();
   await expect(page.getByRole("link", { name: "セキュリティ画面へ移動" })).toBeFocused();
+});
+
+// 各主要導線の最終状態で全テキスト・入力欄の字体継承を確認する。
+test.afterEach(async ({ page }, testInfo) => {
+  if (testInfo.status === "skipped") return;
+  await expectLocalUiFonts(page);
 });

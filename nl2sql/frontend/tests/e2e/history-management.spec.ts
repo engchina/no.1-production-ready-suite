@@ -1,3 +1,4 @@
+import { expectLocalUiFonts } from "./_helpers/local-fonts";
 import { expect, test, type Locator, type Page, type Route } from "@playwright/test";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
 import { expectCompactSortHeaders, expectPlainSortHeader } from "./_helpers/sort-header";
@@ -714,4 +715,10 @@ test("履歴の更新失敗後も続きが読めて条件変更では旧 cursor 
   await expect.poll(() => requests.at(-1)?.searchParams.get("rating")).toBe("unrated");
   await expect(more).toHaveCount(0);
   expect(requests.filter((url) => url.searchParams.has("cursor")).map((url) => url.searchParams.get("cursor"))).toEqual(["next-1"]);
+});
+
+// 各主要導線の最終状態で全テキスト・入力欄の字体継承を確認する。
+test.afterEach(async ({ page }, testInfo) => {
+  if (testInfo.status === "skipped") return;
+  await expectLocalUiFonts(page);
 });

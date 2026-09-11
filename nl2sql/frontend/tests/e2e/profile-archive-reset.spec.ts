@@ -1,3 +1,4 @@
+import { expectLocalUiFonts } from "./_helpers/local-fonts";
 import { expect, test, type Locator, type Page, type Route } from "@playwright/test";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
 import { expectCompactSortHeaders } from "./_helpers/sort-header";
@@ -447,6 +448,9 @@ test("ローカルフォントで全体と並べ替え列名を描画しキー�
   const bodyFont = await page.locator("body").evaluate((node) => getComputedStyle(node).fontFamily);
   expect(bodyFont).toMatch(/^"Noto Sans JP", Roboto,/);
   await expect(grid.locator("[data-sort-header]").first()).toHaveCSS("font-family", bodyFont);
+  for (const count of await grid.locator("tbody td:nth-child(2), tbody td:nth-child(3)").all()) {
+    await expect(count).toHaveCSS("font-family", bodyFont);
+  }
   // Chromium が日本語列名に使った実フォントを確認（CSS 宣言だけの検証にしない）。
   const cdp = await context.newCDPSession(page);
   try {
@@ -628,4 +632,10 @@ test("プロファイル削除時に Oracle 資産 cleanup の警告を表示す
   await expect(
     page.getByText("Oracle 資産の削除結果に警告があります。1 件を確認してください。")
   ).toBeVisible();
+});
+
+// 各主要導線の最終状態で全テキスト・入力欄の字体継承を確認する。
+test.afterEach(async ({ page }, testInfo) => {
+  if (testInfo.status === "skipped") return;
+  await expectLocalUiFonts(page);
 });

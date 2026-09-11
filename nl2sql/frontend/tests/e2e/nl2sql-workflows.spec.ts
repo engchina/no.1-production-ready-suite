@@ -1,3 +1,4 @@
+import { expectLocalUiFonts } from "./_helpers/local-fonts";
 import { expect, test, type Locator, type Page, type Route, type TestInfo } from "@playwright/test";
 import { mockDatabaseGateReady, systemAdminMe } from "./_helpers/database-gate";
 import {
@@ -2942,6 +2943,69 @@ async function expectQuerySingleColumnLayout(page: Page) {
   expect(tableBox!.x + tableBox!.width).toBeLessThanOrEqual(shellBox!.x + shellBox!.width + 1);
   await expectNoHorizontalScroll(page);
 }
+
+test("ローカルコードフォントで英日混在 SQL を表示し業務数字は UI フォントを使う", async ({ page, context, baseURL }, testInfo) => {
+  const origin = new URL(baseURL!).origin;
+  const external: string[] = [];
+  const fonts: { url: string; ok: boolean }[] = [];
+  await context.route("**/*", async (route) => {
+    if (new URL(route.request().url()).origin !== origin) {
+      external.push(route.request().url());
+      await route.abort();
+    } else {
+      await route.fallback();
+    }
+  });
+  page.on("response", (response) => {
+    if (response.request().resourceType() === "font") fonts.push({ url: response.url(), ok: response.ok() });
+  });
+  await mockNl2SqlApi(page);
+  await page.goto("/direct-sql");
+  const sql = directSqlInput(page);
+  await expect(sql).toBeVisible();
+  await sql.fill('SELECT CUSTOMER_NAME AS "顧客名", 1200000 AS "金額" FROM INVOICES');
+  const loaded = await page.evaluate(async () => {
+    const counts = [];
+    for (const weight of [400, 500, 600, 700]) {
+      const faces = await document.fonts.load(`${weight} 14px "Google Sans Code"`, "SELECT 1200000");
+      counts.push(faces.filter((face) => face.status === "loaded").length);
+    }
+    await document.fonts.ready;
+    return counts;
+  });
+  expect(loaded.every((count) => count > 0)).toBe(true);
+  await expect(sql).toHaveCSS("font-family", '"Google Sans Code", "Noto Sans JP", Roboto, monospace');
+  const rowLimit = page.getByTestId("nl2sql-direct-sql").getByLabel("取得件数上限");
+  await expect(rowLimit).toHaveCSS("font-family", await page.locator("body").evaluate((node) => getComputedStyle(node).fontFamily));
+  const cdp = await context.newCDPSession(page);
+  try {
+    await cdp.send("DOM.enable");
+    await cdp.send("CSS.enable");
+    const { root } = await cdp.send("DOM.getDocument");
+    const { nodeId } = await cdp.send("DOM.querySelector", { nodeId: root.nodeId, selector: "#direct-sql-input" });
+    // textarea の文字は UA shadow root 内に描画され、textarea 自身の字体一覧は空になる。
+    const { node } = await cdp.send("DOM.describeNode", { nodeId, depth: -1, pierce: true });
+    const editors = (node.shadowRoots ?? []).flatMap((root) => root.children ?? [])
+      .filter((child) => child.nodeName === "DIV" && !child.attributes?.includes("-webkit-input-placeholder"));
+    expect(editors).toHaveLength(1);
+    const { nodeIds } = await cdp.send("DOM.pushNodesByBackendIdsToFrontend", {
+      backendNodeIds: editors.map((editor) => editor.backendNodeId),
+    });
+    const { fonts: rendered } = await cdp.send("CSS.getPlatformFontsForNode", { nodeId: nodeIds[0] });
+    expect(rendered.some((font) => font.familyName.startsWith("Google Sans Code") && font.isCustomFont)).toBe(true);
+    expect(rendered.some((font) => font.familyName.startsWith("Noto Sans JP") && font.isCustomFont)).toBe(true);
+    expect(rendered.every((font) => font.isCustomFont)).toBe(true);
+  } finally {
+    await cdp.detach();
+  }
+  expect(fonts.some(({ url, ok }) => url.includes("google-sans-code") && ok)).toBe(true);
+  expect(fonts.every(({ url, ok }) => new URL(url).origin === origin && ok)).toBe(true);
+  expect(external).toEqual([]);
+  await sql.focus();
+  await expect(sql).toBeFocused();
+  await expectNoHorizontalScroll(page);
+  await page.screenshot({ path: testInfo.outputPath("local-code-fonts.png"), fullPage: true });
+});
 
 test("スキーマ参照の読込状態は利用者向けの日本語ラベルを表示する", async ({ page }) => {
   await mockNl2SqlApi(page);
@@ -8883,6 +8947,7 @@ test("shared split panes reserve their divider track across NL2SQL management pa
       await expectSplitPaneReservedTrack(pane);
     }
     await expectNoHorizontalScroll(page);
+    await expectLocalUiFonts(page);
   }
 });
 
@@ -14206,6 +14271,8 @@ test("全 NL2SQL ルートのページヘッダーは 1440px / 375px で横方�
       `${path} の primary は最大 1 件`
     ).toBeLessThanOrEqual(1);
     await expectNoHorizontalScroll(page);
+    await expectLocalUiFonts(page);
+    await page.screenshot({ path: test.info().outputPath(`font-scan-${path.slice(1)}.png`), fullPage: true });
   }
 });
 
@@ -15670,3 +15737,9 @@ for (const existing of [false, true]) {
     expect(calls).toBe(1);
   });
 }
+
+// 各主要導線の最終状態で全テキスト・入力欄の字体継承を確認する。
+test.afterEach(async ({ page }, testInfo) => {
+  if (testInfo.status === "skipped") return;
+  await expectLocalUiFonts(page);
+});

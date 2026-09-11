@@ -955,7 +955,7 @@ function TrainingDataTable({
                         variant={example.source_type === "feedback" ? "info" : "neutral"}
                         label={example.source_type === "feedback" ? t("qcm.training.sourceFeedback") : t("qcm.training.sourceFile")}
                       />
-                      <span className="mt-1 block font-mono">{example.source || "-"}</span>
+                      <span className="mt-1 block font-sans">{example.source || "-"}</span>
                     </td>
                     <td className="px-3 py-2 align-top">
                       <div className="flex flex-wrap justify-end gap-2">
@@ -1152,7 +1152,7 @@ function ModelTestPanel({
                     {prediction.candidates.map((candidate) => (
                       <tr key={candidate.category} className={INFORMATION_TABLE_ROW_CLASS}>
                         <td className="break-words px-3 py-2 font-semibold text-foreground">{candidate.category}</td>
-                        <td className="px-3 py-2 font-mono text-xs text-foreground">{Math.round(candidate.score * 100)}%</td>
+                        <td className="px-3 py-2 font-sans text-xs text-foreground">{Math.round(candidate.score * 100)}%</td>
                         <td className="break-words px-3 py-2 text-xs text-muted">
                           {profileRecordDisplayLabel(candidate)}
                         </td>
@@ -1451,7 +1451,7 @@ function TrainingCandidatesPanel({
                           {item.feedback_comment}
                         </p>
                       )}
-                      <p className="mt-1 font-mono text-xs tabular-nums text-muted">
+                      <p className="mt-1 font-sans text-xs tabular-nums text-muted">
                         {formatDateTime(item.created_at)}
                       </p>
                       {item.conflict_profile_ids.length > 0 && (

@@ -172,7 +172,7 @@ export function ProcessingIndicator({
           >
             <Clock3 size={14} aria-hidden="true" />
             <span>{timing.active ? t("common.processing.elapsed") : t("common.processing.duration")}</span>
-            <span className="min-w-[3.25rem] text-right font-mono tabular-nums text-foreground">
+            <span className="min-w-[3.25rem] text-right font-sans tabular-nums text-foreground">
               {timing.elapsedClock}
             </span>
           </span>

@@ -190,7 +190,7 @@ export function WorkflowProgressStrip({
         </div>
         <div className="flex min-w-0 max-w-full flex-wrap items-center gap-x-4 gap-y-2 text-xs text-muted sm:justify-end">
           {meta}
-          <span className="inline-flex min-w-0 max-w-full flex-wrap items-center gap-1.5 font-mono tabular-nums">
+          <span className="inline-flex min-w-0 max-w-full flex-wrap items-center gap-1.5 font-sans tabular-nums">
             <Clock3 size={14} className="shrink-0" aria-hidden="true" />
             <span>{timerKind}</span>
             <span

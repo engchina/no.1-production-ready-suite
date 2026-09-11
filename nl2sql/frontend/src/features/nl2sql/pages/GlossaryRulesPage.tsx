@@ -365,7 +365,7 @@ function GlobalPreviewTable({
                       {absoluteIndex + 1}
                     </td>
                     <td
-                      className="px-3 py-2 align-middle font-mono text-xs text-foreground [overflow-wrap:anywhere]"
+                      className="px-3 py-2 align-middle font-sans text-xs text-foreground [overflow-wrap:anywhere]"
                       data-testid="glossary-term-preview-cell"
                     >
                       {row.term}

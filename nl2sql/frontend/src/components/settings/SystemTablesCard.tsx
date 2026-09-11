@@ -325,7 +325,7 @@ function SummaryItem({
   return (
     <div className="rounded-md border border-border bg-muted/30 p-3">
       <p className="text-xs text-muted">{label}</p>
-      <p className="mt-1 font-mono text-sm font-semibold text-foreground">{value}</p>
+      <p className="mt-1 font-sans text-sm font-semibold text-foreground">{value}</p>
       {description ? (
         <p className="mt-1 text-xs leading-relaxed text-muted">{description}</p>
       ) : null}

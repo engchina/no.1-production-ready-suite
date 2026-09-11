@@ -464,8 +464,8 @@ function ProfileList({
                           <span className="line-clamp-2 text-xs leading-5 text-muted">{profile.category || "-"}</span>
                         </button>
                       </td>
-                      <td className="px-3 py-2 text-right font-mono text-xs text-foreground">{profile.allowed_table_count}</td>
-                      <td className="px-3 py-2 text-right font-mono text-xs text-foreground">{profile.allowed_view_count}</td>
+                      <td className="px-3 py-2 text-right font-sans text-xs text-foreground">{profile.allowed_table_count}</td>
+                      <td className="px-3 py-2 text-right font-sans text-xs text-foreground">{profile.allowed_view_count}</td>
                     </tr>
                   );
                 })}

@@ -1,3 +1,4 @@
+import { expectLocalUiFonts } from "./_helpers/local-fonts";
 import { expect, test, type Locator, type Page, type Route } from "@playwright/test";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
 import { expectLegacyOntologyControls } from "./_helpers/ontology-controls";
@@ -1315,4 +1316,10 @@ test("サーバ検索結果のヒット一覧は最大高さを超えると縦�
   await expect(playground.locator(".react-flow__viewport")).not.toHaveAttribute("style", /NaN|Infinity/);
   await playground.getByTestId("ontology-playground-graph-region").screenshot({ path: testInfo.outputPath("ontology-visible-viewport.png") });
   expect(invalidCoordinates).toEqual([]);
+});
+
+// 各主要導線の最終状態で全テキスト・入力欄の字体継承を確認する。
+test.afterEach(async ({ page }, testInfo) => {
+  if (testInfo.status === "skipped") return;
+  await expectLocalUiFonts(page);
 });

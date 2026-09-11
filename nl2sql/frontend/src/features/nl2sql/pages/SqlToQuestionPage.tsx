@@ -616,7 +616,7 @@ function SchemaPreview({
                 <span className="ml-2 font-mono text-xs text-muted">{table.qualified_name || `${table.owner}.${table.table_name}`}</span>
               </p>
               <p className="mt-1 text-xs leading-5 text-muted">{table.comment || "-"}</p>
-              <p className="mt-2 break-words font-mono text-xs leading-5 text-foreground">
+              <p className="mt-2 break-words font-sans text-xs leading-5 text-foreground">
                 {table.columns
                   .slice(0, 8)
                   .map((column) => column.logical_name || column.column_name)

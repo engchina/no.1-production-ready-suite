@@ -300,7 +300,7 @@ function HistoryGrid({
                           testId="history-question"
                         />
                         <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-                          <span className="font-mono text-xs tabular-nums text-foreground">
+                          <span className="font-sans text-xs tabular-nums text-foreground">
                             {formatDateTime(item.created_at)}
                           </span>
                           <span className="min-w-0 break-words text-xs text-muted [overflow-wrap:anywhere]">
@@ -478,7 +478,7 @@ function HistoryDetailPanel({
           />
         </div>
         <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
-          <span className="font-mono text-xs tabular-nums text-muted">{formatDateTime(item.created_at)}</span>
+          <span className="font-sans text-xs tabular-nums text-muted">{formatDateTime(item.created_at)}</span>
           <StatusBadge variant="info" label={engineLabel(item.engine)} />
           <StatusBadge variant="neutral" label={formatElapsed(item.elapsed_ms)} />
           {item.generation_elapsed_ms !== null && item.generation_elapsed_ms !== undefined && (
@@ -561,7 +561,7 @@ function HistoryTimingMetric({ label, value }: { label: string; value?: number |
   return (
     <div className="min-w-0">
       <p className="text-xs font-medium text-muted">{label}</p>
-      <p className="mt-1 font-mono text-sm font-semibold tabular-nums text-foreground">
+      <p className="mt-1 font-sans text-sm font-semibold tabular-nums text-foreground">
         {formatElapsed(value)}
       </p>
     </div>
@@ -608,7 +608,7 @@ function HistoryTimingBreakdown({ item }: { item: HistoryItem }) {
                 variant={engineTimingStatusVariant(timing.status)}
                 label={engineTimingStatusLabel(timing.status)}
               />
-              <span className="font-mono text-xs tabular-nums text-muted">
+              <span className="font-sans text-xs tabular-nums text-muted">
                 {formatElapsed(timing.elapsed_ms)}
               </span>
               {timing.error ? (

@@ -15,6 +15,8 @@
  * dark theme だけ冷調 blue-gray の表面・文字・操作色へ差し替える。
  */
 :root {
+  /* 技術情報はローカル等幅フォント、日本語の未収録文字は Noto Sans JP に委ねる。 */
+  --font-mono: "Google Sans Code", "Noto Sans JP", "Roboto", monospace;
   --border-subtle: var(--border);
   --control-border: var(--border);
   --disabled: #9ca3af;
@@ -167,6 +169,18 @@ svg.animate-spin {
 }
 
 @layer base {
+  html {
+    font-family: var(--font-sans);
+  }
+
+  /* Tailwind の既定等幅スタックをローカル配信のコード用フォントへ揃える。 */
+  code,
+  kbd,
+  samp,
+  pre {
+    font-family: var(--font-mono);
+  }
+
   /*
    * border-border を使う既存 field へ strong control border を局所注入する。
    * --border の上書きなので border-primary / border-danger 等の状態 utility は維持される。
