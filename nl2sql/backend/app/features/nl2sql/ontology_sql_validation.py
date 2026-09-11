@@ -37,7 +37,8 @@ def validated_sql(tree: exp.Expression, physical: dict[str, set[str]]) -> exp.Ex
             dialect="oracle",
             schema=schema,
             identify=False,
-            quote_identifiers=False,
+            # CTE 列リスト等から生成された小文字 alias も再解析時に意味を保持する。
+            quote_identifiers=True,
             infer_schema=False,
         )
     for column in tree.find_all(exp.Column):
@@ -60,15 +61,29 @@ def expression_in_query(
 
     def bind_physical_reference(node: exp.Expression) -> exp.Expression:
         if isinstance(node, exp.Column) and node.db:
-            key = physical_column(node, physical).rsplit(".", 1)[0]
-            aliases = [
-                alias
-                for alias, (_, source) in scope.selected_sources.items()
-                if isinstance(source, exp.Table) and physical_table(source, physical) == key
-            ]
-            if len(aliases) != 1:
+            target = physical_column(node, physical)
+            candidates = []
+            for alias, (_, source) in scope.selected_sources.items():
+                if isinstance(source, exp.Table):
+                    columns = [exp.Column(this=node.this.copy())]
+                elif isinstance(source, Scope) and isinstance(source.expression, exp.Select):
+                    # 公開された投影だけを辿る。未投影列や計算結果を元の列と同一視しない。
+                    columns = [
+                        exp.column(p.alias_or_name, quoted=True) for p in source.expression.selects
+                    ]
+                else:
+                    continue
+                for column in columns:
+                    column.set("table", exp.to_identifier(alias, quoted=True))
+                    try:
+                        resolved = physical_column(column, physical, scope)
+                    except ValueError:
+                        continue
+                    if resolved == target:
+                        candidates.append(column)
+            if len(candidates) != 1:
                 raise ValueError("フィルタの物理参照を SELECT 内で一意に解決できません。")
-            return exp.column(node.name, table=aliases[0])
+            return candidates[0]
         return node
 
     expression = expression.copy().transform(bind_physical_reference)
@@ -95,7 +110,8 @@ def physical_column(
                 projections = [
                     p
                     for p in source.expression.selects
-                    if p.alias_or_name.upper() == column.name.upper()
+                    # qualify 済みの識別子は通常名が正規化され、引用名の大小文字は保持される。
+                    if p.alias_or_name == column.name
                 ]
                 if len(projections) != 1:
                     raise ValueError("派生列の物理参照を一意に解決できません。")
