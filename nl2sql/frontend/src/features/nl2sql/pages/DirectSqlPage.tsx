@@ -18,7 +18,7 @@ import { apiPost } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { SqlFileInput } from "../components/DbAdminShared";
 import { Nl2SqlResultTable } from "../components/Nl2SqlResultTable";
-import { RowLimitField, parseSqlRowLimit } from "../components/SqlRowLimitControls";
+import { DEFAULT_SQL_ROW_LIMIT, RowLimitField, parseSqlRowLimit } from "../components/SqlRowLimitControls";
 import { sqlExecutePayload } from "../previewState";
 import type { QueryResults } from "../types";
 import { emptySelection, toAllowedObjects } from "../workbenchState";
@@ -66,7 +66,7 @@ function ExecutableDirectSqlPage() {
   const [sqlText, setSqlText] = useWorkspaceState("sqlText", "");
   const [sqlFileResetSignal, setSqlFileResetSignal] = useState(0);
   const [results, setResults] = useState<QueryResults | null>(null);
-  const [rowLimitInput, setRowLimitInput] = useWorkspaceState("rowLimitInput", "");
+  const [rowLimitInput, setRowLimitInput] = useWorkspaceState("rowLimitInput", String(DEFAULT_SQL_ROW_LIMIT));
   const [executedRowLimit, setExecutedRowLimit] = useState<number | null>(null);
   const [executionRun, setExecutionRun] = useState<ExecutionRunState | null>(null);
   const [loading, setLoading] = useState(false);
@@ -80,7 +80,7 @@ function ExecutableDirectSqlPage() {
   const rowLimitError =
     rowLimitInput.trim() && rowLimit === null ? t("queryResults.rowLimit.errorBounded") : "";
   const canExecute = Boolean(sqlText.trim()) && !loading && rowLimit !== null;
-  const canClear = Boolean(sqlText || rowLimitInput || results || executionRun);
+  const canClear = Boolean(sqlText || rowLimitInput !== String(DEFAULT_SQL_ROW_LIMIT) || results || executionRun);
 
   const execute = async () => {
     const trimmedSql = sqlText.trim();
@@ -127,7 +127,7 @@ function ExecutableDirectSqlPage() {
     setResults(null);
     setExecutedRowLimit(null);
     setExecutionRun(null);
-    setRowLimitInput("");
+    setRowLimitInput(String(DEFAULT_SQL_ROW_LIMIT));
     setError("");
     setSqlFileResetSignal((value) => value + 1);
   };
@@ -175,7 +175,8 @@ function ExecutableDirectSqlPage() {
               onChange={setRowLimitInput}
               disabled={loading}
               error={rowLimitError}
-              className="w-full max-w-[22rem]"
+              className="w-full [&_input]:max-w-[22rem]"
+              helperClassName="overflow-x-auto whitespace-nowrap"
               min={1}
               max={DIRECT_SQL_MAX_ROW_LIMIT}
               helper={t("queryResults.rowLimit.helperDirectSql")}

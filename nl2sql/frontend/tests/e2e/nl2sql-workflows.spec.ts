@@ -6541,7 +6541,7 @@ test("Select AI の今回だけの生成条件を job に渡し、reset で消�
   await expectNoHorizontalScroll(page);
 });
 
-test("AI 活用の SELECT SQL 画面は通常 API だけを使用し、更新 SQL を拒否する", async ({ page }) => {
+test("AI 活用の SELECT SQL 画面は通常 API だけを使用し、更新 SQL を拒否する", async ({ page }, testInfo) => {
   const api = await mockNl2SqlApi(page);
   await page.route("**/api/nl2sql/execute", (route) => {
     api.executePayload = route.request().postDataJSON() as Record<string, unknown>;
@@ -6586,8 +6586,26 @@ test("AI 活用の SELECT SQL 画面は通常 API だけを使用し、更新 SQ
   const rowLimitHelper = directSql.getByText(
     "1〜100000 の整数。直接 SQL 実行では取得上限を明示してください。"
   );
-  await expect(rowLimitInput).toHaveValue("");
+  await expect(rowLimitInput).toHaveValue("100");
   await expect(rowLimitHelper).toBeVisible();
+  await expect(directSql.getByRole("button", { name: "SQL をクリア" })).toBeDisabled();
+  await expect(directSql.getByRole("button", { name: "SQL 実行" })).toBeDisabled();
+  const helperLayout = await rowLimitHelper.evaluate((element) => {
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    return { lines: range.getClientRects().length, height: element.clientHeight, lineHeight: parseFloat(getComputedStyle(element).lineHeight) };
+  });
+  expect(helperLayout.lines).toBe(1);
+  expect(helperLayout.height).toBe(Math.round(helperLayout.lineHeight));
+  await rowLimitInput.focus();
+  await rowLimitInput.press("Tab");
+  if (testInfo.project.name === "mobile-375") {
+    await expect(rowLimitHelper).toBeFocused();
+    await rowLimitHelper.press("ArrowRight");
+    await expect.poll(() => rowLimitHelper.evaluate((element) => element.scrollLeft)).toBeGreaterThan(0);
+  }
+  await rowLimitHelper.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("direct-sql-default-row-limit.png"), fullPage: true });
   for (const field of [rowLimitInput, rowLimitHelper]) {
     const bounds = await field.boundingBox();
     const panelBounds = await directSql.boundingBox();
@@ -6597,9 +6615,8 @@ test("AI 活用の SELECT SQL 画面は通常 API だけを使用し、更新 SQ
   }
   await expectButtonBelowInput(rowLimitInput, directSql.getByRole("button", { name: "SQL 実行" }));
   await sqlInput.fill("SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES");
-  await expect(directSql.getByRole("button", { name: "SQL 実行" })).toBeDisabled();
+  await expect(directSql.getByRole("button", { name: "SQL 実行" })).toBeEnabled();
   await expect(directSql.getByRole("alert")).toHaveCount(0);
-  await rowLimitInput.fill("100");
   await page.getByRole("button", { name: "SQL 実行" }).click();
 
   await expect(page.getByText("検索結果（1件）")).toBeVisible();
@@ -6619,11 +6636,15 @@ test("AI 活用の SELECT SQL 画面は通常 API だけを使用し、更新 SQ
   await expect(directSql.getByTestId("direct-sql-execution-activity")).toBeVisible();
   await clearButton.click();
   await expect(sqlInput).toHaveValue("");
-  await expect(rowLimitInput).toHaveValue("");
+  await expect(rowLimitInput).toHaveValue("100");
+  await expect(clearButton).toBeDisabled();
   await expect(page.getByText("検索結果（1件）")).toHaveCount(0);
   await expect(directSql.getByTestId("direct-sql-execution-activity")).toHaveCount(0);
 
   // この画面は直接 SQL 実行のため、利用者が取得上限を明示してから /api/nl2sql/execute へ送る。
+  await sqlInput.fill("SELECT CUSTOMER_NAME FROM INVOICES");
+  await rowLimitInput.fill("");
+  await expect(directSql.getByRole("button", { name: "SQL 実行" })).toBeDisabled();
   await rowLimitInput.fill("-1");
   await expect(directSql.getByRole("alert")).toContainText("1〜100000 の整数で入力してください。");
   await expect(directSql.getByRole("button", { name: "SQL 実行" })).toBeDisabled();
@@ -14460,10 +14481,13 @@ test("SELECT SQL の上限だけの入力をクリアでき、上限変更は未
   await page.goto("/direct-sql");
   const limit = page.getByLabel("取得件数上限");
   const clear = page.getByRole("button", { name: "SQL をクリア", exact: true });
-  await limit.fill("100");
+  await expect(limit).toHaveValue("100");
+  await limit.fill("200");
+  await page.reload();
+  await expect(limit).toHaveValue("200");
   await expect(clear).toBeEnabled();
   await clear.press("Enter");
-  await expect(limit).toHaveValue("");
+  await expect(limit).toHaveValue("100");
   await directSqlInput(page).fill("SELECT CUSTOMER_NAME FROM INVOICES");
   await limit.fill("100");
   let calls = 0;
