@@ -110,7 +110,7 @@ export function useWorkspaceDraftWriter() {
   };
 }
 
-export function WorkspaceResultNotice({ result, inputSignature, finishedAt }: { result: object | null; inputSignature: string; finishedAt?: string | number | null }) {
+export function WorkspaceResultNotice({ result, inputSignature, finishedAt, restored = false }: { result: object | null; inputSignature: string; finishedAt?: string | number | null; restored?: boolean }) {
   const active = useWorkspaceActive();
   const snapshot = useRef({ result, inputSignature, at: new Date().toISOString() });
   const [previous, setPrevious] = useState<object | null>(null);
@@ -118,7 +118,7 @@ export function WorkspaceResultNotice({ result, inputSignature, finishedAt }: { 
   useEffect(() => { if (!active) setPrevious(result); }, [active, result]);
   if (!result) return null;
   const changed = snapshot.current.inputSignature !== inputSignature;
-  if (previous !== result && !changed) return null;
+  if (!restored && previous !== result && !changed) return null;
   return <Banner severity="info" title={t("workspace.previousResult")}>
     {t("workspace.executedAt", { date: new Date(finishedAt || snapshot.current.at).toLocaleString("ja-JP") })}
     {changed ? ` — ${t("workspace.inputChanged")}` : ""}

@@ -1,4 +1,4 @@
-/** 同一タブ専用の草稿。保存対象は各画面が明示的に登録した入力・表示条件だけ。 */
+/** 同一タブ専用の草稿。保存対象は各画面が明示登録した入力・表示条件・最小スナップショットだけ。 */
 export const WORKSPACE_DRAFT_PREFIX = "production-ready-nl2sql.draft.v1:";
 export const WORKSPACE_DRAFT_TTL_MS = 8 * 60 * 60 * 1000;
 const OWNER_KEY = `${WORKSPACE_DRAFT_PREFIX}owner`;

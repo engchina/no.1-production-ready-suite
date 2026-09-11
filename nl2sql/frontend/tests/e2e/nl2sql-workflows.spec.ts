@@ -7874,6 +7874,15 @@ test("sql to question page invalidates stale results when inputs change", async 
   await expect(page.getByText("SQL 構造は未分析です")).toBeVisible();
   await page.getByRole("tab", { name: "SQL分析・質問候補" }).click();
   await expect(page.getByText("質問候補は未生成です")).toBeVisible();
+  // 別 Profile の編集で、元 Profile の候補を消去しない。
+  await page.getByRole("tab", { name: "SQL入力・生成" }).click();
+  await page.getByRole("combobox", { name: "業務プロファイル" }).selectOption("default");
+  await expect(sqlToQuestionInput(page)).toHaveValue("SELECT TOTAL_AMOUNT FROM INVOICES");
+  await page.getByRole("tab", { name: "SQL分析・質問候補" }).click();
+  await expect(page.getByRole("region", { name: "質問候補", exact: true })).toContainText("請求金額を条件付きで一覧確認したい");
+  await page.reload();
+  await expect(page.getByRole("region", { name: "質問候補", exact: true })).toContainText("請求金額を条件付きで一覧確認したい");
+
 });
 
 test("sql to question page keeps controls usable without page overflow at 375px", async ({ page }) => {
@@ -14435,7 +14444,10 @@ test("sql to question merges candidates after structure and restores the legacy 
   await page.reload();
   await expect(page.getByRole("tab", { name: "SQL分析・質問候補" })).toHaveAttribute("aria-selected", "true");
   await expect(editor).toHaveValue(draft);
-  await expect(candidates.getByText("質問候補は未生成です")).toBeVisible();
+  await expect(candidates).toContainText("請求金額を条件付きで一覧確認したい");
+  await expect(candidates).toContainText("前回の実行結果");
+  await expect(candidates).toContainText("実行日時:");
+  await expect(candidates).toContainText("論理構造が編集されています");
   await expect(page.getByRole("button", { name: "論理構造から SQL を生成" })).toBeEnabled();
   expect(generationRequests).toBe(0);
   await expectNoHorizontalScroll(page);
@@ -15332,3 +15344,120 @@ test("sql to question generates SQL independently from the natural question and 
   expect(payloads).toHaveLength(3);
   expect(executions).toBe(0);
 });
+
+// Issue #427: 質問は明示登録した最小スナップショットとして復元する。
+test("sql to question retains candidates through navigation, reload and failed reference revalidation", async ({ page }, testInfo) => {
+  await mockNl2SqlApi(page);
+  let mutations = 0;
+  page.on("request", (request) => {
+    if (request.method() === "POST" && /\/api\/nl2sql\//.test(request.url())) mutations += 1;
+  });
+  await page.goto("/sql-to-question");
+  await sqlToQuestionInput(page).fill("SELECT TOTAL_AMOUNT FROM INVOICES");
+  await page.getByRole("button", { name: "質問を生成", exact: true }).click();
+  const candidates = page.getByRole("region", { name: "質問候補", exact: true });
+  const question = "請求金額を条件付きで一覧確認したい";
+  await expect(candidates).toContainText(question);
+  const editor = page.getByRole("textbox", { name: "再生成に使う SQL 論理構造" });
+  const draft = "SELECT: 請求金額\nFROM: INVOICES\nWHERE: 請求金額 >= 100";
+  await editor.fill(draft);
+  await page.locator('a[href="/direct-sql"]').first().click();
+  await expect(directSqlInput(page)).toBeVisible();
+  await page.goBack();
+  await expect(candidates).toContainText(question);
+  await expect(candidates).toContainText("前回の実行結果");
+  const timestamp = await candidates.getByText(/実行日時:/).innerText();
+  await page.goForward();
+  await expect(directSqlInput(page)).toBeVisible();
+  await page.locator('a[href="/sql-to-question"]').first().click();
+  await expect(editor).toHaveValue(draft);
+  await expect(candidates).toContainText(timestamp);
+  await page.reload();
+  await expect(editor).toHaveValue(draft);
+  await expect(candidates).toContainText(question);
+  await expect(candidates).toContainText(timestamp);
+  await expect(candidates).toContainText("論理構造が編集されています");
+  const generate = candidates.getByRole("button", { name: "自然言語の質問から SQL を生成" });
+  await expect(generate).toBeEnabled();
+  await generate.focus();
+  await expect(generate).toBeFocused();
+  await candidates.scrollIntoViewIfNeeded();
+  await expectNoHorizontalScroll(page);
+  await candidates.screenshot({ path: testInfo.outputPath("restored-question-candidate.png") });
+
+  // 対象の参照権限が再検証できなければ候補を残し、生成は停止する。
+  let unavailable = true;
+  await page.route("**/api/nl2sql/profiles/default/usage-context", async (route) => {
+    if (unavailable) return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ detail: "プロファイルが見つかりません。" }) });
+    return route.fallback();
+  });
+  await page.reload();
+  await expect(page.getByRole("alert")).toContainText("プロファイルが見つかりません");
+  await expect(candidates).toContainText(question);
+  await expect(candidates).toContainText(timestamp);
+  await expect(generate).toBeDisabled();
+  await expect(editor).toHaveValue(draft);
+  unavailable = false;
+  await page.getByRole("button", { name: "プロファイル・スキーマを再読込" }).click();
+  await expect(generate).toBeEnabled();
+  expect(mutations).toBe(1);
+});
+
+test("sql to question isolates candidate snapshots by DB and account and clears them on auth expiry", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  let database = "question-db-a";
+  let user = systemAdminMe;
+  await page.route("**/api/ready/database", (route) => fulfillJson(route, { status: "ok", check: "ok", detail: null, context_id: database }));
+  await page.route("**/api/auth/me", (route) => fulfillJson(route, user));
+  await page.goto("/sql-to-question");
+  await sqlToQuestionInput(page).fill("SELECT TOTAL_AMOUNT FROM INVOICES");
+  await page.getByRole("button", { name: "質問を生成", exact: true }).click();
+  const candidates = page.getByRole("region", { name: "質問候補", exact: true });
+  await expect(candidates).toContainText("請求金額を条件付きで一覧確認したい");
+  database = "question-db-b";
+  await page.reload();
+  await expect(sqlToQuestionInput(page)).toHaveValue("");
+  await page.getByRole("tab", { name: "SQL分析・質問候補" }).click();
+  await expect(candidates).toContainText("質問候補は未生成です");
+  database = "question-db-a";
+  await page.reload();
+  await expect(candidates).toContainText("請求金額を条件付きで一覧確認したい");
+  await expect(candidates).toContainText("前回の実行結果");
+  user = { ...systemAdminMe, user_uuid: "other-question-user", login_user_id: "OTHER" };
+  await page.reload();
+  await expect(sqlToQuestionInput(page)).toHaveValue("");
+  await page.getByRole("tab", { name: "SQL分析・質問候補" }).click();
+  await expect(candidates).toContainText("質問候補は未生成です");
+  await page.getByRole("tab", { name: "SQL入力・生成" }).click();
+  await sqlToQuestionInput(page).fill("SELECT TOTAL_AMOUNT FROM INVOICES");
+  await page.getByRole("button", { name: "質問を生成", exact: true }).click();
+  await expect(candidates).toContainText("請求金額を条件付きで一覧確認したい");
+  await page.evaluate(() => window.dispatchEvent(new Event("app-auth-unauthorized")));
+  await expect(page).toHaveURL(/\/login/);
+  expect(await page.evaluate(() => Object.keys(sessionStorage).filter((key) => key.startsWith("production-ready-nl2sql.draft.v1:")))).toEqual([]);
+});
+
+for (const invalid of ["expired", "malformed", "different-sql"] as const) {
+  test(`sql to question does not restore ${invalid} candidate snapshots`, async ({ page }) => {
+    await mockNl2SqlApi(page);
+    await page.goto("/sql-to-question");
+    await sqlToQuestionInput(page).fill("SELECT TOTAL_AMOUNT FROM INVOICES");
+    await page.getByRole("button", { name: "質問を生成", exact: true }).click();
+    const candidates = page.getByRole("region", { name: "質問候補", exact: true });
+    await expect(candidates).toContainText("請求金額を条件付きで一覧確認したい");
+    await page.evaluate((invalid) => {
+      const key = Object.keys(sessionStorage).find((key) => key.includes('questionSnapshot:default'))!;
+      const saved = JSON.parse(sessionStorage.getItem(key)!);
+      if (invalid === "expired") saved.at = Date.now() - 8 * 60 * 60 * 1000;
+      if (invalid === "malformed") saved.value.warnings = [123];
+      if (invalid === "different-sql") saved.value.sourceSql = "SELECT 1 FROM DUAL";
+      sessionStorage.setItem(key, JSON.stringify(saved));
+    }, invalid);
+    let mutations = 0;
+    page.on("request", (request) => { if (request.method() === "POST" && /\/api\/nl2sql\//.test(request.url())) mutations += 1; });
+    await page.reload();
+    await expect(candidates).toContainText("質問候補は未生成です");
+    await expect(page.getByRole("textbox", { name: "再生成に使う SQL 論理構造" })).toHaveValue(/SELECT: 請求金額/);
+    expect(mutations).toBe(0);
+  });
+}

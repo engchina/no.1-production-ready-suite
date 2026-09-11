@@ -39,6 +39,10 @@ import type {
 
 type SqlToQuestionPanel = "input" | "structure";
 type GeneratedSql = { sql: string; explanation: string; warnings: string[]; at: string };
+// 質問の再利用と旧結果の識別に必要な項目だけを同一タブに保存する。
+const EMPTY_QUESTION_SNAPSHOT = {
+  question: "", logicalStructure: "", sourceSql: "", warnings: [] as string[], generatedAt: "",
+};
 
 export function SqlToQuestionPage() {
   useWorkspaceRevalidation();
@@ -54,6 +58,9 @@ export function SqlToQuestionPage() {
   const [selectedProfileId, setSelectedProfileId] = useWorkspaceState("selectedProfileId", "");
   const [sql, setSql] = useWorkspaceState(`sql:${selectedProfileId}`, "");
   const [structureText, setStructureText] = useWorkspaceState(`structureText:${selectedProfileId}`, "");
+  const [questionSnapshot, setQuestionSnapshot] = useWorkspaceState(`questionSnapshot:${selectedProfileId}`, EMPTY_QUESTION_SNAPSHOT);
+  const reverse = questionSnapshot.generatedAt && questionSnapshot.sourceSql === sql ? questionSnapshot : null;
+  const generatedThisVisit = useRef<typeof EMPTY_QUESTION_SNAPSHOT | null>(null);
   const [editingStructure, setEditingStructure] = useState(false);
   const [sqlGenerationLoading, setSqlGenerationLoading] = useState(false);
   const [sqlGenerationError, setSqlGenerationError] = useState("");
@@ -74,9 +81,8 @@ export function SqlToQuestionPage() {
     }
   }, [activePanel, workspaceActive]);
   const [structureItems, setStructureItems] = useState<Nl2SqlLogicalStructureItem[]>([]);
-  const [reverse, setReverse] = useState<ReverseSqlData | null>(null);
   useEffect(() => { setQuestionSql(null); setQuestionSqlError(""); }, [selectedProfileId, sql, reverse]);
-  useEffect(() => { setReverse(null); setStructureItems([]); setEditingStructure(false); setRegenerated(null); setSqlGenerationError(""); }, [selectedProfileId]);
+  useEffect(() => { setStructureItems([]); setEditingStructure(false); setRegenerated(null); setSqlGenerationError(""); }, [selectedProfileId]);
   const [loading, setLoading] = useState(false);
   const [reverseLoading, setReverseLoading] = useState(false);
   const [loadError, setLoadError] = useState("");
@@ -194,7 +200,15 @@ export function SqlToQuestionPage() {
           use_glossary: false,
         }, { signal, timeoutMs: API_TIMEOUT_MS.longRunningJob });
         if (signal.aborted) return;
-        setReverse(data);
+        const snapshot = {
+          question: data.question,
+          logicalStructure: data.logical_structure || "",
+          sourceSql: sql,
+          warnings: data.warnings ?? [],
+          generatedAt: new Date().toISOString(),
+        };
+        generatedThisVisit.current = snapshot;
+        setQuestionSnapshot(snapshot);
         setStructureText(data.logical_structure || "");
         setRegenerated(null);
         setSqlGenerationError("");
@@ -345,7 +359,6 @@ export function SqlToQuestionPage() {
                   value={selectedProfileId}
                   onChange={(event) => {
                     setSelectedProfileId(event.currentTarget.value);
-                    setReverse(null);
                     setActionError("");
                     setActivePanel("input");
                   }}
@@ -375,7 +388,7 @@ export function SqlToQuestionPage() {
                     setEditingStructure(false);
                     setStructureItems([]);
                     setRegenerated(null);
-                    setReverse(null);
+                    setQuestionSnapshot(EMPTY_QUESTION_SNAPSHOT);
                     setActionError("");
                     setActivePanel("input");
                   }}
@@ -490,8 +503,8 @@ export function SqlToQuestionPage() {
             />
             {reverse ? (
               <section className="grid content-start gap-3 text-sm">
-                {structureText !== reverse.logical_structure && <FormStatus tone="warning" message={t("sqlToQuestion.result.staleStructure")} />}
-                <WorkspaceResultNotice result={reverse} inputSignature={JSON.stringify([selectedProfileId, sql, false])} />
+                {structureText !== reverse.logicalStructure && <FormStatus tone="warning" message={t("sqlToQuestion.result.staleStructure")} />}
+                <WorkspaceResultNotice result={reverse} inputSignature={JSON.stringify([selectedProfileId, sql, false])} finishedAt={reverse.generatedAt} restored={reverse !== generatedThisVisit.current} />
                 <div className="min-w-0 rounded-md border border-border bg-card p-3">
                   <p className="text-xs font-medium text-muted">{t("sqlToQuestion.result.question")}</p>
                   <QuestionText
