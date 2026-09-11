@@ -3156,7 +3156,7 @@ test("SQL 系の必須入力欄は既存の必須マークと required 属性で
   await page.goto("/sql-to-question");
   await expect(page.getByRole("combobox", { name: "業務プロファイル" })).toHaveValue("default");
   await expectRequiredTextarea(page, "sql-to-question-sql-input", "対象 SQL");
-  const generateButton = page.getByRole("button", { name: "業務質問を生成" });
+  const generateButton = page.getByRole("button", { name: "質問を生成" });
   await expect(generateButton).toBeDisabled();
   await sqlToQuestionInput(page).fill("SELECT TOTAL_AMOUNT FROM INVOICES");
   await expect(generateButton).toBeEnabled();
@@ -7644,16 +7644,12 @@ test("sql to question page reverse-generates a business question with one primar
   await expect(page.getByTestId("sql-to-question-table-count")).toHaveText("参照表 1");
 
   await sqlToQuestionInput(page).fill("SELECT TOTAL_AMOUNT FROM INVOICES");
-  // 用語・同義語は既定 off。本テストは適用時の payload を検証するので明示 ON にする。
-  await expect(page.getByLabel("用語・同義語を使う")).not.toBeChecked();
-  await page.getByLabel("用語・同義語を使う").check();
-  const generateButton = page.getByRole("button", { name: "業務質問を生成" });
+  await expect(page.getByLabel("用語・同義語を使う")).toHaveCount(0);
+  const generateButton = page.getByRole("button", { name: "質問を生成" });
   await expect(generateButton).toBeEnabled();
   await expect(page.getByRole("button", { name: "SQL 構造を分析" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Deep 逆生成" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "質問を生成", exact: true })).toHaveCount(0);
   await expect(sqlToQuestionInput(page)).toHaveValue("SELECT TOTAL_AMOUNT FROM INVOICES");
-  await expect(page.getByLabel("用語・同義語を使う")).toBeChecked();
   await generateButton.click();
   await expect(page.locator("#sql-to-question-panel-structure")).toBeVisible();
   await expect(page.getByRole("tab", { name: "SQL分析・質問候補" })).toHaveAttribute("aria-selected", "true");
@@ -7661,27 +7657,22 @@ test("sql to question page reverse-generates a business question with one primar
 
   await page.getByRole("tab", { name: "SQL分析・質問候補" }).click();
   const structurePanel = page.locator("#sql-to-question-panel-structure");
-  await expect(structurePanel.getByText("SQL 構造分析").first()).toBeVisible();
+  await expect(structurePanel.getByText("SQL 論理構造").first()).toBeVisible();
   // SQL 論理構造は「見出し + 業務者向け説明 + 技術詳細」で併記する。
   const structureList = structurePanel.getByTestId("sql-to-question-structure-list");
   await expect(structureList).toBeVisible();
   await expect(structureList).toContainText("SQL 種別");
   await expect(structureList).toContainText("データを取り出すだけの参照 SQL です");
   await expect(structureList.getByText("SELECT").first()).toBeVisible();
-  // 処理手順は「SQL の処理手順」ラベルの番号付きリストで、業務文と技術行を併記する。
-  await page.getByRole("tab", { name: "SQL分析・質問候補" }).click();
   const resultPanel = page.getByRole("region", { name: "質問候補", exact: true });
   await expect(resultPanel).toBeVisible();
-  await expect(resultPanel.getByText("SQL の処理手順", { exact: true })).toBeVisible();
-  await expect(resultPanel.locator('[data-testid="nl2sql-logical-steps-list"] > li')).toHaveCount(2);
-  await expect(resultPanel).toContainText("請求情報を対象に、一覧の取得を行います。");
-  await expect(resultPanel).toContainText("合計を計算します");
-  await expect(resultPanel.getByText("INVOICES を参照")).toBeVisible();
-  await expect(resultPanel.getByText("集計: SUM")).toBeVisible();
+  await expect(resultPanel.getByText("自然言語の質問", { exact: true })).toBeVisible();
+  await expect(resultPanel.getByText("SQL の処理手順", { exact: true })).toHaveCount(0);
+  await expect(resultPanel.getByText("説明", { exact: true })).toHaveCount(0);
   await expect.poll(() => api.reverseDeepPayload).toEqual({
     sql: "SELECT TOTAL_AMOUNT FROM INVOICES",
     profile_id: "default",
-    use_glossary: true,
+    use_glossary: false,
   });
   expect(api.reversePayload).toBeNull();
   expect(api.analyzePayload).toBeNull();
@@ -7790,7 +7781,7 @@ test("sql to question page shows a reserved loading state and retries reference-
 
   await page.goto("/sql-to-question");
   await expect(page.getByTestId("sql-to-question-schema-skeleton")).toBeVisible();
-  await expect(page.getByRole("button", { name: "業務質問を生成" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "質問を生成" })).toBeDisabled();
   releaseFirstObjectRequest?.();
 
   const errorBanner = page.getByRole("alert");
@@ -7858,7 +7849,7 @@ test("sql to question page invalidates stale results when inputs change", async 
   await page.goto("/sql-to-question");
 
   await sqlToQuestionInput(page).fill("SELECT TOTAL_AMOUNT FROM INVOICES");
-  await page.getByRole("button", { name: "業務質問を生成" }).click();
+  await page.getByRole("button", { name: "質問を生成" }).click();
   await expect(page.locator("#sql-to-question-panel-structure")).toBeVisible();
   await page.getByRole("tab", { name: "SQL分析・質問候補" }).click();
   await expect(page.getByText("請求金額を条件付きで一覧確認したい")).toBeVisible();
@@ -7872,13 +7863,13 @@ test("sql to question page invalidates stale results when inputs change", async 
   await expect(page.getByText("質問候補は未生成です")).toBeVisible();
 
   await page.getByRole("tab", { name: "SQL入力・生成" }).click();
-  await page.getByRole("button", { name: "業務質問を生成" }).click();
+  await page.getByRole("button", { name: "質問を生成" }).click();
   await expect(page.locator("#sql-to-question-panel-structure")).toBeVisible();
   await page.getByRole("tab", { name: "SQL分析・質問候補" }).click();
   await expect(page.getByText("請求金額を条件付きで一覧確認したい")).toBeVisible();
   await page.getByRole("tab", { name: "SQL入力・生成" }).click();
   await sqlToQuestionInput(page).fill("SELECT TOTAL_AMOUNT FROM INVOICES WHERE TOTAL_AMOUNT > 0");
-  await expect(page.getByRole("button", { name: "業務質問を生成" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "質問を生成" })).toBeEnabled();
   await page.getByRole("tab", { name: "SQL分析・質問候補" }).click();
   await expect(page.getByText("SQL 構造は未分析です")).toBeVisible();
   await page.getByRole("tab", { name: "SQL分析・質問候補" }).click();
@@ -7892,8 +7883,8 @@ test("sql to question page keeps controls usable without page overflow at 375px"
 
   await expect(page.getByTestId("sql-to-question-steps")).toBeVisible();
   await sqlToQuestionInput(page).fill("SELECT TOTAL_AMOUNT FROM INVOICES");
-  await expect(page.getByLabel("用語・同義語を使う")).toBeVisible();
-  const generateButton = page.getByRole("button", { name: "業務質問を生成" });
+  await expect(page.getByLabel("用語・同義語を使う")).toHaveCount(0);
+  const generateButton = page.getByRole("button", { name: "質問を生成" });
   await expect(generateButton).toBeVisible();
   const box = await generateButton.boundingBox();
   expect(box?.width ?? 0).toBeGreaterThan(250);
@@ -7911,12 +7902,12 @@ test("sql to question page remains usable at 150 percent zoom", async ({ page })
   });
 
   await sqlToQuestionInput(page).fill("SELECT TOTAL_AMOUNT FROM INVOICES");
-  await expect(page.getByLabel("用語・同義語を使う")).toBeVisible();
+  await expect(page.getByLabel("用語・同義語を使う")).toHaveCount(0);
   const steps = page.getByTestId("sql-to-question-steps");
   for (const label of ["SQL入力・生成", "SQL分析・質問候補"]) {
     await expect(steps.getByText(label)).toBeVisible();
   }
-  const generateButton = page.getByRole("button", { name: "業務質問を生成" });
+  const generateButton = page.getByRole("button", { name: "質問を生成" });
   await expect(generateButton).toBeVisible();
   await expect(generateButton).toHaveCSS("white-space", "nowrap");
   await expect(page.getByRole("button", { name: "SQL 構造を分析" })).toHaveCount(0);
@@ -7943,10 +7934,10 @@ test("sql to question page reports generation errors beside the action bar", asy
 
   const inputPanel = page.locator("#sql-to-question-panel-input");
   await sqlToQuestionInput(inputPanel).fill("SELECT TOTAL_AMOUNT FROM INVOICES");
-  await inputPanel.getByRole("button", { name: "業務質問を生成" }).click();
+  await inputPanel.getByRole("button", { name: "質問を生成" }).click();
   await expect(sqlToQuestionInput(inputPanel)).toBeDisabled();
   await expect(inputPanel.getByRole("combobox", { name: "業務プロファイル" })).toBeDisabled();
-  await expect(inputPanel.getByLabel("用語・同義語を使う")).toBeDisabled();
+  await expect(inputPanel.getByLabel("用語・同義語を使う")).toHaveCount(0);
   releaseReverse?.();
 
   await expect(inputPanel.getByRole("alert")).toContainText("接続状態と入力内容を確認して再試行してください。");
@@ -14363,12 +14354,12 @@ test("sql to question roundtrip uses the edited structure and preserves drafts o
   });
   await page.goto("/sql-to-question");
   await sqlToQuestionInput(page).fill("SELECT TOTAL_AMOUNT FROM INVOICES");
-  await page.getByRole("button", { name: "業務質問を生成" }).click();
-  const editor = page.getByRole("textbox", { name: "再生成に使う SQL 構造分析" });
+  await page.getByRole("button", { name: "質問を生成" }).click();
+  const editor = page.getByRole("textbox", { name: "再生成に使う SQL 論理構造" });
   await expect(editor).toHaveValue(/SELECT: 請求金額/);
   const edited = "SELECT: 請求金額\nFROM: INVOICES\nWHERE: 請求金額 >= 100";
   await editor.fill(edited);
-  const generate = page.getByRole("button", { name: "SQL 構造分析から SQL を生成" });
+  const generate = page.getByRole("button", { name: "論理構造から SQL を生成" });
   await generate.focus();
   await page.keyboard.press("Enter");
   const output = page.getByRole("region", { name: "再生成 SQL", exact: true });
@@ -14386,7 +14377,7 @@ test("sql to question roundtrip uses the edited structure and preserves drafts o
   await output.scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath("sql-structure-roundtrip.png"), fullPage: true });
   await page.getByRole("region", { name: "質問候補", exact: true }).scrollIntoViewIfNeeded();
-  await expect(page.getByText("SQL 構造分析が編集されています。この質問候補は編集前の SQL から生成したものです。")).toBeVisible();
+  await expect(page.getByText("論理構造が編集されています。この質問候補は編集前の SQL から生成したものです。")).toBeVisible();
   await page.getByRole("tab", { name: "SQL分析・質問候補" }).click();
   await page.reload();
   await expect(editor).toHaveValue(edited + " AND 請求金額 < 500");
@@ -14405,10 +14396,10 @@ test("sql to question merges candidates after structure and restores the legacy 
   await mockNl2SqlApi(page);
   await page.goto("/sql-to-question");
   await sqlToQuestionInput(page).fill("SELECT TOTAL_AMOUNT FROM INVOICES");
-  await page.getByRole("button", { name: "業務質問を生成" }).click();
+  await page.getByRole("button", { name: "質問を生成" }).click();
   const panel = page.locator("#sql-to-question-panel-structure");
   const candidates = panel.getByRole("region", { name: "質問候補", exact: true });
-  const editor = panel.getByRole("textbox", { name: "再生成に使う SQL 構造分析" });
+  const editor = panel.getByRole("textbox", { name: "再生成に使う SQL 論理構造" });
   await expect(page.getByRole("tab")).toHaveText(["SQL入力・生成", "SQL分析・質問候補"]);
   await expect(candidates).toContainText("請求金額を条件付きで一覧確認したい");
   await expect(page.getByRole("button", { name: "質問候補を確認" })).toHaveCount(0);
@@ -14445,7 +14436,7 @@ test("sql to question merges candidates after structure and restores the legacy 
   await expect(page.getByRole("tab", { name: "SQL分析・質問候補" })).toHaveAttribute("aria-selected", "true");
   await expect(editor).toHaveValue(draft);
   await expect(candidates.getByText("質問候補は未生成です")).toBeVisible();
-  await expect(page.getByRole("button", { name: "SQL 構造分析から SQL を生成" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "論理構造から SQL を生成" })).toBeEnabled();
   expect(generationRequests).toBe(0);
   await expectNoHorizontalScroll(page);
 });
@@ -14946,10 +14937,10 @@ test("論理構造の再生成不能理由を表示し編集内容を保持し�
   });
   await page.goto("/sql-to-question");
   await sqlToQuestionInput(page).fill("select * from INVOICES");
-  await page.getByRole("button", { name: "業務質問を生成" }).click();
-  const editor = page.getByRole("textbox", { name: "再生成に使う SQL 構造分析" });
+  await page.getByRole("button", { name: "質問を生成" }).click();
+  const editor = page.getByRole("textbox", { name: "再生成に使う SQL 論理構造" });
   await editor.fill("請求の一覧を取得");
-  const generate = page.getByRole("button", { name: "SQL 構造分析から SQL を生成" });
+  const generate = page.getByRole("button", { name: "論理構造から SQL を生成" });
   await generate.press("Enter");
   await expect(page.getByRole("alert")).toContainText("対象の列名を論理構造に追加してください。");
   await expect(page.getByRole("alert")).not.toContainText("validation error");
@@ -15233,14 +15224,15 @@ test("classifier refresh retains the applied candidate filter and current page",
 });
 
 for (const questionFailed of [false, true]) {
-  test(`sql to question displays SQL Assist clause analysis when later generation ${questionFailed ? "fails" : "succeeds"}`, async ({ page }, testInfo) => {
+  test(`sql to question displays SQL Assist logical structure and natural question when later generation ${questionFailed ? "fails" : "succeeds"}`, async ({ page }, testInfo) => {
     await mockNl2SqlApi(page);
     const analysis = "## 📊 SQL構造分析\n\n### 📋 SELECT句\n- *\n\n### 📁 FROM句\n- employee";
-    const warning = "業務質問の生成を完了できませんでした。完成した SQL 構造分析を表示しています。再試行してください。";
+    const logical = analysis.replace("SQL構造分析", "SQL論理構造").replace("employee", "[従業員情報]");
+    const warning = "業務質問の生成を完了できませんでした。完成した SQL 論理構造を表示しています。再試行してください。";
     await page.route("**/api/nl2sql/reverse/deep", (route) => fulfillJson(route, {
       question: "従業員情報を取得したい", explanation: "従業員を参照します。", referenced_tables: ["employee"],
-      sql_structure: analysis, logical_structure: "業務名へ変換した別の構造",
-      logical_structure_items: [{ kind: "statement", business: "古い要約", technical: "SELECT" }],
+      sql_structure: analysis, logical_structure: logical,
+      logical_structure_items: [],
       source: questionFailed ? "deterministic" : "oci_enterprise_ai", warnings: questionFailed ? [warning] : [],
     }));
     let payload: Record<string, unknown> | null = null;
@@ -15250,19 +15242,26 @@ for (const questionFailed of [false, true]) {
     });
     await page.goto("/sql-to-question");
     await sqlToQuestionInput(page).fill("select * from employee");
-    await page.getByRole("button", { name: "業務質問を生成" }).click();
-    const editor = page.getByRole("textbox", { name: "再生成に使う SQL 構造分析" });
-    await expect(editor).toHaveValue(analysis);
+    await page.getByRole("button", { name: "質問を生成" }).click();
+    const editor = page.getByRole("textbox", { name: "再生成に使う SQL 論理構造" });
+    await expect(editor).toHaveValue(logical);
     await expect(page.getByTestId("sql-to-question-structure-list")).toHaveCount(0);
-    await expect(page.getByText(/SQL 構造分析が編集されています/)).toHaveCount(0);
+    await expect(page.getByText(/論理構造が編集されています/)).toHaveCount(0);
     if (questionFailed) await expect(page.getByText(warning).first()).toBeVisible();
+    const candidate = page.getByRole("region", { name: "質問候補", exact: true });
+    await expect(candidate).toContainText("従業員情報を取得したい");
+    await expect(candidate).not.toContainText("oci_enterprise_ai");
+    await expect(candidate).not.toContainText("SQL の処理手順");
     await expectNoHorizontalScroll(page);
     await page.screenshot({ path: testInfo.outputPath("sql-assist-analysis.png"), fullPage: true });
-    const edited = analysis.replace("- *", "- employee_id");
+    await candidate.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath("natural-question.png"), fullPage: true });
+    const edited = logical.replace("- *", "- 従業員ID");
     await editor.fill(edited);
-    await expect(page.getByText(/SQL 構造分析が編集されています/)).toBeVisible();
-    await page.getByRole("button", { name: "SQL 構造分析から SQL を生成" }).press("Enter");
+    await expect(page.getByText(/論理構造が編集されています/)).toBeVisible();
+    await page.getByRole("button", { name: "論理構造から SQL を生成" }).press("Enter");
     await expect.poll(() => payload?.logical_structure).toBe(edited);
+    await expect.poll(() => payload?.use_glossary).toBe(false);
     await page.reload();
     await expect(editor).toHaveValue(edited);
   });

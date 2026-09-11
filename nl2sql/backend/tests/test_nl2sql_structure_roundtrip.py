@@ -14,7 +14,12 @@ from test_nl2sql_reverse_access import _principal, _request, _service
 from app.features.nl2sql import router
 from app.features.nl2sql.enterprise_ai_client import EnterpriseAiDirectError
 from app.features.nl2sql.models import ReverseSqlRequest, StructureToSqlRequest
-from app.features.nl2sql.reverse_prompts import source_prompt
+from app.features.nl2sql.reverse_prompts import (
+    BUSINESS_QUESTION_CORRECTIONS,
+    LOGICAL_STRUCTURE_CORRECTIONS,
+    PHYSICAL_STRUCTURE_CORRECTIONS,
+    source_prompt,
+)
 
 
 class StagedClient:
@@ -236,6 +241,45 @@ def test_original_glossary_prompt_is_applied_only_when_requested(use_glossary: b
     assert result.source == "oci_enterprise_ai"
     assert ("本タスクでは逆最適化を行います" in client.calls[2]["system_prompt"]) == use_glossary
     assert ("- 請求: INVOICES" in client.calls[2]["context"]) == use_glossary
+
+
+def test_schema_business_names_are_used_by_default_without_glossary() -> None:
+    service = _service()
+    physical = "## SQL構造分析\n### SELECT句\n- *\n### FROM句\n- APP.INVOICES i"
+    logical = "## SQL論理構造\n### SELECT句\n- *\n### FROM句\n- [請求] i"
+    client = StagedClient(
+        [
+            {"logical_structure": physical},
+            {"logical_structure": logical},
+            {"question": "すべての請求情報を教えてください。"},
+            {"sql": "SELECT * FROM APP.INVOICES i"},
+        ]
+    )
+    cast(Any, service)._enterprise_ai_client = client
+    request = ReverseSqlRequest(sql="SELECT * FROM APP.INVOICES i", profile_id="finance")
+    assert not request.use_glossary
+    result = service.reverse_sql_deep(request)
+    assert result.logical_structure == logical
+    assert result.sql_structure == physical
+    assert result.question == "すべての請求情報を教えてください。"
+    assert client.calls[2]["prompt"] == logical
+    for call in client.calls:
+        assert "table APP.INVOICES logical=請求" in call["context"]
+        assert "column NAME logical=名称" in call["context"]
+        assert "comment=" in call["context"]
+        assert "- 請求: INVOICES" not in call["context"]
+        assert "本タスクでは逆最適化を行います" not in call["system_prompt"]
+    assert PHYSICAL_STRUCTURE_CORRECTIONS in client.calls[0]["system_prompt"]
+    assert PHYSICAL_STRUCTURE_CORRECTIONS not in client.calls[1]["system_prompt"]
+    assert PHYSICAL_STRUCTURE_CORRECTIONS not in client.calls[2]["system_prompt"]
+    assert LOGICAL_STRUCTURE_CORRECTIONS in client.calls[1]["system_prompt"]
+    assert BUSINESS_QUESTION_CORRECTIONS in client.calls[2]["system_prompt"]
+    regeneration = StructureToSqlRequest(logical_structure=logical, profile_id="finance")
+    assert not regeneration.use_glossary
+    service.structure_to_sql(regeneration)
+    assert client.calls[3]["prompt"] == logical
+    assert "table APP.INVOICES logical=請求" in client.calls[3]["context"]
+    assert "- 請求: INVOICES" not in client.calls[3]["context"]
 
 
 def test_structure_endpoint_handles_provider_failure_and_retains_menu_permission(

@@ -2351,7 +2351,9 @@ def test_reverse_deep_uses_profile_context_and_glossary() -> None:
     assert "logical_structure" in fake.calls[0]["system_prompt"]
 
     deterministic = service.reverse_sql(
-        ReverseSqlRequest(sql="SELECT TOTAL_AMOUNT FROM INVOICES", profile_id="billing")
+        ReverseSqlRequest(
+            sql="SELECT TOTAL_AMOUNT FROM INVOICES", profile_id="billing", use_glossary=True
+        )
     )
     assert "請求表" in deterministic.question
     assert "請求金額" in deterministic.question

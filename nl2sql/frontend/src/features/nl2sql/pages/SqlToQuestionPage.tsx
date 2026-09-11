@@ -26,7 +26,6 @@ import {
 import { QuestionText } from "../components/QuestionText";
 import { FixedSplitPane } from "@/components/layout/FixedSplitPane";
 import { profileDisplayLabel } from "../profileDisplay";
-import { LogicalStepsList } from "../components/LogicalStepsList";
 import type {
   Nl2SqlLogicalStructureItem,
   ProfileSummary,
@@ -53,13 +52,12 @@ export function SqlToQuestionPage() {
   const [schemaTables, setSchemaTables] = useState<SchemaTable[]>([]);
   const [selectedProfileId, setSelectedProfileId] = useWorkspaceState("selectedProfileId", "");
   const [sql, setSql] = useWorkspaceState(`sql:${selectedProfileId}`, "");
-  const [useGlossary, setUseGlossary] = useWorkspaceState("useGlossary", false);
   const [structureText, setStructureText] = useWorkspaceState(`structureText:${selectedProfileId}`, "");
   const [editingStructure, setEditingStructure] = useState(false);
   const [sqlGenerationLoading, setSqlGenerationLoading] = useState(false);
   const [sqlGenerationError, setSqlGenerationError] = useState("");
   const [regenerated, setRegenerated] = useState<{ sql: string; explanation: string; warnings: string[]; signature: string; at: string } | null>(null);
-  const structureSignature = JSON.stringify([selectedProfileId, structureText, useGlossary]);
+  const structureSignature = JSON.stringify([selectedProfileId, structureText, false]);
   const workspaceActive = useWorkspaceActive();
   const activeRef = useRef(workspaceActive);
   activeRef.current = workspaceActive;
@@ -187,14 +185,14 @@ export function SqlToQuestionPage() {
         const data = await apiPost<ReverseSqlData>("/api/nl2sql/reverse/deep", {
           sql: trimmedSql,
           profile_id: selectedProfileId || undefined,
-          use_glossary: useGlossary,
+          use_glossary: false,
         }, { signal, timeoutMs: API_TIMEOUT_MS.longRunningJob });
         if (signal.aborted) return;
         setReverse(data);
-        setStructureText(data.sql_structure || data.logical_structure || "");
+        setStructureText(data.logical_structure || "");
         setRegenerated(null);
         setSqlGenerationError("");
-        setStructureItems(data.sql_structure ? [] : (data.logical_structure_items ?? []));
+        setStructureItems(data.logical_structure_items ?? []);
         focusStructure.current = activeRef.current;
         setActivePanel("structure");
       });
@@ -214,7 +212,7 @@ export function SqlToQuestionPage() {
       await runScopedRequest(async (signal) => {
         const data = await apiPost<{ sql: string; explanation: string; warnings: string[] }>(
           "/api/nl2sql/reverse/sql",
-          { logical_structure: structureText, profile_id: selectedProfileId || undefined, use_glossary: useGlossary },
+          { logical_structure: structureText, profile_id: selectedProfileId || undefined, use_glossary: false },
           { signal, timeoutMs: API_TIMEOUT_MS.longRunningJob }
         );
         if (signal.aborted) return;
@@ -359,26 +357,6 @@ export function SqlToQuestionPage() {
                 />
               </div>
 
-              <label className="flex min-h-11 items-center gap-2 rounded-md border border-border px-3 py-2 text-sm text-foreground">
-                <input
-                  type="checkbox"
-                  checked={useGlossary}
-                  onChange={(event) => {
-                    setUseGlossary(event.currentTarget.checked);
-                    setStructureText("");
-                    setEditingStructure(false);
-                    setStructureItems([]);
-                    setRegenerated(null);
-                    setReverse(null);
-                    setActionError("");
-                    setActivePanel("input");
-                  }}
-                  disabled={actionBusy}
-                  className="h-4 w-4 rounded border-border text-primary focus:ring-ring/40"
-                />
-                <span>{t("sqlToQuestion.useGlossary")}</span>
-              </label>
-
               <div className="flex flex-col gap-2 border-t border-border pt-4 sm:flex-row sm:flex-wrap sm:items-center">
                 <Button
                   type="button"
@@ -482,36 +460,15 @@ export function SqlToQuestionPage() {
             />
             {reverse ? (
               <section className="grid content-start gap-3 text-sm">
-                {structureText !== (reverse.sql_structure || reverse.logical_structure) && <FormStatus tone="warning" message={t("sqlToQuestion.result.staleStructure")} />}
-                <WorkspaceResultNotice result={reverse} inputSignature={JSON.stringify([selectedProfileId, sql, useGlossary])} />
-                <div className="flex flex-wrap gap-2">
-                  <StatusBadge variant="neutral" label={reverse.source ?? "deterministic"} />
-                  {useGlossary && <StatusBadge variant="info" label={t("sqlToQuestion.glossaryApplied")} />}
-                </div>
+                {structureText !== reverse.logical_structure && <FormStatus tone="warning" message={t("sqlToQuestion.result.staleStructure")} />}
+                <WorkspaceResultNotice result={reverse} inputSignature={JSON.stringify([selectedProfileId, sql, false])} />
                 <div className="min-w-0 rounded-md border border-border bg-card p-3">
                   <p className="text-xs font-medium text-muted">{t("sqlToQuestion.result.question")}</p>
                   <QuestionText
                     value={reverse.question}
                     variant="detail"
-                    maxLines={3}
-                    expandable
+                    maxLines={0}
                     className="mt-1 font-semibold"
-                  />
-                </div>
-                <CompactFact label={t("sqlToQuestion.result.explanation")} value={reverse.explanation} />
-                <CompactFact
-                  label={t("sqlToQuestion.result.tables")}
-                  value={reverse.referenced_tables.join(", ") || "-"}
-                />
-                <div>
-                  <p className="mb-1 text-xs font-medium text-muted">
-                    {t("sqlToQuestion.result.steps")}
-                  </p>
-                  <LogicalStepsList
-                    steps={reverse.logical_step_details}
-                    fallbackSteps={reverse.logical_steps}
-                    surface="card"
-                    listAriaLabel={t("nl2sql.logicalSteps.listAria")}
                   />
                 </div>
               </section>
@@ -685,15 +642,6 @@ function TextList({ label, items }: { label: string; items: string[] }) {
           </li>
         ))}
       </ul>
-    </div>
-  );
-}
-
-function CompactFact({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="min-w-0 rounded-md border border-border bg-card p-3">
-      <p className="text-xs font-medium text-muted">{label}</p>
-      <p className="mt-1 break-words text-sm font-semibold text-foreground">{value}</p>
     </div>
   );
 }

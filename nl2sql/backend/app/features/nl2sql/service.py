@@ -9935,15 +9935,14 @@ class Nl2SqlService:
                 context=context,
                 system_prompt=stage_prompt(
                     "business_question",
-                    "JSON object で question, explanation, logical_steps (文字列配列) を返す。"
+                    "JSON object の question に自然言語の質問文だけを返す。"
                     "logical_structure プレースホルダーは入力本文を参照する。",
                 )
                 + (
                     "\n語彙の正規化は質問生成と同時に行う。terms_text は context の glossary、"
                     "question_text は生成中の質問を指す。文字列リテラルは変更しない。\n"
                     + source_prompt("glossary_question")
-                    + "\n最終出力は引き続き question, explanation, logical_steps の "
-                    "JSON object とする。"
+                    + "\n最終出力は引き続き question の JSON object とする。"
                     if request.use_glossary
                     else ""
                 ),
@@ -9969,7 +9968,7 @@ class Nl2SqlService:
                 update={
                     "warnings": [
                         "Enterprise AI の生成を完了できませんでした。"
-                        "完了済みの SQL 構造分析または元 SQL を含む簡易構造を表示しています。"
+                        "完了済みの SQL 論理構造または元 SQL を含む簡易論理構造を表示しています。"
                         "質問候補は簡易生成です。再試行してください。"
                     ]
                 }

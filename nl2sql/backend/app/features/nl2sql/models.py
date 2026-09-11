@@ -2088,7 +2088,7 @@ class ReverseSqlRequest(BaseModel):
 
     sql: str = Field(min_length=1)
     profile_id: str | None = None
-    use_glossary: bool = True
+    use_glossary: bool = False
 
 
 class StructureToSqlRequest(BaseModel):
@@ -2096,7 +2096,7 @@ class StructureToSqlRequest(BaseModel):
 
     logical_structure: str = Field(min_length=1, max_length=100_000)
     profile_id: str | None = None
-    use_glossary: bool = True
+    use_glossary: bool = False
 
 
 class StructureToSqlOutput(BaseModel):
