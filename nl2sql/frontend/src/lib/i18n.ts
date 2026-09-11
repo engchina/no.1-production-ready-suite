@@ -916,6 +916,7 @@ const nl2sqlJa = {
   "nl2sql.selectAiFeedbackAdd.content": "利用者コメント（feedback_content）",
   "nl2sql.selectAiFeedbackAdd.contentPlaceholder": "改善点や条件を自然言語で入力",
   "nl2sql.selectAiFeedbackAdd.usedSql": "使用された DBMS_CLOUD_AI.FEEDBACK",
+  "nl2sql.selectAiFeedbackAdd.refreshFailed": "フィードバックは保存済みですが、履歴の更新に失敗しました。実行履歴で最新情報を取得してください。",
   "nl2sql.selectAiFeedbackAdd.saved": "フィードバックを保存しました。",
   "nl2sql.selectAiFeedbackAdd.rating": "生成結果の評価",
   "nl2sql.selectAiFeedbackAdd.requiresHistory": "対象の SQL 履歴がまだ保存されていません。少し待ってから再試行してください。",

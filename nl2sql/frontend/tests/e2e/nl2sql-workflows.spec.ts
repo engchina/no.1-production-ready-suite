@@ -14950,3 +14950,40 @@ test("論理構造の再生成不能理由を表示し編集内容を保持し�
   expect(calls).toBe(2);
   await expectNoHorizontalScroll(page);
 });
+
+test("フィードバック保存成功と履歴再取得失敗を分離し送信中のコメントを固定する", async ({ page }, testInfo) => {
+  await mockNl2SqlApi(page);
+  await page.goto("/query");
+  await nl2sqlQuestionInput(page).fill("請求金額を一覧で見たい");
+  await page.getByRole("button", { name: "SQL を生成して実行", exact: true }).click();
+  const comment = page.getByLabel("利用者コメント（feedback_content）");
+  await expect(comment).toBeVisible();
+  await comment.fill("保存するコメント");
+  const gate = createRequestGate();
+  let posts = 0;
+  await page.route("**/api/nl2sql/feedback", async (route) => {
+    posts += 1;
+    await gate.promise;
+    await route.fallback();
+  });
+  await page.route("**/api/nl2sql/history", (route) => route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "履歴再取得テストエラー" }) }));
+  const good = page.getByRole("button", { name: "良い", exact: true });
+  await good.click();
+  try {
+    await expect(comment).toBeDisabled();
+    await expect(good).toBeDisabled();
+    await expect(page.getByRole("button", { name: "違う", exact: true })).toBeDisabled();
+  } finally { gate.release(); }
+  await expect(page.getByText("フィードバックは保存済みですが、履歴の更新に失敗しました。実行履歴で最新情報を取得してください。", { exact: true })).toBeVisible();
+  await expect(page.getByText("履歴再取得テストエラー", { exact: true })).toHaveCount(0);
+  await expect(comment).toBeEnabled();
+  await expect(comment).toHaveValue("保存するコメント");
+  expect(posts).toBe(1);
+  await expectNoHorizontalScroll(page);
+  await page.screenshot({ path: testInfo.outputPath("feedback-saved-refresh-warning.png") });
+  await page.route("**/api/nl2sql/feedback", (route) => route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "保存テストエラー" }) }));
+  await good.press("Enter");
+  await expect(page.getByText("保存テストエラー", { exact: true })).toBeVisible();
+  await expect(comment).toHaveValue("保存するコメント");
+  await expect(comment).toBeEnabled();
+});

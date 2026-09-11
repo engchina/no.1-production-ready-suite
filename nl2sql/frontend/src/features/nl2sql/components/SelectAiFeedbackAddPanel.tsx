@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { MessageSquareText, ThumbsDown, ThumbsUp } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -42,6 +42,8 @@ export function SelectAiFeedbackAddPanel({
   const [feedbackContent, setFeedbackContent] = useState("");
   const [savingRating, setSavingRating] = useState<Rating | null>(null);
   const [message, setMessage] = useState("");
+  const saving = useRef(false);
+  const currentHistoryId = useRef("");
 
   const generatedSql = useMemo(
     () => (result?.executable_sql || result?.generated_sql || "").trim(),
@@ -49,6 +51,7 @@ export function SelectAiFeedbackAddPanel({
   );
   const question = history?.question || result?.original_question || questionText || "";
   const historyId = history?.id || result?.history_id || "";
+  currentHistoryId.current = historyId;
 
   useEffect(() => {
     setFeedbackContent(history?.feedback_comment ?? "");
@@ -58,6 +61,7 @@ export function SelectAiFeedbackAddPanel({
   if (!result) return null;
 
   const submit = async (rating: Rating) => {
+    if (saving.current) return;
     const trimmedContent = feedbackContent.trim();
 
     if (!question.trim()) return;
@@ -70,6 +74,7 @@ export function SelectAiFeedbackAddPanel({
       return;
     }
 
+    saving.current = true;
     setSavingRating(rating);
     setMessage("");
     try {
@@ -79,11 +84,18 @@ export function SelectAiFeedbackAddPanel({
         feedback_content: trimmedContent,
         comment: trimmedContent,
       });
-      await onSaved();
-      toast.success(t("nl2sql.selectAiFeedbackAdd.saved"));
+      try {
+        await onSaved();
+        toast.success(t("nl2sql.selectAiFeedbackAdd.saved"));
+      } catch {
+        toast.warning(t("nl2sql.selectAiFeedbackAdd.refreshFailed"));
+      }
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : t("nl2sql.selectAiFeedbackAdd.failed"));
+      if (currentHistoryId.current === historyId) {
+        setMessage(err instanceof Error ? err.message : t("nl2sql.selectAiFeedbackAdd.failed"));
+      }
     } finally {
+      saving.current = false;
       setSavingRating(null);
     }
   };
@@ -121,6 +133,7 @@ export function SelectAiFeedbackAddPanel({
         <label className="grid gap-1 text-sm font-medium text-foreground">
           <span>{t("nl2sql.selectAiFeedbackAdd.content")}</span>
           <textarea
+            disabled={savingRating !== null}
             value={feedbackContent}
             onChange={(event) => setFeedbackContent(event.currentTarget.value)}
             rows={3}
