@@ -15112,3 +15112,47 @@ test("feedback refresh preserves drafts and pending review locks competing actio
   await expect(page).toHaveURL(/question-classifier-models/);
   await expect(page.getByRole("alertdialog")).toHaveCount(0);
 });
+
+test("learning candidate failed previous page preserves the cursor for retry", async ({ page }, testInfo) => {
+  await mockNl2SqlApi(page);
+  let failPrevious = false;
+  const requests: string[] = [];
+  await page.route("**/api/nl2sql/classifier/training-candidates*", (route) => {
+    const cursor = new URL(route.request().url()).searchParams.get("cursor") ?? "";
+    requests.push(cursor);
+    if (failPrevious && cursor === "cursor-2") {
+      failPrevious = false;
+      return route.fulfill({ status: 503, json: { detail: "前ページ取得失敗" } });
+    }
+    const number = cursor === "cursor-3" ? 3 : cursor === "cursor-2" ? 2 : 1;
+    return fulfillJson(route, {
+      items: [{ history_id: `history-${number}`, question: `候補ページ ${number}`,
+        profile_id: "default", profile_name: "既定プロファイル", profile_category: "請求",
+        feedback_rating: "good", feedback_comment: "", created_at: historyItem.created_at,
+        status: "pending", training_example_id: "", conflict_profile_ids: [] }],
+      total: 41, next_cursor: number < 3 ? `cursor-${number + 1}` : "",
+      pending_count: 41, added_count: 0, attention_count: 0,
+    });
+  });
+  await page.goto("/question-classifier-models?tab=candidates");
+  const pagination = page.getByTestId("qcm-candidate-pagination");
+  const next = pagination.getByRole("button", { name: "次へ" });
+  const previous = pagination.getByRole("button", { name: "前へ" });
+  await next.click();
+  await expect(pagination).toContainText("2 / 3 ページ");
+  await next.click();
+  await expect(pagination).toContainText("3 / 3 ページ");
+  failPrevious = true;
+  await previous.click();
+  await expect(page.getByText("前ページ取得失敗", { exact: true })).toBeVisible();
+  const retry = page.getByRole("button", { name: "再読込", exact: true });
+  await retry.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("qcm-training-candidate")).toContainText("候補ページ 2");
+  expect(requests.slice(-2)).toEqual(["cursor-2", "cursor-2"]);
+  await previous.click();
+  await expect(pagination).toContainText("1 / 3 ページ");
+  await expect(previous).toBeDisabled();
+  await expectNoHorizontalScroll(page);
+  await page.screenshot({ path: testInfo.outputPath("classifier-cursor-recovery.png"), fullPage: true });
+});

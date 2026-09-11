@@ -143,6 +143,7 @@ export function QuestionClassifierModelsPage() {
   const [loading, setLoading] = useState("");
   const [message, setMessage] = useState("");
   const loadSequence = useRef(0);
+  const retryCandidates = useRef<(() => void) | null>(null);
   const { abortAll, run: runScopedRequest } = useRequestScope();
 
   const filteredExamples = useMemo(() => {
@@ -227,6 +228,7 @@ export function QuestionClassifierModelsPage() {
       profileId: candidateProfileId,
     }
   ) => {
+    retryCandidates.current = () => void loadCandidates(cursor, direction, filters);
     setLoading("candidates-load");
     setCandidateError("");
     setCandidateActionError("");
@@ -252,6 +254,9 @@ export function QuestionClassifierModelsPage() {
         setCandidateCursorStack([]);
         setCandidatePage(1);
       } else {
+        setCandidateCursorStack((current) =>
+          direction === "next" ? [...current, candidateCursor] : current.slice(0, -1)
+        );
         setCandidateCursor(cursor);
         setCandidatePage((current) => Math.max(1, current + (direction === "next" ? 1 : -1)));
       }
@@ -272,14 +277,12 @@ export function QuestionClassifierModelsPage() {
 
   const goToNextCandidatePage = () => {
     if (!candidates?.next_cursor) return;
-    setCandidateCursorStack((current) => [...current, candidateCursor]);
     void loadCandidates(candidates.next_cursor, "next");
   };
 
   const goToPreviousCandidatePage = () => {
     const previous = candidateCursorStack.at(-1);
     if (previous === undefined) return;
-    setCandidateCursorStack((current) => current.slice(0, -1));
     void loadCandidates(previous, "prev");
   };
 
@@ -632,6 +635,7 @@ export function QuestionClassifierModelsPage() {
               onStatusChange={setCandidateStatus}
               onProfileFilterChange={setCandidateProfileId}
               onApplyFilters={() => void loadCandidates()}
+              onRetry={() => retryCandidates.current?.()}
               onResetFilters={resetCandidateFilters}
               onSelectionChange={setSelectedCandidates}
               onProfileOverrideChange={(historyId, value) =>
@@ -1161,6 +1165,7 @@ function TrainingCandidatesPanel({
   onStatusChange,
   onProfileFilterChange,
   onApplyFilters,
+  onRetry,
   onResetFilters,
   onSelectionChange,
   onProfileOverrideChange,
@@ -1185,6 +1190,7 @@ function TrainingCandidatesPanel({
   onStatusChange: (value: string) => void;
   onProfileFilterChange: (value: string) => void;
   onApplyFilters: () => void;
+  onRetry: () => void;
   onResetFilters: () => void;
   onSelectionChange: (value: Set<string>) => void;
   onProfileOverrideChange: (historyId: string, value: string) => void;
@@ -1297,7 +1303,7 @@ function TrainingCandidatesPanel({
       ) : error ? (
         <ErrorState
           message={error}
-          onRetry={onApplyFilters}
+          onRetry={onRetry}
           retryLabel={t("learning.action.refresh")}
         />
       ) : items.length > 0 ? (
