@@ -1,5 +1,6 @@
 import { expect, test, type Locator, type Page, type Route } from "@playwright/test";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
+import { expectLegacyOntologyControls } from "./_helpers/ontology-controls";
 
 test.beforeEach(async ({ page }) => mockDatabaseGateReady(page));
 
@@ -571,6 +572,46 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
   );
 }
 
+test("グラフ操作部は旧版の外観でモード・凡例・ズーム・検索を操作できる", async ({ page }, testInfo) => {
+  await mockApi(page, { ontologyGraph: erDetailOntologyGraph });
+  await page.goto("/ontology-build?profile=default");
+  await page.getByRole("button", { name: "情報を取得", exact: true }).click();
+  const playground = page.getByRole("region", { name: "質問のオントロジー接地確認用グラフ" });
+  await openGraphIfCollapsed(page, playground);
+  await expectLegacyOntologyControls(page, playground);
+  await expectGraphSearchFieldLayout(page, playground);
+
+  const viewport = playground.locator(".react-flow__viewport");
+  const initialTransform = await viewport.getAttribute("style");
+  await playground.getByRole("button", { name: "グラフを拡大", exact: true }).click();
+  await expect.poll(() => viewport.getAttribute("style")).not.toBe(initialTransform);
+  const zoomedTransform = await viewport.getAttribute("style");
+  await playground.getByRole("button", { name: "グラフを縮小", exact: true }).click();
+  await expect.poll(() => viewport.getAttribute("style")).not.toBe(zoomedTransform);
+  await playground.getByRole("button", { name: "グラフ全体を表示", exact: true }).click();
+  await expect(playground.getByTestId("ontology-graph-reset-layout")).toBeDisabled();
+
+  const search = playground.getByTestId("ontology-graph-search");
+  await search.fill("従業員");
+  const nav = playground.getByTestId("ontology-graph-search-nav");
+  await expect(nav).toHaveCSS("height", testInfo.project.name === "mobile-375" ? "44px" : "40px");
+  const next = playground.getByTestId("ontology-graph-search-next");
+  const prev = playground.getByTestId("ontology-graph-search-prev");
+  await expect(next).toBeEnabled();
+  const firstMatch = await nav.innerText();
+  await next.click();
+  await expect(nav).not.toHaveText(firstMatch);
+  await prev.click();
+  await expect(nav).toHaveText(firstMatch);
+  await search.fill("no-such-ontology-node");
+  await expect(next).toBeDisabled();
+  await expect(prev).toBeDisabled();
+  await search.press("Escape");
+  await expect(nav).toHaveCount(0);
+  await expectNoHorizontalScroll(page);
+  await playground.screenshot({ path: testInfo.outputPath("ontology-controls-restored.png") });
+});
+
 test("グラフはカード表示 + 検索 + 詳細ノードの折畳ができる", async ({ page }, testInfo) => {
   if (testInfo.project.name === "desktop") {
     await page.setViewportSize({ width: 1440, height: 900 });
@@ -602,6 +643,7 @@ test("グラフはカード表示 + 検索 + 詳細ノードの折畳ができ�
   await expectQuestionActionLayoutWithClear(page, playground);
   await expectNoHorizontalScroll(page);
   await openGraphIfCollapsed(page, playground);
+  await expectLegacyOntologyControls(page, playground);
   await expect(playground.getByTestId("ontology-graph-view-mode")).toBeVisible();
   await expect(playground.getByTestId("ontology-graph-mode-all")).toHaveAttribute("aria-pressed", "true");
   await expect(playground.getByTestId("ontology-graph-lane-business")).toContainText("業務概念");

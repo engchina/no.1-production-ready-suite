@@ -113,3 +113,18 @@
 
 /* 横並びの排他選択は触れる高さを保ち、ラベル左右の余白のみ compact にする。 */
 .nl2sql-button[data-button-layout="segmented"] { --button-padding: 8px; }
+
+/* Ontology の局所ツールは統一前の共有 Button(sm) の寸法を維持する。 */
+.nl2sql-button[data-button-layout="graph-tool"] {
+  --button-height: 2rem;
+  --button-padding: 0.75rem;
+  min-width: 0;
+  gap: 0.375rem;
+  border-width: 0;
+  border-radius: var(--radius-md);
+  font-size: 0.875rem;
+}
+.nl2sql-button[data-button-layout="graph-tool"] > svg { width: 15px; height: 15px; }
+@media (hover: hover) {
+  .nl2sql-button[data-button-layout="graph-tool"]:hover:not(:disabled) { background: var(--background); }
+}

@@ -46,7 +46,7 @@
 - 同じアクションバーは size を揃える。位置を指定する `w-full` / `sm:w-auto` / `flex-*` は可。ページ側の高さ・padding・文字サイズ・色・border override は禁止する。
 - 日本語ラベルは全 size で **14px / line-height 20px / weight 500**、アイコンは **16px**、ラベルとの gap は **8px**。角丸は **6px**、border は全 variant **1px**（塗り・ghost は transparent）。root font-size に依存しない。
 - ボタン間隔は **8px 以上**。通常の `gap-2` は root=14px で 7px のため、アクション群は `gap-[8px]` を使用する。
-- グラフの排他選択バーは `data-button-layout="segmented"` で左右 padding 8px、操作高さ 40/44px を維持し、375px でもラベルを切らない。
+- Ontology グラフの排他選択バーと局所ツールは §6.2 の専用規約に従う。
 - 並べ替え列頭は Action Button の対象外とし、専用 `SortHeader`（§6.1）を使用する。
 - 説明文を含む選択カードは `data-button-layout="choice"` で最小 64px + 内容に応じた自動高さ。menu item / disclosure / field-icon / segmented は共通 CSS の named layout に限る。
 
@@ -185,6 +185,19 @@
 - 文字組みは **0.75rem / line-height 1rem / weight 600**、gap 4px、padding 0。操作領域は desktop 32px / touch 44px、表ヘッダー高は35px / 47pxを維持し、一覧の可視行数を変えない。
 - Enter / Space / Tab とネイティブの disabled を維持するため、内部は意味上の `<button type="button">` を使用する。これは列頭専用の構造コントロールとしての明示的な適用除外である。
 - キーボードフォーカスは列名の2px下線（offset 3px）で示す。ボタン式の外枠を復活させない。
+
+---
+
+## 6.2 Ontology グラフの操作部
+
+Issue #435 のユーザー指定により、`OntologyGraphCanvas` の操作部は #307 (`9dcaf63`) の親 commit の外観を維持する。オントロジー構築と SQL 生成結果で共通適用する。他画面のボタン標準には波及させない。
+
+- **モード選択**: `aria-pressed` 付き専用 `<button>` を使用する。外枠は border / card 背景 / 軽い shadow、desktop 40px・mobile 44px。項目は desktop 32px・mobile 36px、`text-xs`、13px icon、選択中は `bg-primary text-primary-foreground` とする。
+- **凡例フィルタ**: `aria-pressed` 付き専用 `<button>` で 10px の小字と色見本を表示する。表示中は透明背景、非表示は opacity 40% + 打消し線。一般 Button の選択枠や高さを適用しない。
+- **拡大・縮小・フィット・配置リセット・検索前後移動**: 共通 `<Button variant="ghost" size="sm" data-button-layout="graph-tool">` を使用する。旧版 `sm` の高さ 2rem・左右 padding 0.75rem・15px icon を専用 named layout で維持する。`aria-label`、native disabled、focus-visible は維持する。
+- **検索の前後移動バー**: 検索欄・モード外枠と同じ desktop 40px・mobile 44px に揃える。
+- SQL 結果の入れ子など、グラフ自体が狭い場合はモードと検索ツールを折り返す。モード外枠は 40/44px を最小高さとして内容に合わせて伸ばし、親の `overflow-hidden` によるボタンの裁切を防ぐ。
+- これらは旧版のコンパクトな外観を復元する明示的な寸法例外である。キーボード操作、選択状態の読み上げ、375px の折り返しを Playwright で確認する。取得・生成・実行などの一般アクションには適用しない。
 
 ---
 

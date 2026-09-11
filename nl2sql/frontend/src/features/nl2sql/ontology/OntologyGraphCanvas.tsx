@@ -43,6 +43,7 @@ import {
 import "@xyflow/react/dist/style.css";
 
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 import { t } from "@/lib/i18n";
 import {
@@ -292,7 +293,7 @@ function FlowControls({
   return (
     <div className="absolute right-3 top-3 z-10 flex gap-1 rounded-md border border-border bg-card p-1 shadow-sm">
       <Button
-        iconOnly
+        data-button-layout="graph-tool"
         type="button"
         size="sm"
         variant="ghost"
@@ -303,7 +304,7 @@ function FlowControls({
         <Plus size={15} aria-hidden="true" />
       </Button>
       <Button
-        iconOnly
+        data-button-layout="graph-tool"
         type="button"
         size="sm"
         variant="ghost"
@@ -314,7 +315,7 @@ function FlowControls({
         <Minus size={15} aria-hidden="true" />
       </Button>
       <Button
-        iconOnly
+        data-button-layout="graph-tool"
         type="button"
         size="sm"
         variant="ghost"
@@ -325,7 +326,7 @@ function FlowControls({
         <Maximize2 size={15} aria-hidden="true" />
       </Button>
       <Button
-        iconOnly
+        data-button-layout="graph-tool"
         type="button"
         size="sm"
         variant="ghost"
@@ -377,19 +378,21 @@ function OntologyGraphLegend({
         {groups.map((group) => {
           const enabled = !disabledGroupIds.has(group.id);
           return (
-            <Button
-              variant="ghost"
-              size="sm"
+            <button
               key={group.id}
               type="button"
               aria-pressed={enabled}
               title={t("nl2sql.ontology.legendToggleHint")}
+              className={cn(
+                "inline-flex cursor-pointer items-center gap-1 rounded px-1 py-0.5 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/40 motion-reduce:transition-none",
+                enabled ? "hover:bg-background" : "opacity-40 line-through hover:opacity-60"
+              )}
               onClick={() => onToggleGroup(group.id)}
               data-testid={`ontology-graph-legend-${group.id}`}
             >
               <LegendSwatch kind={group.swatchKind} />
               {t(group.labelKey)}
-            </Button>
+            </button>
           );
         })}
         <span className="inline-flex items-center gap-1 whitespace-normal px-1">
@@ -450,7 +453,7 @@ function GraphModeControl({
 }) {
   return (
     <div
-      className="pointer-events-auto flex min-w-0 max-w-full items-center gap-[8px]"
+      className="pointer-events-auto flex min-h-[44px] min-w-0 max-w-full flex-wrap items-center gap-1 rounded-md border border-border bg-card p-1 shadow-sm sm:min-h-[40px]"
       role="group"
       aria-label={t("nl2sql.ontology.graphMode.label")}
       data-testid="ontology-graph-view-mode"
@@ -459,19 +462,20 @@ function GraphModeControl({
         const Icon = item.icon;
         const selected = item.id === mode;
         return (
-          <Button
-            variant="ghost"
-            size="lg"
-            data-button-layout="segmented"
+          <button
             key={item.id}
             type="button"
             aria-pressed={selected}
+            className={cn(
+              "inline-flex h-[36px] cursor-pointer items-center gap-1 rounded px-2 text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/40 motion-reduce:transition-none sm:h-[32px]",
+              selected ? "bg-primary text-primary-foreground" : "text-muted hover:bg-background hover:text-foreground"
+            )}
             onClick={() => onChange(item.id)}
             data-testid={`ontology-graph-mode-${item.id}`}
           >
             <Icon size={13} aria-hidden="true" />
             <span>{t(item.labelKey)}</span>
-          </Button>
+          </button>
         );
       })}
     </div>
@@ -1033,15 +1037,15 @@ function OntologyFlow({
   ]);
 
   return (
-    <div className="grid gap-2">
+    <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-2">
       {/* ツールバーはキャンバス外(上部)に置き、フィット時にノードと重ならないようにする */}
       <div className="flex flex-wrap items-center gap-2">
         <GraphModeControl mode={currentViewMode} onChange={changeViewMode} />
-        <div className="flex min-w-0 items-center gap-1">
+        <div className="flex min-w-0 max-w-full flex-wrap items-center gap-1">
           <GraphToolbarSearchField value={search} onChange={setSearch} />
           {query ? (
             <div
-              className="flex h-[44px] items-center gap-0.5 rounded-md border border-border bg-card px-1 shadow-sm"
+              className="flex h-[44px] items-center gap-0.5 rounded-md border border-border bg-card px-1 shadow-sm sm:h-[40px]"
               data-testid="ontology-graph-search-nav"
             >
               <span className="px-1 text-xs tabular-nums text-muted" aria-live="polite">
@@ -1050,7 +1054,7 @@ function OntologyFlow({
                   : `${searchCursor + 1} / ${orderedSearchMatches.length}`}
               </span>
               <Button
-                iconOnly
+                data-button-layout="graph-tool"
                 type="button"
                 size="sm"
                 variant="ghost"
@@ -1063,7 +1067,7 @@ function OntologyFlow({
                 <ChevronLeft size={15} aria-hidden="true" />
               </Button>
               <Button
-                iconOnly
+                data-button-layout="graph-tool"
                 type="button"
                 size="sm"
                 variant="ghost"
@@ -1080,7 +1084,7 @@ function OntologyFlow({
         </div>
         {detailCount > 0 ? (
           <label
-            className="flex h-[44px] cursor-pointer items-center gap-2 rounded-md border border-border bg-card px-3 text-xs text-foreground shadow-sm transition-colors focus-within:border-primary focus-within:ring-2 focus-within:ring-ring/40 sm:h-[40px]"
+            className="flex h-[44px] min-w-0 max-w-full cursor-pointer items-center gap-2 rounded-md border border-border bg-card px-3 text-xs text-foreground shadow-sm transition-colors focus-within:border-primary focus-within:ring-2 focus-within:ring-ring/40 sm:h-[40px]"
             data-testid="ontology-graph-details-toggle-field"
           >
             <input

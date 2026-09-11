@@ -6,6 +6,7 @@ import {
 } from "./_helpers/fixed-split-pane";
 import { dropFiles } from "./_helpers/file-dropzone";
 import { expectLargeActionButton } from "./_helpers/action-button";
+import { expectLegacyOntologyControls } from "./_helpers/ontology-controls";
 
 test.beforeEach(async ({ page }) => mockDatabaseGateReady(page));
 
@@ -5936,6 +5937,8 @@ test("生成 SQL を読み取り専用 Ontology グラフへ接地して確認�
   );
 
   const graphSearch = panel.getByTestId("ontology-graph-search");
+  await expectLegacyOntologyControls(page, panel);
+  await panel.screenshot({ path: testInfo.outputPath("sql-ontology-controls-restored.png") });
   await graphSearch.focus();
   await expect(graphSearch).toBeFocused();
   const zoomIn = panel.getByLabel("グラフを拡大");
