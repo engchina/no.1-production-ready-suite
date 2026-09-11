@@ -38,6 +38,7 @@ import type {
 } from "../types";
 
 type SqlToQuestionPanel = "input" | "structure";
+type GeneratedSql = { sql: string; explanation: string; warnings: string[]; at: string };
 
 export function SqlToQuestionPage() {
   useWorkspaceRevalidation();
@@ -57,6 +58,10 @@ export function SqlToQuestionPage() {
   const [sqlGenerationLoading, setSqlGenerationLoading] = useState(false);
   const [sqlGenerationError, setSqlGenerationError] = useState("");
   const [regenerated, setRegenerated] = useState<{ sql: string; explanation: string; warnings: string[]; signature: string; at: string } | null>(null);
+  const [questionSql, setQuestionSql] = useState<GeneratedSql | null>(null);
+  const [questionSqlLoading, setQuestionSqlLoading] = useState(false);
+  const [questionSqlError, setQuestionSqlError] = useState("");
+  const questionSqlInFlight = useRef(false);
   const structureSignature = JSON.stringify([selectedProfileId, structureText, false]);
   const workspaceActive = useWorkspaceActive();
   const activeRef = useRef(workspaceActive);
@@ -70,6 +75,7 @@ export function SqlToQuestionPage() {
   }, [activePanel, workspaceActive]);
   const [structureItems, setStructureItems] = useState<Nl2SqlLogicalStructureItem[]>([]);
   const [reverse, setReverse] = useState<ReverseSqlData | null>(null);
+  useEffect(() => { setQuestionSql(null); setQuestionSqlError(""); }, [selectedProfileId, sql, reverse]);
   useEffect(() => { setReverse(null); setStructureItems([]); setEditingStructure(false); setRegenerated(null); setSqlGenerationError(""); }, [selectedProfileId]);
   const [loading, setLoading] = useState(false);
   const [reverseLoading, setReverseLoading] = useState(false);
@@ -205,7 +211,7 @@ export function SqlToQuestionPage() {
   };
 
   const generateSql = async () => {
-    if (!structureText.trim() || sqlGenerationLoading) return;
+    if (!structureText.trim() || actionBusy) return;
     setSqlGenerationLoading(true);
     setSqlGenerationError("");
     try {
@@ -225,7 +231,31 @@ export function SqlToQuestionPage() {
     }
   };
 
-  const actionBusy = reverseLoading || sqlGenerationLoading;
+  const generateQuestionSql = async () => {
+    const question = reverse?.question.trim();
+    if (!question || actionBusy || questionSqlInFlight.current) return;
+    questionSqlInFlight.current = true;
+    setQuestionSqlLoading(true);
+    setQuestionSqlError("");
+    try {
+      await runScopedRequest(async (signal) => {
+        const data = await apiPost<Omit<GeneratedSql, "at">>(
+          "/api/nl2sql/reverse/question-sql",
+          { question, profile_id: selectedProfileId || undefined },
+          { signal, timeoutMs: API_TIMEOUT_MS.longRunningJob }
+        );
+        if (signal.aborted) return;
+        setQuestionSql({ ...data, at: new Date().toLocaleString("ja-JP") });
+      });
+    } catch (err) {
+      if (!isAbortError(err)) setQuestionSqlError(actionableError(err, t("sqlToQuestion.error.questionSql")));
+    } finally {
+      questionSqlInFlight.current = false;
+      setQuestionSqlLoading(false);
+    }
+  };
+
+  const actionBusy = reverseLoading || sqlGenerationLoading || questionSqlLoading;
   const panels = useMemo(
     () =>
       [
@@ -471,6 +501,23 @@ export function SqlToQuestionPage() {
                     className="mt-1 font-semibold"
                   />
                 </div>
+                <div className="flex flex-wrap items-center gap-[8px] border-t border-border pt-4">
+                  <Button size="lg" loading={questionSqlLoading} disabled={actionBusy || !reverse.question.trim() || loading || !!loadError || !selectedProfile} onClick={() => void generateQuestionSql()}>
+                    <ArrowRightLeft size={16} aria-hidden="true" />
+                    {t("sqlToQuestion.actions.questionSql")}
+                  </Button>
+                </div>
+                <FormStatus tone="danger" message={questionSqlError} />
+                {questionSqlLoading && <ProcessingIndicator active label={t("sqlToQuestion.actions.questionSql")} operationKey="question-to-sql" placement="action" activityIcon="none" />}
+                {questionSql && (
+                  <section className="grid min-w-0 gap-2" aria-label={t("sqlToQuestion.questionSql.title")}>
+                    <h3 className="font-semibold">{t("sqlToQuestion.questionSql.title")}</h3>
+                    <p className="text-sm text-muted">{t("sqlToQuestion.regenerated.at", { at: questionSql.at })}</p>
+                    <pre className="max-h-96 overflow-auto rounded-md border border-border bg-code p-4 text-sm leading-6 text-code-fg"><code>{questionSql.sql}</code></pre>
+                    <p className="text-sm">{questionSql.explanation}</p>
+                    <TextList label={t("sqlToQuestion.result.warnings")} items={questionSql.warnings ?? []} />
+                  </section>
+                )}
               </section>
             ) : (
               <EmptyState

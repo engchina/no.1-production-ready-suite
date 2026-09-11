@@ -49,3 +49,13 @@ Issue #321。対象は「SQL から質問を生成」の SQL → 物理構造 �
 - `nl2sql-workflows.spec.ts` の desktop / mobile-375: 成功後タブ・フォーカス、構造編集と再生成、失敗時草稿保持、未実行/旧結果表示、再読込、重複送信なし、主要な空/読込/エラー状態、横 overflow、150% zoom。
 
 自動テストは Enterprise AI と API を fake/mock 化した契約検証である。Issue #421 では `select * from employee` の実 Enterprise AI 応答が JSON ではなく原版形式の Markdown で返ることを確認した。修正後の全生成経路でも SELECT句・FROM句を保持し、`source=oci_enterprise_ai`、警告なしで成功した（テスト用 Profile、DB 実行なし）。Issue #423 では人工の `DEMO.EMPLOYEE` スキーマ（論理名: 従業員情報）だけを使用した実モデル検証で、論理構造の FROM が `[従業員情報] e`、質問が「すべての従業員情報を教えてください。」となることを確認した。用語集・実 DB データは使用していない。実モデルと Oracle のデータで結果の同値性を比較する live 受入は別途必要。任意の SQL について「100% 同値」を証明したものではない。
+
+## 自然言語の質問から SQL を生成（Issue #425）
+
+「質問候補」の「自然言語の質問から SQL を生成」は、表示中の `question` を唯一の生成要件にし、選択 Profile のスキーマ情報を使って SQL を生成する。元 SQL や編集した論理構造は送らない。用語集は使用しない。
+
+`POST /api/nl2sql/reverse/question-sql` は `question` / `profile_id` のみを受理する。余分な field は拒否し、既存の `menu.sql_to_question` と Profile アクセス検証を適用する。生成応答は論理構造からの生成と同じ `sql` / `explanation` / `source` / `warnings`。生成・Pydantic 検証・全文の AST/許可表/危険関数検証は共通 helper を使うが、未編集元 SQL の復元 shortcut は質問生成に適用しない。
+
+質問候補内の生成結果は上の論理構造からの生成結果と独立して保持し、生成日時と「未実行」を表示する。送信中は他の生成操作も無効化し、失敗時は質問と前回の成功結果を残して再試行を可能にする。元 SQL・Profile・質問の変更で結果を解除する。再読込では質問・生成 SQL のスナップショットを復元せず、自動生成・SQL 実行・履歴保存も行わない。
+
+`test_nl2sql_question_to_sql.py` と `nl2sql-workflows.spec.ts` で質問だけの送信、用語集不使用、Profile 認可、危険/不許可 SQL、不正/空応答、未設定、独立した結果、送信中・失敗・再試行・再読込を検証する。

@@ -205,6 +205,7 @@ from .models import (
     ProfileSummary,
     ProfileSummaryPage,
     QueryResults,
+    QuestionToSqlRequest,
     ReverseQuestionOutput,
     ReverseSqlData,
     ReverseSqlRequest,
@@ -285,6 +286,7 @@ from .oracle_adapter import (
     TabularImportValidationError,
 )
 from .reverse_prompts import (
+    QUESTION_TO_SQL_PROMPT,
     RECONSTRUCTION_SQL_PREFIX,
     STRUCTURE_TO_SQL_PROMPT,
     source_prompt,
@@ -10005,17 +10007,58 @@ class Nl2SqlService:
                     source="preserved_original",
                     warnings=analysis.safety.warnings,
                 )
+        return self._generate_sql_from_reverse_input(
+            text=structure,
+            profile=profile,
+            allowed=allowed,
+            catalog=catalog,
+            use_glossary=request.use_glossary,
+            system_prompt=STRUCTURE_TO_SQL_PROMPT,
+            missing_information="論理構造の対象表・列・条件を確認して再試行してください。",
+        )
+
+    def question_to_sql(self, request: QuestionToSqlRequest) -> StructureToSqlData:
+        question = request.question.strip()
+        if not question:
+            raise ValueError("自然言語の質問を入力してください。")
+        profile = self.get_profile(request.profile_id)
+        allowed = self._resolve_allowed_objects(request.profile_id, AllowedObjects())
+        if not allowed.table_names:
+            raise ValueError("選択したプロファイルで参照できる表がありません。")
+        catalog = self._generation_schema_catalog(profile, allowed)
+        return self._generate_sql_from_reverse_input(
+            text=question,
+            profile=profile,
+            allowed=allowed,
+            catalog=catalog,
+            use_glossary=False,
+            system_prompt=QUESTION_TO_SQL_PROMPT,
+            missing_information="質問の対象・項目・条件を確認して再試行してください。",
+        )
+
+    def _generate_sql_from_reverse_input(
+        self,
+        *,
+        text: str,
+        profile: Nl2SqlProfile,
+        allowed: AllowedObjects,
+        catalog: SchemaCatalog,
+        use_glossary: bool,
+        system_prompt: str,
+        missing_information: str,
+    ) -> StructureToSqlData:
+        """生成と安全検証を共通化する。DB 実行・履歴保存は行わない。"""
         if not self._enterprise_ai_client.is_configured():
             raise ValueError("OCI Enterprise AI を設定してから SQL を再生成してください。")
         raw = self._enterprise_ai_client.generate(
-            prompt=structure,
+            prompt=text,
             context=self._enterprise_ai_schema_context(
                 profile=profile,
                 allowed=allowed,
                 catalog=catalog,
-                use_glossary=request.use_glossary,
+                use_glossary=use_glossary,
             ),
-            system_prompt=STRUCTURE_TO_SQL_PROMPT,
+            system_prompt=system_prompt,
         )
         # 先頭 SELECT の抽出やセミコロンで切断すると不正な複文を隠すため、全 SQL を検証する。
         try:
@@ -10028,10 +10071,7 @@ class Nl2SqlService:
         if not sql:
             raise ValueError(
                 output.explanation.strip()
-                or (
-                    "SQL を再生成できませんでした。"
-                    "論理構造の対象表・列・条件を確認して再試行してください。"
-                )
+                or ("SQL を再生成できませんでした。" + missing_information)
             )
         analysis = self.analyze_sql(sql, allowed, None, catalog=catalog)
         if not analysis.safety.is_safe:

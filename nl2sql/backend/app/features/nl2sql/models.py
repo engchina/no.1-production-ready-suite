@@ -2099,6 +2099,15 @@ class StructureToSqlRequest(BaseModel):
     use_glossary: bool = False
 
 
+class QuestionToSqlRequest(BaseModel):
+    """表示中の自然言語質問と対象 Profile だけを SQL 生成要件として受け付ける。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    question: str = Field(min_length=1, max_length=100_000)
+    profile_id: str | None = None
+
+
 class StructureToSqlOutput(BaseModel):
     """LLM は再構築不能の場合に空 SQL と理由を返す。成功 API 応答とは分離する。"""
 
