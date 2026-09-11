@@ -13,7 +13,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from .ontology_definitions import BusinessDefinition, ConceptCoverage
+from .ontology_definitions import BusinessDefinition, ConceptCoverage, DefinitionPhase
 
 
 def utc_now() -> datetime:
@@ -1016,6 +1016,9 @@ class OntologyBuildJob(OntologyContract):
     draft_revision_id: str = ""
     draft_etag: str = ""
     result_bundle_id: str = ""
+    definition_phases: list[DefinitionPhase] = Field(default_factory=list)
+    profile_fingerprint: str = ""
+    schema_context_fingerprint: str = ""
     source_document_ids: list[str] = Field(default_factory=list)
     sources: list[OntologySourceProgress] = Field(default_factory=list)
     markdown_output: str = ""

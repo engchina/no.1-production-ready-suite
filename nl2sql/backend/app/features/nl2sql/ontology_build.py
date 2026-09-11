@@ -27,6 +27,8 @@ from uuid import uuid4
 
 from app.features.nl2sql.models import Nl2SqlProfile, SchemaCatalog, SchemaTable
 from app.features.nl2sql.ontology_catalog import SchemaOntology, catalog_schema_fingerprint
+from app.features.nl2sql.ontology_definition_service import definition_fingerprint
+from app.features.nl2sql.ontology_definitions import DefinitionPhase, DefinitionSource
 from app.features.nl2sql.ontology_models import (
     JoinCondition,
     MetricDefinition,
@@ -1929,31 +1931,9 @@ _EXTRACTION_SYSTEM_PROMPT = (
     "確信が持てない候補は confidence を下げるか warnings_ja に残してください。"
     "出力に含める業務名・説明・証拠・警告・同義語の文言はすべて日本語にしてください。"
     "汎用的な英語ラベルや説明文をそのまま出さないでください。"
-    # schema-guided few-shot(1 例)。研究では few-shot 付き schema 誘導が最高精度。
-    "\n\n例 — schema_context: "
-    '{"objects":[{"owner":"APP","object_name":"ORDERS",'
-    '"columns":["ORDER_ID","CUSTOMER_ID","AMOUNT"],'
-    '"constraints":[{"type":"P","columns":["ORDER_ID"]},'
-    '{"type":"R","columns":["CUSTOMER_ID"],"references":"APP.CUSTOMERS"}]},'
-    '{"owner":"APP","object_name":"CUSTOMERS",'
-    '"columns":["CUSTOMER_ID","CUSTOMER_NAME"],'
-    '"constraints":[{"type":"P","columns":["CUSTOMER_ID"]}]}]} '
-    "/ 業務文:「受注は顧客に紐づく。売上は確定済み受注の受注金額の合計。」"
-    "に対する期待出力: "
-    '{"entities":[{"object_name":"APP.ORDERS","business_name_ja":"受注",'
-    '"description_ja":"顧客からの受注。主識別子は ORDER_ID。",'
-    '"aliases":["注文","オーダー","じゅちゅう"],"confidence":0.9}],'
-    '"relationships":[{"source_object":"APP.ORDERS","target_object":"APP.CUSTOMERS",'
-    '"relationship_name_ja":"顧客に紐づく","cardinality":"many_to_one",'
-    '"join_conditions":[{"left":"APP.ORDERS.CUSTOMER_ID",'
-    '"right":"APP.CUSTOMERS.CUSTOMER_ID","operator":"="}],'
-    '"evidence_ja":"受注は顧客に紐づく","confidence":0.85}],'
-    '"metrics":[{"metric_name_ja":"売上","expression_sql":"SUM(APP.ORDERS.AMOUNT)",'
-    '"aggregation":"sum","base_columns":["APP.ORDERS.AMOUNT"],"unit":"円",'
-    '"description_ja":"確定済み受注の受注金額の合計",'
-    '"evidence_ja":"売上は確定済み受注の受注金額の合計","confidence":0.8}],'
-    '"synonyms":[{"target":"APP.CUSTOMERS","aliases":["得意先","客先","顧客"],'
-    '"evidence_ja":"業務慣用表現"}],"warnings_ja":[]}'
+    "\n指標の例: APP.ORDERS(ORDER_ID, AMOUNT, STATUS) で STATUS='CONFIRMED' が確定済みなら、"
+    "『確定済み受注金額』は SUM(CASE WHEN APP.ORDERS.STATUS='CONFIRMED' "
+    "THEN APP.ORDERS.AMOUNT ELSE 0 END)。状態の値が資料に無ければ確認事項にする。"
 )
 
 
@@ -1964,6 +1944,11 @@ _EXTRACTION_SYSTEM_PROMPT += (
     "物理表と業務オブジェクトを一対一と決めつけない。根拠は evidence の資料 ID と位置に記録する。"
     "不足項目は missing_information_ja、未生成の種類は coverage に理由を残す。"
     "実装キー・権限・アルゴリズムを推測せず、SQL 条件を業務定義と一致させる。"
+    "指標は filter_sql/aggregation/grain/distinct_keys/time_property/time_policy_ja/"
+    "unit/currency/null_policy_ja/additivity を記録し、未確定は不足理由を残す。"
+    "インターフェースは必須プロパティ・関係・アクションと実装オブジェクトの対応を定義する。"
+    "evidence は入力の source_id と locator、原文をそのまま引用し、"
+    "assertion に対象フィールドを記録する。DB は source_id=schema、locator=OWNER.OBJECT。"
 )
 
 
@@ -2084,6 +2069,7 @@ class _BuildTextUnit:
     def context_payload(self) -> dict[str, str]:
         return {
             "source": self.source_label,
+            "source_id": self.source_document.id if self.source_document else "manual",
             "locator_kind": self.locator_kind.value,
             "locator": self.locator,
             "text": self.text,
@@ -2111,6 +2097,7 @@ class _OntologyBuildLlmTask:
     qa_batch: list[QaPair] | None = None
     text_batch: list[_BuildTextUnit] | None = None
     schema_payload: dict[str, Any] | None = None
+    definition_phase: str = "objects"
 
     def split(self) -> list[_OntologyBuildLlmTask] | None:
         """batch を二分割した子タスクを返す(分割不能・要素 1 件以下は None)。"""
@@ -2350,6 +2337,8 @@ def _ignore_sql_column_reference(
 
 def _qa_pair_context_payload(schema_context: Mapping[str, Any], pair: QaPair) -> dict[str, Any]:
     payload = pair.model_dump(mode="json")
+    payload["source_id"] = "qa:" + definition_fingerprint(payload)[:16]
+    payload["locator"] = "question_sql"
     lookup = _SchemaContextLookup.from_payload(schema_context)
     analysis = parse_oracle_sql(pair.sql)
     graph = analysis.graph
@@ -2694,6 +2683,20 @@ class OntologyBuildService:
             id=f"ontology_build_{uuid4().hex}",
             profile_id=profile_id,
             steps=steps,
+            definition_phases=[
+                DefinitionPhase(name=name)
+                for name in (
+                    "freeze",
+                    "evidence",
+                    "objects",
+                    "shared",
+                    "capabilities",
+                    "validation",
+                )
+            ],
+            profile_fingerprint=definition_fingerprint(
+                self._runtime._strict_profile(profile_id).model_dump(mode="json")
+            ),
             # POST 応答に最初のフィードバックを含める(worker 開始を待たない)
             events=[
                 OntologyBuildEvent(message_ja="構築リクエストを受け付けました。処理を開始します。")
@@ -3407,6 +3410,15 @@ class OntologyBuildService:
 
         self._update(job_id, mutate)
 
+    def _set_definition_phase(self, job_id: str, name: str, status: str, detail: str = "") -> None:
+        def mutate(job: OntologyBuildJob) -> None:
+            for phase in job.definition_phases:
+                if phase.name == name:
+                    phase.status = status  # type: ignore[assignment]
+                    phase.detail_ja = detail
+
+        self._update(job_id, mutate)
+
     def _set_step(
         self,
         job_id: str,
@@ -3521,6 +3533,9 @@ class OntologyBuildService:
                         f"{item.source_object}->{item.target_object}"
                         for item in current.relationships
                     ],
+                    "抽出済み定義": [
+                        f"{item.kind}:{item.api_name}" for item in current.definitions
+                    ],
                     "抽出済み指標": [item.metric_name_ja for item in current.metrics],
                     "抽出済み同義語": [item.target for item in current.synonyms],
                 },
@@ -3577,15 +3592,52 @@ class OntologyBuildService:
 
         if self._is_cancelled(job_id):
             return [], []
+        job = self.get(job_id)
+        checkpoint_id = stable_ontology_id(
+            "ontology_batch", job_id, task.name.value, task.prompt, task.context
+        )
+        checkpoint = self._runtime.store.get_artifact(checkpoint_id)
+        if (
+            checkpoint is not None
+            and job is not None
+            and checkpoint.get("profile_id") == job.profile_id
+        ):
+            extraction = OntologyBuildExtraction.model_validate_json(checkpoint["content"])
+            self._emit(
+                job_id,
+                f"{label}: 保存済み抽出を再利用しました。",
+                code="BATCH_RESTORED",
+                step=task.name,
+            )
+            return [
+                _ValidatedBuildExtraction(
+                    task.name, label, extraction, task.cross_check_sql, task.source_evidence
+                )
+            ], []
         last_error: Exception | None = None
         for attempt in range(2):
             try:
                 raw = self._generate_extraction(client, task)
                 extraction = parse_extraction(raw)
-                if depth == 0:
+                if depth == 0 and task.definition_phase == "objects":
                     # 取りこぼし回収(schema_naming / text_extraction のみ・最上位のみ)
                     extraction = self._glean_extraction(
                         job_id, client, task, extraction, label=label
+                    )
+                if self._is_cancelled(job_id):
+                    return [], []
+                if job is not None:
+                    self._runtime.store.save_artifact(
+                        {
+                            "artifact_id": checkpoint_id,
+                            "session_id": f"profile-ontology:{job.profile_id}",
+                            "profile_id": job.profile_id,
+                            "artifact_type": "ontology_build_checkpoint",
+                            "content": extraction.model_dump_json(),
+                            "content_hash": definition_fingerprint(
+                                extraction.model_dump(mode="json")
+                            ),
+                        }
                     )
                 return (
                     [
@@ -3667,6 +3719,12 @@ class OntologyBuildService:
         def mutate(job: OntologyBuildJob) -> None:
             job.status = OntologyBuildStatus.FAILED
             job.error_message_ja = message_ja
+            for phase in job.definition_phases:
+                if phase.status == "running":
+                    phase.status = "failed"
+                    phase.detail_ja = message_ja
+                elif phase.status == "pending":
+                    phase.status = "skipped"
             if error_code:
                 job.error_code = error_code
             job.finished_at = now
@@ -3705,6 +3763,20 @@ class OntologyBuildService:
         if job is None:
             return
         self._emit(job_id, "AI オントロジー構築を開始しました。")
+        self._set_definition_phase(job_id, "freeze", "running")
+        if job.profile_fingerprint and job.profile_fingerprint != definition_fingerprint(
+            self._runtime._strict_profile(job.profile_id).model_dump(mode="json")
+        ):
+            self._set_definition_phase(
+                job_id, "freeze", "failed", "Profile が受付時から変更されました。"
+            )
+            self._fail(
+                job_id,
+                "Profile の範囲が変更されたため再構築してください。",
+                error_code="PROFILE_SCOPE_CHANGED",
+            )
+            return
+        self._set_definition_phase(job_id, "evidence", "running")
 
         client = getattr(self._runtime.legacy_service, "_enterprise_ai_client", None)
         configured = getattr(client, "is_configured", None)
@@ -3942,6 +4014,23 @@ class OntologyBuildService:
             return
 
         schema_context = str(prepared_schema.schema_context)
+        context_fingerprint = definition_fingerprint(schema_context)
+        if job.schema_context_fingerprint and job.schema_context_fingerprint != context_fingerprint:
+            self._set_definition_phase(
+                job_id, "freeze", "failed", "Schema が構築中に変更されました。"
+            )
+            self._fail(
+                job_id,
+                "Schema が変更されたため再構築してください。",
+                error_code="SCHEMA_SCOPE_CHANGED",
+            )
+            return
+        self._update(
+            job_id, lambda value: setattr(value, "schema_context_fingerprint", context_fingerprint)
+        )
+        self._set_definition_phase(job_id, "freeze", "succeeded")
+        self._set_definition_phase(job_id, "evidence", "succeeded")
+        self._set_definition_phase(job_id, "objects", "running")
         self._set_step(
             job_id,
             OntologyBuildStepName.SCHEMA_CONTEXT,
@@ -4095,6 +4184,43 @@ class OntologyBuildService:
                         )
                     )
 
+        definition_sources = [
+            DefinitionSource(
+                source_id=unit.source_document.id if unit.source_document else "manual",
+                locator=unit.locator,
+                kind="document" if unit.source_document else "manual",
+                sha256=(
+                    unit.source_document.sha256
+                    if unit.source_document
+                    else definition_fingerprint(unit.text)
+                ),
+                text=unit.text,
+            )
+            for task in llm_tasks
+            for unit in task.text_batch or []
+        ]
+        for pair in qa_pairs:
+            payload = _qa_pair_context_payload(schema_payload, pair)
+            definition_sources.append(
+                DefinitionSource(
+                    source_id=str(payload["source_id"]),
+                    locator="question_sql",
+                    kind="qa",
+                    sha256=definition_fingerprint(pair.model_dump(mode="json")),
+                    text=pair.question + "\n" + pair.sql,
+                )
+            )
+        for obj in schema_payload.get("objects", []):
+            definition_sources.append(
+                DefinitionSource(
+                    source_id="schema",
+                    locator=f"{obj.get('owner', '')}.{obj.get('object_name', '')}",
+                    kind="database",
+                    sha256=context_fingerprint,
+                    text=canonical_json(obj),
+                )
+            )
+
         # 各タスクは 1 回再試行 → なお失敗なら batch を二分割して再帰する。
         # 一部 batch の失敗はジョブ全体を止めず warning として継続し、
         # 全タスク失敗のときだけジョブを FAILED にする(部分成功)。
@@ -4148,6 +4274,64 @@ class OntologyBuildService:
                     "応答を検証しました。",
                 )
                 self._emit(job_id, f"{label}: 抽出候補を検証しました。", step=task.name)
+
+        self._set_definition_phase(
+            job_id, "objects", "succeeded" if validated_extractions else "failed"
+        )
+        for phase_name, instruction in (
+            (
+                "shared",
+                "共有プロパティ・値型・インターフェース・列挙・指標・業務ルール・イベントを"
+                " definitions に補完してください。",
+            ),
+            (
+                "capabilities",
+                "資料に明記された関数・アクション・オブジェクト集合の型付き契約を"
+                " definitions に補完してください。実装や権限を創作せず不足を記録してください。",
+            ),
+        ):
+            self._set_definition_phase(job_id, phase_name, "running")
+            # 旧形式だけを返すモデルも読み取り可能。新形式は先行定義の名前を後段へ渡す。
+            if not any(result.extraction.definitions for result in validated_extractions):
+                self._set_definition_phase(
+                    job_id, phase_name, "skipped", "型付き候補がないため補完を省略しました。"
+                )
+                continue
+            refs = sorted(
+                {
+                    f"{item.kind}:{item.api_name}"
+                    for result in validated_extractions
+                    for item in result.extraction.definitions
+                }
+            )
+            phase_failed = False
+            for task in llm_tasks:
+                if self._is_cancelled(job_id):
+                    return
+                focused = _OntologyBuildLlmTask(
+                    name=task.name,
+                    prompt=instruction + "既存定義: " + ", ".join(refs),
+                    context=task.context,
+                    progress_ja=instruction,
+                    cross_check_sql=task.cross_check_sql,
+                    source_evidence=task.source_evidence,
+                    definition_phase=phase_name,
+                )
+                extractions, messages = self._execute_llm_task(
+                    job_id, client, focused, label=instruction
+                )
+                validated_extractions.extend(extractions)
+                warnings.extend(messages)
+                if messages:
+                    phase_failed = True
+                    partial_failed_steps.add(task.name)
+            self._set_definition_phase(
+                job_id,
+                phase_name,
+                "failed" if phase_failed else "succeeded",
+                "成功した抽出結果を保持しています。" if phase_failed else "",
+            )
+        self._set_definition_phase(job_id, "validation", "running")
 
         if llm_tasks and not validated_extractions:
             self._fail(
@@ -4372,6 +4556,24 @@ class OntologyBuildService:
             ],
             schema_fingerprint=ontology.revision.schema_fingerprint,
             source_revision_id=draft_ontology.revision.id,
+            sources=definition_sources,
+            profile_fingerprint=job.profile_fingerprint,
+            requires_revalidation=(
+                job.profile_fingerprint
+                != definition_fingerprint(
+                    self._runtime._strict_profile(job.profile_id).model_dump(mode="json")
+                )
+                or context_fingerprint
+                != definition_fingerprint(
+                    str(self._runtime.prepare_build_schema_context(job.profile_id).schema_context)
+                )
+            ),
+        )
+        self._set_definition_phase(
+            job_id,
+            "validation",
+            "succeeded",
+            f"検査事項 {len(bundle.findings)} 件、競合 {len(bundle.conflicts)} 件。",
         )
 
         def finish(job: OntologyBuildJob) -> None:

@@ -10,6 +10,7 @@ from .ontology_definitions import (
     BusinessDefinition,
     ConceptCoverage,
     DefinitionConflict,
+    DefinitionSource,
     ProfileOntologyBundle,
 )
 from .ontology_service import OntologyNotFoundError
@@ -60,6 +61,9 @@ class ProfileOntologyDefinitionService:
         schema_fingerprint: str,
         source_revision_id: str,
         coverage: list[ConceptCoverage] | None = None,
+        sources: list[DefinitionSource] | None = None,
+        profile_fingerprint: str = "",
+        requires_revalidation: bool = False,
     ) -> ProfileOntologyBundle:
         session = self._session(profile_id)
         bundle_id = stable_ontology_id("profile_ontology_bundle", profile_id, job_id)
@@ -73,29 +77,46 @@ class ProfileOntologyDefinitionService:
         conflicts: list[DefinitionConflict] = []
         for definition in definitions:
             item = definition.model_copy(deep=True)
-            item.id = stable_ontology_id("profile_concept", profile_id, item.kind, item.api_name)
+            matches = [
+                candidate
+                for candidate in old.values()
+                if candidate.kind == item.kind
+                and (
+                    candidate.api_name == item.api_name
+                    or item.api_name in candidate.aliases
+                    or candidate.api_name in item.aliases
+                )
+            ]
+            item.id = (
+                matches[0].id
+                if len(matches) == 1
+                else stable_ontology_id("profile_concept", profile_id, item.kind, item.api_name)
+            )
             item.review_status = "unreviewed"
             item.origin = "ai"
             for evidence in item.evidence:
                 evidence.verified = False
             current = old.get(item.id) or normalized.get(item.id)
-            if (
-                current is not None
-                and (
-                    current.origin == "manual"
-                    or current.review_status == "reviewed"
-                    or item.id in normalized
-                )
-                and current.model_dump(exclude={"review_status", "origin"})
-                != item.model_dump(exclude={"review_status", "origin"})
+            if current is not None and (
+                current.origin == "manual"
+                or current.review_status == "reviewed"
+                or item.id in normalized
             ):
-                conflicts.append(
-                    DefinitionConflict(
-                        definition_id=item.id,
-                        current=current,
-                        proposed=item,
+                if current.model_dump(
+                    exclude={"review_status", "origin", "evidence"}
+                ) != item.model_dump(exclude={"review_status", "origin", "evidence"}):
+                    conflicts.append(
+                        DefinitionConflict(definition_id=item.id, current=current, proposed=item)
                     )
-                )
+                else:
+                    evidence_keys = {
+                        (e.source_id, e.locator, e.excerpt_ja) for e in current.evidence
+                    }
+                    current.evidence.extend(
+                        e
+                        for e in item.evidence
+                        if (e.source_id, e.locator, e.excerpt_ja) not in evidence_keys
+                    )
                 normalized[item.id] = current
                 continue
             normalized[item.id] = item
@@ -136,13 +157,19 @@ class ProfileOntologyDefinitionService:
             profile_id=profile_id,
             job_id=job_id,
             schema_fingerprint=schema_fingerprint,
-            profile_fingerprint=definition_fingerprint(profile.model_dump(mode="json")),
+            profile_fingerprint=profile_fingerprint
+            or definition_fingerprint(profile.model_dump(mode="json")),
+            sources=sources or [],
+            requires_revalidation=requires_revalidation,
             source_revision_id=source_revision_id,
             parent_id=prior.id if prior else "",
             definitions=list(normalized.values()),
             coverage=final_coverage,
             conflicts=conflicts,
         )
+        from .ontology_definition_quality import inspect_definition_quality
+
+        bundle.findings = inspect_definition_quality(bundle.definitions, bundle.sources)
         bundle.etag = definition_fingerprint(bundle.model_dump(mode="json", exclude={"etag"}))
         self.store.save_artifact(
             {

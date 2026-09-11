@@ -1741,7 +1741,7 @@ export function OntologyBuildSection({
         />
       ) : null}
 
-      <ProfileOntologyResults key={profileId} profileId={profileId} buildId={job?.result_bundle_id} />
+      <ProfileOntologyResults key={profileId} profileId={profileId} buildId={job?.result_bundle_id} phases={job?.definition_phases} />
 
       <section
         className="grid min-w-0 gap-3 rounded-md border border-border bg-background p-3"

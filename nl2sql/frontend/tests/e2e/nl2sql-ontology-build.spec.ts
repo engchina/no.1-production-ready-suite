@@ -303,6 +303,7 @@ function buildJob(status: string, stepStatus: string, proposalIds: string[] = []
   return {
     job: {
       id: "job-1",
+      definition_phases: ["freeze", "evidence", "objects", "shared", "capabilities", "validation"].map(name => ({ name, status: stepStatus, detail_ja: "" })),
       profile_id: "default",
       status,
       steps: [
@@ -1014,6 +1015,7 @@ test("AI オントロジー構築の実行 → 進捗 → Markdown 下書き編�
   // 完了は工程ステッパーの「完了」バッジ(永続)で判定する。完了の“瞬間”通知は toast のため
   // section スコープには残らない(spec §9: 完了は状態表示が担い、瞬間だけ toast)。
   await expect(steps.getByText("完了").first()).toBeVisible({ timeout: 15000 });
+  await expect(page.getByRole("list", { name: "構築段階（Build Stages）" }).getByRole("listitem")).toHaveCount(6);
   expect(state.startPayloadSeen).toBe(true);
   expect(state.idempotencySeen).toBe(true);
   expect(state.latestRunOptions).toEqual({
@@ -2612,7 +2614,7 @@ test("型付き構築結果の六概念を日英併記で閲覧し、検索・�
     await button.focus();
     await page.keyboard.press("Enter");
     await expect(button).toHaveAttribute("aria-pressed", "true");
-    await panel.locator("summary").click();
+    await panel.getByTestId("ontology-definition-detail").locator("summary").click();
     await expect(panel.getByText("根拠・来歴（Evidence & Provenance）", { exact: true })).toBeVisible();
   }
   await panel.getByLabel("定義を検索（Search Definitions）").fill("見つからない定義");
@@ -2639,9 +2641,27 @@ test("型付き結果の取得失敗は再試行でき、Profile 切替で前の
   await expect(panel.getByRole("alert")).toBeVisible();
   failed = false;
   await panel.getByRole("button", { name: "最新情報を取得（Refresh）" }).click();
-  await expect(panel.locator("summary")).toContainText("salesの定義");
+  await expect(panel.getByTestId("ontology-definition-detail").locator("summary")).toContainText("salesの定義");
   await page.getByTestId("ontology-build-profile-select").selectOption("finance");
   await loadOntologyBuildWorkspace(page);
-  await expect(panel.locator("summary")).toContainText("financeの定義");
+  await expect(panel.getByTestId("ontology-definition-detail").locator("summary")).toContainText("financeの定義");
   await expect(panel.getByText("salesの定義", { exact: false })).toHaveCount(0);
+});
+
+test("型付き構築の証拠・競合・再検証状態を確認できる", async ({ page }, testInfo) => {
+  await mockApi(page);
+  const bundle = typedBundle("default");
+  const definition = { ...bundle.definitions[0], evidence: [{ source_id: "manual", locator: "line:1", excerpt_ja: "受注は顧客に属します。", verified: true }] };
+  await page.route("**/api/nl2sql/profiles/*/ontology-results", route => fulfillJson(route, { results: [{ ...bundle, requires_revalidation: true, definitions: [definition], conflicts: [{ definition_id: definition.id, current: definition, proposed: { ...definition, name_ja: "AI の変更案" } }] }] }));
+  await page.goto("/ontology-build?profile=default");
+  await loadOntologyBuildWorkspace(page);
+  const panel = page.getByTestId("ontology-typed-results");
+  await expect(panel.getByText(/Profile または Schema が変更されました/)).toBeVisible();
+  await panel.getByText("競合する変更（Conflicting Changes） (1)", { exact: true }).click();
+  await expect(panel.getByText("AI の変更案", { exact: true })).toBeVisible();
+  await panel.getByText("競合する変更（Conflicting Changes） (1)", { exact: true }).click();
+  await panel.getByTestId("ontology-definition-detail").locator("summary").filter({ hasText: "defaultの定義" }).click();
+  await expect(panel.getByText("受注は顧客に属します。", { exact: true }).last()).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await panel.screenshot({ path: testInfo.outputPath("ontology-evidence-conflicts.png") });
 });

@@ -43,12 +43,28 @@ class DefinitionContract(BaseModel):
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
 
+class DefinitionSource(DefinitionContract):
+    source_id: str
+    locator: str
+    kind: Literal["database", "document", "qa", "manual"]
+    sha256: str
+    text: str
+
+
+class DefinitionPhase(DefinitionContract):
+    name: Literal["freeze", "evidence", "objects", "shared", "capabilities", "validation"]
+    status: Literal["pending", "running", "succeeded", "failed", "skipped"] = "pending"
+    detail_ja: str = ""
+
+
 class DefinitionEvidence(DefinitionContract):
     source_id: str
     locator: str
     excerpt_ja: str = ""
     source_sha256: str = ""
     verified: bool = False
+    source_kind: Literal["database", "document", "qa", "manual", "inference"] = "inference"
+    assertion: str = ""
 
 
 class DefinitionMapping(DefinitionContract):
@@ -264,3 +280,5 @@ class ProfileOntologyBundle(DefinitionContract):
     findings: list[DefinitionFinding] = Field(default_factory=list)
     conflicts: list[DefinitionConflict] = Field(default_factory=list)
     notes_ja: str = ""
+    sources: list[DefinitionSource] = Field(default_factory=list)
+    requires_revalidation: bool = False

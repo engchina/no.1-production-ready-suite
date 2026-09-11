@@ -1,3 +1,4 @@
+import type { OntologyBuildJob } from "./types";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
@@ -29,7 +30,8 @@ export interface ProfileOntologyBundle {
   definitions: BusinessDefinition[];
   coverage: { kind: ConceptKind; count: number; status: "generated" | "insufficient_evidence" | "not_applicable" | "failed"; reason_ja: string }[];
   findings: { code: string; message_ja: string; definition_id: string; severity: string }[];
-  conflicts: unknown[];
+  conflicts: { definition_id: string; current: BusinessDefinition; proposed: BusinessDefinition }[];
+  requires_revalidation?: boolean;
 }
 
 export function useProfileOntologyResults(profileId: string, buildId?: string) {
@@ -58,7 +60,7 @@ function fieldLabel(field: string) {
   return translated === key ? field : translated;
 }
 
-export function ProfileOntologyResults({ profileId, buildId }: { profileId: string; buildId?: string }) {
+export function ProfileOntologyResults({ profileId, buildId, phases }: { profileId: string; buildId?: string; phases?: OntologyBuildJob["definition_phases"] }) {
   const query = useProfileOntologyResults(profileId, buildId);
   const [kind, setKind] = useState<ConceptKind>("object_type");
   const [search, setSearch] = useState("");
@@ -69,17 +71,21 @@ export function ProfileOntologyResults({ profileId, buildId }: { profileId: stri
       <h3 className="font-semibold">{t("ontologyResults.title")}</h3>
       <Button variant="secondary" size="sm" onClick={() => void query.refetch()} disabled={query.isFetching}>{t("ontologyResults.refresh")}</Button>
     </div>
+    {phases?.length ? <ol className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3" aria-label={t("ontologyResults.phases.title")}>{phases.map((phase, index) => <li key={phase.name} className="rounded border border-border p-2 text-sm"><span className="font-medium">{index + 1}. {t(`ontologyResults.phase.${phase.name}`)}</span><p>{t(`ontologyResults.phaseStatus.${phase.status}`)}</p>{phase.detail_ja ? <p className="text-muted">{phase.detail_ja}</p> : null}</li>)}</ol> : null}
     {query.isPending ? <p role="status">{t("ontologyResults.loading")}</p> : null}
     {query.isError ? <FormStatus tone="danger" message={t("ontologyResults.error")} /> : null}
     {!query.isPending && !query.isError && !bundle ? <p>{t("ontologyResults.empty")}</p> : null}
     {bundle ? <>
+      {bundle.requires_revalidation ? <FormStatus tone="warning" message={t("ontologyResults.staleScope")} /> : null}
+      {bundle.conflicts.length ? <details className="rounded border border-border p-3"><summary>{t("ontologyResults.conflicts")} ({bundle.conflicts.length})</summary>{bundle.conflicts.map((conflict, i) => <div key={i} className="mt-2 grid min-w-0 gap-2 sm:grid-cols-2"><div className="min-w-0"><h4>{t("ontologyResults.current")}</h4><DefinitionValue value={conflict.current} /></div><div className="min-w-0"><h4>{t("ontologyResults.proposed")}</h4><DefinitionValue value={conflict.proposed} /></div></div>)}</details> : null}
+      <details><summary>{t("ontologyResults.history")} ({query.data?.results.length})</summary><ul className="text-sm">{query.data?.results.map(result => <li key={result.id} className="break-all">{new Date(result.created_at).toLocaleString("ja-JP")} · {result.id} · {t(`ontologyResults.status.${result.status}`)}</li>)}</ul></details>
       <p className="text-sm text-muted">{t(`ontologyResults.status.${bundle.status}`)} · {new Date(bundle.created_at).toLocaleString("ja-JP")}</p>
       <div className="flex flex-wrap gap-2" role="group" aria-label={t("ontologyResults.categories")}>
         {conceptKinds.map(item => <Button className="h-auto min-h-11 w-full whitespace-normal py-2 sm:w-auto [&>span]:whitespace-normal [&>span]:text-clip" key={item} variant={kind === item ? "primary" : "secondary"} size="sm" aria-pressed={kind === item} onClick={() => setKind(item)}><span>{kindLabel(item)} ({bundle.coverage.find(c => c.kind === item)?.count ?? 0})</span></Button>)}
       </div>
       <label className="grid gap-1 text-sm">{t("ontologyResults.search")}<input value={search} onChange={event => setSearch(event.target.value)} className="w-full rounded-md border border-border bg-background p-2" /></label>
       {!items.length ? <p>{bundle.coverage.find(item => item.kind === kind)?.reason_ja || t("ontologyResults.noMatch")}</p> : null}
-      {items.map(item => <details key={item.id} className="min-w-0 rounded-md border border-border p-3">
+      {items.map(item => <details key={item.id} data-testid="ontology-definition-detail" className="min-w-0 rounded-md border border-border p-3">
         <summary className="cursor-pointer break-words font-medium">{item.name_ja} ({item.api_name})</summary>
         <div className="mt-3 grid min-w-0 gap-3 text-sm">
           <p>{item.description_ja}</p>

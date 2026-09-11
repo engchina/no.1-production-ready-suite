@@ -613,6 +613,7 @@ export interface OntologyBuildEvent {
 
 export interface OntologyBuildJob {
   result_bundle_id?: string;
+  definition_phases?: { name: "freeze" | "evidence" | "objects" | "shared" | "capabilities" | "validation"; status: "pending" | "running" | "succeeded" | "failed" | "skipped"; detail_ja: string }[];
   id: string;
   profile_id: string;
   status: OntologyBuildStatus;
