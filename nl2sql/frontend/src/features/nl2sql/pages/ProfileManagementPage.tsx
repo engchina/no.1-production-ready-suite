@@ -981,6 +981,7 @@ function ProfileEditor({
   viewLoadMoreError,
   objectFilter,
   saving,
+  busy,
   nameError,
   requiredErrors,
   oracleConfirmation,
@@ -1028,6 +1029,7 @@ function ProfileEditor({
   viewLoadMoreError: string;
   objectFilter: string;
   saving: boolean;
+  busy: boolean;
   nameError: ProfileNameError;
   requiredErrors: ProfileRequiredErrors;
   oracleConfirmation: string;
@@ -1062,7 +1064,7 @@ function ProfileEditor({
     : "profile-name-helper";
   const categoryDescriptionId = requiredErrors.category ? "profile-category-error" : undefined;
   return (
-    <section className="grid min-w-0 content-start gap-4" aria-labelledby="profile-editor-heading">
+    <fieldset disabled={busy} className="grid min-w-0 content-start gap-4" aria-labelledby="profile-editor-heading">
       <DbObjectPanelHeader
         headingId="profile-editor-heading"
         icon={FileJson}
@@ -1307,7 +1309,7 @@ function ProfileEditor({
         retryingOracleSync={retryingOracleSync}
         onRetryOracleSync={onRetryOracleSync}
       />
-    </section>
+    </fieldset>
   );
 }
 
@@ -1399,6 +1401,12 @@ export function ProfileManagementPage() {
 
   // ?profile= が唯一の情報源: null=一覧 / "new"=新規 / <id>=編集
   const profileParam = searchParams.get("profile");
+  const editTargetRef = useRef(profileParam);
+  editTargetRef.current = profileParam;
+  const [bulkSelecting, setBulkSelecting] = useState(false);
+  const mutationBusy = bulkSelecting || (loading !== "" && loading !== "load");
+  const mutationBusyRef = useRef(mutationBusy);
+  mutationBusyRef.current = mutationBusy;
   const syncJobParam = searchParams.get("syncJobId") ?? "";
   const activeView: ActiveView = profileParam ? "editor" : "list";
   const selectedProfileId = profileParam && profileParam !== "new" ? profileParam : "";
@@ -1752,6 +1760,7 @@ export function ProfileManagementPage() {
   useUnsavedChangesGuard(activeView === "editor" && isDirty, confirmDiscard);
 
   const backToList = async () => {
+    if (mutationBusyRef.current) return;
     if (isDirty && !(await confirmDiscard())) return;
     setSearchParams({});
   };
@@ -1768,6 +1777,10 @@ export function ProfileManagementPage() {
     owner: string,
     select: boolean
   ) => {
+    if (mutationBusyRef.current) return;
+    const target = profileParam;
+    mutationBusyRef.current = true;
+    setBulkSelecting(true);
     const key = kind === "table" ? "allowedTables" : "allowedViews";
     // 表示中の一覧と同じ条件で一括操作するため、デバウンス後の値を使う。
     const filter = debouncedObjectFilter.trim();
@@ -1779,6 +1792,7 @@ export function ProfileManagementPage() {
         select || filtered
           ? await getSchemaObjectSnapshot(owner, kind === "table" ? "TABLE" : "VIEW", filter)
           : [];
+      if (editTargetRef.current !== target) return;
       setForm((current) => ({
         ...current,
         [key]: applySchemaBulkSelection({
@@ -1790,11 +1804,15 @@ export function ProfileManagementPage() {
         }),
       }));
     } catch (error) {
-      toastError(error instanceof Error ? error.message : t("profiles.error.load"));
+      if (editTargetRef.current === target) toastError(error instanceof Error ? error.message : t("profiles.error.load"));
+    } finally {
+      setBulkSelecting(false);
     }
   };
 
   const save = async () => {
+    if (mutationBusyRef.current) return;
+    const target = profileParam;
     const nextNameError = profileNameError(form.name);
     const nextRequiredErrors = profileRequiredErrors(form);
     setNameError(nextNameError);
@@ -1807,6 +1825,7 @@ export function ProfileManagementPage() {
     setOracleSyncJobId("");
     setOracleSyncSubmissionError("");
     reportedOracleSyncJobId.current = "";
+    mutationBusyRef.current = true;
     setLoading("save");
     let saved: Nl2SqlProfile;
     try {
@@ -1823,14 +1842,16 @@ export function ProfileManagementPage() {
         etag: saved.etag ?? "",
       });
       void queryClient.invalidateQueries({ queryKey: ["nl2sql", "profiles", "search"] });
-      setForm(profileToForm(normalizeProfile(saved)));
-      setOracleSyncProfileId(saved.id);
-      setRequiredErrors({});
-      // 破壊的操作のゲートなので、保存が通ったら必ず再入力を求める
-      // (既存 profile の保存では編集対象が変わらず初期化 effect が走らない)。
-      setOracleConfirmation("");
-      if (!selectedProfile) {
-        setSearchParams({ profile: saved.id }, { replace: true });
+      if (editTargetRef.current === target) {
+        setForm(profileToForm(normalizeProfile(saved)));
+        setOracleSyncProfileId(saved.id);
+        setRequiredErrors({});
+        // 破壊的操作のゲートなので、保存が通ったら必ず再入力を求める
+        // (既存 profile の保存では編集対象が変わらず初期化 effect が走らない)。
+        setOracleConfirmation("");
+        if (!selectedProfile) {
+          setSearchParams({ profile: saved.id }, { replace: true });
+        }
       }
       toast.success(t("profiles.message.saved"));
     } catch (err) {
@@ -1863,8 +1884,10 @@ export function ProfileManagementPage() {
         }
       );
       reportedOracleSyncJobId.current = "";
-      setOracleSyncJobId(job.job_id);
-      setOracleSyncProfileId(job.profile_id);
+      if (editTargetRef.current === target) {
+        setOracleSyncJobId(job.job_id);
+        setOracleSyncProfileId(job.profile_id);
+      }
       queryClient.setQueryData(["nl2sql", "oracle-sync-job", job.job_id], job);
     } catch (err) {
       setOracleSyncSubmissionError(
@@ -1876,6 +1899,7 @@ export function ProfileManagementPage() {
   };
 
   const retryOracleSync = async () => {
+    if (mutationBusyRef.current) return;
     const profileId = oracleSyncJob?.profile_id || oracleSyncProfileId || selectedProfile?.id;
     if (!profileId) return;
     setLoading("retry-oracle-sync");
@@ -1911,6 +1935,7 @@ export function ProfileManagementPage() {
   };
 
   const deleteProfile = async (profile: Pick<Nl2SqlProfile, "id" | "name" | "etag">) => {
+    if (mutationBusyRef.current) return;
     const ok = await confirm({
       title: t("profiles.delete.confirm.title"),
       description: t("profiles.delete.confirm.description", { name: profile.name }),
@@ -1935,7 +1960,7 @@ export function ProfileManagementPage() {
       if (!trackingRefresh) {
         await queryClient.invalidateQueries({ queryKey: ["nl2sql", "select-ai"] });
       }
-      if (profileParam) {
+      if (editTargetRef.current === profile.id) {
         setSearchParams({}, { replace: true });
       }
       const cleanupWarnings = deleted.oracle_cleanup.filter((item) => item.warning.trim());
@@ -2024,6 +2049,7 @@ export function ProfileManagementPage() {
       viewLoadMoreError={viewLoadMoreError}
       objectFilter={objectFilter}
       saving={loading === "save"}
+      busy={mutationBusy}
       nameError={nameError}
       requiredErrors={requiredErrors}
       oracleConfirmation={oracleConfirmation}
@@ -2110,7 +2136,7 @@ export function ProfileManagementPage() {
         <span>{t("profiles.action.dbProfileRefresh")}</span>
       </Button>
     ) : (
-      <Button type="button" variant="secondary" size="sm" onClick={() => void load()}>
+      <Button type="button" variant="secondary" size="sm" disabled={mutationBusy} onClick={() => void load()}>
         <RefreshCw size={15} aria-hidden="true" />
         <span>{t("profiles.action.refresh")}</span>
       </Button>
@@ -2207,7 +2233,7 @@ export function ProfileManagementPage() {
         ) : (
           <>
             <div>
-              <Button type="button" variant="ghost" size="sm" onClick={() => void backToList()}>
+              <Button type="button" variant="ghost" size="sm" disabled={mutationBusy} onClick={() => void backToList()}>
                 <ArrowLeft size={15} aria-hidden="true" />
                 <span>{t("profiles.action.backToList")}</span>
               </Button>

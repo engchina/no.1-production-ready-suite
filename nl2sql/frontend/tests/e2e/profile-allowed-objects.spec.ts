@@ -2553,3 +2553,55 @@ test("未保存のままサイドナビで離脱しようとすると確認を�
   await dialog.getByRole("button", { name: "破棄して戻る" }).click();
   await expect(page).toHaveURL(/\/ontology-build/);
 });
+
+test("保存中はプロファイル編集と競合操作を固定し失敗後に復帰する", async ({ page }, testInfo) => {
+  await mockProfileApi(page);
+  await page.goto("/profiles?profile=default");
+  const name = page.locator("#profile-name");
+  await name.fill("PENDING_PROFILE");
+  await page.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
+  let release: (() => void) | undefined;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let saves = 0;
+  await page.route("**/api/nl2sql/profiles/default", async (route) => {
+    if (route.request().method() !== "PATCH") return route.fallback();
+    saves += 1;
+    await gate;
+    await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "保存失敗テスト" }) });
+  });
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+  try {
+    await expect(name).toBeDisabled();
+    await expect(page.getByLabel("実行確認語")).toBeDisabled();
+    await expect(page.getByRole("button", { name: "一覧に戻る", exact: true })).toBeDisabled();
+    await expect(page.getByTestId("profile-allowed-table-list").getByRole("checkbox").first()).toBeDisabled();
+  } finally { release?.(); }
+  await expect(page.getByText("保存失敗テスト", { exact: true })).toBeVisible();
+  await expect(name).toBeEnabled();
+  await expect(name).toHaveValue("PENDING_PROFILE");
+  await expect(page.getByRole("button", { name: "保存", exact: true })).toBeEnabled();
+  expect(saves).toBe(1);
+  await page.screenshot({ path: testInfo.outputPath("profile-save-failure-draft.png") });
+});
+
+test("スキーマ一括選択中は保存と対象切替を固定する", async ({ page }) => {
+  await mockProfileApi(page, { profileItems: [{ ...profiles[0], allowed_tables: [], allowed_views: [] }] });
+  await page.goto("/profiles?profile=default");
+  const list = page.getByTestId("profile-allowed-table-list");
+  await expect(list.getByLabel("APP.TABLE_01")).not.toBeChecked();
+  let release: (() => void) | undefined;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  await page.route("**/api/schema/objects?*", async (route) => {
+    if (new URL(route.request().url()).searchParams.get("owner") === "APP") await gate;
+    await route.fallback();
+  });
+  await page.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
+  await list.getByRole("button", { name: "APP をすべて選択", exact: true }).click();
+  try {
+    await expect(page.getByRole("button", { name: "保存", exact: true })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "一覧に戻る", exact: true })).toBeDisabled();
+    await expect(list.getByLabel("APP.TABLE_01")).toBeDisabled();
+  } finally { release?.(); }
+  await expect(list.getByLabel("APP.TABLE_01")).toBeChecked();
+  await expect(page.getByRole("button", { name: "保存", exact: true })).toBeEnabled();
+});
