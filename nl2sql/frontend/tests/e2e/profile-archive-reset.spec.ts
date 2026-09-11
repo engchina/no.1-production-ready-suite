@@ -404,11 +404,73 @@ test("リセットとアーカイブ関連 UI は表示しない", async ({ page
   expect(viewport.body).toBeLessThanOrEqual(viewport.window);
 });
 
-test("プロファイルの並べ替え列名は小字号を維持してキーボードで操作できる", async ({ page }, testInfo) => {
+test("ローカルフォントで全体と並べ替え列名を描画しキーボードで操作できる", async ({ page, context, baseURL }, testInfo) => {
+  const origin = new URL(baseURL!).origin;
+  const externalRequests: string[] = [];
+  const fontResponses: { url: string; ok: boolean }[] = [];
+  await context.route("**/*", async (route) => {
+    if (new URL(route.request().url()).origin !== origin) {
+      externalRequests.push(route.request().url());
+      await route.abort();
+    } else {
+      await route.fallback();
+    }
+  });
+  page.on("response", (response) => {
+    if (response.request().resourceType() === "font") {
+      fontResponses.push({ url: response.url(), ok: response.ok() });
+    }
+  });
   await mockProfileManagement(page);
   await page.goto("/profiles");
   const grid = page.getByTestId("profile-management-grid");
   await expect(grid).toBeVisible();
+  // check() だけでは未登録フォントの fallback を見逃すため、実際にロードした face も検証する。
+  const fonts = await page.evaluate(async () => {
+    const loaded = [];
+    for (const family of ["Noto Sans JP", "Roboto"]) {
+      for (const weight of [400, 500, 600, 700]) {
+        const faces = await document.fonts.load(
+          `${weight} 14px "${family}"`,
+          family === "Noto Sans JP" ? "名称 許可表 許可ビュー" : "Production Ready NL2SQL"
+        );
+        loaded.push({ family, weight, count: faces.length, loaded: faces.every((face) => face.status === "loaded") });
+      }
+    }
+    await document.fonts.ready;
+    return loaded;
+  });
+  for (const font of fonts) {
+    expect(font.count, `${font.family} ${font.weight}`).toBeGreaterThan(0);
+    expect(font.loaded).toBe(true);
+  }
+  const bodyFont = await page.locator("body").evaluate((node) => getComputedStyle(node).fontFamily);
+  expect(bodyFont).toMatch(/^"Noto Sans JP", Roboto,/);
+  await expect(grid.locator("[data-sort-header]").first()).toHaveCSS("font-family", bodyFont);
+  // Chromium が日本語列名に使った実フォントを確認（CSS 宣言だけの検証にしない）。
+  const cdp = await context.newCDPSession(page);
+  try {
+    await cdp.send("DOM.enable");
+    await cdp.send("CSS.enable");
+    const { root } = await cdp.send("DOM.getDocument");
+    const { nodeId } = await cdp.send("DOM.querySelector", {
+      nodeId: root.nodeId,
+      selector: '[data-sort-header] > span',
+    });
+    const { fonts: renderedFonts } = await cdp.send("CSS.getPlatformFontsForNode", { nodeId });
+    expect(renderedFonts.length).toBeGreaterThan(0);
+    for (const font of renderedFonts) {
+      // フォント内部名にはウェイト名が付く（例: Noto Sans JP Thin SemiBold）。
+      expect(font.familyName).toMatch(/^Noto Sans JP(?: |$)/);
+      expect(font.isCustomFont).toBe(true);
+    }
+  } finally {
+    await cdp.detach();
+  }
+  expect(fontResponses.some(({ url }) => url.includes("noto-sans-jp"))).toBe(true);
+  expect(fontResponses.some(({ url }) => url.includes("roboto"))).toBe(true);
+  expect(fontResponses.every(({ url, ok }) => new URL(url).origin === origin && ok)).toBe(true);
+  expect(externalRequests).toEqual([]);
   await expectCompactSortHeaders(grid);
   const nameSort = grid.locator('[data-sort-header]').first();
   await nameSort.focus();
@@ -418,6 +480,7 @@ test("プロファイルの並べ替え列名は小字号を維持してキー�
   await expect(nameSort).not.toHaveAttribute("aria-sort", before!);
   await expectProfileListNoHorizontalOverflow(page);
   await grid.locator("thead").screenshot({ path: testInfo.outputPath("profile-column-font.png") });
+  await page.screenshot({ path: testInfo.outputPath("profile-local-fonts.png"), fullPage: true });
 });
 
 test("標準プロファイルも一覧と編集画面から確認付きで削除できる", async ({ page }) => {

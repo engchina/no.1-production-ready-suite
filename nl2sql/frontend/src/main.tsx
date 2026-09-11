@@ -11,6 +11,15 @@ import { installBrowserErrorGuards } from "@/lib/browser-error-guards";
 import { initTheme } from "@/lib/theme";
 import { t } from "@/lib/i18n";
 import { AuthProvider } from "@/features/security/AuthProvider";
+// フォント実体をビルドへ同梱し、Google Fonts / CDN に依存せず同一 origin から配信する。
+import "@fontsource/noto-sans-jp/400.css";
+import "@fontsource/noto-sans-jp/500.css";
+import "@fontsource/noto-sans-jp/600.css";
+import "@fontsource/noto-sans-jp/700.css";
+import "@fontsource/roboto/400.css";
+import "@fontsource/roboto/500.css";
+import "@fontsource/roboto/600.css";
+import "@fontsource/roboto/700.css";
 // globals.css が tailwindcss + 共有 tokens.css + @source を取り込む（単一エントリ）。
 import "./globals.css";
 
