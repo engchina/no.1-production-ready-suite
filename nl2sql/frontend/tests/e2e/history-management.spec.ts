@@ -566,7 +566,7 @@ test("実行履歴は検索結果なしと条件クリアを案内する", async
 
   await page.getByRole("searchbox", { name: "履歴検索" }).fill("一致しない検索語");
   await expect(page.getByText("条件に一致する履歴がありません")).toBeVisible();
-  await page.getByRole("button", { name: "条件をクリア" }).click();
+  await page.getByRole("button", { name: "絞り込みを解除" }).click();
   await expect(historyRows(page)).toHaveCount(3);
 });
 

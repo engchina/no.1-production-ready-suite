@@ -102,7 +102,7 @@ test("Grounding graph displays revision identity and supports reset", () => {
   assert.match(ontologyQueryPlayground, /ontology-playground-revision-id/u);
   assert.match(ontologyQueryPlayground, /resetGroundingState/u);
   assert.match(ontologyQueryPlayground, /ontology-playground-clear/u);
-  assert.match(messages, /接地確認をクリア/u);
+  assert.match(messages, /質問・確認結果をクリア/u);
   assert.doesNotMatch(messages, /SQL 生成用 Mermaid ER 技術表現/u);
 });
 

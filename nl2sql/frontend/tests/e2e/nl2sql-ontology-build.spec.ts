@@ -904,10 +904,10 @@ test("AI オントロジー構築の実行 → 進捗 → Markdown 下書き編�
     .fill("受注は顧客に紐づく。売上は受注金額の合計。");
   const sourceClear = page
     .getByTestId("ontology-build-source-files")
-    .getByRole("button", { name: "クリア" });
+    .getByRole("button", { name: "ファイル選択を解除" });
   const qaClear = page
     .getByTestId("ontology-build-qa-file")
-    .getByRole("button", { name: "クリア" });
+    .getByRole("button", { name: "ファイル選択を解除" });
   await expect(sourceClear).toBeDisabled();
   await expect(qaClear).toBeDisabled();
   await dropFiles(
@@ -991,6 +991,9 @@ test("AI オントロジー構築の実行 → 進捗 → Markdown 下書き編�
   await expect(sourceFileList.getByText("terms.csv", { exact: true })).toBeVisible();
   await expect(section.getByText("選択済み: qa_cases.csv")).toBeVisible();
   await expect(qaClear).toBeEnabled();
+  await expectButtonLabelFits(qaClear);
+  await qaClear.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("qa-file-deselect.png") });
   await qaClear.click();
   await expect(section.getByText("選択済み: qa_cases.csv")).toHaveCount(0);
   await expect(qaClear).toBeDisabled();
@@ -2534,6 +2537,7 @@ test("失効したProfile URLでは別Profileの情報を取得せず明示選�
   expect(state.ontologyViewCalls).toBe(0);
   await page.screenshot({ path: testInfo.outputPath("ontology-missing-profile.png") });
   await page.getByTestId("ontology-build-profile-select").selectOption("default");
+  await expect(fetch).toBeEnabled();
   await fetch.press("Enter");
   await expect(page.getByTestId("profile-ontology-build")).toBeVisible();
   expect(state.profileDetailCalls).toEqual(["default"]);

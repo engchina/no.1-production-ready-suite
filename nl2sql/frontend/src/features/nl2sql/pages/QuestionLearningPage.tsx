@@ -764,7 +764,7 @@ function TrainingDataPanel({
           formatLabel={XLSX_TEMPLATE_FILE_FORMATS.formatLabel}
           hint={t("qcm.training.noFile")}
           replaceText={t("qcm.file.replace")}
-          clearAriaLabel={t("qcm.file.clear")}
+          clearText={t("qcm.file.clear")}
           icon="spreadsheet"
           required
           disabled={loading === "classifier-import"}

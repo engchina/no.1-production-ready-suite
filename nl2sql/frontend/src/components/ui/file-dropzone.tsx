@@ -181,7 +181,7 @@ export function FileDropzone({
       data-testid={dataTestId}
     >
       <FieldLabel htmlFor={inputId} label={label} required={required} />
-      <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-2">
+      <div className="grid min-w-0 grid-cols-1 gap-[8px] sm:grid-cols-[minmax(0,1fr)_auto]">
         <label
           htmlFor={inputId}
           data-testid={dataTestId ? `${dataTestId}-dropzone` : undefined}

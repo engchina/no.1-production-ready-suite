@@ -364,6 +364,8 @@ async function expectQuestionActionLayoutWithClear(page: Page, playground: Locat
   const input = playground.getByTestId("ontology-playground-question");
   const runButton = playground.getByTestId("ontology-playground-run");
   const clearButton = playground.getByTestId("ontology-playground-clear");
+  await expect(clearButton).toHaveText("質問・確認結果をクリア");
+  await expect(clearButton).toHaveAccessibleName("質問・確認結果をクリア");
   const [inputBox, runBox, clearBox] = await Promise.all([
     input.boundingBox(),
     runButton.boundingBox(),
@@ -779,8 +781,7 @@ test("質問接地グラフで選択した物理オブジェクトの ER 詳細�
 
 test("質問を接地すると分類とグラフ強調が表示され、入力削除とクリアで reset できる", async ({
   page,
-}) => {
-  await page.setViewportSize({ width: 375, height: 812 });
+}, testInfo) => {
   await mockApi(page);
   await page.goto("/ontology-build?profile=default");
   await page.getByRole("button", { name: "情報を取得", exact: true }).click();
@@ -834,7 +835,9 @@ test("質問を接地すると分類とグラフ強調が表示され、入力�
   await playground.getByTestId("ontology-playground-run").click();
   await expect(playground.getByTestId("ontology-playground-result")).toContainText("関係の一致");
   await expect(metricCard).toHaveCSS("opacity", "0.35");
-  await playground.getByTestId("ontology-playground-clear").click();
+  await playground.getByTestId("ontology-playground-clear").focus();
+  await page.screenshot({ path: testInfo.outputPath("grounding-clear.png") });
+  await playground.getByTestId("ontology-playground-clear").press("Enter");
   await expect(playground.getByTestId("ontology-playground-question")).toHaveValue("");
   await expect(playground.getByTestId("ontology-playground-ready-state")).toBeVisible();
   await expect(playground.getByTestId("ontology-playground-result")).toHaveCount(0);

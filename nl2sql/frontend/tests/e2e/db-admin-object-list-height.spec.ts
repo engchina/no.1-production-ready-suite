@@ -1207,7 +1207,7 @@ test("データプレビューは検索・所有者・種別フィルタを共�
   await kindFilter.selectOption("all");
   await page.getByRole("button", { name: "APP.TABLE_01 を選択" }).click();
   const previewShowButton = page.getByRole("button", { name: "データを表示", exact: true });
-  const previewClearButton = page.getByRole("button", { name: "表示結果をクリア", exact: true });
+  const previewClearButton = page.getByRole("button", { name: "表示件数・結果をリセット", exact: true });
   await expect(previewShowButton).toBeEnabled();
   await expect(previewClearButton).toBeDisabled();
   await previewShowButton.click();
@@ -2429,7 +2429,7 @@ test("Excel/CSV 取込フォームは取込方法を表示せずファイル選�
 
   const fileFieldBox = await fileField.boundingBox();
   const filePickerBox = await fileField.getByTestId("table-import-file-field-dropzone").boundingBox();
-  const clearButtonBox = await fileField.getByRole("button", { name: "取込ファイルをクリア" }).boundingBox();
+  const clearButtonBox = await fileField.getByRole("button", { name: "取込ファイル選択を解除" }).boundingBox();
   const fillsAvailableWidth = await fileField.evaluate((element) => {
     const parent = element.parentElement;
     return Boolean(
@@ -2444,6 +2444,12 @@ test("Excel/CSV 取込フォームは取込方法を表示せずファイル選�
   expect(fillsAvailableWidth).toBe(true);
   expect(filePickerBox!.height).toBeGreaterThanOrEqual(44);
   expect(clearButtonBox!.height).toBeGreaterThanOrEqual(44);
+  if ((page.viewportSize()?.width ?? 0) < 640) {
+    expect(clearButtonBox!.y).toBeGreaterThanOrEqual(filePickerBox!.y + filePickerBox!.height + 8);
+    expect(filePickerBox!.width).toBeGreaterThanOrEqual(fileFieldBox!.width - 1);
+  } else {
+    expect(clearButtonBox!.x).toBeGreaterThanOrEqual(filePickerBox!.x + filePickerBox!.width + 8);
+  }
   await expectNoHorizontalScroll(page);
 });
 
