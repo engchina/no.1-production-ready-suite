@@ -11,6 +11,32 @@ import { expectLegacyOntologyControls } from "./_helpers/ontology-controls";
 
 test.beforeEach(async ({ page }) => mockDatabaseGateReady(page));
 
+async function expectBoundedRowLimit(input: Locator, action: Locator) {
+  await expect(input).toHaveAttribute("min", "1");
+  await expect(input).toHaveAttribute("max", "100000");
+  await expect(input).toHaveAttribute("step", "1");
+  const label = input.locator("..");
+  const helper = label.locator("p").first();
+  await expect(helper).toContainText("1〜100000 の整数。");
+  await expect(helper).toHaveCSS("white-space", "nowrap");
+  for (const value of ["", "0", "-1", "1.5", "100001"]) {
+    await input.fill(value);
+    await expect(input).toHaveAttribute("aria-invalid", "true");
+    await expect(label.getByRole("alert")).toContainText("1〜100000 の整数で入力してください。");
+    await expect(action).toBeDisabled();
+  }
+  for (const value of ["1", "100000"]) {
+    await input.fill(value);
+    await expect(input).not.toHaveAttribute("aria-invalid", "true");
+    await expect(action).toBeEnabled();
+  }
+  await input.focus();
+  await input.press("ArrowDown");
+  await expect(input).toHaveValue("99999");
+  await input.fill("100");
+  await label.screenshot({ path: test.info().outputPath("row-limit.png") });
+}
+
 async function clickPageHeaderAction(page: Page, testId: string, name: string) {
   const actions = page.getByTestId(testId);
   await expect(actions).toBeVisible();
@@ -6836,6 +6862,10 @@ test("AI 活用の SELECT SQL 画面は通常 API だけを使用し、更新 SQ
   await sqlInput.fill("SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES");
   await page.getByRole("button", { name: "SQL 実行" }).click();
   await expect(directSql.getByTestId("query-result-summary")).toContainText("上限到達");
+  await expectBoundedRowLimit(rowLimitInput, directSql.getByRole("button", { name: "SQL 実行" }));
+  await rowLimitInput.fill("100000");
+  await directSql.getByRole("button", { name: "SQL 実行" }).click();
+  await expect(directSql.getByTestId("query-result-summary")).toContainText("取得上限 100000 件");
 
   await clearButton.click();
   await rowLimitInput.fill("100");
@@ -7107,12 +7137,13 @@ test("データ準備の管理 SQL 画面は SELECT と確認済み更新 SQL �
   await expect(adminSql.getByTestId("query-results-table")).toHaveCount(0);
 
   await sqlInput.fill("SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES");
-  await rowLimitInput.fill("0");
+  await expectBoundedRowLimit(rowLimitInput, adminSql.getByRole("button", { name: "SQL 実行" }));
+  await rowLimitInput.fill("100000");
   await adminSql.getByRole("button", { name: "SQL 実行" }).click();
-  await expect(adminSql.getByTestId("query-result-summary")).toContainText("取得上限なし");
+  await expect(adminSql.getByTestId("query-result-summary")).toContainText("取得上限 100000 件");
   expect(api.adminExecutePayload).toEqual({
     sql: "SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES",
-    row_limit: 0,
+    row_limit: 100000,
     confirmation: "",
     reason: "admin-sql-select",
   });
@@ -11040,17 +11071,19 @@ test("synthetic data table bulk selection and results use the shared skeleton pr
   const resultsActions = syntheticPanel.getByTestId("data-synthetic-results-actions");
   await expect(resultTableSelect).toHaveValue("APP.INVOICES");
   await expect(resultLimitInput).toHaveValue("100");
-  await expect(resultLimitInput).toHaveAttribute("max", "10000");
+  await expect(resultLimitInput).toHaveAttribute("max", "100000");
   await expect(syntheticResultsSection.getByText("表示するデータはまだありません")).toBeVisible();
   await expectTopToBottomOrder(resultTableSelect, resultLimitInput, resultsActions);
   const showDataButton = syntheticResultsSection.getByRole("button", { name: "データを表示" });
+  await expectBoundedRowLimit(resultLimitInput, showDataButton);
   await resultLimitInput.fill("-1");
-  await expect(syntheticResultsSection.getByRole("alert")).toContainText("1〜10000 の整数で入力してください。");
+  await expect(syntheticResultsSection.getByRole("alert")).toContainText("1〜100000 の整数で入力してください。");
   await expect(showDataButton).toBeDisabled();
   expect(syntheticResultsRequests).toHaveLength(0);
   await resultLimitInput.fill("100");
-  await expect(syntheticResultsSection.getByText("1〜10000 の整数で入力してください。")).toHaveCount(0);
+  await expect(syntheticResultsSection.getByText("1〜100000 の整数で入力してください。")).toHaveCount(0);
   await expect(showDataButton).toBeEnabled();
+  await resultLimitInput.fill("100000");
   await showDataButton.click();
   const syntheticResultsSkeleton = page.getByTestId("data-synthetic-results-detail-skeleton");
   await expect(syntheticResultsSkeleton).toBeVisible();
@@ -11059,11 +11092,11 @@ test("synthetic data table bulk selection and results use the shared skeleton pr
   await expect(syntheticPanel.getByText("表示するデータはまだありません")).toHaveCount(0);
   await expect.poll(() => syntheticResultsRequests.length).toBe(1);
   expect(syntheticResultsRequests[0].searchParams.get("table_name")).toBe("APP.INVOICES");
-  expect(syntheticResultsRequests[0].searchParams.get("limit")).toBe("100");
+  expect(syntheticResultsRequests[0].searchParams.get("limit")).toBe("100000");
   resultsGate.release();
   await expect(syntheticPanel.getByRole("cell", { name: "synthetic-loading-customer" })).toBeVisible();
   await expect(syntheticPanel.getByTestId("query-result-summary")).toContainText("取得件数 1 件");
-  await expect(syntheticPanel.getByTestId("query-result-summary")).toContainText("取得上限 100 件");
+  await expect(syntheticPanel.getByTestId("query-result-summary")).toContainText("取得上限 100000 件");
   await expect(page.getByRole("region", { name: "通知" })).toContainText("「APP.INVOICES」の生成結果データを表示しました。");
   await expectNoHorizontalScroll(page);
 
@@ -11073,7 +11106,7 @@ test("synthetic data table bulk selection and results use the shared skeleton pr
   await expect(showDataButton).toBeVisible();
   await showDataButton.click();
   await expect.poll(() => syntheticResultsRequests.length).toBe(2);
-  expect(syntheticResultsRequests[1].searchParams.get("limit")).toBe("100");
+  expect(syntheticResultsRequests[1].searchParams.get("limit")).toBe("100000");
   await expect(page.getByRole("region", { name: "通知" })).toContainText("「APP.INVOICES」の生成結果データを表示しました。");
   await expectToastStackBottomRight(page);
   await expectNoHorizontalScroll(page);
@@ -11596,7 +11629,7 @@ test("sample data and data management run imported workflows", async ({ page }) 
   await expect(dataPreviewPanel.getByLabel("行数フィルタ")).toHaveCount(0);
   const previewRowLimitInput = dataPreviewPanel.getByLabel("取得件数上限");
   await expect(previewRowLimitInput).toHaveValue("100");
-  await expect(dataPreviewPanel.getByText("0 は取得上限なし。")).toBeVisible();
+  await expect(dataPreviewPanel.getByText("1〜100000 の整数。取得上限を明示してください。")).toBeVisible();
   await expect(dataPreviewPanel.getByLabel("WHERE 条件(任意)")).toHaveCount(0);
   await expect(dataPreviewPanel.getByText("選択中", { exact: true })).toHaveCount(0);
   await expect(dataPreviewPanel.getByText("統計未取得")).toBeVisible();
@@ -11622,12 +11655,12 @@ test("sample data and data management run imported workflows", async ({ page }) 
   await expect(previewResultsStep).toHaveAttribute("aria-current", "step");
   expect(api.previewDataPayload).toBeNull();
   await previewRowLimitInput.fill("-1");
-  await expect(dataPreviewPanel.getByText("0 以上の整数で入力してください。")).toBeVisible();
+  await expect(dataPreviewPanel.getByText("1〜100000 の整数で入力してください。")).toBeVisible();
   await expect(previewShowButton).toBeDisabled();
   await expect(previewExportButton).toBeDisabled();
   await expect(dataPreviewPanel.getByRole("button", { name: "APP.INVOICES を選択" })).toBeEnabled();
   await previewRowLimitInput.fill("100");
-  await expect(dataPreviewPanel.getByText("0 以上の整数で入力してください。")).toHaveCount(0);
+  await expect(dataPreviewPanel.getByText("1〜100000 の整数で入力してください。")).toHaveCount(0);
   await previewShowButton.click();
   await expect(previewExportButton).toBeVisible();
   await expect(previewMoreButton).toBeVisible();
@@ -11644,6 +11677,7 @@ test("sample data and data management run imported workflows", async ({ page }) 
   await expect(dataPreviewPanel.getByRole("button", { name: "APP.INVOICES を選択" })).toHaveAttribute("aria-current", "true");
   await expect(previewClearButton).toBeDisabled();
   await expect(previewShowButton).toBeEnabled();
+  await expectBoundedRowLimit(previewRowLimitInput, previewShowButton);
   api.previewDataPayload = null;
   await previewShowButton.click();
   await expect.poll(() => currentPreviewDataPayload()?.object_name).toBe("INVOICES");
@@ -11707,7 +11741,7 @@ test("sample data and data management run imported workflows", async ({ page }) 
   await dataPreviewPanel.getByLabel("種別フィルタ").selectOption("view");
   await expect(dataPreviewPanel.getByRole("button", { name: "APP.V_EMP_DEPT を選択" })).toBeVisible();
   await expect(dataPreviewPanel.getByRole("button", { name: "APP.INVOICES を選択" })).toHaveCount(0);
-  await previewRowLimitInput.fill("0");
+  await previewRowLimitInput.fill("25");
   await expect(dataPreviewPanel.getByText("データ未表示")).toBeVisible();
   await expect(dataPreviewPanel.getByRole("button", { name: "APP.V_EMP_DEPT のデータを空にする" })).toHaveCount(0);
   await expect(dataPreviewPanel.getByRole("button", { name: "データを空にする", exact: true })).toHaveCount(0);
@@ -11722,12 +11756,12 @@ test("sample data and data management run imported workflows", async ({ page }) 
   api.previewDataPayload = null;
   await previewShowButton.click();
   await expect(page.getByRole("cell", { name: "顧客01" })).toBeVisible();
-  await expect(dataPreviewPanel.getByTestId("query-result-summary")).toContainText("取得上限なし");
+  await expect(dataPreviewPanel.getByTestId("query-result-summary")).toContainText("取得上限 25 件");
   await expect(page.getByTestId("query-results-pagination")).toContainText("1-10 / 25 件");
   await expect(page.getByRole("cell", { name: "顧客11" })).toHaveCount(0);
   await expect.poll(() => currentPreviewDataPayload()?.object_name).toBe("V_EMP_DEPT");
   expect(currentPreviewDataPayload()?.owner).toBe("APP");
-  expect(currentPreviewDataPayload()?.limit).toBe(0);
+  expect(currentPreviewDataPayload()?.limit).toBe(25);
   expect(currentPreviewDataPayload()?.where_clause).toBe("");
   const downloadPromise = page.waitForEvent("download");
   await page.getByRole("button", { name: "XLSX ダウンロード" }).click();
@@ -11735,7 +11769,7 @@ test("sample data and data management run imported workflows", async ({ page }) 
   expect(download.suggestedFilename()).toBe("app_v_emp_dept_preview.xlsx");
   await expect.poll(() => api.previewDataExportPayload?.object_name).toBe("V_EMP_DEPT");
   expect(api.previewDataExportPayload?.owner).toBe("APP");
-  expect(api.previewDataExportPayload?.limit).toBe(0);
+  expect(api.previewDataExportPayload?.limit).toBe(25);
   expect(api.previewDataExportPayload?.where_clause).toBe("");
   await expectNoHorizontalScroll(page);
 

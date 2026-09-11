@@ -2734,24 +2734,24 @@ def test_preview_data_builds_guarded_select() -> None:
         service.preview_db_admin_data(DbAdminDataPreviewRequest(object_name='ADMIN"."SECRET'))
 
 
-def test_preview_data_limit_zero_uses_unbounded_oracle_fetch() -> None:
+def test_preview_data_max_limit_reaches_preview_and_export() -> None:
     adapter = _FakeAdminSqlAdapter()
     service = _OracleRuntimeService(adapter)
 
     preview = service.preview_db_admin_data(
-        DbAdminDataPreviewRequest(object_name="INVOICES", limit=0)
+        DbAdminDataPreviewRequest(object_name="INVOICES", limit=100000)
     )
 
     assert preview.runtime == "oracle"
-    assert adapter.select_calls[-1][1] == 0
+    assert adapter.select_calls[-1][1] == 100000
 
     filename, content = service.export_db_admin_preview_xlsx(
-        DbAdminDataPreviewRequest(object_name="INVOICES", limit=0)
+        DbAdminDataPreviewRequest(object_name="INVOICES", limit=100000)
     )
 
     assert filename == "app_invoices_preview.xlsx"
     assert content
-    assert adapter.select_calls[-1][1] == 0
+    assert adapter.select_calls[-1][1] == 100000
 
 
 def test_oracle_adapter_execute_select_normalizes_driver_error(

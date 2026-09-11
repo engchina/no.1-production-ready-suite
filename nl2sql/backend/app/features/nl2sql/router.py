@@ -2414,14 +2414,14 @@ def generate_synthetic_data(
 @router.get("/synthetic-data/results", response_model=ApiResponse[SyntheticDataResultsData])
 def synthetic_data_results(
     table_name: str,
-    limit: int = 100,
+    limit: int = Query(default=100, ge=1, le=100000),
 ) -> ApiResponse[SyntheticDataResultsData]:
     """Synthetic DB data generation 後の table preview を返す。"""
     try:
         return ApiResponse(
             data=nl2sql_service.synthetic_data_results(
                 table_name=table_name,
-                limit=max(1, min(limit, 1000)),
+                limit=limit,
             )
         )
     except ValueError as exc:

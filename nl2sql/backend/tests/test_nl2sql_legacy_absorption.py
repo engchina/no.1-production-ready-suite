@@ -564,11 +564,15 @@ def test_sql_execute_row_limit_is_bounded_1_to_100000() -> None:
         ExecuteRequest(sql="SELECT * FROM INVOICES", row_limit=-1)
 
 
-def test_db_admin_execute_row_limit_keeps_zero_as_unbounded() -> None:
-    assert DbAdminExecuteRequest(sql="SELECT * FROM INVOICES", row_limit=0).row_limit == 0
-    assert DbAdminExecuteRequest(sql="SELECT * FROM INVOICES", row_limit=5001).row_limit == 5001
+@pytest.mark.parametrize("limit", [0, -1, 1.5, 100001])
+def test_db_admin_execute_row_limit_rejects_out_of_range(limit: float) -> None:
     with pytest.raises(ValidationError):
-        DbAdminExecuteRequest(sql="SELECT * FROM INVOICES", row_limit=-1)
+        DbAdminExecuteRequest.model_validate({"sql": "SELECT * FROM INVOICES", "row_limit": limit})
+
+
+@pytest.mark.parametrize("limit", [1, 100, 100000])
+def test_db_admin_execute_row_limit_accepts_boundaries(limit: int) -> None:
+    assert DbAdminExecuteRequest(sql="SELECT * FROM INVOICES", row_limit=limit).row_limit == limit
 
 
 def test_db_admin_executor_with_dml_requires_confirmation() -> None:
@@ -628,7 +632,7 @@ def test_db_admin_executor_select_uses_oracle_select_data_plane(
     assert adapter.select_calls == [("SELECT * FROM INVOICES", 3)]
 
 
-def test_db_admin_executor_zero_row_limit_does_not_append_fetch_first(
+def test_db_admin_executor_max_row_limit_reaches_oracle(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
@@ -637,11 +641,11 @@ def test_db_admin_executor_zero_row_limit_does_not_append_fetch_first(
     monkeypatch.setattr(service, "_use_oracle_runtime", lambda: True)
 
     selected = service.execute_db_admin_sql(
-        DbAdminExecuteRequest(sql="SELECT * FROM INVOICES", row_limit=0)
+        DbAdminExecuteRequest(sql="SELECT * FROM INVOICES", row_limit=100000)
     )
 
     assert selected.executed is True
-    assert adapter.select_calls == [("SELECT * FROM INVOICES", 0)]
+    assert adapter.select_calls == [("SELECT * FROM INVOICES", 100000)]
 
 
 def test_select_ai_profile_mutation_requires_confirmation() -> None:

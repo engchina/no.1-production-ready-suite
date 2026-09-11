@@ -96,11 +96,11 @@ test("NL2SQL の局所実行 CTA は対象内容の後ろに置く", () => {
   );
   assert.ok(
     dataManagementSource.indexOf('t("dataTools.syntheticData.results")') >
-      dataManagementSource.indexOf('t("dataTools.syntheticData.resultLimitHelper")')
+      dataManagementSource.indexOf('value={syntheticResultLimitInput}')
   );
   assert.ok(
     dataManagementSource.indexOf('data-testid="synthetic-result-table-select"') <
-      dataManagementSource.indexOf('t("dataTools.syntheticData.resultLimitHelper")')
+      dataManagementSource.indexOf('value={syntheticResultLimitInput}')
   );
 
   const syntheticTargetHeaderStart = dataManagementSource.indexOf('headingId="synthetic-target-heading"');

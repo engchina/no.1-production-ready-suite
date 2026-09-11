@@ -1196,7 +1196,7 @@ test("データプレビューは検索・所有者・種別フィルタを共�
 
   const previewRowLimitInput = page.getByLabel("取得件数上限");
   await expect(previewRowLimitInput).toHaveValue("100");
-  await expect(page.getByText("0 は取得上限なし。")).toBeVisible();
+  await expect(page.getByText("1〜100000 の整数。取得上限を明示してください。")).toBeVisible();
   await expect(page.getByText("表示件数 10 件固定")).toHaveCount(0);
   const previewList = page.getByTestId("data-preview-object-list");
   await expect(previewList.getByText("操作", { exact: true })).toHaveCount(0);

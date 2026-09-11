@@ -6,12 +6,13 @@ import { t } from "@/lib/i18n";
 import type { QueryResults } from "../types";
 
 export const DEFAULT_SQL_ROW_LIMIT = 100;
+export const MAX_SQL_ROW_LIMIT = 100000;
 
 export function parseSqlRowLimit(value: string): number | null {
   const normalized = value.trim();
   if (!/^\d+$/.test(normalized)) return null;
   const rowLimit = Number(normalized);
-  if (!Number.isFinite(rowLimit) || !Number.isInteger(rowLimit) || rowLimit < 0) return null;
+  if (!Number.isInteger(rowLimit) || rowLimit < 1 || rowLimit > MAX_SQL_ROW_LIMIT) return null;
   return rowLimit;
 }
 
@@ -21,9 +22,6 @@ export function RowLimitField({
   disabled = false,
   error = "",
   className = "",
-  helperClassName = "",
-  min = 0,
-  max,
   helper = t("queryResults.rowLimit.helper"),
 }: {
   value: string;
@@ -31,10 +29,6 @@ export function RowLimitField({
   disabled?: boolean;
   error?: string;
   className?: string;
-  helperClassName?: string;
-  /** 許容最小値。0 = 無制限を許す画面(db-admin)は既定のまま、/execute 系は 1 を渡す。 */
-  min?: number;
-  max?: number;
   helper?: string;
 }) {
   const id = useId();
@@ -43,13 +37,13 @@ export function RowLimitField({
   const describedBy = error ? `${helperId} ${errorId}` : helperId;
 
   return (
-    <label className={`grid min-w-0 gap-1 text-sm font-medium text-foreground ${className}`}>
+    <label className={`grid w-full min-w-0 gap-1 text-sm font-medium text-foreground ${className}`}>
       <span>{t("queryResults.rowLimit.label")}</span>
       <input
         id={id}
         type="number"
-        min={min}
-        max={max}
+        min={1}
+        max={MAX_SQL_ROW_LIMIT}
         step={1}
         inputMode="numeric"
         value={value}
@@ -57,9 +51,9 @@ export function RowLimitField({
         disabled={disabled}
         aria-describedby={describedBy}
         aria-invalid={error ? "true" : undefined}
-        className="h-10 w-full min-w-0 rounded-md border border-border bg-card px-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted disabled:cursor-not-allowed disabled:bg-muted/30 disabled:text-muted focus:border-primary focus:ring-2 focus:ring-ring/40"
+        className="h-10 w-full min-w-0 max-w-[22rem] rounded-md border border-border bg-card px-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted disabled:cursor-not-allowed disabled:bg-muted/30 disabled:text-muted focus:border-primary focus:ring-2 focus:ring-ring/40"
       />
-      <p id={helperId} className={`text-xs leading-5 text-muted ${helperClassName}`}>
+      <p id={helperId} className="overflow-x-auto whitespace-nowrap text-xs leading-5 text-muted">
         {helper}
       </p>
       <FieldError id={errorId} message={error} />

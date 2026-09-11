@@ -101,7 +101,6 @@ type SyntheticLoading = "" | "tables" | "generate" | "results";
 const DATA_MANAGEMENT_ID = "data-management";
 const DEFAULT_DATA_PREVIEW_ROW_LIMIT = DEFAULT_SQL_ROW_LIMIT;
 const DEFAULT_SYNTHETIC_RESULT_LIMIT = DEFAULT_SQL_ROW_LIMIT;
-const SYNTHETIC_RESULT_MAX_LIMIT = 10000;
 const DEFAULT_OBJECT_PICKER_SORT: DbObjectPickerSortState = { key: "name", direction: "asc" };
 
 interface PreviewObject {
@@ -371,15 +370,9 @@ export function DataManagementPage() {
       executedSyntheticResultLimit !== null ||
       syntheticResultLimitInput !== String(DEFAULT_SYNTHETIC_RESULT_LIMIT)
   );
-  const parsedSyntheticResultLimit = parseSqlRowLimit(syntheticResultLimitInput);
-  const syntheticResultLimit =
-    parsedSyntheticResultLimit !== null &&
-    parsedSyntheticResultLimit >= 1 &&
-    parsedSyntheticResultLimit <= SYNTHETIC_RESULT_MAX_LIMIT
-      ? parsedSyntheticResultLimit
-      : null;
+  const syntheticResultLimit = parseSqlRowLimit(syntheticResultLimitInput);
   const syntheticResultLimitError =
-    syntheticResultLimit === null ? t("dataTools.syntheticData.resultLimitError") : "";
+    syntheticResultLimit === null ? t("queryResults.rowLimit.error") : "";
   const syntheticResultError = syntheticErrorOperation === "results" ? syntheticError : "";
   const syntheticWorkspaceError = syntheticErrorOperation === "results" ? "" : syntheticError;
   const canLoadSyntheticDataResults = Boolean(
@@ -1665,7 +1658,6 @@ function PreviewResultsPanel({
           onChange={onRowLimitChange}
           disabled={loading}
           error={rowLimitError}
-          className="sm:w-48"
         />
         <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
           <Button
@@ -2447,10 +2439,6 @@ function SyntheticWorkspace({
             onChange={onSyntheticResultLimitChange}
             disabled={loading === "results"}
             error={syntheticResultLimitError}
-            className="w-full max-w-[22rem]"
-            min={1}
-            max={SYNTHETIC_RESULT_MAX_LIMIT}
-            helper={t("dataTools.syntheticData.resultLimitHelper")}
           />
           <div
             className="flex flex-col gap-2 sm:flex-row sm:flex-wrap"

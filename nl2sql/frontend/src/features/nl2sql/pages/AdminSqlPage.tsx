@@ -473,7 +473,6 @@ export function AdminSqlPage() {
                 onChange={setRowLimitInput}
                 disabled={loading}
                 error={rowLimitError}
-                className="sm:w-48"
               />
               <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
                 {actionButtons}

@@ -734,7 +734,7 @@ class DbAdminExecuteRequest(AdminExecutionConfirmation):
     """
 
     sql: str = Field(min_length=1)
-    row_limit: int = Field(default=100, ge=0)
+    row_limit: int = Field(default=100, ge=1, le=100000)
 
 
 class DbAdminExecuteData(BaseModel):
@@ -834,7 +834,7 @@ class DbAdminDataPreviewRequest(BaseModel):
 
     object_name: str = Field(min_length=1)
     owner: str = ""
-    limit: int = Field(default=100, ge=0)
+    limit: int = Field(default=100, ge=1, le=100000)
     where_clause: str = ""
 
 

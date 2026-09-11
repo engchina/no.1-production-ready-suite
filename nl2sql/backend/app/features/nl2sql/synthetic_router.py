@@ -34,7 +34,7 @@ def get_run(run_id: str, request: Request) -> ApiResponse[dict[str, Any]]:
 
 @router.get("/runs/{run_id}/results", response_model=ApiResponse[dict[str, Any]])
 def get_results(
-    run_id: str, request: Request, table_name: str, limit: int = Query(default=100, ge=1, le=10000)
+    run_id: str, request: Request, table_name: str, limit: int = Query(default=100, ge=1, le=100000)
 ) -> ApiResponse[dict[str, Any]]:
     service = get_synthetic_service()
     run = service.get(run_id, getattr(request.state, "principal", None))
