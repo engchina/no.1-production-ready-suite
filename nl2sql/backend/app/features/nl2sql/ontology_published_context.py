@@ -6,14 +6,16 @@ import json
 from typing import Any
 
 import sqlglot
-from sqlglot import exp
 
 from .ontology_definition_service import definition_fingerprint
-from .ontology_definition_validation import checked_expression, interface_contracts
+from .ontology_definition_validation import (
+    definition_expressions,
+    interface_contracts,
+    validated_definition_expression,
+)
 from .ontology_definition_workspace import ProfileOntologyWorkspaceService
 from .ontology_definitions import ProfileOntologyBundle
 from .ontology_service import OntologyGateBlockedError
-from .ontology_sql_validation import validated_sql
 from .ontology_store import canonical_json
 
 
@@ -37,28 +39,14 @@ def require_current_scope(
     return bundle
 
 
-def _expressions_visible(definition: Any, allowed: dict[str, set[str]]) -> bool:
-    expressions = [
-        (getattr(definition, field, ""), allowed)
-        for field in ("expression_sql", "filter_sql", "predicate_sql", "join_expression_sql")
-    ]
-    expressions.extend(
-        (
-            m.expression_sql,
-            {
-                f"{m.owner}.{m.object_name}".upper(): allowed.get(
-                    f"{m.owner}.{m.object_name}".upper(), set()
-                )
-            },
-        )
-        for m in definition.mappings
-    )
-    for sql, local_scope in expressions:
+def _expressions_visible(
+    definition: Any, allowed: dict[str, set[str]], definitions: dict[str, Any] | None = None
+) -> bool:
+    for field, sql, local_scope in definition_expressions(definition, definitions or {}, allowed):
         if not sql:
             continue
         try:
-            tree = checked_expression(sql)
-            validated_sql(tree, allowed if isinstance(tree, exp.Query) else local_scope)
+            validated_definition_expression(definition, field, sql, local_scope, allowed)
         except (ValueError, sqlglot.errors.SqlglotError):
             return False
     return True
@@ -91,7 +79,7 @@ def published_context(
     definitions = {d.api_name: d for d in bundle.definitions}
     selected: dict[str, Any] = {}
     for name, d in definitions.items():
-        if _expressions_visible(d, allowed) and all(
+        if _expressions_visible(d, allowed, definitions) and all(
             f"{m.owner}.{m.object_name}".upper() in allowed
             and (
                 not m.column_name

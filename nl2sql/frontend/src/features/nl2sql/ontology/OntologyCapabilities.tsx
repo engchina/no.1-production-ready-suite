@@ -12,9 +12,9 @@ interface Parameter { api_name: string; name_ja: string; data_type: string; requ
 interface Capability { definition: { id: string; kind: string; name_ja: string; api_name: string; description_ja: string; expression_sql?: string; implementation_key?: string; parameters: Parameter[] }; target_parameters: Parameter[]; status: string; reason_ja: string; binding: { etag: string; kind: string; expression_sql: string; implementation_key: string; state_requirements: unknown[]; reviewed_rules_ja: string; enabled: boolean } | null }
 interface Catalog { release_id: string; capabilities: Capability[]; implementations: { functions: string[]; actions: string[] } }
 interface Preview { id: string; before: Record<string, unknown>; after: Record<string, unknown>; expires_at: string }
-interface Outcome { status: "succeeded" | "unresolved"; execution?: Execution }
+interface Outcome { status: "succeeded" | "failed" | "unresolved"; execution?: Execution }
 interface PendingAction { preview: Preview; key: string; input: string; releaseId: string }
-interface Execution { id: string; release_id: string; at: string; status: string; result?: unknown; before?: Record<string, unknown>; after?: Record<string, unknown> }
+interface Execution { message_ja?: string; id: string; release_id: string; at: string; status: string; result?: unknown; before?: Record<string, unknown>; after?: Record<string, unknown> }
 
 export function OntologyCapabilities({ profileId }: { profileId: string }) {
   const endpoint = `/api/nl2sql/profiles/${encodeURIComponent(profileId)}/ontology-capabilities`;
@@ -55,8 +55,8 @@ function CapabilityCard({ profileId, releaseId, capability, implementations, ref
   const execution = useQuery({ queryKey: ["nl2sql", "profiles", "ontology-capability-execution", profileId, lastId], queryFn: ({ signal }) => apiGet<Execution>(`/api/nl2sql/profiles/${encodeURIComponent(profileId)}/ontology-capabilities/executions/${encodeURIComponent(lastId)}`, { signal }), enabled: !!lastId, retry: false });
   const outcome = useQuery({ queryKey: ["nl2sql", "profiles", "ontology-capability-outcome", profileId, definition.id, pending?.preview.id], queryFn: ({ signal }) => apiGet<Outcome>(`${endpoint}/previews/${encodeURIComponent(pending!.preview.id)}/outcome`, { signal }), enabled: !!pending && !busy, retry: false });
   useEffect(() => {
-    if (pending && !busy && outcome.data?.status === "succeeded" && outcome.data.execution) {
-      setLastId(outcome.data.execution.id); setLastInput(pending.input); setPendingJson(""); setPreview(null); setError("");
+    if (pending && !busy && (outcome.data?.status === "succeeded" || outcome.data?.status === "failed") && outcome.data.execution) {
+      setLastId(outcome.data.execution.id); setLastInput(pending.input); setPendingJson(""); setPreview(null); setError(outcome.data.status === "failed" ? outcome.data.execution.message_ja ?? t("ontologyCapability.failed") : "");
     }
   }, [busy, outcome.data, pendingJson, setLastId, setLastInput, setPendingJson]);
   const convert = (parameters: Parameter[], entries: Record<string, string>) => Object.fromEntries(parameters.map(parameter => { const value = entries[parameter.api_name]; return [parameter.api_name, value === undefined || value === "" ? null : ["integer", "number"].includes(parameter.data_type) ? Number(value) : parameter.data_type === "boolean" ? value === "true" : parameter.data_type === "object" ? JSON.parse(value) : value]; }));
@@ -82,7 +82,7 @@ function CapabilityCard({ profileId, releaseId, capability, implementations, ref
         if (operation) flushSync(() => setPendingJson(JSON.stringify(operation)));
         const result = await apiPost<Preview | Execution>(`${endpoint}/${action}`, body, { headers: { "Idempotency-Key": operation?.key ?? crypto.randomUUID() } });
         if (action === "preview") { if (current === consent.current) setPreview(result as Preview); }
-        else { setLastId(result.id); setLastInput(operation?.input ?? input); setPendingJson(""); setPreview(null); }
+        else { const execution = result as Execution; setLastId(execution.id); setLastInput(operation?.input ?? input); setPendingJson(""); setPreview(null); if (execution.status === "failed") setError(execution.message_ja ?? t("ontologyCapability.failed")); }
       }
     } catch (cause) {
       if (action === "execute" && !pending && cause instanceof ApiError && ["ACTION_PREVIEW_STALE", "OBJECT_VERSION_CHANGED", "ACTION_EFFECT_CHANGED"].includes(cause.errorCode ?? "")) setPendingJson("");

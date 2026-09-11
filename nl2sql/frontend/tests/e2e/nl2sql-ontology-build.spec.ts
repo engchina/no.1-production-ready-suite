@@ -2884,3 +2884,51 @@ for (const committedBeforeDisconnect of [true, false]) {
     await expect(region.getByText(/元の操作の結果を確認中/)).toHaveCount(0);
   });
 }
+
+for (const lostFailureResponse of [false, true]) {
+  test(`確定 rollback 後に入力を修正し新しいプレビューから実行できる (${lostFailureResponse ? "失敗応答喪失" : "確定失敗"})`, async ({ page }, testInfo) => {
+    await mockApi(page);
+    await page.route("**/api/nl2sql/profiles/*/ontology-results", route => fulfillJson(route, { results: [{ ...typedBundle("default"), status: "published" }] }));
+    let previews = 0, calls = 0, mutations = 0, outcomeAvailable = !lostFailureResponse;
+    const failed = { id: "failed-execution", release_id: "release-default", at: "2026-09-12T01:00:00Z", status: "failed", changes_applied: false, message_ja: "操作は失敗し、変更を取り消しました。入力を確認して再プレビューしてください。" };
+    const succeeded = { id: "new-execution", release_id: "release-default", at: "2026-09-12T01:02:00Z", status: "succeeded", after: { status: "APPROVED" } };
+    await page.route("**/api/nl2sql/profiles/default/ontology-capabilities**", route => {
+      const path = new URL(route.request().url()).pathname;
+      if (path.endsWith("ontology-capabilities")) return fulfillJson(route, { release_id: "release-default", implementations: { functions: [], actions: [] }, capabilities: [{ definition: { id: "approve", kind: "action_type", name_ja: "承認", api_name: "approve", parameters: [{ api_name: "status", name_ja: "状態", data_type: "string", required: true }] }, target_parameters: [], status: "available", reason_ja: "", binding: { kind: "backend", etag: "binding", expression_sql: "", implementation_key: "trusted.approve", state_requirements: [], reviewed_rules_ja: "条件に合わない入力は取消", enabled: true } }] });
+      if (path.endsWith("/preview")) { previews++; expect(route.request().postDataJSON().parameters.status).toBe(previews === 1 ? "CONFIRMED" : "APPROVED"); return fulfillJson(route, { id: `preview-${previews}`, before: { status: "DRAFT" }, after: { status: route.request().postDataJSON().parameters.status }, expires_at: "2026-09-12T01:10:00Z" }); }
+      if (path.endsWith("/execute")) {
+        calls++; expect(route.request().postDataJSON()).toEqual({ preview_id: `preview-${calls}`, confirmed: true });
+        if (calls === 1) return lostFailureResponse ? route.abort("connectionreset") : fulfillJson(route, failed);
+        mutations++; return fulfillJson(route, succeeded);
+      }
+      if (path.endsWith("/outcome")) return outcomeAvailable ? fulfillJson(route, { status: "failed", execution: failed }) : route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "fixture unavailable" }) });
+      return fulfillJson(route, path.endsWith("failed-execution") ? failed : succeeded);
+    });
+    await page.goto("/ontology-build?profile=default"); await loadOntologyBuildWorkspace(page);
+    await page.getByRole("tab", { name: "能力の利用（Capabilities）", exact: true }).click();
+    const region = page.getByRole("region", { name: "公開能力（Published Capabilities）", exact: true });
+    const preview = region.getByRole("button", { name: "変更をプレビュー（Preview Changes）", exact: true });
+    await region.getByLabel(/状態 \(status\)/).fill("CONFIRMED"); await preview.click();
+    await region.getByRole("button", { name: "確認して実行（Confirm & Execute）", exact: true }).click();
+    await page.getByRole("button", { name: "確認して実行（Confirm）", exact: true }).click();
+    if (lostFailureResponse) {
+      await expect(region.getByText(/元の操作の結果を確認中/)).toBeVisible(); await expect(preview).toBeDisabled();
+      await page.reload(); await loadOntologyBuildWorkspace(page); expect(calls).toBe(1);
+      const checkOriginal = region.getByRole("button", { name: "元の結果を照会（Check Original Result）", exact: true });
+      await expect(checkOriginal).toBeEnabled();
+      outcomeAvailable = true;
+      await checkOriginal.click();
+    }
+    await expect(region.getByRole("alert")).toContainText("変更を取り消しました");
+    await expect(preview).toBeEnabled(); await expect(region.getByText(/元の操作の結果を確認中/)).toHaveCount(0);
+    expect(mutations).toBe(0);
+    await region.screenshot({ path: testInfo.outputPath(`ontology-rollback-${lostFailureResponse}.png`) });
+    await page.reload(); await loadOntologyBuildWorkspace(page); await expect(preview).toBeEnabled(); expect(calls).toBe(1);
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await region.getByLabel(/状態 \(status\)/).fill("APPROVED"); await preview.click();
+    await region.getByRole("button", { name: "確認して実行（Confirm & Execute）", exact: true }).focus(); await page.keyboard.press("Enter");
+    expect(calls).toBe(1); await page.getByRole("button", { name: "確認して実行（Confirm）", exact: true }).click();
+    await expect(region.locator("pre")).toContainText("new-execution"); expect(calls).toBe(2); expect(mutations).toBe(1); expect(previews).toBe(2);
+    await expect(region.getByRole("alert")).toHaveCount(0);
+  });
+}

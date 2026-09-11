@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import Any, cast
 
 import sqlglot
@@ -20,7 +21,7 @@ from .ontology_definitions import (
     ProfileOntologyBundle,
     PropertyDefinition,
 )
-from .ontology_sql_validation import canonical_expression, validated_sql
+from .ontology_sql_validation import canonical_expression, expression_in_query, validated_sql
 
 
 def schema_objects(payload: dict[str, Any]) -> dict[str, set[str]]:
@@ -53,6 +54,41 @@ def checked_expression(sql: str, *, query: bool = False) -> exp.Expression:
     if any(isinstance(node, exp.Anonymous) for node in tree.walk()):
         raise ValueError("未登録の SQL 関数は使用できません。")
     return cast(exp.Expression, tree)
+
+
+def definition_expressions(
+    item: BusinessDefinition,
+    definitions: dict[str, BusinessDefinition],
+    physical: dict[str, set[str]],
+) -> Iterator[tuple[str, str, dict[str, set[str]]]]:
+    owner = definitions.get(getattr(item, "object_type", ""), item)
+    mappings = item.mappings or owner.mappings
+    keys = {f"{m.owner}.{m.object_name}".upper() for m in mappings}
+    local = {key: physical[key] for key in keys if key in physical} if mappings else physical
+    for field in ("expression_sql", "filter_sql", "predicate_sql", "join_expression_sql"):
+        yield field, getattr(item, field, ""), local
+    for index, mapping in enumerate(item.mappings):
+        key = f"{mapping.owner}.{mapping.object_name}".upper()
+        yield f"mappings.{index}.expression_sql", mapping.expression_sql, (
+            {key: physical[key]} if key in physical else {}
+        )
+
+
+def validated_definition_expression(
+    item: BusinessDefinition,
+    field: str,
+    sql: str,
+    local: dict[str, set[str]],
+    physical: dict[str, set[str]],
+) -> exp.Expression:
+    tree = checked_expression(sql)
+    if isinstance(tree, exp.Query):
+        return validated_sql(tree, physical)
+    if item.kind == "metric" and field == "filter_sql" and item.expression_sql:
+        query = checked_expression(item.expression_sql)
+        if isinstance(query, exp.Query):
+            return expression_in_query(tree, query, physical)
+    return validated_sql(tree, local)
 
 
 def interface_contracts(
@@ -226,31 +262,11 @@ def validate_definitions(
                     "mappings",
                     f"{key}.{mapping.column_name} は現在の Profile 範囲にありません。",
                 )
-        expressions = [
-            (field, getattr(item, field, ""), physical)
-            for field in ("expression_sql", "filter_sql", "predicate_sql", "join_expression_sql")
-        ]
-        expressions.extend(
-            (
-                f"mappings.{index}.expression_sql",
-                mapping.expression_sql,
-                {
-                    f"{mapping.owner}.{mapping.object_name}".upper(): physical.get(
-                        f"{mapping.owner}.{mapping.object_name}".upper(), set()
-                    )
-                },
-            )
-            for index, mapping in enumerate(item.mappings)
-            if mapping.expression_sql
-        )
-        for field, sql, expression_scope in expressions:
+        for field, sql, expression_scope in definition_expressions(item, definitions, physical):
             if not sql:
                 continue
             try:
-                parsed = checked_expression(sql)
-                tree = validated_sql(
-                    parsed, physical if isinstance(parsed, exp.Query) else expression_scope
-                )
+                tree = validated_definition_expression(item, field, sql, expression_scope, physical)
                 if item.kind == "metric" and field == "expression_sql":
                     aggregates = list(tree.find_all(exp.AggFunc))
                     if item.aggregation and not any(
@@ -265,6 +281,8 @@ def validate_definitions(
                     if item.filter_sql:
                         predicate = checked_expression(item.filter_sql)
                         try:
+                            if isinstance(tree, exp.Query):
+                                predicate = expression_in_query(predicate, tree, physical)
                             expected_filter = canonical_expression(predicate, physical, scope)
                         except ValueError:
                             expected_filter = ""
@@ -302,7 +320,9 @@ def validate_definitions(
                                     mapping.column_name, table=mapping.object_name, db=mapping.owner
                                 )
                             )
-                            result.add(canonical_expression(value, physical))
+                            key = f"{mapping.owner}.{mapping.object_name}".upper()
+                            local = {key: physical[key]} if key in physical else {}
+                            result.add(canonical_expression(value, local))
                         return result
 
                     if item.distinct_keys:

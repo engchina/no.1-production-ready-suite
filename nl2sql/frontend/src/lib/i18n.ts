@@ -595,6 +595,7 @@ const nl2sqlJa = {
   "ontologyCapability.required": "必須（Required）",
   "ontologyCapability.invoke": "関数を呼出（Invoke Function）",
   "ontologyCapability.preview": "変更をプレビュー（Preview Changes）",
+  "ontologyCapability.failed": "操作は失敗し、変更を取り消しました。入力を確認して再プレビューしてください（Rolled Back）。",
   "ontologyCapability.pending": "元の操作の結果を確認中です。新しい操作の前に結果を確認してください（Checking Original Operation）。",
   "ontologyCapability.checkOutcome": "元の結果を照会（Check Original Result）",
   "ontologyCapability.retryOriginal": "元の操作を再試行（Retry Original）",

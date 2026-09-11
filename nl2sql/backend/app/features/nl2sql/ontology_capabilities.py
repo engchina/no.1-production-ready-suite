@@ -786,7 +786,7 @@ class ProfileOntologyCapabilityService(ProfileOntologyWorkspaceService):
                 who,
                 definition_fingerprint({"preview_id": preview_id, "actor": who}),
             )
-            return {"status": "succeeded", "execution": result}
+            return {"status": result["status"], "execution": result}
         # 未記録は未実行の証明ではない。再試行時にも同じ preview を使用する。
         return {"status": "unresolved"}
 
@@ -844,49 +844,82 @@ class ProfileOntologyCapabilityService(ProfileOntologyWorkspaceService):
                 if transaction.existing:
                     return dict(transaction.existing)
                 cursor = transaction.cursor
-                before = self._read_target(cursor, plan, request.target, lock=True, version=True)
-                row_scn = before.pop("__row_scn")
-                if (
-                    definition_fingerprint({"values": before, "row_scn": row_scn})
-                    != preview["object_version"]
-                ):
-                    raise OntologyVersionConflictError(
-                        "OBJECT_VERSION_CHANGED", "対象が更新されました。再プレビューしてください。"
+                # LOCK_SCOPE のロックを保持し、業務更新だけを取り消せる境界を固定する。
+                cursor.execute("SAVEPOINT NL2SQL_ONT_ACTION_BODY", {})
+                try:
+                    before = self._read_target(
+                        cursor, plan, request.target, lock=True, version=True
                     )
-                self._state(before, binding)
-                authorize_definition_operation(profile_id, actor, ACTION_EXECUTE)
-                from .ontology_capability_context import ActionExecutionContext
+                    row_scn = before.pop("__row_scn")
+                    if (
+                        definition_fingerprint({"values": before, "row_scn": row_scn})
+                        != preview["object_version"]
+                    ):
+                        raise OntologyVersionConflictError(
+                            "OBJECT_VERSION_CHANGED",
+                            "対象が更新されました。再プレビューしてください。",
+                        )
+                    self._state(before, binding)
+                    authorize_definition_operation(profile_id, actor, ACTION_EXECUTE)
+                    from .ontology_capability_context import ActionExecutionContext
 
-                context = ActionExecutionContext(
-                    cursor, plan, request.target, definition.affected_properties
-                )
-                if binding["kind"] == "backend":
-                    ACTION_REGISTRY[binding["implementation_key"]].execute(context, before, params)
-                else:
-                    context.update({name: params[param] for name, param in plan["updates"].items()})
-                after = self._read_target(cursor, plan, request.target)
-                if after != preview["after"]:
-                    raise OntologyVersionConflictError(
-                        "ACTION_EFFECT_CHANGED",
-                        "実際の変更がプレビューと一致しません。transaction を取り消しました。",
+                    context = ActionExecutionContext(
+                        cursor, plan, request.target, definition.affected_properties
                     )
-                self._release(profile_id, request.release_id)
-                result = {
-                    "id": identity,
-                    "profile_id": profile_id,
-                    "definition_id": definition_id,
-                    "release_id": request.release_id,
-                    "preview_id": preview_id,
-                    "binding_etag": binding["etag"],
-                    "actor": who,
-                    "request_hash": request_hash,
-                    "parameters": request.parameters,
-                    "target": request.target,
-                    "before": before,
-                    "after": after,
-                    "status": "succeeded",
-                    "at": datetime.now(UTC).isoformat(),
-                }
+                    if binding["kind"] == "backend":
+                        ACTION_REGISTRY[binding["implementation_key"]].execute(
+                            context, before, params
+                        )
+                    else:
+                        context.update(
+                            {name: params[param] for name, param in plan["updates"].items()}
+                        )
+                    after = self._read_target(cursor, plan, request.target)
+                    if after != preview["after"]:
+                        raise OntologyVersionConflictError(
+                            "ACTION_EFFECT_CHANGED",
+                            "実際の変更がプレビューと一致しません。transaction を取り消しました。",
+                        )
+                    self._release(profile_id, request.release_id)
+                    result = {
+                        "id": identity,
+                        "profile_id": profile_id,
+                        "definition_id": definition_id,
+                        "release_id": request.release_id,
+                        "preview_id": preview_id,
+                        "binding_etag": binding["etag"],
+                        "actor": who,
+                        "request_hash": request_hash,
+                        "parameters": request.parameters,
+                        "target": request.target,
+                        "before": before,
+                        "after": after,
+                        "status": "succeeded",
+                        "at": datetime.now(UTC).isoformat(),
+                    }
+                except Exception as failure:
+                    # rollback/失敗記録の保存が失敗した場合は確定扱いにしない。
+                    cursor.execute("ROLLBACK TO SAVEPOINT NL2SQL_ONT_ACTION_BODY", {})
+                    result = {
+                        "id": identity,
+                        "profile_id": profile_id,
+                        "definition_id": definition_id,
+                        "release_id": request.release_id,
+                        "preview_id": preview_id,
+                        "binding_etag": binding["etag"],
+                        "actor": who,
+                        "request_hash": request_hash,
+                        "parameters": request.parameters,
+                        "target": request.target,
+                        "status": "failed",
+                        "changes_applied": False,
+                        "error_code": getattr(failure, "code", "ACTION_EXECUTION_FAILED"),
+                        "message_ja": (
+                            "操作は失敗し、変更を取り消しました。"
+                            "入力を確認して再プレビューしてください。"
+                        ),
+                        "at": datetime.now(UTC).isoformat(),
+                    }
                 transaction.save(result)
             return result
         except Exception as exc:

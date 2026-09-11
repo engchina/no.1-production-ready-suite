@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from sqlglot import exp
 from sqlglot.optimizer.qualify import qualify
-from sqlglot.optimizer.scope import Scope, traverse_scope
+from sqlglot.optimizer.scope import Scope, build_scope, traverse_scope
 
 
 def physical_table(table: exp.Table, physical: dict[str, set[str]]) -> str:
@@ -45,6 +45,39 @@ def validated_sql(tree: exp.Expression, physical: dict[str, set[str]]) -> exp.Ex
     if any(tree.find_all(exp.Query)) or any(tree.find_all(exp.Table)):
         raise ValueError("副問い合わせを含む式は SELECT 全体として検証してください。")
     return tree
+
+
+def expression_in_query(
+    expression: exp.Expression, query: exp.Expression, physical: dict[str, set[str]]
+) -> exp.Expression:
+    """SELECT のソース・別名・CTE で独立したフィルタを解決する。SQL は実行しない。"""
+    if not isinstance(query, exp.Select):
+        raise ValueError("フィルタの所属 SELECT を一意に指定してください。")
+    query = cast(exp.Select, validated_sql(query, physical))
+    scope = build_scope(query)
+    if scope is None:
+        raise ValueError("フィルタの所属 SELECT を解決できません。")
+
+    def bind_physical_reference(node: exp.Expression) -> exp.Expression:
+        if isinstance(node, exp.Column) and node.db:
+            key = physical_column(node, physical).rsplit(".", 1)[0]
+            aliases = [
+                alias
+                for alias, (_, source) in scope.selected_sources.items()
+                if isinstance(source, exp.Table) and physical_table(source, physical) == key
+            ]
+            if len(aliases) != 1:
+                raise ValueError("フィルタの物理参照を SELECT 内で一意に解決できません。")
+            return exp.column(node.name, table=aliases[0])
+        return node
+
+    expression = expression.copy().transform(bind_physical_reference)
+    name = "NL2SQL_ONTOLOGY_PREDICATE"
+    while name in {p.alias_or_name.upper() for p in query.selects}:
+        name += "_"
+    augmented = query.select(exp.alias_(expression.copy(), name, quoted=True), append=True)
+    qualified = cast(exp.Select, validated_sql(augmented, physical))
+    return cast(exp.Expression, qualified.selects[-1].unalias())
 
 
 def physical_column(

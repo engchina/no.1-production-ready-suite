@@ -82,7 +82,14 @@ class Cursor:
 
     def execute(self, sql: str, params: dict[str, Any]) -> None:
         self.connection.adapter.sql.append((sql, params))
-        if sql.startswith("UPDATE"):
+        if sql.startswith("SAVEPOINT"):
+            self.connection.savepoint = (
+                copy.deepcopy(self.connection.row),
+                copy.deepcopy(self.connection.records),
+            )
+        elif sql.startswith("ROLLBACK TO SAVEPOINT"):
+            self.connection.row, self.connection.records = copy.deepcopy(self.connection.savepoint)
+        elif sql.startswith("UPDATE"):
             columns = re.findall(r'"([^\"]+)" = :v\d+', sql)
             for index, column in enumerate(columns):
                 self.connection.row[column] = params[f"v{index}"]
@@ -289,14 +296,21 @@ def test_changed_confirmation_and_failed_transaction_never_apply(
         )
     else:
         adapter.fail_commit = True
-    with pytest.raises((OntologyVersionConflictError, RuntimeError)):
-        svc.execute("sales", ids["approve"], preview["id"], "execute", None)
+    if change in {"target", "aba"}:
+        result = svc.execute("sales", ids["approve"], preview["id"], "execute", None)
+        assert result["status"] == "failed"
+        assert result["error_code"] == "OBJECT_VERSION_CHANGED"
+        assert adapter.commits == 1  # 確定失敗だけを記録し、対象の更新は行わない。
+    else:
+        with pytest.raises((OntologyVersionConflictError, RuntimeError)):
+            svc.execute("sales", ids["approve"], preview["id"], "execute", None)
+        assert adapter.commits == 0
     assert adapter.row["STATUS"] == ("CANCELLED" if change == "target" else "DRAFT")
-    assert adapter.commits == 0
     assert not [
         r
         for r in svc.store.list_artifacts(svc._session("sales"))
         if r["artifact_type"] == "ontology_action_execution"
+        and json.loads(r["content"])["status"] == "succeeded"
     ]
 
 
