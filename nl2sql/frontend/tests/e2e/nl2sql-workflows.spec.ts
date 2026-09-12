@@ -3227,17 +3227,58 @@ test("query workbench keeps the schema picker inside a single column with long i
   }
 });
 
-test("実行エンジンは自動を廃し Select AI を既定にする", async ({ page }) => {
+test("実行エンジンは選び方と各方式を説明し Select AI を既定にする", async ({ page }, testInfo) => {
   await mockNl2SqlApi(page);
   await page.goto("/query");
   // 「自動」オプションは削除
   await expect(page.getByRole("button", { name: /Agent → Select AI → Direct/ })).toHaveCount(0);
   // 既定は Select AI（先頭・押下状態）
-  const selectAi = page.getByRole("button", { name: /DBMS_CLOUD_AI profile を利用/ });
+  const selectAi = page.getByRole("button", { name: /^Select AI 質問に表や項目/ });
   await expect(selectAi).toHaveAttribute("aria-pressed", "true");
   // 3 択（select_ai / agent / direct）
   const engineGroup = page.getByRole("group", { name: "実行エンジン" });
   await expect(engineGroup.getByRole("button")).toHaveCount(3);
+  const help = "質問から SQL を作る方法を選びます。初めての方は「Select AI」からお試しください。";
+  await expect(engineGroup.getByText(help, { exact: true })).toBeVisible();
+  await expect(engineGroup).toHaveAccessibleDescription(help);
+  const descriptions = [
+    "質問に表や項目の情報を添えて、AI に SQL 生成を依頼します。",
+    "AI エージェントが質問を受け取り、用意された SQL 生成ツールを呼び出して SQL を生成します。",
+    "OCI Enterprise AI に質問・表・項目の情報を直接渡して、SQL を生成します。",
+  ];
+  for (const description of descriptions) {
+    const text = engineGroup.getByText(description, { exact: true });
+    await expect(text).toBeVisible();
+    await expect(text).toHaveCSS("font-size", "14px");
+    const contained = await text.evaluate((element) => {
+      const button = element.closest("button")!;
+      const textRect = element.getBoundingClientRect();
+      const buttonRect = button.getBoundingClientRect();
+      return textRect.left >= buttonRect.left && textRect.right <= buttonRect.right
+        && textRect.top >= buttonRect.top && textRect.bottom <= buttonRect.bottom;
+    });
+    expect(contained).toBe(true);
+  }
+  await engineGroup.screenshot({ path: testInfo.outputPath("engine-guidance.png") });
+  await expectNoHorizontalScroll(page);
+
+  const question = nl2sqlQuestionInput(page);
+  await question.fill("請求金額を一覧で見たい");
+  const agent = engineGroup.getByRole("button", { name: /^Select AI Agent/ });
+  await agent.focus();
+  await page.keyboard.press("Enter");
+  await expect(agent).toHaveAttribute("aria-pressed", "true");
+  await expect(selectAi).toHaveAttribute("aria-pressed", "false");
+  await page.keyboard.press("Tab");
+  const direct = engineGroup.getByRole("button", { name: /^Enterprise AI Direct/ });
+  await expect(direct).toBeFocused();
+  await page.keyboard.press("Space");
+  await expect(direct).toHaveAttribute("aria-pressed", "true");
+  await expect(agent).toHaveAttribute("aria-pressed", "false");
+  await selectAi.click();
+  await expect(selectAi).toHaveAttribute("aria-pressed", "true");
+  await expect(direct).toHaveAttribute("aria-pressed", "false");
+  await expect(question).toHaveValue("請求金額を一覧で見たい");
 });
 
 test("SQL 系の必須入力欄は既存の必須マークと required 属性で統一する", async ({ page }) => {
@@ -4673,7 +4714,7 @@ test("参考履歴は件数を表示し、候補があれば自動で展開す�
 });
 
 for (const { engine, name } of [
-  { engine: "select_ai", name: /Select AI DBMS_CLOUD_AI profile/ },
+  { engine: "select_ai", name: /^Select AI 質問に表や項目/ },
   { engine: "select_ai_agent", name: /Select AI Agent/ },
 ]) {
   test(`${engine} は参考履歴を表示・取得せず、Direct への切替で再開する`, async ({ page }, testInfo) => {
@@ -4894,7 +4935,7 @@ test("参考履歴の取得失敗後も Select AI 系では取得せず、Direct
   await expect.poll(() => requests.length).toBe(1);
   const header = page.getByRole("button", { name: /参考履歴/ });
   await expect(header).toHaveCount(0);
-  for (const name of [/Select AI DBMS_CLOUD_AI profile/, /Select AI Agent/]) {
+  for (const name of [/^Select AI 質問に表や項目/, /Select AI Agent/]) {
     await page.getByRole("button", { name }).click();
     await page.waitForTimeout(900);
     expect(requests).toEqual(["enterprise_ai_direct"]);
@@ -6729,7 +6770,7 @@ test("Select AI の今回だけの生成条件を job に渡し、reset で消�
   await page.setViewportSize({ width: 375, height: 900 });
   await page.goto("/query");
 
-  await page.getByRole("button", { name: /Select AI DBMS_CLOUD_AI profile/ }).click();
+  await page.getByRole("button", { name: /^Select AI 質問に表や項目/ }).click();
   const disclosure = page.getByRole("button", { name: "今回だけの生成条件" });
   await expectButtonBelowInput(nl2sqlQuestionInput(page), disclosure);
   await expect(disclosure).toHaveAttribute("aria-expanded", "false");
@@ -6772,7 +6813,7 @@ test("Select AI の今回だけの生成条件を job に渡し、reset で消�
   });
 
   api.jobPayload = null;
-  await page.getByRole("button", { name: /Select AI DBMS_CLOUD_AI profile/ }).click();
+  await page.getByRole("button", { name: /^Select AI 質問に表や項目/ }).click();
   await page.getByRole("button", { name: "SQL を生成して実行" }).click();
   await expect.poll(() => api.jobPayload?.engine).toBe("select_ai");
   expect(api.jobPayload).toMatchObject({
@@ -7869,7 +7910,7 @@ test("dark theme keeps the SQL workbench text, controls and active states legibl
   const heading = page.getByRole("heading", { name: "NL2SQL 検索ワークベンチ" });
   const question = nl2sqlQuestionInput(page);
   const selectedEngine = page.getByRole("button", {
-    name: /Select AI DBMS_CLOUD_AI profile/u,
+    name: /^Select AI 質問に表や項目/u,
   });
   const executeButton = page.getByRole("button", { name: "SQL を生成して実行" });
   const activeQueryLink = page

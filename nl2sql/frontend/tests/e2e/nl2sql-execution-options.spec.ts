@@ -874,7 +874,7 @@ test("select ai overrides show inactive notice for other engines and role can co
   });
 
   api.jobPayload = null;
-  await page.getByRole("button", { name: /Select AI DBMS_CLOUD_AI profile/ }).click();
+  await page.getByRole("button", { name: /^Select AI 質問に表や項目/ }).click();
   await page.getByRole("button", { name: "SQL を生成して実行" }).click();
   await expect.poll(() => api.jobPayload).not.toBeNull();
   expect(api.jobPayload).toMatchObject({

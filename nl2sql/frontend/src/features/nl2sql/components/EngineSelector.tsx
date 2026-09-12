@@ -1,4 +1,5 @@
 import { Bot, Check, DatabaseZap, Sparkles } from "lucide-react";
+import { useId } from "react";
 
 import { Button } from "@/components/ui/button";
 
@@ -38,9 +39,11 @@ export function EngineSelector({
   onChange: (value: Nl2SqlEngine) => void;
   disabled?: boolean;
 }) {
+  const helpId = useId();
   return (
-    <fieldset className="space-y-3">
-      <legend className="text-sm font-semibold text-foreground">{t("nl2sql.engine.label")}</legend>
+    <fieldset className="min-w-0 space-y-3" aria-describedby={helpId}>
+      <legend className="text-base font-semibold text-foreground">{t("nl2sql.engine.label")}</legend>
+      <p id={helpId} className="text-base leading-relaxed text-muted">{t("nl2sql.engine.help")}</p>
       <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
         {ENGINE_OPTIONS.map((option) => {
           const selected = option.value === value;
@@ -58,9 +61,9 @@ export function EngineSelector({
               onClick={() => onChange(option.value)}
             >
               <EngineIcon engine={option.value} />
-              <span className="grid gap-1">
-                <span className="text-sm font-semibold">{option.label}</span>
-                <span className="text-xs font-normal opacity-80">{option.description}</span>
+              <span className="grid min-w-0 flex-1 gap-1 text-left">
+                <span className="text-base font-semibold">{option.label}</span>
+                <span className="text-base font-normal leading-relaxed opacity-80">{option.description}</span>
               </span>
               {selected ? <Check size={16} aria-hidden="true" className="ml-auto shrink-0" /> : null}
             </Button>
