@@ -1077,9 +1077,7 @@ test("AI オントロジー構築の実行 → 進捗 → Markdown 下書き編�
     ontologyQueryPanel.getByRole("heading", { name: "質問のオントロジー接地確認用グラフ" })
   ).toBeVisible();
   await expect.poll(() => state.ontologyViewCalls).toBe(1);
-  await expect(ontologyQueryPanel.getByTestId("ontology-playground-version")).toHaveText(
-    "公開済みバージョン: v3"
-  );
+  await expect(ontologyQueryPanel.getByTestId("ontology-playground-version")).toHaveCount(0);
   const graphExpandButton = ontologyQueryPanel.getByRole("button", { name: "グラフを表示" });
   if (await graphExpandButton.isVisible()) {
     await graphExpandButton.click();
@@ -1105,9 +1103,7 @@ test("AI オントロジー構築の実行 → 進捗 → Markdown 下書き編�
   expect(state.publishPayload).toMatchObject({ etag: "draft-etag-4", profile_id: "default" });
   await expect(page.getByTestId("ontology-publish-status")).toContainText("完了");
   await expect.poll(() => state.ontologyViewCalls).toBeGreaterThan(ontologyViewCallsBeforePublish);
-  await expect(ontologyQueryPanel.getByTestId("ontology-playground-version")).toHaveText(
-    "公開済みバージョン: v4"
-  );
+  await expect(ontologyQueryPanel.getByTestId("ontology-playground-version")).toHaveCount(0);
   await expect(page.getByTestId("ontology-mermaid-panel")).toHaveCount(0);
   await markdown.getByRole("tab", { name: "公開済み Markdown オントロジー" }).click();
   await expect(markdown.getByTestId("ontology-markdown-published-viewer")).toContainText(

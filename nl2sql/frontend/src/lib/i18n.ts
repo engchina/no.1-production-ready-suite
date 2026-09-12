@@ -1311,7 +1311,6 @@ const nl2sqlJa = {
   "ontologyPlayground.emptyFlow": "準備: AI 構築 → Markdown 下書き確認 → オントロジー公開",
   "ontologyPlayground.readyHint":
     "質問を入力すると、一致したノードと関係をグラフで強調表示します。",
-  "ontologyPlayground.graphStats": "確認対象: {nodes} ノード / {edges} 関係",
   "ontologyPlayground.graphSection": "オントロジーグラフ",
   "ontologyPlayground.graphExpand": "グラフを表示",
   "ontologyPlayground.graphCollapse": "グラフを隠す",
@@ -1320,7 +1319,6 @@ const nl2sqlJa = {
   "ontologyPlayground.run": "接地を確認",
   "ontologyPlayground.clear": "質問・確認結果をクリア",
   "ontologyPlayground.clearAriaLabel": "質問・確認結果をクリア",
-  "ontologyPlayground.graphRevision": "公開済みバージョン: v{version}",
   "ontologyPlayground.suggestions": "候補",
   "ontologyPlayground.stage.entityDefinition": "エンティティの一致",
   "ontologyPlayground.stage.listAll": "一覧照会",

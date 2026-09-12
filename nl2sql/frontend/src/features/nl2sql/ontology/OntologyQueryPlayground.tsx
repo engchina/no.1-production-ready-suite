@@ -721,12 +721,6 @@ export function OntologyQueryPlayground({
   const serverSearchSeqRef = useRef(0);
 
   const hasGraph = Boolean(graph && graph.nodes.length > 0);
-  const graphStats = graph
-    ? t("ontologyPlayground.graphStats", {
-        nodes: graph.nodes.length,
-        edges: graph.edges.length,
-      })
-    : "";
   const graphRevisionId = graph?.revision?.id ?? graph?.revision_id ?? "";
 
   const resetGroundingState = ({ clearQuestion = false }: { clearQuestion?: boolean } = {}) => {
@@ -923,17 +917,6 @@ export function OntologyQueryPlayground({
         />
       ) : (
         <div className="grid gap-3">
-          <div className="flex flex-wrap items-center gap-2" data-testid="ontology-playground-graph-summary">
-            <StatusBadge variant="neutral" label={graphStats} />
-            {graph?.revision?.version ? (
-              <span data-testid="ontology-playground-version">
-                <StatusBadge
-                  variant="neutral"
-                  label={t("ontologyPlayground.graphRevision", { version: graph.revision.version })}
-                />
-              </span>
-            ) : null}
-          </div>
           <form
             className="space-y-1.5"
             onSubmit={(event) => {
@@ -1000,7 +983,6 @@ export function OntologyQueryPlayground({
               <p className="text-sm leading-6 text-foreground">
                 {t("ontologyPlayground.readyHint")}
               </p>
-              <p className="text-xs leading-5 text-muted">{graphStats}</p>
             </div>
           ) : null}
           {result ? (

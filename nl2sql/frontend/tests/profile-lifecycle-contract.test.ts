@@ -97,9 +97,8 @@ test("Ontology workspace is loaded only by the explicit fetch action", () => {
   assert.match(messages, /オントロジー情報は未取得です/u);
 });
 
-test("Grounding graph displays the published version and supports reset", () => {
+test("Grounding graph tracks revision changes and supports reset", () => {
   assert.match(ontologyQueryPlayground, /graphRevisionId/u);
-  assert.match(ontologyQueryPlayground, /ontology-playground-version/u);
   assert.match(ontologyQueryPlayground, /resetGroundingState/u);
   assert.match(ontologyQueryPlayground, /ontology-playground-clear/u);
   assert.match(messages, /質問・確認結果をクリア/u);

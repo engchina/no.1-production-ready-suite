@@ -577,15 +577,22 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
 }
 
 for (const version of [1, 2]) {
-  test(`公開版を内部 ID ではなく v${version} と表示する`, async ({ page }, testInfo) => {
+  test(`公開版 v${version} の接地確認に件数と版番号を表示しない`, async ({ page }, testInfo) => {
     await mockApi(page, { revisionVersion: version });
     await page.goto("/ontology-build?profile=default");
     await page.getByTestId("ontology-view-fetch").click();
-    const summary = page.getByTestId("ontology-playground-graph-summary");
-    await expect(summary.getByTestId("ontology-playground-version")).toHaveText(`公開済みバージョン: v${version}`);
-    await expect(summary).not.toContainText("rev1");
+    const playground = page.getByRole("region", { name: "質問のオントロジー接地確認用グラフ" });
+    await expect(playground.getByTestId("ontology-playground-question")).toBeVisible();
+    await expect(playground.getByTestId("ontology-playground-graph-summary")).toHaveCount(0);
+    await expect(playground.getByTestId("ontology-playground-version")).toHaveCount(0);
+    await expect(playground).not.toContainText("確認対象:");
+    await expect(playground).not.toContainText("公開済みバージョン:");
+    await expect(playground.getByTestId("ontology-playground-ready-state")).toHaveText(
+      "質問を入力すると、一致したノードと関係をグラフで強調表示します。"
+    );
     await expectNoHorizontalScroll(page);
-    await summary.screenshot({ path: testInfo.outputPath(`published-v${version}.png`) });
+    await playground.getByRole("heading", { name: "質問のオントロジー接地確認用グラフ", exact: true }).scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath(`grounding-without-summary-v${version}.png`) });
   });
 }
 
@@ -652,10 +659,8 @@ test("グラフはカード表示 + 検索 + 詳細ノードの折畳ができ�
   await expect(
     playground.getByText("質問を入力すると、一致したノードと関係をグラフで強調表示します。")
   ).toBeVisible();
-  await expect(playground.getByTestId("ontology-playground-graph-summary")).toContainText(
-    "確認対象: 5 ノード / 30 関係"
-  );
-  await expect(playground.getByTestId("ontology-playground-version")).toHaveText("公開済みバージョン: v1");
+  await expect(playground).not.toContainText("確認対象:");
+  await expect(playground).not.toContainText("公開済みバージョン:");
   await expect(playground.getByTestId("ontology-playground-clear")).toBeDisabled();
   await expectQuestionActionLayoutWithClear(page, playground);
   await expectNoHorizontalScroll(page);
