@@ -130,6 +130,7 @@ from .models import (
     SampleDataInfo,
     SampleDataMutationData,
     SampleDataMutationRequest,
+    SampleDataset,
     SelectAiAgentAssetsData,
     SelectAiDbProfileDetailData,
     SelectAiDbProfileDropRequest,
@@ -1455,9 +1456,9 @@ def seed_demo_learning() -> ApiResponse[DemoLearningData]:
 
 
 @router.get("/sample-data", response_model=ApiResponse[SampleDataInfo])
-def sample_data_info() -> ApiResponse[SampleDataInfo]:
+def sample_data_info(dataset: SampleDataset = SampleDataset.HR) -> ApiResponse[SampleDataInfo]:
     """Optional SQL Assist sample package status / SQL preview."""
-    return ApiResponse(data=nl2sql_service.sample_data_info())
+    return ApiResponse(data=nl2sql_service.sample_data_info(dataset))
 
 
 @router.post("/sample-data/import", response_model=ApiResponse[SampleDataMutationData])

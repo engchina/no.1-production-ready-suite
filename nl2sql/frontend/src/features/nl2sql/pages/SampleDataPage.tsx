@@ -1,4 +1,4 @@
-import { useResetExecutionConsent } from "@/components/WorkspaceState";
+import { useResetExecutionConsent, useWorkspaceActivation, useWorkspaceState } from "@/components/WorkspaceState";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Database, FileSpreadsheet, RefreshCw, Trash2 } from "lucide-react";
 
@@ -26,13 +26,14 @@ import {
 } from "../components/SchemaRefreshFeedback";
 import { useSchemaRefreshJob } from "../incrementalQueries";
 import { useSchemaRefreshCoordinator } from "../SchemaRefreshCoordinator";
-import type { SampleDataInfo, SampleDataMutationData, SchemaRefreshJob } from "../types";
+import type { SampleDataInfo, SampleDataMutationData, SampleDataset, SchemaRefreshJob } from "../types";
 
 type SampleStep = "tables" | "views" | "data" | "all";
 type SampleAction = "import" | "delete";
 
 const SAMPLE_DATA_ID = "sample-data";
 const SAMPLE_STEPS: SampleStep[] = ["all", "tables", "views", "data"];
+const SAMPLE_DATASETS: SampleDataset[] = ["hr", "sales", "inquiries"];
 
 function sampleStepLabel(step: SampleStep) {
   return t(`dataTools.sample.step.${step}`);
@@ -117,9 +118,11 @@ function SampleSqlPreview({ sql }: { sql: string }) {
 }
 
 export function SampleDataPage() {
+  const [dataset, setDataset] = useWorkspaceState<SampleDataset>("sampleData.dataset", "hr");
   const [sampleInfo, setSampleInfo] = useState<SampleDataInfo | null>(null);
-  const [sampleStep, setSampleStep] = useState<SampleStep>("all");
-  const [activeAction, setActiveAction] = useState<SampleAction>("import");
+  const [sampleLoadFailed, setSampleLoadFailed] = useState(false);
+  const [sampleStep, setSampleStep] = useWorkspaceState<SampleStep>("sampleData.step", "all");
+  const [activeAction, setActiveAction] = useWorkspaceState<SampleAction>("sampleData.action", "import");
   const [sampleConfirmation, setSampleConfirmation] = useState("");
   const [sampleResult, setSampleResult] = useState<SampleDataMutationData | null>(null);
   const [schemaRefreshJobId, setSchemaRefreshJobId] = useState("");
@@ -139,8 +142,10 @@ export function SampleDataPage() {
       : t("dataMgmt.schemaJob.error")
     : schemaRefreshError || sharedSchemaRefresh.error;
 
-  const expectedConfirmation = sampleInfo?.confirmation ?? "SQL_ASSIST_SAMPLE";
-  const confirmationMatched = sampleConfirmation.trim() === expectedConfirmation;
+  const sampleInfoUrl = dataset === "hr" ? "/api/nl2sql/sample-data" : `/api/nl2sql/sample-data?dataset=${encodeURIComponent(dataset)}`;
+  const sampleReady = Boolean(sampleInfo) && (sampleInfo?.dataset ?? "hr") === dataset && !sampleLoadFailed;
+  const expectedConfirmation = sampleInfo?.confirmation ?? "";
+  const confirmationMatched = sampleReady && Boolean(expectedConfirmation) && sampleConfirmation.trim() === expectedConfirmation;
   const isDeleteAction = activeAction === "delete";
 
   const sampleSqlPreview = useMemo(() => {
@@ -150,7 +155,7 @@ export function SampleDataPage() {
     return joinSql(steps.flatMap((step) => sampleInfo.sql[step] ?? []));
   }, [activeAction, sampleInfo, sampleStep]);
 
-  useResetExecutionConsent(() => setSampleConfirmation(""), JSON.stringify([activeAction, sampleStep, sampleSqlPreview, expectedConfirmation]));
+  useResetExecutionConsent(() => setSampleConfirmation(""), JSON.stringify([dataset, activeAction, sampleStep, sampleSqlPreview, expectedConfirmation]));
 
   const load = async (announce = false) => {
     if (loading) return;
@@ -160,8 +165,11 @@ export function SampleDataPage() {
     setMessage("");
     try {
       await runScopedRequest(async (signal) => {
-        const data = await apiGet<SampleDataInfo>("/api/nl2sql/sample-data", { signal });
-        if (!signal.aborted && sequence === loadSequence.current) setSampleInfo(data);
+        const data = await apiGet<SampleDataInfo>(sampleInfoUrl, { signal });
+        if (!signal.aborted && sequence === loadSequence.current) {
+          setSampleInfo(data);
+          setSampleLoadFailed(false);
+        }
       });
       if (announce && sequence === loadSequence.current) {
         toast.success(t("common.action.refreshed"));
@@ -170,6 +178,7 @@ export function SampleDataPage() {
       if (isAbortError(err)) {
         return;
       }
+      setSampleLoadFailed(true);
       setMessage(err instanceof Error ? err.message : t("dataTools.error.sample"));
     } finally {
       if (sequence === loadSequence.current) setLoading("");
@@ -182,10 +191,21 @@ export function SampleDataPage() {
       loadSequence.current += 1;
       abortAll();
     };
-  }, []);
+  }, [dataset]);
+
+  // 初回取得は上の effect が担い、keep-alive からの復帰時は状態だけ再検証する。
+  const visited = useRef(false);
+  useWorkspaceActivation(() => {
+    if (visited.current) void load();
+    visited.current = true;
+  });
 
   const reloadSampleState = async () => {
-    setSampleInfo(await apiGet<SampleDataInfo>("/api/nl2sql/sample-data"));
+    const sequence = loadSequence.current;
+    await runScopedRequest(async (signal) => {
+      const info = await apiGet<SampleDataInfo>(sampleInfoUrl, { signal });
+      if (!signal.aborted && sequence === loadSequence.current) setSampleInfo(info);
+    });
   };
 
   const refreshSchema = async () => {
@@ -247,6 +267,7 @@ export function SampleDataPage() {
     setMessage("");
     try {
       const result = await apiPost<SampleDataMutationData>("/api/nl2sql/sample-data/import", {
+        dataset,
         step: sampleStep,
         confirmation: sampleConfirmation.trim(),
         reason: "ui-sample-import",
@@ -268,6 +289,7 @@ export function SampleDataPage() {
     setMessage("");
     try {
       const result = await apiPost<SampleDataMutationData>("/api/nl2sql/sample-data/delete", {
+        dataset,
         step: "all",
         confirmation: sampleConfirmation.trim(),
         reason: "ui-sample-delete",
@@ -283,7 +305,10 @@ export function SampleDataPage() {
   };
 
   const actionTitle = isDeleteAction ? t("dataTools.sample.delete") : t("dataTools.sample.import");
-  const actionDescription = isDeleteAction ? t("dataTools.sample.deleteHint") : t("dataTools.sample.importHint");
+  const datasetLabel = t(`dataTools.sample.dataset.${dataset}`);
+  const actionDescription = isDeleteAction
+    ? t("dataTools.sample.deleteHint", { name: datasetLabel })
+    : t("dataTools.sample.importHint", { name: datasetLabel });
   const pageNoticeActionLoading = schemaRefreshNeedsFull
     ? schemaRefreshing
     : loading === "load";
@@ -317,7 +342,9 @@ export function SampleDataPage() {
               ? { tone: "danger", message }
               : visibleSchemaRefreshError
                 ? { tone: "danger", message: visibleSchemaRefreshError }
-                : null
+                : sampleInfo?.warnings.length
+                  ? { tone: "warning", message: sampleInfo.warnings.join("\n") }
+                  : null
           }
           action={
             <Button
@@ -341,6 +368,32 @@ export function SampleDataPage() {
             </Button>
           }
         />
+
+        <section className="grid min-w-0 gap-2" aria-label={t("dataTools.sample.dataset.label")}>
+          <label className="grid gap-1 text-sm font-medium text-foreground">
+            <span>{t("dataTools.sample.dataset.label")}</span>
+            <select
+              value={dataset}
+              disabled={Boolean(loading) || schemaRefreshing}
+              aria-describedby="sample-data-dataset-description"
+              onChange={(event) => {
+                setSampleInfo(null);
+                setSampleResult(null);
+                setSampleConfirmation("");
+                setMessage("");
+                setSchemaRefreshError("");
+                setSchemaRefreshNeedsFull(false);
+                setSchemaRefreshJobId("");
+                setDataset(event.currentTarget.value as SampleDataset);
+              }}
+              className="min-h-11 w-full min-w-0 rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:ring-2 focus:ring-ring/40 sm:max-w-md"
+            >
+              {SAMPLE_DATASETS.map((item) => <option key={item} value={item}>{t(`dataTools.sample.dataset.${item}`)}</option>)}
+            </select>
+          </label>
+          <p id="sample-data-dataset-description" className="text-sm text-muted">{t(`dataTools.sample.dataset.${dataset}.description`)}</p>
+          <p className="text-sm text-muted">{t(`dataTools.sample.dataset.${dataset}.example`)}</p>
+        </section>
 
         <DbObjectManagementTabs
           activeView={activeAction}

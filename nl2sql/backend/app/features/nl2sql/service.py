@@ -216,6 +216,7 @@ from .models import (
     SampleDataInfo,
     SampleDataMutationData,
     SampleDataMutationRequest,
+    SampleDataset,
     SampleDataStep,
     SchemaCatalog,
     SchemaCatalogHead,
@@ -293,6 +294,7 @@ from .reverse_prompts import (
     source_prompt,
     stage_prompt,
 )
+from .sample_datasets import SAMPLE_DATASETS
 from .sql_lexing import prepare_oracle_query
 from .sql_semantics import parse_oracle_sql
 from .store import MemoryNl2SqlStore, Nl2SqlStore, OracleJsonNl2SqlStore
@@ -680,7 +682,6 @@ def _is_oracle_connection_failure(exc: Exception) -> bool:
 _JoinWherePromptProfile = Literal["sql_structure"]
 
 _SAMPLE_PROFILE_ID = "sql_assist_sample"
-_SAMPLE_CONFIRMATION = "SQL_ASSIST_SAMPLE"
 _LEGACY_LEARNING_MATERIAL_SINGLETON = "legacy_learning_material"
 # 推薦信頼度の平滑化定数。strength = s/(s+K) で、確かな 2 ヒット(≒score 3)が
 # strength≈0.5 になるよう K=3 とする（散在していた除数 6 を置換する唯一の定数）。
@@ -715,13 +716,6 @@ _PROFILE_RECOMMENDATION_TEMPLATE_LABEL_RE = re.compile(
     r"(?:対象\s*テーブル|対象\s*表|抽出\s*項目|抽出\s*条件)\s*[：:]*",
     flags=re.I,
 )
-_SAMPLE_OBJECTS = [
-    "DEPARTMENT",
-    "EMPLOYEE",
-    "PROJECT",
-    "V_EMP_DEPT",
-    "V_DEPT_PROJECT",
-]
 _SAMPLE_IMPORT_IDEMPOTENT_ERROR_CODES = frozenset({"ORA-00955", "ORA-00001"})
 _SAMPLE_DELETE_IDEMPOTENT_ERROR_CODES = frozenset({"ORA-00942"})
 _SAMPLE_EXECUTED_STATUSES = frozenset({"success", "skipped"})
@@ -738,8 +732,6 @@ _SYNTHETIC_DATA_UNSUPPORTED_DATA_TYPES = {
     "VECTOR",
     "XMLTYPE",
 }
-_SAMPLE_TABLES = ["DEPARTMENT", "EMPLOYEE", "PROJECT"]
-_SAMPLE_VIEWS = ["V_EMP_DEPT", "V_DEPT_PROJECT"]
 _SCHEMA_EMPTY_MESSAGE = (
     "Schema catalog が空です。Oracle schema を refresh するか、"
     "Data Tools から sample data を明示的に import してください。"
@@ -4648,25 +4640,28 @@ class Nl2SqlService:
                 observation.__exit__(None, None, None)
             self._schema_refresh_lock.release()
 
-    def sample_data_info(self) -> SampleDataInfo:
-        sql = self._sample_sql_sections()
+    def sample_data_info(self, dataset: SampleDataset = SampleDataset.HR) -> SampleDataInfo:
+        sql = self._sample_sql_sections(dataset)
         warnings: list[str] = []
-        imported = self._sample_imported_objects(warnings=warnings)
+        imported = self._sample_imported_objects(dataset, warnings=warnings)
         return SampleDataInfo(
             runtime="oracle" if self._use_oracle_runtime() else "deterministic",
             profile_id="",
-            confirmation=_SAMPLE_CONFIRMATION,
-            objects=list(_SAMPLE_OBJECTS),
+            dataset=dataset,
+            confirmation=SAMPLE_DATASETS[dataset].confirmation,
+            objects=list(SAMPLE_DATASETS[dataset].objects),
             imported_objects=imported,
             sql=sql,
             warnings=warnings,
         )
 
     def import_sample_data(self, request: SampleDataMutationRequest) -> SampleDataMutationData:
+        self._require_sample_data_permission()
         started = time.monotonic()
         created_at = _utc_now()
+        dataset = request.dataset
         step = request.step
-        sql_sections = self._sample_sql_sections()
+        sql_sections = self._sample_sql_sections(dataset)
         statements = self._sample_import_statements(step, sql_sections)
         warnings: list[str] = []
         executed = False
@@ -4674,7 +4669,7 @@ class Nl2SqlService:
         schema_refresh_required = False
         schema_refresh_reason_code = ""
         results: list[DbAdminStatementResult]
-        confirmation_error = self._sample_confirmation_error(request.confirmation)
+        confirmation_error = self._sample_confirmation_error(request.confirmation, dataset)
         if confirmation_error:
             warnings.append(confirmation_error)
             results = self._statement_results(
@@ -4715,11 +4710,12 @@ class Nl2SqlService:
                     try:
                         self._record_admin_audit(
                             operation="sample_data_import",
-                            target=",".join(_SAMPLE_OBJECTS),
+                            target=",".join(SAMPLE_DATASETS[dataset].objects),
                             executed=True,
                             reason=request.reason or "sql-assist-sample-import",
                             detail={
                                 "step": step.value,
+                                "dataset": dataset.value,
                                 "statement_count": len(statements),
                                 "success_count": sum(
                                     1
@@ -4739,13 +4735,14 @@ class Nl2SqlService:
                         schema_refresh_required,
                         schema_refresh_reason_code,
                     ) = self._submit_sample_schema_refresh(
+                        dataset=dataset,
                         step=step,
                         expected_state="present",
                         source="sample_data_import",
                         warnings=warnings,
                     )
         else:
-            blocker = self._sample_deterministic_import_blocker(step)
+            blocker = self._sample_deterministic_import_blocker(step, dataset)
             if blocker:
                 warnings.append(blocker)
                 results = self._statement_results(
@@ -4754,16 +4751,17 @@ class Nl2SqlService:
                     error_message=blocker,
                 )
             else:
-                self._apply_sample_import_to_catalog(step)
+                self._apply_sample_import_to_catalog(step, dataset)
                 results = self._statement_results(statements, status="applied_to_local_state")
                 executed = True
                 self._persist_local_catalog()
         return SampleDataMutationData(
             operation="import",
+            dataset=dataset,
             step=step,
             runtime="oracle" if self._use_oracle_runtime() else "deterministic",
             executed=executed,
-            objects=list(_SAMPLE_OBJECTS),
+            objects=list(SAMPLE_DATASETS[dataset].objects),
             statements=results,
             warnings=warnings,
             profile_id="",
@@ -4774,16 +4772,18 @@ class Nl2SqlService:
         )
 
     def delete_sample_data(self, request: SampleDataMutationRequest) -> SampleDataMutationData:
+        self._require_sample_data_permission()
         started = time.monotonic()
         created_at = _utc_now()
-        statements = self._sample_sql_sections()["delete"]
+        dataset = request.dataset
+        statements = self._sample_sql_sections(dataset)["delete"]
         warnings: list[str] = []
         executed = False
         schema_refresh_job_id = ""
         schema_refresh_required = False
         schema_refresh_reason_code = ""
         results: list[DbAdminStatementResult]
-        confirmation_error = self._sample_confirmation_error(request.confirmation)
+        confirmation_error = self._sample_confirmation_error(request.confirmation, dataset)
         if confirmation_error:
             warnings.append(confirmation_error)
             results = self._statement_results(
@@ -4831,28 +4831,30 @@ class Nl2SqlService:
                         schema_refresh_required,
                         schema_refresh_reason_code,
                     ) = self._submit_sample_schema_refresh(
+                        dataset=dataset,
                         step=SampleDataStep.ALL,
                         expected_state="absent",
                         source="sample_data_delete",
                         warnings=warnings,
                     )
             if executed:
-                self._remove_sample_from_state()
+                self._remove_sample_from_state(dataset)
                 try:
                     self._persist_local_catalog()
                 except (Nl2SqlPersistenceUnavailable, Nl2SqlRepositoryOperationFailed) as exc:
                     warnings.append(f"Sample data 削除後の catalog 保存に失敗しました: {exc}")
         else:
-            self._remove_sample_from_state()
+            self._remove_sample_from_state(dataset)
             results = self._statement_results(statements, status="applied_to_local_state")
             executed = True
             self._persist_local_catalog()
         return SampleDataMutationData(
             operation="delete",
+            dataset=dataset,
             step=SampleDataStep.ALL,
             runtime="oracle" if self._use_oracle_runtime() else "deterministic",
             executed=executed,
-            objects=list(_SAMPLE_OBJECTS),
+            objects=list(SAMPLE_DATASETS[dataset].objects),
             statements=results,
             warnings=warnings,
             profile_id="",
@@ -4862,8 +4864,21 @@ class Nl2SqlService:
             timing=self._timing(created_at, started, "sample_data_delete"),
         )
 
-    def _sample_sql_sections(self) -> dict[str, list[str]]:
-        base = Path(__file__).with_name("sample_data") / "sql_assist_sample"
+    @staticmethod
+    def _require_sample_data_permission() -> None:
+        if not get_settings().app_auth_enabled:
+            return
+        from app.security.permissions import SAMPLE_DATA_MANAGE_PERMISSION
+        from app.security.service import SecurityApiError, get_security_service
+
+        principal = get_security_service().principal_for_worker(current_actor_context().user_uuid)
+        if not principal.has_permission(SAMPLE_DATA_MANAGE_PERMISSION):
+            raise SecurityApiError(403, "サンプルデータを操作する権限がありません。")
+
+    def _sample_sql_sections(
+        self, dataset: SampleDataset = SampleDataset.HR
+    ) -> dict[str, list[str]]:
+        base = Path(__file__).with_name("sample_data") / SAMPLE_DATASETS[dataset].directory
         return {
             name: _split_sql_statements((base / f"{name}.sql").read_text(encoding="utf-8"))
             for name in ("tables", "views", "data", "delete")
@@ -4893,15 +4908,16 @@ class Nl2SqlService:
         self,
         *,
         step: SampleDataStep,
+        dataset: SampleDataset = SampleDataset.HR,
         expected_state: Literal["present", "absent"],
         source: str,
         warnings: list[str],
     ) -> tuple[str, bool, str]:
         object_names: list[tuple[str, Literal["table", "view"]]] = []
         if step in {SampleDataStep.TABLES, SampleDataStep.DATA, SampleDataStep.ALL}:
-            object_names.extend((name, "table") for name in _SAMPLE_TABLES)
+            object_names.extend((name, "table") for name in SAMPLE_DATASETS[dataset].tables)
         if step in {SampleDataStep.VIEWS, SampleDataStep.ALL}:
-            object_names.extend((name, "view") for name in _SAMPLE_VIEWS)
+            object_names.extend((name, "view") for name in SAMPLE_DATASETS[dataset].views)
         targets: list[SchemaRefreshTargetObject] = []
         for name, object_type in object_names:
             target = self._schema_refresh_target_for_object_name(
@@ -4923,11 +4939,15 @@ class Nl2SqlService:
             warnings.append(_schema_refresh_required_warning(sync.reason_code))
         return sync.job_id, sync.required, sync.reason_code
 
-    def _sample_deterministic_import_blocker(self, step: SampleDataStep) -> str:
+    def _sample_deterministic_import_blocker(
+        self, step: SampleDataStep, dataset: SampleDataset = SampleDataset.HR
+    ) -> str:
         if step not in {SampleDataStep.DATA, SampleDataStep.VIEWS}:
             return ""
-        existing_tables = self._sample_existing_table_names()
-        missing_tables = [name for name in _SAMPLE_TABLES if name not in existing_tables]
+        existing_tables = self._sample_existing_table_names(dataset)
+        missing_tables = [
+            name for name in SAMPLE_DATASETS[dataset].tables if name not in existing_tables
+        ]
         if not missing_tables:
             return ""
         missing_text = ", ".join(missing_tables)
@@ -4941,27 +4961,30 @@ class Nl2SqlService:
             f"不足 table: {missing_text}。先に tables または all を実行してください。"
         )
 
-    def _sample_existing_table_names(self) -> set[str]:
+    def _sample_existing_table_names(self, dataset: SampleDataset = SampleDataset.HR) -> set[str]:
         current_owner = self._current_schema_owner()
         return {
             table.table_name.upper()
             for table in self._catalog.tables
             if (table.owner or current_owner).upper() == current_owner
             and table.table_type.lower() != "view"
-            and table.table_name.upper() in _SAMPLE_TABLES
+            and table.table_name.upper() in SAMPLE_DATASETS[dataset].tables
         }
 
-    def _sample_imported_objects(self, *, warnings: list[str] | None = None) -> list[str]:
+    def _sample_imported_objects(
+        self, dataset: SampleDataset = SampleDataset.HR, *, warnings: list[str] | None = None
+    ) -> list[str]:
         current_owner = self._current_schema_owner()
         if self._use_oracle_runtime():
             try:
-                object_keys = {(current_owner, name) for name in _SAMPLE_OBJECTS}
+                object_keys = {(current_owner, name) for name in SAMPLE_DATASETS[dataset].objects}
                 catalog = self._oracle_adapter.fetch_catalog(
                     include_samples=False,
                     object_keys=object_keys,
                 )
                 return self._sample_imported_objects_from_catalog(
                     catalog,
+                    dataset=dataset,
                     current_owner=current_owner,
                 )
             except OracleAdapterError as exc:
@@ -4976,15 +4999,21 @@ class Nl2SqlService:
                 current_owner = self._current_schema_owner()
                 imported = self._sample_imported_objects_from_catalog(
                     catalog,
+                    dataset=dataset,
                     current_owner=current_owner,
                 )
                 if imported:
                     return imported
-                return self._sample_imported_objects_from_profile(current_owner=current_owner)
+                return (
+                    self._sample_imported_objects_from_profile(current_owner=current_owner)
+                    if dataset == SampleDataset.HR
+                    else []
+                )
         catalog = self._sample_cached_catalog(warnings=warnings)
         current_owner = self._current_schema_owner()
         return self._sample_imported_objects_from_catalog(
             catalog,
+            dataset=dataset,
             current_owner=current_owner,
         )
 
@@ -5005,6 +5034,7 @@ class Nl2SqlService:
         self,
         catalog: SchemaCatalog,
         *,
+        dataset: SampleDataset = SampleDataset.HR,
         current_owner: str,
     ) -> list[str]:
         owner_key = current_owner.upper()
@@ -5012,7 +5042,7 @@ class Nl2SqlService:
             ((table.owner or current_owner).upper(), table.table_name.upper())
             for table in catalog.tables
         }
-        return [name for name in _SAMPLE_OBJECTS if (owner_key, name) in existing]
+        return [name for name in SAMPLE_DATASETS[dataset].objects if (owner_key, name) in existing]
 
     def _sample_imported_objects_from_profile(self, *, current_owner: str) -> list[str]:
         try:
@@ -5033,12 +5063,15 @@ class Nl2SqlService:
                 continue
             if identity.owner == owner_key:
                 existing.add(identity.object_name)
-        return [name for name in _SAMPLE_OBJECTS if name in existing]
+        return [name for name in SAMPLE_DATASETS[SampleDataset.HR].objects if name in existing]
 
-    def _sample_confirmation_error(self, confirmation: str) -> str:
-        if confirmation.strip() == _SAMPLE_CONFIRMATION:
+    def _sample_confirmation_error(
+        self, confirmation: str, dataset: SampleDataset = SampleDataset.HR
+    ) -> str:
+        expected = SAMPLE_DATASETS[dataset].confirmation
+        if confirmation.strip() == expected:
             return ""
-        return f"実行するには confirmation に {_SAMPLE_CONFIRMATION} を入力してください。"
+        return f"実行するには confirmation に {expected} を入力してください。"
 
     def _statement_results(
         self,
@@ -5058,7 +5091,9 @@ class Nl2SqlService:
             for index, statement in enumerate(statements, start=1)
         ]
 
-    def _apply_sample_import_to_catalog(self, step: SampleDataStep) -> None:
+    def _apply_sample_import_to_catalog(
+        self, step: SampleDataStep, dataset: SampleDataset = SampleDataset.HR
+    ) -> None:
         current_owner = self._current_schema_owner()
         current = {
             ((table.owner or current_owner).upper(), table.table_name.upper()): table
@@ -5066,12 +5101,12 @@ class Nl2SqlService:
         }
         sample = {
             ((table.owner or current_owner).upper(), table.table_name.upper()): table
-            for table in self._sample_schema_tables(step)
+            for table in self._sample_schema_tables(step, dataset)
         }
         current.update(sample)
         ordered = [
             (current_owner.upper(), name)
-            for name in _SAMPLE_OBJECTS
+            for name in SAMPLE_DATASETS[dataset].objects
             if (current_owner.upper(), name) in current
         ]
         ordered_set = set(ordered)
@@ -5085,9 +5120,9 @@ class Nl2SqlService:
             }
         )
 
-    def _remove_sample_from_state(self) -> None:
+    def _remove_sample_from_state(self, dataset: SampleDataset = SampleDataset.HR) -> None:
         current_owner = self._current_schema_owner()
-        sample_keys = {(current_owner.upper(), name) for name in _SAMPLE_OBJECTS}
+        sample_keys = {(current_owner.upper(), name) for name in SAMPLE_DATASETS[dataset].objects}
         self._catalog = self._catalog.model_copy(
             update={
                 "refreshed_at": _utc_now(),
@@ -5104,6 +5139,8 @@ class Nl2SqlService:
                 "schema_fingerprint": "",
             }
         )
+        if dataset != SampleDataset.HR:
+            return
         profile = self._profiles.get(_SAMPLE_PROFILE_ID)
         if self._incremental_repository is not None:
             current = self._incremental_repository.get_profile(_SAMPLE_PROFILE_ID)
@@ -5143,21 +5180,23 @@ class Nl2SqlService:
         )
         self._schema_cache.clear()
 
-    def _sample_schema_tables(self, step: SampleDataStep) -> list[SchemaTable]:
+    def _sample_schema_tables(
+        self, step: SampleDataStep, dataset: SampleDataset = SampleDataset.HR
+    ) -> list[SchemaTable]:
         current_owner = self._current_schema_owner()
         tables: list[SchemaTable] = []
         if step in {SampleDataStep.TABLES, SampleDataStep.ALL}:
-            tables.extend(self._sample_tables_from_ddl())
+            tables.extend(self._sample_tables_from_ddl(dataset))
         if step in {SampleDataStep.VIEWS, SampleDataStep.ALL}:
-            tables.extend(self._sample_views_from_ddl())
+            tables.extend(self._sample_views_from_ddl(dataset))
         if step in {SampleDataStep.DATA, SampleDataStep.ALL}:
-            row_counts = self._sample_row_counts()
+            row_counts = self._sample_row_counts(dataset)
             if not tables:
                 tables.extend(
                     table
                     for table in self._catalog.tables
                     if (table.owner or current_owner).upper() == current_owner
-                    and table.table_name in _SAMPLE_TABLES
+                    and table.table_name in SAMPLE_DATASETS[dataset].tables
                 )
             tables = [
                 table.model_copy(
@@ -5167,10 +5206,12 @@ class Nl2SqlService:
             ]
         return tables
 
-    def _sample_tables_from_ddl(self) -> list[SchemaTable]:
+    def _sample_tables_from_ddl(
+        self, dataset: SampleDataset = SampleDataset.HR
+    ) -> list[SchemaTable]:
         current_owner = self._current_schema_owner()
         result: list[SchemaTable] = []
-        for statement in self._sample_sql_sections()["tables"]:
+        for statement in self._sample_sql_sections(dataset)["tables"]:
             match = re.search(
                 r"CREATE\s+TABLE\s+([A-Z0-9_]+)\s*\(",
                 statement,
@@ -5226,10 +5267,12 @@ class Nl2SqlService:
             )
         return result
 
-    def _sample_views_from_ddl(self) -> list[SchemaTable]:
+    def _sample_views_from_ddl(
+        self, dataset: SampleDataset = SampleDataset.HR
+    ) -> list[SchemaTable]:
         views: list[SchemaTable] = []
         current_owner = self._current_schema_owner()
-        for statement in self._sample_sql_sections()["views"]:
+        for statement in self._sample_sql_sections(dataset)["views"]:
             match = re.search(
                 r"CREATE\s+OR\s+REPLACE\s+VIEW\s+([A-Z0-9_]+)\s+AS\s+SELECT\s+(.*?)\s+FROM\s+",
                 statement,
@@ -5259,9 +5302,9 @@ class Nl2SqlService:
             )
         return views
 
-    def _sample_row_counts(self) -> dict[str, int]:
+    def _sample_row_counts(self, dataset: SampleDataset = SampleDataset.HR) -> dict[str, int]:
         counts: dict[str, int] = {}
-        for statement in self._sample_sql_sections()["data"]:
+        for statement in self._sample_sql_sections(dataset)["data"]:
             match = re.match(r"INSERT\s+INTO\s+([A-Z0-9_]+)\b", statement, flags=re.I)
             if match:
                 table_name = _normalize_identifier(match.group(1))

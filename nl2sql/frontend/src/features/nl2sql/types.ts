@@ -1115,7 +1115,10 @@ export interface DbAdminExecuteData {
   timing: TimingEnvelope;
 }
 
+export type SampleDataset = "hr" | "sales" | "inquiries";
+
 export interface SampleDataInfo {
+  dataset?: SampleDataset;
   runtime: string;
   profile_id: string;
   confirmation: string;
@@ -1126,6 +1129,7 @@ export interface SampleDataInfo {
 }
 
 export interface SampleDataMutationData {
+  dataset?: SampleDataset;
   operation: string;
   step: "tables" | "views" | "data" | "all";
   runtime: string;

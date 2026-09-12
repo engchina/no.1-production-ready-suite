@@ -53,6 +53,14 @@ class FeedbackRating(StrEnum):
     BAD = "bad"
 
 
+class SampleDataset(StrEnum):
+    """業務別サンプル。未指定は従来の人事サンプル。"""
+
+    HR = "hr"
+    SALES = "sales"
+    INQUIRIES = "inquiries"
+
+
 class SampleDataStep(StrEnum):
     """SQL Assist sample data import step."""
 
@@ -763,6 +771,7 @@ class DbAdminExecuteData(BaseModel):
 class SampleDataInfo(BaseModel):
     """Optional SQL Assist sample package status."""
 
+    dataset: SampleDataset = SampleDataset.HR
     runtime: str = "deterministic"
     profile_id: str = ""
     confirmation: str = "SQL_ASSIST_SAMPLE"
@@ -775,6 +784,7 @@ class SampleDataInfo(BaseModel):
 class SampleDataMutationRequest(AdminExecutionConfirmation):
     """Sample data import/delete execution request."""
 
+    dataset: SampleDataset = SampleDataset.HR
     step: SampleDataStep = SampleDataStep.ALL
 
 
@@ -782,6 +792,7 @@ class SampleDataMutationData(BaseModel):
     """Sample data import/delete response."""
 
     operation: str
+    dataset: SampleDataset = SampleDataset.HR
     step: SampleDataStep = SampleDataStep.ALL
     runtime: str = "deterministic"
     executed: bool = False
