@@ -548,7 +548,10 @@ class MarkdownOntologyWorkspace(ProfileOntologyWorkspaceService):
         authorize_definition_operation(profile_id, actor)
         state = self.runtime.ontology_markdown_state(profile_id)
         bundles = self.list_results(profile_id)
-        current = self.runtime.profile_view(profile_id)[1]
+        prepared = self.runtime.prepare_build_schema_context(profile_id)
+        current = self.runtime.build_proposal_scope(
+            profile_id, schema_fingerprint=str(prepared.schema_fingerprint)
+        )[1]
         definitions, conflicts = merge_definitions(
             profile_id,
             [*legacy_definitions(current), *[d for b in bundles[:1] for d in b.definitions]],

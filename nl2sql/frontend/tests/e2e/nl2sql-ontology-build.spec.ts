@@ -2885,3 +2885,82 @@ test("Markdown 草稿は往復ナビで保持し DB とユーザーを越えて�
   database="database-a";await page.reload();await loadOntologyBuildWorkspace(page);await expect(input).toHaveValue("最初の利用者と DB の草稿");
   user={...systemAdminMe,user_uuid:"other-ontology-user",login_user_id:"OTHER"};await page.reload();await loadOntologyBuildWorkspace(page);await expect(input).toHaveValue(generatedDraftMarkdown);
 });
+
+for (const saveExplicitly of [true, false]) {
+  test(`公開 snapshot の新 ETag で次の草稿を保存できる (${saveExplicitly ? "保存後に公開" : "公開時に保存"})`, async ({ page }, testInfo) => {
+    await mockApi(page);
+    let text = generatedDraftMarkdown;
+    let etag = "draft-before-save";
+    let version = 4;
+    let published = false;
+    let publishedText = "";
+    let saves = 0;
+    let refreshedAfterPublish = false;
+    const state = () => ({
+      ...markdownDraftPayload(text, etag),
+      draft_revision: { id: `revision-draft-${version}`, version, status: "draft", etag: `revision-${version}`, schema_fingerprint: "fp" },
+      draft_version: version,
+      published_revision: published ? { id: "ontology_markdown_snapshot_confirmed", version: 4, status: "published", etag: "snapshot-hash", schema_fingerprint: "fp" } : null,
+      published_version: published ? 4 : null,
+      published_markdown: publishedText,
+    });
+    await page.route("**/api/nl2sql/profiles/*/ontology-markdown", route => {
+      if (published) refreshedAfterPublish = true;
+      return fulfillJson(route, state());
+    });
+    await page.route("**/api/nl2sql/profiles/*/ontology-markdown/draft", route => {
+      const body = route.request().postDataJSON();
+      expect(body.base_etag).toBe(etag);
+      saves += 1;
+      if (published) version = 5;
+      text = body.markdown;
+      etag = `saved-${saves}`;
+      return fulfillJson(route, state());
+    });
+    const preparation = () => ({ id: "check-current", status: "ready", draft_etag: etag, expected_head: "", display_version: 4, findings: [], differences: [], error_message_ja: "" });
+    await page.route("**/ontology-markdown/prepare", route => fulfillJson(route, preparation()));
+    await page.route("**/ontology-markdown/preparations/*", route => fulfillJson(route, preparation()));
+    await page.route("**/ontology-markdown/publish", route => {
+      const body = route.request().postDataJSON();
+      expect(body.draft_etag).toBe(etag);
+      const requested = etag;
+      published = true;
+      publishedText = text;
+      // 実 backend は草稿を draft のまま保ち、CAS で ETag だけを更新する。
+      etag = "draft-after-publication-cas";
+      return fulfillJson(route, { job: { id: "ontology_markdown_snapshot_confirmed", revision_id: "ontology_markdown_snapshot_confirmed", requested_etag: requested, status: "succeeded" } });
+    });
+    await page.goto("/ontology-build?profile=default");
+    await loadOntologyBuildWorkspace(page);
+    const editor = page.getByTestId("ontology-markdown-draft-editor");
+    const save = page.getByRole("button", { name: "Markdown 下書きを保存", exact: true });
+    await editor.fill(`${generatedDraftMarkdown}\n公開する手動編集`);
+    if (saveExplicitly) {
+      await save.click();
+      await expect(save).toBeDisabled();
+    }
+    await page.getByRole("button", { name: "オントロジーを公開", exact: true }).click();
+    await confirmPreparedPublish(page);
+    await expect.poll(() => refreshedAfterPublish).toBe(true);
+    await page.getByRole("tab", { name: "Markdown オントロジー下書き", exact: true }).click();
+    await expect(editor).toBeEditable();
+    await editor.fill(`${publishedText}\n次の版への編集`);
+    await save.focus();
+    await page.keyboard.press("Enter");
+    await expect(save).toBeDisabled();
+    expect(saves).toBe(2);
+    await expect(page.getByTestId("ontology-markdown-tab-draft-meta")).toHaveText("v5");
+    await expect(page.getByTestId("ontology-markdown-tab-published-meta")).toHaveText("v4");
+    await page.reload();
+    await loadOntologyBuildWorkspace(page);
+    await expect(editor).toHaveValue(/次の版への編集/);
+    await expect(save).toBeDisabled();
+    if (!saveExplicitly) {
+      await page.emulateMedia({ colorScheme: "dark" });
+      await page.evaluate(() => document.documentElement.classList.add("dark"));
+    }
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await editor.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath("markdown-edit-after-publication.png") });
+  });
+}

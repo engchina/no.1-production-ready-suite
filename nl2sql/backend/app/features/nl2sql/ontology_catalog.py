@@ -966,14 +966,21 @@ def retrieve_ontology_nodes(
         }:
             continue
         for edge in ontology.edges:
+            # implements / extends は実装側から Interface へ向く。Interface を
+            # 質問した場合だけ逆引きし、実装 object に到達したら伝播を止める。
+            reverse_interface = (
+                source_node.kind == OntologyNodeKind.INTERFACE
+                and edge.kind == OntologyEdgeKind.IS_A
+                and edge.target_node_id == source_id
+            )
+            target = edge.source_node_id if reverse_interface else edge.target_node_id
             if (
                 edge.id not in profile_view.edge_ids
-                or edge.source_node_id != source_id
+                or (edge.source_node_id != source_id and not reverse_interface)
                 or edge.kind not in {OntologyEdgeKind.USES, OntologyEdgeKind.IS_A}
-                or edge.target_node_id not in allowed_ids
+                or target not in allowed_ids
             ):
                 continue
-            target = edge.target_node_id
             scores[target] = max(scores[target], scores[source_id] * 0.98)
             terms[target].update(terms[source_id])
             sources[target].update(sources[source_id])

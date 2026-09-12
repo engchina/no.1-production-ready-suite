@@ -9,10 +9,13 @@ from typing import Any
 from pydantic import TypeAdapter
 
 from .ontology_catalog import SchemaOntology
-from .ontology_definitions import BusinessDefinition
+from .ontology_definitions import BusinessDefinition, MetricDefinitionV2
 from .ontology_models import (
     BusinessRuleDefinition,
+    BusinessRuleExpression,
     JoinCondition,
+    MetricAggregation,
+    MetricDefinition,
     OntologyEdge,
     OntologyNode,
     OntologyProvenance,
@@ -90,6 +93,81 @@ def api_name(value: str) -> str:
     return (result if result and result[0].isalpha() else "concept_" + result)[:128]
 
 
+def metric_definition_projection(
+    definition: MetricDefinitionV2,
+    concept_ids: dict[str, str],
+    physical: dict[str, OntologyNode],
+) -> MetricDefinition:
+    """13分類の指標を引導式 SQL の既存読み取り契約へ可逆な意味で投影する。"""
+    import sqlglot
+    from sqlglot import exp
+
+    columns = set()
+    try:
+        tree = sqlglot.parse_one(definition.expression_sql, read="oracle")
+        for col in tree.find_all(exp.Column):
+            node = physical.get(".".join(part.name for part in col.parts).upper())
+            if node and node.kind.value == "column":
+                columns.add(node.id)
+    except sqlglot.errors.SqlglotError:
+        pass  # 検証は公開前ゲート。ここでは原式を保持する。
+    return MetricDefinition(
+        id=stable_ontology_id("metric_definition", definition.id),
+        metric_node_id=definition.id,
+        expression_sql=definition.expression_sql,
+        aggregation=(
+            definition.aggregation.lower()
+            if definition.aggregation.lower() in MetricAggregation._value2member_map_
+            else "none"
+        ),
+        base_column_node_ids=sorted(columns),
+        grain_node_ids=[concept_ids[name] for name in definition.grain if name in concept_ids],
+        distinct_key_node_ids=[
+            concept_ids[name] for name in definition.distinct_keys if name in concept_ids
+        ],
+        unit=definition.unit,
+        currency=definition.currency,
+        additivity=definition.additivity,
+        null_policy_ja=definition.null_policy_ja,
+        description_ja=definition.description_ja,
+    )
+
+
+def _legacy_rule_sql(expression: BusinessRuleExpression, nodes: dict[str, OntologyNode]) -> Any:
+    """固定ルール AST を物理列の SQL 条件へ変換する。解決不能は呼出元に返す。"""
+    from sqlglot import exp
+
+    op = expression.operator
+    if op in {"all", "any", "not"}:
+        children = [_legacy_rule_sql(child, nodes) for child in expression.children]
+        if op == "not":
+            return exp.not_(children[0])
+        return exp.and_(*children) if op == "all" else exp.or_(*children)
+    node = nodes.get(expression.property_node_id)
+    if node is None or len(node.physical_mappings) != 1:
+        raise ValueError("ルールの参照プロパティを一意に解決できません。")
+    mapping = node.physical_mappings[0]
+    if mapping.expression_sql or len(mapping.column_refs) != 1:
+        raise ValueError("ルールの物理列を一意に解決できません。")
+    col = mapping.column_refs[0]
+    left = exp.column(col.column_name, table=col.object_name, db=col.owner or None, quoted=True)
+    if op in {"is_null", "not_null"}:
+        condition = exp.Is(this=left, expression=exp.Null())
+        return exp.not_(condition) if op == "not_null" else condition
+    if op in {"in", "not_in"}:
+        membership = exp.In(this=left, expressions=[exp.convert(v) for v in expression.values])
+        return exp.not_(membership) if op == "not_in" else membership
+    comparison = {
+        "eq": exp.EQ,
+        "ne": exp.NEQ,
+        "lt": exp.LT,
+        "lte": exp.LTE,
+        "gt": exp.GT,
+        "gte": exp.GTE,
+    }[op]
+    return comparison(this=left, expression=exp.convert(expression.value))
+
+
 def legacy_definitions(graph: SchemaOntology) -> list[BusinessDefinition]:
     """旧 graph の明示的な identity を保った変換。物理名だけで業務概念を併合しない。"""
     names = {
@@ -163,9 +241,32 @@ def legacy_definitions(graph: SchemaOntology) -> list[BusinessDefinition]:
                 if metric.get(field):
                     value[field] = metric[field]
         if kind == "business_rule" and node.business_rule_definition:
-            value["applies_to"] = [
-                names[i] for i in node.business_rule_definition.applies_to_node_ids if i in names
-            ]
+            rule = node.business_rule_definition
+            value["applies_to"] = [names[i] for i in rule.applies_to_node_ids if i in names]
+            # statement と元の固定 AST は変換可否に関わらず残す。LLM に渡す
+            # Markdown 自体に元の条件を含め、解釈不能な条件を消さない。
+            value["description_ja"] = "\n".join(
+                dict.fromkeys(
+                    filter(
+                        None,
+                        [
+                            node.description_ja,
+                            rule.statement_ja,
+                            "旧ルール定義: " + canonical_json(rule.model_dump(mode="json")),
+                        ],
+                    )
+                )
+            )
+            value["severity"] = "warning" if rule.severity.value in {"info", "warning"} else "error"
+            if rule.expression:
+                try:
+                    value["predicate_sql"] = _legacy_rule_sql(
+                        rule.expression, {n.id: n for n in graph.nodes}
+                    ).sql(dialect="oracle")
+                except (ValueError, TypeError, KeyError):
+                    value["missing_information_ja"] = [
+                        "旧ルールの条件を SQL に変換できません。保持した元定義を確認してください。"
+                    ]
         if kind in {"business_event", "action_type", "object_set"}:
             targets = [
                 e.target_node_id
@@ -552,8 +653,12 @@ def project_graph(
                     "definition": d.model_dump(mode="json"),
                     "concept_kind": d.kind,
                     **(
-                        {"metric_definition": d.model_dump(mode="json")}
-                        if d.kind == "metric"
+                        {
+                            "metric_definition": metric_definition_projection(
+                                d, {name: item.id for name, item in by_name.items()}, physical
+                            ).model_dump(mode="json")
+                        }
+                        if d.kind == "metric" and d.expression_sql
                         else {}
                     ),
                 },

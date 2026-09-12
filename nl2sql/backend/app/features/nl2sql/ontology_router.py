@@ -1915,8 +1915,86 @@ class OntologyApiRuntime:
                     "AI 構築中に DB schema catalog が更新されました。"
                     "同じ入力で再実行してください。",
                 )
-            view = self._base_profile_view(profile, latest)
-            return view.model_copy(deep=True), latest.model_copy(deep=True)
+            # 全域の最新 draft は別 Profile の作業かもしれない。物理層だけを
+            # 再利用し、業務層はこの Profile の Markdown 出典から取り出す。
+            state = self.ontology_markdown_state(profile_id)
+            from .ontology_markdown_workspace import MarkdownOntologyWorkspace
+
+            snapshot = MarkdownOntologyWorkspace(self).snapshot(profile_id)
+            source = None
+            if snapshot and (
+                not state.draft_revision
+                or state.draft_revision.id == snapshot["source_revision_id"]
+            ):
+                source = SchemaOntology.model_validate(snapshot["graph"])
+            elif state.draft_revision:
+                source = self.ontology_revision(state.draft_revision.id)
+            else:
+                # Profile 所有 Markdown 導入前の公開業務層だけは互換移行する。
+                owned_revisions = {
+                    self._artifact_revision_id(doc)
+                    for doc in self.store.list_documents("artifacts", {})
+                    if doc.get("artifact_type")
+                    in {"ontology_markdown_draft", "ontology_markdown_published"}
+                    and self._artifact_profile_id(doc)
+                }
+                legacy = [
+                    g
+                    for g in self._ontologies.values()
+                    if g.revision.status == OntologyRevisionStatus.PUBLISHED
+                    and g.revision.id not in owned_revisions
+                ]
+                if legacy:
+                    source = max(legacy, key=lambda g: g.revision.version)
+                    source_view = self._base_profile_view(profile, source)
+                    source = source.model_copy(
+                        update={
+                            "nodes": [n for n in source.nodes if n.id in source_view.node_ids],
+                            "edges": [e for e in source.edges if e.id in source_view.edge_ids],
+                        }
+                    )
+            nodes = [n for n in latest.nodes if n.kind not in _BUSINESS_NODE_KINDS]
+            if source:
+                nodes.extend(n for n in source.nodes if n.kind in _BUSINESS_NODE_KINDS)
+            ids = {n.id for n in nodes}
+            edges = [e for e in latest.edges if e.kind not in _BUSINESS_EDGE_KINDS]
+            if source:
+                edges.extend(e for e in source.edges if e.kind in _BUSINESS_EDGE_KINDS)
+            base_id = stable_ontology_id(
+                "ontology_revision",
+                "profile_build",
+                profile.model_dump(mode="json"),
+                latest.revision.schema_fingerprint,
+                source.revision.id if source else "",
+            )
+            existing = self._load_ontology_revision(base_id)
+            if existing:
+                return self._base_profile_view(profile, existing), existing.model_copy(deep=True)
+            scoped = latest.model_copy(
+                update={
+                    "revision": OntologyRevision(
+                        id=base_id,
+                        version=latest.revision.version + 1,
+                        status=OntologyRevisionStatus.DRAFT,
+                        schema_fingerprint=latest.revision.schema_fingerprint,
+                        parent_revision_id=source.revision.id if source else latest.revision.id,
+                        note="Profile の Markdown 構築基準",
+                    ),
+                    "nodes": [n.model_copy(update={"revision_id": base_id}) for n in nodes],
+                    "edges": [
+                        e.model_copy(update={"revision_id": base_id})
+                        for e in edges
+                        if e.source_node_id in ids and e.target_node_id in ids
+                    ],
+                }
+            )
+            scoped.revision = self.sessions.register_revision(
+                scoped.revision, nodes=scoped.nodes, edges=scoped.edges
+            )
+            self._cache_ontology(scoped)
+            self._persist_ontology(scoped)
+            view = self._base_profile_view(profile, scoped)
+            return view.model_copy(deep=True), scoped
 
     def profile_view_persistence_state(self, view: ProfileOntologyView) -> tuple[bool, bool]:
         """現在 revision の永続 view 有無と、元 Profile からの stale 状態を返す。"""
@@ -2948,6 +3026,23 @@ class OntologyApiRuntime:
             definition_raw = node.metadata.get("metric_definition")
             if isinstance(definition_raw, Mapping):
                 try:
+                    if definition_raw.get("kind") == "metric":
+                        # 統合初版で保存された v2 snapshot も書換えず読み取る。
+                        from .ontology_unified_model import (
+                            DEFINITIONS,
+                            metric_definition_projection,
+                        )
+
+                        definition = DEFINITIONS.validate_python([definition_raw])[0]
+                        if definition.kind == "metric":
+                            metric_definitions.append(
+                                metric_definition_projection(
+                                    definition,
+                                    {n.technical_name: n.id for n in ontology.nodes},
+                                    {n.technical_name.upper(): n for n in ontology.nodes},
+                                )
+                            )
+                            continue
                     metric_definitions.append(MetricDefinition.model_validate(definition_raw))
                     continue
                 except Exception:
@@ -3401,7 +3496,8 @@ class OntologyApiRuntime:
                 vectors.update(
                     {node.id: vector for node, vector in zip(missing, embedded, strict=True)}
                 )
-                persisted_ontology = self._ontologies.get(revision_id) or self._ontology
+                # Profile snapshot の埋め込みを全域 revision に誤保存しない。
+                persisted_ontology = self._load_ontology_revision(revision_id)
                 if persisted_ontology is not None:
                     for node in missing:
                         self._persist_node(persisted_ontology, node)
@@ -4702,6 +4798,10 @@ class OntologyApiRuntime:
             view = self.sessions.get_profile_view(session.profile_view_id)
         self._sync_ontology()
         ontology = self._ontologies.get(session.ontology_revision_id)
+        if ontology is None:
+            # Markdown 公開 snapshot は Profile 固有 artifact であり、global revision
+            # cache の公開候補には入れない。新規・復元 session とも固定 ID から読む。
+            ontology = self._load_ontology_revision(session.ontology_revision_id)
         if ontology is None:
             raise OntologyNotFoundError(
                 "SESSION_ONTOLOGY_REVISION_NOT_FOUND",

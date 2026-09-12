@@ -769,6 +769,7 @@ def _candidate_nodes_for_ambiguity(
             if node.kind
             in {
                 OntologyNodeKind.BUSINESS_ENTITY,
+                OntologyNodeKind.OBJECT_TYPE,
                 OntologyNodeKind.BUSINESS_EVENT,
                 OntologyNodeKind.METRIC,
                 OntologyNodeKind.TABLE,
@@ -828,6 +829,7 @@ def _question_copy(
         )
     if kinds and kinds <= {
         OntologyNodeKind.BUSINESS_ENTITY,
+        OntologyNodeKind.OBJECT_TYPE,
         OntologyNodeKind.BUSINESS_EVENT,
         OntologyNodeKind.TABLE,
         OntologyNodeKind.VIEW,
@@ -891,7 +893,11 @@ def _deduplicate_guided_entities(
     """同じ物理 object を指す業務 node / 物理 node は業務 node へ統合する。"""
 
     node_by_id = {node.id: node for node in ontology.nodes}
-    business_kinds = {OntologyNodeKind.BUSINESS_ENTITY, OntologyNodeKind.BUSINESS_EVENT}
+    business_kinds = {
+        OntologyNodeKind.BUSINESS_ENTITY,
+        OntologyNodeKind.OBJECT_TYPE,
+        OntologyNodeKind.BUSINESS_EVENT,
+    }
     physical_kinds = {OntologyNodeKind.TABLE, OntologyNodeKind.VIEW}
 
     def object_ids(entity: IntentEntity) -> set[str]:
@@ -970,6 +976,7 @@ def _append_selected_concepts(intent: QuestionIntentGraph, nodes: Sequence[Ontol
     for node in nodes:
         if node.kind in {
             OntologyNodeKind.BUSINESS_ENTITY,
+            OntologyNodeKind.OBJECT_TYPE,
             OntologyNodeKind.BUSINESS_EVENT,
             OntologyNodeKind.TABLE,
             OntologyNodeKind.VIEW,

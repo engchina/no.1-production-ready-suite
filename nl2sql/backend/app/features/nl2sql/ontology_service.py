@@ -1363,7 +1363,11 @@ class OntologyQuerySessionService:
                     item
                     for item in matched
                     if item.kind
-                    in {OntologyNodeKind.BUSINESS_ENTITY, OntologyNodeKind.BUSINESS_EVENT}
+                    in {
+                        OntologyNodeKind.BUSINESS_ENTITY,
+                        OntologyNodeKind.OBJECT_TYPE,
+                        OntologyNodeKind.BUSINESS_EVENT,
+                    }
                 ],
                 start=1,
             )

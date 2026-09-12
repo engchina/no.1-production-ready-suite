@@ -719,6 +719,8 @@ export function OntologyBuildSection({
     const staleAfterLocalSave =
       reason !== "profile-load" &&
       reason !== "save" &&
+      // 公開 CAS は本文・草稿 revision を維持したまま ETag を更新する。
+      reason !== "publish" &&
       localSavedDraft !== null &&
       currentRevisionId !== "" &&
       incomingRevisionId === currentRevisionId &&
