@@ -63,6 +63,14 @@ class OntologyNodeKind(StrEnum):
     TABLE = "table"
     VIEW = "view"
     COLUMN = "column"
+    OBJECT_TYPE = "object_type"
+    INTERFACE = "interface"
+    FUNCTION = "function"
+    ACTION_TYPE = "action_type"
+    SHARED_PROPERTY = "shared_property"
+    VALUE_TYPE = "value_type"
+    ENUMERATION = "enumeration"
+    OBJECT_SET = "object_set"
     BUSINESS_ENTITY = "business_entity"
     BUSINESS_EVENT = "business_event"
     PROPERTY = "property"
@@ -80,6 +88,7 @@ class OntologyNodeKind(StrEnum):
 class OntologyEdgeKind(StrEnum):
     CONTAINS = "contains"
     FOREIGN_KEY = "foreign_key"
+    LINK_TYPE = "link_type"
     BUSINESS_RELATIONSHIP = "business_relationship"
     MAPS_TO = "maps_to"
     LINEAGE = "lineage"
@@ -1020,6 +1029,7 @@ class OntologyBuildJob(OntologyContract):
     draft_etag: str = ""
     result_bundle_id: str = ""
     definition_phases: list[DefinitionPhase] = Field(default_factory=list)
+    concept_coverage: list[ConceptCoverage] = Field(default_factory=list)
     profile_fingerprint: str = ""
     schema_context_fingerprint: str = ""
     source_document_ids: list[str] = Field(default_factory=list)

@@ -31,12 +31,21 @@ export interface GroundingCandidate {
 
 export const GROUNDING_ENTITY_KINDS = new Set([
   "business_entity",
+  "object_type",
+  "interface",
+  "function",
+  "action_type",
+  "business_rule",
+  "object_set",
   "business_event",
   "table",
   "view",
 ]);
 export const GROUNDING_ATTRIBUTE_KINDS = new Set([
   "property",
+  "shared_property",
+  "value_type",
+  "enumeration",
   "metric",
   "business_term",
   "column",
@@ -146,6 +155,10 @@ function nodeNameVariants(node: OntologyNode): NameVariant[] {
   push(node.business_name_ja, "name");
   for (const alias of node.aliases ?? []) push(alias, "alias");
   push(node.technical_name, "technical");
+  if (node.metadata?.definition) {
+    push(node.description_ja, "token");
+    for (const value of Object.values(node.metadata.definition)) if (typeof value === "string") push(value, "token");
+  }
   // 物理名の構成語(ADMIN.EMPLOYEE → employee / DEPARTMENT_ID → department)も候補にする
   const technical = normalizeGroundingText(node.technical_name ?? "");
   for (const part of technical.split(/[._]/)) {

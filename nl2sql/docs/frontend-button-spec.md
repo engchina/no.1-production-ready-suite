@@ -304,9 +304,9 @@ Issue #435 のユーザー指定により、`OntologyGraphCanvas` の操作部�
 
 `tests/e2e/button-standards.spec.ts` は実 React 部品を使って light/dark × desktop/mobile-375 の寸法・状態・操作・focus・danger 確認・overflow・ページング・再試行を検証する。各機能の既存 Playwright spec はユーザーフローの回帰を担当する。
 
-### 構築結果と公開能力（Issue #485）
+### Markdown オントロジーの構築と公開（Issue #491）
 
-- 構築結果の五つの表示切替は `ManagementTabs` を使う。操作ボタンでタブを模倣しない。
-- 構築結果・公開能力は独立した管理パネルとし、それぞれのヘッダー右側に `secondary/sm` の「最新情報を取得」を置く。
-- 変更解析・検証・実装設定・呼出し・プレビューは `ContentActionBar` 内の `secondary/lg`、公開・実行確定は `primary/lg`。共通サイズを子要素 CSS で上書きしない。
-- 定義／能力一覧の選択は一覧行として扱い、選択状態とフォーカスを示す。カテゴリ／版の選択は `SelectField`、マッピングからの詳細表示は局所操作とする。
+- 下書き／公開版の表示切替は `ManagementTabs`。独立した構築結果・公開能力の操作は表示しない。
+- Markdown の保存・コピー・移行確認は `secondary/sm`、公開準備と確認済み内容の公開は `ContentActionBar` 内の `primary/md`。確認ダイアログで Profile と対象版を示す。
+- 「公開結果を確認」は保存した冪等キーによる読み取りだけを行う。Function / Action Type のグラフ詳細に実行操作を設けない。
+- 概念種類は主要6／補助7にまとめる。欠けた種類をダミーノードや操作ボタンで補わない。モバイルの入力・操作領域は 44px を確保する。

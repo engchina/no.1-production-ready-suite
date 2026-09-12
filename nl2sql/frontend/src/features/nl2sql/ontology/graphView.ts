@@ -78,6 +78,9 @@ const GROUNDING_CONTEXT_EDGE_KINDS = new Set([
   "contains",
   "column",
   "foreign_key",
+  "link_type",
+  "uses",
+  "is_a",
 ]);
 
 export function isOntologyDetailNodeKind(kind: string): boolean {

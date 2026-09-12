@@ -344,6 +344,7 @@ def test_markdown_state_does_not_show_global_published_revision_before_profile_w
 
 def test_markdown_state_uses_profile_local_versions_for_draft_and_publish(
     harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runtime, _store, legacy = harness
     legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_STRUCTURED_PAYLOAD)
@@ -355,21 +356,49 @@ def test_markdown_state_uses_profile_local_versions_for_draft_and_publish(
     assert first_state.draft_revision.id == first.draft_revision_id
     assert first_state.draft_version == 1
 
-    runtime.publish_ontology_revision(
-        first_state.draft_revision.id,
-        OntologyPublishRequest(etag=first_state.draft_revision.etag),
+    from test_nl2sql_markdown_unification import Parser
+    from test_nl2sql_ontology_workspace import model
+
+    from app.features.nl2sql.ontology_markdown_workspace import (
+        MarkdownConfirmRequest,
+        MarkdownOntologyWorkspace,
     )
-    runtime.copy_draft_markdown_to_published(first_state.draft_revision.id)
+    from app.settings import get_settings
+
+    monkeypatch.setattr(get_settings(), "nl2sql_ontology_worker_mode", "external")
+    parser = Parser(model())
+    first_state = runtime.save_ontology_markdown_draft(
+        "sales",
+        OntologyMarkdownDraftPatch(
+            markdown="受注を受注番号で識別する。", base_etag=first_state.draft_etag
+        ),
+    )
+    parser.lines[0]["end_line"] = len(first_state.draft_markdown.splitlines())
+    legacy._enterprise_ai_client = parser
+    workspace = MarkdownOntologyWorkspace(runtime)
+    prepared = workspace.prepare("sales", first_state.draft_etag, "version-check", None)
+    workspace.run_preparation("sales", prepared["id"])
+    published = workspace.publish(
+        "sales",
+        MarkdownConfirmRequest(
+            preparation_id=prepared["id"], draft_etag=first_state.draft_etag, confirmed=True
+        ),
+        "publish-version",
+        None,
+    )
     published_state = runtime.ontology_markdown_state("sales")
     assert published_state.draft_revision is not None
+    assert first_state.draft_revision is not None
     assert published_state.draft_revision.id == first_state.draft_revision.id
-    assert published_state.draft_revision.status == OntologyRevisionStatus.PUBLISHED
+    assert published_state.draft_revision.status == OntologyRevisionStatus.DRAFT
     assert published_state.draft_version == 1
     assert published_state.draft_markdown == first_state.draft_markdown
     assert published_state.published_revision is not None
-    assert published_state.published_revision.id == first_state.draft_revision.id
+    assert published_state.published_revision.id == published.revision_id
     assert published_state.published_version == 1
 
+    monkeypatch.setattr(get_settings(), "nl2sql_ontology_worker_mode", "inprocess")
+    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(_STRUCTURED_PAYLOAD)
     second = _wait_for_job(
         service,
         service.start("sales", business_text="受注は顧客に紐づく。").id,
@@ -796,19 +825,18 @@ def test_build_job_creates_markdown_draft_and_drops_outside_candidates(
     assert "## 物理オブジェクト" in finished.markdown_output
     assert "`APP.ORDERS` (table)" in finished.markdown_output
     assert "業務名: 受注" in finished.markdown_output
-    assert "## 業務エンティティ" in finished.markdown_output
+    assert "#### オブジェクト型（Object Type）" in finished.markdown_output
     assert "受注 (`APP.ORDERS`)" in finished.markdown_output
-    assert "## 関係 / Join" in finished.markdown_output
+    assert "#### リンク型（Link Type）" in finished.markdown_output
     assert "顧客を参照" in finished.markdown_output
-    assert "検索利用: 利用可" in finished.markdown_output
-    assert "`APP.ORDERS.CUSTOMER_ID = APP.CUSTOMERS.ID`" in finished.markdown_output
-    assert "## 指標" in finished.markdown_output
+    assert "APP.ORDERS.CUSTOMER_ID = APP.CUSTOMERS.ID" in finished.markdown_output
+    assert "#### 指標（Metric）" in finished.markdown_output
     assert "受注金額合計" in finished.markdown_output
     assert "APP.ORDERS.AMOUNT" in finished.markdown_output
-    assert "## 業務ルール / 列挙値" in finished.markdown_output
-    assert "## 同義語" in finished.markdown_output
+    assert "#### 業務ルール（Business Rule）" in finished.markdown_output
+    assert "別名:" in finished.markdown_output
     assert "オーダー" in finished.markdown_output
-    assert "## 証拠 / 確認事項" in finished.markdown_output
+    assert "解決が必要な定義の競合" in finished.markdown_output
     assert "## 採用外候補" in finished.markdown_output
     assert "APP.SECRET" in finished.markdown_output
 
@@ -827,24 +855,22 @@ def test_build_job_creates_markdown_draft_and_drops_outside_candidates(
     )
     assert saved_state.draft_etag != state.draft_etag
     assert "手動メモ" in saved_state.draft_markdown
-    with pytest.raises(OntologyVersionConflict):
+    with pytest.raises((OntologyVersionConflict, OntologyVersionConflictError)):
         runtime.save_ontology_markdown_draft(
             "sales",
             OntologyMarkdownDraftPatch(markdown="stale", base_etag=state.draft_etag),
         )
     draft = runtime.ontology_revision(finished.draft_revision_id)
     kinds = {node.kind for node in draft.nodes}
-    assert OntologyNodeKind.BUSINESS_ENTITY in kinds
+    assert OntologyNodeKind.OBJECT_TYPE in kinds
     assert OntologyNodeKind.METRIC in kinds
-    relationship_edges = [
-        edge for edge in draft.edges if edge.kind == OntologyEdgeKind.BUSINESS_RELATIONSHIP
-    ]
+    relationship_edges = [edge for edge in draft.edges if edge.kind == OntologyEdgeKind.LINK_TYPE]
     assert len(relationship_edges) == 1
     assert relationship_edges[0].review_status == OntologyReviewStatus.APPROVED
     orders_entity = next(
         node
         for node in draft.nodes
-        if node.kind == OntologyNodeKind.BUSINESS_ENTITY and node.technical_name == "APP.ORDERS"
+        if node.kind == OntologyNodeKind.OBJECT_TYPE and node.technical_name == "APP.ORDERS"
     )
     assert set(orders_entity.aliases) >= {"注文", "オーダー"}
 
@@ -931,7 +957,8 @@ def test_build_job_batches_all_source_chunks_without_omission(
     processed_chunks = sum(
         len(json.loads(context)["business_text_chunks"]) for context in text_contexts
     )
-    assert processed_chunks == len(markers)
+    # 基礎抽出・共有定義・能力契約の3段階が同じ固定資料を完全に読む。
+    assert processed_chunks == len(markers) * 3
     assert any("chunk batch" in event.message_ja for event in finished.events)
 
 
@@ -954,6 +981,7 @@ def test_build_job_batches_more_than_two_hundred_qa_pairs(
         )
         for index in range(205)
     ]
+    monkeypatch.setattr(get_settings(), "nl2sql_ontology_worker_mode", "external")
     service = OntologyBuildService(runtime)
 
     queued = service.start(
@@ -962,13 +990,14 @@ def test_build_job_batches_more_than_two_hundred_qa_pairs(
         run_schema_naming=False,
         run_text_extraction=False,
     )
-    finished = _wait_for_job(service, queued.id)
+    finished = service.run_persisted(queued.id)
 
     assert finished.status == OntologyBuildStatus.SUCCEEDED
     qa_contexts = [context for context in client.contexts if '"qa_pairs"' in context]
     assert len(qa_contexts) > 1
     sent_pairs = [pair for context in qa_contexts for pair in json.loads(context)["qa_pairs"]]
-    assert len(sent_pairs) == 205
+    assert len(sent_pairs) == 205 * 3
+    assert {p["question"] for p in sent_pairs} == {p.question for p in qa_pairs}
     assert sent_pairs[-1]["question"] == "顧客別売上 204"
     assert any("Q/A batch" in event.message_ja for event in finished.events)
 
@@ -2563,7 +2592,7 @@ def test_build_draft_preserves_inferred_provenance(
     business_nodes = [
         node
         for node in draft.nodes
-        if node.kind == OntologyNodeKind.BUSINESS_ENTITY and node.business_name_ja == "受注"
+        if node.kind == OntologyNodeKind.OBJECT_TYPE and node.business_name_ja == "受注"
     ]
     assert business_nodes, "AI 構築由来の業務エンティティが draft に存在すること"
     provenance = business_nodes[0].provenance

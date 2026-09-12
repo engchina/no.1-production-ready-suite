@@ -66,6 +66,7 @@ class ProfileOntologyDefinitionService:
         profile_fingerprint: str = "",
         requires_revalidation: bool = False,
         schema_context_fingerprint: str = "",
+        unified: bool = False,
     ) -> ProfileOntologyBundle:
         session = self._session(profile_id)
         bundle_id = stable_ontology_id("profile_ontology_bundle", profile_id, job_id)
@@ -75,9 +76,11 @@ class ProfileOntologyDefinitionService:
         previous = self.list_results(profile_id)
         prior = previous[0] if previous else None
         old = {item.id: item for item in prior.definitions} if prior else {}
-        normalized: dict[str, BusinessDefinition] = {}
+        normalized: dict[str, BusinessDefinition] = (
+            {d.id: d.model_copy(deep=True) for d in definitions} if unified else {}
+        )
         conflicts: list[DefinitionConflict] = []
-        for definition in definitions:
+        for definition in ([] if unified else definitions):
             item = definition.model_copy(deep=True)
             matches = [
                 candidate
@@ -123,7 +126,7 @@ class ProfileOntologyDefinitionService:
                 continue
             normalized[item.id] = item
         # 新しい抽出で言及されなかった人手編集は削除しない。
-        for item_id, item in old.items():
+        for item_id, item in ({} if unified else old).items():
             if item_id not in normalized and (
                 item.origin == "manual" or item.review_status == "reviewed"
             ):

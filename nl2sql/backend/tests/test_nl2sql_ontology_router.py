@@ -2822,7 +2822,7 @@ def test_execute_without_generated_sql_raises_state_conflict(
     assert exc_info.value.code == "SQL_ARTIFACT_NOT_GENERATED"
 
 
-def test_typed_business_release_is_frozen_in_query_session_and_generation_context(
+def test_independent_business_release_does_not_override_markdown_context(
     runtime: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
 ) -> None:
     from app.features.nl2sql.ontology_definition_workspace import ProfileOntologyWorkspaceService
@@ -2872,11 +2872,12 @@ def test_typed_business_release_is_frozen_in_query_session_and_generation_contex
 
     first = publish("first")
     session = api.create_session(QuerySessionApiCreate(profile_id="sales", question="受注を表示"))
-    assert session.session.business_release_id == first["id"]
+    # 旧独立 release は Markdown 正本を上書きしない。
+    assert session.session.business_release_id == ""
     second = publish("second")
     assert second["id"] != first["id"]
     api.generate_sql(session.session.id, _generate_request(session))
     context = legacy.preview_requests[-1].ontology_context
-    assert context is not None and context.business_release_id == first["id"]
-    assert "顧客契約" in context.llm_markdown
+    assert context is not None and context.business_release_id == ""
+    assert "顧客契約" not in context.llm_markdown
     assert second["id"] not in context.llm_markdown

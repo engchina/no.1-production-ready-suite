@@ -257,12 +257,13 @@ async def test_workspace_api_etag_body_and_profile_ownership() -> None:
         response = await client.post(
             path + "/notes", json={"notes_ja": "メモ"}, headers={"If-Match": b.etag}
         )
-        assert response.status_code == 200
+        assert response.status_code == 410
+        assert svc.get("sales", b.id).etag == b.etag
         assert (
             await client.post(
                 path + "/notes", json={"notes_ja": "古い版"}, headers={"If-Match": b.etag}
             )
-        ).status_code == 409
+        ).status_code == 410
 
 
 def test_data_validation_job_reports_actual_sample_and_missing_connection(

@@ -6287,15 +6287,21 @@ class Nl2SqlService:
             raise ValueError("DeepSec 有効時のジョブには認証済み actor が必要です。")
         business_release_id = ""
         if request.use_ontology_context:
-            from .ontology_definition_workspace import ProfileOntologyWorkspaceService
+            from .ontology_markdown_workspace import MarkdownOntologyWorkspace
             from .ontology_router import ontology_runtime
 
             if ontology_runtime.legacy_service is self:
                 business_release_id = str(
-                    ProfileOntologyWorkspaceService(ontology_runtime).head(
+                    MarkdownOntologyWorkspace(ontology_runtime).head(
                         request.profile_id or "default"
-                    )["release_id"]
+                    )["snapshot_id"]
                 )
+                if not business_release_id:
+                    state = ontology_runtime.ontology_markdown_state(
+                        request.profile_id or "default"
+                    )
+                    if state.published_revision is not None:
+                        business_release_id = state.published_revision.id
         job = StoredJob(
             job_id=job_id,
             request=request,
@@ -17160,6 +17166,7 @@ class Nl2SqlService:
         *,
         profile: Nl2SqlProfile,
         allowed: AllowedObjects,
+        revision_id: str = "",
     ) -> tuple[Nl2SqlOntologyGraphSnapshot | None, list[str]]:
         try:
             # ontology_router imports nl2sql_service at module load time, so keep this lazy.
@@ -17168,6 +17175,7 @@ class Nl2SqlService:
             snapshot = ontology_runtime.profile_scoped_graph_snapshot_for_job(
                 profile=profile,
                 allowed=allowed,
+                revision_id=revision_id,
             )
             return Nl2SqlOntologyGraphSnapshot.model_validate(snapshot), []
         except Exception as exc:  # pragma: no cover - artifact must never fail the job
@@ -17240,13 +17248,25 @@ class Nl2SqlService:
         *,
         request: JobCreateRequest,
         profile: Nl2SqlProfile,
-        business_release_id: str = "",
+        business_release_id: str | None = None,
         allowed: AllowedObjects | None = None,
     ) -> str | None:
         """選択中 Profile の公開版 Markdown を SQL 生成 prompt 用に返す。"""
 
         if not request.use_ontology_context:
             return None
+        # Queue 時点で未公開だった task に、後から公開された内容を適用しない。
+        if business_release_id == "":
+            return None
+        if business_release_id and business_release_id.startswith("ontology_revision_"):
+            from .ontology_router import ontology_runtime
+
+            return (
+                ontology_runtime.published_markdown_for_revision(
+                    business_release_id, profile_id=profile.id
+                )
+                or None
+            )
         if business_release_id:
             import json
 
@@ -17419,6 +17439,13 @@ class Nl2SqlService:
                         self._build_interpretation_ontology_graph_snapshot(
                             profile=profile,
                             allowed=allowed,
+                            revision_id=(
+                                job.business_release_id
+                                if job.business_release_id.startswith(
+                                    ("ontology_markdown_snapshot_", "ontology_revision_")
+                                )
+                                else ""
+                            ),
                         )
                     )
                 interpretation = self._build_interpretation_artifact(

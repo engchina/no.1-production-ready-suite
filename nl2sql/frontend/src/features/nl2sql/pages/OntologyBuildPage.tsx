@@ -26,7 +26,6 @@ import {
 } from "../incrementalQueries";
 import { classifyOntologyWorkspaceError, ontologyWorkspaceErrorPresentation } from "../ontologyWorkspaceError";
 import { profileDisplayLabel } from "../profileDisplay";
-import { OntologyCapabilities } from "../ontology/OntologyCapabilities";
 import { OntologyBuildSection } from "../ontology/OntologyBuildSection";
 import { OntologyQueryPlayground } from "../ontology/OntologyQueryPlayground";
 import type { OntologyMarkdownState } from "../ontology/types";
@@ -45,7 +44,6 @@ function listLoadMoreErrorMessage(error: unknown, fallbackKey: Parameters<typeof
  * 旧 tab URL は profile だけを残す正規 URL へ置き換える。
  */
 export function OntologyBuildPage() {
-  const [resultRequest, setResultRequest] = useState<{tab:"model"|"review"; sequence:number}>();
   const [searchParams, setSearchParams] = useSearchParams();
   const [pageError, setPageError] = useState("");
   const [publishedMarkdownState, setPublishedMarkdownState] = useState<{
@@ -362,7 +360,6 @@ export function OntologyBuildPage() {
         ) : selectedProfileId ? (
           <>
             <OntologyBuildSection
-              resultRequest={resultRequest}
               profileId={selectedProfileId}
               profileLabel={
                 selectedProfileSummary ? profileDisplayLabel(selectedProfileSummary) : ""
@@ -375,15 +372,6 @@ export function OntologyBuildPage() {
               onMarkdownStateChange={handleMarkdownStateChange}
               onRefreshSchema={refreshSchema}
               refreshingSchema={refreshing}
-            />
-            <OntologyCapabilities
-              key={selectedProfileId}
-              profileId={selectedProfileId}
-              profileLabel={selectedProfileSummary ? profileDisplayLabel(selectedProfileSummary) : ""}
-              onOpenResults={tab => {
-                document.getElementById(`ontology-results-start-${selectedProfileId}`)?.focus();
-                setResultRequest({tab, sequence: Date.now()});
-              }}
             />
             <OntologyQueryPlayground
               graph={ontologyGraph}

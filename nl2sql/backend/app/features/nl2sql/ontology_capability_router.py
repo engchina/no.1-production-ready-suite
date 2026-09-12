@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from fastapi import APIRouter, Header, Request
+from fastapi import APIRouter, Header, HTTPException, Request
 from pr_backend_core import ApiResponse
 
 from .ontology_capabilities import (
@@ -24,6 +24,13 @@ def create_capability_router(runtime: Any, raise_error: Any) -> APIRouter:
 
     def service(request: Request, profile_id: str) -> ProfileOntologyCapabilityService:
         assert_profile_access(request, profile_id)
+        if request.method != "GET":
+            from .ontology_definition_workspace import authorize_definition_operation
+
+            authorize_definition_operation(profile_id, principal_from_request(request))
+            raise HTTPException(
+                410, "この独立した操作は廃止されました。Markdown オントロジーを使用してください。"
+            )
         return ProfileOntologyCapabilityService(runtime())
 
     @router.get("/profiles/{profile_id}/ontology-capabilities")

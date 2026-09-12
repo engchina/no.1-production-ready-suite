@@ -20,7 +20,7 @@ import re
 import threading
 import time
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -2116,6 +2116,7 @@ class _OntologyBuildLlmTask:
                     cross_check_sql=[pair.sql for pair in half],
                     qa_batch=half,
                     schema_payload=self.schema_payload,
+                    definition_phase=self.definition_phase,
                 )
                 for half in qa_halves
             ]
@@ -2133,6 +2134,7 @@ class _OntologyBuildLlmTask:
                     ],
                     text_batch=text_half,
                     schema_payload=self.schema_payload,
+                    definition_phase=self.definition_phase,
                 )
                 for text_half in text_halves
             ]
@@ -3412,10 +3414,16 @@ class OntologyBuildService:
 
     def _set_definition_phase(self, job_id: str, name: str, status: str, detail: str = "") -> None:
         def mutate(job: OntologyBuildJob) -> None:
+            if not any(p.name == name for p in job.definition_phases):
+                job.definition_phases.append(DefinitionPhase(name=name))
             for phase in job.definition_phases:
                 if phase.name == name:
                     phase.status = status  # type: ignore[assignment]
                     phase.detail_ja = detail
+                    if status == "running" and not phase.started_at:
+                        phase.started_at = utc_now().isoformat()
+                    if status in {"succeeded", "failed", "skipped"}:
+                        phase.finished_at = utc_now().isoformat()
 
         self._update(job_id, mutate)
 
@@ -3592,6 +3600,34 @@ class OntologyBuildService:
 
         if self._is_cancelled(job_id):
             return [], []
+        # 補充用の参照一覧も入力予算に含め、送信する前に再分割する。
+        if _llm_call_chars(task.prompt, task.context) > _ONTOLOGY_BUILD_LLM_CONTEXT_MAX_CHARS:
+            children = task.split()
+            if task.text_batch is not None and task.schema_payload is not None:
+                children = [
+                    replace(
+                        task,
+                        text_batch=batch,
+                        context=_dump_text_context(task.schema_payload, batch),
+                        source_evidence=[e for unit in batch if (e := unit.evidence())],
+                    )
+                    for batch in _batch_text_units(
+                        task.schema_payload, task.text_batch, task.prompt
+                    )
+                ]
+            if not children or depth >= 6:
+                return [], [
+                    f"{label}: 入力上限を超えました。資料または対象範囲を分割してください。"
+                ]
+            results: list[_ValidatedBuildExtraction] = []
+            messages: list[str] = []
+            for child in children:
+                extracted, warnings = self._execute_llm_task(
+                    job_id, client, child, label=label, depth=depth + 1
+                )
+                results.extend(extracted)
+                messages.extend(warnings)
+            return results, messages
         job = self.get(job_id)
         checkpoint_id = stable_ontology_id(
             "ontology_batch", job_id, task.name.value, task.prompt, task.context
@@ -4275,6 +4311,35 @@ class OntologyBuildService:
                 )
                 self._emit(job_id, f"{label}: 抽出候補を検証しました。", step=task.name)
 
+        # 旧形式の命名・抽出も先に13分類へ変換し、後段は同じ安定 ID を参照する。
+        from .ontology_unified_model import legacy_definitions, merge_definitions
+
+        preliminary_definitions = []
+        if validated_extractions:
+            view, ontology = self._runtime.build_proposal_scope(
+                job.profile_id, schema_fingerprint=str(prepared_schema.schema_fingerprint)
+            )
+            preliminary_drafts = []
+            for result in validated_extractions:
+                converted, _ = convert_extraction_to_proposals(
+                    result.extraction,
+                    ontology=ontology,
+                    view=view,
+                    job_id=job_id,
+                    inferred_by=inferred_by,
+                    qa_sql_texts=result.cross_check_sql,
+                    source_evidence=result.source_evidence,
+                )
+                preliminary_drafts.extend(converted)
+            request = self._runtime._proposal_payloads_upsert_draft_request(
+                [d.payload for d in preliminary_drafts], ontology
+            )
+            candidate_graph = SchemaOntology(
+                revision=ontology.revision,
+                nodes=list({n.id: n for n in [*ontology.nodes, *request.node_upserts]}.values()),
+                edges=list({e.id: e for e in [*ontology.edges, *request.edge_upserts]}.values()),
+            )
+            preliminary_definitions = legacy_definitions(candidate_graph)
         self._set_definition_phase(
             job_id, "objects", "succeeded" if validated_extractions else "failed"
         )
@@ -4291,17 +4356,25 @@ class OntologyBuildService:
             ),
         ):
             self._set_definition_phase(job_id, phase_name, "running")
-            # 旧形式だけを返すモデルも読み取り可能。新形式は先行定義の名前を後段へ渡す。
-            if not any(result.extraction.definitions for result in validated_extractions):
-                self._set_definition_phase(
-                    job_id, phase_name, "skipped", "型付き候補がないため補完を省略しました。"
-                )
-                continue
+            # 名前・ID・出典が一致する候補だけを補完し、別概念を同じ表だけで併合しない。
             refs = sorted(
                 {
-                    f"{item.kind}:{item.api_name}"
-                    for result in validated_extractions
-                    for item in result.extraction.definitions
+                    canonical_json(
+                        {
+                            "kind": item.kind,
+                            "api_name": item.api_name,
+                            "id": item.id,
+                            "name_ja": item.name_ja,
+                        }
+                    )
+                    for item in [
+                        *preliminary_definitions,
+                        *[
+                            d
+                            for result in validated_extractions
+                            for d in result.extraction.definitions
+                        ],
+                    ]
                 }
             )
             phase_failed = False
@@ -4310,12 +4383,17 @@ class OntologyBuildService:
                     return
                 focused = _OntologyBuildLlmTask(
                     name=task.name,
-                    prompt=instruction + "既存定義: " + ", ".join(refs),
+                    prompt=instruction
+                    + "同一概念は既存の id と api_name を使用し不足フィールドを補完してください。"
+                    "別の定義を作らないでください。既存定義: " + ", ".join(refs),
                     context=task.context,
                     progress_ja=instruction,
                     cross_check_sql=task.cross_check_sql,
                     source_evidence=task.source_evidence,
                     definition_phase=phase_name,
+                    qa_batch=task.qa_batch,
+                    text_batch=task.text_batch,
+                    schema_payload=task.schema_payload,
                 )
                 extractions, messages = self._execute_llm_task(
                     job_id, client, focused, label=instruction
@@ -4453,6 +4531,52 @@ class OntologyBuildService:
         )
         self._emit(job_id, "Markdown 下書きをレンダリングしています。")
         actionable_warnings, proposal_rejections = _split_ontology_build_warnings(warnings)
+        from .ontology_unified_model import legacy_definitions, render_concepts
+
+        candidate_request = self._runtime._proposal_payloads_upsert_draft_request(
+            [draft.payload for draft in draft_inputs],
+            ontology,
+        )
+        candidate_nodes = {n.id: n for n in ontology.nodes}
+        candidate_edges = {e.id: e for e in ontology.edges}
+        candidate_nodes.update({n.id: n for n in candidate_request.node_upserts})
+        candidate_edges.update({e.id: e for e in candidate_request.edge_upserts})
+        candidates = SchemaOntology(
+            revision=ontology.revision,
+            nodes=list(candidate_nodes.values()),
+            edges=list(candidate_edges.values()),
+        )
+        unified_definitions, concept_conflicts = merge_definitions(
+            job.profile_id,
+            [
+                *legacy_definitions(candidates),
+                *[d for result in validated_extractions for d in result.extraction.definitions],
+            ],
+        )
+        from .ontology_definition_validation import validate_definitions
+        from .ontology_definitions import ProfileOntologyBundle
+
+        provisional = ProfileOntologyBundle(
+            id=job_id,
+            profile_id=job.profile_id,
+            job_id=job_id,
+            source_revision_id=ontology.revision.id,
+            schema_fingerprint=ontology.revision.schema_fingerprint,
+            profile_fingerprint=job.profile_fingerprint,
+            definitions=unified_definitions,
+            sources=definition_sources,
+        )
+        build_findings = validate_definitions(provisional, json.loads(schema_context))
+        concept_conflicts.extend(
+            f"{f.definition_id} / {f.field}: {f.message_ja}" for f in build_findings
+        )
+        self._set_definition_phase(
+            job_id,
+            "validation",
+            "succeeded",
+            f"定義 {len(unified_definitions)} 件、要確認 {len(concept_conflicts)} 件。",
+        )
+        self._set_definition_phase(job_id, "markdown", "running")
         try:
             markdown_output = render_ontology_build_markdown(
                 profile_id=job.profile_id,
@@ -4467,6 +4591,25 @@ class OntologyBuildService:
                 ontology=ontology,
                 profile_view=view,
             )
+            markdown_output = (
+                markdown_output.split("## 業務エンティティ", 1)[0].rstrip()
+                + "\n\n"
+                + render_concepts(
+                    unified_definitions,
+                    concept_conflicts,
+                    [c for result in validated_extractions for c in result.extraction.coverage],
+                )
+            )
+            if actionable_warnings:
+                markdown_output += "\n\n## 構築時の確認事項\n" + "\n".join(
+                    "- " + w for w in actionable_warnings
+                )
+            if proposal_rejections:
+                markdown_output += "\n\n## 採用外候補\n" + "\n".join(
+                    "- " + w for w in dict.fromkeys(proposal_rejections)
+                )
+            self._set_definition_phase(job_id, "markdown", "succeeded")
+            self._set_definition_phase(job_id, "save", "running")
         except Exception as exc:
             logger.warning("ontology_build_markdown_render_failed", exc_info=True)
             self._set_step(
@@ -4510,6 +4653,7 @@ class OntologyBuildService:
                 payloads=[draft.payload for draft in draft_inputs],
                 titles=[draft.title_ja for draft in draft_inputs],
                 markdown=markdown_output,
+                unified_definitions=unified_definitions,
                 note=f"AI 構築 Markdown 下書き: {len(draft_inputs)} 件",
                 prepared_base=ontology,
                 on_progress=save_progress,
@@ -4548,9 +4692,8 @@ class OntologyBuildService:
         bundle = ProfileOntologyDefinitionService(self._runtime).save_build(
             profile_id=job.profile_id,
             job_id=job_id,
-            definitions=[
-                item for result in validated_extractions for item in result.extraction.definitions
-            ],
+            definitions=unified_definitions,
+            unified=True,
             coverage=[
                 item for result in validated_extractions for item in result.extraction.coverage
             ],
@@ -4572,7 +4715,7 @@ class OntologyBuildService:
         )
         self._set_definition_phase(
             job_id,
-            "validation",
+            "save",
             "succeeded",
             f"検査事項 {len(bundle.findings)} 件、競合 {len(bundle.conflicts)} 件。",
         )
@@ -4600,6 +4743,7 @@ class OntologyBuildService:
                 job.status = OntologyBuildStatus.FAILED
             job.proposal_ids = []
             job.result_bundle_id = bundle.id
+            job.concept_coverage = bundle.coverage
             job.draft_revision_id = draft_ontology.revision.id
             job.draft_etag = str(markdown_artifact.get("etag") or "")
             job.markdown_output = markdown_output

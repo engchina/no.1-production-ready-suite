@@ -1,3 +1,4 @@
+import { DefinitionFields } from "./ontologyResultPresentation";
 import { lazy, Suspense, useMemo, useRef, useState } from "react";
 import {
   Info,
@@ -514,6 +515,7 @@ function OntologyNodeDetailsPanel({
               {ontologyNodeDisplay(node).secondaryLabel}
             </p>
           ) : null}
+          {node.metadata?.definition && typeof node.metadata.definition === "object" && !Array.isArray(node.metadata.definition) ? <DefinitionFields definition={node.metadata.definition as Record<string, unknown>} /> : null}
           {node.description_ja || node.description ? (
             <p className="text-sm leading-6 text-muted">{node.description_ja || node.description}</p>
           ) : null}
@@ -975,6 +977,7 @@ export function OntologyQueryPlayground({
               />
             </div>
           </form>
+          {selectedEdgeId && (() => { const definition = graph?.edges.find(e=>e.id===selectedEdgeId)?.metadata?.definition; return definition && typeof definition === "object" && !Array.isArray(definition) ? <section aria-label={t("ontologyResults.kind.link_type")} className="rounded-md border border-border p-3"><h3 className="text-sm font-semibold">{t("ontologyResults.kind.link_type")}</h3><DefinitionFields definition={definition as Record<string, unknown>} /></section> : null; })()}
           {!result ? (
             <div
               className="rounded-md border border-border bg-muted/20 px-3 py-2"
@@ -1053,6 +1056,7 @@ export function OntologyQueryPlayground({
                   >
                     <LazyOntologyGraphCanvas
                       graph={graph}
+                      workspaceKey={`playground:${profileId}`}
                       selectedNodeId={selectedNodeId}
                       selectedEdgeId={selectedEdgeId}
                       onSelectNode={setSelectedNodeId}

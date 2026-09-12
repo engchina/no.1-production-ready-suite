@@ -42,7 +42,7 @@ export interface PlaygroundResult {
   aggregate: boolean;
 }
 
-const BUSINESS_ENTITY_KINDS = new Set(["business_entity", "business_event"]);
+const BUSINESS_ENTITY_KINDS = new Set(["business_entity", "business_event", "object_type", "interface", "function", "action_type", "object_set", "shared_property", "value_type", "enumeration", "business_rule"]);
 const LIST_PATTERNS = [/一覧/, /すべて/, /全て/, /リスト/, /list/i, /show me all/i];
 const DEFINITION_PATTERNS = [/とは/, /について/, /何ですか/, /どういう/, /what is/i];
 const MAX_ENTITY_MATCHES = 3;
@@ -168,6 +168,18 @@ export function answerOntologyQuestion(
   });
 
   if (!normalizedQuestion) return noMatch("質問を入力してください。");
+
+  const links = graph.edges.filter(edge => {
+    const definition = edge.metadata?.definition;
+    const aliases = definition && typeof definition === "object" && !Array.isArray(definition)
+      && Array.isArray(definition.aliases) ? definition.aliases.filter((v): v is string => typeof v === "string") : [];
+    return edge.kind === "link_type" && [edge.relationship_name_ja, String(edge.metadata?.api_name ?? ""), ...aliases]
+      .some(label => Boolean(label) && label!.length >= 2 && normalizedQuestion.includes(normalizeGroundingText(label!)));
+  });
+  if (links.length) {
+    const ids = [...new Set(links.flatMap(edge=>[edge.source_node_id, edge.target_node_id]))];
+    return {stage:"relationship",highlightNodeIds:ids,highlightEdgeIds:links.map(e=>e.id),explanationJa:links.map(e=>`${relationshipLabel(e)} ${e.description_ja ?? ""}`).join("、"),matchedEntityNames:graph.nodes.filter(n=>ids.includes(n.id)).map(n=>n.business_name_ja),suggestionsJa:[],candidates,aggregate};
+  }
 
   const entityCandidates = preferBusinessEntities(
     candidates.filter((candidate) => GROUNDING_ENTITY_KINDS.has(candidate.node.kind))

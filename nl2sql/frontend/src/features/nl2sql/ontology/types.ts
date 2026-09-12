@@ -28,6 +28,14 @@ export type OntologyNodeKind =
   | "table"
   | "view"
   | "column"
+  | "object_type"
+  | "interface"
+  | "function"
+  | "action_type"
+  | "shared_property"
+  | "value_type"
+  | "enumeration"
+  | "object_set"
   | "business_entity"
   | "business_event"
   | "property"
@@ -613,7 +621,8 @@ export interface OntologyBuildEvent {
 
 export interface OntologyBuildJob {
   result_bundle_id?: string;
-  definition_phases?: { name: "freeze" | "evidence" | "objects" | "shared" | "capabilities" | "validation"; status: "pending" | "running" | "succeeded" | "failed" | "skipped"; detail_ja: string }[];
+  concept_coverage?: {kind:string;status:string;count:number;reason_ja:string}[];
+  definition_phases?: { name: "freeze" | "evidence" | "objects" | "shared" | "capabilities" | "validation" | "markdown" | "save"; status: "pending" | "running" | "succeeded" | "failed" | "skipped"; detail_ja: string; started_at?: string; finished_at?: string }[];
   id: string;
   profile_id: string;
   status: OntologyBuildStatus;
@@ -663,6 +672,8 @@ export interface OntologySourceDocument {
 export interface OntologyPublishJob {
   id: string;
   revision_id: string;
+  requested_etag?: string;
+  finished_at?: string | null;
   profile_id?: string;
   status: "queued" | "materializing" | "validating" | "succeeded" | "failed";
   rdf_graph_name?: string;

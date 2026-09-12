@@ -59,7 +59,7 @@ interface GroundingIndex {
   columnEntries: ColumnEntry[];
 }
 
-const TABLE_NODE_KINDS = new Set(["table", "view", "business_entity", "business_event"]);
+const TABLE_NODE_KINDS = new Set(["table", "view", "business_entity", "object_type", "business_event"]);
 const QUALIFIED_COLUMN_PATTERN = /(?:(?:"[^"]+"|[A-Za-z_][\w$#]*)\.){1,2}(?:"[^"]+"|[A-Za-z_][\w$#]*)/gu;
 
 function isRecord(value: unknown): value is Record<string, unknown> {

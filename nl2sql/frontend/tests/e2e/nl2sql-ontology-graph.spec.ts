@@ -455,6 +455,8 @@ async function expectGraphSearchFieldLayout(page: Page, playground: Locator) {
 
   await playground.getByTestId("ontology-graph-mode-physical_er").focus();
   await page.keyboard.press("Tab");
+  await expect(playground.getByRole("combobox", {name:"概念の種類",exact:true})).toBeFocused();
+  await page.keyboard.press("Tab");
   await expect
     .poll(() => page.evaluate(() => document.activeElement?.getAttribute("data-testid")))
     .toBe("ontology-graph-search");

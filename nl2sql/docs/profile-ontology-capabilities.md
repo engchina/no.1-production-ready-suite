@@ -1,43 +1,50 @@
-# Profile Ontology の構築・公開・能力利用
+# Profile Ontology：13分類と Markdown の構築・公開
 
-`AI 構築を実行` は現在の DB context / Profile の資料と Schema から業務定義の草稿を作る。業務のサンプルを利用環境へ登録せず、Function / Action を自動実行・自動有効化しない。
+Markdown を業務定義の編集・公開元とする。画面の順序は **構築入力・進捗 → Markdown 下書き／公開版 → 接地確認グラフ**。独立した構築結果・公開能力の画面は廃止した。Function / Action Type は業務の意味を記述する定義であり、この画面から実装の設定・呼出し・更新操作を実行しない。
 
-## 構築から利用まで
+## 分類と同一性
 
-1. Object Type / Property / Link Type / Function / Action Type / Interface と補助 7 分類を型付きで保存する。根拠不足・不適用・失敗は分類別に表示する。
-2. 入力固定、証拠抽出、物理モデル、共通契約、能力契約、統合検証の各段階を記録する。再構築では安定 ID、手編集、レビュー済み定義を保持し、差分をレビューへ送る。
-3. 型付き版から文書、図、OWL/SHACL、SQL context を生成する。静的検証と人のレビューは別のゲートであり、Profile の公開 pointer を独立して更新する。データ検証・受入テストは独立した確認操作で実行し、対象・標本件数・未検証範囲を報告する。
-4. 「能力の利用（Capabilities）」で公開された定義に実装を設定する。設定不足は「設定が必要（Configuration Required）」のまま残す。SQL 生成 session / job は `business_release_id` を保持し、後日の公開で過去の生成 context を置き換えない。
+| 分類 | 読む順序 |
+| --- | --- |
+| 主要6種類 | Object Type → Property → Link Type → Interface → Function → Action Type |
+| 補助7種類 | Shared Property → Value Type → Enumeration → Metric → Business Rule → Business Event → Object Set |
 
-## 能力と権限
+旧業務エンティティは Object Type、旧属性・指標・ルール等は対応する分類に変換する。命名と後続抽出に同じ概念 ID / API 名を渡す。同一性は Profile と分類、安定 ID / API 名で確認し、同じ表示名や同じ物理表という理由だけで併合しない。説明・別名・証拠・マッピングは保持し、式・型・制約等の異なる値は Markdown の確認事項へ残す。Schema / 表 / ビュー / 列は物理層に保持する。
 
-| 能力 | 初期実装 | 必要な権限 |
-| --- | --- | --- |
-| binding の更新 | ETag による競合検出、公開版に固定、明示的な有効化・無効化 | `nl2sql.ontology.capabilities.manage` |
-| Function | Oracle の検査済み SELECT、bind パラメーターを使う宣言式、登録済みのバックエンド実装 | `nl2sql.sql.execute` |
-| Action | 主キーで一意な単一テーブルの属性更新、transaction 内の登録済み処理 | `nl2sql.ontology.actions.execute` |
+すべての分類を確認するが、根拠のないインスタンスは作らない。件数と根拠不足・不適用・失敗理由は coverage として保持する。
 
-Profile 所有権・現在の権限・公開版の有効範囲をサーバーで再確認する。管理メニュー権限から Action 実行権限を暗黙追加しない。DB の `UPDATE` 権限は別途管理する。AI の資料から DB 権限を付与しない。
+## 構築
 
-Action は資料から生成されたパラメーター、書込み可能な Property、影響範囲に加えて、業務条件を明示的に binding する。現在状態の等値条件を宣言でき、複雑な業務処理はサーバーで登録した実装に委ねる。SQL の任意 UDF、DDL、DML、実行 hint、曖昧な列は Function SQL の対象外。`COUNT(*)` は許可する。
+1. 範囲・資料の準備：Profile、Schema、構築資料、Q/A、業務説明を固定する。
+2. 基本概念の構築：命名を Object Type 構築に含め、Property / Link Type とマッピングを抽出する。
+3. 関連概念の補完：先行定義を参照して共有定義・契約・補助概念を補完する。旧形式の抽出もここへ渡す。
+4. 統合・検証：同一性、参照、SQL 式、物理範囲、業務上の不足を確認する。
+5. Markdown 下書き生成：13分類の順に定義・証拠・確認事項を出力する。Q/A 由来 SQL ルールと物理情報を保持する。
+6. 保存・最終確認：下書きと派生データを保存する。
 
-登録はアプリケーション code の `register_function` / `register_action` のみ。HTTP に code 登録 API はない。Function の実装には検査済み SELECT だけを提供する `ReadOnlyFunctionContext`、Action の実装には契約内の属性だけを更新できる `ActionExecutionContext` を渡す。後者に独立した commit はない。外部サービスへの副作用を持つ実装はこの transaction registry の対象外であり、外部 adapter は追加していない。
+既存タスクの記録は改変せず、新タスクは実際の工程順・時刻を表示する。完了した工程は折りたたみ可能。失敗時も成功した抽出を保持し、再実行では既存 checkpoint を再利用する。
 
-## 確認・競合・transaction
+## Markdown の公開
 
-プレビューは Profile、公開版、binding ETag、ユーザー、入力パラメーター、対象主キー、対象値、`ORA_ROWSCN`、有効期限に固定する。画面で入力が変わった場合、離脱・再読込した場合は確認を破棄する。実行前には DB 行をロックして再取得し、状態とバージョンを再検査する。
+- 下書きを保存して `POST /profiles/{profile_id}/ontology-markdown/prepare` に ETag と `Idempotency-Key` を渡す。
+- 準備タスクは Markdown、元 revision、Profile / Schema の fingerprint、期待する公開 head を固定する。OCI Enterprise AI が全行の扱いと13分類を解析する。未解析行、解釈できない行、概念の欠落、競合、静的検証エラーがあれば公開できない。
+- `GET .../preparations/{preparation_id}` で進捗、定義ごとの増減・前後差分、行位置と検査事項を確認する。必要に応じて `POST .../preparations/{preparation_id}/validate-data` で標本データと受入テストを検証する。
+- 確認ダイアログは Profile と実際の公開版を示す。`POST .../publish` は preparation ID、draft ETag、expected head、確認フラグ、冪等キーを必須とする。確認後に LLM を再実行しない。
+- Markdown、構造化定義、graph、OWL / SHACL / 検証結果を一つの immutable snapshot に保存し、draft と head の CAS を含む同一 transaction で公開 pointer を更新する。失敗時は旧 head を維持する。
+- 公開成功後は Markdown とグラフを再取得する。公開後の編集は次の下書き版を作り、以前の公開本文と成果物を書き換えない。
 
-`ORA_ROWSCN` は `ROWDEPENDENCIES` のないテーブルでは block 単位になる。そのため他行の更新でも安全側に再プレビューを要求する場合がある。ビュー・外部テーブルには利用できないため、初期の属性更新は物理テーブルを対象にする。[Oracle ORA_ROWSCN](https://docs.oracle.com/en/database/oracle/oracle-database/19/sqlrf/ORA_ROWSCN-Pseudocolumn.html)
+準備後に Markdown / Profile / Schema / 公開 head が変わった場合は再確認する。公開応答が失われた場合は `GET .../publication-outcome?key=...` で照会し、自動再送しない。準備タスクの再開時に解析済み結果を再利用し、中断して結果のない LLM 呼出しは黙示再送しない。
 
-属性更新、実行結果、冪等キーの記録は同一のユーザーデータ接続・同一 transaction で commit する。変更後の実値がプレビューに一致しない場合も rollback する。成功監査の保存失敗は更新全体の失敗とする。失敗監査は rollback 後に区別して保存する。commit の通信結果が不明な場合は成功記録を再照会し、確認できなければ結果未確定として扱う。プレビューごとの実行 ID を固定し、別キーで同じプレビューを送っても再適用しない。
+## SQL とグラフ
 
-## 明示的 migration
+通常生成、非同期 job、引導式 session、サーバー接地検索は Profile の同じ公開 snapshot を使用する。job / session の `business_release_id` は snapshot ID を保持する。以前の独立 release を新しい生成へ重ねない。過去の release / job の読み取りは互換性のため残す。
 
-- `021_profile_ontology_revisions.sql`: 旧業務 revision の Profile 所有列と公開一意性。旧 ID / artifact は保持する。
-- `022_ontology_capability_transaction.sql`: `NL2SQL_ONT_ACTION_TX` package と body。システムテーブル管理の既存 migration 操作で適用する。構築・読取・能力 API から DDL を実行しない。
+グラフには12種類の型付きノードと Link Type の選択可能な関係辺を投影する。Markdown と概念 ID を共有し、定義の説明・型固有フィールド・マッピング・証拠を詳細に表示する。「概念の種類」は主要6／補助7にまとめ、存在しない種類は該当なしとする。全体／接地パス／物理 ER を維持し、Function / Action の詳細に実行ボタンを出さない。物理マッピングを持たない概念は参照先のオブジェクト付近へ配置する。
 
-package は公開 pointer と binding の行をロックして更新競合を検出し、実行監査 2 種だけを artifact table へ挿入する。`AUTHID DEFINER` を使うが、通常ユーザーの業務更新は `user_data_connection()` の権限・DeepSec を維持する。package は `COMMIT` / autonomous transaction を使用しない。権限は既存 `NL2SQL_APP_DB_ROLE` に限定し、業務テーブルや artifact table の広い権限を追加しない。DeepSec の後日初期化時も package が既にあれば EXECUTE のみ設定する。[Oracle AUTHID](https://docs.oracle.com/en/database/oracle/oracle-database/18/lnpls/plsql-subprograms.html)
+## 既存データの移行と廃止 API
 
-## 検証の扱い
+`POST .../migration-preview` は既存の定義を現在の Markdown へ取り込む内容を返す。`POST .../migrate` は preview ID と ETag を確認して下書きへ反映する。手書き本文と競合を残し、自動公開しない。概念 ID と移行マーカーにより再適用・応答喪失後の追跡で本文を重複追加しない。草稿がなければ新しい草稿を作る。過去の artifact は更新しない。
 
-通常 CI / pytest は fixture、InMemory store、Oracle 接続・transaction のテストダブルを使う。Playwright も API を mock する。これらを OCI 推論、実 Oracle migration、実 DeepSec / DML の統合成功とは扱わない。環境に適用後、専用のテスト用 Profile とテーブルで package のコンパイル、通常ユーザーの最小権限、行競合、二重送信、監査保存失敗の rollback を確認する。
+独立した定義の編集・解析・適用・レビュー・検証・公開・切戻し、能力 binding / invoke / preview / execute の HTTP mutation は認証・Profile アクセス検査後に `410 Gone` を返す。歴史的な構築結果・公開履歴・実行結果の GET は読み取り専用で残す。
+
+Markdown 草稿と保存基準、表示タブ、業務説明、準備 ID、公開結果の照会キーはユーザー・DB・Profile を分離して同じタブに一時保存する。共通の有効期限・保存容量制限・離脱ガードを適用する。旧能力の草稿を実行操作として復元しない。

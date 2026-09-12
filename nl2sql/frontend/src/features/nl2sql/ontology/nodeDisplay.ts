@@ -1,8 +1,12 @@
+import { conceptKinds, conceptLabel } from "./unifiedConcepts";
 import { t } from "../../../lib/i18n";
 import type { OntologyNode, OntologyNodeKind, OntologyValidationStatus } from "./types";
 
 const BUSINESS_OBJECT_KINDS = new Set<OntologyNodeKind>([
   "business_entity",
+  "object_type",
+  "interface",
+  "object_set",
   "business_event",
 ]);
 
@@ -28,6 +32,7 @@ export function physicalObjectLabel(node: OntologyNode): string {
 }
 
 export function ontologyNodeKindLabel(kind: OntologyNodeKind): string {
+  if ((conceptKinds as readonly string[]).includes(kind)) return conceptLabel(kind);
   switch (kind) {
     case "schema":
       return t("nl2sql.ontology.nodeKind.schema");
@@ -169,6 +174,8 @@ export function ontologyNodeSearchValues(node: OntologyNode): string[] {
     display.kindLabel,
     display.secondaryLabel ?? "",
     node.technical_name ?? "",
+    node.description_ja ?? "",
+    ...Object.values(node.metadata?.definition ?? {}).flatMap(value => typeof value === "string" ? [value] : Array.isArray(value) ? value.filter((v):v is string => typeof v === "string") : []),
     ...(node.aliases ?? []),
   ];
 }

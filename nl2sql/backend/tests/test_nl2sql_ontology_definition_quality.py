@@ -123,7 +123,16 @@ def test_staged_worker_and_checkpoint_reuse_after_service_restart(
     )
     service = OntologyBuildService(rt)
     job = _wait_for_job(service, service.start("sales", business_text="受注を承認する。").id)
-    assert len(job.definition_phases) == 6
+    assert [p.name for p in job.definition_phases] == [
+        "freeze",
+        "evidence",
+        "objects",
+        "shared",
+        "capabilities",
+        "validation",
+        "markdown",
+        "save",
+    ]
     assert all(phase.status == "succeeded" for phase in job.definition_phases)
     task = _OntologyBuildLlmTask(
         name=OntologyBuildStepName.TEXT_EXTRACTION,

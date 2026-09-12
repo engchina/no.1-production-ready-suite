@@ -61,6 +61,7 @@ from .ontology_clarification import (
     enrich_guided_intent,
     merge_free_text_reinterpretation,
 )
+from .ontology_markdown_router import create_markdown_router
 from .ontology_mermaid import render_mermaid_er
 from .ontology_models import (
     ClarificationAnswer,
@@ -162,6 +163,14 @@ _STORE_OPTIMISTIC_COLLECTIONS: frozenset[OntologyCollection] = frozenset(
 
 _BUSINESS_NODE_KINDS = frozenset(
     {
+        OntologyNodeKind.OBJECT_TYPE,
+        OntologyNodeKind.INTERFACE,
+        OntologyNodeKind.FUNCTION,
+        OntologyNodeKind.ACTION_TYPE,
+        OntologyNodeKind.SHARED_PROPERTY,
+        OntologyNodeKind.VALUE_TYPE,
+        OntologyNodeKind.ENUMERATION,
+        OntologyNodeKind.OBJECT_SET,
         OntologyNodeKind.BUSINESS_ENTITY,
         OntologyNodeKind.BUSINESS_EVENT,
         OntologyNodeKind.PROPERTY,
@@ -173,6 +182,8 @@ _BUSINESS_NODE_KINDS = frozenset(
 )
 _BUSINESS_EDGE_KINDS = frozenset(
     {
+        OntologyEdgeKind.LINK_TYPE,
+        OntologyEdgeKind.USES,
         OntologyEdgeKind.BUSINESS_RELATIONSHIP,
         OntologyEdgeKind.MAPS_TO,
         OntologyEdgeKind.IS_A,
@@ -989,14 +1000,22 @@ class OntologyApiRuntime:
             if published_match is not None:
                 published_document, published_revision = published_match
 
+            from .ontology_markdown_workspace import MarkdownOntologyWorkspace
+
+            snapshot = MarkdownOntologyWorkspace(self).snapshot(profile_id)
+            if snapshot:
+                published_document = {"content": snapshot["markdown"]}
+                published_revision = SchemaOntology.model_validate(snapshot["graph"]).revision
             return OntologyMarkdownState(
                 draft_markdown=self._artifact_content(draft_document),
                 published_markdown=self._artifact_content(published_document),
                 draft_revision=draft_revision,
                 published_revision=published_revision,
                 draft_version=self._profile_markdown_revision_version(profile_id, draft_document),
-                published_version=self._profile_markdown_revision_version(
-                    profile_id, published_document
+                published_version=(
+                    snapshot["display_version"]
+                    if snapshot
+                    else self._profile_markdown_revision_version(profile_id, published_document)
                 ),
                 draft_etag=str(draft_document.get("etag") or "") if draft_document else "",
                 published_at=published_revision.published_at if published_revision else None,
@@ -1009,6 +1028,29 @@ class OntologyApiRuntime:
     ) -> OntologyMarkdownState:
         with self._lock:
             state = self.ontology_markdown_state(profile_id)
+            if state.draft_etag != request.base_etag:
+                raise OntologyVersionConflictError(
+                    "ONTOLOGY_ETAG_MISMATCH", "下書きが更新されました。最新情報を取得してください。"
+                )
+            from .ontology_markdown_workspace import MarkdownOntologyWorkspace
+
+            published = MarkdownOntologyWorkspace(self).snapshot(profile_id)
+            if (
+                state.draft_revision
+                and published
+                and published.get("source_revision_id") == state.draft_revision.id
+                and request.markdown != state.draft_markdown
+            ):
+                # 公開済み本文の出典 artifact は固定し、以後の自由編集は次の草稿版へ保存する。
+                self.create_build_markdown_draft(
+                    profile_id=profile_id,
+                    base_revision_id=published["id"],
+                    payloads=[],
+                    titles=[],
+                    markdown=request.markdown,
+                    note="公開 Markdown から次の下書きを作成",
+                )
+                return self.ontology_markdown_state(profile_id)
             if (
                 state.draft_revision is None
                 or state.draft_revision.status != OntologyRevisionStatus.DRAFT
@@ -1030,6 +1072,11 @@ class OntologyApiRuntime:
     def published_markdown_for_revision(self, revision_id: str, *, profile_id: str = "") -> str:
         with self._lock:
             self._ensure_store()
+            snapshot_doc = self.store.get_artifact(revision_id)
+            if snapshot_doc and snapshot_doc.get("artifact_type") == "ontology_markdown_snapshot":
+                if profile_id and snapshot_doc.get("profile_id") != profile_id:
+                    return ""
+                return str(json.loads(snapshot_doc["content"])["markdown"])
             if profile_id:
                 published_document = self._markdown_artifact_for_revision(
                     profile_id=profile_id,
@@ -1382,9 +1429,19 @@ class OntologyApiRuntime:
                     )
                 if edge.kind == OntologyEdgeKind.IS_A and (
                     source_kind
-                    not in {OntologyNodeKind.BUSINESS_ENTITY, OntologyNodeKind.BUSINESS_EVENT}
+                    not in {
+                        OntologyNodeKind.BUSINESS_ENTITY,
+                        OntologyNodeKind.BUSINESS_EVENT,
+                        OntologyNodeKind.OBJECT_TYPE,
+                        OntologyNodeKind.INTERFACE,
+                    }
                     or target_kind
-                    not in {OntologyNodeKind.BUSINESS_ENTITY, OntologyNodeKind.BUSINESS_EVENT}
+                    not in {
+                        OntologyNodeKind.BUSINESS_ENTITY,
+                        OntologyNodeKind.BUSINESS_EVENT,
+                        OntologyNodeKind.OBJECT_TYPE,
+                        OntologyNodeKind.INTERFACE,
+                    }
                 ):
                     raise OntologyIntegrityError(
                         "ONTOLOGY_IS_A_ENDPOINT_INVALID",
@@ -1677,7 +1734,7 @@ class OntologyApiRuntime:
             edge.kind in _BUSINESS_EDGE_KINDS for edge in ontology.edges
         )
 
-    def _query_ontology(self) -> SchemaOntology:
+    def _query_ontology(self, profile_id: str = "") -> SchemaOntology:
         """Schema drift draft は、次の publish まで確認済み query scope を置換しない。
 
         例外として、published にもドラフトにも業務定義が 1 件も無い(純物理)場合は
@@ -1685,6 +1742,19 @@ class OntologyApiRuntime:
         published へ固定され続けると、profile view が永遠に空になるため。
         """
 
+        if profile_id:
+            from .ontology_markdown_workspace import MarkdownOntologyWorkspace
+
+            snapshot = MarkdownOntologyWorkspace(self).snapshot(profile_id)
+            if snapshot:
+                graph = SchemaOntology.model_validate(snapshot["graph"])
+                try:
+                    self.sessions.get_revision(graph.revision.id)
+                except OntologyNotFoundError:
+                    self.sessions.register_revision(
+                        graph.revision, nodes=graph.nodes, edges=graph.edges
+                    )
+                return graph
         latest = self._sync_ontology()
         published = [
             item
@@ -1736,12 +1806,14 @@ class OntologyApiRuntime:
     ) -> None:
         if (
             node.kind
-            not in {
-                OntologyNodeKind.BUSINESS_TERM,
-                OntologyNodeKind.BUSINESS_RULE,
-                OntologyNodeKind.ENUM_VALUE,
+            in {
+                OntologyNodeKind.BUSINESS_ENTITY,
+                OntologyNodeKind.PROPERTY,
+                OntologyNodeKind.METRIC,
+                OntologyNodeKind.BUSINESS_EVENT,
             }
             and not node.physical_mappings
+            and not node.metadata.get("definition")
         ):
             raise OntologyIntegrityError(
                 "BUSINESS_NODE_MAPPING_REQUIRED",
@@ -1793,7 +1865,7 @@ class OntologyApiRuntime:
     def profile_view(self, profile_id: str) -> tuple[ProfileOntologyView, SchemaOntology]:
         with self._lock:
             profile = self._strict_profile(profile_id)
-            ontology = self._query_ontology()
+            ontology = self._query_ontology(profile_id)
             view = self._base_profile_view(profile, ontology)
             return view.model_copy(deep=True), ontology.model_copy(deep=True)
 
@@ -1884,7 +1956,7 @@ class OntologyApiRuntime:
 
         with self._lock:
             profile = self._strict_profile(profile_id)
-            ontology = self._query_ontology()
+            ontology = self._query_ontology(profile_id)
             current = self._base_profile_view(profile, ontology)
             if request.base_etag != current.etag:
                 raise OntologyVersionConflictError(
@@ -2155,7 +2227,7 @@ class OntologyApiRuntime:
         """互換 API から active revision のプロファイル範囲を明示的に再生成する。"""
 
         with self._lock:
-            ontology = self._query_ontology()
+            ontology = self._query_ontology(profile_id)
             profile = self._strict_profile(profile_id)
             view = self._base_profile_view(profile, ontology)
             self._persist_profile_view(view)
@@ -2293,7 +2365,7 @@ class OntologyApiRuntime:
         # 全 ontology API を塞ぐため、状態参照だけをロック下で行う。
         with self._lock:
             profile = self._strict_profile(profile_id)
-            ontology = self._query_ontology()
+            ontology = self._query_ontology(profile_id)
             if (
                 ontology.revision.id != request.ontology_revision_id
                 or ontology.revision.status != OntologyRevisionStatus.PUBLISHED
@@ -2402,12 +2474,10 @@ class OntologyApiRuntime:
             ontology.revision.id,
             profile_id=profile_id,
         )
-        from .ontology_definition_workspace import ProfileOntologyWorkspaceService
+        from .ontology_markdown_workspace import MarkdownOntologyWorkspace
         from .ontology_published_context import published_context
 
-        business_release_id = str(
-            ProfileOntologyWorkspaceService(self).head(profile_id)["release_id"]
-        )
+        business_release_id = str(MarkdownOntologyWorkspace(self).head(profile_id)["snapshot_id"])
         if business_release_id:
             published_markdown = published_context(self, profile_id, business_release_id)
         context_hash = hashlib.sha256(
@@ -2527,17 +2597,17 @@ class OntologyApiRuntime:
         # スナップショット(ロック下)→ LLM 解釈(ロック外)→ 書き戻し(ロック下+再検証)。
         # Enterprise AI 呼び出し中にグローバルロックを保持すると、1 つのハング呼び出しが
         # 全 ontology API を最大 timeout×retry 分塞ぐため、HTTP はロック外で行う。
-        from .ontology_definition_workspace import ProfileOntologyWorkspaceService
+        from .ontology_markdown_workspace import MarkdownOntologyWorkspace
         from .ontology_published_context import published_context
 
         business_release_id = str(
-            ProfileOntologyWorkspaceService(self).head(request.profile_id)["release_id"]
+            MarkdownOntologyWorkspace(self).head(request.profile_id)["snapshot_id"]
         )
         if business_release_id:
             published_context(self, request.profile_id, business_release_id)
         with self._lock:
             profile = self._strict_profile(request.profile_id)
-            ontology = self._query_ontology()
+            ontology = self._query_ontology(request.profile_id)
             recommendation_id = self._validate_profile_confirmation(request, ontology)
             base_view = self._base_profile_view(profile, ontology)
             allowed = self.legacy_service.resolve_allowed_objects(
@@ -2563,7 +2633,7 @@ class OntologyApiRuntime:
                 intent = enrich_guided_intent(intent, ontology)
         with self._lock:
             # LLM 呼び出し中に revision が公開・置換されていたら stale session を作らない
-            current_ontology = self._query_ontology()
+            current_ontology = self._query_ontology(request.profile_id)
             if current_ontology.revision.id != ontology.revision.id:
                 raise OntologyVersionConflictError(
                     "ONTOLOGY_REVISION_CHANGED",
@@ -2678,11 +2748,16 @@ class OntologyApiRuntime:
         *,
         profile: Nl2SqlProfile,
         allowed: AllowedObjects,
+        revision_id: str = "",
     ) -> dict[str, Any]:
         """通常 NL2SQL job 結果に同梱する profile/request scope の graph snapshot。"""
 
         with self._lock, observe_stage("job_profile_ontology_graph_snapshot"):
-            ontology = self._query_ontology()
+            ontology = (
+                self.ontology_revision(revision_id)
+                if revision_id
+                else self._query_ontology(profile.id)
+            )
             base_view = self._base_profile_view(profile, ontology)
             view = self._narrow_profile_view(base_view, ontology, allowed)
             node_ids = set(view.node_ids)
@@ -4003,7 +4078,7 @@ class OntologyApiRuntime:
                         "提案の基準 Ontology revision が見つかりません。",
                     )
             else:
-                ontology = self._query_ontology()
+                ontology = self._query_ontology(profile_id)
             proposal = self.sessions.create_build_proposal(
                 session_id=f"ontology_build:{job_id}",
                 profile_id=profile.id,
@@ -4165,6 +4240,7 @@ class OntologyApiRuntime:
         markdown: str,
         note: str,
         prepared_base: SchemaOntology | None = None,
+        unified_definitions: list[Any] | None = None,
         on_progress: Callable[[str], None] | None = None,
     ) -> tuple[SchemaOntology, dict[str, Any]]:
         """AI 構築結果を proposal 登録せず、承認済み draft revision として保存する。"""
@@ -4190,6 +4266,42 @@ class OntologyApiRuntime:
                 titles=titles,
                 note=note or "AI 構築から Markdown 下書きを生成",
             )
+            if unified_definitions is not None:
+                from .ontology_unified_model import project_graph
+
+                candidates = base.model_copy(
+                    update={
+                        "nodes": list(
+                            {n.id: n for n in [*base.nodes, *request.node_upserts]}.values()
+                        ),
+                        "edges": list(
+                            {e.id: e for e in [*base.edges, *request.edge_upserts]}.values()
+                        ),
+                    }
+                )
+                unified = project_graph(candidates, unified_definitions)
+                ids = {n.id for n in unified.nodes}
+                edge_ids = {e.id for e in unified.edges}
+                request = request.model_copy(
+                    update={
+                        "node_upserts": [
+                            n for n in unified.nodes if n.kind in _BUSINESS_NODE_KINDS
+                        ],
+                        "edge_upserts": [
+                            e for e in unified.edges if e.kind in _BUSINESS_EDGE_KINDS
+                        ],
+                        "remove_node_ids": [
+                            n.id
+                            for n in base.nodes
+                            if n.kind in _BUSINESS_NODE_KINDS and n.id not in ids
+                        ],
+                        "remove_edge_ids": [
+                            e.id
+                            for e in base.edges
+                            if e.kind in _BUSINESS_EDGE_KINDS and e.id not in edge_ids
+                        ],
+                    }
+                )
             if on_progress is not None:
                 on_progress("下書き revision を保存しています…")
             draft = self.create_ontology_draft(
@@ -4506,6 +4618,30 @@ class OntologyApiRuntime:
             )
         ]
         node_ids = {node.id for node in nodes}
+        # 補助概念は物理 mapping を持たない場合もある。参照先がすべて今回の
+        # 範囲に収まる型付き定義だけを残し、別 object の情報を間接参照で混ぜない。
+        typed = {
+            node.id: node
+            for node in ontology.nodes
+            if node.id in base.node_ids and isinstance(node.metadata.get("definition"), dict)
+        }
+        safe = {
+            identity
+            for identity, node in typed.items()
+            if all(m.object_ref.node_id in selected_ids for m in node.physical_mappings)
+        }
+        changed = True
+        while changed:
+            changed = False
+            for edge in ontology.edges:
+                if (
+                    edge.source_node_id in safe
+                    and edge.kind in {OntologyEdgeKind.USES, OntologyEdgeKind.IS_A}
+                    and edge.target_node_id not in safe | (node_ids - typed.keys())
+                ):
+                    safe.remove(edge.source_node_id)
+                    changed = True
+        node_ids = (node_ids - typed.keys()) | safe
         edges = [
             edge
             for edge in ontology.edges
@@ -4676,6 +4812,18 @@ class OntologyApiRuntime:
         self._revision_headers_loaded = True
 
     def _load_ontology_revision(self, revision_id: str) -> SchemaOntology | None:
+        snapshot_doc = self.store.get_artifact(revision_id)
+        if snapshot_doc and snapshot_doc.get("artifact_type") == "ontology_markdown_snapshot":
+            snapshot_graph = SchemaOntology.model_validate(
+                json.loads(snapshot_doc["content"])["graph"]
+            )
+            try:
+                self.sessions.get_revision(snapshot_graph.revision.id)
+            except OntologyNotFoundError:
+                self.sessions.register_revision(
+                    snapshot_graph.revision, nodes=snapshot_graph.nodes, edges=snapshot_graph.edges
+                )
+            return snapshot_graph
         cached = self._ontologies.get(revision_id)
         header = self._revision_headers.get(revision_id)
         if cached is not None:
@@ -5333,6 +5481,10 @@ def publish_ontology_revision(
                 "REVISION_ETAG_MISMATCH",
                 "If-Match と request etag が一致しません。",
             )
+        if request.profile_id.strip():
+            raise OntologyGateBlockedError(
+                "MARKDOWN_PREPARATION_REQUIRED", "Markdown の公開前確認を実行してください。"
+            )
         job = _run_runtime_sync(
             ontology_publish_service.start,
             revision_id,
@@ -5353,6 +5505,16 @@ def get_ontology_publish_job(
     job_id: str,
     http_request: Request,
 ) -> ApiResponse[OntologyPublishJobData]:
+    snapshot_doc = ontology_runtime.store.get_artifact(job_id)
+    if snapshot_doc and snapshot_doc.get("artifact_type") == "ontology_markdown_snapshot":
+        assert_profile_access(http_request, str(snapshot_doc["profile_id"]))
+        return ApiResponse(
+            data=OntologyPublishJobData(
+                job=OntologyPublishJob.model_validate(
+                    json.loads(snapshot_doc["content"])["publish_job"]
+                )
+            )
+        )
     job = _run_runtime_sync(ontology_publish_service.get, job_id)
     if job is None:
         raise HTTPException(
@@ -6303,3 +6465,6 @@ router.include_router(create_workspace_router(lambda: ontology_runtime, _raise_d
 from .ontology_capability_router import create_capability_router  # noqa: E402
 
 router.include_router(create_capability_router(lambda: ontology_runtime, _raise_domain_error))
+
+
+router.include_router(create_markdown_router(lambda: ontology_runtime, _raise_domain_error))

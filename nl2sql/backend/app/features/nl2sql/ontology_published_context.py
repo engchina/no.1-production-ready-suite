@@ -61,6 +61,59 @@ def published_context(
     # 空 ID は旧 session。最新公開版で過去の問い合わせを再解釈しない。
     if not release_id:
         return ""
+    from .ontology_markdown_workspace import SNAPSHOT, MarkdownOntologyWorkspace
+    from .ontology_unified_model import DEFINITIONS, definition_references, render_concepts
+
+    record = runtime.store.get_artifact(release_id)
+    if record and record.get("artifact_type") == SNAPSHOT:
+        workspace = MarkdownOntologyWorkspace(runtime)
+        snapshot = workspace.snapshot(profile_id, release_id)
+        if snapshot is None:
+            raise OntologyGateBlockedError(
+                "MARKDOWN_SNAPSHOT_MISSING", "公開 Markdown が見つかりません。"
+            )
+        profile_hash, schema_hash, schema_context = workspace._scope(profile_id)
+        if (profile_hash, schema_hash) != (snapshot["profile_hash"], snapshot["schema_hash"]):
+            raise OntologyGateBlockedError(
+                "BUSINESS_SCOPE_CHANGED",
+                "Profile または Schema が変更されました。Markdown を再検証してください。",
+            )
+        from .ontology_definition_validation import schema_objects
+
+        columns = schema_objects(json.loads(schema_context))
+        allowed = {
+            name.upper(): {c.upper() for c in cols}
+            for name, cols in (allowed_columns if allowed_columns is not None else columns).items()
+        }
+        definitions = {d.api_name: d for d in DEFINITIONS.validate_python(snapshot["definitions"])}
+        selected = {
+            name: d
+            for name, d in definitions.items()
+            if _expressions_visible(d, allowed, definitions)
+            and all(
+                f"{m.owner}.{m.object_name}".upper() in allowed
+                and (
+                    not m.column_name
+                    or m.column_name.upper() in allowed[f"{m.owner}.{m.object_name}".upper()]
+                )
+                for m in d.mappings
+            )
+        }
+        changed = True
+        while changed:
+            changed = False
+            for name, d in list(selected.items()):
+                refs = [ref for _, ref in definition_references(d)]
+                if d.kind == "link_type":
+                    refs.extend([d.source, d.target])
+                if any(ref not in selected for ref in refs):
+                    selected.pop(name)
+                    changed = True
+        # 自由記述に隠れた物理参照を漏らさないよう、scope を絞った場合は確認済み定義のみ。
+        full_scope = all(
+            name in allowed and set(cols) <= allowed[name] for name, cols in columns.items()
+        )
+        return snapshot["markdown"] if full_scope else render_concepts(list(selected.values()))
     svc = ProfileOntologyWorkspaceService(runtime)
     release = svc.release(profile_id, release_id)
     if release is None:
@@ -77,7 +130,7 @@ def published_context(
         name.upper(): {col.upper() for col in cols} for name, cols in allowed_columns.items()
     }
     definitions = {d.api_name: d for d in bundle.definitions}
-    selected: dict[str, Any] = {}
+    selected = {}
     for name, d in definitions.items():
         if _expressions_visible(d, allowed, definitions) and all(
             f"{m.owner}.{m.object_name}".upper() in allowed

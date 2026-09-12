@@ -71,6 +71,12 @@ class OntologyWorker:
         logger.info("ontology_job_started", extra={"job_id": job_id, "job_type": job_type})
         if job_type == "build":
             self.build_service.run_persisted(job_id)
+        elif job_type == "markdown_prepare":
+            from .ontology_markdown_workspace import MarkdownOntologyWorkspace
+
+            MarkdownOntologyWorkspace(self.runtime).run_preparation(
+                str(document["profile_id"]), job_id
+            )
         elif job_type == "publish":
             self.publish_service.run_persisted(job_id)
         elif job_type == "definition_validation":

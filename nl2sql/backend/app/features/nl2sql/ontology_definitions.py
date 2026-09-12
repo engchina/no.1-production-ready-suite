@@ -26,14 +26,14 @@ DEFINITION_KINDS: tuple[DefinitionKind, ...] = (
     "object_type",
     "property",
     "link_type",
+    "interface",
     "function",
     "action_type",
-    "interface",
     "shared_property",
     "value_type",
+    "enumeration",
     "metric",
     "business_rule",
-    "enumeration",
     "business_event",
     "object_set",
 )
@@ -52,9 +52,13 @@ class DefinitionSource(DefinitionContract):
 
 
 class DefinitionPhase(DefinitionContract):
-    name: Literal["freeze", "evidence", "objects", "shared", "capabilities", "validation"]
+    name: Literal[
+        "freeze", "evidence", "objects", "shared", "capabilities", "validation", "markdown", "save"
+    ]
     status: Literal["pending", "running", "succeeded", "failed", "skipped"] = "pending"
     detail_ja: str = ""
+    started_at: str | None = None
+    finished_at: str | None = None
 
 
 class DefinitionEvidence(DefinitionContract):

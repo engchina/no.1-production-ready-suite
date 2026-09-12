@@ -67,6 +67,14 @@ _PHYSICAL_NODE_KINDS = frozenset(
 )
 _BUSINESS_NODE_KINDS = frozenset(
     {
+        OntologyNodeKind.OBJECT_TYPE,
+        OntologyNodeKind.INTERFACE,
+        OntologyNodeKind.FUNCTION,
+        OntologyNodeKind.ACTION_TYPE,
+        OntologyNodeKind.SHARED_PROPERTY,
+        OntologyNodeKind.VALUE_TYPE,
+        OntologyNodeKind.ENUMERATION,
+        OntologyNodeKind.OBJECT_SET,
         OntologyNodeKind.BUSINESS_ENTITY,
         OntologyNodeKind.BUSINESS_EVENT,
         OntologyNodeKind.PROPERTY,
@@ -76,7 +84,13 @@ _BUSINESS_NODE_KINDS = frozenset(
         OntologyNodeKind.ENUM_VALUE,
     }
 )
-_PATH_EDGE_KINDS = frozenset({OntologyEdgeKind.FOREIGN_KEY, OntologyEdgeKind.BUSINESS_RELATIONSHIP})
+_PATH_EDGE_KINDS = frozenset(
+    {
+        OntologyEdgeKind.FOREIGN_KEY,
+        OntologyEdgeKind.BUSINESS_RELATIONSHIP,
+        OntologyEdgeKind.LINK_TYPE,
+    }
+)
 
 
 class SchemaOntology(OntologyContract):
@@ -774,6 +788,11 @@ def migrate_profile_ontology_view(
         )
     )
 
+    # Markdown snapshot は Profile 所有。物理 mapping のない共有型・関数等も含める。
+    if ontology.revision.id.startswith("ontology_markdown_snapshot"):
+        selected_node_ids.update(
+            node.id for node in ontology.nodes if node.metadata.get("definition")
+        )
     selected_edges = [
         edge
         for edge in ontology.edges
@@ -830,6 +849,9 @@ def _node_labels(
     labels.extend((alias, 0.9, "alias") for alias in node.aliases)
     if node.technical_name:
         labels.append((node.technical_name, 0.8, "technical_name"))
+    definition = node.metadata.get("definition", {})
+    if isinstance(definition, dict):
+        labels.extend((v, 0.4, "comment") for v in definition.values() if isinstance(v, str) and v)
     for value in (
         node.description_ja,
         str(node.metadata.get("comment", "")),
@@ -875,6 +897,27 @@ def retrieve_ontology_nodes(
             terms[node.id].add(normalized_label)
             sources[node.id].add(source)
 
+    for edge in ontology.edges:
+        if edge.kind != OntologyEdgeKind.LINK_TYPE or edge.id not in profile_view.edge_ids:
+            continue
+        definition = edge.metadata.get("definition", {})
+        edge_labels = [
+            edge.relationship_name_ja,
+            str(edge.metadata.get("api_name", "")),
+            *definition.get("aliases", []),
+        ]
+        matches = {
+            _normalized_text(label)
+            for label in edge_labels
+            if len(label) >= 2 and _normalized_text(label) in question_key
+        }
+        if matches:
+            for endpoint in (edge.source_node_id, edge.target_node_id):
+                if endpoint in allowed_ids:
+                    scores[endpoint] = max(scores[endpoint], 0.95)
+                    terms[endpoint].update(matches)
+                    sources[endpoint].add("business_name")
+
     if profile is not None:
         for term, definition in profile.glossary.items():
             normalized_term = _normalized_text(term)
@@ -907,6 +950,36 @@ def retrieve_ontology_nodes(
                     continue
                 scores[node_id] = max(scores[node_id], score * 0.75)
                 sources[node_id].add("embedding")
+
+    # 型付き概念の明示参照を辿り、関数・集合等の命中も対象 object に接地する。
+    # 関係先 object への際限ない伝播はせず、object に到達したら停止する。
+    node_by_id = {node.id: node for node in candidates}
+    frontier = list(scores)
+    visited = set(frontier)
+    while frontier:
+        source_id = frontier.pop(0)
+        source_node = node_by_id[source_id]
+        if source_node.kind in {
+            OntologyNodeKind.OBJECT_TYPE,
+            OntologyNodeKind.TABLE,
+            OntologyNodeKind.VIEW,
+        }:
+            continue
+        for edge in ontology.edges:
+            if (
+                edge.id not in profile_view.edge_ids
+                or edge.source_node_id != source_id
+                or edge.kind not in {OntologyEdgeKind.USES, OntologyEdgeKind.IS_A}
+                or edge.target_node_id not in allowed_ids
+            ):
+                continue
+            target = edge.target_node_id
+            scores[target] = max(scores[target], scores[source_id] * 0.98)
+            terms[target].update(terms[source_id])
+            sources[target].update(sources[source_id])
+            if target not in visited:
+                visited.add(target)
+                frontier.append(target)
 
     hits = [
         OntologyRetrievalHit(
@@ -1117,6 +1190,7 @@ def interpret_question_deterministically(
         frozenset(
             {
                 OntologyNodeKind.BUSINESS_ENTITY,
+                OntologyNodeKind.OBJECT_TYPE,
                 OntologyNodeKind.BUSINESS_EVENT,
                 OntologyNodeKind.TABLE,
                 OntologyNodeKind.VIEW,

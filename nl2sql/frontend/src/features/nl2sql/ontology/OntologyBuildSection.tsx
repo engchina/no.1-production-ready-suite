@@ -1,4 +1,7 @@
-import { ProfileOntologyResults } from "./ProfileOntologyResults";
+import { orderedBuildProgress } from "./unifiedConcepts";
+import { MarkdownPublication } from "./MarkdownPublication";
+import { useWorkspaceState } from "@/components/WorkspaceState";
+import { useUnsavedChangesGuard } from "@/lib/useUnsavedChangesGuard";
 import { Button } from "@/components/ui/button";
 import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
 import {
@@ -62,7 +65,6 @@ import {
   getOntologyPublishJob,
   listOntologyBuildJobs,
   listOntologySourceDocuments,
-  publishOntologyRevision,
   retryOntologyBuildJob,
   saveOntologyMarkdownDraft,
   startOntologyBuild,
@@ -533,7 +535,6 @@ function SavedSourceDocumentsList({
 }
 
 export interface OntologyBuildSectionProps {
-  resultRequest?: {tab:"model"|"review";sequence:number};
   profileId: string | null;
   profileLabel?: string;
   hasProfileSchemaInput: boolean;
@@ -544,7 +545,6 @@ export interface OntologyBuildSectionProps {
 }
 
 export function OntologyBuildSection({
-  resultRequest,
   profileId,
   profileLabel,
   hasProfileSchemaInput,
@@ -553,8 +553,10 @@ export function OntologyBuildSection({
   onRefreshSchema,
   refreshingSchema = false,
 }: OntologyBuildSectionProps) {
-  const [hasTypedResult, setHasTypedResult] = useState(false);
-  const [businessText, setBusinessText] = useState("");
+  const [businessText, setBusinessText] = useWorkspaceState(`markdown:${profileId}:business-text`, "");
+  const [retainedDraft, setRetainedDraft] = useWorkspaceState(`markdown:${profileId}:draft`, {text:"",baseline:"",revisionId:"",etag:""});
+  const retainedDraftRef = useRef(retainedDraft);
+  retainedDraftRef.current = retainedDraft;
   const [qaFile, setQaFile] = useState<File | null>(null);
   const [sourceFiles, setSourceFiles] = useState<File[]>([]);
   const [sourceFilesError, setSourceFilesError] = useState("");
@@ -566,12 +568,13 @@ export function OntologyBuildSection({
   const [markdownError, setMarkdownError] = useState("");
   const [draftMarkdown, setDraftMarkdown] = useState("");
   const [draftDirty, setDraftDirty] = useState(false);
-  const [activeMarkdownTab, setActiveMarkdownTab] = useState<MarkdownTab>("draft");
+  const [activeMarkdownTab, setActiveMarkdownTab] = useWorkspaceState<MarkdownTab>(`markdown:${profileId}:tab`, "draft");
   const [draftRevision, setDraftRevision] = useState<OntologyRevision | null>(null);
   const [publishJob, setPublishJob] = useState<OntologyPublishJob | null>(null);
   const [progressCollapsed, setProgressCollapsed] = useState(false);
   const { notice, showNotice, clearNotice } = usePageNotice();
   const confirm = useConfirm();
+  useUnsavedChangesGuard(draftDirty, async () => confirm({title:t("markdownOntology.leaveTitle"),description:t("markdownOntology.leaveHint"),confirmLabel:t("markdownOntology.leaveConfirm"),tone:"warning"}));
   const [busy, setBusy] = useState("");
   // 実行中ステップの経過秒を更新するための現在時刻(ポーリングと同じ周期で更新)
   const [nowTick, setNowTick] = useState(() => Date.now());
@@ -695,6 +698,8 @@ export function OntologyBuildSection({
     const incomingDraftMarkdown = next.draft_markdown ?? "";
     const incomingDraftRevision = next.draft_revision;
     const incomingRevisionId = incomingDraftRevision?.id ?? "";
+    const retained = retainedDraftRef.current;
+    const restoreDirty = reason === "profile-load" && retained.text !== retained.baseline;
     const incomingPublishedRevisionId = next.published_revision?.id ?? "";
     const incomingHasDraft = markdownStateHasDraft(
       next,
@@ -739,7 +744,9 @@ export function OntologyBuildSection({
       !incomingDraftMarkdown.trim()
         ? options.fallbackDraftMarkdown
         : incomingDraftMarkdown;
-    const reconciled: OntologyMarkdownState = preserveCurrentDraft
+    const reconciled: OntologyMarkdownState = restoreDirty
+      ? {...next,draft_markdown:retained.text,draft_etag:retained.etag,draft_revision:incomingRevisionId === retained.revisionId ? incomingDraftRevision : null}
+      : preserveCurrentDraft
       ? {
           ...next,
           draft_markdown: currentDraftMarkdown,
@@ -750,7 +757,9 @@ export function OntologyBuildSection({
       : reason === "save"
         ? { ...next, draft_markdown: savedDraftMarkdown }
         : next;
-    const nextDraftDirty = preserveCurrentDraft ? currentDraftDirty : false;
+    const nextDraftDirty = restoreDirty || (preserveCurrentDraft ? currentDraftDirty : false);
+    if (restoreDirty && incomingRevisionId !== retained.revisionId) showNotice("warning", t("markdownOntology.draftTargetChanged"));
+    if (!nextDraftDirty) setRetainedDraft({text:reconciled.draft_markdown ?? "",baseline:reconciled.draft_markdown ?? "",revisionId:reconciled.draft_revision?.id ?? "",etag:reconciled.draft_etag});
 
     markdownStateRef.current = reconciled;
     draftRevisionRef.current = reconciled.draft_revision;
@@ -775,7 +784,7 @@ export function OntologyBuildSection({
     setDraftMarkdown(reconciled.draft_markdown ?? "");
     setDraftDirty(nextDraftDirty);
     onMarkdownStateChange?.(reconciled);
-  }, [onMarkdownStateChange]);
+  }, [onMarkdownStateChange, setRetainedDraft, showNotice]);
 
   const refreshSourceDocuments = useCallback(async (targetProfileId: string) => {
     const requestId = sourceDocumentsRequestIdRef.current + 1;
@@ -869,7 +878,7 @@ export function OntologyBuildSection({
   }, [applyMarkdownState]);
 
   const applyOptimisticPublishedMarkdown = useCallback((
-    publishedRevisionId: string
+    result: OntologyPublishJob
   ): boolean => {
     const currentState = markdownStateRef.current;
     const currentDraftRevision = draftRevisionRef.current;
@@ -877,21 +886,23 @@ export function OntologyBuildSection({
     if (
       currentState === null ||
       currentDraftRevision === null ||
-      currentDraftRevision.id !== publishedRevisionId ||
+      (currentDraftRevision.id !== result.revision_id && currentState.draft_etag !== result.requested_etag) ||
+      draftDirtyRef.current ||
       !currentDraftMarkdown.trim()
     ) {
       return false;
     }
     const publishedRevision: OntologyRevision = {
       ...currentDraftRevision,
+      id: result.revision_id,
       status: "published",
-      published_at: currentDraftRevision.published_at ?? null,
+      published_at: result.finished_at ?? currentDraftRevision.published_at ?? null,
     };
     applyMarkdownState(
       {
         ...currentState,
         draft_markdown: currentDraftMarkdown,
-        draft_revision: publishedRevision,
+        draft_revision: currentDraftRevision.id === result.revision_id ? publishedRevision : currentDraftRevision,
         draft_version: currentState.draft_version ?? currentDraftRevision.version,
         draft_etag: currentState.draft_etag,
         published_markdown: currentDraftMarkdown,
@@ -947,14 +958,12 @@ export function OntologyBuildSection({
     onMarkdownStateChange?.(null);
     setDraftMarkdown("");
     setDraftDirty(false);
-    setActiveMarkdownTab("draft");
     setDraftRevision(null);
     setPublishJob(null);
     setProgressCollapsed(false);
     clearNotice();
     setMarkdownLoading(Boolean(profileId));
     setMarkdownError("");
-    setBusinessText("");
     setQaFile(null);
     setSourceFiles([]);
     setSourceFilesError("");
@@ -1090,25 +1099,6 @@ export function OntologyBuildSection({
           if (cancelled) return; // 古い応答で新しい状態を上書きしない
           publishPollFailureCountRef.current = 0;
           setPublishJob(next);
-          const terminal = next.status === "succeeded" || next.status === "failed";
-          if (!terminal || publishTerminalHandledRef.current === publishJobId) return;
-          publishTerminalHandledRef.current = publishJobId;
-          if (next.status === "succeeded") {
-            const preserveCurrentOnError = applyOptimisticPublishedMarkdown(next.revision_id);
-            if (profileIdRef.current) {
-              void refreshMarkdown(profileIdRef.current, {
-                reason: "publish",
-                preserveCurrentOnError,
-              });
-            }
-            toast.success(t("profiles.ontologyBuild.published"));
-            void onPublished?.();
-          } else {
-            showNotice(
-              "danger",
-              next.error_message_ja || t("profiles.ontologyBuild.error.publish")
-            );
-          }
         })
         .catch((err) => {
           if (cancelled || isAbortError(err)) return;
@@ -1140,6 +1130,17 @@ export function OntologyBuildSection({
     refreshMarkdown,
     showNotice,
   ]);
+
+  useEffect(() => {
+    if (!publishJob || !["succeeded", "failed"].includes(publishJob.status) || publishTerminalHandledRef.current === publishJob.id) return;
+    publishTerminalHandledRef.current = publishJob.id;
+    if (publishJob.status === "succeeded") {
+      const preserveCurrentOnError = applyOptimisticPublishedMarkdown(publishJob);
+      if (profileIdRef.current) void refreshMarkdown(profileIdRef.current, {reason:"publish", preserveCurrentOnError});
+      toast.success(t("profiles.ontologyBuild.published"));
+      void onPublished?.();
+    } else showNotice("danger", publishJob.error_message_ja || t("profiles.ontologyBuild.error.publish"));
+  }, [publishJob, applyOptimisticPublishedMarkdown, refreshMarkdown, onPublished, showNotice]);
 
   if (!profileId) {
     return (
@@ -1311,6 +1312,7 @@ export function OntologyBuildSection({
         markdown: markdownToSave,
         base_etag: baseDraftEtag,
       });
+      if (profileIdRef.current !== profileId) return null;
       applyMarkdownState(next, {
         reason: "save",
         fallbackDraftMarkdown: markdownToSave,
@@ -1325,31 +1327,6 @@ export function OntologyBuildSection({
       return null;
     } finally {
       if (!silent) setBusy("");
-    }
-  };
-
-  const publish = async () => {
-    if (!draftRevision || !canEditDraftRevision || busy || publishRunning) return;
-    setBusy("publish");
-    clearNotice();
-    try {
-      let revisionToPublish = draftRevision;
-      if (draftDirty) {
-        const saved = await saveDraftMarkdown({ silent: true });
-        if (!saved?.draft_revision) return;
-        revisionToPublish = saved.draft_revision;
-      }
-      setPublishJob(
-        await publishOntologyRevision(
-          revisionToPublish.id,
-          revisionToPublish.etag,
-          profileId
-        )
-      );
-    } catch (err) {
-      showNotice("danger", err instanceof Error ? err.message : t("profiles.ontologyBuild.error.publish"));
-    } finally {
-      setBusy("");
     }
   };
 
@@ -1386,7 +1363,7 @@ export function OntologyBuildSection({
       <SectionHeading profileLabel={profileLabel} />
       <PageNotice notice={notice} />
       <section
-        className={hasTypedResult ? "grid w-full min-w-0 content-start gap-4" : "grid w-full min-w-0 content-start gap-4 rounded-md border border-border bg-background p-3"}
+        className="grid w-full min-w-0 content-start gap-4 rounded-md border border-border bg-background p-3"
         aria-label={t("profiles.ontologyBuild.setupTitle")}
         data-testid="ontology-build-setup-panel"
       >
@@ -1509,15 +1486,15 @@ export function OntologyBuildSection({
       </section>
 
       <section
-        className={hasTypedResult ? "grid w-full min-w-0 content-start gap-4" : "grid w-full min-w-0 content-start gap-4 rounded-md border border-border bg-background p-3"}
-        aria-label={t(hasTypedResult ? "ontologyWorkspace.workTitle" : "profiles.ontologyBuild.reviewTitle")}
+        className="grid w-full min-w-0 content-start gap-4 rounded-md border border-border bg-background p-3"
+        aria-label={t("profiles.ontologyBuild.reviewTitle")}
         data-testid="ontology-build-review-panel"
       >
-        {!hasTypedResult ? <DbObjectPanelHeader
+        {<DbObjectPanelHeader
           icon={FileText}
-          title={t(hasTypedResult ? "ontologyWorkspace.workTitle" : "profiles.ontologyBuild.reviewTitle")}
+          title={t("profiles.ontologyBuild.reviewTitle")}
           description={t("profiles.ontologyBuild.reviewHint")}
-        /> : null}
+        />}
       {!job && busy === "start" ? (
         <TimedLoadingState
           label={t("profiles.ontologyBuild.submitting")}
@@ -1584,7 +1561,7 @@ export function OntologyBuildSection({
               </Button>
             ) : null
           }
-          steps={[...job.steps.map((step, stepIndex) => {
+          steps={orderedBuildProgress(job, job.steps.map((step, stepIndex) => {
             const displayStatus = effectiveBuildStepStatus(job.status, step.status);
             const displayFinishedAt =
               displayStatus !== step.status && job.finished_at ? job.finished_at : step.finished_at;
@@ -1622,7 +1599,8 @@ export function OntologyBuildSection({
                 </>
               ),
             };
-          }), ...((job.definition_phases ?? []).map(phase => ({ id: phase.name, label: t(`ontologyResults.phase.${phase.name}`), status: normalizeBuildStepStatus(phase.status), statusLabel: t(`ontologyResults.phaseStatus.${phase.status}`), description: phase.detail_ja })))] }
+          }))}
+
           footer={
             schemaScopeFailure ||
             unscopedBuildError ||
@@ -1735,13 +1713,11 @@ export function OntologyBuildSection({
         />
       ) : null}
 
-      <ProfileOntologyResults resultRequest={resultRequest} key={profileId} profileId={profileId} buildId={job?.result_bundle_id} profileLabel={profileLabel} onPublished={onPublished} onTypedResult={setHasTypedResult} />
 
       <section
         className="grid min-w-0 gap-3 rounded-md border border-border bg-background p-3"
         aria-label={t("profiles.ontologyBuild.markdownTitle")}
         data-testid="ontology-build-markdown"
-        style={hasTypedResult ? { display: "none" } : undefined}
       >
         <ContentActionBar
           ariaLabel={t("profiles.ontologyBuild.markdownActions")}
@@ -1749,6 +1725,7 @@ export function OntologyBuildSection({
             <span className="flex min-w-0 items-center gap-2">
               <FileText size={16} className="shrink-0 text-primary" aria-hidden="true" />
               <span>{t("profiles.ontologyBuild.markdownTitle")}</span>
+              {draftDirty && <StatusBadge variant="warning" label={t("profiles.ontologyBuild.markdownUnsaved")} />}
             </span>
           }
           description={t("profiles.ontologyBuild.markdownHint")}
@@ -1866,10 +1843,12 @@ export function OntologyBuildSection({
                   onChange={(event) => {
                     if (!canEditDraftRevision) return;
                     const nextDraftMarkdown = event.currentTarget.value;
+                    const dirty = nextDraftMarkdown !== retainedDraftRef.current.baseline;
                     draftMarkdownRef.current = nextDraftMarkdown;
-                    draftDirtyRef.current = true;
+                    draftDirtyRef.current = dirty;
                     setDraftMarkdown(nextDraftMarkdown);
-                    setDraftDirty(true);
+                    setDraftDirty(dirty);
+                    setRetainedDraft(current=>({...current,text:nextDraftMarkdown}));
                   }}
                 />
               </>
@@ -1907,32 +1886,15 @@ export function OntologyBuildSection({
           </div>
         )}
 
-        {!markdownLoading ? (
-          <div
-            className="flex flex-wrap items-center gap-3 border-t border-border pt-4"
-            data-testid="ontology-publish-actions"
-          >
-            <Button
-              type="button"
-              variant="primary"
-              size="lg"
-              className="w-full sm:w-auto"
-              loading={busy === "publish"}
-              disabled={
-                !canEditDraftRevision ||
-                publishRunning ||
-                (busy !== "" && busy !== "publish")
-              }
-              onClick={() => void publish()}
-            >
-              <Sparkles size={15} aria-hidden="true" />
-              <span>{t("profiles.ontologyBuild.publish")}</span>
-            </Button>
-            {draftDirty ? (
-              <StatusBadge variant="warning" label={t("profiles.ontologyBuild.markdownUnsaved")} />
-            ) : null}
-          </div>
-        ) : null}
+        {!markdownLoading && <MarkdownPublication
+          key={profileId} profileId={profileId} profileLabel={profileLabel ?? profileId}
+          signature={`${draftMarkdown}\n${publishedRevision?.id ?? ""}\n${publishedRevision?.etag ?? ""}`}
+          disabled={!canEditDraftRevision || publishRunning || busy !== ""}
+          save={async () => draftDirty ? await saveDraftMarkdown({silent:true}) : markdownState}
+          onPublished={setPublishJob}
+          onBusyChange={setBusy}
+          onMigrated={state => applyMarkdownState(state, {reason:"save"})}
+        />}
         {!markdownLoading && publishJob ? (
           <div
             className="grid gap-2 rounded-md border border-border bg-background p-3"

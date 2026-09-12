@@ -45,11 +45,14 @@ _EDGE_KIND_LABELS_JA: dict[OntologyEdgeKind, str] = {
     OntologyEdgeKind.FOREIGN_KEY: "外部キー",
     OntologyEdgeKind.BUSINESS_RELATIONSHIP: "業務関係",
     OntologyEdgeKind.JOINS: "Join",
+    OntologyEdgeKind.LINK_TYPE: "リンク型（Link Type）",
 }
 
 
 def _node_kind_label_ja(kind: OntologyNodeKind) -> str:
-    return _NODE_KIND_LABELS_JA.get(kind, kind.value)
+    from .ontology_unified_model import CONCEPT_LABELS
+
+    return CONCEPT_LABELS.get(kind.value, _NODE_KIND_LABELS_JA.get(kind, kind.value))
 
 
 def _edge_kind_label_ja(kind: OntologyEdgeKind) -> str:
@@ -118,6 +121,14 @@ def serialize_owl_turtle(ontology: SchemaOntology) -> str:
         subject = stable_node_iri(node.id)
         node_type = {
             OntologyNodeKind.BUSINESS_ENTITY: "owl:Class",
+            OntologyNodeKind.OBJECT_TYPE: "owl:Class",
+            OntologyNodeKind.INTERFACE: "owl:Class",
+            OntologyNodeKind.FUNCTION: "ont:Function",
+            OntologyNodeKind.ACTION_TYPE: "ont:ActionType",
+            OntologyNodeKind.SHARED_PROPERTY: "owl:DatatypeProperty",
+            OntologyNodeKind.VALUE_TYPE: "rdfs:Datatype",
+            OntologyNodeKind.ENUMERATION: "skos:ConceptScheme",
+            OntologyNodeKind.OBJECT_SET: "ont:ObjectSet",
             OntologyNodeKind.BUSINESS_EVENT: "owl:Class",
             OntologyNodeKind.PROPERTY: "owl:DatatypeProperty",
             OntologyNodeKind.ENUM_VALUE: "owl:NamedIndividual, skos:Concept",
@@ -162,7 +173,9 @@ def serialize_owl_turtle(ontology: SchemaOntology) -> str:
             lines.append(f"{source} ont:governs {target} .")
         elif edge.kind == OntologyEdgeKind.MAPS_TO:
             lines.append(f"{source} ont:mapsTo {target} .")
-        elif edge.kind == OntologyEdgeKind.BUSINESS_RELATIONSHIP:
+        elif edge.kind == OntologyEdgeKind.USES:
+            lines.append(f"{source} ont:uses {target} .")
+        elif edge.kind in {OntologyEdgeKind.BUSINESS_RELATIONSHIP, OntologyEdgeKind.LINK_TYPE}:
             predicate = stable_edge_iri(edge.id)
             lines.append(f"{predicate} rdf:type owl:ObjectProperty .")
             lines.append(f"{predicate} rdfs:label {_literal(edge.relationship_name_ja)} .")

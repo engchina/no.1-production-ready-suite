@@ -1,4 +1,6 @@
+import { conceptKinds, conceptLabel, conceptGraph, nodeConceptKind } from "./unifiedConcepts";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useWorkspaceState } from "@/components/WorkspaceState";
 import {
   AlertTriangle,
   BookOpen,
@@ -75,6 +77,7 @@ import type { OntologyGraph, OntologyNode } from "./types";
 
 interface OntologyGraphCanvasProps {
   graph: OntologyGraph;
+  workspaceKey?: string;
   selectedNodeId?: string | null;
   selectedEdgeId?: string | null;
   onSelectNode?: (nodeId: string) => void;
@@ -107,6 +110,7 @@ const KIND_ICONS: Record<string, LucideIcon> = {
   view: Layers,
   column: Columns3,
   business_entity: Boxes,
+  object_type: Boxes, interface: Layers, function: Sigma, action_type: Route, shared_property: Tag, value_type: BookOpen, enumeration: ListOrdered, object_set: Boxes,
   business_event: CalendarClock,
   property: Tag,
   metric: Sigma,
@@ -543,6 +547,7 @@ function LaneOverlays({ lanes }: { lanes: OntologyGraphSemanticLane[] }) {
 
 function OntologyFlow({
   graph,
+  workspaceKey = "canvas",
   selectedNodeId,
   selectedEdgeId,
   onSelectNode,
@@ -565,7 +570,9 @@ function OntologyFlow({
     observer.observe(canvas);
     return () => observer.disconnect();
   }, []);
-  const [search, setSearch] = useState("");
+  const stateKey = `ontology-graph:${workspaceKey}:${graph.revision?.id ?? graph.revision_id ?? "current"}`;
+  const [search, setSearch] = useWorkspaceState(`${stateKey}:search`, "");
+  const [conceptKind, setConceptKind] = useWorkspaceState(`${stateKey}:concept`, "");
   const [searchCursor, setSearchCursor] = useState(0);
   const [showDetails, setShowDetails] = useState(false);
   const [disabledLegendGroups, setDisabledLegendGroups] = useState<Set<string>>(new Set());
@@ -595,8 +602,8 @@ function OntologyFlow({
 
   // view-mode 適用後・詳細フィルタ前のグラフ。検索は非表示の詳細ノードも対象にする。
   const scopedGraph = useMemo<OntologyGraph>(
-    () => ontologyGraphForViewMode(graph, currentViewMode, highlightNodeIds, highlightEdgeIds),
-    [graph, currentViewMode, highlightNodeIds, highlightEdgeIds]
+    () => conceptGraph(ontologyGraphForViewMode(graph, currentViewMode, highlightNodeIds, highlightEdgeIds), currentViewMode === "physical_er" ? "" : conceptKind),
+    [graph, currentViewMode, highlightNodeIds, highlightEdgeIds, conceptKind]
   );
   // トグルに出す件数は view-mode 適用後を数える(接地パスで実際に出る列数と一致させる)。
   const detailCount = useMemo(
@@ -1041,6 +1048,14 @@ function OntologyFlow({
       {/* ツールバーはキャンバス外(上部)に置き、フィット時にノードと重ならないようにする */}
       <div className="flex flex-wrap items-center gap-2">
         <GraphModeControl mode={currentViewMode} onChange={changeViewMode} />
+        <label className="grid w-full min-w-0 max-w-full gap-1 text-xs text-muted sm:w-72">{t("markdownOntology.kindFilter")}
+          <select aria-label={t("markdownOntology.kindFilter")} className="h-11 w-full min-w-0 max-w-full rounded-md border border-border bg-card px-3 text-sm text-foreground" value={conceptKind} onChange={e=>setConceptKind(e.target.value)}>
+            <option value="">{t("markdownOntology.allConcepts")}</option>
+            {[conceptKinds.slice(0,6),conceptKinds.slice(6)].map((kinds,i)=><optgroup key={i} label={t(i?"markdownOntology.auxConcepts":"markdownOntology.mainConcepts")}>
+              {kinds.map(kind=>{const exists=kind === "link_type" ? graph.edges.some(e=>e.kind === "link_type" || e.kind === "business_relationship") : graph.nodes.some(n=>nodeConceptKind(n.kind) === kind); return <option key={kind} value={kind} disabled={!exists}>{conceptLabel(kind)}{exists?"":` · ${t("markdownOntology.noConcept")}`}</option>;})}
+            </optgroup>)}
+          </select>
+        </label>
         <div className="flex min-w-0 max-w-full flex-wrap items-center gap-1">
           <GraphToolbarSearchField value={search} onChange={setSearch} />
           {query ? (
@@ -1082,6 +1097,7 @@ function OntologyFlow({
             </div>
           ) : null}
         </div>
+        {query && scopedGraph.edges.filter(e=>[e.relationship_name_ja,e.description_ja,String(e.metadata?.api_name ?? "")].some(value=>normalize(value ?? "").includes(query))).map(edge=><Button key={edge.id} size="sm" variant="secondary" onClick={()=>onSelectEdge?.(edge.id)}>{edge.relationship_name_ja}</Button>)}
         {detailCount > 0 ? (
           <label
             className="flex h-[44px] min-w-0 max-w-full cursor-pointer items-center gap-2 rounded-md border border-border bg-card px-3 text-xs text-foreground shadow-sm transition-colors focus-within:border-primary focus-within:ring-2 focus-within:ring-ring/40 sm:h-[40px]"
