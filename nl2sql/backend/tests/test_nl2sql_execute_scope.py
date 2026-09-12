@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 from fastapi import HTTPException
@@ -20,6 +21,7 @@ from app.features.nl2sql.models import (
     AnalyzeRequest,
     ExecuteRequest,
     Nl2SqlProfile,
+    QueryResults,
     SchemaCatalog,
     SchemaColumn,
     SchemaTable,
@@ -324,3 +326,56 @@ def test_direct_sql_keeps_valid_cte_scopes(sql: str) -> None:
     analysis = service.analyze_sql(sql, allowed, 100)
     assert analysis.safety.is_safe, analysis.safety.blocked_reason
     assert analysis.safety.referenced_tables == ["APP.ORDERS"]
+
+
+@pytest.mark.parametrize("alias", ["x", "p", '"x"'])
+@pytest.mark.parametrize(
+    "operation",
+    ["PIVOT (COUNT(*) FOR ID IN (1))", "UNPIVOT (v FOR k IN (ID, AMOUNT))"],
+)
+def test_execute_accepts_pivot_cte_with_result_alias(
+    monkeypatch: pytest.MonkeyPatch, alias: str, operation: str
+) -> None:
+    service = _service(_repository())
+    sql = "WITH x AS (SELECT ID, AMOUNT FROM APP.ORDERS) " f"SELECT * FROM x {operation} {alias}"
+    allowed = service.resolve_direct_sql_allowed_objects(AllowedObjects(), profile_ids={"sales"})
+    analysis = service.analyze_sql(sql, allowed, 100)
+    assert analysis.safety.is_safe, analysis.safety.blocked_reason
+    assert analysis.safety.referenced_tables == ["APP.ORDERS"]
+    execute = Mock(return_value=QueryResults(columns=[], rows=[], total=0))
+    monkeypatch.setattr(nl2sql_router, "nl2sql_service", service)
+    monkeypatch.setattr(service, "_use_oracle_runtime", lambda: True)
+    monkeypatch.setattr(service._oracle_adapter, "execute_select", execute)
+    nl2sql_router.execute(
+        ExecuteRequest(sql=sql, row_limit=100),
+        _request(_principal({"sales"})),  # type: ignore[arg-type]
+    )
+    execute.assert_called_once_with(sql, 100)
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "WITH salary AS (SELECT ID FROM APP.ORDERS) "
+        "SELECT * FROM APP.SALARY PIVOT (COUNT(*) FOR ID IN (1)) salary",
+        "WITH x AS (SELECT ID FROM APP.ORDERS) "
+        "SELECT * FROM SALARY PIVOT (COUNT(*) FOR ID IN (1)) x",
+        "SELECT * FROM SALARY PIVOT (COUNT(*) FOR ID IN (1)) salary "
+        "WHERE EXISTS (WITH salary AS (SELECT ID FROM APP.ORDERS) SELECT 1 FROM salary)",
+    ],
+)
+def test_pivot_alias_does_not_hide_unauthorized_physical_table(
+    monkeypatch: pytest.MonkeyPatch, sql: str
+) -> None:
+    service = _service(_repository())
+    execute = Mock()
+    monkeypatch.setattr(nl2sql_router, "nl2sql_service", service)
+    monkeypatch.setattr(service, "_use_oracle_runtime", lambda: True)
+    monkeypatch.setattr(service._oracle_adapter, "execute_select", execute)
+    with pytest.raises(HTTPException) as denied:
+        nl2sql_router.execute(
+            ExecuteRequest(sql=sql, row_limit=100),
+            _request(_principal({"sales"})),  # type: ignore[arg-type]
+        )
+    assert denied.value.status_code == 400
+    execute.assert_not_called()

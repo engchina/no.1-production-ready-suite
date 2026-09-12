@@ -67,16 +67,15 @@ def prepare_oracle_query(sql: str, *, for_parser: bool = True) -> str:
     不正な引用や閉じていないコメントは parser に拒否させる。
     """
     tokens = list(_tokens(sql))
-    last_code = next(
-        (
-            i
-            for i in range(len(tokens) - 1, -1, -1)
-            if tokens[i][0] != "comment" and tokens[i][1].strip()
-        ),
-        None,
-    )
-    if last_code is not None and tokens[last_code] == ("code", ";"):
-        tokens[last_code] = ("code", "")
+    # 末尾の空 statement は一度で除去し、実行用/解析用の反復処理を冪等にする。
+    # 実際の SQL token に到達したら停止し、文と文の間の分号は残す。
+    for index in range(len(tokens) - 1, -1, -1):
+        kind, text = tokens[index]
+        if kind == "comment" or not text.strip():
+            continue
+        if (kind, text) != ("code", ";"):
+            break
+        tokens[index] = ("code", "")
     result: list[str] = []
     for kind, text in tokens:
         if for_parser and kind in {"q", "nq"}:

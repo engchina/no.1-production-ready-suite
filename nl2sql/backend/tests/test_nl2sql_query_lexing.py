@@ -11,7 +11,7 @@ from fastapi import HTTPException
 from app.features.nl2sql import router
 from app.features.nl2sql.models import ExecuteRequest, QueryResults
 from app.features.nl2sql.oracle_adapter import OracleNl2SqlAdapter
-from app.features.nl2sql.service import Nl2SqlService, is_select_only
+from app.features.nl2sql.service import Nl2SqlService, is_select_only, normalize_executable_sql
 from app.features.nl2sql.sql_lexing import prepare_oracle_query
 from app.features.nl2sql.sql_semantics import parse_oracle_sql
 from app.features.nl2sql.store import MemoryNl2SqlStore
@@ -21,6 +21,16 @@ from app.settings import get_settings
 @pytest.mark.parametrize(
     ("sql", "expected"),
     [
+        ("SELECT ID FROM APP.ORDERS;;", "SELECT ID FROM APP.ORDERS"),
+        ("SELECT ID FROM APP.ORDERS; ; ;", "SELECT ID FROM APP.ORDERS"),
+        (
+            "SELECT ID FROM APP.ORDERS; /* note */; -- tail\n;",
+            "SELECT ID FROM APP.ORDERS /* note */ -- tail",
+        ),
+        (
+            "SELECT q'[it''s; valid]' AS NOTE FROM APP.ORDERS;;",
+            "SELECT q'[it''s; valid]' AS NOTE FROM APP.ORDERS",
+        ),
         ("SELECT ID FROM APP.ORDERS; -- explanation", "SELECT ID FROM APP.ORDERS -- explanation"),
         ("SELECT ID FROM APP.ORDERS; /* note */", "SELECT ID FROM APP.ORDERS /* note */"),
         (
@@ -59,12 +69,17 @@ def test_execute_preserves_literals_and_removes_only_statement_terminator(
         SimpleNamespace(state=SimpleNamespace(principal=None)),  # type: ignore[arg-type]
     )
     execute.assert_called_once_with(expected, 100)
+    assert normalize_executable_sql(expected) == expected
+    parsed = prepare_oracle_query(expected)
+    assert prepare_oracle_query(parsed) == parsed
 
 
 @pytest.mark.parametrize(
     "sql",
     [
         "SELECT q'[ok]' FROM APP.ORDERS; DELETE FROM APP.ORDERS",
+        "SELECT 1 FROM APP.ORDERS;; DELETE FROM APP.ORDERS;;",
+        "SELECT 1 FROM APP.ORDERS; /* between */; SELECT 2 FROM APP.ORDERS;;",
         "SELECT 1 FROM APP.ORDERS; /* note */ SELECT 2 FROM APP.ORDERS",
         "SELECT q'[unterminated' FROM APP.ORDERS",
         "SELECT 1 FROM APP.ORDERS; /* unterminated",

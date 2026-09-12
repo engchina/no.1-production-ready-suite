@@ -471,9 +471,9 @@ def parse_oracle_sql(
         original_ids[id(table)]
         for scope in traverse_scope(normalized)
         for table in scope.tables
-        if not table.db
-        and not table.catalog
-        and isinstance(scope.sources.get(table.alias_or_name), Scope)
+        if not table.db and not table.catalog
+        # 透視後の alias は sources を上書きするため、可視 CTE の元の表名を引く。
+        and isinstance(scope.cte_sources.get(table.name), Scope)
     }
     # Oracle の再帰 WITH は RECURSIVE keyword を持たないため sqlglot の
     # scope では未解決になる。UNION ALL の再帰側に限って自己参照を補う。
