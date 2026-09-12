@@ -1107,7 +1107,7 @@ const nl2sqlJa = {
   "nl2sql.profile.empty.readOnlyDescription": "利用可能な業務プロファイルがありません。管理者に権限付与を依頼してください。",
   "nl2sql.profile.empty.action": "業務プロファイルを作成",
   "nl2sql.question.label": "クエリ",
-  "nl2sql.question.placeholder": "確認したい内容を業務用語で入力してください",
+  "nl2sql.question.placeholder": "確認したい内容を日本語で入力してください",
   "nl2sql.question.template.default": "自由入力",
   "nl2sql.question.template.basic": "項目抽出",
   "nl2sql.question.template.aggregate": "集計・グループ化",

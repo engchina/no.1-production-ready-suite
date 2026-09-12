@@ -3398,6 +3398,9 @@ test("クエリとスキーマ参照は desktop で左右並置、mobile で縦�
   const question = nl2sqlQuestionInput(page);
   const picker = page.getByTestId("nl2sql-schema-reference");
   await expect(question).toBeVisible();
+  await expect(question).toHaveAttribute("placeholder", "確認したい内容を日本語で入力してください");
+  await expect(question).toHaveAccessibleName("クエリ 必須");
+  await expect(question).toHaveValue("");
   await expect(picker).toBeVisible();
 
   const questionBox = await question.boundingBox();
@@ -3415,6 +3418,7 @@ test("クエリとスキーマ参照は desktop で左右並置、mobile で縦�
     expect(pickerBox!.y).toBeGreaterThan(questionBox!.y);
   }
   await expectNoHorizontalScroll(page);
+  await question.screenshot({ path: test.info().outputPath("query-guidance.png") });
 });
 
 test("クエリは内容に応じて最大10行まで自動拡張し、挿入行へ内部スクロールする", async ({ page }) => {
