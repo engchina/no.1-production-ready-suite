@@ -905,15 +905,6 @@ export function OntologyBuildSection({
     return true;
   }, [applyMarkdownState]);
 
-  const cancelMarkdownLoad = useCallback(() => {
-    const controller = markdownLoadControllerRef.current;
-    if (!controller) return;
-    markdownLoadControllerRef.current = null;
-    markdownRequestIdRef.current += 1;
-    controller.abort();
-    setMarkdownLoading(false);
-  }, []);
-
   const applyBuildJobMarkdownOutput = useCallback((next: OntologyBuildJob) => {
     const markdownOutput = next.markdown_output ?? "";
     if (!markdownOutput.trim()) return;
@@ -1837,7 +1828,6 @@ export function OntologyBuildSection({
             ariaLabel={t("profiles.ontologyBuild.markdownLoading")}
             variant="detail"
             operationKey={`ontology-markdown-load:${profileId ?? ""}`}
-            onCancel={cancelMarkdownLoad}
             placement="panel"
             testId="ontology-markdown-loading"
           />

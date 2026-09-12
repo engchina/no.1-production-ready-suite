@@ -1751,32 +1751,32 @@ test("Profile の一覧読込と情報取得後の workspace/Markdown 読込で�
   await expect(page.getByTestId("ontology-markdown-draft-empty")).toBeVisible();
 });
 
-test("Markdown オントロジーの初期読込はキャンセルでき、取消後の応答で上書きしない", async ({ page }) => {
+test("Markdown オントロジーの読込はキャンセル操作を表示せず完了時に内容を表示する", async ({ page }, testInfo) => {
+  await page.clock.install({ time: new Date("2026-09-12T00:00:00Z") });
   await mockApi(page);
   const markdownGate = createRequestGate();
   await page.unroute("**/api/nl2sql/profiles/*/ontology-markdown");
   await page.route("**/api/nl2sql/profiles/*/ontology-markdown", async (route) => {
     await markdownGate.promise;
-    try {
-      await fulfillJson(route, markdownDraftPayload(generatedDraftMarkdown));
-    } catch {
-      // ユーザー取消で破棄された request は fulfill できなくても正常。
-    }
+    await fulfillJson(route, markdownDraftPayload(generatedDraftMarkdown));
   });
 
   await page.goto("/ontology-build?profile=default");
   await loadOntologyBuildWorkspace(page);
   const skeleton = page.getByTestId("ontology-markdown-loading");
   await expect(skeleton).toBeVisible();
-  await skeleton.getByRole("button", { name: "キャンセル" }).click();
+  await expect(skeleton.getByRole("button", { name: "キャンセル" })).toHaveCount(0);
+  await page.clock.fastForward(21_000);
+  await expect(skeleton.getByRole("timer")).toHaveAccessibleName("経過時間 00:21");
+  await expect(skeleton).toContainText("通常より時間がかかっています");
+  await expect(skeleton.getByRole("button", { name: "キャンセル" })).toHaveCount(0);
+  await skeleton.screenshot({ path: testInfo.outputPath("markdown-loading-without-cancel.png") });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 
-  await expect(skeleton).toHaveCount(0);
-  await expect(page.getByText("Markdown オントロジーを読み込めませんでした。")).toHaveCount(0);
-  await expect(page.getByTestId("ontology-markdown-draft-empty")).toBeVisible();
   markdownGate.release();
-  await page.waitForTimeout(50);
-  // Draft 未生成のままなのでエディタは表示されない(取消後の応答で上書きされていない)
-  await expect(page.getByTestId("ontology-markdown-draft-editor")).toHaveCount(0);
+  await expect(skeleton).toHaveCount(0);
+  await expect(page.getByTestId("ontology-markdown-draft-editor")).toHaveValue(generatedDraftMarkdown);
+  await expect(page.getByText("Markdown オントロジーを読み込めませんでした。")).toHaveCount(0);
 });
 
 test("Profile の読込失敗から再試行できる", async ({ page }) => {
