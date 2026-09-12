@@ -1035,6 +1035,7 @@ export function DbObjectGrid({
   ownerPrefix,
   sort,
   labels,
+  showComments = false,
   totalCount,
   hasNextPage,
   loadingNextPage = false,
@@ -1058,6 +1059,7 @@ export function DbObjectGrid({
   ownerPrefix: DbObjectOwnerPrefix;
   sort: DbObjectSortState;
   labels: DbObjectGridLabels;
+  showComments?: boolean;
   totalCount?: number;
   hasNextPage?: boolean;
   loadingNextPage?: boolean;
@@ -1131,9 +1133,10 @@ export function DbObjectGrid({
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/70">
-                {items.map((item) => {
+                {items.map((item, index) => {
                   const qualifiedName = dbAdminObjectQualifiedName(item);
                   const selected = qualifiedName === selectedName;
+                  const commentId = `${idPrefix}-comment-${index}`;
                   return (
                     <tr
                       key={qualifiedName}
@@ -1153,11 +1156,17 @@ export function DbObjectGrid({
                         <button
                           type="button"
                           aria-label={labels.showObject(qualifiedName)}
+                          aria-describedby={showComments ? commentId : undefined}
                           aria-current={selected ? "true" : undefined}
-                          className="break-all font-mono text-xs font-semibold text-primary hover:text-primary focus:outline-none focus:ring-2 focus:ring-ring/40"
+                          className="grid max-w-full text-left focus:outline-none focus:ring-2 focus:ring-ring/40"
                           onClick={() => onSelect(qualifiedName)}
                         >
-                          {qualifiedName}
+                          <span className="break-all font-mono text-xs font-semibold text-primary">{qualifiedName}</span>
+                          {showComments && (
+                            <span id={commentId} className="line-clamp-2 break-words text-xs leading-5 text-muted [overflow-wrap:anywhere]" title={item.comment?.trim() || "-"}>
+                              {item.comment?.trim() || "-"}
+                            </span>
+                          )}
                         </button>
                       </td>
                       <td className="whitespace-nowrap px-3 py-2 font-sans text-xs text-foreground">{rowCountLabel(item.row_count)}</td>

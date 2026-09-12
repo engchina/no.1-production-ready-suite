@@ -888,6 +888,75 @@ async function compactVisualStyle(locator: Locator) {
   });
 }
 
+test("コメント付きテーブル一覧でも読込・取得エラー・再試行後の空状態を表示する", async ({ page }) => {
+  await mockObjectManagementApi(page, scenarios[0], { itemCount: 0 });
+  const gate = createRequestGate();
+  let fail = true;
+  await page.route("**/api/nl2sql/db-admin/objects?*", async (route) => {
+    await gate.promise;
+    if (fail) {
+      await route.fulfill({ status: 400, contentType: "application/json", body: JSON.stringify({ detail: "一覧の取得に失敗しました。" }) });
+    } else {
+      await fulfillJson(route, { runtime: "deterministic", items: [], total: 0, next_cursor: null, warnings: [] });
+    }
+  });
+  await page.goto("/table-management");
+  await expect(page.getByTestId("table-management-list-skeleton")).toBeVisible();
+  gate.release();
+  await expect(page.getByText("一覧の取得に失敗しました。", { exact: true })).toBeVisible();
+  fail = false;
+  await page.getByRole("button", { name: "再試行", exact: true }).click();
+  await expect(page.getByText("テーブルがありません", { exact: true })).toBeVisible();
+  await expectNoHorizontalScroll(page);
+});
+
+test("テーブル管理は Profile 一覧と同じ補足表示でコメントを名前の下に表示する", async ({ page }, testInfo) => {
+  const shortComment = "請求書の金額と支払期日を管理します。";
+  const longComment = "長い日本語のテーブルコメントです。".repeat(12) + "LONG_IDENTIFIER_".repeat(12);
+  await mockObjectManagementApi(page, scenarios[0], {
+    itemCount: 1,
+    extraItems: [
+      { name: "INVOICES", owner: "APP", object_type: "table", row_count: 10, comment: shortComment },
+      { name: "LONG_COMMENT", owner: "APP", object_type: "table", row_count: 20, comment: longComment },
+      { name: "WHITESPACE", owner: "APP", object_type: "table", row_count: null, comment: "   " },
+    ],
+  });
+  await page.goto("/table-management");
+  const grid = page.getByTestId("table-management-grid");
+  await expect(grid.locator("tbody tr")).toHaveCount(4);
+  await expect(grid.getByRole("columnheader", { name: /コメント/ })).toHaveCount(0);
+  for (const [name, comment] of [["INVOICES", shortComment], ["LONG_COMMENT", longComment], ["TABLE_01", "-"], ["WHITESPACE", "-"]]) {
+    const button = grid.getByRole("button", { name: `APP.${name} を表示`, exact: true });
+    const text = button.locator("span").nth(1);
+    await expect(text).toHaveText(comment);
+    await expect(button).toHaveAccessibleDescription(comment);
+    const layout = await button.evaluate((node) => {
+      const [name, comment] = Array.from(node.querySelectorAll("span"));
+      const nameBox = name.getBoundingClientRect();
+      const commentBox = comment.getBoundingClientRect();
+      const cellBox = node.closest("td")!.getBoundingClientRect();
+      const style = getComputedStyle(comment);
+      return { below: commentBox.top >= nameBox.bottom, contained: commentBox.left >= cellBox.left && commentBox.right <= cellBox.right,
+        clamp: style.webkitLineClamp, height: commentBox.height, lineHeight: parseFloat(style.lineHeight) };
+    });
+    expect(layout.below).toBe(true);
+    expect(layout.contained).toBe(true);
+    expect(layout.clamp).toBe("2");
+    expect(layout.height).toBeLessThanOrEqual(layout.lineHeight * 2 + 1);
+  }
+  await grid.getByText(shortComment, { exact: true }).click();
+  await expect(page.getByTestId("table-management-detail-header")).toContainText("INVOICES");
+  const longButton = grid.getByRole("button", { name: "APP.LONG_COMMENT を表示", exact: true });
+  await longButton.focus();
+  await page.keyboard.press("Enter");
+  await expect(longButton).toHaveAttribute("aria-current", "true");
+  await grid.screenshot({ path: testInfo.outputPath("table-name-comments.png") });
+  await expectNoHorizontalScroll(page);
+  await page.getByRole("searchbox", { name: "検索" }).fill("支払期日");
+  await expect(grid.locator("tbody tr")).toHaveCount(1);
+  await expect(grid.getByText(shortComment, { exact: true })).toBeVisible();
+});
+
 for (const scenario of scenarios) {
   test(
     `${scenario.title}はデスクトップ8行・モバイル5行の高さに収める`,

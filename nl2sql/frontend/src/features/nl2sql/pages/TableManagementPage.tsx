@@ -949,6 +949,7 @@ export function TableManagementPage() {
               }
             >
             <DbObjectGrid
+              showComments
               idPrefix="table-management"
               headingId="table-grid-heading"
               icon={Table2}
