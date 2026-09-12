@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { Banner, toast } from "@engchina/production-ready-ui";
 import { StatusBadge } from "@/components/ui/status-badge";
@@ -46,7 +45,6 @@ export function useSyntheticRuns() {
 
 export function SyntheticRunNotifications() {
   const query = useSyntheticRuns();
-  const navigate = useNavigate();
   const observed = useRef(new Map<string, string>());
   const scope = JSON.stringify(query.key);
   const previousScope = useRef(scope);
@@ -59,17 +57,13 @@ export function SyntheticRunNotifications() {
         const options = {
           duration: 4000,
           description: run.targets.map((target) => target.table_name).join(", "),
-          action: {
-            label: t("syntheticRun.viewResult"),
-            onClick: () => navigate(`/data-management?synthetic_run=${encodeURIComponent(run.run_id)}`),
-          },
         };
         if (run.status === "completed") toast.success(label, options);
         else toast.warning(label, options);
       }
       observed.current.set(run.run_id, run.status);
     }
-  }, [query.data, navigate]);
+  }, [query.data]);
   return null;
 }
 

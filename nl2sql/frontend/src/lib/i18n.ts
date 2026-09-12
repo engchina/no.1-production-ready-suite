@@ -2840,7 +2840,6 @@ const nl2sqlJa = {
   "syntheticRun.status.no_data": "処理は終了しましたが、データは追加されていません",
   "syntheticRun.status.unknown": "生成結果を確認できていません",
   "syntheticRun.skipped": "生成対象から除外されました",
-  "syntheticRun.viewResult": "結果を確認",
   "syntheticRun.stale": "最新の状況を取得できません。前回の情報を表示しています。最終確認:",
   "syntheticRun.notStarted": "生成はまだ開始されていません。",
   "syntheticRun.continues": "この画面を離れても処理は続きます。",

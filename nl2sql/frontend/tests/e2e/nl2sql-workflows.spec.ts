@@ -10974,7 +10974,7 @@ test("synthetic run status outage keeps prior state and never resubmits", async 
   expect(submits).toBe(0);
 });
 
-test("synthetic completion uses a bottom-right toast and keyboard result action without another generation", async ({ page }, testInfo) => {
+test("synthetic completion uses a bottom-right toast without a result action or another generation", async ({ page }, testInfo) => {
   await mockNl2SqlApi(page);
   let status = "running";
   let writes = 0;
@@ -10993,8 +10993,10 @@ test("synthetic completion uses a bottom-right toast and keyboard result action 
   const notifications = page.getByRole("region", { name: "通知", exact: true });
   await expect(notifications.getByRole("status")).toHaveCount(0);
   status = "completed";
-  const result = notifications.getByRole("button", { name: "結果を確認" });
-  await expect(result).toBeVisible();
+  await expect(notifications.getByRole("status")).toHaveCount(1);
+  await expect(notifications.getByRole("button", { name: "結果を確認" })).toHaveCount(0);
+  await expect(notifications.getByRole("button")).toHaveCount(1);
+  await expect(notifications.getByRole("button", { name: "閉じる", exact: true })).toBeVisible();
   await expect(input).toBeFocused();
   await expect(notifications).toHaveAttribute("aria-live", "polite");
   await expect(notifications.getByRole("status")).toHaveCount(1);
@@ -11008,12 +11010,10 @@ test("synthetic completion uses a bottom-right toast and keyboard result action 
   expect(box!.y + box!.height).toBeCloseTo(page.viewportSize()!.height - inset, 0);
   await expectNoHorizontalScroll(page);
   await page.screenshot({ path: testInfo.outputPath("synthetic-completion-toast.png") });
-  await result.focus();
+  await notifications.getByRole("button", { name: "閉じる", exact: true }).focus();
   await page.keyboard.press("Enter");
-  await expect(page).toHaveURL(/\/data-management\?synthetic_run=run-001/);
+  await expect(page).toHaveURL(/\/admin-sql$/);
   await expect(notifications.getByRole("status")).toHaveCount(0);
-  await expect(page.getByTestId("synthetic-run-status")).toHaveText("合成データの生成が完了しました");
-  await expect(page.getByRole("cell", { name: "synthetic-customer" })).toBeVisible();
   expect(writes).toBe(0);
 });
 
@@ -11030,7 +11030,10 @@ for (const status of ["completed", "partial", "failed", "no_data"]) {
     await expect.poll(() => reads).toBeGreaterThanOrEqual(2);
     current = status;
     const notifications = page.getByRole("region", { name: "通知", exact: true });
-    await expect(notifications.getByRole("button", { name: "結果を確認" })).toBeVisible();
+    await expect(notifications.getByRole("status")).toHaveCount(1);
+    await expect(notifications).toContainText("APP.INVOICES");
+    await expect(notifications.getByRole("button", { name: "結果を確認" })).toHaveCount(0);
+    await expect(notifications.getByRole("button")).toHaveCount(1);
     if (status === "completed") {
       await expect(notifications.getByRole("status")).toHaveCount(0, { timeout: 6_000 });
     } else {
