@@ -3297,42 +3297,72 @@ test("スキーマ参照から連続挿入すると各項目が改行区切り�
   await expect(question).toHaveValue("\"請求\".\"請求金額\"\n\"請求\".\"請求金額\"");
 });
 
-test("クエリのテンプレートボタンで穴埋めテンプレートを全置換挿入できる", async ({ page }) => {
+test("クエリのテンプレートは入力を保持して追記し、自由入力は変更しない", async ({ page }, testInfo) => {
   await mockNl2SqlApi(page);
+  let jobs = 0;
+  page.on("request", (request) => {
+    if (request.method() === "POST" && new URL(request.url()).pathname === "/api/nl2sql/jobs") jobs += 1;
+  });
   await page.goto("/query");
   const question = nl2sqlQuestionInput(page);
-
-  // 「テンプレート:」行が textarea の上に見える
+  const freeInput = page.getByRole("button", { name: "自由入力", exact: true });
   await expect(page.getByText("テンプレート:", { exact: true })).toBeVisible();
-  for (const label of ["項目抽出", "集計・グループ化", "上位N件・並び替え", "複数テーブル結合"]) {
-    await expect(page.getByRole("button", { name: label, exact: true })).toBeVisible();
+  await freeInput.click();
+  await expect(question).toHaveValue("");
+
+  const original = "請求金額を一覧で見たい\n  2025年の請求を対象にする  ";
+  const templates = [
+    ["項目抽出", "対象テーブル：\n抽出項目：\n抽出条件："],
+    ["集計・グループ化", "対象テーブル：\n集計内容（件数・合計・平均など）：\n集計単位（グループ化）：\n抽出条件："],
+    ["上位N件・並び替え", "対象テーブル：\n抽出項目：\n並び替え（項目と昇順／降順）：\n表示件数（上位N件）：\n抽出条件："],
+    ["複数テーブル結合", "対象テーブル（複数可）：\nテーブル間の関連：\n抽出項目：\n抽出条件："],
+  ];
+  for (const [label, body] of templates) {
+    await question.fill(original);
+    // テキストが選択されていても、その範囲を上書きしない。
+    await question.focus();
+    await question.press("ControlOrMeta+A");
+    await page.getByRole("button", { name: label, exact: true }).click();
+    await expect(question).toHaveValue(`${original}\n${body}`);
+    await expect(question).toBeFocused();
+    const caret = await question.evaluate((el) => (el as HTMLTextAreaElement).selectionStart);
+    expect(caret).toBe(original.length + 1 + body.indexOf("\n"));
+    await freeInput.click();
+    await expect(question).toHaveValue(`${original}\n${body}`);
   }
 
-  // クリックで穴埋め本文が入り(既存入力は全置換)、カーソルは 1 行目「対象テーブル：」の直後
-  await question.fill("既存の入力");
-  await page.getByRole("button", { name: "項目抽出", exact: true }).click();
-  await expect(question).toHaveValue("対象テーブル：\n抽出項目：\n抽出条件：");
-  await expect(question).toBeFocused();
-  const caret = await question.evaluate((el) => (el as HTMLTextAreaElement).selectionStart);
-  expect(caret).toBe("対象テーブル：".length);
-
-  // 別テンプレートも全置換
-  await page.getByRole("button", { name: "集計・グループ化", exact: true }).click();
-  await expect(question).toHaveValue(
-    "対象テーブル：\n集計内容（件数・合計・平均など）：\n集計単位（グループ化）：\n抽出条件：",
-  );
-
-  // スキーマ参照のカーソル挿入と組み合わせて空欄を埋められる
-  await page.getByRole("button", { name: "項目抽出", exact: true }).click();
+  // 入力の末尾にある改行を利用し、キーボードでも同じように追記できる。
+  await question.fill(`${original}\n`);
+  const basic = page.getByRole("button", { name: "項目抽出", exact: true });
+  await basic.focus();
+  await page.keyboard.press("Enter");
+  const basicText = templates[0][1];
+  await expect(question).toHaveValue(`${original}\n${basicText}`);
   await openSchemaPicker(page);
   await page.getByRole("button", { name: "請求 を開閉" }).click();
   await page.getByRole("button", { name: /^請求金額 TOTAL_AMOUNT/ }).click();
-  await expect(question).toHaveValue("対象テーブル：\"請求\".\"請求金額\"\n抽出項目：\n抽出条件：");
+  const filled = `${original}\n対象テーブル："請求"."請求金額"\n抽出項目：\n抽出条件：`;
+  await expect(question).toHaveValue(filled);
+  await basic.click();
+  await expect(question).toHaveValue(`${filled}\n${basicText}`);
+  await page.getByRole("button", { name: "集計・グループ化", exact: true }).click();
+  const appended = `${filled}\n${basicText}\n${templates[1][1]}`;
+  await expect(question).toHaveValue(appended);
+  await page.reload();
+  await expect(question).toHaveValue(appended);
 
-  // 375px でも折返しで収まり、横スクロールが発生しない
-  await page.setViewportSize({ width: 375, height: 800 });
-  await expect(page.getByRole("button", { name: "複数テーブル結合", exact: true })).toBeVisible();
+  // 空欄ではテンプレートだけを挿入し、長い入力では追加した欄を表示する。
+  await question.fill("");
+  await basic.click();
+  await expect(question).toHaveValue(basicText);
+  const longQuestion = Array.from({ length: 25 }, (_, index) => `確認したい内容 ${index + 1}`).join("\n");
+  await question.fill(longQuestion);
+  await basic.click();
+  await expect(question).toHaveValue(`${longQuestion}\n${basicText}`);
+  await expect.poll(() => question.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+  await question.screenshot({ path: testInfo.outputPath("appended-question-template.png") });
   await expectNoHorizontalScroll(page);
+  expect(jobs).toBe(0);
 });
 
 test("スキーマピッカーは compact（checkbox なし・挿入でページがスクロールしない）", async ({ page }) => {

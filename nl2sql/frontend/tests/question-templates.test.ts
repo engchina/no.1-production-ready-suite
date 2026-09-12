@@ -2,10 +2,39 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  appendQuestionTemplate,
   QUESTION_FILTER_LABELS,
   QUESTION_SLOT_LABELS,
   QUESTION_TEMPLATES,
 } from "../src/features/nl2sql/questionTemplates.ts";
+
+test("自由入力では空欄・編集中・テンプレート適用済みのいずれも変更しない", () => {
+  for (const question of ["", "請求金額を一覧で見たい", QUESTION_TEMPLATES[1].body]) {
+    assert.equal(appendQuestionTemplate(question, ""), null);
+  }
+});
+
+test("テンプレートは入力の空白・改行を保持して追記し、最初の空欄へカーソルを置く", () => {
+  for (const template of QUESTION_TEMPLATES.slice(1)) {
+    for (const question of ["", "請求金額を一覧で見たい", "  部署別の社員数  ", "条件\n", "条件\r\n", "条件\n\n", "📊売上"]) {
+      const appended = appendQuestionTemplate(question, template.body);
+      assert.ok(appended);
+      assert.ok(appended.value.startsWith(question));
+      assert.ok(appended.value.endsWith(template.body));
+      const prefix = question + (question && !question.endsWith("\n") ? "\n" : "");
+      assert.equal(appended.value, prefix + template.body);
+      assert.equal(appended.value.slice(appended.caret - 1, appended.caret + 1), "：\n");
+      assert.equal(appended.caret, prefix.length + template.body.indexOf("\n"));
+    }
+  }
+});
+
+test("別テンプレートや同じテンプレートを続けて押しても記入済みの内容を保持する", () => {
+  const original = "社員数を知りたい\n対象テーブル：EMPLOYEE\n抽出項目：社員名\n抽出条件：在職中";
+  const first = appendQuestionTemplate(original, QUESTION_TEMPLATES[2].body)!;
+  const second = appendQuestionTemplate(first.value, QUESTION_TEMPLATES[2].body)!;
+  assert.equal(second.value, `${original}\n${QUESTION_TEMPLATES[2].body}\n${QUESTION_TEMPLATES[2].body}`);
+});
 
 test("すべてのテンプレートが対象テーブル行を持つ穴埋め形式である", () => {
   assert.equal(QUESTION_TEMPLATES.length, 5);

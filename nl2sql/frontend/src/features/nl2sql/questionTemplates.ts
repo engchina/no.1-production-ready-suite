@@ -23,7 +23,7 @@ export const QUESTION_SLOT_LABELS = [
 // スロットのうち「抽出条件」系(空欄ガード・解釈表示の filter 判定に使う)。
 export const QUESTION_FILTER_LABELS = ["抽出条件", "条件", "WHERE条件", "WHERE 条件", "検索条件"];
 export const QUESTION_TEMPLATES: Array<{ labelKey: string; body: string }> = [
-  // 先頭は「自由入力」。body 空でクリック時にクエリを空へ戻す(テンプレ未適用の初期状態)。
+  // 先頭は「自由入力」。body が空のため、既存のクエリや関連状態を変更しない。
   {
     labelKey: "nl2sql.question.template.default",
     body: "",
@@ -45,3 +45,18 @@ export const QUESTION_TEMPLATES: Array<{ labelKey: string; body: string }> = [
     body: "対象テーブル（複数可）：\nテーブル間の関連：\n抽出項目：\n抽出条件：",
   },
 ];
+
+/** 入力をそのまま残し、テンプレートの最初の空欄を編集できる位置を返す。 */
+export function appendQuestionTemplate(
+  question: string,
+  body: string,
+): { value: string; caret: number } | null {
+  if (!body) return null;
+  const separator = question && !question.endsWith("\n") ? "\n" : "";
+  const offset = question.length + separator.length;
+  const firstLineEnd = body.indexOf("\n");
+  return {
+    value: `${question}${separator}${body}`,
+    caret: offset + (firstLineEnd === -1 ? body.length : firstLineEnd),
+  };
+}
