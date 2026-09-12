@@ -65,6 +65,13 @@ class RoleRecord:
 
 
 @dataclass(slots=True)
+class UserIdentity:
+    user_uuid: str
+    login_user_id: str
+    display_name: str
+
+
+@dataclass(slots=True)
 class UserRecord:
     user_uuid: str
     login_user_id: str

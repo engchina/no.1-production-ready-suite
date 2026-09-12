@@ -19,6 +19,7 @@ import {
 import { useNavigate } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
+import { useAuth } from "@/features/security/AuthProvider";
 import { EmptyState, toast } from "@engchina/production-ready-ui";
 
 import { StatusBadge, type StatusVariant } from "@/components/ui/status-badge";
@@ -47,6 +48,24 @@ import type { EngineTiming, HistoryData, HistoryItem, Nl2SqlEngine, StageTiming 
 import { userFeedbackRatingBadgeLabel } from "../feedbackLabels";
 
 type HistoryDetailTab = "overview" | "sql";
+
+function HistoryExecutor({ item, detailed = false }: { item: HistoryItem; detailed?: boolean }) {
+  const { user } = useAuth();
+  if (!user?.is_system_admin) return null;
+  const uuid = item.actor_user_uuid?.trim();
+  const loginId = item.actor_login_user_id?.trim();
+  const name = item.actor_display_name?.trim();
+  const identity = !uuid ? t("history.actor.unrecorded")
+    : loginId ? (name ? t("history.actor.identity", { name, loginId }) : loginId)
+    : t("history.actor.missing", { uuid });
+  return (
+    <span className="grid min-w-0 gap-1 text-sm leading-relaxed text-foreground [overflow-wrap:anywhere]" data-testid="history-executor">
+      <span>{t("history.actor.label")}: {identity}</span>
+      {detailed && uuid && loginId && <span className="text-muted">{t("history.actor.uuid", { uuid })}</span>}
+      {detailed && loginId && <span className="text-muted">{t("history.actor.hint")}</span>}
+    </span>
+  );
+}
 
 function HistorySafetyHelp() {
   return (
@@ -321,6 +340,7 @@ function HistoryGrid({
                           className="font-medium text-foreground"
                           testId="history-question"
                         />
+                        <HistoryExecutor item={item} />
                         <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
                           <span className="font-sans text-xs tabular-nums text-foreground">
                             {formatDateTime(item.created_at)}
@@ -517,6 +537,7 @@ function HistoryDetailPanel({
             label={item.safety_is_safe ? t("nl2sql.safety.safe") : t("nl2sql.safety.blocked")}
           />
         </div>
+        <HistoryExecutor item={item} detailed />
       </div>
 
       <div className="overflow-x-auto border-b border-border" role="tablist" aria-label={t("history.detail.tabsLabel")}>

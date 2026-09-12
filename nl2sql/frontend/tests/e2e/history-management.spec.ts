@@ -1,6 +1,6 @@
 import { expectLocalUiFonts } from "./_helpers/local-fonts";
 import { expect, test, type Locator, type Page, type Route } from "@playwright/test";
-import { mockDatabaseGateReady } from "./_helpers/database-gate";
+import { mockDatabaseGateReady, systemAdminMe } from "./_helpers/database-gate";
 import { expectCompactSortHeaders, expectPlainSortHeader } from "./_helpers/sort-header";
 
 test.beforeEach(async ({ page }) => mockDatabaseGateReady(page));
@@ -304,6 +304,54 @@ async function expectSameWidth(a: Locator, b: Locator) {
   expect(Math.abs(boxA!.width - boxB!.width)).toBeLessThanOrEqual(1);
   expect(Math.abs(boxA!.x - boxB!.x)).toBeLessThanOrEqual(1);
 }
+
+test("管理者は実行ユーザーを一覧と詳細で確認し同名・削除済み・未記録を区別できる", async ({ page }, testInfo) => {
+  const items = historyItems.map((item, index) => ({
+    ...item,
+    actor_user_uuid: `actor-${index}`,
+    actor_login_user_id: `analyst-${index}`,
+    actor_display_name: "同じ表示名",
+  }));
+  items.push({ ...items[0], id: "deleted", question: "削除済みユーザーの履歴", actor_user_uuid: "deleted-user", actor_login_user_id: "", actor_display_name: "" });
+  items.push({ ...items[0], id: "legacy", question: "古い履歴", actor_user_uuid: "", actor_login_user_id: "", actor_display_name: "" });
+  items[2].actor_display_name = "長い表示名".repeat(12);
+  items[2].actor_login_user_id = "long_login_id_".repeat(10);
+  await mockHistory(page, items);
+  await page.goto("/history");
+  const first = page.getByRole("button", { name: "未入金の顧客を確認 の履歴を表示" });
+  await expect(first.getByTestId("history-executor")).toHaveText("実行ユーザー: 同じ表示名（analyst-0）");
+  const second = page.getByRole("button", { name: "請求金額を確認 の履歴を表示" });
+  await second.focus();
+  await page.keyboard.press("Enter");
+  const detail = page.getByTestId("history-detail").getByTestId("history-executor");
+  await expect(detail).toContainText("同じ表示名（analyst-1）");
+  await expect(detail).toContainText("ユーザー UUID: actor-1");
+  await expect(detail).toContainText("表示名とログイン ID は現在のユーザー情報です。");
+  await page.getByRole("button", { name: "削除済みユーザーの履歴 の履歴を表示" }).click();
+  await expect(detail).toContainText("ユーザー情報なし（deleted-user）");
+  await page.getByRole("button", { name: "古い履歴 の履歴を表示" }).click();
+  await expect(detail).toHaveText("実行ユーザー: 記録なし");
+  const longRow = page.getByRole("button", { name: "監査ログを削除 の履歴を表示" });
+  await longRow.click();
+  await expectContained(longRow.getByTestId("history-executor"), longRow);
+  await expectContained(detail, page.getByTestId("history-detail"));
+  expect(await hasDocumentHorizontalScroll(page)).toBe(false);
+  await page.getByTestId("history-detail-header").screenshot({ path: testInfo.outputPath("history-executor-detail.png") });
+  await longRow.screenshot({ path: testInfo.outputPath("history-executor-row.png") });
+});
+
+test("一般ユーザーには管理者向けの実行ユーザー情報を表示しない", async ({ page }) => {
+  await page.route("**/api/auth/me", (route) => fulfillJson(route, {
+    ...systemAdminMe, is_system_admin: false, role_codes: ["ANALYST"], permissions: ["menu.history"],
+  }));
+  await mockHistory(page, historyItems.map((item) => ({
+    ...item, actor_user_uuid: "other-user", actor_login_user_id: "other-login", actor_display_name: "他ユーザー",
+  })));
+  await page.goto("/history");
+  await expect(historyRows(page)).toHaveCount(3);
+  await expect(page.getByTestId("history-executor")).toHaveCount(0);
+  await expect(page.getByText(/他ユーザー|other-login/)).toHaveCount(0);
+});
 
 test("実行履歴の安全とブロックの定義は操作なしで読めて履歴選択でも参照できる", async ({ page }, testInfo) => {
   await mockHistory(page);

@@ -20,6 +20,7 @@ from .domain import (
     DataEntitlementRecord,
     RoleRecord,
     SessionRecord,
+    UserIdentity,
     UserRecord,
     scope_expression_canonical_json,
     scope_expression_from_json,
@@ -99,6 +100,7 @@ class SecurityStore(Protocol):
     def bootstrap(self, *, login_user_id: str, display_name: str, password_hash: str) -> bool: ...
     def get_user_by_login_user_id(self, normalized_login_user_id: str) -> UserRecord | None: ...
     def get_user(self, user_uuid: str) -> UserRecord | None: ...
+    def get_user_identities(self, user_uuids: list[str]) -> dict[str, UserIdentity]: ...
     def list_users(self) -> list[UserRecord]: ...
     def create_user(self, user: UserRecord) -> UserRecord: ...
     def update_user(
@@ -232,6 +234,14 @@ class InMemorySecurityStore:
                 copy.deepcopy(item)
                 for item in sorted(self.users.values(), key=lambda u: u.login_user_id)
             ]
+
+    def get_user_identities(self, user_uuids: list[str]) -> dict[str, UserIdentity]:
+        with self._lock:
+            return {
+                user_uuid: UserIdentity(user_uuid, user.login_user_id, user.display_name)
+                for user_uuid in set(user_uuids)
+                if user_uuid and (user := self.users.get(user_uuid)) is not None
+            }
 
     def create_user(self, user: UserRecord) -> UserRecord:
         with self._lock:
@@ -645,6 +655,29 @@ class OracleSecurityStore:
             ") THEN 1 ELSE 0 END AS IS_BOOTSTRAP_ADMIN "
             "FROM NL2SQL_APP_USERS"
         )
+
+    def get_user_identities(self, user_uuids: list[str]) -> dict[str, UserIdentity]:
+        """履歴ページの実行者だけを一括解決し、認証情報・role は取得しない。"""
+        ids = sorted(set(user_uuids) - {""})
+        identities: dict[str, UserIdentity] = {}
+        if not ids:
+            return identities
+        with self.connection("NL2SQL_APP_USERS") as conn, conn.cursor() as cursor:
+            for offset in range(0, len(ids), 500):
+                binds = {
+                    f"user_{index}": value for index, value in enumerate(ids[offset : offset + 500])
+                }
+                placeholders = ", ".join(f":{key}" for key in binds)
+                # 展開するのは生成した bind 名だけ。UUID の値はすべて別引数で bind する。
+                cursor.execute(
+                    "SELECT USER_UUID, LOGIN_USER_ID, DISPLAY_NAME FROM NL2SQL_APP_USERS "  # nosec B608
+                    f"WHERE USER_UUID IN ({placeholders})",
+                    binds,
+                )
+                for row in cursor.fetchall():
+                    identity = UserIdentity(str(row[0]), str(row[1]), str(row[2] or ""))
+                    identities[identity.user_uuid] = identity
+        return identities
 
     def _user_from_row(self, cursor: Any, row: Any) -> UserRecord:
         user_uuid = str(row[0])

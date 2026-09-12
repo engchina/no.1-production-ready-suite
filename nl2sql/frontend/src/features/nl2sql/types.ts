@@ -621,6 +621,8 @@ export interface HistoryItem {
   admin_feedback_content?: string;
   admin_feedback_updated_at?: string;
   actor_user_uuid?: string;
+  actor_login_user_id?: string;
+  actor_display_name?: string;
 }
 
 export interface HistoryData {

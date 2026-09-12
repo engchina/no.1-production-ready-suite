@@ -25,6 +25,7 @@ from pr_backend_core import ApiResponse
 from app.api.concurrency import run_sync_io
 from app.security.domain import Principal
 from app.security.permissions import FEEDBACK_MANAGE_PERMISSION, PROFILE_MANAGE_PERMISSION
+from app.security.service import get_security_service
 from app.settings import get_settings
 
 from .enterprise_ai_client import EnterpriseAiDirectError
@@ -1339,16 +1340,34 @@ def history(
         if not actor_user_uuid:
             return ApiResponse(data=HistoryData(items=[], total=0))
     try:
-        return ApiResponse(
-            data=nl2sql_service.list_history(
-                actor_user_uuid=actor_user_uuid,
-                cursor=cursor,
-                limit=max(1, min(limit, 200)),
-                rating=rating,
-                safety=safety,
-                query=q.strip(),
-            )
+        data = nl2sql_service.list_history(
+            actor_user_uuid=actor_user_uuid,
+            cursor=cursor,
+            limit=max(1, min(limit, 200)),
+            rating=rating,
+            safety=safety,
+            query=q.strip(),
         )
+        identities = (
+            get_security_service().history_user_identities(
+                principal, [item.actor_user_uuid for item in data.items if item.actor_user_uuid]
+            )
+            if principal is not None and principal.is_system_admin and data.items
+            else {}
+        )
+        # 保存済み履歴を変更せず、応答だけに管理者向けの最小情報を補完する。
+        items = []
+        for item in data.items:
+            identity = identities.get(item.actor_user_uuid)
+            items.append(
+                item.model_copy(
+                    update={
+                        "actor_login_user_id": identity.login_user_id if identity else "",
+                        "actor_display_name": identity.display_name if identity else "",
+                    }
+                )
+            )
+        return ApiResponse(data=data.model_copy(update={"items": items}))
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

@@ -30,6 +30,7 @@ from .domain import (
     Principal,
     RoleRecord,
     SessionRecord,
+    UserIdentity,
     UserRecord,
     scope_expression_canonical_json,
     scope_expression_scope_code,
@@ -386,6 +387,13 @@ class SecurityService:
         except Exception as exc:
             self._raise_security_migration_if_needed(exc)
             raise
+
+    def history_user_identities(
+        self, actor: Principal, user_uuids: list[str]
+    ) -> dict[str, UserIdentity]:
+        if not actor.is_system_admin:
+            raise SecurityApiError(403, "履歴の実行者情報はシステム管理者のみ確認できます。")
+        return self.store.get_user_identities(user_uuids)
 
     def create_user(
         self,

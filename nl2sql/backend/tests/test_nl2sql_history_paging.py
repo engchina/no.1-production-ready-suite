@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi import HTTPException
@@ -12,7 +13,17 @@ from app.features.nl2sql.incremental_store import MemoryIncrementalNl2SqlReposit
 from app.features.nl2sql.models import FeedbackRating, HistoryItem, Nl2SqlEngine
 from app.features.nl2sql.service import Nl2SqlService
 from app.features.nl2sql.store import MemoryNl2SqlStore
-from app.security.domain import SYSTEM_ADMIN_ROLE_CODE, Principal
+from app.security.domain import SYSTEM_ADMIN_ROLE_CODE, Principal, UserIdentity, UserRecord
+from app.security.service import SecurityApiError, SecurityService
+from app.security.store import InMemorySecurityStore, OracleSecurityStore
+from app.settings import Settings
+
+
+@pytest.fixture(autouse=True)
+def history_security(monkeypatch: pytest.MonkeyPatch) -> SecurityService:
+    security = SecurityService(InMemorySecurityStore(), Settings())
+    monkeypatch.setattr(nl2sql_router, "get_security_service", lambda: security)
+    return security
 
 
 def _history(index: int, actor: str) -> HistoryItem:
@@ -247,3 +258,102 @@ def test_history_route_rejects_broken_cursor(monkeypatch: pytest.MonkeyPatch) ->
     with pytest.raises(HTTPException) as broken:
         nl2sql_router.history(_request(None), cursor="%%%not-base64%%%")  # type: ignore[arg-type]
     assert broken.value.status_code == 422
+
+
+@pytest.mark.parametrize("factory", [_memory_service, _incremental_service])
+def test_history_executor_identity_is_admin_only_and_does_not_mutate_history(
+    factory: object, monkeypatch: pytest.MonkeyPatch, history_security: SecurityService
+) -> None:
+    store = history_security.store
+    for index in [1, 2]:
+        store.create_user(
+            UserRecord(
+                user_uuid=f"user-{index}",
+                login_user_id=f"analyst{index}",
+                display_name="同じ表示名",
+                password_hash="not-a-real-hash",
+                status="ACTIVE" if index == 1 else "DISABLED",
+                force_password_change=False,
+                failed_login_count=0,
+                locked_until=None,
+                version=1,
+            )
+        )
+    original = [
+        _history(1, "user-1"),
+        _history(2, "user-2"),
+        _history(3, "deleted"),
+        _history(4, ""),
+    ]
+    service = factory(original)  # type: ignore[operator]
+    monkeypatch.setattr(nl2sql_router, "nl2sql_service", service)
+    before = service.list_history().model_dump()
+    first = nl2sql_router.history(_request(_principal(admin=True)), limit=2).data  # type: ignore[arg-type]
+    assert first is not None
+    assert [(item.actor_user_uuid, item.actor_login_user_id) for item in first.items] == [
+        ("", ""),
+        ("deleted", ""),
+    ]
+    second = nl2sql_router.history(
+        _request(_principal(admin=True)), cursor=first.next_cursor, limit=2  # type: ignore[arg-type]
+    ).data
+    assert second is not None
+    assert [(item.actor_login_user_id, item.actor_display_name) for item in second.items] == [
+        ("analyst2", "同じ表示名"),
+        ("analyst1", "同じ表示名"),
+    ]
+    assert "password_hash" not in second.model_dump_json()
+    assert service.list_history().model_dump() == before
+    user = store.get_user("user-1")
+    assert user is not None
+    store.update_user(
+        user.user_uuid,
+        expected_version=user.version,
+        display_name="変更後の名前",
+        status=user.status,
+        role_ids=user.role_ids,
+    )
+    renamed = nl2sql_router.history(_request(_principal(admin=True))).data  # type: ignore[arg-type]
+    assert renamed is not None
+    assert renamed.items[-1].actor_display_name == "変更後の名前"
+    store.delete_user("user-2", expected_version=1)
+    after_delete = nl2sql_router.history(_request(_principal(admin=True))).data  # type: ignore[arg-type]
+    assert after_delete is not None
+    deleted = next(item for item in after_delete.items if item.actor_user_uuid == "user-2")
+    assert deleted.actor_login_user_id == deleted.actor_display_name == ""
+    assert service.list_history().model_dump() == before
+
+    def forbidden_lookup(_ids: list[str]) -> dict[str, UserIdentity]:
+        raise AssertionError("一般ユーザーが他のユーザー情報を取得した")
+
+    monkeypatch.setattr(store, "get_user_identities", forbidden_lookup)
+    own = nl2sql_router.history(_request(_principal(admin=False))).data  # type: ignore[arg-type]
+    assert own is not None
+    assert [item.actor_user_uuid for item in own.items] == ["user-1"]
+    assert own.items[0].actor_display_name == own.items[0].actor_login_user_id == ""
+    with pytest.raises(SecurityApiError) as exc:
+        history_security.history_user_identities(_principal(admin=False), ["user-2"])
+    assert exc.value.status_code == 403
+
+
+def test_oracle_history_user_identities_batch_only_public_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = OracleSecurityStore(Settings.model_construct())
+    connection = MagicMock()
+    cursor = connection.cursor.return_value.__enter__.return_value
+    cursor.fetchall.return_value = [("user-1", "analyst1", "利用者")]
+    context = MagicMock()
+    context.__enter__.return_value = connection
+    connect = MagicMock(return_value=context)
+    monkeypatch.setattr(store, "connection", connect)
+    assert store.get_user_identities([]) == {}
+    connect.assert_not_called()
+    identities = store.get_user_identities(["user-1", "user-1", "missing", ""])
+    assert identities == {"user-1": UserIdentity("user-1", "analyst1", "利用者")}
+    cursor.execute.assert_called_once()
+    sql, binds = cursor.execute.call_args.args
+    assert sql.startswith("SELECT USER_UUID, LOGIN_USER_ID, DISPLAY_NAME FROM NL2SQL_APP_USERS ")
+    assert set(binds.values()) == {"user-1", "missing"}
+    assert "user-1" not in sql
+    assert "PASSWORD" not in sql and "ROLE" not in sql

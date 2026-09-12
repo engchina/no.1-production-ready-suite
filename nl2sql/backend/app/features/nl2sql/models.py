@@ -1187,6 +1187,9 @@ class HistoryItem(BaseModel):
     admin_feedback_updated_at: str = ""
     session_id: str = ""
     actor_user_uuid: str = ""
+    # 履歴 API の管理者向け応答で現在のユーザー情報を補完する。
+    actor_login_user_id: str = ""
+    actor_display_name: str = ""
     ontology_trace_summary: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="before")
