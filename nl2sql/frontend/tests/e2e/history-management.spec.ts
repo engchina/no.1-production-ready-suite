@@ -305,6 +305,40 @@ async function expectSameWidth(a: Locator, b: Locator) {
   expect(Math.abs(boxA!.x - boxB!.x)).toBeLessThanOrEqual(1);
 }
 
+test("実行履歴の安全とブロックの定義は操作なしで読めて履歴選択でも参照できる", async ({ page }, testInfo) => {
+  await mockHistory(page);
+  await page.goto("/history");
+  const help = page.getByRole("region", { name: "安全状態の見方" });
+  const safeDefinition = "参照用の SQL（SELECT / WITH）で、許可された表・列や危険な処理の有無などの検査を通過しています。";
+  const blockedDefinition = "更新・削除などの処理、許可外の表・列の参照、SQL を解析できない場合など、検査を通過せず実行を止めた状態です。";
+  for (const definition of [safeDefinition, blockedDefinition]) {
+    const text = help.getByText(definition, { exact: true });
+    await expect(text).toBeVisible();
+    await expect(text).toHaveCSS("font-size", "14px");
+    await expectContained(text, help);
+  }
+  await expect(help.getByText("安全", { exact: true })).toBeVisible();
+  await expect(help.getByText("ブロック", { exact: true })).toBeVisible();
+  await expect(help).toContainText("「安全」は結果の正しさや再実行の成功を保証するものではなく、再実行時には改めて検査します。");
+  await help.screenshot({ path: testInfo.outputPath("history-safety-help.png") });
+  await page.locator("html").evaluate((element) => element.classList.add("dark"));
+  await help.screenshot({ path: testInfo.outputPath("history-safety-help-dark.png") });
+  await page.locator("html").evaluate((element) => element.classList.remove("dark"));
+  expect(await hasDocumentHorizontalScroll(page)).toBe(false);
+
+  const safeRow = page.getByRole("button", { name: "未入金の顧客を確認 の履歴を表示" });
+  await expect(safeRow).toHaveAccessibleDescription(safeDefinition);
+  await safeRow.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("history-detail").getByText("安全", { exact: true })).toBeVisible();
+  const blockedRow = page.getByRole("button", { name: "監査ログを削除 の履歴を表示" });
+  await expect(blockedRow).toHaveAccessibleDescription(blockedDefinition);
+  await blockedRow.focus();
+  await page.keyboard.press("Space");
+  await expect(page.getByTestId("history-detail").getByText("ブロック", { exact: true })).toBeVisible();
+  await expect(blockedRow).toHaveAttribute("aria-current", "true");
+});
+
 test("実行履歴は管理一覧で検索・絞り込み・並べ替え・詳細確認できる", async ({ page }) => {
   const historyRequests: URL[] = [];
   await mockHistory(page, historyItems, historyRequests);
@@ -550,6 +584,7 @@ test("実行履歴は初期読込と空状態を明示する", async ({ page }) 
   await page.goto("/history");
   await expect(page.getByTestId("history-list-skeleton")).toBeVisible();
   await expect(page.getByTestId("history-detail-skeleton")).toBeVisible();
+  await expect(page.getByRole("region", { name: "安全状態の見方" })).toBeVisible();
   await expect(
     page.getByTestId("history-list-loading").getByRole("timer")
   ).toHaveAccessibleName(/経過時間 00:0\d/);
@@ -558,6 +593,7 @@ test("実行履歴は初期読込と空状態を明示する", async ({ page }) 
   );
   historyGate.release();
   await expect(page.getByText("履歴はまだありません")).toBeVisible();
+  await expect(page.getByRole("region", { name: "安全状態の見方" })).toBeVisible();
   expect(await hasDocumentHorizontalScroll(page)).toBe(false);
 });
 
@@ -636,6 +672,7 @@ test("実行履歴は読込失敗を既存データなしでも再試行でき�
   const alert = page.getByRole("alert");
   await expect(alert).toContainText("履歴サービスを利用できません。");
   await expect(alert).toContainText("通信状態を確認して再試行してください。");
+  await expect(page.getByRole("region", { name: "安全状態の見方" })).toBeVisible();
   shouldFail = false;
   await alert.getByRole("button", { name: "履歴更新" }).click();
   await expect(historyRows(page)).toHaveCount(3);

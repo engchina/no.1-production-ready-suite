@@ -48,6 +48,27 @@ import { userFeedbackRatingBadgeLabel } from "../feedbackLabels";
 
 type HistoryDetailTab = "overview" | "sql";
 
+function HistorySafetyHelp() {
+  return (
+    <section className="grid min-w-0 gap-2 rounded-md border border-border bg-card p-3" aria-labelledby="history-safety-help-heading">
+      <h2 id="history-safety-help-heading" className="text-base font-semibold text-foreground">
+        {t("history.safetyHelp.title")}
+      </h2>
+      <dl className="grid gap-3 md:grid-cols-2">
+        {(["safe", "blocked"] as const).map((state) => (
+          <div key={state} className="grid min-w-0 content-start gap-1">
+            <dt><StatusBadge variant={state === "safe" ? "success" : "danger"} label={t(`nl2sql.safety.${state}`)} /></dt>
+            <dd id={`history-safety-help-${state}`} className="text-base leading-relaxed text-foreground">
+              {t(`history.safetyHelp.${state}`)}
+            </dd>
+          </div>
+        ))}
+      </dl>
+      <p className="text-base leading-relaxed text-muted">{t("history.safetyHelp.note")}</p>
+    </section>
+  );
+}
+
 function columnsLabel(item: HistoryItem) {
   if (item.result_columns.length === 0) return "—";
   return item.result_columns.join(", ");
@@ -284,6 +305,7 @@ function HistoryGrid({
                       <button
                         type="button"
                         aria-label={t("history.grid.show", { question: item.question })}
+                        aria-describedby={`history-safety-help-${item.safety_is_safe ? "safe" : "blocked"}`}
                         aria-current={selected ? "true" : undefined}
                         className={`grid min-h-20 w-full min-w-0 gap-2 border-l-2 px-3 py-2.5 text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/40 ${
                           selected
@@ -787,6 +809,7 @@ export function HistoryPage() {
         ]}
       />
       <main className="grid gap-3 p-3 sm:p-4 lg:p-6">
+        <HistorySafetyHelp />
         <PageNotice
           notice={message ? { tone: "danger", message: `${message} ${t("history.error.retryHint")}` } : null}
           action={
