@@ -18406,6 +18406,13 @@ class Nl2SqlService:
                 expression = getattr(metric, "expression_sql", "")
                 aggregation = getattr(getattr(metric, "aggregation", ""), "value", "")
                 lines.append(f"- {name}: aggregation={aggregation} expression={expression}")
+                metric_filter = str(getattr(metric, "filter_sql", "") or "").strip()
+                if metric_filter:
+                    lines.append(f"  filter_sql: {metric_filter}")
+                    lines.append(
+                        "  この条件はこの指標の集計対象だけに適用する。"
+                        "他の指標へ全体 WHERE 条件として流用しない。"
+                    )
         filters = list(getattr(context, "filter_summaries_ja", []) or [])
         if filters:
             lines.append("filters:")

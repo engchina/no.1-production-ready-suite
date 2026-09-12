@@ -1,4 +1,4 @@
-"""Issue #497: 統合後の Profile 所有境界・利用契約・旧定義保持。"""
+"""Issue #497 / #499: 統合後の Profile 所有境界・利用契約・旧定義保持。"""
 
 import json
 from types import SimpleNamespace
@@ -20,7 +20,12 @@ from app.features.nl2sql.ontology_clarification import (
     apply_clarification_answer,
     enrich_guided_intent,
 )
-from app.features.nl2sql.ontology_definitions import InterfaceDefinition, InterfaceImplementation
+from app.features.nl2sql.ontology_definitions import (
+    DefinitionMapping,
+    InterfaceDefinition,
+    InterfaceImplementation,
+    ObjectTypeDefinition,
+)
 from app.features.nl2sql.ontology_markdown_workspace import (
     MarkdownConfirmRequest,
     MarkdownOntologyWorkspace,
@@ -48,6 +53,8 @@ from app.features.nl2sql.ontology_unified_model import (
     project_graph,
     render_concepts,
 )
+from app.features.nl2sql.service import Nl2SqlService
+from app.features.nl2sql.store import MemoryNl2SqlStore
 from app.settings import get_settings
 
 
@@ -197,17 +204,25 @@ def test_published_snapshot_session_loads_without_global_revision_cache(
     assert restored.store.get_artifact(job.revision_id) == snapshot_before
 
 
-@pytest.mark.parametrize("old_snapshot", [False, True])
-def test_sql_context_retains_published_metric_contract(old_snapshot: bool) -> None:
+@pytest.mark.parametrize("snapshot_format", ["current", "v2_only", "lossy_projection", "legacy"])
+def test_sql_context_retains_published_metric_contract(snapshot_format: str) -> None:
     rt, legacy = runtime()
     definitions, _ = merge_definitions("sales", all_concepts())
+    definition = next(d for d in definitions if d.kind == "metric")
+    definition.filter_sql = "APP.ORDERS.AMOUNT > 1000"
     graph = project_graph(
         rt.profile_view("sales")[1], definitions, "ontology_markdown_snapshot_test"
     )
     view = migrate_profile_ontology_view(legacy.profile, graph, strict=False)
     metric = next(n for n in graph.nodes if n.kind.value == "metric")
-    if old_snapshot:
+    if snapshot_format == "v2_only":
         metric.metadata["metric_definition"] = metric.metadata["definition"]
+        del metric.metadata["definition"]
+    elif snapshot_format == "lossy_projection":
+        del metric.metadata["metric_definition"]["filter_sql"]
+        metric.metadata["metric_definition"]["base_column_node_ids"] = []
+    elif snapshot_format == "legacy":
+        del metric.metadata["definition"]
     original = json.dumps(metric.metadata, sort_keys=True)
     intent = QuestionIntentGraph(
         profile_view_id=view.id,
@@ -234,10 +249,32 @@ def test_sql_context_retains_published_metric_contract(old_snapshot: bool) -> No
     assert not context.warnings_ja
     result = context.metric_definitions[0]
     assert result.expression_sql == "COUNT(APP.ORDERS.ID)"
+    assert result.filter_sql == "APP.ORDERS.AMOUNT > 1000"
     assert result.aggregation == "count"
     assert result.grain_node_ids == [next(d.id for d in definitions if d.api_name == "Order.id")]
-    assert result.base_column_node_ids
+    assert set(result.base_column_node_ids) == {
+        n.id for n in graph.nodes if n.technical_name in {"APP.ORDERS.ID", "APP.ORDERS.AMOUNT"}
+    }
     assert json.dumps(metric.metadata, sort_keys=True) == original
+    # Markdown の後半が prompt 上限で切れても正式指標の条件は残り、別指標の
+    # 条件を全体 WHERE として合成しない。
+    context.llm_markdown = "x" * 13000 + "\nAPP.ORDERS.AMOUNT > 1000"
+    context.metric_definitions.append(
+        result.model_copy(
+            update={
+                "metric_node_id": "low_value",
+                "filter_sql": "APP.ORDERS.AMOUNT <= 1000",
+            }
+        )
+    )
+    prompt = Nl2SqlService(store=MemoryNl2SqlStore())._ontology_generation_context_prompt(context)
+    assert "... truncated ..." in prompt
+    metric_prompt = prompt.split("published_markdown_ontology:")[0]
+    high_prompt, low_prompt = metric_prompt.split("- low_value:")
+    assert "filter_sql: APP.ORDERS.AMOUNT > 1000" in high_prompt
+    assert "filter_sql: APP.ORDERS.AMOUNT <= 1000" in low_prompt
+    assert not context.filter_summaries_ja
+    assert "filters:" not in metric_prompt
 
 
 @pytest.mark.parametrize("unresolved", [False, True])
@@ -303,3 +340,41 @@ def test_interface_grounding_follows_inheritance_to_only_visible_implementers() 
     assert object_id not in {
         h.node_id for h in retrieve_ontology_nodes("識別可能", graph, restricted)
     }
+
+
+def test_child_interface_does_not_ground_parent_only_or_sibling_implementers() -> None:
+    rt, legacy = runtime()
+    obj, prop = model()
+    obj.implements = [InterfaceImplementation(interface="PremiumChild")]
+    definitions, _ = merge_definitions(
+        "sales",
+        [
+            obj,
+            prop,
+            ObjectTypeDefinition(
+                api_name="Customer",
+                name_ja="顧客",
+                mappings=[DefinitionMapping(owner="APP", object_name="CUSTOMERS")],
+                implements=[InterfaceImplementation(interface="Identified")],
+            ),
+            ObjectTypeDefinition(
+                api_name="StandardCustomer",
+                name_ja="一般顧客",
+                mappings=[DefinitionMapping(owner="APP", object_name="CUSTOMERS")],
+                implements=[InterfaceImplementation(interface="Standard")],
+            ),
+            InterfaceDefinition(api_name="Identified", name_ja="識別可能"),
+            InterfaceDefinition(api_name="Premium", name_ja="特別会員", extends=["Identified"]),
+            InterfaceDefinition(api_name="PremiumChild", name_ja="特別区分", extends=["Premium"]),
+            InterfaceDefinition(api_name="Standard", name_ja="一般区分", extends=["Identified"]),
+        ],
+    )
+    graph = project_graph(
+        rt.profile_view("sales")[1], definitions, "ontology_markdown_snapshot_child"
+    )
+    view = migrate_profile_ontology_view(legacy.profile, graph, strict=False)
+    names = {n.id: n.technical_name for n in graph.nodes}
+    child_hits = {names[h.node_id] for h in retrieve_ontology_nodes("特別会員", graph, view)}
+    assert child_hits == {"Premium", "PremiumChild", "Order"}
+    parent_hits = {names[h.node_id] for h in retrieve_ontology_nodes("識別可能", graph, view)}
+    assert {"Order", "Customer", "StandardCustomer"} <= parent_hits

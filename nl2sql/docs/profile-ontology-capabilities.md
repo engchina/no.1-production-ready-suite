@@ -39,6 +39,10 @@ Markdown を業務定義の編集・公開元とする。画面の順序は **�
 
 通常生成、非同期 job、引導式 session、サーバー接地検索は Profile の同じ公開 snapshot を使用する。job / session の `business_release_id` は snapshot ID を保持する。以前の独立 release を新しい生成へ重ねない。過去の release / job の読み取りは互換性のため残す。
 
+引導式生成の正式指標には `expression_sql` と指標固有の `filter_sql` を渡す。絞り込み条件はその指標の集計対象だけに適用し、他の指標の全体 WHERE 条件へ流用しない。過去の読み取り投影に条件がない場合は、同じ snapshot の完全な型付き定義から復元する。保存済み artifact は書き換えない。
+
+Interface の接地は下位の継承・実装を辿る。子 Interface の検索で上位だけを実装する object や兄弟 Interface の実装へ広げず、上位 Interface の検索では配下の実装を含める。Profile の node / edge 範囲は各段階で守る。
+
 グラフには12種類の型付きノードと Link Type の選択可能な関係辺を投影する。Markdown と概念 ID を共有し、定義の説明・型固有フィールド・マッピング・証拠を詳細に表示する。「概念の種類」は主要6／補助7にまとめ、存在しない種類は該当なしとする。全体／接地パス／物理 ER を維持し、Function / Action の詳細に実行ボタンを出さない。物理マッピングを持たない概念は参照先のオブジェクト付近へ配置する。
 
 ## 既存データの移行と廃止 API

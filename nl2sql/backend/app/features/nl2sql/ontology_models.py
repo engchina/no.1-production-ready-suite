@@ -417,6 +417,7 @@ class MetricDefinition(OntologyContract):
     id: str = Field(min_length=1)
     metric_node_id: str = Field(min_length=1)
     expression_sql: str = Field(min_length=1)
+    filter_sql: str = ""
     aggregation: MetricAggregation = MetricAggregation.NONE
     base_column_node_ids: list[str] = Field(default_factory=list)
     grain_node_ids: list[str] = Field(default_factory=list)

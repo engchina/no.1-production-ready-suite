@@ -1705,8 +1705,11 @@ class OntologyApiRuntime:
             except Exception:
                 invalid_codes.append(f"{node.id}:METRIC_DEFINITION_INVALID")
                 continue
-            expression = f" {definition.expression_sql.upper()} "
-            if any(token in expression for token in dangerous_tokens):
+            if any(
+                token in f" {sql.upper()} "
+                for sql in (definition.expression_sql, definition.filter_sql)
+                for token in dangerous_tokens
+            ):
                 invalid_codes.append(f"{node.id}:METRIC_DEFINITION_SQL_UNSAFE")
             missing_columns = [
                 column_id
@@ -3024,6 +3027,11 @@ class OntologyApiRuntime:
                 warnings.append(f"指標 {metric.name_ja} の Ontology node を解決できません。")
                 continue
             definition_raw = node.metadata.get("metric_definition")
+            typed_definition = node.metadata.get("definition")
+            if isinstance(typed_definition, Mapping) and typed_definition.get("kind") == "metric":
+                # 初期の読み取り投影は filter_sql を落としていた。公開時の完全な
+                # 型付き定義から再投影し、保存済み snapshot 自体は変更しない。
+                definition_raw = typed_definition
             if isinstance(definition_raw, Mapping):
                 try:
                     if definition_raw.get("kind") == "metric":

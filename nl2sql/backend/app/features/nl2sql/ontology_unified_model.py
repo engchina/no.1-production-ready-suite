@@ -103,18 +103,22 @@ def metric_definition_projection(
     from sqlglot import exp
 
     columns = set()
-    try:
-        tree = sqlglot.parse_one(definition.expression_sql, read="oracle")
-        for col in tree.find_all(exp.Column):
-            node = physical.get(".".join(part.name for part in col.parts).upper())
-            if node and node.kind.value == "column":
-                columns.add(node.id)
-    except sqlglot.errors.SqlglotError:
-        pass  # 検証は公開前ゲート。ここでは原式を保持する。
+    for sql in (definition.expression_sql, definition.filter_sql):
+        if not sql.strip():
+            continue
+        try:
+            tree = sqlglot.parse_one(sql, read="oracle")
+            for col in tree.find_all(exp.Column):
+                node = physical.get(".".join(part.name for part in col.parts).upper())
+                if node and node.kind.value == "column":
+                    columns.add(node.id)
+        except sqlglot.errors.SqlglotError:
+            pass  # 検証は公開前ゲート。ここでは原式・条件を保持する。
     return MetricDefinition(
         id=stable_ontology_id("metric_definition", definition.id),
         metric_node_id=definition.id,
         expression_sql=definition.expression_sql,
+        filter_sql=definition.filter_sql,
         aggregation=(
             definition.aggregation.lower()
             if definition.aggregation.lower() in MetricAggregation._value2member_map_
