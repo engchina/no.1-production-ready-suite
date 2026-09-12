@@ -33,6 +33,7 @@ from .ontology_models import (
     SqlWindowExpression,
     ValidationSeverity,
 )
+from .sql_lexing import prepare_oracle_query
 
 
 def sql_sha256(sql: str) -> str:
@@ -362,7 +363,9 @@ def parse_oracle_sql(
         )
 
     try:
-        statements = sqlglot.parse(sql, read="oracle", error_level=ErrorLevel.RAISE)
+        statements = sqlglot.parse(
+            prepare_oracle_query(sql), read="oracle", error_level=ErrorLevel.RAISE
+        )
     except (ParseError, ValueError, TypeError) as exc:
         detail = str(exc).splitlines()[0][:240]
         return _blocker_analysis(
@@ -453,6 +456,38 @@ def parse_oracle_sql(
             )
         )
 
+    # コピー上で Oracle の非引用識別子を正規化し、可視な CTE のみを解決する。
+    # semantic graph の表記は原文どおり保つ。
+    from sqlglot.optimizer.normalize_identifiers import normalize_identifiers
+    from sqlglot.optimizer.scope import Scope, traverse_scope
+
+    normalized = normalize_identifiers(root.copy(), dialect="oracle")
+    original_tables = list(root.find_all(exp.Table))
+    original_ids = {
+        id(copied): id(original)
+        for original, copied in zip(original_tables, normalized.find_all(exp.Table), strict=True)
+    }
+    cte_reference_ids = {
+        original_ids[id(table)]
+        for scope in traverse_scope(normalized)
+        for table in scope.tables
+        if not table.db
+        and not table.catalog
+        and isinstance(scope.sources.get(table.alias_or_name), Scope)
+    }
+    # Oracle の再帰 WITH は RECURSIVE keyword を持たないため sqlglot の
+    # scope では未解決になる。UNION ALL の再帰側に限って自己参照を補う。
+    for cte in normalized.find_all(exp.CTE):
+        union = cte.this
+        if (
+            not isinstance(union, exp.Union)
+            or union.args.get("distinct") is not False
+            or not cte.alias_column_names
+        ):
+            continue
+        for table in union.expression.find_all(exp.Table):
+            if table.name == cte.alias and not table.db and not table.catalog:
+                cte_reference_ids.add(original_ids[id(table)])
     tables: list[SqlTableReference] = []
     for index, table in enumerate(root.find_all(exp.Table), start=1):
         catalog = _text(getattr(table, "catalog", ""))
@@ -469,7 +504,7 @@ def parse_oracle_sql(
                 name=name,
                 alias=alias,
                 qualified_name=qualified_name,
-                is_cte=name.upper() in cte_names and not owner and not catalog,
+                is_cte=id(table) in cte_reference_ids,
                 source_sql=_sql(table),
             )
         )

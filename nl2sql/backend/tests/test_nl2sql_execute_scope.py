@@ -276,3 +276,51 @@ def test_execute_route_keeps_request_scope_for_admin_and_unauthenticated(
         _request(None),  # type: ignore[arg-type]
     )
     assert unauthenticated.data is not None and unauthenticated.data.columns
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT ID FROM SALARY WHERE EXISTS "
+        "(WITH SALARY AS (SELECT ID FROM APP.ORDERS) SELECT 1 FROM SALARY)",
+        "SELECT ID FROM NL2SQL_APP_USERS WHERE EXISTS "
+        "(WITH NL2SQL_APP_USERS AS (SELECT ID FROM APP.ORDERS) "
+        "SELECT 1 FROM NL2SQL_APP_USERS)",
+        'WITH "salary" AS (SELECT ID FROM APP.ORDERS) SELECT ID FROM SALARY',
+    ],
+)
+def test_execute_does_not_hide_physical_tables_behind_cte_names(
+    monkeypatch: pytest.MonkeyPatch, sql: str
+) -> None:
+    service = _service(_repository())
+    monkeypatch.setattr(nl2sql_router, "nl2sql_service", service)
+    monkeypatch.setattr(service, "_use_oracle_runtime", lambda: True)
+
+    def forbidden_execute(*_args: object) -> None:
+        pytest.fail("拒否対象の SQL が Oracle adapter に到達した")
+
+    monkeypatch.setattr(service._oracle_adapter, "execute_select", forbidden_execute)
+    with pytest.raises(HTTPException) as denied:
+        nl2sql_router.execute(
+            ExecuteRequest(sql=sql, row_limit=100),
+            _request(_principal({"sales"})),  # type: ignore[arg-type]
+        )
+    assert denied.value.status_code == 400
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "WITH sales AS (SELECT ID FROM APP.ORDERS) SELECT ID FROM SALES",
+        "SELECT ID FROM (WITH sales AS (SELECT ID FROM APP.ORDERS) SELECT ID FROM SALES)",
+        "WITH x AS (SELECT ID FROM APP.ORDERS), y AS (SELECT ID FROM x) SELECT ID FROM y",
+        "WITH x (id) AS (SELECT ID FROM APP.ORDERS UNION ALL "
+        "SELECT id + 1 FROM x WHERE id < 3) SELECT id FROM x",
+    ],
+)
+def test_direct_sql_keeps_valid_cte_scopes(sql: str) -> None:
+    service = _service(_repository())
+    allowed = service.resolve_direct_sql_allowed_objects(AllowedObjects(), profile_ids={"sales"})
+    analysis = service.analyze_sql(sql, allowed, 100)
+    assert analysis.safety.is_safe, analysis.safety.blocked_reason
+    assert analysis.safety.referenced_tables == ["APP.ORDERS"]

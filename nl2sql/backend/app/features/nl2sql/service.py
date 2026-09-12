@@ -293,6 +293,7 @@ from .reverse_prompts import (
     source_prompt,
     stage_prompt,
 )
+from .sql_lexing import prepare_oracle_query
 from .sql_semantics import parse_oracle_sql
 from .store import MemoryNl2SqlStore, Nl2SqlStore, OracleJsonNl2SqlStore
 from .structured_outputs import (
@@ -2373,36 +2374,7 @@ def is_select_only(sql: str) -> bool:
         return False
     if not (head.startswith("select") or head.startswith("with")):
         return False
-    return parse_oracle_sql(_replace_q_quoted_literals_for_parser(stripped)).graph is not None
-
-
-def _replace_q_quoted_literals_for_parser(sql: str) -> str:
-    text = str(sql or "")
-    length = len(text)
-    out: list[str] = []
-    index = 0
-    while index < length:
-        char = text[index]
-        next_char = text[index + 1] if index + 1 < length else ""
-        previous = text[index - 1] if index > 0 else ""
-        if (
-            char in {"q", "Q"}
-            and next_char == "'"
-            and index + 2 < length
-            and not (previous.isalnum() or previous in {"_", "$", "#"})
-        ):
-            opener = text[index + 2]
-            closer = _Q_QUOTE_CLOSERS.get(opener, opener)
-            end = text.find(f"{closer}'", index + 3)
-            if end < 0:
-                out.append(text[index:])
-                break
-            out.append("''")
-            index = end + 2
-            continue
-        out.append(char)
-        index += 1
-    return "".join(out)
+    return parse_oracle_sql(stripped).graph is not None
 
 
 def _sqlglot_name(value: Any) -> str:
@@ -2439,7 +2411,9 @@ def _dangerous_oracle_function_names(sql: str) -> list[str]:
         return []
 
     try:
-        statements = sqlglot.parse(sql, read="oracle", error_level=ErrorLevel.RAISE)
+        statements = sqlglot.parse(
+            prepare_oracle_query(sql), read="oracle", error_level=ErrorLevel.RAISE
+        )
     except Exception:
         return []
 
@@ -2709,7 +2683,7 @@ def normalize_executable_sql(sql: str) -> str:
     FETCH FIRST / LIMIT はそのまま保持する。行数上限は画面の「取得件数上限」
     (= 取得時の fetch 上限、OracleAdapter.execute_select の fetchmany)だけで効かせる。
     """
-    return _normalize_oracle_sql_text(sql).strip().rstrip(";")
+    return prepare_oracle_query(_normalize_oracle_sql_text(sql), for_parser=False)
 
 
 _JOB_RESULT_PERSISTENCE_WARNING = (

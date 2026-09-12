@@ -1185,7 +1185,21 @@ class OracleNl2SqlAdapter:
         try:
             with self.user_data_connection() as conn, conn.cursor() as cursor:
                 cursor.execute(sql)
-                columns = [description[0] for description in cursor.description or []]
+                column_names = [description[0] for description in cursor.description or []]
+                # 既存の一意な名前を予約してから重名列へキーを割り当てる。
+                reserved = set(column_names)
+                used: set[str] = set()
+                columns: list[str] = []
+                for name in column_names:
+                    key = name
+                    suffix = 2
+                    if key in used:
+                        key = f"{name}_{suffix}"
+                        while key in used or key in reserved:
+                            suffix += 1
+                            key = f"{name}_{suffix}"
+                    used.add(key)
+                    columns.append(key)
                 rows: list[dict[str, Any]] = []
                 has_more = False
                 if max_rows is not None and max_rows > 0:

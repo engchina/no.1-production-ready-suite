@@ -16270,3 +16270,24 @@ test.describe("query snapshot ownership", () => {
   });
 
 });
+
+test("SELECT SQL の重名列は別々の値を表示し予約済み列名を保持する", async ({ page }, testInfo) => {
+  await mockNl2SqlApi(page);
+  await page.route("**/api/nl2sql/execute", (route) => fulfillJson(route, {
+    columns: ["ID", "ID_3", "ID_2"],
+    rows: [{ ID: 11, ID_3: 22, ID_2: 33 }],
+    total: 1,
+    returned_count: 1,
+    has_more: false,
+    truncated: false,
+  }));
+  await page.goto("/direct-sql");
+  await directSqlInput(page).fill("SELECT 11 AS ID, 22 AS ID, 33 AS ID_2 FROM DUAL; -- 重名列");
+  await page.getByRole("button", { name: "SQL 実行", exact: true }).press("Enter");
+  const table = page.getByRole("table");
+  await expect(table.getByRole("columnheader")).toHaveText(["ID", "ID_3", "ID_2"]);
+  await expect(table.getByRole("cell")).toHaveText(["11", "22", "33"]);
+  await table.scrollIntoViewIfNeeded();
+  await expectNoHorizontalScroll(page);
+  await page.screenshot({ path: testInfo.outputPath("direct-sql-duplicate-columns.png") });
+});
