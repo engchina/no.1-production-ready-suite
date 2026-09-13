@@ -33,13 +33,14 @@ import {
   FormStatus,
   Skeleton,
   PageBody,
+  SelectField,
+  type SelectFieldOption,
 } from "@engchina/production-ready-ui";
 
 import { ErrorState } from "@/components/StateViews";
 import { TimedLoadingState } from "@/components/ProcessingState";
 import { FileDropzone } from "@/components/ui/file-dropzone";
 import { FieldLabel, RequiredFieldsNote } from "@/components/ui/required-field";
-import { SelectField, type SelectFieldOption } from "@/components/ui/select-field";
 import { SavedSecretBadge } from "@/components/settings/SavedSecretBadge";
 import {
   SettingsTestResultPanel,

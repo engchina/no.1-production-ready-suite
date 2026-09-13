@@ -12,6 +12,7 @@ import {
   StatusBadge,
   PageHeader,
   PageBody,
+  useConfirm,
 } from "@engchina/production-ready-ui";
 import {
   useEffect,
@@ -41,7 +42,6 @@ import { PageHeaderStatusBadge } from "@/components/PageHeaderStatusBadge";
 import { ProcessingIndicator } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";
 import { useUnsavedChangesGuard } from "@/lib/useUnsavedChangesGuard";
-import { useConfirm } from "@/components/ui/confirm-dialog";
 import { FileDropzone } from "@/components/ui/file-dropzone";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { apiDelete, apiFetch, apiGet, apiPatch, apiPost, isAbortError } from "@/lib/api";

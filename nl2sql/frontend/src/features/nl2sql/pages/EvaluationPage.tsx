@@ -8,6 +8,7 @@ import {
   FieldError,
   FormStatus,
   PageBody,
+  useConfirm,
 } from "@engchina/production-ready-ui";
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -30,7 +31,6 @@ import { ErrorState, LoadingState } from "@/components/StateViews";
 import { usePageNotice, PageNotice } from "@/components/page-notice";
 import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
 import { FileDropzone } from "@/components/ui/file-dropzone";
-import { useConfirm } from "@/components/ui/confirm-dialog";
 import { FieldLabel, RequiredFieldsNote } from "@/components/ui/required-field";
 import { ApiError, apiDelete, apiFetch, apiGet, apiPost, apiPostForm } from "@/lib/api";
 import { downloadBlob, downloadFilename } from "@/lib/download";

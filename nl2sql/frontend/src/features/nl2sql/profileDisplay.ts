@@ -1,4 +1,4 @@
-import type { SelectFieldOption } from "@/components/ui/select-field";
+import type { SelectFieldOption } from "@engchina/production-ready-ui";
 
 export interface ProfileDisplaySource {
   name?: string | null;

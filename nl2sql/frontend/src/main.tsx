@@ -1,12 +1,10 @@
-import { StrictMode } from "react";
+import { StrictMode, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
-import { BrowserRouter } from "react-router-dom";
+import { BrowserRouter, useLocation } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-
-import { Toaster } from "@/components/ui/toaster";
+import { ConfirmProvider, Toaster } from "@engchina/production-ready-ui";
 
 import { App } from "./App";
-import { ConfirmProvider } from "@/components/ui/confirm-dialog";
 import { installBrowserErrorGuards } from "@/lib/browser-error-guards";
 import { initTheme } from "@/lib/theme";
 import { t } from "@/lib/i18n";
@@ -38,18 +36,31 @@ if (!root) {
 
 const queryClient = new QueryClient();
 
+/** 共有 ConfirmProvider に NL2SQL の文言を注入し、ルート遷移で開いている確認をキャンセルする。 */
+function AppConfirmProvider({ children }: { children: ReactNode }) {
+  const location = useLocation();
+  return (
+    <ConfirmProvider
+      labels={{ confirm: t("common.confirm"), cancel: t("common.cancel") }}
+      navigationKey={location.key}
+    >
+      {children}
+    </ConfirmProvider>
+  );
+}
+
 createRoot(root).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
         <AuthProvider>
-          <ConfirmProvider>
+          <AppConfirmProvider>
             <App />
             <Toaster
               dismissLabel={t("common.dismiss")}
               regionLabel={t("common.notifications")}
             />
-          </ConfirmProvider>
+          </AppConfirmProvider>
         </AuthProvider>
       </BrowserRouter>
     </QueryClientProvider>

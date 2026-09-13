@@ -1744,13 +1744,14 @@ test("Select AI 設定は requested order で並び狭い幅でも重ならな�
   for (const fieldId of [
     "profile-name",
     "profile-category",
-    "profile-select-ai-region",
     "profile-select-ai-model",
     "profile-select-ai-max-tokens",
     "profile-select-ai-embedding-model",
   ]) {
     await expect(page.locator(`label[for="${fieldId}"] span[aria-hidden="true"]`)).toHaveText("*");
   }
+  // Region は共有 SelectField。必須は「必須」バッジ（aria-hidden）+ aria-required で示す。
+  await expect(page.locator('label[for="profile-select-ai-region"] span[aria-hidden="true"]')).toHaveText("必須");
   for (const fieldId of [
     "profile-name",
     "profile-category",

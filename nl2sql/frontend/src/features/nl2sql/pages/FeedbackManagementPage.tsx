@@ -27,6 +27,8 @@ import {
   StatusBadge,
   PageHeader,
   PageBody,
+  useConfirm,
+  SelectField,
 } from "@engchina/production-ready-ui";
 
 import { MasterDetailDataTable } from "@/components/MasterDetailDataTable";
@@ -36,8 +38,6 @@ import { ProcessingIndicator } from "@/components/ProcessingState";
 import { FixedSplitPane } from "@/components/layout/FixedSplitPane";
 
 import { PageNotice } from "@/components/page-notice";
-import { useConfirm } from "@/components/ui/confirm-dialog";
-import { SelectField } from "@/components/ui/select-field";
 import { apiDelete, apiGet, apiPatch, apiPost, isAbortError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";

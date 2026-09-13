@@ -6127,7 +6127,8 @@ test("セキュリティレビュー: 成功通知が残っていても確認ダ
   });
   const notification = page.getByRole("region", { name: "通知", exact: true });
   await expect(notification.getByRole("status")).toBeVisible();
-  const dialogLayer = await page.getByTestId("app-dialog-overlay").evaluate(node => Number(getComputedStyle(node).zIndex));
+  // 共有 ConfirmDialog の暗幕（alertdialog の親）。通知は共有トークンで暗幕の下（--z-toast < --z-dialog）。
+  const dialogLayer = await dialog.locator("xpath=..").evaluate(node => Number(getComputedStyle(node).zIndex));
   const toastLayer = await notification.evaluate(node => Number(getComputedStyle(node).zIndex));
   expect(dialogLayer).toBeGreaterThan(toastLayer);
   for (const button of await dialog.getByRole("button").all()) {
