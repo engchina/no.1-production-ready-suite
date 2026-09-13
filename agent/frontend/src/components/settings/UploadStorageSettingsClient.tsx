@@ -58,7 +58,7 @@ const EMPTY_FORM: UploadStorageForm = {
   objectStorageBucket: "",
 };
 
-const DEFAULT_LOCAL_STORAGE_DIR = "/u01/production-ready-rag";
+const DEFAULT_LOCAL_STORAGE_DIR = "/u01/data/production-ready-agent";
 const OBJECT_STORAGE_NAME_PATTERN = /^[A-Za-z0-9._-]+$/;
 
 /** ドキュメントアップロード原本の保存先設定。 */
