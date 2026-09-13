@@ -153,7 +153,7 @@ Issue の要点と、この変更が必要な理由を記載する。bug fix で
 ### UI/UX 構造
 
 **基本原則:**
-- **レイアウト/UI 構造**(情報設計・画面構成・ナビ導線・状態遷移・文言設計)は、本プロジェクト内の `frontend/src` と `src/lib/i18n` / `src/lib/routes` を正本として継続的に整備する。
+- **レイアウト/UI 構造**(情報設計・画面構成・ナビ導線・状態遷移・文言設計)は、本プロジェクト内の `frontend/src` と `src/lib/i18n` / `src/lib/routes` を正本として継続的に整備する。**見た目(トークン)と共有コンポーネントは platform の `docs/design-system/` を正本とする**(「デザインシステム / UI」節)。
 - **技術選定は本 AGENTS.md の確定スタックを正とする。** フロントエンドのフレームワーク・ライブラリ・パターンは Vite + React Router + TypeScript + Tailwind + shadcn/ui + TanStack Query + Zustand を採用する。
 
 **ナビゲーション/画面構成**:
@@ -170,13 +170,82 @@ Issue の要点と、この変更が必要な理由を記載する。bug fix で
 - ファイル状態: `UPLOADED → INGESTING(parse/抽出) → REVIEW(プレビュー確認待ち) → INDEXING → INDEXED`(+ `ERROR`)を **StatusBadge** で可視化する。**ファイル処理は 2 段階(parse → 人がプレビュー確認 → index)を方針とする。** parse/抽出の完了後はいったん `REVIEW` で停止し、`DocumentPreviewWorkspace` で抽出結果を人手で確認・承認(必要なら帳票項目を修正)してから後段の chunk/embed/index を実行する。**人手のプレビュー確認・承認ゲートを通過した文書のみ検索対象にする。** 抽出 artifact は再利用し、確認・承認は index 実行前の必須ゲートとする。
 - ページネーション、確認ダイアログ、トースト通知、一括選択(全選択/選択件数表示)を共通コンポーネント化。
 - **メッセージ機構(通知・成功/エラー・フォーム検証・確認ダイアログ・空/読込/エラー状態)は [docs/frontend-messaging-spec.md](./docs/frontend-messaging-spec.md) を正本とする。** 関連 UI を新規実装・改修するときは必ず同 spec の 6 チャネル / 4 トーン / i18n 規約に従うこと。
-- **ボタン(大きさ・スタイル・配置・命名)は [docs/frontend-button-spec.md](./docs/frontend-button-spec.md) を正本とする。** アクションは共通 `<Button>` を使い、size(sm/md/lg)・variant(primary/secondary/ghost/danger)・配置・aria-label/文言キー規則を揃える。類似機能は同じ size・variant にすること。
+- **ボタンの大きさ・スタイル・アイコン・loading・ヘッダーの並び順は platform の `docs/design-system/` を正本とし、画面内の配置と命名は [docs/frontend-button-spec.md](./docs/frontend-button-spec.md) に従う。** アクションは共通 `<Button>` を使い、size(sm/md/lg)・variant(primary/secondary/ghost/danger)・配置・aria-label/文言キー規則を揃える。類似機能は同じ size・variant にすること。
 - データ取得・通知・ページングは hooks に集約する。状態管理は TanStack Query + Zustand を使う。
 
 **タイポグラフィ/デザイン原則**:
 - **日本語第一フォントスタック**: `"Noto Sans JP", "Roboto", system-ui, sans-serif`。本文ベース `font-size: 14px`。
-- 落ち着いた業務系トーンを shadcn/ui のテーマで再現する。
+- 落ち着いた業務系トーンを `@engchina/production-ready-ui` のトークンで再現する(本リポジトリで色トークンを定義しない)。
 - 文言は日本語(i18n 経由)で管理する。
+
+## デザインシステム / UI（platform が正本）
+
+- **UI に触る変更（`frontend/`）の前に、platform リポジトリの [docs/design-system/ARCHITECTURE.md](../no.1-production-ready-platform/docs/design-system/ARCHITECTURE.md) を読む。** ワークスペースに sibling の `../no.1-production-ready-platform` が無い場合は GitHub の `engchina/no.1-production-ready-platform` の `docs/design-system/` を参照する。
+  - トークン値・コンポーネント仕様・意図的な見た目の変更点: 同 `README.md`
+  - 実装の参照: 同 `components-reference.md`
+  - 共通の禁止事項とレビュー観点: platform の `AGENTS.md`「デザインシステム / UI」節
+- **依存の向きは「デザインシステムの決定 → `@engchina/production-ready-ui`（platform の `packages/ui`）→ 本リポジトリ」の一方向。** 本リポジトリでコンポーネントやトークンを新規実装しない。必要になったら platform に `packages/ui` へ入れる Issue を立てる。
+- **本リポジトリが持てるのは次だけ。**
+  - ナビ構造（nav config）と業務コピー（i18n）
+  - データ取得・状態管理・権限
+  - ドメイン enum → コンポーネント prop の対応表（例: 状態 → `StatusBadge` の `variant`）
+  - 画面固有の業務レイアウト
+  - 1製品しか使わない部品は置いてよい。判断基準は「他の2製品がこれを欲しがるか」で、欲しがるなら `packages/ui` に入れる
+- **色・型・余白・角丸・影・モーション・フォーカス表示・テーマ（light / dark / auto）は `packages/ui` が持つ。** `frontend/src/globals.css` は `@import "tailwindcss"` → `@import "@engchina/production-ready-ui/styles.css"` → `@source "../node_modules/@engchina/production-ready-ui/dist"` と、画面固有のレイアウトだけにする。`main.tsx` から JS で import すると共有ユーティリティが生成されない。
+
+### 禁止事項
+
+- 生の hex（`#1a73c1` 等）と生の px を書く。色は `--color-*` トークン（`bg-surface` / `text-fg-muted` / `border-border-control` 等のユーティリティ）を使う。旧名（`bg-card` / `text-muted` / `bg-primary` / `var(--primary)` 等）は移行用の互換エイリアスで、新規コードで使わない。
+- `globals.css` に色トークンや `.dark { … }` の上書きを定義する。
+- `TextField` / `PageHeader` / `Button` / `StatusBadge` などの共有コンポーネントを再実装する。
+- `<table>` を手書きする。`DataTable` を使う。
+- `<div className="px-8 py-6">` や `style={{ padding: "1.5rem 2rem" }}` のような余白コンテナを手書きする。`PageBody` を使う。
+- `ToggleChip` をタブ代わりに使う。タブ＝同じ対象の別の見方に切り替えるのは `Tabs`、チップ＝データの絞り込みは `ToggleChip`。
+- `loading` 中にボタンのラベルを「実行中…」等に差し替える。ラベルは変えず、`icon` がスピナーに置き換わる。子要素にアイコンを書かず `icon={Upload}` で渡す。
+- 製品ごとのアクセント色を作る。製品は wordmark・ナビ・内容で区別する。
+- 絵文字と手描き SVG。アイコンは `lucide-react`（14 / 16 / 20 / 24px のみ）。
+- `@engchina/production-ready-ui` の内部パス（`dist/components/**` や `dist/tokens/*.css`）を import したりテストで読んだりする。パッケージのルートと `styles.css` だけを使う。
+
+### 画面の構成
+
+```tsx
+<AppShell sidebar={<Sidebar … footer={<SidebarAccountFooter … />} />}>
+  <PageHeader title="…" actions={[{ id, kind: "primary", label, icon }]} tabs={<Tabs … />} />
+  <PageBody>
+    <Section title="…">…</Section>
+  </PageBody>
+</AppShell>
+```
+
+- `PageHeader` の `actions` は配列で渡す（danger → utility → secondary → primary の順に自動で並び、右端が primary になる）。
+- `PageHeader` と `PageBody` に `wide` を渡す場合は必ず両方に同じ値を渡す。片方だけだと 1920px でタイトルと本文の左端がずれる。
+- 単位の境界: 文字サイズとコントロール高さは px、余白とレイアウト寸法は rem（14px ルート）。
+
+### 既存ルールとの優先順位
+
+- トークン・コンポーネントの見た目と振る舞い（サイズ・variant・アイコン・loading・ヘッダーの並び順・フォーカス・ダークテーマ）は、`ui-ux-pro-max` skill の一般論や本リポジトリの `docs/` より platform の `docs/design-system/` を優先する。
+- 本リポジトリの `docs/frontend-button-spec.md` / `docs/frontend-messaging-spec.md` は、デザインシステムが規定しない範囲（画面内の配置・文言キーの命名・通知チャネルの使い分け等）でのみ有効とする。
+
+### UI 変更の検証
+
+- ライト / ダークの両テーマで確認する。
+- 1280px / 1920px の両幅で確認する。1920px では PageHeader のタイトルと本文の左端が揃うこと。
+- キーボード操作（最初の Tab で「本文へスキップ」、フォーカスリングの視認性、`Tabs` の ← → / Home / End）を確認する。
+- 状態を表す UI は色だけに依存しない（`StatusBadge` / `Banner` / `Toast` はアイコン付き）。
+- 意図的な見た目の変更は platform の `docs/design-system/README.md` §7 と照合し、PR の `検証結果` に記載する。
+### NL2SQL 固有
+
+- **移行で削除するもの**（`packages/ui` に昇格済み。完了したらこの箇条を削除する）
+  - `frontend/src/components/ui/button.css` → `Button`
+  - `frontend/src/components/ui/status-badge.tsx` → `StatusBadge`
+  - `frontend/src/components/PageHeader.tsx` → `PageHeader`
+  - `frontend/src/globals.css` の `:root` / `.dark` トークン定義と `.dark .bg-muted\/NN` 上書き → トークンと `light-dark()`
+  - 設定画面ごとの独自 `TextField` → `TextField`
+  - `frontend/src/components/layout/AppSidebar.tsx` のフッター独自実装 → `SidebarAccountFooter`
+- **残すもの（ドメイン固有）**
+  - `WorkflowProgressStrip`
+  - オントロジー / 関係グラフ。配色は `--color-graph-*`（種別 = 塗り、状態 = 線）
+- `--font-mono`（Google Sans Code）は本リポジトリが `@fontsource` で自前ホストして定義する。
 
 ## ディレクトリ構成
 
