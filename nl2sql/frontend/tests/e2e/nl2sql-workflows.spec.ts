@@ -14009,7 +14009,7 @@ test("annotation management explains ORA-11548 before Oracle execution", async (
   ).toBeVisible();
   await expect(executePanel.getByText("説明用の annotation 名は UI_Display に変更してください。"))
     .toBeVisible();
-  await expect(executePanel.getByText(/\"COMMENT\" のように二重引用符/)).toBeVisible();
+  await expect(executePanel.getByText(/"COMMENT" のように二重引用符/)).toBeVisible();
 
   const details = executePanel.locator("details");
   const summary = details.locator("summary");

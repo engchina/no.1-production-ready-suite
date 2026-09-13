@@ -1268,6 +1268,8 @@ export function SecurityDeepSecPage() {
     if (dataUserPassword.length < 12 || dataUserPassword.length > 256) {
       return t("security.deepsec.config.passwordLength");
     }
+    // 制御文字を含むパスワードを拒否するため、制御文字の範囲指定は意図どおり。
+    // oxlint-disable-next-line no-control-regex
     if (dataUserPassword.includes("\"") || /[\x00-\x1f\x7f-\x9f]/.test(dataUserPassword)) {
       return t("security.deepsec.config.passwordChars");
     }
@@ -1605,7 +1607,7 @@ export function SecurityDeepSecPage() {
         preview.data_entitlements.map((item, index) => {
           const currentDraft = current[index];
           return {
-            ...(currentDraft ?? {}),
+            ...currentDraft,
             ...item,
             client_key: currentDraft?.client_key ?? entitlementDraftClientKey(item, index),
           };

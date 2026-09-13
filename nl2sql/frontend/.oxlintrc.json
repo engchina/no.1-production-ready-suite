@@ -1,0 +1,75 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  // 既定の correctness カテゴリ（oxlint 標準）に加え、src/** にデザインシステム遵守ルールを掛ける。
+  // 正本: platform の docs/design-system/adherence.oxlintrc.json と AGENTS.md「デザインシステム / UI」節。
+  "ignorePatterns": ["dist/**", "playwright-report/**", "test-results/**"],
+  "jsPlugins": ["./lint/design-system-plugin.mjs"],
+  "overrides": [
+    {
+      // tests/** は computed style の実測値（rgb / px）や fixture を検証するため、見た目の規約は掛けない。
+      "files": ["src/**/*.ts", "src/**/*.tsx"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                // adherence の components/core/** 等に相当。アプリからは dist の内部パスも含めてルート以外を禁止する。
+                "group": ["@engchina/production-ready-ui/**", "!@engchina/production-ready-ui/styles.css"],
+                "message": "共有 UI パッケージはルート（@engchina/production-ready-ui）から import する。内部パスに依存しない。"
+              }
+            ]
+          }
+        ],
+        "design-system/restricted-syntax": [
+          "error",
+          // --- adherence.oxlintrc.json 由来 ---
+          // `#adb-management` のような URL フラグメントを誤検知しないよう、直後に英数字・ハイフンが続くものは除く。
+          {
+            "selector": "Literal[value=/#[0-9a-fA-F]{3,8}(?![\\w-])/]",
+            "message": "生の hex 色は使わない。@engchina/production-ready-ui の色トークン（bg-surface / text-fg-muted / var(--color-*)）を使う。"
+          },
+          {
+            "selector": "TemplateElement[value.raw=/#[0-9a-fA-F]{3,8}(?![\\w-])/]",
+            "message": "生の hex 色は使わない。@engchina/production-ready-ui の色トークン（bg-surface / text-fg-muted / var(--color-*)）を使う。"
+          },
+          // 生の px は inline style に限定する（RAG / Agent と同じ範囲）。
+          // Tailwind のレイアウト寸法（min-w-[640px] / h-[392px] 等）は画面固有の業務レイアウトとしてアプリが持てる。
+          // matchMedia のブレークポイントやグラフ座標の計算値も px が正しいため対象外。
+          {
+            "selector": "JSXAttribute[name.name='style'] Literal[value=/\\b\\d+px\\b/]",
+            "message": "inline style に生の px を書かない。余白・寸法トークン（var(--space-*) / var(--button-height-*) 等）か Tailwind のユーティリティを使う。"
+          },
+          {
+            "selector": "JSXAttribute[name.name='style'] TemplateElement[value.raw=/\\b\\d+px\\b/]",
+            "message": "inline style に生の px を書かない。余白・寸法トークン（var(--space-*) / var(--button-height-*) 等）か Tailwind のユーティリティを使う。"
+          },
+          {
+            "selector": "Literal[value=/font-family\\s*:\\s*(?!['\\\"]?(?:Noto Sans JP|Roboto|Google Sans Code|var\\())/i]",
+            "message": "デザインシステムに無い書体。Noto Sans JP / Roboto / Google Sans Code（var(--font-sans) / var(--font-mono)）を使う。"
+          },
+          // --- #529 で固めた規約（adherence に無いもの） ---
+          // 型・角丸は packages/ui が持つ。text-[10px] / leading-[18px] / rounded-[3px] 等の任意値で迂回しない。
+          {
+            "selector": ":matches(Literal[value=/(?:^|[\\s:!])(?:text|leading|tracking|rounded(?:-[trblse]{1,2})?)-\\[-?[\\d.]+(?:px|rem|em)?\\]/], TemplateElement[value.raw=/(?:^|[\\s:!])(?:text|leading|tracking|rounded(?:-[trblse]{1,2})?)-\\[-?[\\d.]+(?:px|rem|em)?\\]/])",
+            "message": "文字サイズ・行間・角丸を任意値で書かない。text-xs / text-sm / text-base、rounded-sm / rounded-md / rounded-lg 等のトークンを使う。"
+          },
+          // platform #40 で compat.css と旧名ユーティリティを削除した。旧名は未定義になり、色が付かなくなる。
+          {
+            "selector": ":matches(Literal[value=/(?:^|[\\s:!])-?(?:bg|text|border(?:-[xytrblse])?|ring(?:-offset)?|outline|fill|stroke|divide|placeholder|caret|accent|decoration)-(?:background|foreground|card|muted(?:-foreground)?|primary(?:-foreground|-fill(?:-foreground)?)?|ring|success(?:-bg|-fill)?|warning(?:-bg)?|danger(?:-bg|-fill)?|info(?:-bg)?|code(?:-fg)?|control-border|button-border|disabled(?:-bg)?|sidebar-(?:foreground|active))(?:\\/\\d+)?(?![\\w-])/], TemplateElement[value.raw=/(?:^|[\\s:!])-?(?:bg|text|border(?:-[xytrblse])?|ring(?:-offset)?|outline|fill|stroke|divide|placeholder|caret|accent|decoration)-(?:background|foreground|card|muted(?:-foreground)?|primary(?:-foreground|-fill(?:-foreground)?)?|ring|success(?:-bg|-fill)?|warning(?:-bg)?|danger(?:-bg|-fill)?|info(?:-bg)?|code(?:-fg)?|control-border|button-border|disabled(?:-bg)?|sidebar-(?:foreground|active))(?:\\/\\d+)?(?![\\w-])/])",
+            "message": "旧トークン名のユーティリティ（bg-card / text-muted / bg-primary-fill 等）は削除済み。bg-surface / text-fg-muted / bg-accent-emphasis 等の新名を使う（platform docs/design-system/ARCHITECTURE.md §5）。"
+          },
+          {
+            "selector": ":matches(Literal[value=/(?:var\\(\\s*|^)--(?:background|foreground|card|border|muted|primary(?:-foreground|-fill(?:-foreground)?)?|ring|sidebar(?:-foreground|-active)?|success(?:-bg|-fill)?|warning(?:-bg)?|danger(?:-bg|-fill)?|info(?:-bg)?|code(?:-fg)?|control-border|button-border|disabled(?:-bg)?|graph-[a-z]+|color-(?:background|foreground|card|primary(?:-foreground)?|muted|ring|code(?:-fg)?|(?:success|warning|danger|info)(?:-bg)?|sidebar-(?:foreground|active)))(?![\\w-])/], TemplateElement[value.raw=/var\\(\\s*--(?:background|foreground|card|border|muted|primary(?:-foreground|-fill(?:-foreground)?)?|ring|sidebar(?:-foreground|-active)?|success(?:-bg|-fill)?|warning(?:-bg)?|danger(?:-bg|-fill)?|info(?:-bg)?|code(?:-fg)?|control-border|button-border|disabled(?:-bg)?|graph-[a-z]+|color-(?:background|foreground|card|primary(?:-foreground)?|muted|ring|code(?:-fg)?|(?:success|warning|danger|info)(?:-bg)?|sidebar-(?:foreground|active)))(?![\\w-])/])",
+            "message": "旧トークン名の CSS 変数（--card / --primary / --graph-line 等）は削除済みで未定義になる。--color-surface / --color-accent-fg / --color-graph-line 等の新名を使う。"
+          },
+          // loading 中はラベルを変えない（先頭アイコンがスピナーに置き換わる）。loading / pending 等を条件にした文言の出し分けを禁止する。
+          {
+            "selector": "JSXElement[openingElement.name.name='Button']:has(JSXAttribute[name.name='loading']) JSXExpressionContainer > ConditionalExpression:matches([test.name=/loading|pending|saving|submitting|running|busy/i], [test.property.name=/loading|pending|saving|submitting|running|busy/i], [test.left.name=/loading|pending|saving|submitting|running|busy/i], [test.left.property.name=/loading|pending|saving|submitting|running|busy/i]):matches([consequent.type='Literal'][consequent.value=/./], [consequent.type='TemplateLiteral'], [consequent.callee.name='t'], [alternate.type='Literal'][alternate.value=/./], [alternate.type='TemplateLiteral'], [alternate.callee.name='t'])",
+            "message": "loading 中に Button のラベルを「保存中…」等へ差し替えない。ラベルは固定し、loading プロップで先頭アイコンをスピナーに置き換える。"
+          }
+        ]
+      }
+    }
+  ]
+}

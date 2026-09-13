@@ -12,7 +12,8 @@
     "test:logic": "tsc -p tsconfig.test.json && node --import jiti/register --test tests/*.test.ts",
     "test:e2e": "playwright test",
     "test:e2e:oci-resource-manager": "playwright test --config playwright.oci-resource-manager.config.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint --deny-warnings"
   },
   "dependencies": {
     "@engchina/production-ready-ui": "file:../../no.1-production-ready-platform/packages/ui",
@@ -35,6 +36,7 @@
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^6.0.2",
     "jiti": "2.7.0",
+    "oxlint": "1.82.0",
     "postcss": "8.5.15",
     "tailwindcss": "^4.0.0",
     "typescript": "^5.7.2",

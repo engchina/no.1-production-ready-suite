@@ -195,7 +195,7 @@ Issue の要点と、この変更が必要な理由を記載する。bug fix で
 
 ### 禁止事項
 
-- 生の hex（`#1a73c1` 等）と生の px を書く。色は `--color-*` トークン（`bg-surface` / `text-fg-muted` / `border-border-control` 等のユーティリティ）を使う。旧名（`bg-card` / `text-muted` / `bg-primary` / `var(--primary)` 等）は移行用の互換エイリアスで、新規コードで使わない。
+- 生の hex（`#1a73c1` 等）と生の px を書く。色は `--color-*` トークン（`bg-surface` / `text-fg-muted` / `border-border-control` 等のユーティリティ）を使う。旧名（`bg-card` / `text-muted` / `bg-primary` / `var(--primary)` / `--graph-line` 等）は platform で削除済みで、書くと未定義になり色が付かない。
 - `globals.css` に色トークンや `.dark { … }` の上書きを定義する。
 - `TextField` / `PageHeader` / `Button` / `StatusBadge` などの共有コンポーネントを再実装する。
 - `<table>` を手書きする。`DataTable` を使う。
@@ -220,6 +220,11 @@ Issue の要点と、この変更が必要な理由を記載する。bug fix で
 - `PageHeader` の `actions` は配列で渡す（danger → utility → secondary → primary の順に自動で並び、右端が primary になる）。
 - `PageHeader` と `PageBody` に `wide` を渡す場合は必ず両方に同じ値を渡す。片方だけだと 1920px でタイトルと本文の左端がずれる。
 - 単位の境界: 文字サイズとコントロール高さは px、余白とレイアウト寸法は rem（14px ルート）。
+
+### lint
+
+- `frontend/.oxlintrc.json` が platform の `docs/design-system/adherence.oxlintrc.json`（生の hex / 生の px / 内部パス直 import）と上記の禁止事項の一部（旧トークン名、型・角丸の任意値、loading 中のラベル差し替え）を `src/**` で検出する。`npm run lint`（`oxlint --deny-warnings`）は CI の Frontend ジョブで実行される。
+- 誤検知や正当な例外（グラフ座標など px が正しい幾何値）は `// oxlint-disable-next-line <rule>` に理由コメントを添えて局所的に除外する。ルール自体を緩める場合は `.oxlintrc.json` に理由を書く。
 
 ### 既存ルールとの優先順位
 

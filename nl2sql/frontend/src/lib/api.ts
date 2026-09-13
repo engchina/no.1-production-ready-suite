@@ -822,7 +822,7 @@ async function settingsRequest<T>(path: string, init?: RequestInit): Promise<T> 
     ...init,
     headers: {
       Accept: "application/json",
-      ...(init?.headers ?? {}),
+      ...init?.headers,
     },
   });
   const envelope = await parseSettingsEnvelope<T>(response);
