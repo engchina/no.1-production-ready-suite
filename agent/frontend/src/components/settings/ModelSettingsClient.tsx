@@ -975,7 +975,7 @@ function ModelTestResultPanel({
                   {t("settings.model.test.errorType")}: {result.error_type}
                 </p>
               ) : null}
-              <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap rounded-md border border-border bg-surface p-2 text-[11px] leading-relaxed text-fg">
+              <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap rounded-md border border-border bg-surface p-2 text-xs leading-relaxed text-fg">
                 {result.raw_error || t("settings.model.test.noDetails")}
               </pre>
             </details>
