@@ -1125,6 +1125,9 @@ export interface SampleDataInfo {
   profile_id: string;
   confirmation: string;
   objects: string[];
+  /** sample object を作成する schema と、objects の所有者付き名前。旧 backend では未返却。 */
+  owner?: string;
+  object_refs?: Array<{ name: string; owner?: string; qualified_name?: string }>;
   imported_objects: string[];
   /** 同名だが構成がサンプル定義と異なり、利用者のものとみなしたオブジェクト。 */
   conflicting_objects?: string[];
@@ -1152,6 +1155,9 @@ export interface SampleDataMutationData {
 
 export interface DbAdminImportTabularData {
   table_name: string;
+  /** 取込先の schema（current schema）。旧 backend では未返却。 */
+  owner?: string;
+  qualified_name?: string;
   filename: string;
   sheet_name: string;
   mode: string;
@@ -1345,6 +1351,9 @@ export interface SelectAiFeedbackEntriesData {
   profile_name: string;
   index_name: string;
   table_name: string;
+  /** feedback vector table の所有者（current schema）と所有者付き名前。旧 backend では未返却。 */
+  table_owner?: string;
+  table_qualified_name?: string;
   items: SelectAiFeedbackEntry[];
   total: number;
   warnings: string[];

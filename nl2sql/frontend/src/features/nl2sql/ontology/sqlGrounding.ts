@@ -550,7 +550,8 @@ export function groundSqlSemanticGraphOnOntologyGraph(
 
   for (const rawTable of sqlGraph.tables) {
     const table = normalizeSqlItem(rawTable);
-    const label = table.qualified_name || itemLabel(table);
+    // SQL に owner が無い表も、backend が current schema で補った所有者付き名前で示す（#556）。
+    const label = table.resolved_qualified_name || table.qualified_name || itemLabel(table);
     const entries = matchingObjectEntries(index, tableIdentityFromItem(table));
     const nodeIds = dedupe(entries.map((entry) => entry.node.id));
     if (nodeIds.length === 0) {

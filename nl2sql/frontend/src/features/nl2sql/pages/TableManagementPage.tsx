@@ -47,6 +47,7 @@ import {
   type DbObjectSortKey,
   type DbObjectSortState,
 } from "../components/DbObjectManagementShared";
+import { DbObjectName } from "../components/DbObjectName";
 import type {
   DbAdminExecuteData,
   DbAdminImportTabularData,
@@ -79,9 +80,13 @@ function ImportResultPanel({ result }: { result: DbAdminImportTabularData }) {
       aria-label={t("tableMgmt.importWizard.result")}
       data-testid="table-import-result-panel"
     >
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <DbObjectName
+          object={{ owner: result.owner, name: result.table_name, qualified_name: result.qualified_name }}
+          size="sm"
+          data-testid="table-import-result-table-name"
+        />
         <StatusBadge variant={result.executed ? "success" : "neutral"} label={result.executed ? "executed" : "not executed"} />
-        <StatusBadge icon={false} variant="info" label={result.table_name} />
         <StatusBadge icon={false} variant="info" label={t("tableMgmt.importWizard.rows", { count: result.row_count })} />
         <StatusBadge icon={false} variant="neutral" label={result.mode} />
       </div>

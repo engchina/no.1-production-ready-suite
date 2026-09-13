@@ -474,6 +474,9 @@ export type SystemObjectType = "TABLE" | "INDEX" | "SEQUENCE" | "PACKAGE" | "PAC
 
 export interface SystemObjectMetadata {
   name: string;
+  /** 接続ユーザーの schema と所有者付き名前。旧 backend では未返却。 */
+  owner?: string;
+  qualified_name?: string;
   object_type: SystemObjectType;
   exists: boolean;
   estimated_rows: number | null;

@@ -3767,6 +3767,12 @@ def test_service_select_ai_feedback_management_uses_dbms_cloud_ai() -> None:
     assert entries.runtime == "oracle"
     assert entries.profile_name == "DEFAULT"
     assert entries.table_name == "DEFAULT_FEEDBACK_VECINDEX$VECTAB"
+    # vector table は current schema に作られるため、所有者付きの名前も返す（#556）。
+    assert entries.table_owner == service._current_schema_owner()
+    assert entries.table_owner
+    assert entries.table_qualified_name == (
+        f"{entries.table_owner}.DEFAULT_FEEDBACK_VECINDEX$VECTAB"
+    )
     assert entries.items[0].sql_id == "sql-001"
     assert entries.items[0].sql_text == "SELECT TOTAL_AMOUNT FROM INVOICES"
     assert any('FROM "DEFAULT_FEEDBACK_VECINDEX$VECTAB"' in sql for sql in fake_db.executed)

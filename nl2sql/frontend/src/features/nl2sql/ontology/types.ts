@@ -442,6 +442,9 @@ export interface SqlSemanticItem {
   query_sql?: string;
   source_sql?: string;
   qualified_name?: string;
+  /** 表示用の所有者付き名前。SQL に owner が無い表は実行時の current schema で補った値。 */
+  resolved_owner?: string;
+  resolved_qualified_name?: string;
   name?: string;
   output_name?: string;
   alias?: string | null;

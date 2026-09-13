@@ -149,6 +149,7 @@ from .models import (
     DbAdminStatementResult,
     DbAdminStatementsRequest,
     DbAdminTruncateTableRequest,
+    DbObjectNameRef,
     DemoLearningData,
     DiagnosticCheck,
     DiagnosticConfigGuide,
@@ -280,6 +281,7 @@ from .object_visibility import (
     is_user_visible_object_name,
     is_user_visible_schema_object,
 )
+from .ontology_models import SqlSemanticGraph
 from .oracle_adapter import (
     OracleAdapterError,
     OracleNl2SqlAdapter,
@@ -502,6 +504,46 @@ _ORACLE_CONNECTION_CODES = frozenset(
     }
 )
 _ORACLE_SCHEMA_COMPATIBILITY_CODES = frozenset({"ORA-00904", "ORA-00942"})
+
+
+def _display_qualified_name(owner: str, object_name: str) -> str:
+    """表示用の `OWNER.OBJECT`。owner が無い・識別子が不正なときは空文字（推測で補わない）。"""
+
+    if not owner.strip() or not object_name.strip():
+        return ""
+    try:
+        return qualified_object_name(owner, object_name)
+    except ValueError:
+        return ""
+
+
+def _graph_with_resolved_table_owners(
+    graph: SqlSemanticGraph | None, current_owner: str
+) -> SqlSemanticGraph | None:
+    """SQL 参照表に表示用の所有者付き名前を付ける。
+
+    owner が SQL に無い表は current schema で補う（`_extract_referenced_tables` と同じ規則）。
+    CTE は schema object ではないため補わない。
+    """
+
+    if graph is None:
+        return None
+    tables = []
+    for table in graph.tables:
+        if table.is_cte:
+            tables.append(table)
+            continue
+        owner = table.owner.upper() or current_owner.upper()
+        name = table.name.upper()
+        tables.append(
+            table.model_copy(
+                update={
+                    "resolved_owner": owner,
+                    "resolved_qualified_name": _display_qualified_name(owner, name),
+                }
+            )
+        )
+    return graph.model_copy(update={"tables": tables})
 
 
 def _safe_oracle_error_code(exc: Exception) -> str:
@@ -4669,12 +4711,22 @@ class Nl2SqlService:
             sql["delete"] = (
                 self._sample_legacy_drop_statements(dataset, state.legacy) + sql["delete"]
             )
+        sample_owner = self._current_schema_owner()
         return SampleDataInfo(
             runtime="oracle" if self._use_oracle_runtime() else "deterministic",
             profile_id="",
             dataset=dataset,
             confirmation=SAMPLE_DATA_CONFIRMATION,
             objects=list(SAMPLE_DATASETS[dataset].objects),
+            owner=sample_owner,
+            object_refs=[
+                DbObjectNameRef(
+                    name=name,
+                    owner=sample_owner,
+                    qualified_name=_display_qualified_name(sample_owner, name),
+                )
+                for name in SAMPLE_DATASETS[dataset].objects
+            ],
             imported_objects=state.imported,
             conflicting_objects=state.conflicts,
             legacy_objects=state.legacy,
@@ -13657,8 +13709,11 @@ class Nl2SqlService:
                     warnings.append(f"import 後の Schema job 投入に失敗しました: {exc}")
         else:
             warnings.append("Tabular import 実行には NL2SQL_RUNTIME_MODE=oracle が必要です。")
+        import_owner = self._current_schema_owner()
         return DbAdminImportTabularData(
             table_name=table_name,
+            owner=import_owner,
+            qualified_name=_display_qualified_name(import_owner, table_name),
             filename=request.filename,
             sheet_name=sheet_name,
             mode=mode,
@@ -15651,11 +15706,15 @@ class Nl2SqlService:
                     profile_name=profile_name,
                     limit=limit,
                 )
+                feedback_table = str(data.get("table_name") or "")
+                feedback_owner = self._current_schema_owner() if feedback_table else ""
                 return SelectAiFeedbackEntriesData(
                     runtime="oracle",
                     profile_name=str(data.get("profile_name") or profile_name),
                     index_name=str(data.get("index_name") or ""),
-                    table_name=str(data.get("table_name") or ""),
+                    table_name=feedback_table,
+                    table_owner=feedback_owner,
+                    table_qualified_name=_display_qualified_name(feedback_owner, feedback_table),
                     items=[
                         SelectAiFeedbackEntry.model_validate(item) for item in data.get("items", [])
                     ],
@@ -17245,7 +17304,7 @@ class Nl2SqlService:
         try:
             sql_for_analysis = executable_sql or generated_sql
             semantic = parse_oracle_sql(sql_for_analysis)
-            graph = semantic.graph
+            graph = _graph_with_resolved_table_owners(semantic.graph, self._current_schema_owner())
             graph_dump = graph.model_dump(mode="json") if graph is not None else {}
             graph_warnings = list(graph.parse_warnings) if graph is not None else []
             warnings = [

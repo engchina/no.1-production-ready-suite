@@ -19,6 +19,7 @@ import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
 import { TimedLoadingState } from "@/components/ProcessingState";
 import { DatabaseUnavailableNotice } from "@/components/system/DatabaseUnavailableNotice";
 import { ExecutionConfirmationField } from "@/features/nl2sql/components/DbAdminShared";
+import { DbObjectName } from "@/features/nl2sql/components/DbObjectName";
 import { useAuth } from "@/features/security/AuthProvider";
 import { MENU_PERMISSIONS } from "@/features/security/menu-permissions";
 import {
@@ -372,8 +373,7 @@ function SystemTablesDetails({ data }: { data: SystemTablesStatusData }) {
               key: "name",
               header: t("settings.database.systemTables.table.name"),
               rowHeader: true,
-              className: "whitespace-nowrap font-mono font-medium text-fg",
-              render: (object) => object.name,
+              render: (object) => <DbObjectName object={object} size="xs" />,
             },
             {
               key: "type",

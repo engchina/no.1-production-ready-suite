@@ -147,6 +147,8 @@ function systemObjectRows(status: SchemaStatus, count = EXPECTED_OBJECT_COUNT) {
     const isTable = object.object_type === "TABLE";
     return {
       ...object,
+      owner: "NL2SQL_APP",
+      qualified_name: `NL2SQL_APP.${object.name}`,
       exists,
       estimated_rows: exists && isTable ? index + 1 : null,
       created_at: exists ? "2026-07-19T00:00:00Z" : null,
@@ -367,7 +369,8 @@ test("四つの schema 状態を再取得し、詳細表を局所スクロール
 
   await card.getByText(/管理オブジェクトの詳細を表示/).click();
   await expect(card.getByRole("table")).toBeVisible();
-  await expect(card.getByText("NL2SQL_PROFILES", { exact: true })).toBeVisible();
+  // 所有者付きの修飾名で表示する（#556）。
+  await expect(card.getByText("NL2SQL_APP.NL2SQL_PROFILES", { exact: true })).toBeVisible();
   await expect(card.getByText("27 / 27", { exact: true })).toBeVisible();
   await expect(card.getByText("53 / 53", { exact: true })).toBeVisible();
   await expect(

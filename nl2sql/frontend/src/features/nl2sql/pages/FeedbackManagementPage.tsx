@@ -53,6 +53,8 @@ import {
   DbObjectPanelHeader,
   type DbObjectTab,
 } from "../components/DbObjectManagementShared";
+import { DbObjectName } from "../components/DbObjectName";
+import type { DbObjectNameSource } from "../dbObjectIdentity";
 import { QuestionText } from "../components/QuestionText";
 import { engineLabel } from "../labels";
 import { profileDisplayLabel, profileRecordDisplayLabel } from "../profileDisplay";
@@ -751,6 +753,15 @@ export function FeedbackManagementPage() {
                   <TechnicalRuntimeFact
                     label={t("feedbackManagement.entries.vectorTable")}
                     value={feedback?.table_name || "-"}
+                    objectName={
+                      feedback?.table_name
+                        ? {
+                            owner: feedback.table_owner,
+                            name: feedback.table_name,
+                            qualified_name: feedback.table_qualified_name,
+                          }
+                        : undefined
+                    }
                   />
                 </dl>
               </section>
@@ -836,7 +847,18 @@ export function FeedbackManagementPage() {
             <div className="flex flex-wrap gap-2">
               <StatusBadge icon={false} variant="neutral" label={feedback?.runtime ?? dbProfiles?.runtime ?? "-"} />
               {feedback?.index_name && <StatusBadge icon={false} variant="info" label={feedback.index_name} />}
-              {feedback?.table_name && <StatusBadge icon={false} variant="neutral" label={feedback.table_name} />}
+              {feedback?.table_name && (
+                <DbObjectName
+                  object={{
+                    owner: feedback.table_owner,
+                    name: feedback.table_name,
+                    qualified_name: feedback.table_qualified_name,
+                  }}
+                  size="xs"
+                  className="self-center"
+                  data-testid="feedback-vector-index-table-name"
+                />
+              )}
             </div>
             <FormActionBar
               ariaLabel={t("feedbackManagement.index.actions")}
@@ -1493,11 +1515,22 @@ function FeedbackEntriesListSkeleton() {
   );
 }
 
-function TechnicalRuntimeFact({ label, value }: { label: string; value: string }) {
+function TechnicalRuntimeFact({
+  label,
+  value,
+  objectName,
+}: {
+  label: string;
+  value: string;
+  /** 表名の場合は所有者付きの修飾名を等幅で示す。 */
+  objectName?: DbObjectNameSource;
+}) {
   return (
     <div className="flex min-w-0 flex-wrap items-baseline gap-x-1 rounded-md border border-border bg-surface px-2 py-1 text-xs leading-5">
       <dt className="shrink-0 font-medium text-fg-muted">{label}:</dt>
-      <dd className="min-w-0 break-all font-medium text-fg">{value}</dd>
+      <dd className="min-w-0 break-all font-medium text-fg">
+        {objectName ? <DbObjectName object={objectName} size="xs" /> : value}
+      </dd>
     </div>
   );
 }

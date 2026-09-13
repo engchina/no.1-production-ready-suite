@@ -327,6 +327,9 @@ class SystemTableMetadata(BaseModel):
     """USER_TABLES / USER_OBJECTS から取得する概算 metadata。"""
 
     name: str
+    # 接続ユーザーの schema と所有者付きの名前（取得できない場合は空文字）。
+    owner: str = ""
+    qualified_name: str = ""
     exists: bool
     estimated_rows: int | None = None
     created_at: str | None = None
@@ -337,6 +340,8 @@ class SystemObjectMetadata(BaseModel):
     """必須の table / index / sequence を統一表示する metadata。"""
 
     name: str
+    owner: str = ""
+    qualified_name: str = ""
     object_type: Literal["TABLE", "INDEX", "SEQUENCE", "PACKAGE", "PACKAGE BODY"]
     exists: bool
     estimated_rows: int | None = None

@@ -138,7 +138,7 @@ def test_object_metadata_covers_manifest_order_and_marks_missing_objects() -> No
         }
     ]
 
-    metadata = manager._build_object_metadata(existing_objects, table_metadata)
+    metadata = manager._build_object_metadata(existing_objects, table_metadata, owner="NL2SQL_APP")
 
     assert [(item["name"], item["object_type"]) for item in metadata] == list(MANAGED_OBJECTS)
     assert sum(item["object_type"] == "TABLE" for item in metadata) == 29
@@ -146,6 +146,8 @@ def test_object_metadata_covers_manifest_order_and_marks_missing_objects() -> No
     assert sum(item["object_type"] == "SEQUENCE" for item in metadata) == 1
     assert metadata[0] == {
         "name": MANAGED_TABLES[0],
+        "owner": "NL2SQL_APP",
+        "qualified_name": f"NL2SQL_APP.{MANAGED_TABLES[0]}",
         "object_type": "TABLE",
         "exists": True,
         "estimated_rows": 12,
@@ -159,12 +161,59 @@ def test_object_metadata_covers_manifest_order_and_marks_missing_objects() -> No
     assert first_index["last_analyzed_at"] is None
     assert metadata[-3] == {
         "name": MANAGED_SEQUENCES[0],
+        "owner": "NL2SQL_APP",
+        "qualified_name": f"NL2SQL_APP.{MANAGED_SEQUENCES[0]}",
         "object_type": "SEQUENCE",
         "exists": False,
         "estimated_rows": None,
         "created_at": None,
         "last_analyzed_at": None,
     }
+
+
+def test_object_metadata_leaves_owner_empty_when_schema_owner_is_unknown() -> None:
+    manager = SystemSchemaManager(ddl_lock_timeout_seconds=1)
+
+    metadata = manager._build_object_metadata({}, [])
+
+    assert metadata[0]["name"] == MANAGED_TABLES[0]
+    assert metadata[0]["owner"] == ""
+    assert metadata[0]["qualified_name"] == ""
+
+
+class _SchemaOwnerCursor:
+    def __init__(self, statements: list[str], row: tuple[Any, ...] | None) -> None:
+        self.statements = statements
+        self.row = row
+
+    def __enter__(self) -> _SchemaOwnerCursor:
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+    def execute(self, sql: str, binds: dict[str, Any] | None = None) -> None:
+        self.statements.append(sql)
+
+    def fetchone(self) -> tuple[Any, ...] | None:
+        return self.row
+
+
+class _SchemaOwnerConnection:
+    def __init__(self, row: tuple[Any, ...] | None) -> None:
+        self.statements: list[str] = []
+        self.row = row
+
+    def cursor(self) -> _SchemaOwnerCursor:
+        return _SchemaOwnerCursor(self.statements, self.row)
+
+
+def test_schema_owner_is_loaded_from_connected_user() -> None:
+    connection = _SchemaOwnerConnection(("nl2sql_app",))
+
+    assert SystemSchemaManager._load_schema_owner(connection) == "NL2SQL_APP"
+    assert connection.statements == ["SELECT USER FROM DUAL"]
+    assert SystemSchemaManager._load_schema_owner(_SchemaOwnerConnection(None)) == ""
 
 
 def test_manifest_checksums_are_actual_sha256_values() -> None:
