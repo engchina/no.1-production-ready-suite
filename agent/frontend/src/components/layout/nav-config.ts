@@ -53,7 +53,6 @@ export const NAV_SECTIONS: NavSection[] = [
       {
         href: APP_ROUTES.pluginMarketplaces,
         labelKey: "nav.pluginMarketplaces",
-        sidebarLabelKey: "nav.pluginMarketplaces.sidebar",
         icon: Store,
       },
     ],
