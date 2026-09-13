@@ -39,6 +39,7 @@ from .models import (
     SchemaTable,
     SchemaViewDependency,
 )
+from .object_identity import catalog_match_key, normalize_object_part, object_name_tokens
 from .object_visibility import (
     filter_user_visible_catalog,
     is_user_visible_schema_object,
@@ -87,7 +88,8 @@ def _merge_refresh_targets(
 ) -> list[SchemaRefreshTargetObject]:
     merged: dict[tuple[str, str], SchemaRefreshTargetObject] = {}
     for target in [*left, *right]:
-        key = (target.owner.upper(), target.object_name.upper())
+        # target は辞書ビュー上の名前。大文字化すると同名表が潰れる（#563）。
+        key = (target.owner, target.object_name)
         current = merged.get(key)
         if current is None:
             merged[key] = target.model_copy(update={"owner": key[0], "object_name": key[1]})
@@ -289,6 +291,35 @@ def _decode_cursor(cursor: str | None, expected_parts: int) -> tuple[str, ...] |
     if not isinstance(decoded, list) or len(decoded) != expected_parts:
         raise ValueError("cursor が不正です。")
     return tuple(str(value) for value in decoded)
+
+
+def _schema_sort_key(owner: str, object_name: str) -> tuple[str, str, str, str]:
+    """Memory schema search の並び順と cursor 比較のキー。
+
+    従来の大文字の並びを保ちつつ、大文字小文字だけが異なる名前（`MIXED_CASE` と `Mixed_Case`）も
+    カタログ上の名前で一意に並べ、keyset cursor で読み飛ばし・重複を起こさない（#563）。
+    """
+
+    return (owner.upper(), object_name.upper(), owner, object_name)
+
+
+def _allowed_schema_object_pairs(allowed_names: Iterable[str]) -> list[tuple[str, str]]:
+    """Profile の対象名（`OBJECT` / `OWNER.OBJECT`、各部は引用可）を辞書上の名前の組にする。
+
+    owner を省略した旧形式は owner を空文字にする。引用符の壊れた名前は一致させない。
+    """
+
+    pairs: set[tuple[str, str]] = set()
+    for value in allowed_names:
+        try:
+            parts = [normalize_object_part(part) for part in object_name_tokens(value)]
+        except ValueError:
+            continue
+        if len(parts) == 1:
+            pairs.add(("", parts[0]))
+        elif len(parts) == 2:
+            pairs.add((parts[0], parts[1]))
+    return sorted(pairs)
 
 
 def _profile_search_key(value: str) -> str:
@@ -758,7 +789,8 @@ class MemoryIncrementalNl2SqlRepository:
         after = _decode_cursor(cursor, 2)
         query_key = query.casefold().strip()
         query_scope_key = query_scope.lower().strip()
-        owner_key = owner.upper().strip()
+        # owner は辞書ビュー上の名前（大文字小文字を保持、#563）。
+        owner_key = owner.strip()
         owner_prefix_key = owner_prefix.upper().strip()
         type_key = object_type.upper().strip()
         row_state_key = row_state.lower().strip()
@@ -767,7 +799,7 @@ class MemoryIncrementalNl2SqlRepository:
                 table
                 for table in self._catalog.tables
                 if is_user_visible_schema_object(table.owner, table.table_name)
-                and (not owner_key or table.owner.upper() == owner_key)
+                and (not owner_key or table.owner == owner_key)
                 and (not owner_prefix_key or table.owner.upper().startswith(owner_prefix_key))
                 and (
                     not type_key
@@ -783,8 +815,8 @@ class MemoryIncrementalNl2SqlRepository:
                 )
                 and (
                     allowed_names is None
-                    or table.table_name.upper() in allowed_names
-                    or f"{table.owner}.{table.table_name}".upper() in allowed_names
+                    or catalog_match_key(table.table_name) in allowed_names
+                    or catalog_match_key(table.owner, table.table_name) in allowed_names
                 )
                 and (
                     not query_key
@@ -803,7 +835,7 @@ class MemoryIncrementalNl2SqlRepository:
                     ).casefold()
                 )
             ]
-            tables.sort(key=lambda item: (item.owner.upper(), item.table_name.upper()))
+            tables.sort(key=lambda item: _schema_sort_key(item.owner, item.table_name))
             total = len(tables) if include_counts else None
             table_count = (
                 sum(item.table_type.upper() not in {"VIEW", "MATERIALIZED VIEW"} for item in tables)
@@ -812,8 +844,11 @@ class MemoryIncrementalNl2SqlRepository:
             )
             view_count = (total - table_count) if total is not None else 0
             if after:
+                after_key = _schema_sort_key(after[0], after[1])
                 tables = [
-                    item for item in tables if (item.owner.upper(), item.table_name.upper()) > after
+                    item
+                    for item in tables
+                    if _schema_sort_key(item.owner, item.table_name) > after_key
                 ]
             selected = tables[: limit + 1]
             has_more = len(selected) > limit
@@ -821,7 +856,7 @@ class MemoryIncrementalNl2SqlRepository:
             next_cursor = None
             if has_more and selected:
                 last = selected[-1]
-                next_cursor = _encode_cursor(last.owner.upper(), last.table_name.upper())
+                next_cursor = _encode_cursor(last.owner, last.table_name)
             return SchemaObjectPage(
                 items=[self._schema_summary(table) for table in selected],
                 next_cursor=next_cursor,
@@ -836,14 +871,13 @@ class MemoryIncrementalNl2SqlRepository:
     def get_schema_object(self, owner: str, object_name: str) -> SchemaObjectDetail | None:
         if not is_user_visible_schema_object(owner, object_name):
             return None
-        owner_key = owner.upper()
-        name_key = object_name.upper()
+        # owner / object_name は辞書ビュー上の名前。大文字小文字を区別して完全一致させる（#563）。
         with self._lock:
             table = next(
                 (
                     item
                     for item in self._catalog.tables
-                    if item.owner.upper() == owner_key and item.table_name.upper() == name_key
+                    if item.owner == owner and item.table_name == object_name
                 ),
                 None,
             )
@@ -852,7 +886,7 @@ class MemoryIncrementalNl2SqlRepository:
             dependencies = [
                 item
                 for item in self._catalog.view_dependencies
-                if item.owner.upper() == owner_key and item.view_name.upper() == name_key
+                if item.owner == owner and item.view_name == object_name
             ]
             return SchemaObjectDetail(
                 table=table.model_copy(deep=True),
@@ -1189,7 +1223,7 @@ class MemoryIncrementalNl2SqlRepository:
             comment=table.comment,
             row_count=table.row_count,
             column_count=len(table.columns),
-            last_ddl_at=self._manifest.get((table.owner.upper(), table.table_name.upper()), ""),
+            last_ddl_at=self._manifest.get((table.owner, table.table_name), ""),
         )
 
 
@@ -1581,7 +1615,7 @@ class OracleIncrementalNl2SqlRepository:
         binds: dict[str, Any] = {"limit": limit + 1}
         if owner.strip():
             where.append("o.OWNER_NAME = :owner")
-            binds["owner"] = owner.strip().upper()
+            binds["owner"] = owner.strip()
         if owner_prefix.strip():
             where.append("SUBSTR(UPPER(o.OWNER_NAME), 1, LENGTH(:owner_prefix)) = :owner_prefix")
             binds["owner_prefix"] = owner_prefix.strip().upper()
@@ -1618,20 +1652,27 @@ class OracleIncrementalNl2SqlRepository:
                 "(o.OWNER_NAME > :after_owner OR "
                 "(o.OWNER_NAME = :after_owner AND o.OBJECT_NAME > :after_name))"
             )
-            binds.update(after_owner=after[0].upper(), after_name=after[1].upper())
+            binds.update(after_owner=after[0], after_name=after[1])
         if allowed_names is not None:
-            normalized = sorted({name.upper() for name in allowed_names})
-            if not normalized:
+            # Profile の対象名は引用規則の token。辞書上の名前（大文字小文字を保持）の組にして
+            # 完全一致させる。`UPPER(o.OBJECT_NAME)` で比べると `SALES."Mixed_Case"` の Profile に
+            # 大文字の同名表 `SALES.MIXED_CASE` も含まれる（#563）。
+            pairs = _allowed_schema_object_pairs(allowed_names)
+            if not pairs:
                 if include_counts:
                     return SchemaObjectPage(catalog_version=self.get_catalog_head().catalog_version)
                 return SchemaObjectPage(total=None, counts_included=False)
             where.append(
                 "EXISTS (SELECT 1 FROM JSON_TABLE(:allowed_names_json, '$[*]' "
-                "COLUMNS (ALLOWED_NAME VARCHAR2(512) PATH '$')) allowed "
-                "WHERE allowed.ALLOWED_NAME = UPPER(o.OBJECT_NAME) OR "
-                "allowed.ALLOWED_NAME = UPPER(o.OWNER_NAME || '.' || o.OBJECT_NAME))"
+                "COLUMNS (ALLOWED_OWNER VARCHAR2(128) PATH '$.owner', "
+                "ALLOWED_NAME VARCHAR2(128) PATH '$.name')) allowed "
+                "WHERE allowed.ALLOWED_NAME = o.OBJECT_NAME AND "
+                "(allowed.ALLOWED_OWNER IS NULL OR allowed.ALLOWED_OWNER = o.OWNER_NAME))"
             )
-            binds["allowed_names_json"] = json.dumps(normalized, ensure_ascii=False)
+            binds["allowed_names_json"] = json.dumps(
+                [{"owner": owner_name, "name": name} for owner_name, name in pairs],
+                ensure_ascii=False,
+            )
         base_where = " AND ".join(where)
         sql = (
             "SELECT o.OWNER_NAME, o.OBJECT_NAME, o.OBJECT_TYPE, o.LOGICAL_NAME, "  # nosec B608
@@ -1693,7 +1734,7 @@ class OracleIncrementalNl2SqlRepository:
         next_cursor = None
         if has_more and items:
             last = items[-1]
-            next_cursor = _encode_cursor(last.owner.upper(), last.object_name.upper())
+            next_cursor = _encode_cursor(last.owner, last.object_name)
         return SchemaObjectPage(
             items=items,
             next_cursor=next_cursor,
@@ -1708,9 +1749,9 @@ class OracleIncrementalNl2SqlRepository:
     def get_schema_object(self, owner: str, object_name: str) -> SchemaObjectDetail | None:
         if not is_user_visible_schema_object(owner, object_name):
             return None
-        owner_key = owner.upper()
-        object_key = object_name.upper()
-        catalog = self._load_catalog_subset(owner_key, object_key)
+        # owner / object_name は辞書ビュー上の名前。大文字化すると `Mixed_Case` の詳細要求で
+        # 大文字の同名表 `MIXED_CASE` の定義を返す（#563）。
+        catalog = self._load_catalog_subset(owner, object_name)
         if not catalog.tables:
             return None
         head = self.get_catalog_head()
@@ -1752,9 +1793,7 @@ class OracleIncrementalNl2SqlRepository:
         changed_keys = {
             key for key in changed_keys if is_user_visible_schema_object(key[0], key[1])
         }
-        table_by_key = {
-            (table.owner.upper(), table.table_name.upper()): table for table in catalog.tables
-        }
+        table_by_key = {(table.owner, table.table_name): table for table in catalog.tables}
         with self._connection_factory() as connection, connection.cursor() as cursor:
             try:
                 cursor.execute(
@@ -2429,8 +2468,8 @@ class OracleIncrementalNl2SqlRepository:
             "(:owner, :object_name, :object_type, :logical_name, :comments, :row_count, "
             ":column_count, :last_ddl_at)",
             {
-                "owner": table.owner.upper(),
-                "object_name": table.table_name.upper(),
+                "owner": table.owner,
+                "object_name": table.table_name,
                 "object_type": table.table_type.upper(),
                 "logical_name": table.logical_name,
                 "comments": table.comment,
@@ -2446,8 +2485,8 @@ class OracleIncrementalNl2SqlRepository:
                 "SAMPLE_VALUES_JSON) VALUES (:owner, :object_name, :column_name, :position, "
                 ":logical_name, :data_type, :nullable, :comments, :samples)",
                 {
-                    "owner": table.owner.upper(),
-                    "object_name": table.table_name.upper(),
+                    "owner": table.owner,
+                    "object_name": table.table_name,
                     "column_name": column.column_name,
                     "position": position,
                     "logical_name": column.logical_name,
@@ -2468,8 +2507,8 @@ class OracleIncrementalNl2SqlRepository:
                 "CONSTRAINT_NAME, CONSTRAINT_TEXT, PAYLOAD_JSON) VALUES "
                 "(:owner, :object_name, :constraint_name, :constraint_text, :payload)",
                 {
-                    "owner": table.owner.upper(),
-                    "object_name": table.table_name.upper(),
+                    "owner": table.owner,
+                    "object_name": table.table_name,
                     "constraint_name": detail.constraint_name,
                     "constraint_text": constraint_text,
                     "payload": _canonical_json(detail.model_dump(mode="json")),

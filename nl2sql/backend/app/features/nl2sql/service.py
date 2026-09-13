@@ -273,8 +273,10 @@ from .object_identity import (
     OracleObjectIdentity,
     canonical_object_part,
     canonical_qualified_name,
+    catalog_match_key,
     format_object_part,
     normalize_object_part,
+    object_match_key,
     object_name_tokens,
     parse_object_identity,
     qualified_object_name,
@@ -1698,7 +1700,8 @@ def _dedupe_schema_refresh_targets(
 ) -> list[SchemaRefreshTargetObject]:
     merged: dict[tuple[str, str], SchemaRefreshTargetObject] = {}
     for target in targets:
-        key = (target.owner.upper(), target.object_name.upper())
+        # target は辞書ビュー上の名前（`parse_object_identity` 済み）。大文字化しない（#563）。
+        key = (target.owner, target.object_name)
         current = merged.get(key)
         if current is None:
             merged[key] = target.model_copy(update={"owner": key[0], "object_name": key[1]})
@@ -2253,6 +2256,22 @@ def _normalize_identifier(value: str) -> str:
     return (parts[-1] if parts else "").upper()
 
 
+def _column_identifier_token(value: str) -> str:
+    """列の入力（`COLUMN` / `TABLE.COLUMN`、各部は引用可）の最後の部分を照合 token にする。
+
+    Oracle の引用規則どおり、引用なしは大文字、`"Amount"` は大文字小文字を保つ。
+    `_normalize_identifier` は引用符を外して大文字化するため `"Amount"` と `AMOUNT` を区別できない
+    （#563）。token は引用が必要な名前だけ `"..."` で囲むため、そのまま SQL に書ける。
+    引用符が壊れた値は例外にせず、前後の空白を除いて返す（どの列にも一致しない）。
+    """
+
+    try:
+        parts = object_name_tokens(value)
+    except ValueError:
+        return str(value or "").strip()
+    return parts[-1] if parts else ""
+
+
 def _synthetic_data_type_key(value: str) -> str:
     normalized = re.sub(r"\s+", " ", value.strip().upper())
     if normalized.startswith("LONG RAW"):
@@ -2694,7 +2713,7 @@ def _column_allowed(
 ) -> bool:
     restrictions = {
         _scope_object_name(table, current_owner=current_owner): {
-            _normalize_identifier(column) for column in columns
+            _column_identifier_token(column) for column in columns
         }
         for table, columns in allowed.columns.items()
         if columns
@@ -4119,17 +4138,20 @@ class Nl2SqlService:
         allowed_names: set[str] | None = None
         if profile_id:
             profile = self.get_profile(profile_id)
+            # 引用規則の照合キー。引用符を外して大文字化すると、`SALES."Mixed_Case"` の Profile に
+            # 大文字の同名表 `SALES.MIXED_CASE` も含まれる（#563）。
             allowed_names = {
-                value.replace('"', "").strip().upper()
-                for value in self.profile_allowed_object_names(profile)
+                object_match_key(value) for value in self.profile_allowed_object_names(profile)
             }
+        # owner は API 入力（引用なしは大文字、`"Sales"` は大文字小文字を保持）。repository には
+        # 辞書ビュー上の名前を渡す。
+        owner = normalize_object_part(owner) if owner.strip() else ""
         repository = self._incremental_repository
         if repository is None:
             memory = MemoryIncrementalNl2SqlRepository(seed_default=False)
             catalog = self.get_catalog()
             manifest = {
-                (table.owner.upper(), table.table_name.upper()): catalog.refreshed_at
-                for table in catalog.tables
+                (table.owner, table.table_name): catalog.refreshed_at for table in catalog.tables
             }
             memory.apply_schema_refresh(
                 catalog=catalog,
@@ -4176,7 +4198,9 @@ class Nl2SqlService:
     def get_schema_object(self, owner: str, object_name: str) -> SchemaObjectDetail | None:
         if not is_user_visible_schema_object(owner, object_name):
             return None
-        cache_key = f"{owner.upper()}.{object_name.upper()}"
+        # owner / object_name は辞書ビュー上の名前。大文字化したキーでは `Mixed_Case` の詳細に
+        # 大文字の同名表 `MIXED_CASE` の cache を返す（#563）。
+        cache_key = catalog_match_key(owner, object_name)
         cached = self._schema_cache.get(cache_key)
         if self._incremental_repository is not None:
             self._refresh_cache_token(
@@ -4203,8 +4227,7 @@ class Nl2SqlService:
                 (
                     item
                     for item in self.get_catalog().tables
-                    if item.owner.upper() == owner.upper()
-                    and item.table_name.upper() == object_name.upper()
+                    if item.owner == owner and item.table_name == object_name
                 ),
                 None,
             )
@@ -4224,12 +4247,16 @@ class Nl2SqlService:
             sample_limit = max(get_settings().nl2sql_schema_sample_rows, 0)
             if sample_limit:
                 try:
+                    # adapter は Oracle の引用規則で解釈するため、カタログ上の名前を token で渡す。
                     samples, _warnings = self._oracle_adapter.fetch_metadata_sample_values(
                         [
                             {
-                                "owner": detail.table.owner,
-                                "object_name": detail.table.table_name,
-                                "columns": [column.column_name for column in detail.table.columns],
+                                "owner": format_object_part(detail.table.owner),
+                                "object_name": format_object_part(detail.table.table_name),
+                                "columns": [
+                                    format_object_part(column.column_name)
+                                    for column in detail.table.columns
+                                ],
                             }
                         ],
                         sample_limit,
@@ -4243,7 +4270,7 @@ class Nl2SqlService:
                                         column.model_copy(
                                             update={
                                                 "sample_values": object_samples.get(
-                                                    column.column_name.upper(), []
+                                                    column.column_name, []
                                                 )
                                             }
                                         )
@@ -4401,8 +4428,9 @@ class Nl2SqlService:
 
     @staticmethod
     def _schema_refresh_target_keys(job: SchemaRefreshJob) -> set[tuple[str, str]]:
+        # schema object key は辞書ビュー上の名前（大文字小文字を保持、#563）。
         return {
-            (target.owner.upper(), target.object_name.upper())
+            (target.owner, target.object_name)
             for target in job.target_objects
             if is_user_visible_schema_object(target.owner, target.object_name)
         }
@@ -4412,7 +4440,7 @@ class Nl2SqlService:
         job: SchemaRefreshJob,
     ) -> dict[tuple[str, str], str]:
         return {
-            (target.owner.upper(), target.object_name.upper()): target.expected_state
+            (target.owner, target.object_name): target.expected_state
             for target in job.target_objects
             if is_user_visible_schema_object(target.owner, target.object_name)
         }
@@ -4468,7 +4496,7 @@ class Nl2SqlService:
             else:
                 deterministic = self._build_default_catalog()
                 incoming_manifest = {
-                    (table.owner.upper(), table.table_name.upper()): "deterministic-v1"
+                    (table.owner, table.table_name): "deterministic-v1"
                     for table in deterministic.tables
                 }
                 if job.mode == SchemaRefreshMode.TARGETED:
@@ -4555,41 +4583,36 @@ class Nl2SqlService:
                     changed_catalog = self._build_default_catalog()
                 job = self._heartbeat_schema_refresh_job(repository, job)
                 changed_or_deleted_keys = changed_keys | deleted_keys
+                # key は辞書ビュー上の名前。大文字化すると `Mixed_Case` と `MIXED_CASE` が
+                # 1 件に潰れる（#563）。
                 dependency_by_key = {
                     (
-                        dependency.owner.upper(),
-                        dependency.view_name.upper(),
-                        dependency.referenced_owner.upper(),
-                        dependency.referenced_name.upper(),
+                        dependency.owner,
+                        dependency.view_name,
+                        dependency.referenced_owner,
+                        dependency.referenced_name,
                     ): dependency
                     for dependency in current_catalog.view_dependencies
-                    if (
-                        dependency.owner.upper(),
-                        dependency.view_name.upper(),
-                    )
-                    not in changed_or_deleted_keys
-                    and (
-                        dependency.referenced_owner.upper(),
-                        dependency.referenced_name.upper(),
-                    )
+                    if (dependency.owner, dependency.view_name) not in changed_or_deleted_keys
+                    and (dependency.referenced_owner, dependency.referenced_name)
                     not in deleted_keys
                 }
                 for dependency in changed_catalog.view_dependencies:
                     dependency_by_key[
                         (
-                            dependency.owner.upper(),
-                            dependency.view_name.upper(),
-                            dependency.referenced_owner.upper(),
-                            dependency.referenced_name.upper(),
+                            dependency.owner,
+                            dependency.view_name,
+                            dependency.referenced_owner,
+                            dependency.referenced_name,
                         )
                     ] = dependency
                 table_by_key = {
-                    (table.owner.upper(), table.table_name.upper()): table
+                    (table.owner, table.table_name): table
                     for table in current_catalog.tables
-                    if (table.owner.upper(), table.table_name.upper()) not in deleted_keys
+                    if (table.owner, table.table_name) not in deleted_keys
                 }
                 for table in changed_catalog.tables:
-                    key = (table.owner.upper(), table.table_name.upper())
+                    key = (table.owner, table.table_name)
                     if key in incoming_keys:
                         table_by_key[key] = table
                 merged = SchemaCatalog(
@@ -5382,7 +5405,7 @@ class Nl2SqlService:
             self._persist_state()
             return
         manifest = {
-            (table.owner.upper(), table.table_name.upper()): self._catalog.refreshed_at
+            (table.owner, table.table_name): self._catalog.refreshed_at
             for table in self._catalog.tables
         }
         current_manifest = repository.schema_manifest()
@@ -6994,26 +7017,32 @@ class Nl2SqlService:
                 qualified = f"{owner_token}.{name_token}"
                 if qualified not in referenced:
                     referenced.append(qualified)
-                table_name_candidates.setdefault(table_ref.name.upper(), []).append(qualified)
+                # 表名での修飾（`"Mixed_Case"."Amount"`）は引用規則の token で引く。大文字化すると
+                # `MIXED_CASE` と `"Mixed_Case"` を同時に参照したとき修飾先が決まらない（#563）。
+                table_name_candidates.setdefault(name_token, []).append(qualified)
                 if table_ref.alias:
                     alias_to_table[table_ref.alias.upper()] = qualified
-            for name, candidates in table_name_candidates.items():
-                unique = sorted(set(candidates))
-                if len(unique) == 1:
-                    alias_to_table[name] = unique[0]
         referenced_columns: list[str] = []
         if graph:
             for column in graph.columns:
                 if column.owner and column.table:
-                    table_name = qualified_object_name(column.owner, column.table)
-                else:
+                    table_name = (
+                        f"{sql_identifier_token(column.owner, quoted=column.owner_quoted)}."
+                        f"{sql_identifier_token(column.table, quoted=column.table_quoted)}"
+                    )
+                elif column.table:
+                    table_token = sql_identifier_token(column.table, quoted=column.table_quoted)
+                    candidates = sorted(set(table_name_candidates.get(table_token, [])))
                     table_name = alias_to_table.get(
                         column.table.upper(),
-                        column.table.upper(),
+                        candidates[0] if len(candidates) == 1 else table_token,
                     )
+                else:
+                    table_name = ""
                 if not table_name and len(set(referenced)) == 1:
                     table_name = referenced[0]
-                value = f"{table_name}.{column.name.upper()}" if table_name else column.name.upper()
+                column_token = sql_identifier_token(column.name, quoted=column.name_quoted)
+                value = f"{table_name}.{column_token}" if table_name else column_token
                 if value and value not in referenced_columns:
                     referenced_columns.append(value)
         has_wildcard = bool(
@@ -13154,16 +13183,15 @@ class Nl2SqlService:
         )
         samples: dict[str, list[str]] = {}
         if catalog_table is not None:
-            samples = {
-                column.column_name.upper(): column.sample_values for column in catalog_table.columns
-            }
+            # 列名はカタログ上の名前で照合する（`Amount` と `AMOUNT` を潰さない、#563）。
+            samples = {column.column_name: column.sample_values for column in catalog_table.columns}
         updates: dict[str, Any] = {
             "constraints": catalog_table.constraints if catalog_table is not None else [],
             "columns": [
                 col.model_copy(
                     update={
-                        "logical_name": names.get(col.column_name.upper(), ""),
-                        "sample_values": samples.get(col.column_name.upper(), col.sample_values),
+                        "logical_name": names.get(col.column_name, ""),
+                        "sample_values": samples.get(col.column_name, col.sample_values),
                     }
                 )
                 for col in detail.columns
@@ -18433,7 +18461,7 @@ class Nl2SqlService:
         }
         allowed_columns = {
             self._resolve_profile_object_name(table): {
-                _normalize_identifier(column) for column in columns
+                _column_identifier_token(column) for column in columns
             }
             for table, columns in allowed.columns.items()
             if columns
@@ -18465,11 +18493,12 @@ class Nl2SqlService:
             )
             table_allowed_columns = allowed_columns.get(qualified_name, set())
             for column in table.columns:
-                if table_allowed_columns and column.column_name not in table_allowed_columns:
+                column_token = catalog_match_key(column.column_name)
+                if table_allowed_columns and column_token not in table_allowed_columns:
                     continue
                 lines.append(
                     "  - column "
-                    f"{column.column_name} logical={column.logical_name} "
+                    f"{column_token} logical={column.logical_name} "
                     f"type={column.data_type} comment={column.comment}"
                 )
         learning_context = self._learning_examples_context(learning_examples or [])
@@ -18921,7 +18950,7 @@ class Nl2SqlService:
             canonical = self._resolve_profile_object_name(table_name)
             if canonical in resolved_scope:
                 resolved_columns[canonical] = [
-                    _normalize_identifier(column) for column in columns if column.strip()
+                    _column_identifier_token(column) for column in columns if column.strip()
                 ]
         return AllowedObjects(
             table_names=resolved_names,
@@ -18993,7 +19022,7 @@ class Nl2SqlService:
             if requested_names and canonical not in requested_scope:
                 continue
             normalized_columns = [
-                _normalize_identifier(column) for column in columns if column.strip()
+                _column_identifier_token(column) for column in columns if column.strip()
             ]
             if normalized_columns:
                 resolved_columns[canonical] = normalized_columns
@@ -19054,13 +19083,6 @@ class Nl2SqlService:
                     exc=exc,
                     operation_error_code="schema_object_detail_failed",
                 )
-            if detail is not None and (
-                (detail.table.owner or identity.owner) != identity.owner
-                or detail.table.table_name != identity.object_name
-            ):
-                # schema catalog の詳細取得は大文字小文字を区別しない。`SALES."Mixed_Case"` に
-                # 大文字の同名表 `SALES.MIXED_CASE` の定義を使わない（#561）。
-                detail = None
             if detail is None:
                 try:
                     page = repository.search_schema_objects(
@@ -19069,7 +19091,7 @@ class Nl2SqlService:
                         query=identity.object_name,
                         owner="",
                         object_type="",
-                        allowed_names={identity.object_name},
+                        allowed_names={format_object_part(identity.object_name)},
                         row_state="",
                         include_counts=False,
                     )
@@ -19081,8 +19103,6 @@ class Nl2SqlService:
                             matches[0].owner,
                             matches[0].object_name,
                         )
-                        if detail is not None and (detail.table.table_name != identity.object_name):
-                            detail = None
                 except Exception as exc:
                     self._raise_incremental_repository_failure(
                         operation="schema_object_detail",
@@ -19134,13 +19154,17 @@ class Nl2SqlService:
     def _choose_columns(self, table: SchemaTable, allowed: AllowedObjects) -> list[SchemaColumn]:
         qualified_name = self._catalog_qualified_name(table)
         allowed_columns = {
-            _normalize_identifier(name)
+            _column_identifier_token(name)
             for name in (
                 allowed.columns.get(qualified_name, []) or allowed.columns.get(table.table_name, [])
             )
         }
         if allowed_columns:
-            selected = [column for column in table.columns if column.column_name in allowed_columns]
+            selected = [
+                column
+                for column in table.columns
+                if catalog_match_key(column.column_name) in allowed_columns
+            ]
             if selected:
                 return selected[:8]
         return table.columns[:6]
@@ -19280,7 +19304,7 @@ class Nl2SqlService:
             for candidate_table, columns in allowed.columns.items()
         }
         allowed_columns = [
-            _normalize_identifier(column)
+            _column_identifier_token(column)
             for column in restricted_columns.get(normalized_table, [])
             if column.strip()
         ]
@@ -19337,7 +19361,7 @@ class Nl2SqlService:
                 recommendations.append(f"参照可能な表は {', '.join(allowed_tables[:5])} です。")
             if allowed and "許可されていない列" in safety.blocked_reason:
                 allowed_columns = [
-                    f"{_normalize_identifier(table)}.{_normalize_identifier(column)}"
+                    f"{_column_identifier_token(table)}.{_column_identifier_token(column)}"
                     for table, columns in allowed.columns.items()
                     for column in columns
                     if column.strip()

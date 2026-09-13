@@ -312,10 +312,12 @@ async function mockProfileApi(
   await page.route("**/api/schema/objects?*", (route) => {
     const url = new URL(route.request().url());
     const type = url.searchParams.get("type") ?? "";
-    const owner = (url.searchParams.get("owner") ?? "").toUpperCase();
+    // backend と同じく owner は Oracle の引用規則で解釈する（`"Sales"` は小文字を含む user、#563）。
+    const rawOwner = (url.searchParams.get("owner") ?? "").trim();
+    const owner = /^".*"$/u.test(rawOwner) ? rawOwner.slice(1, -1) : rawOwner.toUpperCase();
     const query = (url.searchParams.get("q") ?? "").toLowerCase();
     const items = catalog.tables
-      .filter((object) => !owner || object.owner.toUpperCase() === owner)
+      .filter((object) => !owner || object.owner === owner)
       .filter((object) => !type || object.table_type.toUpperCase() === type.toUpperCase())
       .filter((object) =>
         [
@@ -1718,6 +1720,94 @@ test("引用が必要な表名は大文字化せず、大文字の同名表と�
   await expect(status.getByRole("button", { name: "Oracle 反映を再試行" })).toHaveCount(0);
   const payload = savedPayload as { allowed_tables: string[] } | null;
   expect(payload?.allowed_tables).toEqual(['SALES."Mixed_Case"']);
+  await expectNoDocumentHorizontalOverflow(page);
+});
+
+test("小文字を含む owner は大文字の同名 owner と別のスキーマとして件数・一括選択する (#563)", async ({ page }) => {
+  const ownerCatalog = {
+    ...schemaCatalog,
+    tables: [
+      {
+        table_name: "ORDERS",
+        logical_name: "大文字 owner の受注",
+        owner: "SALES",
+        table_type: "TABLE",
+        comment: "",
+        row_count: null,
+        columns: [],
+        constraints: [],
+      },
+      {
+        table_name: "ORDERS",
+        logical_name: "小文字を含む owner の受注",
+        owner: "Sales",
+        table_type: "TABLE",
+        comment: "",
+        row_count: null,
+        columns: [],
+        constraints: [],
+      },
+    ],
+  };
+  const ownerProfiles = [{ ...profiles[0], allowed_tables: [], allowed_views: [] }];
+  await mockProfileApi(page, { catalog: ownerCatalog, profileItems: ownerProfiles });
+  const snapshotOwners: string[] = [];
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (url.pathname === "/api/schema/objects" && url.searchParams.get("include_counts") === "false") {
+      snapshotOwners.push(url.searchParams.get("owner") ?? "");
+    }
+  });
+  let savedPayload: { allowed_tables: string[] } | null = null;
+  await page.route("**/api/nl2sql/profiles/default", async (route) => {
+    if (route.request().method() === "GET") {
+      await route.fallback();
+      return;
+    }
+    savedPayload = route.request().postDataJSON() as { allowed_tables: string[] };
+    await fulfillJson(route, { ...ownerProfiles[0], ...savedPayload, id: "default" });
+  });
+
+  await page.goto("/profiles?profile=default");
+
+  const tableList = page.getByTestId("profile-allowed-table-list");
+  const mixedGroup = tableList.getByRole("region", { name: '"Sales" schema のオブジェクト' });
+  const upperGroup = tableList.getByRole("region", { name: "SALES schema のオブジェクト" });
+  await expect(mixedGroup).toBeVisible();
+  await expect(upperGroup).toBeVisible();
+  const mixed = mixedGroup.getByLabel('"Sales".ORDERS', { exact: true });
+  const upper = upperGroup.getByLabel("SALES.ORDERS", { exact: true });
+  await expect(mixed).toBeVisible();
+  await expect(upper).toBeVisible();
+
+  // 引用名の owner の表を選んでも、大文字 owner のグループは 0 件のまま。
+  await mixed.check();
+  await expect(mixedGroup).toContainText("1 / 1");
+  await expect(upperGroup).toContainText("0 / 1");
+
+  // 大文字 owner の一括選択は、小文字を含む owner の表を巻き込まずに選び・外す。
+  await upperGroup.getByRole("button", { name: "SALES をすべて選択" }).click();
+  await expect(upper).toBeChecked();
+  await expect(mixed).toBeChecked();
+  await expect(tableList).toContainText("選択 2 件");
+  await upperGroup.getByRole("button", { name: "SALES の選択をすべて解除" }).click();
+  await expect(upper).not.toBeChecked();
+  await expect(mixed).toBeChecked();
+  await expect(upperGroup).toContainText("0 / 1");
+
+  // 小文字を含む owner の一括操作は、その owner の表だけを snapshot（owner=`"Sales"`）から選ぶ。
+  await mixedGroup.getByRole("button", { name: '"Sales" の選択をすべて解除' }).click();
+  await expect(mixed).not.toBeChecked();
+  await mixedGroup.getByRole("button", { name: '"Sales" をすべて選択' }).click();
+  await expect(mixed).toBeChecked();
+  await expect(upper).not.toBeChecked();
+  await expect(tableList).toContainText("選択 1 件");
+  expect(snapshotOwners).toEqual(["SALES", '"Sales"']);
+
+  await page.getByLabel("名称").fill("SALES_PROFILE");
+  await page.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+  await expect.poll(() => savedPayload?.allowed_tables).toEqual(['"Sales".ORDERS']);
   await expectNoDocumentHorizontalOverflow(page);
 });
 

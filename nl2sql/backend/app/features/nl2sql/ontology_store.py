@@ -162,7 +162,26 @@ def stable_ontology_id(kind: str, *identity_parts: Any, length: int = 24) -> str
 
 
 def _normalize_oracle_identifier(identifier: str) -> str:
-    return unicodedata.normalize("NFC", identifier.strip()).upper()
+    value = unicodedata.normalize("NFC", identifier.strip())
+    if len(value) >= 2 and value[0] == value[-1] == '"':
+        # `physical_identity_part` の引用表現（#563）。大文字化しても同じ名前は、引用符を外して
+        # 既存 ID と同じ値にする。小文字を含む名前だけ引用符付きのまま hash に入れる。
+        inner = value[1:-1]
+        return inner if inner == inner.upper() else value
+    return value.upper()
+
+
+def physical_identity_part(name: str) -> str:
+    """カタログ上の owner / object / column 名を `stable_physical_id` に渡す値にする（#563）。
+
+    `stable_physical_id` は引用なしの値を大文字化して ID を作るため、`Mixed_Case` をそのまま渡すと
+    大文字の同名表 `MIXED_CASE` と同じ ID になる。大文字化しても変わらない名前（`ORDERS`、`売上`、
+    `MY TABLE`）は既存 ID を変えないためそのまま返し、小文字を含む名前だけ `"Mixed_Case"` と
+    二重引用符で囲んで別の ID にする。Oracle の識別子は `"` を含まないため表現は衝突しない。
+    """
+
+    value = unicodedata.normalize("NFC", str(name or "").strip())
+    return value if value == value.upper() else f'"{value}"'
 
 
 def stable_physical_id(

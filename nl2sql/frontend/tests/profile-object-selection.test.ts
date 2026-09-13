@@ -290,3 +290,24 @@ test("編集画面はルート遷移とタブ離脱の両方を未保存ガー�
   // 「一覧に戻る」も同じ確認ダイアログを共有する。
   assert.match(profilePage, /if \(isDirty && !\(await confirmDiscard\(\)\)\) return;/u);
 });
+
+test("スキーマ単位の件数・一括解除は小文字を含む owner を大文字の同名 owner と区別する (#563)", () => {
+  const selected = ['"Sales".ORDERS', "SALES.ORDERS", 'SALES."Mixed_Case"'];
+  const keys = selectedObjectKeys(selected);
+
+  // owner はスキーマ一覧のカタログ上の名前（大文字小文字を保持）で渡る。
+  assert.equal(countSelectedObjectsInOwner(keys, "Sales"), 1);
+  assert.equal(countSelectedObjectsInOwner(keys, "SALES"), 2);
+  assert.deepEqual(
+    applySchemaBulkSelection({
+      current: selected,
+      snapshot: [],
+      ownerPrefix: "Sales.",
+      select: false,
+      filtered: false,
+    }),
+    ["SALES.ORDERS", 'SALES."Mixed_Case"'],
+  );
+  assert.doesNotMatch(profilePage, /object\.owner\.toUpperCase\(\)/u);
+  assert.doesNotMatch(incrementalQueries, /owner\.trim\(\)\.toUpperCase\(\)/u);
+});

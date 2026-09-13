@@ -665,6 +665,11 @@ class SqlColumnReference(OntologyContract):
     name: str
     clause: str
     expression_sql: str
+    # SQL で owner / 表（または別名）/ 列名が二重引用符で囲まれていたか。列単位の許可チェックで
+    # `"Amount"` と `AMOUNT` を区別する（#563）。
+    owner_quoted: bool = False
+    table_quoted: bool = False
+    name_quoted: bool = False
 
 
 class SqlJoinReference(OntologyContract):

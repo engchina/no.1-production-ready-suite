@@ -14,6 +14,7 @@ from app.features.nl2sql.models import (
     SchemaRefreshActiveJobData,
     SchemaRefreshJob,
 )
+from app.features.nl2sql.object_identity import normalize_object_part
 from app.features.nl2sql.service import nl2sql_service
 
 router = APIRouter(prefix="/schema", tags=["schema"])
@@ -95,8 +96,17 @@ def object_detail(
     response: Response,
     if_none_match: Annotated[str | None, Header(alias="If-None-Match")] = None,
 ) -> ApiResponse[SchemaObjectDetail] | Response:
-    """選択 object の columns/constraints/dependency だけを返す。"""
-    detail = nl2sql_service.get_schema_object(owner, object_name)
+    """選択 object の columns/constraints/dependency だけを返す。
+
+    `owner` / `object_name` は Oracle の引用規則で解釈する（引用なしは大文字、
+    `"Mixed_Case"` は大文字小文字を保持）。大文字の同名表と取り違えない（#563）。
+    """
+    try:
+        catalog_owner = normalize_object_part(owner)
+        catalog_object_name = normalize_object_part(object_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    detail = nl2sql_service.get_schema_object(catalog_owner, catalog_object_name)
     if detail is None:
         raise HTTPException(status_code=404, detail="Schema object が見つかりません。")
     quoted_etag = f'"{detail.etag}"'

@@ -35,6 +35,7 @@ from .models import (
 )
 from .object_identity import (
     OracleObjectIdentity,
+    canonical_object_part,
     format_object_part,
     is_unquoted_object_part,
     normalize_object_part,
@@ -389,6 +390,20 @@ def _quote_object_identity(identity: OracleObjectIdentity) -> str:
     return f"{_quote_identifier(identity.owner)}.{_quote_identifier(identity.object_name)}"
 
 
+def _sample_catalog_name(value: str) -> str:
+    """代表値取得の辞書ビュー照合と `"..."` 引用に使うカタログ上の名前を検証する。
+
+    `canonical_object_part` と同じく `"`・NUL・制御文字を含む名前を拒否する。名前は
+    `_quote_identifier` で二重引用符に囲んで SQL に埋め込む。
+    """
+
+    try:
+        canonical_object_part(format_object_part(value))
+    except ValueError as exc:
+        raise OracleAdapterError(f"安全でない Oracle object name です: {value}") from exc
+    return value
+
+
 def _strict_sql_name(value: str) -> str:
     normalized = value.strip().strip('"').upper()
     if not re.fullmatch(r"[A-Z][A-Z0-9_]{0,127}", normalized):
@@ -680,8 +695,10 @@ class OracleNl2SqlAdapter:
                 owner_key = f"target_owner_{index}"
                 name_key = f"target_name_{index}"
                 target_parts.append(f"(c.owner = :{owner_key} AND c.table_name = :{name_key})")
-                target_binds[owner_key] = owner.upper()
-                target_binds[name_key] = object_name.upper()
+                # object key は辞書ビュー上の名前（大文字小文字を保持）。大文字化すると
+                # `Mixed_Case` の代わりに大文字の同名表 `MIXED_CASE` を取得する（#563）。
+                target_binds[owner_key] = owner
+                target_binds[name_key] = object_name
             target_filter = " AND (" + " OR ".join(target_parts) + ")"
         # owner_filter / target_filter は固定 fragment と bind だけで組み立てる。
         sql = (
@@ -729,7 +746,7 @@ class OracleNl2SqlAdapter:
                 nullable = str(row[6]).upper() == "Y"
                 row_count = int(row[8]) if row[8] is not None else None
                 table_type = str(row[9]).lower() if len(row) > 9 and row[9] else "table"
-                table_key = f"{owner.upper()}.{table_name.upper()}"
+                table_key = f"{owner}.{table_name}"
                 table = tables.setdefault(
                     table_key,
                     SchemaTable(
@@ -797,7 +814,8 @@ class OracleNl2SqlAdapter:
         with self.connection() as conn, conn.cursor() as cursor:
             cursor.execute(sql)
             for row in cursor:
-                owner = str(row[0] or "").upper()
+                # 小文字を含む user（引用付きで作成）を大文字の同名 user と取り違えない（#563）。
+                owner = str(row[0] or "")
                 oracle_maintained = str(row[1] or "N").upper() == "Y"
                 is_current = bool(int(row[2] or 0))
                 if is_current:
@@ -881,7 +899,7 @@ class OracleNl2SqlAdapter:
         with self.connection() as conn, conn.cursor() as cursor:
             cursor.execute(sql, {**owner_binds, **target_binds})
             return {
-                (str(owner).upper(), str(object_name).upper()): (
+                (str(owner), str(object_name)): (
                     last_ddl_time.isoformat()
                     if hasattr(last_ddl_time, "isoformat")
                     else str(last_ddl_time or "")
@@ -984,7 +1002,7 @@ class OracleNl2SqlAdapter:
         for row in cursor:
             table_name, constraint_name, constraint_type, columns = row[:4]
             owner = str(row[4]) if len(row) > 4 and row[4] else "APP"
-            table = tables.get(f"{owner.upper()}.{str(table_name).upper()}")
+            table = tables.get(f"{owner}.{table_name}")
             if not table:
                 continue
             column_text = str(columns or "").strip()
@@ -1077,8 +1095,8 @@ class OracleNl2SqlAdapter:
         for index, (owner, object_name) in enumerate(sorted(object_keys)):
             owner_key = f"{prefix}_owner_{index}"
             name_key = f"{prefix}_name_{index}"
-            binds[owner_key] = owner.upper()
-            binds[name_key] = object_name.upper()
+            binds[owner_key] = owner
+            binds[name_key] = object_name
             clauses.append(f"({owner_column} = :{owner_key} AND {name_column} = :{name_key})")
         return "AND (" + " OR ".join(clauses) + ")", binds
 
@@ -1086,11 +1104,11 @@ class OracleNl2SqlAdapter:
         payload = {
             "tables": [
                 {
-                    "owner": table.owner.upper(),
-                    "name": table.table_name.upper(),
+                    "owner": table.owner,
+                    "name": table.table_name,
                     "type": table.table_type.upper(),
                     "columns": [
-                        (column.column_name.upper(), column.data_type.upper(), column.nullable)
+                        (column.column_name, column.data_type.upper(), column.nullable)
                         for column in table.columns
                     ],
                     "constraints": [
@@ -1151,14 +1169,17 @@ class OracleNl2SqlAdapter:
                 for target in targets:
                     raw_object_name = str(target.get("object_name") or "")
                     raw_owner = str(target.get("owner") or "")
+                    # owner / object / column は Oracle の引用規則で解釈する（引用なしは大文字、
+                    # `"Mixed_Case"` は大文字小文字を保持）。引用符を外して大文字化すると、
+                    # 大文字の同名表・同名列の代表値を取得する（#563）。
                     identity = parse_object_identity(
                         raw_object_name,
                         default_owner=raw_owner or self.settings.oracle_user,
                     )
-                    owner = _strict_sql_name(identity.owner)
-                    object_name = _strict_sql_name(identity.object_name)
+                    owner = _sample_catalog_name(identity.owner)
+                    object_name = _sample_catalog_name(identity.object_name)
                     requested_columns = [
-                        _strict_sql_name(str(column))
+                        _sample_catalog_name(normalize_object_part(str(column)))
                         for column in target.get("columns", [])
                         if str(column).strip()
                     ]
@@ -1170,7 +1191,7 @@ class OracleNl2SqlAdapter:
                         """,
                         {"owner": owner, "object_name": object_name},
                     )
-                    available_columns = {str(row[0]).upper() for row in cursor}
+                    available_columns = {str(row[0]) for row in cursor}
                     columns = requested_columns or list(available_columns)
                     columns = [column for column in columns if column in available_columns]
                     skipped_columns = set(requested_columns) - available_columns

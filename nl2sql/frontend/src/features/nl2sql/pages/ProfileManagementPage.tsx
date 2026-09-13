@@ -89,7 +89,7 @@ import type { ProfileListSortKey, ProfileListSortState } from "../profileListSta
 import { BUSINESS_SELECT_AI_DB_PROFILES_URL } from "../selectAiProfileUrls";
 import { schemaTableQualifiedName } from "../workbenchState";
 import { DbObjectName } from "../components/DbObjectName";
-import { formatDbObjectName } from "../dbObjectIdentity";
+import { formatDbObjectName, formatDbObjectPart } from "../dbObjectIdentity";
 import type {
   Nl2SqlProfile,
   ProfileDeleteData,
@@ -757,7 +757,8 @@ function SchemaGroupedSelectionPanel({
   const groups = useMemo(() => {
     const grouped = new Map<string, SchemaTable[]>();
     for (const object of objects) {
-      const owner = object.owner.toUpperCase();
+      // 小文字を含む owner（`"Sales"`）を大文字の同名 owner と同じグループにしない（#563）。
+      const owner = object.owner;
       grouped.set(owner, [...(grouped.get(owner) ?? []), object]);
     }
     return [...grouped.entries()]
@@ -808,19 +809,22 @@ function SchemaGroupedSelectionPanel({
             const total = ownerTotals[owner] ?? entries.length;
             const allSelected = total > 0 && selectedCount >= total;
             const noneSelected = selectedCount === 0;
+            // 表示・読み上げは SQL と同じ表記（`"Sales"` と `SALES` を見分けられる、#563）。
+            const ownerLabel = formatDbObjectPart(owner);
+            const ownerTestId = ownerLabel.toLowerCase();
             return (
               <section
                 key={owner}
                 className="rounded-md border border-border bg-surface-sunken"
-                aria-label={t("profiles.objects.schemaGroup", { owner })}
+                aria-label={t("profiles.objects.schemaGroup", { owner: ownerLabel })}
               >
                 <div className="grid min-h-11 gap-2 border-b border-border bg-surface-hover px-2.5 py-1.5">
                   <div
                     className="flex min-w-0 flex-wrap items-center gap-2"
-                    data-testid={`${dataTestId}-${owner.toLowerCase()}-schema-heading`}
+                    data-testid={`${dataTestId}-${ownerTestId}-schema-heading`}
                   >
                     <span className="rounded border border-border bg-surface px-2 py-0.5 font-mono text-xs font-semibold text-fg">
-                      {owner}
+                      {ownerLabel}
                     </span>
                     <span className="text-xs text-fg-muted">
                       {t("profiles.objects.schemaCount", {
@@ -832,12 +836,12 @@ function SchemaGroupedSelectionPanel({
                   <BulkSelectionActions
                     selectLabel={t("profiles.objects.selectSchemaAction")}
                     clearLabel={t("profiles.objects.clearSchema")}
-                    selectAriaLabel={t("common.selection.selectGroup", { name: owner })}
-                    clearAriaLabel={t("common.selection.clearGroup", { name: owner })}
+                    selectAriaLabel={t("common.selection.selectGroup", { name: ownerLabel })}
+                    clearAriaLabel={t("common.selection.clearGroup", { name: ownerLabel })}
                     selectDisabled={allSelected || Boolean(schemaSelectionOwner)}
                     clearDisabled={noneSelected || Boolean(schemaSelectionOwner)}
                     busy={schemaSelectionOwner === owner}
-                    dataTestId={`${dataTestId}-${owner.toLowerCase()}-schema-bulk-actions`}
+                    dataTestId={`${dataTestId}-${ownerTestId}-schema-bulk-actions`}
                     onSelectAll={() => void toggleSchemaSelection(owner, true)}
                     onClearAll={() => void toggleSchemaSelection(owner, false)}
                   />
@@ -1421,7 +1425,7 @@ export function ProfileManagementPage() {
     () =>
       Object.fromEntries(
         (schemaOwnersQuery.data?.owners ?? []).map((item) => [
-          item.owner.toUpperCase(),
+          item.owner,
           item.table_count,
         ])
       ),
@@ -1431,7 +1435,7 @@ export function ProfileManagementPage() {
     () =>
       Object.fromEntries(
         (schemaOwnersQuery.data?.owners ?? []).map((item) => [
-          item.owner.toUpperCase(),
+          item.owner,
           item.view_count,
         ])
       ),

@@ -24,7 +24,7 @@ import {
   filterUserVisibleSchemaObjectPage,
   isUserVisibleSchemaObject,
 } from "./objectVisibility";
-import { formatDbObjectName } from "./dbObjectIdentity";
+import { formatDbObjectName, formatDbObjectPart } from "./dbObjectIdentity";
 import { profileSummaryPageFromLegacyList, type ProfileListSortState } from "./profileListState";
 import type { ProfileOntologyViewData } from "./ontology/types";
 
@@ -373,7 +373,8 @@ export async function getSchemaObjectSnapshot(
     do {
       const params = new URLSearchParams({
         limit: "100",
-        owner: owner.trim().toUpperCase(),
+        // API の owner は Oracle の引用規則で解釈される。カタログ上の名前を token にして送る（#563）。
+        owner: formatDbObjectPart(owner),
         type: objectType.trim().toUpperCase(),
         q: normalizedQuery,
         include_counts: "false",
@@ -402,7 +403,7 @@ export async function getSchemaObjectSnapshot(
       .filter(
         (table) =>
           isUserVisibleSchemaObject(table.owner, table.table_name) &&
-          table.owner.toUpperCase() === owner.trim().toUpperCase() &&
+          table.owner === owner.trim() &&
           (objectType.toUpperCase() === "VIEW"
             ? ["VIEW", "MATERIALIZED VIEW"].includes(table.table_type.toUpperCase())
             : table.table_type.toUpperCase() === objectType.toUpperCase()) &&
@@ -418,24 +419,26 @@ export async function getSchemaObjectDetail(
   objectName: string,
   signal?: AbortSignal
 ) {
+  // path は Oracle の引用規則で解釈される。カタログ上の名前を token（`"Mixed_Case"`）にして送り、
+  // 大文字の同名表 `MIXED_CASE` の詳細を読まない（#563）。
   return apiGet<SchemaObjectDetail>(
-    `/api/schema/objects/${encodeURIComponent(owner)}/${encodeURIComponent(objectName)}`,
+    `/api/schema/objects/${encodeURIComponent(formatDbObjectPart(owner))}/${encodeURIComponent(
+      formatDbObjectPart(objectName)
+    )}`,
     { signal, timeoutMs: API_TIMEOUT_MS.interactiveDetail }
   ).catch(async (error: unknown) => {
     if (!isLegacyCompatibilityError(error)) throw error;
     const catalog = await legacyCatalog(signal);
     const table = catalog.tables.find(
       (item) =>
-        item.owner.toUpperCase() === owner.toUpperCase() &&
-        item.table_name.toUpperCase() === objectName.toUpperCase()
+        item.owner === owner && item.table_name === objectName
     );
     if (!table) throw new Error(t("nl2sql.schema.objectNotFound"));
     return {
       table,
       dependencies: (catalog.view_dependencies ?? []).filter(
         (item) =>
-          (item.owner ?? "").toUpperCase() === owner.toUpperCase() &&
-          item.view_name.toUpperCase() === objectName.toUpperCase()
+          (item.owner ?? "") === owner && item.view_name === objectName
       ),
       catalog_version: 0,
       etag: catalog.schema_fingerprint ?? "",

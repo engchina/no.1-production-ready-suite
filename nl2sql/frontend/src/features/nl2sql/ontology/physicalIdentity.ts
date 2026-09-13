@@ -1,6 +1,6 @@
 // Ontology ノード/関係の物理識別(owner.object.column)と Join 条件表記の共有実装。
 // ER 詳細(erDetails.ts)と関係一覧(types.ts)で同じ表記を使うため、ここを唯一の実装とする。
-import { formatDbObjectName } from "../dbObjectIdentity";
+import { formatDbObjectName, formatDbObjectPart } from "../dbObjectIdentity";
 import type {
   OntologyEdge,
   OntologyGraph,
@@ -28,8 +28,17 @@ export function jsonString(value: OntologyJsonValue | undefined): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+/**
+ * node の metadata / 物理参照に入ったカタログ上の名前（大文字小文字を保持）を比較用に揃える。
+ * `"Mixed_Case"` のような token は引用符を外す。大文字化すると大文字の同名表と同じ表として
+ * 扱ってしまう（#563）。
+ */
 export function normalizeIdentifier(value: string | undefined): string {
-  return (value ?? "").trim().toLocaleUpperCase("en-US");
+  const trimmed = (value ?? "").trim();
+  if (trimmed.length >= 2 && trimmed.startsWith('"') && trimmed.endsWith('"')) {
+    return trimmed.slice(1, -1).replaceAll('""', '"');
+  }
+  return trimmed;
 }
 
 export function objectType(value: string | undefined): ObjectIdentity["objectType"] {
@@ -158,7 +167,8 @@ export function edgeEndpoint(
 export function endpointLabel(endpoint: ColumnIdentity | null): string {
   if (!endpoint) return "?";
   const qualified = objectName(endpoint);
-  return qualified ? `${qualified}.${endpoint.columnName}` : endpoint.columnName;
+  const column = formatDbObjectPart(endpoint.columnName);
+  return qualified ? `${qualified}.${column}` : column;
 }
 
 /** 物理修飾できないときは列名のみ、それも無ければ "?" へ縮退する。 */

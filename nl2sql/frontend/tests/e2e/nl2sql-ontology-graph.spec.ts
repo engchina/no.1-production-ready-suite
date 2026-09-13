@@ -759,6 +759,50 @@ test("同じ物理名の業務概念と物理表をカード上で区別でき�
   await expectNoHorizontalScroll(page);
 });
 
+test("大文字小文字だけが異なる物理表は別カード・別 cluster として SQL と同じ表記で表示する (#563)", async ({
+  page,
+}) => {
+  const physicalTable = (id: string, objectName: string, technicalName: string, label: string) => ({
+    id,
+    kind: "table",
+    business_name_ja: label,
+    technical_name: technicalName,
+    review_status: "approved",
+    validation_status: "passed",
+    metadata: { owner: "ADMIN", object_name: objectName, object_type: "table" },
+    physical_mappings: [
+      { object_ref: { node_id: id, owner: "ADMIN", object_name: objectName, object_type: "table" } },
+    ],
+  });
+  await mockApi(page, {
+    ontologyGraph: {
+      nodes: [
+        physicalTable("upper-table", "MIXED_CASE", "ADMIN.MIXED_CASE", "大文字の受注"),
+        physicalTable("quoted-table", "Mixed_Case", 'ADMIN."Mixed_Case"', "引用名の受注"),
+      ],
+      edges: [],
+    },
+  });
+  await page.goto("/ontology-build?profile=default");
+  await page.getByRole("button", { name: "情報を取得", exact: true }).click();
+
+  const playground = page.getByRole("region", { name: "質問のオントロジー接地確認用グラフ" });
+  await playground.scrollIntoViewIfNeeded();
+  await openGraphIfCollapsed(page, playground);
+
+  const upperCard = playground.getByTestId("ontology-node-card-upper-table");
+  const quotedCard = playground.getByTestId("ontology-node-card-quoted-table");
+  await expect(upperCard).toContainText("物理名: ADMIN.MIXED_CASE");
+  await expect(quotedCard).toContainText('物理名: ADMIN."Mixed_Case"');
+  // 大文字化した cluster に潰れると同じ列に重なる。別 cluster なら横位置が異なる。
+  const upperBox = await upperCard.boundingBox();
+  const quotedBox = await quotedCard.boundingBox();
+  expect(upperBox).not.toBeNull();
+  expect(quotedBox).not.toBeNull();
+  expect(Math.abs((upperBox?.x ?? 0) - (quotedBox?.x ?? 0))).toBeGreaterThan(1);
+  await expectNoHorizontalScroll(page);
+});
+
 test("質問接地グラフで選択した物理オブジェクトの ER 詳細を段階表示する", async ({ page }) => {
   await mockApi(page, { ontologyGraph: erDetailOntologyGraph });
   await page.goto("/ontology-build?profile=default");
