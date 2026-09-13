@@ -436,7 +436,7 @@ def test_upload_storage_backend_is_local_or_oci() -> None:
 def test_local_storage_dir_defaults_to_u01_persistent_path() -> None:
     """local 保存の既定ディレクトリは /u01 配下の永続化想定パスにする。"""
     assert Settings().local_storage_dir == DEFAULT_LOCAL_STORAGE_DIR
-    assert DEFAULT_LOCAL_STORAGE_DIR == "/u01/production-ready-rag"
+    assert DEFAULT_LOCAL_STORAGE_DIR == "/u01/data/production-ready-rag"
 
 
 def test_max_upload_bytes_defaults_to_200_mib_and_is_positive() -> None:

@@ -23,7 +23,36 @@ cp backend/.env.example backend/.env
 docker compose up --build
 ```
 
-backend は OCI / Oracle 接続情報を前提に起動し、`/u01/production-ready-rag` を永続ボリュームにする。
+backend は OCI / Oracle 接続情報を前提に起動し、`/u01/data/production-ready-rag` を永続ボリュームにする。
+
+### ローカル保存ディレクトリ(`LOCAL_STORAGE_DIR`)
+
+`UPLOAD_STORAGE_BACKEND=local` の原本は `LOCAL_STORAGE_DIR/objects/` に保存される。既定値は製品ごとに `/u01/data/<製品名>` で統一している(RAG: `/u01/data/production-ready-rag`、NL2SQL: `/u01/data/production-ready-nl2sql`、Agent: `/u01/data/production-ready-agent`)。
+
+#### 旧既定値 `/u01/production-ready-rag` からの移行
+
+以前の既定値は `/u01/production-ready-rag` だった。backend は**ファイルを自動で移動しない**。
+
+- `backend/.env` などで `LOCAL_STORAGE_DIR` を明示設定している環境は、そのまま従来のディレクトリを使い続ける。
+- Docker Compose の named volume `backend-local-storage` はマウント先が変わるだけで、中身(原本と `model-settings.json`)は保持される。
+- `LOCAL_STORAGE_DIR` 未設定(既定値)で起動し、旧ディレクトリにデータが残っている場合は、起動時に警告ログ `legacy_local_storage_dir_detected` を出す。旧ディレクトリが新ディレクトリへの symlink になっていれば警告は出ない。
+
+旧ディレクトリの原本を引き続き参照するには、次のいずれかを行う(NL2SQL の `init_script.sh` と同じく、コピー後に旧ディレクトリを退避して symlink を張る)。
+
+```bash
+# 1) 旧ディレクトリを使い続ける
+#    backend/.env に LOCAL_STORAGE_DIR=/u01/production-ready-rag を設定して再起動する
+
+# 2) 新ディレクトリへ移行する(backend を停止してから実行)
+OLD=/u01/production-ready-rag
+NEW=/u01/data/production-ready-rag
+sudo install -d -m 0755 -o "$(id -un)" -g "$(id -gn)" "${NEW}"
+cp -an "${OLD}/." "${NEW}/"   # -n: 新ディレクトリの既存ファイルは上書きしない
+mv "${OLD}" "${OLD}.legacy-$(date +%Y%m%d%H%M%S)"
+ln -s "${NEW}" "${OLD}"
+```
+
+移行後に backend を起動し、警告ログが出ないこと、既存文書のプレビュー / 再取込ができることを確認してから退避ディレクトリを削除する。
 コンテナ healthcheck は `/api/ready` を使う。`oci_common`、`enterprise_ai`、`genai`、`oracle`、`object_storage` の設定グループを確認する。
 `ENVIRONMENT=production` では `audit_context_salt` も確認し、`AUDIT_CONTEXT_HASH_SALT` を必須にする。すべて `ok` のときだけ 200 になり、`missing`、`invalid`、`missing_credentials`、`wallet_not_found` が含まれる場合は 503 になる。
 

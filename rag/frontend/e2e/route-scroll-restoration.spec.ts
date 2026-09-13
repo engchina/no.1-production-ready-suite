@@ -48,7 +48,7 @@ async function mockApi(page: Page) {
         json: {
           data: {
             backend: "oci",
-            local_storage_dir: "/u01/production-ready-rag",
+            local_storage_dir: "/u01/data/production-ready-rag",
             object_storage_region: "ap-osaka-1",
             object_storage_namespace: "idqcucnenh88",
             object_storage_bucket: "rag-originals",

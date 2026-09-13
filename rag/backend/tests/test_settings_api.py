@@ -3519,7 +3519,7 @@ def test_update_upload_storage_settings_persists_env_and_mutates_runtime(
         "/api/settings/upload-storage",
         json={
             "backend": "oci",
-            "local_storage_dir": "/u01/production-ready-rag",
+            "local_storage_dir": "/u01/data/production-ready-rag",
             "object_storage_bucket": "rag-originals",
         },
     )
@@ -3529,14 +3529,14 @@ def test_update_upload_storage_settings_persists_env_and_mutates_runtime(
     assert body["backend"] == "oci"
     assert body["readiness"] == "ok"
     assert settings.upload_storage_backend == "oci"
-    assert settings.local_storage_dir == "/u01/production-ready-rag"
+    assert settings.local_storage_dir == "/u01/data/production-ready-rag"
     assert settings.object_storage_namespace == "global-namespace"
     assert settings.object_storage_bucket == "rag-originals"
     persisted = env_file.read_text(encoding="utf-8")
     assert "# 既存設定" in persisted
     assert persisted.count("UPLOAD_STORAGE_BACKEND=") == 1
     assert "UPLOAD_STORAGE_BACKEND=oci" in persisted
-    assert "LOCAL_STORAGE_DIR=/u01/production-ready-rag" in persisted
+    assert "LOCAL_STORAGE_DIR=/u01/data/production-ready-rag" in persisted
     assert "OBJECT_STORAGE_REGION=us-chicago-1" in persisted
     assert "OBJECT_STORAGE_NAMESPACE=global-namespace" in persisted
     assert "OBJECT_STORAGE_BUCKET=rag-originals" in persisted
@@ -3554,7 +3554,7 @@ def test_update_upload_storage_settings_can_apply_namespace_from_oci_settings_dr
         "/api/settings/upload-storage",
         json={
             "backend": "oci",
-            "local_storage_dir": "/u01/production-ready-rag",
+            "local_storage_dir": "/u01/data/production-ready-rag",
             "object_storage_namespace": "oci-page-namespace",
             "object_storage_bucket": "rag-originals",
         },
@@ -3583,7 +3583,7 @@ def test_update_upload_storage_settings_does_not_mutate_runtime_when_env_write_f
         "/api/settings/upload-storage",
         json={
             "backend": "oci",
-            "local_storage_dir": "/u01/production-ready-rag",
+            "local_storage_dir": "/u01/data/production-ready-rag",
             "object_storage_bucket": "rag-originals",
         },
     )
@@ -3607,7 +3607,7 @@ def test_update_upload_storage_settings_allows_missing_selected_backend_fields(
         "/api/settings/upload-storage",
         json={
             "backend": "oci",
-            "local_storage_dir": "/u01/production-ready-rag",
+            "local_storage_dir": "/u01/data/production-ready-rag",
             "object_storage_bucket": "",
         },
     )
@@ -3636,7 +3636,7 @@ def test_update_upload_storage_settings_allows_missing_global_namespace(
         "/api/settings/upload-storage",
         json={
             "backend": "oci",
-            "local_storage_dir": "/u01/production-ready-rag",
+            "local_storage_dir": "/u01/data/production-ready-rag",
             "object_storage_bucket": "rag-originals",
         },
     )

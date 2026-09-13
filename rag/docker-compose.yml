@@ -46,8 +46,8 @@ services:
       # コンテナ運用は prod モード(サービスの起動/停止は docker compose 経由)。
       ENVIRONMENT: prod
       LD_LIBRARY_PATH: /u01/aipoc/instantclient_23_26
-      LOCAL_STORAGE_DIR: /u01/production-ready-rag
-      MODEL_SETTINGS_FILE: /u01/production-ready-rag/model-settings.json
+      LOCAL_STORAGE_DIR: /u01/data/production-ready-rag
+      MODEL_SETTINGS_FILE: /u01/data/production-ready-rag/model-settings.json
       OCI_CONFIG_FILE: /home/appuser/.oci/config
       WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}
       GUNICORN_TIMEOUT: ${GUNICORN_TIMEOUT:-60}
@@ -75,7 +75,7 @@ services:
     volumes:
       - /u01/aipoc/instantclient_23_26:/u01/aipoc/instantclient_23_26:ro
       - oci-config:/home/appuser/.oci
-      - backend-local-storage:/u01/production-ready-rag
+      - backend-local-storage:/u01/data/production-ready-rag
     healthcheck:
       test:
         - CMD
@@ -99,8 +99,8 @@ services:
       <<: *parser-service-urls
       ENVIRONMENT: prod
       LD_LIBRARY_PATH: /u01/aipoc/instantclient_23_26
-      LOCAL_STORAGE_DIR: /u01/production-ready-rag
-      MODEL_SETTINGS_FILE: /u01/production-ready-rag/model-settings.json
+      LOCAL_STORAGE_DIR: /u01/data/production-ready-rag
+      MODEL_SETTINGS_FILE: /u01/data/production-ready-rag/model-settings.json
       OCI_CONFIG_FILE: /home/appuser/.oci/config
       INGESTION_QUEUE_DEDICATED_WORKER_ENABLED: "true"
       INGESTION_QUEUE_WORKER_CONCURRENCY: ${INGESTION_QUEUE_WORKER_CONCURRENCY:-2}
@@ -119,7 +119,7 @@ services:
     volumes:
       - /u01/aipoc/instantclient_23_26:/u01/aipoc/instantclient_23_26:ro
       - oci-config:/home/appuser/.oci
-      - backend-local-storage:/u01/production-ready-rag
+      - backend-local-storage:/u01/data/production-ready-rag
 
   # ---- 前処理マイクロサービス(CPU・既定起動、1 変換 = 1 独立サービス)----
   # parse の前に原本を変換する。未達時は backend が passthrough へ安全に縮退する。

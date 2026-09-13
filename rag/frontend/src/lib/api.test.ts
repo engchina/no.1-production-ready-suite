@@ -612,7 +612,7 @@ describe("api.request envelope", () => {
   it("updateUploadStorageSettings は保存先 payload を設定 API へ送る", async () => {
     const payload = {
       backend: "oci" as const,
-      local_storage_dir: "/u01/production-ready-rag",
+      local_storage_dir: "/u01/data/production-ready-rag",
       object_storage_namespace: "example-namespace",
       object_storage_bucket: "rag-originals",
     };
@@ -1108,7 +1108,7 @@ describe("api.request envelope", () => {
       jsonResponse({
         data: {
           backend: "local",
-          local_storage_dir: "/u01/production-ready-rag",
+          local_storage_dir: "/u01/data/production-ready-rag",
           object_storage_region: payload.object_storage_region,
           object_storage_namespace: payload.object_storage_namespace,
           object_storage_bucket: "",

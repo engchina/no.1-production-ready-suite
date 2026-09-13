@@ -8,10 +8,17 @@ from typing import Any
 
 from pytest import LogCaptureFixture, MonkeyPatch
 
+from app import main as main_module
 from app.api.routes import health as health_route
-from app.config import EnterpriseAiConfiguredModel, get_settings
+from app.config import (
+    DEFAULT_LOCAL_STORAGE_DIR,
+    EnterpriseAiConfiguredModel,
+    Settings,
+    get_settings,
+)
 from app.main import UNHANDLED_ERROR_MESSAGE, app, create_app
 from app.rag.system_schema import system_schema_manager
+from app.readiness import pending_legacy_local_storage_dir
 from tests.support import AsgiTestClient
 
 client = AsgiTestClient(app)
@@ -475,3 +482,78 @@ def _configure_oci_readiness(
     monkeypatch.setattr(settings, "object_storage_namespace", "example-namespace")
     monkeypatch.setattr(settings, "object_storage_bucket", "rag-originals")
     monkeypatch.setattr(settings, "audit_context_hash_salt", audit_context_hash_salt)
+
+
+def _legacy_storage_settings(local_storage_dir: Path) -> Settings:
+    return Settings(local_storage_dir=str(local_storage_dir))
+
+
+def test_pending_legacy_local_storage_dir_detects_legacy_data_with_default_dir(
+    tmp_path: Path,
+) -> None:
+    """既定保存先で起動し旧ディレクトリに原本が残る場合だけ旧パスを返す。"""
+    default_dir = tmp_path / "data" / "production-ready-rag"
+    legacy_dir = tmp_path / "production-ready-rag"
+    (legacy_dir / "objects").mkdir(parents=True)
+
+    assert pending_legacy_local_storage_dir(
+        _legacy_storage_settings(default_dir),
+        legacy_dir=str(legacy_dir),
+        default_dir=str(default_dir),
+    ) == str(legacy_dir)
+    # LOCAL_STORAGE_DIR を明示設定した環境では案内しない。
+    assert (
+        pending_legacy_local_storage_dir(
+            _legacy_storage_settings(tmp_path / "custom"),
+            legacy_dir=str(legacy_dir),
+            default_dir=str(default_dir),
+        )
+        is None
+    )
+
+
+def test_pending_legacy_local_storage_dir_ignores_missing_empty_or_linked_legacy_dir(
+    tmp_path: Path,
+) -> None:
+    """旧ディレクトリが無い・空・新ディレクトリへの symlink の場合は案内しない。"""
+    default_dir = tmp_path / "data" / "production-ready-rag"
+    default_dir.mkdir(parents=True)
+    legacy_dir = tmp_path / "production-ready-rag"
+    settings = _legacy_storage_settings(default_dir)
+
+    def pending() -> str | None:
+        return pending_legacy_local_storage_dir(
+            settings, legacy_dir=str(legacy_dir), default_dir=str(default_dir)
+        )
+
+    assert pending() is None
+    legacy_dir.mkdir()
+    assert pending() is None
+    legacy_dir.rmdir()
+    (default_dir / "objects").mkdir()
+    legacy_dir.symlink_to(default_dir)
+    assert pending() is None
+
+
+def test_startup_warns_pending_legacy_local_storage_dir_without_moving_files(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+    caplog: LogCaptureFixture,
+) -> None:
+    """起動時は警告ログで移行を案内し、旧ディレクトリのファイルは移動しない。"""
+    legacy_file = tmp_path / "production-ready-rag" / "objects" / "doc.pdf"
+    legacy_file.parent.mkdir(parents=True)
+    legacy_file.write_bytes(b"legacy")
+    monkeypatch.setattr(
+        main_module,
+        "pending_legacy_local_storage_dir",
+        lambda _settings: str(tmp_path / "production-ready-rag"),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="app.main"):
+        main_module._warn_pending_legacy_local_storage_dir(Settings())
+
+    record = next(r for r in caplog.records if r.message == "legacy_local_storage_dir_detected")
+    assert record.__dict__["legacy_local_storage_dir"] == str(tmp_path / "production-ready-rag")
+    assert record.__dict__["local_storage_dir"] == DEFAULT_LOCAL_STORAGE_DIR
+    assert legacy_file.read_bytes() == b"legacy"

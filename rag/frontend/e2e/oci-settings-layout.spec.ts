@@ -133,7 +133,7 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
         json: {
           data: {
             backend: "local",
-            local_storage_dir: "/u01/production-ready-rag",
+            local_storage_dir: "/u01/data/production-ready-rag",
             object_storage_region: options.uploadStorageSettings?.object_storage_region ?? "",
             object_storage_namespace:
               options.uploadStorageSettings?.object_storage_namespace ?? "",
@@ -159,7 +159,7 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
         json: {
           data: {
             backend: "local",
-            local_storage_dir: "/u01/production-ready-rag",
+            local_storage_dir: "/u01/data/production-ready-rag",
             object_storage_region: body.object_storage_region ?? "",
             object_storage_namespace: body.object_storage_namespace ?? "",
             object_storage_bucket: options.uploadStorageSettings?.object_storage_bucket ?? "",
