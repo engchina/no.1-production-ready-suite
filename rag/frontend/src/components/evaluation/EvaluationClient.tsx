@@ -181,8 +181,8 @@ export function EvaluationClient() {
 
   return (
     <div>
-      <PageHeader title={t("nav.evaluation")} subtitle={t("evaluation.subtitle")} />
-      <PageBody>
+      <PageHeader wide title={t("nav.evaluation")} subtitle={t("evaluation.subtitle")} />
+      <PageBody wide>
         <Card className="min-w-0">
           <CardContent className="pt-5">
             <KnowledgeBaseScopePicker

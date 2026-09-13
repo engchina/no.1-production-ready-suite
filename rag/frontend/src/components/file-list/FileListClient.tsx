@@ -219,7 +219,6 @@ export function FileListClient() {
 
   return (
     <div>
-      {/* 多列の表と一括操作は画面幅を使う作業画面（lib/page-layout.ts。PageHeader と PageBody の wide は同値） */}
       <PageHeader wide title={t("nav.fileList")} subtitle={t("fileList.subtitle")} />
       <PageBody wide>
         {/* DB 停止時の縮退お知らせ(非ブロッキング) */}

@@ -50,7 +50,7 @@ export function AgenticSettingsClient() {
 
   if (query.isPending) {
     return (
-      <PageBody>
+      <PageBody wide>
         <Skeleton className="h-64 w-full rounded-lg" />
       </PageBody>
     );
@@ -58,7 +58,7 @@ export function AgenticSettingsClient() {
 
   if (query.isError) {
     return (
-      <PageBody>
+      <PageBody wide>
         <ErrorState
           message={
             query.error instanceof ApiError ? query.error.message : t("settings.agentic.loadError")
@@ -113,7 +113,7 @@ export function AgenticSettingsClient() {
   }
 
   return (
-    <PageBody>
+    <PageBody wide>
       <Card>
         <CardHeader>
           <div className="flex items-start gap-3">
@@ -185,7 +185,8 @@ export function AgenticSettingsClient() {
               value={settings.multi_hop ? t("settings.agentic.on") : t("settings.agentic.off")}
             />
           </dl>
-          <div className="max-w-xs">
+          {/* 上の実行時設定（3 列）と同じ段組みの 1 列目に置く。 */}
+          <div className="grid gap-x-6 gap-y-4 lg:grid-cols-3">
             <NumberField
               label={t("settings.agentic.maxSubqueries")}
               value={form.max_subqueries}

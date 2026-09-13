@@ -115,8 +115,8 @@ export function UploadWorkspace() {
 
   return (
     <div>
-      <PageHeader title={t("nav.upload")} subtitle={t("upload.subtitle")} />
-      <PageBody>
+      <PageHeader wide title={t("nav.upload")} subtitle={t("upload.subtitle")} />
+      <PageBody wide>
         {!uploaded ? (
           <>
             <UploadStorageNotice />

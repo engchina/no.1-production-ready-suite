@@ -148,7 +148,7 @@ export function ParserAdapterSettingsClient() {
 
   if (query.isPending) {
     return (
-      <PageBody>
+      <PageBody wide>
         <Skeleton className="h-40 w-full rounded-lg" />
         <Skeleton className="h-72 w-full rounded-lg" />
       </PageBody>
@@ -157,7 +157,7 @@ export function ParserAdapterSettingsClient() {
 
   if (query.isError) {
     return (
-      <PageBody>
+      <PageBody wide>
         <ErrorState
           message={
             query.error instanceof ApiError
@@ -244,7 +244,7 @@ export function ParserAdapterSettingsClient() {
   }
 
   return (
-    <PageBody>
+    <PageBody wide>
       <OverviewCard
         dirty={dirty}
         form={form}

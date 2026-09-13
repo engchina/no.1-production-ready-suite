@@ -515,7 +515,6 @@ export function ChatClient() {
 
   return (
     <div className="flex min-h-full flex-col lg:h-full lg:min-h-0">
-      {/* 会話と比較の作業領域は画面幅を使う作業画面（lib/page-layout.ts。PageHeader と PageBody の wide は同値） */}
       <PageHeader wide title={t("chat.title")} subtitle={t("chat.subtitle")} />
 
       <PageBody wide className="flex min-h-0 flex-1 flex-col gap-4">
@@ -534,7 +533,7 @@ export function ChatClient() {
                 }
               />
             ) : (
-              <div className="max-w-md">
+              <div className="grid gap-x-6 gap-y-4 lg:grid-cols-2 2xl:grid-cols-3">
                 <SelectField
                   id="chat-business-view"
                   label={t("chat.businessView.label")}

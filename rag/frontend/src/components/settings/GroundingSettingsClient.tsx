@@ -89,7 +89,7 @@ export function GroundingSettingsClient() {
 
   if (query.isPending) {
     return (
-      <PageBody>
+      <PageBody wide>
         <Skeleton className="h-64 w-full rounded-lg" />
       </PageBody>
     );
@@ -97,7 +97,7 @@ export function GroundingSettingsClient() {
 
   if (query.isError) {
     return (
-      <PageBody>
+      <PageBody wide>
         <ErrorState
           message={
             query.error instanceof ApiError ? query.error.message : t("settings.grounding.loadError")
@@ -144,7 +144,7 @@ export function GroundingSettingsClient() {
   }
 
   return (
-    <PageBody>
+    <PageBody wide>
       <Card>
         <CardHeader>
           <div className="flex items-start gap-3">

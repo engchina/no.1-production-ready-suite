@@ -87,7 +87,7 @@ export function ChunkingSettingsClient() {
 
   if (query.isPending) {
     return (
-      <PageBody>
+      <PageBody wide>
         <Skeleton className="h-48 w-full rounded-lg" />
         <Skeleton className="h-64 w-full rounded-lg" />
       </PageBody>
@@ -96,7 +96,7 @@ export function ChunkingSettingsClient() {
 
   if (query.isError) {
     return (
-      <PageBody>
+      <PageBody wide>
         <ErrorState
           message={
             query.error instanceof ApiError ? query.error.message : t("settings.chunking.loadError")
@@ -142,7 +142,7 @@ export function ChunkingSettingsClient() {
   }
 
   return (
-    <PageBody>
+    <PageBody wide>
       <OverviewCard
         dirty={dirty}
         form={form}

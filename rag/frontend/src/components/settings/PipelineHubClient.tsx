@@ -40,7 +40,7 @@ export function PipelineHubClient() {
   const query = stages.filter((item) => !INGESTION_HREFS.has(item.href));
 
   return (
-    <PageBody>
+    <PageBody wide>
       <PhaseGroup
         title={t("settings.pipeline.phase.ingestion")}
         hint={t("settings.pipeline.phase.ingestionHint")}

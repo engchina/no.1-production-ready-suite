@@ -186,8 +186,8 @@ export function BusinessViewManagementClient() {
 
   return (
     <div>
-      <PageHeader title={t("nav.businessViews")} subtitle={t("businessViews.subtitle")} />
-      <PageBody className="grid grid-cols-1 gap-5">
+      <PageHeader wide title={t("nav.businessViews")} subtitle={t("businessViews.subtitle")} />
+      <PageBody wide className="grid grid-cols-1 gap-5">
         <DegradedBanner
           messages={page?.warning_messages}
           onRetry={() => void query.refetch()}
@@ -589,26 +589,28 @@ function BusinessViewForm({
                       {t("businessViews.field.systemPromptHelper")}
                     </p>
                   </div>
-                  <div className="max-w-xs">
-                    <label
-                      htmlFor="business-view-language"
-                      className="text-sm font-medium text-fg"
-                    >
-                      {t("businessViews.field.defaultLanguage")}
-                    </label>
-                    <input
-                      id="business-view-language"
-                      value={config.default_language ?? ""}
-                      onChange={(event) =>
-                        setConfig((current) => ({
-                          ...current,
-                          default_language: event.target.value || null,
-                        }))
-                      }
-                      placeholder={t("businessViews.field.defaultLanguagePlaceholder")}
-                      disabled={pending}
-                      className="mt-1 h-9 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:border-focus-ring disabled:cursor-not-allowed disabled:opacity-50"
-                    />
+                  <div className="grid gap-x-6 gap-y-4 lg:grid-cols-2">
+                    <div>
+                      <label
+                        htmlFor="business-view-language"
+                        className="text-sm font-medium text-fg"
+                      >
+                        {t("businessViews.field.defaultLanguage")}
+                      </label>
+                      <input
+                        id="business-view-language"
+                        value={config.default_language ?? ""}
+                        onChange={(event) =>
+                          setConfig((current) => ({
+                            ...current,
+                            default_language: event.target.value || null,
+                          }))
+                        }
+                        placeholder={t("businessViews.field.defaultLanguagePlaceholder")}
+                        disabled={pending}
+                        className="mt-1 h-9 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:border-focus-ring disabled:cursor-not-allowed disabled:opacity-50"
+                      />
+                    </div>
                   </div>
                 </div>
               </div>

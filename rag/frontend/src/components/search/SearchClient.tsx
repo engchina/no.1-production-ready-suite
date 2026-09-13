@@ -307,8 +307,8 @@ export function SearchClient() {
 
   return (
     <div>
-      <PageHeader title={t("nav.search")} subtitle={t("search.initial")} />
-      <PageBody>
+      <PageHeader wide title={t("nav.search")} subtitle={t("search.initial")} />
+      <PageBody wide>
         <section className="space-y-6">
           {businessViewsQuery.isLoading ? (
             <Card>
