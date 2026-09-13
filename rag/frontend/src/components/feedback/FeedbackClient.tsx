@@ -7,6 +7,7 @@ import {
   CardContent,
   SelectField,
   type SelectFieldOption,
+  StatusBadge,
   ToggleChip,
 } from "@engchina/production-ready-ui";
 import {
@@ -370,34 +371,39 @@ function Metric({ label, value, detail, delta }: { label: string; value: string;
 function FeedbackTable({ items, onOpen }: { items: FeedbackItem[]; onOpen: (id: string, trigger: HTMLButtonElement) => void }) {
   return (
     <div className="hidden max-h-[60vh] overflow-auto rounded-lg border border-border bg-surface md:block">
-      <table className="w-full min-w-[1260px] table-fixed border-collapse text-left text-xs">
+      {/*
+        列幅は固定しない（table-fixed の固定幅だと「役に立たなかった」等の折り返さない値が次の列に重なる）。
+        折り返さない列（時間・評価・対象・操作）は w-px + whitespace-nowrap で内容の幅に縮め、
+        折り返す列（理由・業務ビュー）は min-w で潰れず max-w で広がりすぎないようにし、残りの幅を問題の概要に渡す。
+      */}
+      <table className="w-full min-w-[1260px] border-collapse text-left text-xs">
         <thead className="sticky top-0 z-20 bg-surface-sunken text-fg-muted shadow-[0_1px_0_var(--color-border)] backdrop-blur">
           <tr>
-            <TableHead className="w-28">{t("feedback.table.time")}</TableHead>
-            <TableHead className="w-32">{t("feedback.filters.rating")}</TableHead>
-            <TableHead className="w-44">{t("feedback.filters.reason")}</TableHead>
-            <TableHead className="w-40">{t("feedback.filters.businessView")}</TableHead>
-            <TableHead className="w-32">{t("feedback.table.targetSource")}</TableHead>
-            <TableHead className="w-44">{t("feedback.list.model")}</TableHead>
+            <TableHead className={NOWRAP_COLUMN}>{t("feedback.table.time")}</TableHead>
+            <TableHead className={NOWRAP_COLUMN}>{t("feedback.filters.rating")}</TableHead>
+            <TableHead className="min-w-40">{t("feedback.filters.reason")}</TableHead>
+            <TableHead className="min-w-36">{t("feedback.filters.businessView")}</TableHead>
+            <TableHead className={NOWRAP_COLUMN}>{t("feedback.table.targetSource")}</TableHead>
+            <TableHead className={NOWRAP_COLUMN}>{t("feedback.list.model")}</TableHead>
             <TableHead>{t("feedback.table.question")}</TableHead>
-            <TableHead className="w-28 whitespace-nowrap text-right">{t("feedback.table.actions")}</TableHead>
+            <TableHead className={cn(NOWRAP_COLUMN, "text-right")}>{t("feedback.table.actions")}</TableHead>
           </tr>
         </thead>
         <tbody className="divide-y divide-border">
           {items.map((item) => (
             <tr key={item.feedback_id} className="align-top transition-colors hover:bg-surface-hover">
-              <TableCell className="whitespace-nowrap tabular-nums text-fg-muted">{formatDateTime(item.created_at)}</TableCell>
-              <TableCell><RatingBadge rating={item.rating} /></TableCell>
-              <TableCell className="max-w-44"><span className="line-clamp-2">{item.reason ? t(REASON_LABEL_KEYS[item.reason]) : "—"}</span></TableCell>
-              <TableCell className="max-w-40"><span className="line-clamp-2">{item.business_view_name ?? t("feedback.list.unknownBusinessView")}</span></TableCell>
-              <TableCell className="whitespace-nowrap">{targetSource(item)}</TableCell>
-              <TableCell className="max-w-36"><span className="block truncate" title={item.model ?? undefined}>{item.model ?? "—"}</span></TableCell>
+              <TableCell className={cn(NOWRAP_COLUMN, "tabular-nums text-fg-muted")}>{formatDateTime(item.created_at)}</TableCell>
+              <TableCell className={NOWRAP_COLUMN}><RatingBadge rating={item.rating} /></TableCell>
+              <TableCell><span className="line-clamp-2 max-w-48">{item.reason ? t(REASON_LABEL_KEYS[item.reason]) : "—"}</span></TableCell>
+              <TableCell><span className="line-clamp-2 max-w-48">{item.business_view_name ?? t("feedback.list.unknownBusinessView")}</span></TableCell>
+              <TableCell className={NOWRAP_COLUMN}>{targetSource(item)}</TableCell>
+              <TableCell className={NOWRAP_COLUMN}><span className="block w-36 truncate" title={item.model ?? undefined}>{item.model ?? "—"}</span></TableCell>
               <TableCell>
                 <p className="line-clamp-2 max-w-xl text-sm leading-5 text-fg">{item.question_preview ?? item.conversation_title ?? item.comment_preview ?? t("feedback.list.legacyPreview")}</p>
                 {item.has_comment ? <span className="mt-1 inline-flex items-center gap-1 text-xs text-fg-muted"><MessageSquareText size={11} aria-hidden />{t("feedback.list.hasComment")}</span> : null}
               </TableCell>
-              <TableCell className="text-right">
-                <Button type="button" variant="secondary" size="sm" className="whitespace-nowrap" onClick={(event) => onOpen(item.feedback_id, event.currentTarget)} icon={Eye}>
+              <TableCell className={cn(NOWRAP_COLUMN, "text-right")}>
+                <Button type="button" variant="secondary" size="sm" onClick={(event) => onOpen(item.feedback_id, event.currentTarget)} icon={Eye}>
                   {t("feedback.list.openDetail")}
                 </Button>
               </TableCell>
@@ -543,7 +549,7 @@ function EvidenceTab({ detail }: { detail: FeedbackDetail }) {
                 <p className="truncate text-sm font-medium text-fg">{citation.file_name ?? citation.document_id}</p>
                 <p className="mt-0.5 text-xs text-fg-muted">{[citation.section_title, citation.page_number ? t("feedback.detail.page", { count: citation.page_number }) : null].filter(Boolean).join(" / ") || "—"}</p>
               </div>
-              {targeted ? <span className="shrink-0 rounded-full bg-accent-subtle px-2 py-1 text-xs font-medium text-accent-fg">{t("feedback.detail.targetCitation")}</span> : null}
+              {targeted ? <StatusBadge variant="info" icon={false} label={t("feedback.detail.targetCitation")} className="shrink-0" /> : null}
             </div>
             <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-fg/90">{citation.content_preview ?? t("feedback.detail.noCitationPreview")}</p>
             <Link to={link} className="mt-3 inline-flex items-center gap-1.5 text-xs font-medium text-accent-fg hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"><ExternalLink size={14} aria-hidden />{t("feedback.list.openCitation")}</Link>
@@ -601,10 +607,20 @@ function TextSection({ title, value, empty = "—" }: { title: string; value: st
   return <section><h3 className="text-xs font-semibold text-fg-muted">{title}</h3><p className="mt-1 whitespace-pre-wrap break-words rounded-lg border border-border bg-surface-sunken p-3 text-sm leading-6 text-fg">{value ?? empty}</p></section>;
 }
 
+/** 利用者の評価は状態（良し悪しの判断）なので、色だけに頼らずサムズアップ / ダウンで冗長に符号化する。 */
 function RatingBadge({ rating }: { rating: CitationFeedbackRating }) {
   const helpful = rating === "helpful";
-  return <span className={cn("inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2 py-1 text-xs font-medium", helpful ? "bg-success-subtle text-success-fg" : "bg-danger-subtle text-danger-fg")}>{helpful ? <ThumbsUp size={14} aria-hidden /> : <ThumbsDown size={14} aria-hidden />}{helpful ? t("feedback.rating.helpful") : t("feedback.rating.notHelpful")}</span>;
+  return (
+    <StatusBadge
+      variant={helpful ? "success" : "danger"}
+      icon={helpful ? ThumbsUp : ThumbsDown}
+      label={helpful ? t("feedback.rating.helpful") : t("feedback.rating.notHelpful")}
+    />
+  );
 }
+
+/** 折り返さない値の列。w-px で内容の幅まで縮め、nowrap で次の列へはみ出させない。 */
+const NOWRAP_COLUMN = "w-px whitespace-nowrap";
 
 function TableHead({ children, className }: { children: React.ReactNode; className?: string }) {
   return <th scope="col" className={cn("px-3 py-2 font-medium", className)}>{children}</th>;

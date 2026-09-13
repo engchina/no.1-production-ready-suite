@@ -110,3 +110,62 @@ export async function expectMainScrollEndsAtContent(page: Page): Promise<void> {
     )
     .toBeLessThanOrEqual(1);
 }
+
+/**
+ * 一覧の各行で、セルの内容（要素と文字）が列の境界を超えないことを実測する。
+ *
+ * - 次のセルが同じ行に並ぶ場合は「内容の右端 <= 次のセルの左端」、最後のセルと縦に積まれる場合は「<= 自セルの右端」。
+ * - 内容の左端も自セルの左端を下回らないこと（右寄せの nowrap が左の列へはみ出す場合）。
+ * - `overflow: hidden` の祖先（truncate / line-clamp）で切り取られる部分は見えないので数えない。
+ * 違反を「列見出し: 内容 はみ出し量」の配列で返す（空配列が合格）。
+ */
+export async function measureTableCellOverflow(page: Page, tableSelector: string): Promise<string[]> {
+  return page.locator(tableSelector).evaluateAll((tables) => {
+    const violations: string[] = [];
+    for (const table of tables) {
+      const headers = Array.from(table.querySelectorAll("thead th, [role='columnheader']")).map(
+        (th) => th.textContent?.trim() ?? ""
+      );
+      for (const row of Array.from(table.querySelectorAll("tr, [role='row']"))) {
+        const cells = Array.from(row.querySelectorAll("td, th, [role='cell'], [role='columnheader']")).filter(
+          (cell) => cell.parentElement?.closest("tr, [role='row']") === row && cell.getBoundingClientRect().width > 0
+        );
+        cells.forEach((cell, index) => {
+          const cellRect = cell.getBoundingClientRect();
+          const nextRect = cells[index + 1]?.getBoundingClientRect();
+          const limitRight =
+            nextRect && nextRect.top < cellRect.bottom - 1 && nextRect.left >= cellRect.left ? nextRect.left : cellRect.right;
+          const walker = document.createTreeWalker(cell, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
+          for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+            const element = node.nodeType === Node.TEXT_NODE ? node.parentElement : (node as Element);
+            if (!element) continue;
+            if (node.nodeType === Node.TEXT_NODE && !node.textContent?.trim()) continue;
+            let rect: DOMRect;
+            if (node.nodeType === Node.TEXT_NODE) {
+              const range = document.createRange();
+              range.selectNodeContents(node);
+              rect = range.getBoundingClientRect();
+            } else {
+              rect = element.getBoundingClientRect();
+            }
+            if (rect.width <= 1 || rect.height <= 1) continue;
+            let right = rect.right;
+            let left = rect.left;
+            for (let ancestor = element; ancestor && ancestor !== row; ancestor = ancestor.parentElement!) {
+              if (ancestor === element && node.nodeType !== Node.TEXT_NODE) continue;
+              if (getComputedStyle(ancestor).overflowX !== "visible") {
+                const clip = ancestor.getBoundingClientRect();
+                right = Math.min(right, clip.right);
+                left = Math.max(left, clip.left);
+              }
+            }
+            const label = `${headers[index] ?? index}: ${(node.textContent ?? "").trim().slice(0, 24)}`;
+            if (right > limitRight + 0.5) violations.push(`${label} right +${(right - limitRight).toFixed(1)}px`);
+            if (left < cellRect.left - 0.5) violations.push(`${label} left -${(cellRect.left - left).toFixed(1)}px`);
+          }
+        });
+      }
+    }
+    return Array.from(new Set(violations));
+  });
+}

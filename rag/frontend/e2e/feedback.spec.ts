@@ -1,6 +1,6 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
 
-import { expectNoPageOverflow, mockDatabaseReady } from "./_helpers";
+import { expectNoPageOverflow, measureTableCellOverflow, mockDatabaseReady } from "./_helpers";
 
 const authStatus = {
   data: {
@@ -124,6 +124,49 @@ test("375pxではカード一覧と全画面詳細になり、URLから状態を
   await page.screenshot({ path: testInfo.outputPath("feedback-root-cause-mobile.png"), fullPage: true });
 });
 
+for (const width of [1280, 1920]) {
+  test(`明細表の値は列の境界を超えず、次の列に重ならない (${width}px)`, async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "desktop", "desktop table contract");
+    await page.setViewportSize({ width, height: 900 });
+    await mockFeedback(page, []);
+    await page.goto("/feedback?period=30&sort=newest&size=50&page=1");
+
+    const table = page.getByRole("table");
+    await expect(table.getByText("役に立たなかった").first()).toBeVisible();
+    await expect(table.getByText("引用 / 不明（旧データ）")).toBeVisible();
+    expect(await measureTableCellOverflow(page, "main table")).toEqual([]);
+
+    // 評価は状態なのでサムズアップ / ダウンのアイコンを持ち、評価対象などのタグはアイコンを持たない
+    const notHelpful = table.locator("[data-status-variant='danger']").first();
+    await expect(notHelpful).toHaveText("役に立たなかった");
+    await expect(notHelpful.locator("svg")).toHaveCount(1);
+    await expectNoPageOverflow(page);
+  });
+}
+
+test("375pxのカード一覧は評価バッジや値がカードの外にはみ出さない", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "mobile", "mobile card contract");
+  await page.setViewportSize({ width: 375, height: 812 });
+  await mockFeedback(page, []);
+  await page.goto("/feedback?period=30&sort=newest&size=50&page=1");
+
+  const cards = page.locator("main li").filter({ hasText: /役に立/ });
+  await expect(cards.first()).toBeVisible();
+  const overflow = await cards.evaluateAll((items) =>
+    items.flatMap((item) => {
+      const box = item.getBoundingClientRect();
+      return Array.from(item.querySelectorAll("*"))
+        .filter((el) => {
+          const rect = el.getBoundingClientRect();
+          return rect.width > 1 && (rect.right > box.right + 0.5 || rect.left < box.left - 0.5);
+        })
+        .map((el) => (el.textContent ?? el.tagName).trim().slice(0, 24));
+    })
+  );
+  expect(overflow).toEqual([]);
+  await expectNoPageOverflow(page);
+});
+
 async function mockFeedback(page: Page, requestedUrls: string[]) {
   await page.route("**/api/feedback**", async (route) => {
     requestedUrls.push(route.request().url());
@@ -214,6 +257,29 @@ function feedbackEnvelope(limit: number, offset: number) {
             model: null,
             file_name: "経費規程.pdf",
             question_preview: "申請期限を確認したい",
+            comment_preview: null,
+            has_comment: false,
+          },
+          {
+            // 列幅の検査用: 最も長い対象 / 送信元・理由・業務ビュー名・モデル名
+            feedback_id: "feedback-legacy-long",
+            trace_id: "trace-legacy-long",
+            business_view_id: "bv-2",
+            business_view_name: "経理・財務・監査の横断ナレッジ業務ビュー",
+            target_type: "citation",
+            source_surface: null,
+            document_id: "doc-2",
+            chunk_id: "doc-2:0",
+            message_id: null,
+            rating: "not_helpful",
+            reason: "missing_evidence",
+            comment: null,
+            created_at: "2026-06-30T23:59:00Z",
+            conversation_id: null,
+            conversation_title: null,
+            model: "ocid1.generativeaiendpoint.oc1.ap-osaka-1.amaaaaaaexample",
+            file_name: "経費規程.pdf",
+            question_preview: "旧データの評価（送信元が記録されていない）",
             comment_preview: null,
             has_comment: false,
           },
