@@ -533,6 +533,15 @@ export type ModelSettingsTestTargetType =
 export type UploadStorageBackend = "local" | "oci";
 export type DatabaseConnectionTestStatus = "success" | "failed" | "skipped";
 export type OciConfigTestStatus = "success" | "failed";
+export type OciConfigTestStageKey = "config_format" | "key_file" | "region" | "authentication";
+export type OciConfigTestStageStatus = "success" | "failed" | "skipped";
+
+export interface OciConfigTestStage {
+  key: OciConfigTestStageKey;
+  status: OciConfigTestStageStatus;
+  message: string;
+  action: string | null;
+}
 
 export interface EnterpriseAiConfiguredModel {
   model_id: string;
@@ -735,8 +744,15 @@ export interface OciConfigTestResult {
   config_file_mode: string | null;
   key_file_mode: string | null;
   message: string;
+  elapsed_ms: number;
   checked_at: string;
   error_type: string | null;
+  stages: OciConfigTestStage[];
+  region: string | null;
+  auth_check_operation: string | null;
+  http_status: number | null;
+  service_code: string | null;
+  request_id: string | null;
 }
 
 export interface OciObjectStorageNamespaceRequest {

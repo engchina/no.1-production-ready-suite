@@ -21,10 +21,13 @@ os.environ["CORS_ORIGINS"] = '["http://localhost:3002"]'
 
 import anyio
 import httpx
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 from pytest import MonkeyPatch, importorskip
 from starlette.websockets import WebSocket
 
 import app.features.agent.router as agent_router
+from app import oci_connectivity
 from app.features.agent.config import runtime_config_store
 from app.features.agent.router import stream_run_events_websocket
 from app.features.agent.runtime import (
@@ -1067,7 +1070,20 @@ def test_oci_config_test_checks_files_permissions_and_key_like_rag(
     oci_dir.mkdir()
     oci_dir.chmod(0o700)
     key_file = oci_dir / "oci_api_key.pem"
-    key_file.write_text("-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----\n")
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    key_file.write_bytes(
+        private_key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
+    )
+    public_der = private_key.public_key().public_bytes(
+        serialization.Encoding.DER,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    digest = hashlib.md5(public_der, usedforsecurity=False).hexdigest()
+    fingerprint = ":".join(digest[index : index + 2] for index in range(0, 32, 2))
     key_file.chmod(0o600)
     config_file = oci_dir / "config"
     config_file.write_text(
@@ -1075,7 +1091,7 @@ def test_oci_config_test_checks_files_permissions_and_key_like_rag(
             [
                 "[DEFAULT]",
                 "user=ocid1.user.oc1..aaaaaaaa",
-                "fingerprint=12:34:56:78:90:ab:cd:ef",
+                f"fingerprint={fingerprint}",
                 "tenancy=ocid1.tenancy.oc1..aaaaaaaa",
                 "region=ap-osaka-1",
                 f"key_file={key_file}",
@@ -1092,6 +1108,13 @@ def test_oci_config_test_checks_files_permissions_and_key_like_rag(
         lambda: _settings_fixture(oci_config_file=str(config_file)),
     )
 
+    namespace_calls: list[str] = []
+    monkeypatch.setattr(
+        oci_connectivity,
+        "_get_object_storage_namespace",
+        lambda config: namespace_calls.append(str(config["region"])),
+    )
+
     resp = client.post("/api/settings/oci/config/test")
 
     assert resp.status_code == 200
@@ -1102,6 +1125,9 @@ def test_oci_config_test_checks_files_permissions_and_key_like_rag(
     assert data["oci_directory_mode"] == "0700"
     assert data["config_file_mode"] == "0600"
     assert data["key_file_mode"] == "0600"
+    assert [stage["status"] for stage in data["stages"]] == ["success"] * 4
+    assert namespace_calls == ["ap-osaka-1"]
+    assert fingerprint not in resp.text
 
 
 def test_upload_database_wallet_extracts_zip_like_rag(
