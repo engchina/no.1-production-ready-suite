@@ -223,8 +223,9 @@ Issue の要点と、この変更が必要な理由を記載する。bug fix で
 
 ### lint
 
-- `frontend/.oxlintrc.json` が platform の `docs/design-system/adherence.oxlintrc.json`（生の hex / 生の px / 内部パス直 import）と上記の禁止事項の一部（旧トークン名、型・角丸の任意値、loading 中のラベル差し替え）を `src/**` で検出する。`npm run lint`（`oxlint --deny-warnings`）は CI の Frontend ジョブで実行される。
-- 誤検知や正当な例外（グラフ座標など px が正しい幾何値）は `// oxlint-disable-next-line <rule>` に理由コメントを添えて局所的に除外する。ルール自体を緩める場合は `.oxlintrc.json` に理由を書く。
+- `frontend/.oxlintrc.json` は platform の `docs/design-system/adherence.oxlintrc.json` を `extends` で相対パス参照し（`../../no.1-production-ready-platform/…`）、生の hex / inline style の生の px / 書体 / 型・角丸の任意値 / 旧トークン名 / 内部パス直 import / loading 中のラベル差し替えを `src/**` で検出する。ルールと JS プラグイン（`design-system-plugin.mjs`）は **NL2SQL にコピーしない**（正本は platform。変更は platform に Issue を立てる）。platform を sibling に置かないと lint が設定を読めない。CI の Frontend ジョブは platform を sibling に checkout して `npm run lint`（`oxlint --deny-warnings`）を実行する。
+- アプリ固有のルールを `.oxlintrc.json` に足す場合は、`design-system/restricted-syntax` / `no-restricted-imports` を同じ名前で上書きしない（adherence のセレクタが消える）。
+- 誤検知や正当な例外（グラフ座標など px が正しい幾何値）は `// oxlint-disable-next-line <rule>` に理由コメントを添えて局所的に除外する。ルール自体を緩める必要がある場合は platform の adherence 設定に Issue を立てる。
 
 ### 既存ルールとの優先順位
 
