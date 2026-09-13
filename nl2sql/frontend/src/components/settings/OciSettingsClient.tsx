@@ -58,6 +58,7 @@ import {
   type OciValidationResult,
 } from "@/lib/oci-settings";
 import { useRequestScope } from "@/lib/useRequestScope";
+import { READABLE_FORM_WIDTH } from "@/lib/form-layout";
 
 type FeedbackState = "idle" | "loading" | "success" | "error";
 type ConfigTestState =
@@ -359,15 +360,15 @@ export function OciSettingsClient() {
     }
   }
 
-  if (loadState === "loading") return <PageBody><TimedLoadingState
+  if (loadState === "loading") return <PageBody wide><TimedLoadingState
     label={t("settings.oci.loading")} operationKey="settings-oci-load" placement="page"
   /></PageBody>;
-  if (loadState === "error") return <PageBody><ErrorState
+  if (loadState === "error") return <PageBody wide><ErrorState
     message={loadError} onRetry={() => setLoadAttempt((current) => current + 1)}
   /></PageBody>;
 
   return (
-    <PageBody>
+    <PageBody wide>
       <fieldset disabled={busy} aria-busy={busy} className="min-w-0 space-y-6">
         <Card className="rounded-md">
           <CardHeader className="p-6 pb-0">
@@ -376,7 +377,7 @@ export function OciSettingsClient() {
               <CardTitle className="text-base">{t("settings.oci.auth.cardTitle")}</CardTitle>
             </div>
           </CardHeader>
-          <CardContent className="space-y-5 p-6">
+          <CardContent className={`space-y-5 p-6 ${READABLE_FORM_WIDTH}`}>
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
               <ConfigFileField
                 id="oci-config-file"
@@ -487,7 +488,7 @@ export function OciSettingsClient() {
               </div>
             </div>
           </CardHeader>
-          <CardContent className="space-y-5">
+          <CardContent className={`space-y-5 ${READABLE_FORM_WIDTH}`}>
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
               <NamespaceField
                 id="oci-object-storage-namespace"

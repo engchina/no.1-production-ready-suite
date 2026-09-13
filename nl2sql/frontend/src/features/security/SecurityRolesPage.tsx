@@ -773,7 +773,7 @@ export function SecurityRolesPage() {
 
   return (
     <>
-      <PageHeader
+      <PageHeader wide
         title={t("nav.securityRoles")}
         subtitle={t("security.roles.subtitle")}
         actions={
@@ -806,7 +806,7 @@ export function SecurityRolesPage() {
         actionsLabel={t("security.roles.actionsLabel")}
         actionsTestId="security-roles-actions"
       />
-      <PageBody className="grid gap-4">
+      <PageBody wide className="grid gap-4">
         {loadError ? <Banner severity="danger">{loadError}</Banner> : null}
         {profileAccessLoadWarning ? (
           <Banner severity="warning">{profileAccessLoadWarning}</Banner>

@@ -74,6 +74,7 @@ import {
 import { useSettingsDraftGuard } from "@/lib/useSettingsDraftGuard";
 import { cn } from "@/lib/utils";
 import { ExecutionConfirmationField } from "@/features/nl2sql/components/DbAdminShared";
+import { READABLE_FORM_WIDTH } from "@/lib/form-layout";
 
 interface DatabaseSettingsForm {
   user: string;
@@ -337,7 +338,7 @@ export function DatabaseSettingsClient() {
 
   if (query.isPending) {
     return (
-      <PageBody>
+      <PageBody wide>
         <TimedLoadingState
           label={t("settings.database.loading")}
           operationKey="settings-database-load"
@@ -353,7 +354,7 @@ export function DatabaseSettingsClient() {
 
   if (query.isError) {
     return (
-      <PageBody>
+      <PageBody wide>
         <ErrorState
           message={
             query.error instanceof ApiError
@@ -370,7 +371,7 @@ export function DatabaseSettingsClient() {
   if (!settings) return null;
 
   return (
-    <PageBody>
+    <PageBody wide>
       <fieldset disabled={operationBusy} aria-busy={operationBusy} className="min-w-0 space-y-6">
         <AdbManagementCard
           settings={settings}
@@ -395,7 +396,7 @@ export function DatabaseSettingsClient() {
               </div>
             </CardHeader>
 
-            <CardContent className="space-y-5 p-6">
+            <CardContent className={`space-y-5 p-6 ${READABLE_FORM_WIDTH}`}>
               <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
                 <TextField
                   id="oracle-user"
@@ -654,7 +655,7 @@ function SelectAiCredentialCard() {
           ) : null}
         </div>
       </CardHeader>
-      <CardContent className="space-y-5 p-6">
+      <CardContent className={`space-y-5 p-6 ${READABLE_FORM_WIDTH}`}>
         {status.isPending ? (
           <div className="grid gap-3 sm:grid-cols-2">
             <Skeleton className="h-20 w-full rounded-md" />
@@ -1015,7 +1016,7 @@ function AdbManagementCard({
         </div>
       </CardHeader>
 
-      <CardContent className="space-y-5 p-6">
+      <CardContent className={`space-y-5 p-6 ${READABLE_FORM_WIDTH}`}>
         <p className="text-sm leading-relaxed text-fg-muted">{t("settings.adb.description")}</p>
 
         <div className="space-y-4">

@@ -63,6 +63,7 @@ import type {
   QualityEvaluationStatus,
   QualityEvaluationVerdict,
 } from "../types";
+import { READABLE_FORM_WIDTH } from "@/lib/form-layout";
 
 const TERMINAL_STATUSES = new Set<QualityEvaluationStatus>([
   "completed",
@@ -369,8 +370,8 @@ export function EvaluationPage() {
 
   return (
     <>
-      <PageHeader title={t("nav.evaluation")} subtitle={t("qualityEvaluation.subtitle")} />
-      <PageBody className="grid min-w-0 gap-4 lg:gap-6">
+      <PageHeader wide title={t("nav.evaluation")} subtitle={t("qualityEvaluation.subtitle")} />
+      <PageBody wide className="grid min-w-0 gap-4 lg:gap-6">
         <PageNotice notice={notice} onDismiss={clearNotice} />
         {pageError ? (
           <ErrorState
@@ -393,7 +394,7 @@ export function EvaluationPage() {
             <LoadingState label={t("common.loading")} placement="panel" />
           ) : pageError ? null : (
             <form
-              className="grid min-w-0 gap-5"
+              className={`grid min-w-0 gap-5 ${READABLE_FORM_WIDTH}`}
               aria-label={t("qualityEvaluation.conditions.title")}
               noValidate
               onSubmit={(event) => {

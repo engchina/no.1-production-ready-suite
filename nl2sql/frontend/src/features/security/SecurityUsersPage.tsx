@@ -719,7 +719,7 @@ export function SecurityUsersPage() {
 
   return (
     <>
-      <PageHeader
+      <PageHeader wide
         title={t("nav.securityUsers")}
         subtitle={t("security.users.subtitle")}
         actions={
@@ -752,7 +752,7 @@ export function SecurityUsersPage() {
         actionsLabel={t("security.users.actionsLabel")}
         actionsTestId="security-users-actions"
       />
-      <PageBody className="grid gap-4">
+      <PageBody wide className="grid gap-4">
         {loadError && !initialLoadFailed ? <Banner severity="danger">{loadError}</Banner> : null}
         {activeView === "list" && actionError ? (
           <Banner severity="danger">{actionError}</Banner>

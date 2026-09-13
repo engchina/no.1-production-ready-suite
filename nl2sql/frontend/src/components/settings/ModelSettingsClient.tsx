@@ -54,6 +54,7 @@ import { t } from "@/lib/i18n";
 import { useModelSettings, useTestModelSettings, useUpdateModelSettings } from "@/lib/queries";
 import { useSettingsDraftGuard } from "@/lib/useSettingsDraftGuard";
 import { cn } from "@/lib/utils";
+import { READABLE_FORM_WIDTH } from "@/lib/form-layout";
 
 type ModelTestKey = `enterprise:${number}` | "embedding" | "rerank";
 type ModelSaveSection = "enterprise_connection" | "enterprise_models" | "generative_ai";
@@ -288,8 +289,8 @@ export function ModelSettingsClient() {
   if (query.isError) {
     return (
       <div>
-        <PageHeader title={t("nav.settingsModel")} subtitle={t("settings.model.subtitle")} />
-        <PageBody>
+        <PageHeader wide title={t("nav.settingsModel")} subtitle={t("settings.model.subtitle")} />
+        <PageBody wide>
           <ErrorState
             message={
               query.error instanceof ApiError ? query.error.message : t("settings.model.loadError")
@@ -304,8 +305,8 @@ export function ModelSettingsClient() {
   if (query.isPending || !draft) {
     return (
       <div>
-        <PageHeader title={t("nav.settingsModel")} subtitle={t("settings.model.subtitle")} />
-        <PageBody>
+        <PageHeader wide title={t("nav.settingsModel")} subtitle={t("settings.model.subtitle")} />
+        <PageBody wide>
           <TimedLoadingState
             label={t("settings.model.loading")}
             operationKey="settings-model-load"
@@ -323,8 +324,8 @@ export function ModelSettingsClient() {
 
   return (
     <div>
-      <PageHeader title={t("nav.settingsModel")} subtitle={t("settings.model.subtitle")} />
-      <PageBody>
+      <PageHeader wide title={t("nav.settingsModel")} subtitle={t("settings.model.subtitle")} />
+      <PageBody wide>
         {legacySecretDetected ? (
           <Banner
             severity="warning"
@@ -345,7 +346,7 @@ export function ModelSettingsClient() {
                 </CardTitle>
                 <CardDescription>{t("settings.model.enterprise.description")}</CardDescription>
               </CardHeader>
-              <CardContent className="space-y-5">
+              <CardContent className={`space-y-5 ${READABLE_FORM_WIDTH}`}>
                 <div className="grid gap-5 md:grid-cols-2">
                   <TextField
                     id="enterprise-endpoint"
@@ -428,7 +429,7 @@ export function ModelSettingsClient() {
                   {t("settings.model.enterprise.modelsDescription")}
                 </CardDescription>
               </CardHeader>
-              <CardContent className="space-y-5">
+              <CardContent className={`space-y-5 ${READABLE_FORM_WIDTH}`}>
                 <ModelCatalogEditor
                   models={draft.enterprise_ai.models}
                   defaultModelId={draft.enterprise_ai.default_model_id}
@@ -462,7 +463,7 @@ export function ModelSettingsClient() {
                 </CardTitle>
                 <CardDescription>{t("settings.model.genai.description")}</CardDescription>
               </CardHeader>
-              <CardContent className="space-y-5">
+              <CardContent className={`space-y-5 ${READABLE_FORM_WIDTH}`}>
                 <div className="grid gap-5 md:grid-cols-2">
                   <TestableTextField
                     id="genai-embedding-model"

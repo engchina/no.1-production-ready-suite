@@ -129,7 +129,7 @@ export function GlobalRulesPage() {
 
   return (
     <>
-      <PageHeader
+      <PageHeader wide
         title={t("globalRules.title")}
         subtitle={t("globalRules.subtitle")}
         actions={[
@@ -144,7 +144,7 @@ export function GlobalRulesPage() {
           },
         ]}
       />
-      <PageBody className="grid gap-4">
+      <PageBody wide className="grid gap-4">
         <PageNotice notice={errorText ? { tone: "danger", message: errorText } : null} />
 
         <DbObjectManagementPanelShell

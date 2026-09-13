@@ -35,6 +35,7 @@ import { t } from "@/lib/i18n";
 import { INFORMATION_TABLE_ROW_CLASS, INFORMATION_TABLE_VISIBLE_ROWS } from "@/lib/list-density";
 import { useInitializeSystemTables, useSystemTablesStatus } from "@/lib/queries";
 import { systemTableControlsBusy, systemTableOperationMessageKey, systemTableStatusLabelKey } from "@/lib/system-tables";
+import { READABLE_FORM_WIDTH } from "@/lib/form-layout";
 
 const RECREATE_CONFIRMATION = "RECREATE_NL2SQL_SYSTEM_TABLES";
 
@@ -269,40 +270,42 @@ export function SystemTablesCard() {
             <SystemTablesDetails data={data} />
 
             {mayExecute ? (
-              <section className="space-y-3 border-t border-border pt-5" aria-labelledby="recreate-system-tables-title">
-                <div className="flex items-start gap-2">
-                  <AlertTriangle className="mt-0.5 shrink-0 text-danger-fg" size={16} aria-hidden />
-                  <div>
-                    <h3 id="recreate-system-tables-title" className="text-sm font-semibold text-fg">
-                      {t("settings.database.systemTables.recreate.sectionTitle")}
-                    </h3>
-                    <p className="mt-1 text-xs leading-relaxed text-fg-muted">
-                      {t("settings.database.systemTables.recreate.sectionDescription")}
-                    </p>
+              <section className="border-t border-border pt-5" aria-labelledby="recreate-system-tables-title">
+                <div className={`space-y-3 ${READABLE_FORM_WIDTH}`}>
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle className="mt-0.5 shrink-0 text-danger-fg" size={16} aria-hidden />
+                    <div>
+                      <h3 id="recreate-system-tables-title" className="text-sm font-semibold text-fg">
+                        {t("settings.database.systemTables.recreate.sectionTitle")}
+                      </h3>
+                      <p className="mt-1 text-xs leading-relaxed text-fg-muted">
+                        {t("settings.database.systemTables.recreate.sectionDescription")}
+                      </p>
+                    </div>
                   </div>
+                  <ExecutionConfirmationField
+                    value={recreateConfirmation}
+                    onChange={setRecreateConfirmation}
+                    confirmed={recreateConfirmed}
+                    placeholder={RECREATE_CONFIRMATION}
+                    expectedLabel={RECREATE_CONFIRMATION}
+                    helper={t("dbAdmin.confirmation.helper.danger", {
+                      phrase: RECREATE_CONFIRMATION,
+                    })}
+                    disabled={busy}
+                    actions={
+                      <Button type="button"
+                        size="lg"
+                        variant="danger"
+                        className="w-full sm:w-auto"
+                        onClick={() => execute(true)}
+                        loading={operation.isPending && operation.variables?.recreate === true}
+                        disabled={busy || !recreateConfirmed} icon={RotateCcw}>
+                        {t("settings.database.systemTables.action.recreate")}
+                      </Button>
+                    }
+                  />
                 </div>
-                <ExecutionConfirmationField
-                  value={recreateConfirmation}
-                  onChange={setRecreateConfirmation}
-                  confirmed={recreateConfirmed}
-                  placeholder={RECREATE_CONFIRMATION}
-                  expectedLabel={RECREATE_CONFIRMATION}
-                  helper={t("dbAdmin.confirmation.helper.danger", {
-                    phrase: RECREATE_CONFIRMATION,
-                  })}
-                  disabled={busy}
-                  actions={
-                    <Button type="button"
-                      size="lg"
-                      variant="danger"
-                      className="w-full sm:w-auto"
-                      onClick={() => execute(true)}
-                      loading={operation.isPending && operation.variables?.recreate === true}
-                      disabled={busy || !recreateConfirmed} icon={RotateCcw}>
-                      {t("settings.database.systemTables.action.recreate")}
-                    </Button>
-                  }
-                />
               </section>
             ) : null}
           </>

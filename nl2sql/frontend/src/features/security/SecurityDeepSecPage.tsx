@@ -83,6 +83,7 @@ import type {
   DeepSecTargetObjectDetail,
   DeepSecVerification,
 } from "./types";
+import { READABLE_FORM_WIDTH } from "@/lib/form-layout";
 
 const ENTITLEMENT_CAPABILITIES = ["SELECT"] as const;
 const SCOPE_MODES = ["ALL", "FILTERS", "EXPRESSION"] as const;
@@ -1674,7 +1675,7 @@ export function SecurityDeepSecPage() {
 
   return (
     <>
-      <PageHeader
+      <PageHeader wide
         title={t("nav.securityDeepSec")}
         subtitle={t("security.deepsec.subtitle")}
         status={
@@ -1701,7 +1702,7 @@ export function SecurityDeepSecPage() {
           },
         ]}
       />
-      <PageBody className="grid gap-4">
+      <PageBody wide className="grid gap-4">
         <fieldset disabled={operationBusy} className="contents" aria-busy={operationBusy} data-testid="security-deepsec-controls">
         <PageNotice
           notice={statusLoadError ? { tone: "danger", message: statusLoadError } : null}
@@ -1747,7 +1748,7 @@ export function SecurityDeepSecPage() {
               icon={KeyRound}
             />
             <form
-              className="grid gap-4"
+              className={`grid gap-4 ${READABLE_FORM_WIDTH}`}
               onSubmit={(event) => {
                 event.preventDefault();
                 void handleSaveConfig();

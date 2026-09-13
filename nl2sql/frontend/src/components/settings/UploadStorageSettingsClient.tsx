@@ -37,6 +37,7 @@ import { useUpdateUploadStorageSettings, useUploadStorageSettings } from "@/lib/
 import { APP_ROUTES } from "@/lib/routes";
 import { useSettingsDraftGuard } from "@/lib/useSettingsDraftGuard";
 import { cn } from "@/lib/utils";
+import { READABLE_FORM_WIDTH } from "@/lib/form-layout";
 
 interface UploadStorageForm {
   backend: UploadStorageBackend;
@@ -127,7 +128,7 @@ export function UploadStorageSettingsClient() {
 
   if (query.isPending) {
     return (
-      <PageBody>
+      <PageBody wide>
         <TimedLoadingState
           label={t("settings.uploadStorage.loading")}
           operationKey="settings-upload-storage-load"
@@ -143,7 +144,7 @@ export function UploadStorageSettingsClient() {
 
   if (query.isError) {
     return (
-      <PageBody>
+      <PageBody wide>
         <ErrorState
           message={
             query.error instanceof ApiError
@@ -166,7 +167,7 @@ export function UploadStorageSettingsClient() {
     (!form.objectStorageRegion.trim() || !form.objectStorageNamespace.trim());
 
   return (
-    <PageBody>
+    <PageBody wide>
       <form
         className="space-y-5"
         onSubmit={(event) => {
@@ -193,7 +194,7 @@ export function UploadStorageSettingsClient() {
               </div>
             </div>
           </CardHeader>
-          <CardContent className="space-y-5">
+          <CardContent className={`space-y-5 ${READABLE_FORM_WIDTH}`}>
             <fieldset className="space-y-3">
               <legend className="text-sm font-medium text-fg">
                 {t("settings.uploadStorage.field.backend")}
