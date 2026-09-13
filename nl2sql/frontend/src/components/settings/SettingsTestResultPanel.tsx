@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import {
   Banner,
   MessageText,
@@ -26,6 +27,8 @@ export interface SettingsTestResultPanelProps {
   rawError?: string | null;
   className?: string;
   testId?: string;
+  /** timing の直後、details の前に置く追加内容（段階ごとの結果など）。 */
+  children?: ReactNode;
 }
 
 /** システム設定の接続・モデルテスト結果を同じ情報階層で表示する。 */
@@ -39,6 +42,7 @@ export function SettingsTestResultPanel({
   errorType,
   className,
   testId,
+  children,
 }: SettingsTestResultPanelProps) {
   const hasTiming = elapsedMs !== undefined || Boolean(checkedAt);
 
@@ -65,6 +69,8 @@ export function SettingsTestResultPanel({
               ) : null}
             </p>
           ) : null}
+
+          {children}
 
           {details.length > 0 ? (
             <dl className="grid min-w-0 gap-x-4 gap-y-1 text-xs text-fg-muted sm:grid-cols-2">
