@@ -401,7 +401,6 @@ const agentJa = {
   "nav.plugins": "プラグイン",
   "nav.plugins.sidebar": "プラグイン (Plugins)",
   "nav.pluginMarketplaces": "マーケットプレイス",
-  "nav.pluginMarketplaces.sidebar": "マーケットプレイス (Marketplace)",
   "page.plugins.subtitle": "Skill / MCP / resource の配布パッケージを管理する",
   "page.pluginMarketplaces.subtitle": "連携機能を選んで Control Plane にインストールする",
   "plugins.title": "インストール済み連携",
