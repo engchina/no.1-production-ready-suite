@@ -192,7 +192,7 @@ export function DatabaseSettingsClient() {
 
   if (query.isPending) {
     return (
-      <PageBody>
+      <PageBody wide>
         <Skeleton className="h-20 w-full rounded-lg" />
         <Skeleton className="h-[460px] w-full rounded-lg" />
       </PageBody>
@@ -201,7 +201,7 @@ export function DatabaseSettingsClient() {
 
   if (query.isError) {
     return (
-      <PageBody>
+      <PageBody wide>
         <ErrorState
           message={
             query.error instanceof ApiError
@@ -219,7 +219,7 @@ export function DatabaseSettingsClient() {
   const envPreview = buildDatabaseEnvFile(form, settings);
 
   return (
-    <PageBody>
+    <PageBody wide>
       <div className={SETTINGS_DETAIL_GRID_CLASS}>
         <div className="space-y-6">
         <form

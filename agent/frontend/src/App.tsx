@@ -68,7 +68,7 @@ export function App() {
 function SettingsOciRoute() {
   return (
     <div>
-      <PageHeader title={t("nav.settingsOci")} subtitle={t("settings.oci.subtitle")} />
+      <PageHeader wide title={t("nav.settingsOci")} subtitle={t("settings.oci.subtitle")} />
       <OciSettingsClient />
     </div>
   );
@@ -78,6 +78,7 @@ function SettingsUploadStorageRoute() {
   return (
     <div>
       <PageHeader
+        wide
         title={t("nav.settingsUploadStorage")}
         subtitle={t("settings.uploadStorage.subtitle")}
       />
@@ -89,7 +90,7 @@ function SettingsUploadStorageRoute() {
 function SettingsDatabaseRoute() {
   return (
     <div>
-      <PageHeader title={t("nav.settingsDatabase")} subtitle={t("settings.database.subtitle")} />
+      <PageHeader wide title={t("nav.settingsDatabase")} subtitle={t("settings.database.subtitle")} />
       <DatabaseSettingsClient />
     </div>
   );

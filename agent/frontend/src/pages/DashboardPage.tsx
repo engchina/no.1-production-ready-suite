@@ -55,6 +55,7 @@ export function DashboardPage() {
   return (
     <>
       <PageHeader
+        wide
         title={t("nav.dashboard")}
         subtitle={t("page.dashboard.subtitle")}
         actions={
@@ -67,7 +68,7 @@ export function DashboardPage() {
           </Link>
         }
       />
-      <PageBody>
+      <PageBody wide>
         {pendingApprovals.length ? (
           <Banner severity="warning" title={t("run.waitingApproval")}>
             {pendingApprovals.map((approval) => approval.tool_call.name).join(", ")}

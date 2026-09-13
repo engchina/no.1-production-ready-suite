@@ -361,7 +361,7 @@ export function OciSettingsClient() {
   }
 
   return (
-    <PageBody>
+    <PageBody wide>
       <div className={SETTINGS_DETAIL_GRID_CLASS}>
         <div className="space-y-6">
           <Card className="rounded-md">
@@ -1094,7 +1094,7 @@ function PrivateKeyDropzoneField({
             ? t("settings.oci.actions.uploadingKeyFile")
             : t("settings.oci.privateKey.uploadCta")}
         </span>
-        <span id={hintId} className="max-w-2xl text-sm leading-relaxed text-fg">
+        <span id={hintId} className="text-sm leading-relaxed text-fg">
           {helper}
         </span>
       </button>

@@ -341,8 +341,8 @@ export function ModelSettingsClient() {
   if (query.isError) {
     return (
       <div>
-        <PageHeader title={t("nav.settingsModel")} subtitle={t("settings.model.subtitle")} />
-        <PageBody>
+        <PageHeader wide title={t("nav.settingsModel")} subtitle={t("settings.model.subtitle")} />
+        <PageBody wide>
           <ErrorState
             message={
               query.error instanceof ApiError ? query.error.message : t("settings.model.loadError")
@@ -357,8 +357,8 @@ export function ModelSettingsClient() {
   if (query.isPending || !draft || !activeChecks) {
     return (
       <div>
-        <PageHeader title={t("nav.settingsModel")} subtitle={t("settings.model.subtitle")} />
-        <PageBody>
+        <PageHeader wide title={t("nav.settingsModel")} subtitle={t("settings.model.subtitle")} />
+        <PageBody wide>
           <div role="status" aria-label={t("settings.model.loading")} className="grid gap-4">
             <Skeleton className="h-28 w-full rounded-lg" />
             <Skeleton className="h-72 w-full rounded-lg" />
@@ -371,8 +371,8 @@ export function ModelSettingsClient() {
 
   return (
     <div>
-      <PageHeader title={t("nav.settingsModel")} subtitle={t("settings.model.subtitle")} />
-      <PageBody>
+      <PageHeader wide title={t("nav.settingsModel")} subtitle={t("settings.model.subtitle")} />
+      <PageBody wide>
       <form onSubmit={(event) => void handleSubmit(event)} className="space-y-6">
         <section className="grid gap-4 lg:grid-cols-3" aria-labelledby="model-status-title">
           <div className="lg:col-span-3">

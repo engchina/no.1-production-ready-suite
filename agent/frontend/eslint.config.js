@@ -6,6 +6,21 @@ import adherence from "../../no.1-production-ready-platform/docs/design-system/a
 
 const { rules: adherenceRules } = adherence.overrides[0];
 
+// Agent の全画面は画面幅いっぱい（共有 PageHeader / PageBody の `wide`）で統一する（#28、NL2SQL #566 と同じ基準）。
+// PageHeader と PageBody の wide がずれると 1920px 以上でタイトルと本文の左端がずれるため、
+// 補助の PageBody（読み込み中・エラー表示）も含めて `wide` を値なしで必ず渡す。frontend に unit test 基盤がないので lint で検査する。
+const PAGE_LAYOUT_ELEMENT = "JSXOpeningElement[name.name=/^Page(Header|Body)$/]";
+const pageWidthRules = [
+  {
+    selector: `${PAGE_LAYOUT_ELEMENT}:not(:has(> JSXAttribute[name.name='wide']))`,
+    message: "PageHeader / PageBody には wide を渡してください（Agent は全画面 wide。付け忘れると 1440px に戻り左端がずれます）。",
+  },
+  {
+    selector: `${PAGE_LAYOUT_ELEMENT} > JSXAttribute[name.name='wide'][value!=null]`,
+    message: "wide は値なし（wide）で渡してください。画面ごとに wide={…} で切り替えないでください。",
+  },
+];
+
 export default tseslint.config(
   { ignores: ["dist", "node_modules", "playwright-report", "test-results"] },
   js.configs.recommended,
@@ -26,7 +41,8 @@ export default tseslint.config(
   {
     files: ["src/**/*.{ts,tsx}"],
     rules: {
-      "no-restricted-syntax": adherenceRules["design-system/restricted-syntax"],
+      // adherence のセレクタを残したまま、全画面 wide の検査を末尾に足す（同じルール名で上書きしない）。
+      "no-restricted-syntax": [...adherenceRules["design-system/restricted-syntax"], ...pageWidthRules],
       "no-restricted-imports": adherenceRules["no-restricted-imports"],
     },
   },

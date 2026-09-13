@@ -69,8 +69,6 @@ import {
   type ToolDefinition,
 } from "@/lib/api";
 import { t } from "@/lib/i18n";
-import { isWidePage } from "@/lib/page-layout";
-import { APP_ROUTES } from "@/lib/routes";
 
 type ToolPolicyChoice = "default" | "allow" | "ask" | "deny";
 type RunStreamMode = "sse" | "websocket";
@@ -392,8 +390,8 @@ export function AgentsPage() {
 
   return (
     <>
-      <PageHeader title={t("nav.agents")} subtitle={t("page.agents.subtitle")} />
-      <PageBody className="grid min-w-0 grid-cols-1 gap-5 xl:grid-cols-[420px_minmax(0,1fr)]">
+      <PageHeader wide title={t("nav.agents")} subtitle={t("page.agents.subtitle")} />
+      <PageBody wide className="grid min-w-0 grid-cols-1 gap-5 xl:grid-cols-[420px_minmax(0,1fr)]">
         <AgentEditor
           title={t("agent.create")}
           description={t("page.agents.subtitle")}
@@ -495,6 +493,7 @@ export function RuntimesPage() {
   return (
     <>
       <PageHeader
+        wide
         title={t("nav.runtimes")}
         subtitle={t("page.runtimes.subtitle")}
         actions={
@@ -503,7 +502,7 @@ export function RuntimesPage() {
           </Button>
         }
       />
-      <PageBody>
+      <PageBody wide>
         {error ? <Banner severity="danger">{error.message}</Banner> : null}
         <QueryState query={runtimes}>
           <div className="grid gap-4 xl:grid-cols-2">
@@ -743,21 +742,19 @@ export function RunsPage() {
     }
   }
 
-  const wide = isWidePage(APP_ROUTES.runs);
-
   return (
     <>
       <PageHeader
+        wide
         title={t("nav.runs")}
         subtitle={t("page.runs.subtitle")}
-        wide={wide}
         actions={
           <Button variant="secondary" onClick={() => void runs.refetch()} aria-label="実行一覧を再読み込み" icon={RefreshCw}>
             {t("common.retry")}
           </Button>
         }
       />
-      <PageBody wide={wide} className="grid min-w-0 grid-cols-1 gap-5 xl:grid-cols-[420px_minmax(0,1fr)]">
+      <PageBody wide className="grid min-w-0 grid-cols-1 gap-5 xl:grid-cols-[420px_minmax(0,1fr)]">
         <div className="min-w-0 space-y-5">
           <Card className="min-w-0">
             <CardHeader>
@@ -887,8 +884,8 @@ export function ApprovalsPage() {
 
   return (
     <>
-      <PageHeader title={t("nav.approvals")} subtitle={t("page.approvals.subtitle")} />
-      <PageBody>
+      <PageHeader wide title={t("nav.approvals")} subtitle={t("page.approvals.subtitle")} />
+      <PageBody wide>
         <QueryState query={runs}>
           {approvals.length ? (
             <div className="grid gap-4">
@@ -979,21 +976,19 @@ export function AuditPage() {
     toast.success(t("audit.csvDownloaded"));
   }
 
-  const wide = isWidePage(APP_ROUTES.audit);
-
   return (
     <>
       <PageHeader
+        wide
         title={t("nav.audit")}
         subtitle={t("page.audit.subtitle")}
-        wide={wide}
         actions={
           <Button variant="secondary" onClick={() => void audit.refetch()} aria-label={t("common.retry")} icon={RefreshCw}>
             {t("common.retry")}
           </Button>
         }
       />
-      <PageBody wide={wide}>
+      <PageBody wide>
         <Card className="min-w-0">
           <CardHeader>
             <CardTitle>{t("audit.filters")}</CardTitle>
@@ -1241,8 +1236,8 @@ export function ToolsPage() {
 
   return (
     <>
-      <PageHeader title={t("nav.tools")} subtitle={t("page.tools.subtitle")} />
-      <PageBody>
+      <PageHeader wide title={t("nav.tools")} subtitle={t("page.tools.subtitle")} />
+      <PageBody wide>
         <QueryState query={tools}>
           <div className="grid gap-4 xl:grid-cols-2">
             {(tools.data?.tools ?? []).map((tool) => (
@@ -1293,8 +1288,8 @@ export function MemoryPage() {
 
   return (
     <>
-      <PageHeader title={t("nav.memory")} subtitle={t("page.memory.subtitle")} />
-      <PageBody>
+      <PageHeader wide title={t("nav.memory")} subtitle={t("page.memory.subtitle")} />
+      <PageBody wide>
         <div className="grid min-w-0 grid-cols-1 gap-5 xl:grid-cols-[420px_minmax(0,1fr)]">
           <Card className="min-w-0">
             <CardHeader>
@@ -1426,9 +1421,9 @@ export function ExternalSettingsPage({ kind }: { kind: "rag" | "nl2sql" }) {
 
   return (
     <>
-      <PageHeader title={title} subtitle={subtitle} />
-      <PageBody>
-<div className="max-w-3xl space-y-5">
+      <PageHeader wide title={title} subtitle={subtitle} />
+      <PageBody wide>
+<div className="space-y-5">
         <QueryState query={settings}>
           <ConnectionBanner settings={settings.data} />
           <Card>
@@ -1437,36 +1432,39 @@ export function ExternalSettingsPage({ kind }: { kind: "rag" | "nl2sql" }) {
               <CardDescription>{t("settings.apiKeyManaged")}</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <Field label={t("settings.baseUrl")} htmlFor={`${kind}-base-url`}>
-                <input
-                  id={`${kind}-base-url`}
-                  value={baseUrl}
-                  onChange={(event) => setBaseUrl(event.target.value)}
-                  className={INPUT_CLASS}
-                />
-              </Field>
-              <Field label={t("settings.timeout")} htmlFor={`${kind}-timeout`}>
-                <input
-                  id={`${kind}-timeout`}
-                  type="number"
-                  min="1"
-                  value={timeoutSeconds}
-                  onChange={(event) => setTimeoutSeconds(event.target.value)}
-                  className={INPUT_CLASS}
-                />
-              </Field>
-              {isNl2Sql ? (
-                <Field label={t("settings.defaultLimit")} htmlFor="nl2sql-default-limit">
+              {/* URL は全幅、タイムアウト・既定件数は 2 列に並べる。 */}
+              <div className="grid gap-x-6 gap-y-4 lg:grid-cols-2">
+                <Field label={t("settings.baseUrl")} htmlFor={`${kind}-base-url`} className="lg:col-span-2">
                   <input
-                    id="nl2sql-default-limit"
-                    type="number"
-                    min="1"
-                    value={defaultLimit}
-                    onChange={(event) => setDefaultLimit(event.target.value)}
+                    id={`${kind}-base-url`}
+                    value={baseUrl}
+                    onChange={(event) => setBaseUrl(event.target.value)}
                     className={INPUT_CLASS}
                   />
                 </Field>
-              ) : null}
+                <Field label={t("settings.timeout")} htmlFor={`${kind}-timeout`}>
+                  <input
+                    id={`${kind}-timeout`}
+                    type="number"
+                    min="1"
+                    value={timeoutSeconds}
+                    onChange={(event) => setTimeoutSeconds(event.target.value)}
+                    className={INPUT_CLASS}
+                  />
+                </Field>
+                {isNl2Sql ? (
+                  <Field label={t("settings.defaultLimit")} htmlFor="nl2sql-default-limit">
+                    <input
+                      id="nl2sql-default-limit"
+                      type="number"
+                      min="1"
+                      value={defaultLimit}
+                      onChange={(event) => setDefaultLimit(event.target.value)}
+                      className={INPUT_CLASS}
+                    />
+                  </Field>
+                ) : null}
+              </div>
               {mutation.error ? <Banner severity="danger">{mutation.error.message}</Banner> : null}
               <Button onClick={save} loading={mutation.isPending} icon={Save}>
                 {t("common.save")}
@@ -1765,9 +1763,9 @@ export function McpServersPage() {
 
   return (
     <>
-      <PageHeader title={t("nav.settingsExternalMcp")} subtitle={t("page.settings.mcp.subtitle")} />
-      <PageBody>
-<div className="max-w-5xl space-y-5">
+      <PageHeader wide title={t("nav.settingsExternalMcp")} subtitle={t("page.settings.mcp.subtitle")} />
+      <PageBody wide>
+<div className="space-y-5">
         <QueryState query={servers}>
           <Card>
             <CardHeader className="flex flex-row items-start justify-between gap-3">
@@ -2227,9 +2225,9 @@ export function SkillsPage() {
 
   return (
     <>
-      <PageHeader title={t("skills.title")} subtitle={t("page.skills.subtitle")} />
-      <PageBody>
-<div className="max-w-5xl space-y-5">
+      <PageHeader wide title={t("skills.title")} subtitle={t("page.skills.subtitle")} />
+      <PageBody wide>
+<div className="space-y-5">
         <QueryState query={skills}>
           <Card>
             <CardHeader className="gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -2638,9 +2636,9 @@ export function PluginsPage() {
 
   return (
     <>
-      <PageHeader title={t("plugins.title")} subtitle={t("page.plugins.subtitle")} />
-      <PageBody>
-<div className="max-w-5xl space-y-5">
+      <PageHeader wide title={t("plugins.title")} subtitle={t("page.plugins.subtitle")} />
+      <PageBody wide>
+<div className="space-y-5">
         <QueryState query={plugins}>
           <Card>
             <CardHeader className="gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -2908,9 +2906,9 @@ export function PluginMarketplacesPage() {
 
   return (
     <>
-      <PageHeader title={t("marketplaces.title")} subtitle={t("page.pluginMarketplaces.subtitle")} />
-      <PageBody>
-<div className="max-w-5xl space-y-5">
+      <PageHeader wide title={t("marketplaces.title")} subtitle={t("page.pluginMarketplaces.subtitle")} />
+      <PageBody wide>
+<div className="space-y-5">
         <QueryState query={markets}>
           <Card>
             <CardHeader className="flex flex-row items-start justify-between gap-3">
@@ -3208,9 +3206,9 @@ export function CommandPolicySettingsPage() {
 
   return (
     <>
-      <PageHeader title={t("nav.settingsCommandPolicy")} subtitle={t("page.settings.commandPolicy.subtitle")} />
-      <PageBody>
-<div className="max-w-4xl space-y-5">
+      <PageHeader wide title={t("nav.settingsCommandPolicy")} subtitle={t("page.settings.commandPolicy.subtitle")} />
+      <PageBody wide>
+<div className="space-y-5">
         <QueryState query={settings}>
           <Banner severity="info">{t("settings.commandPolicy.enabledHint")}</Banner>
           <Card className="min-w-0">
@@ -3395,9 +3393,9 @@ export function ToolPolicySettingsPage() {
 
   return (
     <>
-      <PageHeader title={t("nav.settingsToolPolicy")} subtitle={t("page.settings.toolPolicy.subtitle")} />
-      <PageBody>
-<div className="max-w-5xl space-y-5">
+      <PageHeader wide title={t("nav.settingsToolPolicy")} subtitle={t("page.settings.toolPolicy.subtitle")} />
+      <PageBody wide>
+<div className="space-y-5">
         <QueryState query={settings}>
           <Card className="min-w-0">
             <CardHeader>
@@ -3533,9 +3531,9 @@ export function RuntimeSafetySettingsPage() {
 
   return (
     <>
-      <PageHeader title={t("nav.settingsRuntimeSafety")} subtitle={t("page.settings.runtimeSafety.subtitle")} />
-      <PageBody>
-<div className="max-w-3xl space-y-5">
+      <PageHeader wide title={t("nav.settingsRuntimeSafety")} subtitle={t("page.settings.runtimeSafety.subtitle")} />
+      <PageBody wide>
+<div className="space-y-5">
         <QueryState query={settings}>
           <Banner severity="info">{t("settings.runtimeSafety.guardrail")}</Banner>
           <Card className="min-w-0">
@@ -3544,29 +3542,31 @@ export function RuntimeSafetySettingsPage() {
               <CardDescription>{t("page.settings.runtimeSafety.subtitle")}</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <Field label={t("settings.runtimeSafety.maxToolCalls")} htmlFor="runtime-safety-max-tool-calls">
-                <input
-                  id="runtime-safety-max-tool-calls"
-                  type="number"
-                  min="0"
-                  value={maxToolCalls}
-                  onChange={(event) => setMaxToolCalls(event.target.value)}
-                  className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                />
-              </Field>
-              <Field
-                label={t("settings.runtimeSafety.maxPendingApprovals")}
-                htmlFor="runtime-safety-max-pending-approvals"
-              >
-                <input
-                  id="runtime-safety-max-pending-approvals"
-                  type="number"
-                  min="0"
-                  value={maxPendingApprovals}
-                  onChange={(event) => setMaxPendingApprovals(event.target.value)}
-                  className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                />
-              </Field>
+              <div className="grid gap-x-6 gap-y-4 lg:grid-cols-2">
+                <Field label={t("settings.runtimeSafety.maxToolCalls")} htmlFor="runtime-safety-max-tool-calls">
+                  <input
+                    id="runtime-safety-max-tool-calls"
+                    type="number"
+                    min="0"
+                    value={maxToolCalls}
+                    onChange={(event) => setMaxToolCalls(event.target.value)}
+                    className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  />
+                </Field>
+                <Field
+                  label={t("settings.runtimeSafety.maxPendingApprovals")}
+                  htmlFor="runtime-safety-max-pending-approvals"
+                >
+                  <input
+                    id="runtime-safety-max-pending-approvals"
+                    type="number"
+                    min="0"
+                    value={maxPendingApprovals}
+                    onChange={(event) => setMaxPendingApprovals(event.target.value)}
+                    className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  />
+                </Field>
+              </div>
               {formError ? <Banner severity="danger">{formError}</Banner> : null}
               {mutation.error ? <Banner severity="danger">{mutation.error.message}</Banner> : null}
               <Button onClick={save} loading={mutation.isPending} icon={Save}>
@@ -3690,6 +3690,7 @@ export function RuntimeSnapshotSettingsPage() {
   return (
     <>
       <PageHeader
+        wide
         title={t("nav.settingsRuntimeSnapshot")}
         subtitle={t("page.settings.runtimeSnapshot.subtitle")}
         actions={
@@ -3701,7 +3702,7 @@ export function RuntimeSnapshotSettingsPage() {
           </Button>
         }
       />
-      <PageBody className="grid min-w-0 grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+      <PageBody wide className="grid min-w-0 grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <QueryState query={snapshot}>
           <Card className="min-w-0">
             <CardHeader className="flex-row flex-wrap items-start justify-between gap-3">
@@ -5178,9 +5179,19 @@ function ConnectionBanner({ settings }: { settings?: ExternalServiceSettings }) 
   );
 }
 
-function Field({ label, htmlFor, children }: { label: string; htmlFor: string; children: ReactNode }) {
+function Field({
+  label,
+  htmlFor,
+  className,
+  children,
+}: {
+  label: string;
+  htmlFor: string;
+  className?: string;
+  children: ReactNode;
+}) {
   return (
-    <div className="space-y-1.5">
+    <div className={className ? `space-y-1.5 ${className}` : "space-y-1.5"}>
       <label htmlFor={htmlFor} className="text-sm font-medium text-fg">
         {label}
       </label>
