@@ -65,7 +65,7 @@ import {
   DbObjectSelectorToolbar,
   DbObjectStepIndicator,
   DbSingleObjectPickerList,
-  dbAdminObjectQualifiedName,
+  formatDbObjectName,
   parseDbAdminObjectTarget,
   rowCountLabel,
   sortDbObjectPickerItems,
@@ -74,6 +74,8 @@ import {
   type DbObjectTab,
   type DbObjectPickerItem,
 } from "../components/DbObjectManagementShared";
+import { DbObjectName } from "../components/DbObjectName";
+import { formatDbAdminObjectPart } from "../dbObjectIdentity";
 import { BUSINESS_SELECT_AI_DB_PROFILES_URL } from "../selectAiProfileUrls";
 import { useSchemaRefreshCoordinator } from "../SchemaRefreshCoordinator";
 import {
@@ -276,7 +278,7 @@ export function DataManagementPage() {
   const previewObjects = useMemo<PreviewObject[]>(() => {
     return previewObjectItems.map((item) => ({
       name: item.name,
-      qualifiedName: dbAdminObjectQualifiedName(item),
+      qualifiedName: formatDbObjectName(item),
       kind: item.object_type === "view" ? ("view" as const) : ("table" as const),
       owner: item.owner,
       rowCount: item.row_count,
@@ -332,8 +334,8 @@ export function DataManagementPage() {
     () =>
       sortDbObjectPickerItems(
         csvTableItems.map<DbObjectPickerItem>((item) => ({
-          key: dbAdminObjectQualifiedName(item),
-          name: dbAdminObjectQualifiedName(item),
+          key: formatDbObjectName(item),
+          name: formatDbObjectName(item),
           kind: "table",
           owner: item.owner,
           comment: item.comment,
@@ -2309,7 +2311,7 @@ function SyntheticWorkspace({
                         className="h-4 w-4 rounded border-border text-accent-fg focus:ring-focus-ring"
                         aria-label={t("dataTools.syntheticData.tableOption", { name: tableName })}
                       />
-                      <span className="min-w-0 break-all font-mono text-xs">{tableName}</span>
+                      <DbObjectName value={tableName} size="xs" interactive className="min-w-0" />
                     </label>
                   );
                 })}
@@ -2490,9 +2492,9 @@ function SyntheticWorkspace({
           <ErrorState message={resultError} onRetry={onLoadSyntheticDataResults} />
         ) : syntheticDataResults ? (
           <div className="grid min-w-0 gap-2">
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <DbObjectName value={syntheticDataResults.table_name} size="sm" />
               <StatusBadge icon={false} variant="neutral" label={syntheticDataResults.runtime} />
-              <StatusBadge icon={false} variant="info" label={syntheticDataResults.table_name} />
             </div>
             {syntheticDataResults.warnings.map((warning) => (
               <p key={warning} className="rounded-md border border-warning-border bg-warning-subtle px-3 py-2 text-sm text-warning-fg">
@@ -2637,9 +2639,16 @@ function profileObjectName(item: unknown) {
   if (typeof name !== "string") return "";
   const trimmedName = name.trim();
   if (!trimmedName) return "";
-  return typeof owner === "string" && owner.trim()
-    ? `${owner.trim()}.${trimmedName}`
-    : trimmedName;
+  const trimmedOwner = typeof owner === "string" ? owner.trim() : "";
+  // profile の object_list は利用者の入力値のため、backend と同じ入力規則で正規化する
+  // （引用符のない名前は大文字化）。owner が無い場合は名前だけにし、推測で補わない。
+  try {
+    return trimmedOwner
+      ? parseDbAdminObjectTarget(trimmedName, trimmedOwner).qualifiedName
+      : formatDbAdminObjectPart(trimmedName);
+  } catch {
+    return trimmedOwner ? `${trimmedOwner}.${trimmedName}` : trimmedName;
+  }
 }
 
 function uniqueStrings(values: string[]) {

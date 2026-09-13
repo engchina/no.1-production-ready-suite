@@ -1,5 +1,6 @@
 // Ontology ノード/関係の物理識別(owner.object.column)と Join 条件表記の共有実装。
 // ER 詳細(erDetails.ts)と関係一覧(types.ts)で同じ表記を使うため、ここを唯一の実装とする。
+import { formatDbObjectName } from "../dbObjectIdentity";
 import type {
   OntologyEdge,
   OntologyGraph,
@@ -38,8 +39,9 @@ export function objectType(value: string | undefined): ObjectIdentity["objectTyp
   return "unknown";
 }
 
+/** 表・ビューの表示名(`OWNER.OBJECT`)。組み立ては `formatDbObjectName` に委ねる。 */
 export function objectName(identity: ObjectIdentity): string {
-  return identity.owner ? `${identity.owner}.${identity.objectName}` : identity.objectName;
+  return formatDbObjectName({ owner: identity.owner, name: identity.objectName });
 }
 
 export function splitQualifiedName(value: string | undefined): {

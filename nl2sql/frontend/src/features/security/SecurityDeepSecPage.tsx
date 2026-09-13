@@ -56,6 +56,8 @@ import { useUnsavedChangesGuard } from "@/lib/useUnsavedChangesGuard";
 import { useRequestScope } from "@/lib/useRequestScope";
 import { cn } from "@/lib/utils";
 import { selectedVisibleKey } from "@/lib/visible-selection";
+import { formatDbObjectName, formatEntitlementTargetName } from "@/features/nl2sql/dbObjectIdentity";
+import { DbObjectName } from "@/features/nl2sql/components/DbObjectName";
 import { useAuth } from "./AuthProvider";
 import { MENU_PERMISSIONS } from "./menu-permissions";
 import { SecuritySearchField } from "./SecurityManagementShared";
@@ -169,11 +171,7 @@ function migrateLegacyColumnEqualsEntitlement(item: DataEntitlement): DataEntitl
 function entitlementDraftClientKey(item: DataEntitlement, index: number) {
   const entitlementId = item.entitlement_id?.trim();
   if (entitlementId) return `saved:${entitlementId}`;
-  const targetKey =
-    item.target_owner && item.target_object
-      ? `${item.target_owner}.${item.target_object}`
-      : item.resource_code || "blank";
-  return `draft:${index}:${targetKey.toUpperCase()}`;
+  return `draft:${index}:${formatEntitlementTargetName(item) || "BLANK"}`;
 }
 
 function toEntitlementDraft(item: DataEntitlement, index: number): DataEntitlementDraft {
@@ -263,9 +261,8 @@ function entitlementRoleSearchText(role: DeepSecRoleEntitlements) {
 }
 
 function targetQualifiedName(item: Pick<DeepSecTargetObject, "name" | "owner" | "qualified_name">) {
-  const qualifiedName = (item.qualified_name ?? "").trim();
-  if (qualifiedName) return qualifiedName.toUpperCase();
-  return `${item.owner}.${item.name}`.toUpperCase();
+  // カタログ値のまま組み立てる。全体を大文字化すると `APP."MixedCase"` が別の表を指してしまう。
+  return formatDbObjectName(item);
 }
 
 function mergeTargetObjectPages(
@@ -284,10 +281,7 @@ function targetObjectTypeLabel(objectType: string) {
 }
 
 function entitlementTargetKey(entitlement: DataEntitlement) {
-  if (entitlement.target_owner && entitlement.target_object) {
-    return `${entitlement.target_owner}.${entitlement.target_object}`.toUpperCase();
-  }
-  return entitlement.resource_code.toUpperCase();
+  return formatEntitlementTargetName(entitlement);
 }
 
 function entitlementApplyStatus(entitlement: DataEntitlement) {
@@ -480,6 +474,9 @@ function DeepSecTargetObjectPicker({
           loaded: objects.length,
         });
   const hasObjectFilter = Boolean(search.trim() || ownerPrefix.trim());
+  const [selectedPrefix, selectedSuffix = ""] = t("security.deepsec.entitlements.objectSelected", {
+    object: "\u0000",
+  }).split("\u0000");
   return (
     <div className="grid gap-1 text-xs font-medium" data-testid={`security-deepsec-object-picker-${index}`}>
       <span id={titleId}>
@@ -503,12 +500,16 @@ function DeepSecTargetObjectPicker({
           disabled={disabled}
         />
         <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
-          <span className="min-w-0 break-all font-mono text-xs text-fg-muted">
-            {selectedObject || value
-              ? t("security.deepsec.entitlements.objectSelected", {
-                  object: selectedObject ? targetQualifiedName(selectedObject) : value,
-                })
-              : t("security.deepsec.entitlements.objectPlaceholder")}
+          <span className="min-w-0 text-xs text-fg-muted">
+            {selectedObject || value ? (
+              <>
+                {selectedPrefix}
+                <DbObjectName value={selectedObject ? targetQualifiedName(selectedObject) : value} size="xs" />
+                {selectedSuffix}
+              </>
+            ) : (
+              t("security.deepsec.entitlements.objectPlaceholder")
+            )}
           </span>
           <StatusBadge icon={false} variant="info" label={loadedLabel} />
         </div>
@@ -564,9 +565,7 @@ function DeepSecTargetObjectPicker({
                 disabled={disabled}
                 onClick={() => onSelect(qualifiedName)}
               >
-                <span className="break-all font-mono text-xs font-semibold">
-                  {qualifiedName}
-                </span>
+                <DbObjectName value={qualifiedName} size="xs" interactive />
                 <span className="text-xs text-fg-muted">
                   {targetObjectTypeLabel(object.object_type)}
                   {object.comment ? ` · ${object.comment}` : ""}
@@ -2204,7 +2203,11 @@ export function SecurityDeepSecPage() {
                                   >
                                     <span className="flex min-w-0 flex-wrap items-start justify-between gap-2">
                                       <span className="min-w-0">
-                                        <span className="block break-all text-sm font-semibold">{ruleTitle}</span>
+                                        {targetKey ? (
+                                          <DbObjectName value={targetKey} size="sm" interactive className="block" />
+                                        ) : (
+                                          <span className="block break-all text-sm font-semibold">{ruleTitle}</span>
+                                        )}
                                         <span className="mt-1 block break-all font-mono text-xs text-fg-muted">
                                           {entitlement.data_grant_name ||
                                             t("security.deepsec.entitlements.notGenerated")}
@@ -2261,7 +2264,7 @@ export function SecurityDeepSecPage() {
                                           className="break-all text-sm font-semibold"
                                           data-testid={`security-deepsec-entitlement-editor-title-${index}`}
                                         >
-                                          {ruleTitle}
+                                          {targetKey ? <DbObjectName value={targetKey} size="sm" /> : ruleTitle}
                                         </p>
                                         <p className="mt-1 break-all font-mono text-xs text-fg-muted">
                                           {entitlement.data_grant_name ||

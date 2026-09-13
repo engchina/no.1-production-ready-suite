@@ -39,7 +39,7 @@ import {
   DbObjectStepIndicator,
   DropDbObjectDialog,
   dbAdminExecuteFailureMessage,
-  dbAdminObjectQualifiedName,
+  formatDbObjectName,
   dbObjectSortValue,
   parseDbAdminObjectTarget,
   type DbObjectDetailTab,
@@ -413,7 +413,7 @@ export function TableManagementPage() {
   const handleDetailTabChange = (nextTab: DbObjectDetailTab) => {
     setDetailTab(nextTab);
     if (nextTab !== "ddl" || !detail || detail.ddl) return;
-    void detailRequest.loadDdl(dbAdminObjectQualifiedName(detail));
+    void detailRequest.loadDdl(formatDbObjectName(detail));
   };
 
   const returnToList = () => {
@@ -432,7 +432,7 @@ export function TableManagementPage() {
         `/api/nl2sql/db-admin/tables/${encodeURIComponent(target.name)}?${params.toString()}`,
       );
       setDetail((current) =>
-        current && dbAdminObjectQualifiedName(current) === target.qualifiedName
+        current && formatDbObjectName(current) === target.qualifiedName
           ? { ...current, row_count: full.row_count }
           : current,
       );
@@ -574,7 +574,7 @@ export function TableManagementPage() {
     const nextTableName = selectedVisibleStringKey(
       filteredTables,
       selectedTableName,
-      dbAdminObjectQualifiedName,
+      formatDbObjectName,
       { preserveSelected: selectedTableManualSelection.current }
     );
     if (!nextTableName) {
@@ -1019,7 +1019,7 @@ export function TableManagementPage() {
               onTabChange={handleDetailTabChange}
               onRetry={() => void fetchDetail(selectedTableName)}
               onRetryDdl={() => {
-                if (detail) void detailRequest.loadDdl(dbAdminObjectQualifiedName(detail));
+                if (detail) void detailRequest.loadDdl(formatDbObjectName(detail));
               }}
               onCancel={detailRequest.cancel}
               onExport={(name) => void downloadColumnsXlsx(name)}

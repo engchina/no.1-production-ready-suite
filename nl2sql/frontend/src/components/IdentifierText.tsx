@@ -8,10 +8,18 @@ import { identifierWrapSegments } from "@/lib/format";
  * 区切りの直後に `<wbr>` を挟み、区切りのない長い区間だけ `overflow-wrap:anywhere` で折り返す。
  * コピー・検索・読み上げのテキストは元の識別子のまま。
  */
-export function IdentifierText({ value, className = "" }: { value: string; className?: string }) {
+export function IdentifierText({
+  value,
+  className = "",
+  "data-testid": testId,
+}: {
+  value: string;
+  className?: string;
+  "data-testid"?: string;
+}) {
   const segments = identifierWrapSegments(value);
   return (
-    <span className={`[overflow-wrap:anywhere] ${className}`.trim()}>
+    <span className={`[overflow-wrap:anywhere] ${className}`.trim()} data-testid={testId}>
       {segments.map((segment, index) => (
         <Fragment key={index}>
           {index > 0 && <wbr />}

@@ -1,3 +1,4 @@
+import { formatDbObjectName } from "./dbObjectIdentity";
 import type { AllowedObjects, SchemaColumn, SchemaTable } from "./types";
 
 export const SCHEMA_CATALOG_EMPTY_ERROR_CODE = "SCHEMA_CATALOG_EMPTY";
@@ -75,7 +76,11 @@ function quoteSqlIdentifier(value: string) {
 }
 
 export function schemaTableQualifiedName(table: SchemaTable) {
-  return table.qualified_name || `${table.owner}.${table.table_name}`.toUpperCase();
+  return formatDbObjectName({
+    owner: table.owner,
+    name: table.table_name,
+    qualified_name: table.qualified_name,
+  });
 }
 
 export function buildSchemaSqlIdentifierText(table: SchemaTable, column: SchemaColumn) {

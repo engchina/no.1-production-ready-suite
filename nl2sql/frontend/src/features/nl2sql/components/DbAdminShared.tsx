@@ -1,3 +1,4 @@
+import { IdentifierText } from "@/components/IdentifierText";
 import { Pagination } from "@/components/Pagination";
 import { useWorkspaceState, useResetExecutionConsent } from "@/components/WorkspaceState";
 import {
@@ -281,6 +282,8 @@ export function ManagementTabs<TView extends string>({
   );
 }
 
+const PHRASE_PLACEHOLDER = "\u0000";
+
 export function ExecutionConfirmationField({
   value,
   onChange,
@@ -308,6 +311,9 @@ export function ExecutionConfirmationField({
     : value.trim()
       ? t("dbAdmin.confirmation.status.mismatch")
       : t("dbAdmin.confirmation.status.pending");
+  const [expectedPrefix, expectedSuffix = ""] = t("dbAdmin.confirmation.expected", {
+    phrase: PHRASE_PLACEHOLDER,
+  }).split(PHRASE_PLACEHOLDER);
   const containerClass = "grid min-w-0 gap-2 rounded-md border border-border bg-surface-sunken p-3";
   const inputClass = [
     "h-[44px] w-full rounded-md border border-border-control bg-surface px-3 py-2 text-sm outline-none transition-colors placeholder:text-fg-muted disabled:cursor-not-allowed disabled:bg-surface-hover disabled:text-fg-disabled",
@@ -333,8 +339,11 @@ export function ExecutionConfirmationField({
           className="font-semibold text-fg"
         />
         <div className="flex flex-wrap items-center gap-2">
-          <span className="max-w-full break-all rounded-md bg-surface px-2 py-1 font-sans text-xs text-fg">
-            {t("dbAdmin.confirmation.expected", { phrase: expectedLabel })}
+          <span className="max-w-full rounded-md bg-surface px-2 py-1 font-sans text-xs text-fg">
+            {expectedPrefix}
+            {/* 確認語は識別子（ADMIN_EXECUTE・OWNER.OBJECT）なので、入力する文字を読み違えないよう等幅で示す。 */}
+            <IdentifierText value={expectedLabel} className="font-mono font-semibold" />
+            {expectedSuffix}
           </span>
           <span className={statusClass} aria-live="polite">
             {statusLabel}

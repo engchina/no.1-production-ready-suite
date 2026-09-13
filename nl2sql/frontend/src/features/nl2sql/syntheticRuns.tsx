@@ -16,6 +16,7 @@ import { formatDateTime } from "@/lib/format";
 import { INFORMATION_LIST_SCROLL_CLASS, INFORMATION_TABLE_FOCUS_CLASS } from "@/lib/list-density";
 import { useAuth } from "@/features/security/AuthProvider";
 import { syntheticRunPollingInterval } from "./syntheticRunPolling";
+import { DbObjectName } from "./components/DbObjectName";
 
 export interface SyntheticRun {
   preview?: boolean;
@@ -152,7 +153,7 @@ export function SyntheticRunPanel({ run, runs, onSelect, error, onRefresh, submi
       >
         <ul className="grid min-w-0 content-start gap-2">
           {run.targets.map((target) => <li key={target.table_name} className="grid min-w-0 gap-1 rounded border border-border bg-surface p-3 text-sm [overflow-wrap:anywhere]">
-            <strong className="break-all">{target.table_name}</strong>
+            <DbObjectName value={target.table_name} size="sm" />
             <span>{t(run.preview ? "syntheticPreview.count" : "syntheticRun.count", { requested: target.requested_rows, loaded: target.loaded_rows ?? t("syntheticRun.unverified") })}</span>
             <span>{t("syntheticRun.targetStatus", { status: targetStatusLabel(run.status === "unknown" && target.status === "pending" ? "unknown" : target.status) })}</span>
             {target.error && <p className="text-danger-fg">{target.error}</p>}

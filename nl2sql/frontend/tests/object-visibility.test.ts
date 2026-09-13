@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  dbAdminObjectQualifiedName,
+  formatDbObjectName,
   parseDbAdminObjectTarget,
 } from "../src/features/nl2sql/dbObjectIdentity.ts";
 import {
@@ -173,9 +173,9 @@ test("DB admin pages remove dollar and hash objects defensively", () => {
 
 test("DB admin object identity preserves quoted and non-ASCII identifiers", () => {
   assert.equal(parseDbAdminObjectTarget("app.orders").qualifiedName, "APP.ORDERS");
-  assert.equal(dbAdminObjectQualifiedName({ name: "lower", owner: "APP" }), 'APP."lower"');
+  assert.equal(formatDbObjectName({ name: "lower", owner: "APP" }), 'APP."lower"');
   assert.equal(
-    dbAdminObjectQualifiedName({ name: "ignored", qualified_name: 'APP."売上"' }),
+    formatDbObjectName({ name: "ignored", qualified_name: 'APP."売上"' }),
     'APP."売上"'
   );
   assert.deepEqual(parseDbAdminObjectTarget('APP."lower"'), {

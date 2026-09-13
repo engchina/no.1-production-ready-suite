@@ -45,6 +45,7 @@ import {
   groundedRelationshipRows,
   type PlaygroundResult,
 } from "./queryPlayground";
+import { DbObjectName } from "../components/DbObjectName";
 import { normalizeGroundingText } from "./groundingMatcher";
 import {
   type OntologyContextSearchResult,
@@ -362,6 +363,13 @@ function RelationshipCard({
             >
               {row.detail_text}
             </code>
+          ) : row.detail_kind === "physical" ? (
+            <DbObjectName
+              value={row.detail_text}
+              size="xs"
+              className="leading-5"
+              data-testid="ontology-inspector-relationship-detail"
+            />
           ) : (
             <span
               className="break-all text-xs leading-5 text-fg"
@@ -589,11 +597,8 @@ function OntologyErDetailsPanel({ details }: { details: OntologyErDetails }) {
             <Table2 size={16} className="text-accent-fg" aria-hidden="true" />
             {t("ontologyPlayground.erDetailsTitle")}
           </h3>
-          <p
-            className="mt-1 break-all font-mono text-xs leading-5 text-fg-muted"
-            data-testid="ontology-er-detail-object-name"
-          >
-            {details.objectName}
+          <p className="mt-1 leading-5">
+            <DbObjectName value={details.objectName} size="xs" data-testid="ontology-er-detail-object-name" />
           </p>
         </div>
         <div className="flex flex-wrap gap-2" aria-label={t("ontologyPlayground.erSummary")}>

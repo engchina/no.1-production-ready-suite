@@ -1,12 +1,5 @@
+import { formatDbObjectName } from "./dbObjectIdentity";
 import type { DbAdminObjectDetail } from "./types";
-
-function detailQualifiedName(detail: DbAdminObjectDetail) {
-  const qualified = (detail.qualified_name ?? "").trim();
-  if (qualified) return qualified.toUpperCase();
-  const owner = detail.owner.trim().toUpperCase();
-  const name = detail.name.trim().toUpperCase();
-  return owner ? `${owner}.${name}` : name;
-}
 
 export function buildMetadataInputTexts(
   details: DbAdminObjectDetail[],
@@ -18,7 +11,7 @@ export function buildMetadataInputTexts(
   const samples: string[] = [];
 
   for (const detail of details) {
-    const qualifiedName = detailQualifiedName(detail);
+    const qualifiedName = formatDbObjectName(detail);
     structure.push(
       [
         `OBJECT: ${qualifiedName}`,

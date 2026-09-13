@@ -30,7 +30,7 @@ import {
   DbObjectStepIndicator,
   DropDbObjectDialog,
   dbAdminExecuteFailureMessage,
-  dbAdminObjectQualifiedName,
+  formatDbObjectName,
   dbObjectSortValue,
   parseDbAdminObjectTarget,
   type DbObjectDetailTab,
@@ -38,6 +38,7 @@ import {
   type DbObjectSortKey,
   type DbObjectSortState,
 } from "../components/DbObjectManagementShared";
+import { DbObjectName } from "../components/DbObjectName";
 import { StatementRunnerCard, downloadBlob } from "../components/DbAdminShared";
 import type {
   DbAdminExecuteData,
@@ -119,8 +120,8 @@ function ViewJoinWherePanel({
           data-testid="view-join-where-selected-view"
         >
           <div className="flex flex-wrap items-center gap-2">
+            <DbObjectName object={detail} size="sm" data-testid="view-join-where-selected-view-name" />
             <StatusBadge icon={false} variant="neutral" label={detail.object_type} />
-            <StatusBadge icon={false} variant="info" label={detail.name} />
           </div>
           <p className="text-sm text-fg-muted">{t("viewMgmt.joinWhere.selectedHint")}</p>
         </section>
@@ -377,7 +378,7 @@ export function ViewManagementPage() {
   const handleDetailTabChange = (nextTab: DbObjectDetailTab) => {
     setDetailTab(nextTab);
     if (nextTab !== "ddl" || !detail || detail.ddl) return;
-    void detailRequest.loadDdl(dbAdminObjectQualifiedName(detail));
+    void detailRequest.loadDdl(formatDbObjectName(detail));
   };
 
   const returnToList = () => {
@@ -446,12 +447,12 @@ export function ViewManagementPage() {
       detail.ddl ||
       detailRequest.ddlLoading ||
       detailRequest.ddlError ||
-      autoJoinWhereDdlName.current === dbAdminObjectQualifiedName(detail)
+      autoJoinWhereDdlName.current === formatDbObjectName(detail)
     ) {
       return;
     }
-    autoJoinWhereDdlName.current = dbAdminObjectQualifiedName(detail);
-    void detailRequest.loadDdl(dbAdminObjectQualifiedName(detail));
+    autoJoinWhereDdlName.current = formatDbObjectName(detail);
+    void detailRequest.loadDdl(formatDbObjectName(detail));
   }, [
     activeView,
     detail?.name,
@@ -506,7 +507,7 @@ export function ViewManagementPage() {
     const nextViewName = selectedVisibleStringKey(
       filteredViews,
       selectedViewName,
-      dbAdminObjectQualifiedName,
+      formatDbObjectName,
       { preserveSelected: selectedViewManualSelection.current }
     );
     if (!nextViewName) {
@@ -653,7 +654,7 @@ export function ViewManagementPage() {
         onRetryDdl={() => {
           if (detail) {
             autoJoinWhereDdlName.current = "";
-            void detailRequest.loadDdl(dbAdminObjectQualifiedName(detail));
+            void detailRequest.loadDdl(formatDbObjectName(detail));
           }
         }}
       />
@@ -834,7 +835,7 @@ export function ViewManagementPage() {
               onTabChange={handleDetailTabChange}
               onRetry={() => void fetchDetail(selectedViewName)}
               onRetryDdl={() => {
-                if (detail) void detailRequest.loadDdl(dbAdminObjectQualifiedName(detail));
+                if (detail) void detailRequest.loadDdl(formatDbObjectName(detail));
               }}
               onCancel={detailRequest.cancel}
               onExport={(name) => void downloadColumnsXlsx(name)}
