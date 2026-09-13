@@ -232,7 +232,7 @@ __marimo__/
 .streamlit/secrets.toml
 
 # Frontend (Next.js)
-node_modules/
+node_modules
 .next/
 out/
 next-env.d.ts
