@@ -219,15 +219,15 @@ const OntologyNodeCard = memo(function OntologyNodeCard({
         width: NODE_WIDTH,
         minHeight: NODE_HEIGHT,
         border: `${emphasizedBorder ? 2 : 1}px solid ${
-          highlighted ? cssVar("--primary") : nodeStroke(node, Boolean(selected))
+          highlighted ? cssVar("--color-accent-fg") : nodeStroke(node, Boolean(selected))
         }`,
         borderRadius: nodeShape(node),
         background: nodeFill(node),
-        color: cssVar("--graph-fg"),
+        color: cssVar("--color-graph-fg"),
         opacity: dimmed ? 0.35 : 1,
         // 検索一致は接地ハイライト(枠)と区別できるリングで示す
         boxShadow: searchMatched
-          ? `0 0 0 3px color-mix(in srgb, ${cssVar("--warning")} 65%, transparent)`
+          ? `0 0 0 3px color-mix(in srgb, ${cssVar("--color-warning-fg")} 65%, transparent)`
           : undefined,
       }}
     >
@@ -390,7 +390,7 @@ function OntologyGraphLegend({
         <span className="inline-flex items-center gap-1 whitespace-normal px-1">
           <span
             className="h-px w-5 shrink-0 border-t"
-            style={{ borderColor: cssVar("--graph-line") }}
+            style={{ borderColor: cssVar("--color-graph-line") }}
             aria-hidden="true"
           />
           {t("nl2sql.ontology.legend.mapping")}
@@ -997,11 +997,11 @@ function OntologyFlow({
         ariaLabel: `${edge.relationship_name_ja}${
           emphasis.highlightEdges.has(edge.id) ? t("nl2sql.ontology.edgeGroundedSuffix") : ""
         }`,
-        markerEnd: { type: MarkerType.ArrowClosed, color: cssVar("--graph-line") },
+        markerEnd: { type: MarkerType.ArrowClosed, color: cssVar("--color-graph-line") },
         // hover/選択中のエッジラベルは他エッジより前面に出す
         ...(showFullLabel ? { zIndex: 1000 } : {}),
         style: {
-          stroke: highlighted || selected ? cssVar("--primary") : edgeStroke(edge),
+          stroke: highlighted || selected ? cssVar("--color-accent-fg") : edgeStroke(edge),
           strokeWidth: highlighted || selected
             ? 2.5
             : edge.validation_status === "blocked"
@@ -1014,8 +1014,8 @@ function OntologyFlow({
             edge.review_status === "proposed" ? "5 4" : mappingEdge ? "4 3" : undefined,
           opacity: emphasis.active && !highlighted ? 0.3 : hoverDimmed ? 0.35 : 1,
         },
-        labelStyle: { fill: cssVar("--muted"), fontSize: 11, fontWeight: 600 },
-        labelBgStyle: { fill: cssVar("--card"), fillOpacity: 0.92 },
+        labelStyle: { fill: cssVar("--color-fg-muted"), fontSize: 11, fontWeight: 600 },
+        labelBgStyle: { fill: cssVar("--color-surface"), fillOpacity: 0.92 },
         labelBgPadding: [6, 3] as [number, number],
         labelBgBorderRadius: 4,
       };
@@ -1128,7 +1128,7 @@ function OntologyFlow({
         onEdgeMouseLeave={() => setHoveredEdgeId(null)}
         proOptions={{ hideAttribution: true }}
       >
-        <Background color={cssVar("--border")} gap={20} size={1} />
+        <Background color={cssVar("--color-border")} gap={20} size={1} />
         <LaneOverlays lanes={semanticLayout.lanes} />
         {visibleGraph.nodes.length > 12 ? (
           // 小規模グラフでは全体が一目で見えるため出さない(白い矩形ノイズを避ける)
@@ -1138,14 +1138,14 @@ function OntologyFlow({
             position="bottom-right"
             aria-label={t("nl2sql.ontology.graphMinimap")}
             style={{ width: 140, height: 90 }}
-            bgColor={cssVar("--card")}
+            bgColor={cssVar("--color-surface")}
             maskColor="color-mix(in srgb, var(--color-border) 45%, transparent)"
             // 種別(型チャネル)の塗りをミニマップにも反映し、縮小表示でも構造が読めるようにする
             nodeColor={(node) => {
               const data = node.data as OntologyNodeData | undefined;
-              return data?.node ? nodeFill(data.node) : cssVar("--graph-line");
+              return data?.node ? nodeFill(data.node) : cssVar("--color-graph-line");
             }}
-            nodeStrokeColor={cssVar("--graph-line")}
+            nodeStrokeColor={cssVar("--color-graph-line")}
           />
         ) : null}
         <FlowControls onResetLayout={resetLayout} resetDisabled={positionOverrides.size === 0} />

@@ -28,7 +28,7 @@ for (const theme of ["light", "dark"]) {
       return {
         label: getComputedStyle(label).color,
         helper: getComputedStyle(helper).color,
-        danger: style.getPropertyValue("--danger").trim(),
+        danger: style.getPropertyValue("--color-danger-fg").trim(),
         background: style.backgroundColor,
         inputBackground: getComputedStyle(input).backgroundColor,
         inputHeight: input.getBoundingClientRect().height,
