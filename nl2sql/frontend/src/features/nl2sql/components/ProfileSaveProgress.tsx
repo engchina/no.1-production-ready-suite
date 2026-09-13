@@ -124,9 +124,6 @@ export function ProfileSaveProgress({
 
   const failed = presentation.status === "failed" || presentation.status === "submission_failed";
   const credentialMissing = job?.error_code === "SELECT_AI_CREDENTIAL_MISSING";
-  // 引用が必要な表名は Select AI の object_list に反映できない（#561）。対象を見直すまで再試行しても
-  // 同じ結果になるため、再試行ボタンは出さない。
-  const retryable = job?.error_code !== "PROFILE_OBJECT_LIST_UNSUPPORTED";
   const shortJobId = job
     ? `${job.job_id.slice(0, 12)}${job.job_id.length > 12 ? "…" : ""}`
     : "";
@@ -177,30 +174,26 @@ export function ProfileSaveProgress({
             severity="danger"
             className="mx-4 mb-4"
             action={
-              credentialMissing || retryable ? (
-                <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
-                  {credentialMissing ? (
-                    <Link
-                      to={credentialSettingsHref(job)}
-                      className={`${buttonVariants({ variant: "secondary", size: "sm" })} w-full sm:w-auto`}
-                    >
-                      <Database size={16} aria-hidden="true" />
-                      <span>{t("profiles.oracle.sync.openDatabaseSettings")}</span>
-                    </Link>
-                  ) : null}
-                  {retryable ? (
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      size="sm"
-                      className="w-full sm:w-auto"
-                      loading={retrying}
-                      onClick={onRetry} icon={RefreshCw}>
-                      <span>{t("profiles.oracle.sync.retry")}</span>
-                    </Button>
-                  ) : null}
-                </div>
-              ) : undefined
+              <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
+                {credentialMissing ? (
+                  <Link
+                    to={credentialSettingsHref(job)}
+                    className={`${buttonVariants({ variant: "secondary", size: "sm" })} w-full sm:w-auto`}
+                  >
+                    <Database size={16} aria-hidden="true" />
+                    <span>{t("profiles.oracle.sync.openDatabaseSettings")}</span>
+                  </Link>
+                ) : null}
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  className="w-full sm:w-auto"
+                  loading={retrying}
+                  onClick={onRetry} icon={RefreshCw}>
+                  <span>{t("profiles.oracle.sync.retry")}</span>
+                </Button>
+              </div>
             }
           >
             {failureMessage(job, submissionError)}

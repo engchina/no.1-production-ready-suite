@@ -1622,7 +1622,7 @@ test("異なる schema の同名表を別々に選択できる", async ({ page }
   await expect(tableList.getByLabel("APP.ORDERS")).toHaveCount(0);
 });
 
-test("引用が必要な表名は大文字化せず、大文字の同名表と別に選択・保存する (#561)", async ({ page }) => {
+test("引用が必要な表名は大文字化せず、大文字の同名表と別に選択・保存し Oracle へ反映する (#561, #564)", async ({ page }) => {
   const quotedCatalog = {
     ...schemaCatalog,
     tables: [
@@ -1660,25 +1660,6 @@ test("引用が必要な表名は大文字化せず、大文字の同名表と�
     savedPayload = route.request().postDataJSON() as { allowed_tables: string[] };
     await fulfillJson(route, { ...quotedProfiles[0], ...savedPayload, id: "default" });
   });
-  const unsupportedMessage =
-    'SALES."Mixed_Case": 大文字小文字の混在や記号を含み引用が必要な表・ビュー名は、' +
-    "Select AI Profile の object_list に反映できません。";
-  await page.route("**/api/nl2sql/oracle-sync-jobs/*", (route) =>
-    fulfillJson(route, {
-      job_id: "profile-sync-default",
-      profile_id: "default",
-      profile_etag: "etag-default",
-      status: "failed",
-      phase: "failed",
-      rebuild_agent_assets: false,
-      error_code: "PROFILE_OBJECT_LIST_UNSUPPORTED",
-      error_message_ja: unsupportedMessage,
-      created_at: "2026-07-22T00:00:00Z",
-      finished_at: "2026-07-22T00:00:01Z",
-      oracle_result: null,
-    })
-  );
-
   await page.goto("/profiles?profile=default");
 
   const tableList = page.getByTestId("profile-allowed-table-list");
@@ -1713,11 +1694,10 @@ test("引用が必要な表名は大文字化せず、大文字の同名表と�
   await page.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
   await page.getByRole("button", { name: "保存", exact: true }).click();
 
+  // #564: 引用名の表も Select AI Profile の object_list に `"Mixed_Case"` として反映できる
+  // （実 Oracle で確認済み）。同期 job は通常どおり成功し、未対応エラーにしない。
   const status = page.getByTestId("profile-save-progress");
-  await expect(status).toHaveAttribute("data-job-status", "failed");
-  await expect(status).toContainText(unsupportedMessage);
-  // 対象を見直すまで結果が変わらないため、再試行は出さない。
-  await expect(status.getByRole("button", { name: "Oracle 反映を再試行" })).toHaveCount(0);
+  await expect(status).toHaveAttribute("data-job-status", "succeeded");
   const payload = savedPayload as { allowed_tables: string[] } | null;
   expect(payload?.allowed_tables).toEqual(['SALES."Mixed_Case"']);
   await expectNoDocumentHorizontalOverflow(page);

@@ -23,11 +23,7 @@ from .models import (
 )
 from .ontology_observability import record_job
 from .ontology_store import OntologyStore, OntologyVersionConflict, canonical_json
-from .oracle_adapter import (
-    OracleAdapterError,
-    SelectAiCredentialMissingError,
-    SelectAiObjectListUnsupportedError,
-)
+from .oracle_adapter import OracleAdapterError, SelectAiCredentialMissingError
 from .service import Nl2SqlService, nl2sql_service
 
 logger = logging.getLogger(__name__)
@@ -55,9 +51,6 @@ def _profile_sync_public_error(exc: Exception) -> tuple[str, str]:
                 "Oracle 反映を再試行してください。"
             ),
         )
-    if isinstance(exc, SelectAiObjectListUnsupportedError):
-        # 再試行では解消しないため、対象の見直しを促す文言をそのまま返す（#561）。
-        return "PROFILE_OBJECT_LIST_UNSUPPORTED", str(exc)
     if isinstance(exc, OracleAdapterError) or _ORACLE_ERROR_CODE_RE.search(str(exc)):
         return (
             "PROFILE_SYNC_FAILED",
@@ -279,9 +272,6 @@ class ProfileSyncService:
                 original_name=running.original_name,
             ),
         )
-        unsupported_names = oracle_result.engine_meta.get("unsupported_object_list_names")
-        if isinstance(unsupported_names, list) and unsupported_names:
-            raise SelectAiObjectListUnsupportedError(str(name) for name in unsupported_names)
         if not oracle_result.executed or oracle_result.status == "error":
             warning = " ".join(oracle_result.warnings).strip()
             raise RuntimeError(warning or "Oracle DBMS_CLOUD_AI Profile の反映に失敗しました。")
