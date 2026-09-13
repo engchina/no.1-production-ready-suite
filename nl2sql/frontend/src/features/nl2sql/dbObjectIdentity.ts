@@ -72,11 +72,14 @@ function formatDbAdminCatalogPart(value: string): string {
   return `"${normalized.replaceAll('"', '""')}"`;
 }
 
-export function dbAdminObjectQualifiedName(item: {
+/** 表・ビュー名の組み立てに使う入力。API の `owner` / `name` / `qualified_name` をそのまま渡す。 */
+export interface DbObjectNameSource {
   name: string;
-  owner?: string;
-  qualified_name?: string;
-}) {
+  owner?: string | null;
+  qualified_name?: string | null;
+}
+
+function strictDbObjectName(item: DbObjectNameSource) {
   const qualifiedName = (item.qualified_name ?? "").trim();
   if (qualifiedName) {
     const parts = splitIdentifierParts(qualifiedName);
@@ -87,8 +90,49 @@ export function dbAdminObjectQualifiedName(item: {
     return qualifiedName;
   }
   const owner = formatDbAdminCatalogPart(item.owner ?? "");
-  const name = formatDbAdminCatalogPart(item.name);
-  return owner ? `${owner}.${name}` : name;
+  const name = formatDbAdminCatalogPart(item.name ?? "");
+  return owner && name ? `${owner}.${name}` : name;
+}
+
+/**
+ * 表・ビュー名を `OWNER.OBJECT` 形式の文字列にする唯一の実装。
+ *
+ * - `qualified_name` があればそれを優先する。
+ * - owner と name は Oracle のカタログ値（大文字化済み・引用符なし）として扱い、
+ *   `[A-Z][A-Z0-9_$#]*` に当てはまらない部分だけを `"..."` で囲む。
+ *   backend `app/features/nl2sql/object_identity.py` の `qualified_object_name` と同じ規則。
+ * - owner が分からない場合は名前だけを返す（推測で補わない）。
+ * - 表示用のため例外を投げない。引用符の対応が壊れた値は受け取った文字列のまま返す。
+ */
+export function formatDbObjectName(item: DbObjectNameSource): string {
+  try {
+    return strictDbObjectName(item);
+  } catch {
+    const qualifiedName = (item.qualified_name ?? "").trim();
+    if (qualifiedName) return qualifiedName;
+    const owner = (item.owner ?? "").trim();
+    const name = (item.name ?? "").trim();
+    return owner && name ? `${owner}.${name}` : name;
+  }
+}
+
+/**
+ * DeepSec のデータ権限（`target_owner` / `target_object` / `resource_code`）の表示名・比較キー。
+ * backend `DataEntitlementInput` は各部の引用符を外して大文字化してから保存するため、同じ正規化をしてから
+ * `formatDbObjectName` で組み立てる。大文字の単純な識別子では従来のキー（`OWNER.OBJECT` の大文字化）と一致する。
+ */
+export function formatEntitlementTargetName(entitlement: {
+  target_owner?: string | null;
+  target_object?: string | null;
+  resource_code?: string | null;
+}): string {
+  const normalize = (value: string | null | undefined) =>
+    (value ?? "").trim().replaceAll('"', "").toUpperCase();
+  const owner = normalize(entitlement.target_owner);
+  const object = normalize(entitlement.target_object);
+  if (owner && object) return formatDbObjectName({ owner, name: object });
+  const resource = (entitlement.resource_code ?? "").trim().toUpperCase();
+  return resource ? formatDbObjectName({ name: "", qualified_name: resource }) : "";
 }
 
 export function parseDbAdminObjectTarget(value: string, owner = ""): DbAdminObjectTarget {

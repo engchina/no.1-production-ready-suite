@@ -55,12 +55,13 @@ import {
 import { cn } from "@/lib/utils";
 import type { FixedSplitWidePane } from "@/lib/fixed-split-pane";
 import {
-  dbAdminObjectQualifiedName,
+  formatDbObjectName,
   parseDbAdminObjectTarget,
   type DbAdminObjectTarget,
 } from "../dbObjectIdentity";
 import type { DbAdminExecuteData, DbAdminObjectDetail, DbAdminObjectSummary } from "../types";
 import { DbObjectColumnsTable, ExecutionConfirmationField, downloadText } from "./DbAdminShared";
+import { DbObjectName } from "./DbObjectName";
 
 export {
   DbManagementSearchField,
@@ -89,7 +90,7 @@ export type DbObjectSortKey = "name" | "row_count" | "owner";
 export type DbObjectSortDirection = "asc" | "desc";
 export type DbObjectPickerSortKey = "name" | "kind" | "row_count" | "owner";
 export type DbObjectPickerSortDirection = "asc" | "desc";
-export { dbAdminObjectQualifiedName, parseDbAdminObjectTarget };
+export { formatDbObjectName, parseDbAdminObjectTarget };
 export type { DbAdminObjectTarget };
 
 export interface DbObjectSortState {
@@ -166,7 +167,7 @@ export interface DbObjectStatusMetric {
 
 export function dbObjectSortValue(item: DbAdminObjectSummary, key: DbObjectSortKey) {
   if (key === "row_count") return item.row_count ?? -1;
-  if (key === "name") return dbAdminObjectQualifiedName(item).toLowerCase();
+  if (key === "name") return formatDbObjectName(item).toLowerCase();
   return item.owner.toLowerCase();
 }
 
@@ -534,7 +535,7 @@ export function DbObjectSelectionSummary({
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-2 rounded-md border border-accent-emphasis bg-surface px-3 py-2 text-sm text-fg">
       <span className="font-medium text-fg">{label}</span>
-      <span className="break-all font-mono text-xs font-semibold text-accent-fg">{value}</span>
+      <DbObjectName value={value} size="xs" />
       {badge}
     </div>
   );
@@ -659,7 +660,7 @@ export function DbSingleObjectPickerList({
               className="flex min-h-11 w-full min-w-0 flex-col justify-center text-left focus:outline-none focus:ring-2 focus:ring-focus-ring disabled:cursor-not-allowed md:min-h-0"
               onClick={() => onSelect(item)}
             >
-              <IdentifierText value={item.name} className="font-mono text-xs font-semibold text-accent-fg" />
+              <DbObjectName value={item.name} size="xs" interactive />
               <DbObjectCommentText id={commentId} comment={item.comment} />
             </button>
             <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-fg-muted md:hidden" data-testid="db-object-picker-row-meta">
@@ -1056,7 +1057,7 @@ export function DbObjectGrid({
               headerClassName: "w-[55%]",
               className: "align-top",
               render: (item, index) => {
-                const qualifiedName = dbAdminObjectQualifiedName(item);
+                const qualifiedName = formatDbObjectName(item);
                 const commentId = `${idPrefix}-comment-${index}`;
                 return (
                   <button
@@ -1067,7 +1068,7 @@ export function DbObjectGrid({
                     className="grid max-w-full text-left focus:outline-none focus:ring-2 focus:ring-focus-ring"
                     onClick={() => onSelect(qualifiedName)}
                   >
-                    <IdentifierText value={qualifiedName} className="font-mono text-xs font-semibold text-accent-fg" />
+                    <DbObjectName value={qualifiedName} size="xs" interactive />
                     {showComments && <DbObjectCommentText id={commentId} comment={item.comment} />}
                   </button>
                 );
@@ -1092,11 +1093,11 @@ export function DbObjectGrid({
             },
           ]}
           rows={items}
-          getRowKey={(item) => dbAdminObjectQualifiedName(item)}
+          getRowKey={(item) => formatDbObjectName(item)}
           sort={sort}
           onSortChange={(next) => onSortChange(next.key as DbObjectSortKey)}
           selectedRowKey={selectedName}
-          onRowClick={(item) => onSelect(dbAdminObjectQualifiedName(item))}
+          onRowClick={(item) => onSelect(formatDbObjectName(item))}
           rowProps={() => ({ className: DB_OBJECT_GRID_ROW_CLASS })}
           testId={`${idPrefix}-grid`}
           scrollTestId="db-admin-object-list"
@@ -1205,7 +1206,7 @@ export function DbObjectDetailPanel({
     { id: "columns", label: labels.columns, icon: Table2 },
     { id: "ddl", label: labels.ddl, icon: Code2 },
   ] as const;
-  const detailQualifiedName = dbAdminObjectQualifiedName(detail);
+  const detailQualifiedName = formatDbObjectName(detail);
   const detailActions: EntityAction[] = [
     {
       id: "exact-count",
@@ -1246,8 +1247,8 @@ export function DbObjectDetailPanel({
       >
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <h2 id={headingId} className="break-all font-mono text-base font-semibold text-fg">
-              {detailQualifiedName}
+            <h2 id={headingId} className="min-w-0">
+              <DbObjectName value={detailQualifiedName} size="base" />
             </h2>
             <StatusBadge icon={false} variant="neutral" label={detail.object_type} />
             <StatusBadge icon={false} variant="neutral" label={t("dbAdmin.detail.columnCount", { count: detail.columns.length })} />
@@ -1425,7 +1426,9 @@ export function DropDbObjectDialog({
         <div className="grid gap-4 p-4">
           <div className="rounded-md border border-border bg-surface-sunken px-3 py-2">
             <p className="text-xs font-semibold text-fg">{labels.target}</p>
-            <p className="mt-1 break-all font-mono text-sm font-semibold text-fg">{objectName}</p>
+            <p className="mt-1">
+              <DbObjectName value={objectName} size="sm" />
+            </p>
           </div>
           {error && (
             <Banner severity="danger">

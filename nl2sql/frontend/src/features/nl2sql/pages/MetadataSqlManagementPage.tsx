@@ -44,9 +44,10 @@ import {
   DbObjectCommentText,
   DbObjectStepIndicator,
   type DbObjectTab,
-  dbAdminObjectQualifiedName,
+  formatDbObjectName,
   parseDbAdminObjectTarget,
 } from "../components/DbObjectManagementShared";
+import { DbObjectName } from "../components/DbObjectName";
 import { StatementRunnerCard } from "../components/DbAdminShared";
 import { buildMetadataInputTexts } from "../metadataSql";
 import { useDbAdminObjects, useSchemaRefreshJob } from "../incrementalQueries";
@@ -830,8 +831,8 @@ function MetadataTargetGrid({
                       className="mt-1 h-4 w-4 shrink-0 rounded border-border text-accent-fg focus:ring-focus-ring"
                     />
                     <span className="grid min-w-0">
-                      <span id={`${rowId}-name`} className="block font-mono text-xs font-semibold text-accent-fg">
-                        <IdentifierText value={item.qualifiedName} />
+                      <span id={`${rowId}-name`} className="block">
+                        <DbObjectName value={item.qualifiedName} size="xs" interactive />
                       </span>
                       <DbObjectCommentText id={`${rowId}-comment`} comment={item.comment} />
                       <span id={`${rowId}-hint`} className="sr-only">
@@ -1120,7 +1121,7 @@ function MetadataTextarea({ label, value, rows }: { label: string; value: string
 function targetItemsFromObjects(items: DbAdminObjectSummary[]) {
   return items.map((item): MetadataTargetItem => {
     const objectType = normalizeMetadataTargetType(item.object_type);
-    const qualifiedName = dbAdminObjectQualifiedName(item);
+    const qualifiedName = formatDbObjectName(item);
     const target: MetadataSqlTarget = {
       owner: item.owner,
       object_name: item.name,

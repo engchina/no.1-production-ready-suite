@@ -87,6 +87,8 @@ import {
 import type { ProfileListSortKey, ProfileListSortState } from "../profileListState";
 import { BUSINESS_SELECT_AI_DB_PROFILES_URL } from "../selectAiProfileUrls";
 import { schemaTableQualifiedName } from "../workbenchState";
+import { DbObjectName } from "../components/DbObjectName";
+import { formatDbObjectName } from "../dbObjectIdentity";
 import type {
   Nl2SqlProfile,
   ProfileDeleteData,
@@ -307,7 +309,7 @@ function formToPayload(form: ProfileFormState): ProfileUpsertPayload {
 function schemaSummaryToTable(object: SchemaObjectSummary): SchemaTable {
   return {
     table_name: object.object_name,
-    qualified_name: `${object.owner}.${object.object_name}`,
+    qualified_name: formatDbObjectName({ owner: object.owner, name: object.object_name }),
     logical_name: object.logical_name,
     owner: object.owner,
     table_type: object.object_type,
@@ -663,9 +665,7 @@ function SchemaObjectOption({
         className="h-4 w-4 shrink-0 accent-[var(--color-accent-emphasis)]"
       />
       <span className="min-w-0 flex-1">
-        <span className="block truncate font-mono text-xs font-medium text-fg">
-          {qualified}
-        </span>
+        <DbObjectName value={qualified} size="xs" interactive truncate className="block" />
         <span className="block truncate text-xs text-fg-muted">
           {object.logical_name || object.comment || object.table_name}
         </span>

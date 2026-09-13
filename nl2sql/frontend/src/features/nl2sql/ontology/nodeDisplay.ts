@@ -1,3 +1,4 @@
+import { formatDbObjectName } from "../dbObjectIdentity";
 import { conceptKinds, conceptLabel } from "./unifiedConcepts";
 import { t } from "../../../lib/i18n";
 import type { OntologyNode, OntologyNodeKind, OntologyValidationStatus } from "./types";
@@ -26,8 +27,7 @@ export function physicalObjectLabel(node: OntologyNode): string {
   const objectRef = node.physical_mappings?.[0]?.object_ref;
   const owner = objectRef?.owner || metadataString(node, "owner");
   const objectName = objectRef?.object_name || metadataString(node, "object_name");
-  if (owner && objectName) return `${owner}.${objectName}`;
-  if (objectName) return objectName;
+  if (objectName) return formatDbObjectName({ owner, name: objectName });
   return node.technical_name || "";
 }
 

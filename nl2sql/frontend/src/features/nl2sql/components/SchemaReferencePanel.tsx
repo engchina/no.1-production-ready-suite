@@ -19,6 +19,7 @@ import {
   normalizeObjectIdentifier,
   schemaTableQualifiedName,
 } from "../workbenchState";
+import { DbObjectName } from "./DbObjectName";
 import { formatSampleValues, formatSchemaCount } from "../schemaDisplay";
 import type { SchemaCatalog, SchemaColumn, SchemaTable } from "../types";
 
@@ -324,17 +325,22 @@ function SchemaTableItem({
           size="sm"
           type="button"
           disabled={disabled}
-          title={table.comment || table.table_name}
+          title={table.comment || schemaTableQualifiedName(table)}
           onClick={() => onInsert(tableInsertText)}
           className="group w-full min-w-0 flex-1 justify-between"
         >
           <span className="min-w-0 truncate text-sm font-medium text-fg">
             {table.logical_name}
           </span>
-          <span className="min-w-0 truncate font-mono text-xs text-fg-muted">{table.table_name}</span>
-          <span className="shrink-0 rounded border border-border bg-surface-hover px-1.5 py-0.5 font-mono text-xs text-fg-muted">
-            {table.owner}
-          </span>
+          {/* 所有者は修飾名に含まれるため、別の owner バッジは置かない（#555）。 */}
+          <DbObjectName
+            value={schemaTableQualifiedName(table)}
+            size="xs"
+            interactive
+            truncate
+            className="min-w-0"
+            data-testid="nl2sql-schema-table-qualified-name"
+          />
           <span className="ml-auto flex shrink-0 items-center gap-1.5 text-xs text-fg-muted">
             {t("schema.table.rows", { count: formatSchemaCount(table.row_count) })}
             <Plus

@@ -82,6 +82,7 @@ import type {
   SimilarHistoryData,
   SimilarHistoryItem,
 } from "./types";
+import { formatDbObjectName } from "./dbObjectIdentity";
 import { useNl2SqlJobPolling } from "./useNl2SqlJobPolling";
 import {
   emptySelection,
@@ -292,7 +293,7 @@ function ExecutableNl2SqlWorkbench() {
         return (
           schemaDetails[key]?.table ?? {
             table_name: object.object_name,
-            qualified_name: `${object.owner}.${object.object_name}`,
+            qualified_name: formatDbObjectName({ owner: object.owner, name: object.object_name }),
             logical_name: object.logical_name,
             owner: object.owner,
             table_type: object.object_type,

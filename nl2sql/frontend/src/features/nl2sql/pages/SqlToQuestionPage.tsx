@@ -29,6 +29,8 @@ import {
 import { QuestionText } from "../components/QuestionText";
 import { FixedSplitPane } from "@/components/layout/FixedSplitPane";
 import { profileDisplayLabel } from "../profileDisplay";
+import { DbObjectName } from "../components/DbObjectName";
+import { formatDbObjectName } from "../dbObjectIdentity";
 import type {
   Nl2SqlLogicalStructureItem,
   ProfileSummary,
@@ -610,7 +612,11 @@ function SchemaPreview({
             <section key={JSON.stringify([table.owner, table.table_name])} className="rounded-md border border-border bg-surface p-3">
               <p className="font-semibold text-fg">
                 {table.logical_name || table.table_name}
-                <span className="ml-2 font-mono text-xs text-fg-muted">{table.qualified_name || `${table.owner}.${table.table_name}`}</span>
+                <DbObjectName
+                  object={{ owner: table.owner, name: table.table_name, qualified_name: table.qualified_name }}
+                  size="xs"
+                  className="ml-2"
+                />
               </p>
               <p className="mt-1 text-xs leading-5 text-fg-muted">{table.comment || "-"}</p>
               <p className="mt-2 break-words font-sans text-xs leading-5 text-fg">
@@ -635,7 +641,7 @@ function actionableError(error: unknown, fallback: string) {
 function schemaSummaryTable(item: SchemaObjectPage["items"][number]): SchemaTable {
   return {
     table_name: item.object_name,
-    qualified_name: `${item.owner}.${item.object_name}`,
+    qualified_name: formatDbObjectName({ owner: item.owner, name: item.object_name }),
     logical_name: item.logical_name,
     owner: item.owner,
     table_type: item.object_type,
