@@ -515,7 +515,7 @@ function DetailPanel({ detail, tab }: { detail: FeedbackDetail; tab: DetailTab }
 function ContentTab({ detail }: { detail: FeedbackDetail }) {
   const hasSavedText = Boolean(detail.question || detail.answer || detail.comment);
   return (
-    <div id="feedback-tabpanel-content" role="tabpanel" aria-labelledby="feedback-tab-content" className="space-y-4">
+    <div id="feedback-panel-content" role="tabpanel" aria-labelledby="feedback-tab-content" className="space-y-4">
       <DetailSummary detail={detail} />
       {!hasSavedText ? <LegacyNotice /> : null}
       <TextSection title={t("feedback.detail.question")} value={detail.question} />
@@ -531,7 +531,7 @@ function ContentTab({ detail }: { detail: FeedbackDetail }) {
 
 function EvidenceTab({ detail }: { detail: FeedbackDetail }) {
   return (
-    <div id="feedback-tabpanel-evidence" role="tabpanel" aria-labelledby="feedback-tab-evidence" className="space-y-3">
+    <div id="feedback-panel-evidence" role="tabpanel" aria-labelledby="feedback-tab-evidence" className="space-y-3">
       {detail.citations.length ? detail.citations.map((citation, index) => {
         const targeted = detail.target_type === "citation" && citation.chunk_id === detail.chunk_id;
         const link = `${APP_ROUTES.documents}/${encodeURIComponent(citation.document_id)}?chunk_id=${encodeURIComponent(citation.chunk_id)}`;
@@ -573,7 +573,7 @@ function ExecutionTab({ detail }: { detail: FeedbackDetail }) {
     [t("feedback.detail.fingerprint"), detail.execution.config_fingerprint ?? "—"],
   ];
   return (
-    <div id="feedback-tabpanel-execution" role="tabpanel" aria-labelledby="feedback-tab-execution" className="space-y-4">
+    <div id="feedback-panel-execution" role="tabpanel" aria-labelledby="feedback-tab-execution" className="space-y-4">
       <dl className="divide-y divide-border rounded-lg border border-border">
         {rows.map(([label, value]) => <div key={label} className="grid grid-cols-[8rem_minmax(0,1fr)] gap-3 px-3 py-2.5 text-sm"><dt className="text-fg-muted">{label}</dt><dd className="break-all font-mono text-xs leading-5 text-fg">{value}</dd></div>)}
       </dl>

@@ -1215,7 +1215,7 @@ export function DocumentWorkspace({
             {inspectorTab === "text" ? (
               <div
                 role="tabpanel"
-                id="inspector-tabpanel-text"
+                id="inspector-panel-text"
                 aria-labelledby="inspector-tab-text"
                 tabIndex={0}
                 className="xl:h-[60vh] xl:overflow-y-auto xl:pr-1 xl:[scrollbar-gutter:stable]"
@@ -1227,7 +1227,7 @@ export function DocumentWorkspace({
             {inspectorTab === "extraction" ? (
               <div
                 role="tabpanel"
-                id="inspector-tabpanel-extraction"
+                id="inspector-panel-extraction"
                 aria-labelledby="inspector-tab-extraction"
                 tabIndex={0}
                 className="xl:h-[60vh] xl:overflow-y-auto xl:pr-1 xl:[scrollbar-gutter:stable]"
@@ -1337,7 +1337,7 @@ export function DocumentWorkspace({
             {inspectorTab === "chunks" ? (
               <div
                 role="tabpanel"
-                id="inspector-tabpanel-chunks"
+                id="inspector-panel-chunks"
                 aria-labelledby="inspector-tab-chunks"
                 tabIndex={0}
                 className="xl:h-[60vh] xl:overflow-y-auto xl:pr-1 xl:[scrollbar-gutter:stable]"
@@ -1392,7 +1392,7 @@ export function DocumentWorkspace({
             {inspectorTab === "export" ? (
               <div
                 role="tabpanel"
-                id="inspector-tabpanel-export"
+                id="inspector-panel-export"
                 aria-labelledby="inspector-tab-export"
                 tabIndex={0}
                 className="xl:h-[60vh] xl:overflow-y-auto xl:pr-1 xl:[scrollbar-gutter:stable]"
