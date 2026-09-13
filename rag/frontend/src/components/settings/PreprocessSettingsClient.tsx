@@ -1,13 +1,20 @@
 "use client";
 
+import {
+  PageBody,
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+  Button,
+  FormStatus,
+  Skeleton,
+} from "@engchina/production-ready-ui";
 import { useEffect, useState } from "react";
 import { CheckCircle2, RotateCcw, Save, Shuffle } from "lucide-react";
 
 import { ErrorState } from "@/components/StateViews";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { FormStatus } from "@/components/ui/form-status";
-import { Skeleton } from "@/components/ui/skeleton";
 import {
   ApiError,
   type PreprocessProfileName,
@@ -43,15 +50,15 @@ export function PreprocessSettingsClient() {
 
   if (query.isPending) {
     return (
-      <div className="space-y-4 p-8">
+      <PageBody>
         <Skeleton className="h-64 w-full rounded-lg" />
-      </div>
+      </PageBody>
     );
   }
 
   if (query.isError) {
     return (
-      <div className="p-8">
+      <PageBody>
         <ErrorState
           message={
             query.error instanceof ApiError
@@ -60,7 +67,7 @@ export function PreprocessSettingsClient() {
           }
           onRetry={() => void query.refetch()}
         />
-      </div>
+      </PageBody>
     );
   }
 
@@ -99,11 +106,11 @@ export function PreprocessSettingsClient() {
   }
 
   return (
-    <div className="space-y-5 p-8">
+    <PageBody>
       <Card>
         <CardHeader>
           <div className="flex items-start gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-bg text-info">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-subtle text-info-fg">
               <Shuffle size={20} aria-hidden />
             </div>
             <div>
@@ -114,7 +121,7 @@ export function PreprocessSettingsClient() {
         </CardHeader>
         <CardContent className="space-y-5">
           <div className="space-y-2">
-            <div className="text-sm font-medium text-foreground">
+            <div className="text-sm font-medium text-fg">
               {t("settings.preprocess.profile")}
             </div>
             <div
@@ -133,19 +140,19 @@ export function PreprocessSettingsClient() {
                     disabled={save.isPending}
                     onClick={() => choose(status.name)}
                     className={cn(
-                      "min-h-[104px] rounded-md border px-3 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50",
+                      "min-h-[104px] rounded-md border px-3 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50",
                       selected
-                        ? "border-primary bg-primary/10 text-foreground"
-                        : "border-border bg-card text-foreground hover:bg-background"
+                        ? "border-accent-emphasis bg-accent-subtle text-fg"
+                        : "border-border bg-surface text-fg hover:bg-surface-hover"
                     )}
                   >
                     <span className="flex items-center justify-between gap-2">
                       <span className="text-sm font-semibold">{profileLabel(status.name)}</span>
                       {selected ? (
-                        <CheckCircle2 size={15} className="shrink-0 text-primary" aria-hidden />
+                        <CheckCircle2 size={16} className="shrink-0 text-accent-fg" aria-hidden />
                       ) : null}
                     </span>
-                    <span className="mt-1 block text-xs leading-relaxed text-muted">
+                    <span className="mt-1 block text-xs leading-relaxed text-fg-muted">
                       {profileDescription(status.name)}
                     </span>
                     <span className="mt-2 flex flex-wrap gap-1.5">
@@ -196,9 +203,7 @@ export function PreprocessSettingsClient() {
                 variant="secondary"
                 onClick={resetForm}
                 disabled={!dirty || save.isPending}
-                aria-label={t("settings.preprocess.actions.reset")}
-              >
-                <RotateCcw size={15} aria-hidden />
+                aria-label={t("settings.preprocess.actions.reset")} icon={RotateCcw}>
                 {t("settings.preprocess.actions.reset")}
               </Button>
               <Button
@@ -206,30 +211,26 @@ export function PreprocessSettingsClient() {
                 loading={save.isPending}
                 disabled={!dirty}
                 onClick={submit}
-                aria-label={t("settings.preprocess.actions.save")}
-              >
-                <Save size={15} aria-hidden />
-                {save.isPending
-                  ? t("settings.preprocess.actions.saving")
-                  : t("settings.preprocess.actions.save")}
+                aria-label={t("settings.preprocess.actions.save")} icon={Save}>
+                {t("settings.preprocess.actions.save")}
               </Button>
             </div>
           </div>
         </CardContent>
       </Card>
-    </div>
+    </PageBody>
   );
 }
 
 function Badge({ tone, children }: { tone: "info" | "muted" | "warning"; children: string }) {
   const toneClass =
     tone === "info"
-      ? "bg-info-bg text-info"
+      ? "bg-info-subtle text-info-fg"
       : tone === "warning"
-        ? "bg-warning-bg text-warning"
-        : "bg-muted/30 text-muted";
+        ? "bg-warning-subtle text-warning-fg"
+        : "bg-surface-hover text-fg-muted";
   return (
-    <span className={cn("rounded px-1.5 py-0.5 text-[11px] font-medium", toneClass)}>
+    <span className={cn("rounded px-1.5 py-0.5 text-xs font-medium", toneClass)}>
       {children}
     </span>
   );
@@ -237,9 +238,9 @@ function Badge({ tone, children }: { tone: "info" | "muted" | "warning"; childre
 
 function RuntimeFact({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-md border border-border bg-muted/20 p-3">
-      <dt className="text-xs font-medium text-muted">{label}</dt>
-      <dd className="mt-1 break-words text-sm font-semibold text-foreground">{value}</dd>
+    <div className="rounded-md border border-border bg-surface-hover p-3">
+      <dt className="text-xs font-medium text-fg-muted">{label}</dt>
+      <dd className="mt-1 break-words text-sm font-semibold text-fg">{value}</dd>
     </div>
   );
 }

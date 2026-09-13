@@ -1,6 +1,16 @@
 "use client";
 
 import {
+  PageBody,
+  PageHeader,
+  Button,
+  Banner,
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+} from "@engchina/production-ready-ui";
+import {
   AlertTriangle,
   Ban,
   CheckCircle2,
@@ -23,10 +33,6 @@ import { Link } from "react-router-dom";
 import { Dropzone } from "./Dropzone";
 import { DocumentWorkspace } from "@/components/documents/DocumentWorkspace";
 import { KnowledgeBasePickerGrid } from "@/components/knowledge-bases/KnowledgeBasePickerGrid";
-import { PageHeader } from "@/components/PageHeader";
-import { Button } from "@/components/ui/button";
-import { Banner } from "@/components/ui/banner";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ErrorState } from "@/components/StateViews";
 import {
   ApiError,
@@ -110,7 +116,7 @@ export function UploadWorkspace() {
   return (
     <div>
       <PageHeader title={t("nav.upload")} subtitle={t("upload.subtitle")} />
-      <div className="space-y-6 p-8">
+      <PageBody>
         {!uploaded ? (
           <>
             <UploadStorageNotice />
@@ -121,7 +127,7 @@ export function UploadWorkspace() {
             />
             <Dropzone onFiles={handleFiles} disabled={isBusy} />
             {isBusy ? (
-              <p className="text-sm text-muted" role="status">
+              <p className="text-sm text-fg-muted" role="status">
                 {t("upload.uploading")}
               </p>
             ) : null}
@@ -162,7 +168,7 @@ export function UploadWorkspace() {
             </Button>
           </>
         )}
-      </div>
+      </PageBody>
     </div>
   );
 }
@@ -179,7 +185,7 @@ function UploadIngestionJobNotice({ job }: { job: IngestionJob | null | undefine
       <div className="flex flex-wrap items-center gap-2 text-sm">
         <IngestionJobBadge job={job} />
         {job.skip_reason ? (
-          <span className="text-muted">{uploadSkipReasonLabel(job.skip_reason)}</span>
+          <span className="text-fg-muted">{uploadSkipReasonLabel(job.skip_reason)}</span>
         ) : null}
       </div>
     </Banner>
@@ -223,7 +229,7 @@ function BatchUploadSummary({
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
-          <ListChecks size={18} className="text-primary" aria-hidden />
+          <ListChecks size={20} className="text-accent-fg" aria-hidden />
           {t("upload.batch.title")}
         </CardTitle>
       </CardHeader>
@@ -234,7 +240,7 @@ function BatchUploadSummary({
           <BatchMetric label={t("upload.batch.skipped")} value={skippedCount} />
           <BatchMetric label={t("upload.batch.failed")} value={failedItems.length} />
         </div>
-        <div className="bounded-scroll-area divide-y divide-border rounded-md border border-border bg-background">
+        <div className="bounded-scroll-area divide-y divide-border rounded-md border border-border bg-surface-sunken">
           {items.map((item) => {
             const selected = item.id === selectedId;
             return (
@@ -242,16 +248,16 @@ function BatchUploadSummary({
                 key={item.id}
                 className={cn(
                   "flex flex-col gap-3 px-3 py-3 sm:flex-row sm:items-center sm:justify-between",
-                  selected && "bg-info-bg/40"
+                  selected && "bg-info-subtle"
                 )}
               >
                 <div className="flex min-w-0 items-start gap-2">
-                  <FileText size={16} className="mt-0.5 shrink-0 text-primary" aria-hidden />
+                  <FileText size={16} className="mt-0.5 shrink-0 text-accent-fg" aria-hidden />
                   <div className="min-w-0">
-                    <p className="truncate text-sm font-medium text-foreground" title={item.file_name}>
+                    <p className="truncate text-sm font-medium text-fg" title={item.file_name}>
                       {item.file_name}
                     </p>
-                    <p className="mt-1 text-xs text-muted">
+                    <p className="mt-1 text-xs text-fg-muted">
                       {t("sourceProfile.parser")}: {t(parserProfileKey(item.source_profile.parser_profile))}
                     </p>
                   </div>
@@ -290,26 +296,26 @@ function BatchUploadFailureList({
           <li key={`${item.file_name}-${item.status_code}`} className="min-w-0">
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
               <span className="font-medium">{item.file_name}</span>
-              <span className="tnum text-muted">{item.status_code}</span>
+              <span className="tnum text-fg-muted">{item.status_code}</span>
               <span>{item.message}</span>
             </div>
             {item.source_profile ? (
               <div className="mt-1.5 flex flex-wrap gap-1.5 text-xs">
-                <span className="rounded-full border border-border bg-card px-2 py-0.5 text-muted">
+                <span className="rounded-full border border-border bg-surface px-2 py-0.5 text-fg-muted">
                   {t(sourceModalityKey(item.source_profile.modality))}
                 </span>
-                <span className="rounded-full border border-border bg-card px-2 py-0.5 text-muted">
+                <span className="rounded-full border border-border bg-surface px-2 py-0.5 text-fg-muted">
                   {t("sourceProfile.parser")}:{" "}
                   {t(parserProfileKey(item.source_profile.parser_profile))}
                 </span>
-                <span className="rounded-full border border-border bg-card px-2 py-0.5 text-muted">
+                <span className="rounded-full border border-border bg-surface px-2 py-0.5 text-fg-muted">
                   {t("sourceProfile.previewKind")}:{" "}
                   {t(sourcePreviewKey(item.source_profile.preview_kind))}
                 </span>
                 {item.source_profile.quality_warnings.slice(0, 2).map((warning) => (
                   <span
                     key={warning}
-                    className="rounded-full border border-warning/30 bg-warning-bg px-2 py-0.5 text-warning"
+                    className="rounded-full border border-warning-border bg-warning-subtle px-2 py-0.5 text-warning-fg"
                   >
                     {t(sourceWarningKey(warning))}
                   </span>
@@ -325,9 +331,9 @@ function BatchUploadFailureList({
 
 function BatchMetric({ label, value }: { label: string; value: number }) {
   return (
-    <div className="rounded-md border border-border bg-background px-3 py-2">
-      <p className="text-xs text-muted">{label}</p>
-      <p className="tnum mt-1 text-lg font-semibold text-foreground">{value}</p>
+    <div className="rounded-md border border-border bg-surface-sunken px-3 py-2">
+      <p className="text-xs text-fg-muted">{label}</p>
+      <p className="tnum mt-1 text-lg font-semibold text-fg">{value}</p>
     </div>
   );
 }
@@ -355,7 +361,7 @@ function RecentIngestionJobsPanel() {
       <CardHeader>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <CardTitle className="flex items-center gap-2">
-            <Clock3 size={18} className="text-primary" aria-hidden />
+            <Clock3 size={20} className="text-accent-fg" aria-hidden />
             {t("upload.jobs.title")}
           </CardTitle>
           <div className="flex flex-wrap items-center gap-2">
@@ -364,9 +370,7 @@ function RecentIngestionJobsPanel() {
               variant="secondary"
               size="sm"
               onClick={() => void refreshJobs()}
-              loading={manualRefreshing}
-            >
-              {!manualRefreshing ? <RefreshCw size={14} aria-hidden /> : null}
+              loading={manualRefreshing} icon={RefreshCw}>
               {t("upload.jobs.refresh")}
             </Button>
             <Button
@@ -374,9 +378,7 @@ function RecentIngestionJobsPanel() {
               variant="secondary"
               size="sm"
               onClick={() => drain.mutate({ limit: 50 })}
-              loading={drain.isPending}
-            >
-              {!drain.isPending ? <PlayCircle size={14} aria-hidden /> : null}
+              loading={drain.isPending} icon={PlayCircle}>
               {t("upload.jobs.drain")}
             </Button>
           </div>
@@ -404,21 +406,21 @@ function RecentIngestionJobsPanel() {
               : t("upload.jobs.cancelFailed")}
           </Banner>
         ) : null}
-        <div className="divide-y divide-border rounded-md border border-border bg-background">
+        <div className="divide-y divide-border rounded-md border border-border bg-surface-sunken">
           {jobs.map((job) => (
             <div
               key={job.id}
               className="flex flex-col gap-2 px-3 py-3 sm:flex-row sm:items-center sm:justify-between"
             >
               <div className="min-w-0">
-                <p className="truncate text-sm font-medium text-foreground">
+                <p className="truncate text-sm font-medium text-fg">
                   {t("upload.jobs.documentId", { id: job.document_id })}
                 </p>
-                <p className="mt-1 text-xs text-muted">
+                <p className="mt-1 text-xs text-fg-muted">
                   {t("sourceProfile.parser")}: {t(parserProfileKey(job.parser_profile))}
                 </p>
                 {job.error_message ? (
-                  <p className="mt-1 text-xs text-danger">{job.error_message}</p>
+                  <p className="mt-1 text-xs text-danger-fg">{job.error_message}</p>
                 ) : null}
               </div>
               <div className="flex shrink-0 flex-wrap items-center gap-2">
@@ -430,10 +432,8 @@ function RecentIngestionJobsPanel() {
                     size="sm"
                     onClick={() => cancel.mutate({ id: job.id })}
                     loading={cancel.isPending && cancel.variables?.id === job.id}
+                    icon={Ban}
                   >
-                    {!(cancel.isPending && cancel.variables?.id === job.id) ? (
-                      <Ban size={14} aria-hidden />
-                    ) : null}
                     {t("upload.jobs.cancel")}
                   </Button>
                 ) : null}
@@ -444,10 +444,8 @@ function RecentIngestionJobsPanel() {
                     size="sm"
                     onClick={() => retry.mutate({ id: job.id })}
                     loading={retry.isPending && retry.variables?.id === job.id}
+                    icon={RotateCcw}
                   >
-                    {!(retry.isPending && retry.variables?.id === job.id) ? (
-                      <RotateCcw size={14} aria-hidden />
-                    ) : null}
                     {t("upload.jobs.retry")}
                   </Button>
                 ) : null}
@@ -471,7 +469,7 @@ function IngestionJobBadge({ job }: { job: IngestionJob | null | undefined }) {
         jobBadgeClass(status)
       )}
     >
-      <Icon size={13} aria-hidden className={status === "RUNNING" ? "animate-spin" : ""} />
+      <Icon size={14} aria-hidden className={status === "RUNNING" ? "animate-spin" : ""} />
       {t(jobStatusKey(status))}
     </span>
   );
@@ -500,17 +498,17 @@ function jobBadgeClass(status: IngestionJob["status"]) {
   switch (status) {
     case "QUEUED":
     case "RUNNING":
-      return "border-info/30 bg-info-bg text-info";
+      return "border-info-border bg-info-subtle text-info-fg";
     case "SUCCEEDED":
-      return "border-success/30 bg-success-bg text-success";
+      return "border-success-border bg-success-subtle text-success-fg";
     case "FAILED":
-      return "border-danger/30 bg-danger-bg text-danger";
+      return "border-danger-border bg-danger-subtle text-danger-fg";
     case "SKIPPED":
-      return "border-warning/30 bg-warning-bg text-warning";
+      return "border-warning-border bg-warning-subtle text-warning-fg";
     case "CANCELLED":
-      return "border-border bg-card text-muted";
+      return "border-border bg-surface text-fg-muted";
     default:
-      return "border-border bg-card text-foreground";
+      return "border-border bg-surface text-fg";
   }
 }
 
@@ -560,7 +558,7 @@ function UploadKnowledgeBasePicker({
       </CardHeader>
       <CardContent>
         {query.isPending ? (
-          <p className="text-sm text-muted" role="status">
+          <p className="text-sm text-fg-muted" role="status">
             {t("upload.knowledgeBases.loading")}
           </p>
         ) : items.length > 0 ? (
@@ -572,11 +570,11 @@ function UploadKnowledgeBasePicker({
             ariaLabel={t("upload.knowledgeBases.aria")}
           />
         ) : (
-          <div className="flex flex-col gap-3 rounded-md border border-border bg-background p-4 text-sm text-muted sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex flex-col gap-3 rounded-md border border-border bg-surface-sunken p-4 text-sm text-fg-muted sm:flex-row sm:items-center sm:justify-between">
             <span>{t("upload.knowledgeBases.emptyHint")}</span>
             <Link
               to={APP_ROUTES.knowledgeBases}
-              className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md border border-border bg-card px-3 text-sm font-medium text-foreground transition-colors hover:bg-info-bg"
+              className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md border border-border bg-surface px-3 text-sm font-medium text-fg transition-colors hover:bg-info-subtle"
             >
               <Database size={14} aria-hidden />
               {t("upload.knowledgeBases.manage")}
@@ -584,7 +582,7 @@ function UploadKnowledgeBasePicker({
           </div>
         )}
         {items.length > 0 ? (
-          <p className="mt-3 text-xs text-muted">
+          <p className="mt-3 text-xs text-fg-muted">
             {selectedIds.length > 0
               ? t("upload.knowledgeBases.selected", { count: selectedIds.length })
               : t("upload.knowledgeBases.defaultHint")}
@@ -601,27 +599,27 @@ function UploadStorageNotice() {
   if (query.isPending || query.isError || !query.data) return null;
 
   return (
-    <div className="flex flex-col gap-3 rounded-md border border-border bg-card px-4 py-3 text-sm text-foreground md:flex-row md:items-center md:justify-between">
+    <div className="flex flex-col gap-3 rounded-md border border-border bg-surface px-4 py-3 text-sm text-fg md:flex-row md:items-center md:justify-between">
       <div className="flex items-start gap-3">
-        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-info-bg text-info">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-info-subtle text-info-fg">
           {query.data.backend === "oci" ? (
-            <Cloud size={18} aria-hidden />
+            <Cloud size={20} aria-hidden />
           ) : (
-            <HardDrive size={18} aria-hidden />
+            <HardDrive size={20} aria-hidden />
           )}
         </div>
         <div>
           <p className="font-medium">
             {t("upload.storageNotice.title")}: {storageBackendLabel(query.data.backend)}
           </p>
-          <p className="mt-1 break-all text-xs text-muted">
+          <p className="mt-1 break-all text-xs text-fg-muted">
             {storageTarget(query.data)}
           </p>
         </div>
       </div>
       <Link
         to={APP_ROUTES.settingsUploadStorage}
-        className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md border border-border bg-background px-3 text-sm font-medium text-foreground transition-colors hover:bg-info-bg"
+        className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md border border-border bg-surface-sunken px-3 text-sm font-medium text-fg transition-colors hover:bg-info-subtle"
       >
         <Settings size={14} aria-hidden />
         {t("upload.storageNotice.settings")}

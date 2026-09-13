@@ -12,9 +12,11 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode, type Ref } from "react";
 
-import { Banner } from "@/components/ui/banner";
-import { Button } from "@/components/ui/button";
-import { FormStatus } from "@/components/ui/form-status";
+import {
+  Banner,
+  Button,
+  FormStatus,
+} from "@engchina/production-ready-ui";
 import type {
   DocumentElement,
   DocumentNavigationNode,
@@ -53,13 +55,13 @@ const KIND_LABELS: Record<string, Parameters<typeof t>[0]> = {
 export function DocumentRawText({ extraction }: { extraction: Record<string, unknown> }) {
   const { rawText } = parseStructuredExtraction(extraction);
   if (!rawText) {
-    return <p className="text-sm text-muted">{t("flow.extraction.noRawText")}</p>;
+    return <p className="text-sm text-fg-muted">{t("flow.extraction.noRawText")}</p>;
   }
 
   return (
-    <section className="rounded-lg border border-border bg-background p-4">
+    <section className="rounded-lg border border-border bg-surface-sunken p-4">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <h4 className="text-sm font-semibold text-foreground">
+        <h4 className="text-sm font-semibold text-fg">
           {t("flow.extraction.rawText")}
         </h4>
         <CopyRawTextButton text={rawText} />
@@ -119,11 +121,11 @@ export function DocumentExtraction({
   }, [focusRequestKey, focusSelectedTableCell, selectedTableCellKey]);
 
   if (!hasSummary) {
-    return <p className="text-sm text-muted">{t("flow.extraction.empty")}</p>;
+    return <p className="text-sm text-fg-muted">{t("flow.extraction.empty")}</p>;
   }
 
   return (
-    <div className="space-y-4 rounded-lg border border-border bg-background p-4">
+    <div className="space-y-4 rounded-lg border border-border bg-surface-sunken p-4">
       <dl className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
         <MetadataItem
           label={t("flow.extraction.documentType")}
@@ -174,9 +176,9 @@ export function DocumentExtraction({
           </div>
 
           <section>
-            <h4 className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
+            <h4 className="mb-2 flex items-center gap-2 text-sm font-semibold text-fg">
               {t("flow.extraction.elements")}
-              <span className="tnum text-xs font-normal text-muted">
+              <span className="tnum text-xs font-normal text-fg-muted">
                 {formatNumber(stats.elementCount)}
               </span>
             </h4>
@@ -226,15 +228,15 @@ function CollapsibleSection({
   children: ReactNode;
 }) {
   return (
-    <details className="group rounded-md border border-border bg-card" data-testid={testId}>
-      <summary className="flex min-h-11 cursor-pointer list-none items-center gap-2 px-3 py-2 text-sm font-semibold text-foreground [&::-webkit-details-marker]:hidden">
+    <details className="group rounded-md border border-border bg-surface" data-testid={testId}>
+      <summary className="flex min-h-11 cursor-pointer list-none items-center gap-2 px-3 py-2 text-sm font-semibold text-fg [&::-webkit-details-marker]:hidden">
         <ChevronRight
           size={14}
-          className="text-muted transition-transform group-open:rotate-90"
+          className="text-fg-muted transition-transform group-open:rotate-90"
           aria-hidden
         />
         {title}
-        <span className="tnum text-xs font-normal text-muted">{formatNumber(count)}</span>
+        <span className="tnum text-xs font-normal text-fg-muted">{formatNumber(count)}</span>
       </summary>
       <div className="border-t border-border p-3">{children}</div>
     </details>
@@ -256,16 +258,16 @@ function NavigationTreePanel({ nodes }: { nodes: DocumentNavigationNode[] }) {
             style={{ paddingLeft: `${Math.min(node.depth, 6) * 16}px` }}
           >
             <div className="flex flex-wrap items-center gap-2">
-              <span className="break-words text-sm font-medium text-foreground">
+              <span className="break-words text-sm font-medium text-fg">
                 {node.title}
               </span>
               {node.page_start != null ? (
-                <span className="tnum rounded-full bg-background px-2 py-0.5 text-xs text-muted">
+                <span className="tnum rounded-full bg-surface-sunken px-2 py-0.5 text-xs text-fg-muted">
                   {t("flow.extraction.page", { page: node.page_start })}
                 </span>
               ) : null}
             </div>
-            {node.summary ? <p className="mt-0.5 text-xs text-muted">{node.summary}</p> : null}
+            {node.summary ? <p className="mt-0.5 text-xs text-fg-muted">{node.summary}</p> : null}
           </li>
         ))}
       </ol>
@@ -283,16 +285,16 @@ function AssetSummariesPanel({ assets }: { assets: ExtractionAsset[] }) {
     >
       <ul className="space-y-3">
         {assets.map((asset) => (
-          <li key={asset.asset_id} className="rounded-md border border-border bg-background p-3">
+          <li key={asset.asset_id} className="rounded-md border border-border bg-surface-sunken p-3">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+              <span className="rounded-full bg-accent-subtle px-2 py-0.5 text-xs font-medium text-accent-fg">
                 {elementKindLabel(asset.kind)}
               </span>
-              <span className="break-all text-xs font-medium text-foreground">
+              <span className="break-all text-xs font-medium text-fg">
                 {asset.alt_text || asset.asset_id}
               </span>
               {typeof asset.page_number === "number" ? (
-                <span className="tnum rounded-full bg-card px-2 py-0.5 text-xs text-muted">
+                <span className="tnum rounded-full bg-surface px-2 py-0.5 text-xs text-fg-muted">
                   {t("flow.extraction.page", { page: asset.page_number })}
                 </span>
               ) : null}
@@ -321,19 +323,19 @@ function ExtractionFieldsPanel({ fields }: { fields: ExtractionField[] }) {
           return (
             <div
               key={`${field.name}-${index}`}
-              className="flex flex-wrap items-baseline gap-2 rounded-md border border-border bg-background p-2.5"
+              className="flex flex-wrap items-baseline gap-2 rounded-md border border-border bg-surface-sunken p-2.5"
             >
-              <dt className="text-xs font-medium text-muted">{field.name}</dt>
-              <dd className="min-w-0 break-words text-sm font-medium text-foreground">
+              <dt className="text-xs font-medium text-fg-muted">{field.name}</dt>
+              <dd className="min-w-0 break-words text-sm font-medium text-fg">
                 {field.value}
               </dd>
-              <span className="rounded-full bg-card px-2 py-0.5 text-[11px] text-muted">
+              <span className="rounded-full bg-surface px-2 py-0.5 text-xs text-fg-muted">
                 {field.value_type}
               </span>
               {typeof field.confidence === "number" ? (
                 <span
-                  className={`tnum inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] ${
-                    lowConfidence ? "bg-warning-bg text-warning" : "bg-success-bg text-success"
+                  className={`tnum inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs ${
+                    lowConfidence ? "bg-warning-subtle text-warning-fg" : "bg-success-subtle text-success-fg"
                   }`}
                 >
                   {lowConfidence ? <CircleAlert size={11} aria-hidden /> : null}
@@ -351,8 +353,8 @@ function ExtractionFieldsPanel({ fields }: { fields: ExtractionField[] }) {
 function MetadataItem({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <dt className="text-xs text-muted">{label}</dt>
-      <dd className="tnum mt-0.5 font-medium text-foreground">{value}</dd>
+      <dt className="text-xs text-fg-muted">{label}</dt>
+      <dd className="tnum mt-0.5 font-medium text-fg">{value}</dd>
     </div>
   );
 }
@@ -367,12 +369,12 @@ function StatTile({
   value: string;
 }) {
   return (
-    <div className="rounded-md border border-border bg-card p-3">
-      <div className="flex items-center gap-2 text-xs font-medium text-muted">
-        <Icon size={14} className="text-primary" aria-hidden />
+    <div className="rounded-md border border-border bg-surface p-3">
+      <div className="flex items-center gap-2 text-xs font-medium text-fg-muted">
+        <Icon size={14} className="text-accent-fg" aria-hidden />
         <span>{label}</span>
       </div>
-      <p className="tnum mt-2 text-lg font-semibold text-foreground">{value}</p>
+      <p className="tnum mt-2 text-lg font-semibold text-fg">{value}</p>
     </div>
   );
 }
@@ -395,38 +397,38 @@ function ElementItem({
       <button
         ref={buttonRef}
         type="button"
-        className={`w-full rounded-md border p-3 text-left transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring ${
-          selected ? "border-primary bg-primary/5" : "border-border bg-card hover:bg-background"
+        className={`w-full rounded-md border p-3 text-left transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
+          selected ? "border-accent-emphasis bg-accent-subtle" : "border-border bg-surface hover:bg-surface-hover"
         }`}
         aria-pressed={selected}
         onClick={() => onSelect?.(id)}
       >
         <div className="flex flex-wrap items-center gap-2">
-          <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+          <span className="rounded-full bg-accent-subtle px-2 py-0.5 text-xs font-medium text-accent-fg">
             {elementKindLabel(element.kind)}
           </span>
           {element.content_kind ? (
-            <span className="rounded-full bg-background px-2 py-0.5 text-xs text-muted">
+            <span className="rounded-full bg-surface-sunken px-2 py-0.5 text-xs text-fg-muted">
               {element.content_kind}
             </span>
           ) : null}
           {typeof element.page_number === "number" ? (
-            <span className="tnum rounded-full bg-background px-2 py-0.5 text-xs text-muted">
+            <span className="tnum rounded-full bg-surface-sunken px-2 py-0.5 text-xs text-fg-muted">
               {t("flow.extraction.page", { page: element.page_number })}
             </span>
           ) : null}
           {element.section_path?.length ? (
-            <span className="min-w-0 max-w-full rounded-full bg-info-bg px-2 py-0.5 text-xs text-info">
+            <span className="min-w-0 max-w-full rounded-full bg-info-subtle px-2 py-0.5 text-xs text-info-fg">
               <span className="break-words">{element.section_path.join(" > ")}</span>
             </span>
           ) : null}
           {typeof element.confidence === "number" ? (
             <span
               className={`tnum inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs ${
-                lowConfidence ? "bg-warning-bg text-warning" : "bg-success-bg text-success"
+                lowConfidence ? "bg-warning-subtle text-warning-fg" : "bg-success-subtle text-success-fg"
               }`}
             >
-              {lowConfidence ? <CircleAlert size={12} aria-hidden /> : null}
+              {lowConfidence ? <CircleAlert size={14} aria-hidden /> : null}
               {confidenceText(element.confidence)}
             </span>
           ) : null}
@@ -458,7 +460,7 @@ function TableCellsPanel({
 }) {
   return (
     <section>
-      <h4 className="mb-2 text-sm font-semibold text-foreground">
+      <h4 className="mb-2 text-sm font-semibold text-fg">
         {t("flow.extraction.tableCells")}
       </h4>
       <div className="max-h-[420px] space-y-3 overflow-auto pr-1">
@@ -467,15 +469,15 @@ function TableCellsPanel({
           .map((table) => (
             <div
               key={table.table_id}
-              className="rounded-md border border-border bg-card p-3"
+              className="rounded-md border border-border bg-surface p-3"
               data-testid="extraction-table-cells"
             >
               <div className="flex flex-wrap items-center gap-2">
-                <span className="break-all text-xs font-medium text-foreground">
+                <span className="break-all text-xs font-medium text-fg">
                   {table.caption || table.table_id}
                 </span>
                 {typeof table.page_number === "number" ? (
-                  <span className="tnum rounded-full bg-background px-2 py-0.5 text-xs text-muted">
+                  <span className="tnum rounded-full bg-surface-sunken px-2 py-0.5 text-xs text-fg-muted">
                     {t("flow.extraction.page", { page: table.page_number })}
                   </span>
                 ) : null}
@@ -491,10 +493,10 @@ function TableCellsPanel({
                         key={key}
                         ref={selected ? selectedTableCellRef : undefined}
                         type="button"
-                        className={`min-h-11 rounded border px-2 py-1.5 text-left text-xs transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring ${
+                        className={`min-h-11 rounded border px-2 py-1.5 text-left text-xs transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
                           selected
-                            ? "border-primary bg-primary/10 text-foreground"
-                            : "border-border bg-background text-foreground hover:bg-card"
+                            ? "border-accent-emphasis bg-accent-subtle text-fg"
+                            : "border-border bg-surface-sunken text-fg hover:bg-surface"
                         }`}
                         aria-pressed={selected}
                         aria-label={tableCellAriaLabel(table, cell)}
@@ -502,14 +504,14 @@ function TableCellsPanel({
                         onClick={() => onTableCellSelect?.(table, cell)}
                       >
                         <span className="flex flex-wrap items-center gap-1">
-                          <span className="tnum rounded bg-card px-1.5 py-0.5 text-[11px] text-muted">
+                          <span className="tnum rounded bg-surface px-1.5 py-0.5 text-xs text-fg-muted">
                             {ref || t("flow.extraction.tableCellPosition", {
                               row: cell.row + 1,
                               col: cell.col + 1,
                             })}
                           </span>
                           {cell.bbox ? (
-                            <span className="rounded bg-success-bg px-1.5 py-0.5 text-[11px] text-success">
+                            <span className="rounded bg-success-subtle px-1.5 py-0.5 text-xs text-success-fg">
                               bbox
                             </span>
                           ) : null}
@@ -572,12 +574,12 @@ function CopyRawTextButton({ text }: { text: string }) {
           message={t("flow.extraction.copyFailed")}
         />
       ) : null}
-      <Button variant="ghost" size="sm" onClick={() => void handleCopy()}>
-        {state === "success" ? (
-          <Check size={14} aria-hidden />
-        ) : (
-          <Clipboard size={14} aria-hidden />
-        )}
+      <Button
+        variant="ghost"
+        size="sm"
+        icon={state === "success" ? Check : Clipboard}
+        onClick={() => void handleCopy()}
+      >
         {state === "success" ? t("flow.extraction.copied") : t("flow.extraction.copyRawText")}
       </Button>
     </span>

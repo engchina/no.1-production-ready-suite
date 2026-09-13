@@ -1,6 +1,20 @@
 "use client";
 
 import {
+  PageBody,
+  Button,
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+  FieldError,
+  FormStatus,
+  SelectField,
+  type SelectFieldOption,
+  TextField,
+} from "@engchina/production-ready-ui";
+import {
   AlertTriangle,
   CheckCircle2,
   Cloud,
@@ -21,11 +35,6 @@ import {
   type RefObject,
 } from "react";
 
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { FieldError } from "@/components/ui/field-error";
-import { FormStatus } from "@/components/ui/form-status";
-import { SelectField, type SelectFieldOption } from "@/components/ui/select-field";
 import {
   SETTINGS_DETAIL_GRID_CLASS,
   SettingsSupplementalPanels,
@@ -348,13 +357,13 @@ export function OciSettingsClient() {
   }
 
   return (
-    <div className="p-8">
+    <PageBody>
       <div className={SETTINGS_DETAIL_GRID_CLASS}>
         <div className="space-y-6">
           <Card className="rounded-md">
             <CardHeader className="p-6 pb-0">
               <div className="flex items-center gap-2 border-b border-border pb-5">
-                <KeyRound size={18} aria-hidden />
+                <KeyRound size={20} aria-hidden />
                 <CardTitle className="text-lg">{t("settings.oci.auth.cardTitle")}</CardTitle>
               </div>
             </CardHeader>
@@ -381,37 +390,37 @@ export function OciSettingsClient() {
                   helper={t("settings.oci.helper.configProfile")}
                   placeholder="DEFAULT"
                   readOnly
-                  required
+                  required requiredLabel={t("common.required")}
                 />
                 <TextField
                   id="oci-user-ocid"
                   label={t("settings.oci.field.userOcid")}
                   value={draft.userOcid}
-                  onChange={(value) => updateDraft("userOcid", value)}
+                  onValueChange={(value) => updateDraft("userOcid", value)}
                   error={errorText(errors.userOcid)}
                   helper={t("settings.oci.helper.userOcid")}
                   placeholder="ocid1.user.oc1.."
-                  required
+                  required requiredLabel={t("common.required")}
                 />
                 <TextField
                   id="oci-tenancy-ocid"
                   label={t("settings.oci.field.tenancyOcid")}
                   value={draft.tenancyOcid}
-                  onChange={(value) => updateDraft("tenancyOcid", value)}
+                  onValueChange={(value) => updateDraft("tenancyOcid", value)}
                   error={errorText(errors.tenancyOcid)}
                   helper={t("settings.oci.helper.tenancyOcid")}
                   placeholder="ocid1.tenancy.oc1.."
-                  required
+                  required requiredLabel={t("common.required")}
                 />
                 <TextField
                   id="oci-fingerprint"
                   label={t("settings.oci.field.fingerprint")}
                   value={draft.fingerprint}
-                  onChange={(value) => updateDraft("fingerprint", value)}
+                  onValueChange={(value) => updateDraft("fingerprint", value)}
                   error={errorText(errors.fingerprint)}
                   helper={t("settings.oci.helper.fingerprint")}
                   placeholder="12:34:56:78:90:ab:cd:ef"
-                  required
+                  required requiredLabel={t("common.required")}
                 />
                 <SelectField
                   id="oci-region"
@@ -445,22 +454,20 @@ export function OciSettingsClient() {
                 ariaContext={t("nav.settingsOci")}
                 saveState={authSaveState}
                 saveLabel={t("settings.oci.actions.saveAuth")}
-                savingLabel={t("settings.oci.actions.saving")}
                 onSave={() => void saveAuthDraft()}
                 testState={configTestState.phase}
                 testLabel={t("settings.oci.actions.test")}
-                testingLabel={t("settings.oci.actions.testing")}
                 onTest={() => void testAuthConfig()}
               />
               <ConfigTestContent state={configTestState} />
-              <p className="text-xs leading-relaxed text-muted">{t("settings.oci.hint")}</p>
+              <p className="text-xs leading-relaxed text-fg-muted">{t("settings.oci.hint")}</p>
             </CardContent>
           </Card>
 
           <Card>
             <CardHeader>
               <div className="flex items-start gap-3">
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-bg text-info">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-subtle text-info-fg">
                   <Cloud size={20} aria-hidden />
                 </div>
                 <div>
@@ -501,7 +508,6 @@ export function OciSettingsClient() {
                 ariaContext={t("settings.oci.storage.title")}
                 saveState={storageSaveState}
                 saveLabel={t("settings.oci.actions.save")}
-                savingLabel={t("settings.oci.actions.saving")}
                 onSave={saveStorageDraft}
               />
             </CardContent>
@@ -513,8 +519,8 @@ export function OciSettingsClient() {
             <Card>
               <CardHeader>
                 <div className="flex items-start gap-3">
-                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-bg text-info">
-                    <ShieldCheck size={18} aria-hidden />
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-subtle text-info-fg">
+                    <ShieldCheck size={20} aria-hidden />
                   </div>
                   <div>
                     <CardTitle>{t("settings.oci.status.title")}</CardTitle>
@@ -523,7 +529,7 @@ export function OciSettingsClient() {
                 </div>
               </CardHeader>
               <CardContent className="space-y-4">
-                <div className="rounded-md border border-border bg-background px-3 py-2 text-sm font-medium text-foreground">
+                <div className="rounded-md border border-border bg-surface-sunken px-3 py-2 text-sm font-medium text-fg">
                   {t("settings.oci.status.complete", {
                     done: completedCount,
                     total: REQUIRED_OCI_SETTINGS_FIELDS.length,
@@ -553,7 +559,7 @@ export function OciSettingsClient() {
           }}
         />
       </div>
-    </div>
+    </PageBody>
   );
 }
 
@@ -561,31 +567,22 @@ function SectionActions({
   ariaContext,
   saveState,
   saveLabel: idleSaveLabel,
-  savingLabel,
   onSave,
   testState,
   testLabel,
-  testingLabel,
   onTest,
 }: {
   ariaContext: string;
   saveState: FeedbackState;
   saveLabel: string;
-  savingLabel: string;
   onSave: () => void;
   testState?: ConfigTestState["phase"];
   testLabel?: string;
-  testingLabel?: string;
   onTest?: () => void;
 }) {
-  const currentSaveLabel =
-    saveState === "loading"
-      ? savingLabel
-      : saveState === "success"
-        ? t("settings.oci.actions.saved")
-        : idleSaveLabel;
-  const currentTestLabel =
-    testState === "loading" && testingLabel ? testingLabel : testLabel;
+  // loading 中もラベルは変えない（先頭アイコンがスピナーに置き換わる）
+  const currentSaveLabel = saveState === "success" ? t("settings.oci.actions.saved") : idleSaveLabel;
+  const currentTestLabel = testLabel;
   const isTesting = testState === "loading";
 
   return (
@@ -597,9 +594,7 @@ function SectionActions({
         aria-label={`${ariaContext}: ${currentSaveLabel}`}
         loading={saveState === "loading"}
         disabled={isTesting}
-        onClick={onSave}
-      >
-        {saveState !== "loading" ? <Save size={15} aria-hidden /> : null}
+        onClick={onSave} icon={Save}>
         {currentSaveLabel}
       </Button>
       {onTest && currentTestLabel ? (
@@ -611,9 +606,7 @@ function SectionActions({
           aria-label={`${ariaContext}: ${currentTestLabel}`}
           loading={isTesting}
           disabled={saveState === "loading"}
-          onClick={onTest}
-        >
-          {!isTesting ? <ShieldCheck size={15} aria-hidden /> : null}
+          onClick={onTest} icon={ShieldCheck}>
           {currentTestLabel}
         </Button>
       ) : null}
@@ -630,7 +623,7 @@ function ConfigTestContent({ state }: { state: ConfigTestState }) {
   if (state.phase === "loading") {
     return (
       <div
-        className="rounded-md border border-border bg-background px-3 py-2 text-sm text-muted"
+        className="rounded-md border border-border bg-surface-sunken px-3 py-2 text-sm text-fg-muted"
         role="status"
       >
         {t("settings.oci.configTest.checking")}
@@ -641,16 +634,16 @@ function ConfigTestContent({ state }: { state: ConfigTestState }) {
   if (state.phase === "error") {
     return (
       <div
-        className="space-y-2 rounded-md border border-danger/30 bg-danger-bg px-3 py-3"
+        className="space-y-2 rounded-md border border-danger-border bg-danger-subtle px-3 py-3"
         role="alert"
       >
         <div className="flex flex-wrap items-center gap-2">
-          <span className="text-sm font-medium text-foreground">
+          <span className="text-sm font-medium text-fg">
             {t("settings.oci.configTest.title")}
           </span>
           <StatusPill kind="danger">{t("settings.oci.configTest.failed")}</StatusPill>
         </div>
-        <p className="text-sm text-foreground">{state.message}</p>
+        <p className="text-sm text-fg">{state.message}</p>
       </div>
     );
   }
@@ -670,28 +663,28 @@ function ConfigTestContent({ state }: { state: ConfigTestState }) {
       className={cn(
         "space-y-2 rounded-md border px-3 py-3",
         failed
-          ? "border-warning/40 bg-warning-bg"
-          : "border-success/30 bg-success-bg"
+          ? "border-warning-border bg-warning-subtle"
+          : "border-success-border bg-success-subtle"
       )}
       role={failed ? "alert" : "status"}
     >
       <div className="flex flex-wrap items-center gap-2">
-        <span className="text-sm font-medium text-foreground">
+        <span className="text-sm font-medium text-fg">
           {t("settings.oci.configTest.title")}
         </span>
         <StatusPill kind={failed ? "warning" : "success"}>
           {failed ? t("settings.oci.configTest.failed") : t("settings.oci.configTest.success")}
         </StatusPill>
       </div>
-      <p className="text-sm text-foreground">{result.message}</p>
+      <p className="text-sm text-fg">{result.message}</p>
       {detailItems.length > 0 ? (
-        <ul className="space-y-1 text-xs leading-relaxed text-foreground">
+        <ul className="space-y-1 text-xs leading-relaxed text-fg">
           {detailItems.map((item) => (
             <li key={item}>{item}</li>
           ))}
         </ul>
       ) : null}
-      <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted">
+      <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-fg-muted">
         {result.oci_directory_mode ? (
           <span className="tnum">.oci {result.oci_directory_mode}</span>
         ) : null}
@@ -813,7 +806,7 @@ function ConfigFileField({
 
   return (
     <div className="space-y-1.5">
-      <label htmlFor={id} className="flex items-center gap-2 text-sm font-medium text-foreground">
+      <label htmlFor={id} className="flex items-center gap-2 text-sm font-medium text-fg">
         {label}
         {required ? <RequiredBadge /> : null}
       </label>
@@ -831,9 +824,9 @@ function ConfigFileField({
           aria-invalid={Boolean(error)}
           aria-describedby={describedBy}
           className={cn(
-            "h-11 w-full rounded-md border px-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted/70 focus-visible:border-primary",
-            readOnly ? "cursor-default bg-background text-muted" : "bg-card",
-            error ? "border-danger" : "border-border"
+            "h-11 w-full rounded-md border px-3 text-sm text-fg outline-none transition-colors placeholder:text-fg-muted focus-visible:border-focus-ring",
+            readOnly ? "cursor-default bg-surface-sunken text-fg-muted" : "bg-surface",
+            error ? "border-danger-fg" : "border-border-control"
           )}
         />
         <Button
@@ -842,13 +835,11 @@ function ConfigFileField({
           size="lg"
           className="h-11 w-full whitespace-nowrap"
           loading={importState === "loading"}
-          onClick={onApply}
-        >
-          {importState !== "loading" ? <RefreshCw size={14} aria-hidden /> : null}
+          onClick={onApply} icon={RefreshCw}>
           {configImportButtonLabel(importState)}
         </Button>
       </div>
-      <p id={hintId} className="text-xs leading-relaxed text-muted">
+      <p id={hintId} className="text-xs leading-relaxed text-fg-muted">
         {helper}
       </p>
       <FieldError id={errorId} message={error} />
@@ -897,7 +888,7 @@ function NamespaceField({
 
   return (
     <div className="space-y-1.5">
-      <label htmlFor={id} className="flex items-center gap-2 text-sm font-medium text-foreground">
+      <label htmlFor={id} className="flex items-center gap-2 text-sm font-medium text-fg">
         {label}
         {required ? <RequiredBadge /> : null}
       </label>
@@ -912,8 +903,8 @@ function NamespaceField({
           aria-invalid={Boolean(error)}
           aria-describedby={describedBy}
           className={cn(
-            "h-11 w-full cursor-default rounded-md border bg-background px-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted/70 focus-visible:border-primary",
-            error ? "border-danger" : "border-border"
+            "h-11 w-full cursor-default rounded-md border bg-surface-sunken px-3 text-sm text-fg outline-none transition-colors placeholder:text-fg-muted focus-visible:border-focus-ring",
+            error ? "border-danger-fg" : "border-border-control"
           )}
         />
         <Button
@@ -923,13 +914,11 @@ function NamespaceField({
           className="h-11 w-full whitespace-nowrap"
           aria-label={`${label}: ${buttonLabel}`}
           loading={fetchState === "loading"}
-          onClick={onFetch}
-        >
-          {fetchState !== "loading" ? <RefreshCw size={14} aria-hidden /> : null}
+          onClick={onFetch} icon={RefreshCw}>
           {buttonLabel}
         </Button>
       </div>
-      <p id={hintId} className="text-xs leading-relaxed text-muted">
+      <p id={hintId} className="text-xs leading-relaxed text-fg-muted">
         {helper}
       </p>
       <FieldError id={errorId} message={error} />
@@ -1002,7 +991,7 @@ function PrivateKeyDropzoneField({
     <div id={id} className="space-y-2">
       <label
         htmlFor={`${id}-button`}
-        className="flex items-center gap-1 text-sm font-medium text-foreground"
+        className="flex items-center gap-1 text-sm font-medium text-fg"
       >
         {label}
         {required ? <RequiredBadge /> : null}
@@ -1011,8 +1000,8 @@ function PrivateKeyDropzoneField({
         id={`${id}-button`}
         type="button"
         className={cn(
-          "flex min-h-32 w-full cursor-pointer flex-col items-center justify-center gap-2 rounded-md border border-dashed bg-background px-4 py-7 text-center transition-colors hover:border-primary/60 hover:bg-primary/5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-60",
-          error || fileState === "error" ? "border-danger" : "border-border"
+          "flex min-h-32 w-full cursor-pointer flex-col items-center justify-center gap-2 rounded-md border border-dashed bg-surface-sunken px-4 py-7 text-center transition-colors hover:border-accent-emphasis hover:bg-accent-subtle focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring disabled:cursor-not-allowed disabled:opacity-60",
+          error || fileState === "error" ? "border-danger-fg" : "border-border-control"
         )}
         aria-invalid={Boolean(error) || fileState === "error"}
         aria-describedby={describedBy}
@@ -1022,13 +1011,13 @@ function PrivateKeyDropzoneField({
         onDragOver={(event) => event.preventDefault()}
         onDrop={handleDrop}
       >
-        <Upload size={22} className="text-muted" aria-hidden />
-        <span className="text-sm font-semibold text-foreground">
+        <Upload size={24} className="text-fg-muted" aria-hidden />
+        <span className="text-sm font-semibold text-fg">
           {fileState === "loading"
             ? t("settings.oci.actions.uploadingKeyFile")
             : t("settings.oci.privateKey.uploadCta")}
         </span>
-        <span id={hintId} className="max-w-2xl text-sm leading-relaxed text-foreground">
+        <span id={hintId} className="max-w-2xl text-sm leading-relaxed text-fg">
           {helper}
         </span>
       </button>
@@ -1053,17 +1042,17 @@ function PrivateKeyDropzoneField({
         </div>
       ) : null}
       {value ? (
-        <p className="break-all text-xs leading-relaxed text-muted">
+        <p className="break-all text-xs leading-relaxed text-fg-muted">
           {t("settings.oci.privateKey.path", { path: value })}
         </p>
       ) : null}
       {warning ? (
         <p
           id={warningId}
-          className="flex items-start gap-1.5 text-xs leading-relaxed text-warning"
+          className="flex items-start gap-1.5 text-xs leading-relaxed text-warning-fg"
           role="status"
         >
-          <AlertTriangle size={13} className="mt-0.5 shrink-0" aria-hidden />
+          <AlertTriangle size={14} className="mt-0.5 shrink-0" aria-hidden />
           <span>{warning}</span>
         </p>
       ) : null}
@@ -1078,66 +1067,10 @@ function PrivateKeyDropzoneField({
   );
 }
 
-function TextField({
-  id,
-  label,
-  value,
-  onChange,
-  error,
-  helper,
-  placeholder,
-  readOnly = false,
-  required,
-}: {
-  id: string;
-  label: string;
-  value: string;
-  onChange?: (value: string) => void;
-  error?: string;
-  helper: string;
-  placeholder: string;
-  readOnly?: boolean;
-  required?: boolean;
-}) {
-  const hintId = `${id}-hint`;
-  const errorId = `${id}-error`;
-
-  return (
-    <div className="space-y-1.5">
-      <label htmlFor={id} className="flex items-center gap-2 text-sm font-medium text-foreground">
-        {label}
-        {required ? <RequiredBadge /> : null}
-      </label>
-      <input
-        id={id}
-        type="text"
-        value={value}
-        readOnly={readOnly}
-        aria-readonly={readOnly || undefined}
-        onChange={(event) => {
-          if (!readOnly) onChange?.(event.target.value);
-        }}
-        placeholder={placeholder}
-        aria-invalid={Boolean(error)}
-        aria-describedby={error ? `${hintId} ${errorId}` : hintId}
-        className={cn(
-          "h-11 w-full rounded-md border px-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted/70 focus-visible:border-primary",
-          readOnly ? "cursor-default bg-background text-muted" : "bg-card",
-          error ? "border-danger" : "border-border"
-        )}
-      />
-      <p id={hintId} className="text-xs leading-relaxed text-muted">
-        {helper}
-      </p>
-      <FieldError id={errorId} message={error} />
-    </div>
-  );
-}
-
 function RequiredBadge() {
   return (
     <>
-      <span aria-hidden className="text-danger">
+      <span aria-hidden className="text-danger-fg">
         *
       </span>
       <span className="sr-only">{t("settings.oci.required")}</span>
@@ -1161,7 +1094,7 @@ function FieldStatusRow({
 
   return (
     <li className="flex items-center justify-between gap-3 text-sm">
-      <span className="text-foreground">{t(FIELD_LABEL_KEYS[field])}</span>
+      <span className="text-fg">{t(FIELD_LABEL_KEYS[field])}</span>
       <StatusPill kind={kind}>{label}</StatusPill>
     </li>
   );
@@ -1181,13 +1114,13 @@ function StatusPill({
     <span
       className={cn(
         "inline-flex min-h-7 items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium",
-        kind === "success" && "border-success/30 bg-success-bg text-success",
-        kind === "warning" && "border-warning/30 bg-warning-bg text-warning",
-        kind === "danger" && "border-danger/30 bg-danger-bg text-danger",
-        kind === "neutral" && "border-border bg-background text-muted"
+        kind === "success" && "border-success-border bg-success-subtle text-success-fg",
+        kind === "warning" && "border-warning-border bg-warning-subtle text-warning-fg",
+        kind === "danger" && "border-danger-border bg-danger-subtle text-danger-fg",
+        kind === "neutral" && "border-border bg-surface-sunken text-fg-muted"
       )}
     >
-      <Icon size={13} aria-hidden />
+      <Icon size={14} aria-hidden />
       {children}
     </span>
   );

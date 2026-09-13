@@ -1,13 +1,20 @@
 "use client";
 
+import {
+  PageBody,
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+  Button,
+  FormStatus,
+  Skeleton,
+} from "@engchina/production-ready-ui";
 import { useEffect, useRef, useState } from "react";
 import { CheckCircle2, ClipboardCheck, RotateCcw, Save } from "lucide-react";
 
 import { ErrorState } from "@/components/StateViews";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { FormStatus } from "@/components/ui/form-status";
-import { Skeleton } from "@/components/ui/skeleton";
 import {
   ApiError,
   type EvaluationSuiteName,
@@ -45,15 +52,15 @@ export function EvaluationSettingsClient() {
 
   if (query.isPending) {
     return (
-      <div className="space-y-4 p-8">
+      <PageBody>
         <Skeleton className="h-64 w-full rounded-lg" />
-      </div>
+      </PageBody>
     );
   }
 
   if (query.isError) {
     return (
-      <div className="p-8">
+      <PageBody>
         <ErrorState
           message={
             query.error instanceof ApiError
@@ -62,7 +69,7 @@ export function EvaluationSettingsClient() {
           }
           onRetry={() => void query.refetch()}
         />
-      </div>
+      </PageBody>
     );
   }
 
@@ -104,11 +111,11 @@ export function EvaluationSettingsClient() {
   const thresholdEntries = Object.entries(selectedSuite?.thresholds ?? {});
 
   return (
-    <div className="space-y-5 p-8">
+    <PageBody>
       <Card>
         <CardHeader>
           <div className="flex items-start gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-bg text-info">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-subtle text-info-fg">
               <ClipboardCheck size={20} aria-hidden />
             </div>
             <div>
@@ -119,7 +126,7 @@ export function EvaluationSettingsClient() {
         </CardHeader>
         <CardContent className="space-y-5">
           <div className="space-y-2">
-            <div className="text-sm font-medium text-foreground">
+            <div className="text-sm font-medium text-fg">
               {t("settings.evaluation.suite")}
             </div>
             <div
@@ -138,19 +145,19 @@ export function EvaluationSettingsClient() {
                     disabled={save.isPending}
                     onClick={() => selectSuite(item.name)}
                     className={cn(
-                      "min-h-[104px] rounded-md border px-3 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50",
+                      "min-h-[104px] rounded-md border px-3 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50",
                       selected
-                        ? "border-primary bg-primary/10 text-foreground"
-                        : "border-border bg-card text-foreground hover:bg-background"
+                        ? "border-accent-emphasis bg-accent-subtle text-fg"
+                        : "border-border bg-surface text-fg hover:bg-surface-hover"
                     )}
                   >
                     <span className="flex items-center justify-between gap-2">
                       <span className="text-sm font-semibold">{suiteLabel(item.name)}</span>
                       {selected ? (
-                        <CheckCircle2 size={15} className="shrink-0 text-primary" aria-hidden />
+                        <CheckCircle2 size={16} className="shrink-0 text-accent-fg" aria-hidden />
                       ) : null}
                     </span>
-                    <span className="mt-1 block text-xs leading-relaxed text-muted">
+                    <span className="mt-1 block text-xs leading-relaxed text-fg-muted">
                       {suiteDescription(item.name)}
                     </span>
                     <SuiteChips suite={item} />
@@ -159,22 +166,22 @@ export function EvaluationSettingsClient() {
               })}
             </div>
           </div>
-          <div className="rounded-md border border-border bg-muted/20 p-3">
-            <div className="text-xs font-medium text-muted">{t("settings.evaluation.thresholds")}</div>
+          <div className="rounded-md border border-border bg-surface-hover p-3">
+            <div className="text-xs font-medium text-fg-muted">{t("settings.evaluation.thresholds")}</div>
             {thresholdEntries.length ? (
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {thresholdEntries.map(([metric, value]) => (
                   <span
                     key={metric}
-                    className="inline-flex min-h-6 items-center rounded-md bg-card px-2 text-xs font-medium text-foreground ring-1 ring-border"
+                    className="inline-flex min-h-6 items-center rounded-md bg-surface px-2 text-xs font-medium text-fg ring-1 ring-border"
                   >
                     {metric}
-                    <span className="ml-1 font-semibold text-primary">{value}</span>
+                    <span className="ml-1 font-semibold text-accent-fg">{value}</span>
                   </span>
                 ))}
               </div>
             ) : (
-              <p className="mt-2 text-sm text-foreground">
+              <p className="mt-2 text-sm text-fg">
                 {t("settings.evaluation.noThresholds")}
               </p>
             )}
@@ -193,9 +200,7 @@ export function EvaluationSettingsClient() {
                 variant="secondary"
                 onClick={resetForm}
                 disabled={!dirty || save.isPending}
-                aria-label={t("settings.evaluation.actions.reset")}
-              >
-                <RotateCcw size={15} aria-hidden />
+                aria-label={t("settings.evaluation.actions.reset")} icon={RotateCcw}>
                 {t("settings.evaluation.actions.reset")}
               </Button>
               <Button
@@ -203,18 +208,14 @@ export function EvaluationSettingsClient() {
                 loading={save.isPending}
                 disabled={!dirty}
                 onClick={submit}
-                aria-label={t("settings.evaluation.actions.save")}
-              >
-                <Save size={15} aria-hidden />
-                {save.isPending
-                  ? t("settings.evaluation.actions.saving")
-                  : t("settings.evaluation.actions.save")}
+                aria-label={t("settings.evaluation.actions.save")} icon={Save}>
+                {t("settings.evaluation.actions.save")}
               </Button>
             </div>
           </div>
         </CardContent>
       </Card>
-    </div>
+    </PageBody>
   );
 }
 
@@ -225,12 +226,12 @@ function SuiteChips({ suite }: { suite: EvaluationSuiteStatusData }) {
       {suite.recommended_for.slice(0, 2).map((item) => (
         <span
           key={item}
-          className="inline-flex min-h-5 items-center rounded bg-muted/20 px-1.5 text-[11px] text-muted"
+          className="inline-flex min-h-5 items-center rounded bg-surface-hover px-1.5 text-xs text-fg-muted"
         >
           {item}
         </span>
       ))}
-      <span className="inline-flex min-h-5 items-center rounded bg-info-bg px-1.5 text-[11px] font-medium text-info">
+      <span className="inline-flex min-h-5 items-center rounded bg-info-subtle px-1.5 text-xs font-medium text-info-fg">
         {t("settings.evaluation.thresholds")} {thresholdCount}
       </span>
     </span>

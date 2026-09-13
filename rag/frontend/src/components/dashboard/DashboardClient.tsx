@@ -1,10 +1,13 @@
 "use client";
 
+import {
+  PageBody,
+  Card,
+  Skeleton,
+} from "@engchina/production-ready-ui";
 import { useDashboardSummary } from "@/lib/queries";
 import { ApiError } from "@/lib/api";
 import { ErrorState } from "@/components/StateViews";
-import { Card } from "@/components/ui/card";
-import { Skeleton } from "@/components/ui/skeleton";
 import type { DashboardIngestionQuality } from "@/lib/api";
 import { DashboardHeader } from "./DashboardHeader";
 import { FeatureHub } from "./FeatureHub";
@@ -42,13 +45,13 @@ export function DashboardClient() {
   const query = useDashboardSummary();
 
   return (
-    <div className="min-h-dvh">
+    <div>
       <DashboardHeader
         onRefresh={() => void query.refetch()}
         isRefreshing={query.isFetching}
         updatedAt={query.dataUpdatedAt ? new Date(query.dataUpdatedAt).toISOString() : null}
       />
-      <div className="space-y-6 p-8">
+      <PageBody>
         {query.isPending ? (
           <DashboardSkeleton />
         ) : query.isError ? (
@@ -78,7 +81,7 @@ export function DashboardClient() {
             </div>
           </>
         )}
-      </div>
+      </PageBody>
     </div>
   );
 }

@@ -17,7 +17,7 @@ export function ExtractedText({ text, clamp = false }: { text: string; clamp?: b
   const { text: body, media } = splitExtractedText(text);
 
   if (!body && media.length === 0) {
-    return <span className="text-sm text-muted">—</span>;
+    return <span className="text-sm text-fg-muted">—</span>;
   }
 
   const shown = media.slice(0, MAX_MEDIA);
@@ -31,7 +31,7 @@ export function ExtractedText({ text, clamp = false }: { text: string; clamp?: b
             <MediaItem key={index} media={item} />
           ))}
           {overflow > 0 ? (
-            <span className="tnum rounded-full border border-border bg-background px-2.5 py-1 text-xs text-muted">
+            <span className="tnum rounded-full border border-border bg-surface-sunken px-2.5 py-1 text-xs text-fg-muted">
               {t("flow.extraction.embeddedMore", { count: overflow })}
             </span>
           ) : null}
@@ -40,7 +40,7 @@ export function ExtractedText({ text, clamp = false }: { text: string; clamp?: b
       {body ? (
         <p
           className={cn(
-            "whitespace-pre-wrap break-words text-sm leading-relaxed text-foreground/90",
+            "whitespace-pre-wrap break-words text-sm leading-relaxed text-fg/90",
             clamp && "line-clamp-4"
           )}
         >
@@ -58,7 +58,7 @@ function MediaItem({ media }: { media: ExtractedMedia }) {
         src={media.src}
         loading="lazy"
         alt={t("flow.extraction.embeddedImageAlt")}
-        className="max-h-32 w-auto rounded-md border border-border bg-card object-contain"
+        className="max-h-32 w-auto rounded-md border border-border bg-surface object-contain"
       />
     );
   }
@@ -80,10 +80,10 @@ export function InfoChip({
 }) {
   return (
     <span
-      className="inline-flex min-w-0 max-w-full items-center gap-1 rounded-full border border-border bg-background px-2.5 py-1 text-xs text-muted"
+      className="inline-flex min-w-0 max-w-full items-center gap-1 rounded-full border border-border bg-surface-sunken px-2.5 py-1 text-xs text-fg-muted"
       title={title ?? label}
     >
-      {Icon ? <Icon size={12} className="shrink-0" aria-hidden /> : null}
+      {Icon ? <Icon size={14} className="shrink-0" aria-hidden /> : null}
       <span className="truncate">{label}</span>
     </span>
   );
@@ -92,7 +92,7 @@ export function InfoChip({
 /** 連番(#N など)を表す小さな丸バッジ。 */
 export function IndexBadge({ children }: { children: ReactNode }) {
   return (
-    <span className="tnum flex h-6 min-w-6 shrink-0 items-center justify-center rounded-full bg-primary/10 px-1.5 text-xs font-semibold text-primary">
+    <span className="tnum flex h-6 min-w-6 shrink-0 items-center justify-center rounded-full bg-accent-subtle px-1.5 text-xs font-semibold text-accent-fg">
       {children}
     </span>
   );

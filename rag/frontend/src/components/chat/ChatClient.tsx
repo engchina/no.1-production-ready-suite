@@ -1,16 +1,21 @@
+import {
+  PageBody,
+  PageHeader,
+  Button,
+  Banner,
+  Card,
+  CardContent,
+  SelectField,
+  type SelectFieldOption,
+  ToggleChip,
+} from "@engchina/production-ready-ui";
 import { Check, ChevronDown, Pencil, Plus, SendHorizontal, Square, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
-import { PageHeader } from "@/components/PageHeader";
 import { FeedbackControls } from "@/components/feedback/FeedbackControls";
 import { CitationCard } from "@/components/search/CitationCard";
 import { EmptyState, ErrorState, LoadingState } from "@/components/StateViews";
-import { Button } from "@/components/ui/button";
-import { Banner } from "@/components/ui/banner";
-import { Card, CardContent } from "@/components/ui/card";
-import { SelectField, type SelectFieldOption } from "@/components/ui/select-field";
-import { ToggleChip } from "@/components/ui/toggle-chip";
 import type { ChatMessage, ConversationSummary, RetrievedChunk } from "@/lib/api";
 import { ApiError } from "@/lib/api";
 import { streamChatMessage, type ChatColumn } from "@/lib/chat-stream";
@@ -96,25 +101,25 @@ function AssistantColumn({
     <div
       id={messageId ? `message-${messageId}` : undefined}
       className={cn(
-        "flex h-full min-w-0 flex-col gap-2 rounded-md border border-border bg-card p-3",
+        "flex h-full min-w-0 flex-col gap-2 rounded-md border border-border bg-surface p-3",
         className
       )}
     >
       {showLabel && label ? (
         <h3
-          className="truncate border-b border-border pb-2 text-sm font-semibold text-foreground"
+          className="truncate border-b border-border pb-2 text-sm font-semibold text-fg"
           title={label}
         >
           {label}
         </h3>
       ) : null}
       {errorMessage ? (
-        <p className="text-sm text-destructive" role="alert">
+        <p className="text-sm text-danger-fg" role="alert">
           {errorMessage}
         </p>
       ) : (
         <p
-          className="whitespace-pre-wrap text-sm leading-relaxed text-foreground"
+          className="whitespace-pre-wrap text-sm leading-relaxed text-fg"
           aria-live="polite"
         >
           {answer}
@@ -140,10 +145,10 @@ function AssistantColumn({
       ) : null}
       {citations.length > 0 ? (
         <details className="group mt-auto border-t border-border pt-1">
-          <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-2 rounded-md px-2 text-sm font-medium text-foreground transition-colors hover:bg-background focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring [&::-webkit-details-marker]:hidden">
+          <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-2 rounded-md px-2 text-sm font-medium text-fg transition-colors hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring [&::-webkit-details-marker]:hidden">
             <span>{t("chat.citations.summary", { count: citations.length })}</span>
             <ChevronDown
-              className="size-4 shrink-0 text-muted transition-transform duration-200 group-open:rotate-180 motion-reduce:transition-none"
+              className="size-4 shrink-0 text-fg-muted transition-transform duration-200 group-open:rotate-180 motion-reduce:transition-none"
               aria-hidden
             />
           </summary>
@@ -190,7 +195,7 @@ function MessageTurn({
   return (
     <div className="space-y-2">
       <div className="flex justify-end">
-        <div className="max-w-[85%] whitespace-pre-wrap rounded-md bg-primary/10 px-3 py-2 text-sm text-foreground">
+        <div className="max-w-[85%] whitespace-pre-wrap rounded-md bg-accent-subtle px-3 py-2 text-sm text-fg">
           {user.content}
         </div>
       </div>
@@ -510,9 +515,10 @@ export function ChatClient() {
 
   return (
     <div className="flex min-h-full flex-col lg:h-full lg:min-h-0">
-      <PageHeader title={t("chat.title")} subtitle={t("chat.subtitle")} />
+      {/* 会話と比較の作業領域は画面幅を使う（PageHeader と PageBody の wide は同値） */}
+      <PageHeader wide title={t("chat.title")} subtitle={t("chat.subtitle")} />
 
-      <div className="flex min-h-0 flex-1 flex-col gap-4 p-4 sm:p-6 lg:p-8">
+      <PageBody wide className="flex min-h-0 flex-1 flex-col gap-4">
         {/* 業務ビュー scope */}
         <Card className="shrink-0">
           <CardContent className="p-4 sm:p-5">
@@ -552,19 +558,17 @@ export function ChatClient() {
             {/* 会話一覧サイドバー */}
             <aside
               aria-label={t("chat.sessions.title")}
-              className="flex min-w-0 flex-col gap-3 rounded-lg border border-border bg-card p-3 shadow-sm lg:min-h-0"
+              className="flex min-w-0 flex-col gap-3 rounded-lg border border-border bg-surface p-3 shadow-sm lg:min-h-0"
             >
               <div className="flex items-center justify-between">
-                <span className="text-sm font-medium text-foreground">
+                <span className="text-sm font-medium text-fg">
                   {t("chat.sessions.title")}
                 </span>
                 <Button
                   size="sm"
                   className="h-11 sm:h-8"
                   onClick={() => void startNewConversation()}
-                  disabled={createConversation.isPending}
-                >
-                  <Plus className="size-4" aria-hidden />
+                  disabled={createConversation.isPending} icon={Plus}>
                   {t("chat.sessions.new")}
                 </Button>
               </div>
@@ -576,7 +580,7 @@ export function ChatClient() {
                   onRetry={() => void conversationsQuery.refetch()}
                 />
               ) : conversations.length === 0 ? (
-                <p className="px-1 text-sm text-muted">{t("chat.sessions.empty")}</p>
+                <p className="px-1 text-sm text-fg-muted">{t("chat.sessions.empty")}</p>
               ) : (
                 <ul
                   className="max-h-56 min-h-0 flex-1 space-y-1 overflow-y-auto lg:max-h-none"
@@ -588,7 +592,7 @@ export function ChatClient() {
                     return (
                       <li key={conversation.id} className="group">
                         {editingId === conversation.id ? (
-                          <div className="space-y-1 rounded-md bg-primary/5 p-2">
+                          <div className="space-y-1 rounded-md bg-accent-subtle p-2">
                             <div className="flex items-center gap-1">
                               <label
                                 htmlFor={`conversation-title-${conversation.id}`}
@@ -614,7 +618,7 @@ export function ChatClient() {
                                     cancelRename();
                                   }
                                 }}
-                                className="h-11 min-w-0 flex-1 rounded-md border border-border bg-background px-2 text-base text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60 sm:h-9 sm:text-sm"
+                                className="h-11 min-w-0 flex-1 rounded-md border border-border bg-surface-sunken px-2 text-base text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring disabled:opacity-60 sm:h-9 sm:text-sm"
                               />
                               <Button
                                 type="button"
@@ -623,10 +627,8 @@ export function ChatClient() {
                                 className="h-11 w-11 px-0 sm:h-9 sm:w-9"
                                 disabled={updateConversation.isPending}
                                 aria-label={t("chat.sessions.renameSave")}
-                                onClick={() => void saveRename()}
-                              >
-                                <Check className="size-4" aria-hidden />
-                              </Button>
+                                onClick={() => void saveRename()} icon={Check}>
+                                </Button>
                               <Button
                                 type="button"
                                 variant="ghost"
@@ -634,13 +636,11 @@ export function ChatClient() {
                                 className="h-11 w-11 px-0 sm:h-9 sm:w-9"
                                 disabled={updateConversation.isPending}
                                 aria-label={t("chat.sessions.renameCancel")}
-                                onClick={cancelRename}
-                              >
-                                <X className="size-4" aria-hidden />
-                              </Button>
+                                onClick={cancelRename} icon={X}>
+                                </Button>
                             </div>
                             {titleError ? (
-                              <p id={errorId} className="px-1 text-xs text-destructive" role="alert">
+                              <p id={errorId} className="px-1 text-xs text-danger-fg" role="alert">
                                 {titleError}
                               </p>
                             ) : null}
@@ -650,20 +650,20 @@ export function ChatClient() {
                             className={cn(
                               "grid grid-cols-[minmax(0,1fr)_auto] rounded-md transition-colors",
                               conversation.id === activeId
-                                ? "bg-primary/10 text-foreground"
-                                : "text-muted hover:bg-muted/30 hover:text-foreground"
+                                ? "bg-accent-subtle text-fg"
+                                : "text-fg-muted hover:bg-surface-hover hover:text-fg"
                             )}
                           >
                             <button
                               type="button"
                               onClick={() => selectConversation(conversation.id)}
                               aria-current={conversation.id === activeId}
-                              className="flex min-w-0 flex-col gap-0.5 rounded-md px-3 py-2 text-left text-sm focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring"
+                              className="flex min-w-0 flex-col gap-0.5 rounded-md px-3 py-2 text-left text-sm focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-focus-ring"
                             >
                               <span className="truncate font-medium" title={title}>
                                 {title}
                               </span>
-                              <span className="text-xs tabular-nums text-muted">
+                              <span className="text-xs tabular-nums text-fg-muted">
                                 {t("chat.sessions.metadata", {
                                   count: conversation.message_count,
                                   updatedAt: formatDateTime(conversation.updated_at),
@@ -679,10 +679,8 @@ export function ChatClient() {
                                 conversation.id === activeId && "sm:opacity-100"
                               )}
                               aria-label={t("chat.sessions.rename", { title })}
-                              onClick={() => startRename(conversation)}
-                            >
-                              <Pencil className="size-4" aria-hidden />
-                            </Button>
+                              onClick={() => startRename(conversation)} icon={Pencil}>
+                              </Button>
                           </div>
                         )}
                       </li>
@@ -695,7 +693,7 @@ export function ChatClient() {
             {/* 会話エリア */}
             <section
               aria-label={t("chat.title")}
-              className="flex h-[70dvh] min-h-[28rem] min-w-0 flex-col gap-3 overflow-hidden rounded-lg border border-border bg-card shadow-sm lg:h-auto lg:min-h-0"
+              className="flex h-[70dvh] min-h-[28rem] min-w-0 flex-col gap-3 overflow-hidden rounded-lg border border-border bg-surface shadow-sm lg:h-auto lg:min-h-0"
             >
             <div ref={scrollRef} className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
               {!activeId ? (
@@ -747,7 +745,7 @@ export function ChatClient() {
             <div className="space-y-2 border-t border-border p-3">
               {compareModels.length > 0 ? (
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-xs font-medium text-muted">{t("chat.compare.label")}</span>
+                  <span className="text-xs font-medium text-fg-muted">{t("chat.compare.label")}</span>
                   {compareModels.map((model) => (
                     <ToggleChip
                       key={model.model_id}
@@ -779,7 +777,7 @@ export function ChatClient() {
                     activeId ? t("chat.composer.placeholder") : t("chat.composer.selectConversation")
                   }
                   disabled={!activeId || sending}
-                  className="min-h-11 min-w-0 flex-1 resize-y rounded-md border border-border bg-background p-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
+                  className="min-h-11 min-w-0 flex-1 resize-y rounded-md border border-border bg-surface-sunken p-2 text-sm text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring disabled:opacity-60"
                 />
                 {sending ? (
                   <Button
@@ -787,9 +785,7 @@ export function ChatClient() {
                     variant="secondary"
                     className="h-11 w-full shrink-0 sm:h-9 sm:w-auto"
                     onClick={stop}
-                    aria-label={t("chat.composer.stop")}
-                  >
-                    <Square className="size-4" aria-hidden />
+                    aria-label={t("chat.composer.stop")} icon={Square}>
                     {t("chat.composer.stop")}
                   </Button>
                 ) : (
@@ -798,15 +794,13 @@ export function ChatClient() {
                     className="h-11 w-full shrink-0 sm:h-9 sm:w-auto"
                     onClick={() => void send()}
                     disabled={!activeId || composer.trim().length === 0}
-                    aria-label={t("chat.composer.send")}
-                  >
-                    <SendHorizontal className="size-4" aria-hidden />
+                    aria-label={t("chat.composer.send")} icon={SendHorizontal}>
                     {t("chat.composer.send")}
                   </Button>
                 )}
               </div>
               {errorText ? (
-                <p className="text-sm text-destructive" role="alert">
+                <p className="text-sm text-danger-fg" role="alert">
                   {errorText}
                 </p>
               ) : null}
@@ -814,7 +808,7 @@ export function ChatClient() {
             </section>
           </div>
         )}
-      </div>
+      </PageBody>
     </div>
   );
 }

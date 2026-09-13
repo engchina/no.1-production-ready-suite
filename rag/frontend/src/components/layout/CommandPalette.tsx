@@ -137,7 +137,7 @@ function CommandPaletteDialog({ onClose }: { onClose: () => void }) {
 
   return createPortal(
     <div
-      className="animate-overlay-in fixed inset-0 z-[1000] flex items-start justify-center bg-black/50 p-4 pt-[12vh]"
+      className="animate-overlay-in fixed inset-0 z-[var(--z-palette)] flex items-start justify-center bg-[var(--scrim)] p-4 pt-[12vh]"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}
@@ -146,12 +146,12 @@ function CommandPaletteDialog({ onClose }: { onClose: () => void }) {
         role="dialog"
         aria-modal="true"
         aria-label={t("command.title")}
-        className="animate-dialog-in flex max-h-[70vh] w-full max-w-xl flex-col overflow-hidden rounded-xl border border-border bg-card shadow-2xl ring-1 ring-black/5"
+        className="animate-dialog-in flex max-h-[70vh] w-full max-w-xl flex-col overflow-hidden rounded-xl border border-border bg-surface-overlay shadow-[var(--shadow-palette)] ring-1 ring-border"
         onKeyDown={onKeyDown}
       >
         {/* 検索ヘッダー: パレットの主役。アイコン + 入力 + クリア/Esc。 */}
         <div className="flex items-center gap-3 border-b border-border px-4">
-          <Search size={18} className="shrink-0 text-muted" aria-hidden />
+          <Search size={20} className="shrink-0 text-fg-muted" aria-hidden />
           <input
             ref={inputRef}
             type="text"
@@ -163,7 +163,7 @@ function CommandPaletteDialog({ onClose }: { onClose: () => void }) {
             onChange={(event) => setQuery(event.target.value)}
             placeholder={t("command.search.placeholder")}
             // グローバルのフォーム focus 枠(inset ring)を打ち消し、パレットらしいシームレスな検索にする。
-            className="h-14 w-full bg-transparent text-[15px] leading-6 text-foreground caret-primary outline-none placeholder:text-muted/80 focus-visible:shadow-none!"
+            className="h-14 w-full bg-transparent text-base leading-6 text-fg caret-accent-fg outline-none placeholder:text-fg-muted focus-visible:shadow-none!"
           />
           {query ? (
             <button
@@ -174,12 +174,12 @@ function CommandPaletteDialog({ onClose }: { onClose: () => void }) {
                 setQuery("");
                 inputRef.current?.focus();
               }}
-              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-border/60 hover:text-foreground"
+              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-fg-muted transition-colors hover:bg-border/60 hover:text-fg"
             >
-              <X size={15} aria-hidden />
+              <X size={16} aria-hidden />
             </button>
           ) : (
-            <kbd className="shrink-0 rounded border border-border bg-background px-1.5 py-0.5 text-[10px] font-medium text-muted">
+            <kbd className="shrink-0 rounded border border-border bg-surface-sunken px-1.5 py-0.5 text-xs font-medium text-fg-muted">
               esc
             </kbd>
           )}
@@ -187,9 +187,9 @@ function CommandPaletteDialog({ onClose }: { onClose: () => void }) {
 
         {results.length === 0 ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-1 px-4 py-12 text-center">
-            <Search size={22} className="text-muted/60" aria-hidden />
-            <p className="text-sm font-medium text-foreground">{t("command.empty")}</p>
-            <p className="text-xs text-muted">{t("command.empty.hint")}</p>
+            <Search size={24} className="text-fg-muted" aria-hidden />
+            <p className="text-sm font-medium text-fg">{t("command.empty")}</p>
+            <p className="text-xs text-fg-muted">{t("command.empty.hint")}</p>
           </div>
         ) : (
           <ul
@@ -212,8 +212,8 @@ function CommandPaletteDialog({ onClose }: { onClose: () => void }) {
                     className={cn(
                       "flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm transition-colors",
                       isActive
-                        ? "bg-primary text-primary-foreground"
-                        : "text-foreground hover:bg-border/50"
+                        ? "bg-accent-emphasis text-fg-on-accent"
+                        : "text-fg hover:bg-surface-hover"
                     )}
                     onMouseMove={() => setActiveIndex(index)}
                     onClick={() => select(index)}
@@ -221,20 +221,20 @@ function CommandPaletteDialog({ onClose }: { onClose: () => void }) {
                     <span
                       className={cn(
                         "flex h-7 w-7 shrink-0 items-center justify-center rounded-md",
-                        isActive ? "bg-white/15" : "bg-border/50"
+                        isActive ? "bg-fg-on-accent/15" : "bg-surface-hover"
                       )}
                     >
                       <Icon
-                        size={15}
-                        className={isActive ? "text-primary-foreground" : "text-muted"}
+                        size={16}
+                        className={isActive ? "text-fg-on-accent" : "text-fg-muted"}
                         aria-hidden
                       />
                     </span>
                     <span className="min-w-0 flex-1 truncate">{entry.fullLabel}</span>
                     <span
                       className={cn(
-                        "shrink-0 rounded px-1.5 py-0.5 text-[11px]",
-                        isActive ? "bg-white/15 text-primary-foreground/90" : "text-muted"
+                        "shrink-0 rounded px-1.5 py-0.5 text-xs",
+                        isActive ? "bg-fg-on-accent/15 text-fg-on-accent" : "text-fg-muted"
                       )}
                     >
                       {entry.sectionTitle}
@@ -247,21 +247,21 @@ function CommandPaletteDialog({ onClose }: { onClose: () => void }) {
         )}
 
         {/* フッター: キーボードヒント + 件数。キーボード優先 UI の完成度を高める。 */}
-        <div className="flex items-center justify-between gap-2 border-t border-border bg-background/40 px-4 py-2 text-xs text-muted">
+        <div className="flex items-center justify-between gap-2 border-t border-border bg-surface-sunken px-4 py-2 text-xs text-fg-muted">
           <div className="flex items-center gap-3">
             <span className="flex items-center gap-1">
-              <kbd className="rounded border border-border bg-background px-1 py-0.5 text-[10px] font-medium">↑</kbd>
-              <kbd className="rounded border border-border bg-background px-1 py-0.5 text-[10px] font-medium">↓</kbd>
+              <kbd className="rounded border border-border bg-surface-sunken px-1 py-0.5 text-xs font-medium">↑</kbd>
+              <kbd className="rounded border border-border bg-surface-sunken px-1 py-0.5 text-xs font-medium">↓</kbd>
               {t("command.hint.navigate")}
             </span>
             <span className="flex items-center gap-1">
-              <kbd className="inline-flex items-center rounded border border-border bg-background px-1 py-0.5 text-[10px] font-medium">
+              <kbd className="inline-flex items-center rounded border border-border bg-surface-sunken px-1 py-0.5 text-xs font-medium">
                 <CornerDownLeft size={11} aria-hidden />
               </kbd>
               {t("command.hint.select")}
             </span>
             <span className="hidden items-center gap-1 sm:flex">
-              <kbd className="rounded border border-border bg-background px-1.5 py-0.5 text-[10px] font-medium">esc</kbd>
+              <kbd className="rounded border border-border bg-surface-sunken px-1.5 py-0.5 text-xs font-medium">esc</kbd>
               {t("command.hint.close")}
             </span>
           </div>

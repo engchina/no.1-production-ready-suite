@@ -1,21 +1,25 @@
 "use client";
 
+import {
+  PageBody,
+  PageHeader,
+  Button,
+  Card,
+  Banner,
+  SelectField,
+  type SelectFieldOption,
+  ToggleChip,
+  Skeleton,
+} from "@engchina/production-ready-ui";
 import { Link } from "react-router-dom";
 import { Search as SearchIcon, Sparkles, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
-import { PageHeader } from "@/components/PageHeader";
 import { DegradedBanner } from "@/components/DegradedBanner";
 import { StatusBadge } from "@/components/StatusBadge";
-import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
-import { Banner } from "@/components/ui/banner";
 import { useConfirm } from "@/components/ui/confirm-dialog";
-import { SelectField, type SelectFieldOption } from "@/components/ui/select-field";
-import { ToggleChip } from "@/components/ui/toggle-chip";
 import { EmptyState, ErrorState } from "@/components/StateViews";
-import { Skeleton } from "@/components/ui/skeleton";
 import {
   api,
   ApiError,
@@ -216,7 +220,7 @@ export function FileListClient() {
   return (
     <div>
       <PageHeader title={t("nav.fileList")} subtitle={t("fileList.subtitle")} />
-      <div className="space-y-4 p-8">
+      <PageBody>
         {/* DB 停止時の縮退お知らせ(非ブロッキング) */}
         <DegradedBanner
           messages={page?.warning_messages}
@@ -245,12 +249,12 @@ export function FileListClient() {
               options={knowledgeBaseOptions}
               onValueChange={(value) => resetView(() => setKnowledgeBaseId(value))}
               className="w-60 [&_label]:text-xs"
-              buttonClassName="bg-card"
+              buttonClassName="bg-surface"
             />
             <div className="relative">
               <SearchIcon
-                size={15}
-                className="absolute left-3 top-1/2 -translate-y-1/2 text-muted"
+                size={16}
+                className="absolute left-3 top-1/2 -translate-y-1/2 text-fg-muted"
                 aria-hidden
               />
               <input
@@ -263,7 +267,7 @@ export function FileListClient() {
                 onBlur={() => resetView(() => setQ(search.trim()))}
                 placeholder={t("fileList.searchPlaceholder")}
                 aria-label={t("fileList.searchPlaceholder")}
-                className="h-10 w-56 rounded-md border border-border bg-card py-2 pl-9 pr-3 text-sm outline-none focus-visible:border-primary"
+                className="h-10 w-56 rounded-md border border-border-control bg-surface py-2 pl-9 pr-3 text-sm outline-none focus-visible:border-focus-ring"
               />
             </div>
           </div>
@@ -281,8 +285,8 @@ export function FileListClient() {
 
         {/* 一括操作バー */}
         {selection.count > 0 ? (
-          <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-primary/30 bg-info-bg/40 px-4 py-2.5">
-            <span className="text-sm font-medium text-foreground">
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-accent-emphasis bg-info-subtle px-4 py-2.5">
+            <span className="text-sm font-medium text-fg">
               {t("fileList.selected", { count: selection.count })}
             </span>
             <div className="flex items-center gap-2">
@@ -290,9 +294,7 @@ export function FileListClient() {
                 size="sm"
                 onClick={() => void runBulkIngest()}
                 loading={bulkIngest !== null}
-                disabled={bulkBusy || ingestibleSelected.length === 0}
-              >
-                {bulkIngest === null ? <Sparkles size={14} aria-hidden /> : null}
+                disabled={bulkBusy || ingestibleSelected.length === 0} icon={Sparkles}>
                 {bulkIngest
                   ? t("fileList.bulkQueueRunning", {
                       done: bulkIngest.done,
@@ -305,9 +307,7 @@ export function FileListClient() {
                 size="sm"
                 onClick={() => void runBulkDelete()}
                 loading={bulkDelete !== null}
-                disabled={bulkBusy || selectedDocuments.length === 0}
-              >
-                {bulkDelete === null ? <Trash2 size={14} aria-hidden /> : null}
+                disabled={bulkBusy || selectedDocuments.length === 0} icon={Trash2}>
                 {bulkDelete
                   ? t("fileList.bulkDeleteRunning", {
                       done: bulkDelete.done,
@@ -315,8 +315,7 @@ export function FileListClient() {
                     })
                   : `${t("fileList.bulkDelete")} (${selectedDocuments.length})`}
               </Button>
-              <Button variant="ghost" size="sm" onClick={selection.clear} disabled={bulkBusy}>
-                <X size={14} aria-hidden />
+              <Button variant="ghost" size="sm" onClick={selection.clear} disabled={bulkBusy} icon={X}>
                 {t("fileList.clearSelection")}
               </Button>
             </div>
@@ -335,7 +334,7 @@ export function FileListClient() {
             <Card className="overflow-hidden">
               <div className="bounded-scroll-area-lg overflow-x-auto">
                 <table className="min-w-[980px] w-full text-sm">
-                  <thead className="sticky top-0 z-10 bg-background text-left text-muted shadow-[inset_0_-1px_0_var(--border)]">
+                  <thead className="sticky top-0 z-10 bg-surface-sunken text-left text-fg-muted shadow-[inset_0_-1px_0_var(--color-border)]">
                     <tr>
                       <th className="w-10 px-4 py-3">
                         <input
@@ -343,7 +342,7 @@ export function FileListClient() {
                           checked={allSelected}
                           onChange={() => selection.toggleAll(pageIds)}
                           aria-label={t("fileList.selectAllAria")}
-                          className="cursor-pointer accent-[var(--primary)]"
+                          className="cursor-pointer accent-[var(--color-accent-emphasis)]"
                         />
                       </th>
                       <th className="px-4 py-3 font-medium">{t("fileList.col.fileName")}</th>
@@ -387,7 +386,7 @@ export function FileListClient() {
 
             {/* ページネーション */}
             <div className="flex items-center justify-between">
-              <span className="tnum text-xs text-muted">
+              <span className="tnum text-xs text-fg-muted">
                 {t("pager.range", {
                   start: page && page.total === 0 ? 0 : offset + 1,
                   end: offset + items.length,
@@ -427,7 +426,7 @@ export function FileListClient() {
             </div>
           </Card>
         )}
-      </div>
+      </PageBody>
     </div>
   );
 }
@@ -452,20 +451,20 @@ function Row({
   actionsDisabled: boolean;
 }) {
   return (
-    <tr className={cn("border-t border-border", selected && "bg-info-bg/30")}>
+    <tr className={cn("border-t border-border", selected && "bg-info-subtle")}>
       <td className="px-4 py-3">
         <input
           type="checkbox"
           checked={selected}
           onChange={onToggle}
           aria-label={t("fileList.selectRowAria")}
-          className="cursor-pointer accent-[var(--primary)]"
+          className="cursor-pointer accent-[var(--color-accent-emphasis)]"
         />
       </td>
       <td className="max-w-[260px] px-4 py-3">
         <Link
           to={`${APP_ROUTES.documents}/${doc.id}`}
-          className="block truncate font-medium text-primary hover:underline"
+          className="block truncate font-medium text-accent-fg hover:underline"
           title={doc.file_name}
         >
           {doc.file_name}
@@ -474,12 +473,12 @@ function Row({
       <td className="max-w-[240px] px-4 py-3">
         <KnowledgeBaseChips knowledgeBases={doc.knowledge_bases ?? []} />
       </td>
-      <td className="px-4 py-3 text-muted">{doc.category_name ?? "—"}</td>
+      <td className="px-4 py-3 text-fg-muted">{doc.category_name ?? "—"}</td>
       <td className="px-4 py-3">
         <StatusBadge status={doc.status} />
       </td>
-      <td className="tnum px-4 py-3 text-right text-muted">{formatBytes(doc.file_size_bytes)}</td>
-      <td className="tnum px-4 py-3 text-muted">{formatDateTime(doc.uploaded_at)}</td>
+      <td className="tnum px-4 py-3 text-right text-fg-muted">{formatBytes(doc.file_size_bytes)}</td>
+      <td className="tnum px-4 py-3 text-fg-muted">{formatDateTime(doc.uploaded_at)}</td>
       <td className="px-4 py-3">
         <div className="flex justify-end gap-2">
           {(doc.status === "UPLOADED" || doc.status === "ERROR") && (
@@ -487,9 +486,7 @@ function Row({
               size="sm"
               loading={ingesting}
               disabled={deleting || actionsDisabled}
-              onClick={() => onIngest(false)}
-            >
-              {!ingesting ? <Sparkles size={14} aria-hidden /> : null}
+              onClick={() => onIngest(false)} icon={Sparkles}>
               {t(doc.status === "ERROR" ? "flow.retry.preprocess" : "action.enqueueIngestion")}
             </Button>
           )}
@@ -499,9 +496,7 @@ function Row({
             loading={deleting}
             disabled={ingesting || actionsDisabled}
             onClick={onDelete}
-            aria-label={t("fileList.delete.aria", { name: doc.file_name })}
-          >
-            {!deleting ? <Trash2 size={14} aria-hidden /> : null}
+            aria-label={t("fileList.delete.aria", { name: doc.file_name })} icon={Trash2}>
             {t("fileList.delete.action")}
           </Button>
         </div>
@@ -512,7 +507,7 @@ function Row({
 
 function KnowledgeBaseChips({ knowledgeBases }: { knowledgeBases: KnowledgeBaseRef[] }) {
   if (knowledgeBases.length === 0) {
-    return <span className="text-muted">—</span>;
+    return <span className="text-fg-muted">—</span>;
   }
 
   return (
@@ -520,7 +515,7 @@ function KnowledgeBaseChips({ knowledgeBases }: { knowledgeBases: KnowledgeBaseR
       {knowledgeBases.map((knowledgeBase) => (
         <span
           key={knowledgeBase.id}
-          className="max-w-[12rem] truncate rounded-full border border-border bg-background px-2 py-0.5 text-xs font-medium text-foreground"
+          className="max-w-[12rem] truncate rounded-full border border-border bg-surface-sunken px-2 py-0.5 text-xs font-medium text-fg"
           title={knowledgeBase.name}
         >
           {knowledgeBase.name}

@@ -1,8 +1,10 @@
 import { CheckCircle2, ThumbsDown, ThumbsUp } from "lucide-react";
 import { useState } from "react";
 
-import { Button } from "@/components/ui/button";
-import { ToggleChip } from "@/components/ui/toggle-chip";
+import {
+  Button,
+  ToggleChip,
+} from "@engchina/production-ready-ui";
 import {
   ApiError,
   type CitationFeedbackReason,
@@ -139,7 +141,7 @@ export function FeedbackControls({
   return (
     <div className={cn("min-w-0", !compact && "mt-4 border-t border-border pt-3")}>
       <div className={cn("flex gap-2", compact ? "items-center justify-end" : "flex-wrap items-center")}>
-        <span className={compact ? "sr-only" : "mr-1 text-sm font-medium text-foreground"}>
+        <span className={compact ? "sr-only" : "mr-1 text-sm font-medium text-fg"}>
           {label}
         </span>
         <div className="flex gap-1" role="group" aria-label={label}>
@@ -150,17 +152,15 @@ export function FeedbackControls({
             className={cn(
               "min-w-8 px-2",
               compact && "min-h-[44px] min-w-[44px] sm:min-h-9 sm:min-w-8",
-              current?.rating === "helpful" && "text-success"
+              current?.rating === "helpful" && "text-success-fg"
             )}
             aria-label={helpfulLabel}
             aria-pressed={current?.rating === "helpful"}
             title={helpfulLabel}
             disabled={disabled}
             loading={mutation.isPending && retryPayload?.rating === "helpful"}
-            onClick={() => void submit("helpful", null, null)}
-          >
-            <ThumbsUp size={14} aria-hidden />
-          </Button>
+            onClick={() => void submit("helpful", null, null)} icon={ThumbsUp}>
+            </Button>
           <Button
             type="button"
             variant={current?.rating === "not_helpful" ? "secondary" : "ghost"}
@@ -168,29 +168,27 @@ export function FeedbackControls({
             className={cn(
               "min-w-8 px-2",
               compact && "min-h-[44px] min-w-[44px] sm:min-h-9 sm:min-w-8",
-              current?.rating === "not_helpful" && "text-danger"
+              current?.rating === "not_helpful" && "text-danger-fg"
             )}
             aria-label={notHelpfulLabel}
             aria-pressed={current?.rating === "not_helpful"}
             aria-expanded={showReasons}
             title={notHelpfulLabel}
             disabled={disabled}
-            onClick={handleOpenReasons}
-          >
-            <ThumbsDown size={14} aria-hidden />
-          </Button>
+            onClick={handleOpenReasons} icon={ThumbsDown}>
+            </Button>
         </div>
         {current && !compact ? (
-          <span className="inline-flex items-center gap-1 text-xs text-muted" role="status">
-            <CheckCircle2 size={14} className="text-success" aria-hidden />
+          <span className="inline-flex items-center gap-1 text-xs text-fg-muted" role="status">
+            <CheckCircle2 size={14} className="text-success-fg" aria-hidden />
             {t("feedback.controls.savedInline")}
           </span>
         ) : null}
       </div>
 
       {showReasons ? (
-        <fieldset className="mt-3 rounded-md border border-border bg-background p-3">
-          <legend className="px-1 text-xs font-medium text-foreground">
+        <fieldset className="mt-3 rounded-md border border-border bg-surface-sunken p-3">
+          <legend className="px-1 text-xs font-medium text-fg">
             {t("feedback.controls.reasonLegend")}
           </legend>
           <div className="flex flex-wrap gap-1" role="group" aria-label={t("feedback.controls.reasonLegend")}>
@@ -205,7 +203,7 @@ export function FeedbackControls({
               </ToggleChip>
             ))}
           </div>
-          <label className="mt-3 block text-xs font-medium text-foreground" htmlFor={`feedback-comment-${targetType}-${chunkId ?? "answer"}`}>
+          <label className="mt-3 block text-xs font-medium text-fg" htmlFor={`feedback-comment-${targetType}-${chunkId ?? "answer"}`}>
             {t("feedback.controls.commentLabel")}
           </label>
           <textarea
@@ -215,10 +213,10 @@ export function FeedbackControls({
             rows={3}
             disabled={mutation.isPending}
             placeholder={t("feedback.controls.commentPlaceholder")}
-            className="mt-1 w-full resize-y rounded-md border border-border bg-card px-3 py-2 text-sm text-foreground outline-none placeholder:text-muted focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+            className="mt-1 w-full resize-y rounded-md border border-border-control bg-surface px-3 py-2 text-sm text-fg outline-none placeholder:text-fg-muted focus-visible:ring-2 focus-visible:ring-focus-ring disabled:opacity-50"
             onChange={(event) => setComment(event.target.value)}
           />
-          <p className="mt-1 text-right text-xs tabular-nums text-muted">
+          <p className="mt-1 text-right text-xs tabular-nums text-fg-muted">
             {t("feedback.controls.commentCount", { count: comment.length })}
           </p>
           <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-border pt-3">
@@ -239,7 +237,7 @@ export function FeedbackControls({
       ) : null}
 
       {error ? (
-        <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-destructive" role="alert">
+        <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-danger-fg" role="alert">
           <span>{error}</span>
           {retryPayload ? (
             <Button

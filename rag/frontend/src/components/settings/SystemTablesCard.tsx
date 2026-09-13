@@ -3,16 +3,23 @@ import {
   DatabaseZap,
   RefreshCw,
   RotateCcw,
+  Hourglass,
 } from "lucide-react";
-import { StatusBadge } from "@engchina/production-ready-ui";
+import {
+  StatusBadge,
+  Button,
+  Banner,
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+  FormStatus,
+  Skeleton,
+} from "@engchina/production-ready-ui";
 import { useEffect, useRef, useState } from "react";
 
-import { Button } from "@/components/ui/button";
-import { Banner } from "@/components/ui/banner";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useConfirm } from "@/components/ui/confirm-dialog";
-import { FormStatus } from "@/components/ui/form-status";
-import { Skeleton } from "@/components/ui/skeleton";
 import {
   ApiError,
   type SystemTableSchemaStatus,
@@ -142,7 +149,7 @@ export function SystemTablesCard() {
         <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border pb-5">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <DatabaseZap size={18} aria-hidden />
+              <DatabaseZap size={20} aria-hidden />
               <CardTitle className="text-lg">
                 {t("settings.database.systemTables.title")}
               </CardTitle>
@@ -159,7 +166,8 @@ export function SystemTablesCard() {
               />
               {schemaOperationRunning ? (
                 <StatusBadge
-                  variant="pending"
+                  variant="info"
+                  icon={Hourglass}
                   label={t("settings.database.systemTables.operation.running")}
                 />
               ) : null}
@@ -183,9 +191,7 @@ export function SystemTablesCard() {
                 variant="secondary"
                 className="min-h-[44px]"
                 loading={statusQuery.isFetching}
-                onClick={() => void refreshStatus()}
-              >
-                <RefreshCw size={16} aria-hidden />
+                onClick={() => void refreshStatus()} icon={RefreshCw}>
                 {t("settings.database.systemTables.action.retry")}
               </Button>
             </div>
@@ -230,7 +236,7 @@ export function SystemTablesCard() {
                 ref={operationErrorRef}
                 tabIndex={-1}
                 data-testid="system-tables-operation-error"
-                className="rounded-md focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                className="rounded-md focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
               >
                 <Banner
                   severity="danger"
@@ -258,9 +264,7 @@ export function SystemTablesCard() {
                 className="min-h-[44px]"
                 loading={operation.isPending && operation.variables?.recreate === false}
                 disabled={busy}
-                onClick={() => execute(false)}
-              >
-                <DatabaseZap size={16} aria-hidden />
+                onClick={() => execute(false)} icon={DatabaseZap}>
                 {t("settings.database.systemTables.action.initialize")}
               </Button>
               <Button
@@ -270,9 +274,7 @@ export function SystemTablesCard() {
                 className="min-h-[44px]"
                 loading={statusQuery.isFetching}
                 disabled={operation.isPending}
-                onClick={() => void refreshStatus()}
-              >
-                <RefreshCw size={16} aria-hidden />
+                onClick={() => void refreshStatus()} icon={RefreshCw}>
                 {t("settings.database.systemTables.action.refresh")}
               </Button>
             </div>
@@ -280,23 +282,23 @@ export function SystemTablesCard() {
             <SystemTablesDetails data={data} />
 
             <section
-              className="space-y-4 border-t border-danger/30 pt-5"
+              className="space-y-4 border-t border-danger-border pt-5"
               aria-labelledby="recreate-system-tables-title"
             >
               <div className="flex items-start gap-2">
                 <AlertTriangle
-                  className="mt-0.5 shrink-0 text-danger"
-                  size={18}
+                  className="mt-0.5 shrink-0 text-danger-fg"
+                  size={20}
                   aria-hidden
                 />
                 <div>
                   <h3
                     id="recreate-system-tables-title"
-                    className="text-sm font-semibold text-danger"
+                    className="text-sm font-semibold text-danger-fg"
                   >
                     {t("settings.database.systemTables.recreate.title")}
                   </h3>
-                  <p className="mt-1 text-xs leading-relaxed text-muted">
+                  <p className="mt-1 text-xs leading-relaxed text-fg-muted">
                     {t("settings.database.systemTables.recreate.description")}
                   </p>
                 </div>
@@ -305,7 +307,7 @@ export function SystemTablesCard() {
               <div className="space-y-2">
                 <label
                   htmlFor="system-tables-recreate-confirmation"
-                  className="text-sm font-medium text-foreground"
+                  className="text-sm font-medium text-fg"
                 >
                   {t("settings.database.systemTables.recreate.confirmationLabel")}
                 </label>
@@ -318,11 +320,11 @@ export function SystemTablesCard() {
                   onChange={(event) => setRecreateConfirmation(event.target.value)}
                   placeholder={RECREATE_RAG_SYSTEM_TABLES_CONFIRMATION}
                   aria-describedby="system-tables-recreate-helper"
-                  className="min-h-[44px] w-full rounded-md border border-border bg-background px-3 font-mono text-sm text-foreground outline-none transition-colors placeholder:text-muted/70 focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="min-h-[44px] w-full rounded-md border border-border-control bg-surface-sunken px-3 font-mono text-sm text-fg outline-none transition-colors placeholder:text-fg-muted focus-visible:border-focus-ring focus-visible:ring-2 focus-visible:ring-focus-ring disabled:cursor-not-allowed disabled:opacity-50"
                 />
                 <p
                   id="system-tables-recreate-helper"
-                  className="text-xs leading-relaxed text-muted"
+                  className="text-xs leading-relaxed text-fg-muted"
                 >
                   {t("settings.database.systemTables.recreate.helper", {
                     phrase: RECREATE_RAG_SYSTEM_TABLES_CONFIRMATION,
@@ -337,9 +339,7 @@ export function SystemTablesCard() {
                 className="min-h-[44px] w-full sm:w-auto"
                 loading={operation.isPending && operation.variables?.recreate === true}
                 disabled={busy || !recreateConfirmed}
-                onClick={() => void requestRecreate()}
-              >
-                <RotateCcw size={16} aria-hidden />
+                onClick={() => void requestRecreate()} icon={RotateCcw}>
                 {t("settings.database.systemTables.action.recreate")}
               </Button>
             </section>
@@ -352,9 +352,9 @@ export function SystemTablesCard() {
 
 function SummaryItem({ label, value }: { label: string; value: string }) {
   return (
-    <div className="min-w-0 rounded-md border border-border bg-muted/20 p-3">
-      <p className="text-xs text-muted">{label}</p>
-      <p className="mt-1 break-words font-mono text-sm font-semibold text-foreground">
+    <div className="min-w-0 rounded-md border border-border bg-surface-hover p-3">
+      <p className="text-xs text-fg-muted">{label}</p>
+      <p className="mt-1 break-words font-mono text-sm font-semibold text-fg">
         {value}
       </p>
     </div>
@@ -377,11 +377,11 @@ function SystemTablesSkeleton() {
 function SystemTablesDetails({ data }: { data: SystemTablesStatusData }) {
   return (
     <details className="min-w-0 rounded-md border border-border">
-      <summary className="min-h-[44px] cursor-pointer px-4 py-3 text-sm font-medium text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring">
+      <summary className="min-h-[44px] cursor-pointer px-4 py-3 text-sm font-medium text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring">
         {t("settings.database.systemTables.details.title")}
       </summary>
       <div className="min-w-0 border-t border-border p-4">
-        <p className="mb-3 break-words text-xs leading-relaxed text-muted">
+        <p className="mb-3 break-words text-xs leading-relaxed text-fg-muted">
           {t("settings.database.systemTables.details.versions", {
             applied: data.applied_versions.join(", ") || "-",
             pending: data.pending_versions.join(", ") || "-",
@@ -392,11 +392,11 @@ function SystemTablesDetails({ data }: { data: SystemTablesStatusData }) {
           tabIndex={0}
           aria-label={t("settings.database.systemTables.table.scrollLabel")}
           data-testid="system-tables-scroll-region"
-          className="max-h-[27rem] max-w-full overflow-auto rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+          className="max-h-[27rem] max-w-full overflow-auto rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
         >
           <table className="w-full min-w-[680px] border-collapse text-left text-sm">
-            <thead className="sticky top-0 z-10 bg-background">
-              <tr className="border-b border-border text-xs text-muted">
+            <thead className="sticky top-0 z-10 bg-surface-sunken">
+              <tr className="border-b border-border text-xs text-fg-muted">
                 <th scope="col" className="px-3 py-2 font-medium">
                   {t("settings.database.systemTables.table.name")}
                 </th>
@@ -422,7 +422,7 @@ function SystemTablesDetails({ data }: { data: SystemTablesStatusData }) {
                 >
                   <th
                     scope="row"
-                    className="whitespace-nowrap px-3 py-2 font-mono text-xs font-medium text-foreground"
+                    className="whitespace-nowrap px-3 py-2 font-mono text-xs font-medium text-fg"
                   >
                     {table.name}
                   </th>
@@ -436,15 +436,15 @@ function SystemTablesDetails({ data }: { data: SystemTablesStatusData }) {
                       )}
                     />
                   </td>
-                  <td className="px-3 py-2 text-right tabular-nums text-foreground">
+                  <td className="px-3 py-2 text-right tabular-nums text-fg">
                     {table.estimated_rows == null
                       ? "—"
                       : formatNumber(table.estimated_rows)}
                   </td>
-                  <td className="whitespace-nowrap px-3 py-2 text-muted">
+                  <td className="whitespace-nowrap px-3 py-2 text-fg-muted">
                     {formatDateTime(table.created_at)}
                   </td>
-                  <td className="whitespace-nowrap px-3 py-2 text-muted">
+                  <td className="whitespace-nowrap px-3 py-2 text-fg-muted">
                     {formatDateTime(table.last_analyzed_at)}
                   </td>
                 </tr>

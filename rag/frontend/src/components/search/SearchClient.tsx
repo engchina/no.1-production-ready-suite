@@ -1,6 +1,19 @@
 "use client";
 
 import {
+  PageBody,
+  PageHeader,
+  Banner,
+  Button,
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  SelectField,
+  type SelectFieldOption,
+  ToggleChip,
+} from "@engchina/production-ready-ui";
+import {
   ChevronRight,
   Clock3,
   Plus,
@@ -19,12 +32,6 @@ import {
   buildFeedbackContentSnapshot,
   FeedbackControls,
 } from "@/components/feedback/FeedbackControls";
-import { PageHeader } from "@/components/PageHeader";
-import { Banner } from "@/components/ui/banner";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { SelectField, type SelectFieldOption } from "@/components/ui/select-field";
-import { ToggleChip } from "@/components/ui/toggle-chip";
 import { EmptyState, ErrorState, LoadingState } from "@/components/StateViews";
 import {
   ApiError,
@@ -300,7 +307,7 @@ export function SearchClient() {
   return (
     <div>
       <PageHeader title={t("nav.search")} subtitle={t("search.initial")} />
-      <div className="p-4 sm:p-6 lg:p-8">
+      <PageBody>
         <section className="space-y-6">
           {businessViewsQuery.isLoading ? (
             <Card>
@@ -320,8 +327,7 @@ export function SearchClient() {
                   title={t("search.businessViewRequired.title")}
                   hint={t("search.businessViewRequired.hint")}
                   action={
-                    <Button onClick={() => navigate(APP_ROUTES.businessViews)}>
-                      <Plus size={16} aria-hidden />
+                    <Button onClick={() => navigate(APP_ROUTES.businessViews)} icon={Plus}>
                       {t("search.businessViewRequired.cta")}
                     </Button>
                   }
@@ -351,7 +357,7 @@ export function SearchClient() {
                 <div className="relative min-w-0 flex-1">
                   <SearchIcon
                     size={16}
-                    className="absolute left-3 top-1/2 -translate-y-1/2 text-muted"
+                    className="absolute left-3 top-1/2 -translate-y-1/2 text-fg-muted"
                     aria-hidden
                   />
                   <input
@@ -364,7 +370,7 @@ export function SearchClient() {
                     }}
                     placeholder={t("search.placeholder")}
                     aria-label={t("nav.search")}
-                    className="h-11 w-full rounded-md border border-border bg-background py-2.5 pl-9 pr-3 text-sm outline-none focus-visible:border-primary focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"
+                    className="h-11 w-full rounded-md border border-border-control bg-surface-sunken py-2.5 pl-9 pr-3 text-sm outline-none focus-visible:border-focus-ring focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus-ring"
                   />
                 </div>
                 <Button
@@ -378,11 +384,10 @@ export function SearchClient() {
                   size="lg"
                   className="sm:w-28"
                 >
-                  {isStreaming ? t("search.searching") : t("search.button")}
+                  {t("search.button")}
                 </Button>
                 {isStreaming ? (
-                  <Button type="button" variant="secondary" size="lg" onClick={cancel}>
-                    <X size={16} aria-hidden />
+                  <Button type="button" variant="secondary" size="lg" onClick={cancel} icon={X}>
                     {t("search.cancel")}
                   </Button>
                 ) : null}
@@ -396,10 +401,10 @@ export function SearchClient() {
                     </ToggleChip>
                   ))}
                 </div>
-                <p className="text-xs text-muted">{t("search.pipeline")}</p>
+                <p className="text-xs text-fg-muted">{t("search.pipeline")}</p>
               </div>
 
-              <div className="rounded-md border border-border bg-background">
+              <div className="rounded-md border border-border bg-surface-sunken">
                 <button
                   type="button"
                   aria-expanded={advancedOpen || hasAdvancedSettings}
@@ -413,9 +418,9 @@ export function SearchClient() {
                     event.preventDefault();
                     setAdvancedOpen((open) => !open);
                   }}
-                  className="flex w-full cursor-pointer items-center gap-1.5 px-3 py-2 text-left text-sm font-medium text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                  className="flex w-full cursor-pointer items-center gap-1.5 px-3 py-2 text-left text-sm font-medium text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 >
-                  <SlidersHorizontal size={14} className="text-primary" aria-hidden />
+                  <SlidersHorizontal size={14} className="text-accent-fg" aria-hidden />
                   {t("search.filters.advanced")}
                 </button>
                 {advancedOpen || hasAdvancedSettings ? (
@@ -430,7 +435,7 @@ export function SearchClient() {
                       helper={t("search.tuning.topKHelp")}
                       onValueChange={changeTopK}
                       className="[&_label]:text-xs"
-                      buttonClassName="bg-card"
+                      buttonClassName="bg-surface"
                     />
 
                     <SelectField
@@ -441,7 +446,7 @@ export function SearchClient() {
                       helper={t("search.tuning.rerankTopNHelp")}
                       onValueChange={setRerankTopN}
                       className="[&_label]:text-xs"
-                      buttonClassName="bg-card"
+                      buttonClassName="bg-surface"
                     />
                   </div>
 
@@ -453,10 +458,10 @@ export function SearchClient() {
                       options={CONTENT_KIND_SELECT_OPTIONS}
                       onValueChange={setContentKind}
                       className="[&_label]:text-xs"
-                      buttonClassName="bg-card"
+                      buttonClassName="bg-surface"
                     />
 
-                    <div className="rounded-md border border-border bg-card">
+                    <div className="rounded-md border border-border bg-surface">
                       <button
                         type="button"
                         aria-expanded={sectionFiltersVisible}
@@ -470,19 +475,19 @@ export function SearchClient() {
                           event.preventDefault();
                           setSectionFiltersOpen((open) => !open);
                         }}
-                        className="flex w-full cursor-pointer items-center justify-between gap-2 px-3 py-2 text-left text-xs font-medium text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                        className="flex w-full cursor-pointer items-center justify-between gap-2 px-3 py-2 text-left text-xs font-medium text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                       >
                         <span>{t("search.filters.sectionGroup")}</span>
-                        <span className="text-muted" aria-hidden>{sectionFiltersVisible ? "−" : "+"}</span>
+                        <span className="text-fg-muted" aria-hidden>{sectionFiltersVisible ? "−" : "+"}</span>
                       </button>
                       {sectionFiltersVisible ? (
                         <div id="search-section-filters" className="space-y-3 border-t border-border p-3">
-                          <p className="text-xs leading-relaxed text-muted">
+                          <p className="text-xs leading-relaxed text-fg-muted">
                             {t("search.filters.sectionHelper")}
                           </p>
                           <div className="grid gap-3 md:grid-cols-2">
                             <div className="space-y-1.5">
-                              <label htmlFor="search-section-title" className="text-xs font-medium text-foreground">
+                              <label htmlFor="search-section-title" className="text-xs font-medium text-fg">
                                 {t("search.filters.sectionTitle")}
                               </label>
                               <input
@@ -491,12 +496,12 @@ export function SearchClient() {
                                 value={sectionTitle}
                                 onChange={(event) => setSectionTitle(event.target.value)}
                                 placeholder={t("search.filters.sectionTitlePlaceholder")}
-                                className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted/70 focus-visible:border-primary focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"
+                                className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm text-fg outline-none transition-colors placeholder:text-fg-muted focus-visible:border-focus-ring focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus-ring"
                               />
                             </div>
 
                             <div className="space-y-1.5">
-                              <label htmlFor="search-section-path" className="text-xs font-medium text-foreground">
+                              <label htmlFor="search-section-path" className="text-xs font-medium text-fg">
                                 {t("search.filters.sectionPath")}
                               </label>
                               <input
@@ -505,7 +510,7 @@ export function SearchClient() {
                                 value={sectionPath}
                                 onChange={(event) => setSectionPath(event.target.value)}
                                 placeholder={t("search.filters.sectionPathPlaceholder")}
-                                className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted/70 focus-visible:border-primary focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"
+                                className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm text-fg outline-none transition-colors placeholder:text-fg-muted focus-visible:border-focus-ring focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus-ring"
                               />
                             </div>
                           </div>
@@ -521,9 +526,7 @@ export function SearchClient() {
                       size="md"
                       onClick={clearFilters}
                       disabled={!hasAdvancedSettings || isStreaming}
-                      className="w-full sm:w-auto"
-                    >
-                      <X size={15} aria-hidden />
+                      className="w-full sm:w-auto" icon={X}>
                       {t("search.filters.clear")}
                     </Button>
                   </div>
@@ -553,7 +556,7 @@ export function SearchClient() {
               ) : null}
 
               {phase === "cancelled" ? (
-                <div className="rounded-md border border-border bg-card px-3 py-2 text-sm text-muted" role="status">
+                <div className="rounded-md border border-border bg-surface px-3 py-2 text-sm text-fg-muted" role="status">
                   {t("search.cancelled")}
                 </div>
               ) : null}
@@ -562,7 +565,7 @@ export function SearchClient() {
               <Card>
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
-                    <Sparkles size={16} className="text-primary" aria-hidden />
+                    <Sparkles size={16} className="text-accent-fg" aria-hidden />
                     {t("search.answer")}
                   </CardTitle>
                 </CardHeader>
@@ -577,14 +580,14 @@ export function SearchClient() {
                   ) : null}
                   <ActiveFilterChips filters={appliedFilters} />
                   {structuredJsonAnswer ? (
-                    <pre className="max-w-full overflow-x-auto whitespace-pre-wrap break-words rounded-md border border-border bg-muted/20 p-3 font-mono text-sm leading-relaxed text-foreground">
+                    <pre className="max-w-full overflow-x-auto whitespace-pre-wrap break-words rounded-md border border-border bg-surface-hover p-3 font-mono text-sm leading-relaxed text-fg">
                       {answer}
                     </pre>
                   ) : (
-                    <p className="whitespace-pre-wrap text-sm leading-relaxed text-foreground">
+                    <p className="whitespace-pre-wrap text-sm leading-relaxed text-fg">
                       {answer || (phase === "cancelled" ? t("search.cancelledHint") : "")}
                       {isStreaming ? (
-                        <span className="ml-0.5 inline-block h-4 w-1.5 animate-pulse bg-primary align-middle" />
+                        <span className="ml-0.5 inline-block h-4 w-1.5 animate-pulse bg-accent-emphasis align-middle" />
                       ) : null}
                     </p>
                   )}
@@ -614,7 +617,7 @@ export function SearchClient() {
                 </Card>
               ) : citations.length > 0 ? (
                 <section>
-                  <h2 className="mb-3 text-sm font-semibold text-foreground">
+                  <h2 className="mb-3 text-sm font-semibold text-fg">
                     {t("search.citations")}（{citations.length}）
                   </h2>
                   <ul className="bounded-scroll-area-lg space-y-2 pr-1">
@@ -639,7 +642,7 @@ export function SearchClient() {
             </>
           )}
         </section>
-      </div>
+      </PageBody>
     </div>
   );
 }
@@ -671,8 +674,8 @@ function SearchRunPanel({
       className="mb-4 space-y-3 border-b border-border pb-3"
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="flex items-center gap-2 text-sm font-semibold text-foreground">
-          <Clock3 size={15} className="text-primary" aria-hidden />
+        <h3 className="flex items-center gap-2 text-sm font-semibold text-fg">
+          <Clock3 size={16} className="text-accent-fg" aria-hidden />
           {t("search.run.title")}
         </h3>
         <span className={runStatusClass(phase)}>{runStatusLabel(phase)}</span>
@@ -689,7 +692,7 @@ function SearchRunPanel({
       </dl>
       {completedStages.length ? (
         <div className="space-y-1.5">
-          <p className="text-xs font-medium text-muted">{t("search.run.stages")}</p>
+          <p className="text-xs font-medium text-fg-muted">{t("search.run.stages")}</p>
           <div className="flex flex-wrap gap-1.5">
             {completedStages.map((stage, index) => (
               <span
@@ -719,8 +722,8 @@ function SearchRunMetric({
 }) {
   return (
     <div className="min-w-0">
-      <dt className="text-muted">{label}</dt>
-      <dd data-testid={testId} className="tnum mt-0.5 truncate font-medium text-foreground">
+      <dt className="text-fg-muted">{label}</dt>
+      <dd data-testid={testId} className="tnum mt-0.5 truncate font-medium text-fg">
         {value}
       </dd>
     </div>
@@ -756,13 +759,13 @@ function runStatusClass(phase: Phase): string {
   const base = "rounded-full px-2 py-0.5 text-xs font-medium";
   switch (phase) {
     case "done":
-      return `${base} bg-success-bg text-success`;
+      return `${base} bg-success-subtle text-success-fg`;
     case "error":
-      return `${base} bg-danger-bg text-danger`;
+      return `${base} bg-danger-subtle text-danger-fg`;
     case "cancelled":
-      return `${base} bg-warning-bg text-warning`;
+      return `${base} bg-warning-subtle text-warning-fg`;
     default:
-      return `${base} bg-info-bg text-info`;
+      return `${base} bg-info-subtle text-info-fg`;
   }
 }
 
@@ -783,12 +786,12 @@ function stageChipClass(outcome: SearchStageEvent["outcome"]): string {
   const base = "inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs";
   switch (outcome) {
     case "success":
-      return `${base} bg-success-bg text-success`;
+      return `${base} bg-success-subtle text-success-fg`;
     case "error":
     case "cancelled":
-      return `${base} bg-danger-bg text-danger`;
+      return `${base} bg-danger-subtle text-danger-fg`;
     default:
-      return `${base} bg-muted/10 text-muted`;
+      return `${base} bg-surface-hover text-fg-muted`;
   }
 }
 
@@ -814,12 +817,12 @@ function ActiveFilterChips({ filters }: { filters: Record<string, string> }) {
   if (!chips.length) return null;
   return (
     <div aria-label={t("search.filters.applied")} className="mb-3 space-y-1.5">
-      <p className="text-xs font-medium text-muted">{t("search.filters.applied")}</p>
+      <p className="text-xs font-medium text-fg-muted">{t("search.filters.applied")}</p>
       <div className="flex flex-wrap gap-1.5">
         {chips.map((chip) => (
           <span
             key={chip.key}
-            className="max-w-full break-all rounded-full border border-border bg-background px-2 py-0.5 text-xs font-medium leading-snug text-foreground"
+            className="max-w-full break-all rounded-full border border-border bg-surface-sunken px-2 py-0.5 text-xs font-medium leading-snug text-fg"
           >
             {chip.label}
           </span>
@@ -869,7 +872,7 @@ function SearchExecutionMeta({ meta }: { meta: Meta }) {
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   return (
     <div className="mt-4 space-y-3 border-t border-border pt-3">
-      <p className="tnum flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">
+      <p className="tnum flex flex-wrap gap-x-4 gap-y-1 text-xs text-fg-muted">
         <span>
           {t("search.meta.elapsed")}: {Math.round(meta.elapsed_ms)} ms
         </span>
@@ -879,12 +882,12 @@ function SearchExecutionMeta({ meta }: { meta: Meta }) {
       </p>
       {keywordTerms.length ? (
         <div aria-label={t("search.meta.keywords")} className="space-y-1.5">
-          <p className="text-xs font-medium text-muted">{t("search.meta.keywords")}</p>
+          <p className="text-xs font-medium text-fg-muted">{t("search.meta.keywords")}</p>
           <div className="flex flex-wrap gap-1.5">
             {keywordTerms.map((term, index) => (
               <span
                 key={`${term}-${index}`}
-                className="max-w-full break-all rounded-full border border-border bg-background px-2 py-0.5 text-xs font-medium leading-snug text-foreground"
+                className="max-w-full break-all rounded-full border border-border bg-surface-sunken px-2 py-0.5 text-xs font-medium leading-snug text-fg"
               >
                 {term}
               </span>
@@ -894,7 +897,7 @@ function SearchExecutionMeta({ meta }: { meta: Meta }) {
       ) : null}
       <RetrievalFlow breakdown={breakdown} />
       {items.length || candidates.length ? (
-        <div className="rounded-md border border-border bg-background">
+        <div className="rounded-md border border-border bg-surface-sunken">
           <button
             type="button"
             aria-expanded={diagnosticsOpen}
@@ -908,7 +911,7 @@ function SearchExecutionMeta({ meta }: { meta: Meta }) {
               event.preventDefault();
               setDiagnosticsOpen((open) => !open);
             }}
-            className="w-full cursor-pointer px-3 py-2 text-left text-xs font-medium text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+            className="w-full cursor-pointer px-3 py-2 text-left text-xs font-medium text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
           >
             {t("search.meta.diagnostics")}
           </button>
@@ -916,7 +919,7 @@ function SearchExecutionMeta({ meta }: { meta: Meta }) {
           <div id="search-diagnostics-panel" className="space-y-3 border-t border-border p-3">
             {items.length ? (
               <section className="space-y-2">
-                <h4 className="text-xs font-medium text-muted">{t("search.meta.detailMetrics")}</h4>
+                <h4 className="text-xs font-medium text-fg-muted">{t("search.meta.detailMetrics")}</h4>
                 <dl
                   aria-label={t("search.meta.execution")}
                   className="grid gap-2 sm:grid-cols-3 lg:grid-cols-4"
@@ -924,10 +927,10 @@ function SearchExecutionMeta({ meta }: { meta: Meta }) {
                   {items.map((item) => (
                     <div
                       key={item.key}
-                      className="min-w-0 rounded-md border border-border bg-card px-3 py-2"
+                      className="min-w-0 rounded-md border border-border bg-surface px-3 py-2"
                     >
-                      <dt className="truncate text-[11px] font-medium text-muted">{item.label}</dt>
-                      <dd className="tnum mt-0.5 text-sm font-semibold text-foreground">{item.value}</dd>
+                      <dt className="truncate text-xs font-medium text-fg-muted">{item.label}</dt>
+                      <dd className="tnum mt-0.5 text-sm font-semibold text-fg">{item.value}</dd>
                     </div>
                   ))}
                 </dl>
@@ -957,23 +960,23 @@ function RetrievalFlow({ breakdown }: { breakdown: NormalizedRetrievalBreakdown 
   ];
   return (
     <div className="space-y-1.5">
-      <p className="text-xs font-medium text-muted">{t("search.meta.flow")}</p>
+      <p className="text-xs font-medium text-fg-muted">{t("search.meta.flow")}</p>
       <ol
         aria-label={t("search.meta.flow")}
-        className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-border bg-background px-3 py-2 text-xs"
+        className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-border bg-surface-sunken px-3 py-2 text-xs"
       >
         {steps.map((step, index) => (
           <li key={step.key} className="inline-flex items-center gap-2">
-            {index > 0 ? <span className="text-muted" aria-hidden>→</span> : null}
+            {index > 0 ? <span className="text-fg-muted" aria-hidden>→</span> : null}
             <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
-              <span className="text-muted">{step.label}</span>
-              <strong className="tnum text-sm text-foreground">{step.value}</strong>
+              <span className="text-fg-muted">{step.label}</span>
+              <strong className="tnum text-sm text-fg">{step.value}</strong>
             </span>
           </li>
         ))}
       </ol>
       {breakdown.dropped_count > 0 ? (
-        <p className="tnum text-xs text-muted">
+        <p className="tnum text-xs text-fg-muted">
           {t("search.meta.flow.dropped")}: {breakdown.dropped_count}
         </p>
       ) : null}
@@ -988,12 +991,12 @@ function RetrievalCandidateDetails({
 }) {
   return (
     <section className="space-y-2">
-      <h4 className="text-xs font-medium text-muted">{t("search.meta.candidateDetails")}</h4>
+      <h4 className="text-xs font-medium text-fg-muted">{t("search.meta.candidateDetails")}</h4>
       {candidates.length ? (
         <div role="table" aria-label={t("search.meta.candidateDetails")} className="space-y-1.5">
           <div
             role="row"
-            className="hidden grid-cols-[minmax(0,0.75fr)_minmax(0,1.35fr)_minmax(0,0.9fr)_80px_80px_60px_80px_minmax(0,1fr)] gap-2 px-2 text-[11px] font-medium text-muted md:grid"
+            className="hidden grid-cols-[minmax(0,0.75fr)_minmax(0,1.35fr)_minmax(0,0.9fr)_80px_80px_60px_80px_minmax(0,1fr)] gap-2 px-2 text-xs font-medium text-fg-muted md:grid"
           >
             <span role="columnheader">{t("fileList.col.fileName")}</span>
             <span role="columnheader">{t("search.meta.candidate")}</span>
@@ -1009,7 +1012,7 @@ function RetrievalCandidateDetails({
           ))}
         </div>
       ) : (
-        <p className="text-xs text-muted">{t("search.meta.noCandidates")}</p>
+        <p className="text-xs text-fg-muted">{t("search.meta.noCandidates")}</p>
       )}
     </section>
   );
@@ -1023,9 +1026,9 @@ function CandidateRow({
   return (
     <details
       role="row"
-      className="group rounded-md border border-border bg-card text-xs"
+      className="group rounded-md border border-border bg-surface text-xs"
     >
-      <summary className="grid min-h-11 cursor-pointer list-none gap-2 rounded-md p-2 outline-none transition-colors hover:bg-background focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none md:grid-cols-[minmax(0,0.75fr)_minmax(0,1.35fr)_minmax(0,0.9fr)_80px_80px_60px_80px_minmax(0,1fr)] [&::-webkit-details-marker]:hidden">
+      <summary className="grid min-h-11 cursor-pointer list-none gap-2 rounded-md p-2 outline-none transition-colors hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-focus-ring motion-reduce:transition-none md:grid-cols-[minmax(0,0.75fr)_minmax(0,1.35fr)_minmax(0,0.9fr)_80px_80px_60px_80px_minmax(0,1fr)] [&::-webkit-details-marker]:hidden">
         <span
           role="cell"
           data-testid="candidate-file-name"
@@ -1033,11 +1036,11 @@ function CandidateRow({
         >
           <ChevronRight
             size={14}
-            className="shrink-0 text-muted transition-transform duration-200 group-open:rotate-90 motion-reduce:transition-none"
+            className="shrink-0 text-fg-muted transition-transform duration-200 group-open:rotate-90 motion-reduce:transition-none"
             aria-hidden
           />
           <span
-            className="min-w-0 truncate font-medium text-foreground"
+            className="min-w-0 truncate font-medium text-fg"
             title={candidate.file_name ?? candidate.document_id}
           >
             {candidate.file_name ?? candidate.document_id}
@@ -1046,7 +1049,7 @@ function CandidateRow({
         <span
           role="cell"
           data-testid="candidate-preview"
-          className="min-w-0 truncate text-[11px] text-muted"
+          className="min-w-0 truncate text-xs text-fg-muted"
           title={candidate.text || undefined}
         >
           {candidate.text || "—"}
@@ -1055,33 +1058,33 @@ function CandidateRow({
           {candidate.sources.map((source) => (
             <span
               key={source}
-              className="rounded-full bg-muted/10 px-2 py-0.5 text-[11px] font-medium text-muted"
+              className="rounded-full bg-surface-hover px-2 py-0.5 text-xs font-medium text-fg-muted"
             >
               {sourceLabel(source)}
             </span>
           ))}
         </span>
-        <span role="cell" className="tnum text-foreground">
+        <span role="cell" className="tnum text-fg">
           {formatRankScore(candidate.vector_rank, candidate.vector_score)}
         </span>
-        <span role="cell" className="tnum text-foreground">
+        <span role="cell" className="tnum text-fg">
           {formatRankScore(candidate.keyword_rank, candidate.keyword_score)}
         </span>
-        <span role="cell" className="tnum text-foreground">
+        <span role="cell" className="tnum text-fg">
           {formatScore(candidate.rrf_score)}
         </span>
-        <span role="cell" className="tnum text-foreground">
+        <span role="cell" className="tnum text-fg">
           {formatRankScore(candidate.rerank_rank, candidate.rerank_score)}
         </span>
-        <span role="cell" className="min-w-0 text-foreground">
+        <span role="cell" className="min-w-0 text-fg">
           <span>{candidateStatusLabel(candidate.status)}</span>
           {candidate.drop_reason ? (
-            <span className="ml-1 text-muted">({dropReasonLabel(candidate.drop_reason)})</span>
+            <span className="ml-1 text-fg-muted">({dropReasonLabel(candidate.drop_reason)})</span>
           ) : null}
         </span>
       </summary>
       <div data-testid="candidate-original" className="border-t border-border p-3">
-        <p className="mb-2 text-[11px] font-medium text-muted">
+        <p className="mb-2 text-xs font-medium text-fg-muted">
           {t("search.meta.chunkOriginal")}
         </p>
         <ExtractedText text={candidate.text ?? ""} />
@@ -1242,9 +1245,9 @@ function BusinessViewScopePicker({
 }) {
   return (
     <div className="space-y-1.5 sm:col-span-4">
-      <p className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+      <p className="flex items-center gap-1.5 text-xs font-medium text-fg">
         {t("businessViews.scope.label")}
-        <span className="rounded-full bg-warning-bg px-2 py-0.5 text-[10px] font-medium text-warning">
+        <span className="rounded-full bg-warning-subtle px-2 py-0.5 text-xs font-medium text-warning-fg">
           {t("common.required")}
         </span>
       </p>
@@ -1258,11 +1261,11 @@ function BusinessViewScopePicker({
         ariaLabel={t("businessViews.scope.label")}
       />
       {error ? (
-        <p className="text-xs text-danger" role="alert">
+        <p className="text-xs text-danger-fg" role="alert">
           {error}
         </p>
       ) : (
-        <p className="text-xs text-muted">
+        <p className="text-xs text-fg-muted">
           {selectedIds.length > 0
             ? t("businessViews.scope.applied", { count: selectedIds.length })
             : t("businessViews.scope.helper")}

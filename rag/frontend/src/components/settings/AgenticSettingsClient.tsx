@@ -1,13 +1,20 @@
 "use client";
 
+import {
+  PageBody,
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+  Button,
+  FormStatus,
+  Skeleton,
+} from "@engchina/production-ready-ui";
 import { useEffect, useState } from "react";
 import { CheckCircle2, RotateCcw, Save, Workflow } from "lucide-react";
 
 import { ErrorState } from "@/components/StateViews";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { FormStatus } from "@/components/ui/form-status";
-import { Skeleton } from "@/components/ui/skeleton";
 import {
   ApiError,
   type AgenticProfileName,
@@ -43,22 +50,22 @@ export function AgenticSettingsClient() {
 
   if (query.isPending) {
     return (
-      <div className="space-y-4 p-8">
+      <PageBody>
         <Skeleton className="h-64 w-full rounded-lg" />
-      </div>
+      </PageBody>
     );
   }
 
   if (query.isError) {
     return (
-      <div className="p-8">
+      <PageBody>
         <ErrorState
           message={
             query.error instanceof ApiError ? query.error.message : t("settings.agentic.loadError")
           }
           onRetry={() => void query.refetch()}
         />
-      </div>
+      </PageBody>
     );
   }
 
@@ -106,11 +113,11 @@ export function AgenticSettingsClient() {
   }
 
   return (
-    <div className="space-y-5 p-8">
+    <PageBody>
       <Card>
         <CardHeader>
           <div className="flex items-start gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-bg text-info">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-subtle text-info-fg">
               <Workflow size={20} aria-hidden />
             </div>
             <div>
@@ -121,7 +128,7 @@ export function AgenticSettingsClient() {
         </CardHeader>
         <CardContent className="space-y-5">
           <div className="space-y-2">
-            <div className="text-sm font-medium text-foreground">
+            <div className="text-sm font-medium text-fg">
               {t("settings.agentic.profile")}
             </div>
             <div
@@ -140,19 +147,19 @@ export function AgenticSettingsClient() {
                     disabled={save.isPending}
                     onClick={() => selectProfile(item.name)}
                     className={cn(
-                      "min-h-[112px] rounded-md border px-3 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50",
+                      "min-h-[112px] rounded-md border px-3 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50",
                       selected
-                        ? "border-primary bg-primary/10 text-foreground"
-                        : "border-border bg-card text-foreground hover:bg-background"
+                        ? "border-accent-emphasis bg-accent-subtle text-fg"
+                        : "border-border bg-surface text-fg hover:bg-surface-hover"
                     )}
                   >
                     <span className="flex items-center justify-between gap-2">
                       <span className="text-sm font-semibold">{profileLabel(item.name)}</span>
                       {selected ? (
-                        <CheckCircle2 size={15} className="shrink-0 text-primary" aria-hidden />
+                        <CheckCircle2 size={16} className="shrink-0 text-accent-fg" aria-hidden />
                       ) : null}
                     </span>
-                    <span className="mt-1 block text-xs leading-relaxed text-muted">
+                    <span className="mt-1 block text-xs leading-relaxed text-fg-muted">
                       {profileDescription(item.name)}
                     </span>
                     <ProfileChips profile={item} />
@@ -205,9 +212,7 @@ export function AgenticSettingsClient() {
                 variant="secondary"
                 onClick={resetForm}
                 disabled={!dirty || save.isPending}
-                aria-label={t("settings.agentic.actions.reset")}
-              >
-                <RotateCcw size={15} aria-hidden />
+                aria-label={t("settings.agentic.actions.reset")} icon={RotateCcw}>
                 {t("settings.agentic.actions.reset")}
               </Button>
               <Button
@@ -215,18 +220,14 @@ export function AgenticSettingsClient() {
                 loading={save.isPending}
                 disabled={!dirty || maxSubqueriesError}
                 onClick={submit}
-                aria-label={t("settings.agentic.actions.save")}
-              >
-                <Save size={15} aria-hidden />
-                {save.isPending
-                  ? t("settings.agentic.actions.saving")
-                  : t("settings.agentic.actions.save")}
+                aria-label={t("settings.agentic.actions.save")} icon={Save}>
+                {t("settings.agentic.actions.save")}
               </Button>
             </div>
           </div>
         </CardContent>
       </Card>
-    </div>
+    </PageBody>
   );
 }
 
@@ -234,27 +235,27 @@ function ProfileChips({ profile }: { profile: AgenticProfileStatusData }) {
   return (
     <span className="mt-2 flex flex-wrap gap-1">
       {profile.hyde ? (
-        <span className="inline-flex min-h-5 items-center rounded bg-info-bg px-1.5 text-[11px] font-medium text-info">
+        <span className="inline-flex min-h-5 items-center rounded bg-info-subtle px-1.5 text-xs font-medium text-info-fg">
           {t("settings.agentic.hyde")}
         </span>
       ) : null}
       {profile.rewrite ? (
-        <span className="inline-flex min-h-5 items-center rounded bg-info-bg px-1.5 text-[11px] font-medium text-info">
+        <span className="inline-flex min-h-5 items-center rounded bg-info-subtle px-1.5 text-xs font-medium text-info-fg">
           {t("settings.agentic.rewrite")}
         </span>
       ) : null}
       {profile.decompose ? (
-        <span className="inline-flex min-h-5 items-center rounded bg-muted/20 px-1.5 text-[11px] text-muted">
+        <span className="inline-flex min-h-5 items-center rounded bg-surface-hover px-1.5 text-xs text-fg-muted">
           {t("settings.agentic.decompose")}
         </span>
       ) : null}
       {profile.multi_hop ? (
-        <span className="inline-flex min-h-5 items-center rounded bg-muted/20 px-1.5 text-[11px] text-muted">
+        <span className="inline-flex min-h-5 items-center rounded bg-surface-hover px-1.5 text-xs text-fg-muted">
           {t("settings.agentic.multiHop")}
         </span>
       ) : null}
       {!profile.enabled ? (
-        <span className="inline-flex min-h-5 items-center rounded bg-muted/20 px-1.5 text-[11px] text-muted">
+        <span className="inline-flex min-h-5 items-center rounded bg-surface-hover px-1.5 text-xs text-fg-muted">
           {t("settings.agentic.off")}
         </span>
       ) : null}
@@ -264,9 +265,9 @@ function ProfileChips({ profile }: { profile: AgenticProfileStatusData }) {
 
 function RuntimeFact({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-md border border-border bg-muted/20 p-3">
-      <dt className="text-xs font-medium text-muted">{label}</dt>
-      <dd className="mt-1 break-words text-sm font-semibold text-foreground">{value}</dd>
+    <div className="rounded-md border border-border bg-surface-hover p-3">
+      <dt className="text-xs font-medium text-fg-muted">{label}</dt>
+      <dd className="mt-1 break-words text-sm font-semibold text-fg">{value}</dd>
     </div>
   );
 }
@@ -290,7 +291,7 @@ function NumberField({
 }) {
   return (
     <label className="space-y-1.5">
-      <span className="block text-sm font-medium text-foreground">{label}</span>
+      <span className="block text-sm font-medium text-fg">{label}</span>
       <input
         type="number"
         inputMode="numeric"
@@ -300,9 +301,9 @@ function NumberField({
         aria-label={label}
         disabled={disabled}
         onChange={(event) => onChange(Number.parseInt(event.target.value, 10))}
-        className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted/70 focus-visible:border-primary disabled:cursor-not-allowed disabled:opacity-50"
+        className="h-10 w-full rounded-md border border-border-control bg-surface px-3 text-sm text-fg outline-none transition-colors placeholder:text-fg-muted focus-visible:border-focus-ring disabled:cursor-not-allowed disabled:opacity-50"
       />
-      {helper ? <span className="block text-xs text-muted">{helper}</span> : null}
+      {helper ? <span className="block text-xs text-fg-muted">{helper}</span> : null}
     </label>
   );
 }

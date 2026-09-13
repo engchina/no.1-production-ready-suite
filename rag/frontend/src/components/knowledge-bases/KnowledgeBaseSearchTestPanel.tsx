@@ -4,9 +4,14 @@ import { FlaskConical, Search as SearchIcon, Sparkles, X } from "lucide-react";
 import { useRef, useState } from "react";
 
 import { CitationCard } from "@/components/search/CitationCard";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { ToggleChip } from "@/components/ui/toggle-chip";
+import {
+  Button,
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  ToggleChip,
+} from "@engchina/production-ready-ui";
 import { EmptyState, ErrorState } from "@/components/StateViews";
 import { ApiError, type RetrievedChunk, type SearchMode } from "@/lib/api";
 import { streamSearch } from "@/lib/search-stream";
@@ -102,12 +107,12 @@ export function KnowledgeBaseSearchTestPanel({
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-base">
-          <FlaskConical className="size-4 text-muted" aria-hidden />
+          <FlaskConical className="size-4 text-fg-muted" aria-hidden />
           {t("knowledgeBases.searchTest.title")}
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        <p className="text-sm text-muted">{t("knowledgeBases.searchTest.description")}</p>
+        <p className="text-sm text-fg-muted">{t("knowledgeBases.searchTest.description")}</p>
 
         {!ready ? (
           <EmptyState
@@ -123,7 +128,7 @@ export function KnowledgeBaseSearchTestPanel({
               <div className="relative min-w-0 flex-1">
                 <SearchIcon
                   size={16}
-                  className="absolute left-3 top-1/2 -translate-y-1/2 text-muted"
+                  className="absolute left-3 top-1/2 -translate-y-1/2 text-fg-muted"
                   aria-hidden
                 />
                 <input
@@ -136,7 +141,7 @@ export function KnowledgeBaseSearchTestPanel({
                   }}
                   placeholder={t("knowledgeBases.searchTest.placeholder")}
                   aria-label={t("knowledgeBases.searchTest.title")}
-                  className="h-11 w-full rounded-md border border-border bg-background py-2.5 pl-9 pr-3 text-sm outline-none focus-visible:border-primary focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"
+                  className="h-11 w-full rounded-md border border-border-control bg-surface-sunken py-2.5 pl-9 pr-3 text-sm outline-none focus-visible:border-focus-ring focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus-ring"
                 />
               </div>
               <Button
@@ -150,13 +155,10 @@ export function KnowledgeBaseSearchTestPanel({
                 size="lg"
                 className="sm:w-28"
               >
-                {isStreaming
-                  ? t("knowledgeBases.searchTest.searching")
-                  : t("knowledgeBases.searchTest.button")}
+                {t("knowledgeBases.searchTest.button")}
               </Button>
               {isStreaming ? (
-                <Button type="button" variant="secondary" size="lg" onClick={cancel}>
-                  <X size={16} aria-hidden />
+                <Button type="button" variant="secondary" size="lg" onClick={cancel} icon={X}>
                   {t("knowledgeBases.searchTest.cancel")}
                 </Button>
               ) : null}
@@ -181,19 +183,19 @@ export function KnowledgeBaseSearchTestPanel({
             ) : (
               <div className="space-y-4">
                 {answer || isStreaming ? (
-                  <div className="rounded-lg border border-border bg-card p-4">
-                    <h3 className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
-                      <Sparkles size={15} className="text-primary" aria-hidden />
+                  <div className="rounded-lg border border-border bg-surface p-4">
+                    <h3 className="mb-2 flex items-center gap-2 text-sm font-semibold text-fg">
+                      <Sparkles size={16} className="text-accent-fg" aria-hidden />
                       {t("search.answer")}
                     </h3>
-                    <p className="whitespace-pre-wrap text-sm leading-relaxed text-foreground">
+                    <p className="whitespace-pre-wrap text-sm leading-relaxed text-fg">
                       {answer || (phase === "cancelled" ? t("search.cancelledHint") : "")}
                       {isStreaming ? (
-                        <span className="ml-0.5 inline-block h-4 w-1.5 animate-pulse bg-primary align-middle motion-reduce:animate-none" />
+                        <span className="ml-0.5 inline-block h-4 w-1.5 animate-pulse bg-accent-emphasis align-middle motion-reduce:animate-none" />
                       ) : null}
                     </p>
                     {meta && phase === "done" ? (
-                      <p className="tnum mt-3 border-t border-border pt-2 text-xs text-muted">
+                      <p className="tnum mt-3 border-t border-border pt-2 text-xs text-fg-muted">
                         {t("knowledgeBases.searchTest.resultMeta", {
                           mode: t(MODE_LABEL[mode]),
                           count: citations.length,
@@ -208,7 +210,7 @@ export function KnowledgeBaseSearchTestPanel({
                   <EmptyState title={t("search.noResults")} hint={t("search.noResultsHint")} />
                 ) : citations.length > 0 ? (
                   <section>
-                    <h3 className="mb-3 text-sm font-semibold text-foreground">
+                    <h3 className="mb-3 text-sm font-semibold text-fg">
                       {t("search.citations")}（{citations.length}）
                     </h3>
                     <ul className="bounded-scroll-area-lg space-y-2 pr-1">

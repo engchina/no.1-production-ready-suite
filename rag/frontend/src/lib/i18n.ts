@@ -32,6 +32,7 @@ export const ja = {
   "common.delete": "削除",
   "common.undo": "元に戻す",
   "common.retry": "再試行",
+  "common.skipToMain": "本文へスキップ",
   "common.cardError.title": "この項目を表示できません",
   "common.cardError.titleWithLabel": "「{label}」を表示できません",
   "common.cardError.description":
@@ -66,6 +67,8 @@ export const ja = {
   "auth.login.signingIn": "ログイン中…",
   "auth.login.error.failed": "ログイン処理に失敗しました。",
   "auth.logout": "ログアウト",
+  "theme.switchToLight": "ライトテーマに切り替え",
+  "theme.switchToDark": "ダークテーマに切り替え",
   "auth.user.unknown": "ログインユーザー",
   "auth.user.role": "USER",
 

@@ -1,6 +1,6 @@
 import { ChevronRight, FileSearch, Sparkles, Upload, type LucideIcon } from "lucide-react";
 
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@engchina/production-ready-ui";
 import { t, type I18nKey } from "@/lib/i18n";
 
 interface Step {
@@ -29,16 +29,16 @@ export function WorkflowSteps() {
             return (
               <li key={s.labelKey} className="flex items-center">
                 <div className="flex items-center gap-2">
-                  <span className="flex size-8 items-center justify-center rounded-full bg-primary/10 text-primary">
+                  <span className="flex size-8 items-center justify-center rounded-full bg-accent-subtle text-accent-fg">
                     <Icon size={16} aria-hidden />
                   </span>
-                  <span className="text-sm font-medium text-foreground">
-                    <span className="tnum mr-1 text-xs text-muted">{i + 1}.</span>
+                  <span className="text-sm font-medium text-fg">
+                    <span className="tnum mr-1 text-xs text-fg-muted">{i + 1}.</span>
                     {t(s.labelKey)}
                   </span>
                 </div>
                 {i < STEPS.length - 1 ? (
-                  <ChevronRight size={16} className="mx-2 text-muted" aria-hidden />
+                  <ChevronRight size={16} className="mx-2 text-fg-muted" aria-hidden />
                 ) : null}
               </li>
             );

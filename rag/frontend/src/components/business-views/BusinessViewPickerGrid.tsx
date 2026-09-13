@@ -58,7 +58,7 @@ export function BusinessViewPickerGrid({
         hideEmpty: t("businessViewPicker.hideEmpty"),
         hiddenEmptyCount: (count) => t("businessViewPicker.hiddenEmptyCount", { count }),
       }}
-      triggerClassName="bg-background focus-within:bg-background"
+      triggerClassName="bg-surface-sunken focus-within:bg-surface-hover"
     />
   );
 }

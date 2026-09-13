@@ -3,12 +3,15 @@
 import { ChevronDown, RotateCcw, Save, SlidersHorizontal } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { Banner } from "@/components/ui/banner";
-import { Button } from "@/components/ui/button";
-import { FormStatus } from "@/components/ui/form-status";
-import { SelectField, type SelectFieldOption } from "@/components/ui/select-field";
-import { Skeleton } from "@/components/ui/skeleton";
-import { ToggleChip } from "@/components/ui/toggle-chip";
+import {
+  Banner,
+  Button,
+  FormStatus,
+  SelectField,
+  type SelectFieldOption,
+  Skeleton,
+  ToggleChip,
+} from "@engchina/production-ready-ui";
 import {
   ApiError,
   type ChunkingStrategyName,
@@ -297,15 +300,15 @@ export function DocumentProcessingConfigPanel({
   return (
     <section
       aria-label={t("flow.buildConfig.title")}
-      className="rounded-md border border-border bg-background p-3"
+      className="rounded-md border border-border bg-surface-sunken p-3"
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="min-w-0">
-          <h3 className="flex items-center gap-2 text-sm font-semibold text-foreground">
-            <SlidersHorizontal size={15} className="text-primary" aria-hidden />
+          <h3 className="flex items-center gap-2 text-sm font-semibold text-fg">
+            <SlidersHorizontal size={16} className="text-accent-fg" aria-hidden />
             {t("flow.buildConfig.title")}
           </h3>
-          <p className="mt-1 text-xs text-muted">{t("documents.processingConfig.subtitle")}</p>
+          <p className="mt-1 text-xs text-fg-muted">{t("documents.processingConfig.subtitle")}</p>
         </div>
         <Button
           type="button"
@@ -314,13 +317,7 @@ export function DocumentProcessingConfigPanel({
           aria-expanded={expanded}
           onClick={() => setExpanded((value) => !value)}
           disabled={loading || Boolean(error) || !data}
-          className="min-h-9 shrink-0"
-        >
-          <ChevronDown
-            size={14}
-            className={cn("transition-transform", expanded && "rotate-180")}
-            aria-hidden
-          />
+          className="min-h-9 shrink-0" icon={ChevronDown}>
           {t(expanded ? "documents.processingConfig.actions.close" : "documents.processingConfig.actions.edit")}
         </Button>
       </div>
@@ -334,8 +331,7 @@ export function DocumentProcessingConfigPanel({
         <Banner severity="warning" title={t("flow.buildConfig.loadError")} className="mt-3">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <p>{error instanceof ApiError ? error.message : t("flow.buildConfig.loadErrorHint")}</p>
-            <Button type="button" variant="secondary" size="sm" onClick={onRetry}>
-              <RotateCcw size={14} aria-hidden />
+            <Button type="button" variant="secondary" size="sm" onClick={onRetry} icon={RotateCcw}>
               {t("common.retry")}
             </Button>
           </div>
@@ -348,18 +344,18 @@ export function DocumentProcessingConfigPanel({
                 key={stage.key}
                 className={cn(
                   "min-w-0 rounded-md border px-2.5 py-2",
-                  stage.overridden ? "border-info/40 bg-info-bg/40" : "border-border bg-card"
+                  stage.overridden ? "border-info-border bg-info-subtle" : "border-border bg-surface"
                 )}
               >
                 <div className="flex min-w-0 items-start justify-between gap-1">
-                  <span className="min-w-0 text-[11px] leading-4 text-muted">{stage.label}</span>
+                  <span className="min-w-0 text-xs leading-4 text-fg-muted">{stage.label}</span>
                   {stage.overridden ? (
-                    <span className="shrink-0 rounded-sm bg-info-bg px-1 text-[10px] font-medium text-info">
+                    <span className="shrink-0 rounded-sm bg-info-subtle px-1 text-xs font-medium text-info-fg">
                       {t("knowledgeBases.adapter.ribbon.overrideBadge")}
                     </span>
                   ) : null}
                 </div>
-                <span className="mt-0.5 block break-words text-xs font-medium text-foreground">
+                <span className="mt-0.5 block break-words text-xs font-medium text-fg">
                   {stage.value}
                 </span>
               </div>
@@ -369,8 +365,8 @@ export function DocumentProcessingConfigPanel({
           {expanded ? (
             <div className="mt-4 space-y-4 border-t border-border pt-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <p className="text-xs text-muted">{t("documents.processingConfig.editHint")}</p>
-                <span className="rounded-md bg-muted/10 px-2 py-1 text-xs font-medium text-muted">
+                <p className="text-xs text-fg-muted">{t("documents.processingConfig.editHint")}</p>
+                <span className="rounded-md bg-surface-hover px-2 py-1 text-xs font-medium text-fg-muted">
                   {overrideCount > 0
                     ? t("knowledgeBases.adapter.overrideCount", {
                         count: overrideCount,
@@ -513,9 +509,7 @@ export function DocumentProcessingConfigPanel({
                   variant="ghost"
                   size="md"
                   onClick={() => setForm(configs.processing)}
-                  disabled={!dirty || savePending || disabled}
-                >
-                  <RotateCcw size={15} aria-hidden />
+                  disabled={!dirty || savePending || disabled} icon={RotateCcw}>
                   {t("knowledgeBases.adapter.actions.reset")}
                 </Button>
                 <Button
@@ -523,9 +517,7 @@ export function DocumentProcessingConfigPanel({
                   size="md"
                   onClick={handleSave}
                   loading={savePending}
-                  disabled={!dirty || disabled}
-                >
-                  <Save size={15} aria-hidden />
+                  disabled={!dirty || disabled} icon={Save}>
                   {t("knowledgeBases.adapter.actions.save")}
                 </Button>
               </div>
@@ -566,9 +558,9 @@ function SelectRow<T extends string>({
     if (value !== null) lastOverride.current = value;
   }, [value]);
   return (
-    <div className="space-y-2 rounded-lg border border-border bg-card p-3">
+    <div className="space-y-2 rounded-lg border border-border bg-surface p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className="text-sm font-medium text-foreground">{label}</span>
+        <span className="text-sm font-medium text-fg">{label}</span>
         <div className="flex flex-wrap gap-1" role="group" aria-label={label}>
           <ToggleChip selected={!overriding} disabled={disabled} onClick={() => onChange(null)}>
             {t("knowledgeBases.adapter.inherit")}
@@ -593,13 +585,13 @@ function SelectRow<T extends string>({
           buttonClassName="min-h-11"
         />
       ) : (
-        <p className="text-xs text-muted">
+        <p className="text-xs text-fg-muted">
           {t("knowledgeBases.adapter.inheritResolved", {
             value: optionLabel(effectiveValue, options),
           })}
         </p>
       )}
-      {hint ? <p className="text-xs text-muted">{hint}</p> : null}
+      {hint ? <p className="text-xs text-fg-muted">{hint}</p> : null}
       {warning ? <FormStatus tone="warning" className="text-xs" message={warning} /> : null}
     </div>
   );
@@ -628,9 +620,9 @@ function BooleanRow({
     if (value !== null) lastOverride.current = value;
   }, [value]);
   return (
-    <div className="space-y-2 rounded-lg border border-border bg-card p-3">
+    <div className="space-y-2 rounded-lg border border-border bg-surface p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <span id={id} className="text-sm font-medium text-foreground">
+        <span id={id} className="text-sm font-medium text-fg">
           {label}
         </span>
         <div className="flex flex-wrap gap-1" role="group" aria-labelledby={id}>
@@ -656,7 +648,7 @@ function BooleanRow({
           </ToggleChip>
         </div>
       ) : (
-        <p className="text-xs text-muted">
+        <p className="text-xs text-fg-muted">
           {t("knowledgeBases.adapter.inheritResolved", { value: boolLabel(effectiveValue) })}
         </p>
       )}

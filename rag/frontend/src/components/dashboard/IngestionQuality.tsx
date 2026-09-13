@@ -15,7 +15,7 @@ import {
 import type { LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
 
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@engchina/production-ready-ui";
 import type { DashboardIngestionQuality } from "@/lib/api";
 import { formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
@@ -31,7 +31,7 @@ export function IngestionQuality({ quality }: { quality: DashboardIngestionQuali
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
-          <Layers3 size={16} className="text-primary" aria-hidden />
+          <Layers3 size={16} className="text-accent-fg" aria-hidden />
           {t("dashboard.ingestionQuality.title")}
         </CardTitle>
         <CardDescription>{t("dashboard.ingestionQuality.subtitle")}</CardDescription>
@@ -39,13 +39,13 @@ export function IngestionQuality({ quality }: { quality: DashboardIngestionQuali
       <CardContent className="space-y-4">
         <div>
           <div className="flex items-center justify-between gap-3 text-sm">
-            <span className="font-medium text-foreground">
+            <span className="font-medium text-fg">
               {t("dashboard.ingestionQuality.structuredCoverage")}
             </span>
-            <span className="tnum text-muted">{coverage}%</span>
+            <span className="tnum text-fg-muted">{coverage}%</span>
           </div>
           <div
-            className="mt-2 h-2 rounded-full bg-background"
+            className="mt-2 h-2 rounded-full bg-surface-sunken"
             role="meter"
             aria-label={t("dashboard.ingestionQuality.structuredCoverage")}
             aria-valuemin={0}
@@ -53,11 +53,11 @@ export function IngestionQuality({ quality }: { quality: DashboardIngestionQuali
             aria-valuenow={coverage}
           >
             <div
-              className="h-full rounded-full bg-primary"
+              className="h-full rounded-full bg-accent-emphasis"
               style={{ width: `${coverage}%` }}
             />
           </div>
-          <p className="tnum mt-2 text-xs text-muted">
+          <p className="tnum mt-2 text-xs text-fg-muted">
             {t("dashboard.ingestionQuality.structuredDocuments", {
               structured: quality.structured_document_count,
               total: quality.document_count,
@@ -160,7 +160,7 @@ function MetricGroup({
 }) {
   return (
     <section className="space-y-2">
-      <h3 className="text-xs font-semibold text-foreground">{title}</h3>
+      <h3 className="text-xs font-semibold text-fg">{title}</h3>
       <div className="grid grid-cols-2 gap-3">{children}</div>
     </section>
   );
@@ -176,12 +176,12 @@ function Metric({
   value: number | string;
 }) {
   return (
-    <div className="rounded-md border border-border bg-background p-3">
-      <div className="flex items-start gap-2 text-xs leading-5 text-muted">
-        <Icon size={14} className="mt-0.5 shrink-0 text-primary" aria-hidden />
+    <div className="rounded-md border border-border bg-surface-sunken p-3">
+      <div className="flex items-start gap-2 text-xs leading-5 text-fg-muted">
+        <Icon size={14} className="mt-0.5 shrink-0 text-accent-fg" aria-hidden />
         <span className="min-w-0">{label}</span>
       </div>
-      <p className="tnum mt-2 text-lg font-semibold text-foreground">
+      <p className="tnum mt-2 text-lg font-semibold text-fg">
         {typeof value === "number" ? formatNumber(value) : value}
       </p>
     </div>
@@ -202,25 +202,25 @@ function Distribution({
 
   return (
     <section className="space-y-2 border-t border-border pt-4">
-      <h3 className="flex items-center gap-2 text-xs font-semibold text-foreground">
-        <FileCheck2 size={14} className="text-primary" aria-hidden />
+      <h3 className="flex items-center gap-2 text-xs font-semibold text-fg">
+        <FileCheck2 size={14} className="text-accent-fg" aria-hidden />
         {title}
       </h3>
       {entries.length === 0 ? (
-        <p className="text-xs text-muted">{empty}</p>
+        <p className="text-xs text-fg-muted">{empty}</p>
       ) : (
         <ul className="space-y-2">
           {entries.map(([label, count]) => (
             <li key={label} className="space-y-1">
               <div className="flex items-center justify-between gap-3 text-xs">
-                <span className="min-w-0 truncate text-muted" title={label}>
+                <span className="min-w-0 truncate text-fg-muted" title={label}>
                   {distributionLabel(label)}
                 </span>
-                <span className="tnum font-medium text-foreground">{formatNumber(count)}</span>
+                <span className="tnum font-medium text-fg">{formatNumber(count)}</span>
               </div>
-              <div className="h-1.5 rounded-full bg-background" aria-hidden>
+              <div className="h-1.5 rounded-full bg-surface-sunken" aria-hidden>
                 <div
-                  className="h-full rounded-full bg-primary/70"
+                  className="h-full rounded-full bg-accent-emphasis"
                   style={{ width: `${Math.max(8, (count / max) * 100)}%` }}
                 />
               </div>

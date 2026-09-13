@@ -1,4 +1,17 @@
 import {
+  PageBody,
+  PageHeader,
+  Banner,
+  Button,
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+  SelectField,
+  type SelectFieldOption,
+} from "@engchina/production-ready-ui";
+import {
   AlertTriangle,
   BarChart3,
   CheckCircle2,
@@ -12,13 +25,8 @@ import {
 import { type FormEvent, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
-import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/StateViews";
 import { KnowledgeBaseScopePicker } from "@/components/knowledge-bases/KnowledgeBaseScopePicker";
-import { Banner } from "@/components/ui/banner";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { SelectField, type SelectFieldOption } from "@/components/ui/select-field";
 import {
   ApiError,
   type EvaluationCompareResponse,
@@ -174,7 +182,7 @@ export function EvaluationClient() {
   return (
     <div>
       <PageHeader title={t("nav.evaluation")} subtitle={t("evaluation.subtitle")} />
-      <div className="space-y-6 p-8">
+      <PageBody>
         <Card className="min-w-0">
           <CardContent className="pt-5">
             <KnowledgeBaseScopePicker
@@ -200,7 +208,7 @@ export function EvaluationClient() {
           <Card className="min-w-0">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
-                <FlaskConical size={16} className="text-primary" aria-hidden />
+                <FlaskConical size={16} className="text-accent-fg" aria-hidden />
                 {t("evaluation.input.title")}
               </CardTitle>
               <CardDescription>{t("evaluation.input.description")}</CardDescription>
@@ -218,11 +226,8 @@ export function EvaluationClient() {
                 {validationMessage ? <ValidationNotice message={validationMessage} /> : null}
                 {runError ? <ErrorNotice message={runError} /> : null}
                 <div className="flex flex-wrap items-center gap-2">
-                  <Button type="submit" loading={runMutation.isPending} disabled={!canRun}>
-                    <BarChart3 size={15} aria-hidden />
-                    {runMutation.isPending
-                      ? t("evaluation.actions.running")
-                      : t("evaluation.actions.run")}
+                  <Button type="submit" loading={runMutation.isPending} disabled={!canRun} icon={BarChart3}>
+                    {t("evaluation.actions.run")}
                   </Button>
                   <Button
                     type="button"
@@ -242,7 +247,7 @@ export function EvaluationClient() {
           <Card className="min-w-0">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
-                <GitCompare size={16} className="text-primary" aria-hidden />
+                <GitCompare size={16} className="text-accent-fg" aria-hidden />
                 {t("evaluation.compare.title")}
               </CardTitle>
               <CardDescription>{t("evaluation.compare.description")}</CardDescription>
@@ -272,12 +277,8 @@ export function EvaluationClient() {
                   type="submit"
                   className="w-full"
                   loading={compareMutation.isPending}
-                  disabled={!canCompare}
-                >
-                  <GitCompare size={15} aria-hidden />
-                  {compareMutation.isPending
-                    ? t("evaluation.actions.comparing")
-                    : t("evaluation.actions.compare")}
+                  disabled={!canCompare} icon={GitCompare}>
+                  {t("evaluation.actions.compare")}
                 </Button>
               </form>
             </CardContent>
@@ -298,7 +299,7 @@ export function EvaluationClient() {
         )}
 
         {compareMutation.data ? <CompareResult comparison={compareMutation.data} /> : null}
-      </div>
+      </PageBody>
     </div>
   );
 }
@@ -342,7 +343,7 @@ function SuiteSelector({
     <Card className="min-w-0">
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
-          <ClipboardCheck size={16} className="text-primary" aria-hidden />
+          <ClipboardCheck size={16} className="text-accent-fg" aria-hidden />
           {t("evaluation.suite.title")}
         </CardTitle>
         <CardDescription>{t("evaluation.suite.description")}</CardDescription>
@@ -355,8 +356,8 @@ function SuiteSelector({
           options={options}
           onValueChange={onChange}
         />
-        <div className="rounded-md border border-border bg-muted/20 p-3">
-          <p className="text-xs font-medium text-muted">
+        <div className="rounded-md border border-border bg-surface-hover p-3">
+          <p className="text-xs font-medium text-fg-muted">
             {requestHasThresholds
               ? t("evaluation.suite.thresholdsPreviewOverride")
               : t("evaluation.suite.thresholdsPreview")}
@@ -366,15 +367,15 @@ function SuiteSelector({
               {thresholdEntries.map(([metric, value]) => (
                 <span
                   key={metric}
-                  className="inline-flex min-h-6 items-center rounded-md bg-card px-2 text-xs font-medium text-foreground ring-1 ring-border"
+                  className="inline-flex min-h-6 items-center rounded-md bg-surface px-2 text-xs font-medium text-fg ring-1 ring-border"
                 >
                   {metricLabel(metric as EvaluationMetricName)}
-                  <span className="tnum ml-1 font-semibold text-primary">{value}</span>
+                  <span className="tnum ml-1 font-semibold text-accent-fg">{value}</span>
                 </span>
               ))}
             </div>
           ) : (
-            <p className="mt-2 text-sm text-foreground">{t("evaluation.suite.noThresholds")}</p>
+            <p className="mt-2 text-sm text-fg">{t("evaluation.suite.noThresholds")}</p>
           )}
         </div>
         {requestHasThresholds ? (
@@ -382,7 +383,7 @@ function SuiteSelector({
         ) : null}
         <Link
           to={APP_ROUTES.settingsEvaluation}
-          className="inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:underline"
+          className="inline-flex items-center gap-1.5 text-sm font-medium text-accent-fg hover:underline"
         >
           <Settings2 size={14} aria-hidden />
           {t("evaluation.suite.settingsLink")}
@@ -396,13 +397,13 @@ function EvaluationResult({ metrics }: { metrics: EvaluationMetrics }) {
   return (
     <section className="min-w-0 space-y-4" aria-labelledby="evaluation-result-title">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 id="evaluation-result-title" className="text-base font-semibold text-foreground">
+        <h2 id="evaluation-result-title" className="text-base font-semibold text-fg">
           {t("evaluation.result.title")}
         </h2>
         <div className="flex flex-wrap items-center gap-2">
           {metrics.evaluation_suite ? (
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-background px-2.5 py-1 text-xs font-medium text-muted">
-              <ClipboardCheck size={13} aria-hidden />
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface-sunken px-2.5 py-1 text-xs font-medium text-fg-muted">
+              <ClipboardCheck size={14} aria-hidden />
               {t("evaluation.suite.applied")}: {suiteLabel(metrics.evaluation_suite)}
             </span>
           ) : null}
@@ -426,13 +427,13 @@ function EvaluationResult({ metrics }: { metrics: EvaluationMetrics }) {
       ) : null}
 
       {Object.keys(metrics.failure_reason_counts).length ? (
-        <div className="rounded-md border border-border bg-card p-4 text-sm">
-          <p className="font-medium text-foreground">{t("evaluation.failureReasons")}</p>
+        <div className="rounded-md border border-border bg-surface p-4 text-sm">
+          <p className="font-medium text-fg">{t("evaluation.failureReasons")}</p>
           <div className="mt-3 flex flex-wrap gap-2">
             {Object.entries(metrics.failure_reason_counts).map(([reason, count]) => (
               <span
                 key={reason}
-                className="rounded-full border border-border bg-background px-2.5 py-1 text-xs text-muted"
+                className="rounded-full border border-border bg-surface-sunken px-2.5 py-1 text-xs text-fg-muted"
               >
                 {reason}: {count}
               </span>
@@ -454,7 +455,7 @@ function IngestionQualityPanel({ metrics }: { metrics: EvaluationMetrics }) {
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-base">
-          <FileSearch size={16} className="text-primary" aria-hidden />
+          <FileSearch size={16} className="text-accent-fg" aria-hidden />
           {t("evaluation.ingestionQuality.title")}
         </CardTitle>
         <CardDescription>{t("evaluation.ingestionQuality.description")}</CardDescription>
@@ -534,9 +535,9 @@ function IngestionQualityPanel({ metrics }: { metrics: EvaluationMetrics }) {
 
 function QualityStat({ label, value }: { label: string; value: number | string }) {
   return (
-    <div className="rounded-md border border-border bg-background p-3">
-      <p className="text-xs text-muted">{label}</p>
-      <p className="tnum mt-1 text-xl font-semibold text-foreground">{value}</p>
+    <div className="rounded-md border border-border bg-surface-sunken p-3">
+      <p className="text-xs text-fg-muted">{label}</p>
+      <p className="tnum mt-1 text-xl font-semibold text-fg">{value}</p>
     </div>
   );
 }
@@ -553,22 +554,22 @@ function QualityChipGroup({
   icon?: "warning";
 }) {
   return (
-    <div className="rounded-md border border-border bg-background p-3">
-      <p className="text-sm font-medium text-foreground">{title}</p>
+    <div className="rounded-md border border-border bg-surface-sunken p-3">
+      <p className="text-sm font-medium text-fg">{title}</p>
       {entries.length ? (
         <div className="mt-3 flex flex-wrap gap-2">
           {entries.map(([name, count]) => (
             <span
               key={name}
-              className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-2.5 py-1 text-xs text-muted"
+              className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-2.5 py-1 text-xs text-fg-muted"
             >
-              {icon === "warning" ? <AlertTriangle size={13} aria-hidden /> : null}
+              {icon === "warning" ? <AlertTriangle size={14} aria-hidden /> : null}
               {qualityLabel(name)}: {count}
             </span>
           ))}
         </div>
       ) : (
-        <p className="mt-2 text-sm text-muted">{emptyText}</p>
+        <p className="mt-2 text-sm text-fg-muted">{emptyText}</p>
       )}
     </div>
   );
@@ -635,8 +636,8 @@ function MetricGrid({ metrics }: { metrics: EvaluationMetrics }) {
       {items.map((item) => (
         <Card key={item.label}>
           <CardContent className="pt-5">
-            <p className="text-xs text-muted">{item.label}</p>
-            <p className="tnum mt-2 text-2xl font-semibold text-foreground">{item.value}</p>
+            <p className="text-xs text-fg-muted">{item.label}</p>
+            <p className="tnum mt-2 text-2xl font-semibold text-fg">{item.value}</p>
           </CardContent>
         </Card>
       ))}
@@ -651,13 +652,13 @@ function qualityLabel(value: string) {
 function CaseTable({ metrics }: { metrics: EvaluationMetrics }) {
   return (
     <section aria-labelledby="evaluation-cases-title">
-      <h3 id="evaluation-cases-title" className="mb-3 text-sm font-semibold text-foreground">
+      <h3 id="evaluation-cases-title" className="mb-3 text-sm font-semibold text-fg">
         {t("evaluation.cases")}
       </h3>
-      <div className="overflow-hidden rounded-lg border border-border bg-card">
+      <div className="overflow-hidden rounded-lg border border-border bg-surface">
         <div className="max-h-[480px] overflow-auto [scrollbar-gutter:stable]">
           <table className="w-full min-w-[680px] text-left text-sm">
-            <thead className="sticky top-0 z-10 bg-background text-xs text-muted shadow-[inset_0_-1px_0_var(--border)]">
+            <thead className="sticky top-0 z-10 bg-surface-sunken text-xs text-fg-muted shadow-[inset_0_-1px_0_var(--color-border)]">
               <tr>
                 <th className="whitespace-nowrap px-3 py-2 font-medium sm:px-4 sm:py-3">{t("evaluation.case.id")}</th>
                 <th className="hidden whitespace-nowrap px-3 py-2 font-medium sm:table-cell sm:px-4 sm:py-3">{t("evaluation.metric.precision")}</th>
@@ -671,17 +672,17 @@ function CaseTable({ metrics }: { metrics: EvaluationMetrics }) {
             <tbody className="divide-y divide-border">
               {metrics.case_results.map((result) => (
                 <tr key={result.case_id}>
-                  <td className="break-words px-3 py-2 font-medium text-foreground sm:px-4 sm:py-3">{result.case_id}</td>
+                  <td className="break-words px-3 py-2 font-medium text-fg sm:px-4 sm:py-3">{result.case_id}</td>
                   <td className="tnum hidden whitespace-nowrap px-3 py-2 sm:table-cell sm:px-4 sm:py-3">{formatPercent(result.precision_at_k)}</td>
                   <td className="tnum hidden whitespace-nowrap px-3 py-2 sm:table-cell sm:px-4 sm:py-3">{formatPercent(result.recall_at_k)}</td>
                   <td className="tnum whitespace-nowrap px-3 py-2 sm:px-4 sm:py-3">{formatPercent(result.reciprocal_rank)}</td>
                   <td className="px-3 py-2 sm:px-4 sm:py-3">
                     <BooleanIcon value={result.answer_keyword_hit && result.groundedness_passed} />
                   </td>
-                  <td className="hidden break-words px-3 py-2 text-xs text-muted md:table-cell sm:px-4 sm:py-3">
+                  <td className="hidden break-words px-3 py-2 text-xs text-fg-muted md:table-cell sm:px-4 sm:py-3">
                     {result.failure_reasons.length ? result.failure_reasons.join(", ") : "-"}
                   </td>
-                  <td className="tnum hidden whitespace-nowrap px-3 py-2 text-xs text-muted lg:table-cell sm:px-4 sm:py-3">
+                  <td className="tnum hidden whitespace-nowrap px-3 py-2 text-xs text-fg-muted lg:table-cell sm:px-4 sm:py-3">
                     {result.trace_id.slice(0, 12)}
                   </td>
                 </tr>
@@ -698,22 +699,22 @@ function CompareResult({ comparison }: { comparison: EvaluationCompareResponse }
   return (
     <section className="min-w-0 space-y-3" aria-labelledby="evaluation-compare-title">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 id="evaluation-compare-title" className="text-base font-semibold text-foreground">
+        <h2 id="evaluation-compare-title" className="text-base font-semibold text-fg">
           {t("evaluation.compare.title")}
         </h2>
         {comparison.best_experiment_id ? (
-          <span className="rounded-full bg-success-bg px-3 py-1 text-xs font-medium text-success">
+          <span className="rounded-full bg-success-subtle px-3 py-1 text-xs font-medium text-success-fg">
             {t("evaluation.compare.best")}: {comparison.best_experiment_id}
           </span>
         ) : null}
       </div>
-      <div className="overflow-hidden rounded-lg border border-border bg-card">
+      <div className="overflow-hidden rounded-lg border border-border bg-surface">
         {/* contain:paint で横スクロール領域を確実に封じ込める。main の [contain:layout] 配下では
             縦スクロールが発生しない scroll container が min-width をもつ表を祖先へ伝播させ、
             ページが横スクロール(崩れ)するため(決定論的に再現・検証済み)。 */}
         <div className="overflow-auto [contain:paint]">
           <table className="w-full min-w-[640px] text-left text-sm">
-            <thead className="bg-background text-xs text-muted">
+            <thead className="bg-surface-sunken text-xs text-fg-muted">
               <tr>
                 <th className="whitespace-nowrap px-3 py-2 font-medium sm:px-4 sm:py-3">{t("evaluation.compare.rank")}</th>
                 <th className="whitespace-nowrap px-3 py-2 font-medium sm:px-4 sm:py-3">{t("evaluation.compare.experiment")}</th>
@@ -730,7 +731,7 @@ function CompareResult({ comparison }: { comparison: EvaluationCompareResponse }
               {comparison.results.map((result) => (
                 <tr key={result.experiment.id}>
                   <td className="tnum whitespace-nowrap px-3 py-2 sm:px-4 sm:py-3">{result.rank}</td>
-                  <td className="break-words px-3 py-2 font-medium text-foreground sm:px-4 sm:py-3">
+                  <td className="break-words px-3 py-2 font-medium text-fg sm:px-4 sm:py-3">
                     {result.experiment.id}
                   </td>
                   <td className="tnum whitespace-nowrap px-3 py-2 sm:px-4 sm:py-3">{formatPercent(result.ranking_score)}</td>
@@ -769,7 +770,7 @@ function JsonField({
 }) {
   return (
     <div className="space-y-1.5">
-      <label htmlFor={id} className="text-sm font-medium text-foreground">
+      <label htmlFor={id} className="text-sm font-medium text-fg">
         {label}
       </label>
       <textarea
@@ -778,7 +779,7 @@ function JsonField({
         rows={rows}
         placeholder={placeholder}
         onChange={(event) => onChange(event.target.value)}
-        className="min-w-0 w-full resize-y rounded-md border border-border bg-card px-3 py-2 font-mono text-xs leading-relaxed text-foreground outline-none transition-colors placeholder:text-muted/70 focus-visible:border-primary"
+        className="min-w-0 w-full resize-y rounded-md border border-border-control bg-surface px-3 py-2 font-mono text-xs leading-relaxed text-fg outline-none transition-colors placeholder:text-fg-muted focus-visible:border-focus-ring"
       />
     </div>
   );
@@ -830,7 +831,7 @@ function StatusBadge({ passed, compact = false }: { passed: boolean; compact?: b
     <span
       className={cn(
         "inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium",
-        passed ? "bg-success-bg text-success" : "bg-danger-bg text-danger"
+        passed ? "bg-success-subtle text-success-fg" : "bg-danger-subtle text-danger-fg"
       )}
     >
       {passed ? (
@@ -853,9 +854,9 @@ function StatusBadge({ passed, compact = false }: { passed: boolean; compact?: b
 
 function BooleanIcon({ value }: { value: boolean }) {
   return value ? (
-    <CheckCircle2 size={16} className="text-success" aria-label={t("evaluation.status.passed")} />
+    <CheckCircle2 size={16} className="text-success-fg" aria-label={t("evaluation.status.passed")} />
   ) : (
-    <XCircle size={16} className="text-danger" aria-label={t("evaluation.status.failed")} />
+    <XCircle size={16} className="text-danger-fg" aria-label={t("evaluation.status.failed")} />
   );
 }
 

@@ -10,9 +10,9 @@ import { ja, t, type I18nKey } from "@/lib/i18n";
 import { parserBackendLabel } from "@/lib/source-profile-labels";
 
 const NODE_STYLE = {
-  background: "var(--card)",
-  color: "var(--foreground)",
-  border: "1px solid var(--border)",
+  background: "var(--color-surface)",
+  color: "var(--color-fg)",
+  border: "1px solid var(--color-border)",
   borderRadius: 8,
   fontSize: 12,
   width: 168,
@@ -30,7 +30,7 @@ function nodeLabel(name: string, value: string) {
   return (
     <div>
       <div style={{ fontWeight: 600 }}>{name}</div>
-      <div style={{ marginTop: 2, fontSize: 11, color: "var(--muted)" }}>{value}</div>
+      <div style={{ marginTop: 2, fontSize: 11, color: "var(--color-fg-muted)" }}>{value}</div>
     </div>
   );
 }
@@ -143,22 +143,22 @@ export function KnowledgeBasePipelineCanvas({ config }: { config: KnowledgeBaseA
   const { nodes, edges } = useMemo(() => buildGraph(config), [config]);
 
   return (
-    <section className="rounded-md border border-border bg-card">
+    <section className="rounded-md border border-border bg-surface">
       <button
         type="button"
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
-        className="flex min-h-11 w-full cursor-pointer items-center gap-2 px-4 text-sm font-semibold text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+        className="flex min-h-11 w-full cursor-pointer items-center gap-2 px-4 text-sm font-semibold text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
       >
-        <Workflow size={15} className="text-primary" aria-hidden />
+        <Workflow size={16} className="text-accent-fg" aria-hidden />
         {open ? t("settings.pipelineCanvas.hide") : t("settings.pipelineCanvas.show")}
       </button>
       {open ? (
         <div className="space-y-2 px-4 pb-4">
-          <p className="text-xs text-muted">{t("settings.pipelineCanvas.hint")}</p>
+          <p className="text-xs text-fg-muted">{t("settings.pipelineCanvas.hint")}</p>
           <div
             role="region"
-            className="h-[360px] w-full overflow-hidden rounded-md border border-border bg-background"
+            className="h-[360px] w-full overflow-hidden rounded-md border border-border bg-surface-sunken"
             aria-label={t("settings.pipelineCanvas.title")}
           >
             <ReactFlow

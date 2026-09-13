@@ -1,8 +1,10 @@
 import { Link } from "react-router-dom";
 import { ArrowRight, RefreshCw, Settings } from "lucide-react";
 
-import { Banner } from "@/components/ui/banner";
-import { Button } from "@/components/ui/button";
+import {
+  Banner,
+  Button,
+} from "@engchina/production-ready-ui";
 import { APP_ROUTES } from "@/lib/routes";
 import { t } from "@/lib/i18n";
 
@@ -36,14 +38,13 @@ export function DegradedBanner({
       action={
         <>
           {onRetry ? (
-            <Button variant="secondary" size="sm" onClick={onRetry} loading={isRetrying}>
-              {!isRetrying ? <RefreshCw size={14} aria-hidden /> : null}
+            <Button variant="secondary" size="sm" onClick={onRetry} loading={isRetrying} icon={RefreshCw}>
               {t("common.retry")}
             </Button>
           ) : null}
           <Link
             to={APP_ROUTES.settingsDatabase}
-            className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md border border-border bg-card px-3 text-sm font-medium text-foreground transition-colors hover:bg-background focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+            className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md border border-border bg-surface px-3 text-sm font-medium text-fg transition-colors hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
           >
             <Settings size={14} aria-hidden />
             {t("common.degraded.openDatabaseSettings")}

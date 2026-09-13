@@ -93,7 +93,7 @@ export async function expectNoPageOverflow(page: Page): Promise<void> {
 
 /** main を末尾までスクロールしたとき、実コンテンツの後ろに空白が残らないことを検証する。 */
 export async function expectMainScrollEndsAtContent(page: Page): Promise<void> {
-  const main = page.getByRole("main", { name: "メイン領域" });
+  const main = page.getByRole("main");
   await expect
     .poll(
       () =>

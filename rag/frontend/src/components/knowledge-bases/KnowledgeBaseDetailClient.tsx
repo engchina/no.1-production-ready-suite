@@ -5,10 +5,16 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { EmptyState, ErrorState } from "@/components/StateViews";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { FormStatus } from "@/components/ui/form-status";
-import { SelectField, type SelectFieldOption } from "@/components/ui/select-field";
+import {
+  Button,
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  FormStatus,
+  SelectField,
+  type SelectFieldOption,
+} from "@engchina/production-ready-ui";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import {
   ApiError,
@@ -60,10 +66,10 @@ export function KnowledgeBaseDetailClient({ knowledgeBaseId }: { knowledgeBaseId
         <CardContent className="space-y-5 pt-6">
           <div>
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <h1 className="min-w-0 truncate text-xl font-semibold text-foreground">{kb.name}</h1>
+              <h1 className="min-w-0 truncate text-xl font-semibold text-fg">{kb.name}</h1>
               <KnowledgeBaseStatusPill status={kb.status} />
             </div>
-            {kb.description ? <p className="mt-1 text-sm text-muted">{kb.description}</p> : null}
+            {kb.description ? <p className="mt-1 text-sm text-fg-muted">{kb.description}</p> : null}
           </div>
 
           <div className="grid grid-cols-3 gap-2 sm:max-w-md">
@@ -78,9 +84,9 @@ export function KnowledgeBaseDetailClient({ knowledgeBaseId }: { knowledgeBaseId
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
-            <Files className="size-4 text-muted" aria-hidden />
+            <Files className="size-4 text-fg-muted" aria-hidden />
             {t("knowledgeBases.documents.title")}
-            <span className="tnum rounded-md bg-muted/10 px-2 py-0.5 text-xs font-medium text-muted">
+            <span className="tnum rounded-md bg-surface-hover px-2 py-0.5 text-xs font-medium text-fg-muted">
               {kb.document_count}
             </span>
           </CardTitle>
@@ -89,7 +95,7 @@ export function KnowledgeBaseDetailClient({ knowledgeBaseId }: { knowledgeBaseId
           {isActive ? (
             <DocumentAssignment knowledgeBase={kb} />
           ) : (
-            <p className="rounded-md border border-border bg-background px-3 py-2 text-sm text-muted">
+            <p className="rounded-md border border-border bg-surface-sunken px-3 py-2 text-sm text-fg-muted">
               {t("knowledgeBases.detail.archivedHint")}
             </p>
           )}
@@ -117,9 +123,9 @@ export function KnowledgeBaseDetailClient({ knowledgeBaseId }: { knowledgeBaseId
 
 function Metric({ label, value }: { label: string; value: number }) {
   return (
-    <div className="rounded-md border border-border bg-background p-3">
-      <p className="text-xs text-muted">{label}</p>
-      <p className="tnum mt-1 text-lg font-semibold text-foreground">{formatNumber(value)}</p>
+    <div className="rounded-md border border-border bg-surface-sunken p-3">
+      <p className="text-xs text-fg-muted">{label}</p>
+      <p className="tnum mt-1 text-lg font-semibold text-fg">{formatNumber(value)}</p>
     </div>
   );
 }
@@ -185,9 +191,7 @@ function DocumentAssignment({ knowledgeBase }: { knowledgeBase: KnowledgeBaseDet
           onClick={handleAssign}
           loading={assign.isPending}
           disabled={!documentId}
-          className="h-9 shrink-0"
-        >
-          <FilePlus2 size={15} aria-hidden />
+          className="h-9 shrink-0" icon={FilePlus2}>
           {t("knowledgeBases.actions.assign")}
         </Button>
       </div>
@@ -277,10 +281,10 @@ function KnowledgeBaseDocumentRow({
 }) {
   return (
     <li className="flex items-center gap-2 px-3 py-2">
-      <Files className="size-4 shrink-0 text-muted" aria-hidden />
+      <Files className="size-4 shrink-0 text-fg-muted" aria-hidden />
       <Link
         to={`${APP_ROUTES.documents}/${document.id}`}
-        className="min-w-0 flex-1 truncate text-sm font-medium text-primary hover:underline"
+        className="min-w-0 flex-1 truncate text-sm font-medium text-accent-fg hover:underline"
         title={document.file_name}
       >
         {document.file_name}
@@ -290,9 +294,7 @@ function KnowledgeBaseDocumentRow({
         size="sm"
         onClick={onRemove}
         loading={removing}
-        className="shrink-0 whitespace-nowrap"
-      >
-        <Trash2 size={14} aria-hidden />
+        className="shrink-0 whitespace-nowrap" icon={Trash2}>
         {t("knowledgeBases.actions.remove")}
       </Button>
     </li>
@@ -306,9 +308,9 @@ function documentHasKnowledgeBase(document: DocumentSummary, knowledgeBaseId: st
 function KnowledgeBaseDocumentsSkeleton() {
   return (
     <div className="space-y-2" role="status" aria-label={t("knowledgeBases.documents.loading")}>
-      <div className="h-9 rounded-md bg-background" />
-      <div className="h-9 rounded-md bg-background" />
-      <div className="h-9 rounded-md bg-background" />
+      <div className="h-9 rounded-md bg-surface-sunken" />
+      <div className="h-9 rounded-md bg-surface-sunken" />
+      <div className="h-9 rounded-md bg-surface-sunken" />
     </div>
   );
 }

@@ -75,7 +75,7 @@ test("sidebar route changes reset the main pane while browser back restores it",
   await mockApi(page);
   await page.goto("/settings/oci");
 
-  const main = page.getByRole("main", { name: "メイン領域" });
+  const main = page.getByRole("main");
   await expect(page.getByRole("heading", { name: "OCI 認証設定", level: 1 })).toBeVisible();
 
   const ociScrollTop = await main.evaluate((element) => {

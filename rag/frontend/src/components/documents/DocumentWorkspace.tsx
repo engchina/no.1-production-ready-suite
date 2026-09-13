@@ -20,7 +20,7 @@ import {
   Wrench,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
 import { DocumentPreview } from "./DocumentPreview";
@@ -56,14 +56,22 @@ import {
 import { ReviewTextEditor } from "./ReviewTextEditor";
 import { KnowledgeBaseScopePicker } from "@/components/knowledge-bases/KnowledgeBaseScopePicker";
 import { StatusBadge } from "@/components/StatusBadge";
-import { Banner } from "@/components/ui/banner";
-import { Button, buttonVariants } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { FormStatus } from "@/components/ui/form-status";
+import {
+  Banner,
+  Button,
+  buttonVariants,
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  FormStatus,
+  SelectField,
+  type SelectFieldOption,
+  Skeleton,
+  Switch,
+  Tabs,
+} from "@engchina/production-ready-ui";
 import { EmptyState, ErrorState } from "@/components/StateViews";
-import { SelectField, type SelectFieldOption } from "@/components/ui/select-field";
-import { Skeleton } from "@/components/ui/skeleton";
-import { Switch } from "@/components/ui/switch";
 import {
   api,
   ApiError,
@@ -1036,7 +1044,7 @@ export function DocumentWorkspace({
       <CardHeader>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <CardTitle className="flex min-w-0 flex-1 items-center gap-2 text-base">
-            <FileText size={18} className="text-primary" aria-hidden />
+            <FileText size={20} className="text-accent-fg" aria-hidden />
             <span className="truncate" title={doc.file_name}>
               {doc.file_name}
             </span>
@@ -1093,20 +1101,20 @@ export function DocumentWorkspace({
 
         <dl className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-3">
           <div>
-            <dt className="text-xs text-muted">{t("flow.size")}</dt>
-            <dd className="tnum mt-0.5 font-medium text-foreground">
+            <dt className="text-xs text-fg-muted">{t("flow.size")}</dt>
+            <dd className="tnum mt-0.5 font-medium text-fg">
               {formatBytes(doc.file_size_bytes)}
             </dd>
           </div>
           <div>
-            <dt className="text-xs text-muted">{t("flow.uploadedAt")}</dt>
-            <dd className="tnum mt-0.5 font-medium text-foreground">
+            <dt className="text-xs text-fg-muted">{t("flow.uploadedAt")}</dt>
+            <dd className="tnum mt-0.5 font-medium text-fg">
               {formatDateTime(doc.uploaded_at)}
             </dd>
           </div>
           <div>
-            <dt className="text-xs text-muted">{t("flow.indexedAt")}</dt>
-            <dd className="tnum mt-0.5 font-medium text-foreground">
+            <dt className="text-xs text-fg-muted">{t("flow.indexedAt")}</dt>
+            <dd className="tnum mt-0.5 font-medium text-fg">
               {formatDateTime(doc.indexed_at)}
             </dd>
           </div>
@@ -1121,12 +1129,12 @@ export function DocumentWorkspace({
           {/* 左ペイン: 原本プレビュー(desktop は引用照合のアンカーとして sticky 固定) */}
           <section className="min-w-0 xl:sticky xl:top-4 xl:self-start">
             <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-              <h3 className="text-sm font-semibold text-foreground">{t("flow.preview")}</h3>
+              <h3 className="text-sm font-semibold text-fg">{t("flow.preview")}</h3>
               <div className="flex flex-wrap items-center justify-end gap-2">
                 <div
                   role="group"
                   aria-label={t("flow.preview")}
-                  className="inline-flex rounded-md border border-border bg-background p-0.5"
+                  className="inline-flex rounded-md border border-border bg-surface-sunken p-0.5"
                 >
                   <Button
                     type="button"
@@ -1186,54 +1194,28 @@ export function DocumentWorkspace({
 
           {/* 右ペイン: 本文 / 構造化要素 / Chunk / エクスポート をタブ切替 */}
           <section className="min-w-0">
-            <div
-              role="tablist"
-              aria-label={t("flow.inspector.tabs")}
-              className="mb-3 flex flex-wrap items-center gap-1"
-            >
-              <InspectorTab
-                id="inspector-tab-text"
-                controls="inspector-panel-text"
-                active={inspectorTab === "text"}
-                onSelect={() => setInspectorTab("text")}
-              >
-                {t("flow.extraction.rawText")}
-              </InspectorTab>
-              <InspectorTab
-                id="inspector-tab-extraction"
-                controls="inspector-panel-extraction"
-                active={inspectorTab === "extraction"}
-                onSelect={() => setInspectorTab("extraction")}
-              >
-                {t("flow.extraction.title")}
-              </InspectorTab>
-              <InspectorTab
-                id="inspector-tab-chunks"
-                controls="inspector-panel-chunks"
-                active={inspectorTab === "chunks"}
-                onSelect={() => setInspectorTab("chunks")}
-              >
-                {t("flow.chunks.title")}
-                {displayedChunks.length ? (
-                  <span className="tnum ml-1.5 opacity-70">
-                    {formatNumber(displayedChunks.length)}
-                  </span>
-                ) : null}
-              </InspectorTab>
-              <InspectorTab
-                id="inspector-tab-export"
-                controls="inspector-panel-export"
-                active={inspectorTab === "export"}
-                onSelect={() => setInspectorTab("export")}
-              >
-                {t("flow.extractionExport.title")}
-              </InspectorTab>
-            </div>
+            <Tabs
+              idPrefix="inspector"
+              ariaLabel={t("flow.inspector.tabs")}
+              className="mb-3"
+              value={inspectorTab}
+              onChange={(value) => setInspectorTab(value as typeof inspectorTab)}
+              items={[
+                { id: "text", label: t("flow.extraction.rawText") },
+                { id: "extraction", label: t("flow.extraction.title") },
+                {
+                  id: "chunks",
+                  label: t("flow.chunks.title"),
+                  count: displayedChunks.length || undefined,
+                },
+                { id: "export", label: t("flow.extractionExport.title") },
+              ]}
+            />
 
             {inspectorTab === "text" ? (
               <div
                 role="tabpanel"
-                id="inspector-panel-text"
+                id="inspector-tabpanel-text"
                 aria-labelledby="inspector-tab-text"
                 tabIndex={0}
                 className="xl:h-[60vh] xl:overflow-y-auto xl:pr-1 xl:[scrollbar-gutter:stable]"
@@ -1245,13 +1227,13 @@ export function DocumentWorkspace({
             {inspectorTab === "extraction" ? (
               <div
                 role="tabpanel"
-                id="inspector-panel-extraction"
+                id="inspector-tabpanel-extraction"
                 aria-labelledby="inspector-tab-extraction"
                 tabIndex={0}
                 className="xl:h-[60vh] xl:overflow-y-auto xl:pr-1 xl:[scrollbar-gutter:stable]"
               >
                 {status === "REVIEW" && selectedRecipeId ? (
-                  <div className="mb-2 xl:sticky xl:top-0 xl:z-10 xl:bg-background xl:pb-2">
+                  <div className="mb-2 xl:sticky xl:top-0 xl:z-10 xl:bg-surface-sunken xl:pb-2">
                     {editingReview ? (
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <div>
@@ -1271,9 +1253,7 @@ export function DocumentWorkspace({
                                 saveReviewEdits.reset();
                                 setReviewEdits(emptyReviewEdits());
                                 setEditingReview(false);
-                              }}
-                            >
-                              <RotateCcw size={14} aria-hidden />
+                              }} icon={RotateCcw}>
                               {t("flow.review.edit.discard")}
                             </Button>
                           ) : null}
@@ -1301,18 +1281,14 @@ export function DocumentWorkspace({
                             disabled={
                               !hasReviewEdits ||
                               approveDocument.isPending
-                            }
-                          >
-                            {!saveReviewEdits.isPending ? <Save size={14} aria-hidden /> : null}
+                            } icon={Save}>
                             {t("flow.review.edit.save")}
                           </Button>
                           <Button
                             size="sm"
                             variant="ghost"
                             disabled={saveReviewEdits.isPending}
-                            onClick={() => setEditingReview(false)}
-                          >
-                            <X size={14} aria-hidden />
+                            onClick={() => setEditingReview(false)} icon={X}>
                             {t("flow.review.edit.close")}
                           </Button>
                         </div>
@@ -1322,9 +1298,7 @@ export function DocumentWorkspace({
                         <Button
                           size="sm"
                           variant="ghost"
-                          onClick={() => setEditingReview(true)}
-                        >
-                          <Pencil size={14} aria-hidden />
+                          onClick={() => setEditingReview(true)} icon={Pencil}>
                           {t("flow.review.edit.structuredOpen")}
                         </Button>
                       </div>
@@ -1363,7 +1337,7 @@ export function DocumentWorkspace({
             {inspectorTab === "chunks" ? (
               <div
                 role="tabpanel"
-                id="inspector-panel-chunks"
+                id="inspector-tabpanel-chunks"
                 aria-labelledby="inspector-tab-chunks"
                 tabIndex={0}
                 className="xl:h-[60vh] xl:overflow-y-auto xl:pr-1 xl:[scrollbar-gutter:stable]"
@@ -1418,7 +1392,7 @@ export function DocumentWorkspace({
             {inspectorTab === "export" ? (
               <div
                 role="tabpanel"
-                id="inspector-panel-export"
+                id="inspector-tabpanel-export"
                 aria-labelledby="inspector-tab-export"
                 tabIndex={0}
                 className="xl:h-[60vh] xl:overflow-y-auto xl:pr-1 xl:[scrollbar-gutter:stable]"
@@ -1439,12 +1413,12 @@ export function DocumentWorkspace({
         </div>
 
         <details
-          className="rounded-md border border-border bg-card px-4 py-1"
+          className="rounded-md border border-border bg-surface px-4 py-1"
           open={diagnosticsOpen}
           onToggle={(event) => setDiagnosticsOpen((event.target as HTMLDetailsElement).open)}
         >
-          <summary className="flex min-h-10 cursor-pointer items-center gap-2 text-sm font-semibold text-foreground">
-            <Wrench size={15} className="text-primary" aria-hidden />
+          <summary className="flex min-h-10 cursor-pointer items-center gap-2 text-sm font-semibold text-fg">
+            <Wrench size={16} className="text-accent-fg" aria-hidden />
             {t("flow.inspector.details")}
           </summary>
           <div className="space-y-5 pb-3 pt-3">
@@ -1587,16 +1561,8 @@ export function DocumentWorkspace({
                     saveReviewEdits.isPending ||
                     enqueueIngestion.isPending ||
                     (status === "REVIEW" && hasReviewEdits)
-                  }
-                >
-                  {!approveDocument.isPending ? <Check size={15} aria-hidden /> : null}
-                  {approveDocument.isPending
-                    ? t("action.queueing")
-                    : status === "PREPROCESSED"
-                      ? t("flow.approvePreprocess")
-                      : status === "CHUNKED"
-                        ? t("flow.approveChunks")
-                        : t("flow.approveExtraction")}
+                  } icon={Check}>
+                  {status === "PREPROCESSED" ? t("flow.approvePreprocess") : status === "CHUNKED" ? t("flow.approveChunks") : t("flow.approveExtraction")}
                 </Button>
               ) : null}
               {actionPlan.primary?.kind === "enqueue" ? (
@@ -1617,14 +1583,8 @@ export function DocumentWorkspace({
                       }
                     )
                   }
-                  loading={enqueueIngestion.isPending}
-                >
-                  {!enqueueIngestion.isPending ? <Send size={15} aria-hidden /> : null}
-                  {enqueueIngestion.isPending
-                    ? t("action.queueing")
-                    : doc.duplicate_of_document_id
-                      ? t("action.enqueueDuplicateIngestion")
-                      : t("action.enqueueIngestion")}
+                  loading={enqueueIngestion.isPending} icon={Send}>
+                  {doc.duplicate_of_document_id ? t("action.enqueueDuplicateIngestion") : t("action.enqueueIngestion")}
                 </Button>
               ) : null}
               {retryPhase ? (
@@ -1633,9 +1593,7 @@ export function DocumentWorkspace({
                   loading={
                     enqueueIngestion.isPending &&
                     enqueueIngestion.variables?.phase === retryPhase
-                  }
-                >
-                  {!enqueueIngestion.isPending ? <RotateCcw size={15} aria-hidden /> : null}
+                  } icon={RotateCcw}>
                   {t(phaseRetryLabelKey(retryPhase))}
                 </Button>
               ) : null}
@@ -1653,7 +1611,7 @@ export function DocumentWorkspace({
                   }
                 >
                   {!enqueueIngestion.isPending || enqueueIngestion.variables?.phase !== phase ? (
-                    <RotateCcw size={15} aria-hidden />
+                    <RotateCcw size={16} aria-hidden />
                   ) : null}
                   {t(`flow.reprocess.${phase.toLowerCase()}` as I18nKey)}
                 </Button>
@@ -1733,13 +1691,13 @@ function IngestionJobsPanel({
 
   const rows = resolvePhaseRows(steps, jobs);
   return (
-    <section className="rounded-md border border-border bg-background p-4">
+    <section className="rounded-md border border-border bg-surface-sunken p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="flex items-center gap-2 text-sm font-semibold text-foreground">
-          <Clock3 size={16} className="text-primary" aria-hidden />
+        <h3 className="flex items-center gap-2 text-sm font-semibold text-fg">
+          <Clock3 size={16} className="text-accent-fg" aria-hidden />
           {t("flow.jobs.title")}
         </h3>
-        <span className="text-xs text-muted">
+        <span className="text-xs text-fg-muted">
           {t("flow.jobs.count", { count: jobs.length })}
         </span>
       </div>
@@ -1807,8 +1765,8 @@ function PhaseJobRow({
     if (!step || step.status === "PENDING") {
       // PENDING で古いジョブ行が残っていても表示しない(前 revision の成果で現状態と矛盾する)。
       return (
-        <li className="flex flex-wrap items-center gap-2 rounded-md border border-dashed border-border bg-card/40 px-3 py-2 text-xs text-muted">
-          <span className="font-medium text-foreground/70">{t(jobPhaseKey(phase))}</span>
+        <li className="flex flex-wrap items-center gap-2 rounded-md border border-dashed border-border bg-surface px-3 py-2 text-xs text-fg-muted">
+          <span className="font-medium text-fg">{t(jobPhaseKey(phase))}</span>
           <span>{t("flow.jobs.notStarted")}</span>
         </li>
       );
@@ -1821,18 +1779,18 @@ function PhaseJobRow({
           })()
         : null;
     return (
-      <li className="rounded-md border border-border bg-card/40 p-3">
+      <li className="rounded-md border border-border bg-surface p-3">
         <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs font-semibold text-foreground">{t(jobPhaseKey(phase))}</span>
+          <span className="text-xs font-semibold text-fg">{t(jobPhaseKey(phase))}</span>
           <span className={recipeStepStatusClass(step.status)}>
             {t(recipeStepStatusKey(step.status))}
           </span>
-          <span className="text-xs text-muted">{t("flow.jobs.inlineExecution")}</span>
+          <span className="text-xs text-fg-muted">{t("flow.jobs.inlineExecution")}</span>
         </div>
         {stepErrorMessage ? (
-          <div className="mt-2 rounded-md border border-danger/20 bg-danger-bg px-2.5 py-2 text-xs text-danger">
-            <p className="font-medium text-danger">{t("flow.jobs.errorReason")}</p>
-            <p className="mt-1 break-words text-danger/90">{stepErrorMessage}</p>
+          <div className="mt-2 rounded-md border border-danger-border bg-danger-subtle px-2.5 py-2 text-xs text-danger-fg">
+            <p className="font-medium text-danger-fg">{t("flow.jobs.errorReason")}</p>
+            <p className="mt-1 break-words text-danger-fg">{stepErrorMessage}</p>
           </div>
         ) : null}
       </li>
@@ -1851,43 +1809,43 @@ function PhaseJobRow({
       : null;
   const showAttempt = job.attempt_count > 1 || job.status === "FAILED";
   return (
-    <li className="rounded-md border border-border bg-card/40 p-3">
+    <li className="rounded-md border border-border bg-surface p-3">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="text-xs font-semibold text-foreground">{t(jobPhaseKey(phase))}</span>
+        <span className="text-xs font-semibold text-fg">{t(jobPhaseKey(phase))}</span>
         <span className={step ? recipeStepStatusClass(step.status) : jobStatusClass(job.status)}>
           {t(step ? recipeStepStatusKey(step.status) : jobStatusKey(job.status))}
         </span>
         {preprocessConverted != null ? (
-          <span className="rounded-full border border-border bg-background px-2 py-0.5 text-xs text-muted">
+          <span className="rounded-full border border-border bg-surface-sunken px-2 py-0.5 text-xs text-fg-muted">
             {preprocessConverted ? t("provenance.converted") : t("provenance.passthrough")}
           </span>
         ) : null}
         {engineLabel ? (
-          <span className="rounded-full border border-border bg-background px-2 py-0.5 text-xs text-muted">
+          <span className="rounded-full border border-border bg-surface-sunken px-2 py-0.5 text-xs text-fg-muted">
             {engineLabel}
           </span>
         ) : null}
         {chunkCount != null ? (
-          <span className="tnum rounded-full border border-border bg-background px-2 py-0.5 text-xs text-muted">
+          <span className="tnum rounded-full border border-border bg-surface-sunken px-2 py-0.5 text-xs text-fg-muted">
             {t("flow.jobs.chunkCount", { count: chunkCount })}
           </span>
         ) : null}
         {chunkSetCreatedAt ? (
-          <span className="tnum rounded-full border border-border bg-background px-2 py-0.5 text-xs text-muted">
+          <span className="tnum rounded-full border border-border bg-surface-sunken px-2 py-0.5 text-xs text-fg-muted">
             {t("flow.jobs.chunkSetCreatedAt", { time: formatDateTime(chunkSetCreatedAt) })}
           </span>
         ) : null}
         {vectorCount != null ? (
-          <span className="tnum rounded-full border border-border bg-background px-2 py-0.5 text-xs text-muted">
+          <span className="tnum rounded-full border border-border bg-surface-sunken px-2 py-0.5 text-xs text-fg-muted">
             {t("flow.jobs.vectorCount", { count: vectorCount })}
           </span>
         ) : null}
         {embeddingLabel ? (
-          <span className="rounded-full border border-border bg-background px-2 py-0.5 text-xs text-muted">
+          <span className="rounded-full border border-border bg-surface-sunken px-2 py-0.5 text-xs text-fg-muted">
             {embeddingLabel}
           </span>
         ) : null}
-        <span className="tnum ml-auto break-all text-xs text-muted" title={job.id}>
+        <span className="tnum ml-auto break-all text-xs text-fg-muted" title={job.id}>
           {t("flow.jobs.jobId", { id: shortJobId(job.id) })}
         </span>
       </div>
@@ -1910,13 +1868,13 @@ function PhaseJobRow({
         ) : null}
       </dl>
       {active ? (
-        <p className="mt-2 text-xs leading-relaxed text-info">{t("flow.jobs.activeHint")}</p>
+        <p className="mt-2 text-xs leading-relaxed text-info-fg">{t("flow.jobs.activeHint")}</p>
       ) : null}
       {progressSummary ? <IngestionProgressSummaryView summary={progressSummary} /> : null}
       {errorMessageText ? (
-        <div className="mt-2 rounded-md border border-danger/20 bg-danger-bg px-2.5 py-2 text-xs text-danger">
-          <p className="font-medium text-danger">{t("flow.jobs.errorReason")}</p>
-          <p className="mt-1 break-words text-danger/90">{errorMessageText}</p>
+        <div className="mt-2 rounded-md border border-danger-border bg-danger-subtle px-2.5 py-2 text-xs text-danger-fg">
+          <p className="font-medium text-danger-fg">{t("flow.jobs.errorReason")}</p>
+          <p className="mt-1 break-words text-danger-fg">{errorMessageText}</p>
         </div>
       ) : null}
     </li>
@@ -1926,8 +1884,8 @@ function PhaseJobRow({
 function IngestionProgressSummaryView({ summary }: { summary: IngestionProgressSummary }) {
   const label = ingestionProgressLabel(summary);
   return (
-    <div className="mt-3 space-y-1.5 rounded-md border border-border bg-background px-3 py-2">
-      <p className="text-xs font-medium text-foreground">{label}</p>
+    <div className="mt-3 space-y-1.5 rounded-md border border-border bg-surface-sunken px-3 py-2">
+      <p className="text-xs font-medium text-fg">{label}</p>
       {summary.kind === "determinate" ? (
         <progress
           className="h-2 w-full"
@@ -2005,8 +1963,8 @@ function JobMetric({
 }) {
   return (
     <div data-testid={testId}>
-      <dt className="text-muted">{label}</dt>
-      <dd className="tnum mt-0.5 font-medium text-foreground">{value}</dd>
+      <dt className="text-fg-muted">{label}</dt>
+      <dd className="tnum mt-0.5 font-medium text-fg">{value}</dd>
     </div>
   );
 }
@@ -2042,14 +2000,14 @@ function IngestionSegmentsPanel({
   const allSucceeded = segments.every((segment) => segment.status === "SUCCEEDED");
 
   return (
-    <section className="rounded-md border border-border bg-background p-4">
+    <section className="rounded-md border border-border bg-surface-sunken p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="flex items-center gap-2 text-sm font-semibold text-foreground">
-          <Route size={16} className="text-primary" aria-hidden />
+        <h3 className="flex items-center gap-2 text-sm font-semibold text-fg">
+          <Route size={16} className="text-accent-fg" aria-hidden />
           {t("flow.segments.title")}
         </h3>
         <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs text-muted">
+          <span className="text-xs text-fg-muted">
             {t("flow.segments.count", { count: segments.length })}
           </span>
           {hasFailedSegments ? (
@@ -2058,9 +2016,7 @@ function IngestionSegmentsPanel({
               variant="secondary"
               size="sm"
               loading={retrying}
-              onClick={onRetryFailedSegments}
-            >
-              {!retrying ? <RotateCcw size={14} aria-hidden /> : null}
+              onClick={onRetryFailedSegments} icon={RotateCcw}>
               {t("flow.segments.retryFailed")}
             </Button>
           ) : null}
@@ -2072,13 +2028,13 @@ function IngestionSegmentsPanel({
         </div>
       ) : null}
       {allSucceeded ? (
-        <p className="mt-3 rounded-md border border-border bg-card/40 px-3 py-2 text-xs text-muted">
+        <p className="mt-3 rounded-md border border-border bg-surface px-3 py-2 text-xs text-fg-muted">
           {t("flow.segments.allSucceeded", { count: segments.length })}
         </p>
       ) : (
       <ol
         aria-label={t("flow.segments.title")}
-        className="bounded-scroll-area mt-3 grid grid-cols-1 gap-2 rounded-md border border-border bg-card/40 p-2 lg:grid-cols-2"
+        className="bounded-scroll-area mt-3 grid grid-cols-1 gap-2 rounded-md border border-border bg-surface p-2 lg:grid-cols-2"
       >
         {segments.map((segment) => {
           const segmentErrorMessage = visibleErrorSegmentIds.has(segment.segment_id)
@@ -2087,39 +2043,39 @@ function IngestionSegmentsPanel({
           return (
             <li
               key={segment.segment_id}
-              className="rounded-md border border-border bg-background p-3 text-sm"
+              className="rounded-md border border-border bg-surface-sunken p-3 text-sm"
             >
               <div className="flex flex-wrap items-center gap-2">
                 <span className={segmentStatusClass(segment.status)}>
                   {segmentStatusLabel(segment.status)}
                 </span>
-                <span className="tnum text-xs text-muted">
+                <span className="tnum text-xs text-fg-muted">
                   {segmentProgressLabel(segment)}
                 </span>
                 {segment.error_code ? (
                   <span
-                    className="inline-flex items-center gap-1 rounded-full bg-warning-bg px-2 py-0.5 text-xs text-warning"
+                    className="inline-flex items-center gap-1 rounded-full bg-warning-subtle px-2 py-0.5 text-xs text-warning-fg"
                     title={t("flow.segments.errorCode", { code: segment.error_code })}
                   >
-                    <TriangleAlert size={12} aria-hidden />
+                    <TriangleAlert size={14} aria-hidden />
                     {segment.error_code}
                   </span>
                 ) : null}
               </div>
-              <p className="mt-2 break-all text-xs text-muted">
+              <p className="mt-2 break-all text-xs text-fg-muted">
                 {parserBackendLabel(segment.parser_backend)}
                 {!isSameParserBackend(segment.parser_profile, segment.parser_backend)
                   ? ` / ${segment.parser_profile}`
                   : ""}
               </p>
               {segmentErrorMessage ? (
-                <div className="mt-2 space-y-1 rounded-md border border-danger/20 bg-danger-bg px-2.5 py-2 text-xs text-danger">
-                  <p className="font-medium text-danger">{t("flow.segments.errorReason")}</p>
-                  <p className="break-words text-danger/90">{segmentErrorMessage}</p>
+                <div className="mt-2 space-y-1 rounded-md border border-danger-border bg-danger-subtle px-2.5 py-2 text-xs text-danger-fg">
+                  <p className="font-medium text-danger-fg">{t("flow.segments.errorReason")}</p>
+                  <p className="break-words text-danger-fg">{segmentErrorMessage}</p>
                 </div>
               ) : null}
               {segment.status === "FAILED" ? (
-                <p className="mt-2 text-xs leading-relaxed text-muted">
+                <p className="mt-2 text-xs leading-relaxed text-fg-muted">
                   {t("flow.segments.errorRecovery")}
                 </p>
               ) : null}
@@ -2153,14 +2109,14 @@ function DocumentExtractionExportPanel({
 }) {
   const formats: DocumentExtractionExportFormat[] = ["markdown", "html", "json", "chunks"];
   return (
-    <section className="mt-4 rounded-lg border border-border bg-background p-4">
+    <section className="mt-4 rounded-lg border border-border bg-surface-sunken p-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h4 className="flex items-center gap-2 text-sm font-semibold text-foreground">
-          <Braces size={15} className="text-primary" aria-hidden />
+        <h4 className="flex items-center gap-2 text-sm font-semibold text-fg">
+          <Braces size={16} className="text-accent-fg" aria-hidden />
           {t("flow.extractionExport.title")}
         </h4>
         <div
-          className="inline-flex flex-wrap rounded-md border border-border bg-card p-0.5"
+          className="inline-flex flex-wrap rounded-md border border-border bg-surface p-0.5"
           role="group"
           aria-label={t("flow.extractionExport.format")}
         >
@@ -2169,10 +2125,10 @@ function DocumentExtractionExportPanel({
               key={item}
               type="button"
               className={cn(
-                "h-8 rounded px-2.5 text-xs font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
+                "h-8 rounded px-2.5 text-xs font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring",
                 item === format
-                  ? "bg-primary text-primary-foreground"
-                  : "text-muted hover:bg-background hover:text-foreground"
+                  ? "bg-accent-emphasis text-fg-on-accent"
+                  : "text-fg-muted hover:bg-surface-hover hover:text-fg"
               )}
               aria-pressed={item === format}
               onClick={() => onFormatChange(item)}
@@ -2194,7 +2150,7 @@ function DocumentExtractionExportPanel({
           {t("flow.extractionExport.loadErrorHint")}
         </Banner>
       ) : (
-        <pre className="mt-3 max-h-72 overflow-auto rounded-md border border-border bg-card p-3 text-xs leading-relaxed text-foreground">
+        <pre className="mt-3 max-h-72 overflow-auto rounded-md border border-border bg-surface p-3 text-xs leading-relaxed text-fg">
           <code>{content || t("flow.extractionExport.empty")}</code>
         </pre>
       )}
@@ -2204,9 +2160,9 @@ function DocumentExtractionExportPanel({
 
 function ExportMetric({ label, value }: { label: string; value: number }) {
   return (
-    <div className="rounded-md border border-border bg-card px-2.5 py-2">
-      <dt className="text-muted">{label}</dt>
-      <dd className="tnum mt-1 font-semibold text-foreground">{value}</dd>
+    <div className="rounded-md border border-border bg-surface px-2.5 py-2">
+      <dt className="text-fg-muted">{label}</dt>
+      <dd className="tnum mt-1 font-semibold text-fg">{value}</dd>
     </div>
   );
 }
@@ -2260,15 +2216,15 @@ function recipeStepStatusClass(status: DocumentRecipeStepStatus): string {
   switch (status) {
     case "QUEUED":
     case "RUNNING":
-      return `${base} bg-info-bg text-info`;
+      return `${base} bg-info-subtle text-info-fg`;
     case "SUCCEEDED":
-      return `${base} bg-success-bg text-success`;
+      return `${base} bg-success-subtle text-success-fg`;
     case "FAILED":
-      return `${base} bg-danger-bg text-danger`;
+      return `${base} bg-danger-subtle text-danger-fg`;
     case "NEEDS_REVIEW":
-      return `${base} bg-warning-bg text-warning`;
+      return `${base} bg-warning-subtle text-warning-fg`;
     default:
-      return `${base} bg-background text-muted`;
+      return `${base} bg-surface-sunken text-fg-muted`;
   }
 }
 
@@ -2284,17 +2240,17 @@ function jobStatusClass(status: IngestionJob["status"]): string {
   switch (status) {
     case "QUEUED":
     case "RUNNING":
-      return `${base} bg-info-bg text-info`;
+      return `${base} bg-info-subtle text-info-fg`;
     case "SUCCEEDED":
-      return `${base} bg-success-bg text-success`;
+      return `${base} bg-success-subtle text-success-fg`;
     case "FAILED":
-      return `${base} bg-danger-bg text-danger`;
+      return `${base} bg-danger-subtle text-danger-fg`;
     case "SKIPPED":
-      return `${base} bg-warning-bg text-warning`;
+      return `${base} bg-warning-subtle text-warning-fg`;
     case "CANCELLED":
-      return `${base} bg-background text-muted`;
+      return `${base} bg-surface-sunken text-fg-muted`;
     default:
-      return `${base} bg-background text-muted`;
+      return `${base} bg-surface-sunken text-fg-muted`;
   }
 }
 
@@ -2318,39 +2274,6 @@ function formatJobElapsed(job: IngestionJob, nowMs = Date.now()): string {
 }
 
 /** インスペクタ右ペインのタブ(本文 / 構造化要素 / Chunk / エクスポート切替)。 */
-function InspectorTab({
-  id,
-  controls,
-  active,
-  onSelect,
-  children,
-}: {
-  id: string;
-  controls: string;
-  active: boolean;
-  onSelect: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      role="tab"
-      id={id}
-      aria-selected={active}
-      aria-controls={controls}
-      tabIndex={active ? 0 : -1}
-      onClick={onSelect}
-      className={cn(
-        "cursor-pointer rounded-full px-3 py-1 text-sm font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring",
-        active
-          ? "bg-primary text-primary-foreground"
-          : "border border-border bg-card text-muted hover:bg-background hover:text-foreground"
-      )}
-    >
-      {children}
-    </button>
-  );
-}
 
 function ChunkPreviewControls({
   form,
@@ -2406,15 +2329,15 @@ function ChunkPreviewControls({
   return (
     <section
       aria-label={t("flow.chunkPreview.title")}
-      className="space-y-3 rounded-md border border-border bg-card p-3"
+      className="space-y-3 rounded-md border border-border bg-surface p-3"
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <h4 className="flex items-center gap-2 text-sm font-semibold text-foreground">
-            <FileSearch size={15} className="text-primary" aria-hidden />
+          <h4 className="flex items-center gap-2 text-sm font-semibold text-fg">
+            <FileSearch size={16} className="text-accent-fg" aria-hidden />
             {t("flow.chunkPreview.title")}
           </h4>
-          <p className="mt-1 text-xs leading-relaxed text-muted">
+          <p className="mt-1 text-xs leading-relaxed text-fg-muted">
             {t("flow.chunkPreview.description")}
           </p>
         </div>
@@ -2424,9 +2347,7 @@ function ChunkPreviewControls({
           size="sm"
           loading={pending}
           disabled={disabled || Boolean(validationError)}
-          onClick={onRun}
-        >
-          <FileSearch size={14} aria-hidden />
+          onClick={onRun} icon={FileSearch}>
           {t(result ? "flow.chunkPreview.rerun" : "flow.chunkPreview.run")}
         </Button>
       </div>
@@ -2447,8 +2368,8 @@ function ChunkPreviewControls({
           }}
           buttonClassName="min-h-11"
         />
-        <div className="flex min-h-11 items-center justify-between gap-3 rounded-md border border-border bg-background px-3 py-2">
-          <span className="text-sm font-medium text-foreground">
+        <div className="flex min-h-11 items-center justify-between gap-3 rounded-md border border-border bg-surface-sunken px-3 py-2">
+          <span className="text-sm font-medium text-fg">
             {t("flow.chunkPreview.contextHeader")}
           </span>
           <Switch
@@ -2462,7 +2383,7 @@ function ChunkPreviewControls({
         </div>
         {fixedDelimiter ? (
           <label className="space-y-1.5 sm:col-span-2">
-            <span className="block text-sm font-medium text-foreground">
+            <span className="block text-sm font-medium text-fg">
               {t("settings.chunking.params.delimiter")}
             </span>
             <input
@@ -2471,7 +2392,7 @@ function ChunkPreviewControls({
               maxLength={256}
               disabled={pending}
               onChange={(event) => onChange({ chunk_delimiter: event.target.value })}
-              className="h-11 w-full rounded-md border border-border bg-background px-3 text-sm text-foreground outline-none focus-visible:border-primary disabled:cursor-not-allowed disabled:opacity-50"
+              className="h-11 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm text-fg outline-none focus-visible:border-focus-ring disabled:cursor-not-allowed disabled:opacity-50"
             />
           </label>
         ) : (
@@ -2479,17 +2400,17 @@ function ChunkPreviewControls({
             {semanticBoundary ? (
               <details
                 key={form.chunking_strategy}
-                className="group rounded-md border border-border bg-background p-3 sm:col-span-2"
+                className="group rounded-md border border-border bg-surface-sunken p-3 sm:col-span-2"
               >
-                <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 rounded-sm text-sm font-semibold text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
+                <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 rounded-sm text-sm font-semibold text-fg outline-none focus-visible:ring-2 focus-visible:ring-focus-ring [&::-webkit-details-marker]:hidden">
                   <span>{t("settings.chunking.params.semanticDetails")}</span>
                   <ChevronDown
                     size={16}
-                    className="shrink-0 text-muted transition-transform group-open:rotate-180"
+                    className="shrink-0 text-fg-muted transition-transform group-open:rotate-180"
                     aria-hidden
                   />
                 </summary>
-                <p className="mb-3 text-xs leading-relaxed text-muted">
+                <p className="mb-3 text-xs leading-relaxed text-fg-muted">
                   {t(
                     form.chunking_strategy === "markdown_heading"
                       ? "settings.chunking.params.headingDescription"
@@ -2585,7 +2506,7 @@ function PreviewNumberField({
 }) {
   return (
     <label className="space-y-1.5">
-      <span className="block text-sm font-medium text-foreground">{label}</span>
+      <span className="block text-sm font-medium text-fg">{label}</span>
       <input
         type="number"
         inputMode="numeric"
@@ -2594,7 +2515,7 @@ function PreviewNumberField({
         max={max}
         disabled={disabled}
         onChange={(event) => onChange(Number.parseInt(event.target.value, 10))}
-        className="h-11 w-full rounded-md border border-border bg-background px-3 text-sm text-foreground outline-none focus-visible:border-primary disabled:cursor-not-allowed disabled:opacity-50"
+        className="h-11 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm text-fg outline-none focus-visible:border-focus-ring disabled:cursor-not-allowed disabled:opacity-50"
       />
     </label>
   );
@@ -2610,9 +2531,9 @@ function PreviewStat({
   chars?: boolean;
 }) {
   return (
-    <div className="rounded-md border border-border bg-background p-2">
-      <dt className="text-[11px] text-muted">{label}</dt>
-      <dd className="tnum mt-0.5 text-sm font-semibold text-foreground">
+    <div className="rounded-md border border-border bg-surface-sunken p-2">
+      <dt className="text-xs text-fg-muted">{label}</dt>
+      <dd className="tnum mt-0.5 text-sm font-semibold text-fg">
         {chars
           ? t("flow.chunkPreview.stats.chars", { count: formatNumber(value) })
           : formatNumber(value)}
@@ -2653,14 +2574,14 @@ function DocumentChunksPanel({
   }
   if (!chunks.length) {
     return (
-      <div className="rounded-md border border-border bg-background">
+      <div className="rounded-md border border-border bg-surface-sunken">
         <EmptyState title={t("flow.chunks.empty")} />
       </div>
     );
   }
 
   return (
-    <ol className="space-y-3 rounded-lg border border-border bg-background p-3">
+    <ol className="space-y-3 rounded-lg border border-border bg-surface-sunken p-3">
       {chunks.map((chunk) => {
         const selected = chunk.chunk_id === selectedChunkId;
         return (
@@ -2668,8 +2589,8 @@ function DocumentChunksPanel({
             <button
               ref={selected ? selectedChunkRef : undefined}
               type="button"
-              className={`w-full rounded-md border p-3 text-left transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring ${
-                selected ? "border-primary bg-primary/5" : "border-border bg-card hover:bg-background"
+              className={`w-full rounded-md border p-3 text-left transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
+                selected ? "border-accent-emphasis bg-accent-subtle" : "border-border bg-surface hover:bg-surface-hover"
               }`}
               aria-pressed={selected}
               onClick={() => onSelect(chunk)}
@@ -2677,12 +2598,12 @@ function DocumentChunksPanel({
               <div className="flex flex-wrap items-center gap-2">
                 <IndexBadge>#{chunk.chunk_index + 1}</IndexBadge>
                 {chunk.content_kind ? (
-                  <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+                  <span className="rounded-full bg-accent-subtle px-2 py-0.5 text-xs font-medium text-accent-fg">
                     {chunk.content_kind}
                   </span>
                 ) : null}
                 {chunk.page_start ? (
-                  <span className="tnum rounded-full bg-info-bg px-2 py-0.5 text-xs text-info">
+                  <span className="tnum rounded-full bg-info-subtle px-2 py-0.5 text-xs text-info-fg">
                     {t("flow.chunks.pageRange", {
                       start: chunk.page_start,
                       end: chunk.page_end ?? chunk.page_start,
@@ -2690,8 +2611,8 @@ function DocumentChunksPanel({
                   </span>
                 ) : null}
                 {chunk.bbox ? (
-                  <span className="inline-flex items-center gap-1 rounded-full bg-success-bg px-2 py-0.5 text-xs text-success">
-                    <LocateFixed size={12} aria-hidden />
+                  <span className="inline-flex items-center gap-1 rounded-full bg-success-subtle px-2 py-0.5 text-xs text-success-fg">
+                    <LocateFixed size={14} aria-hidden />
                     bbox
                   </span>
                 ) : null}
@@ -2732,28 +2653,28 @@ function SourceDerivationPanel({
 }) {
   const pageCount = Object.keys(derivation.pageMap).length;
   return (
-    <section className="rounded-md border border-border bg-background p-4">
-      <h3 className="flex items-center gap-2 text-sm font-semibold text-foreground">
-        <GitBranch size={16} className="text-primary" aria-hidden />
+    <section className="rounded-md border border-border bg-surface-sunken p-4">
+      <h3 className="flex items-center gap-2 text-sm font-semibold text-fg">
+        <GitBranch size={16} className="text-accent-fg" aria-hidden />
         {t("provenance.title")}
       </h3>
       {/* 原本 → 正規化原本 → 抽出 の系譜(溯源)。原本は保全され、変換物から追跡できる。 */}
       <ol className="mt-3 space-y-2 text-sm">
-        <li className="rounded-md border border-border bg-card px-3 py-2">
-          <div className="text-xs text-muted">{t("provenance.original")}</div>
-          <div className="mt-0.5 break-all font-medium text-foreground">{originalFileName}</div>
+        <li className="rounded-md border border-border bg-surface px-3 py-2">
+          <div className="text-xs text-fg-muted">{t("provenance.original")}</div>
+          <div className="mt-0.5 break-all font-medium text-fg">{originalFileName}</div>
         </li>
-        <li className="rounded-md border border-border bg-card px-3 py-2">
+        <li className="rounded-md border border-border bg-surface px-3 py-2">
           <div className="flex items-center justify-between gap-2">
-            <div className="text-xs text-muted">{t("provenance.canonical")}</div>
-            <span className="rounded bg-info-bg px-1.5 py-0.5 text-[11px] font-medium text-info">
+            <div className="text-xs text-fg-muted">{t("provenance.canonical")}</div>
+            <span className="rounded bg-info-subtle px-1.5 py-0.5 text-xs font-medium text-info-fg">
               {t(`settings.preprocess.profile.${derivation.preprocessProfile}` as I18nKey)}
             </span>
           </div>
-          <div className="mt-0.5 break-all font-medium text-foreground">
+          <div className="mt-0.5 break-all font-medium text-fg">
             {derivation.derivedObjectPath ?? derivation.derivedContentType ?? "-"}
           </div>
-          <div className="tnum mt-0.5 break-all text-xs text-muted">
+          <div className="tnum mt-0.5 break-all text-xs text-fg-muted">
             {derivation.converterName} {derivation.converterVersion}
             {derivation.derivedSha256
               ? ` · sha256: ${derivation.derivedSha256.slice(0, 16)}…`
@@ -2763,7 +2684,7 @@ function SourceDerivationPanel({
         </li>
       </ol>
       {derivation.warnings.length > 0 ? (
-        <ul className="mt-3 space-y-1 text-xs text-warning">
+        <ul className="mt-3 space-y-1 text-xs text-warning-fg">
           {derivation.warnings.map((warning) => (
             <li key={warning}>{warning}</li>
           ))}
@@ -2777,39 +2698,39 @@ function SourceDerivationPanel({
 function SourceProfilePanel({ profile }: { profile: SourceProfile }) {
   const warnings = profile.quality_warnings ?? [];
   return (
-    <section className="rounded-md border border-border bg-background p-4">
-      <h3 className="flex items-center gap-2 text-sm font-semibold text-foreground">
-        <FileSearch size={16} className="text-primary" aria-hidden />
+    <section className="rounded-md border border-border bg-surface-sunken p-4">
+      <h3 className="flex items-center gap-2 text-sm font-semibold text-fg">
+        <FileSearch size={16} className="text-accent-fg" aria-hidden />
         {t("sourceProfile.documentWorkspaceTitle")}
       </h3>
       <dl className="mt-3 grid grid-cols-1 gap-3 text-sm sm:grid-cols-3">
         <div>
-          <dt className="text-xs text-muted">{t("sourceProfile.parser")}</dt>
-          <dd className="mt-0.5 font-medium text-foreground">
+          <dt className="text-xs text-fg-muted">{t("sourceProfile.parser")}</dt>
+          <dd className="mt-0.5 font-medium text-fg">
             {t(parserProfileKey(profile.parser_profile))}
           </dd>
         </div>
         <div>
-          <dt className="text-xs text-muted">{t("sourceProfile.contentType")}</dt>
-          <dd className="mt-0.5 break-all font-medium text-foreground">
+          <dt className="text-xs text-fg-muted">{t("sourceProfile.contentType")}</dt>
+          <dd className="mt-0.5 break-all font-medium text-fg">
             {profile.content_type}
           </dd>
         </div>
         <div>
-          <dt className="text-xs text-muted">{t("sourceProfile.hash")}</dt>
-          <dd className="tnum mt-0.5 font-medium text-foreground">
+          <dt className="text-xs text-fg-muted">{t("sourceProfile.hash")}</dt>
+          <dd className="tnum mt-0.5 font-medium text-fg">
             {profile.content_sha256.slice(0, 12)}
           </dd>
         </div>
       </dl>
       {profile.unsupported_reason ? (
-        <p className="mt-3 text-xs text-warning">
+        <p className="mt-3 text-xs text-warning-fg">
           {t("sourceProfile.unsupportedReason")}:{" "}
           {unsupportedReasonLabel(profile.unsupported_reason)}
         </p>
       ) : null}
       {warnings.length > 0 ? (
-        <ul className="mt-3 space-y-1 text-xs text-warning">
+        <ul className="mt-3 space-y-1 text-xs text-warning-fg">
           {warnings.map((warning) => (
             <li key={warning}>{t(sourceWarningKey(warning))}</li>
           ))}
@@ -2840,14 +2761,14 @@ function segmentStatusClass(status: string): string {
   const base = "rounded-full px-2 py-0.5 text-xs font-medium";
   switch (status) {
     case "SUCCEEDED":
-      return `${base} bg-success-bg text-success`;
+      return `${base} bg-success-subtle text-success-fg`;
     case "FAILED":
     case "CANCELLED":
-      return `${base} bg-danger-bg text-danger`;
+      return `${base} bg-danger-subtle text-danger-fg`;
     case "RUNNING":
-      return `${base} bg-info-bg text-info`;
+      return `${base} bg-info-subtle text-info-fg`;
     default:
-      return `${base} bg-background text-muted`;
+      return `${base} bg-surface-sunken text-fg-muted`;
   }
 }
 
@@ -2904,10 +2825,10 @@ function DocumentKnowledgeBaseEditor({
   return (
     <section className="space-y-3 border-t border-border pt-4">
       <div>
-        <h3 className="text-sm font-semibold text-foreground">
+        <h3 className="text-sm font-semibold text-fg">
           {t("documents.knowledgeBases.title")}
         </h3>
-        <p className="mt-1 text-xs text-muted">{t("documents.knowledgeBases.description")}</p>
+        <p className="mt-1 text-xs text-fg-muted">{t("documents.knowledgeBases.description")}</p>
       </div>
 
       {membership.isError ? (
@@ -2931,9 +2852,7 @@ function DocumentKnowledgeBaseEditor({
           size="md"
           onClick={onSave}
           loading={replace.isPending}
-          disabled={!canSave}
-        >
-          <Save size={15} aria-hidden />
+          disabled={!canSave} icon={Save}>
           {t("documents.knowledgeBases.save")}
         </Button>
         {selectedIds.length === 0 ? (

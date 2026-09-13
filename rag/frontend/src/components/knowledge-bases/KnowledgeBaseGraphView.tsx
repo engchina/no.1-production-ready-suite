@@ -6,15 +6,15 @@ import "@xyflow/react/dist/style.css";
 import { Share2 } from "lucide-react";
 
 import { EmptyState, ErrorState } from "@/components/StateViews";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Skeleton } from "@engchina/production-ready-ui";
 import type { KnowledgeBaseGraphData } from "@/lib/api";
 import { useKnowledgeBaseGraph } from "@/lib/queries";
 import { t } from "@/lib/i18n";
 
 const NODE_STYLE = {
-  background: "var(--card)",
-  color: "var(--foreground)",
-  border: "1px solid var(--border)",
+  background: "var(--color-surface)",
+  color: "var(--color-fg)",
+  border: "1px solid var(--color-border)",
   borderRadius: 8,
   fontSize: 12,
   padding: 6,
@@ -39,7 +39,7 @@ function toFlow(data: KnowledgeBaseGraphData): { nodes: Node[]; edges: Edge[] } 
     source: edge.source,
     target: edge.target,
     label: edge.type ?? undefined,
-    labelStyle: { fill: "var(--muted)", fontSize: 10 },
+    labelStyle: { fill: "var(--color-fg-muted)", fontSize: 10 },
   }));
   return { nodes, edges };
 }
@@ -58,19 +58,19 @@ export function KnowledgeBaseGraphView({ knowledgeBaseId }: { knowledgeBaseId: s
   const isEmpty = query.data && (query.data.status === "empty" || query.data.nodes.length === 0);
 
   return (
-    <section className="rounded-md border border-border bg-card">
+    <section className="rounded-md border border-border bg-surface">
       <button
         type="button"
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
-        className="flex min-h-11 w-full cursor-pointer items-center gap-2 px-4 text-sm font-semibold text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+        className="flex min-h-11 w-full cursor-pointer items-center gap-2 px-4 text-sm font-semibold text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
       >
-        <Share2 size={15} className="text-primary" aria-hidden />
+        <Share2 size={16} className="text-accent-fg" aria-hidden />
         {open ? t("knowledgeBases.graph.hide") : t("knowledgeBases.graph.show")}
       </button>
       {open ? (
         <div className="space-y-2 px-4 pb-4">
-          <p className="text-xs text-muted">{t("knowledgeBases.graph.hint")}</p>
+          <p className="text-xs text-fg-muted">{t("knowledgeBases.graph.hint")}</p>
           {query.isPending ? (
             <Skeleton className="h-[360px] w-full rounded-md" />
           ) : query.isError ? (
@@ -85,7 +85,7 @@ export function KnowledgeBaseGraphView({ knowledgeBaseId }: { knowledgeBaseId: s
               <div
                 role="region"
                 aria-label={t("knowledgeBases.graph.title")}
-                className="h-[360px] w-full overflow-hidden rounded-md border border-border bg-background"
+                className="h-[360px] w-full overflow-hidden rounded-md border border-border bg-surface-sunken"
               >
                 <ReactFlow
                   nodes={flow.nodes}
@@ -102,7 +102,7 @@ export function KnowledgeBaseGraphView({ knowledgeBaseId }: { knowledgeBaseId: s
                 </ReactFlow>
               </div>
               {query.data?.truncated ? (
-                <p className="text-xs text-muted">{t("knowledgeBases.graph.truncated")}</p>
+                <p className="text-xs text-fg-muted">{t("knowledgeBases.graph.truncated")}</p>
               ) : null}
             </>
           )}

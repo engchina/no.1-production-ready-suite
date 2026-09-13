@@ -1,9 +1,6 @@
-"use client";
-
+import { Button, PageHeader } from "@engchina/production-ready-ui";
 import { RefreshCw } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
 import { t } from "@/lib/i18n";
 import { formatDateTime } from "@/lib/format";
 
@@ -18,15 +15,13 @@ export function DashboardHeader({
   updatedAt: string | null;
 }) {
   return (
-    <header className="border-b border-border bg-card px-8 py-5">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-bold text-foreground">{t("dashboard.title")}</h1>
-          <p className="mt-1 max-w-2xl text-sm text-muted">{t("dashboard.subtitle")}</p>
-        </div>
-        <div className="flex items-center gap-3">
+    <PageHeader
+      title={t("dashboard.title")}
+      subtitle={t("dashboard.subtitle")}
+      actions={
+        <>
           {updatedAt ? (
-            <span className="tnum text-xs text-muted">
+            <span className="tnum text-xs text-fg-muted">
               {t("dashboard.lastUpdated")} {formatDateTime(updatedAt)}
             </span>
           ) : null}
@@ -34,14 +29,14 @@ export function DashboardHeader({
             type="button"
             variant="secondary"
             size="sm"
+            icon={RefreshCw}
+            loading={isRefreshing}
             onClick={onRefresh}
-            disabled={isRefreshing}
           >
-            <RefreshCw size={14} className={cn(isRefreshing && "animate-spin")} aria-hidden />
             {t("dashboard.refresh")}
           </Button>
-        </div>
-      </div>
-    </header>
+        </>
+      }
+    />
   );
 }

@@ -1,14 +1,21 @@
 "use client";
 
+import {
+  PageBody,
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+  Button,
+  FormStatus,
+  Skeleton,
+} from "@engchina/production-ready-ui";
 import { useEffect, useState } from "react";
 import { CheckCircle2, RotateCcw, Save, ShieldAlert } from "lucide-react";
 import { Link } from "react-router-dom";
 
 import { ErrorState } from "@/components/StateViews";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { FormStatus } from "@/components/ui/form-status";
-import { Skeleton } from "@/components/ui/skeleton";
 import {
   ApiError,
   type GuardrailBackend,
@@ -39,22 +46,22 @@ export function GuardrailSettingsClient() {
 
   if (query.isPending) {
     return (
-      <div className="space-y-4 p-8">
+      <PageBody>
         <Skeleton className="h-64 w-full rounded-lg" />
-      </div>
+      </PageBody>
     );
   }
 
   if (query.isError) {
     return (
-      <div className="p-8">
+      <PageBody>
         <ErrorState
           message={
             query.error instanceof ApiError ? query.error.message : t("settings.guardrail.loadError")
           }
           onRetry={() => void query.refetch()}
         />
-      </div>
+      </PageBody>
     );
   }
 
@@ -110,11 +117,11 @@ export function GuardrailSettingsClient() {
   }
 
   return (
-    <div className="space-y-5 p-4 sm:p-6 lg:p-8">
+    <PageBody>
       <Card>
         <CardHeader>
           <div className="flex items-start gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-warning-bg text-warning">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-warning-subtle text-warning-fg">
               <ShieldAlert size={20} aria-hidden />
             </div>
             <div>
@@ -129,14 +136,14 @@ export function GuardrailSettingsClient() {
               <FormStatus tone="warning" message={ociWarning} />
               <Link
                 to={APP_ROUTES.settingsOci}
-                className="inline-flex min-h-11 items-center rounded-md text-sm font-medium text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:min-h-9"
+                className="inline-flex min-h-11 items-center rounded-md text-sm font-medium text-accent-fg underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring sm:min-h-9"
               >
                 {t("settings.guardrail.ociSettingsLink")}
               </Link>
             </div>
           ) : null}
           <fieldset className="space-y-2" disabled={save.isPending}>
-            <legend className="text-sm font-medium text-foreground">
+            <legend className="text-sm font-medium text-fg">
               {t("settings.guardrail.backend")}
             </legend>
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
@@ -156,16 +163,16 @@ export function GuardrailSettingsClient() {
                     <label
                       htmlFor={`guardrail-backend-${item}`}
                       className={cn(
-                        "flex min-h-20 cursor-pointer flex-col rounded-md border px-3 py-2 text-left transition-colors peer-focus-visible:ring-2 peer-focus-visible:ring-ring peer-focus-visible:ring-offset-2 peer-disabled:cursor-not-allowed peer-disabled:opacity-50",
+                        "flex min-h-20 cursor-pointer flex-col rounded-md border px-3 py-2 text-left transition-colors peer-focus-visible:ring-2 peer-focus-visible:ring-focus-ring peer-focus-visible:ring-offset-2 peer-disabled:cursor-not-allowed peer-disabled:opacity-50",
                         selected
-                          ? "border-primary bg-primary/10 text-foreground"
-                          : "border-border bg-card text-foreground hover:bg-background"
+                          ? "border-accent-emphasis bg-accent-subtle text-fg"
+                          : "border-border bg-surface text-fg hover:bg-surface-hover"
                       )}
                     >
                       <span className="text-sm font-semibold">
                         {t(`settings.guardrail.backend.${item}` as I18nKey)}
                       </span>
-                      <span className="mt-1 text-xs leading-relaxed text-muted">
+                      <span className="mt-1 text-xs leading-relaxed text-fg-muted">
                         {t(`settings.guardrail.backend.${item}.description` as I18nKey)}
                       </span>
                     </label>
@@ -175,7 +182,7 @@ export function GuardrailSettingsClient() {
             </div>
           </fieldset>
           <div className="space-y-2">
-            <div className="text-sm font-medium text-foreground">
+            <div className="text-sm font-medium text-fg">
               {t("settings.guardrail.policy")}
             </div>
             <fieldset
@@ -199,19 +206,19 @@ export function GuardrailSettingsClient() {
                     <label
                       htmlFor={`guardrail-policy-${item.name}`}
                       className={cn(
-                        "block min-h-[104px] cursor-pointer rounded-md border px-3 py-2 text-left transition-colors peer-focus-visible:ring-2 peer-focus-visible:ring-ring peer-focus-visible:ring-offset-2 peer-disabled:cursor-not-allowed peer-disabled:opacity-50",
+                        "block min-h-[104px] cursor-pointer rounded-md border px-3 py-2 text-left transition-colors peer-focus-visible:ring-2 peer-focus-visible:ring-focus-ring peer-focus-visible:ring-offset-2 peer-disabled:cursor-not-allowed peer-disabled:opacity-50",
                         selected
-                          ? "border-primary bg-primary/10 text-foreground"
-                          : "border-border bg-card text-foreground hover:bg-background"
+                          ? "border-accent-emphasis bg-accent-subtle text-fg"
+                          : "border-border bg-surface text-fg hover:bg-surface-hover"
                       )}
                     >
                       <span className="flex items-center justify-between gap-2">
                         <span className="text-sm font-semibold">{policyLabel(item.name)}</span>
                         {selected ? (
-                          <CheckCircle2 size={15} className="shrink-0 text-primary" aria-hidden />
+                          <CheckCircle2 size={16} className="shrink-0 text-accent-fg" aria-hidden />
                         ) : null}
                       </span>
-                      <span className="mt-1 block text-xs leading-relaxed text-muted">
+                      <span className="mt-1 block text-xs leading-relaxed text-fg-muted">
                         {policyDescription(item.name)}
                       </span>
                       <PolicyChips policy={item} />
@@ -262,7 +269,7 @@ export function GuardrailSettingsClient() {
               }
             />
           </dl>
-          <p className="text-xs leading-relaxed text-muted">
+          <p className="text-xs leading-relaxed text-fg-muted">
             {t("settings.guardrail.capabilityNote")}
           </p>
           <div className="flex flex-col gap-3 border-t border-border pt-4 md:flex-row md:items-center md:justify-between">
@@ -279,9 +286,7 @@ export function GuardrailSettingsClient() {
                 variant="secondary"
                 onClick={resetForm}
                 disabled={!dirty || save.isPending}
-                aria-label={t("settings.guardrail.actions.reset")}
-              >
-                <RotateCcw size={15} aria-hidden />
+                aria-label={t("settings.guardrail.actions.reset")} icon={RotateCcw}>
                 {t("settings.guardrail.actions.reset")}
               </Button>
               <Button
@@ -289,32 +294,28 @@ export function GuardrailSettingsClient() {
                 loading={save.isPending}
                 disabled={!dirty}
                 onClick={submit}
-                aria-label={t("settings.guardrail.actions.save")}
-              >
-                <Save size={15} aria-hidden />
-                {save.isPending
-                  ? t("settings.guardrail.actions.saving")
-                  : t("settings.guardrail.actions.save")}
+                aria-label={t("settings.guardrail.actions.save")} icon={Save}>
+                {t("settings.guardrail.actions.save")}
               </Button>
             </div>
           </div>
         </CardContent>
       </Card>
-    </div>
+    </PageBody>
   );
 }
 
 function PolicyChips({ policy }: { policy: GuardrailPolicyStatusData }) {
   return (
     <span className="mt-2 flex flex-wrap gap-1">
-      <span className="inline-flex min-h-5 items-center rounded bg-muted/20 px-1.5 text-[11px] text-muted">
+      <span className="inline-flex min-h-5 items-center rounded bg-surface-hover px-1.5 text-xs text-fg-muted">
         {t("settings.guardrail.groundingOverlap")} {policy.grounding_min_overlap}
       </span>
-      <span className="inline-flex min-h-5 items-center rounded bg-muted/20 px-1.5 text-[11px] text-muted">
+      <span className="inline-flex min-h-5 items-center rounded bg-surface-hover px-1.5 text-xs text-fg-muted">
         {t("settings.guardrail.groundingRatio")} {policy.grounding_min_ratio.toFixed(2)}
       </span>
       {policy.audit_emphasis ? (
-        <span className="inline-flex min-h-5 items-center rounded bg-warning-bg px-1.5 text-[11px] font-medium text-warning">
+        <span className="inline-flex min-h-5 items-center rounded bg-warning-subtle px-1.5 text-xs font-medium text-warning-fg">
           {t("settings.guardrail.auditEmphasis")}
         </span>
       ) : null}
@@ -324,9 +325,9 @@ function PolicyChips({ policy }: { policy: GuardrailPolicyStatusData }) {
 
 function RuntimeFact({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-md border border-border bg-muted/20 p-3">
-      <dt className="text-xs font-medium text-muted">{label}</dt>
-      <dd className="mt-1 break-words text-sm font-semibold text-foreground">{value}</dd>
+    <div className="rounded-md border border-border bg-surface-hover p-3">
+      <dt className="text-xs font-medium text-fg-muted">{label}</dt>
+      <dd className="mt-1 break-words text-sm font-semibold text-fg">{value}</dd>
     </div>
   );
 }

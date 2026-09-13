@@ -4,8 +4,10 @@ import { Eye, EyeOff, LockKeyhole, LogIn } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 
-import { Banner } from "@/components/ui/banner";
-import { Button } from "@/components/ui/button";
+import {
+  Banner,
+  Button,
+} from "@engchina/production-ready-ui";
 import { ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { t } from "@/lib/i18n";
@@ -70,20 +72,20 @@ export function LoginPage() {
   }
 
   return (
-    <main className="grid min-h-dvh place-items-center bg-background px-4 py-8">
+    <main className="grid min-h-dvh place-items-center bg-canvas px-4 py-8">
       <section
-        className="w-full max-w-[420px] rounded-lg border border-border bg-card p-6 shadow-sm"
+        className="w-full max-w-[420px] rounded-lg border border-border bg-surface p-6 shadow-sm"
         aria-labelledby="login-title"
       >
         <div className="mb-6 flex items-start gap-3">
-          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md bg-info-bg text-info">
-            <LockKeyhole size={22} aria-hidden />
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md bg-info-subtle text-info-fg">
+            <LockKeyhole size={24} aria-hidden />
           </div>
           <div>
-            <h1 id="login-title" className="text-xl font-bold leading-7 text-foreground">
+            <h1 id="login-title" className="text-xl font-bold leading-7 text-fg">
               {t("auth.login.title")}
             </h1>
-            <p className="mt-1 text-sm leading-6 text-muted">{t("auth.login.subtitle")}</p>
+            <p className="mt-1 text-sm leading-6 text-fg-muted">{t("auth.login.subtitle")}</p>
           </div>
         </div>
 
@@ -91,9 +93,9 @@ export function LoginPage() {
           {error ? <Banner severity="danger">{error}</Banner> : null}
 
           <div className="space-y-2">
-            <label htmlFor="login-username" className="text-sm font-medium text-foreground">
+            <label htmlFor="login-username" className="text-sm font-medium text-fg">
               {t("auth.login.username")}
-              <span className="ml-1 text-danger" aria-hidden>
+              <span className="ml-1 text-danger-fg" aria-hidden>
                 *
               </span>
             </label>
@@ -102,7 +104,7 @@ export function LoginPage() {
               type="text"
               value={username}
               onChange={(event) => setUsername(event.target.value)}
-              className="h-11 w-full rounded-md border border-border bg-background px-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted focus:border-ring"
+              className="h-11 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm text-fg outline-none transition-colors placeholder:text-fg-muted focus:border-focus-ring"
               placeholder={t("auth.login.usernamePlaceholder")}
               autoComplete="username"
               required
@@ -110,9 +112,9 @@ export function LoginPage() {
           </div>
 
           <div className="space-y-2">
-            <label htmlFor="login-password" className="text-sm font-medium text-foreground">
+            <label htmlFor="login-password" className="text-sm font-medium text-fg">
               {t("auth.login.password")}
-              <span className="ml-1 text-danger" aria-hidden>
+              <span className="ml-1 text-danger-fg" aria-hidden>
                 *
               </span>
             </label>
@@ -122,37 +124,36 @@ export function LoginPage() {
                 type={showPassword ? "text" : "password"}
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
-                className="h-11 w-full rounded-md border border-border bg-background px-3 pr-12 text-sm text-foreground outline-none transition-colors placeholder:text-muted focus:border-ring"
+                className="h-11 w-full rounded-md border border-border-control bg-surface-sunken px-3 pr-12 text-sm text-fg outline-none transition-colors placeholder:text-fg-muted focus:border-focus-ring"
                 placeholder={t("auth.login.passwordPlaceholder")}
                 autoComplete="current-password"
                 required
               />
               <button
                 type="button"
-                className="absolute right-0 top-0 inline-flex h-11 w-11 cursor-pointer items-center justify-center rounded-md text-muted transition-colors hover:text-foreground"
+                className="absolute right-0 top-0 inline-flex h-11 w-11 cursor-pointer items-center justify-center rounded-md text-fg-muted transition-colors hover:text-fg"
                 aria-label={
                   showPassword ? t("auth.login.hidePassword") : t("auth.login.showPassword")
                 }
                 onClick={() => setShowPassword((current) => !current)}
               >
-                {showPassword ? <EyeOff size={18} aria-hidden /> : <Eye size={18} aria-hidden />}
+                {showPassword ? <EyeOff size={20} aria-hidden /> : <Eye size={20} aria-hidden />}
               </button>
             </div>
           </div>
 
-          <label className="flex cursor-pointer items-center gap-3 text-sm text-foreground">
+          <label className="flex cursor-pointer items-center gap-3 text-sm text-fg">
             <input
               type="checkbox"
               checked={rememberMe}
               onChange={(event) => handleRememberMeChange(event.target.checked)}
-              className="h-4 w-4 cursor-pointer accent-[var(--primary)]"
+              className="h-4 w-4 cursor-pointer accent-[var(--color-accent-emphasis)]"
             />
             <span>{t("auth.login.rememberMe")}</span>
           </label>
 
-          <Button type="submit" className="h-11 w-full" loading={auth.isLoggingIn}>
-            <LogIn size={16} aria-hidden />
-            {auth.isLoggingIn ? t("auth.login.signingIn") : t("auth.login.signIn")}
+          <Button type="submit" className="h-11 w-full" loading={auth.isLoggingIn} icon={LogIn}>
+            {t("auth.login.signIn")}
           </Button>
         </form>
       </section>

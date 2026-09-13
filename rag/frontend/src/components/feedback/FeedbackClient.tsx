@@ -1,4 +1,15 @@
 import {
+  PageBody,
+  Tabs,
+  PageHeader,
+  Button,
+  Card,
+  CardContent,
+  SelectField,
+  type SelectFieldOption,
+  ToggleChip,
+} from "@engchina/production-ready-ui";
+import {
   ChevronLeft,
   ChevronRight,
   ExternalLink,
@@ -11,15 +22,10 @@ import {
   ThumbsUp,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
-import { PageHeader } from "@/components/PageHeader";
 import { EmptyState, ErrorState, LoadingState } from "@/components/StateViews";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-import { SelectField, type SelectFieldOption } from "@/components/ui/select-field";
-import { ToggleChip } from "@/components/ui/toggle-chip";
 import type {
   CitationFeedbackRating,
   CitationFeedbackReason,
@@ -160,12 +166,12 @@ export function FeedbackClient() {
   return (
     <div>
       <PageHeader title={t("feedback.page.title")} subtitle={t("feedback.page.subtitle")} />
-      <div className="space-y-4 p-4 sm:p-6 lg:p-8">
+      <PageBody>
         <Card>
           <CardContent className="space-y-4 pt-4">
             <div className="flex flex-wrap items-end justify-between gap-3">
               <fieldset>
-                <legend className="mb-2 text-xs font-medium text-muted">
+                <legend className="mb-2 text-xs font-medium text-fg-muted">
                   {t("feedback.filters.period")}
                 </legend>
                 <div className="flex flex-wrap gap-1" role="group" aria-label={t("feedback.filters.period")}>
@@ -182,24 +188,23 @@ export function FeedbackClient() {
                   ))}
                 </div>
               </fieldset>
-              <Button type="button" variant="ghost" size="sm" onClick={clearFilters}>
-                <FilterX size={14} aria-hidden />
+              <Button type="button" variant="ghost" size="sm" onClick={clearFilters} icon={FilterX}>
                 {t("feedback.filters.clear")}
               </Button>
             </div>
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-7">
               <label className="sm:col-span-2 xl:col-span-2">
-                <span className="mb-1 block text-xs font-medium text-foreground">
+                <span className="mb-1 block text-xs font-medium text-fg">
                   {t("feedback.filters.search")}
                 </span>
                 <span className="relative block">
-                  <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted" aria-hidden />
+                  <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-fg-muted" aria-hidden />
                   <input
                     type="search"
                     value={searchDraft}
                     maxLength={200}
                     placeholder={t("feedback.filters.searchPlaceholder")}
-                    className="h-9 w-full rounded-md border border-border bg-card pl-9 pr-3 text-sm text-foreground outline-none placeholder:text-muted focus-visible:ring-2 focus-visible:ring-ring"
+                    className="h-9 w-full rounded-md border border-border-control bg-surface pl-9 pr-3 text-sm text-fg outline-none placeholder:text-fg-muted focus-visible:ring-2 focus-visible:ring-focus-ring"
                     onChange={(event) => setSearchDraft(event.target.value)}
                   />
                 </span>
@@ -253,10 +258,10 @@ export function FeedbackClient() {
             <section aria-labelledby="feedback-list-heading">
               <div className="mb-2 flex flex-wrap items-end justify-between gap-2">
                 <div>
-                  <h2 id="feedback-list-heading" className="text-base font-semibold text-foreground">
+                  <h2 id="feedback-list-heading" className="text-base font-semibold text-fg">
                     {t("feedback.list.title")}
                   </h2>
-                  <p className="text-xs tabular-nums text-muted">
+                  <p className="text-xs tabular-nums text-fg-muted">
                     {t("feedback.list.range", {
                       start: page?.total ? (urlState.page - 1) * urlState.pageSize + 1 : 0,
                       end: Math.min(urlState.page * urlState.pageSize, page?.total ?? 0),
@@ -296,7 +301,7 @@ export function FeedbackClient() {
             </section>
           </>
         ) : null}
-      </div>
+      </PageBody>
       <FeedbackDetailDialog feedbackId={urlState.feedbackId || null} onClose={closeDetail} />
     </div>
   );
@@ -307,7 +312,7 @@ function SummaryPanel({ summary, previous }: { summary: FeedbackSummary; previou
     <Card>
       <CardContent className="grid gap-4 pt-4 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
         <section aria-labelledby="feedback-summary-heading">
-          <h2 id="feedback-summary-heading" className="mb-3 text-sm font-semibold text-foreground">
+          <h2 id="feedback-summary-heading" className="mb-3 text-sm font-semibold text-fg">
             {t("feedback.summary.title")}
           </h2>
           <div className="grid grid-cols-2 gap-x-5 gap-y-3 sm:grid-cols-4 lg:grid-cols-2 xl:grid-cols-4">
@@ -319,10 +324,10 @@ function SummaryPanel({ summary, previous }: { summary: FeedbackSummary; previou
         </section>
         <section aria-labelledby="feedback-reasons-heading">
           <div className="mb-3 flex items-center justify-between gap-2">
-            <h2 id="feedback-reasons-heading" className="text-sm font-semibold text-foreground">
+            <h2 id="feedback-reasons-heading" className="text-sm font-semibold text-fg">
               {t("feedback.reasons.title")}
             </h2>
-            <span className="text-xs tabular-nums text-muted">
+            <span className="text-xs tabular-nums text-fg-muted">
               {t("feedback.summary.lowCount", { count: summary.not_helpful_count })}
             </span>
           </div>
@@ -332,17 +337,17 @@ function SummaryPanel({ summary, previous }: { summary: FeedbackSummary; previou
                 const ratio = summary.not_helpful_count ? item.count / summary.not_helpful_count : 0;
                 return (
                   <div key={item.reason} className="grid grid-cols-[minmax(8rem,1fr)_minmax(5rem,1fr)_auto] items-center gap-2 text-xs">
-                    <span className="truncate text-foreground" title={t(REASON_LABEL_KEYS[item.reason])}>{t(REASON_LABEL_KEYS[item.reason])}</span>
-                    <span className="h-1.5 overflow-hidden rounded-full bg-muted/20" aria-hidden>
-                      <span className="block h-full rounded-full bg-danger" style={{ width: `${Math.round(ratio * 100)}%` }} />
+                    <span className="truncate text-fg" title={t(REASON_LABEL_KEYS[item.reason])}>{t(REASON_LABEL_KEYS[item.reason])}</span>
+                    <span className="h-1.5 overflow-hidden rounded-full bg-surface-hover" aria-hidden>
+                      <span className="block h-full rounded-full bg-danger-emphasis" style={{ width: `${Math.round(ratio * 100)}%` }} />
                     </span>
-                    <span className="w-20 text-right tabular-nums text-muted">{formatNumber(item.count)} / {formatRate(ratio)}</span>
+                    <span className="w-20 text-right tabular-nums text-fg-muted">{formatNumber(item.count)} / {formatRate(ratio)}</span>
                   </div>
                 );
               })}
             </div>
           ) : (
-            <p className="text-sm text-muted">{t("feedback.reasons.empty")}</p>
+            <p className="text-sm text-fg-muted">{t("feedback.reasons.empty")}</p>
           )}
         </section>
       </CardContent>
@@ -352,20 +357,20 @@ function SummaryPanel({ summary, previous }: { summary: FeedbackSummary; previou
 
 function Metric({ label, value, detail, delta }: { label: string; value: string; detail?: string; delta: string | null }) {
   return (
-    <div className="min-w-0 border-l-2 border-primary/30 pl-3">
-      <p className="truncate text-xs text-muted" title={label}>{label}</p>
-      <p className="mt-0.5 text-xl font-semibold tabular-nums text-foreground">{value}</p>
-      <p className="mt-0.5 min-h-4 text-[11px] tabular-nums text-muted">{detail ?? delta ?? "\u00a0"}</p>
-      {detail && delta ? <p className="text-[11px] tabular-nums text-muted">{delta}</p> : null}
+    <div className="min-w-0 border-l-2 border-accent-emphasis pl-3">
+      <p className="truncate text-xs text-fg-muted" title={label}>{label}</p>
+      <p className="mt-0.5 text-xl font-semibold tabular-nums text-fg">{value}</p>
+      <p className="mt-0.5 min-h-4 text-xs tabular-nums text-fg-muted">{detail ?? delta ?? "\u00a0"}</p>
+      {detail && delta ? <p className="text-xs tabular-nums text-fg-muted">{delta}</p> : null}
     </div>
   );
 }
 
 function FeedbackTable({ items, onOpen }: { items: FeedbackItem[]; onOpen: (id: string, trigger: HTMLButtonElement) => void }) {
   return (
-    <div className="hidden max-h-[60vh] overflow-auto rounded-lg border border-border bg-card md:block">
+    <div className="hidden max-h-[60vh] overflow-auto rounded-lg border border-border bg-surface md:block">
       <table className="w-full min-w-[1260px] table-fixed border-collapse text-left text-xs">
-        <thead className="sticky top-0 z-20 bg-background/95 text-muted shadow-[0_1px_0_var(--color-border)] backdrop-blur">
+        <thead className="sticky top-0 z-20 bg-surface-sunken text-fg-muted shadow-[0_1px_0_var(--color-border)] backdrop-blur">
           <tr>
             <TableHead className="w-28">{t("feedback.table.time")}</TableHead>
             <TableHead className="w-32">{t("feedback.filters.rating")}</TableHead>
@@ -379,20 +384,20 @@ function FeedbackTable({ items, onOpen }: { items: FeedbackItem[]; onOpen: (id: 
         </thead>
         <tbody className="divide-y divide-border">
           {items.map((item) => (
-            <tr key={item.feedback_id} className="align-top transition-colors hover:bg-background/70">
-              <TableCell className="whitespace-nowrap tabular-nums text-muted">{formatDateTime(item.created_at)}</TableCell>
+            <tr key={item.feedback_id} className="align-top transition-colors hover:bg-surface-hover">
+              <TableCell className="whitespace-nowrap tabular-nums text-fg-muted">{formatDateTime(item.created_at)}</TableCell>
               <TableCell><RatingBadge rating={item.rating} /></TableCell>
               <TableCell className="max-w-44"><span className="line-clamp-2">{item.reason ? t(REASON_LABEL_KEYS[item.reason]) : "—"}</span></TableCell>
               <TableCell className="max-w-40"><span className="line-clamp-2">{item.business_view_name ?? t("feedback.list.unknownBusinessView")}</span></TableCell>
               <TableCell className="whitespace-nowrap">{targetSource(item)}</TableCell>
               <TableCell className="max-w-36"><span className="block truncate" title={item.model ?? undefined}>{item.model ?? "—"}</span></TableCell>
               <TableCell>
-                <p className="line-clamp-2 max-w-xl text-sm leading-5 text-foreground">{item.question_preview ?? item.conversation_title ?? item.comment_preview ?? t("feedback.list.legacyPreview")}</p>
-                {item.has_comment ? <span className="mt-1 inline-flex items-center gap-1 text-[11px] text-muted"><MessageSquareText size={11} aria-hidden />{t("feedback.list.hasComment")}</span> : null}
+                <p className="line-clamp-2 max-w-xl text-sm leading-5 text-fg">{item.question_preview ?? item.conversation_title ?? item.comment_preview ?? t("feedback.list.legacyPreview")}</p>
+                {item.has_comment ? <span className="mt-1 inline-flex items-center gap-1 text-xs text-fg-muted"><MessageSquareText size={11} aria-hidden />{t("feedback.list.hasComment")}</span> : null}
               </TableCell>
               <TableCell className="text-right">
-                <Button type="button" variant="secondary" size="sm" className="whitespace-nowrap" onClick={(event) => onOpen(item.feedback_id, event.currentTarget)}>
-                  <Eye size={14} aria-hidden />{t("feedback.list.openDetail")}
+                <Button type="button" variant="secondary" size="sm" className="whitespace-nowrap" onClick={(event) => onOpen(item.feedback_id, event.currentTarget)} icon={Eye}>
+                  {t("feedback.list.openDetail")}
                 </Button>
               </TableCell>
             </tr>
@@ -407,13 +412,13 @@ function FeedbackCards({ items, onOpen }: { items: FeedbackItem[]; onOpen: (id: 
   return (
     <ul className="space-y-2 md:hidden">
       {items.map((item) => (
-        <li key={item.feedback_id} className="rounded-lg border border-border bg-card p-3">
+        <li key={item.feedback_id} className="rounded-lg border border-border bg-surface p-3">
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-2"><RatingBadge rating={item.rating} /><span className="text-xs tabular-nums text-muted">{formatDateTime(item.created_at)}</span></div>
-              <p className="mt-2 line-clamp-2 text-sm font-medium leading-5 text-foreground">{item.question_preview ?? item.conversation_title ?? item.comment_preview ?? t("feedback.list.legacyPreview")}</p>
+              <div className="flex flex-wrap items-center gap-2"><RatingBadge rating={item.rating} /><span className="text-xs tabular-nums text-fg-muted">{formatDateTime(item.created_at)}</span></div>
+              <p className="mt-2 line-clamp-2 text-sm font-medium leading-5 text-fg">{item.question_preview ?? item.conversation_title ?? item.comment_preview ?? t("feedback.list.legacyPreview")}</p>
             </div>
-            <Button type="button" variant="secondary" size="sm" aria-label={t("feedback.list.openDetail")} onClick={(event) => onOpen(item.feedback_id, event.currentTarget)}><Eye size={14} aria-hidden /></Button>
+            <Button type="button" variant="secondary" size="sm" aria-label={t("feedback.list.openDetail")} onClick={(event) => onOpen(item.feedback_id, event.currentTarget)} icon={Eye}></Button>
           </div>
           <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
             <Metadata label={t("feedback.filters.reason")} value={item.reason ? t(REASON_LABEL_KEYS[item.reason]) : "—"} />
@@ -430,13 +435,13 @@ function FeedbackCards({ items, onOpen }: { items: FeedbackItem[]; onOpen: (id: 
 function Pagination({ current, total, onChange }: { current: number; total: number; onChange: (page: number) => void }) {
   return (
     <nav className="mt-3 flex flex-wrap items-center justify-center gap-1" aria-label={t("feedback.pager.label")}>
-      <Button type="button" variant="secondary" size="sm" disabled={current <= 1} onClick={() => onChange(current - 1)}><ChevronLeft size={14} aria-hidden /><span className="sr-only sm:not-sr-only">{t("pager.prev")}</span></Button>
+      <Button type="button" variant="secondary" size="sm" disabled={current <= 1} onClick={() => onChange(current - 1)} icon={ChevronLeft}><span className="sr-only sm:not-sr-only">{t("pager.prev")}</span></Button>
       {pageWindow(current, total).map((item, index) => item === "ellipsis" ? (
-        <span key={`ellipsis-${index}`} className="flex h-8 min-w-8 items-center justify-center text-sm text-muted" aria-hidden>…</span>
+        <span key={`ellipsis-${index}`} className="flex h-8 min-w-8 items-center justify-center text-sm text-fg-muted" aria-hidden>…</span>
       ) : (
         <Button key={item} type="button" variant={item === current ? "primary" : "ghost"} size="sm" className="min-w-8 px-2 tabular-nums" aria-current={item === current ? "page" : undefined} aria-label={t("feedback.pager.page", { count: item })} onClick={() => onChange(item)}>{item}</Button>
       ))}
-      <Button type="button" variant="secondary" size="sm" disabled={current >= total} onClick={() => onChange(current + 1)}><span className="sr-only sm:not-sr-only">{t("pager.next")}</span><ChevronRight size={14} aria-hidden /></Button>
+      <Button type="button" variant="secondary" size="sm" disabled={current >= total} onClick={() => onChange(current + 1)} trailingIcon={ChevronRight}><span className="sr-only sm:not-sr-only">{t("pager.next")}</span></Button>
     </nav>
   );
 }
@@ -459,51 +464,33 @@ function FeedbackDetailDialog({ feedbackId, onClose }: { feedbackId: string | nu
     dialogRef.current?.close();
   }
 
-  function handleTabKey(event: KeyboardEvent<HTMLDivElement>) {
-    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
-    event.preventDefault();
-    const tabs: DetailTab[] = ["content", "evidence", "execution"];
-    const current = tabs.indexOf(tab);
-    const delta = event.key === "ArrowRight" ? 1 : -1;
-    setTab(tabs[(current + delta + tabs.length) % tabs.length]);
-  }
-
   return (
     <dialog
       ref={dialogRef}
       aria-labelledby="feedback-detail-title"
-      className="m-0 ml-auto h-dvh max-h-dvh w-full max-w-none overflow-hidden border-0 border-l border-border bg-card p-0 text-foreground shadow-2xl backdrop:bg-black/45 md:w-[min(42rem,92vw)]"
+      className="m-0 ml-auto h-dvh max-h-dvh w-full max-w-none overflow-hidden border-0 border-l border-border bg-surface-overlay p-0 text-fg shadow-[var(--shadow-dialog)] backdrop:bg-[var(--scrim)] md:w-[min(42rem,92vw)]"
       onClose={onClose}
       onClick={(event) => { if (event.target === dialogRef.current) close(); }}
     >
       <div className="flex h-full min-h-0 flex-col">
         <header className="flex items-start justify-between gap-3 border-b border-border px-4 py-3 sm:px-5">
           <div className="min-w-0">
-            <h2 id="feedback-detail-title" className="text-base font-semibold text-foreground">{t("feedback.detail.title")}</h2>
-            <p className="mt-0.5 truncate text-xs font-mono text-muted" title={feedbackId ?? undefined}>{feedbackId ? shortId(feedbackId) : "—"}</p>
+            <h2 id="feedback-detail-title" className="text-base font-semibold text-fg">{t("feedback.detail.title")}</h2>
+            <p className="mt-0.5 truncate text-xs font-mono text-fg-muted" title={feedbackId ?? undefined}>{feedbackId ? shortId(feedbackId) : "—"}</p>
           </div>
-          <Button type="button" variant="ghost" size="md" className="size-11 px-0" aria-label={t("feedback.detail.close")} onClick={close}><X size={16} aria-hidden /></Button>
+          <Button type="button" variant="ghost" size="md" className="size-11 px-0" aria-label={t("feedback.detail.close")} onClick={close} icon={X}></Button>
         </header>
-        <div className="border-b border-border px-4 pt-2 sm:px-5" role="tablist" aria-label={t("feedback.detail.tabsLabel")} onKeyDown={handleTabKey}>
-          <div className="flex gap-1 overflow-x-auto">
-            {(["content", "evidence", "execution"] as DetailTab[]).map((value) => (
-              <Button
-                key={value}
-                id={`feedback-tab-${value}`}
-                type="button"
-                role="tab"
-                size="sm"
-                variant="ghost"
-                className={cn("rounded-b-none border-b-2 border-transparent", tab === value && "border-primary text-primary")}
-                aria-selected={tab === value}
-                aria-controls={`feedback-panel-${value}`}
-                tabIndex={tab === value ? 0 : -1}
-                onClick={() => setTab(value)}
-              >
-                {t(`feedback.detail.tab.${value}` as I18nKey)}
-              </Button>
-            ))}
-          </div>
+        <div className="px-4 sm:px-5">
+          <Tabs
+            idPrefix="feedback"
+            ariaLabel={t("feedback.detail.tabsLabel")}
+            value={tab}
+            onChange={(value) => setTab(value as DetailTab)}
+            items={(["content", "evidence", "execution"] as DetailTab[]).map((value) => ({
+              id: value,
+              label: t(`feedback.detail.tab.${value}` as I18nKey),
+            }))}
+          />
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5">
           {query.isLoading ? (
@@ -528,14 +515,14 @@ function DetailPanel({ detail, tab }: { detail: FeedbackDetail; tab: DetailTab }
 function ContentTab({ detail }: { detail: FeedbackDetail }) {
   const hasSavedText = Boolean(detail.question || detail.answer || detail.comment);
   return (
-    <div id="feedback-panel-content" role="tabpanel" aria-labelledby="feedback-tab-content" className="space-y-4">
+    <div id="feedback-tabpanel-content" role="tabpanel" aria-labelledby="feedback-tab-content" className="space-y-4">
       <DetailSummary detail={detail} />
       {!hasSavedText ? <LegacyNotice /> : null}
       <TextSection title={t("feedback.detail.question")} value={detail.question} />
       <TextSection title={t("feedback.detail.answer")} value={detail.answer} />
       <section>
-        <h3 className="text-xs font-semibold text-muted">{t("feedback.detail.reason")}</h3>
-        <p className="mt-1 text-sm text-foreground">{detail.reason ? t(REASON_LABEL_KEYS[detail.reason]) : "—"}</p>
+        <h3 className="text-xs font-semibold text-fg-muted">{t("feedback.detail.reason")}</h3>
+        <p className="mt-1 text-sm text-fg">{detail.reason ? t(REASON_LABEL_KEYS[detail.reason]) : "—"}</p>
       </section>
       <TextSection title={t("feedback.detail.comment")} value={detail.comment} empty={t("feedback.detail.noComment")} />
     </div>
@@ -544,21 +531,21 @@ function ContentTab({ detail }: { detail: FeedbackDetail }) {
 
 function EvidenceTab({ detail }: { detail: FeedbackDetail }) {
   return (
-    <div id="feedback-panel-evidence" role="tabpanel" aria-labelledby="feedback-tab-evidence" className="space-y-3">
+    <div id="feedback-tabpanel-evidence" role="tabpanel" aria-labelledby="feedback-tab-evidence" className="space-y-3">
       {detail.citations.length ? detail.citations.map((citation, index) => {
         const targeted = detail.target_type === "citation" && citation.chunk_id === detail.chunk_id;
         const link = `${APP_ROUTES.documents}/${encodeURIComponent(citation.document_id)}?chunk_id=${encodeURIComponent(citation.chunk_id)}`;
         return (
-          <article key={`${citation.chunk_id}-${index}`} className={cn("rounded-lg border border-border p-3", targeted && "border-primary bg-primary/5")}>
+          <article key={`${citation.chunk_id}-${index}`} className={cn("rounded-lg border border-border p-3", targeted && "border-accent-emphasis bg-accent-subtle")}>
             <div className="flex items-start justify-between gap-2">
               <div className="min-w-0">
-                <p className="truncate text-sm font-medium text-foreground">{citation.file_name ?? citation.document_id}</p>
-                <p className="mt-0.5 text-xs text-muted">{[citation.section_title, citation.page_number ? t("feedback.detail.page", { count: citation.page_number }) : null].filter(Boolean).join(" / ") || "—"}</p>
+                <p className="truncate text-sm font-medium text-fg">{citation.file_name ?? citation.document_id}</p>
+                <p className="mt-0.5 text-xs text-fg-muted">{[citation.section_title, citation.page_number ? t("feedback.detail.page", { count: citation.page_number }) : null].filter(Boolean).join(" / ") || "—"}</p>
               </div>
-              {targeted ? <span className="shrink-0 rounded-full bg-primary/10 px-2 py-1 text-[11px] font-medium text-primary">{t("feedback.detail.targetCitation")}</span> : null}
+              {targeted ? <span className="shrink-0 rounded-full bg-accent-subtle px-2 py-1 text-xs font-medium text-accent-fg">{t("feedback.detail.targetCitation")}</span> : null}
             </div>
-            <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-foreground/90">{citation.content_preview ?? t("feedback.detail.noCitationPreview")}</p>
-            <Link to={link} className="mt-3 inline-flex items-center gap-1.5 text-xs font-medium text-primary hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"><ExternalLink size={13} aria-hidden />{t("feedback.list.openCitation")}</Link>
+            <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-fg/90">{citation.content_preview ?? t("feedback.detail.noCitationPreview")}</p>
+            <Link to={link} className="mt-3 inline-flex items-center gap-1.5 text-xs font-medium text-accent-fg hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"><ExternalLink size={14} aria-hidden />{t("feedback.list.openCitation")}</Link>
           </article>
         );
       }) : (
@@ -586,36 +573,36 @@ function ExecutionTab({ detail }: { detail: FeedbackDetail }) {
     [t("feedback.detail.fingerprint"), detail.execution.config_fingerprint ?? "—"],
   ];
   return (
-    <div id="feedback-panel-execution" role="tabpanel" aria-labelledby="feedback-tab-execution" className="space-y-4">
+    <div id="feedback-tabpanel-execution" role="tabpanel" aria-labelledby="feedback-tab-execution" className="space-y-4">
       <dl className="divide-y divide-border rounded-lg border border-border">
-        {rows.map(([label, value]) => <div key={label} className="grid grid-cols-[8rem_minmax(0,1fr)] gap-3 px-3 py-2.5 text-sm"><dt className="text-muted">{label}</dt><dd className="break-all font-mono text-xs leading-5 text-foreground">{value}</dd></div>)}
+        {rows.map(([label, value]) => <div key={label} className="grid grid-cols-[8rem_minmax(0,1fr)] gap-3 px-3 py-2.5 text-sm"><dt className="text-fg-muted">{label}</dt><dd className="break-all font-mono text-xs leading-5 text-fg">{value}</dd></div>)}
       </dl>
-      {chatLink ? <Link to={chatLink} className="inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"><MessageSquareText size={14} aria-hidden />{t("feedback.list.openConversation")}</Link> : null}
+      {chatLink ? <Link to={chatLink} className="inline-flex items-center gap-1.5 text-sm font-medium text-accent-fg hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"><MessageSquareText size={14} aria-hidden />{t("feedback.list.openConversation")}</Link> : null}
     </div>
   );
 }
 
 function DetailSummary({ detail }: { detail: FeedbackDetail }) {
   return (
-    <div className="flex flex-wrap items-center gap-2 rounded-lg bg-background p-3">
+    <div className="flex flex-wrap items-center gap-2 rounded-lg bg-surface-sunken p-3">
       <RatingBadge rating={detail.rating} />
-      <span className="text-xs text-muted">{formatDateTime(detail.created_at)}</span>
-      <span className="text-xs text-muted">{detail.business_view_name ?? t("feedback.list.unknownBusinessView")}</span>
+      <span className="text-xs text-fg-muted">{formatDateTime(detail.created_at)}</span>
+      <span className="text-xs text-fg-muted">{detail.business_view_name ?? t("feedback.list.unknownBusinessView")}</span>
     </div>
   );
 }
 
 function LegacyNotice() {
-  return <div className="rounded-lg border border-warning/30 bg-warning-bg p-3 text-sm text-warning" role="status"><div className="flex items-start gap-2"><FileText size={16} className="mt-0.5 shrink-0" aria-hidden /><div><p className="font-medium">{t("feedback.detail.legacyTitle")}</p><p className="mt-1 text-xs leading-5">{t("feedback.detail.legacyHint")}</p></div></div></div>;
+  return <div className="rounded-lg border border-warning-border bg-warning-subtle p-3 text-sm text-warning-fg" role="status"><div className="flex items-start gap-2"><FileText size={16} className="mt-0.5 shrink-0" aria-hidden /><div><p className="font-medium">{t("feedback.detail.legacyTitle")}</p><p className="mt-1 text-xs leading-5">{t("feedback.detail.legacyHint")}</p></div></div></div>;
 }
 
 function TextSection({ title, value, empty = "—" }: { title: string; value: string | null; empty?: string }) {
-  return <section><h3 className="text-xs font-semibold text-muted">{title}</h3><p className="mt-1 whitespace-pre-wrap break-words rounded-lg border border-border bg-background p-3 text-sm leading-6 text-foreground">{value ?? empty}</p></section>;
+  return <section><h3 className="text-xs font-semibold text-fg-muted">{title}</h3><p className="mt-1 whitespace-pre-wrap break-words rounded-lg border border-border bg-surface-sunken p-3 text-sm leading-6 text-fg">{value ?? empty}</p></section>;
 }
 
 function RatingBadge({ rating }: { rating: CitationFeedbackRating }) {
   const helpful = rating === "helpful";
-  return <span className={cn("inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2 py-1 text-[11px] font-medium", helpful ? "bg-success-bg text-success" : "bg-danger-bg text-danger")}>{helpful ? <ThumbsUp size={12} aria-hidden /> : <ThumbsDown size={12} aria-hidden />}{helpful ? t("feedback.rating.helpful") : t("feedback.rating.notHelpful")}</span>;
+  return <span className={cn("inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2 py-1 text-xs font-medium", helpful ? "bg-success-subtle text-success-fg" : "bg-danger-subtle text-danger-fg")}>{helpful ? <ThumbsUp size={14} aria-hidden /> : <ThumbsDown size={14} aria-hidden />}{helpful ? t("feedback.rating.helpful") : t("feedback.rating.notHelpful")}</span>;
 }
 
 function TableHead({ children, className }: { children: React.ReactNode; className?: string }) {
@@ -627,7 +614,7 @@ function TableCell({ children, className }: { children: React.ReactNode; classNa
 }
 
 function Metadata({ label, value }: { label: string; value: string }) {
-  return <div className="min-w-0"><dt className="text-muted">{label}</dt><dd className="mt-0.5 line-clamp-2 text-foreground">{value}</dd></div>;
+  return <div className="min-w-0"><dt className="text-fg-muted">{label}</dt><dd className="mt-0.5 line-clamp-2 text-fg">{value}</dd></div>;
 }
 
 function targetSource(item: FeedbackItem) {
