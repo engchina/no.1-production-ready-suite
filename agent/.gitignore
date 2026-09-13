@@ -1,12 +1,12 @@
 # --- frontend ---
-node_modules/
-frontend/node_modules/
+node_modules
+frontend/node_modules
 frontend/dist/
 frontend/test-results/
 frontend/playwright-report/
 
 # --- backend (Python/uv) ---
-backend/.venv/
+backend/.venv
 backend/.env
 backend/model-settings.json
 backend/.model-settings.json.tmp-*
