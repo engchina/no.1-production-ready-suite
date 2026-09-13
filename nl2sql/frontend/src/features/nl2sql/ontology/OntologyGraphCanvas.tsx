@@ -227,7 +227,9 @@ const OntologyNodeCard = memo(function OntologyNodeCard({
         opacity: dimmed ? 0.35 : 1,
         // 検索一致は接地ハイライト(枠)と区別できるリングで示す
         boxShadow: searchMatched
-          ? `0 0 0 3px color-mix(in srgb, ${cssVar("--color-warning-fg")} 65%, transparent)`
+          ? // グラフ座標系のリング幅（ズームに追従する幾何値）なので px で指定する。
+            // oxlint-disable-next-line design-system/restricted-syntax
+            `0 0 0 3px color-mix(in srgb, ${cssVar("--color-warning-fg")} 65%, transparent)`
           : undefined,
       }}
     >
@@ -337,7 +339,7 @@ function FlowControls({
 function LegendSwatch({ kind }: { kind: string }) {
   return (
     <span
-      className="h-2.5 w-2.5 shrink-0 rounded-[3px] border border-current/20"
+      className="h-2.5 w-2.5 shrink-0 rounded-sm border border-current/20"
       style={{ background: cssVar(nodeFillVar(kind)) }}
       aria-hidden="true"
     />
@@ -519,6 +521,8 @@ function LaneOverlays({ lanes }: { lanes: OntologyGraphSemanticLane[] }) {
           className="pointer-events-none absolute flex items-start"
           data-testid={`ontology-graph-lane-${lane.id}`}
           style={{
+            // React Flow のビューポート座標（ズームに追従する幾何値）なので px で指定する。
+            // oxlint-disable-next-line design-system/restricted-syntax
             transform: `translate(18px, ${lane.y + 2}px)`,
             height: lane.height,
             width: 176,

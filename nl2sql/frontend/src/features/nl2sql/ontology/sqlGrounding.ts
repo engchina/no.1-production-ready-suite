@@ -74,7 +74,7 @@ function normalizeIdentifier(value: string | undefined | null): string {
   return String(value ?? "")
     .normalize("NFKC")
     .trim()
-    .replace(/^["'`\[]+|["'`\]]+$/g, "")
+    .replace(/^["'`[]+|["'`\]]+$/g, "")
     .toLocaleUpperCase("en-US");
 }
 

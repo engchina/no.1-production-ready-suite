@@ -251,7 +251,7 @@ function listLoadMoreErrorMessage(error: unknown, fallbackKey: Parameters<typeof
 }
 
 function normalizeProfile(profile: Nl2SqlProfile): Nl2SqlProfile {
-  const selectAiConfig = { ...DEFAULT_SELECT_AI_CONFIG, ...(profile.select_ai_config ?? {}) };
+  const selectAiConfig = { ...DEFAULT_SELECT_AI_CONFIG, ...profile.select_ai_config };
   return {
     ...profile,
     allowed_tables: (profile.allowed_tables ?? []).filter(isUserVisibleObjectName),

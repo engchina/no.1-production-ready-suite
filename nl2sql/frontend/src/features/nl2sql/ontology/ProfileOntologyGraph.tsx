@@ -8,7 +8,7 @@ export function ProfileOntologyGraph({ artifact }: { artifact: string }) {
   const graph = useMemo(() => {
     try {
       const parsed = JSON.parse(artifact) as { nodes: { id: string; name_ja: string; kind: string }[]; edges: Edge[] };
-      const nodes: Node[] = parsed.nodes.map((item, index) => ({ id: item.id, position: { x: (index % 3) * 230, y: Math.floor(index / 3) * 130 }, data: { label: `${item.name_ja}\n${t(`ontologyResults.kind.${item.kind}` as Parameters<typeof t>[0])}` }, style: { width: 200, whiteSpace: "pre-wrap", background: "var(--color-background)", color: "var(--color-foreground)", borderColor: "var(--color-border)" } }));
+      const nodes: Node[] = parsed.nodes.map((item, index) => ({ id: item.id, position: { x: (index % 3) * 230, y: Math.floor(index / 3) * 130 }, data: { label: `${item.name_ja}\n${t(`ontologyResults.kind.${item.kind}` as Parameters<typeof t>[0])}` }, style: { width: 200, whiteSpace: "pre-wrap", background: "var(--color-canvas)", color: "var(--color-fg)", borderColor: "var(--color-border)" } }));
       return { nodes, edges: parsed.edges };
     } catch { return { nodes: [], edges: [] }; }
   }, [artifact]);

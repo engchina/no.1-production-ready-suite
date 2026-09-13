@@ -229,6 +229,10 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # デザインシステム遵守ルール（frontend/.oxlintrc.json）と oxlint 既定の correctness ルール。
+      - name: Lint
+        run: npm run lint
+
       - name: Logic tests
         run: npm run test:logic
 
