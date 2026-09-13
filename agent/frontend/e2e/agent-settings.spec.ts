@@ -249,7 +249,7 @@ test.describe("Agent Runtime settings", () => {
   test("ツール権限を表示して保存できる", async ({ page }) => {
     await page.goto("/settings/tool-policy");
 
-    await expect(page.getByRole("heading", { name: "ツール権限" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "ツール権限", level: 1 })).toBeVisible();
     await expect(page.getByLabel("未指定ツールの既定動作")).toBeVisible();
     await expect(page.getByText("external_rag_search")).toBeVisible();
     await expect(page.getByText("external_nl2sql_query")).toBeVisible();
@@ -257,13 +257,23 @@ test.describe("Agent Runtime settings", () => {
     await expect(page.getByText("sandbox_command_run")).toBeVisible();
 
     const firstPolicy = page.getByLabel("ポリシー").first();
+    // 連続保存では前回のトーストが残るため、保存 API の成功を待ってから最新のトーストを確認する。
+    const savePolicy = async () => {
+      const saved = page.waitForResponse(
+        (response) =>
+          response.url().endsWith("/api/settings/tool-policy") &&
+          response.request().method() === "PATCH" &&
+          response.ok()
+      );
+      await page.getByRole("button", { name: "保存" }).click();
+      await saved;
+      await expect(page.getByText("設定を保存しました").last()).toBeVisible();
+    };
     await firstPolicy.selectOption({ label: "自動実行" });
-    await page.getByRole("button", { name: "保存" }).click();
-    await expect(page.getByText("設定を保存しました")).toBeVisible();
+    await savePolicy();
 
     await firstPolicy.selectOption({ label: "既定に従う" });
-    await page.getByRole("button", { name: "保存" }).click();
-    await expect(page.getByText("設定を保存しました")).toBeVisible();
+    await savePolicy();
   });
 
   test("複数 MCP サーバーを登録・既定設定・削除し tool 探索できる", async ({ page }) => {
