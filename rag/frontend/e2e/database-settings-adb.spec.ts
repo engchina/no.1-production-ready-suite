@@ -260,7 +260,8 @@ test("OCID 未入力では起動 / 停止できない", async ({ page }) => {
       });
       return;
     }
-    await route.continue();
+    // 保存などは先に登録した mock に渡す（実 backend へは流さない）。
+    await route.fallback();
   });
 
   await page.goto("/settings/database");

@@ -65,7 +65,8 @@ test.beforeEach(async ({ page }) => {
       return;
     }
 
-    await route.continue();
+    // 未モックの API は実 backend へ流さない（hermetic の dev サーバが 404 で終端する）。
+    await route.fallback();
   });
 });
 
