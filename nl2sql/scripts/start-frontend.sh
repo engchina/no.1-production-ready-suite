@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # フロントエンド(Vite + React)を開発モードで起動する。
 # - 共有 UI パッケージを検証・build してから Vite を起動する。
-# - node_modules または共有 UI のリンクが無い場合は npm install を実行する。
+# - node_modules / 共有 UI のリンクが無い場合、または package.json / package-lock.json が
+#   前回インストール時（node_modules/.package-lock.json）より新しい場合は npm install を実行する。
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -81,8 +82,18 @@ prepare_shared_ui
 
 cd "${FRONTEND_DIR}"
 
+# git pull 等で依存が追加・更新されたのに node_modules が古いままだと、Vite が import を解決できない。
+dependencies_changed() {
+  local installed="node_modules/.package-lock.json"
+  [ -f package-lock.json ] || return 1
+  [ ! -f "${installed}" ] || [ package-lock.json -nt "${installed}" ] || [ package.json -nt "${installed}" ]
+}
+
 if [ ! -d node_modules ] || [ ! -e node_modules/@engchina/production-ready-ui/package.json ]; then
   echo "[frontend] 依存をインストールします (npm install)..."
+  npm install
+elif dependencies_changed; then
+  echo "[frontend] package.json / package-lock.json が更新されているため依存を更新します (npm install)..."
   npm install
 fi
 

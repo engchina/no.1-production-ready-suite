@@ -7,6 +7,10 @@ case "$*" in
   ci)
     mkdir -p "${PWD}/node_modules"
     ;;
+  install)
+    mkdir -p "${PWD}/node_modules"
+    touch "${PWD}/node_modules/.package-lock.json"
+    ;;
   "run build --workspace @engchina/production-ready-ui")
     mkdir -p "${SHARED_UI_DIR}/dist"
     : > "${SHARED_UI_DIR}/dist/index.js"
