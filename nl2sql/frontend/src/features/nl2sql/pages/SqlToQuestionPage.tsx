@@ -2,16 +2,19 @@ import { useWorkspaceState, useWorkspaceRevalidation, useWorkspaceActivation, us
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowRightLeft, BookOpen, Database, FileText, RefreshCw } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
-import { EmptyState } from "@engchina/production-ready-ui";
+import {
+  Button,
+  EmptyState,
+  StatusBadge,
+  PageHeader,
+  FormStatus,
+  Skeleton,
+  PageBody,
+} from "@engchina/production-ready-ui";
 
-import { PageHeader } from "@/components/PageHeader";
 import { ProcessingIndicator, TimedLoadingState } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";
-import { FormStatus } from "@/components/ui/form-status";
 import { FieldLabel } from "@/components/ui/required-field";
-import { Skeleton } from "@/components/ui/skeleton";
-import { StatusBadge } from "@/components/ui/status-badge";
 import { apiGet, apiPost, isAbortError } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { API_TIMEOUT_MS } from "@/lib/requestPolicy";
@@ -314,7 +317,7 @@ export function SqlToQuestionPage() {
           },
         ]}
       />
-      <main className="grid gap-4 p-4 lg:p-8">
+      <PageBody className="grid gap-4">
         <PageNotice
           notice={loadError ? { tone: "danger", message: loadError } : null}
           action={
@@ -323,9 +326,7 @@ export function SqlToQuestionPage() {
               variant="secondary"
               size="sm"
               loading={loading}
-              onClick={() => void loadReferenceData()}
-            >
-              <RefreshCw size={15} aria-hidden="true" />
+              onClick={() => void loadReferenceData()} icon={RefreshCw}>
               <span>{t("sqlToQuestion.action.reload")}</span>
             </Button>
           }
@@ -359,7 +360,7 @@ export function SqlToQuestionPage() {
                 description={t("sqlToQuestion.input.hint")}
               />
 
-              <label className="grid gap-1 text-sm font-medium text-foreground">
+              <label className="grid gap-1 text-sm font-medium text-fg">
                 <span>{t("sqlToQuestion.profile.label")}</span>
                 <select
                   value={selectedProfileId}
@@ -368,7 +369,7 @@ export function SqlToQuestionPage() {
                     setActionError("");
                     setActivePanel("input");
                   }}
-                  className="min-h-11 min-w-0 rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:outline-none focus:ring-2 focus:ring-ring/40 disabled:cursor-not-allowed disabled:bg-muted/30 disabled:text-muted"
+                  className="min-h-11 min-w-0 rounded-md border border-border-control bg-surface px-3 py-2 focus:border-focus-ring focus:outline-none focus:ring-2 focus:ring-focus-ring disabled:cursor-not-allowed disabled:bg-surface-hover disabled:text-fg-disabled"
                   disabled={loading || actionBusy || profiles.length === 0}
                 >
                   {profiles.map((profile) => (
@@ -401,7 +402,7 @@ export function SqlToQuestionPage() {
                   rows={9}
                   required
                   aria-required="true"
-                  className="min-h-56 min-w-0 resize-y rounded-md border border-border bg-card px-3 py-2 font-mono text-sm leading-6 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40 disabled:cursor-not-allowed disabled:bg-muted/30 disabled:text-muted"
+                  className="min-h-56 min-w-0 resize-y rounded-md border border-border-control bg-surface px-3 py-2 font-mono text-sm leading-6 outline-none focus:border-focus-ring focus:ring-2 focus:ring-focus-ring disabled:cursor-not-allowed disabled:bg-surface-hover disabled:text-fg-disabled"
                   disabled={actionBusy}
                 />
               </div>
@@ -414,9 +415,7 @@ export function SqlToQuestionPage() {
                   className="w-full whitespace-nowrap sm:w-auto"
                   loading={reverseLoading}
                   disabled={!sql.trim() || actionBusy || loading || !!loadError || !selectedProfile}
-                  onClick={() => void generateQuestion()}
-                >
-                  <ArrowRightLeft size={16} aria-hidden="true" />
+                  onClick={() => void generateQuestion()} icon={ArrowRightLeft}>
                   <span>{t("sqlToQuestion.action.generate")}</span>
                 </Button>
                 <FormStatus tone="danger" message={actionError} className="sm:ml-auto" />
@@ -482,13 +481,12 @@ export function SqlToQuestionPage() {
                   required
                   aria-required="true"
                   disabled={actionBusy}
-                  className="min-h-64 min-w-0 w-full resize-y rounded-md border border-border bg-card px-3 py-2 font-mono text-sm leading-6 focus:outline-none focus:ring-2 focus:ring-ring/40"
+                  className="min-h-64 min-w-0 w-full resize-y rounded-md border border-border-control bg-surface px-3 py-2 font-mono text-sm leading-6 focus:outline-none focus:ring-2 focus:ring-focus-ring"
                 />
               </div>
               {structureItems.length > 0 && <LogicalStructureList items={structureItems} />}
               <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
-                <Button size="lg" loading={sqlGenerationLoading} disabled={actionBusy || !structureText.trim() || loading || !!loadError || !selectedProfile} onClick={() => void generateSql()}>
-                  <ArrowRightLeft size={16} aria-hidden="true" />
+                <Button type="button" size="lg" loading={sqlGenerationLoading} disabled={actionBusy || !structureText.trim() || loading || !!loadError || !selectedProfile} onClick={() => void generateSql()} icon={ArrowRightLeft}>
                   {t("sqlToQuestion.actions.regenerateSql")}
                 </Button>
               </div>
@@ -497,9 +495,9 @@ export function SqlToQuestionPage() {
               {regenerated && (
                 <section className="grid min-w-0 gap-2" aria-label={t("sqlToQuestion.regenerated.title")}>
                   <h3 className="font-semibold">{t("sqlToQuestion.regenerated.title")}</h3>
-                  <p className="text-sm text-muted">{t("sqlToQuestion.regenerated.at", { at: regenerated.at })}</p>
+                  <p className="text-sm text-fg-muted">{t("sqlToQuestion.regenerated.at", { at: regenerated.at })}</p>
                   {regenerated.signature !== structureSignature && <FormStatus tone="warning" message={t("sqlToQuestion.regenerated.stale")} />}
-                  <pre className="max-h-96 overflow-auto rounded-md border border-border bg-code p-4 text-sm leading-6 text-code-fg"><code>{regenerated.sql}</code></pre>
+                  <pre data-surface="code" className="max-h-96 overflow-auto rounded-md border border-border bg-surface p-4 text-sm leading-6 text-fg"><code>{regenerated.sql}</code></pre>
                   <p className="text-sm">{regenerated.explanation}</p>
                   <TextList label={t("sqlToQuestion.result.warnings")} items={regenerated.warnings ?? []} />
                 </section>
@@ -523,8 +521,8 @@ export function SqlToQuestionPage() {
               <section className="grid content-start gap-3 text-sm">
                 {structureText !== reverse.logicalStructure && <FormStatus tone="warning" message={t("sqlToQuestion.result.staleStructure")} />}
                 <WorkspaceResultNotice result={reverse} inputSignature={JSON.stringify([selectedProfileId, sql, false])} finishedAt={reverse.generatedAt} restored={reverse !== generatedThisVisit.current} />
-                <div className="min-w-0 rounded-md border border-border bg-card p-3">
-                  <p className="text-xs font-medium text-muted">{t("sqlToQuestion.result.question")}</p>
+                <div className="min-w-0 rounded-md border border-border bg-surface p-3">
+                  <p className="text-xs font-medium text-fg-muted">{t("sqlToQuestion.result.question")}</p>
                   <QuestionText
                     value={reverse.question}
                     variant="detail"
@@ -533,8 +531,7 @@ export function SqlToQuestionPage() {
                   />
                 </div>
                 <div className="flex flex-wrap items-center gap-[8px] border-t border-border pt-4">
-                  <Button size="lg" loading={questionSqlLoading} disabled={actionBusy || !reverse.question.trim() || loading || !!loadError || !selectedProfile} onClick={() => void generateQuestionSql()}>
-                    <ArrowRightLeft size={16} aria-hidden="true" />
+                  <Button type="button" size="lg" loading={questionSqlLoading} disabled={actionBusy || !reverse.question.trim() || loading || !!loadError || !selectedProfile} onClick={() => void generateQuestionSql()} icon={ArrowRightLeft}>
                     {t("sqlToQuestion.actions.questionSql")}
                   </Button>
                 </div>
@@ -543,8 +540,8 @@ export function SqlToQuestionPage() {
                 {questionSql && (
                   <section className="grid min-w-0 gap-2" aria-label={t("sqlToQuestion.questionSql.title")}>
                     <h3 className="font-semibold">{t("sqlToQuestion.questionSql.title")}</h3>
-                    <p className="text-sm text-muted">{t("sqlToQuestion.regenerated.at", { at: questionSql.at })}</p>
-                    <pre className="max-h-96 overflow-auto rounded-md border border-border bg-code p-4 text-sm leading-6 text-code-fg"><code>{questionSql.sql}</code></pre>
+                    <p className="text-sm text-fg-muted">{t("sqlToQuestion.regenerated.at", { at: questionSql.at })}</p>
+                    <pre data-surface="code" className="max-h-96 overflow-auto rounded-md border border-border bg-surface p-4 text-sm leading-6 text-fg"><code>{questionSql.sql}</code></pre>
                     <p className="text-sm">{questionSql.explanation}</p>
                     <TextList label={t("sqlToQuestion.result.warnings")} items={questionSql.warnings ?? []} />
                   </section>
@@ -560,7 +557,7 @@ export function SqlToQuestionPage() {
           </div>
           </div>
         </DbObjectManagementPanelShell>
-      </main>
+      </PageBody>
     </>
   );
 }
@@ -591,14 +588,14 @@ function SchemaPreview({
   }
 
   return (
-    <section className="grid content-start gap-3 rounded-md border border-border bg-background p-3 text-sm">
+    <section className="grid content-start gap-3 rounded-md border border-border bg-surface-sunken p-3 text-sm">
       <div className="flex flex-wrap gap-2">
         <StatusBadge variant="neutral" label={profile ? profileDisplayLabel(profile) : "-"} />
         <span data-testid="sql-to-question-table-count">
           <StatusBadge variant="info" label={t("sqlToQuestion.schema.tableCount", { count: tables.length })} />
         </span>
       </div>
-      <h3 className="flex items-center gap-2 text-sm font-semibold text-foreground">
+      <h3 className="flex items-center gap-2 text-sm font-semibold text-fg">
         <Database size={16} aria-hidden="true" />
         {t("sqlToQuestion.schema.title")}
       </h3>
@@ -610,13 +607,13 @@ function SchemaPreview({
       ) : (
         <div className="grid max-h-96 gap-2 overflow-auto pr-1">
           {tables.map((table) => (
-            <section key={JSON.stringify([table.owner, table.table_name])} className="rounded-md border border-border bg-card p-3">
-              <p className="font-semibold text-foreground">
+            <section key={JSON.stringify([table.owner, table.table_name])} className="rounded-md border border-border bg-surface p-3">
+              <p className="font-semibold text-fg">
                 {table.logical_name || table.table_name}
-                <span className="ml-2 font-mono text-xs text-muted">{table.qualified_name || `${table.owner}.${table.table_name}`}</span>
+                <span className="ml-2 font-mono text-xs text-fg-muted">{table.qualified_name || `${table.owner}.${table.table_name}`}</span>
               </p>
-              <p className="mt-1 text-xs leading-5 text-muted">{table.comment || "-"}</p>
-              <p className="mt-2 break-words font-sans text-xs leading-5 text-foreground">
+              <p className="mt-1 text-xs leading-5 text-fg-muted">{table.comment || "-"}</p>
+              <p className="mt-2 break-words font-sans text-xs leading-5 text-fg">
                 {table.columns
                   .slice(0, 8)
                   .map((column) => column.logical_name || column.column_name)
@@ -674,21 +671,21 @@ function LogicalStructureList({ items }: { items: Nl2SqlLogicalStructureItem[] }
         return (
           <div
             key={`${index}-${item.kind ?? ""}`}
-            className="grid gap-1 rounded-md border border-border bg-card px-3 py-2"
+            className="grid gap-1 rounded-md border border-border bg-surface px-3 py-2"
             data-structure-kind={item.kind || undefined}
           >
-            <dt className="text-xs font-medium text-muted">
+            <dt className="text-xs font-medium text-fg-muted">
               {labelKey ? t(labelKey) : (item.kind ?? "")}
             </dt>
             <dd className="grid min-w-0 gap-1">
-              <span className="min-w-0 text-sm leading-6 text-foreground [overflow-wrap:anywhere]">
+              <span className="min-w-0 text-sm leading-6 text-fg [overflow-wrap:anywhere]">
                 {item.business}
               </span>
               {item.technical && (
-                <span className="flex min-w-0 items-start gap-1.5 text-xs leading-5 text-muted">
+                <span className="flex min-w-0 items-start gap-1.5 text-xs leading-5 text-fg-muted">
                   <span className="sr-only">{t("nl2sql.logicalSteps.technicalSrLabel")}</span>
                   <span
-                    className="mt-0.5 shrink-0 rounded bg-muted/20 px-1.5 font-medium"
+                    className="mt-0.5 shrink-0 rounded bg-surface-hover px-1.5 font-medium"
                     aria-hidden="true"
                   >
                     {t("nl2sql.logicalSteps.technicalLabel")}
@@ -710,13 +707,13 @@ function TextList({ label, items }: { label: string; items: string[] }) {
   if (items.length === 0) return null;
   return (
     <div>
-      <p className="mb-1 text-xs font-medium text-muted">{label}</p>
+      <p className="mb-1 text-xs font-medium text-fg-muted">{label}</p>
       <ul className="grid gap-1">
         {items.map((item, index) => (
           <li
             // 同一文が並ぶことがあるため index を key に含める。
             key={`${index}-${item}`}
-            className="flex min-w-0 items-start gap-2 rounded-md border border-border bg-card px-3 py-2 text-foreground"
+            className="flex min-w-0 items-start gap-2 rounded-md border border-border bg-surface px-3 py-2 text-fg"
           >
             <span className="min-w-0 [overflow-wrap:anywhere]">{item}</span>
           </li>

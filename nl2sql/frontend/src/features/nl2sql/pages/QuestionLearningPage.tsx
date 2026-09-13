@@ -1,6 +1,18 @@
 import { ErrorState } from "@/components/StateViews";
 import { Pagination } from "@/components/Pagination";
-import { Button } from "@/components/ui/button";
+import {
+  Button,
+  buttonVariants,
+  Banner,
+  EmptyState,
+  FormStatus,
+  SelectField,
+  toast,
+  usePagination,
+  StatusBadge,
+  PageHeader,
+  PageBody,
+} from "@engchina/production-ready-ui";
 import {
   useEffect,
   useMemo,
@@ -22,20 +34,10 @@ import {
 } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 
-import { buttonVariants } from "@/components/ui/button";
-import {
-  Banner,
-  EmptyState,
-  FormStatus,
-  SelectField,
-  toast,
-  usePagination,
-} from "@engchina/production-ready-ui";
 
-import { StatusBadge } from "@/components/ui/status-badge";
 import { BulkSelectionActions } from "@/components/BulkSelectionActions";
 import { RowActionMenu, type EntityAction } from "@/components/ObjectActions";
-import { PageHeader, PageHeaderStatusBadge } from "@/components/PageHeader";
+import { PageHeaderStatusBadge } from "@/components/PageHeaderStatusBadge";
 import { ProcessingIndicator } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";
 import { useUnsavedChangesGuard } from "@/lib/useUnsavedChangesGuard";
@@ -87,11 +89,11 @@ type ClassifierPredictionSnapshot = ClassifierPredictionData & {
   finishedAt: string;
 };
 
-const fieldClass = "grid min-w-0 gap-1 text-sm font-medium leading-5 text-foreground";
+const fieldClass = "grid min-w-0 gap-1 text-sm font-medium leading-5 text-fg";
 const controlClass =
-  "min-h-11 w-full rounded-md border border-border bg-card px-3 py-2 text-sm text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-ring/40";
+  "min-h-11 w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-fg outline-none focus:border-focus-ring focus:ring-2 focus:ring-focus-ring";
 const linkButtonClass =
-  "inline-flex min-h-9 items-center justify-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-sm font-medium text-foreground hover:bg-background focus:outline-none focus:ring-2 focus:ring-ring/40";
+  "inline-flex min-h-9 items-center justify-center gap-2 rounded-md border border-border bg-surface px-3 py-2 text-sm font-medium text-fg hover:bg-surface-hover focus:outline-none focus:ring-2 focus:ring-focus-ring";
 const TRAINING_DATA_PAGE_SIZE = 10;
 const CANDIDATE_PAGE_SIZE = 20;
 const CANDIDATE_STATUS_VALUES = [
@@ -533,14 +535,13 @@ export function QuestionClassifierModelsPage() {
           },
         ]}
       />
-      <main className="p-4 lg:p-8">
+      <PageBody>
         <fieldset disabled={Boolean(loading)} className="m-0 grid min-w-0 gap-4 border-0 p-0">
         <PageNotice
           notice={message ? { tone: "danger", message } : null}
           action={
             message ? (
-              <Button type="button" variant="secondary" size="sm" onClick={() => void load(true)}>
-                <RefreshCw size={15} aria-hidden="true" />
+              <Button type="button" variant="secondary" size="sm" onClick={() => void load(true)} icon={RefreshCw}>
                 <span>{t("learning.action.refresh")}</span>
               </Button>
             ) : undefined
@@ -552,7 +553,7 @@ export function QuestionClassifierModelsPage() {
             label={t("common.processing.refreshing")}
             operationKey="question-learning-refresh"
             placement="workspace"
-            className="rounded-md border border-border bg-card px-3 py-2 shadow-sm"
+            className="rounded-md border border-border bg-surface px-3 py-2 shadow-sm"
             testId="question-learning-workspace-processing"
             activityIcon="none"
           />
@@ -680,7 +681,7 @@ export function QuestionClassifierModelsPage() {
           </DbObjectManagementPanelShell>
         )}
         </fieldset>
-      </main>
+      </PageBody>
 
     </>
   );
@@ -743,8 +744,7 @@ function TrainingDataPanel({
         icon={FileSpreadsheet}
         title={t("qcm.training.title")}
         action={
-          <Button type="button" variant="secondary" size="sm" loading={loading === "training-load"} onClick={onRefresh}>
-            <RefreshCw size={15} aria-hidden="true" />
+          <Button type="button" variant="secondary" size="sm" loading={loading === "training-load"} onClick={onRefresh} icon={RefreshCw}>
             <span>{t("qcm.training.refresh")}</span>
           </Button>
         }
@@ -756,7 +756,7 @@ function TrainingDataPanel({
         <CompactFact label={t("qcm.training.filtered")} value={formatNumber(examples.length)} />
       </div>
 
-      <div className="grid gap-3 rounded-md border border-border bg-background p-3">
+      <div className="grid gap-3 rounded-md border border-border bg-surface-sunken p-3">
         <FileDropzone
           label={t("qcm.training.file")}
           accept={XLSX_TEMPLATE_FILE_FORMATS.accept}
@@ -773,25 +773,25 @@ function TrainingDataPanel({
           onFiles={([file]) => onImport(file)}
           onClear={onClearFile}
         />
-        <label className="flex min-h-11 items-start gap-3 rounded-md border border-border bg-card p-3 text-sm text-foreground">
+        <label className="flex min-h-11 items-start gap-3 rounded-md border border-border bg-surface p-3 text-sm text-fg">
           <input
             type="checkbox"
             checked={replace}
             onChange={(event) => onReplaceChange(event.currentTarget.checked)}
-            className="mt-1 h-4 w-4 rounded border-border text-primary focus:ring-ring/40"
+            className="mt-1 h-4 w-4 rounded border-border text-accent-fg focus:ring-focus-ring"
           />
           <span>{t("learning.classifier.replace")}</span>
         </label>
         <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
           <a className={linkButtonClass} href="/api/nl2sql/classifier/training-data/export.xlsx">
-            <Download size={15} aria-hidden="true" />
+            <Download size={16} aria-hidden="true" />
             <span>{t("learning.classifier.exportXlsx")}</span>
           </a>
         </div>
       </div>
 
       {importSummary && (
-        <div className="rounded-md border border-success/30 bg-success-bg px-3 py-2 text-sm text-success">
+        <div className="rounded-md border border-success-border bg-success-subtle px-3 py-2 text-sm text-success-fg">
           {t("learning.classifier.importSummary", {
             count: importSummary.imported_count,
             total: importSummary.total_examples,
@@ -800,7 +800,7 @@ function TrainingDataPanel({
       )}
 
       {warnings.map((warning) => (
-        <p key={warning} className="rounded-md border border-warning/30 bg-warning-bg px-3 py-2 text-sm text-warning">
+        <p key={warning} className="rounded-md border border-warning-border bg-warning-subtle px-3 py-2 text-sm text-warning-fg">
           {warning}
         </p>
       ))}
@@ -880,7 +880,7 @@ function TrainingDataTable({
 
   return (
     <div className="grid gap-2">
-      <div className="overflow-hidden rounded-md border border-border bg-card">
+      <div className="overflow-hidden rounded-md border border-border bg-surface">
         <div className="max-h-[42rem] overflow-auto">
           <table className="w-full min-w-[62rem] table-fixed divide-y divide-border text-left text-sm" data-testid="qcm-training-data-table">
             <colgroup>
@@ -890,7 +890,7 @@ function TrainingDataTable({
               <col className="w-[11rem]" />
               <col className="w-[12rem]" />
             </colgroup>
-            <thead className="sticky top-0 z-10 bg-background text-xs text-muted">
+            <thead className="sticky top-0 z-10 bg-surface-sunken text-xs text-fg-muted">
               <tr>
                 <th className="px-3 py-2">{t("qcm.training.profile")}</th>
                 <th className="px-3 py-2">{t("qcm.training.question")}</th>
@@ -921,8 +921,8 @@ function TrainingDataTable({
                       },
                     ];
                 return (
-                  <tr key={example.id} className="hover:bg-background">
-                    <td className="break-words px-3 py-2 align-top text-xs font-semibold text-foreground">
+                  <tr key={example.id} className="hover:bg-surface-hover">
+                    <td className="break-words px-3 py-2 align-top text-xs font-semibold text-fg">
                       {editing ? (
                         <select
                           aria-label={t("qcm.training.editProfile")}
@@ -938,7 +938,7 @@ function TrainingDataTable({
                         <span className="block">{profileRecordDisplayLabel(example)}</span>
                       )}
                     </td>
-                    <td className="break-words px-3 py-2 align-top leading-6 text-foreground">
+                    <td className="break-words px-3 py-2 align-top leading-6 text-fg">
                       {editing ? (
                         <textarea
                           aria-label={t("qcm.training.editQuestion")}
@@ -949,8 +949,8 @@ function TrainingDataTable({
                         />
                       ) : example.text}
                     </td>
-                    <td className="break-words px-3 py-2 align-top text-xs text-foreground">{example.category}</td>
-                    <td className="break-words px-3 py-2 align-top text-xs text-muted">
+                    <td className="break-words px-3 py-2 align-top text-xs text-fg">{example.category}</td>
+                    <td className="break-words px-3 py-2 align-top text-xs text-fg-muted">
                       <StatusBadge
                         variant={example.source_type === "feedback" ? "info" : "neutral"}
                         label={example.source_type === "feedback" ? t("qcm.training.sourceFeedback") : t("qcm.training.sourceFile")}
@@ -1025,8 +1025,7 @@ function ModelTrainPanel({
         title={t("qcm.train.title")}
         description={t("qcm.train.hint")}
         action={
-          <Button type="button" size="sm" loading={loading} disabled={!canTrain} onClick={onTrain}>
-            <BrainCircuit size={15} aria-hidden="true" />
+          <Button type="button" size="sm" loading={loading} disabled={!canTrain} onClick={onTrain} icon={BrainCircuit}>
             <span>{t("learning.classifier.train")}</span>
           </Button>
         }
@@ -1044,11 +1043,11 @@ function ModelTrainPanel({
       </div>
       <label className={fieldClass}>
         <span>{t("learning.classifier.model")}</span>
-        <select value={status?.embedding_model || "cohere.embed-v4.0"} disabled className={`${controlClass} disabled:bg-muted/30 disabled:text-muted`}>
+        <select value={status?.embedding_model || "cohere.embed-v4.0"} disabled className={`${controlClass} disabled:bg-surface-hover disabled:text-fg-disabled`}>
           <option value={status?.embedding_model || "cohere.embed-v4.0"}>{status?.embedding_model || "cohere.embed-v4.0"}</option>
         </select>
       </label>
-      <section className="grid gap-3 rounded-md border border-border bg-background p-3">
+      <section className="grid gap-3 rounded-md border border-border bg-surface-sunken p-3">
         <div className="flex flex-wrap gap-2">
           <StatusBadge variant={status?.ready ? "success" : "warning"} label={status?.ready ? t("learning.classifier.ready") : t("learning.classifier.notReady")} />
           {status?.stale && <StatusBadge variant="warning" label={t("learning.classifier.stale")} />}
@@ -1057,7 +1056,7 @@ function ModelTrainPanel({
           {status?.classifier_version && <StatusBadge variant="info" label={status.classifier_version} />}
         </div>
         {(status?.warnings ?? []).map((warning) => (
-          <p key={warning} className="rounded-md border border-warning/30 bg-warning-bg px-3 py-2 text-sm text-warning">
+          <p key={warning} className="rounded-md border border-warning-border bg-warning-subtle px-3 py-2 text-sm text-warning-fg">
             {warning}
           </p>
         ))}
@@ -1098,8 +1097,7 @@ function ModelTestPanel({
           title={t("qcm.test.title")}
           description={t("qcm.test.hint")}
           action={
-            <Button type="button" size="sm" loading={loading} disabled={loading || !question.trim() || !ready} onClick={onPredict}>
-              <Search size={15} aria-hidden="true" />
+            <Button type="button" size="sm" loading={loading} disabled={loading || !question.trim() || !ready} onClick={onPredict} icon={Search}>
               <span>{t("learning.classifier.predict")}</span>
             </Button>
           }
@@ -1115,8 +1113,8 @@ function ModelTestPanel({
           />
         </label>
       </section>
-      <section className="grid content-start gap-3 rounded-md border border-border bg-background p-4">
-        <h3 className="text-sm font-semibold text-foreground">{t("qcm.test.result")}</h3>
+      <section className="grid content-start gap-3 rounded-md border border-border bg-surface-sunken p-4">
+        <h3 className="text-sm font-semibold text-fg">{t("qcm.test.result")}</h3>
         {prediction ? (
           <>
             {(prediction.inputQuestion !== question || prediction.modelVersion !== modelVersion) && (
@@ -1132,7 +1130,7 @@ function ModelTestPanel({
             <CompactFact label={t("qcm.test.predictedCategory")} value={prediction.predicted_category || "-"} />
             {prediction.candidates.length > 0 && (
               <div
-                className={`rounded-md border border-border bg-card ${INFORMATION_TABLE_SCROLL_CLASS}`}
+                className={`rounded-md border border-border bg-surface ${INFORMATION_TABLE_SCROLL_CLASS}`}
                 data-testid="qcm-test-candidates-scroll-region"
               >
                 <table className="w-full min-w-[28rem] table-fixed divide-y divide-border text-sm">
@@ -1141,7 +1139,7 @@ function ModelTestPanel({
                     <col className="w-[7rem]" />
                     <col className="w-[11rem]" />
                   </colgroup>
-                  <thead className="sticky top-0 z-10 bg-background text-xs text-muted">
+                  <thead className="sticky top-0 z-10 bg-surface-sunken text-xs text-fg-muted">
                     <tr className="h-10">
                       <th className="whitespace-nowrap px-3 py-2 text-left">{t("qcm.test.category")}</th>
                       <th className="whitespace-nowrap px-3 py-2 text-left">{t("qcm.test.probability")}</th>
@@ -1151,9 +1149,9 @@ function ModelTestPanel({
                   <tbody className="divide-y divide-border/70">
                     {prediction.candidates.map((candidate) => (
                       <tr key={candidate.category} className={INFORMATION_TABLE_ROW_CLASS}>
-                        <td className="break-words px-3 py-2 font-semibold text-foreground">{candidate.category}</td>
-                        <td className="px-3 py-2 font-sans text-xs text-foreground">{Math.round(candidate.score * 100)}%</td>
-                        <td className="break-words px-3 py-2 text-xs text-muted">
+                        <td className="break-words px-3 py-2 font-semibold text-fg">{candidate.category}</td>
+                        <td className="px-3 py-2 font-sans text-xs text-fg">{Math.round(candidate.score * 100)}%</td>
+                        <td className="break-words px-3 py-2 text-xs text-fg-muted">
                           {profileRecordDisplayLabel(candidate)}
                         </td>
                       </tr>
@@ -1163,7 +1161,7 @@ function ModelTestPanel({
               </div>
             )}
             {prediction.warnings.map((warning) => (
-              <p key={warning} className="rounded-md border border-warning/30 bg-warning-bg px-3 py-2 text-sm text-warning">
+              <p key={warning} className="rounded-md border border-warning-border bg-warning-subtle px-3 py-2 text-sm text-warning-fg">
                 {warning}
               </p>
             ))}
@@ -1277,7 +1275,7 @@ function TrainingCandidatesPanel({
       </div>
 
       <form
-        className="grid gap-3 rounded-md border border-border bg-background p-3 md:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_13rem_16rem_auto] xl:items-end"
+        className="grid gap-3 rounded-md border border-border bg-surface-sunken p-3 md:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_13rem_16rem_auto] xl:items-end"
         data-testid="qcm-candidate-filters"
         onSubmit={(event) => {
           event.preventDefault();
@@ -1318,9 +1316,7 @@ function TrainingCandidatesPanel({
           variant="secondary"
           size="lg"
           touchTarget className="w-full whitespace-nowrap md:w-auto"
-          loading={loading === "candidates-load"}
-        >
-          <RefreshCw size={15} aria-hidden="true" />
+          loading={loading === "candidates-load"} icon={RefreshCw}>
           <span>{t("qcm.candidates.applyFilters")}</span>
         </Button>
       </form>
@@ -1342,7 +1338,7 @@ function TrainingCandidatesPanel({
       ) : items.length > 0 ? (
         <div className="grid gap-3">
           <div
-            className="flex flex-col gap-3 rounded-md border border-border bg-background p-3 sm:flex-row sm:items-center sm:justify-between"
+            className="flex flex-col gap-3 rounded-md border border-border bg-surface-sunken p-3 sm:flex-row sm:items-center sm:justify-between"
             data-testid="qcm-candidate-bulk-actions"
           >
             <BulkSelectionActions
@@ -1362,16 +1358,14 @@ function TrainingCandidatesPanel({
                 className="w-full sm:w-auto"
                 loading={loading === "candidates-import"}
                 disabled={selected.size === 0}
-                onClick={onAddSelected}
-              >
-                <CheckSquare size={15} aria-hidden="true" />
+                onClick={onAddSelected} icon={CheckSquare}>
                 <span>{t("qcm.candidates.addSelectedWithCount", { count: selected.size })}</span>
               </Button>
             </div>
           </div>
 
           <ul
-            className="divide-y divide-border/70 rounded-md border border-border bg-card"
+            className="divide-y divide-border/70 rounded-md border border-border bg-surface"
             aria-label={t("qcm.candidates.listAria")}
             data-testid="qcm-candidate-list"
           >
@@ -1413,14 +1407,14 @@ function TrainingCandidatesPanel({
                   data-testid="qcm-training-candidate"
                   className={`grid min-w-0 gap-3 border-l-2 p-3 transition-colors xl:grid-cols-[minmax(20rem,1fr)_10rem_minmax(15rem,18rem)_auto] xl:items-start ${
                     selectedItem
-                      ? "border-l-primary bg-primary/10"
-                      : "border-l-transparent hover:bg-background"
+                      ? "border-l-accent-fg bg-accent-subtle"
+                      : "border-l-transparent hover:bg-surface-hover"
                   }`}
                 >
                   <div className="flex min-w-0 items-start gap-1">
                     <label
                       className={`flex h-11 w-11 shrink-0 items-start justify-center rounded-md pt-1 ${
-                        canSelect ? "cursor-pointer hover:bg-background" : "cursor-not-allowed opacity-50"
+                        canSelect ? "cursor-pointer hover:bg-surface-hover" : "cursor-not-allowed opacity-50"
                       }`}
                     >
                       <input
@@ -1434,11 +1428,11 @@ function TrainingCandidatesPanel({
                           else next.delete(item.history_id);
                           onSelectionChange(next);
                         }}
-                        className="h-4 w-4 rounded border-border text-primary focus:ring-ring/40"
+                        className="h-4 w-4 rounded border-border text-accent-fg focus:ring-focus-ring"
                       />
                     </label>
                     <div className="min-w-0 pt-0.5">
-                      <div className="min-w-0 text-sm leading-6 text-foreground">
+                      <div className="min-w-0 text-sm leading-6 text-fg">
                         <QuestionText
                           value={item.question}
                           variant="select"
@@ -1447,15 +1441,15 @@ function TrainingCandidatesPanel({
                         />
                       </div>
                       {item.feedback_comment && (
-                        <p className="mt-1 break-words border-l-2 border-primary/30 pl-2 text-sm leading-6 text-foreground [overflow-wrap:anywhere]">
+                        <p className="mt-1 break-words border-l-2 border-accent-emphasis pl-2 text-sm leading-6 text-fg [overflow-wrap:anywhere]">
                           {item.feedback_comment}
                         </p>
                       )}
-                      <p className="mt-1 font-sans text-xs tabular-nums text-muted">
+                      <p className="mt-1 font-sans text-xs tabular-nums text-fg-muted">
                         {formatDateTime(item.created_at)}
                       </p>
                       {item.conflict_profile_ids.length > 0 && (
-                        <p className="mt-1 break-words text-sm text-warning [overflow-wrap:anywhere]">
+                        <p className="mt-1 break-words text-sm text-warning-fg [overflow-wrap:anywhere]">
                           {t("qcm.candidates.conflicts", { profiles: conflictProfileLabels.join(", ") })}
                         </p>
                       )}
@@ -1480,7 +1474,7 @@ function TrainingCandidatesPanel({
                   )}
                   {item.status !== "pending" && item.status !== "profile_missing" && (
                     <div className="grid min-w-0 content-start gap-1 xl:pt-1">
-                      <p className="text-xs font-medium text-muted">{t("nl2sql.profile.label")}</p>
+                      <p className="text-xs font-medium text-fg-muted">{t("nl2sql.profile.label")}</p>
                       <div className="min-w-0">
                         <StatusBadge variant="info" label={resolvedProfileName} />
                       </div>
@@ -1492,7 +1486,7 @@ function TrainingCandidatesPanel({
                       className={`${buttonVariants({ variant: "secondary", size: "sm" })} w-full sm:w-auto`}
                       href={`${APP_ROUTES.feedbackManagement}?tab=appFeedback&history_id=${encodeURIComponent(item.history_id)}`}
                     >
-                      <Link2 size={15} aria-hidden="true" />
+                      <Link2 size={16} aria-hidden="true" />
                       <span>{t("qcm.candidates.openFeedback")}</span>
                     </a>
                   </div>
@@ -1518,11 +1512,11 @@ function TrainingCandidatesPanel({
             nextLabel={t("qcm.training.pagination.next")}
             ariaLabel={t("qcm.candidates.pagination.label")}
             testId="qcm-candidate-pagination"
-            className="rounded-md border border-border bg-background p-3"
+            className="rounded-md border border-border bg-surface-sunken p-3"
           />
         </div>
       ) : (
-        <div className="rounded-md border border-border bg-background p-3">
+        <div className="rounded-md border border-border bg-surface-sunken p-3">
           <EmptyState
             title={hasActiveFilters ? t("qcm.candidates.noResultsTitle") : t("qcm.candidates.emptyTitle")}
             hint={hasActiveFilters ? t("qcm.candidates.noResultsHint") : t("qcm.candidates.emptyHint")}
@@ -1542,9 +1536,9 @@ function TrainingCandidatesPanel({
 
 function CompactFact({ label, value }: { label: string; value: string }) {
   return (
-    <div className="min-w-0 rounded-md border border-border bg-card p-3">
-      <p className="text-xs font-medium text-muted">{label}</p>
-      <p className="mt-1 break-words text-sm font-semibold text-foreground">{value}</p>
+    <div className="min-w-0 rounded-md border border-border bg-surface p-3">
+      <p className="text-xs font-medium text-fg-muted">{label}</p>
+      <p className="mt-1 break-words text-sm font-semibold text-fg">{value}</p>
     </div>
   );
 }

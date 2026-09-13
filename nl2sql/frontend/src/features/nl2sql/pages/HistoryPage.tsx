@@ -1,6 +1,6 @@
 import { SortHeader } from "@/components/SortHeader";
 import { useWorkspaceState } from "@/components/WorkspaceState";
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from "react";
+import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import {
   ArrowDown,
   ArrowDownUp,
@@ -18,12 +18,18 @@ import {
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
-import { Button } from "@/components/ui/button";
+import {
+  Button,
+  EmptyState,
+  toast,
+  StatusBadge,
+  type StatusVariant,
+  PageHeader,
+  Tabs,
+  PageBody,
+} from "@engchina/production-ready-ui";
 import { useAuth } from "@/features/security/AuthProvider";
-import { EmptyState, toast } from "@engchina/production-ready-ui";
 
-import { StatusBadge, type StatusVariant } from "@/components/ui/status-badge";
-import { PageHeader } from "@/components/PageHeader";
 import { PageNotice } from "@/components/page-notice";
 import { ProcessingIndicator, TimedLoadingState } from "@/components/ProcessingState";
 import { apiGet, isAbortError } from "@/lib/api";
@@ -59,31 +65,31 @@ function HistoryExecutor({ item, detailed = false }: { item: HistoryItem; detail
     : loginId ? (name ? t("history.actor.identity", { name, loginId }) : loginId)
     : t("history.actor.missing", { uuid });
   return (
-    <span className="grid min-w-0 gap-1 text-sm leading-relaxed text-foreground [overflow-wrap:anywhere]" data-testid="history-executor">
+    <span className="grid min-w-0 gap-1 text-sm leading-relaxed text-fg [overflow-wrap:anywhere]" data-testid="history-executor">
       <span>{t("history.actor.label")}: {identity}</span>
-      {detailed && uuid && loginId && <span className="text-muted">{t("history.actor.uuid", { uuid })}</span>}
-      {detailed && loginId && <span className="text-muted">{t("history.actor.hint")}</span>}
+      {detailed && uuid && loginId && <span className="text-fg-muted">{t("history.actor.uuid", { uuid })}</span>}
+      {detailed && loginId && <span className="text-fg-muted">{t("history.actor.hint")}</span>}
     </span>
   );
 }
 
 function HistorySafetyHelp() {
   return (
-    <section className="grid min-w-0 gap-2 rounded-md border border-border bg-card p-3" aria-labelledby="history-safety-help-heading">
-      <h2 id="history-safety-help-heading" className="text-base font-semibold text-foreground">
+    <section className="grid min-w-0 gap-2 rounded-md border border-border bg-surface p-3" aria-labelledby="history-safety-help-heading">
+      <h2 id="history-safety-help-heading" className="text-base font-semibold text-fg">
         {t("history.safetyHelp.title")}
       </h2>
       <dl className="grid gap-3 md:grid-cols-2">
         {(["safe", "blocked"] as const).map((state) => (
           <div key={state} className="grid min-w-0 content-start gap-1">
             <dt><StatusBadge variant={state === "safe" ? "success" : "danger"} label={t(`nl2sql.safety.${state}`)} /></dt>
-            <dd id={`history-safety-help-${state}`} className="text-base leading-relaxed text-foreground">
+            <dd id={`history-safety-help-${state}`} className="text-sm leading-relaxed text-fg">
               {t(`history.safetyHelp.${state}`)}
             </dd>
           </div>
         ))}
       </dl>
-      <p className="text-base leading-relaxed text-muted">{t("history.safetyHelp.note")}</p>
+      <p className="text-sm leading-relaxed text-fg-muted">{t("history.safetyHelp.note")}</p>
     </section>
   );
 }
@@ -119,12 +125,8 @@ function engineTimingStatusVariant(status: EngineTiming["status"]): StatusVarian
   return "warning";
 }
 
-function focusHistoryTab(id: string) {
-  window.requestAnimationFrame(() => document.getElementById(id)?.focus({ preventScroll: true }));
-}
-
 function HistorySkeletonBlock({ className = "" }: { className?: string }) {
-  return <div className={`animate-pulse rounded-md bg-muted/30 motion-reduce:animate-none ${className}`} aria-hidden="true" />;
+  return <div className={`animate-pulse rounded-md bg-surface-hover motion-reduce:animate-none ${className}`} aria-hidden="true" />;
 }
 
 function HistoryListSkeleton() {
@@ -192,7 +194,7 @@ function HistorySortButton({
       onClick={() => onToggle(sortKey)}
     >
       <span>{label}</span>
-      <SortIcon size={13} aria-hidden="true" />
+      <SortIcon size={14} aria-hidden="true" />
     </SortHeader>
   );
 }
@@ -249,7 +251,7 @@ function HistoryGrid({
         action={<StatusBadge variant="info" label={t("history.list.count", { count })} />}
       />
 
-      <div className="grid gap-2 rounded-md border border-border bg-background p-3">
+      <div className="grid gap-2 rounded-md border border-border bg-surface-sunken p-3">
         <DbManagementSearchField
           label={t("history.search.label")}
           placeholder={t("history.search.placeholder")}
@@ -285,7 +287,7 @@ function HistoryGrid({
       </div>
 
       {items.length === 0 ? (
-        <div className="grid justify-items-center gap-3 rounded-md border border-border bg-background p-4">
+        <div className="grid justify-items-center gap-3 rounded-md border border-border bg-surface-sunken p-4">
           <EmptyState title={t("history.noResults.title")} hint={t("history.noResults.hint")} />
           <Button type="button" variant="secondary" size="sm" onClick={onClearFilters}>
             {t("history.action.clearFilters")}
@@ -294,11 +296,11 @@ function HistoryGrid({
       ) : (
         <div className="grid gap-2">
           <div
-            className="overflow-hidden rounded-md border border-border bg-card"
+            className="overflow-hidden rounded-md border border-border bg-surface"
             data-testid="history-list-surface"
           >
             <div
-              className="flex flex-wrap items-center gap-1 border-b border-border bg-background px-2 py-1.5"
+              className="flex flex-wrap items-center gap-1 border-b border-border bg-surface-sunken px-2 py-1.5"
               role="group"
               aria-label={t("history.sort.label")}
             >
@@ -326,10 +328,10 @@ function HistoryGrid({
                         aria-label={t("history.grid.show", { question: item.question })}
                         aria-describedby={`history-safety-help-${item.safety_is_safe ? "safe" : "blocked"}`}
                         aria-current={selected ? "true" : undefined}
-                        className={`grid min-h-20 w-full min-w-0 gap-2 border-l-2 px-3 py-2.5 text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/40 ${
+                        className={`grid min-h-20 w-full min-w-0 gap-2 border-l-2 px-3 py-2.5 text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring ${
                           selected
-                            ? "border-l-primary bg-primary/10"
-                            : "border-l-transparent hover:bg-background"
+                            ? "border-l-accent-fg bg-accent-subtle"
+                            : "border-l-transparent hover:bg-surface-hover"
                         }`}
                         onClick={() => onSelect(item)}
                       >
@@ -337,15 +339,15 @@ function HistoryGrid({
                           value={item.question}
                           variant="select"
                           maxLines={1}
-                          className="font-medium text-foreground"
+                          className="font-medium text-fg"
                           testId="history-question"
                         />
                         <HistoryExecutor item={item} />
                         <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-                          <span className="font-sans text-xs tabular-nums text-foreground">
+                          <span className="font-sans text-xs tabular-nums text-fg">
                             {formatDateTime(item.created_at)}
                           </span>
-                          <span className="min-w-0 break-words text-xs text-muted [overflow-wrap:anywhere]">
+                          <span className="min-w-0 break-words text-xs text-fg-muted [overflow-wrap:anywhere]">
                             {engineLabel(item.engine)}
                           </span>
                           <StatusBadge variant="neutral" label={formatElapsed(item.elapsed_ms)} />
@@ -376,10 +378,10 @@ function HistoryGrid({
         </div>
       )}
       <div
-        className="flex flex-col gap-2 rounded-md border border-border bg-background p-3 sm:flex-row sm:items-center sm:justify-between"
+        className="flex flex-col gap-2 rounded-md border border-border bg-surface-sunken p-3 sm:flex-row sm:items-center sm:justify-between"
         data-testid="history-load-more"
       >
-        <p className="text-xs leading-5 text-muted">
+        <p className="text-xs leading-5 text-fg-muted">
           {total === null
             ? t("history.list.loadedUnknownTotal", { loaded: loadedCount })
             : t("history.list.loaded", { loaded: loadedCount, total })}
@@ -406,12 +408,12 @@ function HistoryFilterSelect({
   onChange: (value: string) => void;
 }) {
   return (
-    <label className="grid min-w-0 gap-1 text-sm font-medium text-foreground">
+    <label className="grid min-w-0 gap-1 text-sm font-medium text-fg">
       <span>{label}</span>
       <select
         value={value}
         onChange={(event) => onChange(event.currentTarget.value)}
-        className="min-h-11 w-full min-w-0 rounded-md border border-border bg-card px-3 py-2 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40"
+        className="min-h-11 w-full min-w-0 rounded-md border border-border-control bg-surface px-3 py-2 outline-none focus:border-focus-ring focus:ring-2 focus:ring-focus-ring"
       >
         {options.map(([optionValue, optionLabel]) => (
           <option key={optionValue} value={optionValue}>{optionLabel}</option>
@@ -459,7 +461,7 @@ function HistoryDetailPanel({
 }) {
   if (!item) {
     return (
-      <section className="grid min-w-0 content-start gap-3 rounded-md border border-border bg-background p-4">
+      <section className="grid min-w-0 content-start gap-3 rounded-md border border-border bg-surface-sunken p-4">
         <EmptyState title={t("history.detail.emptyTitle")} hint={t(selectionMissing ? "history.detail.selectionMissing" : "history.detail.emptyHint")} />
       </section>
     );
@@ -470,30 +472,16 @@ function HistoryDetailPanel({
     { id: "sql", label: t("history.detail.sql"), icon: Code2 },
   ] as const;
 
-  const handleTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
-    const keyMap: Record<string, number | undefined> = {
-      ArrowRight: (index + 1) % tabs.length,
-      ArrowLeft: (index - 1 + tabs.length) % tabs.length,
-      Home: 0,
-      End: tabs.length - 1,
-    };
-    const nextIndex = keyMap[event.key];
-    if (nextIndex === undefined) return;
-    event.preventDefault();
-    const nextTab = tabs[nextIndex];
-    onTabChange(nextTab.id);
-    focusHistoryTab(`history-detail-tab-${nextTab.id}`);
-  };
 
   return (
-    <section className="grid min-w-0 content-start gap-3 rounded-md border border-border bg-background p-3 [grid-template-columns:minmax(0,1fr)]" aria-labelledby="history-detail-heading" data-testid="history-detail">
+    <section className="grid min-w-0 content-start gap-3 rounded-md border border-border bg-surface-sunken p-3 [grid-template-columns:minmax(0,1fr)]" aria-labelledby="history-detail-heading" data-testid="history-detail">
       <div className="grid min-w-0 gap-2 [grid-template-columns:minmax(0,1fr)]" data-testid="history-detail-header">
         <div className="flex min-w-0 flex-wrap items-start gap-3">
           <h2
             id="history-detail-heading"
             ref={headingRef}
             tabIndex={-1}
-            className="min-w-0 flex-1 break-words text-base font-semibold leading-6 text-foreground [overflow-wrap:anywhere] focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+            className="min-w-0 flex-1 break-words text-base font-semibold leading-6 text-fg [overflow-wrap:anywhere] focus:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
           >
             {t("history.detail.title")}
           </h2>
@@ -502,14 +490,12 @@ function HistoryDetailPanel({
             variant="primary"
             size="sm"
             className="ml-auto w-full shrink-0 whitespace-nowrap sm:w-auto"
-            onClick={() => onRerun(item)}
-          >
-            <RotateCcw size={15} aria-hidden="true" />
+            onClick={() => onRerun(item)} icon={RotateCcw}>
             <span>{t("history.action.rerun")}</span>
           </Button>
         </div>
-        <div className="min-w-0 rounded-md border border-border bg-card p-3" data-testid="history-detail-question-block">
-          <p className="text-xs font-medium text-muted">{t("history.grid.question")}</p>
+        <div className="min-w-0 rounded-md border border-border bg-surface p-3" data-testid="history-detail-question-block">
+          <p className="text-xs font-medium text-fg-muted">{t("history.grid.question")}</p>
           <QuestionText
             value={item.question}
             variant="detail"
@@ -520,7 +506,7 @@ function HistoryDetailPanel({
           />
         </div>
         <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
-          <span className="font-sans text-xs tabular-nums text-muted">{formatDateTime(item.created_at)}</span>
+          <span className="font-sans text-xs tabular-nums text-fg-muted">{formatDateTime(item.created_at)}</span>
           <StatusBadge variant="info" label={engineLabel(item.engine)} />
           <StatusBadge variant="neutral" label={formatElapsed(item.elapsed_ms)} />
           {item.generation_elapsed_ms !== null && item.generation_elapsed_ms !== undefined && (
@@ -540,34 +526,13 @@ function HistoryDetailPanel({
         <HistoryExecutor item={item} detailed />
       </div>
 
-      <div className="overflow-x-auto border-b border-border" role="tablist" aria-label={t("history.detail.tabsLabel")}>
-        <div className="flex min-w-max gap-1">
-          {tabs.map((detailTab, index) => {
-            const Icon = detailTab.icon;
-            const selected = tab === detailTab.id;
-            return (
-              <button
-                key={detailTab.id}
-                id={`history-detail-tab-${detailTab.id}`}
-                type="button"
-                role="tab"
-                aria-selected={selected}
-                aria-controls={`history-detail-panel-${detailTab.id}`}
-                className={`group inline-flex min-h-11 shrink-0 items-center gap-2 whitespace-nowrap border-b-2 px-4 text-sm font-semibold transition-colors focus:outline-none focus-visible:bg-primary/10 focus-visible:ring-2 focus-visible:ring-ring/40 ${
-                  selected
-                    ? "border-primary bg-card text-primary"
-                    : "border-transparent text-muted hover:border-border hover:bg-card hover:text-foreground"
-                }`}
-                onClick={() => onTabChange(detailTab.id)}
-                onKeyDown={(event) => handleTabKeyDown(event, index)}
-              >
-                <Icon size={15} aria-hidden="true" className={selected ? "text-primary" : "text-muted"} />
-                <span>{detailTab.label}</span>
-              </button>
-            );
-          })}
-        </div>
-      </div>
+      <Tabs
+        idPrefix="history-detail"
+        ariaLabel={t("history.detail.tabsLabel")}
+        value={tab}
+        onChange={(id) => onTabChange(id as HistoryDetailTab)}
+        items={tabs.map((detailTab) => ({ id: detailTab.id, label: detailTab.label, icon: detailTab.icon }))}
+      />
 
       {tab === "overview" ? (
         <div id="history-detail-panel-overview" role="tabpanel" aria-labelledby="history-detail-tab-overview" className="grid gap-3">
@@ -579,18 +544,18 @@ function HistoryDetailPanel({
           <HistoryTimingBreakdown item={item} />
           <HistoryDetailSection title={t("history.rewritten")} value={item.rewritten_question || "—"} testId="history-detail-rewritten-block" />
           <HistoryDetailSection title={t("history.resultColumns")} value={columnsLabel(item)} mono />
-          <div className="rounded-md border border-border bg-card p-3">
-            <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
-              <MessageSquareText size={16} className="text-primary" aria-hidden="true" />
+          <div className="rounded-md border border-border bg-surface p-3">
+            <div className="flex items-center gap-2 text-sm font-semibold text-fg">
+              <MessageSquareText size={16} className="text-accent-fg" aria-hidden="true" />
               <span>{t("history.feedbackComment")}</span>
             </div>
-            <p className="mt-2 break-words text-sm leading-6 text-foreground">{item.feedback_comment || "—"}</p>
+            <p className="mt-2 break-words text-sm leading-6 text-fg">{item.feedback_comment || "—"}</p>
           </div>
         </div>
       ) : (
         <section id="history-detail-panel-sql" role="tabpanel" aria-labelledby="history-detail-tab-sql" className="grid gap-3">
-          <h3 className="text-sm font-semibold text-foreground">{t("history.sql")}</h3>
-          <pre className="max-h-[32rem] overflow-auto rounded-md border border-border bg-code p-4 font-mono text-sm leading-6 text-code-fg">
+          <h3 className="text-sm font-semibold text-fg">{t("history.sql")}</h3>
+          <pre data-surface="code" className="max-h-[32rem] overflow-auto rounded-md border border-border bg-surface p-4 font-mono text-sm leading-6 text-fg">
             <code>{item.executable_sql || item.generated_sql || "—"}</code>
           </pre>
         </section>
@@ -603,8 +568,8 @@ function HistoryTimingMetric({ label, value }: { label: string; value?: number |
   if (value === null || value === undefined) return null;
   return (
     <div className="min-w-0">
-      <p className="text-xs font-medium text-muted">{label}</p>
-      <p className="mt-1 font-sans text-sm font-semibold tabular-nums text-foreground">
+      <p className="text-xs font-medium text-fg-muted">{label}</p>
+      <p className="mt-1 font-sans text-sm font-semibold tabular-nums text-fg">
         {formatElapsed(value)}
       </p>
     </div>
@@ -626,9 +591,9 @@ function HistoryTimingBreakdown({ item }: { item: HistoryItem }) {
   if (!hasBreakdown) return null;
 
   return (
-    <div className="min-w-0 rounded-md border border-border bg-card p-3" data-testid="history-timing-breakdown">
-      <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
-        <Clock3 size={16} className="text-primary" aria-hidden="true" />
+    <div className="min-w-0 rounded-md border border-border bg-surface p-3" data-testid="history-timing-breakdown">
+      <div className="flex items-center gap-2 text-sm font-semibold text-fg">
+        <Clock3 size={16} className="text-accent-fg" aria-hidden="true" />
         <span>{t("history.timing.title")}</span>
       </div>
       <div className="mt-3 grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(min(100%,7rem),1fr))]">
@@ -642,20 +607,20 @@ function HistoryTimingBreakdown({ item }: { item: HistoryItem }) {
           {engineTimings.map((timing, index) => (
             <li
               key={`${timing.engine}-${index}`}
-              className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-border bg-background px-2.5 py-2"
+              className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-border bg-surface-sunken px-2.5 py-2"
             >
-              <span className="min-w-0 break-words text-xs font-semibold text-foreground [overflow-wrap:anywhere]">
+              <span className="min-w-0 break-words text-xs font-semibold text-fg [overflow-wrap:anywhere]">
                 {engineTimingLabel(timing.engine)}
               </span>
               <StatusBadge
                 variant={engineTimingStatusVariant(timing.status)}
                 label={engineTimingStatusLabel(timing.status)}
               />
-              <span className="font-sans text-xs tabular-nums text-muted">
+              <span className="font-sans text-xs tabular-nums text-fg-muted">
                 {formatElapsed(timing.elapsed_ms)}
               </span>
               {timing.error ? (
-                <span className="min-w-0 break-words text-xs text-muted [overflow-wrap:anywhere]">
+                <span className="min-w-0 break-words text-xs text-fg-muted [overflow-wrap:anywhere]">
                   {timing.error}
                 </span>
               ) : null}
@@ -669,11 +634,11 @@ function HistoryTimingBreakdown({ item }: { item: HistoryItem }) {
 
 function HistoryFact({ icon: Icon, label, value }: { icon: typeof Database; label: string; value: string }) {
   return (
-    <div className="flex min-w-0 items-start gap-2 rounded-md border border-border bg-card p-3">
-      <Icon size={16} className="mt-0.5 shrink-0 text-muted" aria-hidden="true" />
+    <div className="flex min-w-0 items-start gap-2 rounded-md border border-border bg-surface p-3">
+      <Icon size={16} className="mt-0.5 shrink-0 text-fg-muted" aria-hidden="true" />
       <div className="min-w-0">
-        <p className="text-xs font-medium text-muted">{label}</p>
-        <p className="mt-1 break-words text-sm font-semibold tabular-nums text-foreground [overflow-wrap:anywhere]" title={value}>{value}</p>
+        <p className="text-xs font-medium text-fg-muted">{label}</p>
+        <p className="mt-1 break-words text-sm font-semibold tabular-nums text-fg [overflow-wrap:anywhere]" title={value}>{value}</p>
       </div>
     </div>
   );
@@ -681,10 +646,10 @@ function HistoryFact({ icon: Icon, label, value }: { icon: typeof Database; labe
 
 function HistoryDetailSection({ title, value, mono = false, testId }: { title: string; value: string; mono?: boolean; testId?: string }) {
   return (
-    <div className="min-w-0 rounded-md border border-border bg-card p-3" data-testid={testId}>
-      <p className="text-xs font-medium text-muted">{title}</p>
+    <div className="min-w-0 rounded-md border border-border bg-surface p-3" data-testid={testId}>
+      <p className="text-xs font-medium text-fg-muted">{title}</p>
       {mono ? (
-        <p className="mt-1 break-words font-mono text-xs leading-6 text-foreground [overflow-wrap:anywhere]">{value}</p>
+        <p className="mt-1 break-words font-mono text-xs leading-6 text-fg [overflow-wrap:anywhere]">{value}</p>
       ) : (
         <QuestionText value={value} variant="detail" maxLines={3} expandable className="mt-1" />
       )}
@@ -829,13 +794,12 @@ export function HistoryPage() {
           },
         ]}
       />
-      <main className="grid gap-3 p-3 sm:p-4 lg:p-6">
+      <PageBody className="grid gap-3 p-3">
         <HistorySafetyHelp />
         <PageNotice
           notice={message ? { tone: "danger", message: `${message} ${t("history.error.retryHint")}` } : null}
           action={
-            <Button type="button" variant="secondary" size="sm" loading={loading} onClick={() => void load()}>
-              <RefreshCw size={15} aria-hidden="true" />
+            <Button type="button" variant="secondary" size="sm" loading={loading} onClick={() => void load()} icon={RefreshCw}>
               <span>{t("history.action.refresh")}</span>
             </Button>
           }
@@ -854,7 +818,7 @@ export function HistoryPage() {
             <HistoryDetailSkeleton />
           </DbObjectManagementPanelShell>
         ) : items.length === 0 && !hasActiveFilters ? (
-          <section className="rounded-md border border-border bg-card p-4 shadow-sm" aria-label={t("history.workspace.label")}>
+          <section className="rounded-md border border-border bg-surface p-4 shadow-sm" aria-label={t("history.workspace.label")}>
             <EmptyState title={t("history.empty.title")} hint={t("history.empty.hint")} />
           </section>
         ) : (
@@ -872,7 +836,7 @@ export function HistoryPage() {
                   label={t("common.processing.refreshing")}
                   operationKey="history-refresh"
                   placement="workspace"
-                  className="rounded-md border border-border bg-background px-3 py-2"
+                  className="rounded-md border border-border bg-surface-sunken px-3 py-2"
                   testId="history-workspace-processing"
                   activityIcon="none"
                 />
@@ -909,7 +873,7 @@ export function HistoryPage() {
             />
           </DbObjectManagementPanelShell>
         )}
-      </main>
+      </PageBody>
     </>
   );
 }

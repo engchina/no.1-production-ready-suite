@@ -46,7 +46,7 @@ export function Nl2SqlResultTable({
           <QueryResultSummary results={results} rowLimit={rowLimit} />
         </div>
         {results.rows.length === 0 ? (
-          <p className="rounded-md border border-dashed border-border p-6 text-sm text-muted">
+          <p className="rounded-md border border-dashed border-border p-6 text-sm text-fg-muted">
             {t("nl2sql.results.empty")}
           </p>
         ) : (

@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CheckCircle2, Sparkles, X } from "lucide-react";
 
-import { Banner } from "@engchina/production-ready-ui";
+import {
+  Banner,
+  Button,
+  StatusBadge,
+  FieldError,
+} from "@engchina/production-ready-ui";
 
 import { ProcessingIndicator } from "@/components/ProcessingState";
-import { Button } from "@/components/ui/button";
-import { FieldError } from "@/components/ui/field-error";
-import { StatusBadge } from "@/components/ui/status-badge";
 import { isAbortError } from "@/lib/api";
 import { t } from "@/lib/i18n";
 
@@ -307,9 +309,7 @@ export function GuidedClarificationPanel({
 
       loading={busyAction === "cancel"}
       disabled={busyAction === "answer"}
-      onClick={() => void closePanel()}
-    >
-      <X size={16} aria-hidden="true" />
+      onClick={() => void closePanel()} icon={X}>
       {t("nl2sql.clarification.close")}
     </Button>
   );
@@ -324,24 +324,24 @@ export function GuidedClarificationPanel({
   return (
     <section
       aria-labelledby="nl2sql-guided-clarification-title"
-      className="grid gap-4 rounded-md border border-primary/30 bg-card p-4"
+      className="grid gap-4 rounded-md border border-accent-emphasis bg-surface p-4"
       data-testid="nl2sql-guided-clarification"
     >
       <div className="flex flex-wrap items-start gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <Sparkles size={18} className="text-primary" aria-hidden="true" />
-            <h3 id="nl2sql-guided-clarification-title" className="text-base font-semibold text-foreground">
+            <Sparkles size={20} className="text-accent-fg" aria-hidden="true" />
+            <h3 id="nl2sql-guided-clarification-title" className="text-base font-semibold text-fg">
               {t("nl2sql.clarification.title")}
             </h3>
             {clarification ? (
               <StatusBadge
-                variant={clarification.can_generate_sql ? "success" : "pending"}
+                variant={clarification.can_generate_sql ? "success" : "warning"}
                 label={completenessLabel}
               />
             ) : null}
           </div>
-          <p className="mt-1 text-sm leading-6 text-muted">
+          <p className="mt-1 text-sm leading-6 text-fg-muted">
             {clarification?.message_ja || t("nl2sql.clarification.description")}
           </p>
         </div>
@@ -355,7 +355,7 @@ export function GuidedClarificationPanel({
 
       {busyAction === "start" ? (
         <div
-          className="rounded-md border border-border bg-background p-4"
+          className="rounded-md border border-border bg-surface-sunken p-4"
           data-start-phase={startPhase}
         >
           <ProcessingIndicator
@@ -375,33 +375,33 @@ export function GuidedClarificationPanel({
       ) : null}
 
       {recommendation && !session ? (
-        <fieldset className="grid gap-3 rounded-md border border-border bg-background p-4">
-          <legend className="px-1 text-sm font-semibold text-foreground">
+        <fieldset className="grid gap-3 rounded-md border border-border bg-surface-sunken p-4">
+          <legend className="px-1 text-sm font-semibold text-fg">
             {t("nl2sql.clarification.profileQuestion")}
           </legend>
-          <p className="text-xs leading-5 text-muted">
+          <p className="text-xs leading-5 text-fg-muted">
             {t("nl2sql.clarification.profileReason")}
           </p>
           <div className="grid gap-2">
             {recommendation.candidates.slice(0, 3).map((candidate, index) => (
               <label
                 key={`${candidate.profile_id}:${candidate.ontology_revision_id}`}
-                className="flex min-h-11 cursor-pointer items-start gap-3 rounded-md border border-control-border bg-card px-3 py-2 text-sm has-[:checked]:border-primary has-[:checked]:bg-primary/5"
+                className="flex min-h-11 cursor-pointer items-start gap-3 rounded-md border border-border-control bg-surface px-3 py-2 text-sm has-[:checked]:border-accent-emphasis has-[:checked]:bg-accent-subtle"
               >
                 <input
                   type="radio"
                   name="guided-profile"
                   checked={selectedProfileId === candidate.profile_id}
                   onChange={() => setSelectedProfileId(candidate.profile_id)}
-                  className="mt-1 h-4 w-4 accent-primary"
+                  className="mt-1 h-4 w-4 accent-accent-emphasis"
                 />
                 <span className="min-w-0">
-                  <span className="flex flex-wrap items-center gap-2 font-medium text-foreground">
+                  <span className="flex flex-wrap items-center gap-2 font-medium text-fg">
                     {candidate.profile_name}
                     {index === 0 ? <StatusBadge variant="info" label={t("nl2sql.clarification.recommended")} /> : null}
                   </span>
                   {candidate.reasons_ja.length ? (
-                    <span className="mt-0.5 block text-xs leading-5 text-muted">
+                    <span className="mt-0.5 block text-xs leading-5 text-fg-muted">
                       {candidate.reasons_ja.join(" ")}
                     </span>
                   ) : null}
@@ -430,10 +430,10 @@ export function GuidedClarificationPanel({
       ) : null}
 
       {currentQuestion && !clarification?.manual_completion_required ? (
-        <fieldset className="grid gap-3 rounded-md border border-border bg-background p-4">
+        <fieldset className="grid gap-3 rounded-md border border-border bg-surface-sunken p-4">
           <legend className="sr-only">{currentQuestion.prompt_ja}</legend>
           <div>
-            <p className="text-xs font-medium text-muted">
+            <p className="text-xs font-medium text-fg-muted">
               {t("nl2sql.clarification.step", {
                 step: (clarification?.turn_count ?? 0) + 1,
               })}
@@ -441,12 +441,12 @@ export function GuidedClarificationPanel({
             <h4
               ref={questionHeadingRef}
               tabIndex={-1}
-              className="mt-1 text-sm font-semibold leading-6 text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+              className="mt-1 text-sm font-semibold leading-6 text-fg outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
             >
               {currentQuestion.prompt_ja}
             </h4>
             {currentQuestion.reason_ja ? (
-              <p className="mt-1 text-xs leading-5 text-muted">{currentQuestion.reason_ja}</p>
+              <p className="mt-1 text-xs leading-5 text-fg-muted">{currentQuestion.reason_ja}</p>
             ) : null}
           </div>
 
@@ -457,7 +457,7 @@ export function GuidedClarificationPanel({
                 return (
                   <div
                     key={option.id}
-                    className="rounded-md border border-control-border bg-card text-sm text-foreground has-[:checked]:border-primary has-[:checked]:bg-primary/5"
+                    className="rounded-md border border-border-control bg-surface text-sm text-fg has-[:checked]:border-accent-emphasis has-[:checked]:bg-accent-subtle"
                   >
                     <label className="flex min-h-11 cursor-pointer items-start gap-3 px-3 py-2">
                       <input
@@ -467,12 +467,12 @@ export function GuidedClarificationPanel({
                         checked={checked}
                         disabled={Boolean(busyAction)}
                         onChange={() => selectOption(option.id)}
-                        className="mt-1 h-4 w-4 accent-primary"
+                        className="mt-1 h-4 w-4 accent-accent-emphasis"
                       />
                       <span className="min-w-0">
                         <span className="block font-medium">{option.label_ja}</span>
                         {option.description_ja ? (
-                          <span className="mt-0.5 block text-xs leading-5 text-muted">
+                          <span className="mt-0.5 block text-xs leading-5 text-fg-muted">
                             {option.description_ja}
                           </span>
                         ) : null}
@@ -485,7 +485,7 @@ export function GuidedClarificationPanel({
           ) : null}
 
           {currentQuestion.allow_free_text ? (
-            <label className="grid gap-1 text-sm font-medium text-foreground">
+            <label className="grid gap-1 text-sm font-medium text-fg">
               <span>{t("nl2sql.clarification.other")}</span>
               <textarea
                 value={freeText}
@@ -495,7 +495,7 @@ export function GuidedClarificationPanel({
                 }}
                 disabled={Boolean(busyAction)}
                 rows={2}
-                className="min-h-20 rounded-md border border-control-border bg-card px-3 py-2 text-base leading-6 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40 sm:text-sm"
+                className="min-h-20 rounded-md border border-border-control bg-surface px-3 py-2 text-sm leading-6 outline-none focus:border-focus-ring focus:ring-2 focus:ring-focus-ring sm:text-sm"
                 placeholder={t("nl2sql.clarification.otherPlaceholder")}
               />
             </label>
@@ -526,29 +526,29 @@ export function GuidedClarificationPanel({
       {clarification?.manual_completion_required ? (
         <section
           aria-labelledby="nl2sql-manual-completion-title"
-          className="grid gap-4 rounded-md border border-warning/40 bg-warning/5 p-4"
+          className="grid gap-4 rounded-md border border-warning-border bg-warning-subtle p-4"
         >
           <div>
-            <h4 id="nl2sql-manual-completion-title" className="text-sm font-semibold text-foreground">
+            <h4 id="nl2sql-manual-completion-title" className="text-sm font-semibold text-fg">
               {t("nl2sql.clarification.remainingRequired")}
             </h4>
-            <p className="mt-1 text-sm leading-6 text-muted">
+            <p className="mt-1 text-sm leading-6 text-fg-muted">
               {t("nl2sql.clarification.manualCompletion")}
             </p>
           </div>
           {manualQuestions.map((question) => {
             const value = manualAnswers[question.id] ?? { optionIds: [], freeText: "" };
             return (
-              <fieldset key={question.id} className="grid gap-2 rounded-md border border-border bg-card p-3">
-                <legend className="px-1 text-sm font-medium leading-6 text-foreground">
+              <fieldset key={question.id} className="grid gap-2 rounded-md border border-border bg-surface p-3">
+                <legend className="px-1 text-sm font-medium leading-6 text-fg">
                   {question.prompt_ja}
                 </legend>
                 {question.reason_ja ? (
-                  <p className="text-xs leading-5 text-muted">{question.reason_ja}</p>
+                  <p className="text-xs leading-5 text-fg-muted">{question.reason_ja}</p>
                 ) : null}
                 {question.options.map((option) => (
-                  <div key={option.id} className="rounded-md border border-control-border bg-background has-[:checked]:border-primary has-[:checked]:bg-primary/5">
-                    <label className="flex min-h-11 cursor-pointer items-start gap-3 px-3 py-2 text-sm text-foreground">
+                  <div key={option.id} className="rounded-md border border-border-control bg-surface-sunken has-[:checked]:border-accent-emphasis has-[:checked]:bg-accent-subtle">
+                    <label className="flex min-h-11 cursor-pointer items-start gap-3 px-3 py-2 text-sm text-fg">
                       <input
                         type={question.answer_kind === "multi_select" ? "checkbox" : "radio"}
                         name={`manual-${question.id}`}
@@ -562,12 +562,12 @@ export function GuidedClarificationPanel({
                             : [option.id];
                           updateManualAnswer(question, { optionIds });
                         }}
-                        className="mt-1 h-4 w-4 accent-primary"
+                        className="mt-1 h-4 w-4 accent-accent-emphasis"
                       />
                       <span className="min-w-0">
                         <span className="block font-medium">{option.label_ja}</span>
                         {option.description_ja ? (
-                          <span className="mt-0.5 block text-xs leading-5 text-muted">
+                          <span className="mt-0.5 block text-xs leading-5 text-fg-muted">
                             {option.description_ja}
                           </span>
                         ) : null}
@@ -576,14 +576,14 @@ export function GuidedClarificationPanel({
                   </div>
                 ))}
                 {question.allow_free_text ? (
-                  <label className="grid gap-1 text-sm text-foreground">
+                  <label className="grid gap-1 text-sm text-fg">
                     <span>{t("nl2sql.clarification.other")}</span>
                     <textarea
                       rows={2}
                       value={value.freeText}
                       disabled={Boolean(busyAction)}
                       onChange={(event) => updateManualAnswer(question, { freeText: event.currentTarget.value })}
-                      className="min-h-20 rounded-md border border-control-border bg-background px-3 py-2 text-base leading-6 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40 sm:text-sm"
+                      className="min-h-20 rounded-md border border-border-control bg-surface-sunken px-3 py-2 text-sm leading-6 outline-none focus:border-focus-ring focus:ring-2 focus:ring-focus-ring sm:text-sm"
                     />
                   </label>
                 ) : null}
@@ -610,22 +610,22 @@ export function GuidedClarificationPanel({
       {clarification && confirmedIntentSummary.length > 0 ? (
         <section aria-labelledby="nl2sql-intent-summary-title" className="grid gap-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <h4 id="nl2sql-intent-summary-title" className="text-sm font-semibold text-foreground">
+            <h4 id="nl2sql-intent-summary-title" className="text-sm font-semibold text-fg">
               {t("nl2sql.clarification.summary")}
             </h4>
-            <span className="text-xs text-muted">{completenessLabel}</span>
+            <span className="text-xs text-fg-muted">{completenessLabel}</span>
           </div>
           <dl className="grid gap-2 sm:grid-cols-2">
             {confirmedIntentSummary.map((item) => (
-              <div key={item.key} className="rounded-md border border-border bg-background p-3">
-                <dt className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted">
+              <div key={item.key} className="rounded-md border border-border bg-surface-sunken p-3">
+                <dt className="flex flex-wrap items-center justify-between gap-2 text-xs text-fg-muted">
                   <span>{item.label_ja}</span>
                   <StatusBadge
                     variant="success"
                     label={t("nl2sql.clarification.confirmed")}
                   />
                 </dt>
-                <dd className="mt-1 text-sm font-medium leading-6 text-foreground">{item.value_ja}</dd>
+                <dd className="mt-1 text-sm font-medium leading-6 text-fg">{item.value_ja}</dd>
               </div>
             ))}
           </dl>
@@ -633,9 +633,9 @@ export function GuidedClarificationPanel({
       ) : null}
 
       {clarification && clarification.assumptions.length > 0 ? (
-        <div className="rounded-md border border-border bg-background p-3 text-sm">
-          <p className="font-medium text-foreground">{t("nl2sql.clarification.assumptions")}</p>
-          <ul className="mt-1 list-disc space-y-1 pl-5 text-muted">
+        <div className="rounded-md border border-border bg-surface-sunken p-3 text-sm">
+          <p className="font-medium text-fg">{t("nl2sql.clarification.assumptions")}</p>
+          <ul className="mt-1 list-disc space-y-1 pl-5 text-fg-muted">
             {clarification.assumptions.map((item) => <li key={item}>{item}</li>)}
           </ul>
         </div>
@@ -643,7 +643,7 @@ export function GuidedClarificationPanel({
 
       {clarification?.can_generate_sql ? (
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
-          <span className="flex items-center gap-2 text-sm text-success">
+          <span className="flex items-center gap-2 text-sm text-success-fg">
             <CheckCircle2 size={16} aria-hidden="true" />
             {t("nl2sql.clarification.ready")}
           </span>
@@ -654,9 +654,7 @@ export function GuidedClarificationPanel({
               size="lg"
 
               disabled={Boolean(busyAction)}
-              onClick={applyQuestion}
-            >
-              <Sparkles size={16} aria-hidden="true" />
+              onClick={applyQuestion} icon={Sparkles}>
               {t("nl2sql.clarification.apply")}
             </Button>
             {renderCloseButton("lg")}

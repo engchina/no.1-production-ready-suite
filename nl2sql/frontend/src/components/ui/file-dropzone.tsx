@@ -15,9 +15,11 @@ import { t } from "@/lib/i18n";
 import { validateFileDropzoneSelection, type FileDropzoneRejectReason } from "@/lib/file-dropzone";
 import { cn } from "@/lib/utils";
 import { ClearActionButton } from "./clear-action-button";
-import { FieldError } from "./field-error";
+import {
+  FieldError,
+  Spinner,
+} from "@engchina/production-ready-ui";
 import { FieldLabel } from "./required-field";
-import { StableLoadingIcon } from "./stable-loading-icon";
 
 export type FileDropzoneIcon = "file" | "spreadsheet" | "upload";
 
@@ -177,7 +179,7 @@ export function FileDropzone({
 
   return (
     <div
-      className={cn("grid min-w-0 gap-1 text-sm font-medium text-foreground", className)}
+      className={cn("grid min-w-0 gap-1 text-sm font-medium text-fg", className)}
       data-testid={dataTestId}
     >
       <FieldLabel htmlFor={inputId} label={label} required={required} />
@@ -192,38 +194,38 @@ export function FileDropzone({
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
           className={cn(
-            "group flex h-[44px] min-w-0 touch-manipulation items-center gap-2 rounded-md border border-dashed bg-background px-3 py-1 text-left",
+            "group flex h-[44px] min-w-0 touch-manipulation items-center gap-2 rounded-md border border-dashed bg-surface-sunken px-3 py-1 text-left",
             "transition-[border-color,background-color,box-shadow] duration-200 ease-out motion-reduce:transition-none",
-            "focus-within:ring-2 focus-within:ring-ring/40",
+            "focus-within:ring-2 focus-within:ring-focus-ring",
             interactionDisabled
               ? "cursor-not-allowed border-border opacity-60"
               : isDragActive
-                ? "cursor-copy border-primary bg-primary/10 ring-2 ring-ring/40"
+                ? "cursor-copy border-accent-emphasis bg-accent-subtle ring-2 ring-focus-ring"
                 : visibleError
-                  ? "cursor-pointer border-danger/60 bg-danger-bg/30 hover:border-danger"
+                  ? "cursor-pointer border-danger-border bg-danger-subtle hover:border-danger-fg"
                   : hasSelection
-                    ? "cursor-pointer border-primary/40 bg-primary/5 hover:border-primary hover:bg-primary/10"
-                    : "cursor-pointer border-border hover:border-primary/60 hover:bg-primary/5"
+                    ? "cursor-pointer border-accent-emphasis bg-accent-subtle hover:border-accent-emphasis hover:bg-accent-subtle"
+                    : "cursor-pointer border-border hover:border-accent-emphasis hover:bg-accent-subtle"
           )}
         >
           <span
             className={cn(
               "inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md",
               hasSelection || isDragActive
-                ? "bg-primary/10 text-primary"
-                : "bg-muted/30 text-muted group-hover:bg-primary/10 group-hover:text-primary"
+                ? "bg-accent-subtle text-accent-fg"
+                : "bg-surface-hover text-fg-muted group-hover:bg-accent-subtle group-hover:text-accent-fg"
             )}
             aria-hidden="true"
           >
             {loading ? (
-              <StableLoadingIcon size={16} />
+              <Spinner size={16} />
             ) : (
               <Icon size={16} />
             )}
           </span>
           <span className="min-w-0 flex-1">
             <span
-              className="block truncate text-sm font-semibold text-foreground"
+              className="block truncate text-sm font-semibold text-fg"
               title={displayText}
             >
               {displayText}
@@ -233,8 +235,8 @@ export function FileDropzone({
             className={cn(
               "inline-block max-w-24 shrink-0 truncate rounded-md border px-2 py-1 text-xs font-semibold sm:max-w-56",
               hasSelection
-                ? "border-primary/30 bg-primary/10 text-primary"
-                : "border-border bg-background text-muted"
+                ? "border-accent-emphasis bg-accent-subtle text-accent-fg"
+                : "border-border bg-surface-sunken text-fg-muted"
             )}
             title={hasSelection ? (multiple ? addText : replaceText) : formatLabel}
           >
@@ -276,7 +278,7 @@ export function FileDropzone({
         ) : null}
       </div>
       {hint ? (
-        <p id={hintId} className="text-xs font-normal leading-5 text-muted">
+        <p id={hintId} className="text-xs font-normal leading-5 text-fg-muted">
           {hint}
         </p>
       ) : null}

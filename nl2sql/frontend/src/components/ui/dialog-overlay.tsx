@@ -11,7 +11,7 @@ interface DialogOverlayPortalProps {
 }
 
 const overlayBaseClass =
-  "animate-overlay-in fixed inset-0 z-50 flex items-end justify-center bg-black/60";
+  "animate-overlay-in fixed inset-0 z-[var(--z-dialog)] flex items-end justify-center bg-[var(--scrim)]";
 const overlayDefaultLayoutClass = "p-3 sm:items-center sm:p-4";
 
 /**

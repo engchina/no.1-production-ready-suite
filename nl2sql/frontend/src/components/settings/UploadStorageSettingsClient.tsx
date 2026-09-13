@@ -8,17 +8,24 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
-import { toast } from "@engchina/production-ready-ui";
+import {
+  toast,
+  Button,
+  TextField,
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+  FormStatus,
+  Skeleton,
+  PageBody,
+} from "@engchina/production-ready-ui";
 
 import { ErrorState } from "@/components/StateViews";
 import { TimedLoadingState } from "@/components/ProcessingState";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { FieldError } from "@/components/ui/field-error";
-import { FormStatus } from "@/components/ui/form-status";
-import { FieldLabel, RequiredFieldsNote } from "@/components/ui/required-field";
+import { RequiredFieldsNote } from "@/components/ui/required-field";
 import { SelectField, type SelectFieldOption } from "@/components/ui/select-field";
-import { Skeleton } from "@/components/ui/skeleton";
 import {
   ApiError,
   type UploadStorageBackend,
@@ -120,7 +127,7 @@ export function UploadStorageSettingsClient() {
 
   if (query.isPending) {
     return (
-      <div className="p-8">
+      <PageBody>
         <TimedLoadingState
           label={t("settings.uploadStorage.loading")}
           operationKey="settings-upload-storage-load"
@@ -130,13 +137,13 @@ export function UploadStorageSettingsClient() {
           <Skeleton className="h-64 w-full rounded-lg" />
           <Skeleton className="h-72 w-full rounded-lg" />
         </TimedLoadingState>
-      </div>
+      </PageBody>
     );
   }
 
   if (query.isError) {
     return (
-      <div className="p-8">
+      <PageBody>
         <ErrorState
           message={
             query.error instanceof ApiError
@@ -145,7 +152,7 @@ export function UploadStorageSettingsClient() {
           }
           onRetry={() => void query.refetch()}
         />
-      </div>
+      </PageBody>
     );
   }
 
@@ -159,7 +166,7 @@ export function UploadStorageSettingsClient() {
     (!form.objectStorageRegion.trim() || !form.objectStorageNamespace.trim());
 
   return (
-    <div className="space-y-5 p-8">
+    <PageBody>
       <form
         className="space-y-5"
         onSubmit={(event) => {
@@ -171,7 +178,7 @@ export function UploadStorageSettingsClient() {
         <Card>
           <CardHeader>
             <div className="flex items-start gap-3">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-bg text-info">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-subtle text-info-fg">
                 {form.backend === "oci" ? (
                   <Cloud size={20} aria-hidden />
                 ) : (
@@ -189,7 +196,7 @@ export function UploadStorageSettingsClient() {
           <CardContent className="space-y-5">
             <RequiredFieldsNote />
             <fieldset className="space-y-3">
-              <legend className="text-sm font-medium text-foreground">
+              <legend className="text-sm font-medium text-fg">
                 {t("settings.uploadStorage.field.backend")}
               </legend>
               <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
@@ -219,11 +226,11 @@ export function UploadStorageSettingsClient() {
                 id="upload-storage-local-dir"
                 label={t("settings.uploadStorage.field.localStorageDir")}
                 value={form.localStorageDir}
-                onChange={(value) => updateForm({ localStorageDir: value })}
+                onValueChange={(value) => updateForm({ localStorageDir: value })}
                 helper={t("settings.uploadStorage.helper.localStorageDir")}
                 placeholder={DEFAULT_LOCAL_STORAGE_DIR}
                 error={errors.localStorageDir}
-                required
+                required requiredLabel={t("common.required")}
               />
             ) : (
               <div className="space-y-4">
@@ -245,26 +252,26 @@ export function UploadStorageSettingsClient() {
                     id="upload-storage-object-storage-namespace"
                     label={t("settings.uploadStorage.field.objectStorageNamespace")}
                     value={form.objectStorageNamespace}
-                    onChange={() => undefined}
+                    onValueChange={() => undefined}
                     helper={t("settings.uploadStorage.helper.objectStorageNamespace")}
                     placeholder="mytenancynamespace"
                     error={errors.objectStorageNamespace}
                     readOnly
-                    required
+                    required requiredLabel={t("common.required")}
                   />
                 </div>
                 <TextField
                   id="upload-storage-bucket"
                   label={t("settings.uploadStorage.field.objectStorageBucket")}
                   value={form.objectStorageBucket}
-                  onChange={(value) => updateForm({ objectStorageBucket: value })}
+                  onValueChange={(value) => updateForm({ objectStorageBucket: value })}
                   helper={t("settings.uploadStorage.helper.objectStorageBucket")}
                   placeholder={DEFAULT_OBJECT_STORAGE_BUCKET}
                   error={errors.objectStorageBucket}
-                  required
+                  required requiredLabel={t("common.required")}
                 />
                 {ociSettingsMissing ? (
-                  <div className="flex flex-wrap items-center gap-3 rounded-md border border-warning/30 bg-warning-bg p-3">
+                  <div className="flex flex-wrap items-center gap-3 rounded-md border border-warning-border bg-warning-subtle p-3">
                     <FormStatus
                       tone="warning"
                       message={t("settings.uploadStorage.status.ociSettingsIncomplete")}
@@ -274,9 +281,7 @@ export function UploadStorageSettingsClient() {
                       variant="secondary"
                       size="lg"
 
-                      onClick={async () => { if (await confirmLeave()) navigate(APP_ROUTES.settingsOci); }}
-                    >
-                      <Settings2 size={15} aria-hidden />
+                      onClick={async () => { if (await confirmLeave()) navigate(APP_ROUTES.settingsOci); }} icon={Settings2}>
                       {t("settings.uploadStorage.actions.openOciSettings")}
                     </Button>
                   </div>
@@ -287,17 +292,14 @@ export function UploadStorageSettingsClient() {
         </Card>
 
         <div className="flex flex-wrap items-center gap-2">
-          <Button type="submit" loading={save.isPending}>
-            <Save size={15} aria-hidden />
-            {save.isPending
-              ? t("settings.uploadStorage.actions.saving")
-              : t("settings.uploadStorage.actions.save")}
+          <Button type="submit" loading={save.isPending} icon={Save}>
+            {t("settings.uploadStorage.actions.save")}
           </Button>
           {save.isError ? <FormStatus tone="danger" message={saveError} /> : null}
         </div>
         </fieldset>
       </form>
-    </div>
+    </PageBody>
   );
 }
 
@@ -322,10 +324,10 @@ function BackendOption({
     <label
       htmlFor={id}
       className={cn(
-        "flex min-h-32 cursor-pointer items-start gap-3 rounded-md border bg-card p-4 text-left transition-colors",
+        "flex min-h-32 cursor-pointer items-start gap-3 rounded-md border bg-surface p-4 text-left transition-colors",
         checked
-          ? "border-primary bg-info-bg/40"
-          : "border-border hover:border-primary/60 hover:bg-background"
+          ? "border-accent-emphasis bg-info-subtle"
+          : "border-border hover:border-accent-emphasis hover:bg-surface-hover"
       )}
     >
       <input
@@ -335,71 +337,16 @@ function BackendOption({
         value={value}
         checked={checked}
         onChange={() => onChange(value)}
-        className="mt-1 h-4 w-4 cursor-pointer accent-[var(--primary)]"
+        className="mt-1 h-4 w-4 cursor-pointer accent-[var(--color-accent-emphasis)]"
       />
-      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-background text-primary">
+      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-surface-sunken text-accent-fg">
         {icon}
       </span>
       <span>
-        <span className="block text-sm font-semibold text-foreground">{title}</span>
-        <span className="mt-1 block text-xs leading-relaxed text-muted">{description}</span>
+        <span className="block text-sm font-semibold text-fg">{title}</span>
+        <span className="mt-1 block text-xs leading-relaxed text-fg-muted">{description}</span>
       </span>
     </label>
-  );
-}
-
-function TextField({
-  id,
-  label,
-  value,
-  onChange,
-  helper,
-  placeholder,
-  error,
-  readOnly = false,
-  required = false,
-}: {
-  id: string;
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  helper: string;
-  placeholder: string;
-  error?: string;
-  readOnly?: boolean;
-  required?: boolean;
-}) {
-  const hintId = `${id}-hint`;
-  const errorId = `${id}-error`;
-
-  return (
-    <div className="space-y-1.5">
-      <FieldLabel htmlFor={id} label={label} required={required} />
-      <input
-        id={id}
-        type="text"
-        value={value}
-        readOnly={readOnly}
-        aria-readonly={readOnly || undefined}
-        required={required}
-        aria-required={required}
-        onChange={(event) => {
-          if (!readOnly) onChange(event.target.value);
-        }}
-        placeholder={placeholder}
-        aria-invalid={Boolean(error)}
-        aria-describedby={error ? `${hintId} ${errorId}` : hintId}
-        className={cn(
-          "h-11 w-full rounded-md border bg-card px-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted/70 focus-visible:border-primary",
-          readOnly && "cursor-default bg-background text-muted",
-          error ? "border-danger" : "border-border"
-        )}
-      />
-      <p id={hintId} className="text-xs leading-relaxed text-muted">
-        {helper}
-      </p>
-      <FieldError id={errorId} message={error} />
-    </div>
   );
 }
 

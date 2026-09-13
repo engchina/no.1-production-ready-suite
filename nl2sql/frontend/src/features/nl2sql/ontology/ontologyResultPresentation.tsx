@@ -9,7 +9,7 @@ export function TechnicalDetails({
   children?: ReactNode;
 }) {
   return (
-    <details className="min-w-0 rounded-md border border-border bg-background p-3">
+    <details className="min-w-0 rounded-md border border-border bg-surface-sunken p-3">
       <summary className="cursor-pointer text-sm font-medium">
         {t("ontologyUi.technicalDetails")}
       </summary>

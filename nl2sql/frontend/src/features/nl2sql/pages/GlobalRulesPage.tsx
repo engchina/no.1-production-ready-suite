@@ -2,15 +2,16 @@ import { Pagination } from "@/components/Pagination";
 import { useEffect, useRef, useState } from "react";
 import { Download, Layers3, RefreshCw } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
 import {
+  Button,
   EmptyState,
   toast,
   usePagination,
+  StatusBadge,
+  PageHeader,
+  PageBody,
 } from "@engchina/production-ready-ui";
 
-import { StatusBadge } from "@/components/ui/status-badge";
-import { PageHeader } from "@/components/PageHeader";
 import { ProcessingIndicator } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";
 import { FileDropzone } from "@/components/ui/file-dropzone";
@@ -142,7 +143,7 @@ export function GlobalRulesPage() {
           },
         ]}
       />
-      <main className="grid gap-4 p-4 lg:p-8">
+      <PageBody className="grid gap-4">
         <PageNotice notice={errorText ? { tone: "danger", message: errorText } : null} />
 
         <DbObjectManagementPanelShell
@@ -157,14 +158,14 @@ export function GlobalRulesPage() {
                 label={t("common.processing.refreshing")}
                 operationKey="global-rules-refresh"
                 placement="workspace"
-                className="rounded-md border border-border bg-background px-3 py-2"
+                className="rounded-md border border-border bg-surface-sunken px-3 py-2"
                 testId="global-rules-workspace-processing"
                 activityIcon="none"
               />
             ) : undefined
           }
         >
-          <section className="grid min-w-0 content-start gap-3 rounded-md border border-border bg-background p-3">
+          <section className="grid min-w-0 content-start gap-3 rounded-md border border-border bg-surface-sunken p-3">
             <DbObjectPanelHeader
               headingId="global-rules-panel-heading"
               title={t("globalRules.title")}
@@ -199,9 +200,7 @@ export function GlobalRulesPage() {
                 touchTarget className="md:self-end"
                 loading={busy}
                 disabled={loading}
-                onClick={() => void exportRules()}
-              >
-                <Download size={15} aria-hidden="true" />
+                onClick={() => void exportRules()} icon={Download}>
                 <span>{t("globalRules.export")}</span>
               </Button>
             </div>
@@ -217,7 +216,7 @@ export function GlobalRulesPage() {
             )}
           </section>
         </DbObjectManagementPanelShell>
-      </main>
+      </PageBody>
     </>
   );
 }
@@ -262,7 +261,7 @@ function RulesPreviewTable({ rules }: { rules: string[] }) {
 
   if (rules.length === 0) {
     return (
-      <div className="rounded-md border border-border bg-card p-4">
+      <div className="rounded-md border border-border bg-surface p-4">
         <EmptyState title={t("globalRules.empty")} hint={t("globalRules.emptyHint")} />
       </div>
     );
@@ -270,14 +269,14 @@ function RulesPreviewTable({ rules }: { rules: string[] }) {
 
   return (
     <div className="grid gap-2" data-testid="global-rules-preview">
-      <div className="overflow-hidden rounded-md border border-border bg-card">
+      <div className="overflow-hidden rounded-md border border-border bg-surface">
         <div className="overflow-x-auto">
           <table className="w-full table-fixed divide-y divide-border text-left text-sm">
             <colgroup>
               <col className="w-12" />
               <col />
             </colgroup>
-            <thead className="bg-background text-xs font-semibold uppercase text-muted">
+            <thead className="bg-surface-sunken text-xs font-semibold uppercase text-fg-muted">
               <tr>
                 <th scope="col" className="px-3 py-2 text-right">
                   {t("glossary.preview.rowNumber")}
@@ -287,13 +286,13 @@ function RulesPreviewTable({ rules }: { rules: string[] }) {
                 </th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-border/70 text-foreground">
+            <tbody className="divide-y divide-border/70 text-fg">
               {visibleRows.map((rule, index) => {
                 const absoluteIndex = start + index;
                 return (
                   <tr key={`${absoluteIndex}-${rule.slice(0, 24)}`}>
                     <td
-                      className="px-3 py-2 text-right text-xs tabular-nums text-muted"
+                      className="px-3 py-2 text-right text-xs tabular-nums text-fg-muted"
                       data-testid="global-rules-row-number"
                     >
                       {absoluteIndex + 1}

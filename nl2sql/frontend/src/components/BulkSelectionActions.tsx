@@ -1,6 +1,6 @@
 import { CheckSquare, X } from "lucide-react";
 
-import { Button, type ButtonProps } from "@/components/ui/button";
+import { Button, type ButtonProps } from "@engchina/production-ready-ui";
 import { cn } from "@/lib/utils";
 
 export interface BulkSelectionActionsProps {
@@ -47,9 +47,7 @@ export function BulkSelectionActions({
         aria-label={selectAriaLabel ?? selectLabel}
         disabled={busy || selectDisabled}
         data-testid={dataTestId ? `${dataTestId}-select` : undefined}
-        onClick={onSelectAll}
-      >
-        <CheckSquare size={14} aria-hidden="true" />
+        onClick={onSelectAll} icon={CheckSquare}>
         <span>{selectLabel}</span>
       </Button>
       <Button
@@ -60,9 +58,7 @@ export function BulkSelectionActions({
         aria-label={clearAriaLabel ?? clearLabel}
         disabled={busy || clearDisabled}
         data-testid={dataTestId ? `${dataTestId}-clear` : undefined}
-        onClick={onClearAll}
-      >
-        <X size={14} aria-hidden="true" />
+        onClick={onClearAll} icon={X}>
         <span>{clearLabel}</span>
       </Button>
     </div>

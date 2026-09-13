@@ -1,4 +1,16 @@
-import { Button } from "@/components/ui/button";
+import {
+  Button,
+  Banner,
+  EmptyState,
+  FormStatus,
+  toast,
+  type DataTableColumn,
+  type DataTableSort,
+  StatusBadge,
+  PageHeader,
+  FieldError,
+  PageBody,
+} from "@engchina/production-ready-ui";
 import {
   useEffect,
   useMemo,
@@ -20,24 +32,13 @@ import {
   UserX,
 } from "lucide-react";
 
-import {
-  Banner,
-  EmptyState,
-  FormStatus,
-  toast,
-  type DataTableColumn,
-  type DataTableSort,
-} from "@engchina/production-ready-ui";
 
 import { FormActionBar, entityActionToFormAction } from "@/components/FormActionBar";
 import { MasterDetailDataTable } from "@/components/MasterDetailDataTable";
-import { PageHeader } from "@/components/PageHeader";
 import { ObjectActionBar, type EntityAction } from "@/components/ObjectActions";
 import { ProcessingIndicator } from "@/components/ProcessingState";
 import { ErrorState } from "@/components/StateViews";
 import { useConfirm } from "@/components/ui/confirm-dialog";
-import { StatusBadge } from "@/components/ui/status-badge";
-import { FieldError } from "@/components/ui/field-error";
 import { FieldLabel, FieldLegend, RequiredFieldsNote } from "@/components/ui/required-field";
 import { ApiError, isAbortError } from "@/lib/api";
 import {
@@ -101,7 +102,7 @@ const EMPTY_DRAFT: UserDraftState = {
 };
 
 const INPUT_CLASS =
-  "h-11 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-ring/30 read-only:cursor-default read-only:bg-muted/20 read-only:text-muted disabled:bg-muted/20 disabled:text-muted";
+  "h-11 w-full rounded-md border border-border bg-surface px-3 text-sm outline-none focus:border-focus-ring focus:ring-2 focus:ring-focus-ring read-only:cursor-default read-only:bg-surface-hover read-only:text-fg-muted disabled:bg-surface-hover disabled:text-fg-disabled";
 const SYSTEM_ADMIN_ROLE_CODE = "SYSTEM_ADMIN";
 
 function compareText(left: string, right: string, direction: DataTableSort["direction"]) {
@@ -681,8 +682,8 @@ export function SecurityUsersPage() {
         return (
           <button
             type="button"
-            className={`min-w-0 cursor-pointer text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring ${
-              selected ? "text-primary" : "text-foreground"
+            className={`min-w-0 cursor-pointer text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
+              selected ? "text-accent-fg" : "text-fg"
             }`}
             aria-label={t("security.users.showUser", { name: user.display_name })}
             aria-current={selected ? "true" : undefined}
@@ -694,7 +695,7 @@ export function SecurityUsersPage() {
             }}
           >
             <span className="block break-words font-medium">{user.display_name}</span>
-            <span className="block break-all font-mono text-[11px] text-muted">{user.login_user_id}</span>
+            <span className="block break-all font-mono text-xs text-fg-muted">{user.login_user_id}</span>
           </button>
         );
       },
@@ -749,10 +750,10 @@ export function SecurityUsersPage() {
               ]
             : []
         }
-        actionsAriaLabel={t("security.users.actionsLabel")}
+        actionsLabel={t("security.users.actionsLabel")}
         actionsTestId="security-users-actions"
       />
-      <main className="grid gap-4 p-4 lg:p-8">
+      <PageBody className="grid gap-4">
         {loadError && !initialLoadFailed ? <Banner severity="danger">{loadError}</Banner> : null}
         {activeView === "list" && actionError ? (
           <Banner severity="danger">{actionError}</Banner>
@@ -776,7 +777,7 @@ export function SecurityUsersPage() {
                   description={t("security.users.listHint")}
                   action={<StatusBadge variant="info" label={securityFilteredCount(filteredUsers.length, users.length)} />}
                 />
-                <div className="rounded-md border border-border bg-background p-3">
+                <div className="rounded-md border border-border bg-surface-sunken p-3">
                   <SecuritySearchField
                     label={t("security.common.search")}
                     placeholder={t("security.users.searchPlaceholder")}
@@ -839,8 +840,7 @@ export function SecurityUsersPage() {
         ) : (
           <>
             <div>
-              <Button type="button" variant="ghost" size="sm" disabled={operationBusy} onClick={returnToList}>
-                <ArrowLeft size={15} aria-hidden="true" />
+              <Button type="button" variant="ghost" size="sm" disabled={operationBusy} onClick={returnToList} icon={ArrowLeft}>
                 <span>{t("security.common.backToList")}</span>
               </Button>
             </div>
@@ -871,7 +871,7 @@ export function SecurityUsersPage() {
                       required
                       maxLength={64}
                       disabled={activeView === "edit" || operationBusy}
-                      className={cn(INPUT_CLASS, fieldErrors.loginUserId && "border-danger")}
+                      className={cn(INPUT_CLASS, fieldErrors.loginUserId && "border-danger-fg")}
                       aria-invalid={fieldErrors.loginUserId ? "true" : undefined}
                       aria-describedby={fieldErrors.loginUserId ? "security-user-login-user-id-error" : undefined}
                       autoComplete="off"
@@ -887,7 +887,7 @@ export function SecurityUsersPage() {
                       id="security-user-display-name"
                       required
                       disabled={inputReadOnly}
-                      className={cn(INPUT_CLASS, fieldErrors.displayName && "border-danger")}
+                      className={cn(INPUT_CLASS, fieldErrors.displayName && "border-danger-fg")}
                       aria-invalid={fieldErrors.displayName ? "true" : undefined}
                       aria-describedby={fieldErrors.displayName ? "security-user-display-name-error" : undefined}
                       value={draft.displayName}
@@ -918,7 +918,7 @@ export function SecurityUsersPage() {
                           type={activeView === "create" ? "password" : "text"}
                           readOnly={activeView === "edit"}
                           disabled={inputReadOnly}
-                          className={cn(INPUT_CLASS, fieldErrors.temporaryPassword && "border-danger")}
+                          className={cn(INPUT_CLASS, fieldErrors.temporaryPassword && "border-danger-fg")}
                           aria-invalid={fieldErrors.temporaryPassword ? "true" : undefined}
                           aria-describedby={
                             fieldErrors.temporaryPassword
@@ -946,9 +946,7 @@ export function SecurityUsersPage() {
                             className="w-full sm:w-auto"
                             disabled={userFormReadOnly || !draft.temporaryPassword}
                             onClick={() => void copyTemporaryPassword()}
-                            data-testid="security-user-temporary-password-copy"
-                          >
-                            <Copy size={15} aria-hidden="true" />
+                            data-testid="security-user-temporary-password-copy" icon={Copy}>
                             <span>{t("security.users.oneTimePassword.copy")}</span>
                           </Button>
                         ) : null}
@@ -977,7 +975,7 @@ export function SecurityUsersPage() {
                     <fieldset className="grid gap-2" disabled={inputReadOnly}>
                   <FieldLegend id="security-users-role-legend" required>{t("security.users.roles")}</FieldLegend>
                   {roles.length === 0 ? (
-                    <p className="text-sm text-muted">{t("security.users.noRole")}</p>
+                    <p className="text-sm text-fg-muted">{t("security.users.noRole")}</p>
                   ) : (
                     <div
                       ref={roleGroupRef}
@@ -998,14 +996,14 @@ export function SecurityUsersPage() {
                             className={cn(
                               "flex min-h-11 items-start gap-2 rounded-md border p-2.5 text-sm transition-colors",
                               disabled
-                                ? "cursor-not-allowed bg-muted/20 text-muted"
+                                ? "cursor-not-allowed bg-surface-hover text-fg-muted"
                                 : selected
-                                  ? "cursor-pointer border-primary bg-info-bg/40"
-                                  : "cursor-pointer border-border hover:bg-background"
+                                  ? "cursor-pointer border-accent-emphasis bg-info-subtle"
+                                  : "cursor-pointer border-border hover:bg-surface-hover"
                             )}
                           >
                             <input
-                              className="mt-0.5 h-4 w-4 accent-primary disabled:cursor-not-allowed"
+                              className="mt-0.5 h-4 w-4 accent-accent-emphasis disabled:cursor-not-allowed"
                               type="radio"
                               name="security-users-role"
                               value={role.role_id}
@@ -1015,8 +1013,8 @@ export function SecurityUsersPage() {
                             />
                             <span className="min-w-0">
                               <span className="block break-words font-medium">{role.display_name}</span>
-                              <span className="block break-all font-mono text-[11px] text-muted">{role.role_code}</span>
-                              {hint ? <span className="mt-1 block text-xs leading-5 text-muted">{hint}</span> : null}
+                              <span className="block break-all font-mono text-xs text-fg-muted">{role.role_code}</span>
+                              {hint ? <span className="mt-1 block text-xs leading-5 text-fg-muted">{hint}</span> : null}
                             </span>
                           </label>
                         );
@@ -1075,7 +1073,7 @@ export function SecurityUsersPage() {
             </SecurityManagementPanelShell>
           </>
         )}
-      </main>
+      </PageBody>
     </>
   );
 }
@@ -1117,17 +1115,17 @@ function UserDetailPanel({
   const hasArchivedRole = assignedRoles.some((role) => role.archived);
 
   return (
-    <section className="grid min-w-0 content-start gap-4 rounded-md border border-border bg-background p-4" aria-labelledby="security-users-detail-heading">
+    <section className="grid min-w-0 content-start gap-4 rounded-md border border-border bg-surface-sunken p-4" aria-labelledby="security-users-detail-heading">
       <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <h2 id="security-users-detail-heading" className="flex min-w-0 items-center gap-2 text-base font-semibold text-foreground">
-              <UserRound size={18} aria-hidden="true" />
+            <h2 id="security-users-detail-heading" className="flex min-w-0 items-center gap-2 text-base font-semibold text-fg">
+              <UserRound size={20} aria-hidden="true" />
               <span className="min-w-0 break-words">{user.display_name}</span>
             </h2>
             <UserStatusBadges user={user} />
           </div>
-          <p className="mt-1 break-all font-mono text-xs text-muted">{user.login_user_id}</p>
+          <p className="mt-1 break-all font-mono text-xs text-fg-muted">{user.login_user_id}</p>
         </div>
         {canManage ? (
           <ObjectActionBar
@@ -1156,7 +1154,7 @@ function UserDetailPanel({
       </dl>
 
       <section className="grid gap-2" aria-label={t("security.users.roles")}>
-        <h3 className="text-sm font-semibold text-foreground">{t("security.users.roles")}</h3>
+        <h3 className="text-sm font-semibold text-fg">{t("security.users.roles")}</h3>
         {hasArchivedRole ? (
           <Banner severity="warning">{t("security.users.archivedRoleNotice")}</Banner>
         ) : null}
@@ -1175,7 +1173,7 @@ function UserDetailPanel({
             ))}
           </div>
         ) : (
-          <p className="rounded-md border border-dashed border-border p-3 text-sm text-muted">{t("security.common.none")}</p>
+          <p className="rounded-md border border-dashed border-border p-3 text-sm text-fg-muted">{t("security.common.none")}</p>
         )}
       </section>
     </section>

@@ -2,16 +2,20 @@ import { useWorkspaceState, useWorkspaceRevalidation, useResetExecutionConsent, 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Code2, RefreshCw, Table2, Upload } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
-import { Banner, toast } from "@engchina/production-ready-ui";
+import {
+  Button,
+  Banner,
+  toast,
+  StatusBadge,
+  PageHeader,
+  PageBody,
+} from "@engchina/production-ready-ui";
 
-import { PageHeader } from "@/components/PageHeader";
 import { ProcessingIndicator } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";
 import { ClearActionButton } from "@/components/ui/clear-action-button";
 import { FileDropzone } from "@/components/ui/file-dropzone";
 import { FieldLabel, RequiredFieldsNote } from "@/components/ui/required-field";
-import { StatusBadge } from "@/components/ui/status-badge";
 import { apiFetch, apiGet, apiPost, isTimeoutError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
@@ -64,14 +68,14 @@ import { useDbObjectDetailRequest } from "../useDbObjectDetailRequest";
 type ActiveView = "list" | "create" | "import";
 type ImportStep = "file" | "execute";
 
-const importFieldClass = "grid min-w-0 gap-1 text-sm font-medium leading-5 text-foreground";
+const importFieldClass = "grid min-w-0 gap-1 text-sm font-medium leading-5 text-fg";
 const importControlClass =
-  "h-11 w-full rounded-md border border-border bg-card px-3 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-ring/40";
+  "h-11 w-full rounded-md border border-border bg-surface px-3 text-sm text-fg focus:border-focus-ring focus:outline-none focus:ring-2 focus:ring-focus-ring";
 
 function ImportResultPanel({ result }: { result: DbAdminImportTabularData }) {
   return (
     <section
-      className="grid gap-3 rounded-md border border-border bg-background p-3 text-sm"
+      className="grid gap-3 rounded-md border border-border bg-surface-sunken p-3 text-sm"
       aria-label={t("tableMgmt.importWizard.result")}
       data-testid="table-import-result-panel"
     >
@@ -82,11 +86,11 @@ function ImportResultPanel({ result }: { result: DbAdminImportTabularData }) {
         <StatusBadge variant="neutral" label={result.mode} />
       </div>
       {result.warnings.map((warning) => (
-        <p key={warning} className="rounded-md border border-warning/30 bg-warning-bg px-3 py-2 text-warning">
+        <p key={warning} className="rounded-md border border-warning-border bg-warning-subtle px-3 py-2 text-warning-fg">
           {warning}
         </p>
       ))}
-      <pre className="overflow-auto rounded-md border border-border bg-card p-3 font-mono text-sm leading-6 text-foreground">
+      <pre className="overflow-auto rounded-md border border-border bg-surface p-3 font-mono text-sm leading-6 text-fg">
         <code>{`${result.ddl}\n\n${result.insert_sql}`}</code>
       </pre>
       {result.sample_rows.length > 0 && (
@@ -236,10 +240,10 @@ function ImportWizard({
       />
 
       <fieldset
-        className="grid gap-3 rounded-md border border-border bg-card p-3"
+        className="grid gap-3 rounded-md border border-border bg-surface p-3"
         data-testid="table-import-execution-fieldset"
       >
-        <legend className="px-1 text-sm font-semibold text-foreground">{t("tableMgmt.importWizard.executeTitle")}</legend>
+        <legend className="px-1 text-sm font-semibold text-fg">{t("tableMgmt.importWizard.executeTitle")}</legend>
         <ExecutionConfirmationField
           value={confirmation}
           disabled={loading}
@@ -257,9 +261,7 @@ function ImportWizard({
                 className="w-full sm:w-auto"
                 loading={loading}
                 disabled={!canExecute}
-                onClick={onExecute}
-              >
-                <Upload size={15} aria-hidden="true" />
+                onClick={onExecute} icon={Upload}>
                 <span>{t("dataTools.dbAdmin.import")}</span>
               </Button>
               <ClearActionButton size="lg"
@@ -281,8 +283,7 @@ function ImportWizard({
           <Banner
             severity="danger"
             action={schemaRefreshNeedsFull ? (
-              <Button type="button" variant="secondary" size="sm" onClick={onSchemaRefresh}>
-                <RefreshCw size={15} aria-hidden="true" />
+              <Button type="button" variant="secondary" size="sm" onClick={onSchemaRefresh} icon={RefreshCw}>
                 <span>{t("common.action.schemaRefresh")}</span>
               </Button>
             ) : undefined}
@@ -853,7 +854,7 @@ export function TableManagementPage() {
             : undefined
         }
         status={<SchemaRefreshHeaderStatus testId="table-schema-refresh-status" />}
-        actionsAriaLabel={t("tableMgmt.tabs.label")}
+        actionsLabel={t("tableMgmt.tabs.label")}
         actionsTestId="table-management-actions"
         actions={
           activeView === "list"
@@ -893,7 +894,7 @@ export function TableManagementPage() {
             : []
         }
       />
-      <main className="grid gap-4 p-4 lg:p-8">
+      <PageBody className="grid gap-4">
         <PageNotice
           notice={
             message
@@ -911,9 +912,7 @@ export function TableManagementPage() {
                 schemaRefreshNeedsFull || Boolean(sharedSchemaRefresh.error)
                   ? () => void refreshSchema()
                   : () => void refreshObjects()
-              }
-            >
-              <RefreshCw size={15} aria-hidden="true" />
+              } icon={RefreshCw}>
               <span>
                 {schemaRefreshNeedsFull || Boolean(sharedSchemaRefresh.error)
                   ? t("common.action.schemaRefresh")
@@ -941,7 +940,7 @@ export function TableManagementPage() {
                     label={t("tableMgmt.workspace.refreshing")}
                     operationKey="table-list-refresh"
                     placement="workspace"
-                    className="rounded-md border border-border bg-background px-3 py-2"
+                    className="rounded-md border border-border bg-surface-sunken px-3 py-2"
                     testId="table-management-workspace-processing"
                     activityIcon="none"
                   />
@@ -1034,8 +1033,7 @@ export function TableManagementPage() {
         ) : (
           <>
             <div>
-              <Button type="button" variant="ghost" size="sm" onClick={returnToList}>
-                <ArrowLeft size={15} aria-hidden="true" />
+              <Button type="button" variant="ghost" size="sm" onClick={returnToList} icon={ArrowLeft}>
                 <span>{t("tableMgmt.action.backToList")}</span>
               </Button>
             </div>
@@ -1049,7 +1047,7 @@ export function TableManagementPage() {
             </DbObjectManagementPanelShell>
           </>
         )}
-      </main>
+      </PageBody>
 
       {dropTargetName && (
         <DropDbObjectDialog

@@ -46,7 +46,8 @@ async function expectNoHorizontalScroll(page: Page) {
 
 async function expectMainScrollDoesNotExposeTrailingBlank(panel: Locator) {
   const metrics = await panel.evaluate((node) => {
-    const main = document.querySelector<HTMLElement>('main[aria-label="メイン領域"]');
+    // 共有 AppShell の <main id="pr-main"> は唯一の main ランドマークなので aria-label を持たない。
+    const main = document.querySelector<HTMLElement>("main");
     if (!main) return null;
     main.scrollTop = main.scrollHeight;
     const mainRect = main.getBoundingClientRect();
@@ -1587,28 +1588,27 @@ test("テーブル管理は 150% zoom 相当でもタブ・列名・ヘッダー
 
   // 一覧が既定。作成/取込はタブではなくツールバーのアクションボタン。
   const actions = page.getByTestId("table-management-actions");
+  // 共有 PageHeader は utility → secondary → primary の順に並べ、主操作を右端に置く
+  // (docs/design-system/README.md §7 #11)。旧実装の data-page-action-group 属性は共有版に存在しない。
   await expect(actions.getByRole("button")).toHaveText([
-    "テーブル作成",
-    "Excel/CSV 取込(新規テーブル)",
     "表示を更新",
     "DB 構造を再取得",
+    "Excel/CSV 取込(新規テーブル)",
+    "テーブル作成",
   ]);
-  await expect(actions.locator('[data-page-action-group="task"]')).toHaveCount(2);
-  await expect(actions.locator('[data-page-action-group="utility"]')).toHaveCount(2);
-  await expect(actions.locator('[data-page-action-group="utility"][data-page-action-group-start="true"]')).toBeVisible();
-  const [createBox, importBox, refreshBox, schemaRefreshBox] = await Promise.all([
-    actions.getByRole("button", { name: "テーブル作成" }).boundingBox(),
-    actions.getByRole("button", { name: "Excel/CSV 取込(新規テーブル)" }).boundingBox(),
+  const [refreshBox, schemaRefreshBox, importBox, createBox] = await Promise.all([
     actions.getByRole("button", { name: "表示を更新" }).boundingBox(),
     actions.getByRole("button", { name: "DB 構造を再取得" }).boundingBox(),
+    actions.getByRole("button", { name: "Excel/CSV 取込(新規テーブル)" }).boundingBox(),
+    actions.getByRole("button", { name: "テーブル作成" }).boundingBox(),
   ]);
   expect(createBox).not.toBeNull();
   expect(importBox).not.toBeNull();
   expect(refreshBox).not.toBeNull();
   expect(schemaRefreshBox).not.toBeNull();
-  expect(importBox!.x).toBeGreaterThan(createBox!.x);
-  expect(refreshBox!.x).toBeGreaterThan(importBox!.x);
   expect(schemaRefreshBox!.x).toBeGreaterThan(refreshBox!.x);
+  expect(importBox!.x).toBeGreaterThan(schemaRefreshBox!.x);
+  expect(createBox!.x).toBeGreaterThan(importBox!.x);
   await expectSingleLine(actions.getByRole("button", { name: "テーブル作成" }).locator("span"));
   await expectSingleLine(actions.getByRole("button", { name: "Excel/CSV 取込(新規テーブル)" }).locator("span"));
   // 詳細内タブ(列情報/DDL)は維持。

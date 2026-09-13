@@ -41,7 +41,7 @@ export function SecurityManagementPanelShell({
       role="region"
       aria-labelledby={labelledBy}
       aria-label={ariaLabel}
-      className={cn("grid gap-4 rounded-md border border-border bg-card p-4 shadow-sm", className)}
+      className={cn("grid gap-4 rounded-md border border-border bg-surface p-4 shadow-sm", className)}
       data-testid="security-management-panel-shell"
       data-management-id={idPrefix}
     >
@@ -75,11 +75,11 @@ export function SecurityPanelHeader({
   return (
     <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
       <div className="min-w-0">
-        <h2 id={headingId} className="flex items-center gap-2 text-base font-semibold text-foreground">
-          <Icon size={18} aria-hidden="true" />
+        <h2 id={headingId} className="flex items-center gap-2 text-base font-semibold text-fg">
+          <Icon size={20} aria-hidden="true" />
           <span className="min-w-0 break-words">{title}</span>
         </h2>
-        {description ? <p className="mt-1 text-sm leading-6 text-muted">{description}</p> : null}
+        {description ? <p className="mt-1 text-sm leading-6 text-fg-muted">{description}</p> : null}
       </div>
       {action ? <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-end">{action}</div> : null}
     </div>
@@ -96,14 +96,14 @@ export function SecurityManagementStatusBar({
   actions?: ReactNode;
 }) {
   return (
-    <section className="rounded-md border border-border bg-card px-4 py-3 shadow-sm" aria-label={ariaLabel}>
+    <section className="rounded-md border border-border bg-surface px-4 py-3 shadow-sm" aria-label={ariaLabel}>
       <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
         <dl className="grid gap-3 sm:grid-cols-3 xl:flex xl:flex-wrap xl:items-center">
           {metrics.map((metric) => (
-            <div key={`${metric.label}-${metric.value}`} className="rounded-md border border-border bg-background px-3 py-2">
-              <dt className="text-xs font-medium text-muted">{metric.label}</dt>
+            <div key={`${metric.label}-${metric.value}`} className="rounded-md border border-border bg-surface-sunken px-3 py-2">
+              <dt className="text-xs font-medium text-fg-muted">{metric.label}</dt>
               <dd
-                className={cn("mt-1 font-semibold tabular-nums text-foreground", metric.emphasis && "text-lg")}
+                className={cn("mt-1 font-semibold tabular-nums text-fg", metric.emphasis && "text-lg")}
                 data-testid={metric.testId}
               >
                 {metric.value}
@@ -133,17 +133,17 @@ export function SecuritySearchField({
   onChange: (value: string) => void;
 }) {
   return (
-    <label className="grid min-w-0 gap-1 text-sm font-medium text-foreground">
+    <label className="grid min-w-0 gap-1 text-sm font-medium text-fg">
       <span>{label}</span>
       <span className="relative">
-        <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" aria-hidden="true" />
+        <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-fg-muted" aria-hidden="true" />
         <input
           type="search"
           value={value}
           data-testid={testId}
           disabled={disabled}
           onChange={(event) => onChange(event.currentTarget.value)}
-          className="min-h-11 w-full rounded-md border border-border bg-card py-2 pl-9 pr-3 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40 disabled:cursor-not-allowed disabled:bg-muted/20 disabled:text-muted"
+          className="min-h-11 w-full rounded-md border border-border-control bg-surface py-2 pl-9 pr-3 outline-none focus:border-focus-ring focus:ring-2 focus:ring-focus-ring disabled:cursor-not-allowed disabled:bg-surface-hover disabled:text-fg-disabled"
           placeholder={placeholder}
         />
       </span>
@@ -159,19 +159,19 @@ export function SecurityDetailField({
   children: ReactNode;
 }) {
   return (
-    <div className="rounded-md border border-border bg-card px-3 py-2">
-      <dt className="text-xs font-medium text-muted">{label}</dt>
-      <dd className="mt-1 min-w-0 break-words text-sm font-medium text-foreground">{children}</dd>
+    <div className="rounded-md border border-border bg-surface px-3 py-2">
+      <dt className="text-xs font-medium text-fg-muted">{label}</dt>
+      <dd className="mt-1 min-w-0 break-words text-sm font-medium text-fg">{children}</dd>
     </div>
   );
 }
 
 export function SecurityEmptySelection({ title, hint }: { title: string; hint: string }) {
   return (
-    <section className="grid min-w-0 content-start gap-3 rounded-md border border-border bg-background p-4">
+    <section className="grid min-w-0 content-start gap-3 rounded-md border border-border bg-surface-sunken p-4">
       <div className="py-10 text-center">
-        <p className="text-sm font-semibold text-foreground">{title}</p>
-        <p className="mt-1 text-sm leading-6 text-muted">{hint}</p>
+        <p className="text-sm font-semibold text-fg">{title}</p>
+        <p className="mt-1 text-sm leading-6 text-fg-muted">{hint}</p>
       </div>
     </section>
   );

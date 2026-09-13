@@ -131,8 +131,8 @@ test("データ管理プレビューは取得件数上限を指定でき、詳�
   assert.match(dataManagementSource, /parseSqlRowLimit\(previewRowLimitInput\)/u);
   assert.match(dataManagementSource, /limit: rowLimit/u);
   assert.match(dataManagementSource, /<RowLimitField/u);
-  assert.match(dataManagementSource, /<Play size=\{16\} aria-hidden="true" \/>/u);
-  assert.match(dataManagementSource, /<X size=\{16\} aria-hidden="true" \/>/u);
+  assert.match(dataManagementSource, /icon=\{Play\}/u);
+  assert.match(dataManagementSource, /icon=\{X\}/u);
   assert.match(dataManagementSource, /size="lg"[\s\S]*?\{t\("dataMgmt\.preview\.show"\)\}/u);
   assert.match(dataManagementSource, /size="lg"[\s\S]*?\{t\("dataMgmt\.preview\.clear"\)\}/u);
   assert.match(dataManagementSource, /onSelectPreviewObject=\{\(objectName\) => selectPreviewObject\(objectName, \{ manualSelection: true \}\)\}/u);

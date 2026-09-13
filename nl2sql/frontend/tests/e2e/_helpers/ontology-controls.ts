@@ -30,7 +30,8 @@ export async function expectLegacyOntologyControls(page: Page, scope: Locator) {
   await expect(all).toBeFocused();
   await expect(all).toHaveAttribute("aria-pressed", "true");
   await expect(all).toHaveCSS("height", mobile ? "36px" : "32px");
-  await expect(all.locator("svg")).toHaveCSS("width", "13px");
+  // アイコンは 14 / 16 / 20 / 24px に統一（奇数 px はボケる。README §3）。
+  await expect(all.locator("svg")).toHaveCSS("width", "14px");
   const focus = await all.evaluate(element => {
     const style = getComputedStyle(element);
     return { visible: element.matches(":focus-visible"), shadow: style.boxShadow };
@@ -40,7 +41,7 @@ export async function expectLegacyOntologyControls(page: Page, scope: Locator) {
   // semantic primary と完全一致する塗り（統一後の薄い混色背景とは異なる）。
   const selectedColors = await all.evaluate(element => {
     const probe = document.createElement("span");
-    probe.style.color = "var(--primary)";
+    probe.style.color = "var(--color-accent-emphasis)";
     element.append(probe);
     const primary = getComputedStyle(probe).color;
     probe.remove();
@@ -56,7 +57,8 @@ export async function expectLegacyOntologyControls(page: Page, scope: Locator) {
   await all.click();
 
   const legend = scope.getByTestId("ontology-graph-legend").getByRole("button").first();
-  await expect(legend).toHaveCSS("font-size", "10px");
+  // 補助テキストの下限は 12px（README §3）。
+  await expect(legend).toHaveCSS("font-size", "12px");
   await expect(legend).toHaveCSS("border-top-width", "0px");
   await expect(legend).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
   await legend.focus();
@@ -71,9 +73,9 @@ export async function expectLegacyOntologyControls(page: Page, scope: Locator) {
   await expect(legend).toHaveCSS("text-decoration-line", "none");
 
   const zoom = scope.getByRole("button", { name: "グラフを拡大", exact: true });
-  const rootSize = await page.locator("html").evaluate(element => parseFloat(getComputedStyle(element).fontSize));
-  await expect(zoom).toHaveCSS("height", `${rootSize * 2}px`);
-  await expect(zoom).toHaveCSS("padding-left", `${rootSize * 0.75}px`);
-  await expect(zoom.locator("svg")).toHaveCSS("width", "15px");
+  // 共有 Button sm（32px、タッチ端末は 44px）。
+  await expect(zoom).toHaveCSS("height", mobile ? "44px" : "32px");
+  await expect(zoom).toHaveCSS("padding-left", "12px");
+  await expect(zoom.locator("svg")).toHaveCSS("width", "16px");
   if (originalMode) await scope.getByTestId(originalMode).click();
 }

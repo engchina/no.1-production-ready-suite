@@ -379,13 +379,19 @@ async function expectNoElementOverlap(items: Array<{ label: string; locator: Loc
 
 async function expectAdbActionButtonsStableDuringOperation(
   page: Page,
-  labels: { start: string; stop: string }
+  operation: "start" | "stop"
 ) {
   const adbCard = page.locator("#adb-management");
   const saveButton = adbCard.getByRole("button", { name: "保存", exact: true });
-  const startButton = adbCard.getByRole("button", { name: labels.start, exact: true });
-  const stopButton = adbCard.getByRole("button", { name: labels.stop, exact: true });
+  // 共有 Button の loading はラベルを差し替えない（DS ルール: 「起動中…」「停止中…」にしない）。
+  // 操作中のボタンは同じラベルのまま先頭アイコンがスピナーになり aria-busy + disabled になる。
+  const startButton = adbCard.getByRole("button", { name: "起動", exact: true });
+  const stopButton = adbCard.getByRole("button", { name: "停止", exact: true });
+  const busyButton = operation === "start" ? startButton : stopButton;
 
+  await expect(busyButton).toHaveAttribute("aria-busy", "true");
+  await expect(busyButton).toBeDisabled();
+  await expect(busyButton.locator("svg.animate-spin")).toBeVisible();
   await expect(saveButton).toBeDisabled();
   await expect(adbCard.getByRole("button", { name: "保存中…", exact: true })).toHaveCount(0);
   await expectNoAdbWalletPendingStatus(page);
@@ -471,9 +477,12 @@ async function expectModelSaveButtonsUsePrimaryStyle(page: Page) {
   const baseline = styles[0];
 
   for (const style of styles) {
-    expect(style.className).toContain("bg-primary-fill");
-    expect(style.className).toContain("text-primary-fill-foreground");
-    expect(style.className).not.toContain("border-control-border");
+    // 共有 Button primary variant（旧 bg-primary-fill → bg-accent-emphasis、
+    // text-primary-fill-foreground → text-fg-on-accent）。secondary の枠線クラスは持たない。
+    const classes = style.className.split(/\s+/);
+    expect(classes).toContain("bg-accent-emphasis");
+    expect(classes).toContain("text-fg-on-accent");
+    expect(classes).not.toContain("border-border-control");
     expect(style.backgroundColor).toBe(baseline.backgroundColor);
     expect(style.borderColor).toBe(baseline.borderColor);
     expect(style.color).toBe(baseline.color);
@@ -517,7 +526,9 @@ async function expectNoExcessBottomWhitespace(page: Page) {
     const mainBottom = scroller.getBoundingClientRect().bottom;
     const cards = Array.from(scroller.querySelectorAll("div")).filter((element) => {
       const className = element.getAttribute("class") ?? "";
-      return className.includes("border-border") && className.includes("bg-card");
+      // 共有 Card: border-border + bg-surface（旧 bg-card）。bg-surface-sunken 等は含めない
+      const classes = className.split(/\s+/);
+      return classes.includes("border-border") && classes.includes("bg-surface");
     });
     if (cards.length === 0) {
       throw new Error("設定カードが見つかりません。");
@@ -738,9 +749,10 @@ test("NL2SQL のシステム設定画面を表示できる", async ({ page }) =>
     page,
     "enterprise-api-key"
   );
-  expect(modelSavedSecretBadgeStyle.className).toContain("border-success/30");
-  expect(modelSavedSecretBadgeStyle.className).toContain("bg-success-bg");
-  expect(modelSavedSecretBadgeStyle.className).toContain("text-success");
+  // 旧 border-success/30 / bg-success-bg / text-success → 共有 success トークン
+  expect(modelSavedSecretBadgeStyle.className).toContain("border-success-border");
+  expect(modelSavedSecretBadgeStyle.className).toContain("bg-success-subtle");
+  expect(modelSavedSecretBadgeStyle.className).toContain("text-success-fg");
   await expectNoHorizontalOverflow(page);
 
   await page.goto("/settings/database");
@@ -1154,7 +1166,7 @@ test("データベース設定は Wallet パスワードを保存し、保存済
   await expectNoHorizontalOverflow(page);
 });
 
-test("DB パスワード表示ボタンの取得中 icon は上下に浮動しない StableLoadingIcon を使う", async ({
+test("DB パスワード表示ボタンの取得中 icon は上下に浮動しない共有 Spinner を使う", async ({
   page,
 }) => {
   const revealGate = createRequestGate();
@@ -1176,9 +1188,12 @@ test("DB パスワード表示ボタンの取得中 icon は上下に浮動し�
   await expect(revealButton).toHaveAttribute("aria-label", "DB パスワードを取得中");
   await expect(revealButton).toBeDisabled();
 
-  const loadingIcon = revealButton.locator('svg[data-loading-icon="true"]');
+  // 共有 Spinner（svg.animate-spin: 全周トラック circle + arc 1 本）。旧 StableLoadingIcon の
+  // 「対称 active arc 2 本」は共有 Spinner の形状に当てはまらないため、トラックの有無で検証する。
+  const loadingIcon = revealButton.locator("svg.animate-spin");
   await expect(loadingIcon).toBeVisible();
-  await expect(loadingIcon.locator('[data-loading-icon-active="true"]')).toHaveCount(2);
+  await expect(revealButton.locator("svg:visible")).toHaveCount(1);
+  await expect(loadingIcon.locator("circle")).toHaveCount(1);
   const metrics = await loadingIcon.evaluate((node) => {
     const icon = node.getBoundingClientRect();
     const button = (node.closest("button") as HTMLElement).getBoundingClientRect();
@@ -1545,10 +1560,11 @@ test("モデル設定を3カードごとに独立保存し、非表示設定と�
 
   await expectLargeActionButton(page.getByRole("button", { name: "OCI Enterprise AI: 保存" }));
   await page.getByRole("button", { name: "OCI Enterprise AI: 保存" }).click();
-  await expect(
-    page.getByRole("button", { name: "OCI Enterprise AI: 保存中…" })
-  ).toBeDisabled();
-  await expectLargeActionButton(page.getByRole("button", { name: "OCI Enterprise AI: 保存中…" }));
+  // loading 中もラベルは変えない（DS ルール）。aria-busy + disabled + スピナーで保存中を表す。
+  const enterpriseSaving = page.getByRole("button", { name: "OCI Enterprise AI: 保存" });
+  await expect(enterpriseSaving).toBeDisabled();
+  await expect(enterpriseSaving).toHaveAttribute("aria-busy", "true");
+  await expectLargeActionButton(enterpriseSaving);
   await expect(page.getByRole("button", { name: "登録モデル: 保存" })).toBeDisabled();
   await expect(page.getByRole("button", { name: "OCI Generative AI: 保存" })).toBeDisabled();
   firstSaveGate.release();
@@ -1890,23 +1906,14 @@ test("ADB 起動中は保存ボタンを無効化して保存表示のままに�
   await adbCard.getByRole("button", { name: "起動", exact: true }).click();
 
   await expect.poll(() => settingsCount).toBe(1);
-  await expectAdbActionButtonsStableDuringOperation(page, {
-    start: "起動中…",
-    stop: "停止",
-  });
+  await expectAdbActionButtonsStableDuringOperation(page, "start");
 
   settingsGate.release();
   await expect.poll(() => startCount).toBe(1);
-  await expectAdbActionButtonsStableDuringOperation(page, {
-    start: "起動中…",
-    stop: "停止",
-  });
+  await expectAdbActionButtonsStableDuringOperation(page, "start");
 
   await page.setViewportSize({ width: 375, height: 812 });
-  await expectAdbActionButtonsStableDuringOperation(page, {
-    start: "起動中…",
-    stop: "停止",
-  });
+  await expectAdbActionButtonsStableDuringOperation(page, "start");
 
   startGate.release();
   await expect(page.getByText("データベース 'NL2SQLDB' の起動を開始しました。")).toBeVisible();
@@ -1943,23 +1950,14 @@ test("ADB 停止中は保存ボタンを無効化して保存表示のままに�
   await adbCard.getByRole("button", { name: "停止", exact: true }).click();
 
   await expect.poll(() => settingsCount).toBe(1);
-  await expectAdbActionButtonsStableDuringOperation(page, {
-    start: "起動",
-    stop: "停止中…",
-  });
+  await expectAdbActionButtonsStableDuringOperation(page, "stop");
 
   settingsGate.release();
   await expect.poll(() => stopCount).toBe(1);
-  await expectAdbActionButtonsStableDuringOperation(page, {
-    start: "起動",
-    stop: "停止中…",
-  });
+  await expectAdbActionButtonsStableDuringOperation(page, "stop");
 
   await page.setViewportSize({ width: 375, height: 812 });
-  await expectAdbActionButtonsStableDuringOperation(page, {
-    start: "起動",
-    stop: "停止中…",
-  });
+  await expectAdbActionButtonsStableDuringOperation(page, "stop");
 
   stopGate.release();
   await expect(page.getByText("データベース 'NL2SQLDB' の停止を開始しました。")).toBeVisible();
@@ -2513,30 +2511,43 @@ test("外観設定でダーク/ライト/自動テーマを切り替えられる
   await page.goto("/settings/appearance");
   await expect(page.getByRole("heading", { name: "外観" })).toBeVisible();
   const html = page.locator("html");
+  // dev サーバでは getPropertyValue が "light-dark(a, b)" 文字列を返すため、変数の文字列ではなく
+  // 実際に解決された色（body の背景色 / 変数を塗ったプローブ要素の background-color）を検証する。
+  // 期待値は packages/ui/src/styles/tokens/palette.css の neutral / blue スケール由来。
+  const hexToRgb = (hex: string) => {
+    const value = Number.parseInt(hex.slice(1), 16);
+    return `rgb(${(value >> 16) & 255}, ${(value >> 8) & 255}, ${value & 255})`;
+  };
+  // body { background: var(--color-canvas) }（旧 --background 相当）
   const bgVar = () =>
-    page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--background").trim());
-  const sidebarBgVar = () =>
-    page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--sidebar").trim());
+    page.evaluate(() => getComputedStyle(document.body).backgroundColor);
   const tokenVar = (name: string) =>
-    page.evaluate(
-      (tokenName) => getComputedStyle(document.documentElement).getPropertyValue(tokenName).trim(),
-      name
-    );
+    page.evaluate((tokenName) => {
+      const probe = document.createElement("div");
+      probe.style.backgroundColor = `var(${tokenName})`;
+      document.body.appendChild(probe);
+      const color = getComputedStyle(probe).backgroundColor;
+      probe.remove();
+      return color;
+    }, name);
+  const sidebarBgVar = () => tokenVar("--color-sidebar");
 
   // 既定はライト。
   await expect(html).not.toHaveClass(/dark/);
-  expect(await bgVar()).toBe("#f7f8fa");
+  await expect.poll(bgVar).toBe(hexToRgb("#f7f8fa"));
 
   const toggle = page.getByTestId("appearance-theme-toggle");
   await toggle.getByRole("button", { name: "ダーク" }).click();
   await expect(html).toHaveClass(/dark/);
   // 冷調 blue-gray の semantic token。純黒・大面積の純白は使わない。
-  expect(await bgVar()).toBe("#101318");
-  expect(await sidebarBgVar()).toBe("#0b0e13");
-  expect(await tokenVar("--foreground")).toBe("#f2f4f7");
-  expect(await tokenVar("--muted")).toBe("#b2bac5");
-  expect(await tokenVar("--control-border")).toBe("#5d6878");
-  expect(await tokenVar("--primary-fill")).toBe("#286abd");
+  // canvas = neutral-950 / sidebar = neutral-1000 / fg = neutral-100 / fg-muted = neutral-350 /
+  // border-control = neutral-650 / accent-emphasis = blue-600（いずれもダーク側の値）
+  await expect.poll(bgVar).toBe(hexToRgb("#101318"));
+  expect(await sidebarBgVar()).toBe(hexToRgb("#0b0e13"));
+  expect(await tokenVar("--color-fg")).toBe(hexToRgb("#f2f4f7"));
+  expect(await tokenVar("--color-fg-muted")).toBe(hexToRgb("#b2bac5"));
+  expect(await tokenVar("--color-border-control")).toBe(hexToRgb("#5d6878"));
+  expect(await tokenVar("--color-accent-emphasis")).toBe(hexToRgb("#286abd"));
   await expect(toggle.getByRole("button", { name: "ダーク" })).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByRole("heading", { name: "外観" })).toHaveCSS(
     "color",
@@ -2551,14 +2562,14 @@ test("外観設定でダーク/ライト/自動テーマを切り替えられる
   await page.emulateMedia({ colorScheme: "dark" });
   await page.getByTestId("appearance-theme-toggle").getByRole("button", { name: "自動（OS 設定）" }).click();
   await expect(page.locator("html")).toHaveClass(/dark/);
-  expect(await bgVar()).toBe("#101318");
+  await expect.poll(bgVar).toBe(hexToRgb("#101318"));
   await page.emulateMedia({ colorScheme: "light" });
   await expect(page.locator("html")).not.toHaveClass(/dark/);
-  expect(await bgVar()).toBe("#f7f8fa");
+  await expect.poll(bgVar).toBe(hexToRgb("#f7f8fa"));
 
   await page.getByTestId("appearance-theme-toggle").getByRole("button", { name: "ライト" }).click();
   await expect(page.locator("html")).not.toHaveClass(/dark/);
-  expect(await bgVar()).toBe("#f7f8fa");
+  await expect.poll(bgVar).toBe(hexToRgb("#f7f8fa"));
 });
 
 test("OCI 初期取得失敗は編集を許可せず、再試行後の遅延保存中も入力と重複操作を防ぐ", async ({ page }) => {

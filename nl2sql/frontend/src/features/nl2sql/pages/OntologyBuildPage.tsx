@@ -1,14 +1,15 @@
-import { Button } from "@/components/ui/button";
+import {
+  Button,
+  Banner,
+  EmptyState,
+  PageHeader,
+  PageBody,
+} from "@engchina/production-ready-ui";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { RefreshCw, Target } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 
-import {
-  Banner,
-  EmptyState,
-} from "@engchina/production-ready-ui";
 
-import { PageHeader } from "@/components/PageHeader";
 import { ErrorState } from "@/components/StateViews";
 import { isTimeoutError } from "@/lib/api";
 import { t } from "@/lib/i18n";
@@ -227,7 +228,7 @@ export function OntologyBuildPage() {
         subtitle={t("ontologyBuild.subtitle")}
         status={<SchemaRefreshHeaderStatus testId="ontology-build-schema-refresh-status" />}
       />
-      <main className="grid min-w-0 gap-4 p-4 lg:p-8">
+      <PageBody className="grid min-w-0 gap-4">
         {pageError ? <Banner severity="danger">{pageError}</Banner> : null}
         {refreshing ? (
           <SchemaRefreshProcessing testId="ontology-build-schema-refresh-processing" />
@@ -260,12 +261,12 @@ export function OntologyBuildPage() {
           ) : (
             <div className="grid gap-3">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-                <label className="grid min-w-0 gap-1 text-sm font-medium text-foreground">
+                <label className="grid min-w-0 gap-1 text-sm font-medium text-fg">
                   <span>{t("ontologyBuild.profile.selectLabel")}</span>
                   <select
                     value={selectedProfileId}
                     onChange={(event) => selectProfile(event.currentTarget.value)}
-                    className="min-h-11 min-w-0 rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:outline-none focus:ring-2 focus:ring-ring/40"
+                    className="min-h-11 min-w-0 rounded-md border border-border-control bg-surface px-3 py-2 focus:border-focus-ring focus:outline-none focus:ring-2 focus:ring-focus-ring"
                     data-testid="ontology-build-profile-select"
                   >
                     {!selectedProfileId && <option value="" disabled>{t("nl2sql.workspace.profileUnavailable")}</option>}
@@ -296,9 +297,7 @@ export function OntologyBuildPage() {
                     loading={workspaceButtonLoading}
                     disabled={!selectedProfileId || profileDetailQuery.isLoading}
                     data-testid="ontology-view-fetch"
-                    onClick={handleLoadOntologyView}
-                  >
-                    <RefreshCw size={15} aria-hidden="true" />
+                    onClick={handleLoadOntologyView} icon={RefreshCw}>
                     <span>{t("ontologyBuild.workspace.fetchAction")}</span>
                   </Button>
                 </div>
@@ -317,9 +316,7 @@ export function OntologyBuildPage() {
                       size="sm"
                       className="w-full sm:w-auto"
                       loading={profilesQuery.isFetchingNextPage}
-                      onClick={() => void profilesQuery.fetchNextPage()}
-                    >
-                      <RefreshCw size={15} aria-hidden="true" />
+                      onClick={() => void profilesQuery.fetchNextPage()} icon={RefreshCw}>
                       <span>{t("common.retry")}</span>
                     </Button>
                     }
@@ -385,7 +382,7 @@ export function OntologyBuildPage() {
             />
           </>
         ) : null}
-      </main>
+      </PageBody>
     </>
   );
 }

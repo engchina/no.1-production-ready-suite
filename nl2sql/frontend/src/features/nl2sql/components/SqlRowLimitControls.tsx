@@ -1,7 +1,9 @@
 import { useId } from "react";
 
-import { FieldError } from "@/components/ui/field-error";
-import { StatusBadge } from "@/components/ui/status-badge";
+import {
+  FieldError,
+  StatusBadge,
+} from "@engchina/production-ready-ui";
 import { t } from "@/lib/i18n";
 import type { QueryResults } from "../types";
 
@@ -37,7 +39,7 @@ export function RowLimitField({
   const describedBy = error ? `${helperId} ${errorId}` : helperId;
 
   return (
-    <label className={`grid w-full min-w-0 gap-1 text-sm font-medium text-foreground ${className}`}>
+    <label className={`grid w-full min-w-0 gap-1 text-sm font-medium text-fg ${className}`}>
       <span>{t("queryResults.rowLimit.label")}</span>
       <input
         id={id}
@@ -51,9 +53,9 @@ export function RowLimitField({
         disabled={disabled}
         aria-describedby={describedBy}
         aria-invalid={error ? "true" : undefined}
-        className="h-10 w-full min-w-0 max-w-[22rem] rounded-md border border-border bg-card px-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted disabled:cursor-not-allowed disabled:bg-muted/30 disabled:text-muted focus:border-primary focus:ring-2 focus:ring-ring/40"
+        className="h-10 w-full min-w-0 max-w-[22rem] rounded-md border border-border-control bg-surface px-3 text-sm text-fg outline-none transition-colors placeholder:text-fg-muted disabled:cursor-not-allowed disabled:bg-surface-hover disabled:text-fg-disabled focus:border-focus-ring focus:ring-2 focus:ring-focus-ring"
       />
-      <p id={helperId} className="overflow-x-auto whitespace-nowrap text-xs leading-5 text-muted">
+      <p id={helperId} className="overflow-x-auto whitespace-nowrap text-xs leading-5 text-fg-muted">
         {helper}
       </p>
       <FieldError id={errorId} message={error} />

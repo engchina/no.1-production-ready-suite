@@ -135,10 +135,13 @@ async function expectBoundedSecurityTableScroll(
       const rect = row.getBoundingClientRect();
       return rect.top >= headerRect.bottom - 1 && rect.bottom <= regionRect.bottom + 1;
     });
+    const firstRowHeight = rows[0]?.getBoundingClientRect().height ?? 0;
     return {
       clientHeight: node.clientHeight,
       scrollHeight: node.scrollHeight,
       maxHeight: Number.parseFloat(computed.maxHeight),
+      fittingRowCount:
+        firstRowHeight > 0 ? Math.floor((regionRect.bottom - headerRect.bottom + 1) / firstRowHeight) : 0,
       overflowX: computed.overflowX,
       overflowY: computed.overflowY,
       headerPosition: window.getComputedStyle(header).position,
@@ -152,7 +155,13 @@ async function expectBoundedSecurityTableScroll(
   expect(metrics.maxHeight).toBeGreaterThanOrEqual(expectedMaxHeight - 2);
   expect(metrics.maxHeight).toBeLessThanOrEqual(expectedMaxHeight + 2);
   expect(metrics.scrollHeight).toBeGreaterThan(metrics.clientHeight);
-  expect(metrics.visibleRowCount).toBe(visibleRowLimit);
+  // 枠の高さ(3.5rem × 表示行数 + 表頭)は list-density の契約として上で固定する。
+  // デザインシステム移行(docs/design-system/README.md §7 #1)で表・メタの文字が 10.5/11px → 12px になり、
+  // 2 行セル(表示名 + ログイン ID)の行高は 3.5rem を超えうる(「表の行高が増え、収まる行数が減る」は意図的変更)。
+  // そのため完全表示行数は実測行高から導き、契約行数から 1 行を超えて減らないことだけを保証する。
+  expect(metrics.visibleRowCount).toBe(metrics.fittingRowCount);
+  expect(metrics.visibleRowCount).toBeGreaterThanOrEqual(visibleRowLimit - 1);
+  expect(metrics.visibleRowCount).toBeLessThanOrEqual(visibleRowLimit);
   expect(metrics.headerPosition).toBe("sticky");
   expect(metrics.overflowX).toBe("auto");
   expect(metrics.overflowY).toBe("auto");
@@ -202,7 +211,7 @@ async function waitForAnimationFrames(page: Page) {
 }
 
 async function setMainScrollTop(page: Page, top: number) {
-  const main = page.getByRole("main", { name: "メイン領域" });
+  const main = page.getByRole("main");
   await main.evaluate((node, value) => {
     node.scrollTop = value;
   }, top);
@@ -210,7 +219,7 @@ async function setMainScrollTop(page: Page, top: number) {
 }
 
 async function expectMainScrollPreserved(page: Page, action: () => Promise<void>) {
-  const main = page.getByRole("main", { name: "メイン領域" });
+  const main = page.getByRole("main");
   const before = await main.evaluate((node) => node.scrollTop);
   await action();
   await waitForAnimationFrames(page);
@@ -739,7 +748,12 @@ test("ローカル DEBUG はログインせず SYSTEM_ADMIN として入り、�
       const style = getComputedStyle(element);
       return { backgroundColor: style.backgroundColor, color: style.color };
     });
-  expect(debugColors).toEqual({ backgroundColor: "rgb(255, 251, 235)", color: "rgb(120, 53, 15)" });
+  // 共有 Sidebar は常時暗いスラブ(data-surface="inverted" → color-scheme: dark)なので、
+  // globals.css の warning トークンはダーク値に解決される(旧実装はライトの琥珀色を直書きしていた)。
+  // --color-warning-subtle = light-dark(amber-200, amber-900 #3a2e13)
+  // --color-warning-fg     = light-dark(amber-700, amber-300 #f4c95d)
+  // (packages/ui/src/styles/tokens/colors.css, palette.css)
+  expect(debugColors).toEqual({ backgroundColor: "rgb(58, 46, 19)", color: "rgb(244, 201, 93)" });
   await expect(sidebar.getByRole("button", { name: "パスワード変更" })).toHaveCount(0);
   await expect(sidebar.getByRole("button", { name: "ログアウト" })).toHaveCount(0);
   const viewport = await page.evaluate(() => ({
@@ -1805,11 +1819,11 @@ test("管理者がユーザーを作成して単一ロールを割り当て、�
   await expect(page.getByTestId("security-users-one-time-password")).toHaveCount(0);
   await expect(loginInput).toHaveValue("001");
   await expect(loginInput).toBeDisabled();
-  await expect(loginInput).toHaveClass(/disabled:bg-muted\/20/u);
+  await expect(loginInput).toHaveClass(/disabled:bg-surface-hover/u);
   await expect(displayNameInput).toHaveValue("短いログインユーザーIDユーザー");
   await expect(temporaryPasswordInput).toHaveValue(generatedPasswords[0]);
   await expect(temporaryPasswordInput).toHaveAttribute("readonly", "");
-  await expect(temporaryPasswordInput).toHaveClass(/read-only:bg-muted\/20/u);
+  await expect(temporaryPasswordInput).toHaveClass(/read-only:bg-surface-hover/u);
   await expect(viewerRadio).toBeChecked();
   await expect(runnerRadio).not.toBeChecked();
   await expect(createButton).toHaveCount(0);
@@ -2240,7 +2254,7 @@ test("ユーザー編集はパスワードリセットと無効化・有効化�
   await expect(editActions.getByRole("button", { name: "その他の操作" })).toBeVisible();
   await expect(temporaryPassword).toHaveValue("");
   await expect(temporaryPassword).toHaveAttribute("readonly", "");
-  await expect(temporaryPassword).toHaveClass(/read-only:bg-muted\/20/u);
+  await expect(temporaryPassword).toHaveClass(/read-only:bg-surface-hover/u);
   await expect(copyTemporaryPassword).toBeDisabled();
   await displayName.fill("未保存の営業ユーザー");
 
@@ -3452,14 +3466,18 @@ test("ロール管理の compact header menu は短い viewport 内に収まる"
 
   await page.goto("/settings/security/roles");
   const actions = page.getByTestId("security-roles-actions");
+  // 共有 PageHeader は lg 未満で「その他の操作」+ 主操作（右端）に畳む。
   const moreButton = actions.getByRole("button", { name: "その他の操作", exact: true });
-  await expect(actions.getByRole("button")).toHaveText(["新規作成", "その他の操作"]);
+  await expect(actions.getByRole("button")).toHaveText(["その他の操作", "新規作成"]);
   await moreButton.click();
 
-  const menu = page.getByRole("menu");
-  await expect(menu).toHaveAttribute("data-floating-menu-placement", "bottom");
-  await expect(menu.getByRole("menuitem", { name: "表示を更新" })).toBeVisible();
+  const menu = page.getByRole("menu", { name: "その他の操作" });
+  await expect(menu.getByRole("menuitem", { name: "表示を更新" })).toBeFocused();
   await expectFloatingMenuInsideViewport(page, menu);
+  await page.keyboard.press("Escape");
+  await expect(menu).toHaveCount(0);
+  await expect(moreButton).toBeFocused();
+  await expectNoPageHorizontalScroll(page);
 });
 
 test("ロール・権限管理はアーカイブ済みロールの権限が無効であることを明示する", async ({ page }) => {
@@ -3737,7 +3755,7 @@ test("アーカイブ済みカスタムロールの削除は409を保持し再�
   await deleteDialog.getByRole("button", { name: "削除", exact: true }).click();
 
   await expect(page.getByText("削除対象ロール", { exact: true }).first()).toBeVisible();
-  await expect(page.getByRole("main", { name: "メイン領域" })).toContainText(
+  await expect(page.getByRole("main")).toContainText(
     "Deep Data Security で空の Data Grant を適用してから削除してください。"
   );
 
@@ -4732,7 +4750,7 @@ test("DeepSec は構造化データ権限をロール別に編集する", async 
   const columnActions = firstRule.getByTestId("security-deepsec-entitlement-column-selection-actions-0");
   const columnsGrid = firstRule.getByTestId("security-deepsec-entitlement-columns-grid-0");
   const objectPickerList = objectPicker.getByTestId("security-deepsec-object-picker-list-0");
-  const main = page.getByRole("main", { name: "メイン領域" });
+  const main = page.getByRole("main");
   const selectAllColumnsButton = columnActions.getByTestId(
     "security-deepsec-entitlement-column-selection-actions-0-select"
   );

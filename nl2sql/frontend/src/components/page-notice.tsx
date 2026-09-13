@@ -3,7 +3,7 @@ import { useCallback, useState } from "react";
 
 import type { FeedbackTone } from "@engchina/production-ready-ui";
 
-import { Banner } from "@/components/ui/banner";
+import { Banner } from "@engchina/production-ready-ui";
 
 /**
  * ページ/セクション常設通知（Messaging Spec Channel 4 Banner）の正準状態。

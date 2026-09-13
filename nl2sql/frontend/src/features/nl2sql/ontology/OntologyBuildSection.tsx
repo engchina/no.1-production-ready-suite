@@ -2,7 +2,12 @@ import { orderedBuildProgress } from "./unifiedConcepts";
 import { MarkdownPublication } from "./MarkdownPublication";
 import { useWorkspaceState } from "@/components/WorkspaceState";
 import { useUnsavedChangesGuard } from "@/lib/useUnsavedChangesGuard";
-import { Button } from "@/components/ui/button";
+import {
+  Button,
+  Banner,
+  toast,
+  StatusBadge,
+} from "@engchina/production-ready-ui";
 import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
 import {
   useCallback,
@@ -25,9 +30,7 @@ import {
   X,
 } from "lucide-react";
 
-import { Banner, toast } from "@engchina/production-ready-ui";
 
-import { StatusBadge } from "@/components/ui/status-badge";
 
 import { TimedLoadingState } from "@/components/ProcessingState";
 import { ContentActionBar } from "@/components/ContentActionBar";
@@ -90,9 +93,9 @@ const ONTOLOGY_SOURCE_FILE_FORMATS: TabularFileFormatConfig = {
 const ONTOLOGY_SOURCE_FILE_MAX_COUNT = 5;
 const ONTOLOGY_QA_FILE_FORMATS = tabularFileFormatConfig([".xlsm"]);
 const textareaClass =
-  "min-h-24 w-full resize-y rounded-md border border-border bg-card px-3 py-2 text-sm leading-6 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40";
+  "min-h-24 w-full resize-y rounded-md border border-border bg-surface px-3 py-2 text-sm leading-6 outline-none focus:border-focus-ring focus:ring-2 focus:ring-focus-ring";
 const markdownTextareaClass =
-  "min-h-[22rem] w-full resize-y rounded-md border border-border bg-code p-3 font-mono text-xs leading-6 text-code-fg outline-none transition-colors placeholder:text-muted focus:border-primary focus:ring-2 focus:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-70";
+  "min-h-[22rem] w-full resize-y rounded-md border border-border-control bg-surface p-3 font-mono text-xs leading-6 text-fg outline-none transition-colors placeholder:text-fg-muted focus:border-focus-ring focus:ring-2 focus:ring-focus-ring disabled:cursor-not-allowed disabled:opacity-70";
 type MarkdownTab = "draft" | "published";
 type MarkdownStateApplyReason = "profile-load" | "background" | "build" | "save" | "publish";
 
@@ -323,10 +326,10 @@ function BuildEventRows({ events }: { events: BuildEventAssignment[] }) {
           key={`${event.at}-${index}`}
           className="grid grid-cols-[auto_minmax(0,1fr)] gap-2 text-xs leading-5"
         >
-          <span className="tabular-nums text-muted">
+          <span className="tabular-nums text-fg-muted">
             {formatEventTime(event.at)}
           </span>
-          <span className="break-words text-foreground">{event.message_ja}</span>
+          <span className="break-words text-fg">{event.message_ja}</span>
         </li>
       ))}
     </>
@@ -338,7 +341,7 @@ function buildStatusVariant(status: OntologyBuildJob["status"]) {
   if (status === "succeeded_with_warnings") return "warning" as const;
   if (status === "failed") return "danger" as const;
   if (status === "cancelled") return "warning" as const;
-  return "pending" as const;
+  return "info" as const;
 }
 
 function buildProgressTone(status: OntologyBuildJob["status"]): WorkflowProgressTone {
@@ -403,11 +406,12 @@ function effectiveBuildStepStatus(
 
 function sourceStatusVariant(
   status: OntologySourceDocument["status"]
-): "danger" | "info" | "pending" | "success" {
+): "danger" | "info" | "neutral" | "success" {
   if (status === "failed") return "danger";
   if (status === "extracted") return "success";
-  if (status === "extracting") return "pending";
-  return "info";
+  // 抽出中は処理中（info）、未着手は neutral
+  if (status === "extracting") return "info";
+  return "neutral";
 }
 
 function sourceDocumentMeta(source: OntologySourceDocument): string {
@@ -442,16 +446,16 @@ function SavedSourceDocumentsList({
 }) {
   return (
     <section
-      className="grid min-w-0 gap-2 rounded-md border border-border bg-card px-3 py-2"
+      className="grid min-w-0 gap-2 rounded-md border border-border bg-surface px-3 py-2"
       aria-label={t("profiles.ontologyBuild.savedFiles")}
       data-testid="ontology-build-saved-files"
     >
       <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
         <div className="min-w-0">
-          <h4 className="text-sm font-semibold text-foreground">
+          <h4 className="text-sm font-semibold text-fg">
             {t("profiles.ontologyBuild.savedFiles")}
           </h4>
-          <p className="text-xs leading-5 text-muted">
+          <p className="text-xs leading-5 text-fg-muted">
             {profileLabel
               ? t("profiles.ontologyBuild.savedFilesHintForProfile", {
                   profile: profileLabel,
@@ -460,19 +464,19 @@ function SavedSourceDocumentsList({
           </p>
         </div>
         {loading ? (
-          <StatusBadge variant="pending" label={t("common.loading")} />
+          <StatusBadge variant="info" label={t("common.loading")} />
         ) : null}
       </div>
       {documents.length > 0 ? (
         <ul className="grid gap-1" aria-label={t("profiles.ontologyBuild.savedFilesList")}>
           {documents.map((source) => (
-            <li key={source.id} className="rounded-md border border-border bg-background px-3 py-2 text-sm">
+            <li key={source.id} className="rounded-md border border-border bg-surface-sunken px-3 py-2 text-sm">
               <div className="grid min-w-0 gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
                 <span className="min-w-0">
-                  <span className="block break-all font-semibold text-foreground">
+                  <span className="block break-all font-semibold text-fg">
                     {source.filename}
                   </span>
-                  <span className="block text-xs leading-5 text-muted">
+                  <span className="block text-xs leading-5 text-fg-muted">
                     {sourceDocumentMeta(source)}
                   </span>
                 </span>
@@ -488,7 +492,7 @@ function SavedSourceDocumentsList({
                     label={t(`profiles.ontologyBuild.sourceStatus.${source.status}`)}
                   />
                   {(source.extracted_chunk_count ?? 0) > 0 ? (
-                    <span className="text-xs tabular-nums text-muted">
+                    <span className="text-xs tabular-nums text-fg-muted">
                       {t("profiles.ontologyBuild.sourceChunks", {
                         count: source.extracted_chunk_count ?? 0,
                       })}
@@ -510,9 +514,7 @@ function SavedSourceDocumentsList({
                       aria-label={t("profiles.ontologyBuild.savedFileDeleteAria", {
                         name: source.filename,
                       })}
-                      onClick={() => onDelete(source)}
-                    >
-                      <Trash2 size={15} aria-hidden="true" />
+                      onClick={() => onDelete(source)} icon={Trash2}>
                       <span>{t("profiles.ontologyBuild.savedFileDelete")}</span>
                     </Button>
                   ) : null}
@@ -522,11 +524,11 @@ function SavedSourceDocumentsList({
           ))}
         </ul>
       ) : loading ? (
-        <p className="text-sm text-muted" data-testid="ontology-build-saved-files-loading">
+        <p className="text-sm text-fg-muted" data-testid="ontology-build-saved-files-loading">
           {t("profiles.ontologyBuild.savedFilesLoading")}
         </p>
       ) : (
-        <p className="text-sm text-muted" data-testid="ontology-build-saved-files-empty">
+        <p className="text-sm text-fg-muted" data-testid="ontology-build-saved-files-empty">
           {t("profiles.ontologyBuild.savedFilesEmpty")}
         </p>
       )}
@@ -1147,7 +1149,7 @@ export function OntologyBuildSection({
   if (!profileId) {
     return (
       <section
-        className="grid gap-3 rounded-md border border-border bg-card p-3"
+        className="grid gap-3 rounded-md border border-border bg-surface p-3"
         aria-label={t("profiles.ontologyBuild.title")}
         data-testid="profile-ontology-build"
       >
@@ -1358,14 +1360,14 @@ export function OntologyBuildSection({
 
   return (
     <section
-      className="grid min-w-0 gap-4 rounded-md border border-border bg-card p-4 shadow-sm"
+      className="grid min-w-0 gap-4 rounded-md border border-border bg-surface p-4 shadow-sm"
       aria-label={t("profiles.ontologyBuild.title")}
       data-testid="profile-ontology-build"
     >
       <SectionHeading profileLabel={profileLabel} />
       <PageNotice notice={notice} />
       <section
-        className="grid w-full min-w-0 content-start gap-4 rounded-md border border-border bg-background p-3"
+        className="grid w-full min-w-0 content-start gap-4 rounded-md border border-border bg-surface-sunken p-3"
         aria-label={t("profiles.ontologyBuild.setupTitle")}
         data-testid="ontology-build-setup-panel"
       >
@@ -1375,7 +1377,7 @@ export function OntologyBuildSection({
           description={t("profiles.ontologyBuild.setupHint")}
         />
         <Banner severity="info">{t("profiles.ontologyBuild.longRunningHint")}</Banner>
-        <label className="grid grid-rows-[auto_1fr] gap-1 text-sm font-medium text-foreground">
+        <label className="grid grid-rows-[auto_1fr] gap-1 text-sm font-medium text-fg">
           <span>{t("profiles.ontologyBuild.businessText")}</span>
           <textarea
             className={textareaClass}
@@ -1413,10 +1415,10 @@ export function OntologyBuildSection({
                 {sourceFiles.map((file) => (
                   <li
                     key={`${file.name}:${file.size}:${file.lastModified}`}
-                    className="flex min-w-0 items-center gap-2 rounded-md bg-card px-3 py-1.5 text-sm"
+                    className="flex min-w-0 items-center gap-2 rounded-md bg-surface px-3 py-1.5 text-sm"
                   >
-                    <span className="min-w-0 flex-1 truncate text-foreground">{file.name}</span>
-                    <span className="shrink-0 text-xs tabular-nums text-muted">
+                    <span className="min-w-0 flex-1 truncate text-fg">{file.name}</span>
+                    <span className="shrink-0 text-xs tabular-nums text-fg-muted">
                       {Math.max(1, Math.ceil(file.size / 1024))} KB
                     </span>
                     <Button
@@ -1430,10 +1432,8 @@ export function OntologyBuildSection({
                       onClick={() => {
                         setSourceFilesError("");
                         setSourceFiles((current) => current.filter((item) => item !== file));
-                      }}
-                    >
-                      <X size={15} aria-hidden="true" />
-                    </Button>
+                      }} icon={X}>
+                      </Button>
                   </li>
                 ))}
               </ul>
@@ -1475,20 +1475,16 @@ export function OntologyBuildSection({
             className="w-full sm:w-auto"
             loading={busy === "start" || jobRunning}
             disabled={busy !== "" || jobRunning || publishRunning}
-            onClick={() => void startBuild()}
-          >
-            <UploadCloud size={15} aria-hidden="true" />
+            onClick={() => void startBuild()} icon={UploadCloud}>
             <span>
-              {jobRunning
-                ? t("profiles.ontologyBuild.running")
-                : t("profiles.ontologyBuild.run")}
+              {t("profiles.ontologyBuild.run")}
             </span>
           </Button>
         </div>
       </section>
 
       <section
-        className="grid w-full min-w-0 content-start gap-4 rounded-md border border-border bg-background p-3"
+        className="grid w-full min-w-0 content-start gap-4 rounded-md border border-border bg-surface-sunken p-3"
         aria-label={t("profiles.ontologyBuild.reviewTitle")}
         data-testid="ontology-build-review-panel"
       >
@@ -1531,7 +1527,7 @@ export function OntologyBuildSection({
             toggleTestId: "ontology-build-progress-toggle",
           }}
           headerExtra={
-            <span className="text-xs tabular-nums text-muted" data-testid="ontology-build-step-progress">
+            <span className="text-xs tabular-nums text-fg-muted" data-testid="ontology-build-step-progress">
               {t("profiles.ontologyBuild.stepProgress", {
                 done: job.steps.filter((step) =>
                   ["succeeded", "skipped", "failed"].includes(
@@ -1556,9 +1552,7 @@ export function OntologyBuildSection({
                 loading={busy === "cancel"}
                 disabled={busy === "cancel"}
                 onClick={() => void cancelBuild()}
-                data-testid="ontology-build-cancel"
-              >
-                <Ban size={14} aria-hidden="true" />
+                data-testid="ontology-build-cancel" icon={Ban}>
                 <span>{t("profiles.ontologyBuild.cancel")}</span>
               </Button>
             ) : null
@@ -1586,7 +1580,7 @@ export function OntologyBuildSection({
               content: (
                 <>
                   {step.detail_ja ? (
-                    <p className="mt-2 border-l border-border pl-3 text-xs leading-5 text-muted">
+                    <p className="mt-2 border-l border-border pl-3 text-xs leading-5 text-fg-muted">
                       {step.detail_ja}
                     </p>
                   ) : null}
@@ -1624,9 +1618,7 @@ export function OntologyBuildSection({
                           loading={refreshingSchema}
                           disabled={refreshingSchema}
                           onClick={() => void onRefreshSchema()}
-                          data-testid="ontology-build-schema-refresh"
-                        >
-                          <RefreshCw size={15} aria-hidden="true" />
+                          data-testid="ontology-build-schema-refresh" icon={RefreshCw}>
                           <span>{t("profiles.schemaRefresh.action")}</span>
                         </Button>
                       ) : undefined
@@ -1647,9 +1639,7 @@ export function OntologyBuildSection({
                         loading={busy === "retry"}
                         disabled={busy !== "" && busy !== "retry"}
                         onClick={() => void retryBuild()}
-                        data-testid="ontology-build-retry"
-                      >
-                        <RefreshCw size={15} aria-hidden="true" />
+                        data-testid="ontology-build-retry" icon={RefreshCw}>
                         <span>{t("profiles.ontologyBuild.retryAction")}</span>
                       </Button>
                     }
@@ -1665,13 +1655,13 @@ export function OntologyBuildSection({
                 {buildWarnings.length > 0 ? (
                   <details
                     open={job.status === "failed"}
-                    className="group/disclosure rounded-md border border-warning/30 bg-warning-bg p-2 text-sm text-warning"
+                    className="group/disclosure rounded-md border border-warning-border bg-warning-subtle p-2 text-sm text-warning-fg"
                   >
-                    <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 [&::-webkit-details-marker]:hidden">
+                    <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring [&::-webkit-details-marker]:hidden">
                       <span>
                         {t("profiles.ontologyBuild.warningsTitle")} ({buildWarnings.length})
                       </span>
-                      <DisclosureChevron expanded="group" size={15} />
+                      <DisclosureChevron expanded="group" size={16} />
                     </summary>
                     <ul className="mt-2 grid gap-1 pl-4">
                       {buildWarnings.map((warning) => (
@@ -1687,11 +1677,11 @@ export function OntologyBuildSection({
                     {(job.sources ?? []).map((source) => (
                       <li
                         key={source.source_document_id}
-                        className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-background px-3 py-2 text-sm"
+                        className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-surface-sunken px-3 py-2 text-sm"
                       >
-                        <span className="min-w-0 break-all text-foreground">{source.filename}</span>
+                        <span className="min-w-0 break-all text-fg">{source.filename}</span>
                         <span className="flex items-center gap-2">
-                          <span className="text-xs tabular-nums text-muted">
+                          <span className="text-xs tabular-nums text-fg-muted">
                             {source.extracted_chunk_count ?? 0} chunks
                           </span>
                           <StatusBadge
@@ -1717,7 +1707,7 @@ export function OntologyBuildSection({
 
 
       <section
-        className="grid min-w-0 gap-3 rounded-md border border-border bg-background p-3"
+        className="grid min-w-0 gap-3 rounded-md border border-border bg-surface-sunken p-3"
         aria-label={t("profiles.ontologyBuild.markdownTitle")}
         data-testid="ontology-build-markdown"
       >
@@ -1725,7 +1715,7 @@ export function OntologyBuildSection({
           ariaLabel={t("profiles.ontologyBuild.markdownActions")}
           title={
             <span className="flex min-w-0 items-center gap-2">
-              <FileText size={16} className="shrink-0 text-primary" aria-hidden="true" />
+              <FileText size={16} className="shrink-0 text-accent-fg" aria-hidden="true" />
               <span>{t("profiles.ontologyBuild.markdownTitle")}</span>
               {draftDirty && <StatusBadge variant="warning" label={t("profiles.ontologyBuild.markdownUnsaved")} />}
             </span>
@@ -1739,9 +1729,7 @@ export function OntologyBuildSection({
             size="sm"
             aria-label={t("profiles.ontologyBuild.markdownCopy")}
             disabled={!activeMarkdown.trim()}
-            onClick={() => void copyMarkdownOutput()}
-          >
-            <ClipboardCopy size={15} aria-hidden="true" />
+            onClick={() => void copyMarkdownOutput()} icon={ClipboardCopy}>
             <span>{t("profiles.ontologyBuild.markdownCopy")}</span>
           </Button>
           <Button
@@ -1756,9 +1744,7 @@ export function OntologyBuildSection({
               publishRunning ||
               (busy !== "" && busy !== "save-draft")
             }
-            onClick={() => void saveDraftMarkdown()}
-          >
-            <Save size={15} aria-hidden="true" />
+            onClick={() => void saveDraftMarkdown()} icon={Save}>
             <span>{t("profiles.ontologyBuild.markdownSave")}</span>
           </Button>
         </ContentActionBar>
@@ -1773,7 +1759,7 @@ export function OntologyBuildSection({
 
         {activeMarkdownTab === "published" && publishedAtMeta ? (
           <div
-            className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted"
+            className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-fg-muted"
             role="status"
             aria-live="polite"
             data-testid="ontology-markdown-published-meta"
@@ -1790,9 +1776,7 @@ export function OntologyBuildSection({
                 type="button"
                 variant="secondary"
                 size="sm"
-                onClick={() => void refreshMarkdown(profileId)}
-              >
-                <RefreshCw size={15} aria-hidden="true" />
+                onClick={() => void refreshMarkdown(profileId)} icon={RefreshCw}>
                 <span>{t("common.action.retry")}</span>
               </Button>
             }
@@ -1821,9 +1805,9 @@ export function OntologyBuildSection({
               // Draft 未生成時は巨大なコードエディタ枠を出さず、簡潔な空状態にする
               <div
                 data-testid="ontology-markdown-draft-empty"
-                className="grid min-h-28 place-items-center rounded-md border border-dashed border-border bg-muted/20 px-4 py-6"
+                className="grid min-h-28 place-items-center rounded-md border border-dashed border-border bg-surface-hover px-4 py-6"
               >
-                <p className="text-sm leading-6 text-muted">
+                <p className="text-sm leading-6 text-fg-muted">
                   {t("profiles.ontologyBuild.markdownDraftPlaceholder")}
                 </p>
               </div>
@@ -1832,7 +1816,7 @@ export function OntologyBuildSection({
                 <label className="sr-only" htmlFor="ontology-markdown-draft-editor">
                   {t("profiles.ontologyBuild.markdownTabAria.draft")}
                 </label>
-                <textarea
+                <textarea data-surface="code"
                   id="ontology-markdown-draft-editor"
                   data-testid="ontology-markdown-draft-editor"
                   className={markdownTextareaClass}
@@ -1865,9 +1849,10 @@ export function OntologyBuildSection({
           >
             {publishedMarkdown.trim() ? (
               <div
+                data-surface="code"
                 data-testid="ontology-markdown-published-viewer"
                 aria-label={t("profiles.ontologyBuild.markdownTabAria.published")}
-                className="max-h-[32rem] min-h-[22rem] max-w-full overflow-auto rounded-md border border-border bg-code p-3 font-mono text-xs leading-6 text-code-fg"
+                className="max-h-[32rem] min-h-[22rem] max-w-full overflow-auto rounded-md border border-border bg-surface p-3 font-mono text-xs leading-6 text-fg"
               >
                 <pre className="whitespace-pre-wrap break-words">
                   <code>{publishedMarkdown}</code>
@@ -1878,9 +1863,9 @@ export function OntologyBuildSection({
               <div
                 data-testid="ontology-markdown-published-viewer"
                 aria-label={t("profiles.ontologyBuild.markdownTabAria.published")}
-                className="grid min-h-28 place-items-center rounded-md border border-dashed border-border bg-muted/20 px-4 py-6"
+                className="grid min-h-28 place-items-center rounded-md border border-dashed border-border bg-surface-hover px-4 py-6"
               >
-                <p className="text-sm leading-6 text-muted">
+                <p className="text-sm leading-6 text-fg-muted">
                   {t("profiles.ontologyBuild.markdownPublishedEmpty")}
                 </p>
               </div>
@@ -1899,13 +1884,13 @@ export function OntologyBuildSection({
         />}
         {!markdownLoading && publishJob ? (
           <div
-            className="grid gap-2 rounded-md border border-border bg-background p-3"
+            className="grid gap-2 rounded-md border border-border bg-surface-sunken p-3"
             role="status"
             aria-live="polite"
             data-testid="ontology-publish-status"
           >
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <span className="text-sm font-semibold text-foreground">
+              <span className="text-sm font-semibold text-fg">
                 {t("profiles.ontologyBuild.publishProgress")}
               </span>
               <StatusBadge
@@ -1920,7 +1905,7 @@ export function OntologyBuildSection({
               />
             </div>
             {publishJob.rdf_graph_name ? (
-              <code className="break-all text-xs text-muted">
+              <code className="break-all text-xs text-fg-muted">
                 {publishJob.rdf_graph_name} / {publishJob.inferred_graph_name}
               </code>
             ) : null}

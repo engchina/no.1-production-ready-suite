@@ -1,6 +1,14 @@
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { useWorkspaceState, useWorkspaceRevalidation, useWorkspaceDraftWriter, useWorkspaceActive, useTransientDraftGuard, WorkspaceResultNotice } from "@/components/WorkspaceState";
-import { Button } from "@/components/ui/button";
+import {
+  Button,
+  Banner,
+  toast,
+  StatusBadge,
+  PageHeader,
+  FieldError,
+  PageBody,
+} from "@engchina/production-ready-ui";
 import {
   useCallback,
   useEffect,
@@ -21,17 +29,13 @@ import {
 } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
-import { Banner, toast } from "@engchina/production-ready-ui";
 
 import { TimedLoadingState } from "@/components/ProcessingState";
 import { ActionResultRegion } from "@/components/ActionResultRegion";
-import { PageHeader } from "@/components/PageHeader";
 import { PageNotice } from "@/components/page-notice";
 import { EmptyState } from "@/components/StateViews";
 import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
-import { FieldError } from "@/components/ui/field-error";
 import { FieldLabel } from "@/components/ui/required-field";
-import { StatusBadge } from "@/components/ui/status-badge";
 import { useAuth } from "@/features/security/AuthProvider";
 import {
   CAPABILITY_PERMISSIONS,
@@ -155,9 +159,9 @@ export function Nl2SqlWorkbench() {
     return (
       <>
         <PageHeader title={t("nav.query")} subtitle={t("page.query.subtitle")} />
-        <main className="p-4 lg:p-8">
+        <PageBody>
           <Banner severity="info">{t("nl2sql.permission.executeRequired")}</Banner>
-        </main>
+        </PageBody>
       </>
     );
   }
@@ -977,7 +981,7 @@ function ExecutableNl2SqlWorkbench() {
         ]}
       />
 
-      <div className="grid gap-4 p-4 lg:p-8">
+      <PageBody className="grid gap-4">
         <PageNotice
           notice={
             visiblePageError
@@ -986,8 +990,7 @@ function ExecutableNl2SqlWorkbench() {
           }
           action={
             visiblePageError ? (
-              <Button type="button" variant="secondary" size="sm" onClick={() => void loadCatalog()}>
-                <RefreshCw size={15} aria-hidden="true" />
+              <Button type="button" variant="secondary" size="sm" onClick={() => void loadCatalog()} icon={RefreshCw}>
                 <span>{t("nl2sql.action.refresh")}</span>
               </Button>
             ) : undefined
@@ -1004,9 +1007,7 @@ function ExecutableNl2SqlWorkbench() {
                   type="button"
                   variant="secondary"
                   size="sm"
-                  onClick={() => navigate("/profiles?profile=new")}
-                >
-                  <UserCog size={15} aria-hidden="true" />
+                  onClick={() => navigate("/profiles?profile=new")} icon={UserCog}>
                   <span>{t("nl2sql.profile.empty.action")}</span>
                 </Button>
               ) : undefined
@@ -1019,11 +1020,11 @@ function ExecutableNl2SqlWorkbench() {
         ) : null}
 
         <section
-          className="grid gap-4 rounded-md border border-border bg-card p-4 shadow-sm"
+          className="grid gap-4 rounded-md border border-border bg-surface p-4 shadow-sm"
           aria-label={t("nl2sql.workspace.label")}
           data-testid="nl2sql-workspace-shell"
         >
-          <section className="grid min-w-0 content-start gap-4" aria-labelledby="nl2sql-query-heading">
+          <section className="grid min-w-0 grid-cols-[minmax(0,1fr)] content-start gap-4" aria-labelledby="nl2sql-query-heading">
                 <DbObjectPanelHeader
                   headingId="nl2sql-query-heading"
                   icon={Sparkles}
@@ -1044,7 +1045,7 @@ function ExecutableNl2SqlWorkbench() {
                 <div className="grid gap-1">
                   <label
                     htmlFor="nl2sql-profile-select"
-                    className="text-sm font-medium text-foreground"
+                    className="text-sm font-medium text-fg"
                   >
                     {t("nl2sql.profile.label")}
                   </label>
@@ -1062,7 +1063,7 @@ function ExecutableNl2SqlWorkbench() {
                         setSchemaDetailError("");
                       }}
                       disabled={active || profilesQuery.isPending || noProfiles}
-                      className="min-h-11 min-w-0 flex-1 rounded-md border border-border bg-card px-3 py-2 text-sm focus:border-primary focus:ring-2 focus:ring-ring/40"
+                      className="min-h-11 min-w-0 flex-1 rounded-md border border-border-control bg-surface px-3 py-2 text-sm focus:border-focus-ring focus:ring-2 focus:ring-focus-ring"
                     >
                       {profilesQuery.isPending && (
                         <option value={profileId}>{t("profiles.summary.loading")}</option>
@@ -1080,9 +1081,7 @@ function ExecutableNl2SqlWorkbench() {
                       className="shrink-0"
                       loading={detecting}
                       disabled={!question.trim() || active || !profileSelectionReady}
-                      onClick={() => void detectProfile()}
-                    >
-                      <Wand2 size={16} aria-hidden="true" />
+                      onClick={() => void detectProfile()} icon={Wand2}>
                       <span>{t("nl2sql.recommend.autoDetect")}</span>
                     </Button>
                     {profilesQuery.hasNextPage && (
@@ -1108,9 +1107,7 @@ function ExecutableNl2SqlWorkbench() {
                         className="w-full sm:w-auto"
                         loading={profilesQuery.isFetchingNextPage}
                         disabled={active}
-                        onClick={() => void profilesQuery.fetchNextPage()}
-                      >
-                        <RefreshCw size={15} aria-hidden="true" />
+                        onClick={() => void profilesQuery.fetchNextPage()} icon={RefreshCw}>
                         <span>{t("common.retry")}</span>
                       </Button>}
                     >
@@ -1124,11 +1121,11 @@ function ExecutableNl2SqlWorkbench() {
                       PROFILE_RECOMMENDATION_APPLY_THRESHOLD) &&
                   recommendation.recommended_profile_id !== profileId && (
                     <div
-                      className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-sm"
+                      className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-accent-emphasis bg-accent-subtle px-3 py-2 text-sm"
                       data-testid="nl2sql-recommend-hint"
                     >
-                      <span className="flex min-w-0 items-center gap-2 text-foreground">
-                        <Sparkles size={15} className="shrink-0 text-primary" aria-hidden="true" />
+                      <span className="flex min-w-0 items-center gap-2 text-fg">
+                        <Sparkles size={16} className="shrink-0 text-accent-fg" aria-hidden="true" />
                         <span className="min-w-0 [overflow-wrap:anywhere]">
                           {t("nl2sql.recommend.switchHint", {
                             name: profileDisplayLabel({
@@ -1174,7 +1171,7 @@ function ExecutableNl2SqlWorkbench() {
                     <div className="grid gap-2">
                       {/* 入力を保持し、選択したテンプレートを末尾へ追記する。 */}
                       <div className="flex flex-wrap items-center gap-2">
-                        <span className="text-xs font-medium text-muted">{t("dbAdmin.runner.templates")}</span>
+                        <span className="text-xs font-medium text-fg-muted">{t("dbAdmin.runner.templates")}</span>
                         {QUESTION_TEMPLATES.map((template) => (
                           <Button
                             key={template.labelKey}
@@ -1222,7 +1219,7 @@ function ExecutableNl2SqlWorkbench() {
                           rows={5}
                           required
                           aria-required="true"
-                          className="min-h-36 max-h-[16.625rem] resize-none rounded-md border border-border bg-card px-3 py-2 text-sm leading-6 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40"
+                          className="min-h-36 max-h-[16.625rem] resize-none rounded-md border border-border-control bg-surface px-3 py-2 text-sm leading-6 outline-none focus:border-focus-ring focus:ring-2 focus:ring-focus-ring"
                           placeholder={t("nl2sql.question.placeholder")}
                         />
                         {guidedClarificationOpen ? (
@@ -1245,12 +1242,10 @@ function ExecutableNl2SqlWorkbench() {
                               onClick={() => {
                                 setActionError("");
                                 setGuidedClarificationOpen(true);
-                              }}
-                            >
-                              <Sparkles size={16} aria-hidden="true" />
+                              }} icon={Sparkles}>
                               <span>{t("nl2sql.clarification.start")}</span>
                             </Button>
-                            <span className="text-xs leading-5 text-muted">
+                            <span className="text-xs leading-5 text-fg-muted">
                               {t("nl2sql.clarification.description")}
                             </span>
                           </div>
@@ -1262,24 +1257,23 @@ function ExecutableNl2SqlWorkbench() {
                           />
                         ) : null}
                         {engine === "select_ai" && (
-                          <section className="overflow-hidden rounded-md border border-dashed border-border bg-background">
-                            <Button
+                          <section className="overflow-hidden rounded-md border border-dashed border-border bg-surface-sunken">
+                            <Button className="w-full justify-between"
                               type="button"
                               variant="ghost"
                               size="md"
-                              data-button-layout="disclosure"
                               aria-expanded={selectAiAdvancedOpen}
                               aria-controls="select-ai-request-overrides"
                               onClick={() => setSelectAiAdvancedOpen((current) => !current)}
                               disabled={active}
                             >
                               <span className="flex min-w-0 items-center gap-2">
-                                <Sparkles size={15} className="shrink-0 text-foreground" aria-hidden="true" />
+                                <Sparkles size={16} className="shrink-0 text-fg" aria-hidden="true" />
                                 <span className="min-w-0 [overflow-wrap:anywhere]">
                                   {t("nl2sql.selectAiOverrides.title")}
                                 </span>
                                 {hasSelectAiOverrideInputs && (
-                                  <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+                                  <span className="shrink-0 rounded-full bg-accent-subtle px-2 py-0.5 text-xs font-medium text-accent-fg">
                                     {t("nl2sql.selectAiOverrides.activeBadge")}
                                   </span>
                                 )}
@@ -1296,49 +1290,48 @@ function ExecutableNl2SqlWorkbench() {
                               hidden={!selectAiAdvancedOpen}
                               className="grid gap-3 border-t border-border p-3"
                             >
-                                <p className="text-xs leading-5 text-muted">
+                                <p className="text-xs leading-5 text-fg-muted">
                                   {t("nl2sql.selectAiOverrides.hint")}
                                 </p>
-                                <label className="grid gap-1 text-sm font-medium text-foreground">
+                                <label className="grid gap-1 text-sm font-medium text-fg">
                                   <span>{t("nl2sql.selectAiOverrides.additionalInstructions")}</span>
                                   <textarea
                                     value={selectAiInstructionsOverride}
                                     onChange={(event) => setSelectAiInstructionsOverride(event.currentTarget.value)}
                                     disabled={active}
                                     rows={3}
-                                    className="min-h-24 rounded-md border border-border bg-card px-3 py-2 text-sm leading-6 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40"
+                                    className="min-h-24 rounded-md border border-border-control bg-surface px-3 py-2 text-sm leading-6 outline-none focus:border-focus-ring focus:ring-2 focus:ring-focus-ring"
                                     placeholder={t("nl2sql.selectAiOverrides.additionalInstructionsPlaceholder")}
                                   />
                                 </label>
-                                <div className="overflow-hidden rounded-md border border-border bg-card">
-                                  <Button
+                                <div className="overflow-hidden rounded-md border border-border bg-surface">
+                                  <Button className="w-full justify-between"
                                     type="button"
                                     variant="ghost"
                                     size="sm"
-                                    data-button-layout="disclosure"
                                     aria-expanded={selectAiRolePanelOpen}
                                     aria-controls="select-ai-role-override"
                                     onClick={() => setSelectAiRoleAdvancedOpen((current) => !current)}
                                     disabled={active}
                                   >
                                     <span className="flex min-w-0 items-center gap-2">
-                                      <UserCog size={14} className="shrink-0 text-muted" aria-hidden="true" />
+                                      <UserCog size={14} className="shrink-0 text-fg-muted" aria-hidden="true" />
                                       <span>{t("nl2sql.selectAiOverrides.roleToggle")}</span>
                                       {selectAiRoleHasOverride && (
-                                        <span className="rounded-full bg-muted/30 px-2 py-0.5 text-xs font-medium text-muted">
+                                        <span className="rounded-full bg-surface-hover px-2 py-0.5 text-xs font-medium text-fg-muted">
                                           {t("nl2sql.selectAiOverrides.activeBadge")}
                                         </span>
                                       )}
                                     </span>
                                     <DisclosureChevron
                                       expanded={selectAiRolePanelOpen}
-                                      size={15}
+                                      size={16}
                                     />
                                   </Button>
                                   <label
                                     id="select-ai-role-override"
                                     hidden={!selectAiRolePanelOpen}
-                                    className="grid gap-1 border-t border-border p-3 text-sm font-medium text-foreground"
+                                    className="grid gap-1 border-t border-border p-3 text-sm font-medium text-fg"
                                   >
                                     <span>{t("nl2sql.selectAiOverrides.role")}</span>
                                     <textarea
@@ -1346,7 +1339,7 @@ function ExecutableNl2SqlWorkbench() {
                                       onChange={(event) => setSelectAiRoleOverride(event.currentTarget.value)}
                                       disabled={active}
                                       rows={2}
-                                      className="min-h-20 rounded-md border border-border bg-background px-3 py-2 text-sm leading-6 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40"
+                                      className="min-h-20 rounded-md border border-border-control bg-surface-sunken px-3 py-2 text-sm leading-6 outline-none focus:border-focus-ring focus:ring-2 focus:ring-focus-ring"
                                       placeholder={t("nl2sql.selectAiOverrides.rolePlaceholder")}
                                     />
                                   </label>
@@ -1356,7 +1349,7 @@ function ExecutableNl2SqlWorkbench() {
                         )}
                       </div>
                     </div>
-                    <div className="rounded-md border border-border bg-background p-3">
+                    <div className="rounded-md border border-border bg-surface-sunken p-3">
                       <SchemaReferencePanel
                         catalog={catalog}
                         loading={loadingCatalog}
@@ -1403,18 +1396,18 @@ function ExecutableNl2SqlWorkbench() {
                   />
                   {rewriteData && rewriteChanged && (
                     <div
-                      className="grid gap-3 rounded-md border border-primary/30 bg-card p-3"
+                      className="grid gap-3 rounded-md border border-accent-emphasis bg-surface p-3"
                       data-testid="nl2sql-rewrite-card"
                     >
                       <dl className="grid gap-2 text-sm">
                         <div>
-                          <dt className="font-medium text-muted">{t("nl2sql.session.originalQuestion")}</dt>
+                          <dt className="font-medium text-fg-muted">{t("nl2sql.session.originalQuestion")}</dt>
                           <dd className="mt-1">
                             <QuestionText value={question} variant="detail" maxLines={3} expandable />
                           </dd>
                         </div>
                         <div>
-                          <dt className="font-medium text-muted">{t("nl2sql.session.suggestedQuestion")}</dt>
+                          <dt className="font-medium text-fg-muted">{t("nl2sql.session.suggestedQuestion")}</dt>
                           <dd className="mt-1">
                             <QuestionText value={rewriteData.rewritten_question} variant="detail" maxLines={3} expandable />
                           </dd>
@@ -1433,7 +1426,7 @@ function ExecutableNl2SqlWorkbench() {
                       <div className="flex flex-wrap items-center gap-2">
                         {/* source（deterministic 等）は内部識別子なので画面には出さない。 */}
                         {rewriteData.model && (
-                          <span className="rounded-md bg-muted/30 px-2 py-1 text-xs font-medium text-foreground">
+                          <span className="rounded-md bg-surface-hover px-2 py-1 text-xs font-medium text-fg">
                             {rewriteData.model}
                           </span>
                         )}
@@ -1451,12 +1444,11 @@ function ExecutableNl2SqlWorkbench() {
                   )}
 
                   {showSimilarHistoryPanel && (
-                    <section className="w-full min-w-0 max-w-full overflow-hidden rounded-md border border-border bg-card">
-                      <Button
+                    <section className="w-full min-w-0 max-w-full overflow-hidden rounded-md border border-border bg-surface">
+                      <Button className="w-full justify-between"
                         type="button"
                         variant="ghost"
                         size="md"
-                        data-button-layout="disclosure"
                         aria-expanded={similarHistoryOpen}
                         aria-controls="nl2sql-similar-history"
                         onClick={() => setSimilarHistoryOpen((current) => !current)}
@@ -1464,7 +1456,7 @@ function ExecutableNl2SqlWorkbench() {
                       >
                         <span className="flex min-w-0 flex-wrap items-center gap-2">
                           <span className="flex min-w-0 items-center gap-2">
-                            <BookOpenText size={16} className="shrink-0 text-foreground" aria-hidden="true" />
+                            <BookOpenText size={16} className="shrink-0 text-fg" aria-hidden="true" />
                             <span className="truncate">
                               {similarHistoryLoading
                                 ? t("nl2sql.similar.loading")
@@ -1490,7 +1482,7 @@ function ExecutableNl2SqlWorkbench() {
                         id="nl2sql-similar-history"
                         data-testid="nl2sql-similar-history"
                         hidden={!similarHistoryOpen}
-                        className="grid gap-3 border-t border-border p-3 text-sm text-foreground"
+                        className="grid gap-3 border-t border-border p-3 text-sm text-fg"
                       >
                         {!similarHistoryUsedForGeneration && !similarHistoryLoading && (
                           <Banner severity="info">{t("nl2sql.similar.notUsedHint")}</Banner>
@@ -1505,7 +1497,7 @@ function ExecutableNl2SqlWorkbench() {
                             <article
                               key={entry.history_id}
                               data-testid="nl2sql-similar-history-item"
-                              className="grid w-full min-w-0 max-w-full gap-2 overflow-hidden rounded-md bg-background p-3"
+                              className="grid w-full min-w-0 max-w-full gap-2 overflow-hidden rounded-md bg-surface-sunken p-3"
                             >
                               <div className="grid w-full min-w-0 max-w-full gap-2 sm:flex sm:flex-wrap sm:items-start sm:justify-between">
                                 <div className="min-w-0 sm:flex-1 sm:basis-0">
@@ -1515,9 +1507,9 @@ function ExecutableNl2SqlWorkbench() {
                                     maxLines={1}
                                     testId="nl2sql-similar-history-question"
                                   />
-                                  <p className="mt-1 text-xs text-muted">{entry.reason}</p>
+                                  <p className="mt-1 text-xs text-fg-muted">{entry.reason}</p>
                                 </div>
-                                <span className="w-fit rounded-md bg-card px-2 py-1 text-xs font-medium text-foreground sm:shrink-0">
+                                <span className="w-fit rounded-md bg-surface px-2 py-1 text-xs font-medium text-fg sm:shrink-0">
                                   {t("nl2sql.similar.score", {
                                     score: Math.round(entry.score * 100),
                                   })}
@@ -1529,7 +1521,7 @@ function ExecutableNl2SqlWorkbench() {
                                 tabIndex={0}
                                 role="region"
                                 aria-label={t("nl2sql.similar.title")}
-                                className="max-h-28 overflow-auto rounded-md border border-border bg-card p-2 text-sm leading-6 text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+                                className="max-h-28 overflow-auto rounded-md border border-border bg-surface p-2 text-sm leading-6 text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
                               >
                                 <code>{entry.sql}</code>
                               </pre>
@@ -1549,9 +1541,7 @@ function ExecutableNl2SqlWorkbench() {
                       size="lg"
                       loading={jobActive}
                       disabled={!question.trim() || active || !profileSelectionReady}
-                      onClick={() => void submit()}
-                    >
-                      <Play size={16} aria-hidden="true" />
+                      onClick={() => void submit()} icon={Play}>
                       <span>{t("nl2sql.action.run")}</span>
                     </Button>
                     <Button
@@ -1579,9 +1569,7 @@ function ExecutableNl2SqlWorkbench() {
                         setSchemaDetailError("");
                         setActionError("");
                         setGuidedClarificationOpen(false);
-                      }}
-                    >
-                      <RotateCcw size={16} aria-hidden="true" />
+                      }} icon={RotateCcw}>
                       <span>{t("nl2sql.query.actions.startNew")}</span>
                     </Button>
                   </div>
@@ -1598,9 +1586,7 @@ function ExecutableNl2SqlWorkbench() {
                           size="sm"
                           loading={importingSample}
                           disabled={active}
-                          onClick={() => void importSampleData()}
-                        >
-                          <Database size={15} aria-hidden="true" />
+                          onClick={() => void importSampleData()} icon={Database}>
                           <span>{t("nl2sql.sample.import")}</span>
                         </Button>
                       ) : undefined
@@ -1650,7 +1636,7 @@ function ExecutableNl2SqlWorkbench() {
           questionText={question}
           onSaved={refreshHistory}
         />
-      </div>
+      </PageBody>
     </>
   );
 }

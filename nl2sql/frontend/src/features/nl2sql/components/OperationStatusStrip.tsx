@@ -1,7 +1,9 @@
 import { Database } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
-import { Banner } from "@engchina/production-ready-ui";
+import {
+  Button,
+  Banner,
+} from "@engchina/production-ready-ui";
 
 import { t } from "@/lib/i18n";
 import { formatElapsedDuration as formatElapsed } from "@/lib/operationTiming";
@@ -82,7 +84,7 @@ export function OperationStatusStrip({
     job?.elapsed_ms ?? job?.result?.timing.elapsed_ms ?? job?.timing?.elapsed_ms;
   if (!job) return null;
 
-  const variant = job.status === "done" ? "success" : job.status === "error" ? "danger" : "pending";
+  const variant = job.status === "done" ? "success" : job.status === "error" ? "danger" : "info";
   const steps = normalizeNl2SqlJobSteps(job);
   // プレビュー経路: execute/format 未実行(skipped)。「完了」ではなく確認を促す文言に差し替える。
   const isPreview = Boolean(onPreviewExecute);
@@ -133,13 +135,13 @@ export function OperationStatusStrip({
             {step.stage === "prepare_context" && job.result && (
               <dl className="mt-2 grid gap-2 border-l border-border pl-3 text-xs">
                 <div className="grid gap-0.5">
-                  <dt className="font-medium text-muted">{t("nl2sql.result.rewritten")}</dt>
-                  <dd className="leading-5 text-foreground">
+                  <dt className="font-medium text-fg-muted">{t("nl2sql.result.rewritten")}</dt>
+                  <dd className="leading-5 text-fg">
                     <QuestionText
                       value={job.result.rewritten_question || "-"}
                       variant="compact"
                       maxLines={2}
-                      className="text-foreground"
+                      className="text-fg"
                     />
                   </dd>
                 </div>
@@ -148,14 +150,14 @@ export function OperationStatusStrip({
             {step.stage === "safety_check" && job.result && (
               <dl className="mt-2 grid gap-2 border-l border-border pl-3 text-xs">
                 <div className="grid gap-0.5">
-                  <dt className="font-medium text-muted">{t("nl2sql.result.tables")}</dt>
-                  <dd className="break-words font-mono leading-5 text-foreground">
+                  <dt className="font-medium text-fg-muted">{t("nl2sql.result.tables")}</dt>
+                  <dd className="break-words font-mono leading-5 text-fg">
                     {job.result.safety.referenced_tables.join(", ") || "-"}
                   </dd>
                 </div>
                 <div className="grid gap-0.5">
-                  <dt className="font-medium text-muted">{t("nl2sql.result.columns")}</dt>
-                  <dd className="break-words font-mono leading-5 text-foreground">
+                  <dt className="font-medium text-fg-muted">{t("nl2sql.result.columns")}</dt>
+                  <dd className="break-words font-mono leading-5 text-fg">
                     {job.result.safety.referenced_columns.join(", ") || "-"}
                   </dd>
                 </div>
@@ -215,18 +217,16 @@ export function OperationStatusStrip({
                     variant="primary"
                     size="sm"
                     loading={importingSample}
-                    onClick={onImportSample}
-                  >
-                    <Database size={15} aria-hidden="true" />
+                    onClick={onImportSample} icon={Database}>
                     <span>{t("nl2sql.sample.import")}</span>
                   </Button>
-                  <span className="text-xs text-muted">{t("nl2sql.sample.importHint")}</span>
+                  <span className="text-xs text-fg-muted">{t("nl2sql.sample.importHint")}</span>
                 </div>
               ) : undefined}
             >
               {failureMessage}
               {job.status === "error" && catalogEmpty && !onImportSample && sampleImportUnavailableHint && (
-                <p className="text-xs text-muted">{sampleImportUnavailableHint}</p>
+                <p className="text-xs text-fg-muted">{sampleImportUnavailableHint}</p>
               )}
             </Banner>
           )}

@@ -18,21 +18,28 @@ import {
   XCircle,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
-import { toast } from "@engchina/production-ready-ui";
+import {
+  toast,
+  Button,
+  Spinner,
+  StatusBadge,
+  TextField,
+  Banner,
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  FieldError,
+  FormStatus,
+  Skeleton,
+  PageBody,
+} from "@engchina/production-ready-ui";
 
 import { ErrorState } from "@/components/StateViews";
 import { TimedLoadingState } from "@/components/ProcessingState";
-import { Button } from "@/components/ui/button";
-import { Banner } from "@/components/ui/banner";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { FieldError } from "@/components/ui/field-error";
 import { FileDropzone } from "@/components/ui/file-dropzone";
-import { FormStatus } from "@/components/ui/form-status";
 import { FieldLabel, RequiredFieldsNote } from "@/components/ui/required-field";
 import { SelectField, type SelectFieldOption } from "@/components/ui/select-field";
-import { Skeleton } from "@/components/ui/skeleton";
-import { StableLoadingIcon } from "@/components/ui/stable-loading-icon";
-import { StatusBadge } from "@/components/ui/status-badge";
 import { SavedSecretBadge } from "@/components/settings/SavedSecretBadge";
 import {
   SettingsTestResultPanel,
@@ -329,7 +336,7 @@ export function DatabaseSettingsClient() {
 
   if (query.isPending) {
     return (
-      <div className="p-8">
+      <PageBody>
         <TimedLoadingState
           label={t("settings.database.loading")}
           operationKey="settings-database-load"
@@ -339,13 +346,13 @@ export function DatabaseSettingsClient() {
           <Skeleton className="h-20 w-full rounded-lg" />
           <Skeleton className="h-[460px] w-full rounded-lg" />
         </TimedLoadingState>
-      </div>
+      </PageBody>
     );
   }
 
   if (query.isError) {
     return (
-      <div className="p-8">
+      <PageBody>
         <ErrorState
           message={
             query.error instanceof ApiError
@@ -354,7 +361,7 @@ export function DatabaseSettingsClient() {
           }
           onRetry={() => void query.refetch()}
         />
-      </div>
+      </PageBody>
     );
   }
 
@@ -362,7 +369,7 @@ export function DatabaseSettingsClient() {
   if (!settings) return null;
 
   return (
-    <div className="p-8">
+    <PageBody>
       <fieldset disabled={operationBusy} aria-busy={operationBusy} className="min-w-0 space-y-6">
         <AdbManagementCard
           settings={settings}
@@ -382,8 +389,8 @@ export function DatabaseSettingsClient() {
           <Card className="rounded-md">
             <CardHeader className="p-6 pb-0">
               <div className="flex items-center gap-2 border-b border-border pb-5">
-                <Database size={18} aria-hidden />
-                <CardTitle className="text-lg">{t("settings.database.cardTitle")}</CardTitle>
+                <Database size={20} aria-hidden />
+                <CardTitle className="text-base">{t("settings.database.cardTitle")}</CardTitle>
               </div>
             </CardHeader>
 
@@ -393,10 +400,10 @@ export function DatabaseSettingsClient() {
                 <TextField
                   id="oracle-user"
                   label={t("settings.database.field.dbUser")}
-                  required
+                  required requiredLabel={t("common.required")}
                   value={form.user}
-                  inputRef={userRef}
-                  onChange={(value) => updateForm({ user: value })}
+                  ref={userRef}
+                  onValueChange={(value) => updateForm({ user: value })}
                   placeholder={t("settings.database.placeholder.dbUser")}
                   error={errors.user}
                 />
@@ -518,37 +525,30 @@ export function DatabaseSettingsClient() {
               />
 
               <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
-                <Button type="submit" size="lg" loading={save.isPending}>
-                  <Save size={16} aria-hidden />
-                  {save.isPending
-                    ? t("settings.database.actions.saving")
-                    : t("settings.database.actions.saveDb")}
+                <Button type="submit" size="lg" loading={save.isPending} icon={Save}>
+                  {t("settings.database.actions.saveDb")}
                 </Button>
                 <Button
                   type="button"
                   size="lg"
                   variant="secondary"
                   loading={test.isPending}
-                  onClick={() => runTest(settings)}
-                >
-                  <PlugZap size={16} aria-hidden />
-                  {test.isPending
-                    ? t("settings.database.actions.testing")
-                    : t("settings.database.actions.testDb")}
+                  onClick={() => runTest(settings)} icon={PlugZap}>
+                  {t("settings.database.actions.testDb")}
                 </Button>
                 {save.isError ? <FormStatus tone="danger" message={saveError} /> : null}
               </div>
 
               <DatabaseTestResultPanel result={testResult} error={test.error} />
 
-              <p className="text-xs leading-relaxed text-muted">{t("settings.database.hint")}</p>
+              <p className="text-xs leading-relaxed text-fg-muted">{t("settings.database.hint")}</p>
             </CardContent>
           </Card>
         </form>
 
         <SelectAiCredentialCard />
       </fieldset>
-    </div>
+    </PageBody>
   );
 }
 
@@ -633,12 +633,12 @@ function SelectAiCredentialCard() {
         <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border pb-5">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <KeyRound size={18} aria-hidden />
-              <CardTitle className="text-lg">
+              <KeyRound size={20} aria-hidden />
+              <CardTitle className="text-base">
                 {t("settings.database.selectAiCredential.title")}
               </CardTitle>
             </div>
-            <p className="mt-2 text-sm leading-6 text-muted">
+            <p className="mt-2 text-sm leading-6 text-fg-muted">
               {t("settings.database.selectAiCredential.description")}
             </p>
           </div>
@@ -672,14 +672,12 @@ function SelectAiCredentialCard() {
               <Banner
                 severity="danger"
                 action={
-                  <Button
+                  <Button type="button"
                     size="sm"
                     variant="secondary"
                     loading={status.isFetching}
                     disabled={status.isFetching}
-                    onClick={() => void refresh()}
-                  >
-                    <RefreshCw size={15} aria-hidden />
+                    onClick={() => void refresh()} icon={RefreshCw}>
                     {t("settings.database.selectAiCredential.action.refresh")}
                   </Button>
                 }
@@ -733,14 +731,12 @@ function SelectAiCredentialCard() {
                   })}
                 />
                 {!hasStatusError ? (
-                  <Button
+                  <Button type="button"
                     size="sm"
                     variant="secondary"
                     loading={status.isFetching}
                     disabled={status.isFetching}
-                    onClick={() => void refresh()}
-                  >
-                    <RefreshCw size={15} aria-hidden />
+                    onClick={() => void refresh()} icon={RefreshCw}>
                     {t("settings.database.selectAiCredential.action.refresh")}
                   </Button>
                 ) : null}
@@ -764,7 +760,7 @@ function SelectAiCredentialCard() {
               )}
               disabled={busy || !data.oci_auth_ready}
               actions={
-                <Button
+                <Button type="button"
                   size="lg"
                   variant={data.exists ? "danger" : "primary"}
                   className="w-full sm:w-auto"
@@ -773,9 +769,9 @@ function SelectAiCredentialCard() {
                   onClick={() => void execute()}
                 >
                   {data.exists ? (
-                    <RotateCcw size={15} aria-hidden />
+                    <RotateCcw size={16} aria-hidden />
                   ) : (
-                    <KeyRound size={15} aria-hidden />
+                    <KeyRound size={16} aria-hidden />
                   )}
                   {t(
                     data.exists
@@ -814,9 +810,9 @@ function CredentialSummary({
   mono?: boolean;
 }) {
   return (
-    <div className="min-w-0 rounded-md border border-border bg-card p-3">
-      <dt className="text-xs font-medium text-muted">{label}</dt>
-      <dd className={cn("mt-1 break-all text-sm font-semibold text-foreground", mono && "font-mono")}>
+    <div className="min-w-0 rounded-md border border-border bg-surface p-3">
+      <dt className="text-xs font-medium text-fg-muted">{label}</dt>
+      <dd className={cn("mt-1 break-all text-sm font-semibold text-fg", mono && "font-mono")}>
         {value}
       </dd>
     </div>
@@ -895,8 +891,6 @@ function AdbManagementCard({
   const refreshWalletPending = refreshAttemptedWallet && walletEnsurePending;
   const saveSettingsFeedbackPending =
     (activeOperation === "save" || activeOperation === "refresh") && saveSettings.isPending;
-  const refreshSettingsFeedbackPending =
-    activeOperation === "refresh" && saveSettings.isPending;
   const saveButtonLoading =
     saveSettingsFeedbackPending ||
     ((activeOperation === "save" || activeOperation === "refresh") && refreshWalletPending);
@@ -1006,8 +1000,8 @@ function AdbManagementCard({
       <CardHeader className="p-6 pb-0">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border pb-5">
           <div className="flex items-center gap-2">
-            <Server size={18} aria-hidden />
-            <CardTitle className="text-lg">{t("settings.adb.title")}</CardTitle>
+            <Server size={20} aria-hidden />
+            <CardTitle className="text-base">{t("settings.adb.title")}</CardTitle>
           </div>
           <Button
             type="button"
@@ -1015,18 +1009,14 @@ function AdbManagementCard({
             size="sm"
             loading={refreshButtonLoading}
             disabled={busy}
-            onClick={() => void handleRefresh("refresh")}
-          >
-            <RefreshCw size={15} aria-hidden />
-            {refreshSettingsFeedbackPending
-              ? t("settings.adb.action.refreshing")
-              : t("settings.adb.action.refresh")}
+            onClick={() => void handleRefresh("refresh")} icon={RefreshCw}>
+            {t("settings.adb.action.refresh")}
           </Button>
         </div>
       </CardHeader>
 
       <CardContent className="space-y-5 p-6">
-        <p className="text-sm leading-relaxed text-muted">{t("settings.adb.description")}</p>
+        <p className="text-sm leading-relaxed text-fg-muted">{t("settings.adb.description")}</p>
 
         <div className="space-y-4">
           <SelectField
@@ -1038,7 +1028,7 @@ function AdbManagementCard({
             buttonClassName="h-11"
           />
           <div className="space-y-1.5">
-            <label htmlFor="adb-ocid" className="text-sm font-medium text-foreground">
+            <label htmlFor="adb-ocid" className="text-sm font-medium text-fg">
               {t("settings.adb.field.ocid")}
             </label>
             <input
@@ -1048,9 +1038,9 @@ function AdbManagementCard({
               readOnly
               aria-readonly="true"
               placeholder={t("settings.adb.placeholder.ocidEmpty")}
-              className="h-11 w-full cursor-not-allowed rounded-md border border-border bg-background px-3 text-sm text-muted outline-none placeholder:text-muted/70"
+              className="h-11 w-full cursor-not-allowed rounded-md border border-border-control bg-surface-sunken px-3 text-sm text-fg-muted outline-none placeholder:text-fg-muted"
             />
-            <p className="text-xs leading-relaxed text-muted">
+            <p className="text-xs leading-relaxed text-fg-muted">
               {t("settings.adb.helper.ocidReadonly")}
             </p>
           </div>
@@ -1063,12 +1053,8 @@ function AdbManagementCard({
               size="lg"
               loading={saveButtonLoading}
               disabled={busy || !ocid.trim()}
-              onClick={() => void handleRefresh("save")}
-            >
-              <Save size={16} aria-hidden />
-              {saveSettingsFeedbackPending
-                ? t("settings.database.actions.saving")
-                : t("settings.database.actions.save")}
+              onClick={() => void handleRefresh("save")} icon={Save}>
+              {t("settings.database.actions.save")}
             </Button>
             <Button
               type="button"
@@ -1076,12 +1062,8 @@ function AdbManagementCard({
               variant="secondary"
               loading={startButtonLoading}
               disabled={busy || !ocid.trim() || !canStart}
-              onClick={() => void handleStart()}
-            >
-              <Power size={16} aria-hidden />
-              {startButtonLoading
-                ? t("settings.adb.action.starting")
-                : t("settings.adb.action.start")}
+              onClick={() => void handleStart()} icon={Power}>
+              {t("settings.adb.action.start")}
             </Button>
             <Button
               type="button"
@@ -1089,12 +1071,8 @@ function AdbManagementCard({
               variant="secondary"
               loading={stopButtonLoading}
               disabled={busy || !ocid.trim() || !canStop}
-              onClick={() => void handleStop()}
-            >
-              <PowerOff size={16} aria-hidden />
-              {stopButtonLoading
-                ? t("settings.adb.action.stopping")
-                : t("settings.adb.action.stop")}
+              onClick={() => void handleStop()} icon={PowerOff}>
+              {t("settings.adb.action.stop")}
             </Button>
           </div>
           {actionError ? (
@@ -1131,10 +1109,10 @@ function AdbLifecycleBadge({ state }: { state: string | null }) {
     <div
       className={cn(
         "flex items-center gap-2 rounded-md border px-3 py-2 text-sm font-medium",
-        tone === "ok" && "border-success/30 bg-success-bg/50 text-success",
-        tone === "danger" && "border-danger/30 bg-danger-bg/50 text-danger",
-        tone === "warning" && "border-warning/30 bg-warning-bg/60 text-warning",
-        tone === "muted" && "border-border bg-card text-muted"
+        tone === "ok" && "border-success-border bg-success-subtle text-success-fg",
+        tone === "danger" && "border-danger-border bg-danger-subtle text-danger-fg",
+        tone === "warning" && "border-warning-border bg-warning-subtle text-warning-fg",
+        tone === "muted" && "border-border bg-surface text-fg-muted"
       )}
     >
       <Icon size={16} aria-hidden />
@@ -1148,16 +1126,16 @@ function AdbLifecycleBadge({ state }: { state: string | null }) {
 function AdbOperationLog({ entries }: { entries: AdbOperationLogEntry[] }) {
   return (
     <div className="space-y-2">
-      <span className="block text-sm font-medium text-foreground">
+      <span className="block text-sm font-medium text-fg">
         {t("settings.adb.operationResult.title")}
       </span>
       <ul className="space-y-1.5">
         {entries.map((entry, index) => (
           <li
             key={`${entry.timestamp}-${index}`}
-            className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-border bg-card px-3 py-2 text-xs"
+            className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-border bg-surface px-3 py-2 text-xs"
           >
-            <span className="text-muted">{entry.timestamp}</span>
+            <span className="text-fg-muted">{entry.timestamp}</span>
             <span
               className={cn(
                 "rounded-full px-2 py-0.5 font-medium",
@@ -1166,7 +1144,7 @@ function AdbOperationLog({ entries }: { entries: AdbOperationLogEntry[] }) {
             >
               {entry.status}
             </span>
-            <span className="text-foreground">{entry.message}</span>
+            <span className="text-fg">{entry.message}</span>
           </li>
         ))}
       </ul>
@@ -1192,14 +1170,14 @@ function adbStatusBadgeClass(status: AdbInfoData["status"]): string {
   switch (status) {
     case "success":
     case "accepted":
-      return "bg-success-bg text-success";
+      return "bg-success-subtle text-success-fg";
     case "already_available":
     case "already_stopped":
-      return "bg-info-bg text-info";
+      return "bg-info-subtle text-info-fg";
     case "error":
-      return "bg-danger-bg text-danger";
+      return "bg-danger-subtle text-danger-fg";
     default:
-      return "bg-warning-bg text-warning";
+      return "bg-warning-subtle text-warning-fg";
   }
 }
 
@@ -1252,9 +1230,9 @@ function WalletServiceField({
           ? t("settings.database.field.serviceDsn")
           : t("settings.database.field.directDsn")
       }
-      required
+      required requiredLabel={t("common.required")}
       value={value}
-      onChange={onChange}
+      onValueChange={onChange}
       placeholder={
         usesWalletMtlS
           ? t("settings.database.placeholder.serviceDsnManual")
@@ -1267,60 +1245,6 @@ function WalletServiceField({
       }
       error={error}
     />
-  );
-}
-
-function TextField({
-  id,
-  label,
-  value,
-  onChange,
-  placeholder,
-  helper,
-  error,
-  required = false,
-  inputRef,
-}: {
-  id: string;
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  placeholder: string;
-  helper?: string;
-  error?: string;
-  required?: boolean;
-  inputRef?: RefObject<HTMLInputElement | null>;
-}) {
-  const errorId = `${id}-error`;
-  const helperId = `${id}-helper`;
-  const describedBy = [helper ? helperId : "", error ? errorId : ""].filter(Boolean).join(" ");
-
-  return (
-    <div className="space-y-1.5">
-      <RequiredLabel id={id} label={label} required={required} />
-      <input
-        ref={inputRef}
-        id={id}
-        type="text"
-        value={value}
-        required={required}
-        aria-required={required}
-        onChange={(event) => onChange(event.target.value)}
-        placeholder={placeholder}
-        aria-invalid={Boolean(error)}
-        aria-describedby={describedBy || undefined}
-        className={cn(
-          "h-11 w-full rounded-md border bg-card px-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted/70 focus-visible:border-primary focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring",
-          error ? "border-danger" : "border-border"
-        )}
-      />
-      {helper ? (
-        <p id={helperId} className="text-xs leading-relaxed text-muted">
-          {helper}
-        </p>
-      ) : null}
-      <FieldError id={errorId} message={error} />
-    </div>
   );
 }
 
@@ -1406,8 +1330,8 @@ function PasswordField({
           aria-invalid={Boolean(error)}
           aria-describedby={describedBy}
           className={cn(
-            "h-11 w-full rounded-md border bg-card px-3 pr-12 text-sm text-foreground outline-none transition-colors placeholder:text-muted/70 focus-visible:border-primary focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring disabled:cursor-not-allowed disabled:bg-background disabled:text-muted",
-            error ? "border-danger" : "border-border"
+            "h-11 w-full rounded-md border bg-surface px-3 pr-12 text-sm text-fg outline-none transition-colors placeholder:text-fg-muted focus-visible:border-focus-ring focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus-ring disabled:cursor-not-allowed disabled:bg-surface-disabled disabled:text-fg-disabled",
+            error ? "border-danger-fg" : "border-border-control"
           )}
         />
         <Button
@@ -1415,16 +1339,15 @@ function PasswordField({
           size="sm"
           iconOnly
           touchTarget
-          data-button-layout="field-icon"
           type="button"
           onClick={onToggleVisible}
           disabled={disabled || revealPending}
           aria-busy={revealPending}
           aria-label={revealButtonLabel}
-          className="absolute right-0 top-0"
+          className="absolute right-0 top-0 rounded-l-none"
         >
           {revealPending ? (
-            <StableLoadingIcon size={16} />
+            <Spinner size={16} />
           ) : visible ? (
             <EyeOff size={16} aria-hidden />
           ) : (
@@ -1432,7 +1355,7 @@ function PasswordField({
           )}
         </Button>
       </div>
-      <p id={hintId} className="text-xs leading-relaxed text-muted">
+      <p id={hintId} className="text-xs leading-relaxed text-fg-muted">
         {helperText}
       </p>
       <FieldError id={errorId} message={error} />
@@ -1522,9 +1445,7 @@ function WalletUploadField({
             variant="secondary"
             className="w-full shrink-0 sm:w-auto"
             aria-label={t("settings.database.wallet.autoDownload.retryAria")}
-            onClick={onRetryDownload}
-          >
-            <CloudDownload size={16} aria-hidden />
+            onClick={onRetryDownload} icon={CloudDownload}>
             {t("settings.database.wallet.autoDownload.retry")}
           </Button>
         </div>
@@ -1532,7 +1453,7 @@ function WalletUploadField({
 
       {uploadError ? <FormStatus tone="danger" className="text-xs" message={uploadError} /> : null}
 
-      <div className="space-y-1 text-xs leading-relaxed text-muted">
+      <div className="space-y-1 text-xs leading-relaxed text-fg-muted">
         <StatusLine
           label={t("settings.database.wallet.status")}
           value={
@@ -1544,7 +1465,7 @@ function WalletUploadField({
         />
         <p>
           <span>{t("settings.database.wallet.location")}:</span>{" "}
-          <span className="break-all text-foreground">{settings.wallet_dir || "—"}</span>
+          <span className="break-all text-fg">{settings.wallet_dir || "—"}</span>
         </p>
       </div>
     </div>
@@ -1563,7 +1484,7 @@ function StatusLine({
   return (
     <p>
       <span>{label}:</span>{" "}
-      <span className={ok ? "font-medium text-success" : "font-medium text-warning"}>
+      <span className={ok ? "font-medium text-success-fg" : "font-medium text-warning-fg"}>
         {value}
       </span>
     </p>
@@ -1580,14 +1501,14 @@ function SecretClearCheckbox({
   onChange: (checked: boolean) => void;
 }) {
   return (
-    <label className="flex cursor-pointer items-start gap-3 rounded-md border border-border bg-background px-4 py-3 text-sm transition-colors hover:bg-info-bg/30">
+    <label className="flex cursor-pointer items-start gap-3 rounded-md border border-border bg-surface-sunken px-4 py-3 text-sm transition-colors hover:bg-info-subtle">
       <input
         type="checkbox"
         checked={checked}
         onChange={(event) => onChange(event.target.checked)}
-        className="mt-0.5 h-4 w-4 cursor-pointer accent-[var(--primary)]"
+        className="mt-0.5 h-4 w-4 cursor-pointer accent-[var(--color-accent-emphasis)]"
       />
-      <span className="text-foreground">{label}</span>
+      <span className="text-fg">{label}</span>
     </label>
   );
 }

@@ -133,7 +133,7 @@ test("DeepSec DATA USER password sync button は保存 action と独立してい
   );
 
   assert.match(dataUserPanel, /security\.deepsec\.config\.sync/u);
-  assert.match(dataUserPanel, /<RefreshCw size=\{15\} aria-hidden \/>/u);
+  assert.match(dataUserPanel, /icon=\{RefreshCw\}/u);
   assert.match(
     dataUserPanel,
     /type="button"[\s\S]*variant="secondary"[\s\S]*loading=\{configSyncing\}[\s\S]*disabled=\{passwordSyncDisabled \|\| actionBlocked\}/u
@@ -216,7 +216,7 @@ test("DeepSec Data Grant editor は対象 object、許可列、行 scope の順�
 
 test("DeepSec Data Grant 行削除は icon-only ではなく短い削除ラベルを表示する", () => {
   assert.match(entitlementsPanel, /aria-label=\{t\("security\.deepsec\.entitlements\.remove"\)\}/u);
-  assert.match(entitlementsPanel, /<Trash2 size=\{14\} aria-hidden \/>[\s\S]*security\.deepsec\.entitlements\.removeButtonLabel/u);
+  assert.match(entitlementsPanel, /icon=\{Trash2\}>[\s\S]*security\.deepsec\.entitlements\.removeButtonLabel/u);
   assert.equal(t("security.deepsec.entitlements.remove"), "データ権限を削除");
   assert.equal(t("security.deepsec.entitlements.removeButtonLabel"), "削除");
 });

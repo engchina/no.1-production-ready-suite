@@ -10,7 +10,7 @@ import {
 import { type LucideIcon } from "lucide-react";
 
 import { FloatingActionMenu } from "@/components/FloatingMenu";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { Button, buttonVariants } from "@engchina/production-ready-ui";
 import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
 import type { EntityAction } from "@/components/ObjectActionsCore";
 import { t } from "@/lib/i18n";
@@ -160,7 +160,7 @@ function DangerMenuItem({
       tone="danger"
       variant="ghost"
       size="sm"
-      className={className}
+      className={cn(className, "w-full justify-start text-left")}
       loading={action.loading}
       disabled={action.disabled}
       aria-label={action.ariaLabel}

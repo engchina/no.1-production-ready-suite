@@ -2124,7 +2124,9 @@ test("job 取得が連続失敗しても長時間猶予内は監視を継続す�
     section.getByText("構築状況の取得に連続して失敗した", { exact: false })
   ).toHaveCount(0);
   await expect.poll(() => polls, { timeout: 12000 }).toBeGreaterThanOrEqual(8);
-  await expect(section.getByRole("button", { name: "構築中…" })).toBeDisabled();
+  const building = section.getByRole("button", { name: "AI 構築を実行" });
+  await expect(building).toBeDisabled();
+  await expect(building).toHaveAttribute("aria-busy", "true");
   await expect(page.getByTestId("ontology-build-steps")).toBeVisible();
   const before = polls;
   await page.waitForTimeout(2500);

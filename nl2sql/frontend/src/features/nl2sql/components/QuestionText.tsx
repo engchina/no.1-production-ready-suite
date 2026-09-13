@@ -1,4 +1,4 @@
-import { Button } from "@/components/ui/button";
+import { Button } from "@engchina/production-ready-ui";
 import { useMemo, useState } from "react";
 
 import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
@@ -25,10 +25,10 @@ const DEFAULT_LINES: Record<QuestionTextVariant, number> = {
 };
 
 const VARIANT_CLASS: Record<QuestionTextVariant, string> = {
-  list: "text-sm font-semibold leading-5 text-foreground",
-  detail: "text-sm leading-6 text-foreground",
-  compact: "text-xs leading-5 text-muted",
-  select: "text-sm leading-5 text-foreground",
+  list: "text-sm font-semibold leading-5 text-fg",
+  detail: "text-sm leading-6 text-fg",
+  compact: "text-xs leading-5 text-fg-muted",
+  select: "text-sm leading-5 text-fg",
 };
 
 const CLAMP_CLASS: Record<number, string> = {

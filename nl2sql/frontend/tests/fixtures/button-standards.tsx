@@ -6,9 +6,8 @@ import { MasterDetailDataTable } from "../../src/components/MasterDetailDataTabl
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { Copy, Plus, Trash2 } from "lucide-react";
-import { Button, buttonVariants } from "../../src/components/ui/button";
+import { Button, buttonVariants, PageHeader } from "@engchina/production-ready-ui";
 import { FormActionBar } from "../../src/components/FormActionBar";
-import { PageHeader } from "../../src/components/PageHeader";
 import { RowActionMenu } from "../../src/components/ObjectActions";
 import { Pagination } from "../../src/components/Pagination";
 import { ErrorState } from "../../src/components/StateViews";

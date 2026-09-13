@@ -6,11 +6,15 @@ import { mockDatabaseGateReady } from "./_helpers/database-gate";
  *
  * 旧実装は lucide `Loader2`（288 度の欠けた円弧）をそのまま回していたため、
  * インクの重心とシルエットが回転角ごとに動き、中心がずれて上下に揺れて見えていた。
- * 現在は 180 度対称の `StableLoadingIcon` を使い、外接矩形だけでなく active arc の
- * 見た目の重心も中央に保つ。
+ * デザインシステム移行（#529）後は共有パッケージ `@engchina/production-ready-ui` の
+ * `Spinner`（全周トラック circle + 270° arc、`svg.animate-spin`）を使う。
+ * 旧 `StableLoadingIcon` 固有の「180° 対称 active arc の重心」検証は共有 Spinner の
+ * 形状に当てはまらないため削除し、16px・中央配置・フレーム間ドリフトなし・
+ * reduced motion で停止、を共有 Spinner に対して維持する。
  */
 
-const LOADING_ICON_SELECTOR = 'svg[data-loading-icon="true"]';
+// 共有 Button の loading は先頭アイコンを共有 Spinner（svg.animate-spin）へ置き換える
+const LOADING_ICON_SELECTOR = "svg.animate-spin";
 
 const profile = {
   id: "default",
@@ -156,52 +160,18 @@ async function mockWorkbenchWithPendingJob(page: Page) {
 async function startPendingRun(page: Page) {
   await mockWorkbenchWithPendingJob(page);
   await page.goto("/query");
-  await page.locator("#nl2sql-question-input").fill("請求金額を確認したい");
-  await page.getByRole("button", { name: "SQL を生成して実行" }).click();
-
   const button = page.getByRole("button", { name: "SQL を生成して実行" });
+  // 負荷が高いと初期化（プロファイル/下書きの復元）が fill の後に走り、入力が空へ戻ってボタンが
+  // disabled のまま残ることがある。入力が反映されボタンが有効になるまで fill をやり直す。
+  await expect(async () => {
+    await page.locator("#nl2sql-question-input").fill("請求金額を確認したい");
+    await expect(button).toBeEnabled({ timeout: 1_000 });
+  }).toPass({ timeout: 15_000 });
+  await button.click();
+
   const spinner = button.locator(LOADING_ICON_SELECTOR);
   await expect(spinner).toBeVisible();
   return { button, spinner };
-}
-
-async function activeArcCentroidSamples(spinner: ReturnType<Page["locator"]>) {
-  return spinner.evaluate((node) => {
-    const activeArcs = Array.from(
-      node.querySelectorAll<SVGPathElement>('[data-loading-icon-active="true"]')
-    );
-    const points: { x: number; y: number }[] = [];
-
-    for (const arc of activeArcs) {
-      const length = arc.getTotalLength();
-      for (let index = 0; index <= 48; index += 1) {
-        const point = arc.getPointAtLength((length * index) / 48);
-        points.push({ x: point.x, y: point.y });
-      }
-    }
-
-    const center = { x: 12, y: 12 };
-    const centroid = (items: typeof points) => ({
-      x: items.reduce((sum, point) => sum + point.x, 0) / items.length,
-      y: items.reduce((sum, point) => sum + point.y, 0) / items.length,
-    });
-    const rotate = (point: { x: number; y: number }, degrees: number) => {
-      const radians = (degrees * Math.PI) / 180;
-      const cos = Math.cos(radians);
-      const sin = Math.sin(radians);
-      const dx = point.x - center.x;
-      const dy = point.y - center.y;
-      return {
-        x: center.x + dx * cos - dy * sin,
-        y: center.y + dx * sin + dy * cos,
-      };
-    };
-
-    return [0, 45, 90, 135, 180, 225, 270, 315].map((angle) => ({
-      angle,
-      ...centroid(points.map((point) => rotate(point, angle))),
-    }));
-  });
 }
 
 test("実行ボタンのスピナーは 16px で回転レイヤーが固定されている", async ({ page }) => {
@@ -227,41 +197,30 @@ test("実行ボタンのスピナーは 16px で回転レイヤーが固定さ�
   expect(style.animationName).not.toBe("none");
 });
 
-test("スピナーは対称 active arc を持ちシルエットが回転角に依存しない", async ({ page }) => {
-  const { spinner } = await startPendingRun(page);
+test("スピナーは全周トラックを持ちシルエットが回転角に依存しない", async ({ page }) => {
+  const { button, spinner } = await startPendingRun(page);
 
   const shape = await spinner.evaluate((node) => {
-    const track = node.querySelector("circle");
-    const arcs = Array.from(node.querySelectorAll('[data-loading-icon-active="true"]'));
+    const tracks = Array.from(node.querySelectorAll("circle"));
     return {
-      hasTrack: Boolean(track),
-      trackRadius: track?.getAttribute("r") ?? null,
-      activeArcCount: arcs.length,
-      arcPaths: arcs.map((arc) => arc.getAttribute("d")),
+      trackCount: tracks.length,
+      trackCenter: tracks.map((track) => [track.getAttribute("cx"), track.getAttribute("cy")]),
+      arcCount: node.querySelectorAll("path").length,
       viewBox: node.getAttribute("viewBox"),
+      ariaHidden: node.getAttribute("aria-hidden"),
     };
   });
 
-  // 2 本の active arc を 180 度対称に置き、濃い筆画の見た目重心が上下へ流れないようにする。
-  expect(shape.hasTrack).toBe(true);
-  expect(shape.trackRadius).toBe("8.25");
-  expect(shape.activeArcCount).toBe(2);
-  expect(shape.arcPaths).toEqual([
-    "M12 3.75A8.25 8.25 0 0 1 20.25 12",
-    "M12 20.25A8.25 8.25 0 0 1 3.75 12",
-  ]);
+  // 共有 Spinner: viewBox 中心に全周トラックを 1 本敷き、その上を arc 1 本が回る。
+  // 閉じた円が常に外形を決めるため、回転角でシルエットが変わらない。
+  expect(shape.trackCount).toBe(1);
+  expect(shape.trackCenter).toEqual([["12", "12"]]);
+  expect(shape.arcCount).toBe(1);
   expect(shape.viewBox).toBe("0 0 24 24");
-});
-
-test("active arc の見た目重心は複数の回転角でも中央に残る", async ({ page }) => {
-  const { spinner } = await startPendingRun(page);
-
-  const samples = await activeArcCentroidSamples(spinner);
-
-  for (const sample of samples) {
-    expect(Math.abs(sample.x - 12), `angle ${sample.angle} x`).toBeLessThan(0.02);
-    expect(Math.abs(sample.y - 12), `angle ${sample.angle} y`).toBeLessThan(0.02);
-  }
+  expect(shape.ariaHidden).toBe("true");
+  // loading 中は aria-busy + disabled。先頭アイコンはスピナー 1 つだけ（二重表示しない）
+  await expect(button).toHaveAttribute("aria-busy", "true");
+  await expect(button.locator("svg:visible")).toHaveCount(1);
 });
 
 test("スピナーはボタンの垂直中心に配置される", async ({ page }) => {
@@ -343,7 +302,7 @@ test("sm/md/lg と icon-only の loading button でもスピナーは固定寸�
             disabled
             data-testid="loading-button-fixture-${item.id}"
             data-expected-height="${item.height}"
-            class="rounded-md border border-border bg-disabled-bg text-sm font-medium leading-5 text-disabled"
+            class="rounded-md border border-border bg-surface-disabled text-sm font-medium leading-5 text-fg-disabled"
             style="display:inline-flex;align-items:center;justify-content:center;gap:6px;height:${item.height}px;width:${item.width}px;overflow:hidden;white-space:nowrap;"
             aria-label="${item.label || "icon-only"}"
           >

@@ -12,7 +12,7 @@
   background: transparent;
   box-shadow: none;
   appearance: none;
-  color: var(--foreground);
+  color: var(--color-fg);
   font-family: inherit;
   font-size: 0.75rem;
   font-weight: 600;
@@ -30,9 +30,9 @@
   text-underline-offset: 3px;
 }
 @media (hover: hover) {
-  .nl2sql-sort-header:hover { color: var(--primary); }
+  .nl2sql-sort-header:hover { color: var(--color-accent-fg); }
 }
-.nl2sql-sort-header:disabled { color: var(--disabled); cursor: not-allowed; }
+.nl2sql-sort-header:disabled { color: var(--color-fg-disabled); cursor: not-allowed; }
 th:has(> .nl2sql-sort-header),
 th:has(> span > .nl2sql-sort-header) { padding-block: 1px; }
 @media (max-width: 639px), (pointer: coarse) {

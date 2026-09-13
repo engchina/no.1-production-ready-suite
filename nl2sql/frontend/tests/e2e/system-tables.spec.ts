@@ -306,7 +306,11 @@ test("dark theme の状態フィードバックは semantic container 色を使�
   const summarySurface = page
     .getByText("存在テーブル / 必須テーブル", { exact: true })
     .locator("..");
-  await expect(summarySurface).toHaveCSS("background-color", "rgb(46, 50, 56)");
+  // 旧 bg-muted/30 → 共有トークン bg-surface-hover。ダークでは
+  // --color-surface-hover = light-dark(neutral-100, neutral-850 #20252e)、文字は
+  // --color-fg-muted = light-dark(neutral-600, neutral-350 #b2bac5)
+  // (packages/ui/src/styles/tokens/colors.css, palette.css)。暗い面のまま一段だけ持ち上げる。
+  await expect(summarySurface).toHaveCSS("background-color", "rgb(32, 37, 46)");
   await expect(summarySurface.getByText("存在テーブル / 必須テーブル", { exact: true })).toHaveCSS(
     "color",
     "rgb(178, 186, 197)"

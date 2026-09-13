@@ -22,16 +22,16 @@ function sliceBetween(text: string, startMarker: string, endMarker: string): str
 const workSection = sliceBetween(
   source,
   "export function WorkSection",
-  "export function focusManagementTabElement"
+  "export function ManagementPanelShell"
 );
 
 test("WorkSection summary は mouse focus ring ではなく focus-visible を使う", () => {
   assert.match(workSection, /list-none/u);
   assert.match(workSection, /focus-visible:ring-2/u);
-  assert.match(workSection, /focus-visible:ring-ring\/40/u);
-  assert.match(workSection, /focus-visible:ring-danger\/40/u);
+  assert.match(workSection, /focus-visible:ring-focus-ring/u);
+  assert.match(workSection, /focus-visible:ring-danger-border/u);
   assert.doesNotMatch(workSection, /focus:ring-2/u);
-  assert.doesNotMatch(workSection, /focus:ring-ring\/40/u);
+  assert.doesNotMatch(workSection, /focus:ring-focus-ring/u);
 });
 
 test("WorkSection は既存折りたたみ UI と同じ chevron 表現を使う", () => {
@@ -50,9 +50,11 @@ test("DbAdminShared の details summary は普通の focus ring を使わない"
   }
 });
 
-test("管理画面の共有 tab focus helper は主スクロールを動かさない", () => {
-  assert.match(source, /export function focusManagementTabElement/u);
-  assert.match(source, /document\.getElementById\(id\)\?\.focus\(\{ preventScroll: true \}\)/u);
-  assert.match(dbObjectSource, /export function focusDbObjectTabElement/u);
-  assert.match(dbObjectSource, /document\.getElementById\(id\)\?\.focus\(\{ preventScroll: true \}\)/u);
+test("管理画面のタブは共有 Tabs（WAI-ARIA Tabs のキー操作とフォーカス移動）に委ねる", () => {
+  assert.match(source, /export function ManagementTabs/u);
+  assert.match(source, /<Tabs\b/u);
+  assert.match(dbObjectSource, /export function DbObjectManagementTabs/u);
+  assert.match(dbObjectSource, /<Tabs\b/u);
+  assert.doesNotMatch(source, /role="tab"/u);
+  assert.doesNotMatch(dbObjectSource, /role="tab"/u);
 });

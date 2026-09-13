@@ -1,6 +1,6 @@
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Button } from "@/components/ui/button";
+import { Button } from "@engchina/production-ready-ui";
 
 export interface PaginationProps {
   /** 1-based の現在ページ。 */
@@ -42,7 +42,7 @@ export function Pagination({
   return (
     <nav
       className={cn(
-        "flex flex-wrap items-center justify-between gap-[8px] text-xs text-muted",
+        "flex flex-wrap items-center justify-between gap-[8px] text-xs text-fg-muted",
         className
       )}
       aria-label={ariaLabel ?? pageIndicator ?? summary}
@@ -55,13 +55,11 @@ export function Pagination({
           variant="secondary"
           size="sm"
           disabled={page <= 1}
-          onClick={() => onPageChange(Math.max(1, page - 1))}
-        >
-          <ChevronLeft size={15} aria-hidden="true" />
+          onClick={() => onPageChange(Math.max(1, page - 1))} icon={ChevronLeft}>
           <span>{prevLabel}</span>
         </Button>
         {pageIndicator ? (
-          <span className="tnum inline-flex min-h-8 items-center rounded-md border border-border px-3 text-foreground">
+          <span className="tnum inline-flex min-h-8 items-center rounded-md border border-border px-3 text-fg">
             {pageIndicator}
           </span>
         ) : null}
@@ -70,10 +68,8 @@ export function Pagination({
           variant="secondary"
           size="sm"
           disabled={page >= totalPages}
-          onClick={() => onPageChange(Math.min(totalPages, page + 1))}
-        >
+          onClick={() => onPageChange(Math.min(totalPages, page + 1))} trailingIcon={ChevronRight}>
           <span>{nextLabel}</span>
-          <ChevronRight size={15} aria-hidden="true" />
         </Button>
       </div>
     </nav>

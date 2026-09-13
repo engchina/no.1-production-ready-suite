@@ -84,7 +84,7 @@ export function MasterDetailDataTable<T>({
   };
 
   return (
-    <div className="overflow-hidden rounded-md border border-border bg-card">
+    <div className="overflow-hidden rounded-md border border-border bg-surface">
       <div
         role={scrollAriaLabel ? "region" : undefined}
         tabIndex={scrollAriaLabel ? 0 : undefined}
@@ -93,11 +93,11 @@ export function MasterDetailDataTable<T>({
         data-testid={scrollTestId}
       >
         <table
-          className={cn("w-full divide-y divide-border text-left text-sm", className)}
+          className={cn("w-full divide-y divide-border text-left text-xs", className)}
           aria-label={ariaLabel}
           data-testid={testId}
         >
-          <thead className="bg-background text-xs text-muted">
+          <thead className="bg-surface-sunken text-xs text-fg-muted">
             <tr>
               {columns.map((column) => {
                 const active = sort?.key === column.key;
@@ -128,8 +128,8 @@ export function MasterDetailDataTable<T>({
                         <ChevronDown
                           size={14}
                           className={cn(
-                            "text-muted transition-transform",
-                            active && "text-primary",
+                            "text-fg-muted transition-transform",
+                            active && "text-accent-fg",
                             active && sort?.direction === "asc" && "rotate-180"
                           )}
                           aria-hidden="true"
@@ -149,7 +149,7 @@ export function MasterDetailDataTable<T>({
                   <tr key={`loading-${index}`} className={rowClassName}>
                     <td colSpan={columns.length} className={paddingClass}>
                       <div
-                        className="h-5 animate-pulse rounded bg-muted/30 motion-reduce:animate-none"
+                        className="h-5 animate-pulse rounded bg-surface-hover motion-reduce:animate-none"
                         aria-hidden="true"
                       />
                     </td>
@@ -175,7 +175,7 @@ export function MasterDetailDataTable<T>({
                         className={cn(
                           "transition-colors",
                           selectable && "cursor-pointer",
-                          selected ? "bg-primary/10" : selectable && "hover:bg-background",
+                          selected ? "bg-accent-subtle" : selectable && "hover:bg-surface-hover",
                           rowClassName
                         )}
                         onClick={(event) => handleRowClick(event, row)}

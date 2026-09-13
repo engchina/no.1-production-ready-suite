@@ -1,9 +1,13 @@
+import { RefreshCw } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Banner, toast } from "@engchina/production-ready-ui";
-import { StatusBadge } from "@/components/ui/status-badge";
-import { Button } from "@/components/ui/button";
-import { FormStatus } from "@/components/ui/form-status";
+import {
+  Banner,
+  toast,
+  Button,
+  StatusBadge,
+  FormStatus,
+} from "@engchina/production-ready-ui";
 import { ProcessingIndicator } from "@/components/ProcessingState";
 import { apiGet } from "@/lib/api";
 import { useDatabaseStatus } from "@/lib/queries";
@@ -109,13 +113,13 @@ export function SyntheticRunPanel({ run, runs, onSelect, error, onRefresh, submi
       setRefresh({ scope, pending: false, failed: true, message: t("syntheticRun.refreshFailed") });
     }
   };
-  return <section aria-label={t("syntheticRun.title")} className="grid min-w-0 gap-3 rounded-md border border-border bg-background p-4" data-testid="synthetic-run-panel">
+  return <section aria-label={t("syntheticRun.title")} className="grid min-w-0 gap-3 rounded-md border border-border bg-surface-sunken p-4" data-testid="synthetic-run-panel">
     <h3 className="font-semibold">{t("syntheticRun.title")}</h3>
     {submitting && <ProcessingIndicator active label={t("syntheticRun.submitting")} activityIcon="none" placement="action" testId="synthetic-submitting" />}
     {error && !feedback?.failed && <Banner severity="warning">{t("syntheticRun.stale")}{run?.checked_at ? ` ${formatDateTime(run.checked_at)}` : ""}</Banner>}
-    {submitting ? null : !run ? !error && <p className="text-sm text-muted-foreground">{t("syntheticRun.notStarted")}</p> : <>
+    {submitting ? null : !run ? !error && <p className="text-sm text-fg-muted">{t("syntheticRun.notStarted")}</p> : <>
       <div role="status" data-testid="synthetic-run-status">
-        <StatusBadge className="max-w-full whitespace-normal text-left" variant={run.status === "completed" ? "success" : run.status === "failed" ? "danger" : error || ["unknown", "partial", "no_data"].includes(run.status) ? "warning" : "pending"} label={runLabel(run)} />
+        <StatusBadge className="max-w-full whitespace-normal text-left" variant={run.status === "completed" ? "success" : run.status === "failed" ? "danger" : error || ["unknown", "partial", "no_data"].includes(run.status) ? "warning" : "info"} label={runLabel(run)} />
       </div>
       {(run.status !== "unknown" && (!runFinished(run) || run.finished_at)) && <ProcessingIndicator
         active={!runFinished(run)}
@@ -132,12 +136,12 @@ export function SyntheticRunPanel({ run, runs, onSelect, error, onRefresh, submi
         testId="synthetic-run-processing"
       />}
       <p className="break-all text-sm" data-testid="synthetic-run-reference">{t("syntheticRun.reference", { id: run.run_id })}</p>
-      <p className="text-sm text-muted-foreground" data-testid="synthetic-run-checked">
+      <p className="text-sm text-fg-muted" data-testid="synthetic-run-checked">
         {t("syntheticRun.checkedAt", { time: formatDateTime(run.checked_at) })}
       </p>
-      {run.status === "unknown" && <p className="text-sm text-muted-foreground">{t("syntheticRun.unknownHint")}</p>}
-      {!runFinished(run) && !error && run.status !== "unknown" && <p className="text-sm text-muted-foreground">{t("syntheticRun.continues")}</p>}
-      <p className="text-xs text-muted-foreground">{t("syntheticRun.targetCount", { count: run.targets.length })}</p>
+      {run.status === "unknown" && <p className="text-sm text-fg-muted">{t("syntheticRun.unknownHint")}</p>}
+      {!runFinished(run) && !error && run.status !== "unknown" && <p className="text-sm text-fg-muted">{t("syntheticRun.continues")}</p>}
+      <p className="text-xs text-fg-muted">{t("syntheticRun.targetCount", { count: run.targets.length })}</p>
       <div
         key={run.run_id}
         role="region"
@@ -147,28 +151,28 @@ export function SyntheticRunPanel({ run, runs, onSelect, error, onRefresh, submi
         data-testid="synthetic-run-targets"
       >
         <ul className="grid min-w-0 content-start gap-2">
-          {run.targets.map((target) => <li key={target.table_name} className="grid min-w-0 gap-1 rounded border border-border bg-card p-3 text-sm [overflow-wrap:anywhere]">
+          {run.targets.map((target) => <li key={target.table_name} className="grid min-w-0 gap-1 rounded border border-border bg-surface p-3 text-sm [overflow-wrap:anywhere]">
             <strong className="break-all">{target.table_name}</strong>
             <span>{t(run.preview ? "syntheticPreview.count" : "syntheticRun.count", { requested: target.requested_rows, loaded: target.loaded_rows ?? t("syntheticRun.unverified") })}</span>
             <span>{t("syntheticRun.targetStatus", { status: targetStatusLabel(run.status === "unknown" && target.status === "pending" ? "unknown" : target.status) })}</span>
-            {target.error && <p className="text-danger">{target.error}</p>}
+            {target.error && <p className="text-danger-fg">{target.error}</p>}
           </li>)}
         </ul>
       </div>
       {run.failure_phase === "validation" && <Banner severity="danger">{t("syntheticRun.validationFailed")}</Banner>}
       {run.message && !run.failure_phase && <Banner severity={run.status === "failed" ? "danger" : "warning"}>{run.message}</Banner>}
-      {run.finished_at && <p className="text-sm text-muted-foreground">{t("syntheticRun.finishedAt", { time: formatDateTime(run.finished_at) })}</p>}
+      {run.finished_at && <p className="text-sm text-fg-muted">{t("syntheticRun.finishedAt", { time: formatDateTime(run.finished_at) })}</p>}
     </>}
-    {runs.some((item) => !runFinished(item)) && <p className="text-sm text-muted-foreground">{t("syntheticRun.independentRuns")}</p>}
+    {runs.some((item) => !runFinished(item)) && <p className="text-sm text-fg-muted">{t("syntheticRun.independentRuns")}</p>}
     {history.length > 0 && <label className="grid gap-1 text-sm">{t("syntheticRun.history")}
-      <select disabled={submitting} value={run?.run_id ?? ""} onChange={(e) => onSelect(e.target.value)} className="h-11 min-w-0 rounded-md border border-border bg-card px-3">
+      <select disabled={submitting} value={run?.run_id ?? ""} onChange={(e) => onSelect(e.target.value)} className="h-11 min-w-0 rounded-md border border-border-control bg-surface px-3">
         {!run && <option value="" disabled>{t("syntheticRun.selectHistory")}</option>}
         {history.map((r) => <option key={r.run_id} value={r.run_id}>{formatDateTime(r.created_at)} · {runLabel(r)} · {r.targets.map((target) => target.table_name).join(", ")} · {r.run_id.slice(0, 8)}</option>)}
       </select>
     </label>}
-    <p className="text-xs text-muted-foreground">{t(run?.preview ? "syntheticPreview.retention" : "syntheticRun.retention")}</p>
+    <p className="text-xs text-fg-muted">{t(run?.preview ? "syntheticPreview.retention" : "syntheticRun.retention")}</p>
     <div className="flex flex-wrap gap-2">
-      <Button variant="secondary" size="sm" loading={feedback?.pending} aria-busy={feedback?.pending || undefined} onClick={() => void refreshStatus()}>{t(feedback?.pending ? "syntheticRun.refreshing" : "syntheticRun.refresh")}</Button>
+      <Button type="button" variant="secondary" size="sm" loading={feedback?.pending} icon={RefreshCw} onClick={() => void refreshStatus()}>{t("syntheticRun.refresh")}</Button>
     </div>
     {feedback?.message && (feedback.failed || !error) && <FormStatus tone={feedback.failed ? "danger" : "success"} message={feedback.message} />}
   </section>;

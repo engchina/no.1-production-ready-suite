@@ -1,5 +1,5 @@
 import { SortHeader } from "@/components/SortHeader";
-import { Children, type KeyboardEvent, type ReactNode } from "react";
+import { Children, type ReactNode } from "react";
 import {
   ArrowDownUp,
   Check,
@@ -12,12 +12,17 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
-import { Banner, EmptyState, toast } from "@engchina/production-ready-ui";
+import {
+  Button,
+  Banner,
+  EmptyState,
+  toast,
+  StatusBadge,
+  Tabs,
+} from "@engchina/production-ready-ui";
 
 import { ContentActionBar } from "@/components/ContentActionBar";
 import { DialogOverlayPortal } from "@/components/ui/dialog-overlay";
-import { StatusBadge } from "@/components/ui/status-badge";
 import {
   DbManagementSearchField,
   DbObjectSearchOwnerFields,
@@ -148,10 +153,6 @@ export interface DbObjectStatusMetric {
   emphasis?: boolean;
 }
 
-export function focusDbObjectTabElement(id: string) {
-  window.requestAnimationFrame(() => document.getElementById(id)?.focus({ preventScroll: true }));
-}
-
 export function dbObjectSortValue(item: DbAdminObjectSummary, key: DbObjectSortKey) {
   if (key === "row_count") return item.row_count ?? -1;
   if (key === "name") return dbAdminObjectQualifiedName(item).toLowerCase();
@@ -183,7 +184,7 @@ export const DB_OBJECT_LIST_VISIBLE_ROWS = INFORMATION_LIST_VISIBLE_ROWS;
 function SkeletonBlock({ className = "" }: { className?: string }) {
   return (
     <div
-      className={`animate-pulse rounded-md bg-muted/30 motion-reduce:animate-none ${className}`}
+      className={`animate-pulse rounded-md bg-surface-hover motion-reduce:animate-none ${className}`}
       aria-hidden="true"
       data-testid="db-management-skeleton-block"
     />
@@ -310,7 +311,7 @@ export function DbObjectManagementPanelShell({
       aria-labelledby={labelledBy}
       aria-label={ariaLabel}
       aria-busy={processing ? true : undefined}
-      className={`grid gap-4 rounded-md border border-border bg-card p-4 shadow-sm ${className}`}
+      className={`grid gap-4 rounded-md border border-border bg-surface p-4 shadow-sm ${className}`}
       data-testid="management-panel-shell"
       data-management-id={idPrefix}
     >
@@ -348,11 +349,11 @@ export function DbObjectPanelHeader({
   return (
     <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
       <div className="min-w-0">
-        <h2 id={headingId} className="flex items-center gap-2 text-base font-semibold text-foreground">
-          <Icon size={18} aria-hidden="true" />
+        <h2 id={headingId} className="flex items-center gap-2 text-base font-semibold text-fg">
+          <Icon size={20} aria-hidden="true" />
           {title}
         </h2>
-        {description && <p className="mt-1 text-sm text-muted">{description}</p>}
+        {description && <p className="mt-1 text-sm text-fg-muted">{description}</p>}
       </div>
       {action && <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-end">{action}</div>}
     </div>
@@ -382,7 +383,7 @@ export function DbObjectSelectorToolbar({
 }) {
   return (
     <div
-      className={`grid gap-2 rounded-md border border-border bg-background p-3 ${className}`}
+      className={`grid gap-2 rounded-md border border-border bg-surface-sunken p-3 ${className}`}
       data-testid={dataTestId}
     >
       {ownerPrefixField && children ? (
@@ -433,7 +434,7 @@ export function DbObjectSelectorToolbar({
         </div>
       )}
       {resultLabel && (
-        <p className="text-xs text-muted" aria-live="polite">
+        <p className="text-xs text-fg-muted" aria-live="polite">
           {resultLabel}
         </p>
       )}
@@ -466,11 +467,11 @@ export function DbObjectSelectorFooter({
 }) {
   return (
     <div
-      className="grid min-h-10 gap-2 rounded-md border border-border bg-card px-3 py-2"
+      className="grid min-h-10 gap-2 rounded-md border border-border bg-surface px-3 py-2"
       data-testid={dataTestId}
     >
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <p className="text-xs text-muted" aria-live="polite">
+        <p className="text-xs text-fg-muted" aria-live="polite">
           {selectedCount == null
             ? t("objectSelector.resultCount", { visible: visibleCount, total: totalCount })
             : t("objectSelector.resultCountWithSelected", {
@@ -502,9 +503,7 @@ export function DbObjectSelectorFooter({
               size="sm"
               className="w-full sm:w-auto"
               loading={loadingNextPage}
-              onClick={onRetryLoadMore}
-            >
-              <RefreshCw size={15} aria-hidden="true" />
+              onClick={onRetryLoadMore} icon={RefreshCw}>
               <span>{t("common.retry")}</span>
             </Button>
           ) : undefined}
@@ -527,9 +526,9 @@ export function DbObjectSelectionSummary({
 }) {
   if (!value) return null;
   return (
-    <div className="flex min-w-0 flex-wrap items-center gap-2 rounded-md border border-primary/20 bg-card px-3 py-2 text-sm text-foreground">
-      <span className="font-medium text-foreground">{label}</span>
-      <span className="break-all font-mono text-xs font-semibold text-primary">{value}</span>
+    <div className="flex min-w-0 flex-wrap items-center gap-2 rounded-md border border-accent-emphasis bg-surface px-3 py-2 text-sm text-fg">
+      <span className="font-medium text-fg">{label}</span>
+      <span className="break-all font-mono text-xs font-semibold text-accent-fg">{value}</span>
       {badge}
     </div>
   );
@@ -604,7 +603,7 @@ function PickerSortHeader({
           onClick={() => onSortChange(sortKey)}
         >
           <span>{label}</span>
-          <ArrowDownUp size={13} className={active ? "text-primary" : "text-muted"} aria-hidden="true" />
+          <ArrowDownUp size={14} className={active ? "text-accent-fg" : "text-fg-muted"} aria-hidden="true" />
         </SortHeader>
       ) : (
         label
@@ -661,7 +660,7 @@ export function DbSingleObjectPickerList({
 }) {
   if (items.length === 0) {
     return (
-      <div className="rounded-md border border-border bg-card p-4" data-testid={dataTestId}>
+      <div className="rounded-md border border-border bg-surface p-4" data-testid={dataTestId}>
         <EmptyState
           title={hasActiveFilter ? noResultsTitle : emptyTitle}
           hint={hasActiveFilter ? noResultsHint : emptyHint}
@@ -671,14 +670,14 @@ export function DbSingleObjectPickerList({
   }
 
   const headerClass = action
-    ? "hidden grid-cols-[minmax(0,1.35fr)_5.25rem_5.25rem_minmax(4.5rem,0.75fr)_3.5rem] gap-2 border-b border-border bg-background px-3 py-2 text-xs font-semibold text-muted md:grid"
-    : "hidden grid-cols-[minmax(0,1.45fr)_5.25rem_5.25rem_minmax(4.5rem,0.8fr)] gap-2 border-b border-border bg-background px-3 py-2 text-xs font-semibold text-muted md:grid";
+    ? "hidden grid-cols-[minmax(0,1.35fr)_5.25rem_5.25rem_minmax(4.5rem,0.75fr)_3.5rem] gap-2 border-b border-border bg-surface-sunken px-3 py-2 text-xs font-semibold text-fg-muted md:grid"
+    : "hidden grid-cols-[minmax(0,1.45fr)_5.25rem_5.25rem_minmax(4.5rem,0.8fr)] gap-2 border-b border-border bg-surface-sunken px-3 py-2 text-xs font-semibold text-fg-muted md:grid";
   const rowClass = action
     ? "md:grid-cols-[minmax(0,1.35fr)_5.25rem_5.25rem_minmax(4.5rem,0.75fr)_3.5rem]"
     : "md:grid-cols-[minmax(0,1.45fr)_5.25rem_5.25rem_minmax(4.5rem,0.8fr)]";
 
   return (
-    <div className="overflow-hidden rounded-md border border-border bg-card" data-testid={dataTestId}>
+    <div className="overflow-hidden rounded-md border border-border bg-surface" data-testid={dataTestId}>
       <div className={headerClass}>
         <PickerSortHeader
           label={t("objectSelector.column.name")}
@@ -738,7 +737,7 @@ export function DbSingleObjectPickerList({
                 `grid w-full min-w-0 gap-2 border-b border-border px-3 py-3 text-left text-sm transition-colors last:border-b-0 ${DB_OBJECT_PICKER_ROW_CLASS}`,
                 `${rowClass} md:items-center md:py-2`,
                 selectionDisabled ? "cursor-not-allowed" : "cursor-pointer",
-                selected ? "bg-primary/10" : selectionDisabled ? "bg-card" : "bg-card hover:bg-background",
+                selected ? "bg-accent-subtle" : selectionDisabled ? "bg-surface" : "bg-surface hover:bg-surface-hover",
               ].join(" ")}
               onClick={(event) => {
                 if (isInteractiveRowTarget(event.target)) return;
@@ -751,34 +750,34 @@ export function DbSingleObjectPickerList({
                 aria-current={selected ? "true" : undefined}
                 aria-label={selectAriaLabel?.(item) ?? t("objectSelector.selectObject", { name: item.name })}
                 disabled={selectionDisabled}
-                className="flex min-h-11 w-full min-w-0 flex-col justify-center text-left focus:outline-none focus:ring-2 focus:ring-ring/40 md:min-h-0"
+                className="flex min-h-11 w-full min-w-0 flex-col justify-center text-left focus:outline-none focus:ring-2 focus:ring-focus-ring md:min-h-0"
                 onClick={() => {
                   if (selectionDisabled) return;
                   onSelect(item);
                 }}
               >
-                <span className="break-all font-mono text-xs font-semibold text-primary">{item.name}</span>
-                {item.comment && <span className="mt-1 block break-words text-xs text-muted md:hidden">{item.comment}</span>}
+                <span className="break-all font-mono text-xs font-semibold text-accent-fg">{item.name}</span>
+                {item.comment && <span className="mt-1 block break-words text-xs text-fg-muted md:hidden">{item.comment}</span>}
               </button>
               <span className="flex items-center gap-2 md:block">
-                <span className="text-xs font-medium text-muted md:hidden">{t("objectSelector.column.kind")}</span>
+                <span className="text-xs font-medium text-fg-muted md:hidden">{t("objectSelector.column.kind")}</span>
                 {item.kindLabel ? (
                   <StatusBadge variant={item.kindVariant ?? "neutral"} label={item.kindLabel} />
                 ) : (
-                  <span className="text-xs text-muted">-</span>
+                  <span className="text-xs text-fg-muted">-</span>
                 )}
               </span>
-              <span className="flex items-center gap-2 font-sans text-xs text-foreground md:block">
-                <span className="font-sans font-medium text-muted md:hidden">{t("objectSelector.column.rows")}</span>
+              <span className="flex items-center gap-2 font-sans text-xs text-fg md:block">
+                <span className="font-sans font-medium text-fg-muted md:hidden">{t("objectSelector.column.rows")}</span>
                 {item.rowCountLabel || "-"}
               </span>
-              <span className="flex min-w-0 items-center gap-2 font-mono text-xs text-muted md:block">
-                <span className="font-sans font-medium text-muted md:hidden">{t("objectSelector.column.owner")}</span>
+              <span className="flex min-w-0 items-center gap-2 font-mono text-xs text-fg-muted md:block">
+                <span className="font-sans font-medium text-fg-muted md:hidden">{t("objectSelector.column.owner")}</span>
                 <span className="break-all">{item.owner || "-"}</span>
               </span>
               {action && hasRowActions && (
                 <span className="flex items-center justify-between gap-2 md:justify-end">
-                  <span className="text-xs font-medium text-muted md:hidden">
+                  <span className="text-xs font-medium text-fg-muted md:hidden">
                     {t("objectSelector.column.actions")}
                   </span>
                   <RowActionMenu
@@ -828,16 +827,16 @@ export function DbObjectStepIndicator({
               <span
                 aria-hidden="true"
                 className={`h-0.5 flex-1 rounded-full ${
-                  isFirst ? "opacity-0" : index <= activeIndex ? "bg-primary" : "bg-border"
+                  isFirst ? "opacity-0" : index <= activeIndex ? "bg-accent-emphasis" : "bg-border"
                 }`}
               />
               <span
                 className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full border text-xs font-semibold transition-colors ${
                   complete
-                    ? "border-primary bg-primary text-primary-foreground"
+                    ? "border-accent-emphasis bg-accent-emphasis text-fg-on-accent"
                     : current
-                      ? "border-primary bg-primary/10 text-primary"
-                      : "border-border bg-card text-muted"
+                      ? "border-accent-emphasis bg-accent-subtle text-accent-fg"
+                      : "border-border bg-surface text-fg-muted"
                 }`}
               >
                 {complete ? <Check size={16} aria-hidden="true" /> : <span className="tnum">{index + 1}</span>}
@@ -845,13 +844,13 @@ export function DbObjectStepIndicator({
               <span
                 aria-hidden="true"
                 className={`h-0.5 flex-1 rounded-full ${
-                  isLast ? "opacity-0" : index < activeIndex ? "bg-primary" : "bg-border"
+                  isLast ? "opacity-0" : index < activeIndex ? "bg-accent-emphasis" : "bg-border"
                 }`}
               />
             </div>
             <span
               className={`px-1 text-center text-xs font-medium leading-snug ${
-                complete || current ? "text-foreground" : "text-muted"
+                complete || current ? "text-fg" : "text-fg-muted"
               }`}
             >
               {label}
@@ -873,9 +872,9 @@ export function DbObjectStatusMetricItem({
   if (density === "compact") {
     return (
       <div className="flex min-w-0 items-baseline gap-2 py-1">
-        <dt className="shrink-0 text-xs font-medium text-muted">{label}</dt>
+        <dt className="shrink-0 text-xs font-medium text-fg-muted">{label}</dt>
         <dd
-          className={`min-w-0 break-words font-semibold tabular-nums text-foreground [overflow-wrap:anywhere] ${
+          className={`min-w-0 break-words font-semibold tabular-nums text-fg [overflow-wrap:anywhere] ${
             emphasis ? "text-base" : "text-sm"
           }`}
           data-testid={testId}
@@ -887,10 +886,10 @@ export function DbObjectStatusMetricItem({
   }
 
   return (
-    <div className="rounded-md border border-border bg-background px-3 py-2">
-      <dt className="text-xs font-medium text-muted">{label}</dt>
+    <div className="rounded-md border border-border bg-surface-sunken px-3 py-2">
+      <dt className="text-xs font-medium text-fg-muted">{label}</dt>
       <dd
-        className={`mt-1 font-semibold text-foreground ${emphasis ? "text-lg" : ""}`}
+        className={`mt-1 font-semibold text-fg ${emphasis ? "text-lg" : ""}`}
         data-testid={testId}
       >
         {value}
@@ -915,7 +914,7 @@ export function DbObjectManagementStatusBar({
   if (density === "compact") {
     return (
       <section
-        className="rounded-md border border-border bg-card px-3 py-2 shadow-sm"
+        className="rounded-md border border-border bg-surface px-3 py-2 shadow-sm"
         aria-label={ariaLabel}
         data-density="compact"
       >
@@ -937,7 +936,7 @@ export function DbObjectManagementStatusBar({
 
   return (
     <section
-      className="rounded-md border border-border bg-card px-4 py-3 shadow-sm"
+      className="rounded-md border border-border bg-surface px-4 py-3 shadow-sm"
       aria-label={ariaLabel}
       data-density="default"
     >
@@ -980,8 +979,7 @@ export function DbObjectStatusBar({
       ]}
       actions={
         <>
-          <Button type="button" variant="secondary" size="sm" loading={loading === "load"} onClick={onRefresh}>
-            <RefreshCw size={15} aria-hidden="true" />
+          <Button type="button" variant="secondary" size="sm" loading={loading === "load"} onClick={onRefresh} icon={RefreshCw}>
             <span>{labels.refresh}</span>
           </Button>
           <Button
@@ -989,9 +987,7 @@ export function DbObjectStatusBar({
             variant="primary"
             size="sm"
             loading={loading === "schema-refresh"}
-            onClick={onSchemaRefresh}
-          >
-            <RefreshCw size={15} aria-hidden="true" />
+            onClick={onSchemaRefresh} icon={RefreshCw}>
             <span>{labels.schemaRefresh}</span>
           </Button>
         </>
@@ -1019,7 +1015,7 @@ function SortButton({
       onClick={() => onToggle(sortKey)}
     >
       <span>{label}</span>
-      <ArrowDownUp size={13} className={active ? "text-primary" : "text-muted"} aria-hidden="true" />
+      <ArrowDownUp size={14} className={active ? "text-accent-fg" : "text-fg-muted"} aria-hidden="true" />
     </SortHeader>
   );
 }
@@ -1084,7 +1080,7 @@ export function DbObjectGrid({
         action={<StatusBadge variant="info" label={labels.count} />}
       />
 
-      <div className="grid gap-2 rounded-md border border-border bg-background p-3">
+      <div className="grid gap-2 rounded-md border border-border bg-surface-sunken p-3">
         <DbObjectSearchOwnerFields
           searchLabel={t("dbAdmin.search.label")}
           searchPlaceholder={t("dbAdmin.search.placeholder")}
@@ -1111,7 +1107,7 @@ export function DbObjectGrid({
           hint={hasActiveFilter ? labels.noResultsHint : labels.emptyHint}
         />
       ) : (
-        <div className="overflow-hidden rounded-md border border-border bg-card">
+        <div className="overflow-hidden rounded-md border border-border bg-surface">
           <div className={DB_OBJECT_GRID_SCROLL_CLASS} data-testid="db-admin-object-list">
             <table className="w-full min-w-[24rem] table-fixed divide-y divide-border text-left text-sm" data-testid={`${idPrefix}-grid`}>
               <colgroup>
@@ -1119,7 +1115,7 @@ export function DbObjectGrid({
                 <col className="w-[7.5rem]" />
                 <col className="w-[7.5rem]" />
               </colgroup>
-              <thead className="sticky top-0 z-10 bg-background text-xs text-muted">
+              <thead className="sticky top-0 z-10 bg-surface-sunken text-xs text-fg-muted">
                 <tr>
                   <th className="whitespace-nowrap px-3 py-2">
                     <SortButton label={labels.objectName} sortKey="name" sort={sort} onToggle={onSortChange} />
@@ -1145,7 +1141,7 @@ export function DbObjectGrid({
                       className={[
                         DB_OBJECT_GRID_ROW_CLASS,
                         "cursor-pointer transition-colors",
-                        selected ? "bg-primary/10" : "hover:bg-background",
+                        selected ? "bg-accent-subtle" : "hover:bg-surface-hover",
                       ].join(" ")}
                       onClick={(event) => {
                         if (isInteractiveRowTarget(event.target)) return;
@@ -1158,19 +1154,19 @@ export function DbObjectGrid({
                           aria-label={labels.showObject(qualifiedName)}
                           aria-describedby={showComments ? commentId : undefined}
                           aria-current={selected ? "true" : undefined}
-                          className="grid max-w-full text-left focus:outline-none focus:ring-2 focus:ring-ring/40"
+                          className="grid max-w-full text-left focus:outline-none focus:ring-2 focus:ring-focus-ring"
                           onClick={() => onSelect(qualifiedName)}
                         >
-                          <span className="break-all font-mono text-xs font-semibold text-primary">{qualifiedName}</span>
+                          <span className="break-all font-mono text-xs font-semibold text-accent-fg">{qualifiedName}</span>
                           {showComments && (
-                            <span id={commentId} className="line-clamp-2 break-words text-xs leading-5 text-muted [overflow-wrap:anywhere]" title={item.comment?.trim() || "-"}>
+                            <span id={commentId} className="line-clamp-2 break-words text-xs leading-5 text-fg-muted [overflow-wrap:anywhere]" title={item.comment?.trim() || "-"}>
                               {item.comment?.trim() || "-"}
                             </span>
                           )}
                         </button>
                       </td>
-                      <td className="whitespace-nowrap px-3 py-2 font-sans text-xs text-foreground">{rowCountLabel(item.row_count)}</td>
-                      <td className="hidden whitespace-nowrap px-3 py-2 font-mono text-xs text-muted lg:table-cell">{item.owner || "-"}</td>
+                      <td className="whitespace-nowrap px-3 py-2 font-sans text-xs text-fg">{rowCountLabel(item.row_count)}</td>
+                      <td className="hidden whitespace-nowrap px-3 py-2 font-mono text-xs text-fg-muted lg:table-cell">{item.owner || "-"}</td>
                     </tr>
                   );
                 })}
@@ -1251,7 +1247,7 @@ export function DbObjectDetailPanel({
   if (error) {
     return (
       <section
-        className="grid min-w-0 content-start rounded-md border border-border bg-background p-4"
+        className="grid min-w-0 content-start rounded-md border border-border bg-surface-sunken p-4"
         data-testid={`${idPrefix}-detail-error`}
       >
         <ErrorState message={error} onRetry={onRetry} />
@@ -1261,7 +1257,7 @@ export function DbObjectDetailPanel({
 
   if (!detail) {
     return (
-      <section className="grid min-w-0 content-start gap-3 rounded-md border border-border bg-background p-4">
+      <section className="grid min-w-0 content-start gap-3 rounded-md border border-border bg-surface-sunken p-4">
         <EmptyState title={t("dbAdmin.detail.emptyTitle")} hint={t("dbAdmin.detail.emptyHint")} />
       </section>
     );
@@ -1310,31 +1306,17 @@ export function DbObjectDetailPanel({
       onSelect: () => onDrop(detailQualifiedName),
     },
   ];
-  const handleDetailTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
-    const keyMap: Record<string, number | undefined> = {
-      ArrowRight: (index + 1) % detailTabs.length,
-      ArrowLeft: (index - 1 + detailTabs.length) % detailTabs.length,
-      Home: 0,
-      End: detailTabs.length - 1,
-    };
-    const nextIndex = keyMap[event.key];
-    if (nextIndex === undefined) return;
-    event.preventDefault();
-    const nextTab = detailTabs[nextIndex];
-    onTabChange(nextTab.id);
-    focusDbObjectTabElement(`${idPrefix}-detail-tab-${nextTab.id}`);
-  };
   const showRowCountBadge = detail.object_type === "table" || detail.row_count != null;
 
   return (
-    <section className="grid min-w-0 content-start gap-3 rounded-md border border-border bg-background p-4" aria-labelledby={headingId}>
+    <section className="grid min-w-0 content-start gap-3 rounded-md border border-border bg-surface-sunken p-4" aria-labelledby={headingId}>
       <div
         className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between"
         data-testid={`${idPrefix}-detail-header`}
       >
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <h2 id={headingId} className="break-all font-mono text-base font-semibold text-foreground">
+            <h2 id={headingId} className="break-all font-mono text-base font-semibold text-fg">
               {detailQualifiedName}
             </h2>
             <StatusBadge variant="neutral" label={detail.object_type} />
@@ -1347,7 +1329,7 @@ export function DbObjectDetailPanel({
               />
             )}
           </div>
-          {detail.comment && <p className="mt-2 text-sm leading-6 text-foreground">{detail.comment}</p>}
+          {detail.comment && <p className="mt-2 text-sm leading-6 text-fg">{detail.comment}</p>}
         </div>
         <ObjectActionBar
           actions={detailActions}
@@ -1357,43 +1339,18 @@ export function DbObjectDetailPanel({
       </div>
 
       {detail.warnings.map((warning) => (
-        <p key={warning} className="rounded-md border border-warning/30 bg-warning-bg px-3 py-2 text-sm text-warning">
+        <p key={warning} className="rounded-md border border-warning-border bg-warning-subtle px-3 py-2 text-sm text-warning-fg">
           {warning}
         </p>
       ))}
 
-      <div className="overflow-x-auto border-b border-border" role="tablist" aria-label={labels.tabsLabel}>
-        <div className="flex min-w-max gap-1">
-          {detailTabs.map((item, index) => {
-            const Icon = item.icon;
-            const selected = tab === item.id;
-            return (
-              <button
-                key={item.id}
-                id={`${idPrefix}-detail-tab-${item.id}`}
-                type="button"
-                role="tab"
-                aria-selected={selected}
-                aria-controls={`${idPrefix}-detail-panel-${item.id}`}
-                className={`group inline-flex min-h-11 shrink-0 items-center gap-2 whitespace-nowrap border-b-2 px-4 text-sm font-semibold transition-colors focus:outline-none focus-visible:bg-primary/10 focus-visible:shadow-[inset_0_-3px_0_0_var(--primary)] ${
-                  selected
-                    ? "border-primary bg-card text-primary"
-                    : "border-transparent text-muted hover:border-border hover:bg-card hover:text-foreground"
-                }`}
-                onClick={() => onTabChange(item.id)}
-                onKeyDown={(event) => handleDetailTabKeyDown(event, index)}
-              >
-                <Icon
-                  size={15}
-                  aria-hidden="true"
-                  className={selected ? "text-primary" : "text-muted group-hover:text-muted"}
-                />
-                <span>{item.label}</span>
-              </button>
-            );
-          })}
-        </div>
-      </div>
+      <Tabs
+        idPrefix={`${idPrefix}-detail`}
+        ariaLabel={labels.tabsLabel}
+        value={tab}
+        onChange={(id) => onTabChange(id as typeof tab)}
+        items={detailTabs.map((item) => ({ id: item.id, label: item.label, icon: item.icon }))}
+      />
 
       {tab === "columns" ? (
         <div
@@ -1402,7 +1359,7 @@ export function DbObjectDetailPanel({
           aria-labelledby={`${idPrefix}-detail-tab-columns`}
           data-testid="db-admin-detail-columns"
           tabIndex={0}
-          className={`min-w-0 rounded-md border border-border bg-card ${INFORMATION_TABLE_SCROLL_CLASS} ${INFORMATION_TABLE_FOCUS_CLASS}`}
+          className={`min-w-0 rounded-md border border-border bg-surface ${INFORMATION_TABLE_SCROLL_CLASS} ${INFORMATION_TABLE_FOCUS_CLASS}`}
         >
           <table className="w-full min-w-[52rem] table-fixed divide-y divide-border text-sm">
             <colgroup>
@@ -1413,7 +1370,7 @@ export function DbObjectDetailPanel({
               <col className="w-[10%]" />
               <col />
             </colgroup>
-            <thead className="sticky top-0 z-10 bg-background">
+            <thead className="sticky top-0 z-10 bg-surface-sunken">
               <tr className="h-10">
                 <th className="whitespace-nowrap px-3 py-2 text-left">{t("dbAdmin.col.physical")}</th>
                 <th className="whitespace-nowrap px-3 py-2 text-left">{t("dbAdmin.col.logical")}</th>
@@ -1428,10 +1385,10 @@ export function DbObjectDetailPanel({
                 <tr key={column.column_name} className={INFORMATION_TABLE_ROW_CLASS}>
                   <td className="px-3 py-2 font-mono text-xs">{column.column_name}</td>
                   <td className="break-words px-3 py-2">{(column.logical_name ?? "").trim() || "-"}</td>
-                  <td className="break-words px-3 py-2 text-muted">{(column.comment ?? "").trim() || "-"}</td>
+                  <td className="break-words px-3 py-2 text-fg-muted">{(column.comment ?? "").trim() || "-"}</td>
                   <td className="px-3 py-2">{column.data_type}</td>
                   <td className="px-3 py-2">{column.nullable ? "YES" : "NO"}</td>
-                  <td className="break-words px-3 py-2 font-sans text-xs text-muted">
+                  <td className="break-words px-3 py-2 font-sans text-xs text-fg-muted">
                     {column.sample_values.join(", ") || "-"}
                   </td>
                 </tr>
@@ -1455,7 +1412,7 @@ export function DbObjectDetailPanel({
           id={`${idPrefix}-detail-panel-ddl`}
           role="tabpanel"
           aria-labelledby={`${idPrefix}-detail-tab-ddl`}
-          className="rounded-md border border-border bg-card p-3"
+          className="rounded-md border border-border bg-surface p-3"
           data-testid={`${idPrefix}-ddl-error`}
         >
           <ErrorState message={ddlError} onRetry={onRetryDdl} />
@@ -1465,7 +1422,7 @@ export function DbObjectDetailPanel({
           id={`${idPrefix}-detail-panel-ddl`}
           role="tabpanel"
           aria-labelledby={`${idPrefix}-detail-tab-ddl`}
-          className="grid gap-3 rounded-md border border-border bg-card p-3"
+          className="grid gap-3 rounded-md border border-border bg-surface p-3"
         >
           <ContentActionBar
             ariaLabel={`${labels.ddl}: ${labels.actions}`}
@@ -1486,13 +1443,11 @@ export function DbObjectDetailPanel({
                 } catch {
                   toastError(t("common.action.downloadFailed"));
                 }
-              }}
-            >
-              <Download size={15} aria-hidden="true" />
+              }} icon={Download}>
               <span>{t("dbAdmin.detail.download")}</span>
             </Button>
           </ContentActionBar>
-          <pre className="max-h-96 overflow-auto rounded-md border border-border bg-code p-3 text-sm leading-6 text-code-fg">
+          <pre data-surface="code" className="max-h-96 overflow-auto rounded-md border border-border bg-surface p-3 text-sm leading-6 text-fg">
             <code>{detail.ddl || "-"}</code>
           </pre>
         </section>
@@ -1516,58 +1471,15 @@ export function DbObjectManagementTabs<T extends string>({
   onViewChange: (view: T) => void;
   disabled?: boolean;
 }) {
-  const handleKeyDown = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
-    if (disabled) return;
-    const keyMap: Record<string, number | undefined> = {
-      ArrowRight: (index + 1) % tabs.length,
-      ArrowLeft: (index - 1 + tabs.length) % tabs.length,
-      Home: 0,
-      End: tabs.length - 1,
-    };
-    const nextIndex = keyMap[event.key];
-    if (nextIndex === undefined) return;
-    event.preventDefault();
-    const nextView = tabs[nextIndex];
-    onViewChange(nextView.id);
-    focusDbObjectTabElement(`${idPrefix}-tab-${nextView.id}`);
-  };
-
-  // 下線タブ(管理コンソールの定石)。詳細タブ(列情報/DDL)と同一様式に統一し、
-  // セグメント型ピルの過剰装飾を排する。role/aria/キーボード操作の意味論は不変。
+  // 共有 Tabs に NL2SQL の view 型を渡す adapter。処理中は全タブを無効にする。
   return (
-    <div className="overflow-x-auto border-b border-border" role="tablist" aria-label={ariaLabel}>
-      <div className="flex min-w-max gap-1">
-        {tabs.map((tab, index) => {
-          const Icon = tab.icon;
-          const selected = activeView === tab.id;
-          return (
-            <button
-              key={tab.id}
-              id={`${idPrefix}-tab-${tab.id}`}
-              type="button"
-              role="tab"
-              disabled={disabled}
-              aria-selected={selected}
-              aria-controls={`${idPrefix}-panel-${tab.id}`}
-              className={`group inline-flex min-h-11 shrink-0 items-center gap-2 whitespace-nowrap border-b-2 px-4 text-sm font-semibold transition-colors focus:outline-none focus-visible:bg-primary/10 focus-visible:shadow-[inset_0_-3px_0_0_var(--primary)] ${
-                selected
-                  ? "border-primary bg-card text-primary"
-                  : "border-transparent text-muted hover:border-border hover:bg-card hover:text-foreground"
-              }`}
-              onClick={() => onViewChange(tab.id)}
-              onKeyDown={(event) => handleKeyDown(event, index)}
-            >
-              <Icon
-                size={15}
-                aria-hidden="true"
-                className={selected ? "text-primary" : "text-muted group-hover:text-muted"}
-              />
-              <span>{tab.label}</span>
-            </button>
-          );
-        })}
-      </div>
-    </div>
+    <Tabs
+      idPrefix={idPrefix}
+      ariaLabel={ariaLabel}
+      value={activeView}
+      onChange={(id) => onViewChange(id as T)}
+      items={tabs.map((tab) => ({ id: tab.id, label: tab.label, icon: tab.icon, disabled }))}
+    />
   );
 }
 
@@ -1597,32 +1509,31 @@ export function DropDbObjectDialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby="drop-db-object-dialog-title"
-        className="max-h-[90dvh] w-full max-w-3xl overflow-auto rounded-md border border-border bg-card shadow-xl"
+        className="max-h-[90dvh] w-full max-w-3xl overflow-auto rounded-md border border-border bg-surface-overlay shadow-[var(--shadow-dialog)]"
       >
-        <div className="flex items-start justify-between gap-3 border-b border-border bg-card px-4 py-3">
+        <div className="flex items-start justify-between gap-3 border-b border-border bg-surface-overlay px-4 py-3">
           <div>
-            <h2 id="drop-db-object-dialog-title" className="text-base font-semibold text-danger">
+            <h2 id="drop-db-object-dialog-title" className="text-base font-semibold text-danger-fg">
               {labels.title}
             </h2>
-            <p className="mt-1 text-sm text-muted">{labels.subtitle}</p>
+            <p className="mt-1 text-sm text-fg-muted">{labels.subtitle}</p>
           </div>
-          <Button type="button" variant="ghost" size="sm" onClick={onClose}>
-            <X size={15} aria-hidden="true" />
+          <Button type="button" variant="ghost" size="sm" onClick={onClose} icon={X}>
             <span>{labels.close}</span>
           </Button>
         </div>
         <div className="grid gap-4 p-4">
-          <div className="rounded-md border border-border bg-background px-3 py-2">
-            <p className="text-xs font-semibold text-foreground">{labels.target}</p>
-            <p className="mt-1 break-all font-mono text-sm font-semibold text-foreground">{objectName}</p>
+          <div className="rounded-md border border-border bg-surface-sunken px-3 py-2">
+            <p className="text-xs font-semibold text-fg">{labels.target}</p>
+            <p className="mt-1 break-all font-mono text-sm font-semibold text-fg">{objectName}</p>
           </div>
           {error && (
             <Banner severity="danger">
               {error}
             </Banner>
           )}
-          <fieldset className="grid gap-3 rounded-md border border-border bg-background p-3">
-            <legend className="px-1 text-sm font-semibold text-foreground">{labels.executeTitle}</legend>
+          <fieldset className="grid gap-3 rounded-md border border-border bg-surface-sunken p-3">
+            <legend className="px-1 text-sm font-semibold text-fg">{labels.executeTitle}</legend>
             <ExecutionConfirmationField
               value={confirmation}
               onChange={onConfirmationChange}
@@ -1632,8 +1543,7 @@ export function DropDbObjectDialog({
               helper={labels.executeHint}
               actions={
                 <>
-                  <Button type="button" variant="danger" size="lg" loading={loading} disabled={!canExecute} onClick={onExecute}>
-                    <Trash2 size={15} aria-hidden="true" />
+                  <Button type="button" variant="danger" size="lg" loading={loading} disabled={!canExecute} onClick={onExecute} icon={Trash2}>
                     <span>{labels.run}</span>
                   </Button>
                   <Button type="button" variant="secondary" size="lg" onClick={onClose}>

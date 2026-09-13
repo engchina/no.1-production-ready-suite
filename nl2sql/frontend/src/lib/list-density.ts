@@ -13,4 +13,4 @@ export const INFORMATION_LIST_SCROLL_CLASS = "max-h-[17.5rem] overflow-auto md:m
 export const INFORMATION_LIST_SHORT_SCROLL_CLASS = "max-h-[17.5rem] overflow-auto";
 export const INFORMATION_COMPACT_LIST_FIVE_ROW_SCROLL_CLASS = "h-56 max-h-56 overflow-auto";
 export const INFORMATION_TABLE_FOCUS_CLASS =
-  "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring";
+  "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring";

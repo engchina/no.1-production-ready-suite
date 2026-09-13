@@ -1,15 +1,22 @@
 import { AlertTriangle, DatabaseZap, RefreshCw, RotateCcw } from "lucide-react";
-import { Banner, toast } from "@engchina/production-ready-ui";
+import {
+  Banner,
+  toast,
+  Button,
+  StatusBadge,
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+  Skeleton,
+} from "@engchina/production-ready-ui";
 
 import { useEffect, useRef, useState } from "react";
 
-import { Button } from "@/components/ui/button";
 import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
-import { StatusBadge } from "@/components/ui/status-badge";
 import { TimedLoadingState } from "@/components/ProcessingState";
 import { DatabaseUnavailableNotice } from "@/components/system/DatabaseUnavailableNotice";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Skeleton } from "@/components/ui/skeleton";
 import { ExecutionConfirmationField } from "@/features/nl2sql/components/DbAdminShared";
 import { useAuth } from "@/features/security/AuthProvider";
 import { MENU_PERMISSIONS } from "@/features/security/menu-permissions";
@@ -142,8 +149,8 @@ export function SystemTablesCard() {
         <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border pb-5">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <DatabaseZap size={18} aria-hidden />
-              <CardTitle className="text-lg">
+              <DatabaseZap size={20} aria-hidden />
+              <CardTitle className="text-base">
                 {t("settings.database.systemTables.title")}
               </CardTitle>
             </div>
@@ -159,7 +166,7 @@ export function SystemTablesCard() {
               />
               {schemaOperationRunning ? (
                 <StatusBadge
-                  variant="pending"
+                  variant="info"
                   label={t("settings.database.systemTables.operation.running")}
                 />
               ) : null}
@@ -217,7 +224,7 @@ export function SystemTablesCard() {
                 ref={operationErrorRef}
                 tabIndex={-1}
                 data-testid="system-tables-operation-error"
-                className="rounded-md focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                className="rounded-md focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
               >
                 <Banner
                   severity="danger"
@@ -243,24 +250,20 @@ export function SystemTablesCard() {
 
             <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
               {mayExecute ? (
-                <Button
+                <Button type="button"
                   size="md"
                   onClick={() => execute(false)}
                   loading={operation.isPending && operation.variables?.recreate === false}
-                  disabled={busy}
-                >
-                  <DatabaseZap size={16} aria-hidden />
+                  disabled={busy} icon={DatabaseZap}>
                   {t("settings.database.systemTables.action.initialize")}
                 </Button>
               ) : null}
-              <Button
+              <Button type="button"
                 size="md"
                 variant="secondary"
                 onClick={() => void refreshStatus()}
                 loading={statusQuery.isFetching}
-                disabled={operation.isPending}
-              >
-                <RefreshCw size={16} aria-hidden />
+                disabled={operation.isPending} icon={RefreshCw}>
                 {t("settings.database.systemTables.action.refresh")}
               </Button>
             </div>
@@ -270,12 +273,12 @@ export function SystemTablesCard() {
             {mayExecute ? (
               <section className="space-y-3 border-t border-border pt-5" aria-labelledby="recreate-system-tables-title">
                 <div className="flex items-start gap-2">
-                  <AlertTriangle className="mt-0.5 shrink-0 text-danger" size={17} aria-hidden />
+                  <AlertTriangle className="mt-0.5 shrink-0 text-danger-fg" size={16} aria-hidden />
                   <div>
-                    <h3 id="recreate-system-tables-title" className="text-sm font-semibold text-foreground">
+                    <h3 id="recreate-system-tables-title" className="text-sm font-semibold text-fg">
                       {t("settings.database.systemTables.recreate.sectionTitle")}
                     </h3>
-                    <p className="mt-1 text-xs leading-relaxed text-muted">
+                    <p className="mt-1 text-xs leading-relaxed text-fg-muted">
                       {t("settings.database.systemTables.recreate.sectionDescription")}
                     </p>
                   </div>
@@ -291,15 +294,13 @@ export function SystemTablesCard() {
                   })}
                   disabled={busy}
                   actions={
-                    <Button
+                    <Button type="button"
                       size="lg"
                       variant="danger"
                       className="w-full sm:w-auto"
                       onClick={() => execute(true)}
                       loading={operation.isPending && operation.variables?.recreate === true}
-                      disabled={busy || !recreateConfirmed}
-                    >
-                      <RotateCcw size={15} aria-hidden />
+                      disabled={busy || !recreateConfirmed} icon={RotateCcw}>
                       {t("settings.database.systemTables.action.recreate")}
                     </Button>
                   }
@@ -323,11 +324,11 @@ function SummaryItem({
   description?: string;
 }) {
   return (
-    <div className="rounded-md border border-border bg-muted/30 p-3">
-      <p className="text-xs text-muted">{label}</p>
-      <p className="mt-1 font-sans text-sm font-semibold text-foreground">{value}</p>
+    <div className="rounded-md border border-border bg-surface-hover p-3">
+      <p className="text-xs text-fg-muted">{label}</p>
+      <p className="mt-1 font-sans text-sm font-semibold text-fg">{value}</p>
       {description ? (
-        <p className="mt-1 text-xs leading-relaxed text-muted">{description}</p>
+        <p className="mt-1 text-xs leading-relaxed text-fg-muted">{description}</p>
       ) : null}
     </div>
   );
@@ -352,17 +353,17 @@ function SystemTablesDetails({ data }: { data: SystemTablesStatusData }) {
 
   return (
     <details className="group/disclosure min-w-0 rounded-md border border-border">
-      <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-medium text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring [&::-webkit-details-marker]:hidden">
+      <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-medium text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring [&::-webkit-details-marker]:hidden">
         <span>
           {t("settings.database.systemTables.details.title", {
             existing: data.existing_object_count,
             expected: data.expected_object_count,
           })}
         </span>
-        <DisclosureChevron expanded="group" size={16} className="text-muted" />
+        <DisclosureChevron expanded="group" size={16} className="text-fg-muted" />
       </summary>
       <div className="min-w-0 border-t border-border p-4">
-        <p className="mb-3 text-xs leading-relaxed text-muted">
+        <p className="mb-3 text-xs leading-relaxed text-fg-muted">
           {t("settings.database.systemTables.details.versions", {
             applied: data.applied_versions.join(", ") || "-",
             pending: data.pending_versions.join(", ") || "-",
@@ -379,8 +380,8 @@ function SystemTablesDetails({ data }: { data: SystemTablesStatusData }) {
           className={`rounded-sm ${INFORMATION_TABLE_SCROLL_CLASS} ${INFORMATION_TABLE_FOCUS_CLASS}`}
         >
           <table className="min-w-[840px] w-full border-collapse text-left text-sm">
-            <thead className="sticky top-0 z-10 bg-background">
-              <tr className="h-10 border-b border-border text-xs text-muted">
+            <thead className="sticky top-0 z-10 bg-surface-sunken">
+              <tr className="h-10 border-b border-border text-xs text-fg-muted">
                 <th scope="col" className="px-3 py-2 font-medium">{t("settings.database.systemTables.table.name")}</th>
                 <th scope="col" className="px-3 py-2 font-medium">{t("settings.database.systemTables.table.type")}</th>
                 <th scope="col" className="px-3 py-2 font-medium">{t("settings.database.systemTables.table.status")}</th>
@@ -392,23 +393,23 @@ function SystemTablesDetails({ data }: { data: SystemTablesStatusData }) {
             <tbody>
               {objects.map((object) => (
                 <tr key={`${object.object_type}:${object.name}`} className={`${INFORMATION_TABLE_ROW_CLASS} border-b border-border last:border-b-0`}>
-                  <th scope="row" className="whitespace-nowrap px-3 py-2 font-mono text-xs font-medium text-foreground">{object.name}</th>
-                  <td className="whitespace-nowrap px-3 py-2 text-foreground">{objectTypeLabel(object.object_type)}</td>
+                  <th scope="row" className="whitespace-nowrap px-3 py-2 font-mono text-xs font-medium text-fg">{object.name}</th>
+                  <td className="whitespace-nowrap px-3 py-2 text-fg">{objectTypeLabel(object.object_type)}</td>
                   <td className="px-3 py-2">
                     <StatusBadge
                       variant={object.exists ? "success" : "neutral"}
                       label={t(object.exists ? "settings.database.systemTables.table.exists" : "settings.database.systemTables.table.missing")}
                     />
                   </td>
-                  <td className="px-3 py-2 text-right tabular-nums text-foreground">
+                  <td className="px-3 py-2 text-right tabular-nums text-fg">
                     {object.object_type !== "TABLE"
                       ? t("settings.database.systemTables.table.notApplicable")
                       : object.estimated_rows == null
                         ? "—"
                         : formatNumber(object.estimated_rows)}
                   </td>
-                  <td className="whitespace-nowrap px-3 py-2 text-muted">{formatDateTime(object.created_at)}</td>
-                  <td className="whitespace-nowrap px-3 py-2 text-muted">
+                  <td className="whitespace-nowrap px-3 py-2 text-fg-muted">{formatDateTime(object.created_at)}</td>
+                  <td className="whitespace-nowrap px-3 py-2 text-fg-muted">
                     {object.object_type === "TABLE"
                       ? formatDateTime(object.last_analyzed_at)
                       : t("settings.database.systemTables.table.notApplicable")}

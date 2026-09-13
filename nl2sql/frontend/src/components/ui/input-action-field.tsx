@@ -2,8 +2,11 @@ import type { ChangeEvent, InputHTMLAttributes, ReactNode } from "react";
 
 import { cn } from "@/lib/utils";
 
-import { Button, type ButtonProps } from "./button";
-import { FieldError } from "./field-error";
+import {
+  Button,
+  type ButtonProps,
+  FieldError,
+} from "@engchina/production-ready-ui";
 import { FieldLabel } from "./required-field";
 
 export interface InputActionFieldAction {
@@ -97,10 +100,10 @@ export function InputActionField({
           data-testid={inputTestId}
           onChange={handleChange}
           className={cn(
-            "h-11 w-full min-h-[44px] rounded-md border px-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted/70 focus-visible:border-primary focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring",
-            readOnly ? "cursor-default bg-background text-muted" : "bg-card",
+            "h-11 w-full min-h-[44px] rounded-md border px-3 text-sm text-fg outline-none transition-colors placeholder:text-fg-muted focus-visible:border-focus-ring focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus-ring",
+            readOnly ? "cursor-default bg-surface-sunken text-fg-muted" : "bg-surface",
             disabled && "cursor-not-allowed opacity-60",
-            error ? "border-danger" : "border-border",
+            error ? "border-danger-fg" : "border-border-control",
             inputClassName
           )}
         />
@@ -123,7 +126,7 @@ export function InputActionField({
         </Button>
       </div>
       {helper ? (
-        <p id={hintId} className="text-xs leading-relaxed text-muted">
+        <p id={hintId} className="text-xs leading-relaxed text-fg-muted">
           {helper}
         </p>
       ) : null}

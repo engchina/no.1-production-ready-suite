@@ -1,7 +1,7 @@
 import { Search } from "lucide-react";
 
 const INPUT_CLASS =
-  "min-h-[44px] w-full rounded-md border border-border bg-card px-3 py-2 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40 disabled:cursor-not-allowed disabled:bg-muted/20 disabled:text-muted";
+  "min-h-[44px] w-full rounded-md border border-border bg-surface px-3 py-2 outline-none focus:border-focus-ring focus:ring-2 focus:ring-focus-ring disabled:cursor-not-allowed disabled:bg-surface-hover disabled:text-fg-disabled";
 
 export interface DbObjectFilterFieldProps {
   label: string;
@@ -48,12 +48,12 @@ export function DbManagementSearchField({
   className = "",
 }: DbObjectFilterFieldProps) {
   return (
-    <label className={`grid min-w-0 gap-1 text-sm font-medium text-foreground ${className}`}>
+    <label className={`grid min-w-0 gap-1 text-sm font-medium text-fg ${className}`}>
       <span>{label}</span>
       <span className="relative">
         <Search
           size={16}
-          className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted"
+          className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-fg-muted"
           aria-hidden="true"
         />
         <input
@@ -79,7 +79,7 @@ export function DbOwnerPrefixFilterField({
   className = "",
 }: DbObjectFilterFieldProps) {
   return (
-    <label className={`grid min-w-0 gap-1 text-sm font-medium text-foreground ${className}`}>
+    <label className={`grid min-w-0 gap-1 text-sm font-medium text-fg ${className}`}>
       <span>{label}</span>
       <input
         type="search"
@@ -105,7 +105,7 @@ export function DbManagementSelectField<T extends string>({
   className = "",
 }: DbManagementSelectFieldProps<T>) {
   return (
-    <label className={`grid min-w-0 gap-1 text-sm font-medium text-foreground ${className}`}>
+    <label className={`grid min-w-0 gap-1 text-sm font-medium text-fg ${className}`}>
       <span>{label}</span>
       <select
         value={value}

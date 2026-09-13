@@ -1,4 +1,4 @@
-import { Button } from "@/components/ui/button";
+import { Button } from "@engchina/production-ready-ui";
 import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
 import { Eye, FileText, Network, Sparkles } from "lucide-react";
 
@@ -19,16 +19,16 @@ function OptionCheckbox({
   onChange: (checked: boolean) => void;
 }) {
   return (
-    <label className="flex min-h-11 items-start gap-3 rounded-md border border-border bg-card p-3 text-foreground">
+    <label className="flex min-h-11 items-start gap-3 rounded-md border border-border bg-surface p-3 text-fg">
       <input
         type="checkbox"
         checked={checked}
         disabled={disabled}
         onChange={(event) => onChange(event.currentTarget.checked)}
-        className="mt-1 h-4 w-4 shrink-0 rounded border-border text-primary focus:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-60"
+        className="mt-1 h-4 w-4 shrink-0 rounded border-border text-accent-fg focus:ring-focus-ring disabled:cursor-not-allowed disabled:opacity-60"
       />
       <span className="flex min-w-0 items-start gap-2">
-        <Icon size={16} className="mt-0.5 shrink-0 text-muted" aria-hidden="true" />
+        <Icon size={16} className="mt-0.5 shrink-0 text-fg-muted" aria-hidden="true" />
         <span className="min-w-0 [overflow-wrap:anywhere]">{label}</span>
       </span>
     </label>
@@ -75,22 +75,21 @@ export function Nl2SqlExecutionOptionsPanel({
 
   return (
     <section
-      className="overflow-hidden rounded-md border border-border bg-background text-sm"
+      className="overflow-hidden rounded-md border border-border bg-surface-sunken text-sm"
       aria-labelledby="nl2sql-execution-options-heading"
       data-testid="nl2sql-execution-options"
     >
-      <Button
+      <Button className="w-full justify-between"
         type="button"
         variant="ghost"
         size="md"
-        data-button-layout="disclosure"
         aria-expanded={open}
         aria-controls="nl2sql-execution-options-body"
         onClick={() => onOpenChange(!open)}
         disabled={disabled}
       >
         <span className="flex min-w-0 items-center gap-2">
-          <Sparkles size={15} className="shrink-0 text-foreground" aria-hidden="true" />
+          <Sparkles size={16} className="shrink-0 text-fg" aria-hidden="true" />
           <span
             id="nl2sql-execution-options-heading"
             className="min-w-0 [overflow-wrap:anywhere]"
@@ -98,7 +97,7 @@ export function Nl2SqlExecutionOptionsPanel({
             {t("nl2sql.executionOptions.title")}
           </span>
           {hasChangedOptions ? (
-            <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+            <span className="shrink-0 rounded-full bg-accent-subtle px-2 py-0.5 text-xs font-medium text-accent-fg">
               {t("nl2sql.selectAiOverrides.activeBadge")}
             </span>
           ) : null}
@@ -113,7 +112,7 @@ export function Nl2SqlExecutionOptionsPanel({
         hidden={!open}
         className={open ? "grid gap-3 border-t border-border p-3" : "hidden"}
       >
-        <p className="text-xs leading-5 text-muted">{t("nl2sql.executionOptions.hint")}</p>
+        <p className="text-xs leading-5 text-fg-muted">{t("nl2sql.executionOptions.hint")}</p>
         <div className="grid gap-3 md:grid-cols-2">
           <OptionCheckbox
             checked={rewriteUseGlossary}
@@ -145,12 +144,12 @@ export function Nl2SqlExecutionOptionsPanel({
           />
         </div>
         {showPromptUnavailable ? (
-          <p className="rounded-md border border-border bg-card px-3 py-2 text-xs leading-5 text-muted">
+          <p className="rounded-md border border-border bg-surface px-3 py-2 text-xs leading-5 text-fg-muted">
             {t("nl2sql.executionOptions.showPromptUnsupported")}
           </p>
         ) : null}
         {selectAiOverridesInactive ? (
-          <p className="rounded-md border border-border bg-card px-3 py-2 text-xs leading-5 text-muted">
+          <p className="rounded-md border border-border bg-surface px-3 py-2 text-xs leading-5 text-fg-muted">
             {t("nl2sql.executionOptions.selectAiOverridesUnsupported")}
           </p>
         ) : null}

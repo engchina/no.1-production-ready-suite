@@ -44,7 +44,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 
-import { Button } from "@/components/ui/button";
+import { Button } from "@engchina/production-ready-ui";
 import { cn } from "@/lib/utils";
 
 import { t } from "@/lib/i18n";
@@ -243,28 +243,28 @@ const OntologyNodeCard = memo(function OntologyNodeCard({
         className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md"
         style={{ background: "color-mix(in srgb, currentColor 12%, transparent)" }}
       >
-        <Icon size={15} aria-hidden="true" />
+        <Icon size={16} aria-hidden="true" />
       </span>
       <span className="grid min-w-0 gap-0.5">
         <span
-          className="inline-flex max-w-full items-center justify-self-start truncate rounded border border-current/20 px-1.5 py-0.5 text-[10px] font-semibold leading-3 opacity-75"
+          className="inline-flex max-w-full items-center justify-self-start truncate rounded border border-current/20 px-1.5 py-0.5 text-xs font-semibold leading-3 opacity-75"
           data-testid="ontology-node-kind-label"
         >
           {display.kindLabel}
         </span>
-        <span className="block truncate text-[13px] font-semibold leading-5">
+        <span className="block truncate text-sm font-semibold leading-5">
           {display.primaryLabel}
         </span>
         {display.secondaryLabel ? (
           <span
-            className="block truncate text-[10px] leading-4 opacity-70"
+            className="block truncate text-xs leading-4 opacity-70"
             title={display.secondaryLabel}
           >
             {display.secondaryLabel}
           </span>
         ) : null}
         {showStats ? (
-          <span className="mt-0.5 flex min-w-0 flex-wrap gap-1 text-[10px] leading-3">
+          <span className="mt-0.5 flex min-w-0 flex-wrap gap-1 text-xs leading-3">
             <span className="rounded border border-current/15 px-1 py-0.5 opacity-75">
               {t("nl2sql.ontology.nodeStats.columns", { count: stats?.columnCount ?? 0 })}
             </span>
@@ -295,42 +295,32 @@ function FlowControls({
 }) {
   const flow = useReactFlow();
   return (
-    <div className="absolute right-3 top-3 z-10 flex gap-1 rounded-md border border-border bg-card p-1 shadow-sm">
+    <div className="absolute right-3 top-3 z-10 flex gap-1 rounded-md border border-border bg-surface p-1 shadow-sm">
       <Button
-        data-button-layout="graph-tool"
         type="button"
         size="sm"
         variant="ghost"
         aria-label={t("nl2sql.ontology.graphZoomIn")}
         title={t("nl2sql.ontology.graphZoomIn")}
-        onClick={() => void flow.zoomIn({ duration: 0 })}
-      >
-        <Plus size={15} aria-hidden="true" />
-      </Button>
+        onClick={() => void flow.zoomIn({ duration: 0 })} icon={Plus}>
+        </Button>
       <Button
-        data-button-layout="graph-tool"
         type="button"
         size="sm"
         variant="ghost"
         aria-label={t("nl2sql.ontology.graphZoomOut")}
         title={t("nl2sql.ontology.graphZoomOut")}
-        onClick={() => void flow.zoomOut({ duration: 0 })}
-      >
-        <Minus size={15} aria-hidden="true" />
-      </Button>
+        onClick={() => void flow.zoomOut({ duration: 0 })} icon={Minus}>
+        </Button>
       <Button
-        data-button-layout="graph-tool"
         type="button"
         size="sm"
         variant="ghost"
         aria-label={t("nl2sql.ontology.graphFit")}
         title={t("nl2sql.ontology.graphFit")}
-        onClick={() => void flow.fitView({ padding: 0.18, duration: 0 })}
-      >
-        <Maximize2 size={15} aria-hidden="true" />
-      </Button>
+        onClick={() => void flow.fitView({ padding: 0.18, duration: 0 })} icon={Maximize2}>
+        </Button>
       <Button
-        data-button-layout="graph-tool"
         type="button"
         size="sm"
         variant="ghost"
@@ -338,10 +328,8 @@ function FlowControls({
         title={t("nl2sql.ontology.graphResetLayout")}
         disabled={resetDisabled}
         onClick={onResetLayout}
-        data-testid="ontology-graph-reset-layout"
-      >
-        <RotateCcw size={15} aria-hidden="true" />
-      </Button>
+        data-testid="ontology-graph-reset-layout" icon={RotateCcw}>
+        </Button>
     </div>
   );
 }
@@ -373,12 +361,12 @@ function OntologyGraphLegend({
   if (groups.length === 0) return null;
   return (
     <div
-      className="absolute bottom-3 left-3 z-10 max-w-[calc(100%-1.5rem)] rounded-md border border-border bg-card px-2 py-1.5 shadow-sm"
+      className="absolute bottom-3 left-3 z-10 max-w-[calc(100%-1.5rem)] rounded-md border border-border bg-surface px-2 py-1.5 shadow-sm"
       role="group"
       aria-label={t("nl2sql.ontology.legendLabel")}
       data-testid="ontology-graph-legend"
     >
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] leading-4 text-muted">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs leading-4 text-fg-muted">
         {groups.map((group) => {
           const enabled = !disabledGroupIds.has(group.id);
           return (
@@ -388,8 +376,8 @@ function OntologyGraphLegend({
               aria-pressed={enabled}
               title={t("nl2sql.ontology.legendToggleHint")}
               className={cn(
-                "inline-flex cursor-pointer items-center gap-1 rounded px-1 py-0.5 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/40 motion-reduce:transition-none",
-                enabled ? "hover:bg-background" : "opacity-40 line-through hover:opacity-60"
+                "inline-flex cursor-pointer items-center gap-1 rounded px-1 py-0.5 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-focus-ring motion-reduce:transition-none",
+                enabled ? "hover:bg-surface-hover" : "opacity-40 line-through hover:opacity-60"
               )}
               onClick={() => onToggleGroup(group.id)}
               data-testid={`ontology-graph-legend-${group.id}`}
@@ -457,7 +445,7 @@ function GraphModeControl({
 }) {
   return (
     <div
-      className="pointer-events-auto flex min-h-[44px] min-w-0 max-w-full flex-wrap items-center gap-1 rounded-md border border-border bg-card p-1 shadow-sm sm:min-h-[40px]"
+      className="pointer-events-auto flex min-h-[44px] min-w-0 max-w-full flex-wrap items-center gap-1 rounded-md border border-border bg-surface p-1 shadow-sm sm:min-h-[40px]"
       role="group"
       aria-label={t("nl2sql.ontology.graphMode.label")}
       data-testid="ontology-graph-view-mode"
@@ -471,13 +459,13 @@ function GraphModeControl({
             type="button"
             aria-pressed={selected}
             className={cn(
-              "inline-flex h-[36px] cursor-pointer items-center gap-1 rounded px-2 text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/40 motion-reduce:transition-none sm:h-[32px]",
-              selected ? "bg-primary text-primary-foreground" : "text-muted hover:bg-background hover:text-foreground"
+              "inline-flex h-[36px] cursor-pointer items-center gap-1 rounded px-2 text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-focus-ring motion-reduce:transition-none sm:h-[32px]",
+              selected ? "bg-accent-emphasis text-fg-on-accent" : "text-fg-muted hover:bg-surface-hover hover:text-fg"
             )}
             onClick={() => onChange(item.id)}
             data-testid={`ontology-graph-mode-${item.id}`}
           >
-            <Icon size={13} aria-hidden="true" />
+            <Icon size={14} aria-hidden="true" />
             <span>{t(item.labelKey)}</span>
           </button>
         );
@@ -496,10 +484,10 @@ function GraphToolbarSearchField({
   const label = t("nl2sql.ontology.graphSearch");
   return (
     <label
-      className="pointer-events-auto flex h-[44px] w-full min-w-0 max-w-full items-center gap-2 rounded-md border border-border bg-card px-3 text-sm text-foreground shadow-sm transition-colors focus-within:border-primary focus-within:ring-2 focus-within:ring-ring/40 sm:h-[40px] sm:w-72 sm:max-w-[18rem]"
+      className="pointer-events-auto flex h-[44px] w-full min-w-0 max-w-full items-center gap-2 rounded-md border border-border bg-surface px-3 text-sm text-fg shadow-sm transition-colors focus-within:border-focus-ring focus-within:ring-2 focus-within:ring-focus-ring sm:h-[40px] sm:w-72 sm:max-w-[18rem]"
       data-testid="ontology-graph-search-field"
     >
-      <Search size={15} aria-hidden="true" className="shrink-0 text-muted" />
+      <Search size={16} aria-hidden="true" className="shrink-0 text-fg-muted" />
       <input
         type="search"
         value={value}
@@ -514,7 +502,7 @@ function GraphToolbarSearchField({
         }}
         placeholder={label}
         aria-label={label}
-        className="min-w-0 flex-1 appearance-none border-0 bg-transparent p-0 text-sm leading-5 text-foreground shadow-none outline-none placeholder:text-muted/70 focus:border-transparent focus:shadow-none focus:outline-none focus:ring-0 focus-visible:shadow-none focus-visible:outline-none focus-visible:ring-0 [&::-webkit-search-cancel-button]:appearance-none [&::-webkit-search-decoration]:appearance-none"
+        className="min-w-0 flex-1 appearance-none border-0 bg-transparent p-0 text-sm leading-5 text-fg shadow-none outline-none placeholder:text-fg-muted focus:border-transparent focus:shadow-none focus:outline-none focus:ring-0 focus-visible:shadow-none focus-visible:outline-none focus-visible:ring-0 [&::-webkit-search-cancel-button]:appearance-none [&::-webkit-search-decoration]:appearance-none"
         style={{ WebkitAppearance: "none", boxShadow: "none" }}
         data-testid="ontology-graph-search"
       />
@@ -536,7 +524,7 @@ function LaneOverlays({ lanes }: { lanes: OntologyGraphSemanticLane[] }) {
             width: 176,
           }}
         >
-          <span className="rounded-md border border-border bg-card/95 px-2 py-1 text-[10px] font-semibold leading-4 text-muted shadow-sm">
+          <span className="rounded-md border border-border bg-surface px-2 py-1 text-xs font-semibold leading-4 text-fg-muted shadow-sm">
             {t(LANE_LABEL_KEYS[lane.id])}
           </span>
         </div>
@@ -1048,8 +1036,8 @@ function OntologyFlow({
       {/* ツールバーはキャンバス外(上部)に置き、フィット時にノードと重ならないようにする */}
       <div className="flex flex-wrap items-center gap-2">
         <GraphModeControl mode={currentViewMode} onChange={changeViewMode} />
-        <label className="grid w-full min-w-0 max-w-full gap-1 text-xs text-muted sm:w-72">{t("markdownOntology.kindFilter")}
-          <select aria-label={t("markdownOntology.kindFilter")} className="h-11 w-full min-w-0 max-w-full rounded-md border border-border bg-card px-3 text-sm text-foreground" value={conceptKind} onChange={e=>setConceptKind(e.target.value)}>
+        <label className="grid w-full min-w-0 max-w-full gap-1 text-xs text-fg-muted sm:w-72">{t("markdownOntology.kindFilter")}
+          <select aria-label={t("markdownOntology.kindFilter")} className="h-11 w-full min-w-0 max-w-full rounded-md border border-border-control bg-surface px-3 text-sm text-fg" value={conceptKind} onChange={e=>setConceptKind(e.target.value)}>
             <option value="">{t("markdownOntology.allConcepts")}</option>
             {[conceptKinds.slice(0,6),conceptKinds.slice(6)].map((kinds,i)=><optgroup key={i} label={t(i?"markdownOntology.auxConcepts":"markdownOntology.mainConcepts")}>
               {kinds.map(kind=>{const exists=kind === "link_type" ? graph.edges.some(e=>e.kind === "link_type" || e.kind === "business_relationship") : graph.nodes.some(n=>nodeConceptKind(n.kind) === kind); return <option key={kind} value={kind} disabled={!exists}>{conceptLabel(kind)}{exists?"":` · ${t("markdownOntology.noConcept")}`}</option>;})}
@@ -1060,16 +1048,15 @@ function OntologyFlow({
           <GraphToolbarSearchField value={search} onChange={setSearch} />
           {query ? (
             <div
-              className="flex h-[44px] items-center gap-0.5 rounded-md border border-border bg-card px-1 shadow-sm sm:h-[40px]"
+              className="flex h-[44px] items-center gap-0.5 rounded-md border border-border bg-surface px-1 shadow-sm sm:h-[40px]"
               data-testid="ontology-graph-search-nav"
             >
-              <span className="px-1 text-xs tabular-nums text-muted" aria-live="polite">
+              <span className="px-1 text-xs tabular-nums text-fg-muted" aria-live="polite">
                 {orderedSearchMatches.length === 0
                   ? t("nl2sql.ontology.graphSearchNoMatch")
                   : `${searchCursor + 1} / ${orderedSearchMatches.length}`}
               </span>
               <Button
-                data-button-layout="graph-tool"
                 type="button"
                 size="sm"
                 variant="ghost"
@@ -1077,12 +1064,9 @@ function OntologyFlow({
                 title={t("nl2sql.ontology.graphSearchPrev")}
                 disabled={orderedSearchMatches.length === 0}
                 onClick={() => jumpToSearchMatch(-1)}
-                data-testid="ontology-graph-search-prev"
-              >
-                <ChevronLeft size={15} aria-hidden="true" />
-              </Button>
+                data-testid="ontology-graph-search-prev" icon={ChevronLeft}>
+                </Button>
               <Button
-                data-button-layout="graph-tool"
                 type="button"
                 size="sm"
                 variant="ghost"
@@ -1090,22 +1074,20 @@ function OntologyFlow({
                 title={t("nl2sql.ontology.graphSearchNext")}
                 disabled={orderedSearchMatches.length === 0}
                 onClick={() => jumpToSearchMatch(1)}
-                data-testid="ontology-graph-search-next"
-              >
-                <ChevronRight size={15} aria-hidden="true" />
-              </Button>
+                data-testid="ontology-graph-search-next" icon={ChevronRight}>
+                </Button>
             </div>
           ) : null}
         </div>
-        {query && scopedGraph.edges.filter(e=>[e.relationship_name_ja,e.description_ja,String(e.metadata?.api_name ?? "")].some(value=>normalize(value ?? "").includes(query))).map(edge=><Button key={edge.id} size="sm" variant="secondary" onClick={()=>onSelectEdge?.(edge.id)}>{edge.relationship_name_ja}</Button>)}
+        {query && scopedGraph.edges.filter(e=>[e.relationship_name_ja,e.description_ja,String(e.metadata?.api_name ?? "")].some(value=>normalize(value ?? "").includes(query))).map(edge=><Button type="button" key={edge.id} size="sm" variant="secondary" onClick={()=>onSelectEdge?.(edge.id)}>{edge.relationship_name_ja}</Button>)}
         {detailCount > 0 ? (
           <label
-            className="flex h-[44px] min-w-0 max-w-full cursor-pointer items-center gap-2 rounded-md border border-border bg-card px-3 text-xs text-foreground shadow-sm transition-colors focus-within:border-primary focus-within:ring-2 focus-within:ring-ring/40 sm:h-[40px]"
+            className="flex h-[44px] min-w-0 max-w-full cursor-pointer items-center gap-2 rounded-md border border-border bg-surface px-3 text-xs text-fg shadow-sm transition-colors focus-within:border-focus-ring focus-within:ring-2 focus-within:ring-focus-ring sm:h-[40px]"
             data-testid="ontology-graph-details-toggle-field"
           >
             <input
               type="checkbox"
-              className="h-4 w-4 accent-primary"
+              className="h-4 w-4 accent-accent-emphasis"
               checked={showDetails}
               onChange={(event) => setShowDetails(event.currentTarget.checked)}
               data-testid="ontology-graph-details-toggle"
@@ -1116,7 +1098,7 @@ function OntologyFlow({
       </div>
       <div
         ref={canvasRef}
-        className="relative h-[32rem] min-h-80 overflow-hidden rounded-md border border-border bg-background"
+        className="relative h-[32rem] min-h-80 overflow-hidden rounded-md border border-border bg-surface-sunken"
       >
       {canvasVisible && <ReactFlow
         nodes={nodes}
@@ -1157,7 +1139,7 @@ function OntologyFlow({
             aria-label={t("nl2sql.ontology.graphMinimap")}
             style={{ width: 140, height: 90 }}
             bgColor={cssVar("--card")}
-            maskColor="color-mix(in srgb, var(--border) 45%, transparent)"
+            maskColor="color-mix(in srgb, var(--color-border) 45%, transparent)"
             // 種別(型チャネル)の塗りをミニマップにも反映し、縮小表示でも構造が読めるようにする
             nodeColor={(node) => {
               const data = node.data as OntologyNodeData | undefined;

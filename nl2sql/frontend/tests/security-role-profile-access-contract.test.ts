@@ -108,7 +108,7 @@ test("archived role editor keeps permission and profile options visible but read
   );
   assert.match(rolesPageSource, /disabled=\{profileAccessReadOnly\}\s*onChange=\{\(\) => toggleProfileAccess/u);
   assert.match(securityManagementSharedSource, /disabled\?: boolean/u);
-  assert.match(securityManagementSharedSource, /disabled:bg-muted\/20 disabled:text-muted/u);
+  assert.match(securityManagementSharedSource, /disabled:bg-surface-hover disabled:text-fg-disabled/u);
   assert.ok((rolesPageSource.match(/if \(inputReadOnly\) return;/gu) ?? []).length >= 6);
   assert.ok((rolesPageSource.match(/if \(profileAccessReadOnly\) return;/gu) ?? []).length >= 4);
 });

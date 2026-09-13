@@ -19,9 +19,8 @@ function applyTheme(pref: ThemePreference) {
   if (typeof document === "undefined") return;
   const dark = resolveDark(pref);
   const root = document.documentElement;
+  // color-scheme（ネイティブコントロールと light-dark() トークン）は共有 CSS の .dark が切り替える。
   root.classList.toggle("dark", dark);
-  // ネイティブコントロール（scrollbar 等）も追従させる。
-  root.style.colorScheme = dark ? "dark" : "light";
 }
 
 /**

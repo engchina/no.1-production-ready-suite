@@ -2,7 +2,12 @@ import { useWorkspaceState, useWorkspaceRevalidation } from "@/components/Worksp
 import { useState } from "react";
 import { Play, X } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
+import {
+  Button,
+  PageHeader,
+  Banner,
+  PageBody,
+} from "@engchina/production-ready-ui";
 import { FieldLabel } from "@/components/ui/required-field";
 
 import { ActionResultRegion } from "@/components/ActionResultRegion";
@@ -10,8 +15,6 @@ import {
   ExecutionActivityPanel,
   type ExecutionActivityStatus,
 } from "@/components/ExecutionActivityPanel";
-import { PageHeader } from "@/components/PageHeader";
-import { Banner } from "@/components/ui/banner";
 import { useAuth } from "@/features/security/AuthProvider";
 import { MENU_PERMISSIONS } from "@/features/security/menu-permissions";
 import { apiPost } from "@/lib/api";
@@ -49,9 +52,9 @@ export function DirectSqlPage() {
     return (
       <>
         <PageHeader title={t("nav.directSql")} subtitle={t("nl2sql.sqlRunner.description")} />
-        <main className="p-4 lg:p-8">
+        <PageBody>
           <Banner severity="info">{t("nl2sql.permission.executeRequired")}</Banner>
-        </main>
+        </PageBody>
       </>
     );
   }
@@ -128,8 +131,8 @@ function ExecutableDirectSqlPage() {
   return (
     <>
       <PageHeader title={t("nav.directSql")} subtitle={t("nl2sql.sqlRunner.description")} />
-      <main className="grid gap-4 p-4 lg:p-8" data-testid="nl2sql-direct-sql">
-        <section className="grid gap-4 rounded-md border border-border bg-card p-4">
+      <PageBody className="grid gap-4" data-testid="nl2sql-direct-sql">
+        <section className="grid gap-4 rounded-md border border-border bg-surface p-4">
           <div className="grid gap-2">
             <FieldLabel
               htmlFor="direct-sql-input"
@@ -147,7 +150,7 @@ function ExecutableDirectSqlPage() {
               rows={12}
               required
               aria-required="true"
-              className="min-h-64 rounded-md border border-border bg-card px-3 py-2 font-mono text-sm leading-6 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40"
+              className="min-h-64 rounded-md border border-border-control bg-surface px-3 py-2 font-mono text-sm leading-6 outline-none focus:border-focus-ring focus:ring-2 focus:ring-focus-ring"
               placeholder={t("nl2sql.sqlRunner.placeholder")}
             />
           </div>
@@ -178,9 +181,7 @@ function ExecutableDirectSqlPage() {
                 className="w-full sm:w-auto"
                 loading={loading}
                 disabled={!canExecute}
-                onClick={() => void execute()}
-              >
-                <Play size={16} aria-hidden="true" />
+                onClick={() => void execute()} icon={Play}>
                 <span>{t("nl2sql.action.executeSql")}</span>
               </Button>
               <Button
@@ -189,9 +190,7 @@ function ExecutableDirectSqlPage() {
                 size="lg"
                 className="w-full sm:w-auto"
                 disabled={!canClear || loading}
-                onClick={clear}
-              >
-                <X size={16} aria-hidden="true" />
+                onClick={clear} icon={X}>
                 <span>{t("nl2sql.action.clearSql")}</span>
               </Button>
             </div>
@@ -220,7 +219,7 @@ function ExecutableDirectSqlPage() {
             ) : null}
           </ActionResultRegion>
         </section>
-      </main>
+      </PageBody>
     </>
   );
 }

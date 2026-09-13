@@ -10,7 +10,7 @@ const source = readFileSync(
 test("settings test result panel defines the three semantic result tones", () => {
   assert.match(source, /export type SettingsTestResultTone = "success" \| "warning" \| "danger"/u);
   assert.match(source, /<Banner severity=\{tone\} title=\{message\}>/u);
-  assert.doesNotMatch(source, /TONE_STYLE|border-danger\/30|bg-danger-bg/u);
+  assert.doesNotMatch(source, /TONE_STYLE|border-danger-border|bg-danger-subtle/u);
 });
 
 test("settings test result panel exposes accessible status and error behavior", () => {

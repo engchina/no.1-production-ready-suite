@@ -371,7 +371,10 @@ test("セクション見出しはキーボードで開閉できる", async ({ pa
 
   const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
   const toggle = sidebar.getByRole("button", { name: "セキュリティ管理 を展開" });
-  await expect.poll(() => toggle.locator("svg").evaluate((icon) => getComputedStyle(icon).rotate)).toBe("90deg");
+  // 共有 Sidebar の disclosure は折りたたみ時 ChevronDown を -90deg(右向き)、展開時 0deg(下向き)にする
+  // (docs/design-system/components-reference.md の Sidebar 参照実装)。旧 NL2SQL は globals.css で
+  // 折りたたみ時だけ 90deg(左向き)に上書きしていたが、業務 repo で見た目を持たない規約により撤去済み。
+  await expect.poll(() => toggle.locator("svg").evaluate((icon) => getComputedStyle(icon).rotate)).toBe("-90deg");
   await toggle.press("Enter");
 
   await expect(sidebar.getByText("ユーザー管理", { exact: true })).toBeVisible();
@@ -386,7 +389,7 @@ test("セクション見出しはキーボードで開閉できる", async ({ pa
   await expandedToggle.press(" ");
   await expect(sidebar.getByText("ユーザー管理", { exact: true })).toBeHidden();
   await expect(sidebar.getByText("監査ログ", { exact: true })).toHaveCount(0);
-  await expect.poll(() => toggle.locator("svg").evaluate((icon) => getComputedStyle(icon).rotate)).toBe("90deg");
+  await expect.poll(() => toggle.locator("svg").evaluate((icon) => getComputedStyle(icon).rotate)).toBe("-90deg");
 });
 
 test("SQL 生成権限がない既定入口は root から最初の許可画面へ振り分ける", async ({ page }) => {

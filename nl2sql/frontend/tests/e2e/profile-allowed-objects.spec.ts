@@ -775,35 +775,39 @@ test("業務プロファイルの更新操作はテーブル管理と同じ文�
   await expect(page.getByText("Oracle Profile", { exact: true })).toHaveCount(0);
 
   const actions = page.getByTestId("profile-management-actions");
+  // 共有 PageHeader(@engchina/production-ready-ui)の並び順は danger → utility → secondary → primary(主操作が右端、
+  // docs/design-system/README.md §7 #11)。lg 未満では主操作以外を「その他の操作」メニュー(上から重要な順)へ畳む。
   const isCompactHeader = (page.viewportSize()?.width ?? 0) < 1024;
   const createButton = actions.getByRole("button", { name: "新規作成", exact: true });
-  await expect(createButton).toHaveAttribute("data-page-action-kind", "primary");
+  await expect(createButton).toHaveClass(/\bbg-accent-emphasis\b/);
 
   if (isCompactHeader) {
     const moreButton = actions.getByRole("button", { name: "その他の操作", exact: true });
-    const moreChevron = moreButton.locator('svg[data-state]');
-    await expect(actions.getByRole("button")).toHaveText(["新規作成", "その他の操作"]);
-    await expect(moreChevron).toHaveAttribute("data-state", "collapsed");
-    await expect(moreChevron).toHaveClass(/rotate-90/);
+    await expect(actions.getByRole("button")).toHaveText(["その他の操作", "新規作成"]);
+    await expect(moreButton).toHaveAttribute("aria-haspopup", "menu");
+    await expect(moreButton).toHaveAttribute("aria-expanded", "false");
     await createButton.focus();
-    await page.keyboard.press("Tab");
+    await page.keyboard.press("Shift+Tab");
     await expect(moreButton).toBeFocused();
     await moreButton.press("Enter");
 
-    const menu = page.getByRole("menu");
+    const menu = page.getByRole("menu", { name: "その他の操作" });
     await expect(moreButton).toHaveAttribute("aria-expanded", "true");
-    await expect(moreChevron).toHaveAttribute("data-state", "expanded");
-    await expect(moreChevron).toHaveClass(/rotate-0/);
     await expect(menu.getByRole("menuitem")).toHaveText([
       "表示を更新",
       "DB 構造を再取得",
       "DB Profile 一覧を再取得",
     ]);
     await expect(menu.getByRole("menuitem", { name: "表示を更新" })).toBeFocused();
+    await page.keyboard.press("ArrowDown");
+    await expect(menu.getByRole("menuitem", { name: "DB 構造を再取得" })).toBeFocused();
+    await page.keyboard.press("End");
+    await expect(menu.getByRole("menuitem", { name: "DB Profile 一覧を再取得" })).toBeFocused();
+    await page.keyboard.press("ArrowDown");
+    await expect(menu.getByRole("menuitem", { name: "表示を更新" })).toBeFocused();
     await page.keyboard.press("Escape");
     await expect(moreButton).toBeFocused();
     await expect(moreButton).toHaveAttribute("aria-expanded", "false");
-    await expect(moreChevron).toHaveAttribute("data-state", "collapsed");
 
     const requestsBeforeRefresh = profileSearchRequests;
     await moreButton.click();
@@ -848,15 +852,15 @@ test("業務プロファイルの更新操作はテーブル管理と同じ文�
     });
 
     await expect(actionButtons).toHaveText([
-      "新規作成",
       "表示を更新",
       "DB 構造を再取得",
       "DB Profile 一覧を再取得",
+      "新規作成",
     ]);
-    await expect(actions.locator('[data-page-action-group="utility"][data-page-action-group-start="true"]')).toBeVisible();
-    await expect(createButton).toHaveClass(/\bbg-primary\b/);
-    await expect(refreshButton).toHaveClass(/\bbg-card\b/);
-    await expect(schemaRefreshButton).toHaveClass(/\bbg-card\b/);
+    // 更新系は utility = ghost(bg-transparent)。
+    await expect(refreshButton).toHaveClass(/\bbg-transparent\b/);
+    await expect(schemaRefreshButton).toHaveClass(/\bbg-transparent\b/);
+    await expect(dbProfileRefreshButton).toHaveClass(/\bbg-transparent\b/);
 
     const [createBox, refreshBox, schemaRefreshBox, dbProfileRefreshBox] = await Promise.all([
       createButton.boundingBox(),
@@ -872,17 +876,17 @@ test("業務プロファイルの更新操作はテーブル管理と同じ文�
       previous: NonNullable<typeof createBox>,
       next: NonNullable<typeof createBox>
     ) => next.y > previous.y + previous.height / 2 || next.x > previous.x;
-    expect(visuallyAfter(createBox!, refreshBox!)).toBe(true);
     expect(visuallyAfter(refreshBox!, schemaRefreshBox!)).toBe(true);
     expect(visuallyAfter(schemaRefreshBox!, dbProfileRefreshBox!)).toBe(true);
+    expect(visuallyAfter(dbProfileRefreshBox!, createBox!)).toBe(true);
 
-    await createButton.focus();
-    await page.keyboard.press("Tab");
-    await expect(refreshButton).toBeFocused();
+    await refreshButton.focus();
     await page.keyboard.press("Tab");
     await expect(schemaRefreshButton).toBeFocused();
     await page.keyboard.press("Tab");
     await expect(dbProfileRefreshButton).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(createButton).toBeFocused();
 
     const requestsBeforeRefresh = profileSearchRequests;
     await refreshButton.click();

@@ -1,13 +1,16 @@
 import { lazy, Suspense, useMemo, useState, type SyntheticEvent } from "react";
 import { Copy, FileText, ListOrdered, Network, Play } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
+import {
+  Button,
+  Banner,
+  toast,
+  StatusBadge,
+} from "@engchina/production-ready-ui";
 import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
-import { Banner, toast } from "@engchina/production-ready-ui";
 
 import { ContentActionBar } from "@/components/ContentActionBar";
 import { LogicalStepsList } from "./LogicalStepsList";
-import { StatusBadge } from "@/components/ui/status-badge";
 import { copyTextToClipboard } from "@/lib/clipboard";
 import { t } from "@/lib/i18n";
 import { toastError } from "@/lib/toast";
@@ -97,15 +100,15 @@ function GroundingMatchRows({
 }) {
   return (
     <div className="grid gap-1">
-      <p className="text-xs font-semibold text-muted">{title}</p>
+      <p className="text-xs font-semibold text-fg-muted">{title}</p>
       {values.length === 0 ? (
-        <p className="text-xs leading-5 text-muted">-</p>
+        <p className="text-xs leading-5 text-fg-muted">-</p>
       ) : (
         <ul className="grid gap-1 text-xs leading-5">
           {values.slice(0, 5).map((value) => (
             <li key={`${title}:${value.sql}`} className="min-w-0 [overflow-wrap:anywhere]">
-              <span className="font-mono text-foreground">{value.sql}</span>
-              <span className="text-muted"> → {value.ontologyLabels.join("、") || "-"}</span>
+              <span className="font-mono text-fg">{value.sql}</span>
+              <span className="text-fg-muted"> → {value.ontologyLabels.join("、") || "-"}</span>
             </li>
           ))}
         </ul>
@@ -117,7 +120,7 @@ function GroundingMatchRows({
 function UnmatchedList({ values }: { values: string[] }) {
   if (values.length === 0) return null;
   return (
-    <ul className="mt-1 grid gap-1 text-xs leading-5 text-warning">
+    <ul className="mt-1 grid gap-1 text-xs leading-5 text-warning-fg">
       {values.slice(0, 6).map((value) => (
         <li key={value} className="min-w-0 font-mono [overflow-wrap:anywhere]">
           {value}
@@ -152,14 +155,14 @@ function SqlOntologyGroundingPanel({
 
   return (
     <section
-      className="grid gap-3 rounded-md border border-border bg-card p-3"
+      className="grid gap-3 rounded-md border border-border bg-surface p-3"
       aria-labelledby="nl2sql-sql-grounding-title"
       data-testid="nl2sql-sql-grounding-panel"
     >
       <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-2">
-          <Network size={16} className="shrink-0 text-foreground" aria-hidden="true" />
-          <h4 id="nl2sql-sql-grounding-title" className="text-sm font-semibold text-foreground">
+          <Network size={16} className="shrink-0 text-fg" aria-hidden="true" />
+          <h4 id="nl2sql-sql-grounding-title" className="text-sm font-semibold text-fg">
             {t("nl2sql.interpretation.graphTitle")}
           </h4>
         </div>
@@ -196,7 +199,7 @@ function SqlOntologyGroundingPanel({
           <div className="min-w-0 overflow-hidden" data-testid="nl2sql-sql-grounding-graph">
             <Suspense
               fallback={
-                <div className="grid h-80 place-items-center rounded-md border border-border bg-background text-sm text-muted">
+                <div className="grid h-80 place-items-center rounded-md border border-border bg-surface-sunken text-sm text-fg-muted">
                   {t("nl2sql.interpretation.graphLoading")}
                 </div>
               }
@@ -214,7 +217,7 @@ function SqlOntologyGroundingPanel({
             </Suspense>
           </div>
           <div
-            className="grid gap-3 rounded-md border border-border bg-background p-3 sm:grid-cols-3"
+            className="grid gap-3 rounded-md border border-border bg-surface-sunken p-3 sm:grid-cols-3"
             aria-label={t("nl2sql.interpretation.graphListAria")}
             data-testid="nl2sql-sql-grounding-list"
           >
@@ -306,13 +309,13 @@ function SqlLogicalStepsPanel({
 
   return (
     <section
-      className="grid gap-3 rounded-md border border-border bg-card p-3"
+      className="grid gap-3 rounded-md border border-border bg-surface p-3"
       aria-labelledby="nl2sql-logical-steps-title"
       data-testid="nl2sql-logical-steps-panel"
     >
       <div className="flex min-w-0 items-center gap-2">
-        <ListOrdered size={16} className="shrink-0 text-foreground" aria-hidden="true" />
-        <h4 id="nl2sql-logical-steps-title" className="text-sm font-semibold text-foreground">
+        <ListOrdered size={16} className="shrink-0 text-fg" aria-hidden="true" />
+        <h4 id="nl2sql-logical-steps-title" className="text-sm font-semibold text-fg">
           {t("nl2sql.logicalSteps.title")}
         </h4>
       </div>
@@ -347,11 +350,11 @@ function ShowPromptArtifactPanel({
 
   return (
     <details
-      className="rounded-md border border-border bg-background p-3"
+      className="rounded-md border border-border bg-surface-sunken p-3"
       data-testid="nl2sql-show-prompt-panel"
       onToggle={handlePromptToggle}
     >
-      <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 text-sm font-semibold text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 [&::-webkit-details-marker]:hidden">
+      <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 text-sm font-semibold text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring [&::-webkit-details-marker]:hidden">
         <span className="flex min-w-0 items-center gap-2">
           <FileText size={16} className="shrink-0" aria-hidden="true" />
           <span>{t("nl2sql.showPrompt.title")}</span>
@@ -359,16 +362,16 @@ function ShowPromptArtifactPanel({
         <DisclosureChevron
           expanded={promptOpen}
           size={16}
-          className="text-muted"
+          className="text-fg-muted"
           data-testid="nl2sql-show-prompt-chevron"
         />
       </summary>
       {/* スクロール領域はキーボードでも操作できるよう focus 可能にする(WCAG 2.1.1)。 */}
-      <pre
+      <pre data-surface="code"
         tabIndex={0}
         role="region"
         aria-label={t("nl2sql.showPrompt.title")}
-        className="mt-3 max-h-96 overflow-auto whitespace-pre-wrap rounded-md border border-border bg-code p-3 text-xs leading-5 text-code-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+        className="mt-3 max-h-96 overflow-auto whitespace-pre-wrap rounded-md border border-border bg-surface p-3 text-xs leading-5 text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
       >
         <code>{artifact.prompt}</code>
       </pre>
@@ -413,12 +416,12 @@ export function GeneratedSqlSummary({
               variant={result.safety.is_safe ? "success" : "danger"}
               label={result.safety.is_safe ? t("nl2sql.safety.safe") : t("nl2sql.safety.blocked")}
             />
-            <span className="rounded-md bg-muted/30 px-2 py-1 text-xs text-foreground">
+            <span className="rounded-md bg-surface-hover px-2 py-1 text-xs text-fg">
               {engineLabel(result.engine)}
             </span>
             {result.fallback_reason && (
               <span
-                className="rounded-md bg-warning-bg px-2 py-1 text-xs text-warning"
+                className="rounded-md bg-warning-subtle px-2 py-1 text-xs text-warning-fg"
                 title={result.fallback_reason}
                 aria-label={t("nl2sql.result.fallbackWithReason", {
                   reason: result.fallback_reason,
@@ -438,36 +441,33 @@ export function GeneratedSqlSummary({
             size="sm"
             loading={executeLoading}
             disabled={!result.safety.is_safe}
-            onClick={onExecute}
-          >
-            <Play size={15} aria-hidden="true" />
+            onClick={onExecute} icon={Play}>
             <span>{t("nl2sql.action.executePreview")}</span>
           </Button>
         )}
-        <Button type="button" variant="secondary" size="sm" onClick={copySql}>
-          <Copy size={15} aria-hidden="true" />
+        <Button type="button" variant="secondary" size="sm" onClick={copySql} icon={Copy}>
           <span>{t("nl2sql.sql.copy")}</span>
         </Button>
       </ContentActionBar>
       {/* スクロール領域はキーボードでも操作できるよう focus 可能にする(WCAG 2.1.1)。 */}
-      <pre
+      <pre data-surface="code"
         tabIndex={0}
         role="region"
         aria-label={t("nl2sql.sql.region")}
-        className="max-h-72 overflow-auto rounded-md border border-border bg-code p-4 text-sm leading-6 text-code-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+        className="max-h-72 overflow-auto rounded-md border border-border bg-surface p-4 text-sm leading-6 text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
       >
         <code>{displayedSql}</code>
       </pre>
       {result.fallback_reason && (
         <div
-          className="rounded-md border border-warning/30 bg-warning-bg px-3 py-2 text-sm leading-6 text-warning"
+          className="rounded-md border border-warning-border bg-warning-subtle px-3 py-2 text-sm leading-6 text-warning-fg"
           role="status"
         >
           <p className="font-medium">{t("nl2sql.result.fallbackTitle")}</p>
           <p className="mt-1 [overflow-wrap:anywhere]">{result.fallback_reason}</p>
         </div>
       )}
-      <p className="text-sm leading-6 text-foreground">{result.explanation}</p>
+      <p className="text-sm leading-6 text-fg">{result.explanation}</p>
       <InterpretationArtifactPanel artifact={result.interpretation} profileId={profileId} />
       <SqlLogicalStepsPanel artifact={result.interpretation} />
       <ShowPromptArtifactPanel artifact={result.show_prompt} />

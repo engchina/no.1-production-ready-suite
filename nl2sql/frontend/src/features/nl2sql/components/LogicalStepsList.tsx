@@ -25,7 +25,7 @@ export function LogicalStepsList({
   if (items.length === 0) return null;
 
   const ListTag = ordered ? "ol" : "ul";
-  const itemSurface = surface === "card" ? "bg-card" : "bg-background";
+  const itemSurface = surface === "card" ? "bg-surface" : "bg-surface-sunken";
   return (
     <ListTag className="grid gap-2" aria-label={listAriaLabel} data-testid="nl2sql-logical-steps-list">
       {items.map((step, index) => (
@@ -37,21 +37,21 @@ export function LogicalStepsList({
         >
           {ordered && (
             <span
-              className="mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-muted/30 text-xs font-medium text-muted"
+              className="mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-surface-hover text-xs font-medium text-fg-muted"
               aria-hidden="true"
             >
               {index + 1}
             </span>
           )}
           <div className="grid min-w-0 gap-1">
-            <span className="min-w-0 text-sm leading-6 text-foreground [overflow-wrap:anywhere]">
+            <span className="min-w-0 text-sm leading-6 text-fg [overflow-wrap:anywhere]">
               {step.business}
             </span>
             {step.technical && (
-              <span className="flex min-w-0 items-start gap-1.5 text-xs leading-5 text-muted">
+              <span className="flex min-w-0 items-start gap-1.5 text-xs leading-5 text-fg-muted">
                 <span className="sr-only">{t("nl2sql.logicalSteps.technicalSrLabel")}</span>
                 <span
-                  className="mt-0.5 shrink-0 rounded bg-muted/20 px-1.5 font-medium"
+                  className="mt-0.5 shrink-0 rounded bg-surface-hover px-1.5 font-medium"
                   aria-hidden="true"
                 >
                   {t("nl2sql.logicalSteps.technicalLabel")}

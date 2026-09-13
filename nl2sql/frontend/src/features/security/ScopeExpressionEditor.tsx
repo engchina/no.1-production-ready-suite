@@ -1,6 +1,9 @@
 import { useWorkspaceActive } from "@/components/WorkspaceState";
 import { useDatabaseStatus } from "@/lib/queries";
-import { FieldError } from "@/components/ui/field-error";
+import {
+  FieldError,
+  Button,
+} from "@engchina/production-ready-ui";
 import { ErrorState } from "@/components/StateViews";
 import {
   cloneElement,
@@ -12,7 +15,6 @@ import {
 } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Plus, Trash2 } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { t } from "@/lib/i18n";
 import { securityApi } from "./api";
@@ -37,7 +39,7 @@ import type {
 
 const text = (key: string) => t(`security.deepsec.entitlements.${key}`);
 const inputClass =
-  "min-h-[44px] w-full min-w-0 rounded-md border border-border bg-background px-3 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary disabled:opacity-60";
+  "min-h-[44px] w-full min-w-0 rounded-md border border-border bg-surface-sunken px-3 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring disabled:opacity-60";
 function Labeled({ label, children }: { label: string; children: ReactNode }) {
   const generatedId = useId();
   const child = children as ReactElement<{ id?: string }>;
@@ -202,7 +204,7 @@ function ConditionEditor({
       </div>
       {valueSource === "LOGIN_USER_ID" && (
         <p
-          className="text-sm text-muted"
+          className="text-sm text-fg-muted"
           data-testid={`security-deepsec-scope-filter-login-user-id-${suffix}`}
         >
           {text("scopeFilterValueLoginUserId")}
@@ -250,7 +252,7 @@ function GroupEditor({
   return (
     <fieldset
       ref={container}
-      className="grid min-w-0 gap-3 rounded-md border border-border bg-card/30 p-1 sm:p-3"
+      className="grid min-w-0 gap-3 rounded-md border border-border bg-surface p-1 sm:p-3"
       data-testid={`scope-group-${path}`}
     >
       <legend className="max-w-full break-words px-1 text-sm font-medium">
@@ -355,10 +357,8 @@ function GroupEditor({
               )
                 return;
               changeChildren(group.children.filter((_, i) => i !== index));
-            }}
-          >
-            <Trash2 aria-hidden size={16} />
-          </Button>
+            }} icon={Trash2}>
+            </Button>
         </div>
       ))}
       <div className="flex min-w-0 flex-wrap gap-[8px]">
@@ -369,9 +369,7 @@ function GroupEditor({
           disabled={budget.conditions >= 20 || !columns.length}
           onClick={() =>
             changeChildren([...group.children, blankCondition(columns)], true)
-          }
-        >
-          <Plus aria-hidden size={16} />
+          } icon={Plus}>
           {text("scopeFilterAdd")}
         </Button>
         <Button
@@ -447,7 +445,7 @@ function QueryStatus({
   retry: () => void;
 }) {
   return loading ? (
-    <p role="status" className="text-sm text-muted">
+    <p role="status" className="text-sm text-fg-muted">
       {text("expression.loading")}
     </p>
   ) : error ? (
@@ -542,8 +540,8 @@ function RelatedEditor({
       <legend className="max-w-full break-words px-1 text-sm font-medium">
         {text("expression.exists")}
       </legend>
-      <p className="text-xs text-muted">{text("expression.sameRecord")}</p>
-      <p className="text-xs text-muted">
+      <p className="text-xs text-fg-muted">{text("expression.sameRecord")}</p>
+      <p className="text-xs text-fg-muted">
         {text("expression.protectedRelated")}
       </p>
       <QueryStatus
@@ -594,7 +592,7 @@ function RelatedEditor({
         </select>
       </Labeled>
       {!profiles.isLoading && !profiles.error && !eligible.length && (
-        <p className="text-sm text-muted">{text("expression.noProfiles")}</p>
+        <p className="text-sm text-fg-muted">{text("expression.noProfiles")}</p>
       )}
       <Labeled label={text("expression.relatedTable")}>
         <select
@@ -736,10 +734,8 @@ function RelatedEditor({
                   patch({
                     join_keys: node.join_keys.filter((_, i) => i !== index),
                   })
-                }
-              >
-                <Trash2 aria-hidden size={16} />
-              </Button>
+                } icon={Trash2}>
+                </Button>
             </div>
           ))}
           <Button
@@ -810,7 +806,7 @@ export function ScopeExpressionEditor({
       aria-describedby={id}
       data-testid={`security-deepsec-scope-filters-${index}`}
     >
-      <p id={id} className="text-sm text-muted">
+      <p id={id} className="text-sm text-fg-muted">
         {text("expression.global")}
       </p>
       <GroupEditor
@@ -828,7 +824,7 @@ export function ScopeExpressionEditor({
       <p className="break-words text-sm" data-testid="scope-expression-summary">
         {text("expression.summary")}: {expressionSummary(expression.root, text)}
       </p>
-      <p className="text-xs text-muted">{text("expression.union")}</p>
+      <p className="text-xs text-fg-muted">{text("expression.union")}</p>
     </fieldset>
   );
 }

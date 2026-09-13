@@ -5,18 +5,24 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router-dom";
 import { ArrowRight, Database, Eye, FileSpreadsheet, Play, RefreshCw, Table2, Trash2, Upload, X } from "lucide-react";
 
-import { Button, buttonVariants } from "@/components/ui/button";
-import { Banner, EmptyState, toast } from "@engchina/production-ready-ui";
+import {
+  Button,
+  buttonVariants,
+  Banner,
+  EmptyState,
+  toast,
+  StatusBadge,
+  PageHeader,
+  PageBody,
+} from "@engchina/production-ready-ui";
 
 import { SyntheticRunPanel, useSyntheticRuns, historyExpired, type SyntheticRun } from "../syntheticRuns";
 import { SyntheticReview } from "../SyntheticReview";
 
-import { StatusBadge } from "@/components/ui/status-badge";
 
 import { BulkSelectionActions } from "@/components/BulkSelectionActions";
 import { ContentActionBar } from "@/components/ContentActionBar";
 import { ObjectActionBar, type EntityAction } from "@/components/ObjectActions";
-import { PageHeader } from "@/components/PageHeader";
 import { ProcessingIndicator } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";
 import { ErrorState } from "@/components/StateViews";
@@ -1022,7 +1028,7 @@ export function DataManagementPage() {
         ]}
         actionsTestId="data-management-actions"
       />
-      <main className="grid gap-4 p-4 lg:p-8">
+      <PageBody className="grid gap-4">
         <PageNotice
           notice={
             visibleSchemaJobError
@@ -1039,9 +1045,7 @@ export function DataManagementPage() {
                   schemaJobNeedsFull
                     ? () => void submitSchemaRefresh()
                     : () => void refreshObjects()
-                }
-              >
-                <RefreshCw size={15} aria-hidden="true" />
+                } icon={RefreshCw}>
                 <span>
                   {schemaJobNeedsFull
                     ? t("common.action.schemaRefresh")
@@ -1059,7 +1063,7 @@ export function DataManagementPage() {
             label={t("common.processing.refreshing")}
             operationKey="object-refresh"
             placement="workspace"
-            className="rounded-md border border-border bg-card px-3 py-2 shadow-sm"
+            className="rounded-md border border-border bg-surface px-3 py-2 shadow-sm"
             testId="data-management-workspace-processing"
             activityIcon="none"
           />
@@ -1327,7 +1331,7 @@ export function DataManagementPage() {
               }} />}
           </DbObjectManagementPanelShell>
         )}
-      </main>
+      </PageBody>
       {truncateTargetName && (
         <DropDbObjectDialog
           objectName={truncateTargetName}
@@ -1418,7 +1422,7 @@ function PreviewControlsPanel({
         }
       />
 
-      <div className="grid gap-3 rounded-md border border-border bg-background p-3">
+      <div className="grid gap-3 rounded-md border border-border bg-surface-sunken p-3">
         <div className="grid gap-2">
           <DbObjectSelectorToolbar
             searchLabel={t("dbAdmin.search.label")}
@@ -1658,7 +1662,7 @@ function PreviewResultsPanel({
   ];
 
   return (
-    <section className="grid min-w-0 content-start gap-3 rounded-md border border-border bg-background p-4" aria-labelledby="data-preview-results-heading">
+    <section className="grid min-w-0 content-start gap-3 rounded-md border border-border bg-surface-sunken p-4" aria-labelledby="data-preview-results-heading">
       <DbObjectPanelHeader
         headingId="data-preview-results-heading"
         icon={FileSpreadsheet}
@@ -1687,9 +1691,7 @@ function PreviewResultsPanel({
             className="w-full sm:w-auto"
             loading={loading}
             disabled={!canShowPreview}
-            onClick={onShowPreview}
-          >
-            <Play size={16} aria-hidden="true" />
+            onClick={onShowPreview} icon={Play}>
             <span>{t("dataMgmt.preview.show")}</span>
           </Button>
           <Button
@@ -1698,9 +1700,7 @@ function PreviewResultsPanel({
             size="lg"
             className="w-full sm:w-auto"
             disabled={!canClearPreview}
-            onClick={onClearPreview}
-          >
-            <X size={16} aria-hidden="true" />
+            onClick={onClearPreview} icon={X}>
             <span>{t("dataMgmt.preview.clear")}</span>
           </Button>
         </div>
@@ -1719,10 +1719,10 @@ function PreviewResultsPanel({
           <div className="flex min-w-0 flex-wrap items-center gap-2">
             <StatusBadge variant="neutral" label={preview.runtime} />
             <StatusBadge variant="info" label={t("tableMgmt.importWizard.rows", { count: preview.results.total })} />
-            <span className="break-all font-mono text-xs text-muted">{preview.sql}</span>
+            <span className="break-all font-mono text-xs text-fg-muted">{preview.sql}</span>
           </div>
           {preview.warnings.map((warning) => (
-            <p key={warning} className="rounded-md border border-warning/30 bg-warning-bg px-3 py-2 text-sm text-warning">
+            <p key={warning} className="rounded-md border border-warning-border bg-warning-subtle px-3 py-2 text-sm text-warning-fg">
               {warning}
             </p>
           ))}
@@ -1832,11 +1832,11 @@ function CsvUploadWorkspace({
         data-testid="data-csv-table-section"
       >
         <div>
-          <h3 id="data-csv-table-heading" className="text-sm font-semibold text-foreground">
+          <h3 id="data-csv-table-heading" className="text-sm font-semibold text-fg">
             {t("dataMgmt.csv.table")}
             <RequiredIndicator />
           </h3>
-          <p className="mt-1 text-sm text-muted">{t("dataMgmt.csv.tableHint")}</p>
+          <p className="mt-1 text-sm text-fg-muted">{t("dataMgmt.csv.tableHint")}</p>
         </div>
         <DbObjectSelectionSummary label={t("objectSelector.selected")} value={table} />
         <DbObjectSelectorToolbar
@@ -1907,14 +1907,14 @@ function CsvUploadWorkspace({
       />
 
       <label
-        className="grid min-w-0 gap-1 text-sm font-medium leading-5 text-foreground"
+        className="grid min-w-0 gap-1 text-sm font-medium leading-5 text-fg"
         data-testid="data-csv-mode-field"
       >
         <span>{t("dataMgmt.csv.mode")}</span>
         <select
           value={mode}
           onChange={(event) => onModeChange(event.currentTarget.value as CsvMode)}
-          className="h-11 w-full rounded-md border border-border bg-card px-3 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-ring/40"
+          className="h-11 w-full rounded-md border border-border-control bg-surface px-3 text-sm text-fg focus:border-focus-ring focus:outline-none focus:ring-2 focus:ring-focus-ring"
         >
           <option value="insert">{t("dataMgmt.csv.mode.insert")}</option>
           <option value="truncate_insert">{t("dataMgmt.csv.mode.truncateInsert")}</option>
@@ -1922,10 +1922,10 @@ function CsvUploadWorkspace({
       </label>
 
       <fieldset
-        className="grid gap-3 rounded-md border border-border bg-card p-3"
+        className="grid gap-3 rounded-md border border-border bg-surface p-3"
         data-testid="data-csv-execution-fieldset"
       >
-        <legend className="px-1 text-sm font-semibold text-foreground">{t("dataMgmt.csv.executeTitle")}</legend>
+        <legend className="px-1 text-sm font-semibold text-fg">{t("dataMgmt.csv.executeTitle")}</legend>
         <ExecutionConfirmationField
           value={confirmation}
           onChange={onConfirmationChange}
@@ -1947,9 +1947,7 @@ function CsvUploadWorkspace({
                 className="w-full sm:w-auto"
                 loading={loading}
                 disabled={!canUpload}
-                onClick={onUpload}
-              >
-                <Upload size={15} aria-hidden="true" />
+                onClick={onUpload} icon={Upload}>
                 <span>{t("dataMgmt.csv.upload")}</span>
               </Button>
               <ClearActionButton size="lg"
@@ -1965,7 +1963,7 @@ function CsvUploadWorkspace({
       </fieldset>
 
       {result && (
-        <section className="grid gap-3 rounded-md border border-border bg-background p-3 text-sm" aria-label={t("dataMgmt.csv.result")}>
+        <section className="grid gap-3 rounded-md border border-border bg-surface-sunken p-3 text-sm" aria-label={t("dataMgmt.csv.result")}>
           <div className="flex flex-wrap gap-2">
             <StatusBadge variant={result.executed ? "success" : "neutral"} label={result.executed ? "executed" : "not executed"} />
             <StatusBadge variant="neutral" label={result.runtime} />
@@ -1982,34 +1980,34 @@ function CsvUploadWorkspace({
             )}
           </div>
           {result.warnings.map((warning) => (
-            <p key={warning} className="rounded-md border border-warning/30 bg-warning-bg px-3 py-2 text-warning">
+            <p key={warning} className="rounded-md border border-warning-border bg-warning-subtle px-3 py-2 text-warning-fg">
               {warning}
             </p>
           ))}
-          <p className="text-foreground">
+          <p className="text-fg">
             {t("dataMgmt.csv.matched")}: <span className="font-mono text-xs">{result.matched_columns.join(", ") || "-"}</span>
           </p>
           {result.unmatched_csv_columns.length > 0 && (
-            <p className="text-foreground">
+            <p className="text-fg">
               {t("dataMgmt.csv.unmatched")}: <span className="font-mono text-xs">{result.unmatched_csv_columns.join(", ")}</span>
             </p>
           )}
           {result.row_errors.length > 0 && (
             <div className="grid gap-1">
-              <p className="font-semibold text-foreground">{t("dataMgmt.csv.rowErrors")}</p>
+              <p className="font-semibold text-fg">{t("dataMgmt.csv.rowErrors")}</p>
               {result.row_errors.map((error) => (
-                <p key={error} className="rounded-md border border-danger/30 bg-danger-bg px-3 py-2 text-danger">
+                <p key={error} className="rounded-md border border-danger-border bg-danger-subtle px-3 py-2 text-danger-fg">
                   {error}
                 </p>
               ))}
             </div>
           )}
           {result.hint && (
-            <p className="rounded-md border border-primary/30 bg-primary/10 px-3 py-2 text-primary">{result.hint}</p>
+            <p className="rounded-md border border-accent-emphasis bg-accent-subtle px-3 py-2 text-accent-fg">{result.hint}</p>
           )}
           {result.sample_rows.length > 0 && (
             <div className="grid gap-1">
-              <p className="font-semibold text-foreground">{t("dataMgmt.csv.preview")}</p>
+              <p className="font-semibold text-fg">{t("dataMgmt.csv.preview")}</p>
               <QueryResultsTable
                 results={{
                   columns: Object.keys(result.sample_rows[0] ?? {}),
@@ -2161,7 +2159,7 @@ function SyntheticWorkspace({
           label={t("common.processing.dbProfileListRefreshing")}
           operationKey={dbProfileRefreshOperationKey}
           placement="panel"
-          className="rounded-md border border-border bg-background px-3 py-2"
+          className="rounded-md border border-border bg-surface-sunken px-3 py-2"
           testId="data-synthetic-db-profile-refresh-processing"
           activityIcon="none"
         />
@@ -2177,7 +2175,7 @@ function SyntheticWorkspace({
         dataTestId="data-synthetic-steps"
       />
 
-      <fieldset disabled={loading === "generate"} className="grid min-w-0 gap-3 rounded-md border border-border bg-background p-3" aria-labelledby="synthetic-target-heading">
+      <fieldset disabled={loading === "generate"} className="grid min-w-0 gap-3 rounded-md border border-border bg-surface-sunken p-3" aria-labelledby="synthetic-target-heading">
         <DbObjectPanelHeader
           headingId="synthetic-target-heading"
           icon={Database}
@@ -2194,13 +2192,13 @@ function SyntheticWorkspace({
         ) : null}
 
         <div className="grid min-w-0 gap-3 lg:grid-cols-[minmax(0,1fr)_10rem]">
-          <label className="grid min-w-0 gap-1 text-sm font-medium text-foreground">
+          <label className="grid min-w-0 gap-1 text-sm font-medium text-fg">
             <span>{t("dataTools.syntheticData.profile")}</span>
             <select
               value={syntheticProfileName}
               onChange={(event) => onSyntheticProfileNameChange(event.currentTarget.value)}
               disabled={dbProfileRefreshRequired || dbProfileRefreshing}
-              className="h-11 w-full min-w-0 rounded-md border border-border bg-card px-3 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-ring/40"
+              className="h-11 w-full min-w-0 rounded-md border border-border-control bg-surface px-3 text-sm text-fg focus:border-focus-ring focus:outline-none focus:ring-2 focus:ring-focus-ring"
             >
               {(selectAiDbProfiles?.profiles ?? []).length === 0 && (
                 <option value="">{t("dataTools.syntheticData.noProfiles")}</option>
@@ -2212,7 +2210,7 @@ function SyntheticWorkspace({
               ))}
             </select>
           </label>
-          <label className="grid gap-1 text-sm font-medium text-foreground">
+          <label className="grid gap-1 text-sm font-medium text-fg">
             <span>{t("dataTools.syntheticData.rowsPerTable")}</span>
             <input
               type="number"
@@ -2220,7 +2218,7 @@ function SyntheticWorkspace({
               max={100}
               value={syntheticRows}
               onChange={(event) => onSyntheticRowsChange(Number(event.currentTarget.value) || 1)}
-              className="h-11 rounded-md border border-border bg-card px-3 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-ring/40"
+              className="h-11 rounded-md border border-border-control bg-surface px-3 text-sm text-fg focus:border-focus-ring focus:outline-none focus:ring-2 focus:ring-focus-ring"
             />
           </label>
         </div>
@@ -2235,7 +2233,7 @@ function SyntheticWorkspace({
           {visibleWarnings.map((warning) => (
             <span
               key={warning}
-              className="rounded-md border border-warning/30 bg-warning-bg px-2 py-1 text-xs text-warning"
+              className="rounded-md border border-warning-border bg-warning-subtle px-2 py-1 text-xs text-warning-fg"
             >
               {warning}
             </span>
@@ -2260,9 +2258,7 @@ function SyntheticWorkspace({
             className="w-full sm:w-auto"
             loading={loading === "tables"}
             disabled={!syntheticProfileName || dbProfileRefreshRequired || dbProfileRefreshing}
-            onClick={onRefreshTables}
-          >
-            <RefreshCw size={15} aria-hidden="true" />
+            onClick={onRefreshTables} icon={RefreshCw}>
             <span>{t("dataTools.syntheticData.refreshTables")}</span>
           </Button>
         </ContentActionBar>
@@ -2296,7 +2292,7 @@ function SyntheticWorkspace({
             />
           ) : filteredSyntheticTables.length > 0 ? (
             <div
-              className={`${INFORMATION_COMPACT_LIST_FIVE_ROW_SCROLL_CLASS} rounded-md border border-border bg-card`}
+              className={`${INFORMATION_COMPACT_LIST_FIVE_ROW_SCROLL_CLASS} rounded-md border border-border bg-surface`}
               role="group"
               aria-label={t("dataTools.syntheticData.tables")}
               data-testid="data-synthetic-table-list"
@@ -2307,13 +2303,13 @@ function SyntheticWorkspace({
                   return (
                     <label
                       key={tableName}
-                      className="flex min-h-11 min-w-0 items-center gap-3 px-3 py-2 text-sm text-foreground hover:bg-background"
+                      className="flex min-h-11 min-w-0 items-center gap-3 px-3 py-2 text-sm text-fg hover:bg-surface-hover"
                     >
                       <input
                         type="checkbox"
                         checked={selected}
                         onChange={(event) => onSyntheticTableToggle(tableName, event.currentTarget.checked)}
-                        className="h-4 w-4 rounded border-border text-primary focus:ring-ring/40"
+                        className="h-4 w-4 rounded border-border text-accent-fg focus:ring-focus-ring"
                         aria-label={t("dataTools.syntheticData.tableOption", { name: tableName })}
                       />
                       <span className="min-w-0 break-all font-mono text-xs">{tableName}</span>
@@ -2347,19 +2343,19 @@ function SyntheticWorkspace({
         </div>
 
         <div className="grid min-w-0 gap-3 lg:grid-cols-[minmax(0,1fr)_18rem]">
-          <label className="grid min-w-0 gap-1 text-sm font-medium text-foreground">
+          <label className="grid min-w-0 gap-1 text-sm font-medium text-fg">
             <span>{t("dataTools.syntheticData.prompt")}</span>
             <textarea
               value={syntheticPrompt}
               onChange={(event) => onSyntheticPromptChange(event.currentTarget.value)}
               rows={5}
               placeholder={t("dataTools.syntheticData.promptPlaceholder")}
-              className="min-h-40 rounded-md border border-border bg-card px-3 py-2 text-sm leading-6 focus:border-primary focus:outline-none focus:ring-2 focus:ring-ring/40"
+              className="min-h-40 rounded-md border border-border-control bg-surface px-3 py-2 text-sm leading-6 focus:border-focus-ring focus:outline-none focus:ring-2 focus:ring-focus-ring"
             />
           </label>
-          <fieldset className="grid content-start gap-3 rounded-md border border-border bg-card p-3">
-            <legend className="px-1 text-sm font-semibold text-foreground">{t("dataTools.syntheticData.options")}</legend>
-            <label className="grid gap-1 text-sm font-medium text-foreground">
+          <fieldset className="grid content-start gap-3 rounded-md border border-border bg-surface p-3">
+            <legend className="px-1 text-sm font-semibold text-fg">{t("dataTools.syntheticData.options")}</legend>
+            <label className="grid gap-1 text-sm font-medium text-fg">
               <span>{t("dataTools.syntheticData.sampleRows")}</span>
               <input
                 type="number"
@@ -2367,23 +2363,23 @@ function SyntheticWorkspace({
                 max={100}
                 value={syntheticSampleRows}
                 onChange={(event) => onSyntheticSampleRowsChange(Number(event.currentTarget.value) || 0)}
-                className="h-11 w-full rounded-md border border-border bg-card px-3 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-ring/40"
+                className="h-11 w-full rounded-md border border-border-control bg-surface px-3 text-sm text-fg focus:border-focus-ring focus:outline-none focus:ring-2 focus:ring-focus-ring"
               />
             </label>
-            <label className="flex min-h-11 items-center gap-2 rounded-md border border-border bg-background px-3 py-2 text-sm font-medium text-foreground">
+            <label className="flex min-h-11 items-center gap-2 rounded-md border border-border bg-surface-sunken px-3 py-2 text-sm font-medium text-fg">
               <input
                 type="checkbox"
                 checked={syntheticUseComments}
                 onChange={(event) => onSyntheticUseCommentsChange(event.currentTarget.checked)}
-                className="h-4 w-4 rounded border-border text-primary focus:ring-ring/40"
+                className="h-4 w-4 rounded border-border text-accent-fg focus:ring-focus-ring"
               />
               <span>{t("dataTools.syntheticData.useComments")}</span>
             </label>
           </fieldset>
         </div>
 
-        <fieldset className="grid gap-3 rounded-md border border-border bg-card p-3">
-          <legend className="px-1 text-sm font-semibold text-foreground">{t("dataTools.syntheticData.executeTitle")}</legend>
+        <fieldset className="grid gap-3 rounded-md border border-border bg-surface p-3">
+          <legend className="px-1 text-sm font-semibold text-fg">{t("dataTools.syntheticData.executeTitle")}</legend>
           <ExecutionConfirmationField
             value={syntheticConfirmation}
             onChange={onSyntheticConfirmationChange}
@@ -2402,9 +2398,7 @@ function SyntheticWorkspace({
                   className="w-full sm:w-auto"
                   loading={submitting}
                   disabled={!canGenerateSyntheticData || dbProfileRefreshRequired || dbProfileRefreshing}
-                  onClick={onGenerateSyntheticData}
-                >
-                  <Database size={15} aria-hidden="true" />
+                  onClick={onGenerateSyntheticData} icon={Database}>
                   <span>{t("dataTools.syntheticData.generate")}</span>
                 </Button>
                 <ClearActionButton size="lg"
@@ -2428,7 +2422,7 @@ function SyntheticWorkspace({
 
       {generationProgress}
 
-      <section className="grid min-w-0 content-start gap-3 rounded-md border border-border bg-background p-4" aria-labelledby="synthetic-results-heading">
+      <section className="grid min-w-0 content-start gap-3 rounded-md border border-border bg-surface-sunken p-4" aria-labelledby="synthetic-results-heading">
         <DbObjectPanelHeader
           headingId="synthetic-results-heading"
           icon={Eye}
@@ -2437,14 +2431,14 @@ function SyntheticWorkspace({
         />
 
         <div className="grid gap-3 border-t border-border pt-3">
-          <label className="grid min-w-0 gap-1 text-sm font-medium text-foreground">
+          <label className="grid min-w-0 gap-1 text-sm font-medium text-fg">
             <span>{t("dataTools.syntheticData.resultTable")}</span>
             <select
               data-testid="synthetic-result-table-select"
               value={hasValidResultTable ? syntheticResultTable : ""}
               onChange={(event) => onSyntheticResultTableChange(event.currentTarget.value)}
               disabled={loading === "results"}
-              className="h-11 w-full min-w-0 rounded-md border border-border bg-card px-3 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-ring/40"
+              className="h-11 w-full min-w-0 rounded-md border border-border-control bg-surface px-3 text-sm text-fg focus:border-focus-ring focus:outline-none focus:ring-2 focus:ring-focus-ring"
             >
               {resultTableOptions.length === 0 && <option value="">{t("dataTools.syntheticData.noResultTables")}</option>}
               {resultTableOptions.map((tableName) => (
@@ -2473,9 +2467,7 @@ function SyntheticWorkspace({
               className="w-full sm:w-auto"
               loading={loading === "results"}
               disabled={!canLoadSyntheticDataResults}
-              onClick={onLoadSyntheticDataResults}
-            >
-              <Eye size={16} aria-hidden="true" />
+              onClick={onLoadSyntheticDataResults} icon={Eye}>
               <span>{t("dataTools.syntheticData.results")}</span>
             </Button>
             <Button
@@ -2484,9 +2476,7 @@ function SyntheticWorkspace({
               size="lg"
               className="w-full sm:w-auto"
               disabled={!canClearSyntheticDataResults || loading === "results"}
-              onClick={onClearSyntheticDataResults}
-            >
-              <X size={16} aria-hidden="true" />
+              onClick={onClearSyntheticDataResults} icon={X}>
               <span>{t("dataMgmt.preview.clear")}</span>
             </Button>
           </div>
@@ -2508,7 +2498,7 @@ function SyntheticWorkspace({
               <StatusBadge variant="info" label={syntheticDataResults.table_name} />
             </div>
             {syntheticDataResults.warnings.map((warning) => (
-              <p key={warning} className="rounded-md border border-warning/30 bg-warning-bg px-3 py-2 text-sm text-warning">
+              <p key={warning} className="rounded-md border border-warning-border bg-warning-subtle px-3 py-2 text-sm text-warning-fg">
                 {warning}
               </p>
             ))}
@@ -2548,9 +2538,7 @@ function DbProfileRefreshNotice({
               className="w-full sm:w-auto"
               loading={loading}
               disabled={loading}
-              onClick={onRefresh}
-            >
-              <RefreshCw size={15} aria-hidden="true" />
+              onClick={onRefresh} icon={RefreshCw}>
               <span>{t("profiles.action.dbProfileRefresh")}</span>
             </Button>
             <Link
@@ -2558,16 +2546,16 @@ function DbProfileRefreshNotice({
               className={`${buttonVariants({ variant: "secondary", size: "sm" })} w-full sm:w-auto`}
             >
               <span>{t("dataTools.syntheticData.openProfileManagement")}</span>
-              <ArrowRight size={15} aria-hidden="true" />
+              <ArrowRight size={16} aria-hidden="true" />
             </Link>
           </div>
         }
       >
-        <p className="leading-6 text-foreground/90">
+        <p className="leading-6 text-fg/90">
           {t("dataTools.syntheticData.dbProfileRefreshRequiredHint")}
         </p>
         {error ? (
-          <p className="mt-1 leading-6 text-danger">{error}</p>
+          <p className="mt-1 leading-6 text-danger-fg">{error}</p>
         ) : null}
       </Banner>
     </div>

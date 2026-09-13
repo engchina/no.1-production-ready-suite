@@ -1,7 +1,7 @@
 import { X } from "lucide-react";
 
 import { cn } from "@/lib/utils";
-import { Button, type ButtonProps } from "./button";
+import { Button, type ButtonProps } from "@engchina/production-ready-ui";
 
 export interface ClearActionButtonProps
   extends Omit<ButtonProps, "aria-label" | "children" | "type" | "variant"> {
@@ -29,9 +29,7 @@ export function ClearActionButton({
       className={cn("whitespace-nowrap", className)}
       aria-label={ariaLabel ?? label}
       data-testid={dataTestId}
-      {...props}
-    >
-      <X size={15} aria-hidden="true" />
+      {...props} icon={X}>
       <span>{label}</span>
     </Button>
   );

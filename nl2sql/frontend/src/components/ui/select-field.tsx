@@ -10,7 +10,7 @@ import {
 
 import { cn } from "@/lib/utils";
 
-import { FieldError } from "./field-error";
+import { FieldError } from "@engchina/production-ready-ui";
 import { FieldLabel } from "./required-field";
 
 export interface SelectFieldOption<T extends string = string> {
@@ -188,20 +188,20 @@ export function SelectField<T extends string>({
           onClick={() => (open ? closeList() : openList())}
           onKeyDown={handleKeyDown}
           className={cn(
-            "flex h-10 w-full cursor-pointer items-center justify-between gap-3 rounded-md border bg-card px-3 text-left text-sm text-foreground outline-none transition-colors",
-            "hover:bg-background focus-visible:border-primary focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring",
-            error ? "border-danger" : "border-border",
+            "flex h-10 w-full cursor-pointer items-center justify-between gap-3 rounded-md border bg-surface px-3 text-left text-sm text-fg outline-none transition-colors",
+            "hover:bg-surface-hover focus-visible:border-focus-ring focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus-ring",
+            error ? "border-danger-fg" : "border-border-control",
             buttonClassName
           )}
         >
-          <span className={cn("min-w-0 truncate", !selectedOption && !value && "text-muted/70")}>
+          <span className={cn("min-w-0 truncate", !selectedOption && !value && "text-fg-muted")}>
             {selectedOption?.label ?? (value || placeholder)}
           </span>
           <ChevronDown
             size={16}
             className={cn(
-              "shrink-0 text-muted transition-transform duration-150",
-              open && "rotate-180 text-primary"
+              "shrink-0 text-fg-muted transition-transform duration-150",
+              open && "rotate-180 text-accent-fg"
             )}
             aria-hidden
           />
@@ -212,7 +212,7 @@ export function SelectField<T extends string>({
             id={listboxId}
             role="listbox"
             aria-labelledby={labelId}
-            className="absolute left-0 right-0 top-[calc(100%+0.25rem)] z-50 max-h-64 overflow-auto rounded-md border border-border bg-card p-1 shadow-lg"
+            className="absolute left-0 right-0 top-[calc(100%+0.25rem)] z-[var(--z-dropdown)] max-h-64 overflow-auto rounded-md border border-border bg-surface-raised p-1 shadow-lg"
           >
             {options.map((option, index) => {
               const selected = option.value === value;
@@ -230,20 +230,20 @@ export function SelectField<T extends string>({
                   }}
                   className={cn(
                     "flex min-h-10 cursor-pointer items-center gap-2 rounded px-2.5 py-2 text-sm transition-colors",
-                    selected ? "bg-info-bg/70 font-medium text-info" : "text-foreground",
-                    highlighted && "bg-background text-foreground",
-                    selected && highlighted && "bg-info-bg text-info"
+                    selected ? "bg-info-subtle font-medium text-info-fg" : "text-fg",
+                    highlighted && "bg-surface-sunken text-fg",
+                    selected && highlighted && "bg-info-subtle text-info-fg"
                   )}
                 >
                   <Check
-                    size={15}
-                    className={cn("shrink-0 text-primary", selected ? "opacity-100" : "opacity-0")}
+                    size={16}
+                    className={cn("shrink-0 text-accent-fg", selected ? "opacity-100" : "opacity-0")}
                     aria-hidden
                   />
                   <span className="min-w-0">
                     <span className="block truncate">{option.label}</span>
                     {option.description ? (
-                      <span className="mt-0.5 block truncate text-xs font-normal text-muted">
+                      <span className="mt-0.5 block truncate text-xs font-normal text-fg-muted">
                         {option.description}
                       </span>
                     ) : null}
@@ -255,7 +255,7 @@ export function SelectField<T extends string>({
         ) : null}
       </div>
       {helper ? (
-        <p id={hintId} className="text-xs leading-relaxed text-muted">
+        <p id={hintId} className="text-xs leading-relaxed text-fg-muted">
           {helper}
         </p>
       ) : null}

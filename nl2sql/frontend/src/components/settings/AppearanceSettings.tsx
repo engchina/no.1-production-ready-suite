@@ -1,8 +1,15 @@
-import { Button } from "@/components/ui/button";
-import { type ThemePreference } from "@engchina/production-ready-ui";
+import {
+  Button,
+  type ThemePreference,
+  PageHeader,
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+  PageBody,
+} from "@engchina/production-ready-ui";
 
-import { PageHeader } from "@/components/PageHeader";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { t } from "@/lib/i18n";
 import { useUiStore } from "@/lib/ui-store";
 
@@ -20,7 +27,7 @@ export function AppearanceSettings() {
   return (
     <>
       <PageHeader title={t("nav.settingsAppearance")} subtitle={t("appearance.subtitle")} />
-      <main className="grid gap-4 p-4 lg:p-8">
+      <PageBody className="grid gap-4">
         <Card>
           <CardHeader>
             <CardTitle>{t("appearance.theme.label")}</CardTitle>
@@ -34,7 +41,7 @@ export function AppearanceSettings() {
               data-testid="appearance-theme-toggle"
             >
               {THEME_OPTIONS.map((option) => (
-                <Button variant="secondary" size="md"
+                <Button type="button" variant="secondary" size="md"
                   key={option.value}
                   aria-pressed={theme === option.value}
                   onClick={() => setTheme(option.value)}
@@ -45,7 +52,7 @@ export function AppearanceSettings() {
             </div>
           </CardContent>
         </Card>
-      </main>
+      </PageBody>
     </>
   );
 }

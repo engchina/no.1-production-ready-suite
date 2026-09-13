@@ -173,7 +173,7 @@ async function waitForAnimationFrames(page: Page) {
 }
 
 async function expectMainScrollPreserved(page: Page, action: () => Promise<void>) {
-  const main = page.getByRole("main", { name: "メイン領域" });
+  const main = page.getByRole("main");
   const before = await main.evaluate((node) => node.scrollTop);
   await action();
   await waitForAnimationFrames(page);

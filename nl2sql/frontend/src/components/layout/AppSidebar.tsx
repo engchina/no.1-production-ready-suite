@@ -85,11 +85,11 @@ export function AppSidebar() {
         auth.user ? (
           <div className="space-y-2">
             <div className={`flex items-center gap-2 ${collapsed ? "justify-center" : "px-1"}`}>
-              <UserRound size={18} className="shrink-0" aria-hidden />
+              <UserRound size={20} className="shrink-0" aria-hidden />
               {!collapsed ? (
                 <div className="min-w-0">
-                  <p className="truncate text-xs font-semibold">{auth.user.display_name}</p>
-                  <p className="truncate text-[10px] text-sidebar-foreground/70">
+                  <p className="truncate text-sm font-medium text-fg">{auth.user.display_name}</p>
+                  <p className="truncate text-xs text-fg-muted">
                     {t("auth.sidebar.roles", { roles: auth.user.role_codes.join(", ") })}
                   </p>
                 </div>
@@ -102,9 +102,9 @@ export function AppSidebar() {
                 aria-label={t("auth.sidebar.debugMode")}
                 title={collapsed ? t("auth.sidebar.debugMode") : undefined}
               >
-                <Bug size={15} className="shrink-0" aria-hidden />
+                <Bug size={16} className="shrink-0" aria-hidden />
                 {!collapsed ? (
-                  <span className="text-[11px] leading-4">
+                  <span className="text-xs leading-4">
                     {t("auth.sidebar.debugMode")}
                   </span>
                 ) : null}
@@ -156,7 +156,9 @@ function SidebarFooterAction({
       className={cn(
         "relative flex h-11 min-h-11 w-full items-center overflow-hidden rounded-md text-sm transition-colors",
         collapsed ? "justify-center px-0" : "gap-2.5 px-3 py-2 text-left",
-        active ? "bg-sidebar-active text-white" : "hover:bg-white/10"
+        active
+          ? "bg-accent-emphasis text-fg-on-accent forced-colors:bg-[Highlight] forced-colors:text-[HighlightText] forced-colors:forced-color-adjust-none"
+          : "hover:bg-surface-hover hover:text-fg"
       )}
       aria-current={active ? "page" : undefined}
       aria-label={label}
@@ -165,11 +167,11 @@ function SidebarFooterAction({
     >
       {active ? (
         <span
-          className="absolute left-0 top-1/2 h-5 w-1 -translate-y-1/2 rounded-r-full bg-white"
+          className="absolute left-0 top-1/2 h-5 w-1 -translate-y-1/2 rounded-r-full bg-fg"
           aria-hidden
         />
       ) : null}
-      <Icon className="shrink-0" size={18} aria-hidden />
+      <Icon className="shrink-0" size={20} aria-hidden />
       <span
         className={cn(
           "sidebar-reveal min-w-0 truncate whitespace-nowrap leading-5",
