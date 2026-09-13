@@ -19,6 +19,7 @@ from typing import Literal, Protocol
 from pydantic import Field
 
 from app.features.nl2sql.models import Nl2SqlProfile, SchemaCatalog, SchemaTable
+from app.features.nl2sql.object_identity import format_object_part, object_name_tokens
 from app.features.nl2sql.ontology_models import (
     IntentAmbiguity,
     IntentDimension,
@@ -131,6 +132,16 @@ class AmbiguousPhysicalObjectError(ValueError):
 
 def _oracle_name(value: str) -> str:
     return unicodedata.normalize("NFC", value.strip()).upper()
+
+
+def _catalog_name_token(value: str) -> str:
+    """カタログ上の owner / object 名を、引用規則どおりの照合 token にする。"""
+
+    normalized = unicodedata.normalize("NFC", value.strip())
+    try:
+        return format_object_part(normalized)
+    except ValueError:
+        return normalized
 
 
 def _normalized_text(value: str) -> str:
@@ -704,15 +715,20 @@ def _resolve_profile_object(
     *,
     strict: bool,
 ) -> OntologyNode | None:
-    parts = [part for part in raw_name.strip().split(".") if part]
-    owner = _oracle_name(parts[-2]) if len(parts) >= 2 else ""
-    object_name = _oracle_name(parts[-1]) if parts else ""
+    # Profile object は object_identity の canonical 修飾名（引用名は `SALES."Mixed_Case"`）。
+    # dot 分割・大文字化すると大文字の同名表にも一致するため、引用規則どおりに照合する（#561）。
+    try:
+        parts = object_name_tokens(unicodedata.normalize("NFC", raw_name))
+    except ValueError:
+        parts = []
+    owner = parts[-2] if len(parts) >= 2 else ""
+    object_name = parts[-1] if parts else ""
     matches = [
         node
         for node in candidates
         if node.kind == kind
-        and _oracle_name(str(node.metadata.get("object_name", ""))) == object_name
-        and (not owner or _oracle_name(str(node.metadata.get("owner", ""))) == owner)
+        and _catalog_name_token(str(node.metadata.get("object_name", ""))) == object_name
+        and (not owner or _catalog_name_token(str(node.metadata.get("owner", ""))) == owner)
     ]
     if len(matches) > 1:
         qualified = ", ".join(sorted(node.technical_name for node in matches))

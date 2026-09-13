@@ -2004,7 +2004,11 @@ def test_referenced_tables_include_quoted_schema_qualified_names() -> None:
         'JOIN "owner"."bills" b ON t."id" = b."trading_partner_id"'
     )
 
-    assert _extract_referenced_tables(sql) == ["OWNER.TRADING_PARTNERS", "OWNER.BILLS"]
+    # Oracle と同じく引用名は大文字小文字を保つ。大文字の OWNER.BILLS とは別の表として扱う（#561）。
+    assert _extract_referenced_tables(sql) == ['"owner"."trading_partners"', '"owner"."bills"']
+    assert _extract_referenced_tables('SELECT * FROM "OWNER"."BILLS", owner.bills') == [
+        "OWNER.BILLS"
+    ]
 
 
 def test_normalize_executable_sql_keeps_existing_fetch_first() -> None:

@@ -147,6 +147,25 @@ export function normalizeDbIdentifierToken(value: string | null | undefined): st
 }
 
 /**
+ * 保存値・入力値の `OBJECT` / `OWNER.OBJECT`（各部は引用可）を突合キーにする。
+ *
+ * backend `object_identity.object_name_tokens` と同じ規則: 引用されていない部分は大文字、
+ * `"..."` で引用された部分は大文字小文字を保ち、引用が必要な部分だけ `"..."` で囲む。
+ * `"SALES"."ORDERS"` / `sales.orders` は `SALES.ORDERS` に揃い、`SALES."Mixed_Case"` は
+ * 大文字の同名表 `SALES.MIXED_CASE` と別のキーになる（#561）。
+ * 表示・比較用のため例外を投げず、引用符が壊れた値は前後の空白を除いてそのまま返す。
+ */
+export function normalizeDbObjectKey(value: string | null | undefined): string {
+  try {
+    return splitIdentifierParts(value ?? "")
+      .map(formatDbAdminObjectPart)
+      .join(".");
+  } catch {
+    return (value ?? "").trim();
+  }
+}
+
+/**
  * canonical な `OWNER.OBJECT` を owner / object の token に分ける。dot を含む引用名も壊さない。
  * 2 部分でない・引用符が壊れている場合は null。
  */

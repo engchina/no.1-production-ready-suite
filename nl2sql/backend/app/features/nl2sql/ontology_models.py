@@ -645,6 +645,11 @@ class SqlTableReference(OntologyContract):
     qualified_name: str
     is_cte: bool = False
     source_sql: str = ""
+    # SQL で owner / 表名が二重引用符で囲まれていたか。Oracle は引用なしを大文字、引用ありを
+    # 書かれたとおりに解釈するため、許可表の照合で `"Mixed_Case"` と `MIXED_CASE` を
+    # 区別する（#561）。
+    owner_quoted: bool = False
+    name_quoted: bool = False
     # 表示用の所有者付き名前。SQL に owner が無い表は実行時の current schema で補う
     # （owner / qualified_name は SQL に書かれたままの値を保持する）。
     resolved_owner: str = ""

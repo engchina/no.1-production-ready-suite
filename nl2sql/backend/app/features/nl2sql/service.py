@@ -271,9 +271,14 @@ from .models import (
 )
 from .object_identity import (
     OracleObjectIdentity,
+    canonical_object_part,
+    canonical_qualified_name,
+    format_object_part,
     normalize_object_part,
+    object_name_tokens,
     parse_object_identity,
     qualified_object_name,
+    sql_identifier_token,
 )
 from .object_visibility import (
     filter_user_visible_catalog,
@@ -281,12 +286,14 @@ from .object_visibility import (
     is_user_visible_object_name,
     is_user_visible_schema_object,
 )
-from .ontology_models import SqlSemanticGraph
+from .ontology_models import SqlSemanticGraph, SqlTableReference
 from .oracle_adapter import (
     OracleAdapterError,
     OracleNl2SqlAdapter,
     SelectAiCredentialMissingError,
+    SelectAiObjectListUnsupportedError,
     TabularImportValidationError,
+    select_ai_object_list_entry,
 )
 from .reverse_generation import ReverseStageError, generate_stage
 from .reverse_prompts import (
@@ -517,6 +524,20 @@ def _display_qualified_name(owner: str, object_name: str) -> str:
         return ""
 
 
+def _sql_table_reference_parts(table: SqlTableReference, current_owner: str) -> tuple[str, str]:
+    """SQL の表参照を owner / 表名の canonical token にする（owner 省略時は current schema）。
+
+    引用なしは大文字、引用ありは書かれたとおり（`SALES."Mixed_Case"` は `MIXED_CASE` と別の表）。
+    """
+
+    owner = (
+        sql_identifier_token(table.owner, quoted=table.owner_quoted)
+        if table.owner
+        else (format_object_part(current_owner.upper()) if current_owner.strip() else "")
+    )
+    return owner, sql_identifier_token(table.name, quoted=table.name_quoted)
+
+
 def _graph_with_resolved_table_owners(
     graph: SqlSemanticGraph | None, current_owner: str
 ) -> SqlSemanticGraph | None:
@@ -533,13 +554,12 @@ def _graph_with_resolved_table_owners(
         if table.is_cte:
             tables.append(table)
             continue
-        owner = table.owner.upper() or current_owner.upper()
-        name = table.name.upper()
+        owner, name = _sql_table_reference_parts(table, current_owner)
         tables.append(
             table.model_copy(
                 update={
-                    "resolved_owner": owner,
-                    "resolved_qualified_name": _display_qualified_name(owner, name),
+                    "resolved_owner": normalize_object_part(owner) if owner else "",
+                    "resolved_qualified_name": f"{owner}.{name}" if owner and name else "",
                 }
             )
         )
@@ -2504,9 +2524,8 @@ def _extract_referenced_tables(sql: str, *, current_owner: str = "") -> list[str
         for table in semantic.graph.tables:
             if table.is_cte:
                 continue
-            owner = table.owner.upper() or current_owner.upper()
-            name = table.name.upper()
-            normalized = qualified_object_name(owner, name) if owner else name
+            owner, name = _sql_table_reference_parts(table, current_owner)
+            normalized = f"{owner}.{name}" if owner else name
             if normalized not in seen:
                 seen.add(normalized)
                 tables.append(normalized)
@@ -5578,22 +5597,25 @@ class Nl2SqlService:
     def _resolve_profile_object_name(self, value: str) -> str:
         """旧形式を含む object 名を catalog 上の一意な限定名へ解決する。"""
 
-        raw = str(value or "").replace('"', "").strip().upper()
+        # 引用規則は object_identity.canonical_object_part に揃える（#561）。引用符を外して
+        # 大文字化すると `SALES."Mixed_Case"` が大文字の同名表 `SALES.MIXED_CASE` に化ける。
+        raw = str(value or "").strip()
         if not raw:
             raise ValueError("空の schema object は profile に追加できません。")
-        catalog_by_name: dict[str, list[str]] = {}
-        catalog_names: set[str] = set()
-        for table in self._catalog.tables:
-            qualified = self._catalog_qualified_name(table)
-            catalog_names.add(qualified)
-            catalog_by_name.setdefault(table.table_name.upper(), []).append(qualified)
-        current_owner = self._current_schema_owner()
-        if "." in raw:
-            qualified = parse_object_identity(raw).qualified_name
+        parts = object_name_tokens(raw)
+        if len(parts) == 2:
             # 既存 profile の object が後から削除/権限取消されても profile 自体は
             # 読み出せるよう限定名を保持する。Oracle 同期・実行時に不一致を明示する。
-            return qualified
-        object_name = _normalize_identifier(raw)
+            return canonical_qualified_name(raw)
+        if len(parts) != 1:
+            raise ValueError(f"{raw}: OWNER.OBJECT 形式で指定してください。")
+        object_name = canonical_object_part(raw)
+        catalog_by_name: dict[str, list[str]] = {}
+        for table in self._catalog.tables:
+            catalog_by_name.setdefault(format_object_part(table.table_name), []).append(
+                self._catalog_qualified_name(table)
+            )
+        current_owner = self._current_schema_owner()
         current_qualified = qualified_object_name(current_owner, object_name)
         matches = sorted(set(catalog_by_name.get(object_name, [])))
         if current_qualified in matches:
@@ -6968,10 +6990,8 @@ class Nl2SqlService:
             for table_ref in graph.tables:
                 if table_ref.is_cte:
                     continue
-                qualified = qualified_object_name(
-                    table_ref.owner.upper() or current_owner,
-                    table_ref.name.upper(),
-                )
+                owner_token, name_token = _sql_table_reference_parts(table_ref, current_owner)
+                qualified = f"{owner_token}.{name_token}"
                 if qualified not in referenced:
                     referenced.append(qualified)
                 table_name_candidates.setdefault(table_ref.name.upper(), []).append(qualified)
@@ -14615,7 +14635,25 @@ class Nl2SqlService:
     def refresh_select_ai_profile(self, profile_id: str | None) -> AssetRefreshData:
         profile = self.get_profile(profile_id)
         profile_name = self._select_ai_profile_name(profile)
-        attributes = self.build_select_ai_profile_attributes(profile)
+        try:
+            attributes = self.build_select_ai_profile_attributes(profile)
+        except SelectAiObjectListUnsupportedError as exc:
+            # Oracle へ反映せず、Select AI の実行を未同期として止める。
+            data = self._record_select_ai_scope_state(
+                profile_name=profile_name,
+                expected_scope=set(),
+                actual_scope=set(),
+                warning=str(exc),
+            )
+            return data.model_copy(
+                update={
+                    "engine_meta": {
+                        **data.engine_meta,
+                        "allowed_objects": self.profile_allowed_object_names(profile),
+                        "unsupported_object_list_names": exc.object_names,
+                    }
+                }
+            )
         expected_scope = self._select_ai_object_scope_set(attributes.get("object_list"))
         actual_scope = set(expected_scope)
         warning = ""
@@ -14661,7 +14699,26 @@ class Nl2SqlService:
         request: ProfileSelectAiProfileRequest,
     ) -> SelectAiDbProfileMutationData:
         profile = self.get_profile(profile_id)
-        attributes = self.build_select_ai_profile_attributes(profile)
+        try:
+            attributes = self.build_select_ai_profile_attributes(profile)
+        except SelectAiObjectListUnsupportedError as exc:
+            profile_name = self._select_ai_profile_name(profile)
+            # 以前に反映済みの Oracle Profile が残っていても、Select AI の実行を未同期として止める。
+            self._record_select_ai_scope_state(
+                profile_name=profile_name,
+                expected_scope=set(),
+                actual_scope=set(),
+                warning=str(exc),
+            )
+            return SelectAiDbProfileMutationData(
+                runtime="oracle" if self._use_oracle_runtime() else "deterministic",
+                executed=False,
+                status="error",
+                profile_name=profile_name,
+                original_name=request.original_name.strip(),
+                warnings=[str(exc)],
+                engine_meta={"unsupported_object_list_names": exc.object_names},
+            )
         if request.attributes_override:
             attributes = {**attributes, **request.attributes_override}
         profile_name = self._select_ai_profile_name(profile)
@@ -18831,13 +18888,19 @@ class Nl2SqlService:
 
     def _select_ai_object_list(self, object_names: Sequence[str]) -> list[dict[str, str]]:
         objects: list[dict[str, str]] = []
+        quoted_names: list[str] = []
         for object_name in object_names:
             if not str(object_name or "").strip():
                 continue
             identity = parse_object_identity(
                 self._resolve_profile_object_name(str(object_name)),
             )
-            objects.append({"owner": identity.owner, "name": identity.object_name})
+            try:
+                objects.append(select_ai_object_list_entry(identity))
+            except SelectAiObjectListUnsupportedError as exc:
+                quoted_names.extend(exc.object_names)
+        if quoted_names:
+            raise SelectAiObjectListUnsupportedError(quoted_names)
         return objects
 
     def _resolve_allowed_objects(
@@ -18991,6 +19054,13 @@ class Nl2SqlService:
                     exc=exc,
                     operation_error_code="schema_object_detail_failed",
                 )
+            if detail is not None and (
+                (detail.table.owner or identity.owner) != identity.owner
+                or detail.table.table_name != identity.object_name
+            ):
+                # schema catalog の詳細取得は大文字小文字を区別しない。`SALES."Mixed_Case"` に
+                # 大文字の同名表 `SALES.MIXED_CASE` の定義を使わない（#561）。
+                detail = None
             if detail is None:
                 try:
                     page = repository.search_schema_objects(
@@ -19004,15 +19074,15 @@ class Nl2SqlService:
                         include_counts=False,
                     )
                     matches = [
-                        item
-                        for item in page.items
-                        if item.object_name.upper() == identity.object_name
+                        item for item in page.items if item.object_name == identity.object_name
                     ]
                     if len(matches) == 1:
                         detail = repository.get_schema_object(
                             matches[0].owner,
                             matches[0].object_name,
                         )
+                        if detail is not None and (detail.table.table_name != identity.object_name):
+                            detail = None
                 except Exception as exc:
                     self._raise_incremental_repository_failure(
                         operation="schema_object_detail",

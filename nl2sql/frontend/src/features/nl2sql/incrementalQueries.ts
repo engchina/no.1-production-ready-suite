@@ -24,6 +24,7 @@ import {
   filterUserVisibleSchemaObjectPage,
   isUserVisibleSchemaObject,
 } from "./objectVisibility";
+import { formatDbObjectName } from "./dbObjectIdentity";
 import { profileSummaryPageFromLegacyList, type ProfileListSortState } from "./profileListState";
 import type { ProfileOntologyViewData } from "./ontology/types";
 
@@ -384,7 +385,8 @@ export async function getSchemaObjectSnapshot(
       });
       for (const object of page.items) {
         if (!isUserVisibleSchemaObject(object.owner, object.object_name)) continue;
-        names.add(`${object.owner}.${object.object_name}`.toUpperCase());
+        // 引用名を大文字化すると、大文字の同名表として選択される（#561）。
+        names.add(formatDbObjectName({ owner: object.owner, name: object.object_name }));
       }
       const next = page.next_cursor ?? "";
       if (!next || seenCursors.has(next)) break;
@@ -406,7 +408,7 @@ export async function getSchemaObjectSnapshot(
             : table.table_type.toUpperCase() === objectType.toUpperCase()) &&
           legacySchemaObjectMatchesQuery(table, legacyQuery)
       )
-      .map((table) => `${table.owner}.${table.table_name}`.toUpperCase())
+      .map((table) => formatDbObjectName({ owner: table.owner, name: table.table_name }))
       .sort();
   }
 }

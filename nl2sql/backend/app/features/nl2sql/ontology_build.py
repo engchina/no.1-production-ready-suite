@@ -26,6 +26,11 @@ from typing import Any
 from uuid import uuid4
 
 from app.features.nl2sql.models import Nl2SqlProfile, SchemaCatalog, SchemaTable
+from app.features.nl2sql.object_identity import (
+    format_object_part,
+    normalize_object_part,
+    object_name_tokens,
+)
 from app.features.nl2sql.ontology_catalog import SchemaOntology, catalog_schema_fingerprint
 from app.features.nl2sql.ontology_definition_service import definition_fingerprint
 from app.features.nl2sql.ontology_definitions import DefinitionPhase, DefinitionSource
@@ -128,21 +133,53 @@ def _schema_object_label(table: SchemaTable) -> str:
     return f"{owner}.{name}" if owner else name
 
 
+def _is_case_sensitive_part(token: str) -> bool:
+    """大文字化すると別の名前になる（小文字を含む）引用名か。
+
+    `"売上"` や `"MY TABLE"` は大文字化しても同じ名前のため該当しない。
+    """
+
+    name = normalize_object_part(token)
+    return name != name.upper()
+
+
+def _catalog_object_part(value: str) -> str:
+    """カタログ上の名前を Profile object と照合する token にする（引用名の大文字小文字を保つ）。"""
+
+    try:
+        return format_object_part(value)
+    except ValueError:
+        return value
+
+
 def _resolve_catalog_object(
     raw_name: str,
     *,
     object_kind: str,
     candidates: list[SchemaTable],
 ) -> tuple[SchemaTable | None, str | None]:
-    parts = [part for part in _normalize_oracle_identifier(raw_name).split(".") if part]
+    # Profile object は object_identity の canonical 修飾名。引用符を外して大文字化すると
+    # `SALES."Mixed_Case"` が大文字の同名表 `SALES.MIXED_CASE` にも一致する（#561）。
+    try:
+        parts = object_name_tokens(raw_name)
+    except ValueError:
+        parts = []
     owner = parts[-2] if len(parts) >= 2 else ""
     object_name = parts[-1] if parts else ""
+    if any(_is_case_sensitive_part(part) for part in parts):
+        # オントロジーの node は owner / object 名を大文字化して識別するため、小文字を含む
+        # 引用名を大文字の同名表と区別できない。取り違えないよう構築対象から外して明示する。
+        return (
+            None,
+            f"「{raw_name}」は大文字小文字の混在や記号を含む名前のため、"
+            "オントロジー構築の対象にできません（未対応）。",
+        )
     matches = [
         table
         for table in candidates
         if _schema_object_kind(table) == object_kind
-        and _normalize_oracle_identifier(table.table_name) == object_name
-        and (not owner or _normalize_oracle_identifier(table.owner or "APP") == owner)
+        and _catalog_object_part(table.table_name) == object_name
+        and (not owner or _catalog_object_part(table.owner or "APP") == owner)
     ]
     if len(matches) > 1:
         qualified = ", ".join(sorted(_schema_object_label(table) for table in matches))
@@ -188,8 +225,8 @@ def _selected_schema_objects(
         if table is None:
             continue
         key = (
-            _normalize_oracle_identifier(table.owner or "APP"),
-            _normalize_oracle_identifier(table.table_name),
+            _catalog_object_part(table.owner or "APP"),
+            _catalog_object_part(table.table_name),
             _schema_object_kind(table),
         )
         selected[key] = table

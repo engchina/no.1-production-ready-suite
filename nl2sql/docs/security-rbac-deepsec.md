@@ -245,8 +245,7 @@ DeepSec のデータ権限は、対象の owner / object と列（`column_names`
   （`/target-objects/SALES/%22Mixed_Case%22`）、`columns[].column_name` は token で返す。
 - 関連条件の候補（外部キー、Ontology edge、既存 Data Grant predicate 内の表参照）も同じ規則で修飾名にする。
   predicate 内の引用されていない表名は大文字、引用された表名は大文字小文字を保つ。
-  ただし業務プロファイルの対象表の保存が引用名を大文字化するため（#561）、引用名の表は現状、関連テーブル条件の
-  候補に出ない。
+  関連テーブル条件の候補範囲になる業務プロファイルの対象表も、#561 から同じ規則で保存する（次節）。
 
 ### 既存データの互換と移行
 
@@ -283,6 +282,65 @@ SELECT e.ROLE_ID, e.ENTITLEMENT_ID, e.TARGET_OWNER, e.TARGET_OBJECT,
    AND UPPER(c.COLUMN_NAME) = j.COLUMN_NAME
    AND c.COLUMN_NAME <> j.COLUMN_NAME;
 ```
+
+### 業務プロファイルの対象表（Issue #561）
+
+業務プロファイルの対象表・ビュー（`allowed_tables` / `allowed_views`）も、保存・照合を上表と同じ規則にそろえた。
+`app/features/nl2sql/service.py` の `_resolve_profile_object_name` は、`OWNER.OBJECT` を
+`canonical_qualified_name`、owner を省略した名前を `canonical_object_part` で正規化する。
+
+| 経路 | #561 以降の挙動 |
+|---|---|
+| 保存（`POST` / `PATCH /api/nl2sql/profiles`） | `SALES."Mixed_Case"` はそのまま保存し、`SALES.MIXED_CASE` とは別の対象として両方を保持できる。`"SALES"."MIXED_CASE"` / `sales.mixed_case` は従来どおり `SALES.MIXED_CASE`。非引用識別子にならない名前（`SALES.my table`）と引用符の壊れた名前は `ValueError`（API はエラー応答）で拒否する |
+| owner 省略の旧形式 | `"Mixed_Case"` はカタログの引用名の表に解決する。引用なしの `mixed_case` は `MIXED_CASE` として解決し、引用名の表 `Mixed_Case` には解決しない |
+| SQL 安全性検査（許可表の照合） | SQL の表参照は sqlglot の引用情報（`SqlTableReference.owner_quoted` / `name_quoted`）を使い、引用なしを大文字、引用ありを書かれたとおりに解釈する。`SALES.MIXED_CASE` だけを許可したとき `SELECT * FROM SALES."Mixed_Case"` を拒否し、逆も拒否する（修正前はどちらも `SALES.MIXED_CASE` として許可していた） |
+| SQL 生成の schema context | Profile の対象から schema catalog の詳細を読むとき、大文字小文字だけが異なる表の定義は使わない（schema catalog の詳細取得は大文字小文字を区別しないため、名前の完全一致を確認する） |
+| Select AI の `object_list` | 引用が必要な owner / 表名を含む Profile は、Oracle へ反映せず `PROFILE_OBJECT_LIST_UNSUPPORTED` で同期 job を失敗させ、Select AI / Select AI Agent の実行を「object scope が未同期」として止める（下記「未確認事項」）。引用が不要な名前の `object_list` は従来と同じ |
+| オントロジー | node は owner / 表名を大文字化して識別するため、小文字を含む引用名の表はオントロジー構築・Profile の view の対象にしない（警告を出す）。大文字の同名表の node へ対応付けない。質問補完の代表値も引用規則どおりに Profile の対象へ絞る |
+| DeepSec の関連テーブル候補（`GET /api/security/deepsec/relations`） | Profile の object が canonical な修飾名になるため、引用名の表を対象・関連テーブルとして選べる |
+| 画面（業務プロファイル・スキーマ参照） | 対象の選択・件数・一括選択・未保存判定のキーを `normalizeDbObjectKey`（`dbObjectIdentity.ts`）にそろえ、引用名を大文字化しない |
+
+#### 未確認事項: Select AI の `object_list` と引用名
+
+Oracle のドキュメント（`DBMS_CLOUD_AI` の profile 属性 `object_list`）は `{"owner": "SH", "name": "customers"}` の
+形式だけを示し、大文字小文字や二重引用符の扱いを規定していない（例は小文字の `customers` で `SH.CUSTOMERS` を指す）。
+そのため `Mixed_Case` を渡すと大文字の `MIXED_CASE` と解釈される可能性があり、`"Mixed_Case"` を渡す形式が有効かも
+確認できていない。実 Oracle で検証するまでは推測で渡さず、明示的なエラーにしている。引用名の表は Select AI 以外の
+エンジン（Enterprise AI Direct 等）で利用する。
+
+#### 既存 Profile の互換と誤保存の検出
+
+引用が不要な名前の保存値・Select AI の `object_list`・SQL は変わらないため、自動移行はしない。
+#561 より前は、画面の選択と保存の両方で引用符を外して大文字化していたため、引用名の表を選ぶと
+**大文字の同名表 `SALES.MIXED_CASE` として保存されていた**（同名表が無い場合も `SALES.MIXED_CASE` として保存され、
+Oracle 反映時に object が見つからない）。保存値から利用者の意図は判別できず、別の表へ自動で付け替えると
+Profile の公開範囲が変わるため、次の SQL（アプリの管理 schema で実行する参考例。実 Oracle では未検証）で
+大文字小文字だけが異なる表・ビューを持つ Profile を洗い出し、画面で対象を選び直して保存し直すこと。
+
+```sql
+-- Profile の対象（引用なしの OWNER.OBJECT）と、小文字を含む引用名の object の大文字化が一致する Profile
+SELECT p.PROFILE_ID, p.NAME, j.OBJECT_KIND, j.OBJECT_KEY,
+       o.OWNER AS CATALOG_OWNER, o.OBJECT_NAME AS CATALOG_OBJECT, o.OBJECT_TYPE
+  FROM NL2SQL_PROFILES p
+ CROSS APPLY (
+         SELECT 'TABLE' AS OBJECT_KIND, t.OBJECT_KEY
+           FROM JSON_TABLE(p.PAYLOAD_JSON, '$.allowed_tables[*]'
+                           COLUMNS (OBJECT_KEY VARCHAR2(512) PATH '$')) t
+         UNION ALL
+         SELECT 'VIEW', v.OBJECT_KEY
+           FROM JSON_TABLE(p.PAYLOAD_JSON, '$.allowed_views[*]'
+                           COLUMNS (OBJECT_KEY VARCHAR2(512) PATH '$')) v
+       ) j
+  JOIN ALL_OBJECTS o
+    ON o.OWNER || '.' || UPPER(o.OBJECT_NAME) = j.OBJECT_KEY
+   AND o.OBJECT_NAME <> UPPER(o.OBJECT_NAME)
+ WHERE INSTR(j.OBJECT_KEY, '"') = 0
+   AND o.OBJECT_TYPE IN ('TABLE', 'VIEW', 'MATERIALIZED VIEW')
+ ORDER BY p.PROFILE_ID, j.OBJECT_KEY;
+```
+
+該当 Profile では、対象に残っている `SALES.MIXED_CASE` が意図した表か確認し、引用名の表を使う場合は
+`SALES."Mixed_Case"` を選び直す。DeepSec のデータ権限の検出は前節の SQL を使う。
 
 ### 画面表示
 

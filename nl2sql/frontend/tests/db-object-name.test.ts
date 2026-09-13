@@ -7,6 +7,7 @@ import {
   formatDbObjectPart,
   formatEntitlementTargetName,
   normalizeDbIdentifierToken,
+  normalizeDbObjectKey,
   splitDbObjectName,
 } from "../src/features/nl2sql/dbObjectIdentity.ts";
 import { objectName } from "../src/features/nl2sql/ontology/physicalIdentity.ts";
@@ -116,6 +117,17 @@ test("normalizeDbIdentifierToken は Oracle の非引用識別子だけを大文
   assert.equal(normalizeDbIdentifierToken('"Amount"'), '"Amount"');
   assert.equal(normalizeDbIdentifierToken(null), "");
   assert.equal(normalizeDbIdentifierToken('"BROKEN'), '"BROKEN');
+});
+
+test("normalizeDbObjectKey は Profile の対象表を backend object_name_tokens と同じキーにする (#561)", () => {
+  assert.equal(normalizeDbObjectKey("sales.orders"), "SALES.ORDERS");
+  assert.equal(normalizeDbObjectKey('"SALES"."ORDERS"'), "SALES.ORDERS");
+  assert.equal(normalizeDbObjectKey("orders"), "ORDERS");
+  assert.equal(normalizeDbObjectKey('SALES."Mixed_Case"'), 'SALES."Mixed_Case"');
+  assert.equal(normalizeDbObjectKey('"SALES"."Mixed_Case"'), 'SALES."Mixed_Case"');
+  assert.equal(normalizeDbObjectKey('SALES."a.b"'), 'SALES."a.b"');
+  assert.equal(normalizeDbObjectKey(' SALES."broken '), 'SALES."broken');
+  assert.equal(normalizeDbObjectKey(null), "");
 });
 
 test("splitDbObjectName は canonical な修飾名を owner / object の token に分ける", () => {

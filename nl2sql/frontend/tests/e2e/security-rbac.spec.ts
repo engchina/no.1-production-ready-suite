@@ -6702,3 +6702,178 @@ test("DeepSec は引用が必要な表名を対象に選び、大文字の同名
   await expect(applyField.getByRole("button", { name: "Data Grant を適用" })).toBeDisabled();
   await expectNoPageHorizontalScroll(page);
 });
+
+test("DeepSec 関連テーブル条件は引用名の表を Profile の候補から選び、大文字の同名表と取り違えない (#561)", async ({ page }) => {
+  await mockDatabaseGateReady(page);
+  // 対象は引用名の表 SALES."Mixed_Case"（#560 で保存される token）。
+  const quotedGrant = {
+    entitlement_id: "quoted-grant",
+    resource_code: 'SALES."Mixed_Case"',
+    scope_code: "*",
+    capability: "SELECT",
+    target_owner: "SALES",
+    target_object: '"Mixed_Case"',
+    target_type: "TABLE",
+    column_names: ['"Region"'],
+    scope_mode: "ALL",
+    scope_column: "",
+    scope_filters: [],
+  };
+  const quotedRole = {
+    ...systemRole,
+    role_id: "role-quoted-relation",
+    role_code: "QUOTED_RELATION",
+    display_name: "引用名の関連条件",
+    is_built_in: false,
+    archived: false,
+    version: 3,
+    data_entitlements: [quotedGrant],
+  };
+  const column = (column_name: string, data_type = "VARCHAR2") => ({
+    column_name,
+    logical_name: "",
+    data_type,
+    nullable: true,
+    comment: "",
+    sample_values: [],
+  });
+  await page.route("**/api/security/deepsec/status", (route) =>
+    fulfill(route, {
+      configured: true,
+      driver_mode: "thin",
+      connection_security: "wallet_mtls",
+      deepsec_enabled: true,
+      data_user: "DEEPSEC_DATA_USER",
+      has_data_user_password: true,
+      objects: { data_grants: 1 },
+      message: "構成済みです。",
+    })
+  );
+  await page.route("**/api/security/deepsec/plan", (route) => fulfill(route, deepSecPlan(true)));
+  await mockDeepSecDataEntitlements(page, [quotedRole]);
+  await page.route("**/api/security/deepsec/target-objects?*", (route) =>
+    fulfill(route, {
+      runtime: "oracle",
+      owner: "",
+      items: [
+        { name: "MIXED_CASE", owner: "SALES", qualified_name: "SALES.MIXED_CASE", object_type: "TABLE", comment: "" },
+        { name: "Mixed_Case", owner: "SALES", qualified_name: 'SALES."Mixed_Case"', object_type: "TABLE", comment: "" },
+      ],
+      total: 2,
+      counts_included: true,
+      next_cursor: null,
+      warnings: [],
+    })
+  );
+  const detailRequests: string[] = [];
+  await page.route(/\/api\/security\/deepsec\/target-objects\/[^?]+\/[^?]+(\?.*)?$/u, (route) => {
+    const objectName = decodeURIComponent(new URL(route.request().url()).pathname.split("/").at(-1) ?? "");
+    detailRequests.push(objectName);
+    if (objectName === '"Regions"') {
+      return fulfill(route, {
+        owner: "SALES",
+        name: "Regions",
+        qualified_name: 'SALES."Regions"',
+        object_type: "TABLE",
+        comment: "引用名の地域",
+        columns: [column('"Id"'), column('"Name"'), column("NAME")],
+      });
+    }
+    if (objectName === '"Mixed_Case"') {
+      return fulfill(route, {
+        owner: "SALES",
+        name: "Mixed_Case",
+        qualified_name: 'SALES."Mixed_Case"',
+        object_type: "TABLE",
+        comment: "引用名の受注",
+        columns: [column('"Region"'), column("REGION"), column("LOGIN_ID")],
+      });
+    }
+    return fulfill(route, "対象が見つかりません", 404);
+  });
+  // backend は #561 以降、Profile の対象表を引用規則どおりの修飾名で返す。
+  await page.route("**/api/security/deepsec/scope-profiles", (route) =>
+    fulfill(route, [
+      { id: "sales-quoted", name: "営業（引用名）", object_scope_version: 2, objects: ['SALES."Mixed_Case"', 'SALES."Regions"', "SALES.REGIONS"] },
+      { id: "sales-upper", name: "営業（大文字）", object_scope_version: 2, objects: ["SALES.MIXED_CASE", "SALES.REGIONS"] },
+    ])
+  );
+  const relationRequests: URLSearchParams[] = [];
+  await page.route("**/api/security/deepsec/relations?*", (route) => {
+    relationRequests.push(new URL(route.request().url()).searchParams);
+    return fulfill(route, {
+      profile_id: "sales-quoted",
+      object_scope_version: 2,
+      objects: ['SALES."Regions"', "SALES.REGIONS"],
+      relations: [
+        {
+          id: 'SALES."FK_Region"',
+          source: "FOREIGN_KEY",
+          version: "fk-quoted-v1",
+          target: 'SALES."Regions"',
+          join_keys: [{ source_column: '"Region"', target_column: '"Id"' }],
+        },
+      ],
+    });
+  });
+  let submitted: any = null;
+  await page.route("**/api/security/deepsec/data-entitlements/role-quoted-relation/preview", (route) => {
+    submitted = route.request().postDataJSON();
+    return fulfill(route, {
+      role_id: quotedRole.role_id,
+      version: submitted.version,
+      data_entitlements: submitted.data_entitlements.map((item: object) => ({ ...item, sql: ["SELECT 1"], checksum: "quoted" })),
+      cleanup_sql: [],
+      checksum: "quoted",
+    });
+  });
+
+  await page.goto("/settings/security/deepsec");
+  await page.getByRole("tab", { name: "データ権限", exact: true }).click();
+  await page.locator("#deepsec-entitlement-scope-mode-0").selectOption("FILTERS");
+  await page.getByTestId("security-deepsec-scope-filter-0-0").getByLabel("値の種類").selectOption("LOGIN_USER_ID");
+  await page.getByRole("button", { name: "関連テーブル条件を追加", exact: true }).click();
+  const related = page.getByTestId("scope-related-0-1");
+  const profileSelect = related.getByLabel("候補を選ぶ Profile");
+  // 大文字の同名表だけを含む Profile は、引用名の表の関連候補に出さない。
+  await expect(profileSelect.getByRole("option", { name: "営業（引用名）", exact: true })).toHaveCount(1);
+  await expect(profileSelect.getByRole("option", { name: "営業（大文字）", exact: true })).toHaveCount(0);
+  await profileSelect.selectOption("sales-quoted");
+  await expect.poll(() => relationRequests.at(-1)?.get("object_name")).toBe('"Mixed_Case"');
+  expect(relationRequests.at(-1)?.get("owner")).toBe("SALES");
+
+  const relatedTable = related.getByLabel("関連テーブル", { exact: true });
+  await expect(relatedTable.getByRole("option", { name: 'SALES."Regions"', exact: true })).toHaveCount(1);
+  await expect(relatedTable.getByRole("option", { name: "SALES.REGIONS", exact: true })).toHaveCount(1);
+  await relatedTable.selectOption('SALES."Regions"');
+  await expect(relatedTable).toHaveValue('SALES."Regions"');
+  // 関連表の列は引用付き token で取得し、大文字の同名表 REGIONS の詳細を読まない。
+  await expect.poll(() => detailRequests).toContain('"Regions"');
+  expect(detailRequests).not.toContain("REGIONS");
+  expect(detailRequests).not.toContain("Regions");
+
+  const relationSelect = related.getByLabel("関連キーの設定方法");
+  await relationSelect.selectOption('SALES."FK_Region"');
+  await expect(related.getByLabel("対象テーブルの列")).toHaveValue('"Region"');
+  await expect(related.getByLabel("関連テーブルの列")).toHaveValue('"Id"');
+  await related.getByLabel("列", { exact: true }).selectOption('"Name"');
+  await related.getByLabel("値", { exact: true }).fill("関東");
+  await expect(related.getByText("Profile または対象が変更されました。", { exact: false })).toHaveCount(0);
+
+  await page.getByText("ロール全体の SQL プレビュー", { exact: true }).click();
+  await page.getByTestId("security-deepsec-sql-preview-generate").click();
+  await expect.poll(() => submitted?.data_entitlements?.[0]?.scope_expression?.root?.children?.length).toBe(2);
+  const entitlement = submitted.data_entitlements[0];
+  expect(entitlement).toMatchObject({ target_owner: "SALES", target_object: '"Mixed_Case"', resource_code: 'SALES."Mixed_Case"' });
+  expect(entitlement.scope_expression.root.children[1]).toMatchObject({
+    profile_id: "sales-quoted",
+    target_owner: "SALES",
+    target_object: '"Regions"',
+    relation_source: "FOREIGN_KEY",
+    relation_id: 'SALES."FK_Region"',
+    relation_version: "fk-quoted-v1",
+    join_keys: [{ source_column: '"Region"', target_column: '"Id"' }],
+  });
+  expect(JSON.stringify(entitlement.scope_expression.root.children[1].condition)).toContain('"\\"Name\\""');
+  await expectNoPageHorizontalScroll(page);
+});

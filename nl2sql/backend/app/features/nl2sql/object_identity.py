@@ -129,6 +129,37 @@ def canonical_qualified_name(value: str) -> str:
     return f"{canonical_object_part(parts[0])}.{canonical_object_part(parts[1])}"
 
 
+def object_name_tokens(value: str) -> list[str]:
+    """`OBJECT` / `OWNER.OBJECT`（各部は引用可）を、部分ごとの比較用 token に分ける。
+
+    `normalize_object_part` → `format_object_part` と同じ規則で、引用名は大文字小文字を保ち、
+    引用なしは大文字として扱う。検証（無効名の拒否）はせず、照合キーを作るためだけに使う。
+    引用符の対応が壊れている値は `ValueError`。
+    """
+
+    return [
+        format_object_part(normalize_object_part(part)) for part in _split_identifier_parts(value)
+    ]
+
+
+def sql_identifier_token(name: str, *, quoted: bool) -> str:
+    """SQL parser が返した識別子 1 部分（引用符を外した値と引用の有無）を canonical token にする。
+
+    Oracle と同じく、引用されていない識別子は大文字として、引用された識別子は書かれたとおりに
+    解釈する。`SALES."Mixed_Case"` の `Mixed_Case` を大文字化すると、大文字の同名表
+    `SALES.MIXED_CASE` と区別できない。
+    """
+
+    raw = str(name or "")
+    return format_object_part(raw if quoted else raw.upper())
+
+
+def is_unquoted_object_part(name: str) -> bool:
+    """カタログ上の名前が、引用なしの Oracle 識別子（`[A-Z][A-Z0-9_$#]*`）で書けるか。"""
+
+    return bool(_SIMPLE_IDENTIFIER.fullmatch(str(name or "")))
+
+
 @dataclass(frozen=True, slots=True)
 class OracleObjectIdentity:
     """Owner-aware 的只读对象身份。"""
@@ -179,7 +210,10 @@ __all__ = [
     "canonical_object_part",
     "canonical_qualified_name",
     "format_object_part",
+    "is_unquoted_object_part",
     "normalize_object_part",
+    "object_name_tokens",
     "parse_object_identity",
     "qualified_object_name",
+    "sql_identifier_token",
 ]

@@ -264,12 +264,15 @@ test("question insertion replaces selected text at the cursor range", () => {
   );
 });
 
-test("object identifier normalization strips owner and quotes and uppercases", () => {
+test("object identifier normalization keeps owner, uppercases unquoted parts and keeps quoted case (#561)", () => {
   assert.equal(normalizeObjectIdentifier("EMPLOYEE"), "EMPLOYEE");
   assert.equal(normalizeObjectIdentifier("employee"), "EMPLOYEE");
   assert.equal(normalizeObjectIdentifier("APP.EMPLOYEE"), "APP.EMPLOYEE");
   assert.equal(normalizeObjectIdentifier('"EMPLOYEE"'), "EMPLOYEE");
-  assert.equal(normalizeObjectIdentifier('app."Employee"'), "APP.EMPLOYEE");
+  assert.equal(normalizeObjectIdentifier('"APP"."EMPLOYEE"'), "APP.EMPLOYEE");
+  // 引用名は大文字の同名表と別のキー。
+  assert.equal(normalizeObjectIdentifier('app."Employee"'), 'APP."Employee"');
+  assert.notEqual(normalizeObjectIdentifier('APP."Employee"'), normalizeObjectIdentifier("APP.EMPLOYEE"));
 });
 
 test("schema insert prepends a newline only when not at start / not after a newline", () => {
