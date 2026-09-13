@@ -7,8 +7,7 @@ ENV PYTHONUNBUFFERED=1 \
 WORKDIR /app
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
-# OCI SDK が cryptography<47 を要求する間は、patched system OpenSSL に対して
-# sdist を build する。PyPI wheel 同梱 OpenSSL の GHSA-537c-gmf6-5ccf を回避する。
+# ネイティブ拡張を sdist から build する依存に備えて build tool を入れる。
 RUN apt-get update \
     && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends build-essential cargo libssl-dev pkg-config \
@@ -21,7 +20,7 @@ COPY no.1-production-ready-platform/packages/backend_core \
      /no.1-production-ready-platform/packages/backend_core
 
 WORKDIR /app/backend
-RUN uv sync --locked --no-dev --no-binary-package cryptography
+RUN uv sync --locked --no-dev
 
 FROM python:3.12-slim AS runtime
 
