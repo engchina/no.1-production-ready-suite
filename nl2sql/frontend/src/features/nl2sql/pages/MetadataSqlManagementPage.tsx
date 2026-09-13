@@ -485,7 +485,7 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
 
   return (
     <>
-      <PageHeader
+      <PageHeader wide
         title={t(mode === "comment" ? "nav.commentManagement" : "nav.annotationManagement")}
         subtitle={t(
           mode === "comment"
@@ -521,7 +521,7 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
         ]}
       />
       {selectedTargets.length > 0 && (checkedAt || activePanel !== "targets") ? (
-        <PageBody className="pb-0">
+        <PageBody wide className="pb-0">
           <Banner severity={validated ? "info" : "warning"} action={
             <Button type="button" variant="secondary" size="sm" disabled={Boolean(loading)} onClick={() => void fetchDetails(true)}>{t("workspace.refresh")}</Button>
           }>
@@ -529,7 +529,7 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
           </Banner>
         </PageBody>
       ) : null}
-      <PageBody className="grid gap-4">
+      <PageBody wide className="grid gap-4">
         <PageNotice
           notice={
             message

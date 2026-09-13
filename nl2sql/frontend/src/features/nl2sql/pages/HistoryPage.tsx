@@ -780,7 +780,7 @@ export function HistoryPage() {
 
   return (
     <>
-      <PageHeader
+      <PageHeader wide
         title={t("nav.history")}
         subtitle={t("history.subtitle")}
         actions={[
@@ -794,7 +794,7 @@ export function HistoryPage() {
           },
         ]}
       />
-      <PageBody className="grid gap-3 p-3">
+      <PageBody wide className="grid gap-3">
         <HistorySafetyHelp />
         <PageNotice
           notice={message ? { tone: "danger", message: `${message} ${t("history.error.retryHint")}` } : null}

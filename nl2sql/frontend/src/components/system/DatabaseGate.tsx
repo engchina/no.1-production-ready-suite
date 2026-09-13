@@ -12,6 +12,7 @@ import {
   type DatabaseOperationalFailure,
 } from "@/lib/database-load-error";
 import { t, type I18nKey } from "@/lib/i18n";
+import { isWidePage } from "@/lib/page-layout";
 import { APP_ROUTES } from "@/lib/routes";
 import {
   useDatabaseStatus,
@@ -212,7 +213,8 @@ export function DatabaseGate({ children }: { children: ReactNode }) {
   return (
     <>
       {persistence.data.mode === "memory" ? (
-        <PageBody className="pb-0">
+        // 直下の PageHeader と左端をそろえるため、表示中の画面と同じ幅にする。
+        <PageBody wide={isWidePage(location.pathname)} className="pb-0">
           <Banner severity="warning" title={t("persistence.memoryWarning.title")}>
             {t("persistence.memoryWarning.message")}
           </Banner>

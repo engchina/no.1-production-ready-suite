@@ -845,7 +845,7 @@ export function TableManagementPage() {
 
   return (
     <>
-      <PageHeader
+      <PageHeader wide
         title={t("nav.tableManagement")}
         subtitle={t("tableMgmt.subtitle")}
         meta={
@@ -894,7 +894,7 @@ export function TableManagementPage() {
             : []
         }
       />
-      <PageBody className="grid gap-4">
+      <PageBody wide className="grid gap-4">
         <PageNotice
           notice={
             message

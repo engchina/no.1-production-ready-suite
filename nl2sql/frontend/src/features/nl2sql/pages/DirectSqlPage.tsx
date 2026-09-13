@@ -51,8 +51,8 @@ export function DirectSqlPage() {
   if (!canExecute) {
     return (
       <>
-        <PageHeader title={t("nav.directSql")} subtitle={t("nl2sql.sqlRunner.description")} />
-        <PageBody>
+        <PageHeader wide title={t("nav.directSql")} subtitle={t("nl2sql.sqlRunner.description")} />
+        <PageBody wide>
           <Banner severity="info">{t("nl2sql.permission.executeRequired")}</Banner>
         </PageBody>
       </>
@@ -130,8 +130,8 @@ function ExecutableDirectSqlPage() {
 
   return (
     <>
-      <PageHeader title={t("nav.directSql")} subtitle={t("nl2sql.sqlRunner.description")} />
-      <PageBody className="grid gap-4" data-testid="nl2sql-direct-sql">
+      <PageHeader wide title={t("nav.directSql")} subtitle={t("nl2sql.sqlRunner.description")} />
+      <PageBody wide className="grid gap-4" data-testid="nl2sql-direct-sql">
         <section className="grid gap-4 rounded-md border border-border bg-surface p-4">
           <div className="grid gap-2">
             <FieldLabel

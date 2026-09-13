@@ -6,7 +6,6 @@ import {
   toast,
   StatusBadge,
   PageHeader,
-  FieldError,
   PageBody,
 } from "@engchina/production-ready-ui";
 import {
@@ -158,8 +157,8 @@ export function Nl2SqlWorkbench() {
   if (!canExecute) {
     return (
       <>
-        <PageHeader title={t("nav.query")} subtitle={t("page.query.subtitle")} />
-        <PageBody>
+        <PageHeader wide title={t("nav.query")} subtitle={t("page.query.subtitle")} />
+        <PageBody wide>
           <Banner severity="info">{t("nl2sql.permission.executeRequired")}</Banner>
         </PageBody>
       </>
@@ -944,7 +943,7 @@ function ExecutableNl2SqlWorkbench() {
 
   return (
     <>
-      <PageHeader
+      <PageHeader wide
         title={t("nav.query")}
         subtitle={t("page.query.subtitle")}
         status={<SchemaRefreshHeaderStatus testId="query-schema-refresh-status" />}
@@ -981,7 +980,7 @@ function ExecutableNl2SqlWorkbench() {
         ]}
       />
 
-      <PageBody className="grid gap-4">
+      <PageBody wide className="grid gap-4">
         <PageNotice
           notice={
             visiblePageError
@@ -1239,6 +1238,7 @@ function ExecutableNl2SqlWorkbench() {
                               size="md"
 
                               disabled={!question.trim() || active || !profileSelectionReady}
+                              aria-describedby={!question.trim() ? "nl2sql-guided-query-required" : undefined}
                               onClick={() => {
                                 setActionError("");
                                 setGuidedClarificationOpen(true);
@@ -1250,11 +1250,11 @@ function ExecutableNl2SqlWorkbench() {
                             </span>
                           </div>
                         )}
+                        {/* 未入力はエラーではなく「ボタンが使えない理由」の案内。操作前に赤字や alert の読み上げで出さない。 */}
                         {!question.trim() && !guidedClarificationOpen ? (
-                          <FieldError
-                            id="nl2sql-guided-query-required"
-                            message={t("nl2sql.clarification.queryRequired")}
-                          />
+                          <p id="nl2sql-guided-query-required" className="text-xs leading-5 text-fg-muted">
+                            {t("nl2sql.clarification.queryRequired")}
+                          </p>
                         ) : null}
                         {engine === "select_ai" && (
                           <section className="overflow-hidden rounded-md border border-dashed border-border bg-surface-sunken">
