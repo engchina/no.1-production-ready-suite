@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from app.clients.oracle_runtime import get_oracle_pool_manager
+from app.features.nl2sql.object_identity import qualified_object_name
 from app.settings import get_settings
 
 logger = logging.getLogger(__name__)
@@ -387,6 +388,14 @@ def _blank_sql_string_literals(statement: str) -> str:
     return "".join(result)
 
 
+def _object_owner_fields(owner: str, name: str) -> dict[str, str]:
+    """表示用の所有者と `OWNER.OBJECT`。owner が不明なら名前だけにし、推測で補わない。"""
+
+    if not owner:
+        return {"owner": "", "qualified_name": ""}
+    return {"owner": owner, "qualified_name": qualified_object_name(owner, name)}
+
+
 def oracle_error_code(exc: Exception) -> str:
     match = re.search(r"ORA-\d{5}", str(exc), flags=re.IGNORECASE)
     return match.group(0).upper() if match else "SCHEMA_OPERATION_FAILED"
@@ -624,8 +633,9 @@ class SystemSchemaManager:
             item.version for item in MIGRATIONS if applied.get(item.version) != item.checksum
         ]
         status = classify_system_schema_status(set(objects), applied)
-        table_metadata = self._load_table_metadata(connection, objects)
-        object_metadata = self._build_object_metadata(objects, table_metadata)
+        owner = self._load_schema_owner(connection)
+        table_metadata = self._load_table_metadata(connection, objects, owner=owner)
+        object_metadata = self._build_object_metadata(objects, table_metadata, owner=owner)
         return {
             "status": status,
             "schema_head": MIGRATIONS[-1].version,
@@ -653,6 +663,15 @@ class SystemSchemaManager:
             )
             return {(str(row[0]).upper(), str(row[1]).upper()): row[2] for row in cursor.fetchall()}
 
+    @staticmethod
+    def _load_schema_owner(connection: Any) -> str:
+        """USER_OBJECTS / USER_TABLES の所有者（接続ユーザー）。取得できなければ空文字。"""
+
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT USER FROM DUAL")
+            row = cursor.fetchone()
+        return str(row[0] or "").strip().upper() if row else ""
+
     def _load_migrations(
         self,
         connection: Any,
@@ -670,6 +689,8 @@ class SystemSchemaManager:
         self,
         connection: Any,
         objects: dict[tuple[str, str], Any],
+        *,
+        owner: str = "",
     ) -> list[dict[str, Any]]:
         existing_names = [name for name in MANAGED_TABLES if (name, "TABLE") in objects]
         metadata: dict[str, tuple[Any, Any]] = {}
@@ -685,6 +706,7 @@ class SystemSchemaManager:
         return [
             {
                 "name": name,
+                **_object_owner_fields(owner, name),
                 "exists": (name, "TABLE") in objects,
                 "estimated_rows": (
                     int(metadata[name][0])
@@ -701,6 +723,8 @@ class SystemSchemaManager:
     def _build_object_metadata(
         objects: dict[tuple[str, str], Any],
         table_metadata: Sequence[dict[str, Any]],
+        *,
+        owner: str = "",
     ) -> list[dict[str, Any]]:
         """既存の table 統計と USER_OBJECTS snapshot を全 manifest object へ展開する。"""
 
@@ -711,6 +735,7 @@ class SystemSchemaManager:
             result.append(
                 {
                     "name": name,
+                    **_object_owner_fields(owner, name),
                     "object_type": object_type,
                     "exists": (name, object_type) in objects,
                     "estimated_rows": (table.get("estimated_rows") if table is not None else None),

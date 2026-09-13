@@ -768,6 +768,14 @@ class DbAdminExecuteData(BaseModel):
     timing: TimingEnvelope
 
 
+class DbObjectNameRef(BaseModel):
+    """表示用の所有者付き object 名（qualified_object_name と同じ規則）。"""
+
+    name: str
+    owner: str = ""
+    qualified_name: str = ""
+
+
 class SampleDataInfo(BaseModel):
     """Optional SQL Assist sample package status."""
 
@@ -776,6 +784,9 @@ class SampleDataInfo(BaseModel):
     profile_id: str = ""
     confirmation: str = "ADMIN_EXECUTE"
     objects: list[str] = Field(default_factory=list)
+    # sample object を作成する schema（current schema）と、objects の所有者付き名前。
+    owner: str = ""
+    object_refs: list[DbObjectNameRef] = Field(default_factory=list)
     imported_objects: list[str] = Field(default_factory=list)
     # 同名だが種類・列構成がサンプル定義と異なり、利用者のものとみなしたオブジェクト。
     conflicting_objects: list[str] = Field(default_factory=list)
@@ -1919,6 +1930,9 @@ class SelectAiFeedbackEntriesData(BaseModel):
     profile_name: str = ""
     index_name: str = ""
     table_name: str = ""
+    # feedback vector table の所有者（current schema）と所有者付きの表名。
+    table_owner: str = ""
+    table_qualified_name: str = ""
     items: list[SelectAiFeedbackEntry] = Field(default_factory=list)
     total: int = 0
     warnings: list[str] = Field(default_factory=list)
@@ -2497,6 +2511,9 @@ class DbAdminImportTabularData(BaseModel):
     """Tabular import execution response."""
 
     table_name: str
+    # 取込先の schema（current schema）と所有者付きの表名。
+    owner: str = ""
+    qualified_name: str = ""
     filename: str = ""
     sheet_name: str = ""
     mode: str = "create"

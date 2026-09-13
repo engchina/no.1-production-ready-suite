@@ -645,6 +645,10 @@ class SqlTableReference(OntologyContract):
     qualified_name: str
     is_cte: bool = False
     source_sql: str = ""
+    # 表示用の所有者付き名前。SQL に owner が無い表は実行時の current schema で補う
+    # （owner / qualified_name は SQL に書かれたままの値を保持する）。
+    resolved_owner: str = ""
+    resolved_qualified_name: str = ""
 
 
 class SqlColumnReference(OntologyContract):

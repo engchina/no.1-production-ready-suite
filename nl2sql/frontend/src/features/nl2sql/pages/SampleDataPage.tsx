@@ -16,6 +16,7 @@ import { formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { useRequestScope } from "@/lib/useRequestScope";
 import { DbAdminExecutionResult, ExecutionConfirmationField } from "../components/DbAdminShared";
+import { DbObjectName } from "../components/DbObjectName";
 import {
   DbManagementLoadingSkeleton,
   DbObjectManagementPanelShell,
@@ -94,23 +95,37 @@ function SampleObjectSummary({ sampleInfo }: { sampleInfo: SampleDataInfo | null
           />
         </div>
       </div>
-      <div className="flex flex-wrap gap-2">
-        {(sampleInfo?.objects ?? []).map((objectName) =>
-          sampleInfo?.conflicting_objects?.includes(objectName) ? (
-            <StatusBadge
+      <ul className="grid gap-1 sm:grid-cols-2" data-testid="sample-data-object-list">
+        {(sampleInfo?.objects ?? []).map((objectName) => {
+          const ref = sampleInfo?.object_refs?.find((item) => item.name === objectName);
+          const conflict = Boolean(sampleInfo?.conflicting_objects?.includes(objectName));
+          const imported = !conflict && Boolean(sampleInfo?.imported_objects.includes(objectName));
+          // 状態は色だけに頼らず、ラベルとアイコン付きの StatusBadge で示す。
+          return (
+            <li
               key={objectName}
-              variant="warning"
-              label={t("dataTools.sample.conflictObject", { name: objectName })}
-            />
-          ) : (
-            <StatusBadge
-              key={objectName}
-              variant={sampleInfo?.imported_objects.includes(objectName) ? "success" : "neutral"}
-              label={objectName}
-            />
-          ),
-        )}
-      </div>
+              className="flex min-w-0 flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-surface px-2 py-1"
+              data-testid="sample-data-object"
+            >
+              <DbObjectName
+                object={{ name: objectName, owner: ref?.owner ?? sampleInfo?.owner, qualified_name: ref?.qualified_name }}
+                size="xs"
+                className="min-w-0"
+              />
+              <StatusBadge
+                variant={conflict ? "warning" : imported ? "success" : "neutral"}
+                label={t(
+                  conflict
+                    ? "dataTools.sample.objectStatus.conflict"
+                    : imported
+                      ? "dataTools.sample.objectStatus.imported"
+                      : "dataTools.sample.objectStatus.notImported"
+                )}
+              />
+            </li>
+          );
+        })}
+      </ul>
     </section>
   );
 }

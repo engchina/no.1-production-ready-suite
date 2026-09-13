@@ -2119,6 +2119,8 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
       profile_name: "NL2SQL_DEFAULT_PROFILE",
       index_name: "NL2SQL_DEFAULT_PROFILE_FEEDBACK_VECINDEX",
       table_name: "NL2SQL_DEFAULT_PROFILE_FEEDBACK_VECINDEX$VECTAB",
+      table_owner: "APP",
+      table_qualified_name: "APP.NL2SQL_DEFAULT_PROFILE_FEEDBACK_VECINDEX$VECTAB",
       items: Array.from({ length: 30 }, (_, index) => {
         const ordinal = String(index + 1).padStart(3, "0");
         const sqlId = `sql-${ordinal}`;
@@ -8428,6 +8430,10 @@ test("feedback management page mirrors Select AI feedback operations", async ({ 
     "Vector Index:"
   );
   await expect(page.getByText("NL2SQL_DEFAULT_PROFILE_FEEDBACK_VECINDEX").first()).toBeVisible();
+  // vector table は所有者付きの修飾名で表示する（#556）。
+  await expect(page.getByTestId("feedback-management-entries-runtime-info")).toContainText(
+    "APP.NL2SQL_DEFAULT_PROFILE_FEEDBACK_VECINDEX$VECTAB"
+  );
   const entriesScrollRegion = page.getByTestId("feedback-management-entries-scroll-region");
   await expect(entriesScrollRegion.getByRole("columnheader")).toHaveText(["CONTENT", "SQL_TEXT"]);
   await expect(page.getByRole("columnheader", { name: "SQL_ID" })).toHaveCount(0);
@@ -11741,6 +11747,11 @@ test("同名の既存オブジェクトと衝突するサンプルは警告し�
   await page.route("**/api/nl2sql/sample-data?dataset=sales", (route) => fulfillJson(route, {
     dataset: "sales", runtime: "oracle", profile_id: "", confirmation: "ADMIN_EXECUTE",
     objects: ["SALES_CUSTOMER", "SALES_ORDER"], imported_objects: ["SALES_CUSTOMER"],
+    owner: "APP",
+    object_refs: [
+      { name: "SALES_CUSTOMER", owner: "APP", qualified_name: "APP.SALES_CUSTOMER" },
+      { name: "SALES_ORDER", owner: "APP", qualified_name: "APP.SALES_ORDER" },
+    ],
     conflicting_objects: ["SALES_ORDER"], legacy_objects: ["SAMPLE_NL2SQL_SALES_ORDER"],
     warnings: [
       "サンプルデータと同名で構成が異なるオブジェクト（SALES_ORDER）が現在のスキーマにあります。",
@@ -11750,8 +11761,10 @@ test("同名の既存オブジェクトと衝突するサンプルは警告し�
   }));
   await page.goto("/sample-data");
   await page.getByRole("combobox", { name: "サンプルデータの種類" }).selectOption("sales");
-  await expect(page.getByText("SALES_ORDER（同名の既存オブジェクト）", { exact: true })).toBeVisible();
-  await expect(page.getByText("SALES_CUSTOMER", { exact: true })).toBeVisible();
+  // 対象オブジェクトは所有者付きの修飾名と、アイコン付きの状態で示す（#556）。
+  const sampleObjects = page.getByTestId("sample-data-object");
+  await expect(sampleObjects.filter({ hasText: "APP.SALES_ORDER" })).toContainText("同名の既存オブジェクト");
+  await expect(sampleObjects.filter({ hasText: "APP.SALES_CUSTOMER" })).toContainText("導入済み");
   await expect(page.getByText(/同名で構成が異なるオブジェクト（SALES_ORDER）/)).toBeVisible();
   await expect(page.getByText(/旧名のサンプルデータ（SAMPLE_NL2SQL_SALES_ORDER）/)).toBeVisible();
   await page.getByRole("tab", { name: "削除実行", exact: true }).click();
@@ -15337,11 +15350,12 @@ test("テーブル取込中は対象とファイルの変更を停止し失敗�
   await expect(consent).toHaveValue("ADMIN_EXECUTE");
   await page.unroute("**/api/nl2sql/db-admin/import-tabular");
   await page.route("**/api/nl2sql/db-admin/import-tabular", (route) => fulfillJson(route, {
-    executed: true, table_name: "IMPORTED_ORDERS", row_count: 1, mode: "create", warnings: [],
+    executed: true, table_name: "IMPORTED_ORDERS", owner: "APP", qualified_name: "APP.IMPORTED_ORDERS", row_count: 1, mode: "create", warnings: [],
     ddl: "CREATE TABLE IMPORTED_ORDERS (ID NUMBER)", insert_sql: "INSERT INTO IMPORTED_ORDERS VALUES (1)", sample_rows: [{ ID: 1 }],
   }));
   await execute.press("Enter");
-  await expect(panel.getByTestId("table-import-result-panel")).toContainText("IMPORTED_ORDERS");
+  // 取込先の表は所有者付きの修飾名で表示する（#556）。
+  await expect(panel.getByTestId("table-import-result-table-name")).toHaveText("APP.IMPORTED_ORDERS");
   expect(api.importTabularPayload).toBeNull();
 });
 

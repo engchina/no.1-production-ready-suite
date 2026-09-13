@@ -834,3 +834,41 @@ test("patch conflict and query-session path helpers are deterministic", () => {
     "/api/nl2sql/query-sessions/guided-1/cancel"
   );
 });
+
+test("SQL 接地の表ラベルは backend が current schema で補った所有者付き名前を使う (#556)", () => {
+  const ontologyGraph: OntologyGraph = {
+    profile_id: "p",
+    // 一致しない表だけの graph（未一致ラベルを確かめる）
+    nodes: [{ id: "other", kind: "table", business_name_ja: "その他", technical_name: "ADMIN.OTHER" }],
+    edges: [],
+  } as unknown as OntologyGraph;
+  const sqlGraph = {
+    dialect: "oracle",
+    statement_type: "SELECT",
+    raw_sql: "SELECT * FROM INVOICES JOIN HR.EMPLOYEES ON 1 = 1",
+    ctes: [],
+    tables: [
+      {
+        owner: "",
+        name: "INVOICES",
+        qualified_name: "INVOICES",
+        resolved_owner: "APP",
+        resolved_qualified_name: "APP.INVOICES",
+      },
+      // 旧 backend（resolved_* なし）は SQL に書かれた名前のまま
+      { owner: "HR", name: "EMPLOYEES", qualified_name: "HR.EMPLOYEES" },
+    ],
+    columns: [],
+    joins: [],
+    filters: [],
+    aggregates: [],
+    groups: [],
+    having: [],
+    orders: [],
+    windows: [],
+  } as unknown as SqlSemanticGraph;
+
+  const result = groundSqlSemanticGraphOnOntologyGraph(sqlGraph, ontologyGraph);
+
+  assert.deepEqual(result.unmatchedTables, ["APP.INVOICES", "HR.EMPLOYEES"]);
+});
