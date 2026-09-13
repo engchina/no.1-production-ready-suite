@@ -1,6 +1,7 @@
 """設定 API のテスト。"""
 
 import asyncio
+import hashlib
 import json
 import stat
 import time
@@ -15,9 +16,12 @@ from typing import Any
 from zipfile import ZipFile
 
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 from pytest import MonkeyPatch
 
 from app.api.routes import settings as settings_routes
+from app.clients import oci_connectivity
 from app.clients.external_parser import ExternalParserClient
 from app.clients.oracle import (
     GenerationSettingsRevisionConflictError,
@@ -2556,7 +2560,7 @@ def test_test_oci_config_reports_missing_private_key_after_save(
         "/api/settings/oci",
         json={
             "user": "ocid1.user.oc1..new",
-            "fingerprint": "12:34:56:78:90:ab:cd:ef",
+            "fingerprint": "12:34:56:78:90:ab:cd:ef:12:34:56:78:90:ab:cd:ef",
             "tenancy": "ocid1.tenancy.oc1..new",
             "region": "ap-osaka-1",
         },
@@ -2585,21 +2589,37 @@ def test_test_oci_config_succeeds_with_private_key_and_permissions(
     monkeypatch.setattr(settings, "oci_config_file", "~/.oci/config")
     monkeypatch.setattr(settings, "oci_config_profile", "DEFAULT")
     _settings_env_file(monkeypatch, tmp_path)
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    public_der = private_key.public_key().public_bytes(
+        serialization.Encoding.DER,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    digest = hashlib.md5(public_der, usedforsecurity=False).hexdigest()
+    fingerprint = ":".join(digest[index : index + 2] for index in range(0, 32, 2))
     client.patch(
         "/api/settings/oci",
         json={
             "user": "ocid1.user.oc1..new",
-            "fingerprint": "12:34:56:78:90:ab:cd:ef",
+            "fingerprint": fingerprint,
             "tenancy": "ocid1.tenancy.oc1..new",
             "region": "ap-osaka-1",
         },
     )
     key_file = tmp_path / ".oci" / "oci_api_key.pem"
-    key_file.write_text(
-        "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----\n",
-        encoding="utf-8",
+    key_file.write_bytes(
+        private_key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
     )
     key_file.chmod(0o600)
+    namespace_calls: list[str] = []
+    monkeypatch.setattr(
+        oci_connectivity,
+        "_get_object_storage_namespace",
+        lambda config: namespace_calls.append(str(config["region"])),
+    )
 
     resp = client.post("/api/settings/oci/config/test")
 
@@ -2609,6 +2629,9 @@ def test_test_oci_config_succeeds_with_private_key_and_permissions(
     assert body["key_file_exists"] is True
     assert body["permission_issues"] == []
     assert body["key_file_mode"] == "0600"
+    assert [stage["status"] for stage in body["stages"]] == ["success"] * 4
+    assert namespace_calls == ["ap-osaka-1"]
+    assert fingerprint not in resp.text
 
 
 def test_test_oci_config_reports_encrypted_private_key_without_pass_phrase(
@@ -2624,7 +2647,7 @@ def test_test_oci_config_reports_encrypted_private_key_without_pass_phrase(
         "/api/settings/oci",
         json={
             "user": "ocid1.user.oc1..new",
-            "fingerprint": "12:34:56:78:90:ab:cd:ef",
+            "fingerprint": "12:34:56:78:90:ab:cd:ef:12:34:56:78:90:ab:cd:ef",
             "tenancy": "ocid1.tenancy.oc1..new",
             "region": "ap-osaka-1",
         },

@@ -1150,9 +1150,21 @@ describe("api.request envelope", () => {
           oci_directory_mode: "0700",
           config_file_mode: "0600",
           key_file_mode: "0600",
-          message: "OCI config と秘密鍵ファイルを確認できました。",
+          message: "OCI へ認証付きで接続できました（Object Storage GetNamespace）。",
+          elapsed_ms: 412,
           checked_at: "2026-06-14T00:00:00Z",
           error_type: null,
+          stages: [
+            { key: "config_format", status: "success", message: "形式を確認しました。", action: null },
+            { key: "key_file", status: "success", message: "鍵を確認しました。", action: null },
+            { key: "region", status: "success", message: "応答がありました。", action: null },
+            { key: "authentication", status: "success", message: "認証しました。", action: null },
+          ],
+          region: "ap-osaka-1",
+          auth_check_operation: "Object Storage GetNamespace",
+          http_status: null,
+          service_code: null,
+          request_id: null,
         },
         error_messages: [],
         warning_messages: [],
@@ -1163,6 +1175,12 @@ describe("api.request envelope", () => {
     const result = await api.testOciConfig();
 
     expect(result.status).toBe("success");
+    expect(result.stages.map((stage) => stage.status)).toEqual([
+      "success",
+      "success",
+      "success",
+      "success",
+    ]);
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/settings/oci/config/test",
       expect.objectContaining({ method: "POST" })

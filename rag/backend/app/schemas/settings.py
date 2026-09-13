@@ -1378,8 +1378,21 @@ class OciObjectStorageSettingsUpdate(BaseModel):
         return value
 
 
+OciConfigTestStageKey = Literal["config_format", "key_file", "region", "authentication"]
+OciConfigTestStageStatus = Literal["success", "failed", "skipped"]
+
+
+class OciConfigTestStage(BaseModel):
+    """OCI 接続テストの 1 段階の結果。秘密の値は含めない。"""
+
+    key: OciConfigTestStageKey
+    status: OciConfigTestStageStatus
+    message: str
+    action: str | None = None
+
+
 class OciConfigTestResult(BaseModel):
-    """保存済み OCI SDK config の検証結果。"""
+    """保存済み OCI 設定の段階的な検証結果(形式・鍵・リージョン到達・認証)。"""
 
     status: OciConfigTestStatus
     profile: str
@@ -1393,8 +1406,15 @@ class OciConfigTestResult(BaseModel):
     config_file_mode: str | None = None
     key_file_mode: str | None = None
     message: str
+    elapsed_ms: int = Field(default=0, ge=0)
     checked_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     error_type: str | None = None
+    stages: list[OciConfigTestStage] = Field(default_factory=list)
+    region: str | None = None
+    auth_check_operation: str | None = None
+    http_status: int | None = None
+    service_code: str | None = None
+    request_id: str | None = None
 
 
 class OciObjectStorageNamespaceRequest(BaseModel):
