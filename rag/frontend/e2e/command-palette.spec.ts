@@ -65,7 +65,7 @@ test("サイドバーの検索トリガーから開ける（375px・タッチ導
   await page.goto("/dashboard");
 
   const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
-  await sidebar.getByRole("button", { name: "コマンドパレットを開く" }).click();
+  await sidebar.getByRole("button", { name: "コマンドパレット" }).click();
 
   const dialog = page.getByRole("dialog", { name: "ページへ移動" });
   await expect(dialog).toBeVisible();
