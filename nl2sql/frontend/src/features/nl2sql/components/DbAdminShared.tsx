@@ -11,6 +11,7 @@ import {
   DataTable,
   EmptyState,
   toast,
+  type DataTableColumn,
   usePagination,
   StatusBadge,
   Tabs,
@@ -52,9 +53,8 @@ import { toastError } from "@/lib/toast";
 import {
   INFORMATION_LIST_ROW_CLASS,
   INFORMATION_LIST_SCROLL_CLASS,
-  INFORMATION_TABLE_FOCUS_CLASS,
   INFORMATION_TABLE_ROW_CLASS,
-  INFORMATION_TABLE_SCROLL_CLASS,
+  INFORMATION_TABLE_VISIBLE_ROWS,
 } from "@/lib/list-density";
 import type { OperationTimestamp } from "@/lib/operationTiming";
 import type {
@@ -367,6 +367,83 @@ export function ExecutionConfirmationField({
         </div>
       )}
     </div>
+  );
+}
+
+type DbObjectColumn = DbAdminObjectDetail["columns"][number];
+
+/**
+ * オブジェクト詳細の列一覧（テーブル管理・ビュー管理・データ管理の詳細で共通）。
+ * スクロール領域は Tab で到達でき、キーボードで縦横にスクロールできる。
+ */
+export function DbObjectColumnsTable({
+  columns,
+  showComment = false,
+  sampleOf,
+}: {
+  columns: DbObjectColumn[];
+  showComment?: boolean;
+  sampleOf: (column: DbObjectColumn) => string;
+}) {
+  const tableColumns: Array<DataTableColumn<DbObjectColumn>> = [
+    {
+      key: "column_name",
+      header: t("dbAdmin.col.physical"),
+      rowHeader: true,
+      headerClassName: "w-[18%]",
+      className: "break-all font-mono",
+      render: (column) => column.column_name,
+    },
+    {
+      key: "logical_name",
+      header: t("dbAdmin.col.logical"),
+      headerClassName: showComment ? "w-[18%]" : "w-[12%]",
+      className: "break-words",
+      render: (column) => (column.logical_name ?? "").trim() || "-",
+    },
+    ...(showComment
+      ? [
+          {
+            key: "comment",
+            header: t("dbAdmin.col.comment"),
+            headerClassName: "w-[20%]",
+            className: "break-words text-fg-muted",
+            render: (column: DbObjectColumn) => (column.comment ?? "").trim() || "-",
+          },
+        ]
+      : []),
+    {
+      key: "data_type",
+      header: t("dbAdmin.col.type"),
+      headerClassName: showComment ? "w-[14%]" : "w-[16%]",
+      className: "break-words",
+      render: (column) => column.data_type,
+    },
+    {
+      key: "nullable",
+      header: t("dbAdmin.col.nullable"),
+      headerClassName: showComment ? "w-[10%]" : "w-[12%]",
+      render: (column) => (column.nullable ? "YES" : "NO"),
+    },
+    {
+      key: "sample",
+      header: t("dbAdmin.col.sample"),
+      className: "break-words font-sans text-fg-muted",
+      render: (column) => sampleOf(column) || "-",
+    },
+  ];
+  return (
+    <DataTable
+      columns={tableColumns}
+      rows={columns}
+      getRowKey={(column) => column.column_name}
+      rowProps={() => ({ className: INFORMATION_TABLE_ROW_CLASS })}
+      tableClassName={showComment ? "w-full min-w-[52rem] table-fixed" : "w-full min-w-[42rem] table-fixed"}
+      scrollAriaLabel={t("dbAdmin.detail.columnsScrollLabel")}
+      scrollTestId="db-admin-detail-columns"
+      stickyHeader
+      visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
+    />
   );
 }
 
@@ -1231,43 +1308,10 @@ export function ObjectDetailPanel({
       ))}
       <div>
         <p className="mb-1 text-sm font-semibold text-fg">{t("dbAdmin.detail.columns")}</p>
-        <div
-          data-testid="db-admin-detail-columns"
-          tabIndex={0}
-          className={`min-w-0 rounded-md border border-border ${INFORMATION_TABLE_SCROLL_CLASS} ${INFORMATION_TABLE_FOCUS_CLASS}`}
-        >
-          <table className="w-full min-w-[42rem] table-fixed divide-y divide-border text-sm">
-            <colgroup>
-              <col className="w-[18%]" />
-              <col className="w-[12%]" />
-              <col className="w-[16%]" />
-              <col className="w-[12%]" />
-              <col />
-            </colgroup>
-            <thead className="sticky top-0 z-10 bg-surface-sunken">
-              <tr className="h-10">
-                <th className="whitespace-nowrap px-3 py-2 text-left">{t("dbAdmin.col.physical")}</th>
-                <th className="whitespace-nowrap px-3 py-2 text-left">{t("dbAdmin.col.logical")}</th>
-                <th className="whitespace-nowrap px-3 py-2 text-left">{t("dbAdmin.col.type")}</th>
-                <th className="whitespace-nowrap px-3 py-2 text-left">{t("dbAdmin.col.nullable")}</th>
-                <th className="whitespace-nowrap px-3 py-2 text-left">{t("dbAdmin.col.sample")}</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border/70">
-              {detail.columns.map((column) => (
-                <tr key={column.column_name} className={INFORMATION_TABLE_ROW_CLASS}>
-                  <td className="px-3 py-2 font-mono text-xs">{column.column_name}</td>
-                  <td className="px-3 py-2">{column.logical_name}</td>
-                  <td className="px-3 py-2">{column.data_type}</td>
-                  <td className="px-3 py-2">{column.nullable ? "YES" : "NO"}</td>
-                  <td className="break-words px-3 py-2 font-sans text-xs text-fg-muted">
-                    {sampleByColumn.get(column.column_name.toUpperCase()) || "-"}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <DbObjectColumnsTable
+          columns={detail.columns}
+          sampleOf={(column) => sampleByColumn.get(column.column_name.toUpperCase()) ?? ""}
+        />
       </div>
       <details className="group/disclosure rounded-md border border-border bg-surface-sunken">
         <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-sm font-semibold text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring [&::-webkit-details-marker]:hidden">

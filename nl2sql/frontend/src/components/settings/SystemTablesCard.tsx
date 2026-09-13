@@ -1,6 +1,7 @@
 import { AlertTriangle, DatabaseZap, RefreshCw, RotateCcw } from "lucide-react";
 import {
   Banner,
+  DataTable,
   toast,
   Button,
   StatusBadge,
@@ -30,11 +31,7 @@ import {
 } from "@/lib/api";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
-import {
-  INFORMATION_TABLE_FOCUS_CLASS,
-  INFORMATION_TABLE_ROW_CLASS,
-  INFORMATION_TABLE_SCROLL_CLASS,
-} from "@/lib/list-density";
+import { INFORMATION_TABLE_ROW_CLASS, INFORMATION_TABLE_VISIBLE_ROWS } from "@/lib/list-density";
 import { useInitializeSystemTables, useSystemTablesStatus } from "@/lib/queries";
 import { systemTableControlsBusy, systemTableOperationMessageKey, systemTableStatusLabelKey } from "@/lib/system-tables";
 
@@ -369,56 +366,71 @@ function SystemTablesDetails({ data }: { data: SystemTablesStatusData }) {
             pending: data.pending_versions.join(", ") || "-",
           })}
         </p>
-        <div
-          role="region"
-          tabIndex={0}
-          aria-label={t("settings.database.systemTables.table.scrollLabel", {
+        <DataTable
+          columns={[
+            {
+              key: "name",
+              header: t("settings.database.systemTables.table.name"),
+              rowHeader: true,
+              className: "whitespace-nowrap font-mono font-medium text-fg",
+              render: (object) => object.name,
+            },
+            {
+              key: "type",
+              header: t("settings.database.systemTables.table.type"),
+              className: "whitespace-nowrap",
+              render: (object) => objectTypeLabel(object.object_type),
+            },
+            {
+              key: "status",
+              header: t("settings.database.systemTables.table.status"),
+              render: (object) => (
+                <StatusBadge
+                  variant={object.exists ? "success" : "neutral"}
+                  label={t(object.exists ? "settings.database.systemTables.table.exists" : "settings.database.systemTables.table.missing")}
+                />
+              ),
+            },
+            {
+              key: "rows",
+              header: t("settings.database.systemTables.table.rows"),
+              align: "right",
+              className: "tabular-nums",
+              render: (object) =>
+                object.object_type !== "TABLE"
+                  ? t("settings.database.systemTables.table.notApplicable")
+                  : object.estimated_rows == null
+                    ? "—"
+                    : formatNumber(object.estimated_rows),
+            },
+            {
+              key: "created",
+              header: t("settings.database.systemTables.table.created"),
+              className: "whitespace-nowrap text-fg-muted",
+              render: (object) => formatDateTime(object.created_at),
+            },
+            {
+              key: "analyzed",
+              header: t("settings.database.systemTables.table.analyzed"),
+              className: "whitespace-nowrap text-fg-muted",
+              render: (object) =>
+                object.object_type === "TABLE"
+                  ? formatDateTime(object.last_analyzed_at)
+                  : t("settings.database.systemTables.table.notApplicable"),
+            },
+          ]}
+          rows={objects}
+          getRowKey={(object) => `${object.object_type}:${object.name}`}
+          rowProps={() => ({ className: INFORMATION_TABLE_ROW_CLASS })}
+          tableClassName="w-full min-w-[60rem]"
+          scrollAriaLabel={t("settings.database.systemTables.table.scrollLabel", {
             existing: data.existing_object_count,
             expected: data.expected_object_count,
           })}
-          data-testid="system-tables-scroll-region"
-          className={`rounded-sm ${INFORMATION_TABLE_SCROLL_CLASS} ${INFORMATION_TABLE_FOCUS_CLASS}`}
-        >
-          <table className="min-w-[840px] w-full border-collapse text-left text-sm">
-            <thead className="sticky top-0 z-10 bg-surface-sunken">
-              <tr className="h-10 border-b border-border text-xs text-fg-muted">
-                <th scope="col" className="px-3 py-2 font-medium">{t("settings.database.systemTables.table.name")}</th>
-                <th scope="col" className="px-3 py-2 font-medium">{t("settings.database.systemTables.table.type")}</th>
-                <th scope="col" className="px-3 py-2 font-medium">{t("settings.database.systemTables.table.status")}</th>
-                <th scope="col" className="px-3 py-2 text-right font-medium">{t("settings.database.systemTables.table.rows")}</th>
-                <th scope="col" className="px-3 py-2 font-medium">{t("settings.database.systemTables.table.created")}</th>
-                <th scope="col" className="px-3 py-2 font-medium">{t("settings.database.systemTables.table.analyzed")}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {objects.map((object) => (
-                <tr key={`${object.object_type}:${object.name}`} className={`${INFORMATION_TABLE_ROW_CLASS} border-b border-border last:border-b-0`}>
-                  <th scope="row" className="whitespace-nowrap px-3 py-2 font-mono text-xs font-medium text-fg">{object.name}</th>
-                  <td className="whitespace-nowrap px-3 py-2 text-fg">{objectTypeLabel(object.object_type)}</td>
-                  <td className="px-3 py-2">
-                    <StatusBadge
-                      variant={object.exists ? "success" : "neutral"}
-                      label={t(object.exists ? "settings.database.systemTables.table.exists" : "settings.database.systemTables.table.missing")}
-                    />
-                  </td>
-                  <td className="px-3 py-2 text-right tabular-nums text-fg">
-                    {object.object_type !== "TABLE"
-                      ? t("settings.database.systemTables.table.notApplicable")
-                      : object.estimated_rows == null
-                        ? "—"
-                        : formatNumber(object.estimated_rows)}
-                  </td>
-                  <td className="whitespace-nowrap px-3 py-2 text-fg-muted">{formatDateTime(object.created_at)}</td>
-                  <td className="whitespace-nowrap px-3 py-2 text-fg-muted">
-                    {object.object_type === "TABLE"
-                      ? formatDateTime(object.last_analyzed_at)
-                      : t("settings.database.systemTables.table.notApplicable")}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+          scrollTestId="system-tables-scroll-region"
+          stickyHeader
+          visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
+        />
       </div>
     </details>
   );

@@ -4,6 +4,7 @@ import {
   EmptyState,
   FormStatus,
   toast,
+  DataTable,
   type DataTableColumn,
   type DataTableSort,
   StatusBadge,
@@ -35,7 +36,6 @@ import {
 
 
 import { FormActionBar, entityActionToFormAction } from "@/components/FormActionBar";
-import { MasterDetailDataTable } from "@/components/MasterDetailDataTable";
 import { ObjectActionBar, type EntityAction } from "@/components/ObjectActions";
 import { ProcessingIndicator } from "@/components/ProcessingState";
 import { ErrorState } from "@/components/StateViews";
@@ -49,9 +49,8 @@ import {
 import { copyTextToClipboard } from "@/lib/clipboard";
 import { t } from "@/lib/i18n";
 import {
-  INFORMATION_TABLE_FOCUS_CLASS,
   INFORMATION_TABLE_ROW_CLASS,
-  INFORMATION_TABLE_SCROLL_CLASS,
+  INFORMATION_TABLE_VISIBLE_ROWS,
 } from "@/lib/list-density";
 import { useUnsavedChangesGuard } from "@/lib/useUnsavedChangesGuard";
 import { useRequestScope } from "@/lib/useRequestScope";
@@ -676,7 +675,7 @@ export function SecurityUsersPage() {
       key: "user",
       header: t("security.users.column.user"),
       sortable: true,
-      className: "min-w-48",
+      className: "min-w-48 align-top",
       render: (user) => {
         const selected = visibleSelectedId === user.user_uuid;
         return (
@@ -704,14 +703,14 @@ export function SecurityUsersPage() {
       key: "roles",
       header: t("security.users.roles"),
       sortable: true,
-      className: "min-w-48",
+      className: "min-w-48 align-top",
       render: (user) => roleSummary(user),
     },
     {
       key: "status",
       header: t("security.common.status"),
       sortable: true,
-      className: "min-w-28",
+      className: "min-w-28 align-top",
       render: (user) => <UserStatusBadges user={user} />,
     },
   ];
@@ -797,29 +796,28 @@ export function SecurityUsersPage() {
                     activityIcon="none"
                   />
                 ) : null}
-                <MasterDetailDataTable
+                <DataTable
                   dense
                   loading={loading}
                   rows={filteredUsers}
                   sort={sort}
                   onSortChange={(next) => { if (!operationBusy) setSort(next); }}
                   selectedRowKey={visibleSelectedId}
-                  onRowSelect={(user) => {
+                  onRowClick={(user) => {
                     if (operationBusy) return;
                     selectedUserManualSelection.current = true;
                     setSelectedId(user.user_uuid);
                   }}
                   getRowKey={(user) => user.user_uuid}
-                  getRowAriaLabel={(user) => t("security.users.showUser", { name: user.display_name })}
+                  rowProps={(user) => ({ className: INFORMATION_TABLE_ROW_CLASS, "aria-label": t("security.users.showUser", { name: user.display_name }) })}
                   ariaLabel={t("security.users.list")}
                   testId="security-users-grid"
                   scrollAriaLabel={t("security.common.listScrollLabel", {
                     list: t("security.users.list"),
                   })}
                   scrollTestId="security-users-scroll-region"
-                  scrollClassName={`${INFORMATION_TABLE_SCROLL_CLASS} ${INFORMATION_TABLE_FOCUS_CLASS}`}
-                  className="[&_thead]:sticky [&_thead]:top-0 [&_thead]:z-10 [&_thead_tr]:h-10"
-                  rowClassName={INFORMATION_TABLE_ROW_CLASS}
+                  stickyHeader
+                  visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
                   empty={<EmptyState title={search ? t("security.users.noResultsTitle") : t("security.common.empty")} hint={search ? t("security.users.noResultsHint") : undefined} />}
                   columns={userColumns}
                 />

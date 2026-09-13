@@ -4,6 +4,7 @@ import { BookOpen, Download, RefreshCw } from "lucide-react";
 
 import {
   Button,
+  DataTable,
   EmptyState,
   toast,
   usePagination,
@@ -331,56 +332,38 @@ function GlobalPreviewTable({
 
   return (
     <div className="grid gap-2" data-testid="glossary-terms-preview">
-      <div className="overflow-hidden rounded-md border border-border bg-surface">
-        <div className="overflow-x-auto">
-          <table className="w-full table-fixed divide-y divide-border text-left text-sm">
-            <colgroup>
-              <col className="w-12" />
-              <col className="w-32 sm:w-56" />
-              <col />
-            </colgroup>
-            <thead className="bg-surface-sunken text-xs font-semibold uppercase text-fg-muted">
-              <tr>
-                <th scope="col" className="px-3 py-2 text-right">
-                  {t("glossary.preview.rowNumber")}
-                </th>
-                <th scope="col" className="px-3 py-2">
-                  TERM
-                </th>
-                <th scope="col" className="px-3 py-2">
-                  DEFINITION
-                </th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border/70 text-fg">
-              {visibleRows.map((row, index) => {
-                const absoluteIndex = start + index;
-                return (
-                  <tr key={`${row.term}-${absoluteIndex}`}>
-                    <td
-                      className="px-3 py-2 text-right text-xs tabular-nums text-fg-muted"
-                      data-testid="glossary-terms-row-number"
-                    >
-                      {absoluteIndex + 1}
-                    </td>
-                    <td
-                      className="px-3 py-2 align-middle font-sans text-xs text-fg [overflow-wrap:anywhere]"
-                      data-testid="glossary-term-preview-cell"
-                    >
-                      {row.term}
-                    </td>
-                    <td className="min-w-0 px-3 py-2 align-top">
-                      <div className={GLOBAL_PREVIEW_TEXT_CLASS} data-testid="glossary-definition-preview-text">
-                        {row.definition}
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </div>
+      <DataTable
+        columns={[
+          {
+            key: "number",
+            header: t("glossary.preview.rowNumber"),
+            align: "right",
+            headerClassName: "w-12",
+            className: "tabular-nums text-fg-muted",
+            render: (_, index) => <span data-testid="glossary-terms-row-number">{start + index + 1}</span>,
+          },
+          {
+            key: "term",
+            header: "TERM",
+            headerClassName: "w-32 sm:w-56",
+            className: "align-middle font-sans [overflow-wrap:anywhere]",
+            render: (row) => <span data-testid="glossary-term-preview-cell">{row.term}</span>,
+          },
+          {
+            key: "definition",
+            header: "DEFINITION",
+            className: "min-w-0 align-top text-sm",
+            render: (row) => (
+              <div className={GLOBAL_PREVIEW_TEXT_CLASS} data-testid="glossary-definition-preview-text">
+                {row.definition}
+              </div>
+            ),
+          },
+        ]}
+        rows={visibleRows}
+        getRowKey={(row, index) => `${row.term}-${start + index}`}
+        tableClassName="w-full table-fixed"
+      />
       <Pagination
         page={currentPage}
         totalPages={totalPages}

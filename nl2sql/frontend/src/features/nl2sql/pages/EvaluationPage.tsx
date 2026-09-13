@@ -1,6 +1,7 @@
 import {
   Button,
   Banner,
+  DataTable,
   EmptyState,
   toast,
   StatusBadge,
@@ -10,7 +11,7 @@ import {
   PageBody,
   useConfirm,
 } from "@engchina/production-ready-ui";
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   BarChart3,
@@ -1156,69 +1157,70 @@ function EngineSummaryCard({ summary }: { summary: QualityEvaluationEngineSummar
 function ResultTable({ results }: { results: QualityEvaluationResult[] }) {
   return (
     <>
-      <div
-        className="hidden max-h-[30.5rem] overflow-auto rounded-lg border border-border focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring md:block"
-        role="region"
-        aria-label={t("qualityEvaluation.details.scrollRegion")}
-        tabIndex={0}
-        data-testid="quality-evaluation-results-table"
-      >
-        <table className="w-full min-w-[74rem] border-collapse text-left text-sm">
-          <thead className="sticky top-0 z-10 bg-surface-sunken text-xs text-fg-muted">
-            <tr>
-              <th className="px-3 py-3 font-medium">{t("qualityEvaluation.details.case")}</th>
-              <th className="px-3 py-3 font-medium">{t("qualityEvaluation.details.engine")}</th>
-              <th className="px-3 py-3 font-medium">{t("qualityEvaluation.details.expectedSql")}</th>
-              <th className="px-3 py-3 font-medium">{t("qualityEvaluation.details.generatedSql")}</th>
-              <th className="px-3 py-3 font-medium">{t("qualityEvaluation.details.judgement")}</th>
-              <th className="px-3 py-3 font-medium">{t("qualityEvaluation.details.elapsed")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {results.map((result) => {
-              const hasAnalysis = hasResultAnalysis(result);
-              return (
-                <Fragment key={result.result_id}>
-                  <tr className="border-t border-border align-top first:border-t-0">
-                    <td className="max-w-56 px-3 py-3">
-                      <div className="font-semibold text-fg">{result.case_id}</div>
-                      <QuestionText
-                        value={result.question}
-                        variant="compact"
-                        maxLines={2}
-                        className="mt-1 text-fg-muted"
-                      />
-                    </td>
-                    <td className="px-3 py-3">
-                      <div className="font-medium text-fg">{engineLabel(result.engine)}</div>
-                      <div className="mt-1 text-xs text-fg-muted">#{result.repetition_no}</div>
-                    </td>
-                    <td className="max-w-72 px-3 py-3">
-                      <SqlBlock sql={result.expected_sql} />
-                    </td>
-                    <td className="max-w-72 px-3 py-3">
-                      <SqlBlock sql={result.generated_sql} error={result.generation_error} />
-                    </td>
-                    <td className="max-w-64 px-3 py-3">
-                      <ResultJudgement result={result} showAnalysis={false} />
-                    </td>
-                    <td className="whitespace-nowrap px-3 py-3 text-fg-muted">
-                      {result.total_elapsed_ms} ms
-                    </td>
-                  </tr>
-                  {hasAnalysis ? (
-                    <tr className="border-t border-border/60 bg-surface-hover">
-                      <td colSpan={6} className="px-3 pb-4 pt-2">
-                        <ResultAnalysisDetails result={result} />
-                      </td>
-                    </tr>
-                  ) : null}
-                </Fragment>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+      <DataTable
+        columns={[
+          {
+            key: "case",
+            header: t("qualityEvaluation.details.case"),
+            className: "max-w-56 py-3 align-top",
+            render: (result) => (
+              <>
+                <div className="font-semibold text-fg">{result.case_id}</div>
+                <QuestionText value={result.question} variant="compact" maxLines={2} className="mt-1 text-fg-muted" />
+              </>
+            ),
+          },
+          {
+            key: "engine",
+            header: t("qualityEvaluation.details.engine"),
+            className: "py-3 align-top",
+            render: (result) => (
+              <>
+                <div className="font-medium text-fg">{engineLabel(result.engine)}</div>
+                <div className="mt-1 text-fg-muted">#{result.repetition_no}</div>
+              </>
+            ),
+          },
+          {
+            key: "expectedSql",
+            header: t("qualityEvaluation.details.expectedSql"),
+            className: "max-w-72 py-3 align-top",
+            render: (result) => <SqlBlock sql={result.expected_sql} />,
+          },
+          {
+            key: "generatedSql",
+            header: t("qualityEvaluation.details.generatedSql"),
+            className: "max-w-72 py-3 align-top",
+            render: (result) => <SqlBlock sql={result.generated_sql} error={result.generation_error} />,
+          },
+          {
+            key: "judgement",
+            header: t("qualityEvaluation.details.judgement"),
+            className: "max-w-64 py-3 align-top",
+            render: (result) => <ResultJudgement result={result} showAnalysis={false} />,
+          },
+          {
+            key: "elapsed",
+            header: t("qualityEvaluation.details.elapsed"),
+            className: "whitespace-nowrap py-3 align-top text-fg-muted",
+            render: (result) => `${result.total_elapsed_ms} ms`,
+          },
+        ]}
+        rows={results}
+        getRowKey={(result) => result.result_id}
+        renderRowDetail={(result) =>
+          hasResultAnalysis(result) ? (
+            <div className="pb-2">
+              <ResultAnalysisDetails result={result} />
+            </div>
+          ) : null
+        }
+        tableClassName="w-full min-w-[74rem]"
+        className="hidden max-h-[30.5rem] rounded-lg md:block"
+        scrollAriaLabel={t("qualityEvaluation.details.scrollRegion")}
+        scrollTestId="quality-evaluation-results-table"
+        stickyHeader
+      />
       <div
         className="grid max-h-[37.5rem] min-w-0 gap-3 overflow-auto pr-1 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring md:hidden"
         role="region"

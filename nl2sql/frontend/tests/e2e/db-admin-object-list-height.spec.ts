@@ -1,5 +1,6 @@
 import { expect, test, type Locator, type Page, type Route, type TestInfo } from "@playwright/test";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
+import { measuredVisibleRowsHeight } from "./_helpers/data-table";
 import { expectCompactSortHeaders } from "./_helpers/sort-header";
 
 test.beforeEach(async ({ page }) => {
@@ -144,7 +145,7 @@ async function expectThreeFieldFilterLayout(
 }
 
 async function pickerRowNames(list: Locator) {
-  return list.getByRole("listitem").evaluateAll((rows) =>
+  return list.locator("tbody tr").evaluateAll((rows) =>
     rows.map((row) => row.querySelector("button span")?.textContent?.trim() ?? "")
   );
 }
@@ -861,7 +862,7 @@ async function expectObjectListRowLimit(
   list: Locator,
   rowSelector: string,
   visibleRows: number,
-  options: { expectedHeightRem?: number; headerHeightRem?: number; rowHeightRem?: number } = {}
+  options: { expectedHeightRem?: number } = {}
 ) {
   const fit = await list.evaluate(
     (node, { rowSelector: selector, visibleRows: limit }) => {
@@ -890,13 +891,10 @@ async function expectObjectListRowLimit(
     { rowSelector, visibleRows }
   );
 
-  // 44px のモバイル並べ替えボタン + padding/border 3px を含め、本文の可視行数は維持する。
-  const headerHeight = options.headerHeightRem != null
-    ? options.headerHeightRem * fit.rootFontSize
-    : fit.touchTarget ? 47 : 35;
+  // 共有 DataTable は表頭と先頭 N 行の実測で高さを決める（#530）。表以外の一覧は rem の期待値を渡す。
   const expectedMaxHeight = options.expectedHeightRem != null
     ? options.expectedHeightRem * fit.rootFontSize
-    : headerHeight + fit.rootFontSize * (options.rowHeightRem ?? 3.5) * visibleRows;
+    : await measuredVisibleRowsHeight(list, rowSelector, visibleRows);
   expect(fit.maxHeight).toBeGreaterThanOrEqual(expectedMaxHeight - 2);
   expect(fit.maxHeight).toBeLessThanOrEqual(expectedMaxHeight + 2);
   expect(Math.abs(fit.listHeight - fit.maxHeight)).toBeLessThanOrEqual(2);
@@ -1050,7 +1048,7 @@ test("データ管理の対象一覧はコメントを名前の下に表示し�
     await expectNoStatusIcon(controls.locator("[data-status-variant]").filter({ hasText: label }));
   }
   const previewList = page.getByTestId("data-preview-object-list");
-  await expect(previewList.getByRole("listitem")).toHaveCount(4);
+  await expect(previewList.locator("tbody tr")).toHaveCount(4);
   for (const [name, comment] of [
     ["DENPYO_ACTIVITY_LOG", shortComment],
     ["LONG_COMMENT_TABLE", longComment],
@@ -1072,9 +1070,9 @@ test("データ管理の対象一覧はコメントを名前の下に表示し�
     expect(layout.height).toBeLessThanOrEqual(layout.lineHeight * 2 + 1);
   }
   for (const kind of ["テーブル", "ビュー"]) {
-    await expectNoStatusIcon(previewList.locator("[data-status-variant]").filter({ hasText: kind }).first());
+    await expectNoStatusIcon(previewList.locator("[data-status-variant]").filter({ hasText: kind, visible: true }).first());
   }
-  await expectRowCellsDoNotOverlap(previewList.getByRole("listitem"));
+  await expectRowCellsDoNotOverlap(previewList.locator("tbody tr"));
   // 識別子は語の途中ではなく . / _ の位置で折り返す（1 行に収まる場合は折り返さない）。
   const nameBreaks = await previewList.getByRole("button", { name: "ADMIN.DENPYO_ACTIVITY_LOG を選択", exact: true })
     .locator(":scope > span").first()
@@ -1088,10 +1086,10 @@ test("データ管理の対象一覧はコメントを名前の下に表示し�
 
   await page.getByRole("tab", { name: "Excel/CSV アップロード(既存テーブル)" }).click();
   const csvList = page.getByTestId("data-csv-table-list");
-  await expect(csvList.getByRole("listitem")).toHaveCount(3);
+  await expect(csvList.locator("tbody tr")).toHaveCount(3);
   await expect(csvList.getByRole("button", { name: "ADMIN.DENPYO_ACTIVITY_LOG を選択", exact: true })).toHaveAccessibleDescription(shortComment);
   await expect(csvList.getByRole("button", { name: "ADMIN.EMPTY_COMMENT を選択", exact: true })).toHaveAccessibleDescription("-");
-  await expectRowCellsDoNotOverlap(csvList.getByRole("listitem"));
+  await expectRowCellsDoNotOverlap(csvList.locator("tbody tr"));
   await csvList.screenshot({ path: testInfo.outputPath("data-csv-name-comments.png") });
   await expectNoHorizontalScroll(page);
 });
@@ -1520,7 +1518,10 @@ test("データ管理の対象ピッカーはヘッダーで並び替えでき�
   await expectNoHorizontalScroll(page);
 
   if (testInfo.project.name === "mobile-375") {
-    await expect(previewList.getByRole("columnheader")).toHaveCount(0);
+    // md 未満は対象名の列だけを表示し、種類・行数・所有者は名前の下に補足として並べる（横スクロールを出さない）。
+    await expect(previewList.getByRole("columnheader").filter({ visible: true })).toHaveText([/対象名/]);
+    await expect(previewList.getByTestId("db-object-picker-row-meta").first()).toBeVisible();
+    await expectCompactSortHeaders(previewList);
     return;
   }
 
@@ -1531,7 +1532,7 @@ test("データ管理の対象ピッカーはヘッダーで並び替えでき�
     "APP.M_EMPTY",
     "BILLING.Z_PAYMENTS",
   ]);
-  await expect(previewList.getByRole("listitem").first()).toHaveAttribute("aria-current", "true");
+  await expect(previewList.locator("tbody tr").first()).toHaveAttribute("aria-current", "true");
 
   await previewList.getByRole("button", { name: /対象名/ }).click();
   await expect.poll(() => pickerRowNames(previewList)).toEqual([
@@ -1540,7 +1541,7 @@ test("データ管理の対象ピッカーはヘッダーで並び替えでき�
     "APP.B_AUDIT",
     "APP.A_VIEW",
   ]);
-  await expect(previewList.getByRole("listitem").first()).toHaveAttribute("aria-current", "true");
+  await expect(previewList.locator("tbody tr").first()).toHaveAttribute("aria-current", "true");
 
   await previewList.getByRole("button", { name: /種類/ }).click();
   await expect.poll(() => pickerRowNames(previewList)).toEqual([
@@ -1574,7 +1575,7 @@ test("データ管理の対象ピッカーはヘッダーで並び替えでき�
     "APP.M_EMPTY",
     "BILLING.Z_PAYMENTS",
   ]);
-  await expect(csvList.getByRole("listitem").first()).toHaveAttribute("aria-current", "true");
+  await expect(csvList.locator("tbody tr").first()).toHaveAttribute("aria-current", "true");
 
   await csvList.getByRole("button", { name: /対象名/ }).click();
   await expect.poll(() => pickerRowNames(csvList)).toEqual([
@@ -1582,7 +1583,7 @@ test("データ管理の対象ピッカーはヘッダーで並び替えでき�
     "APP.M_EMPTY",
     "APP.B_AUDIT",
   ]);
-  await expect(csvList.getByRole("listitem").first()).toHaveAttribute("aria-current", "true");
+  await expect(csvList.locator("tbody tr").first()).toHaveAttribute("aria-current", "true");
 
   await csvList.getByRole("button", { name: /行数/ }).click();
   await expect.poll(() => pickerRowNames(csvList)).toEqual([

@@ -16,8 +16,6 @@
  */
 :root {
   --font-mono: "Google Sans Code", "Noto Sans JP", "Roboto", monospace;
-  /* 並べ替えボタン（sm）を持つ表ヘッダーの高さ = ボタン + padding/border 3px。タッチ端末では共有トークンが 44px になる。 */
-  --button-table-header: calc(var(--button-height-sm) + 3px);
 }
 
 /* サイドバー内のローカル DEBUG 状態（暗い面のスコープ内で warning トークンを使う）。 */

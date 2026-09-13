@@ -2953,6 +2953,7 @@ const nl2sqlJa = {
   "dbAdmin.detail.emptyTitle": "オブジェクトが未選択です",
   "dbAdmin.detail.emptyHint": "一覧から選択すると列情報と CREATE SQL が表示されます。",
   "dbAdmin.detail.columns": "列情報",
+  "dbAdmin.detail.columnsScrollLabel": "列情報。必要に応じて縦方向または横方向にスクロールできます。",
   "dbAdmin.detail.columnCount": "{count} 列",
   "dbAdmin.detail.ddl": "CREATE SQL",
   "dbAdmin.detail.ddlHint": "必要な時だけ開く",

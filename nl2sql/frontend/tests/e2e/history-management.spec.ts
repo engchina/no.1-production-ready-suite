@@ -1,7 +1,6 @@
 import { expectLocalUiFonts } from "./_helpers/local-fonts";
 import { expect, test, type Locator, type Page, type Route } from "@playwright/test";
 import { mockDatabaseGateReady, systemAdminMe } from "./_helpers/database-gate";
-import { expectCompactSortHeaders, expectPlainSortHeader } from "./_helpers/sort-header";
 
 test.beforeEach(async ({ page }) => mockDatabaseGateReady(page));
 
@@ -474,22 +473,18 @@ test("実行履歴は管理一覧で検索・絞り込み・並べ替え・詳�
   expect(await hasDocumentHorizontalScroll(page)).toBe(false);
 });
 
-test("履歴の並べ替え見出しは従来の小さい文字とキーボード操作を維持する", async ({ page }, testInfo) => {
+test("履歴の並べ替えは共有 Button のトグルでキーボード操作できる", async ({ page }, testInfo) => {
   await mockHistory(page);
   await page.goto("/history");
   await expect(historyRows(page)).toHaveCount(3);
 
   const sortGroup = page.getByRole("group", { name: "履歴一覧の並べ替え" });
-  await expectCompactSortHeaders(sortGroup);
-  const questionSort = sortGroup.getByRole("button", { name: "質問" });
-  const executionSort = sortGroup.getByRole("button", { name: "実行情報" });
-  const rootFontSize = await page.evaluate(() =>
-    Number.parseFloat(getComputedStyle(document.documentElement).fontSize)
-  );
+  const questionSort = sortGroup.getByRole("button", { name: /^質問: / });
+  const executionSort = sortGroup.getByRole("button", { name: /^実行情報: / });
+  // 履歴はカード一覧で表ではないため、並べ替えは共有 Button（ghost / sm）のトグルにする（#530）。
   for (const button of [questionSort, executionSort]) {
-    await expect(button).toHaveCSS("font-size", `${rootFontSize * 0.75}px`);
-    await expect(button).toHaveCSS("font-weight", "600");
     await expect(button).toHaveCSS("height", testInfo.project.name === "mobile-375" ? "44px" : "32px");
+    expect(await button.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true);
   }
 
   await questionSort.focus();
@@ -498,18 +493,16 @@ test("履歴の並べ替え見出しは従来の小さい文字とキーボー�
   await expect(questionSort).toHaveAttribute("aria-pressed", "true");
   await page.keyboard.press("Tab");
   await expect(executionSort).toBeFocused();
-  await expect(executionSort.locator("span")).toHaveCSS("text-decoration-line", "underline");
+  await expect(executionSort).toHaveCSS("outline-style", "solid");
   await executionSort.press("Space");
   await expect(executionSort).toHaveAttribute("aria-pressed", "true");
   await expect(questionSort).toHaveAttribute("aria-pressed", "false");
-  await expectPlainSortHeader(executionSort);
   await expect(historyRows(page).first()).toContainText("監査ログを削除");
   await expectContained(questionSort, sortGroup);
   await expectContained(executionSort, sortGroup);
   expect(await hasDocumentHorizontalScroll(page)).toBe(false);
   await questionSort.click();
   await expect(questionSort).toHaveAttribute("aria-pressed", "true");
-  await expectPlainSortHeader(questionSort);
   await sortGroup.screenshot({ path: testInfo.outputPath("history-sort-font.png") });
 });
 

@@ -4,6 +4,7 @@ import {
   Button,
   buttonVariants,
   Banner,
+  DataTable,
   EmptyState,
   FormStatus,
   SelectField,
@@ -49,7 +50,7 @@ import { t } from "@/lib/i18n";
 import { toastError } from "@/lib/toast";
 import {
   INFORMATION_TABLE_ROW_CLASS,
-  INFORMATION_TABLE_SCROLL_CLASS,
+  INFORMATION_TABLE_VISIBLE_ROWS,
 } from "@/lib/list-density";
 import { APP_ROUTES } from "@/lib/routes";
 import { XLSX_TEMPLATE_FILE_FORMATS } from "@/lib/tabular-file-formats";
@@ -880,118 +881,132 @@ function TrainingDataTable({
 
   return (
     <div className="grid gap-2">
-      <div className="overflow-hidden rounded-md border border-border bg-surface">
-        <div className="max-h-[42rem] overflow-auto">
-          <table className="w-full min-w-[62rem] table-fixed divide-y divide-border text-left text-sm" data-testid="qcm-training-data-table">
-            <colgroup>
-              <col className="w-[14rem]" />
-              <col />
-              <col className="w-[10rem]" />
-              <col className="w-[11rem]" />
-              <col className="w-[12rem]" />
-            </colgroup>
-            <thead className="sticky top-0 z-10 bg-surface-sunken text-xs text-fg-muted">
-              <tr>
-                <th className="px-3 py-2">{t("qcm.training.profile")}</th>
-                <th className="px-3 py-2">{t("qcm.training.question")}</th>
-                <th className="px-3 py-2">{t("qcm.training.category")}</th>
-                <th className="px-3 py-2">{t("qcm.training.source")}</th>
-                <th className="px-3 py-2">{t("qcm.training.actions")}</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border/70">
-              {visibleExamples.map((example) => {
-                const editing = editingExampleId === example.id;
-                const rowActions: EntityAction[] = editing
-                  ? []
-                  : [
-                      {
-                        id: "edit",
-                        label: t("qcm.training.edit"),
-                        icon: Pencil,
-                        onSelect: () => onStartEdit(example),
-                      },
-                      {
-                        id: "delete",
-                        label: t("qcm.training.delete"),
-                        icon: Trash2,
-                        tone: "danger",
-                        loading: loading === `training-delete-${example.id}`,
-                        onSelect: () => onDelete(example),
-                      },
-                    ];
-                return (
-                  <tr key={example.id} className="hover:bg-surface-hover">
-                    <td className="break-words px-3 py-2 align-top text-xs font-semibold text-fg">
-                      {editing ? (
-                        <select
-                          aria-label={t("qcm.training.editProfile")}
-                          value={editingProfileId}
-                          onChange={(event) => onEditProfileChange(event.currentTarget.value)}
-                          className={controlClass}
-                        >
-                          {profiles.filter((profile) => !profile.archived).map((profile) => (
-                            <option key={profile.id} value={profile.id}>{profileDisplayLabel(profile)}</option>
-                          ))}
-                        </select>
-                      ) : (
-                        <span className="block">{profileRecordDisplayLabel(example)}</span>
-                      )}
-                    </td>
-                    <td className="break-words px-3 py-2 align-top leading-6 text-fg">
-                      {editing ? (
-                        <textarea
-                          aria-label={t("qcm.training.editQuestion")}
-                          value={editingText}
-                          onChange={(event) => onEditTextChange(event.currentTarget.value)}
-                          rows={3}
-                          className={`${controlClass} min-h-24`}
-                        />
-                      ) : example.text}
-                    </td>
-                    <td className="break-words px-3 py-2 align-top text-xs text-fg">{example.category}</td>
-                    <td className="break-words px-3 py-2 align-top text-xs text-fg-muted">
-                      <StatusBadge
-                        icon={false}
-                        variant={example.source_type === "feedback" ? "info" : "neutral"}
-                        label={example.source_type === "feedback" ? t("qcm.training.sourceFeedback") : t("qcm.training.sourceFile")}
-                      />
-                      <span className="mt-1 block font-sans">{example.source || "-"}</span>
-                    </td>
-                    <td className="px-3 py-2 align-top">
-                      <div className="flex flex-wrap justify-end gap-2">
-                        {editing ? (
-                          <>
-                            <Button
-                              type="button"
-                              size="sm"
-                              loading={loading === `training-save-${example.id}`}
-                              disabled={!editingText.trim() || !editingProfileId}
-                              onClick={onSaveEdit}
-                            >
-                              {t("qcm.training.save")}
-                            </Button>
-                            <Button type="button" variant="secondary" size="sm" onClick={onCancelEdit}>
-                              {t("qcm.training.cancel")}
-                            </Button>
-                          </>
-                        ) : (
-                          <RowActionMenu
-                            actions={rowActions}
-                            ariaLabel={t("qcm.training.rowActions", { text: example.text })}
-                            loading={loading === `training-delete-${example.id}`}
-                            testId={`qcm-training-row-actions-${example.id}`}
-                          />
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </div>
+      <DataTable
+        columns={[
+          {
+            key: "profile",
+            header: t("qcm.training.profile"),
+            headerClassName: "w-[14rem]",
+            className: "break-words align-top font-semibold",
+            render: (example) =>
+              editingExampleId === example.id ? (
+                <select
+                  aria-label={t("qcm.training.editProfile")}
+                  value={editingProfileId}
+                  onChange={(event) => onEditProfileChange(event.currentTarget.value)}
+                  className={controlClass}
+                >
+                  {profiles.filter((profile) => !profile.archived).map((profile) => (
+                    <option key={profile.id} value={profile.id}>{profileDisplayLabel(profile)}</option>
+                  ))}
+                </select>
+              ) : (
+                <span className="block">{profileRecordDisplayLabel(example)}</span>
+              ),
+          },
+          {
+            key: "question",
+            header: t("qcm.training.question"),
+            className: "break-words align-top text-sm leading-6",
+            render: (example) =>
+              editingExampleId === example.id ? (
+                <textarea
+                  aria-label={t("qcm.training.editQuestion")}
+                  value={editingText}
+                  onChange={(event) => onEditTextChange(event.currentTarget.value)}
+                  rows={3}
+                  className={`${controlClass} min-h-24`}
+                />
+              ) : (
+                example.text
+              ),
+          },
+          {
+            key: "category",
+            header: t("qcm.training.category"),
+            headerClassName: "w-[10rem]",
+            className: "break-words align-top",
+            render: (example) => example.category,
+          },
+          {
+            key: "source",
+            header: t("qcm.training.source"),
+            headerClassName: "w-[11rem]",
+            className: "break-words align-top text-fg-muted",
+            render: (example) => (
+              <>
+                <StatusBadge
+                  icon={false}
+                  variant={example.source_type === "feedback" ? "info" : "neutral"}
+                  label={example.source_type === "feedback" ? t("qcm.training.sourceFeedback") : t("qcm.training.sourceFile")}
+                />
+                <span className="mt-1 block font-sans">{example.source || "-"}</span>
+              </>
+            ),
+          },
+          {
+            key: "actions",
+            header: t("qcm.training.actions"),
+            headerClassName: "w-[12rem]",
+            className: "align-top",
+            render: (example) => {
+              const editing = editingExampleId === example.id;
+              const rowActions: EntityAction[] = editing
+                ? []
+                : [
+                    {
+                      id: "edit",
+                      label: t("qcm.training.edit"),
+                      icon: Pencil,
+                      onSelect: () => onStartEdit(example),
+                    },
+                    {
+                      id: "delete",
+                      label: t("qcm.training.delete"),
+                      icon: Trash2,
+                      tone: "danger",
+                      loading: loading === `training-delete-${example.id}`,
+                      onSelect: () => onDelete(example),
+                    },
+                  ];
+              return (
+                <div className="flex flex-wrap justify-end gap-2">
+                  {editing ? (
+                    <>
+                      <Button
+                        type="button"
+                        size="sm"
+                        loading={loading === `training-save-${example.id}`}
+                        disabled={!editingText.trim() || !editingProfileId}
+                        onClick={onSaveEdit}
+                      >
+                        {t("qcm.training.save")}
+                      </Button>
+                      <Button type="button" variant="secondary" size="sm" onClick={onCancelEdit}>
+                        {t("qcm.training.cancel")}
+                      </Button>
+                    </>
+                  ) : (
+                    <RowActionMenu
+                      actions={rowActions}
+                      ariaLabel={t("qcm.training.rowActions", { text: example.text })}
+                      loading={loading === `training-delete-${example.id}`}
+                      testId={`qcm-training-row-actions-${example.id}`}
+                    />
+                  )}
+                </div>
+              );
+            },
+          },
+        ]}
+        rows={visibleExamples}
+        getRowKey={(example) => example.id}
+        rowProps={() => ({ className: "hover:bg-surface-hover" })}
+        testId="qcm-training-data-table"
+        tableClassName="w-full min-w-[62rem] table-fixed"
+        className="max-h-[42rem]"
+        stickyHeader
+      />
       <Pagination
         page={currentPage}
         totalPages={totalPages}
@@ -1130,36 +1145,37 @@ function ModelTestPanel({
             </div>
             <CompactFact label={t("qcm.test.predictedCategory")} value={prediction.predicted_category || "-"} />
             {prediction.candidates.length > 0 && (
-              <div
-                className={`rounded-md border border-border bg-surface ${INFORMATION_TABLE_SCROLL_CLASS}`}
-                data-testid="qcm-test-candidates-scroll-region"
-              >
-                <table className="w-full min-w-[28rem] table-fixed divide-y divide-border text-sm">
-                  <colgroup>
-                    <col />
-                    <col className="w-[7rem]" />
-                    <col className="w-[11rem]" />
-                  </colgroup>
-                  <thead className="sticky top-0 z-10 bg-surface-sunken text-xs text-fg-muted">
-                    <tr className="h-10">
-                      <th className="whitespace-nowrap px-3 py-2 text-left">{t("qcm.test.category")}</th>
-                      <th className="whitespace-nowrap px-3 py-2 text-left">{t("qcm.test.probability")}</th>
-                      <th className="whitespace-nowrap px-3 py-2 text-left">{t("nl2sql.profile.label")}</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border/70">
-                    {prediction.candidates.map((candidate) => (
-                      <tr key={candidate.category} className={INFORMATION_TABLE_ROW_CLASS}>
-                        <td className="break-words px-3 py-2 font-semibold text-fg">{candidate.category}</td>
-                        <td className="px-3 py-2 font-sans text-xs text-fg">{Math.round(candidate.score * 100)}%</td>
-                        <td className="break-words px-3 py-2 text-xs text-fg-muted">
-                          {profileRecordDisplayLabel(candidate)}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              <DataTable
+                columns={[
+                  {
+                    key: "category",
+                    header: t("qcm.test.category"),
+                    className: "break-words font-semibold",
+                    render: (candidate) => candidate.category,
+                  },
+                  {
+                    key: "probability",
+                    header: t("qcm.test.probability"),
+                    headerClassName: "w-[7rem]",
+                    className: "font-sans",
+                    render: (candidate) => `${Math.round(candidate.score * 100)}%`,
+                  },
+                  {
+                    key: "profile",
+                    header: t("nl2sql.profile.label"),
+                    headerClassName: "w-[11rem]",
+                    className: "break-words text-fg-muted",
+                    render: (candidate) => profileRecordDisplayLabel(candidate),
+                  },
+                ]}
+                rows={prediction.candidates}
+                getRowKey={(candidate) => candidate.category}
+                rowProps={() => ({ className: INFORMATION_TABLE_ROW_CLASS })}
+                tableClassName="w-full min-w-[28rem] table-fixed"
+                scrollTestId="qcm-test-candidates-scroll-region"
+                stickyHeader
+                visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
+              />
             )}
             {prediction.warnings.map((warning) => (
               <p key={warning} className="rounded-md border border-warning-border bg-warning-subtle px-3 py-2 text-sm text-warning-fg">

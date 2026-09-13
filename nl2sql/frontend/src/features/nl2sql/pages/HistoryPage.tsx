@@ -1,4 +1,3 @@
-import { SortHeader } from "@/components/SortHeader";
 import { useWorkspaceState } from "@/components/WorkspaceState";
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import {
@@ -187,15 +186,18 @@ function HistorySortButton({
     : t("history.sort.inactive");
   const SortIcon = active ? (sort.direction === "asc" ? ArrowUp : ArrowDown) : ArrowDownUp;
   return (
-    <SortHeader
+    // 履歴は複数行のカード一覧で表ではないため、並べ替えは共有 Button のトグル（aria-pressed）で出す。
+    <Button
       type="button"
+      variant="ghost"
+      size="sm"
+      pressed={active}
+      trailingIcon={SortIcon}
       aria-label={t("history.sort.button", { label, direction })}
-      aria-pressed={active}
       onClick={() => onToggle(sortKey)}
     >
       <span>{label}</span>
-      <SortIcon size={14} aria-hidden="true" />
-    </SortHeader>
+    </Button>
   );
 }
 

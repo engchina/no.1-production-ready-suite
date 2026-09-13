@@ -1,7 +1,5 @@
-import { SortHeader } from "@/components/SortHeader";
 import { Children, useId, type ReactNode } from "react";
 import {
-  ArrowDownUp,
   Check,
   Code2,
   Download,
@@ -15,7 +13,10 @@ import {
 import {
   Button,
   Banner,
+  DataTable,
   EmptyState,
+  type DataTableColumn,
+  type DataTableVisibleRows,
   toast,
   StatusBadge,
   Tabs,
@@ -29,7 +30,6 @@ import {
   DbOwnerPrefixFilterField,
   type DbObjectFilterFieldProps,
 } from "@/components/DbObjectFilterFields";
-import { isInteractiveRowTarget } from "@/components/MasterDetailDataTable";
 import {
   ObjectActionBar,
   RowActionMenu,
@@ -49,14 +49,10 @@ import { formatDateTime, formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { toastError } from "@/lib/toast";
 import {
-  INFORMATION_LIST_ROW_CLASS,
-  INFORMATION_LIST_SCROLL_CLASS,
-  INFORMATION_LIST_SHORT_SCROLL_CLASS,
-  INFORMATION_LIST_VISIBLE_ROWS,
-  INFORMATION_TABLE_FOCUS_CLASS,
   INFORMATION_TABLE_ROW_CLASS,
-  INFORMATION_TABLE_SCROLL_CLASS,
+  INFORMATION_TABLE_VISIBLE_ROWS,
 } from "@/lib/list-density";
+import { cn } from "@/lib/utils";
 import type { FixedSplitWidePane } from "@/lib/fixed-split-pane";
 import {
   dbAdminObjectQualifiedName,
@@ -64,7 +60,7 @@ import {
   type DbAdminObjectTarget,
 } from "../dbObjectIdentity";
 import type { DbAdminExecuteData, DbAdminObjectDetail, DbAdminObjectSummary } from "../types";
-import { ExecutionConfirmationField, downloadText } from "./DbAdminShared";
+import { DbObjectColumnsTable, ExecutionConfirmationField, downloadText } from "./DbAdminShared";
 
 export {
   DbManagementSearchField,
@@ -188,13 +184,8 @@ export function dbAdminExecuteFailureMessage(result: DbAdminExecuteData, fallbac
 
 export type DbManagementLoadingSkeletonVariant = "list" | "detail" | "compact";
 
-// 5/8 行の上限を共有し、表形式のみ sticky header 分を含める。
+// 一覧の行の最小高さ。表示行数（5/8 行）は DataTable の visibleRows が表頭と行の実測から決める。
 export const DB_OBJECT_GRID_ROW_CLASS = INFORMATION_TABLE_ROW_CLASS;
-export const DB_OBJECT_PICKER_ROW_CLASS = INFORMATION_LIST_ROW_CLASS;
-export const DB_OBJECT_GRID_SCROLL_CLASS = INFORMATION_TABLE_SCROLL_CLASS;
-export const DB_OBJECT_PICKER_SCROLL_CLASS = INFORMATION_LIST_SCROLL_CLASS;
-export const DB_OBJECT_PICKER_SHORT_SCROLL_CLASS = INFORMATION_LIST_SHORT_SCROLL_CLASS;
-export const DB_OBJECT_LIST_VISIBLE_ROWS = INFORMATION_LIST_VISIBLE_ROWS;
 
 function SkeletonBlock({ className = "" }: { className?: string }) {
   return (
@@ -583,50 +574,6 @@ export function sortDbObjectPickerItems<T extends DbObjectPickerItem>(
   });
 }
 
-function PickerSortHeader({
-  label,
-  sortKey,
-  sort,
-  onSortChange,
-}: {
-  label: string;
-  sortKey: DbObjectPickerSortKey;
-  sort?: DbObjectPickerSortState;
-  onSortChange?: (key: DbObjectPickerSortKey) => void;
-}) {
-  const active = sort?.key === sortKey;
-  const direction = active
-    ? sort.direction === "asc"
-      ? t("objectSelector.sort.asc")
-      : t("objectSelector.sort.desc")
-    : t("objectSelector.sort.inactive");
-  const ariaSort =
-    !sort || !onSortChange
-      ? undefined
-      : active
-        ? sort.direction === "asc"
-          ? "ascending"
-          : "descending"
-        : "none";
-
-  return (
-    <span role="columnheader" aria-sort={ariaSort}>
-      {sort && onSortChange ? (
-        <SortHeader
-          type="button"
-          aria-label={t("objectSelector.sort.button", { label, direction })}
-          onClick={() => onSortChange(sortKey)}
-        >
-          <span>{label}</span>
-          <ArrowDownUp size={14} className={active ? "text-accent-fg" : "text-fg-muted"} aria-hidden="true" />
-        </SortHeader>
-      ) : (
-        label
-      )}
-    </span>
-  );
-}
-
 export function DbSingleObjectPickerList({
   items,
   selectedKey,
@@ -638,7 +585,7 @@ export function DbSingleObjectPickerList({
   noResultsTitle,
   noResultsHint,
   dataTestId,
-  maxHeightClass = DB_OBJECT_PICKER_SCROLL_CLASS,
+  visibleRows = INFORMATION_TABLE_VISIBLE_ROWS,
   onSelect,
   selectAriaLabel,
   selectDisabled,
@@ -656,7 +603,8 @@ export function DbSingleObjectPickerList({
   noResultsTitle: string;
   noResultsHint: string;
   dataTestId?: string;
-  maxHeightClass?: string;
+  /** 表示行数（既定: モバイル 5 行・md 以上 8 行）。 */
+  visibleRows?: DataTableVisibleRows;
   onSelect: (item: DbObjectPickerItem) => void;
   selectAriaLabel?: (item: DbObjectPickerItem) => string;
   selectDisabled?: (item: DbObjectPickerItem) => boolean;
@@ -685,135 +633,131 @@ export function DbSingleObjectPickerList({
     );
   }
 
-  // 種類・行数は内容幅（バッジ「テーブル」約 70px、「統計未取得」約 60px）より広い固定幅にし、
-  // 行ごとに独立した grid でも列がそろい、隣の列へはみ出さないようにする。
-  const headerClass = action
-    ? "hidden grid-cols-[minmax(0,1.35fr)_6rem_6rem_minmax(4.5rem,0.75fr)_3.5rem] gap-2 border-b border-border bg-surface-sunken px-3 py-2 text-xs font-semibold text-fg-muted md:grid"
-    : "hidden grid-cols-[minmax(0,1.45fr)_6rem_6rem_minmax(4.5rem,0.8fr)] gap-2 border-b border-border bg-surface-sunken px-3 py-2 text-xs font-semibold text-fg-muted md:grid";
-  const rowClass = action
-    ? "md:grid-cols-[minmax(0,1.35fr)_6rem_6rem_minmax(4.5rem,0.75fr)_3.5rem]"
-    : "md:grid-cols-[minmax(0,1.45fr)_6rem_6rem_minmax(4.5rem,0.8fr)]";
+  const selectedItem = items.find((item) => item.key === selectedKey || item.name === selectedKey);
+  const sortable = Boolean(sort && onSortChange);
+  // md 未満は対象名の列だけを見せ、種類・行数・所有者は名前の下に補足として並べる（横スクロールを出さない）。
+  // md 以上の種類・行数は内容幅（バッジ「テーブル」約 70px、「統計未取得」約 60px）より広い固定幅にする。
+  const columns: Array<DataTableColumn<DbObjectPickerItem>> = [
+    {
+      key: "name",
+      header: t("objectSelector.column.name"),
+      sortable,
+      className: "align-top",
+      render: (item) => {
+        const index = items.indexOf(item);
+        const commentId = `${commentIdPrefix}-comment-${index}`;
+        const selected = item === selectedItem;
+        const selectionDisabled = Boolean(selectDisabled?.(item));
+        return (
+          <div className="grid min-w-0 gap-1">
+            <button
+              type="button"
+              aria-current={selected ? "true" : undefined}
+              aria-label={selectAriaLabel?.(item) ?? t("objectSelector.selectObject", { name: item.name })}
+              aria-describedby={commentId}
+              disabled={selectionDisabled}
+              className="flex min-h-11 w-full min-w-0 flex-col justify-center text-left focus:outline-none focus:ring-2 focus:ring-focus-ring disabled:cursor-not-allowed md:min-h-0"
+              onClick={() => onSelect(item)}
+            >
+              <IdentifierText value={item.name} className="font-mono text-xs font-semibold text-accent-fg" />
+              <DbObjectCommentText id={commentId} comment={item.comment} />
+            </button>
+            <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-fg-muted md:hidden" data-testid="db-object-picker-row-meta">
+              {item.kindLabel ? <StatusBadge icon={false} variant={item.kindVariant ?? "neutral"} label={item.kindLabel} /> : null}
+              <span className="whitespace-nowrap font-sans text-fg">{item.rowCountLabel || "-"}</span>
+              <IdentifierText value={item.owner || "-"} className="font-mono" />
+            </span>
+          </div>
+        );
+      },
+    },
+    {
+      key: "kind",
+      header: t("objectSelector.column.kind"),
+      sortable,
+      headerClassName: "hidden w-[6.75rem] md:table-cell",
+      className: "hidden whitespace-nowrap align-top md:table-cell",
+      render: (item) =>
+        item.kindLabel ? (
+          <StatusBadge icon={false} variant={item.kindVariant ?? "neutral"} label={item.kindLabel} />
+        ) : (
+          <span className="text-fg-muted">-</span>
+        ),
+    },
+    {
+      key: "row_count",
+      header: t("objectSelector.column.rows"),
+      sortable,
+      headerClassName: "hidden w-[6.75rem] md:table-cell",
+      className: "hidden whitespace-nowrap align-top font-sans md:table-cell",
+      render: (item) => item.rowCountLabel || "-",
+    },
+    {
+      key: "owner",
+      header: t("objectSelector.column.owner"),
+      sortable,
+      headerClassName: "hidden w-[22%] md:table-cell",
+      className: "hidden min-w-0 align-top font-mono text-fg-muted md:table-cell",
+      render: (item) => <IdentifierText value={item.owner || "-"} />,
+    },
+  ];
+  if (action) {
+    columns.push({
+      key: "actions",
+      header: t("objectSelector.column.actions"),
+      align: "right",
+      headerClassName: "w-[4rem]",
+      className: "align-top",
+      render: (item) => {
+        const actionLoading = loadingKey === item.key;
+        const rowActions: EntityAction[] = [
+          {
+            id: action.id,
+            label: action.label,
+            ariaLabel: action.ariaLabel(item),
+            icon: action.icon,
+            tone: action.tone,
+            visible: action.visible?.(item),
+            loading: actionLoading,
+            disabled: action.disabled?.(item),
+            onSelect: () => action.onClick(item),
+          },
+        ];
+        if (!rowActions.some((rowAction) => rowAction.visible !== false)) return null;
+        return (
+          <RowActionMenu
+            actions={rowActions}
+            ariaLabel={`${t("objectSelector.column.actions")}: ${item.name}`}
+            loading={actionLoading}
+            disabled={rowActions.every((rowAction) => rowAction.disabled)}
+            testId={dataTestId ? `${dataTestId}-row-actions-${item.key}` : undefined}
+          />
+        );
+      },
+    });
+  }
 
   return (
-    <div className="overflow-hidden rounded-md border border-border bg-surface" data-testid={dataTestId}>
-      <div className={headerClass}>
-        <PickerSortHeader
-          label={t("objectSelector.column.name")}
-          sortKey="name"
-          sort={sort}
-          onSortChange={onSortChange}
-        />
-        <PickerSortHeader
-          label={t("objectSelector.column.kind")}
-          sortKey="kind"
-          sort={sort}
-          onSortChange={onSortChange}
-        />
-        <PickerSortHeader
-          label={t("objectSelector.column.rows")}
-          sortKey="row_count"
-          sort={sort}
-          onSortChange={onSortChange}
-        />
-        <PickerSortHeader
-          label={t("objectSelector.column.owner")}
-          sortKey="owner"
-          sort={sort}
-          onSortChange={onSortChange}
-        />
-        {action && <span role="columnheader" className="text-right">{t("objectSelector.column.actions")}</span>}
-      </div>
-      <div className={maxHeightClass} role="list" aria-label={listLabel}>
-        {items.map((item, index) => {
-          const commentId = `${commentIdPrefix}-comment-${index}`;
-          const selected = item.key === selectedKey || item.name === selectedKey;
-          const selectionDisabled = Boolean(selectDisabled?.(item));
-          const actionLoading = Boolean(action && loadingKey === item.key);
-          const rowActions: EntityAction[] = action
-            ? [
-                {
-                  id: action.id,
-                  label: action.label,
-                  ariaLabel: action.ariaLabel(item),
-                  icon: action.icon,
-                  tone: action.tone,
-                  visible: action.visible?.(item),
-                  loading: actionLoading,
-                  disabled: action.disabled?.(item),
-                  onSelect: () => action.onClick(item),
-                },
-              ]
-            : [];
-          const hasRowActions = rowActions.some((rowAction) => rowAction.visible !== false);
-          const rowActionsDisabled =
-            rowActions.length > 0 && rowActions.every((rowAction) => rowAction.disabled);
-          return (
-            <div
-              key={item.key}
-              role="listitem"
-              aria-current={selected ? "true" : undefined}
-              className={[
-                `grid w-full min-w-0 gap-2 border-b border-border px-3 py-3 text-left text-sm transition-colors last:border-b-0 ${DB_OBJECT_PICKER_ROW_CLASS}`,
-                `${rowClass} md:items-center md:py-2`,
-                selectionDisabled ? "cursor-not-allowed" : "cursor-pointer",
-                selected ? "bg-accent-subtle" : selectionDisabled ? "bg-surface" : "bg-surface hover:bg-surface-hover",
-              ].join(" ")}
-              onClick={(event) => {
-                if (isInteractiveRowTarget(event.target)) return;
-                if (selectionDisabled) return;
-                onSelect(item);
-              }}
-            >
-              <button
-                type="button"
-                aria-current={selected ? "true" : undefined}
-                aria-label={selectAriaLabel?.(item) ?? t("objectSelector.selectObject", { name: item.name })}
-                aria-describedby={commentId}
-                disabled={selectionDisabled}
-                className="flex min-h-11 w-full min-w-0 flex-col justify-center text-left focus:outline-none focus:ring-2 focus:ring-focus-ring md:min-h-0"
-                onClick={() => {
-                  if (selectionDisabled) return;
-                  onSelect(item);
-                }}
-              >
-                <IdentifierText value={item.name} className="font-mono text-xs font-semibold text-accent-fg" />
-                <DbObjectCommentText id={commentId} comment={item.comment} />
-              </button>
-              <span className="flex items-center gap-2 whitespace-nowrap md:block">
-                <span className="text-xs font-medium text-fg-muted md:hidden">{t("objectSelector.column.kind")}</span>
-                {item.kindLabel ? (
-                  <StatusBadge icon={false} variant={item.kindVariant ?? "neutral"} label={item.kindLabel} />
-                ) : (
-                  <span className="text-xs text-fg-muted">-</span>
-                )}
-              </span>
-              <span className="flex items-center gap-2 whitespace-nowrap font-sans text-xs text-fg md:block">
-                <span className="font-sans font-medium text-fg-muted md:hidden">{t("objectSelector.column.rows")}</span>
-                {item.rowCountLabel || "-"}
-              </span>
-              <span className="flex min-w-0 items-center gap-2 font-mono text-xs text-fg-muted md:block">
-                <span className="font-sans font-medium text-fg-muted md:hidden">{t("objectSelector.column.owner")}</span>
-                <IdentifierText value={item.owner || "-"} />
-              </span>
-              {action && hasRowActions && (
-                <span className="flex items-center justify-between gap-2 md:justify-end">
-                  <span className="text-xs font-medium text-fg-muted md:hidden">
-                    {t("objectSelector.column.actions")}
-                  </span>
-                  <RowActionMenu
-                    actions={rowActions}
-                    ariaLabel={`${t("objectSelector.column.actions")}: ${item.name}`}
-                    loading={actionLoading}
-                    disabled={rowActionsDisabled}
-                    testId={dataTestId ? `${dataTestId}-row-actions-${item.key}` : undefined}
-                  />
-                </span>
-              )}
-            </div>
-          );
-        })}
-      </div>
-    </div>
+    <DataTable
+      columns={columns}
+      rows={items}
+      getRowKey={(item) => item.key}
+      sort={sort ?? null}
+      onSortChange={onSortChange ? (next) => onSortChange(next.key as DbObjectPickerSortKey) : undefined}
+      selectedRowKey={selectedItem?.key ?? null}
+      onRowClick={(item) => {
+        if (selectDisabled?.(item)) return;
+        onSelect(item);
+      }}
+      rowProps={(item) => ({
+        className: cn(DB_OBJECT_GRID_ROW_CLASS, selectDisabled?.(item) && "cursor-not-allowed hover:bg-surface"),
+      })}
+      ariaLabel={listLabel}
+      scrollTestId={dataTestId}
+      tableClassName="w-full table-fixed"
+      stickyHeader
+      visibleRows={visibleRows}
+    />
   );
 }
 
@@ -1016,30 +960,6 @@ export function DbObjectStatusBar({
   );
 }
 
-function SortButton({
-  label,
-  sortKey,
-  sort,
-  onToggle,
-}: {
-  label: string;
-  sortKey: DbObjectSortKey;
-  sort: DbObjectSortState;
-  onToggle: (key: DbObjectSortKey) => void;
-}) {
-  const active = sort.key === sortKey;
-  return (
-    <SortHeader
-      type="button"
-      aria-sort={active ? (sort.direction === "asc" ? "ascending" : "descending") : "none"}
-      onClick={() => onToggle(sortKey)}
-    >
-      <span>{label}</span>
-      <ArrowDownUp size={14} className={active ? "text-accent-fg" : "text-fg-muted"} aria-hidden="true" />
-    </SortHeader>
-  );
-}
-
 export function DbObjectGrid({
   idPrefix,
   headingId,
@@ -1127,70 +1047,63 @@ export function DbObjectGrid({
           hint={hasActiveFilter ? labels.noResultsHint : labels.emptyHint}
         />
       ) : (
-        <div className="overflow-hidden rounded-md border border-border bg-surface">
-          <div className={DB_OBJECT_GRID_SCROLL_CLASS} data-testid="db-admin-object-list">
-            {/* 所有者列は lg 未満で非表示にする。<col> も隠さないと空の列が幅を取り、375px で横スクロールが出る。 */}
-            <table className="w-full min-w-[16rem] table-fixed divide-y divide-border text-left text-sm lg:min-w-[24rem]" data-testid={`${idPrefix}-grid`}>
-              <colgroup>
-                <col className="w-[55%]" />
-                <col className="w-[7.5rem]" />
-                <col className="hidden w-[7.5rem] lg:table-column" />
-              </colgroup>
-              <thead className="sticky top-0 z-10 bg-surface-sunken text-xs text-fg-muted">
-                <tr>
-                  <th className="whitespace-nowrap px-3 py-2">
-                    <SortButton label={labels.objectName} sortKey="name" sort={sort} onToggle={onSortChange} />
-                  </th>
-                  <th className="whitespace-nowrap px-3 py-2">
-                    <SortButton label={labels.rows} sortKey="row_count" sort={sort} onToggle={onSortChange} />
-                  </th>
-                  <th className="hidden whitespace-nowrap px-3 py-2 lg:table-cell">
-                    <SortButton label={labels.owner} sortKey="owner" sort={sort} onToggle={onSortChange} />
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border/70">
-                {items.map((item, index) => {
-                  const qualifiedName = dbAdminObjectQualifiedName(item);
-                  const selected = qualifiedName === selectedName;
-                  const commentId = `${idPrefix}-comment-${index}`;
-                  return (
-                    <tr
-                      key={qualifiedName}
-                      data-selected={selected ? "true" : "false"}
-                      aria-current={selected ? "true" : undefined}
-                      className={[
-                        DB_OBJECT_GRID_ROW_CLASS,
-                        "cursor-pointer transition-colors",
-                        selected ? "bg-accent-subtle" : "hover:bg-surface-hover",
-                      ].join(" ")}
-                      onClick={(event) => {
-                        if (isInteractiveRowTarget(event.target)) return;
-                        onSelect(qualifiedName);
-                      }}
-                    >
-                      <td className="px-3 py-2 align-top">
-                        <button
-                          type="button"
-                          aria-label={labels.showObject(qualifiedName)}
-                          aria-describedby={showComments ? commentId : undefined}
-                          aria-current={selected ? "true" : undefined}
-                          className="grid max-w-full text-left focus:outline-none focus:ring-2 focus:ring-focus-ring"
-                          onClick={() => onSelect(qualifiedName)}
-                        >
-                          <IdentifierText value={qualifiedName} className="font-mono text-xs font-semibold text-accent-fg" />
-                          {showComments && <DbObjectCommentText id={commentId} comment={item.comment} />}
-                        </button>
-                      </td>
-                      <td className="whitespace-nowrap px-3 py-2 font-sans text-xs text-fg">{rowCountLabel(item.row_count)}</td>
-                      <td className="hidden whitespace-nowrap px-3 py-2 font-mono text-xs text-fg-muted lg:table-cell">{item.owner || "-"}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
+        <DataTable
+          columns={[
+            {
+              key: "name",
+              header: labels.objectName,
+              sortable: true,
+              headerClassName: "w-[55%]",
+              className: "align-top",
+              render: (item, index) => {
+                const qualifiedName = dbAdminObjectQualifiedName(item);
+                const commentId = `${idPrefix}-comment-${index}`;
+                return (
+                  <button
+                    type="button"
+                    aria-label={labels.showObject(qualifiedName)}
+                    aria-describedby={showComments ? commentId : undefined}
+                    aria-current={qualifiedName === selectedName ? "true" : undefined}
+                    className="grid max-w-full text-left focus:outline-none focus:ring-2 focus:ring-focus-ring"
+                    onClick={() => onSelect(qualifiedName)}
+                  >
+                    <IdentifierText value={qualifiedName} className="font-mono text-xs font-semibold text-accent-fg" />
+                    {showComments && <DbObjectCommentText id={commentId} comment={item.comment} />}
+                  </button>
+                );
+              },
+            },
+            {
+              key: "row_count",
+              header: labels.rows,
+              sortable: true,
+              headerClassName: "w-[7.5rem]",
+              className: "whitespace-nowrap align-top font-sans",
+              render: (item) => rowCountLabel(item.row_count),
+            },
+            {
+              // 所有者列は lg 未満で非表示にする（375px で空の列が幅を取り、横スクロールが出るのを防ぐ）。
+              key: "owner",
+              header: labels.owner,
+              sortable: true,
+              headerClassName: "hidden w-[7.5rem] lg:table-cell",
+              className: "hidden whitespace-nowrap align-top font-mono text-fg-muted lg:table-cell",
+              render: (item) => item.owner || "-",
+            },
+          ]}
+          rows={items}
+          getRowKey={(item) => dbAdminObjectQualifiedName(item)}
+          sort={sort}
+          onSortChange={(next) => onSortChange(next.key as DbObjectSortKey)}
+          selectedRowKey={selectedName}
+          onRowClick={(item) => onSelect(dbAdminObjectQualifiedName(item))}
+          rowProps={() => ({ className: DB_OBJECT_GRID_ROW_CLASS })}
+          testId={`${idPrefix}-grid`}
+          scrollTestId="db-admin-object-list"
+          tableClassName="w-full min-w-[16rem] table-fixed lg:min-w-[24rem]"
+          stickyHeader
+          visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
+        />
       )}
       {!loading && !error && (
         <DbObjectSelectorFooter
@@ -1375,44 +1288,13 @@ export function DbObjectDetailPanel({
           id={`${idPrefix}-detail-panel-columns`}
           role="tabpanel"
           aria-labelledby={`${idPrefix}-detail-tab-columns`}
-          data-testid="db-admin-detail-columns"
-          tabIndex={0}
-          className={`min-w-0 rounded-md border border-border bg-surface ${INFORMATION_TABLE_SCROLL_CLASS} ${INFORMATION_TABLE_FOCUS_CLASS}`}
+          className="min-w-0"
         >
-          <table className="w-full min-w-[52rem] table-fixed divide-y divide-border text-sm">
-            <colgroup>
-              <col className="w-[18%]" />
-              <col className="w-[18%]" />
-              <col className="w-[20%]" />
-              <col className="w-[14%]" />
-              <col className="w-[10%]" />
-              <col />
-            </colgroup>
-            <thead className="sticky top-0 z-10 bg-surface-sunken">
-              <tr className="h-10">
-                <th className="whitespace-nowrap px-3 py-2 text-left">{t("dbAdmin.col.physical")}</th>
-                <th className="whitespace-nowrap px-3 py-2 text-left">{t("dbAdmin.col.logical")}</th>
-                <th className="whitespace-nowrap px-3 py-2 text-left">{t("dbAdmin.col.comment")}</th>
-                <th className="whitespace-nowrap px-3 py-2 text-left">{t("dbAdmin.col.type")}</th>
-                <th className="whitespace-nowrap px-3 py-2 text-left">{t("dbAdmin.col.nullable")}</th>
-                <th className="whitespace-nowrap px-3 py-2 text-left">{t("dbAdmin.col.sample")}</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border/70">
-              {detail.columns.map((column) => (
-                <tr key={column.column_name} className={INFORMATION_TABLE_ROW_CLASS}>
-                  <td className="px-3 py-2 font-mono text-xs">{column.column_name}</td>
-                  <td className="break-words px-3 py-2">{(column.logical_name ?? "").trim() || "-"}</td>
-                  <td className="break-words px-3 py-2 text-fg-muted">{(column.comment ?? "").trim() || "-"}</td>
-                  <td className="px-3 py-2">{column.data_type}</td>
-                  <td className="px-3 py-2">{column.nullable ? "YES" : "NO"}</td>
-                  <td className="break-words px-3 py-2 font-sans text-xs text-fg-muted">
-                    {column.sample_values.join(", ") || "-"}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <DbObjectColumnsTable
+            columns={detail.columns}
+            showComment
+            sampleOf={(column) => column.sample_values.join(", ")}
+          />
         </div>
       ) : ddlLoading ? (
         <TimedLoadingState
