@@ -1,4 +1,5 @@
 import { useWorkspaceActive, useWorkspaceState, useWorkspaceRevalidation, useResetExecutionConsent, useTransientDraftGuard } from "@/components/WorkspaceState";
+import { syntheticRunPollingInterval } from "../syntheticRunPolling";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router-dom";
@@ -7,7 +8,7 @@ import { ArrowRight, Database, Eye, FileSpreadsheet, Play, RefreshCw, Table2, Tr
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Banner, EmptyState, toast } from "@engchina/production-ready-ui";
 
-import { SyntheticRunPanel, useSyntheticRuns, runFinished, historyExpired, type SyntheticRun } from "../syntheticRuns";
+import { SyntheticRunPanel, useSyntheticRuns, historyExpired, type SyntheticRun } from "../syntheticRuns";
 import { SyntheticReview } from "../SyntheticReview";
 
 import { StatusBadge } from "@/components/ui/status-badge";
@@ -152,7 +153,7 @@ export function DataManagementPage() {
   const [csvConfirmation, setCsvConfirmation] = useState("");
   const [csvUploadResult, setCsvUploadResult] = useState<DbAdminCsvUploadData | null>(null);
   useTransientDraftGuard(Boolean(csvBase64) && !csvUploadResult?.executed);
-  const syntheticRuns = useSyntheticRuns();
+  const syntheticRuns = useSyntheticRuns({ enabled: workspaceActive });
   const [searchParams, setSearchParams] = useSearchParams();
   const [syntheticRunId, setSyntheticRunId] = useWorkspaceState("syntheticRunId", "");
   const [submissionKey, setSubmissionKey] = useWorkspaceState("syntheticSubmission", { signature: "", key: "" });
@@ -161,8 +162,10 @@ export function DataManagementPage() {
   const historicalRun = useQuery({
     queryKey: [...syntheticRuns.key, requestedRunId],
     queryFn: ({ signal }) => apiGet<SyntheticRun>(`/api/nl2sql/synthetic-data/runs/${encodeURIComponent(requestedRunId)}`, { signal, timeoutMs: API_TIMEOUT_MS.interactiveDetail }),
-    enabled: Boolean(requestedRunId) && !listedRun && syntheticRuns.isSuccess,
-    refetchInterval: (query) => query.state.data && !runFinished(query.state.data) ? 2_000 : false,
+    enabled: workspaceActive && Boolean(requestedRunId) && !listedRun && syntheticRuns.isSuccess,
+    refetchInterval: syntheticRunPollingInterval,
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: true,
     retry: false,
   });
   const candidateRun = listedRun ?? (requestedRunId ? historicalRun.data : null) ?? null;

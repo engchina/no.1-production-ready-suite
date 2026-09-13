@@ -11,6 +11,7 @@ import { t } from "@/lib/i18n";
 import { formatDateTime } from "@/lib/format";
 import { INFORMATION_LIST_SCROLL_CLASS, INFORMATION_TABLE_FOCUS_CLASS } from "@/lib/list-density";
 import { useAuth } from "@/features/security/AuthProvider";
+import { syntheticRunPollingInterval } from "./syntheticRunPolling";
 
 export interface SyntheticRun {
   preview?: boolean;
@@ -32,23 +33,26 @@ export const historyExpired = (run: SyntheticRun) => runFinished(run) && Date.pa
 export const runLabel = (run: SyntheticRun) => run.preview && run.status === "completed" && run.review_status !== "applied"
   ? t(run.review_status === "discarded" ? "syntheticPreview.discarded" : "syntheticPreview.ready") : t(`syntheticRun.status.${run.status}`);
 
-export function useSyntheticRuns() {
+export function useSyntheticRuns({ poll = false, enabled = true } = {}) {
   const { user, hasPermission } = useAuth();
   const db = useDatabaseStatus();
   const key = ["synthetic-runs", user?.user_uuid, db.data?.context_id];
   const query = useQuery({
     queryKey: key,
     queryFn: ({ signal }) => apiGet<SyntheticRun[]>("/api/nl2sql/synthetic-data/runs", { signal, timeoutMs: 10_000 }),
-    enabled: Boolean(user) && (hasPermission("menu.data_management") || hasPermission("menu.sample_data")),
-    refetchInterval: (q) => q.state.data?.some((r) => !runFinished(r)) ? 2_000 : 15_000,
-    refetchIntervalInBackground: true,
+    enabled: enabled && Boolean(user) && (hasPermission("menu.data_management") || hasPermission("menu.sample_data")),
+    // 一覧の定期取得は全体通知だけが担当し、keep-alive 画面にタイマーを重ねない。
+    refetchInterval: poll ? syntheticRunPollingInterval : false,
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: true,
+    staleTime: 1_000,
     retry: false,
   });
   return { ...query, key };
 }
 
 export function SyntheticRunNotifications() {
-  const query = useSyntheticRuns();
+  const query = useSyntheticRuns({ poll: true });
   const observed = useRef(new Map<string, string>());
   const scope = JSON.stringify(query.key);
   const previousScope = useRef(scope);

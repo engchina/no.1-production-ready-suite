@@ -14702,6 +14702,180 @@ for (const targetCount of [1, 12]) {
   });
 }
 
+for (const status of ["empty", "completed", "partial", "failed", "no_data"] as const) {
+  test(`synthetic polling stops for ${status} and refresh remains keyboard accessible`, async ({ page }) => {
+    await mockNl2SqlApi(page);
+    await page.clock.install({ time: new Date("2026-09-13T00:00:00Z") });
+    let reads = 0;
+    let writes = 0;
+    const runs = status === "empty" ? [] : [syntheticRunFixture(status)];
+    await page.route("**/api/nl2sql/synthetic-data/runs", (route) => {
+      if (route.request().method() === "GET") reads++; else writes++;
+      return fulfillJson(route, runs);
+    });
+    await page.goto("/data-management");
+    await page.getByRole("tab", { name: "合成データ生成" }).click();
+    const panel = page.getByTestId("synthetic-run-panel");
+    await expect(panel).toBeVisible();
+    await expect.poll(() => reads).toBeGreaterThan(0);
+    const before = reads;
+    await page.clock.fastForward(60_000);
+    expect(reads).toBe(before);
+    const refresh = panel.getByRole("button", { name: "状況を再確認", exact: true });
+    await refresh.focus();
+    await page.keyboard.press("Enter");
+    await expect(panel.getByText(/生成状況に変更はありません/)).toBeVisible();
+    expect(reads).toBe(before + 1);
+    expect(writes).toBe(0);
+    await expectNoHorizontalScroll(page);
+  });
+}
+
+test("synthetic polling pauses in hidden tabs, resumes on visibility and notifies across navigation", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  await page.clock.install({ time: new Date("2026-09-13T00:00:00Z") });
+  let run = syntheticRunFixture("running");
+  let reads = 0;
+  let writes = 0;
+  await page.route("**/api/nl2sql/synthetic-data/runs", (route) => {
+    if (route.request().method() === "GET") reads++; else writes++;
+    return fulfillJson(route, [run]);
+  });
+  await page.goto("/data-management?synthetic_run=run-001");
+  const panel = page.getByTestId("synthetic-run-panel");
+  await expect(panel.getByTestId("synthetic-run-status")).toHaveText("生成中");
+  const initial = reads;
+  await page.clock.fastForward(2_000);
+  await expect.poll(() => reads).toBe(initial + 1);
+  // Page Visibility API を変更し、query の実際の focusManager にイベントを届ける。
+  await page.evaluate(() => {
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  const hidden = reads;
+  await page.clock.fastForward(60_000);
+  expect(reads).toBe(hidden);
+  await page.evaluate(() => {
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await expect.poll(() => reads).toBe(hidden + 1);
+  // 同一アプリ内でページ離脱。keep-alive された画面の状態と全体通知を検証する。
+  await page.evaluate(() => { history.pushState({}, "", "/query"); window.dispatchEvent(new PopStateEvent("popstate")); });
+  await expect(panel).toBeHidden();
+  run = syntheticRunFixture("completed");
+  await page.clock.fastForward(2_000);
+  await expect(page.getByRole("status").filter({ hasText: "合成データの生成が完了しました" })).toBeVisible();
+  const completed = reads;
+  await page.clock.fastForward(60_000);
+  expect(reads).toBe(completed);
+  await page.goBack();
+  await expect(panel.getByTestId("synthetic-run-status")).toHaveText("合成データの生成が完了しました");
+  await expect.poll(() => reads).toBe(completed + 1);
+  expect(writes).toBe(0);
+});
+
+for (const outcome of ["unknown", "unavailable"] as const) {
+  test(`synthetic polling bounds ${outcome} rechecks and manual recovery restarts monitoring`, async ({ page }, testInfo) => {
+    await mockNl2SqlApi(page);
+    await page.clock.install({ time: new Date("2026-09-13T00:00:00Z") });
+    let run = syntheticRunFixture("running");
+    let fail = false;
+    let reads = 0;
+    await page.route("**/api/nl2sql/synthetic-data/runs", (route) => {
+      expect(route.request().method()).toBe("GET");
+      reads++;
+      return fail ? route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "unavailable" }) }) : fulfillJson(route, [run]);
+    });
+    await page.goto("/data-management?synthetic_run=run-001");
+    const panel = page.getByTestId("synthetic-run-panel");
+    await expect(panel.getByTestId("synthetic-run-status")).toHaveText("生成中");
+    if (outcome === "unknown") run = syntheticRunFixture("unknown"); else fail = true;
+    await page.clock.fastForward(2_000);
+    if (outcome === "unknown") await expect(panel.getByTestId("synthetic-run-status")).toHaveText("生成結果を確認できていません");
+    else await expect(panel).toContainText("前回の情報を表示しています");
+    for (const delay of [5_000, 15_000, 30_000]) {
+      const before = reads;
+      await page.clock.fastForward(delay);
+      await expect.poll(() => reads).toBe(before + 1);
+      // 応答が query state へ反映されてから次の仮想時間へ進む。
+      await expect(panel.getByRole("button", { name: "状況を再確認", exact: true })).toBeEnabled();
+    }
+    const stopped = reads;
+    await page.clock.fastForward(120_000);
+    expect(reads).toBe(stopped);
+    await expect(panel).toContainText(outcome === "unknown" ? "生成結果を確認できていません" : "前回の情報を表示しています");
+    await expectNoHorizontalScroll(page);
+    await page.screenshot({ path: testInfo.outputPath(`synthetic-polling-${outcome}.png`) });
+    fail = false;
+    run = syntheticRunFixture("running");
+    await panel.getByRole("button", { name: "状況を再確認", exact: true }).click();
+    await expect(panel.getByText(/生成状況を更新しました|生成状況に変更はありません/)).toBeVisible();
+    await expect(panel.getByTestId("synthetic-run-status")).toHaveText("生成中");
+    run = syntheticRunFixture("completed");
+    await page.clock.fastForward(2_000);
+    await expect(panel.getByTestId("synthetic-run-status")).toHaveText("合成データの生成が完了しました");
+  });
+}
+
+test("synthetic polling restarts after submission from an idle list without reloading", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  let run: ReturnType<typeof syntheticRunFixture> | null = null;
+  let writes = 0;
+  await page.route("**/api/nl2sql/synthetic-data/runs", (route) => {
+    if (route.request().method() === "GET") return fulfillJson(route, run ? [run] : []);
+    writes++;
+    run = syntheticRunFixture("running");
+    return route.fulfill({ status: 202, contentType: "application/json", body: JSON.stringify({ data: run }) });
+  });
+  await page.goto("/data-management");
+  await page.getByRole("tab", { name: "合成データ生成" }).click();
+  const form = page.locator("#data-management-panel-synthetic");
+  await form.getByRole("button", { name: "テーブル一覧を取得" }).click();
+  await form.getByLabel("APP.INVOICES を選択").check();
+  await form.getByLabel("実行確認語").fill("APP.INVOICES");
+  await form.getByRole("button", { name: "生成開始" }).click();
+  const panel = page.getByTestId("synthetic-run-panel");
+  await expect(panel.getByTestId("synthetic-run-status")).toHaveText("生成中");
+  run = syntheticRunFixture("completed");
+  await expect(panel.getByTestId("synthetic-run-status")).toHaveText("合成データの生成が完了しました");
+  expect(writes).toBe(1);
+});
+
+test("synthetic polling historical detail stops for unknown and revalidates after page return", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  await page.clock.install();
+  let run = syntheticRunFixture("unknown");
+  let reads = 0;
+  await page.route("**/api/nl2sql/synthetic-data/runs", (route) => fulfillJson(route, []));
+  await page.route("**/api/nl2sql/synthetic-data/runs/run-001", (route) => {
+    expect(route.request().method()).toBe("GET");
+    reads++;
+    return fulfillJson(route, run);
+  });
+  await page.goto("/data-management?synthetic_run=run-001");
+  const panel = page.getByTestId("synthetic-run-panel");
+  await expect(panel.getByTestId("synthetic-run-status")).toHaveText("生成結果を確認できていません");
+  for (const delay of [5_000, 15_000, 30_000]) {
+    const before = reads;
+    await page.clock.fastForward(delay);
+    await expect.poll(() => reads).toBe(before + 1);
+  }
+  const stopped = reads;
+  await page.clock.fastForward(120_000);
+  expect(reads).toBe(stopped);
+  await page.evaluate(() => { history.pushState({}, "", "/query"); window.dispatchEvent(new PopStateEvent("popstate")); });
+  await expect(panel).toBeHidden();
+  await page.clock.fastForward(60_000);
+  expect(reads).toBe(stopped);
+  run = syntheticRunFixture("completed");
+  await page.goBack();
+  await expect(panel.getByTestId("synthetic-run-status")).toHaveText("合成データの生成が完了しました");
+  const completed = reads;
+  await page.clock.fastForward(60_000);
+  expect(reads).toBe(completed);
+});
+
 test("synthetic manual refresh shows pending unchanged updated and retry feedback", async ({ page }, testInfo) => {
   await mockNl2SqlApi(page);
   let run = syntheticRunFixture("completed");
