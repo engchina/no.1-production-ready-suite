@@ -165,8 +165,9 @@ export function FeedbackClient() {
 
   return (
     <div>
-      <PageHeader title={t("feedback.page.title")} subtitle={t("feedback.page.subtitle")} />
-      <PageBody>
+      {/* 多列の明細表は画面幅を使う作業画面（lib/page-layout.ts。PageHeader と PageBody の wide は同値） */}
+      <PageHeader wide title={t("feedback.page.title")} subtitle={t("feedback.page.subtitle")} />
+      <PageBody wide>
         <Card>
           <CardContent className="space-y-4 pt-4">
             <div className="flex flex-wrap items-end justify-between gap-3">

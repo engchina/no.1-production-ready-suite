@@ -515,7 +515,7 @@ export function ChatClient() {
 
   return (
     <div className="flex min-h-full flex-col lg:h-full lg:min-h-0">
-      {/* 会話と比較の作業領域は画面幅を使う（PageHeader と PageBody の wide は同値） */}
+      {/* 会話と比較の作業領域は画面幅を使う作業画面（lib/page-layout.ts。PageHeader と PageBody の wide は同値） */}
       <PageHeader wide title={t("chat.title")} subtitle={t("chat.subtitle")} />
 
       <PageBody wide className="flex min-h-0 flex-1 flex-col gap-4">
