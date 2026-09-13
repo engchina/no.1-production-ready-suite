@@ -10,9 +10,11 @@ import {
   CardDescription,
   CardHeader,
   CardTitle,
+  RequiredBadge,
   SelectField,
   type SelectFieldOption,
   Skeleton,
+  StatusBadge,
   Switch,
 } from "@engchina/production-ready-ui";
 import {
@@ -419,7 +421,7 @@ export function ModelSettingsClient() {
                 <TextField
                   id="enterprise-endpoint"
                   label={t("settings.model.enterprise.endpoint")}
-                  badge={t("settings.model.requiredInOci")}
+                  requiredLabel={t("settings.model.requiredInOci")}
                   value={draft.enterprise_ai.endpoint}
                   placeholder={t("settings.model.placeholder.endpoint")}
                   helper={t("settings.model.enterprise.endpointHelp")}
@@ -429,7 +431,7 @@ export function ModelSettingsClient() {
                 <TextField
                   id="enterprise-project-ocid"
                   label={t("settings.model.enterprise.project")}
-                  badge={t("settings.model.requiredInOci")}
+                  requiredLabel={t("settings.model.requiredInOci")}
                   value={draft.enterprise_ai.project_ocid}
                   placeholder={t("settings.model.placeholder.project")}
                   helper={t("settings.model.enterprise.projectHelp")}
@@ -694,7 +696,7 @@ function ModelCatalogEditor({
         <FieldLabel
           htmlFor="enterprise-model-catalog"
           label={t("settings.model.enterprise.models")}
-          badge={t("settings.model.requiredInOci")}
+          requiredLabel={t("settings.model.requiredInOci")}
         />
         <Button
           type="button"
@@ -833,7 +835,7 @@ function TestableTextField({
   value,
   placeholder,
   helper,
-  badge,
+  requiredLabel,
   className,
   testResult,
   testing,
@@ -845,7 +847,7 @@ function TestableTextField({
   value: string;
   placeholder?: string;
   helper?: string;
-  badge?: string;
+  requiredLabel?: string;
   className?: string;
   testResult?: ModelSettingsTestResult;
   testing: boolean;
@@ -854,7 +856,7 @@ function TestableTextField({
 }) {
   return (
     <div className={cn("space-y-1.5", className)}>
-      <FieldLabel htmlFor={id} label={label} badge={badge} />
+      <FieldLabel htmlFor={id} label={label} requiredLabel={requiredLabel} />
       <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
         <input
           id={id}
@@ -990,7 +992,7 @@ function TextField({
   value,
   placeholder,
   helper,
-  badge,
+  requiredLabel,
   className,
   onChange,
 }: {
@@ -999,13 +1001,13 @@ function TextField({
   value: string;
   placeholder?: string;
   helper?: string;
-  badge?: string;
+  requiredLabel?: string;
   className?: string;
   onChange: (value: string) => void;
 }) {
   return (
     <div className={cn("space-y-1.5", className)}>
-      <FieldLabel htmlFor={id} label={label} badge={badge} />
+      <FieldLabel htmlFor={id} label={label} requiredLabel={requiredLabel} />
       <input
         id={id}
         type="text"
@@ -1133,25 +1135,29 @@ function NumberField({
   );
 }
 
+/**
+ * 入力のラベル。条件付きの必須（「OCI 運用時必須」）は aria-required では条件を伝えられないため、
+ * 中立色の RequiredBadge をラベルの中に置き、アクセシブルネームに文言ごと含める。
+ * badge は必須以外の項目属性（「固定」など）。状態ではないのでアイコンを付けない。
+ */
 function FieldLabel({
   htmlFor,
   label,
+  requiredLabel,
   badge,
 }: {
   htmlFor: string;
   label: string;
+  requiredLabel?: string;
   badge?: string;
 }) {
   return (
     <div className="flex min-h-5 items-center gap-2">
-      <label htmlFor={htmlFor} className="text-sm font-medium text-fg">
+      <label htmlFor={htmlFor} className="flex items-center gap-2 text-sm font-medium text-fg">
         {label}
+        {requiredLabel ? <RequiredBadge label={requiredLabel} /> : null}
       </label>
-      {badge ? (
-        <span className="rounded-full bg-info-subtle px-2 py-0.5 text-[11px] font-medium text-info-fg">
-          {badge}
-        </span>
-      ) : null}
+      {badge ? <StatusBadge variant="neutral" label={badge} icon={false} /> : null}
     </div>
   );
 }
