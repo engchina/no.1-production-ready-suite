@@ -34,7 +34,10 @@ import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { useDebouncedValue } from "@/lib/useDebouncedValue";
 import { toastError } from "@/lib/toast";
-import { INFORMATION_COMPACT_LIST_FIVE_ROW_SCROLL_CLASS } from "@/lib/list-density";
+import {
+  INFORMATION_COMPACT_LIST_FIVE_ROW_SCROLL_CLASS,
+  INFORMATION_TABLE_FIXED_VISIBLE_ROWS,
+} from "@/lib/list-density";
 import { API_TIMEOUT_MS, requestTimeoutSeconds } from "@/lib/requestPolicy";
 import { APP_ROUTES } from "@/lib/routes";
 import { CORE_TABULAR_FILE_FORMATS } from "@/lib/tabular-file-formats";
@@ -51,7 +54,6 @@ import {
   parseSqlRowLimit,
 } from "../components/SqlRowLimitControls";
 import {
-  DB_OBJECT_PICKER_SHORT_SCROLL_CLASS,
   DbManagementLoadingSkeleton,
   DbManagementSelectField,
   DropDbObjectDialog,
@@ -1865,7 +1867,7 @@ function CsvUploadWorkspace({
               noResultsTitle={t("dataMgmt.csv.noTablesTitle")}
               noResultsHint={t("dataMgmt.csv.noTablesHint")}
               dataTestId="data-csv-table-list"
-              maxHeightClass={DB_OBJECT_PICKER_SHORT_SCROLL_CLASS}
+              visibleRows={INFORMATION_TABLE_FIXED_VISIBLE_ROWS}
               sort={tableSort}
               onSortChange={onTableSortChange}
               onSelect={(item) => onTableChange(item.key)}

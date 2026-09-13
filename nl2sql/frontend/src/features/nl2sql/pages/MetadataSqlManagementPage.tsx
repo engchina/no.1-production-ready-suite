@@ -1,8 +1,6 @@
-import { SortHeader } from "@/components/SortHeader";
 import { useWorkspaceState, useWorkspaceRevalidation, useWorkspaceActivation } from "@/components/WorkspaceState";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  ArrowDownUp,
   Code2,
   FileText,
   RefreshCw,
@@ -15,6 +13,7 @@ import {
   Banner,
   EmptyState,
   toast,
+  DataTable,
   StatusBadge,
   PageHeader,
   PageBody,
@@ -31,7 +30,7 @@ import { apiGet, apiPost, isTimeoutError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { useDebouncedValue } from "@/lib/useDebouncedValue";
-import { INFORMATION_TABLE_FIVE_ROW_SCROLL_CLASS } from "@/lib/list-density";
+import { INFORMATION_TABLE_FIXED_VISIBLE_ROWS } from "@/lib/list-density";
 import { API_TIMEOUT_MS, requestTimeoutSeconds } from "@/lib/requestPolicy";
 import {
   DB_OBJECT_GRID_ROW_CLASS,
@@ -808,73 +807,71 @@ function MetadataTargetGrid({
           hint={hasActiveFilter ? t("metadataSql.targets.noResultsHint") : t("metadataSql.targets.emptyHint")}
         />
       ) : (
-        <div className="overflow-hidden rounded-md border border-border bg-surface">
-          <div className={INFORMATION_TABLE_FIVE_ROW_SCROLL_CLASS} data-testid="db-admin-object-list">
-            {/* コメントは別列ではなく対象名の直下に置き（テーブル管理・ビュー管理・データ管理と同じ形式）、
-                空いた幅を対象名に回す。種類はバッジ「テーブル」＋セル余白が収まる幅にする。
-                狭い幅では対象名が 1 行に収まる最小幅を保ち、一覧内の横スクロールで種類・所有者を確認する（5 行の固定高さを維持）。 */}
-            <table className="w-full min-w-[28rem] table-fixed divide-y divide-border text-left text-sm" data-testid={`${pageId}-target-grid`}>
-              <colgroup>
-                <col />
-                <col className="w-[7rem]" />
-                <col className="w-[8rem]" />
-              </colgroup>
-              <thead className="sticky top-0 z-10 bg-surface-sunken text-xs text-fg-muted">
-                <tr>
-                  <th className="whitespace-nowrap px-3 py-2">
-                    <TargetSortButton label={t("metadataSql.targets.grid.objectName")} sortKey="name" sort={sort} onToggle={onSortChange} />
-                  </th>
-                  <th className="whitespace-nowrap px-3 py-2">
-                    <TargetSortButton label={t("metadataSql.targets.grid.type")} sortKey="object_type" sort={sort} onToggle={onSortChange} />
-                  </th>
-                  <th className="whitespace-nowrap px-3 py-2">
-                    <TargetSortButton label={t("metadataSql.targets.grid.owner")} sortKey="owner" sort={sort} onToggle={onSortChange} />
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border/70">
-                {items.map((item, index) => {
-                  const selected = selectedSet.has(item.key);
-                  const rowId = `${pageId}-target-${index}`;
-                  return (
-                    <tr
-                      key={item.key}
-                      className={`${DB_OBJECT_GRID_ROW_CLASS} ${selected ? "bg-accent-subtle" : "hover:bg-surface-hover"}`}
-                    >
-                      <td className="px-3 py-1 align-top">
-                        <label className="flex min-h-11 cursor-pointer items-start gap-3 text-fg">
-                          <input
-                            type="checkbox"
-                            checked={selected}
-                            aria-labelledby={`${rowId}-name ${rowId}-hint`}
-                            aria-describedby={`${rowId}-comment`}
-                            onChange={() => onToggle(item)}
-                            className="mt-1 h-4 w-4 shrink-0 rounded border-border text-accent-fg focus:ring-focus-ring"
-                          />
-                          <span className="grid min-w-0">
-                            <span id={`${rowId}-name`} className="block font-mono text-xs font-semibold text-accent-fg">
-                              <IdentifierText value={item.qualifiedName} />
-                            </span>
-                            <DbObjectCommentText id={`${rowId}-comment`} comment={item.comment} />
-                            <span id={`${rowId}-hint`} className="sr-only">
-                              {t("metadataSql.targets.grid.toggleHint")}
-                            </span>
-                          </span>
-                        </label>
-                      </td>
-                      <td className="whitespace-nowrap px-3 py-1 align-top">
-                        <StatusBadge icon={false} variant="neutral" label={targetTypeLabel(item.object_type)} />
-                      </td>
-                      <td className="px-3 py-1 align-top font-mono text-xs text-fg-muted">
-                        <IdentifierText value={item.owner || "-"} />
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
+        // コメントは別列ではなく対象名の直下に置き（テーブル管理・ビュー管理・データ管理と同じ形式）、空いた幅を対象名に回す。
+        // 種類はバッジ「テーブル」＋セル余白が収まる幅にする。狭い幅では対象名が 1 行に収まる最小幅を保ち、
+        // 一覧内の横スクロールで種類・所有者を確認する（5 行の固定高さを維持）。
+        <DataTable
+          columns={[
+            {
+              key: "name",
+              header: t("metadataSql.targets.grid.objectName"),
+              sortable: true,
+              className: "py-1 align-top",
+              render: (item, index) => {
+                const rowId = `${pageId}-target-${index}`;
+                return (
+                  <label className="flex min-h-11 cursor-pointer items-start gap-3 text-fg">
+                    <input
+                      type="checkbox"
+                      checked={selectedSet.has(item.key)}
+                      aria-labelledby={`${rowId}-name ${rowId}-hint`}
+                      aria-describedby={`${rowId}-comment`}
+                      onChange={() => onToggle(item)}
+                      className="mt-1 h-4 w-4 shrink-0 rounded border-border text-accent-fg focus:ring-focus-ring"
+                    />
+                    <span className="grid min-w-0">
+                      <span id={`${rowId}-name`} className="block font-mono text-xs font-semibold text-accent-fg">
+                        <IdentifierText value={item.qualifiedName} />
+                      </span>
+                      <DbObjectCommentText id={`${rowId}-comment`} comment={item.comment} />
+                      <span id={`${rowId}-hint`} className="sr-only">
+                        {t("metadataSql.targets.grid.toggleHint")}
+                      </span>
+                    </span>
+                  </label>
+                );
+              },
+            },
+            {
+              key: "object_type",
+              header: t("metadataSql.targets.grid.type"),
+              sortable: true,
+              headerClassName: "w-[7rem]",
+              className: "whitespace-nowrap py-1 align-top",
+              render: (item) => <StatusBadge icon={false} variant="neutral" label={targetTypeLabel(item.object_type)} />,
+            },
+            {
+              key: "owner",
+              header: t("metadataSql.targets.grid.owner"),
+              sortable: true,
+              headerClassName: "w-[8rem]",
+              className: "py-1 align-top font-mono text-fg-muted",
+              render: (item) => <IdentifierText value={item.owner || "-"} />,
+            },
+          ]}
+          rows={items}
+          getRowKey={(item) => item.key}
+          sort={sort}
+          onSortChange={(next) => onSortChange(next.key as TargetSortKey)}
+          isRowSelected={(item) => selectedSet.has(item.key)}
+          rowProps={() => ({ className: `${DB_OBJECT_GRID_ROW_CLASS} hover:bg-surface-hover` })}
+          testId={`${pageId}-target-grid`}
+          scrollTestId="db-admin-object-list"
+          tableClassName="w-full min-w-[28rem] table-fixed"
+          stickyHeader
+          visibleRows={INFORMATION_TABLE_FIXED_VISIBLE_ROWS}
+          fillVisibleRows
+        />
       )}
       {!loading && (
         <DbObjectSelectorFooter
@@ -1117,30 +1114,6 @@ function MetadataTextarea({ label, value, rows }: { label: string; value: string
         className="rounded-md border border-border-control bg-surface-sunken px-3 py-2 font-mono text-sm leading-6 text-fg"
       />
     </label>
-  );
-}
-
-function TargetSortButton({
-  label,
-  sortKey,
-  sort,
-  onToggle,
-}: {
-  label: string;
-  sortKey: TargetSortKey;
-  sort: TargetSortState;
-  onToggle: (key: TargetSortKey) => void;
-}) {
-  const active = sort.key === sortKey;
-  return (
-    <SortHeader
-      type="button"
-      aria-sort={active ? (sort.direction === "asc" ? "ascending" : "descending") : "none"}
-      onClick={() => onToggle(sortKey)}
-    >
-      <span>{label}</span>
-      <ArrowDownUp size={14} className={active ? "text-accent-fg" : "text-fg-muted"} aria-hidden="true" />
-    </SortHeader>
   );
 }
 

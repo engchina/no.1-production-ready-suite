@@ -23,6 +23,7 @@ import {
   EmptyState,
   Skeleton,
   toast,
+  DataTable,
   type DataTableColumn,
   StatusBadge,
   PageHeader,
@@ -31,7 +32,6 @@ import {
   SelectField,
 } from "@engchina/production-ready-ui";
 
-import { MasterDetailDataTable } from "@/components/MasterDetailDataTable";
 import { FormActionBar } from "@/components/FormActionBar";
 import { ObjectActionBar, type EntityAction } from "@/components/ObjectActions";
 import { ProcessingIndicator } from "@/components/ProcessingState";
@@ -41,7 +41,7 @@ import { PageNotice } from "@/components/page-notice";
 import { apiDelete, apiGet, apiPatch, apiPost, isAbortError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
-import { INFORMATION_TABLE_SCROLL_CLASS } from "@/lib/list-density";
+import { INFORMATION_TABLE_ROW_CLASS, INFORMATION_TABLE_VISIBLE_ROWS } from "@/lib/list-density";
 import { APP_ROUTES } from "@/lib/routes";
 import { selectedVisibleStringKey } from "@/lib/visible-selection";
 import { useUnsavedChangesGuard } from "@/lib/useUnsavedChangesGuard";
@@ -1314,7 +1314,8 @@ function FeedbackEntriesList({
     {
       key: "content",
       header: t("feedbackManagement.entries.content"),
-      className: "w-[42%]",
+      className: "align-top",
+      headerClassName: "w-[42%] uppercase",
       render: (entry, index) => (
         <button
           type="button"
@@ -1334,7 +1335,8 @@ function FeedbackEntriesList({
     {
       key: "sql_text",
       header: t("feedbackManagement.entries.sqlText"),
-      className: "w-[58%]",
+      className: "align-top",
+      headerClassName: "w-[58%] uppercase",
       render: (entry) => (
         <p className="line-clamp-3 break-words font-mono text-xs leading-5 text-fg">
           {entry.sql_text || "-"}
@@ -1351,7 +1353,7 @@ function FeedbackEntriesList({
         description={t("feedbackManagement.entries.listHint")}
         icon={MessageSquareText}
       />
-      <MasterDetailDataTable
+      <DataTable
         columns={columns}
         rows={entries}
         getRowKey={feedbackEntryRowKey}
@@ -1360,15 +1362,16 @@ function FeedbackEntriesList({
             ? null
             : feedbackEntryRowKey(entries[selectedIndex], selectedIndex)
         }
-        onRowSelect={(entry) => {
+        onRowClick={(entry) => {
           const index = entries.indexOf(entry);
           if (index >= 0) onSelect(index);
         }}
-        getRowAriaLabel={(entry) =>
-          t("feedbackManagement.entries.select", {
+        rowProps={(entry) => ({
+          className: INFORMATION_TABLE_ROW_CLASS,
+          "aria-label": t("feedbackManagement.entries.select", {
             content: entry.content || entry.sql_text || "-",
-          })
-        }
+          }),
+        })}
         dense
         empty={
           <EmptyState
@@ -1379,8 +1382,9 @@ function FeedbackEntriesList({
         ariaLabel={t("feedbackManagement.entries.listAria")}
         testId="feedback-management-entries-table"
         scrollTestId="feedback-management-entries-scroll-region"
-        scrollClassName={INFORMATION_TABLE_SCROLL_CLASS}
-        className="min-w-[640px] table-fixed [&_thead]:sticky [&_thead]:top-0 [&_thead]:z-10 [&_thead]:uppercase [&_tbody_tr]:h-[3.5rem]"
+        stickyHeader
+        visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
+        tableClassName="w-full min-w-[640px] table-fixed"
       />
     </section>
   );

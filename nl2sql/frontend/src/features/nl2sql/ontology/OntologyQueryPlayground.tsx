@@ -14,6 +14,7 @@ import {
 import {
   Button,
   Banner,
+  DataTable,
   EmptyState,
   StatusBadge,
 } from "@engchina/production-ready-ui";
@@ -28,7 +29,7 @@ import {
   INFORMATION_LIST_SCROLL_CLASS,
   INFORMATION_TABLE_FOCUS_CLASS,
   INFORMATION_TABLE_ROW_CLASS,
-  INFORMATION_TABLE_SCROLL_CLASS,
+  INFORMATION_TABLE_VISIBLE_ROWS,
 } from "@/lib/list-density";
 import { DbManagementLoadingSkeleton, DbObjectManagementPanelShell, DbObjectPanelHeader } from "../components/DbObjectManagementShared";
 import {
@@ -606,66 +607,52 @@ function OntologyErDetailsPanel({ details }: { details: OntologyErDetails }) {
       </div>
 
       {details.columns.length > 0 ? (
-        <div
-          className={`rounded-md border border-border ${INFORMATION_TABLE_SCROLL_CLASS}`}
-          data-testid="ontology-er-columns"
-        >
-          <table className="min-w-[48rem] w-full table-fixed border-collapse text-sm">
-            <thead className="sticky top-0 z-10 bg-surface-sunken">
-              <tr className="h-10">
-                <th
-                  scope="col"
-                  className="w-[24%] px-3 py-2 text-left text-xs font-semibold text-fg"
-                >
-                  {t("ontologyPlayground.erColumnName")}
-                </th>
-                <th
-                  scope="col"
-                  className="w-[16%] px-3 py-2 text-left text-xs font-semibold text-fg"
-                >
-                  {t("ontologyPlayground.erDataType")}
-                </th>
-                <th
-                  scope="col"
-                  className="w-[12%] px-3 py-2 text-left text-xs font-semibold text-fg"
-                >
-                  {t("ontologyPlayground.erKeyRole")}
-                </th>
-                <th
-                  scope="col"
-                  className="w-[22%] px-3 py-2 text-left text-xs font-semibold text-fg"
-                >
-                  {t("ontologyPlayground.erBusinessName")}
-                </th>
-                <th
-                  scope="col"
-                  className="w-[26%] px-3 py-2 text-left text-xs font-semibold text-fg"
-                >
-                  {t("ontologyPlayground.erDescription")}
-                </th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border bg-surface">
-              {details.columns.map((column) => (
-                <tr
-                  key={column.id}
-                  className={INFORMATION_TABLE_ROW_CLASS}
-                  data-testid={`ontology-er-column-${column.id}`}
-                >
-                  <td className="break-all px-3 py-3 font-mono text-xs leading-5 text-fg">
-                    {column.columnName}
-                  </td>
-                  <td className="break-all px-3 py-3 font-mono text-xs leading-5 text-fg-muted">
-                    {column.dataType}
-                  </td>
-                  <td className="px-3 py-3 text-fg">{erKeyRoleLabel(column.keyRole)}</td>
-                  <td className="break-words px-3 py-3 text-fg">{column.businessNameJa}</td>
-                  <td className="break-words px-3 py-3 text-fg-muted">{column.descriptionJa || "-"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <DataTable
+          columns={[
+            {
+              key: "columnName",
+              header: t("ontologyPlayground.erColumnName"),
+              headerClassName: "w-[24%]",
+              className: "break-all py-3 font-mono leading-5",
+              render: (column) => column.columnName,
+            },
+            {
+              key: "dataType",
+              header: t("ontologyPlayground.erDataType"),
+              headerClassName: "w-[16%]",
+              className: "break-all py-3 font-mono leading-5 text-fg-muted",
+              render: (column) => column.dataType,
+            },
+            {
+              key: "keyRole",
+              header: t("ontologyPlayground.erKeyRole"),
+              headerClassName: "w-[12%]",
+              className: "py-3",
+              render: (column) => erKeyRoleLabel(column.keyRole),
+            },
+            {
+              key: "businessNameJa",
+              header: t("ontologyPlayground.erBusinessName"),
+              headerClassName: "w-[22%]",
+              className: "break-words py-3",
+              render: (column) => column.businessNameJa,
+            },
+            {
+              key: "descriptionJa",
+              header: t("ontologyPlayground.erDescription"),
+              headerClassName: "w-[26%]",
+              className: "break-words py-3 text-fg-muted",
+              render: (column) => column.descriptionJa || "-",
+            },
+          ]}
+          rows={details.columns}
+          getRowKey={(column) => column.id}
+          rowProps={(column) => ({ className: INFORMATION_TABLE_ROW_CLASS, "data-testid": `ontology-er-column-${column.id}` })}
+          tableClassName="w-full min-w-[48rem] table-fixed"
+          scrollTestId="ontology-er-columns"
+          stickyHeader
+          visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
+        />
       ) : (
         <Banner severity="info">{t("ontologyPlayground.erColumnsEmpty")}</Banner>
       )}

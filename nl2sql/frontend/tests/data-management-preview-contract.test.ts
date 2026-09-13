@@ -167,7 +167,8 @@ test("データ管理の対象ピッカーはヘッダーソート契約を持�
   assert.match(dbObjectSharedSource, /export type DbObjectPickerSortKey = "name" \| "kind" \| "row_count" \| "owner"/u);
   assert.match(dbObjectSharedSource, /export interface DbObjectPickerSortState/u);
   assert.match(dbObjectSharedSource, /rowCount\?: number \| null/u);
-  assert.match(dbObjectSharedSource, /aria-sort=\{ariaSort\}/u);
+  // 並べ替えの aria-sort は共有 DataTable の <th> が持つ（#530）。
+  assert.match(dbObjectSharedSource, /<DataTable[\s\S]{0,400}onSortChange=\{onSortChange \? \(next\) => onSortChange\(next\.key as DbObjectPickerSortKey\)/u);
   assert.match(dbObjectSharedSource, /onSortChange\?: \(key: DbObjectPickerSortKey\) => void/u);
   assert.match(dataManagementSource, /previewObjectSort/u);
   assert.match(dataManagementSource, /csvTableSort/u);

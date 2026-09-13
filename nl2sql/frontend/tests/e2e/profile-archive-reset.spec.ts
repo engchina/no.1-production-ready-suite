@@ -462,7 +462,7 @@ test("ローカルフォントで全体と並べ替え列名を描画しキー�
   }
   const bodyFont = await page.locator("body").evaluate((node) => getComputedStyle(node).fontFamily);
   expect(bodyFont).toMatch(/^"Noto Sans JP", Roboto,/);
-  await expect(grid.locator("[data-sort-header]").first()).toHaveCSS("font-family", bodyFont);
+  await expect(grid.locator("th[aria-sort] > button").first()).toHaveCSS("font-family", bodyFont);
   for (const count of await grid.locator("tbody td:nth-child(2), tbody td:nth-child(3)").all()) {
     await expect(count).toHaveCSS("font-family", bodyFont);
   }
@@ -474,7 +474,7 @@ test("ローカルフォントで全体と並べ替え列名を描画しキー�
     const { root } = await cdp.send("DOM.getDocument");
     const { nodeId } = await cdp.send("DOM.querySelector", {
       nodeId: root.nodeId,
-      selector: '[data-sort-header] > span',
+      selector: 'th[aria-sort] > button > span',
     });
     const { fonts: renderedFonts } = await cdp.send("CSS.getPlatformFontsForNode", { nodeId });
     expect(renderedFonts.length).toBeGreaterThan(0);
@@ -491,12 +491,13 @@ test("ローカルフォントで全体と並べ替え列名を描画しキー�
   expect(fontResponses.every(({ url, ok }) => new URL(url).origin === origin && ok)).toBe(true);
   expect(externalRequests).toEqual([]);
   await expectCompactSortHeaders(grid);
-  const nameSort = grid.locator('[data-sort-header]').first();
+  const nameHeader = grid.locator("th[aria-sort]").first();
+  const nameSort = nameHeader.locator(":scope > button");
   await nameSort.focus();
   await expect(nameSort).toBeFocused();
-  const before = await nameSort.getAttribute("aria-sort");
+  const before = await nameHeader.getAttribute("aria-sort");
   await nameSort.press("Enter");
-  await expect(nameSort).not.toHaveAttribute("aria-sort", before!);
+  await expect(nameHeader).not.toHaveAttribute("aria-sort", before!);
   await expectProfileListNoHorizontalOverflow(page);
   await grid.locator("thead").screenshot({ path: testInfo.outputPath("profile-column-font.png") });
   await page.screenshot({ path: testInfo.outputPath("profile-local-fonts.png"), fullPage: true });

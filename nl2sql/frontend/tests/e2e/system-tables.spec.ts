@@ -1,4 +1,5 @@
 import { expect, test, type Page, type Route, type TestInfo } from "@playwright/test";
+import { measuredVisibleRowsHeight } from "./_helpers/data-table";
 import { mockDatabaseGateReady, systemAdminMe } from "./_helpers/database-gate";
 
 function envelope(data: unknown, errors: string[] = [], errorCode?: string) {
@@ -467,9 +468,9 @@ test("詳細表はデスクトップ8行・モバイル5行の高さに収め、
       rootFontSize,
     };
   });
-  const expectedMaxHeight = (await scrollRegion.evaluate(() => window.matchMedia("(max-width: 639px), (pointer: coarse)").matches) ? 47 : 35) + exactRows.rootFontSize * 3.5 * expectedRows;
-  expect(exactRows.maxHeight).toBeGreaterThanOrEqual(expectedMaxHeight - 2);
-  expect(exactRows.maxHeight).toBeLessThanOrEqual(expectedMaxHeight + 2);
+  // 共有 DataTable の visibleRows は表頭と先頭 N 行の実測で高さを決める（#530）。
+  const expectedMaxHeight = await measuredVisibleRowsHeight(scrollRegion, "tbody tr", expectedRows);
+  expect(Math.abs(exactRows.maxHeight - expectedMaxHeight)).toBeLessThanOrEqual(1);
   expect(exactRows.scrollHeight).toBeLessThanOrEqual(exactRows.clientHeight + 2);
   expect(exactRows.overflowX).toBe("auto");
   expect(exactRows.overflowY).toBe("auto");

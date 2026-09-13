@@ -135,13 +135,16 @@ async function expectBoundedSecurityTableScroll(
       const rect = row.getBoundingClientRect();
       return rect.top >= headerRect.bottom - 1 && rect.bottom <= regionRect.bottom + 1;
     });
-    const firstRowHeight = rows[0]?.getBoundingClientRect().height ?? 0;
+    const table = node.querySelector("table");
+    const limitRow = rows[expectedRows - 1];
+    if (!table || !limitRow) throw new Error("security table rows are missing");
     return {
       clientHeight: node.clientHeight,
       scrollHeight: node.scrollHeight,
       maxHeight: Number.parseFloat(computed.maxHeight),
-      fittingRowCount:
-        firstRowHeight > 0 ? Math.floor((regionRect.bottom - headerRect.bottom + 1) / firstRowHeight) : 0,
+      // 表頭 + 先頭 N 行の実測下端 + 枠（border・横スクロールバー）。行高が 3.5rem を超える 2 行セルでも N 行ちょうどになる。
+      measuredMaxHeight:
+        limitRow.getBoundingClientRect().bottom - table.getBoundingClientRect().top + (node as HTMLElement).offsetHeight - node.clientHeight,
       overflowX: computed.overflowX,
       overflowY: computed.overflowY,
       headerPosition: window.getComputedStyle(header).position,
@@ -151,17 +154,11 @@ async function expectBoundedSecurityTableScroll(
     };
   }, visibleRowLimit);
 
-  const expectedMaxHeight = (await scrollRegion.evaluate(() => window.matchMedia("(max-width: 639px), (pointer: coarse)").matches) ? 47 : 35) + metrics.rootFontSize * 3.5 * metrics.expectedRows;
-  expect(metrics.maxHeight).toBeGreaterThanOrEqual(expectedMaxHeight - 2);
-  expect(metrics.maxHeight).toBeLessThanOrEqual(expectedMaxHeight + 2);
+  // 共有 DataTable の visibleRows は表頭と先頭 N 行の実測高さから枠を決める（#530）。
+  // 2 行セル（表示名 + ログイン ID）で行高が 3.5rem を超えても、デスクトップ 8 行・モバイル 5 行ちょうどが見える。
+  expect(Math.abs(metrics.maxHeight - metrics.measuredMaxHeight)).toBeLessThanOrEqual(1);
   expect(metrics.scrollHeight).toBeGreaterThan(metrics.clientHeight);
-  // 枠の高さ(3.5rem × 表示行数 + 表頭)は list-density の契約として上で固定する。
-  // デザインシステム移行(docs/design-system/README.md §7 #1)で表・メタの文字が 10.5/11px → 12px になり、
-  // 2 行セル(表示名 + ログイン ID)の行高は 3.5rem を超えうる(「表の行高が増え、収まる行数が減る」は意図的変更)。
-  // そのため完全表示行数は実測行高から導き、契約行数から 1 行を超えて減らないことだけを保証する。
-  expect(metrics.visibleRowCount).toBe(metrics.fittingRowCount);
-  expect(metrics.visibleRowCount).toBeGreaterThanOrEqual(visibleRowLimit - 1);
-  expect(metrics.visibleRowCount).toBeLessThanOrEqual(visibleRowLimit);
+  expect(metrics.visibleRowCount).toBe(visibleRowLimit);
   expect(metrics.headerPosition).toBe("sticky");
   expect(metrics.overflowX).toBe("auto");
   expect(metrics.overflowY).toBe("auto");

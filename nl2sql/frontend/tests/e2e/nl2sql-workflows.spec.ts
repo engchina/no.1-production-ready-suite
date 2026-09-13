@@ -1,6 +1,7 @@
 import { draftKey, WORKSPACE_DRAFT_PREFIX } from "../../src/lib/workspace-drafts";
 import { expectLocalUiFonts } from "./_helpers/local-fonts";
 import { expect, test, type Locator, type Page, type Route, type TestInfo } from "@playwright/test";
+import { measuredVisibleRowsHeight } from "./_helpers/data-table";
 import { mockDatabaseGateReady, systemAdminMe } from "./_helpers/database-gate";
 import {
   expectSplitPaneReservedTrack,
@@ -2805,9 +2806,8 @@ async function expectInformationTableRowLimit(
     { rowSelector, visibleRows }
   );
 
-  const expectedMaxHeight = (await list.evaluate(() => window.matchMedia("(max-width: 639px), (pointer: coarse)").matches) ? 47 : 35) + fit.rootFontSize * 3.5 * visibleRows;
-  expect(fit.maxHeight).toBeGreaterThanOrEqual(expectedMaxHeight - 2);
-  expect(fit.maxHeight).toBeLessThanOrEqual(expectedMaxHeight + 2);
+  const expectedMaxHeight = await measuredVisibleRowsHeight(list, rowSelector, visibleRows);
+  expect(Math.abs(fit.maxHeight - expectedMaxHeight)).toBeLessThanOrEqual(1);
   expect(Math.abs(fit.listHeight - fit.maxHeight)).toBeLessThanOrEqual(2);
   expect(fit.limitInside).toBe(true);
   expect(fit.nextBelow).toBe(true);
@@ -9785,7 +9785,7 @@ test("glossary page manages global terms only", async ({ page }) => {
   await expect(page.getByTestId("glossary-terms-preview").getByRole("columnheader", { name: "No." })).toBeVisible();
   await expect(page.getByTestId("glossary-terms-row-number").first()).toHaveText("1");
   await expect(page.getByTestId("glossary-terms-preview").getByRole("cell", { name: "売上" })).toBeVisible();
-  await expect(page.getByTestId("glossary-term-preview-cell").first()).toHaveCSS("vertical-align", "middle");
+  await expect(page.getByTestId("glossary-term-preview-cell").first().locator("xpath=ancestor::td[1]")).toHaveCSS("vertical-align", "middle");
   await expect(page.getByTestId("glossary-terms-preview").getByRole("cell", { name: "INVOICES.TOTAL_AMOUNT" })).toBeVisible();
   await expect(page.getByTestId("glossary-terms-preview").getByRole("cell", { name: "用語11" })).toHaveCount(0);
   await expect(page.getByTestId("glossary-terms-pagination")).toContainText("1-10 / 21 件");
@@ -10678,7 +10678,7 @@ test("table and view management object lists load more and find unloaded objects
   await expect(tableFooter).toContainText("1 / 1 件を表示");
   await page.getByRole("button", { name: "PAGE_TABLE_101 を表示" }).click();
   await expect(page.getByTestId("table-management-detail-header")).toContainText("PAGE_TABLE_101");
-  await expect(page.getByTestId("db-admin-detail-columns").getByRole("cell", { name: "ID" })).toBeVisible();
+  await expect(page.getByTestId("db-admin-detail-columns").getByRole("rowheader", { name: "ID" })).toBeVisible();
   await tableSearch.fill("");
   await expect(tableFooter).toContainText("100 / 101 件を表示");
   await tableFooter.getByRole("button", { name: "さらに読み込む" }).click();
@@ -10694,7 +10694,7 @@ test("table and view management object lists load more and find unloaded objects
   await expect(viewFooter).toContainText("101 / 101 件を表示");
   await page.getByRole("button", { name: "V_PAGE_VIEW_101 を表示" }).click();
   await expect(page.getByTestId("view-management-detail-header")).toContainText("V_PAGE_VIEW_101");
-  await expect(page.getByTestId("db-admin-detail-columns").getByRole("cell", { name: "ID" })).toBeVisible();
+  await expect(page.getByTestId("db-admin-detail-columns").getByRole("rowheader", { name: "ID" })).toBeVisible();
   await page.goto("/view-management");
   await expect(viewFooter).toContainText("100 / 101 件を表示");
   await viewSearch.fill("V_PAGE_VIEW_101");
@@ -11893,7 +11893,7 @@ test("sample data and data management run imported workflows", async ({ page }) 
   await expect(dataPreviewPanel.getByText("1〜100000 の整数。取得上限を明示してください。")).toBeVisible();
   await expect(dataPreviewPanel.getByLabel("WHERE 条件(任意)")).toHaveCount(0);
   await expect(dataPreviewPanel.getByText("選択中", { exact: true })).toHaveCount(0);
-  await expect(dataPreviewPanel.getByText("統計未取得")).toBeVisible();
+  await expect(dataPreviewPanel.getByText("統計未取得").filter({ visible: true })).toBeVisible();
   await expect(dataPreviewPanel.getByRole("button", { name: /^操作: / })).toHaveCount(0);
   await expect(dataPreviewPanel.getByRole("button", { name: / を選択$/ })).toHaveCount(4);
   await expect(dataPreviewPanel.getByRole("button", { name: / のデータを表示$/ })).toHaveCount(0);

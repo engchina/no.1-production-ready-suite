@@ -23,6 +23,7 @@ import {
   EmptyState,
   FormStatus,
   toast,
+  DataTable,
   type DataTableColumn,
   type DataTableSort,
   Button,
@@ -35,7 +36,6 @@ import {
 
 import { BulkSelectionActions } from "@/components/BulkSelectionActions";
 import { FormActionBar, entityActionToFormAction } from "@/components/FormActionBar";
-import { MasterDetailDataTable } from "@/components/MasterDetailDataTable";
 import { ObjectActionBar, type EntityAction } from "@/components/ObjectActions";
 import { ProcessingIndicator } from "@/components/ProcessingState";
 import { FieldLabel } from "@/components/ui/required-field";
@@ -50,7 +50,7 @@ import {
   INFORMATION_LIST_SCROLL_CLASS,
   INFORMATION_TABLE_FOCUS_CLASS,
   INFORMATION_TABLE_ROW_CLASS,
-  INFORMATION_TABLE_SCROLL_CLASS,
+  INFORMATION_TABLE_VISIBLE_ROWS,
 } from "@/lib/list-density";
 import { useUnsavedChangesGuard } from "@/lib/useUnsavedChangesGuard";
 import { useRequestScope } from "@/lib/useRequestScope";
@@ -728,7 +728,7 @@ export function SecurityRolesPage() {
       key: "role",
       header: t("security.roles.column.role"),
       sortable: true,
-      className: "min-w-52",
+      className: "min-w-52 align-top",
       render: (role) => {
         const selected = visibleSelectedId === role.role_id;
         return (
@@ -756,14 +756,14 @@ export function SecurityRolesPage() {
       key: "status",
       header: t("security.common.status"),
       sortable: true,
-      className: "min-w-32",
+      className: "min-w-32 align-top",
       render: (role) => <RoleStatusBadges role={role} />,
     },
     {
       key: "permissions",
       header: t("security.roles.permissions"),
       sortable: true,
-      className: "min-w-32",
+      className: "min-w-32 align-top",
       render: (role) =>
         t("security.roles.permissionCount", {
           count: effectivePermissionCodes(role.permissions, permissionByCode).size,
@@ -849,29 +849,28 @@ export function SecurityRolesPage() {
                     activityIcon="none"
                   />
                 ) : null}
-                <MasterDetailDataTable
+                <DataTable
                   dense
                   loading={loading}
                   rows={filteredRoles}
                   sort={sort}
                   onSortChange={(next) => { if (!operationBusy) setSort(next); }}
                   selectedRowKey={visibleSelectedId}
-                  onRowSelect={(role) => {
+                  onRowClick={(role) => {
                     if (operationBusy) return;
                     selectedRoleManualSelection.current = true;
                     setSelectedId(role.role_id);
                   }}
                   getRowKey={(role) => role.role_id}
-                  getRowAriaLabel={(role) => t("security.roles.showRole", { name: role.display_name })}
+                  rowProps={(role) => ({ className: INFORMATION_TABLE_ROW_CLASS, "aria-label": t("security.roles.showRole", { name: role.display_name }) })}
                   ariaLabel={t("security.roles.list")}
                   testId="security-roles-grid"
                   scrollAriaLabel={t("security.common.listScrollLabel", {
                     list: t("security.roles.list"),
                   })}
                   scrollTestId="security-roles-scroll-region"
-                  scrollClassName={`${INFORMATION_TABLE_SCROLL_CLASS} ${INFORMATION_TABLE_FOCUS_CLASS}`}
-                  className="[&_thead]:sticky [&_thead]:top-0 [&_thead]:z-10 [&_thead_tr]:h-10"
-                  rowClassName={INFORMATION_TABLE_ROW_CLASS}
+                  stickyHeader
+                  visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
                   empty={<EmptyState title={search ? t("security.roles.noResultsTitle") : t("security.common.empty")} hint={search ? t("security.roles.noResultsHint") : undefined} />}
                   columns={roleColumns}
                 />

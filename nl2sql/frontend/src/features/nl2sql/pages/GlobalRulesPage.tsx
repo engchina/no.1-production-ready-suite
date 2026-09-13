@@ -4,6 +4,7 @@ import { Download, Layers3, RefreshCw } from "lucide-react";
 
 import {
   Button,
+  DataTable,
   EmptyState,
   toast,
   usePagination,
@@ -270,46 +271,31 @@ function RulesPreviewTable({ rules }: { rules: string[] }) {
 
   return (
     <div className="grid gap-2" data-testid="global-rules-preview">
-      <div className="overflow-hidden rounded-md border border-border bg-surface">
-        <div className="overflow-x-auto">
-          <table className="w-full table-fixed divide-y divide-border text-left text-sm">
-            <colgroup>
-              <col className="w-12" />
-              <col />
-            </colgroup>
-            <thead className="bg-surface-sunken text-xs font-semibold uppercase text-fg-muted">
-              <tr>
-                <th scope="col" className="px-3 py-2 text-right">
-                  {t("glossary.preview.rowNumber")}
-                </th>
-                <th scope="col" className="px-3 py-2">
-                  RULE
-                </th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border/70 text-fg">
-              {visibleRows.map((rule, index) => {
-                const absoluteIndex = start + index;
-                return (
-                  <tr key={`${absoluteIndex}-${rule.slice(0, 24)}`}>
-                    <td
-                      className="px-3 py-2 text-right text-xs tabular-nums text-fg-muted"
-                      data-testid="global-rules-row-number"
-                    >
-                      {absoluteIndex + 1}
-                    </td>
-                    <td className="min-w-0 px-3 py-2 align-top">
-                      <div className={RULE_PREVIEW_TEXT_CLASS} data-testid="global-rules-preview-text">
-                        {rule}
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </div>
+      <DataTable
+        columns={[
+          {
+            key: "number",
+            header: t("glossary.preview.rowNumber"),
+            align: "right",
+            headerClassName: "w-12",
+            className: "tabular-nums text-fg-muted",
+            render: (_, index) => <span data-testid="global-rules-row-number">{start + index + 1}</span>,
+          },
+          {
+            key: "rule",
+            header: "RULE",
+            className: "min-w-0 align-top text-sm",
+            render: (rule) => (
+              <div className={RULE_PREVIEW_TEXT_CLASS} data-testid="global-rules-preview-text">
+                {rule}
+              </div>
+            ),
+          },
+        ]}
+        rows={visibleRows}
+        getRowKey={(rule, index) => `${start + index}-${rule.slice(0, 24)}`}
+        tableClassName="w-full table-fixed"
+      />
       <Pagination
         page={currentPage}
         totalPages={totalPages}

@@ -5,6 +5,29 @@
   // コピーせず相対パスで参照する（platform AGENTS.md「lint」節）。CI も platform を sibling に checkout している。
   // アプリ固有のルールを足す場合は、adherence のセレクタを上書きしないよう別のルール名にする。
   "extends": ["../../no.1-production-ready-platform/docs/design-system/adherence.oxlintrc.json"],
+  // アプリ固有のルール用に、同じプラグインを別名で読み込む（adherence の design-system/restricted-syntax を上書きしない）。
+  // jsPlugins は extends 先とマージされないため、adherence のプラグイン（design-system）も並べて指定する。
+  // アプリ固有のルールは、同じ実装を別名で再公開した lint/app-design-system-plugin.mjs で掛ける（adherence の設定を上書きしない）。
+  "jsPlugins": [
+    "../../no.1-production-ready-platform/docs/design-system/design-system-plugin.mjs",
+    "./lint/app-design-system-plugin.mjs"
+  ],
+  "overrides": [
+    {
+      "files": ["src/**/*.ts", "src/**/*.tsx"],
+      "rules": {
+        // 表は共有 DataTable を使う（#530）。固定表頭・表示行数・行の選択状態・aria-sort は DataTable が持つ。
+        // RAG / Agent の置き換え後に platform の adherence へ移す。
+        "nl2sql-design-system/restricted-syntax": [
+          "error",
+          {
+            "selector": "JSXOpeningElement[name.name=/^(table|thead|tbody|tfoot|tr|th|td|colgroup)$/]",
+            "message": "<table> を手書きしない。@engchina/production-ready-ui の DataTable（stickyHeader / visibleRows / selectedRowKey 等）を使う。"
+          }
+        ]
+      }
+    }
+  ],
   // tests/** は computed style の実測値（rgb / px）や fixture を検証するため、adherence の対象外（files: src/**）。
   "ignorePatterns": ["dist/**", "playwright-report/**", "test-results/**"]
 }

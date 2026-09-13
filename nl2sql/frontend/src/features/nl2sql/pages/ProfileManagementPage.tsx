@@ -1,8 +1,6 @@
-import { SortHeader } from "@/components/SortHeader";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  ArrowDownUp,
   ArrowLeft,
   FileJson,
   Plus,
@@ -16,6 +14,7 @@ import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import {
   Button,
   Banner,
+  DataTable,
   EmptyState,
   toast,
   StatusBadge,
@@ -31,7 +30,6 @@ import { ErrorState } from "@/components/StateViews";
 import { IdentifierText } from "@/components/IdentifierText";
 
 import { BulkSelectionActions } from "@/components/BulkSelectionActions";
-import { isInteractiveRowTarget } from "@/components/MasterDetailDataTable";
 import { ObjectActionBar } from "@/components/ObjectActions";
 import { PageHeaderStatusBadge } from "@/components/PageHeaderStatusBadge";
 import { ProcessingIndicator } from "@/components/ProcessingState";
@@ -40,7 +38,6 @@ import { ClearActionButton } from "@/components/ui/clear-action-button";
 import { FieldLabel } from "@/components/ui/required-field";
 import { ApiError, apiDelete, apiGet, apiPatch, apiPost, isTimeoutError } from "@/lib/api";
 import { t } from "@/lib/i18n";
-import { INFORMATION_TABLE_FOCUS_CLASS } from "@/lib/list-density";
 import { toastError } from "@/lib/toast";
 import { LIST_SEARCH_DEBOUNCE_MS, useDebouncedValue } from "@/lib/useDebouncedValue";
 import { useUnsavedChangesGuard } from "@/lib/useUnsavedChangesGuard";
@@ -321,30 +318,6 @@ function schemaSummaryToTable(object: SchemaObjectSummary): SchemaTable {
   };
 }
 
-function SortButton({
-  label,
-  sortKey,
-  sort,
-  onToggle,
-}: {
-  label: string;
-  sortKey: ProfileListSortKey;
-  sort: ProfileListSortState;
-  onToggle: (key: ProfileListSortKey) => void;
-}) {
-  const active = sort.key === sortKey;
-  return (
-    <SortHeader
-      type="button"
-      aria-sort={active ? (sort.direction === "asc" ? "ascending" : "descending") : "none"}
-      onClick={() => onToggle(sortKey)}
-    >
-      <span>{label}</span>
-      <ArrowDownUp size={14} className={active ? "text-accent-fg" : "text-fg-muted"} aria-hidden="true" />
-    </SortHeader>
-  );
-}
-
 function updateSelectAiConfig(
   setForm: (updater: (current: ProfileFormState) => ProfileFormState) => void,
   patch: Partial<ProfileSelectAiConfig>
@@ -417,73 +390,61 @@ function ProfileList({
           hint={search.trim() ? t("profiles.list.noResultsHint") : t("profiles.empty.hint")}
         />
       ) : (
-        <div className="overflow-hidden rounded-md border border-border bg-surface">
-          <div
-            className={`max-h-[20rem] max-w-full overflow-x-hidden overflow-y-auto md:max-h-[30.5rem] ${INFORMATION_TABLE_FOCUS_CLASS}`}
-            role="region"
-            tabIndex={0}
-            aria-label={t("profiles.list.scrollLabel")}
-            data-testid="profile-management-list"
-          >
-            <table className="w-full max-w-[34rem] table-fixed divide-y divide-border text-left text-sm" data-testid="profile-management-grid">
-              <colgroup>
-                <col />
-                <col className="w-[7rem]" />
-                <col className="w-[7rem]" />
-              </colgroup>
-              <thead className="sticky top-0 z-10 bg-surface-sunken text-xs text-fg-muted">
-                <tr>
-                  <th className="px-3 py-2">
-                    <SortButton label={t("profiles.field.name")} sortKey="name" sort={sort} onToggle={onSortChange} />
-                  </th>
-                  <th className="px-3 py-2 text-right">
-                    <SortButton label={t("profiles.field.allowedTables")} sortKey="tables" sort={sort} onToggle={onSortChange} />
-                  </th>
-                  <th className="px-3 py-2 text-right">
-                    <SortButton label={t("profiles.field.allowedViews")} sortKey="views" sort={sort} onToggle={onSortChange} />
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border/70">
-                {profiles.map((profile) => {
-                  const selected = profile.id === selectedProfileId;
-                  return (
-                    <tr
-                      key={profile.id}
-                      data-selected={selected ? "true" : "false"}
-                      aria-current={selected ? "true" : undefined}
-                      className={[
-                        "cursor-pointer transition-colors",
-                        selected ? "bg-accent-subtle" : "hover:bg-surface-hover",
-                      ].join(" ")}
-                      onClick={(event) => {
-                        if (isInteractiveRowTarget(event.target)) return;
-                        onSelect(profile);
-                      }}
-                    >
-                      <td className="px-3 py-2 align-top">
-                        <button
-                          type="button"
-                          className="grid max-w-full text-left focus:outline-none focus:ring-2 focus:ring-focus-ring"
-                          aria-current={selected ? "true" : undefined}
-                          aria-label={t("profiles.action.selectProfile", { name: profile.name })}
-                          onClick={() => onSelect(profile)}
-                        >
-                          {/* 375px では名前列が狭く、区切りのない名前（PROFILE_EMP 等）の min-content が隣の列へはみ出すため、
-                              `_` の位置を優先して折り返し、最後の手段として任意位置で折り返す。 */}
-                          <IdentifierText value={profile.name} className="font-semibold text-accent-fg" />
-                          <span className="line-clamp-2 text-xs leading-5 text-fg-muted [overflow-wrap:anywhere]">{profile.category || "-"}</span>
-                        </button>
-                      </td>
-                      <td className="px-3 py-2 text-right font-sans text-xs text-fg">{profile.allowed_table_count}</td>
-                      <td className="px-3 py-2 text-right font-sans text-xs text-fg">{profile.allowed_view_count}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
+        <DataTable
+          columns={[
+            {
+              key: "name",
+              header: t("profiles.field.name"),
+              sortable: true,
+              className: "align-top",
+              render: (profile) => (
+                <button
+                  type="button"
+                  className="grid max-w-full text-left focus:outline-none focus:ring-2 focus:ring-focus-ring"
+                  aria-current={profile.id === selectedProfileId ? "true" : undefined}
+                  aria-label={t("profiles.action.selectProfile", { name: profile.name })}
+                  onClick={() => onSelect(profile)}
+                >
+                  {/* 375px では名前列が狭く、区切りのない名前（PROFILE_EMP 等）の min-content が隣の列へはみ出すため、
+                      `_` の位置を優先して折り返し、最後の手段として任意位置で折り返す。 */}
+                  <IdentifierText value={profile.name} className="font-semibold text-accent-fg" />
+                  <span className="line-clamp-2 text-xs leading-5 text-fg-muted [overflow-wrap:anywhere]">{profile.category || "-"}</span>
+                </button>
+              ),
+            },
+            {
+              key: "tables",
+              header: t("profiles.field.allowedTables"),
+              sortable: true,
+              align: "right",
+              headerClassName: "w-[7rem]",
+              className: "align-top font-sans",
+              render: (profile) => profile.allowed_table_count,
+            },
+            {
+              key: "views",
+              header: t("profiles.field.allowedViews"),
+              sortable: true,
+              align: "right",
+              headerClassName: "w-[7rem]",
+              className: "align-top font-sans",
+              render: (profile) => profile.allowed_view_count,
+            },
+          ]}
+          rows={profiles}
+          getRowKey={(profile) => profile.id}
+          sort={sort}
+          onSortChange={(next) => onSortChange(next.key as ProfileListSortKey)}
+          selectedRowKey={selectedProfileId}
+          onRowClick={onSelect}
+          testId="profile-management-grid"
+          tableClassName="w-full min-w-0 max-w-[34rem] table-fixed"
+          // 名前・カテゴリの 2 行セルが並ぶ一覧。横スクロールは出さず、縦だけ内部スクロールにする。
+          className="max-h-[20rem] max-w-full overflow-x-hidden md:max-h-[30.5rem]"
+          scrollAriaLabel={t("profiles.list.scrollLabel")}
+          scrollTestId="profile-management-list"
+          stickyHeader
+        />
       )}
       {!loading && profiles.length > 0 && (hasNextPage || loadMoreError) && (
         <div className="grid justify-items-end gap-2" data-testid="profile-management-load-more">

@@ -1,7 +1,6 @@
 import { ConfirmProvider, Toaster, toast, useConfirm } from "@engchina/production-ready-ui";
 import { MemoryRouter } from "react-router-dom";
-import type { DataTableSort } from "@engchina/production-ready-ui";
-import { MasterDetailDataTable } from "../../src/components/MasterDetailDataTable";
+import { DataTable, type DataTableSort } from "@engchina/production-ready-ui";
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { Copy, Plus, Trash2 } from "lucide-react";
@@ -57,7 +56,7 @@ function Standards() {
       <Button variant="secondary" onClick={() => toast.success("保存しました", { duration: 0 })}>保存通知</Button>
       <Toaster />
       <output id="results">操作回数: {count}</output>
-      <MasterDetailDataTable
+      <DataTable
         ariaLabel="一覧の列名"
         testId="sort-header-table"
         columns={[
@@ -65,7 +64,7 @@ function Standards() {
           { key: "description", header: "説明", render: () => "確認用の項目" },
         ]}
         rows={(sort.direction === "asc" ? ["A", "B"] : ["B", "A"]).map(name => ({ name }))}
-        getRowKey={row => row.name}
+        getRowKey={(row: { name: string }) => row.name}
         sort={sort}
         onSortChange={setSort}
       />
