@@ -24,8 +24,8 @@ WORKDIR /build/backend
 COPY backend/pyproject.toml backend/uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project \
     && useradd --create-home --shell /usr/sbin/nologin appuser \
-    && mkdir -p /u01/production-ready-rag /tmp/uv-cache \
-    && chown -R appuser:appuser /u01/production-ready-rag /tmp/uv-cache /build
+    && mkdir -p /u01/data/production-ready-rag /tmp/uv-cache \
+    && chown -R appuser:appuser /u01/data/production-ready-rag /tmp/uv-cache /build
 
 COPY --chown=appuser:appuser backend/app ./app
 RUN chown appuser:appuser /build/backend

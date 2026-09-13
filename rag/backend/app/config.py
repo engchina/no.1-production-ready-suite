@@ -154,7 +154,7 @@ AgenticProfile = Literal[
 EnterpriseAiVlmInputMode = Literal["files_api", "inline_image"]
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MODEL_SETTINGS_FILE = "model-settings.json"
-DEFAULT_LOCAL_STORAGE_DIR = "/u01/production-ready-rag"
+DEFAULT_LOCAL_STORAGE_DIR = "/u01/data/production-ready-rag"
 
 
 class EnterpriseAiConfiguredModel(BaseModel):

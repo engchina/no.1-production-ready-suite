@@ -20,7 +20,7 @@ from starlette.responses import JSONResponse, Response
 from app.api.router import api_router
 from app.auth import attach_refreshed_auth_cookie, auth_is_enabled, prepare_auth_request
 from app.clients.oracle import close_oracle_pool
-from app.config import get_settings
+from app.config import Settings, get_settings
 from app.logging_config import configure_logging
 from app.rag.observability import (
     close_trace_exporter,
@@ -32,9 +32,28 @@ from app.rag.request_context import (
     reset_audit_request_context,
     set_audit_request_context,
 )
+from app.readiness import pending_legacy_local_storage_dir
 
 logger = logging.getLogger(__name__)
 UNHANDLED_ERROR_MESSAGE = "サーバー内部でエラーが発生しました。時間をおいて再度お試しください。"
+
+
+def _warn_pending_legacy_local_storage_dir(settings: Settings) -> None:
+    """旧既定ディレクトリに原本が残っている場合、移行手順を警告ログで案内する。"""
+    legacy_dir = pending_legacy_local_storage_dir(settings)
+    if legacy_dir is None:
+        return
+    logger.warning(
+        "legacy_local_storage_dir_detected",
+        extra={
+            "legacy_local_storage_dir": legacy_dir,
+            "local_storage_dir": settings.local_storage_dir,
+            "advice": (
+                "files are not moved automatically; copy legacy files into LOCAL_STORAGE_DIR "
+                "(see docs/deployment.md) or set LOCAL_STORAGE_DIR to the legacy path"
+            ),
+        },
+    )
 
 
 @asynccontextmanager
@@ -43,6 +62,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     configure_logging(settings.log_level)
     configure_trace_exporter(settings)
+    _warn_pending_legacy_local_storage_dir(settings)
     worker_task: asyncio.Task[None] | None = None
     worker_stop: asyncio.Event | None = None
     if (

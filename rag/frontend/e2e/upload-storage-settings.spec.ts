@@ -14,7 +14,7 @@ interface UploadStorageSettingsData {
 
 const localStorageSettings: UploadStorageSettingsData = {
   backend: "local",
-  local_storage_dir: "/u01/production-ready-rag",
+  local_storage_dir: "/u01/data/production-ready-rag",
   object_storage_region: "ap-osaka-1",
   object_storage_namespace: "",
   object_storage_bucket: "",
@@ -75,7 +75,7 @@ test("アップロード保存先設定で OCI Object Storage に切り替えら
   await expect(page.getByRole("heading", { name: "運用メモ" })).toBeVisible();
   const envPreview = page.getByLabel(".env プレビュー");
   await expect(envPreview).toContainText("UPLOAD_STORAGE_BACKEND=local");
-  await expect(envPreview).toContainText("LOCAL_STORAGE_DIR=/u01/production-ready-rag");
+  await expect(envPreview).toContainText("LOCAL_STORAGE_DIR=/u01/data/production-ready-rag");
   await page.getByRole("radio", { name: /OCI Object Storage/ }).check();
   await expect(page.getByLabel("Object Storage ネームスペース")).toHaveCount(0);
   await page.getByLabel("Object Storage バケット").fill("rag-originals");

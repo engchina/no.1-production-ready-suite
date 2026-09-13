@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from app.config import (
+    DEFAULT_LOCAL_STORAGE_DIR,
     Settings,
     enterprise_ai_default_model_id,
     enterprise_ai_model_catalog,
@@ -15,6 +16,8 @@ READINESS_MISSING = "missing"
 READINESS_INVALID = "invalid"
 READINESS_MISSING_CREDENTIALS = "missing_credentials"
 READINESS_WALLET_NOT_FOUND = "wallet_not_found"
+# 既定値を /u01/data/production-ready-rag へ移す前の保存先。自動移行はせず、起動時に案内だけ出す。
+LEGACY_LOCAL_STORAGE_DIR = "/u01/production-ready-rag"
 
 
 def readiness_checks_are_ok(checks: Mapping[str, str]) -> bool:
@@ -46,6 +49,31 @@ def oracle_readiness_check(settings: Settings) -> str:
 def upload_storage_readiness_checks(settings: Settings) -> dict[str, str]:
     """アップロード原本保存先の readiness checks を返す。"""
     return _upload_storage_checks(settings)
+
+
+def pending_legacy_local_storage_dir(
+    settings: Settings,
+    *,
+    legacy_dir: str = LEGACY_LOCAL_STORAGE_DIR,
+    default_dir: str = DEFAULT_LOCAL_STORAGE_DIR,
+) -> str | None:
+    """既定保存先で起動し、旧既定ディレクトリにデータが残っていればそのパスを返す。
+
+    LOCAL_STORAGE_DIR を明示設定している環境、旧ディレクトリが新ディレクトリへの
+    symlink 済み・空・存在しない環境では None を返す。ファイルの移動は行わない。
+    """
+    try:
+        configured = Path(settings.local_storage_dir).expanduser().resolve()
+        if configured != Path(default_dir).resolve():
+            return None
+        legacy = Path(legacy_dir)
+        if legacy.is_symlink() or not legacy.is_dir():
+            return None
+        if not any(legacy.iterdir()):
+            return None
+    except OSError:
+        return None
+    return str(legacy)
 
 
 def _production_safety_checks(settings: Settings) -> dict[str, str]:
