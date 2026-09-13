@@ -129,7 +129,7 @@ export const ja = {
   "nav.section.toggle.collapse": "{section} を折りたたむ",
   "nav.section.toggle.expand": "{section} を展開",
   "nav.section.containsActive": "現在のページを含む",
-  "nav.command.open": "コマンドパレットを開く",
+  "nav.command.open": "コマンドパレット",
   "command.title": "ページへ移動",
   "command.search.placeholder": "ページ名で検索（Parser、検索、評価 など）",
   "command.empty": "一致するページがありません。",
