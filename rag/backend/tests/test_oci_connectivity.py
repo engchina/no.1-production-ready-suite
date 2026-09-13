@@ -49,6 +49,7 @@ def _write_oci_files(
     key_bytes: bytes | None = None,
 ) -> str:
     """tmp 配下に 0700 / 0600 の OCI config と鍵を作り、Settings をそこへ向ける。"""
+    monkeypatch.setenv("HOME", str(tmp_path))
     oci_dir = tmp_path / "oci"
     oci_dir.mkdir()
     pem, actual_fingerprint = _rsa_pem_and_fingerprint()
@@ -103,6 +104,7 @@ def _assert_no_secrets(result: OciConfigTestResult, fingerprint: str) -> None:
 def test_missing_config_fails_first_stage_and_skips_the_rest(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
     settings = get_settings()
     monkeypatch.setattr(settings, "oci_config_file", str(tmp_path / "missing-config"))
     calls = _mock_namespace_call(monkeypatch, lambda _config: "ns")
