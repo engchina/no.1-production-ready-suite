@@ -35,6 +35,8 @@ from .models import (
 )
 from .object_identity import (
     OracleObjectIdentity,
+    format_object_part,
+    is_unquoted_object_part,
     normalize_object_part,
     parse_object_identity,
     qualified_object_name,
@@ -74,6 +76,36 @@ class SelectAiCredentialExistsError(OracleAdapterError):
 
 class TabularImportValidationError(OracleAdapterError):
     """Excel/CSV 取込を DB mutation 前に拒否する利用者修正可能なエラー。"""
+
+
+class SelectAiObjectListUnsupportedError(ValueError):
+    """引用が必要な owner / object 名を Select AI の `object_list` へ渡さない（#561）。
+
+    `DBMS_CLOUD_AI` の `object_list` は `{"owner": "SH", "name": "customers"}` のように
+    owner / name を文字列で受け取るが、Oracle のドキュメントは大文字小文字や引用符の扱いを
+    規定していない（例は小文字の `customers` で `SH.CUSTOMERS` を指す）。`Mixed_Case` を渡すと
+    大文字の同名表 `MIXED_CASE` と解釈される可能性があり、`"Mixed_Case"` を渡す形式も未確認のため、
+    推測で渡さず明示的なエラーにする。利用者が画面で原因を読めるよう、Oracle 例外とは別の型にする。
+    """
+
+    def __init__(self, object_names: Iterable[str]) -> None:
+        self.object_names = sorted(set(object_names))
+        super().__init__(
+            f"{', '.join(self.object_names)}: "
+            "大文字小文字の混在や記号を含み引用が必要な表・ビュー名は、"
+            "Select AI Profile の object_list に反映できません。大文字の同名表と取り違えないよう"
+            "反映を中止しました。対象から外すか、Select AI 以外のエンジンで利用してください。"
+        )
+
+
+def select_ai_object_list_entry(identity: OracleObjectIdentity) -> dict[str, str]:
+    """Owner 付き object を Select AI の `object_list` 要素にする。引用が必要な名前は拒否する。"""
+
+    if not (
+        is_unquoted_object_part(identity.owner) and is_unquoted_object_part(identity.object_name)
+    ):
+        raise SelectAiObjectListUnsupportedError([identity.qualified_name])
+    return {"owner": identity.owner, "name": identity.object_name}
 
 
 WALLET_PASSWORD_REQUIRED_ERROR = (
@@ -3599,17 +3631,31 @@ class OracleNl2SqlAdapter:
     def _object_list(self, allowed_tables: list[str]) -> list[dict[str, str]]:
         owner = self.settings.oracle_user.upper() if self.settings.oracle_user else ""
         objects: list[dict[str, str]] = []
+        quoted_names: list[str] = []
         for table_name in allowed_tables:
-            normalized = table_name.strip().upper()
-            if not normalized:
+            if not table_name.strip():
                 continue
-            if "." in normalized:
-                object_owner, object_name = normalized.split(".", 1)
-                objects.append({"owner": object_owner, "name": object_name})
-            elif owner:
-                objects.append({"owner": owner, "name": normalized})
-            else:
-                objects.append({"name": normalized})
+            # 大文字化・dot 分割すると `SALES."Mixed_Case"` が `SALES."MIXED_CASE"` に化けるため、
+            # 引用規則どおりに分解する（#561）。
+            try:
+                identity = parse_object_identity(table_name, default_owner=owner)
+            except ValueError:
+                if owner:
+                    raise OracleAdapterError(
+                        f"{table_name}: Select AI の対象 object 名が不正です。"
+                    ) from None
+                name = normalize_object_part(table_name)
+                if not is_unquoted_object_part(name):
+                    quoted_names.append(format_object_part(name))
+                    continue
+                objects.append({"name": name})
+                continue
+            try:
+                objects.append(select_ai_object_list_entry(identity))
+            except SelectAiObjectListUnsupportedError:
+                quoted_names.append(identity.qualified_name)
+        if quoted_names:
+            raise OracleAdapterError(str(SelectAiObjectListUnsupportedError(quoted_names)))
         return objects
 
     def _execute_agent_create(

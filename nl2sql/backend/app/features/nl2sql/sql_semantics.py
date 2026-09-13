@@ -204,6 +204,12 @@ def _from_sources(select: Any) -> list[Any]:
     return sources
 
 
+def _identifier_quoted(identifier: Any) -> bool:
+    """sqlglot の Identifier が二重引用符付きで書かれていたか。"""
+
+    return bool(getattr(identifier, "args", {}).get("quoted")) if identifier is not None else False
+
+
 def _normalize_qualifier(value: str) -> str:
     return value.replace('"', "").strip().upper()
 
@@ -506,6 +512,8 @@ def parse_oracle_sql(
                 qualified_name=qualified_name,
                 is_cte=id(table) in cte_reference_ids,
                 source_sql=_sql(table),
+                owner_quoted=_identifier_quoted(table.args.get("db")),
+                name_quoted=_identifier_quoted(table.args.get("this")),
             )
         )
 

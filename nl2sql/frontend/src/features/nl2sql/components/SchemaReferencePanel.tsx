@@ -19,6 +19,7 @@ import {
   normalizeObjectIdentifier,
   schemaTableQualifiedName,
 } from "../workbenchState";
+import { formatDbObjectPart } from "../dbObjectIdentity";
 import { DbObjectName } from "./DbObjectName";
 import { formatSampleValues, formatSchemaCount } from "../schemaDisplay";
 import type { SchemaCatalog, SchemaColumn, SchemaTable } from "../types";
@@ -95,7 +96,8 @@ export function SchemaReferencePanel({
     if (!allowedSet) return catalog.tables;
     return catalog.tables.filter((table) => {
       const qualifiedName = normalizeObjectIdentifier(schemaTableQualifiedName(table));
-      const objectName = normalizeObjectIdentifier(table.table_name);
+      // table_name はカタログ上の名前（引用符なし）。引用が必要な名前だけ `"..."` で囲んで照合する。
+      const objectName = formatDbObjectPart(table.table_name);
       // legacy profile は非修飾名、新しい cross-schema profile は OWNER.OBJECT を保持する。
       return allowedSet.has(qualifiedName) || allowedSet.has(objectName);
     });

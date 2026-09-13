@@ -4,6 +4,8 @@ import test from "node:test";
 
 import {
   applySchemaBulkSelection,
+  countSelectedObjectsInOwner,
+  normalizeObjectKey,
   profileFormEquals,
   selectedObjectKeys,
   toggleObjectSelection,
@@ -135,6 +137,61 @@ test("トグルは表記が違う保存値でも同じ object として外せる
   ]);
 });
 
+test("引用名は大文字化せず、大文字の同名表と別の object として選択する (#561)", () => {
+  assert.equal(normalizeObjectKey('SALES."Mixed_Case"'), 'SALES."Mixed_Case"');
+  assert.equal(normalizeObjectKey('"SALES"."Mixed_Case"'), 'SALES."Mixed_Case"');
+  assert.equal(normalizeObjectKey('"SALES"."MIXED_CASE"'), "SALES.MIXED_CASE");
+  assert.equal(normalizeObjectKey('APP."売上"'), 'APP."売上"');
+
+  const quotedSelected = toggleObjectSelection([], 'SALES."Mixed_Case"');
+  assert.deepEqual(quotedSelected, ['SALES."Mixed_Case"']);
+  const both = toggleObjectSelection(quotedSelected, "SALES.MIXED_CASE");
+  assert.deepEqual(both, ['SALES."Mixed_Case"', "SALES.MIXED_CASE"]);
+  assert.deepEqual([...selectedObjectKeys(both)].sort(), ['SALES."Mixed_Case"', "SALES.MIXED_CASE"]);
+  // 大文字の表を外しても引用名の表の選択は残る。
+  assert.deepEqual(toggleObjectSelection(both, '"SALES"."MIXED_CASE"'), ['SALES."Mixed_Case"']);
+  assert.equal(
+    profileFormEquals(
+      { allowedTables: ['SALES."Mixed_Case"'], allowedViews: [] },
+      { allowedTables: ["SALES.MIXED_CASE"], allowedViews: [] },
+    ),
+    false,
+  );
+});
+
+test("スキーマ単位の件数と一括解除は owner 部分で判定し、前方一致で他スキーマを巻き込まない", () => {
+  const selected = ["SALES.ORDERS", 'SALES."Mixed_Case"', "SALES_ARCHIVE.ORDERS", "ORDERS"];
+  assert.equal(countSelectedObjectsInOwner(selectedObjectKeys(selected), "SALES"), 2);
+  assert.deepEqual(
+    applySchemaBulkSelection({
+      current: selected,
+      snapshot: [],
+      ownerPrefix: "SALES.",
+      select: false,
+      filtered: false,
+    }),
+    ["SALES_ARCHIVE.ORDERS", "ORDERS"],
+  );
+  assert.deepEqual(
+    applySchemaBulkSelection({
+      current: ["SALES.MIXED_CASE", 'SALES."Mixed_Case"'],
+      snapshot: ['SALES."Mixed_Case"'],
+      ownerPrefix: "SALES.",
+      select: false,
+      filtered: true,
+    }),
+    ["SALES.MIXED_CASE"],
+  );
+});
+
+test("スキーマ一括選択の snapshot は引用名を大文字化しない", () => {
+  assert.match(
+    incrementalQueries,
+    /names\.add\(formatDbObjectName\(\{ owner: object\.owner, name: object\.object_name \}\)\);/u,
+  );
+  assert.doesNotMatch(incrementalQueries, /`\$\{object\.owner\}\.\$\{object\.object_name\}`\.toUpperCase\(\)/u);
+});
+
 test("トグルは重複を積み上げない", () => {
   let selection: string[] = [];
   for (let index = 0; index < 3; index += 1) {
@@ -156,7 +213,8 @@ test("チェック判定・トグル・件数が同じ正規化キーを共有�
   assert.match(profilePage, /selectedObjectKeys\(selectedItems\)/u);
   assert.match(profilePage, /toggleObjectSelection\(current\[key\], name\)/u);
   assert.match(profilePage, /selected=\{selectedSet\.has\(normalizeObjectKey\(qualified\)\)\}/u);
-  assert.match(profilePage, /const ownerKeyPrefix = normalizeObjectKey\(`\$\{owner\}\.`\);/u);
+  assert.match(profilePage, /countSelectedObjectsInOwner\(selectedSet, owner\)/u);
+  assert.doesNotMatch(profilePage, /name\.startsWith\(ownerKeyPrefix\)/u);
   assert.doesNotMatch(profilePage, /current\[key\]\.includes\(name\)/u);
 });
 

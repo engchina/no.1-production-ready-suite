@@ -1620,6 +1620,107 @@ test("異なる schema の同名表を別々に選択できる", async ({ page }
   await expect(tableList.getByLabel("APP.ORDERS")).toHaveCount(0);
 });
 
+test("引用が必要な表名は大文字化せず、大文字の同名表と別に選択・保存する (#561)", async ({ page }) => {
+  const quotedCatalog = {
+    ...schemaCatalog,
+    tables: [
+      ...schemaCatalog.tables,
+      {
+        table_name: "MIXED_CASE",
+        logical_name: "大文字の受注",
+        owner: "SALES",
+        table_type: "TABLE",
+        comment: "大文字の同名表",
+        row_count: null,
+        columns: [],
+        constraints: [],
+      },
+      {
+        table_name: "Mixed_Case",
+        logical_name: "引用名の受注",
+        owner: "SALES",
+        table_type: "TABLE",
+        comment: "引用が必要な表",
+        row_count: null,
+        columns: [],
+        constraints: [],
+      },
+    ],
+  };
+  const quotedProfiles = [{ ...profiles[0], allowed_tables: [], allowed_views: [] }];
+  await mockProfileApi(page, { catalog: quotedCatalog, profileItems: quotedProfiles });
+  let savedPayload: { allowed_tables: string[] } | null = null;
+  await page.route("**/api/nl2sql/profiles/default", async (route) => {
+    if (route.request().method() === "GET") {
+      await route.fallback();
+      return;
+    }
+    savedPayload = route.request().postDataJSON() as { allowed_tables: string[] };
+    await fulfillJson(route, { ...quotedProfiles[0], ...savedPayload, id: "default" });
+  });
+  const unsupportedMessage =
+    'SALES."Mixed_Case": 大文字小文字の混在や記号を含み引用が必要な表・ビュー名は、' +
+    "Select AI Profile の object_list に反映できません。";
+  await page.route("**/api/nl2sql/oracle-sync-jobs/*", (route) =>
+    fulfillJson(route, {
+      job_id: "profile-sync-default",
+      profile_id: "default",
+      profile_etag: "etag-default",
+      status: "failed",
+      phase: "failed",
+      rebuild_agent_assets: false,
+      error_code: "PROFILE_OBJECT_LIST_UNSUPPORTED",
+      error_message_ja: unsupportedMessage,
+      created_at: "2026-07-22T00:00:00Z",
+      finished_at: "2026-07-22T00:00:01Z",
+      oracle_result: null,
+    })
+  );
+
+  await page.goto("/profiles?profile=default");
+
+  const tableList = page.getByTestId("profile-allowed-table-list");
+  const quoted = tableList.getByLabel('SALES."Mixed_Case"', { exact: true });
+  const upper = tableList.getByLabel("SALES.MIXED_CASE", { exact: true });
+  await expect(quoted).toBeVisible();
+  await expect(upper).toBeVisible();
+  await expect(tableList.getByText("引用名の受注", { exact: true })).toBeVisible();
+  await expect(tableList.getByText("大文字の受注", { exact: true })).toBeVisible();
+
+  // 引用名の表を選んでも、大文字の同名表はチェックされない。
+  await quoted.check();
+  await expect(quoted).toBeChecked();
+  await expect(upper).not.toBeChecked();
+  await expect(tableList).toContainText("選択 1 件");
+  await upper.check();
+  await upper.uncheck();
+  await expect(quoted).toBeChecked();
+  await expect(upper).not.toBeChecked();
+  await expect(tableList).toContainText("選択 1 件");
+
+  // スキーマ単位の一括解除は SALES の両方を外し、再選択は snapshot の表記を保つ。
+  const salesBulkActions = tableList.getByTestId("profile-allowed-table-list-sales-schema-bulk-actions");
+  await salesBulkActions.getByRole("button", { name: "SALES をすべて選択" }).click();
+  await expect(quoted).toBeChecked();
+  await expect(upper).toBeChecked();
+  await expect(tableList).toContainText("選択 2 件");
+  await upper.uncheck();
+  await expect(tableList).toContainText("選択 1 件");
+
+  await page.getByLabel("名称").fill("SALES_PROFILE");
+  await page.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+
+  const status = page.getByTestId("profile-save-progress");
+  await expect(status).toHaveAttribute("data-job-status", "failed");
+  await expect(status).toContainText(unsupportedMessage);
+  // 対象を見直すまで結果が変わらないため、再試行は出さない。
+  await expect(status.getByRole("button", { name: "Oracle 反映を再試行" })).toHaveCount(0);
+  const payload = savedPayload as { allowed_tables: string[] } | null;
+  expect(payload?.allowed_tables).toEqual(['SALES."Mixed_Case"']);
+  await expectNoDocumentHorizontalOverflow(page);
+});
+
 test("$ と NL2SQL_ のシステム object は業務プロファイルの対象オブジェクトに表示しない", async ({ page }) => {
   const catalog = {
     ...schemaCatalog,

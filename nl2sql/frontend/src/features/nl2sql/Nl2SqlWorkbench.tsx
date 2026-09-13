@@ -289,7 +289,8 @@ function ExecutableNl2SqlWorkbench() {
       refreshed_at: schemaHeadQuery.data?.refreshed_at ?? "",
       schema_fingerprint: schemaHeadQuery.data?.schema_fingerprint ?? "",
       tables: schemaObjects.map((object) => {
-        const key = `${object.owner}.${object.object_name}`.toUpperCase();
+        // 引用名の表を大文字の同名表と同じキーにしない（#561）。
+        const key = formatDbObjectName({ owner: object.owner, name: object.object_name });
         return (
           schemaDetails[key]?.table ?? {
             table_name: object.object_name,
@@ -735,7 +736,7 @@ function ExecutableNl2SqlWorkbench() {
   };
 
   const loadSchemaDetail = useCallback(async (table: SchemaTable, signal?: AbortSignal) => {
-    const key = `${table.owner}.${table.table_name}`.toUpperCase();
+    const key = formatDbObjectName({ owner: table.owner, name: table.table_name });
     if (schemaDetails[key] || schemaDetailRequests.current.has(key)) return;
     schemaDetailRequests.current.add(key);
     try {

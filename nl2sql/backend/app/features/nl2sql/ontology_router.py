@@ -38,6 +38,7 @@ from .models import (
     PreviewRequest,
     QueryResults,
 )
+from .object_identity import format_object_part, object_name_tokens
 from .ontology_build import (
     OntologyBuildService,
     build_schema_context_from_catalog,
@@ -140,6 +141,25 @@ from .service import nl2sql_service
 from .structured_outputs import format_schema, strict_schema
 
 logger = logging.getLogger(__name__)
+
+
+def _object_match_key(value: str) -> str:
+    """Profile の object 名（`OBJECT` / `OWNER.OBJECT`、各部は引用可）の照合キー（#561）。"""
+
+    try:
+        return ".".join(object_name_tokens(value))
+    except ValueError:
+        return value.strip()
+
+
+def _catalog_match_key(*parts: str) -> str:
+    """カタログ上の owner / object 名（引用符なし・大文字小文字を保持）の照合キー。"""
+
+    try:
+        return ".".join(format_object_part(part) for part in parts)
+    except ValueError:
+        return ".".join(parts)
+
 
 ONTOLOGY_SOURCE_FILE_MAX_COUNT = 5
 _EXPECTED_ETAG_UNSET = object()
@@ -1879,12 +1899,19 @@ class OntologyApiRuntime:
         *,
         source_label: str = "公開済みオントロジー(スキーマ情報)",
     ) -> list[str]:
-        resolved = {item.object_name.upper() for item in view.physical_objects} | {
-            f"{item.owner}.{item.object_name}".upper() for item in view.physical_objects
+        resolved = {
+            key
+            for item in view.physical_objects
+            for key in (
+                _catalog_match_key(item.object_name),
+                _catalog_match_key(item.owner, item.object_name),
+            )
         }
 
         def normalize(value: str) -> str:
-            return value.replace('"', "").strip().upper()
+            # 引用名は大文字小文字を保つ。`SALES."Mixed_Case"` を大文字の同名表で
+            # 解決済みにしない（#561）。
+            return _object_match_key(value)
 
         return [
             f"「{name}」を {source_label} に解決できません。"
@@ -3364,8 +3391,10 @@ class OntologyApiRuntime:
         column policy が masked または filterable=false の列は代表値を送らない。
         """
 
+        # Profile の object は canonical 修飾名。引用符を外して大文字化すると、引用名の表の
+        # Profile で大文字の同名表の代表値まで LLM へ送るため、引用規則どおりに照合する（#561）。
         allowed = {
-            value.replace('"', "").strip().upper()
+            _object_match_key(value)
             for value in [*profile.allowed_tables, *profile.allowed_views]
             if value.strip()
         }
@@ -3422,7 +3451,11 @@ class OntologyApiRuntime:
         for table in tables:
             short_name = table.table_name.upper()
             qualified_name = f"{table.owner}.{table.table_name}".upper()
-            if allowed and short_name not in allowed and qualified_name not in allowed:
+            if (
+                allowed
+                and _catalog_match_key(table.table_name) not in allowed
+                and _catalog_match_key(table.owner, table.table_name) not in allowed
+            ):
                 continue
             if relevant_objects and not {short_name, qualified_name} & relevant_objects:
                 continue

@@ -74,6 +74,7 @@ import {
 import { isUserVisibleObjectName } from "../objectVisibility";
 import {
   applySchemaBulkSelection,
+  countSelectedObjectsInOwner,
   normalizeObjectKey,
   profileFormEquals,
   selectedObjectKeys,
@@ -803,10 +804,7 @@ function SchemaGroupedSelectionPanel({
           data-testid={`${dataTestId}-scroll-region`}
         >
           {groups.map(({ owner, entries }) => {
-            const ownerKeyPrefix = normalizeObjectKey(`${owner}.`);
-            const selectedCount = [...selectedSet].filter((name) =>
-              name.startsWith(ownerKeyPrefix)
-            ).length;
+            const selectedCount = countSelectedObjectsInOwner(selectedSet, owner);
             const total = ownerTotals[owner] ?? entries.length;
             const allSelected = total > 0 && selectedCount >= total;
             const noneSelected = selectedCount === 0;

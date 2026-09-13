@@ -1,4 +1,4 @@
-import { formatDbObjectName } from "./dbObjectIdentity";
+import { formatDbObjectName, normalizeDbObjectKey } from "./dbObjectIdentity";
 import type { AllowedObjects, SchemaColumn, SchemaTable } from "./types";
 
 export const SCHEMA_CATALOG_EMPTY_ERROR_CODE = "SCHEMA_CATALOG_EMPTY";
@@ -117,14 +117,11 @@ export function leadingNewlinePrefix(source: string, start: number): string {
 }
 
 /**
- * オブジェクト識別子を正規化する（backend `_normalize_identifier` 相当）。
- * owner を保持したままダブルクオートを除去して大文字化する。
- * 例: `APP.EMPLOYEE` / `app."Employee"` → `APP.EMPLOYEE`。
+ * オブジェクト識別子を突合キーに正規化する（backend `object_identity.object_name_tokens` 相当）。
+ * owner を保持し、引用されていない部分は大文字化、引用された部分は大文字小文字を保つ。
+ * 例: `app.employee` / `"APP"."EMPLOYEE"` → `APP.EMPLOYEE`、`app."Employee"` → `APP."Employee"`。
+ * 引用名を大文字化すると、大文字の同名表と同じ表として扱ってしまう（#561）。
  */
 export function normalizeObjectIdentifier(value: string): string {
-  const parts = value
-    .trim()
-    .split(".")
-    .map((part) => part.trim().replaceAll('"', ""));
-  return parts.filter(Boolean).join(".").toUpperCase();
+  return normalizeDbObjectKey(value);
 }

@@ -1,8 +1,38 @@
 /** 業務プロファイルの許可オブジェクト選択に関する純粋ロジック。 */
 
-/** 引用符と大文字小文字の揺れを吸収した突合キー。 */
+import {
+  normalizeDbIdentifierToken,
+  normalizeDbObjectKey,
+  splitDbObjectName,
+} from "./dbObjectIdentity";
+
+/**
+ * 表記の揺れを吸収した突合キー（canonical な `OWNER.OBJECT`）。
+ *
+ * 引用されていない部分は大文字、`"..."` で引用された部分は大文字小文字を保つ
+ * （`normalizeDbObjectKey`）。`SALES."Mixed_Case"` を大文字の同名表と同じキーにしない（#561）。
+ */
 export function normalizeObjectKey(name: string) {
-  return name.replaceAll('"', "").toUpperCase();
+  return normalizeDbObjectKey(name);
+}
+
+/** `OWNER.` 形式の接頭辞（または owner 名）を owner の突合キーにする。 */
+function normalizeOwnerKey(ownerPrefix: string) {
+  return normalizeDbIdentifierToken(ownerPrefix.trim().replace(/\.$/u, ""));
+}
+
+/** object 名が指定 owner に属するか。文字列の前方一致ではなく owner 部分で比較する。 */
+export function isObjectInOwner(name: string, owner: string) {
+  return splitDbObjectName(name)?.owner === normalizeOwnerKey(owner);
+}
+
+/** 選択済み object のうち、指定 owner に属する件数。 */
+export function countSelectedObjectsInOwner(selected: Iterable<string>, owner: string) {
+  let count = 0;
+  for (const name of selected) {
+    if (isObjectInOwner(name, owner)) count += 1;
+  }
+  return count;
 }
 
 export interface SchemaBulkSelectionInput {
@@ -36,20 +66,19 @@ export function applySchemaBulkSelection({
   filtered,
 }: SchemaBulkSelectionInput): string[] {
   const scope = new Set(snapshot.map(normalizeObjectKey));
-  const prefix = normalizeObjectKey(ownerPrefix);
-  const retained = current.filter((name) => {
-    const key = normalizeObjectKey(name);
-    return filtered ? !scope.has(key) : !key.startsWith(prefix);
-  });
+  const retained = current.filter((name) =>
+    filtered ? !scope.has(normalizeObjectKey(name)) : !isObjectInOwner(name, ownerPrefix)
+  );
   return select ? [...retained, ...snapshot] : retained;
 }
 
 /**
  * 1 object の選択をトグルする。
  *
- * 保存済みの値は引用符付き・大文字小文字混在(`"APP"."ORDERS"` / `app.orders`)の
+ * 保存済みの値は引用符付き・小文字(`"APP"."ORDERS"` / `app.orders`)の
  * ことがある。チェック表示は正規化キーで判定しているため、トグル側も同じキーで
  * 突合しないと「チェックは付くのに外せず、重複が積まれる」状態になる。
+ * 追加する値も正規化キーにする。引用名(`SALES."Mixed_Case"`)は大文字化しない。
  */
 export function toggleObjectSelection(current: readonly string[], name: string): string[] {
   const key = normalizeObjectKey(name);

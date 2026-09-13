@@ -4035,6 +4035,79 @@ test("owner 付きの許可表でもスキーマ参照が対象表に絞り込�
   await expect(page.getByRole("button", { name: "請求 を開閉" })).toBeVisible();
 });
 
+test("引用名の許可表ではスキーマ参照を大文字の同名表まで広げない (#561)", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  const baseTable = schemaCatalog.tables[0];
+  const quotedCatalog = {
+    ...schemaCatalog,
+    tables: [
+      { ...baseTable, table_name: "MIXED_CASE", logical_name: "大文字の請求" },
+      { ...baseTable, table_name: "Mixed_Case", logical_name: "引用名の請求" },
+    ],
+  };
+  const quotedProfile = { ...profiles[0], allowed_tables: ['APP."Mixed_Case"'], allowed_views: [] };
+  await page.unroute("**/api/nl2sql/profiles");
+  await page.route("**/api/nl2sql/profiles", (route) => fulfillJson(route, [quotedProfile]));
+  await page.unroute("**/api/nl2sql/profiles/default");
+  await page.route("**/api/nl2sql/profiles/default", (route) =>
+    fulfillJson(route, { ...quotedProfile, etag: "etag-default" })
+  );
+  await page.route("**/api/nl2sql/profiles/default/usage-context", (route) =>
+    fulfillJson(route, {
+      id: "default",
+      name: quotedProfile.name,
+      category: quotedProfile.category,
+      description: quotedProfile.description,
+      allowed_tables: quotedProfile.allowed_tables,
+      allowed_views: [],
+      archived: false,
+      object_scope_version: 2,
+      version: 1,
+      etag: "etag-default",
+      updated_at: "2026-06-21T10:00:00.000Z",
+    })
+  );
+  await page.unroute("**/api/schema/catalog");
+  await page.route("**/api/schema/catalog", (route) => fulfillJson(route, quotedCatalog));
+  await page.unroute("**/api/schema/objects?*");
+  await page.route("**/api/schema/objects?*", (route) =>
+    fulfillJson(route, {
+      items: quotedCatalog.tables.map((table) => ({
+        owner: table.owner,
+        object_name: table.table_name,
+        object_type: table.table_type,
+        logical_name: table.logical_name,
+        comment: table.comment,
+        row_count: table.row_count,
+        column_count: table.columns.length,
+        last_ddl_at: "",
+      })),
+      next_cursor: null,
+      total: quotedCatalog.tables.length,
+      catalog_version: 1,
+    })
+  );
+
+  await page.unroute("**/api/schema/objects/*/*");
+  await page.route("**/api/schema/objects/*/*", (route) => {
+    const parts = new URL(route.request().url()).pathname.split("/");
+    const objectName = decodeURIComponent(parts.at(-1) ?? "");
+    const table = quotedCatalog.tables.find((item) => item.table_name === objectName);
+    return table
+      ? fulfillJson(route, { table, dependencies: [], catalog_version: 1, etag: "schema-mock" })
+      : route.fulfill({ status: 404, contentType: "application/json", body: "{}" });
+  });
+
+  await page.goto("/query");
+  await openSchemaPicker(page);
+  await expect(page.getByRole("button", { name: "引用名の請求 を開閉" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "大文字の請求 を開閉" })).toHaveCount(0);
+  // 検索で列詳細を読み込んでも、大文字の同名表の定義で置き換えない。
+  await page.getByRole("textbox", { name: "表・項目検索" }).fill("請求");
+  await expect(page.getByRole("button", { name: "引用名の請求 を開閉" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "大文字の請求 を開閉" })).toHaveCount(0);
+});
+
 test("query workbench generates SQL through the job flow and shows results", async ({ page }, testInfo) => {
   const api = await mockNl2SqlApi(page);
 
