@@ -5,6 +5,9 @@ const playwrightBaseUrl = `http://127.0.0.1:${playwrightPort}`;
 
 export default defineConfig({
   testDir: "./tests/e2e",
+  // 対象の dev サーバ（再利用したものを含む）が hermetic であることを確認してから開始し、
+  // 実行前後で利用者の実環境の設定ファイルが変わっていないことを検査する。
+  globalSetup: "./tests/e2e/global-setup.ts",
   timeout: 30_000,
   workers: process.env.CI ? 2 : 4,
   expect: {

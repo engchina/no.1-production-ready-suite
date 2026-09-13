@@ -37,9 +37,12 @@ export default defineConfig({
   server: {
     host: "0.0.0.0",
     port: 3001,
-    proxy: {
-      "/api": { target: backendUrl, changeOrigin: true },
-    },
+    // hermetic では proxy 自体を持たない（未モック API は上の middleware が 404 で終端する）。
+    proxy: hermeticApi
+      ? undefined
+      : {
+          "/api": { target: backendUrl, changeOrigin: true },
+        },
   },
   preview: {
     host: "0.0.0.0",
