@@ -68,6 +68,8 @@ import {
   type ToolDefinition,
 } from "@/lib/api";
 import { t } from "@/lib/i18n";
+import { isWidePage } from "@/lib/page-layout";
+import { APP_ROUTES } from "@/lib/routes";
 
 type ToolPolicyChoice = "default" | "allow" | "ask" | "deny";
 type RunStreamMode = "sse" | "websocket";
@@ -737,18 +739,21 @@ export function RunsPage() {
     }
   }
 
+  const wide = isWidePage(APP_ROUTES.runs);
+
   return (
     <>
       <PageHeader
         title={t("nav.runs")}
         subtitle={t("page.runs.subtitle")}
+        wide={wide}
         actions={
           <Button variant="secondary" onClick={() => void runs.refetch()} aria-label="実行一覧を再読み込み" icon={RefreshCw}>
             {t("common.retry")}
           </Button>
         }
       />
-      <PageBody className="grid min-w-0 grid-cols-1 gap-5 xl:grid-cols-[420px_minmax(0,1fr)]">
+      <PageBody wide={wide} className="grid min-w-0 grid-cols-1 gap-5 xl:grid-cols-[420px_minmax(0,1fr)]">
         <div className="min-w-0 space-y-5">
           <Card className="min-w-0">
             <CardHeader>
@@ -970,18 +975,21 @@ export function AuditPage() {
     toast.success(t("audit.csvDownloaded"));
   }
 
+  const wide = isWidePage(APP_ROUTES.audit);
+
   return (
     <>
       <PageHeader
         title={t("nav.audit")}
         subtitle={t("page.audit.subtitle")}
+        wide={wide}
         actions={
           <Button variant="secondary" onClick={() => void audit.refetch()} aria-label={t("common.retry")} icon={RefreshCw}>
             {t("common.retry")}
           </Button>
         }
       />
-      <PageBody>
+      <PageBody wide={wide}>
         <Card className="min-w-0">
           <CardHeader>
             <CardTitle>{t("audit.filters")}</CardTitle>
@@ -1512,6 +1520,7 @@ function McpDiscoveryPanel({ configured }: { configured: boolean }) {
             variant="secondary"
             onClick={() => void tools.refetch()}
             disabled={!configured}
+            aria-describedby={!configured ? "mcp-discovery-configure-hint" : undefined}
             loading={tools.isFetching}
             className="min-h-10" icon={RefreshCw}>
             {t("settings.mcpDiscovery.refresh")}
@@ -1519,7 +1528,10 @@ function McpDiscoveryPanel({ configured }: { configured: boolean }) {
         </div>
 
         {!configured ? (
-          <Banner severity="warning">{t("settings.mcpDiscovery.configureFirst")}</Banner>
+          // 未設定は通常の初期状態。警告にせず「取得」が使えない理由として補助テキストで伝える。
+          <p id="mcp-discovery-configure-hint" className="text-sm leading-6 text-fg-muted">
+            {t("settings.mcpDiscovery.configureFirst")}
+          </p>
         ) : tools.error ? (
           <Banner severity="danger">{tools.error.message}</Banner>
         ) : tools.isLoading ? (
@@ -3751,15 +3763,21 @@ export function RuntimeSnapshotSettingsPage() {
                   value={confirmText}
                   onChange={(event) => setConfirmText(event.target.value)}
                   placeholder={t("settings.snapshot.confirmPlaceholder")}
+                  aria-describedby="runtime-snapshot-confirm-hint"
                   className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 />
+                <p id="runtime-snapshot-confirm-hint" className="mt-1 text-xs leading-5 text-fg-muted">
+                  {t("settings.snapshot.confirmRequired")}
+                </p>
               </Field>
               <Button
                 variant="danger"
                 className="mt-3"
                 onClick={() => void replaceRuntimeSnapshot()}
                 loading={importSnapshot.isPending}
-                disabled={confirmText !== "REPLACE"} icon={Upload}>
+                disabled={confirmText !== "REPLACE"}
+                aria-describedby={confirmText !== "REPLACE" ? "runtime-snapshot-confirm-hint" : undefined}
+                icon={Upload}>
                 {t("common.replace")}
               </Button>
             </div>
