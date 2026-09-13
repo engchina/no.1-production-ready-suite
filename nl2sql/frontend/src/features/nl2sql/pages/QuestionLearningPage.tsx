@@ -495,7 +495,7 @@ export function QuestionClassifierModelsPage() {
 
   return (
     <>
-      <PageHeader
+      <PageHeader wide
         title={t("nav.questionClassifierModels")}
         subtitle={t("qcm.subtitle")}
         status={
@@ -536,7 +536,7 @@ export function QuestionClassifierModelsPage() {
           },
         ]}
       />
-      <PageBody>
+      <PageBody wide>
         <fieldset disabled={Boolean(loading)} className="m-0 grid min-w-0 gap-4 border-0 p-0">
         <PageNotice
           notice={message ? { tone: "danger", message } : null}

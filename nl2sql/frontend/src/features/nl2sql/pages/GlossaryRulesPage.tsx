@@ -142,7 +142,7 @@ export function GlossaryRulesPage() {
 
   return (
     <>
-      <PageHeader
+      <PageHeader wide
         title={t("nav.glossaryRules")}
         subtitle={t("glossary.subtitle")}
         actions={[
@@ -157,7 +157,7 @@ export function GlossaryRulesPage() {
           },
         ]}
       />
-      <PageBody className="grid gap-4">
+      <PageBody wide className="grid gap-4">
         <PageNotice notice={errorText ? { tone: "danger", message: errorText } : null} />
 
         <DbObjectManagementPanelShell

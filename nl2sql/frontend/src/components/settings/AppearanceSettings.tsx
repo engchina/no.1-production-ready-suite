@@ -26,8 +26,8 @@ export function AppearanceSettings() {
 
   return (
     <>
-      <PageHeader title={t("nav.settingsAppearance")} subtitle={t("appearance.subtitle")} />
-      <PageBody className="grid gap-4">
+      <PageHeader wide title={t("nav.settingsAppearance")} subtitle={t("appearance.subtitle")} />
+      <PageBody wide className="grid gap-4">
         <Card>
           <CardHeader>
             <CardTitle>{t("appearance.theme.label")}</CardTitle>

@@ -250,7 +250,7 @@ function FullPageRouteLoadingFallback() {
 
 function RouteLoadingFallback() {
   return (
-    <PageBody>
+    <PageBody wide>
       <TimedLoadingState
         label={t("app.route.loading")}
         operationKey="route-loading"
@@ -500,7 +500,7 @@ function decodeHashId(hash: string) {
 function SettingsOciRoute() {
   return (
     <>
-      <PageHeader title={t("nav.settingsOci")} subtitle={t("settings.oci.subtitle")} />
+      <PageHeader wide title={t("nav.settingsOci")} subtitle={t("settings.oci.subtitle")} />
       <OciSettingsClient />
     </>
   );
@@ -509,7 +509,7 @@ function SettingsOciRoute() {
 function SettingsUploadStorageRoute() {
   return (
     <>
-      <PageHeader
+      <PageHeader wide
         title={t("nav.settingsUploadStorage")}
         subtitle={t("settings.uploadStorage.subtitle")}
       />
@@ -521,7 +521,7 @@ function SettingsUploadStorageRoute() {
 function SettingsDatabaseRoute() {
   return (
     <>
-      <PageHeader title={t("nav.settingsDatabase")} subtitle={t("settings.database.subtitle")} />
+      <PageHeader wide title={t("nav.settingsDatabase")} subtitle={t("settings.database.subtitle")} />
       <DatabaseSettingsClient />
     </>
   );
@@ -530,11 +530,11 @@ function SettingsDatabaseRoute() {
 function SettingsSystemTablesRoute() {
   return (
     <>
-      <PageHeader
+      <PageHeader wide
         title={t("nav.settingsSystemTables")}
         subtitle={t("settings.systemTables.subtitle")}
       />
-      <PageBody>
+      <PageBody wide>
         <SystemTablesCard />
       </PageBody>
     </>

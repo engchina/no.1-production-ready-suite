@@ -2055,7 +2055,7 @@ export function ProfileManagementPage() {
 
   return (
     <>
-      <PageHeader
+      <PageHeader wide
         title={t("nav.profiles")}
         subtitle={t("profiles.subtitle")}
         status={
@@ -2110,7 +2110,7 @@ export function ProfileManagementPage() {
         actionsTestId="profile-management-actions"
       />
 
-      <PageBody className="grid gap-4">
+      <PageBody wide className="grid gap-4">
         <PageNotice
           notice={workspaceNotice}
           action={workspaceNoticeAction}
