@@ -61,7 +61,7 @@ test("行/詳細の overflow menu は ARIA とキーボード契約を持つ", (
   assert.match(menuFocusSource, /triggerRef\.current\?\.focus\(\{ preventScroll: true \}\)/u);
   assert.match(menuFocusSource, /active !== document\.body/u);
   assert.match(source, /items\[nextIndex\]\?\.focus\(\{ preventScroll: true \}\)/u);
-  assert.match(source, /<DisclosureChevron expanded=\{open\} size=\{15\} \/>/u);
+  assert.match(source, /<DisclosureChevron expanded=\{open\} size=\{16\} \/>/u);
   assert.doesNotMatch(source, /open && "rotate-180"/u);
 });
 

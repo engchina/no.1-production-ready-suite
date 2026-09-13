@@ -28,9 +28,9 @@ const statusLabelKey: Record<ExecutionActivityStatus, string> = {
 };
 
 const toneClass: Record<ExecutionActivityTone, string> = {
-  info: "border-info/30 bg-info-bg text-info",
-  success: "border-success/30 bg-success-bg text-success",
-  danger: "border-danger/30 bg-danger-bg text-danger",
+  info: "border-info-border bg-info-subtle text-info-fg",
+  success: "border-success-border bg-success-subtle text-success-fg",
+  danger: "border-danger-border bg-danger-subtle text-danger-fg",
 };
 
 function statusTone(status: ExecutionActivityStatus): ExecutionActivityTone {
@@ -40,9 +40,9 @@ function statusTone(status: ExecutionActivityStatus): ExecutionActivityTone {
 }
 
 function ActivityIcon({ status }: { status: ExecutionActivityStatus }) {
-  if (status === "success") return <CheckCircle2 size={17} aria-hidden="true" />;
-  if (status === "error") return <CircleAlert size={17} aria-hidden="true" />;
-  return <Clock3 size={17} aria-hidden="true" />;
+  if (status === "success") return <CheckCircle2 size={16} aria-hidden="true" />;
+  if (status === "error") return <CircleAlert size={16} aria-hidden="true" />;
+  return <Clock3 size={16} aria-hidden="true" />;
 }
 
 export function ExecutionActivityPanel({
@@ -81,7 +81,7 @@ export function ExecutionActivityPanel({
       aria-atomic="true"
       aria-busy={active ? "true" : undefined}
       aria-labelledby={titleId}
-      className="grid min-w-0 gap-3 rounded-md border border-border bg-background px-3 py-3 text-sm shadow-sm"
+      className="grid min-w-0 gap-3 rounded-md border border-border bg-surface-sunken px-3 py-3 text-sm shadow-sm"
       data-testid={testId}
       data-execution-activity-status={status}
     >
@@ -94,12 +94,12 @@ export function ExecutionActivityPanel({
             <ActivityIcon status={status} />
           </span>
           <div className="min-w-0">
-            <h3 id={titleId} className="text-sm font-semibold text-foreground">
+            <h3 id={titleId} className="text-sm font-semibold text-fg">
               {t(historical ? "workspace.previousResult" : "executionActivity.title")}
             </h3>
-            <p className="mt-0.5 break-words text-sm text-foreground">{label}</p>
-            {!active && finishedAt ? <p className="mt-1 text-xs text-muted">{t("workspace.executedAt", { date: formatDateTime(new Date(finishedAt).toISOString()) })}</p> : null}
-            {inputChanged && !active ? <p className="mt-1 text-sm text-muted">{t("workspace.inputChanged")}</p> : null}
+            <p className="mt-0.5 break-words text-sm text-fg">{label}</p>
+            {!active && finishedAt ? <p className="mt-1 text-xs text-fg-muted">{t("workspace.executedAt", { date: formatDateTime(new Date(finishedAt).toISOString()) })}</p> : null}
+            {inputChanged && !active ? <p className="mt-1 text-sm text-fg-muted">{t("workspace.inputChanged")}</p> : null}
           </div>
         </div>
         <div className="flex shrink-0 flex-wrap items-center gap-2 sm:justify-end">
@@ -109,7 +109,7 @@ export function ExecutionActivityPanel({
             {t(statusLabelKey[status])}
           </span>
           <span
-            className="inline-flex min-h-7 items-center gap-1.5 whitespace-nowrap rounded-md border border-border bg-card px-2 py-1 text-xs font-medium text-muted"
+            className="inline-flex min-h-7 items-center gap-1.5 whitespace-nowrap rounded-md border border-border bg-surface px-2 py-1 text-xs font-medium text-fg-muted"
             role="timer"
             aria-live="off"
             aria-label={`${timerLabel} ${timing.elapsedClock}`}
@@ -117,7 +117,7 @@ export function ExecutionActivityPanel({
           >
             <Clock3 size={14} aria-hidden="true" />
             <span>{timerLabel}</span>
-            <span className="min-w-[3.25rem] text-right font-sans tabular-nums text-foreground">
+            <span className="min-w-[3.25rem] text-right font-sans tabular-nums text-fg">
               {timing.elapsedClock}
             </span>
           </span>

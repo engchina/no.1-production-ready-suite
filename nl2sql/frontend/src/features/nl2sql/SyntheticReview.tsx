@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { Banner, toast } from "@engchina/production-ready-ui";
-import { Button } from "@/components/ui/button";
-import { FormStatus } from "@/components/ui/form-status";
+import {
+  Banner,
+  toast,
+  Button,
+  FormStatus,
+} from "@engchina/production-ready-ui";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { useResetExecutionConsent, useWorkspaceActive } from "@/components/WorkspaceState";
 import { apiPost } from "@/lib/api";
@@ -53,23 +56,23 @@ export function SyntheticReview({ run, previews, stale, onUpdated }: {
       setError(err instanceof Error ? err.message : t("syntheticPreview.error"));
     } finally { setPending(false); }
   };
-  return <section aria-label={t("syntheticPreview.title")} className="grid min-w-0 gap-3 rounded-md border border-border bg-card p-4" data-testid="synthetic-review">
+  return <section aria-label={t("syntheticPreview.title")} className="grid min-w-0 gap-3 rounded-md border border-border bg-surface p-4" data-testid="synthetic-review">
     <h3 className="font-semibold">{t("syntheticPreview.title")}</h3>
     <Banner severity={run.review_status === "applied" ? "success" : "info"}>
       {t(run.review_status === "applied" ? "syntheticPreview.applied" : run.review_status === "discarded" ? "syntheticPreview.discarded" : "syntheticPreview.pending")}
       {run.applied_at && ` ${formatDateTime(run.applied_at)}`}
     </Banner>
     {!['applied', 'discarded'].includes(run.review_status ?? '') && <>
-      <p className="text-sm text-muted-foreground">{t("syntheticPreview.retention")}</p>
+      <p className="text-sm text-fg-muted">{t("syntheticPreview.retention")}</p>
       {run.review_status === "ready" && run.status === "completed" && <>
         <p className="text-sm">{t("syntheticPreview.viewed", { count: run.targets.filter(target => previews[target.table_name]).length, total: run.targets.length })}</p>
         <ExecutionConfirmationField value={confirmation} onChange={setConfirmation}
           confirmed={confirmation.trim() === expected} placeholder={expected} expectedLabel={expected}
           helper={t("syntheticPreview.confirmHint", { phrase: expected })} disabled={pending || stale || !allViewed}
-          actions={<Button size="lg" disabled={pending || stale || !allViewed || confirmation.trim() !== expected} loading={pending} onClick={() => void apply(false)}>{t("syntheticPreview.apply")}</Button>} />
+          actions={<Button type="button" size="lg" disabled={pending || stale || !allViewed || confirmation.trim() !== expected} loading={pending} onClick={() => void apply(false)}>{t("syntheticPreview.apply")}</Button>} />
       </>}
       {run.status === "partial" && <Banner severity="warning">{t("syntheticPreview.partial")}</Banner>}
-      {runFinished(run) && <div className="border-t border-border pt-3"><Button size="lg" variant="ghost" tone="danger" disabled={pending || stale} onClick={() => void apply(true)}>{t("syntheticPreview.discard")}</Button></div>}
+      {runFinished(run) && <div className="border-t border-border pt-3"><Button type="button" size="lg" variant="ghost" tone="danger" disabled={pending || stale} onClick={() => void apply(true)}>{t("syntheticPreview.discard")}</Button></div>}
     </>}
     {error && <FormStatus tone="danger" message={error} />}
   </section>;

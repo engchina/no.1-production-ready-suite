@@ -9,14 +9,16 @@ import {
 } from "lucide-react";
 
 import { useOperationTiming } from "@/components/ProcessingState";
-import { Button } from "@/components/ui/button";
+import {
+  Button,
+  Spinner,
+  StatusBadge,
+} from "@engchina/production-ready-ui";
 import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
-import { StableLoadingIcon } from "@/components/ui/stable-loading-icon";
-import { StatusBadge } from "@/components/ui/status-badge";
 import { t } from "@/lib/i18n";
 import type { OperationTimestamp } from "@/lib/operationTiming";
 
-type StatusBadgeVariant = "neutral" | "info" | "success" | "warning" | "danger" | "pending";
+type StatusBadgeVariant = "neutral" | "info" | "success" | "warning" | "danger";
 
 export type WorkflowProgressStepStatus = "pending" | "running" | "done" | "error" | "skipped";
 export type WorkflowProgressTone = "active" | "success" | "danger" | "neutral";
@@ -67,41 +69,41 @@ export interface WorkflowProgressStripProps {
 }
 
 function toneBorderClass(tone: WorkflowProgressTone) {
-  if (tone === "danger") return "border-l-danger";
-  if (tone === "success") return "border-l-success";
-  if (tone === "neutral") return "border-l-muted";
-  return "border-l-primary";
+  if (tone === "danger") return "border-l-danger-fg";
+  if (tone === "success") return "border-l-success-fg";
+  if (tone === "neutral") return "border-l-fg-muted";
+  return "border-l-accent-fg";
 }
 
 function toneIconClass(tone: WorkflowProgressTone) {
-  if (tone === "danger") return "bg-danger-bg text-danger";
-  if (tone === "success") return "bg-success-bg text-success";
-  if (tone === "neutral") return "bg-muted/40 text-muted";
-  return "bg-primary/10 text-primary";
+  if (tone === "danger") return "bg-danger-subtle text-danger-fg";
+  if (tone === "success") return "bg-success-subtle text-success-fg";
+  if (tone === "neutral") return "bg-surface-hover text-fg-muted";
+  return "bg-accent-subtle text-accent-fg";
 }
 
 function toneIcon(tone: WorkflowProgressTone) {
-  if (tone === "success") return <CheckCircle2 size={18} />;
-  if (tone === "danger") return <TriangleAlert size={18} />;
-  if (tone === "neutral") return <Clock3 size={18} />;
-  return <Route size={18} />;
+  if (tone === "success") return <CheckCircle2 size={20} />;
+  if (tone === "danger") return <TriangleAlert size={20} />;
+  if (tone === "neutral") return <Clock3 size={20} />;
+  return <Route size={20} />;
 }
 
 function stepTextClass(status: WorkflowProgressStepStatus) {
-  if (status === "running") return "text-primary";
-  if (status === "done") return "text-success";
-  if (status === "error") return "text-danger";
-  return "text-muted";
+  if (status === "running") return "text-accent-fg";
+  if (status === "done") return "text-success-fg";
+  if (status === "error") return "text-danger-fg";
+  return "text-fg-muted";
 }
 
 function stepCircleClass(status: WorkflowProgressStepStatus) {
   if (status === "running") {
-    return "border-primary-fill bg-primary-fill text-primary-fill-foreground";
+    return "border-accent-emphasis bg-accent-emphasis text-fg-on-accent";
   }
-  if (status === "done") return "border-success-fill bg-success-fill text-white";
-  if (status === "error") return "border-danger-fill bg-danger-fill text-white";
-  if (status === "skipped") return "border-border bg-muted/30 text-muted";
-  return "border-border bg-card text-muted";
+  if (status === "done") return "border-success-emphasis bg-success-emphasis text-fg-on-emphasis";
+  if (status === "error") return "border-danger-emphasis bg-danger-emphasis text-fg-on-emphasis";
+  if (status === "skipped") return "border-border bg-surface-hover text-fg-muted";
+  return "border-border bg-surface text-fg-muted";
 }
 
 function StepIcon({
@@ -112,7 +114,7 @@ function StepIcon({
   index: number;
 }) {
   if (status === "running") {
-    return <StableLoadingIcon size={14} />;
+    return <Spinner size={14} />;
   }
   if (status === "done") return <Check size={14} aria-hidden="true" />;
   if (status === "error") return <X size={14} aria-hidden="true" />;
@@ -157,14 +159,14 @@ export function WorkflowProgressStrip({
 
   return (
     <section
-      className={`overflow-hidden rounded-md border border-border border-l-4 bg-card shadow-sm ${toneBorderClass(tone)}`}
+      className={`overflow-hidden rounded-md border border-border border-l-4 bg-surface shadow-sm ${toneBorderClass(tone)}`}
       role={role}
       aria-labelledby={titleId}
       data-testid={testId}
       data-job-status={dataJobStatus}
     >
       <div
-        className={`flex flex-col gap-3 bg-background px-4 py-3 sm:flex-row sm:items-center sm:justify-between ${
+        className={`flex flex-col gap-3 bg-surface-sunken px-4 py-3 sm:flex-row sm:items-center sm:justify-between ${
           collapsed ? "" : "border-b border-border"
         }`}
       >
@@ -177,18 +179,18 @@ export function WorkflowProgressStrip({
           </span>
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
-              <h2 id={titleId} className="font-semibold text-foreground">
+              <h2 id={titleId} className="font-semibold text-fg">
                 {title}
               </h2>
               <StatusBadge variant={statusVariant} label={statusLabel} />
               {headerExtra}
             </div>
-            <p className="mt-1 text-sm text-foreground" aria-live="polite">
+            <p className="mt-1 text-sm text-fg" aria-live="polite">
               {message}
             </p>
           </div>
         </div>
-        <div className="flex min-w-0 max-w-full flex-wrap items-center gap-x-4 gap-y-2 text-xs text-muted sm:justify-end">
+        <div className="flex min-w-0 max-w-full flex-wrap items-center gap-x-4 gap-y-2 text-xs text-fg-muted sm:justify-end">
           {meta}
           <span className="inline-flex min-w-0 max-w-full flex-wrap items-center gap-1.5 font-sans tabular-nums">
             <Clock3 size={14} className="shrink-0" aria-hidden="true" />
@@ -241,7 +243,7 @@ export function WorkflowProgressStrip({
                 {index < steps.length - 1 && (
                   <span
                     className={`absolute bottom-[-0.5rem] left-[0.84375rem] top-9 w-px ${
-                      done ? "bg-success" : "bg-border"
+                      done ? "bg-success-emphasis" : "bg-border"
                     }`}
                     aria-hidden="true"
                   />
@@ -252,16 +254,16 @@ export function WorkflowProgressStrip({
                   <StepIcon status={step.status} index={index} />
                 </span>
                 <details
-                  className="group/disclosure min-w-0 rounded-md border border-transparent px-1 py-1 open:border-border open:bg-background sm:px-2"
+                  className="group/disclosure min-w-0 rounded-md border border-transparent px-1 py-1 open:border-border open:bg-surface-sunken sm:px-2"
                   open={step.open}
                 >
-                  <summary className="flex min-h-11 min-w-0 max-w-full cursor-pointer list-none flex-wrap items-center justify-between gap-2 overflow-hidden rounded-sm text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 sm:gap-3 [&::-webkit-details-marker]:hidden">
-                    <span className="flex min-w-0 max-w-full flex-1 basis-full items-center gap-2 font-semibold text-foreground sm:basis-0">
+                  <summary className="flex min-h-11 min-w-0 max-w-full cursor-pointer list-none flex-wrap items-center justify-between gap-2 overflow-hidden rounded-sm text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring sm:gap-3 [&::-webkit-details-marker]:hidden">
+                    <span className="flex min-w-0 max-w-full flex-1 basis-full items-center gap-2 font-semibold text-fg sm:basis-0">
                       <span className="min-w-0 break-words sm:truncate">{step.label}</span>
                       <DisclosureChevron
                         expanded="group"
                         size={14}
-                        className="text-muted"
+                        className="text-fg-muted"
                       />
                     </span>
                     <span
@@ -272,7 +274,7 @@ export function WorkflowProgressStrip({
                     </span>
                   </summary>
                   {step.description ? (
-                    <p className="mt-2 border-l border-border pl-3 text-xs leading-5 text-muted">
+                    <p className="mt-2 border-l border-border pl-3 text-xs leading-5 text-fg-muted">
                       {step.description}
                     </p>
                   ) : null}

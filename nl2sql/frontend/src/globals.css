@@ -2,227 +2,38 @@
 
 /*
  * Production Ready NL2SQL — グローバルスタイル
- * デザイントークン（日本語第一・semantic 状態色・shadcn/ui テーマ）は共有 UI パッケージが正本。
+ * 色・型・余白・角丸・影・テーマは共有 UI パッケージ（platform の docs/design-system/）が正本。
+ * ここには NL2SQL 固有の書体と画面固有のレイアウトだけを書く。
  */
-@import "@engchina/production-ready-ui/tokens.css";
-@import "./components/ui/button.css";
+@import "@engchina/production-ready-ui/styles.css";
 
 /* 共有コンポーネントの utility クラスを Tailwind v4 のスキャン対象に含める。 */
 @source "../node_modules/@engchina/production-ready-ui/dist";
 
 /*
- * NL2SQL 固有の semantic token。共有 UI の light theme はそのまま継承し、
- * dark theme だけ冷調 blue-gray の表面・文字・操作色へ差し替える。
+ * 等幅書体。NL2SQL は Google Sans Code を @fontsource で自前ホストしているためここで定義する。
+ * RAG / Agent も自前ホストしたら platform の --font-mono に寄せる。
  */
 :root {
-  /* 技術情報はローカル等幅フォント、日本語の未収録文字は Noto Sans JP に委ねる。 */
   --font-mono: "Google Sans Code", "Noto Sans JP", "Roboto", monospace;
-  --border-subtle: var(--border);
-  --control-border: var(--border);
-  --disabled: #9ca3af;
-  --disabled-bg: #f3f4f6;
-  --primary-fill: var(--primary);
-  --primary-fill-foreground: var(--primary-foreground);
-  --success-fill: var(--success);
-  --danger-fill: var(--danger);
+  /* 並べ替えボタン（sm）を持つ表ヘッダーの高さ = ボタン + padding/border 3px。タッチ端末では共有トークンが 44px になる。 */
+  --button-table-header: calc(var(--button-height-sm) + 3px);
 }
 
-.dark {
-  /* base / elevated surface */
-  --background: #101318;
-  --foreground: #f2f4f7;
-  --card: #181c23;
-  --border: #343b46;
-  --border-subtle: #343b46;
-  --control-border: #5d6878;
-  --muted: #b2bac5;
-  --disabled: #747f8e;
-  --disabled-bg: #252b34;
-  --surface-muted-5: #1c2027;
-  --surface-muted-15: #21252b;
-  --surface-muted-20: #25292f;
-  --surface-muted-30: #2e3238;
-  --surface-muted-40: #373a41;
-
-  /* interactive: accent foreground と solid action を分離 */
-  --primary: #69adff;
-  --primary-foreground: #08121f;
-  --primary-fill: #286abd;
-  --primary-fill-foreground: #ffffff;
-  --ring: #7cbbff;
-
-  /* navigation */
-  --sidebar: #0b0e13;
-  --sidebar-foreground: #dce2e8;
-  --sidebar-active: #286abd;
-
-  /* semantic feedback */
-  --success: #65d7a5;
-  --success-bg: #12382d;
-  --success-fill: #187a55;
-  --warning: #f4c95d;
-  --warning-bg: #3a2e13;
-  --danger: #ff7b86;
-  --danger-bg: #411e25;
-  --danger-fill: #bd3844;
-  --info: #73b2ff;
-  --info-bg: #152d4a;
-
-  /* ontology graph: 型チャネルと状態チャネルを分離 */
-  --graph-entity: #173a5e;
-  --graph-metric: #362a59;
-  --graph-sql: #27323f;
-  --graph-term: #17473f;
-  --graph-default: #242b35;
-  --graph-fg: #eff3f7;
-  --graph-line: #667386;
-}
-
-/*
- * 共有 token では `muted` が次級文字色と surface utility の双方に使われる。
- * dark で半透明 bg-muted をそのまま合成すると面が明るくなり過ぎるため、既存 utility を
- * 冷調 tonal surface へ再マップする（light theme は共有実装のまま）。
- */
-.dark .bg-muted\/5 {
-  background-color: var(--surface-muted-5);
-}
-
-.dark .bg-muted\/15 {
-  background-color: var(--surface-muted-15);
-}
-
-.dark .bg-muted\/20 {
-  background-color: var(--surface-muted-20);
-}
-
-.dark .bg-muted\/30 {
-  background-color: var(--surface-muted-30);
-}
-
-.dark .bg-muted\/40 {
-  background-color: var(--surface-muted-40);
-}
-
-.dark .hover\:bg-muted\/20:hover {
-  background-color: var(--surface-muted-20);
-}
-
-.dark .hover\:bg-muted\/30:hover {
-  background-color: var(--surface-muted-30);
-}
-
-@theme inline {
-  --color-control-border: var(--control-border);
-  --color-disabled: var(--disabled);
-  --color-disabled-bg: var(--disabled-bg);
-  --color-primary-fill: var(--primary-fill);
-  --color-primary-fill-foreground: var(--primary-fill-foreground);
-  --color-success-fill: var(--success-fill);
-  --color-danger-fill: var(--danger-fill);
-}
-
-/*
- * サイドバー内のローカル DEBUG 状態。
- * 警告背景へ sidebar-foreground を重ねるとライトテーマで十分な文字コントラストを
- * 確保できないため、状態表示専用の前景色を定義する。
- */
+/* サイドバー内のローカル DEBUG 状態（暗い面のスコープ内で warning トークンを使う）。 */
 .sidebar-debug-status {
-  border-color: #d97706;
-  background: #fffbeb;
-  color: #78350f;
-}
-
-.dark .sidebar-debug-status {
-  border-color: var(--warning);
-  background: var(--warning-bg);
-  color: var(--warning);
-}
-
-/*
- * 共有 Sidebar のセクション disclosure は展開時の下向きを維持し、
- * NL2SQL 側の統一規約に合わせて折りたたみ時だけ左向きへ補正する。
- */
-.sidebar-shell
-  button[aria-controls^="nav-section-"][aria-expanded="false"]
-  > svg {
-  rotate: 90deg;
-}
-
-/*
- * 回転アイコン（animate-spin）は原点を viewBox 中心（= 図形中心）へ固定し、
- * 継続回転する要素として独立レイヤーで合成させる（毎フレームの再ラスタライズを避ける）。
- * 「回転が中心からずれて見える」現象の主因は図形側にあるため、アプリ内の処理中表示は
- * 180 度対称の `StableLoadingIcon` を使うこと（欠けた円弧だけの Loader2 や単一 active arc は
- * インク重心が角度ごとに動く）。
- * 共有 tokens.css にも同じ規則があるが、アプリ側でも明示して意図を残す。
- */
-svg.animate-spin {
-  transform-box: view-box;
-  transform-origin: 50% 50%;
-  will-change: transform;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  svg.animate-spin {
-    animation: none;
-  }
+  border-color: var(--color-warning-border);
+  background: var(--color-warning-subtle);
+  color: var(--color-warning-fg);
 }
 
 @layer base {
-  html {
-    font-family: var(--font-sans);
-  }
-
   /* Tailwind の既定等幅スタックをローカル配信のコード用フォントへ揃える。 */
   code,
   kbd,
   samp,
   pre {
     font-family: var(--font-mono);
-  }
-
-  /*
-   * border-border を使う既存 field へ strong control border を局所注入する。
-   * --border の上書きなので border-primary / border-danger 等の状態 utility は維持される。
-   */
-  .dark
-    :where(
-      input:not([type]),
-      input[type="date"],
-      input[type="datetime-local"],
-      input[type="email"],
-      input[type="number"],
-      input[type="password"],
-      input[type="search"],
-      input[type="tel"],
-      input[type="text"],
-      input[type="time"],
-      input[type="url"],
-      select,
-      textarea,
-      [role="combobox"]
-    ) {
-    --border: var(--control-border);
-  }
-
-  .dark
-    :where(
-      input:not([type]),
-      input[type="date"],
-      input[type="datetime-local"],
-      input[type="email"],
-      input[type="number"],
-      input[type="password"],
-      input[type="search"],
-      input[type="tel"],
-      input[type="text"],
-      input[type="time"],
-      input[type="url"],
-      select,
-      textarea,
-      [role="combobox"]
-    ):disabled {
-    --border: var(--border-subtle);
   }
 
   pre {
@@ -296,7 +107,7 @@ svg.animate-spin {
       max-width: 14px;
       align-items: center;
       justify-content: center;
-      color: color-mix(in srgb, var(--muted) 74%, transparent);
+      color: color-mix(in srgb, var(--color-fg-muted) 74%, transparent);
       cursor: col-resize;
       outline: none;
       touch-action: none;
@@ -320,7 +131,7 @@ svg.animate-spin {
       left: 50%;
       width: 2px;
       border-radius: 999px;
-      background: color-mix(in srgb, var(--border) 88%, var(--muted) 12%);
+      background: color-mix(in srgb, var(--color-border) 88%, var(--color-fg-muted) 12%);
       transform: translateX(-50%);
       transition:
         background-color 160ms ease,
@@ -335,10 +146,10 @@ svg.animate-spin {
       gap: 4px;
       align-items: center;
       padding: 0.5rem 0.1875rem;
-      border: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
+      border: 1px solid color-mix(in srgb, var(--color-border) 84%, transparent);
       border-radius: 999px;
-      background: color-mix(in srgb, var(--card) 96%, transparent);
-      box-shadow: 0 12px 24px -22px color-mix(in srgb, var(--foreground) 34%, transparent);
+      background: color-mix(in srgb, var(--color-surface) 96%, transparent);
+      box-shadow: 0 12px 24px -22px color-mix(in srgb, var(--color-fg) 34%, transparent);
       transition:
         background-color 160ms ease,
         border-color 160ms ease,
@@ -357,35 +168,35 @@ svg.animate-spin {
     .fixed-split-pane__divider:hover,
     .fixed-split-pane__divider:focus-visible,
     .fixed-split-pane__divider[data-dragging="true"] {
-      color: var(--primary);
+      color: var(--color-accent-fg);
     }
 
     .fixed-split-pane__divider:hover::before,
     .fixed-split-pane__divider:focus-visible::before,
     .fixed-split-pane__divider[data-dragging="true"]::before {
-      background: color-mix(in srgb, var(--primary) 10%, transparent);
-      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 12%, transparent);
+      background: color-mix(in srgb, var(--color-accent-fg) 10%, transparent);
+      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-accent-fg) 12%, transparent);
     }
 
     .fixed-split-pane__divider:focus-visible::before {
       box-shadow:
-        inset 0 0 0 1px color-mix(in srgb, var(--primary) 12%, transparent),
-        inset 0 0 0 3px color-mix(in srgb, var(--ring) 24%, transparent);
+        inset 0 0 0 1px color-mix(in srgb, var(--color-accent-fg) 12%, transparent),
+        inset 0 0 0 3px color-mix(in srgb, var(--color-focus-ring) 24%, transparent);
     }
 
     .fixed-split-pane__divider:hover .fixed-split-pane__line,
     .fixed-split-pane__divider:focus-visible .fixed-split-pane__line,
     .fixed-split-pane__divider[data-dragging="true"] .fixed-split-pane__line {
-      background: color-mix(in srgb, var(--primary) 58%, var(--border));
-      box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary) 12%, transparent);
+      background: color-mix(in srgb, var(--color-accent-fg) 58%, var(--color-border));
+      box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-accent-fg) 12%, transparent);
     }
 
     .fixed-split-pane__divider:hover .fixed-split-pane__grip,
     .fixed-split-pane__divider:focus-visible .fixed-split-pane__grip,
     .fixed-split-pane__divider[data-dragging="true"] .fixed-split-pane__grip {
-      border-color: color-mix(in srgb, var(--primary) 28%, var(--border));
-      background: color-mix(in srgb, var(--primary) 10%, var(--card));
-      box-shadow: 0 18px 36px -28px color-mix(in srgb, var(--primary) 42%, transparent);
+      border-color: color-mix(in srgb, var(--color-accent-fg) 28%, var(--color-border));
+      background: color-mix(in srgb, var(--color-accent-fg) 10%, var(--color-surface));
+      box-shadow: 0 18px 36px -28px color-mix(in srgb, var(--color-accent-fg) 42%, transparent);
       transform: scale(1.02);
     }
 

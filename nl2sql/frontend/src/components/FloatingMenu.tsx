@@ -176,7 +176,7 @@ export function FloatingActionMenu({
       data-floating-menu-constrained={position?.constrained ? "true" : undefined}
       data-floating-menu-placement={position?.placement}
       className={cn(
-        "fixed z-50 grid gap-1 rounded-md border border-border bg-card p-1 text-sm shadow-lg",
+        "fixed z-[var(--z-dropdown)] grid gap-1 rounded-md border border-border bg-surface-raised p-1 text-sm shadow-[var(--shadow-popover)]",
         position?.constrained && "overflow-y-auto overscroll-contain",
         !position && "opacity-0",
         className

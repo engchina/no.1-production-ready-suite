@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Clock3 } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
-import { StableLoadingIcon } from "@/components/ui/stable-loading-icon";
+import {
+  Button,
+  Spinner,
+} from "@engchina/production-ready-ui";
 
 import {
   elapsedMsBetween,
@@ -154,17 +156,17 @@ export function ProcessingIndicator({
         </span>
       ) : null}
       <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <span className="flex min-w-0 items-center gap-2 text-sm font-medium text-foreground">
+        <span className="flex min-w-0 items-center gap-2 text-sm font-medium text-fg">
           {timing.active && showActivityIcon ? (
-            <StableLoadingIcon size={16} className="text-primary" />
+            <Spinner size={16} className="text-accent-fg" />
           ) : !timing.active && showActivityIcon ? (
-            <Clock3 size={16} className="shrink-0 text-muted" aria-hidden="true" />
+            <Clock3 size={16} className="shrink-0 text-fg-muted" aria-hidden="true" />
           ) : null}
           <span className="min-w-0 break-words">{displayLabel}</span>
         </span>
         <span className="flex shrink-0 flex-wrap items-center gap-2 sm:justify-end">
           <span
-            className="inline-flex min-h-7 items-center gap-1.5 whitespace-nowrap rounded-md border border-border bg-card px-2 py-1 text-xs font-medium text-muted"
+            className="inline-flex min-h-7 items-center gap-1.5 whitespace-nowrap rounded-md border border-border bg-surface px-2 py-1 text-xs font-medium text-fg-muted"
             role="timer"
             aria-live="off"
             aria-label={`${timing.active ? t("common.processing.elapsed") : t("common.processing.duration")} ${timing.elapsedClock}`}
@@ -172,7 +174,7 @@ export function ProcessingIndicator({
           >
             <Clock3 size={14} aria-hidden="true" />
             <span>{timing.active ? t("common.processing.elapsed") : t("common.processing.duration")}</span>
-            <span className="min-w-[3.25rem] text-right font-sans tabular-nums text-foreground">
+            <span className="min-w-[3.25rem] text-right font-sans tabular-nums text-fg">
               {timing.elapsedClock}
             </span>
           </span>
@@ -191,7 +193,7 @@ export function ProcessingIndicator({
       </div>
       {showSlowMessage && timing.slow ? (
         <p
-          className="text-xs leading-5 text-muted"
+          className="text-xs leading-5 text-fg-muted"
           role={announceSlow ? "status" : undefined}
           data-testid={testId ? `${testId}-slow` : undefined}
         >
@@ -233,7 +235,7 @@ export function TimedLoadingState({
   return (
     <section
       className={`grid min-w-0 gap-3 ${
-        framed ? "rounded-md border border-border bg-background p-3" : ""
+        framed ? "rounded-md border border-border bg-surface-sunken p-3" : ""
       } ${className}`}
       aria-busy="true"
       aria-label={label}

@@ -1,4 +1,4 @@
-import { PageHeaderStatusBadge } from "@/components/PageHeader";
+import { PageHeaderStatusBadge } from "@/components/PageHeaderStatusBadge";
 import { ProcessingIndicator, type ProcessingPlacement } from "@/components/ProcessingState";
 
 import { useSchemaRefreshCoordinator } from "../SchemaRefreshCoordinator";
@@ -26,7 +26,7 @@ export function SchemaRefreshHeaderStatus({ testId }: { testId?: string }) {
 
 export function SchemaRefreshProcessing({
   placement = "workspace",
-  className = "rounded-md border border-border bg-background px-3 py-2",
+  className = "rounded-md border border-border bg-surface-sunken px-3 py-2",
   testId,
 }: {
   placement?: ProcessingPlacement;

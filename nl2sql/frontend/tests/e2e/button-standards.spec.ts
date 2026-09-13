@@ -5,6 +5,12 @@ for (const theme of ["light", "dark"]) {
   test(`${theme}: 共通ボタンの実寸・状態・配置・キーボード操作`, async ({ page }, testInfo) => {
     await page.route("**/__button-standards", route => route.fulfill({ contentType: "text/html", body:
       `<html class="${theme === "dark" ? "dark" : ""}" lang="ja"><head><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><div id="root"></div><script type="module">import RefreshRuntime from "/@react-refresh"; RefreshRuntime.injectIntoGlobalHook(window); window.$RefreshReg$ = () => {}; window.$RefreshSig$ = () => type => type; window.__vite_plugin_react_preamble_installed__ = true;</script><script type="module" src="/tests/fixtures/button-standards.tsx"></script></body></html>` }));
+    // fixture はトップレベルで createRoot() する。@vitejs/plugin-react は react-refresh 用に自分自身を
+    // import するが、並行作業中のファイル更新で Vite が HMR timestamp を付けると自己 import が
+    // `button-standards.tsx?t=…` に書き換わり、ここで静的に読む `button-standards.tsx` と別モジュールとして
+    // 二重実行される（root と Toaster portal「通知」が重複する）。?t= 版は元モジュールの再 export に差し替える。
+    await page.route(/\/tests\/fixtures\/button-standards\.tsx\?t=\d+/, route => route.fulfill({
+      contentType: "text/javascript", body: 'export * from "/tests/fixtures/button-standards.tsx";' }));
     await page.goto("/__button-standards");
     const mobile = testInfo.project.name === "mobile-375";
     for (const [size, height] of [["sm", 32], ["md", 36], ["lg", 40]] as const) {
@@ -50,7 +56,14 @@ for (const theme of ["light", "dark"]) {
     await sortTable.locator("thead").screenshot({ path: testInfo.outputPath(`column-font-${theme}.png`) });
 
     // 実際に合成された色を sRGB に変換して通常文字の 4.5:1 を検証する。
-    const contrasts = await page.locator(".nl2sql-button:not(:disabled)").evaluateAll(buttons => {
+    // 共有 Button には nl2sql-button クラスが無いため、fixture の共有 Button を data-testid で対象にする。
+    const sharedButtons = page.locator(
+      ['sm-', 'md-', 'lg-'].map(prefix => `button[data-testid^="${prefix}"]:not(:disabled)`)
+        .concat(['[data-testid="icon"]', '[data-testid="field"]', '[data-testid="danger-trigger"]'])
+        .join(", ")
+    );
+    expect(await sharedButtons.count()).toBeGreaterThanOrEqual(15);
+    const contrasts = await sharedButtons.evaluateAll(buttons => {
       const canvas = document.createElement("canvas");
       canvas.width = canvas.height = 1;
       const ctx = canvas.getContext("2d")!;
@@ -68,7 +81,13 @@ for (const theme of ["light", "dark"]) {
       }
       return buttons.map(button => {
         const style = getComputedStyle(button);
-        const surface = style.getPropertyValue("--card");
+        // dev サーバでは CSS 変数が light-dark() 文字列のまま返るため、変数ではなく
+        // 祖先で実際に塗られている背景色（最も近い不透明な background-color）を下地にする。
+        let surface = "rgb(255, 255, 255)";
+        for (let node = button.parentElement; node; node = node.parentElement) {
+          const bgColor = getComputedStyle(node).backgroundColor;
+          if (bgColor !== "rgba(0, 0, 0, 0)" && bgColor !== "transparent") { surface = bgColor; break; }
+        }
         const fg = luminance(style.color, surface);
         const bg = luminance(style.backgroundColor, surface);
         return { label: button.textContent, ratio: (Math.max(fg, bg) + 0.05) / (Math.min(fg, bg) + 0.05) };
@@ -110,12 +129,20 @@ for (const theme of ["light", "dark"]) {
     await page.getByTestId("danger-trigger").click();
     const dialog = page.getByRole("alertdialog");
     await expect(dialog).toBeVisible();
-    await expect(dialog.getByRole("button", { name: "削除する" })).toHaveClass(/nl2sql-button--danger/);
+    // 共有 Button の danger variant（bg-danger-emphasis）。実際の塗りも fixture の danger ボタンと一致する
+    const dialogDelete = dialog.getByRole("button", { name: "削除する" });
+    await expect(dialogDelete).toHaveClass(/(^|\s)bg-danger-emphasis(\s|$)/);
+    await expect(dialogDelete).toHaveCSS("background-color",
+      await page.getByTestId("sm-danger").evaluate(el => getComputedStyle(el).backgroundColor));
     await page.keyboard.press("Escape");
     await expect(dialog).not.toBeVisible();
     const overflow = page.getByRole("button", { name: "対象の操作", exact: true });
     await overflow.click();
-    await expect(page.getByRole("menuitem", { name: "削除", exact: true })).toHaveClass(/nl2sql-button--danger-tone/);
+    // 共有 Button の tone="danger"（text-danger-fg）。文字色は secondary + tone=danger のトリガーと同じ
+    const menuDelete = page.getByRole("menuitem", { name: "削除", exact: true });
+    await expect(menuDelete).toHaveClass(/(^|\s)text-danger-fg(\s|$)/);
+    await expect(menuDelete).toHaveCSS("color",
+      await page.getByTestId("danger-trigger").evaluate(el => getComputedStyle(el).color));
     await page.keyboard.press("Escape");
     await expect(overflow).toBeFocused();
     const form = page.getByTestId("form-actions");

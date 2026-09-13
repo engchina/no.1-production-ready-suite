@@ -1,10 +1,13 @@
 import { Bot, Database, RefreshCw } from "lucide-react";
 import { Link } from "react-router-dom";
 
-import { Banner } from "@engchina/production-ready-ui";
+import {
+  Banner,
+  Button,
+  buttonVariants,
+  StatusBadge,
+} from "@engchina/production-ready-ui";
 
-import { Button, buttonVariants } from "@/components/ui/button";
-import { StatusBadge } from "@/components/ui/status-badge";
 import { t } from "@/lib/i18n";
 import { APP_ROUTES } from "@/lib/routes";
 
@@ -17,13 +20,13 @@ import {
 import type { AssetRefreshData, ProfileSyncJobData } from "../types";
 import { WorkflowProgressStrip, type WorkflowProgressTone } from "./WorkflowProgressStrip";
 
-type StatusBadgeVariant = "neutral" | "success" | "danger" | "warning" | "pending";
+type StatusBadgeVariant = "neutral" | "info" | "success" | "danger" | "warning";
 
 function statusVariant(status: ProfileSaveProgressStatus): StatusBadgeVariant {
   if (status === "succeeded") return "success";
   if (status === "failed" || status === "submission_failed") return "danger";
   if (status === "cancelled") return "warning";
-  return "pending";
+  return "info";
 }
 
 function progressTone(status: ProfileSaveProgressStatus): WorkflowProgressTone {
@@ -75,10 +78,10 @@ function AgentAssetDetails({ result }: { result: AssetRefreshData }) {
     >
       <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
         <div className="flex min-w-0 items-start gap-2">
-          <Bot size={17} className="mt-0.5 shrink-0 text-primary" aria-hidden="true" />
+          <Bot size={16} className="mt-0.5 shrink-0 text-accent-fg" aria-hidden="true" />
           <div className="min-w-0">
-            <p className="break-words font-semibold text-foreground">{engineLabel(result.engine)}</p>
-            <p className="mt-1 break-words text-xs text-muted">
+            <p className="break-words font-semibold text-fg">{engineLabel(result.engine)}</p>
+            <p className="mt-1 break-words text-xs text-fg-muted">
               {result.refreshed_at ? new Date(result.refreshed_at).toLocaleString("ja-JP") : "-"}
             </p>
           </div>
@@ -87,9 +90,9 @@ function AgentAssetDetails({ result }: { result: AssetRefreshData }) {
       </div>
       <dl className="grid min-w-0 gap-2 sm:grid-cols-2">
         {Object.entries(result.asset_names).map(([name, value]) => (
-          <div key={name} className="grid min-w-0 gap-1 rounded-md bg-card p-2 text-sm">
-            <dt className="break-words text-xs font-medium uppercase text-muted">{name}</dt>
-            <dd className="min-w-0 break-all font-mono text-xs leading-5 text-foreground">
+          <div key={name} className="grid min-w-0 gap-1 rounded-md bg-surface p-2 text-sm">
+            <dt className="break-words text-xs font-medium uppercase text-fg-muted">{name}</dt>
+            <dd className="min-w-0 break-all font-mono text-xs leading-5 text-fg">
               {value}
             </dd>
           </div>
@@ -177,7 +180,7 @@ export function ProfileSaveProgress({
                     to={credentialSettingsHref(job)}
                     className={`${buttonVariants({ variant: "secondary", size: "sm" })} w-full sm:w-auto`}
                   >
-                    <Database size={15} aria-hidden="true" />
+                    <Database size={16} aria-hidden="true" />
                     <span>{t("profiles.oracle.sync.openDatabaseSettings")}</span>
                   </Link>
                 ) : null}
@@ -187,9 +190,7 @@ export function ProfileSaveProgress({
                   size="sm"
                   className="w-full sm:w-auto"
                   loading={retrying}
-                  onClick={onRetry}
-                >
-                  <RefreshCw size={15} aria-hidden="true" />
+                  onClick={onRetry} icon={RefreshCw}>
                   <span>{t("profiles.oracle.sync.retry")}</span>
                 </Button>
               </div>

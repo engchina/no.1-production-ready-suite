@@ -1,6 +1,20 @@
 import { Pagination } from "@/components/Pagination";
 import { useWorkspaceState, useResetExecutionConsent } from "@/components/WorkspaceState";
-import { Button } from "@/components/ui/button";
+import {
+  Button,
+  Banner,
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  DEFAULT_PAGE_SIZE,
+  DataTable,
+  EmptyState,
+  toast,
+  usePagination,
+  StatusBadge,
+  Tabs,
+} from "@engchina/production-ready-ui";
 import { ClearActionButton } from "@/components/ui/clear-action-button";
 import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
 import {
@@ -9,7 +23,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type KeyboardEvent,
   type ReactNode,
 } from "react";
 import {
@@ -22,21 +35,8 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
-import {
-  Banner,
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-  DEFAULT_PAGE_SIZE,
-  DataTable,
-  EmptyState,
-  toast,
-  usePagination,
-} from "@engchina/production-ready-ui";
 
 import { ActionResultRegion } from "@/components/ActionResultRegion";
-import { StatusBadge } from "@/components/ui/status-badge";
 import { ContentActionBar } from "@/components/ContentActionBar";
 import {
   ExecutionActivityPanel,
@@ -102,9 +102,9 @@ export async function readTextFileSmart(file: File): Promise<string> {
 
 export function PageMetric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-md border border-border bg-background p-4">
-      <p className="text-xs font-medium text-muted">{label}</p>
-      <p className="mt-1 text-2xl font-semibold text-foreground">{value}</p>
+    <div className="rounded-md border border-border bg-surface-sunken p-4">
+      <p className="text-xs font-medium text-fg-muted">{label}</p>
+      <p className="mt-1 text-2xl font-semibold text-fg">{value}</p>
     </div>
   );
 }
@@ -128,11 +128,11 @@ export function WorkSection({
 }) {
   const toneClass =
     tone === "danger"
-      ? "border-danger/30 bg-danger-bg/70 text-danger marker:text-danger"
-      : "border-border bg-card text-foreground marker:text-muted";
+      ? "border-danger-border bg-danger-subtle text-danger-fg marker:text-danger-fg"
+      : "border-border bg-surface text-fg marker:text-fg-muted";
   const summaryFocusClass =
-    tone === "danger" ? "focus-visible:ring-danger/40" : "focus-visible:ring-ring/40";
-  const summaryIconClass = tone === "danger" ? "text-danger" : "text-muted";
+    tone === "danger" ? "focus-visible:ring-danger-border" : "focus-visible:ring-focus-ring";
+  const summaryIconClass = tone === "danger" ? "text-danger-fg" : "text-fg-muted";
 
   return (
     <details
@@ -146,7 +146,7 @@ export function WorkSection({
       >
         <span className="min-w-0">
           <span className="block font-semibold">{title}</span>
-          <span className="mt-1 block text-sm font-normal text-muted">{description}</span>
+          <span className="mt-1 block text-sm font-normal text-fg-muted">{description}</span>
         </span>
         <DisclosureChevron
           expanded="group"
@@ -154,13 +154,9 @@ export function WorkSection({
           className={summaryIconClass}
         />
       </summary>
-      <div className="border-t border-current/10 bg-card p-3">{children}</div>
+      <div className="border-t border-current/10 bg-surface p-3">{children}</div>
     </details>
   );
-}
-
-export function focusManagementTabElement(id: string) {
-  window.requestAnimationFrame(() => document.getElementById(id)?.focus({ preventScroll: true }));
 }
 
 export function ManagementPanelShell({
@@ -182,7 +178,7 @@ export function ManagementPanelShell({
       role="tabpanel"
       aria-labelledby={labelledBy}
       aria-label={ariaLabel}
-      className={`grid gap-4 rounded-md border border-border bg-card p-4 shadow-sm ${className}`}
+      className={`grid gap-4 rounded-md border border-border bg-surface p-4 shadow-sm ${className}`}
       data-testid="management-panel-shell"
     >
       {children}
@@ -206,11 +202,11 @@ export function ManagementPanelHeader({
   return (
     <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
       <div className="min-w-0">
-        <h2 id={headingId} className="flex items-center gap-2 text-base font-semibold text-foreground">
-          <Icon size={18} aria-hidden="true" />
+        <h2 id={headingId} className="flex items-center gap-2 text-base font-semibold text-fg">
+          <Icon size={20} aria-hidden="true" />
           {title}
         </h2>
-        {description && <p className="mt-1 text-sm text-muted">{description}</p>}
+        {description && <p className="mt-1 text-sm text-fg-muted">{description}</p>}
       </div>
       {action && <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-end">{action}</div>}
     </div>
@@ -234,7 +230,7 @@ export function StepIndicator({
         <li
           key={label}
           className={`rounded-md border px-3 py-2 text-sm font-semibold ${
-            index <= activeIndex ? "border-primary/30 bg-primary/10 text-primary" : "border-border bg-card text-muted"
+            index <= activeIndex ? "border-accent-emphasis bg-accent-subtle text-accent-fg" : "border-border bg-surface text-fg-muted"
           }`}
         >
           {index + 1}. {label}
@@ -257,77 +253,30 @@ export function ManagementTabs<TView extends string>({
     label: string;
     icon: LucideIcon;
     ariaLabel?: string;
-    meta?: ReactNode;
+    /** タブ横の短いバッジ（版数・状態など）。 */
+    meta?: string;
     metaTestId?: string;
   }>;
   idPrefix: string;
   ariaLabel: string;
   onViewChange: (view: TView) => void;
 }) {
-  const handleKeyDown = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
-    const keyMap: Record<string, number | undefined> = {
-      ArrowRight: (index + 1) % tabs.length,
-      ArrowLeft: (index - 1 + tabs.length) % tabs.length,
-      Home: 0,
-      End: tabs.length - 1,
-    };
-    const nextIndex = keyMap[event.key];
-    if (nextIndex === undefined) return;
-    event.preventDefault();
-    const nextView = tabs[nextIndex];
-    onViewChange(nextView.id);
-    focusManagementTabElement(`${idPrefix}-tab-${nextView.id}`);
-  };
-
-  // 下線タブ(管理コンソールの定石)へ統一。DbObjectManagementTabs / 詳細タブと同一様式。
+  // 共有 Tabs（WAI-ARIA Tabs、下線スタイル）に NL2SQL の view 型とバッジを渡す adapter。
   return (
-    <div className="overflow-x-auto border-b border-border" role="tablist" aria-label={ariaLabel}>
-      <div className="flex min-w-max gap-1">
-        {tabs.map((view, index) => {
-          const Icon = view.icon;
-          const selected = activeView === view.id;
-          return (
-            <button
-              key={view.id}
-              id={`${idPrefix}-tab-${view.id}`}
-              type="button"
-              role="tab"
-              aria-selected={selected}
-              aria-label={view.ariaLabel}
-              aria-describedby={view.meta ? `${idPrefix}-tab-${view.id}-meta` : undefined}
-              aria-controls={`${idPrefix}-panel-${view.id}`}
-              className={`group inline-flex min-h-11 shrink-0 items-center gap-2 whitespace-nowrap border-b-2 px-4 text-sm font-semibold transition-colors focus:outline-none focus-visible:bg-primary/10 focus-visible:shadow-[inset_0_-3px_0_0_var(--primary)] ${
-                selected
-                  ? "border-primary bg-card text-primary"
-                  : "border-transparent text-muted hover:border-border hover:bg-card hover:text-foreground"
-              }`}
-              onClick={() => onViewChange(view.id)}
-              onKeyDown={(event) => handleKeyDown(event, index)}
-            >
-              <Icon
-                size={15}
-                aria-hidden="true"
-                className={selected ? "text-primary" : "text-muted group-hover:text-muted"}
-              />
-              <span>{view.label}</span>
-              {view.meta ? (
-                <span
-                  id={`${idPrefix}-tab-${view.id}-meta`}
-                  data-testid={view.metaTestId}
-                  className={`rounded-full border px-1.5 py-0.5 text-xs font-semibold leading-4 tabular-nums ${
-                    selected
-                      ? "border-primary/30 bg-primary/10 text-primary"
-                      : "border-border bg-background text-muted"
-                  }`}
-                >
-                  {view.meta}
-                </span>
-              ) : null}
-            </button>
-          );
-        })}
-      </div>
-    </div>
+    <Tabs
+      idPrefix={idPrefix}
+      ariaLabel={ariaLabel}
+      value={activeView}
+      onChange={(id) => onViewChange(id as TView)}
+      items={tabs.map((tab) => ({
+        id: tab.id,
+        label: tab.label,
+        icon: tab.icon,
+        ariaLabel: tab.ariaLabel,
+        badge: tab.meta,
+        badgeTestId: tab.metaTestId,
+      }))}
+    />
   );
 }
 
@@ -358,18 +307,18 @@ export function ExecutionConfirmationField({
     : value.trim()
       ? t("dbAdmin.confirmation.status.mismatch")
       : t("dbAdmin.confirmation.status.pending");
-  const containerClass = "grid min-w-0 gap-2 rounded-md border border-border bg-background p-3";
+  const containerClass = "grid min-w-0 gap-2 rounded-md border border-border bg-surface-sunken p-3";
   const inputClass = [
-    "h-[44px] w-full rounded-md border border-border bg-card px-3 py-2 text-sm outline-none transition-colors placeholder:text-muted disabled:cursor-not-allowed disabled:bg-muted/30 disabled:text-muted",
-    "focus:border-danger focus:ring-2 focus:ring-danger/40",
+    "h-[44px] w-full rounded-md border border-border-control bg-surface px-3 py-2 text-sm outline-none transition-colors placeholder:text-fg-muted disabled:cursor-not-allowed disabled:bg-surface-hover disabled:text-fg-disabled",
+    "focus:border-danger-fg focus:ring-2 focus:ring-danger-border",
   ].join(" ");
   const statusClass = [
     "inline-flex min-h-6 items-center rounded-full border px-2 py-0.5 text-xs font-semibold",
     confirmed
-      ? "border-success/30 bg-success-bg text-success"
+      ? "border-success-border bg-success-subtle text-success-fg"
       : value.trim()
-        ? "border-danger/30 bg-danger-bg text-danger"
-        : "border-border bg-card text-muted",
+        ? "border-danger-border bg-danger-subtle text-danger-fg"
+        : "border-border bg-surface text-fg-muted",
   ].join(" ");
 
   return (
@@ -379,10 +328,10 @@ export function ExecutionConfirmationField({
           htmlFor={id}
           label={t("dbAdmin.confirmation.label")}
           required
-          className="font-semibold text-danger"
+          className="font-semibold text-danger-fg"
         />
         <div className="flex flex-wrap items-center gap-2">
-          <span className="max-w-full break-all rounded-md bg-card px-2 py-1 font-sans text-xs text-foreground">
+          <span className="max-w-full break-all rounded-md bg-surface px-2 py-1 font-sans text-xs text-fg">
             {t("dbAdmin.confirmation.expected", { phrase: expectedLabel })}
           </span>
           <span className={statusClass} aria-live="polite">
@@ -407,12 +356,12 @@ export function ExecutionConfirmationField({
           spellCheck={false}
         />
       </div>
-      <p id={helperId} className="break-words text-xs leading-5 text-danger">
+      <p id={helperId} className="break-words text-xs leading-5 text-danger-fg">
         {helper}
       </p>
       {actions && (
         <div
-          className="flex min-w-0 flex-col gap-[8px] border-t border-danger/20 pt-3 sm:flex-row sm:flex-wrap sm:items-center"
+          className="flex min-w-0 flex-col gap-[8px] border-t border-danger-border pt-3 sm:flex-row sm:flex-wrap sm:items-center"
         >
           {actions}
         </div>
@@ -459,7 +408,7 @@ export function QueryResultsTable({
           testId="query-results-pagination"
         />
       ) : (
-        <nav className="text-xs text-muted" aria-label={pageIndicator} data-testid="query-results-pagination">
+        <nav className="text-xs text-fg-muted" aria-label={pageIndicator} data-testid="query-results-pagination">
           <span className="tnum">{paginationSummary}</span>
         </nav>
       )}
@@ -605,15 +554,15 @@ export function DbAdminErrorNotice({
     >
       <div className="grid gap-3">
         <div className="grid gap-1">
-          <p className="break-words text-sm font-semibold text-foreground">{error.summary}</p>
+          <p className="break-words text-sm font-semibold text-fg">{error.summary}</p>
         </div>
         <div className="grid gap-1">
-          <p className="text-xs font-semibold text-danger">{t("dbAdmin.result.error.cause")}</p>
-          <p className="text-sm leading-6 text-foreground/90">{error.cause}</p>
+          <p className="text-xs font-semibold text-danger-fg">{t("dbAdmin.result.error.cause")}</p>
+          <p className="text-sm leading-6 text-fg/90">{error.cause}</p>
         </div>
         <div className="grid gap-1">
-          <p className="text-xs font-semibold text-danger">{t("dbAdmin.result.error.nextAction")}</p>
-          <ul className="grid gap-1 text-sm leading-6 text-foreground/90">
+          <p className="text-xs font-semibold text-danger-fg">{t("dbAdmin.result.error.nextAction")}</p>
+          <ul className="grid gap-1 text-sm leading-6 text-fg/90">
             {error.actions.map((action) => (
               <li key={action} className="flex gap-2">
                 <span aria-hidden="true">-</span>
@@ -624,20 +573,20 @@ export function DbAdminErrorNotice({
         </div>
         {error.examples.length > 0 ? <SqlRecoveryExamples examples={error.examples} /> : null}
         {hasDetail ? (
-          <details className="group/disclosure rounded-md border border-border bg-card/70">
-            <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-sm font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
+          <details className="group/disclosure rounded-md border border-border bg-surface">
+            <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-sm font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring [&::-webkit-details-marker]:hidden">
               <span>{t("dbAdmin.result.error.detail")}</span>
-              <DisclosureChevron expanded="group" size={15} className="text-muted" />
+              <DisclosureChevron expanded="group" size={16} className="text-fg-muted" />
             </summary>
             <div className="grid gap-2 border-t border-border p-3">
               {error.code ? <StatusBadge variant="danger" label={error.code} /> : null}
               {requestId ? (
-                <p className="break-all text-xs text-muted">
+                <p className="break-all text-xs text-fg-muted">
                   {t("common.requestId")}: <code>{requestId}</code>
                 </p>
               ) : null}
               {error.helpUrl ? (
-                <a className="text-sm font-semibold text-danger underline" href={error.helpUrl} target="_blank" rel="noreferrer">
+                <a className="text-sm font-semibold text-danger-fg underline" href={error.helpUrl} target="_blank" rel="noreferrer">
                   {t("dbAdmin.result.error.help")}
                 </a>
               ) : null}
@@ -664,24 +613,22 @@ function SqlRecoveryExamples({ examples }: { examples: { label: string; sql: str
   };
   return (
     <section className="grid min-w-0 gap-3" aria-label={t("dbAdmin.result.error.examples")}>
-      <p className="text-xs font-semibold text-danger">{t("dbAdmin.result.error.examples")}</p>
-      <p className="text-sm leading-6 text-foreground/90">{t("dbAdmin.result.error.examples.hint")}</p>
+      <p className="text-xs font-semibold text-danger-fg">{t("dbAdmin.result.error.examples")}</p>
+      <p className="text-sm leading-6 text-fg/90">{t("dbAdmin.result.error.examples.hint")}</p>
       {examples.map((example) => (
-        <div key={example.label} className="grid min-w-0 gap-2 rounded-md border border-border bg-card p-3">
+        <div key={example.label} className="grid min-w-0 gap-2 rounded-md border border-border bg-surface p-3">
           <ContentActionBar ariaLabel={example.label} title={example.label}>
-            <Button
+            <Button type="button"
               variant="secondary"
               size="sm"
               aria-label={t("dbAdmin.result.error.example.copyAria", { name: example.label })}
               loading={copying === example.label}
               disabled={copying !== null}
-              onClick={() => void copyExample(example)}
-            >
-              <Copy size={14} aria-hidden />
+              onClick={() => void copyExample(example)} icon={Copy}>
               {t("dbAdmin.result.error.example.copy")}
             </Button>
           </ContentActionBar>
-          <pre className="min-w-0 whitespace-pre-wrap break-all text-xs leading-6 text-foreground"><code>{example.sql}</code></pre>
+          <pre className="min-w-0 whitespace-pre-wrap break-all text-xs leading-6 text-fg"><code>{example.sql}</code></pre>
         </div>
       ))}
     </section>
@@ -702,7 +649,7 @@ export function DbAdminExecutionResult({
   const summary = resultSummary(result);
   const showStatementDetails = !result.select_result;
   return (
-    <section className="grid gap-2 rounded-md border border-border bg-background p-3 text-sm">
+    <section className="grid gap-2 rounded-md border border-border bg-surface-sunken p-3 text-sm">
       <div className="flex flex-wrap gap-2">
         <StatusBadge variant={summary.variant} label={summary.label} />
         <StatusBadge variant="neutral" label={runtimeLabel(result.runtime)} />
@@ -718,7 +665,7 @@ export function DbAdminExecutionResult({
       {showStatementDetails ? (
         <div className="grid max-h-[32rem] gap-2 overflow-y-auto">
           {result.statements.map((statement) => (
-            <div key={`${statement.index}-${statement.sql}`} className="rounded-md bg-card p-3">
+            <div key={`${statement.index}-${statement.sql}`} className="rounded-md bg-surface p-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="flex flex-wrap gap-2">
                   <StatusBadge variant="neutral" label={statement.statement_type} />
@@ -733,7 +680,7 @@ export function DbAdminExecutionResult({
                     )}
                 </div>
               </div>
-              <code className="mt-2 block break-words text-xs text-foreground">{statement.sql}</code>
+              <code className="mt-2 block break-words text-xs text-fg">{statement.sql}</code>
               {statement.error_message && <DbAdminStatementError statement={statement} />}
             </div>
           ))}
@@ -769,7 +716,7 @@ export function SelectionListPanel({
   return (
     <section className="grid min-w-0 gap-2">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="text-sm font-semibold text-foreground">{title}</h3>
+        <h3 className="text-sm font-semibold text-fg">{title}</h3>
         <StatusBadge
           variant={selectedItems.length > 0 ? "info" : "neutral"}
           label={selectedCountLabel}
@@ -779,7 +726,7 @@ export function SelectionListPanel({
         role="group"
         aria-label={ariaLabel}
         data-testid={dataTestId}
-        className="grid h-[28rem] overflow-y-auto rounded-md border border-border bg-card"
+        className="grid h-[28rem] overflow-y-auto rounded-md border border-border bg-surface"
       >
         {items.length === 0 ? (
           <div className="grid min-h-full place-items-center p-4">
@@ -794,17 +741,17 @@ export function SelectionListPanel({
                   key={name}
                   className={`flex min-h-11 min-w-0 cursor-pointer items-center gap-2 rounded-md border p-3 text-sm transition-colors ${
                     selected
-                      ? "border-primary/30 bg-primary/10 text-primary"
-                      : "border-border text-foreground hover:border-primary/30 hover:bg-primary/10"
+                      ? "border-accent-emphasis bg-accent-subtle text-accent-fg"
+                      : "border-border text-fg hover:border-accent-emphasis hover:bg-accent-subtle"
                   }`}
                 >
                   <input
                     type="checkbox"
                     checked={selected}
                     onChange={() => onToggle(name)}
-                    className="h-4 w-4 shrink-0 rounded border-border text-primary focus:ring-ring/40"
+                    className="h-4 w-4 shrink-0 rounded border-border text-accent-fg focus:ring-focus-ring"
                   />
-                  <span className="min-w-0 break-all font-mono text-xs font-semibold text-foreground">
+                  <span className="min-w-0 break-all font-mono text-xs font-semibold text-fg">
                     {name}
                   </span>
                 </label>
@@ -1010,15 +957,15 @@ export function StatementRunnerCard({
 
   const header = executeOnly ? (
     <div className="min-w-0">
-      <h2 className="flex items-center gap-2 text-base font-semibold text-foreground">
-        <Code2 size={18} aria-hidden="true" />
+      <h2 className="flex items-center gap-2 text-base font-semibold text-fg">
+        <Code2 size={20} aria-hidden="true" />
         {title}
       </h2>
-      {description && <p className="mt-1 text-sm text-muted">{description}</p>}
+      {description && <p className="mt-1 text-sm text-fg-muted">{description}</p>}
     </div>
   ) : (
     <CardTitle className="flex items-center gap-2">
-      <Code2 size={18} aria-hidden="true" />
+      <Code2 size={20} aria-hidden="true" />
       {title}
     </CardTitle>
   );
@@ -1031,9 +978,7 @@ export function StatementRunnerCard({
       className="w-full sm:w-auto"
       loading={loading}
       disabled={!canRun || executionBlocked}
-      onClick={() => void run()}
-    >
-      <Play size={15} aria-hidden="true" />
+      onClick={() => void run()} icon={Play}>
       <span>{t("dbAdmin.runner.run")}</span>
     </Button>
   );
@@ -1066,14 +1011,14 @@ export function StatementRunnerCard({
     <>
       {executeOnly && header}
       {progressNode}
-      <label className="grid gap-1 text-sm font-medium text-foreground">
+      <label className="grid gap-1 text-sm font-medium text-fg">
         <span>{t("dbAdmin.runner.sqlLabel")}</span>
         <textarea
           value={sql}
           onChange={(event) => setSql(event.currentTarget.value)}
           rows={9}
           placeholder={placeholder}
-          className="min-h-52 rounded-md border border-border bg-card px-3 py-2 font-mono text-sm leading-6 focus:border-primary focus:ring-2 focus:ring-ring/40"
+          className="min-h-52 rounded-md border border-border-control bg-surface px-3 py-2 font-mono text-sm leading-6 focus:border-focus-ring focus:ring-2 focus:ring-focus-ring"
         />
       </label>
       <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
@@ -1098,16 +1043,14 @@ export function StatementRunnerCard({
             setMessage("");
             setExecutionRun(null);
             setSqlFileResetSignal((value) => value + 1);
-          }}
-        >
-          <X size={15} aria-hidden="true" />
+          }} icon={X}>
           <span>{t("nl2sql.action.clearSql")}</span>
         </Button>
       </div>
       <div className="grid gap-3">
         {executeOnly ? (
-          <fieldset className="grid gap-3 rounded-md border border-border bg-card p-3">
-            <legend className="px-1 text-sm font-semibold text-foreground">
+          <fieldset className="grid gap-3 rounded-md border border-border bg-surface p-3">
+            <legend className="px-1 text-sm font-semibold text-fg">
               {confirmationTitle ?? t("dbAdmin.runner.confirmation")}
             </legend>
             {confirmationField}
@@ -1184,19 +1127,19 @@ export function ObjectListPanel({
 
   return (
     <div className="grid content-start gap-3">
-      <label className="grid gap-1 text-sm font-medium text-foreground">
+      <label className="grid gap-1 text-sm font-medium text-fg">
         <span>{t("dbAdmin.search.label")}</span>
         <span className="relative">
-          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" aria-hidden="true" />
+          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-fg-muted" aria-hidden="true" />
           <input
             value={query}
             onChange={(event) => setQuery(event.currentTarget.value)}
-            className="min-h-11 w-full rounded-md border border-border bg-card py-2 pl-9 pr-3 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40"
+            className="min-h-11 w-full rounded-md border border-border-control bg-surface py-2 pl-9 pr-3 outline-none focus:border-focus-ring focus:ring-2 focus:ring-focus-ring"
             placeholder={t("dbAdmin.search.placeholder")}
           />
         </span>
       </label>
-      <p className="text-xs text-muted">
+      <p className="text-xs text-fg-muted">
         {t("dbAdmin.search.resultCount", { filtered: filtered.length, total: items.length })}
       </p>
       {filtered.length === 0 ? (
@@ -1210,14 +1153,14 @@ export function ObjectListPanel({
               role="listitem"
               aria-current={item.name === selectedName ? "true" : undefined}
               onClick={() => onSelect(item)}
-              className={`${INFORMATION_LIST_ROW_CLASS} cursor-pointer rounded-md border p-3 text-left text-sm transition focus:outline-none focus:ring-2 focus:ring-ring/40 ${
+              className={`${INFORMATION_LIST_ROW_CLASS} cursor-pointer rounded-md border p-3 text-left text-sm transition focus:outline-none focus:ring-2 focus:ring-focus-ring ${
                 item.name === selectedName
-                  ? "border-primary bg-primary/10"
-                  : "border-border bg-card hover:bg-background"
+                  ? "border-accent-emphasis bg-accent-subtle"
+                  : "border-border bg-surface hover:bg-surface-hover"
               }`}
             >
-              <span className="break-all font-mono text-xs font-semibold text-primary">{item.name}</span>
-              <span className="mt-1 block text-xs text-muted">
+              <span className="break-all font-mono text-xs font-semibold text-accent-fg">{item.name}</span>
+              <span className="mt-1 block text-xs text-fg-muted">
                 {item.comment.trim() || "-"}
                 {item.row_count != null && ` / ${t("dbAdmin.list.rows", { count: item.row_count })}`}
               </span>
@@ -1269,7 +1212,7 @@ export function ObjectDetailPanel({
     <section className="grid min-w-0 content-start gap-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-center gap-2">
-          <p className="break-all font-mono text-sm font-semibold text-foreground">{detail.name}</p>
+          <p className="break-all font-mono text-sm font-semibold text-fg">{detail.name}</p>
           <StatusBadge variant="neutral" label={detail.object_type} />
           <StatusBadge variant="neutral" label={t("dbAdmin.detail.columnCount", { count: detail.columns.length })} />
           {detail.row_count != null && (
@@ -1278,14 +1221,14 @@ export function ObjectDetailPanel({
         </div>
         {actions}
       </div>
-      {detail.comment && <p className="text-sm text-foreground">{detail.comment}</p>}
+      {detail.comment && <p className="text-sm text-fg">{detail.comment}</p>}
       {detail.warnings.map((warning) => (
-        <p key={warning} className="rounded-md border border-warning/30 bg-warning-bg px-3 py-2 text-sm text-warning">
+        <p key={warning} className="rounded-md border border-warning-border bg-warning-subtle px-3 py-2 text-sm text-warning-fg">
           {warning}
         </p>
       ))}
       <div>
-        <p className="mb-1 text-sm font-semibold text-foreground">{t("dbAdmin.detail.columns")}</p>
+        <p className="mb-1 text-sm font-semibold text-fg">{t("dbAdmin.detail.columns")}</p>
         <div
           data-testid="db-admin-detail-columns"
           tabIndex={0}
@@ -1299,7 +1242,7 @@ export function ObjectDetailPanel({
               <col className="w-[12%]" />
               <col />
             </colgroup>
-            <thead className="sticky top-0 z-10 bg-background">
+            <thead className="sticky top-0 z-10 bg-surface-sunken">
               <tr className="h-10">
                 <th className="whitespace-nowrap px-3 py-2 text-left">{t("dbAdmin.col.physical")}</th>
                 <th className="whitespace-nowrap px-3 py-2 text-left">{t("dbAdmin.col.logical")}</th>
@@ -1315,7 +1258,7 @@ export function ObjectDetailPanel({
                   <td className="px-3 py-2">{column.logical_name}</td>
                   <td className="px-3 py-2">{column.data_type}</td>
                   <td className="px-3 py-2">{column.nullable ? "YES" : "NO"}</td>
-                  <td className="break-words px-3 py-2 font-sans text-xs text-muted">
+                  <td className="break-words px-3 py-2 font-sans text-xs text-fg-muted">
                     {sampleByColumn.get(column.column_name.toUpperCase()) || "-"}
                   </td>
                 </tr>
@@ -1324,15 +1267,15 @@ export function ObjectDetailPanel({
           </table>
         </div>
       </div>
-      <details className="group/disclosure rounded-md border border-border bg-background">
-        <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-sm font-semibold text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 [&::-webkit-details-marker]:hidden">
+      <details className="group/disclosure rounded-md border border-border bg-surface-sunken">
+        <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-sm font-semibold text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring [&::-webkit-details-marker]:hidden">
           <span className="min-w-0">
             {t("dbAdmin.detail.ddl")}
-            <span className="ml-2 text-xs font-normal text-muted">{t("dbAdmin.detail.ddlHint")}</span>
+            <span className="ml-2 text-xs font-normal text-fg-muted">{t("dbAdmin.detail.ddlHint")}</span>
           </span>
-          <DisclosureChevron expanded="group" size={15} className="text-muted" />
+          <DisclosureChevron expanded="group" size={16} className="text-fg-muted" />
         </summary>
-        <div className="grid gap-2 border-t border-border bg-card p-3">
+        <div className="grid gap-2 border-t border-border bg-surface p-3">
           <ContentActionBar ariaLabel={t("dbAdmin.detail.ddl")}>
             <Button type="button" variant="secondary" size="sm" disabled={!detail.ddl} onClick={() => void copyDdl()}>
               {t("dbAdmin.detail.copy")}
@@ -1349,13 +1292,11 @@ export function ObjectDetailPanel({
                 } catch {
                   toastError(t("common.action.downloadFailed"));
                 }
-              }}
-            >
-              <Download size={15} aria-hidden="true" />
+              }} icon={Download}>
               <span>{t("dbAdmin.detail.download")}</span>
             </Button>
           </ContentActionBar>
-          <pre className="max-h-72 overflow-auto rounded-md border border-border bg-code p-3 text-sm leading-6 text-code-fg">
+          <pre data-surface="code" className="max-h-72 overflow-auto rounded-md border border-border bg-surface p-3 text-sm leading-6 text-fg">
             <code>{detail.ddl || "-"}</code>
           </pre>
         </div>

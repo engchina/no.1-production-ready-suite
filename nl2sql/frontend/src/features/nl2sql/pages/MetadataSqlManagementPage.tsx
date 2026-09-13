@@ -10,14 +10,19 @@ import {
   Wand2,
 } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
-import { Banner, EmptyState, toast } from "@engchina/production-ready-ui";
+import {
+  Button,
+  Banner,
+  EmptyState,
+  toast,
+  StatusBadge,
+  PageHeader,
+  PageBody,
+} from "@engchina/production-ready-ui";
 
-import { StatusBadge } from "@/components/ui/status-badge";
 
 import { BulkSelectionActions } from "@/components/BulkSelectionActions";
 import { ContentActionBar } from "@/components/ContentActionBar";
-import { PageHeader } from "@/components/PageHeader";
 import { ProcessingIndicator } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";
 import { ErrorState } from "@/components/StateViews";
@@ -516,15 +521,15 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
         ]}
       />
       {selectedTargets.length > 0 && (checkedAt || activePanel !== "targets") ? (
-        <div className="px-4 pb-3 lg:px-8">
+        <PageBody className="pb-0">
           <Banner severity={validated ? "info" : "warning"} action={
-            <Button variant="secondary" size="sm" disabled={Boolean(loading)} onClick={() => void fetchDetails(true)}>{t("workspace.refresh")}</Button>
+            <Button type="button" variant="secondary" size="sm" disabled={Boolean(loading)} onClick={() => void fetchDetails(true)}>{t("workspace.refresh")}</Button>
           }>
             {t(checkedAt ? "workspace.snapshot" : "workspace.unverified")}{checkedAt ? ` (${formatDateTime(checkedAt)})` : ""}
           </Banner>
-        </div>
+        </PageBody>
       ) : null}
-      <main className="grid gap-4 p-4 lg:p-8">
+      <PageBody className="grid gap-4">
         <PageNotice
           notice={
             message
@@ -542,9 +547,7 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
                 schemaRefreshNeedsFull || Boolean(sharedSchemaRefresh.error)
                   ? () => void refreshSchema()
                   : () => void refreshObjects()
-              }
-            >
-              <RefreshCw size={15} aria-hidden="true" />
+              } icon={RefreshCw}>
               <span>
                 {schemaRefreshNeedsFull || Boolean(sharedSchemaRefresh.error)
                   ? t("common.action.schemaRefresh")
@@ -561,7 +564,7 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
             label={t("common.processing.refreshing")}
             operationKey="metadata-objects-refresh"
             placement="workspace"
-            className="rounded-md border border-border bg-card px-3 py-2 shadow-sm"
+            className="rounded-md border border-border bg-surface px-3 py-2 shadow-sm"
             testId={`${pageId}-workspace-processing`}
             activityIcon="none"
           />
@@ -666,7 +669,7 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
             onExecuted={reloadAfterMutation}
           />
         </DbObjectManagementPanelShell>
-      </main>
+      </PageBody>
     </>
   );
 }
@@ -802,7 +805,7 @@ function MetadataTargetGrid({
           hint={hasActiveFilter ? t("metadataSql.targets.noResultsHint") : t("metadataSql.targets.emptyHint")}
         />
       ) : (
-        <div className="overflow-hidden rounded-md border border-border bg-card">
+        <div className="overflow-hidden rounded-md border border-border bg-surface">
           <div className={INFORMATION_TABLE_FIVE_ROW_SCROLL_CLASS} data-testid="db-admin-object-list">
             <table className="w-full min-w-[42rem] table-fixed divide-y divide-border text-left text-sm" data-testid={`${pageId}-target-grid`}>
               <colgroup>
@@ -811,7 +814,7 @@ function MetadataTargetGrid({
                 <col className="w-[7rem]" />
                 <col />
               </colgroup>
-              <thead className="sticky top-0 z-10 bg-background text-xs text-muted">
+              <thead className="sticky top-0 z-10 bg-surface-sunken text-xs text-fg-muted">
                 <tr>
                   <th className="whitespace-nowrap px-3 py-2">
                     <TargetSortButton label={t("metadataSql.targets.grid.objectName")} sortKey="name" sort={sort} onToggle={onSortChange} />
@@ -831,18 +834,18 @@ function MetadataTargetGrid({
                   return (
                     <tr
                       key={item.key}
-                      className={`${DB_OBJECT_GRID_ROW_CLASS} ${selected ? "bg-primary/10" : "hover:bg-background"}`}
+                      className={`${DB_OBJECT_GRID_ROW_CLASS} ${selected ? "bg-accent-subtle" : "hover:bg-surface-hover"}`}
                     >
                       <td className="px-3 py-1 align-top">
-                        <label className="flex min-h-11 cursor-pointer items-start gap-3 text-foreground">
+                        <label className="flex min-h-11 cursor-pointer items-start gap-3 text-fg">
                           <input
                             type="checkbox"
                             checked={selected}
                             onChange={() => onToggle(item)}
-                            className="mt-1 h-4 w-4 shrink-0 rounded border-border text-primary focus:ring-ring/40"
+                            className="mt-1 h-4 w-4 shrink-0 rounded border-border text-accent-fg focus:ring-focus-ring"
                           />
                           <span className="min-w-0">
-                            <span className="block break-all font-mono text-xs font-semibold text-primary">
+                            <span className="block break-all font-mono text-xs font-semibold text-accent-fg">
                               {item.qualifiedName}
                             </span>
                             <span className="sr-only">
@@ -854,10 +857,10 @@ function MetadataTargetGrid({
                       <td className="whitespace-nowrap px-3 py-1 align-top">
                         <StatusBadge variant="neutral" label={targetTypeLabel(item.object_type)} />
                       </td>
-                      <td className="whitespace-nowrap px-3 py-1 align-top font-mono text-xs text-muted">
+                      <td className="whitespace-nowrap px-3 py-1 align-top font-mono text-xs text-fg-muted">
                         {item.owner || "-"}
                       </td>
-                      <td className="break-words px-3 py-1 align-top text-sm text-foreground">
+                      <td className="break-words px-3 py-1 align-top text-sm text-fg">
                         {item.comment || "-"}
                       </td>
                     </tr>
@@ -958,9 +961,9 @@ function MetadataInputPanel({
             <EmptyState title={t("metadataSql.input.emptyTitle")} hint={t("metadataSql.input.emptyHint")} />
           )}
 
-          <div className="grid gap-3 rounded-md border border-border bg-background p-3">
+          <div className="grid gap-3 rounded-md border border-border bg-surface-sunken p-3">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-              <label className="grid min-w-0 gap-1 text-sm font-medium text-foreground sm:w-44">
+              <label className="grid min-w-0 gap-1 text-sm font-medium text-fg sm:w-44">
                 <span>{t("metadataSql.input.sampleLimit")}</span>
                 <input
                   type="number"
@@ -971,7 +974,7 @@ function MetadataInputPanel({
                     const value = Number(event.currentTarget.value);
                     onSampleLimitChange(Number.isFinite(value) ? Math.min(100, Math.max(0, value)) : 0);
                   }}
-                  className="min-h-11 w-full rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:ring-2 focus:ring-ring/40"
+                  className="min-h-11 w-full rounded-md border border-border-control bg-surface px-3 py-2 focus:border-focus-ring focus:ring-2 focus:ring-focus-ring"
                 />
               </label>
               <StatusBadge variant={detailsReady ? "info" : "neutral"} label={t("metadataSql.targets.selected", { count: selectedCount })} />
@@ -985,13 +988,13 @@ function MetadataInputPanel({
             <MetadataTextarea label={t("metadataSql.input.fk")} value={inputTexts.foreignKeyText} rows={5} />
           </div>
 
-          <label className="grid gap-1 text-sm font-medium text-foreground">
+          <label className="grid gap-1 text-sm font-medium text-fg">
             <span>{t("metadataSql.input.extra")}</span>
             <textarea
               value={extraText}
               onChange={(event) => onExtraTextChange(event.currentTarget.value)}
               rows={6}
-              className="min-h-32 rounded-md border border-border bg-card px-3 py-2 text-sm leading-6 focus:border-primary focus:ring-2 focus:ring-ring/40"
+              className="min-h-32 rounded-md border border-border-control bg-surface px-3 py-2 text-sm leading-6 focus:border-focus-ring focus:ring-2 focus:ring-focus-ring"
             />
           </label>
 
@@ -1013,9 +1016,7 @@ function MetadataInputPanel({
               className="w-full sm:w-auto"
               loading={loading}
               disabled={!detailsReady}
-              onClick={onGenerate}
-            >
-              <Wand2 size={15} aria-hidden="true" />
+              onClick={onGenerate} icon={Wand2}>
               <span>{t("metadataSql.action.generate")}</span>
             </Button>
           </ContentActionBar>
@@ -1073,7 +1074,7 @@ function MetadataExecutePanel({
           )}
 
           {generated?.warnings.map((warning) => (
-            <p key={warning} className="rounded-md border border-warning/30 bg-warning-bg px-3 py-2 text-sm text-warning">
+            <p key={warning} className="rounded-md border border-warning-border bg-warning-subtle px-3 py-2 text-sm text-warning-fg">
               {warning}
             </p>
           ))}
@@ -1102,13 +1103,13 @@ function MetadataExecutePanel({
 
 function MetadataTextarea({ label, value, rows }: { label: string; value: string; rows: number }) {
   return (
-    <label className="grid min-w-0 gap-1 text-sm font-medium text-foreground">
+    <label className="grid min-w-0 gap-1 text-sm font-medium text-fg">
       <span>{label}</span>
       <textarea
         readOnly
         value={value}
         rows={rows}
-        className="rounded-md border border-border bg-background px-3 py-2 font-mono text-sm leading-6 text-foreground"
+        className="rounded-md border border-border-control bg-surface-sunken px-3 py-2 font-mono text-sm leading-6 text-fg"
       />
     </label>
   );
@@ -1133,7 +1134,7 @@ function TargetSortButton({
       onClick={() => onToggle(sortKey)}
     >
       <span>{label}</span>
-      <ArrowDownUp size={13} className={active ? "text-primary" : "text-muted"} aria-hidden="true" />
+      <ArrowDownUp size={14} className={active ? "text-accent-fg" : "text-fg-muted"} aria-hidden="true" />
     </SortHeader>
   );
 }

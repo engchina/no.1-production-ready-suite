@@ -15,11 +15,12 @@ async function fulfillJson(route: Route, data: unknown) {
 
 async function expectUnifiedConfirmDialogSurface(dialog: Locator) {
   await expect(dialog).toHaveClass(/max-w-md/);
-  await expect(dialog).toHaveClass(/bg-card/);
+  // ダイアログ面は共有トークン bg-surface-overlay(旧 bg-card)。
+  await expect(dialog).toHaveClass(/\bbg-surface-overlay\b/);
   await expect(dialog).toHaveClass(/border-border/);
   await expect(dialog).not.toHaveClass(/border-l-danger/);
   await expect(dialog.locator(".border-l-danger")).toHaveCount(0);
-  await expect(dialog.locator(".bg-danger-bg")).toHaveCount(0);
+  await expect(dialog.locator(".bg-danger-subtle")).toHaveCount(0);
   await expect(dialog.getByRole("button", { name: "閉じる", exact: true })).toHaveCount(0);
 }
 

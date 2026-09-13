@@ -2,13 +2,17 @@ import { useWorkspaceState, useWorkspaceRevalidation, useResetExecutionConsent }
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Code2, Eye, RefreshCw, Sparkles } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
+import {
+  Button,
+  EmptyState,
+  toast,
+  StatusBadge,
+  PageHeader,
+  PageBody,
+} from "@engchina/production-ready-ui";
 import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
-import { EmptyState, toast } from "@engchina/production-ready-ui";
 
 import { ContentActionBar } from "@/components/ContentActionBar";
-import { StatusBadge } from "@/components/ui/status-badge";
-import { PageHeader } from "@/components/PageHeader";
 import { ProcessingIndicator } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";
 import { apiFetch, apiPost, isTimeoutError } from "@/lib/api";
@@ -111,14 +115,14 @@ function ViewJoinWherePanel({
 
       {detail ? (
         <section
-          className="grid gap-3 rounded-md border border-border bg-background p-3"
+          className="grid gap-3 rounded-md border border-border bg-surface-sunken p-3"
           data-testid="view-join-where-selected-view"
         >
           <div className="flex flex-wrap items-center gap-2">
             <StatusBadge variant="neutral" label={detail.object_type} />
             <StatusBadge variant="info" label={detail.name} />
           </div>
-          <p className="text-sm text-muted">{t("viewMgmt.joinWhere.selectedHint")}</p>
+          <p className="text-sm text-fg-muted">{t("viewMgmt.joinWhere.selectedHint")}</p>
         </section>
       ) : (
         <EmptyState title={t("viewMgmt.joinWhere.emptyTitle")} hint={t("viewMgmt.joinWhere.empty")} />
@@ -126,25 +130,25 @@ function ViewJoinWherePanel({
 
       <section
         aria-label={t("viewMgmt.joinWhere.advancedSettings")}
-        className="grid gap-3 rounded-md border border-border bg-background p-3"
+        className="grid gap-3 rounded-md border border-border bg-surface-sunken p-3"
         data-testid="view-join-where-advanced-settings"
       >
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="grid min-w-0 gap-1">
-            <h3 className="text-sm font-semibold text-foreground">
+            <h3 className="text-sm font-semibold text-fg">
               {t("viewMgmt.joinWhere.advancedSettings")}
             </h3>
-            <p className="max-w-prose text-xs leading-5 text-muted">
+            <p className="max-w-prose text-xs leading-5 text-fg-muted">
               {t("viewMgmt.joinWhere.advancedSettingsHint")}
             </p>
           </div>
           <StatusBadge variant="info" label={joinWherePromptProfileLabel()} />
         </div>
-        <div className="grid gap-2 rounded-md border border-border bg-card p-3">
-          <p className="text-sm font-medium text-foreground">
+        <div className="grid gap-2 rounded-md border border-border bg-surface p-3">
+          <p className="text-sm font-medium text-fg">
             {t("viewMgmt.joinWhere.profileLabel")}
           </p>
-          <p className="max-w-prose text-xs leading-5 text-muted">
+          <p className="max-w-prose text-xs leading-5 text-fg-muted">
             {joinWherePromptProfileDescription()}
           </p>
           <div
@@ -156,7 +160,7 @@ function ViewJoinWherePanel({
               <span
                 key={scope}
                 role="listitem"
-                className="inline-flex min-h-8 items-center rounded-full border border-info/30 bg-info-bg px-3 text-xs font-medium text-info"
+                className="inline-flex min-h-8 items-center rounded-full border border-info-border bg-info-subtle px-3 text-xs font-medium text-info-fg"
               >
                 {t(`viewMgmt.joinWhere.outputScope.${scope}`)}
               </span>
@@ -171,7 +175,7 @@ function ViewJoinWherePanel({
         description={
           <span
             id={ddlStatusId}
-            className={ddlError ? "text-warning" : undefined}
+            className={ddlError ? "text-warning-fg" : undefined}
             aria-live={ddlLoading || ddlError ? "polite" : undefined}
           >
             {ddlStatus}
@@ -187,9 +191,7 @@ function ViewJoinWherePanel({
             size="lg"
             className="w-full sm:w-auto"
             disabled={ddlLoading}
-            onClick={onRetryDdl}
-          >
-            <RefreshCw size={15} aria-hidden="true" />
+            onClick={onRetryDdl} icon={RefreshCw}>
             <span>{t("viewMgmt.joinWhere.ddlRetry")}</span>
           </Button>
         ) : null}
@@ -201,9 +203,7 @@ function ViewJoinWherePanel({
           loading={loading}
           disabled={!ddlReady || ddlLoading}
           aria-describedby={ddlStatusId}
-          onClick={onExtract}
-        >
-          <Sparkles size={15} aria-hidden="true" />
+          onClick={onExtract} icon={Sparkles}>
           <span>{t("viewMgmt.joinWhere.extract")}</span>
         </Button>
       </ContentActionBar>
@@ -216,7 +216,7 @@ function ViewJoinWherePanel({
           placement="result"
         />
       ) : result ? (
-        <section className="grid gap-3 rounded-md border border-border bg-background p-3 text-sm" aria-label={t("viewMgmt.joinWhere.result")}>
+        <section className="grid gap-3 rounded-md border border-border bg-surface-sunken p-3 text-sm" aria-label={t("viewMgmt.joinWhere.result")}>
           <div className="flex flex-wrap gap-2">
             <StatusBadge variant={result.source === "oci_enterprise_ai" ? "success" : "neutral"} label={result.source} />
             <StatusBadge
@@ -225,37 +225,37 @@ function ViewJoinWherePanel({
             />
           </div>
           {result.warnings.map((warning) => (
-            <p key={warning} className="rounded-md border border-warning/30 bg-warning-bg px-3 py-2 text-warning">
+            <p key={warning} className="rounded-md border border-warning-border bg-warning-subtle px-3 py-2 text-warning-fg">
               {warning}
             </p>
           ))}
           <div className="grid gap-3 lg:grid-cols-2">
-            <label className="grid gap-1 text-sm font-medium text-foreground">
+            <label className="grid gap-1 text-sm font-medium text-fg">
               <span>{t("viewMgmt.joinWhere.join")}</span>
               <textarea
                 readOnly
                 value={result.join_text}
                 rows={5}
-                className="min-h-32 rounded-md border border-border bg-card px-3 py-2 font-mono text-sm leading-6 text-foreground outline-none"
+                className="min-h-32 rounded-md border border-border-control bg-surface px-3 py-2 font-mono text-sm leading-6 text-fg outline-none"
               />
             </label>
-            <label className="grid gap-1 text-sm font-medium text-foreground">
+            <label className="grid gap-1 text-sm font-medium text-fg">
               <span>{t("viewMgmt.joinWhere.where")}</span>
               <textarea
                 readOnly
                 value={result.where_text}
                 rows={5}
-                className="min-h-32 rounded-md border border-border bg-card px-3 py-2 font-mono text-sm leading-6 text-foreground outline-none"
+                className="min-h-32 rounded-md border border-border-control bg-surface px-3 py-2 font-mono text-sm leading-6 text-fg outline-none"
               />
             </label>
           </div>
           {result.structure_markdown ? (
-            <details className="group/disclosure rounded-md border border-border bg-card p-3">
-              <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 text-sm font-semibold text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 [&::-webkit-details-marker]:hidden">
+            <details className="group/disclosure rounded-md border border-border bg-surface p-3">
+              <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 text-sm font-semibold text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring [&::-webkit-details-marker]:hidden">
                 <span>{t("viewMgmt.joinWhere.structureResult")}</span>
-                <DisclosureChevron expanded="group" size={15} className="text-muted" />
+                <DisclosureChevron expanded="group" size={16} className="text-fg-muted" />
               </summary>
-              <pre className="mt-3 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-code p-3 font-mono text-sm leading-6 text-code-fg">
+              <pre data-surface="code" className="mt-3 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-surface p-3 font-mono text-sm leading-6 text-fg">
                 {result.structure_markdown}
               </pre>
             </details>
@@ -669,7 +669,7 @@ export function ViewManagementPage() {
             : undefined
         }
         status={<SchemaRefreshHeaderStatus testId="view-schema-refresh-status" />}
-        actionsAriaLabel={t("viewMgmt.tabs.label")}
+        actionsLabel={t("viewMgmt.tabs.label")}
         actionsTestId="view-management-actions"
         actions={
           activeView === "list"
@@ -709,7 +709,7 @@ export function ViewManagementPage() {
             : []
         }
       />
-      <main className="grid gap-4 p-4 lg:p-8">
+      <PageBody className="grid gap-4">
         <PageNotice
           notice={
             message
@@ -727,9 +727,7 @@ export function ViewManagementPage() {
                 schemaRefreshNeedsFull || Boolean(sharedSchemaRefresh.error)
                   ? () => void refreshSchema()
                   : () => void refreshObjects()
-              }
-            >
-              <RefreshCw size={15} aria-hidden="true" />
+              } icon={RefreshCw}>
               <span>
                 {schemaRefreshNeedsFull || Boolean(sharedSchemaRefresh.error)
                   ? t("common.action.schemaRefresh")
@@ -757,7 +755,7 @@ export function ViewManagementPage() {
                     label={t("viewMgmt.workspace.refreshing")}
                     operationKey="view-list-refresh"
                     placement="workspace"
-                    className="rounded-md border border-border bg-background px-3 py-2"
+                    className="rounded-md border border-border bg-surface-sunken px-3 py-2"
                     testId="view-management-workspace-processing"
                     activityIcon="none"
                   />
@@ -845,8 +843,7 @@ export function ViewManagementPage() {
         ) : (
           <>
             <div>
-              <Button type="button" variant="ghost" size="sm" onClick={returnToList}>
-                <ArrowLeft size={15} aria-hidden="true" />
+              <Button type="button" variant="ghost" size="sm" onClick={returnToList} icon={ArrowLeft}>
                 <span>{t("viewMgmt.action.backToList")}</span>
               </Button>
             </div>
@@ -860,7 +857,7 @@ export function ViewManagementPage() {
             </DbObjectManagementPanelShell>
           </>
         )}
-      </main>
+      </PageBody>
 
       {dropTargetName && (
         <DropDbObjectDialog

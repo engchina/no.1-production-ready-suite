@@ -25,18 +25,19 @@ import {
   toast,
   type DataTableColumn,
   type DataTableSort,
+  Button,
+  StatusBadge,
+  PageHeader,
+  FieldError,
+  PageBody,
 } from "@engchina/production-ready-ui";
 
 import { BulkSelectionActions } from "@/components/BulkSelectionActions";
 import { FormActionBar, entityActionToFormAction } from "@/components/FormActionBar";
 import { MasterDetailDataTable } from "@/components/MasterDetailDataTable";
 import { ObjectActionBar, type EntityAction } from "@/components/ObjectActions";
-import { PageHeader } from "@/components/PageHeader";
 import { ProcessingIndicator } from "@/components/ProcessingState";
-import { Button } from "@/components/ui/button";
-import { StatusBadge } from "@/components/ui/status-badge";
 import { useConfirm } from "@/components/ui/confirm-dialog";
-import { FieldError } from "@/components/ui/field-error";
 import { FieldLabel, RequiredFieldsNote } from "@/components/ui/required-field";
 import { ApiError, isAbortError } from "@/lib/api";
 import {
@@ -98,7 +99,7 @@ const EMPTY_DRAFT: RoleDraftState = {
 };
 
 const INPUT_CLASS =
-  "h-11 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-ring/30 disabled:bg-muted/20 disabled:text-muted";
+  "h-11 w-full rounded-md border border-border bg-surface px-3 text-sm outline-none focus:border-focus-ring focus:ring-2 focus:ring-focus-ring disabled:bg-surface-hover disabled:text-fg-disabled";
 
 function compareText(left: string, right: string, direction: DataTableSort["direction"]) {
   const result = left.localeCompare(right, "ja");
@@ -733,8 +734,8 @@ export function SecurityRolesPage() {
         return (
           <button
             type="button"
-            className={`min-w-0 cursor-pointer text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring ${
-              selected ? "text-primary" : "text-foreground"
+            className={`min-w-0 cursor-pointer text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
+              selected ? "text-accent-fg" : "text-fg"
             }`}
             aria-label={t("security.roles.showRole", { name: role.display_name })}
             aria-current={selected ? "true" : undefined}
@@ -746,7 +747,7 @@ export function SecurityRolesPage() {
             }}
           >
             <span className="block break-words font-medium">{role.display_name}</span>
-            <span className="block break-all font-mono text-[11px] text-muted">{role.role_code}</span>
+            <span className="block break-all font-mono text-xs text-fg-muted">{role.role_code}</span>
           </button>
         );
       },
@@ -802,10 +803,10 @@ export function SecurityRolesPage() {
               ]
             : []
         }
-        actionsAriaLabel={t("security.roles.actionsLabel")}
+        actionsLabel={t("security.roles.actionsLabel")}
         actionsTestId="security-roles-actions"
       />
-      <main className="grid gap-4 p-4 lg:p-8">
+      <PageBody className="grid gap-4">
         {loadError ? <Banner severity="danger">{loadError}</Banner> : null}
         {profileAccessLoadWarning ? (
           <Banner severity="warning">{profileAccessLoadWarning}</Banner>
@@ -828,7 +829,7 @@ export function SecurityRolesPage() {
                   description={t("security.roles.listHint")}
                   action={<StatusBadge variant="info" label={securityFilteredCount(filteredRoles.length, roles.length)} />}
                 />
-                <div className="rounded-md border border-border bg-background p-3">
+                <div className="rounded-md border border-border bg-surface-sunken p-3">
                   <SecuritySearchField
                     label={t("security.common.search")}
                     placeholder={t("security.roles.searchPlaceholder")}
@@ -887,8 +888,7 @@ export function SecurityRolesPage() {
         ) : (
           <>
             <div>
-              <Button type="button" variant="ghost" size="sm" disabled={operationBusy} onClick={returnToList}>
-                <ArrowLeft size={15} aria-hidden="true" />
+              <Button type="button" variant="ghost" size="sm" disabled={operationBusy} onClick={returnToList} icon={ArrowLeft}>
                 <span>{t("security.common.backToList")}</span>
               </Button>
             </div>
@@ -921,7 +921,7 @@ export function SecurityRolesPage() {
                       id="security-role-code"
                       required
                       disabled={activeView === "edit" || inputReadOnly}
-                      className={cn(INPUT_CLASS, fieldErrors.roleCode && "border-danger")}
+                      className={cn(INPUT_CLASS, fieldErrors.roleCode && "border-danger-fg")}
                       aria-invalid={fieldErrors.roleCode ? "true" : undefined}
                       aria-describedby={fieldErrors.roleCode ? "security-role-code-error" : undefined}
                       value={draft.roleCode}
@@ -943,7 +943,7 @@ export function SecurityRolesPage() {
                       id="security-role-name"
                       required
                       disabled={inputReadOnly}
-                      className={cn(INPUT_CLASS, fieldErrors.displayName && "border-danger")}
+                      className={cn(INPUT_CLASS, fieldErrors.displayName && "border-danger-fg")}
                       aria-invalid={fieldErrors.displayName ? "true" : undefined}
                       aria-describedby={fieldErrors.displayName ? "security-role-name-error" : undefined}
                       value={draft.displayName}
@@ -960,7 +960,7 @@ export function SecurityRolesPage() {
                   <span>{t("security.roles.description")}</span>
                   <textarea
                     disabled={inputReadOnly}
-                    className="min-h-24 w-full rounded-md border border-border bg-card px-3 py-2 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-ring/30 disabled:cursor-not-allowed disabled:bg-muted/20 disabled:text-muted"
+                    className="min-h-24 w-full rounded-md border border-border-control bg-surface px-3 py-2 text-sm outline-none focus:border-focus-ring focus:ring-2 focus:ring-focus-ring disabled:cursor-not-allowed disabled:bg-surface-hover disabled:text-fg-disabled"
                     value={draft.description}
                     onChange={(event) => {
                       if (inputReadOnly) return;
@@ -971,7 +971,7 @@ export function SecurityRolesPage() {
 
                 <fieldset className="grid gap-3" disabled={inputReadOnly}>
                   <legend className="text-base font-semibold">{t("security.roles.permissions")}</legend>
-                  <p className="text-sm text-muted">{t("security.roles.permissionsHint")}</p>
+                  <p className="text-sm text-fg-muted">{t("security.roles.permissionsHint")}</p>
                   {permissions.length > 0 ? (
                     <BulkSelectionActions
                       selectLabel={t("common.selection.selectAll")}
@@ -984,7 +984,7 @@ export function SecurityRolesPage() {
                     />
                   ) : null}
                   {permissionGroups.length === 0 ? (
-                    <p className="rounded-md border border-dashed border-border p-4 text-sm text-muted">{t("security.common.empty")}</p>
+                    <p className="rounded-md border border-dashed border-border p-4 text-sm text-fg-muted">{t("security.common.empty")}</p>
                   ) : (
                     <div className="grid gap-3 lg:grid-cols-2">
                       {permissionGroups.map(([group, groupPermissions]) => {
@@ -1024,7 +1024,7 @@ export function SecurityRolesPage() {
                                     }`}
                                   >
                                     <input
-                                      className="mt-0.5 h-4 w-4 accent-primary disabled:cursor-not-allowed"
+                                      className="mt-0.5 h-4 w-4 accent-accent-emphasis disabled:cursor-not-allowed"
                                       type="checkbox"
                                       checked={checkedDirect || inherited}
                                       disabled={inputReadOnly || inherited}
@@ -1044,8 +1044,8 @@ export function SecurityRolesPage() {
                                           />
                                         ) : null}
                                       </span>
-                                      <span className="block text-xs leading-5 text-muted">{permission.description}</span>
-                                      <code className="block break-all text-[10px] text-muted">{permission.code}</code>
+                                      <span className="block text-xs leading-5 text-fg-muted">{permission.description}</span>
+                                      <code className="block break-all text-xs text-fg-muted">{permission.code}</code>
                                     </span>
                                   </label>
                                 );
@@ -1065,7 +1065,7 @@ export function SecurityRolesPage() {
                   >
                     {t("security.roles.profileAccess")}
                   </legend>
-                  <p className="text-sm text-muted">{t("security.roles.profileAccessHint")}</p>
+                  <p className="text-sm text-fg-muted">{t("security.roles.profileAccessHint")}</p>
                   {draftGrantsAllProfileAccess ? (
                     <Banner severity="info">
                       {t(
@@ -1076,7 +1076,7 @@ export function SecurityRolesPage() {
                     </Banner>
                   ) : (
                     <>
-                      <div className="rounded-md border border-border bg-background p-3">
+                      <div className="rounded-md border border-border bg-surface-sunken p-3">
                         <SecuritySearchField
                           label={t("security.roles.profileAccessSearch")}
                           placeholder={t("security.roles.profileAccessSearchPlaceholder")}
@@ -1101,11 +1101,11 @@ export function SecurityRolesPage() {
                         />
                       ) : null}
                       {profileAccessProfiles.length === 0 ? (
-                        <p className="rounded-md border border-dashed border-border p-4 text-sm text-muted">
+                        <p className="rounded-md border border-dashed border-border p-4 text-sm text-fg-muted">
                           {t("security.roles.profileAccessEmpty")}
                         </p>
                       ) : filteredProfileAccessProfiles.length === 0 ? (
-                        <p className="rounded-md border border-dashed border-border p-4 text-sm text-muted">
+                        <p className="rounded-md border border-dashed border-border p-4 text-sm text-fg-muted">
                           {t("security.roles.profileAccessNoResults")}
                         </p>
                       ) : (
@@ -1114,7 +1114,7 @@ export function SecurityRolesPage() {
                           aria-labelledby="security-roles-profile-access-label"
                           tabIndex={0}
                           data-testid="security-roles-profile-access-list"
-                          className={`grid min-w-0 gap-2 overflow-x-hidden rounded-md border border-border bg-background p-3 pr-4 lg:grid-cols-2 ${INFORMATION_LIST_SCROLL_CLASS} ${INFORMATION_TABLE_FOCUS_CLASS}`}
+                          className={`grid min-w-0 gap-2 overflow-x-hidden rounded-md border border-border bg-surface-sunken p-3 pr-4 lg:grid-cols-2 ${INFORMATION_LIST_SCROLL_CLASS} ${INFORMATION_TABLE_FOCUS_CLASS}`}
                         >
                           {filteredProfileAccessProfiles.map((profile) => {
                             const checked = draft.allowedProfileIds.includes(profile.id);
@@ -1126,7 +1126,7 @@ export function SecurityRolesPage() {
                                 }`}
                               >
                                 <input
-                                  className="mt-0.5 h-4 w-4 accent-primary disabled:cursor-not-allowed"
+                                  className="mt-0.5 h-4 w-4 accent-accent-emphasis disabled:cursor-not-allowed"
                                   type="checkbox"
                                   checked={checked}
                                   disabled={profileAccessReadOnly}
@@ -1137,9 +1137,9 @@ export function SecurityRolesPage() {
                                     <span>{profileAccessLabel(profile)}</span>
                                   </span>
                                   {profile.description ? (
-                                    <span className="block text-xs leading-5 text-muted">{profile.description}</span>
+                                    <span className="block text-xs leading-5 text-fg-muted">{profile.description}</span>
                                   ) : null}
-                                  <code className="block break-all text-[10px] text-muted">{profile.id}</code>
+                                  <code className="block break-all text-xs text-fg-muted">{profile.id}</code>
                                 </span>
                               </label>
                             );
@@ -1190,7 +1190,7 @@ export function SecurityRolesPage() {
             </SecurityManagementPanelShell>
           </>
         )}
-      </main>
+      </PageBody>
     </>
   );
 }
@@ -1237,17 +1237,17 @@ function RoleDetailPanel({
       : profileAccessProfiles.filter((profile) => role.allowed_profile_ids.includes(profile.id));
 
   return (
-    <section className="grid min-w-0 content-start gap-4 rounded-md border border-border bg-background p-4" aria-labelledby="security-roles-detail-heading">
+    <section className="grid min-w-0 content-start gap-4 rounded-md border border-border bg-surface-sunken p-4" aria-labelledby="security-roles-detail-heading">
       <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <h2 id="security-roles-detail-heading" className="flex min-w-0 items-center gap-2 text-base font-semibold text-foreground">
-              <ShieldCheck size={18} aria-hidden="true" />
+            <h2 id="security-roles-detail-heading" className="flex min-w-0 items-center gap-2 text-base font-semibold text-fg">
+              <ShieldCheck size={20} aria-hidden="true" />
               <span className="min-w-0 break-words">{role.display_name}</span>
             </h2>
             <RoleStatusBadges role={role} />
           </div>
-          <p className="mt-1 break-all font-mono text-xs text-muted">{role.role_code}</p>
+          <p className="mt-1 break-all font-mono text-xs text-fg-muted">{role.role_code}</p>
         </div>
         {canManage ? (
           <ObjectActionBar
@@ -1288,8 +1288,8 @@ function RoleDetailPanel({
         </SecurityDetailField>
       </dl>
       {!grantsAllProfileAccess && allowedProfiles.length > 0 ? (
-        <div className="grid gap-2 rounded-md border border-border bg-card p-3">
-          <h3 className="text-sm font-semibold text-foreground">{t("security.roles.profileAccess")}</h3>
+        <div className="grid gap-2 rounded-md border border-border bg-surface p-3">
+          <h3 className="text-sm font-semibold text-fg">{t("security.roles.profileAccess")}</h3>
           <div className="flex flex-wrap gap-1.5">
             {allowedProfiles.map((profile) => (
               <StatusBadge key={profile.id} variant="neutral" label={profileAccessLabel(profile)} />

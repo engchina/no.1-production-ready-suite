@@ -2,7 +2,19 @@ import { useWorkspaceState, useWorkspaceDraftWriter, useResetExecutionConsent } 
 import { ScopeExpressionEditor } from "./ScopeExpressionEditor";
 import { canonicalExpression, entitlementExpression, expressionError, expressionCounts } from "./scope-expression";
 import { BulkSelectionActions } from "@/components/BulkSelectionActions";
-import { Button } from "@/components/ui/button";
+import {
+  Button,
+  Banner,
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  FormStatus,
+  toast,
+  StatusBadge,
+  PageHeader,
+  PageBody,
+} from "@engchina/production-ready-ui";
 import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -21,18 +33,8 @@ import {
   Trash2,
 } from "lucide-react";
 
-import {
-  Banner,
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-  FormStatus,
-  toast,
-} from "@engchina/production-ready-ui";
 
-import { PageHeader, PageHeaderStatusBadge } from "@/components/PageHeader";
-import { StatusBadge } from "@/components/ui/status-badge";
+import { PageHeaderStatusBadge } from "@/components/PageHeaderStatusBadge";
 import { DbObjectSearchOwnerFields } from "@/components/DbObjectFilterFields";
 import { ProcessingIndicator } from "@/components/ProcessingState";
 import { ErrorState } from "@/components/StateViews";
@@ -94,7 +96,7 @@ type ScrollPositionSnapshot = {
 };
 
 const INPUT_CLASS =
-  "h-11 min-w-0 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 disabled:bg-muted/20 disabled:text-muted";
+  "h-11 min-w-0 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus:border-focus-ring focus:ring-2 focus:ring-focus-ring disabled:bg-surface-hover disabled:text-fg-disabled";
 const ADMIN_EXECUTE_CONFIRMATION = "ADMIN_EXECUTE";
 const ADMIN_RESET_CONFIRMATION = "ADMIN_RESET";
 const TARGET_OBJECT_PAGE_SIZE = 50;
@@ -108,7 +110,7 @@ function loadErrorMessage(cause: unknown) {
 function stepStatus(step: DeepSecStep) {
   if (step.status === "APPLIED") return { variant: "success" as const, label: t("security.deepsec.complete") };
   if (step.status === "FAILED") return { variant: "danger" as const, label: t("security.deepsec.failed") };
-  if (step.status === "RUNNING") return { variant: "pending" as const, label: t("security.deepsec.running") };
+  if (step.status === "RUNNING") return { variant: "info" as const, label: t("security.deepsec.running") };
   return { variant: "neutral" as const, label: t("security.deepsec.pending") };
 }
 
@@ -295,7 +297,7 @@ function entitlementApplyStatus(entitlement: DataEntitlement) {
     return { variant: "danger" as const, label: t("security.deepsec.entitlements.failed") };
   }
   if (entitlement.apply_status === "RUNNING") {
-    return { variant: "pending" as const, label: t("security.deepsec.entitlements.running") };
+    return { variant: "info" as const, label: t("security.deepsec.entitlements.running") };
   }
   return { variant: "neutral" as const, label: t("security.deepsec.entitlements.pending") };
 }
@@ -484,7 +486,7 @@ function DeepSecTargetObjectPicker({
         <RequiredIndicator />
       </span>
       <div
-        className="grid gap-2 rounded-md border border-border bg-background p-2"
+        className="grid gap-2 rounded-md border border-border bg-surface-sunken p-2"
         role="group"
         aria-labelledby={titleId}
       >
@@ -500,7 +502,7 @@ function DeepSecTargetObjectPicker({
           disabled={disabled}
         />
         <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
-          <span className="min-w-0 break-all font-mono text-[11px] text-muted">
+          <span className="min-w-0 break-all font-mono text-xs text-fg-muted">
             {selectedObject || value
               ? t("security.deepsec.entitlements.objectSelected", {
                   object: selectedObject ? targetQualifiedName(selectedObject) : value,
@@ -518,19 +520,19 @@ function DeepSecTargetObjectPicker({
           />
         ) : null}
         <div
-          className="grid max-h-52 gap-1 overflow-auto rounded-md border border-border bg-card/30 p-1"
+          className="grid max-h-52 gap-1 overflow-auto rounded-md border border-border bg-surface p-1"
           role="listbox"
           aria-labelledby={titleId}
           data-entitlement-scroll-container
           data-testid={`security-deepsec-object-picker-list-${index}`}
         >
           {loading && objects.length === 0 ? (
-            <p className="px-2 py-3 text-sm text-muted" role="status">
+            <p className="px-2 py-3 text-sm text-fg-muted" role="status">
               {t("security.deepsec.entitlements.objectsLoading")}
             </p>
           ) : null}
           {!loading && objects.length === 0 ? (
-            <div className="grid gap-1 px-2 py-3 text-sm text-muted">
+            <div className="grid gap-1 px-2 py-3 text-sm text-fg-muted">
               <p>
                 {t(
                   hasObjectFilter
@@ -539,7 +541,7 @@ function DeepSecTargetObjectPicker({
                 )}
               </p>
               {!hasObjectFilter ? (
-                <p className="text-[11px] leading-5">
+                <p className="text-xs leading-5">
                   {t("security.deepsec.entitlements.objectEmptyHint")}
                 </p>
               ) : null}
@@ -555,8 +557,8 @@ function DeepSecTargetObjectPicker({
                 role="option"
                 aria-selected={selected}
                 className={cn(
-                  "grid min-h-11 min-w-0 gap-1 rounded-md px-2 py-1.5 text-left outline-none transition hover:bg-muted/20 focus-visible:ring-2 focus-visible:ring-ring/40",
-                  selected && "bg-primary/10 text-primary"
+                  "grid min-h-11 min-w-0 gap-1 rounded-md px-2 py-1.5 text-left outline-none transition hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-focus-ring",
+                  selected && "bg-accent-subtle text-accent-fg"
                 )}
                 disabled={disabled}
                 onClick={() => onSelect(qualifiedName)}
@@ -564,7 +566,7 @@ function DeepSecTargetObjectPicker({
                 <span className="break-all font-mono text-xs font-semibold">
                   {qualifiedName}
                 </span>
-                <span className="text-[11px] text-muted">
+                <span className="text-xs text-fg-muted">
                   {targetObjectTypeLabel(object.object_type)}
                   {object.comment ? ` · ${object.comment}` : ""}
                 </span>
@@ -573,7 +575,7 @@ function DeepSecTargetObjectPicker({
           })}
         </div>
         <div className="grid min-w-0 gap-2">
-          <p className="min-w-0 text-[11px] leading-5 text-muted">
+          <p className="min-w-0 text-xs leading-5 text-fg-muted">
             {t("security.deepsec.entitlements.oracleHelper")}
           </p>
           {nextCursor ? (
@@ -619,7 +621,7 @@ function DeepSecPlanSteps({
     return (
       <Card>
         <CardContent>
-          <p className="text-sm text-muted" role="status">{t("security.deepsec.planLoading")}</p>
+          <p className="text-sm text-fg-muted" role="status">{t("security.deepsec.planLoading")}</p>
         </CardContent>
       </Card>
     );
@@ -630,7 +632,7 @@ function DeepSecPlanSteps({
     return (
       <Card>
         <CardContent>
-          <p className="text-sm text-muted">{t("security.deepsec.planEmpty")}</p>
+          <p className="text-sm text-fg-muted">{t("security.deepsec.planEmpty")}</p>
         </CardContent>
       </Card>
     );
@@ -647,21 +649,21 @@ function DeepSecPlanSteps({
               className="flex min-w-0 flex-wrap items-center gap-2"
               aria-label={`${versionLabel} ${step.title}`}
             >
-              <span className="inline-flex shrink-0 items-center rounded-md border border-border bg-muted/30 px-2 py-0.5 font-sans text-xs font-semibold leading-5 tabular-nums text-muted">
+              <span className="inline-flex shrink-0 items-center rounded-md border border-border bg-surface-hover px-2 py-0.5 font-sans text-xs font-semibold leading-5 tabular-nums text-fg-muted">
                 {versionLabel}
               </span>
               <span className="min-w-0 break-words">{step.title}</span>
             </CardTitle>
-            <p className="mt-1 text-sm leading-6 text-muted">{step.description}</p>
+            <p className="mt-1 text-sm leading-6 text-fg-muted">{step.description}</p>
           </div>
           <div className="flex shrink-0 flex-col items-start gap-2 sm:items-end">
             <StatusBadge variant={statusBadge.variant} label={statusBadge.label} />
             {step.status === "APPLIED" && step.executed_at ? (
-              <span className="inline-flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-muted">
+              <span className="inline-flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-fg-muted">
                 <Clock3 size={14} className="shrink-0" aria-hidden />
                 <span>{t("security.deepsec.appliedAt")}</span>
                 <time
-                  className="whitespace-nowrap font-sans tabular-nums text-foreground"
+                  className="whitespace-nowrap font-sans tabular-nums text-fg"
                   dateTime={step.executed_at}
                 >
                   {formatDateTimeWithYear(step.executed_at)}
@@ -672,26 +674,27 @@ function DeepSecPlanSteps({
         </CardHeader>
         <CardContent className="space-y-4">
           {step.error_message ? <Banner severity="danger">{step.error_message}</Banner> : null}
-          <details className="group/disclosure min-w-0 rounded-md border border-border bg-background">
-            <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-sm font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring/40 [&::-webkit-details-marker]:hidden">
+          <details className="group/disclosure min-w-0 rounded-md border border-border bg-surface-sunken">
+            <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-sm font-semibold outline-none focus-visible:ring-2 focus-visible:ring-focus-ring [&::-webkit-details-marker]:hidden">
               <span>{t("security.deepsec.sqlDetails")}</span>
               <DisclosureChevron
                 expanded="group"
                 size={16}
-                className="text-muted"
+                className="text-fg-muted"
               />
             </summary>
             <div className="space-y-4 border-t border-border p-3">
-              <p className="text-sm leading-6 text-muted">{t("security.deepsec.sqlReadonly")}</p>
+              <p className="text-sm leading-6 text-fg-muted">{t("security.deepsec.sqlReadonly")}</p>
               <div className="space-y-1">
-                <p className="text-xs font-medium text-muted">{t("security.deepsec.checksum")}</p>
-                <code className="block break-all rounded-md bg-card p-2 text-[11px]">{step.checksum}</code>
+                <p className="text-xs font-medium text-fg-muted">{t("security.deepsec.checksum")}</p>
+                <code className="block break-all rounded-md bg-surface p-2 text-xs">{step.checksum}</code>
               </div>
               <div className="space-y-3">
                 {step.sql.map((sql, index) => (
                   <pre
                     key={`${step.step_no}-${index}`}
-                    className="max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-code p-3 text-code-fg text-xs leading-5"
+                    data-surface="code"
+                    className="max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-surface p-3 text-fg text-xs leading-5"
                     tabIndex={0}
                     aria-label={`${step.title} SQL ${index + 1}`}
                   >
@@ -1668,7 +1671,7 @@ export function SecurityDeepSecPage() {
           statusLoadError ? (
             <PageHeaderStatusBadge variant="danger" label={t("security.deepsec.statusLoadFailed")} />
           ) : statusLoading && !status ? (
-            <PageHeaderStatusBadge variant="pending" label={t("security.deepsec.statusChecking")} />
+            <PageHeaderStatusBadge variant="info" label={t("security.deepsec.statusChecking")} />
           ) : (
             <PageHeaderStatusBadge
               variant={status?.configured ? "success" : "warning"}
@@ -1688,14 +1691,13 @@ export function SecurityDeepSecPage() {
           },
         ]}
       />
-      <main className="grid gap-4 p-4 lg:p-8">
+      <PageBody className="grid gap-4">
         <fieldset disabled={operationBusy} className="contents" aria-busy={operationBusy} data-testid="security-deepsec-controls">
         <PageNotice
           notice={statusLoadError ? { tone: "danger", message: statusLoadError } : null}
           action={
             statusLoadError ? (
-              <Button type="button" variant="secondary" size="sm" onClick={() => void loadStatus()}>
-                <RefreshCw size={14} aria-hidden />
+              <Button type="button" variant="secondary" size="sm" onClick={() => void loadStatus()} icon={RefreshCw}>
                 {t("security.common.reload")}
               </Button>
             ) : null
@@ -1745,8 +1747,8 @@ export function SecurityDeepSecPage() {
                 className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]"
                 data-testid="security-deepsec-config-fields"
               >
-                <dl className="rounded-md border border-border bg-background p-3 text-sm">
-                  <dt className="text-muted">{t("security.deepsec.dataUser")}</dt>
+                <dl className="rounded-md border border-border bg-surface-sunken p-3 text-sm">
+                  <dt className="text-fg-muted">{t("security.deepsec.dataUser")}</dt>
                   <dd className="mt-1 break-all font-mono">
                     {status?.data_user ?? plan?.data_user ?? "DEEPSEC_DATA_USER"}
                   </dd>
@@ -1773,7 +1775,7 @@ export function SecurityDeepSecPage() {
                     aria-describedby="deepsec-data-user-password-state"
                     aria-invalid={Boolean(configError)}
                   />
-                  <p id="deepsec-data-user-password-state" className="text-xs text-muted">
+                  <p id="deepsec-data-user-password-state" className="text-xs text-fg-muted">
                     {hasSavedDataUserPassword
                       ? t("security.deepsec.config.secretSaved")
                       : t("security.deepsec.config.secretMissing")}
@@ -1790,9 +1792,7 @@ export function SecurityDeepSecPage() {
                   size="lg"
                   loading={configSaving}
                   disabled={!dataUserPassword || actionBlocked}
-                  className="w-full whitespace-nowrap sm:w-auto"
-                >
-                  <Save size={15} aria-hidden />
+                  className="w-full whitespace-nowrap sm:w-auto" icon={Save}>
                   {t("security.deepsec.config.save")}
                 </Button>
                 <Button
@@ -1802,9 +1802,7 @@ export function SecurityDeepSecPage() {
                   loading={configSyncing}
                   disabled={passwordSyncDisabled || actionBlocked}
                   className="w-full whitespace-nowrap sm:w-auto"
-                  onClick={() => void handleSyncConfig()}
-                >
-                  <RefreshCw size={15} aria-hidden />
+                  onClick={() => void handleSyncConfig()} icon={RefreshCw}>
                   {t("security.deepsec.config.sync")}
                 </Button>
               </div>
@@ -1886,9 +1884,7 @@ export function SecurityDeepSecPage() {
                               foundationApplyBlocked ||
                               actionBlocked
                             }
-                            onClick={() => void handleApplyFoundation()}
-                          >
-                            <Play size={15} aria-hidden />
+                            onClick={() => void handleApplyFoundation()} icon={Play}>
                             {t("security.deepsec.applyFoundation")}
                           </Button>
                           <Button
@@ -1952,9 +1948,7 @@ export function SecurityDeepSecPage() {
                             className="w-full sm:w-auto"
                             loading={resetting}
                             disabled={!resetConfirmed || actionBlocked}
-                            onClick={() => void handleReset()}
-                          >
-                            <Trash2 size={15} aria-hidden />
+                            onClick={() => void handleReset()} icon={Trash2}>
                             {t("security.deepsec.reset")}
                           </Button>
                           <Button
@@ -2007,10 +2001,10 @@ export function SecurityDeepSecPage() {
             <Card>
               <CardHeader>
                 <CardTitle className="flex min-w-0 items-center gap-2">
-                  <Database size={18} aria-hidden />
+                  <Database size={20} aria-hidden />
                   <span className="min-w-0 break-words">{t("security.deepsec.entitlements.title")}</span>
                 </CardTitle>
-                <p className="text-sm leading-6 text-muted">{t("security.deepsec.entitlements.hint")}</p>
+                <p className="text-sm leading-6 text-fg-muted">{t("security.deepsec.entitlements.hint")}</p>
               </CardHeader>
               <CardContent className="space-y-4">
                 {entitlementLoadError ? <Banner severity="danger">{entitlementLoadError}</Banner> : null}
@@ -2052,7 +2046,7 @@ export function SecurityDeepSecPage() {
                       data-testid="security-deepsec-entitlement-roles"
                     >
                       {!entitlementLoading && filteredEntitlementRoles.length === 0 ? (
-                        <p className="rounded-md border border-dashed border-border p-3 text-sm text-muted">
+                        <p className="rounded-md border border-dashed border-border p-3 text-sm text-fg-muted">
                           {entitlementSearch ? t("security.deepsec.entitlements.noResults") : t("security.common.empty")}
                         </p>
                       ) : null}
@@ -2064,8 +2058,8 @@ export function SecurityDeepSecPage() {
                             key={role.role_id}
                             type="button"
                             className={cn(
-                              "min-w-0 rounded-md border border-border bg-background p-2.5 text-left outline-none transition hover:border-primary/50 focus-visible:ring-2 focus-visible:ring-ring/40",
-                              selected && "border-primary bg-primary/5"
+                              "min-w-0 rounded-md border border-border bg-surface-sunken p-2.5 text-left outline-none transition hover:border-accent-emphasis focus-visible:ring-2 focus-visible:ring-focus-ring",
+                              selected && "border-accent-emphasis bg-accent-subtle"
                             )}
                             aria-pressed={selected}
                             data-testid={`security-deepsec-entitlement-role-${role.role_id}`}
@@ -2074,11 +2068,11 @@ export function SecurityDeepSecPage() {
                             <span className="flex min-w-0 flex-wrap items-start justify-between gap-2">
                               <span className="min-w-0">
                                 <span className="block break-words text-sm font-medium">{role.display_name}</span>
-                                <span className="block break-all font-mono text-[11px] text-muted">{role.role_code}</span>
+                                <span className="block break-all font-mono text-xs text-fg-muted">{role.role_code}</span>
                               </span>
                               <StatusBadge variant={statusBadge.variant} label={statusBadge.label} />
                             </span>
-                            <span className="mt-1.5 block text-xs text-muted">
+                            <span className="mt-1.5 block text-xs text-fg-muted">
                               {t("security.deepsec.entitlements.count", { count: role.data_entitlements.length })}
                             </span>
                           </button>
@@ -2087,13 +2081,13 @@ export function SecurityDeepSecPage() {
                     </div>
                   </section>
 
-                  <section className="min-w-0 rounded-md border border-border bg-background p-4" aria-labelledby="deepsec-entitlement-editor-title">
+                  <section className="min-w-0 rounded-md border border-border bg-surface-sunken p-4" aria-labelledby="deepsec-entitlement-editor-title">
                     {!selectedEntitlementRole ? (
                       <div className="py-10 text-center">
                         <h3 id="deepsec-entitlement-editor-title" className="text-sm font-semibold">
                           {t("security.deepsec.entitlements.noSelectionTitle")}
                         </h3>
-                        <p className="mt-1 text-sm text-muted">{t("security.deepsec.entitlements.noSelectionHint")}</p>
+                        <p className="mt-1 text-sm text-fg-muted">{t("security.deepsec.entitlements.noSelectionHint")}</p>
                       </div>
                     ) : (
                       <div
@@ -2107,7 +2101,7 @@ export function SecurityDeepSecPage() {
                               <h3 id="deepsec-entitlement-editor-title" className="break-words text-base font-semibold">
                                 {selectedEntitlementRole.display_name}
                               </h3>
-                              <p className="mt-1 break-all font-mono text-xs text-muted">{selectedEntitlementRole.role_code}</p>
+                              <p className="mt-1 break-all font-mono text-xs text-fg-muted">{selectedEntitlementRole.role_code}</p>
                             </div>
                             <div className="flex flex-wrap gap-2">
                               <StatusBadge
@@ -2141,9 +2135,7 @@ export function SecurityDeepSecPage() {
                                   variant="ghost"
                                   aria-label={t("security.deepsec.entitlements.remove")}
                                   onClick={() => removeEntitlement(selectedEntitlementDraftIndex)}
-                                  disabled={entitlementReadOnly || selectedEntitlementDraftIndex < 0}
-                                >
-                                  <Trash2 size={14} aria-hidden />
+                                  disabled={entitlementReadOnly || selectedEntitlementDraftIndex < 0} icon={Trash2}>
                                   {t("security.deepsec.entitlements.removeButtonLabel")}
                                 </Button>
                               ) : null}
@@ -2152,9 +2144,7 @@ export function SecurityDeepSecPage() {
                                 size="sm"
                                 variant="secondary"
                                 onClick={addEntitlement}
-                                disabled={entitlementReadOnly}
-                              >
-                                <Plus size={14} aria-hidden />
+                                disabled={entitlementReadOnly} icon={Plus}>
                                 {t("security.deepsec.entitlements.add")}
                               </Button>
                             </div>
@@ -2172,7 +2162,7 @@ export function SecurityDeepSecPage() {
                               <h4 className="text-sm font-semibold">
                                 {t("security.deepsec.entitlements.emptyRulesTitle")}
                               </h4>
-                              <p className="mt-1 text-sm text-muted">
+                              <p className="mt-1 text-sm text-fg-muted">
                                 {t("security.deepsec.entitlements.emptyRulesHint")}
                               </p>
                             </div>
@@ -2198,8 +2188,8 @@ export function SecurityDeepSecPage() {
                                     key={entitlement.client_key}
                                     type="button"
                                     className={cn(
-                                      "min-w-0 rounded-md border border-border bg-card/30 p-3 text-left outline-none transition hover:border-primary/50 focus-visible:ring-2 focus-visible:ring-ring/40",
-                                      selected && "border-primary bg-primary/5"
+                                      "min-w-0 rounded-md border border-border bg-surface p-3 text-left outline-none transition hover:border-accent-emphasis focus-visible:ring-2 focus-visible:ring-focus-ring",
+                                      selected && "border-accent-emphasis bg-accent-subtle"
                                     )}
                                     aria-pressed={selected}
                                     data-testid={`security-deepsec-entitlement-rule-tab-${index}`}
@@ -2211,14 +2201,14 @@ export function SecurityDeepSecPage() {
                                     <span className="flex min-w-0 flex-wrap items-start justify-between gap-2">
                                       <span className="min-w-0">
                                         <span className="block break-all text-sm font-semibold">{ruleTitle}</span>
-                                        <span className="mt-1 block break-all font-mono text-[11px] text-muted">
+                                        <span className="mt-1 block break-all font-mono text-xs text-fg-muted">
                                           {entitlement.data_grant_name ||
                                             t("security.deepsec.entitlements.notGenerated")}
                                         </span>
                                       </span>
                                       <StatusBadge variant={statusBadge.variant} label={statusBadge.label} />
                                     </span>
-                                    <span className="mt-2 flex min-w-0 flex-wrap gap-2 text-[11px] text-muted">
+                                    <span className="mt-2 flex min-w-0 flex-wrap gap-2 text-xs text-fg-muted">
                                       <span>{entitlementColumnsSummary(entitlement, detail)}</span>
                                       <span aria-hidden="true">/</span>
                                       <span>{entitlementScopeSummary(entitlement)}</span>
@@ -2259,7 +2249,7 @@ export function SecurityDeepSecPage() {
                                     targetKey || t("security.deepsec.entitlements.ruleTitle");
                                 return (
                                   <section
-                                    className="min-w-0 rounded-md border border-border bg-background"
+                                    className="min-w-0 rounded-md border border-border bg-surface-sunken"
                                   >
                                     <div className="flex min-h-12 items-start justify-between gap-3 border-b border-border px-3 py-3">
                                       <div className="min-w-0">
@@ -2269,11 +2259,11 @@ export function SecurityDeepSecPage() {
                                         >
                                           {ruleTitle}
                                         </p>
-                                        <p className="mt-1 break-all font-mono text-[11px] text-muted">
+                                        <p className="mt-1 break-all font-mono text-xs text-fg-muted">
                                           {entitlement.data_grant_name ||
                                             t("security.deepsec.entitlements.notGenerated")}
                                         </p>
-                                        <p className="mt-1 text-[11px] text-muted">
+                                        <p className="mt-1 text-xs text-fg-muted">
                                           {entitlementColumnsSummary(entitlement, detail)}
                                           {" / "}
                                           {entitlementScopeSummary(entitlement)}
@@ -2345,27 +2335,27 @@ export function SecurityDeepSecPage() {
                                           />
                                         </div>
                                         {loadingDetail ? (
-                                          <p className="rounded-md border border-dashed border-border p-3 text-sm text-muted">
+                                          <p className="rounded-md border border-dashed border-border p-3 text-sm text-fg-muted">
                                             {t("security.deepsec.entitlements.columnsLoading")}
                                           </p>
                                         ) : detailError ? (
-                                          <p className="rounded-md border border-danger/30 bg-danger-bg p-3 text-sm text-danger">
+                                          <p className="rounded-md border border-danger-border bg-danger-subtle p-3 text-sm text-danger-fg">
                                             {detailError}
                                           </p>
                                         ) : detail?.columns.length ? (
                                           <div
-                                            className="mt-1 grid max-h-48 gap-2 overflow-auto rounded-md border border-border bg-background p-2 sm:grid-cols-2 xl:grid-cols-3"
+                                            className="mt-1 grid max-h-48 gap-2 overflow-auto rounded-md border border-border bg-surface-sunken p-2 sm:grid-cols-2 xl:grid-cols-3"
                                             data-entitlement-scroll-container
                                             data-testid={`security-deepsec-entitlement-columns-grid-${index}`}
                                           >
                                             {detail.columns.map((column) => (
                                               <label
                                                 key={column.column_name}
-                                                className="flex min-h-11 min-w-0 items-start gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-muted/20"
+                                                className="flex min-h-11 min-w-0 items-start gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-surface-hover"
                                               >
                                                 <input
                                                   type="checkbox"
-                                                  className="mt-1 h-4 w-4 shrink-0 accent-primary"
+                                                  className="mt-1 h-4 w-4 shrink-0 accent-accent-emphasis"
                                                   disabled={entitlementReadOnly}
                                                   checked={selectedColumns.has(
                                                     column.column_name.toUpperCase()
@@ -2382,7 +2372,7 @@ export function SecurityDeepSecPage() {
                                                   <span className="block break-all font-mono text-xs">
                                                     {column.column_name}
                                                   </span>
-                                                  <span className="block text-[11px] text-muted">
+                                                  <span className="block text-xs text-fg-muted">
                                                     {column.data_type}
                                                   </span>
                                                 </span>
@@ -2390,7 +2380,7 @@ export function SecurityDeepSecPage() {
                                             ))}
                                           </div>
                                         ) : (
-                                          <p className="rounded-md border border-dashed border-border p-3 text-sm text-muted">
+                                          <p className="rounded-md border border-dashed border-border p-3 text-sm text-fg-muted">
                                             {t("security.deepsec.entitlements.selectObjectForColumns")}
                                           </p>
                                         )}
@@ -2447,7 +2437,7 @@ export function SecurityDeepSecPage() {
                                 })()
                               ) : (
                                 <div className="grid content-center rounded-md border border-dashed border-border p-4 text-center">
-                                  <p className="text-sm text-muted">
+                                  <p className="text-sm text-fg-muted">
                                     {t("security.deepsec.entitlements.noSelectionHint")}
                                   </p>
                                 </div>
@@ -2457,17 +2447,17 @@ export function SecurityDeepSecPage() {
                           )}
                         </div>
                         <div
-                          className="grid min-h-0 min-w-0 gap-3 border-t border-border bg-card/60 pt-3"
+                          className="grid min-h-0 min-w-0 gap-3 border-t border-border bg-surface pt-3"
                           data-testid="security-deepsec-entitlement-action-region"
                         >
                           {entitlementFormError ? <FormStatus tone="danger" message={entitlementFormError} /> : null}
                           <details
                             open={entitlementSqlPreviewOpen}
-                            className="group/disclosure max-h-[min(28rem,45dvh)] min-w-0 overflow-y-auto overscroll-contain rounded-md border border-border bg-background"
+                            className="group/disclosure max-h-[min(28rem,45dvh)] min-w-0 overflow-y-auto overscroll-contain rounded-md border border-border bg-surface-sunken"
                             data-testid="security-deepsec-sql-preview"
                           >
                             <summary
-                              className="sticky top-0 z-10 flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 bg-background px-3 py-2 text-sm font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring/40 [&::-webkit-details-marker]:hidden"
+                              className="sticky top-0 z-10 flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 bg-surface-sunken px-3 py-2 text-sm font-semibold outline-none focus-visible:ring-2 focus-visible:ring-focus-ring [&::-webkit-details-marker]:hidden"
                               onClick={(event) => {
                                 event.preventDefault();
                                 setEntitlementSqlPreviewOpen((current) => !current);
@@ -2477,7 +2467,7 @@ export function SecurityDeepSecPage() {
                               <DisclosureChevron
                                 expanded="group"
                                 size={16}
-                                className="text-muted"
+                                className="text-fg-muted"
                               />
                             </summary>
                             <div className="space-y-3 border-t border-border p-3">
@@ -2485,7 +2475,7 @@ export function SecurityDeepSecPage() {
                                 className="grid min-w-0 gap-2"
                                 data-testid="security-deepsec-sql-preview-toolbar"
                               >
-                                <p className="min-w-0 text-sm leading-6 text-muted">
+                                <p className="min-w-0 text-sm leading-6 text-fg-muted">
                                   {t("security.deepsec.entitlements.sqlReadonly")}
                                 </p>
                                 <div className="flex min-w-0 justify-end">
@@ -2503,16 +2493,14 @@ export function SecurityDeepSecPage() {
                                         savedEntitlementRows.length === 0)
                                     }
                                     data-testid="security-deepsec-sql-preview-generate"
-                                    onClick={() => void handlePreviewEntitlements()}
-                                  >
-                                    <RefreshCw size={14} aria-hidden />
+                                    onClick={() => void handlePreviewEntitlements()} icon={RefreshCw}>
                                     {t("security.deepsec.entitlements.generatePreview")}
                                   </Button>
                                 </div>
                               </div>
                               {entitlementPreview ? (
                                 <div className="grid min-w-0 gap-4">
-                                  <p className="text-sm leading-6 text-muted" role="status">
+                                  <p className="text-sm leading-6 text-fg-muted" role="status">
                                     {t("security.deepsec.entitlements.sqlScopeSummary", {
                                       role: selectedEntitlementRole.display_name,
                                       grantCount: selectedRolePreviewRows.length,
@@ -2521,22 +2509,23 @@ export function SecurityDeepSecPage() {
                                     })}
                                   </p>
                                   <div className="space-y-1">
-                                    <p className="text-xs font-medium text-muted">
+                                    <p className="text-xs font-medium text-fg-muted">
                                       {t("security.deepsec.checksum")}
                                     </p>
-                                    <code className="block break-all rounded-md bg-card p-2 text-[11px]">
+                                    <code className="block break-all rounded-md bg-surface p-2 text-xs">
                                       {entitlementPreview.checksum}
                                     </code>
                                   </div>
                                   {selectedRoleCleanupSql.length ? (
                                     <section className="grid min-w-0 gap-2" aria-labelledby="deepsec-cleanup-sql-title">
-                                      <h5 id="deepsec-cleanup-sql-title" className="text-sm font-semibold text-danger">
+                                      <h5 id="deepsec-cleanup-sql-title" className="text-sm font-semibold text-danger-fg">
                                         {t("security.deepsec.entitlements.sqlCleanupTitle")}
                                       </h5>
                                       {selectedRoleCleanupSql.map((sql, index) => (
                                         <pre
                                           key={`${selectedEntitlementRole.role_id}-cleanup-${index}`}
-                                          className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-md border border-danger/30 bg-code p-3 text-code-fg text-xs leading-5"
+                                          data-surface="code"
+                    className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-md border border-danger-border bg-surface p-3 text-fg text-xs leading-5"
                                           tabIndex={0}
                                           aria-label={t("security.deepsec.entitlements.sqlCleanupAria", {
                                             index: index + 1,
@@ -2571,7 +2560,8 @@ export function SecurityDeepSecPage() {
                                             {(item.sql ?? []).map((sql, index) => (
                                               <pre
                                                 key={`${item.entitlement_id ?? dataGrant}-sql-${index}`}
-                                                className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-code p-3 text-code-fg text-xs leading-5"
+                                                data-surface="code"
+                    className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-surface p-3 text-fg text-xs leading-5"
                                                 tabIndex={0}
                                                 aria-label={t("security.deepsec.entitlements.sqlGrantAria", {
                                                   target,
@@ -2587,13 +2577,13 @@ export function SecurityDeepSecPage() {
                                     </section>
                                   ) : null}
                                   {selectedRolePreviewSqlCount === 0 ? (
-                                    <p className="rounded-md border border-dashed border-border p-3 text-sm text-muted">
+                                    <p className="rounded-md border border-dashed border-border p-3 text-sm text-fg-muted">
                                       {t("security.deepsec.entitlements.sqlNoChanges")}
                                     </p>
                                   ) : null}
                                 </div>
                               ) : (
-                                <p className="rounded-md border border-dashed border-border p-3 text-sm text-muted">
+                                <p className="rounded-md border border-dashed border-border p-3 text-sm text-fg-muted">
                                   {t("security.deepsec.entitlements.sqlEmpty")}
                                 </p>
                               )}
@@ -2631,9 +2621,7 @@ export function SecurityDeepSecPage() {
                                   !status?.configured ||
                                   !entitlementApplyConfirmed || Boolean(validateEntitlements())
                                 }
-                                onClick={() => void handleApplyEntitlements()}
-                              >
-                                <ShieldCheck size={15} aria-hidden />
+                                onClick={() => void handleApplyEntitlements()} icon={ShieldCheck}>
                                 {t("security.deepsec.entitlements.apply")}
                               </Button>
                             }
@@ -2651,7 +2639,7 @@ export function SecurityDeepSecPage() {
                 <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div className="min-w-0">
                     <CardTitle>{t("security.deepsec.result")}</CardTitle>
-                    <p className="mt-1 text-sm leading-6 text-muted">
+                    <p className="mt-1 text-sm leading-6 text-fg-muted">
                       {t("security.deepsec.resultEmpty")}
                     </p>
                   </div>
@@ -2670,9 +2658,7 @@ export function SecurityDeepSecPage() {
                       loading={verifying}
                       disabled={!status?.configured || actionBlocked}
                       data-testid="security-deepsec-verify-action"
-                      onClick={() => void handleVerify()}
-                    >
-                      <ShieldCheck size={14} aria-hidden />
+                      onClick={() => void handleVerify()} icon={ShieldCheck}>
                       {t("security.deepsec.verify")}
                     </Button>
                   </div>
@@ -2683,7 +2669,7 @@ export function SecurityDeepSecPage() {
                       role="region"
                       aria-label={t("security.deepsec.resultListAriaLabel")}
                       tabIndex={0}
-                      className="grid max-h-[23.25rem] gap-2 overflow-y-auto overscroll-contain pr-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
+                      className="grid max-h-[23.25rem] gap-2 overflow-y-auto overscroll-contain pr-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2"
                       data-testid="security-deepsec-verification-results"
                     >
                       {verification.checks.map((check) => (
@@ -2691,16 +2677,16 @@ export function SecurityDeepSecPage() {
                           key={check.key}
                           className="flex min-h-[4.25rem] items-start gap-2 rounded-md border border-border p-3 text-sm"
                         >
-                          <CheckCircle2 size={16} className={check.passed ? "text-success" : "text-warning"} aria-hidden />
+                          <CheckCircle2 size={16} className={check.passed ? "text-success-fg" : "text-warning-fg"} aria-hidden />
                           <div className="min-w-0">
                             <p className="font-mono text-xs font-medium">{check.key}</p>
-                            <p className="mt-1 break-words text-muted">{check.detail}</p>
+                            <p className="mt-1 break-words text-fg-muted">{check.detail}</p>
                           </div>
                         </div>
                       ))}
                     </div>
                   ) : (
-                    <p className="rounded-md border border-dashed border-border p-3 text-sm leading-6 text-muted">
+                    <p className="rounded-md border border-dashed border-border p-3 text-sm leading-6 text-fg-muted">
                       {t("security.deepsec.resultPending")}
                     </p>
                   )}
@@ -2710,7 +2696,7 @@ export function SecurityDeepSecPage() {
           </ManagementPanelShell>
         ) : null}
         </fieldset>
-      </main>
+      </PageBody>
     </>
   );
 }

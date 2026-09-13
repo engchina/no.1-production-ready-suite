@@ -1,9 +1,12 @@
 import { Plus, RefreshCw, Search, Table2 } from "lucide-react";
 import { useMemo, useState } from "react";
 
-import { Button } from "@/components/ui/button";
+import {
+  Button,
+  Banner,
+  Skeleton,
+} from "@engchina/production-ready-ui";
 import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
-import { Banner, Skeleton } from "@engchina/production-ready-ui";
 
 import { TimedLoadingState } from "@/components/ProcessingState";
 import { t } from "@/lib/i18n";
@@ -136,18 +139,18 @@ export function SchemaReferencePanel({
       aria-label={t("nl2sql.schema.title")}
       data-testid="nl2sql-schema-reference"
     >
-      <p className="flex min-w-0 items-center gap-2 text-sm font-semibold text-foreground">
-        <Table2 size={15} className="shrink-0" aria-hidden="true" />
+      <p className="flex min-w-0 items-center gap-2 text-sm font-semibold text-fg">
+        <Table2 size={16} className="shrink-0" aria-hidden="true" />
         <span>{t("nl2sql.schema.title")}</span>
-        <span className="min-w-0 truncate text-xs font-normal text-muted">
+        <span className="min-w-0 truncate text-xs font-normal text-fg-muted">
           {t("nl2sql.schema.insertHint")}
         </span>
       </p>
 
       <span className="relative min-w-0 max-w-full">
         <Search
-          size={15}
-          className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted"
+          size={16}
+          className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-fg-muted"
           aria-hidden="true"
         />
         <input
@@ -157,7 +160,7 @@ export function SchemaReferencePanel({
             if (onSearchQueryChange) onSearchQueryChange(value);
             else setLocalQuery(value);
           }}
-          className="min-h-9 min-w-0 w-full rounded-md border border-border bg-card py-1.5 pl-8 pr-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-ring/40"
+          className="min-h-9 min-w-0 w-full rounded-md border border-border-control bg-surface py-1.5 pl-8 pr-3 text-sm outline-none focus:border-focus-ring focus:ring-2 focus:ring-focus-ring"
           placeholder={t("nl2sql.schema.searchPlaceholder")}
           aria-label={t("nl2sql.schema.search")}
           disabled={disabled}
@@ -180,7 +183,7 @@ export function SchemaReferencePanel({
       {!loading && refreshing ? (
         <SchemaRefreshProcessing
           placement="panel"
-          className="rounded-md border border-border bg-card px-3 py-2"
+          className="rounded-md border border-border bg-surface px-3 py-2"
           testId="schema-reference-refreshing"
         />
       ) : null}
@@ -207,7 +210,7 @@ export function SchemaReferencePanel({
       ) : null}
 
       {!loading && filteredTables.length === 0 && catalogEmpty && onRefreshSchema && (
-        <div className="grid min-w-0 gap-3 rounded-md border border-dashed border-border p-4 text-sm text-muted">
+        <div className="grid min-w-0 gap-3 rounded-md border border-dashed border-border p-4 text-sm text-fg-muted">
           <p className="[overflow-wrap:anywhere]">{t("nl2sql.schema.emptyCatalog")}</p>
           <div>
             <Button
@@ -216,9 +219,7 @@ export function SchemaReferencePanel({
               size="sm"
               loading={refreshing}
               disabled={disabled}
-              onClick={onRefreshSchema}
-            >
-              <RefreshCw size={15} aria-hidden="true" />
+              onClick={onRefreshSchema} icon={RefreshCw}>
               <span>{t("nl2sql.schema.refresh")}</span>
             </Button>
           </div>
@@ -226,7 +227,7 @@ export function SchemaReferencePanel({
       )}
 
       {!loading && filteredTables.length === 0 && !(catalogEmpty && onRefreshSchema) && (
-        <p className="min-w-0 rounded-md border border-dashed border-border p-3 text-sm text-muted [overflow-wrap:anywhere]">
+        <p className="min-w-0 rounded-md border border-dashed border-border p-3 text-sm text-fg-muted [overflow-wrap:anywhere]">
           {t("nl2sql.schema.empty")}
         </p>
       )}
@@ -268,9 +269,7 @@ export function SchemaReferencePanel({
                 size="sm"
                 loading={loadingMore}
                 disabled={disabled}
-                onClick={onRetryLoadMore}
-              >
-                <RefreshCw size={15} aria-hidden="true" />
+                onClick={onRetryLoadMore} icon={RefreshCw}>
                 <span>{t("common.retry")}</span>
               </Button>
             ) : undefined}
@@ -303,7 +302,7 @@ function SchemaTableItem({
     insertMode === "physical" ? buildTableSqlIdentifierText(table) : buildTableInsertText(table);
   return (
     <article
-      className="min-w-0 max-w-full overflow-hidden rounded-md border border-border bg-card"
+      className="min-w-0 max-w-full overflow-hidden rounded-md border border-border bg-surface"
       data-testid="nl2sql-schema-table-item"
     >
       <div className="flex min-h-9 w-full min-w-0 items-stretch">
@@ -318,30 +317,29 @@ function SchemaTableItem({
           aria-label={t("nl2sql.schema.toggleTable", { name: table.logical_name })}
           onClick={() => onToggleExpanded(schemaTableQualifiedName(table))}
         >
-          <DisclosureChevron expanded={expanded} size={15} />
+          <DisclosureChevron expanded={expanded} size={16} />
         </Button>
         <Button
           variant="ghost"
           size="sm"
-          data-button-layout="disclosure"
           type="button"
           disabled={disabled}
           title={table.comment || table.table_name}
           onClick={() => onInsert(tableInsertText)}
-          className="group w-full min-w-0 flex-1"
+          className="group w-full min-w-0 flex-1 justify-between"
         >
-          <span className="min-w-0 truncate text-sm font-medium text-foreground">
+          <span className="min-w-0 truncate text-sm font-medium text-fg">
             {table.logical_name}
           </span>
-          <span className="min-w-0 truncate font-mono text-xs text-muted">{table.table_name}</span>
-          <span className="shrink-0 rounded border border-border bg-muted/20 px-1.5 py-0.5 font-mono text-[10px] text-muted">
+          <span className="min-w-0 truncate font-mono text-xs text-fg-muted">{table.table_name}</span>
+          <span className="shrink-0 rounded border border-border bg-surface-hover px-1.5 py-0.5 font-mono text-xs text-fg-muted">
             {table.owner}
           </span>
-          <span className="ml-auto flex shrink-0 items-center gap-1.5 text-xs text-muted">
+          <span className="ml-auto flex shrink-0 items-center gap-1.5 text-xs text-fg-muted">
             {t("schema.table.rows", { count: formatSchemaCount(table.row_count) })}
             <Plus
               size={14}
-              className="text-primary opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100 motion-reduce:transition-none"
+              className="text-accent-fg opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100 motion-reduce:transition-none"
               aria-hidden="true"
             />
           </span>
@@ -398,22 +396,15 @@ function SchemaColumnItem({
       <Button
         variant="ghost"
         size="sm"
-        data-button-layout="disclosure"
         type="button"
         disabled={disabled}
         title={columnTooltip(table, column)}
         onClick={() => onInsert(insertText)}
-        className="group w-full min-w-0 flex-1"
-      >
-        <span className="min-w-0 truncate text-sm text-foreground">{column.logical_name}</span>
-        <span className="min-w-0 truncate font-mono text-xs text-muted">
+        className="group w-full min-w-0 flex-1 justify-between" trailingIcon={Plus}>
+        <span className="min-w-0 truncate text-sm text-fg">{column.logical_name}</span>
+        <span className="min-w-0 truncate font-mono text-xs text-fg-muted">
           {column.column_name} · {column.data_type}
         </span>
-        <Plus
-          size={14}
-          className="ml-auto shrink-0 text-primary opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100 motion-reduce:transition-none"
-          aria-hidden="true"
-        />
       </Button>
     </li>
   );

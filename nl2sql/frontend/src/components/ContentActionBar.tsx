@@ -39,11 +39,11 @@ export function ContentActionBar({
         <div className={infoClassName}>{leading}</div>
       ) : hasInfo ? (
         <div className={cn(infoClassName, "space-y-1")}>
-          {title ? <div className="text-sm font-semibold text-foreground">{title}</div> : null}
+          {title ? <div className="text-sm font-semibold text-fg">{title}</div> : null}
           {description ? (
-            <div className="text-sm leading-6 text-muted">{description}</div>
+            <div className="text-sm leading-6 text-fg-muted">{description}</div>
           ) : null}
-          {meta ? <div className="text-xs leading-5 text-muted">{meta}</div> : null}
+          {meta ? <div className="text-xs leading-5 text-fg-muted">{meta}</div> : null}
         </div>
       ) : null}
       <div

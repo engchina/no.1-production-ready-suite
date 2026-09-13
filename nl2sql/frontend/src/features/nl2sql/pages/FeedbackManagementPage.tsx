@@ -17,18 +17,19 @@ import {
 } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 
-import { Button } from "@/components/ui/button";
 import {
+  Button,
   Banner,
   EmptyState,
   Skeleton,
   toast,
   type DataTableColumn,
+  StatusBadge,
+  PageHeader,
+  PageBody,
 } from "@engchina/production-ready-ui";
 
-import { StatusBadge } from "@/components/ui/status-badge";
 import { MasterDetailDataTable } from "@/components/MasterDetailDataTable";
-import { PageHeader } from "@/components/PageHeader";
 import { FormActionBar } from "@/components/FormActionBar";
 import { ObjectActionBar, type EntityAction } from "@/components/ObjectActions";
 import { ProcessingIndicator } from "@/components/ProcessingState";
@@ -637,7 +638,7 @@ export function FeedbackManagementPage() {
         ]}
       />
 
-      <main className="p-4 lg:p-8">
+      <PageBody>
         <fieldset disabled={Boolean(loading)} className="m-0 grid min-w-0 gap-4 border-0 p-0">
         <PageNotice
           notice={message ? { tone: "danger", message } : null}
@@ -648,9 +649,7 @@ export function FeedbackManagementPage() {
                 variant="secondary"
                 size="sm"
                 loading={loading === "load"}
-                onClick={() => void load()}
-              >
-                <RefreshCw size={15} aria-hidden="true" />
+                onClick={() => void load()} icon={RefreshCw}>
                 <span>{t("feedbackManagement.action.reload")}</span>
               </Button>
             ) : undefined
@@ -709,7 +708,7 @@ export function FeedbackManagementPage() {
               />
 
               <section
-                className="grid min-w-0 gap-3 rounded-md border border-border bg-background p-3"
+                className="grid min-w-0 gap-3 rounded-md border border-border bg-surface-sunken p-3"
                 aria-label={t("feedbackManagement.entries.context")}
                 data-testid="feedback-management-entries-toolbar"
               >
@@ -722,9 +721,7 @@ export function FeedbackManagementPage() {
                     touchTarget className="w-full whitespace-nowrap sm:w-auto"
                     loading={loading === "feedback"}
                     disabled={!profileName.trim()}
-                    onClick={() => void refreshSelectAiFeedback()}
-                  >
-                    <RefreshCw size={15} aria-hidden="true" />
+                    onClick={() => void refreshSelectAiFeedback()} icon={RefreshCw}>
                     <span>{t("feedbackManagement.action.refresh")}</span>
                   </Button>
                 </div>
@@ -763,7 +760,7 @@ export function FeedbackManagementPage() {
                   label={t("feedbackManagement.entries.refreshing")}
                   operationKey={profileName}
                   placement="workspace"
-                  className="rounded-md border border-border bg-background px-3 py-2"
+                  className="rounded-md border border-border bg-surface-sunken px-3 py-2"
                   testId="feedback-management-entries-processing"
                   activityIcon="none"
                 />
@@ -868,7 +865,7 @@ export function FeedbackManagementPage() {
             minRightPaneWidthPx={420}
           >
             <section
-              className="grid min-w-0 content-start gap-4 rounded-md border border-border bg-background p-4"
+              className="grid min-w-0 content-start gap-4 rounded-md border border-border bg-surface-sunken p-4"
               data-testid="feedback-history-pane"
             >
               <DbObjectPanelHeader
@@ -889,16 +886,16 @@ export function FeedbackManagementPage() {
                   void refreshAppFeedback("", "reset", { query: feedbackSearch });
                 }}
               >
-                <label className="grid min-w-0 gap-1 text-sm font-medium text-foreground">
+                <label className="grid min-w-0 gap-1 text-sm font-medium text-fg">
                   <span>{t("feedbackManagement.appFeedback.search")}</span>
                   <input
                     value={feedbackSearch}
                     onChange={(event) => setFeedbackSearch(event.currentTarget.value)}
-                    className="min-h-[44px] w-full min-w-0 max-w-full rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:ring-2 focus:ring-ring/40"
+                    className="min-h-[44px] w-full min-w-0 max-w-full rounded-md border border-border-control bg-surface px-3 py-2 focus:border-focus-ring focus:ring-2 focus:ring-focus-ring"
                     placeholder={t("feedbackManagement.appFeedback.searchPlaceholder")}
                   />
                 </label>
-                <label className="grid min-w-0 gap-1 text-sm font-medium text-foreground">
+                <label className="grid min-w-0 gap-1 text-sm font-medium text-fg">
                   <span>{t("feedbackManagement.appFeedback.filter")}</span>
                   <select
                     aria-label={t("feedbackManagement.appFeedback.filter")}
@@ -907,7 +904,7 @@ export function FeedbackManagementPage() {
                       const rating = event.currentTarget.value as AppFeedbackFilter;
                       void refreshAppFeedback("", "reset", { rating });
                     }}
-                    className="min-h-[44px] w-full min-w-0 max-w-full rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:ring-2 focus:ring-ring/40"
+                    className="min-h-[44px] w-full min-w-0 max-w-full rounded-md border border-border-control bg-surface px-3 py-2 focus:border-focus-ring focus:ring-2 focus:ring-focus-ring"
                   >
                     <option value="all">{t("feedbackManagement.appFeedback.filterAll")}</option>
                     <option value="good">{t("nl2sql.feedback.good")}</option>
@@ -915,7 +912,7 @@ export function FeedbackManagementPage() {
                     <option value="unrated">{t("feedbackManagement.appFeedback.unrated")}</option>
                   </select>
                 </label>
-                <label className="grid min-w-0 gap-1 text-sm font-medium text-foreground">
+                <label className="grid min-w-0 gap-1 text-sm font-medium text-fg">
                   <span>{t("feedbackManagement.appFeedback.profileFilter")}</span>
                   <select
                     aria-label={t("feedbackManagement.appFeedback.profileFilter")}
@@ -924,7 +921,7 @@ export function FeedbackManagementPage() {
                       const profileId = event.currentTarget.value;
                       void refreshAppFeedback("", "reset", { profileId });
                     }}
-                    className="min-h-[44px] w-full min-w-0 max-w-full rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:ring-2 focus:ring-ring/40"
+                    className="min-h-[44px] w-full min-w-0 max-w-full rounded-md border border-border-control bg-surface px-3 py-2 focus:border-focus-ring focus:ring-2 focus:ring-focus-ring"
                   >
                     <option value="">{t("feedbackManagement.appFeedback.profileAll")}</option>
                     {appProfiles.filter((profile) => !profile.archived).map((profile) => (
@@ -938,9 +935,7 @@ export function FeedbackManagementPage() {
                   variant="secondary"
                   size="lg"
                   touchTarget className="w-full whitespace-nowrap md:w-auto"
-                  loading={loading === "app-feedback-load"}
-                >
-                  <RefreshCw size={16} aria-hidden="true" />
+                  loading={loading === "app-feedback-load"} icon={RefreshCw}>
                   <span>{t("feedbackManagement.appFeedback.applyFilters")}</span>
                 </Button>
               </form>
@@ -1003,8 +998,8 @@ export function FeedbackManagementPage() {
                     className="min-w-0"
                     buttonClassName="h-11"
                   />
-                  <section className="rounded-md border border-border bg-card p-3">
-                    <p className="text-xs font-medium text-muted">{t("feedbackManagement.appFeedback.history")}</p>
+                  <section className="rounded-md border border-border bg-surface p-3">
+                    <p className="text-xs font-medium text-fg-muted">{t("feedbackManagement.appFeedback.history")}</p>
                     <QuestionText
                       value={selectedAppFeedback.question}
                       variant="detail"
@@ -1015,32 +1010,32 @@ export function FeedbackManagementPage() {
                     />
                   </section>
                   <div className="grid min-w-0 gap-3 sm:grid-cols-2">
-                    <div className="rounded-md border border-border bg-card p-3">
-                      <p className="text-xs font-medium text-muted">{t("feedbackManagement.appFeedback.profile")}</p>
-                      <p className="mt-1 break-words text-sm font-semibold text-foreground">
+                    <div className="rounded-md border border-border bg-surface p-3">
+                      <p className="text-xs font-medium text-fg-muted">{t("feedbackManagement.appFeedback.profile")}</p>
+                      <p className="mt-1 break-words text-sm font-semibold text-fg">
                         {profileRecordDisplayLabel(selectedAppFeedback)}
                       </p>
                     </div>
-                    <div className="rounded-md border border-border bg-card p-3">
-                      <p className="text-xs font-medium text-muted">{t("feedbackManagement.appFeedback.createdAt")}</p>
-                      <p className="mt-1 text-sm font-semibold text-foreground">{formatDateTime(selectedAppFeedback.feedback_updated_at || selectedAppFeedback.created_at)}</p>
+                    <div className="rounded-md border border-border bg-surface p-3">
+                      <p className="text-xs font-medium text-fg-muted">{t("feedbackManagement.appFeedback.createdAt")}</p>
+                      <p className="mt-1 text-sm font-semibold text-fg">{formatDateTime(selectedAppFeedback.feedback_updated_at || selectedAppFeedback.created_at)}</p>
                       {selectedAppFeedback.training_status && (
                         <div className="mt-2"><StatusBadge variant="info" label={t(`qcm.candidates.status.${selectedAppFeedback.training_status}`)} /></div>
                       )}
                     </div>
                   </div>
-                  <label className="grid min-w-0 gap-1 text-sm font-medium text-foreground">
+                  <label className="grid min-w-0 gap-1 text-sm font-medium text-fg">
                     <span>{t("feedbackManagement.appFeedback.generatedSql")}</span>
-                    <textarea
+                    <textarea data-surface="code"
                       value={selectedAppFeedback.executable_sql || selectedAppFeedback.generated_sql}
                       readOnly
                       rows={5}
-                      className="min-h-32 w-full min-w-0 max-w-full rounded-md border border-border bg-code px-3 py-2 font-mono text-sm leading-6 text-code-fg outline-none"
+                      className="min-h-32 w-full min-w-0 max-w-full rounded-md border border-border-control bg-surface px-3 py-2 font-mono text-sm leading-6 text-fg outline-none"
                     />
                   </label>
                   <div className="grid min-w-0 gap-3 sm:grid-cols-2">
-                    <div className="rounded-md border border-border bg-card p-3">
-                      <p className="text-xs font-medium text-muted">{t("feedbackManagement.appFeedback.userRating")}</p>
+                    <div className="rounded-md border border-border bg-surface p-3">
+                      <p className="text-xs font-medium text-fg-muted">{t("feedbackManagement.appFeedback.userRating")}</p>
                       <div className="mt-2">
                         <StatusBadge
                           variant={selectedAppFeedback.feedback_rating ? "success" : "neutral"}
@@ -1048,8 +1043,8 @@ export function FeedbackManagementPage() {
                         />
                       </div>
                     </div>
-                    <div className="rounded-md border border-border bg-card p-3">
-                      <p className="text-xs font-medium text-muted">{t("feedbackManagement.appFeedback.adminRatingStatus")}</p>
+                    <div className="rounded-md border border-border bg-surface p-3">
+                      <p className="text-xs font-medium text-fg-muted">{t("feedbackManagement.appFeedback.adminRatingStatus")}</p>
                       <div className="mt-2">
                         <StatusBadge
                           variant={selectedAppFeedback.admin_feedback_rating === "good" ? "success" : "neutral"}
@@ -1058,30 +1053,30 @@ export function FeedbackManagementPage() {
                       </div>
                     </div>
                   </div>
-                  <label className="grid min-w-0 gap-1 text-sm font-medium text-foreground">
+                  <label className="grid min-w-0 gap-1 text-sm font-medium text-fg">
                     <span>{t("feedbackManagement.appFeedback.userFeedbackContent")}</span>
                     <textarea
                       aria-label={t("feedbackManagement.appFeedback.userFeedbackContent")}
                       value={selectedAppFeedback.feedback_comment}
                       readOnly
                       rows={3}
-                      className="min-h-24 w-full min-w-0 max-w-full rounded-md border border-border bg-background px-3 py-2 text-sm leading-6 text-foreground outline-none"
+                      className="min-h-24 w-full min-w-0 max-w-full rounded-md border border-border-control bg-surface-sunken px-3 py-2 text-sm leading-6 text-fg outline-none"
                       placeholder={t("feedbackManagement.appFeedback.userFeedbackEmpty")}
                     />
                   </label>
-                  <label className="grid min-w-0 gap-1 text-sm font-medium text-foreground">
+                  <label className="grid min-w-0 gap-1 text-sm font-medium text-fg">
                     <span>{t("feedbackManagement.appFeedback.adminRating")}</span>
                     <select
                       aria-label={t("feedbackManagement.appFeedback.adminRating")}
                       value={adminFeedbackRating}
                       onChange={(event) => setAdminFeedbackRating(event.currentTarget.value as FeedbackRating)}
-                      className="min-h-11 w-full min-w-0 max-w-full rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:ring-2 focus:ring-ring/40"
+                      className="min-h-11 w-full min-w-0 max-w-full rounded-md border border-border-control bg-surface px-3 py-2 focus:border-focus-ring focus:ring-2 focus:ring-focus-ring"
                     >
                       <option value="good">{t("nl2sql.feedback.good")}</option>
                       <option value="bad">{t("nl2sql.feedback.bad")}</option>
                     </select>
                   </label>
-                  <div className="grid min-w-0 gap-1 text-sm font-medium text-foreground">
+                  <div className="grid min-w-0 gap-1 text-sm font-medium text-fg">
                     <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
                       <label htmlFor="app-feedback-admin-content">
                         {t("feedbackManagement.appFeedback.adminFeedbackContent")}
@@ -1091,9 +1086,7 @@ export function FeedbackManagementPage() {
                         variant="secondary"
                         size="sm"
                         disabled={!selectedAppFeedback.feedback_comment.trim()}
-                        onClick={() => setAdminFeedbackContent(selectedAppFeedback.feedback_comment)}
-                      >
-                        <Copy size={15} aria-hidden="true" />
+                        onClick={() => setAdminFeedbackContent(selectedAppFeedback.feedback_comment)} icon={Copy}>
                         <span>{t("feedbackManagement.appFeedback.copyUserContent")}</span>
                       </Button>
                     </div>
@@ -1106,28 +1099,28 @@ export function FeedbackManagementPage() {
                       onChange={(event) => setAdminFeedbackContent(event.currentTarget.value)}
                       required={adminFeedbackContentRequired}
                       rows={4}
-                      className="min-h-28 w-full min-w-0 max-w-full rounded-md border border-border bg-card px-3 py-2 text-sm leading-6 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40"
+                      className="min-h-28 w-full min-w-0 max-w-full rounded-md border border-border-control bg-surface px-3 py-2 text-sm leading-6 outline-none focus:border-focus-ring focus:ring-2 focus:ring-focus-ring"
                       placeholder={t("feedbackManagement.appFeedback.adminFeedbackPlaceholder")}
                     />
                   </div>
-                  <label className="flex min-h-11 min-w-0 items-center gap-3 rounded-md border border-border bg-card px-3 py-2 text-sm font-medium text-foreground">
+                  <label className="flex min-h-11 min-w-0 items-center gap-3 rounded-md border border-border bg-surface px-3 py-2 text-sm font-medium text-fg">
                     <input
                       type="checkbox"
                       checked={registerSelectAiFeedback}
                       onChange={(event) => setRegisterSelectAiFeedback(event.currentTarget.checked)}
-                      className="h-4 w-4 shrink-0 accent-primary"
+                      className="h-4 w-4 shrink-0 accent-accent-emphasis"
                     />
                     <span>{t("feedbackManagement.appFeedback.registerSelectAi")}</span>
                   </label>
                   {registerSelectAiFeedback && (
-                    <label className="grid min-w-0 gap-1 text-sm font-medium text-foreground">
+                    <label className="grid min-w-0 gap-1 text-sm font-medium text-fg">
                       <span>{t("feedbackManagement.appFeedback.selectAiResponse")}</span>
-                      <textarea
+                      <textarea data-surface="code"
                         aria-label={t("feedbackManagement.appFeedback.selectAiResponse")}
                         value={selectAiResponse}
                         onChange={(event) => setSelectAiResponse(event.currentTarget.value)}
                         rows={5}
-                        className="min-h-32 w-full min-w-0 max-w-full rounded-md border border-border bg-code px-3 py-2 font-mono text-sm leading-6 text-code-fg outline-none focus:border-primary focus:ring-2 focus:ring-ring/40"
+                        className="min-h-32 w-full min-w-0 max-w-full rounded-md border border-border-control bg-surface px-3 py-2 font-mono text-sm leading-6 text-fg outline-none focus:border-focus-ring focus:ring-2 focus:ring-focus-ring"
                         placeholder={t("feedbackManagement.appFeedback.selectAiResponsePlaceholder")}
                       />
                     </label>
@@ -1228,7 +1221,7 @@ export function FeedbackManagementPage() {
               testId="feedback-similarity-index-actions"
               status={
                 feedbackConfigDirty ? (
-                  <p className="text-sm text-muted">
+                  <p className="text-sm text-fg-muted">
                     {t("feedbackManagement.similarityIndex.configDirty")}
                   </p>
                 ) : null
@@ -1247,7 +1240,7 @@ export function FeedbackManagementPage() {
           </DbObjectManagementPanelShell>
         )}
         </fieldset>
-      </main>
+      </PageBody>
     </>
   );
 }
@@ -1267,7 +1260,7 @@ function ProfileSelect({
 }) {
   return (
     <label
-      className={`grid min-w-0 gap-1 text-sm font-medium text-foreground ${
+      className={`grid min-w-0 gap-1 text-sm font-medium text-fg ${
         fullWidth ? "w-full" : "sm:min-w-72"
       }`}
     >
@@ -1276,7 +1269,7 @@ function ProfileSelect({
         value={value}
         disabled={disabled || profiles.length === 0}
         onChange={(event) => onChange(event.currentTarget.value)}
-        className="min-h-[44px] w-full min-w-0 rounded-md border border-border bg-card px-3 py-2 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-ring/40"
+        className="min-h-[44px] w-full min-w-0 rounded-md border border-border-control bg-surface px-3 py-2 text-sm outline-none focus:border-focus-ring focus:ring-2 focus:ring-focus-ring"
       >
         {profiles.map((profile) => (
           <option key={profile.name} value={profile.name}>
@@ -1322,7 +1315,7 @@ function FeedbackEntriesList({
       render: (entry, index) => (
         <button
           type="button"
-          className="block w-full rounded-sm text-left text-foreground underline-offset-2 hover:text-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+          className="block w-full rounded-sm text-left text-fg underline-offset-2 hover:text-accent-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
           aria-label={t("feedbackManagement.entries.select", {
             content: entry.content || entry.sql_text || "-",
           })}
@@ -1340,7 +1333,7 @@ function FeedbackEntriesList({
       header: t("feedbackManagement.entries.sqlText"),
       className: "w-[58%]",
       render: (entry) => (
-        <p className="line-clamp-3 break-words font-mono text-xs leading-5 text-foreground">
+        <p className="line-clamp-3 break-words font-mono text-xs leading-5 text-fg">
           {entry.sql_text || "-"}
         </p>
       ),
@@ -1416,7 +1409,7 @@ function FeedbackEntryDetail({
 
   return (
     <section
-      className="grid min-w-0 content-start gap-3 rounded-md border border-border bg-background p-4"
+      className="grid min-w-0 content-start gap-3 rounded-md border border-border bg-surface-sunken p-4"
       aria-labelledby="feedback-entry-detail-heading"
       data-testid="feedback-management-entry-detail"
     >
@@ -1442,16 +1435,16 @@ function FeedbackEntryDetail({
             <CompactFact label={t("feedbackManagement.entries.sqlId")} value={entry.sql_id || "-"} />
             <CompactFact label={t("feedbackManagement.profile")} value={profileName || "-"} />
           </div>
-          <section className="rounded-md border border-border bg-card p-3">
-            <p className="text-xs font-medium text-muted">{t("feedbackManagement.entries.content")}</p>
-            <p className="mt-1 break-words text-sm leading-6 text-foreground">{entry.content || "-"}</p>
+          <section className="rounded-md border border-border bg-surface p-3">
+            <p className="text-xs font-medium text-fg-muted">{t("feedbackManagement.entries.content")}</p>
+            <p className="mt-1 break-words text-sm leading-6 text-fg">{entry.content || "-"}</p>
           </section>
           <section className="grid min-w-0 gap-2">
-            <p className="text-xs font-medium text-muted">{t("feedbackManagement.entries.sqlText")}</p>
-            <pre
+            <p className="text-xs font-medium text-fg-muted">{t("feedbackManagement.entries.sqlText")}</p>
+            <pre data-surface="code"
               aria-label={t("feedbackManagement.entries.selectedSql")}
               data-testid="feedback-management-entry-sql"
-              className="max-h-[30.5rem] min-h-44 overflow-auto rounded-md border border-border bg-code p-3 font-mono text-sm leading-6 text-code-fg"
+              className="max-h-[30.5rem] min-h-44 overflow-auto rounded-md border border-border bg-surface p-3 font-mono text-sm leading-6 text-fg"
             >
               <code>{entry.sql_text || "-"}</code>
             </pre>
@@ -1459,7 +1452,7 @@ function FeedbackEntryDetail({
         </>
       ) : (
         <div
-          className="grid min-h-52 place-items-center rounded-md border border-border bg-card p-4"
+          className="grid min-h-52 place-items-center rounded-md border border-border bg-surface p-4"
           data-testid="feedback-management-entry-detail-empty"
         >
           <EmptyState
@@ -1483,7 +1476,7 @@ function FeedbackEntriesListSkeleton() {
       <span className="sr-only" role="status">{t("feedbackManagement.entries.loading")}</span>
       <Skeleton className="h-6 w-44" />
       <Skeleton className="h-5 w-72 max-w-full" />
-      <div className="overflow-hidden rounded-md border border-border bg-card">
+      <div className="overflow-hidden rounded-md border border-border bg-surface">
         <Skeleton className="h-10 rounded-none" />
         {Array.from({ length: 5 }, (_, index) => (
           <Skeleton key={index} className="h-14 rounded-none border-t border-border" />
@@ -1495,9 +1488,9 @@ function FeedbackEntriesListSkeleton() {
 
 function TechnicalRuntimeFact({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex min-w-0 flex-wrap items-baseline gap-x-1 rounded-md border border-border bg-card px-2 py-1 text-xs leading-5">
-      <dt className="shrink-0 font-medium text-muted">{label}:</dt>
-      <dd className="min-w-0 break-all font-medium text-foreground">{value}</dd>
+    <div className="flex min-w-0 flex-wrap items-baseline gap-x-1 rounded-md border border-border bg-surface px-2 py-1 text-xs leading-5">
+      <dt className="shrink-0 font-medium text-fg-muted">{label}:</dt>
+      <dd className="min-w-0 break-all font-medium text-fg">{value}</dd>
     </div>
   );
 }
@@ -1505,7 +1498,7 @@ function TechnicalRuntimeFact({ label, value }: { label: string; value: string }
 function FeedbackEntryDetailSkeleton() {
   return (
     <section
-      className="grid min-w-0 content-start gap-3 rounded-md border border-border bg-background p-4"
+      className="grid min-w-0 content-start gap-3 rounded-md border border-border bg-surface-sunken p-4"
       aria-label={t("feedbackManagement.entries.loading")}
       aria-busy="true"
       data-testid="feedback-management-entry-detail-skeleton"
@@ -1536,8 +1529,8 @@ function FeedbackHistoryRow({
       type="button"
       data-testid="feedback-history-row"
       aria-current={selected ? "true" : undefined}
-      className={`grid min-w-0 max-w-full gap-2 rounded-md border p-3 text-left text-sm outline-none focus:ring-2 focus:ring-ring/40 ${
-        selected ? "border-primary/40 bg-primary/10" : "border-border bg-card hover:bg-background"
+      className={`grid min-w-0 max-w-full gap-2 rounded-md border p-3 text-left text-sm outline-none focus:ring-2 focus:ring-focus-ring ${
+        selected ? "border-accent-emphasis bg-accent-subtle" : "border-border bg-surface hover:bg-surface-hover"
       }`}
       onClick={onSelect}
     >
@@ -1568,12 +1561,12 @@ function FeedbackHistoryRow({
         </span>
       </span>
       {item.feedback_comment && (
-        <span className="rounded-md border border-primary/20 bg-primary/10 px-3 py-2 text-foreground">
+        <span className="rounded-md border border-accent-emphasis bg-accent-subtle px-3 py-2 text-fg">
           {item.feedback_comment}
         </span>
       )}
       {item.admin_feedback_content && (
-        <span className="rounded-md border border-border bg-background px-3 py-2 text-foreground">
+        <span className="rounded-md border border-border bg-surface-sunken px-3 py-2 text-fg">
           {item.admin_feedback_content}
         </span>
       )}
@@ -1602,7 +1595,7 @@ function SimilarityConfigField({
 }) {
   const hintId = `${id}-hint`;
   return (
-    <fieldset className="grid gap-2 text-sm font-medium text-foreground">
+    <fieldset className="grid gap-2 text-sm font-medium text-fg">
       <legend className="mb-1">{label}</legend>
       <input
         type="range"
@@ -1613,7 +1606,7 @@ function SimilarityConfigField({
         step={step}
         value={value}
         onChange={(event) => onChange(Number(event.currentTarget.value))}
-        className="w-full accent-primary"
+        className="w-full accent-accent-emphasis"
       />
       <input
         id={id}
@@ -1629,9 +1622,9 @@ function SimilarityConfigField({
           const nextValue = Number(event.currentTarget.value);
           if (!Number.isNaN(nextValue)) onChange(nextValue);
         }}
-        className="min-h-11 rounded-md border border-border bg-card px-3 py-2 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40"
+        className="min-h-11 rounded-md border border-border-control bg-surface px-3 py-2 outline-none focus:border-focus-ring focus:ring-2 focus:ring-focus-ring"
       />
-      <span id={hintId} className="text-xs font-normal leading-5 text-muted">
+      <span id={hintId} className="text-xs font-normal leading-5 text-fg-muted">
         {hint}
       </span>
     </fieldset>
@@ -1654,7 +1647,7 @@ function SliderNumberField({
   onChange: (value: number) => void;
 }) {
   return (
-    <fieldset className="grid gap-3 rounded-md border border-border bg-background p-4 text-sm font-medium text-foreground">
+    <fieldset className="grid gap-3 rounded-md border border-border bg-surface-sunken p-4 text-sm font-medium text-fg">
       <legend className="px-1">{label}</legend>
       <input
         type="range"
@@ -1664,7 +1657,7 @@ function SliderNumberField({
         step={step}
         value={value}
         onChange={(event) => onChange(Number(event.currentTarget.value))}
-        className="w-full accent-primary"
+        className="w-full accent-accent-emphasis"
       />
       <input
         type="number"
@@ -1674,7 +1667,7 @@ function SliderNumberField({
         step={step}
         value={value}
         onChange={(event) => onChange(Number(event.currentTarget.value))}
-        className="min-h-11 rounded-md border border-border bg-card px-3 py-2 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-ring/40"
+        className="min-h-11 rounded-md border border-border-control bg-surface px-3 py-2 text-sm outline-none focus:border-focus-ring focus:ring-2 focus:ring-focus-ring"
       />
     </fieldset>
   );
@@ -1682,10 +1675,10 @@ function SliderNumberField({
 
 function CompactFact({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
-    <div className="min-w-0 rounded-md border border-border bg-card p-3">
-      <p className="text-xs font-medium text-muted">{label}</p>
-      <p className="mt-1 break-words text-sm font-semibold text-foreground">{value}</p>
-      {hint ? <p className="mt-1 text-xs leading-5 text-muted">{hint}</p> : null}
+    <div className="min-w-0 rounded-md border border-border bg-surface p-3">
+      <p className="text-xs font-medium text-fg-muted">{label}</p>
+      <p className="mt-1 break-words text-sm font-semibold text-fg">{value}</p>
+      {hint ? <p className="mt-1 text-xs leading-5 text-fg-muted">{hint}</p> : null}
     </div>
   );
 }

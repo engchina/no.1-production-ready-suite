@@ -13,22 +13,28 @@ import {
 } from "lucide-react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
-import { Button } from "@/components/ui/button";
+import {
+  Button,
+  Banner,
+  EmptyState,
+  toast,
+  StatusBadge,
+  PageHeader,
+  FieldError,
+  PageBody,
+} from "@engchina/production-ready-ui";
 import { ErrorState } from "@/components/StateViews";
-import { FieldError } from "@/components/ui/field-error";
-import { Banner, EmptyState, toast } from "@engchina/production-ready-ui";
 
 import { BulkSelectionActions } from "@/components/BulkSelectionActions";
 import { isInteractiveRowTarget } from "@/components/MasterDetailDataTable";
 import { ObjectActionBar } from "@/components/ObjectActions";
-import { PageHeader, PageHeaderStatusBadge } from "@/components/PageHeader";
+import { PageHeaderStatusBadge } from "@/components/PageHeaderStatusBadge";
 import { ProcessingIndicator } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";
 import { ClearActionButton } from "@/components/ui/clear-action-button";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { FieldLabel } from "@/components/ui/required-field";
 import { SelectField, type SelectFieldOption } from "@/components/ui/select-field";
-import { StatusBadge } from "@/components/ui/status-badge";
 import { ApiError, apiDelete, apiGet, apiPatch, apiPost, isTimeoutError } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { INFORMATION_TABLE_FOCUS_CLASS } from "@/lib/list-density";
@@ -153,9 +159,9 @@ function emptyProfileForm(): ProfileFormState {
 }
 
 const inputClass =
-  "min-h-11 min-w-0 w-full rounded-md border border-border bg-card px-3 py-2 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-ring/40";
+  "min-h-11 min-w-0 w-full rounded-md border border-border bg-surface px-3 py-2 text-sm outline-none focus:border-focus-ring focus:ring-2 focus:ring-focus-ring";
 const textareaClass =
-  "rounded-md border border-border bg-card px-3 py-2 text-sm leading-6 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40";
+  "rounded-md border border-border bg-surface px-3 py-2 text-sm leading-6 outline-none focus:border-focus-ring focus:ring-2 focus:ring-focus-ring";
 
 function mergeAdditionalInstructions(instructions: string, rules: string[]) {
   const base = instructions.trim();
@@ -331,7 +337,7 @@ function SortButton({
       onClick={() => onToggle(sortKey)}
     >
       <span>{label}</span>
-      <ArrowDownUp size={13} className={active ? "text-primary" : "text-muted"} aria-hidden="true" />
+      <ArrowDownUp size={14} className={active ? "text-accent-fg" : "text-fg-muted"} aria-hidden="true" />
     </SortHeader>
   );
 }
@@ -388,7 +394,7 @@ function ProfileList({
           <StatusBadge variant="info" label={t("profiles.objects.count", { count: totalCount })} />
         }
       />
-      <div className="grid gap-2 rounded-md border border-border bg-background p-3">
+      <div className="grid gap-2 rounded-md border border-border bg-surface-sunken p-3">
         <DbManagementSearchField
           label={t("profiles.list.search")}
           placeholder={t("profiles.list.searchPlaceholder")}
@@ -399,7 +405,7 @@ function ProfileList({
       {loading ? (
         <div className="grid gap-2" data-testid="profile-list-skeleton">
           {Array.from({ length: 6 }, (_, index) => (
-            <div key={index} className="h-12 animate-pulse rounded-md bg-muted/30" />
+            <div key={index} className="h-12 animate-pulse rounded-md bg-surface-hover" />
           ))}
         </div>
       ) : profiles.length === 0 ? (
@@ -408,7 +414,7 @@ function ProfileList({
           hint={search.trim() ? t("profiles.list.noResultsHint") : t("profiles.empty.hint")}
         />
       ) : (
-        <div className="overflow-hidden rounded-md border border-border bg-card">
+        <div className="overflow-hidden rounded-md border border-border bg-surface">
           <div
             className={`max-h-[20rem] max-w-full overflow-x-hidden overflow-y-auto md:max-h-[30.5rem] ${INFORMATION_TABLE_FOCUS_CLASS}`}
             role="region"
@@ -422,7 +428,7 @@ function ProfileList({
                 <col className="w-[7rem]" />
                 <col className="w-[7rem]" />
               </colgroup>
-              <thead className="sticky top-0 z-10 bg-background text-xs text-muted">
+              <thead className="sticky top-0 z-10 bg-surface-sunken text-xs text-fg-muted">
                 <tr>
                   <th className="px-3 py-2">
                     <SortButton label={t("profiles.field.name")} sortKey="name" sort={sort} onToggle={onSortChange} />
@@ -445,7 +451,7 @@ function ProfileList({
                       aria-current={selected ? "true" : undefined}
                       className={[
                         "cursor-pointer transition-colors",
-                        selected ? "bg-primary/10" : "hover:bg-background",
+                        selected ? "bg-accent-subtle" : "hover:bg-surface-hover",
                       ].join(" ")}
                       onClick={(event) => {
                         if (isInteractiveRowTarget(event.target)) return;
@@ -455,17 +461,17 @@ function ProfileList({
                       <td className="px-3 py-2 align-top">
                         <button
                           type="button"
-                          className="grid max-w-full text-left focus:outline-none focus:ring-2 focus:ring-ring/40"
+                          className="grid max-w-full text-left focus:outline-none focus:ring-2 focus:ring-focus-ring"
                           aria-current={selected ? "true" : undefined}
                           aria-label={t("profiles.action.selectProfile", { name: profile.name })}
                           onClick={() => onSelect(profile)}
                         >
-                          <span className="break-words font-semibold text-primary">{profile.name}</span>
-                          <span className="line-clamp-2 text-xs leading-5 text-muted">{profile.category || "-"}</span>
+                          <span className="break-words font-semibold text-accent-fg">{profile.name}</span>
+                          <span className="line-clamp-2 text-xs leading-5 text-fg-muted">{profile.category || "-"}</span>
                         </button>
                       </td>
-                      <td className="px-3 py-2 text-right font-sans text-xs text-foreground">{profile.allowed_table_count}</td>
-                      <td className="px-3 py-2 text-right font-sans text-xs text-foreground">{profile.allowed_view_count}</td>
+                      <td className="px-3 py-2 text-right font-sans text-xs text-fg">{profile.allowed_table_count}</td>
+                      <td className="px-3 py-2 text-right font-sans text-xs text-fg">{profile.allowed_view_count}</td>
                     </tr>
                   );
                 })}
@@ -486,9 +492,7 @@ function ProfileList({
                   size="sm"
                   className="w-full sm:w-auto"
                   loading={loadingNextPage}
-                  onClick={onRetryLoadMore}
-                >
-                  <RefreshCw size={15} aria-hidden="true" />
+                  onClick={onRetryLoadMore} icon={RefreshCw}>
                   <span>{t("common.retry")}</span>
                 </Button>
               }
@@ -527,7 +531,7 @@ function SelectAiConfigFields({
   return (
     <section
       id="profile-select-ai"
-      className="grid scroll-mt-4 gap-3 rounded-md border border-border bg-background p-3 focus:outline-none focus:ring-2 focus:ring-ring/40"
+      className="grid scroll-mt-4 gap-3 rounded-md border border-border bg-surface-sunken p-3 focus:outline-none focus:ring-2 focus:ring-focus-ring"
       aria-label={t("profiles.editor.selectAi")}
       tabIndex={-1}
     >
@@ -564,7 +568,7 @@ function SelectAiConfigFields({
               if (requiredErrors.model) onRequiredErrorClear("model");
             }}
             className={`${inputClass} ${
-              requiredErrors.model ? "border-danger focus:border-danger focus:ring-danger/40" : ""
+              requiredErrors.model ? "border-danger-fg focus:border-danger-fg focus:ring-danger-border" : ""
             }`}
           />
           {requiredErrors.model && (
@@ -605,7 +609,7 @@ function SelectAiConfigFields({
             }
             className={`${inputClass} ${
               requiredErrors.maxTokens
-                ? "border-danger focus:border-danger focus:ring-danger/40"
+                ? "border-danger-fg focus:border-danger-fg focus:ring-danger-border"
                 : ""
             }`}
           />
@@ -636,7 +640,7 @@ function SelectAiConfigFields({
             }}
             className={`${inputClass} ${
               requiredErrors.embeddingModel
-                ? "border-danger focus:border-danger focus:ring-danger/40"
+                ? "border-danger-fg focus:border-danger-fg focus:ring-danger-border"
                 : ""
             }`}
           />
@@ -654,19 +658,19 @@ function SelectAiConfigFields({
           ["annotations", "profiles.field.annotations"],
           ["constraints", "profiles.field.constraints"],
         ] as const).map(([key, labelKey]) => (
-          <label key={key} className="flex min-h-11 items-center gap-2 rounded-md border border-border bg-card p-3 text-sm text-foreground">
+          <label key={key} className="flex min-h-11 items-center gap-2 rounded-md border border-border bg-surface p-3 text-sm text-fg">
             <input
               type="checkbox"
               checked={Boolean(form.selectAiConfig[key])}
               onChange={(event) => updateSelectAiConfig(setForm, { [key]: event.currentTarget.checked })}
-              className="h-4 w-4 rounded border-border text-primary focus:ring-ring/40"
+              className="h-4 w-4 rounded border-border text-accent-fg focus:ring-focus-ring"
             />
             <span>{t(labelKey)}</span>
           </label>
         ))}
       </div>
       <div className="grid gap-3 md:grid-cols-2">
-        <div className="grid content-start gap-1 text-sm font-medium text-foreground">
+        <div className="grid content-start gap-1 text-sm font-medium text-fg">
           <label htmlFor="profile-select-ai-role">{t("profiles.field.role")}</label>
           <textarea
             id="profile-select-ai-role"
@@ -677,11 +681,11 @@ function SelectAiConfigFields({
             className={`${textareaClass} min-h-40`}
             placeholder={t("profiles.placeholder.role")}
           />
-          <p id="profile-select-ai-role-hint" className="text-xs font-normal leading-5 text-muted">
+          <p id="profile-select-ai-role-hint" className="text-xs font-normal leading-5 text-fg-muted">
             {t("profiles.field.roleHint")}
           </p>
         </div>
-        <div className="grid content-start gap-1 text-sm font-medium text-foreground">
+        <div className="grid content-start gap-1 text-sm font-medium text-fg">
           <label htmlFor="profile-select-ai-additional-instructions">
             {t("profiles.field.additionalInstructions")}
           </label>
@@ -700,7 +704,7 @@ function SelectAiConfigFields({
           />
           <p
             id="profile-select-ai-additional-instructions-hint"
-            className="text-xs font-normal leading-5 text-muted"
+            className="text-xs font-normal leading-5 text-fg-muted"
           >
             {t("profiles.field.additionalInstructionsHint")}
           </p>
@@ -728,7 +732,7 @@ function SchemaObjectOption({
   const qualified = schemaTableQualifiedName(object);
   return (
     <label
-      className={`flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 hover:bg-primary/5 focus-within:ring-2 focus-within:ring-ring/40 ${className}`}
+      className={`flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 hover:bg-accent-subtle focus-within:ring-2 focus-within:ring-focus-ring ${className}`}
       style={{ height: SCHEMA_OPTION_ROW_HEIGHT }}
     >
       <input
@@ -736,13 +740,13 @@ function SchemaObjectOption({
         checked={selected}
         onChange={() => onToggle(qualified)}
         aria-label={qualified}
-        className="h-4 w-4 shrink-0 accent-[var(--primary)]"
+        className="h-4 w-4 shrink-0 accent-[var(--color-accent-emphasis)]"
       />
       <span className="min-w-0 flex-1">
-        <span className="block truncate font-mono text-xs font-medium text-foreground">
+        <span className="block truncate font-mono text-xs font-medium text-fg">
           {qualified}
         </span>
-        <span className="block truncate text-xs text-muted">
+        <span className="block truncate text-xs text-fg-muted">
           {object.logical_name || object.comment || object.table_name}
         </span>
       </span>
@@ -855,20 +859,20 @@ function SchemaGroupedSelectionPanel({
 
   return (
     <section
-      className="grid h-[392px] min-w-0 grid-rows-[auto_minmax(0,1fr)_auto] gap-2 overflow-hidden rounded-md border border-border bg-card p-3"
+      className="grid h-[392px] min-w-0 grid-rows-[auto_minmax(0,1fr)_auto] gap-2 overflow-hidden rounded-md border border-border bg-surface p-3"
       aria-label={title}
       data-testid={dataTestId}
     >
       <div className="flex min-h-8 items-center justify-between gap-2">
-        <h4 className="text-sm font-semibold text-foreground">{title}</h4>
-        <span className="text-xs text-muted">
+        <h4 className="text-sm font-semibold text-fg">{title}</h4>
+        <span className="text-xs text-fg-muted">
           {t("profiles.objects.selected", { count: selectedItems.length })}
         </span>
       </div>
       {loading ? (
         <div className="grid gap-2" aria-label={t("profiles.objects.loading")}>
           {Array.from({ length: 5 }, (_, index) => (
-            <div key={index} className="h-11 animate-pulse rounded-md bg-muted/30" />
+            <div key={index} className="h-11 animate-pulse rounded-md bg-surface-hover" />
           ))}
         </div>
       ) : groups.length === 0 ? (
@@ -889,18 +893,18 @@ function SchemaGroupedSelectionPanel({
             return (
               <section
                 key={owner}
-                className="rounded-md border border-border bg-background"
+                className="rounded-md border border-border bg-surface-sunken"
                 aria-label={t("profiles.objects.schemaGroup", { owner })}
               >
-                <div className="grid min-h-11 gap-2 border-b border-border bg-muted/15 px-2.5 py-1.5">
+                <div className="grid min-h-11 gap-2 border-b border-border bg-surface-hover px-2.5 py-1.5">
                   <div
                     className="flex min-w-0 flex-wrap items-center gap-2"
                     data-testid={`${dataTestId}-${owner.toLowerCase()}-schema-heading`}
                   >
-                    <span className="rounded border border-border bg-card px-2 py-0.5 font-mono text-xs font-semibold text-foreground">
+                    <span className="rounded border border-border bg-surface px-2 py-0.5 font-mono text-xs font-semibold text-fg">
                       {owner}
                     </span>
-                    <span className="text-xs text-muted">
+                    <span className="text-xs text-fg-muted">
                       {t("profiles.objects.schemaCount", {
                         selected: selectedCount,
                         total,
@@ -1095,8 +1099,8 @@ function ProfileEditor({
         }
       />
 
-      <section className="grid gap-3 rounded-md border border-border bg-background p-3">
-        <h3 className="text-sm font-semibold text-foreground">{t("profiles.editor.basic")}</h3>
+      <section className="grid gap-3 rounded-md border border-border bg-surface-sunken p-3">
+        <h3 className="text-sm font-semibold text-fg">{t("profiles.editor.basic")}</h3>
         <div className="grid gap-x-3 gap-y-1.5 md:grid-cols-2">
           <FieldLabel
             htmlFor="profile-name"
@@ -1127,7 +1131,7 @@ function ProfileEditor({
             aria-invalid={Boolean(nameError)}
             aria-describedby={nameDescriptionId}
             className={`${inputClass} order-2 md:order-none ${
-              nameError ? "border-danger focus:border-danger focus:ring-danger/40" : ""
+              nameError ? "border-danger-fg focus:border-danger-fg focus:ring-danger-border" : ""
             }`}
           />
           <input
@@ -1144,13 +1148,13 @@ function ProfileEditor({
             }}
             className={`${inputClass} order-6 md:order-none ${
               requiredErrors.category
-                ? "border-danger focus:border-danger focus:ring-danger/40"
+                ? "border-danger-fg focus:border-danger-fg focus:ring-danger-border"
                 : ""
             }`}
           />
           <p
             id="profile-name-helper"
-            className="order-3 text-xs font-normal leading-5 text-muted md:order-none md:col-span-2 md:whitespace-nowrap"
+            className="order-3 text-xs font-normal leading-5 text-fg-muted md:order-none md:col-span-2 md:whitespace-nowrap"
           >
             {t("profiles.field.nameHint")}
           </p>
@@ -1172,9 +1176,9 @@ function ProfileEditor({
       </section>
 
       {selectedProfile && profileAccessProfile ? (
-        <section className="grid gap-2 rounded-md border border-border bg-background p-3">
-          <h3 className="text-sm font-semibold text-foreground">{t("profiles.access.title")}</h3>
-          <p className="text-sm text-muted">{t("profiles.access.hint")}</p>
+        <section className="grid gap-2 rounded-md border border-border bg-surface-sunken p-3">
+          <h3 className="text-sm font-semibold text-fg">{t("profiles.access.title")}</h3>
+          <p className="text-sm text-fg-muted">{t("profiles.access.hint")}</p>
           {profileAccessProfile.allowed_role_ids.length > 0 ? (
             <div className="flex flex-wrap gap-1.5">
               {profileAccessProfile.allowed_role_ids.map((roleId) => (
@@ -1182,7 +1186,7 @@ function ProfileEditor({
               ))}
             </div>
           ) : (
-            <p className="rounded-md border border-dashed border-border p-3 text-sm text-muted">
+            <p className="rounded-md border border-dashed border-border p-3 text-sm text-fg-muted">
               {t("profiles.access.none")}
             </p>
           )}
@@ -1191,8 +1195,8 @@ function ProfileEditor({
 
       <section data-testid="profile-allowed-object-list" className="grid gap-3">
         <div>
-          <h3 className="text-sm font-semibold text-foreground">{t("profiles.editor.objects")}</h3>
-          <p className="mt-1 text-sm text-muted">{t("profiles.field.allowedObjects")}</p>
+          <h3 className="text-sm font-semibold text-fg">{t("profiles.editor.objects")}</h3>
+          <p className="mt-1 text-sm text-fg-muted">{t("profiles.field.allowedObjects")}</p>
         </div>
         <DbObjectSelectorToolbar
           searchLabel={t("profiles.objects.filter")}
@@ -1253,19 +1257,19 @@ function ProfileEditor({
         onRequiredErrorClear={onRequiredErrorClear}
       />
 
-      <section className="grid gap-3 rounded-md border border-border bg-card p-3" aria-labelledby="profile-engine-assets-heading">
+      <section className="grid gap-3 rounded-md border border-border bg-surface p-3" aria-labelledby="profile-engine-assets-heading">
         <div>
-          <h3 id="profile-engine-assets-heading" className="text-sm font-semibold text-foreground">
+          <h3 id="profile-engine-assets-heading" className="text-sm font-semibold text-fg">
             {t("profiles.oracle.assets.title")}
           </h3>
-          <p className="mt-1 text-sm text-muted">{t("profiles.oracle.assets.hint")}</p>
+          <p className="mt-1 text-sm text-fg-muted">{t("profiles.oracle.assets.hint")}</p>
         </div>
-        <label className="flex min-h-11 items-center gap-2 rounded-md border border-border bg-background p-3 text-sm text-foreground">
+        <label className="flex min-h-11 items-center gap-2 rounded-md border border-border bg-surface-sunken p-3 text-sm text-fg">
           <input
             type="checkbox"
             checked={rebuildAgentAssets}
             onChange={(event) => onRebuildAgentAssetsChange(event.currentTarget.checked)}
-            className="h-4 w-4 rounded border-border text-primary focus:ring-ring/40"
+            className="h-4 w-4 rounded border-border text-accent-fg focus:ring-focus-ring"
           />
           <span>{t("profiles.oracle.assets.refreshAgent")}</span>
         </label>
@@ -1286,9 +1290,7 @@ function ProfileEditor({
               size="lg"
               loading={saving}
               disabled={!oracleConfirmed || saving}
-              onClick={onSave}
-            >
-              <Save size={15} aria-hidden="true" />
+              onClick={onSave} icon={Save}>
               <span>{t("profiles.action.save")}</span>
             </Button>
             <ClearActionButton
@@ -2097,7 +2099,7 @@ export function ProfileManagementPage() {
             : "profile-refresh"
         }
         placement="workspace"
-        className="rounded-md border border-border bg-background px-3 py-2"
+        className="rounded-md border border-border bg-surface-sunken px-3 py-2"
         testId="profile-management-workspace-processing"
         activityIcon="none"
       />
@@ -2124,14 +2126,11 @@ export function ProfileManagementPage() {
         variant="secondary"
         size="sm"
         loading={startDbProfileRefresh.isPending || dbProfileRefreshing}
-        onClick={() => void runDbProfileRefresh()}
-      >
-        <RefreshCw size={15} aria-hidden="true" />
+        onClick={() => void runDbProfileRefresh()} icon={RefreshCw}>
         <span>{t("profiles.action.dbProfileRefresh")}</span>
       </Button>
     ) : (
-      <Button type="button" variant="secondary" size="sm" disabled={mutationBusy} onClick={() => void load()}>
-        <RefreshCw size={15} aria-hidden="true" />
+      <Button type="button" variant="secondary" size="sm" disabled={mutationBusy} onClick={() => void load()} icon={RefreshCw}>
         <span>{t("profiles.action.refresh")}</span>
       </Button>
     );
@@ -2193,7 +2192,7 @@ export function ProfileManagementPage() {
         actionsTestId="profile-management-actions"
       />
 
-      <main className="grid gap-4 p-4 lg:p-8">
+      <PageBody className="grid gap-4">
         <PageNotice
           notice={workspaceNotice}
           action={workspaceNoticeAction}
@@ -2227,8 +2226,7 @@ export function ProfileManagementPage() {
         ) : (
           <>
             <div>
-              <Button type="button" variant="ghost" size="sm" disabled={mutationBusy} onClick={() => void backToList()}>
-                <ArrowLeft size={15} aria-hidden="true" />
+              <Button type="button" variant="ghost" size="sm" disabled={mutationBusy} onClick={() => void backToList()} icon={ArrowLeft}>
                 <span>{t("profiles.action.backToList")}</span>
               </Button>
             </div>
@@ -2253,14 +2251,14 @@ export function ProfileManagementPage() {
                   aria-label={t("profiles.detail.loading")}
                 >
                   {Array.from({ length: 6 }, (_, index) => (
-                    <div key={index} className="h-12 animate-pulse rounded-md bg-muted/30" />
+                    <div key={index} className="h-12 animate-pulse rounded-md bg-surface-hover" />
                   ))}
                 </div>
               )}
             </DbObjectManagementPanelShell>
           </>
         )}
-      </main>
+      </PageBody>
     </>
   );
 }

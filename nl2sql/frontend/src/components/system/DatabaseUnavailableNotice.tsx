@@ -1,9 +1,12 @@
 import { ArrowRight, Database, DatabaseZap, RefreshCw, Settings } from "lucide-react";
 import { Link } from "react-router-dom";
 
-import { Banner } from "@engchina/production-ready-ui";
+import {
+  Banner,
+  Button,
+  buttonVariants,
+} from "@engchina/production-ready-ui";
 
-import { Button, buttonVariants } from "@/components/ui/button";
 import { t, type I18nKey } from "@/lib/i18n";
 import { APP_ROUTES } from "@/lib/routes";
 
@@ -65,8 +68,7 @@ export function DatabaseUnavailableNotice({
         severity="warning"
         title={t(copy.title)}
         action={
-          <Button size="md" variant="secondary" onClick={onRetry} loading={isRetrying}>
-            <RefreshCw size={15} aria-hidden />
+          <Button type="button" size="md" variant="secondary" onClick={onRetry} loading={isRetrying} icon={RefreshCw}>
             {t("common.retry")}
           </Button>
         }
@@ -92,18 +94,18 @@ export function DatabaseUnavailableNotice({
   return (
     <div className="grid min-h-dvh place-items-center p-4 sm:p-6">
       <section
-        className="w-full max-w-lg rounded-xl border border-border bg-card p-6 text-center shadow-sm sm:p-8"
+        className="w-full max-w-lg rounded-xl border border-border bg-surface p-6 text-center shadow-sm sm:p-8"
         aria-labelledby="database-unavailable-title"
       >
         <div
-          className="mx-auto grid size-12 place-items-center rounded-full bg-warning-bg text-warning"
+          className="mx-auto grid size-12 place-items-center rounded-full bg-warning-subtle text-warning-fg"
           aria-hidden
         >
-          <Database size={22} />
+          <Database size={24} />
         </div>
         <h1
           id="database-unavailable-title"
-          className="mt-5 text-lg font-semibold text-foreground"
+          className="mt-5 text-lg font-semibold text-fg"
         >
           {t(copy.title)}
         </h1>
@@ -143,11 +145,11 @@ function NoticeContent({
   const PrimaryActionIcon = primaryAction.icon;
   return (
     <>
-      <p className="mx-auto mt-2 max-w-md text-sm leading-relaxed text-muted">
+      <p className="mx-auto mt-2 max-w-md text-sm leading-relaxed text-fg-muted">
         {t(messageKey)}
       </p>
       {reasonCode ? (
-        <p className="mt-2 text-xs text-muted" role="status">
+        <p className="mt-2 text-xs text-fg-muted" role="status">
           {t("dbGate.reasonCode", { code: reasonCode })}
         </p>
       ) : null}
@@ -158,17 +160,16 @@ function NoticeContent({
           state={returnTo ? { returnTo } : undefined}
           className={buttonVariants({ variant: "primary", size: "md" })}
         >
-          <PrimaryActionIcon size={15} aria-hidden />
+          <PrimaryActionIcon size={16} aria-hidden />
           {t(primaryAction.labelKey)}
-          <ArrowRight size={15} aria-hidden />
+          <ArrowRight size={16} aria-hidden />
         </Link>
-        <Button size="md" variant="secondary" onClick={onRetry} loading={isRetrying}>
-          <RefreshCw size={15} aria-hidden />
+        <Button type="button" size="md" variant="secondary" onClick={onRetry} loading={isRetrying} icon={RefreshCw}>
           {t("common.retry")}
         </Button>
       </div>
 
-      <p className="mt-6 border-t border-border pt-4 text-xs leading-relaxed text-muted">
+      <p className="mt-6 border-t border-border pt-4 text-xs leading-relaxed text-fg-muted">
         {t(primaryAction.hintKey)}
       </p>
     </>

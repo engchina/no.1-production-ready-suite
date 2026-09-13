@@ -7,12 +7,18 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useState, type ReactNode } from "react";
-import { toast } from "@engchina/production-ready-ui";
+import {
+  toast,
+  Button,
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+  FormStatus,
+} from "@engchina/production-ready-ui";
 
 import { ContentActionBar } from "@/components/ContentActionBar";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { FormStatus } from "@/components/ui/form-status";
 import { copyTextToClipboard } from "@/lib/clipboard";
 import { t } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -135,9 +141,7 @@ function SettingsPreviewCard({
             variant="secondary"
             size="sm"
             aria-label={copyLabel}
-            onClick={() => void handleCopy()}
-          >
-            <Clipboard size={14} aria-hidden />
+            onClick={() => void handleCopy()} icon={Clipboard}>
             <span>{t("settings.preview.copy")}</span>
           </Button>
         </ContentActionBar>
@@ -148,7 +152,7 @@ function SettingsPreviewCard({
           value={value}
           aria-label={ariaLabel ?? title}
           className={cn(
-            "w-full resize-none rounded-md border border-border bg-background p-3 font-mono text-xs leading-relaxed text-foreground outline-none focus-visible:border-primary",
+            "w-full resize-none rounded-md border border-border-control bg-surface-sunken p-3 font-mono text-xs leading-relaxed text-fg outline-none focus-visible:border-focus-ring",
             previewHeightClassName
           )}
         />
@@ -175,8 +179,8 @@ function SettingsCardHeader({
 }) {
   return (
     <div className="flex min-w-0 items-start gap-3">
-      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-bg text-info">
-        <Icon size={18} aria-hidden />
+      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-subtle text-info-fg">
+        <Icon size={20} aria-hidden />
       </span>
       <span className="min-w-0 space-y-1">
         <CardTitle>{title}</CardTitle>

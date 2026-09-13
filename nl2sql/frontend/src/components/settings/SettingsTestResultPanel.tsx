@@ -1,6 +1,9 @@
-import { Banner, MessageText } from "@engchina/production-ready-ui";
+import {
+  Banner,
+  MessageText,
+  StatusBadge,
+} from "@engchina/production-ready-ui";
 
-import { StatusBadge } from "@/components/ui/status-badge";
 import { t } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
@@ -49,7 +52,7 @@ export function SettingsTestResultPanel({
       <Banner severity={tone} title={message}>
         <div className="min-w-0 space-y-2">
           {hasTiming ? (
-            <p className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted">
+            <p className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-fg-muted">
               {elapsedMs !== undefined ? (
                 <span className="tnum">
                   {t("settings.testResult.elapsed")}: {elapsedMs} ms
@@ -64,10 +67,10 @@ export function SettingsTestResultPanel({
           ) : null}
 
           {details.length > 0 ? (
-            <dl className="grid min-w-0 gap-x-4 gap-y-1 text-xs text-muted sm:grid-cols-2">
+            <dl className="grid min-w-0 gap-x-4 gap-y-1 text-xs text-fg-muted sm:grid-cols-2">
               {details.map((detail) => (
                 <div key={detail.label} className="min-w-0">
-                  <dt className="break-words font-medium text-foreground">{detail.label}</dt>
+                  <dt className="break-words font-medium text-fg">{detail.label}</dt>
                   <dd className="break-words tnum">{String(detail.value)}</dd>
                 </div>
               ))}
@@ -76,10 +79,10 @@ export function SettingsTestResultPanel({
 
           {tone !== "success" && troubleshooting.length > 0 ? (
             <div className="space-y-1">
-              <p className="text-xs font-semibold text-foreground">
+              <p className="text-xs font-semibold text-fg">
                 {t("settings.testResult.troubleshooting")}
               </p>
-              <ul className="list-disc space-y-1 pl-5 text-xs leading-relaxed text-foreground/90">
+              <ul className="list-disc space-y-1 pl-5 text-xs leading-relaxed text-fg/90">
                 {troubleshooting.map((item) => (
                   <li key={item} className="min-w-0 break-words">
                     <MessageText text={item} />
@@ -91,7 +94,7 @@ export function SettingsTestResultPanel({
 
           {tone === "danger" && errorType ? (
             <div className="flex flex-wrap items-center gap-2">
-              <span className="text-xs font-semibold text-foreground">
+              <span className="text-xs font-semibold text-fg">
                 {t("settings.testResult.errorType")}
               </span>
               <StatusBadge variant="danger" label={errorType} />

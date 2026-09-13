@@ -334,7 +334,8 @@ async function expectCsvUploadLayout(csvPanel: Locator) {
 }
 
 function mainScroller(page: Page) {
-  return page.locator('main[aria-label="メイン領域"]');
+  // 共有 AppShell の <main id="pr-main"> は唯一の main ランドマークなので aria-label を持たない。
+  return page.getByRole("main");
 }
 
 async function mainScrollTop(page: Page) {
@@ -345,56 +346,48 @@ async function expectMainScrolledBelowTop(page: Page) {
   await expect.poll(() => mainScrollTop(page)).toBeGreaterThan(0);
 }
 
-async function expectAppDialogOverlayCoversViewport(page: Page) {
+export async function expectNeutralDangerConfirmationSurface(surface: Locator) {
+  await expect(surface).toHaveClass(/max-w-md/);
+  // 旧 bg-card → 共有ダイアログ面 bg-surface-overlay。
+  await expect(surface).toHaveClass(/\bbg-surface-overlay\b/);
+  await expect(surface).toHaveClass(/border-border/);
+  await expect(surface).not.toHaveClass(/border-l-danger/);
+  await expect(surface).not.toHaveClass(/bg-danger-subtle/);
+  await expect(surface.locator('[class*="border-l-danger"]')).toHaveCount(0);
+  await expect(surface.getByRole("button", { name: "閉じる" })).toHaveCount(0);
+}
+
+// デザインシステム移行後の確認ダイアログ検証(#529)。
+// 暗幕は共有トークン --scrim(packages/ui/src/styles/tokens/elevation.css: light-dark(rgb(0 0 0 / 0.5), rgb(0 0 0 / 0.7)))。
+// 確認語フィールドは旧 bg-card / bg-background から bg-surface-sunken へ移行し、左アクセントは border-l-danger-fg。
+async function expectSharedScrimOverlayCoversViewport(page: Page) {
   const overlay = page.getByTestId("app-dialog-overlay");
   await expect(overlay).toBeVisible();
   const metrics = await overlay.evaluate((node) => {
     const rect = node.getBoundingClientRect();
     return {
-      left: rect.left,
-      top: rect.top,
-      right: rect.right,
-      bottom: rect.bottom,
-      width: rect.width,
-      height: rect.height,
-      viewportWidth: window.innerWidth,
-      viewportHeight: window.innerHeight,
+      rect: [rect.left, rect.top, window.innerWidth - rect.right, window.innerHeight - rect.bottom],
+      dark: document.documentElement.classList.contains("dark"),
       backgroundColor: window.getComputedStyle(node).backgroundColor,
     };
   });
-
-  expect(Math.abs(metrics.left)).toBeLessThanOrEqual(1);
-  expect(Math.abs(metrics.top)).toBeLessThanOrEqual(1);
-  expect(Math.abs(metrics.right - metrics.viewportWidth)).toBeLessThanOrEqual(1);
-  expect(Math.abs(metrics.bottom - metrics.viewportHeight)).toBeLessThanOrEqual(1);
-  expect(Math.abs(metrics.width - metrics.viewportWidth)).toBeLessThanOrEqual(1);
-  expect(Math.abs(metrics.height - metrics.viewportHeight)).toBeLessThanOrEqual(1);
-  expect(metrics.backgroundColor).toMatch(/^(rgba\(0, 0, 0, 0\.6\)|oklab\(0 0 0 \/ 0\.6\))$/u);
+  for (const edge of metrics.rect) expect(Math.abs(edge)).toBeLessThanOrEqual(1);
+  const alpha = metrics.dark ? "0\\.7" : "0\\.5";
+  expect(metrics.backgroundColor).toMatch(new RegExp(`^(rgba\\(0, 0, 0, ${alpha}\\)|oklab\\(0 0 0 \\/ ${alpha}\\))$`, "u"));
 }
 
-export async function expectNeutralDangerConfirmationSurface(surface: Locator) {
-  await expect(surface).toHaveClass(/max-w-md/);
-  await expect(surface).toHaveClass(/bg-card/);
-  await expect(surface).toHaveClass(/border-border/);
-  await expect(surface).not.toHaveClass(/border-l-danger/);
-  await expect(surface).not.toHaveClass(/bg-danger-bg/);
-  await expect(surface.locator(".border-l-danger")).toHaveCount(0);
-  await expect(surface.getByRole("button", { name: "閉じる" })).toHaveCount(0);
+async function expectNeutralConfirmationFieldSurface(surface: Locator) {
+  await expect(surface).toHaveClass(/\bbg-surface-sunken\b/);
+  await expect(surface).toHaveClass(/\bborder-border\b/);
+  await expect(surface).not.toHaveClass(/border-l-danger|bg-danger-subtle/);
 }
 
-async function expectExecutionConfirmationFieldNoLeftAccent(surface: Locator) {
-  await expect(surface).toHaveClass(/bg-(card|background)/);
-  await expect(surface).toHaveClass(/border-border/);
-  await expect(surface).not.toHaveClass(/border-l-danger/);
-  await expect(surface).not.toHaveClass(/bg-danger-bg/);
-}
-
-async function expectOnlyConfirmationFieldHasNoLeftAccent(dialog: Locator) {
+async function expectOnlyNeutralConfirmationFieldInDialog(dialog: Locator) {
   const confirmationField = dialog.getByTestId("execution-confirmation-field");
   await expect(confirmationField).toHaveCount(1);
-  await expectExecutionConfirmationFieldNoLeftAccent(confirmationField);
-  await expect(dialog.locator(".border-l-danger")).toHaveCount(0);
-  await expect(dialog.locator(".bg-danger-bg")).toHaveCount(0);
+  await expectNeutralConfirmationFieldSurface(confirmationField);
+  await expect(dialog.locator('[class*="border-l-danger"]')).toHaveCount(0);
+  await expect(dialog.locator(".bg-danger-subtle")).toHaveCount(0);
 }
 
 type JsonValue = Record<string, unknown> | unknown[];
@@ -2711,7 +2704,7 @@ async function expectNoHorizontalScroll(page: Page) {
 
 async function expectMainScrollDoesNotExposeTrailingBlank(panel: Locator) {
   const metrics = await panel.evaluate((node) => {
-    const main = document.querySelector<HTMLElement>('main[aria-label="メイン領域"]');
+    const main = document.querySelector<HTMLElement>("main");
     if (!main) return null;
     main.scrollTop = main.scrollHeight;
     const mainRect = main.getBoundingClientRect();
@@ -4798,7 +4791,8 @@ for (const { engine, name } of [
     await page.goto("/query");
     await expect(nl2sqlQuestionInput(page)).toBeVisible();
     await page.clock.install();
-    await page.clock.pauseAt(new Date());
+    // Node 側の new Date() はブラウザの時計より遅れることがあり「過去へは進めない」で落ちるため、ブラウザの現在時刻から少し先で止める。
+    await page.clock.pauseAt((await page.evaluate(() => Date.now())) + 100);
     const direct = page.getByRole("button", { name: /Enterprise AI Direct/ });
     const selectAi = page.getByRole("button", { name });
     await direct.click();
@@ -6753,7 +6747,7 @@ test("Workbench のサンプルデータ投入は executed=false を成功表示
   await progress.getByRole("button", { name: "サンプルデータを投入" }).click();
 
   await expect(
-    page.getByLabel("メイン領域").getByText(
+    page.getByRole("main").getByText(
       "Admin SQL 実行には NL2SQL_RUNTIME_MODE=oracle が必要です。",
       {
         exact: false,
@@ -7904,8 +7898,16 @@ test("root route opens SQL generation and sidebar exposes feature surfaces", asy
 
 test("dark theme keeps the SQL workbench text, controls and active states legible", async ({ page }, testInfo) => {
   await mockNl2SqlApi(page);
+  // theme.ts は ui-store の変更ごとに html.dark を toggle し直すため、classList を直接触ると
+  // store 更新(サイドバー状態等)で light へ戻る。永続化されたテーマ選好として dark を与える。
+  await page.addInitScript(() => {
+    const key = "production-ready-nl2sql.ui";
+    const stored = JSON.parse(window.localStorage.getItem(key) ?? "null") ?? { state: {}, version: 0 };
+    stored.state = { ...stored.state, theme: "dark" };
+    window.localStorage.setItem(key, JSON.stringify(stored));
+  });
   await page.goto("/query");
-  await page.locator("html").evaluate((element) => element.classList.add("dark"));
+  await expect(page.locator("html")).toHaveClass(/\bdark\b/);
 
   const heading = page.getByRole("heading", { name: "NL2SQL 検索ワークベンチ" });
   const question = nl2sqlQuestionInput(page);
@@ -7917,6 +7919,8 @@ test("dark theme keeps the SQL workbench text, controls and active states legibl
     .getByRole("complementary", { name: "サイドナビゲーション" })
     .getByRole("link", { name: "SQL 生成" });
 
+  // 期待値は packages/ui tokens/colors.css + palette.css の dark 側:
+  // --color-fg = neutral-100 #f2f4f7 / 入力の輪郭 --color-border-control = neutral-650 #5d6878 (3:1, WCAG 1.4.11)
   await expect(heading).toHaveCSS("color", "rgb(242, 244, 247)");
   await expect(question).toHaveCSS("border-color", "rgb(93, 104, 120)");
   // エンジン選択は primary 塗りではなく「primary 枠線 + 前景色維持」の選択スタイル
@@ -8424,12 +8428,10 @@ test("feedback management page mirrors Select AI feedback operations", async ({ 
     "tbody tr",
     expectedInformationRows(testInfo)
   );
+  // 共有 PageHeader の utility 操作は ghost / md(36px、タッチ端末 44px)。
   const pageRefreshButton = page.getByRole("button", { name: "表示を更新", exact: true });
-  if ((page.viewportSize()?.width ?? 0) < 1024) {
-    await expect(pageRefreshButton).toHaveCSS("height", "44px");
-  } else {
-    await expect(pageRefreshButton).toHaveClass(/\bh-8\b/);
-  }
+  await expect(pageRefreshButton).toHaveCSS("height", testInfo.project.name === "mobile-375" ? "44px" : "36px");
+  await expect(pageRefreshButton).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
   const entryRefreshButtons = page.getByRole("button", { name: "最新エントリを取得" });
   await expect(entryRefreshButtons).toHaveCount(1);
   await expect(entryRefreshButtons).toHaveCSS("height", "44px");
@@ -8462,8 +8464,9 @@ test("feedback management page mirrors Select AI feedback operations", async ({ 
     name: "ベクトルインデックスを更新",
   });
   await expect(vectorIndexActions).toHaveClass(/\bborder-t\b/);
-  await expect(vectorIndexUpdate).toHaveClass(/\bh-10\b/);
-  await expect(vectorIndexUpdate).toHaveClass(/\bbg-primary\b/);
+  // FormActionBar の主操作は共有 Button primary / lg(40px、タッチ端末 44px)。
+  await expectLargeActionButton(vectorIndexUpdate);
+  await expect(vectorIndexUpdate).toHaveClass(/\bbg-accent-emphasis\b/);
   await page.getByLabel("Similarity_Threshold", { exact: true }).fill("0.85");
   await page.getByLabel("Match_Limit", { exact: true }).fill("4");
   await vectorIndexUpdate.click();
@@ -8497,12 +8500,13 @@ test("feedback management page mirrors Select AI feedback operations", async ({ 
   const openCandidateLink = appFeedbackActions.getByRole("link", { name: "学習候補で確認" });
   const appFeedbackMoreButton = appFeedbackActions.getByRole("button", { name: "その他の操作" });
   await expect(appFeedbackActions).toHaveClass(/\bborder-t\b/);
-  await expect(saveAppFeedbackButton).toHaveClass(/\bh-10\b/);
-  await expect(saveAppFeedbackButton).toHaveClass(/\bbg-primary\b/);
-  await expect(openCandidateLink).toHaveClass(/\bh-10\b/);
-  await expect(openCandidateLink).toHaveClass(/\bbg-card\b/);
-  await expect(appFeedbackMoreButton).toHaveClass(/\bh-10\b/);
-  await expect(appFeedbackMoreButton).toHaveClass(/\bbg-card\b/);
+  // primary=bg-accent-emphasis / secondary=border-border-control(共有 Button)。いずれも lg。
+  await expectLargeActionButton(saveAppFeedbackButton);
+  await expect(saveAppFeedbackButton).toHaveClass(/\bbg-accent-emphasis\b/);
+  await expectLargeActionButton(openCandidateLink);
+  await expect(openCandidateLink).toHaveClass(/\bborder-border-control\b/);
+  await expectLargeActionButton(appFeedbackMoreButton);
+  await expect(appFeedbackMoreButton).toHaveClass(/\bborder-border-control\b/);
   await expect(appFeedbackActions.getByRole("button", { name: "フィードバックを解除" })).toHaveCount(0);
   await expect(openCandidateLink).toHaveAttribute(
     "href",
@@ -8635,8 +8639,8 @@ test("feedback management page mirrors Select AI feedback operations", async ({ 
   await expect(page.getByText("技術詳細", { exact: true })).toHaveCount(0);
   const similarityConfigSave = page.getByRole("button", { name: "設定保存" });
   const similarityIndexActions = page.getByTestId("feedback-similarity-index-actions");
-  await expect(similarityConfigSave).toHaveClass(/\bh-10\b/);
-  await expect(similarityConfigSave).toHaveClass(/\bbg-primary\b/);
+  await expectLargeActionButton(similarityConfigSave);
+  await expect(similarityConfigSave).toHaveClass(/\bbg-accent-emphasis\b/);
   await expect(similarityIndexActions).toHaveClass(/\bborder-t\b/);
   await expect(similarityIndexActions.getByRole("button", { name: "インデックスを更新" })).toHaveCount(0);
   await expect(similarityIndexActions.getByRole("button", { name: "インデックスを削除" })).toHaveCount(0);
@@ -8905,7 +8909,7 @@ test("app feedback uses the shared responsive pagination for cursor pages", asyn
   await expectNoHorizontalScroll(page);
 });
 
-test("feedback management keeps utility actions usable in empty and load error states", async ({ page }) => {
+test("feedback management keeps utility actions usable in empty and load error states", async ({ page }, testInfo) => {
   await mockNl2SqlApi(page);
   await page.route("**/api/nl2sql/feedback-config", (route) =>
     route.fulfill({
@@ -8922,13 +8926,10 @@ test("feedback management keeps utility actions usable in empty and load error s
   await expect(page.getByTestId("feedback-management-entry-detail-empty")).toBeVisible();
   await expect(page.getByTestId("feedback-management-entry-sql")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "再読込", exact: true })).toBeVisible();
+  // 共有 PageHeader の utility 操作は ghost / md(36px、タッチ端末 44px)。
   const reloadButton = page.getByRole("button", { name: "表示を更新", exact: true });
-  if ((page.viewportSize()?.width ?? 0) < 1024) {
-    await expect(reloadButton).toHaveCSS("height", "44px");
-  } else {
-    await expect(reloadButton).toHaveClass(/\bh-8\b/);
-  }
-  await expect(reloadButton).toHaveClass(/\bbg-card\b/);
+  await expect(reloadButton).toHaveCSS("height", testInfo.project.name === "mobile-375" ? "44px" : "36px");
+  await expect(reloadButton).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
   await reloadButton.focus();
   await expect(reloadButton).toBeFocused();
   await page.setViewportSize({ width: 375, height: 900 });
@@ -9223,7 +9224,8 @@ test("question classifier model management page trains classifier and finds lear
   await expect(page.getByRole("heading", { name: "訓練データ一覧" })).toBeVisible();
   const classifierStatus = page.getByTestId("qcm-model-status");
   // PageHeaderStatusBadge は可視ラベル + sr-only 通知文の 2 重構造(意図的な a11y 設計)。
-  await expect(classifierStatus.locator('[aria-hidden="true"]')).toHaveText("学習済み");
+  // 共有 StatusBadge 内のアイコン svg も aria-hidden を持つため、直下の可視ラベル wrapper に限定する。
+  await expect(classifierStatus.locator('> [aria-hidden="true"]')).toHaveText("学習済み");
   await expect(page.getByText(/最終更新日時:/)).toBeVisible();
   expect(api.classifierModelListRequests).toBe(0);
 
@@ -9279,7 +9281,7 @@ test("question classifier model management page trains classifier and finds lear
   expect(api.classifierFeedbackImportPayload).toEqual({
     items: [{ history_id: "hist-001", profile_id: "default" }],
   });
-  await expect(classifierStatus.locator('[aria-hidden="true"]')).toHaveText("学習済み・再学習待ち");
+  await expect(classifierStatus.locator('> [aria-hidden="true"]')).toHaveText("学習済み・再学習待ち");
   await expect(page.getByRole("button", { name: "推薦・書き換え" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "類似履歴検索" })).toHaveCount(0);
 
@@ -9291,7 +9293,7 @@ test("question classifier model management page trains classifier and finds lear
   await page.getByRole("tab", { name: "モデル学習" }).click();
   await page.getByRole("button", { name: "Classifier 学習" }).click();
   await expect(page.getByText("LogisticRegression classifier を学習しました。")).toBeVisible();
-  await expect(classifierStatus.locator('[aria-hidden="true"]')).toHaveText("学習済み");
+  await expect(classifierStatus.locator('> [aria-hidden="true"]')).toHaveText("学習済み");
 
   await page.setViewportSize({ width: 375, height: 900 });
   await page.getByRole("tab", { name: "訓練データ" }).click();
@@ -9732,7 +9734,7 @@ test("question classifier model management handles untrained, empty, and load er
 
   await page.goto("/question-classifier-models");
   const classifierStatus = page.getByTestId("qcm-model-status");
-  await expect(classifierStatus.locator('[aria-hidden="true"]')).toHaveText("未学習");
+  await expect(classifierStatus.locator('> [aria-hidden="true"]')).toHaveText("未学習");
   await expect(page.getByText("訓練データは未登録です")).toBeVisible();
   await page.getByRole("tab", { name: "モデルテスト" }).click();
   await expect(page.getByRole("button", { name: "分類を試す" })).toBeDisabled();
@@ -10310,7 +10312,16 @@ test("JOIN WHERE and metadata read result branches replace their result areas wi
   joinWhereGate.release();
   await expect(page.getByLabel("結合条件 (JOIN)")).toHaveValue(/EMPLOYEE/);
   await page.setViewportSize({ width: 375, height: 900 });
-  await expectLargeActionButton(joinWhereButton);
+  // 共有 Button の 44px 化はタッチ端末(pointer: coarse)だけで、幅 375px でもマウス環境は lg=40px のまま。
+  // expectLargeActionButton は旧仕様の max-width: 639px も 44px 扱いするため、ここでは DS 仕様で直接測る。
+  await expect(joinWhereButton).toBeVisible();
+  const narrowJoinWhereMetrics = await joinWhereButton.evaluate((element) => ({
+    height: element.getBoundingClientRect().height,
+    expectedHeight: window.matchMedia("(pointer: coarse)").matches ? 44 : 40,
+    clipped: element.scrollWidth > element.clientWidth,
+  }));
+  expect(narrowJoinWhereMetrics.height).toBe(narrowJoinWhereMetrics.expectedHeight);
+  expect(narrowJoinWhereMetrics.clipped).toBe(false);
   joinWhereGate = createRequestGate();
   await joinWhereButton.click();
   const mobileJoinWhereSkeleton = page.getByTestId("view-join-where-result-detail-skeleton");
@@ -10734,7 +10745,7 @@ for (const outcome of ["completed", "failed", "partial", "no_data", "unknown"] a
     } else if (outcome === "unknown") {
       await expect(status).toContainText("未確認");
       await expect(status.getByRole("timer")).toHaveCount(0);
-      await expect(status.locator('[data-loading-icon="true"]')).toHaveCount(0);
+      await expect(status.locator("svg.animate-spin")).toHaveCount(0);
       await expect(panel.getByRole("button", { name: "生成開始" })).toBeDisabled();
       expect(reads).toBe(0);
     } else {
@@ -10775,7 +10786,8 @@ test("synthetic waiting uses shared live timing beside the action and freezes du
   await expect(submitting).toBeVisible();
   await expect(submitting).toContainText("生成を受け付けています。");
   await expect(submitting.getByRole("timer")).toBeInViewport();
-  await expect(workspace.locator('[data-loading-icon="true"]')).toHaveCount(1);
+  // 共有 Spinner(svg.animate-spin)。旧 data-loading-icon 属性は移行で廃止。
+  await expect(workspace.locator("svg.animate-spin")).toHaveCount(1);
   const firstSubmissionTime = await submitting.getByRole("timer").textContent();
   await expect.poll(() => submitting.getByRole("timer").textContent()).not.toBe(firstSubmissionTime);
   gate.release();
@@ -10787,8 +10799,8 @@ test("synthetic waiting uses shared live timing beside the action and freezes du
   await expect(timer).toBeInViewport();
   await expect(processing).toHaveAttribute("data-processing-placement", "job");
   await expect(timer).toHaveAttribute("aria-live", "off");
-  await expect(workspace.locator('[data-loading-icon="true"]')).toHaveCount(1);
-  await expect(processing.locator('[data-loading-icon="true"]')).toHaveCSS("animation-name", "none");
+  await expect(workspace.locator("svg.animate-spin")).toHaveCount(1);
+  await expect(processing.locator("svg.animate-spin")).toHaveCSS("animation-name", "none");
   const elapsedSeconds = async () => {
     const text = (await timer.textContent()) ?? "";
     const [, minutes, seconds] = text.match(/(\d+):(\d+)/) ?? [];
@@ -10817,7 +10829,7 @@ test("synthetic waiting uses shared live timing beside the action and freezes du
   run = { ...syntheticRunFixture("completed"), created_at: createdAt, finished_at: new Date(Date.parse(createdAt) + 80_000).toISOString() };
   await expect(panel.getByTestId("synthetic-run-status")).toHaveText("合成データの生成が完了しました");
   await expect(timer).toHaveAccessibleName("処理時間 01:20");
-  await expect(processing.locator('[data-loading-icon="true"]')).toHaveCount(0);
+  await expect(processing.locator("svg.animate-spin")).toHaveCount(0);
   await page.clock.install();
   await page.clock.fastForward(5_000);
   await expect(timer).toHaveAccessibleName("処理時間 01:20");
@@ -10876,7 +10888,7 @@ test("synthetic validation rejection shows its reference and zero rows without a
   await expect(panel.getByTestId("synthetic-run-status")).toHaveText("データを生成できませんでした");
   await expect(panel).toContainText("今回の追加件数: 0 件");
   await expect(panel.getByRole("alert")).toContainText("データは追加されませんでした");
-  await expect(panel.locator('[data-loading-icon="true"]')).toHaveCount(0);
+  await expect(panel.locator("svg.animate-spin")).toHaveCount(0);
   await expect(panel.getByText(run.message)).not.toBeVisible();
   await expect(panel).not.toContainText("Oracle 実行番号");
   await expect(panel.getByRole("link", { name: "この生成記録を開く" })).toHaveCount(0);
@@ -10968,7 +10980,7 @@ test("synthetic run status outage keeps prior state and never resubmits", async 
   unavailable = true;
   await panel.getByRole("button", { name: "状況を再確認" }).click();
   await expect(panel).toContainText("最新の状況を取得できません");
-  await expect(panel.locator('[data-loading-icon="true"]')).toHaveCount(0);
+  await expect(panel.locator("svg.animate-spin")).toHaveCount(0);
   await expect(panel).toContainText("現在の処理状況は未確認です。");
   await expect(panel.getByTestId("synthetic-run-status")).toHaveText("生成中");
   expect(submits).toBe(0);
@@ -11043,7 +11055,18 @@ for (const status of ["completed", "partial", "failed", "no_data"]) {
       await expect(notifications.getByRole("status")).toHaveCount(0);
     }
     const previousReads = reads;
-    await expect.poll(() => reads, { timeout: 18_000 }).toBeGreaterThan(previousReads);
+    // #522 以降、終了済み run だけの一覧は定期取得を止める(「synthetic polling stops for …」参照)。
+    // 取得の再実行は画面復帰(visibilitychange → focusManager)で起こし、同じ終了状態を再取得しても通知を再生しないことを確認する。
+    // staleTime(1 秒)内の復帰は再取得しないため、poll ごとに復帰イベントを送る。
+    // TanStack Query の focusManager は window で visibilitychange を購読する。
+    await expect
+      .poll(async () => {
+        await page.evaluate(() => {
+          window.dispatchEvent(new Event("visibilitychange"));
+        });
+        return reads;
+      })
+      .toBeGreaterThan(previousReads);
     await expect(notifications.getByRole("button")).toHaveCount(0);
     await expect(page.getByRole("link", { name: "結果を確認" })).toHaveCount(0);
     await page.reload();
@@ -11741,7 +11764,7 @@ test("sample data and data management run imported workflows", async ({ page }) 
   await page.getByRole("tab", { name: "削除実行" }).click();
   const deletePanel = page.locator("#sample-data-panel-delete");
   const deleteConfirmationField = deletePanel.getByTestId("execution-confirmation-field");
-  await expectExecutionConfirmationFieldNoLeftAccent(deleteConfirmationField);
+  await expectNeutralConfirmationFieldSurface(deleteConfirmationField);
   await expect(page.getByLabel("実行確認語")).toHaveValue("");
   await expect(page.getByRole("button", { name: "削除実行", exact: true })).toBeDisabled();
   await page.getByLabel("実行確認語").fill("SQL_ASSIST_SAMPLE");
@@ -11915,8 +11938,8 @@ test("sample data and data management run imported workflows", async ({ page }) 
   await mainScroller(page).evaluate((node) => {
     node.scrollTop = node.scrollHeight;
   });
-  await expectAppDialogOverlayCoversViewport(page);
-  await expectOnlyConfirmationFieldHasNoLeftAccent(truncateDialog);
+  await expectSharedScrimOverlayCoversViewport(page);
+  await expectOnlyNeutralConfirmationFieldInDialog(truncateDialog);
   const truncateButton = truncateDialog.getByRole("button", { name: "データを空にする" });
   await expect(truncateButton).toBeDisabled();
   await truncateDialog.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
@@ -13505,12 +13528,15 @@ test("table and view management pages run guarded DDL and AI workflows", async (
   await expect(page.getByText("取得元", { exact: true })).toHaveCount(0);
   await expect(page.getByText(/DB 構造の最終取得:/)).toBeVisible();
   const tablePageActions = page.getByTestId("table-management-actions");
+  // 共有 PageHeader は lg 未満で主操作以外を「その他の操作」メニューへ畳む。
   if ((page.viewportSize()?.width ?? 0) < 1024) {
     await tablePageActions.getByRole("button", { name: "その他の操作" }).click();
-    await expect(page.getByRole("menuitem", { name: "表示を更新" })).toBeVisible();
-    await expect(page.getByRole("menuitem", { name: "DB 構造を再取得" })).toBeVisible();
+    const tableMenu = page.getByRole("menu", { name: "その他の操作" });
+    await expect(tableMenu.getByRole("menuitem", { name: "表示を更新" })).toBeVisible();
+    await expect(tableMenu.getByRole("menuitem", { name: "DB 構造を再取得" })).toBeVisible();
     await page.keyboard.press("Escape");
   } else {
+    await expect(tablePageActions.getByRole("button", { name: "その他の操作" })).toHaveCount(0);
     await expect(tablePageActions.getByRole("button", { name: "表示を更新" })).toBeVisible();
     await expect(tablePageActions.getByRole("button", { name: "DB 構造を再取得" })).toBeVisible();
   }
@@ -13563,8 +13589,8 @@ test("table and view management pages run guarded DDL and AI workflows", async (
   await mainScroller(page).evaluate((node) => {
     node.scrollTop = node.scrollHeight;
   });
-  await expectAppDialogOverlayCoversViewport(page);
-  await expectOnlyConfirmationFieldHasNoLeftAccent(dropTableDialog);
+  await expectSharedScrimOverlayCoversViewport(page);
+  await expectOnlyNeutralConfirmationFieldInDialog(dropTableDialog);
   await dropTableDialog.getByLabel("実行確認語").fill("APP.INVOICES");
   await expect(dropTableDialog.getByText("確認済み", { exact: true })).toHaveCount(1);
   await page.getByRole("button", { name: "Drop 実行" }).click();
@@ -13805,8 +13831,8 @@ test("table and view management pages run guarded DDL and AI workflows", async (
   await mainScroller(page).evaluate((node) => {
     node.scrollTop = node.scrollHeight;
   });
-  await expectAppDialogOverlayCoversViewport(page);
-  await expectOnlyConfirmationFieldHasNoLeftAccent(dropViewDialog);
+  await expectSharedScrimOverlayCoversViewport(page);
+  await expectOnlyNeutralConfirmationFieldInDialog(dropViewDialog);
   await expect(page.getByRole("button", { name: "Drop 実行" })).toBeDisabled();
   await page.getByLabel("実行確認語").fill("APP.V_EMP_DEPT");
   await page.getByRole("button", { name: "Drop 実行" }).click();
@@ -14506,8 +14532,9 @@ test("全 NL2SQL ルートのページヘッダーは 1440px / 375px で横方�
     const headerBox = await header.boundingBox();
     expect(headerBox, `${path} の PageHeader bounds`).not.toBeNull();
     expect(headerBox!.height, `${path} の PageHeader が首屏を占有しすぎない`).toBeLessThan(240);
+    // 共有 PageHeader は data-page-action-kind を出さない。primary variant は bg-accent-emphasis で判別する。
     expect(
-      await header.locator('[data-page-action-kind="primary"]:visible').count(),
+      await header.locator('[role="group"] button.bg-accent-emphasis:visible').count(),
       `${path} の primary は最大 1 件`
     ).toBeLessThanOrEqual(1);
     await expectNoHorizontalScroll(page);
@@ -14895,10 +14922,11 @@ test("synthetic manual refresh shows pending unchanged updated and retry feedbac
   gate = createRequestGate();
   await panel.getByRole("button", { name: "状況を再確認", exact: true }).focus();
   await page.keyboard.press("Enter");
-  const pending = panel.getByRole("button", { name: "状況を確認中…", exact: true });
+  // DS ルールでは loading 中にラベルを差し替えない(先頭アイコンだけが共有 Spinner に替わる)。
+  const pending = panel.locator('button[aria-busy="true"]');
+  await expect(pending).toHaveCount(1);
   await expect(pending).toBeDisabled();
-  await expect(pending).toHaveAttribute("aria-busy", "true");
-  await expect(pending.locator('[data-loading-icon="true"]')).toHaveCount(1);
+  await expect(pending.locator("svg.animate-spin")).toHaveCount(1);
   await expect(panel.getByTestId("synthetic-run-status")).toHaveText("合成データの生成が完了しました");
   await page.screenshot({ path: testInfo.outputPath("synthetic-refresh-pending.png") });
   gate.release();
@@ -14936,7 +14964,7 @@ test("synthetic manual refresh discards feedback after switching history", async
   await expect(panel.getByTestId("synthetic-run-reference")).toContainText("run-001");
   gate = createRequestGate();
   await panel.getByRole("button", { name: "状況を再確認", exact: true }).click();
-  await expect(panel.getByRole("button", { name: "状況を確認中…" })).toBeDisabled();
+  await expect(panel.getByRole("button", { name: "状況を再確認", exact: true })).toHaveAttribute("aria-busy", "true");
   await panel.getByLabel("生成履歴").selectOption("run-002");
   await expect(panel.getByTestId("synthetic-run-reference")).toContainText("run-002");
   gate.release();

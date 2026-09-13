@@ -11,13 +11,16 @@ import {
   Table2,
 } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
+import {
+  Button,
+  Banner,
+  EmptyState,
+  StatusBadge,
+} from "@engchina/production-ready-ui";
 import { ClearActionButton } from "@/components/ui/clear-action-button";
 import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
 import { ErrorState } from "@/components/StateViews";
-import { Banner, EmptyState } from "@engchina/production-ready-ui";
 
-import { StatusBadge } from "@/components/ui/status-badge";
 
 import { t } from "@/lib/i18n";
 import {
@@ -154,12 +157,12 @@ function QuestionMatchedSpans({
   }
   if (cursor < normalized.length) parts.push({ text: normalized.slice(cursor), matched: false });
   return (
-    <p className="text-sm leading-6 text-muted" data-testid="ontology-playground-matched-spans">
+    <p className="text-sm leading-6 text-fg-muted" data-testid="ontology-playground-matched-spans">
       {parts.map((part, index) =>
         part.matched ? (
           <mark
             key={index}
-            className="rounded bg-primary/15 px-0.5 font-medium text-foreground underline decoration-primary decoration-2 underline-offset-2"
+            className="rounded bg-accent-muted px-0.5 font-medium text-fg underline decoration-accent-fg decoration-2 underline-offset-2"
           >
             {part.text}
           </mark>
@@ -201,13 +204,13 @@ function ServerSearchResultPanel({
   );
   return (
     <section
-      className="grid gap-3 rounded-md border border-border bg-card p-3"
+      className="grid gap-3 rounded-md border border-border bg-surface p-3"
       aria-label={t("ontologyPlayground.serverSearch.title")}
       data-testid="ontology-playground-server-result"
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="flex items-center gap-2 text-sm font-semibold text-foreground">
-          <ServerCog size={16} className="text-primary" aria-hidden="true" />
+        <h3 className="flex items-center gap-2 text-sm font-semibold text-fg">
+          <ServerCog size={16} className="text-accent-fg" aria-hidden="true" />
           {t("ontologyPlayground.serverSearch.title")}
         </h3>
         <StatusBadge
@@ -240,7 +243,7 @@ function ServerSearchResultPanel({
             />
           </div>
           {comparison.serverOnly.length > 0 ? (
-            <p className="text-xs leading-5 text-muted">
+            <p className="text-xs leading-5 text-fg-muted">
               {t("ontologyPlayground.serverSearch.compareHint")}
             </p>
           ) : null}
@@ -263,19 +266,19 @@ function ServerSearchResultPanel({
               <li key={hit.node.id}>
                 <button
                   type="button"
-                  className="grid w-full cursor-pointer gap-1 rounded-md border border-border bg-background px-3 py-2 text-left outline-none transition-colors hover:border-primary/50 focus-visible:ring-2 focus-visible:ring-ring/40 motion-reduce:transition-none disabled:cursor-default"
+                  className="grid w-full cursor-pointer gap-1 rounded-md border border-border bg-surface-sunken px-3 py-2 text-left outline-none transition-colors hover:border-accent-emphasis focus-visible:ring-2 focus-visible:ring-focus-ring motion-reduce:transition-none disabled:cursor-default"
                   onClick={() => inGraph && onSelectNode(hit.node.id)}
                   disabled={!inGraph}
                   data-testid={`ontology-server-hit-${hit.node.id}`}
                 >
                   <span className="flex flex-wrap items-center gap-2">
-                    <span className="text-xs font-semibold tabular-nums text-muted">
+                    <span className="text-xs font-semibold tabular-nums text-fg-muted">
                       {index + 1}.
                     </span>
-                    <span className="min-w-0 flex-1 break-words text-sm font-medium text-foreground">
+                    <span className="min-w-0 flex-1 break-words text-sm font-medium text-fg">
                       {hit.node.business_name_ja}
                     </span>
-                    <span className="text-xs text-muted">{display.kindLabel}</span>
+                    <span className="text-xs text-fg-muted">{display.kindLabel}</span>
                     {hit.inference_source !== "asserted" ? (
                       <StatusBadge
                         variant="info"
@@ -285,20 +288,20 @@ function ServerSearchResultPanel({
                   </span>
                   <span className="flex items-center gap-2">
                     <span
-                      className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted/20"
+                      className="h-1.5 flex-1 overflow-hidden rounded-full bg-surface-hover"
                       aria-hidden="true"
                     >
                       <span
-                        className="block h-full rounded-full bg-primary"
+                        className="block h-full rounded-full bg-accent-emphasis"
                         style={{ width: `${scorePercent}%` }}
                       />
                     </span>
-                    <span className="text-xs tabular-nums text-muted">
+                    <span className="text-xs tabular-nums text-fg-muted">
                       {t("ontologyPlayground.serverSearch.score")} {scorePercent}%
                     </span>
                   </span>
                   {hit.matched_terms.length > 0 ? (
-                    <span className="text-xs leading-5 text-muted">
+                    <span className="text-xs leading-5 text-fg-muted">
                       {t("ontologyPlayground.serverSearch.matchedTerms")}:{" "}
                       {hit.matched_terms.join("、")}
                     </span>
@@ -331,34 +334,34 @@ function RelationshipCard({
   return (
     <button
       type="button"
-      className={`grid w-full cursor-pointer gap-2 rounded-md border bg-background px-3 py-2 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/40 motion-reduce:transition-none ${
-        selected ? "border-primary ring-2 ring-primary/20" : "border-border hover:border-primary/50"
+      className={`grid w-full cursor-pointer gap-2 rounded-md border bg-surface-sunken px-3 py-2 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-focus-ring motion-reduce:transition-none ${
+        selected ? "border-accent-emphasis ring-2 ring-accent-emphasis" : "border-border hover:border-accent-emphasis"
       }`}
       onClick={() => onSelect?.(row.edge_id)}
       data-testid={`ontology-inspector-relationship-${row.edge_id}`}
     >
       <span className="flex flex-wrap items-center gap-2">
-        <span className="min-w-0 flex-1 break-words text-sm font-semibold text-foreground">
+        <span className="min-w-0 flex-1 break-words text-sm font-semibold text-fg">
           {row.relationship_label}
         </span>
         <StatusBadge variant={validationVariant(row.validation_status)} label={validationLabel(row.validation_status)} />
       </span>
-      <span className="text-xs leading-5 text-muted">
+      <span className="text-xs leading-5 text-fg-muted">
         {row.source_label} → {row.target_label}
       </span>
       {row.detail_kind === "none" ? null : (
         <span className="grid gap-0.5">
-          <span className="text-[11px] leading-4 text-muted">{relationshipDetailLabel(row.detail_kind)}</span>
+          <span className="text-xs leading-4 text-fg-muted">{relationshipDetailLabel(row.detail_kind)}</span>
           {row.detail_kind === "join" ? (
             <code
-              className="break-all rounded bg-card px-2 py-1 font-mono text-xs leading-5 text-foreground"
+              className="break-all rounded bg-surface px-2 py-1 font-mono text-xs leading-5 text-fg"
               data-testid="ontology-inspector-relationship-detail"
             >
               {row.detail_text}
             </code>
           ) : (
             <span
-              className="break-all text-xs leading-5 text-foreground"
+              className="break-all text-xs leading-5 text-fg"
               data-testid="ontology-inspector-relationship-detail"
             >
               {row.detail_text}
@@ -385,15 +388,15 @@ function OntologyGroundingPathPanel({
     [nodeById, result]
   );
   return (
-    <section className="grid gap-3 rounded-md border border-border bg-card p-3" data-testid="ontology-grounding-path-panel">
+    <section className="grid gap-3 rounded-md border border-border bg-surface p-3" data-testid="ontology-grounding-path-panel">
       <div className="flex items-center gap-2">
-        <Route size={16} className="text-primary" aria-hidden="true" />
-        <h3 className="text-sm font-semibold text-foreground">
+        <Route size={16} className="text-accent-fg" aria-hidden="true" />
+        <h3 className="text-sm font-semibold text-fg">
           {t("ontologyPlayground.inspector.groundingPath")}
         </h3>
       </div>
       {!result ? (
-        <p className="text-sm leading-6 text-muted">{t("ontologyPlayground.inspector.groundingEmpty")}</p>
+        <p className="text-sm leading-6 text-fg-muted">{t("ontologyPlayground.inspector.groundingEmpty")}</p>
       ) : highlightedNodes.length === 0 && rows.length === 0 ? (
         <Banner severity="info">{t("ontologyPlayground.inspector.groundingNoMatch")}</Banner>
       ) : (
@@ -415,7 +418,7 @@ function OntologyGroundingPathPanel({
                 return (
                   <span
                     key={node.id}
-                    className="rounded-md border border-border bg-background px-2 py-1 text-xs leading-5 text-foreground"
+                    className="rounded-md border border-border bg-surface-sunken px-2 py-1 text-xs leading-5 text-fg"
                     title={display.ariaLabel}
                   >
                     {display.kindLabel}: {display.primaryLabel}
@@ -427,9 +430,9 @@ function OntologyGroundingPathPanel({
           {rows.length > 0 ? (
             <div className="grid gap-2">
               {rows.slice(0, 5).map((row) => (
-                <div key={row.edge_id} className="rounded-md border border-border bg-background px-3 py-2">
-                  <p className="text-sm font-semibold text-foreground">{row.relationship_label}</p>
-                  <p className="mt-1 text-xs leading-5 text-muted">
+                <div key={row.edge_id} className="rounded-md border border-border bg-surface-sunken px-3 py-2">
+                  <p className="text-sm font-semibold text-fg">{row.relationship_label}</p>
+                  <p className="mt-1 text-xs leading-5 text-fg-muted">
                     {row.source_label} → {row.target_label}
                   </p>
                 </div>
@@ -459,18 +462,18 @@ function OntologyNodeDetailsPanel({
     [graph.nodes]
   );
   return (
-    <section className="grid gap-3 rounded-md border border-border bg-card p-3" data-testid="ontology-node-details-panel">
+    <section className="grid gap-3 rounded-md border border-border bg-surface p-3" data-testid="ontology-node-details-panel">
       <div className="flex items-center gap-2">
-        <Info size={16} className="text-primary" aria-hidden="true" />
-        <h3 className="text-sm font-semibold text-foreground">
+        <Info size={16} className="text-accent-fg" aria-hidden="true" />
+        <h3 className="text-sm font-semibold text-fg">
           {t("ontologyPlayground.inspector.nodeDetails")}
         </h3>
       </div>
       {!node ? (
         <div className="grid gap-3">
-          <p className="text-sm leading-6 text-muted">{t("ontologyPlayground.inspector.nodeEmpty")}</p>
+          <p className="text-sm leading-6 text-fg-muted">{t("ontologyPlayground.inspector.nodeEmpty")}</p>
           <div className="grid gap-2" data-testid="ontology-inspector-node-picker">
-            <p className="text-xs font-semibold text-muted">
+            <p className="text-xs font-semibold text-fg-muted">
               {t("ontologyPlayground.inspector.nodePicker")}
             </p>
             <div
@@ -486,12 +489,12 @@ function OntologyNodeDetailsPanel({
                   <button
                     key={item.id}
                     type="button"
-                    className={`grid min-w-0 cursor-pointer gap-0.5 rounded-md border border-border bg-background px-3 py-2 text-left outline-none transition-colors hover:border-primary/50 focus-visible:ring-2 focus-visible:ring-ring/40 motion-reduce:transition-none ${INFORMATION_LIST_ROW_CLASS}`}
+                    className={`grid min-w-0 cursor-pointer gap-0.5 rounded-md border border-border bg-surface-sunken px-3 py-2 text-left outline-none transition-colors hover:border-accent-emphasis focus-visible:ring-2 focus-visible:ring-focus-ring motion-reduce:transition-none ${INFORMATION_LIST_ROW_CLASS}`}
                     onClick={() => onSelectNode(item.id)}
                     data-testid={`ontology-inspector-node-${item.id}`}
                   >
-                    <span className="text-xs font-semibold text-muted">{display.kindLabel}</span>
-                    <span className="break-words text-sm font-medium text-foreground">
+                    <span className="text-xs font-semibold text-fg-muted">{display.kindLabel}</span>
+                    <span className="break-words text-sm font-medium text-fg">
                       {display.primaryLabel}
                     </span>
                   </button>
@@ -509,18 +512,18 @@ function OntologyNodeDetailsPanel({
               label={validationLabel(node.validation_status ?? "unreviewed")}
             />
           </div>
-          <p className="break-words text-sm font-semibold text-foreground">{node.business_name_ja}</p>
+          <p className="break-words text-sm font-semibold text-fg">{node.business_name_ja}</p>
           {ontologyNodeDisplay(node).secondaryLabel ? (
-            <p className="break-all font-mono text-xs leading-5 text-muted">
+            <p className="break-all font-mono text-xs leading-5 text-fg-muted">
               {ontologyNodeDisplay(node).secondaryLabel}
             </p>
           ) : null}
           {node.metadata?.definition && typeof node.metadata.definition === "object" && !Array.isArray(node.metadata.definition) ? <DefinitionFields definition={node.metadata.definition as Record<string, unknown>} /> : null}
           {node.description_ja || node.description ? (
-            <p className="text-sm leading-6 text-muted">{node.description_ja || node.description}</p>
+            <p className="text-sm leading-6 text-fg-muted">{node.description_ja || node.description}</p>
           ) : null}
           {node.aliases?.length ? (
-            <p className="text-xs leading-5 text-muted">
+            <p className="text-xs leading-5 text-fg-muted">
               {t("ontologyPlayground.inspector.aliases")}: {node.aliases.join("、")}
             </p>
           ) : null}
@@ -540,10 +543,10 @@ function OntologyRelationshipListPanel({
   onSelectEdge: (edgeId: string) => void;
 }) {
   return (
-    <section className="grid gap-3 rounded-md border border-border bg-card p-3" data-testid="ontology-inspector-relationships">
+    <section className="grid gap-3 rounded-md border border-border bg-surface p-3" data-testid="ontology-inspector-relationships">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="flex items-center gap-2 text-sm font-semibold text-foreground">
-          <Network size={16} className="text-primary" aria-hidden="true" />
+        <h3 className="flex items-center gap-2 text-sm font-semibold text-fg">
+          <Network size={16} className="text-accent-fg" aria-hidden="true" />
           {t("ontologyPlayground.inspector.relationships")}
         </h3>
         <StatusBadge variant="neutral" label={t("ontologyPlayground.inspector.relationshipCount", { count: rows.length })} />
@@ -569,7 +572,7 @@ function OntologyRelationshipListPanel({
 function OntologyErDetailsPanel({ details }: { details: OntologyErDetails }) {
   return (
     <section
-      className="grid gap-4 rounded-md border border-border bg-card p-3"
+      className="grid gap-4 rounded-md border border-border bg-surface p-3"
       aria-labelledby="ontology-er-details-title"
       data-testid="ontology-er-details-panel"
     >
@@ -577,13 +580,13 @@ function OntologyErDetailsPanel({ details }: { details: OntologyErDetails }) {
         <div className="min-w-0">
           <h3
             id="ontology-er-details-title"
-            className="flex items-center gap-2 text-sm font-semibold text-foreground"
+            className="flex items-center gap-2 text-sm font-semibold text-fg"
           >
-            <Table2 size={16} className="text-primary" aria-hidden="true" />
+            <Table2 size={16} className="text-accent-fg" aria-hidden="true" />
             {t("ontologyPlayground.erDetailsTitle")}
           </h3>
           <p
-            className="mt-1 break-all font-mono text-xs leading-5 text-muted"
+            className="mt-1 break-all font-mono text-xs leading-5 text-fg-muted"
             data-testid="ontology-er-detail-object-name"
           >
             {details.objectName}
@@ -604,56 +607,56 @@ function OntologyErDetailsPanel({ details }: { details: OntologyErDetails }) {
           data-testid="ontology-er-columns"
         >
           <table className="min-w-[48rem] w-full table-fixed border-collapse text-sm">
-            <thead className="sticky top-0 z-10 bg-background">
+            <thead className="sticky top-0 z-10 bg-surface-sunken">
               <tr className="h-10">
                 <th
                   scope="col"
-                  className="w-[24%] px-3 py-2 text-left text-xs font-semibold text-foreground"
+                  className="w-[24%] px-3 py-2 text-left text-xs font-semibold text-fg"
                 >
                   {t("ontologyPlayground.erColumnName")}
                 </th>
                 <th
                   scope="col"
-                  className="w-[16%] px-3 py-2 text-left text-xs font-semibold text-foreground"
+                  className="w-[16%] px-3 py-2 text-left text-xs font-semibold text-fg"
                 >
                   {t("ontologyPlayground.erDataType")}
                 </th>
                 <th
                   scope="col"
-                  className="w-[12%] px-3 py-2 text-left text-xs font-semibold text-foreground"
+                  className="w-[12%] px-3 py-2 text-left text-xs font-semibold text-fg"
                 >
                   {t("ontologyPlayground.erKeyRole")}
                 </th>
                 <th
                   scope="col"
-                  className="w-[22%] px-3 py-2 text-left text-xs font-semibold text-foreground"
+                  className="w-[22%] px-3 py-2 text-left text-xs font-semibold text-fg"
                 >
                   {t("ontologyPlayground.erBusinessName")}
                 </th>
                 <th
                   scope="col"
-                  className="w-[26%] px-3 py-2 text-left text-xs font-semibold text-foreground"
+                  className="w-[26%] px-3 py-2 text-left text-xs font-semibold text-fg"
                 >
                   {t("ontologyPlayground.erDescription")}
                 </th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-border bg-card">
+            <tbody className="divide-y divide-border bg-surface">
               {details.columns.map((column) => (
                 <tr
                   key={column.id}
                   className={INFORMATION_TABLE_ROW_CLASS}
                   data-testid={`ontology-er-column-${column.id}`}
                 >
-                  <td className="break-all px-3 py-3 font-mono text-xs leading-5 text-foreground">
+                  <td className="break-all px-3 py-3 font-mono text-xs leading-5 text-fg">
                     {column.columnName}
                   </td>
-                  <td className="break-all px-3 py-3 font-mono text-xs leading-5 text-muted">
+                  <td className="break-all px-3 py-3 font-mono text-xs leading-5 text-fg-muted">
                     {column.dataType}
                   </td>
-                  <td className="px-3 py-3 text-foreground">{erKeyRoleLabel(column.keyRole)}</td>
-                  <td className="break-words px-3 py-3 text-foreground">{column.businessNameJa}</td>
-                  <td className="break-words px-3 py-3 text-muted">{column.descriptionJa || "-"}</td>
+                  <td className="px-3 py-3 text-fg">{erKeyRoleLabel(column.keyRole)}</td>
+                  <td className="break-words px-3 py-3 text-fg">{column.businessNameJa}</td>
+                  <td className="break-words px-3 py-3 text-fg-muted">{column.descriptionJa || "-"}</td>
                 </tr>
               ))}
             </tbody>
@@ -664,7 +667,7 @@ function OntologyErDetailsPanel({ details }: { details: OntologyErDetails }) {
       )}
 
       <div className="grid gap-2" data-testid="ontology-er-joins">
-        <h4 className="text-xs font-semibold text-muted">
+        <h4 className="text-xs font-semibold text-fg-muted">
           {t("ontologyPlayground.erJoinConditions")}
         </h4>
         {details.joins.length > 0 ? (
@@ -672,26 +675,26 @@ function OntologyErDetailsPanel({ details }: { details: OntologyErDetails }) {
             {details.joins.map((join) => (
               <div
                 key={join.id}
-                className="grid gap-1 rounded-md border border-border bg-background px-3 py-2"
+                className="grid gap-1 rounded-md border border-border bg-surface-sunken px-3 py-2"
                 data-testid={`ontology-er-join-${join.id}`}
               >
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-sm font-semibold text-foreground">
+                  <span className="text-sm font-semibold text-fg">
                     {join.relationshipNameJa}
                   </span>
-                  <span className="text-xs text-muted">{join.cardinality}</span>
+                  <span className="text-xs text-fg-muted">{join.cardinality}</span>
                 </div>
-                <p className="text-xs leading-5 text-muted">
+                <p className="text-xs leading-5 text-fg-muted">
                   {join.sourceLabel} → {join.targetLabel}
                 </p>
-                <code className="break-all rounded bg-muted/30 px-2 py-1 font-mono text-xs leading-5 text-foreground">
+                <code className="break-all rounded bg-surface-hover px-2 py-1 font-mono text-xs leading-5 text-fg">
                   {join.joinCondition}
                 </code>
               </div>
             ))}
           </div>
         ) : (
-          <p className="text-sm leading-6 text-muted">{t("ontologyPlayground.erJoinsEmpty")}</p>
+          <p className="text-sm leading-6 text-fg-muted">{t("ontologyPlayground.erJoinsEmpty")}</p>
         )}
       </div>
     </section>
@@ -868,13 +871,9 @@ export function OntologyQueryPlayground({
                   size="sm"
                   loading={refreshingSchema}
                   disabled={refreshingSchema}
-                  onClick={() => void onRefreshSchema()}
-                >
-                  <RefreshCw size={15} aria-hidden="true" />
+                  onClick={() => void onRefreshSchema()} icon={RefreshCw}>
                   <span>
-                    {refreshingSchema
-                      ? t("profiles.schemaRefresh.status.running")
-                      : t("profiles.schemaRefresh.action")}
+                    {t("profiles.schemaRefresh.action")}
                   </span>
                 </Button>
               ) : undefined
@@ -912,7 +911,7 @@ export function OntologyQueryPlayground({
           title={t("ontologyPlayground.emptyTitle")}
           hint={t("ontologyPlayground.emptyHint")}
           action={
-            <p className="text-xs font-medium leading-5 text-muted">
+            <p className="text-xs font-medium leading-5 text-fg-muted">
               {t("ontologyPlayground.emptyFlow")}
             </p>
           }
@@ -928,7 +927,7 @@ export function OntologyQueryPlayground({
           >
             <label
               htmlFor="ontology-playground-question"
-              className="text-sm font-medium text-foreground"
+              className="text-sm font-medium text-fg"
             >
               {t("ontologyPlayground.questionLabel")}
             </label>
@@ -940,7 +939,7 @@ export function OntologyQueryPlayground({
                 onChange={(event) => handleQuestionChange(event.currentTarget.value)}
                 placeholder={t("ontologyPlayground.questionPlaceholder")}
                 data-testid="ontology-playground-question"
-                className="h-11 min-h-[44px] w-full min-w-0 rounded-md border border-border bg-card px-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted/70 focus-visible:border-primary focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"
+                className="h-11 min-h-[44px] w-full min-w-0 rounded-md border border-border-control bg-surface px-3 text-sm text-fg outline-none transition-colors placeholder:text-fg-muted focus-visible:border-focus-ring focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus-ring"
               />
               <Button
                 type="submit"
@@ -948,9 +947,7 @@ export function OntologyQueryPlayground({
                 size="lg"
                 touchTarget className="w-full whitespace-nowrap sm:w-auto"
                 disabled={!question.trim()}
-                data-testid="ontology-playground-run"
-              >
-                <Search size={15} aria-hidden="true" />
+                data-testid="ontology-playground-run" icon={Search}>
                 <span>{t("ontologyPlayground.run")}</span>
               </Button>
               <Button
@@ -962,9 +959,7 @@ export function OntologyQueryPlayground({
                 loading={serverSearch.status === "loading"}
                 onClick={() => void runServerSearch()}
                 title={t("ontologyPlayground.serverSearch.hint")}
-                data-testid="ontology-playground-server-search"
-              >
-                <ServerCog size={15} aria-hidden="true" />
+                data-testid="ontology-playground-server-search" icon={ServerCog}>
                 <span>{t("ontologyPlayground.serverSearch.run")}</span>
               </Button>
               <ClearActionButton
@@ -980,27 +975,27 @@ export function OntologyQueryPlayground({
           {selectedEdgeId && (() => { const definition = graph?.edges.find(e=>e.id===selectedEdgeId)?.metadata?.definition; return definition && typeof definition === "object" && !Array.isArray(definition) ? <section aria-label={t("ontologyResults.kind.link_type")} className="rounded-md border border-border p-3"><h3 className="text-sm font-semibold">{t("ontologyResults.kind.link_type")}</h3><DefinitionFields definition={definition as Record<string, unknown>} /></section> : null; })()}
           {!result ? (
             <div
-              className="rounded-md border border-border bg-muted/20 px-3 py-2"
+              className="rounded-md border border-border bg-surface-hover px-3 py-2"
               data-testid="ontology-playground-ready-state"
             >
-              <p className="text-sm leading-6 text-foreground">
+              <p className="text-sm leading-6 text-fg">
                 {t("ontologyPlayground.readyHint")}
               </p>
             </div>
           ) : null}
           {result ? (
             <div
-              className="grid gap-1 rounded-md border border-border bg-card p-3"
+              className="grid gap-1 rounded-md border border-border bg-surface p-3"
               aria-live="polite"
               data-testid="ontology-playground-result"
             >
-              <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+              <p className="text-xs font-semibold uppercase tracking-wide text-fg-muted">
                 {t(STAGE_LABEL_KEYS[result.stage])}
               </p>
-              <p className="text-sm leading-6 text-foreground">{result.explanationJa}</p>
+              <p className="text-sm leading-6 text-fg">{result.explanationJa}</p>
               <QuestionMatchedSpans question={question} result={result} />
               {result.suggestionsJa.length > 0 ? (
-                <p className="text-sm text-muted">
+                <p className="text-sm text-fg-muted">
                   {t("ontologyPlayground.suggestions")}: {result.suggestionsJa.join("、")}
                 </p>
               ) : null}
@@ -1021,7 +1016,7 @@ export function OntologyQueryPlayground({
             <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(22rem,26rem)] xl:items-start">
               <section className="order-2 grid gap-2 xl:order-1" aria-label={t("ontologyPlayground.graphSection")}>
                 <div className="flex items-center justify-between gap-2 xl:hidden">
-                  <h3 className="text-sm font-semibold text-foreground">
+                  <h3 className="text-sm font-semibold text-fg">
                     {t("ontologyPlayground.graphSection")}
                   </h3>
                   <Button
@@ -1032,7 +1027,7 @@ export function OntologyQueryPlayground({
                     aria-expanded={mobileGraphOpen}
                     aria-controls="ontology-playground-graph-region"
                   >
-                    <DisclosureChevron expanded={mobileGraphOpen} size={15} />
+                    <DisclosureChevron expanded={mobileGraphOpen} size={16} />
                     <span>
                       {mobileGraphOpen
                         ? t("ontologyPlayground.graphCollapse")

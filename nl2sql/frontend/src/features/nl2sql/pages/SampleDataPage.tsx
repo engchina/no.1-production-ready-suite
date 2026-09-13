@@ -2,12 +2,15 @@ import { useResetExecutionConsent, useWorkspaceActivation, useWorkspaceState } f
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Database, FileSpreadsheet, RefreshCw, Trash2 } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
-import { toast } from "@engchina/production-ready-ui";
+import {
+  Button,
+  toast,
+  StatusBadge,
+  PageHeader,
+  PageBody,
+} from "@engchina/production-ready-ui";
 
-import { PageHeader } from "@/components/PageHeader";
 import { PageNotice } from "@/components/page-notice";
-import { StatusBadge } from "@/components/ui/status-badge";
 import { apiGet, apiPost, isAbortError } from "@/lib/api";
 import { formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
@@ -70,9 +73,9 @@ function schemaRefreshErrorMessage(job: SchemaRefreshJob) {
 
 function SampleObjectSummary({ sampleInfo }: { sampleInfo: SampleDataInfo | null }) {
   return (
-    <section className="grid gap-2 rounded-md border border-border bg-background p-3 text-sm">
+    <section className="grid gap-2 rounded-md border border-border bg-surface-sunken p-3 text-sm">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="font-semibold text-foreground">{t("dataTools.sample.objects")}</p>
+        <p className="font-semibold text-fg">{t("dataTools.sample.objects")}</p>
         <div className="flex flex-wrap items-center gap-2">
           <span className="sr-only" data-testid="sample-data-object-count">
             {formatNumber(sampleInfo?.objects.length ?? 0)}
@@ -107,10 +110,10 @@ function SampleSqlPreview({ sql }: { sql: string }) {
   return (
     <section className="grid gap-2">
       <div>
-        <p className="font-semibold text-foreground">{t("dataTools.sample.sqlPreview")}</p>
-        <p className="mt-1 text-sm text-muted">{t("dataTools.sample.sqlPreviewHint")}</p>
+        <p className="font-semibold text-fg">{t("dataTools.sample.sqlPreview")}</p>
+        <p className="mt-1 text-sm text-fg-muted">{t("dataTools.sample.sqlPreviewHint")}</p>
       </div>
-      <pre className="max-h-80 overflow-auto rounded-md border border-border bg-code p-3 text-sm leading-6 text-code-fg">
+      <pre data-surface="code" className="max-h-80 overflow-auto rounded-md border border-border bg-surface p-3 text-sm leading-6 text-fg">
         <code>{sql || "-"}</code>
       </pre>
     </section>
@@ -335,7 +338,7 @@ export function SampleDataPage() {
           },
         ]}
       />
-      <main className="grid gap-4 p-4 lg:p-8">
+      <PageBody className="grid gap-4">
         <PageNotice
           notice={
             message
@@ -357,9 +360,7 @@ export function SampleDataPage() {
                 schemaRefreshNeedsFull
                   ? () => void refreshSchema()
                   : () => void load()
-              }
-            >
-              <RefreshCw size={15} aria-hidden="true" />
+              } icon={RefreshCw}>
               <span>
                 {schemaRefreshNeedsFull
                   ? t("common.action.schemaRefresh")
@@ -370,7 +371,7 @@ export function SampleDataPage() {
         />
 
         <section className="grid min-w-0 gap-2" aria-label={t("dataTools.sample.dataset.label")}>
-          <label className="grid gap-1 text-sm font-medium text-foreground">
+          <label className="grid gap-1 text-sm font-medium text-fg">
             <span>{t("dataTools.sample.dataset.label")}</span>
             <select
               value={dataset}
@@ -386,13 +387,13 @@ export function SampleDataPage() {
                 setSchemaRefreshJobId("");
                 setDataset(event.currentTarget.value as SampleDataset);
               }}
-              className="min-h-11 w-full min-w-0 rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:ring-2 focus:ring-ring/40 sm:max-w-md"
+              className="min-h-11 w-full min-w-0 rounded-md border border-border-control bg-surface px-3 py-2 focus:border-focus-ring focus:ring-2 focus:ring-focus-ring sm:max-w-md"
             >
               {SAMPLE_DATASETS.map((item) => <option key={item} value={item}>{t(`dataTools.sample.dataset.${item}`)}</option>)}
             </select>
           </label>
-          <p id="sample-data-dataset-description" className="text-sm text-muted">{t(`dataTools.sample.dataset.${dataset}.description`)}</p>
-          <p className="text-sm text-muted">{t(`dataTools.sample.dataset.${dataset}.example`)}</p>
+          <p id="sample-data-dataset-description" className="text-sm text-fg-muted">{t(`dataTools.sample.dataset.${dataset}.description`)}</p>
+          <p className="text-sm text-fg-muted">{t(`dataTools.sample.dataset.${dataset}.example`)}</p>
         </section>
 
         <DbObjectManagementTabs
@@ -443,13 +444,13 @@ export function SampleDataPage() {
               />
 
               {!isDeleteAction && (
-                <label className="grid gap-1 text-sm font-medium text-foreground">
+                <label className="grid gap-1 text-sm font-medium text-fg">
                   <span>{t("dataTools.sample.step")}</span>
                   <select
                     value={sampleStep}
                     disabled={Boolean(loading)}
                     onChange={(event) => setSampleStep(event.currentTarget.value as SampleStep)}
-                    className="min-h-11 rounded-md border border-border bg-card px-3 py-2 focus:border-primary focus:ring-2 focus:ring-ring/40"
+                    className="min-h-11 rounded-md border border-border-control bg-surface px-3 py-2 focus:border-focus-ring focus:ring-2 focus:ring-focus-ring"
                   >
                     {SAMPLE_STEPS.map((step) => (
                       <option key={step} value={step}>
@@ -478,7 +479,7 @@ export function SampleDataPage() {
                     disabled={Boolean(loading) || !confirmationMatched || !sampleInfo}
                     onClick={() => void (isDeleteAction ? deleteSampleData() : importSampleData())}
                   >
-                    {isDeleteAction ? <Trash2 size={15} aria-hidden="true" /> : <FileSpreadsheet size={15} aria-hidden="true" />}
+                    {isDeleteAction ? <Trash2 size={16} aria-hidden="true" /> : <FileSpreadsheet size={16} aria-hidden="true" />}
                     <span>{actionTitle}</span>
                   </Button>
                 }
@@ -512,7 +513,7 @@ export function SampleDataPage() {
             </section>
           )}
         </DbObjectManagementPanelShell>
-      </main>
+      </PageBody>
     </>
   );
 }

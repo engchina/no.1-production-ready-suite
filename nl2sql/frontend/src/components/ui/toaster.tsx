@@ -1,8 +1,16 @@
 import { X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { cn, useToastStore, toneIcon, toneRole, toneText, MessageText, type ToastItem } from "@engchina/production-ready-ui";
-import { Button } from "./button";
+import {
+  cn,
+  useToastStore,
+  toneIcon,
+  toneRole,
+  toneText,
+  MessageText,
+  type ToastItem,
+  Button,
+} from "@engchina/production-ready-ui";
 import { t } from "@/lib/i18n";
 
 export interface ToasterProps {
@@ -29,13 +37,14 @@ export function Toaster({
   useEffect(() => setMounted(true), []);
   if (!mounted) return null;
 
+  // 通知はモーダルの下に置く（z-dialog − 1）。モーダル外は操作できないため、上に重ねると確認ダイアログのボタンを塞ぐ。
   return createPortal(
     <div
       role="region"
       aria-label={regionLabel}
       aria-live="polite"
       aria-relevant="additions"
-      className="pointer-events-none fixed z-[45] flex max-h-[calc(100dvh-2rem)] w-[min(92vw,22rem)] flex-col gap-2 overflow-y-auto"
+      className="pointer-events-none fixed z-[calc(var(--z-dialog)-1)] flex max-h-[calc(100dvh-2rem)] w-[min(92vw,22rem)] flex-col gap-2 overflow-y-auto"
       style={{
         bottom: "max(1rem, env(safe-area-inset-bottom))",
         ...(placement === "bottom-left"
@@ -58,15 +67,15 @@ function ToastCard({ item, dismissLabel }: { item: ToastItem; dismissLabel: stri
   return (
     <div
       role={toneRole(item.tone)}
-      className="animate-toast-in pointer-events-auto flex items-start gap-2.5 rounded-lg border border-border bg-card px-3.5 py-3 shadow-lg"
+      className="animate-toast-in pointer-events-auto flex items-start gap-2.5 rounded-lg border border-border bg-surface px-3.5 py-3 shadow-lg"
     >
       <Icon size={16} className={cn("mt-0.5 shrink-0", toneText[item.tone])} aria-hidden />
       <div className="min-w-0 flex-1">
-        <p className="text-sm font-medium leading-relaxed text-foreground">
+        <p className="text-sm font-medium leading-relaxed text-fg">
           <MessageText text={item.message} />
         </p>
         {item.description ? (
-          <p className="mt-0.5 text-xs leading-relaxed text-muted">
+          <p className="mt-0.5 text-xs leading-relaxed text-fg-muted">
             <MessageText text={item.description} />
           </p>
         ) : null}
@@ -91,10 +100,8 @@ function ToastCard({ item, dismissLabel }: { item: ToastItem; dismissLabel: stri
         type="button"
         onClick={() => dismiss(item.id)}
         aria-label={dismissLabel}
-        iconOnly touchTarget
-      >
-        <X size={14} aria-hidden />
-      </Button>
+        iconOnly touchTarget icon={X}>
+        </Button>
     </div>
   );
 }

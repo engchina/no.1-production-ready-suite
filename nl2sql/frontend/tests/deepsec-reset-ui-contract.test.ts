@@ -76,7 +76,7 @@ test("DeepSec foundation apply は step card 内ではなく外側 neutral secti
 });
 
 test("DeepSec reset confirmation は大きな赤い外枠で実行計画前に常設しない", () => {
-  assert.doesNotMatch(foundationPanel, /rounded-md border border-danger\/30 bg-danger-bg\/40 p-3/u);
+  assert.doesNotMatch(foundationPanel, /rounded-md border border-danger-border bg-danger-subtle p-3/u);
 
   const planTitleIndex = foundationPanel.indexOf("security-deepsec-foundation-plan-title");
   const resetConfirmationIndex = foundationPanel.indexOf("ADMIN_RESET_CONFIRMATION");

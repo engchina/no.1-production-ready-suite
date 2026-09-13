@@ -18,7 +18,7 @@ const migratedPages = [
 ].map((path) => readFileSync(new URL(path, import.meta.url), "utf8"));
 
 test("BulkSelectionActions uses shared Button variants for select and clear", () => {
-  assert.match(source, /from "@\/components\/ui\/button"/u);
+  assert.match(source, /from "@engchina\/production-ready-ui"/u);
   assert.match(source, /variant="secondary"/u);
   assert.match(source, /variant="ghost"/u);
   assert.match(source, /size = "sm"/u);

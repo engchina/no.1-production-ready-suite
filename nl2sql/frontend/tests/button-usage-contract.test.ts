@@ -10,19 +10,15 @@ function files(dir: string): string[] {
     entry.isDirectory() ? files(join(dir, entry.name)) : entry.name.endsWith(".tsx") ? [join(dir, entry.name)] : []);
 }
 
-test("アクションはアプリ共通 Button を使い、raw button は選択・ナビ・入力部品に限定する", () => {
+test("アクションは共有 UI パッケージの Button を使い、raw button は選択・ナビ・入力部品に限定する", () => {
   const violations: string[] = [];
   for (const file of files(root)) {
     const path = relative(root, file);
-    if (path === "components/ui/button.tsx") continue;
     const source = ts.createSourceFile(file, readFileSync(file, "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
     function visit(node: ts.Node) {
-      if (ts.isImportDeclaration(node) && node.moduleSpecifier.getText(source).includes("@engchina/production-ready-ui")) {
-        const imports = node.importClause?.namedBindings;
-        if (imports && ts.isNamedImports(imports) && imports.elements.some(item =>
-          ["Button", "buttonVariants", "Pagination", "ErrorState", "Toaster", "ToggleChip"].includes((item.propertyName ?? item.name).text))) {
-          violations.push(`${path}: action component bypasses local Button`);
-        }
+      // 独自 Button（旧 components/ui/button）は共有 Button に昇格済み。再実装への依存を戻さない。
+      if (ts.isImportDeclaration(node) && /["'](?:@\/components\/ui\/button|\.\/button)["']/u.test(node.moduleSpecifier.getText(source))) {
+        violations.push(`${path}: local Button を import している（共有 Button を使う）`);
       }
       if ((ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) && node.tagName.getText(source) === "button") {
         const attributes = node.attributes.getText(source);

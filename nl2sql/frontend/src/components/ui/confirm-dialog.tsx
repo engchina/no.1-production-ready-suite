@@ -9,11 +9,15 @@ import {
   type ReactNode,
 } from "react";
 
-import { MessageText, toneIcon, type FeedbackTone } from "@engchina/production-ready-ui";
+import {
+  MessageText,
+  toneIcon,
+  type FeedbackTone,
+  Button,
+} from "@engchina/production-ready-ui";
 
 import { useLocation } from "react-router-dom";
 
-import { Button } from "@/components/ui/button";
 import { DialogOverlayPortal } from "@/components/ui/dialog-overlay";
 import { t } from "@/lib/i18n";
 
@@ -162,15 +166,15 @@ function ConfirmDialog({
 
   const confirmVariant = tone === "danger" ? "danger" : "primary";
   const toneClass =
-    tone === "danger" ? "text-danger" : tone === "warning" ? "text-warning" : "text-info";
+    tone === "danger" ? "text-danger-fg" : tone === "warning" ? "text-warning-fg" : "text-info-fg";
   const iconClass =
     tone === "danger"
-      ? "border-danger/30 text-danger"
+      ? "border-danger-border text-danger-fg"
       : tone === "warning"
-        ? "border-warning/30 text-warning"
-        : "border-info/30 text-info";
+        ? "border-warning-border text-warning-fg"
+        : "border-info-border text-info-fg";
   const panelClass =
-    "animate-dialog-in max-h-[90dvh] w-full max-w-md overflow-auto rounded-md border border-border bg-card shadow-xl";
+    "animate-dialog-in max-h-[90dvh] w-full max-w-md overflow-auto rounded-md border border-border bg-surface-overlay shadow-[var(--shadow-dialog)]";
 
   return (
     <DialogOverlayPortal
@@ -186,28 +190,28 @@ function ConfirmDialog({
         aria-describedby={description ? descriptionId : undefined}
         className={panelClass}
       >
-        <div className="flex items-start gap-3 bg-card px-5 pt-5">
+        <div className="flex items-start gap-3 bg-surface-overlay px-5 pt-5">
           <span
-            className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full border bg-background ${iconClass}`}
+            className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full border bg-surface-sunken ${iconClass}`}
           >
-            <Icon size={18} aria-hidden />
+            <Icon size={20} aria-hidden />
           </span>
           <div className="min-w-0 flex-1">
             <h2 id={titleId} className={`text-base font-semibold ${toneClass}`}>
               <MessageText text={title} />
             </h2>
             {description ? (
-              <p id={descriptionId} className="mt-1 text-sm leading-relaxed text-muted">
+              <p id={descriptionId} className="mt-1 text-sm leading-relaxed text-fg-muted">
                 <MessageText text={description} />
               </p>
             ) : null}
           </div>
         </div>
-        <div className="mt-5 flex justify-end gap-[8px] border-t border-border bg-background px-5 py-4">
-          <Button variant="secondary" size="sm" onClick={onCancel}>
+        <div className="mt-5 flex justify-end gap-[8px] border-t border-border bg-surface-sunken px-5 py-4">
+          <Button type="button" variant="secondary" size="sm" onClick={onCancel}>
             {options.cancelLabel ?? labels.cancel}
           </Button>
-          <Button ref={confirmRef} variant={confirmVariant} size="sm" onClick={onConfirm}>
+          <Button type="button" ref={confirmRef} variant={confirmVariant} size="sm" onClick={onConfirm}>
             {options.confirmLabel ?? labels.confirm}
           </Button>
         </div>

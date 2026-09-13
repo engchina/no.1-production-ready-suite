@@ -20,7 +20,7 @@ import { WorkspaceBoundary, WorkspaceDraftWarning, WorkspacePage } from "@/compo
 import { useDatabaseStatus } from "@/lib/queries";
 
 import { AppSidebar } from "@/components/layout/AppSidebar";
-import { PageHeader } from "@/components/PageHeader";
+import { PageHeader, AppShell, PageBody } from "@engchina/production-ready-ui";
 import { TimedLoadingState } from "@/components/ProcessingState";
 import { DatabaseGate } from "@/components/system/DatabaseGate";
 import { SyntheticRunNotifications } from "@/features/nl2sql/syntheticRuns";
@@ -237,7 +237,7 @@ function PublicRoute({ element }: { element: ReactNode }) {
 
 function FullPageRouteLoadingFallback() {
   return (
-    <main className="flex min-h-screen items-center justify-center bg-background p-4">
+    <main className="flex min-h-screen items-center justify-center bg-canvas p-4">
       <TimedLoadingState
         label={t("app.route.loading")}
         operationKey="route-loading-full"
@@ -250,14 +250,14 @@ function FullPageRouteLoadingFallback() {
 
 function RouteLoadingFallback() {
   return (
-    <div className="p-8">
+    <PageBody>
       <TimedLoadingState
         label={t("app.route.loading")}
         operationKey="route-loading"
         placement="page"
         testId="route-loading"
       />
-    </div>
+    </PageBody>
   );
 }
 
@@ -267,7 +267,7 @@ function AuthenticatedApplication() {
 
   if (auth.status === "loading") {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-background p-4">
+      <main className="flex min-h-screen items-center justify-center bg-canvas p-4">
         <TimedLoadingState
           label={t("auth.loading")}
           operationKey="auth-session"
@@ -390,7 +390,11 @@ function KeepAlivePages() {
 function AppLayout({ children }: { children: ReactNode }) {
   const location = useLocation();
   const navigationType = useNavigationType();
+  // AppShell が出力する <main id="pr-main">（スキップリンクの移動先と同じ公開 ID）をスクロール復元に使う。
   const mainRef = useRef<HTMLElement | null>(null);
+  useLayoutEffect(() => {
+    mainRef.current = document.getElementById("pr-main");
+  });
   const setSidebarCollapsed = useUiStore((state) => state.setSidebarCollapsed);
 
   useEffect(() => () => { mainScrollPositions.clear(); }, []);
@@ -398,17 +402,9 @@ function AppLayout({ children }: { children: ReactNode }) {
   useMainScrollRestoration(mainRef, location, navigationType);
 
   return (
-    <div className="flex">
-      <AppSidebar />
-      <main
-        ref={mainRef}
-        className="h-screen min-w-0 flex-1 overflow-y-auto [contain:layout] focus:outline-none"
-        aria-label="メイン領域"
-        tabIndex={-1}
-      >
-        {children}
-      </main>
-    </div>
+    <AppShell sidebar={<AppSidebar />} mainClassName="[contain:layout]" skipLinkLabel={t("common.skipToMain")}>
+      {children}
+    </AppShell>
   );
 }
 
@@ -538,9 +534,9 @@ function SettingsSystemTablesRoute() {
         title={t("nav.settingsSystemTables")}
         subtitle={t("settings.systemTables.subtitle")}
       />
-      <div className="space-y-6 p-8">
+      <PageBody>
         <SystemTablesCard />
-      </div>
+      </PageBody>
     </>
   );
 }

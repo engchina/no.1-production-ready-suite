@@ -1,17 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { MessageSquareText, ThumbsDown, ThumbsUp } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
 import {
+  Button,
   Card,
   CardContent,
   CardHeader,
   CardTitle,
   toast,
+  StatusBadge,
+  FormStatus,
 } from "@engchina/production-ready-ui";
 
-import { FormStatus } from "@/components/ui/form-status";
-import { StatusBadge } from "@/components/ui/status-badge";
 import { apiPost } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { userFeedbackRatingBadgeLabel } from "../feedbackLabels";
@@ -105,10 +105,10 @@ export function SelectAiFeedbackAddPanel({
       <CardHeader className="flex flex-row items-start justify-between gap-4">
         <div className="space-y-2">
           <CardTitle className="flex items-center gap-2">
-            <MessageSquareText size={18} aria-hidden="true" />
+            <MessageSquareText size={20} aria-hidden="true" />
             {t("nl2sql.selectAiFeedbackAdd.title")}
           </CardTitle>
-          <p className="text-sm text-muted">{t("nl2sql.selectAiFeedbackAdd.description")}</p>
+          <p className="text-sm text-fg-muted">{t("nl2sql.selectAiFeedbackAdd.description")}</p>
         </div>
         {history?.feedback_rating && (
           <div className="flex flex-wrap justify-end gap-2">
@@ -120,24 +120,24 @@ export function SelectAiFeedbackAddPanel({
         )}
       </CardHeader>
       <CardContent className="grid gap-4">
-        <label className="grid gap-1 text-sm font-medium text-foreground">
+        <label className="grid gap-1 text-sm font-medium text-fg">
           <span>{t("nl2sql.selectAiFeedbackAdd.response")}</span>
-          <textarea
+          <textarea data-surface="code"
             value={generatedSql}
             readOnly
             rows={12}
-            className="min-h-72 rounded-md border border-border bg-code px-3 py-2 font-mono text-sm leading-6 text-code-fg outline-none"
+            className="min-h-72 rounded-md border border-border-control bg-surface px-3 py-2 font-mono text-sm leading-6 text-fg outline-none"
             placeholder={t("nl2sql.selectAiFeedbackAdd.responsePlaceholder")}
           />
         </label>
-        <label className="grid gap-1 text-sm font-medium text-foreground">
+        <label className="grid gap-1 text-sm font-medium text-fg">
           <span>{t("nl2sql.selectAiFeedbackAdd.content")}</span>
           <textarea
             disabled={savingRating !== null}
             value={feedbackContent}
             onChange={(event) => setFeedbackContent(event.currentTarget.value)}
             rows={3}
-            className="min-h-24 rounded-md border border-border bg-card px-3 py-2 text-sm leading-6 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40"
+            className="min-h-24 rounded-md border border-border-control bg-surface px-3 py-2 text-sm leading-6 outline-none focus:border-focus-ring focus:ring-2 focus:ring-focus-ring"
             placeholder={t("nl2sql.selectAiFeedbackAdd.contentPlaceholder")}
           />
         </label>
@@ -162,9 +162,7 @@ export function SelectAiFeedbackAddPanel({
               aria-pressed={history?.feedback_rating === "good"}
               loading={savingRating === "good"}
               disabled={savingRating !== null}
-              onClick={() => void submit("good")}
-            >
-              <ThumbsUp size={15} aria-hidden="true" />
+              onClick={() => void submit("good")} icon={ThumbsUp}>
               <span>{t("nl2sql.feedback.good")}</span>
             </Button>
             <Button
@@ -175,9 +173,7 @@ export function SelectAiFeedbackAddPanel({
               aria-pressed={history?.feedback_rating === "bad"}
               loading={savingRating === "bad"}
               disabled={savingRating !== null}
-              onClick={() => void submit("bad")}
-            >
-              <ThumbsDown size={15} aria-hidden="true" />
+              onClick={() => void submit("bad")} icon={ThumbsDown}>
               <span>{t("nl2sql.feedback.bad")}</span>
             </Button>
           </div>

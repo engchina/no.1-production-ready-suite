@@ -6,10 +6,16 @@ const actionResultRegionSource = readFileSync(
   new URL("../src/components/ActionResultRegion.tsx", import.meta.url),
   "utf8",
 );
-const buttonSource = readFileSync(
-  new URL("../src/components/ui/button.tsx", import.meta.url),
-  "utf8",
-);
+import { readdirSync } from "node:fs";
+import { join } from "node:path";
+import ts from "typescript";
+
+const srcRoot = new URL("../src/", import.meta.url).pathname;
+function sourceFiles(dir: string): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) =>
+    entry.isDirectory() ? sourceFiles(join(dir, entry.name)) : entry.name.endsWith(".tsx") ? [join(dir, entry.name)] : []
+  );
+}
 
 test("action result region keeps local actions from forcing page-top scroll", () => {
   assert.match(actionResultRegionSource, /export interface ActionResultRegionProps/u);
@@ -40,23 +46,20 @@ test("action result region uses minimal result/error scroll guidance", () => {
   assert.match(actionResultRegionSource, /prefers-reduced-motion: reduce/u);
 });
 
-test("app button defaults to non-submit actions unless explicitly overridden", () => {
-  assert.match(buttonSource, /type = "button"/u);
-  assert.match(buttonSource, /<BaseButton\s+type=\{type\}/u);
-  assert.match(buttonSource, /export type ButtonProps = BaseButtonProps/u);
-});
-
-test("app button variants restore safe Japanese text line height", () => {
-  assert.match(buttonSource, /BUTTON_TEXT_LAYOUT_CLASSNAME = "leading-5"/u);
-  assert.match(
-    buttonSource,
-    /sharedButtonVariants\(options\)[\s\S]*BUTTON_TEXT_LAYOUT_CLASSNAME[\s\S]*semanticVariantClass\(options\?\.variant\)/u
-  );
-  assert.match(
-    buttonSource,
-    /className=\{cn\([\s\S]*buttonVariants\(\{ variant, size, iconOnly, touchTarget, tone \}\)[\s\S]*className/u
-  );
-  assert.match(buttonSource, /bg-primary-fill text-primary-fill-foreground/u);
-  assert.match(buttonSource, /bg-danger-fill text-white/u);
-  assert.doesNotMatch(buttonSource, /\bleading-none\b/u);
+test("共有 Button はブラウザ既定の type（submit）になるため、アプリの Button は type を明示する", () => {
+  const missing: string[] = [];
+  for (const file of sourceFiles(srcRoot)) {
+    const source = ts.createSourceFile(file, readFileSync(file, "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    const visit = (node: ts.Node) => {
+      if ((ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) && node.tagName.getText(source) === "Button") {
+        const hasType = node.attributes.properties.some(
+          (attribute) => (ts.isJsxAttribute(attribute) && attribute.name.getText(source) === "type") || ts.isJsxSpreadAttribute(attribute)
+        );
+        if (!hasType) missing.push(`${file.slice(srcRoot.length)}:${source.getLineAndCharacterOfPosition(node.getStart()).line + 1}`);
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
+  }
+  assert.deepEqual(missing, []);
 });

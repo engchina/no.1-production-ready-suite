@@ -3,7 +3,11 @@ import { useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Play, RefreshCw, X } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
+import {
+  Button,
+  PageHeader,
+  PageBody,
+} from "@engchina/production-ready-ui";
 import { FieldLabel } from "@/components/ui/required-field";
 
 import { ActionResultRegion } from "@/components/ActionResultRegion";
@@ -11,7 +15,6 @@ import {
   ExecutionActivityPanel,
   type ExecutionActivityStatus,
 } from "@/components/ExecutionActivityPanel";
-import { PageHeader } from "@/components/PageHeader";
 import { PageNotice } from "@/components/page-notice";
 import { apiPost } from "@/lib/api";
 import type { OperationTimestamp } from "@/lib/operationTiming";
@@ -375,9 +378,7 @@ export function AdminSqlPage() {
         className="w-full sm:w-auto"
         loading={loading}
         disabled={!canExecute}
-        onClick={() => void execute()}
-      >
-        <Play size={16} aria-hidden="true" />
+        onClick={() => void execute()} icon={Play}>
         <span>{t("nl2sql.action.executeSql")}</span>
       </Button>
       <Button
@@ -386,9 +387,7 @@ export function AdminSqlPage() {
         size="lg"
         className="w-full sm:w-auto"
         disabled={!canClear || loading}
-        onClick={clear}
-      >
-        <X size={16} aria-hidden="true" />
+        onClick={clear} icon={X}>
         <span>{t("nl2sql.action.clearSql")}</span>
       </Button>
     </>
@@ -401,7 +400,7 @@ export function AdminSqlPage() {
         subtitle={t("nl2sql.adminSqlRunner.description")}
         status={<SchemaRefreshHeaderStatus testId="admin-sql-schema-refresh-status" />}
       />
-      <main className="grid gap-4 p-4 lg:p-8" data-testid="nl2sql-admin-sql">
+      <PageBody className="grid gap-4" data-testid="nl2sql-admin-sql">
         <PageNotice
           notice={
             visibleSchemaRefreshError
@@ -416,15 +415,13 @@ export function AdminSqlPage() {
                 size="sm"
                 loading={schemaRefreshing}
                 disabled={schemaRefreshing}
-                onClick={() => void refreshSchema()}
-              >
-                <RefreshCw size={15} aria-hidden="true" />
+                onClick={() => void refreshSchema()} icon={RefreshCw}>
                 <span>{t("common.action.schemaRefresh")}</span>
               </Button>
             ) : null
           }
         />
-        <section className="grid gap-4 rounded-md border border-border bg-card p-4">
+        <section className="grid gap-4 rounded-md border border-border bg-surface p-4">
           <div className="grid gap-2">
             <FieldLabel
               htmlFor="admin-sql-input"
@@ -439,7 +436,7 @@ export function AdminSqlPage() {
               rows={12}
               required
               aria-required="true"
-              className="min-h-64 rounded-md border border-border bg-card px-3 py-2 font-mono text-sm leading-6 outline-none focus:border-primary focus:ring-2 focus:ring-ring/40"
+              className="min-h-64 rounded-md border border-border-control bg-surface px-3 py-2 font-mono text-sm leading-6 outline-none focus:border-focus-ring focus:ring-2 focus:ring-focus-ring"
               placeholder={t("nl2sql.adminSqlRunner.placeholder")}
             />
           </div>
@@ -506,7 +503,7 @@ export function AdminSqlPage() {
             <SchemaRefreshProcessing testId="admin-sql-schema-refresh-processing" />
           ) : null}
         </section>
-      </main>
+      </PageBody>
     </>
   );
 }

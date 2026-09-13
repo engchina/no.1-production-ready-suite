@@ -27,11 +27,11 @@ test("ExecutionConfirmationField uses a stable neutral surface without a left da
     "export function QueryResultsTable",
   );
 
-  assert.match(component, /border border-border bg-background p-3/u);
+  assert.match(component, /border border-border bg-surface-sunken p-3/u);
   assert.doesNotMatch(component, /border-l-4 border-l-danger/u);
-  assert.doesNotMatch(component, /bg-danger-bg\/70/u);
-  assert.match(component, /border border-border bg-card/u);
-  assert.match(component, /focus:border-danger focus:ring-2 focus:ring-danger\/40/u);
+  assert.doesNotMatch(component, /bg-danger-subtle\/70/u);
+  assert.match(component, /border border-border-control bg-surface/u);
+  assert.match(component, /focus:border-danger-fg focus:ring-2 focus:ring-danger-border/u);
   assert.doesNotMatch(component, /tone\??:|isDanger/u);
 });
 
@@ -42,9 +42,9 @@ test("ExecutionConfirmationField keeps empty, mismatch, and confirmed status ton
     "export function QueryResultsTable",
   );
 
-  assert.match(component, /border-success\/30 bg-success-bg text-success/u);
-  assert.match(component, /border-danger\/30 bg-danger-bg text-danger/u);
-  assert.match(component, /border-border bg-card text-muted/u);
+  assert.match(component, /border-success-border bg-success-subtle text-success-fg/u);
+  assert.match(component, /border-danger-border bg-danger-subtle text-danger-fg/u);
+  assert.match(component, /border-border bg-surface text-fg-muted/u);
 });
 
 test("Drop object dialog does not wrap the confirmation field in a second danger surface", () => {
@@ -55,18 +55,18 @@ test("Drop object dialog does not wrap the confirmation field in a second danger
     "export function DropDbObjectDialog",
   );
 
-  assert.doesNotMatch(sourceText, /fieldset className="grid gap-3 rounded-md border border-danger\/30 bg-danger-bg\/70 p-3"/u);
+  assert.doesNotMatch(sourceText, /fieldset className="grid gap-3 rounded-md border border-danger-border bg-danger-subtle\/70 p-3"/u);
   assert.match(component, /<DialogOverlayPortal className="p-3 sm:items-center">/u);
   assert.match(overlaySource, /createPortal/u);
   assert.match(overlaySource, /document\.body/u);
-  assert.match(overlaySource, /fixed inset-0 z-50/u);
-  assert.match(overlaySource, /bg-black\/60/u);
-  assert.match(component, /border border-border bg-card shadow-xl/u);
-  assert.match(component, /border-b border-border bg-card/u);
-  assert.match(component, /border border-border bg-background px-3 py-2/u);
-  assert.match(component, /text-xs font-semibold text-foreground/u);
-  assert.match(component, /fieldset className="grid gap-3 rounded-md border border-border bg-background p-3"/u);
-  assert.match(component, /legend className="px-1 text-sm font-semibold text-foreground"/u);
+  assert.match(overlaySource, /fixed inset-0 z-\[var\(--z-dialog\)\]/u);
+  assert.match(overlaySource, /bg-\[var\(--scrim\)\]/u);
+  assert.match(component, /border border-border bg-surface-overlay shadow-\[var\(--shadow-dialog\)\]/u);
+  assert.match(component, /border-b border-border bg-surface-overlay/u);
+  assert.match(component, /border border-border bg-surface-sunken px-3 py-2/u);
+  assert.match(component, /text-xs font-semibold text-fg/u);
+  assert.match(component, /fieldset className="grid gap-3 rounded-md border border-border bg-surface-sunken p-3"/u);
+  assert.match(component, /legend className="px-1 text-sm font-semibold text-fg"/u);
   assert.doesNotMatch(component, /border-l-4 border-l-danger/u);
-  assert.doesNotMatch(component, /bg-danger-bg/u);
+  assert.doesNotMatch(component, /bg-danger-subtle/u);
 });

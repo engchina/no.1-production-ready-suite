@@ -1,4 +1,14 @@
-import { Button } from "@/components/ui/button";
+import {
+  Button,
+  Banner,
+  EmptyState,
+  toast,
+  StatusBadge,
+  PageHeader,
+  FieldError,
+  FormStatus,
+  PageBody,
+} from "@engchina/production-ready-ui";
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -12,23 +22,14 @@ import {
 } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 
-import {
-  Banner,
-  EmptyState,
-  toast,
-} from "@engchina/production-ready-ui";
 
-import { StatusBadge } from "@/components/ui/status-badge";
 
 import { BulkSelectionActions } from "@/components/BulkSelectionActions";
-import { PageHeader } from "@/components/PageHeader";
 import { ProcessingIndicator } from "@/components/ProcessingState";
 import { ErrorState, LoadingState } from "@/components/StateViews";
 import { usePageNotice, PageNotice } from "@/components/page-notice";
-import { FieldError } from "@/components/ui/field-error";
 import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
 import { FileDropzone } from "@/components/ui/file-dropzone";
-import { FormStatus } from "@/components/ui/form-status";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { FieldLabel, RequiredFieldsNote } from "@/components/ui/required-field";
 import { ApiError, apiDelete, apiFetch, apiGet, apiPost, apiPostForm } from "@/lib/api";
@@ -68,9 +69,9 @@ const TERMINAL_STATUSES = new Set<QualityEvaluationStatus>([
   "cancelled",
 ]);
 const ACTIVE_STATUSES = new Set<QualityEvaluationStatus>(["pending", "running"]);
-const sectionClass = "grid min-w-0 gap-5 rounded-lg border border-border bg-card p-4 shadow-sm lg:p-5";
+const sectionClass = "grid min-w-0 gap-5 rounded-lg border border-border bg-surface p-4 shadow-sm lg:p-5";
 const controlClass =
-  "min-h-11 w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground outline-none transition focus:border-primary focus:ring-2 focus:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-60";
+  "min-h-11 w-full rounded-md border border-border bg-surface-sunken px-3 py-2 text-sm text-fg outline-none transition focus:border-focus-ring focus:ring-2 focus:ring-focus-ring disabled:cursor-not-allowed disabled:opacity-60";
 
 type FormErrors = Partial<Record<"profile" | "file" | "engines" | "repeat", string>>;
 
@@ -367,7 +368,7 @@ export function EvaluationPage() {
   return (
     <>
       <PageHeader title={t("nav.evaluation")} subtitle={t("qualityEvaluation.subtitle")} />
-      <main className="grid min-w-0 gap-4 p-4 lg:gap-6 lg:p-8">
+      <PageBody className="grid min-w-0 gap-4 lg:gap-6">
         <PageNotice notice={notice} onDismiss={clearNotice} />
         {pageError ? (
           <ErrorState
@@ -414,7 +415,7 @@ export function EvaluationPage() {
                 data-testid="quality-evaluation-input-row"
               >
                 <div
-                  className="grid min-w-0 content-start gap-1.5 text-sm font-medium text-foreground"
+                  className="grid min-w-0 content-start gap-1.5 text-sm font-medium text-fg"
                   data-testid="quality-evaluation-profile-field"
                 >
                   <FieldLabel
@@ -488,9 +489,7 @@ export function EvaluationPage() {
                           "/api/nl2sql/quality-evaluations/template.xlsx",
                           "nl2sql_quality_evaluation_template.xlsx"
                         )
-                      }
-                    >
-                      <Download className="size-4" aria-hidden="true" />
+                      } icon={Download}>
                       {t("qualityEvaluation.template.download")}
                     </Button>
                   </div>
@@ -505,10 +504,10 @@ export function EvaluationPage() {
               >
                 <legend className="sr-only">{t("qualityEvaluation.engines.label")}</legend>
                 <div className="min-w-0">
-                  <div className="text-sm font-semibold text-foreground">
+                  <div className="text-sm font-semibold text-fg">
                     {t("qualityEvaluation.engines.label")}
                   </div>
-                  <p id="quality-engines-hint" className="mt-1 text-xs leading-5 text-muted">
+                  <p id="quality-engines-hint" className="mt-1 text-xs leading-5 text-fg-muted">
                     {t("qualityEvaluation.engines.hint")}
                   </p>
                 </div>
@@ -534,32 +533,32 @@ export function EvaluationPage() {
                     return (
                       <label
                         key={capability.engine}
-                        className={`grid min-h-[6.75rem] min-w-0 content-start gap-2 rounded-md border p-4 outline-none transition focus-within:ring-2 focus-within:ring-ring/40 ${
+                        className={`grid min-h-[6.75rem] min-w-0 content-start gap-2 rounded-md border p-4 outline-none transition focus-within:ring-2 focus-within:ring-focus-ring ${
                           capability.available
                             ? selected
-                              ? "border-primary bg-primary/5"
-                              : "border-border bg-background hover:border-primary/60"
-                            : "cursor-not-allowed border-border bg-muted/30 opacity-70"
+                              ? "border-accent-emphasis bg-accent-subtle"
+                              : "border-border bg-surface-sunken hover:border-accent-emphasis"
+                            : "cursor-not-allowed border-border bg-surface-hover opacity-70"
                         }`}
                       >
                         <span className="flex min-w-0 items-start gap-3">
                           <input
                             type="checkbox"
-                            className="mt-0.5 size-4 accent-primary"
+                            className="mt-0.5 size-4 accent-accent-emphasis"
                             checked={selected}
                             disabled={!capability.available || conditionsLocked}
                             onChange={() => toggleEngine(capability.engine)}
                           />
                           <span className="min-w-0">
-                            <span className="block font-semibold text-foreground">
+                            <span className="block font-semibold text-fg">
                               {capability.label}
                             </span>
                             {!capability.available ? (
-                              <span className="mt-1 block text-xs leading-5 text-muted">
+                              <span className="mt-1 block text-xs leading-5 text-fg-muted">
                                 {capability.reason}
                               </span>
                             ) : (
-                              <span className="mt-1 block text-xs text-muted">
+                              <span className="mt-1 block text-xs text-fg-muted">
                                 {t("qualityEvaluation.engines.strict")}
                               </span>
                             )}
@@ -584,7 +583,7 @@ export function EvaluationPage() {
                 data-testid="quality-evaluation-run-summary"
               >
                 <label
-                  className="grid gap-1.5 text-sm font-medium text-foreground"
+                  className="grid gap-1.5 text-sm font-medium text-fg"
                   data-testid="quality-evaluation-repeat-field"
                 >
                   <span data-testid="quality-evaluation-repeat-label">
@@ -606,7 +605,7 @@ export function EvaluationPage() {
                       setFormErrors((current) => ({ ...current, repeat: undefined }));
                     }}
                   />
-                  <span id="quality-repeat-hint" className="text-xs font-normal text-muted">
+                  <span id="quality-repeat-hint" className="text-xs font-normal text-fg-muted">
                     {t("qualityEvaluation.repeat.hint")}
                   </span>
                   <FieldError id="quality-repeat-error" message={formErrors.repeat} />
@@ -616,13 +615,13 @@ export function EvaluationPage() {
                   data-testid="quality-evaluation-estimate-summary"
                 >
                   <div
-                    className="font-medium text-foreground"
+                    className="font-medium text-fg"
                     data-testid="quality-evaluation-estimate-label"
                   >
                     {t("qualityEvaluation.estimate.title")}
                   </div>
                   <p
-                    className="flex min-h-11 min-w-0 items-center break-words leading-6 text-muted"
+                    className="flex min-h-11 min-w-0 items-center break-words leading-6 text-fg-muted"
                     data-testid="quality-evaluation-estimate-value"
                   >
                     {currentJob
@@ -655,9 +654,7 @@ export function EvaluationPage() {
                     startMutation.isPending ||
                     !capabilities?.judge.available ||
                     selectedUnavailable
-                  }
-                >
-                  <Play className="size-4" aria-hidden="true" />
+                  } icon={Play}>
                   {t("qualityEvaluation.action.start")}
                 </Button>
                 <FormStatus
@@ -724,9 +721,7 @@ export function EvaluationPage() {
                         )}/results.xlsx`,
                         "nl2sql_quality_evaluation.xlsx"
                       )
-                    }
-                  >
-                    <Download className="size-4" aria-hidden="true" />
+                    } icon={Download}>
                     {t("qualityEvaluation.action.download")}
                   </Button>
                 ) : null
@@ -824,7 +819,7 @@ export function EvaluationPage() {
                   />
                 ) : (
                   <div
-                    className="grid max-h-[17.5rem] min-w-0 gap-2 overflow-auto pr-1 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                    className="grid max-h-[17.5rem] min-w-0 gap-2 overflow-auto pr-1 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                     role="region"
                     aria-label={t("qualityEvaluation.recent.scrollRegion")}
                     tabIndex={0}
@@ -835,13 +830,13 @@ export function EvaluationPage() {
                         key={job.job_id}
                         className={`grid min-w-0 gap-3 rounded-lg border p-4 md:grid-cols-[1fr_auto] md:items-center ${
                           job.job_id === currentJobId
-                            ? "border-primary bg-primary/5"
-                            : "border-border bg-background"
+                            ? "border-accent-emphasis bg-accent-subtle"
+                            : "border-border bg-surface-sunken"
                         }`}
                       >
                         <div className="min-w-0">
                           <div className="flex flex-wrap items-center gap-2">
-                            <span className="font-semibold text-foreground">
+                            <span className="font-semibold text-fg">
                               {profileRecordDisplayLabel(job)}
                             </span>
                             <StatusBadge
@@ -849,7 +844,7 @@ export function EvaluationPage() {
                               label={statusLabel(job.status)}
                             />
                           </div>
-                          <p className="mt-1 break-words text-xs text-muted">
+                          <p className="mt-1 break-words text-xs text-fg-muted">
                             {formatDate(job.created_at)} ·{" "}
                             {t("qualityEvaluation.recent.meta", {
                               cases: job.case_count,
@@ -880,9 +875,7 @@ export function EvaluationPage() {
                               aria-label={t("qualityEvaluation.action.cancelJob", {
                                 job: profileRecordDisplayLabel(job),
                               })}
-                              onClick={() => void cancelJob(job)}
-                            >
-                              <CircleStop size={15} aria-hidden="true" />
+                              onClick={() => void cancelJob(job)} icon={CircleStop}>
                               {t("qualityEvaluation.action.cancel")}
                             </Button>
                           ) : null}
@@ -911,9 +904,7 @@ export function EvaluationPage() {
                                   })
                                 : t("qualityEvaluation.action.deleteDisabled")
                             }
-                            onClick={() => void deleteJob(job)}
-                          >
-                            <Trash2 size={15} aria-hidden="true" />
+                            onClick={() => void deleteJob(job)} icon={Trash2}>
                             {t("qualityEvaluation.action.delete")}
                           </Button>
                         </div>
@@ -940,7 +931,7 @@ export function EvaluationPage() {
             )}
           </div>
         </section>
-      </main>
+      </PageBody>
     </>
   );
 }
@@ -961,14 +952,14 @@ function SectionHeader({
   return (
     <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
       <div className="flex min-w-0 items-start gap-3">
-        <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary">
+        <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-accent-subtle text-accent-fg">
           <Icon className="size-5" aria-hidden="true" />
         </span>
         <div className="min-w-0">
-          <h2 id={id} className="text-base font-semibold text-foreground">
+          <h2 id={id} className="text-base font-semibold text-fg">
             {title}
           </h2>
-          <p className="mt-1 text-sm leading-6 text-muted">{description}</p>
+          <p className="mt-1 text-sm leading-6 text-fg-muted">{description}</p>
         </div>
       </div>
       {action ? <div className="shrink-0">{action}</div> : null}
@@ -1002,7 +993,7 @@ function JobProgress({
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-center gap-2">
           <StatusBadge variant={statusVariant(job.status)} label={statusLabel(job.status)} />
-          <span className="text-sm font-semibold tabular-nums text-foreground">
+          <span className="text-sm font-semibold tabular-nums text-fg">
             {t("qualityEvaluation.progress.count", {
               completed: job.completed_attempts,
               total: job.total_attempts,
@@ -1017,9 +1008,7 @@ function JobProgress({
             tone="danger"
             loading={cancelling}
             disabled={cancelling}
-            onClick={() => void onCancel(job)}
-          >
-            <CircleStop className="size-4" aria-hidden="true" />
+            onClick={() => void onCancel(job)} icon={CircleStop}>
             {t("qualityEvaluation.action.cancel")}
           </Button>
         ) : null}
@@ -1036,16 +1025,16 @@ function JobProgress({
         testId="quality-evaluation-timing"
       />
       <div
-        className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted"
+        className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-fg-muted"
         data-testid="quality-evaluation-job-diagnostics"
       >
         <span>
           {t("qualityEvaluation.progress.lastHeartbeat")}{" "}
-          <span className="font-medium text-foreground">{lastHeartbeatLabel}</span>
+          <span className="font-medium text-fg">{lastHeartbeatLabel}</span>
         </span>
         <span>
           {t("qualityEvaluation.progress.attemptTimeout")}{" "}
-          <span className="font-medium text-foreground">
+          <span className="font-medium text-fg">
             {t("qualityEvaluation.progress.timeoutSeconds", {
               seconds: attemptTimeoutSeconds,
             })}
@@ -1071,7 +1060,7 @@ function JobProgress({
         </div>
       ) : null}
       <div
-        className="h-2 overflow-hidden rounded-full bg-muted/40"
+        className="h-2 overflow-hidden rounded-full bg-surface-hover"
         role="progressbar"
         aria-valuemin={0}
         aria-valuemax={job.total_attempts}
@@ -1079,7 +1068,7 @@ function JobProgress({
         aria-label={t("qualityEvaluation.progress.title")}
       >
         <div
-          className="h-full rounded-full bg-primary transition-[width] duration-300"
+          className="h-full rounded-full bg-accent-emphasis transition-[width] duration-300"
           style={{ width: `${percentage}%` }}
         />
       </div>
@@ -1122,9 +1111,9 @@ function JobProgress({
 
 function Metric({ label, value, danger = false }: { label: string; value: string; danger?: boolean }) {
   return (
-    <div className="min-w-0 rounded-lg border border-border bg-muted/20 p-3">
-      <dt className="text-xs text-muted">{label}</dt>
-      <dd className={`mt-1 break-words text-sm font-semibold ${danger ? "text-danger" : "text-foreground"}`}>
+    <div className="min-w-0 rounded-lg border border-border bg-surface-hover p-3">
+      <dt className="text-xs text-fg-muted">{label}</dt>
+      <dd className={`mt-1 break-words text-sm font-semibold ${danger ? "text-danger-fg" : "text-fg"}`}>
         {value}
       </dd>
     </div>
@@ -1133,9 +1122,9 @@ function Metric({ label, value, danger = false }: { label: string; value: string
 
 function EngineSummaryCard({ summary }: { summary: QualityEvaluationEngineSummary }) {
   return (
-    <article className="grid min-w-0 gap-4 rounded-lg border border-border bg-background p-4">
+    <article className="grid min-w-0 gap-4 rounded-lg border border-border bg-surface-sunken p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="font-semibold text-foreground">{engineLabel(summary.engine)}</h3>
+        <h3 className="font-semibold text-fg">{engineLabel(summary.engine)}</h3>
         <StatusBadge
           variant={summary.error_count ? "warning" : "success"}
           label={t("qualityEvaluation.summary.errors", { count: summary.error_count })}
@@ -1152,7 +1141,7 @@ function EngineSummaryCard({ summary }: { summary: QualityEvaluationEngineSummar
         />
       </dl>
       <div>
-        <div className="text-xs font-medium text-muted">
+        <div className="text-xs font-medium text-fg-muted">
           {t("qualityEvaluation.summary.verdicts")}
         </div>
         <div className="mt-2 flex flex-wrap gap-2">
@@ -1170,14 +1159,14 @@ function ResultTable({ results }: { results: QualityEvaluationResult[] }) {
   return (
     <>
       <div
-        className="hidden max-h-[30.5rem] overflow-auto rounded-lg border border-border focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring md:block"
+        className="hidden max-h-[30.5rem] overflow-auto rounded-lg border border-border focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring md:block"
         role="region"
         aria-label={t("qualityEvaluation.details.scrollRegion")}
         tabIndex={0}
         data-testid="quality-evaluation-results-table"
       >
         <table className="w-full min-w-[74rem] border-collapse text-left text-sm">
-          <thead className="sticky top-0 z-10 bg-background text-xs text-muted">
+          <thead className="sticky top-0 z-10 bg-surface-sunken text-xs text-fg-muted">
             <tr>
               <th className="px-3 py-3 font-medium">{t("qualityEvaluation.details.case")}</th>
               <th className="px-3 py-3 font-medium">{t("qualityEvaluation.details.engine")}</th>
@@ -1194,17 +1183,17 @@ function ResultTable({ results }: { results: QualityEvaluationResult[] }) {
                 <Fragment key={result.result_id}>
                   <tr className="border-t border-border align-top first:border-t-0">
                     <td className="max-w-56 px-3 py-3">
-                      <div className="font-semibold text-foreground">{result.case_id}</div>
+                      <div className="font-semibold text-fg">{result.case_id}</div>
                       <QuestionText
                         value={result.question}
                         variant="compact"
                         maxLines={2}
-                        className="mt-1 text-muted"
+                        className="mt-1 text-fg-muted"
                       />
                     </td>
                     <td className="px-3 py-3">
-                      <div className="font-medium text-foreground">{engineLabel(result.engine)}</div>
-                      <div className="mt-1 text-xs text-muted">#{result.repetition_no}</div>
+                      <div className="font-medium text-fg">{engineLabel(result.engine)}</div>
+                      <div className="mt-1 text-xs text-fg-muted">#{result.repetition_no}</div>
                     </td>
                     <td className="max-w-72 px-3 py-3">
                       <SqlBlock sql={result.expected_sql} />
@@ -1215,12 +1204,12 @@ function ResultTable({ results }: { results: QualityEvaluationResult[] }) {
                     <td className="max-w-64 px-3 py-3">
                       <ResultJudgement result={result} showAnalysis={false} />
                     </td>
-                    <td className="whitespace-nowrap px-3 py-3 text-muted">
+                    <td className="whitespace-nowrap px-3 py-3 text-fg-muted">
                       {result.total_elapsed_ms} ms
                     </td>
                   </tr>
                   {hasAnalysis ? (
-                    <tr className="border-t border-border/60 bg-muted/5">
+                    <tr className="border-t border-border/60 bg-surface-hover">
                       <td colSpan={6} className="px-3 pb-4 pt-2">
                         <ResultAnalysisDetails result={result} />
                       </td>
@@ -1233,7 +1222,7 @@ function ResultTable({ results }: { results: QualityEvaluationResult[] }) {
         </table>
       </div>
       <div
-        className="grid max-h-[37.5rem] min-w-0 gap-3 overflow-auto pr-1 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring md:hidden"
+        className="grid max-h-[37.5rem] min-w-0 gap-3 overflow-auto pr-1 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring md:hidden"
         role="region"
         aria-label={t("qualityEvaluation.details.scrollRegion")}
         tabIndex={0}
@@ -1243,27 +1232,27 @@ function ResultTable({ results }: { results: QualityEvaluationResult[] }) {
           <article key={result.result_id} className="grid min-w-0 gap-3 rounded-lg border border-border p-4">
             <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
               <div className="min-w-0">
-                <h3 className="break-words font-semibold text-foreground">{result.case_id}</h3>
+                <h3 className="break-words font-semibold text-fg">{result.case_id}</h3>
                 <QuestionText
                   value={result.question}
                   variant="compact"
                   maxLines={2}
-                  className="mt-1 text-muted"
+                  className="mt-1 text-fg-muted"
                 />
               </div>
               <VerdictBadge verdict={result.verdict} />
             </div>
-            <div className="text-xs font-medium text-muted">
+            <div className="text-xs font-medium text-fg-muted">
               {engineLabel(result.engine)} / #{result.repetition_no} / {result.total_elapsed_ms} ms
             </div>
             <div>
-              <div className="mb-1 text-xs font-medium text-muted">
+              <div className="mb-1 text-xs font-medium text-fg-muted">
                 {t("qualityEvaluation.details.expectedSql")}
               </div>
               <SqlBlock sql={result.expected_sql} />
             </div>
             <div>
-              <div className="mb-1 text-xs font-medium text-muted">
+              <div className="mb-1 text-xs font-medium text-fg-muted">
                 {t("qualityEvaluation.details.generatedSql")}
               </div>
               <SqlBlock sql={result.generated_sql} error={result.generation_error} />
@@ -1298,7 +1287,7 @@ function ResultJudgementSummary({ result }: { result: QualityEvaluationResult })
       <div className="flex flex-wrap items-center gap-2">
         <VerdictBadge verdict={result.verdict} />
         {result.judge ? (
-          <span className="text-xs tabular-nums text-muted">
+          <span className="text-xs tabular-nums text-fg-muted">
             {Math.round(result.judge.confidence * 100)}%
           </span>
         ) : null}
@@ -1312,7 +1301,7 @@ function ResultJudgementSummary({ result }: { result: QualityEvaluationResult })
         />
       </div>
       {result.judge?.summary ? (
-        <p className="break-words text-xs leading-5 text-foreground">{result.judge.summary}</p>
+        <p className="break-words text-xs leading-5 text-fg">{result.judge.summary}</p>
       ) : null}
     </>
   );
@@ -1323,14 +1312,14 @@ function ResultAnalysisDetails({ result }: { result: QualityEvaluationResult }) 
   return (
     <details className="group/disclosure min-w-0 text-xs">
       <summary
-        className="inline-flex min-h-8 cursor-pointer list-none items-center gap-1 font-medium text-primary outline-none focus-visible:ring-2 focus-visible:ring-ring/40 [&::-webkit-details-marker]:hidden"
+        className="inline-flex min-h-8 cursor-pointer list-none items-center gap-1 font-medium text-accent-fg outline-none focus-visible:ring-2 focus-visible:ring-focus-ring [&::-webkit-details-marker]:hidden"
         data-testid="quality-evaluation-analysis-toggle"
       >
         <span>{t("qualityEvaluation.details.analysis")}</span>
-        <DisclosureChevron expanded="group" size={13} />
+        <DisclosureChevron expanded="group" size={14} />
       </summary>
       <div
-        className="mt-2 grid min-w-0 gap-2 rounded-md bg-muted/20 p-3 text-muted"
+        className="mt-2 grid min-w-0 gap-2 rounded-md bg-surface-hover p-3 text-fg-muted"
         data-testid="quality-evaluation-analysis-detail"
       >
         <AnalysisList
@@ -1343,7 +1332,7 @@ function ResultAnalysisDetails({ result }: { result: QualityEvaluationResult }) 
         />
         {result.judge?.correction_suggestion ? (
           <div>
-            <div className="font-medium text-foreground">
+            <div className="font-medium text-fg">
               {t("qualityEvaluation.details.suggestion")}
             </div>
             <p className="mt-1 break-words">{result.judge.correction_suggestion}</p>
@@ -1376,7 +1365,7 @@ function AnalysisList({
   if (!items.length) return null;
   return (
     <div>
-      <div className={`font-medium ${danger ? "text-danger" : "text-foreground"}`}>{label}</div>
+      <div className={`font-medium ${danger ? "text-danger-fg" : "text-fg"}`}>{label}</div>
       <ul className="mt-1 list-disc space-y-1 pl-4">
         {items.map((item, index) => (
           <li key={`${index}-${item}`} className="break-words">
@@ -1391,13 +1380,13 @@ function AnalysisList({
 function SqlBlock({ sql, error }: { sql: string; error?: string }) {
   if (!sql) {
     return (
-      <span className={`break-words text-xs ${error ? "text-danger" : "text-muted"}`}>
+      <span className={`break-words text-xs ${error ? "text-danger-fg" : "text-fg-muted"}`}>
         {error || "-"}
       </span>
     );
   }
   return (
-    <pre className="max-h-32 min-w-0 overflow-auto whitespace-pre-wrap break-all rounded-md bg-muted/30 p-2 font-mono text-xs leading-5 text-foreground">
+    <pre className="max-h-32 min-w-0 overflow-auto whitespace-pre-wrap break-all rounded-md bg-surface-hover p-2 font-mono text-xs leading-5 text-fg">
       {sql}
     </pre>
   );

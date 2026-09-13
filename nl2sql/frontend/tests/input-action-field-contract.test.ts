@@ -17,7 +17,7 @@ test("InputActionField keeps label, field errors, and action layout centralized"
 });
 
 test("InputActionField uses the shared Button and 44px input/action sizing", () => {
-  assert.match(source, /import \{ Button, type ButtonProps \} from "\.\/button"/u);
+  assert.match(source, /Button,[\s\S]*type ButtonProps,[\s\S]*from "@engchina\/production-ready-ui"/u);
   assert.match(source, /grid min-w-0 gap-2 sm:grid-cols-\[minmax\(0,1fr\)_auto\]/u);
   assert.match(source, /"h-11 w-full min-h-\[44px\] rounded-md border/u);
   assert.match(

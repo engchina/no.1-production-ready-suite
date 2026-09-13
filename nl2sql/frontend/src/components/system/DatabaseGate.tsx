@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "react-router-dom";
 
-import { Banner } from "@engchina/production-ready-ui";
+import { Banner, PageBody } from "@engchina/production-ready-ui";
 
 import { TimedLoadingState } from "@/components/ProcessingState";
 import { DatabaseUnavailableNotice, type DatabaseNoticeStatus } from "@/components/system/DatabaseUnavailableNotice";
@@ -212,11 +212,11 @@ export function DatabaseGate({ children }: { children: ReactNode }) {
   return (
     <>
       {persistence.data.mode === "memory" ? (
-        <div className="px-4 pt-4 lg:px-8 lg:pt-6">
+        <PageBody className="pb-0">
           <Banner severity="warning" title={t("persistence.memoryWarning.title")}>
             {t("persistence.memoryWarning.message")}
           </Banner>
-        </div>
+        </PageBody>
       ) : null}
       {children}
     </>

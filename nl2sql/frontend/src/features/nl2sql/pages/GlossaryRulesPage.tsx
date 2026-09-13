@@ -2,15 +2,16 @@ import { Pagination } from "@/components/Pagination";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { BookOpen, Download, RefreshCw } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
 import {
+  Button,
   EmptyState,
   toast,
   usePagination,
+  StatusBadge,
+  PageHeader,
+  PageBody,
 } from "@engchina/production-ready-ui";
 
-import { StatusBadge } from "@/components/ui/status-badge";
-import { PageHeader } from "@/components/PageHeader";
 import { ProcessingIndicator } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";
 import { FileDropzone } from "@/components/ui/file-dropzone";
@@ -155,7 +156,7 @@ export function GlossaryRulesPage() {
           },
         ]}
       />
-      <main className="grid gap-4 p-4 lg:p-8">
+      <PageBody className="grid gap-4">
         <PageNotice notice={errorText ? { tone: "danger", message: errorText } : null} />
 
         <DbObjectManagementPanelShell
@@ -170,7 +171,7 @@ export function GlossaryRulesPage() {
                 label={t("common.processing.refreshing")}
                 operationKey="glossary-rules-refresh"
                 placement="workspace"
-                className="rounded-md border border-border bg-background px-3 py-2"
+                className="rounded-md border border-border bg-surface-sunken px-3 py-2"
                 testId="glossary-rules-workspace-processing"
                 activityIcon="none"
               />
@@ -193,7 +194,7 @@ export function GlossaryRulesPage() {
             onExport={() => void exportLegacyTerms()}
           />
         </DbObjectManagementPanelShell>
-      </main>
+      </PageBody>
     </>
   );
 }
@@ -261,7 +262,7 @@ function GlobalMaterialPanel({
   onExport: () => void;
 }) {
   return (
-    <section className="grid min-w-0 content-start gap-3 rounded-md border border-border bg-background p-3">
+    <section className="grid min-w-0 content-start gap-3 rounded-md border border-border bg-surface-sunken p-3">
       <DbObjectPanelHeader
         headingId={headingId}
         title={title}
@@ -291,9 +292,7 @@ function GlobalMaterialPanel({
           touchTarget className="md:self-end"
           loading={busy}
           disabled={disabled}
-          onClick={onExport}
-        >
-          <Download size={15} aria-hidden="true" />
+          onClick={onExport} icon={Download}>
           <span>{exportLabel}</span>
         </Button>
       </div>
@@ -324,7 +323,7 @@ function GlobalPreviewTable({
 
   if (rows.length === 0) {
     return (
-      <div className="rounded-md border border-border bg-card p-4">
+      <div className="rounded-md border border-border bg-surface p-4">
         <EmptyState title={t("glossary.legacy.empty")} hint={t("glossary.legacy.emptyHint")} />
       </div>
     );
@@ -332,7 +331,7 @@ function GlobalPreviewTable({
 
   return (
     <div className="grid gap-2" data-testid="glossary-terms-preview">
-      <div className="overflow-hidden rounded-md border border-border bg-card">
+      <div className="overflow-hidden rounded-md border border-border bg-surface">
         <div className="overflow-x-auto">
           <table className="w-full table-fixed divide-y divide-border text-left text-sm">
             <colgroup>
@@ -340,7 +339,7 @@ function GlobalPreviewTable({
               <col className="w-32 sm:w-56" />
               <col />
             </colgroup>
-            <thead className="bg-background text-xs font-semibold uppercase text-muted">
+            <thead className="bg-surface-sunken text-xs font-semibold uppercase text-fg-muted">
               <tr>
                 <th scope="col" className="px-3 py-2 text-right">
                   {t("glossary.preview.rowNumber")}
@@ -353,19 +352,19 @@ function GlobalPreviewTable({
                 </th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-border/70 text-foreground">
+            <tbody className="divide-y divide-border/70 text-fg">
               {visibleRows.map((row, index) => {
                 const absoluteIndex = start + index;
                 return (
                   <tr key={`${row.term}-${absoluteIndex}`}>
                     <td
-                      className="px-3 py-2 text-right text-xs tabular-nums text-muted"
+                      className="px-3 py-2 text-right text-xs tabular-nums text-fg-muted"
                       data-testid="glossary-terms-row-number"
                     >
                       {absoluteIndex + 1}
                     </td>
                     <td
-                      className="px-3 py-2 align-middle font-sans text-xs text-foreground [overflow-wrap:anywhere]"
+                      className="px-3 py-2 align-middle font-sans text-xs text-fg [overflow-wrap:anywhere]"
                       data-testid="glossary-term-preview-cell"
                     >
                       {row.term}

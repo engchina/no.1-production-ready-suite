@@ -11,7 +11,7 @@ import {
 import { MoreHorizontal } from "lucide-react";
 
 import { FloatingActionMenu } from "@/components/FloatingMenu";
-import { Button } from "@/components/ui/button";
+import { Button } from "@engchina/production-ready-ui";
 import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
 import { t } from "@/lib/i18n";
 import { restoreMenuTriggerFocus } from "@/lib/menu-focus";
@@ -119,7 +119,7 @@ function MenuItems({
               data-testid={action.testId}
               data-entity-action-id={action.id}
               data-entity-action-tone={action.tone ?? "default"}
-              className="w-full"
+              className="w-full justify-start text-left"
               onClick={(event) => {
                 event.stopPropagation();
                 onActionClick?.(event);
@@ -127,7 +127,7 @@ function MenuItems({
                 void action.onSelect();
               }}
             >
-              {Icon ? <Icon size={15} aria-hidden="true" /> : null}
+              {Icon ? <Icon size={16} aria-hidden="true" /> : null}
               <span>{action.label}</span>
             </Button>
           </div>
@@ -181,10 +181,8 @@ export function RowActionMenu({
         onClick={(event) => {
           event.stopPropagation();
           setOpen((current) => !current);
-        }}
-      >
-        <MoreHorizontal size={16} aria-hidden="true" />
-      </Button>
+        }} icon={MoreHorizontal}>
+        </Button>
       {open ? (
         <FloatingActionMenu
           id={menuId}
@@ -240,7 +238,7 @@ export function ObjectActionBar({
             data-entity-action-tone={action.tone ?? "default"}
             onClick={() => void action.onSelect()}
           >
-            {Icon ? <Icon size={15} aria-hidden="true" /> : null}
+            {Icon ? <Icon size={16} aria-hidden="true" /> : null}
             <span>{action.label}</span>
           </Button>
         );
@@ -259,7 +257,7 @@ export function ObjectActionBar({
             onClick={() => setOpen((current) => !current)}
           >
             <span>{t("common.actions.more")}</span>
-            <DisclosureChevron expanded={open} size={15} />
+            <DisclosureChevron expanded={open} size={16} />
           </Button>
           {open ? (
             <FloatingActionMenu

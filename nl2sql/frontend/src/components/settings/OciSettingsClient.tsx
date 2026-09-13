@@ -9,7 +9,18 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { useEffect, useState } from "react";
-import { toast } from "@engchina/production-ready-ui";
+import {
+  toast,
+  Button,
+  TextField,
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+  FormStatus,
+  PageBody,
+} from "@engchina/production-ready-ui";
 
 import {
   SettingsTestResultPanel,
@@ -18,13 +29,9 @@ import {
 import { ErrorState } from "@/components/StateViews";
 import { TimedLoadingState } from "@/components/ProcessingState";
 import { useSettingsDraftGuard } from "@/lib/useSettingsDraftGuard";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { FieldError } from "@/components/ui/field-error";
 import { FileDropzone } from "@/components/ui/file-dropzone";
-import { FormStatus } from "@/components/ui/form-status";
 import { InputActionField } from "@/components/ui/input-action-field";
-import { RequiredFieldsNote, RequiredIndicator } from "@/components/ui/required-field";
+import { RequiredFieldsNote } from "@/components/ui/required-field";
 import { SelectField, type SelectFieldOption } from "@/components/ui/select-field";
 import {
   ApiError,
@@ -51,7 +58,6 @@ import {
   type OciValidationResult,
 } from "@/lib/oci-settings";
 import { useRequestScope } from "@/lib/useRequestScope";
-import { cn } from "@/lib/utils";
 
 type FeedbackState = "idle" | "loading" | "success" | "error";
 type ConfigTestState =
@@ -353,21 +359,21 @@ export function OciSettingsClient() {
     }
   }
 
-  if (loadState === "loading") return <div className="p-8"><TimedLoadingState
+  if (loadState === "loading") return <PageBody><TimedLoadingState
     label={t("settings.oci.loading")} operationKey="settings-oci-load" placement="page"
-  /></div>;
-  if (loadState === "error") return <div className="p-8"><ErrorState
+  /></PageBody>;
+  if (loadState === "error") return <PageBody><ErrorState
     message={loadError} onRetry={() => setLoadAttempt((current) => current + 1)}
-  /></div>;
+  /></PageBody>;
 
   return (
-    <div className="p-8">
+    <PageBody>
       <fieldset disabled={busy} aria-busy={busy} className="min-w-0 space-y-6">
         <Card className="rounded-md">
           <CardHeader className="p-6 pb-0">
             <div className="flex items-center gap-2 border-b border-border pb-5">
-              <KeyRound size={18} aria-hidden />
-              <CardTitle className="text-lg">{t("settings.oci.auth.cardTitle")}</CardTitle>
+              <KeyRound size={20} aria-hidden />
+              <CardTitle className="text-base">{t("settings.oci.auth.cardTitle")}</CardTitle>
             </div>
           </CardHeader>
           <CardContent className="space-y-5 p-6">
@@ -394,37 +400,37 @@ export function OciSettingsClient() {
                 helper={t("settings.oci.helper.configProfile")}
                 placeholder="DEFAULT"
                 readOnly
-                required
+                required requiredLabel={t("common.required")}
               />
               <TextField
                 id="oci-user-ocid"
                 label={t("settings.oci.field.userOcid")}
                 value={draft.userOcid}
-                onChange={(value) => updateDraft("userOcid", value)}
+                onValueChange={(value) => updateDraft("userOcid", value)}
                 error={errorText(errors.userOcid)}
                 helper={t("settings.oci.helper.userOcid")}
                 placeholder="ocid1.user.oc1.."
-                required
+                required requiredLabel={t("common.required")}
               />
               <TextField
                 id="oci-tenancy-ocid"
                 label={t("settings.oci.field.tenancyOcid")}
                 value={draft.tenancyOcid}
-                onChange={(value) => updateDraft("tenancyOcid", value)}
+                onValueChange={(value) => updateDraft("tenancyOcid", value)}
                 error={errorText(errors.tenancyOcid)}
                 helper={t("settings.oci.helper.tenancyOcid")}
                 placeholder="ocid1.tenancy.oc1.."
-                required
+                required requiredLabel={t("common.required")}
               />
               <TextField
                 id="oci-fingerprint"
                 label={t("settings.oci.field.fingerprint")}
                 value={draft.fingerprint}
-                onChange={(value) => updateDraft("fingerprint", value)}
+                onValueChange={(value) => updateDraft("fingerprint", value)}
                 error={errorText(errors.fingerprint)}
                 helper={t("settings.oci.helper.fingerprint")}
                 placeholder="12:34:56:78:90:ab:cd:ef"
-                required
+                required requiredLabel={t("common.required")}
               />
               <SelectField
                 id="oci-region"
@@ -466,14 +472,14 @@ export function OciSettingsClient() {
               onTest={() => void testAuthConfig()}
             />
             <ConfigTestContent state={configTestState} />
-            <p className="text-xs leading-relaxed text-muted">{t("settings.oci.hint")}</p>
+            <p className="text-xs leading-relaxed text-fg-muted">{t("settings.oci.hint")}</p>
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader>
             <div className="flex items-start gap-3">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-bg text-info">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-subtle text-info-fg">
                 <Cloud size={20} aria-hidden />
               </div>
               <div>
@@ -520,7 +526,7 @@ export function OciSettingsClient() {
           </CardContent>
         </Card>
       </fieldset>
-    </div>
+    </PageBody>
   );
 }
 
@@ -564,9 +570,7 @@ function SectionActions({
         aria-label={`${ariaContext}: ${currentSaveLabel}`}
         loading={saveState === "loading"}
         disabled={isTesting}
-        onClick={onSave}
-      >
-        {saveState !== "loading" ? <Save size={15} aria-hidden /> : null}
+        onClick={onSave} icon={Save}>
         {currentSaveLabel}
       </Button>
       {onTest && currentTestLabel ? (
@@ -578,9 +582,7 @@ function SectionActions({
           aria-label={`${ariaContext}: ${currentTestLabel}`}
           loading={isTesting}
           disabled={saveState === "loading"}
-          onClick={onTest}
-        >
-          {!isTesting ? <ShieldCheck size={15} aria-hidden /> : null}
+          onClick={onTest} icon={ShieldCheck}>
           {currentTestLabel}
         </Button>
       ) : null}
@@ -798,7 +800,7 @@ function NamespaceField({
       readOnly
       required={required}
       requiredLabel={t("settings.oci.required")}
-      inputClassName="text-foreground"
+      inputClassName="text-fg"
       action={{
         label: buttonLabel,
         ariaLabel: `${label}: ${buttonLabel}`,
@@ -880,84 +882,22 @@ function PrivateKeyDropzoneField({
         </div>
       ) : null}
       {value ? (
-        <p className="break-all text-xs leading-relaxed text-muted">
+        <p className="break-all text-xs leading-relaxed text-fg-muted">
           {t("settings.oci.privateKey.path", { path: value })}
         </p>
       ) : null}
       {warning ? (
         <p
           id={warningId}
-          className="flex items-start gap-1.5 text-xs leading-relaxed text-warning"
+          className="flex items-start gap-1.5 text-xs leading-relaxed text-warning-fg"
           role="status"
         >
-          <AlertTriangle size={13} className="mt-0.5 shrink-0" aria-hidden />
+          <AlertTriangle size={14} className="mt-0.5 shrink-0" aria-hidden />
           <span>{warning}</span>
         </p>
       ) : null}
     </div>
   );
-}
-
-function TextField({
-  id,
-  label,
-  value,
-  onChange,
-  error,
-  helper,
-  placeholder,
-  readOnly = false,
-  required,
-}: {
-  id: string;
-  label: string;
-  value: string;
-  onChange?: (value: string) => void;
-  error?: string;
-  helper: string;
-  placeholder: string;
-  readOnly?: boolean;
-  required?: boolean;
-}) {
-  const hintId = `${id}-hint`;
-  const errorId = `${id}-error`;
-
-  return (
-    <div className="space-y-1.5">
-      <label htmlFor={id} className="flex items-center gap-2 text-sm font-medium text-foreground">
-        {label}
-        {required ? <RequiredBadge /> : null}
-      </label>
-      <input
-        id={id}
-        type="text"
-        value={value}
-        readOnly={readOnly}
-        aria-readonly={readOnly || undefined}
-        required={required}
-        aria-required={required}
-        onChange={(event) => {
-          if (!readOnly) onChange?.(event.target.value);
-        }}
-        placeholder={placeholder}
-        aria-invalid={Boolean(error)}
-        aria-describedby={error ? `${hintId} ${errorId}` : hintId}
-        className={cn(
-          "h-11 w-full rounded-md border px-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted/70 focus-visible:border-primary",
-          readOnly ? "cursor-default bg-background text-muted" : "bg-card",
-          error ? "border-danger" : "border-border"
-        )}
-      />
-      <p id={hintId} className="text-xs leading-relaxed text-muted">
-        {helper}
-      </p>
-      <FieldError id={errorId} message={error} />
-    </div>
-  );
-}
-
-function RequiredBadge() {
-  return <RequiredIndicator label={t("settings.oci.required")} />;
 }
 
 function errorText(code?: OciValidationCode): string | undefined {
