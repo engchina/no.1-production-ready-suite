@@ -752,7 +752,7 @@ async function mockSampleDataApi(page: Page) {
     fulfillJson(route, {
       runtime: "deterministic",
       profile_id: "default",
-      confirmation: "SQL_ASSIST_SAMPLE",
+      confirmation: "ADMIN_EXECUTE",
       objects: ["TABLE_01", "VIEW_01"],
       imported_objects: ["TABLE_01"],
       sql: {

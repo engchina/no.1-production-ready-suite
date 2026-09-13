@@ -94,13 +94,21 @@ function SampleObjectSummary({ sampleInfo }: { sampleInfo: SampleDataInfo | null
         </div>
       </div>
       <div className="flex flex-wrap gap-2">
-        {(sampleInfo?.objects ?? []).map((objectName) => (
-          <StatusBadge
-            key={objectName}
-            variant={sampleInfo?.imported_objects.includes(objectName) ? "success" : "neutral"}
-            label={objectName}
-          />
-        ))}
+        {(sampleInfo?.objects ?? []).map((objectName) =>
+          sampleInfo?.conflicting_objects?.includes(objectName) ? (
+            <StatusBadge
+              key={objectName}
+              variant="warning"
+              label={t("dataTools.sample.conflictObject", { name: objectName })}
+            />
+          ) : (
+            <StatusBadge
+              key={objectName}
+              variant={sampleInfo?.imported_objects.includes(objectName) ? "success" : "neutral"}
+              label={objectName}
+            />
+          ),
+        )}
       </div>
     </section>
   );

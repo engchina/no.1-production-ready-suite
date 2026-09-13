@@ -294,7 +294,7 @@ from .reverse_prompts import (
     source_prompt,
     stage_prompt,
 )
-from .sample_datasets import SAMPLE_DATASETS
+from .sample_datasets import SAMPLE_DATA_CONFIRMATION, SAMPLE_DATASETS
 from .sql_lexing import prepare_oracle_query
 from .sql_semantics import parse_oracle_sql
 from .store import MemoryNl2SqlStore, Nl2SqlStore, OracleJsonNl2SqlStore
@@ -719,6 +719,20 @@ _PROFILE_RECOMMENDATION_TEMPLATE_LABEL_RE = re.compile(
 _SAMPLE_IMPORT_IDEMPOTENT_ERROR_CODES = frozenset({"ORA-00955", "ORA-00001"})
 _SAMPLE_DELETE_IDEMPOTENT_ERROR_CODES = frozenset({"ORA-00942"})
 _SAMPLE_EXECUTED_STATUSES = frozenset({"success", "skipped"})
+
+
+@dataclass(frozen=True)
+class _SampleObjectState:
+    """現在のスキーマにある、サンプル定義と同名のオブジェクトの判定結果。"""
+
+    # 現行名で、サンプル定義と種類・列構成が一致する（サンプル由来とみなす）もの。
+    imported: list[str] = field(default_factory=list)
+    # 現行名だが種類・列構成が異なる（利用者のオブジェクトとみなす）もの。
+    conflicts: list[str] = field(default_factory=list)
+    # 旧名（接頭辞付き）で、サンプル定義と構成が一致するもの。削除対象に含める。
+    legacy: list[str] = field(default_factory=list)
+
+
 _SYNTHETIC_DATA_UNSUPPORTED_DATA_TYPES = {
     "BFILE",
     "BLOB",
@@ -4643,14 +4657,27 @@ class Nl2SqlService:
     def sample_data_info(self, dataset: SampleDataset = SampleDataset.HR) -> SampleDataInfo:
         sql = self._sample_sql_sections(dataset)
         warnings: list[str] = []
-        imported = self._sample_imported_objects(dataset, warnings=warnings)
+        state = self._sample_object_state(dataset, warnings=warnings)
+        if state.conflicts:
+            warnings.append(self._sample_conflict_message(state.conflicts))
+        if state.legacy:
+            warnings.append(
+                "旧名のサンプルデータ（"
+                + ", ".join(state.legacy)
+                + "）が残っています。削除を実行すると旧名のオブジェクトも削除します。"
+            )
+            sql["delete"] = (
+                self._sample_legacy_drop_statements(dataset, state.legacy) + sql["delete"]
+            )
         return SampleDataInfo(
             runtime="oracle" if self._use_oracle_runtime() else "deterministic",
             profile_id="",
             dataset=dataset,
-            confirmation=SAMPLE_DATASETS[dataset].confirmation,
+            confirmation=SAMPLE_DATA_CONFIRMATION,
             objects=list(SAMPLE_DATASETS[dataset].objects),
-            imported_objects=imported,
+            imported_objects=state.imported,
+            conflicting_objects=state.conflicts,
+            legacy_objects=state.legacy,
             sql=sql,
             warnings=warnings,
         )
@@ -4669,13 +4696,21 @@ class Nl2SqlService:
         schema_refresh_required = False
         schema_refresh_reason_code = ""
         results: list[DbAdminStatementResult]
-        confirmation_error = self._sample_confirmation_error(request.confirmation, dataset)
+        confirmation_error = self._sample_confirmation_error(request.confirmation)
+        _state, guard_status, guard_error = (
+            (None, "", "") if confirmation_error else self._sample_mutation_state(dataset)
+        )
         if confirmation_error:
             warnings.append(confirmation_error)
             results = self._statement_results(
                 statements,
                 status="confirmation_required",
                 error_message=confirmation_error,
+            )
+        elif guard_error:
+            warnings.append(guard_error)
+            results = self._statement_results(
+                statements, status=guard_status, error_message=guard_error
             )
         elif self._use_oracle_runtime():
             try:
@@ -4783,13 +4818,23 @@ class Nl2SqlService:
         schema_refresh_required = False
         schema_refresh_reason_code = ""
         results: list[DbAdminStatementResult]
-        confirmation_error = self._sample_confirmation_error(request.confirmation, dataset)
+        confirmation_error = self._sample_confirmation_error(request.confirmation)
+        state, guard_status, guard_error = (
+            (None, "", "") if confirmation_error else self._sample_mutation_state(dataset)
+        )
+        legacy = state.legacy if state is not None else []
+        statements = self._sample_legacy_drop_statements(dataset, legacy) + statements
         if confirmation_error:
             warnings.append(confirmation_error)
             results = self._statement_results(
                 statements,
                 status="confirmation_required",
                 error_message=confirmation_error,
+            )
+        elif guard_error:
+            warnings.append(guard_error)
+            results = self._statement_results(
+                statements, status=guard_status, error_message=guard_error
             )
         elif self._use_oracle_runtime():
             try:
@@ -4836,15 +4881,16 @@ class Nl2SqlService:
                         expected_state="absent",
                         source="sample_data_delete",
                         warnings=warnings,
+                        legacy_objects=legacy,
                     )
             if executed:
-                self._remove_sample_from_state(dataset)
+                self._remove_sample_from_state(dataset, legacy_objects=legacy)
                 try:
                     self._persist_local_catalog()
                 except (Nl2SqlPersistenceUnavailable, Nl2SqlRepositoryOperationFailed) as exc:
                     warnings.append(f"Sample data 削除後の catalog 保存に失敗しました: {exc}")
         else:
-            self._remove_sample_from_state(dataset)
+            self._remove_sample_from_state(dataset, legacy_objects=legacy)
             results = self._statement_results(statements, status="applied_to_local_state")
             executed = True
             self._persist_local_catalog()
@@ -4912,12 +4958,17 @@ class Nl2SqlService:
         expected_state: Literal["present", "absent"],
         source: str,
         warnings: list[str],
+        legacy_objects: Sequence[str] = (),
     ) -> tuple[str, bool, str]:
+        definition = SAMPLE_DATASETS[dataset]
         object_names: list[tuple[str, Literal["table", "view"]]] = []
         if step in {SampleDataStep.TABLES, SampleDataStep.DATA, SampleDataStep.ALL}:
-            object_names.extend((name, "table") for name in SAMPLE_DATASETS[dataset].tables)
+            object_names.extend((name, "table") for name in definition.tables)
         if step in {SampleDataStep.VIEWS, SampleDataStep.ALL}:
-            object_names.extend((name, "view") for name in SAMPLE_DATASETS[dataset].views)
+            object_names.extend((name, "view") for name in definition.views)
+        for name in legacy_objects:
+            is_view = definition.legacy_names[name] in definition.views
+            object_names.append((name, "view" if is_view else "table"))
         targets: list[SchemaRefreshTargetObject] = []
         for name, object_type in object_names:
             target = self._schema_refresh_target_for_object_name(
@@ -4971,22 +5022,13 @@ class Nl2SqlService:
             and table.table_name.upper() in SAMPLE_DATASETS[dataset].tables
         }
 
-    def _sample_imported_objects(
+    def _sample_object_state(
         self, dataset: SampleDataset = SampleDataset.HR, *, warnings: list[str] | None = None
-    ) -> list[str]:
+    ) -> _SampleObjectState:
         current_owner = self._current_schema_owner()
         if self._use_oracle_runtime():
             try:
-                object_keys = {(current_owner, name) for name in SAMPLE_DATASETS[dataset].objects}
-                catalog = self._oracle_adapter.fetch_catalog(
-                    include_samples=False,
-                    object_keys=object_keys,
-                )
-                return self._sample_imported_objects_from_catalog(
-                    catalog,
-                    dataset=dataset,
-                    current_owner=current_owner,
-                )
+                return self._sample_oracle_object_state(dataset, current_owner=current_owner)
             except OracleAdapterError as exc:
                 message = (
                     "Sample data 導入状態の Oracle 確認に失敗したため、"
@@ -4997,25 +5039,142 @@ class Nl2SqlService:
                 logger.warning("sample_data_oracle_status_check_failed", exc_info=True)
                 catalog = self._sample_cached_catalog(warnings=warnings)
                 current_owner = self._current_schema_owner()
-                imported = self._sample_imported_objects_from_catalog(
+                state = self._sample_object_state_from_catalog(
                     catalog,
                     dataset=dataset,
                     current_owner=current_owner,
                 )
-                if imported:
-                    return imported
-                return (
-                    self._sample_imported_objects_from_profile(current_owner=current_owner)
-                    if dataset == SampleDataset.HR
-                    else []
+                if state.imported or state.conflicts or dataset != SampleDataset.HR:
+                    return state
+                return replace(
+                    state,
+                    imported=self._sample_imported_objects_from_profile(
+                        current_owner=current_owner
+                    ),
                 )
         catalog = self._sample_cached_catalog(warnings=warnings)
         current_owner = self._current_schema_owner()
-        return self._sample_imported_objects_from_catalog(
+        return self._sample_object_state_from_catalog(
             catalog,
             dataset=dataset,
             current_owner=current_owner,
         )
+
+    def _sample_oracle_object_state(
+        self, dataset: SampleDataset, *, current_owner: str
+    ) -> _SampleObjectState:
+        definition = SAMPLE_DATASETS[dataset]
+        object_keys = {
+            (current_owner, name) for name in (*definition.objects, *definition.legacy_names)
+        }
+        catalog = self._oracle_adapter.fetch_catalog(
+            include_samples=False,
+            object_keys=object_keys,
+        )
+        return self._sample_object_state_from_catalog(
+            catalog,
+            dataset=dataset,
+            current_owner=current_owner,
+        )
+
+    def _sample_mutation_state(
+        self, dataset: SampleDataset
+    ) -> tuple[_SampleObjectState | None, str, str]:
+        """取り込み・削除の前に同名オブジェクトを確認する。確認できない場合は実行しない。
+
+        戻り値は (状態, 実行しない場合の statement status, 実行しない理由)。
+        """
+
+        current_owner = self._current_schema_owner()
+        if self._use_oracle_runtime():
+            try:
+                state = self._sample_oracle_object_state(dataset, current_owner=current_owner)
+            except OracleAdapterError as exc:
+                return (
+                    None,
+                    "error",
+                    "同名オブジェクトの確認に失敗したため、サンプルデータを操作しませんでした: "
+                    f"{exc}",
+                )
+        else:
+            state = self._sample_object_state_from_catalog(
+                self._catalog, dataset=dataset, current_owner=current_owner
+            )
+        if state.conflicts:
+            return state, "blocked", self._sample_conflict_message(state.conflicts)
+        return state, "", ""
+
+    @staticmethod
+    def _sample_conflict_message(conflicts: Sequence[str]) -> str:
+        return (
+            "サンプルデータと同名で構成が異なるオブジェクト（"
+            + ", ".join(conflicts)
+            + "）が現在のスキーマにあります。利用者のオブジェクトを変更しないよう、"
+            "このサンプルデータの取り込み・削除は実行しません。"
+        )
+
+    def _sample_object_signatures(
+        self, dataset: SampleDataset
+    ) -> dict[str, tuple[bool, frozenset[str]]]:
+        """サンプル定義の DDL から、名前 → (ビューか, 列名集合) を得る。"""
+
+        return {
+            table.table_name: (
+                table.table_type.lower() == "view",
+                frozenset(column.column_name.upper() for column in table.columns),
+            )
+            for table in (
+                *self._sample_tables_from_ddl(dataset),
+                *self._sample_views_from_ddl(dataset),
+            )
+        }
+
+    def _sample_object_state_from_catalog(
+        self,
+        catalog: SchemaCatalog,
+        *,
+        dataset: SampleDataset = SampleDataset.HR,
+        current_owner: str,
+    ) -> _SampleObjectState:
+        # 名前の接頭辞ではなく、種類と列構成がサンプル定義と完全一致するかでサンプル由来を判定する。
+        # 利用者が同名の表を持つ場合に DROP や INSERT を適用しないための安全策。
+        definition = SAMPLE_DATASETS[dataset]
+        signatures = self._sample_object_signatures(dataset)
+        owner_key = current_owner.upper()
+        found = {
+            table.table_name.upper(): (
+                table.table_type.lower() == "view",
+                frozenset(column.column_name.upper() for column in table.columns),
+            )
+            for table in catalog.tables
+            if (table.owner or current_owner).upper() == owner_key
+        }
+        state = _SampleObjectState()
+        for name in definition.objects:
+            if name in found:
+                target = state.imported if found[name] == signatures.get(name) else state.conflicts
+                target.append(name)
+        for legacy_name, name in definition.legacy_names.items():
+            if legacy_name in found and found[legacy_name] == signatures.get(name):
+                state.legacy.append(legacy_name)
+        return state
+
+    def _sample_legacy_drop_statements(
+        self, dataset: SampleDataset, legacy_objects: Sequence[str]
+    ) -> list[str]:
+        definition = SAMPLE_DATASETS[dataset]
+        present = set(legacy_objects)
+        views = [
+            f"DROP VIEW {legacy}"
+            for legacy, name in definition.legacy_names.items()
+            if legacy in present and name in definition.views
+        ]
+        tables = [
+            f"DROP TABLE {legacy} CASCADE CONSTRAINTS PURGE"
+            for legacy, name in reversed(definition.legacy_names.items())
+            if legacy in present and name in definition.tables
+        ]
+        return views + tables
 
     def _sample_cached_catalog(self, *, warnings: list[str] | None = None) -> SchemaCatalog:
         try:
@@ -5029,20 +5188,6 @@ class Nl2SqlService:
                 warnings.append(message)
             logger.warning("sample_data_catalog_status_check_failed", exc_info=True)
             return self._catalog
-
-    def _sample_imported_objects_from_catalog(
-        self,
-        catalog: SchemaCatalog,
-        *,
-        dataset: SampleDataset = SampleDataset.HR,
-        current_owner: str,
-    ) -> list[str]:
-        owner_key = current_owner.upper()
-        existing = {
-            ((table.owner or current_owner).upper(), table.table_name.upper())
-            for table in catalog.tables
-        }
-        return [name for name in SAMPLE_DATASETS[dataset].objects if (owner_key, name) in existing]
 
     def _sample_imported_objects_from_profile(self, *, current_owner: str) -> list[str]:
         try:
@@ -5065,13 +5210,11 @@ class Nl2SqlService:
                 existing.add(identity.object_name)
         return [name for name in SAMPLE_DATASETS[SampleDataset.HR].objects if name in existing]
 
-    def _sample_confirmation_error(
-        self, confirmation: str, dataset: SampleDataset = SampleDataset.HR
-    ) -> str:
-        expected = SAMPLE_DATASETS[dataset].confirmation
-        if confirmation.strip() == expected:
+    @staticmethod
+    def _sample_confirmation_error(confirmation: str) -> str:
+        if confirmation.strip() == SAMPLE_DATA_CONFIRMATION:
             return ""
-        return f"実行するには confirmation に {expected} を入力してください。"
+        return f"実行するには confirmation に {SAMPLE_DATA_CONFIRMATION} を入力してください。"
 
     def _statement_results(
         self,
@@ -5120,9 +5263,17 @@ class Nl2SqlService:
             }
         )
 
-    def _remove_sample_from_state(self, dataset: SampleDataset = SampleDataset.HR) -> None:
+    def _remove_sample_from_state(
+        self,
+        dataset: SampleDataset = SampleDataset.HR,
+        *,
+        legacy_objects: Sequence[str] = (),
+    ) -> None:
         current_owner = self._current_schema_owner()
-        sample_keys = {(current_owner.upper(), name) for name in SAMPLE_DATASETS[dataset].objects}
+        sample_keys = {
+            (current_owner.upper(), name)
+            for name in (*SAMPLE_DATASETS[dataset].objects, *legacy_objects)
+        }
         self._catalog = self._catalog.model_copy(
             update={
                 "refreshed_at": _utc_now(),

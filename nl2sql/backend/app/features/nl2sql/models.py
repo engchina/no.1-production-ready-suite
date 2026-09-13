@@ -774,9 +774,13 @@ class SampleDataInfo(BaseModel):
     dataset: SampleDataset = SampleDataset.HR
     runtime: str = "deterministic"
     profile_id: str = ""
-    confirmation: str = "SQL_ASSIST_SAMPLE"
+    confirmation: str = "ADMIN_EXECUTE"
     objects: list[str] = Field(default_factory=list)
     imported_objects: list[str] = Field(default_factory=list)
+    # 同名だが種類・列構成がサンプル定義と異なり、利用者のものとみなしたオブジェクト。
+    conflicting_objects: list[str] = Field(default_factory=list)
+    # 旧名（SAMPLE_NL2SQL_ 接頭辞）で残っているサンプルオブジェクト。削除時に併せて削除する。
+    legacy_objects: list[str] = Field(default_factory=list)
     sql: dict[str, list[str]] = Field(default_factory=dict)
     warnings: list[str] = Field(default_factory=list)
 

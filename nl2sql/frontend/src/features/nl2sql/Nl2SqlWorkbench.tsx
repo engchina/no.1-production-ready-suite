@@ -854,7 +854,7 @@ function ExecutableNl2SqlWorkbench() {
     try {
       const result = await apiPost<SampleDataMutationData>("/api/nl2sql/sample-data/import", {
         step: "all",
-        confirmation: "SQL_ASSIST_SAMPLE",
+        confirmation: "ADMIN_EXECUTE",
       });
       if (!result.executed) {
         const message = sampleDataMutationFailureMessage(result);

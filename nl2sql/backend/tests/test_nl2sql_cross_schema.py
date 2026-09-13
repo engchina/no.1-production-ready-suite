@@ -44,9 +44,11 @@ SAMPLE_OBJECTS = ["DEPARTMENT", "EMPLOYEE", "PROJECT", "V_EMP_DEPT", "V_DEPT_PRO
 
 
 def _sample_tables(owner: str) -> list[SchemaTable]:
+    # 導入判定は種類と列構成で行うため、サンプル DDL と同じ列を持たせる。
+    ddl = Nl2SqlService(store=MemoryNl2SqlStore())
     return [
-        _table(owner, name, table_type="VIEW" if name.startswith("V_") else "TABLE")
-        for name in SAMPLE_OBJECTS
+        item.model_copy(update={"owner": owner, "logical_name": f"{owner} {item.table_name}"})
+        for item in (*ddl._sample_tables_from_ddl(), *ddl._sample_views_from_ddl())  # noqa: SLF001
     ]
 
 

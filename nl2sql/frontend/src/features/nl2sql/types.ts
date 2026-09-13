@@ -1126,6 +1126,10 @@ export interface SampleDataInfo {
   confirmation: string;
   objects: string[];
   imported_objects: string[];
+  /** 同名だが構成がサンプル定義と異なり、利用者のものとみなしたオブジェクト。 */
+  conflicting_objects?: string[];
+  /** 旧名（SAMPLE_NL2SQL_ 接頭辞）で残っているサンプルオブジェクト。削除時に併せて削除される。 */
+  legacy_objects?: string[];
   sql: Record<string, string[]>;
   warnings: string[];
 }

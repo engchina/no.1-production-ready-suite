@@ -2472,7 +2472,7 @@ def test_nl2sql_capability_boundaries_and_feedback_ownership(
                 await client.post(
                     "/api/nl2sql/sample-data/import",
                     headers={"X-CSRF-Token": csrf},
-                    json={"step": "all", "confirmation": "SQL_ASSIST_SAMPLE"},
+                    json={"step": "all", "confirmation": "ADMIN_EXECUTE"},
                 )
             ).status_code == 403
             assert (await client.get("/api/nl2sql/legacy-learning-material")).status_code == 403
