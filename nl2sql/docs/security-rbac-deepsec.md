@@ -295,18 +295,39 @@ SELECT e.ROLE_ID, e.ENTITLEMENT_ID, e.TARGET_OWNER, e.TARGET_OBJECT,
 | owner 省略の旧形式 | `"Mixed_Case"` はカタログの引用名の表に解決する。引用なしの `mixed_case` は `MIXED_CASE` として解決し、引用名の表 `Mixed_Case` には解決しない |
 | SQL 安全性検査（許可表の照合） | SQL の表参照は sqlglot の引用情報（`SqlTableReference.owner_quoted` / `name_quoted`）を使い、引用なしを大文字、引用ありを書かれたとおりに解釈する。`SALES.MIXED_CASE` だけを許可したとき `SELECT * FROM SALES."Mixed_Case"` を拒否し、逆も拒否する（修正前はどちらも `SALES.MIXED_CASE` として許可していた） |
 | SQL 生成の schema context | Profile の対象から schema catalog の詳細を読むとき、大文字小文字だけが異なる表の定義は使わない（#563 で schema catalog の詳細取得自体が大文字小文字を区別するようになった） |
-| Select AI の `object_list` | 引用が必要な owner / 表名を含む Profile は、Oracle へ反映せず `PROFILE_OBJECT_LIST_UNSUPPORTED` で同期 job を失敗させ、Select AI / Select AI Agent の実行を「object scope が未同期」として止める（下記「未確認事項」）。引用が不要な名前の `object_list` は従来と同じ |
+| Select AI の `object_list` | #564 で実 Oracle の挙動を確認し、引用が必要な owner / 表名は `{"owner": "SALES", "name": "\"Mixed_Case\""}` の token で反映する（下記「確認結果」）。#561 の時点では確認前のため `PROFILE_OBJECT_LIST_UNSUPPORTED` で同期を止めていたが、#564 で解除した。引用が不要な名前の `object_list` は従来と同じ |
 | オントロジー | 質問補完の代表値も引用規則どおりに Profile の対象へ絞る。node の識別と Profile の view は #563 で引用名に対応した（次節）。AI 構築は引き続き対象外 |
 | DeepSec の関連テーブル候補（`GET /api/security/deepsec/relations`） | Profile の object が canonical な修飾名になるため、引用名の表を対象・関連テーブルとして選べる |
 | 画面（業務プロファイル・スキーマ参照） | 対象の選択・件数・一括選択・未保存判定のキーを `normalizeDbObjectKey`（`dbObjectIdentity.ts`）にそろえ、引用名を大文字化しない |
 
-#### 未確認事項: Select AI の `object_list` と引用名
+#### 確認結果: Select AI の `object_list`・合成データ生成と引用名（Issue #564）
 
 Oracle のドキュメント（`DBMS_CLOUD_AI` の profile 属性 `object_list`）は `{"owner": "SH", "name": "customers"}` の
-形式だけを示し、大文字小文字や二重引用符の扱いを規定していない（例は小文字の `customers` で `SH.CUSTOMERS` を指す）。
-そのため `Mixed_Case` を渡すと大文字の `MIXED_CASE` と解釈される可能性があり、`"Mixed_Case"` を渡す形式が有効かも
-確認できていない。実 Oracle で検証するまでは推測で渡さず、明示的なエラーにしている。引用名の表は Select AI 以外の
-エンジン（Enterprise AI Direct 等）で利用する。
+形式だけを示し、大文字小文字や二重引用符の扱いを規定していない。そこで実 Oracle で次を確認した。
+
+- 環境: Autonomous Database（Oracle AI Database 26ai Enterprise Edition Release 23.26.3.3.0）、2026-09-14 実施。
+- 同じ owner に `ZZ_CLAUDE_QV_<時刻>`（列 `ID` / `UPPER_ONLY_COL`）と `"Zz_Claude_Qv_<時刻>"`（列 `"Id"` /
+  `"Quoted_Only_Col"`）を作り、`object_list` の表記ごとに Select AI profile を作成して `showprompt` / `showsql` と
+  `GENERATE_SYNTHETIC_DATA`（1 行）を実行した。検証用の表・profile は確認後にすべて削除した。
+
+| 渡した表記 | `USER_CLOUD_AI_PROFILE_ATTRIBUTES` の再読込 | `showprompt` の表定義 / `showsql` の FROM | 合成データの生成先 |
+|---|---|---|---|
+| `{"owner": "ADMIN", "name": "Zz_Claude_Qv_…"}`（引用なし・大文字小文字混在） | 渡したとおり | **大文字の表** `"ADMIN"."ZZ_CLAUDE_QV_…"` | `object_name` / `object_list` とも **大文字の表** |
+| `{"owner": "ADMIN", "name": "\"Zz_Claude_Qv_…\""}`（引用あり） | 渡したとおり（引用符付き） | 引用名の表 `"ADMIN"."Zz_Claude_Qv_…"` | `object_name` / `object_list` とも引用名の表 |
+| `{"owner": "\"ADMIN\"", "name": "\"Zz_Claude_Qv_…\""}` | 渡したとおり | 引用名の表 | — |
+| `{"owner": "ADMIN", "name": "ZZ_CLAUDE_QV_…"}` / `{"owner": "admin", "name": "zz_claude_qv_…"}` | 渡したとおり | 大文字の表 | — |
+
+`DBMS_CLOUD_AI` は `object_list` の owner / name と `GENERATE_SYNTHETIC_DATA` の `owner_name` / `object_name` を
+**SQL 識別子として解釈する**（引用なしは大文字化、`"..."` は大文字小文字を保持）。そのため:
+
+- `select_ai_object_list_entry`（`oracle_adapter.py`）は、カタログ上の名前を `format_object_part` の token
+  （引用が必要な部分だけ `"..."`）で渡す。引用が不要な名前は従来と同じ値になる。
+  Select AI / Select AI Agent の Profile 同期は引用名の表でも通常どおり行い、`PROFILE_OBJECT_LIST_UNSUPPORTED` は廃止した。
+- `generate_synthetic_data` も owner / 表名を同じ token で渡す。修正前はカタログ上の名前（`Mixed_Case`）をそのまま
+  渡していたため、**引用名の表を対象にすると大文字の同名表に行を生成する**経路があった（現行の受付は必ずプレビュー経由で
+  `NL2SQL_SP_…` の一時表を生成対象にするため該当しない。`preview=false` で受け付けた旧履歴の実行と
+  `Nl2SqlService.generate_synthetic_data` の直接呼び出しが該当する）。
+- 再読込の照合（`_select_ai_object_scope_set`）は、Oracle が返す表記を同じ規則（`parse_object_identity`）で解釈する。
 
 #### 既存 Profile の互換と誤保存の検出
 

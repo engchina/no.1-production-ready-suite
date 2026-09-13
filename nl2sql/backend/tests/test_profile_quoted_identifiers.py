@@ -9,7 +9,6 @@ import pytest
 from app.features.nl2sql.models import (
     AllowedObjects,
     Nl2SqlProfile,
-    ProfileSelectAiProfileRequest,
     SchemaCatalog,
     SchemaTable,
 )
@@ -24,7 +23,6 @@ from app.features.nl2sql.ontology_router import OntologyApiRuntime
 from app.features.nl2sql.oracle_adapter import (
     OracleAdapterError,
     OracleNl2SqlAdapter,
-    SelectAiObjectListUnsupportedError,
 )
 from app.features.nl2sql.profile_sync import _profile_sync_public_error
 from app.features.nl2sql.service import Nl2SqlService, _graph_with_resolved_table_owners
@@ -250,24 +248,24 @@ def test_generation_catalog_does_not_use_upper_table_detail_for_quoted_profile_o
     assert [c.column_name for c in generated.tables[0].columns] == ["Amount"]
 
 
-# --- Select AI の object_list --------------------------------------------------
+# --- Select AI の object_list（#564 で実 Oracle を確認し、引用名を token で渡す） ----------
 
 
-def test_select_ai_object_list_rejects_names_that_require_quoting() -> None:
+def test_select_ai_object_list_passes_quoted_names_as_sql_identifier_tokens() -> None:
     service = _both_tables_service()
     profile = service.create_profile(
-        Nl2SqlProfile(id="both", name="両方", allowed_tables=[UPPER, QUOTED])
+        Nl2SqlProfile(id="both", name="両方", allowed_tables=[UPPER, QUOTED, 'SALES."売上"'])
     )
 
-    with pytest.raises(SelectAiObjectListUnsupportedError) as exc_info:
-        service.build_select_ai_profile_attributes(profile)
+    # DBMS_CLOUD_AI は owner / name を SQL 識別子として解釈する（引用なしは大文字化）。
+    assert service.build_select_ai_profile_attributes(profile)["object_list"] == [
+        {"owner": "SALES", "name": "MIXED_CASE"},
+        {"owner": "SALES", "name": '"Mixed_Case"'},
+        {"owner": "SALES", "name": '"売上"'},
+    ]
 
-    assert exc_info.value.object_names == [QUOTED]
-    assert "Select AI Profile の object_list に反映できません" in str(exc_info.value)
-    assert "MIXED_CASE" not in str(exc_info.value).replace('"Mixed_Case"', "")
 
-
-def test_select_ai_refresh_records_unsynchronized_scope_for_quoted_profile() -> None:
+def test_select_ai_refresh_synchronizes_quoted_profile_scope() -> None:
     service = _both_tables_service()
     profile = service.create_profile(
         Nl2SqlProfile(id="quoted", name="引用名", allowed_tables=[QUOTED])
@@ -275,50 +273,93 @@ def test_select_ai_refresh_records_unsynchronized_scope_for_quoted_profile() -> 
 
     refreshed = service.refresh_select_ai_profile("quoted")
 
-    assert refreshed.refreshed is False
-    assert refreshed.status == "error"
-    assert "Select AI Profile の object_list に反映できません" in refreshed.warning
-    assert refreshed.engine_meta["unsupported_object_list_names"] == [QUOTED]
-    with pytest.raises(OracleAdapterError, match="未同期"):
-        service._assert_select_ai_scope_ready(profile)  # noqa: SLF001
+    assert refreshed.status == "ready"
+    assert refreshed.warning == ""
+    assert "unsupported_object_list_names" not in refreshed.engine_meta
+    service._assert_select_ai_scope_ready(profile)  # noqa: SLF001
 
 
-def test_profile_select_ai_upsert_returns_explicit_error_for_quoted_profile() -> None:
+def test_select_ai_scope_reread_distinguishes_quoted_and_upper_entries() -> None:
     service = _both_tables_service()
-    profile = service.create_profile(
-        Nl2SqlProfile(id="quoted", name="引用名", allowed_tables=[QUOTED])
-    )
 
-    result = service.upsert_profile_select_ai_profile(
-        "quoted", ProfileSelectAiProfileRequest(confirmation="ADMIN_EXECUTE")
-    )
-
-    assert result.executed is False
-    assert result.status == "error"
-    assert result.engine_meta["unsupported_object_list_names"] == [QUOTED]
-    assert "Select AI Profile の object_list に反映できません" in result.warnings[0]
-    with pytest.raises(OracleAdapterError, match="未同期"):
-        service._assert_select_ai_scope_ready(profile)  # noqa: SLF001
-
-    code, message = _profile_sync_public_error(SelectAiObjectListUnsupportedError([QUOTED]))
-    assert code == "PROFILE_OBJECT_LIST_UNSUPPORTED"
-    assert QUOTED in message
-    assert "再試行" not in message
+    # Oracle の再読込結果（USER_CLOUD_AI_PROFILE_ATTRIBUTES）は渡した表記のまま返る。
+    assert service._select_ai_object_scope_set(  # noqa: SLF001
+        [{"owner": "SALES", "name": '"Mixed_Case"'}, {"owner": "sales", "name": "mixed_case"}]
+    ) == {QUOTED, UPPER}
+    assert service._select_ai_object_scope_set(  # noqa: SLF001
+        [{"owner": "SALES", "name": "Mixed_Case"}]
+    ) == {UPPER}
 
 
 def test_adapter_object_list_uses_quoting_rules() -> None:
     settings = get_settings().model_copy(update={"oracle_user": "APP"})
     adapter = OracleNl2SqlAdapter(settings)
 
-    assert adapter._object_list(
-        ["ORDERS", "sh.orders", '"SALES"."MIXED_CASE"']
-    ) == [  # noqa: SLF001
+    assert adapter._object_list(  # noqa: SLF001
+        ["ORDERS", "sh.orders", '"SALES"."MIXED_CASE"', QUOTED, '"Sales"."Orders"']
+    ) == [
         {"owner": "APP", "name": "ORDERS"},
         {"owner": "SH", "name": "ORDERS"},
         {"owner": "SALES", "name": "MIXED_CASE"},
+        {"owner": "SALES", "name": '"Mixed_Case"'},
+        {"owner": '"Sales"', "name": '"Orders"'},
     ]
-    with pytest.raises(OracleAdapterError, match=r'SALES\."Mixed_Case"'):
-        adapter._object_list([UPPER, QUOTED])  # noqa: SLF001
+
+
+def test_adapter_normalized_object_list_keeps_quoted_and_upper_same_name_entries() -> None:
+    from app.features.nl2sql.oracle_adapter import _normalize_select_ai_object_list
+
+    entries = [
+        {"owner": "SALES", "name": "MIXED_CASE"},
+        {"owner": "SALES", "name": '"Mixed_Case"'},
+        {"owner": "sales", "name": "mixed_case"},
+        {"owner": "SALES", "name": '"NL2SQL_HIDDEN"'},
+    ]
+
+    assert _normalize_select_ai_object_list(entries) == entries[:2]
+
+
+@pytest.mark.parametrize("multiple", [False, True])
+def test_synthetic_data_passes_quoted_table_names_as_sql_identifier_tokens(
+    monkeypatch: pytest.MonkeyPatch, multiple: bool
+) -> None:
+    import json
+    from collections.abc import Iterator
+    from contextlib import contextmanager
+    from unittest.mock import MagicMock
+
+    adapter = OracleNl2SqlAdapter(get_settings().model_copy(update={"oracle_user": "APP"}))
+    conn = MagicMock()
+    cursor = conn.cursor.return_value.__enter__.return_value
+
+    @contextmanager
+    def connection() -> Iterator[Any]:
+        yield conn
+
+    monkeypatch.setattr(adapter, "connection", connection)
+    result = adapter.generate_synthetic_data(
+        table_name="" if multiple else QUOTED,
+        object_list=[QUOTED, UPPER] if multiple else [],
+        row_count=1,
+        profile_name="P",
+    )
+    _sql, binds = cursor.execute.call_args.args
+
+    # 引用しない `Mixed_Case` を渡すと Oracle は大文字の同名表 `MIXED_CASE` に生成する（#564）。
+    if multiple:
+        assert [(item["owner"], item["name"]) for item in json.loads(binds["object_list"])] == [
+            ("SALES", '"Mixed_Case"'),
+            ("SALES", "MIXED_CASE"),
+        ]
+    else:
+        assert (binds["owner_name"], binds["object_name"]) == ("SALES", '"Mixed_Case"')
+    assert result["table_name"] == QUOTED
+
+
+def test_profile_sync_no_longer_maps_object_list_errors_to_unsupported() -> None:
+    code, _message = _profile_sync_public_error(OracleAdapterError("ORA-20047: object"))
+
+    assert code == "PROFILE_SYNC_FAILED"
 
 
 # --- オントロジー --------------------------------------------------------------

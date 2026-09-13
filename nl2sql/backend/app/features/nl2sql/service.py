@@ -293,7 +293,6 @@ from .oracle_adapter import (
     OracleAdapterError,
     OracleNl2SqlAdapter,
     SelectAiCredentialMissingError,
-    SelectAiObjectListUnsupportedError,
     TabularImportValidationError,
     select_ai_object_list_entry,
 )
@@ -14663,25 +14662,7 @@ class Nl2SqlService:
     def refresh_select_ai_profile(self, profile_id: str | None) -> AssetRefreshData:
         profile = self.get_profile(profile_id)
         profile_name = self._select_ai_profile_name(profile)
-        try:
-            attributes = self.build_select_ai_profile_attributes(profile)
-        except SelectAiObjectListUnsupportedError as exc:
-            # Oracle へ反映せず、Select AI の実行を未同期として止める。
-            data = self._record_select_ai_scope_state(
-                profile_name=profile_name,
-                expected_scope=set(),
-                actual_scope=set(),
-                warning=str(exc),
-            )
-            return data.model_copy(
-                update={
-                    "engine_meta": {
-                        **data.engine_meta,
-                        "allowed_objects": self.profile_allowed_object_names(profile),
-                        "unsupported_object_list_names": exc.object_names,
-                    }
-                }
-            )
+        attributes = self.build_select_ai_profile_attributes(profile)
         expected_scope = self._select_ai_object_scope_set(attributes.get("object_list"))
         actual_scope = set(expected_scope)
         warning = ""
@@ -14727,26 +14708,7 @@ class Nl2SqlService:
         request: ProfileSelectAiProfileRequest,
     ) -> SelectAiDbProfileMutationData:
         profile = self.get_profile(profile_id)
-        try:
-            attributes = self.build_select_ai_profile_attributes(profile)
-        except SelectAiObjectListUnsupportedError as exc:
-            profile_name = self._select_ai_profile_name(profile)
-            # 以前に反映済みの Oracle Profile が残っていても、Select AI の実行を未同期として止める。
-            self._record_select_ai_scope_state(
-                profile_name=profile_name,
-                expected_scope=set(),
-                actual_scope=set(),
-                warning=str(exc),
-            )
-            return SelectAiDbProfileMutationData(
-                runtime="oracle" if self._use_oracle_runtime() else "deterministic",
-                executed=False,
-                status="error",
-                profile_name=profile_name,
-                original_name=request.original_name.strip(),
-                warnings=[str(exc)],
-                engine_meta={"unsupported_object_list_names": exc.object_names},
-            )
+        attributes = self.build_select_ai_profile_attributes(profile)
         if request.attributes_override:
             attributes = {**attributes, **request.attributes_override}
         profile_name = self._select_ai_profile_name(profile)
@@ -18916,20 +18878,16 @@ class Nl2SqlService:
         return objects
 
     def _select_ai_object_list(self, object_names: Sequence[str]) -> list[dict[str, str]]:
+        # 引用名は `"Mixed_Case"` の token で渡す。DBMS_CLOUD_AI は SQL 識別子として解釈するため、
+        # 引用しない `Mixed_Case` は大文字の同名表 `MIXED_CASE` になる（#564 で実 Oracle を確認）。
         objects: list[dict[str, str]] = []
-        quoted_names: list[str] = []
         for object_name in object_names:
             if not str(object_name or "").strip():
                 continue
             identity = parse_object_identity(
                 self._resolve_profile_object_name(str(object_name)),
             )
-            try:
-                objects.append(select_ai_object_list_entry(identity))
-            except SelectAiObjectListUnsupportedError as exc:
-                quoted_names.extend(exc.object_names)
-        if quoted_names:
-            raise SelectAiObjectListUnsupportedError(quoted_names)
+            objects.append(select_ai_object_list_entry(identity))
         return objects
 
     def _resolve_allowed_objects(
