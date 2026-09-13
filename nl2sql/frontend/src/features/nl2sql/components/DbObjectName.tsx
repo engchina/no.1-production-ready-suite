@@ -18,6 +18,11 @@ type DbObjectNameProps = {
    * accent 色は「押せる」ことを示すため、見出し・バッジ・確認ダイアログ・結果表示では使わない。
    */
   interactive?: boolean;
+  /**
+   * 1 行密度のリスト（スキーマ参照・許可オブジェクト選択）では折り返さず末尾を省略する。
+   * 省略時も全文は title で確認できる。`<wbr>` は nowrap でも改行位置になるため、この場合は使わない。
+   */
+  truncate?: boolean;
   className?: string;
   "data-testid"?: string;
 } & (
@@ -34,22 +39,26 @@ export function DbObjectName({
   value,
   size = "sm",
   interactive = false,
+  truncate = false,
   className = "",
   "data-testid": testId,
 }: DbObjectNameProps) {
   const text = object ? formatDbObjectName(object) : (value ?? "");
-  return (
-    <IdentifierText
-      value={text}
-      data-testid={testId}
-      className={[
-        "font-mono font-semibold",
-        SIZE_CLASS[size],
-        interactive ? "text-accent-fg" : "text-fg",
-        className,
-      ]
-        .filter(Boolean)
-        .join(" ")}
-    />
-  );
+  const classes = [
+    "font-mono font-semibold",
+    SIZE_CLASS[size],
+    interactive ? "text-accent-fg" : "text-fg",
+    truncate ? "truncate" : "",
+    className,
+  ]
+    .filter(Boolean)
+    .join(" ");
+  if (truncate) {
+    return (
+      <span className={classes} title={text} data-testid={testId}>
+        {text}
+      </span>
+    );
+  }
+  return <IdentifierText value={text} data-testid={testId} className={classes} />;
 }

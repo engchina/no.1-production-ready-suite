@@ -665,7 +665,7 @@ function SchemaObjectOption({
         className="h-4 w-4 shrink-0 accent-[var(--color-accent-emphasis)]"
       />
       <span className="min-w-0 flex-1">
-        <DbObjectName value={qualified} size="xs" interactive className="block truncate" />
+        <DbObjectName value={qualified} size="xs" interactive truncate className="block" />
         <span className="block truncate text-xs text-fg-muted">
           {object.logical_name || object.comment || object.table_name}
         </span>

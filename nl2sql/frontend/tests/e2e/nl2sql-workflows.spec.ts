@@ -3452,7 +3452,11 @@ test("スキーマ参照はアコーディオンで、表名クリックで表�
   // 表名クリック=表名（論理名）を挿入。chevron クリックでは挿入されない。
   const question = nl2sqlQuestionInput(page);
   await expect(question).toHaveValue("");
-  await page.getByRole("button", { name: /^請求 INVOICES/ }).click();
+  // 表名は所有者付きの修飾名で表示し、所有者を別バッジで重ねない（#555）。
+  await expect(
+    page.getByTestId("nl2sql-schema-table-item").filter({ has: secondToggle }).getByTestId("nl2sql-schema-table-qualified-name")
+  ).toHaveText("APP.INVOICES");
+  await page.getByRole("button", { name: /^請求 APP\.INVOICES/ }).click();
   await expect(question).toHaveValue("\"請求\"");
   await secondToggle.click();
   await expect(question).toHaveValue("\"請求\""); // chevron では変化しない

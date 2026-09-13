@@ -337,7 +337,8 @@ function SchemaTableItem({
             value={schemaTableQualifiedName(table)}
             size="xs"
             interactive
-            className="min-w-0 truncate"
+            truncate
+            className="min-w-0"
             data-testid="nl2sql-schema-table-qualified-name"
           />
           <span className="ml-auto flex shrink-0 items-center gap-1.5 text-xs text-fg-muted">
