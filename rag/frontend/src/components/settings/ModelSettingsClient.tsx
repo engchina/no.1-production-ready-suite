@@ -10,6 +10,7 @@ import {
   CardDescription,
   CardHeader,
   CardTitle,
+  RequiredBadge,
   SelectField,
   type SelectFieldOption,
   Skeleton,
@@ -688,7 +689,7 @@ function ModelCatalogEditor({
         <FieldLabel
           htmlFor="enterprise-model-catalog"
           label={t("settings.model.enterprise.models")}
-          badge={t("settings.model.requiredInOci")}
+          requiredLabel={t("settings.model.requiredInOci")}
         />
         <Button
           type="button"
@@ -1096,10 +1097,13 @@ function FieldLabel({
   htmlFor,
   label,
   badge,
+  requiredLabel,
 }: {
   htmlFor: string;
   label: string;
   badge?: string;
+  /** 条件付きを含む必須の文言（例:「OCI 運用時必須」）。中立色の RequiredBadge で出す。 */
+  requiredLabel?: string;
 }) {
   return (
     <div className="flex min-h-5 items-center gap-2">
@@ -1111,6 +1115,7 @@ function FieldLabel({
           {badge}
         </span>
       ) : null}
+      {requiredLabel ? <RequiredBadge label={requiredLabel} /> : null}
     </div>
   );
 }

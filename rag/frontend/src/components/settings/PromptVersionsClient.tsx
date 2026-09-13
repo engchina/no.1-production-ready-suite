@@ -9,8 +9,10 @@ import {
   CardTitle,
   Button,
   FormStatus,
+  RequiredBadge,
   Skeleton,
   Switch,
+  TextField,
 } from "@engchina/production-ready-ui";
 import { useState } from "react";
 import { CheckCircle2, FileText, Plus } from "lucide-react";
@@ -112,18 +114,19 @@ export function PromptVersionsClient() {
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
-          <Field label={t("settings.prompts.form.name")} required>
-            <input
-              type="text"
-              value={name}
-              maxLength={NAME_MAX}
-              onChange={(event) => setName(event.target.value)}
-              placeholder={t("settings.prompts.form.namePlaceholder")}
-              className="h-11 w-full rounded-md border border-border-control bg-surface px-3 text-sm text-fg outline-none transition-colors placeholder:text-fg-muted focus-visible:border-focus-ring"
-            />
-          </Field>
+          <TextField
+            id="prompt-version-name"
+            label={t("settings.prompts.form.name")}
+            value={name}
+            maxLength={NAME_MAX}
+            onValueChange={setName}
+            placeholder={t("settings.prompts.form.namePlaceholder")}
+            required
+            requiredLabel={t("common.required")}
+          />
           <Field label={t("settings.prompts.form.systemPrompt")} required>
             <textarea
+              aria-required="true"
               value={systemPrompt}
               maxLength={PROMPT_MAX}
               onChange={(event) => setSystemPrompt(event.target.value)}
@@ -132,16 +135,14 @@ export function PromptVersionsClient() {
               className="w-full resize-y rounded-md border border-border-control bg-surface p-3 text-sm leading-relaxed text-fg outline-none transition-colors placeholder:text-fg-muted focus-visible:border-focus-ring"
             />
           </Field>
-          <Field label={t("settings.prompts.form.note")}>
-            <input
-              type="text"
-              value={note}
-              maxLength={NOTE_MAX}
-              onChange={(event) => setNote(event.target.value)}
-              placeholder={t("settings.prompts.form.notePlaceholder")}
-              className="h-11 w-full rounded-md border border-border-control bg-surface px-3 text-sm text-fg outline-none transition-colors placeholder:text-fg-muted focus-visible:border-focus-ring"
-            />
-          </Field>
+          <TextField
+            id="prompt-version-note"
+            label={t("settings.prompts.form.note")}
+            value={note}
+            maxLength={NOTE_MAX}
+            onValueChange={setNote}
+            placeholder={t("settings.prompts.form.notePlaceholder")}
+          />
           <div className="flex items-center justify-between gap-3 text-sm text-fg">
             <span>{t("settings.prompts.form.activate")}</span>
             <Switch
@@ -205,9 +206,10 @@ function Field({
 }) {
   return (
     <label className="block space-y-1.5">
-      <span className="flex items-center gap-1 text-sm font-medium text-fg">
+      <span className="flex items-center gap-2 text-sm font-medium text-fg">
         {label}
-        {required ? <span className="text-danger-fg">*</span> : null}
+        {/* 入力側の aria-required が必須を伝えるので、バッジは読み上げから外す */}
+        {required ? <RequiredBadge label={t("common.required")} aria-hidden /> : null}
       </span>
       {children}
     </label>

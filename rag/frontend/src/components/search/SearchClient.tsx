@@ -9,6 +9,7 @@ import {
   CardContent,
   CardHeader,
   CardTitle,
+  RequiredBadge,
   SelectField,
   type SelectFieldOption,
   ToggleChip,
@@ -1247,9 +1248,8 @@ function BusinessViewScopePicker({
     <div className="space-y-1.5 sm:col-span-4">
       <p className="flex items-center gap-1.5 text-xs font-medium text-fg">
         {t("businessViews.scope.label")}
-        <span className="rounded-full bg-warning-subtle px-2 py-0.5 text-xs font-medium text-warning-fg">
-          {t("common.required")}
-        </span>
+        {/* グリッド選択は aria-required を持てないので、バッジは読み上げ対象のままにする */}
+        <RequiredBadge label={t("common.required")} />
       </p>
       <BusinessViewPickerGrid
         items={views}

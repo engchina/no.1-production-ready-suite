@@ -534,6 +534,23 @@ test("OCI 認証設定は runtime 由来値を初期表示する", async ({ page
   await expect(page.getByLabel(".env プレビュー")).toContainText("OCI_REGION=ap-osaka-1");
 });
 
+test("OCI 設定の必須表示は共有の「必須」タグにそろい、記号の * を出さない", async ({ page }) => {
+  await mockApi(page);
+  await page.goto("/settings/oci");
+
+  // 共有 TextField と独自入力（設定ファイルのパス / ネームスペース）で同じ表示・同じ読み上げ名になる
+  for (const label of ["OCI 設定ファイルのパス", "ユーザー OCID", "Object Storage ネームスペース"]) {
+    const input = page.getByRole("textbox", { name: label, exact: true });
+    await expect(input).toHaveAttribute("aria-required", "true");
+    await expect(page.locator(`label[for="${await input.getAttribute("id")}"]`)).toContainText(
+      "必須"
+    );
+  }
+  // 秘密鍵のドロップゾーンは button で aria-required を持てないため、タグを読み上げ名に含める
+  await expect(page.getByRole("button", { name: /^秘密鍵\s*必須/ })).toBeVisible();
+  await expect(page.locator("main label").filter({ hasText: "*" })).toHaveCount(0);
+});
+
 test("秘密鍵ファイルが無い場合は固定 path の案内を表示する", async ({ page }) => {
   await mockApi(page, {
     ociSettings: {

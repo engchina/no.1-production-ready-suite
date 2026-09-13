@@ -1022,7 +1022,6 @@ export const ja = {
   "settings.agentic.actions.unsaved": "未保存の変更があります。",
   "settings.agentic.loadError": "高度な検索設定を取得できませんでした。",
   "settings.agentic.saveError": "高度な検索設定を保存できませんでした。",
-  "settings.oci.required": "必須",
   "settings.oci.helper.configFile":
     "~/.oci/config 固定です。右のボタンで DEFAULT 設定を読み取り、内容を反映します。",
   "settings.oci.helper.configProfile": "DEFAULT 固定です。OCI config の DEFAULT 設定を読み取ります。",
@@ -1405,7 +1404,6 @@ export const ja = {
   "settings.database.field.dsnService": "Wallet サービス名",
   "settings.database.field.password": "パスワード",
   "settings.database.field.walletPassword": "Wallet パスワード",
-  "settings.database.requiredMark": "必須",
   "settings.database.helper.user": "Oracle 26ai に接続するアプリケーションユーザー。",
   "settings.database.helper.dsnService":
     "Wallet の tnsnames.ora から検出したサービス名を選択します。",
