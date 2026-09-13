@@ -1,6 +1,21 @@
 "use client";
 
 import {
+  PageBody,
+  Button,
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+  FieldError,
+  FormStatus,
+  SelectField,
+  type SelectFieldOption,
+  Skeleton,
+  TextField,
+} from "@engchina/production-ready-ui";
+import {
   AlertCircle,
   CheckCircle2,
   Database,
@@ -20,12 +35,6 @@ import { useEffect, useRef, useState, type DragEvent, type RefObject } from "rea
 
 import { CardErrorBoundary } from "@/components/CardErrorBoundary";
 import { ErrorState } from "@/components/StateViews";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { FieldError } from "@/components/ui/field-error";
-import { FormStatus } from "@/components/ui/form-status";
-import { SelectField, type SelectFieldOption } from "@/components/ui/select-field";
-import { Skeleton } from "@/components/ui/skeleton";
 import {
   SETTINGS_DETAIL_GRID_CLASS,
   SettingsSupplementalPanels,
@@ -184,16 +193,16 @@ export function DatabaseSettingsClient() {
 
   if (query.isPending) {
     return (
-      <div className="space-y-4 p-8">
+      <PageBody>
         <Skeleton className="h-20 w-full rounded-lg" />
         <Skeleton className="h-[460px] w-full rounded-lg" />
-      </div>
+      </PageBody>
     );
   }
 
   if (query.isError) {
     return (
-      <div className="p-8">
+      <PageBody>
         <ErrorState
           message={
             query.error instanceof ApiError
@@ -202,7 +211,7 @@ export function DatabaseSettingsClient() {
           }
           onRetry={() => void query.refetch()}
         />
-      </div>
+      </PageBody>
     );
   }
 
@@ -211,7 +220,7 @@ export function DatabaseSettingsClient() {
   const envPreview = buildDatabaseEnvFile(form, settings);
 
   return (
-    <div className="p-8">
+    <PageBody>
       <div className={SETTINGS_DETAIL_GRID_CLASS}>
         <div className="space-y-6">
         <form
@@ -223,7 +232,7 @@ export function DatabaseSettingsClient() {
           <Card className="rounded-md">
             <CardHeader className="p-6 pb-0">
               <div className="flex items-center gap-2 border-b border-border pb-5">
-                <Database size={18} aria-hidden />
+                <Database size={20} aria-hidden />
                 <CardTitle className="text-lg">{t("settings.database.cardTitle")}</CardTitle>
               </div>
             </CardHeader>
@@ -233,10 +242,10 @@ export function DatabaseSettingsClient() {
                 <TextField
                   id="oracle-user"
                   label={t("settings.database.field.dbUser")}
-                  required
+                  required requiredLabel={t("common.required")}
                   value={form.user}
-                  inputRef={userRef}
-                  onChange={(value) => updateForm({ user: value })}
+                  ref={userRef}
+                  onValueChange={(value) => updateForm({ user: value })}
                   placeholder={t("settings.database.placeholder.dbUser")}
                   error={errors.user}
                 />
@@ -281,23 +290,16 @@ export function DatabaseSettingsClient() {
               />
 
               <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
-                <Button type="submit" size="lg" loading={save.isPending}>
-                  <Save size={16} aria-hidden />
-                  {save.isPending
-                    ? t("settings.database.actions.saving")
-                    : t("settings.database.actions.saveDb")}
+                <Button type="submit" size="lg" loading={save.isPending} icon={Save}>
+                  {t("settings.database.actions.saveDb")}
                 </Button>
                 <Button
                   type="button"
                   size="lg"
                   variant="secondary"
                   loading={test.isPending}
-                  onClick={() => runTest(settings)}
-                >
-                  <PlugZap size={16} aria-hidden />
-                  {test.isPending
-                    ? t("settings.database.actions.testing")
-                    : t("settings.database.actions.testDb")}
+                  onClick={() => runTest(settings)} icon={PlugZap}>
+                  {t("settings.database.actions.testDb")}
                 </Button>
                 {saved ? (
                   <FormStatus tone="success" message={t("settings.database.actions.saved")} />
@@ -307,7 +309,7 @@ export function DatabaseSettingsClient() {
 
               {testResult ? <ConnectionTestResultPanel result={testResult} /> : null}
 
-              <p className="text-xs leading-relaxed text-muted">{t("settings.database.hint")}</p>
+              <p className="text-xs leading-relaxed text-fg-muted">{t("settings.database.hint")}</p>
             </CardContent>
           </Card>
         </form>
@@ -338,7 +340,7 @@ export function DatabaseSettingsClient() {
           }}
         />
       </div>
-    </div>
+    </PageBody>
   );
 }
 
@@ -461,7 +463,7 @@ function AdbManagementCard({ settings }: { settings: DatabaseSettingsData }) {
       <CardHeader className="p-6 pb-0">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border pb-5">
           <div className="flex items-center gap-2">
-            <Server size={18} aria-hidden />
+            <Server size={20} aria-hidden />
             <CardTitle className="text-lg">{t("settings.adb.title")}</CardTitle>
           </div>
           <Button
@@ -470,18 +472,14 @@ function AdbManagementCard({ settings }: { settings: DatabaseSettingsData }) {
             size="sm"
             loading={saveSettings.isPending}
             disabled={busy}
-            onClick={() => void handleRefresh()}
-          >
-            <RefreshCw size={15} aria-hidden />
-            {saveSettings.isPending
-              ? t("settings.adb.action.refreshing")
-              : t("settings.adb.action.refresh")}
+            onClick={() => void handleRefresh()} icon={RefreshCw}>
+            {t("settings.adb.action.refresh")}
           </Button>
         </div>
       </CardHeader>
 
       <CardContent className="space-y-5 p-6">
-        <p className="text-sm leading-relaxed text-muted">{t("settings.adb.description")}</p>
+        <p className="text-sm leading-relaxed text-fg-muted">{t("settings.adb.description")}</p>
 
         <div className="space-y-4">
           <SelectField
@@ -493,7 +491,7 @@ function AdbManagementCard({ settings }: { settings: DatabaseSettingsData }) {
             buttonClassName="h-11"
           />
           <div className="space-y-1.5">
-            <label htmlFor="adb-ocid" className="text-sm font-medium text-foreground">
+            <label htmlFor="adb-ocid" className="text-sm font-medium text-fg">
               {t("settings.adb.field.ocid")}
             </label>
             <input
@@ -503,9 +501,9 @@ function AdbManagementCard({ settings }: { settings: DatabaseSettingsData }) {
               readOnly
               aria-readonly="true"
               placeholder={t("settings.adb.placeholder.ocidEmpty")}
-              className="h-11 w-full cursor-not-allowed rounded-md border border-border bg-background px-3 text-sm text-muted outline-none placeholder:text-muted/70"
+              className="h-11 w-full cursor-not-allowed rounded-md border border-border-control bg-surface-sunken px-3 text-sm text-fg-muted outline-none placeholder:text-fg-muted"
             />
-            <p className="text-xs leading-relaxed text-muted">
+            <p className="text-xs leading-relaxed text-fg-muted">
               {t("settings.adb.helper.ocidReadonly")}
             </p>
           </div>
@@ -517,12 +515,8 @@ function AdbManagementCard({ settings }: { settings: DatabaseSettingsData }) {
             size="lg"
             loading={saveSettings.isPending}
             disabled={busy || !ocid.trim()}
-            onClick={() => void handleRefresh()}
-          >
-            <Save size={16} aria-hidden />
-            {saveSettings.isPending
-              ? t("settings.database.actions.saving")
-              : t("settings.database.actions.save")}
+            onClick={() => void handleRefresh()} icon={Save}>
+            {t("settings.database.actions.save")}
           </Button>
           <Button
             type="button"
@@ -530,12 +524,8 @@ function AdbManagementCard({ settings }: { settings: DatabaseSettingsData }) {
             variant="secondary"
             loading={start.isPending}
             disabled={busy || !ocid.trim()}
-            onClick={() => void handleStart()}
-          >
-            <Power size={16} aria-hidden />
-            {start.isPending
-              ? t("settings.adb.action.starting")
-              : t("settings.adb.action.start")}
+            onClick={() => void handleStart()} icon={Power}>
+            {t("settings.adb.action.start")}
           </Button>
           <Button
             type="button"
@@ -543,10 +533,8 @@ function AdbManagementCard({ settings }: { settings: DatabaseSettingsData }) {
             variant="secondary"
             loading={stop.isPending}
             disabled={busy || !ocid.trim()}
-            onClick={() => void handleStop()}
-          >
-            <PowerOff size={16} aria-hidden />
-            {stop.isPending ? t("settings.adb.action.stopping") : t("settings.adb.action.stop")}
+            onClick={() => void handleStop()} icon={PowerOff}>
+            {t("settings.adb.action.stop")}
           </Button>
           {actionError ? <FormStatus tone="danger" message={actionError} /> : null}
         </div>
@@ -577,10 +565,10 @@ function AdbLifecycleBadge({ state }: { state: string | null }) {
     <div
       className={cn(
         "flex items-center gap-2 rounded-md border px-3 py-2 text-sm font-medium",
-        tone === "ok" && "border-success/30 bg-success-bg/50 text-success",
-        tone === "danger" && "border-danger/30 bg-danger-bg/50 text-danger",
-        tone === "warning" && "border-warning/30 bg-warning-bg/60 text-warning",
-        tone === "muted" && "border-border bg-card text-muted"
+        tone === "ok" && "border-success-border bg-success-subtle text-success-fg",
+        tone === "danger" && "border-danger-border bg-danger-subtle text-danger-fg",
+        tone === "warning" && "border-warning-border bg-warning-subtle text-warning-fg",
+        tone === "muted" && "border-border bg-surface text-fg-muted"
       )}
     >
       <Icon size={16} aria-hidden />
@@ -594,16 +582,16 @@ function AdbLifecycleBadge({ state }: { state: string | null }) {
 function AdbOperationLog({ entries }: { entries: AdbOperationLogEntry[] }) {
   return (
     <div className="space-y-2">
-      <span className="block text-sm font-medium text-foreground">
+      <span className="block text-sm font-medium text-fg">
         {t("settings.adb.operationResult.title")}
       </span>
       <ul className="space-y-1.5">
         {entries.map((entry, index) => (
           <li
             key={`${entry.timestamp}-${index}`}
-            className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-border bg-card px-3 py-2 text-xs"
+            className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-border bg-surface px-3 py-2 text-xs"
           >
-            <span className="text-muted">{entry.timestamp}</span>
+            <span className="text-fg-muted">{entry.timestamp}</span>
             <span
               className={cn(
                 "rounded-full px-2 py-0.5 font-medium",
@@ -612,7 +600,7 @@ function AdbOperationLog({ entries }: { entries: AdbOperationLogEntry[] }) {
             >
               {entry.status}
             </span>
-            <span className="text-foreground">{entry.message}</span>
+            <span className="text-fg">{entry.message}</span>
           </li>
         ))}
       </ul>
@@ -638,14 +626,14 @@ function adbStatusBadgeClass(status: AdbInfoData["status"]): string {
   switch (status) {
     case "success":
     case "accepted":
-      return "bg-success-bg text-success";
+      return "bg-success-subtle text-success-fg";
     case "already_available":
     case "already_stopped":
-      return "bg-info-bg text-info";
+      return "bg-info-subtle text-info-fg";
     case "error":
-      return "bg-danger-bg text-danger";
+      return "bg-danger-subtle text-danger-fg";
     default:
-      return "bg-warning-bg text-warning";
+      return "bg-warning-subtle text-warning-fg";
   }
 }
 
@@ -686,55 +674,12 @@ function WalletServiceField({
     <TextField
       id="oracle-wallet-service"
       label={t("settings.database.field.serviceDsn")}
-      required
+      required requiredLabel={t("common.required")}
       value={value}
-      onChange={onChange}
+      onValueChange={onChange}
       placeholder={t("settings.database.placeholder.serviceDsnManual")}
       error={error}
     />
-  );
-}
-
-function TextField({
-  id,
-  label,
-  value,
-  onChange,
-  placeholder,
-  error,
-  required = false,
-  inputRef,
-}: {
-  id: string;
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  placeholder: string;
-  error?: string;
-  required?: boolean;
-  inputRef?: RefObject<HTMLInputElement | null>;
-}) {
-  const errorId = `${id}-error`;
-
-  return (
-    <div className="space-y-1.5">
-      <RequiredLabel id={id} label={label} required={required} />
-      <input
-        ref={inputRef}
-        id={id}
-        type="text"
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        placeholder={placeholder}
-        aria-invalid={Boolean(error)}
-        aria-describedby={error ? errorId : undefined}
-        className={cn(
-          "h-11 w-full rounded-md border bg-card px-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted/70 focus-visible:border-primary focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring",
-          error ? "border-danger" : "border-border"
-        )}
-      />
-      <FieldError id={errorId} message={error} />
-    </div>
   );
 }
 
@@ -772,7 +717,7 @@ function PasswordField({
       <div className="flex flex-wrap items-center justify-between gap-2">
         <RequiredLabel id={id} label={label} required={required} />
         {hasSavedSecret ? (
-          <span className="rounded-full border border-success/30 bg-success-bg px-2 py-0.5 text-xs font-medium text-success">
+          <span className="rounded-full border border-success-border bg-success-subtle px-2 py-0.5 text-xs font-medium text-success-fg">
             {t("settings.database.secrets.saved")}
           </span>
         ) : null}
@@ -794,8 +739,8 @@ function PasswordField({
           aria-invalid={Boolean(error)}
           aria-describedby={describedBy}
           className={cn(
-            "h-11 w-full rounded-md border bg-card px-3 pr-12 text-sm text-foreground outline-none transition-colors placeholder:text-muted/70 focus-visible:border-primary focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring disabled:cursor-not-allowed disabled:bg-background disabled:text-muted",
-            error ? "border-danger" : "border-border"
+            "h-11 w-full rounded-md border bg-surface px-3 pr-12 text-sm text-fg outline-none transition-colors placeholder:text-fg-muted focus-visible:border-focus-ring focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus-ring disabled:cursor-not-allowed disabled:bg-surface-disabled disabled:text-fg-disabled",
+            error ? "border-danger-fg" : "border-border-control"
           )}
         />
         <button
@@ -807,12 +752,12 @@ function PasswordField({
               ? t("settings.database.secrets.hide")
               : t("settings.database.secrets.show")
           }
-          className="absolute right-0 top-0 flex h-11 w-11 cursor-pointer items-center justify-center rounded-r-md text-muted transition-colors hover:bg-background hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-50"
+          className="absolute right-0 top-0 flex h-11 w-11 cursor-pointer items-center justify-center rounded-r-md text-fg-muted transition-colors hover:bg-surface-hover hover:text-fg focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus-ring disabled:cursor-not-allowed disabled:opacity-50"
         >
           {visible ? <EyeOff size={16} aria-hidden /> : <Eye size={16} aria-hidden />}
         </button>
       </div>
-      <p id={hintId} className="text-xs leading-relaxed text-muted">
+      <p id={hintId} className="text-xs leading-relaxed text-fg-muted">
         {hasSavedSecret
           ? t("settings.database.helper.passwordSavedCompact")
           : t("settings.database.helper.passwordRequired")}
@@ -832,7 +777,7 @@ function RequiredLabel({
   required?: boolean;
 }) {
   return (
-    <label htmlFor={id} className="text-sm font-medium text-foreground">
+    <label htmlFor={id} className="text-sm font-medium text-fg">
       {label}
       {required ? (
         <span aria-hidden="true" className="ml-0.5">
@@ -870,7 +815,7 @@ function WalletUploadField({
 
   return (
     <div className="space-y-2">
-      <span className="block text-sm font-medium text-foreground">
+      <span className="block text-sm font-medium text-fg">
         {t("settings.database.wallet.title")}
       </span>
       <button
@@ -880,15 +825,15 @@ function WalletUploadField({
         onDragOver={(event) => event.preventDefault()}
         onDrop={handleDrop}
         aria-describedby={hintId}
-        className="flex min-h-36 w-full cursor-pointer flex-col items-center justify-center rounded-md border border-dashed border-border bg-background px-4 py-6 text-center transition-colors hover:border-primary hover:bg-info-bg/30 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-60"
+        className="flex min-h-36 w-full cursor-pointer flex-col items-center justify-center rounded-md border border-dashed border-border bg-surface-sunken px-4 py-6 text-center transition-colors hover:border-accent-emphasis hover:bg-info-subtle focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring disabled:cursor-not-allowed disabled:opacity-60"
       >
-        <Upload size={24} className="text-muted" aria-hidden />
-        <span className="mt-2 text-sm font-semibold text-foreground">
+        <Upload size={24} className="text-fg-muted" aria-hidden />
+        <span className="mt-2 text-sm font-semibold text-fg">
           {uploadPending
             ? t("settings.database.actions.uploadingWallet")
             : t("settings.database.wallet.uploadCta")}
         </span>
-        <span id={hintId} className="mt-2 text-sm leading-relaxed text-muted">
+        <span id={hintId} className="mt-2 text-sm leading-relaxed text-fg-muted">
           {t("settings.database.wallet.help")}
         </span>
       </button>
@@ -920,10 +865,10 @@ function WalletUploadField({
       {uploadError ? <FormStatus tone="danger" className="text-xs" message={uploadError} /> : null}
 
       {/* Wallet 状態と Readiness は右「構成状態」パネルが正本。ここでは固有情報の保存先パスのみ残す。 */}
-      <div className="space-y-1 text-xs leading-relaxed text-muted">
+      <div className="space-y-1 text-xs leading-relaxed text-fg-muted">
         <p>
           <span>{t("settings.database.wallet.location")}:</span>{" "}
-          <span className="break-all text-foreground">{settings.wallet_dir || "—"}</span>
+          <span className="break-all text-fg">{settings.wallet_dir || "—"}</span>
         </p>
       </div>
     </div>
@@ -940,14 +885,14 @@ function SecretClearCheckbox({
   onChange: (checked: boolean) => void;
 }) {
   return (
-    <label className="flex cursor-pointer items-start gap-3 rounded-md border border-border bg-background px-4 py-3 text-sm transition-colors hover:bg-info-bg/30">
+    <label className="flex cursor-pointer items-start gap-3 rounded-md border border-border bg-surface-sunken px-4 py-3 text-sm transition-colors hover:bg-info-subtle">
       <input
         type="checkbox"
         checked={checked}
         onChange={(event) => onChange(event.target.checked)}
-        className="mt-0.5 h-4 w-4 cursor-pointer accent-[var(--primary)]"
+        className="mt-0.5 h-4 w-4 cursor-pointer accent-[var(--color-accent-emphasis)]"
       />
-      <span className="text-foreground">{label}</span>
+      <span className="text-fg">{label}</span>
     </label>
   );
 }
@@ -957,8 +902,8 @@ function StatusPanel({ settings }: { settings: DatabaseSettingsData }) {
     <Card>
       <CardHeader>
         <div className="flex items-start gap-3">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-bg text-info">
-            <ShieldCheck size={18} aria-hidden />
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-subtle text-info-fg">
+            <ShieldCheck size={20} aria-hidden />
           </div>
           <div>
             <CardTitle>{t("settings.database.status.title")}</CardTitle>
@@ -995,25 +940,25 @@ function ConnectionTestResultPanel({ result }: { result: DatabaseConnectionTestR
       role={success || skipped ? "status" : "alert"}
       className={cn(
         "flex flex-col gap-2 rounded-md border px-4 py-3 text-sm",
-        success && "border-success/30 bg-success-bg/50 text-foreground",
-        skipped && "border-warning/30 bg-warning-bg/60 text-foreground",
-        !success && !skipped && "border-danger/30 bg-danger-bg/50 text-foreground"
+        success && "border-success-border bg-success-subtle text-fg",
+        skipped && "border-warning-border bg-warning-subtle text-fg",
+        !success && !skipped && "border-danger-border bg-danger-subtle text-fg"
       )}
     >
       <div className="flex items-start gap-2">
         <Icon
-          size={18}
+          size={20}
           className={cn(
             "mt-0.5 shrink-0",
-            success && "text-success",
-            skipped && "text-warning",
-            !success && !skipped && "text-danger"
+            success && "text-success-fg",
+            skipped && "text-warning-fg",
+            !success && !skipped && "text-danger-fg"
           )}
           aria-hidden
         />
         <div>
           <p className="font-medium">{result.message}</p>
-          <p className="mt-1 text-xs text-muted">
+          <p className="mt-1 text-xs text-fg-muted">
             {t("settings.database.test.meta", {
               readiness: readinessLabel(result.readiness),
               elapsed: result.elapsed_ms,
@@ -1022,7 +967,7 @@ function ConnectionTestResultPanel({ result }: { result: DatabaseConnectionTestR
             {result.error_type ? ` / ${result.error_type}` : ""}
           </p>
           {result.troubleshooting.length > 0 ? (
-            <ul className="mt-2 space-y-1 text-xs leading-relaxed text-muted">
+            <ul className="mt-2 space-y-1 text-xs leading-relaxed text-fg-muted">
               {result.troubleshooting.map((tip) => (
                 <li key={tip} className="flex gap-1.5">
                   <span aria-hidden="true">-</span>
@@ -1046,9 +991,9 @@ function ReadinessBadge({ readiness }: { readiness: string }) {
     <div
       className={cn(
         "flex items-center gap-2 rounded-md border px-3 py-2 text-sm font-medium",
-        ok && "border-success/30 bg-success-bg/50 text-success",
-        warning && "border-warning/30 bg-warning-bg/60 text-warning",
-        !ok && !warning && "border-danger/30 bg-danger-bg/50 text-danger"
+        ok && "border-success-border bg-success-subtle text-success-fg",
+        warning && "border-warning-border bg-warning-subtle text-warning-fg",
+        !ok && !warning && "border-danger-border bg-danger-subtle text-danger-fg"
       )}
     >
       <Icon size={16} aria-hidden />
@@ -1062,8 +1007,8 @@ function ReadinessBadge({ readiness }: { readiness: string }) {
 function MetadataRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-center justify-between gap-3 border-t border-border pt-3 text-sm first:border-t-0 first:pt-0">
-      <span className="text-muted">{label}</span>
-      <span className="break-all text-right font-medium text-foreground">{value || "—"}</span>
+      <span className="text-fg-muted">{label}</span>
+      <span className="break-all text-right font-medium text-fg">{value || "—"}</span>
     </div>
   );
 }

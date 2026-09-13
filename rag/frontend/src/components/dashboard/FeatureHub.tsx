@@ -7,7 +7,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@engchina/production-ready-ui";
 import { APP_ROUTES } from "@/lib/routes";
 import { t, type I18nKey } from "@/lib/i18n";
 
@@ -55,13 +55,13 @@ export function FeatureHub() {
               <Link
                 key={f.href}
                 to={f.href}
-                className="group flex cursor-pointer items-start gap-3 rounded-lg border border-border bg-background p-4 transition-colors hover:border-primary hover:bg-info-bg/40"
+                className="group flex cursor-pointer items-start gap-3 rounded-lg border border-border bg-surface-sunken p-4 transition-colors hover:border-accent-emphasis hover:bg-info-subtle"
               >
-                <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
-                  <Icon size={18} aria-hidden />
+                <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-accent-subtle text-accent-fg">
+                  <Icon size={20} aria-hidden />
                 </span>
                 <span className="min-w-0 flex-1">
-                  <span className="flex items-center gap-1 text-sm font-semibold text-foreground">
+                  <span className="flex items-center gap-1 text-sm font-semibold text-fg">
                     {t(f.labelKey)}
                     <ArrowRight
                       size={14}
@@ -69,7 +69,7 @@ export function FeatureHub() {
                       aria-hidden
                     />
                   </span>
-                  <span className="mt-1 block text-xs leading-relaxed text-muted">
+                  <span className="mt-1 block text-xs leading-relaxed text-fg-muted">
                     {t(f.descKey)}
                   </span>
                 </span>

@@ -20,8 +20,10 @@ import {
 } from "@/lib/bbox";
 import { t } from "@/lib/i18n";
 import { charsetFromContentType, decodeText } from "@/lib/text-decode";
-import { buttonVariants } from "@/components/ui/button";
-import { Skeleton } from "@/components/ui/skeleton";
+import {
+  buttonVariants,
+  Skeleton,
+} from "@engchina/production-ready-ui";
 
 type Kind = SourcePreviewKind;
 type DocumentContentVariant = "original" | "prepared";
@@ -129,7 +131,7 @@ export function DocumentPreview({
         <iframe
           src={pdfUrl}
           title={fileName}
-          className="h-[60vh] w-full rounded-md border border-border bg-card"
+          className="h-[60vh] w-full rounded-md border border-border bg-surface"
         />
       </PreviewFrame>
     );
@@ -168,7 +170,7 @@ export function DocumentPreview({
           <iframe
             src={preparedPdfUrl}
             title={fileName}
-            className="h-[60vh] w-full rounded-md border border-border bg-card"
+            className="h-[60vh] w-full rounded-md border border-border bg-surface"
           />
         </PreviewFrame>
       );
@@ -223,7 +225,7 @@ function ImagePreview({
         contentMaxWidth={imagePreviewMaxWidth(pageSize)}
       >
       <div
-        className="relative mx-auto w-full overflow-hidden rounded-md border border-border bg-card"
+        className="relative mx-auto w-full overflow-hidden rounded-md border border-border bg-surface"
         data-testid="preview-image-surface"
         style={{
           aspectRatio: bboxPageAspectRatio(pageSize),
@@ -319,7 +321,7 @@ function PreviewFrame({
             data-bbox-mode={overlayRect?.coordinateMode}
             data-bbox-unit={overlayRect?.unit}
             data-testid="bbox-content-overlay"
-            className="pointer-events-none absolute rounded-sm border-2 border-primary bg-primary/10 shadow-[0_0_0_1px_rgba(255,255,255,0.85)]"
+            className="pointer-events-none absolute rounded-sm border-2 border-accent-emphasis bg-accent-subtle shadow-[0_0_0_1px_rgba(255,255,255,0.85)]"
             style={style}
           />
         ) : null}
@@ -341,7 +343,7 @@ function BboxPreviewOverlay({
     <div
       aria-label={t("preview.bboxPreviewLabel", { page: focusPage ?? "—" })}
       data-testid="bbox-preview-page"
-      className="relative mx-auto max-h-72 w-full max-w-56 overflow-hidden rounded-md border border-primary/40 bg-card shadow-sm"
+      className="relative mx-auto max-h-72 w-full max-w-56 overflow-hidden rounded-md border border-accent-emphasis bg-surface shadow-sm"
       role="img"
       style={{ aspectRatio: bboxPageAspectRatio(focusPageSize) }}
     >
@@ -350,7 +352,7 @@ function BboxPreviewOverlay({
         data-bbox-mode={overlayRect.coordinateMode}
         data-bbox-unit={overlayRect.unit}
         data-testid="bbox-preview-overlay"
-        className="pointer-events-none absolute rounded-sm border-2 border-primary bg-primary/15 shadow-[0_0_0_1px_rgba(255,255,255,0.9)]"
+        className="pointer-events-none absolute rounded-sm border-2 border-accent-emphasis bg-accent-muted shadow-[0_0_0_1px_rgba(255,255,255,0.9)]"
         style={bboxOverlayStyle(overlayRect)}
       />
     </div>
@@ -371,7 +373,7 @@ function BboxLocator({
     <div
       role="status"
       aria-live="polite"
-      className="rounded-md border border-info/30 bg-info-bg p-3 text-info"
+      className="rounded-md border border-info-border bg-info-subtle p-3 text-info-fg"
     >
       <div className="grid grid-cols-1 items-center gap-3 sm:grid-cols-[minmax(0,1fr)_4rem]">
         <p className="tnum min-w-0 break-words text-xs">
@@ -386,7 +388,7 @@ function BboxLocator({
         <div
           aria-label={t("preview.bboxMapLabel", { page: focusPage ?? "—" })}
           data-testid="bbox-page-map"
-          className="relative mx-auto w-16 overflow-hidden rounded-sm border border-info/40 bg-background shadow-sm"
+          className="relative mx-auto w-16 overflow-hidden rounded-sm border border-info-border bg-surface-sunken shadow-sm"
           style={{ aspectRatio: bboxPageAspectRatio(focusPageSize) }}
         >
           <span
@@ -394,7 +396,7 @@ function BboxLocator({
             data-bbox-mode={overlayRect.coordinateMode}
             data-bbox-unit={overlayRect.unit}
             data-testid="bbox-overlay"
-            className="pointer-events-none absolute rounded-[2px] border-2 border-primary bg-primary/15"
+            className="pointer-events-none absolute rounded-[2px] border-2 border-accent-emphasis bg-accent-muted"
             style={overlayStyle}
           />
         </div>
@@ -435,7 +437,7 @@ function TextPreview({ url }: { url: string }) {
 
   if (error) {
     return (
-      <div className="rounded-md border border-border bg-card p-4 text-sm text-muted">
+      <div className="rounded-md border border-border bg-surface p-4 text-sm text-fg-muted">
         {t("preview.fetchError")}
       </div>
     );
@@ -443,7 +445,7 @@ function TextPreview({ url }: { url: string }) {
   if (text === null) return <Skeleton className="h-40 w-full" />;
 
   return (
-    <pre className="max-h-[60vh] overflow-auto rounded-md border border-border bg-card p-4 text-sm leading-relaxed whitespace-pre-wrap break-words text-foreground">
+    <pre className="max-h-[60vh] overflow-auto rounded-md border border-border bg-surface p-4 text-sm leading-relaxed whitespace-pre-wrap break-words text-fg">
       {text}
     </pre>
   );
@@ -461,7 +463,7 @@ function UnsupportedPreview({
   showDownload: boolean;
 }) {
   return (
-    <div className="flex min-h-40 flex-col items-center justify-center gap-3 rounded-md border border-border bg-card p-4 text-center text-muted">
+    <div className="flex min-h-40 flex-col items-center justify-center gap-3 rounded-md border border-border bg-surface p-4 text-center text-fg-muted">
       <FileQuestion size={24} aria-hidden />
       <p className="text-sm">{message}</p>
       {showDownload ? (
@@ -470,7 +472,7 @@ function UnsupportedPreview({
           download={fileName}
           className={buttonVariants({ variant: "secondary", size: "md" })}
         >
-          <Download size={15} aria-hidden />
+          <Download size={16} aria-hidden />
           {t("preview.download")}
         </a>
       ) : null}

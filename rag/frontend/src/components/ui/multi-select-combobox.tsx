@@ -194,7 +194,7 @@ export function MultiSelectCombobox<T>({
     <div ref={rootRef} className="space-y-2">
       <div
         className={cn(
-          "group flex min-h-11 w-full flex-wrap items-center gap-1.5 rounded-md border border-border/80 bg-card px-2 py-2 shadow-sm transition-[background-color,border-color,box-shadow] duration-150 focus-within:border-primary/70 focus-within:bg-background focus-within:ring-2 focus-within:ring-primary/15",
+          "group flex min-h-11 w-full flex-wrap items-center gap-1.5 rounded-md border border-border/80 bg-surface px-2 py-2 shadow-sm transition-[background-color,border-color,box-shadow] duration-150 focus-within:border-focus-ring focus-within:bg-surface-hover focus-within:ring-2 focus-within:ring-focus-ring",
           triggerClassName,
           disabled && "cursor-not-allowed opacity-60"
         )}
@@ -206,7 +206,7 @@ export function MultiSelectCombobox<T>({
         }}
       >
         <span
-          className="flex size-8 shrink-0 items-center justify-center rounded-md bg-info-bg text-primary transition-colors group-focus-within:bg-primary group-focus-within:text-white"
+          className="flex size-8 shrink-0 items-center justify-center rounded-md bg-info-subtle text-accent-fg transition-colors group-focus-within:bg-accent-emphasis group-focus-within:text-fg-on-accent"
           aria-hidden
         >
           <Search size={16} />
@@ -218,11 +218,11 @@ export function MultiSelectCombobox<T>({
           return (
             <span
               key={id}
-              className="inline-flex h-7 max-w-full min-w-0 items-center gap-1.5 rounded-md border border-primary/15 bg-info-bg px-2 text-xs font-medium text-foreground sm:max-w-[14rem]"
+              className="inline-flex h-7 max-w-full min-w-0 items-center gap-1.5 rounded-md border border-accent-emphasis bg-info-subtle px-2 text-xs font-medium text-fg sm:max-w-[14rem]"
             >
               <span className="min-w-0 truncate">{name}</span>
               {badge ? (
-                <span className="shrink-0 rounded-sm bg-background px-1 py-0.5 text-[10px] font-medium text-primary">
+                <span className="shrink-0 rounded-sm bg-surface-sunken px-1 py-0.5 text-xs font-medium text-accent-fg">
                   {badge}
                 </span>
               ) : null}
@@ -234,9 +234,9 @@ export function MultiSelectCombobox<T>({
                 }}
                 disabled={disabled}
                 aria-label={strings.removeChip(name)}
-                className="relative flex size-5 shrink-0 items-center justify-center rounded-sm text-muted transition-colors before:absolute before:-inset-1 before:content-[''] hover:bg-background hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20 disabled:cursor-not-allowed"
+                className="relative flex size-5 shrink-0 items-center justify-center rounded-sm text-fg-muted transition-colors before:absolute before:-inset-1 before:content-[''] hover:bg-surface-hover hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring disabled:cursor-not-allowed"
               >
-                <X size={12} aria-hidden />
+                <X size={14} aria-hidden />
               </button>
             </span>
           );
@@ -260,7 +260,7 @@ export function MultiSelectCombobox<T>({
           onKeyDown={onInputKeyDown}
           placeholder={chips.length === 0 ? strings.addPlaceholder : ""}
           disabled={disabled}
-          className="h-8 min-w-[7.5rem] flex-1 appearance-none border-0 bg-transparent px-1 text-sm leading-8 text-foreground shadow-none outline-none placeholder:text-muted/70 focus:outline-none focus:ring-0 focus-visible:border-transparent! focus-visible:shadow-none! disabled:cursor-not-allowed sm:min-w-[12rem]"
+          className="h-8 min-w-[7.5rem] flex-1 appearance-none border-0 bg-transparent px-1 text-sm leading-8 text-fg shadow-none outline-none placeholder:text-fg-muted focus:outline-none focus:ring-0 focus-visible:border-transparent! focus-visible:shadow-none! disabled:cursor-not-allowed sm:min-w-[12rem]"
         />
         <button
           type="button"
@@ -272,7 +272,7 @@ export function MultiSelectCombobox<T>({
           }}
           disabled={disabled}
           aria-label={strings.toggleListAria}
-          className="relative ml-auto flex size-9 shrink-0 items-center justify-center rounded-md text-muted transition-colors before:absolute before:-inset-1 before:content-[''] hover:bg-info-bg hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20 disabled:cursor-not-allowed"
+          className="relative ml-auto flex size-9 shrink-0 items-center justify-center rounded-md text-fg-muted transition-colors before:absolute before:-inset-1 before:content-[''] hover:bg-info-subtle hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring disabled:cursor-not-allowed"
         >
           <ChevronDown
             size={16}
@@ -283,18 +283,18 @@ export function MultiSelectCombobox<T>({
       </div>
 
       {open ? (
-        <div className="overflow-hidden rounded-md border border-border bg-card shadow-sm">
+        <div className="overflow-hidden rounded-md border border-border bg-surface shadow-sm">
           {showEmptyToggle ? (
             <div className="flex items-center justify-between border-b border-border px-3 py-1.5">
-              <span className="text-xs text-muted">
+              <span className="text-xs text-fg-muted">
                 {strings.count(filtered.length, items.length)}
               </span>
-              <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted">
+              <label className="flex cursor-pointer items-center gap-1.5 text-xs text-fg-muted">
                 <input
                   type="checkbox"
                   checked={hideEmpty}
                   onChange={(event) => setHideEmpty(event.target.checked)}
-                  className="cursor-pointer accent-[var(--primary)]"
+                  className="cursor-pointer accent-[var(--color-accent-emphasis)]"
                 />
                 {strings.hideEmpty}
               </label>
@@ -333,31 +333,31 @@ export function MultiSelectCombobox<T>({
                     onMouseEnter={() => setActiveIndex(index)}
                     className={cn(
                       "flex min-h-[44px] cursor-pointer items-center gap-2.5 px-3 py-2 text-sm",
-                      isActive && "bg-info-bg/60",
-                      isSelected && "bg-info-bg/40"
+                      isActive && "bg-info-subtle",
+                      isSelected && "bg-info-subtle"
                     )}
                   >
                     <span
                       className={cn(
                         "flex size-4 shrink-0 items-center justify-center rounded-sm border",
                         isSelected
-                          ? "border-primary bg-primary text-white"
+                          ? "border-accent-emphasis bg-accent-emphasis text-fg-on-accent"
                           : "border-border"
                       )}
                       aria-hidden
                     >
-                      {isSelected ? <Check size={12} strokeWidth={3} /> : null}
+                      {isSelected ? <Check size={14} strokeWidth={3} /> : null}
                     </span>
-                    <span className="min-w-0 max-w-[24rem] truncate font-medium text-foreground">
+                    <span className="min-w-0 max-w-[24rem] truncate font-medium text-fg">
                       {name}
                       {badge ? (
-                        <span className="ml-1.5 rounded-sm bg-info-bg px-1 py-0.5 align-middle text-[10px] font-medium text-primary">
+                        <span className="ml-1.5 rounded-sm bg-info-subtle px-1 py-0.5 align-middle text-xs font-medium text-accent-fg">
                           {badge}
                         </span>
                       ) : null}
                     </span>
                     {metaText ? (
-                      <span className="tnum shrink-0 text-xs text-muted">{metaText}</span>
+                      <span className="tnum shrink-0 text-xs text-fg-muted">{metaText}</span>
                     ) : null}
                     <span className="flex-1" aria-hidden />
                   </li>
@@ -365,13 +365,13 @@ export function MultiSelectCombobox<T>({
               })}
             </ul>
           ) : (
-            <p className="px-3 py-6 text-center text-xs text-muted">
+            <p className="px-3 py-6 text-center text-xs text-fg-muted">
               {normalized ? strings.noMatch(filter.trim()) : strings.emptyList}
             </p>
           )}
 
-          <div className="flex flex-col gap-1.5 border-t border-border bg-card px-3 py-2 sm:flex-row sm:items-center sm:justify-between sm:py-1.5">
-            <span className="tnum text-xs text-muted">
+          <div className="flex flex-col gap-1.5 border-t border-border bg-surface px-3 py-2 sm:flex-row sm:items-center sm:justify-between sm:py-1.5">
+            <span className="tnum text-xs text-fg-muted">
               {hiddenEmptyCount > 0 && strings.hiddenEmptyCount
                 ? strings.hiddenEmptyCount(hiddenEmptyCount)
                 : strings.selectedCount(selectedIds.length)}
@@ -381,7 +381,7 @@ export function MultiSelectCombobox<T>({
                 type="button"
                 onClick={selectAllVisible}
                 disabled={disabled || filtered.length === 0}
-                className="text-xs font-medium text-primary transition-colors hover:underline disabled:cursor-not-allowed disabled:opacity-50 disabled:no-underline"
+                className="text-xs font-medium text-accent-fg transition-colors hover:underline disabled:cursor-not-allowed disabled:opacity-50 disabled:no-underline"
               >
                 {strings.selectAllVisible}
               </button>
@@ -389,7 +389,7 @@ export function MultiSelectCombobox<T>({
                 type="button"
                 onClick={() => onChange([])}
                 disabled={disabled || selectedIds.length === 0}
-                className="text-xs text-muted transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                className="text-xs text-fg-muted transition-colors hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {strings.clear}
               </button>

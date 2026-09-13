@@ -1,8 +1,14 @@
 import { Link } from "react-router-dom";
 import { ArrowRight, Settings } from "lucide-react";
 
-import { Banner } from "@/components/ui/banner";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Banner,
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@engchina/production-ready-ui";
 import { t, type I18nKey } from "@/lib/i18n";
 import { formatNumber } from "@/lib/format";
 import { APP_ROUTES } from "@/lib/routes";
@@ -12,15 +18,15 @@ const STATUS_PRESENTATION: Record<
   DashboardSystemInfo["status"],
   { labelKey: Parameters<typeof t>[0]; color: string }
 > = {
-  online: { labelKey: "dashboard.system.online", color: "text-success" },
-  degraded: { labelKey: "dashboard.system.degraded", color: "text-warning" },
-  offline: { labelKey: "dashboard.system.offline", color: "text-danger" },
+  online: { labelKey: "dashboard.system.online", color: "text-success-fg" },
+  degraded: { labelKey: "dashboard.system.degraded", color: "text-warning-fg" },
+  offline: { labelKey: "dashboard.system.offline", color: "text-danger-fg" },
 };
 
 const DOT_COLOR: Record<DashboardSystemInfo["status"], string> = {
-  online: "bg-success",
-  degraded: "bg-warning",
-  offline: "bg-danger",
+  online: "bg-success-emphasis",
+  degraded: "bg-warning-emphasis",
+  offline: "bg-danger-emphasis",
 };
 
 const CHECK_STATUS_LABELS: Record<string, I18nKey> = {
@@ -56,7 +62,7 @@ export function SystemInfo({ info }: { info: DashboardSystemInfo }) {
             action={
               <Link
                 to={APP_ROUTES.settingsDatabase}
-                className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md border border-border bg-card px-3 text-sm font-medium text-foreground transition-colors hover:bg-background focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md border border-border bg-surface px-3 text-sm font-medium text-fg transition-colors hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
               >
                 <Settings size={14} aria-hidden />
                 {t("dashboard.system.openDatabaseSettings")}
@@ -69,7 +75,7 @@ export function SystemInfo({ info }: { info: DashboardSystemInfo }) {
         ) : null}
         <dl className={`space-y-3 text-sm ${hasDatabaseIssue ? "mt-4" : ""}`}>
           <div className="flex items-center justify-between">
-            <dt className="text-muted">{t("dashboard.system.serviceStatus")}</dt>
+            <dt className="text-fg-muted">{t("dashboard.system.serviceStatus")}</dt>
             <dd className={`flex items-center gap-1.5 font-medium ${presentation.color}`}>
               <span className={`size-2 rounded-full ${DOT_COLOR[info.status]}`} aria-hidden />
               {t(presentation.labelKey)}
@@ -77,7 +83,7 @@ export function SystemInfo({ info }: { info: DashboardSystemInfo }) {
           </div>
           {databaseCheckPresentation ? (
             <div className="flex items-center justify-between">
-              <dt className="text-muted">{t("dashboard.system.databaseStatus")}</dt>
+              <dt className="text-fg-muted">{t("dashboard.system.databaseStatus")}</dt>
               <dd
                 className={`flex items-center gap-1.5 font-medium ${databaseCheckPresentation.color}`}
               >
@@ -90,17 +96,17 @@ export function SystemInfo({ info }: { info: DashboardSystemInfo }) {
             </div>
           ) : null}
           <div className="flex items-center justify-between">
-            <dt className="text-muted">{t("dashboard.system.version")}</dt>
-            <dd className="tnum font-medium text-foreground">v{info.version}</dd>
+            <dt className="text-fg-muted">{t("dashboard.system.version")}</dt>
+            <dd className="tnum font-medium text-fg">v{info.version}</dd>
           </div>
           <div className="flex items-center justify-between">
-            <dt className="text-muted">{t("dashboard.system.indexedRows")}</dt>
-            <dd className="tnum font-medium text-foreground">
+            <dt className="text-fg-muted">{t("dashboard.system.indexedRows")}</dt>
+            <dd className="tnum font-medium text-fg">
               {formatNumber(info.searchable_rows)}
             </dd>
           </div>
         </dl>
-        <p className="mt-4 border-t border-border pt-3 text-xs leading-relaxed text-muted">
+        <p className="mt-4 border-t border-border pt-3 text-xs leading-relaxed text-fg-muted">
           {t("dashboard.system.hint")}
         </p>
       </CardContent>
@@ -116,21 +122,21 @@ function checkStatusPresentation(status: string): {
   if (status === "ok") {
     return {
       label: t(CHECK_STATUS_LABELS.ok),
-      color: "text-success",
-      dotColor: "bg-success",
+      color: "text-success-fg",
+      dotColor: "bg-success-emphasis",
     };
   }
   if (status === "timeout" || status === "error") {
     return {
       label: t(CHECK_STATUS_LABELS[status]),
-      color: "text-danger",
-      dotColor: "bg-danger",
+      color: "text-danger-fg",
+      dotColor: "bg-danger-emphasis",
     };
   }
   const labelKey = CHECK_STATUS_LABELS[status];
   return {
     label: labelKey ? t(labelKey) : status,
-    color: "text-warning",
-    dotColor: "bg-warning",
+    color: "text-warning-fg",
+    dotColor: "bg-warning-emphasis",
   };
 }

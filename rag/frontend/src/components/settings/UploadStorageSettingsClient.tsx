@@ -1,6 +1,19 @@
 "use client";
 
 import {
+  PageBody,
+  Button,
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+  FieldError,
+  FormStatus,
+  Skeleton,
+  TextField,
+} from "@engchina/production-ready-ui";
+import {
   AlertCircle,
   CheckCircle2,
   Cloud,
@@ -12,11 +25,6 @@ import {
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 
 import { ErrorState } from "@/components/StateViews";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { FieldError } from "@/components/ui/field-error";
-import { FormStatus } from "@/components/ui/form-status";
-import { Skeleton } from "@/components/ui/skeleton";
 import {
   SETTINGS_DETAIL_GRID_CLASS,
   SettingsSupplementalPanels,
@@ -105,16 +113,16 @@ export function UploadStorageSettingsClient() {
 
   if (query.isPending) {
     return (
-      <div className="space-y-4 p-8">
+      <PageBody>
         <Skeleton className="h-64 w-full rounded-lg" />
         <Skeleton className="h-72 w-full rounded-lg" />
-      </div>
+      </PageBody>
     );
   }
 
   if (query.isError) {
     return (
-      <div className="p-8">
+      <PageBody>
         <ErrorState
           message={
             query.error instanceof ApiError
@@ -123,7 +131,7 @@ export function UploadStorageSettingsClient() {
           }
           onRetry={() => void query.refetch()}
         />
-      </div>
+      </PageBody>
     );
   }
 
@@ -135,7 +143,7 @@ export function UploadStorageSettingsClient() {
   const envPreview = buildUploadStorageEnvFile(form, objectStorageNamespace, settings);
 
   return (
-    <div className="space-y-5 p-8">
+    <PageBody>
       <div className={SETTINGS_DETAIL_GRID_CLASS}>
         <form
           className="space-y-5"
@@ -147,7 +155,7 @@ export function UploadStorageSettingsClient() {
           <Card>
             <CardHeader>
               <div className="flex items-start gap-3">
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-bg text-info">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-subtle text-info-fg">
                   {form.backend === "oci" ? (
                     <Cloud size={20} aria-hidden />
                   ) : (
@@ -164,7 +172,7 @@ export function UploadStorageSettingsClient() {
             </CardHeader>
             <CardContent className="space-y-5">
               <fieldset className="space-y-3">
-                <legend className="text-sm font-medium text-foreground">
+                <legend className="text-sm font-medium text-fg">
                   {t("settings.uploadStorage.field.backend")}
                 </legend>
                 <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
@@ -194,7 +202,7 @@ export function UploadStorageSettingsClient() {
                   id="upload-storage-local-dir"
                   label={t("settings.uploadStorage.field.localStorageDir")}
                   value={form.localStorageDir}
-                  onChange={(value) => updateForm({ localStorageDir: value })}
+                  onValueChange={(value) => updateForm({ localStorageDir: value })}
                   helper={t("settings.uploadStorage.helper.localStorageDir")}
                   placeholder={DEFAULT_LOCAL_STORAGE_DIR}
                   error={errors.localStorageDir}
@@ -205,7 +213,7 @@ export function UploadStorageSettingsClient() {
                     id="upload-storage-bucket"
                     label={t("settings.uploadStorage.field.objectStorageBucket")}
                     value={form.objectStorageBucket}
-                    onChange={(value) => updateForm({ objectStorageBucket: value })}
+                    onValueChange={(value) => updateForm({ objectStorageBucket: value })}
                     helper={t("settings.uploadStorage.helper.objectStorageBucket")}
                     placeholder="rag-originals"
                     error={errors.objectStorageBucket}
@@ -221,11 +229,8 @@ export function UploadStorageSettingsClient() {
           </Card>
 
           <div className="flex flex-wrap items-center gap-2">
-            <Button type="submit" loading={save.isPending}>
-              <Save size={15} aria-hidden />
-              {save.isPending
-                ? t("settings.uploadStorage.actions.saving")
-                : t("settings.uploadStorage.actions.save")}
+            <Button type="submit" loading={save.isPending} icon={Save}>
+              {t("settings.uploadStorage.actions.save")}
             </Button>
             {saved ? (
               <FormStatus tone="success" message={t("settings.uploadStorage.actions.saved")} />
@@ -252,7 +257,7 @@ export function UploadStorageSettingsClient() {
           }}
         />
       </div>
-    </div>
+    </PageBody>
   );
 }
 
@@ -277,10 +282,10 @@ function BackendOption({
     <label
       htmlFor={id}
       className={cn(
-        "flex min-h-32 cursor-pointer items-start gap-3 rounded-md border bg-card p-4 text-left transition-colors",
+        "flex min-h-32 cursor-pointer items-start gap-3 rounded-md border bg-surface p-4 text-left transition-colors",
         checked
-          ? "border-primary bg-info-bg/40"
-          : "border-border hover:border-primary/60 hover:bg-background"
+          ? "border-accent-emphasis bg-info-subtle"
+          : "border-border hover:border-accent-emphasis hover:bg-surface-hover"
       )}
     >
       <input
@@ -290,62 +295,16 @@ function BackendOption({
         value={value}
         checked={checked}
         onChange={() => onChange(value)}
-        className="mt-1 h-4 w-4 cursor-pointer accent-[var(--primary)]"
+        className="mt-1 h-4 w-4 cursor-pointer accent-[var(--color-accent-emphasis)]"
       />
-      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-background text-primary">
+      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-surface-sunken text-accent-fg">
         {icon}
       </span>
       <span>
-        <span className="block text-sm font-semibold text-foreground">{title}</span>
-        <span className="mt-1 block text-xs leading-relaxed text-muted">{description}</span>
+        <span className="block text-sm font-semibold text-fg">{title}</span>
+        <span className="mt-1 block text-xs leading-relaxed text-fg-muted">{description}</span>
       </span>
     </label>
-  );
-}
-
-function TextField({
-  id,
-  label,
-  value,
-  onChange,
-  helper,
-  placeholder,
-  error,
-}: {
-  id: string;
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  helper: string;
-  placeholder: string;
-  error?: string;
-}) {
-  const hintId = `${id}-hint`;
-  const errorId = `${id}-error`;
-
-  return (
-    <div className="space-y-1.5">
-      <label htmlFor={id} className="text-sm font-medium text-foreground">
-        {label}
-      </label>
-      <input
-        id={id}
-        type="text"
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        placeholder={placeholder}
-        aria-invalid={Boolean(error)}
-        aria-describedby={error ? `${hintId} ${errorId}` : hintId}
-        className={cn(
-          "h-11 w-full rounded-md border bg-card px-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted/70 focus-visible:border-primary",
-          error ? "border-danger" : "border-border"
-        )}
-      />
-      <p id={hintId} className="text-xs leading-relaxed text-muted">
-        {helper}
-      </p>
-      <FieldError id={errorId} message={error} />
-    </div>
   );
 }
 
@@ -354,8 +313,8 @@ function StatusPanel({ settings }: { settings: UploadStorageSettingsData }) {
     <Card>
       <CardHeader>
         <div className="flex items-start gap-3">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-bg text-info">
-            <ShieldCheck size={18} aria-hidden />
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-subtle text-info-fg">
+            <ShieldCheck size={20} aria-hidden />
           </div>
           <div>
             <CardTitle>{t("settings.uploadStorage.status.title")}</CardTitle>
@@ -403,9 +362,9 @@ function ReadinessBadge({ readiness }: { readiness: string }) {
     <div
       className={cn(
         "flex items-center gap-2 rounded-md border px-3 py-2 text-sm font-medium",
-        ok && "border-success/30 bg-success-bg/50 text-success",
-        warning && "border-warning/30 bg-warning-bg/60 text-warning",
-        !ok && !warning && "border-danger/30 bg-danger-bg/50 text-danger"
+        ok && "border-success-border bg-success-subtle text-success-fg",
+        warning && "border-warning-border bg-warning-subtle text-warning-fg",
+        !ok && !warning && "border-danger-border bg-danger-subtle text-danger-fg"
       )}
     >
       <Icon size={16} aria-hidden />
@@ -419,8 +378,8 @@ function ReadinessBadge({ readiness }: { readiness: string }) {
 function MetadataRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-center justify-between gap-3 border-t border-border pt-3 text-sm first:border-t-0 first:pt-0">
-      <span className="text-muted">{label}</span>
-      <span className="break-all text-right font-medium text-foreground">{value || "—"}</span>
+      <span className="text-fg-muted">{label}</span>
+      <span className="break-all text-right font-medium text-fg">{value || "—"}</span>
     </div>
   );
 }

@@ -11,9 +11,15 @@ import {
 } from "lucide-react";
 import { useState, type ReactNode } from "react";
 
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { FormStatus } from "@/components/ui/form-status";
+import {
+  Button,
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+  FormStatus,
+} from "@engchina/production-ready-ui";
 import { t } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
@@ -120,19 +126,19 @@ function OperationMemoCard({
         />
       </CardHeader>
       <CardContent className="space-y-3">
-        <ul className="space-y-2 text-sm leading-relaxed text-muted">
+        <ul className="space-y-2 text-sm leading-relaxed text-fg-muted">
           {notes.map((note) => (
             <li key={note} className="flex gap-2">
-              <CheckCircle2 size={15} className="mt-0.5 shrink-0 text-info" aria-hidden />
+              <CheckCircle2 size={16} className="mt-0.5 shrink-0 text-info-fg" aria-hidden />
               <span className="leading-relaxed">{note}</span>
             </li>
           ))}
         </ul>
         {uniqueWarnings.length > 0 ? (
-          <ul className="space-y-2 border-t border-border pt-3 text-sm leading-relaxed text-foreground">
+          <ul className="space-y-2 border-t border-border pt-3 text-sm leading-relaxed text-fg">
             {uniqueWarnings.map((warning) => (
               <li key={warning} className="flex gap-2">
-                <AlertCircle size={15} className="mt-0.5 shrink-0 text-warning" aria-hidden />
+                <AlertCircle size={16} className="mt-0.5 shrink-0 text-warning-fg" aria-hidden />
                 <span className="leading-relaxed">{warning}</span>
               </li>
             ))}
@@ -184,9 +190,7 @@ export function SettingsPreviewCard({
             variant="secondary"
             size="lg"
             className="w-full shrink-0 whitespace-nowrap sm:w-auto"
-            onClick={() => void handleCopy()}
-          >
-            <Clipboard size={14} aria-hidden />
+            onClick={() => void handleCopy()} icon={Clipboard}>
             {copyState === "success"
               ? t("settings.preview.copy.copied")
               : copyLabel}
@@ -199,7 +203,7 @@ export function SettingsPreviewCard({
           value={value}
           aria-label={ariaLabel ?? title}
           className={cn(
-            "w-full resize-none rounded-md border border-border bg-background p-3 font-mono text-xs leading-relaxed text-foreground outline-none focus-visible:border-primary",
+            "w-full resize-none rounded-md border border-border-control bg-surface-sunken p-3 font-mono text-xs leading-relaxed text-fg outline-none focus-visible:border-focus-ring",
             previewHeightClassName
           )}
         />
@@ -226,8 +230,8 @@ function SettingsCardHeader({
 }) {
   return (
     <div className="flex min-w-0 items-start gap-3">
-      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-bg text-info">
-        <Icon size={18} aria-hidden />
+      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-subtle text-info-fg">
+        <Icon size={20} aria-hidden />
       </span>
       <span className="min-w-0 space-y-1">
         <CardTitle>{title}</CardTitle>

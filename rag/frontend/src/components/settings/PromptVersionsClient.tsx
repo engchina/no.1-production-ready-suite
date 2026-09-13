@@ -1,14 +1,21 @@
 "use client";
 
+import {
+  PageBody,
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+  Button,
+  FormStatus,
+  Skeleton,
+  Switch,
+} from "@engchina/production-ready-ui";
 import { useState } from "react";
 import { CheckCircle2, FileText, Plus } from "lucide-react";
 
 import { ErrorState } from "@/components/StateViews";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { FormStatus } from "@/components/ui/form-status";
-import { Skeleton } from "@/components/ui/skeleton";
-import { Switch } from "@/components/ui/switch";
 import { ApiError, type PromptVersionData } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { usePromptVersions, useCreatePromptVersion, useActivatePromptVersion } from "@/lib/queries";
@@ -31,22 +38,22 @@ export function PromptVersionsClient() {
 
   if (query.isPending) {
     return (
-      <div className="space-y-4 p-8">
+      <PageBody>
         <Skeleton className="h-64 w-full rounded-lg" />
-      </div>
+      </PageBody>
     );
   }
 
   if (query.isError) {
     return (
-      <div className="p-8">
+      <PageBody>
         <ErrorState
           message={
             query.error instanceof ApiError ? query.error.message : t("settings.prompts.loadError")
           }
           onRetry={() => void query.refetch()}
         />
-      </div>
+      </PageBody>
     );
   }
 
@@ -91,11 +98,11 @@ export function PromptVersionsClient() {
   }
 
   return (
-    <div className="space-y-5 p-8">
+    <PageBody>
       <Card>
         <CardHeader>
           <div className="flex items-start gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-bg text-info">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-subtle text-info-fg">
               <FileText size={20} aria-hidden />
             </div>
             <div>
@@ -112,7 +119,7 @@ export function PromptVersionsClient() {
               maxLength={NAME_MAX}
               onChange={(event) => setName(event.target.value)}
               placeholder={t("settings.prompts.form.namePlaceholder")}
-              className="h-11 w-full rounded-md border border-border bg-card px-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted/70 focus-visible:border-primary"
+              className="h-11 w-full rounded-md border border-border-control bg-surface px-3 text-sm text-fg outline-none transition-colors placeholder:text-fg-muted focus-visible:border-focus-ring"
             />
           </Field>
           <Field label={t("settings.prompts.form.systemPrompt")} required>
@@ -122,7 +129,7 @@ export function PromptVersionsClient() {
               onChange={(event) => setSystemPrompt(event.target.value)}
               placeholder={t("settings.prompts.form.systemPromptPlaceholder")}
               rows={6}
-              className="w-full resize-y rounded-md border border-border bg-card p-3 text-sm leading-relaxed text-foreground outline-none transition-colors placeholder:text-muted/70 focus-visible:border-primary"
+              className="w-full resize-y rounded-md border border-border-control bg-surface p-3 text-sm leading-relaxed text-fg outline-none transition-colors placeholder:text-fg-muted focus-visible:border-focus-ring"
             />
           </Field>
           <Field label={t("settings.prompts.form.note")}>
@@ -132,10 +139,10 @@ export function PromptVersionsClient() {
               maxLength={NOTE_MAX}
               onChange={(event) => setNote(event.target.value)}
               placeholder={t("settings.prompts.form.notePlaceholder")}
-              className="h-11 w-full rounded-md border border-border bg-card px-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted/70 focus-visible:border-primary"
+              className="h-11 w-full rounded-md border border-border-control bg-surface px-3 text-sm text-fg outline-none transition-colors placeholder:text-fg-muted focus-visible:border-focus-ring"
             />
           </Field>
-          <div className="flex items-center justify-between gap-3 text-sm text-foreground">
+          <div className="flex items-center justify-between gap-3 text-sm text-fg">
             <span>{t("settings.prompts.form.activate")}</span>
             <Switch
               checked={activateOnCreate}
@@ -154,12 +161,8 @@ export function PromptVersionsClient() {
               loading={create.isPending}
               disabled={!canSubmit}
               onClick={submit}
-              aria-label={t("settings.prompts.actions.create")}
-            >
-              <Plus size={15} aria-hidden />
-              {create.isPending
-                ? t("settings.prompts.actions.creating")
-                : t("settings.prompts.actions.create")}
+              aria-label={t("settings.prompts.actions.create")} icon={Plus}>
+              {t("settings.prompts.actions.create")}
             </Button>
           </div>
         </CardContent>
@@ -172,7 +175,7 @@ export function PromptVersionsClient() {
         </CardHeader>
         <CardContent>
           {versions.length === 0 ? (
-            <p className="py-6 text-center text-sm text-muted">{t("settings.prompts.list.empty")}</p>
+            <p className="py-6 text-center text-sm text-fg-muted">{t("settings.prompts.list.empty")}</p>
           ) : (
             <ul className="space-y-2">
               {versions.map((version) => (
@@ -187,7 +190,7 @@ export function PromptVersionsClient() {
           )}
         </CardContent>
       </Card>
-    </div>
+    </PageBody>
   );
 }
 
@@ -202,9 +205,9 @@ function Field({
 }) {
   return (
     <label className="block space-y-1.5">
-      <span className="flex items-center gap-1 text-sm font-medium text-foreground">
+      <span className="flex items-center gap-1 text-sm font-medium text-fg">
         {label}
-        {required ? <span className="text-danger">*</span> : null}
+        {required ? <span className="text-danger-fg">*</span> : null}
       </span>
       {children}
     </label>
@@ -224,24 +227,24 @@ function VersionRow({
     <li
       className={cn(
         "flex flex-col gap-2 rounded-md border px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between",
-        version.active ? "border-primary bg-primary/10" : "border-border bg-card"
+        version.active ? "border-accent-emphasis bg-accent-subtle" : "border-border bg-surface"
       )}
     >
       <div className="min-w-0">
         <div className="flex items-center gap-2">
-          <span className="truncate text-sm font-semibold text-foreground">{version.name}</span>
+          <span className="truncate text-sm font-semibold text-fg">{version.name}</span>
           {version.active ? (
-            <span className="inline-flex items-center gap-1 rounded bg-primary/15 px-1.5 py-0.5 text-[11px] font-medium text-primary">
-              <CheckCircle2 size={12} aria-hidden />
+            <span className="inline-flex items-center gap-1 rounded bg-accent-muted px-1.5 py-0.5 text-xs font-medium text-accent-fg">
+              <CheckCircle2 size={14} aria-hidden />
               {t("settings.prompts.list.activeBadge")}
             </span>
           ) : null}
         </div>
-        <div className="mt-0.5 text-xs text-muted">
+        <div className="mt-0.5 text-xs text-fg-muted">
           {t("settings.prompts.list.createdAt")}: {formatTimestamp(version.created_at)}
         </div>
         {version.note ? (
-          <p className="mt-1 break-words text-xs leading-relaxed text-muted">{version.note}</p>
+          <p className="mt-1 break-words text-xs leading-relaxed text-fg-muted">{version.note}</p>
         ) : null}
       </div>
       <Button

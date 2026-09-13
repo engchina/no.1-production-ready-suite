@@ -1,17 +1,23 @@
 "use client";
 
+import {
+  PageBody,
+  PageHeader,
+  Button,
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  FieldError,
+  FormStatus,
+  ToggleChip,
+} from "@engchina/production-ready-ui";
 import { Archive, Database, Search } from "lucide-react";
 import { useMemo, useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
-import { PageHeader } from "@/components/PageHeader";
 import { DegradedBanner } from "@/components/DegradedBanner";
 import { EmptyState, ErrorState } from "@/components/StateViews";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { FieldError } from "@/components/ui/field-error";
-import { FormStatus } from "@/components/ui/form-status";
-import { ToggleChip } from "@/components/ui/toggle-chip";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import {
   ApiError,
@@ -79,7 +85,7 @@ export function KnowledgeBaseManagementClient() {
   return (
     <div>
       <PageHeader title={t("nav.knowledgeBases")} subtitle={t("knowledgeBases.subtitle")} />
-      <div className="space-y-4 p-8">
+      <PageBody>
         <DegradedBanner
           messages={page?.warning_messages}
           onRetry={() => void query.refetch()}
@@ -108,8 +114,8 @@ export function KnowledgeBaseManagementClient() {
           </div>
           <div className="relative w-full sm:w-auto">
             <Search
-              size={15}
-              className="absolute left-3 top-1/2 -translate-y-1/2 text-muted"
+              size={16}
+              className="absolute left-3 top-1/2 -translate-y-1/2 text-fg-muted"
               aria-hidden
             />
             <input
@@ -122,7 +128,7 @@ export function KnowledgeBaseManagementClient() {
               onBlur={() => resetView(() => setQ(search.trim()))}
               placeholder={t("knowledgeBases.search.placeholder")}
               aria-label={t("knowledgeBases.search.placeholder")}
-              className="h-9 w-full rounded-md border border-border bg-card py-2 pl-9 pr-3 text-sm outline-none focus-visible:border-primary sm:w-64"
+              className="h-9 w-full rounded-md border border-border-control bg-surface py-2 pl-9 pr-3 text-sm outline-none focus-visible:border-focus-ring sm:w-64"
             />
           </div>
         </div>
@@ -141,7 +147,7 @@ export function KnowledgeBaseManagementClient() {
             <Card className="overflow-hidden">
               <div className="bounded-scroll-area-lg overflow-x-auto">
                 <table className="w-full min-w-[760px] text-sm">
-                  <thead className="sticky top-0 z-10 bg-background text-left text-muted shadow-[inset_0_-1px_0_var(--border)]">
+                  <thead className="sticky top-0 z-10 bg-surface-sunken text-left text-fg-muted shadow-[inset_0_-1px_0_var(--color-border)]">
                     <tr>
                       <th className="px-4 py-3 font-medium">{t("knowledgeBases.col.name")}</th>
                       <th className="px-4 py-3 font-medium">{t("knowledgeBases.col.status")}</th>
@@ -166,7 +172,7 @@ export function KnowledgeBaseManagementClient() {
             </Card>
 
             <div className="flex items-center justify-between">
-              <span className="tnum text-xs text-muted">
+              <span className="tnum text-xs text-fg-muted">
                 {t("pager.range", {
                   start: page && page.total === 0 ? 0 : offset + 1,
                   end: offset + items.length,
@@ -198,7 +204,7 @@ export function KnowledgeBaseManagementClient() {
             <EmptyState title={t("knowledgeBases.empty.title")} hint={t("knowledgeBases.empty.hint")} />
           </Card>
         )}
-      </div>
+      </PageBody>
     </div>
   );
 }
@@ -243,7 +249,7 @@ function KnowledgeBaseCreateForm({ onCreated }: { onCreated: (id: string) => voi
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="grid gap-3 md:grid-cols-[minmax(0,18rem)_minmax(0,1fr)]">
             <div>
-              <label htmlFor="knowledge-base-name" className="text-sm font-medium text-foreground">
+              <label htmlFor="knowledge-base-name" className="text-sm font-medium text-fg">
                 {t("knowledgeBases.field.name")}
               </label>
               <input
@@ -253,14 +259,14 @@ function KnowledgeBaseCreateForm({ onCreated }: { onCreated: (id: string) => voi
                 onBlur={() => setTouched(true)}
                 aria-invalid={Boolean(nameError)}
                 aria-describedby={nameError ? NAME_ERROR_ID : undefined}
-                className="mt-1 h-9 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus-visible:border-primary"
+                className="mt-1 h-9 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:border-focus-ring"
               />
               <FieldError id={NAME_ERROR_ID} message={nameError} className="mt-1" />
             </div>
             <div>
               <label
                 htmlFor="knowledge-base-description"
-                className="text-sm font-medium text-foreground"
+                className="text-sm font-medium text-fg"
               >
                 {t("knowledgeBases.field.description")}
               </label>
@@ -268,13 +274,12 @@ function KnowledgeBaseCreateForm({ onCreated }: { onCreated: (id: string) => voi
                 id="knowledge-base-description"
                 value={description}
                 onChange={(event) => setDescription(event.target.value)}
-                className="mt-1 h-9 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus-visible:border-primary"
+                className="mt-1 h-9 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:border-focus-ring"
               />
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
-            <Button size="lg" loading={create.isPending} type="submit">
-              <Database size={16} aria-hidden />
+            <Button size="lg" loading={create.isPending} type="submit" icon={Database}>
               {t("knowledgeBases.actions.create")}
             </Button>
             <FormStatus
@@ -311,24 +316,24 @@ function KnowledgeBaseRow({
       <td className="max-w-[18rem] px-4 py-3">
         <Link
           to={`${APP_ROUTES.knowledgeBases}/${knowledgeBase.id}`}
-          className="block max-w-full font-medium text-primary hover:underline"
+          className="block max-w-full font-medium text-accent-fg hover:underline"
         >
           <span className="block truncate">{knowledgeBase.name}</span>
         </Link>
         {knowledgeBase.description ? (
-          <p className="mt-1 truncate text-xs text-muted">{knowledgeBase.description}</p>
+          <p className="mt-1 truncate text-xs text-fg-muted">{knowledgeBase.description}</p>
         ) : null}
       </td>
       <td className="px-4 py-3">
         <KnowledgeBaseStatusPill status={knowledgeBase.status} />
       </td>
-      <td className="tnum px-4 py-3 text-right text-muted">
+      <td className="tnum px-4 py-3 text-right text-fg-muted">
         {formatNumber(knowledgeBase.document_count)}
       </td>
-      <td className="tnum px-4 py-3 text-right text-muted">
+      <td className="tnum px-4 py-3 text-right text-fg-muted">
         {formatNumber(knowledgeBase.indexed_document_count)}
       </td>
-      <td className="tnum px-4 py-3 text-muted">{formatDateTime(knowledgeBase.updated_at)}</td>
+      <td className="tnum px-4 py-3 text-fg-muted">{formatDateTime(knowledgeBase.updated_at)}</td>
       <td className="px-4 py-3">
         <div className="flex justify-end">
           <Button
@@ -338,9 +343,7 @@ function KnowledgeBaseRow({
             loading={archiving}
             disabled={knowledgeBase.status === "ARCHIVED" || isDefault}
             aria-label={isDefault ? t("knowledgeBases.default.archiveDisabled") : undefined}
-            title={isDefault ? t("knowledgeBases.default.archiveDisabled") : undefined}
-          >
-            <Archive size={14} aria-hidden />
+            title={isDefault ? t("knowledgeBases.default.archiveDisabled") : undefined} icon={Archive}>
             {t("knowledgeBases.actions.archive")}
           </Button>
         </div>
@@ -361,7 +364,7 @@ function validateKnowledgeBaseName(name: string) {
 function KnowledgeBaseListSkeleton() {
   return (
     <Card className="h-80 animate-pulse">
-      <div className="h-full bg-background/60" />
+      <div className="h-full bg-surface-sunken" />
     </Card>
   );
 }

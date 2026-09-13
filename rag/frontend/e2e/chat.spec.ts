@@ -263,7 +263,7 @@ async function mockChat(
 }
 
 async function expectChatWorkspaceLayout(page: Page, mode: "desktop" | "mobile") {
-  const main = page.getByRole("main", { name: "メイン領域" });
+  const main = page.getByRole("main");
   const sessions = page.getByRole("complementary", { name: "会話" });
   const chat = page.getByRole("region", { name: "チャット" });
   const [mainBox, sessionsBox, chatBox] = await Promise.all([

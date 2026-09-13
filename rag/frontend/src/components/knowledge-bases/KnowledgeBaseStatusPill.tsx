@@ -15,8 +15,8 @@ export function KnowledgeBaseStatusPill({ status }: { status: KnowledgeBaseStatu
     <span
       className={cn(
         "inline-flex rounded-full px-2 py-0.5 text-xs font-medium",
-        status === "ACTIVE" && "bg-success-bg text-success",
-        status === "ARCHIVED" && "bg-muted/10 text-muted"
+        status === "ACTIVE" && "bg-success-subtle text-success-fg",
+        status === "ARCHIVED" && "bg-surface-hover text-fg-muted"
       )}
     >
       {knowledgeBaseStatusLabel(status)}

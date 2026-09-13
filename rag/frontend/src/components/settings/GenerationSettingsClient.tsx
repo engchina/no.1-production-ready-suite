@@ -1,15 +1,22 @@
 "use client";
 
+import {
+  PageBody,
+  Banner,
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+  Button,
+  FormStatus,
+  Skeleton,
+} from "@engchina/production-ready-ui";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { RotateCcw, Save, Sparkles } from "lucide-react";
 
 import { ErrorState } from "@/components/StateViews";
-import { Banner } from "@/components/ui/banner";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { FormStatus } from "@/components/ui/form-status";
-import { Skeleton } from "@/components/ui/skeleton";
 import {
   ApiError,
   type GenerationProfileName,
@@ -47,15 +54,15 @@ export function GenerationSettingsClient() {
 
   if (query.isPending) {
     return (
-      <div className="space-y-4 p-8">
+      <PageBody>
         <Skeleton className="h-64 w-full rounded-lg" />
-      </div>
+      </PageBody>
     );
   }
 
   if (query.isError) {
     return (
-      <div className="p-8">
+      <PageBody>
         <ErrorState
           message={
             query.error instanceof ApiError
@@ -64,7 +71,7 @@ export function GenerationSettingsClient() {
           }
           onRetry={() => void query.refetch()}
         />
-      </div>
+      </PageBody>
     );
   }
 
@@ -103,11 +110,11 @@ export function GenerationSettingsClient() {
   }
 
   return (
-    <div className="space-y-5 p-8">
+    <PageBody>
       <Card>
         <CardHeader>
           <div className="flex items-start gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-bg text-info">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-subtle text-info-fg">
               <Sparkles size={20} aria-hidden />
             </div>
             <div>
@@ -118,13 +125,13 @@ export function GenerationSettingsClient() {
         </CardHeader>
         <CardContent className="space-y-5">
           <div className="space-y-2">
-            <div className="text-sm font-medium text-foreground">
+            <div className="text-sm font-medium text-fg">
               {t("settings.generation.profile")}
             </div>
             {!settings.custom_prompt_configured ? (
               <Banner severity="info" title={t("settings.generation.custom.unavailableTitle")}>
                 <span>{t("settings.generation.custom.unavailableDescription")} </span>
-                <Link className="font-medium text-primary underline" to={APP_ROUTES.settingsPrompts}>
+                <Link className="font-medium text-accent-fg underline" to={APP_ROUTES.settingsPrompts}>
                   {t("settings.generation.custom.manageLink")}
                 </Link>
               </Banner>
@@ -141,11 +148,11 @@ export function GenerationSettingsClient() {
                     key={item.name}
                     htmlFor={`generation-profile-${item.name}`}
                     className={cn(
-                      "min-h-[118px] rounded-md border px-3 py-2 text-left transition-colors focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2",
+                      "min-h-[118px] rounded-md border px-3 py-2 text-left transition-colors focus-within:ring-2 focus-within:ring-focus-ring focus-within:ring-offset-2",
                       disabled && "cursor-not-allowed opacity-50",
                       selected
-                        ? "border-primary bg-primary/10 text-foreground"
-                        : "border-border bg-card text-foreground hover:bg-background",
+                        ? "border-accent-emphasis bg-accent-subtle text-fg"
+                        : "border-border bg-surface text-fg hover:bg-surface-hover",
                       !disabled && "cursor-pointer"
                     )}
                   >
@@ -153,7 +160,7 @@ export function GenerationSettingsClient() {
                       <span className="text-sm font-semibold">{profileLabel(item.name)}</span>
                       <input
                         id={`generation-profile-${item.name}`}
-                        className="h-4 w-4 shrink-0 accent-primary"
+                        className="h-4 w-4 shrink-0 accent-accent-emphasis"
                         type="radio"
                         name="generation-profile"
                         value={item.name}
@@ -162,14 +169,14 @@ export function GenerationSettingsClient() {
                         onChange={() => selectProfile(item.name)}
                       />
                     </span>
-                    <span className="mt-1 block text-xs leading-relaxed text-muted">
+                    <span className="mt-1 block text-xs leading-relaxed text-fg-muted">
                       {profileDescription(item.name)}
                     </span>
-                    <span className="mt-2 block text-[11px] font-medium text-muted">
+                    <span className="mt-2 block text-xs font-medium text-fg-muted">
                       {t("settings.generation.validationMethod")}: {contractLabel(item.contract_mode)}
                     </span>
                     {item.repair_enabled ? (
-                      <span className="mt-1 block text-[11px] text-info">
+                      <span className="mt-1 block text-xs text-info-fg">
                         {t("settings.generation.repairEnabled")}
                       </span>
                     ) : null}
@@ -181,7 +188,7 @@ export function GenerationSettingsClient() {
             {profile === "custom" ? (
               <Link
                 to={APP_ROUTES.settingsPrompts}
-                className="inline-flex text-sm font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                className="inline-flex text-sm font-medium text-accent-fg hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2"
               >
                 {t("settings.generation.custom.manageLink")}
               </Link>
@@ -224,9 +231,7 @@ export function GenerationSettingsClient() {
                 size="lg"
                 onClick={resetForm}
                 disabled={!dirty || save.isPending}
-                aria-label={t("settings.generation.actions.reset")}
-              >
-                <RotateCcw size={15} aria-hidden />
+                aria-label={t("settings.generation.actions.reset")} icon={RotateCcw}>
                 {t("settings.generation.actions.reset")}
               </Button>
               <Button
@@ -235,18 +240,14 @@ export function GenerationSettingsClient() {
                 disabled={!dirty}
                 onClick={submit}
                 size="lg"
-                aria-label={t("settings.generation.actions.save")}
-              >
-                <Save size={15} aria-hidden />
-                {save.isPending
-                  ? t("settings.generation.actions.saving")
-                  : t("settings.generation.actions.save")}
+                aria-label={t("settings.generation.actions.save")} icon={Save}>
+                {t("settings.generation.actions.save")}
               </Button>
             </div>
           </div>
         </CardContent>
       </Card>
-    </div>
+    </PageBody>
   );
 }
 
@@ -256,13 +257,13 @@ function ProfileChips({ profile }: { profile: GenerationProfileStatusData }) {
       {profile.recommended_for.slice(0, 2).map((item) => (
         <span
           key={item}
-          className="inline-flex min-h-5 items-center rounded bg-muted/20 px-1.5 text-[11px] text-muted"
+          className="inline-flex min-h-5 items-center rounded bg-surface-hover px-1.5 text-xs text-fg-muted"
         >
           {recommendedForLabel(item)}
         </span>
       ))}
       {profile.structured_output ? (
-        <span className="inline-flex min-h-5 items-center rounded bg-info-bg px-1.5 text-[11px] font-medium text-info">
+        <span className="inline-flex min-h-5 items-center rounded bg-info-subtle px-1.5 text-xs font-medium text-info-fg">
           {t("settings.generation.structuredOutput")}
         </span>
       ) : null}
@@ -272,9 +273,9 @@ function ProfileChips({ profile }: { profile: GenerationProfileStatusData }) {
 
 function RuntimeFact({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-md border border-border bg-muted/20 p-3">
-      <dt className="text-xs font-medium text-muted">{label}</dt>
-      <dd className="mt-1 break-words text-sm font-semibold text-foreground">{value}</dd>
+    <div className="rounded-md border border-border bg-surface-hover p-3">
+      <dt className="text-xs font-medium text-fg-muted">{label}</dt>
+      <dd className="mt-1 break-words text-sm font-semibold text-fg">{value}</dd>
     </div>
   );
 }

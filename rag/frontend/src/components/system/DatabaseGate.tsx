@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { ArrowRight, Database, Loader2, RefreshCw, Settings } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
+import { Button } from "@engchina/production-ready-ui";
 import { useDatabaseStatus } from "@/lib/queries";
 import { APP_ROUTES } from "@/lib/routes";
 import { t, type I18nKey } from "@/lib/i18n";
@@ -90,7 +90,7 @@ function GateChecking() {
   return (
     <div className="grid min-h-dvh place-items-center p-8">
       <div
-        className="flex items-center gap-2 text-sm text-muted"
+        className="flex items-center gap-2 text-sm text-fg-muted"
         role="status"
         aria-live="polite"
       >
@@ -103,10 +103,10 @@ function GateChecking() {
 
 const TONE_STYLES = {
   info: {
-    ring: "bg-info-bg text-info",
+    ring: "bg-info-subtle text-info-fg",
   },
   warning: {
-    ring: "bg-warning-bg text-warning",
+    ring: "bg-warning-subtle text-warning-fg",
   },
 } as const;
 
@@ -126,34 +126,33 @@ function GateNotice({
 }) {
   return (
     <div className="grid min-h-dvh place-items-center p-6">
-      <div className="w-full max-w-lg rounded-xl border border-border bg-card p-8 text-center shadow-sm">
+      <div className="w-full max-w-lg rounded-xl border border-border bg-surface p-8 text-center shadow-sm">
         <div
           className={`mx-auto grid size-12 place-items-center rounded-full ${TONE_STYLES[tone].ring}`}
           aria-hidden
         >
-          <Database size={22} />
+          <Database size={24} />
         </div>
-        <h1 className="mt-5 text-lg font-semibold text-foreground">{t(titleKey)}</h1>
-        <p className="mx-auto mt-2 max-w-md text-sm leading-relaxed text-muted">{t(messageKey)}</p>
+        <h1 className="mt-5 text-lg font-semibold text-fg">{t(titleKey)}</h1>
+        <p className="mx-auto mt-2 max-w-md text-sm leading-relaxed text-fg-muted">{t(messageKey)}</p>
 
         <div className="mt-6 flex flex-wrap items-center justify-center gap-2.5">
           <Link
             to={APP_ROUTES.settingsDatabase}
-            className="inline-flex h-9 items-center justify-center gap-1.5 rounded-md bg-primary px-4 text-sm font-medium leading-none text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+            className="inline-flex h-9 items-center justify-center gap-1.5 rounded-md bg-accent-emphasis px-4 text-sm font-medium leading-none text-fg-on-accent transition-colors hover:bg-accent-emphasis-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
           >
             <Settings size={16} aria-hidden />
             {t("dbGate.openDatabaseSettings")}
             <ArrowRight size={16} aria-hidden />
           </Link>
           {onRetry ? (
-            <Button variant="secondary" onClick={onRetry} loading={isRetrying}>
-              {!isRetrying ? <RefreshCw size={16} aria-hidden /> : null}
+            <Button variant="secondary" onClick={onRetry} loading={isRetrying} icon={RefreshCw}>
               {t("common.retry")}
             </Button>
           ) : null}
         </div>
 
-        <p className="mt-6 border-t border-border pt-4 text-xs leading-relaxed text-muted">
+        <p className="mt-6 border-t border-border pt-4 text-xs leading-relaxed text-fg-muted">
           {t("dbGate.settingsHint")}
         </p>
       </div>

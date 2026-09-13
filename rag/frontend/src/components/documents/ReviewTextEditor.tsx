@@ -9,10 +9,10 @@ function cellKey(tableId: string, row: number, col: number): string {
 }
 
 const TEXTAREA_CLASS =
-  "min-h-20 w-full resize-y rounded-md border border-border bg-card px-3 py-2 text-sm " +
-  "leading-relaxed text-foreground outline-none transition-colors placeholder:text-muted/70 " +
-  "focus-visible:border-primary focus-visible:outline-2 focus-visible:outline-offset-1 " +
-  "focus-visible:outline-ring";
+  "min-h-20 w-full resize-y rounded-md border border-border bg-surface px-3 py-2 text-sm " +
+  "leading-relaxed text-fg outline-none transition-colors placeholder:text-fg-muted " +
+  "focus-visible:border-focus-ring focus-visible:outline-2 focus-visible:outline-offset-1 " +
+  "focus-visible:outline-focus-ring";
 
 function editableElementId(element: DocumentElement): string | null {
   return element.element_id ?? null;
@@ -93,12 +93,12 @@ export function ReviewTextEditor({
   });
 
   return (
-    <div className="space-y-4 rounded-lg border border-border bg-background p-4">
-      <p className="text-xs text-muted">{t("flow.review.edit.structuredHint")}</p>
+    <div className="space-y-4 rounded-lg border border-border bg-surface-sunken p-4">
+      <p className="text-xs text-fg-muted">{t("flow.review.edit.structuredHint")}</p>
 
       {editableElements.length > 0 ? (
         <section aria-label={t("flow.review.edit.elements")} className="space-y-3">
-          <h4 className="text-sm font-semibold text-foreground">
+          <h4 className="text-sm font-semibold text-fg">
             {t("flow.review.edit.elements")}
           </h4>
           <ol className="max-h-[520px] space-y-3 overflow-auto pr-1">
@@ -109,18 +109,18 @@ export function ReviewTextEditor({
                 <li key={id} className="space-y-1">
                   <label
                     htmlFor={fieldId}
-                    className="flex flex-wrap items-center gap-2 text-xs text-muted"
+                    className="flex flex-wrap items-center gap-2 text-xs text-fg-muted"
                   >
-                    <span className="rounded-full bg-primary/10 px-2 py-0.5 font-medium text-primary">
+                    <span className="rounded-full bg-accent-subtle px-2 py-0.5 font-medium text-accent-fg">
                       {element.kind}
                     </span>
                     {typeof element.page_number === "number" ? (
-                      <span className="tnum rounded-full bg-card px-2 py-0.5">
+                      <span className="tnum rounded-full bg-surface px-2 py-0.5">
                         {t("flow.extraction.page", { page: element.page_number })}
                       </span>
                     ) : null}
                     {element.section_path?.length ? (
-                      <span className="min-w-0 max-w-full break-words rounded-full bg-info-bg px-2 py-0.5 text-info">
+                      <span className="min-w-0 max-w-full break-words rounded-full bg-info-subtle px-2 py-0.5 text-info-fg">
                         {element.section_path.join(" > ")}
                       </span>
                     ) : null}
@@ -144,13 +144,13 @@ export function ReviewTextEditor({
 
       {editableTables.length > 0 ? (
         <section aria-label={t("flow.review.edit.tableCells")} className="space-y-3">
-          <h4 className="text-sm font-semibold text-foreground">
+          <h4 className="text-sm font-semibold text-fg">
             {t("flow.review.edit.tableCells")}
           </h4>
           {editableTables.map((table) => (
             <div key={table.table_id} className="space-y-1">
               {table.caption ? (
-                <p className="text-xs text-muted">{table.caption}</p>
+                <p className="text-xs text-fg-muted">{table.caption}</p>
               ) : null}
               <div className="overflow-auto rounded-md border border-border">
                 <table className="w-full border-collapse text-sm">

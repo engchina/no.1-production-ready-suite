@@ -1,8 +1,10 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
 import { RefreshCw } from "lucide-react";
 
-import { Banner } from "@/components/ui/banner";
-import { Button } from "@/components/ui/button";
+import {
+  Banner,
+  Button,
+} from "@engchina/production-ready-ui";
 import { t } from "@/lib/i18n";
 
 interface CardErrorBoundaryProps {
@@ -59,8 +61,7 @@ export class CardErrorBoundary extends Component<
             : t("common.cardError.title")
         }
         action={
-          <Button variant="secondary" size="sm" onClick={this.handleReset}>
-            <RefreshCw size={14} aria-hidden />
+          <Button variant="secondary" size="sm" onClick={this.handleReset} icon={RefreshCw}>
             {t("common.retry")}
           </Button>
         }

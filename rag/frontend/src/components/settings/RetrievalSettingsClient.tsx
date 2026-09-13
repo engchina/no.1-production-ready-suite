@@ -1,14 +1,21 @@
 "use client";
 
+import {
+  PageBody,
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+  Button,
+  FormStatus,
+  Skeleton,
+  Switch,
+} from "@engchina/production-ready-ui";
 import { useEffect, useState } from "react";
 import { CheckCircle2, RotateCcw, Save, Search } from "lucide-react";
 
 import { ErrorState } from "@/components/StateViews";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { FormStatus } from "@/components/ui/form-status";
-import { Skeleton } from "@/components/ui/skeleton";
-import { Switch } from "@/components/ui/switch";
 import {
   ApiError,
   type RetrievalModeName,
@@ -71,22 +78,22 @@ export function RetrievalSettingsClient() {
 
   if (query.isPending) {
     return (
-      <div className="space-y-4 p-8">
+      <PageBody>
         <Skeleton className="h-64 w-full rounded-lg" />
-      </div>
+      </PageBody>
     );
   }
 
   if (query.isError) {
     return (
-      <div className="p-8">
+      <PageBody>
         <ErrorState
           message={
             query.error instanceof ApiError ? query.error.message : t("settings.retrieval.loadError")
           }
           onRetry={() => void query.refetch()}
         />
-      </div>
+      </PageBody>
     );
   }
 
@@ -125,11 +132,11 @@ export function RetrievalSettingsClient() {
   }
 
   return (
-    <div className="space-y-5 p-8">
+    <PageBody>
       <Card>
         <CardHeader>
           <div className="flex items-start gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-bg text-info">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-subtle text-info-fg">
               <Search size={20} aria-hidden />
             </div>
             <div>
@@ -143,7 +150,7 @@ export function RetrievalSettingsClient() {
             <FormStatus tone="info" message={t("settings.retrieval.legacyNotice")} />
           ) : null}
           <div className="space-y-2">
-            <div className="text-sm font-medium text-foreground">
+            <div className="text-sm font-medium text-fg">
               {t("settings.retrieval.mode")}
             </div>
             <div
@@ -162,26 +169,26 @@ export function RetrievalSettingsClient() {
                     disabled={save.isPending}
                     onClick={() => updateForm({ mode: item.name as RetrievalModeName })}
                     className={cn(
-                      "min-h-[96px] rounded-md border px-3 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50",
+                      "min-h-[96px] rounded-md border px-3 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50",
                       selected
-                        ? "border-primary bg-primary/10 text-foreground"
-                        : "border-border bg-card text-foreground hover:bg-background"
+                        ? "border-accent-emphasis bg-accent-subtle text-fg"
+                        : "border-border bg-surface text-fg hover:bg-surface-hover"
                     )}
                   >
                     <span className="flex items-center justify-between gap-2">
                       <span className="text-sm font-semibold">{strategyLabel(item.name)}</span>
                       {selected ? (
-                        <CheckCircle2 size={15} className="shrink-0 text-primary" aria-hidden />
+                        <CheckCircle2 size={16} className="shrink-0 text-accent-fg" aria-hidden />
                       ) : null}
                     </span>
-                    <span className="mt-1 block text-xs leading-relaxed text-muted">
+                    <span className="mt-1 block text-xs leading-relaxed text-fg-muted">
                       {strategyDescription(item.name)}
                     </span>
                     <span className="mt-2 flex flex-wrap gap-1">
                       {item.recommended_for.slice(0, 2).map((token) => (
                         <span
                           key={token}
-                          className="inline-flex min-h-5 items-center rounded bg-muted/20 px-1.5 text-[11px] text-muted"
+                          className="inline-flex min-h-5 items-center rounded bg-surface-hover px-1.5 text-xs text-fg-muted"
                         >
                           {purposeLabel(token)}
                         </span>
@@ -194,10 +201,10 @@ export function RetrievalSettingsClient() {
           </div>
           <div className="space-y-2">
             <div>
-              <div className="text-sm font-medium text-foreground">
+              <div className="text-sm font-medium text-fg">
                 {t("settings.retrieval.toggles")}
               </div>
-              <p className="text-xs text-muted">{t("settings.retrieval.toggles.description")}</p>
+              <p className="text-xs text-fg-muted">{t("settings.retrieval.toggles.description")}</p>
             </div>
             <div className="divide-y divide-border rounded-md border border-border">
               <ToggleRow
@@ -258,9 +265,7 @@ export function RetrievalSettingsClient() {
                 variant="secondary"
                 onClick={resetForm}
                 disabled={!dirty || save.isPending}
-                aria-label={t("settings.retrieval.actions.reset")}
-              >
-                <RotateCcw size={15} aria-hidden />
+                aria-label={t("settings.retrieval.actions.reset")} icon={RotateCcw}>
                 {t("settings.retrieval.actions.reset")}
               </Button>
               <Button
@@ -268,18 +273,14 @@ export function RetrievalSettingsClient() {
                 loading={save.isPending}
                 disabled={!dirty}
                 onClick={submit}
-                aria-label={t("settings.retrieval.actions.save")}
-              >
-                <Save size={15} aria-hidden />
-                {save.isPending
-                  ? t("settings.retrieval.actions.saving")
-                  : t("settings.retrieval.actions.save")}
+                aria-label={t("settings.retrieval.actions.save")} icon={Save}>
+                {t("settings.retrieval.actions.save")}
               </Button>
             </div>
           </div>
         </CardContent>
       </Card>
-    </div>
+    </PageBody>
   );
 }
 
@@ -307,8 +308,8 @@ function ToggleRow({
       )}
     >
       <div className="min-w-0">
-        <div className="text-sm font-medium text-foreground">{label}</div>
-        <p className="mt-0.5 text-xs leading-relaxed text-muted">{description}</p>
+        <div className="text-sm font-medium text-fg">{label}</div>
+        <p className="mt-0.5 text-xs leading-relaxed text-fg-muted">{description}</p>
       </div>
       <Switch
         checked={checked}

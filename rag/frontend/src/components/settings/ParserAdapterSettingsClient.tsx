@@ -1,5 +1,17 @@
 "use client";
 
+import {
+  PageBody,
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+  Button,
+  FieldError,
+  FormStatus,
+  Skeleton,
+} from "@engchina/production-ready-ui";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   AlertTriangle,
@@ -13,11 +25,6 @@ import {
 } from "lucide-react";
 
 import { ErrorState } from "@/components/StateViews";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { FieldError } from "@/components/ui/field-error";
-import { FormStatus } from "@/components/ui/form-status";
-import { Skeleton } from "@/components/ui/skeleton";
 import {
   SERVICE_PROFILE_ORDER,
   ServiceProfileBadge,
@@ -141,16 +148,16 @@ export function ParserAdapterSettingsClient() {
 
   if (query.isPending) {
     return (
-      <div className="space-y-4 p-8">
+      <PageBody>
         <Skeleton className="h-40 w-full rounded-lg" />
         <Skeleton className="h-72 w-full rounded-lg" />
-      </div>
+      </PageBody>
     );
   }
 
   if (query.isError) {
     return (
-      <div className="p-8">
+      <PageBody>
         <ErrorState
           message={
             query.error instanceof ApiError
@@ -159,7 +166,7 @@ export function ParserAdapterSettingsClient() {
           }
           onRetry={() => void query.refetch()}
         />
-      </div>
+      </PageBody>
     );
   }
 
@@ -237,7 +244,7 @@ export function ParserAdapterSettingsClient() {
   }
 
   return (
-    <div className="space-y-5 p-8">
+    <PageBody>
       <OverviewCard
         dirty={dirty}
         form={form}
@@ -252,7 +259,7 @@ export function ParserAdapterSettingsClient() {
         onSubmit={submit}
       />
       <details className="border-t border-border pt-4">
-        <summary className="cursor-pointer text-sm font-semibold text-foreground">
+        <summary className="cursor-pointer text-sm font-semibold text-fg">
           {t("settings.parserAdapters.diagnostics.title")}
         </summary>
         <div className="mt-4 space-y-5">
@@ -265,7 +272,7 @@ export function ParserAdapterSettingsClient() {
           />
         </div>
       </details>
-    </div>
+    </PageBody>
   );
 }
 
@@ -354,7 +361,7 @@ function OverviewCard({
     <Card>
       <CardHeader>
         <div className="flex items-start gap-3">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-bg text-info">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-subtle text-info-fg">
             <Plug size={20} aria-hidden />
           </div>
           <div>
@@ -367,7 +374,7 @@ function OverviewCard({
       </CardHeader>
       <CardContent className="space-y-5">
         <div className="space-y-2">
-          <div className="text-sm font-medium text-foreground">
+          <div className="text-sm font-medium text-fg">
             {t("settings.parserAdapters.backend")}
           </div>
           <div
@@ -404,50 +411,50 @@ function OverviewCard({
                       disabled={saving}
                       onClick={() => onBackendChange(backend)}
                       className={cn(
-                        "min-h-[76px] rounded-md border px-3 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50",
+                        "min-h-[76px] rounded-md border px-3 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50",
                         selected
-                          ? "border-primary bg-primary/10 text-foreground"
-                          : "border-border bg-card text-foreground hover:bg-background"
+                          ? "border-accent-emphasis bg-accent-subtle text-fg"
+                          : "border-border bg-surface text-fg hover:bg-surface-hover"
                       )}
                     >
                       <span className="flex items-center gap-1.5">
                         <span className="text-sm font-semibold">{backendLabel(backend)}</span>
                         {runtimeProfile ? <ServiceProfileBadge profile={runtimeProfile} /> : null}
                       </span>
-                      <span className="mt-1 block text-xs leading-relaxed text-muted">
+                      <span className="mt-1 block text-xs leading-relaxed text-fg-muted">
                         {t(backendDescriptionKey(backend))}
                       </span>
                       {supportedFormats ? (
-                        <span className="mt-1 block text-xs text-muted">
+                        <span className="mt-1 block text-xs text-fg-muted">
                           {t("settings.parserAdapters.capabilities")}: {supportedFormats}
                         </span>
                       ) : null}
                       {supportedExtensions ? (
-                        <span className="mt-0.5 block break-words text-[11px] leading-4 text-muted">
+                        <span className="mt-0.5 block break-words text-xs leading-4 text-fg-muted">
                           {supportedExtensions}
                         </span>
                       ) : null}
                       <span className="mt-2 flex flex-wrap items-center gap-1.5">
                         {runtimeStatus ? <ServiceStatusBadge status={runtimeStatus} /> : null}
                         {service && !service.configured ? (
-                          <span className="inline-flex items-center gap-1 rounded-sm bg-warning-bg px-1.5 py-0.5 text-[11px] font-medium text-warning whitespace-nowrap">
-                            <AlertTriangle size={12} aria-hidden />
+                          <span className="inline-flex items-center gap-1 rounded-sm bg-warning-subtle px-1.5 py-0.5 text-xs font-medium text-warning-fg whitespace-nowrap">
+                            <AlertTriangle size={14} aria-hidden />
                             {t("settings.parserAdapters.serviceBackend.unconfigured")}
                           </span>
                         ) : null}
                         {externalConnection ? (
                           <span
                             className={cn(
-                              "inline-flex items-center gap-1 rounded-sm px-1.5 py-0.5 text-[11px] font-medium whitespace-nowrap",
+                              "inline-flex items-center gap-1 rounded-sm px-1.5 py-0.5 text-xs font-medium whitespace-nowrap",
                               externalConnection.configured
-                                ? "bg-success-bg text-success"
-                                : "bg-warning-bg text-warning"
+                                ? "bg-success-subtle text-success-fg"
+                                : "bg-warning-subtle text-warning-fg"
                             )}
                           >
                             {externalConnection.configured ? (
-                              <CheckCircle2 size={12} aria-hidden />
+                              <CheckCircle2 size={14} aria-hidden />
                             ) : (
-                              <AlertTriangle size={12} aria-hidden />
+                              <AlertTriangle size={14} aria-hidden />
                             )}
                             {externalConnection.configured
                               ? t("settings.parserAdapters.connection.configured")
@@ -462,20 +469,20 @@ function OverviewCard({
             ))}
           </div>
           {form.adapter_backend === "local" ? (
-            <p className="text-xs leading-relaxed text-warning">
+            <p className="text-xs leading-relaxed text-warning-fg">
               {t("settings.parserAdapters.legacyBackendNotice")}
             </p>
           ) : null}
-          <p className="text-xs leading-relaxed text-muted">
+          <p className="text-xs leading-relaxed text-fg-muted">
             {t("settings.parserAdapters.serviceBackend.note")}
           </p>
         </div>
         <section className="space-y-3 border-t border-border pt-5">
           <div>
-            <h3 className="text-sm font-semibold text-foreground">
+            <h3 className="text-sm font-semibold text-fg">
               {t("settings.parserAdapters.connection.title")}
             </h3>
-            <p className="mt-1 text-xs leading-relaxed text-muted">
+            <p className="mt-1 text-xs leading-relaxed text-fg-muted">
               {t("settings.parserAdapters.connection.description")}
             </p>
           </div>
@@ -521,21 +528,15 @@ function OverviewCard({
               loading={saving}
               disabled={!dirty}
               onClick={onSubmit}
-              aria-label={t("settings.parserAdapters.actions.save")}
-            >
-              <Save size={15} aria-hidden />
-              {saving
-                ? t("settings.parserAdapters.actions.saving")
-                : t("settings.parserAdapters.actions.save")}
+              aria-label={t("settings.parserAdapters.actions.save")} icon={Save}>
+              {t("settings.parserAdapters.actions.save")}
             </Button>
             <Button
               type="button"
               variant="secondary"
               onClick={onReset}
               disabled={!dirty || saving}
-              aria-label={t("settings.parserAdapters.actions.reset")}
-            >
-              <RotateCcw size={15} aria-hidden />
+              aria-label={t("settings.parserAdapters.actions.reset")} icon={RotateCcw}>
               {t("settings.parserAdapters.actions.reset")}
             </Button>
           </div>
@@ -575,11 +576,11 @@ function ExternalConnectionCard({
   const clearApiKeyId = `external-parser-${backend}-clear-api-key`;
 
   return (
-    <div className="min-w-0 rounded-md border border-border bg-muted/10 p-4">
+    <div className="min-w-0 rounded-md border border-border bg-surface-hover p-4">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
-          <h4 className="text-sm font-semibold text-foreground">{backendLabel(backend)}</h4>
-          <p className="mt-0.5 break-all text-xs text-muted">
+          <h4 className="text-sm font-semibold text-fg">{backendLabel(backend)}</h4>
+          <p className="mt-0.5 break-all text-xs text-fg-muted">
             {connectionProtocolLabel(connection?.protocol ?? externalProtocol(backend))}
           </p>
         </div>
@@ -587,8 +588,8 @@ function ExternalConnectionCard({
           className={cn(
             "inline-flex min-h-6 items-center rounded-md px-2 text-xs font-medium",
             connection?.configured
-              ? "bg-success-bg text-success"
-              : "bg-warning-bg text-warning"
+              ? "bg-success-subtle text-success-fg"
+              : "bg-warning-subtle text-warning-fg"
           )}
         >
           {connection?.configured
@@ -632,7 +633,7 @@ function ExternalConnectionCard({
         />
         <label
           htmlFor={clearApiKeyId}
-          className="flex min-h-[44px] cursor-pointer items-center gap-2 rounded-md text-xs text-foreground"
+          className="flex min-h-[44px] cursor-pointer items-center gap-2 rounded-md text-xs text-fg"
         >
           <input
             id={clearApiKeyId}
@@ -642,7 +643,7 @@ function ExternalConnectionCard({
             onChange={(event) =>
               onChange({ clear_api_key: event.target.checked, api_key: "" })
             }
-            className="h-4 w-4 rounded border-border accent-primary"
+            className="h-4 w-4 rounded border-border accent-accent-emphasis"
           />
           {t("settings.parserAdapters.connection.clearApiKey")}
         </label>
@@ -655,15 +656,11 @@ function ExternalConnectionCard({
           className="min-h-[44px] w-full sm:w-auto"
           loading={statusQuery.isFetching}
           disabled={saving || dirty || !connection?.configured}
-          onClick={() => void statusQuery.refetch()}
-        >
-          <Plug size={15} aria-hidden />
-          {statusQuery.isFetching
-            ? t("settings.parserAdapters.connection.testing")
-            : t("settings.parserAdapters.connection.test")}
+          onClick={() => void statusQuery.refetch()} icon={Plug}>
+          {t("settings.parserAdapters.connection.test")}
         </Button>
         {dirty ? (
-          <p className="text-xs leading-relaxed text-muted">
+          <p className="text-xs leading-relaxed text-fg-muted">
             {t("settings.parserAdapters.connection.saveBeforeTest")}
           </p>
         ) : null}
@@ -707,7 +704,7 @@ function ConnectionTextField({
   const errorId = `${id}-error`;
   return (
     <div className="min-w-0 space-y-1.5">
-      <label htmlFor={id} className="text-xs font-medium text-foreground">
+      <label htmlFor={id} className="text-xs font-medium text-fg">
         {label}
       </label>
       <input
@@ -721,8 +718,8 @@ function ConnectionTextField({
         aria-describedby={error ? errorId : undefined}
         onChange={(event) => onChange(event.target.value)}
         className={cn(
-          "min-h-[44px] w-full min-w-0 rounded-md border bg-card px-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted/70 focus-visible:border-primary disabled:cursor-not-allowed disabled:bg-muted/30 disabled:text-muted",
-          error ? "border-danger" : "border-border"
+          "min-h-[44px] w-full min-w-0 rounded-md border bg-surface px-3 text-sm text-fg outline-none transition-colors placeholder:text-fg-muted focus-visible:border-focus-ring disabled:cursor-not-allowed disabled:bg-surface-hover disabled:text-fg-disabled",
+          error ? "border-danger-fg" : "border-border-control"
         )}
       />
       <FieldError id={errorId} message={error} />
@@ -758,7 +755,7 @@ function ParserAdapterContractCard({
       <CardHeader>
         <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
           <div className="flex items-start gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-bg text-info">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-subtle text-info-fg">
               <ShieldCheck size={20} aria-hidden />
             </div>
             <div>
@@ -774,12 +771,8 @@ function ParserAdapterContractCard({
             loading={checking}
             onClick={onRun}
             aria-label={t("settings.parserAdapters.contract.run")}
-            className="w-full md:w-auto"
-          >
-            <RefreshCw size={15} aria-hidden />
-            {checking
-              ? t("settings.parserAdapters.contract.running")
-              : t("settings.parserAdapters.contract.run")}
+            className="w-full md:w-auto" icon={RefreshCw}>
+            {t("settings.parserAdapters.contract.run")}
           </Button>
         </div>
       </CardHeader>
@@ -806,8 +799,8 @@ function ParserAdapterContractResult({ data }: { data: ParserAdapterContractData
   return (
     <div className="space-y-4">
       <dl className="grid grid-cols-1 gap-3 md:grid-cols-4">
-        <div className="rounded-md border border-border bg-muted/20 p-3">
-          <dt className="text-xs font-medium text-muted">
+        <div className="rounded-md border border-border bg-surface-hover p-3">
+          <dt className="text-xs font-medium text-fg-muted">
             {t("settings.parserAdapters.contract.judgement")}
           </dt>
           <dd className="mt-2">
@@ -844,7 +837,7 @@ function ContractVerdict({ passed }: { passed: boolean }) {
     <span
       className={cn(
         "inline-flex min-h-7 items-center gap-1.5 rounded-md px-2 text-xs font-semibold",
-        passed ? "bg-success-bg text-success" : "bg-danger-bg text-danger"
+        passed ? "bg-success-subtle text-success-fg" : "bg-danger-subtle text-danger-fg"
       )}
     >
       <Icon size={14} aria-hidden />
@@ -896,23 +889,23 @@ function CodeCountPanel({
       return labelForCode(leftCode).localeCompare(labelForCode(rightCode), "ja");
     });
   return (
-    <section className="rounded-md border border-border bg-muted/20 p-3">
-      <h3 className="text-xs font-medium text-muted">{title}</h3>
+    <section className="rounded-md border border-border bg-surface-hover p-3">
+      <h3 className="text-xs font-medium text-fg-muted">{title}</h3>
       {entries.length ? (
         <div className="mt-2 flex flex-wrap gap-1.5">
           {entries.map(([code, count]) => (
             <span
               key={code}
-              className="inline-flex min-h-6 items-center rounded-md bg-card px-2 text-xs font-medium text-foreground ring-1 ring-border"
+              className="inline-flex min-h-6 items-center rounded-md bg-surface px-2 text-xs font-medium text-fg ring-1 ring-border"
               title={code}
             >
               {labelForCode(code)}
-              <span className="ml-1 font-semibold text-muted"> {count}</span>
+              <span className="ml-1 font-semibold text-fg-muted"> {count}</span>
             </span>
           ))}
         </div>
       ) : (
-        <p className="mt-2 text-sm text-foreground">
+        <p className="mt-2 text-sm text-fg">
           {t("settings.parserAdapters.contract.noCodes")}
         </p>
       )}
@@ -927,12 +920,12 @@ function ContractBackendMatrix({ data }: { data: ParserAdapterContractData }) {
         const sourceStatus = data.summary.backend_source_status[backend] ?? {};
         const statusCounts = data.summary.backend_status_counts[backend] ?? {};
         return (
-          <div key={backend} className="rounded-md border border-border bg-muted/20 p-3">
+          <div key={backend} className="rounded-md border border-border bg-surface-hover p-3">
             <div className="flex items-center justify-between gap-2">
-              <div className="text-sm font-semibold text-foreground">
+              <div className="text-sm font-semibold text-fg">
                 {adapterLabel(backend)}
               </div>
-              <div className="text-xs text-muted">
+              <div className="text-xs text-fg-muted">
                 {formatStatusCounts(statusCounts)}
               </div>
             </div>
@@ -946,7 +939,7 @@ function ContractBackendMatrix({ data }: { data: ParserAdapterContractData }) {
                   )}
                 >
                   {sourceKindLabel(sourceKind)}
-                  <span className="text-[11px] opacity-80">
+                  <span className="text-xs opacity-80">
                     {contractStatusLabel(status)}
                   </span>
                 </span>
@@ -965,7 +958,7 @@ function ContractCaseTable({ cases }: { cases: ParserAdapterContractCaseData[] }
   }
   return (
     <div className="overflow-hidden rounded-md border border-border">
-      <div className="hidden border-b border-border bg-muted/20 text-xs font-medium text-muted md:grid md:grid-cols-[0.85fr_0.65fr_0.8fr_1.25fr_1.05fr_1.25fr]">
+      <div className="hidden border-b border-border bg-surface-hover text-xs font-medium text-fg-muted md:grid md:grid-cols-[0.85fr_0.65fr_0.8fr_1.25fr_1.05fr_1.25fr]">
         <div className="px-3 py-2">{t("settings.parserAdapters.adapter")}</div>
         <div className="px-3 py-2">{t("settings.parserAdapters.routes.sourceKind")}</div>
         <div className="px-3 py-2">{t("settings.parserAdapters.status")}</div>
@@ -995,15 +988,15 @@ function ContractCaseRow({
   return (
     <li className="grid grid-cols-1 gap-3 px-0 py-4 md:grid-cols-[0.85fr_0.65fr_0.8fr_1.25fr_1.05fr_1.25fr] md:gap-0 md:py-0">
       <RowCell label={t("settings.parserAdapters.adapter")}>
-        <div className="text-sm font-medium text-foreground">
+        <div className="text-sm font-medium text-fg">
           {adapterLabel(contractCase.backend)}
         </div>
-        <div className="break-words text-xs text-muted">
+        <div className="break-words text-xs text-fg-muted">
           {contractCase.parser_backend ?? contractCase.fixture_name}
         </div>
       </RowCell>
       <RowCell label={t("settings.parserAdapters.routes.sourceKind")}>
-        <span className="inline-flex min-h-6 items-center rounded-md bg-muted px-2 text-xs font-semibold text-foreground">
+        <span className="inline-flex min-h-6 items-center rounded-md bg-surface-hover px-2 text-xs font-semibold text-fg">
           {sourceKindLabel(contractCase.source_kind)}
         </span>
       </RowCell>
@@ -1014,7 +1007,7 @@ function ContractCaseRow({
         <ContractRuntimeEvidence contractCase={contractCase} />
       </RowCell>
       <RowCell label={t("settings.parserAdapters.contract.schemaCounts")}>
-        <span className="break-words text-sm text-foreground">
+        <span className="break-words text-sm text-fg">
           {formatContractCounts(contractCase)}
         </span>
       </RowCell>
@@ -1031,7 +1024,7 @@ function ContractRuntimeEvidence({
   contractCase: ParserAdapterContractCaseData;
 }) {
   return (
-    <div className="space-y-1 text-xs text-muted">
+    <div className="space-y-1 text-xs text-fg-muted">
       <EvidenceLine
         label={t("settings.parserAdapters.contract.packageEvidence")}
         value={formatPackageEvidence(contractCase)}
@@ -1051,8 +1044,8 @@ function ContractRuntimeEvidence({
 function EvidenceLine({ label, value }: { label: string; value: string }) {
   return (
     <div className="grid grid-cols-[4.8rem_minmax(0,1fr)] gap-2">
-      <span className="text-muted">{label}</span>
-      <span className="break-words font-medium text-foreground">{value}</span>
+      <span className="text-fg-muted">{label}</span>
+      <span className="break-words font-medium text-fg">{value}</span>
     </div>
   );
 }
@@ -1087,14 +1080,14 @@ function ContractCodeList({
     ...contractCase.reason_codes.map(contractReasonLabel),
   ].filter(Boolean);
   if (!labels.length) {
-    return <span className="text-sm text-foreground">{t("settings.parserAdapters.noWarning")}</span>;
+    return <span className="text-sm text-fg">{t("settings.parserAdapters.noWarning")}</span>;
   }
   return (
     <div className="flex flex-wrap gap-1.5">
       {labels.map((label, index) => (
         <span
           key={`${contractCase.backend}-${contractCase.source_kind}-${label}-${index}`}
-          className="inline-flex min-h-6 items-center rounded-md bg-muted px-2 text-xs font-medium text-foreground"
+          className="inline-flex min-h-6 items-center rounded-md bg-surface-hover px-2 text-xs font-medium text-fg"
         >
           {label}
         </span>
@@ -1105,9 +1098,9 @@ function ContractCodeList({
 
 function RuntimeFact({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-md border border-border bg-muted/20 p-3">
-      <dt className="text-xs font-medium text-muted">{label}</dt>
-      <dd className="mt-1 break-words text-sm font-semibold text-foreground">{value}</dd>
+    <div className="rounded-md border border-border bg-surface-hover p-3">
+      <dt className="text-xs font-medium text-fg-muted">{label}</dt>
+      <dd className="mt-1 break-words text-sm font-semibold text-fg">{value}</dd>
     </div>
   );
 }
@@ -1115,7 +1108,7 @@ function RuntimeFact({ label, value }: { label: string; value: string }) {
 function RowCell({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="min-w-0 px-3 md:py-3">
-      <div className="mb-1 text-xs font-medium text-muted md:hidden">{label}</div>
+      <div className="mb-1 text-xs font-medium text-fg-muted md:hidden">{label}</div>
       {children}
     </div>
   );
@@ -1304,18 +1297,18 @@ function isKnownContractStatus(status: string): status is ParserAdapterContractS
 }
 
 function contractStatusToneClass(status: ParserAdapterContractStatus | string) {
-  if (status === "passed") return "bg-success-bg text-success";
+  if (status === "passed") return "bg-success-subtle text-success-fg";
   if (status === "failed" || status === "fallback" || status === "missing") {
-    return "bg-danger-bg text-danger";
+    return "bg-danger-subtle text-danger-fg";
   }
   if (status === "disabled" || status === "fixture_missing") {
-    return "bg-warning-bg text-warning";
+    return "bg-warning-subtle text-warning-fg";
   }
   if (status === "ignored" || status === "unsupported") {
-    return "bg-warning-bg text-warning";
+    return "bg-warning-subtle text-warning-fg";
   }
-  if (status === "available") return "bg-info-bg text-info";
-  return "bg-muted text-foreground";
+  if (status === "available") return "bg-info-subtle text-info-fg";
+  return "bg-surface-hover text-fg";
 }
 
 function formatContractCounts(contractCase: ParserAdapterContractCaseData) {

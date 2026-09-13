@@ -1,6 +1,22 @@
 "use client";
 
 import {
+  PageBody,
+  PageHeader,
+  Button,
+  Banner,
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+  SelectField,
+  type SelectFieldOption,
+  Skeleton,
+  Switch,
+  TextField,
+} from "@engchina/production-ready-ui";
+import {
   AlertCircle,
   CheckCircle2,
   Cpu,
@@ -14,15 +30,8 @@ import {
 } from "lucide-react";
 import { type FormEvent, useEffect, useMemo, useState } from "react";
 
-import { PageHeader } from "@/components/PageHeader";
 import { ErrorState } from "@/components/StateViews";
-import { Button } from "@/components/ui/button";
-import { Banner } from "@/components/ui/banner";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useConfirm } from "@/components/ui/confirm-dialog";
-import { SelectField, type SelectFieldOption } from "@/components/ui/select-field";
-import { Skeleton } from "@/components/ui/skeleton";
-import { Switch } from "@/components/ui/switch";
 import {
   SETTINGS_DETAIL_GRID_CLASS,
   SettingsSupplementalPanels,
@@ -327,14 +336,14 @@ export function ModelSettingsClient() {
     return (
       <div>
         <PageHeader title={t("nav.settingsModel")} subtitle={t("settings.model.subtitle")} />
-        <div className="p-8">
+        <PageBody>
           <ErrorState
             message={
               query.error instanceof ApiError ? query.error.message : t("settings.model.loadError")
             }
             onRetry={() => void query.refetch()}
           />
-        </div>
+        </PageBody>
       </div>
     );
   }
@@ -343,11 +352,11 @@ export function ModelSettingsClient() {
     return (
       <div>
         <PageHeader title={t("nav.settingsModel")} subtitle={t("settings.model.subtitle")} />
-        <div className="space-y-4 p-8" aria-label={t("settings.model.loading")}>
+        <PageBody aria-label={t("settings.model.loading")}>
           <Skeleton className="h-28 w-full rounded-lg" />
           <Skeleton className="h-72 w-full rounded-lg" />
           <Skeleton className="h-44 w-full rounded-lg" />
-        </div>
+        </PageBody>
       </div>
     );
   }
@@ -355,23 +364,24 @@ export function ModelSettingsClient() {
   return (
     <div>
       <PageHeader title={t("nav.settingsModel")} subtitle={t("settings.model.subtitle")} />
-      <form onSubmit={(event) => void handleSubmit(event)} className="space-y-6 p-8">
+      <PageBody>
+      <form onSubmit={(event) => void handleSubmit(event)} className="space-y-6">
         <section className="grid gap-4 lg:grid-cols-3" aria-labelledby="model-status-title">
           <div className="lg:col-span-3">
             <div className="flex flex-wrap items-end justify-between gap-3">
               <div>
-                <h2 id="model-status-title" className="text-base font-semibold text-foreground">
+                <h2 id="model-status-title" className="text-base font-semibold text-fg">
                   {t("settings.model.status.title")}
                 </h2>
-                <p className="mt-1 text-sm text-muted">{t("settings.model.status.subtitle")}</p>
+                <p className="mt-1 text-sm text-fg-muted">{t("settings.model.status.subtitle")}</p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 {isDirty ? (
-                  <span className="rounded-full bg-warning-bg px-3 py-1 text-xs font-medium text-warning">
+                  <span className="rounded-full bg-warning-subtle px-3 py-1 text-xs font-medium text-warning-fg">
                     {t("settings.model.unsaved")}
                   </span>
                 ) : null}
-                <span className="rounded-full border border-border bg-card px-3 py-1 text-xs text-muted">
+                <span className="rounded-full border border-border bg-surface px-3 py-1 text-xs text-fg-muted">
                   {t("settings.model.source")}: {t("settings.model.source.runtime")}
                 </span>
               </div>
@@ -394,7 +404,7 @@ export function ModelSettingsClient() {
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
-                  <Cpu size={16} className="text-primary" aria-hidden />
+                  <Cpu size={16} className="text-accent-fg" aria-hidden />
                   {t("settings.model.enterprise.title")}
                 </CardTitle>
                 <CardDescription>{t("settings.model.enterprise.description")}</CardDescription>
@@ -403,21 +413,21 @@ export function ModelSettingsClient() {
                 <TextField
                   id="enterprise-endpoint"
                   label={t("settings.model.enterprise.endpoint")}
-                  badge={t("settings.model.requiredInOci")}
+                  required requiredLabel={t("settings.model.requiredInOci")}
                   value={draft.enterprise_ai.endpoint}
                   placeholder={t("settings.model.placeholder.endpoint")}
                   helper={t("settings.model.enterprise.endpointHelp")}
-                  onChange={(value) => updateEnterprise("endpoint", value)}
+                  onValueChange={(value) => updateEnterprise("endpoint", value)}
                   className="md:col-span-2"
                 />
                 <TextField
                   id="enterprise-project-ocid"
                   label={t("settings.model.enterprise.project")}
-                  badge={t("settings.model.requiredInOci")}
+                  required requiredLabel={t("settings.model.requiredInOci")}
                   value={draft.enterprise_ai.project_ocid}
                   placeholder={t("settings.model.placeholder.project")}
                   helper={t("settings.model.enterprise.projectHelp")}
-                  onChange={(value) => updateEnterprise("project_ocid", value)}
+                  onValueChange={(value) => updateEnterprise("project_ocid", value)}
                   className="md:col-span-2"
                 />
                 <SecretField
@@ -434,14 +444,14 @@ export function ModelSettingsClient() {
                   className="md:col-span-2"
                 />
                 {draft.enterprise_ai.has_api_key ? (
-                  <label className="flex cursor-pointer items-start gap-3 rounded-md border border-border bg-background px-4 py-3 text-sm transition-colors hover:bg-info-bg/30 md:col-span-2">
+                  <label className="flex cursor-pointer items-start gap-3 rounded-md border border-border bg-surface-sunken px-4 py-3 text-sm transition-colors hover:bg-info-subtle md:col-span-2">
                     <input
                       type="checkbox"
                       checked={draft.enterprise_ai.clear_api_key}
                       onChange={(event) => updateApiKeyClear(event.target.checked)}
-                      className="mt-0.5 h-4 w-4 cursor-pointer accent-[var(--primary)]"
+                      className="mt-0.5 h-4 w-4 cursor-pointer accent-[var(--color-accent-emphasis)]"
                     />
-                    <span className="text-foreground">
+                    <span className="text-fg">
                       {t("settings.model.enterprise.clearApiKey")}
                     </span>
                   </label>
@@ -462,7 +472,7 @@ export function ModelSettingsClient() {
                   label={t("settings.model.enterprise.apiPath")}
                   value={draft.enterprise_ai.api_path}
                   placeholder={t("settings.model.placeholder.apiPath")}
-                  onChange={(value) => updateEnterprise("api_path", value)}
+                  onValueChange={(value) => updateEnterprise("api_path", value)}
                   className="md:col-span-2"
                 />
                 <SelectField
@@ -498,7 +508,7 @@ export function ModelSettingsClient() {
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
-                  <Database size={16} className="text-primary" aria-hidden />
+                  <Database size={16} className="text-accent-fg" aria-hidden />
                   {t("settings.model.genai.title")}
                 </CardTitle>
                 <CardDescription>{t("settings.model.genai.description")}</CardDescription>
@@ -581,6 +591,7 @@ export function ModelSettingsClient() {
           />
         </div>
       </form>
+      </PageBody>
     </div>
   );
 }
@@ -592,7 +603,7 @@ function ModelFormActions({
   canSubmit: boolean;
   saving: boolean;
 }) {
-  const saveLabel = saving ? t("settings.model.saving") : t("settings.model.save");
+  const saveLabel = t("settings.model.save");
 
   return (
     <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
@@ -602,9 +613,7 @@ function ModelFormActions({
         className="whitespace-nowrap"
         aria-label={`${t("nav.settingsModel")}: ${saveLabel}`}
         disabled={!canSubmit}
-        loading={saving}
-      >
-        {!saving ? <Save size={15} aria-hidden /> : null}
+        loading={saving} icon={Save}>
         {saveLabel}
       </Button>
     </div>
@@ -618,18 +627,18 @@ function CheckCard({ checkKey, status }: { checkKey: CheckKey; status: ModelSett
       <CardContent className="flex h-full flex-col gap-3 pt-5">
         <div className="flex items-start justify-between gap-3">
           <div>
-            <p className="text-sm font-semibold text-foreground">{t(CHECK_LABEL_KEYS[checkKey])}</p>
-            <p className="mt-1 text-xs leading-relaxed text-muted">
+            <p className="text-sm font-semibold text-fg">{t(CHECK_LABEL_KEYS[checkKey])}</p>
+            <p className="mt-1 text-xs leading-relaxed text-fg-muted">
               {t(CHECK_MESSAGE_KEYS[checkKey][status])}
             </p>
           </div>
           <Icon
-            size={18}
+            size={20}
             className={cn(
               "shrink-0",
-              status === "ok" && "text-success",
-              status === "missing" && "text-warning",
-              status === "invalid" && "text-danger"
+              status === "ok" && "text-success-fg",
+              status === "missing" && "text-warning-fg",
+              status === "invalid" && "text-danger-fg"
             )}
             aria-hidden
           />
@@ -637,9 +646,9 @@ function CheckCard({ checkKey, status }: { checkKey: CheckKey; status: ModelSett
         <span
           className={cn(
             "mt-auto w-fit rounded-full px-2.5 py-1 text-xs font-medium",
-            status === "ok" && "bg-success-bg text-success",
-            status === "missing" && "bg-warning-bg text-warning",
-            status === "invalid" && "bg-danger-bg text-danger"
+            status === "ok" && "bg-success-subtle text-success-fg",
+            status === "missing" && "bg-warning-subtle text-warning-fg",
+            status === "invalid" && "bg-danger-subtle text-danger-fg"
           )}
         >
           {t(STATUS_LABEL_KEYS[status])}
@@ -686,17 +695,15 @@ function ModelCatalogEditor({
           variant="secondary"
           size="sm"
           onClick={onAdd}
-          disabled={models.length >= 20}
-        >
-          <Plus size={14} aria-hidden />
+          disabled={models.length >= 20} icon={Plus}>
           {t("settings.model.enterprise.addModel")}
         </Button>
       </div>
       <div
         id="enterprise-model-catalog"
-        className="overflow-hidden rounded-md border border-border bg-background"
+        className="overflow-hidden rounded-md border border-border bg-surface-sunken"
       >
-        <div className="hidden border-b border-border bg-card px-3 py-2 text-xs font-medium text-muted md:grid md:grid-cols-[64px_minmax(0,1.2fr)_minmax(0,1fr)_84px_96px_44px] md:gap-3">
+        <div className="hidden border-b border-border bg-surface px-3 py-2 text-xs font-medium text-fg-muted md:grid md:grid-cols-[64px_minmax(0,1.2fr)_minmax(0,1fr)_84px_96px_44px] md:gap-3">
           <span>{t("settings.model.enterprise.default")}</span>
           <span>{t("settings.model.enterprise.modelId")}</span>
           <span>{t("settings.model.enterprise.displayName")}</span>
@@ -716,7 +723,7 @@ function ModelCatalogEditor({
               key={index}
               className="grid gap-3 border-b border-border p-3 last:border-b-0 md:grid-cols-[64px_minmax(0,1.2fr)_minmax(0,1fr)_84px_96px_44px] md:items-start"
             >
-              <label className="flex min-h-10 items-center gap-2 text-sm text-foreground">
+              <label className="flex min-h-10 items-center gap-2 text-sm text-fg">
                 <input
                   type="radio"
                   name="enterprise-default-model"
@@ -724,7 +731,7 @@ function ModelCatalogEditor({
                   disabled={!trimmedModelId}
                   aria-label={`${t("settings.model.enterprise.default")} ${modelNumber}`}
                   onChange={() => onDefaultChange(model.model_id)}
-                  className="h-4 w-4 cursor-pointer accent-[var(--primary)] disabled:cursor-not-allowed"
+                  className="h-4 w-4 cursor-pointer accent-[var(--color-accent-emphasis)] disabled:cursor-not-allowed"
                 />
                 <span className="md:sr-only">{t("settings.model.enterprise.default")}</span>
               </label>
@@ -740,7 +747,7 @@ function ModelCatalogEditor({
                 placeholder={t("settings.model.placeholder.displayName")}
                 onChange={(value) => onModelChange(index, { display_name: value })}
               />
-              <div className="flex min-h-10 items-center justify-between gap-3 text-sm text-foreground md:justify-start">
+              <div className="flex min-h-10 items-center justify-between gap-3 text-sm text-fg md:justify-start">
                 <span className="md:sr-only">{t("settings.model.enterprise.vision")}</span>
                 <Switch
                   checked={model.vision_enabled}
@@ -751,7 +758,7 @@ function ModelCatalogEditor({
                 />
               </div>
               <div className="flex min-h-10 items-center">
-                <span className="mr-2 text-xs font-medium text-muted md:sr-only">
+                <span className="mr-2 text-xs font-medium text-fg-muted md:sr-only">
                   {t("settings.model.test.action")}
                 </span>
                 <TestButton
@@ -772,12 +779,10 @@ function ModelCatalogEditor({
                 type="button"
                 variant="ghost"
                 size="sm"
-                className="h-10 w-full px-2 text-danger hover:bg-danger-bg md:w-10"
+                className="h-10 w-full px-2 text-danger-fg hover:bg-danger-subtle md:w-10"
                 aria-label={`${t("settings.model.enterprise.removeModel")} ${modelNumber}`}
-                onClick={() => onRemove(index)}
-              >
-                <Trash2 size={15} aria-hidden />
-              </Button>
+                onClick={() => onRemove(index)} icon={Trash2}>
+                </Button>
               <ModelTestResultPanel
                 result={testResults[testKey]}
                 className="md:col-span-5 md:col-start-2"
@@ -803,14 +808,14 @@ function CompactTextInput({
 }) {
   return (
     <label className="space-y-1.5">
-      <span className="block text-xs font-medium text-muted md:sr-only">{label}</span>
+      <span className="block text-xs font-medium text-fg-muted md:sr-only">{label}</span>
       <input
         type="text"
         value={value}
         placeholder={placeholder}
         aria-label={label}
         onChange={(event) => onChange(event.target.value)}
-        className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted/70 focus-visible:border-primary"
+        className="h-10 w-full rounded-md border border-border-control bg-surface px-3 text-sm text-fg outline-none transition-colors placeholder:text-fg-muted focus-visible:border-focus-ring"
       />
     </label>
   );
@@ -851,7 +856,7 @@ function TestableTextField({
           value={value}
           placeholder={placeholder}
           onChange={(event) => onChange(event.target.value)}
-          className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted/70 focus-visible:border-primary"
+          className="h-10 w-full rounded-md border border-border-control bg-surface px-3 text-sm text-fg outline-none transition-colors placeholder:text-fg-muted focus-visible:border-focus-ring"
         />
         <TestButton
           modelId={value.trim()}
@@ -861,7 +866,7 @@ function TestableTextField({
           onClick={onTest}
         />
       </div>
-      {helper ? <p className="text-xs leading-relaxed text-muted">{helper}</p> : null}
+      {helper ? <p className="text-xs leading-relaxed text-fg-muted">{helper}</p> : null}
       <ModelTestResultPanel result={testResult} />
     </div>
   );
@@ -880,7 +885,7 @@ function TestButton({
   disabled?: boolean;
   onClick: () => void;
 }) {
-  const label = testing ? t("settings.model.test.testing") : t("settings.model.test.action");
+  const label = t("settings.model.test.action");
   return (
     <Button
       type="button"
@@ -890,9 +895,7 @@ function TestButton({
       aria-label={t("settings.model.test.aria", { model: modelId || fallbackLabel })}
       disabled={disabled}
       loading={testing}
-      onClick={onClick}
-    >
-      {!testing ? <TestTube2 size={15} aria-hidden /> : null}
+      onClick={onClick} icon={TestTube2}>
       {label}
     </Button>
   );
@@ -915,28 +918,28 @@ function ModelTestResultPanel({
       role={isSuccess ? "status" : "alert"}
       className={cn(
         "rounded-md border px-3 py-2.5 text-sm",
-        isSuccess ? "border-success/30 bg-success-bg" : "border-danger/30 bg-danger-bg",
+        isSuccess ? "border-success-border bg-success-subtle" : "border-danger-border bg-danger-subtle",
         className
       )}
     >
       <div className="flex items-start gap-2.5">
         <Icon
           size={16}
-          className={cn("mt-0.5 shrink-0", isSuccess ? "text-success" : "text-danger")}
+          className={cn("mt-0.5 shrink-0", isSuccess ? "text-success-fg" : "text-danger-fg")}
           aria-hidden
         />
         <div className="min-w-0 flex-1 space-y-2">
           <div>
-            <p className="font-medium text-foreground">{result.message}</p>
-            <p className="mt-0.5 text-xs text-muted">
+            <p className="font-medium text-fg">{result.message}</p>
+            <p className="mt-0.5 text-xs text-fg-muted">
               {t("settings.model.test.elapsed")}: {result.elapsed_ms} ms
             </p>
           </div>
           {detailEntries.length > 0 ? (
-            <dl className="grid gap-1 text-xs text-muted sm:grid-cols-2">
+            <dl className="grid gap-1 text-xs text-fg-muted sm:grid-cols-2">
               {detailEntries.map(([key, value]) => (
                 <div key={key} className="min-w-0">
-                  <dt className="font-medium text-foreground">{key}</dt>
+                  <dt className="font-medium text-fg">{key}</dt>
                   <dd className="break-words">{String(value)}</dd>
                 </div>
               ))}
@@ -944,10 +947,10 @@ function ModelTestResultPanel({
           ) : null}
           {!isSuccess && result.troubleshooting.length > 0 ? (
             <div className="space-y-1">
-              <p className="text-xs font-semibold text-foreground">
+              <p className="text-xs font-semibold text-fg">
                 {t("settings.model.test.troubleshooting")}
               </p>
-              <ul className="list-disc space-y-1 pl-5 text-xs leading-relaxed text-foreground/90">
+              <ul className="list-disc space-y-1 pl-5 text-xs leading-relaxed text-fg/90">
                 {result.troubleshooting.map((item) => (
                   <li key={item}>{item}</li>
                 ))}
@@ -955,57 +958,22 @@ function ModelTestResultPanel({
             </div>
           ) : null}
           {!isSuccess ? (
-            <details className="text-xs text-foreground">
+            <details className="text-xs text-fg">
               <summary className="cursor-pointer font-semibold">
                 {t("settings.model.test.rawError")}
               </summary>
               {result.error_type ? (
-                <p className="mt-1 text-muted">
+                <p className="mt-1 text-fg-muted">
                   {t("settings.model.test.errorType")}: {result.error_type}
                 </p>
               ) : null}
-              <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap rounded-md border border-border bg-card p-2 text-[11px] leading-relaxed text-foreground">
+              <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap rounded-md border border-border bg-surface p-2 text-xs leading-relaxed text-fg">
                 {result.raw_error || t("settings.model.test.noDetails")}
               </pre>
             </details>
           ) : null}
         </div>
       </div>
-    </div>
-  );
-}
-
-function TextField({
-  id,
-  label,
-  value,
-  placeholder,
-  helper,
-  badge,
-  className,
-  onChange,
-}: {
-  id: string;
-  label: string;
-  value: string;
-  placeholder?: string;
-  helper?: string;
-  badge?: string;
-  className?: string;
-  onChange: (value: string) => void;
-}) {
-  return (
-    <div className={cn("space-y-1.5", className)}>
-      <FieldLabel htmlFor={id} label={label} badge={badge} />
-      <input
-        id={id}
-        type="text"
-        value={value}
-        placeholder={placeholder}
-        onChange={(event) => onChange(event.target.value)}
-        className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted/70 focus-visible:border-primary"
-      />
-      {helper ? <p className="text-xs leading-relaxed text-muted">{helper}</p> : null}
     </div>
   );
 }
@@ -1040,10 +1008,10 @@ function SecretField({
   return (
     <div className={cn("space-y-1.5", className)}>
       <div className="flex min-h-5 flex-wrap items-center justify-between gap-2">
-        <label htmlFor={id} className="text-sm font-medium text-foreground">
+        <label htmlFor={id} className="text-sm font-medium text-fg">
           {label}
         </label>
-        <span className="rounded-full border border-border bg-background px-2 py-0.5 text-xs text-muted">
+        <span className="rounded-full border border-border bg-surface-sunken px-2 py-0.5 text-xs text-fg-muted">
           {hasSavedSecret
             ? t("settings.model.enterprise.apiKeySaved")
             : t("settings.model.enterprise.apiKeyNotSet")}
@@ -1058,7 +1026,7 @@ function SecretField({
           placeholder={placeholder}
           aria-describedby={hintId}
           onChange={(event) => onChange(event.target.value)}
-          className="h-10 w-full rounded-md border border-border bg-card px-3 pr-12 text-sm text-foreground outline-none transition-colors placeholder:text-muted/70 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:border-primary"
+          className="h-10 w-full rounded-md border border-border-control bg-surface px-3 pr-12 text-sm text-fg outline-none transition-colors placeholder:text-fg-muted disabled:cursor-not-allowed disabled:opacity-50 focus-visible:border-focus-ring"
         />
         <button
           type="button"
@@ -1068,12 +1036,12 @@ function SecretField({
               ? t("settings.model.enterprise.apiKeyHide")
               : t("settings.model.enterprise.apiKeyShow")
           }
-          className="absolute right-0 top-0 flex h-10 w-10 cursor-pointer items-center justify-center rounded-r-md text-muted transition-colors hover:bg-background hover:text-foreground"
+          className="absolute right-0 top-0 flex h-10 w-10 cursor-pointer items-center justify-center rounded-r-md text-fg-muted transition-colors hover:bg-surface-hover hover:text-fg"
         >
           {visible ? <EyeOff size={16} aria-hidden /> : <Eye size={16} aria-hidden />}
         </button>
       </div>
-      {helper ? <p id={hintId} className="text-xs leading-relaxed text-muted">{helper}</p> : null}
+      {helper ? <p id={hintId} className="text-xs leading-relaxed text-fg-muted">{helper}</p> : null}
     </div>
   );
 }
@@ -1115,11 +1083,11 @@ function NumberField({
         readOnly={readOnly}
         onChange={(event) => onChange(Number(event.target.value))}
         className={cn(
-          "tnum h-10 w-full rounded-md border border-border bg-card px-3 text-sm text-foreground outline-none transition-colors focus-visible:border-primary",
-          readOnly && "bg-background text-muted"
+          "tnum h-10 w-full rounded-md border border-border-control bg-surface px-3 text-sm text-fg outline-none transition-colors focus-visible:border-focus-ring",
+          readOnly && "bg-surface-sunken text-fg-muted"
         )}
       />
-      {helper ? <p className="text-xs leading-relaxed text-muted">{helper}</p> : null}
+      {helper ? <p className="text-xs leading-relaxed text-fg-muted">{helper}</p> : null}
     </div>
   );
 }
@@ -1135,11 +1103,11 @@ function FieldLabel({
 }) {
   return (
     <div className="flex min-h-5 items-center gap-2">
-      <label htmlFor={htmlFor} className="text-sm font-medium text-foreground">
+      <label htmlFor={htmlFor} className="text-sm font-medium text-fg">
         {label}
       </label>
       {badge ? (
-        <span className="rounded-full bg-info-bg px-2 py-0.5 text-[11px] font-medium text-info">
+        <span className="rounded-full bg-info-subtle px-2 py-0.5 text-xs font-medium text-info-fg">
           {badge}
         </span>
       ) : null}

@@ -4,7 +4,7 @@ import { Database } from "lucide-react";
 import { useId } from "react";
 
 import { KnowledgeBasePickerGrid } from "@/components/knowledge-bases/KnowledgeBasePickerGrid";
-import { Banner } from "@/components/ui/banner";
+import { Banner } from "@engchina/production-ready-ui";
 import { ApiError } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { useKnowledgeBases } from "@/lib/queries";
@@ -35,11 +35,11 @@ export function KnowledgeBaseScopePicker({
   return (
     <div className={cn("space-y-2", className)}>
       <div>
-        <p id={labelId} className="flex items-center gap-1.5 text-xs font-medium text-foreground">
-          <Database size={14} className="text-primary" aria-hidden />
+        <p id={labelId} className="flex items-center gap-1.5 text-xs font-medium text-fg">
+          <Database size={14} className="text-accent-fg" aria-hidden />
           {label}
         </p>
-        <p className="mt-1 text-xs text-muted">{helper}</p>
+        <p className="mt-1 text-xs text-fg-muted">{helper}</p>
       </div>
 
       {query.isError ? (
@@ -51,7 +51,7 @@ export function KnowledgeBaseScopePicker({
           </p>
         </Banner>
       ) : query.isPending ? (
-        <p className="text-xs text-muted" role="status">
+        <p className="text-xs text-fg-muted" role="status">
           {t("knowledgeBaseScope.loading")}
         </p>
       ) : items.length > 0 ? (
@@ -63,14 +63,14 @@ export function KnowledgeBaseScopePicker({
             disabled={disabled}
             ariaLabel={label}
           />
-          <p className="text-xs text-muted">
+          <p className="text-xs text-fg-muted">
             {selectedIds.length > 0
               ? t("knowledgeBaseScope.selected", { count: selectedIds.length })
               : emptySelectionText}
           </p>
         </>
       ) : (
-        <p className="rounded-md border border-border bg-background px-3 py-2 text-xs text-muted">
+        <p className="rounded-md border border-border bg-surface-sunken px-3 py-2 text-xs text-fg-muted">
           {t("knowledgeBaseScope.empty")}
         </p>
       )}

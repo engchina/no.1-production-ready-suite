@@ -83,7 +83,7 @@ test("データベース設定から Wallet ZIP をアップロードできる",
 
   await page.goto("/settings/database");
 
-  const main = page.getByRole("main", { name: "メイン領域" });
+  const main = page.getByRole("main");
 
   await expect(page.getByText("保存済みパスワードを削除する")).toHaveCount(0);
   await expect(page.getByText("保存済み Wallet パスワードを削除する")).toHaveCount(0);

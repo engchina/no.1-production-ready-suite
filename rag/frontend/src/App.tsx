@@ -11,6 +11,14 @@ import {
 } from "react-router-dom";
 import { ChevronLeft } from "lucide-react";
 
+import {
+  AppShell,
+  PageBody,
+  PageHeader,
+  Button,
+  Skeleton,
+} from "@engchina/production-ready-ui";
+
 import { LoginPage } from "@/components/auth/LoginPage";
 import { CardErrorBoundary } from "@/components/CardErrorBoundary";
 import { DashboardClient } from "@/components/dashboard/DashboardClient";
@@ -24,7 +32,6 @@ import { BusinessViewManagementClient } from "@/components/business-views/Busine
 import { Sidebar } from "@/components/layout/Sidebar";
 import { CommandPalette } from "@/components/layout/CommandPalette";
 import { DatabaseGate } from "@/components/system/DatabaseGate";
-import { PageHeader } from "@/components/PageHeader";
 import { ChatClient } from "@/components/chat/ChatClient";
 import { SearchClient } from "@/components/search/SearchClient";
 import { ErrorState } from "@/components/StateViews";
@@ -47,8 +54,6 @@ import { GraphSettingsClient } from "@/components/settings/GraphSettingsClient";
 import { AgenticSettingsClient } from "@/components/settings/AgenticSettingsClient";
 import { PipelineHubClient } from "@/components/settings/PipelineHubClient";
 import { UploadStorageSettingsClient } from "@/components/settings/UploadStorageSettingsClient";
-import { Button } from "@/components/ui/button";
-import { Skeleton } from "@/components/ui/skeleton";
 import { UploadWorkspace } from "@/components/upload/UploadWorkspace";
 import { useAuth } from "@/lib/auth";
 import { APP_ROUTES } from "@/lib/routes";
@@ -64,7 +69,7 @@ export function App() {
 
   if (auth.error) {
     return (
-      <main className="grid min-h-dvh place-items-center bg-background p-6">
+      <main className="grid min-h-dvh place-items-center bg-canvas p-6">
         <div className="w-full max-w-lg">
           <ErrorState message={t("auth.status.error")} onRetry={() => void auth.refetch()} />
         </div>
@@ -127,7 +132,11 @@ function ProtectedLayout() {
   const auth = useAuth();
   const location = useLocation();
   const navigationType = useNavigationType();
+  // AppShell が出力する <main id="pr-main">（スキップリンクの移動先と同じ公開 ID）をスクロール復元に使う。
   const mainRef = useRef<HTMLElement | null>(null);
+  useLayoutEffect(() => {
+    mainRef.current = document.getElementById("pr-main");
+  });
   const setSidebarCollapsed = useUiStore((state) => state.setSidebarCollapsed);
   useCollapseSidebarOnNarrowViewport(setSidebarCollapsed);
   useMainScrollRestoration(mainRef, location, navigationType);
@@ -138,24 +147,25 @@ function ProtectedLayout() {
   }
 
   return (
-    <div className="fixed inset-0 flex overflow-hidden">
-      <Sidebar />
-      <CommandPalette />
-      <main
-        ref={mainRef}
-        className="h-full min-h-0 min-w-0 flex-1 overflow-y-auto focus:outline-none"
-        aria-label="メイン領域"
-        tabIndex={-1}
-      >
-        <DatabaseGate>
+    <AppShell
+      className="fixed inset-0 h-auto"
+      mainClassName="min-h-0"
+      skipLinkLabel={t("common.skipToMain")}
+      sidebar={
+        <>
+          <Sidebar />
+          <CommandPalette />
+        </>
+      }
+    >
+      <DatabaseGate>
           {/* ページ本体の描画例外を main 内に閉じ込め、サイドナビと画面遷移を維持する(#67)。
               location をキーにして、別ページへ移動したらエラー状態を自動で解除する。 */}
           <CardErrorBoundary key={location.pathname}>
             <Outlet />
           </CardErrorBoundary>
-        </DatabaseGate>
-      </main>
-    </div>
+      </DatabaseGate>
+    </AppShell>
   );
 }
 
@@ -269,8 +279,8 @@ function LoginRoute() {
 
 function AuthLoading() {
   return (
-    <main className="grid min-h-dvh place-items-center bg-background p-6">
-      <div className="w-full max-w-md rounded-lg border border-border bg-card p-6">
+    <main className="grid min-h-dvh place-items-center bg-canvas p-6">
+      <div className="w-full max-w-md rounded-lg border border-border bg-surface p-6">
         <Skeleton className="h-6 w-40" />
         <Skeleton className="mt-4 h-11 w-full" />
         <Skeleton className="mt-3 h-11 w-full" />
@@ -288,18 +298,20 @@ function DocumentDetailRoute() {
 
   return (
     <div>
-      <div className="border-b border-border bg-card px-8 py-4">
+      <div className="border-b border-border bg-surface">
+        <PageBody wide className="py-4">
         <Link
           to={APP_ROUTES.fileList}
-          className="inline-flex items-center gap-1 text-sm text-muted transition-colors hover:text-foreground"
+          className="inline-flex items-center gap-1 text-sm text-fg-muted transition-colors hover:text-fg"
         >
           <ChevronLeft size={16} aria-hidden />
           {t("workspace.back")}
         </Link>
+        </PageBody>
       </div>
-      <div className="p-8">
+      <PageBody wide>
         <DocumentWorkspace documentId={id} />
-      </div>
+      </PageBody>
     </div>
   );
 }
@@ -310,18 +322,20 @@ function KnowledgeBaseDetailRoute() {
 
   return (
     <div>
-      <div className="border-b border-border bg-card px-8 py-4">
+      <div className="border-b border-border bg-surface">
+        <PageBody className="py-4">
         <Link
           to={APP_ROUTES.knowledgeBases}
-          className="inline-flex items-center gap-1 text-sm text-muted transition-colors hover:text-foreground"
+          className="inline-flex items-center gap-1 text-sm text-fg-muted transition-colors hover:text-fg"
         >
           <ChevronLeft size={16} aria-hidden />
           {t("knowledgeBases.detail.back")}
         </Link>
+        </PageBody>
       </div>
-      <div className="p-8">
+      <PageBody>
         <KnowledgeBaseDetailClient knowledgeBaseId={id} />
-      </div>
+      </PageBody>
     </div>
   );
 }

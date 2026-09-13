@@ -124,14 +124,14 @@ export function Dropzone({
       onDragLeave={() => setDragOver(false)}
       onDrop={handleDrop}
       className={cn(
-        "flex h-52 cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed bg-card text-center transition-colors",
-        dragOver ? "border-primary bg-info-bg/40" : "border-border hover:border-primary/60",
+        "flex h-52 cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed bg-surface text-center transition-colors",
+        dragOver ? "border-accent-emphasis bg-info-subtle" : "border-border hover:border-accent-emphasis",
         disabled && "cursor-not-allowed opacity-60"
       )}
     >
-      <UploadCloud size={28} className="text-primary" aria-hidden />
-      <p className="text-sm font-medium text-foreground">{t("upload.dropzone")}</p>
-      <p className="text-xs text-muted">{t("upload.dropzoneHint")}</p>
+      <UploadCloud size={28} className="text-accent-fg" aria-hidden />
+      <p className="text-sm font-medium text-fg">{t("upload.dropzone")}</p>
+      <p className="text-xs text-fg-muted">{t("upload.dropzoneHint")}</p>
       <input
         ref={inputRef}
         type="file"

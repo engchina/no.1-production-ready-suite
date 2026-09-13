@@ -1,5 +1,6 @@
 "use client";
 
+import { PageBody } from "@engchina/production-ready-ui";
 import { Link } from "react-router-dom";
 
 import { NAV_SECTIONS, type NavItem } from "@/components/layout/nav-config";
@@ -39,7 +40,7 @@ export function PipelineHubClient() {
   const query = stages.filter((item) => !INGESTION_HREFS.has(item.href));
 
   return (
-    <div className="space-y-6 p-8">
+    <PageBody>
       <PhaseGroup
         title={t("settings.pipeline.phase.ingestion")}
         hint={t("settings.pipeline.phase.ingestionHint")}
@@ -52,7 +53,7 @@ export function PipelineHubClient() {
         stages={query}
         startIndex={ingestion.length + 1}
       />
-    </div>
+    </PageBody>
   );
 }
 
@@ -71,8 +72,8 @@ function PhaseGroup({
   return (
     <section className="space-y-3" aria-label={title}>
       <div>
-        <h2 className="text-sm font-semibold text-foreground">{title}</h2>
-        <p className="mt-0.5 text-xs text-muted">{hint}</p>
+        <h2 className="text-sm font-semibold text-fg">{title}</h2>
+        <p className="mt-0.5 text-xs text-fg-muted">{hint}</p>
       </div>
       <ol className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {stages.map((item, index) => (
@@ -92,16 +93,16 @@ function StageCard({ item, step }: { item: NavItem; step: number }) {
     <Link
       to={item.href}
       aria-label={t("settings.pipeline.openStage", { name })}
-      className="flex h-full gap-3 rounded-lg border border-border bg-card p-4 transition-colors hover:border-primary hover:bg-background focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+      className="flex h-full gap-3 rounded-lg border border-border bg-surface p-4 transition-colors hover:border-accent-emphasis hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
     >
-      <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
-        <Icon size={18} aria-hidden />
+      <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-accent-subtle text-accent-fg">
+        <Icon size={20} aria-hidden />
       </span>
       <span className="min-w-0">
-        <span className="block text-sm font-semibold text-foreground">
-          <span className="tnum text-muted">{step}.</span> {name}
+        <span className="block text-sm font-semibold text-fg">
+          <span className="tnum text-fg-muted">{step}.</span> {name}
         </span>
-        <span className="mt-0.5 block text-xs leading-relaxed text-muted">
+        <span className="mt-0.5 block text-xs leading-relaxed text-fg-muted">
           {stageDescription(item)}
         </span>
       </span>

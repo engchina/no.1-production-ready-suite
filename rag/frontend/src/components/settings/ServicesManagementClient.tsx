@@ -1,5 +1,16 @@
 "use client";
 
+import {
+  PageBody,
+  Button,
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+  FormStatus,
+  Skeleton,
+} from "@engchina/production-ready-ui";
 import { Fragment, useState } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import {
@@ -25,11 +36,7 @@ import {
 } from "lucide-react";
 
 import { ErrorState } from "@/components/StateViews";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useConfirm } from "@/components/ui/confirm-dialog";
-import { FormStatus } from "@/components/ui/form-status";
-import { Skeleton } from "@/components/ui/skeleton";
 import {
   ApiError,
   type DeploymentMode,
@@ -57,9 +64,9 @@ type DisplayServiceData = ServiceCatalogItemData & {
 };
 
 const PROFILE_META: Record<ServiceProfile, { className: string; labelKey: I18nKey }> = {
-  cpu: { className: "bg-slate-100 text-slate-600", labelKey: "settings.services.profile.cpu" },
-  gpu: { className: "bg-violet-100 text-violet-700", labelKey: "settings.services.profile.gpu" },
-  oci: { className: "bg-sky-100 text-sky-700", labelKey: "settings.services.profile.oci" },
+  cpu: { className: "bg-surface-hover text-fg-muted", labelKey: "settings.services.profile.cpu" },
+  gpu: { className: "bg-accent-muted text-accent-fg-strong", labelKey: "settings.services.profile.gpu" },
+  oci: { className: "bg-info-subtle text-info-fg", labelKey: "settings.services.profile.oci" },
 };
 export const SERVICE_PROFILE_ORDER: ServiceProfile[] = ["cpu", "gpu", "oci"];
 const PROFILE_GROUP_META: Record<
@@ -107,16 +114,16 @@ export function ServicesManagementClient() {
 
   if (query.isPending) {
     return (
-      <div className="space-y-4 p-8">
+      <PageBody>
         <Skeleton className="h-40 w-full rounded-lg" />
         <Skeleton className="h-40 w-full rounded-lg" />
-      </div>
+      </PageBody>
     );
   }
 
   if (query.isError) {
     return (
-      <div className="p-8">
+      <PageBody>
         <ErrorState
           message={
             query.error instanceof ApiError
@@ -125,7 +132,7 @@ export function ServicesManagementClient() {
           }
           onRetry={() => void query.refetch()}
         />
-      </div>
+      </PageBody>
     );
   }
 
@@ -247,12 +254,12 @@ export function ServicesManagementClient() {
   }
 
   return (
-    <div className="space-y-5 p-8">
+    <PageBody>
       <Card>
         <CardHeader>
           <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
             <div className="flex items-start gap-3">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-bg text-info">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-subtle text-info-fg">
                 <Server size={20} aria-hidden />
               </div>
               <div>
@@ -271,12 +278,8 @@ export function ServicesManagementClient() {
                 size="sm"
                 loading={query.isFetching || statusFetching}
                 onClick={refreshServices}
-                aria-label={t("settings.services.refresh")}
-              >
-                <RefreshCw size={15} aria-hidden />
-                {query.isFetching || statusFetching
-                  ? t("settings.services.refreshing")
-                  : t("settings.services.refresh")}
+                aria-label={t("settings.services.refresh")} icon={RefreshCw}>
+                {t("settings.services.refresh")}
               </Button>
             </div>
           </div>
@@ -296,7 +299,7 @@ export function ServicesManagementClient() {
           )}
           <ServiceCommandsDisclosure mode={deploymentMode} />
           {lastUpdatedText ? (
-            <p className="text-xs tabular-nums text-muted">
+            <p className="text-xs tabular-nums text-fg-muted">
               {t("settings.services.lastUpdated", { time: lastUpdatedText })}
             </p>
           ) : null}
@@ -335,7 +338,7 @@ export function ServicesManagementClient() {
           </Fragment>
         );
       })}
-    </div>
+    </PageBody>
   );
 }
 
@@ -355,7 +358,7 @@ function ServiceCommandsDisclosure({ mode }: { mode: DeploymentMode }) {
     },
   ];
   return (
-    <div className="rounded-md border border-border bg-background">
+    <div className="rounded-md border border-border bg-surface-sunken">
       <button
         type="button"
         aria-expanded={open}
@@ -369,14 +372,14 @@ function ServiceCommandsDisclosure({ mode }: { mode: DeploymentMode }) {
           event.preventDefault();
           setOpen((value) => !value);
         }}
-        className="flex w-full cursor-pointer items-center gap-1.5 px-3 py-2 text-left text-sm font-medium text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+        className="flex w-full cursor-pointer items-center gap-1.5 px-3 py-2 text-left text-sm font-medium text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
       >
-        <SlidersHorizontal size={14} className="text-primary" aria-hidden />
+        <SlidersHorizontal size={14} className="text-accent-fg" aria-hidden />
         {t("settings.services.commands.title")}
       </button>
       {open ? (
         <div id="service-commands" className="space-y-2 border-t border-border p-3">
-          <p className="text-xs leading-relaxed text-muted">
+          <p className="text-xs leading-relaxed text-fg-muted">
             {t("settings.services.commands.description")}
           </p>
           {commands.map((entry) => (
@@ -402,9 +405,9 @@ function CommandRow({ label, command }: { label: string; command: string }) {
   }
   return (
     <div className="space-y-1">
-      <p className="text-xs font-medium text-foreground">{label}</p>
+      <p className="text-xs font-medium text-fg">{label}</p>
       <div className="flex items-stretch gap-2">
-        <code className="flex-1 overflow-x-auto whitespace-nowrap rounded border border-border bg-card px-3 py-2 font-mono text-xs text-foreground">
+        <code className="flex-1 overflow-x-auto whitespace-nowrap rounded border border-border bg-surface px-3 py-2 font-mono text-xs text-fg">
           {command}
         </code>
         <Button
@@ -412,9 +415,9 @@ function CommandRow({ label, command }: { label: string; command: string }) {
           variant="secondary"
           size="sm"
           className="shrink-0 whitespace-nowrap"
+          icon={copied ? Check : Clipboard}
           onClick={() => void copy()}
         >
-          {copied ? <Check size={14} aria-hidden /> : <Clipboard size={14} aria-hidden />}
           {copied ? t("settings.preview.copy.copied") : t("settings.services.commands.copy")}
         </Button>
       </div>
@@ -518,24 +521,24 @@ function ServiceRow({
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <p className="text-sm font-semibold text-foreground">{serviceLabel(service)}</p>
+            <p className="text-sm font-semibold text-fg">{serviceLabel(service)}</p>
             <ServiceExecutionPolicyBadge policy={service.execution_policy} />
           </div>
-          <p className="font-mono text-xs text-muted">{service.service_id}</p>
+          <p className="font-mono text-xs text-fg-muted">{service.service_id}</p>
           {service.model_cache ? <ServiceModelCacheRow cache={service.model_cache} /> : null}
           {stoppedHintKey ? (
             <p
               className={cn(
                 "mt-1 flex items-center gap-1 text-xs",
-                required ? "font-medium text-rose-700" : "text-muted"
+                required ? "font-medium text-danger-fg" : "text-fg-muted"
               )}
             >
-              {required ? <AlertTriangle size={13} aria-hidden /> : null}
+              {required ? <AlertTriangle size={14} aria-hidden /> : null}
               {t(stoppedHintKey)}
             </p>
           ) : null}
           {!deployable ? (
-            <p className="mt-1 text-xs text-muted">{t("settings.services.futureServiceHint")}</p>
+            <p className="mt-1 text-xs text-fg-muted">{t("settings.services.futureServiceHint")}</p>
           ) : null}
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -549,17 +552,10 @@ function ServiceRow({
                 onClick={() => onToggleLogs(service)}
                 aria-expanded={logsOpen}
                 aria-controls={logsPanelId}
-                aria-label={`${serviceLabel(service)} ${t("settings.services.action.logs")}`}
-              >
-                <TerminalSquare size={14} aria-hidden />
+                aria-label={`${serviceLabel(service)} ${t("settings.services.action.logs")}`} icon={TerminalSquare} trailingIcon={ChevronDown}>
                 {logsOpen
                   ? t("settings.services.action.hideLogs")
                   : t("settings.services.action.logs")}
-                <ChevronDown
-                  size={14}
-                  className={cn("transition-transform", logsOpen ? "rotate-180" : undefined)}
-                  aria-hidden
-                />
               </Button>
               <div className="flex flex-wrap justify-end gap-2" title={controlHint}>
                 <Button
@@ -569,12 +565,8 @@ function ServiceRow({
                   loading={buildPending}
                   disabled={!controlEnabled || (thisPending && !buildPending)}
                   onClick={() => onAct(service, "build")}
-                  aria-label={`${serviceLabel(service)} ${t("settings.services.action.build")}`}
-                >
-                  <Hammer size={14} aria-hidden />
-                  {buildPending
-                    ? t("settings.services.action.building")
-                    : t("settings.services.action.build")}
+                  aria-label={`${serviceLabel(service)} ${t("settings.services.action.build")}`} icon={Hammer}>
+                  {t("settings.services.action.build")}
                 </Button>
                 <Button
                   type="button"
@@ -588,12 +580,8 @@ function ServiceRow({
                     (thisPending && !startPending)
                   }
                   onClick={() => onAct(service, "start")}
-                  aria-label={`${serviceLabel(service)} ${t("settings.services.action.start")}`}
-                >
-                  <Play size={14} aria-hidden />
-                  {startPending
-                    ? t("settings.services.action.starting")
-                    : t("settings.services.action.start")}
+                  aria-label={`${serviceLabel(service)} ${t("settings.services.action.start")}`} icon={Play}>
+                  {t("settings.services.action.start")}
                 </Button>
                 <Button
                   type="button"
@@ -607,27 +595,19 @@ function ServiceRow({
                     (thisPending && !stopPending)
                   }
                   onClick={() => onAct(service, "stop")}
-                  aria-label={`${serviceLabel(service)} ${t("settings.services.action.stop")}`}
-                >
-                  <Square size={14} aria-hidden />
-                  {stopPending
-                    ? t("settings.services.action.stopping")
-                    : t("settings.services.action.stop")}
+                  aria-label={`${serviceLabel(service)} ${t("settings.services.action.stop")}`} icon={Square}>
+                  {t("settings.services.action.stop")}
                 </Button>
                 <Button
                   type="button"
                   variant="secondary"
                   size="sm"
-                  className="text-danger hover:bg-danger-bg/40"
+                  className="text-danger-fg hover:bg-danger-subtle"
                   loading={removePending}
                   disabled={!controlEnabled || (thisPending && !removePending)}
                   onClick={() => onAct(service, "remove")}
-                  aria-label={`${serviceLabel(service)} ${t("settings.services.action.remove")}`}
-                >
-                  <Trash2 size={14} aria-hidden />
-                  {removePending
-                    ? t("settings.services.action.removing")
-                    : t("settings.services.action.remove")}
+                  aria-label={`${serviceLabel(service)} ${t("settings.services.action.remove")}`} icon={Trash2}>
+                  {t("settings.services.action.remove")}
                 </Button>
               </div>
             </>
@@ -645,12 +625,12 @@ function ServiceExecutionPolicyBadge({ policy }: { policy: ServiceExecutionPolic
   return (
     <span
       className={cn(
-        "inline-flex min-h-5 items-center rounded-full px-2 py-0.5 text-[11px] font-medium",
+        "inline-flex min-h-5 items-center rounded-full px-2 py-0.5 text-xs font-medium",
         policy === "required_no_fallback"
-          ? "bg-rose-100 text-rose-700"
+          ? "bg-danger-subtle text-danger-fg"
           : policy === "in_process_when_disabled"
-            ? "bg-sky-100 text-sky-700"
-            : "bg-slate-100 text-slate-600"
+            ? "bg-info-subtle text-info-fg"
+            : "bg-surface-hover text-fg-muted"
       )}
     >
       {t(serviceExecutionPolicyLabelKey(policy))}
@@ -682,15 +662,16 @@ function ServiceLogPanel({
   return (
     <div
       id={id}
-      className="mt-3 overflow-hidden rounded-md border border-slate-800 bg-slate-950 text-slate-100"
+      data-surface="code"
+      className="mt-3 overflow-hidden rounded-md border border-border bg-surface text-fg"
     >
-      <div className="flex flex-col gap-2 border-b border-slate-800 bg-slate-900 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex flex-col gap-2 border-b border-border bg-surface-raised px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0">
-          <p className="text-xs font-semibold text-slate-50">
+          <p className="text-xs font-semibold text-fg">
             {t("settings.services.logs.title", { service: serviceLabel(service) })}
           </p>
           {logsQuery.data ? (
-            <p className="mt-0.5 text-[11px] text-slate-300">
+            <p className="mt-0.5 text-xs text-fg-muted">
               {t(sourceKey as I18nKey, { lines: String(logsQuery.data.lines) })}
             </p>
           ) : null}
@@ -702,9 +683,7 @@ function ServiceLogPanel({
             size="sm"
             loading={logsQuery.isFetching}
             onClick={() => void logsQuery.refetch()}
-            aria-label={t("settings.services.logs.refresh")}
-          >
-            <RefreshCw size={14} aria-hidden />
+            aria-label={t("settings.services.logs.refresh")} icon={RefreshCw}>
             {t("settings.services.logs.refresh")}
           </Button>
           <Button
@@ -713,30 +692,28 @@ function ServiceLogPanel({
             size="sm"
             disabled={!content}
             onClick={() => void copyLogs()}
-            aria-label={t("settings.services.logs.copy")}
-          >
-            <Clipboard size={14} aria-hidden />
+            aria-label={t("settings.services.logs.copy")} icon={Clipboard}>
             {t("settings.services.logs.copy")}
           </Button>
         </div>
       </div>
       {logsQuery.isPending ? (
-        <div className="flex min-h-28 items-center gap-2 px-3 py-4 text-xs text-slate-300">
+        <div className="flex min-h-28 items-center gap-2 px-3 py-4 text-xs text-fg-muted">
           <RefreshCw size={14} className="animate-spin" aria-hidden />
           {t("settings.services.logs.loading")}
         </div>
       ) : logsQuery.isError ? (
-        <div className="px-3 py-4 text-xs text-rose-200" role="alert">
+        <div className="px-3 py-4 text-xs text-danger-fg" role="alert">
           {logsQuery.error instanceof ApiError
             ? logsQuery.error.message
             : t("settings.services.logs.loadError")}
         </div>
       ) : content ? (
-        <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-words px-3 py-3 font-mono text-[11px] leading-relaxed text-slate-100">
+        <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-words px-3 py-3 font-mono text-xs leading-relaxed text-fg">
           {content}
         </pre>
       ) : (
-        <div className="px-3 py-4 text-xs text-slate-300">
+        <div className="px-3 py-4 text-xs text-fg-muted">
           {t("settings.services.logs.empty")}
         </div>
       )}
@@ -751,10 +728,10 @@ function ModeBadge({ mode }: { mode: DeploymentMode }) {
     <span
       className={cn(
         "inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium",
-        mode === "dev" ? "bg-sky-100 text-sky-700" : "bg-violet-100 text-violet-700"
+        mode === "dev" ? "bg-info-subtle text-info-fg" : "bg-accent-muted text-accent-fg-strong"
       )}
     >
-      <Icon size={13} aria-hidden />
+      <Icon size={14} aria-hidden />
       {t(mode === "dev" ? "settings.services.mode.dev" : "settings.services.mode.prod")}
     </span>
   );
@@ -766,7 +743,7 @@ function ControlBadge({ enabled }: { enabled: boolean }) {
     <span
       className={cn(
         "inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium",
-        enabled ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600"
+        enabled ? "bg-success-subtle text-success-fg" : "bg-surface-hover text-fg-muted"
       )}
     >
       {t("settings.services.controlEnabled")}:{" "}
@@ -782,7 +759,7 @@ export function ServiceProfileBadge({ profile }: { profile: ServiceProfile }) {
   return (
     <span
       className={cn(
-        "inline-flex rounded-sm px-1.5 py-0.5 text-[10px] font-medium whitespace-nowrap",
+        "inline-flex rounded-sm px-1.5 py-0.5 text-xs font-medium whitespace-nowrap",
         meta.className
       )}
     >
@@ -795,13 +772,13 @@ const STATUS_META: Record<
   DisplayRuntimeStatus,
   { className: string; icon: LucideIcon; spin?: boolean }
 > = {
-  running: { className: "bg-emerald-100 text-emerald-700", icon: CheckCircle2 },
-  degraded: { className: "bg-amber-100 text-amber-700", icon: AlertTriangle },
-  stopped: { className: "bg-slate-100 text-slate-600", icon: CircleSlash },
-  unconfigured: { className: "bg-slate-100 text-slate-500", icon: MinusCircle },
-  in_process: { className: "bg-sky-100 text-sky-700", icon: Cpu },
-  loading: { className: "bg-slate-100 text-slate-600", icon: RefreshCw, spin: true },
-  error: { className: "bg-rose-100 text-rose-700", icon: AlertTriangle },
+  running: { className: "bg-success-subtle text-success-fg", icon: CheckCircle2 },
+  degraded: { className: "bg-warning-subtle text-warning-fg", icon: AlertTriangle },
+  stopped: { className: "bg-surface-hover text-fg-muted", icon: CircleSlash },
+  unconfigured: { className: "bg-surface-hover text-fg-muted", icon: MinusCircle },
+  in_process: { className: "bg-info-subtle text-info-fg", icon: Cpu },
+  loading: { className: "bg-surface-hover text-fg-muted", icon: RefreshCw, spin: true },
+  error: { className: "bg-danger-subtle text-danger-fg", icon: AlertTriangle },
 };
 
 /** 稼働状態バッジ(色だけに頼らずアイコン+日本語ラベル併記)。 */
@@ -815,7 +792,7 @@ export function ServiceStatusBadge({ status }: { status: DisplayRuntimeStatus })
         meta.className
       )}
     >
-      <Icon size={13} className={meta.spin ? "animate-spin" : undefined} aria-hidden />
+      <Icon size={14} className={meta.spin ? "animate-spin" : undefined} aria-hidden />
       {t(`settings.services.status.${status}` as I18nKey)}
     </span>
   );
@@ -829,15 +806,15 @@ function serviceLabel(service: ServiceCatalogItemData): string {
 function ServiceModelCacheRow({ cache }: { cache: ServiceModelCacheData }) {
   return (
     <p
-      className="mt-1 flex flex-wrap items-center gap-1 text-xs text-muted"
+      className="mt-1 flex flex-wrap items-center gap-1 text-xs text-fg-muted"
       title={t("settings.services.modelCache.hint")}
     >
-      <HardDriveDownload size={13} aria-hidden />
-      <span className="text-muted">{t("settings.services.modelCache.label")}:</span>
-      <span className="font-mono break-all text-foreground">{cache.volume_name}</span>
+      <HardDriveDownload size={14} aria-hidden />
+      <span className="text-fg-muted">{t("settings.services.modelCache.label")}:</span>
+      <span className="font-mono break-all text-fg">{cache.volume_name}</span>
       <span aria-hidden>→</span>
-      <span className="font-mono break-all text-foreground">{cache.container_path}</span>
-      <span className="rounded-sm bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600">
+      <span className="font-mono break-all text-fg">{cache.container_path}</span>
+      <span className="rounded-sm bg-surface-hover px-1.5 py-0.5 text-xs font-medium text-fg-muted">
         {t("settings.services.modelCache.readonly")}
       </span>
     </p>

@@ -1,5 +1,18 @@
 "use client";
 
+import {
+  PageBody,
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+  Button,
+  FormStatus,
+  Skeleton,
+  Switch,
+  TextField,
+} from "@engchina/production-ready-ui";
 import { useEffect, useState } from "react";
 import {
   CheckCircle2,
@@ -11,11 +24,6 @@ import {
 } from "lucide-react";
 
 import { ErrorState } from "@/components/StateViews";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { FormStatus } from "@/components/ui/form-status";
-import { Skeleton } from "@/components/ui/skeleton";
-import { Switch } from "@/components/ui/switch";
 import {
   ApiError,
   type ChunkingSettingsData,
@@ -79,23 +87,23 @@ export function ChunkingSettingsClient() {
 
   if (query.isPending) {
     return (
-      <div className="space-y-4 p-8">
+      <PageBody>
         <Skeleton className="h-48 w-full rounded-lg" />
         <Skeleton className="h-64 w-full rounded-lg" />
-      </div>
+      </PageBody>
     );
   }
 
   if (query.isError) {
     return (
-      <div className="p-8">
+      <PageBody>
         <ErrorState
           message={
             query.error instanceof ApiError ? query.error.message : t("settings.chunking.loadError")
           }
           onRetry={() => void query.refetch()}
         />
-      </div>
+      </PageBody>
     );
   }
 
@@ -134,7 +142,7 @@ export function ChunkingSettingsClient() {
   }
 
   return (
-    <div className="space-y-5 p-8">
+    <PageBody>
       <OverviewCard
         dirty={dirty}
         form={form}
@@ -160,7 +168,7 @@ export function ChunkingSettingsClient() {
         validationError={validationError}
         onChange={updateForm}
       />
-    </div>
+    </PageBody>
   );
 }
 
@@ -191,7 +199,7 @@ function OverviewCard({
     <Card>
       <CardHeader>
         <div className="flex items-start gap-3">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-bg text-info">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-subtle text-info-fg">
             <Scissors size={20} aria-hidden />
           </div>
           <div>
@@ -203,7 +211,7 @@ function OverviewCard({
       <CardContent className="space-y-5">
         <FormStatus tone="info" message={t("settings.chunking.serviceNote")} />
         <div className="space-y-2">
-          <div className="text-sm font-medium text-foreground">
+          <div className="text-sm font-medium text-fg">
             {t("settings.chunking.strategy")}
           </div>
           <div
@@ -222,10 +230,10 @@ function OverviewCard({
                   disabled={saving}
                   onClick={() => onStrategyChange(strategy.name)}
                   className={cn(
-                    "min-h-[92px] rounded-md border px-3 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50",
+                    "min-h-[92px] rounded-md border px-3 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50",
                     selected
-                      ? "border-primary bg-primary/10 text-foreground"
-                      : "border-border bg-card text-foreground hover:bg-background"
+                      ? "border-accent-emphasis bg-accent-subtle text-fg"
+                      : "border-border bg-surface text-fg hover:bg-surface-hover"
                   )}
                 >
                   <span className="flex items-start gap-3">
@@ -236,14 +244,14 @@ function OverviewCard({
                           {strategyLabel(strategy.name)}
                         </span>
                         {selected ? (
-                          <CheckCircle2 size={15} className="shrink-0 text-primary" aria-hidden />
+                          <CheckCircle2 size={16} className="shrink-0 text-accent-fg" aria-hidden />
                         ) : null}
                       </span>
-                      <span className="mt-1 block text-xs leading-relaxed text-muted">
+                      <span className="mt-1 block text-xs leading-relaxed text-fg-muted">
                         {strategyDescription(strategy.name)}
                       </span>
                       {strategy.recommended_for.length ? (
-                        <span className="mt-2 block text-[11px] text-muted">
+                        <span className="mt-2 block text-xs text-fg-muted">
                           {t("settings.chunking.recommendedFor")}:{" "}
                           {strategy.recommended_for.join(", ")}
                         </span>
@@ -284,9 +292,7 @@ function OverviewCard({
               variant="secondary"
               onClick={onReset}
               disabled={!dirty || saving}
-              aria-label={t("settings.chunking.actions.reset")}
-            >
-              <RotateCcw size={15} aria-hidden />
+              aria-label={t("settings.chunking.actions.reset")} icon={RotateCcw}>
               {t("settings.chunking.actions.reset")}
             </Button>
             <Button
@@ -294,12 +300,8 @@ function OverviewCard({
               loading={saving}
               disabled={!dirty || Boolean(validationError)}
               onClick={onSubmit}
-              aria-label={t("settings.chunking.actions.save")}
-            >
-              <Save size={15} aria-hidden />
-              {saving
-                ? t("settings.chunking.actions.saving")
-                : t("settings.chunking.actions.save")}
+              aria-label={t("settings.chunking.actions.save")} icon={Save}>
+              {t("settings.chunking.actions.save")}
             </Button>
           </div>
         </div>
@@ -358,7 +360,7 @@ function ParamsCard({
     <Card>
       <CardHeader>
         <div className="flex items-start gap-3">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-success-bg text-success">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-success-subtle text-success-fg">
             <SlidersHorizontal size={20} aria-hidden />
           </div>
           <div>
@@ -369,12 +371,12 @@ function ParamsCard({
       </CardHeader>
       <CardContent>
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          <div className="flex items-start justify-between gap-4 rounded-md border border-border bg-card p-3 md:col-span-2">
+          <div className="flex items-start justify-between gap-4 rounded-md border border-border bg-surface p-3 md:col-span-2">
             <div className="min-w-0">
-              <div className="text-sm font-medium text-foreground">
+              <div className="text-sm font-medium text-fg">
                 {t("settings.chunking.params.contextHeader")}
               </div>
-              <p className="mt-1 text-xs leading-relaxed text-muted">
+              <p className="mt-1 text-xs leading-relaxed text-fg-muted">
                 {t("settings.chunking.params.contextHeaderHint")}
               </p>
             </div>
@@ -387,27 +389,29 @@ function ParamsCard({
           </div>
           {hasField("delimiter") ? (
             <TextField
+              id="chunking-delimiter"
+              maxLength={256}
               label={t("settings.chunking.params.delimiter")}
               value={form.delimiter}
               disabled={saving}
               helper={t("settings.chunking.params.delimiterHint")}
-              onChange={(value) => onChange({ delimiter: value })}
+              onValueChange={(value) => onChange({ delimiter: value })}
             />
           ) : null}
           {semanticBoundary ? (
             <details
               key={form.strategy}
-              className="group rounded-md border border-border bg-background p-3 md:col-span-2"
+              className="group rounded-md border border-border bg-surface-sunken p-3 md:col-span-2"
             >
-              <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 rounded-sm text-sm font-semibold text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
+              <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 rounded-sm text-sm font-semibold text-fg outline-none focus-visible:ring-2 focus-visible:ring-focus-ring [&::-webkit-details-marker]:hidden">
                 <span>{t("settings.chunking.params.semanticDetails")}</span>
                 <ChevronDown
                   size={16}
-                  className="shrink-0 text-muted transition-transform group-open:rotate-180"
+                  className="shrink-0 text-fg-muted transition-transform group-open:rotate-180"
                   aria-hidden
                 />
               </summary>
-              <p className="mb-3 text-xs leading-relaxed text-muted">
+              <p className="mb-3 text-xs leading-relaxed text-fg-muted">
                 {paramsDescription(form.strategy)}
               </p>
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -445,36 +449,6 @@ function ParamsCard({
   );
 }
 
-function TextField({
-  label,
-  value,
-  disabled,
-  helper,
-  onChange,
-}: {
-  label: string;
-  value: string;
-  disabled: boolean;
-  helper?: string;
-  onChange: (value: string) => void;
-}) {
-  return (
-    <label className="space-y-1.5">
-      <span className="block text-sm font-medium text-foreground">{label}</span>
-      <input
-        type="text"
-        value={value}
-        maxLength={256}
-        aria-label={label}
-        disabled={disabled}
-        onChange={(event) => onChange(event.target.value)}
-        className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted/70 focus-visible:border-primary disabled:cursor-not-allowed disabled:opacity-50"
-      />
-      {helper ? <span className="block text-xs text-muted">{helper}</span> : null}
-    </label>
-  );
-}
-
 function NumberField({
   label,
   value,
@@ -494,7 +468,7 @@ function NumberField({
 }) {
   return (
     <label className="space-y-1.5">
-      <span className="block text-sm font-medium text-foreground">{label}</span>
+      <span className="block text-sm font-medium text-fg">{label}</span>
       <input
         type="number"
         inputMode="numeric"
@@ -504,18 +478,18 @@ function NumberField({
         aria-label={label}
         disabled={disabled}
         onChange={(event) => onChange(Number.parseInt(event.target.value, 10))}
-        className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted/70 focus-visible:border-primary disabled:cursor-not-allowed disabled:opacity-50"
+        className="h-10 w-full rounded-md border border-border-control bg-surface px-3 text-sm text-fg outline-none transition-colors placeholder:text-fg-muted focus-visible:border-focus-ring disabled:cursor-not-allowed disabled:opacity-50"
       />
-      {helper ? <span className="block text-xs text-muted">{helper}</span> : null}
+      {helper ? <span className="block text-xs text-fg-muted">{helper}</span> : null}
     </label>
   );
 }
 
 function RuntimeFact({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-md border border-border bg-muted/20 p-3">
-      <dt className="text-xs font-medium text-muted">{label}</dt>
-      <dd className="mt-1 break-words text-sm font-semibold text-foreground">{value}</dd>
+    <div className="rounded-md border border-border bg-surface-hover p-3">
+      <dt className="text-xs font-medium text-fg-muted">{label}</dt>
+      <dd className="mt-1 break-words text-sm font-semibold text-fg">{value}</dd>
     </div>
   );
 }
@@ -534,7 +508,7 @@ function ChunkStrategyDiagram({
   return (
     <svg
       viewBox="0 0 48 36"
-      className={cn("h-9 w-12 shrink-0", selected ? "text-primary" : "text-muted")}
+      className={cn("h-9 w-12 shrink-0", selected ? "text-accent-fg" : "text-fg-muted")}
       fill="currentColor"
       aria-hidden
     >

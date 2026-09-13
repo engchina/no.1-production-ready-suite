@@ -3,11 +3,10 @@
 /*
  * production-ready RAG - グローバルスタイル
  *
- * デザイントークン（日本語第一タイポグラフィ・semantic 状態色・shadcn/ui テーマ・
- * サイドバー/トースト等のアニメーション）は共有 UI パッケージへ移管した。
- * トークン変更は @engchina/production-ready-ui 側で行い、3 プロジェクトへ同時反映する。
+ * 色・型・余白・角丸・影・テーマは共有 UI パッケージ（platform の docs/design-system/）が正本。
+ * ここには画面固有のレイアウトだけを書く。
  */
-@import "@engchina/production-ready-ui/tokens.css";
+@import "@engchina/production-ready-ui/styles.css";
 
 /* shared UI の現行配布版に残る contain を上書きし、内部スクロール端から
  * 親ページへ wheel / touch scroll を引き継ぐ。共有 token 更新後も同値で無害。 */

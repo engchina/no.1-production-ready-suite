@@ -77,15 +77,15 @@ export function CitationCard({
   const hasMetadata = chips.length > 0 || recipeSlot != null || Boolean(chunk.category_name);
 
   return (
-    <li className="rounded-lg border border-border bg-card p-3">
+    <li className="rounded-lg border border-border bg-surface p-3">
       <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_176px] sm:items-start">
         <div data-testid="citation-main" className="min-w-0">
           <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
-            <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">
+            <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-accent-subtle text-xs font-semibold text-accent-fg">
               {index + 1}
             </span>
-            <span className="flex min-w-0 items-center gap-1.5 text-sm font-medium text-foreground">
-              <FileText size={14} className="shrink-0 text-muted" aria-hidden />
+            <span className="flex min-w-0 items-center gap-1.5 text-sm font-medium text-fg">
+              <FileText size={14} className="shrink-0 text-fg-muted" aria-hidden />
               <span className="truncate" title={chunk.file_name ?? chunk.document_id}>
                 {chunk.file_name ?? chunk.document_id}
               </span>
@@ -95,7 +95,7 @@ export function CitationCard({
                 {retrievalBadges.map((badge) => (
                   <span
                     key={badge}
-                    className="rounded-full border border-border bg-background px-1.5 py-0.5 text-[10px] font-medium leading-none text-muted"
+                    className="rounded-full border border-border bg-surface-sunken px-1.5 py-0.5 text-xs font-medium leading-none text-fg-muted"
                   >
                     {badge}
                   </span>
@@ -105,7 +105,7 @@ export function CitationCard({
           </div>
           <p
             data-testid="citation-text"
-            className="mt-2.5 line-clamp-3 whitespace-pre-wrap break-words text-sm leading-relaxed text-foreground/90"
+            className="mt-2.5 line-clamp-3 whitespace-pre-wrap break-words text-sm leading-relaxed text-fg/90"
           >
             {chunk.text}
           </p>
@@ -119,13 +119,13 @@ export function CitationCard({
                 </dl>
               ) : null}
               {recipeSlot ? (
-                <span className="inline-flex items-center gap-1 rounded-full border border-border bg-background px-2 py-0.5 text-xs text-muted">
+                <span className="inline-flex items-center gap-1 rounded-full border border-border bg-surface-sunken px-2 py-0.5 text-xs text-fg-muted">
                   <Layers size={11} aria-hidden />
                   {t("documents.recipes.name", { slot: recipeSlot })}
                 </span>
               ) : null}
               {chunk.category_name ? (
-                <span className="inline-flex rounded-full bg-info-bg px-2 py-0.5 text-xs text-info">
+                <span className="inline-flex rounded-full bg-info-subtle px-2 py-0.5 text-xs text-info-fg">
                   {chunk.category_name}
                 </span>
               ) : null}
@@ -139,19 +139,19 @@ export function CitationCard({
           <button
             type="button"
             onClick={openPreview}
-            className="inline-flex h-[44px] items-center justify-center gap-1.5 rounded-md border border-border bg-card px-3 text-sm font-medium text-foreground transition-colors hover:bg-background focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring sm:h-9"
+            className="inline-flex h-[44px] items-center justify-center gap-1.5 rounded-md border border-border bg-surface px-3 text-sm font-medium text-fg transition-colors hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring sm:h-9"
           >
-            <Eye size={15} aria-hidden />
+            <Eye size={16} aria-hidden />
             {t("search.citation.previewOpen")}
           </button>
           <Link
             to={previewUrl}
-            className="inline-flex h-[44px] items-center justify-center gap-1.5 rounded-md border border-border bg-card px-3 text-sm font-medium text-foreground transition-colors hover:bg-background focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring sm:h-9"
+            className="inline-flex h-[44px] items-center justify-center gap-1.5 rounded-md border border-border bg-surface px-3 text-sm font-medium text-fg transition-colors hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring sm:h-9"
             aria-label={t("search.citation.openPreview", {
               file: previewFileName,
             })}
           >
-            <LocateFixed size={15} aria-hidden />
+            <LocateFixed size={16} aria-hidden />
             {t("search.citation.openPreviewShort")}
           </Link>
         </div>
@@ -176,13 +176,13 @@ export function CitationCard({
           if (event.target === dialogRef.current) closePreview();
         }}
         aria-label={t("search.citation.openPreview", { file: previewFileName })}
-        className="m-auto w-[min(92vw,900px)] max-h-[85vh] overflow-auto rounded-lg border border-border bg-card p-0 text-foreground backdrop:bg-black/50"
+        className="m-auto w-[min(92vw,900px)] max-h-[85vh] overflow-auto rounded-lg border border-border bg-surface-overlay p-0 text-fg shadow-[var(--shadow-dialog)] backdrop:bg-[var(--scrim)]"
       >
         {previewOpen ? (
           <div className="flex flex-col">
-            <div className="sticky top-0 z-10 flex items-center justify-between gap-2 border-b border-border bg-card px-4 py-3">
-              <span className="flex min-w-0 items-center gap-1.5 text-sm font-medium text-foreground">
-                <FileText size={14} className="shrink-0 text-muted" aria-hidden />
+            <div className="sticky top-0 z-10 flex items-center justify-between gap-2 border-b border-border bg-surface px-4 py-3">
+              <span className="flex min-w-0 items-center gap-1.5 text-sm font-medium text-fg">
+                <FileText size={14} className="shrink-0 text-fg-muted" aria-hidden />
                 <span className="truncate" title={previewFileName}>
                   {previewFileName}
                 </span>
@@ -190,7 +190,7 @@ export function CitationCard({
               <div className="flex shrink-0 items-center gap-2">
                 <Link
                   to={previewUrl}
-                  className="text-xs font-medium text-primary hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                  className="text-xs font-medium text-accent-fg hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 >
                   {t("search.citation.previewFullpage")}
                 </Link>
@@ -198,7 +198,7 @@ export function CitationCard({
                   type="button"
                   onClick={closePreview}
                   aria-label={t("search.citation.previewClose")}
-                  className="inline-flex size-8 items-center justify-center rounded-md text-muted transition-colors hover:bg-background hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                  className="inline-flex size-8 items-center justify-center rounded-md text-fg-muted transition-colors hover:bg-surface-hover hover:text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 >
                   <X size={16} aria-hidden />
                 </button>
@@ -247,11 +247,11 @@ function CitationScores({ chunk }: { chunk: RetrievedChunk }) {
   return (
     <div
       data-testid="citation-score-panel"
-      className="w-full space-y-2 rounded-md bg-background px-2.5 py-2 sm:w-[176px] sm:shrink-0"
+      className="w-full space-y-2 rounded-md bg-surface-sunken px-2.5 py-2 sm:w-[176px] sm:shrink-0"
     >
-      <div className="flex items-center justify-between gap-2 text-[11px]">
-        <span className="font-medium text-muted">{t("search.citation.score.retrieval")}</span>
-        <span className="tnum shrink-0 text-foreground">{formatScoreValue(chunk.score)}</span>
+      <div className="flex items-center justify-between gap-2 text-xs">
+        <span className="font-medium text-fg-muted">{t("search.citation.score.retrieval")}</span>
+        <span className="tnum shrink-0 text-fg">{formatScoreValue(chunk.score)}</span>
       </div>
       <ScoreMeter label={t("search.citation.score.rerank")} value={chunk.rerank_score} />
     </div>
@@ -267,7 +267,7 @@ function ScoreMeter({
 }) {
   if (value == null || !Number.isFinite(value)) {
     return (
-      <p className="text-[11px] font-medium text-muted">
+      <p className="text-xs font-medium text-fg-muted">
         {t("search.citation.score.rerankMissing")}
       </p>
     );
@@ -276,9 +276,9 @@ function ScoreMeter({
   const ariaNow = Math.min(Math.max(value, 0), 1);
   return (
     <div className="space-y-1">
-      <div className="flex items-center justify-between gap-2 text-[11px]">
-        <span className="font-medium text-muted">{label}</span>
-        <span className="tnum shrink-0 text-foreground">{valueText}</span>
+      <div className="flex items-center justify-between gap-2 text-xs">
+        <span className="font-medium text-fg-muted">{label}</span>
+        <span className="tnum shrink-0 text-fg">{valueText}</span>
       </div>
       <div
         role="meter"
@@ -287,11 +287,11 @@ function ScoreMeter({
         aria-valuemax={1}
         aria-valuenow={ariaNow}
         aria-valuetext={valueText}
-        className="h-1.5 overflow-hidden rounded-full bg-muted/20"
+        className="h-1.5 overflow-hidden rounded-full bg-surface-hover"
       >
         <div
           data-testid="citation-rerank-fill"
-          className="h-full rounded-full bg-success"
+          className="h-full rounded-full bg-success-emphasis"
           style={{ width: `${scoreMeterPercent(value)}%` }}
         />
       </div>
@@ -390,7 +390,7 @@ function firstIntegerMetadata(
 
 function MetadataChip({ chip }: { chip: CitationMetadataChip }) {
   return (
-    <div className="min-w-0 max-w-full rounded-full border border-border bg-background px-2 py-0.5 text-xs text-muted sm:max-w-80">
+    <div className="min-w-0 max-w-full rounded-full border border-border bg-surface-sunken px-2 py-0.5 text-xs text-fg-muted sm:max-w-80">
       <dt className="sr-only">{chipLabel(chip)}</dt>
       <dd className="truncate">{chipValue(chip)}</dd>
     </div>

@@ -1,18 +1,25 @@
 "use client";
 
+import {
+  PageBody,
+  PageHeader,
+  Button,
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  FieldError,
+  FormStatus,
+  SelectField,
+  type SelectFieldOption,
+  ToggleChip,
+} from "@engchina/production-ready-ui";
 import { Archive, Pencil, Sparkles, UserCog } from "lucide-react";
 import { useMemo, useState, type FormEvent } from "react";
 
-import { PageHeader } from "@/components/PageHeader";
 import { DegradedBanner } from "@/components/DegradedBanner";
 import { EmptyState, ErrorState } from "@/components/StateViews";
 import { KnowledgeBaseScopePicker } from "@/components/knowledge-bases/KnowledgeBaseScopePicker";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { FieldError } from "@/components/ui/field-error";
-import { FormStatus } from "@/components/ui/form-status";
-import { SelectField, type SelectFieldOption } from "@/components/ui/select-field";
-import { ToggleChip } from "@/components/ui/toggle-chip";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import {
   ApiError,
@@ -180,7 +187,7 @@ export function BusinessViewManagementClient() {
   return (
     <div>
       <PageHeader title={t("nav.businessViews")} subtitle={t("businessViews.subtitle")} />
-      <div className="grid grid-cols-1 gap-5 p-8">
+      <PageBody className="grid grid-cols-1 gap-5">
         <DegradedBanner
           messages={page?.warning_messages}
           onRetry={() => void query.refetch()}
@@ -237,7 +244,7 @@ export function BusinessViewManagementClient() {
               onChange={(event) => setSearch(event.target.value)}
               placeholder={t("businessViews.search.placeholder")}
               aria-label={t("businessViews.search.placeholder")}
-              className="h-9 w-full min-w-0 rounded-md border border-border bg-background px-3 text-sm outline-none focus-visible:border-primary sm:w-56"
+              className="h-9 w-full min-w-0 rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:border-focus-ring sm:w-56"
             />
             <Button size="sm" variant="secondary" type="submit" className="shrink-0">
               {t("businessViews.search.placeholder")}
@@ -270,7 +277,7 @@ export function BusinessViewManagementClient() {
             ))}
           </ul>
         )}
-      </div>
+      </PageBody>
     </div>
   );
 }
@@ -289,33 +296,32 @@ function BusinessViewCard({
   const isArchived = view.status === "ARCHIVED";
   const isDefault = view.name === DEFAULT_BUSINESS_VIEW_NAME;
   return (
-    <li className="flex min-w-0 flex-col rounded-lg border border-border bg-card p-4">
+    <li className="flex min-w-0 flex-col rounded-lg border border-border bg-surface p-4">
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <p className="flex items-center gap-1.5 truncate font-medium text-foreground">
-            <UserCog size={15} className="shrink-0 text-primary" aria-hidden />
+          <p className="flex items-center gap-1.5 truncate font-medium text-fg">
+            <UserCog size={16} className="shrink-0 text-accent-fg" aria-hidden />
             <span className="truncate">{view.name}</span>
           </p>
           {view.description ? (
-            <p className="mt-1 line-clamp-2 text-xs text-muted">{view.description}</p>
+            <p className="mt-1 line-clamp-2 text-xs text-fg-muted">{view.description}</p>
           ) : null}
         </div>
         <span
           className={cn(
             "shrink-0 rounded-full px-2 py-0.5 text-xs font-medium",
-            isArchived ? "bg-muted/15 text-muted" : "bg-success-bg text-success"
+            isArchived ? "bg-surface-hover text-fg-muted" : "bg-success-subtle text-success-fg"
           )}
         >
           {t(`businessViews.status.${view.status}` as const)}
         </span>
       </div>
-      <dl className="mt-3 space-y-1 text-xs text-muted">
+      <dl className="mt-3 space-y-1 text-xs text-fg-muted">
         <div>{t("businessViews.list.knowledgeBaseCount", { count: view.knowledge_base_count })}</div>
         <div>{t("businessViews.list.updatedAt", { value: formatDateTime(view.updated_at) })}</div>
       </dl>
       <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-border pt-3">
-        <Button size="sm" variant="secondary" onClick={onEdit} disabled={isArchived}>
-          <Pencil size={14} aria-hidden />
+        <Button size="sm" variant="secondary" onClick={onEdit} disabled={isArchived} icon={Pencil}>
           {t("businessViews.actions.edit")}
         </Button>
         {!isArchived ? (
@@ -325,9 +331,7 @@ function BusinessViewCard({
             onClick={onArchive}
             disabled={archiving || isDefault}
             aria-label={isDefault ? t("businessViews.default.archiveDisabled") : undefined}
-            title={isDefault ? t("businessViews.default.archiveDisabled") : undefined}
-          >
-            <Archive size={14} aria-hidden />
+            title={isDefault ? t("businessViews.default.archiveDisabled") : undefined} icon={Archive}>
             {t("businessViews.actions.archive")}
           </Button>
         ) : null}
@@ -415,7 +419,7 @@ function BusinessViewForm({
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
-          <Sparkles size={18} className="text-primary" aria-hidden />
+          <Sparkles size={20} className="text-accent-fg" aria-hidden />
           {mode === "edit" ? t("businessViews.edit.title") : t("businessViews.create.title")}
         </CardTitle>
       </CardHeader>
@@ -423,7 +427,7 @@ function BusinessViewForm({
         <form onSubmit={handleSubmit} className="space-y-5">
           <div className="grid gap-3 md:grid-cols-[minmax(0,18rem)_minmax(0,1fr)]">
             <div>
-              <label htmlFor="business-view-name" className="text-sm font-medium text-foreground">
+              <label htmlFor="business-view-name" className="text-sm font-medium text-fg">
                 {t("businessViews.field.name")}
               </label>
               <input
@@ -441,12 +445,12 @@ function BusinessViewForm({
                     .join(" ") || undefined
                 }
                 className={cn(
-                  "mt-1 h-9 w-full rounded-md border border-border px-3 text-sm outline-none focus-visible:border-primary",
-                  isDefault ? "cursor-default bg-background text-muted" : "bg-background"
+                  "mt-1 h-9 w-full rounded-md border border-border-control px-3 text-sm outline-none focus-visible:border-focus-ring",
+                  isDefault ? "cursor-default bg-surface-sunken text-fg-muted" : "bg-surface-sunken"
                 )}
               />
               {isDefault ? (
-                <p id={NAME_HELPER_ID} className="mt-1 text-xs text-muted">
+                <p id={NAME_HELPER_ID} className="mt-1 text-xs text-fg-muted">
                   {t("businessViews.default.nameFixed")}
                 </p>
               ) : null}
@@ -455,7 +459,7 @@ function BusinessViewForm({
             <div>
               <label
                 htmlFor="business-view-description"
-                className="text-sm font-medium text-foreground"
+                className="text-sm font-medium text-fg"
               >
                 {t("businessViews.field.description")}
               </label>
@@ -464,7 +468,7 @@ function BusinessViewForm({
                 value={description}
                 onChange={(event) => setDescription(event.target.value)}
                 placeholder={t("businessViews.field.descriptionPlaceholder")}
-                className="mt-1 h-9 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus-visible:border-primary"
+                className="mt-1 h-9 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:border-focus-ring"
               />
             </div>
           </div>
@@ -486,10 +490,10 @@ function BusinessViewForm({
           </div>
 
           <fieldset className="space-y-3 rounded-lg border border-border p-4">
-            <legend className="px-1 text-sm font-semibold text-foreground">
+            <legend className="px-1 text-sm font-semibold text-fg">
               {t("businessViews.query.title")}
             </legend>
-            <p className="text-xs text-muted">{t("businessViews.query.helper")}</p>
+            <p className="text-xs text-fg-muted">{t("businessViews.query.helper")}</p>
             <div className="space-y-3">
               <QuerySelectRow
                 id="business-view-retrieval"
@@ -500,8 +504,8 @@ function BusinessViewForm({
                 disabled={pending}
                 onChange={(value) => updateQuery({ retrieval_strategy: value })}
               />
-              <div className="grid gap-3 rounded-lg border border-border bg-background p-3 md:grid-cols-[minmax(10rem,14rem)_minmax(0,1fr)]">
-                <h3 className="text-sm font-medium text-foreground">
+              <div className="grid gap-3 rounded-lg border border-border bg-surface-sunken p-3 md:grid-cols-[minmax(10rem,14rem)_minmax(0,1fr)]">
+                <h3 className="text-sm font-medium text-fg">
                   {t("settings.retrieval.toggles")}
                 </h3>
                 <div className="min-w-0 space-y-2">
@@ -555,15 +559,15 @@ function BusinessViewForm({
                 disabled={pending}
                 onChange={(value) => updateQuery({ generation_profile: value })}
               />
-              <div className="grid gap-3 rounded-lg border border-border bg-background p-3 md:grid-cols-[minmax(10rem,14rem)_minmax(0,1fr)]">
-                <h3 className="text-sm font-medium text-foreground">
+              <div className="grid gap-3 rounded-lg border border-border bg-surface-sunken p-3 md:grid-cols-[minmax(10rem,14rem)_minmax(0,1fr)]">
+                <h3 className="text-sm font-medium text-fg">
                   {t("businessViews.field.prompt")}
                 </h3>
                 <div className="min-w-0 space-y-3">
                   <div>
                     <label
                       htmlFor="business-view-system-prompt"
-                      className="text-sm font-medium text-foreground"
+                      className="text-sm font-medium text-fg"
                     >
                       {t("businessViews.field.systemPrompt")}
                     </label>
@@ -579,16 +583,16 @@ function BusinessViewForm({
                       placeholder={t("businessViews.field.systemPromptPlaceholder")}
                       rows={3}
                       disabled={pending}
-                      className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus-visible:border-primary disabled:cursor-not-allowed disabled:opacity-50"
+                      className="mt-1 w-full rounded-md border border-border-control bg-surface-sunken px-3 py-2 text-sm outline-none focus-visible:border-focus-ring disabled:cursor-not-allowed disabled:opacity-50"
                     />
-                    <p className="mt-1 text-xs text-muted">
+                    <p className="mt-1 text-xs text-fg-muted">
                       {t("businessViews.field.systemPromptHelper")}
                     </p>
                   </div>
                   <div className="max-w-xs">
                     <label
                       htmlFor="business-view-language"
-                      className="text-sm font-medium text-foreground"
+                      className="text-sm font-medium text-fg"
                     >
                       {t("businessViews.field.defaultLanguage")}
                     </label>
@@ -603,7 +607,7 @@ function BusinessViewForm({
                       }
                       placeholder={t("businessViews.field.defaultLanguagePlaceholder")}
                       disabled={pending}
-                      className="mt-1 h-9 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus-visible:border-primary disabled:cursor-not-allowed disabled:opacity-50"
+                      className="mt-1 h-9 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:border-focus-ring disabled:cursor-not-allowed disabled:opacity-50"
                     />
                   </div>
                 </div>
@@ -630,8 +634,7 @@ function BusinessViewForm({
           </fieldset>
 
           <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
-            <Button size="lg" loading={pending} type="submit">
-              <Sparkles size={16} aria-hidden />
+            <Button size="lg" loading={pending} type="submit" icon={Sparkles}>
               {mode === "edit"
                 ? t("businessViews.actions.save")
                 : t("businessViews.actions.create")}
@@ -691,8 +694,8 @@ function QuerySelectRow<T extends string>({
 }) {
   const overriding = value !== null;
   return (
-    <div className="grid gap-3 rounded-lg border border-border bg-background p-3 md:grid-cols-[minmax(10rem,14rem)_minmax(0,1fr)]">
-      <h3 className="text-sm font-medium text-foreground">{label}</h3>
+    <div className="grid gap-3 rounded-lg border border-border bg-surface-sunken p-3 md:grid-cols-[minmax(10rem,14rem)_minmax(0,1fr)]">
+      <h3 className="text-sm font-medium text-fg">{label}</h3>
       <div className="min-w-0 space-y-2">
         <div className="flex flex-wrap gap-1" role="group" aria-label={label}>
           <ToggleChip selected={!overriding} disabled={disabled} onClick={() => onChange(null)}>
@@ -737,7 +740,7 @@ function QueryToggleRow({
 }) {
   return (
     <div className="flex flex-wrap items-center justify-between gap-2">
-      <span className="text-sm text-foreground">{label}</span>
+      <span className="text-sm text-fg">{label}</span>
       <div className="flex flex-wrap gap-1" role="group" aria-label={label}>
         <ToggleChip selected={value === null} disabled={disabled} onClick={() => onChange(null)}>
           {t("businessViews.inherit")}

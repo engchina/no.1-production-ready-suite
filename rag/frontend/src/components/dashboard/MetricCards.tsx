@@ -1,6 +1,6 @@
 import { FileStack, Search, Upload, type LucideIcon } from "lucide-react";
 
-import { Card } from "@/components/ui/card";
+import { Card } from "@engchina/production-ready-ui";
 import { t, type I18nKey } from "@/lib/i18n";
 import { formatNumber } from "@/lib/format";
 import type { DashboardStats } from "@/lib/api";
@@ -41,15 +41,15 @@ export function MetricCards({ stats }: { stats: DashboardStats }) {
         return (
           <Card key={m.labelKey} className="p-5">
             <div className="flex items-start justify-between">
-              <span className="text-xs font-medium text-muted">{t(m.labelKey)}</span>
-              <span className="flex size-8 items-center justify-center rounded-md bg-info-bg text-info">
+              <span className="text-xs font-medium text-fg-muted">{t(m.labelKey)}</span>
+              <span className="flex size-8 items-center justify-center rounded-md bg-info-subtle text-info-fg">
                 <Icon size={16} aria-hidden />
               </span>
             </div>
-            <div className="tnum mt-3 text-2xl font-bold leading-none text-foreground">
+            <div className="tnum mt-3 text-2xl font-bold leading-none text-fg">
               {formatNumber(m.value)}
             </div>
-            {m.sub ? <div className="mt-2 text-xs text-muted">{m.sub}</div> : null}
+            {m.sub ? <div className="mt-2 text-xs text-fg-muted">{m.sub}</div> : null}
           </Card>
         );
       })}

@@ -30,12 +30,14 @@ import {
   type RecipeLayerStatusView,
 } from "./DocumentRecipeManager.logic";
 import { CitationCard } from "@/components/search/CitationCard";
-import { Banner } from "@/components/ui/banner";
-import { Button } from "@/components/ui/button";
+import {
+  Banner,
+  Button,
+  FormStatus,
+  SelectField,
+  Skeleton,
+} from "@engchina/production-ready-ui";
 import { useConfirm } from "@/components/ui/confirm-dialog";
-import { FormStatus } from "@/components/ui/form-status";
-import { SelectField } from "@/components/ui/select-field";
-import { Skeleton } from "@/components/ui/skeleton";
 import {
   ApiError,
   api,
@@ -190,8 +192,7 @@ export function DocumentRecipeManager({
       <Banner severity="warning" title={t("documents.recipes.loadError")}>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <p>{error instanceof ApiError ? error.message : t("flow.buildConfig.loadErrorHint")}</p>
-          <Button type="button" variant="secondary" size="sm" onClick={onRetry}>
-            <RotateCcw size={14} aria-hidden />
+          <Button type="button" variant="secondary" size="sm" onClick={onRetry} icon={RotateCcw}>
             {t("common.retry")}
           </Button>
         </div>
@@ -211,15 +212,15 @@ export function DocumentRecipeManager({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="flex items-center gap-2">
-            <Settings2 size={17} className="text-primary" aria-hidden />
-            <h2 className="text-sm font-semibold text-foreground">
+            <Settings2 size={16} className="text-accent-fg" aria-hidden />
+            <h2 className="text-sm font-semibold text-fg">
               {t("documents.recipes.title")}
             </h2>
-            <span className="tnum rounded-md bg-muted/10 px-2 py-0.5 text-xs font-medium text-muted">
+            <span className="tnum rounded-md bg-surface-hover px-2 py-0.5 text-xs font-medium text-fg-muted">
               {t("documents.recipes.count", { count: recipes.length })}
             </span>
           </div>
-          <p className="mt-1 text-xs text-muted">
+          <p className="mt-1 text-xs text-fg-muted">
             {atMaximum ? t("documents.recipes.max") : t("documents.recipes.subtitle")}
           </p>
         </div>
@@ -229,9 +230,7 @@ export function DocumentRecipeManager({
           size="sm"
           onClick={openAddDialog}
           disabled={atMaximum}
-          title={atMaximum ? t("documents.recipes.max") : undefined}
-        >
-          <Plus size={15} aria-hidden />
+          title={atMaximum ? t("documents.recipes.max") : undefined} icon={Plus}>
           {t("documents.recipes.add")}
         </Button>
       </div>
@@ -261,20 +260,20 @@ export function DocumentRecipeManager({
         ))}
       </div>
 
-      <div className="rounded-lg border border-border bg-card p-3 sm:p-4">
+      <div className="rounded-lg border border-border bg-surface p-3 sm:p-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <div className="flex flex-wrap items-center gap-2">
-              <h3 className="text-base font-semibold text-foreground">{recipeName(selected)}</h3>
+              <h3 className="text-base font-semibold text-fg">{recipeName(selected)}</h3>
               <RecipeStatusBadge recipe={selected} />
               {selected.needs_reprocessing ? (
-                <span className="rounded-full bg-warning-bg px-2 py-0.5 text-xs font-medium text-warning">
+                <span className="rounded-full bg-warning-subtle px-2 py-0.5 text-xs font-medium text-warning-fg">
                   {t("documents.recipes.reprocess")}
                 </span>
               ) : null}
             </div>
             <RecipeLayerStatusChips statuses={recipeLayerStatuses(selected, chunkSets)} />
-            <p className="mt-1 text-xs text-muted">
+            <p className="mt-1 text-xs text-fg-muted">
               {t("documents.recipes.updated", { time: formatDateTime(selected.updated_at) })}
             </p>
           </div>
@@ -285,9 +284,7 @@ export function DocumentRecipeManager({
               size="sm"
               onClick={() => void handleDelete()}
               disabled={atMinimum || active || deleteRecipe.isPending}
-              title={atMinimum ? t("documents.recipes.min") : undefined}
-            >
-              <Trash2 size={15} aria-hidden />
+              title={atMinimum ? t("documents.recipes.min") : undefined} icon={Trash2}>
               {t("documents.recipes.delete")}
             </Button>
             <Button
@@ -335,7 +332,7 @@ export function DocumentRecipeManager({
 
       <dialog
         ref={dialogRef}
-        className="m-auto w-[calc(100%-2rem)] max-w-lg rounded-xl border border-border bg-card p-0 text-foreground shadow-xl backdrop:bg-slate-950/45"
+        className="m-auto w-[calc(100%-2rem)] max-w-lg rounded-xl border border-border bg-surface-overlay p-0 text-fg shadow-[var(--shadow-dialog)] backdrop:bg-[var(--scrim)]"
         onClose={() => setAddMode("clone")}
         onClick={(event) => {
           if (event.target === event.currentTarget) dialogRef.current?.close();
@@ -343,17 +340,17 @@ export function DocumentRecipeManager({
       >
         <div className="p-5">
           <h2 className="text-base font-semibold">{t("documents.recipes.addTitle")}</h2>
-          <p className="mt-1 text-sm text-muted">{t("documents.recipes.addDescription")}</p>
+          <p className="mt-1 text-sm text-fg-muted">{t("documents.recipes.addDescription")}</p>
           <div className="mt-4 grid gap-2">
             <AddModeOption
               selected={addMode === "clone"}
-              icon={<Copy size={17} aria-hidden />}
+              icon={<Copy size={16} aria-hidden />}
               label={t("documents.recipes.clone")}
               onSelect={() => setAddMode("clone")}
             />
             <AddModeOption
               selected={addMode === "defaults"}
-              icon={<Settings2 size={17} aria-hidden />}
+              icon={<Settings2 size={16} aria-hidden />}
               label={t("documents.recipes.defaults")}
               onSelect={() => setAddMode("defaults")}
             />
@@ -372,8 +369,7 @@ export function DocumentRecipeManager({
             <Button type="button" variant="ghost" onClick={() => dialogRef.current?.close()}>
               {t("common.cancel")}
             </Button>
-            <Button type="button" onClick={handleCreate} loading={createRecipe.isPending}>
-              <Plus size={15} aria-hidden />
+            <Button type="button" onClick={handleCreate} loading={createRecipe.isPending} icon={Plus}>
               {t("documents.recipes.create")}
             </Button>
           </div>
@@ -399,15 +395,15 @@ function RecipeCard({
       aria-pressed={selected}
       onClick={onSelect}
       className={cn(
-        "min-w-0 rounded-lg border p-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        "min-w-0 rounded-lg border p-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring",
         selected
-          ? "border-primary bg-primary/5 shadow-sm"
-          : "border-border bg-card hover:border-primary/40 hover:bg-muted/5"
+          ? "border-accent-emphasis bg-accent-subtle shadow-sm"
+          : "border-border bg-surface hover:border-accent-emphasis hover:bg-surface-hover"
       )}
     >
       <div className="flex items-start justify-between gap-2">
-        <span className="font-semibold text-foreground">{recipeName(recipe)}</span>
-        <span className="tnum text-xs font-medium text-muted">{completed}/4</span>
+        <span className="font-semibold text-fg">{recipeName(recipe)}</span>
+        <span className="tnum text-xs font-medium text-fg-muted">{completed}/4</span>
       </div>
       <div className="mt-2 flex items-center gap-2">
         <RecipeStatusBadge recipe={recipe} />
@@ -421,13 +417,13 @@ function RecipeCard({
               className={cn(
                 "h-1.5 rounded-full",
                 step?.status === "FAILED"
-                  ? "bg-danger"
+                  ? "bg-danger-emphasis"
                   : step?.status === "RUNNING"
-                    ? "bg-info"
+                    ? "bg-info-emphasis"
                     : step?.status === "SUCCEEDED"
-                      ? "bg-success"
+                      ? "bg-success-emphasis"
                       : step?.status === "NEEDS_REVIEW"
-                        ? "bg-warning"
+                        ? "bg-warning-emphasis"
                         : "bg-border"
               )}
             />
@@ -450,13 +446,13 @@ function RecipeSteps({ recipe }: { recipe: DocumentRecipeView }) {
             ) : null}
             <span
               className={cn(
-                "relative z-10 mx-auto flex size-6 items-center justify-center rounded-full border bg-card",
+                "relative z-10 mx-auto flex size-6 items-center justify-center rounded-full border bg-surface",
                 stepTone(step)
               )}
             >
               <StepIcon step={step} />
             </span>
-            <span className="mt-1.5 block min-h-7 px-0.5 text-[10px] leading-3 text-muted sm:text-xs sm:leading-4">
+            <span className="mt-1.5 block min-h-7 px-0.5 text-xs leading-3 text-fg-muted sm:text-xs sm:leading-4">
               <span className="sm:hidden">{t(shortLabel)}</span>
               <span className="hidden sm:inline">{t(label)}</span>
             </span>
@@ -469,11 +465,11 @@ function RecipeSteps({ recipe }: { recipe: DocumentRecipeView }) {
 
 function StepIcon({ step }: { step: DocumentRecipeStep | undefined }) {
   if (step?.status === "RUNNING") {
-    return <LoaderCircle size={13} className="animate-spin" aria-hidden />;
+    return <LoaderCircle size={14} className="animate-spin" aria-hidden />;
   }
-  if (step?.status === "FAILED") return <AlertCircle size={13} aria-hidden />;
-  if (step?.status === "NEEDS_REVIEW") return <Eye size={13} aria-hidden />;
-  if (step?.status === "SUCCEEDED") return <Check size={13} aria-hidden />;
+  if (step?.status === "FAILED") return <AlertCircle size={14} aria-hidden />;
+  if (step?.status === "NEEDS_REVIEW") return <Eye size={14} aria-hidden />;
+  if (step?.status === "SUCCEEDED") return <Check size={14} aria-hidden />;
   return <Circle size={10} aria-hidden />;
 }
 
@@ -482,7 +478,7 @@ function RecipeStatusBadge({ recipe }: { recipe: DocumentRecipeView }) {
   const Icon = status.icon;
   return (
     <span className={cn("inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium", status.className)}>
-      <Icon size={12} className={status.spin ? "animate-spin" : undefined} aria-hidden />
+      <Icon size={14} className={status.spin ? "animate-spin" : undefined} aria-hidden />
       {t(status.label)}
     </span>
   );
@@ -503,11 +499,11 @@ const LAYER_STATUS_LABEL_KEYS: Record<DocumentLayerStatusName, I18nKey> = {
 };
 
 const LAYER_STATUS_TONES: Record<DocumentLayerStatusName, string> = {
-  not_requested: "bg-muted/10 text-muted",
-  planned_only: "bg-warning-bg text-warning",
-  materialized: "bg-success-bg text-success",
-  needs_reingest: "bg-warning-bg text-warning",
-  error: "bg-danger-bg text-danger",
+  not_requested: "bg-surface-hover text-fg-muted",
+  planned_only: "bg-warning-subtle text-warning-fg",
+  materialized: "bg-success-subtle text-success-fg",
+  needs_reingest: "bg-warning-subtle text-warning-fg",
+  error: "bg-danger-subtle text-danger-fg",
 };
 
 /** 派生 layer(項目抽出/関係情報/ナビ)の実体化状態チップ。reason は title で開示する。 */
@@ -540,7 +536,7 @@ function recipeStatus(recipe: DocumentRecipeView) {
     return {
       label: "documents.recipes.status.running" as const,
       icon: LoaderCircle,
-      className: "bg-info-bg text-info",
+      className: "bg-info-subtle text-info-fg",
       spin: true,
     };
   }
@@ -548,7 +544,7 @@ function recipeStatus(recipe: DocumentRecipeView) {
     return {
       label: "documents.recipes.status.queued" as const,
       icon: Clock3,
-      className: "bg-muted/10 text-muted",
+      className: "bg-surface-hover text-fg-muted",
       spin: false,
     };
   }
@@ -556,7 +552,7 @@ function recipeStatus(recipe: DocumentRecipeView) {
     return {
       label: "documents.recipes.status.error" as const,
       icon: AlertCircle,
-      className: "bg-danger-bg text-danger",
+      className: "bg-danger-subtle text-danger-fg",
       spin: false,
     };
   }
@@ -564,7 +560,7 @@ function recipeStatus(recipe: DocumentRecipeView) {
     return {
       label: "documents.recipes.status.review" as const,
       icon: Clock3,
-      className: "bg-warning-bg text-warning",
+      className: "bg-warning-subtle text-warning-fg",
       spin: false,
     };
   }
@@ -572,24 +568,24 @@ function recipeStatus(recipe: DocumentRecipeView) {
     return {
       label: "documents.recipes.status.searchable" as const,
       icon: SearchCheck,
-      className: "bg-success-bg text-success",
+      className: "bg-success-subtle text-success-fg",
       spin: false,
     };
   }
   return {
     label: "documents.recipes.status.idle" as const,
     icon: Circle,
-    className: "bg-muted/10 text-muted",
+    className: "bg-surface-hover text-fg-muted",
     spin: false,
   };
 }
 
 function stepTone(step: DocumentRecipeStep | undefined) {
-  if (step?.status === "FAILED") return "border-danger text-danger";
-  if (step?.status === "RUNNING") return "border-info text-info";
-  if (step?.status === "NEEDS_REVIEW") return "border-warning text-warning";
-  if (step?.status === "SUCCEEDED") return "border-success bg-success text-white";
-  return "border-border text-muted";
+  if (step?.status === "FAILED") return "border-danger-fg text-danger-fg";
+  if (step?.status === "RUNNING") return "border-info-fg text-info-fg";
+  if (step?.status === "NEEDS_REVIEW") return "border-warning-fg text-warning-fg";
+  if (step?.status === "SUCCEEDED") return "border-success-fg bg-success-emphasis text-fg-on-emphasis";
+  return "border-border text-fg-muted";
 }
 
 function completedStepCount(recipe: DocumentRecipeView) {
@@ -694,16 +690,14 @@ function RecipeComparison({
         variant="ghost"
         size="sm"
         onClick={() => setOpen((value) => !value)}
-        disabled={searchable.length < 2}
-      >
-        <Search size={15} aria-hidden />
+        disabled={searchable.length < 2} icon={Search}>
         {t("documents.experiment.compare.title")}
       </Button>
       {searchable.length < 2 ? (
-        <p className="mt-1 text-xs text-muted">{t("documents.recipes.compareNeedsTwo")}</p>
+        <p className="mt-1 text-xs text-fg-muted">{t("documents.recipes.compareNeedsTwo")}</p>
       ) : null}
       {open ? (
-        <div className="mt-3 space-y-3 rounded-lg border border-border bg-background p-3">
+        <div className="mt-3 space-y-3 rounded-lg border border-border bg-surface-sunken p-3">
           <div className="grid gap-3 sm:grid-cols-2">
             <SelectField
               id={`recipe-compare-left-${documentId}`}
@@ -721,13 +715,13 @@ function RecipeComparison({
             />
           </div>
           <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
-            <label className="min-w-0 flex-1 text-sm font-medium text-foreground">
+            <label className="min-w-0 flex-1 text-sm font-medium text-fg">
               {t("documents.experiment.compare.queryLabel")}
               <input
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
                 placeholder={t("documents.experiment.compare.placeholder")}
-                className="mt-1 h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                className="mt-1 h-10 w-full rounded-md border border-border bg-surface px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
                 onKeyDown={(event) => {
                   if (event.key === "Enter") void run();
                 }}
@@ -765,7 +759,7 @@ function ComparisonColumn({ title, result }: { title: string; result: SearchResp
   const chunks = result.citations;
   return (
     <section className="min-w-0">
-      <h4 className="mb-2 text-sm font-semibold text-foreground">{title}</h4>
+      <h4 className="mb-2 text-sm font-semibold text-fg">{title}</h4>
       {chunks.length ? (
         <ol className="space-y-2">
           {chunks.map((chunk, index) => (
@@ -806,15 +800,15 @@ function AddModeOption({
       aria-checked={selected}
       onClick={onSelect}
       className={cn(
-        "flex min-h-12 items-center gap-3 rounded-lg border px-3 text-left text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-        selected ? "border-primary bg-primary/5 text-foreground" : "border-border text-muted"
+        "flex min-h-12 items-center gap-3 rounded-lg border px-3 text-left text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring",
+        selected ? "border-accent-emphasis bg-accent-subtle text-fg" : "border-border text-fg-muted"
       )}
     >
-      <span className={cn("flex size-8 items-center justify-center rounded-md", selected ? "bg-primary/10 text-primary" : "bg-muted/10")}>
+      <span className={cn("flex size-8 items-center justify-center rounded-md", selected ? "bg-accent-subtle text-accent-fg" : "bg-surface-hover")}>
         {icon}
       </span>
       <span className="flex-1">{label}</span>
-      {selected ? <CheckCircle2 size={17} className="text-primary" aria-hidden /> : null}
+      {selected ? <CheckCircle2 size={16} className="text-accent-fg" aria-hidden /> : null}
     </button>
   );
 }

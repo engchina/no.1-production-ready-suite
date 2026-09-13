@@ -1,6 +1,6 @@
 import { FileStack, Upload } from "lucide-react";
 
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@engchina/production-ready-ui";
 import { StatusBadge } from "@/components/StatusBadge";
 import { EmptyState } from "@/components/StateViews";
 import { t } from "@/lib/i18n";
@@ -31,14 +31,14 @@ export function RecentActivity({ activities }: { activities: DashboardActivity[]
                   : t("dashboard.activity.type.indexing");
               return (
                 <li key={a.id} className="flex items-center gap-3 py-3 first:pt-0 last:pb-0">
-                  <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-background text-muted">
-                    <Icon size={15} aria-hidden />
+                  <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-surface-sunken text-fg-muted">
+                    <Icon size={16} aria-hidden />
                   </span>
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium text-foreground" title={a.file_name}>
+                    <p className="truncate text-sm font-medium text-fg" title={a.file_name}>
                       {a.file_name}
                     </p>
-                    <p className="tnum mt-0.5 text-xs text-muted">
+                    <p className="tnum mt-0.5 text-xs text-fg-muted">
                       {typeLabel}
                       {a.category_name ? ` ・ ${a.category_name}` : ""} ・ {formatDateTime(a.timestamp)}
                     </p>
