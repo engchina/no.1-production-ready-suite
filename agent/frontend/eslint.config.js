@@ -2,6 +2,10 @@ import js from "@eslint/js";
 import globals from "globals";
 import tseslint from "typescript-eslint";
 
+import adherence from "../../no.1-production-ready-platform/docs/design-system/adherence.oxlintrc.json" with { type: "json" };
+
+const { rules: adherenceRules } = adherence.overrides[0];
+
 export default tseslint.config(
   { ignores: ["dist", "node_modules", "playwright-report", "test-results"] },
   js.configs.recommended,
@@ -15,33 +19,15 @@ export default tseslint.config(
       "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_" }],
     },
   },
-  // デザインシステムの adherence ルール（platform の docs/design-system/adherence.oxlintrc.json 相当）。
-  // 生の px は Tailwind のレイアウト幅（min-w-[980px] 等）で正当に使うため、inline style に限定する。
+  // デザインシステムの adherence ルール。正本は platform の docs/design-system/adherence.oxlintrc.json で、
+  // ルールをコピーせず同じセレクタを ESLint 標準の no-restricted-syntax / no-restricted-imports に渡す
+  // （platform AGENTS.md「lint」節）。CI は platform を sibling に checkout するので同じ相対パスで解決できる。
+  // アプリ固有のルールを足す場合は、同じルール名で上書きせず別のルール名にする（adherence のセレクタが消える）。
   {
     files: ["src/**/*.{ts,tsx}"],
     rules: {
-      "no-restricted-syntax": [
-        "error",
-        {
-          selector: "Literal[value=/#[0-9a-fA-F]{3,8}\\b/]",
-          message: "生の hex 色は使わない。@engchina/production-ready-ui の色トークン（bg-surface / text-fg-muted 等）を使う。",
-        },
-        {
-          selector: "JSXAttribute[name.name='style'] Literal[value=/\\b\\d+px\\b/]",
-          message: "inline style に生の px を書かない。余白・寸法トークンか Tailwind のユーティリティを使う。",
-        },
-      ],
-      "no-restricted-imports": [
-        "error",
-        {
-          patterns: [
-            {
-              group: ["@engchina/production-ready-ui/*", "!@engchina/production-ready-ui/styles.css", "!@engchina/production-ready-ui/tokens.css"],
-              message: "共有 UI パッケージはルート（@engchina/production-ready-ui）から import する。内部パスに依存しない。",
-            },
-          ],
-        },
-      ],
+      "no-restricted-syntax": adherenceRules["design-system/restricted-syntax"],
+      "no-restricted-imports": adherenceRules["no-restricted-imports"],
     },
   },
 );
