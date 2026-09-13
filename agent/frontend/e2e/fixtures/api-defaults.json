@@ -1641,7 +1641,7 @@
   },
   "uploadStorage": {
     "backend": "local",
-    "local_storage_dir": "/u01/production-ready-rag",
+    "local_storage_dir": "/u01/data/production-ready-agent",
     "object_storage_region": "",
     "object_storage_namespace": "",
     "object_storage_bucket": "",

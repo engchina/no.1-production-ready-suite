@@ -227,7 +227,7 @@ test.describe("Agent Runtime settings", () => {
     await expect(page.getByText("保存しました")).toBeVisible();
     expect(mockApi.lastRequest("PATCH", "/api/settings/upload-storage")?.body).toMatchObject({
       backend: "local",
-      local_storage_dir: "/u01/production-ready-rag",
+      local_storage_dir: "/u01/data/production-ready-agent",
     });
     await expectNoHorizontalOverflow(page);
 
