@@ -4807,7 +4807,9 @@ test("DeepSec は構造化データ権限をロール別に編集する", async 
     clearAllColumnsButton.press("Space")
   );
   await expect(firstRule.getByRole("checkbox", { name: /ORDER_ID/ })).not.toBeChecked();
-  await expect(objectPicker.locator("#deepsec-entitlement-resource-0 [aria-hidden='true']")).toHaveText("*");
+  // 対象 object は複合入力（group）なので、必須バッジは見出しの一部として読み上げる。
+  await expect(objectPicker.locator("#deepsec-entitlement-resource-0")).toHaveText("対象 table/view必須");
+  await expect(objectPicker.locator("#deepsec-entitlement-resource-0 [aria-hidden='true']")).toHaveCount(0);
   await expect(firstRule.getByTestId("security-deepsec-entitlement-editor-title-0")).toHaveText("SALES.ORDERS");
   await expect(firstRule.getByText("Data Grant 1", { exact: true })).toHaveCount(0);
   const scopeModeLabelText = entitlementForm.getByTestId("security-deepsec-scope-mode-label-text-0");
@@ -4815,8 +4817,10 @@ test("DeepSec は構造化データ権限をロール別に編集する", async 
     "label[for='deepsec-entitlement-scope-mode-0'] [aria-hidden='true']"
   );
   await expect(scopeModeLabelText).toHaveText("行 scope");
-  await expect(scopeModeRequired).toHaveText("*");
-  await expect(columnsFieldset.locator("legend [aria-hidden='true']")).toHaveText("*");
+  await expect(scopeModeRequired).toHaveText("必須");
+  // legend には aria-required が無いので、必須バッジは読み上げ対象のまま。
+  await expect(columnsFieldset.locator("legend")).toContainText("必須");
+  await expect(columnsFieldset.locator("legend [aria-hidden='true']")).toHaveCount(0);
   await expect
     .poll(async () => {
       const [

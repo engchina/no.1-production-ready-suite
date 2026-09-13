@@ -26,7 +26,6 @@ import {
 
 import { ErrorState } from "@/components/StateViews";
 import { TimedLoadingState } from "@/components/ProcessingState";
-import { RequiredFieldsNote } from "@/components/ui/required-field";
 import {
   ApiError,
   type UploadStorageBackend,
@@ -195,7 +194,6 @@ export function UploadStorageSettingsClient() {
             </div>
           </CardHeader>
           <CardContent className="space-y-5">
-            <RequiredFieldsNote />
             <fieldset className="space-y-3">
               <legend className="text-sm font-medium text-fg">
                 {t("settings.uploadStorage.field.backend")}

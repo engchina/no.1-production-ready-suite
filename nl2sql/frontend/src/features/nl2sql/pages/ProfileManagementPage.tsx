@@ -24,6 +24,7 @@ import {
   PageBody,
   useConfirm,
   SelectField,
+  TextField,
   type SelectFieldOption,
 } from "@engchina/production-ready-ui";
 import { ErrorState } from "@/components/StateViews";
@@ -555,106 +556,59 @@ function SelectAiConfigFields({
           className="min-w-0"
           buttonClassName="h-11"
         />
-        <div className="grid min-w-0 content-start gap-1">
-          <FieldLabel
-            htmlFor="profile-select-ai-model"
-            label={t("profiles.field.model")}
-            required
-          />
-          <input
-            id="profile-select-ai-model"
-            value={form.selectAiConfig.model}
-            required
-            aria-required="true"
-            aria-invalid={Boolean(requiredErrors.model)}
-            aria-describedby={requiredErrors.model ? "profile-select-ai-model-error" : undefined}
-            onChange={(event) => {
-              updateSelectAiConfig(setForm, { model: event.currentTarget.value });
-              if (requiredErrors.model) onRequiredErrorClear("model");
-            }}
-            className={`${inputClass} ${
-              requiredErrors.model ? "border-danger-fg focus:border-danger-fg focus:ring-danger-border" : ""
-            }`}
-          />
-          {requiredErrors.model && (
-            <RequiredFieldError id="profile-select-ai-model-error">
-              {t("profiles.error.modelRequired")}
-            </RequiredFieldError>
-          )}
-        </div>
-        <div className="grid min-w-0 content-start gap-1">
-          <FieldLabel
-            htmlFor="profile-select-ai-max-tokens"
-            label={t("profiles.field.maxTokens")}
-            required
-          />
-          <input
-            id="profile-select-ai-max-tokens"
-            type="number"
-            min={SELECT_AI_MAX_TOKENS_MIN}
-            max={SELECT_AI_MAX_TOKENS_MAX}
-            step={1}
-            value={form.selectAiConfig.max_tokens}
-            required
-            aria-required="true"
-            aria-invalid={Boolean(requiredErrors.maxTokens)}
-            aria-describedby={
-              requiredErrors.maxTokens ? "profile-select-ai-max-tokens-error" : undefined
-            }
-            onChange={(event) => {
-              updateSelectAiConfig(setForm, {
-                max_tokens: parseMaxTokensInput(event.currentTarget.value),
-              });
-              if (requiredErrors.maxTokens) onRequiredErrorClear("maxTokens");
-            }}
-            onBlur={(event) =>
-              updateSelectAiConfig(setForm, {
-                max_tokens: normalizeSelectAiMaxTokens(event.currentTarget.value),
-              })
-            }
-            className={`${inputClass} ${
-              requiredErrors.maxTokens
-                ? "border-danger-fg focus:border-danger-fg focus:ring-danger-border"
-                : ""
-            }`}
-          />
-          {requiredErrors.maxTokens && (
-            <RequiredFieldError id="profile-select-ai-max-tokens-error">
-              {t("profiles.error.maxTokensRequired")}
-            </RequiredFieldError>
-          )}
-        </div>
-        <div className="grid min-w-0 content-start gap-1">
-          <FieldLabel
-            htmlFor="profile-select-ai-embedding-model"
-            label={t("profiles.field.embeddingModel")}
-            required
-          />
-          <input
-            id="profile-select-ai-embedding-model"
-            value={form.selectAiConfig.embedding_model}
-            required
-            aria-required="true"
-            aria-invalid={Boolean(requiredErrors.embeddingModel)}
-            aria-describedby={
-              requiredErrors.embeddingModel ? "profile-select-ai-embedding-model-error" : undefined
-            }
-            onChange={(event) => {
-              updateSelectAiConfig(setForm, { embedding_model: event.currentTarget.value });
-              if (requiredErrors.embeddingModel) onRequiredErrorClear("embeddingModel");
-            }}
-            className={`${inputClass} ${
-              requiredErrors.embeddingModel
-                ? "border-danger-fg focus:border-danger-fg focus:ring-danger-border"
-                : ""
-            }`}
-          />
-          {requiredErrors.embeddingModel && (
-            <RequiredFieldError id="profile-select-ai-embedding-model-error">
-              {t("profiles.error.embeddingModelRequired")}
-            </RequiredFieldError>
-          )}
-        </div>
+        <TextField
+          id="profile-select-ai-model"
+          label={t("profiles.field.model")}
+          required
+          requiredLabel={t("common.required")}
+          value={form.selectAiConfig.model}
+          error={requiredErrors.model ? t("profiles.error.modelRequired") : undefined}
+          onValueChange={(value) => {
+            updateSelectAiConfig(setForm, { model: value });
+            if (requiredErrors.model) onRequiredErrorClear("model");
+          }}
+          className="min-w-0"
+          inputClassName="h-11"
+        />
+        <TextField
+          id="profile-select-ai-max-tokens"
+          label={t("profiles.field.maxTokens")}
+          required
+          requiredLabel={t("common.required")}
+          type="number"
+          min={SELECT_AI_MAX_TOKENS_MIN}
+          max={SELECT_AI_MAX_TOKENS_MAX}
+          step={1}
+          value={form.selectAiConfig.max_tokens}
+          error={requiredErrors.maxTokens ? t("profiles.error.maxTokensRequired") : undefined}
+          onValueChange={(value) => {
+            updateSelectAiConfig(setForm, { max_tokens: parseMaxTokensInput(value) });
+            if (requiredErrors.maxTokens) onRequiredErrorClear("maxTokens");
+          }}
+          onBlur={(event) =>
+            updateSelectAiConfig(setForm, {
+              max_tokens: normalizeSelectAiMaxTokens(event.currentTarget.value),
+            })
+          }
+          className="min-w-0"
+          inputClassName="h-11"
+        />
+        <TextField
+          id="profile-select-ai-embedding-model"
+          label={t("profiles.field.embeddingModel")}
+          required
+          requiredLabel={t("common.required")}
+          value={form.selectAiConfig.embedding_model}
+          error={
+            requiredErrors.embeddingModel ? t("profiles.error.embeddingModelRequired") : undefined
+          }
+          onValueChange={(value) => {
+            updateSelectAiConfig(setForm, { embedding_model: value });
+            if (requiredErrors.embeddingModel) onRequiredErrorClear("embeddingModel");
+          }}
+          className="min-w-0"
+          inputClassName="h-11"
+        />
       </div>
       <div className="grid gap-2 md:grid-cols-4">
         {([

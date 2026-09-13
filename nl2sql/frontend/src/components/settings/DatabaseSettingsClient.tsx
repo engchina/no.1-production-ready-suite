@@ -40,7 +40,7 @@ import {
 import { ErrorState } from "@/components/StateViews";
 import { TimedLoadingState } from "@/components/ProcessingState";
 import { FileDropzone } from "@/components/ui/file-dropzone";
-import { FieldLabel, RequiredFieldsNote } from "@/components/ui/required-field";
+import { FieldLabel } from "@/components/ui/required-field";
 import { SavedSecretBadge } from "@/components/settings/SavedSecretBadge";
 import {
   SettingsTestResultPanel,
@@ -396,7 +396,6 @@ export function DatabaseSettingsClient() {
             </CardHeader>
 
             <CardContent className="space-y-5 p-6">
-              <RequiredFieldsNote />
               <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
                 <TextField
                   id="oracle-user"

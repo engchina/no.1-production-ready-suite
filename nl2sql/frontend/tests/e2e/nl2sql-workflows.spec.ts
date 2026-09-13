@@ -292,7 +292,9 @@ async function expectRequiredTextarea(scope: Page | Locator, id: string, label: 
   const field = scope.locator(`#${id}`);
   const fieldLabel = scope.locator(`label[for="${id}"]`);
   await expect(fieldLabel).toContainText(label);
-  await expect(fieldLabel.locator('[aria-hidden="true"]')).toHaveText("*");
+  // 必須は共有 RequiredBadge（中立色の「必須」）。入力側の required / aria-required で伝えるのでバッジは読み上げない。
+  await expect(fieldLabel.locator('[aria-hidden="true"]')).toHaveText("必須");
+  await expect(field).toHaveAccessibleName(label);
   await expect(field).toHaveAttribute("required", "");
   await expect(field).toHaveAttribute("aria-required", "true");
 }
@@ -3274,7 +3276,7 @@ test("実行エンジンは選び方と各方式を説明し Select AI を既定
   await expect(question).toHaveValue("請求金額を一覧で見たい");
 });
 
-test("SQL 系の必須入力欄は既存の必須マークと required 属性で統一する", async ({ page }) => {
+test("SQL 系の必須入力欄は共有の必須バッジと required 属性で統一する", async ({ page }) => {
   await mockNl2SqlApi(page);
 
   await page.goto("/query");
@@ -3463,7 +3465,7 @@ test("クエリとスキーマ参照は desktop で左右並置、mobile で縦�
   const picker = page.getByTestId("nl2sql-schema-reference");
   await expect(question).toBeVisible();
   await expect(question).toHaveAttribute("placeholder", "確認したい内容を日本語で入力してください");
-  await expect(question).toHaveAccessibleName("クエリ 必須");
+  await expect(question).toHaveAccessibleName("クエリ");
   await expect(question).toHaveValue("");
   await expect(picker).toBeVisible();
 
@@ -13671,7 +13673,8 @@ test("table and view management pages run guarded DDL and AI workflows", async (
   await expect(page.getByTestId("table-management-grid")).toHaveCount(0);
   await expect(page.getByTestId("db-admin-detail-columns")).toHaveCount(0);
   await expect(importPanel).toBeVisible();
-  await expect(importPanel.getByText(/必須入力項目です。/)).toBeVisible();
+  // 必須はテキストのバッジで示すので、凡例文（「* は必須入力項目です。」）は出さない。
+  await expect(importPanel.getByText(/必須入力項目です。/)).toHaveCount(0);
   const importExecuteButton = importPanel.getByRole("button", { name: "取込を実行" });
   await expect(importPanel.getByText("入力条件: ADMIN_EXECUTE")).toBeVisible();
   const importConfirmationInput = importPanel.getByLabel("実行確認語");
@@ -13691,8 +13694,8 @@ test("table and view management pages run guarded DDL and AI workflows", async (
   await expect(importExecuteButton).toBeDisabled();
   await importPanel.getByLabel("Oracle 表名").fill("IMPORTED_ORDERS");
   await importPanel.getByLabel("Sheet 名").fill("Sheet1");
-  await expect(importPanel.locator('label[for="table-import-table-name"] span[aria-hidden="true"]')).toHaveText("*");
-  await expect(importPanel.locator('label[for="table-import-sheet-name"] span[aria-hidden="true"]')).toHaveText("*");
+  await expect(importPanel.locator('label[for="table-import-table-name"] span[aria-hidden="true"]')).toHaveText("必須");
+  await expect(importPanel.locator('label[for="table-import-sheet-name"] span[aria-hidden="true"]')).toHaveText("必須");
   const importFileClearButton = importPanel.getByRole("button", { name: "取込ファイル選択を解除" });
   const importFileInput = importPanel.getByTestId("table-import-file-field-input");
   await expect(importFileClearButton).toBeDisabled();

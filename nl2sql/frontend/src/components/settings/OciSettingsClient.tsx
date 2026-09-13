@@ -33,7 +33,6 @@ import { TimedLoadingState } from "@/components/ProcessingState";
 import { useSettingsDraftGuard } from "@/lib/useSettingsDraftGuard";
 import { FileDropzone } from "@/components/ui/file-dropzone";
 import { InputActionField } from "@/components/ui/input-action-field";
-import { RequiredFieldsNote } from "@/components/ui/required-field";
 import {
   ApiError,
   api,
@@ -378,7 +377,6 @@ export function OciSettingsClient() {
             </div>
           </CardHeader>
           <CardContent className="space-y-5 p-6">
-            <RequiredFieldsNote />
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
               <ConfigFileField
                 id="oci-config-file"

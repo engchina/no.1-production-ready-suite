@@ -39,7 +39,7 @@ import { MasterDetailDataTable } from "@/components/MasterDetailDataTable";
 import { ObjectActionBar, type EntityAction } from "@/components/ObjectActions";
 import { ProcessingIndicator } from "@/components/ProcessingState";
 import { ErrorState } from "@/components/StateViews";
-import { FieldLabel, FieldLegend, RequiredFieldsNote } from "@/components/ui/required-field";
+import { FieldLabel, FieldLegend } from "@/components/ui/required-field";
 import { ApiError, isAbortError } from "@/lib/api";
 import {
   mapApiFieldErrors,
@@ -861,7 +861,6 @@ export function SecurityUsersPage() {
                 onSubmit={handleSubmit}
                 aria-labelledby="security-users-form-heading"
               >
-                    <RequiredFieldsNote />
                     <div className="grid gap-4 lg:grid-cols-2">
                   <div className="grid gap-1.5 text-sm font-medium">
                     <FieldLabel htmlFor="security-user-login-user-id" label={t("security.users.loginUserId")} required />

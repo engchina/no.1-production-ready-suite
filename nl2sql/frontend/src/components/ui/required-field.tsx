@@ -1,31 +1,22 @@
+import { RequiredBadge } from "@engchina/production-ready-ui";
 import { type ReactNode } from "react";
 
 import { t } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
-export function RequiredIndicator({
-  label = t("common.required"),
-  className,
-}: {
-  label?: string;
-  className?: string;
-}) {
-  return (
-    <>
-      <span aria-hidden="true" className={cn("ml-0.5 text-danger-fg", className)}>
-        *
-      </span>
-      <span className="sr-only">{label}</span>
-    </>
-  );
-}
+// 必須表示は共有の RequiredBadge（中立色の「必須」テキストタグ）に統一する（#543 / platform #49）。
+// TextField / SelectField で表せない入力（textarea・ファイル選択・複合入力・legend）のラベルだけをここで組む。
 
+/**
+ * 入力のラベル。必須のときは RequiredBadge を添える。
+ * 入力側に required / aria-required を付けて必須を伝えるので、バッジは aria-hidden にして二重読み上げを避ける。
+ */
 export function FieldLabel({
   id,
   htmlFor,
   label,
   required = false,
-  requiredLabel,
+  requiredLabel = t("common.required"),
   className,
   children,
 }: {
@@ -40,17 +31,18 @@ export function FieldLabel({
   return (
     <label id={id} htmlFor={htmlFor} className={cn("text-sm font-medium text-fg", className)}>
       {label}
-      {required ? <RequiredIndicator label={requiredLabel} /> : null}
+      {required ? <RequiredBadge label={requiredLabel} aria-hidden className="ml-2 align-middle" /> : null}
       {children}
     </label>
   );
 }
 
+/** fieldset の見出し。legend には aria-required が無いので、バッジは読み上げ対象のままにする。 */
 export function FieldLegend({
   id,
   children,
   required = false,
-  requiredLabel,
+  requiredLabel = t("common.required"),
   className,
 }: {
   id?: string;
@@ -62,22 +54,7 @@ export function FieldLegend({
   return (
     <legend id={id} className={cn("text-sm font-semibold text-fg", className)}>
       {children}
-      {required ? <RequiredIndicator label={requiredLabel} /> : null}
+      {required ? <RequiredBadge label={requiredLabel} className="ml-2 align-middle" /> : null}
     </legend>
-  );
-}
-
-export function RequiredFieldsNote({
-  className,
-  label = t("common.required"),
-}: {
-  className?: string;
-  label?: string;
-}) {
-  return (
-    <p className={cn("text-xs leading-5 text-fg-muted", className)}>
-      <RequiredIndicator label={label} />
-      <span className="ml-1">{t("common.requiredFieldsNote")}</span>
-    </p>
   );
 }

@@ -14,6 +14,7 @@ import {
   StatusBadge,
   PageHeader,
   PageBody,
+  RequiredBadge,
   useConfirm,
 } from "@engchina/production-ready-ui";
 import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
@@ -40,7 +41,7 @@ import { DbObjectSearchOwnerFields } from "@/components/DbObjectFilterFields";
 import { ProcessingIndicator } from "@/components/ProcessingState";
 import { ErrorState } from "@/components/StateViews";
 import { PageNotice } from "@/components/page-notice";
-import { FieldLabel, FieldLegend, RequiredIndicator } from "@/components/ui/required-field";
+import { FieldLabel, FieldLegend } from "@/components/ui/required-field";
 import {
   ExecutionConfirmationField,
   ManagementPanelHeader,
@@ -483,7 +484,7 @@ function DeepSecTargetObjectPicker({
     <div className="grid gap-1 text-xs font-medium" data-testid={`security-deepsec-object-picker-${index}`}>
       <span id={titleId}>
         {t("security.deepsec.entitlements.resource")}
-        <RequiredIndicator />
+        <RequiredBadge label={t("common.required")} className="ml-2 align-middle" />
       </span>
       <div
         className="grid gap-2 rounded-md border border-border bg-surface-sunken p-2"
@@ -2401,6 +2402,7 @@ export function SecurityDeepSecPage() {
                                       <select
                                         id={`deepsec-entitlement-scope-mode-${index}`}
                                         className={cn(INPUT_CLASS, "mt-1 block")}
+                                        aria-required="true"
                                         disabled={entitlementReadOnly}
                                         value={entitlement.scope_mode === "EXPRESSION" ? "FILTERS" : entitlement.scope_mode ?? "ALL"}
                                         onChange={(event) => {

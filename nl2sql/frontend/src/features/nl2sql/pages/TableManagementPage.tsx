@@ -15,7 +15,7 @@ import { ProcessingIndicator } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";
 import { ClearActionButton } from "@/components/ui/clear-action-button";
 import { FileDropzone } from "@/components/ui/file-dropzone";
-import { FieldLabel, RequiredFieldsNote } from "@/components/ui/required-field";
+import { FieldLabel } from "@/components/ui/required-field";
 import { apiFetch, apiGet, apiPost, isTimeoutError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
@@ -181,8 +181,6 @@ function ImportWizard({
         ariaLabel={t("tableMgmt.importWizard.steps")}
         dataTestId="table-import-steps"
       />
-
-      <RequiredFieldsNote />
 
       <div className="grid gap-3 lg:grid-cols-2">
         <div className={importFieldClass}>
