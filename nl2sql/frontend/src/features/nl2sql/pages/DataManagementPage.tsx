@@ -8,6 +8,7 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Banner, EmptyState, toast } from "@engchina/production-ready-ui";
 
 import { SyntheticRunPanel, useSyntheticRuns, runFinished, historyExpired, type SyntheticRun } from "../syntheticRuns";
+import { SyntheticReview } from "../SyntheticReview";
 
 import { StatusBadge } from "@/components/ui/status-badge";
 
@@ -173,6 +174,7 @@ export function DataManagementPage() {
   const resultSelectionEdited = useRef(false);
   const [syntheticData, setSyntheticData] = useState<SyntheticDataOperationData | null>(null);
   const [syntheticDataResults, setSyntheticDataResults] = useState<SyntheticDataResultsData | null>(null);
+  const [viewedPreviews, setViewedPreviews] = useState<Record<string, string>>({});
   const [syntheticProfileName, setSyntheticProfileName] = useState("");
   const [syntheticAvailableTables, setSyntheticAvailableTables] = useState<string[]>([]);
   const [syntheticSelectedTables, setSyntheticSelectedTables] = useState<string[]>([]);
@@ -376,6 +378,7 @@ export function DataManagementPage() {
   const syntheticResultError = syntheticErrorOperation === "results" ? syntheticError : "";
   const syntheticWorkspaceError = syntheticErrorOperation === "results" ? "" : syntheticError;
   const canLoadSyntheticDataResults = Boolean(
+    (!selectedRun?.preview || ["ready", "applied"].includes(selectedRun.review_status ?? "")) &&
     (selectedRun ? selectedRun.targets.some((target) => target.table_name === syntheticResultTable) : syntheticAvailableTables.includes(syntheticResultTable)) && syntheticResultLimit !== null && !syntheticLoading
   );
   const canClearSyntheticDataResults = Boolean(
@@ -880,9 +883,13 @@ export function DataManagementPage() {
       if (requestVersion !== resultRequest.current) return;
       setResultGeneratedRows(generatedRows);
       setSyntheticDataResults(result);
+      if (result.preview_digest && result.run_id === selectedRun?.run_id) {
+        const checksum = result.preview_digest;
+        setViewedPreviews(current => ({ ...current, [tableName]: checksum }));
+      }
       setSyntheticQueryTime(new Date().toISOString());
       setExecutedSyntheticResultLimit(rowLimit);
-      toast.success(t("dataTools.syntheticData.toast.resultsLoaded", { name: result.table_name }));
+      if (!result.preview_digest) toast.success(t("dataTools.syntheticData.toast.resultsLoaded", { name: result.table_name }));
     } catch (err) {
       if (requestVersion !== resultRequest.current) return;
       setSyntheticError(apiErrorMessage(err, "dataTools.error.syntheticResults"));
@@ -897,6 +904,10 @@ export function DataManagementPage() {
     setSyntheticDataResults(null);
     setSyntheticLoading((value) => value === "results" ? "" : value);
   }, [selectedRun?.run_id]);
+
+  useEffect(() => {
+    setViewedPreviews({});
+  }, [selectedRun?.run_id, workspaceActive]);
 
   useEffect(() => {
     if (!selectedRun) return;
@@ -1301,10 +1312,16 @@ export function DataManagementPage() {
             />
             )}
             {syntheticDataResults && <Banner severity={syntheticDataResults.results.rows.length === 0 ? "warning" : "info"}>
-              <p>{t("syntheticRun.currentData")}</p>
+              <p>{t(selectedRun?.preview ? "syntheticPreview.resultHint" : "syntheticRun.currentData")}</p>
               <p>{t("syntheticRun.queryTime", { time: formatDateTime(syntheticQueryTime) })}</p>
               {syntheticDataResults.results.rows.length === 0 && <p>{t(resultGeneratedRows === null ? "syntheticRun.unverifiedResult" : resultGeneratedRows > 0 ? "syntheticRun.mismatch" : "syntheticRun.zero")}</p>}
             </Banner>}
+            {selectedRun?.preview && <SyntheticReview key={selectedRun.run_id} run={selectedRun} previews={viewedPreviews}
+              stale={Boolean(syntheticRuns.error || historicalRun.error)}
+              onUpdated={(updated) => {
+                queryClient.setQueryData<SyntheticRun[]>(syntheticRuns.key, (old = []) => [updated, ...old.filter(item => item.run_id !== updated.run_id)]);
+                if (updated.review_status === "discarded") clearSyntheticResultState();
+              }} />}
           </DbObjectManagementPanelShell>
         )}
       </main>

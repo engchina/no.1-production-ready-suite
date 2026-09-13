@@ -23,6 +23,7 @@ def api(monkeypatch: pytest.MonkeyPatch) -> tuple[FastAPI, MagicMock, MagicMock]
     )
     monkeypatch.setattr(router, "nl2sql_service", service)
     synthetic = MagicMock()
+    synthetic.get.return_value.preview = False
     synthetic.get.return_value.targets = [MagicMock(table_name="APP.T")]
     synthetic.get.return_value.request = {"_object_ids": {"APP.T": 7}}
     synthetic.adapter._db_admin_identity.return_value = MagicMock(owner="APP", object_name="T")

@@ -5,7 +5,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from pr_backend_core import ApiResponse
 
-from .synthetic_models import SyntheticRunRequest
+from .synthetic_models import SyntheticApplyRequest, SyntheticRunRequest
 from .synthetic_service import get_synthetic_service
 
 router = APIRouter(prefix="/synthetic-data", tags=["synthetic-data"])
@@ -32,6 +32,27 @@ def get_run(run_id: str, request: Request) -> ApiResponse[dict[str, Any]]:
     return ApiResponse(data=run.public())
 
 
+@router.post("/runs/{run_id}/apply", response_model=ApiResponse[dict[str, Any]])
+def apply_run(
+    run_id: str, req: SyntheticApplyRequest, request: Request
+) -> ApiResponse[dict[str, Any]]:
+    run = get_synthetic_service().review(
+        run_id,
+        getattr(request.state, "principal", None),
+        confirmation=req.confirmation,
+        previews=req.previews,
+    )
+    return ApiResponse(data=run.public())
+
+
+@router.post("/runs/{run_id}/discard", response_model=ApiResponse[dict[str, Any]])
+def discard_run(run_id: str, request: Request) -> ApiResponse[dict[str, Any]]:
+    run = get_synthetic_service().review(
+        run_id, getattr(request.state, "principal", None), discard=True
+    )
+    return ApiResponse(data=run.public())
+
+
 @router.get("/runs/{run_id}/results", response_model=ApiResponse[dict[str, Any]])
 def get_results(
     run_id: str, request: Request, table_name: str, limit: int = Query(default=100, ge=1, le=100000)
@@ -41,6 +62,13 @@ def get_results(
     target = next((t for t in run.targets if t.table_name == table_name), None)
     if target is None:
         raise HTTPException(400, "今回の生成対象に含まれないテーブルです。")
+    if run.preview:
+        principal = getattr(request.state, "principal", None)
+        if run.request.get("profile_id") and (
+            not principal or not principal.can_use_profile(run.request["profile_id"])
+        ):
+            raise HTTPException(403, "Profile の利用権限が変更されています。")
+        return ApiResponse(data=service.preview.results(run, table_name, limit))
     identity = service.adapter._db_admin_identity(table_name)
     with service.adapter.connection() as conn, conn.cursor() as cur:
         cur.execute(

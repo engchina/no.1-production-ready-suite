@@ -183,6 +183,15 @@ def service(monkeypatch: pytest.MonkeyPatch) -> SyntheticService:
     monkeypatch.setattr(module, "get_settings", lambda: settings)
     monkeypatch.setattr(svc, "preflight", Mock(return_value={"APP.T": 1}))
     monkeypatch.setattr(svc.adapter, "generate_synthetic_data", Mock())
+    monkeypatch.setattr(
+        svc.preview,
+        "plan",
+        lambda run: {
+            t.table_name: {"name": f"APP.NL2SQL_SP_{run.run_id.replace('-', '').upper()}_{i}"}
+            for i, t in enumerate(run.targets)
+        },
+    )
+    monkeypatch.setattr(svc.preview, "prepare", Mock())
     return svc
 
 

@@ -13,6 +13,9 @@ import { INFORMATION_LIST_SCROLL_CLASS, INFORMATION_TABLE_FOCUS_CLASS } from "@/
 import { useAuth } from "@/features/security/AuthProvider";
 
 export interface SyntheticRun {
+  preview?: boolean;
+  review_status?: "pending" | "ready" | "applied" | "discarded";
+  applied_at?: string | null;
   run_id: string;
   status: "pending" | "running" | "verifying" | "completed" | "partial" | "failed" | "no_data" | "unknown";
   targets: { table_name: string; requested_rows: number; loaded_rows: number | null; status: string; error: string }[];
@@ -26,7 +29,8 @@ export interface SyntheticRun {
 }
 export const runFinished = (run: SyntheticRun) => ["completed", "partial", "failed", "no_data"].includes(run.status);
 export const historyExpired = (run: SyntheticRun) => runFinished(run) && Date.parse(run.finished_at ?? run.created_at) < Date.now() - 24 * 60 * 60_000;
-export const runLabel = (run: SyntheticRun) => t(`syntheticRun.status.${run.status}`);
+export const runLabel = (run: SyntheticRun) => run.preview && run.status === "completed" && run.review_status !== "applied"
+  ? t(run.review_status === "discarded" ? "syntheticPreview.discarded" : "syntheticPreview.ready") : t(`syntheticRun.status.${run.status}`);
 
 export function useSyntheticRuns() {
   const { user, hasPermission } = useAuth();
@@ -141,7 +145,7 @@ export function SyntheticRunPanel({ run, runs, onSelect, error, onRefresh, submi
         <ul className="grid min-w-0 content-start gap-2">
           {run.targets.map((target) => <li key={target.table_name} className="grid min-w-0 gap-1 rounded border border-border bg-card p-3 text-sm [overflow-wrap:anywhere]">
             <strong className="break-all">{target.table_name}</strong>
-            <span>{t("syntheticRun.count", { requested: target.requested_rows, loaded: target.loaded_rows ?? t("syntheticRun.unverified") })}</span>
+            <span>{t(run.preview ? "syntheticPreview.count" : "syntheticRun.count", { requested: target.requested_rows, loaded: target.loaded_rows ?? t("syntheticRun.unverified") })}</span>
             <span>{t("syntheticRun.targetStatus", { status: targetStatusLabel(run.status === "unknown" && target.status === "pending" ? "unknown" : target.status) })}</span>
             {target.error && <p className="text-danger">{target.error}</p>}
           </li>)}
@@ -158,7 +162,7 @@ export function SyntheticRunPanel({ run, runs, onSelect, error, onRefresh, submi
         {history.map((r) => <option key={r.run_id} value={r.run_id}>{formatDateTime(r.created_at)} · {runLabel(r)} · {r.targets.map((target) => target.table_name).join(", ")} · {r.run_id.slice(0, 8)}</option>)}
       </select>
     </label>}
-    <p className="text-xs text-muted-foreground">{t("syntheticRun.retention")}</p>
+    <p className="text-xs text-muted-foreground">{t(run?.preview ? "syntheticPreview.retention" : "syntheticRun.retention")}</p>
     <div className="flex flex-wrap gap-2">
       <Button variant="secondary" size="sm" loading={feedback?.pending} aria-busy={feedback?.pending || undefined} onClick={() => void refreshStatus()}>{t(feedback?.pending ? "syntheticRun.refreshing" : "syntheticRun.refresh")}</Button>
     </div>

@@ -28,7 +28,12 @@ class SyntheticStore:
         return SyntheticRun.model_validate_json(value.read() if hasattr(value, "read") else value)
 
     def list(
-        self, context: str, actor: str | None = None, *, active: bool = False
+        self,
+        context: str,
+        actor: str | None = None,
+        *,
+        active: bool = False,
+        all_records: bool = False,
     ) -> list[SyntheticRun]:
         if self.connection:
             with self.connection() as conn, conn.cursor() as cur:
@@ -36,7 +41,8 @@ class SyntheticStore:
                     "SELECT PAYLOAD FROM NL2SQL_SYNTHETIC_RUNS WHERE CONTEXT_ID=:ctx "  # nosec B608
                     "AND (:actor IS NULL OR ACTOR_ID=:actor) "
                     "AND (:active=0 OR STATUS IN ('pending','running','verifying','unknown')) "
-                    "ORDER BY CREATED_AT DESC" + ("" if active else " FETCH FIRST 100 ROWS ONLY"),
+                    "ORDER BY CREATED_AT DESC"
+                    + ("" if active or all_records else " FETCH FIRST 100 ROWS ONLY"),
                     {"ctx": context, "actor": actor, "active": int(active)},
                 )
                 return [self.decode(row[0]) for row in cur.fetchall()]
@@ -51,7 +57,7 @@ class SyntheticStore:
                 ],
                 key=lambda r: r.created_at,
                 reverse=True,
-            )[: None if active else 100]
+            )[: None if active or all_records else 100]
 
     def get(self, run_id: str) -> SyntheticRun | None:
         if self.connection:
@@ -85,7 +91,7 @@ class SyntheticStore:
                 expired = [self.decode(row[0]) for row in cur.fetchall()]
                 deleted = 0
                 for run in expired:
-                    if not run.history_expired(at):
+                    if not run.history_expired(at) or run.staging:
                         continue
                     cur.execute(
                         "DELETE FROM NL2SQL_SYNTHETIC_LOCKS WHERE RUN_ID=:id",
@@ -107,6 +113,7 @@ class SyntheticStore:
                 if run.context_id == context
                 and (actor is None or run.actor_id == actor)
                 and run.history_expired(at)
+                and not run.staging
             ]
             for run_id in expired_ids:
                 del self._runs[run_id]
@@ -200,3 +207,39 @@ class SyntheticStore:
                 return False
             self._runs[run.run_id] = updated
             return True
+
+    def transact(self, run_id: str, action: Callable[[Any, SyntheticRun], None]) -> SyntheticRun:
+        """Serialize review mutations; target INSERTs and applied receipt commit atomically."""
+        if self.connection:
+            with self.connection() as conn, conn.cursor() as cur:
+                try:
+                    cur.execute(
+                        "SELECT PAYLOAD FROM NL2SQL_SYNTHETIC_RUNS "
+                        "WHERE RUN_ID=:id FOR UPDATE WAIT 5",
+                        {"id": run_id},
+                    )
+                    row = cur.fetchone()
+                    if not row:
+                        raise SyntheticConflict("生成記録が見つかりません。")
+                    run = self.decode(row[0])
+                    action(conn, run)
+                    run.version += 1
+                    cur.execute(
+                        "UPDATE NL2SQL_SYNTHETIC_RUNS SET PAYLOAD=:payload, VERSION_NO=:version "
+                        "WHERE RUN_ID=:id",
+                        {"payload": run.model_dump_json(), "version": run.version, "id": run_id},
+                    )
+                    conn.commit()
+                    return run
+                except Exception:
+                    conn.rollback()
+                    raise
+        with self._lock:
+            found = self.get(run_id)
+            if found is None:
+                raise SyntheticConflict("生成記録が見つかりません。")
+            run = found
+            action(None, run)
+            run.version += 1
+            self._runs[run_id] = run.model_copy(deep=True)
+            return run

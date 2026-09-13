@@ -23,6 +23,7 @@ from .models import SyntheticDataGenerateRequest
 from .oracle_adapter import OracleNl2SqlAdapter
 from .synthetic_models import TERMINAL, SyntheticRun, SyntheticRunRequest, SyntheticTarget, now
 from .synthetic_oracle import capture_session, inspect_operation
+from .synthetic_preview import SyntheticPreview
 from .synthetic_store import SyntheticConflict, SyntheticStore
 
 logger = logging.getLogger(__name__)
@@ -71,6 +72,7 @@ class SyntheticService:
         self.resolve_actor = resolve_actor or (
             lambda actor: get_security_service().principal_for_worker(actor)
         )
+        self.preview = SyntheticPreview(self.adapter)
         self._threads: dict[str, threading.Thread] = {}
         self._thread_lock = threading.Lock()
         self._last_history_cleanup = float("-inf")
@@ -171,6 +173,7 @@ class SyntheticService:
             return old
         payload["_object_ids"] = self.preflight(names, request.profile_name.strip())
         run = SyntheticRun(
+            preview=True,
             run_id=str(uuid4()),
             actor_id=actor.user_uuid,
             context_id=self.context,
@@ -204,6 +207,75 @@ class SyntheticService:
         actor = authorize(principal)
         self.store.purge_expired(self.context, actor.user_uuid)
         return self.store.list(self.context, actor.user_uuid)
+
+    def review(
+        self,
+        run_id: str,
+        principal: Principal | None,
+        *,
+        discard: bool = False,
+        confirmation: str = "",
+        previews: dict[str, str] | None = None,
+    ) -> SyntheticRun:
+        # Check ownership before locking; recheck all authorization and state under the lock.
+        self.get(run_id, principal)
+
+        def change(conn: Any, run: SyntheticRun) -> None:
+            actor = authorize(principal)
+            if run.actor_id != actor.user_uuid or run.context_id != self.context:
+                raise HTTPException(404, "生成記録が見つかりません。")
+            if self.context != context_id(get_settings()):
+                raise HTTPException(409, "DB 接続先が変更されています。")
+            if run.request.get("profile_id") and not actor.can_use_profile(
+                run.request["profile_id"]
+            ):
+                raise HTTPException(403, "Profile の利用権限が変更されています。")
+            if not run.preview or run.status not in TERMINAL or run.history_expired():
+                raise HTTPException(409, "この生成記録は適用・破棄できません。")
+            if discard:
+                if run.review_status == "applied":
+                    raise HTTPException(409, "適用済みデータは破棄できません。")
+                run.review_status = "discarded"
+                return
+            expected = run.targets[0].table_name if len(run.targets) == 1 else "ADMIN_EXECUTE"
+            if confirmation.strip() != expected:
+                raise HTTPException(400, "適用確認語が対象と一致しません。")
+            if run.review_status == "applied":
+                return  # Response loss/retry never replays INSERT.
+            if run.review_status != "ready" or run.status != "completed":
+                raise HTTPException(409, "全対象の生成が完了したデータだけを適用できます。")
+            if previews != {name: stage["checksum"] for name, stage in run.staging.items()}:
+                raise HTTPException(
+                    409, "すべての対象表の確認用データを表示してから適用してください。"
+                )
+            with actor_scope(actor.user_uuid, is_system_admin=actor.is_system_admin):
+                self.preview.apply(conn, run)
+            run.review_status, run.applied_at = "applied", now()
+
+        try:
+            run = self.store.transact(run_id, change)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.warning("synthetic_preview_apply_failed", extra={"run_id": run_id})
+            raise HTTPException(
+                409,
+                "適用結果を確認できません。状況を再確認してください。制約違反・他の処理によるロックがある場合は解消後に再試行してください。",
+            ) from exc
+        if discard:
+            self.cleanup(run)
+        return run
+
+    def cleanup(self, run: SyntheticRun) -> None:
+        if not run.staging:
+            return
+        try:
+            self.preview.cleanup(run)
+            run.staging = {}
+            self.store.save(run)
+        except Exception:
+            # Never purge the receipt while cleanup failed; the worker retries without the browser.
+            logger.warning("synthetic_preview_cleanup_failed", extra={"run_id": run.run_id})
 
     @staticmethod
     def log_state(run: SyntheticRun) -> None:
@@ -256,15 +328,28 @@ class SyntheticService:
                     raise RuntimeError("実行セッションの保存を確認できません。")
 
             with actor_scope(actor.user_uuid, is_system_admin=actor.is_system_admin):
+                if run.preview:
+                    run.staging = self.preview.plan(run)
+
+                    def persist(staging: dict[str, Any]) -> None:
+                        self.update(run_id, lambda r: setattr(r, "staging", staging))
+
+                    persist(run.staging)
+                    self.preview.prepare(run, persist)
+                names = [
+                    run.staging[t.table_name]["name"] if run.preview else t.table_name
+                    for t in run.targets
+                ]
                 self.adapter.generate_synthetic_data(
-                    table_name=run.targets[0].table_name if len(run.targets) == 1 else "",
-                    object_list=[t.table_name for t in run.targets] if len(run.targets) > 1 else [],
+                    table_name=names[0] if len(names) == 1 else "",
+                    object_list=names if len(names) > 1 else [],
                     row_count=req.rows_per_table or req.row_count,
                     profile_name=req.profile_name,
                     user_prompt="\n".join(p for p in [req.user_prompt, req.extra_prompt] if p),
                     sample_rows=req.sample_rows,
                     use_comments=req.use_comments,
                     on_connection=record_session,
+                    staging=run.preview,
                 )
 
             def returned(r: SyntheticRun) -> None:
@@ -292,6 +377,14 @@ class SyntheticService:
         previous_state = (run.status, tuple(run.operation_ids))
         try:
             latest = inspect_operation(self.adapter, run)
+            if latest.preview and latest.status in TERMINAL:
+                if not latest.execution_returned and self.preview.execution_stopped(latest):
+                    latest.execution_returned = True
+                if not latest.execution_returned:
+                    # The Oracle call must have returned before sealing or cleaning its tables.
+                    latest.status = "verifying"
+                elif latest.status in {"completed", "partial"}:
+                    self.preview.seal(latest)
             latest.checked_at = now()
             if latest.status in TERMINAL:
                 latest.finished_at = now()
@@ -326,6 +419,13 @@ class SyntheticService:
         # CAS で pending→running を一度だけ claim。期限切れでも生成を再実行しない。
         with self._thread_lock:
             if time.monotonic() - self._last_history_cleanup >= 60:
+                for run in self.store.list(self.context, all_records=True):
+                    if run.status in TERMINAL and (
+                        run.history_expired()
+                        or run.review_status == "discarded"
+                        or run.status in {"failed", "no_data"}
+                    ):
+                        self.cleanup(run)
                 self.store.purge_expired(self.context)
                 self._last_history_cleanup = time.monotonic()
             self._threads = {k: t for k, t in self._threads.items() if t.is_alive()}

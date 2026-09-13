@@ -16480,3 +16480,103 @@ test("SELECT SQL の重名列は別々の値を表示し予約済み列名を保
   await expectNoHorizontalScroll(page);
   await page.screenshot({ path: testInfo.outputPath("direct-sql-duplicate-columns.png") });
 });
+
+test("synthetic preview requires all tables and fresh consent before applying the same batch", async ({ page }, testInfo) => {
+  await mockNl2SqlApi(page);
+  let run = { ...syntheticRunFixture("completed"), preview: true, review_status: "ready", applied_at: null as string | null,
+    targets: [syntheticRunFixture("completed").targets[0], { ...syntheticRunFixture("completed").targets[0], table_name: "APP.CUSTOMERS" }] };
+  const applied: Record<string, unknown>[] = [];
+  let generated = 0;
+  await page.route("**/api/nl2sql/synthetic-data/runs", route => {
+    if (route.request().method() !== "GET") generated++;
+    return fulfillJson(route, [run]);
+  });
+  await page.route("**/api/nl2sql/synthetic-data/runs/*/results**", route => {
+    const table = new URL(route.request().url()).searchParams.get("table_name")!;
+    return fulfillJson(route, { table_name: table, run_id: run.run_id, preview_digest: `digest-${table}`, runtime: "oracle",
+      results: { columns: ["ID", "NAME"], rows: [{ ID: 2, NAME: "適用前の確認データ" }], total: 1 }, warnings: [] });
+  });
+  await page.route("**/api/nl2sql/synthetic-data/runs/*/apply", route => {
+    applied.push(route.request().postDataJSON());
+    run = { ...run, review_status: "applied", applied_at: new Date().toISOString() };
+    return fulfillJson(route, run);
+  });
+  await page.goto("/data-management?synthetic_run=run-001");
+  const review = page.getByTestId("synthetic-review");
+  await expect(review).toContainText("対象テーブルにはまだ追加されていません");
+  await expect(review).toContainText("内容を表示した対象表: 1 / 2");
+  await expect(review.getByRole("button", { name: "確認したデータを適用", exact: true })).toBeDisabled();
+  const panel = page.locator("#data-management-panel-synthetic");
+  await page.getByRole("combobox", { name: "結果テーブル", exact: true }).selectOption("APP.CUSTOMERS");
+  await panel.getByRole("button", { name: "データを表示", exact: true }).click();
+  await expect(review).toContainText("内容を表示した対象表: 2 / 2");
+  await review.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
+  await review.getByRole("button", { name: "確認したデータを適用", exact: true }).click();
+  const dialog = page.getByRole("alertdialog");
+  await expect(dialog).toContainText("表示したデータと同じ生成データを追加");
+  await page.keyboard.press("Escape");
+  expect(applied).toHaveLength(0);
+  await page.reload();
+  await expect(review.getByLabel("実行確認語")).toHaveValue("");
+  expect(applied).toHaveLength(0);
+  await page.getByRole("combobox", { name: "結果テーブル", exact: true }).selectOption("APP.INVOICES");
+  await panel.getByRole("button", { name: "データを表示", exact: true }).click();
+  await page.getByRole("combobox", { name: "結果テーブル", exact: true }).selectOption("APP.CUSTOMERS");
+  await panel.getByRole("button", { name: "データを表示", exact: true }).click();
+  await expect(review).toContainText("内容を表示した対象表: 2 / 2");
+  await review.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
+  await review.scrollIntoViewIfNeeded();
+  await expectNoHorizontalScroll(page);
+  await page.screenshot({ path: testInfo.outputPath("synthetic-preview-ready.png") });
+  await review.getByRole("button", { name: "確認したデータを適用", exact: true }).click();
+  await dialog.getByRole("button", { name: "確認したデータを適用", exact: true }).focus();
+  await page.keyboard.press("Enter");
+  await expect(review).toContainText("確認したデータを対象テーブルに適用しました");
+  expect(applied).toEqual([{ confirmation: "ADMIN_EXECUTE", previews: { "APP.INVOICES": "digest-APP.INVOICES", "APP.CUSTOMERS": "digest-APP.CUSTOMERS" } }]);
+  await expect(review.getByRole("button", { name: "確認したデータを適用", exact: true })).toHaveCount(0);
+  expect(generated).toBe(0);
+});
+
+for (const outcome of ["discard", "apply-error", "partial"] as const) {
+  test(`synthetic preview ${outcome} keeps target writes gated`, async ({ page }) => {
+    await mockNl2SqlApi(page);
+    let run = { ...syntheticRunFixture(outcome === "partial" ? "partial" : "completed"), preview: true, review_status: "ready" };
+    let applied = 0;
+    let discarded = 0;
+    await page.route("**/api/nl2sql/synthetic-data/runs", route => fulfillJson(route, [run]));
+    await page.route("**/api/nl2sql/synthetic-data/runs/*/results**", route => fulfillJson(route, {
+      table_name: "APP.INVOICES", run_id: run.run_id, preview_digest: "digest", runtime: "oracle",
+      results: { columns: ["ID"], rows: [{ ID: 1 }], total: 1 }, warnings: [],
+    }));
+    await page.route("**/api/nl2sql/synthetic-data/runs/*/apply", route => {
+      applied++;
+      return route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ detail: "主キーが競合しています。状況を再確認してください。" }) });
+    });
+    await page.route("**/api/nl2sql/synthetic-data/runs/*/discard", route => {
+      discarded++; run = { ...run, review_status: "discarded" }; return fulfillJson(route, run);
+    });
+    await page.goto("/data-management?synthetic_run=run-001");
+    const review = page.getByTestId("synthetic-review");
+    if (outcome === "apply-error") {
+      await expect(review).toContainText("内容を表示した対象表: 1 / 1");
+      await review.getByLabel("実行確認語").fill("APP.INVOICES");
+      await review.getByRole("button", { name: "確認したデータを適用", exact: true }).click();
+      await page.getByRole("alertdialog").getByRole("button", { name: "確認したデータを適用", exact: true }).click();
+      await expect(review.getByRole("alert")).toContainText("主キーが競合");
+      await expect(review.getByLabel("実行確認語")).toHaveValue("");
+      await expect(review).toContainText("対象テーブルにはまだ追加されていません");
+      expect(applied).toBe(1);
+    } else {
+      if (outcome === "partial") {
+        await expect(review).toContainText("一部の生成に失敗したため適用できません");
+        await expect(review.getByRole("button", { name: "確認したデータを適用", exact: true })).toHaveCount(0);
+      }
+      await review.getByRole("button", { name: "確認用データを破棄", exact: true }).click();
+      await page.getByRole("alertdialog").getByRole("button", { name: "確認用データを破棄", exact: true }).click();
+      await expect(review).toContainText("確認用データを破棄しました");
+      expect(discarded).toBe(1);
+      expect(applied).toBe(0);
+    }
+    await expectNoHorizontalScroll(page);
+  });
+}

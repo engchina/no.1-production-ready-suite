@@ -2630,6 +2630,7 @@ class OracleNl2SqlAdapter:
         sample_rows: int = 0,
         use_comments: bool = True,
         on_connection: Callable[[Any], None] | None = None,
+        staging: bool = False,
     ) -> dict[str, Any]:
         """Call DBMS_CLOUD_AI.GENERATE_SYNTHETIC_DATA for a validated table."""
         normalized_profile_name = profile_name.strip()
@@ -2637,10 +2638,19 @@ class OracleNl2SqlAdapter:
             raise OracleAdapterError(
                 "DBMS_CLOUD_AI.GENERATE_SYNTHETIC_DATA の実行には profile_name が必要です。"
             )
-        table_identity = self._db_admin_identity(table_name) if table_name.strip() else None
-        object_identities = [
-            self._db_admin_identity(item) for item in object_list or [] if item.strip()
-        ]
+
+        def identity(name: str) -> OracleObjectIdentity:
+            if not staging:
+                return self._db_admin_identity(name)
+            value = parse_object_identity(name, default_owner=self.settings.oracle_user)
+            if value.owner != self.settings.oracle_user.upper() or not re.fullmatch(
+                r"NL2SQL_SP_[A-F0-9]{32}_[0-9]{1,3}", value.object_name
+            ):
+                raise OracleAdapterError("合成データの一時表名が不正です。")
+            return value
+
+        table_identity = identity(table_name) if table_name.strip() else None
+        object_identities = [identity(item) for item in object_list or [] if item.strip()]
         if table_identity is None and not object_identities:
             raise OracleAdapterError("synthetic data 対象 table/object_list が空です。")
         target_identity = table_identity or object_identities[0]

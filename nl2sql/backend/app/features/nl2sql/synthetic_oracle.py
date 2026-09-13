@@ -110,7 +110,8 @@ def inspect_operation(adapter: OracleNl2SqlAdapter, run: SyntheticRun) -> Synthe
         by_table.setdefault(name, []).append(chunk)
     targets: list[SyntheticTarget] = []
     for target in run.targets:
-        rows = by_table.get(target.table_name, [])
+        name = run.staging.get(target.table_name, {}).get("name", target.table_name)
+        rows = by_table.get(name, [])
         target = target.model_copy(deep=True)
         if rows:
             target.loaded_rows = (

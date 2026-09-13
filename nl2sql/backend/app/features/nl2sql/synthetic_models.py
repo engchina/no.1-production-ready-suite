@@ -21,6 +21,11 @@ class SyntheticRunRequest(SyntheticDataGenerateRequest):
     idempotency_key: str = Field(min_length=16, max_length=128)
 
 
+class SyntheticApplyRequest(BaseModel):
+    confirmation: str
+    previews: dict[str, str]
+
+
 class SyntheticTarget(BaseModel):
     table_name: str
     requested_rows: int
@@ -48,6 +53,11 @@ class SyntheticRun(BaseModel):
     failure_phase: Literal["validation"] | None = None
     execution_returned: bool = False
     version: int = 0
+    # 旧履歴は直接生成。新規受付は必ず preview=True にする（request から選択不可）。
+    preview: bool = False
+    review_status: Literal["pending", "ready", "applied", "discarded"] = "pending"
+    applied_at: str | None = None
+    staging: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
     def history_expired(self, at: datetime | None = None) -> bool:
         if self.status not in TERMINAL:
@@ -66,5 +76,6 @@ class SyntheticRun(BaseModel):
                 "request_hash",
                 "request",
                 "session",
+                "staging",
             }
         )

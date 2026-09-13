@@ -1460,6 +1460,8 @@ export interface SyntheticDataOperationData {
 }
 
 export interface SyntheticDataResultsData {
+  preview_digest?: string;
+  run_id?: string;
   table_name: string;
   runtime: string;
   results: QueryResults;
