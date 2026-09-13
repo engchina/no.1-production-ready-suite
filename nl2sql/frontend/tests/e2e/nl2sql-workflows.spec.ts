@@ -12125,7 +12125,7 @@ test("sample data and data management run imported workflows", async ({ page }) 
   await expect(syntheticPanel.getByText("確認済み", { exact: true })).toHaveCount(1);
   const syntheticClearButton = syntheticPanel
     .getByTestId("execution-confirmation-field")
-    .getByRole("button", { name: "生成条件・結果をリセット", exact: true });
+    .getByRole("button", { name: "生成条件をリセット", exact: true });
   await expect(syntheticClearButton).toBeEnabled();
   await expectButtonsSameHeight(syntheticGenerateButton, syntheticClearButton);
   await syntheticClearButton.click();
@@ -12152,11 +12152,15 @@ test("sample data and data management run imported workflows", async ({ page }) 
   expect(api.syntheticDataPayload?.rows_per_table).toBe(1);
   expect(api.syntheticDataPayload?.sample_rows).toBe(5);
   expect(api.syntheticDataPayload?.use_comments).toBe(true);
+  // 生成条件のリセットは入力だけを戻し、表示中の結果は残す（結果は「表示件数・結果をリセット」で消す）。
+  await syntheticPanel.getByLabel("APP.INVOICES を選択").check();
   await expect(syntheticClearButton).toBeEnabled();
   await syntheticClearButton.click();
-  await expect(syntheticPanel.getByRole("cell", { name: "synthetic-customer" })).toHaveCount(0);
   await expect(syntheticPanel.getByLabel("APP.INVOICES を選択")).not.toBeChecked();
   await expect(syntheticConfirmationInput).toHaveValue("");
+  await expect(syntheticPanel.getByRole("cell", { name: "synthetic-customer" })).toBeVisible();
+  await syntheticPanel.getByRole("button", { name: "表示件数・結果をリセット", exact: true }).click();
+  await expect(syntheticPanel.getByRole("cell", { name: "synthetic-customer" })).toHaveCount(0);
   await expectNoHorizontalScroll(page);
 });
 

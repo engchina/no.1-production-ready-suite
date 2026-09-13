@@ -3039,7 +3039,7 @@ const nl2sqlJa = {
   "dbAdmin.runner.sqlLabel": "SQL(セミコロン区切りで複数文を入力可能)",
   "dbAdmin.runner.filePick": "SQL ファイル読込 (.sql/.txt)",
   "dbAdmin.import.actions.clear": "取込設定・結果をリセット",
-  "dataTools.syntheticData.actions.clear": "生成条件・結果をリセット",
+  "dataTools.syntheticData.actions.clear": "生成条件をリセット",
   "profiles.oracle.actions.clear": "実行設定・同期表示をリセット",
   "dbAdmin.runner.templates": "テンプレート:",
   "dbAdmin.runner.execute": "Oracle に実行する",
