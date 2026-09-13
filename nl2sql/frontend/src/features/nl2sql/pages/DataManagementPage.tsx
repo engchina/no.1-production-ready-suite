@@ -14,6 +14,7 @@ import {
   StatusBadge,
   PageHeader,
   PageBody,
+  RequiredBadge,
 } from "@engchina/production-ready-ui";
 
 import { SyntheticRunPanel, useSyntheticRuns, historyExpired, type SyntheticRun } from "../syntheticRuns";
@@ -28,7 +29,6 @@ import { PageNotice } from "@/components/page-notice";
 import { ErrorState } from "@/components/StateViews";
 import { ClearActionButton } from "@/components/ui/clear-action-button";
 import { FileDropzone } from "@/components/ui/file-dropzone";
-import { RequiredFieldsNote, RequiredIndicator } from "@/components/ui/required-field";
 import { apiFetch, apiGet, apiPost, isTimeoutError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
@@ -1824,8 +1824,6 @@ function CsvUploadWorkspace({
         dataTestId="data-csv-steps"
       />
 
-      <RequiredFieldsNote />
-
       <section
         className="grid min-w-0 gap-3"
         aria-labelledby="data-csv-table-heading"
@@ -1834,7 +1832,7 @@ function CsvUploadWorkspace({
         <div>
           <h3 id="data-csv-table-heading" className="text-sm font-semibold text-fg">
             {t("dataMgmt.csv.table")}
-            <RequiredIndicator />
+            <RequiredBadge label={t("common.required")} className="ml-2 align-middle" />
           </h3>
           <p className="mt-1 text-sm text-fg-muted">{t("dataMgmt.csv.tableHint")}</p>
         </div>

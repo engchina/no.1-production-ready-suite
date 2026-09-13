@@ -27,13 +27,13 @@ import {
   Skeleton,
   Switch,
   PageBody,
+  RequiredBadge,
   useConfirm,
 } from "@engchina/production-ready-ui";
 
 import { TimedLoadingState } from "@/components/ProcessingState";
 import { ErrorState } from "@/components/StateViews";
 import { InputActionField } from "@/components/ui/input-action-field";
-import { RequiredIndicator } from "@/components/ui/required-field";
 import { SavedSecretBadge } from "@/components/settings/SavedSecretBadge";
 import {
   SettingsTestResultPanel,
@@ -754,7 +754,7 @@ function TestableTextField({
         label={
           <>
             {label}
-            {badge ? <RequiredIndicator label={badge} /> : null}
+            {badge ? <RequiredBadge label={badge} className="ml-2 align-middle" /> : null}
           </>
         }
         value={value}
@@ -961,7 +961,7 @@ function FieldLabel({
       <label htmlFor={htmlFor} className="text-sm font-medium text-fg">
         {label}
       </label>
-      {badge ? <RequiredIndicator label={badge} /> : null}
+      {badge ? <RequiredBadge label={badge} /> : null}
     </div>
   );
 }

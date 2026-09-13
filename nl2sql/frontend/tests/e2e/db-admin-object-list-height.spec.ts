@@ -2689,9 +2689,9 @@ test("Excel/CSV 取込フォームは取込方法を表示せずファイル選�
   await expect(importPanel).toBeVisible();
   const fileField = importPanel.getByTestId("table-import-file-field");
   await expect(fileField).toBeVisible();
-  await expect(importPanel.getByText(/必須入力項目です。/)).toBeVisible();
-  await expect(importPanel.locator('label[for="table-import-table-name"] span[aria-hidden="true"]')).toHaveText("*");
-  await expect(importPanel.locator('label[for="table-import-sheet-name"] span[aria-hidden="true"]')).toHaveText("*");
+  await expect(importPanel.getByText(/必須入力項目です。/)).toHaveCount(0);
+  await expect(importPanel.locator('label[for="table-import-table-name"] span[aria-hidden="true"]')).toHaveText("必須");
+  await expect(importPanel.locator('label[for="table-import-sheet-name"] span[aria-hidden="true"]')).toHaveText("必須");
   await expect(importPanel.getByTestId("table-import-file-field-input")).toHaveAttribute("aria-required", "true");
   await expect(importPanel.getByTestId("table-import-mode-field")).toHaveCount(0);
   await expect(importPanel.getByText("取込方法", { exact: true })).toHaveCount(0);

@@ -64,7 +64,6 @@ export const ja = {
   "common.retry": "再試行",
   "common.skipToMain": "本文へスキップ",
   "common.required": "必須",
-  "common.requiredFieldsNote": "は必須入力項目です。",
   "settings.testResult.elapsed": "所要時間",
   "settings.testResult.checkedAt": "確認時刻",
   "settings.testResult.troubleshooting": "確認ポイント",

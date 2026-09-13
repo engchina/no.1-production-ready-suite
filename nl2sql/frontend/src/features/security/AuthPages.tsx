@@ -5,6 +5,7 @@ import {
   CardContent,
   CardHeader,
   CardTitle,
+  TextField,
   toast,
 } from "@engchina/production-ready-ui";
 import { useState, type FormEvent, type ReactNode } from "react";
@@ -13,7 +14,7 @@ import { Navigate, useLocation, useNavigate } from "react-router-dom";
 
 
 import { ProcessingIndicator } from "@/components/ProcessingState";
-import { FieldLabel, RequiredFieldsNote } from "@/components/ui/required-field";
+import { FieldLabel } from "@/components/ui/required-field";
 import { ApiError } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { APP_ROUTES } from "@/lib/routes";
@@ -102,34 +103,30 @@ export function LoginPage() {
         </CardHeader>
         <CardContent>
           <form className="space-y-4" onSubmit={handleSubmit} noValidate>
-            <RequiredFieldsNote />
             {error ? <Banner severity="danger">{error}</Banner> : null}
-            <div className="block space-y-1.5 text-sm font-medium">
-              <FieldLabel htmlFor="auth-login-user-id" label={t("auth.login.name")} required />
-              <input
-                id="auth-login-user-id"
-                required
-                aria-required="true"
-                autoComplete="username"
-                autoFocus
-                className={INPUT_CLASS}
-                value={loginUserId}
-                onChange={(event) => setLoginUserId(event.target.value)}
-              />
-            </div>
-            <div className="block space-y-1.5 text-sm font-medium">
-              <FieldLabel htmlFor="auth-login-password" label={t("auth.login.password")} required />
-              <input
-                id="auth-login-password"
-                required
-                aria-required="true"
-                type="password"
-                autoComplete="current-password"
-                className={INPUT_CLASS}
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-              />
-            </div>
+            {/* 認証の入力はモバイルでも 44px のタッチ領域を確保する。未入力は送信時に検証する（noValidate）。 */}
+            <TextField
+              id="auth-login-user-id"
+              label={t("auth.login.name")}
+              required
+              requiredLabel={t("common.required")}
+              autoComplete="username"
+              autoFocus
+              inputClassName="h-11"
+              value={loginUserId}
+              onValueChange={setLoginUserId}
+            />
+            <TextField
+              id="auth-login-password"
+              label={t("auth.login.password")}
+              required
+              requiredLabel={t("common.required")}
+              type="password"
+              autoComplete="current-password"
+              inputClassName="h-11"
+              value={password}
+              onValueChange={setPassword}
+            />
             {/* 認証の主導線はモバイルでも 44px のタッチ領域を確保する。 */}
             <Button size="lg" touchTarget className="w-full" loading={busy} type="submit" icon={LogIn}>
               {t("auth.login.submit")}
@@ -240,7 +237,6 @@ export function PasswordChangePage() {
         </CardHeader>
         <CardContent>
           <form className="space-y-4" onSubmit={handleSubmit}>
-            <RequiredFieldsNote />
             {error ? <Banner severity="danger">{error}</Banner> : null}
             <Banner severity="info">{t("auth.password.rule")}</Banner>
             {[

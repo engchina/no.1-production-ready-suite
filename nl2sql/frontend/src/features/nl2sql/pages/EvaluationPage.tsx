@@ -31,7 +31,7 @@ import { ErrorState, LoadingState } from "@/components/StateViews";
 import { usePageNotice, PageNotice } from "@/components/page-notice";
 import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
 import { FileDropzone } from "@/components/ui/file-dropzone";
-import { FieldLabel, RequiredFieldsNote } from "@/components/ui/required-field";
+import { FieldLabel } from "@/components/ui/required-field";
 import { ApiError, apiDelete, apiFetch, apiGet, apiPost, apiPostForm } from "@/lib/api";
 import { downloadBlob, downloadFilename } from "@/lib/download";
 import { t } from "@/lib/i18n";
@@ -407,8 +407,6 @@ export function EvaluationPage() {
                   {capabilities?.judge.reason}
                 </Banner>
               ) : null}
-
-              <RequiredFieldsNote />
 
               <div
                 className="grid min-w-0 gap-4 lg:grid-cols-2 lg:items-start"

@@ -633,8 +633,9 @@ test("業務プロファイル基本情報は名称とカテゴリの行を揃�
   const categoryInput = page.locator("#profile-category");
   await expect(nameInput).toBeVisible();
   await expect(categoryInput).toBeVisible();
-  await expect(nameInput).toHaveAccessibleName("名称 必須");
-  await expect(categoryInput).toHaveAccessibleName("カテゴリ 必須");
+  // 必須バッジは aria-hidden（入力側の aria-required で伝える）なので、読み上げ名はラベルだけになる。
+  await expect(nameInput).toHaveAccessibleName("名称");
+  await expect(categoryInput).toHaveAccessibleName("カテゴリ");
 
   const layout = await page.evaluate(() => {
     const box = (selector: string) => {
@@ -1752,26 +1753,22 @@ test("Select AI 設定は requested order で並び狭い幅でも重ならな�
   await page.getByRole("button", { name: "新規作成", exact: true }).click();
 
   await expect(page.getByLabel("Oracle Profile 名")).toHaveCount(0);
+  // 必須はすべて共有の「必須」バッジ（aria-hidden）+ aria-required で示す。独自の * は出さない。
   for (const fieldId of [
     "profile-name",
     "profile-category",
+    "profile-select-ai-region",
     "profile-select-ai-model",
     "profile-select-ai-max-tokens",
     "profile-select-ai-embedding-model",
   ]) {
-    await expect(page.locator(`label[for="${fieldId}"] span[aria-hidden="true"]`)).toHaveText("*");
-  }
-  // Region は共有 SelectField。必須は「必須」バッジ（aria-hidden）+ aria-required で示す。
-  await expect(page.locator('label[for="profile-select-ai-region"] span[aria-hidden="true"]')).toHaveText("必須");
-  for (const fieldId of [
-    "profile-name",
-    "profile-category",
-    "profile-select-ai-model",
-    "profile-select-ai-max-tokens",
-    "profile-select-ai-embedding-model",
-  ]) {
-    await expect(page.locator(`#${fieldId}`)).toHaveAttribute("required", "");
+    await expect(page.locator(`label[for="${fieldId}"] span[aria-hidden="true"]`)).toHaveText("必須");
     await expect(page.locator(`#${fieldId}`)).toHaveAttribute("aria-required", "true");
+  }
+  // 名称・カテゴリは独自の 2 列レイアウト（FieldLabel + input）のままで、ネイティブ required も持つ。
+  // Select AI の入力は共有 TextField（ネイティブ検証は使わず、保存時にアプリ側で検証する）。
+  for (const fieldId of ["profile-name", "profile-category"]) {
+    await expect(page.locator(`#${fieldId}`)).toHaveAttribute("required", "");
   }
   const region = page.getByRole("combobox", { name: "Region" });
   const model = page.getByLabel("LLM Model");

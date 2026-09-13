@@ -38,7 +38,7 @@ import { FormActionBar, entityActionToFormAction } from "@/components/FormAction
 import { MasterDetailDataTable } from "@/components/MasterDetailDataTable";
 import { ObjectActionBar, type EntityAction } from "@/components/ObjectActions";
 import { ProcessingIndicator } from "@/components/ProcessingState";
-import { FieldLabel, RequiredFieldsNote } from "@/components/ui/required-field";
+import { FieldLabel } from "@/components/ui/required-field";
 import { ApiError, isAbortError } from "@/lib/api";
 import {
   mapApiFieldErrors,
@@ -909,7 +909,6 @@ export function SecurityRolesPage() {
                 onSubmit={handleSubmit}
                 aria-labelledby="security-roles-form-heading"
               >
-                <RequiredFieldsNote />
                 {editingRole?.role_code === SYSTEM_ADMIN_ROLE_CODE ? (
                   <Banner severity="info">{t("security.roles.systemAdminNotice")}</Banner>
                 ) : null}
