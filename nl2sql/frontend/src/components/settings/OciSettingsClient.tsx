@@ -21,6 +21,7 @@ import {
   FormStatus,
   PageBody,
   SelectField,
+  StatusBadge,
   type SelectFieldOption,
 } from "@engchina/production-ready-ui";
 
@@ -39,6 +40,8 @@ import {
   isAbortError,
   type OciConfigReadData,
   type OciConfigTestResult,
+  type OciConfigTestStage,
+  type OciConfigTestStageStatus,
   type OciSettingsData,
   type UploadStorageSettingsData,
 } from "@/lib/api";
@@ -468,7 +471,6 @@ export function OciSettingsClient() {
               onSave={() => void saveAuthDraft()}
               testState={configTestState.phase}
               testLabel={t("settings.oci.actions.test")}
-              testingLabel={t("settings.oci.actions.testing")}
               onTest={() => void testAuthConfig()}
             />
             <ConfigTestContent state={configTestState} />
@@ -538,7 +540,6 @@ function SectionActions({
   onSave,
   testState,
   testLabel,
-  testingLabel,
   onTest,
 }: {
   ariaContext: string;
@@ -548,7 +549,6 @@ function SectionActions({
   onSave: () => void;
   testState?: ConfigTestState["phase"];
   testLabel?: string;
-  testingLabel?: string;
   onTest?: () => void;
 }) {
   const currentSaveLabel =
@@ -557,8 +557,8 @@ function SectionActions({
       : saveState === "success"
         ? t("settings.oci.actions.saved")
         : idleSaveLabel;
-  const currentTestLabel =
-    testState === "loading" && testingLabel ? testingLabel : testLabel;
+  // 接続テスト中もラベルは変えず、先頭アイコンだけが Button の loading でスピナーになる。
+  const currentTestLabel = testLabel;
   const isTesting = testState === "loading";
 
   return (
@@ -608,7 +608,11 @@ function ConfigTestContent({ state }: { state: ConfigTestState }) {
 
   const result = state.data;
   const failed = result.status === "failed";
+  const stages = result.stages ?? [];
   const troubleshooting = [
+    ...stages.flatMap((stage) =>
+      stage.status === "failed" && stage.action ? [stage.action] : []
+    ),
     ...result.missing_fields.map((field) =>
       t("settings.oci.configTest.missingField", { field })
     ),
@@ -623,16 +627,59 @@ function ConfigTestContent({ state }: { state: ConfigTestState }) {
       elapsedMs={result.elapsed_ms}
       details={toSettingsTestResultDetails({
         profile: result.profile,
-        config_file_exists: result.config_file_exists,
-        key_file_exists: result.key_file_exists,
+        region: result.region,
+        auth_check: result.auth_check_operation,
+        http_status: result.http_status,
+        service_code: result.service_code,
+        opc_request_id: result.request_id,
         oci_directory_mode: result.oci_directory_mode,
         config_file_mode: result.config_file_mode,
         key_file_mode: result.key_file_mode,
-        error_type: result.error_type,
       })}
       troubleshooting={troubleshooting}
+      errorType={result.error_type}
       testId="settings-oci-test-result"
-    />
+    >
+      {stages.length > 0 ? <ConfigTestStages stages={stages} /> : null}
+    </SettingsTestResultPanel>
+  );
+}
+
+const STAGE_STATUS_VARIANT = {
+  success: "success",
+  failed: "danger",
+  skipped: "neutral",
+} as const satisfies Record<OciConfigTestStageStatus, "success" | "danger" | "neutral">;
+
+function ConfigTestStages({ stages }: { stages: readonly OciConfigTestStage[] }) {
+  return (
+    <ol
+      aria-label={t("settings.oci.configTest.stagesLabel")}
+      data-testid="settings-oci-test-stages"
+      className="min-w-0 space-y-2"
+    >
+      {stages.map((stage) => (
+        <li
+          key={stage.key}
+          data-stage={stage.key}
+          data-stage-status={stage.status}
+          className="flex min-w-0 flex-col gap-1 sm:flex-row sm:items-start sm:gap-3"
+        >
+          <span className="flex shrink-0 items-center gap-2 sm:w-52">
+            <StatusBadge
+              variant={STAGE_STATUS_VARIANT[stage.status]}
+              label={t(`settings.oci.configTest.stageStatus.${stage.status}`)}
+            />
+            <span className="whitespace-nowrap text-xs font-medium text-fg">
+              {t(`settings.oci.configTest.stage.${stage.key}`)}
+            </span>
+          </span>
+          <span className="min-w-0 break-words text-xs leading-relaxed text-fg-muted">
+            {stage.message}
+          </span>
+        </li>
+      ))}
+    </ol>
   );
 }
 

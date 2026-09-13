@@ -144,6 +144,53 @@ function ociSettingsFixture() {
   };
 }
 
+type OciStageStatus = "success" | "failed" | "skipped";
+const OCI_STAGE_KEYS = ["config_format", "key_file", "region", "authentication"] as const;
+
+function ociStages(statuses: readonly OciStageStatus[], failure?: { message: string; action: string }) {
+  return OCI_STAGE_KEYS.map((key, index) => {
+    const status = statuses[index] ?? "skipped";
+    return {
+      key,
+      status,
+      message:
+        status === "failed" && failure
+          ? failure.message
+          : status === "skipped"
+            ? "前の段階が失敗したため実施していません。"
+            : `${key} を確認しました。`,
+      action: status === "failed" && failure ? failure.action : null,
+    };
+  });
+}
+
+function ociConfigTestFixture(overrides: Record<string, unknown> = {}) {
+  return {
+    status: "success",
+    profile: "DEFAULT",
+    config_file: "~/.oci/config",
+    key_file: "~/.oci/oci_api_key.pem",
+    config_file_exists: true,
+    key_file_exists: true,
+    missing_fields: [],
+    permission_issues: [],
+    oci_directory_mode: "0700",
+    config_file_mode: "0600",
+    key_file_mode: "0600",
+    message: "OCI へ認証付きで接続できました（Object Storage GetNamespace）。",
+    elapsed_ms: 7,
+    checked_at: "2026-06-21T10:00:00.000Z",
+    error_type: null,
+    stages: ociStages(["success", "success", "success", "success"]),
+    region: "ap-osaka-1",
+    auth_check_operation: "Object Storage GetNamespace",
+    http_status: null,
+    service_code: null,
+    request_id: null,
+    ...overrides,
+  };
+}
+
 async function mockNl2sqlSettingsApi(page: Page) {
   const ociSettings = ociSettingsFixture();
 
@@ -174,23 +221,7 @@ async function mockNl2sqlSettingsApi(page: Page) {
 
   await page.route("**/api/settings/oci", (route) => fulfillJson(route, ociSettings));
   await page.route("**/api/settings/oci/config/test", (route) =>
-    fulfillJson(route, {
-      status: "success",
-      profile: "DEFAULT",
-      config_file: "~/.oci/config",
-      key_file: "~/.oci/oci_api_key.pem",
-      config_file_exists: true,
-      key_file_exists: true,
-      missing_fields: [],
-      permission_issues: [],
-      oci_directory_mode: "700",
-      config_file_mode: "600",
-      key_file_mode: "600",
-      message: "OCI config を確認しました。",
-      elapsed_ms: 7,
-      checked_at: "2026-06-21T10:00:00.000Z",
-      error_type: null,
-    })
+    fulfillJson(route, ociConfigTestFixture())
   );
   await page.route("**/api/settings/oci/object-storage", (route) =>
     fulfillJson(route, uploadStorage)
@@ -910,8 +941,17 @@ test("システム設定のテスト成功結果を共通パネルで表示す�
   const ociResult = page.getByTestId("settings-oci-test-result");
   await expect(ociResult.getByRole("status")).toBeVisible();
   await expect(ociResult).toHaveAttribute("data-tone", "success");
-  await expect(ociResult).toContainText("OCI config を確認しました。");
+  await expect(ociResult).toContainText(
+    "OCI へ認証付きで接続できました（Object Storage GetNamespace）。"
+  );
   await expect(ociResult).toContainText("所要時間: 7 ms");
+  const ociStagesList = ociResult.getByRole("list", { name: "確認段階" });
+  await expect(ociStagesList.getByRole("listitem")).toHaveCount(4);
+  await expect(ociStagesList.locator('[data-stage-status="success"]')).toHaveCount(4);
+  for (const label of ["設定の形式", "鍵の読み取り", "リージョン到達", "認証（API 応答）"]) {
+    await expect(ociStagesList).toContainText(label);
+  }
+  await expect(ociResult).toContainText("Object Storage GetNamespace");
   await expect(ociResult).toContainText("config_file_mode");
   await expectNoHorizontalOverflow(page);
   await page.locator("#oci-user-ocid").fill("ocid1.user.oc1..changed");
@@ -986,23 +1026,25 @@ test("システム設定のテスト成功結果を共通パネルで表示す�
 test("システム設定の失敗と API エラーを共通 danger パネルで表示する", async ({ page }) => {
   await page.unroute("**/api/settings/oci/config/test");
   await page.route("**/api/settings/oci/config/test", (route) =>
-    fulfillJson(route, {
-      status: "failed",
-      profile: "DEFAULT",
-      config_file: "~/.oci/config",
-      key_file: "~/.oci/oci_api_key.pem",
-      config_file_exists: true,
-      key_file_exists: false,
-      missing_fields: ["fingerprint"],
-      permission_issues: ["OCI config ファイルは 0600 にしてください。"],
-      oci_directory_mode: "0700",
-      config_file_mode: "0644",
-      key_file_mode: null,
-      message: "OCI 認証ファイルを確認してください。",
-      elapsed_ms: 4,
-      checked_at: "2026-06-21T10:00:00.000Z",
-      error_type: "InvalidOciConfig",
-    })
+    fulfillJson(
+      route,
+      ociConfigTestFixture({
+        status: "failed",
+        key_file_exists: false,
+        missing_fields: ["fingerprint"],
+        permission_issues: ["OCI config ファイルは 0600 にしてください。"],
+        config_file_mode: "0644",
+        key_file_mode: null,
+        message: "OCI config の必須項目が不足しています。",
+        elapsed_ms: 4,
+        error_type: "InvalidOciConfig",
+        stages: ociStages(["failed"], {
+          message: "OCI config の必須項目が不足しています。",
+          action: "不足している項目を入力して認証設定を保存してください。",
+        }),
+        auth_check_operation: null,
+      })
+    )
   );
   await page.goto("/settings/oci");
   await page.getByRole("button", { name: /接続テスト/ }).click();
@@ -1058,6 +1100,106 @@ test("システム設定の失敗と API エラーを共通 danger パネルで�
   await expect(databaseResult).toContainText("再試行してください。");
   await expectNoHorizontalOverflow(page);
 });
+
+const OCI_CONNECTIVITY_FAILURES = [
+  {
+    name: "形式不正",
+    statuses: ["failed", "skipped", "skipped", "skipped"],
+    message: "OCI config の形式が正しくありません（fingerprint）。",
+    action: "fingerprint は OCI コンソールの API キーに表示される 16 バイトのコロン区切りを設定してください。",
+    extra: { error_type: null, auth_check_operation: null },
+    detail: null,
+  },
+  {
+    name: "認証失敗",
+    statuses: ["success", "success", "success", "failed"],
+    message: "OCI が認証を拒否しました（401 NotAuthenticated）。",
+    action: "fingerprint が OCI コンソールの API キーと一致しているかを確認してください。",
+    extra: {
+      error_type: "ServiceError",
+      http_status: 401,
+      service_code: "NotAuthenticated",
+      request_id: "E2EREQUEST401",
+    },
+    detail: "E2EREQUEST401",
+  },
+  {
+    name: "権限不足",
+    statuses: ["success", "success", "success", "failed"],
+    message: "OCI がアクセスを許可しませんでした（404 NotAuthorizedOrNotFound）。",
+    action: "IAM ポリシーでこのユーザーのグループに必要な権限が付与されているかを確認してください。",
+    extra: {
+      error_type: "ServiceError",
+      http_status: 404,
+      service_code: "NotAuthorizedOrNotFound",
+      request_id: "E2EREQUEST404",
+    },
+    detail: "NotAuthorizedOrNotFound",
+  },
+  {
+    name: "タイムアウト",
+    statuses: ["success", "success", "failed", "skipped"],
+    message: "ap-osaka-1 の OCI endpoint への接続が 5 秒以内に完了しませんでした。",
+    action: "リージョン名（ap-osaka-1）と、バックエンドから OCI への HTTPS 通信を確認してください。",
+    extra: { error_type: "ConnectTimeout" },
+    detail: null,
+  },
+] as const;
+
+for (const failure of OCI_CONNECTIVITY_FAILURES) {
+  test(`OCI 接続テストの${failure.name}を段階・次の対処つきで表示する`, async ({ page }) => {
+    const gate = createRequestGate();
+    let testRequests = 0;
+    await page.unroute("**/api/settings/oci/config/test");
+    await page.route("**/api/settings/oci/config/test", async (route) => {
+      testRequests += 1;
+      expect(route.request().method()).toBe("POST");
+      expect(route.request().postData() ?? "").toBe("");
+      await gate.promise;
+      await fulfillJson(
+        route,
+        ociConfigTestFixture({
+          status: "failed",
+          message: failure.message,
+          stages: ociStages(failure.statuses, { message: failure.message, action: failure.action }),
+          ...failure.extra,
+        })
+      );
+    });
+
+    await page.goto("/settings/oci");
+    const testButton = page.getByRole("button", { name: /接続テスト/ });
+    await testButton.click();
+    // loading 中もラベルは「接続テスト」のまま（先頭アイコンだけがスピナーになる）。
+    await expect(testButton).toHaveAccessibleName(/接続テスト$/);
+    await expect(testButton).not.toContainText("テスト中");
+    gate.release();
+
+    const ociResult = page.getByTestId("settings-oci-test-result");
+    await expect(ociResult.getByRole("alert")).toBeVisible();
+    await expect(ociResult).toHaveAttribute("data-tone", "danger");
+    await expect(ociResult.getByRole("alert")).toContainText(failure.message);
+    const stagesList = ociResult.getByRole("list", { name: "確認段階" });
+    for (const [index, key] of OCI_STAGE_KEYS.entries()) {
+      await expect(stagesList.locator(`[data-stage="${key}"]`)).toHaveAttribute(
+        "data-stage-status",
+        failure.statuses[index]
+      );
+    }
+    const failedStage = stagesList.locator('[data-stage-status="failed"]');
+    await expect(failedStage).toContainText("失敗");
+    if ((failure.statuses as readonly OciStageStatus[]).includes("skipped")) {
+      await expect(stagesList.locator('[data-stage-status="skipped"]').first()).toContainText(
+        "未実施"
+      );
+    }
+    await expect(ociResult).toContainText("確認ポイント");
+    await expect(ociResult).toContainText(failure.action);
+    if (failure.detail) await expect(ociResult).toContainText(failure.detail);
+    expect(testRequests).toBe(1);
+    await expectNoHorizontalOverflow(page);
+  });
+}
 
 test("データベース設定は Wallet ZIP の下にサービス名を置き、保存済みパスワードを明示表示する", async ({
   page,
