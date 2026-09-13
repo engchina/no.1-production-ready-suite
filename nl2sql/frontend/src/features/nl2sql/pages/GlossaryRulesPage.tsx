@@ -268,7 +268,7 @@ function GlobalMaterialPanel({
         title={title}
         description={description}
         icon={BookOpen}
-        action={<StatusBadge variant="neutral" label={countLabel} />}
+        action={<StatusBadge icon={false} variant="neutral" label={countLabel} />}
       />
       <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
         <FileDropzone

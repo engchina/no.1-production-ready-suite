@@ -398,7 +398,7 @@ export function GuidedClarificationPanel({
                 <span className="min-w-0">
                   <span className="flex flex-wrap items-center gap-2 font-medium text-fg">
                     {candidate.profile_name}
-                    {index === 0 ? <StatusBadge variant="info" label={t("nl2sql.clarification.recommended")} /> : null}
+                    {index === 0 ? <StatusBadge icon={false} variant="info" label={t("nl2sql.clarification.recommended")} /> : null}
                   </span>
                   {candidate.reasons_ja.length ? (
                     <span className="mt-0.5 block text-xs leading-5 text-fg-muted">

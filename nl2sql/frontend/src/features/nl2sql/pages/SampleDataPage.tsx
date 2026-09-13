@@ -81,6 +81,7 @@ function SampleObjectSummary({ sampleInfo }: { sampleInfo: SampleDataInfo | null
             {formatNumber(sampleInfo?.objects.length ?? 0)}
           </span>
           <StatusBadge
+            icon={false}
             variant="neutral"
             label={`${t("dataTools.sample.metric.objects")} ${formatNumber(sampleInfo?.objects.length ?? 0)}`}
           />

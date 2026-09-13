@@ -214,6 +214,7 @@ function ServerSearchResultPanel({
           {t("ontologyPlayground.serverSearch.title")}
         </h3>
         <StatusBadge
+          icon={false}
           variant="neutral"
           label={t("ontologyPlayground.serverSearch.hitCount", {
             count: result.hits.length,
@@ -281,6 +282,7 @@ function ServerSearchResultPanel({
                     <span className="text-xs text-fg-muted">{display.kindLabel}</span>
                     {hit.inference_source !== "asserted" ? (
                       <StatusBadge
+                        icon={false}
                         variant="info"
                         label={t("ontologyPlayground.serverSearch.inferred")}
                       />
@@ -402,8 +404,9 @@ function OntologyGroundingPathPanel({
       ) : (
         <div className="grid gap-3">
           <div className="flex flex-wrap gap-2">
-            <StatusBadge variant="info" label={stageLabel(result)} />
+            <StatusBadge icon={false} variant="info" label={stageLabel(result)} />
             <StatusBadge
+              icon={false}
               variant="neutral"
               label={t("ontologyPlayground.inspector.groundingCount", {
                 nodes: highlightedNodes.length,
@@ -506,7 +509,7 @@ function OntologyNodeDetailsPanel({
       ) : (
         <div className="grid gap-2">
           <div className="flex flex-wrap gap-2">
-            <StatusBadge variant="info" label={ontologyNodeDisplay(node).kindLabel} />
+            <StatusBadge icon={false} variant="info" label={ontologyNodeDisplay(node).kindLabel} />
             <StatusBadge
               variant={validationVariant(node.validation_status ?? "unreviewed")}
               label={validationLabel(node.validation_status ?? "unreviewed")}
@@ -549,7 +552,7 @@ function OntologyRelationshipListPanel({
           <Network size={16} className="text-accent-fg" aria-hidden="true" />
           {t("ontologyPlayground.inspector.relationships")}
         </h3>
-        <StatusBadge variant="neutral" label={t("ontologyPlayground.inspector.relationshipCount", { count: rows.length })} />
+        <StatusBadge icon={false} variant="neutral" label={t("ontologyPlayground.inspector.relationshipCount", { count: rows.length })} />
       </div>
       {rows.length === 0 ? (
         <Banner severity="info">{t("ontologyPlayground.inspector.relationshipsEmpty")}</Banner>
@@ -593,8 +596,9 @@ function OntologyErDetailsPanel({ details }: { details: OntologyErDetails }) {
           </p>
         </div>
         <div className="flex flex-wrap gap-2" aria-label={t("ontologyPlayground.erSummary")}>
-          <StatusBadge variant="neutral" label={erObjectTypeLabel(details.objectType)} />
+          <StatusBadge icon={false} variant="neutral" label={erObjectTypeLabel(details.objectType)} />
           <StatusBadge
+            icon={false}
             variant="info"
             label={t("ontologyPlayground.erColumnCount", { count: details.columns.length })}
           />

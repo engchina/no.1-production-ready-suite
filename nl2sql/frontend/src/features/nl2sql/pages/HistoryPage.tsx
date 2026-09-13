@@ -248,7 +248,7 @@ function HistoryGrid({
         icon={History}
         title={t("history.list.title")}
         description={t("history.list.hint")}
-        action={<StatusBadge variant="info" label={t("history.list.count", { count })} />}
+        action={<StatusBadge icon={false} variant="info" label={t("history.list.count", { count })} />}
       />
 
       <div className="grid gap-2 rounded-md border border-border bg-surface-sunken p-3">
@@ -350,9 +350,10 @@ function HistoryGrid({
                           <span className="min-w-0 break-words text-xs text-fg-muted [overflow-wrap:anywhere]">
                             {engineLabel(item.engine)}
                           </span>
-                          <StatusBadge variant="neutral" label={formatElapsed(item.elapsed_ms)} />
+                          <StatusBadge icon={false} variant="neutral" label={formatElapsed(item.elapsed_ms)} />
                           {item.generation_elapsed_ms !== null && item.generation_elapsed_ms !== undefined && (
                             <StatusBadge
+                              icon={false}
                               variant="info"
                               label={t("history.timing.generationBadge", {
                                 elapsed: formatElapsed(item.generation_elapsed_ms),
@@ -507,10 +508,11 @@ function HistoryDetailPanel({
         </div>
         <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
           <span className="font-sans text-xs tabular-nums text-fg-muted">{formatDateTime(item.created_at)}</span>
-          <StatusBadge variant="info" label={engineLabel(item.engine)} />
-          <StatusBadge variant="neutral" label={formatElapsed(item.elapsed_ms)} />
+          <StatusBadge icon={false} variant="info" label={engineLabel(item.engine)} />
+          <StatusBadge icon={false} variant="neutral" label={formatElapsed(item.elapsed_ms)} />
           {item.generation_elapsed_ms !== null && item.generation_elapsed_ms !== undefined && (
             <StatusBadge
+              icon={false}
               variant="info"
               label={t("history.timing.generationBadge", {
                 elapsed: formatElapsed(item.generation_elapsed_ms),

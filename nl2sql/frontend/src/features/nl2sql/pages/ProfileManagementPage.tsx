@@ -392,7 +392,7 @@ function ProfileList({
         title={t("profiles.list.title")}
         description={t("profiles.list.hint")}
         action={
-          <StatusBadge variant="info" label={t("profiles.objects.count", { count: totalCount })} />
+          <StatusBadge icon={false} variant="info" label={t("profiles.objects.count", { count: totalCount })} />
         }
       />
       <div className="grid gap-2 rounded-md border border-border bg-surface-sunken p-3">
@@ -1184,7 +1184,7 @@ function ProfileEditor({
           {profileAccessProfile.allowed_role_ids.length > 0 ? (
             <div className="flex flex-wrap gap-1.5">
               {profileAccessProfile.allowed_role_ids.map((roleId) => (
-                <StatusBadge key={roleId} variant="neutral" label={roleId} />
+                <StatusBadge icon={false} key={roleId} variant="neutral" label={roleId} />
               ))}
             </div>
           ) : (

@@ -3401,7 +3401,6 @@ const nl2sqlJa = {
   "metadataSql.targets.grid.objectName": "対象名",
   "metadataSql.targets.grid.type": "種類",
   "metadataSql.targets.grid.owner": "所有者",
-  "metadataSql.targets.grid.comment": "コメント",
   "metadataSql.targets.grid.toggleHint": "チェックで対象に含める",
   "metadataSql.targets.emptyTitle": "対象がありません",
   "metadataSql.targets.emptyHint": "DB 構造を再取得してから確認してください。",

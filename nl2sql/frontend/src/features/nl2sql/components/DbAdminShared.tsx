@@ -652,7 +652,7 @@ export function DbAdminExecutionResult({
     <section className="grid gap-2 rounded-md border border-border bg-surface-sunken p-3 text-sm">
       <div className="flex flex-wrap gap-2">
         <StatusBadge variant={summary.variant} label={summary.label} />
-        <StatusBadge variant="neutral" label={runtimeLabel(result.runtime)} />
+        <StatusBadge icon={false} variant="neutral" label={runtimeLabel(result.runtime)} />
         {result.committed && <StatusBadge variant="success" label={t("dbAdmin.result.summary.committed")} />}
         {result.rolled_back && <StatusBadge variant="danger" label={t("dbAdmin.result.summary.rolledBack")} />}
       </div>
@@ -668,12 +668,13 @@ export function DbAdminExecutionResult({
             <div key={`${statement.index}-${statement.sql}`} className="rounded-md bg-surface p-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="flex flex-wrap gap-2">
-                  <StatusBadge variant="neutral" label={statement.statement_type} />
+                  <StatusBadge icon={false} variant="neutral" label={statement.statement_type} />
                   <StatusBadge variant={statusVariant(statement.status)} label={statusLabel(statement.status)} />
                   {statement.statement_type !== "SELECT" &&
                     statement.row_count !== null &&
                     statement.row_count !== undefined && (
                       <StatusBadge
+                        icon={false}
                         variant="neutral"
                         label={t("dbAdmin.result.affectedRows", { count: statement.row_count })}
                       />
@@ -718,6 +719,7 @@ export function SelectionListPanel({
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 className="text-sm font-semibold text-fg">{title}</h3>
         <StatusBadge
+          icon={false}
           variant={selectedItems.length > 0 ? "info" : "neutral"}
           label={selectedCountLabel}
         />
@@ -1213,10 +1215,10 @@ export function ObjectDetailPanel({
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-center gap-2">
           <p className="break-all font-mono text-sm font-semibold text-fg">{detail.name}</p>
-          <StatusBadge variant="neutral" label={detail.object_type} />
-          <StatusBadge variant="neutral" label={t("dbAdmin.detail.columnCount", { count: detail.columns.length })} />
+          <StatusBadge icon={false} variant="neutral" label={detail.object_type} />
+          <StatusBadge icon={false} variant="neutral" label={t("dbAdmin.detail.columnCount", { count: detail.columns.length })} />
           {detail.row_count != null && (
-            <StatusBadge variant="info" label={t("dbAdmin.list.rows", { count: detail.row_count })} />
+            <StatusBadge icon={false} variant="info" label={t("dbAdmin.list.rows", { count: detail.row_count })} />
           )}
         </div>
         {actions}

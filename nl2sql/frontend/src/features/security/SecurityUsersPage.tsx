@@ -775,7 +775,7 @@ export function SecurityUsersPage() {
                   icon={Users}
                   title={t("security.users.list")}
                   description={t("security.users.listHint")}
-                  action={<StatusBadge variant="info" label={securityFilteredCount(filteredUsers.length, users.length)} />}
+                  action={<StatusBadge icon={false} variant="info" label={securityFilteredCount(filteredUsers.length, users.length)} />}
                 />
                 <div className="rounded-md border border-border bg-surface-sunken p-3">
                   <SecuritySearchField
@@ -1162,6 +1162,7 @@ function UserDetailPanel({
           <div className="flex flex-wrap gap-1.5">
             {assignedRoles.map((role) => (
               <StatusBadge
+                icon={false}
                 key={role.role_id}
                 variant={role.archived ? "neutral" : "info"}
                 label={

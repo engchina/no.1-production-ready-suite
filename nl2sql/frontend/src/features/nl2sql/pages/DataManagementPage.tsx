@@ -1415,9 +1415,9 @@ function PreviewControlsPanel({
         description={t("dataMgmt.preview.controlsHint")}
         action={
           <>
-            <StatusBadge variant="info" label={t("dataMgmt.preview.objectTotalCount", { count: previewObjectCounts.totalCount })} />
-            <StatusBadge variant="neutral" label={t("dataMgmt.preview.objectTableCount", { count: previewObjectCounts.tableCount })} />
-            <StatusBadge variant="neutral" label={t("dataMgmt.preview.objectViewCount", { count: previewObjectCounts.viewCount })} />
+            <StatusBadge icon={false} variant="info" label={t("dataMgmt.preview.objectTotalCount", { count: previewObjectCounts.totalCount })} />
+            <StatusBadge icon={false} variant="neutral" label={t("dataMgmt.preview.objectTableCount", { count: previewObjectCounts.tableCount })} />
+            <StatusBadge icon={false} variant="neutral" label={t("dataMgmt.preview.objectViewCount", { count: previewObjectCounts.viewCount })} />
           </>
         }
       />
@@ -1717,8 +1717,8 @@ function PreviewResultsPanel({
         <div className="grid gap-2">
           {exportError && <ErrorState message={exportError} onRetry={onDownload} />}
           <div className="flex min-w-0 flex-wrap items-center gap-2">
-            <StatusBadge variant="neutral" label={preview.runtime} />
-            <StatusBadge variant="info" label={t("tableMgmt.importWizard.rows", { count: preview.results.total })} />
+            <StatusBadge icon={false} variant="neutral" label={preview.runtime} />
+            <StatusBadge icon={false} variant="info" label={t("tableMgmt.importWizard.rows", { count: preview.results.total })} />
             <span className="break-all font-mono text-xs text-fg-muted">{preview.sql}</span>
           </div>
           {preview.warnings.map((warning) => (
@@ -1966,9 +1966,9 @@ function CsvUploadWorkspace({
         <section className="grid gap-3 rounded-md border border-border bg-surface-sunken p-3 text-sm" aria-label={t("dataMgmt.csv.result")}>
           <div className="flex flex-wrap gap-2">
             <StatusBadge variant={result.executed ? "success" : "neutral"} label={result.executed ? "executed" : "not executed"} />
-            <StatusBadge variant="neutral" label={result.runtime} />
-            <StatusBadge variant="neutral" label={result.mode} />
-            <StatusBadge variant="info" label={t("tableMgmt.importWizard.rows", { count: result.row_count })} />
+            <StatusBadge icon={false} variant="neutral" label={result.runtime} />
+            <StatusBadge icon={false} variant="neutral" label={result.mode} />
+            <StatusBadge icon={false} variant="info" label={t("tableMgmt.importWizard.rows", { count: result.row_count })} />
             {result.executed && (
               <>
                 <StatusBadge variant="success" label={`${t("dataMgmt.csv.success")} ${result.success_count}`} />
@@ -2225,11 +2225,12 @@ function SyntheticWorkspace({
 
         <div className="flex flex-wrap items-center gap-2">
           <StatusBadge
+            icon={false}
             variant={syntheticSelectedTables.length > 0 ? "info" : "neutral"}
             label={t("dataTools.syntheticData.selectedCount", { count: syntheticSelectedTables.length })}
           />
-          {selectedSyntheticProfile?.owner && <StatusBadge variant="neutral" label={selectedSyntheticProfile.owner} />}
-          {selectedSyntheticProfile?.status && <StatusBadge variant="neutral" label={selectedSyntheticProfile.status} />}
+          {selectedSyntheticProfile?.owner && <StatusBadge icon={false} variant="neutral" label={selectedSyntheticProfile.owner} />}
+          {selectedSyntheticProfile?.status && <StatusBadge icon={false} variant="neutral" label={selectedSyntheticProfile.status} />}
           {visibleWarnings.map((warning) => (
             <span
               key={warning}
@@ -2494,8 +2495,8 @@ function SyntheticWorkspace({
         ) : syntheticDataResults ? (
           <div className="grid min-w-0 gap-2">
             <div className="flex flex-wrap gap-2">
-              <StatusBadge variant="neutral" label={syntheticDataResults.runtime} />
-              <StatusBadge variant="info" label={syntheticDataResults.table_name} />
+              <StatusBadge icon={false} variant="neutral" label={syntheticDataResults.runtime} />
+              <StatusBadge icon={false} variant="info" label={syntheticDataResults.table_name} />
             </div>
             {syntheticDataResults.warnings.map((warning) => (
               <p key={warning} className="rounded-md border border-warning-border bg-warning-subtle px-3 py-2 text-sm text-warning-fg">

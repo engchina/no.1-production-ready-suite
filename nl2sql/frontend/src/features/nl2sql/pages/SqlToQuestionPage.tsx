@@ -590,9 +590,9 @@ function SchemaPreview({
   return (
     <section className="grid content-start gap-3 rounded-md border border-border bg-surface-sunken p-3 text-sm">
       <div className="flex flex-wrap gap-2">
-        <StatusBadge variant="neutral" label={profile ? profileDisplayLabel(profile) : "-"} />
+        <StatusBadge icon={false} variant="neutral" label={profile ? profileDisplayLabel(profile) : "-"} />
         <span data-testid="sql-to-question-table-count">
-          <StatusBadge variant="info" label={t("sqlToQuestion.schema.tableCount", { count: tables.length })} />
+          <StatusBadge icon={false} variant="info" label={t("sqlToQuestion.schema.tableCount", { count: tables.length })} />
         </span>
       </div>
       <h3 className="flex items-center gap-2 text-sm font-semibold text-fg">

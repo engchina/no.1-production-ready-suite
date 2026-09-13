@@ -827,7 +827,7 @@ export function SecurityRolesPage() {
                   icon={Shield}
                   title={t("security.roles.list")}
                   description={t("security.roles.listHint")}
-                  action={<StatusBadge variant="info" label={securityFilteredCount(filteredRoles.length, roles.length)} />}
+                  action={<StatusBadge icon={false} variant="info" label={securityFilteredCount(filteredRoles.length, roles.length)} />}
                 />
                 <div className="rounded-md border border-border bg-surface-sunken p-3">
                   <SecuritySearchField
@@ -1037,6 +1037,7 @@ export function SecurityRolesPage() {
                                         <span>{permission.label}</span>
                                         {inherited ? (
                                           <StatusBadge
+                                            icon={false}
                                             variant="neutral"
                                             label={t("security.roles.permissionInherited", {
                                               source: inheritedSources[0],
@@ -1198,7 +1199,7 @@ export function SecurityRolesPage() {
 function RoleStatusBadges({ role }: { role: SecurityRole }) {
   return (
     <div className="flex flex-wrap gap-1">
-      <StatusBadge variant={role.is_built_in ? "info" : "neutral"} label={role.is_built_in ? t("security.roles.builtIn") : t("security.roles.custom")} />
+      <StatusBadge icon={false} variant={role.is_built_in ? "info" : "neutral"} label={role.is_built_in ? t("security.roles.builtIn") : t("security.roles.custom")} />
       {role.archived ? <StatusBadge variant="neutral" label={t("security.roles.archivedDisabled")} /> : null}
     </div>
   );
@@ -1292,7 +1293,7 @@ function RoleDetailPanel({
           <h3 className="text-sm font-semibold text-fg">{t("security.roles.profileAccess")}</h3>
           <div className="flex flex-wrap gap-1.5">
             {allowedProfiles.map((profile) => (
-              <StatusBadge key={profile.id} variant="neutral" label={profileAccessLabel(profile)} />
+              <StatusBadge icon={false} key={profile.id} variant="neutral" label={profileAccessLabel(profile)} />
             ))}
           </div>
         </div>

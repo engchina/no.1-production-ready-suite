@@ -1,5 +1,5 @@
 import { SortHeader } from "@/components/SortHeader";
-import { Children, type ReactNode } from "react";
+import { Children, useId, type ReactNode } from "react";
 import {
   ArrowDownUp,
   Check,
@@ -43,6 +43,7 @@ import {
 } from "@/components/ProcessingState";
 import { FixedSplitPane } from "@/components/layout/FixedSplitPane";
 import { ErrorState } from "@/components/StateViews";
+import { IdentifierText } from "@/components/IdentifierText";
 import { copyTextToClipboard } from "@/lib/clipboard";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
@@ -71,6 +72,20 @@ export {
   DbObjectSearchOwnerFields,
   DbOwnerPrefixFilterField,
 } from "@/components/DbObjectFilterFields";
+
+/**
+ * オブジェクト一覧で名前の直下に置くコメント（#509 / #536）。
+ * Profile 一覧の補足表示と同じ見た目で最大 2 行に収め、空・空白は `-`、全文は title に入れる。
+ * 選択操作の要素から `aria-describedby` でこの id を参照し、読み上げでも名前と関連付ける。
+ */
+export function DbObjectCommentText({ id, comment }: { id: string; comment?: string | null }) {
+  const text = comment?.trim() || "-";
+  return (
+    <span id={id} className="line-clamp-2 break-words text-xs font-normal leading-5 text-fg-muted [overflow-wrap:anywhere]" title={text}>
+      {text}
+    </span>
+  );
+}
 
 export type DbObjectDetailTab = "columns" | "ddl";
 export type DbObjectOwnerPrefix = string;
@@ -658,6 +673,7 @@ export function DbSingleObjectPickerList({
     onClick: (item: DbObjectPickerItem) => void;
   };
 }) {
+  const commentIdPrefix = useId();
   if (items.length === 0) {
     return (
       <div className="rounded-md border border-border bg-surface p-4" data-testid={dataTestId}>
@@ -669,12 +685,14 @@ export function DbSingleObjectPickerList({
     );
   }
 
+  // 種類・行数は内容幅（バッジ「テーブル」約 70px、「統計未取得」約 60px）より広い固定幅にし、
+  // 行ごとに独立した grid でも列がそろい、隣の列へはみ出さないようにする。
   const headerClass = action
-    ? "hidden grid-cols-[minmax(0,1.35fr)_5.25rem_5.25rem_minmax(4.5rem,0.75fr)_3.5rem] gap-2 border-b border-border bg-surface-sunken px-3 py-2 text-xs font-semibold text-fg-muted md:grid"
-    : "hidden grid-cols-[minmax(0,1.45fr)_5.25rem_5.25rem_minmax(4.5rem,0.8fr)] gap-2 border-b border-border bg-surface-sunken px-3 py-2 text-xs font-semibold text-fg-muted md:grid";
+    ? "hidden grid-cols-[minmax(0,1.35fr)_6rem_6rem_minmax(4.5rem,0.75fr)_3.5rem] gap-2 border-b border-border bg-surface-sunken px-3 py-2 text-xs font-semibold text-fg-muted md:grid"
+    : "hidden grid-cols-[minmax(0,1.45fr)_6rem_6rem_minmax(4.5rem,0.8fr)] gap-2 border-b border-border bg-surface-sunken px-3 py-2 text-xs font-semibold text-fg-muted md:grid";
   const rowClass = action
-    ? "md:grid-cols-[minmax(0,1.35fr)_5.25rem_5.25rem_minmax(4.5rem,0.75fr)_3.5rem]"
-    : "md:grid-cols-[minmax(0,1.45fr)_5.25rem_5.25rem_minmax(4.5rem,0.8fr)]";
+    ? "md:grid-cols-[minmax(0,1.35fr)_6rem_6rem_minmax(4.5rem,0.75fr)_3.5rem]"
+    : "md:grid-cols-[minmax(0,1.45fr)_6rem_6rem_minmax(4.5rem,0.8fr)]";
 
   return (
     <div className="overflow-hidden rounded-md border border-border bg-surface" data-testid={dataTestId}>
@@ -706,7 +724,8 @@ export function DbSingleObjectPickerList({
         {action && <span role="columnheader" className="text-right">{t("objectSelector.column.actions")}</span>}
       </div>
       <div className={maxHeightClass} role="list" aria-label={listLabel}>
-        {items.map((item) => {
+        {items.map((item, index) => {
+          const commentId = `${commentIdPrefix}-comment-${index}`;
           const selected = item.key === selectedKey || item.name === selectedKey;
           const selectionDisabled = Boolean(selectDisabled?.(item));
           const actionLoading = Boolean(action && loadingKey === item.key);
@@ -749,6 +768,7 @@ export function DbSingleObjectPickerList({
                 type="button"
                 aria-current={selected ? "true" : undefined}
                 aria-label={selectAriaLabel?.(item) ?? t("objectSelector.selectObject", { name: item.name })}
+                aria-describedby={commentId}
                 disabled={selectionDisabled}
                 className="flex min-h-11 w-full min-w-0 flex-col justify-center text-left focus:outline-none focus:ring-2 focus:ring-focus-ring md:min-h-0"
                 onClick={() => {
@@ -756,24 +776,24 @@ export function DbSingleObjectPickerList({
                   onSelect(item);
                 }}
               >
-                <span className="break-all font-mono text-xs font-semibold text-accent-fg">{item.name}</span>
-                {item.comment && <span className="mt-1 block break-words text-xs text-fg-muted md:hidden">{item.comment}</span>}
+                <IdentifierText value={item.name} className="font-mono text-xs font-semibold text-accent-fg" />
+                <DbObjectCommentText id={commentId} comment={item.comment} />
               </button>
-              <span className="flex items-center gap-2 md:block">
+              <span className="flex items-center gap-2 whitespace-nowrap md:block">
                 <span className="text-xs font-medium text-fg-muted md:hidden">{t("objectSelector.column.kind")}</span>
                 {item.kindLabel ? (
-                  <StatusBadge variant={item.kindVariant ?? "neutral"} label={item.kindLabel} />
+                  <StatusBadge icon={false} variant={item.kindVariant ?? "neutral"} label={item.kindLabel} />
                 ) : (
                   <span className="text-xs text-fg-muted">-</span>
                 )}
               </span>
-              <span className="flex items-center gap-2 font-sans text-xs text-fg md:block">
+              <span className="flex items-center gap-2 whitespace-nowrap font-sans text-xs text-fg md:block">
                 <span className="font-sans font-medium text-fg-muted md:hidden">{t("objectSelector.column.rows")}</span>
                 {item.rowCountLabel || "-"}
               </span>
               <span className="flex min-w-0 items-center gap-2 font-mono text-xs text-fg-muted md:block">
                 <span className="font-sans font-medium text-fg-muted md:hidden">{t("objectSelector.column.owner")}</span>
-                <span className="break-all">{item.owner || "-"}</span>
+                <IdentifierText value={item.owner || "-"} />
               </span>
               {action && hasRowActions && (
                 <span className="flex items-center justify-between gap-2 md:justify-end">
@@ -1077,7 +1097,7 @@ export function DbObjectGrid({
         icon={icon}
         title={labels.title}
         description={labels.hint}
-        action={<StatusBadge variant="info" label={labels.count} />}
+        action={<StatusBadge icon={false} variant="info" label={labels.count} />}
       />
 
       <div className="grid gap-2 rounded-md border border-border bg-surface-sunken p-3">
@@ -1157,12 +1177,8 @@ export function DbObjectGrid({
                           className="grid max-w-full text-left focus:outline-none focus:ring-2 focus:ring-focus-ring"
                           onClick={() => onSelect(qualifiedName)}
                         >
-                          <span className="break-all font-mono text-xs font-semibold text-accent-fg">{qualifiedName}</span>
-                          {showComments && (
-                            <span id={commentId} className="line-clamp-2 break-words text-xs leading-5 text-fg-muted [overflow-wrap:anywhere]" title={item.comment?.trim() || "-"}>
-                              {item.comment?.trim() || "-"}
-                            </span>
-                          )}
+                          <IdentifierText value={qualifiedName} className="font-mono text-xs font-semibold text-accent-fg" />
+                          {showComments && <DbObjectCommentText id={commentId} comment={item.comment} />}
                         </button>
                       </td>
                       <td className="whitespace-nowrap px-3 py-2 font-sans text-xs text-fg">{rowCountLabel(item.row_count)}</td>
@@ -1319,10 +1335,11 @@ export function DbObjectDetailPanel({
             <h2 id={headingId} className="break-all font-mono text-base font-semibold text-fg">
               {detailQualifiedName}
             </h2>
-            <StatusBadge variant="neutral" label={detail.object_type} />
-            <StatusBadge variant="neutral" label={t("dbAdmin.detail.columnCount", { count: detail.columns.length })} />
+            <StatusBadge icon={false} variant="neutral" label={detail.object_type} />
+            <StatusBadge icon={false} variant="neutral" label={t("dbAdmin.detail.columnCount", { count: detail.columns.length })} />
             {showRowCountBadge && (
               <StatusBadge
+                icon={false}
                 variant={detail.row_count != null ? "info" : "neutral"}
                 label={rowCountLabel(detail.row_count)}
                 className="min-w-[4.5rem]"

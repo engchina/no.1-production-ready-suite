@@ -83,15 +83,17 @@ export function QueryResultSummary({
 
   return (
     <div className="flex flex-wrap items-center gap-2" data-testid="query-result-summary">
-      <StatusBadge variant="neutral" label={t("queryResults.fetchedCount", { count: returnedCount })} />
+      <StatusBadge icon={false} variant="neutral" label={t("queryResults.fetchedCount", { count: returnedCount })} />
       {showExecutionContext ? (
         <StatusBadge
+          icon={false}
           variant={results.vpd_context_enforced ? "info" : "neutral"}
           label={t(`queryResults.executionContext.${executionContext}`)}
         />
       ) : null}
       {hasRowLimit && (
         <StatusBadge
+          icon={false}
           variant="neutral"
           label={
             rowLimit === 0

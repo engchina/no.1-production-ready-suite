@@ -51,3 +51,12 @@ export function formatBytes(bytes: number | null): string {
   }
   return `${value.toFixed(1)} ${units[unit]}`;
 }
+
+/**
+ * Oracle 識別子（`OWNER.TABLE_NAME` 等）を折り返し候補位置で分割する。
+ * `.` `_` `$` `#` の直後を候補にし、`<wbr>` を挟んで描画すると語の途中ではなく区切りで折り返す。
+ * 区切りのない長い区間は描画側の `overflow-wrap:anywhere` で最後の手段として折り返す。
+ */
+export function identifierWrapSegments(value: string): string[] {
+  return value.match(/[^._$#]*[._$#]+|[^._$#]+$/g) ?? [value];
+}

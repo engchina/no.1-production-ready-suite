@@ -173,6 +173,7 @@ export function GlobalRulesPage() {
               icon={Layers3}
               action={
                 <StatusBadge
+                  icon={false}
                   variant="neutral"
                   label={t("globalRules.count", { count: rules.length })}
                 />
