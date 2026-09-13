@@ -1,4 +1,6 @@
-import { expect, test, type Page } from "@playwright/test";
+import type { Page } from "@playwright/test";
+
+import { expect, test } from "./fixtures/mock-api";
 
 async function expectNoHorizontalOverflow(page: Page) {
   const hasNoOverflow = await page.evaluate(() => {
@@ -55,7 +57,8 @@ async function mockMissingOciRuntimeSettings(page: Page) {
   });
   await page.route("**/api/settings/oci/object-storage", async (route) => {
     if (route.request().method() !== "PATCH") {
-      await route.continue();
+      // 保存などは e2e/fixtures/mock-api.ts が扱う（実 backend へは流さない）。
+      await route.fallback();
       return;
     }
     await route.fulfill({
@@ -76,7 +79,8 @@ async function mockMissingOciRuntimeSettings(page: Page) {
   });
   await page.route("**/api/settings/oci", async (route) => {
     if (route.request().method() !== "GET") {
-      await route.continue();
+      // 保存などは e2e/fixtures/mock-api.ts が扱う（実 backend へは流さない）。
+      await route.fallback();
       return;
     }
     await route.fulfill({
@@ -99,7 +103,8 @@ async function mockMissingOciRuntimeSettings(page: Page) {
   });
   await page.route("**/api/settings/upload-storage", async (route) => {
     if (route.request().method() !== "GET") {
-      await route.continue();
+      // 保存などは e2e/fixtures/mock-api.ts が扱う（実 backend へは流さない）。
+      await route.fallback();
       return;
     }
     await route.fulfill({
@@ -121,7 +126,8 @@ async function mockMissingOciRuntimeSettings(page: Page) {
   await page.route("**/api/settings/database", async (route) => {
     const method = route.request().method();
     if (!["GET", "PATCH"].includes(method)) {
-      await route.continue();
+      // 保存などは e2e/fixtures/mock-api.ts が扱う（実 backend へは流さない）。
+      await route.fallback();
       return;
     }
     const body =
@@ -170,7 +176,7 @@ async function mockMissingOciRuntimeSettings(page: Page) {
 }
 
 test.describe("Agent Runtime settings", () => {
-  test("RAG 由来のシステム設定 4 画面を表示・保存できる", async ({ page }) => {
+  test("RAG 由来のシステム設定 4 画面を表示・保存できる", async ({ page, mockApi }) => {
     await mockMissingOciRuntimeSettings(page);
     await page.goto("/settings/oci");
     await expect(page.getByRole("heading", { name: "OCI 認証設定", level: 1 })).toBeVisible();
@@ -194,6 +200,12 @@ test.describe("Agent Runtime settings", () => {
     await page.getByRole("option", { name: "ap-osaka-1" }).click();
     await page.getByRole("button", { name: /OCI 設定を保存/ }).click();
     await expect(page.getByText("保存しました").first()).toBeVisible();
+    expect(mockApi.lastRequest("PATCH", "/api/settings/oci")?.body).toMatchObject({
+      user: "ocid1.user.oc1..aaaaaaaa",
+      tenancy: "ocid1.tenancy.oc1..aaaaaaaa",
+      fingerprint: "12:34:56:78:90:ab:cd:ef",
+      region: "ap-osaka-1",
+    });
     await page.getByRole("combobox", { name: "Object Storage リージョン" }).click();
     await page.getByRole("option", { name: "ap-osaka-1" }).click();
     await page.getByRole("button", { name: /Object Storage ネームスペース: 取得/ }).click();
@@ -213,6 +225,10 @@ test.describe("Agent Runtime settings", () => {
     await page.getByLabel("ローカル保存ディレクトリ").fill("/u01/data/production-ready-agent");
     await page.getByRole("button", { name: "保存" }).click();
     await expect(page.getByText("保存しました")).toBeVisible();
+    expect(mockApi.lastRequest("PATCH", "/api/settings/upload-storage")?.body).toMatchObject({
+      backend: "local",
+      local_storage_dir: "/u01/data/production-ready-agent",
+    });
     await expectNoHorizontalOverflow(page);
 
     await page.goto("/settings/model");
@@ -220,6 +236,9 @@ test.describe("Agent Runtime settings", () => {
     await page.getByRole("textbox", { name: "API key" }).fill("test-api-key");
     await page.getByRole("button", { name: /保存/ }).click();
     await expect(page.getByText("モデル設定を保存しました")).toBeVisible();
+    expect(mockApi.lastRequest("PATCH", "/api/settings/model")?.body).toMatchObject({
+      enterprise_ai: { api_key: "test-api-key" },
+    });
     await expectNoHorizontalOverflow(page);
 
     await page.goto("/settings/database");
@@ -292,7 +311,7 @@ test.describe("Agent Runtime settings", () => {
     await page.getByRole("button", { name: "サーバーを追加" }).click();
     await page.locator("#mcp-server-id").fill("crm");
     await page.locator("#mcp-server-label").fill("CRM Gateway");
-    await page.locator("#mcp-server-base-url").fill("http://127.0.0.1:8052/jsonrpc");
+    await page.locator("#mcp-server-base-url").fill("http://mcp.example.test/jsonrpc");
     await page.locator("#mcp-server-timeout").fill("7");
     await page.getByRole("button", { name: "作成" }).click();
     await expect(page.getByText("サーバーを追加しました")).toBeVisible();
@@ -394,7 +413,7 @@ test.describe("Agent Runtime settings", () => {
           resource_ids: ["ui_plugin_prompt"],
         },
       ],
-      mcp_servers: [{ server_id: "ui_plugin_mcp", base_url: "http://127.0.0.1:8052/jsonrpc" }],
+      mcp_servers: [{ server_id: "ui_plugin_mcp", base_url: "http://mcp.example.test/jsonrpc" }],
       resources: [
         {
           id: "ui_plugin_prompt",
@@ -428,7 +447,7 @@ test.describe("Agent Runtime settings", () => {
     await page.getByRole("button", { name: "マーケットプレイスを追加" }).click();
     await page.locator("#mkt-id").fill("fixture_market");
     await page.locator("#mkt-name").fill("Fixture Market");
-    await page.locator("#mkt-url").fill("http://127.0.0.1:8052/marketplace");
+    await page.locator("#mkt-url").fill("http://marketplace.example.test/marketplace");
     await page.getByRole("button", { name: "作成" }).click();
     await expect(page.getByText("マーケットプレイスを追加しました")).toBeVisible();
 

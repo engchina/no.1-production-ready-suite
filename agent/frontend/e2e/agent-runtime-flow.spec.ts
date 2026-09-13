@@ -1,4 +1,6 @@
-import { expect, test, type Page, type Route } from "@playwright/test";
+import type { Page, Route } from "@playwright/test";
+
+import { expect, test } from "./fixtures/mock-api";
 
 const now = "2026-06-28T00:00:00Z";
 

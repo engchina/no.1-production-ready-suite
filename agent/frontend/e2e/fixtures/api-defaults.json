@@ -1,0 +1,1664 @@
+{
+  "health": {
+    "status": "ok",
+    "version": "0.1.0",
+    "message": null,
+    "checks": {}
+  },
+  "runtimes": [
+    {
+      "id": "legacy-native",
+      "name": "Legacy Native (read-only)",
+      "kind": "legacy_native",
+      "base_url": "",
+      "auth_secret_ref": null,
+      "managed_service_id": null,
+      "capabilities": {
+        "stream_events": false,
+        "cancel": false,
+        "artifacts": false,
+        "approvals": false,
+        "skill_sync": true,
+        "mcp_sync": true
+      },
+      "enabled": false,
+      "status": "legacy",
+      "created_at": "2026-06-28T00:00:00Z",
+      "updated_at": "2026-06-28T00:00:00Z"
+    },
+    {
+      "id": "openclaw-default",
+      "name": "OpenClaw",
+      "kind": "openclaw",
+      "base_url": "http://runtime-openclaw:18789",
+      "auth_secret_ref": "OPENCLAW_GATEWAY_TOKEN",
+      "managed_service_id": "runtime-openclaw",
+      "capabilities": {
+        "stream_events": true,
+        "cancel": true,
+        "artifacts": false,
+        "approvals": true,
+        "skill_sync": true,
+        "mcp_sync": true
+      },
+      "enabled": false,
+      "status": "unknown",
+      "created_at": "2026-06-28T00:00:00Z",
+      "updated_at": "2026-06-28T00:00:00Z"
+    },
+    {
+      "id": "hermes-default",
+      "name": "Hermes",
+      "kind": "hermes",
+      "base_url": "http://runtime-hermes:8642",
+      "auth_secret_ref": "HERMES_API_SERVER_KEY",
+      "managed_service_id": "runtime-hermes",
+      "capabilities": {
+        "stream_events": true,
+        "cancel": true,
+        "artifacts": false,
+        "approvals": false,
+        "skill_sync": true,
+        "mcp_sync": true
+      },
+      "enabled": false,
+      "status": "unknown",
+      "created_at": "2026-06-28T00:00:00Z",
+      "updated_at": "2026-06-28T00:00:00Z"
+    },
+    {
+      "id": "deerflow-default",
+      "name": "DeerFlow",
+      "kind": "deerflow",
+      "base_url": "http://runtime-deerflow:2026",
+      "auth_secret_ref": "DEER_FLOW_INTERNAL_AUTH_TOKEN",
+      "managed_service_id": "runtime-deerflow",
+      "capabilities": {
+        "stream_events": true,
+        "cancel": false,
+        "artifacts": true,
+        "approvals": false,
+        "skill_sync": true,
+        "mcp_sync": true
+      },
+      "enabled": false,
+      "status": "unknown",
+      "created_at": "2026-06-28T00:00:00Z",
+      "updated_at": "2026-06-28T00:00:00Z"
+    }
+  ],
+  "agents": [
+    {
+      "id": "default",
+      "name": "汎用業務 Agent",
+      "description": "外部 RAG / NL2SQL と承認フローを使う既定 Agent。",
+      "instructions": "業務データは外部ツール経由で取得し、根拠と監査情報を残す。",
+      "skill_ids": [
+        "business_rag_research",
+        "structured_data_query",
+        "mcp_tool_discovery",
+        "mcp_tool_call",
+        "rag_then_structured_data"
+      ],
+      "migration_required": false,
+      "tool_names": [
+        "agent_skill_list",
+        "agent_skill_run",
+        "echo",
+        "external_mcp_call",
+        "external_mcp_list_tools",
+        "external_nl2sql_query",
+        "external_rag_search",
+        "sandbox_command_run"
+      ],
+      "command_allowed_prefixes": [],
+      "enabled": true,
+      "source": "builtin",
+      "created_at": "2026-06-28T00:00:00Z",
+      "updated_at": "2026-06-28T00:00:00Z"
+    }
+  ],
+  "skills": [
+    {
+      "id": "business_rag_research",
+      "name": "業務 RAG 調査",
+      "description": "外部業務 RAG を使って根拠付き情報を検索する。",
+      "instructions": "ユーザーの目的を外部 RAG の query として扱い、引用と根拠を返す。",
+      "mcp_requirements": [
+        {
+          "server_id": "control-plane",
+          "tool_names": [
+            "external_rag_search"
+          ]
+        }
+      ],
+      "resource_ids": [],
+      "tool_calls": [
+        {
+          "name": "external_rag_search",
+          "arguments": {
+            "query": "${goal}",
+            "business_view_id": "${arguments.business_view_id}",
+            "filters": "${arguments.filters}",
+            "top_k": "${arguments.top_k}"
+          },
+          "trace_id": null
+        }
+      ],
+      "enabled": true,
+      "tags": [
+        "rag",
+        "research",
+        "business-data"
+      ],
+      "source": "builtin",
+      "created_at": "2026-06-28T00:00:00Z",
+      "updated_at": "2026-06-28T00:00:00Z"
+    },
+    {
+      "id": "mcp_tool_call",
+      "name": "MCP ツール実行",
+      "description": "外部 MCP gateway 経由で指定 tool を実行する。",
+      "instructions": "MCP tool の schema に合わせた arguments を渡す。副作用は通常承認対象になる。",
+      "mcp_requirements": [
+        {
+          "server_id": "control-plane",
+          "tool_names": [
+            "external_mcp_call"
+          ]
+        }
+      ],
+      "resource_ids": [],
+      "tool_calls": [
+        {
+          "name": "external_mcp_call",
+          "arguments": {
+            "tool_name": "${arguments.tool_name}",
+            "arguments": "${arguments.arguments}",
+            "server_id": "${arguments.server_id}"
+          },
+          "trace_id": null
+        }
+      ],
+      "enabled": true,
+      "tags": [
+        "mcp",
+        "tool-call"
+      ],
+      "source": "builtin",
+      "created_at": "2026-06-28T00:00:00Z",
+      "updated_at": "2026-06-28T00:00:00Z"
+    },
+    {
+      "id": "mcp_tool_discovery",
+      "name": "MCP ツール探索",
+      "description": "外部 MCP gateway の tools/list を呼んで利用可能な tool を確認する。",
+      "instructions": "MCP tool 実行前に schema と説明を確認する。",
+      "mcp_requirements": [
+        {
+          "server_id": "control-plane",
+          "tool_names": [
+            "external_mcp_list_tools"
+          ]
+        }
+      ],
+      "resource_ids": [],
+      "tool_calls": [
+        {
+          "name": "external_mcp_list_tools",
+          "arguments": {
+            "server_id": "${arguments.server_id}"
+          },
+          "trace_id": null
+        }
+      ],
+      "enabled": true,
+      "tags": [
+        "mcp",
+        "tool-discovery"
+      ],
+      "source": "builtin",
+      "created_at": "2026-06-28T00:00:00Z",
+      "updated_at": "2026-06-28T00:00:00Z"
+    },
+    {
+      "id": "rag_then_structured_data",
+      "name": "RAG 後に構造化データ照会",
+      "description": "業務 RAG で文脈を確認した後、外部 NL2SQL へ同じ目的を渡す。",
+      "instructions": "非構造文脈と構造化表の両方が必要な調査に使う。",
+      "mcp_requirements": [
+        {
+          "server_id": "control-plane",
+          "tool_names": [
+            "external_rag_search",
+            "external_nl2sql_query"
+          ]
+        }
+      ],
+      "resource_ids": [],
+      "tool_calls": [
+        {
+          "name": "external_rag_search",
+          "arguments": {
+            "query": "${goal}",
+            "business_view_id": "${arguments.business_view_id}",
+            "filters": "${arguments.filters}",
+            "top_k": "${arguments.top_k}"
+          },
+          "trace_id": null
+        },
+        {
+          "name": "external_nl2sql_query",
+          "arguments": {
+            "question": "${goal}",
+            "data_domain_id": "${arguments.data_domain_id}",
+            "business_view_id": "${arguments.business_view_id}",
+            "filters": "${arguments.filters}",
+            "limit": "${arguments.limit}",
+            "mode": "${arguments.mode}",
+            "include_sql": "${arguments.include_sql}"
+          },
+          "trace_id": null
+        }
+      ],
+      "enabled": true,
+      "tags": [
+        "rag",
+        "nl2sql",
+        "business-data"
+      ],
+      "source": "builtin",
+      "created_at": "2026-06-28T00:00:00Z",
+      "updated_at": "2026-06-28T00:00:00Z"
+    },
+    {
+      "id": "structured_data_query",
+      "name": "構造化データ照会",
+      "description": "外部 NL2SQL/構造化データサービスへ質問を渡して表形式結果を取得する。",
+      "instructions": "SQL は監査・説明用途として受け取り、この Runtime 内では実行しない。",
+      "mcp_requirements": [
+        {
+          "server_id": "control-plane",
+          "tool_names": [
+            "external_nl2sql_query"
+          ]
+        }
+      ],
+      "resource_ids": [],
+      "tool_calls": [
+        {
+          "name": "external_nl2sql_query",
+          "arguments": {
+            "question": "${goal}",
+            "data_domain_id": "${arguments.data_domain_id}",
+            "business_view_id": "${arguments.business_view_id}",
+            "filters": "${arguments.filters}",
+            "limit": "${arguments.limit}",
+            "mode": "${arguments.mode}",
+            "include_sql": "${arguments.include_sql}"
+          },
+          "trace_id": null
+        }
+      ],
+      "enabled": true,
+      "tags": [
+        "nl2sql",
+        "structured-data",
+        "audit-sql"
+      ],
+      "source": "builtin",
+      "created_at": "2026-06-28T00:00:00Z",
+      "updated_at": "2026-06-28T00:00:00Z"
+    },
+    {
+      "id": "workspace_command",
+      "name": "ワークスペースコマンド",
+      "description": "許可済み prefix のコマンドを sandbox command tool として計画する。",
+      "instructions": "コード調査・テスト・生成物確認のために、許可されたコマンドだけを使う。",
+      "mcp_requirements": [
+        {
+          "server_id": "control-plane",
+          "tool_names": [
+            "sandbox_command_run"
+          ]
+        }
+      ],
+      "resource_ids": [],
+      "tool_calls": [
+        {
+          "name": "sandbox_command_run",
+          "arguments": {
+            "command": "${arguments.command}",
+            "cwd": "${arguments.cwd}",
+            "timeout_seconds": "${arguments.timeout_seconds}",
+            "output_limit_bytes": "${arguments.output_limit_bytes}"
+          },
+          "trace_id": null
+        }
+      ],
+      "enabled": true,
+      "tags": [
+        "command",
+        "workspace",
+        "sandbox"
+      ],
+      "source": "builtin",
+      "created_at": "2026-06-28T00:00:00Z",
+      "updated_at": "2026-06-28T00:00:00Z"
+    }
+  ],
+  "tools": [
+    {
+      "name": "agent_skill_list",
+      "description": "Agent Runtime に登録された Skill 一覧を返す。",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "$defs": {
+          "AgentSkillDefinition": {
+            "properties": {
+              "id": {
+                "title": "Id",
+                "type": "string"
+              },
+              "name": {
+                "title": "Name",
+                "type": "string"
+              },
+              "description": {
+                "default": "",
+                "title": "Description",
+                "type": "string"
+              },
+              "instructions": {
+                "default": "",
+                "title": "Instructions",
+                "type": "string"
+              },
+              "mcp_requirements": {
+                "items": {
+                  "$ref": "#/$defs/SkillMcpRequirement"
+                },
+                "title": "Mcp Requirements",
+                "type": "array"
+              },
+              "resource_ids": {
+                "items": {
+                  "type": "string"
+                },
+                "title": "Resource Ids",
+                "type": "array"
+              },
+              "tool_calls": {
+                "items": {
+                  "$ref": "#/$defs/SkillToolCallTemplate"
+                },
+                "title": "Tool Calls",
+                "type": "array"
+              },
+              "enabled": {
+                "default": true,
+                "title": "Enabled",
+                "type": "boolean"
+              },
+              "tags": {
+                "items": {
+                  "type": "string"
+                },
+                "title": "Tags",
+                "type": "array"
+              },
+              "source": {
+                "default": "runtime",
+                "title": "Source",
+                "type": "string"
+              },
+              "created_at": {
+                "format": "date-time",
+                "title": "Created At",
+                "type": "string"
+              },
+              "updated_at": {
+                "format": "date-time",
+                "title": "Updated At",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name"
+            ],
+            "title": "AgentSkillDefinition",
+            "type": "object"
+          },
+          "SkillMcpRequirement": {
+            "description": "Skill の内部実装が必要とする MCP server / tool allowlist。",
+            "properties": {
+              "server_id": {
+                "title": "Server Id",
+                "type": "string"
+              },
+              "tool_names": {
+                "items": {
+                  "type": "string"
+                },
+                "title": "Tool Names",
+                "type": "array"
+              }
+            },
+            "required": [
+              "server_id"
+            ],
+            "title": "SkillMcpRequirement",
+            "type": "object"
+          },
+          "SkillToolCallTemplate": {
+            "properties": {
+              "name": {
+                "title": "Name",
+                "type": "string"
+              },
+              "arguments": {
+                "additionalProperties": true,
+                "title": "Arguments",
+                "type": "object"
+              },
+              "trace_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Trace Id"
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "title": "SkillToolCallTemplate",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "skills": {
+            "items": {
+              "$ref": "#/$defs/AgentSkillDefinition"
+            },
+            "title": "Skills",
+            "type": "array"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "title": "Metadata",
+            "type": "object"
+          }
+        },
+        "required": [
+          "skills"
+        ],
+        "title": "AgentSkillListOutput",
+        "type": "object"
+      },
+      "permission_level": "read",
+      "side_effects": false,
+      "timeout_seconds": 1.0,
+      "max_retries": 0,
+      "audit_tags": [
+        "agent",
+        "skill",
+        "discovery"
+      ]
+    },
+    {
+      "name": "agent_skill_run",
+      "description": "指定 Skill を標準 ToolCall 計画へ展開する。実行は Runtime の通常ステップで行う。",
+      "input_schema": {
+        "properties": {
+          "skill_id": {
+            "title": "Skill Id",
+            "type": "string"
+          },
+          "goal": {
+            "title": "Goal",
+            "type": "string"
+          },
+          "arguments": {
+            "additionalProperties": true,
+            "title": "Arguments",
+            "type": "object"
+          },
+          "trace_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Trace Id"
+          }
+        },
+        "required": [
+          "skill_id",
+          "goal"
+        ],
+        "title": "AgentSkillRunInput",
+        "type": "object"
+      },
+      "output_schema": {
+        "$defs": {
+          "SkillToolCallTemplate": {
+            "properties": {
+              "name": {
+                "title": "Name",
+                "type": "string"
+              },
+              "arguments": {
+                "additionalProperties": true,
+                "title": "Arguments",
+                "type": "object"
+              },
+              "trace_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Trace Id"
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "title": "SkillToolCallTemplate",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "skill_id": {
+            "title": "Skill Id",
+            "type": "string"
+          },
+          "skill_name": {
+            "title": "Skill Name",
+            "type": "string"
+          },
+          "goal": {
+            "title": "Goal",
+            "type": "string"
+          },
+          "instructions": {
+            "default": "",
+            "title": "Instructions",
+            "type": "string"
+          },
+          "tool_calls": {
+            "items": {
+              "$ref": "#/$defs/SkillToolCallTemplate"
+            },
+            "title": "Tool Calls",
+            "type": "array"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "title": "Metadata",
+            "type": "object"
+          }
+        },
+        "required": [
+          "skill_id",
+          "skill_name",
+          "goal"
+        ],
+        "title": "AgentSkillPlanOutput",
+        "type": "object"
+      },
+      "permission_level": "read",
+      "side_effects": false,
+      "timeout_seconds": 1.0,
+      "max_retries": 0,
+      "audit_tags": [
+        "agent",
+        "skill",
+        "planner"
+      ]
+    },
+    {
+      "name": "echo",
+      "description": "入力をそのまま返す疎通確認用ツール。",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "output_schema": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "permission_level": "read",
+      "side_effects": false,
+      "timeout_seconds": 10.0,
+      "max_retries": 0,
+      "audit_tags": [
+        "debug"
+      ]
+    },
+    {
+      "name": "external_mcp_call",
+      "description": "外部 MCP JSON-RPC gateway 経由で MCP tool を呼び出す。",
+      "input_schema": {
+        "properties": {
+          "tool_name": {
+            "title": "Tool Name",
+            "type": "string"
+          },
+          "arguments": {
+            "additionalProperties": true,
+            "title": "Arguments",
+            "type": "object"
+          },
+          "server_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Server Id"
+          },
+          "trace_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Trace Id"
+          }
+        },
+        "required": [
+          "tool_name"
+        ],
+        "title": "ExternalMcpCallInput",
+        "type": "object"
+      },
+      "output_schema": {
+        "properties": {
+          "tool_name": {
+            "title": "Tool Name",
+            "type": "string"
+          },
+          "content": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Content",
+            "type": "array"
+          },
+          "structured_content": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Structured Content"
+          },
+          "result": {
+            "additionalProperties": true,
+            "title": "Result",
+            "type": "object"
+          },
+          "is_error": {
+            "default": false,
+            "title": "Is Error",
+            "type": "boolean"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "title": "Metadata",
+            "type": "object"
+          }
+        },
+        "required": [
+          "tool_name"
+        ],
+        "title": "ExternalMcpCallOutput",
+        "type": "object"
+      },
+      "permission_level": "sensitive",
+      "side_effects": true,
+      "timeout_seconds": 10.0,
+      "max_retries": 3,
+      "audit_tags": [
+        "external",
+        "mcp",
+        "tool-gateway"
+      ]
+    },
+    {
+      "name": "external_mcp_list_tools",
+      "description": "外部 MCP JSON-RPC gateway の tools/list を呼び、利用可能 tool を取得する。",
+      "input_schema": {
+        "properties": {
+          "server_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Server Id"
+          },
+          "trace_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Trace Id"
+          }
+        },
+        "title": "ExternalMcpListToolsInput",
+        "type": "object"
+      },
+      "output_schema": {
+        "$defs": {
+          "ExternalMcpToolInfo": {
+            "properties": {
+              "name": {
+                "title": "Name",
+                "type": "string"
+              },
+              "description": {
+                "default": "",
+                "title": "Description",
+                "type": "string"
+              },
+              "input_schema": {
+                "additionalProperties": true,
+                "title": "Input Schema",
+                "type": "object"
+              },
+              "output_schema": {
+                "anyOf": [
+                  {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Output Schema"
+              },
+              "server_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Server Id"
+              },
+              "metadata": {
+                "additionalProperties": true,
+                "title": "Metadata",
+                "type": "object"
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "title": "ExternalMcpToolInfo",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "tools": {
+            "items": {
+              "$ref": "#/$defs/ExternalMcpToolInfo"
+            },
+            "title": "Tools",
+            "type": "array"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "title": "Metadata",
+            "type": "object"
+          }
+        },
+        "title": "ExternalMcpToolsData",
+        "type": "object"
+      },
+      "permission_level": "read",
+      "side_effects": false,
+      "timeout_seconds": 10.0,
+      "max_retries": 3,
+      "audit_tags": [
+        "external",
+        "mcp",
+        "tool-discovery"
+      ]
+    },
+    {
+      "name": "external_nl2sql_query",
+      "description": "外部 NL2SQL/構造化データサービスを呼び、SQL と表形式結果を取得する。",
+      "input_schema": {
+        "$defs": {
+          "ExternalToolMode": {
+            "enum": [
+              "execute",
+              "dry_run"
+            ],
+            "title": "ExternalToolMode",
+            "type": "string"
+          }
+        },
+        "properties": {
+          "question": {
+            "title": "Question",
+            "type": "string"
+          },
+          "data_domain_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Data Domain Id"
+          },
+          "business_view_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Business View Id"
+          },
+          "filters": {
+            "additionalProperties": true,
+            "title": "Filters",
+            "type": "object"
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "maximum": 10000,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Limit"
+          },
+          "mode": {
+            "$ref": "#/$defs/ExternalToolMode",
+            "default": "execute"
+          },
+          "include_sql": {
+            "default": true,
+            "title": "Include Sql",
+            "type": "boolean"
+          },
+          "trace_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Trace Id"
+          }
+        },
+        "required": [
+          "question"
+        ],
+        "title": "ExternalNl2SqlInput",
+        "type": "object"
+      },
+      "output_schema": {
+        "$defs": {
+          "StructuredColumn": {
+            "properties": {
+              "name": {
+                "title": "Name",
+                "type": "string"
+              },
+              "type": {
+                "title": "Type",
+                "type": "string"
+              },
+              "label": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Label"
+              },
+              "unit": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Unit"
+              }
+            },
+            "required": [
+              "name",
+              "type"
+            ],
+            "title": "StructuredColumn",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "sql": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Sql"
+          },
+          "columns": {
+            "items": {
+              "$ref": "#/$defs/StructuredColumn"
+            },
+            "title": "Columns",
+            "type": "array"
+          },
+          "rows": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Rows",
+            "type": "array"
+          },
+          "row_count": {
+            "default": 0,
+            "title": "Row Count",
+            "type": "integer"
+          },
+          "truncated": {
+            "default": false,
+            "title": "Truncated",
+            "type": "boolean"
+          },
+          "execution_time_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Execution Time Ms"
+          },
+          "lineage": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Lineage"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "title": "Metadata",
+            "type": "object"
+          }
+        },
+        "title": "ExternalNl2SqlOutput",
+        "type": "object"
+      },
+      "permission_level": "sensitive",
+      "side_effects": false,
+      "timeout_seconds": 15.0,
+      "max_retries": 3,
+      "audit_tags": [
+        "external",
+        "nl2sql",
+        "structured-data",
+        "audit-sql"
+      ]
+    },
+    {
+      "name": "external_rag_search",
+      "description": "外部業務 RAG サービスを呼び、回答・根拠・引用を取得する。",
+      "input_schema": {
+        "properties": {
+          "query": {
+            "title": "Query",
+            "type": "string"
+          },
+          "business_view_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Business View Id"
+          },
+          "filters": {
+            "additionalProperties": true,
+            "title": "Filters",
+            "type": "object"
+          },
+          "top_k": {
+            "anyOf": [
+              {
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Top K"
+          },
+          "trace_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Trace Id"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "title": "ExternalRagSearchInput",
+        "type": "object"
+      },
+      "output_schema": {
+        "$defs": {
+          "RagCitation": {
+            "properties": {
+              "source_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Source Id"
+              },
+              "title": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Title"
+              },
+              "url": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Url"
+              },
+              "page": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Page"
+              },
+              "chunk_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Chunk Id"
+              },
+              "metadata": {
+                "additionalProperties": true,
+                "title": "Metadata",
+                "type": "object"
+              }
+            },
+            "title": "RagCitation",
+            "type": "object"
+          },
+          "RagContext": {
+            "properties": {
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Id"
+              },
+              "title": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Title"
+              },
+              "content": {
+                "title": "Content",
+                "type": "string"
+              },
+              "score": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Score"
+              },
+              "metadata": {
+                "additionalProperties": true,
+                "title": "Metadata",
+                "type": "object"
+              }
+            },
+            "required": [
+              "content"
+            ],
+            "title": "RagContext",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "answer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Answer"
+          },
+          "contexts": {
+            "items": {
+              "$ref": "#/$defs/RagContext"
+            },
+            "title": "Contexts",
+            "type": "array"
+          },
+          "citations": {
+            "items": {
+              "$ref": "#/$defs/RagCitation"
+            },
+            "title": "Citations",
+            "type": "array"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "title": "Metadata",
+            "type": "object"
+          }
+        },
+        "title": "ExternalRagSearchOutput",
+        "type": "object"
+      },
+      "permission_level": "read",
+      "side_effects": false,
+      "timeout_seconds": 10.0,
+      "max_retries": 3,
+      "audit_tags": [
+        "external",
+        "rag",
+        "business-data"
+      ]
+    },
+    {
+      "name": "sandbox_command_run",
+      "description": "許可済み prefix のコマンドを workspace 内で shell なしに実行する。",
+      "input_schema": {
+        "properties": {
+          "command": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 32,
+            "minItems": 1,
+            "title": "Command",
+            "type": "array"
+          },
+          "cwd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cwd"
+          },
+          "timeout_seconds": {
+            "anyOf": [
+              {
+                "maximum": 300,
+                "minimum": 0.1,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Timeout Seconds"
+          },
+          "output_limit_bytes": {
+            "anyOf": [
+              {
+                "maximum": 200000,
+                "minimum": 100,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Output Limit Bytes"
+          },
+          "trace_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Trace Id"
+          }
+        },
+        "required": [
+          "command"
+        ],
+        "title": "SandboxCommandInput",
+        "type": "object"
+      },
+      "output_schema": {
+        "properties": {
+          "command": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Command",
+            "type": "array"
+          },
+          "cwd": {
+            "title": "Cwd",
+            "type": "string"
+          },
+          "exit_code": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exit Code"
+          },
+          "stdout": {
+            "title": "Stdout",
+            "type": "string"
+          },
+          "stderr": {
+            "title": "Stderr",
+            "type": "string"
+          },
+          "duration_ms": {
+            "title": "Duration Ms",
+            "type": "integer"
+          },
+          "timed_out": {
+            "default": false,
+            "title": "Timed Out",
+            "type": "boolean"
+          },
+          "truncated": {
+            "default": false,
+            "title": "Truncated",
+            "type": "boolean"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "title": "Metadata",
+            "type": "object"
+          }
+        },
+        "required": [
+          "command",
+          "cwd",
+          "exit_code",
+          "stdout",
+          "stderr",
+          "duration_ms"
+        ],
+        "title": "SandboxCommandOutput",
+        "type": "object"
+      },
+      "permission_level": "sensitive",
+      "side_effects": true,
+      "timeout_seconds": 10.0,
+      "max_retries": 0,
+      "audit_tags": [
+        "command",
+        "sandbox",
+        "side-effect"
+      ]
+    }
+  ],
+  "observabilityStatus": {
+    "metrics_enabled": true,
+    "prometheus_metrics_path": "/metrics",
+    "trace_events_enabled": true,
+    "trace_events_buffer_size": 500,
+    "trace_events_retention_seconds": 86400,
+    "trace_sample_rate": 1.0,
+    "trace_exporter_configured": false,
+    "trace_exporter_last_success_at": null,
+    "trace_exporter_last_error": null,
+    "retry_queue_size": 0,
+    "retry_queue_max_size": 100,
+    "retry_max_attempts": 3,
+    "retry_worker_enabled": true,
+    "retry_worker_running": true,
+    "retry_worker_interval_seconds": 5.0,
+    "langfuse_configured": false,
+    "opentelemetry_configured": false
+  },
+  "tracePolicy": {
+    "trace_events_enabled": true,
+    "trace_events_buffer_size": 500,
+    "trace_events_retention_seconds": 86400,
+    "trace_sample_rate": 1.0
+  },
+  "runtimeSafety": {
+    "max_tool_calls_per_run": 20,
+    "max_pending_approvals_per_run": 5
+  },
+  "toolPolicy": {
+    "default_mode": "approval",
+    "allow": [],
+    "ask": [],
+    "deny": []
+  },
+  "commandPolicy": {
+    "enabled": false,
+    "workspace_root": ".",
+    "allowed_prefixes": [],
+    "default_timeout_seconds": 10.0,
+    "max_timeout_seconds": 30.0,
+    "output_limit_bytes": 20000,
+    "artifact_storage_backend": "inline",
+    "artifact_storage_path": ".agent-artifacts"
+  },
+  "externalRag": {
+    "base_url": null,
+    "api_key_configured": false,
+    "oauth_configured": false,
+    "auth_mode": "none",
+    "session_configured": false,
+    "timeout_seconds": 10.0,
+    "default_limit": null,
+    "configured": false
+  },
+  "externalNl2Sql": {
+    "base_url": null,
+    "api_key_configured": false,
+    "oauth_configured": false,
+    "auth_mode": "none",
+    "session_configured": false,
+    "timeout_seconds": 15.0,
+    "default_limit": 100,
+    "configured": false
+  },
+  "externalMcp": {
+    "base_url": null,
+    "api_key_configured": false,
+    "oauth_configured": false,
+    "auth_mode": "none",
+    "session_configured": false,
+    "timeout_seconds": 10.0,
+    "default_limit": null,
+    "configured": false
+  },
+  "externalMcpServers": {
+    "servers": [
+      {
+        "base_url": null,
+        "api_key_configured": false,
+        "oauth_configured": false,
+        "auth_mode": "none",
+        "session_configured": false,
+        "timeout_seconds": 10.0,
+        "default_limit": null,
+        "configured": false,
+        "server_id": "default",
+        "label": "default",
+        "is_default": true
+      }
+    ],
+    "default_server_id": "default"
+  },
+  "modelSettings": {
+    "settings": {
+      "enterprise_ai": {
+        "endpoint": "",
+        "project_ocid": "",
+        "api_key": "",
+        "has_api_key": false,
+        "clear_api_key": false,
+        "models": [
+          {
+            "model_id": "enterprise-llm",
+            "display_name": "業務 RAG 標準",
+            "vision_enabled": true
+          }
+        ],
+        "default_model_id": "enterprise-llm",
+        "api_path": "/responses",
+        "vlm_input_mode": "auto",
+        "text_payload_template": "",
+        "vision_payload_template": "",
+        "text_response_path": "",
+        "vision_response_path": "",
+        "timeout_seconds": 600.0,
+        "max_retries": 3,
+        "llm_max_output_tokens": 1200,
+        "vlm_max_output_tokens": 65536
+      },
+      "generative_ai": {
+        "embedding_model": "cohere.embed-v4.0",
+        "embedding_dim": 1536,
+        "rerank_model": "cohere.rerank-v4.0-fast"
+      }
+    },
+    "checks": {
+      "enterprise_ai": "missing",
+      "generative_ai": "ok",
+      "embedding_dim": "ok"
+    },
+    "model_settings_file": "model-settings.json",
+    "source": "runtime"
+  },
+  "databaseSettings": {
+    "user": "",
+    "dsn": "",
+    "wallet_dir": "/u01/aipoc/instantclient_23_26/network/admin",
+    "wallet_uploaded": false,
+    "available_services": [],
+    "has_password": false,
+    "has_wallet_password": false,
+    "readiness": "missing",
+    "embedding_dimension": 1536,
+    "vector_column": "VECTOR(1536, FLOAT32)",
+    "adb_ocid": "",
+    "region": "",
+    "config_source": "runtime"
+  },
+  "adbInfo": {
+    "status": "not_configured",
+    "message": "ADB OCID が未設定です。",
+    "id": null,
+    "display_name": null,
+    "lifecycle_state": null,
+    "db_name": null,
+    "cpu_core_count": null,
+    "data_storage_size_in_tbs": null,
+    "region": null
+  },
+  "uploadStorage": {
+    "backend": "local",
+    "local_storage_dir": "/u01/data/production-ready-agent",
+    "object_storage_region": "",
+    "object_storage_namespace": "",
+    "object_storage_bucket": "",
+    "readiness": "ok",
+    "max_upload_bytes": 104857600,
+    "config_source": "runtime"
+  },
+  "ociSettings": {
+    "config_file": "~/.oci/config",
+    "profile": "DEFAULT",
+    "user": "",
+    "fingerprint": "",
+    "tenancy": "",
+    "region": "",
+    "key_file": "~/.oci/oci_api_key.pem",
+    "key_file_exists": false,
+    "config_file_exists": false,
+    "config_source": "runtime"
+  }
+}
