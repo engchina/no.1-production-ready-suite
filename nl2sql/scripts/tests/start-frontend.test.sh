@@ -53,4 +53,39 @@ for artifact in index.js index.d.ts tokens.css; do
   fi
 done
 
+# package-lock.json が前回インストール時より新しい場合は npm install で依存を更新する。
+: > "${NPM_CALL_LOG}"
+touch -d "2026-01-01 00:00:00" "${APP_DIR}/frontend/node_modules/.package-lock.json"
+: > "${APP_DIR}/frontend/package.json"
+: > "${APP_DIR}/frontend/package-lock.json"
+
+PATH="${MOCK_BIN_DIR}:${PATH}" \
+NPM_CALL_LOG="${NPM_CALL_LOG}" \
+SHARED_PLATFORM_DIR="${PLATFORM_DIR}" \
+SHARED_UI_DIR="${UI_DIR}" \
+PORT=3997 \
+  "${APP_DIR}/scripts/start-frontend.sh"
+
+if ! grep -qx "${APP_DIR}/frontend|install" "${NPM_CALL_LOG}"; then
+  echo "package-lock.json 更新後に npm install が呼ばれていません。" >&2
+  cat "${NPM_CALL_LOG}" >&2
+  exit 1
+fi
+
+# インストール済み（hidden lockfile が lock より新しい）なら npm install を呼ばない。
+: > "${NPM_CALL_LOG}"
+touch "${APP_DIR}/frontend/node_modules/.package-lock.json"
+PATH="${MOCK_BIN_DIR}:${PATH}" \
+NPM_CALL_LOG="${NPM_CALL_LOG}" \
+SHARED_PLATFORM_DIR="${PLATFORM_DIR}" \
+SHARED_UI_DIR="${UI_DIR}" \
+PORT=3997 \
+  "${APP_DIR}/scripts/start-frontend.sh"
+
+if grep -qx "${APP_DIR}/frontend|install" "${NPM_CALL_LOG}"; then
+  echo "依存が最新なのに npm install が呼ばれました。" >&2
+  cat "${NPM_CALL_LOG}" >&2
+  exit 1
+fi
+
 echo "start-frontend preflight test: ok"
