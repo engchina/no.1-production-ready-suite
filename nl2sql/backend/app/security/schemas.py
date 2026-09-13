@@ -9,6 +9,12 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
 
+from app.features.nl2sql.object_identity import (
+    canonical_object_part,
+    canonical_qualified_name,
+    qualified_object_name,
+)
+
 from .domain import (
     LEGACY_APP_USER_ID_SCOPE_VALUE_SOURCE,
     LOGIN_USER_ID_SCOPE_VALUE_SOURCE,
@@ -22,7 +28,9 @@ from .domain import (
 )
 from .permissions import PermissionDefinition, normalize_permission_codes
 
-_ORACLE_IDENTIFIER_RE = re.compile(r"[A-Z][A-Z0-9_$#]{0,127}")
+# 引用付き token（`"Mixed_Case"`）は 128 byte + 引用符 2 文字まで入力を受け付け、
+# canonical_object_part で 128 byte 以内か検証する。
+_IDENTIFIER_INPUT_MAX_LENGTH = 130
 _APPLY_STATUSES = {"PENDING", "RUNNING", "APPLIED", "FAILED"}
 _SCOPE_FILTER_OPERATORS = {
     "EQ",
@@ -51,9 +59,39 @@ _MAX_SCOPE_FILTER_VALUES = 25
 
 
 def _normalize_oracle_identifier(value: str, field_name: str) -> str:
-    normalized = value.strip().strip('"').upper()
-    if not _ORACLE_IDENTIFIER_RE.fullmatch(normalized):
-        raise ValueError(f"{field_name} は有効な Oracle identifier で指定してください。")
+    """DeepSec の owner / object / column を object_identity と同じ canonical token にする。
+
+    引用されていない名前は大文字、引用された名前は大文字小文字を保ち、引用が必要な名前だけ
+    `"..."` で保存する。以前の実装は引用符を外して大文字化していたため、`"Mixed_Case"` が
+    大文字の同名表 `MIXED_CASE` として扱われていた。
+    """
+
+    try:
+        return canonical_object_part(value)
+    except ValueError as exc:
+        raise ValueError(
+            f"{field_name} は有効な Oracle identifier で指定してください。"
+            '大文字小文字の混在や記号を含む名前は "Mixed_Case" のように二重引用符で囲みます。'
+        ) from exc
+
+
+def _canonical_resource_code(value: str) -> str:
+    """`OWNER.OBJECT` の resource code を canonical な修飾名にする。"""
+
+    stripped = value.strip()
+    if not stripped:
+        return ""
+    if '"' in stripped:
+        try:
+            return canonical_qualified_name(stripped)
+        except ValueError as exc:
+            raise ValueError(
+                "OWNER.OBJECT 形式の有効な Oracle identifier で指定してください。"
+            ) from exc
+    normalized = stripped.upper()
+    # 引用が不要な名前と旧 resource code は、従来どおり大文字の単純連結で保存する。
+    if not re.fullmatch(r"[A-Z][A-Z0-9_$#.-]{0,260}", normalized):
+        raise ValueError("英大文字・数字・アンダースコア等で指定してください。")
     return normalized
 
 
@@ -69,7 +107,7 @@ class PasswordChangeRequest(BaseModel):
 
 class DataEntitlementScopeFilterInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    column_name: str = Field(min_length=1, max_length=128)
+    column_name: str = Field(min_length=1, max_length=_IDENTIFIER_INPUT_MAX_LENGTH)
     operator: str = Field(min_length=1, max_length=32)
     value_type: str = Field(default="TEXT", max_length=32)
     value_source: str = Field(default="LITERAL", max_length=32)
@@ -249,12 +287,12 @@ class DataEntitlementInput(BaseModel):
     resource_code: str = Field(default="", max_length=261)
     scope_code: str = Field(default="*", max_length=256)
     capability: str = Field(min_length=1, max_length=64)
-    target_owner: str = Field(default="", max_length=128)
-    target_object: str = Field(default="", max_length=128)
+    target_owner: str = Field(default="", max_length=_IDENTIFIER_INPUT_MAX_LENGTH)
+    target_object: str = Field(default="", max_length=_IDENTIFIER_INPUT_MAX_LENGTH)
     target_type: str = Field(default="TABLE", max_length=32)
     column_names: list[str] = Field(default_factory=list)
     scope_mode: str = Field(default="ALL", max_length=32)
-    scope_column: str = Field(default="", max_length=128)
+    scope_column: str = Field(default="", max_length=_IDENTIFIER_INPUT_MAX_LENGTH)
     scope_expression: ScopeExpression | None = None
     scope_expression_version: Literal[1] | None = None
     scope_filters: list[DataEntitlementScopeFilterInput] = Field(
@@ -265,13 +303,7 @@ class DataEntitlementInput(BaseModel):
     @field_validator("resource_code")
     @classmethod
     def normalize_resource_code(cls, value: str) -> str:
-        normalized = value.strip().upper()
-        if not normalized:
-            return ""
-        # Oracle identifier(_ORACLE_IDENTIFIER_RE)と同じ文字集合 + OWNER.OBJECT の区切り
-        if not re.fullmatch(r"[A-Z][A-Z0-9_$#.-]{0,260}", normalized):
-            raise ValueError("英大文字・数字・アンダースコア等で指定してください。")
-        return normalized
+        return _canonical_resource_code(value)
 
     @field_validator("capability")
     @classmethod
@@ -328,6 +360,9 @@ class DataEntitlementInput(BaseModel):
 
     @model_validator(mode="after")
     def validate_expression_mode(self) -> DataEntitlementInput:
+        if self.target_owner and self.target_object:
+            # 保存キーは対象の canonical token から作り、送信された resource_code と食い違わせない。
+            self.resource_code = f"{self.target_owner}.{self.target_object}"
         if self.scope_mode == "EXPRESSION":
             if self.scope_expression is None or self.scope_filters or self.scope_column:
                 raise ValueError("EXPRESSION は条件ツリーのみ指定してください。")
@@ -565,7 +600,11 @@ class RoleDeleteData(BaseModel):
 
 
 class DeepSecTargetObjectData(BaseModel):
-    """DeepSec Data Grant picker 用の live Oracle object summary。"""
+    """DeepSec Data Grant picker 用の live Oracle object summary。
+
+    `owner` / `name` はカタログ上の値（引用符なし・大文字小文字を保持）、`qualified_name` は
+    `qualified_object_name` の canonical 修飾名（引用が必要な部分だけ `"..."`）。
+    """
 
     name: str
     owner: str = ""
@@ -578,7 +617,7 @@ class DeepSecTargetObjectData(BaseModel):
     def fill_qualified_name(self) -> DeepSecTargetObjectData:
         if self.qualified_name or not self.owner:
             return self
-        self.qualified_name = f"{self.owner}.{self.name}"
+        self.qualified_name = qualified_object_name(self.owner, self.name)
         return self
 
 
@@ -595,6 +634,7 @@ class DeepSecTargetObjectPageData(BaseModel):
 
 
 class DeepSecTargetColumnData(BaseModel):
+    # Data Grant の column_names / scope 条件と同じ canonical token（引用が必要な列だけ "..."）。
     column_name: str
     logical_name: str = ""
     data_type: str = ""

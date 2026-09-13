@@ -9,6 +9,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+from app.features.nl2sql.object_identity import canonical_object_part
+
 SYSTEM_ADMIN_ROLE_CODE = "SYSTEM_ADMIN"
 SYSTEM_ADMIN_ROLE_ID = "00000000-0000-0000-0000-000000000001"
 SCOPE_FILTER_CODE_PREFIX = "FILTERS:"
@@ -130,12 +132,20 @@ class Principal:
         return bool(normalized and normalized in self.allowed_profile_ids)
 
 
+def _scope_filter_column_token(column_name: str) -> str:
+    try:
+        return canonical_object_part(column_name)
+    except ValueError:
+        # 検証前の旧データでも canonical JSON は作れるようにする（SQL 生成時に拒否される）。
+        return column_name.strip().upper()
+
+
 def scope_filter_payload(filter_item: DataEntitlementScopeFilter) -> dict[str, object]:
     value_source = filter_item.value_source.strip().upper() or "LITERAL"
     if value_source == LEGACY_APP_USER_ID_SCOPE_VALUE_SOURCE:
         value_source = LOGIN_USER_ID_SCOPE_VALUE_SOURCE
     payload: dict[str, object] = {
-        "column_name": filter_item.column_name.strip().upper(),
+        "column_name": _scope_filter_column_token(filter_item.column_name),
         "operator": filter_item.operator.strip().upper(),
         "value_type": filter_item.value_type.strip().upper(),
         "value": filter_item.value.strip(),

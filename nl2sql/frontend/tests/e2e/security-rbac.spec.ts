@@ -6502,3 +6502,203 @@ test("DeepSec フォーカス修正: 条件・入れ子グループ・関連カ�
   await expect(page.getByTestId("scope-related-0-3").getByLabel("候補を選ぶ Profile")).toBeFocused();
   await expectNoPageHorizontalScroll(page);
 });
+
+test("DeepSec は引用が必要な表名を対象に選び、大文字の同名表と取り違えずに適用する (#560)", async ({ page }) => {
+  await mockDatabaseGateReady(page);
+  const quotedRole = {
+    ...systemRole,
+    role_id: "role-quoted",
+    role_code: "QUOTED_VIEWER",
+    display_name: "引用名テーブル閲覧",
+    is_built_in: false,
+    version: 2,
+    data_entitlements: [] as Array<Record<string, unknown>>,
+  };
+  let entitlementRoles: unknown[] = [quotedRole];
+  // カタログ上の値（引用符なし・大文字小文字を保持）。同じ所有者に大文字の同名表もある。
+  const upperObject = {
+    name: "MIXED_CASE",
+    owner: "SALES",
+    qualified_name: "SALES.MIXED_CASE",
+    object_type: "TABLE",
+    comment: "大文字の表",
+  };
+  const quotedObject = {
+    name: "Mixed_Case",
+    owner: "SALES",
+    qualified_name: 'SALES."Mixed_Case"',
+    object_type: "TABLE",
+    comment: "引用名の表",
+  };
+  const column = (column_name: string, data_type: string) => ({
+    column_name,
+    logical_name: "",
+    data_type,
+    nullable: true,
+    comment: "",
+    sample_values: [],
+  });
+  const detailRequests: string[] = [];
+  let previewPayload: Record<string, unknown> | null = null;
+  let applyPayload: Record<string, unknown> | null = null;
+  await page.route("**/api/security/deepsec/status", (route) =>
+    fulfill(route, {
+      configured: true,
+      driver_mode: "thin",
+      connection_security: "wallet_mtls",
+      deepsec_enabled: true,
+      data_user: "DEEPSEC_DATA_USER",
+      has_data_user_password: true,
+      objects: { data_grants: 0 },
+      message: "構成済みです。",
+    })
+  );
+  await page.route("**/api/security/deepsec/plan", (route) => fulfill(route, deepSecPlan(true)));
+  await page.route("**/api/security/deepsec/data-entitlements", (route) =>
+    fulfill(route, entitlementRoles)
+  );
+  await page.route("**/api/security/deepsec/target-objects?*", (route) =>
+    fulfill(route, {
+      runtime: "oracle",
+      owner: "",
+      items: [upperObject, quotedObject],
+      total: 2,
+      counts_included: true,
+      next_cursor: null,
+      warnings: [],
+    })
+  );
+  await page.route(/\/api\/security\/deepsec\/target-objects\/[^?]+\/[^?]+(\?.*)?$/u, (route) => {
+    const path = new URL(route.request().url()).pathname;
+    const objectName = decodeURIComponent(path.split("/").at(-1) ?? "");
+    detailRequests.push(objectName);
+    if (objectName === '"Mixed_Case"') {
+      return fulfill(route, {
+        ...quotedObject,
+        columns: [column('"Amount"', "NUMBER"), column("AMOUNT", "NUMBER"), column("ORDER_ID", "NUMBER")],
+      });
+    }
+    return fulfill(route, { ...upperObject, columns: [column("AMOUNT", "NUMBER")] });
+  });
+  await page.route("**/api/security/deepsec/data-entitlements/role-quoted/preview", async (route) => {
+    const payload = route.request().postDataJSON() as {
+      version: number;
+      data_entitlements: Array<Record<string, unknown>>;
+    };
+    previewPayload = payload;
+    await fulfill(route, {
+      role_id: "role-quoted",
+      version: payload.version,
+      data_entitlements: payload.data_entitlements.map((item) => ({
+        entitlement_id: "quoted-0",
+        data_grant_name: "NL2SQL_DG_QUOTED",
+        sql_checksum: "f".repeat(64),
+        apply_status: "PENDING",
+        apply_error_message: "",
+        applied_at: null,
+        sql: ['GRANT SELECT ON SALES."Mixed_Case" TO NL2SQL_APP_DB_ROLE'],
+        checksum: "f".repeat(64),
+        ...item,
+      })),
+      cleanup_sql: [],
+      checksum: "a".repeat(64),
+    });
+  });
+  await page.route("**/api/security/deepsec/data-entitlements/role-quoted/apply", async (route) => {
+    const payload = route.request().postDataJSON() as {
+      version: number;
+      data_entitlements: Array<Record<string, unknown>>;
+    };
+    applyPayload = payload;
+    const updated = {
+      ...quotedRole,
+      version: payload.version + 1,
+      data_entitlements: payload.data_entitlements.map((item) => ({
+        data_grant_name: "NL2SQL_DG_QUOTED",
+        sql_checksum: "e".repeat(64),
+        apply_status: "APPLIED",
+        apply_error_message: "",
+        applied_at: "2026-09-14T00:00:00Z",
+        sql: [],
+        checksum: "e".repeat(64),
+        ...item,
+      })),
+    };
+    entitlementRoles = [updated];
+    await fulfill(route, {
+      role: updated,
+      status: "APPLIED",
+      checksum: "b".repeat(64),
+      cleanup_count: 0,
+      applied_count: 1,
+    });
+  });
+
+  await page.goto("/settings/security/deepsec");
+  await page.getByRole("tab", { name: "データ権限", exact: true }).click();
+  const entitlementForm = page.getByTestId("security-deepsec-entitlement-form");
+  await entitlementForm.getByRole("button", { name: "データ権限を追加" }).click();
+  const rule = entitlementForm.getByTestId("security-deepsec-entitlement-rule-0");
+  const objectPicker = rule.getByTestId("security-deepsec-object-picker-0");
+  const upperOption = objectPicker.getByRole("option", { name: /SALES\.MIXED_CASE/u });
+  const quotedOption = objectPicker.getByRole("option", { name: /SALES\."Mixed_Case"/u });
+  await expect(upperOption).toBeVisible();
+  await expect(quotedOption).toBeVisible();
+
+  await quotedOption.click();
+  await expect(quotedOption).toHaveAttribute("aria-selected", "true");
+  await expect(upperOption).toHaveAttribute("aria-selected", "false");
+  await expect(rule.getByTestId("security-deepsec-entitlement-editor-title-0")).toHaveText(
+    'SALES."Mixed_Case"'
+  );
+  // 詳細 API にはカタログ値ではなく引用付き token を送り、大文字の同名表の詳細を読まない。
+  await expect.poll(() => detailRequests).toContain('"Mixed_Case"');
+  expect(detailRequests).not.toContain("MIXED_CASE");
+  expect(detailRequests).not.toContain("Mixed_Case");
+  const quotedAmount = rule.getByRole("checkbox", { name: /^"Amount"/u });
+  const upperAmount = rule.getByRole("checkbox", { name: /^AMOUNT/u });
+  await quotedAmount.check();
+  await expect(quotedAmount).toBeChecked();
+  await expect(upperAmount).not.toBeChecked();
+
+  await entitlementForm.getByText("ロール全体の SQL プレビュー", { exact: true }).click();
+  await entitlementForm.getByTestId("security-deepsec-sql-preview-generate").click();
+  const expectedEntitlement = {
+    resource_code: 'SALES."Mixed_Case"',
+    scope_code: "*",
+    capability: "SELECT",
+    target_owner: "SALES",
+    target_object: '"Mixed_Case"',
+    target_type: "TABLE",
+    column_names: ['"Amount"'],
+    scope_mode: "ALL",
+    scope_column: "",
+    scope_filters: [],
+  };
+  await expect.poll(() => previewPayload).toEqual({
+    version: 2,
+    data_entitlements: [expectedEntitlement],
+  });
+  await expect(
+    entitlementForm.getByText('GRANT SELECT ON SALES."Mixed_Case" TO NL2SQL_APP_DB_ROLE')
+  ).toBeVisible();
+  const applyField = entitlementForm.getByTestId("execution-confirmation-field");
+  await applyField.getByRole("textbox", { name: "実行確認語" }).fill("ADMIN_EXECUTE");
+  await applyField.getByRole("button", { name: "Data Grant を適用" }).click();
+  await expect.poll(() => applyPayload).toEqual({
+    version: 2,
+    confirmation: "ADMIN_EXECUTE",
+    data_entitlements: [{ entitlement_id: "quoted-0", ...expectedEntitlement }],
+  });
+  await expect(page.getByText("Data Grant を適用しました。", { exact: true }).last()).toBeVisible();
+
+  // 保存済みの引用名は再表示後も同じ表・列として選択状態が復元され、未保存変更にならない。
+  const savedTab = entitlementForm.getByTestId("security-deepsec-entitlement-rule-tab-0");
+  await expect(savedTab).toContainText('SALES."Mixed_Case"');
+  await expect(savedTab.getByText("適用済み", { exact: true })).toBeVisible();
+  await expect(quotedOption).toHaveAttribute("aria-selected", "true");
+  await expect(quotedAmount).toBeChecked();
+  await expect(upperAmount).not.toBeChecked();
+  await expect(applyField.getByRole("button", { name: "Data Grant を適用" })).toBeDisabled();
+  await expectNoPageHorizontalScroll(page);
+});

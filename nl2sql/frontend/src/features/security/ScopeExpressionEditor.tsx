@@ -17,6 +17,10 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import { Plus, Trash2 } from "lucide-react";
 import { t } from "@/lib/i18n";
+import {
+  formatEntitlementTargetName,
+  splitDbObjectName,
+} from "@/features/nl2sql/dbObjectIdentity";
 import { securityApi } from "./api";
 import { useAuth } from "./AuthProvider";
 import {
@@ -519,13 +523,24 @@ function RelatedEditor({
       onChange({ ...node, target_type: type });
     }
   }, [active, detail.data, node, onChange]);
+  // 関連表のキーは DeepSec の保存キーと同じ canonical `OWNER.OBJECT`（引用が必要な部分だけ "..."）。
+  // backend の relation catalog / Profile の object もこの形で返る。
+  const sourceTarget = formatEntitlementTargetName({
+    target_owner: owner,
+    target_object: objectName,
+  });
   const eligible =
     profiles.data?.filter((p) =>
-      p.objects.includes(`${owner}.${objectName}`),
+      p.objects.some(
+        (object) => formatEntitlementTargetName({ resource_code: object }) === sourceTarget,
+      ),
     ) ?? [];
   const relatedColumns = detail.data?.columns ?? [];
   const selectedTarget = node.target_object
-    ? `${node.target_owner}.${node.target_object}`
+    ? formatEntitlementTargetName({
+        target_owner: node.target_owner,
+        target_object: node.target_object,
+      })
     : "";
   const stale = Boolean(
     catalog.data &&
@@ -600,10 +615,11 @@ function RelatedEditor({
           disabled={!catalog.data || catalog.isError}
           value={selectedTarget}
           onChange={(e) => {
-            const [target_owner, target_object] = e.target.value.split(".");
+            // 引用名は dot を含み得るため、単純な split(".") ではなく引用規則どおりに分ける。
+            const target = splitDbObjectName(e.target.value);
             patch({
-              target_owner: target_owner ?? "",
-              target_object: target_object ?? "",
+              target_owner: target?.owner ?? "",
+              target_object: target?.name ?? "",
               object_scope_version: catalog.data!.object_scope_version,
               relation_source: "MANUAL",
               relation_id: "",

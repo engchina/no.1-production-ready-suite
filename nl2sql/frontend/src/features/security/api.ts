@@ -1,4 +1,5 @@
 import { normalizeExpression } from "./scope-expression";
+import { formatDbObjectPart } from "@/features/nl2sql/dbObjectIdentity";
 import { apiDelete, apiGet, apiPatch, apiPost, type ApiRequestOptions } from "@/lib/api";
 
 import type {
@@ -178,9 +179,11 @@ export const securityApi = {
   deepSecTargetObjectDetail: (object: DeepSecTargetObject, options: ApiRequestOptions = {}) => {
     const params = new URLSearchParams({ object_type: object.object_type });
     return apiGet<DeepSecTargetObjectDetail>(
+      // backend は path を canonical token として解釈する。カタログ値 `Mixed_Case` をそのまま送ると
+      // 大文字の MIXED_CASE と解釈されるため、引用が必要な部分だけ "..." にして送る。
       `/api/security/deepsec/target-objects/${encodeURIComponent(
-        object.owner
-      )}/${encodeURIComponent(object.name)}?${params.toString()}`,
+        formatDbObjectPart(object.owner)
+      )}/${encodeURIComponent(formatDbObjectPart(object.name))}?${params.toString()}`,
       options
     );
   },

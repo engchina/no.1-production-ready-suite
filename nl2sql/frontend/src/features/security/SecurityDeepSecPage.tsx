@@ -56,7 +56,12 @@ import { useUnsavedChangesGuard } from "@/lib/useUnsavedChangesGuard";
 import { useRequestScope } from "@/lib/useRequestScope";
 import { cn } from "@/lib/utils";
 import { selectedVisibleKey } from "@/lib/visible-selection";
-import { formatDbObjectName, formatEntitlementTargetName } from "@/features/nl2sql/dbObjectIdentity";
+import {
+  formatDbObjectName,
+  formatDbObjectPart,
+  formatEntitlementTargetName,
+  normalizeDbIdentifierToken,
+} from "@/features/nl2sql/dbObjectIdentity";
 import { DbObjectName } from "@/features/nl2sql/components/DbObjectName";
 import { useAuth } from "./AuthProvider";
 import { MENU_PERMISSIONS } from "./menu-permissions";
@@ -135,7 +140,7 @@ function isPositiveIntegerScopeValue(value: string | undefined) {
 
 function migrateLegacyColumnEqualsEntitlement(item: DataEntitlement): DataEntitlement {
   const scopeMode = (item.scope_mode ?? "ALL").trim().toUpperCase();
-  const scopeColumn = (item.scope_column ?? "").trim().toUpperCase();
+  const scopeColumn = normalizeDbIdentifierToken(item.scope_column);
   const scopeCode = (item.scope_code ?? "").trim();
   if (scopeMode !== "COLUMN_EQUALS") {
     return {
@@ -342,7 +347,7 @@ function normalizeScopeFilters(filters: DataEntitlementScopeFilter[] = []) {
         ? normalizeScopeFilterValueSource(filter.value_source)
         : LITERAL_SCOPE_VALUE_SOURCE;
       return {
-        column_name: filter.column_name.trim().toUpperCase(),
+        column_name: normalizeDbIdentifierToken(filter.column_name),
         operator,
         value_type: valueType,
         value_source: valueSource,
@@ -376,7 +381,7 @@ function normalizeEntitlementRows(rows: DataEntitlement[]) {
   return rows
     .map((item) => {
       const rawScopeMode = (item.scope_mode ?? "ALL").trim().toUpperCase();
-      const legacyScopeColumn = (item.scope_column ?? "").trim().toUpperCase();
+      const legacyScopeColumn = normalizeDbIdentifierToken(item.scope_column);
       const legacyScopeValue = item.scope_code.trim();
       const legacyFilters =
         rawScopeMode === "COLUMN_EQUALS" && legacyScopeColumn && legacyScopeValue && legacyScopeValue !== "*"
@@ -395,14 +400,16 @@ function normalizeEntitlementRows(rows: DataEntitlement[]) {
       const scopeMode = rawScopeMode === "COLUMN_EQUALS" ? "FILTERS" : rawScopeMode;
       return {
         entitlement_id: item.entitlement_id ?? "",
-        resource_code: item.resource_code.trim().toUpperCase(),
+        // 識別子は backend と同じ canonical token（引用が必要な名前だけ "..."）に揃える。
+        // 全体を大文字化すると "Mixed_Case" が大文字の同名表 MIXED_CASE を指してしまう。
+        resource_code: formatEntitlementTargetName(item),
         scope_code: item.scope_code.trim(),
         capability: "SELECT",
-        target_owner: (item.target_owner ?? "").trim().toUpperCase(),
-        target_object: (item.target_object ?? "").trim().toUpperCase(),
+        target_owner: normalizeDbIdentifierToken(item.target_owner),
+        target_object: normalizeDbIdentifierToken(item.target_object),
         target_type: (item.target_type ?? "TABLE").trim().toUpperCase(),
         column_names: Array.from(
-          new Set((item.column_names ?? []).map((column) => column.trim().toUpperCase()).filter(Boolean))
+          new Set((item.column_names ?? []).map(normalizeDbIdentifierToken).filter(Boolean))
         ),
         scope_mode: scopeMode,
         scope_column: "",
@@ -1439,8 +1446,9 @@ export function SecurityDeepSecPage() {
     }
     patchEntitlement(index, {
       resource_code: targetQualifiedName(object),
-      target_owner: object.owner,
-      target_object: object.name,
+      // 一覧の owner / name はカタログ上の値。保存値は引用が必要な部分だけ "..." にした token。
+      target_owner: formatDbObjectPart(object.owner),
+      target_object: formatDbObjectPart(object.name),
       target_type: object.object_type,
       column_names: [],
       scope_mode: "ALL",
@@ -1459,11 +1467,11 @@ export function SecurityDeepSecPage() {
     setEntitlementDraftRows((current) =>
       current.map((item, itemIndex) => {
         if (itemIndex !== index) return item;
-        const columns = new Set((item.column_names ?? []).map((column) => column.toUpperCase()));
+        const columns = new Set((item.column_names ?? []).map(normalizeDbIdentifierToken));
         if (checked) {
-          columns.add(columnName.toUpperCase());
+          columns.add(normalizeDbIdentifierToken(columnName));
         } else {
-          columns.delete(columnName.toUpperCase());
+          columns.delete(normalizeDbIdentifierToken(columnName));
         }
         return { ...item, column_names: Array.from(columns) };
       })
@@ -1474,7 +1482,7 @@ export function SecurityDeepSecPage() {
   const setEntitlementColumns = (index: number, columnNames: string[]) => {
     patchEntitlement(index, {
       column_names: Array.from(
-        new Set(columnNames.map((columnName) => columnName.trim().toUpperCase()).filter(Boolean))
+        new Set(columnNames.map(normalizeDbIdentifierToken).filter(Boolean))
       ),
     });
   };
@@ -2242,10 +2250,10 @@ export function SecurityDeepSecPage() {
                                   const loadingDetail = Boolean(targetDetailLoading[targetKey]);
                                   const detailError = targetDetailErrors[targetKey] ?? "";
                                   const selectedColumns = new Set(
-                                    (entitlement.column_names ?? []).map((column) => column.toUpperCase())
+                                    (entitlement.column_names ?? []).map(normalizeDbIdentifierToken)
                                   );
                                   const availableColumnNames =
-                                    detail?.columns.map((column) => column.column_name.toUpperCase()) ?? [];
+                                    detail?.columns.map((column) => normalizeDbIdentifierToken(column.column_name)) ?? [];
                                   const selectedAvailableColumnCount = availableColumnNames.filter(
                                     (columnName) => selectedColumns.has(columnName)
                                   ).length;
@@ -2365,7 +2373,7 @@ export function SecurityDeepSecPage() {
                                                   className="mt-1 h-4 w-4 shrink-0 accent-accent-emphasis"
                                                   disabled={entitlementReadOnly}
                                                   checked={selectedColumns.has(
-                                                    column.column_name.toUpperCase()
+                                                    normalizeDbIdentifierToken(column.column_name)
                                                   )}
                                                   onChange={(event) =>
                                                     toggleEntitlementColumn(
