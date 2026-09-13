@@ -223,12 +223,12 @@ export function OntologyBuildPage() {
         : "ready";
   return (
     <>
-      <PageHeader
+      <PageHeader wide
         title={t("nav.ontologyBuild")}
         subtitle={t("ontologyBuild.subtitle")}
         status={<SchemaRefreshHeaderStatus testId="ontology-build-schema-refresh-status" />}
       />
-      <PageBody className="grid min-w-0 gap-4">
+      <PageBody wide className="grid min-w-0 gap-4">
         {pageError ? <Banner severity="danger">{pageError}</Banner> : null}
         {refreshing ? (
           <SchemaRefreshProcessing testId="ontology-build-schema-refresh-processing" />

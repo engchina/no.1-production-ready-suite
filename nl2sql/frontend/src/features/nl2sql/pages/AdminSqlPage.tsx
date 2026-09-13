@@ -395,12 +395,12 @@ export function AdminSqlPage() {
 
   return (
     <>
-      <PageHeader
+      <PageHeader wide
         title={t("nav.adminSql")}
         subtitle={t("nl2sql.adminSqlRunner.description")}
         status={<SchemaRefreshHeaderStatus testId="admin-sql-schema-refresh-status" />}
       />
-      <PageBody className="grid gap-4" data-testid="nl2sql-admin-sql">
+      <PageBody wide className="grid gap-4" data-testid="nl2sql-admin-sql">
         <PageNotice
           notice={
             visibleSchemaRefreshError

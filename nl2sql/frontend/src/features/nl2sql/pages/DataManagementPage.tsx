@@ -996,7 +996,7 @@ export function DataManagementPage() {
 
   return (
     <>
-      <PageHeader
+      <PageHeader wide
         title={t("nav.dataManagement")}
         subtitle={t("dataMgmt.subtitle")}
         meta={
@@ -1028,7 +1028,7 @@ export function DataManagementPage() {
         ]}
         actionsTestId="data-management-actions"
       />
-      <PageBody className="grid gap-4">
+      <PageBody wide className="grid gap-4">
         <PageNotice
           notice={
             visibleSchemaJobError

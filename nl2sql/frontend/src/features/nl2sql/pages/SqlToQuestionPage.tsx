@@ -303,7 +303,7 @@ export function SqlToQuestionPage() {
 
   return (
     <>
-      <PageHeader
+      <PageHeader wide
         title={t("nav.sqlToQuestion")}
         subtitle={t("sqlToQuestion.subtitle")}
         actions={[
@@ -317,7 +317,7 @@ export function SqlToQuestionPage() {
           },
         ]}
       />
-      <PageBody className="grid gap-4">
+      <PageBody wide className="grid gap-4">
         <PageNotice
           notice={loadError ? { tone: "danger", message: loadError } : null}
           action={

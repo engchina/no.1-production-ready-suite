@@ -660,7 +660,7 @@ export function ViewManagementPage() {
 
   return (
     <>
-      <PageHeader
+      <PageHeader wide
         title={t("nav.viewManagement")}
         subtitle={t("viewMgmt.subtitle")}
         meta={
@@ -709,7 +709,7 @@ export function ViewManagementPage() {
             : []
         }
       />
-      <PageBody className="grid gap-4">
+      <PageBody wide className="grid gap-4">
         <PageNotice
           notice={
             message

@@ -321,7 +321,7 @@ export function SampleDataPage() {
 
   return (
     <>
-      <PageHeader
+      <PageHeader wide
         title={t("sampleData.title")}
         subtitle={t("sampleData.subtitle")}
         status={<SchemaRefreshHeaderStatus testId="sample-data-schema-refresh-status" />}
@@ -338,7 +338,7 @@ export function SampleDataPage() {
           },
         ]}
       />
-      <PageBody className="grid gap-4">
+      <PageBody wide className="grid gap-4">
         <PageNotice
           notice={
             message
