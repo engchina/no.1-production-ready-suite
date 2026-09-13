@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Check, Trash2 } from "lucide-react";
 import {
   Banner,
   toast,
@@ -19,6 +20,7 @@ export function SyntheticReview({ run, previews, stale, onUpdated }: {
 }) {
   const [confirmation, setConfirmation] = useState("");
   const [pending, setPending] = useState(false);
+  const [pendingAction, setPendingAction] = useState<"apply" | "discard">("apply");
   const [error, setError] = useState("");
   const confirm = useConfirm();
   const active = useWorkspaceActive();
@@ -34,6 +36,7 @@ export function SyntheticReview({ run, previews, stale, onUpdated }: {
   useResetExecutionConsent(() => setConfirmation(""), scope);
   const expected = run.targets.length === 1 ? run.targets[0].table_name : "ADMIN_EXECUTE";
   const allViewed = run.targets.every(target => Boolean(previews[target.table_name]));
+  const canApply = run.review_status === "ready" && run.status === "completed";
   const apply = async (discard: boolean) => {
     if (pending || stale || !active) return;
     const requestScope = scopeRef.current;
@@ -43,7 +46,7 @@ export function SyntheticReview({ run, previews, stale, onUpdated }: {
       confirmLabel: t(discard ? "syntheticPreview.discard" : "syntheticPreview.apply"),
       tone: discard ? "danger" : "warning",
     }) || requestScope !== scopeRef.current) return;
-    setPending(true); setError("");
+    setPending(true); setPendingAction(discard ? "discard" : "apply"); setError("");
     try {
       const updated = await apiPost<SyntheticRun>(`/api/nl2sql/synthetic-data/runs/${run.run_id}/${discard ? "discard" : "apply"}`,
         discard ? {} : { confirmation, previews });
@@ -64,15 +67,24 @@ export function SyntheticReview({ run, previews, stale, onUpdated }: {
     </Banner>
     {!['applied', 'discarded'].includes(run.review_status ?? '') && <>
       <p className="text-sm text-fg-muted">{t("syntheticPreview.retention")}</p>
-      {run.review_status === "ready" && run.status === "completed" && <>
+      {canApply && <>
         <p className="text-sm">{t("syntheticPreview.viewed", { count: run.targets.filter(target => previews[target.table_name]).length, total: run.targets.length })}</p>
         <ExecutionConfirmationField value={confirmation} onChange={setConfirmation}
           confirmed={confirmation.trim() === expected} placeholder={expected} expectedLabel={expected}
-          helper={t("syntheticPreview.confirmHint", { phrase: expected })} disabled={pending || stale || !allViewed}
-          actions={<Button type="button" size="lg" disabled={pending || stale || !allViewed || confirmation.trim() !== expected} loading={pending} onClick={() => void apply(false)}>{t("syntheticPreview.apply")}</Button>} />
+          helper={t("syntheticPreview.confirmHint", { phrase: expected })} disabled={pending || stale || !allViewed} />
       </>}
       {run.status === "partial" && <Banner severity="warning">{t("syntheticPreview.partial")}</Banner>}
-      {runFinished(run) && <div className="border-t border-border pt-3"><Button type="button" size="lg" variant="ghost" tone="danger" disabled={pending || stale} onClick={() => void apply(true)}>{t("syntheticPreview.discard")}</Button></div>}
+      {/* 適用と破棄は同じ確認データへの二者択一。1 つの操作行の反対の端に置き、隣り合わせない（破棄は確認語が不要なので確認語欄の外）。 */}
+      {(canApply || runFinished(run)) && (
+        <div className="flex flex-col gap-2 border-t border-border pt-3 sm:flex-row sm:items-center" data-testid="synthetic-review-actions">
+          {canApply && (
+            <Button type="button" size="lg" icon={Check} className="w-full sm:w-auto" disabled={pending || stale || !allViewed || confirmation.trim() !== expected} loading={pending && pendingAction === "apply"} onClick={() => void apply(false)}>{t("syntheticPreview.apply")}</Button>
+          )}
+          {runFinished(run) && (
+            <Button type="button" size="lg" variant="ghost" tone="danger" icon={Trash2} className="w-full sm:ml-auto sm:w-auto" disabled={pending || stale} loading={pending && pendingAction === "discard"} onClick={() => void apply(true)}>{t("syntheticPreview.discard")}</Button>
+          )}
+        </div>
+      )}
     </>}
     {error && <FormStatus tone="danger" message={error} />}
   </section>;

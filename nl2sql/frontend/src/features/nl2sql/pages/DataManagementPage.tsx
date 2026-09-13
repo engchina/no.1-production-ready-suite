@@ -369,19 +369,16 @@ export function DataManagementPage() {
   const canGenerateSyntheticData = Boolean(
     syntheticProfileName.trim() && syntheticSelectedTables.length > 0 && syntheticDataConfirmed && !syntheticLoading
   );
+  // 生成条件のリセットは入力（と生成開始の失敗表示）だけを戻す。表示中の結果は「表示件数・結果をリセット」、
+  // サーバーに残る生成（生成状況・確認・適用）は「確認用データを破棄」で扱う。
   const canClearSyntheticGeneration = Boolean(
     syntheticSelectedTables.length > 0 ||
       syntheticPrompt ||
       syntheticConfirmation ||
-      syntheticData ||
-      syntheticDataResults ||
-      syntheticError ||
-      syntheticErrorOperation ||
+      (syntheticError && syntheticErrorOperation !== "results") ||
       syntheticRows !== 1 ||
       syntheticSampleRows !== 5 ||
-      !syntheticUseComments ||
-      executedSyntheticResultLimit !== null ||
-      syntheticResultLimitInput !== String(DEFAULT_SYNTHETIC_RESULT_LIMIT)
+      !syntheticUseComments
   );
   const syntheticResultLimit = parseSqlRowLimit(syntheticResultLimitInput);
   const syntheticResultLimitError =
@@ -868,11 +865,10 @@ export function DataManagementPage() {
     setSyntheticRows(1);
     setSyntheticSampleRows(5);
     setSyntheticUseComments(true);
-    setSyntheticResultTable("");
-    setSyntheticData(null);
-    clearSyntheticResultState({ resetLimit: true });
-    setSyntheticError("");
-    setSyntheticErrorOperation("");
+    if (syntheticErrorOperation !== "results") {
+      setSyntheticError("");
+      setSyntheticErrorOperation("");
+    }
   };
 
   const loadSyntheticDataResults = async () => {

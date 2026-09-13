@@ -795,7 +795,13 @@ test("desktop shows stale attempt diagnostics and cancels a running job", async 
   await expect(page.getByText("中止").first()).toBeVisible();
 });
 
-test("desktop shows delete beside view and cancels without calling the API", async ({
+async function openJobActions(page: Page, jobId: string) {
+  // 中止・削除は行内に並べず、行メニュー（その他の操作）にまとめる（docs/frontend-button-spec.md §5.1）。
+  await page.getByTestId(`quality-evaluation-job-actions-${jobId}-trigger`).click();
+  return page.getByRole("menu");
+}
+
+test("desktop keeps view inline, puts cancel/delete in the row menu and cancels without calling the API", async ({
   page,
 }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "desktop delete action layout");
@@ -819,18 +825,26 @@ test("desktop shows delete beside view and cancels without calling the API", asy
   const completedRow = recentRegion.locator("article").filter({ hasText: "削除対象" });
   const runningRow = recentRegion.locator("article").filter({ hasText: "実行中対象" });
   const viewButton = completedRow.getByRole("button", { name: "結果を表示" });
-  const deleteButton = completedRow.getByRole("button", { name: /削除対象.*削除/ });
+  const trigger = page.getByTestId("quality-evaluation-job-actions-delete-me-trigger");
   const viewBox = await visibleBox(viewButton);
-  const deleteBox = await visibleBox(deleteButton);
-  expect(deleteBox.x).toBeGreaterThanOrEqual(viewBox.x + viewBox.width - 1);
-  await expect(
-    runningRow.getByRole("button", {
-      name: "実行中または待機中の job は完了後に削除できます。",
-    })
-  ).toBeDisabled();
-  await expect(runningRow.getByRole("button", { name: /実行中対象.*中止/ })).toBeVisible();
+  const triggerBox = await visibleBox(trigger);
+  expect(triggerBox.x).toBeGreaterThanOrEqual(viewBox.x + viewBox.width - 1);
+  await expect(completedRow.getByRole("button", { name: /を削除$|^削除$/ })).toHaveCount(0);
+  await expect(runningRow.getByRole("button", { name: /を中止$|^中止$/ })).toHaveCount(0);
 
-  await deleteButton.click();
+  const runningMenu = await openJobActions(page, "running-job");
+  await expect(runningMenu.getByRole("menuitem", { name: /実行中対象.*を中止/ })).toBeEnabled();
+  await expect(
+    runningMenu.getByRole("menuitem", { name: "実行中または待機中の job は完了後に削除できます。" })
+  ).toBeDisabled();
+  await page.keyboard.press("Escape");
+  await expect(runningMenu).toHaveCount(0);
+
+  await trigger.focus();
+  await page.keyboard.press("Enter");
+  const menu = page.getByRole("menu");
+  await expect(menu.getByRole("menuitem", { name: /削除対象.*を削除/ })).toBeFocused();
+  await page.keyboard.press("Enter");
   const dialog = page.getByRole("alertdialog", { name: "SQL生成評価 job を削除しますか" });
   await expect(dialog).toBeVisible();
   await expect(dialog).toContainText("削除対象");
@@ -859,7 +873,7 @@ test("desktop confirms delete, removes the current job URL and clears the page s
 
   const recentRegion = page.getByTestId("quality-evaluation-recent-jobs-scroll-region");
   const currentRow = recentRegion.locator("article").filter({ hasText: "現在 job" });
-  await currentRow.getByRole("button", { name: /現在 job.*削除/ }).click();
+  await (await openJobActions(page, "job-001")).getByRole("menuitem", { name: /現在 job.*を削除/ }).click();
   const dialog = page.getByRole("alertdialog", { name: "SQL生成評価 job を削除しますか" });
   await dialog.getByRole("button", { name: "削除" }).click();
 
@@ -891,25 +905,20 @@ test("mobile recent job delete actions do not create horizontal overflow", async
 
   const recentRegion = page.getByTestId("quality-evaluation-recent-jobs-scroll-region");
   const completedRow = recentRegion.locator("article").filter({ hasText: "モバイル削除" });
-  const pendingRow = recentRegion.locator("article").filter({ hasText: "モバイル待機" });
   const rowBox = await visibleBox(completedRow);
   const viewBox = await visibleBox(completedRow.getByRole("button", { name: "結果を表示" }));
-  const deleteBox = await visibleBox(
-    completedRow.getByRole("button", { name: /モバイル削除.*削除/ })
-  );
+  const triggerBox = await visibleBox(page.getByTestId("quality-evaluation-job-actions-mobile-delete-trigger"));
   expect(viewBox.x).toBeGreaterThanOrEqual(rowBox.x - 1);
-  expect(deleteBox.x + deleteBox.width).toBeLessThanOrEqual(rowBox.x + rowBox.width + 1);
+  expect(triggerBox.x + triggerBox.width).toBeLessThanOrEqual(rowBox.x + rowBox.width + 1);
+  const pendingMenu = await openJobActions(page, "mobile-pending");
   await expect(
-    pendingRow.getByRole("button", {
-      name: "実行中または待機中の job は完了後に削除できます。",
-    })
+    pendingMenu.getByRole("menuitem", { name: "実行中または待機中の job は完了後に削除できます。" })
   ).toBeDisabled();
-  const pendingRowBox = await visibleBox(pendingRow);
-  const cancelBox = await visibleBox(pendingRow.getByRole("button", { name: /モバイル待機.*中止/ }));
-  expect(cancelBox.x).toBeGreaterThanOrEqual(pendingRowBox.x - 1);
-  expect(cancelBox.x + cancelBox.width).toBeLessThanOrEqual(
-    pendingRowBox.x + pendingRowBox.width + 1
-  );
+  const menuBox = await visibleBox(pendingMenu);
+  const viewport = page.viewportSize()!;
+  expect(menuBox.x).toBeGreaterThanOrEqual(0);
+  expect(menuBox.x + menuBox.width).toBeLessThanOrEqual(viewport.width + 1);
+  await page.keyboard.press("Escape");
   const noHorizontalOverflow = await page.evaluate(
     () => document.documentElement.scrollWidth <= window.innerWidth
   );

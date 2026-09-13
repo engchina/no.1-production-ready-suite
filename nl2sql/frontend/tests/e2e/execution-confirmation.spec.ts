@@ -29,6 +29,8 @@ for (const theme of ["light", "dark"]) {
         label: getComputedStyle(label).color,
         helper: getComputedStyle(helper).color,
         danger: style.getPropertyValue("--color-danger-fg").trim(),
+        muted: style.getPropertyValue("--color-fg-muted").trim(),
+        fg: style.getPropertyValue("--color-fg").trim(),
         background: style.backgroundColor,
         inputBackground: getComputedStyle(input).backgroundColor,
         inputHeight: input.getBoundingClientRect().height,
@@ -40,16 +42,18 @@ for (const theme of ["light", "dark"]) {
         direction: getComputedStyle(actions).flexDirection,
       };
     });
-    const dangerColor = await page.evaluate(color => {
+    const resolveColor = (color: string) => page.evaluate(value => {
       const el = document.createElement("span");
-      el.style.color = color;
+      el.style.color = value;
       document.body.append(el);
       const resolved = getComputedStyle(el).color;
       el.remove();
       return resolved;
-    }, styles.danger);
-    expect(styles.label).toBe(dangerColor);
-    expect(styles.helper).toBe(dangerColor);
+    }, color);
+    const dangerColor = await resolveColor(styles.danger);
+    // 入力前は danger 色にしない（操作前のエラー表示に見えるため）。ラベルは通常の文字色、説明は補助色。
+    expect(styles.label).toBe(await resolveColor(styles.fg));
+    expect(styles.helper).toBe(await resolveColor(styles.muted));
     expect(styles.background).not.toBe(styles.inputBackground);
     expect(styles.inputHeight).toBe(44);
     expect(styles.actionsY).toBeGreaterThanOrEqual(styles.helperBottom);
@@ -63,6 +67,8 @@ for (const theme of ["light", "dark"]) {
     await input.pressSequentially("wrong");
     await expect(field.getByText("不一致", { exact: true })).toBeVisible();
     await expect(input).toHaveAttribute("aria-invalid", "true");
+    // 一致しない語を入力したときだけ、説明文を danger 色にする。
+    await expect(field.locator("p").first()).toHaveCSS("color", dangerColor);
     await expect(run).toBeDisabled();
     await input.fill("ADMIN_EXECUTE");
     await expect(field.getByText("確認済み", { exact: true })).toBeVisible();

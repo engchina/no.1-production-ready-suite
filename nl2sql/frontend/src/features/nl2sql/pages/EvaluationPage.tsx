@@ -35,6 +35,7 @@ import { FileDropzone } from "@/components/ui/file-dropzone";
 import { FieldLabel } from "@/components/ui/required-field";
 import { ApiError, apiDelete, apiFetch, apiGet, apiPost, apiPostForm } from "@/lib/api";
 import { downloadBlob, downloadFilename } from "@/lib/download";
+import { RowActionMenu } from "@/components/ObjectActions";
 import { t } from "@/lib/i18n";
 import { toastError } from "@/lib/toast";
 import { XLSX_TEMPLATE_FILE_FORMATS } from "@/lib/tabular-file-formats";
@@ -860,52 +861,38 @@ export function EvaluationPage() {
                           >
                             {t("qualityEvaluation.action.view")}
                           </Button>
-                          {ACTIVE_STATUSES.has(job.status) ? (
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="secondary"
-                              tone="danger"
-                              disabled={cancelJobMutation.isPending}
-                              loading={
-                                cancelJobMutation.isPending &&
-                                cancelJobMutation.variables?.job_id === job.job_id
-                              }
-                              aria-label={t("qualityEvaluation.action.cancelJob", {
-                                job: profileRecordDisplayLabel(job),
-                              })}
-                              onClick={() => void cancelJob(job)} icon={CircleStop}>
-                              {t("qualityEvaluation.action.cancel")}
-                            </Button>
-                          ) : null}
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="secondary"
-                            tone="danger"
-                            disabled={
-                              !TERMINAL_STATUSES.has(job.status) ||
-                              deleteJobMutation.isPending
-                            }
+                          {/* 中止・削除は行内に並べず、行メニューにまとめる（docs/frontend-button-spec.md §5.1）。 */}
+                          <RowActionMenu
+                            ariaLabel={t("qualityEvaluation.action.rowActions", { job: profileRecordDisplayLabel(job) })}
+                            testId={`quality-evaluation-job-actions-${job.job_id}`}
                             loading={
-                              deleteJobMutation.isPending &&
-                              deleteJobMutation.variables?.job_id === job.job_id
+                              (cancelJobMutation.isPending && cancelJobMutation.variables?.job_id === job.job_id) ||
+                              (deleteJobMutation.isPending && deleteJobMutation.variables?.job_id === job.job_id)
                             }
-                            title={
-                              TERMINAL_STATUSES.has(job.status)
-                                ? undefined
-                                : t("qualityEvaluation.action.deleteDisabled")
-                            }
-                            aria-label={
-                              TERMINAL_STATUSES.has(job.status)
-                                ? t("qualityEvaluation.action.deleteJob", {
-                                    job: profileRecordDisplayLabel(job),
-                                  })
-                                : t("qualityEvaluation.action.deleteDisabled")
-                            }
-                            onClick={() => void deleteJob(job)} icon={Trash2}>
-                            {t("qualityEvaluation.action.delete")}
-                          </Button>
+                            actions={[
+                              {
+                                id: "cancel",
+                                label: t("qualityEvaluation.action.cancel"),
+                                ariaLabel: t("qualityEvaluation.action.cancelJob", { job: profileRecordDisplayLabel(job) }),
+                                icon: CircleStop,
+                                tone: "danger",
+                                visible: ACTIVE_STATUSES.has(job.status),
+                                disabled: cancelJobMutation.isPending,
+                                onSelect: () => cancelJob(job),
+                              },
+                              {
+                                id: "delete",
+                                label: t("qualityEvaluation.action.delete"),
+                                ariaLabel: TERMINAL_STATUSES.has(job.status)
+                                  ? t("qualityEvaluation.action.deleteJob", { job: profileRecordDisplayLabel(job) })
+                                  : t("qualityEvaluation.action.deleteDisabled"),
+                                icon: Trash2,
+                                tone: "danger",
+                                disabled: !TERMINAL_STATUSES.has(job.status) || deleteJobMutation.isPending,
+                                onSelect: () => deleteJob(job),
+                              },
+                            ]}
+                          />
                         </div>
                       </article>
                     ))}

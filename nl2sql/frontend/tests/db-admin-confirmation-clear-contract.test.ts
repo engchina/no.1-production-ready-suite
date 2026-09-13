@@ -94,15 +94,20 @@ test("data management CSV and synthetic guarded actions expose clear buttons", (
     dataManagementPage,
     /const clearCsvUpload = \(\) => \{[\s\S]*clearCsvFile\(\);[\s\S]*setCsvMode\("insert"\);[\s\S]*setCsvConfirmation\(""\);[\s\S]*setCsvUploadError\(""\);[\s\S]*\};/u,
   );
-  assert.match(dataManagementPage, /const canClearSyntheticGeneration = Boolean\([\s\S]*syntheticSelectedTables[\s\S]*syntheticConfirmation[\s\S]*syntheticResultLimitInput/u);
+  // 生成条件のリセットは入力だけを戻す。表示中の結果（表示件数・結果をリセット）と生成状況（破棄）は対象外（#553）。
+  const canClearSyntheticGeneration = section(dataManagementPage, "const canClearSyntheticGeneration = Boolean(", "  );");
+  assert.match(canClearSyntheticGeneration, /syntheticSelectedTables[\s\S]*syntheticConfirmation/u);
+  assert.doesNotMatch(canClearSyntheticGeneration, /syntheticDataResults|syntheticResultLimitInput|syntheticData \|\|/u);
   assert.match(
     syntheticWorkspace,
     /<ClearActionButton[\s\S]*label=\{t\("dataTools\.syntheticData\.actions\.clear"\)\}[\s\S]*matchButtonHeight[\s\S]*!canClearSyntheticGeneration[\s\S]*onClick=\{onClearSyntheticGeneration\}/u,
   );
+  const clearSyntheticGeneration = section(dataManagementPage, "const clearSyntheticGeneration = () => {", "\n  };");
   assert.match(
-    dataManagementPage,
-    /const clearSyntheticGeneration = \(\) => \{[\s\S]*setSyntheticSelectedTables\(\[\]\);[\s\S]*setSyntheticPrompt\(""\);[\s\S]*setSyntheticConfirmation\(""\);[\s\S]*setSyntheticRows\(1\);[\s\S]*clearSyntheticResultState\(\{ resetLimit: true \}\);/u,
+    clearSyntheticGeneration,
+    /setSyntheticSelectedTables\(\[\]\);[\s\S]*setSyntheticPrompt\(""\);[\s\S]*setSyntheticConfirmation\(""\);[\s\S]*setSyntheticRows\(1\);/u,
   );
+  assert.doesNotMatch(clearSyntheticGeneration, /clearSyntheticResultState|setSyntheticData\(null\)|setSyntheticResultTable/u);
 });
 
 test("business profile clear action resets only the Oracle execution gate and job state", () => {
