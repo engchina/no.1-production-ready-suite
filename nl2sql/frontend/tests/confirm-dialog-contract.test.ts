@@ -1,54 +1,32 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import test from "node:test";
 
-const source = readFileSync(new URL("../src/components/ui/confirm-dialog.tsx", import.meta.url), "utf8");
-const overlaySource = readFileSync(
-  new URL("../src/components/ui/dialog-overlay.tsx", import.meta.url),
-  "utf8"
-);
+const source = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8");
+const overlaySource = source("../src/components/ui/dialog-overlay.tsx");
 
-test("ConfirmDialog is app-local and keeps the existing promise API", () => {
-  assert.match(source, /const ConfirmContext = createContext<ConfirmFn \| null>\(null\)/u);
-  assert.match(source, /export function useConfirm\(\): ConfirmFn/u);
-  assert.match(source, /export function ConfirmProvider/u);
-  assert.match(source, /new Promise<boolean>/u);
-  assert.doesNotMatch(source, /UiConfirmProvider/u);
-  assert.doesNotMatch(source, /export \{ useConfirm, type ConfirmOptions \} from "@engchina\/production-ready-ui"/u);
+test("ConfirmDialog / Toaster は共有パッケージを使い、アプリ内に再実装を持たない", () => {
+  for (const path of ["confirm-dialog.tsx", "toaster.tsx", "select-field.tsx"]) {
+    assert.equal(existsSync(new URL(`../src/components/ui/${path}`, import.meta.url)), false, path);
+  }
+  const main = source("../src/main.tsx");
+  assert.match(main, /import \{ ConfirmProvider, Toaster \} from "@engchina\/production-ready-ui";/u);
+  assert.doesNotMatch(main, /@\/components\/ui\/(?:confirm-dialog|toaster)/u);
 });
 
-test("ConfirmDialog keeps the compact alert layout with DB object delete dialog surface tokens", () => {
-  assert.match(source, /DialogOverlayPortal/u);
+test("ConfirmProvider には NL2SQL の文言とルート遷移の key を渡す（遷移で開いている確認をキャンセルする）", () => {
+  const main = source("../src/main.tsx");
+  assert.match(main, /labels=\{\{ confirm: t\("common\.confirm"\), cancel: t\("common\.cancel"\) \}\}/u);
+  assert.match(main, /const location = useLocation\(\);/u);
+  assert.match(main, /navigationKey=\{location\.key\}/u);
+  assert.match(main, /<BrowserRouter>[\s\S]*<AppConfirmProvider>[\s\S]*<\/AppConfirmProvider>[\s\S]*<\/BrowserRouter>/u);
+});
+
+test("画面固有のモーダルは共有 z-dialog の暗幕を body 直下に出す", () => {
   assert.match(overlaySource, /createPortal/u);
   assert.match(overlaySource, /document\.body/u);
   assert.match(overlaySource, /bg-\[var\(--scrim\)\]/u);
   assert.match(overlaySource, /fixed inset-0 z-\[var\(--z-dialog\)\]/u);
   assert.match(overlaySource, /data-testid=\{testId\}/u);
-  assert.match(source, /max-w-md overflow-auto rounded-md border border-border bg-surface-overlay shadow-\[var\(--shadow-dialog\)\]/u);
-  assert.match(source, /flex items-start gap-3 bg-surface-overlay px-5 pt-5/u);
-  assert.match(source, /rounded-full border bg-surface-sunken \$\{iconClass\}/u);
-  assert.match(source, /mt-5 flex justify-end gap-\[8px\] border-t border-border bg-surface-sunken px-5 py-4/u);
-  assert.match(source, /tone === "danger" \? "danger" : "primary"/u);
-  assert.match(source, /const Icon = toneIcon\[tone\]/u);
-  assert.match(source, /<Button type="button" variant="secondary" size="sm" onClick=\{onCancel\}>/u);
-  assert.match(source, /<Button type="button" ref=\{confirmRef\} variant=\{confirmVariant\} size="sm" onClick=\{onConfirm\}>/u);
-  assert.doesNotMatch(source, /border-l-danger/u);
-  assert.doesNotMatch(source, /bg-danger-subtle/u);
   assert.doesNotMatch(overlaySource, /z-\[1000\]/u);
-  assert.doesNotMatch(source, /z-\[1000\]/u);
-  assert.doesNotMatch(source, /command\.hint\.close/u);
-});
-
-test("ConfirmDialog keeps modal accessibility and escape behavior", () => {
-  assert.match(source, /role="alertdialog"/u);
-  assert.match(source, /aria-modal="true"/u);
-  assert.match(source, /aria-labelledby=\{titleId\}/u);
-  assert.match(source, /aria-describedby=\{description \? descriptionId : undefined\}/u);
-  assert.match(source, /confirmRef\.current\?\.focus\(\{ preventScroll: true \}\)/u);
-  assert.match(source, /previouslyFocused\.current\.focus\(\{ preventScroll: true \}\)/u);
-  assert.match(source, /last\.focus\(\{ preventScroll: true \}\)/u);
-  assert.match(source, /first\.focus\(\{ preventScroll: true \}\)/u);
-  assert.match(source, /event\.key === "Escape"/u);
-  assert.match(source, /event\.key !== "Tab"/u);
-  assert.match(source, /dismissOnOverlay/u);
 });

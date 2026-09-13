@@ -1,9 +1,10 @@
 import { useCallback, useMemo } from "react";
-import { Bug, KeyRound, LogOut, UserRound, type LucideIcon } from "lucide-react";
+import { Bug, KeyRound } from "lucide-react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 
 import {
   Sidebar as UiSidebar,
+  SidebarAccountFooter,
   cn,
   type NavSection as UiNavSection,
   type SidebarLabels,
@@ -83,104 +84,45 @@ export function AppSidebar() {
       labels={labels}
       footer={
         auth.user ? (
-          <div className="space-y-2">
-            <div className={`flex items-center gap-2 ${collapsed ? "justify-center" : "px-1"}`}>
-              <UserRound size={20} className="shrink-0" aria-hidden />
-              {!collapsed ? (
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-medium text-fg">{auth.user.display_name}</p>
-                  <p className="truncate text-xs text-fg-muted">
-                    {t("auth.sidebar.roles", { roles: auth.user.role_codes.join(", ") })}
-                  </p>
-                </div>
-              ) : null}
-            </div>
-            {auth.user.debug_mode ? (
-              <div
-                className={`sidebar-debug-status flex min-h-9 items-center gap-2 rounded-md border ${collapsed ? "justify-center px-1" : "px-2 py-1.5"}`}
-                role="status"
-                aria-label={t("auth.sidebar.debugMode")}
-                title={collapsed ? t("auth.sidebar.debugMode") : undefined}
-              >
-                <Bug size={16} className="shrink-0" aria-hidden />
-                {!collapsed ? (
-                  <span className="text-xs leading-4">
-                    {t("auth.sidebar.debugMode")}
-                  </span>
-                ) : null}
-              </div>
-            ) : (
-              <div className="space-y-1">
-                {auth.user.password_change_allowed !== false ? (
-                  <SidebarFooterAction
-                    icon={KeyRound}
-                    label={t("auth.sidebar.password")}
-                    collapsed={collapsed}
-                    active={passwordChangeActive}
-                    onClick={() => navigate(APP_ROUTES.passwordChange)}
-                  />
-                ) : null}
-                <SidebarFooterAction
-                  icon={LogOut}
-                  label={t("auth.sidebar.logout")}
-                  collapsed={collapsed}
-                  onClick={handleLogout}
-                />
-              </div>
-            )}
-          </div>
+          <SidebarAccountFooter
+            name={auth.user.display_name}
+            roles={t("auth.sidebar.roles", { roles: auth.user.role_codes.join(", ") })}
+            collapsed={collapsed}
+            labels={{ logout: t("auth.sidebar.logout"), switchToLight: "", switchToDark: "" }}
+            // ローカル DEBUG はログインしていないため、パスワード変更・ログアウトの代わりに状態を示す。
+            notice={auth.user.debug_mode ? <DebugModeNotice collapsed={collapsed} /> : undefined}
+            actions={
+              !auth.user.debug_mode && auth.user.password_change_allowed !== false
+                ? [
+                    {
+                      id: "password-change",
+                      label: t("auth.sidebar.password"),
+                      icon: KeyRound,
+                      active: passwordChangeActive,
+                      onClick: () => navigate(APP_ROUTES.passwordChange),
+                    },
+                  ]
+                : []
+            }
+            onLogout={auth.user.debug_mode ? undefined : handleLogout}
+          />
         ) : null
       }
     />
   );
 }
 
-interface SidebarFooterActionProps {
-  icon: LucideIcon;
-  label: string;
-  collapsed: boolean;
-  active?: boolean;
-  onClick: () => void;
-}
-
-function SidebarFooterAction({
-  icon: Icon,
-  label,
-  collapsed,
-  active = false,
-  onClick,
-}: SidebarFooterActionProps) {
+function DebugModeNotice({ collapsed }: { collapsed: boolean }) {
+  const label = t("auth.sidebar.debugMode");
   return (
-    <button
-      type="button"
-      className={cn(
-        "relative flex h-11 min-h-11 w-full items-center overflow-hidden rounded-md text-sm transition-colors",
-        collapsed ? "justify-center px-0" : "gap-2.5 px-3 py-2 text-left",
-        active
-          ? "bg-accent-emphasis text-fg-on-accent forced-colors:bg-[Highlight] forced-colors:text-[HighlightText] forced-colors:forced-color-adjust-none"
-          : "hover:bg-surface-hover hover:text-fg"
-      )}
-      aria-current={active ? "page" : undefined}
+    <div
+      className={cn("sidebar-debug-status flex min-h-9 items-center gap-2 rounded-md border", collapsed ? "justify-center px-1" : "px-2 py-1.5")}
+      role="status"
       aria-label={label}
       title={collapsed ? label : undefined}
-      onClick={onClick}
     >
-      {active ? (
-        <span
-          className="absolute left-0 top-1/2 h-5 w-1 -translate-y-1/2 rounded-r-full bg-fg"
-          aria-hidden
-        />
-      ) : null}
-      <Icon className="shrink-0" size={20} aria-hidden />
-      <span
-        className={cn(
-          "sidebar-reveal min-w-0 truncate whitespace-nowrap leading-5",
-          collapsed && "w-0"
-        )}
-        aria-hidden={collapsed}
-      >
-        {label}
-      </span>
-    </button>
+      <Bug size={16} className="shrink-0" aria-hidden />
+      {!collapsed ? <span className="text-xs leading-4">{label}</span> : null}
+    </div>
   );
 }

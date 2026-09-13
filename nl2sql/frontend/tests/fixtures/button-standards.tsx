@@ -1,5 +1,4 @@
-import { toast } from "@engchina/production-ready-ui";
-import { Toaster } from "../../src/components/ui/toaster";
+import { ConfirmProvider, Toaster, toast, useConfirm } from "@engchina/production-ready-ui";
 import { MemoryRouter } from "react-router-dom";
 import type { DataTableSort } from "@engchina/production-ready-ui";
 import { MasterDetailDataTable } from "../../src/components/MasterDetailDataTable";
@@ -11,7 +10,6 @@ import { FormActionBar } from "../../src/components/FormActionBar";
 import { RowActionMenu } from "../../src/components/ObjectActions";
 import { Pagination } from "../../src/components/Pagination";
 import { ErrorState } from "../../src/components/StateViews";
-import { ConfirmProvider, useConfirm } from "../../src/components/ui/confirm-dialog";
 import "../../src/globals.css";
 
 function Standards() {
@@ -74,4 +72,4 @@ function Standards() {
     </main>
   </>;
 }
-createRoot(document.getElementById("root")!).render(<MemoryRouter><ConfirmProvider><Standards /></ConfirmProvider></MemoryRouter>);
+createRoot(document.getElementById("root")!).render(<MemoryRouter><ConfirmProvider labels={{ confirm: "実行", cancel: "キャンセル" }}><Standards /></ConfirmProvider></MemoryRouter>);

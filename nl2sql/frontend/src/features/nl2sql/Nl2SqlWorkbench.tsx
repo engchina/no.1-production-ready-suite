@@ -1,4 +1,3 @@
-import { useConfirm } from "@/components/ui/confirm-dialog";
 import { useWorkspaceState, useWorkspaceRevalidation, useWorkspaceDraftWriter, useWorkspaceActive, useTransientDraftGuard, WorkspaceResultNotice } from "@/components/WorkspaceState";
 import {
   Button,
@@ -7,6 +6,7 @@ import {
   StatusBadge,
   PageHeader,
   PageBody,
+  useConfirm,
 } from "@engchina/production-ready-ui";
 import {
   useCallback,

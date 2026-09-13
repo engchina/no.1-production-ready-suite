@@ -20,7 +20,10 @@ async function expectUnifiedConfirmDialogSurface(dialog: Locator) {
   await expect(dialog).toHaveClass(/border-border/);
   await expect(dialog).not.toHaveClass(/border-l-danger/);
   await expect(dialog.locator(".border-l-danger")).toHaveCount(0);
-  await expect(dialog.locator(".bg-danger-subtle")).toHaveCount(0);
+  // 淡い danger 面は共有 ConfirmDialog のアイコンチップ（文字を持たない）だけに限る。
+  for (const subtle of await dialog.locator(".bg-danger-subtle").all()) {
+    await expect(subtle).toHaveText("");
+  }
   await expect(dialog.getByRole("button", { name: "閉じる", exact: true })).toHaveCount(0);
 }
 

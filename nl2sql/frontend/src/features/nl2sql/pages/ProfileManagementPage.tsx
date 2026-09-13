@@ -22,6 +22,9 @@ import {
   PageHeader,
   FieldError,
   PageBody,
+  useConfirm,
+  SelectField,
+  type SelectFieldOption,
 } from "@engchina/production-ready-ui";
 import { ErrorState } from "@/components/StateViews";
 
@@ -32,9 +35,7 @@ import { PageHeaderStatusBadge } from "@/components/PageHeaderStatusBadge";
 import { ProcessingIndicator } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";
 import { ClearActionButton } from "@/components/ui/clear-action-button";
-import { useConfirm } from "@/components/ui/confirm-dialog";
 import { FieldLabel } from "@/components/ui/required-field";
-import { SelectField, type SelectFieldOption } from "@/components/ui/select-field";
 import { ApiError, apiDelete, apiGet, apiPatch, apiPost, isTimeoutError } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { INFORMATION_TABLE_FOCUS_CLASS } from "@/lib/list-density";
@@ -542,6 +543,7 @@ function SelectAiConfigFields({
           value={form.selectAiConfig.region}
           options={SELECT_AI_REGION_OPTIONS}
           required
+          requiredLabel={t("common.required")}
           error={requiredErrors.region ? t("profiles.error.regionRequired") : undefined}
           onValueChange={(value) => {
             updateSelectAiConfig(setForm, { region: value });

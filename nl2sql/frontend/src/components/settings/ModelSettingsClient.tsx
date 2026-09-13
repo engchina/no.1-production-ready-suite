@@ -27,11 +27,11 @@ import {
   Skeleton,
   Switch,
   PageBody,
+  useConfirm,
 } from "@engchina/production-ready-ui";
 
 import { TimedLoadingState } from "@/components/ProcessingState";
 import { ErrorState } from "@/components/StateViews";
-import { useConfirm } from "@/components/ui/confirm-dialog";
 import { InputActionField } from "@/components/ui/input-action-field";
 import { RequiredIndicator } from "@/components/ui/required-field";
 import { SavedSecretBadge } from "@/components/settings/SavedSecretBadge";

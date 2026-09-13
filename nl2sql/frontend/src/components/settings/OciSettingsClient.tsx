@@ -20,6 +20,8 @@ import {
   CardTitle,
   FormStatus,
   PageBody,
+  SelectField,
+  type SelectFieldOption,
 } from "@engchina/production-ready-ui";
 
 import {
@@ -32,7 +34,6 @@ import { useSettingsDraftGuard } from "@/lib/useSettingsDraftGuard";
 import { FileDropzone } from "@/components/ui/file-dropzone";
 import { InputActionField } from "@/components/ui/input-action-field";
 import { RequiredFieldsNote } from "@/components/ui/required-field";
-import { SelectField, type SelectFieldOption } from "@/components/ui/select-field";
 import {
   ApiError,
   api,

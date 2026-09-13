@@ -4,8 +4,8 @@ import {
   toast,
   Button,
   FormStatus,
+  useConfirm,
 } from "@engchina/production-ready-ui";
-import { useConfirm } from "@/components/ui/confirm-dialog";
 import { useResetExecutionConsent, useWorkspaceActive } from "@/components/WorkspaceState";
 import { apiPost } from "@/lib/api";
 import { t } from "@/lib/i18n";

@@ -3,12 +3,12 @@ import {
   Button,
   StatusBadge,
   FieldError,
+  useConfirm,
 } from "@engchina/production-ready-ui";
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ApiError, apiGet, apiPost } from "@/lib/api";
 import { t } from "@/lib/i18n";
-import { useConfirm } from "@/components/ui/confirm-dialog";
 import { useWorkspaceState, useResetExecutionConsent } from "@/components/WorkspaceState";
 import { ContentActionBar } from "@/components/ContentActionBar";
 import type { OntologyMarkdownState, OntologyPublishJob } from "./types";

@@ -1,4 +1,4 @@
-import { useConfirm } from "@/components/ui/confirm-dialog";
+import { useConfirm } from "@engchina/production-ready-ui";
 import { t } from "@/lib/i18n";
 import { useUnsavedChangesGuard } from "@/lib/useUnsavedChangesGuard";
 

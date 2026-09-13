@@ -99,7 +99,7 @@
 
 ### 3.1 Toast
 
-- **配置**: NL2SQL では画面右下にスタック。`z-index` は app-local Toaster で `45` とし、共通 modal (`50`) の背後に置く(§6 参照)。通知が確認ボタンを覆ってはならない。共有 UI の `<Toaster/>` は `placement?: "bottom-left" | "bottom-right"` を受け取り、互換性のため既定は `bottom-right` とする。`bottom-left` は明示指定したコンシューマのみで使用する。
+- **配置**: 画面右下にスタック。共有 `@engchina/production-ready-ui` の `<Toaster/>` を使い、重なり順は共有トークン `--z-toast`(暗幕 `--z-scrim` とモーダル `--z-dialog` の下)に従う(§6 参照)。通知が確認ボタンを覆ってはならない。共有 UI の `<Toaster/>` は `placement?: "bottom-left" | "bottom-right"` を受け取り、互換性のため既定は `bottom-right` とする。`bottom-left` は明示指定したコンシューマのみで使用する。
 - **合成データ生成の終了通知**: 終端遷移を観測したときだけ、終了状態と対象表名を共通 Toast に表示する。結果画面へ遷移する action は付けず、4 秒で自動消去し、閉じるボタンも利用できる。ページ上部に終了履歴の Banner を表示せず、初回取得・再読込・同一状態の再取得では通知を再送しない。履歴と詳細はデータ管理画面で確認する。
 - **a11y**: コンテナは `role="region"` + `aria-live="polite"`、フォーカスを奪わない(`toast-accessibility`)。`danger` は `role="alert"`。
 - **自動消滅**: success/info/warning は既定 4 秒(`toast-dismiss`: 3–5s)。`danger` は
@@ -124,7 +124,7 @@ toastError(message, opts?)      // = danger トーン。固定面がない場合
 - **配置**: 必ず該当入力欄の**直下**(`error-placement`)。
 - **検証タイミング**: blur 時または送信時(`inline-validation`、キーストロークごとに出さない)。
 - **a11y**: `<input aria-invalid aria-describedby={errorId}>` ↔ `<p id={errorId} role="alert">`。送信失敗時は**最初の不正欄に自動フォーカス**(`focus-management`)。
-- 既存実装(`src/components/ui/select-field.tsx`)のパターンを正とし、共通 `<FieldError id message />` に集約する。
+- 共有 `SelectField` / `TextField`(`@engchina/production-ready-ui`)のパターンを正とし、共通 `<FieldError id message />` に集約する。
 - 複数エラー時はフォーム上部に**サマリ + 各欄へのアンカー**を併設してよい(`error-summary`)。ただし欄直下表示は必須。
 - サーバー検証は `problem.field_errors[].pointer` の JSON Pointer を、画面が宣言する
   `pointer → control/field` map で結び付ける。日本語 `detail` の部分一致や正規表現で欄を推測してはならない。
@@ -172,7 +172,8 @@ toastError(message, opts?)      // = danger トーン。固定面がない場合
 - **a11y / 操作**:
   - フォーカストラップ + 開いたら確認ボタンへフォーカス、閉じたらトリガーへ復帰。
   - `Esc` とオーバーレイクリックでキャンセル(`escape-routes` / `modal-escape`)。破棄系は誤操作防止のためオーバーレイクリック無効可。
-  - scrim は 40–60% black。NL2SQL の共通 overlay は `z-index` 50（Toast の 45 より上）。
+  - scrim は共有トークン `--scrim`。overlay は `--z-dialog` で、Toast(`--z-toast`)より上。
+  - メニュー(`role="menu"`)の項目から開いた場合は、閉じたあとメニューのトリガーへフォーカスを戻す。ルート遷移(`useLocation().key` を `navigationKey` に渡す)で開いている確認はキャンセルされる。
   - 確認ボタンは操作トーンに合わせる(削除なら `danger`)。キャンセルが既定フォーカスでもよい。
   - enter は trigger 起点の scale+fade(`modal-motion`)、`prefers-reduced-motion` でフェードのみ。
 - **API(実装規約)**:
@@ -331,8 +332,10 @@ if (!query.data?.length) return <EmptyState title={…} hint={…} />;          
 | 通常コンテンツ | 0 |
 | sticky header / sideTabBar | 20–40 |
 | Banner(sticky 時) | 40 |
-| ConfirmDialog overlay/scrim | 50 |
-| Toast スタック（NL2SQL app-local） | 45 |
+| Toast スタック | `--z-toast`(共有トークン。暗幕・モーダルの下) |
+| ConfirmDialog / 画面固有モーダルの overlay・scrim | `--z-dialog` |
+
+- 値は platform `docs/design-system/README.md` §6 の z-index スケールを正本とし、アプリで数値を直書きしない。
 
 - アニメーション: micro 150–300ms、exit は enter の 60–70%、`transform`/`opacity` のみ、`ease-out`(enter)/`ease-in`(exit)。すべて `prefers-reduced-motion` 対応。
 
@@ -402,14 +405,13 @@ header           : StatusBadge（文書状態の正本 = P1）
 
 ```
 src/components/ui/feedback-tone.ts   FeedbackTone(4 トーン)+ アイコン/色/role マップ
-src/lib/toast.ts                     Toast ストア(Zustand) + toast.* API
-src/components/ui/toast.tsx          <Toaster/>（placement 指定・aria-live）
+src/lib/toast.ts                     toastError() 等のアプリ側ラッパ(ストアは共有パッケージ)
+@engchina/production-ready-ui        <Toaster/> / <ConfirmProvider> / useConfirm() / <SelectField/>
 src/components/ui/banner.tsx         <Banner severity title? action? onDismiss? />
-src/components/ui/confirm-dialog.tsx <ConfirmProvider> / useConfirm()（focus trap・Esc）
 src/components/ui/field-error.tsx    <FieldError id message />
 src/components/ui/form-status.tsx    <FormStatus tone message />
 src/components/StateViews.tsx        LoadingState / ErrorState / EmptyState
-src/components/providers.tsx         <ConfirmProvider> + <Toaster/> を配線済み
+src/main.tsx                         <ConfirmProvider labels navigationKey> + <Toaster/> を配線済み
 ```
 
 - 4 トーンの視覚定義は **`feedback-tone.ts` を単一の正**とする(各チャネルはこれを参照)。

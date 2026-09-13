@@ -3,6 +3,7 @@ import { useDatabaseStatus } from "@/lib/queries";
 import {
   FieldError,
   Button,
+  useConfirm,
 } from "@engchina/production-ready-ui";
 import { ErrorState } from "@/components/StateViews";
 import {
@@ -15,7 +16,6 @@ import {
 } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Plus, Trash2 } from "lucide-react";
-import { useConfirm } from "@/components/ui/confirm-dialog";
 import { t } from "@/lib/i18n";
 import { securityApi } from "./api";
 import { useAuth } from "./AuthProvider";

@@ -30,6 +30,7 @@ import {
   PageHeader,
   FieldError,
   PageBody,
+  useConfirm,
 } from "@engchina/production-ready-ui";
 
 import { BulkSelectionActions } from "@/components/BulkSelectionActions";
@@ -37,7 +38,6 @@ import { FormActionBar, entityActionToFormAction } from "@/components/FormAction
 import { MasterDetailDataTable } from "@/components/MasterDetailDataTable";
 import { ObjectActionBar, type EntityAction } from "@/components/ObjectActions";
 import { ProcessingIndicator } from "@/components/ProcessingState";
-import { useConfirm } from "@/components/ui/confirm-dialog";
 import { FieldLabel, RequiredFieldsNote } from "@/components/ui/required-field";
 import { ApiError, isAbortError } from "@/lib/api";
 import {
