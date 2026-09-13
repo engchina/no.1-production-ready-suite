@@ -174,7 +174,9 @@ test("desktop の空の右ペイン上でも主ページをスクロールでき
 
 test("desktop の右ペインは高さを保ち、境界で主ページへスクロールを引き継ぐ", async ({
   page,
-}) => {
+}, testInfo) => {
+  // マウスホイールでのスクロール引き継ぎはデスクトップの操作。タッチ端末プロジェクトでは入力方式が前提と一致しない。
+  test.skip(testInfo.project.name !== "desktop", "desktop (mouse wheel) contract");
   await mockDocumentWorkspace(page, { pdfPreview: true });
 
   await page.setViewportSize({ width: 1440, height: 900 });
