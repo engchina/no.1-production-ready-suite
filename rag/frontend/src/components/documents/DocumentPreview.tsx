@@ -396,7 +396,7 @@ function BboxLocator({
             data-bbox-mode={overlayRect.coordinateMode}
             data-bbox-unit={overlayRect.unit}
             data-testid="bbox-overlay"
-            className="pointer-events-none absolute rounded-[2px] border-2 border-accent-emphasis bg-accent-muted"
+            className="pointer-events-none absolute rounded-sm border-2 border-accent-emphasis bg-accent-muted"
             style={overlayStyle}
           />
         </div>
