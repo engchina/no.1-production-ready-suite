@@ -1,13 +1,13 @@
 # --- frontend ---
-node_modules/
-frontend/node_modules/
+node_modules
+frontend/node_modules
 frontend/dist/
 frontend/.deploy-update-*/
 frontend/.dist-backup-*/
 frontend/.dist-failed-*/
 
 # --- backend (Python/uv) ---
-backend/.venv/
+backend/.venv
 **/__pycache__/
 .pytest_cache/
 .mypy_cache/
