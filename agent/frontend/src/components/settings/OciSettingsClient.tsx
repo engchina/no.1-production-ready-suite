@@ -13,6 +13,7 @@ import {
   RequiredBadge,
   SelectField,
   type SelectFieldOption,
+  StatusBadge,
   TextField,
 } from "@engchina/production-ready-ui";
 import {
@@ -45,6 +46,8 @@ import {
   api,
   type OciConfigReadData,
   type OciConfigTestResult,
+  type OciConfigTestStage,
+  type OciConfigTestStageStatus,
   type OciSettingsData,
   type UploadStorageSettingsData,
 } from "@/lib/api";
@@ -659,52 +662,117 @@ function ConfigTestContent({ state }: { state: ConfigTestState }) {
 
   const result = state.data;
   const failed = result.status === "failed";
-  const detailItems = [
+  const stages = result.stages ?? [];
+  const troubleshooting = [
+    ...stages.flatMap((stage) =>
+      stage.status === "failed" && stage.action ? [stage.action] : []
+    ),
     ...result.missing_fields.map((field) =>
       t("settings.oci.configTest.missingField", { field })
     ),
     ...result.permission_issues,
     !result.key_file_exists ? t("settings.oci.configTest.missingKey") : "",
   ].filter(Boolean);
+  const technicalDetails = [
+    result.region ? `region ${result.region}` : "",
+    result.auth_check_operation ?? "",
+    result.http_status ? `HTTP ${result.http_status}` : "",
+    result.service_code ?? "",
+    result.request_id ? `opc-request-id ${result.request_id}` : "",
+    result.oci_directory_mode ? `.oci ${result.oci_directory_mode}` : "",
+    result.config_file_mode ? `config ${result.config_file_mode}` : "",
+    result.key_file_mode ? `key ${result.key_file_mode}` : "",
+  ].filter(Boolean);
 
   return (
     <div
       className={cn(
-        "space-y-2 rounded-md border px-3 py-3",
+        "space-y-3 rounded-md border px-3 py-3",
         failed
-          ? "border-warning-border bg-warning-subtle"
+          ? "border-danger-border bg-danger-subtle"
           : "border-success-border bg-success-subtle"
       )}
       role={failed ? "alert" : "status"}
+      data-testid="settings-oci-test-result"
+      data-tone={failed ? "danger" : "success"}
     >
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-sm font-medium text-fg">
           {t("settings.oci.configTest.title")}
         </span>
-        <StatusPill kind={failed ? "warning" : "success"}>
+        <StatusPill kind={failed ? "danger" : "success"}>
           {failed ? t("settings.oci.configTest.failed") : t("settings.oci.configTest.success")}
         </StatusPill>
+        {result.elapsed_ms ? (
+          <span className="tnum text-xs text-fg-muted">
+            {t("settings.oci.configTest.elapsed", { ms: result.elapsed_ms })}
+          </span>
+        ) : null}
       </div>
       <p className="text-sm text-fg">{result.message}</p>
-      {detailItems.length > 0 ? (
-        <ul className="space-y-1 text-xs leading-relaxed text-fg">
-          {detailItems.map((item) => (
-            <li key={item}>{item}</li>
-          ))}
-        </ul>
+      {stages.length > 0 ? <ConfigTestStages stages={stages} /> : null}
+      {failed && troubleshooting.length > 0 ? (
+        <div className="space-y-1">
+          <p className="text-xs font-semibold text-fg">
+            {t("settings.oci.configTest.troubleshooting")}
+          </p>
+          <ul className="list-disc space-y-1 pl-5 text-xs leading-relaxed text-fg">
+            {troubleshooting.map((item) => (
+              <li key={item} className="break-words">
+                {item}
+              </li>
+            ))}
+          </ul>
+        </div>
       ) : null}
-      <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-fg-muted">
-        {result.oci_directory_mode ? (
-          <span className="tnum">.oci {result.oci_directory_mode}</span>
-        ) : null}
-        {result.config_file_mode ? (
-          <span className="tnum">config {result.config_file_mode}</span>
-        ) : null}
-        {result.key_file_mode ? (
-          <span className="tnum">key {result.key_file_mode}</span>
-        ) : null}
-      </div>
+      {technicalDetails.length > 0 ? (
+        <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-fg-muted">
+          {technicalDetails.map((item) => (
+            <span key={item} className="tnum break-all">
+              {item}
+            </span>
+          ))}
+        </div>
+      ) : null}
     </div>
+  );
+}
+
+const STAGE_STATUS_VARIANT = {
+  success: "success",
+  failed: "danger",
+  skipped: "neutral",
+} as const satisfies Record<OciConfigTestStageStatus, "success" | "danger" | "neutral">;
+
+function ConfigTestStages({ stages }: { stages: readonly OciConfigTestStage[] }) {
+  return (
+    <ol
+      aria-label={t("settings.oci.configTest.stagesLabel")}
+      data-testid="settings-oci-test-stages"
+      className="min-w-0 space-y-2"
+    >
+      {stages.map((stage) => (
+        <li
+          key={stage.key}
+          data-stage={stage.key}
+          data-stage-status={stage.status}
+          className="flex min-w-0 flex-col gap-1 sm:flex-row sm:items-start sm:gap-3"
+        >
+          <span className="flex shrink-0 items-center gap-2 sm:w-52">
+            <StatusBadge
+              variant={STAGE_STATUS_VARIANT[stage.status]}
+              label={t(`settings.oci.configTest.stageStatus.${stage.status}`)}
+            />
+            <span className="whitespace-nowrap text-xs font-medium text-fg">
+              {t(`settings.oci.configTest.stage.${stage.key}`)}
+            </span>
+          </span>
+          <span className="min-w-0 break-words text-xs leading-relaxed text-fg-muted">
+            {stage.message}
+          </span>
+        </li>
+      ))}
+    </ol>
   );
 }
 

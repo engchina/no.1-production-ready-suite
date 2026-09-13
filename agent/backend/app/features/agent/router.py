@@ -19,6 +19,7 @@ import stat
 from asyncio import sleep, wait_for
 from collections.abc import Iterable, Mapping
 from csv import DictWriter
+from dataclasses import asdict
 from datetime import UTC, datetime
 from email import policy
 from email.parser import BytesParser
@@ -131,6 +132,17 @@ from app.observability import (
     list_trace_events,
     patch_trace_policy,
     trace_exporter_status,
+)
+from app.oci_connectivity import (
+    OCI_AUTH_CHECK_OPERATION,
+    OciConnectivityReport,
+    OciConnectivityStage,
+    OciConnectivityStageKey,
+    OciConnectivityStageStatus,
+    check_authenticated_api,
+    check_config_format,
+    check_private_key,
+    log_api_check_result,
 )
 from app.settings import get_settings
 
@@ -676,6 +688,13 @@ class OciObjectStorageSettingsUpdate(BaseModel):
         return value
 
 
+class OciConfigTestStage(BaseModel):
+    key: OciConnectivityStageKey
+    status: OciConnectivityStageStatus
+    message: str
+    action: str | None = None
+
+
 class OciConfigTestResult(BaseModel):
     status: OciConfigTestStatus
     profile: str = "DEFAULT"
@@ -689,8 +708,15 @@ class OciConfigTestResult(BaseModel):
     config_file_mode: str | None = None
     key_file_mode: str | None = None
     message: str
+    elapsed_ms: int = Field(default=0, ge=0)
     checked_at: str
     error_type: str | None = None
+    stages: list[OciConfigTestStage] = Field(default_factory=list)
+    region: str | None = None
+    auth_check_operation: str | None = None
+    http_status: int | None = None
+    service_code: str | None = None
+    request_id: str | None = None
 
 
 class OciObjectStorageNamespaceRequest(BaseModel):
@@ -2704,27 +2730,35 @@ def _has_pass_phrase(config: Mapping[str, object]) -> bool:
 
 
 def _test_oci_config(settings: object) -> OciConfigTestResult:
+    """保存済み OCI 設定で、形式 → 鍵 → リージョン到達 → 認証の順に実疎通を確認する。"""
+    started = monotonic()
     config_file = _settings_str_from(settings, "oci_config_file", "~/.oci/config")
     profile = _safe_oci_profile_name(_settings_str_from(settings, "oci_config_profile", "DEFAULT"))
     config_path = Path(config_file).expanduser()
-    default_key_path = Path(OCI_PRIVATE_KEY_FILE).expanduser()
+    key_path = Path(OCI_PRIVATE_KEY_FILE).expanduser()
+    report = OciConnectivityReport()
     try:
         content = _read_oci_config_text(config_file)
         parsed = _parse_oci_config(content, profile)
     except HTTPException as exc:
-        return OciConfigTestResult(
-            status="failed",
+        report.add(
+            OciConnectivityStage(
+                key="config_format",
+                status="failed",
+                message=str(exc.detail),
+                action="OCI config を「config 読込」で確認し、認証設定を保存し直してください。",
+            )
+        )
+        return _oci_config_test_result(
+            report,
+            started=started,
             profile=profile,
             config_file=config_file,
             key_file=OCI_PRIVATE_KEY_FILE,
-            config_file_exists=config_path.is_file(),
-            key_file_exists=default_key_path.is_file(),
-            message=str(exc.detail),
-            checked_at=_now_iso(),
+            config_path=config_path,
+            key_path=key_path,
+            key_file_exists=key_path.is_file(),
             error_type=type(exc).__name__,
-            oci_directory_mode=_mode_string(config_path.parent),
-            config_file_mode=_mode_string(config_path),
-            key_file_mode=_mode_string(default_key_path),
         )
 
     parsed_values = {
@@ -2735,47 +2769,167 @@ def _test_oci_config(settings: object) -> OciConfigTestResult:
         "key_file": parsed.key_file,
     }
     missing_fields = [field for field in OCI_CONFIG_KEYS if not parsed_values[field].strip()]
-    key_path = _resolve_oci_key_file(parsed.key_file or OCI_PRIVATE_KEY_FILE, config_path)
+    key_file = parsed.key_file or OCI_PRIVATE_KEY_FILE
+    key_path = _resolve_oci_key_file(key_file, config_path)
     key_file_exists = key_path.is_file()
     permission_issues = _oci_permission_issues(config_path, key_path)
-    pass_phrase_required = (
-        key_file_exists
-        and _pem_file_is_encrypted(key_path)
-        and not _oci_config_has_private_key_pass_phrase(content, profile)
-    )
-    can_use_config = (
-        not missing_fields
-        and key_file_exists
-        and not permission_issues
-        and not pass_phrase_required
-    )
+    error_type: str | None = None
 
+    def finish(
+        *,
+        auth_check_operation: str | None = None,
+        http_status: int | None = None,
+        service_code: str | None = None,
+        request_id: str | None = None,
+    ) -> OciConfigTestResult:
+        return _oci_config_test_result(
+            report,
+            started=started,
+            profile=parsed.profile,
+            config_file=config_file,
+            key_file=key_file,
+            config_path=config_path,
+            key_path=key_path,
+            key_file_exists=key_file_exists,
+            missing_fields=missing_fields,
+            permission_issues=permission_issues,
+            region=parsed.region or None,
+            error_type=error_type,
+            auth_check_operation=auth_check_operation,
+            http_status=http_status,
+            service_code=service_code,
+            request_id=request_id,
+        )
+
+    config_permission_issues = [
+        issue for issue in permission_issues if not issue.startswith("秘密鍵")
+    ]
     if missing_fields:
-        message = "OCI config の必須項目が不足しています。"
-    elif not key_file_exists:
-        message = "OCI config の key_file が指す秘密鍵ファイルが見つかりません。"
-    elif pass_phrase_required:
-        message = OCI_PRIVATE_KEY_PASSPHRASE_REQUIRED_ERROR
-    elif permission_issues:
-        message = "OCI 認証ファイルの権限を確認してください。"
-    else:
-        message = "OCI config と秘密鍵ファイルを確認できました。"
+        report.add(
+            OciConnectivityStage(
+                key="config_format",
+                status="failed",
+                message="OCI config の必須項目が不足しています。",
+                action="不足している項目を入力して認証設定を保存してください。",
+            )
+        )
+        return finish()
+    if not report.add(check_config_format(parsed_values)):
+        return finish()
+    if config_permission_issues:
+        report.stages[-1] = OciConnectivityStage(
+            key="config_format",
+            status="failed",
+            message="OCI 認証ファイルの権限を確認してください。",
+            action=" ".join(config_permission_issues),
+        )
+        return finish()
 
+    pass_phrase = _oci_config_private_key_pass_phrase(content, profile)
+    if not key_file_exists:
+        key_stage = OciConnectivityStage(
+            key="key_file",
+            status="failed",
+            message="OCI config の key_file が指す秘密鍵ファイルが見つかりません。",
+            action="OCI コンソールで API キーを登録した秘密鍵 PEM をアップロードしてください。",
+        )
+    elif _pem_file_is_encrypted(key_path) and not pass_phrase:
+        key_stage = OciConnectivityStage(
+            key="key_file",
+            status="failed",
+            message=OCI_PRIVATE_KEY_PASSPHRASE_REQUIRED_ERROR,
+            action="パスフレーズなしの秘密鍵 PEM をアップロードしてください。",
+        )
+        error_type = "OciPrivateKeyPassPhraseRequiredError"
+    elif len(permission_issues) != len(config_permission_issues):
+        key_stage = OciConnectivityStage(
+            key="key_file",
+            status="failed",
+            message="OCI 認証ファイルの権限を確認してください。",
+            action="秘密鍵ファイルは 0600 にしてください。",
+        )
+    else:
+        key_stage = check_private_key(key_path, parsed.fingerprint, pass_phrase)
+    if not report.add(key_stage):
+        return finish()
+
+    try:
+        oci_config = import_module("oci.config")
+        sdk_config = _load_oci_config_without_prompt(oci_config, config_file, profile)
+    except Exception as exc:
+        report.add(
+            OciConnectivityStage(
+                key="authentication",
+                status="failed",
+                message="OCI SDK で OCI config を読み込めませんでした。",
+                action="OCI config の内容を確認し、認証設定を保存し直してください。",
+            )
+        )
+        error_type = type(exc).__name__
+        return finish()
+
+    api_result = check_authenticated_api(sdk_config)
+    report.add(api_result.region)
+    report.add(api_result.authentication)
+    log_api_check_result(api_result)
+    error_type = api_result.error_type
+    return finish(
+        auth_check_operation=OCI_AUTH_CHECK_OPERATION,
+        http_status=api_result.http_status,
+        service_code=api_result.service_code,
+        request_id=api_result.request_id,
+    )
+
+
+def _oci_config_test_result(
+    report: OciConnectivityReport,
+    *,
+    started: float,
+    profile: str,
+    config_file: str,
+    key_file: str,
+    config_path: Path,
+    key_path: Path,
+    key_file_exists: bool,
+    missing_fields: list[str] | None = None,
+    permission_issues: list[str] | None = None,
+    region: str | None = None,
+    auth_check_operation: str | None = None,
+    http_status: int | None = None,
+    service_code: str | None = None,
+    request_id: str | None = None,
+    error_type: str | None = None,
+) -> OciConfigTestResult:
+    """段階の結果から API 応答を組み立てる。失敗した段階が 1 つでもあれば failed にする。"""
+    stages = report.finish()
+    failure = report.first_failure
+    message = (
+        failure.message
+        if failure
+        else f"OCI へ認証付きで接続できました（{OCI_AUTH_CHECK_OPERATION}）。"
+    )
     return OciConfigTestResult(
-        status="success" if can_use_config else "failed",
-        profile=parsed.profile,
+        status="failed" if failure else "success",
+        profile=profile,
         config_file=config_file,
-        key_file=parsed.key_file or OCI_PRIVATE_KEY_FILE,
+        key_file=key_file,
         config_file_exists=config_path.is_file(),
         key_file_exists=key_file_exists,
-        missing_fields=missing_fields,
-        permission_issues=permission_issues,
+        missing_fields=missing_fields or [],
+        permission_issues=permission_issues or [],
         oci_directory_mode=_mode_string(config_path.parent),
         config_file_mode=_mode_string(config_path),
         key_file_mode=_mode_string(key_path),
         message=message,
+        elapsed_ms=max(0, round((monotonic() - started) * 1000)),
         checked_at=_now_iso(),
-        error_type="OciPrivateKeyPassPhraseRequiredError" if pass_phrase_required else None,
+        error_type=error_type,
+        stages=[OciConfigTestStage(**asdict(stage)) for stage in stages],
+        region=region,
+        auth_check_operation=auth_check_operation,
+        http_status=http_status,
+        service_code=service_code,
+        request_id=request_id,
     )
 
 
@@ -2805,12 +2959,13 @@ def _path_mode(path: Path) -> int | None:
         return None
 
 
-def _oci_config_has_private_key_pass_phrase(content: str, profile: str) -> bool:
+def _oci_config_private_key_pass_phrase(content: str, profile: str) -> str | None:
+    """OCI config profile の private key pass phrase を返す。値はログや応答に出さない。"""
     parser = configparser.ConfigParser(interpolation=None)
     try:
         parser.read_string(content)
     except configparser.Error:
-        return False
+        return None
 
     selected_profile = profile.strip() or "DEFAULT"
     if selected_profile.upper() == "DEFAULT":
@@ -2818,8 +2973,12 @@ def _oci_config_has_private_key_pass_phrase(content: str, profile: str) -> bool:
     elif parser.has_section(selected_profile):
         entries = parser[selected_profile]
     else:
-        return False
-    return any(str(entries.get(key, "")).strip() for key in PASSPHRASE_CONFIG_KEYS)
+        return None
+    for key in PASSPHRASE_CONFIG_KEYS:
+        value = str(entries.get(key, "")).strip()
+        if value:
+            return value
+    return None
 
 
 def _read_object_storage_namespace(payload: OciObjectStorageNamespaceRequest) -> str:
@@ -3392,7 +3551,8 @@ async def read_oci_config(payload: OciConfigReadRequest) -> ApiResponse[OciConfi
 
 @router.post("/settings/oci/config/test", response_model=ApiResponse[OciConfigTestResult])
 async def test_oci_config() -> ApiResponse[OciConfigTestResult]:
-    return ApiResponse(data=_test_oci_config(get_settings()))
+    settings = get_settings()
+    return ApiResponse(data=await anyio_to_thread.run_sync(_test_oci_config, settings))
 
 
 @router.post(
