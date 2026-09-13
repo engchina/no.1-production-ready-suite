@@ -113,7 +113,7 @@ export function UploadStorageSettingsClient() {
 
   if (query.isPending) {
     return (
-      <PageBody>
+      <PageBody wide>
         <Skeleton className="h-64 w-full rounded-lg" />
         <Skeleton className="h-72 w-full rounded-lg" />
       </PageBody>
@@ -122,7 +122,7 @@ export function UploadStorageSettingsClient() {
 
   if (query.isError) {
     return (
-      <PageBody>
+      <PageBody wide>
         <ErrorState
           message={
             query.error instanceof ApiError
@@ -143,7 +143,7 @@ export function UploadStorageSettingsClient() {
   const envPreview = buildUploadStorageEnvFile(form, objectStorageNamespace, settings);
 
   return (
-    <PageBody>
+    <PageBody wide>
       <div className={SETTINGS_DETAIL_GRID_CLASS}>
         <form
           className="space-y-5"
@@ -208,21 +208,24 @@ export function UploadStorageSettingsClient() {
                   error={errors.localStorageDir}
                 />
               ) : (
-                <div className="max-w-xl">
-                  <TextField
-                    id="upload-storage-bucket"
-                    label={t("settings.uploadStorage.field.objectStorageBucket")}
-                    value={form.objectStorageBucket}
-                    onValueChange={(value) => updateForm({ objectStorageBucket: value })}
-                    helper={t("settings.uploadStorage.helper.objectStorageBucket")}
-                    placeholder="rag-originals"
-                    error={errors.objectStorageBucket}
-                  />
-                  <FieldError
-                    id="uploadStorage-objectStorageNamespace-error"
-                    className="mt-2"
-                    message={errors.objectStorageNamespace}
-                  />
+                // 上の保存先の選択肢（2 列）と同じ段組みの 1 列目に置く。
+                <div className="grid gap-x-6 gap-y-4 lg:grid-cols-2">
+                  <div>
+                    <TextField
+                      id="upload-storage-bucket"
+                      label={t("settings.uploadStorage.field.objectStorageBucket")}
+                      value={form.objectStorageBucket}
+                      onValueChange={(value) => updateForm({ objectStorageBucket: value })}
+                      helper={t("settings.uploadStorage.helper.objectStorageBucket")}
+                      placeholder="rag-originals"
+                      error={errors.objectStorageBucket}
+                    />
+                    <FieldError
+                      id="uploadStorage-objectStorageNamespace-error"
+                      className="mt-2"
+                      message={errors.objectStorageNamespace}
+                    />
+                  </div>
                 </div>
               )}
             </CardContent>

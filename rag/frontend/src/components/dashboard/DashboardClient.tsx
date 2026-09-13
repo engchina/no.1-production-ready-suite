@@ -51,7 +51,7 @@ export function DashboardClient() {
         isRefreshing={query.isFetching}
         updatedAt={query.dataUpdatedAt ? new Date(query.dataUpdatedAt).toISOString() : null}
       />
-      <PageBody>
+      <PageBody wide>
         {query.isPending ? (
           <DashboardSkeleton />
         ) : query.isError ? (

@@ -16,6 +16,7 @@ export function DashboardHeader({
 }) {
   return (
     <PageHeader
+      wide
       title={t("dashboard.title")}
       subtitle={t("dashboard.subtitle")}
       actions={

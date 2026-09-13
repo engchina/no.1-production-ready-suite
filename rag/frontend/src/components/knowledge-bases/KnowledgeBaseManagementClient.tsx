@@ -84,8 +84,8 @@ export function KnowledgeBaseManagementClient() {
 
   return (
     <div>
-      <PageHeader title={t("nav.knowledgeBases")} subtitle={t("knowledgeBases.subtitle")} />
-      <PageBody>
+      <PageHeader wide title={t("nav.knowledgeBases")} subtitle={t("knowledgeBases.subtitle")} />
+      <PageBody wide>
         <DegradedBanner
           messages={page?.warning_messages}
           onRetry={() => void query.refetch()}

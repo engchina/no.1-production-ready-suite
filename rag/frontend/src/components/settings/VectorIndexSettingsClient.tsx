@@ -44,7 +44,7 @@ export function VectorIndexSettingsClient() {
 
   if (query.isPending) {
     return (
-      <PageBody>
+      <PageBody wide>
         <Skeleton className="h-64 w-full rounded-lg" />
       </PageBody>
     );
@@ -52,7 +52,7 @@ export function VectorIndexSettingsClient() {
 
   if (query.isError) {
     return (
-      <PageBody>
+      <PageBody wide>
         <ErrorState
           message={
             query.error instanceof ApiError
@@ -103,7 +103,7 @@ export function VectorIndexSettingsClient() {
   const showReprovision = requiresReprovision(selectedProfile);
 
   return (
-    <PageBody>
+    <PageBody wide>
       <Card>
         <CardHeader>
           <div className="flex items-start gap-3">

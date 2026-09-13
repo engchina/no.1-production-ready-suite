@@ -40,7 +40,7 @@ export function PromptVersionsClient() {
 
   if (query.isPending) {
     return (
-      <PageBody>
+      <PageBody wide>
         <Skeleton className="h-64 w-full rounded-lg" />
       </PageBody>
     );
@@ -48,7 +48,7 @@ export function PromptVersionsClient() {
 
   if (query.isError) {
     return (
-      <PageBody>
+      <PageBody wide>
         <ErrorState
           message={
             query.error instanceof ApiError ? query.error.message : t("settings.prompts.loadError")
@@ -100,7 +100,7 @@ export function PromptVersionsClient() {
   }
 
   return (
-    <PageBody>
+    <PageBody wide>
       <Card>
         <CardHeader>
           <div className="flex items-start gap-3">

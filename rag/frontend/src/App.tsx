@@ -323,7 +323,7 @@ function KnowledgeBaseDetailRoute() {
   return (
     <div>
       <div className="border-b border-border bg-surface">
-        <PageBody className="py-4">
+        <PageBody wide className="py-4">
         <Link
           to={APP_ROUTES.knowledgeBases}
           className="inline-flex items-center gap-1 text-sm text-fg-muted transition-colors hover:text-fg"
@@ -333,7 +333,7 @@ function KnowledgeBaseDetailRoute() {
         </Link>
         </PageBody>
       </div>
-      <PageBody>
+      <PageBody wide>
         <KnowledgeBaseDetailClient knowledgeBaseId={id} />
       </PageBody>
     </div>
@@ -344,6 +344,7 @@ function SettingsPipelineRoute() {
   return (
     <div>
       <PageHeader
+        wide
         title={t("nav.settingsPipeline")}
         subtitle={t("settings.pipeline.subtitle")}
       />
@@ -355,7 +356,7 @@ function SettingsPipelineRoute() {
 function SettingsOciRoute() {
   return (
     <div>
-      <PageHeader title={t("nav.settingsOci")} subtitle={t("settings.oci.subtitle")} />
+      <PageHeader wide title={t("nav.settingsOci")} subtitle={t("settings.oci.subtitle")} />
       <OciSettingsClient />
     </div>
   );
@@ -365,6 +366,7 @@ function SettingsUploadStorageRoute() {
   return (
     <div>
       <PageHeader
+        wide
         title={t("nav.settingsUploadStorage")}
         subtitle={t("settings.uploadStorage.subtitle")}
       />
@@ -377,6 +379,7 @@ function SettingsParserAdaptersRoute() {
   return (
     <div>
       <PageHeader
+        wide
         title={t("nav.settingsParserAdapters")}
         subtitle={t("settings.parserAdapters.subtitle")}
       />
@@ -389,6 +392,7 @@ function SettingsPreprocessRoute() {
   return (
     <div>
       <PageHeader
+        wide
         title={t("nav.settingsPreprocess")}
         subtitle={t("settings.preprocess.subtitle")}
       />
@@ -401,6 +405,7 @@ function SettingsServicesRoute() {
   return (
     <div>
       <PageHeader
+        wide
         title={t("nav.settingsServices")}
         subtitle={t("settings.services.subtitle")}
       />
@@ -413,6 +418,7 @@ function SettingsChunkingRoute() {
   return (
     <div>
       <PageHeader
+        wide
         title={t("nav.settingsChunking")}
         subtitle={t("settings.chunking.subtitle")}
       />
@@ -425,6 +431,7 @@ function SettingsRetrievalRoute() {
   return (
     <div>
       <PageHeader
+        wide
         title={t("nav.settingsRetrieval")}
         subtitle={t("settings.retrieval.subtitle")}
       />
@@ -437,6 +444,7 @@ function SettingsGroundingRoute() {
   return (
     <div>
       <PageHeader
+        wide
         title={t("nav.settingsGrounding")}
         subtitle={t("settings.grounding.subtitle")}
       />
@@ -449,6 +457,7 @@ function SettingsGenerationRoute() {
   return (
     <div>
       <PageHeader
+        wide
         title={t("nav.settingsGeneration")}
         subtitle={t("settings.generation.subtitle")}
       />
@@ -460,7 +469,7 @@ function SettingsGenerationRoute() {
 function SettingsPromptsRoute() {
   return (
     <div>
-      <PageHeader title={t("nav.settingsPrompts")} subtitle={t("settings.prompts.subtitle")} />
+      <PageHeader wide title={t("nav.settingsPrompts")} subtitle={t("settings.prompts.subtitle")} />
       <PromptVersionsClient />
     </div>
   );
@@ -470,6 +479,7 @@ function SettingsGuardrailRoute() {
   return (
     <div>
       <PageHeader
+        wide
         title={t("nav.settingsGuardrail")}
         subtitle={t("settings.guardrail.subtitle")}
       />
@@ -482,6 +492,7 @@ function SettingsVectorIndexRoute() {
   return (
     <div>
       <PageHeader
+        wide
         title={t("nav.settingsVectorIndex")}
         subtitle={t("settings.vectorIndex.subtitle")}
       />
@@ -494,6 +505,7 @@ function SettingsEvaluationRoute() {
   return (
     <div>
       <PageHeader
+        wide
         title={t("nav.settingsEvaluation")}
         subtitle={t("settings.evaluation.subtitle")}
       />
@@ -505,7 +517,7 @@ function SettingsEvaluationRoute() {
 function SettingsGraphRoute() {
   return (
     <div>
-      <PageHeader title={t("nav.settingsGraph")} subtitle={t("settings.graph.subtitle")} />
+      <PageHeader wide title={t("nav.settingsGraph")} subtitle={t("settings.graph.subtitle")} />
       <GraphSettingsClient />
     </div>
   );
@@ -514,7 +526,7 @@ function SettingsGraphRoute() {
 function SettingsAgenticRoute() {
   return (
     <div>
-      <PageHeader title={t("nav.settingsAgentic")} subtitle={t("settings.agentic.subtitle")} />
+      <PageHeader wide title={t("nav.settingsAgentic")} subtitle={t("settings.agentic.subtitle")} />
       <AgenticSettingsClient />
     </div>
   );
@@ -523,7 +535,7 @@ function SettingsAgenticRoute() {
 function SettingsDatabaseRoute() {
   return (
     <div>
-      <PageHeader title={t("nav.settingsDatabase")} subtitle={t("settings.database.subtitle")} />
+      <PageHeader wide title={t("nav.settingsDatabase")} subtitle={t("settings.database.subtitle")} />
       <DatabaseSettingsClient />
     </div>
   );
@@ -533,6 +545,7 @@ function SettingsHuggingfaceRoute() {
   return (
     <div>
       <PageHeader
+        wide
         title={t("nav.settingsHuggingface")}
         subtitle={t("settings.huggingface.subtitle")}
       />

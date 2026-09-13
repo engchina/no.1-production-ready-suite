@@ -72,7 +72,7 @@ export function KnowledgeBaseDetailClient({ knowledgeBaseId }: { knowledgeBaseId
             {kb.description ? <p className="mt-1 text-sm text-fg-muted">{kb.description}</p> : null}
           </div>
 
-          <div className="grid grid-cols-3 gap-2 sm:max-w-md">
+          <div className="grid grid-cols-3 gap-2">
             <Metric label={t("knowledgeBases.metric.documents")} value={kb.document_count} />
             <Metric label={t("knowledgeBases.metric.indexed")} value={kb.indexed_document_count} />
             <Metric label={t("knowledgeBases.metric.errors")} value={kb.error_document_count} />
