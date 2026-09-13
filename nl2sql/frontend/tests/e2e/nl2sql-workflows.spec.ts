@@ -16761,6 +16761,19 @@ test("synthetic preview requires all tables and fresh consent before applying th
   await expect(review).toContainText("内容を表示した対象表: 2 / 2");
   await review.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
   await review.scrollIntoViewIfNeeded();
+  // 適用と破棄は確認語欄の外の 1 つの操作行に置き、適用を左（狭い画面では上）、破棄を右端（狭い画面では下）に分ける。
+  const reviewActions = review.getByTestId("synthetic-review-actions");
+  const applyButton = reviewActions.getByRole("button", { name: "確認したデータを適用", exact: true });
+  const discardButton = reviewActions.getByRole("button", { name: "確認用データを破棄", exact: true });
+  await expect(review.getByTestId("execution-confirmation-field").getByRole("button")).toHaveCount(0);
+  const [actionsBox, applyBox, discardBox] = await Promise.all([reviewActions.boundingBox(), applyButton.boundingBox(), discardButton.boundingBox()]);
+  if ((page.viewportSize()?.width ?? 0) < 640) {
+    expect(discardBox!.y).toBeGreaterThan(applyBox!.y + applyBox!.height - 1);
+  } else {
+    expect(Math.abs(applyBox!.x - actionsBox!.x)).toBeLessThanOrEqual(1);
+    expect(Math.abs(discardBox!.x + discardBox!.width - (actionsBox!.x + actionsBox!.width))).toBeLessThanOrEqual(1);
+    expect(Math.abs(discardBox!.y - applyBox!.y)).toBeLessThanOrEqual(1);
+  }
   await expectNoHorizontalScroll(page);
   await page.screenshot({ path: testInfo.outputPath("synthetic-preview-ready.png") });
   await review.getByRole("button", { name: "確認したデータを適用", exact: true }).click();

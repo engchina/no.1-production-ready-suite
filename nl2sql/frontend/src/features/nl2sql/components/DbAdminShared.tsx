@@ -15,6 +15,7 @@ import {
   usePagination,
   StatusBadge,
   Tabs,
+  cn,
 } from "@engchina/production-ready-ui";
 import { ClearActionButton } from "@/components/ui/clear-action-button";
 import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
@@ -328,7 +329,8 @@ export function ExecutionConfirmationField({
           htmlFor={id}
           label={t("dbAdmin.confirmation.label")}
           required
-          className="font-semibold text-danger-fg"
+          // 入力前から danger 色にしない（操作前のエラー表示に見えるため）。確認語欄の強調は状態バッジと入力欄のフォーカス色で行う。
+          className="font-semibold text-fg"
         />
         <div className="flex flex-wrap items-center gap-2">
           <span className="max-w-full break-all rounded-md bg-surface px-2 py-1 font-sans text-xs text-fg">
@@ -356,12 +358,12 @@ export function ExecutionConfirmationField({
           spellCheck={false}
         />
       </div>
-      <p id={helperId} className="break-words text-xs leading-5 text-danger-fg">
+      <p id={helperId} className={cn("break-words text-xs leading-5", value.trim() && !confirmed ? "text-danger-fg" : "text-fg-muted")}>
         {helper}
       </p>
       {actions && (
         <div
-          className="flex min-w-0 flex-col gap-[8px] border-t border-danger-border pt-3 sm:flex-row sm:flex-wrap sm:items-center"
+          className="flex min-w-0 flex-col gap-[8px] border-t border-border pt-3 sm:flex-row sm:flex-wrap sm:items-center"
         >
           {actions}
         </div>

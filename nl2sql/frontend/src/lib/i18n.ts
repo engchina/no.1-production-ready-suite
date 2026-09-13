@@ -2414,6 +2414,7 @@ const nl2sqlJa = {
   "qualityEvaluation.action.delete": "削除",
   "qualityEvaluation.action.deleteJob": "{job} を削除",
   "qualityEvaluation.action.deleteDisabled": "実行中または待機中の job は完了後に削除できます。",
+  "qualityEvaluation.action.rowActions": "{job} の操作",
   "qualityEvaluation.action.previous": "前へ",
   "qualityEvaluation.action.next": "次へ",
   "qualityEvaluation.judge.unavailableTitle": "LLM Judge を利用できません",
