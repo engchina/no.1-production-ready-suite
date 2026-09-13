@@ -10,9 +10,11 @@ import {
   CardTitle,
   FieldError,
   FormStatus,
+  RequiredBadge,
   SelectField,
   type SelectFieldOption,
   Skeleton,
+  TextField,
 } from "@engchina/production-ready-ui";
 import {
   AlertCircle,
@@ -240,9 +242,11 @@ export function DatabaseSettingsClient() {
                   id="oracle-user"
                   label={t("settings.database.field.dbUser")}
                   required
+                  requiredLabel={t("common.required")}
+                  inputClassName="h-11"
                   value={form.user}
-                  inputRef={userRef}
-                  onChange={(value) => updateForm({ user: value })}
+                  ref={userRef}
+                  onValueChange={(value) => updateForm({ user: value })}
                   placeholder={t("settings.database.placeholder.dbUser")}
                   error={errors.user}
                 />
@@ -653,7 +657,7 @@ function WalletServiceField({
         options={serviceOptions}
         onValueChange={onChange}
         required
-        requiredLabel={t("settings.database.requiredMark")}
+        requiredLabel={t("common.required")}
         error={error}
         placeholder={t("settings.database.placeholder.serviceDsn")}
         buttonClassName="h-11"
@@ -666,54 +670,13 @@ function WalletServiceField({
       id="oracle-wallet-service"
       label={t("settings.database.field.serviceDsn")}
       required
+      requiredLabel={t("common.required")}
+      inputClassName="h-11"
       value={value}
-      onChange={onChange}
+      onValueChange={onChange}
       placeholder={t("settings.database.placeholder.serviceDsnManual")}
       error={error}
     />
-  );
-}
-
-function TextField({
-  id,
-  label,
-  value,
-  onChange,
-  placeholder,
-  error,
-  required = false,
-  inputRef,
-}: {
-  id: string;
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  placeholder: string;
-  error?: string;
-  required?: boolean;
-  inputRef?: RefObject<HTMLInputElement | null>;
-}) {
-  const errorId = `${id}-error`;
-
-  return (
-    <div className="space-y-1.5">
-      <RequiredLabel id={id} label={label} required={required} />
-      <input
-        ref={inputRef}
-        id={id}
-        type="text"
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        placeholder={placeholder}
-        aria-invalid={Boolean(error)}
-        aria-describedby={error ? errorId : undefined}
-        className={cn(
-          "h-11 w-full rounded-md border bg-surface px-3 text-sm text-fg outline-none transition-colors placeholder:text-fg-muted focus-visible:border-focus-ring focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus-ring",
-          error ? "border-danger-fg" : "border-border-control"
-        )}
-      />
-      <FieldError id={errorId} message={error} />
-    </div>
   );
 }
 
@@ -749,7 +712,10 @@ function PasswordField({
   return (
     <div className="space-y-1.5">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <RequiredLabel id={id} label={label} required={required} />
+        <label htmlFor={id} className="flex items-center gap-2 text-sm font-medium text-fg">
+          {label}
+          {required ? <RequiredBadge label={t("common.required")} aria-hidden /> : null}
+        </label>
         {hasSavedSecret ? (
           <span className="rounded-full border border-success-border bg-success-subtle px-2 py-0.5 text-xs font-medium text-success-fg">
             {t("settings.database.secrets.saved")}
@@ -798,27 +764,6 @@ function PasswordField({
       </p>
       <FieldError id={errorId} message={error} />
     </div>
-  );
-}
-
-function RequiredLabel({
-  id,
-  label,
-  required,
-}: {
-  id: string;
-  label: string;
-  required?: boolean;
-}) {
-  return (
-    <label htmlFor={id} className="text-sm font-medium text-fg">
-      {label}
-      {required ? (
-        <span aria-hidden="true" className="ml-0.5">
-          *
-        </span>
-      ) : null}
-    </label>
   );
 }
 

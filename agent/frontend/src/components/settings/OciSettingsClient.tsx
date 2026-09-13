@@ -10,8 +10,10 @@ import {
   CardTitle,
   FieldError,
   FormStatus,
+  RequiredBadge,
   SelectField,
   type SelectFieldOption,
+  TextField,
 } from "@engchina/production-ready-ui";
 import {
   AlertTriangle,
@@ -390,36 +392,44 @@ export function OciSettingsClient() {
                   placeholder="DEFAULT"
                   readOnly
                   required
+                  requiredLabel={t("common.required")}
+                  inputClassName="h-11"
                 />
                 <TextField
                   id="oci-user-ocid"
                   label={t("settings.oci.field.userOcid")}
                   value={draft.userOcid}
-                  onChange={(value) => updateDraft("userOcid", value)}
+                  onValueChange={(value) => updateDraft("userOcid", value)}
                   error={errorText(errors.userOcid)}
                   helper={t("settings.oci.helper.userOcid")}
                   placeholder="ocid1.user.oc1.."
                   required
+                  requiredLabel={t("common.required")}
+                  inputClassName="h-11"
                 />
                 <TextField
                   id="oci-tenancy-ocid"
                   label={t("settings.oci.field.tenancyOcid")}
                   value={draft.tenancyOcid}
-                  onChange={(value) => updateDraft("tenancyOcid", value)}
+                  onValueChange={(value) => updateDraft("tenancyOcid", value)}
                   error={errorText(errors.tenancyOcid)}
                   helper={t("settings.oci.helper.tenancyOcid")}
                   placeholder="ocid1.tenancy.oc1.."
                   required
+                  requiredLabel={t("common.required")}
+                  inputClassName="h-11"
                 />
                 <TextField
                   id="oci-fingerprint"
                   label={t("settings.oci.field.fingerprint")}
                   value={draft.fingerprint}
-                  onChange={(value) => updateDraft("fingerprint", value)}
+                  onValueChange={(value) => updateDraft("fingerprint", value)}
                   error={errorText(errors.fingerprint)}
                   helper={t("settings.oci.helper.fingerprint")}
                   placeholder="12:34:56:78:90:ab:cd:ef"
                   required
+                  requiredLabel={t("common.required")}
+                  inputClassName="h-11"
                 />
                 <SelectField
                   id="oci-region"
@@ -431,7 +441,7 @@ export function OciSettingsClient() {
                   helper={t("settings.oci.helper.region")}
                   placeholder={t("settings.oci.placeholder.region")}
                   required
-                  requiredLabel={t("settings.oci.required")}
+                  requiredLabel={t("common.required")}
                   buttonClassName="h-11"
                 />
               </div>
@@ -499,7 +509,7 @@ export function OciSettingsClient() {
                   helper={t("settings.oci.helper.objectStorageRegion")}
                   placeholder={t("settings.oci.placeholder.region")}
                   required
-                  requiredLabel={t("settings.oci.required")}
+                  requiredLabel={t("common.required")}
                 />
               </div>
 
@@ -807,7 +817,7 @@ function ConfigFileField({
     <div className="space-y-1.5">
       <label htmlFor={id} className="flex items-center gap-2 text-sm font-medium text-fg">
         {label}
-        {required ? <RequiredBadge /> : null}
+        {required ? <RequiredBadge label={t("common.required")} /> : null}
       </label>
       <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
         <input
@@ -889,7 +899,7 @@ function NamespaceField({
     <div className="space-y-1.5">
       <label htmlFor={id} className="flex items-center gap-2 text-sm font-medium text-fg">
         {label}
-        {required ? <RequiredBadge /> : null}
+        {required ? <RequiredBadge label={t("common.required")} /> : null}
       </label>
       <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
         <input
@@ -993,7 +1003,7 @@ function PrivateKeyDropzoneField({
         className="flex items-center gap-1 text-sm font-medium text-fg"
       >
         {label}
-        {required ? <RequiredBadge /> : null}
+        {required ? <RequiredBadge label={t("common.required")} /> : null}
       </label>
       <button
         id={`${id}-button`}
@@ -1063,73 +1073,6 @@ function PrivateKeyDropzoneField({
         />
       ) : null}
     </div>
-  );
-}
-
-function TextField({
-  id,
-  label,
-  value,
-  onChange,
-  error,
-  helper,
-  placeholder,
-  readOnly = false,
-  required,
-}: {
-  id: string;
-  label: string;
-  value: string;
-  onChange?: (value: string) => void;
-  error?: string;
-  helper: string;
-  placeholder: string;
-  readOnly?: boolean;
-  required?: boolean;
-}) {
-  const hintId = `${id}-hint`;
-  const errorId = `${id}-error`;
-
-  return (
-    <div className="space-y-1.5">
-      <label htmlFor={id} className="flex items-center gap-2 text-sm font-medium text-fg">
-        {label}
-        {required ? <RequiredBadge /> : null}
-      </label>
-      <input
-        id={id}
-        type="text"
-        value={value}
-        readOnly={readOnly}
-        aria-readonly={readOnly || undefined}
-        onChange={(event) => {
-          if (!readOnly) onChange?.(event.target.value);
-        }}
-        placeholder={placeholder}
-        aria-invalid={Boolean(error)}
-        aria-describedby={error ? `${hintId} ${errorId}` : hintId}
-        className={cn(
-          "h-11 w-full rounded-md border px-3 text-sm text-fg outline-none transition-colors placeholder:text-fg-muted focus-visible:border-focus-ring",
-          readOnly ? "cursor-default bg-surface-sunken text-fg-muted" : "bg-surface",
-          error ? "border-danger-fg" : "border-border-control"
-        )}
-      />
-      <p id={hintId} className="text-xs leading-relaxed text-fg-muted">
-        {helper}
-      </p>
-      <FieldError id={errorId} message={error} />
-    </div>
-  );
-}
-
-function RequiredBadge() {
-  return (
-    <>
-      <span aria-hidden className="text-danger-fg">
-        *
-      </span>
-      <span className="sr-only">{t("settings.oci.required")}</span>
-    </>
   );
 }
 
