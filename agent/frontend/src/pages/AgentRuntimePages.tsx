@@ -7,6 +7,7 @@ import {
   FileText,
   GitBranch,
   ListChecks,
+  Minus,
   Pencil,
   PlayCircle,
   Plus,
@@ -538,6 +539,9 @@ export function RuntimesPage() {
                         key={name}
                         variant={supported ? "info" : "neutral"}
                         label={`${name}: ${supported ? "on" : "off"}`}
+                        // 対応の有無は Runtime の probe で変わる「状態」なのでアイコンで冗長に符号化する。
+                        // 既定の Info（注意喚起）は「対応」の意味にならないため、形で on / off を区別する。
+                        icon={supported ? Check : Minus}
                       />
                     ))}
                   </div>
@@ -1100,7 +1104,7 @@ export function AuditPage() {
               <CardTitle>{t("audit.records")}</CardTitle>
               <CardDescription>{t("page.audit.subtitle")}</CardDescription>
             </div>
-            {audit.data ? <StatusBadge variant="info" label={`${t("audit.total")}: ${audit.data.total}`} /> : null}
+            {audit.data ? <StatusBadge variant="info" label={`${t("audit.total")}: ${audit.data.total}`} icon={false} /> : null}
           </CardHeader>
           <CardContent>
             <QueryState query={audit}>
@@ -1173,6 +1177,7 @@ function AuditRecordsTable({ records }: { records: ToolCallAuditRecord[] }) {
                 <StatusBadge
                   variant={permissionStatusVariant(record.permission_level)}
                   label={record.permission_level ?? "-"}
+                  icon={false}
                 />
               </td>
               <td className="max-w-64 px-3 py-3">
@@ -1354,7 +1359,7 @@ export function MemoryPage() {
                 <Card key={entry.id} className="min-w-0">
                   <CardContent className="min-w-0 space-y-2 pt-5">
                     <div className="flex flex-wrap items-center gap-2">
-                      <StatusBadge variant="info" label={entry.kind} />
+                      <StatusBadge variant="info" label={entry.kind} icon={false} />
                       <span className="text-xs text-fg-muted">{formatDate(entry.created_at)}</span>
                     </div>
                     <p className="break-words text-sm leading-6 text-fg [overflow-wrap:anywhere]">{entry.content}</p>
@@ -1941,7 +1946,7 @@ function McpServerTable({
                   <div className="flex items-center gap-2">
                     <span className="font-mono text-xs text-fg">{server.server_id}</span>
                     {server.is_default ? (
-                      <StatusBadge variant="info" label={t("settings.mcpServers.default")} />
+                      <StatusBadge variant="info" label={t("settings.mcpServers.default")} icon={false} />
                     ) : null}
                   </div>
                 </td>
@@ -1970,7 +1975,7 @@ function McpServerTable({
             <div className="flex items-center justify-between gap-2">
               <span className="font-mono text-xs text-fg">{server.server_id}</span>
               {server.is_default ? (
-                <StatusBadge variant="info" label={t("settings.mcpServers.default")} />
+                <StatusBadge variant="info" label={t("settings.mcpServers.default")} icon={false} />
               ) : null}
             </div>
             <p className="text-sm text-fg-muted">{server.label || "-"}</p>
@@ -2227,12 +2232,12 @@ export function SkillsPage() {
 <div className="max-w-5xl space-y-5">
         <QueryState query={skills}>
           <Card>
-            <CardHeader className="flex flex-row items-start justify-between gap-3">
-              <div className="space-y-1">
+            <CardHeader className="gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div className="min-w-0 space-y-1">
                 <CardTitle>{t("skills.title")}</CardTitle>
                 <CardDescription>{t("skills.description")}</CardDescription>
               </div>
-              <div className="flex gap-2">
+              <div className="flex shrink-0 flex-wrap gap-2">
                 <Button
                   size="sm"
                   variant="secondary"
@@ -2403,6 +2408,7 @@ function SkillTable({
                   <StatusBadge
                     variant={skillSourceVariant(skill.source)}
                     label={skillSourceLabel(skill.source)}
+                    icon={false}
                   />
                 </td>
                 <td className="px-3 py-3 align-top">
@@ -2433,12 +2439,14 @@ function SkillTable({
           <div key={skill.id} className="space-y-2 rounded-md border border-border p-3">
             <div className="flex items-start justify-between gap-2">
               <div className="min-w-0">
-                <p className="text-sm font-medium text-fg">{skill.name}</p>
-                <p className="font-mono text-xs text-fg-muted">{skill.id}</p>
+                <p className="text-sm font-medium text-fg [overflow-wrap:anywhere]">{skill.name}</p>
+                <p className="break-all font-mono text-xs text-fg-muted">{skill.id}</p>
               </div>
               <StatusBadge
                 variant={skillSourceVariant(skill.source)}
                 label={skillSourceLabel(skill.source)}
+                icon={false}
+                className="shrink-0"
               />
             </div>
             <div className="flex items-center gap-2">
@@ -2526,6 +2534,7 @@ function SkillDetailCard({ skill, onClose }: { skill: AgentSkill; onClose: () =>
           <StatusBadge
             variant={skillSourceVariant(skill.source)}
             label={skillSourceLabel(skill.source)}
+            icon={false}
           />
           <StatusBadge
             variant={skill.enabled ? "success" : "neutral"}
@@ -2634,12 +2643,12 @@ export function PluginsPage() {
 <div className="max-w-5xl space-y-5">
         <QueryState query={plugins}>
           <Card>
-            <CardHeader className="flex flex-row items-start justify-between gap-3">
-              <div className="space-y-1">
+            <CardHeader className="gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div className="min-w-0 space-y-1">
                 <CardTitle>{t("plugins.title")}</CardTitle>
                 <CardDescription>{t("plugins.description")}</CardDescription>
               </div>
-              <div className="flex gap-2">
+              <div className="flex shrink-0 flex-wrap gap-2">
                 <Button
                   size="sm"
                   variant="secondary"
@@ -2718,9 +2727,9 @@ export function PluginsPage() {
 function PluginBundle({ plugin }: { plugin: PluginSummary }) {
   return (
     <div className="flex flex-wrap gap-1.5">
-      <StatusBadge variant="info" label={`${t("plugins.skills")} ${plugin.skill_count}`} />
-      <StatusBadge variant="info" label={`${t("plugins.mcp")} ${plugin.mcp_count}`} />
-      <StatusBadge variant="info" label={`${t("plugins.resources")} ${plugin.resource_count}`} />
+      <StatusBadge variant="info" label={`${t("plugins.skills")} ${plugin.skill_count}`} icon={false} />
+      <StatusBadge variant="info" label={`${t("plugins.mcp")} ${plugin.mcp_count}`} icon={false} />
+      <StatusBadge variant="info" label={`${t("plugins.resources")} ${plugin.resource_count}`} icon={false} />
     </div>
   );
 }
@@ -2791,12 +2800,13 @@ function PluginTable({
           <div key={plugin.id} className="space-y-2 rounded-md border border-border p-3">
             <div className="flex items-start justify-between gap-2">
               <div className="min-w-0">
-                <p className="text-sm font-medium text-fg">{plugin.name}</p>
-                <p className="font-mono text-xs text-fg-muted">
+                <p className="text-sm font-medium text-fg [overflow-wrap:anywhere]">{plugin.name}</p>
+                <p className="break-all font-mono text-xs text-fg-muted">
                   {plugin.id} · v{plugin.version}
                 </p>
               </div>
               <Switch
+                className="shrink-0"
                 checked={plugin.enabled}
                 aria-label={`${t("plugins.enabledLabel")} ${plugin.id}`}
                 onCheckedChange={(checked) => onToggle(plugin.id, checked)}
@@ -3002,12 +3012,13 @@ function MarketplaceTable({
         <div key={source.id} className="space-y-2 rounded-md border border-border p-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="min-w-0">
-              <p className="text-sm font-medium text-fg">{source.name || source.id}</p>
-              <p className="font-mono text-xs text-fg-muted">{source.id}</p>
+              <p className="text-sm font-medium text-fg [overflow-wrap:anywhere]">{source.name || source.id}</p>
+              <p className="break-all font-mono text-xs text-fg-muted">{source.id}</p>
             </div>
             <StatusBadge
               variant="info"
               label={`${t("marketplaces.pluginCount")}: ${source.plugin_count}`}
+              icon={false}
             />
           </div>
           {source.url ? <p className="break-all text-xs text-fg-muted">{source.url}</p> : null}
@@ -3214,6 +3225,7 @@ export function CommandPolicySettingsPage() {
                       ? t("settings.commandPolicy.filesystem")
                       : t("settings.commandPolicy.inline")
                   }
+                  icon={false}
                 />
               </div>
               <CardDescription>{t("page.settings.commandPolicy.subtitle")}</CardDescription>
@@ -3429,9 +3441,10 @@ export function ToolPolicySettingsPage() {
                                     : "danger"
                               }
                               label={tool.permission_level}
+                              icon={false}
                             />
                             {tool.side_effects ? (
-                              <StatusBadge variant="warning" label="side_effects" />
+                              <StatusBadge variant="warning" label="side_effects" icon={false} />
                             ) : null}
                           </div>
                           <p className="break-words text-xs leading-5 text-fg-muted [overflow-wrap:anywhere]">
@@ -3792,10 +3805,9 @@ export function RuntimeSnapshotSettingsPage() {
 
 function SnapshotSummaryBadge({ summary }: { summary: RuntimeSnapshotSummary }) {
   return (
-    <StatusBadge
-      variant={summary.pending_tool_calls || summary.approvals ? "warning" : "success"}
-      label={`${summary.runs} runs`}
-    />
+    // 件数の表示。保留中の承認・tool call の有無は隣の集計（SnapshotSummaryGrid）が数値で示すので、
+    // ここで色だけで状態を表さない。
+    <StatusBadge variant="neutral" label={`${summary.runs} runs`} icon={false} />
   );
 }
 
@@ -3989,7 +4001,7 @@ function AgentEditor({
               {availableSkills.map((skill) => (
                 <label
                   key={skill.id}
-                  className="flex min-h-11 min-w-0 flex-col items-start justify-between gap-2 rounded-md border border-border px-3 py-2 text-sm md:flex-row md:items-center"
+                  className="flex min-h-11 min-w-0 flex-col items-stretch justify-between gap-2 rounded-md border border-border px-3 py-2 text-sm md:flex-row md:items-center"
                 >
                   <span className="flex min-w-0 flex-1 items-start gap-2">
                     <input
@@ -3999,7 +4011,7 @@ function AgentEditor({
                       className="mt-0.5 h-4 w-4 shrink-0"
                     />
                     <span className="min-w-0">
-                      <span className="block break-words font-medium leading-5 text-fg">
+                      <span className="block break-words font-medium leading-5 text-fg [overflow-wrap:anywhere]">
                         {skill.name}
                       </span>
                       <span className="mt-1 block text-xs leading-5 text-fg-muted">
@@ -4007,10 +4019,16 @@ function AgentEditor({
                       </span>
                     </span>
                   </span>
-                  <StatusBadge
-                    variant={skill.enabled ? "success" : "neutral"}
-                    label={skill.source}
-                  />
+                  <span className="flex shrink-0 flex-wrap items-center gap-1.5">
+                    <StatusBadge
+                      variant={skillSourceVariant(skill.source)}
+                      label={skillSourceLabel(skill.source)}
+                      icon={false}
+                    />
+                    {skill.enabled ? null : (
+                      <StatusBadge variant="neutral" label={t("agent.disabled")} />
+                    )}
+                  </span>
                 </label>
               ))}
             </div>
@@ -4095,7 +4113,7 @@ function RuntimeBindingsPanel({
                       {t("binding.makeDefault")}
                     </Button>
                   ) : (
-                    <StatusBadge variant="info" label={t("binding.default")} />
+                    <StatusBadge variant="info" label={t("binding.default")} icon={false} />
                   )}
                   <Button size="sm" variant="secondary" onClick={() => onSync(binding)} icon={RefreshCw}>
                     {t("binding.sync")}
@@ -4709,6 +4727,8 @@ function RunStreamControls({
         <StatusBadge
           variant={mode === "websocket" ? websocketStatusVariant[websocketState.status] : "info"}
           label={mode === "websocket" ? websocketStatusLabel(websocketState.status) : t("run.stream.sse")}
+          // WebSocket は接続状態（アイコンあり）、SSE は方式名（状態ではない）
+          icon={mode === "websocket"}
         />
       </CardHeader>
       <CardContent className="space-y-4">
@@ -4949,7 +4969,7 @@ function ArtifactsPanel({ run }: { run: RunState }) {
                   <p className="break-all text-sm font-medium text-fg">{artifact.name}</p>
                   <p className="mt-0.5 text-xs text-fg-muted">{formatDate(artifact.created_at)}</p>
                 </div>
-                <StatusBadge variant={artifact.kind === "rag_evidence" ? "info" : "success"} label={artifact.kind} />
+                <StatusBadge variant={artifact.kind === "rag_evidence" ? "info" : "success"} label={artifact.kind} icon={false} />
               </div>
               {artifact.kind === "rag_evidence" ? (
                 <RagEvidenceArtifact artifact={artifact} />
@@ -5089,7 +5109,7 @@ function ToolCard({ tool }: { tool: ToolDefinition }) {
           <CardTitle>{tool.name}</CardTitle>
           <CardDescription>{tool.description}</CardDescription>
         </div>
-        <StatusBadge variant={permissionVariant} label={tool.permission_level} />
+        <StatusBadge variant={permissionVariant} label={tool.permission_level} icon={false} />
       </CardHeader>
       <CardContent className="space-y-3">
         <div className="flex flex-wrap gap-2">

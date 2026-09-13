@@ -255,6 +255,10 @@ test.describe("Agent Runtime settings", () => {
     await expect(page.getByText("external_nl2sql_query")).toBeVisible();
     await expect(page.getByText("external_mcp_call")).toBeVisible();
     await expect(page.getByText("sandbox_command_run")).toBeVisible();
+    // 権限レベルと side_effects は tool の分類（状態ではない）なので、StatusBadge のアイコンを付けない
+    const badges = page.locator("main [data-status-variant]");
+    await expect(badges.filter({ hasText: /^(read|write|sensitive|side_effects)$/ }).first()).toBeVisible();
+    await expect(badges.filter({ hasText: /^(read|write|sensitive|side_effects)$/ }).locator("svg")).toHaveCount(0);
 
     const firstPolicy = page.getByLabel("ポリシー").first();
     // 連続保存では前回のトーストが残るため、保存 API の成功を待ってから最新のトーストを確認する。

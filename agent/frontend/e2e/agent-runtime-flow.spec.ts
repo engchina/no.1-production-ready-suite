@@ -195,6 +195,10 @@ test.describe("AI Agent Control Plane", () => {
     await expect(page.getByRole("heading", { name: "Hermes" })).toBeVisible();
     await expect(page.getByText("degraded")).toBeVisible();
     await expect(page.getByText("cancel: off")).toBeVisible();
+    // 状態（Runtime の status、capability の対応有無）のバッジだけがアイコンを持つ
+    await expect(page.locator("[data-status-variant]", { hasText: "degraded" }).locator("svg")).toHaveCount(1);
+    await expect(page.locator("[data-status-variant]", { hasText: "cancel: off" }).locator("svg")).toHaveCount(1);
+    await expect(page.locator("[data-status-variant]", { hasText: "mcp_sync: on" }).locator("svg")).toHaveCount(1);
     await expect(page.getByRole("button", { name: "状態確認" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Pull" })).toBeVisible();
     await expect(page.getByRole("button", { name: "起動", exact: true })).toBeVisible();
