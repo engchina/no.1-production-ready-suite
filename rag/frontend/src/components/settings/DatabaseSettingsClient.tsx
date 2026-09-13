@@ -12,6 +12,7 @@ import {
   FormStatus,
   SelectField,
   type SelectFieldOption,
+  RequiredBadge,
   Skeleton,
   TextField,
 } from "@engchina/production-ready-ui";
@@ -662,7 +663,7 @@ function WalletServiceField({
         options={serviceOptions}
         onValueChange={onChange}
         required
-        requiredLabel={t("settings.database.requiredMark")}
+        requiredLabel={t("common.required")}
         error={error}
         placeholder={t("settings.database.placeholder.serviceDsn")}
         buttonClassName="h-11"
@@ -777,13 +778,10 @@ function RequiredLabel({
   required?: boolean;
 }) {
   return (
-    <label htmlFor={id} className="text-sm font-medium text-fg">
+    <label htmlFor={id} className="flex items-center gap-2 text-sm font-medium text-fg">
       {label}
-      {required ? (
-        <span aria-hidden="true" className="ml-0.5">
-          *
-        </span>
-      ) : null}
+      {/* 入力側の required が必須を伝えるので、バッジは読み上げから外す */}
+      {required ? <RequiredBadge label={t("common.required")} aria-hidden /> : null}
     </label>
   );
 }

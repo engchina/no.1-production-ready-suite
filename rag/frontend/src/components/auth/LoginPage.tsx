@@ -7,6 +7,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import {
   Banner,
   Button,
+  RequiredBadge,
 } from "@engchina/production-ready-ui";
 import { ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
@@ -93,11 +94,9 @@ export function LoginPage() {
           {error ? <Banner severity="danger">{error}</Banner> : null}
 
           <div className="space-y-2">
-            <label htmlFor="login-username" className="text-sm font-medium text-fg">
+            <label htmlFor="login-username" className="flex items-center gap-2 text-sm font-medium text-fg">
               {t("auth.login.username")}
-              <span className="ml-1 text-danger-fg" aria-hidden>
-                *
-              </span>
+              <RequiredBadge label={t("common.required")} aria-hidden />
             </label>
             <input
               id="login-username"
@@ -112,11 +111,9 @@ export function LoginPage() {
           </div>
 
           <div className="space-y-2">
-            <label htmlFor="login-password" className="text-sm font-medium text-fg">
+            <label htmlFor="login-password" className="flex items-center gap-2 text-sm font-medium text-fg">
               {t("auth.login.password")}
-              <span className="ml-1 text-danger-fg" aria-hidden>
-                *
-              </span>
+              <RequiredBadge label={t("common.required")} aria-hidden />
             </label>
             <div className="relative">
               <input

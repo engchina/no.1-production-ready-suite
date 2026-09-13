@@ -12,6 +12,7 @@ import {
   FormStatus,
   SelectField,
   type SelectFieldOption,
+  RequiredBadge,
   TextField,
 } from "@engchina/production-ready-ui";
 import {
@@ -432,7 +433,7 @@ export function OciSettingsClient() {
                   helper={t("settings.oci.helper.region")}
                   placeholder={t("settings.oci.placeholder.region")}
                   required
-                  requiredLabel={t("settings.oci.required")}
+                  requiredLabel={t("common.required")}
                   buttonClassName="h-11"
                 />
               </div>
@@ -500,7 +501,7 @@ export function OciSettingsClient() {
                   helper={t("settings.oci.helper.objectStorageRegion")}
                   placeholder={t("settings.oci.placeholder.region")}
                   required
-                  requiredLabel={t("settings.oci.required")}
+                  requiredLabel={t("common.required")}
                 />
               </div>
 
@@ -808,7 +809,7 @@ function ConfigFileField({
     <div className="space-y-1.5">
       <label htmlFor={id} className="flex items-center gap-2 text-sm font-medium text-fg">
         {label}
-        {required ? <RequiredBadge /> : null}
+        {required ? <RequiredBadge label={t("common.required")} aria-hidden /> : null}
       </label>
       <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
         <input
@@ -817,6 +818,7 @@ function ConfigFileField({
           value={value}
           readOnly={readOnly}
           aria-readonly={readOnly || undefined}
+          aria-required={required || undefined}
           onChange={(event) => {
             if (!readOnly) onChange?.(event.target.value);
           }}
@@ -890,7 +892,7 @@ function NamespaceField({
     <div className="space-y-1.5">
       <label htmlFor={id} className="flex items-center gap-2 text-sm font-medium text-fg">
         {label}
-        {required ? <RequiredBadge /> : null}
+        {required ? <RequiredBadge label={t("common.required")} aria-hidden /> : null}
       </label>
       <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
         <input
@@ -899,6 +901,7 @@ function NamespaceField({
           value={value}
           readOnly
           aria-readonly="true"
+          aria-required={required || undefined}
           placeholder={placeholder}
           aria-invalid={Boolean(error)}
           aria-describedby={describedBy}
@@ -991,10 +994,10 @@ function PrivateKeyDropzoneField({
     <div id={id} className="space-y-2">
       <label
         htmlFor={`${id}-button`}
-        className="flex items-center gap-1 text-sm font-medium text-fg"
+        className="flex items-center gap-2 text-sm font-medium text-fg"
       >
         {label}
-        {required ? <RequiredBadge /> : null}
+        {required ? <RequiredBadge label={t("common.required")} /> : null}
       </label>
       <button
         id={`${id}-button`}
@@ -1064,17 +1067,6 @@ function PrivateKeyDropzoneField({
         />
       ) : null}
     </div>
-  );
-}
-
-function RequiredBadge() {
-  return (
-    <>
-      <span aria-hidden className="text-danger-fg">
-        *
-      </span>
-      <span className="sr-only">{t("settings.oci.required")}</span>
-    </>
   );
 }
 
