@@ -108,6 +108,24 @@ async function expectContentActionsRightAligned(actions: Locator) {
   expect(metrics!.firstButtonLeft).toBeGreaterThan(metrics!.codeLeft);
 }
 
+// 取得件数上限は広い画面（lg 以上）で実行ボタンと同じ操作行に置き（1:2）、狭い画面では入力の下にボタンを置く（#575）。
+async function expectRowLimitActionRow(input: Locator, button: Locator) {
+  await expect(input).toBeVisible();
+  await expect(button).toBeVisible();
+  const inputBox = await input.boundingBox();
+  const buttonBox = await button.boundingBox();
+  expect(inputBox).not.toBeNull();
+  expect(buttonBox).not.toBeNull();
+  const viewport = input.page().viewportSize();
+  if (viewport && viewport.width >= 1024) {
+    expect(buttonBox!.x).toBeGreaterThan(inputBox!.x + inputBox!.width);
+    expect(buttonBox!.y).toBeLessThan(inputBox!.y + inputBox!.height);
+    expect(buttonBox!.y + buttonBox!.height).toBeGreaterThan(inputBox!.y);
+  } else {
+    expect(buttonBox!.y).toBeGreaterThan(inputBox!.y + inputBox!.height);
+  }
+}
+
 async function expectButtonBelowInput(input: Locator, button: Locator) {
   await expect(input).toBeVisible();
   await expect(button).toBeVisible();
@@ -329,10 +347,21 @@ async function expectCsvUploadLayout(csvPanel: Locator) {
   const modeField = csvPanel.getByTestId("data-csv-mode-field");
   const executionFieldset = csvPanel.getByTestId("data-csv-execution-fieldset");
 
-  await expectSameVisualWidth(tableSection, fileField);
-  await expectSameVisualWidth(modeField, fileField);
-  await expectSameVisualWidth(executionFieldset, fileField);
-  await expectTopToBottomOrder(tableSection, fileField, modeField, executionFieldset);
+  await expectSameVisualWidth(executionFieldset, tableSection);
+  const viewport = csvPanel.page().viewportSize();
+  if (viewport && viewport.width >= 1024) {
+    // 広い画面ではファイル選択とアップロードモードを 2:1 で同じ行に置き、2 つで行全体を使う（#575）。
+    await expectTopToBottomOrder(tableSection, fileField, executionFieldset);
+    const [table, file, mode] = await Promise.all([tableSection.boundingBox(), fileField.boundingBox(), modeField.boundingBox()]);
+    expect(Math.abs(file!.y - mode!.y)).toBeLessThanOrEqual(1);
+    expect(mode!.x).toBeGreaterThan(file!.x + file!.width);
+    expect(Math.abs(mode!.x + mode!.width - (table!.x + table!.width))).toBeLessThanOrEqual(4);
+    expect(file!.width).toBeGreaterThan(mode!.width);
+  } else {
+    await expectSameVisualWidth(tableSection, fileField);
+    await expectSameVisualWidth(modeField, fileField);
+    await expectTopToBottomOrder(tableSection, fileField, modeField, executionFieldset);
+  }
   await expect(modeField.getByText("DELETE & INSERT(全置換)", { exact: true })).toHaveCount(1);
 }
 
@@ -6994,7 +7023,7 @@ test("AI 活用の SELECT SQL 画面は通常 API だけを使用し、更新 SQ
     expect(panelBounds).not.toBeNull();
     expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(panelBounds!.x + panelBounds!.width);
   }
-  await expectButtonBelowInput(rowLimitInput, directSql.getByRole("button", { name: "SQL 実行" }));
+  await expectRowLimitActionRow(rowLimitInput, directSql.getByRole("button", { name: "SQL 実行" }));
   await sqlInput.fill("SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES");
   await expect(directSql.getByRole("button", { name: "SQL 実行" })).toBeEnabled();
   await expect(directSql.getByRole("alert")).toHaveCount(0);
@@ -7291,7 +7320,7 @@ test("データ準備の管理 SQL 画面は SELECT と確認済み更新 SQL �
   const sqlInput = adminSqlInput(adminSql);
   const rowLimitInput = adminSql.getByLabel("取得件数上限");
   await expect(rowLimitInput).toHaveValue("100");
-  await expectButtonBelowInput(rowLimitInput, adminSql.getByRole("button", { name: "SQL 実行" }));
+  await expectRowLimitActionRow(rowLimitInput, adminSql.getByRole("button", { name: "SQL 実行" }));
   await sqlInput.fill("SELECT CUSTOMER_NAME, TOTAL_AMOUNT FROM INVOICES");
   await expect(
     adminSql.getByText("単一 SELECT/WITH は、ログインユーザーの DeepSec context を設定した data plane で実行します。")
@@ -11289,7 +11318,12 @@ test("synthetic data table bulk selection and results use the shared skeleton pr
   await expect(resultLimitInput).toHaveValue("100");
   await expect(resultLimitInput).toHaveAttribute("max", "100000");
   await expect(syntheticResultsSection.getByText("表示するデータはまだありません")).toBeVisible();
-  await expectTopToBottomOrder(resultTableSelect, resultLimitInput, resultsActions);
+  // 結果テーブルと取得件数上限は 2:1 で同じ行、操作ボタンはその下（#575）。
+  await expectTopToBottomOrder(resultTableSelect, resultsActions);
+  await expectTopToBottomOrder(resultLimitInput, resultsActions);
+  const [resultTableBox, resultLimitBox] = await Promise.all([resultTableSelect.boundingBox(), resultLimitInput.boundingBox()]);
+  expect(resultLimitBox!.x).toBeGreaterThan(resultTableBox!.x + resultTableBox!.width);
+  expect(resultTableBox!.width).toBeGreaterThan(resultLimitBox!.width);
   const showDataButton = syntheticResultsSection.getByRole("button", { name: "データを表示" });
   await expectBoundedRowLimit(resultLimitInput, showDataButton);
   await resultLimitInput.fill("-1");

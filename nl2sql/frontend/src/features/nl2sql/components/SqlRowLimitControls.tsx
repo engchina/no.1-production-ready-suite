@@ -53,7 +53,7 @@ export function RowLimitField({
         disabled={disabled}
         aria-describedby={describedBy}
         aria-invalid={error ? "true" : undefined}
-        className="h-10 w-full min-w-0 max-w-[22rem] rounded-md border border-border-control bg-surface px-3 text-sm text-fg outline-none transition-colors placeholder:text-fg-muted disabled:cursor-not-allowed disabled:bg-surface-hover disabled:text-fg-disabled focus:border-focus-ring focus:ring-2 focus:ring-focus-ring"
+        className="h-10 w-full min-w-0 rounded-md border border-border-control bg-surface px-3 text-sm text-fg outline-none transition-colors placeholder:text-fg-muted disabled:cursor-not-allowed disabled:bg-surface-hover disabled:text-fg-disabled focus:border-focus-ring focus:ring-2 focus:ring-focus-ring"
       />
       <p id={helperId} className="overflow-x-auto whitespace-nowrap text-xs leading-5 text-fg-muted">
         {helper}

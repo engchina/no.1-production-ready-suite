@@ -83,7 +83,6 @@ import type {
   DeepSecTargetObjectDetail,
   DeepSecVerification,
 } from "./types";
-import { READABLE_FORM_WIDTH } from "@/lib/form-layout";
 
 const ENTITLEMENT_CAPABILITIES = ["SELECT"] as const;
 const SCOPE_MODES = ["ALL", "FILTERS", "EXPRESSION"] as const;
@@ -1748,7 +1747,7 @@ export function SecurityDeepSecPage() {
               icon={KeyRound}
             />
             <form
-              className={`grid gap-4 ${READABLE_FORM_WIDTH}`}
+              className="grid gap-4"
               onSubmit={(event) => {
                 event.preventDefault();
                 void handleSaveConfig();

@@ -1676,7 +1676,8 @@ function PreviewResultsPanel({
           />
         }
       />
-      <div className="grid gap-3 border-t border-border pt-3">
+      {/* 取得件数上限と表示ボタンを 1 行の操作行にまとめ、数値入力を行全体に伸ばさない（1:2）。 */}
+      <div className="grid gap-3 border-t border-border pt-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)] lg:items-center lg:gap-x-6">
         <RowLimitField
           value={rowLimitInput}
           onChange={onRowLimitChange}
@@ -1887,6 +1888,8 @@ function CsvUploadWorkspace({
 
       {error && <ErrorState message={error} onRetry={onRetry} />}
 
+      {/* ファイル選択とアップロードモードを 2:1 で同じ行に置き、どちらも行全体に伸ばさない。 */}
+      <div className="grid min-w-0 gap-3 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] lg:items-start lg:gap-x-6">
       <FileDropzone
         label={t("dataMgmt.csv.file")}
         accept={CORE_TABULAR_FILE_FORMATS.accept}
@@ -1918,6 +1921,7 @@ function CsvUploadWorkspace({
           <option value="truncate_insert">{t("dataMgmt.csv.mode.truncateInsert")}</option>
         </select>
       </label>
+      </div>
 
       <fieldset
         className="grid gap-3 rounded-md border border-border bg-surface p-3"
@@ -2429,7 +2433,8 @@ function SyntheticWorkspace({
           description={t("dataTools.syntheticData.resultsActionDisabled")}
         />
 
-        <div className="grid gap-3 border-t border-border pt-3">
+        {/* 結果テーブル（長い名前）と取得件数上限を 2:1 で同じ行に置き、ボタン行はその下の全幅。 */}
+        <div className="grid gap-3 border-t border-border pt-3 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] lg:items-start lg:gap-x-6">
           <label className="grid min-w-0 gap-1 text-sm font-medium text-fg">
             <span>{t("dataTools.syntheticData.resultTable")}</span>
             <select
@@ -2454,7 +2459,7 @@ function SyntheticWorkspace({
             error={syntheticResultLimitError}
           />
           <div
-            className="flex flex-col gap-2 sm:flex-row sm:flex-wrap"
+            className="flex flex-col gap-2 sm:flex-row sm:flex-wrap lg:col-span-full"
             role="group"
             aria-label={t("dataTools.syntheticData.resultsActions")}
             data-testid="data-synthetic-results-actions"

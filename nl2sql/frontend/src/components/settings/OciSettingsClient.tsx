@@ -61,7 +61,6 @@ import {
   type OciValidationResult,
 } from "@/lib/oci-settings";
 import { useRequestScope } from "@/lib/useRequestScope";
-import { READABLE_FORM_WIDTH } from "@/lib/form-layout";
 
 type FeedbackState = "idle" | "loading" | "success" | "error";
 type ConfigTestState =
@@ -380,7 +379,7 @@ export function OciSettingsClient() {
               <CardTitle className="text-base">{t("settings.oci.auth.cardTitle")}</CardTitle>
             </div>
           </CardHeader>
-          <CardContent className={`space-y-5 p-6 ${READABLE_FORM_WIDTH}`}>
+          <CardContent className="space-y-5 p-6">
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
               <ConfigFileField
                 id="oci-config-file"
@@ -490,7 +489,7 @@ export function OciSettingsClient() {
               </div>
             </div>
           </CardHeader>
-          <CardContent className={`space-y-5 ${READABLE_FORM_WIDTH}`}>
+          <CardContent className="space-y-5">
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
               <NamespaceField
                 id="oci-object-storage-namespace"

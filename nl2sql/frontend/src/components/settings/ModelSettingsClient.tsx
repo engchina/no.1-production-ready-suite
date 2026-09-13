@@ -54,7 +54,6 @@ import { t } from "@/lib/i18n";
 import { useModelSettings, useTestModelSettings, useUpdateModelSettings } from "@/lib/queries";
 import { useSettingsDraftGuard } from "@/lib/useSettingsDraftGuard";
 import { cn } from "@/lib/utils";
-import { READABLE_FORM_WIDTH } from "@/lib/form-layout";
 
 type ModelTestKey = `enterprise:${number}` | "embedding" | "rerank";
 type ModelSaveSection = "enterprise_connection" | "enterprise_models" | "generative_ai";
@@ -346,8 +345,9 @@ export function ModelSettingsClient() {
                 </CardTitle>
                 <CardDescription>{t("settings.model.enterprise.description")}</CardDescription>
               </CardHeader>
-              <CardContent className={`space-y-5 ${READABLE_FORM_WIDTH}`}>
-                <div className="grid gap-5 md:grid-cols-2">
+              <CardContent className="space-y-5">
+                {/* Endpoint URL は長い値なので全幅。Project OCID と API キーは広い画面（2xl）で同じ行に置く。 */}
+                <div className="grid gap-x-6 gap-y-5 md:grid-cols-2">
                   <TextField
                     id="enterprise-endpoint"
                     label={t("settings.model.enterprise.endpoint")}
@@ -378,7 +378,7 @@ export function ModelSettingsClient() {
                     placeholder={t("settings.model.placeholder.project")}
                     helper={t("settings.model.enterprise.projectHelp")}
                     onValueChange={(value) => updateEnterprise("project_ocid", value)}
-                    className="md:col-span-2"
+                    className="md:col-span-2 2xl:col-span-1"
                   />
                   <SecretField
                     id="enterprise-api-key"
@@ -391,7 +391,7 @@ export function ModelSettingsClient() {
                     helper={t("settings.model.enterprise.apiKeyHelp")}
                     onToggleVisible={() => setApiKeyVisible((current) => !current)}
                     onChange={(value) => updateEnterprise("api_key", value)}
-                    className="md:col-span-2"
+                    className="md:col-span-2 2xl:col-span-1"
                   />
                   {draft.enterprise_ai.has_api_key ? (
                     <label className="flex cursor-pointer items-start gap-3 rounded-md border border-border bg-surface-sunken px-4 py-3 text-sm transition-colors hover:bg-info-subtle md:col-span-2">
@@ -429,7 +429,7 @@ export function ModelSettingsClient() {
                   {t("settings.model.enterprise.modelsDescription")}
                 </CardDescription>
               </CardHeader>
-              <CardContent className={`space-y-5 ${READABLE_FORM_WIDTH}`}>
+              <CardContent className="space-y-5">
                 <ModelCatalogEditor
                   models={draft.enterprise_ai.models}
                   defaultModelId={draft.enterprise_ai.default_model_id}
@@ -463,8 +463,9 @@ export function ModelSettingsClient() {
                 </CardTitle>
                 <CardDescription>{t("settings.model.genai.description")}</CardDescription>
               </CardHeader>
-              <CardContent className={`space-y-5 ${READABLE_FORM_WIDTH}`}>
-                <div className="grid gap-5 md:grid-cols-2">
+              <CardContent className="space-y-5">
+                {/* 3 項目とも短い値なので、広い画面（2xl）では 1 行に並べる。 */}
+                <div className="grid gap-x-6 gap-y-5 md:grid-cols-2 2xl:grid-cols-3">
                   <TestableTextField
                     id="genai-embedding-model"
                     label={t("settings.model.genai.embeddingModel")}
@@ -499,7 +500,7 @@ export function ModelSettingsClient() {
                     value={draft.generative_ai.rerank_model}
                     placeholder={t("settings.model.placeholder.rerankModel")}
                     onChange={(value) => updateGenerative("rerank_model", value)}
-                    className="md:col-span-2"
+                    className="md:col-span-2 2xl:col-span-1"
                     testResult={testResults.rerank}
                     testing={testingKey === "rerank"}
                     onTest={() =>

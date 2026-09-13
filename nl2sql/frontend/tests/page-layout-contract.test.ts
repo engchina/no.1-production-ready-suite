@@ -6,7 +6,7 @@ import ts from "typescript";
 
 // NL2SQL は全画面が画面幅いっぱい（PageHeader / PageBody の `wide`）。例外を作らない（#566）。
 // PageHeader と PageBody の wide がずれると、広い画面でタイトルと本文の左端がずれる。
-// 読み・入力の行長は、ページ幅ではなくカード内のフォームや説明文の最大幅で抑える。
+// カード内の中身も幅を止めず、フォームは grid の段組み、検索欄は toolbar の配分で広い画面を埋める（#575）。
 const root = new URL("../src/", import.meta.url).pathname;
 function files(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) =>
@@ -56,20 +56,14 @@ test("AI要件確認の未入力案内は操作前に赤いエラー（role=aler
   assert.match(workbench, /aria-describedby=\{!question\.trim\(\) \? "nl2sql-guided-query-required" : undefined\}/u);
 });
 
-test("設定・入力フォームは wide のカード内で読みやすい最大幅に止める", () => {
-  const layout = readFileSync(new URL("../src/lib/form-layout.ts", import.meta.url), "utf8");
-  assert.match(layout, /READABLE_FORM_WIDTH = "max-w-\[var\(--content-max-width\)\]"/u);
-  const forms: Record<string, number> = {
-    "components/settings/OciSettingsClient.tsx": 2,
-    "components/settings/UploadStorageSettingsClient.tsx": 1,
-    "components/settings/ModelSettingsClient.tsx": 3,
-    "components/settings/DatabaseSettingsClient.tsx": 3,
-    "components/settings/SystemTablesCard.tsx": 1,
-    "features/security/SecurityDeepSecPage.tsx": 1,
-    "features/nl2sql/pages/EvaluationPage.tsx": 1,
-  };
-  for (const [path, count] of Object.entries(forms)) {
-    const source = readFileSync(new URL(`../src/${path}`, import.meta.url), "utf8");
-    assert.equal(source.match(/className=\{`[^`]*\$\{READABLE_FORM_WIDTH\}`\}/gu)?.length ?? 0, count, path);
+test("wide のカード内の中身に最大幅を付けず、100% を使う（#575）", () => {
+  // 広い画面ではコンテナを止めず、フォームや toolbar を grid の段組みで埋める。
+  // 例外（ダイアログ・ポップオーバー本体、長文の max-w-prose、バッジ等の truncate）は対象の文字列に当たらない。
+  const forbidden = [/READABLE_FORM_WIDTH/u, /form-layout/u, /max-w-\[var\(--content-max-width\)\]/u, /max-w-\[22rem\]/u, /max-w-\[34rem\]/u, /sm:max-w-md/u, /xl:max-w-3xl/u];
+  const violations: string[] = [];
+  for (const file of [...files(root), ...readdirSync(join(root, "lib")).map((name) => join(root, "lib", name))]) {
+    const source = readFileSync(file, "utf8");
+    for (const pattern of forbidden) if (pattern.test(source)) violations.push(`${relative(root, file)}: ${pattern}`);
   }
+  assert.deepEqual(violations, []);
 });

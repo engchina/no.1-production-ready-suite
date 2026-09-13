@@ -106,7 +106,7 @@ test("NL2SQL の局所実行 CTA は対象内容の後ろに置く", () => {
   const syntheticTargetHeaderStart = dataManagementSource.indexOf('headingId="synthetic-target-heading"');
   const syntheticTargetHeaderEnd = dataManagementSource.indexOf('<div className="grid min-w-0 gap-3 lg:grid-cols', syntheticTargetHeaderStart);
   const syntheticResultsHeaderStart = dataManagementSource.indexOf('headingId="synthetic-results-heading"');
-  const syntheticResultsHeaderEnd = dataManagementSource.indexOf('<div className="grid gap-3 border-t border-border pt-3"', syntheticResultsHeaderStart);
+  const syntheticResultsHeaderEnd = dataManagementSource.indexOf('<div className="grid gap-3 border-t border-border pt-3', syntheticResultsHeaderStart);
   assert.doesNotMatch(dataManagementSource.slice(syntheticTargetHeaderStart, syntheticTargetHeaderEnd), /action=\{/u);
   assert.doesNotMatch(dataManagementSource.slice(syntheticResultsHeaderStart, syntheticResultsHeaderEnd), /action=\{/u);
   assert.doesNotMatch(
