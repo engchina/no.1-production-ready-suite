@@ -1008,6 +1008,8 @@ for (const scenario of scenarios) {
     await longButton.focus();
     await page.keyboard.press("Enter");
     await expect(longButton).toHaveAttribute("aria-current", "true");
+    const gridScroll = await page.getByTestId("db-admin-object-list").evaluate((node) => node.scrollWidth - node.clientWidth);
+    expect(gridScroll).toBeLessThanOrEqual(1);
     await grid.screenshot({ path: testInfo.outputPath(`${scenario.objectType}-name-comments.png`) });
     await expectNoHorizontalScroll(page);
     await page.getByRole("searchbox", { name: "検索" }).fill("支払期日");

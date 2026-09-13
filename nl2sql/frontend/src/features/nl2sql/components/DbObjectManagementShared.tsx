@@ -1129,11 +1129,12 @@ export function DbObjectGrid({
       ) : (
         <div className="overflow-hidden rounded-md border border-border bg-surface">
           <div className={DB_OBJECT_GRID_SCROLL_CLASS} data-testid="db-admin-object-list">
-            <table className="w-full min-w-[24rem] table-fixed divide-y divide-border text-left text-sm" data-testid={`${idPrefix}-grid`}>
+            {/* 所有者列は lg 未満で非表示にする。<col> も隠さないと空の列が幅を取り、375px で横スクロールが出る。 */}
+            <table className="w-full min-w-[16rem] table-fixed divide-y divide-border text-left text-sm lg:min-w-[24rem]" data-testid={`${idPrefix}-grid`}>
               <colgroup>
                 <col className="w-[55%]" />
                 <col className="w-[7.5rem]" />
-                <col className="w-[7.5rem]" />
+                <col className="hidden w-[7.5rem] lg:table-column" />
               </colgroup>
               <thead className="sticky top-0 z-10 bg-surface-sunken text-xs text-fg-muted">
                 <tr>

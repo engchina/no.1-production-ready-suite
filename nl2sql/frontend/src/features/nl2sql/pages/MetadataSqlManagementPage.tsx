@@ -811,7 +811,8 @@ function MetadataTargetGrid({
         <div className="overflow-hidden rounded-md border border-border bg-surface">
           <div className={INFORMATION_TABLE_FIVE_ROW_SCROLL_CLASS} data-testid="db-admin-object-list">
             {/* コメントは別列ではなく対象名の直下に置き（テーブル管理・ビュー管理・データ管理と同じ形式）、
-                空いた幅を対象名に回す。種類はバッジ「テーブル」＋セル余白が収まる幅にする。 */}
+                空いた幅を対象名に回す。種類はバッジ「テーブル」＋セル余白が収まる幅にする。
+                狭い幅では対象名が 1 行に収まる最小幅を保ち、一覧内の横スクロールで種類・所有者を確認する（5 行の固定高さを維持）。 */}
             <table className="w-full min-w-[28rem] table-fixed divide-y divide-border text-left text-sm" data-testid={`${pageId}-target-grid`}>
               <colgroup>
                 <col />
