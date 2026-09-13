@@ -616,3 +616,42 @@ def test_service_hides_expired_history_and_worker_cleans_without_browser(
     service.tick()
     assert service.store.get(value.run_id) is None
     service.adapter.generate_synthetic_data.assert_not_called()  # type: ignore[attr-defined]
+
+
+def test_worker_loop_logs_failure_cause_and_backs_off(caplog: pytest.LogCaptureFixture) -> None:
+    from app.features.nl2sql import synthetic_service
+
+    class StopAfter:
+        def __init__(self, iterations: int) -> None:
+            self.iterations = iterations
+            self.waits: list[float] = []
+
+        def is_set(self) -> bool:
+            return len(self.waits) >= self.iterations
+
+        def wait(self, seconds: float) -> None:
+            self.waits.append(seconds)
+
+    outcomes: list[Exception | None] = [
+        RuntimeError("Oracle 接続に失敗しました: DPY-6005"),
+        RuntimeError("Oracle 接続に失敗しました: DPY-6005"),
+        None,
+        *[RuntimeError("timeout")] * 6,
+    ]
+
+    def tick() -> None:
+        outcome = outcomes.pop(0)
+        if outcome:
+            raise outcome
+
+    stop = StopAfter(len(outcomes))
+    with caplog.at_level(logging.WARNING, logger=synthetic_service.__name__):
+        synthetic_service.worker_loop(cast(Any, stop), tick=tick)
+
+    # 失敗が続くと 4 → 8 秒と伸び、成功で 2 秒に戻り、上限は 60 秒
+    assert stop.waits == [4.0, 8.0, 2.0, 4.0, 8.0, 16.0, 32.0, 60.0, 60.0]
+    first = caplog.records[0]
+    assert first.getMessage() == "synthetic_worker_poll_failed"
+    assert cast(Any, first).error_type == "RuntimeError"
+    assert "DPY-6005" in cast(Any, first).error
+    assert cast(Any, caplog.records[-1]).consecutive_failures == 6

@@ -456,10 +456,29 @@ def get_synthetic_service() -> SyntheticService:
         return _services[key]
 
 
-def worker_loop(stop: threading.Event) -> None:
+POLL_INTERVAL_SECONDS = 2.0
+MAX_POLL_BACKOFF_SECONDS = 60.0
+
+
+def worker_loop(stop: threading.Event, tick: Callable[[], None] | None = None) -> None:
+    """合成データ run を 2 秒ごとに進める。
+
+    DB 接続断などで失敗が続く間は待機を倍々に伸ばし（上限 60 秒）、成功したら 2 秒に戻す。
+    失敗の原因を追えるよう、例外の種類とメッセージを記録する（接続情報は含まれない）。
+    """
+    failures = 0
     while not stop.is_set():
         try:
-            get_synthetic_service().tick()
-        except Exception:
-            logger.warning("synthetic_worker_poll_failed")
-        stop.wait(2)
+            (tick or get_synthetic_service().tick)()
+            failures = 0
+        except Exception as exc:
+            failures += 1
+            logger.warning(
+                "synthetic_worker_poll_failed",
+                extra={
+                    "error_type": type(exc).__name__,
+                    "error": str(exc)[:300],
+                    "consecutive_failures": failures,
+                },
+            )
+        stop.wait(min(POLL_INTERVAL_SECONDS * 2**failures, MAX_POLL_BACKOFF_SECONDS))
