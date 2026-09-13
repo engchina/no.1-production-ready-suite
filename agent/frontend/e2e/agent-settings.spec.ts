@@ -63,7 +63,7 @@ async function mockMissingOciRuntimeSettings(page: Page) {
       body: JSON.stringify({
         data: {
           backend: "local",
-          local_storage_dir: "/u01/production-ready-rag",
+          local_storage_dir: "/u01/data/production-ready-agent",
           object_storage_region: "",
           object_storage_namespace: "mytenancynamespace",
           object_storage_bucket: "",
@@ -107,7 +107,7 @@ async function mockMissingOciRuntimeSettings(page: Page) {
       body: JSON.stringify({
         data: {
           backend: "local",
-          local_storage_dir: "/u01/production-ready-rag",
+          local_storage_dir: "/u01/data/production-ready-agent",
           object_storage_region: "",
           object_storage_namespace: "",
           object_storage_bucket: "",
@@ -210,7 +210,7 @@ test.describe("Agent Runtime settings", () => {
 
     await page.goto("/settings/upload-storage");
     await expect(page.getByRole("heading", { name: "アップロード保存先", level: 1 })).toBeVisible();
-    await page.getByLabel("ローカル保存ディレクトリ").fill("/u01/production-ready-rag");
+    await page.getByLabel("ローカル保存ディレクトリ").fill("/u01/data/production-ready-agent");
     await page.getByRole("button", { name: "保存" }).click();
     await expect(page.getByText("保存しました")).toBeVisible();
     await expectNoHorizontalOverflow(page);

@@ -527,7 +527,7 @@ class AdbSettingsUpdate(BaseModel):
 
 class UploadStorageSettingsData(BaseModel):
     backend: UploadStorageBackend = "local"
-    local_storage_dir: str = "/u01/production-ready-rag"
+    local_storage_dir: str = "/u01/data/production-ready-agent"
     object_storage_region: str = ""
     object_storage_namespace: str = ""
     object_storage_bucket: str = ""
@@ -2066,7 +2066,7 @@ def _upload_storage_settings_data(settings: object) -> UploadStorageSettingsData
         local_storage_dir=_settings_str_from(
             settings,
             "local_storage_dir",
-            "/u01/production-ready-rag",
+            "/u01/data/production-ready-agent",
         ),
         object_storage_region=_settings_str_from(
             settings,

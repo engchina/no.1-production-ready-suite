@@ -28,7 +28,7 @@ class Settings(BaseServiceSettings):
     object_storage_namespace: str = ""
     object_storage_bucket: str = ""
     upload_storage_backend: str = "local"
-    local_storage_dir: str = "/u01/production-ready-rag"
+    local_storage_dir: str = "/u01/data/production-ready-agent"
     max_upload_bytes: int = 100 * 1024 * 1024
     model_settings_file: str = "model-settings.json"
     enterprise_ai_endpoint: str | None = None

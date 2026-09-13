@@ -91,7 +91,7 @@ def _settings_fixture(**overrides: object) -> SimpleNamespace:
     defaults: dict[str, object] = {
         "agent_rbac_enabled": False,
         "upload_storage_backend": "local",
-        "local_storage_dir": "/u01/production-ready-rag",
+        "local_storage_dir": "/u01/data/production-ready-agent",
         "object_storage_region": "",
         "object_storage_namespace": "",
         "object_storage_bucket": "",
@@ -875,7 +875,7 @@ def test_oci_settings_defaults_match_rag_when_credentials_missing(
     assert storage_resp.status_code == 200
     storage = storage_resp.json()["data"]
     assert storage["backend"] == "local"
-    assert storage["local_storage_dir"] == "/u01/production-ready-rag"
+    assert storage["local_storage_dir"] == "/u01/data/production-ready-agent"
     assert storage["object_storage_region"] == ""
     assert storage["object_storage_namespace"] == ""
     assert storage["object_storage_bucket"] == ""
