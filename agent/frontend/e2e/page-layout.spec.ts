@@ -2,7 +2,6 @@ import type { Page } from "@playwright/test";
 
 import { expect, test } from "./fixtures/mock-api";
 
-import { WIDE_PAGE_ROUTES } from "../src/lib/page-layout";
 import { APP_ROUTES } from "../src/lib/routes";
 
 const CONTENT_MAX_WIDTH = 1440;
@@ -30,39 +29,28 @@ async function measureLayout(page: Page) {
   });
 }
 
+// Agent の全画面は画面幅いっぱい（共有 PageHeader / PageBody の `wide`）で統一する（#28。#13 の Run・監査だけの wide を置き換え）。
 test.describe("画面幅（PageHeader / PageBody の wide）", () => {
-  test("2,560px で作業画面だけ本文が広がり、全画面でタイトルと本文の左端がそろう", async ({ page }) => {
-    test.setTimeout(90_000);
-    await page.setViewportSize({ width: 2560, height: 1200 });
-    const wideRoutes: readonly string[] = WIDE_PAGE_ROUTES;
+  for (const { width, height } of [
+    { width: 1920, height: 1080 },
+    { width: 2560, height: 1200 },
+  ]) {
+    test(`${width}px で全画面の本文が 1440px を超えて広がり、タイトルと本文の左端がそろう`, async ({ page }) => {
+      test.setTimeout(90_000);
+      await page.setViewportSize({ width, height });
 
-    for (const route of Object.values(APP_ROUTES)) {
-      await page.goto(route);
-      const layout = await measureLayout(page);
-      const label = `${route} ${JSON.stringify(layout)}`;
+      for (const route of Object.values(APP_ROUTES)) {
+        await page.goto(route);
+        const layout = await measureLayout(page);
+        const label = `${route} ${JSON.stringify(layout)}`;
 
-      expect(layout.headerLeft, label).toBe(layout.bodyLeft);
-      expect(layout.headerWidth, label).toBe(layout.bodyWidth);
-      if (wideRoutes.includes(route)) {
+        expect(layout.headerLeft, label).toBe(layout.bodyLeft);
+        expect(layout.headerWidth, label).toBe(layout.bodyWidth);
         expect(layout.bodyWidth, label).toBe(layout.mainWidth);
         expect(layout.bodyWidth, label).toBeGreaterThan(CONTENT_MAX_WIDTH);
-      } else {
-        expect(layout.bodyWidth, label).toBe(CONTENT_MAX_WIDTH);
       }
-    }
-  });
-
-  test("1920px でも作業画面のタイトルと本文の左端がそろう", async ({ page }) => {
-    await page.setViewportSize({ width: 1920, height: 1080 });
-    for (const route of WIDE_PAGE_ROUTES) {
-      await page.goto(route);
-      const layout = await measureLayout(page);
-      const label = `${route} ${JSON.stringify(layout)}`;
-      expect(layout.headerLeft, label).toBe(layout.bodyLeft);
-      expect(layout.bodyWidth, label).toBe(layout.mainWidth);
-      expect(layout.bodyWidth, label).toBeGreaterThan(CONTENT_MAX_WIDTH);
-    }
-  });
+    });
+  }
 });
 
 test.describe("操作前の案内", () => {
