@@ -229,7 +229,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # デザインシステム遵守ルール（frontend/.oxlintrc.json）と oxlint 既定の correctness ルール。
+      # デザインシステム遵守ルール（frontend/.oxlintrc.json が sibling の platform の
+      # docs/design-system/adherence.oxlintrc.json を extends）と oxlint 既定の correctness ルール。
       - name: Lint
         run: npm run lint
 
