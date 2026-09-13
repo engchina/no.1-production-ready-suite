@@ -949,7 +949,7 @@ def test_default_quality_evaluation_enterprise_ai_calls_disable_retries(
     monkeypatch.setattr(settings, "nl2sql_quality_evaluation_worker_mode", "external")
     nl2sql = Nl2SqlService(store=MemoryNl2SqlStore())
     nl2sql.import_sample_data(
-        SampleDataMutationRequest(step=SampleDataStep.ALL, confirmation="SQL_ASSIST_SAMPLE")
+        SampleDataMutationRequest(step=SampleDataStep.ALL, confirmation="ADMIN_EXECUTE")
     )
     _create_sample_profile(nl2sql)
     fake_client = _FakeEnterpriseAiClient(
@@ -1195,7 +1195,7 @@ def test_default_judge_uses_profile_schema_catalog_without_argument_error(
     monkeypatch.setattr(settings, "nl2sql_quality_evaluation_worker_mode", "external")
     nl2sql = Nl2SqlService(store=MemoryNl2SqlStore())
     nl2sql.import_sample_data(
-        SampleDataMutationRequest(step=SampleDataStep.ALL, confirmation="SQL_ASSIST_SAMPLE")
+        SampleDataMutationRequest(step=SampleDataStep.ALL, confirmation="ADMIN_EXECUTE")
     )
     _create_sample_profile(nl2sql)
     fake_client = _FakeEnterpriseAiClient(
@@ -1247,7 +1247,7 @@ def test_strict_enterprise_ai_direct_generation_passes_timeout_override(
 ) -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
     service.import_sample_data(
-        SampleDataMutationRequest(step=SampleDataStep.ALL, confirmation="SQL_ASSIST_SAMPLE")
+        SampleDataMutationRequest(step=SampleDataStep.ALL, confirmation="ADMIN_EXECUTE")
     )
     _create_sample_profile(service)
     fake_client = _FakeEnterpriseAiClient(
@@ -1285,7 +1285,7 @@ def test_strict_generation_never_uses_deterministic_fallback(
 ) -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
     service.import_sample_data(
-        SampleDataMutationRequest(step=SampleDataStep.ALL, confirmation="SQL_ASSIST_SAMPLE")
+        SampleDataMutationRequest(step=SampleDataStep.ALL, confirmation="ADMIN_EXECUTE")
     )
     monkeypatch.setattr(
         service,

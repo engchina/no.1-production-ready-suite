@@ -831,7 +831,7 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
     fulfillJson(route, {
       runtime: "deterministic",
       profile_id: "",
-      confirmation: "SQL_ASSIST_SAMPLE",
+      confirmation: "ADMIN_EXECUTE",
       objects: sampleObjects,
       imported_objects: sampleImportedObjects,
       sql: sampleSql,
@@ -6596,6 +6596,10 @@ test("schema catalog が空のとき、ジョブ失敗からサンプルデー�
   );
   await page.unroute("**/api/nl2sql/sample-data/import");
   await page.route("**/api/nl2sql/sample-data/import", (route) => {
+    // クエリ画面からのワンクリック投入も、サンプルデータ管理と同じ確認語で送る。
+    if (route.request().postDataJSON()?.confirmation !== "ADMIN_EXECUTE") {
+      return route.fulfill({ status: 400, contentType: "application/json", body: JSON.stringify({ detail: "unexpected confirmation" }) });
+    }
     catalogPopulated = true;
     return fulfillJson(route, {
       operation: "import",
@@ -11615,17 +11619,18 @@ test("data management CSV upload hides unmatched columns when Oracle reports non
 });
 
 const domainSamples = [
-  { dataset: "sales", label: "売上サンプルデータ", phrase: "NL2SQL_SALES_SAMPLE", object: "SAMPLE_NL2SQL_SALES_ORDER" },
-  { dataset: "inquiries", label: "問い合わせサンプルデータ", phrase: "NL2SQL_INQUIRY_SAMPLE", object: "SAMPLE_NL2SQL_INQUIRY_TICKET" },
+  // 実行確認語は種類によらず ADMIN_EXECUTE に統一。旧確認語は受け付けない。
+  { dataset: "sales", label: "売上サンプルデータ", legacyPhrase: "NL2SQL_SALES_SAMPLE", object: "SALES_ORDER" },
+  { dataset: "inquiries", label: "問い合わせサンプルデータ", legacyPhrase: "NL2SQL_INQUIRY_SAMPLE", object: "INQUIRY_TICKET" },
 ] as const;
 
 for (const sample of domainSamples) {
-  test(`${sample.label}を選んで投入・削除し、人事データと確認を分離する`, async ({ page }, testInfo) => {
+  test(`${sample.label}を選んで投入・削除し、種類の切替で確認を解除する`, async ({ page }, testInfo) => {
     await mockNl2SqlApi(page);
     let imported = false;
     const requests: Array<Record<string, unknown>> = [];
     await page.route(`**/api/nl2sql/sample-data?dataset=${sample.dataset}`, (route) => fulfillJson(route, {
-      dataset: sample.dataset, runtime: "deterministic", profile_id: "", confirmation: sample.phrase,
+      dataset: sample.dataset, runtime: "deterministic", profile_id: "", confirmation: "ADMIN_EXECUTE",
       objects: [sample.object], imported_objects: imported ? [sample.object] : [], warnings: [],
       sql: { tables: [`CREATE TABLE ${sample.object} (ID NUMBER)`], views: [], data: [`INSERT INTO ${sample.object} VALUES (1)`], delete: [`DROP TABLE ${sample.object}`] },
     }));
@@ -11645,39 +11650,41 @@ for (const sample of domainSamples) {
     await expect(selector.getByRole("option")).toHaveText(["人事サンプルデータ", "売上サンプルデータ", "問い合わせサンプルデータ"]);
     const confirmation = page.getByLabel("実行確認語");
     const execute = page.getByRole("button", { name: "取り込み実行", exact: true });
-    await confirmation.fill("SQL_ASSIST_SAMPLE");
+    await confirmation.fill("ADMIN_EXECUTE");
     await execute.click();
     await expect(page.getByTestId("sample-data-imported-count")).toHaveText("5");
     await selector.selectOption(sample.dataset);
     await expect(page.getByTestId("sample-data-imported-count")).toHaveText("0");
     await expect(confirmation).toHaveValue("");
-    await expect(confirmation).toHaveAttribute("placeholder", sample.phrase);
+    await expect(confirmation).toHaveAttribute("placeholder", "ADMIN_EXECUTE");
     await expect(page.locator("pre")).toContainText(`CREATE TABLE ${sample.object}`);
     await expect(page.locator("pre")).not.toContainText("DEPARTMENT");
     await expect(page.getByText(`dataTools.sample.dataset.${sample.dataset}`)).toHaveCount(0);
     await expectNoHorizontalScroll(page);
     await page.getByRole("region", { name: "サンプルデータの種類" }).screenshot({ path: testInfo.outputPath(`${sample.dataset}-selector.png`) });
-    await confirmation.fill("SQL_ASSIST_SAMPLE");
-    await expect(execute).toBeDisabled();
-    await confirmation.fill(sample.phrase);
+    for (const legacyPhrase of ["SQL_ASSIST_SAMPLE", sample.legacyPhrase]) {
+      await confirmation.fill(legacyPhrase);
+      await expect(execute).toBeDisabled();
+    }
+    await confirmation.fill("ADMIN_EXECUTE");
     await execute.focus();
     await page.keyboard.press("Enter");
     await expect(page.getByTestId("sample-data-imported-count")).toHaveText("1");
-    expect(requests).toEqual([{ operation: "import", dataset: sample.dataset, step: "all", confirmation: sample.phrase, reason: "ui-sample-import" }]);
+    expect(requests).toEqual([{ operation: "import", dataset: sample.dataset, step: "all", confirmation: "ADMIN_EXECUTE", reason: "ui-sample-import" }]);
     await page.getByRole("tab", { name: "削除実行", exact: true }).click();
     await expect(confirmation).toHaveValue("");
     await expect(page.getByText(`${sample.label}のテーブル・ビューと格納されたデータをすべて削除します。他の種類のサンプルデータは保持します。`)).toBeVisible();
     await expect(page.locator("pre")).toHaveText(`DROP TABLE ${sample.object}`);
-    await confirmation.fill(sample.phrase);
+    await confirmation.fill("ADMIN_EXECUTE");
     await page.reload();
     await expect(selector).toHaveValue(sample.dataset);
     await expect(page.getByRole("tab", { name: "削除実行", exact: true })).toHaveAttribute("aria-selected", "true");
     await expect(confirmation).toHaveValue("");
     expect(requests).toHaveLength(1);
-    await confirmation.fill(sample.phrase);
+    await confirmation.fill("ADMIN_EXECUTE");
     await page.getByRole("button", { name: "削除実行", exact: true }).click();
     await expect(page.getByTestId("sample-data-imported-count")).toHaveText("0");
-    expect(requests[1]).toMatchObject({ operation: "delete", dataset: sample.dataset, confirmation: sample.phrase });
+    expect(requests[1]).toMatchObject({ operation: "delete", dataset: sample.dataset, confirmation: "ADMIN_EXECUTE" });
     await selector.selectOption("hr");
     await expect(confirmation).toHaveValue("");
     await expect(page.getByTestId("sample-data-imported-count")).toHaveText("5");
@@ -11698,13 +11705,13 @@ test("サンプルの種類変更中・取得失敗時は旧 SQL を実行でき
       await gate.promise;
       return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "サンプルの取得に失敗しました。表示を更新してください。" }) });
     }
-    return fulfillJson(route, { dataset: "sales", runtime: "deterministic", profile_id: "", confirmation: "NL2SQL_SALES_SAMPLE",
-      objects: ["SAMPLE_NL2SQL_SALES_ORDER"], imported_objects: [], warnings: [],
-      sql: { tables: ["CREATE TABLE SAMPLE_NL2SQL_SALES_ORDER (ID NUMBER)"], views: [], data: [], delete: [] } });
+    return fulfillJson(route, { dataset: "sales", runtime: "deterministic", profile_id: "", confirmation: "ADMIN_EXECUTE",
+      objects: ["SALES_ORDER"], imported_objects: [], warnings: [],
+      sql: { tables: ["CREATE TABLE SALES_ORDER (ID NUMBER)"], views: [], data: [], delete: [] } });
   });
   await page.goto("/sample-data");
   const selector = page.getByRole("combobox", { name: "サンプルデータの種類" });
-  await page.getByLabel("実行確認語").fill("SQL_ASSIST_SAMPLE");
+  await page.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
   await selector.selectOption("sales");
   try {
     await expect(page.getByTestId("sample-data-workspace-refresh-skeleton")).toBeVisible();
@@ -11717,9 +11724,32 @@ test("サンプルの種類変更中・取得失敗時は旧 SQL を実行でき
   await expect(page.locator("pre")).not.toContainText("DEPARTMENT");
   fail = false;
   await clickPageHeaderAction(page, "sample-data-actions", "表示を更新");
-  await expect(page.locator("pre")).toContainText("SAMPLE_NL2SQL_SALES_ORDER");
+  await expect(page.locator("pre")).toContainText("SALES_ORDER");
   await expect(page.getByLabel("実行確認語")).toHaveValue("");
   expect(mutations).toBe(0);
+  await expectNoHorizontalScroll(page);
+});
+
+test("同名の既存オブジェクトと衝突するサンプルは警告し、旧名の残存を案内する", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  await page.route("**/api/nl2sql/sample-data?dataset=sales", (route) => fulfillJson(route, {
+    dataset: "sales", runtime: "oracle", profile_id: "", confirmation: "ADMIN_EXECUTE",
+    objects: ["SALES_CUSTOMER", "SALES_ORDER"], imported_objects: ["SALES_CUSTOMER"],
+    conflicting_objects: ["SALES_ORDER"], legacy_objects: ["SAMPLE_NL2SQL_SALES_ORDER"],
+    warnings: [
+      "サンプルデータと同名で構成が異なるオブジェクト（SALES_ORDER）が現在のスキーマにあります。",
+      "旧名のサンプルデータ（SAMPLE_NL2SQL_SALES_ORDER）が残っています。削除を実行すると旧名のオブジェクトも削除します。",
+    ],
+    sql: { tables: ["CREATE TABLE SALES_ORDER (ID NUMBER)"], views: [], data: [], delete: ["DROP TABLE SAMPLE_NL2SQL_SALES_ORDER CASCADE CONSTRAINTS PURGE", "DROP TABLE SALES_ORDER CASCADE CONSTRAINTS PURGE"] },
+  }));
+  await page.goto("/sample-data");
+  await page.getByRole("combobox", { name: "サンプルデータの種類" }).selectOption("sales");
+  await expect(page.getByText("SALES_ORDER（同名の既存オブジェクト）", { exact: true })).toBeVisible();
+  await expect(page.getByText("SALES_CUSTOMER", { exact: true })).toBeVisible();
+  await expect(page.getByText(/同名で構成が異なるオブジェクト（SALES_ORDER）/)).toBeVisible();
+  await expect(page.getByText(/旧名のサンプルデータ（SAMPLE_NL2SQL_SALES_ORDER）/)).toBeVisible();
+  await page.getByRole("tab", { name: "削除実行", exact: true }).click();
+  await expect(page.locator("pre")).toContainText("DROP TABLE SAMPLE_NL2SQL_SALES_ORDER");
   await expectNoHorizontalScroll(page);
 });
 
@@ -11752,14 +11782,14 @@ test("sample data and data management run imported workflows", async ({ page }) 
   await expect(importPanel.getByText("未入力", { exact: true })).toHaveCount(1);
   const importButton = page.getByRole("button", { name: "取り込み実行" }).last();
   await expect(importButton).toBeDisabled();
-  await page.getByLabel("実行確認語").fill("SQL_ASSIST_SAMPLE");
+  await page.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
   await expect(importConfirmationField.getByText("確認済み", { exact: true })).toBeVisible();
   await expect(importPanel.getByText("確認済み", { exact: true })).toHaveCount(1);
   await expect(importButton).toBeEnabled();
   await importButton.click();
-  await expect.poll(() => api.samplePayload?.confirmation).toBe("SQL_ASSIST_SAMPLE");
+  await expect.poll(() => api.samplePayload?.confirmation).toBe("ADMIN_EXECUTE");
   await expect(page.getByTestId("sample-data-imported-count")).toHaveText("5");
-  expect(api.samplePayload?.confirmation).toBe("SQL_ASSIST_SAMPLE");
+  expect(api.samplePayload?.confirmation).toBe("ADMIN_EXECUTE");
 
   await page.getByRole("tab", { name: "削除実行" }).click();
   const deletePanel = page.locator("#sample-data-panel-delete");
@@ -11767,13 +11797,13 @@ test("sample data and data management run imported workflows", async ({ page }) 
   await expectNeutralConfirmationFieldSurface(deleteConfirmationField);
   await expect(page.getByLabel("実行確認語")).toHaveValue("");
   await expect(page.getByRole("button", { name: "削除実行", exact: true })).toBeDisabled();
-  await page.getByLabel("実行確認語").fill("SQL_ASSIST_SAMPLE");
+  await page.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
   await expect(deleteConfirmationField.getByText("確認済み", { exact: true })).toBeVisible();
   await expect(deletePanel.getByText("確認済み", { exact: true })).toHaveCount(1);
   const deleteButton = page.getByRole("button", { name: "削除実行" }).last();
   await expect(deleteButton).toBeEnabled();
   await deleteButton.click();
-  await expect.poll(() => api.samplePayload?.confirmation).toBe("SQL_ASSIST_SAMPLE");
+  await expect.poll(() => api.samplePayload?.confirmation).toBe("ADMIN_EXECUTE");
   await expect(page.getByTestId("sample-data-imported-count")).toHaveText("0");
   await expectNoHorizontalScroll(page);
   await page.setViewportSize({ width: 375, height: 900 });
@@ -11782,7 +11812,7 @@ test("sample data and data management run imported workflows", async ({ page }) 
   await page.setViewportSize({ width: 1280, height: 720 });
   api.sampleImportError = true;
   await page.getByRole("tab", { name: "取り込み実行", exact: true }).click();
-  await page.getByLabel("実行確認語").fill("SQL_ASSIST_SAMPLE");
+  await page.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
   await page.getByRole("button", { name: "取り込み実行" }).last().click();
   await expect(page.getByText("実行エラー").first()).toBeVisible();
   await expect(page.getByText("エラー概要")).toBeVisible();
@@ -12140,7 +12170,7 @@ test("sample data refresh replaces the whole workspace with the shared skeleton"
   const sampleDataResponse = {
     runtime: "deterministic",
     profile_id: "",
-    confirmation: "SQL_ASSIST_SAMPLE",
+    confirmation: "ADMIN_EXECUTE",
     objects: ["DEPARTMENT", "EMPLOYEE", "PROJECT"],
     imported_objects: ["DEPARTMENT"],
     sql: {
@@ -12281,7 +12311,7 @@ test("SampleData schema refresh recovery disables CTA while workspace processing
   });
 
   await page.goto("/sample-data");
-  await page.getByLabel("実行確認語").fill("SQL_ASSIST_SAMPLE");
+  await page.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
   await page.getByRole("button", { name: "取り込み実行" }).last().click();
 
   await expect(page.getByText("DB 構造の差分同期で不整合を検出しました。")).toBeVisible();
@@ -15476,17 +15506,17 @@ test("サンプルの操作・対象変更で確認を解除し実行中は競�
   await page.goto("/sample-data");
   const confirmation = page.getByLabel("実行確認語");
   const step = page.getByRole("combobox", { name: /^取り込み対象/ });
-  await confirmation.fill("SQL_ASSIST_SAMPLE");
+  await confirmation.fill("ADMIN_EXECUTE");
   await page.getByRole("tab", { name: "削除実行", exact: true }).click();
   await expect(confirmation).toHaveValue("");
   await expect(page.getByRole("button", { name: "削除実行", exact: true })).toBeDisabled();
-  await confirmation.fill("SQL_ASSIST_SAMPLE");
+  await confirmation.fill("ADMIN_EXECUTE");
   await page.getByRole("tab", { name: "取り込み実行", exact: true }).press("Home");
   await expect(confirmation).toHaveValue("");
-  await confirmation.fill("SQL_ASSIST_SAMPLE");
+  await confirmation.fill("ADMIN_EXECUTE");
   await step.selectOption("tables");
   await expect(confirmation).toHaveValue("");
-  await confirmation.fill("SQL_ASSIST_SAMPLE");
+  await confirmation.fill("ADMIN_EXECUTE");
   const gate = createRequestGate();
   let attempts = 0;
   await page.route("**/api/nl2sql/sample-data/import", async (route) => {
@@ -15508,7 +15538,7 @@ test("サンプルの操作・対象変更で確認を解除し実行中は競�
   await expect(page.getByText("サンプル処理を再試行してください", { exact: true })).toBeVisible();
   await expect(step).toBeEnabled();
   await execute.press("Enter");
-  await expect.poll(() => api.samplePayload).toMatchObject({ step: "tables", confirmation: "SQL_ASSIST_SAMPLE" });
+  await expect.poll(() => api.samplePayload).toMatchObject({ step: "tables", confirmation: "ADMIN_EXECUTE" });
   expect(attempts).toBe(2);
 });
 

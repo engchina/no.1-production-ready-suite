@@ -421,25 +421,19 @@ class _SampleAdminOracleAdapter(_FakeRuntimeOracleAdapter):
     ) -> SchemaCatalog:
         _ = include_samples
         current_owner = get_settings().oracle_user.strip().upper() or "APP"
-        sample_names = [
-            "DEPARTMENT",
-            "EMPLOYEE",
-            "PROJECT",
-            "V_EMP_DEPT",
-            "V_DEPT_PROJECT",
+        # 導入判定は種類と列構成で行うため、人事サンプル DDL と同じ構成の object を返す。
+        ddl = Nl2SqlService(store=MemoryNl2SqlStore())
+        sample_tables = [
+            item.model_copy(update={"owner": current_owner})
+            for item in (*ddl._sample_tables_from_ddl(), *ddl._sample_views_from_ddl())
         ]
         if object_keys:
             requested = {(owner.upper(), object_name.upper()) for owner, object_name in object_keys}
             tables = [
-                SchemaTable(table_name=name, logical_name=name, owner=current_owner)
-                for name in sample_names
-                if (current_owner, name) in requested
+                item for item in sample_tables if (current_owner, item.table_name) in requested
             ]
         else:
-            tables = [
-                SchemaTable(table_name=name, logical_name=name, owner=current_owner)
-                for name in sample_names
-            ]
+            tables = sample_tables
         return SchemaCatalog(
             refreshed_at="2026-06-23T00:00:00+00:00",
             current_owner=current_owner,
@@ -544,7 +538,7 @@ def _import_sample(service: Nl2SqlService) -> None:
     service.import_sample_data(
         SampleDataMutationRequest(
             step=SampleDataStep.ALL,
-            confirmation="SQL_ASSIST_SAMPLE",
+            confirmation="ADMIN_EXECUTE",
         )
     )
 
@@ -570,7 +564,7 @@ def _import_sample_with_profile(service: Nl2SqlService) -> Nl2SqlProfile:
 async def _api_import_sample(client: httpx.AsyncClient) -> None:
     resp = await client.post(
         "/api/nl2sql/sample-data/import",
-        json={"step": "all", "confirmation": "SQL_ASSIST_SAMPLE"},
+        json={"step": "all", "confirmation": "ADMIN_EXECUTE"},
     )
     assert resp.status_code == 200
     assert resp.json()["data"]["executed"] is True
@@ -664,7 +658,7 @@ async def test_sample_import_enables_preview_and_delete() -> None:
         assert resp.status_code == 200
         delete_resp = await client.post(
             "/api/nl2sql/sample-data/delete",
-            json={"confirmation": "SQL_ASSIST_SAMPLE"},
+            json={"confirmation": "ADMIN_EXECUTE"},
         )
 
     data = resp.json()["data"]
@@ -2267,9 +2261,7 @@ def test_sample_data_oracle_fake_import_and_repeated_delete_warning() -> None:
     adapter = _SampleAdminOracleAdapter(_FakeOracleDb())
     service = _OracleRuntimeNl2SqlService(adapter)
 
-    imported = service.import_sample_data(
-        SampleDataMutationRequest(confirmation="SQL_ASSIST_SAMPLE")
-    )
+    imported = service.import_sample_data(SampleDataMutationRequest(confirmation="ADMIN_EXECUTE"))
 
     assert imported.executed is True
     assert imported.runtime == "oracle"
@@ -2300,9 +2292,7 @@ def test_sample_data_oracle_fake_import_and_repeated_delete_warning() -> None:
 
     missing_adapter = _SampleAdminOracleAdapter(_FakeOracleDb(), missing_objects=True)
     service._oracle_adapter = missing_adapter
-    deleted = service.delete_sample_data(
-        SampleDataMutationRequest(confirmation="SQL_ASSIST_SAMPLE")
-    )
+    deleted = service.delete_sample_data(SampleDataMutationRequest(confirmation="ADMIN_EXECUTE"))
 
     assert deleted.executed is True
     assert deleted.profile_id == ""
@@ -2344,9 +2334,7 @@ def test_sample_data_oracle_import_treats_existing_objects_as_idempotent() -> No
     adapter = ExistingSampleAdapter(_FakeOracleDb())
     service = _OracleRuntimeNl2SqlService(adapter)
 
-    imported = service.import_sample_data(
-        SampleDataMutationRequest(confirmation="SQL_ASSIST_SAMPLE")
-    )
+    imported = service.import_sample_data(SampleDataMutationRequest(confirmation="ADMIN_EXECUTE"))
 
     assert imported.executed is True
     assert {statement.status for statement in imported.statements} == {"skipped"}
@@ -2359,10 +2347,10 @@ def test_sample_data_deterministic_scopes_require_base_tables_and_keep_table_cou
     service = Nl2SqlService(store=MemoryNl2SqlStore())
 
     data_only = service.import_sample_data(
-        SampleDataMutationRequest(step=SampleDataStep.DATA, confirmation="SQL_ASSIST_SAMPLE")
+        SampleDataMutationRequest(step=SampleDataStep.DATA, confirmation="ADMIN_EXECUTE")
     )
     views_only = service.import_sample_data(
-        SampleDataMutationRequest(step=SampleDataStep.VIEWS, confirmation="SQL_ASSIST_SAMPLE")
+        SampleDataMutationRequest(step=SampleDataStep.VIEWS, confirmation="ADMIN_EXECUTE")
     )
 
     assert data_only.executed is False
@@ -2372,7 +2360,7 @@ def test_sample_data_deterministic_scopes_require_base_tables_and_keep_table_cou
     assert service.get_catalog().tables == []
 
     tables_only = service.import_sample_data(
-        SampleDataMutationRequest(step=SampleDataStep.TABLES, confirmation="SQL_ASSIST_SAMPLE")
+        SampleDataMutationRequest(step=SampleDataStep.TABLES, confirmation="ADMIN_EXECUTE")
     )
 
     assert tables_only.executed is True
@@ -2392,7 +2380,7 @@ def test_sample_data_deterministic_scopes_require_base_tables_and_keep_table_cou
     )
 
     loaded = service.import_sample_data(
-        SampleDataMutationRequest(step=SampleDataStep.DATA, confirmation="SQL_ASSIST_SAMPLE")
+        SampleDataMutationRequest(step=SampleDataStep.DATA, confirmation="ADMIN_EXECUTE")
     )
 
     assert loaded.executed is True
@@ -2405,9 +2393,7 @@ def test_sample_data_deterministic_scopes_require_base_tables_and_keep_table_cou
 def test_sample_data_import_does_not_create_profile_in_deterministic_runtime() -> None:
     service = Nl2SqlService(store=MemoryNl2SqlStore())
 
-    imported = service.import_sample_data(
-        SampleDataMutationRequest(confirmation="SQL_ASSIST_SAMPLE")
-    )
+    imported = service.import_sample_data(SampleDataMutationRequest(confirmation="ADMIN_EXECUTE"))
 
     assert imported.executed is True
     assert imported.runtime == "deterministic"

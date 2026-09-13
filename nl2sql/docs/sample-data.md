@@ -1,6 +1,6 @@
 # 業務別サンプルデータ
 
-「データ準備 → サンプルデータ管理」で、試したい業務を選びます。画面に表示される対象 SQL と確認語を確認してから取り込みを実行してください。種類や操作を変えると確認語は解除されます。
+「データ準備 → サンプルデータ管理」で、試したい業務を選びます。画面に表示される対象 SQL を確認し、実行確認語 `ADMIN_EXECUTE` を入力して取り込みを実行してください。種類や操作を変えると確認語は解除されます。
 
 | 種類 | 内容 | クエリの例 |
 |---|---|---|
@@ -20,9 +20,27 @@
 
 - `GET /api/nl2sql/sample-data?dataset=hr|sales|inquiries`：選択したサンプルの SQL・対象・確認語・導入状態。
 - `POST /api/nl2sql/sample-data/import` / `POST /api/nl2sql/sample-data/delete`：既存 body に `dataset` を追加。`step`、`confirmation`、`reason` は従来どおり。
-- `dataset` の省略は `hr`。人事サンプルの既存名 `DEPARTMENT` / `EMPLOYEE` / `PROJECT` / `V_EMP_DEPT` / `V_DEPT_PROJECT` と確認語 `SQL_ASSIST_SAMPLE` は維持します。
-- 売上の確認語は `NL2SQL_SALES_SAMPLE`、問い合わせは `NL2SQL_INQUIRY_SAMPLE`。別種類の確認語では実行できません。未定義の `dataset` は `422` です。
-- 新規オブジェクトは `SAMPLE_NL2SQL_` で始まる専用名です。システム内部用 `NL2SQL_` の非表示・操作禁止ルールの対象に入らない業務サンプル名を使い、既存の可視性ルールは維持します。
+- `dataset` の省略は `hr`。人事サンプルの既存名 `DEPARTMENT` / `EMPLOYEE` / `PROJECT` / `V_EMP_DEPT` / `V_DEPT_PROJECT` は維持します。
+- 実行確認語は種類によらず `ADMIN_EXECUTE` です（他の管理 SQL 操作と同じ規則）。以前の `SQL_ASSIST_SAMPLE` / `NL2SQL_SALES_SAMPLE` / `NL2SQL_INQUIRY_SAMPLE` は受け付けず、`confirmation_required` を返します。未定義の `dataset` は `422` です。
+- 売上は `SALES_CUSTOMER` / `SALES_PRODUCT` / `SALES_ORDER` / `V_SALES_DETAIL`、問い合わせは `INQUIRY_CUSTOMER` / `INQUIRY_CATEGORY` / `INQUIRY_TICKET` / `V_INQUIRY_DETAIL` です。人事と同じく接頭辞のない業務名で、システム内部用 `NL2SQL_` の非表示・操作禁止ルールの対象外です。
+
+### 同名オブジェクトの扱い
+
+接頭辞がないため、利用者のテーブル・ビューと名前が重なる場合があります。サンプル由来かどうかは名前ではなく、**現在のスキーマにある同名オブジェクトの種類（テーブル / ビュー）と列名の集合がサンプル定義の DDL と完全に一致するか**で判定します。
+
+- 一致するものは導入済み（`imported_objects`）として扱い、取り込み時の重複はスキップ、削除時は DROP します。
+- 一致しないものは利用者のオブジェクトとみなし `conflicting_objects` と警告で示します。この場合、その種類のサンプルの取り込み・削除は実行前に停止し（statement status `blocked`）、DROP / INSERT を一切発行しません。
+- 取り込み・削除の直前に Oracle のメタデータを確認できない場合も実行しません（fail closed）。
+- 判定はコメントや管理表に依存しないため、コメント管理でサンプル表のコメントを書き換えても変わりません。サンプル表に列を追加した場合は利用者のオブジェクトとみなされるため、手動で削除してください。
+
+### 旧名（`SAMPLE_NL2SQL_`）からの移行
+
+以前のバージョンで作成した `SAMPLE_NL2SQL_SALES_*` / `SAMPLE_NL2SQL_INQUIRY_*` などが残っている場合は、自動で改名・削除しません。
+
+- 旧名で構成が一致するものを `legacy_objects` と警告で案内します。
+- その種類の「削除実行」で、現行名に加えて旧名のオブジェクトも DROP します（SQL プレビューに表示されます）。旧名を削除してから取り込み直してください。
+- 旧名が残っていても、現行名での取り込みは実行できます。
+
 - 操作権限は `nl2sql.sample_data.manage`。API と domain service で認可を強制します。
 - ローカルの決定論ランタイムは従来どおりカタログ状態を更新します。実テーブルへの SQL 適用は Oracle ランタイムで実施します。
 

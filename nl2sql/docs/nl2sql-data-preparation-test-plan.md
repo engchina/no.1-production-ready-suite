@@ -155,10 +155,10 @@
 |---|---|---|---|
 | DP-SAMPLE-001 | なし | 画面を開く | `objects` と `imported_objects` が表示され、SQL preview が出る |
 | DP-SAMPLE-002 | step=`tables` | confirmation なし | 実行ボタン disabled |
-| DP-SAMPLE-003 | step=`tables` | confirmation=`SQL_ASSIST_SAMPLE` | `DEPARTMENT`, `EMPLOYEE`, `PROJECT` が作成される |
-| DP-SAMPLE-004 | step=`views` | confirmation=`SQL_ASSIST_SAMPLE` | `V_EMP_DEPT`, `V_DEPT_PROJECT` が作成される |
-| DP-SAMPLE-005 | step=`data` | confirmation=`SQL_ASSIST_SAMPLE` | sample rows が inserted |
-| DP-SAMPLE-006 | delete | confirmation=`SQL_ASSIST_SAMPLE` | views/tables が削除され、imported count が 0 |
+| DP-SAMPLE-003 | step=`tables` | confirmation=`ADMIN_EXECUTE` | `DEPARTMENT`, `EMPLOYEE`, `PROJECT` が作成される |
+| DP-SAMPLE-004 | step=`views` | confirmation=`ADMIN_EXECUTE` | `V_EMP_DEPT`, `V_DEPT_PROJECT` が作成される |
+| DP-SAMPLE-005 | step=`data` | confirmation=`ADMIN_EXECUTE` | sample rows が inserted |
+| DP-SAMPLE-006 | delete | confirmation=`ADMIN_EXECUTE` | views/tables が削除され、imported count が 0 |
 
 ## 後片付け
 

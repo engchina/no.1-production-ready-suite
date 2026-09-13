@@ -2768,6 +2768,7 @@ const nl2sqlJa = {
   "dataTools.sample.confirmationHelper": "{phrase} を入力すると実行できます。",
   "dataTools.sample.imported": "導入済み",
   "dataTools.sample.objects": "対象オブジェクト",
+  "dataTools.sample.conflictObject": "{name}（同名の既存オブジェクト）",
   "dataTools.sample.previewTitle": "対象オブジェクトと SQL",
   "dataTools.sample.previewHint": "選択中の操作で実行される SQL と対象オブジェクトを確認できます。",
   "dataTools.sample.sqlPreview": "SQL プレビュー",

@@ -88,7 +88,7 @@
 | QRY-013 | 非同期 run | `実行` を押す | job 作成後、polling 中ステップが表示され、done で結果表と履歴が更新される | `mock-responses/jobs.created.json`、`mock-responses/job.running.json`、`mock-responses/job.done.json` |
 | QRY-014 | job error | job が error で返る | OperationStatusStrip にエラーが出て、結果表は更新されない | `mock-responses/job.error.json` |
 | QRY-015 | reset | 入力、selection、結果、override がある状態で reset | 全 UI 状態が初期化され、tracked job も消える | - |
-| QRY-016 | sample data import | catalog empty の状態で sample import を押す | confirmation `SQL_ASSIST_SAMPLE` 付き import API が呼ばれる | `api/sample-data-import.request.json` |
+| QRY-016 | sample data import | catalog empty の状態で sample import を押す | confirmation `ADMIN_EXECUTE` 付き import API が呼ばれる | `api/sample-data-import.request.json` |
 | QRY-017 | feedback good | 実行結果ありで「良い」を押す | Select AI feedback add と app feedback が保存され、toast success | `api/select-ai-feedback-good.request.json`、`api/feedback-good.request.json` |
 | QRY-018 | feedback bad 必須 | 「違う」で修正 SQL またはコメントを空にする | クライアント側で必須メッセージが出る | `api/select-ai-feedback-bad.request.json` |
 | QRY-019 | 業務確認 profile 推薦 | `業務確認 flow` を開始 | ontology profile 候補が表示され、候補を確認できる | `api/ontology-profile-recommendation.request.json`、`mock-responses/ontology-profile-recommendation.success.json` |

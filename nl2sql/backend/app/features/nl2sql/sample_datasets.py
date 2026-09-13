@@ -4,44 +4,46 @@ from dataclasses import dataclass
 
 from .models import SampleDataset
 
+# サンプルデータの取り込み・削除は、他の管理 SQL 操作と同じ確認語で実行する。
+SAMPLE_DATA_CONFIRMATION = "ADMIN_EXECUTE"
+
 
 @dataclass(frozen=True)
 class SampleDatasetDefinition:
     directory: str
-    confirmation: str
     tables: tuple[str, ...]
     views: tuple[str, ...]
+    # 旧バージョンが作成した名前の接頭辞。検出と削除だけに使い、新規作成はしない。
+    legacy_prefix: str = ""
 
     @property
     def objects(self) -> tuple[str, ...]:
         return self.tables + self.views
 
+    @property
+    def legacy_names(self) -> dict[str, str]:
+        """旧名 → 現行名。"""
+        if not self.legacy_prefix:
+            return {}
+        return {f"{self.legacy_prefix}{name}": name for name in self.objects}
+
 
 SAMPLE_DATASETS = {
     SampleDataset.HR: SampleDatasetDefinition(
         directory="sql_assist_sample",
-        confirmation="SQL_ASSIST_SAMPLE",
         tables=("DEPARTMENT", "EMPLOYEE", "PROJECT"),
         views=("V_EMP_DEPT", "V_DEPT_PROJECT"),
     ),
     SampleDataset.SALES: SampleDatasetDefinition(
         directory="sales",
-        confirmation="NL2SQL_SALES_SAMPLE",
-        tables=(
-            "SAMPLE_NL2SQL_SALES_CUSTOMER",
-            "SAMPLE_NL2SQL_SALES_PRODUCT",
-            "SAMPLE_NL2SQL_SALES_ORDER",
-        ),
-        views=("SAMPLE_NL2SQL_V_SALES_DETAIL",),
+        tables=("SALES_CUSTOMER", "SALES_PRODUCT", "SALES_ORDER"),
+        views=("V_SALES_DETAIL",),
+        legacy_prefix="SAMPLE_NL2SQL_",
     ),
     SampleDataset.INQUIRIES: SampleDatasetDefinition(
         directory="inquiries",
-        confirmation="NL2SQL_INQUIRY_SAMPLE",
-        tables=(
-            "SAMPLE_NL2SQL_INQUIRY_CUSTOMER",
-            "SAMPLE_NL2SQL_INQUIRY_CATEGORY",
-            "SAMPLE_NL2SQL_INQUIRY_TICKET",
-        ),
-        views=("SAMPLE_NL2SQL_V_INQUIRY_DETAIL",),
+        tables=("INQUIRY_CUSTOMER", "INQUIRY_CATEGORY", "INQUIRY_TICKET"),
+        views=("V_INQUIRY_DETAIL",),
+        legacy_prefix="SAMPLE_NL2SQL_",
     ),
 }

@@ -414,7 +414,7 @@ def _import_sample(service: Nl2SqlService) -> None:
     service.import_sample_data(
         SampleDataMutationRequest(
             step=SampleDataStep.ALL,
-            confirmation="SQL_ASSIST_SAMPLE",
+            confirmation="ADMIN_EXECUTE",
         )
     )
 
