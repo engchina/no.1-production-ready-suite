@@ -1,7 +1,8 @@
 import { Route, Routes } from "react-router-dom";
 
+import { AppShell, PageHeader } from "@engchina/production-ready-ui";
+
 import { AppSidebar } from "@/components/layout/AppSidebar";
-import { PageHeader } from "@/components/PageHeader";
 import { DatabaseSettingsClient } from "@/components/settings/DatabaseSettingsClient";
 import { ModelSettingsClient } from "@/components/settings/ModelSettingsClient";
 import { OciSettingsClient } from "@/components/settings/OciSettingsClient";
@@ -31,13 +32,7 @@ import {
 
 export function App() {
   return (
-    <div className="flex">
-      <AppSidebar />
-      <main
-        className="h-screen min-w-0 flex-1 overflow-y-auto [contain:layout] focus:outline-none"
-        aria-label="メイン領域"
-        tabIndex={-1}
-      >
+    <AppShell sidebar={<AppSidebar />} mainClassName="[contain:layout]" skipLinkLabel={t("common.skipToMain")}>
         <Routes>
           <Route path={APP_ROUTES.dashboard} element={<DashboardPage />} />
           <Route path={APP_ROUTES.agents} element={<AgentsPage />} />
@@ -66,8 +61,7 @@ export function App() {
           <Route path={APP_ROUTES.settingsRuntimeSafety} element={<RuntimeSafetySettingsPage />} />
           <Route path={APP_ROUTES.settingsRuntimeSnapshot} element={<RuntimeSnapshotSettingsPage />} />
         </Routes>
-      </main>
-    </div>
+    </AppShell>
   );
 }
 

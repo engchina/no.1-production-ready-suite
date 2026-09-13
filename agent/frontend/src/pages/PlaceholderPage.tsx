@@ -1,4 +1,4 @@
-import { PageHeader, Card, CardContent, EmptyState } from "@engchina/production-ready-ui";
+import { PageHeader, PageBody, Card, CardContent, EmptyState } from "@engchina/production-ready-ui";
 
 import { t } from "@/lib/i18n";
 
@@ -7,13 +7,13 @@ export function PlaceholderPage({ title, subtitle }: { title: string; subtitle?:
   return (
     <>
       <PageHeader title={title} subtitle={subtitle} />
-      <div className="p-8">
+      <PageBody>
         <Card>
           <CardContent className="pt-5">
             <EmptyState title={t("common.empty.title")} hint={t("common.empty.hint")} />
           </CardContent>
         </Card>
-      </div>
+      </PageBody>
     </>
   );
 }

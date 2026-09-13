@@ -2,9 +2,10 @@
 
 /*
  * Production Ready Agent — グローバルスタイル
- * デザイントークン（日本語第一・semantic 状態色・shadcn/ui テーマ）は共有 UI パッケージが正本。
+ * 色・型・余白・角丸・影・テーマは共有 UI パッケージ（platform の docs/design-system/）が正本。
+ * ここには画面固有のレイアウトだけを書く。
  */
-@import "@engchina/production-ready-ui/tokens.css";
+@import "@engchina/production-ready-ui/styles.css";
 
 /* 共有コンポーネントの utility クラスを Tailwind v4 のスキャン対象に含める。 */
 @source "../node_modules/@engchina/production-ready-ui/dist";

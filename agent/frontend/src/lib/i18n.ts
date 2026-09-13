@@ -54,6 +54,7 @@ const agentJa = {
   "common.empty.title": "まだデータがありません",
   "common.empty.hint": "バックエンド接続後にここへ表示されます。",
   "common.loading": "読み込み中",
+  "common.skipToMain": "本文へスキップ",
   "common.retry": "再試行",
   "common.save": "保存",
   "common.create": "作成",

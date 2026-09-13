@@ -37,6 +37,7 @@ import {
   toast,
   useConfirm,
   type StatusVariant,
+  PageBody,
 } from "@engchina/production-ready-ui";
 
 import {
@@ -100,7 +101,7 @@ interface WebSocketMessage {
 const statusVariant: Record<RunState["status"], StatusVariant> = {
   queued: "neutral",
   running: "info",
-  waiting_approval: "pending",
+  waiting_approval: "warning",
   completed: "success",
   failed: "danger",
   cancelled: "warning",
@@ -109,7 +110,7 @@ const statusVariant: Record<RunState["status"], StatusVariant> = {
 const stepStatusVariant: Record<string, StatusVariant> = {
   pending: "neutral",
   running: "info",
-  waiting_approval: "pending",
+  waiting_approval: "warning",
   completed: "success",
   failed: "danger",
   cancelled: "warning",
@@ -117,9 +118,9 @@ const stepStatusVariant: Record<string, StatusVariant> = {
 
 const websocketStatusVariant: Record<WebSocketStreamStatus, StatusVariant> = {
   idle: "neutral",
-  connecting: "pending",
+  connecting: "info",
   open: "success",
-  reconnecting: "pending",
+  reconnecting: "info",
   closed: "neutral",
   error: "danger",
 };
@@ -389,7 +390,7 @@ export function AgentsPage() {
   return (
     <>
       <PageHeader title={t("nav.agents")} subtitle={t("page.agents.subtitle")} />
-      <main className="grid min-w-0 grid-cols-1 gap-5 p-6 xl:grid-cols-[420px_minmax(0,1fr)] md:p-8">
+      <PageBody className="grid min-w-0 grid-cols-1 gap-5 xl:grid-cols-[420px_minmax(0,1fr)]">
         <AgentEditor
           title={t("agent.create")}
           description={t("page.agents.subtitle")}
@@ -445,7 +446,7 @@ export function AgentsPage() {
             )}
           </div>
         </QueryState>
-      </main>
+      </PageBody>
     </>
   );
 }
@@ -494,13 +495,12 @@ export function RuntimesPage() {
         title={t("nav.runtimes")}
         subtitle={t("page.runtimes.subtitle")}
         actions={
-          <Button variant="secondary" onClick={() => void runtimes.refetch()}>
-            <RefreshCw size={15} aria-hidden />
+          <Button variant="secondary" onClick={() => void runtimes.refetch()} icon={RefreshCw}>
             {t("common.retry")}
           </Button>
         }
       />
-      <main className="space-y-5 p-6 md:p-8">
+      <PageBody>
         {error ? <Banner severity="danger">{error.message}</Banner> : null}
         <QueryState query={runtimes}>
           <div className="grid gap-4 xl:grid-cols-2">
@@ -509,7 +509,7 @@ export function RuntimesPage() {
                 <CardHeader className="flex-row items-start justify-between gap-4">
                   <div className="min-w-0">
                     <CardTitle className="flex items-center gap-2">
-                      <Server size={18} aria-hidden />
+                      <Server size={20} aria-hidden />
                       {runtime.name}
                     </CardTitle>
                     <CardDescription className="break-all">
@@ -550,9 +550,7 @@ export function RuntimesPage() {
                         <Button
                           size="sm"
                           variant="secondary"
-                          onClick={() => probe.mutate(runtime.id)}
-                        >
-                          <RefreshCw size={14} aria-hidden />
+                          onClick={() => probe.mutate(runtime.id)} icon={RefreshCw}>
                           {t("runtime.probe")}
                         </Button>
                       </div>
@@ -583,7 +581,7 @@ export function RuntimesPage() {
                     </>
                   ) : null}
                   {logs[runtime.id] ? (
-                    <pre className="max-h-56 overflow-auto rounded-md bg-muted/30 p-3 text-xs leading-5">
+                    <pre className="max-h-56 overflow-auto rounded-md bg-surface-hover p-3 text-xs leading-5">
                       {logs[runtime.id]}
                     </pre>
                   ) : null}
@@ -592,7 +590,7 @@ export function RuntimesPage() {
             ))}
           </div>
         </QueryState>
-      </main>
+      </PageBody>
     </>
   );
 }
@@ -745,13 +743,12 @@ export function RunsPage() {
         title={t("nav.runs")}
         subtitle={t("page.runs.subtitle")}
         actions={
-          <Button variant="secondary" onClick={() => void runs.refetch()} aria-label="実行一覧を再読み込み">
-            <RefreshCw size={15} aria-hidden />
+          <Button variant="secondary" onClick={() => void runs.refetch()} aria-label="実行一覧を再読み込み" icon={RefreshCw}>
             {t("common.retry")}
           </Button>
         }
       />
-      <main className="grid min-w-0 grid-cols-1 gap-5 p-6 xl:grid-cols-[420px_minmax(0,1fr)] md:p-8">
+      <PageBody className="grid min-w-0 grid-cols-1 gap-5 xl:grid-cols-[420px_minmax(0,1fr)]">
         <div className="min-w-0 space-y-5">
           <Card className="min-w-0">
             <CardHeader>
@@ -764,7 +761,7 @@ export function RunsPage() {
                   id="run-agent"
                   value={agentId}
                   onChange={(event) => onAgentChange(event.target.value)}
-                  className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                  className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 >
                   {(agents.data?.agents ?? []).filter((agent) => agent.enabled).map((agent) => (
                     <option key={agent.id} value={agent.id}>
@@ -778,7 +775,7 @@ export function RunsPage() {
                   id="run-goal"
                   value={goal}
                   onChange={(event) => setGoal(event.target.value)}
-                  className="min-h-24 w-full rounded-md border border-border bg-background px-3 py-2 text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                  className="min-h-24 w-full rounded-md border border-border bg-surface-sunken px-3 py-2 text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 />
               </Field>
               <Field label={t("run.form.binding")} htmlFor="run-binding">
@@ -786,7 +783,7 @@ export function RunsPage() {
                   id="run-binding"
                   value={bindingId}
                   onChange={(event) => setBindingId(event.target.value)}
-                  className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                  className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 >
                   <option value="">
                     {defaultBinding
@@ -805,8 +802,7 @@ export function RunsPage() {
               ) : null}
               {formError ? <Banner severity="danger">{formError}</Banner> : null}
               {createRun.error ? <Banner severity="danger">{createRun.error.message}</Banner> : null}
-              <Button onClick={submitRun} loading={createRun.isPending} className="w-full">
-                <PlayCircle size={16} aria-hidden />
+              <Button onClick={submitRun} loading={createRun.isPending} className="w-full" icon={PlayCircle}>
                 {t("run.form.submit")}
               </Button>
             </CardContent>
@@ -842,7 +838,7 @@ export function RunsPage() {
             <EmptyState title={t("common.empty.title")} />
           )}
         </QueryState>
-      </main>
+      </PageBody>
     </>
   );
 }
@@ -883,7 +879,7 @@ export function ApprovalsPage() {
   return (
     <>
       <PageHeader title={t("nav.approvals")} subtitle={t("page.approvals.subtitle")} />
-      <main className="p-6 md:p-8">
+      <PageBody>
         <QueryState query={runs}>
           {approvals.length ? (
             <div className="grid gap-4">
@@ -895,7 +891,7 @@ export function ApprovalsPage() {
                       <CardDescription>{run.goal}</CardDescription>
                     </div>
                     <StatusBadge
-                      variant={approval.status === "pending" ? "pending" : approval.status === "approved" ? "success" : "danger"}
+                      variant={approval.status === "pending" ? "warning" : approval.status === "approved" ? "success" : "danger"}
                       label={approval.status}
                     />
                   </CardHeader>
@@ -906,18 +902,14 @@ export function ApprovalsPage() {
                         <Button
                           size="sm"
                           onClick={() => void decideApproval(approval, true)}
-                          loading={decide.isPending}
-                        >
-                          <Check size={15} aria-hidden />
+                          loading={decide.isPending} icon={Check}>
                           {t("common.approve")}
                         </Button>
                         <Button
                           size="sm"
                           variant="danger"
                           onClick={() => void decideApproval(approval, false)}
-                          loading={decide.isPending}
-                        >
-                          <X size={15} aria-hidden />
+                          loading={decide.isPending} icon={X}>
                           {t("common.reject")}
                         </Button>
                       </div>
@@ -930,7 +922,7 @@ export function ApprovalsPage() {
             <EmptyState title={t("common.empty.title")} />
           )}
         </QueryState>
-      </main>
+      </PageBody>
     </>
   );
 }
@@ -984,13 +976,12 @@ export function AuditPage() {
         title={t("nav.audit")}
         subtitle={t("page.audit.subtitle")}
         actions={
-          <Button variant="secondary" onClick={() => void audit.refetch()} aria-label={t("common.retry")}>
-            <RefreshCw size={15} aria-hidden />
+          <Button variant="secondary" onClick={() => void audit.refetch()} aria-label={t("common.retry")} icon={RefreshCw}>
             {t("common.retry")}
           </Button>
         }
       />
-      <main className="space-y-5 p-6 md:p-8">
+      <PageBody>
         <Card className="min-w-0">
           <CardHeader>
             <CardTitle>{t("audit.filters")}</CardTitle>
@@ -1003,7 +994,7 @@ export function AuditPage() {
                   id="audit-run-id"
                   value={runId}
                   onChange={(event) => setRunId(event.target.value)}
-                  className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                  className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 />
               </Field>
               <Field label={t("audit.toolName")} htmlFor="audit-tool-name">
@@ -1011,7 +1002,7 @@ export function AuditPage() {
                   id="audit-tool-name"
                   value={toolName}
                   onChange={(event) => setToolName(event.target.value)}
-                  className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                  className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 >
                   <option value="">{t("common.all")}</option>
                   {(tools.data?.tools ?? []).map((tool) => (
@@ -1026,7 +1017,7 @@ export function AuditPage() {
                   id="audit-step-status"
                   value={stepStatus}
                   onChange={(event) => setStepStatus(event.target.value)}
-                  className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                  className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 >
                   <option value="">{t("common.all")}</option>
                   {["pending", "running", "waiting_approval", "completed", "failed", "cancelled"].map((status) => (
@@ -1041,7 +1032,7 @@ export function AuditPage() {
                   id="audit-approval-status"
                   value={approvalStatus}
                   onChange={(event) => setApprovalStatus(event.target.value)}
-                  className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                  className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 >
                   <option value="">{t("common.all")}</option>
                   {["pending", "approved", "rejected", "cancelled"].map((status) => (
@@ -1056,7 +1047,7 @@ export function AuditPage() {
                   id="audit-error-code"
                   value={errorCode}
                   onChange={(event) => setErrorCode(event.target.value)}
-                  className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                  className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 />
               </Field>
               <Field label={t("audit.guardrailWarnings")} htmlFor="audit-warning-filter">
@@ -1064,7 +1055,7 @@ export function AuditPage() {
                   id="audit-warning-filter"
                   value={warnings}
                   onChange={(event) => setWarnings(event.target.value as AuditWarningsFilter)}
-                  className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                  className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 >
                   <option value="any">{t("common.all")}</option>
                   <option value="true">{t("audit.hasWarnings")}</option>
@@ -1079,17 +1070,15 @@ export function AuditPage() {
                   max="1000"
                   value={limit}
                   onChange={(event) => setLimit(event.target.value)}
-                  className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                  className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 />
               </Field>
             </div>
             <div className="flex flex-wrap gap-2">
-              <Button onClick={applyFilters} loading={audit.isFetching}>
-                <RefreshCw size={15} aria-hidden />
+              <Button onClick={applyFilters} loading={audit.isFetching} icon={RefreshCw}>
                 {t("audit.apply")}
               </Button>
-              <Button variant="secondary" onClick={downloadCsv}>
-                <Download size={15} aria-hidden />
+              <Button variant="secondary" onClick={downloadCsv} icon={Download}>
                 {t("audit.downloadCsv")}
               </Button>
             </div>
@@ -1115,7 +1104,7 @@ export function AuditPage() {
             </QueryState>
           </CardContent>
         </Card>
-      </main>
+      </PageBody>
     </>
   );
 }
@@ -1125,7 +1114,7 @@ function AuditRecordsTable({ records }: { records: ToolCallAuditRecord[] }) {
     <div className="w-full overflow-x-auto">
       <table className="w-full min-w-[980px] border-collapse text-left text-sm">
         <thead>
-          <tr className="border-b border-border text-xs text-muted">
+          <tr className="border-b border-border text-xs text-fg-muted">
             <th className="px-3 py-2 font-medium">{t("audit.runGoal")}</th>
             <th className="px-3 py-2 font-medium">{t("audit.toolName")}</th>
             <th className="px-3 py-2 font-medium">{t("audit.stepStatus")}</th>
@@ -1141,16 +1130,16 @@ function AuditRecordsTable({ records }: { records: ToolCallAuditRecord[] }) {
           {records.map((record) => (
             <tr key={`${record.run_id}:${record.step_id}`} className="border-b border-border/70 align-top">
               <td className="max-w-72 px-3 py-3">
-                <p className="break-words text-sm font-medium text-foreground [overflow-wrap:anywhere]">
+                <p className="break-words text-sm font-medium text-fg [overflow-wrap:anywhere]">
                   {record.run_goal}
                 </p>
-                <p className="mt-1 break-all text-xs text-muted">{record.run_id}</p>
-                <p className="mt-1 text-xs text-muted">{formatDate(record.run_created_at)}</p>
+                <p className="mt-1 break-all text-xs text-fg-muted">{record.run_id}</p>
+                <p className="mt-1 text-xs text-fg-muted">{formatDate(record.run_created_at)}</p>
               </td>
               <td className="px-3 py-3">
-                <p className="break-all font-medium text-foreground">{record.tool_name}</p>
+                <p className="break-all font-medium text-fg">{record.tool_name}</p>
                 {record.error_code ? (
-                  <p className="mt-1 break-words text-xs text-danger [overflow-wrap:anywhere]">
+                  <p className="mt-1 break-words text-xs text-danger-fg [overflow-wrap:anywhere]">
                     {record.error_code}
                   </p>
                 ) : null}
@@ -1168,10 +1157,10 @@ function AuditRecordsTable({ records }: { records: ToolCallAuditRecord[] }) {
                     label={record.approval_status}
                   />
                 ) : (
-                  <span className="text-xs text-muted">-</span>
+                  <span className="text-xs text-fg-muted">-</span>
                 )}
               </td>
-              <td className="px-3 py-3 text-xs text-foreground">{record.policy_decision ?? "-"}</td>
+              <td className="px-3 py-3 text-xs text-fg">{record.policy_decision ?? "-"}</td>
               <td className="px-3 py-3">
                 <StatusBadge
                   variant={permissionStatusVariant(record.permission_level)}
@@ -1182,22 +1171,22 @@ function AuditRecordsTable({ records }: { records: ToolCallAuditRecord[] }) {
                 {record.guardrail_warnings.length ? (
                   <div className="space-y-1">
                     {record.guardrail_warnings.map((warning) => (
-                      <p key={warning} className="break-words text-xs text-warning [overflow-wrap:anywhere]">
+                      <p key={warning} className="break-words text-xs text-warning-fg [overflow-wrap:anywhere]">
                         {warning}
                       </p>
                     ))}
                   </div>
                 ) : (
-                  <span className="text-xs text-muted">-</span>
+                  <span className="text-xs text-fg-muted">-</span>
                 )}
               </td>
-              <td className="px-3 py-3 text-xs text-foreground">
+              <td className="px-3 py-3 text-xs text-fg">
                 {record.duration_ms === null || record.duration_ms === undefined ? "-" : `${record.duration_ms}ms`}
               </td>
               <td className="max-w-48 px-3 py-3">
-                <p className="break-all text-xs text-muted">{record.trace_id ?? "-"}</p>
+                <p className="break-all text-xs text-fg-muted">{record.trace_id ?? "-"}</p>
                 {record.artifact_ids.length ? (
-                  <p className="mt-1 text-xs text-muted">{`${t("run.auditArtifacts")}: ${record.artifact_ids.length}`}</p>
+                  <p className="mt-1 text-xs text-fg-muted">{`${t("run.auditArtifacts")}: ${record.artifact_ids.length}`}</p>
                 ) : null}
               </td>
             </tr>
@@ -1240,7 +1229,7 @@ export function ToolsPage() {
   return (
     <>
       <PageHeader title={t("nav.tools")} subtitle={t("page.tools.subtitle")} />
-      <main className="p-6 md:p-8">
+      <PageBody>
         <QueryState query={tools}>
           <div className="grid gap-4 xl:grid-cols-2">
             {(tools.data?.tools ?? []).map((tool) => (
@@ -1248,7 +1237,7 @@ export function ToolsPage() {
             ))}
           </div>
         </QueryState>
-      </main>
+      </PageBody>
     </>
   );
 }
@@ -1292,7 +1281,7 @@ export function MemoryPage() {
   return (
     <>
       <PageHeader title={t("nav.memory")} subtitle={t("page.memory.subtitle")} />
-      <main className="space-y-5 p-6 md:p-8">
+      <PageBody>
         <div className="grid min-w-0 grid-cols-1 gap-5 xl:grid-cols-[420px_minmax(0,1fr)]">
           <Card className="min-w-0">
             <CardHeader>
@@ -1305,7 +1294,7 @@ export function MemoryPage() {
                   id="memory-kind"
                   value={kind}
                   onChange={(event) => setKind(event.target.value as MemoryKind)}
-                  className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                  className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 >
                   <option value="user_preference">{t("memory.kind.userPreference")}</option>
                   <option value="tool_learning">{t("memory.kind.toolLearning")}</option>
@@ -1318,7 +1307,7 @@ export function MemoryPage() {
                   id="memory-content"
                   value={content}
                   onChange={(event) => setContent(event.target.value)}
-                  className="min-h-28 w-full rounded-md border border-border bg-background px-3 py-2 text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                  className="min-h-28 w-full rounded-md border border-border bg-surface-sunken px-3 py-2 text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 />
               </Field>
               <Field label={t("memory.metadata")} htmlFor="memory-metadata">
@@ -1326,14 +1315,13 @@ export function MemoryPage() {
                   id="memory-metadata"
                   value={metadataText}
                   onChange={(event) => setMetadataText(event.target.value)}
-                  className="min-h-24 w-full rounded-md border border-border bg-background px-3 py-2 font-mono text-xs leading-5 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                  className="min-h-24 w-full rounded-md border border-border bg-surface-sunken px-3 py-2 font-mono text-xs leading-5 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   spellCheck={false}
                 />
               </Field>
               {formError ? <Banner severity="danger">{formError}</Banner> : null}
               {addMemory.error ? <Banner severity="danger">{addMemory.error.message}</Banner> : null}
-              <Button onClick={submitMemory} loading={addMemory.isPending} className="w-full">
-                <Save size={16} aria-hidden />
+              <Button onClick={submitMemory} loading={addMemory.isPending} className="w-full" icon={Save}>
                 {t("memory.create")}
               </Button>
             </CardContent>
@@ -1345,7 +1333,7 @@ export function MemoryPage() {
                 id="memory-search"
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
               />
             </Field>
             </CardContent>
@@ -1359,9 +1347,9 @@ export function MemoryPage() {
                   <CardContent className="min-w-0 space-y-2 pt-5">
                     <div className="flex flex-wrap items-center gap-2">
                       <StatusBadge variant="info" label={entry.kind} />
-                      <span className="text-xs text-muted">{formatDate(entry.created_at)}</span>
+                      <span className="text-xs text-fg-muted">{formatDate(entry.created_at)}</span>
                     </div>
-                    <p className="break-words text-sm leading-6 text-foreground [overflow-wrap:anywhere]">{entry.content}</p>
+                    <p className="break-words text-sm leading-6 text-fg [overflow-wrap:anywhere]">{entry.content}</p>
                     <JsonPreview value={entry.metadata} />
                   </CardContent>
                 </Card>
@@ -1371,7 +1359,7 @@ export function MemoryPage() {
             <EmptyState title={t("common.empty.title")} />
           )}
         </QueryState>
-      </main>
+      </PageBody>
     </>
   );
 }
@@ -1426,7 +1414,8 @@ export function ExternalSettingsPage({ kind }: { kind: "rag" | "nl2sql" }) {
   return (
     <>
       <PageHeader title={title} subtitle={subtitle} />
-      <main className="max-w-3xl space-y-5 p-6 md:p-8">
+      <PageBody>
+<div className="max-w-3xl space-y-5">
         <QueryState query={settings}>
           <ConnectionBanner settings={settings.data} />
           <Card>
@@ -1466,14 +1455,14 @@ export function ExternalSettingsPage({ kind }: { kind: "rag" | "nl2sql" }) {
                 </Field>
               ) : null}
               {mutation.error ? <Banner severity="danger">{mutation.error.message}</Banner> : null}
-              <Button onClick={save} loading={mutation.isPending}>
-                <Save size={15} aria-hidden />
+              <Button onClick={save} loading={mutation.isPending} icon={Save}>
                 {t("common.save")}
               </Button>
             </CardContent>
           </Card>
         </QueryState>
-      </main>
+      </div>
+</PageBody>
     </>
   );
 }
@@ -1508,7 +1497,7 @@ function McpDiscoveryPanel({ configured }: { configured: boolean }) {
               id="mcp-discovery-server-id"
               value={serverId}
               onChange={(event) => setServerId(event.target.value)}
-              className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+              className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
             />
           </Field>
           <Field label={t("settings.mcpDiscovery.traceId")} htmlFor="mcp-discovery-trace-id">
@@ -1516,7 +1505,7 @@ function McpDiscoveryPanel({ configured }: { configured: boolean }) {
               id="mcp-discovery-trace-id"
               value={traceId}
               onChange={(event) => setTraceId(event.target.value)}
-              className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+              className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
             />
           </Field>
           <Button
@@ -1524,9 +1513,7 @@ function McpDiscoveryPanel({ configured }: { configured: boolean }) {
             onClick={() => void tools.refetch()}
             disabled={!configured}
             loading={tools.isFetching}
-            className="min-h-10"
-          >
-            <RefreshCw size={15} aria-hidden />
+            className="min-h-10" icon={RefreshCw}>
             {t("settings.mcpDiscovery.refresh")}
           </Button>
         </div>
@@ -1553,7 +1540,7 @@ function McpToolsList({ tools }: { tools: ExternalMcpToolInfo[] }) {
       <div className="hidden overflow-x-auto md:block">
         <table className="w-full min-w-[720px] border-collapse text-left text-sm">
           <thead>
-            <tr className="border-b border-border text-xs text-muted">
+            <tr className="border-b border-border text-xs text-fg-muted">
               <th className="px-3 py-2 font-medium">{t("settings.mcpDiscovery.tool")}</th>
               <th className="px-3 py-2 font-medium">{t("settings.mcpDiscovery.descriptionColumn")}</th>
               <th className="px-3 py-2 font-medium">{t("settings.mcpDiscovery.server")}</th>
@@ -1564,11 +1551,11 @@ function McpToolsList({ tools }: { tools: ExternalMcpToolInfo[] }) {
           <tbody>
             {tools.map((tool) => (
               <tr key={`${tool.server_id ?? "default"}:${tool.name}`} className="border-b border-border/70 last:border-0">
-                <td className="px-3 py-3 align-top font-mono text-xs text-foreground">{tool.name}</td>
-                <td className="max-w-sm px-3 py-3 align-top text-muted">{tool.description || "-"}</td>
-                <td className="px-3 py-3 align-top text-muted">{tool.server_id ?? "-"}</td>
-                <td className="px-3 py-3 align-top text-muted">{schemaSummary(tool.input_schema)}</td>
-                <td className="px-3 py-3 align-top text-muted">{schemaSummary(tool.output_schema)}</td>
+                <td className="px-3 py-3 align-top font-mono text-xs text-fg">{tool.name}</td>
+                <td className="max-w-sm px-3 py-3 align-top text-fg-muted">{tool.description || "-"}</td>
+                <td className="px-3 py-3 align-top text-fg-muted">{tool.server_id ?? "-"}</td>
+                <td className="px-3 py-3 align-top text-fg-muted">{schemaSummary(tool.input_schema)}</td>
+                <td className="px-3 py-3 align-top text-fg-muted">{schemaSummary(tool.output_schema)}</td>
               </tr>
             ))}
           </tbody>
@@ -1578,10 +1565,10 @@ function McpToolsList({ tools }: { tools: ExternalMcpToolInfo[] }) {
         {tools.map((tool) => (
           <div key={`${tool.server_id ?? "default"}:${tool.name}`} className="rounded-md border border-border p-3">
             <div className="min-w-0 space-y-1">
-              <p className="break-words font-mono text-xs font-medium text-foreground">{tool.name}</p>
-              <p className="text-sm leading-6 text-muted">{tool.description || "-"}</p>
+              <p className="break-words font-mono text-xs font-medium text-fg">{tool.name}</p>
+              <p className="text-sm leading-6 text-fg-muted">{tool.description || "-"}</p>
             </div>
-            <dl className="mt-3 grid grid-cols-1 gap-2 text-xs text-muted">
+            <dl className="mt-3 grid grid-cols-1 gap-2 text-xs text-fg-muted">
               <McpToolMeta label={t("settings.mcpDiscovery.server")} value={tool.server_id ?? "-"} />
               <McpToolMeta label={t("settings.mcpDiscovery.inputSchema")} value={schemaSummary(tool.input_schema)} />
               <McpToolMeta label={t("settings.mcpDiscovery.outputSchema")} value={schemaSummary(tool.output_schema)} />
@@ -1596,7 +1583,7 @@ function McpToolsList({ tools }: { tools: ExternalMcpToolInfo[] }) {
 function McpToolMeta({ label, value }: { label: string; value: string }) {
   return (
     <div className="grid grid-cols-[92px_minmax(0,1fr)] gap-2">
-      <dt className="font-medium text-foreground">{label}</dt>
+      <dt className="font-medium text-fg">{label}</dt>
       <dd className="min-w-0 break-words">{value}</dd>
     </div>
   );
@@ -1616,9 +1603,9 @@ function schemaSummary(schema?: Record<string, unknown> | null): string {
 }
 
 const INPUT_CLASS =
-  "h-10 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring";
+  "h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring";
 const TEXTAREA_CLASS =
-  "w-full rounded-md border border-border bg-background p-3 text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring";
+  "w-full rounded-md border border-border bg-surface-sunken p-3 text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring";
 
 function mcpAuthLabel(mode?: string | null): string {
   if (mode === "oauth_client_credentials") {
@@ -1762,7 +1749,8 @@ export function McpServersPage() {
   return (
     <>
       <PageHeader title={t("nav.settingsExternalMcp")} subtitle={t("page.settings.mcp.subtitle")} />
-      <main className="max-w-5xl space-y-5 p-6 md:p-8">
+      <PageBody>
+<div className="max-w-5xl space-y-5">
         <QueryState query={servers}>
           <Card>
             <CardHeader className="flex flex-row items-start justify-between gap-3">
@@ -1770,8 +1758,7 @@ export function McpServersPage() {
                 <CardTitle>{t("settings.mcpServers.title")}</CardTitle>
                 <CardDescription>{t("settings.mcpServers.description")}</CardDescription>
               </div>
-              <Button size="sm" onClick={openCreate}>
-                <Plus size={15} aria-hidden />
+              <Button size="sm" onClick={openCreate} icon={Plus}>
                 {t("settings.mcpServers.add")}
               </Button>
             </CardHeader>
@@ -1807,7 +1794,7 @@ export function McpServersPage() {
                     onChange={(event) => setForm({ ...form, serverId: event.target.value })}
                     className={editingId ? `${INPUT_CLASS} opacity-60` : INPUT_CLASS}
                   />
-                  <p className="mt-1 text-xs leading-5 text-muted">
+                  <p className="mt-1 text-xs leading-5 text-fg-muted">
                     {t("settings.mcpServers.serverIdHint")}
                   </p>
                 </Field>
@@ -1890,12 +1877,10 @@ export function McpServersPage() {
                   <Banner severity="danger">{(saveMutation.error as Error).message}</Banner>
                 ) : null}
                 <div className="flex gap-2">
-                  <Button onClick={save} loading={saveMutation.isPending}>
-                    <Save size={15} aria-hidden />
+                  <Button onClick={save} loading={saveMutation.isPending} icon={Save}>
                     {editingId ? t("common.save") : t("common.create")}
                   </Button>
-                  <Button variant="ghost" onClick={closeForm}>
-                    <X size={15} aria-hidden />
+                  <Button variant="ghost" onClick={closeForm} icon={X}>
                     {t("common.cancel")}
                   </Button>
                 </div>
@@ -1905,7 +1890,8 @@ export function McpServersPage() {
 
           <McpDiscoveryPanel configured={anyConfigured} />
         </QueryState>
-      </main>
+      </div>
+</PageBody>
     </>
   );
 }
@@ -1928,7 +1914,7 @@ function McpServerTable({
       <div className="hidden overflow-x-auto md:block">
         <table className="w-full min-w-[760px] border-collapse text-left text-sm">
           <thead>
-            <tr className="border-b border-border text-xs text-muted">
+            <tr className="border-b border-border text-xs text-fg-muted">
               <th className="px-3 py-2 font-medium">{t("settings.mcpServers.serverId")}</th>
               <th className="px-3 py-2 font-medium">{t("settings.mcpServers.label")}</th>
               <th className="px-3 py-2 font-medium">{t("settings.baseUrl")}</th>
@@ -1941,17 +1927,17 @@ function McpServerTable({
               <tr key={server.server_id} className="border-b border-border/70 last:border-0">
                 <td className="px-3 py-3 align-top">
                   <div className="flex items-center gap-2">
-                    <span className="font-mono text-xs text-foreground">{server.server_id}</span>
+                    <span className="font-mono text-xs text-fg">{server.server_id}</span>
                     {server.is_default ? (
                       <StatusBadge variant="info" label={t("settings.mcpServers.default")} />
                     ) : null}
                   </div>
                 </td>
-                <td className="px-3 py-3 align-top text-muted">{server.label || "-"}</td>
-                <td className="max-w-xs break-all px-3 py-3 align-top text-muted">
+                <td className="px-3 py-3 align-top text-fg-muted">{server.label || "-"}</td>
+                <td className="max-w-xs break-all px-3 py-3 align-top text-fg-muted">
                   {server.base_url || "-"}
                 </td>
-                <td className="px-3 py-3 align-top text-muted">{mcpAuthLabel(server.auth_mode)}</td>
+                <td className="px-3 py-3 align-top text-fg-muted">{mcpAuthLabel(server.auth_mode)}</td>
                 <td className="px-3 py-3 align-top">
                   <McpServerActions
                     server={server}
@@ -1970,14 +1956,14 @@ function McpServerTable({
         {servers.map((server) => (
           <div key={server.server_id} className="space-y-2 rounded-md border border-border p-3">
             <div className="flex items-center justify-between gap-2">
-              <span className="font-mono text-xs text-foreground">{server.server_id}</span>
+              <span className="font-mono text-xs text-fg">{server.server_id}</span>
               {server.is_default ? (
                 <StatusBadge variant="info" label={t("settings.mcpServers.default")} />
               ) : null}
             </div>
-            <p className="text-sm text-muted">{server.label || "-"}</p>
-            <p className="break-all text-xs text-muted">{server.base_url || "-"}</p>
-            <p className="text-xs text-muted">
+            <p className="text-sm text-fg-muted">{server.label || "-"}</p>
+            <p className="break-all text-xs text-fg-muted">{server.base_url || "-"}</p>
+            <p className="text-xs text-fg-muted">
               {t("settings.mcpServers.auth")}: {mcpAuthLabel(server.auth_mode)}
             </p>
             <McpServerActions
@@ -2015,9 +2001,7 @@ function McpServerActions({
           variant="ghost"
           onClick={() => onSetDefault(server.server_id)}
           disabled={busy}
-          aria-label={`${t("settings.mcpServers.setDefault")} ${server.server_id}`}
-        >
-          <Star size={14} aria-hidden />
+          aria-label={`${t("settings.mcpServers.setDefault")} ${server.server_id}`} icon={Star}>
           {t("settings.mcpServers.setDefault")}
         </Button>
       ) : null}
@@ -2025,9 +2009,7 @@ function McpServerActions({
         size="sm"
         variant="secondary"
         onClick={() => onEdit(server)}
-        aria-label={`${t("settings.mcpServers.edit")} ${server.server_id}`}
-      >
-        <Pencil size={14} aria-hidden />
+        aria-label={`${t("settings.mcpServers.edit")} ${server.server_id}`} icon={Pencil}>
         {t("settings.mcpServers.edit")}
       </Button>
       <Button
@@ -2035,9 +2017,7 @@ function McpServerActions({
         variant="danger"
         onClick={() => onDelete(server)}
         disabled={server.server_id === "default" || busy}
-        aria-label={`${t("settings.mcpServers.delete")} ${server.server_id}`}
-      >
-        <Trash2 size={14} aria-hidden />
+        aria-label={`${t("settings.mcpServers.delete")} ${server.server_id}`} icon={Trash2}>
         {t("settings.mcpServers.delete")}
       </Button>
     </div>
@@ -2231,7 +2211,8 @@ export function SkillsPage() {
   return (
     <>
       <PageHeader title={t("skills.title")} subtitle={t("page.skills.subtitle")} />
-      <main className="max-w-5xl space-y-5 p-6 md:p-8">
+      <PageBody>
+<div className="max-w-5xl space-y-5">
         <QueryState query={skills}>
           <Card>
             <CardHeader className="flex flex-row items-start justify-between gap-3">
@@ -2244,13 +2225,10 @@ export function SkillsPage() {
                   size="sm"
                   variant="secondary"
                   onClick={() => reloadMutation.mutate()}
-                  loading={reloadMutation.isPending}
-                >
-                  <RefreshCw size={15} aria-hidden />
+                  loading={reloadMutation.isPending} icon={RefreshCw}>
                   {t("skills.reload")}
                 </Button>
-                <Button size="sm" onClick={openCreate}>
-                  <Plus size={15} aria-hidden />
+                <Button size="sm" onClick={openCreate} icon={Plus}>
                   {t("skills.add")}
                 </Button>
               </div>
@@ -2319,7 +2297,7 @@ export function SkillsPage() {
                     onChange={(event) => setForm({ ...form, tags: event.target.value })}
                     className={INPUT_CLASS}
                   />
-                  <p className="mt-1 text-xs leading-5 text-muted">{t("skills.tagsHint")}</p>
+                  <p className="mt-1 text-xs leading-5 text-fg-muted">{t("skills.tagsHint")}</p>
                 </Field>
                 <Field label={t("skills.mcpRequirements")} htmlFor="skill-mcp-requirements">
                   <textarea
@@ -2332,7 +2310,7 @@ export function SkillsPage() {
                     }
                     className={`${TEXTAREA_CLASS} font-mono`}
                   />
-                  <p className="mt-1 text-xs leading-5 text-muted">
+                  <p className="mt-1 text-xs leading-5 text-fg-muted">
                     {t("skills.mcpRequirementsHint")}
                   </p>
                 </Field>
@@ -2346,7 +2324,7 @@ export function SkillsPage() {
                     className={`${TEXTAREA_CLASS} font-mono`}
                   />
                 </Field>
-                <label className="flex items-center gap-2 text-sm text-foreground">
+                <label className="flex items-center gap-2 text-sm text-fg">
                   <Switch
                     checked={form.enabled}
                     aria-label={t("skills.enabledLabel")}
@@ -2359,12 +2337,10 @@ export function SkillsPage() {
                   <Banner severity="danger">{(saveMutation.error as Error).message}</Banner>
                 ) : null}
                 <div className="flex gap-2">
-                  <Button onClick={save} loading={saveMutation.isPending}>
-                    <Save size={15} aria-hidden />
+                  <Button onClick={save} loading={saveMutation.isPending} icon={Save}>
                     {editingId ? t("common.save") : t("common.create")}
                   </Button>
-                  <Button variant="ghost" onClick={closeForm}>
-                    <X size={15} aria-hidden />
+                  <Button variant="ghost" onClick={closeForm} icon={X}>
                     {t("common.cancel")}
                   </Button>
                 </div>
@@ -2372,7 +2348,8 @@ export function SkillsPage() {
             </Card>
           ) : null}
         </QueryState>
-      </main>
+      </div>
+</PageBody>
     </>
   );
 }
@@ -2395,7 +2372,7 @@ function SkillTable({
       <div className="hidden overflow-x-auto md:block">
         <table className="w-full min-w-[760px] border-collapse text-left text-sm">
           <thead>
-            <tr className="border-b border-border text-xs text-muted">
+            <tr className="border-b border-border text-xs text-fg-muted">
               <th className="px-3 py-2 font-medium">{t("skills.skill")}</th>
               <th className="px-3 py-2 font-medium">{t("skills.source")}</th>
               <th className="px-3 py-2 font-medium">{t("common.status")}</th>
@@ -2407,8 +2384,8 @@ function SkillTable({
             {skills.map((skill) => (
               <tr key={skill.id} className="border-b border-border/70 last:border-0">
                 <td className="px-3 py-3 align-top">
-                  <p className="text-sm font-medium text-foreground">{skill.name}</p>
-                  <p className="font-mono text-xs text-muted">{skill.id}</p>
+                  <p className="text-sm font-medium text-fg">{skill.name}</p>
+                  <p className="font-mono text-xs text-fg-muted">{skill.id}</p>
                 </td>
                 <td className="px-3 py-3 align-top">
                   <StatusBadge
@@ -2422,7 +2399,7 @@ function SkillTable({
                     label={skill.enabled ? t("agent.enabled") : t("agent.disabled")}
                   />
                 </td>
-                <td className="px-3 py-3 align-top text-xs text-muted">
+                <td className="px-3 py-3 align-top text-xs text-fg-muted">
                   {skill.tags.length ? skill.tags.join(", ") : "-"}
                 </td>
                 <td className="px-3 py-3 align-top">
@@ -2444,8 +2421,8 @@ function SkillTable({
           <div key={skill.id} className="space-y-2 rounded-md border border-border p-3">
             <div className="flex items-start justify-between gap-2">
               <div className="min-w-0">
-                <p className="text-sm font-medium text-foreground">{skill.name}</p>
-                <p className="font-mono text-xs text-muted">{skill.id}</p>
+                <p className="text-sm font-medium text-fg">{skill.name}</p>
+                <p className="font-mono text-xs text-fg-muted">{skill.id}</p>
               </div>
               <StatusBadge
                 variant={skillSourceVariant(skill.source)}
@@ -2457,7 +2434,7 @@ function SkillTable({
                 variant={skill.enabled ? "success" : "neutral"}
                 label={skill.enabled ? t("agent.enabled") : t("agent.disabled")}
               />
-              <span className="text-xs text-muted">
+              <span className="text-xs text-fg-muted">
                 {skill.tags.length ? skill.tags.join(", ") : "-"}
               </span>
             </div>
@@ -2495,9 +2472,7 @@ function SkillActions({
         size="sm"
         variant="ghost"
         onClick={() => onDetail(skill.id)}
-        aria-label={`${t("skills.detail")} ${skill.id}`}
-      >
-        <FileText size={14} aria-hidden />
+        aria-label={`${t("skills.detail")} ${skill.id}`} icon={FileText}>
         {t("skills.detail")}
       </Button>
       {editable ? (
@@ -2506,9 +2481,7 @@ function SkillActions({
             size="sm"
             variant="secondary"
             onClick={() => onEdit(skill)}
-            aria-label={`${t("skills.edit")} ${skill.id}`}
-          >
-            <Pencil size={14} aria-hidden />
+            aria-label={`${t("skills.edit")} ${skill.id}`} icon={Pencil}>
             {t("skills.edit")}
           </Button>
           <Button
@@ -2516,9 +2489,7 @@ function SkillActions({
             variant="danger"
             onClick={() => onDelete(skill)}
             disabled={busy}
-            aria-label={`${t("skills.delete")} ${skill.id}`}
-          >
-            <Trash2 size={14} aria-hidden />
+            aria-label={`${t("skills.delete")} ${skill.id}`} icon={Trash2}>
             {t("skills.delete")}
           </Button>
         </>
@@ -2535,9 +2506,8 @@ function SkillDetailCard({ skill, onClose }: { skill: AgentSkill; onClose: () =>
           <CardTitle>{skill.name}</CardTitle>
           <CardDescription>{skill.description || skill.id}</CardDescription>
         </div>
-        <Button size="sm" variant="ghost" onClick={onClose} aria-label={t("common.cancel")}>
-          <X size={15} aria-hidden />
-        </Button>
+        <Button size="sm" variant="ghost" onClick={onClose} aria-label={t("common.cancel")} icon={X}>
+          </Button>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="flex flex-wrap items-center gap-2">
@@ -2555,8 +2525,8 @@ function SkillDetailCard({ skill, onClose }: { skill: AgentSkill; onClose: () =>
         ) : null}
         {skill.instructions ? (
           <div>
-            <p className="mb-1 text-xs font-medium text-muted">{t("skills.instructions")}</p>
-            <p className="whitespace-pre-wrap text-sm leading-6 text-foreground">
+            <p className="mb-1 text-xs font-medium text-fg-muted">{t("skills.instructions")}</p>
+            <p className="whitespace-pre-wrap text-sm leading-6 text-fg">
               {skill.instructions}
             </p>
           </div>
@@ -2648,7 +2618,8 @@ export function PluginsPage() {
   return (
     <>
       <PageHeader title={t("plugins.title")} subtitle={t("page.plugins.subtitle")} />
-      <main className="max-w-5xl space-y-5 p-6 md:p-8">
+      <PageBody>
+<div className="max-w-5xl space-y-5">
         <QueryState query={plugins}>
           <Card>
             <CardHeader className="flex flex-row items-start justify-between gap-3">
@@ -2661,9 +2632,7 @@ export function PluginsPage() {
                   size="sm"
                   variant="secondary"
                   onClick={() => reloadMutation.mutate()}
-                  loading={reloadMutation.isPending}
-                >
-                  <RefreshCw size={15} aria-hidden />
+                  loading={reloadMutation.isPending} icon={RefreshCw}>
                   {t("skills.reload")}
                 </Button>
                 <Button
@@ -2671,9 +2640,7 @@ export function PluginsPage() {
                   onClick={() => {
                     setFormOpen(true);
                     setFormError(null);
-                  }}
-                >
-                  <Plus size={15} aria-hidden />
+                  }} icon={Plus}>
                   {t("plugins.install")}
                 </Button>
               </div>
@@ -2707,15 +2674,14 @@ export function PluginsPage() {
                     onChange={(event) => setManifestJson(event.target.value)}
                     className={`${TEXTAREA_CLASS} font-mono`}
                   />
-                  <p className="mt-1 text-xs leading-5 text-muted">{t("plugins.manifestHint")}</p>
+                  <p className="mt-1 text-xs leading-5 text-fg-muted">{t("plugins.manifestHint")}</p>
                 </Field>
                 {formError ? <Banner severity="danger">{formError}</Banner> : null}
                 {installMutation.error ? (
                   <Banner severity="danger">{(installMutation.error as Error).message}</Banner>
                 ) : null}
                 <div className="flex gap-2">
-                  <Button onClick={install} loading={installMutation.isPending}>
-                    <Download size={15} aria-hidden />
+                  <Button onClick={install} loading={installMutation.isPending} icon={Download}>
                     {t("plugins.installSubmit")}
                   </Button>
                   <Button
@@ -2723,9 +2689,7 @@ export function PluginsPage() {
                     onClick={() => {
                       setFormOpen(false);
                       setFormError(null);
-                    }}
-                  >
-                    <X size={15} aria-hidden />
+                    }} icon={X}>
                     {t("common.cancel")}
                   </Button>
                 </div>
@@ -2733,7 +2697,8 @@ export function PluginsPage() {
             </Card>
           ) : null}
         </QueryState>
-      </main>
+      </div>
+</PageBody>
     </>
   );
 }
@@ -2764,7 +2729,7 @@ function PluginTable({
       <div className="hidden overflow-x-auto md:block">
         <table className="w-full min-w-[760px] border-collapse text-left text-sm">
           <thead>
-            <tr className="border-b border-border text-xs text-muted">
+            <tr className="border-b border-border text-xs text-fg-muted">
               <th className="px-3 py-2 font-medium">{t("plugins.title")}</th>
               <th className="px-3 py-2 font-medium">{t("plugins.source")}</th>
               <th className="px-3 py-2 font-medium">{t("plugins.bundle")}</th>
@@ -2776,12 +2741,12 @@ function PluginTable({
             {plugins.map((plugin) => (
               <tr key={plugin.id} className="border-b border-border/70 last:border-0">
                 <td className="px-3 py-3 align-top">
-                  <p className="text-sm font-medium text-foreground">{plugin.name}</p>
-                  <p className="font-mono text-xs text-muted">
+                  <p className="text-sm font-medium text-fg">{plugin.name}</p>
+                  <p className="font-mono text-xs text-fg-muted">
                     {plugin.id} · v{plugin.version}
                   </p>
                 </td>
-                <td className="px-3 py-3 align-top text-muted">
+                <td className="px-3 py-3 align-top text-fg-muted">
                   {plugin.marketplace_id ? plugin.marketplace_id : t("plugins.sourceManual")}
                 </td>
                 <td className="px-3 py-3 align-top">
@@ -2800,9 +2765,7 @@ function PluginTable({
                     variant="danger"
                     onClick={() => onUninstall(plugin)}
                     disabled={busy}
-                    aria-label={`${t("plugins.uninstall")} ${plugin.id}`}
-                  >
-                    <Trash2 size={14} aria-hidden />
+                    aria-label={`${t("plugins.uninstall")} ${plugin.id}`} icon={Trash2}>
                     {t("plugins.uninstall")}
                   </Button>
                 </td>
@@ -2816,8 +2779,8 @@ function PluginTable({
           <div key={plugin.id} className="space-y-2 rounded-md border border-border p-3">
             <div className="flex items-start justify-between gap-2">
               <div className="min-w-0">
-                <p className="text-sm font-medium text-foreground">{plugin.name}</p>
-                <p className="font-mono text-xs text-muted">
+                <p className="text-sm font-medium text-fg">{plugin.name}</p>
+                <p className="font-mono text-xs text-fg-muted">
                   {plugin.id} · v{plugin.version}
                 </p>
               </div>
@@ -2833,9 +2796,7 @@ function PluginTable({
               variant="danger"
               onClick={() => onUninstall(plugin)}
               disabled={busy}
-              aria-label={`${t("plugins.uninstall")} ${plugin.id}`}
-            >
-              <Trash2 size={14} aria-hidden />
+              aria-label={`${t("plugins.uninstall")} ${plugin.id}`} icon={Trash2}>
               {t("plugins.uninstall")}
             </Button>
           </div>
@@ -2926,7 +2887,8 @@ export function PluginMarketplacesPage() {
   return (
     <>
       <PageHeader title={t("marketplaces.title")} subtitle={t("page.pluginMarketplaces.subtitle")} />
-      <main className="max-w-5xl space-y-5 p-6 md:p-8">
+      <PageBody>
+<div className="max-w-5xl space-y-5">
         <QueryState query={markets}>
           <Card>
             <CardHeader className="flex flex-row items-start justify-between gap-3">
@@ -2934,8 +2896,7 @@ export function PluginMarketplacesPage() {
                 <CardTitle>{t("marketplaces.title")}</CardTitle>
                 <CardDescription>{t("marketplaces.description")}</CardDescription>
               </div>
-              <Button size="sm" onClick={() => setFormOpen(true)}>
-                <Plus size={15} aria-hidden />
+              <Button size="sm" onClick={() => setFormOpen(true)} icon={Plus}>
                 {t("marketplaces.add")}
               </Button>
             </CardHeader>
@@ -2987,18 +2948,16 @@ export function PluginMarketplacesPage() {
                     onChange={(event) => setForm({ ...form, url: event.target.value })}
                     className={INPUT_CLASS}
                   />
-                  <p className="mt-1 text-xs leading-5 text-muted">{t("marketplaces.urlHint")}</p>
+                  <p className="mt-1 text-xs leading-5 text-fg-muted">{t("marketplaces.urlHint")}</p>
                 </Field>
                 {addMutation.error ? (
                   <Banner severity="danger">{(addMutation.error as Error).message}</Banner>
                 ) : null}
                 <div className="flex gap-2">
-                  <Button onClick={add} loading={addMutation.isPending}>
-                    <Save size={15} aria-hidden />
+                  <Button onClick={add} loading={addMutation.isPending} icon={Save}>
                     {t("common.create")}
                   </Button>
-                  <Button variant="ghost" onClick={() => setFormOpen(false)}>
-                    <X size={15} aria-hidden />
+                  <Button variant="ghost" onClick={() => setFormOpen(false)} icon={X}>
                     {t("common.cancel")}
                   </Button>
                 </div>
@@ -3006,7 +2965,8 @@ export function PluginMarketplacesPage() {
             </Card>
           ) : null}
         </QueryState>
-      </main>
+      </div>
+</PageBody>
     </>
   );
 }
@@ -3030,15 +2990,15 @@ function MarketplaceTable({
         <div key={source.id} className="space-y-2 rounded-md border border-border p-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="min-w-0">
-              <p className="text-sm font-medium text-foreground">{source.name || source.id}</p>
-              <p className="font-mono text-xs text-muted">{source.id}</p>
+              <p className="text-sm font-medium text-fg">{source.name || source.id}</p>
+              <p className="font-mono text-xs text-fg-muted">{source.id}</p>
             </div>
             <StatusBadge
               variant="info"
               label={`${t("marketplaces.pluginCount")}: ${source.plugin_count}`}
             />
           </div>
-          {source.url ? <p className="break-all text-xs text-muted">{source.url}</p> : null}
+          {source.url ? <p className="break-all text-xs text-fg-muted">{source.url}</p> : null}
           {source.last_error ? (
             <Banner severity="warning">{source.last_error}</Banner>
           ) : null}
@@ -3048,18 +3008,14 @@ function MarketplaceTable({
               variant="secondary"
               onClick={() => onRefresh(source.id)}
               disabled={busy}
-              aria-label={`${t("marketplaces.refresh")} ${source.id}`}
-            >
-              <RefreshCw size={14} aria-hidden />
+              aria-label={`${t("marketplaces.refresh")} ${source.id}`} icon={RefreshCw}>
               {t("marketplaces.refresh")}
             </Button>
             <Button
               size="sm"
               variant="ghost"
               onClick={() => onBrowse(source.id)}
-              aria-label={`${t("marketplaces.browse")} ${source.id}`}
-            >
-              <FileText size={14} aria-hidden />
+              aria-label={`${t("marketplaces.browse")} ${source.id}`} icon={FileText}>
               {t("marketplaces.browse")}
             </Button>
             <Button
@@ -3067,9 +3023,7 @@ function MarketplaceTable({
               variant="danger"
               onClick={() => onDelete(source)}
               disabled={busy}
-              aria-label={`${t("marketplaces.delete")} ${source.id}`}
-            >
-              <Trash2 size={14} aria-hidden />
+              aria-label={`${t("marketplaces.delete")} ${source.id}`} icon={Trash2}>
               {t("marketplaces.delete")}
             </Button>
           </div>
@@ -3122,22 +3076,20 @@ function MarketplaceBrowse({
                 className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border p-3"
               >
                 <div className="min-w-0">
-                  <p className="text-sm font-medium text-foreground">{manifest.name}</p>
-                  <p className="font-mono text-xs text-muted">
+                  <p className="text-sm font-medium text-fg">{manifest.name}</p>
+                  <p className="font-mono text-xs text-fg-muted">
                     {manifest.id}
                     {manifest.version ? ` · v${manifest.version}` : ""}
                   </p>
                   {manifest.description ? (
-                    <p className="text-xs text-muted">{manifest.description}</p>
+                    <p className="text-xs text-fg-muted">{manifest.description}</p>
                   ) : null}
                 </div>
                 <Button
                   size="sm"
                   onClick={() => installMutation.mutate(manifest.id)}
                   loading={installMutation.isPending}
-                  aria-label={`${t("marketplaces.installFrom")} ${manifest.id}`}
-                >
-                  <Download size={14} aria-hidden />
+                  aria-label={`${t("marketplaces.installFrom")} ${manifest.id}`} icon={Download}>
                   {t("marketplaces.installFrom")}
                 </Button>
               </div>
@@ -3234,7 +3186,8 @@ export function CommandPolicySettingsPage() {
   return (
     <>
       <PageHeader title={t("nav.settingsCommandPolicy")} subtitle={t("page.settings.commandPolicy.subtitle")} />
-      <main className="max-w-4xl space-y-5 p-6 md:p-8">
+      <PageBody>
+<div className="max-w-4xl space-y-5">
         <QueryState query={settings}>
           <Banner severity="info">{t("settings.commandPolicy.enabledHint")}</Banner>
           <Card className="min-w-0">
@@ -3254,12 +3207,12 @@ export function CommandPolicySettingsPage() {
               <CardDescription>{t("page.settings.commandPolicy.subtitle")}</CardDescription>
             </CardHeader>
             <CardContent className="space-y-5">
-              <label className="flex min-h-11 cursor-pointer items-center gap-3 rounded-md border border-border px-3 py-2 text-sm text-foreground">
+              <label className="flex min-h-11 cursor-pointer items-center gap-3 rounded-md border border-border px-3 py-2 text-sm text-fg">
                 <input
                   type="checkbox"
                   checked={enabled}
                   onChange={(event) => setEnabled(event.target.checked)}
-                  className="size-4 rounded border-border text-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                  className="size-4 rounded border-border text-accent-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 />
                 <span>{t("settings.commandPolicy.enabled")}</span>
               </label>
@@ -3270,7 +3223,7 @@ export function CommandPolicySettingsPage() {
                     id="command-policy-workspace-root"
                     value={workspaceRoot}
                     onChange={(event) => setWorkspaceRoot(event.target.value)}
-                    className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                    className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   />
                 </Field>
                 <Field label={t("settings.commandPolicy.outputLimit")} htmlFor="command-policy-output-limit">
@@ -3280,7 +3233,7 @@ export function CommandPolicySettingsPage() {
                     min="1"
                     value={outputLimit}
                     onChange={(event) => setOutputLimit(event.target.value)}
-                    className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                    className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   />
                 </Field>
                 <Field label={t("settings.commandPolicy.defaultTimeout")} htmlFor="command-policy-default-timeout">
@@ -3291,7 +3244,7 @@ export function CommandPolicySettingsPage() {
                     step="0.1"
                     value={defaultTimeout}
                     onChange={(event) => setDefaultTimeout(event.target.value)}
-                    className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                    className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   />
                 </Field>
                 <Field label={t("settings.commandPolicy.maxTimeout")} htmlFor="command-policy-max-timeout">
@@ -3302,7 +3255,7 @@ export function CommandPolicySettingsPage() {
                     step="0.1"
                     value={maxTimeout}
                     onChange={(event) => setMaxTimeout(event.target.value)}
-                    className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                    className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   />
                 </Field>
               </div>
@@ -3313,9 +3266,9 @@ export function CommandPolicySettingsPage() {
                   value={allowedPrefixes}
                   onChange={(event) => setAllowedPrefixes(event.target.value)}
                   rows={5}
-                  className="min-h-32 w-full rounded-md border border-border bg-background px-3 py-2 font-mono text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                  className="min-h-32 w-full rounded-md border border-border bg-surface-sunken px-3 py-2 font-mono text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 />
-                <p className="mt-1 text-xs leading-5 text-muted">{t("settings.commandPolicy.allowedPrefixesHint")}</p>
+                <p className="mt-1 text-xs leading-5 text-fg-muted">{t("settings.commandPolicy.allowedPrefixesHint")}</p>
               </Field>
 
               <div className="grid gap-4 md:grid-cols-2">
@@ -3324,33 +3277,33 @@ export function CommandPolicySettingsPage() {
                     id="command-policy-artifact-storage"
                     value={artifactStorageBackend}
                     onChange={(event) => setArtifactStorageBackend(event.target.value as "inline" | "filesystem")}
-                    className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                    className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   >
                     <option value="inline">{t("settings.commandPolicy.inline")}</option>
                     <option value="filesystem">{t("settings.commandPolicy.filesystem")}</option>
                   </select>
-                  <p className="mt-1 text-xs leading-5 text-muted">{t("settings.commandPolicy.storageHint")}</p>
+                  <p className="mt-1 text-xs leading-5 text-fg-muted">{t("settings.commandPolicy.storageHint")}</p>
                 </Field>
                 <Field label={t("settings.commandPolicy.artifactPath")} htmlFor="command-policy-artifact-path">
                   <input
                     id="command-policy-artifact-path"
                     value={artifactStoragePath}
                     onChange={(event) => setArtifactStoragePath(event.target.value)}
-                    className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                    className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   />
                 </Field>
               </div>
 
               {formError ? <Banner severity="danger">{formError}</Banner> : null}
               {mutation.error ? <Banner severity="danger">{mutation.error.message}</Banner> : null}
-              <Button onClick={save} loading={mutation.isPending}>
-                <Save size={15} aria-hidden />
+              <Button onClick={save} loading={mutation.isPending} icon={Save}>
                 {t("common.save")}
               </Button>
             </CardContent>
           </Card>
         </QueryState>
-      </main>
+      </div>
+</PageBody>
     </>
   );
 }
@@ -3419,7 +3372,8 @@ export function ToolPolicySettingsPage() {
   return (
     <>
       <PageHeader title={t("nav.settingsToolPolicy")} subtitle={t("page.settings.toolPolicy.subtitle")} />
-      <main className="max-w-5xl space-y-5 p-6 md:p-8">
+      <PageBody>
+<div className="max-w-5xl space-y-5">
         <QueryState query={settings}>
           <Card className="min-w-0">
             <CardHeader>
@@ -3432,7 +3386,7 @@ export function ToolPolicySettingsPage() {
                   id="tool-policy-default-mode"
                   value={defaultMode}
                   onChange={(event) => setDefaultMode(event.target.value as "approval" | "deny")}
-                  className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring sm:max-w-xs"
+                  className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring sm:max-w-xs"
                 >
                   <option value="approval">{t("settings.toolPolicy.defaultModeApproval")}</option>
                   <option value="deny">{t("settings.toolPolicy.defaultModeDeny")}</option>
@@ -3453,7 +3407,7 @@ export function ToolPolicySettingsPage() {
                       >
                         <div className="min-w-0 space-y-2">
                           <div className="flex flex-wrap items-center gap-2">
-                            <p className="break-all text-sm font-medium text-foreground">{tool.name}</p>
+                            <p className="break-all text-sm font-medium text-fg">{tool.name}</p>
                             <StatusBadge
                               variant={
                                 tool.permission_level === "read"
@@ -3468,7 +3422,7 @@ export function ToolPolicySettingsPage() {
                               <StatusBadge variant="warning" label="side_effects" />
                             ) : null}
                           </div>
-                          <p className="break-words text-xs leading-5 text-muted [overflow-wrap:anywhere]">
+                          <p className="break-words text-xs leading-5 text-fg-muted [overflow-wrap:anywhere]">
                             {tool.description}
                           </p>
                         </div>
@@ -3477,7 +3431,7 @@ export function ToolPolicySettingsPage() {
                             id={`tool-policy-${tool.name}`}
                             value={policy}
                             onChange={(event) => setPolicy(tool.name, event.target.value as ToolPolicyChoice)}
-                            className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                            className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                           >
                             <option value="default">{t("settings.toolPolicy.default")}</option>
                             <option value="allow">{t("settings.toolPolicy.allow")}</option>
@@ -3494,14 +3448,14 @@ export function ToolPolicySettingsPage() {
               )}
 
               {mutation.error ? <Banner severity="danger">{mutation.error.message}</Banner> : null}
-              <Button onClick={save} loading={mutation.isPending}>
-                <Save size={15} aria-hidden />
+              <Button onClick={save} loading={mutation.isPending} icon={Save}>
                 {t("common.save")}
               </Button>
             </CardContent>
           </Card>
         </QueryState>
-      </main>
+      </div>
+</PageBody>
     </>
   );
 }
@@ -3555,7 +3509,8 @@ export function RuntimeSafetySettingsPage() {
   return (
     <>
       <PageHeader title={t("nav.settingsRuntimeSafety")} subtitle={t("page.settings.runtimeSafety.subtitle")} />
-      <main className="max-w-3xl space-y-5 p-6 md:p-8">
+      <PageBody>
+<div className="max-w-3xl space-y-5">
         <QueryState query={settings}>
           <Banner severity="info">{t("settings.runtimeSafety.guardrail")}</Banner>
           <Card className="min-w-0">
@@ -3571,7 +3526,7 @@ export function RuntimeSafetySettingsPage() {
                   min="0"
                   value={maxToolCalls}
                   onChange={(event) => setMaxToolCalls(event.target.value)}
-                  className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                  className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 />
               </Field>
               <Field
@@ -3584,19 +3539,19 @@ export function RuntimeSafetySettingsPage() {
                   min="0"
                   value={maxPendingApprovals}
                   onChange={(event) => setMaxPendingApprovals(event.target.value)}
-                  className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                  className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 />
               </Field>
               {formError ? <Banner severity="danger">{formError}</Banner> : null}
               {mutation.error ? <Banner severity="danger">{mutation.error.message}</Banner> : null}
-              <Button onClick={save} loading={mutation.isPending}>
-                <Save size={15} aria-hidden />
+              <Button onClick={save} loading={mutation.isPending} icon={Save}>
                 {t("common.save")}
               </Button>
             </CardContent>
           </Card>
         </QueryState>
-      </main>
+      </div>
+</PageBody>
     </>
   );
 }
@@ -3716,14 +3671,12 @@ export function RuntimeSnapshotSettingsPage() {
           <Button
             variant="secondary"
             onClick={() => void snapshot.refetch()}
-            aria-label={t("common.retry")}
-          >
-            <RefreshCw size={15} aria-hidden />
+            aria-label={t("common.retry")} icon={RefreshCw}>
             {t("common.retry")}
           </Button>
         }
       />
-      <main className="grid min-w-0 grid-cols-1 gap-5 p-6 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] md:p-8">
+      <PageBody className="grid min-w-0 grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <QueryState query={snapshot}>
           <Card className="min-w-0">
             <CardHeader className="flex-row flex-wrap items-start justify-between gap-3">
@@ -3740,17 +3693,15 @@ export function RuntimeSnapshotSettingsPage() {
                   id="runtime-snapshot-export"
                   value={exportText}
                   readOnly
-                  className="min-h-80 w-full rounded-md border border-border bg-background px-3 py-2 font-mono text-xs leading-5 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                  className="min-h-80 w-full rounded-md border border-border bg-surface-sunken px-3 py-2 font-mono text-xs leading-5 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   spellCheck={false}
                 />
               </Field>
               <div className="flex flex-wrap gap-2">
-                <Button variant="secondary" onClick={downloadSnapshot}>
-                  <Download size={15} aria-hidden />
+                <Button variant="secondary" onClick={downloadSnapshot} icon={Download}>
                   {t("common.download")}
                 </Button>
-                <Button variant="secondary" onClick={copyCurrentSnapshotToImport}>
-                  <Upload size={15} aria-hidden />
+                <Button variant="secondary" onClick={copyCurrentSnapshotToImport} icon={Upload}>
                   {t("settings.snapshot.copyCurrent")}
                 </Button>
               </div>
@@ -3772,7 +3723,7 @@ export function RuntimeSnapshotSettingsPage() {
                   setImportText(event.target.value);
                   setValidationResult(null);
                 }}
-                className="min-h-80 w-full rounded-md border border-border bg-background px-3 py-2 font-mono text-xs leading-5 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                className="min-h-80 w-full rounded-md border border-border bg-surface-sunken px-3 py-2 font-mono text-xs leading-5 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 spellCheck={false}
               />
             </Field>
@@ -3781,28 +3732,26 @@ export function RuntimeSnapshotSettingsPage() {
                 id="runtime-snapshot-reason"
                 value={reason}
                 onChange={(event) => setReason(event.target.value)}
-                className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
               />
             </Field>
             <div className="flex flex-wrap gap-2">
               <Button
                 variant="secondary"
                 onClick={dryRunImport}
-                loading={importSnapshot.isPending}
-              >
-                <ShieldAlert size={15} aria-hidden />
+                loading={importSnapshot.isPending} icon={ShieldAlert}>
                 {t("common.validate")}
               </Button>
             </div>
             {validationResult ? <SnapshotValidationPanel result={validationResult} /> : null}
-            <div className="rounded-md border border-danger/40 p-3">
+            <div className="rounded-md border border-danger-border p-3">
               <Field label={t("settings.snapshot.confirmText")} htmlFor="runtime-snapshot-confirm">
                 <input
                   id="runtime-snapshot-confirm"
                   value={confirmText}
                   onChange={(event) => setConfirmText(event.target.value)}
                   placeholder={t("settings.snapshot.confirmPlaceholder")}
-                  className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                  className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 />
               </Field>
               <Button
@@ -3810,9 +3759,7 @@ export function RuntimeSnapshotSettingsPage() {
                 className="mt-3"
                 onClick={() => void replaceRuntimeSnapshot()}
                 loading={importSnapshot.isPending}
-                disabled={confirmText !== "REPLACE"}
-              >
-                <Upload size={15} aria-hidden />
+                disabled={confirmText !== "REPLACE"} icon={Upload}>
                 {t("common.replace")}
               </Button>
             </div>
@@ -3820,7 +3767,7 @@ export function RuntimeSnapshotSettingsPage() {
             {importSnapshot.error ? <Banner severity="danger">{importSnapshot.error.message}</Banner> : null}
           </CardContent>
         </Card>
-      </main>
+      </PageBody>
     </>
   );
 }
@@ -3989,7 +3936,7 @@ function AgentEditor({
             id={`${agent?.id ?? "new"}-agent-name`}
             value={name}
             onChange={(event) => setName(event.target.value)}
-            className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+            className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
           />
         </Field>
         <Field label={t("agent.description")} htmlFor={`${agent?.id ?? "new"}-agent-description`}>
@@ -3997,7 +3944,7 @@ function AgentEditor({
             id={`${agent?.id ?? "new"}-agent-description`}
             value={agentDescription}
             onChange={(event) => setAgentDescription(event.target.value)}
-            className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+            className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
           />
         </Field>
         <Field label={t("agent.instructions")} htmlFor={`${agent?.id ?? "new"}-agent-instructions`}>
@@ -4005,10 +3952,10 @@ function AgentEditor({
             id={`${agent?.id ?? "new"}-agent-instructions`}
             value={instructions}
             onChange={(event) => setInstructions(event.target.value)}
-            className="min-h-24 w-full rounded-md border border-border bg-background px-3 py-2 text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+            className="min-h-24 w-full rounded-md border border-border bg-surface-sunken px-3 py-2 text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
           />
         </Field>
-        <label className="flex min-h-11 items-center gap-2 rounded-md border border-border px-3 py-2 text-sm text-foreground">
+        <label className="flex min-h-11 items-center gap-2 rounded-md border border-border px-3 py-2 text-sm text-fg">
           <input
             type="checkbox"
             checked={enabled}
@@ -4018,7 +3965,7 @@ function AgentEditor({
           {t("agent.enabled")}
         </label>
         <div className="space-y-2">
-          <p className="text-sm font-medium text-foreground">{t("agent.skills")}</p>
+          <p className="text-sm font-medium text-fg">{t("agent.skills")}</p>
           {availableSkills.length ? (
             <div className="grid gap-2 md:grid-cols-2">
               {availableSkills.map((skill) => (
@@ -4034,10 +3981,10 @@ function AgentEditor({
                       className="mt-0.5 h-4 w-4 shrink-0"
                     />
                     <span className="min-w-0">
-                      <span className="block break-words font-medium leading-5 text-foreground">
+                      <span className="block break-words font-medium leading-5 text-fg">
                         {skill.name}
                       </span>
-                      <span className="mt-1 block text-xs leading-5 text-muted">
+                      <span className="mt-1 block text-xs leading-5 text-fg-muted">
                         {skill.description}
                       </span>
                     </span>
@@ -4055,8 +4002,7 @@ function AgentEditor({
         </div>
         {formError ? <Banner severity="danger">{formError}</Banner> : null}
         {error ? <Banner severity="danger">{error.message}</Banner> : null}
-        <Button onClick={saveAgent} loading={pending}>
-          <Save size={15} aria-hidden />
+        <Button onClick={saveAgent} loading={pending} icon={Save}>
           {agent ? t("common.save") : t("common.create")}
         </Button>
       </CardContent>
@@ -4116,14 +4062,14 @@ function RuntimeBindingsPanel({
                 className="flex min-w-0 flex-wrap items-center justify-between gap-3 rounded-md border border-border p-3"
               >
                 <div className="min-w-0">
-                  <p className="break-words text-sm font-medium text-foreground">
+                  <p className="break-words text-sm font-medium text-fg">
                     {binding.native_agent_ref}
                   </p>
-                  <p className="mt-1 break-all text-xs text-muted">{binding.runtime_id}</p>
+                  <p className="mt-1 break-all text-xs text-fg-muted">{binding.runtime_id}</p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
                   <StatusBadge
-                    variant={binding.sync_status === "ready" ? "success" : binding.sync_status === "error" ? "danger" : "pending"}
+                    variant={binding.sync_status === "ready" ? "success" : binding.sync_status === "error" ? "danger" : "warning"}
                     label={binding.sync_status}
                   />
                   {!binding.is_default ? (
@@ -4133,17 +4079,15 @@ function RuntimeBindingsPanel({
                   ) : (
                     <StatusBadge variant="info" label={t("binding.default")} />
                   )}
-                  <Button size="sm" variant="secondary" onClick={() => onSync(binding)}>
-                    <RefreshCw size={14} aria-hidden />
+                  <Button size="sm" variant="secondary" onClick={() => onSync(binding)} icon={RefreshCw}>
                     {t("binding.sync")}
                   </Button>
-                  <Button size="sm" variant="danger" onClick={() => onDelete(binding)}>
-                    <Trash2 size={14} aria-hidden />
+                  <Button size="sm" variant="danger" onClick={() => onDelete(binding)} icon={Trash2}>
                     {t("common.delete")}
                   </Button>
                 </div>
                 {binding.sync_error ? (
-                  <p className="w-full text-xs text-danger">{binding.sync_error}</p>
+                  <p className="w-full text-xs text-danger-fg">{binding.sync_error}</p>
                 ) : null}
               </div>
             ))}
@@ -4157,7 +4101,7 @@ function RuntimeBindingsPanel({
               id={`${agent.id}-binding-runtime`}
               value={runtimeId}
               onChange={(event) => setRuntimeId(event.target.value)}
-              className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm"
+              className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm"
             >
               {candidates.map((runtime) => (
                 <option key={runtime.id} value={runtime.id}>
@@ -4171,7 +4115,7 @@ function RuntimeBindingsPanel({
               id={`${agent.id}-binding-native-ref`}
               value={nativeAgentRef}
               onChange={(event) => setNativeAgentRef(event.target.value)}
-              className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm"
+              className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm"
             />
           </Field>
         </div>
@@ -4188,9 +4132,7 @@ function RuntimeBindingsPanel({
               is_default: !bindings.length,
               enabled: true,
             })
-          }
-        >
-          <Plus size={15} aria-hidden />
+          } icon={Plus}>
           {t("binding.add")}
         </Button>
       </CardContent>
@@ -4224,18 +4166,18 @@ function RunHistoryList({
                   type="button"
                   aria-pressed={selected}
                   onClick={() => onSelect(run.id)}
-                  className={`min-h-16 w-full min-w-0 max-w-full overflow-hidden rounded-md border px-3 py-2 text-left transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring ${
+                  className={`min-h-16 w-full min-w-0 max-w-full overflow-hidden rounded-md border px-3 py-2 text-left transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
                     selected
-                      ? "border-primary bg-primary/5"
-                      : "border-border bg-card hover:bg-muted/40"
+                      ? "border-accent-emphasis bg-accent-subtle"
+                      : "border-border bg-surface hover:bg-surface-hover"
                   }`}
                 >
                   <span className="flex items-start justify-between gap-2">
                     <span className="min-w-0">
-                      <span className="line-clamp-2 text-sm font-medium leading-5 text-foreground">
+                      <span className="line-clamp-2 text-sm font-medium leading-5 text-fg">
                         {run.goal}
                       </span>
-                      <span className="mt-1 block break-words text-xs text-muted [overflow-wrap:anywhere]">
+                      <span className="mt-1 block break-words text-xs text-fg-muted [overflow-wrap:anywhere]">
                         {`${run.agent_id} / ${formatDate(run.created_at)}`}
                       </span>
                     </span>
@@ -4297,8 +4239,8 @@ function RunDetail({
           <StatusBadge variant={statusVariant[run.status]} label={run.status} />
         </CardHeader>
         <CardContent className="space-y-3">
-          <p className="text-sm leading-6 text-foreground">{run.goal}</p>
-          <div className="grid gap-2 text-xs text-muted sm:grid-cols-2">
+          <p className="text-sm leading-6 text-fg">{run.goal}</p>
+          <div className="grid gap-2 text-xs text-fg-muted sm:grid-cols-2">
             <span>{`${t("run.form.agent")}: ${run.agent_id}`}</span>
             <span>{`${t("run.runtime")}: ${run.runtime_id}`}</span>
             <span>{`${t("run.form.binding")}: ${run.binding_id ?? t("runtime.legacyReadOnly")}`}</span>
@@ -4315,9 +4257,7 @@ function RunDetail({
                 size="sm"
                 onClick={onCancel}
                 loading={actionPending}
-                aria-label={t("run.cancel")}
-              >
-                <X size={15} aria-hidden />
+                aria-label={t("run.cancel")} icon={X}>
                 {t("run.cancel")}
               </Button>
             ) : null}
@@ -4327,9 +4267,7 @@ function RunDetail({
                 size="sm"
                 onClick={onResume}
                 loading={actionPending}
-                aria-label={t("run.resume")}
-              >
-                <PlayCircle size={15} aria-hidden />
+                aria-label={t("run.resume")} icon={PlayCircle}>
                 {t("run.resume")}
               </Button>
             ) : null}
@@ -4339,9 +4277,7 @@ function RunDetail({
                 size="sm"
                 onClick={onReplay}
                 loading={actionPending}
-                aria-label={t("run.replay")}
-              >
-                <RefreshCw size={15} aria-hidden />
+                aria-label={t("run.replay")} icon={RefreshCw}>
                 {t("run.replay")}
               </Button>
             ) : null}
@@ -4379,14 +4315,14 @@ function RunDetail({
                 {run.steps.map((step) => (
                   <div key={step.id} className="min-w-0 rounded-md border border-border p-3">
                     <div className="flex items-center justify-between gap-3">
-                      <span className="text-sm font-medium text-foreground">{step.tool_call?.name ?? step.kind}</span>
+                      <span className="text-sm font-medium text-fg">{step.tool_call?.name ?? step.kind}</span>
                       <StatusBadge
                         variant={stepStatusVariant[step.status] ?? "neutral"}
                         label={step.status}
                       />
                     </div>
                     {step.tool_result?.error ? (
-                      <p className="mt-2 text-xs text-danger">{step.tool_result.error}</p>
+                      <p className="mt-2 text-xs text-danger-fg">{step.tool_result.error}</p>
                     ) : null}
                     {step.tool_result?.output ? <JsonPreview value={step.tool_result.output} /> : null}
                   </div>
@@ -4446,17 +4382,17 @@ function RunTimelineItem({ event }: { event: RunEvent }) {
   return (
     <li className="grid min-w-0 grid-cols-[2rem_minmax(0,1fr)] gap-3">
       <div className="flex justify-center">
-        <div className="mt-1 flex size-8 items-center justify-center rounded-full border border-border bg-background text-muted">
+        <div className="mt-1 flex size-8 items-center justify-center rounded-full border border-border bg-surface-sunken text-fg-muted">
           {view.icon}
         </div>
       </div>
-      <div className="min-w-0 rounded-md border border-border bg-background p-3">
+      <div className="min-w-0 rounded-md border border-border bg-surface-sunken p-3">
         <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
           <div className="min-w-0">
-            <p className="break-words text-sm font-medium text-foreground [overflow-wrap:anywhere]">
+            <p className="break-words text-sm font-medium text-fg [overflow-wrap:anywhere]">
               {view.title}
             </p>
-            <p className="mt-1 break-words text-xs leading-5 text-muted [overflow-wrap:anywhere]">
+            <p className="mt-1 break-words text-xs leading-5 text-fg-muted [overflow-wrap:anywhere]">
               {view.subtitle}
             </p>
           </div>
@@ -4476,7 +4412,7 @@ function RunTimelineItem({ event }: { event: RunEvent }) {
             {view.warnings.map((warning) => (
               <span
                 key={warning}
-                className="max-w-full break-all rounded-md border border-warning/40 bg-warning/10 px-2 py-1 text-xs text-warning"
+                className="max-w-full break-all rounded-md border border-warning-border bg-warning-subtle px-2 py-1 text-xs text-warning-fg"
               >
                 {warning}
               </span>
@@ -4492,10 +4428,10 @@ function RunTimelineItem({ event }: { event: RunEvent }) {
 
 function TimelineFact({ label, value }: { label: string; value: string }) {
   return (
-    <div className="min-w-0 rounded-md bg-muted/20 px-2 py-1.5">
-      <span className="text-muted">{label}</span>
-      <span className="mx-1 text-muted">/</span>
-      <span className="break-words font-medium text-foreground [overflow-wrap:anywhere]">{value}</span>
+    <div className="min-w-0 rounded-md bg-surface-hover px-2 py-1.5">
+      <span className="text-fg-muted">{label}</span>
+      <span className="mx-1 text-fg-muted">/</span>
+      <span className="break-words font-medium text-fg [overflow-wrap:anywhere]">{value}</span>
     </div>
   );
 }
@@ -4555,7 +4491,7 @@ function timelineEventView(event: RunEvent): TimelineEventView {
       subtitle: event.message,
       icon: <Check size={16} aria-hidden />,
       badgeLabel: event.type.replace("approval.", ""),
-      badgeVariant: "pending",
+      badgeVariant: "warning",
       details: compactTimelineDetails([
         [t("run.timeline.approval"), payloadString(event.payload, "approval_id")],
         [t("run.timeline.step"), payloadString(event.payload, "step_id")],
@@ -4767,10 +4703,10 @@ function RunStreamControls({
             type="button"
             aria-pressed={mode === "sse"}
             onClick={() => onModeChange("sse")}
-            className={`px-3 py-2 font-medium outline-none transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring ${
+            className={`px-3 py-2 font-medium outline-none transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
               mode === "sse"
-                ? "bg-primary text-primary-foreground"
-                : "bg-background text-muted hover:bg-accent hover:text-accent-foreground"
+                ? "bg-accent-emphasis text-fg-on-accent"
+                : "bg-surface-sunken text-fg-muted hover:bg-surface-hover hover:text-fg"
             }`}
           >
             {t("run.stream.sse")}
@@ -4779,10 +4715,10 @@ function RunStreamControls({
             type="button"
             aria-pressed={mode === "websocket"}
             onClick={() => onModeChange("websocket")}
-            className={`border-l border-border px-3 py-2 font-medium outline-none transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring ${
+            className={`border-l border-border px-3 py-2 font-medium outline-none transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
               mode === "websocket"
-                ? "bg-primary text-primary-foreground"
-                : "bg-background text-muted hover:bg-accent hover:text-accent-foreground"
+                ? "bg-accent-emphasis text-fg-on-accent"
+                : "bg-surface-sunken text-fg-muted hover:bg-surface-hover hover:text-fg"
             }`}
           >
             {t("run.stream.websocket")}
@@ -4801,7 +4737,7 @@ function RunStreamControls({
             />
           </div>
         ) : (
-          <p className="text-sm leading-6 text-muted">{t("run.stream.sseDescription")}</p>
+          <p className="text-sm leading-6 text-fg-muted">{t("run.stream.sseDescription")}</p>
         )}
 
         {mode === "websocket" && (pendingApproval || canResume || canCancel) ? (
@@ -4814,9 +4750,7 @@ function RunStreamControls({
                   onClick={() => onWebSocketApprovalDecision(pendingApproval.id, true)}
                   loading={actionPending}
                   disabled={websocketState.status !== "open"}
-                  aria-label={t("run.stream.wsApprove")}
-                >
-                  <Check size={15} aria-hidden />
+                  aria-label={t("run.stream.wsApprove")} icon={Check}>
                   {t("run.stream.wsApprove")}
                 </Button>
                 <Button
@@ -4825,9 +4759,7 @@ function RunStreamControls({
                   onClick={() => onWebSocketApprovalDecision(pendingApproval.id, false)}
                   loading={actionPending}
                   disabled={websocketState.status !== "open"}
-                  aria-label={t("run.stream.wsReject")}
-                >
-                  <X size={15} aria-hidden />
+                  aria-label={t("run.stream.wsReject")} icon={X}>
                   {t("run.stream.wsReject")}
                 </Button>
               </>
@@ -4839,9 +4771,7 @@ function RunStreamControls({
                 onClick={onWebSocketResume}
                 loading={actionPending}
                 disabled={websocketState.status !== "open"}
-                aria-label={t("run.stream.wsResume")}
-              >
-                <PlayCircle size={15} aria-hidden />
+                aria-label={t("run.stream.wsResume")} icon={PlayCircle}>
                 {t("run.stream.wsResume")}
               </Button>
             ) : null}
@@ -4852,9 +4782,7 @@ function RunStreamControls({
                 onClick={onWebSocketCancel}
                 loading={actionPending}
                 disabled={websocketState.status !== "open"}
-                aria-label={t("run.stream.wsCancel")}
-              >
-                <X size={15} aria-hidden />
+                aria-label={t("run.stream.wsCancel")} icon={X}>
                 {t("run.stream.wsCancel")}
               </Button>
             ) : null}
@@ -4867,9 +4795,9 @@ function RunStreamControls({
 
 function StreamMetric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="min-w-0 rounded-md border border-border bg-muted/20 px-3 py-2">
-      <p className="text-xs font-medium text-muted">{label}</p>
-      <p className="mt-1 break-words text-sm text-foreground [overflow-wrap:anywhere]">{value}</p>
+    <div className="min-w-0 rounded-md border border-border bg-surface-hover px-3 py-2">
+      <p className="text-xs font-medium text-fg-muted">{label}</p>
+      <p className="mt-1 break-words text-sm text-fg [overflow-wrap:anywhere]">{value}</p>
     </div>
   );
 }
@@ -4922,15 +4850,15 @@ function AuditRecordItem({ audit, record }: { audit: RunAuditData; record: ToolA
       : record.status === "failed"
         ? "danger"
         : record.status === "waiting_approval"
-          ? "pending"
+          ? "warning"
           : "neutral";
 
   return (
     <div className="min-w-0 rounded-md border border-border p-3">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="break-all text-sm font-medium text-foreground">{record.tool_name}</p>
-          <p className="mt-0.5 break-all text-xs text-muted">{`${audit.status} / ${record.step_id}`}</p>
+          <p className="break-all text-sm font-medium text-fg">{record.tool_name}</p>
+          <p className="mt-0.5 break-all text-xs text-fg-muted">{`${audit.status} / ${record.step_id}`}</p>
         </div>
         <StatusBadge variant={status} label={record.status} />
       </div>
@@ -4946,12 +4874,12 @@ function AuditRecordItem({ audit, record }: { audit: RunAuditData; record: ToolA
       </div>
 
       {record.trace_id ? (
-        <p className="mt-3 break-all text-xs text-muted">{`${t("run.auditTrace")}: ${record.trace_id}`}</p>
+        <p className="mt-3 break-all text-xs text-fg-muted">{`${t("run.auditTrace")}: ${record.trace_id}`}</p>
       ) : null}
       {record.artifact_ids.length ? (
         <div className="mt-3 flex min-w-0 flex-wrap gap-2">
           {record.artifact_ids.map((artifactId) => (
-            <span key={artifactId} className="max-w-full break-all rounded-md border border-border px-2 py-1 text-xs text-muted">
+            <span key={artifactId} className="max-w-full break-all rounded-md border border-border px-2 py-1 text-xs text-fg-muted">
               {`${t("run.auditArtifacts")}: ${artifactId}`}
             </span>
           ))}
@@ -4980,9 +4908,9 @@ function AuditRecordItem({ audit, record }: { audit: RunAuditData; record: ToolA
 
 function AuditFact({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-md bg-background px-3 py-2">
-      <p className="text-xs text-muted">{label}</p>
-      <p className="mt-1 break-words text-xs font-medium text-foreground [overflow-wrap:anywhere]">{value}</p>
+    <div className="rounded-md bg-surface-sunken px-3 py-2">
+      <p className="text-xs text-fg-muted">{label}</p>
+      <p className="mt-1 break-words text-xs font-medium text-fg [overflow-wrap:anywhere]">{value}</p>
     </div>
   );
 }
@@ -5000,8 +4928,8 @@ function ArtifactsPanel({ run }: { run: RunState }) {
             <div key={artifact.id} className="min-w-0 rounded-md border border-border p-3">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <p className="break-all text-sm font-medium text-foreground">{artifact.name}</p>
-                  <p className="mt-0.5 text-xs text-muted">{formatDate(artifact.created_at)}</p>
+                  <p className="break-all text-sm font-medium text-fg">{artifact.name}</p>
+                  <p className="mt-0.5 text-xs text-fg-muted">{formatDate(artifact.created_at)}</p>
                 </div>
                 <StatusBadge variant={artifact.kind === "rag_evidence" ? "info" : "success"} label={artifact.kind} />
               </div>
@@ -5031,14 +4959,14 @@ function RagEvidenceArtifact({ artifact }: { artifact: Artifact }) {
     <div className="mt-3 space-y-4">
       {answer ? (
         <section className="space-y-1">
-          <h3 className="text-sm font-medium text-foreground">{t("run.ragAnswer")}</h3>
-          <p className="break-words text-sm leading-6 text-foreground [overflow-wrap:anywhere]">{answer}</p>
+          <h3 className="text-sm font-medium text-fg">{t("run.ragAnswer")}</h3>
+          <p className="break-words text-sm leading-6 text-fg [overflow-wrap:anywhere]">{answer}</p>
         </section>
       ) : null}
       {citations.length ? (
         <section className="space-y-2">
-          <h3 className="flex items-center gap-2 text-sm font-medium text-foreground">
-            <FileText size={15} aria-hidden />
+          <h3 className="flex items-center gap-2 text-sm font-medium text-fg">
+            <FileText size={16} aria-hidden />
             {t("run.citations")}
           </h3>
           <div className="grid gap-2">
@@ -5055,7 +4983,7 @@ function RagEvidenceArtifact({ artifact }: { artifact: Artifact }) {
       ) : null}
       {contexts.length ? (
         <section className="space-y-2">
-          <h3 className="text-sm font-medium text-foreground">{t("run.contexts")}</h3>
+          <h3 className="text-sm font-medium text-fg">{t("run.contexts")}</h3>
           <div className="grid gap-2">
             {contexts.slice(0, 6).map((context, index) => (
               <EvidenceItem
@@ -5112,11 +5040,11 @@ function EvidenceItem({
   detail?: string | null;
 }) {
   return (
-    <div className="min-w-0 rounded-md bg-background p-3">
-      <p className="break-words text-sm font-medium text-foreground [overflow-wrap:anywhere]">{title}</p>
-      {subtitle ? <p className="mt-1 break-all text-xs text-muted">{subtitle}</p> : null}
+    <div className="min-w-0 rounded-md bg-surface-sunken p-3">
+      <p className="break-words text-sm font-medium text-fg [overflow-wrap:anywhere]">{title}</p>
+      {subtitle ? <p className="mt-1 break-all text-xs text-fg-muted">{subtitle}</p> : null}
       {detail ? (
-        <p className="mt-2 line-clamp-4 break-words text-xs leading-5 text-foreground [overflow-wrap:anywhere]">
+        <p className="mt-2 line-clamp-4 break-words text-xs leading-5 text-fg [overflow-wrap:anywhere]">
           {detail}
         </p>
       ) : null}
@@ -5127,8 +5055,8 @@ function EvidenceItem({
 function MetricPill({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-md border border-border px-3 py-2">
-      <p className="text-xs text-muted">{label}</p>
-      <p className="mt-1 text-sm font-medium text-foreground">{value}</p>
+      <p className="text-xs text-fg-muted">{label}</p>
+      <p className="mt-1 text-sm font-medium text-fg">{value}</p>
     </div>
   );
 }
@@ -5148,7 +5076,7 @@ function ToolCard({ tool }: { tool: ToolDefinition }) {
       <CardContent className="space-y-3">
         <div className="flex flex-wrap gap-2">
           {tool.audit_tags.map((tag) => (
-            <span key={tag} className="rounded-md border border-border px-2 py-1 text-xs text-muted">
+            <span key={tag} className="rounded-md border border-border px-2 py-1 text-xs text-fg-muted">
               {tag}
             </span>
           ))}
@@ -5174,7 +5102,7 @@ function StructuredResultTable({ result }: { result: StructuredResult }) {
           <thead>
             <tr className="border-b border-border">
               {result.columns.map((column) => (
-                <th key={column.name} className="px-3 py-2 font-medium text-muted">
+                <th key={column.name} className="px-3 py-2 font-medium text-fg-muted">
                   {column.label ?? column.name}
                 </th>
               ))}
@@ -5184,7 +5112,7 @@ function StructuredResultTable({ result }: { result: StructuredResult }) {
             {result.rows.map((row, index) => (
               <tr key={String(index)} className="border-b border-border/70">
                 {result.columns.map((column) => (
-                  <td key={column.name} className="px-3 py-2 text-foreground">
+                  <td key={column.name} className="px-3 py-2 text-fg">
                     {formatValue(row[column.name])}
                   </td>
                 ))}
@@ -5215,7 +5143,7 @@ function ConnectionBanner({ settings }: { settings?: ExternalServiceSettings }) 
 function Field({ label, htmlFor, children }: { label: string; htmlFor: string; children: ReactNode }) {
   return (
     <div className="space-y-1.5">
-      <label htmlFor={htmlFor} className="text-sm font-medium text-foreground">
+      <label htmlFor={htmlFor} className="text-sm font-medium text-fg">
         {label}
       </label>
       {children}
@@ -5226,7 +5154,7 @@ function Field({ label, htmlFor, children }: { label: string; htmlFor: string; c
 function JsonPanel({ title, value }: { title: string; value: unknown }) {
   return (
     <div className="min-w-0">
-      <p className="mb-1 text-xs font-medium text-muted">{title}</p>
+      <p className="mb-1 text-xs font-medium text-fg-muted">{title}</p>
       <JsonPreview value={value} />
     </div>
   );
@@ -5234,7 +5162,7 @@ function JsonPanel({ title, value }: { title: string; value: unknown }) {
 
 function JsonPreview({ value }: { value: unknown }) {
   return (
-    <pre className="mt-2 max-h-64 w-full min-w-0 max-w-full overflow-auto rounded-md bg-background p-3 text-xs leading-5 text-foreground">
+    <pre className="mt-2 max-h-64 w-full min-w-0 max-w-full overflow-auto rounded-md bg-surface-sunken p-3 text-xs leading-5 text-fg">
       {JSON.stringify(value, null, 2)}
     </pre>
   );
