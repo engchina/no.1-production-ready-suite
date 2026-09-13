@@ -143,6 +143,25 @@ def _is_case_sensitive_part(token: str) -> bool:
     return name != name.upper()
 
 
+def _has_case_sensitive_name(*names: str) -> bool:
+    """カタログ上の名前に、大文字化すると別の名前になる（小文字を含む）ものがあるか。"""
+
+    return any(str(name or "") != str(name or "").upper() for name in names)
+
+
+def _is_case_sensitive_physical_node(node: OntologyNode) -> bool:
+    """owner / object / column 名に、大文字化すると別の名前になる引用名を含む物理 node か。
+
+    schema ontology は #563 から `SALES."Mixed_Case"` を大文字の同名表と別 node にしたが、
+    AI 構築の schema context と参照解決（`_ScopeResolver` / `_SchemaContextLookup`）は名前を
+    大文字化して照合する。取り違えないよう、AI 構築ではこれらの node を扱わない。
+    """
+
+    return _has_case_sensitive_name(
+        *(str(node.metadata.get(key) or "") for key in ("owner", "object_name", "column_name"))
+    )
+
+
 def _catalog_object_part(value: str) -> str:
     """カタログ上の名前を Profile object と照合する token にする（引用名の大文字小文字を保つ）。"""
 
@@ -167,12 +186,13 @@ def _resolve_catalog_object(
     owner = parts[-2] if len(parts) >= 2 else ""
     object_name = parts[-1] if parts else ""
     if any(_is_case_sensitive_part(part) for part in parts):
-        # オントロジーの node は owner / object 名を大文字化して識別するため、小文字を含む
-        # 引用名を大文字の同名表と区別できない。取り違えないよう構築対象から外して明示する。
+        # AI 構築の schema context と LLM 出力の参照解決は owner / object / column 名を大文字化して
+        # 照合するため、小文字を含む引用名を大文字の同名表と区別できない。取り違えないよう
+        # AI 構築の対象から外して明示する（schema ontology・Profile の view は #563 で対応済み）。
         return (
             None,
-            f"「{raw_name}」は大文字小文字の混在や記号を含む名前のため、"
-            "オントロジー構築の対象にできません（未対応）。",
+            f"「{raw_name}」は大文字小文字の混在を含む引用名のため、"
+            "オントロジーの AI 構築の対象にできません（未対応）。",
         )
     matches = [
         table
@@ -286,6 +306,8 @@ def build_schema_context_from_catalog(
                         "comment": column.comment,
                     }
                     for ordinal, column in enumerate(table.columns, start=1)
+                    # 小文字を含む引用名の列は大文字化すると同名列と区別できない（#563）。
+                    if not _has_case_sensitive_name(column.column_name)
                 ],
                 "constraints": [
                     {
@@ -297,6 +319,7 @@ def build_schema_context_from_catalog(
                     }
                     for detail in table.constraint_details
                     if detail.constraint_type in {"P", "U", "C"}
+                    and not _has_case_sensitive_name(*detail.columns)
                 ],
             }
         )
@@ -306,6 +329,8 @@ def build_schema_context_from_catalog(
             target_owner = _normalize_oracle_identifier(detail.referenced_owner or owner)
             target_name = _normalize_oracle_identifier(detail.referenced_table)
             if (target_owner, target_name) not in selected_keys:
+                continue
+            if _has_case_sensitive_name(*detail.columns, *detail.referenced_columns):
                 continue
             relationships.append(
                 {
@@ -404,7 +429,7 @@ class _ScopeResolver:
         self.columns_by_name: dict[str, list[OntologyNode]] = {}
         self.sql_aliases: dict[str, set[str]] = {}
         for node in ontology.nodes:
-            if node.id not in scoped:
+            if node.id not in scoped or _is_case_sensitive_physical_node(node):
                 continue
             if node.kind in {OntologyNodeKind.TABLE, OntologyNodeKind.VIEW}:
                 owner = str(node.metadata.get("owner", "")).upper()
@@ -532,7 +557,7 @@ def build_schema_context(ontology: SchemaOntology, view: ProfileOntologyView) ->
     scoped_edges = set(view.edge_ids)
     objects: dict[str, dict[str, Any]] = {}
     for node in sorted(ontology.nodes, key=lambda item: item.id):
-        if node.id not in scoped:
+        if node.id not in scoped or _is_case_sensitive_physical_node(node):
             continue
         if node.kind in {OntologyNodeKind.TABLE, OntologyNodeKind.VIEW}:
             objects[node.technical_name] = {
@@ -544,7 +569,11 @@ def build_schema_context(ontology: SchemaOntology, view: ProfileOntologyView) ->
                 "columns": [],
             }
     for node in sorted(ontology.nodes, key=lambda item: item.id):
-        if node.id not in scoped or node.kind != OntologyNodeKind.COLUMN:
+        if (
+            node.id not in scoped
+            or node.kind != OntologyNodeKind.COLUMN
+            or _is_case_sensitive_physical_node(node)
+        ):
             continue
         owner = str(node.metadata.get("owner", ""))
         object_name = str(node.metadata.get("object_name", ""))
@@ -574,7 +603,17 @@ def build_schema_context(ontology: SchemaOntology, view: ProfileOntologyView) ->
             continue
         source = node_by_id.get(edge.source_node_id)
         target = node_by_id.get(edge.target_node_id)
-        if source is None or target is None:
+        if (
+            source is None
+            or target is None
+            or _is_case_sensitive_physical_node(source)
+            or _is_case_sensitive_physical_node(target)
+            or any(
+                _has_case_sensitive_name(ref.owner, ref.object_name, ref.column_name)
+                for condition in edge.join_conditions
+                for ref in (condition.left, condition.right)
+            )
+        ):
             continue
         relationships.append(
             {

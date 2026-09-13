@@ -537,6 +537,9 @@ def parse_oracle_sql(
                 name=_text(getattr(column, "name", "")),
                 clause=clause,
                 expression_sql=expression_sql,
+                owner_quoted=_identifier_quoted(column.args.get("db")),
+                table_quoted=_identifier_quoted(column.args.get("table")),
+                name_quoted=_identifier_quoted(column.args.get("this")),
             )
         )
 

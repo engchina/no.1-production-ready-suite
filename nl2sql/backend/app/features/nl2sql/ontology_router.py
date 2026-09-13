@@ -38,7 +38,7 @@ from .models import (
     PreviewRequest,
     QueryResults,
 )
-from .object_identity import format_object_part, object_name_tokens
+from .object_identity import catalog_match_key, object_match_key, object_name_tokens
 from .ontology_build import (
     OntologyBuildService,
     build_schema_context_from_catalog,
@@ -133,6 +133,7 @@ from .ontology_store import (
     OracleOntologyStore,
     canonical_json,
     compute_etag,
+    physical_identity_part,
     stable_ontology_id,
     stable_physical_id,
 )
@@ -141,24 +142,6 @@ from .service import nl2sql_service
 from .structured_outputs import format_schema, strict_schema
 
 logger = logging.getLogger(__name__)
-
-
-def _object_match_key(value: str) -> str:
-    """Profile の object 名（`OBJECT` / `OWNER.OBJECT`、各部は引用可）の照合キー（#561）。"""
-
-    try:
-        return ".".join(object_name_tokens(value))
-    except ValueError:
-        return value.strip()
-
-
-def _catalog_match_key(*parts: str) -> str:
-    """カタログ上の owner / object 名（引用符なし・大文字小文字を保持）の照合キー。"""
-
-    try:
-        return ".".join(format_object_part(part) for part in parts)
-    except ValueError:
-        return ".".join(parts)
 
 
 ONTOLOGY_SOURCE_FILE_MAX_COUNT = 5
@@ -660,10 +643,11 @@ class OntologyApiRuntime:
         """
 
         normalized_type: Literal["table", "view"] = "view" if object_type == "view" else "table"
+        # owner / object_name はカタログ上の名前。引用名を大文字の同名表の ID にしない（#563）。
         physical_id = stable_physical_id(
             normalized_type,
-            owner,
-            object_name,
+            physical_identity_part(owner),
+            physical_identity_part(object_name),
         )
         with self._business_name_lock:
             self._ensure_store()
@@ -705,9 +689,10 @@ class OntologyApiRuntime:
         names: dict[str, str] = {}
         for document in node_documents:
             node = OntologyNode.model_validate(self._stored_payload(document, collection="node"))
-            column_name = str(node.metadata.get("column_name") or "").strip().upper()
+            # key はカタログ上の列名。`Amount` と `AMOUNT` を潰さない（#563）。
+            column_name = str(node.metadata.get("column_name") or "").strip()
             if not column_name:
-                parts = node.technical_name.upper().split(".")
+                parts = node.technical_name.split(".")
                 column_name = parts[-1] if len(parts) >= 3 else ""
             if column_name:
                 names[column_name] = node.business_name_ja
@@ -1903,15 +1888,15 @@ class OntologyApiRuntime:
             key
             for item in view.physical_objects
             for key in (
-                _catalog_match_key(item.object_name),
-                _catalog_match_key(item.owner, item.object_name),
+                catalog_match_key(item.object_name),
+                catalog_match_key(item.owner, item.object_name),
             )
         }
 
         def normalize(value: str) -> str:
             # 引用名は大文字小文字を保つ。`SALES."Mixed_Case"` を大文字の同名表で
             # 解決済みにしない（#561）。
-            return _object_match_key(value)
+            return object_match_key(value)
 
         return [
             f"「{name}」を {source_label} に解決できません。"
@@ -2107,13 +2092,18 @@ class OntologyApiRuntime:
                         "未承認または範囲外の関係 path は許可できません。",
                     )
             if request.physical_scope is not None:
+                # 引用規則で照合する。大文字化すると `SALES."Mixed_Case"` だけの view に
+                # 大文字の同名表 `SALES.MIXED_CASE` を含められる（#563）。
                 requested_scope = {
-                    str(value).replace('"', "").strip().upper()
+                    object_match_key(str(value))
                     for values in request.physical_scope.values()
                     for value in values
                 }
-                current_scope = {item.object_name.upper() for item in current.physical_objects} | {
-                    f"{item.owner}.{item.object_name}".upper() for item in current.physical_objects
+                current_scope = {
+                    catalog_match_key(item.object_name) for item in current.physical_objects
+                } | {
+                    catalog_match_key(item.owner, item.object_name)
+                    for item in current.physical_objects
                 }
                 if requested_scope - current_scope:
                     raise OntologyIntegrityError(
@@ -3394,7 +3384,7 @@ class OntologyApiRuntime:
         # Profile の object は canonical 修飾名。引用符を外して大文字化すると、引用名の表の
         # Profile で大文字の同名表の代表値まで LLM へ送るため、引用規則どおりに照合する（#561）。
         allowed = {
-            _object_match_key(value)
+            object_match_key(value)
             for value in [*profile.allowed_tables, *profile.allowed_views]
             if value.strip()
         }
@@ -3407,11 +3397,9 @@ class OntologyApiRuntime:
                 continue
             for mapping in node.physical_mappings:
                 for column in mapping.column_refs:
-                    key_tuple = (
-                        column.owner.upper(),
-                        column.object_name.upper(),
-                        column.column_name.upper(),
-                    )
+                    # カタログ上の名前で照合する。大文字化すると `"Amount"` の policy
+                    # （masked 等）が `AMOUNT` に効かない、または逆になる（#563）。
+                    key_tuple = (column.owner, column.object_name, column.column_name)
                     policy_by_column[key_tuple] = column_policy
 
         relevant_objects: set[str] = set()
@@ -3423,13 +3411,19 @@ class OntologyApiRuntime:
                 terms = [node.business_name_ja, *node.aliases]
                 if not any(term and term.casefold() in normalized_question for term in terms):
                     continue
-                if node.kind in {OntologyNodeKind.TABLE, OntologyNodeKind.VIEW}:
-                    relevant_objects.add(node.technical_name.upper())
                 for mapping in node.physical_mappings:
                     object_ref = mapping.object_ref
                     if object_ref.object_name:
-                        relevant_objects.add(object_ref.object_name.upper())
-                        relevant_objects.add(f"{object_ref.owner}.{object_ref.object_name}".upper())
+                        relevant_objects.add(catalog_match_key(object_ref.object_name))
+                        relevant_objects.add(
+                            catalog_match_key(object_ref.owner, object_ref.object_name)
+                        )
+                if node.kind in {OntologyNodeKind.TABLE, OntologyNodeKind.VIEW}:
+                    metadata_name = str(node.metadata.get("object_name") or "")
+                    if metadata_name:
+                        relevant_objects.add(
+                            catalog_match_key(str(node.metadata.get("owner") or ""), metadata_name)
+                        )
 
         result: list[dict[str, Any]] = []
         remaining_columns = 40
@@ -3442,19 +3436,19 @@ class OntologyApiRuntime:
             name
             for table in tables
             for name in (
-                table.table_name.upper(),
-                f"{table.owner}.{table.table_name}".upper(),
+                catalog_match_key(table.table_name),
+                catalog_match_key(table.owner, table.table_name),
             )
         }
         if relevant_objects and not relevant_objects & catalog_objects:
             relevant_objects.clear()
         for table in tables:
-            short_name = table.table_name.upper()
-            qualified_name = f"{table.owner}.{table.table_name}".upper()
+            short_name = catalog_match_key(table.table_name)
+            qualified_name = catalog_match_key(table.owner, table.table_name)
             if (
                 allowed
-                and _catalog_match_key(table.table_name) not in allowed
-                and _catalog_match_key(table.owner, table.table_name) not in allowed
+                and catalog_match_key(table.table_name) not in allowed
+                and catalog_match_key(table.owner, table.table_name) not in allowed
             ):
                 continue
             if relevant_objects and not {short_name, qualified_name} & relevant_objects:
@@ -3464,7 +3458,7 @@ class OntologyApiRuntime:
                 if remaining_columns <= 0:
                     break
                 current_policy = policy_by_column.get(
-                    (table.owner.upper(), table.table_name.upper(), column.column_name.upper())
+                    (table.owner, table.table_name, column.column_name)
                 )
                 samples = []
                 if current_policy is None or (
@@ -4715,14 +4709,22 @@ class OntologyApiRuntime:
         requested_full: set[str] = set()
         requested_short: set[str] = set()
         for raw_name in allowed.table_names:
-            normalized = raw_name.replace('"', "").strip().upper()
-            if "." in normalized:
+            # 引用規則の照合キー。大文字化すると `SALES."Mixed_Case"` の要求で大文字の同名表
+            # `SALES.MIXED_CASE` も選ぶ（#563）。
+            normalized = object_match_key(raw_name)
+            try:
+                part_count = len(object_name_tokens(raw_name))
+            except ValueError:
+                part_count = 0
+            if part_count >= 2:
                 requested_full.add(normalized)
             else:
                 requested_short.add(normalized)
         for short_name in requested_short:
             matches = [
-                item for item in base.physical_objects if item.object_name.upper() == short_name
+                item
+                for item in base.physical_objects
+                if catalog_match_key(item.object_name) == short_name
             ]
             if len(matches) > 1:
                 raise OntologyIntegrityError(
@@ -4733,8 +4735,8 @@ class OntologyApiRuntime:
             item
             for item in base.physical_objects
             if (
-                f"{item.owner}.{item.object_name}".upper() in requested_full
-                or item.object_name.upper() in requested_short
+                catalog_match_key(item.owner, item.object_name) in requested_full
+                or catalog_match_key(item.object_name) in requested_short
             )
         ]
         selected_ids = {item.node_id for item in selected_objects}
@@ -4749,8 +4751,8 @@ class OntologyApiRuntime:
                 )
                 or (
                     node.kind.value == "schema"
-                    and str(node.metadata.get("owner", "")).upper()
-                    in {item.owner.upper() for item in selected_objects}
+                    and str(node.metadata.get("owner", ""))
+                    in {item.owner for item in selected_objects}
                 )
             )
         ]

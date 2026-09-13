@@ -10,7 +10,13 @@ import {
   normalizeDbObjectKey,
   splitDbObjectName,
 } from "../src/features/nl2sql/dbObjectIdentity.ts";
-import { objectName } from "../src/features/nl2sql/ontology/physicalIdentity.ts";
+import {
+  objectMatches,
+  objectIdentityFromNode,
+  objectName,
+  ontologyPhysicalNodeLabel,
+} from "../src/features/nl2sql/ontology/physicalIdentity.ts";
+import { ontologyGraphObjectClusterKey } from "../src/features/nl2sql/ontology/graphLayout.ts";
 import { schemaTableQualifiedName } from "../src/features/nl2sql/workbenchState.ts";
 
 test("formatDbObjectName は OWNER.OBJECT を組み立て、Oracle の規則外の部分だけを引用する", () => {
@@ -165,4 +171,53 @@ test("別実装だった修飾名の組み立てが formatDbObjectName に委ね
     assert.doesNotMatch(source, /`\$\{[\w.?]*owner(?:\.trim\(\))?\}\.\$\{[^}]*\}`/iu, `${path} で owner を単純連結している`);
     assert.doesNotMatch(source, /qualified_?[Nn]ame[^;\n]*\.toUpperCase\(\)/u, `${path} で修飾名を大文字化している`);
   }
+});
+
+test("オントロジーの物理名は大文字化せず、引用名の node を大文字の同名表と区別する (#563)", () => {
+  const quoted = {
+    id: "quoted",
+    kind: "table" as const,
+    business_name_ja: "引用名",
+    technical_name: 'SALES."Mixed_Case"',
+    metadata: { owner: "SALES", object_name: "Mixed_Case" },
+  };
+  const upper = {
+    id: "upper",
+    kind: "table" as const,
+    business_name_ja: "大文字",
+    technical_name: "SALES.MIXED_CASE",
+    metadata: { owner: "SALES", object_name: "MIXED_CASE" },
+  };
+  const column = {
+    id: "amount",
+    kind: "column" as const,
+    business_name_ja: "金額",
+    technical_name: 'SALES."Mixed_Case"."Amount"',
+    metadata: { owner: "SALES", object_name: "Mixed_Case", column_name: "Amount" },
+  };
+  const quotedIdentity = objectIdentityFromNode(quoted);
+  const upperIdentity = objectIdentityFromNode(upper);
+
+  assert.equal(quotedIdentity?.objectName, "Mixed_Case");
+  assert.ok(quotedIdentity && upperIdentity);
+  assert.equal(
+    objectMatches({ ...quotedIdentity, nodeId: undefined }, { ...upperIdentity, nodeId: undefined }),
+    false,
+  );
+  assert.equal(ontologyPhysicalNodeLabel(quoted), 'SALES."Mixed_Case"');
+  assert.equal(ontologyPhysicalNodeLabel(column), 'SALES."Mixed_Case"."Amount"');
+  assert.equal(ontologyPhysicalNodeLabel(upper), "SALES.MIXED_CASE");
+  // technical_name だけの旧 node（引用 token）も引用符を外して同じ名前に揃える。
+  assert.equal(
+    objectIdentityFromNode({
+      id: "legacy",
+      kind: "table",
+      business_name_ja: "旧",
+      technical_name: 'SALES."Mixed_Case"',
+    })
+      ?.objectName,
+    "Mixed_Case",
+  );
+  assert.notEqual(ontologyGraphObjectClusterKey(quoted), ontologyGraphObjectClusterKey(upper));
+  assert.equal(ontologyGraphObjectClusterKey(upper), "object:SALES.MIXED_CASE");
 });

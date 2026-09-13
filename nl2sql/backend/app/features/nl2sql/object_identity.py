@@ -160,6 +160,32 @@ def is_unquoted_object_part(name: str) -> bool:
     return bool(_SIMPLE_IDENTIFIER.fullmatch(str(name or "")))
 
 
+def object_match_key(value: str) -> str:
+    """入力の `OBJECT` / `OWNER.OBJECT` / `OWNER.OBJECT.COLUMN`（各部は引用可）の照合キー。
+
+    `object_name_tokens` の単純連結。引用符が壊れた値は例外にせず、前後の空白を除いて返す
+    （照合に失敗させるだけで、別の object に一致させない）。
+    """
+
+    try:
+        return ".".join(object_name_tokens(value))
+    except ValueError:
+        return str(value or "").strip()
+
+
+def catalog_match_key(*parts: str) -> str:
+    """カタログ上の owner / object / column 名（引用符なし・大文字小文字を保持）の照合キー。
+
+    引用が必要な部分だけ `"..."` で囲む（`format_object_part`）。`object_match_key` と同じ
+    規則のため、入力とカタログを突き合わせられる。不正な値は例外にせず、そのまま連結する。
+    """
+
+    try:
+        return ".".join(format_object_part(part) for part in parts)
+    except ValueError:
+        return ".".join(str(part or "") for part in parts)
+
+
 @dataclass(frozen=True, slots=True)
 class OracleObjectIdentity:
     """Owner-aware 的只读对象身份。"""
@@ -209,9 +235,11 @@ __all__ = [
     "OracleObjectIdentity",
     "canonical_object_part",
     "canonical_qualified_name",
+    "catalog_match_key",
     "format_object_part",
     "is_unquoted_object_part",
     "normalize_object_part",
+    "object_match_key",
     "object_name_tokens",
     "parse_object_identity",
     "qualified_object_name",

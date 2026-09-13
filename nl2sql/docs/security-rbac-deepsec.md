@@ -294,9 +294,9 @@ SELECT e.ROLE_ID, e.ENTITLEMENT_ID, e.TARGET_OWNER, e.TARGET_OBJECT,
 | 保存（`POST` / `PATCH /api/nl2sql/profiles`） | `SALES."Mixed_Case"` はそのまま保存し、`SALES.MIXED_CASE` とは別の対象として両方を保持できる。`"SALES"."MIXED_CASE"` / `sales.mixed_case` は従来どおり `SALES.MIXED_CASE`。非引用識別子にならない名前（`SALES.my table`）と引用符の壊れた名前は `ValueError`（API はエラー応答）で拒否する |
 | owner 省略の旧形式 | `"Mixed_Case"` はカタログの引用名の表に解決する。引用なしの `mixed_case` は `MIXED_CASE` として解決し、引用名の表 `Mixed_Case` には解決しない |
 | SQL 安全性検査（許可表の照合） | SQL の表参照は sqlglot の引用情報（`SqlTableReference.owner_quoted` / `name_quoted`）を使い、引用なしを大文字、引用ありを書かれたとおりに解釈する。`SALES.MIXED_CASE` だけを許可したとき `SELECT * FROM SALES."Mixed_Case"` を拒否し、逆も拒否する（修正前はどちらも `SALES.MIXED_CASE` として許可していた） |
-| SQL 生成の schema context | Profile の対象から schema catalog の詳細を読むとき、大文字小文字だけが異なる表の定義は使わない（schema catalog の詳細取得は大文字小文字を区別しないため、名前の完全一致を確認する） |
+| SQL 生成の schema context | Profile の対象から schema catalog の詳細を読むとき、大文字小文字だけが異なる表の定義は使わない（#563 で schema catalog の詳細取得自体が大文字小文字を区別するようになった） |
 | Select AI の `object_list` | 引用が必要な owner / 表名を含む Profile は、Oracle へ反映せず `PROFILE_OBJECT_LIST_UNSUPPORTED` で同期 job を失敗させ、Select AI / Select AI Agent の実行を「object scope が未同期」として止める（下記「未確認事項」）。引用が不要な名前の `object_list` は従来と同じ |
-| オントロジー | node は owner / 表名を大文字化して識別するため、小文字を含む引用名の表はオントロジー構築・Profile の view の対象にしない（警告を出す）。大文字の同名表の node へ対応付けない。質問補完の代表値も引用規則どおりに Profile の対象へ絞る |
+| オントロジー | 質問補完の代表値も引用規則どおりに Profile の対象へ絞る。node の識別と Profile の view は #563 で引用名に対応した（次節）。AI 構築は引き続き対象外 |
 | DeepSec の関連テーブル候補（`GET /api/security/deepsec/relations`） | Profile の object が canonical な修飾名になるため、引用名の表を対象・関連テーブルとして選べる |
 | 画面（業務プロファイル・スキーマ参照） | 対象の選択・件数・一括選択・未保存判定のキーを `normalizeDbObjectKey`（`dbObjectIdentity.ts`）にそろえ、引用名を大文字化しない |
 
@@ -341,6 +341,32 @@ SELECT p.PROFILE_ID, p.NAME, j.OBJECT_KIND, j.OBJECT_KEY,
 
 該当 Profile では、対象に残っている `SALES.MIXED_CASE` が意図した表か確認し、引用名の表を使う場合は
 `SALES."Mixed_Case"` を選び直す。DeepSec のデータ権限の検出は前節の SQL を使う。
+
+### schema catalog・オントロジー・列単位の許可チェック（Issue #563）
+
+#561 の時点で残っていた「大文字化した名前を一意キーにする」経路を、同じ引用規則にそろえた。
+内部のキーは **辞書ビュー上の名前（大文字小文字を保持、引用符なし）**、API の入力は **引用規則の token**
+（引用なしは大文字、`"Mixed_Case"` は大文字小文字を保持）とし、境界で `normalize_object_part` / `format_object_part`
+（`object_match_key` / `catalog_match_key`）で変換する。
+
+| 経路 | #563 以降の挙動 |
+|---|---|
+| schema refresh（`fetch_schema_manifest` / `fetch_catalog` / 増分 merge / 永続化） | manifest・変更 object・merge・`NL2SQL_SCHEMA_OBJECTS` / `COLUMNS` / `CONSTRAINTS` の key を辞書上の名前にした。修正前は `UPPER` した名前を bind していたため、`Mixed_Case` の列定義を取得できず（同名表があればその定義を保存し）、`MIXED_CASE` と 1 行に潰れていた |
+| 詳細 `GET /api/schema/objects/{owner}/{object_name}` | path は引用規則で解釈する（`/SALES/%22Mixed_Case%22` は引用名の表、`/sales/mixed_case` は従来どおり `SALES.MIXED_CASE`）。repository と cache は大文字小文字を区別して完全一致する。引用符が壊れた path は 400 |
+| 一覧 `GET /api/schema/objects` / `GET /api/nl2sql/db-admin/objects` | `owner` は引用規則で解釈し、辞書上の owner と完全一致させる。`profile_id` の絞り込みは Profile の対象を辞書上の `(owner, name)` の組にして完全一致させる（Oracle は `JSON_TABLE` の `$.owner` / `$.name`）。keyset cursor は辞書上の名前を保持する（大文字化した cursor では同名表を読み飛ばす・重複する） |
+| 詳細の代表値（`fetch_metadata_sample_values`） | owner / object / 列を引用規則で解釈し、辞書ビューの照合と `"..."` 引用に辞書上の名前を使う。修正前は引用符を外して大文字化し、大文字の同名表・同名列の値を取得していた |
+| オントロジーの node ID | `stable_physical_id` に渡す名前を `physical_identity_part` にした。大文字化しても変わらない名前（`ORDERS`、`売上`）は **既存の ID・technical_name・schema fingerprint を変えない**。小文字を含む名前だけ `"Mixed_Case"` を ID に含め、`technical_name` も `SALES."Mixed_Case"` にする。metadata / 物理参照の owner・object・column は辞書上の名前を保持する |
+| Profile の view・物理 scope の絞り込み・draft scope・質問補完の column policy | 引用規則の照合キーで対応付け、引用名の Profile を引用名の node に対応付ける（#561 の「対象にしない」扱いを解除） |
+| オントロジーの AI 構築 | schema context と LLM 出力の参照解決（`_ScopeResolver` / `_SchemaContextLookup`）が名前を大文字化して照合するため、小文字を含む引用名の表・列・関係は **引き続き対象外**（警告）。取り違えを避けるため、view に含まれていても AI 構築の context と参照解決から除く |
+| 列単位の許可チェック（`allowed_objects.columns`） | 列名は引用規則の token で照合する。SQL の列参照は sqlglot の引用情報（`SqlColumnReference.owner_quoted` / `table_quoted` / `name_quoted`）で解釈する。`"Amount"` だけを許可したとき `SELECT AMOUNT` を拒否し、`AMOUNT` だけを許可したとき `SELECT "Amount"` を拒否する（修正前はどちらも `AMOUNT` として許可していた）。同名表を JOIN したときの表名修飾（`"Mixed_Case"."Amount"`）も引用規則で解決する |
+| 画面 | スキーマ参照の列詳細は token で要求する。業務プロファイルのスキーマ別グループは owner を大文字化せず、`"Sales"` と `SALES` を別グループとして件数・一括選択する（表示は SQL と同じ表記）。オントロジーの物理名表示とグラフの cluster も大文字化しない |
+
+#### 既存データの互換
+
+- 引用が不要な名前（辞書上の名前が大文字化しても変わるものがない名前）は、保存値・キー・SQL・API 応答・オントロジーの ID が従来と同じ。schema / migration の変更なし。
+- 修正前に保存された schema catalog の行は、小文字を含む名前も大文字化されている（列定義は大文字の同名表のもの、または取得できていない）。**DB 構造の全件再取得**で manifest の key が辞書上の名前に揃い、引用名の表は新しい行として取得される。大文字化された行は、大文字の同名表が無ければ削除され、あればその表の行として比較・更新される（targeted refresh は対象 object だけを更新する）。
+- オントロジーは、再取得後の catalog から作る次の revision で引用名の node が別 node になる。修正前の revision で 1 node に潰れていた同名表の業務定義・mapping は自動では付け替えない（どちらの表を意図したか判別できないため、ID が変わらない大文字の表の node に残る）。
+- API の入力: 引用なしの小文字（`/api/schema/objects/sales/orders`、`owner=sales`、列 `amount`）は従来どおり大文字として解釈する。辞書上の小文字の名前をそのまま渡していたクライアント（`owner=Sales`）は、`owner="Sales"` と引用して渡す必要がある。
 
 ### 画面表示
 

@@ -1,5 +1,6 @@
 // Ontology グラフの決定論レイアウト(semantic matrix)。
 // 4 つの意味レーン × object クラスタ列に配置し、同じグラフは常に同じ座標になる。
+import { formatDbObjectName } from "../dbObjectIdentity";
 import type { OntologyGraph, OntologyJsonValue, OntologyNode, OntologyNodeKind } from "./types";
 
 export interface GraphPoint {
@@ -79,7 +80,7 @@ function jsonNumber(value: OntologyJsonValue | undefined): number | null {
 }
 
 function normalizeIdentifier(value: string | undefined): string {
-  return (value ?? "").trim().toLocaleUpperCase("en-US");
+  return (value ?? "").trim();
 }
 
 function splitQualifiedName(value: string | undefined): {
@@ -143,7 +144,9 @@ export function ontologyGraphObjectClusterKey(node: OntologyNode): string | null
       technical.objectName
   );
   if (!objectName) return null;
-  return stableClusterId("object", owner ? `${owner}.${objectName}` : objectName);
+  // カタログ上の名前を引用規則の表記にしてから ID 化する。大文字化だけでは `SALES."Mixed_Case"` と
+  // 大文字の同名表 `SALES.MIXED_CASE` が同じ cluster になる（#563）。
+  return stableClusterId("object", formatDbObjectName({ owner, name: objectName }));
 }
 
 function enumParentClusterKey(node: OntologyNode, clusterByNodeId: Map<string, string>): string | null {

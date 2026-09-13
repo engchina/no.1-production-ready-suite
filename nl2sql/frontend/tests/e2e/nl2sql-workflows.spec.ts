@@ -4035,7 +4035,7 @@ test("owner 付きの許可表でもスキーマ参照が対象表に絞り込�
   await expect(page.getByRole("button", { name: "請求 を開閉" })).toBeVisible();
 });
 
-test("引用名の許可表ではスキーマ参照を大文字の同名表まで広げない (#561)", async ({ page }) => {
+test("引用名の許可表ではスキーマ参照を大文字の同名表まで広げない (#561, #563)", async ({ page }) => {
   await mockNl2SqlApi(page);
   const baseTable = schemaCatalog.tables[0];
   const quotedCatalog = {
@@ -4088,10 +4088,14 @@ test("引用名の許可表ではスキーマ参照を大文字の同名表ま�
     })
   );
 
+  const detailPaths: string[] = [];
   await page.unroute("**/api/schema/objects/*/*");
   await page.route("**/api/schema/objects/*/*", (route) => {
     const parts = new URL(route.request().url()).pathname.split("/");
-    const objectName = decodeURIComponent(parts.at(-1) ?? "");
+    const rawName = decodeURIComponent(parts.at(-1) ?? "");
+    detailPaths.push(rawName);
+    // backend と同じく path は Oracle の引用規則で解釈する（#563）。
+    const objectName = /^".*"$/u.test(rawName) ? rawName.slice(1, -1) : rawName.toUpperCase();
     const table = quotedCatalog.tables.find((item) => item.table_name === objectName);
     return table
       ? fulfillJson(route, { table, dependencies: [], catalog_version: 1, etag: "schema-mock" })
@@ -4106,6 +4110,10 @@ test("引用名の許可表ではスキーマ参照を大文字の同名表ま�
   await page.getByRole("textbox", { name: "表・項目検索" }).fill("請求");
   await expect(page.getByRole("button", { name: "引用名の請求 を開閉" })).toBeVisible();
   await expect(page.getByRole("button", { name: "大文字の請求 を開閉" })).toHaveCount(0);
+  // 引用名の表の列詳細は token で要求する。引用なしの `Mixed_Case` は backend が `MIXED_CASE` と
+  // 解釈するため送らない（#563）。
+  await expect.poll(() => detailPaths).toContain('"Mixed_Case"');
+  expect(detailPaths).not.toContain("Mixed_Case");
 });
 
 test("query workbench generates SQL through the job flow and shows results", async ({ page }, testInfo) => {

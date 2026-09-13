@@ -1,10 +1,6 @@
 /** 業務プロファイルの許可オブジェクト選択に関する純粋ロジック。 */
 
-import {
-  normalizeDbIdentifierToken,
-  normalizeDbObjectKey,
-  splitDbObjectName,
-} from "./dbObjectIdentity";
+import { formatDbObjectPart, normalizeDbObjectKey, splitDbObjectName } from "./dbObjectIdentity";
 
 /**
  * 表記の揺れを吸収した突合キー（canonical な `OWNER.OBJECT`）。
@@ -16,9 +12,13 @@ export function normalizeObjectKey(name: string) {
   return normalizeDbObjectKey(name);
 }
 
-/** `OWNER.` 形式の接頭辞（または owner 名）を owner の突合キーにする。 */
+/**
+ * `OWNER.` 形式の接頭辞（または owner 名）を owner の突合キーにする。
+ * owner はスキーマ一覧のカタログ上の名前（大文字小文字を保持）。引用なしの入力として大文字化すると
+ * `"Sales"` のグループで `SALES` の object を数える・外す（#563）。
+ */
 function normalizeOwnerKey(ownerPrefix: string) {
-  return normalizeDbIdentifierToken(ownerPrefix.trim().replace(/\.$/u, ""));
+  return formatDbObjectPart(ownerPrefix.trim().replace(/\.$/u, ""));
 }
 
 /** object 名が指定 owner に属するか。文字列の前方一致ではなく owner 部分で比較する。 */

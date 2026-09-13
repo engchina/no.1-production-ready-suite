@@ -216,33 +216,38 @@ def test_resolved_table_owner_keeps_quoted_name_for_display() -> None:
 def test_generation_catalog_does_not_use_upper_table_detail_for_quoted_profile_object(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.features.nl2sql.models import SchemaObjectDetail, SchemaObjectPage
+    from app.features.nl2sql.incremental_store import MemoryIncrementalNl2SqlRepository
+    from app.features.nl2sql.models import SchemaColumn
 
     upper = _table("SALES", "MIXED_CASE")
-
-    class Repository:
-        def get_schema_object(self, owner: str, object_name: str) -> SchemaObjectDetail | None:
-            # schema catalog の詳細取得は大文字小文字を区別しない（既存の制約を再現する）。
-            if (owner.upper(), object_name.upper()) == ("SALES", "MIXED_CASE"):
-                return SchemaObjectDetail(table=upper)
-            return None
-
-        def search_schema_objects(self, **_kwargs: Any) -> SchemaObjectPage:
-            return SchemaObjectPage()
+    upper.columns = [
+        SchemaColumn(column_name="UPPER_ONLY", logical_name="大文字", data_type="NUMBER")
+    ]
+    quoted = _table("SALES", "Mixed_Case")
+    quoted.columns = [SchemaColumn(column_name="Amount", logical_name="引用名", data_type="NUMBER")]
+    repository = MemoryIncrementalNl2SqlRepository(seed_default=False)
+    catalog = SchemaCatalog(refreshed_at="2026-09-14T00:00:00+00:00", tables=[upper, quoted])
+    manifest = {(t.owner, t.table_name): "v1" for t in catalog.tables}
+    repository.apply_schema_refresh(
+        catalog=catalog, manifest=manifest, changed_keys=set(manifest), deleted_keys=set()
+    )
 
     service = _both_tables_service()
     profile = service.create_profile(
         Nl2SqlProfile(id="quoted", name="引用名", allowed_tables=[QUOTED])
     )
-    service._incremental_repository = Repository()  # type: ignore[assignment]  # noqa: SLF001
+    service._incremental_repository = repository  # noqa: SLF001
     monkeypatch.setattr(service, "_refresh_cache_token", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(service, "get_catalog_head", lambda: service._catalog)  # noqa: SLF001
     monkeypatch.setattr(service, "_profile_scope_for_read", lambda value, **_kwargs: value)
 
-    with pytest.raises(ValueError):
-        service._generation_schema_catalog(  # noqa: SLF001
-            profile, AllowedObjects(table_names=[QUOTED], enforce_table_scope=True)
-        )
+    # #563 から schema catalog の詳細取得は大文字小文字を区別する。引用名の Profile には
+    # 引用名の表の定義だけを使い、大文字の同名表の定義を使わない。
+    generated = service._generation_schema_catalog(  # noqa: SLF001
+        profile, AllowedObjects(table_names=[QUOTED], enforce_table_scope=True)
+    )
+
+    assert [(t.owner, t.table_name) for t in generated.tables] == [("SALES", "Mixed_Case")]
+    assert [c.column_name for c in generated.tables[0].columns] == ["Amount"]
 
 
 # --- Select AI の object_list --------------------------------------------------
@@ -337,7 +342,7 @@ def test_ontology_build_selects_exact_catalog_object_and_skips_quoted_profile_ob
     assert upper_warnings == [] and upper_errors == []
     assert quoted_selected == []
     assert quoted_errors == []
-    assert "オントロジー構築の対象にできません" in quoted_warnings[0]
+    assert "オントロジーの AI 構築の対象にできません" in quoted_warnings[0]
 
 
 def test_profile_ontology_view_does_not_map_quoted_profile_object_to_upper_node() -> None:

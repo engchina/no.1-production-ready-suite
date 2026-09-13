@@ -49,6 +49,7 @@ from app.features.nl2sql.ontology_models import (
 )
 from app.features.nl2sql.ontology_store import (
     compute_etag,
+    physical_identity_part,
     schema_fingerprint,
     stable_ontology_id,
     stable_physical_id,
@@ -131,7 +132,21 @@ class AmbiguousPhysicalObjectError(ValueError):
 
 
 def _oracle_name(value: str) -> str:
-    return unicodedata.normalize("NFC", value.strip()).upper()
+    """カタログ上の owner / object / column 名（大文字小文字を保持）。
+
+    #563 より前は大文字化していたため、`MIXED_CASE` と `"Mixed_Case"` が 1 node に潰れていた。
+    """
+
+    return unicodedata.normalize("NFC", value.strip())
+
+
+def _identity_name(value: str) -> str:
+    """ID・technical_name・fingerprint に使う名前（`physical_identity_part`）。
+
+    大文字化しても変わらない名前は従来と同じ値、小文字を含む名前だけ `"Mixed_Case"` になる。
+    """
+
+    return physical_identity_part(_oracle_name(value))
 
 
 def _catalog_name_token(value: str) -> str:
@@ -177,14 +192,14 @@ def _catalog_semantic_payload(catalog: SchemaCatalog) -> dict[str, object]:
     return {
         "tables": [
             {
-                "owner": _oracle_name(table.owner),
-                "table_name": _oracle_name(table.table_name),
+                "owner": _identity_name(table.owner),
+                "table_name": _identity_name(table.table_name),
                 "table_type": table.table_type.casefold(),
                 "logical_name": table.logical_name,
                 "comment": table.comment,
                 "columns": [
                     {
-                        "column_name": _oracle_name(column.column_name),
+                        "column_name": _identity_name(column.column_name),
                         "logical_name": column.logical_name,
                         "data_type": column.data_type,
                         "nullable": column.nullable,
@@ -197,14 +212,14 @@ def _catalog_semantic_payload(catalog: SchemaCatalog) -> dict[str, object]:
                     {
                         "constraint_name": detail.constraint_name,
                         "constraint_type": detail.constraint_type,
-                        "owner": _oracle_name(detail.owner),
-                        "table_name": _oracle_name(detail.table_name),
+                        "owner": _identity_name(detail.owner),
+                        "table_name": _identity_name(detail.table_name),
                         # Composite key order is semantically significant.
-                        "source_columns": [_oracle_name(value) for value in detail.columns],
-                        "referenced_owner": _oracle_name(detail.referenced_owner or ""),
-                        "referenced_table": _oracle_name(detail.referenced_table or ""),
+                        "source_columns": [_identity_name(value) for value in detail.columns],
+                        "referenced_owner": _identity_name(detail.referenced_owner or ""),
+                        "referenced_table": _identity_name(detail.referenced_table or ""),
                         "target_columns": [
-                            _oracle_name(value) for value in detail.referenced_columns
+                            _identity_name(value) for value in detail.referenced_columns
                         ],
                         "delete_rule": detail.delete_rule,
                         "status": detail.status,
@@ -217,10 +232,10 @@ def _catalog_semantic_payload(catalog: SchemaCatalog) -> dict[str, object]:
         ],
         "view_dependencies": [
             {
-                "owner": _oracle_name(dependency.owner),
-                "view_name": _oracle_name(dependency.view_name),
-                "referenced_owner": _oracle_name(dependency.referenced_owner),
-                "referenced_name": _oracle_name(dependency.referenced_name),
+                "owner": _identity_name(dependency.owner),
+                "view_name": _identity_name(dependency.view_name),
+                "referenced_owner": _identity_name(dependency.referenced_owner),
+                "referenced_name": _identity_name(dependency.referenced_name),
                 "referenced_type": dependency.referenced_type.casefold(),
             }
             for dependency in catalog.view_dependencies
@@ -274,16 +289,17 @@ def build_schema_ontology(
 
     def add_schema(owner: str) -> OntologyNode:
         normalized_owner = _oracle_name(owner or "APP")
-        node_id = stable_physical_id("schema", normalized_owner, normalized_owner)
+        identity_owner = physical_identity_part(normalized_owner)
+        node_id = stable_physical_id("schema", identity_owner, identity_owner)
         if node_id not in nodes:
             nodes[node_id] = OntologyNode(
                 id=node_id,
                 revision_id=resolved_revision_id,
                 kind=OntologyNodeKind.SCHEMA,
-                technical_name=normalized_owner,
+                technical_name=identity_owner,
                 business_name_ja=normalized_owner,
                 description_ja="Oracle schema",
-                aliases=[normalized_owner],
+                aliases=_unique([normalized_owner, identity_owner]),
                 provenance=provenance,
                 review_status=OntologyReviewStatus.APPROVED,
                 metadata={"owner": normalized_owner},
@@ -320,7 +336,12 @@ def build_schema_ontology(
         normalized_owner = _oracle_name(owner or "APP")
         normalized_name = _oracle_name(name)
         physical_type = _object_type(kind)
-        node_id = stable_physical_id(physical_type, normalized_owner, normalized_name)
+        # ID と technical_name は physical_identity_part で作る。小文字を含む引用名
+        # （`SALES."Mixed_Case"`）を大文字の同名表と別 node にし、既存名の ID は変えない（#563）。
+        identity_owner = physical_identity_part(normalized_owner)
+        identity_name = physical_identity_part(normalized_name)
+        technical_name = f"{identity_owner}.{identity_name}"
+        node_id = stable_physical_id(physical_type, identity_owner, identity_name)
         if node_id not in nodes:
             object_ref = PhysicalObjectRef(
                 node_id=node_id,
@@ -332,11 +353,11 @@ def build_schema_ontology(
                 id=node_id,
                 revision_id=resolved_revision_id,
                 kind=kind,
-                technical_name=f"{normalized_owner}.{normalized_name}",
+                technical_name=technical_name,
                 business_name_ja=logical_name.strip() or normalized_name,
                 description_ja=comment.strip()
                 or ("外部参照として検出された object" if external else ""),
-                aliases=_unique([normalized_name, f"{normalized_owner}.{normalized_name}"]),
+                aliases=_unique([normalized_name, technical_name]),
                 physical_mappings=[PhysicalMapping(object_ref=object_ref)],
                 provenance=provenance,
                 review_status=OntologyReviewStatus.APPROVED,
@@ -365,7 +386,14 @@ def build_schema_ontology(
         owner = str(object_node.metadata["owner"])
         object_name = str(object_node.metadata["object_name"])
         normalized_column = _oracle_name(column_name)
-        node_id = stable_physical_id("column", owner, object_name, normalized_column)
+        identity_prefix = f"{physical_identity_part(owner)}.{physical_identity_part(object_name)}"
+        identity_column = physical_identity_part(normalized_column)
+        node_id = stable_physical_id(
+            "column",
+            physical_identity_part(owner),
+            physical_identity_part(object_name),
+            identity_column,
+        )
         if node_id not in nodes:
             object_ref = PhysicalObjectRef(
                 node_id=object_node.id,
@@ -384,14 +412,14 @@ def build_schema_ontology(
                 id=node_id,
                 revision_id=resolved_revision_id,
                 kind=OntologyNodeKind.COLUMN,
-                technical_name=f"{owner}.{object_name}.{normalized_column}",
+                technical_name=f"{identity_prefix}.{identity_column}",
                 business_name_ja=logical_name.strip() or normalized_column,
                 description_ja=comment.strip(),
                 aliases=_unique(
                     [
                         normalized_column,
-                        f"{object_name}.{normalized_column}",
-                        f"{owner}.{object_name}.{normalized_column}",
+                        f"{physical_identity_part(object_name)}.{identity_column}",
+                        f"{identity_prefix}.{identity_column}",
                     ]
                 ),
                 physical_mappings=[
@@ -441,7 +469,9 @@ def build_schema_ontology(
         owner = _oracle_name(table.owner or "APP")
         source_name = _oracle_name(table.table_name)
         source_id = stable_physical_id(
-            _object_type(_object_kind(table.table_type)), owner, source_name
+            _object_type(_object_kind(table.table_type)),
+            physical_identity_part(owner),
+            physical_identity_part(source_name),
         )
         source = nodes[source_id]
         unique_column_sets = {
@@ -481,11 +511,11 @@ def build_schema_ontology(
                 )
             edge_id = stable_physical_id(
                 "foreign_key",
-                owner,
-                source_name,
-                detail.constraint_name,
-                target_owner,
-                target_name,
+                physical_identity_part(owner),
+                physical_identity_part(source_name),
+                physical_identity_part(detail.constraint_name),
+                physical_identity_part(target_owner),
+                physical_identity_part(target_name),
             )
             source_columns = tuple(_oracle_name(value) for value in detail.columns)
             mapping_complete = (
@@ -558,7 +588,13 @@ def build_schema_ontology(
             comment=target_table.comment if target_table else "",
             external=target_table is None,
         )
-        edge_id = stable_physical_id("lineage", owner, view_name, target_owner, target_name)
+        edge_id = stable_physical_id(
+            "lineage",
+            physical_identity_part(owner),
+            physical_identity_part(view_name),
+            physical_identity_part(target_owner),
+            physical_identity_part(target_name),
+        )
         edges[edge_id] = OntologyEdge(
             id=edge_id,
             revision_id=resolved_revision_id,
