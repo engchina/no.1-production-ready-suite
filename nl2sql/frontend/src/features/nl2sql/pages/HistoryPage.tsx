@@ -794,7 +794,7 @@ export function HistoryPage() {
           },
         ]}
       />
-      <PageBody wide className="grid gap-3 p-3">
+      <PageBody wide className="grid gap-3">
         <HistorySafetyHelp />
         <PageNotice
           notice={message ? { tone: "danger", message: `${message} ${t("history.error.retryHint")}` } : null}
