@@ -549,6 +549,17 @@ test("業務プロファイル一覧検索はAPI totalを件数表示に使い�
   await expect(listPanel.getByText("PROFILE_DEPT", { exact: true })).toHaveCount(0);
   await expect(profileList).toHaveCSS("max-height", "280px");
   await expectNoDocumentHorizontalOverflow(page);
+  // 区切りのない名前でも名前セルの内容が許可表の列へはみ出さない（#535）。
+  const nameCellOverflow = await page.getByTestId("profile-management-grid").locator("tbody td:first-child").evaluateAll((cells) =>
+    cells.flatMap((cell) => {
+      const cellRight = cell.getBoundingClientRect().right;
+      return Array.from(cell.querySelectorAll("button, button > span"))
+        .map((node) => node.getBoundingClientRect().right)
+        .filter((right) => right > cellRight + 1)
+        .map((right) => `${cell.textContent}: ${right} > ${cellRight}`);
+    })
+  );
+  expect(nameCellOverflow).toEqual([]);
 });
 
 test("業務プロファイルの対象オブジェクト件数は取得済み件数と API total を分けて表示する", async ({ page }) => {

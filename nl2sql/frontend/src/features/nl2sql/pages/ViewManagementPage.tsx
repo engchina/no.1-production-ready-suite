@@ -119,8 +119,8 @@ function ViewJoinWherePanel({
           data-testid="view-join-where-selected-view"
         >
           <div className="flex flex-wrap items-center gap-2">
-            <StatusBadge variant="neutral" label={detail.object_type} />
-            <StatusBadge variant="info" label={detail.name} />
+            <StatusBadge icon={false} variant="neutral" label={detail.object_type} />
+            <StatusBadge icon={false} variant="info" label={detail.name} />
           </div>
           <p className="text-sm text-fg-muted">{t("viewMgmt.joinWhere.selectedHint")}</p>
         </section>
@@ -142,7 +142,7 @@ function ViewJoinWherePanel({
               {t("viewMgmt.joinWhere.advancedSettingsHint")}
             </p>
           </div>
-          <StatusBadge variant="info" label={joinWherePromptProfileLabel()} />
+          <StatusBadge icon={false} variant="info" label={joinWherePromptProfileLabel()} />
         </div>
         <div className="grid gap-2 rounded-md border border-border bg-surface p-3">
           <p className="text-sm font-medium text-fg">
@@ -218,8 +218,9 @@ function ViewJoinWherePanel({
       ) : result ? (
         <section className="grid gap-3 rounded-md border border-border bg-surface-sunken p-3 text-sm" aria-label={t("viewMgmt.joinWhere.result")}>
           <div className="flex flex-wrap gap-2">
-            <StatusBadge variant={result.source === "oci_enterprise_ai" ? "success" : "neutral"} label={result.source} />
+            <StatusBadge icon={false} variant={result.source === "oci_enterprise_ai" ? "success" : "neutral"} label={result.source} />
             <StatusBadge
+              icon={false}
               variant="info"
               label={joinWherePromptProfileLabel()}
             />
@@ -763,6 +764,7 @@ export function ViewManagementPage() {
               }
             >
             <DbObjectGrid
+              showComments
               idPrefix={VIEW_MANAGEMENT_ID}
               headingId="view-grid-heading"
               icon={Eye}

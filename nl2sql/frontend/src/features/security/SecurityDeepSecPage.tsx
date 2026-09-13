@@ -509,7 +509,7 @@ function DeepSecTargetObjectPicker({
                 })
               : t("security.deepsec.entitlements.objectPlaceholder")}
           </span>
-          <StatusBadge variant="info" label={loadedLabel} />
+          <StatusBadge icon={false} variant="info" label={loadedLabel} />
         </div>
         {error ? (
           <FormStatus
@@ -2111,6 +2111,7 @@ export function SecurityDeepSecPage() {
                                 label={entitlementRoleStatus(selectedEntitlementRole).label}
                               />
                               <StatusBadge
+                                icon={false}
                                 variant="info"
                                 label={t("security.deepsec.entitlements.count", {
                                   count: entitlementDraftRows.length,

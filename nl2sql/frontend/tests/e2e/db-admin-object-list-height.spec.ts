@@ -795,9 +795,62 @@ async function expectSingleLine(locator: Locator) {
     range.selectNodeContents(node);
     const rects = Array.from(range.getClientRects()).filter((rect) => rect.width > 0 && rect.height > 0);
     range.detach();
-    return rects.length;
+    // 識別子は <wbr> で text node が分かれ、同じ行でも rect が複数になるため行の top で数える。
+    return new Set(rects.map((rect) => Math.round(rect.top))).size;
   });
   expect(lineCount).toBeLessThanOrEqual(1);
+}
+
+/**
+ * 一覧の各行で、セルの内容（バッジ・文字）が自セルの右端と、同じ行に並ぶ次のセルの左端を超えないことを実測する。
+ * sr-only（absolute）と非表示要素は除外する。
+ */
+async function expectRowCellsDoNotOverlap(rows: Locator) {
+  expect(await rows.count()).toBeGreaterThan(0);
+  const problems = await rows.evaluateAll((rowNodes) => {
+    const found: string[] = [];
+    const isMeasured = (element: Element) => {
+      const style = getComputedStyle(element);
+      return style.display !== "none" && style.visibility !== "hidden" && style.position !== "absolute";
+    };
+    for (const row of rowNodes) {
+      const cells = Array.from(row.children).filter((cell) => isMeasured(cell) && cell.getBoundingClientRect().width > 0);
+      cells.forEach((cell, index) => {
+        const cellBox = cell.getBoundingClientRect();
+        let contentRight = cellBox.left;
+        const walker = document.createTreeWalker(cell, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, {
+          acceptNode: (node) =>
+            node instanceof Element && !isMeasured(node) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT,
+        });
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          const rects = node instanceof Element
+            ? [node.getBoundingClientRect()]
+            : (() => {
+                const range = document.createRange();
+                range.selectNodeContents(node);
+                return Array.from(range.getClientRects());
+              })();
+          for (const rect of rects) {
+            if (rect.width > 0 && rect.height > 0) contentRight = Math.max(contentRight, rect.right);
+          }
+        }
+        const label = `${row.textContent?.trim().slice(0, 40)} / cell ${index}`;
+        if (contentRight > cellBox.right + 1) found.push(`${label}: content ${contentRight} > cell ${cellBox.right}`);
+        const next = cells[index + 1]?.getBoundingClientRect();
+        const sameLine = next && next.top < cellBox.bottom - 1 && next.bottom > cellBox.top + 1;
+        if (next && sameLine && contentRight > next.left + 1) {
+          found.push(`${label}: content ${contentRight} > next cell ${next.left}`);
+        }
+      });
+    }
+    return found;
+  });
+  expect(problems).toEqual([]);
+}
+
+async function expectNoStatusIcon(badge: Locator) {
+  await expect(badge).toBeVisible();
+  await expect(badge.locator("svg")).toHaveCount(0);
 }
 
 function expectedObjectListRows(testInfo: TestInfo) {
@@ -911,51 +964,136 @@ test("コメント付きテーブル一覧でも読込・取得エラー・再�
   await expectNoHorizontalScroll(page);
 });
 
-test("テーブル管理は Profile 一覧と同じ補足表示でコメントを名前の下に表示する", async ({ page }, testInfo) => {
-  const shortComment = "請求書の金額と支払期日を管理します。";
-  const longComment = "長い日本語のテーブルコメントです。".repeat(12) + "LONG_IDENTIFIER_".repeat(12);
-  await mockObjectManagementApi(page, scenarios[0], {
-    itemCount: 1,
-    extraItems: [
-      { name: "INVOICES", owner: "APP", object_type: "table", row_count: 10, comment: shortComment },
-      { name: "LONG_COMMENT", owner: "APP", object_type: "table", row_count: 20, comment: longComment },
-      { name: "WHITESPACE", owner: "APP", object_type: "table", row_count: null, comment: "   " },
-    ],
+for (const scenario of scenarios) {
+  test(`${scenario.title}は Profile 一覧と同じ補足表示でコメントを名前の下に表示する`, async ({ page }, testInfo) => {
+    const shortComment = "請求書の金額と支払期日を管理します。";
+    const longComment = "長い日本語のオブジェクトコメントです。".repeat(12) + "LONG_IDENTIFIER_".repeat(12);
+    await mockObjectManagementApi(page, scenario, {
+      itemCount: 1,
+      extraItems: [
+        { name: "INVOICES", owner: "APP", object_type: scenario.objectType, row_count: 10, comment: shortComment },
+        { name: "LONG_COMMENT", owner: "APP", object_type: scenario.objectType, row_count: 20, comment: longComment },
+        { name: "WHITESPACE", owner: "APP", object_type: scenario.objectType, row_count: null, comment: "   " },
+      ],
+    });
+    await page.goto(scenario.path);
+    const idPrefix = `${scenario.objectType}-management`;
+    const grid = page.getByTestId(`${idPrefix}-grid`);
+    await expect(grid.locator("tbody tr")).toHaveCount(4);
+    await expect(grid.getByRole("columnheader", { name: /コメント/ })).toHaveCount(0);
+    for (const [name, comment] of [["INVOICES", shortComment], ["LONG_COMMENT", longComment], [`${scenario.prefix}_01`, "-"], ["WHITESPACE", "-"]]) {
+      const button = grid.getByRole("button", { name: `APP.${name} を表示`, exact: true });
+      const text = button.locator(":scope > span").nth(1);
+      await expect(text).toHaveText(comment);
+      await expect(button).toHaveAccessibleDescription(comment);
+      const layout = await button.evaluate((node) => {
+        const [name, comment] = Array.from(node.querySelectorAll(":scope > span"));
+        const nameBox = name.getBoundingClientRect();
+        const commentBox = comment.getBoundingClientRect();
+        const cellBox = node.closest("td")!.getBoundingClientRect();
+        const style = getComputedStyle(comment);
+        return { below: commentBox.top >= nameBox.bottom, contained: commentBox.left >= cellBox.left && commentBox.right <= cellBox.right,
+          clamp: style.webkitLineClamp, height: commentBox.height, lineHeight: parseFloat(style.lineHeight) };
+      });
+      expect(layout.below).toBe(true);
+      expect(layout.contained).toBe(true);
+      expect(layout.clamp).toBe("2");
+      expect(layout.height).toBeLessThanOrEqual(layout.lineHeight * 2 + 1);
+    }
+    await expectRowCellsDoNotOverlap(grid.locator("tbody tr"));
+    await expectNoStatusIcon(page.locator(`section[aria-labelledby='${scenario.objectType}-grid-heading'] [data-status-variant]`).first());
+    await grid.getByText(shortComment, { exact: true }).click();
+    await expect(page.getByTestId(`${idPrefix}-detail-header`)).toContainText("INVOICES");
+    const longButton = grid.getByRole("button", { name: "APP.LONG_COMMENT を表示", exact: true });
+    await longButton.focus();
+    await page.keyboard.press("Enter");
+    await expect(longButton).toHaveAttribute("aria-current", "true");
+    const gridScroll = await page.getByTestId("db-admin-object-list").evaluate((node) => node.scrollWidth - node.clientWidth);
+    expect(gridScroll).toBeLessThanOrEqual(1);
+    await grid.screenshot({ path: testInfo.outputPath(`${scenario.objectType}-name-comments.png`) });
+    await expectNoHorizontalScroll(page);
+    await page.getByRole("searchbox", { name: "検索" }).fill("支払期日");
+    await expect(grid.locator("tbody tr")).toHaveCount(1);
+    await expect(grid.getByText(shortComment, { exact: true })).toBeVisible();
   });
-  await page.goto("/table-management");
-  const grid = page.getByTestId("table-management-grid");
-  await expect(grid.locator("tbody tr")).toHaveCount(4);
-  await expect(grid.getByRole("columnheader", { name: /コメント/ })).toHaveCount(0);
-  for (const [name, comment] of [["INVOICES", shortComment], ["LONG_COMMENT", longComment], ["TABLE_01", "-"], ["WHITESPACE", "-"]]) {
-    const button = grid.getByRole("button", { name: `APP.${name} を表示`, exact: true });
-    const text = button.locator("span").nth(1);
-    await expect(text).toHaveText(comment);
+}
+
+test("データ管理の対象一覧はコメントを名前の下に表示し、種類・行数が隣の列に重ならない", async ({ page }, testInfo) => {
+  const shortComment = "伝票の処理履歴を保持します。";
+  const longComment = "長い日本語のテーブルコメントです。".repeat(10);
+  const items = [
+    { name: "DENPYO_ACTIVITY_LOG", owner: "ADMIN", object_type: "table", row_count: 266, comment: shortComment },
+    { name: "LONG_COMMENT_TABLE", owner: "ADMIN", object_type: "table", row_count: null, comment: longComment },
+    { name: "EMPTY_COMMENT", owner: "ADMIN", object_type: "table", row_count: 1234567, comment: "  " },
+    { name: "ORDER_SUMMARY_V", owner: "ADMIN", object_type: "view", row_count: null, comment: "受注サマリ" },
+  ];
+  const tableItems = items.filter((item) => item.object_type === "table");
+  await page.route("**/api/schema/catalog", (route) => fulfillJson(route, managementCatalog));
+  await page.route("**/api/nl2sql/db-admin/objects?*", (route) => {
+    const url = new URL(route.request().url());
+    const type = url.searchParams.get("type") ?? "all";
+    const q = (url.searchParams.get("q") ?? url.searchParams.get("search") ?? "").toLowerCase();
+    const source = (type === "table" ? tableItems : items).filter((item) =>
+      !q || `${item.name} ${item.comment}`.toLowerCase().includes(q)
+    );
+    return fulfillJson(route, {
+      runtime: "deterministic", owner: "ADMIN", items: source, total: source.length,
+      table_count: source.filter((item) => item.object_type === "table").length,
+      view_count: source.filter((item) => item.object_type === "view").length,
+      next_cursor: null, refreshed_at: managementCatalog.refreshed_at, catalog_version: 1, warnings: [],
+    });
+  });
+  await page.goto("/data-management");
+
+  const controls = page.locator("section[aria-labelledby='data-preview-controls-heading']");
+  for (const label of ["全4件", "テーブル3", "ビュー1"]) {
+    await expectNoStatusIcon(controls.locator("[data-status-variant]").filter({ hasText: label }));
+  }
+  const previewList = page.getByTestId("data-preview-object-list");
+  await expect(previewList.getByRole("listitem")).toHaveCount(4);
+  for (const [name, comment] of [
+    ["DENPYO_ACTIVITY_LOG", shortComment],
+    ["LONG_COMMENT_TABLE", longComment],
+    ["EMPTY_COMMENT", "-"],
+    ["ORDER_SUMMARY_V", "受注サマリ"],
+  ]) {
+    const button = previewList.getByRole("button", { name: `ADMIN.${name} を選択`, exact: true });
     await expect(button).toHaveAccessibleDescription(comment);
     const layout = await button.evaluate((node) => {
-      const [name, comment] = Array.from(node.querySelectorAll("span"));
-      const nameBox = name.getBoundingClientRect();
-      const commentBox = comment.getBoundingClientRect();
-      const cellBox = node.closest("td")!.getBoundingClientRect();
-      const style = getComputedStyle(comment);
-      return { below: commentBox.top >= nameBox.bottom, contained: commentBox.left >= cellBox.left && commentBox.right <= cellBox.right,
-        clamp: style.webkitLineClamp, height: commentBox.height, lineHeight: parseFloat(style.lineHeight) };
+      const [nameNode, commentNode] = Array.from(node.querySelectorAll(":scope > span"));
+      const nameBox = nameNode.getBoundingClientRect();
+      const commentBox = commentNode.getBoundingClientRect();
+      const style = getComputedStyle(commentNode);
+      return { below: commentBox.top >= nameBox.bottom - 1, clamp: style.webkitLineClamp, height: commentBox.height, lineHeight: parseFloat(style.lineHeight), text: commentNode.textContent };
     });
+    expect(layout.text).toBe(comment);
     expect(layout.below).toBe(true);
-    expect(layout.contained).toBe(true);
     expect(layout.clamp).toBe("2");
     expect(layout.height).toBeLessThanOrEqual(layout.lineHeight * 2 + 1);
   }
-  await grid.getByText(shortComment, { exact: true }).click();
-  await expect(page.getByTestId("table-management-detail-header")).toContainText("INVOICES");
-  const longButton = grid.getByRole("button", { name: "APP.LONG_COMMENT を表示", exact: true });
-  await longButton.focus();
-  await page.keyboard.press("Enter");
-  await expect(longButton).toHaveAttribute("aria-current", "true");
-  await grid.screenshot({ path: testInfo.outputPath("table-name-comments.png") });
+  for (const kind of ["テーブル", "ビュー"]) {
+    await expectNoStatusIcon(previewList.locator("[data-status-variant]").filter({ hasText: kind }).first());
+  }
+  await expectRowCellsDoNotOverlap(previewList.getByRole("listitem"));
+  // 識別子は語の途中ではなく . / _ の位置で折り返す（1 行に収まる場合は折り返さない）。
+  const nameBreaks = await previewList.getByRole("button", { name: "ADMIN.DENPYO_ACTIVITY_LOG を選択", exact: true })
+    .locator(":scope > span").first()
+    .evaluate((node) => Array.from(node.childNodes).filter((child) => child.nodeType === Node.TEXT_NODE).map((child) => child.textContent));
+  expect(nameBreaks).toEqual(["ADMIN.", "DENPYO_", "ACTIVITY_", "LOG"]);
+  await previewList.screenshot({ path: testInfo.outputPath("data-preview-name-comments.png") });
+
+  await previewList.getByText(shortComment, { exact: true }).click();
+  await expect(previewList.getByRole("button", { name: "ADMIN.DENPYO_ACTIVITY_LOG を選択", exact: true })).toHaveAttribute("aria-current", "true");
   await expectNoHorizontalScroll(page);
-  await page.getByRole("searchbox", { name: "検索" }).fill("支払期日");
-  await expect(grid.locator("tbody tr")).toHaveCount(1);
-  await expect(grid.getByText(shortComment, { exact: true })).toBeVisible();
+
+  await page.getByRole("tab", { name: "Excel/CSV アップロード(既存テーブル)" }).click();
+  const csvList = page.getByTestId("data-csv-table-list");
+  await expect(csvList.getByRole("listitem")).toHaveCount(3);
+  await expect(csvList.getByRole("button", { name: "ADMIN.DENPYO_ACTIVITY_LOG を選択", exact: true })).toHaveAccessibleDescription(shortComment);
+  await expect(csvList.getByRole("button", { name: "ADMIN.EMPTY_COMMENT を選択", exact: true })).toHaveAccessibleDescription("-");
+  await expectRowCellsDoNotOverlap(csvList.getByRole("listitem"));
+  await csvList.screenshot({ path: testInfo.outputPath("data-csv-name-comments.png") });
+  await expectNoHorizontalScroll(page);
 });
 
 for (const scenario of scenarios) {
@@ -1078,6 +1216,69 @@ for (const scenario of scenarios) {
 }
 
 for (const scenario of metadataScenarios) {
+  test(`${scenario.title}は対象名の下にコメントを表示し、種類・所有者が重ならない`, async ({ page }, testInfo) => {
+    const longComment = "長い日本語の対象コメントです。".repeat(10);
+    await mockMetadataManagementApi(page, {
+      empty: true,
+      extraTableItems: [
+        { name: "DENPYO_ACTIVITY_LOG", owner: "ADMIN", object_type: "table", row_count: 266, comment: "伝票の処理履歴" },
+        { name: "LONG_COMMENT_TABLE", owner: "ADMIN", object_type: "table", row_count: null, comment: longComment },
+        { name: "NO_COMMENT", owner: "ADMIN", object_type: "table", row_count: null, comment: "" },
+      ],
+      extraViewItems: [
+        { name: "ORDER_SUMMARY_V", owner: "ADMIN", object_type: "view", row_count: null, comment: "受注サマリ" },
+      ],
+    });
+    await page.goto(scenario.path);
+
+    const grid = page.getByTestId(`${scenario.idPrefix}-target-grid`);
+    await expect(grid.locator("tbody tr")).toHaveCount(4);
+    await expect(grid.getByRole("columnheader")).toHaveText([/対象名/, /種類/, /所有者/]);
+    for (const [name, comment] of [
+      ["DENPYO_ACTIVITY_LOG", "伝票の処理履歴"],
+      ["LONG_COMMENT_TABLE", longComment],
+      ["NO_COMMENT", "-"],
+      ["ORDER_SUMMARY_V", "受注サマリ"],
+    ]) {
+      const checkbox = grid.getByRole("checkbox", { name: `ADMIN.${name} チェックで対象に含める`, exact: true });
+      await expect(checkbox).toHaveAccessibleDescription(comment);
+      const layout = await checkbox.evaluate((node) => {
+        const label = node.closest("label")!;
+        const nameNode = label.querySelector("[id$='-name']")!;
+        const commentNode = label.querySelector("[id$='-comment']")!;
+        const cellBox = node.closest("td")!.getBoundingClientRect();
+        const nameBox = nameNode.getBoundingClientRect();
+        const commentBox = commentNode.getBoundingClientRect();
+        const style = getComputedStyle(commentNode);
+        return {
+          below: commentBox.top >= nameBox.bottom - 1,
+          contained: commentBox.right <= cellBox.right + 1,
+          clamp: style.webkitLineClamp,
+          height: commentBox.height,
+          lineHeight: parseFloat(style.lineHeight),
+          nameLines: new Set(Array.from((() => { const r = document.createRange(); r.selectNodeContents(nameNode); return r.getClientRects(); })()).filter((rect) => rect.width > 0).map((rect) => Math.round(rect.top))).size,
+        };
+      });
+      expect(layout.below).toBe(true);
+      expect(layout.contained).toBe(true);
+      expect(layout.clamp).toBe("2");
+      expect(layout.height).toBeLessThanOrEqual(layout.lineHeight * 2 + 1);
+      if (testInfo.project.name === "desktop") expect(layout.nameLines).toBe(1);
+    }
+    for (const kind of ["テーブル", "ビュー"]) {
+      await expectNoStatusIcon(grid.locator("[data-status-variant]").filter({ hasText: kind }).first());
+    }
+    await expectRowCellsDoNotOverlap(grid.locator("tbody tr"));
+    await grid.getByText("伝票の処理履歴", { exact: true }).click();
+    await expect(grid.getByRole("checkbox", { name: "ADMIN.DENPYO_ACTIVITY_LOG チェックで対象に含める", exact: true })).toBeChecked();
+    await page.getByRole("searchbox", { name: "検索" }).fill("受注サマリ");
+    await expect(grid.locator("tbody tr")).toHaveCount(1);
+    await page.getByRole("searchbox", { name: "検索" }).clear();
+    await expect(grid.locator("tbody tr")).toHaveCount(4);
+    await grid.screenshot({ path: testInfo.outputPath(`${scenario.idPrefix}-target-comments.png`) });
+    await expectNoHorizontalScroll(page);
+  });
+
   test(`${scenario.title}は対象グリッドを5行の固定高さに収める`, async ({ page }) => {
     await mockMetadataManagementApi(page);
     await page.goto(scenario.path);

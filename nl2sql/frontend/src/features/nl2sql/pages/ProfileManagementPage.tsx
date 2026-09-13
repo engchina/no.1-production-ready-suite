@@ -27,6 +27,7 @@ import {
   type SelectFieldOption,
 } from "@engchina/production-ready-ui";
 import { ErrorState } from "@/components/StateViews";
+import { IdentifierText } from "@/components/IdentifierText";
 
 import { BulkSelectionActions } from "@/components/BulkSelectionActions";
 import { isInteractiveRowTarget } from "@/components/MasterDetailDataTable";
@@ -392,7 +393,7 @@ function ProfileList({
         title={t("profiles.list.title")}
         description={t("profiles.list.hint")}
         action={
-          <StatusBadge variant="info" label={t("profiles.objects.count", { count: totalCount })} />
+          <StatusBadge icon={false} variant="info" label={t("profiles.objects.count", { count: totalCount })} />
         }
       />
       <div className="grid gap-2 rounded-md border border-border bg-surface-sunken p-3">
@@ -467,8 +468,10 @@ function ProfileList({
                           aria-label={t("profiles.action.selectProfile", { name: profile.name })}
                           onClick={() => onSelect(profile)}
                         >
-                          <span className="break-words font-semibold text-accent-fg">{profile.name}</span>
-                          <span className="line-clamp-2 text-xs leading-5 text-fg-muted">{profile.category || "-"}</span>
+                          {/* 375px では名前列が狭く、区切りのない名前（PROFILE_EMP 等）の min-content が隣の列へはみ出すため、
+                              `_` の位置を優先して折り返し、最後の手段として任意位置で折り返す。 */}
+                          <IdentifierText value={profile.name} className="font-semibold text-accent-fg" />
+                          <span className="line-clamp-2 text-xs leading-5 text-fg-muted [overflow-wrap:anywhere]">{profile.category || "-"}</span>
                         </button>
                       </td>
                       <td className="px-3 py-2 text-right font-sans text-xs text-fg">{profile.allowed_table_count}</td>
@@ -1184,7 +1187,7 @@ function ProfileEditor({
           {profileAccessProfile.allowed_role_ids.length > 0 ? (
             <div className="flex flex-wrap gap-1.5">
               {profileAccessProfile.allowed_role_ids.map((roleId) => (
-                <StatusBadge key={roleId} variant="neutral" label={roleId} />
+                <StatusBadge icon={false} key={roleId} variant="neutral" label={roleId} />
               ))}
             </div>
           ) : (

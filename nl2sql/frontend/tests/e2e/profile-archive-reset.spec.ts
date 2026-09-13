@@ -62,6 +62,17 @@ async function expectProfileListNoHorizontalOverflow(page: Page) {
   expect(metrics.gridScrollWidth).toBeLessThanOrEqual(metrics.gridOffsetWidth + 1);
   expect(metrics.gridLeft).toBeGreaterThanOrEqual(metrics.listLeft - 1);
   expect(metrics.gridRight).toBeLessThanOrEqual(metrics.listRight + 1);
+  // 名前セルの内容（名前・カテゴリ）が狭い幅でも許可表の列へはみ出さない（#535）。
+  const nameCellOverflow = await page.getByTestId("profile-management-grid").locator("tbody td:first-child").evaluateAll((cells) =>
+    cells.flatMap((cell) => {
+      const cellRight = cell.getBoundingClientRect().right;
+      return Array.from(cell.querySelectorAll("button, button > span"))
+        .map((node) => node.getBoundingClientRect().right)
+        .filter((right) => right > cellRight + 1)
+        .map((right) => `${cell.textContent}: ${right} > ${cellRight}`);
+    })
+  );
+  expect(nameCellOverflow).toEqual([]);
   if (viewportWidth >= 768) {
     expect(metrics.gridWidth).toBeLessThanOrEqual(34 * 16 + 1);
     expect(Math.abs(metrics.gridLeft - metrics.listLeft)).toBeLessThanOrEqual(1);

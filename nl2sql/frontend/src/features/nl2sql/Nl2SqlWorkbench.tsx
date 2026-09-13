@@ -1464,10 +1464,11 @@ function ExecutableNl2SqlWorkbench() {
                             </span>
                           </span>
                           <StatusBadge
+                            icon={false}
                             variant={similarHistory.length > 0 ? "info" : "neutral"}
                             label={t("nl2sql.similar.count", { count: similarHistory.length })}
                           />
-                          <StatusBadge variant="success" label={t("nl2sql.similar.goodOnly")} />
+                          <StatusBadge icon={false} variant="success" label={t("nl2sql.similar.goodOnly")} />
                           {!similarHistoryUsedForGeneration && (
                             <StatusBadge variant="warning" label={t("nl2sql.similar.notUsedBadge")} />
                           )}

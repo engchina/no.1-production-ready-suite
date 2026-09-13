@@ -26,6 +26,7 @@ import { ContentActionBar } from "@/components/ContentActionBar";
 import { ProcessingIndicator } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";
 import { ErrorState } from "@/components/StateViews";
+import { IdentifierText } from "@/components/IdentifierText";
 import { apiGet, apiPost, isTimeoutError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
@@ -41,6 +42,7 @@ import {
   DbObjectSelectorFooter,
   DbObjectSelectorToolbar,
   DbObjectPanelHeader,
+  DbObjectCommentText,
   DbObjectStepIndicator,
   type DbObjectTab,
   dbAdminObjectQualifiedName,
@@ -740,10 +742,11 @@ function MetadataTargetGrid({
         action={
           <>
             <StatusBadge
+              icon={false}
               variant="neutral"
               label={t("command.count", { count: totalCount })}
             />
-            <StatusBadge variant="info" label={t("metadataSql.targets.selected", { count: selectedKeys.length })} />
+            <StatusBadge icon={false} variant="info" label={t("metadataSql.targets.selected", { count: selectedKeys.length })} />
           </>
         }
       />
@@ -807,12 +810,14 @@ function MetadataTargetGrid({
       ) : (
         <div className="overflow-hidden rounded-md border border-border bg-surface">
           <div className={INFORMATION_TABLE_FIVE_ROW_SCROLL_CLASS} data-testid="db-admin-object-list">
-            <table className="w-full min-w-[42rem] table-fixed divide-y divide-border text-left text-sm" data-testid={`${pageId}-target-grid`}>
+            {/* コメントは別列ではなく対象名の直下に置き（テーブル管理・ビュー管理・データ管理と同じ形式）、
+                空いた幅を対象名に回す。種類はバッジ「テーブル」＋セル余白が収まる幅にする。
+                狭い幅では対象名が 1 行に収まる最小幅を保ち、一覧内の横スクロールで種類・所有者を確認する（5 行の固定高さを維持）。 */}
+            <table className="w-full min-w-[28rem] table-fixed divide-y divide-border text-left text-sm" data-testid={`${pageId}-target-grid`}>
               <colgroup>
-                <col className="w-[16rem]" />
-                <col className="w-[6rem]" />
-                <col className="w-[7rem]" />
                 <col />
+                <col className="w-[7rem]" />
+                <col className="w-[8rem]" />
               </colgroup>
               <thead className="sticky top-0 z-10 bg-surface-sunken text-xs text-fg-muted">
                 <tr>
@@ -825,12 +830,12 @@ function MetadataTargetGrid({
                   <th className="whitespace-nowrap px-3 py-2">
                     <TargetSortButton label={t("metadataSql.targets.grid.owner")} sortKey="owner" sort={sort} onToggle={onSortChange} />
                   </th>
-                  <th className="whitespace-nowrap px-3 py-2">{t("metadataSql.targets.grid.comment")}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/70">
-                {items.map((item) => {
+                {items.map((item, index) => {
                   const selected = selectedSet.has(item.key);
+                  const rowId = `${pageId}-target-${index}`;
                   return (
                     <tr
                       key={item.key}
@@ -841,27 +846,27 @@ function MetadataTargetGrid({
                           <input
                             type="checkbox"
                             checked={selected}
+                            aria-labelledby={`${rowId}-name ${rowId}-hint`}
+                            aria-describedby={`${rowId}-comment`}
                             onChange={() => onToggle(item)}
                             className="mt-1 h-4 w-4 shrink-0 rounded border-border text-accent-fg focus:ring-focus-ring"
                           />
-                          <span className="min-w-0">
-                            <span className="block break-all font-mono text-xs font-semibold text-accent-fg">
-                              {item.qualifiedName}
+                          <span className="grid min-w-0">
+                            <span id={`${rowId}-name`} className="block font-mono text-xs font-semibold text-accent-fg">
+                              <IdentifierText value={item.qualifiedName} />
                             </span>
-                            <span className="sr-only">
+                            <DbObjectCommentText id={`${rowId}-comment`} comment={item.comment} />
+                            <span id={`${rowId}-hint`} className="sr-only">
                               {t("metadataSql.targets.grid.toggleHint")}
                             </span>
                           </span>
                         </label>
                       </td>
                       <td className="whitespace-nowrap px-3 py-1 align-top">
-                        <StatusBadge variant="neutral" label={targetTypeLabel(item.object_type)} />
+                        <StatusBadge icon={false} variant="neutral" label={targetTypeLabel(item.object_type)} />
                       </td>
-                      <td className="whitespace-nowrap px-3 py-1 align-top font-mono text-xs text-fg-muted">
-                        {item.owner || "-"}
-                      </td>
-                      <td className="break-words px-3 py-1 align-top text-sm text-fg">
-                        {item.comment || "-"}
+                      <td className="px-3 py-1 align-top font-mono text-xs text-fg-muted">
+                        <IdentifierText value={item.owner || "-"} />
                       </td>
                     </tr>
                   );
@@ -977,7 +982,7 @@ function MetadataInputPanel({
                   className="min-h-11 w-full rounded-md border border-border-control bg-surface px-3 py-2 focus:border-focus-ring focus:ring-2 focus:ring-focus-ring"
                 />
               </label>
-              <StatusBadge variant={detailsReady ? "info" : "neutral"} label={t("metadataSql.targets.selected", { count: selectedCount })} />
+              <StatusBadge icon={false} variant={detailsReady ? "info" : "neutral"} label={t("metadataSql.targets.selected", { count: selectedCount })} />
             </div>
           </div>
 
@@ -1055,7 +1060,7 @@ function MetadataExecutePanel({
         description={t("metadataSql.execute.hint")}
         action={
           generated ? (
-            <StatusBadge variant={generated.source === "oci_enterprise_ai" ? "success" : "neutral"} label={generated.source} />
+            <StatusBadge icon={false} variant={generated.source === "oci_enterprise_ai" ? "success" : "neutral"} label={generated.source} />
           ) : null
         }
       />

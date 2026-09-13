@@ -952,6 +952,7 @@ function TrainingDataTable({
                     <td className="break-words px-3 py-2 align-top text-xs text-fg">{example.category}</td>
                     <td className="break-words px-3 py-2 align-top text-xs text-fg-muted">
                       <StatusBadge
+                        icon={false}
                         variant={example.source_type === "feedback" ? "info" : "neutral"}
                         label={example.source_type === "feedback" ? t("qcm.training.sourceFeedback") : t("qcm.training.sourceFile")}
                       />
@@ -1051,9 +1052,9 @@ function ModelTrainPanel({
         <div className="flex flex-wrap gap-2">
           <StatusBadge variant={status?.ready ? "success" : "warning"} label={status?.ready ? t("learning.classifier.ready") : t("learning.classifier.notReady")} />
           {status?.stale && <StatusBadge variant="warning" label={t("learning.classifier.stale")} />}
-          <StatusBadge variant="neutral" label={status?.persistence_mode ?? "memory"} />
-          <StatusBadge variant="neutral" label={status?.recommendation_source ?? "deterministic"} />
-          {status?.classifier_version && <StatusBadge variant="info" label={status.classifier_version} />}
+          <StatusBadge icon={false} variant="neutral" label={status?.persistence_mode ?? "memory"} />
+          <StatusBadge icon={false} variant="neutral" label={status?.recommendation_source ?? "deterministic"} />
+          {status?.classifier_version && <StatusBadge icon={false} variant="info" label={status.classifier_version} />}
         </div>
         {(status?.warnings ?? []).map((warning) => (
           <p key={warning} className="rounded-md border border-warning-border bg-warning-subtle px-3 py-2 text-sm text-warning-fg">
@@ -1124,8 +1125,8 @@ function ModelTestPanel({
               </Banner>
             )}
             <div className="flex flex-wrap gap-2">
-              <StatusBadge variant={prediction.recommendation_source === "classifier" ? "success" : "neutral"} label={prediction.recommendation_source} />
-              <StatusBadge variant="info" label={t("learning.classifier.confidence", { confidence: Math.round(prediction.confidence * 100) })} />
+              <StatusBadge icon={false} variant={prediction.recommendation_source === "classifier" ? "success" : "neutral"} label={prediction.recommendation_source} />
+              <StatusBadge icon={false} variant="info" label={t("learning.classifier.confidence", { confidence: Math.round(prediction.confidence * 100) })} />
             </div>
             <CompactFact label={t("qcm.test.predictedCategory")} value={prediction.predicted_category || "-"} />
             {prediction.candidates.length > 0 && (
@@ -1265,7 +1266,7 @@ function TrainingCandidatesPanel({
         icon={ListChecks}
         title={t("qcm.candidates.title")}
         description={t("qcm.candidates.hint")}
-        action={<StatusBadge variant="info" label={t("qcm.candidates.matches", { count: data?.total ?? 0 })} />}
+        action={<StatusBadge icon={false} variant="info" label={t("qcm.candidates.matches", { count: data?.total ?? 0 })} />}
       />
 
       <div className="grid gap-3 sm:grid-cols-3">
@@ -1476,7 +1477,7 @@ function TrainingCandidatesPanel({
                     <div className="grid min-w-0 content-start gap-1 xl:pt-1">
                       <p className="text-xs font-medium text-fg-muted">{t("nl2sql.profile.label")}</p>
                       <div className="min-w-0">
-                        <StatusBadge variant="info" label={resolvedProfileName} />
+                        <StatusBadge icon={false} variant="info" label={resolvedProfileName} />
                       </div>
                     </div>
                   )}

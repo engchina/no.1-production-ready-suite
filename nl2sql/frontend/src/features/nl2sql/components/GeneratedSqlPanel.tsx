@@ -169,6 +169,7 @@ function SqlOntologyGroundingPanel({
         <div className="flex flex-wrap gap-2">
           <GroundingStatusBadge result={grounding} />
           <StatusBadge
+            icon={false}
             variant="neutral"
             label={t("nl2sql.interpretation.graphMatchedCount", {
               count:

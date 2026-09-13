@@ -698,6 +698,7 @@ export function FeedbackManagementPage() {
                 action={
                   <span data-testid="feedback-management-entry-count">
                     <StatusBadge
+                      icon={false}
                       variant="info"
                       label={t("feedbackManagement.entries.count", {
                         count: feedback?.total ?? selectAiFeedbackItems.length,
@@ -735,6 +736,7 @@ export function FeedbackManagementPage() {
                     <dt className="sr-only">{t("feedbackManagement.entries.runtime")}</dt>
                     <dd>
                       <StatusBadge
+                        icon={false}
                         variant={feedback?.runtime === "oracle" ? "success" : "neutral"}
                         label={t("feedbackManagement.entries.runtimeBadge", {
                           value: feedback?.runtime || dbProfiles?.runtime || "-",
@@ -832,9 +834,9 @@ export function FeedbackManagementPage() {
               />
             </div>
             <div className="flex flex-wrap gap-2">
-              <StatusBadge variant="neutral" label={feedback?.runtime ?? dbProfiles?.runtime ?? "-"} />
-              {feedback?.index_name && <StatusBadge variant="info" label={feedback.index_name} />}
-              {feedback?.table_name && <StatusBadge variant="neutral" label={feedback.table_name} />}
+              <StatusBadge icon={false} variant="neutral" label={feedback?.runtime ?? dbProfiles?.runtime ?? "-"} />
+              {feedback?.index_name && <StatusBadge icon={false} variant="info" label={feedback.index_name} />}
+              {feedback?.table_name && <StatusBadge icon={false} variant="neutral" label={feedback.table_name} />}
             </div>
             <FormActionBar
               ariaLabel={t("feedbackManagement.index.actions")}
@@ -873,6 +875,7 @@ export function FeedbackManagementPage() {
                 icon={MessageSquareText}
                 action={
                   <StatusBadge
+                    icon={false}
                     variant="neutral"
                     label={`${t("feedbackManagement.metric.appFeedback")} ${feedbackTotal}`}
                   />
@@ -1544,7 +1547,7 @@ function FeedbackHistoryRow({
           />
         </span>
         <span className="flex min-w-0 flex-wrap gap-2">
-          <StatusBadge variant="neutral" label={engineLabel(item.engine)} />
+          <StatusBadge icon={false} variant="neutral" label={engineLabel(item.engine)} />
           <StatusBadge
             variant={item.feedback_rating ? "success" : "neutral"}
             label={userFeedbackRatingBadgeLabel(item.feedback_rating)}
@@ -1554,10 +1557,10 @@ function FeedbackHistoryRow({
             label={adminFeedbackReviewBadgeLabel(item.admin_feedback_rating)}
           />
           {(item.profile_name || item.profile_category) && (
-            <StatusBadge variant="info" label={profileRecordDisplayLabel(item)} />
+            <StatusBadge icon={false} variant="info" label={profileRecordDisplayLabel(item)} />
           )}
           {item.training_status && <StatusBadge variant="neutral" label={t(`qcm.candidates.status.${item.training_status}`)} />}
-          <StatusBadge variant="neutral" label={formatElapsed(item.elapsed_ms)} />
+          <StatusBadge icon={false} variant="neutral" label={formatElapsed(item.elapsed_ms)} />
         </span>
       </span>
       {item.feedback_comment && (

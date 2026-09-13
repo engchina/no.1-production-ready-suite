@@ -482,6 +482,7 @@ function SavedSourceDocumentsList({
                 </span>
                 <span className="flex min-w-0 flex-wrap items-center gap-2 sm:justify-end">
                   <StatusBadge
+                    icon={false}
                     variant="neutral"
                     label={t(
                       `profiles.ontologyBuild.sourceRole.${source.source_role ?? "source"}`
@@ -1927,6 +1928,7 @@ function SectionHeading({ profileLabel }: { profileLabel?: string }) {
         profileLabel ? (
           <span data-testid="ontology-build-profile-scope">
             <StatusBadge
+              icon={false}
               variant="info"
               className="max-w-full whitespace-normal text-center leading-5 sm:max-w-80"
               label={t("profiles.ontologyBuild.profileScope", {

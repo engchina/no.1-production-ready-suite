@@ -81,9 +81,9 @@ function ImportResultPanel({ result }: { result: DbAdminImportTabularData }) {
     >
       <div className="flex flex-wrap gap-2">
         <StatusBadge variant={result.executed ? "success" : "neutral"} label={result.executed ? "executed" : "not executed"} />
-        <StatusBadge variant="info" label={result.table_name} />
-        <StatusBadge variant="info" label={t("tableMgmt.importWizard.rows", { count: result.row_count })} />
-        <StatusBadge variant="neutral" label={result.mode} />
+        <StatusBadge icon={false} variant="info" label={result.table_name} />
+        <StatusBadge icon={false} variant="info" label={t("tableMgmt.importWizard.rows", { count: result.row_count })} />
+        <StatusBadge icon={false} variant="neutral" label={result.mode} />
       </div>
       {result.warnings.map((warning) => (
         <p key={warning} className="rounded-md border border-warning-border bg-warning-subtle px-3 py-2 text-warning-fg">
