@@ -149,7 +149,67 @@ RAG の製品語は **ナレッジ構築**、**業務ビュー**、**検索・�
   - **検索・回答設定**: ファイル準備、文書解析、文書分割、検索インデックス、検索方法、根拠確認、回答スタイル、回答プロンプト、安全チェック、品質評価、GraphRAG、エージェント計画。
   - **システム設定**: OCI 認証、アップロード保存先、モデル、データベース、サービス管理。
 - メッセージ機構は [docs/frontend-messaging-spec.md](./docs/frontend-messaging-spec.md) を正本とする。
-- ボタン仕様は [docs/frontend-button-spec.md](./docs/frontend-button-spec.md) を正本とする。
+- ボタンの大きさ・スタイル・アイコン・loading・ヘッダーの並び順は platform の `docs/design-system/` を正本とし、画面内の配置と命名は [docs/frontend-button-spec.md](./docs/frontend-button-spec.md) に従う。
+
+## デザインシステム / UI（platform が正本）
+
+- **UI に触る変更（`frontend/`）の前に、platform リポジトリの [docs/design-system/ARCHITECTURE.md](../no.1-production-ready-platform/docs/design-system/ARCHITECTURE.md) を読む。** ワークスペースに sibling の `../no.1-production-ready-platform` が無い場合は GitHub の `engchina/no.1-production-ready-platform` の `docs/design-system/` を参照する。
+  - トークン値・コンポーネント仕様・意図的な見た目の変更点: 同 `README.md`
+  - 実装の参照: 同 `components-reference.md`
+  - 共通の禁止事項とレビュー観点: platform の `AGENTS.md`「デザインシステム / UI」節
+- **依存の向きは「デザインシステムの決定 → `@engchina/production-ready-ui`（platform の `packages/ui`）→ 本リポジトリ」の一方向。** 本リポジトリでコンポーネントやトークンを新規実装しない。必要になったら platform に `packages/ui` へ入れる Issue を立てる。
+- **本リポジトリが持てるのは次だけ。**
+  - ナビ構造（nav config）と業務コピー（i18n）
+  - データ取得・状態管理・権限
+  - ドメイン enum → コンポーネント prop の対応表（例: 状態 → `StatusBadge` の `variant`）
+  - 画面固有の業務レイアウト
+  - 1製品しか使わない部品は置いてよい。判断基準は「他の2製品がこれを欲しがるか」で、欲しがるなら `packages/ui` に入れる
+- **色・型・余白・角丸・影・モーション・フォーカス表示・テーマ（light / dark / auto）は `packages/ui` が持つ。** `frontend/src/globals.css` は `@import "tailwindcss"` → `@import "@engchina/production-ready-ui/styles.css"` → `@source "../node_modules/@engchina/production-ready-ui/dist"` と、画面固有のレイアウトだけにする。`main.tsx` から JS で import すると共有ユーティリティが生成されない。
+
+### 禁止事項
+
+- 生の hex（`#1a73c1` 等）と生の px を書く。色は `--color-*` トークン（`bg-surface` / `text-fg-muted` / `border-border-control` 等のユーティリティ）を使う。旧名（`bg-card` / `text-muted` / `bg-primary` / `var(--primary)` 等）は移行用の互換エイリアスで、新規コードで使わない。
+- `globals.css` に色トークンや `.dark { … }` の上書きを定義する。
+- `TextField` / `PageHeader` / `Button` / `StatusBadge` などの共有コンポーネントを再実装する。
+- `<table>` を手書きする。`DataTable` を使う。
+- `<div className="px-8 py-6">` や `style={{ padding: "1.5rem 2rem" }}` のような余白コンテナを手書きする。`PageBody` を使う。
+- `ToggleChip` をタブ代わりに使う。タブ＝同じ対象の別の見方に切り替えるのは `Tabs`、チップ＝データの絞り込みは `ToggleChip`。
+- `loading` 中にボタンのラベルを「実行中…」等に差し替える。ラベルは変えず、`icon` がスピナーに置き換わる。子要素にアイコンを書かず `icon={Upload}` で渡す。
+- 製品ごとのアクセント色を作る。製品は wordmark・ナビ・内容で区別する。
+- 絵文字と手描き SVG。アイコンは `lucide-react`（14 / 16 / 20 / 24px のみ）。
+- `@engchina/production-ready-ui` の内部パス（`dist/components/**` や `dist/tokens/*.css`）を import したりテストで読んだりする。パッケージのルートと `styles.css` だけを使う。
+
+### 画面の構成
+
+```tsx
+<AppShell sidebar={<Sidebar … footer={<SidebarAccountFooter … />} />}>
+  <PageHeader title="…" actions={[{ id, kind: "primary", label, icon }]} tabs={<Tabs … />} />
+  <PageBody>
+    <Section title="…">…</Section>
+  </PageBody>
+</AppShell>
+```
+
+- `PageHeader` の `actions` は配列で渡す（danger → utility → secondary → primary の順に自動で並び、右端が primary になる）。
+- `PageHeader` と `PageBody` に `wide` を渡す場合は必ず両方に同じ値を渡す。片方だけだと 1920px でタイトルと本文の左端がずれる。
+- 単位の境界: 文字サイズとコントロール高さは px、余白とレイアウト寸法は rem（14px ルート）。
+
+### 既存ルールとの優先順位
+
+- トークン・コンポーネントの見た目と振る舞い（サイズ・variant・アイコン・loading・ヘッダーの並び順・フォーカス・ダークテーマ）は、`ui-ux-pro-max` skill の一般論や本リポジトリの `docs/` より platform の `docs/design-system/` を優先する。
+- 本リポジトリの `docs/frontend-button-spec.md` / `docs/frontend-messaging-spec.md` は、デザインシステムが規定しない範囲（画面内の配置・文言キーの命名・通知チャネルの使い分け等）でのみ有効とする。
+
+### UI 変更の検証
+
+- ライト / ダークの両テーマで確認する。
+- 1280px / 1920px の両幅で確認する。1920px では PageHeader のタイトルと本文の左端が揃うこと。
+- キーボード操作（最初の Tab で「本文へスキップ」、フォーカスリングの視認性、`Tabs` の ← → / Home / End）を確認する。
+- 状態を表す UI は色だけに依存しない（`StatusBadge` / `Banner` / `Toast` はアイコン付き）。
+- 意図的な見た目の変更は platform の `docs/design-system/README.md` §7 と照合し、PR の `検証結果` に記載する。
+### RAG 固有
+
+- 移行時に `ToggleChip` をタブとして使っている箇所（ビューの切替）を `Tabs` に置き換え、絞り込みの箇所だけ `ToggleChip` に残す。
+- `--font-mono`（ID・ログ・SQL の等幅書体）は、本リポジトリで `@fontsource/google-sans-code` を自前ホストしてから定義する。
 
 ## RAG 設定責務
 
