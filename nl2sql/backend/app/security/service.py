@@ -1187,15 +1187,17 @@ class SecurityService:
         entitlement: DataEntitlementRecord,
     ) -> tuple[object, ...]:
         return (
-            entitlement.resource_code.strip().upper(),
+            # 識別子は canonical token（引用名は大文字小文字を保持）なので大文字化せずに比べる。
+            # 大文字化すると "Mixed" と "MIXED" 等の別 object を同じ適用状態として引き継いでしまう。
+            entitlement.resource_code.strip(),
             entitlement.scope_code.strip(),
             entitlement.capability.strip().upper(),
-            entitlement.target_owner.strip().upper(),
-            entitlement.target_object.strip().upper(),
+            entitlement.target_owner.strip(),
+            entitlement.target_object.strip(),
             entitlement.target_type.strip().upper(),
-            tuple(column.strip().upper() for column in entitlement.column_names),
+            tuple(column.strip() for column in entitlement.column_names),
             entitlement.scope_mode.strip().upper(),
-            entitlement.scope_column.strip().upper(),
+            entitlement.scope_column.strip(),
             scope_filters_canonical_json(entitlement.scope_filters),
             scope_expression_canonical_json(entitlement.scope_expression),
         )

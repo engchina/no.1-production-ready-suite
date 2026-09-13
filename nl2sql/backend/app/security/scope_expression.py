@@ -52,7 +52,7 @@ def compile_expression(
     column_types: Mapping[str, str],
     validate_relation: Callable[[ScopeRelatedExists], Mapping[str, str]] | None = None,
 ) -> str:
-    from .deepsec import _qualified, _scope_filter_predicate, _scope_value_type, _strict_identifier
+    from .deepsec import _identifier_token, _qualified, _scope_filter_predicate, _scope_value_type
 
     expression = parse_expression(entitlement.scope_expression)
     target = _qualified(entitlement.target_owner, entitlement.target_object)
@@ -94,8 +94,8 @@ def compile_expression(
                 alias_number += 1
                 alias = f"dsr{alias_number}"
                 keys = [
-                    f"{target}.{_strict_identifier(key.source_column)} = "
-                    f"{alias}.{_strict_identifier(key.target_column)}"
+                    f"{target}.{_identifier_token(key.source_column)} = "
+                    f"{alias}.{_identifier_token(key.target_column)}"
                     for key in node.join_keys
                 ]
                 parts.append(

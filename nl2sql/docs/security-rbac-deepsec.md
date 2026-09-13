@@ -217,6 +217,80 @@ direct logon と対象 object 参照に必要な DB role を有効化する。�
 wildcard ではない。実データへのアクセス範囲は、他の role と同じく `データ権限` workflow で明示的に
 設定・適用する。
 
+## 対象識別子の引用規則（Issue #560）
+
+DeepSec のデータ権限は、対象の owner / object と列（`column_names`、行条件の列、関連キー、関連テーブル）を
+`app/features/nl2sql/object_identity.py` の `canonical_object_part` と同じ規則の **canonical token** で
+検証・保存・照合する。frontend の `formatDbObjectName` / `formatEntitlementTargetName` も同じ規則である。
+
+| 入力 | 保存値（token） | 意味 |
+|---|---|---|
+| `orders` / `ORDERS` / `"ORDERS"` | `ORDERS` | 引用が不要な名前。従来の保存値と同じ |
+| `"Mixed_Case"` | `"Mixed_Case"` | 大文字小文字を保持する引用名。`MIXED_CASE` とは別の object |
+| `Mixed_Case`（引用なし） | `MIXED_CASE` | Oracle と同じく大文字として解釈する |
+| `DEPT@REMOTE`、`my table`（引用なし） | 拒否 | 非引用識別子にならない名前は推測で引用しない |
+
+- `resource_code` は `target_owner` と `target_object` の token を `.` で単純連結した値に揃える
+  （例: `SALES."Mixed_Case"`）。引用が不要な名前では従来の大文字の `OWNER.OBJECT` と同じになる。
+- 二重引用符・NUL・制御文字を含む名前、前後に空白がある引用名、引用符を含めて 128 バイトを超える token は拒否する。
+  `TARGET_OWNER` / `TARGET_OBJECT` / `SCOPE_COLUMN` 列が `VARCHAR2(128)` のため、引用が必要な名前は
+  126 バイトまでとなる。
+- Data Grant / GRANT / `SET USE DATA GRANTS ONLY` の SQL には token をそのまま識別子として埋め込む
+  （token は内部に `"` を含まない）。PL/SQL の文字列リテラル内（`ALL_OBJECTS` の照合、`EXECUTE IMMEDIATE`）
+  では `'` を `''` に escape する。辞書ビュー（`ALL_OBJECTS` / `ALL_TAB_COLUMNS` / `DBA_DATA_GRANTS` /
+  `DBA_POLICIES` / `ALL_CONSTRAINTS` / `ALL_DEPENDENCIES`）の照合は、token から引用符を外したカタログ上の名前を
+  bind 変数で渡す。
+- `GET /api/security/deepsec/target-objects` と詳細 API は、`owner` / `name` をカタログ上の値のまま
+  （大文字化せず）返し、`qualified_name` を canonical な修飾名で返す。詳細 API の path は token で指定し
+  （`/target-objects/SALES/%22Mixed_Case%22`）、`columns[].column_name` は token で返す。
+- 関連条件の候補（外部キー、Ontology edge、既存 Data Grant predicate 内の表参照）も同じ規則で修飾名にする。
+  predicate 内の引用されていない表名は大文字、引用された表名は大文字小文字を保つ。
+  ただし業務プロファイルの対象表の保存が引用名を大文字化するため（#561）、引用名の表は現状、関連テーブル条件の
+  候補に出ない。
+
+### 既存データの互換と移行
+
+引用が不要な名前の保存値・`resource_code`・Data Grant 名（`NL2SQL_DG_...` の hash 入力）・checksum は変わらないため、
+自動移行はしない。
+
+#560 より前は、対象一覧が owner / object を大文字化して返し、入力チェックも引用符を外して大文字化していた。
+そのため `"Mixed_Case"` を選ぶと、同じ owner に大文字の `MIXED_CASE` がある場合だけ詳細取得・適用が成功し、
+**大文字の同名表（または同名列）へ権限が付与されていた可能性がある**（同名表が無い場合は適用時に拒否され、誤付与は起きない）。
+保存値から利用者の意図は判別できず、別の object へ自動で付け替えると公開範囲が変わるため、自動移行はしない。
+次の SQL（Data Grant owner で実行する参考例。実 Oracle では未検証）で大文字小文字だけが異なる object / 列が並存する
+ルールを洗い出し、該当ルールは画面で対象を選び直して適用し直すこと。
+
+```sql
+-- 保存済みの対象と、大文字小文字だけが異なる object が並存するルール
+SELECT e.ROLE_ID, e.ENTITLEMENT_ID, e.TARGET_OWNER, e.TARGET_OBJECT,
+       o.OWNER AS CATALOG_OWNER, o.OBJECT_NAME AS CATALOG_OBJECT, o.OBJECT_TYPE
+  FROM NL2SQL_APP_DATA_ENTITLEMENTS e
+  JOIN ALL_OBJECTS o
+    ON UPPER(o.OWNER) = e.TARGET_OWNER
+   AND UPPER(o.OBJECT_NAME) = e.TARGET_OBJECT
+ WHERE e.TARGET_OBJECT NOT LIKE '"%'
+   AND (o.OWNER <> e.TARGET_OWNER OR o.OBJECT_NAME <> e.TARGET_OBJECT)
+   AND o.OBJECT_TYPE IN ('TABLE', 'VIEW', 'MATERIALIZED VIEW');
+
+-- 保存済みの許可列と、大文字小文字だけが異なる列が並存するルール
+SELECT e.ROLE_ID, e.ENTITLEMENT_ID, e.TARGET_OWNER, e.TARGET_OBJECT,
+       j.COLUMN_NAME, c.COLUMN_NAME AS CATALOG_COLUMN
+  FROM NL2SQL_APP_DATA_ENTITLEMENTS e
+ CROSS APPLY JSON_TABLE(e.COLUMN_NAMES, '$[*]' COLUMNS (COLUMN_NAME VARCHAR2(130) PATH '$')) j
+  JOIN ALL_TAB_COLUMNS c
+    ON c.OWNER = e.TARGET_OWNER
+   AND c.TABLE_NAME = e.TARGET_OBJECT
+   AND UPPER(c.COLUMN_NAME) = j.COLUMN_NAME
+   AND c.COLUMN_NAME <> j.COLUMN_NAME;
+```
+
+### 画面表示
+
+表名・列名は SQL と同じ表記（引用が必要な部分だけ `"..."`）で表示する。一覧で `SALES.MIXED_CASE` と
+`SALES."Mixed_Case"` は別の候補として並び、選択後の見出し・許可列・プレビュー SQL も同じ表記になる。
+入力規則に反する識別子の API エラーは「… は有効な Oracle identifier で指定してください。大文字小文字の混在や
+記号を含む名前は "Mixed_Case" のように二重引用符で囲みます。」と返す。
+
 ## 条件グループと関連テーブル条件（Issue #447）
 
 行条件は `すべて満たす（AND）` / `いずれかを満たす（OR）` のグループで編集する。

@@ -4,7 +4,10 @@ import test from "node:test";
 
 import {
   formatDbObjectName,
+  formatDbObjectPart,
   formatEntitlementTargetName,
+  normalizeDbIdentifierToken,
+  splitDbObjectName,
 } from "../src/features/nl2sql/dbObjectIdentity.ts";
 import { objectName } from "../src/features/nl2sql/ontology/physicalIdentity.ts";
 import { schemaTableQualifiedName } from "../src/features/nl2sql/workbenchState.ts";
@@ -76,6 +79,50 @@ test("DeepSec のデータ権限キーは保存済みの大文字キーと一致
     formatDbObjectName({ owner: "APP", name: "MixedCase", qualified_name: "APP.MixedCase" }),
     formatEntitlementTargetName({ target_owner: "APP", target_object: "MIXEDCASE" })
   );
+});
+
+test("DeepSec のデータ権限キーは引用名を保ち、大文字の同名表と別のキーになる (#560)", () => {
+  // backend canonical_object_part と同じ token
+  assert.equal(formatEntitlementTargetName({ target_owner: "SALES", target_object: '"Mixed_Case"' }), 'SALES."Mixed_Case"');
+  assert.equal(formatEntitlementTargetName({ target_owner: "SALES", target_object: "MIXED_CASE" }), "SALES.MIXED_CASE");
+  assert.notEqual(
+    formatEntitlementTargetName({ target_owner: "SALES", target_object: '"Mixed_Case"' }),
+    formatEntitlementTargetName({ target_owner: "SALES", target_object: "MIXED_CASE" })
+  );
+  // 一覧のカタログ値から作ったキーと、保存済み token から作ったキーが一致する
+  assert.equal(
+    formatDbObjectName({ owner: "SALES", name: "Mixed_Case" }),
+    formatEntitlementTargetName({
+      target_owner: formatDbObjectPart("SALES"),
+      target_object: formatDbObjectPart("Mixed_Case"),
+    })
+  );
+  // resource_code しか無い場合も引用規則どおりに分解する（dot を含む引用名を壊さない）
+  assert.equal(formatEntitlementTargetName({ resource_code: 'SALES."a.b"' }), 'SALES."a.b"');
+  assert.equal(formatEntitlementTargetName({ resource_code: "nl2sql_deepsec_probe" }), "NL2SQL_DEEPSEC_PROBE");
+});
+
+test("formatDbObjectPart はカタログ値を token にし、token には冪等", () => {
+  assert.equal(formatDbObjectPart("Mixed_Case"), '"Mixed_Case"');
+  assert.equal(formatDbObjectPart('"Mixed_Case"'), '"Mixed_Case"');
+  assert.equal(formatDbObjectPart("ORDERS"), "ORDERS");
+  assert.equal(formatDbObjectPart("売上"), '"売上"');
+  assert.equal(formatDbObjectPart(""), "");
+});
+
+test("normalizeDbIdentifierToken は Oracle の非引用識別子だけを大文字にする", () => {
+  assert.equal(normalizeDbIdentifierToken("amount"), "AMOUNT");
+  assert.equal(normalizeDbIdentifierToken('"ORDERS"'), "ORDERS");
+  assert.equal(normalizeDbIdentifierToken('"Amount"'), '"Amount"');
+  assert.equal(normalizeDbIdentifierToken(null), "");
+  assert.equal(normalizeDbIdentifierToken('"BROKEN'), '"BROKEN');
+});
+
+test("splitDbObjectName は canonical な修飾名を owner / object の token に分ける", () => {
+  assert.deepEqual(splitDbObjectName('SALES."a.b"'), { owner: "SALES", name: '"a.b"' });
+  assert.deepEqual(splitDbObjectName("sales.orders"), { owner: "SALES", name: "ORDERS" });
+  assert.equal(splitDbObjectName("ORDERS"), null);
+  assert.equal(splitDbObjectName('SALES."BROKEN'), null);
 });
 
 test("別実装だった修飾名の組み立てが formatDbObjectName に委ねられている", () => {

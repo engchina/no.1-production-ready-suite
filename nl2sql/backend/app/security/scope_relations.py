@@ -7,7 +7,32 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
+from app.features.nl2sql.object_identity import (
+    format_object_part,
+    parse_object_identity,
+    qualified_object_name,
+)
+
 from .service import SecurityApiError
+
+
+def _catalog_qualified_name(owner: object, object_name: object) -> str:
+    """辞書ビュー・オントロジーの owner / object を canonical な `OWNER.OBJECT` にする。
+
+    DeepSec の保存キー（`schemas._normalize_oracle_identifier` の token 連結）と同じ規則。
+    """
+
+    return qualified_object_name(str(owner or ""), str(object_name or ""))
+
+
+def _split_target(target: str) -> tuple[str, str]:
+    """canonical `OWNER.OBJECT` を辞書ビューの bind 用のカタログ上の名前に分ける。"""
+
+    try:
+        identity = parse_object_identity(target)
+    except ValueError as exc:
+        raise SecurityApiError(400, "対象テーブルの識別子が不正です。") from exc
+    return identity.owner, identity.object_name
 
 
 def scope_profiles() -> list[dict[str, Any]]:
@@ -35,15 +60,24 @@ def relation_catalog(
     profile = profiles[0]
     objects = []
     for value in profile["objects"]:
-        parts = value.upper().split(".")
-        if len(parts) == 2:
-            objects.append(_qualified(*parts))
+        # Profile の object は qualified_object_name の canonical 修飾名。大文字化・dot 分割すると
+        # 引用名が大文字の同名表に化けるため、引用規則どおりに分解する。
+        try:
+            identity = parse_object_identity(str(value))
+        except ValueError:
+            continue
+        objects.append(
+            _qualified(
+                format_object_part(identity.owner),
+                format_object_part(identity.object_name),
+            )
+        )
     if target not in objects:
         raise SecurityApiError(400, "対象テーブルが Profile の範囲にありません。")
     if cursor is None:
         with service.pools.control_connection() as conn, conn.cursor() as db_cursor:
             return relation_catalog(service, profile_id, target, cursor=db_cursor)
-    owner, name = target.split(".")
+    owner, name = _split_target(target)
     cursor.execute(
         """
         SELECT fk.OWNER, fk.CONSTRAINT_NAME, fk.TABLE_NAME, pk.OWNER, pk.TABLE_NAME,
@@ -64,18 +98,20 @@ def relation_catalog(
     )
     grouped: dict[str, dict[str, Any]] = {}
     for row in cursor.fetchall():
-        child, parent = f"{row[0]}.{row[2]}", f"{row[3]}.{row[4]}"
+        child, parent = _catalog_qualified_name(row[0], row[2]), _catalog_qualified_name(
+            row[3], row[4]
+        )
         related = parent if child == target else child
         if related == target or related not in objects:
             continue
-        key = f"{row[0]}.{row[1]}"
+        key = _catalog_qualified_name(row[0], row[1])
         relation = grouped.setdefault(
             key, {"id": key, "source": "FOREIGN_KEY", "target": related, "join_keys": []}
         )
         relation["join_keys"].append(
             {
-                "source_column": str(row[5] if child == target else row[6]),
-                "target_column": str(row[6] if child == target else row[5]),
+                "source_column": format_object_part(str(row[5] if child == target else row[6])),
+                "target_column": format_object_part(str(row[6] if child == target else row[5])),
             }
         )
     relations = list(grouped.values())
@@ -128,12 +164,12 @@ def _ontology_relations(profile_id: str, target: str, objects: list[str]) -> lis
             related = ""
             for join in edge.join_conditions:
                 left, right = join.left, join.right
-                if f"{right.owner}.{right.object_name}" == target:
+                if _catalog_qualified_name(right.owner, right.object_name) == target:
                     left, right = right, left
-                candidate = f"{right.owner}.{right.object_name}"
+                candidate = _catalog_qualified_name(right.owner, right.object_name)
                 if (
                     join.operator != "="
-                    or f"{left.owner}.{left.object_name}" != target
+                    or _catalog_qualified_name(left.owner, left.object_name) != target
                     or candidate == target
                     or candidate not in objects
                     or (related and related != candidate)
@@ -141,7 +177,10 @@ def _ontology_relations(profile_id: str, target: str, objects: list[str]) -> lis
                     break
                 related = candidate
                 pairs.append(
-                    {"source_column": left.column_name, "target_column": right.column_name}
+                    {
+                        "source_column": format_object_part(left.column_name),
+                        "target_column": format_object_part(right.column_name),
+                    }
                 )
             else:
                 result.append(
@@ -184,7 +223,7 @@ def validate_relation_dependency(
             raise SecurityApiError(400, "参照依存が複雑なため関連条件を検証できません。")
         if plan is not None:
             pending.extend((child, ancestors | {current}) for child in plan.edges.get(current, ()))
-        owner, name = current.split(".")
+        owner, name = _split_target(current)
         cursor.execute(
             """SELECT REFERENCED_OWNER, REFERENCED_NAME, REFERENCED_LINK_NAME
             FROM ALL_DEPENDENCIES WHERE OWNER = :owner AND NAME = :object_name
@@ -194,7 +233,7 @@ def validate_relation_dependency(
         for row in cursor.fetchall():
             if row[2]:
                 raise SecurityApiError(400, "DB link を参照する関連条件は指定できません。")
-            pending.append((f"{row[0]}.{row[1]}", ancestors | {current}))
+            pending.append((_catalog_qualified_name(row[0], row[1]), ancestors | {current}))
         cursor.execute(
             """SELECT OWNER, GRANT_NAME, PREDICATE FROM DBA_DATA_GRANTS
             WHERE OBJECT_OWNER = :owner AND OBJECT_NAME = :object_name""",
@@ -214,9 +253,26 @@ def validate_relation_dependency(
                     if table.catalog or "@" in table.sql():
                         raise ValueError("remote object")
                     pending.append(
-                        (f"{table.db or grant_owner}.{table.name}".upper(), ancestors | {current})
+                        (_predicate_table_key(table, grant_owner), ancestors | {current})
                     )
             except Exception as exc:
                 raise SecurityApiError(
                     400, "関連テーブルの既存ポリシー依存を検証できません。"
                 ) from exc
+
+
+def _predicate_table_key(table: Any, grant_owner: object) -> str:
+    """Data Grant predicate 内の表参照を canonical `OWNER.OBJECT` にする。
+
+    引用されていない識別子は Oracle と同じく大文字、引用された識別子は大文字小文字を保つ。
+    """
+
+    def part(identifier: Any, fallback: str) -> str:
+        if identifier is None:
+            return fallback
+        name = str(identifier.name)
+        return name if identifier.args.get("quoted") else name.upper()
+
+    owner = part(table.args.get("db"), str(grant_owner or ""))
+    object_name = part(table.this, str(table.name))
+    return qualified_object_name(owner, object_name)

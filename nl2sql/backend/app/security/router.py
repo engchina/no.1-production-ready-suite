@@ -579,7 +579,8 @@ def list_deepsec_target_objects(
 
 
 @router.get(
-    "/security/deepsec/target-objects/{owner}/{object_name}",
+    # object_name は canonical token（引用名は "..."）。"/" を含む表名も受けるため path 変換。
+    "/security/deepsec/target-objects/{owner}/{object_name:path}",
     response_model=ApiResponse[DeepSecTargetObjectDetailData],
 )
 def get_deepsec_target_object(

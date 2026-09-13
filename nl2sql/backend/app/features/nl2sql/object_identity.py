@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass
 
 _SIMPLE_IDENTIFIER = re.compile(r"^[A-Z][A-Z0-9_$#]{0,127}$")
+_MAX_CANONICAL_PART_BYTES = 128
 
 
 def _split_identifier_parts(value: str) -> list[str]:
@@ -90,6 +91,44 @@ def format_object_part(value: str) -> str:
     return '"' + normalized.replace('"', '""') + '"'
 
 
+def canonical_object_part(value: str) -> str:
+    """API 入力の owner / object / column 1 部分を、保存・比較・SQL 用の canonical token にする。
+
+    - `"Mixed_Case"` のように引用された値は、引用符を外した名前を大文字小文字を保って使う。
+    - 引用されていない値は Oracle と同じく大文字として解釈する（`orders` → `ORDERS`）。
+      Oracle の非引用識別子にならない値（`DEPT@REMOTE`、`my table` 等）は、推測で引用せず拒否する。
+    - 結果は `format_object_part` と同じ規則で、引用が必要な名前だけ `"..."` で囲む。
+      引用が不要な名前は従来の保存キー（大文字）と同じ値になる。
+    - Oracle の識別子に使えない `"`・NUL・制御文字を含む名前と、token が 128 byte を超える
+      名前は拒否する。token は二重引用符を含まないため、そのまま SQL 識別子として埋め込める。
+    """
+
+    raw = str(value or "").strip()
+    if not raw.startswith('"') and not _SIMPLE_IDENTIFIER.fullmatch(raw.upper()):
+        raise ValueError(f"{value}: Oracle 識別子が不正です。")
+    name = normalize_object_part(raw)
+    if (
+        not name
+        or '"' in name
+        or any(ord(char) < 32 or 127 <= ord(char) <= 159 for char in name)
+        or name != name.strip()
+    ):
+        raise ValueError(f"{value}: Oracle 識別子が不正です。")
+    token = format_object_part(name)
+    if len(token.encode("utf-8")) > _MAX_CANONICAL_PART_BYTES:
+        raise ValueError(f"{value}: Oracle 識別子が長すぎます（引用符を含めて 128 バイト以内）。")
+    return token
+
+
+def canonical_qualified_name(value: str) -> str:
+    """`OWNER.OBJECT`（各部は引用可）を canonical token の単純連結にする。"""
+
+    parts = _split_identifier_parts(value)
+    if len(parts) != 2:
+        raise ValueError(f"{value}: OWNER.OBJECT 形式で指定してください。")
+    return f"{canonical_object_part(parts[0])}.{canonical_object_part(parts[1])}"
+
+
 @dataclass(frozen=True, slots=True)
 class OracleObjectIdentity:
     """Owner-aware 的只读对象身份。"""
@@ -137,6 +176,8 @@ def qualified_object_name(owner: str, object_name: str) -> str:
 
 __all__ = [
     "OracleObjectIdentity",
+    "canonical_object_part",
+    "canonical_qualified_name",
     "format_object_part",
     "normalize_object_part",
     "parse_object_identity",

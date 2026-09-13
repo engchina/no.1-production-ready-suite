@@ -117,22 +117,68 @@ export function formatDbObjectName(item: DbObjectNameSource): string {
 }
 
 /**
+ * カタログ上の名前（引用符なし・大文字小文字を保持）を、識別子 1 部分の canonical token にする。
+ *
+ * - 引用が必要な名前だけ `"..."` で囲む（`Mixed_Case` → `"Mixed_Case"`、`ORDERS` → `ORDERS`）。
+ * - canonical token（`"Mixed_Case"`）を渡しても同じ値を返す（冪等）。
+ * - backend `format_object_part` と同じ規則。表示・比較用のため例外を投げない。
+ */
+export function formatDbObjectPart(value: string | null | undefined): string {
+  try {
+    return formatDbAdminCatalogPart(value ?? "");
+  } catch {
+    return (value ?? "").trim();
+  }
+}
+
+/**
+ * DeepSec のデータ権限で保存・送信する識別子 1 部分（owner / object / column）を正規化する。
+ *
+ * backend `canonical_object_part` と同じ規則: `"..."` は大文字小文字を保ち、引用されていない値は
+ * Oracle と同じく大文字として扱う。保存済みの値はすでに canonical token なので変わらない。
+ * 表示・比較用のため例外を投げず、壊れた値はそのまま返す（保存時に backend が拒否する）。
+ */
+export function normalizeDbIdentifierToken(value: string | null | undefined): string {
+  try {
+    return formatDbAdminObjectPart(value ?? "");
+  } catch {
+    return (value ?? "").trim();
+  }
+}
+
+/**
+ * canonical な `OWNER.OBJECT` を owner / object の token に分ける。dot を含む引用名も壊さない。
+ * 2 部分でない・引用符が壊れている場合は null。
+ */
+export function splitDbObjectName(value: string): { owner: string; name: string } | null {
+  try {
+    const parts = splitIdentifierParts(value);
+    if (parts.length !== 2) return null;
+    return { owner: formatDbAdminObjectPart(parts[0]), name: formatDbAdminObjectPart(parts[1]) };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * DeepSec のデータ権限（`target_owner` / `target_object` / `resource_code`）の表示名・比較キー。
- * backend `DataEntitlementInput` は各部の引用符を外して大文字化してから保存するため、同じ正規化をしてから
- * `formatDbObjectName` で組み立てる。大文字の単純な識別子では従来のキー（`OWNER.OBJECT` の大文字化）と一致する。
+ * backend は各部を canonical token（引用が必要な名前だけ `"..."`）で保存するので、各部を
+ * `normalizeDbIdentifierToken` で揃えて単純連結する。引用が不要な名前は従来のキー（大文字の
+ * `OWNER.OBJECT`）と一致し、引用名は大文字化しないため大文字の同名表と取り違えない。
  */
 export function formatEntitlementTargetName(entitlement: {
   target_owner?: string | null;
   target_object?: string | null;
   resource_code?: string | null;
 }): string {
-  const normalize = (value: string | null | undefined) =>
-    (value ?? "").trim().replaceAll('"', "").toUpperCase();
-  const owner = normalize(entitlement.target_owner);
-  const object = normalize(entitlement.target_object);
-  if (owner && object) return formatDbObjectName({ owner, name: object });
-  const resource = (entitlement.resource_code ?? "").trim().toUpperCase();
-  return resource ? formatDbObjectName({ name: "", qualified_name: resource }) : "";
+  const owner = normalizeDbIdentifierToken(entitlement.target_owner);
+  const object = normalizeDbIdentifierToken(entitlement.target_object);
+  if (owner && object) return `${owner}.${object}`;
+  const resource = (entitlement.resource_code ?? "").trim();
+  if (!resource) return "";
+  const parts = splitDbObjectName(resource);
+  if (parts) return `${parts.owner}.${parts.name}`;
+  return resource.includes('"') ? resource : resource.toUpperCase();
 }
 
 export function parseDbAdminObjectTarget(value: string, owner = ""): DbAdminObjectTarget {

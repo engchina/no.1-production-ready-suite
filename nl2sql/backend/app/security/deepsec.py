@@ -22,6 +22,13 @@ from app.clients.oracle_runtime import (
 )
 from app.clients.oracle_statement_executor import oracle_statement_executor
 from app.env_file import locked_env_file, replace_env_file
+from app.features.nl2sql.object_identity import (
+    canonical_object_part,
+    format_object_part,
+    normalize_object_part,
+    parse_object_identity,
+    qualified_object_name,
+)
 from app.features.nl2sql.object_visibility import is_user_visible_schema_object
 from app.settings import Settings, get_settings
 
@@ -134,6 +141,34 @@ def _strict_identifier(value: str) -> str:
     return normalized
 
 
+def _identifier_token(value: str) -> str:
+    """対象 owner / object / column を canonical token にする（SQL へそのまま埋め込める）。
+
+    引用が不要な名前は大文字の単純な識別子、引用が必要な名前は `"..."`。token は二重引用符・
+    制御文字を内部に含まないことを canonical_object_part で保証している。
+    """
+
+    try:
+        return canonical_object_part(value)
+    except ValueError as exc:
+        raise SecurityApiError(400, f"安全でない Oracle identifier です: {value}") from exc
+
+
+def _identifier_name(value: str) -> str:
+    """canonical token から、辞書ビューの bind に使うカタログ上の名前を取り出す。"""
+
+    return normalize_object_part(_identifier_token(value))
+
+
+def _catalog_identifier_token(value: object) -> str:
+    """辞書ビューが返したカタログ上の名前（引用符なし）を canonical token にする。"""
+
+    name = str(value or "")
+    if not name or '"' in name or name != name.strip():
+        raise SecurityApiError(400, f"安全でない Oracle identifier です: {name}")
+    return _identifier_token(format_object_part(name))
+
+
 def _has_forbidden_password_char(value: str) -> bool:
     return '"' in value or any(ord(char) < 32 or 127 <= ord(char) <= 159 for char in value)
 
@@ -205,6 +240,22 @@ def _write_deepsec_config_env(settings: Settings) -> None:
             500,
             "DeepSec DATA USER 認証情報を backend/.env へ保存できませんでした。",
         ) from exc
+
+
+def _single_quoted_identifier_sql(template: str, **values: str) -> str:
+    """固定 PL/SQL template の単一引用符の中へ、検証済みの識別子を escape して埋め込む。
+
+    値は呼び出し側で `_identifier_token` / `_identifier_name` を通したものに限る。
+    置換は 1 回の走査で行い、値に含まれる `{...}` を再置換しない。
+    """
+
+    def replace_placeholder(match: re.Match[str]) -> str:
+        value = values[match.group(1)]
+        if any(ord(char) < 32 for char in value):
+            raise SecurityApiError(400, f"安全でない Oracle identifier です: {value}")
+        return value.replace("'", "''")
+
+    return re.sub(r"\{([a-z_]+)\}", replace_placeholder, template)
 
 
 def _trusted_identifier_sql(template: str, **identifiers: str) -> str:
@@ -318,15 +369,26 @@ def _decode_target_object_cursor(cursor: str) -> tuple[str, str]:
         or not all(isinstance(item, str) and item.strip() for item in value)
     ):
         raise SecurityApiError(400, "対象 object の cursor が不正です。")
-    return _strict_identifier(value[0]), _strict_identifier(value[1])
+    # cursor はカタログ上の名前（引用符なし・大文字小文字を保持）を持つ。
+    return (
+        normalize_object_part(_catalog_identifier_token(value[0])),
+        normalize_object_part(_catalog_identifier_token(value[1])),
+    )
 
 
 def _deepsec_target_visible(owner: str, object_name: str) -> bool:
-    normalized_owner = str(owner or "").strip().upper()
-    return normalized_owner not in _DEEPSEC_INTERNAL_OWNER_NAMES and is_user_visible_schema_object(
-        normalized_owner,
-        str(object_name or ""),
-    )
+    """owner / object はカタログ上の名前（引用符なし・大文字小文字を保持）で受け取る。"""
+
+    owner_name = str(owner or "")
+    if owner_name.strip().upper() in _DEEPSEC_INTERNAL_OWNER_NAMES:
+        return False
+    try:
+        return is_user_visible_schema_object(
+            format_object_part(owner_name),
+            format_object_part(str(object_name or "")),
+        )
+    except ValueError:
+        return False
 
 
 def _non_empty_value(value: str, label: str) -> str:
@@ -431,7 +493,7 @@ def _scope_filter_predicate(
     *,
     data_type: str,
 ) -> str:
-    column = f"{target}.{_strict_identifier(filter_item.column_name)}"
+    column = f"{target}.{_identifier_token(filter_item.column_name)}"
     operator = filter_item.operator.strip().upper()
     value_type = filter_item.value_type.strip().upper()
     value_source = filter_item.value_source.strip().upper() or "LITERAL"
@@ -516,14 +578,14 @@ def _scope_filter_predicate(
 
 
 def _qualified(owner: str, name: str) -> str:
-    return f"{_strict_identifier(owner)}.{_strict_identifier(name)}"
+    """canonical な `OWNER.OBJECT`。保存キー・比較キー・SQL 識別子を兼ねる。"""
+
+    return f"{_identifier_token(owner)}.{_identifier_token(name)}"
 
 
 def _disable_data_grants_only_statement(target_owner: str, target_object: str) -> str:
-    target_owner = _strict_identifier(target_owner)
-    target_object = _strict_identifier(target_object)
-    target = f"{target_owner}.{target_object}"
-    return _trusted_identifier_sql(
+    target = _qualified(target_owner, target_object)
+    return _single_quoted_identifier_sql(
         """
         DECLARE
           v_count NUMBER;
@@ -537,8 +599,8 @@ def _disable_data_grants_only_statement(target_owner: str, target_object: str) -
           END IF;
         END;
         """,
-        target_owner=target_owner,
-        target_object=target_object,
+        target_owner=_identifier_name(target_owner),
+        target_object=_identifier_name(target_object),
         target=target,
     )
 
@@ -601,14 +663,12 @@ def build_data_entitlement_statements(
 ) -> tuple[str, ...]:
     owner = _strict_identifier(settings.oracle_user)
     data_grant_grantee = _managed_data_grant_grantee(settings)
-    target_owner = _strict_identifier(entitlement.target_owner)
-    target_object = _strict_identifier(entitlement.target_object)
-    target = f"{target_owner}.{target_object}"
+    target = _qualified(entitlement.target_owner, entitlement.target_object)
     grant_name = entitlement.data_grant_name or _data_grant_name(entitlement)
     grant = f"{owner}.{_strict_identifier(grant_name)}"
     if not entitlement.column_names:
         raise SecurityApiError(400, "Data Grant に含める列を選択してください。")
-    columns = ", ".join(_strict_identifier(column) for column in entitlement.column_names)
+    columns = ", ".join(_identifier_token(column) for column in entitlement.column_names)
     entitlement_id_literal = _sql_literal(entitlement.entitlement_id)
     role_id_literal = _sql_literal(entitlement.role_id)
     # owner は Oracle identifier whitelist、entitlement/role は SQL literal escape 済み。
@@ -627,15 +687,15 @@ def build_data_entitlement_statements(
     )
     scope_mode = entitlement.scope_mode.strip().upper() or "ALL"
     if scope_mode == "COLUMN_EQUALS":
-        scope_column = _strict_identifier(entitlement.scope_column)
+        scope_column = _identifier_token(entitlement.scope_column)
         predicate += f"\n             AND {target}.{scope_column} = e.SCOPE_CODE"
     elif scope_mode == "FILTERS":
         type_by_column = {
-            str(column).strip().upper(): str(data_type)
+            _identifier_token(str(column)): str(data_type)
             for column, data_type in (column_types or {}).items()
         }
         for filter_item in entitlement.scope_filters:
-            column_name = _strict_identifier(filter_item.column_name)
+            column_name = _identifier_token(filter_item.column_name)
             data_type = type_by_column.get(column_name, filter_item.value_type)
             filter_predicate = _scope_filter_predicate(
                 target,
@@ -879,19 +939,25 @@ def build_v001_reset_statements(
     for entitlement in entitlements:
         if not _is_real_data_entitlement(entitlement):
             continue
-        target_owner = _strict_identifier(entitlement.target_owner)
-        target_object = _strict_identifier(entitlement.target_object)
+        target_owner = _identifier_token(entitlement.target_owner)
+        target_object = _identifier_token(entitlement.target_object)
         target_key = (target_owner, target_object)
         if target_key not in seen_targets:
             seen_targets.add(target_key)
-            managed_targets.append((target_owner, target_object, f"{target_owner}.{target_object}"))
+            managed_targets.append(
+                (
+                    _identifier_name(target_owner),
+                    _identifier_name(target_object),
+                    f"{target_owner}.{target_object}",
+                )
+            )
         data_grant_name = entitlement.data_grant_name or _data_grant_name(entitlement)
         data_grant_name = _strict_identifier(data_grant_name)
         if data_grant_name not in seen_grants:
             seen_grants.add(data_grant_name)
             managed_grants.append(data_grant_name)
     managed_disable_statements = tuple(
-        _trusted_identifier_sql(
+        _single_quoted_identifier_sql(
             """
             DECLARE
               v_count NUMBER;
@@ -1094,8 +1160,16 @@ class DeepSecService:
             names = profiles[0]["objects"]
             terms = []
             for i, name in enumerate(names):
-                binds[f"profile_object_{i}"] = name
-                terms.append(f"o.owner || '.' || o.object_name = :profile_object_{i}")
+                try:
+                    identity = parse_object_identity(str(name))
+                except ValueError:
+                    continue
+                # 連結文字列で比較すると引用名・dot を含む名前を取り違えるため、部分ごとに比べる。
+                binds[f"profile_owner_{i}"] = identity.owner
+                binds[f"profile_object_{i}"] = identity.object_name
+                terms.append(
+                    f"(o.owner = :profile_owner_{i} AND o.object_name = :profile_object_{i})"
+                )
             filters.append("(" + " OR ".join(terms) + ")" if terms else "1 = 0")
         normalized_owner_prefix = owner_prefix.strip().upper()
         if normalized_owner_prefix:
@@ -1170,11 +1244,13 @@ class DeepSecService:
                 total = int((db_cursor.fetchone() or (0,))[0] or 0)
 
         page_rows = rows[:normalized_limit]
+        # owner / object_name はカタログ上の値のまま返す。以前は大文字化していたため、
+        # "Mixed_Case" が大文字の同名表 MIXED_CASE として選択されていた。
         items = [
             {
                 "name": object_name,
                 "owner": owner,
-                "qualified_name": f"{owner}.{object_name}",
+                "qualified_name": qualified_object_name(owner, object_name),
                 "object_type": object_type,
                 "row_count": int(row_count) if row_count is not None else None,
                 "comment": comment,
@@ -1182,14 +1258,14 @@ class DeepSecService:
             for row in page_rows
             for owner, object_name, object_type, row_count, comment in [
                 (
-                    str(row[0] or "").upper(),
-                    str(row[1] or "").upper(),
+                    str(row[0] or ""),
+                    str(row[1] or ""),
                     str(row[2] or "").upper(),
                     row[3],
                     str(row[4] or ""),
                 )
             ]
-            if _deepsec_target_visible(owner, object_name)
+            if owner and object_name and _deepsec_target_visible(owner, object_name)
         ]
         next_cursor = None
         if len(rows) > normalized_limit and items:
@@ -1215,8 +1291,8 @@ class DeepSecService:
         object_name: str,
         object_type: str = "",
     ) -> dict[str, object]:
-        target_owner = _strict_identifier(owner)
-        target_object = _strict_identifier(object_name)
+        target_owner = _identifier_name(owner)
+        target_object = _identifier_name(object_name)
         if not _deepsec_target_visible(target_owner, target_object):
             raise SecurityApiError(404, "対象 object が見つかりません。")
         requested_type = object_type.strip().replace("_", " ").upper()
@@ -1301,21 +1377,22 @@ class DeepSecService:
             )
             column_rows = list(db_cursor.fetchall())
 
-        actual_owner = str(object_row[0] or "").upper()
-        actual_name = str(object_row[1] or "").upper()
+        actual_owner = str(object_row[0] or "")
+        actual_name = str(object_row[1] or "")
         actual_type = str(object_row[2] or "").upper()
         row_count = object_row[3]
         comment = str(object_row[4] or "")
         return {
             "name": actual_name,
             "owner": actual_owner,
-            "qualified_name": f"{actual_owner}.{actual_name}",
+            "qualified_name": qualified_object_name(actual_owner, actual_name),
             "object_type": actual_type,
             "row_count": int(row_count) if row_count is not None else None,
             "comment": comment,
             "columns": [
                 {
-                    "column_name": str(column_name or "").upper(),
+                    # Data Grant の column_names と同じ canonical token で返す。
+                    "column_name": _catalog_identifier_token(column_name),
                     "logical_name": str(column_comment or column_name or ""),
                     "data_type": str(data_type or ""),
                     "nullable": str(nullable or "Y").upper() == "Y",
@@ -1492,7 +1569,9 @@ class DeepSecService:
                 entitlement,
                 role_id=role.role_id,
                 capability="SELECT",
-                resource_code=f"{entitlement.target_owner}.{entitlement.target_object}",
+                target_owner=_identifier_token(entitlement.target_owner),
+                target_object=_identifier_token(entitlement.target_object),
+                resource_code=_qualified(entitlement.target_owner, entitlement.target_object),
                 scope_code=(
                     "*"
                     if entitlement.scope_mode == "ALL"
@@ -1556,8 +1635,8 @@ class DeepSecService:
         }
         desired_targets = {
             (
-                _strict_identifier(entitlement.target_owner),
-                _strict_identifier(entitlement.target_object),
+                _identifier_token(entitlement.target_owner),
+                _identifier_token(entitlement.target_object),
             )
             for other_role in self.security.list_roles(include_archived=True)
             if other_role.role_id != role.role_id
@@ -1566,8 +1645,8 @@ class DeepSecService:
         }
         desired_targets.update(
             (
-                _strict_identifier(entitlement.target_owner),
-                _strict_identifier(entitlement.target_object),
+                _identifier_token(entitlement.target_owner),
+                _identifier_token(entitlement.target_object),
             )
             for entitlement in desired_entitlements
             if _is_real_data_entitlement(entitlement)
@@ -1595,8 +1674,8 @@ class DeepSecService:
             if grant_name in desired_grant_names:
                 continue
             target = (
-                _strict_identifier(entitlement.target_owner),
-                _strict_identifier(entitlement.target_object),
+                _identifier_token(entitlement.target_owner),
+                _identifier_token(entitlement.target_object),
             )
             if target not in desired_targets and target not in disabled_targets:
                 statements.append(_disable_data_grants_only_statement(*target))
@@ -1655,8 +1734,8 @@ class DeepSecService:
         return [
             OracleManagedDataGrant(
                 grant_name=_strict_identifier(str(row[0])),
-                target_owner=_strict_identifier(str(row[1])),
-                target_object=_strict_identifier(str(row[2])),
+                target_owner=_catalog_identifier_token(row[1]),
+                target_object=_catalog_identifier_token(row[2]),
                 grantee=_strict_identifier(str(row[3])),
                 grantee_type=str(row[4]).upper(),
             )
@@ -2097,10 +2176,11 @@ class DeepSecService:
         return entitlements
 
     def _managed_target_keys(self) -> set[tuple[str, str]]:
+        """管理対象の (owner, object) をカタログ上の名前（辞書ビューの bind 用）で返す。"""
         return {
             (
-                _strict_identifier(entitlement.target_owner),
-                _strict_identifier(entitlement.target_object),
+                _identifier_name(entitlement.target_owner),
+                _identifier_name(entitlement.target_object),
             )
             for entitlement in self._managed_real_entitlements()
             if _is_real_data_entitlement(entitlement)
@@ -2123,8 +2203,8 @@ class DeepSecService:
              ORDER BY POLICY_NAME
             """,
             {
-                "target_owner": _strict_identifier(target_owner),
-                "target_object": _strict_identifier(target_object),
+                "target_owner": _identifier_name(target_owner),
+                "target_object": _identifier_name(target_object),
             },
         )
         return [
@@ -2144,15 +2224,16 @@ class DeepSecService:
         *,
         dependency_plan: DependencyPlan | None = None,
     ) -> dict[str, str]:
-        target_owner = _strict_identifier(entitlement.target_owner)
-        target_object = _strict_identifier(entitlement.target_object)
+        # bind にはカタログ上の名前を使う。引用名を大文字化せず、大文字の同名表と取り違えない。
+        target_owner = _identifier_name(entitlement.target_owner)
+        target_object = _identifier_name(entitlement.target_object)
         target_type = entitlement.target_type.strip().upper() or "TABLE"
         if target_type not in _DEEPSEC_MANAGED_TARGET_TYPES:
             raise SecurityApiError(400, "対象は TABLE / VIEW / MATERIALIZED VIEW のみです。")
-        if target_owner in _DEEPSEC_INTERNAL_OWNER_NAMES:
+        if target_owner.upper() in _DEEPSEC_INTERNAL_OWNER_NAMES:
             raise SecurityApiError(400, "SYS/SYSTEM schema の object は管理対象にできません。")
         app_owner = _strict_identifier(self.settings.oracle_user)
-        if target_owner == app_owner and target_object.startswith(
+        if target_owner.upper() == app_owner and target_object.upper().startswith(
             _DEEPSEC_INTERNAL_OBJECT_PREFIXES
         ):
             raise SecurityApiError(400, "NL2SQL の内部/security object は管理対象にできません。")
@@ -2191,11 +2272,14 @@ class DeepSecService:
             """,
             {"owner": target_owner, "object_name": target_object},
         )
-        columns = {str(row[0]).upper(): str(row[1]).upper() for row in cursor.fetchall()}
+        # 列も canonical token で照合する。大文字化すると "Amount" と AMOUNT を取り違える。
+        columns = {
+            _catalog_identifier_token(row[0]): str(row[1]).upper() for row in cursor.fetchall()
+        }
         missing_columns = [
             column
             for column in entitlement.column_names
-            if _strict_identifier(column) not in columns
+            if _identifier_token(column) not in columns
         ]
         if missing_columns:
             raise SecurityApiError(
@@ -2222,7 +2306,7 @@ class DeepSecService:
                 raise SecurityApiError(400, "FILTERS scope では scope column を指定できません。")
             self._validate_scope_filters(columns, entitlement)
             return columns
-        scope_column = _strict_identifier(entitlement.scope_column)
+        scope_column = _identifier_token(entitlement.scope_column)
         if scope_column not in columns:
             raise SecurityApiError(400, "scope column が対象 object に存在しません。")
         if _scope_value_type(columns[scope_column]) != "TEXT":
@@ -2251,7 +2335,7 @@ class DeepSecService:
                 "FILTERS scope の scope_code が条件 checksum と一致しません。",
             )
         for filter_item in entitlement.scope_filters:
-            column_name = _strict_identifier(filter_item.column_name)
+            column_name = _identifier_token(filter_item.column_name)
             if column_name not in columns:
                 raise SecurityApiError(400, "scope filter column が対象 object に存在しません。")
             value_type = filter_item.value_type.strip().upper()
@@ -2344,8 +2428,8 @@ class DeepSecService:
                         {
                             "owner": _strict_identifier(self.settings.oracle_user),
                             "grant_name": _strict_identifier(grant_name),
-                            "target_owner": _strict_identifier(entitlement.target_owner),
-                            "target_object": _strict_identifier(entitlement.target_object),
+                            "target_owner": _identifier_name(entitlement.target_owner),
+                            "target_object": _identifier_name(entitlement.target_object),
                             "expected_grantee": expected_grantee,
                             "legacy_grantee": legacy_direct_grantee,
                         },
@@ -2376,7 +2460,7 @@ class DeepSecService:
                         _DEEPSEC_LEGACY_APP_USER_CONTEXT_EXPR in predicate
                         for predicate in predicates
                     )
-                    target = f"{entitlement.target_owner}.{entitlement.target_object}"
+                    target = _qualified(entitlement.target_owner, entitlement.target_object)
                     vpd_policy_rows = self._enabled_vpd_policy_rows(
                         cursor,
                         target_owner=entitlement.target_owner,
