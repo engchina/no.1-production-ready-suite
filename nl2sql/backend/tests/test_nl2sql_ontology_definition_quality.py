@@ -126,9 +126,7 @@ def test_staged_worker_and_checkpoint_reuse_after_service_restart(
     assert [p.name for p in job.definition_phases] == [
         "freeze",
         "evidence",
-        "objects",
-        "shared",
-        "capabilities",
+        "concepts",
         "validation",
         "markdown",
         "save",
@@ -157,53 +155,3 @@ def test_staged_worker_and_checkpoint_reuse_after_service_restart(
     assert not warnings
     bundle = ProfileOntologyDefinitionService(rt).get("sales", job.result_bundle_id)
     assert any(source.kind == "manual" for source in bundle.sources)
-
-
-def test_supplement_adds_distinct_concepts_and_preserves_actionable_warnings() -> None:
-    class SupplementClient(_FakeEnterpriseAiClient):
-        def generate(
-            self,
-            *,
-            prompt: str,
-            context: str,
-            system_prompt: str,
-            response_format: object | None = None,
-        ) -> str:
-            self.calls.append(prompt)
-            assert "正常な処理方針を warnings_ja に重複記録しない" in system_prompt
-            if prompt.startswith("共有プロパティ・値型"):
-                assert "別の定義を作らないでください" not in prompt
-                assert "同一概念の重複定義を作らない" in prompt
-                assert "既存定義にない別の概念" in prompt
-                return json.dumps(
-                    {
-                        "definitions": [
-                            {
-                                "kind": "shared_property",
-                                "api_name": "Amount",
-                                "name_ja": "金額",
-                                "data_type": "number",
-                                "missing_information_ja": ["通貨は資料に未記載"],
-                            }
-                        ],
-                        "warnings_ja": ["受注金額の通貨に資料間の矛盾があります。"],
-                    }
-                )
-            if prompt.startswith("資料に明記された関数"):
-                assert '"api_name":"Amount"' in prompt
-                assert "coverage に未生成の理由を記録" in prompt
-                return json.dumps({"definitions": [], "warnings_ja": []})
-            return self.payload
-
-    rt, legacy = runtime()
-    client = SupplementClient(json.dumps({"definitions": definition_payload()}))
-    legacy._enterprise_ai_client = client
-    service = OntologyBuildService(rt)
-    job = _wait_for_job(service, service.start("sales", business_text="受注金額を集計する。").id)
-    bundle = ProfileOntologyDefinitionService(rt).get("sales", job.result_bundle_id)
-    amounts = [item for item in bundle.definitions if item.api_name == "Amount"]
-    assert len(amounts) == 1
-    assert amounts[0].kind == "shared_property"
-    assert amounts[0].missing_information_ja == ["通貨は資料に未記載"]
-    assert "受注金額の通貨に資料間の矛盾があります。" in job.warnings_ja
-    assert any(prompt.startswith("資料に明記された関数") for prompt in client.calls)

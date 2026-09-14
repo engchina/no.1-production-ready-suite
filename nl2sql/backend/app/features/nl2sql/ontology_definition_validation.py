@@ -171,12 +171,16 @@ def validate_definitions(
                     "mappings",
                     "オブジェクトの物理マッピングが必要です。",
                 )
-            for name in {*item.properties, *item.primary_key}:
+            for name in {
+                *item.properties,
+                *item.primary_key,
+                *([item.title_property] if item.title_property else []),
+            }:
                 prop = definitions.get(name)
                 if isinstance(prop, PropertyDefinition) and prop.object_type != item.api_name:
                     error(
                         "PROPERTY_OWNER_MISMATCH",
-                        "properties",
+                        "title_property" if name == item.title_property else "properties",
                         f"{name} は別オブジェクトのプロパティです。",
                     )
             for implementation in item.implements:

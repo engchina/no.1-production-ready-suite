@@ -937,6 +937,14 @@ class OntologyBuildExtraction(OntologyContract):
     warnings_ja: list[str] = Field(default_factory=list)
 
 
+class OntologyConceptExtraction(OntologyContract):
+    """新規生成の正本。旧形式の候補は OntologyBuildExtraction でのみ読み込む。"""
+
+    definitions: list[BusinessDefinition] = Field(default_factory=list)
+    coverage: list[ConceptCoverage] = Field(default_factory=list)
+    warnings_ja: list[str] = Field(default_factory=list)
+
+
 class QaPair(OntologyContract):
     """Q/A Excel の 1 行(質問と正解 SQL)。"""
 
@@ -1020,6 +1028,9 @@ class OntologyBuildStep(OntologyContract):
     finished_at: datetime | None = None
 
 
+OntologyBuildPhase = Literal["freeze", "evidence", "concepts", "validation", "markdown", "save"]
+
+
 class OntologyBuildEvent(OntologyContract):
     """アクティビティタイムライン 1 行(時刻付きの進捗イベント)。"""
 
@@ -1029,6 +1040,8 @@ class OntologyBuildEvent(OntologyContract):
     code: str = ""
     # イベントの帰属ステップ(frontend のステップ別タイムライン用)。
     step: OntologyBuildStepName | None = None
+    # 入力別 step と独立した表示工程。旧イベントには存在しない。
+    phase: OntologyBuildPhase | None = None
 
 
 class OntologyBuildJob(OntologyContract):

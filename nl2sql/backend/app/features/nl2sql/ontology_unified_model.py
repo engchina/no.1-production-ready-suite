@@ -354,6 +354,13 @@ def merge_definitions(
     remap: dict[str, str] = {}
     for original in definitions:
         item = original.model_copy(deep=True)
+        # 単一バッチ内の重複も除去する。複数定義の併合時だけに限定しない。
+        for field in ("aliases", "evidence", "missing_information_ja", "mappings"):
+            unique = {
+                canonical_json(v.model_dump(mode="json") if hasattr(v, "model_dump") else v): v
+                for v in getattr(item, field)
+            }
+            setattr(item, field, list(unique.values()))
         identity = (item.kind, item.api_name)
         # 安定 ID の明示的一致も同一性の根拠にする。名前や同じ表だけでは併合しない。
         prior = merged.get(identity) or next(

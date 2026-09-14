@@ -53,7 +53,15 @@ class DefinitionSource(DefinitionContract):
 
 class DefinitionPhase(DefinitionContract):
     name: Literal[
-        "freeze", "evidence", "objects", "shared", "capabilities", "validation", "markdown", "save"
+        "freeze",
+        "evidence",
+        "concepts",
+        "objects",
+        "shared",
+        "capabilities",
+        "validation",
+        "markdown",
+        "save",
     ]
     status: Literal["pending", "running", "succeeded", "failed", "skipped"] = "pending"
     detail_ja: str = ""
@@ -121,7 +129,12 @@ class InterfaceImplementation(DefinitionContract):
 class ObjectTypeDefinition(DefinitionBase):
     kind: Literal["object_type"] = "object_type"
     primary_key: list[str] = Field(default_factory=list)
-    title_property: str = ""
+    title_property: str = Field(
+        default="",
+        description="任意の表示用プロパティ参照。同じオブジェクトに属する property の api_name。"
+        "根拠がなければ空文字。JSON のキー出力は必須でも、値の設定は必須ではない。"
+        "未設定を資料不足・必須項目不足として報告しない。",
+    )
     grain_ja: str = ""
     properties: list[str] = Field(default_factory=list)
     implements: list[InterfaceImplementation] = Field(default_factory=list)

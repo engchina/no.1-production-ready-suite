@@ -954,26 +954,16 @@ def test_build_job_batches_all_source_chunks_without_omission(
     combined_context = "\n".join(text_contexts)
     for marker in markers:
         assert marker in combined_context
-    # 補完指示の長さで再分割数は変わる。3段階それぞれで本文の欠落・重複を検証する。
-    phase_texts: dict[str, dict[str, str]] = {}
-    for prompt, context in zip(client.calls, client.contexts, strict=True):
-        if "business_text_chunks" not in context:
-            continue
-        phase = (
-            "shared"
-            if prompt.startswith("共有プロパティ・値型")
-            else "capabilities" if prompt.startswith("資料に明記された関数") else "objects"
-        )
-        texts = phase_texts.setdefault(phase, {})
+    # 統合工程で各資料を一度だけ読み、分割後も欠落・重複がない。
+    texts: dict[str, str] = {}
+    for context in text_contexts:
         for chunk in json.loads(context)["business_text_chunks"]:
             source_id = chunk["source_id"]
             texts[source_id] = texts.get(source_id, "") + chunk["text"]
-    assert set(phase_texts) == {"objects", "shared", "capabilities"}
     expected_texts = {
         source_id: "".join(content.decode().split()) for source_id, content in contents.items()
     }
-    for texts in phase_texts.values():
-        assert {key: "".join(value.split()) for key, value in texts.items()} == expected_texts
+    assert {key: "".join(value.split()) for key, value in texts.items()} == expected_texts
     assert any("chunk batch" in event.message_ja for event in finished.events)
 
 
@@ -1011,7 +1001,7 @@ def test_build_job_batches_more_than_two_hundred_qa_pairs(
     qa_contexts = [context for context in client.contexts if '"qa_pairs"' in context]
     assert len(qa_contexts) > 1
     sent_pairs = [pair for context in qa_contexts for pair in json.loads(context)["qa_pairs"]]
-    assert len(sent_pairs) == 205 * 3
+    assert len(sent_pairs) == 205 * 2  # 統合抽出 + 取りこぼし確認（既定1回）
     assert {p["question"] for p in sent_pairs} == {p.question for p in qa_pairs}
     assert sent_pairs[-1]["question"] == "顧客別売上 204"
     assert any("Q/A batch" in event.message_ja for event in finished.events)
@@ -1305,7 +1295,7 @@ def test_extraction_prompt_contains_playground_rules() -> None:
 
     from app.features.nl2sql.ontology_build import _EXTRACTION_SYSTEM_PROMPT
 
-    assert "名詞をエンティティ候補" in _EXTRACTION_SYSTEM_PROMPT
+    assert "名詞をオブジェクト" in _EXTRACTION_SYSTEM_PROMPT
     assert "one_to_one / one_to_many / many_to_one / many_to_many" in _EXTRACTION_SYSTEM_PROMPT
     assert "主識別子" in _EXTRACTION_SYSTEM_PROMPT
 

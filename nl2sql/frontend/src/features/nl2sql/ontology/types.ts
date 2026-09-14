@@ -621,6 +621,7 @@ export interface OntologyBuildStep {
 }
 
 export interface OntologyBuildEvent {
+  phase?: "freeze" | "evidence" | "concepts" | "validation" | "markdown" | "save" | null;
   at: string;
   message_ja: string;
   /** 機械可読イベントコード(例: MARKDOWN_DRAFT_UPDATED。旧 job は空)。 */
@@ -632,7 +633,7 @@ export interface OntologyBuildEvent {
 export interface OntologyBuildJob {
   result_bundle_id?: string;
   concept_coverage?: {kind:string;status:string;count:number;reason_ja:string}[];
-  definition_phases?: { name: "freeze" | "evidence" | "objects" | "shared" | "capabilities" | "validation" | "markdown" | "save"; status: "pending" | "running" | "succeeded" | "failed" | "skipped"; detail_ja: string; started_at?: string; finished_at?: string }[];
+  definition_phases?: { name: "freeze" | "evidence" | "concepts" | "objects" | "shared" | "capabilities" | "validation" | "markdown" | "save"; status: "pending" | "running" | "succeeded" | "failed" | "skipped"; detail_ja: string; started_at?: string; finished_at?: string }[];
   id: string;
   profile_id: string;
   status: OntologyBuildStatus;

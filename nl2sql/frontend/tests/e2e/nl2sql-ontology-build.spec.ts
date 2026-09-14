@@ -2374,7 +2374,7 @@ test("完了 job に実行中 step が混在しても Markdown 下書き生成�
     "data-job-status",
     "succeeded"
   );
-  await expect(page.getByTestId("ontology-build-step-progress")).toContainText("4/4");
+  await expect(page.getByTestId("ontology-build-step-progress")).toContainText("5/5");
   await expect(proposalStep).toHaveAttribute("data-step-status", "succeeded");
   await expect(proposalStep.locator(".animate-spin")).toHaveCount(0);
   await expect(page.getByTestId("ontology-build-cancel")).toHaveCount(0);
@@ -2671,9 +2671,11 @@ test("構築段階は一般状態を日本語だけで表示し専門概念の�
   await expect(phases).not.toContainText(/Completed|Running|Skipped|Pending|Failed/);
   await expect(phases).toContainText("保存・最終確認");
   const text = await phases.textContent();
-  expect(text!.indexOf("基本概念の構築")).toBeLessThan(text!.indexOf("関連概念の補完"));
+  await expect(phases).not.toContainText("基本概念の構築");
+  await expect(phases.locator("[data-testid^=ontology-build-stage-]")).toHaveCount(5);
+  await expect(page.getByTestId("ontology-build-step-progress")).toContainText("5/5");
   expect(text!.indexOf("Markdown 下書き生成")).toBeLessThan(text!.indexOf("保存・最終確認"));
-  await phases.getByText("関連概念の補完",{exact:true}).click();
+  await phases.getByText("関連概念の構築",{exact:true}).click();
   await phases.getByText("主要概念（6種類）",{exact:true}).click();
   await phases.getByText("補助概念（7種類）",{exact:true}).click();
   await expect(phases.getByText(/オブジェクト型（Object Type）/)).toBeVisible();
@@ -2974,4 +2976,51 @@ for (const saveExplicitly of [true, false]) {
     await editor.scrollIntoViewIfNeeded();
     await page.screenshot({ path: testInfo.outputPath("markdown-edit-after-publication.png") });
   });
+}
+
+for (const theme of ["light", "dark"]) {
+  for (const width of [1280, 1920]) {
+    test(`統合概念生成は5段階とログを一度だけ表示する ${theme} ${width}`, async ({ page }, testInfo) => {
+      test.skip(testInfo.project.name !== "desktop" && width !== 1280, "375幅は各テーマ1回確認");
+      if (testInfo.project.name === "desktop") await page.setViewportSize({width, height: 1000});
+      await page.addInitScript(theme => {
+        localStorage.setItem("production-ready-nl2sql.ui", JSON.stringify({state:{sidebarCollapsed:false,collapsedSections:{},theme},version:0}));
+      }, theme);
+      await mockApi(page);
+      const payload = buildJob("running", "succeeded");
+      payload.job.definition_phases = ["freeze", "evidence", "concepts", "validation", "markdown", "save"].map(name => ({
+        name, status: name === "concepts" ? "running" : ["freeze", "evidence"].includes(name) ? "succeeded" : "pending", detail_ja: "",
+      }));
+      payload.job.steps.find(step => step.name === "schema_naming")!.status = "running";
+      payload.job.steps.find(step => step.name === "proposal_registration")!.status = "pending";
+      const typedEvents = [
+        {at:new Date().toISOString(),message_ja:"13種類の関連概念を抽出しています。",step:"schema_naming",phase:"concepts"},
+        {at:new Date().toISOString(),message_ja:"13種類の関連概念を抽出しています。",step:"schema_naming",phase:"concepts"},
+      ];
+      payload.job.events = typedEvents;
+      payload.job.started_at = new Date().toISOString();
+      await page.route("**/api/nl2sql/ontology-build/*", route => fulfillJson(route, payload));
+      await page.goto("/ontology-build?profile=default");
+      await loadOntologyBuildWorkspace(page);
+      await page.getByRole("button", {name:"AI 構築を実行",exact:true}).click();
+      const progress = page.getByTestId("ontology-build-steps");
+      const concepts = progress.getByTestId("ontology-build-stage-concepts");
+      await expect(concepts).toHaveAttribute("data-step-status", "running");
+      await expect(progress.locator("[data-testid^=ontology-build-stage-]")).toHaveCount(5);
+      await expect(page.getByTestId("ontology-build-step-progress")).toContainText("1/5");
+      await expect(progress).not.toContainText("基本概念の構築");
+      await expect(progress).not.toContainText("共有定義（Shared Definitions）");
+      await expect(concepts.getByText("13種類の関連概念を抽出しています。",{exact:true})).toHaveCount(1);
+      await expect(concepts.getByText("13種類の関連概念を抽出しています。",{exact:true})).toBeVisible();
+      const mainConcepts = concepts.getByText("主要概念（6種類）",{exact:true});
+      await mainConcepts.focus(); await page.keyboard.press("Enter");
+      await expect(concepts.getByText(/オブジェクト型（Object Type）/)).toBeVisible();
+      await progress.screenshot({path:testInfo.outputPath(`unified-progress-${theme}-${width}.png`)});
+      payload.job.status = "succeeded";
+      payload.job.definition_phases.forEach(p => {p.status = "succeeded";});
+      payload.job.steps.forEach(step => {step.status = "succeeded";});
+      await expect(page.getByTestId("ontology-build-step-progress")).toContainText("5/5");
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    });
+  }
 }

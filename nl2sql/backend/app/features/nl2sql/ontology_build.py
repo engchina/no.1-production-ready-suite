@@ -1,4 +1,4 @@
-"""AI オントロジー構築(業務エンティティ命名・Q/A 学習・自然言語補強)。
+"""AI オントロジー構築(スキーマ・Q/A・資料から13種類の関連概念を統合抽出)。
 
 OCI Enterprise AI の入力 schema は Profile + DB schema catalog から直接作る。
 出力は Pydantic(:class:`OntologyBuildExtraction`)で検証し、profile スコープ外の
@@ -22,7 +22,7 @@ import time
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from uuid import uuid4
 
 from app.features.nl2sql.models import Nl2SqlProfile, SchemaCatalog, SchemaTable
@@ -44,10 +44,12 @@ from app.features.nl2sql.ontology_models import (
     OntologyBuildEvent,
     OntologyBuildExtraction,
     OntologyBuildJob,
+    OntologyBuildPhase,
     OntologyBuildStatus,
     OntologyBuildStep,
     OntologyBuildStepName,
     OntologyBuildStepStatus,
+    OntologyConceptExtraction,
     OntologyEdge,
     OntologyEdgeKind,
     OntologyEvidence,
@@ -2000,54 +2002,44 @@ def render_ontology_build_markdown(
 # --- LLM 呼び出し -----------------------------------------------------------------------------
 
 _EXTRACTION_SYSTEM_PROMPT = (
-    "あなたは NL2SQL 用オントロジーの構築支援器です。JSON オブジェクトだけを返し、"
-    "説明文や Markdown を付けないでください。返す JSON は次の形式です: "
-    '{"entities": [{"object_name": "OWNER.OBJECT", "business_name_ja": "...", '
-    '"description_ja": "...", "aliases": ["..."], "confidence": 0.0}], '
-    '"relationships": [{"source_object": "OWNER.OBJECT", "target_object": "OWNER.OBJECT", '
-    '"relationship_name_ja": "...", "cardinality": "many_to_one", '
-    '"join_conditions": [{"left": "OWNER.OBJECT.COLUMN", "right": "OWNER.OBJECT.COLUMN", '
-    '"operator": "="}], "evidence_ja": "...", "confidence": 0.0}], '
-    '"metrics": [{"metric_name_ja": "...", "expression_sql": "SUM(OWNER.OBJECT.COLUMN)", '
-    '"aggregation": "sum", "base_columns": ["OWNER.OBJECT.COLUMN"], "unit": "", '
-    '"description_ja": "...", "evidence_ja": "...", "confidence": 0.0}], '
-    '"synonyms": [{"target": "OWNER.OBJECT", "aliases": ["..."], "evidence_ja": "..."}], '
-    '"warnings_ja": ["..."]} '
-    "。schema_context に存在しない owner/object/column を参照しないでください。"
-    "owner/object/column は schema_context の表記どおりに書き、二重引用符で囲まれた名前は"
-    '引用符と大文字小文字を保ってください(例: SALES."Mixed_Case"."Amount")。'
-    "qa_pairs に schema_resolved_columns / schema_resolved_join_conditions がある場合は、"
-    "SQL の alias 表記ではなく、その正規化済み参照を使ってください。"
-    "抽出ルール: (1) 業務文中の名詞をエンティティ候補、動詞・述語を関係候補として抽出する。"
-    "(2) 各関係の cardinality は one_to_one / one_to_many / many_to_one / many_to_many から"
-    "必ず選ぶ。判断できない場合のみ unknown とし、理由を warnings_ja に 1 行残す。"
-    "(3) 各エンティティの主識別子(主キーに相当する列)を description_ja に明記する。"
-    "(4) 各エンティティ・同義語には、利用者が質問で使いそうな言い回し"
-    "(短縮形・ひらがな表記・別表記・現場用語)を 2〜5 個 aliases として提案する。"
-    "確信が持てない候補は confidence を下げるか warnings_ja に残してください。"
-    "出力に含める業務名・説明・証拠・警告・同義語の文言はすべて日本語にしてください。"
-    "汎用的な英語ラベルや説明文をそのまま出さないでください。"
-    "\n指標の例: APP.ORDERS(ORDER_ID, AMOUNT, STATUS) で STATUS='CONFIRMED' が確定済みなら、"
-    "『確定済み受注金額』は SUM(CASE WHEN APP.ORDERS.STATUS='CONFIRMED' "
-    "THEN APP.ORDERS.AMOUNT ELSE 0 END)。状態の値が資料に無ければ確認事項にする。"
-)
-
-
-_EXTRACTION_SYSTEM_PROMPT += (
-    "\n互換フィールドに加え、応答 JSON Schema の definitions で型付き定義を返す。"
-    "Object Type/Property/Link Type/Function/Action Type/Interface と補助概念を対象とし、"
-    "api_name は英語の安定識別子、概念参照は同一 definitions 内の api_name とする。"
-    "物理表と業務オブジェクトを一対一と決めつけない。根拠は evidence の資料 ID と位置に記録する。"
-    "不足項目は missing_information_ja、未生成の種類は coverage に理由を残す。"
-    "資料にない任意の概念・契約を生成しなかったことや、既存 ID の再利用などの"
+    "あなたは NL2SQL 用オントロジーの構築支援器です。"
+    "応答 JSON Schema に従った JSON だけを返してください。"
+    "新規生成は definitions を唯一の正本とし、entities/relationships/metrics/synonyms の旧形式へ"
+    "同じ候補を二重出力しないでください。"
+    "各入力バッチから主要6種類（Object Type/Property/Link Type/"
+    "Interface/Function/Action Type）と"
+    "補助7種類（Shared Property/Value Type/Enumeration/Metric/"
+    "Business Rule/Business Event/Object Set）を"
+    "まとめて抽出してください。根拠のない種類は創作せず coverage に未生成の理由を記録してください。"
+    "同一概念の重複定義を作らず、同じ種類と api_name または"
+    "既存 ID が一致する概念を補完してください。"
+    "既存定義にない別の概念は資料・スキーマに根拠があれば追加してください。"
+    "api_name は安定した英語識別子、参照は definitions の api_name とします。"
+    "schema_context に存在しない owner/object/column を参照しないでください。"
+    '引用された物理名は引用符と大文字小文字を保持してください（例: SALES."Mixed_Case"."Amount"）。'
+    "Q/A の schema_resolved_columns/schema_resolved_join_conditions を正とし、"
+    "SQL の alias を物理名にしない。"
+    "名詞をオブジェクト、動詞・述語を関係の手がかりとし、物理表と業務オブジェクトを一対一と決めつけない。"
+    "主識別子 primary_key/properties は所属する Property の api_name を参照し、"
+    "grain_ja は業務上の粒度、mappings は根拠のある物理表・列を設定する。"
+    "JSON Schema の required はキーの出力要件であり、すべての値が業務上必須という意味ではない。"
+    "title_property は任意で、根拠のある同じオブジェクトの表示用 Property がなければ空文字にする。"
+    "title_property の未設定を warnings_ja や missing_information_ja に記録しない。"
+    "必須項目の不足は対象定義の missing_information_ja に具体的なフィールド名と理由を記録し、"
+    "キーが required という理由だけで不足を推測しない。必須判定の正本は型と後段の機械的検証である。"
+    "資料にない任意の概念・契約を生成しなかったことや既存 ID の再利用などの"
     "正常な処理方針を warnings_ja に重複記録しない。"
     "warnings_ja は根拠の矛盾や抽出失敗など利用者の確認・修正が必要な問題に限定する。"
-    "実装キー・権限・アルゴリズムを推測せず、SQL 条件を業務定義と一致させる。"
-    "指標は filter_sql/aggregation/grain/distinct_keys/time_property/time_policy_ja/"
-    "unit/currency/null_policy_ja/additivity を記録し、未確定は不足理由を残す。"
+    "関係の cardinality は one_to_one / one_to_many / many_to_one / many_to_many を"
+    "主キー・一意制約と資料から判断し、不明なら unknown と理由を記録する。"
+    "指標は expression_sql/filter_sql/aggregation/grain/distinct_keys/"
+    "time_property/time_policy_ja/"
+    "unit/currency/null_policy_ja/additivity を資料に合わせ、"
+    "実装キー・権限・アルゴリズムは創作しない。"
     "インターフェースは必須プロパティ・関係・アクションと実装オブジェクトの対応を定義する。"
-    "evidence は入力の source_id と locator、原文をそのまま引用し、"
-    "assertion に対象フィールドを記録する。DB は source_id=schema、locator=OWNER.OBJECT。"
+    "業務名・説明・同義語は日本語とし、現場の別名・略称を aliases に記録する。"
+    "evidence は入力の source_id と locator、原文の引用を記録し、assertion に対象フィールドを書く。"
+    "DB は source_id=schema、locator=OWNER.OBJECT とする。"
 )
 
 
@@ -2127,8 +2119,15 @@ def merge_build_extractions(
         synonyms.append(synonym)
         added += 1
 
-    definitions = [*base.definitions, *addition.definitions]
-    added += len(addition.definitions)
+    # 完全に同じ再出力だけを除去する。差分は最終の意味的統合へ渡し競合を保持する。
+    definitions = list(base.definitions)
+    definition_values = {canonical_json(d.model_dump(mode="json")) for d in definitions}
+    for definition in addition.definitions:
+        value = canonical_json(definition.model_dump(mode="json"))
+        if value not in definition_values:
+            definitions.append(definition)
+            definition_values.add(value)
+            added += 1
     warnings_ja = [*base.warnings_ja]
     for warning in addition.warnings_ja:
         if warning not in warnings_ja:
@@ -2198,7 +2197,7 @@ class _OntologyBuildLlmTask:
     qa_batch: list[QaPair] | None = None
     text_batch: list[_BuildTextUnit] | None = None
     schema_payload: dict[str, Any] | None = None
-    definition_phase: str = "objects"
+    definition_phase: str = "concepts"
 
     def split(self) -> list[_OntologyBuildLlmTask] | None:
         """batch を二分割した子タスクを返す(分割不能・要素 1 件以下は None)。"""
@@ -2708,7 +2707,7 @@ def _batch_qa_pairs(
 _STEP_LABELS_JA: dict[OntologyBuildStepName, str] = {
     OntologyBuildStepName.SOURCE_EXTRACTION: "資料の抽出",
     OntologyBuildStepName.SCHEMA_CONTEXT: "スキーマ情報の準備",
-    OntologyBuildStepName.SCHEMA_NAMING: "業務エンティティ命名",
+    OntologyBuildStepName.SCHEMA_NAMING: "スキーマからの概念抽出",
     OntologyBuildStepName.QA_EXTRACTION: "Q/A からの抽出",
     OntologyBuildStepName.TEXT_EXTRACTION: "業務説明からの抽出",
     OntologyBuildStepName.PROPOSAL_REGISTRATION: "Markdown 下書き生成",
@@ -2811,10 +2810,10 @@ class OntologyBuildService:
                 for name in (
                     "freeze",
                     "evidence",
-                    "objects",
-                    "shared",
-                    "capabilities",
+                    "concepts",
                     "validation",
+                    "markdown",
+                    "save",
                 )
             ],
             profile_fingerprint=definition_fingerprint(
@@ -3585,12 +3584,26 @@ class OntologyBuildService:
         *,
         code: str = "",
         step: OntologyBuildStepName | None = None,
+        phase: OntologyBuildPhase | None = None,
     ) -> None:
         """アクティビティタイムラインへ 1 行追記する(上限超過は古い順に間引く)。"""
 
-        event = OntologyBuildEvent(message_ja=message_ja, code=code, step=step)
+        event = OntologyBuildEvent(message_ja=message_ja, code=code, step=step, phase=phase)
 
         def mutate(job: OntologyBuildJob) -> None:
+            if event.phase is None:
+                active = next(
+                    (p for p in reversed(job.definition_phases) if p.status == "running"), None
+                )
+                if active and active.name in {
+                    "freeze",
+                    "evidence",
+                    "concepts",
+                    "validation",
+                    "markdown",
+                    "save",
+                }:
+                    event.phase = cast(OntologyBuildPhase, active.name)
             job.events.append(event)
             if len(job.events) > _MAX_JOB_EVENTS:
                 del job.events[: len(job.events) - _MAX_JOB_EVENTS]
@@ -3620,7 +3633,7 @@ class OntologyBuildService:
                     prompt=task.prompt,
                     context=task.context,
                     system_prompt=_EXTRACTION_SYSTEM_PROMPT,
-                    response_format=response_format(OntologyBuildExtraction),
+                    response_format=response_format(OntologyConceptExtraction),
                     max_output_tokens=budget,
                 )
             )
@@ -3629,7 +3642,7 @@ class OntologyBuildService:
                 prompt=task.prompt,
                 context=task.context,
                 system_prompt=_EXTRACTION_SYSTEM_PROMPT,
-                response_format=response_format(OntologyBuildExtraction),
+                response_format=response_format(OntologyConceptExtraction),
             )
         )
 
@@ -3648,6 +3661,7 @@ class OntologyBuildService:
         passes = max(0, int(get_settings().nl2sql_ontology_extraction_gleaning_passes))
         if passes == 0 or task.name not in {
             OntologyBuildStepName.SCHEMA_NAMING,
+            OntologyBuildStepName.QA_EXTRACTION,
             OntologyBuildStepName.TEXT_EXTRACTION,
         }:
             return extraction
@@ -3662,9 +3676,7 @@ class OntologyBuildService:
                         f"{item.source_object}->{item.target_object}"
                         for item in current.relationships
                     ],
-                    "抽出済み定義": [
-                        f"{item.kind}:{item.api_name}" for item in current.definitions
-                    ],
+                    "抽出済み定義": [item.model_dump(mode="json") for item in current.definitions],
                     "抽出済み指標": [item.metric_name_ja for item in current.metrics],
                     "抽出済み同義語": [item.target for item in current.synonyms],
                 },
@@ -3673,8 +3685,10 @@ class OntologyBuildService:
             glean_prompt = (
                 f"{task.prompt}\n\n【追加パス {pass_index}】前回までに抽出済みの候補は"
                 f"次のとおりです: {seen_summary} 。多くの候補が見逃されている可能性が"
-                "あります。これらに含まれていない候補だけを同じ JSON 形式で返して"
-                "ください。新しい候補が無ければ全フィールドが空の JSON を返してください。"
+                "あります。未抽出候補と、根拠を確認できた不足フィールドの補完だけを返してください。"
+                "補完対象だけを同じ id/api_name と既存の値を保って返し、"
+                "全定義を再生成しないでください。"
+                "追加・補完が無ければ配列がすべて空の JSON を返してください。"
             )
             if _llm_call_chars(glean_prompt, task.context) > _ONTOLOGY_BUILD_LLM_CONTEXT_MAX_CHARS:
                 return current
@@ -3696,7 +3710,7 @@ class OntologyBuildService:
                 return current
             merged, added = merge_build_extractions(current, addition)
             if added == 0:
-                return current
+                return merged
             current = merged
             self._emit(
                 job_id,
@@ -3776,8 +3790,8 @@ class OntologyBuildService:
             try:
                 raw = self._generate_extraction(client, task)
                 extraction = parse_extraction(raw)
-                if depth == 0 and task.definition_phase == "objects":
-                    # 取りこぼし回収(schema_naming / text_extraction のみ・最上位のみ)
+                if depth == 0 and task.definition_phase == "concepts":
+                    # 統合抽出の取りこぼし回収。再試行の子バッチでは重複実行しない。
                     extraction = self._glean_extraction(
                         job_id, client, task, extraction, label=label
                     )
@@ -4187,7 +4201,6 @@ class OntologyBuildService:
         )
         self._set_definition_phase(job_id, "freeze", "succeeded")
         self._set_definition_phase(job_id, "evidence", "succeeded")
-        self._set_definition_phase(job_id, "objects", "running")
         self._set_step(
             job_id,
             OntologyBuildStepName.SCHEMA_CONTEXT,
@@ -4197,7 +4210,9 @@ class OntologyBuildService:
         self._emit(
             job_id,
             f"スキーマ情報を準備しました(表・ビュー {object_count} 件、列 {column_count} 件)。",
+            phase="evidence",
         )
+        self._set_definition_phase(job_id, "concepts", "running")
         inferred_by = str(getattr(client, "model_id", lambda: "enterprise-ai")())
         qa_pairs = list({(item.question, item.sql): item for item in qa_pairs}.values())
         try:
@@ -4219,8 +4234,10 @@ class OntologyBuildService:
         ontology: SchemaOntology | None = None
         if OntologyBuildStepName.SCHEMA_NAMING in step_names:
             prompt = (
-                "schema_context の各表・ビューに日本語の業務エンティティ名・説明・同義語を"
-                "提案してください。関係と指標は提案不要です。"
+                "schema_context を根拠に主要6種類・補助7種類の関連概念を"
+                " definitions に抽出してください。"
+                "各表・ビューの日本語の業務名・説明・同義語、Property と主識別子、"
+                "制約から確認できる関係を含め、根拠のない業務契約は創作しないでください。"
             )
             try:
                 _ensure_llm_call_fits(prompt, schema_context)
@@ -4229,7 +4246,7 @@ class OntologyBuildService:
                     job_id,
                     str(exc),
                     failed_step=OntologyBuildStepName.SCHEMA_NAMING,
-                    failed_step_detail_ja="業務エンティティ命名の LLM 入力が上限を超えています。",
+                    failed_step_detail_ja="スキーマからの概念抽出の LLM 入力が上限を超えています。",
                 )
                 return
             llm_tasks.append(
@@ -4237,7 +4254,7 @@ class OntologyBuildService:
                     name=OntologyBuildStepName.SCHEMA_NAMING,
                     prompt=prompt,
                     context=schema_context,
-                    progress_ja="業務エンティティ命名を処理中です。",
+                    progress_ja="スキーマから関連概念を構築中です。",
                 )
             )
         if OntologyBuildStepName.QA_EXTRACTION in step_names:
@@ -4251,7 +4268,9 @@ class OntologyBuildService:
             else:
                 prompt = (
                     "入力 JSON の qa_pairs にある質問と正解 SQL から、実際に使われた "
-                    "JOIN パスを relationships に、業務指標を metrics に抽出してください。"
+                    "JOIN パスを Link Type に、業務指標を Metric にし、"
+                    "根拠のある主要6種類・補助7種類を"
+                    " definitions にまとめて抽出してください。"
                     "qa_pairs[].schema_resolved_columns と "
                     "qa_pairs[].schema_resolved_join_conditions にある "
                     "OWNER.OBJECT.COLUMN 形式の参照を正としてください。"
@@ -4300,9 +4319,10 @@ class OntologyBuildService:
                 )
             else:
                 prompt = (
-                    "入力 JSON の business_text_chunks をすべて読み、関係候補を "
-                    "relationships に、同義語を synonyms に、業務指標を metrics に"
-                    "抽出してください。名詞をエンティティ、"
+                    "入力 JSON の business_text_chunks をすべて読み、"
+                    "根拠のある主要6種類・補助7種類を"
+                    " definitions にまとめて抽出してください。同義語は各定義の aliases に含め、"
+                    "名詞をエンティティ、"
                     "動詞・述語を関係の手がかりとして読み取り、schema_context に対応づかない"
                     "内容は warnings_ja に残してください。"
                 )
@@ -4432,109 +4452,10 @@ class OntologyBuildService:
                 )
                 self._emit(job_id, f"{label}: 抽出候補を検証しました。", step=task.name)
 
-        # 旧形式の命名・抽出も先に13分類へ変換し、後段は同じ安定 ID を参照する。
-        from .ontology_unified_model import legacy_definitions, merge_definitions
-
-        preliminary_definitions = []
-        if validated_extractions:
-            view, ontology = self._runtime.build_proposal_scope(
-                job.profile_id, schema_fingerprint=str(prepared_schema.schema_fingerprint)
-            )
-            preliminary_drafts = []
-            for result in validated_extractions:
-                converted, _ = convert_extraction_to_proposals(
-                    result.extraction,
-                    ontology=ontology,
-                    view=view,
-                    job_id=job_id,
-                    inferred_by=inferred_by,
-                    qa_sql_texts=result.cross_check_sql,
-                    source_evidence=result.source_evidence,
-                )
-                preliminary_drafts.extend(converted)
-            request = self._runtime._proposal_payloads_upsert_draft_request(
-                [d.payload for d in preliminary_drafts], ontology
-            )
-            candidate_graph = SchemaOntology(
-                revision=ontology.revision,
-                nodes=list({n.id: n for n in [*ontology.nodes, *request.node_upserts]}.values()),
-                edges=list({e.id: e for e in [*ontology.edges, *request.edge_upserts]}.values()),
-            )
-            preliminary_definitions = legacy_definitions(candidate_graph)
+        # 全13種類を入力バッチごとに一度生成する。旧形式の変換は保存時の互換経路のみ。
         self._set_definition_phase(
-            job_id, "objects", "succeeded" if validated_extractions else "failed"
+            job_id, "concepts", "succeeded" if validated_extractions else "failed"
         )
-        for phase_name, instruction in (
-            (
-                "shared",
-                "共有プロパティ・値型・インターフェース・列挙・指標・業務ルール・イベントを"
-                " definitions に補完してください。",
-            ),
-            (
-                "capabilities",
-                "資料に明記された関数・アクション・オブジェクト集合の型付き契約を"
-                " definitions に補完してください。実装や権限を創作せず不足を記録してください。",
-            ),
-        ):
-            self._set_definition_phase(job_id, phase_name, "running")
-            # 名前・ID・出典が一致する候補だけを補完し、別概念を同じ表だけで併合しない。
-            refs = sorted(
-                {
-                    canonical_json(
-                        {
-                            "kind": item.kind,
-                            "api_name": item.api_name,
-                            "id": item.id,
-                            "name_ja": item.name_ja,
-                        }
-                    )
-                    for item in [
-                        *preliminary_definitions,
-                        *[
-                            d
-                            for result in validated_extractions
-                            for d in result.extraction.definitions
-                        ],
-                    ]
-                }
-            )
-            phase_failed = False
-            for task in llm_tasks:
-                if self._is_cancelled(job_id):
-                    return
-                focused = _OntologyBuildLlmTask(
-                    name=task.name,
-                    prompt=instruction
-                    + "同一概念は既存の id と api_name を使用し不足フィールドを補完してください。"
-                    "同一概念の重複定義を作らないでください。"
-                    "既存定義にない別の概念は、資料・スキーマに根拠があれば新しい安定した"
-                    " api_name で definitions に追加してください。"
-                    "資料に契約がない種類は創作せず coverage に未生成の理由を記録し、"
-                    "既存定義の不足フィールドは missing_information_ja に記録してください。"
-                    "既存定義: " + ", ".join(refs),
-                    context=task.context,
-                    progress_ja=instruction,
-                    cross_check_sql=task.cross_check_sql,
-                    source_evidence=task.source_evidence,
-                    definition_phase=phase_name,
-                    qa_batch=task.qa_batch,
-                    text_batch=task.text_batch,
-                    schema_payload=task.schema_payload,
-                )
-                extractions, messages = self._execute_llm_task(
-                    job_id, client, focused, label=instruction
-                )
-                validated_extractions.extend(extractions)
-                warnings.extend(messages)
-                if messages:
-                    phase_failed = True
-                    partial_failed_steps.add(task.name)
-            self._set_definition_phase(
-                job_id,
-                phase_name,
-                "failed" if phase_failed else "succeeded",
-                "成功した抽出結果を保持しています。" if phase_failed else "",
-            )
         self._set_definition_phase(job_id, "validation", "running")
 
         if llm_tasks and not validated_extractions:
@@ -4586,7 +4507,7 @@ class OntologyBuildService:
                     step_warnings
                 )
                 step_result_counts = _build_result_counts_ja(
-                    len(step_drafts),
+                    len(validated.extraction.definitions) or len(step_drafts),
                     warning_count=len(actionable_step_warnings),
                     rejected_count=len(step_rejections),
                 )
@@ -4599,6 +4520,8 @@ class OntologyBuildService:
                 self._emit(
                     job_id,
                     f"{validated.label_ja}: {step_result_counts}を整理しました。",
+                    step=validated.name,
+                    phase="concepts",
                 )
         if ontology is None:
             self._set_step(
@@ -4655,9 +4578,8 @@ class OntologyBuildService:
             OntologyBuildStepStatus.RUNNING,
             "Markdown 下書きをレンダリング中…",
         )
-        self._emit(job_id, "Markdown 下書きをレンダリングしています。")
         actionable_warnings, proposal_rejections = _split_ontology_build_warnings(warnings)
-        from .ontology_unified_model import legacy_definitions, render_concepts
+        from .ontology_unified_model import legacy_definitions, merge_definitions, render_concepts
 
         candidate_request = self._runtime._proposal_payloads_upsert_draft_request(
             [draft.payload for draft in draft_inputs],
@@ -4703,6 +4625,7 @@ class OntologyBuildService:
             f"定義 {len(unified_definitions)} 件、要確認 {len(concept_conflicts)} 件。",
         )
         self._set_definition_phase(job_id, "markdown", "running")
+        self._emit(job_id, "Markdown 下書きをレンダリングしています。")
         try:
             markdown_output = render_ontology_build_markdown(
                 profile_id=job.profile_id,
@@ -4796,7 +4719,7 @@ class OntologyBuildService:
             self._fail(job_id, message)
             return
         result_counts = _build_result_counts_ja(
-            len(draft_inputs),
+            len(unified_definitions),
             warning_count=len(actionable_warnings),
             rejected_count=len(proposal_rejections),
         )
@@ -4883,6 +4806,7 @@ class OntologyBuildService:
                     message_ja=registered_note,
                     code="MARKDOWN_DRAFT_UPDATED",
                     step=OntologyBuildStepName.PROPOSAL_REGISTRATION,
+                    phase="save",
                 )
             )
             job.events.append(

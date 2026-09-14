@@ -1,4 +1,4 @@
-import { orderedBuildProgress } from "./unifiedConcepts";
+import { buildEventStage, orderedBuildProgress } from "./unifiedConcepts";
 import { MarkdownPublication } from "./MarkdownPublication";
 import { useWorkspaceState } from "@/components/WorkspaceState";
 import { useUnsavedChangesGuard } from "@/lib/useUnsavedChangesGuard";
@@ -270,7 +270,7 @@ function stepIndexForEventTime(job: OntologyBuildJob, eventMs: number | null): n
 function groupBuildEvents(job: OntologyBuildJob): Map<number, BuildEventAssignment[]> {
   const byStepIndex = new Map<number, BuildEventAssignment[]>();
   for (const [index, event] of (job.events ?? []).entries()) {
-    if (shouldSuppressBuildEvent(event)) continue;
+    if (shouldSuppressBuildEvent(event) || buildEventStage(event.phase)) continue;
     const eventMs = parseTimeMs(event.at);
     // 新 backend はイベントに帰属ステップ(event.step)を付与する。
     // 文言/時刻ベースの推定は旧 job(step 無し)向けの互換フォールバック。
@@ -1359,6 +1359,62 @@ export function OntologyBuildSection({
     }
   };
 
+  const stageEvents: Parameters<typeof orderedBuildProgress>[2] = {};
+  if (job) {
+    const assignments = new Map<string, BuildEventAssignment[]>();
+    for (const [index, event] of (job.events ?? []).entries()) {
+      const stage = buildEventStage(event.phase);
+      if (!stage || shouldSuppressBuildEvent(event)) continue;
+      const events = assignments.get(stage) ?? [];
+      if (!events.some(row => normalizedProgressText(row.event.message_ja) === normalizedProgressText(event.message_ja))) events.push({event, index});
+      assignments.set(stage, events);
+    }
+    for (const [stage, events] of assignments) {
+      stageEvents[stage as keyof typeof stageEvents] = <ol className="grid gap-1 text-xs text-fg-muted" aria-label={t("profiles.ontologyBuild.stepEventsLabel")}><BuildEventRows events={events} /></ol>;
+    }
+  }
+  const buildProgress = job ? orderedBuildProgress(job, job.steps.map((step, stepIndex) => {
+    const unified = job.definition_phases?.some(phase => phase.name === "concepts");
+    const conceptInput = ["schema_naming", "qa_extraction", "text_extraction"].includes(step.name);
+    const displayStatus = effectiveBuildStepStatus(job.status, step.status);
+    const displayFinishedAt =
+      displayStatus !== step.status && job.finished_at ? job.finished_at : step.finished_at;
+    const elapsed = formatElapsed(step.started_at, displayFinishedAt, nowTick);
+    const stepEvents = groupedEvents?.get(stepIndex) ?? [];
+    return {
+      id: step.name,
+      label: t(unified && step.name === "schema_naming" ? "profiles.ontologyBuild.concepts.schema_naming" : `profiles.ontologyBuild.step.${step.name}`),
+      description: t(unified && conceptInput ? `profiles.ontologyBuild.concepts.description.${step.name}` : `profiles.ontologyBuild.stepDescription.${step.name}`),
+      status: normalizeBuildStepStatus(displayStatus),
+      statusLabel: t(`profiles.ontologyBuild.stepStatus.${displayStatus}`),
+      elapsedLabel: elapsed,
+      open:
+        displayStatus === "running" ||
+        displayStatus === "failed" ||
+        Boolean(step.detail_ja) ||
+        stepEvents.length > 0,
+      testId: `ontology-build-step-${step.name}`,
+      dataStatus: displayStatus,
+      content: (
+        <>
+          {step.detail_ja ? (
+            <p className="mt-2 border-l border-border pl-3 text-xs leading-5 text-fg-muted">
+              {step.detail_ja}
+            </p>
+          ) : null}
+          {stepEvents.length > 0 ? (
+            <ol
+              className="mt-2 grid gap-1 border-l border-border pl-3"
+              aria-label={t("profiles.ontologyBuild.stepEventsLabel")}
+            >
+              <BuildEventRows events={stepEvents} />
+            </ol>
+          ) : null}
+        </>
+      ),
+    };
+  }), stageEvents) : [];
+
   return (
     <section
       className="grid min-w-0 gap-4 rounded-md border border-border bg-surface p-4 shadow-sm"
@@ -1530,12 +1586,8 @@ export function OntologyBuildSection({
           headerExtra={
             <span className="text-xs tabular-nums text-fg-muted" data-testid="ontology-build-step-progress">
               {t("profiles.ontologyBuild.stepProgress", {
-                done: job.steps.filter((step) =>
-                  ["succeeded", "skipped", "failed"].includes(
-                    effectiveBuildStepStatus(job.status, step.status)
-                  )
-                ).length,
-                total: job.steps.length,
+                done: buildProgress.filter(step => ["done", "skipped", "error"].includes(step.status)).length,
+                total: buildProgress.length,
               })}
             </span>
           }
@@ -1558,45 +1610,7 @@ export function OntologyBuildSection({
               </Button>
             ) : null
           }
-          steps={orderedBuildProgress(job, job.steps.map((step, stepIndex) => {
-            const displayStatus = effectiveBuildStepStatus(job.status, step.status);
-            const displayFinishedAt =
-              displayStatus !== step.status && job.finished_at ? job.finished_at : step.finished_at;
-            const elapsed = formatElapsed(step.started_at, displayFinishedAt, nowTick);
-            const stepEvents = groupedEvents?.get(stepIndex) ?? [];
-            return {
-              id: step.name,
-              label: t(`profiles.ontologyBuild.step.${step.name}`),
-              description: t(`profiles.ontologyBuild.stepDescription.${step.name}`),
-              status: normalizeBuildStepStatus(displayStatus),
-              statusLabel: t(`profiles.ontologyBuild.stepStatus.${displayStatus}`),
-              elapsedLabel: elapsed,
-              open:
-                displayStatus === "running" ||
-                displayStatus === "failed" ||
-                Boolean(step.detail_ja) ||
-                stepEvents.length > 0,
-              testId: `ontology-build-step-${step.name}`,
-              dataStatus: displayStatus,
-              content: (
-                <>
-                  {step.detail_ja ? (
-                    <p className="mt-2 border-l border-border pl-3 text-xs leading-5 text-fg-muted">
-                      {step.detail_ja}
-                    </p>
-                  ) : null}
-                  {stepEvents.length > 0 ? (
-                    <ol
-                      className="mt-2 grid gap-1 border-l border-border pl-3"
-                      aria-label={t("profiles.ontologyBuild.stepEventsLabel")}
-                    >
-                      <BuildEventRows events={stepEvents} />
-                    </ol>
-                  ) : null}
-                </>
-              ),
-            };
-          }))}
+          steps={buildProgress}
 
           footer={
             schemaScopeFailure ||
