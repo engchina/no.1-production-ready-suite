@@ -233,6 +233,7 @@ async def test_database_ready_wallet_mtls_missing_files_skips_probe(
 )
 async def test_database_ready_redacts_probe_failures(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
     error: Exception,
     detail: str,
 ) -> None:
@@ -264,6 +265,10 @@ async def test_database_ready_redacts_probe_failures(
         "detail": detail,
     }
     assert "secret" not in response.text
+    record = next(r for r in caplog.records if r.message == "database_status_unreachable")
+    assert record.__dict__["summary"]
+    assert record.__dict__["suggested_action"]
+    assert record.exc_info  # 既存の調査用 traceback も保持する。
 
 
 @pytest.mark.asyncio

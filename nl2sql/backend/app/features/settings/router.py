@@ -53,6 +53,7 @@ from app.clients.oci_database import (
 from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
 from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import close_oracle_pool, test_oracle_connection
+from app.clients.oracle_diagnostics import oracle_connection_diagnostics
 from app.env_file import locked_env_file, replace_env_file
 from app.features.nl2sql.oracle_adapter import (
     OracleNl2SqlAdapter,
@@ -289,11 +290,14 @@ def get_select_ai_credential(
         schema_name, exists = OracleNl2SqlAdapter(
             settings=settings
         ).get_select_ai_credential_status(SELECT_AI_CREDENTIAL_NAME)
-    except Exception:
+    except Exception as exc:
         logger.warning(
             "select_ai_credential_status_failed",
             exc_info=True,
-            extra={"credential_name": SELECT_AI_CREDENTIAL_NAME},
+            extra={
+                **oracle_connection_diagnostics(exc),
+                "credential_name": SELECT_AI_CREDENTIAL_NAME,
+            },
         )
         return _select_ai_credential_error_response(
             request,
@@ -662,6 +666,10 @@ async def test_database_settings(
     try:
         await test_oracle_connection(candidate)
     except Exception as exc:
+        logger.error(
+            "database_connection_test_failed",
+            extra=oracle_connection_diagnostics(exc),
+        )
         oracle_error_codes = _oracle_error_codes(str(exc))
         message = _database_connection_error_message(exc, oracle_error_codes)
         return ApiResponse(

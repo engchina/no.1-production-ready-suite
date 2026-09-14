@@ -2514,6 +2514,7 @@ def test_db_admin_objects_rejects_invalid_query_scope() -> None:
 
 def test_connection_failure_opens_circuit_and_next_probe_recovers(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     class Repository(MemoryIncrementalNl2SqlRepository):
         fail_search = True
@@ -2549,6 +2550,12 @@ def test_connection_failure_opens_circuit_and_next_probe_recovers(
         )
     assert error.value.reason_code == "oracle_connection_unavailable"
     assert service.persistence_status().circuit_state == "open"
+    record = next(
+        r for r in caplog.records if r.message == "nl2sql_incremental_repository_connection_failed"
+    )
+    assert record.__dict__["diagnostic_category"] == "service_not_registered"
+    assert record.__dict__["oracle_error_codes"] == ["ORA-12514"]
+    assert record.__dict__["operation"]
 
     repository.fail_search = False
     service._persistence_retry_at = 0.0  # noqa: SLF001 - half-open contract

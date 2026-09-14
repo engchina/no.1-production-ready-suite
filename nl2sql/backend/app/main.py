@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from pr_backend_core import configure_logging, create_app
+from pythonjsonlogger.json import JsonFormatter
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import JSONResponse
 
@@ -36,6 +37,10 @@ from app.settings import get_settings
 
 settings = get_settings()
 configure_logging(settings.log_level)
+# 日本語の診断を端末でも読めるようにし、共有 JSON ログの項目構成は維持する。
+for handler in logging.getLogger().handlers:
+    if isinstance(handler.formatter, JsonFormatter):
+        handler.formatter.json_ensure_ascii = False
 logger = logging.getLogger(__name__)
 
 _ORACLE_RAW_DETAIL_RE = re.compile(r"\s*:?[ ]*ORA-\d{5}.*$", re.IGNORECASE)

@@ -188,6 +188,7 @@ def test_select_ai_credential_create_and_recreate_persist_safe_settings(
 
 def test_select_ai_credential_status_failure_returns_problem_contract(
     monkeypatch: MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     class FailingAdapter(_FakeSelectAiCredentialAdapter):
         def get_select_ai_credential_status(self, credential_name: str) -> tuple[str, bool]:
@@ -213,6 +214,10 @@ def test_select_ai_credential_status_failure_returns_problem_contract(
     assert response.headers["X-Request-ID"] == "select-ai-status-request"
     assert "raw Oracle target" not in response.text
     assert "ocid1.tenancy.oc1..leaked" not in response.text
+    record = next(r for r in caplog.records if r.message == "select_ai_credential_status_failed")
+    assert record.__dict__["diagnostic_category"] == "unknown"
+    assert record.__dict__["suggested_action"]
+    assert "ocid1.tenancy" not in record.__dict__["summary"]
 
 
 def test_select_ai_credential_existing_requires_explicit_recreate(

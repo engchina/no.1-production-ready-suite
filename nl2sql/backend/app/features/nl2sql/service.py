@@ -33,6 +33,7 @@ from dotenv import dotenv_values
 from pydantic import BaseModel, ValidationError
 from pydantic import Field as PydanticField
 
+from app.clients.oracle_diagnostics import oracle_connection_diagnostics
 from app.security.request_actor import (
     actor_scope,
     current_actor_context,
@@ -3183,6 +3184,7 @@ class Nl2SqlService:
             logger.error(
                 "nl2sql_incremental_repository_connection_failed",
                 extra={
+                    **oracle_connection_diagnostics(exc),
                     "operation": operation,
                     "error_code": oracle_code or "connection_error",
                     "exception_type": type(exc).__name__,

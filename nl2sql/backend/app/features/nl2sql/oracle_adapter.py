@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from app.clients.oracle_diagnostics import oracle_connection_diagnostics
 from app.settings import Settings
 
 from .models import (
@@ -637,6 +638,18 @@ class OracleNl2SqlAdapter:
                 ):
                     time.sleep(0.25 * (attempt + 1))
                     continue
+                diagnostics = oracle_connection_diagnostics(exc)
+                logger.error(
+                    "%s %s",
+                    diagnostics["summary"],
+                    diagnostics["suggested_action"],
+                    extra={
+                        **diagnostics,
+                        "event": "oracle_connection_failed",
+                        "operation": "connect",
+                        "attempts": attempt + 1,
+                    },
+                )
                 raise OracleAdapterError(f"Oracle 接続に失敗しました: {exc}") from exc
         try:
             # python-oracledb call_timeout は 1 round-trip 単位の millisecond。

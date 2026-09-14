@@ -13,6 +13,7 @@ from pr_backend_core import ApiResponse
 from app.api.concurrency import run_sync_io
 from app.api.models import DatabaseStatusData
 from app.clients.oracle import OracleConnectionTimeoutError, test_oracle_connection
+from app.clients.oracle_diagnostics import oracle_connection_diagnostics
 from app.features.nl2sql.incremental_observability import record_ready_once
 from app.features.nl2sql.service import nl2sql_service
 from app.features.settings.system_schema_runtime import observe_system_schema_epoch
@@ -70,7 +71,7 @@ async def database_status() -> ApiResponse[DatabaseStatusData]:
     except Exception as exc:  # noqa: BLE001 - DB failure is normalized at this API boundary
         logger.exception(
             "database_status_unreachable",
-            extra={"exception_type": type(exc).__name__},
+            extra=oracle_connection_diagnostics(exc),
         )
         return ApiResponse(
             data=DatabaseStatusData(
