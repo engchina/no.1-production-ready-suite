@@ -5,12 +5,14 @@ from typing import Any
 
 import pytest
 from test_nl2sql_ontology_build import _FakeEnterpriseAiClient, _wait_for_job
-from test_nl2sql_ontology_definitions import runtime
+from test_nl2sql_ontology_definitions import definition_payload, runtime
 
-from app.features.nl2sql.ontology_build import OntologyBuildService
+from app.features.nl2sql.ontology_build import OntologyBuildService, merge_build_extractions
 from app.features.nl2sql.ontology_build_grounding import ground_qa_links
 from app.features.nl2sql.ontology_definition_service import ProfileOntologyDefinitionService
+from app.features.nl2sql.ontology_definitions import DefinitionEvidence
 from app.features.nl2sql.ontology_models import OntologyBuildExtraction, QaPair
+from app.features.nl2sql.ontology_unified_model import merge_definitions
 from app.settings import get_settings
 
 SCHEMA: dict[str, Any] = {
@@ -101,6 +103,157 @@ def test_typed_link_requires_physical_columns_in_one_qa(
 def test_schema_and_document_links_are_not_filtered_as_qa() -> None:
     value = extraction()
     assert ground_qa_links(value, None, SCHEMA) is value
+
+
+@pytest.mark.parametrize(
+    "subquery,accepted",
+    [
+        ("SELECT 0 FROM DUAL", True),
+        ("SELECT 0 FROM sys.dual", True),
+        ("SELECT SYS.DUAL.DUMMY FROM SYS.DUAL", True),
+        ('SELECT d.DUMMY FROM "SYS"."DUAL" d', True),
+        ('SELECT 0 FROM "dual"', False),
+        ('SELECT 0 FROM "sys".DUAL', False),
+        ("SELECT 0 FROM OTHER.DUAL", False),
+        ("SELECT 0 FROM APP.UNKNOWN_TABLE", False),
+        ("SELECT UNKNOWN_COLUMN FROM DUAL", False),
+        ("SELECT UNKNOWN_COLUMN FROM APP.ORDERS", False),
+    ],
+)
+def test_qa_dual_does_not_relax_business_scope(subquery: str, accepted: bool) -> None:
+    sql = (
+        "SELECT o.ID FROM APP.ORDERS o JOIN APP.CUSTOMERS c ON o.CUSTOMER_ID=c.ID "
+        f"WHERE o.ID > ({subquery})"
+    )
+    result = ground_qa_links(extraction(), [sql], SCHEMA)
+    assert any(d.kind == "link_type" for d in result.definitions) == accepted
+    assert bool(result.warnings_ja) != accepted
+
+
+def test_dual_cte_and_profile_table_keep_their_own_columns() -> None:
+    sql = (
+        "WITH dual AS (SELECT CUSTOMER_ID FROM APP.ORDERS) "
+        "SELECT d.CUSTOMER_ID FROM dual d JOIN APP.CUSTOMERS c ON d.CUSTOMER_ID=c.ID"
+    )
+    assert not ground_qa_links(extraction(), [sql], SCHEMA).warnings_ja
+    schema = {
+        "objects": [
+            *SCHEMA["objects"],
+            {"owner": "APP", "object_name": "DUAL", "columns": ["CUSTOMER_ID"]},
+        ]
+    }
+    sql = (
+        "SELECT d.CUSTOMER_ID FROM DUAL d JOIN APP.CUSTOMERS c ON d.CUSTOMER_ID=c.ID "
+        "WHERE c.ID > (SELECT 0 FROM SYS.DUAL)"
+    )
+    value = extraction("APP.DUAL.CUSTOMER_ID = APP.CUSTOMERS.ID")
+    assert not ground_qa_links(value, [sql], schema).warnings_ja
+    # システム列を Profile の業務列へ読み替えない。
+    result = ground_qa_links(extraction(), ["SELECT DUMMY FROM DUAL"], SCHEMA)
+    assert not any(d.kind == "link_type" for d in result.definitions)
+
+
+@pytest.mark.parametrize("same_id", [False, True])
+def test_completed_link_keeps_original_evidence_aliases_and_conflicts(same_id: bool) -> None:
+    base, addition = extraction(""), extraction()
+    original, completed = base.definitions[0], addition.definitions[0]
+    assert original.kind == completed.kind == "link_type"
+    original.aliases = ["旧名称"]
+    original.evidence = [
+        DefinitionEvidence(source_id="qa", locator="question_sql", excerpt_ja="受注")
+    ]
+    completed.aliases = ["補完名称"]
+    completed.cardinality = "one_to_many"
+    if same_id:
+        base.definitions[0].id = completed.id = "same-link"
+        completed.api_name = "CompletedOrderCustomer"
+    combined, _ = merge_build_extractions(base, addition)
+    result = ground_qa_links(
+        combined,
+        ["SELECT o.ID FROM APP.ORDERS o JOIN APP.CUSTOMERS c ON o.CUSTOMER_ID=c.ID"],
+        SCHEMA,
+    )
+    assert not result.warnings_ja
+    merged, conflicts = merge_definitions("sales", result.definitions)
+    link = next(d for d in merged if d.kind == "link_type")
+    assert link.join_expression_sql == JOIN
+    assert link.aliases == ["旧名称", "補完名称"]
+    assert link.evidence[0].excerpt_ja == "受注"
+    assert conflicts  # cardinality の意味の相違は補完で消さない
+    assert original.join_expression_sql == ""  # checkpoint の原本は不変
+
+
+@pytest.mark.parametrize("initial", ["", "APP.ORDERS.AMOUNT = APP.CUSTOMERS.ID"])
+def test_unresolved_or_invalid_link_still_warns(initial: str) -> None:
+    base, addition = extraction(initial), extraction()
+    if not initial:
+        addition.definitions[0].api_name = "OtherLink"
+    combined, _ = merge_build_extractions(base, addition)
+    result = ground_qa_links(
+        combined,
+        ["SELECT o.ID FROM APP.ORDERS o JOIN APP.CUSTOMERS c ON o.CUSTOMER_ID=c.ID"],
+        SCHEMA,
+    )
+    assert any("OrderCustomer / join_expression_sql" in w for w in result.warnings_ja)
+
+
+def test_differing_supported_join_conditions_remain_conflicts() -> None:
+    combined, _ = merge_build_extractions(extraction(), extraction(JOIN.replace("=", "<>")))
+    result = ground_qa_links(
+        combined,
+        ["SELECT o.ID FROM APP.ORDERS o JOIN APP.CUSTOMERS c ON o.CUSTOMER_ID=c.ID"],
+        SCHEMA,
+    )
+    assert not result.warnings_ja
+    _, conflicts = merge_definitions("sales", result.definitions)
+    assert any("<>" in conflict for conflict in conflicts)
+
+
+@pytest.mark.parametrize("glean", [False, True])
+def test_worker_keeps_dual_join_and_drops_repaired_warning(
+    glean: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(get_settings(), "nl2sql_ontology_extraction_gleaning_passes", int(glean))
+    rt, legacy = runtime()
+
+    class Client(_FakeEnterpriseAiClient):
+        def generate(
+            self, *, prompt: str, context: str, system_prompt: str, response_format: Any = None
+        ) -> str:
+            self.calls.append(prompt)
+            definitions = definition_payload()[:3]
+            if not glean or "【追加パス" in prompt:
+                definitions[2]["join_expression_sql"] = "APP.ORDERS.CUSTOMER_ID = APP.ORDERS.ID"
+            return json.dumps({"definitions": definitions})
+
+    client = Client("")
+    legacy._enterprise_ai_client = client
+    service = OntologyBuildService(rt)
+    job = _wait_for_job(
+        service,
+        service.start(
+            "sales",
+            run_schema_naming=False,
+            qa_pairs=[
+                QaPair(
+                    question="関連受注",
+                    sql=(
+                        "SELECT o.ID FROM APP.ORDERS o JOIN APP.ORDERS p ON o.CUSTOMER_ID=p.ID "
+                        "WHERE o.ID > (SELECT 0 FROM DUAL)"
+                    ),
+                )
+            ],
+        ).id,
+    )
+    assert job.status == "succeeded", job.error_message_ja
+    assert len(client.calls) == 1 + int(glean)
+    bundle = ProfileOntologyDefinitionService(rt).get("sales", job.result_bundle_id)
+    link = next(d for d in bundle.definitions if d.kind == "link_type")
+    assert link.join_expression_sql == "APP.ORDERS.CUSTOMER_ID = APP.ORDERS.ID"
+    assert not job.warnings_ja
+    assert "related / join_expression_sql を採用しません" not in job.markdown_output
+    coverage = next(c for c in bundle.coverage if c.kind == "link_type")
+    assert coverage.count == 1
 
 
 @pytest.mark.parametrize("mixed", [False, True])
