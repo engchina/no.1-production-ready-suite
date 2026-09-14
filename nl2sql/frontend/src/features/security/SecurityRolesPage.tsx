@@ -61,12 +61,14 @@ import { MENU_PERMISSIONS } from "./menu-permissions";
 import {
   SecurityDetailField,
   SecurityEmptySelection,
+  SecurityIdentityLines,
   SecurityManagementPanelShell,
   SecurityPanelHeader,
   SecuritySearchField,
   securityFilteredCount,
 } from "./SecurityManagementShared";
 import { securityApi } from "./api";
+import { identitySecondaryName } from "./identity-label";
 import type { PermissionDefinition, ProfileAccessProfile, SecurityRole } from "./types";
 
 type RolePanelView = "list" | "create" | "edit";
@@ -290,7 +292,8 @@ export function SecurityRolesPage() {
             sort.direction
           );
         }
-        return compareText(left.display_name, right.display_name, sort.direction);
+        // 1 列目はロールコードを主表示するため、コードで並べる。
+        return compareText(left.role_code, right.role_code, sort.direction);
       });
   }, [permissionByCode, profileAccessProfiles, roles, search, sort]);
 
@@ -737,7 +740,7 @@ export function SecurityRolesPage() {
             className={`min-w-0 cursor-pointer text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
               selected ? "text-accent-fg" : "text-fg"
             }`}
-            aria-label={t("security.roles.showRole", { name: role.display_name })}
+            aria-label={t("security.roles.showRole", { name: role.role_code })}
             aria-current={selected ? "true" : undefined}
             onClick={(event) => {
               event.stopPropagation();
@@ -746,8 +749,7 @@ export function SecurityRolesPage() {
               setSelectedId(role.role_id);
             }}
           >
-            <span className="block break-words font-medium">{role.display_name}</span>
-            <span className="block break-all font-mono text-xs text-fg-muted">{role.role_code}</span>
+            <SecurityIdentityLines id={role.role_code} name={role.display_name} />
           </button>
         );
       },
@@ -862,7 +864,7 @@ export function SecurityRolesPage() {
                     setSelectedId(role.role_id);
                   }}
                   getRowKey={(role) => role.role_id}
-                  rowProps={(role) => ({ className: INFORMATION_TABLE_ROW_CLASS, "aria-label": t("security.roles.showRole", { name: role.display_name }) })}
+                  rowProps={(role) => ({ className: INFORMATION_TABLE_ROW_CLASS, "aria-label": t("security.roles.showRole", { name: role.role_code }) })}
                   ariaLabel={t("security.roles.list")}
                   testId="security-roles-grid"
                   scrollAriaLabel={t("security.common.listScrollLabel", {
@@ -1242,16 +1244,18 @@ function RoleDetailPanel({
           <div className="flex flex-wrap items-center gap-2">
             <h2 id="security-roles-detail-heading" className="flex min-w-0 items-center gap-2 text-base font-semibold text-fg">
               <ShieldCheck size={20} aria-hidden="true" />
-              <span className="min-w-0 break-words">{role.display_name}</span>
+              <span className="min-w-0 break-all font-mono">{role.role_code}</span>
             </h2>
             <RoleStatusBadges role={role} />
           </div>
-          <p className="mt-1 break-all font-mono text-xs text-fg-muted">{role.role_code}</p>
+          {identitySecondaryName(role.role_code, role.display_name) ? (
+            <p className="mt-1 break-words text-xs text-fg-muted">{role.display_name}</p>
+          ) : null}
         </div>
         {canManage ? (
           <ObjectActionBar
             actions={actions}
-            ariaLabel={`${t("security.common.actions")}: ${role.display_name}`}
+            ariaLabel={`${t("security.common.actions")}: ${role.role_code}`}
             testId="security-roles-detail-actions"
           />
         ) : null}

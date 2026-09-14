@@ -476,7 +476,7 @@ test("ユーザー管理の migration 未適用は初回 ErrorState、再取得�
   allowUsersSuccess = true;
   await retry.press("Enter");
 
-  await expect(page.getByRole("button", { name: "復旧確認ユーザー を表示" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "migration.recovered を表示" })).toBeVisible();
   await expect(initialError).toHaveCount(0);
   expect(userRequests).toBeGreaterThanOrEqual(2);
 
@@ -494,7 +494,7 @@ test("ユーザー管理の migration 未適用は初回 ErrorState、再取得�
     .getByRole("alert")
     .filter({ hasText: "users-migration-refresh-request" });
   await expect(refreshError).toBeVisible();
-  await expect(page.getByRole("button", { name: "復旧確認ユーザー を表示" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "migration.recovered を表示" })).toBeVisible();
   await expect(page.getByTestId("security-users-grid")).toBeVisible();
 
   await page.setViewportSize({ width: 375, height: 812 });
@@ -571,7 +571,7 @@ test("ユーザー・ロール一覧はデスクトップ8行・モバイル5行
   await lastUserRow.locator("td").nth(1).click();
   await expect(lastUserRow).toHaveAttribute("data-selected", "true");
   await expect(
-    page.getByRole("heading", { name: lastUser.display_name, exact: true })
+    page.getByRole("heading", { name: lastUser.login_user_id, exact: true })
   ).toBeVisible();
   await expectNoPageHorizontalScroll(page);
 
@@ -605,7 +605,7 @@ test("ユーザー・ロール一覧はデスクトップ8行・モバイル5行
   await lastRoleRow.locator("td").nth(1).click();
   await expect(lastRoleRow).toHaveAttribute("data-selected", "true");
   await expect(
-    page.getByRole("heading", { name: lastRole.display_name, exact: true })
+    page.getByRole("heading", { name: lastRole.role_code, exact: true })
   ).toBeVisible();
   await expectNoPageHorizontalScroll(page);
 });
@@ -2070,7 +2070,7 @@ test("ユーザー一覧と詳細のパスワードリセット結果を編集�
   const adminRow = grid.locator("tbody tr").filter({ hasText: "システム管理者" });
   await adminRow.locator("td").first().click();
   const detailActions = page.getByTestId("security-users-detail-actions");
-  await expect(page.getByRole("heading", { name: "システム管理者", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "SYSTEM", exact: true })).toBeVisible();
   await expect(detailActions.getByRole("button", { name: "編集" })).toBeVisible();
   await expect(
     detailActions.getByRole("button", { name: "パスワードをリセット" })
@@ -2457,7 +2457,7 @@ test("無効ユーザーの削除は確認・フォーカス復帰・選択移�
 
   const deleteDialog = page.getByRole("alertdialog", { name: "削除" });
   await expect(deleteDialog).toContainText(
-    "「削除対象ユーザー」（ログインユーザーID: disabled.user）を完全に削除します。"
+    "「disabled.user」（表示名: 削除対象ユーザー）を完全に削除します。"
   );
   await expect(deleteDialog).toContainText("割り当てロール、既存セッションは削除され");
   await page.mouse.click(4, 4);
@@ -2478,7 +2478,7 @@ test("無効ユーザーの削除は確認・フォーカス復帰・選択移�
   await deleteDialog.getByRole("button", { name: "削除", exact: true }).click();
 
   await expect(page.getByText("削除対象ユーザー", { exact: true })).toHaveCount(0);
-  await expect(page.getByRole("heading", { name: "有効ユーザー" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "active.user" })).toBeVisible();
   await expect(page.getByText("削除対象ユーザー を完全に削除しました。", { exact: true }).last()).toBeVisible();
   expect(observedIfMatch).toBe('"7"');
   expect(deleteCount).toBe(1);
@@ -2568,7 +2568,7 @@ test("ユーザー管理は一覧・作成・編集をテーブル管理型パ�
     {
       user_uuid: "sales-user",
       login_user_id: "sales.user",
-      display_name: "あ営業ユーザー",
+      display_name: "営業ユーザー",
       status: "DISABLED",
       force_password_change: true,
       locked_until: "2026-07-21T03:00:00Z",
@@ -2607,7 +2607,8 @@ test("ユーザー管理は一覧・作成・編集をテーブル管理型パ�
   await expect(grid.getByRole("button", { name: /^操作: / })).toHaveCount(0);
   const salesUserRow = grid.locator("tbody tr").filter({ hasText: "営業ユーザー" });
   await expect(salesUserRow).toHaveAttribute("data-selected", "true");
-  await expect(page.getByRole("region", { name: "あ営業ユーザー" })).toBeVisible();
+  // 一覧はログインユーザーID順（sales.user < SYSTEM）、詳細見出しは ID（#584）。
+  await expect(page.getByRole("region", { name: "sales.user" })).toBeVisible();
   const adminUserRow = grid.locator("tbody tr").filter({ hasText: "システム管理者" });
   await expect(grid.getByRole("button", { name: "編集" })).toHaveCount(0);
   await adminUserRow.locator("td").first().click();
@@ -2825,7 +2826,7 @@ test("ロール・権限管理はカード型リストではなくテーブル�
     ...systemRole,
     role_id: "role-viewer",
     role_code: "SECURITY_VIEWER",
-    display_name: "あアプリ閲覧",
+    display_name: "アプリ閲覧",
     description: "表示のみ",
     is_built_in: false,
     permissions: ["menu.security_users"],
@@ -2854,7 +2855,8 @@ test("ロール・権限管理はカード型リストではなくテーブル�
   await expect(grid.locator("tbody tr")).toHaveCount(2);
   const viewerRoleRow = grid.locator("tbody tr").filter({ hasText: "アプリ閲覧" });
   await expect(viewerRoleRow).toHaveAttribute("data-selected", "true");
-  await expect(page.getByRole("region", { name: "あアプリ閲覧" })).toBeVisible();
+  // 一覧はロールコード順（SECURITY_VIEWER < SYSTEM_ADMIN）、詳細見出しはコード（#584）。
+  await expect(page.getByRole("region", { name: "SECURITY_VIEWER" })).toBeVisible();
   await expect(grid.getByRole("button", { name: "編集" })).toHaveCount(0);
   await expect(page.getByTestId("security-roles-detail-actions").getByRole("button", { name: "編集" })).toBeVisible();
   await viewerRoleRow.locator("td").nth(2).click();
@@ -3570,7 +3572,7 @@ test("ロール・権限管理はアーカイブ済みロールの権限が無�
     )
   ).toBeVisible();
 
-  const archivedDetail = page.locator("section", { has: page.getByRole("heading", { name: "データ管理者" }) });
+  const archivedDetail = page.locator("section", { has: page.getByRole("heading", { name: "DATA_ADMIN", exact: true }) });
   await expect(archivedDetail.getByText("SQL 生成", { exact: true })).toHaveCount(0);
 
   await expect(page.getByTestId("security-roles-detail-actions").getByRole("button", { name: "復元" })).toBeVisible();
@@ -3746,7 +3748,7 @@ test("アーカイブ済みカスタムロールの削除は409を保持し再�
   await page.getByRole("menuitem", { name: "削除" }).click();
   const deleteDialog = page.getByRole("alertdialog", { name: "削除" });
   await expect(deleteDialog).toContainText(
-    "「削除対象ロール」（ロールコード: ARCHIVED_DELETE）を完全に削除します。"
+    "「ARCHIVED_DELETE」（ロール名: 削除対象ロール）を完全に削除します。"
   );
   await expect(deleteDialog).toContainText("機能権限と業務プロファイルの関連は削除され");
   await deleteDialog.getByRole("button", { name: "削除", exact: true }).click();
@@ -4415,8 +4417,9 @@ test("DeepSec は構造化データ権限をロール別に編集する", async 
   await mockDatabaseGateReady(page);
   const queryRole = {
     role_id: "role-query",
-    role_code: "QUERY_VIEWER",
-    display_name: "あアプリ検索閲覧",
+    // ロール一覧はロールコード順（#584）。既定選択を先頭にするためコードで先頭に並べる。
+    role_code: "APP_QUERY_VIEWER",
+    display_name: "アプリ検索閲覧",
     description: "業務データ参照",
     is_built_in: false,
     archived: false,
@@ -6939,8 +6942,10 @@ test("ユーザー / ロール一覧の選択行はライト / ダークで文�
         const firstCellShadow = getComputedStyle(row.firstElementChild!).boxShadow;
         const bar = firstCellShadow.match(/(rgba?\([^)]*\)) [\d.]+px 0px 0px 0px inset/);
         return {
-          name: contrast(rgb(getComputedStyle(button.querySelector("span")!).color), rowBg),
-          code: contrast(rgb(getComputedStyle(button.querySelector(".font-mono")!).color), rowBg),
+          // 1 行目 = ID/コード（mono）、2 行目 = 表示名（muted）の順で描画する（#584）。
+          firstLineIsCode: button.firstElementChild?.classList.contains("font-mono") ?? false,
+          name: contrast(rgb(getComputedStyle(button.querySelector(":scope > span:not(.font-mono)")!).color), rowBg),
+          code: contrast(rgb(getComputedStyle(button.querySelector(":scope > span.font-mono")!).color), rowBg),
           body: contrast(rgb(getComputedStyle(row).color), rowBg),
           bar: bar ? contrast(rgb(bar[1]), rowBg) : 0,
           rowBgLuminance: luminance(rowBg),
@@ -6948,6 +6953,7 @@ test("ユーザー / ロール一覧の選択行はライト / ダークで文�
       });
       // ダークの選択行は暗い地のまま（明るい地に文字を載せない）。
       if (theme === "dark") expect(measured.rowBgLuminance).toBeLessThan(0.05);
+      expect(measured.firstLineIsCode, `${prefix} ${theme} ID 先`).toBe(true);
       expect(measured.name, `${prefix} ${theme} 表示名`).toBeGreaterThanOrEqual(4.5);
       expect(measured.code, `${prefix} ${theme} コード`).toBeGreaterThanOrEqual(4.5);
       expect(measured.body, `${prefix} ${theme} 本文`).toBeGreaterThanOrEqual(4.5);
