@@ -340,7 +340,7 @@ uv run uvicorn app.main:app --reload   # http://localhost:8000/docs
 
 # frontend
 cd frontend && npm install && npm run build
-npm run dev                            # http://localhost:3000
+npm run dev                            # http://localhost:3000（/api は BACKEND_URL 明示時のみ proxy。未指定なら 404 の hermetic）
 ```
 
 ## 開発コマンド(scaffolding 後)
@@ -354,7 +354,7 @@ uv run ruff check . && uv run mypy .   # lint/型
 
 # frontend
 cd frontend && npm install
-npm run dev
+BACKEND_URL=http://127.0.0.1:8010 npm run dev   # BACKEND_URL 未指定なら /api は proxy せず 404（hermetic。起動時に警告）
 npm run lint && npm run build
 ```
 
