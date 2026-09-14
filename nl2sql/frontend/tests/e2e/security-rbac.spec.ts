@@ -6877,3 +6877,83 @@ test("DeepSec 関連テーブル条件は引用名の表を Profile の候補か
   expect(JSON.stringify(entitlement.scope_expression.root.children[1].condition)).toContain('"\\"Name\\""');
   await expectNoPageHorizontalScroll(page);
 });
+
+test("ユーザー / ロール一覧の選択行はライト / ダークで文字が 4.5:1 以上になり、左バーでも選択を示す (#571)", async ({ page }) => {
+  await mockDatabaseGateReady(page);
+  const customRole = { ...systemRole, role_id: "role-contrast", role_code: "CONTRAST_VIEWER", display_name: "コントラスト確認", description: "表示のみ", is_built_in: false };
+  const users = ["contrast.first", "contrast.second"].map((login, index) => ({
+    user_uuid: `contrast-user-${index}`,
+    login_user_id: login,
+    display_name: `コントラスト確認ユーザー ${index + 1}`,
+    status: "ACTIVE",
+    force_password_change: false,
+    locked_until: null,
+    version: 1,
+    role_ids: [customRole.role_id],
+    is_bootstrap_admin: false,
+  }));
+  await page.route("**/api/security/roles?include_archived=*", (route) => fulfill(route, [systemRole, customRole]));
+  await page.route("**/api/security/users", (route) => fulfill(route, users));
+  await page.route("**/api/security/permissions", (route) => fulfill(route, []));
+
+  for (const theme of ["light", "dark"] as const) {
+    // theme.ts は ui-store のテーマ選好から html.dark を決めるため、永続化された選好として描画前に与える
+    // （addInitScript は登録順に実行されるので、後の周回のテーマが勝つ）。
+    await page.addInitScript((value) => {
+      const key = "production-ready-nl2sql.ui";
+      const stored = JSON.parse(window.localStorage.getItem(key) ?? "null") ?? { state: {}, version: 0 };
+      stored.state = { ...stored.state, theme: value };
+      window.localStorage.setItem(key, JSON.stringify(stored));
+    }, theme);
+
+    for (const prefix of ["security-users", "security-roles"] as const) {
+      await page.goto(`/settings/security/${prefix === "security-users" ? "users" : "roles"}`);
+      if (theme === "dark") await expect(page.locator("html")).toHaveClass(/\bdark\b/);
+      else await expect(page.locator("html")).not.toHaveClass(/\bdark\b/);
+      const grid = page.getByTestId(`${prefix}-grid`);
+      const selected = grid.locator('tbody tr[data-selected="true"]');
+      await expect(selected).toHaveCount(1);
+      const unselected = grid.locator('tbody tr[data-selected="false"]').first();
+      await unselected.hover();
+
+      const measured = await selected.evaluate((row) => {
+        const canvas = document.createElement("canvas");
+        canvas.width = canvas.height = 1;
+        const context = canvas.getContext("2d", { willReadFrequently: true })!;
+        const rgb = (color: string) => {
+          context.clearRect(0, 0, 1, 1);
+          context.fillStyle = color;
+          context.fillRect(0, 0, 1, 1);
+          return Array.from(context.getImageData(0, 0, 1, 1).data.slice(0, 3));
+        };
+        const luminance = (color: number[]) => {
+          const [r, g, b] = color.map((v) => (v / 255 <= 0.03928 ? v / 255 / 12.92 : ((v / 255 + 0.055) / 1.055) ** 2.4));
+          return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        };
+        const contrast = (a: number[], b: number[]) => {
+          const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+          return Math.round(((hi + 0.05) / (lo + 0.05)) * 100) / 100;
+        };
+        const rowBg = rgb(getComputedStyle(row).backgroundColor);
+        const button = row.querySelector("button")!;
+        const firstCellShadow = getComputedStyle(row.firstElementChild!).boxShadow;
+        const bar = firstCellShadow.match(/(rgba?\([^)]*\)) [\d.]+px 0px 0px 0px inset/);
+        return {
+          name: contrast(rgb(getComputedStyle(button.querySelector("span")!).color), rowBg),
+          code: contrast(rgb(getComputedStyle(button.querySelector(".font-mono")!).color), rowBg),
+          body: contrast(rgb(getComputedStyle(row).color), rowBg),
+          bar: bar ? contrast(rgb(bar[1]), rowBg) : 0,
+          rowBgLuminance: luminance(rowBg),
+        };
+      });
+      // ダークの選択行は暗い地のまま（明るい地に文字を載せない）。
+      if (theme === "dark") expect(measured.rowBgLuminance).toBeLessThan(0.05);
+      expect(measured.name, `${prefix} ${theme} 表示名`).toBeGreaterThanOrEqual(4.5);
+      expect(measured.code, `${prefix} ${theme} コード`).toBeGreaterThanOrEqual(4.5);
+      expect(measured.body, `${prefix} ${theme} 本文`).toBeGreaterThanOrEqual(4.5);
+      // 選択を背景色の差だけで示さない（WCAG 1.4.1）。左バーは非テキストの 3:1 以上。
+      expect(measured.bar, `${prefix} ${theme} 左バー`).toBeGreaterThanOrEqual(3);
+      await expect(unselected).not.toHaveAttribute("data-surface-tint");
+    }
+  }
+});
