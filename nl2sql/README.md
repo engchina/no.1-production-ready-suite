@@ -33,6 +33,13 @@ and troubleshooting, see [terraform/README.md](terraform/README.md).
 `/u01/aipoc/no.1-production-ready-platform` のローカルソース更新も NL2SQL に反映します。
 **スクリプト自身は `git pull` を含む Git 操作を行わないため、先に両リポジトリを更新してください。**
 
+**実行前に、Oracle データベースが起動済みで、Compute から接続可能であることを確認してください。**
+OCI Autonomous Database が `Stopped`（停止済み）の場合は起動し、`Starting`（起動処理中）の場合は
+`Available`（利用可能）になるまで待ちます。`backend/.env` で設定した接続アカウントには、
+ログインとシステムテーブルの migration に必要な権限が必要です。
+DB に接続できず migration が失敗すると、frontend のビルドが成功していても新しい画面は公開されず、
+旧 frontend が維持され、external worker は停止・無効化されます。
+
 以下を通常のデプロイユーザー (`ubuntu`) で順に実行し、各コマンドの成功を確認してから次へ進みます。
 
 ```bash
