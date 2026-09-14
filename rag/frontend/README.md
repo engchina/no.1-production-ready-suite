@@ -8,11 +8,13 @@ UI/UX 構造は本リポジトリの AGENTS.md と `frontend/src` を正本と�
 
 ```bash
 npm ci
-cp .env.example .env.local
-npm run dev          # http://localhost:3000
+BACKEND_URL=http://localhost:8000 npm run dev   # http://localhost:3000
 ```
 
-`/api/*` は `BACKEND_URL`（既定 http://localhost:8000）へプロキシされる。
+`/api/*` は **`BACKEND_URL` を明示したときだけ** その URL へプロキシされる（既定の接続先は持たない）。
+`BACKEND_URL` を渡さずに `npm run dev` すると hermetic モードになり、`/api/*` は proxy されず 404 を返す
+（起動時に警告を 1 行表示する）。Vite の config は `.env.local` を読まないため、`BACKEND_URL` はシェルの環境変数で渡す。
+`scripts/start-all.sh` / `scripts/start-frontend.sh` は `BACKEND_URL` を明示して起動する。
 サーバ状態は TanStack Query、UI 永続状態（例: サイドバー折りたたみ）は Zustand store で管理する。
 
 ## 開発コマンド

@@ -11,9 +11,8 @@ uv sync   # 外部 parser は services/parsers/<name> の独立サービスで�
 uv run uvicorn app.main:app --reload
 
 cd ../frontend
-cp .env.example .env.local
 npm ci
-npm run dev
+BACKEND_URL=http://localhost:8000 npm run dev   # BACKEND_URL 未指定なら /api は proxy せず 404（hermetic）
 ```
 
 Docker Compose:
