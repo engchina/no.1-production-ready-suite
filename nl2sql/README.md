@@ -40,14 +40,31 @@ OCI Autonomous Database が `Stopped`（停止済み）の場合は起動し、`
 DB に接続できず migration が失敗すると、frontend のビルドが成功していても新しい画面は公開されず、
 旧 frontend が維持され、external worker は停止・無効化されます。
 
-以下を通常のデプロイユーザー (`ubuntu`) で順に実行し、各コマンドの成功を確認してから次へ進みます。
+通常のデプロイユーザー (`ubuntu`) で、次のコマンドを実行します。
+[`scripts/git-pull.sh`](scripts/git-pull.sh) が platform → NL2SQL の順に更新し、
+**両方の pull が成功した場合だけ** `&&` に続く再デプロイを実行します。
 
 ```bash
-git -C /u01/aipoc/no.1-production-ready-platform pull --ff-only
-git -C /u01/aipoc/no.1-production-ready-nl2sql pull --ff-only
+cd /u01/aipoc/no.1-production-ready-nl2sql &&
+./scripts/git-pull.sh && sudo ./scripts/update-after-pull.sh
+```
 
-cd /u01/aipoc/no.1-production-ready-nl2sql
-sudo ./scripts/update-after-pull.sh
+ソースの取得だけなら `./scripts/git-pull.sh` を実行します（`sudo` は不要）。
+DB の起動が必要なのは再デプロイ時で、ソース取得だけなら DB 接続は不要です。
+両 repository が `main` で追跡ファイルに未保存変更がないことを事前確認し、
+`git pull --ff-only --no-rebase origin main` の後に取得 commit と `HEAD` の一致を検証します。
+branch の自動切替や変更の破棄・stash は行いません。未追跡ファイル（例: `backend/..env.lock`）は
+保持しますが、取得ファイルとの衝突は Git が拒否します。失敗時はエラーを確認してから再実行してください。
+途中まで更新された repository は元に戻さないため、両方が成功するまで再デプロイへ進まないでください。
+共有 platform は既定で NL2SQL と同じ親 directory を参照し、別配置では `PLATFORM_REPO_DIR` を指定できます。
+
+古い checkout に `scripts/git-pull.sh` がまだない場合は、最初の一度だけ NL2SQL の `main` で
+次を実行してスクリプトを取得します。
+
+```bash
+cd /u01/aipoc/no.1-production-ready-nl2sql &&
+git pull --ff-only origin main &&
+./scripts/git-pull.sh && sudo ./scripts/update-after-pull.sh
 ```
 
 引数なしで実行すると、共有コンポーネントの更新を次のように反映します。

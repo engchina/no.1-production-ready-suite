@@ -35,7 +35,8 @@ jobs:
 
       - name: Test deployment update and recovery scripts
         run: |
-          bash -n init_script.sh scripts/update-after-pull.sh scripts/tail-logs.sh
+          bash -n init_script.sh scripts/git-pull.sh scripts/update-after-pull.sh scripts/tail-logs.sh
+          bash scripts/tests/git-pull.test.sh
           bash scripts/tests/init-script-deployment.test.sh
           bash scripts/tests/update-after-pull.test.sh
           bash scripts/tests/tail-logs.test.sh
