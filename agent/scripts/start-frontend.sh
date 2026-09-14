@@ -9,6 +9,9 @@ FRONTEND_DIR="${ROOT_DIR}/frontend"
 
 HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-3002}"
+# Vite は BACKEND_URL を明示したときだけ /api を proxy する（未指定なら 404 の hermetic モード）。
+# このスクリプトはローカル backend と組み合わせる起動経路なので、接続先を明示して渡す。
+export BACKEND_URL="${BACKEND_URL:-http://127.0.0.1:8020}"
 
 if ! command -v npm >/dev/null 2>&1; then
   echo "[frontend] npm が見つかりません。Node.js をインストールしてください。" >&2

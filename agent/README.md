@@ -43,13 +43,17 @@ workspace には共有 package の sibling repo が必要です。
 # backend
 cd backend
 uv sync
-uv run uvicorn app.main:app --reload
+uv run uvicorn app.main:app --reload --port 8020
 
 # frontend
 cd frontend
 npm install
-npm run dev
+BACKEND_URL=http://127.0.0.1:8020 npm run dev
 ```
+
+frontend の Vite は `BACKEND_URL` を明示したときだけ `/api` を backend へ proxy します（既定の接続先は持ちません）。
+`BACKEND_URL` を渡さずに `npm run dev` すると hermetic モードになり、`/api` は proxy されず 404 を返します（起動時に警告を 1 行表示）。
+`scripts/start-all.sh` / `scripts/start-frontend.sh` は `BACKEND_URL` を明示して起動します。
 
 既存 helper を使う場合:
 
