@@ -11,6 +11,7 @@ import importlib
 import json
 import logging
 import re
+import time
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager, suppress
 from datetime import UTC, datetime, timedelta
@@ -576,8 +577,9 @@ class OracleNl2SqlAdapter:
     deterministic / oracle runtime を切り替える。
     """
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, *, connect_attempts: int = 1) -> None:
         self.settings = settings
+        self.connect_attempts = max(1, min(connect_attempts, 3))
         self._oracledb: Any | None = None
         self._client_initialized = False
 
@@ -620,12 +622,22 @@ class OracleNl2SqlAdapter:
         self._init_client(oracledb)
         if not self.is_configured():
             raise OracleAdapterError("Oracle 接続情報が不足しています。")
-        try:
-            conn = oracledb.connect(**_oracle_connect_kwargs(self.settings))
-        except OracleAdapterError:
-            raise
-        except Exception as exc:  # oracledb.DatabaseError/OperationalError 等を統一契約に変換
-            raise OracleAdapterError(f"Oracle 接続に失敗しました: {exc}") from exc
+        for attempt in range(self.connect_attempts):
+            try:
+                conn = oracledb.connect(**_oracle_connect_kwargs(self.settings))
+                break
+            except OracleAdapterError:
+                raise
+            except Exception as exc:  # 接続確立前だけ再試行し、yield 後の SQL は再送しない。
+                message = str(exc)
+                if (
+                    "DPY-6005" in message
+                    and "timed out" in message.lower()
+                    and attempt + 1 < self.connect_attempts
+                ):
+                    time.sleep(0.25 * (attempt + 1))
+                    continue
+                raise OracleAdapterError(f"Oracle 接続に失敗しました: {exc}") from exc
         try:
             # python-oracledb call_timeout は 1 round-trip 単位の millisecond。
             # 0 (無期限) を避け、DBMS_CLOUD_AI/Agent PL/SQL が worker を占有し続けないようにする。

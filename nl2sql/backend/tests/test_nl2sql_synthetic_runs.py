@@ -655,3 +655,105 @@ def test_worker_loop_logs_failure_cause_and_backs_off(caplog: pytest.LogCaptureF
     assert cast(Any, first).error_type == "RuntimeError"
     assert "DPY-6005" in cast(Any, first).error
     assert cast(Any, caplog.records[-1]).consecutive_failures == 6
+
+
+@pytest.mark.parametrize("failure", ["configuration", "connection"])
+def test_worker_keeps_pending_on_actor_service_outage_and_executes_once_after_recovery(
+    service: Any, failure: str
+) -> None:
+    from app.features.nl2sql.oracle_adapter import OracleAdapterError
+    from app.security.service import SecurityApiError
+
+    created = service.create(request(), actor())
+    error = (
+        SecurityApiError(503, "構成管理者の認証情報が正しく設定されていません。")
+        if failure == "configuration"
+        else OracleAdapterError("Oracle 接続に失敗しました: timed out")
+    )
+    resolver = Mock(side_effect=error)
+    service.resolve_actor = resolver
+    for _ in range(2):
+        with pytest.raises(type(error)):
+            service.tick()
+        saved = service.store.get(created.run_id)
+        assert saved.status == "pending"
+        assert saved.started_at is None and saved.finished_at is None
+        assert saved.version == created.version
+        assert not saved.worker_id
+        assert not saved.session and not saved.operation_ids and not saved.staging
+        service.adapter.generate_synthetic_data.assert_not_called()
+        service.preview.prepare.assert_not_called()
+    resolver.side_effect = None
+    resolver.return_value = actor()
+    service.tick()
+    for thread in service._threads.values():
+        thread.join(3)
+        assert not thread.is_alive()
+    completed = service.store.get(created.run_id)
+    assert completed.status == "verifying"
+    assert completed.worker_id
+    assert "worker_id" not in completed.public()
+    assert service.adapter.generate_synthetic_data.call_count == 1
+    assert service.create(request(), actor()).run_id == created.run_id
+    assert service.adapter.generate_synthetic_data.call_count == 1
+
+
+def test_worker_does_not_retry_revoked_actor_as_configuration_outage(service: Any) -> None:
+    from app.security.service import SecurityApiError
+
+    created = service.create(request(), actor())
+    service.resolve_actor = Mock(side_effect=SecurityApiError(403, "実行権限がありません。"))
+    service.tick()
+    for thread in service._threads.values():
+        thread.join(3)
+        assert not thread.is_alive()
+    saved = service.store.get(created.run_id)
+    assert saved.status == "failed" and saved.finished_at is not None
+    assert saved.message == "実行権限がありません。"
+    service.adapter.generate_synthetic_data.assert_not_called()
+    service.preview.prepare.assert_not_called()
+
+
+@pytest.mark.parametrize("case", ["recover", "exhausted", "credentials", "statement", "default"])
+def test_synthetic_connection_retries_only_establishment_timeouts(
+    monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    from app.features.nl2sql import oracle_adapter as oracle
+
+    settings = Settings(
+        _env_file=None,
+        oracle_user="APP",
+        oracle_password="fixture-only",
+        oracle_dsn="localhost/FREEPDB1",
+        oracle_connection_security="walletless_tls",
+    )
+    adapter = OracleNl2SqlAdapter(settings, connect_attempts=1 if case == "default" else 3)
+    conn = MagicMock()
+    timeout = RuntimeError("DPY-6005: cannot connect to database. timed out")
+    driver = Mock()
+    if case == "recover":
+        driver.connect.side_effect = [timeout, timeout, conn]
+    elif case == "statement":
+        driver.connect.return_value = conn
+    elif case == "credentials":
+        driver.connect.side_effect = RuntimeError("ORA-01017: invalid credential")
+    else:
+        driver.connect.side_effect = timeout
+    monkeypatch.setattr(adapter, "_load_oracledb", lambda: driver)
+    monkeypatch.setattr(adapter, "_init_client", lambda _: None)
+    monkeypatch.setattr("app.features.nl2sql.oracle_adapter.time.sleep", Mock())
+    if case == "recover":
+        with adapter.connection() as result:
+            assert result is conn
+        assert driver.connect.call_count == 3
+        conn.close.assert_called_once()
+    elif case == "statement":
+        with pytest.raises(RuntimeError, match="DPY-6005"), adapter.connection():
+            raise timeout
+        assert driver.connect.call_count == 1
+        conn.rollback.assert_called_once()
+        conn.close.assert_called_once()
+    else:
+        with pytest.raises(oracle.OracleAdapterError), adapter.connection():
+            pytest.fail("connection must not yield on failure")
+        assert driver.connect.call_count == (3 if case == "exhausted" else 1)

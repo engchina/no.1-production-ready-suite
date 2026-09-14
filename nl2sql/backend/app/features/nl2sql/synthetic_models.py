@@ -52,6 +52,7 @@ class SyntheticRun(BaseModel):
     operation_ids: list[int] = Field(default_factory=list)
     failure_phase: Literal["validation"] | None = None
     execution_returned: bool = False
+    worker_id: str = ""
     version: int = 0
     # 旧履歴は直接生成。新規受付は必ず preview=True にする（request から選択不可）。
     preview: bool = False
@@ -71,6 +72,7 @@ class SyntheticRun(BaseModel):
         return self.model_dump(
             exclude={
                 "actor_id",
+                "worker_id",
                 "context_id",
                 "idempotency_key",
                 "request_hash",

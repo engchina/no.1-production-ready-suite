@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
+import socket
 import threading
 import time
 from collections.abc import Callable
@@ -16,7 +18,7 @@ from fastapi import HTTPException
 
 from app.security.domain import Principal
 from app.security.request_actor import actor_scope
-from app.security.service import get_security_service
+from app.security.service import SecurityApiError, get_security_service
 from app.settings import Settings, get_settings
 
 from .models import SyntheticDataGenerateRequest
@@ -65,7 +67,7 @@ class SyntheticService:
     ):
         self.context = context_id(settings)
         self.settings = settings
-        self.adapter = adapter or OracleNl2SqlAdapter(settings)
+        self.adapter = adapter or OracleNl2SqlAdapter(settings, connect_attempts=3)
         self.store = store or SyntheticStore(
             self.adapter.connection if settings.nl2sql_persistence_mode == "oracle" else None
         )
@@ -284,7 +286,12 @@ class SyntheticService:
             run.run_id,
             run.status,
             run.operation_ids,
-            extra={"run_id": run.run_id, "status": run.status, "operation_ids": run.operation_ids},
+            extra={
+                "run_id": run.run_id,
+                "status": run.status,
+                "operation_ids": run.operation_ids,
+                "worker_id": run.worker_id,
+            },
         )
 
     def update(self, run_id: str, fn: Callable[[SyntheticRun], None]) -> None:
@@ -431,7 +438,16 @@ class SyntheticService:
             self._threads = {k: t for k, t in self._threads.items() if t.is_alive()}
             for run in reversed(self.store.list(self.context, active=True)):
                 if run.status == "pending" and len(self._threads) < 2:
+                    # worker 自身の設定不備・認可DB接続断は未実行ジョブの失敗にしない。
+                    # claim 前に検出し、worker_loop のバックオフ後に同じ pending を確認する。
+                    try:
+                        self.resolve_actor(run.actor_id)
+                    except SecurityApiError as exc:
+                        if exc.status_code >= 500:
+                            raise
+                        # 権限剥奪等は execute の再認可で従来どおり拒否する。
                     run.status, run.started_at = "running", now()
+                    run.worker_id = f"{socket.gethostname()}:{os.getpid()}"
                     if self.store.save(run):
                         self.log_state(run)
                         thread = threading.Thread(
