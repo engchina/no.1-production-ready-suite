@@ -8812,10 +8812,10 @@ test("feedback management page mirrors Select AI feedback operations", async ({ 
     "tbody tr",
     expectedInformationRows(testInfo)
   );
-  // 共有 PageHeader の utility 操作は ghost / md(36px、タッチ端末 44px)。
+  // 共有 PageHeader の utility 操作は secondary / md(36px、タッチ端末 44px)。
   const pageRefreshButton = page.getByRole("button", { name: "表示を更新", exact: true });
   await expect(pageRefreshButton).toHaveCSS("height", testInfo.project.name === "mobile-375" ? "44px" : "36px");
-  await expect(pageRefreshButton).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+  await expect(pageRefreshButton).not.toHaveCSS("border-top-color", "rgba(0, 0, 0, 0)");
   const entryRefreshButtons = page.getByRole("button", { name: "最新エントリを取得" });
   await expect(entryRefreshButtons).toHaveCount(1);
   await expect(entryRefreshButtons).toHaveCSS("height", "44px");
@@ -9310,10 +9310,10 @@ test("feedback management keeps utility actions usable in empty and load error s
   await expect(page.getByTestId("feedback-management-entry-detail-empty")).toBeVisible();
   await expect(page.getByTestId("feedback-management-entry-sql")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "再読込", exact: true })).toBeVisible();
-  // 共有 PageHeader の utility 操作は ghost / md(36px、タッチ端末 44px)。
+  // 共有 PageHeader の utility 操作は secondary / md(36px、タッチ端末 44px)。
   const reloadButton = page.getByRole("button", { name: "表示を更新", exact: true });
   await expect(reloadButton).toHaveCSS("height", testInfo.project.name === "mobile-375" ? "44px" : "36px");
-  await expect(reloadButton).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+  await expect(reloadButton).not.toHaveCSS("border-top-color", "rgba(0, 0, 0, 0)");
   await reloadButton.focus();
   await expect(reloadButton).toBeFocused();
   await page.setViewportSize({ width: 375, height: 900 });
@@ -17221,5 +17221,41 @@ for (const outcome of ["discard", "apply-error", "partial"] as const) {
       expect(applied).toBe(0);
     }
     await expectNoHorizontalScroll(page);
+  });
+}
+
+
+for (const theme of ["light", "dark"]) {
+  test(`header utility outline matches import across management pages: ${theme}`, async ({ page, isMobile }, testInfo) => {
+    await mockNl2SqlApi(page);
+    for (const path of ["/table-management", "/view-management", "/data-management"]) {
+      await page.goto(path);
+      await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
+      const header = page.locator("main header").first();
+      const inMenu = isMobile && path !== "/data-management";
+      await expect(header.getByRole("heading", { level: 1 })).toBeVisible();
+      if (inMenu) await header.getByRole("button", { name: "その他の操作" }).click();
+      const role = inMenu ? "menuitem" : "button";
+      const refresh = header.getByRole(role, { name: "表示を更新", exact: true });
+      await expect(refresh).toBeEnabled();
+      if (!isMobile) {
+        for (const label of ["表示を更新", "DB 構造を再取得"]) {
+          const button = header.getByRole("button", { name: label, exact: true });
+          await expect(button).toHaveCSS("border-top-width", "1px");
+          await expect(button).not.toHaveCSS("border-top-color", "rgba(0, 0, 0, 0)");
+          if (path === "/table-management") {
+            const importButton = header.getByRole("button", { name: "Excel/CSV 取込(新規テーブル)" });
+            await expect(button).toHaveCSS("border-top-color", await importButton.evaluate(el => getComputedStyle(el).borderTopColor));
+            await expect(button).toHaveCSS("background-color", await importButton.evaluate(el => getComputedStyle(el).backgroundColor));
+          }
+        }
+      }
+      await refresh.click();
+      if (inMenu) await header.getByRole("button", { name: "その他の操作" }).click();
+      await expect(refresh).toBeEnabled();
+      if (inMenu) await page.keyboard.press("Escape");
+      await expectNoHorizontalScroll(page);
+      await page.screenshot({ path: testInfo.outputPath(`${path.slice(1)}-${theme}.png`), fullPage: true });
+    }
   });
 }
