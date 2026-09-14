@@ -27,8 +27,10 @@ from app.settings import get_settings
 
 
 def all_concepts() -> list[dict[str, Any]]:
+    definitions = definition_payload()
+    definitions[2]["join_expression_sql"] = "APP.ORDERS.CUSTOMER_ID = APP.ORDERS.ID"
     return [
-        *definition_payload(),
+        *definitions,
         {"kind": "shared_property", "api_name": "Amount", "name_ja": "金額", "data_type": "number"},
         {"kind": "value_type", "api_name": "Money", "name_ja": "金額型", "data_type": "number"},
         {"kind": "enumeration", "api_name": "Status", "name_ja": "状態", "property": "Order.id"},
@@ -93,7 +95,12 @@ def test_unified_worker_builds_thirteen_kinds_once_per_input(
             run_schema_naming=source in {"schema", "mixed"},
             business_text="受注の定義" if source in {"text", "mixed"} else "",
             qa_pairs=(
-                [QaPair(question="受注", sql="SELECT * FROM APP.ORDERS")]
+                [
+                    QaPair(
+                        question="受注",
+                        sql="SELECT o.ID FROM APP.ORDERS o JOIN APP.ORDERS p ON o.CUSTOMER_ID=p.ID",
+                    )
+                ]
                 if source in {"qa", "mixed"}
                 else []
             ),

@@ -4491,7 +4491,16 @@ class OntologyBuildService:
                 )
                 self._fail(job_id, message)
                 return
+            from .ontology_build_grounding import ground_qa_links
+
             for validated in validated_extractions:
+                # checkpoint の旧候補を読み込んだ場合も、型付き関係を統合前に検証する。
+                grounded = ground_qa_links(
+                    validated.extraction, validated.cross_check_sql, schema_payload
+                )
+                validated.extraction.definitions = grounded.definitions
+                validated.extraction.warnings_ja = grounded.warnings_ja
+                validated.extraction.coverage = grounded.coverage
                 step_drafts, step_warnings = convert_extraction_to_proposals(
                     validated.extraction,
                     ontology=ontology,

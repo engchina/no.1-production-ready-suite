@@ -3016,10 +3016,19 @@ for (const theme of ["light", "dark"]) {
       await mainConcepts.focus(); await page.keyboard.press("Enter");
       await expect(concepts.getByText(/オブジェクト型（Object Type）/)).toBeVisible();
       await progress.screenshot({path:testInfo.outputPath(`unified-progress-${theme}-${width}.png`)});
+      const savedNote = "Markdown 下書き v2 を生成しました(候補 13 件)。";
+      payload.job.steps.find(step => step.name === "proposal_registration")!.detail_ja = savedNote;
+      payload.job.events.push({at:new Date().toISOString(), message_ja:savedNote, step:"proposal_registration", phase:"save"} as typeof typedEvents[number]);
+      payload.job.events.push({at:new Date().toISOString(), message_ja:"保存後の整合性を確認しました。", step:"proposal_registration", phase:"save"} as typeof typedEvents[number]);
       payload.job.status = "succeeded";
       payload.job.definition_phases.forEach(p => {p.status = "succeeded";});
       payload.job.steps.forEach(step => {step.status = "succeeded";});
       await expect(page.getByTestId("ontology-build-step-progress")).toContainText("5/5");
+      const saveStage = progress.getByTestId("ontology-build-stage-save");
+      await saveStage.getByText("保存・最終確認",{exact:true}).click();
+      await expect(saveStage.getByText(savedNote,{exact:true})).toHaveCount(1);
+      await expect(saveStage.getByText(savedNote,{exact:true})).toBeVisible();
+      await expect(saveStage.getByText("保存後の整合性を確認しました。",{exact:true})).toBeVisible();
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     });
   }

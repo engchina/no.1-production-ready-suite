@@ -1365,6 +1365,8 @@ export function OntologyBuildSection({
     for (const [index, event] of (job.events ?? []).entries()) {
       const stage = buildEventStage(event.phase);
       if (!stage || shouldSuppressBuildEvent(event)) continue;
+      const step = job.steps.find(item => item.name === event.step);
+      if (step && eventDuplicatesStepDetail(event, step)) continue;
       const events = assignments.get(stage) ?? [];
       if (!events.some(row => normalizedProgressText(row.event.message_ja) === normalizedProgressText(event.message_ja))) events.push({event, index});
       assignments.set(stage, events);
