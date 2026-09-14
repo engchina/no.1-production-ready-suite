@@ -31,8 +31,7 @@ uv run uvicorn app.main:app --reload    # http://localhost:8000/docs
 # フロントエンド（別ターミナル）
 cd frontend
 npm ci
-cp .env.example .env.local
-npm run dev                 # http://localhost:3000
+BACKEND_URL=http://localhost:8000 npm run dev   # http://localhost:3000（BACKEND_URL 未指定なら /api は 404）
 
 # まとめて（Docker。CPU parser サービス込み）
 docker compose up --build

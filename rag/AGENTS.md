@@ -303,7 +303,7 @@ cd frontend && npm install
 npm run lint
 npm run build
 npm run test
-npm run dev
+npm run dev   # /api は BACKEND_URL を明示したときだけ proxy する（未指定なら 404 の hermetic モード）
 ```
 
 ## テスト/検証方針
