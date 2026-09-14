@@ -31,6 +31,7 @@ import { ClearActionButton } from "@/components/ui/clear-action-button";
 import { FileDropzone } from "@/components/ui/file-dropzone";
 import { apiFetch, apiGet, apiPost, isTimeoutError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
+import { randomUuid } from "@/lib/randomUuid";
 import { t } from "@/lib/i18n";
 import { useDebouncedValue } from "@/lib/useDebouncedValue";
 import { toastError } from "@/lib/toast";
@@ -828,7 +829,6 @@ export function DataManagementPage() {
     setSyntheticData(null);
     setSyntheticError("");
     setSyntheticErrorOperation("");
-    toast.info(t("dataTools.syntheticData.toast.generateStarted"));
     try {
       clearSyntheticResultState();
       const body = {
@@ -838,7 +838,7 @@ export function DataManagementPage() {
         reason: "ui-synthetic-data",
       };
       const signature = JSON.stringify(body);
-      const key = submissionKey.signature === signature ? submissionKey.key : crypto.randomUUID();
+      const key = submissionKey.signature === signature ? submissionKey.key : randomUuid();
       setSubmissionKey({ signature, key });
       const run = await apiPost<SyntheticRun>("/api/nl2sql/synthetic-data/runs", {
         ...body, confirmation: syntheticConfirmation, idempotency_key: key,

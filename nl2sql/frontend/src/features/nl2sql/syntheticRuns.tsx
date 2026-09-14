@@ -171,7 +171,7 @@ export function SyntheticRunPanel({ run, runs, onSelect, error, onRefresh, submi
         {history.map((r) => <option key={r.run_id} value={r.run_id}>{formatDateTime(r.created_at)} · {runLabel(r)} · {r.targets.map((target) => target.table_name).join(", ")} · {r.run_id.slice(0, 8)}</option>)}
       </select>
     </label>}
-    <p className="text-xs text-fg-muted">{t(run?.preview ? "syntheticPreview.retention" : "syntheticRun.retention")}</p>
+    <p className="text-xs text-fg-muted">{t(!run || run.preview ? "syntheticPreview.retention" : "syntheticRun.retention")}</p>
     <div className="flex flex-wrap gap-2">
       <Button type="button" variant="secondary" size="sm" loading={feedback?.pending} icon={RefreshCw} onClick={() => void refreshStatus()}>{t("syntheticRun.refresh")}</Button>
     </div>

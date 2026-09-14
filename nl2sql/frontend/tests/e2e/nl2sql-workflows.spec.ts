@@ -11156,6 +11156,59 @@ for (const outcome of ["completed", "failed", "partial", "no_data", "unknown"] a
   });
 }
 
+for (const uuidAvailable of [false, true]) {
+  test(`synthetic submission with randomUUID ${uuidAvailable ? "available" : "unavailable"} creates persistent history`, async ({ page }, testInfo) => {
+    await mockNl2SqlApi(page);
+    if (!uuidAvailable) {
+      // HTTP のクラウドでは randomUUID のみ未提供。localhost の通常テストでは見逃す。
+      await page.addInitScript(() => Object.defineProperty(crypto, "randomUUID", { value: undefined, configurable: true }));
+    }
+    const gate = createRequestGate();
+    let run: ReturnType<typeof syntheticRunFixture> | null = null;
+    const submissions: Record<string, unknown>[] = [];
+    await page.route("**/api/nl2sql/synthetic-data/runs", async route => {
+      if (route.request().method() === "GET") return fulfillJson(route, run ? [run] : []);
+      submissions.push(route.request().postDataJSON());
+      await gate.promise;
+      run = Object.assign(syntheticRunFixture("pending"), { preview: true, review_status: "generating" });
+      return fulfillJson(route, run);
+    });
+    await page.goto("/data-management");
+    await page.getByRole("tab", { name: "合成データ生成" }).click();
+    const workspace = page.locator("#data-management-panel-synthetic");
+    const panel = page.getByTestId("synthetic-run-panel");
+    await expect(panel).toContainText("確認用データと履歴は生成終了から24時間保持します。");
+    await workspace.getByRole("button", { name: "テーブル一覧を取得" }).click();
+    await workspace.getByLabel("APP.INVOICES を選択").check();
+    await workspace.getByLabel("実行確認語").fill("APP.INVOICES");
+    await workspace.getByRole("button", { name: "生成開始" }).focus();
+    await page.keyboard.press("Enter");
+    await expect.poll(() => submissions.length).toBe(1);
+    expect(submissions[0].idempotency_key).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(submissions[0].table_name).toBe("APP.INVOICES");
+    await expect(page.getByText("Synthetic data 生成を開始しました。", { exact: true })).toHaveCount(0);
+    await expect(page.getByText("生成を受け付けました。生成状況で結果を確認できます。", { exact: true })).toHaveCount(0);
+    await expect(page.getByTestId("synthetic-submitting")).toBeVisible();
+    gate.release();
+    await expect(panel.getByTestId("synthetic-run-status")).toHaveText("受付済み・開始を待っています");
+    await expect(panel.getByLabel("生成履歴")).toHaveValue("run-001");
+    await page.reload();
+    await expect(panel.getByLabel("生成履歴")).toHaveValue("run-001");
+    await expect(panel.getByTestId("synthetic-run-status")).toHaveText("受付済み・開始を待っています");
+    expect(submissions).toHaveLength(1);
+    const widths = testInfo.project.name === "desktop" ? [1280, 1920] : [375];
+    for (const width of widths) {
+      await page.setViewportSize({ width, height: 900 });
+      for (const theme of ["light", "dark"]) {
+        await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
+        await panel.scrollIntoViewIfNeeded();
+        await expectNoHorizontalScroll(page);
+        await page.screenshot({ path: testInfo.outputPath(`synthetic-http-${width}-${theme}.png`) });
+      }
+    }
+  });
+}
+
 test("synthetic waiting uses shared live timing beside the action and freezes duration", async ({ page }, testInfo) => {
   await mockNl2SqlApi(page);
   await page.emulateMedia({ reducedMotion: "reduce" });
@@ -11651,7 +11704,8 @@ test("synthetic data reports preflight rejection beside the generate action", as
 
   await syntheticPanel.getByRole("button", { name: "生成開始" }).click();
 
-  await expect(page.getByRole("region", { name: "通知" })).toContainText("Synthetic data 生成を開始しました。");
+  await expect(page.getByText("Synthetic data 生成を開始しました。", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("生成を受け付けました。生成状況で結果を確認できます。", { exact: true })).toHaveCount(0);
   await expect(page.getByRole("region", { name: "通知" })).not.toContainText("合成データの生成が完了しました");
   await expect(
     syntheticPanel.getByText(
