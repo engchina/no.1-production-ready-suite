@@ -45,9 +45,9 @@ export async function expectLegacyOntologyControls(page: Page, scope: Locator) {
     element.append(probe);
     const primary = getComputedStyle(probe).color;
     probe.remove();
-    return { background: getComputedStyle(element).backgroundColor, primary };
+    return { primary };
   });
-  expect(selectedColors.background).toBe(selectedColors.primary);
+  await expect(all).toHaveCSS("background-color", selectedColors.primary);
 
   const physical = scope.getByTestId("ontology-graph-mode-physical_er");
   await physical.focus();

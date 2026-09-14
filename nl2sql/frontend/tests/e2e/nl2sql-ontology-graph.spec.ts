@@ -637,7 +637,7 @@ for (const theme of ["light", "dark"]) {
         expect(boxes[2]!.y).toBeGreaterThanOrEqual(boxes[0]!.y + boxes[0]!.height);
       }
       const canvas = playground.getByTestId("ontology-graph-canvas");
-      expect(await canvas.evaluate(el => el.getBoundingClientRect().height / parseFloat(getComputedStyle(document.documentElement).fontSize))).toBeCloseTo(45, 0);
+      expect(await canvas.evaluate(el => el.getBoundingClientRect().height / parseFloat(getComputedStyle(document.documentElement).fontSize))).toBeCloseTo(56, 0);
       await expectEntireGraphInCanvas(playground);
       await playground.getByRole("button", { name: "グラフを拡大", exact: true }).click();
       const fit = playground.getByRole("button", { name: "グラフ全体を表示", exact: true });

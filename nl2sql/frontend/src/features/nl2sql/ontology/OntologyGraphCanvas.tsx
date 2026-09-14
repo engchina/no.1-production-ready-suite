@@ -1126,7 +1126,7 @@ function OntologyFlow({
       <div
         ref={canvasRef}
         data-testid="ontology-graph-canvas"
-        className="relative h-[45rem] min-h-80 overflow-hidden rounded-md border border-border bg-surface-sunken"
+        className="relative h-[56rem] min-h-80 overflow-hidden rounded-md border border-border bg-surface-sunken"
       >
       {canvasVisible && <ReactFlow
         nodes={nodes}
