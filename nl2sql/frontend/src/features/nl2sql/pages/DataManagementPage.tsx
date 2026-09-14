@@ -1676,13 +1676,14 @@ function PreviewResultsPanel({
           />
         }
       />
-      {/* 取得件数上限と表示ボタンを 1 行の操作行にまとめ、数値入力を行全体に伸ばさない（1:2）。 */}
-      <div className="grid gap-3 border-t border-border pt-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)] lg:items-center lg:gap-x-6">
+      {/* 取得件数上限は lg 以上で 50% 幅。操作ボタンはヘルパーテキストの下の行に置く。 */}
+      <div className="grid grid-cols-1 gap-3 border-t border-border pt-3">
         <RowLimitField
           value={rowLimitInput}
           onChange={onRowLimitChange}
           disabled={loading}
           error={rowLimitError}
+          className="lg:w-1/2"
         />
         <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
           <Button
