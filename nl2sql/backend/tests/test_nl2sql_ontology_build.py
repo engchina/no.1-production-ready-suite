@@ -954,11 +954,26 @@ def test_build_job_batches_all_source_chunks_without_omission(
     combined_context = "\n".join(text_contexts)
     for marker in markers:
         assert marker in combined_context
-    processed_chunks = sum(
-        len(json.loads(context)["business_text_chunks"]) for context in text_contexts
-    )
-    # 基礎抽出・共有定義・能力契約の3段階が同じ固定資料を完全に読む。
-    assert processed_chunks == len(markers) * 3
+    # 補完指示の長さで再分割数は変わる。3段階それぞれで本文の欠落・重複を検証する。
+    phase_texts: dict[str, dict[str, str]] = {}
+    for prompt, context in zip(client.calls, client.contexts, strict=True):
+        if "business_text_chunks" not in context:
+            continue
+        phase = (
+            "shared"
+            if prompt.startswith("共有プロパティ・値型")
+            else "capabilities" if prompt.startswith("資料に明記された関数") else "objects"
+        )
+        texts = phase_texts.setdefault(phase, {})
+        for chunk in json.loads(context)["business_text_chunks"]:
+            source_id = chunk["source_id"]
+            texts[source_id] = texts.get(source_id, "") + chunk["text"]
+    assert set(phase_texts) == {"objects", "shared", "capabilities"}
+    expected_texts = {
+        source_id: "".join(content.decode().split()) for source_id, content in contents.items()
+    }
+    for texts in phase_texts.values():
+        assert {key: "".join(value.split()) for key, value in texts.items()} == expected_texts
     assert any("chunk batch" in event.message_ja for event in finished.events)
 
 

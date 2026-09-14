@@ -10,6 +10,7 @@ import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ApiError, apiGet, apiPost } from "@/lib/api";
 import { t } from "@/lib/i18n";
+import { randomUuid } from "@/lib/randomUuid";
 import { useWorkspaceState, useResetExecutionConsent } from "@/components/WorkspaceState";
 import { ContentActionBar } from "@/components/ContentActionBar";
 import type { OntologyMarkdownState, OntologyPublishJob } from "./types";
@@ -75,7 +76,7 @@ export function MarkdownPublication({ profileId, profileLabel, signature, disabl
     try {
       const state = await save();
       if (!state?.draft_etag) return;
-      const result = await apiPost<Preparation>(`${endpoint}/prepare`, { draft_etag: state.draft_etag }, headers(crypto.randomUUID()));
+      const result = await apiPost<Preparation>(`${endpoint}/prepare`, { draft_etag: state.draft_etag }, headers(randomUuid()));
       if (!mounted.current) return;
       setPreparationId(result.id);
     } catch (e) { setError(e instanceof Error ? e.message : t("markdownOntology.failed")); }
@@ -88,9 +89,9 @@ export function MarkdownPublication({ profileId, profileLabel, signature, disabl
     if (consent !== generation.current) return;
     setBusy("publish"); setError("");
     const body = { preparation_id: value.id, draft_etag: value.draft_etag, expected_head: value.expected_head, confirmed: true };
-    const key = crypto.randomUUID();
-    setExecution({key});
     try {
+      const key = randomUuid();
+      setExecution({key});
       const result = await apiPost<{job:OntologyPublishJob}>(`${endpoint}/publish`, body, headers(key));
       if (!mounted.current) return;
       setExecution({key:""}); setPreparationId(""); onPublished(result.job);

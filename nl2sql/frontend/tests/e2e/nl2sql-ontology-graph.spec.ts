@@ -453,9 +453,11 @@ async function expectGraphSearchFieldLayout(page: Page, playground: Locator) {
   });
   expect(hasVisibleBoxShadow(inputFrameStyles.boxShadow)).toBe(false);
 
-  await playground.getByTestId("ontology-graph-mode-physical_er").focus();
+  const kindFilter = playground.getByRole("combobox", { name: "概念の種類", exact: true });
+  await kindFilter.focus();
   await page.keyboard.press("Tab");
-  await expect(playground.getByRole("combobox", {name:"概念の種類",exact:true})).toBeFocused();
+  await expect(playground.getByTestId("ontology-graph-mode-grounding")).toBeFocused();
+  await playground.getByTestId("ontology-graph-mode-physical_er").focus();
   await page.keyboard.press("Tab");
   await expect
     .poll(() => page.evaluate(() => document.activeElement?.getAttribute("data-testid")))
@@ -483,7 +485,8 @@ async function expectGraphSearchFieldLayout(page: Page, playground: Locator) {
   if (viewportWidth >= 640) {
     const laneBox = await playground.getByTestId("ontology-graph-lane-business").boundingBox();
     expect(laneBox).not.toBeNull();
-    expect(fieldBox!.y + fieldBox!.height + 4).toBeLessThanOrEqual(laneBox!.y);
+    const focusedFieldBox = await field.boundingBox();
+    expect(focusedFieldBox!.y + focusedFieldBox!.height + 4).toBeLessThanOrEqual(laneBox!.y);
   }
 }
 
@@ -576,6 +579,57 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
   await page.route("**/api/nl2sql/profiles/*/ontology-source-documents**", (route) =>
     fulfillJson(route, { source_documents: [] })
   );
+}
+
+for (const theme of ["light", "dark"]) {
+  for (const width of [1280, 1920]) {
+    test(`概念の種類を先頭にして操作枠を整列する ${theme} ${width}`, async ({ page }, testInfo) => {
+      test.skip(testInfo.project.name !== "desktop" && width !== 1280, "モバイルは375幅で確認");
+      if (testInfo.project.name === "desktop") await page.setViewportSize({ width, height: 1000 });
+      await page.addInitScript((theme) => {
+        localStorage.setItem("production-ready-nl2sql.ui", JSON.stringify({
+          state: { sidebarCollapsed: false, collapsedSections: {}, theme }, version: 0,
+        }));
+      }, theme);
+      await mockApi(page, { ontologyGraph: erDetailOntologyGraph });
+      await page.goto("/ontology-build?profile=default");
+      await expect(page.getByTestId("ontology-view-fetch")).toBeVisible();
+      await page.keyboard.press("Tab");
+      await expect(page.getByRole("link", { name: "本文へスキップ" })).toBeFocused();
+      const heading = page.getByRole("heading", { level: 1 });
+      const bodyStart = page.locator("main header + div > :first-child");
+      const headingBox = await heading.boundingBox();
+      const bodyBox = await bodyStart.boundingBox();
+      expect(headingBox).not.toBeNull();
+      expect(bodyBox).not.toBeNull();
+      expect(Math.abs(headingBox!.x - bodyBox!.x)).toBeLessThanOrEqual(1);
+      await page.getByTestId("ontology-view-fetch").click();
+      const playground = page.getByRole("region", { name: "質問のオントロジー接地確認用グラフ" });
+      await openGraphIfCollapsed(page, playground);
+      await expectGraphSearchFieldLayout(page, playground);
+      const toolbar = playground.getByTestId("ontology-graph-toolbar");
+      const filter = toolbar.getByRole("combobox", { name: "概念の種類", exact: true });
+      await expect(toolbar.locator("select, button, input").first()).toHaveAttribute("aria-label", "概念の種類");
+      const controls = [filter, ...["ontology-graph-view-mode", "ontology-graph-search-field", "ontology-graph-details-toggle-field"].map(id => toolbar.getByTestId(id))];
+      const boxes = await Promise.all(controls.map(control => control.boundingBox()));
+      for (const box of boxes) {
+        expect(box).not.toBeNull();
+        expect(Math.abs(box!.height - boxes[0]!.height)).toBeLessThanOrEqual(1);
+        if (testInfo.project.name === "desktop" && width === 1920) expect(Math.abs(box!.y - boxes[0]!.y)).toBeLessThanOrEqual(1);
+      }
+      if (testInfo.project.name === "desktop" && width === 1280) {
+        // 右側の詳細パネルを含む狭いグラフでは2行。各行で上下端を揃える。
+        expect(Math.abs(boxes[0]!.y - boxes[1]!.y)).toBeLessThanOrEqual(1);
+        expect(Math.abs(boxes[2]!.y - boxes[3]!.y)).toBeLessThanOrEqual(1);
+        expect(boxes[2]!.y).toBeGreaterThanOrEqual(boxes[0]!.y + boxes[0]!.height);
+      }
+      await filter.selectOption("object_type");
+      await expect(filter).toHaveValue("object_type");
+      await filter.selectOption("");
+      await expectNoHorizontalScroll(page);
+      await toolbar.screenshot({ path: testInfo.outputPath(`toolbar-${theme}-${width}.png`) });
+    });
+  }
 }
 
 for (const version of [1, 2]) {

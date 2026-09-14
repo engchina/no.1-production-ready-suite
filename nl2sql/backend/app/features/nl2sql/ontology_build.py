@@ -2039,6 +2039,9 @@ _EXTRACTION_SYSTEM_PROMPT += (
     "api_name は英語の安定識別子、概念参照は同一 definitions 内の api_name とする。"
     "物理表と業務オブジェクトを一対一と決めつけない。根拠は evidence の資料 ID と位置に記録する。"
     "不足項目は missing_information_ja、未生成の種類は coverage に理由を残す。"
+    "資料にない任意の概念・契約を生成しなかったことや、既存 ID の再利用などの"
+    "正常な処理方針を warnings_ja に重複記録しない。"
+    "warnings_ja は根拠の矛盾や抽出失敗など利用者の確認・修正が必要な問題に限定する。"
     "実装キー・権限・アルゴリズムを推測せず、SQL 条件を業務定義と一致させる。"
     "指標は filter_sql/aggregation/grain/distinct_keys/time_property/time_policy_ja/"
     "unit/currency/null_policy_ja/additivity を記録し、未確定は不足理由を残す。"
@@ -4503,7 +4506,12 @@ class OntologyBuildService:
                     name=task.name,
                     prompt=instruction
                     + "同一概念は既存の id と api_name を使用し不足フィールドを補完してください。"
-                    "別の定義を作らないでください。既存定義: " + ", ".join(refs),
+                    "同一概念の重複定義を作らないでください。"
+                    "既存定義にない別の概念は、資料・スキーマに根拠があれば新しい安定した"
+                    " api_name で definitions に追加してください。"
+                    "資料に契約がない種類は創作せず coverage に未生成の理由を記録し、"
+                    "既存定義の不足フィールドは missing_information_ja に記録してください。"
+                    "既存定義: " + ", ".join(refs),
                     context=task.context,
                     progress_ja=instruction,
                     cross_check_sql=task.cross_check_sql,

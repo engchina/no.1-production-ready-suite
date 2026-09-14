@@ -2742,6 +2742,11 @@ test("Markdown 解析の競合と行位置を表示し公開を阻止する", as
 });
 
 test("Markdown の変更差分を確認して公開し図と公開本文を更新する", async ({ page }) => {
+  await page.addInitScript(() => Reflect.deleteProperty(Crypto.prototype, "randomUUID"));
+  const keys: string[] = [];
+  page.on("request", request => {
+    if (/ontology-markdown\/(prepare|publish)$/.test(request.url())) keys.push(request.headers()["idempotency-key"]);
+  });
   const state=await existingMarkdown(page);
   const editor=page.getByTestId("ontology-markdown-draft-editor");
   await editor.fill(generatedDraftMarkdown+"\n\n## 関数（Function）\n顧客契約を参照する。");
@@ -2753,6 +2758,9 @@ test("Markdown の変更差分を確認して公開し図と公開本文を更�
   await expect(page.getByText("オントロジーを公開しました。",{exact:true})).toBeVisible();
   expect(state.savedDraftMarkdown).toContain("顧客契約");
   expect(state.publishPayload).toMatchObject({preparation_id:"preparation-1",confirmed:true});
+  expect(keys).toHaveLength(2);
+  for (const key of keys) expect(key).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  expect(new Set(keys).size).toBe(2);
   await expect.poll(()=>state.ontologyViewCalls).toBeGreaterThan(before);
   await page.getByRole("tab",{name:"公開済み Markdown オントロジー",exact:true}).click();
   await expect(page.getByTestId("ontology-markdown-published-viewer")).toContainText("顧客契約");
@@ -2802,6 +2810,7 @@ test("Markdown の変更は準備済みの公開確認を失効させる", async
 
 for (const committedBeforeDisconnect of [true, false]) {
   test(`Markdown 公開の応答喪失後は結果照会だけで復旧する (${committedBeforeDisconnect ? "commit 済み" : "未実行"})`, async ({ page },testInfo) => {
+    await page.addInitScript(() => Reflect.deleteProperty(Crypto.prototype, "randomUUID"));
     const state=await existingMarkdown(page);let calls=0,lookups=0;let key="";
     await page.route("**/ontology-markdown/publish",route=>{calls++;key=route.request().headers()["idempotency-key"];return route.abort("connectionreset");});
     await page.route("**/ontology-markdown/publication-outcome?*",route=>{lookups++;expect(new URL(route.request().url()).searchParams.get("key")).toBe(key);return fulfillJson(route,{job:committedBeforeDisconnect?{id:"snapshot-1",revision_id:"snapshot-1",requested_etag:state.draftMarkdownEtag,status:"succeeded"}:null});});
