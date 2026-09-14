@@ -15,12 +15,27 @@ export function resolveDark(pref: ThemePreference): boolean {
   return prefersDark();
 }
 
+/**
+ * テーマ切替の瞬間だけ CSS transition を止める。
+ * 行・ボタン等の `transition-colors`（150ms）が旧テーマの色から補間し、ダークへ切り替えた直後に
+ * 明るい地と暗い地の中間色が一瞬描かれる（NL2SQL #571: 選択行が明るく読みにくく見えた原因）。
+ * テーマは状態の切替であって動きではないため、補間せずに一度で切り替える。
+ */
+const THEME_SWITCH_STYLE = "*,*::before,*::after{transition:none!important}";
+
 function applyTheme(pref: ThemePreference) {
   if (typeof document === "undefined") return;
   const dark = resolveDark(pref);
   const root = document.documentElement;
+  if (root.classList.contains("dark") === dark) return;
+  const pause = document.createElement("style");
+  pause.textContent = THEME_SWITCH_STYLE;
+  document.head.appendChild(pause);
   // color-scheme（ネイティブコントロールと light-dark() トークン）は共有 CSS の .dark が切り替える。
   root.classList.toggle("dark", dark);
+  // transition を止めたまま新しいテーマの computed style を確定させてから戻す。
+  void window.getComputedStyle(root).color;
+  window.setTimeout(() => pause.remove(), 1);
 }
 
 /**

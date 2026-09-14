@@ -2714,6 +2714,40 @@ test("外観設定でダーク/ライト/自動テーマを切り替えられる
   await expect.poll(bgVar).toBe(hexToRgb("#f7f8fa"));
 });
 
+test("テーマ切替は transition で旧テーマの色から補間せず、一度で切り替える (#571)", async ({ page }) => {
+  await page.goto("/settings/appearance");
+  await expect(page.getByRole("heading", { name: "外観" })).toBeVisible();
+
+  for (const label of ["ダーク", "ライト"]) {
+    // クリックと同じタスク内で次のフレームまで待ち、実行中の CSS transition を集める。
+    // 押したトグル自身の aria-pressed の変化は操作へのフィードバックなので対象外にする。
+    const running = await page.evaluate(async (name) => {
+      const group = document.querySelector('[data-testid="appearance-theme-toggle"]')!;
+      const button = Array.from(group.querySelectorAll("button")).find((node) => node.textContent?.trim() === name)!;
+      button.click();
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      return document
+        .getAnimations()
+        .filter((animation): animation is CSSTransition => animation instanceof CSSTransition)
+        .filter((animation) => {
+          const target = animation.effect instanceof KeyframeEffect ? animation.effect.target : null;
+          return !(target instanceof Node && group.contains(target));
+        })
+        .map((animation) => {
+          const target = (animation.effect as KeyframeEffect).target as Element;
+          return `${target.tagName.toLowerCase()}.${String(target.className).slice(0, 40)} ${animation.transitionProperty}`;
+        });
+    }, label);
+    expect(running, `${label} へ切り替えた直後の transition`).toEqual([]);
+  }
+  await expect(page.locator("html")).not.toHaveClass(/dark/);
+
+  // 切替後は通常どおり transition が効く（止めたままにしない）。
+  await expect
+    .poll(() => page.locator('aside a[aria-current="page"]').evaluate((node) => getComputedStyle(node).transitionDuration))
+    .not.toBe("0s");
+});
+
 test("OCI 初期取得失敗は編集を許可せず、再試行後の遅延保存中も入力と重複操作を防ぐ", async ({ page }) => {
   let failLoad = true;
   let saves = 0;
