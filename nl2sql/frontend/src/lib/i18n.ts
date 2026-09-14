@@ -1366,6 +1366,7 @@ const nl2sqlJa = {
   "ontologyPlayground.title": "質問のオントロジー接地確認用グラフ",
   "ontologyPlayground.description":
     "入力した質問が一致する公開済みオントロジーの業務エンティティ・属性・関係を強調表示します。LLM 呼び出しと SQL 生成は行いません。",
+  "ontologyPlayground.publishedGraphMismatch": "公開版に対応するグラフを取得できませんでした。再試行してください。",
   "ontologyPlayground.emptyTitle": "公開済みオントロジーがまだありません",
   "ontologyPlayground.emptyHint":
     "AI 構築の Markdown 下書きを確認して公開すると、質問がどの業務モデルに接地するかをここで確認できます。",

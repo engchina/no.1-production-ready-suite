@@ -1089,11 +1089,9 @@ test("AI オントロジー構築の実行 → 進捗 → Markdown 下書き編�
   ).toBeVisible();
   await expect.poll(() => state.ontologyViewCalls).toBe(1);
   await expect(ontologyQueryPanel.getByTestId("ontology-playground-version")).toHaveCount(0);
-  const graphExpandButton = ontologyQueryPanel.getByRole("button", { name: "グラフを表示" });
-  if (await graphExpandButton.isVisible()) {
-    await graphExpandButton.click();
-  }
-  await expect(ontologyQueryPanel.getByTestId("ontology-graph-mode-physical_er")).toBeVisible();
+  await expect(ontologyQueryPanel.getByText("公開済みオントロジーがまだありません", { exact: true })).toBeVisible();
+  await expect(ontologyQueryPanel.getByTestId("ontology-graph-mode-physical_er")).toHaveCount(0);
+  await expect(ontologyQueryPanel.getByTestId("ontology-playground-question")).toHaveCount(0);
 
   await draftEditor.fill(`${generatedDraftMarkdown}\n\n## 手動メモ\n- 公開確認済み`);
   await expect(markdown.getByText("未保存")).toBeVisible();
@@ -1115,6 +1113,7 @@ test("AI オントロジー構築の実行 → 進捗 → Markdown 下書き編�
   expect(state.publishPayload).toMatchObject({ preparation_id: "preparation-1", confirmed: true });
   await expect(page.getByTestId("ontology-publish-status")).toContainText("完了");
   await expect.poll(() => state.ontologyViewCalls).toBeGreaterThan(ontologyViewCallsBeforePublish);
+  await expect(ontologyQueryPanel.getByTestId("ontology-playground-question")).toBeVisible();
   await expect(ontologyQueryPanel.getByTestId("ontology-playground-version")).toHaveCount(0);
   await expect(page.getByTestId("ontology-mermaid-panel")).toHaveCount(0);
   await markdown.getByRole("tab", { name: "公開済み Markdown オントロジー" }).click();
@@ -2624,6 +2623,11 @@ function typedBundle(profileId: string) {
 
 const unifiedKinds = ["object_type", "property", "link_type", "interface", "function", "action_type", "shared_property", "value_type", "enumeration", "metric", "business_rule", "business_event", "object_set"];
 async function unifiedGraphFixture(page: Page) {
+  await page.route("**/api/nl2sql/profiles/*/ontology-markdown", route => fulfillJson(route, {
+    ...markdownDraftPayload(generatedDraftMarkdown),
+    published_markdown: generatedDraftMarkdown,
+    published_revision: ontologyView.ontology_graph.revision,
+  }));
   const nodes = unifiedKinds.filter(kind => kind !== "link_type").map(kind => ({
     id: `concept-${kind}`, revision_id: "revision-1", kind,
     technical_name: `API_${kind}`, business_name_ja: `定義_${kind}`, aliases: [`別名_${kind}`],

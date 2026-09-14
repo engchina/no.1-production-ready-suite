@@ -1,5 +1,5 @@
 import { DefinitionFields } from "./ontologyResultPresentation";
-import { lazy, Suspense, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import {
   Info,
   MessageSquareText,
@@ -723,6 +723,14 @@ export function OntologyQueryPlayground({
 
   const hasGraph = Boolean(graph && graph.nodes.length > 0);
   const graphRevisionId = graph?.revision?.id ?? graph?.revision_id ?? "";
+
+  useEffect(() => {
+    setResult(null);
+    setSelectedNodeId(null);
+    setSelectedEdgeId(null);
+    serverSearchSeqRef.current += 1;
+    setServerSearch({ status: "idle" });
+  }, [graphRevisionId]);
 
   const resetGroundingState = ({ clearQuestion = false }: { clearQuestion?: boolean } = {}) => {
     if (clearQuestion) setQuestion("");

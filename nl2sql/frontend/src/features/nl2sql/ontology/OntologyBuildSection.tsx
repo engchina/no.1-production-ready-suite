@@ -543,6 +543,7 @@ export interface OntologyBuildSectionProps {
   hasProfileSchemaInput: boolean;
   onPublished?: () => void | Promise<void>;
   onMarkdownStateChange?: (state: OntologyMarkdownState | null) => void;
+  markdownRefreshVersion?: number;
   onRefreshSchema?: () => void | Promise<void>;
   refreshingSchema?: boolean;
 }
@@ -553,6 +554,7 @@ export function OntologyBuildSection({
   hasProfileSchemaInput,
   onPublished,
   onMarkdownStateChange,
+  markdownRefreshVersion = 0,
   onRefreshSchema,
   refreshingSchema = false,
 }: OntologyBuildSectionProps) {
@@ -1009,6 +1011,13 @@ export function OntologyBuildSection({
       jobsController.abort();
     };
   }, [onMarkdownStateChange, profileId, refreshMarkdown, refreshSourceDocuments]);
+
+  const lastMarkdownRefreshVersion = useRef(markdownRefreshVersion);
+  useEffect(() => {
+    if (lastMarkdownRefreshVersion.current === markdownRefreshVersion) return;
+    lastMarkdownRefreshVersion.current = markdownRefreshVersion;
+    if (profileId) void refreshMarkdown(profileId, { reason: "background" });
+  }, [markdownRefreshVersion, profileId, refreshMarkdown]);
 
   // job ポーリング(1s)。完了で停止し、Markdown 下書きを更新する。
   // 依存は jobId(文字列)なので毎秒の setJob で interval は再生成されない。

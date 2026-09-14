@@ -44,6 +44,8 @@ Q/A の補助的な `DUAL` / `SYS.DUAL` 参照は SQL の名前解決に限っ�
 
 ## SQL とグラフ
 
+接地確認グラフは、選択 Profile の公開 Markdown revision が存在し、取得した graph の revision が一致する場合だけ表示する。未公開時は公開を案内する空状態とし、物理 Schema の fallback を公開図として扱わない。公開後・再試行時は公開状態と graph を再取得し、版不一致時は旧図を表示せず再試行を案内する。Profile 切替や graph の版変更時は以前の接地・サーバ検索結果を保持しない。
+
 通常生成、非同期 job、引導式 session、サーバー接地検索は Profile の同じ公開 snapshot を使用する。job / session の `business_release_id` は snapshot ID を保持する。以前の独立 release を新しい生成へ重ねない。過去の release / job の読み取りは互換性のため残す。
 
 引導式生成の正式指標には `expression_sql` と指標固有の `filter_sql` を渡す。絞り込み条件はその指標の集計対象だけに適用し、他の指標の全体 WHERE 条件へ流用しない。過去の読み取り投影に条件がない場合は、同じ snapshot の完全な型付き定義から復元する。保存済み artifact は書き換えない。

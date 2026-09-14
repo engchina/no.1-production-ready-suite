@@ -47,10 +47,11 @@ function listLoadMoreErrorMessage(error: unknown, fallbackKey: Parameters<typeof
 export function OntologyBuildPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [pageError, setPageError] = useState("");
+  const [markdownRefreshVersion, setMarkdownRefreshVersion] = useState(0);
   const [publishedMarkdownState, setPublishedMarkdownState] = useState<{
     profileId: string;
-    hasPublished: boolean;
-  }>({ profileId: "", hasPublished: false });
+    revisionId: string;
+  }>({ profileId: "", revisionId: "" });
   const [ontologyViewRequestedProfileId, setOntologyViewRequestedProfileId] = useState("");
   const sharedSchemaRefresh = useSchemaRefreshCoordinator();
   const handledSchemaRefreshJob = useRef("");
@@ -82,15 +83,19 @@ export function OntologyBuildPage() {
   const { refetch: refetchOntologyView } = ontologyViewQuery;
   const { refetch: refetchProfileDetail } = profileDetailQuery;
   const selectedProfile = profileDetailQuery.data?.profile ?? null;
-  const ontologyGraph = workspaceRequested
+  const loadedOntologyGraph = workspaceRequested
     ? ontologyViewQuery.data?.ontology_graph ?? null
     : null;
   const ontologyWarnings = workspaceRequested
     ? ontologyViewQuery.data?.warnings_ja ?? []
     : [];
-  const hasPublishedOntology =
-    publishedMarkdownState.profileId === selectedProfileId &&
-    publishedMarkdownState.hasPublished;
+  const publishedRevisionId = publishedMarkdownState.profileId === selectedProfileId
+    ? publishedMarkdownState.revisionId : "";
+  const hasPublishedOntology = Boolean(publishedRevisionId);
+  // ontology-view は構築用の物理 Schema にも fallback する。公開版の存在と同一性を別に確認する。
+  const publishedGraphMatches = hasPublishedOntology &&
+    (loadedOntologyGraph?.revision?.id ?? loadedOntologyGraph?.revision_id) === publishedRevisionId;
+  const ontologyGraph = publishedGraphMatches ? loadedOntologyGraph : null;
   const visibleOntologyWarnings = hasPublishedOntology ? ontologyWarnings : [];
   const refreshing = sharedSchemaRefresh.isRefreshing;
 
@@ -130,6 +135,7 @@ export function OntologyBuildPage() {
     if (!selectedProfileId) return;
     setPageError("");
     if (workspaceRequested) {
+      setMarkdownRefreshVersion(version => version + 1);
       void Promise.all([refetchProfileDetail(), refetchOntologyView()]);
       return;
     }
@@ -170,7 +176,7 @@ export function OntologyBuildPage() {
     (state: OntologyMarkdownState | null) => {
       setPublishedMarkdownState({
         profileId: selectedProfileId,
-        hasPublished: Boolean(state?.published_revision),
+        revisionId: state?.published_revision?.id ?? "",
       });
     },
     [selectedProfileId]
@@ -208,7 +214,10 @@ export function OntologyBuildPage() {
   const workspaceErrorMessage = workspaceErrorPresentation
     ? t(workspaceErrorPresentation.key, workspaceErrorPresentation.params)
     : "";
-  const ontologyErrorMessage = ontologyErrorPresentation
+  const publishedGraphMismatch = hasPublishedOntology && !publishedGraphMatches;
+  const ontologyErrorMessage = publishedGraphMismatch && !ontologyErrorPresentation
+    ? t("ontologyPlayground.publishedGraphMismatch")
+    : ontologyErrorPresentation
     ? t(ontologyErrorPresentation.key, ontologyErrorPresentation.params)
     : "";
   const handleWorkspaceRetry = useCallback(() => {
@@ -216,9 +225,9 @@ export function OntologyBuildPage() {
   }, [refetchOntologyView, refetchProfileDetail]);
   const ontologyLoadState = !workspaceRequested
     ? "not_loaded"
-    : ontologyViewQuery.isFetching && !ontologyViewQuery.data
+    : ontologyViewQuery.isFetching && (!ontologyViewQuery.data || publishedGraphMismatch)
       ? "loading"
-      : ontologyFailure
+      : ontologyFailure || publishedGraphMismatch
         ? "error"
         : "ready";
   return (
@@ -365,12 +374,14 @@ export function OntologyBuildPage() {
                 (selectedProfile?.allowed_tables?.length ?? 0) > 0 ||
                 (selectedProfile?.allowed_views?.length ?? 0) > 0
               }
+              markdownRefreshVersion={markdownRefreshVersion}
               onPublished={handleOntologyPublished}
               onMarkdownStateChange={handleMarkdownStateChange}
               onRefreshSchema={refreshSchema}
               refreshingSchema={refreshing}
             />
             <OntologyQueryPlayground
+              key={selectedProfileId}
               graph={ontologyGraph}
               profileId={selectedProfileId}
               warningsJa={visibleOntologyWarnings}

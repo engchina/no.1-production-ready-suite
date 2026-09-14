@@ -353,6 +353,7 @@ function hasVisibleBoxShadow(value: string) {
 }
 
 async function openGraphIfCollapsed(page: Page, playground: Locator) {
+  await expect(playground.getByTestId("ontology-playground-question")).toBeVisible();
   const viewportWidth = page.viewportSize()?.width ?? 0;
   if (viewportWidth >= 1280) return;
   const toggle = playground.getByRole("button", { name: "グラフを表示" });
@@ -566,9 +567,9 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
   await page.route("**/api/nl2sql/profiles/*/ontology-markdown", (route) =>
     fulfillJson(route, {
       draft_markdown: "",
-      published_markdown: "",
+      published_markdown: "# 公開済みオントロジー",
       draft_revision: null,
-      published_revision: null,
+      published_revision: { id: "rev1", version: options.revisionVersion ?? 1, status: "published", etag: "re", schema_fingerprint: "fp" },
       draft_etag: "",
       published_at: null,
     })
@@ -1512,4 +1513,67 @@ for (const theme of ["light", "dark"]) {
 test.afterEach(async ({ page }, testInfo) => {
   if (testInfo.status === "skipped") return;
   await expectLocalUiFonts(page);
+});
+
+for (const theme of ["light", "dark"]) {
+  for (const width of [1280, 1920]) {
+    test(`公開版のない Profile に物理 graph を表示しない ${theme} ${width}`, async ({ page }, testInfo) => {
+      test.skip(testInfo.project.name !== "desktop" && width !== 1280, "モバイルは375幅で確認");
+      if (testInfo.project.name === "desktop") await page.setViewportSize({ width, height: 1000 });
+      await page.addInitScript(theme => localStorage.setItem("production-ready-nl2sql.ui", JSON.stringify({state:{theme},version:0})), theme);
+      await mockApi(page, { ontologyGraph: employeeOntologyGraph });
+      let published = false;
+      let wrongRevision = false;
+      let fail = false;
+      await page.route("**/api/nl2sql/profiles/*/ontology-markdown", async route => {
+        await new Promise(resolve => setTimeout(resolve, 300));
+        if (fail) { await route.fulfill({status:500,contentType:"application/json",body:'{"detail":"Markdown unavailable"}'}); return; }
+        await fulfillJson(route, {draft_markdown:"# 下書き",draft_revision:null,draft_etag:"draft",published_markdown:published ? "# 公開済み" : "",published_revision:published ? {id:wrongRevision ? "different" : "rev1",version:1,status:"published",etag:"re",schema_fingerprint:"fp"} : null});
+      });
+      const panel = page.locator("#ontology-query-playground-panel");
+      await page.goto("/ontology-build?profile=default");
+      await page.getByTestId("ontology-view-fetch").click();
+      await expect(panel.getByText("公開済みオントロジーがまだありません", {exact:true})).toBeVisible();
+      await expect(panel.locator(".react-flow")).toHaveCount(0);
+      await expect(panel.getByTestId("ontology-playground-question")).toHaveCount(0);
+      await expect(panel.getByTestId("ontology-playground-server-search")).toHaveCount(0);
+      await panel.screenshot({path:testInfo.outputPath(`unpublished-${theme}-${width}.png`)});
+      // API が公開版を返して初めて表示する。物理 graph 単体の取得では公開判定しない。
+      published = true;
+      await page.reload(); await page.getByTestId("ontology-view-fetch").click();
+      await expect(panel.getByTestId("ontology-playground-question")).toBeVisible();
+      wrongRevision = true;
+      await page.reload(); await page.getByTestId("ontology-view-fetch").click();
+      await expect(panel.getByText("公開版に対応するグラフを取得できませんでした。再試行してください。", {exact:true})).toBeVisible();
+      await expect(panel.locator(".react-flow")).toHaveCount(0);
+      wrongRevision = false;
+      await panel.getByRole("button", {name:"再試行",exact:true}).click();
+      await expect(panel.getByTestId("ontology-playground-question")).toBeVisible();
+      fail = true;
+      await page.reload(); await page.getByTestId("ontology-view-fetch").click();
+      await expect(page.getByText("Markdown オントロジーを読み込めませんでした。", {exact:true})).toBeVisible();
+      await expect(panel.locator(".react-flow")).toHaveCount(0);
+      await expect(panel.getByTestId("ontology-playground-question")).toHaveCount(0);
+    });
+  }
+}
+
+test("公開済み Profile から未公開 Profile へ切り替えると graph と質問を残さない", async ({ page }) => {
+  await mockApi(page);
+  await page.route("**/api/nl2sql/profiles/search?*", route => fulfillJson(route, {
+    items: ["default", "unpublished"].map(id => ({...profile,id,name:id,allowed_table_count:1,allowed_view_count:0,glossary_count:0,few_shot_count:0,version:1,etag:id,updated_at:"2026-07-12T00:00:00Z"})), next_cursor:null,total:2,change_token:1,
+  }));
+  await page.route("**/api/nl2sql/profiles/unpublished/ontology-markdown", route => fulfillJson(route, {draft_markdown:"# 別の下書き",draft_revision:null,draft_etag:"draft",published_markdown:"",published_revision:null}));
+  await page.goto("/ontology-build?profile=default");
+  await page.getByTestId("ontology-view-fetch").click();
+  const panel = page.locator("#ontology-query-playground-panel");
+  await panel.getByTestId("ontology-playground-question").fill("公開版の顧客");
+  await page.getByTestId("ontology-build-profile-select").selectOption("unpublished");
+  await page.getByTestId("ontology-view-fetch").click();
+  await expect(panel.getByText("公開済みオントロジーがまだありません", {exact:true})).toBeVisible();
+  await expect(panel.locator(".react-flow")).toHaveCount(0);
+  await expect(panel.getByTestId("ontology-playground-question")).toHaveCount(0);
+  await page.getByTestId("ontology-build-profile-select").selectOption("default");
+  await page.getByTestId("ontology-view-fetch").click();
+  await expect(panel.getByTestId("ontology-playground-question")).toHaveValue("");
 });
