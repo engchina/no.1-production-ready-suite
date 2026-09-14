@@ -766,7 +766,7 @@ function TestableTextField({
         action={{
           label: t("settings.model.test.action"),
           ariaLabel: t("settings.model.test.aria", { model: value.trim() || label }),
-          icon: <TestTube2 size={16} aria-hidden />,
+          icon: TestTube2,
           loading: testing,
           disabled: !value.trim(),
           onClick: onTest,

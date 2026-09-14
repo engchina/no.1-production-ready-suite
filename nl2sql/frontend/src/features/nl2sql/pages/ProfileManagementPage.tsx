@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import {
+import { ListPlus,
   ArrowLeft,
   FileJson,
   Plus,
@@ -470,7 +470,7 @@ function ProfileList({
               {loadMoreError}
             </Banner>
           ) : (
-            <Button
+            <Button icon={ListPlus}
               type="button"
               variant="secondary"
               size="sm"

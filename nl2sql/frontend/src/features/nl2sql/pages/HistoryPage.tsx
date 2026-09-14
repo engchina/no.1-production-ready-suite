@@ -1,6 +1,6 @@
 import { useWorkspaceState } from "@/components/WorkspaceState";
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
-import {
+import { ListPlus,
   ArrowDown,
   ArrowDownUp,
   ArrowUp,
@@ -391,7 +391,7 @@ function HistoryGrid({
             : t("history.list.loaded", { loaded: loadedCount, total })}
         </p>
         {hasMore && (
-          <Button type="button" variant="secondary" size="sm" loading={loadingMore} disabled={refreshing} onClick={onLoadMore}>
+          <Button icon={ListPlus} type="button" variant="secondary" size="sm" loading={loadingMore} disabled={refreshing} onClick={onLoadMore}>
             {t("history.action.loadMore")}
           </Button>
         )}

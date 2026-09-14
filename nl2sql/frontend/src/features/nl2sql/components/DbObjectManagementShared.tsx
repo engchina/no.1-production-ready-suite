@@ -1,5 +1,5 @@
 import { Children, useId, type ReactNode } from "react";
-import {
+import { ListPlus,
   Check,
   Code2,
   Download,
@@ -498,7 +498,7 @@ export function DbObjectSelectorFooter({
               })}
         </p>
         {hasNextPage && onLoadMore && (
-          <Button
+          <Button icon={ListPlus}
             type="button"
             variant="secondary"
             size="sm"

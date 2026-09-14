@@ -12,7 +12,7 @@ import { FieldLabel } from "./required-field";
 export interface InputActionFieldAction {
   label: ReactNode;
   ariaLabel?: string;
-  icon?: ReactNode;
+  icon?: ButtonProps["icon"];
   type?: ButtonProps["type"];
   variant?: ButtonProps["variant"];
   loading?: boolean;
@@ -116,12 +116,12 @@ export function InputActionField({
           className={cn("w-full", action.className)}
           aria-label={action.ariaLabel}
           aria-describedby={actionError ? actionErrorId : undefined}
+          icon={action.icon}
           loading={action.loading}
           disabled={disabled || action.disabled}
           data-testid={action.dataTestId}
           onClick={action.onClick}
         >
-          {action.loading ? null : action.icon}
           <span>{action.label}</span>
         </Button>
       </div>

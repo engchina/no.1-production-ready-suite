@@ -797,7 +797,7 @@ function ConfigFileField({
       requiredLabel={t("settings.oci.required")}
       action={{
         label: configImportButtonLabel(importState),
-        icon: <RefreshCw size={14} aria-hidden />,
+        icon: RefreshCw,
         loading: importState === "loading",
         onClick: onApply,
       }}
@@ -850,7 +850,7 @@ function NamespaceField({
       action={{
         label: buttonLabel,
         ariaLabel: `${label}: ${buttonLabel}`,
-        icon: <RefreshCw size={14} aria-hidden />,
+        icon: RefreshCw,
         loading: fetchState === "loading",
         onClick: onFetch,
       }}

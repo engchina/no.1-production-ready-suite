@@ -6,7 +6,7 @@ import {
   PageBody,
 } from "@engchina/production-ready-ui";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { RefreshCw, Target } from "lucide-react";
+import { ListPlus, RefreshCw, Target } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 
 
@@ -278,7 +278,7 @@ export function OntologyBuildPage() {
                   </select>
                 </label>
                 {profilesQuery.hasNextPage ? (
-                  <Button
+                  <Button icon={ListPlus}
                     type="button"
                     variant="secondary"
                     size="sm"

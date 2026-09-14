@@ -1,6 +1,6 @@
 import { useWorkspaceState, useWorkspaceRevalidation, useWorkspaceActivation } from "@/components/WorkspaceState";
 import { useEffect, useMemo, useRef, useState } from "react";
-import {
+import { Database,
   Code2,
   FileText,
   RefreshCw,
@@ -899,7 +899,7 @@ function MetadataTargetGrid({
           actionsClassName="w-full sm:w-auto"
           testId={`${pageId}-target-actions`}
         >
-          <Button
+          <Button icon={Database}
             type="button"
             variant="primary"
             size="lg"

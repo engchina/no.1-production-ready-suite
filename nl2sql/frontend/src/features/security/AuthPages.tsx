@@ -1,3 +1,4 @@
+import { ArrowRight } from "lucide-react";
 import {
   Button,
   Banner,
@@ -311,7 +312,7 @@ export function ForbiddenPage() {
               </p>
             ) : null}
           </Banner>
-          <Button type="button" className="w-full" onClick={() => navigate(defaultEntryRoute(auth.hasPermission), { replace: true })}>
+          <Button icon={ArrowRight} type="button" className="w-full" onClick={() => navigate(defaultEntryRoute(auth.hasPermission), { replace: true })}>
             {t("auth.forbidden.back")}
           </Button>
         </CardContent>

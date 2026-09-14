@@ -113,6 +113,7 @@ function MenuItems({
               tone={danger ? "danger" : "default"}
               size="sm"
               variant="ghost"
+              icon={Icon}
               loading={action.loading}
               disabled={action.disabled}
               aria-label={action.ariaLabel}
@@ -127,7 +128,6 @@ function MenuItems({
                 void action.onSelect();
               }}
             >
-              {Icon ? <Icon size={16} aria-hidden="true" /> : null}
               <span>{action.label}</span>
             </Button>
           </div>
@@ -230,7 +230,8 @@ export function ObjectActionBar({
             type="button"
             variant="secondary"
             size="sm"
-            loading={action.loading}
+            icon={Icon}
+              loading={action.loading}
             disabled={action.disabled}
             aria-label={action.ariaLabel}
             data-testid={action.testId}
@@ -238,7 +239,6 @@ export function ObjectActionBar({
             data-entity-action-tone={action.tone ?? "default"}
             onClick={() => void action.onSelect()}
           >
-            {Icon ? <Icon size={16} aria-hidden="true" /> : null}
             <span>{action.label}</span>
           </Button>
         );

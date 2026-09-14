@@ -31,58 +31,26 @@
 
 ---
 
-## 2. サイズ(size)
+## 2. 見た目とサイズの正本
 
-`<Button>` の `size` で固定する。**生の高さ override(`min-h-10` 等)は使わない。**
+色・高さ・アイコン枠・loading・disabled・フォーカスは platform の
+[README §4 Button](../../no.1-production-ready-platform/docs/design-system/README.md) と
+共通 `Button` が管理する。役割×配置の選択表も同節を正とする。
+本アプリでは寸法・色・角丸の上書きや共有ボタンの再実装をしない。
 
-| size | desktop 実寸 | 左右 padding | 使う場面 |
-|---|---|---|---|
-| `sm` | 32px | 12px | ページヘッダー、一覧行、局所ツール、ページング、一括選択、確認ダイアログ |
-| `md` | 36px | 16px | 既定。カード内の単発操作・選択切替 |
-| `lg` | 40px | 20px | 主フォームの保存・生成・実行と、同じバーのキャンセル・入力クリア |
+## 3. NL2SQLでの役割の割り当て
 
-- **640px 未満または `pointer: coarse` は全 size で高さ・最小幅 44px、左右 padding 12px**。desktop の icon-only は 36×36px、mobile は 44×44px。`iconOnly` と `aria-label` を必ず指定する。
-- **入力横・認証フォーム・compact ヘッダーは `touchTarget` で全 viewport 44px 高**にする。入力自身も実寸 44px に揃える。`h-11` は root=14px で 38.5px のため使わない。
-- 同じアクションバーは size を揃える。位置を指定する `w-full` / `sm:w-auto` / `flex-*` は可。ページ側の高さ・padding・文字サイズ・色・border override は禁止する。
-- 日本語ラベルは全 size で **14px / line-height 20px / weight 500**、アイコンは **16px**、ラベルとの gap は **8px**。角丸は **6px**、border は全 variant **1px**（塗り・ghost は transparent）。root font-size に依存しない。
-- ボタン間隔は **8px 以上**。通常の `gap-2` は root=14px で 7px のため、アクション群は `gap-[8px]` を使用する。
-- Ontology グラフの排他選択バーと局所ツールは §6.2 の専用規約に従う。
-- 並べ替え列頭は Action Button の対象外とし、専用 `SortHeader`（§6.1）を使用する。
-- 説明文を含む選択カードは `data-button-layout="choice"` で最小 64px + 内容に応じた自動高さ。menu item / disclosure / field-icon / segmented は共通 CSS の named layout に限る。
+- コメント/アノテーションの対象情報取得、合成データの対象表取得、SQL生成、保存、実行は工程を進める主操作（`primary/lg`）。
+- ページ全体の表示更新・DB構造再取得は `PageHeader` の `utility`。通常表示は `secondary/md`。
+- コピー、ダウンロード、状態の再確認、追加読込は局所ツール（`secondary/sm`）。追加読込は `ListPlus`、更新は `RefreshCw`。
+- 入力欄に並ぶ取得/接続テストは入力と同じ44px。`touchTarget` と `icon` を渡す。
+- 同じ操作行は主操作・補助操作とも同じsize。非同期操作は必ず `icon` propを使い、loading時もラベルと幅を保つ。
+- `danger` は実際の破壊的確定に使う。選択・未選択の変化でvariantやアイコンを切り替えず、`disabled`だけを変更する。
 
----
+## 4. 配置
 
-## 3. スタイル(variant)
-
-`<Button>` の `variant`(`buttonVariants` cva)で固定する。
-
-| variant | 見た目 | 意味 / 使う場面 |
-|---|---|---|
-| `primary`(既定) | 塗り(bg-primary) | 画面の主 CTA(保存・実行・送信)。**操作領域ごとに原則 1 つ** |
-| `secondary` | 枠線 + bg-card | 並列の副アクション(接続テスト、再読込、非破壊キャンセル、再試行) |
-| `ghost` | 透明 + hover 背景 | 低強度の補助(リセット、選択解除、文脈内の削除トリガ) |
-| `danger` | 塗り(bg-danger) | 破壊的確定(削除確定)。**確認ダイアログの確定ボタン**等 |
-
-- 外観の正本は [`button.css`](../frontend/src/components/ui/button.css)。`buttonVariants()` を使うリンクにも同じ規約が適用される。
-- **primary**: light `#1a73c1` / dark `#286abd` + 白文字。**danger**: light `#b91c1c` / dark `#bd3844` + 白文字。
-- **secondary**: card 背景 + foreground 文字、light border `#8893a3` / dark border `#5d6878`。補助的な区切り線より強い境界でクリック可能な領域を示す。
-- **ghost**: 透明背景 + foreground 文字。削除トリガ・メニュー項目には `tone="danger"` を使う。secondary + danger tone は赤い枠線、ghost + danger tone は赤文字で示し、確定時のみ danger の塗りにする。
-- touch device では hover を適用せず、タップ後に hover 色を残さない（`@media (hover: hover)`）。
-- **hover**: 塗りは黒 12% 混合、secondary/ghost は foreground 7% 混合。**active**: 塗りは黒 24%、secondary/ghost は foreground 12%。レイアウト移動・拡大縮小はしない。
-- **focus-visible**: `--ring` 色の **2px outline + 2px offset**。`prefers-reduced-motion` で transition を停止し、forced-colors ではシステム色の境界を保つ。
-- **disabled/loading**: ネイティブ disabled + `--disabled-bg` / `--disabled`、opacity=1。hover/active で有効色へ戻さない。loading は `aria-busy` と StableLoadingIcon 1 個を表示し、二重送信を防ぐ。
-- **選択**: `aria-pressed="true"` は primary の細い枠線・薄い背景・内側線。主 CTA の塗りと区別し、色以外に aria 状態やチェックアイコンで伝える。
-- **リンク**: navigation は `<a>` / Router Link の意味を保ち `buttonVariants()` で外観だけ共有する。無効なリンクは href を外し、`aria-disabled` と handler の guard を付ける。
-
----
-
-## 4. 配置(placement)
-
-- **主アクションバー**は、フォーム/カードの**末尾**に `border-t border-border pt-4` で区切って置く。`flex flex-wrap items-center gap-[8px]`。
-- **並び順**: primary → secondary → ghost(左から重要度順)。結果表示(`FormStatus`)はバー内の末尾に置く。
-- **ページレベル操作**はローカル [`<PageHeader>` / `<PageActionBar>`](../frontend/src/components/PageHeader.tsx) に集約する。独立したページ上部アクション行を追加しない。
-- **破壊的アクションは通常アクションから空間的に分離**(`destructive-nav-separation` / `destructive-emphasis`)。
-- レスポンシブ: ページヘッダー操作は `lg` 未満で compact 表示にし、タイトル/説明とボタンが横方向に押し合わないよう縦積みにする。`whitespace-nowrap` でラベル折返しを防ぐ。
+工程/フォームの主操作は入力内容の末尾に配置する。補助操作を同じ高さで並べ、破壊的操作は離す。
+ページ操作は共通 `PageHeader`、局所ツールは `ContentActionBar`、対象オブジェクト操作は `ObjectActionBar` に置く。
 
 ---
 
@@ -113,13 +81,13 @@
 />
 ```
 
-- 固定順序は **primary → secondary → utility(現在表示の再取得 → 外部データ/DB 構造同期) → danger**。配列順に依存せず `kind` で整列し、同一 `kind` 内の宣言順を保つ。
+- 固定順序は **danger → utility(現在表示の再取得 → 外部データ/DB 構造同期) → secondary → primary**（右端が主操作）。配列順に依存せず `kind` で整列し、同一 `kind` 内の宣言順を保つ。
 - ページヘッダーの `utility`（表示更新・DB 構造再取得など）は、platform の `PageHeader` により `secondary` と同じ枠付きスタイルで表示する。compact メニュー内は `ghost` を維持する。
 - `primary` はページ全体で最大 1 件。`primary/secondary` は作業開始グループ、`utility` はページツールグループ、`danger` は危険操作グループとして、グループ境界に軽い区切りと余白を置く。
 - 共通文言は `common.action.refresh`=`表示を更新`、`common.action.schemaRefresh`=`DB 構造を再取得` を使用する。前者は現在表示の GET、後者は Schema Refresh Job の開始に限定する。
 - 非同期操作は `loading` を渡し、処理中の再送信を防止する。成功 Toast と回復可能なエラー表示は [frontend-messaging-spec.md](./frontend-messaging-spec.md) に従い handler 側で行う。
 - `lg` 未満で操作が 2 件以上なら、先頭の最高優先度操作だけを表示し、残りを `その他の操作` メニューへ収める。`DB 構造を再取得` は `lg+` では工具グループ最右、`lg` 未満では overflow 内へ入れる。メニューは `aria-expanded` / `aria-controls` / `role="menu"`、Esc、矢印/Home/End、フォーカス復帰を満たす。
-- compact のページ操作は 44px、`lg+` は `size="sm"`。ラベルと既存 `data-testid` は可能な限り維持する。
+- compact のページ操作は 44px、`lg+` は共通 `PageHeader` の既定 `size="md"`。ラベルと既存 `data-testid` は可能な限り維持する。
 - ヘッダーには現在の判断を変える状態・リスク・バックグラウンド進捗だけを置く。件数は一覧/タブ/操作パネルへ、DB 構造の最終取得時刻は同期操作の近くへ置く。
 
 ---
@@ -233,10 +201,10 @@ Issue #435 のユーザー指定により、`OntologyGraphCanvas` の操作部�
 
 ## 8. アイコン / ローディング
 
-- Lucide を使用。ラベル付きは**アイコンを左**に置き(`<Button>` 既定の 8px gap)、`aria-hidden` を付ける。
-- サイズ: 全 size で 16px。`[&>svg]:shrink-0` 済み。
-- 非同期処理は `loading` prop を使う(安定した `StableLoadingIcon` に置換し自動 disable、`loading-buttons` / `submit-feedback`)。
-  - **ボタン内の loading icon は 180 度対称の `StableLoadingIcon` に統一する。** `Loader2`、共有 `Spinner`、単一の欠けた円弧など、回転角で見た目の重心が上下に動く icon をボタン内で直接使わない。
+- Lucide を使用。ラベル付きは**アイコンを左**に置き（共通Buttonのicon prop）、`aria-hidden` を付ける。
+- サイズ: 全 size で16px。共通Buttonの`icon`スロットが制御する。
+- 非同期処理は `loading` prop を使う（共通ButtonがアイコンをSpinnerに置換し、自動でdisableする）。
+  - **ボタン内のloading表示は共通Buttonに任せる。** `Loader2`や`Spinner`等を子要素として手動で描画しない。
   - **同じ operation の動的 spinner は 1 つだけ**にする。主ボタンが `loading` の場合、同じ処理を説明する
     `ProcessingIndicator` / `TimedLoadingState` は `activityIcon="none"` にして、静的ラベル・経過時間・slow hint
     のみを表示する。
@@ -262,14 +230,13 @@ Issue #435 のユーザー指定により、`OntologyGraphCanvas` の操作部�
 ```tsx
 // 主アクションバー（設定）
 <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
-  <Button size="lg" loading={save.isPending} onClick={handleSave}>
-    <Save size={16} aria-hidden />
+  <Button size="lg" icon={Save} loading={save.isPending} onClick={handleSave}>
     {t("settings.model.actions.save")}
   </Button>
-  <Button size="lg" variant="secondary" onClick={handleTest}>
+  <Button size="lg" variant="secondary" icon={TestTube2} onClick={handleTest}>
     {t("settings.model.actions.test")}
   </Button>
-  <Button size="lg" variant="ghost" onClick={handleReset}>
+  <Button size="lg" variant="ghost" icon={X} onClick={handleReset}>
     {t("settings.model.actions.reset")}
   </Button>
   <FormStatus tone="success" message={saved ? t("...saved") : undefined} />
@@ -308,6 +275,6 @@ Issue #435 のユーザー指定により、`OntologyGraphCanvas` の操作部�
 ### Markdown オントロジーの構築と公開（Issue #491）
 
 - 下書き／公開版の表示切替は `ManagementTabs`。独立した構築結果・公開能力の操作は表示しない。
-- Markdown の保存・コピー・移行確認は `secondary/sm`、公開準備と確認済み内容の公開は `ContentActionBar` 内の `primary/md`。確認ダイアログで Profile と対象版を示す。
+- Markdown の保存・コピー・移行確認は `secondary/sm`、公開準備と確認済み内容の公開は `ContentActionBar` 内の `primary/lg`（同じ行の移行確認もlg）。確認ダイアログで Profile と対象版を示す。
 - 「公開結果を確認」は保存した冪等キーによる読み取りだけを行う。Function / Action Type のグラフ詳細に実行操作を設けない。
 - 概念種類は主要6／補助7にまとめる。欠けた種類をダミーノードや操作ボタンで補わない。モバイルの入力・操作領域は 44px を確保する。

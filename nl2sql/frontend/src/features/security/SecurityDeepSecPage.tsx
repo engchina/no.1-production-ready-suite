@@ -21,7 +21,7 @@ import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useDatabaseStatus } from "@/lib/queries";
-import {
+import { ListPlus,
   CheckCircle2,
   Clock3,
   Database,
@@ -588,7 +588,7 @@ function DeepSecTargetObjectPicker({
           </p>
           {nextCursor ? (
             <div className="flex min-w-0 justify-end">
-              <Button
+              <Button icon={ListPlus}
                 type="button"
                 variant="secondary"
                 size="sm"

@@ -17327,3 +17327,58 @@ for (const theme of ["light", "dark"]) {
     }
   });
 }
+
+for (const theme of ["light", "dark"] as const) {
+  test(`action roles and placement remain consistent in metadata and synthetic workflows ${theme}`, async ({ page }, testInfo) => {
+    await mockNl2SqlApi(page);
+    await page.addInitScript(() => sessionStorage.clear());
+    const mobile = testInfo.project.name === "mobile-375";
+    for (const width of mobile ? [375] : [1280, 1920]) {
+      await page.setViewportSize({ width, height: 1000 });
+      for (const path of ["comment-management", "annotation-management"]) {
+        await page.goto(`/${path}`);
+        await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
+        await page.getByRole("tab", { name: "対象選択", exact: true }).click();
+        const checkbox = page.getByRole("checkbox", { name: /INVOICES/ });
+        await checkbox.setChecked(false);
+        const fetch = page.getByRole("button", { name: "情報を取得", exact: true });
+        await expect(fetch).toBeDisabled();
+        await expect(fetch.locator("svg")).toHaveCount(1);
+        await expect(fetch.locator("svg")).toHaveAttribute("width", "16");
+        await expect(fetch).toHaveCSS("height", mobile ? "44px" : "40px");
+        const before = await fetch.boundingBox();
+        await checkbox.check();
+        await expect(fetch).toBeEnabled();
+        await expect(fetch).toHaveClass(/bg-accent-emphasis/);
+        await expect(fetch.locator("svg")).toHaveCount(1);
+        expect((await fetch.boundingBox())?.width).toBe(before?.width);
+        if (!mobile) {
+          const refresh = page.getByRole("button", { name: "表示を更新", exact: true });
+          await expect(refresh).toHaveCSS("height", "36px");
+          await expect(refresh).toHaveClass(/border-border-control/);
+          await expect(refresh.locator("svg")).toHaveAttribute("width", "16");
+        }
+        await fetch.scrollIntoViewIfNeeded();
+        await expectNoHorizontalScroll(page);
+        await page.screenshot({ path: testInfo.outputPath(`${path}-${width}-${theme}-actions.png`) });
+        await page.keyboard.press("Tab");
+        await fetch.focus();
+        await expect(fetch).toHaveCSS("outline-style", "solid");
+        await page.keyboard.press("Enter");
+        await expect(page.getByLabel("構造情報")).toHaveValue(/INVOICES/);
+      }
+      await page.goto("/data-management");
+      await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
+      await page.getByRole("tab", { name: "合成データ生成" }).click();
+      const fetchTables = page.getByTestId("data-synthetic-refresh-tables-actions").getByRole("button");
+      await expect(fetchTables).toHaveClass(/bg-accent-emphasis/);
+      await expect(fetchTables).toHaveCSS("height", mobile ? "44px" : "40px");
+      await expect(fetchTables.locator("svg")).toHaveCount(1);
+      await fetchTables.click();
+      await expect(page.getByLabel("APP.INVOICES を選択")).toBeVisible();
+      await fetchTables.scrollIntoViewIfNeeded();
+      await expectNoHorizontalScroll(page);
+      await page.screenshot({ path: testInfo.outputPath(`synthetic-${width}-${theme}-actions.png`) });
+    }
+  });
+}

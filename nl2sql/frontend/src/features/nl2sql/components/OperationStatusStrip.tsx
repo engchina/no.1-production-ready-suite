@@ -1,4 +1,4 @@
-import { Database } from "lucide-react";
+import { CircleStop, Database } from "lucide-react";
 
 import {
   Button,
@@ -180,7 +180,7 @@ export function OperationStatusStrip({
         <>
           {active && onCancelJob && (
             <div className="mx-4 mb-4 flex justify-end">
-              <Button
+              <Button icon={CircleStop}
                 type="button"
                 variant="ghost"
                 size="sm"

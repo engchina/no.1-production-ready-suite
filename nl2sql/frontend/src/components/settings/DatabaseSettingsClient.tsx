@@ -784,15 +784,11 @@ function SelectAiCredentialCard() {
                   size="lg"
                   variant={data.exists ? "danger" : "primary"}
                   className="w-full sm:w-auto"
+                  icon={data.exists ? RotateCcw : KeyRound}
                   loading={changeCredential.isPending}
                   disabled={busy || !confirmed || !data.oci_auth_ready}
                   onClick={() => void execute()}
                 >
-                  {data.exists ? (
-                    <RotateCcw size={16} aria-hidden />
-                  ) : (
-                    <KeyRound size={16} aria-hidden />
-                  )}
                   {t(
                     data.exists
                       ? "settings.database.selectAiCredential.action.recreate"

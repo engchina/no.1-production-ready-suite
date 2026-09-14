@@ -2257,7 +2257,7 @@ function SyntheticWorkspace({
         >
           <Button
             type="button"
-            variant="secondary"
+            variant="primary"
             size="lg"
             className="w-full sm:w-auto"
             loading={loading === "tables"}

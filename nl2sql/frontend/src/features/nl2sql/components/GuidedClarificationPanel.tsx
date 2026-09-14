@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { CheckCircle2, Sparkles, X } from "lucide-react";
+import { Send, CheckCircle2, Sparkles, X } from "lucide-react";
 
 import {
   Banner,
@@ -301,7 +301,7 @@ export function GuidedClarificationPanel({
     }
   };
 
-  const renderCloseButton = (size: "md" | "lg" = "md") => (
+  const renderCloseButton = (size: "md" | "lg" = "lg") => (
     <Button
       type="button"
       variant="ghost"
@@ -413,9 +413,10 @@ export function GuidedClarificationPanel({
             <Button
               type="button"
               variant="primary"
-              size="md"
+              size="lg"
 
               disabled={!selectedProfileId || Boolean(busyAction)}
+              icon={CheckCircle2}
               onClick={() => void confirmRecommendedProfile()}
             >
               {t("nl2sql.clarification.confirmProfile")}
@@ -507,10 +508,10 @@ export function GuidedClarificationPanel({
             />
           ) : null}
           <div className="flex flex-wrap justify-end gap-2">
-            <Button
+            <Button icon={Send}
               type="button"
               variant="primary"
-              size="md"
+              size="lg"
 
               loading={busyAction === "answer"}
               disabled={!answerReady || Boolean(busyAction && busyAction !== "answer")}
@@ -591,10 +592,10 @@ export function GuidedClarificationPanel({
             );
           })}
           <div className="flex flex-wrap justify-end gap-2">
-            <Button
+            <Button icon={Send}
               type="button"
               variant="primary"
-              size="md"
+              size="lg"
 
               loading={busyAction === "answer"}
               disabled={!manualAnswersReady || Boolean(busyAction && busyAction !== "answer")}

@@ -105,6 +105,7 @@ function VisibleAction({
       variant={variant}
       size="lg"
       className={className}
+      icon={action.icon}
       loading={action.loading}
       disabled={action.disabled}
       aria-label={action.ariaLabel}
@@ -113,7 +114,7 @@ function VisibleAction({
       data-form-action-kind={variant}
       onClick={() => void action.onClick?.()}
     >
-      <ActionContent action={action} />
+      <span>{action.label}</span>
     </Button>
   );
 }
@@ -148,7 +149,7 @@ function DangerMenuItem({
           onInvoked();
         }}
       >
-        <ActionContent action={action} iconSize={15} />
+        <ActionContent action={action} />
       </a>
     );
   }
@@ -161,6 +162,7 @@ function DangerMenuItem({
       variant="ghost"
       size="sm"
       className={cn(className, "w-full justify-start text-left")}
+      icon={action.icon}
       loading={action.loading}
       disabled={action.disabled}
       aria-label={action.ariaLabel}
@@ -173,7 +175,7 @@ function DangerMenuItem({
         void action.onClick?.();
       }}
     >
-      <ActionContent action={action} iconSize={15} />
+      <span>{action.label}</span>
     </Button>
   );
 }

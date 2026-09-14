@@ -21,7 +21,7 @@ import {
   useRef,
   useState,
 } from "react";
-import {
+import { Save,
   CheckSquare,
   BrainCircuit,
   Download,
@@ -977,7 +977,7 @@ function TrainingDataTable({
                 <div className="flex flex-wrap justify-end gap-2">
                   {editing ? (
                     <>
-                      <Button
+                      <Button icon={Save}
                         type="button"
                         size="sm"
                         loading={loading === `training-save-${example.id}`}

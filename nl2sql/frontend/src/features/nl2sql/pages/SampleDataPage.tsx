@@ -502,11 +502,11 @@ export function SampleDataPage() {
                     variant={isDeleteAction ? "danger" : "primary"}
                     size="lg"
                     className="w-full sm:w-auto"
+                    icon={isDeleteAction ? Trash2 : FileSpreadsheet}
                     loading={loading === (isDeleteAction ? "sample-delete" : "sample-import")}
                     disabled={Boolean(loading) || !confirmationMatched || !sampleInfo}
                     onClick={() => void (isDeleteAction ? deleteSampleData() : importSampleData())}
                   >
-                    {isDeleteAction ? <Trash2 size={16} aria-hidden="true" /> : <FileSpreadsheet size={16} aria-hidden="true" />}
                     <span>{actionTitle}</span>
                   </Button>
                 }

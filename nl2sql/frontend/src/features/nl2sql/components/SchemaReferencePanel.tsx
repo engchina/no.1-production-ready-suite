@@ -1,4 +1,4 @@
-import { Plus, RefreshCw, Search, Table2 } from "lucide-react";
+import { ListPlus, Plus, RefreshCw, Search, Table2 } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import {
@@ -251,7 +251,7 @@ export function SchemaReferencePanel({
           />
         ))}
         {hasMore && onLoadMore && (
-          <Button
+          <Button icon={ListPlus}
             type="button"
             variant="secondary"
             size="sm"

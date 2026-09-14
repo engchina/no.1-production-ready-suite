@@ -16,7 +16,7 @@ import {
   useRef,
   useState,
 } from "react";
-import {
+import { ListPlus,
   BookOpenText,
   Database,
   Play,
@@ -1086,9 +1086,9 @@ function ExecutableNl2SqlWorkbench() {
                       <span>{t("nl2sql.recommend.autoDetect")}</span>
                     </Button>
                     {profilesQuery.hasNextPage && (
-                      <Button
+                      <Button icon={ListPlus}
                         type="button"
-                        variant="ghost"
+                        variant="secondary"
                         size="sm"
                         loading={profilesQuery.isFetchingNextPage}
                         disabled={active}

@@ -1,3 +1,4 @@
+import { FileSearch, RefreshCw, ShieldCheck, Upload } from "lucide-react";
 import {
   Banner,
   Button,
@@ -137,11 +138,11 @@ export function MarkdownPublication({ profileId, profileLabel, signature, disabl
   }
   return <div className="grid min-w-0 gap-3 border-t border-border pt-4" data-testid="ontology-publish-actions">
     <ContentActionBar ariaLabel={t("markdownOntology.actions")}>
-      <Button type="button" variant="primary" size="md" disabled={disabled || Boolean(busy) || running || Boolean(execution.key)} loading={busy === "prepare" || running} onClick={() => void prepare()}>{t("profiles.ontologyBuild.publish")}</Button>
-      <Button type="button" variant="secondary" size="sm" disabled={Boolean(busy) || running} onClick={() => void previewMigration()}>{t("markdownOntology.importPreview")}</Button>
+      <Button icon={Upload} type="button" variant="primary" size="lg" disabled={disabled || Boolean(busy) || running || Boolean(execution.key)} loading={busy === "prepare" || running} onClick={() => void prepare()}>{t("profiles.ontologyBuild.publish")}</Button>
+      <Button icon={FileSearch} type="button" variant="secondary" size="lg" disabled={Boolean(busy) || running} onClick={() => void previewMigration()}>{t("markdownOntology.importPreview")}</Button>
     </ContentActionBar>
     {(error || preparation.isError) && <Banner severity="danger">{error || t("markdownOntology.refreshFailed")}</Banner>}
-    {execution.key && <Button type="button" size="sm" variant="secondary" disabled={Boolean(busy)} onClick={() => void recover()}>{t("markdownOntology.checkOutcome")}</Button>}
+    {execution.key && <Button icon={RefreshCw} type="button" size="sm" variant="secondary" disabled={Boolean(busy)} onClick={() => void recover()}>{t("markdownOntology.checkOutcome")}</Button>}
     {value && <section className="grid min-w-0 gap-3" aria-label={t("markdownOntology.check")}>
       <h3 className="text-sm font-semibold">{t("markdownOntology.check")}</h3>
       <StatusBadge variant={dataValidationFailed || value.status === "failed" ? "danger" : value.status === "ready" ? "success" : "info"} label={t(`markdownOntology.status.${dataValidationFailed ? "failed" : value.status}`)} />
@@ -156,7 +157,7 @@ export function MarkdownPublication({ profileId, profileLabel, signature, disabl
           <label className="grid gap-2 text-sm">{t("markdownOntology.acceptance")}<textarea className="min-h-24 w-full rounded border border-border-control bg-surface p-3" value={acceptance} aria-invalid={Boolean(acceptanceError)} aria-describedby="markdown-acceptance-hint markdown-acceptance-error" onChange={e=>{setAcceptance(e.target.value);setAcceptanceError("");}} /></label>
           <p id="markdown-acceptance-hint" className="text-xs text-fg-muted">{t("markdownOntology.acceptanceHint")}</p>
           <FieldError id="markdown-acceptance-error" message={acceptanceError} />
-          <Button type="button" variant="secondary" size="sm" disabled={Boolean(busy)} onClick={()=>void dataValidation()}>{t("markdownOntology.dataValidation")}</Button>
+          <Button icon={ShieldCheck} type="button" variant="secondary" size="sm" disabled={Boolean(busy)} onClick={()=>void dataValidation()}>{t("markdownOntology.dataValidation")}</Button>
           {value.data_report && <div className="grid gap-3">
             <DefinitionFields definition={Object.fromEntries(["checked_at", "sample_limit", "instance_count", "errors", "acceptance_cases"].filter(key => key in value.data_report!).map(key => [key, value.data_report![key]]))} />
             <p className="text-xs text-fg-muted">{t("markdownOntology.sampledOnly")}</p>
@@ -164,14 +165,14 @@ export function MarkdownPublication({ profileId, profileLabel, signature, disabl
           </div>}
         </details>
         {dataValidationFailed && <Banner severity="danger">{t("markdownOntology.dataValidationFailed")}</Banner>}
-        <ContentActionBar ariaLabel={t("markdownOntology.actions")}><Button type="button" variant="primary" size="md" disabled={Boolean(busy) || Boolean(execution.key) || preparation.isError || dataValidationFailed} loading={busy === "publish"} onClick={()=>void publish()}>{t("markdownOntology.confirmPublish")}</Button></ContentActionBar>
+        <ContentActionBar ariaLabel={t("markdownOntology.actions")}><Button icon={Upload} type="button" variant="primary" size="lg" disabled={Boolean(busy) || Boolean(execution.key) || preparation.isError || dataValidationFailed} loading={busy === "publish"} onClick={()=>void publish()}>{t("markdownOntology.confirmPublish")}</Button></ContentActionBar>
       </>}
     </section>}
     {migration && <section className="grid gap-3" aria-label={t("markdownOntology.importPreview")}>
       <p>{t("markdownOntology.importHint")}</p>
       <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words rounded border border-border p-3 text-xs">{migration.markdown}</pre>
       {migration.conflicts.map((c,i)=><p key={i}>{c}</p>)}
-      <Button type="button" variant="secondary" size="sm" disabled={Boolean(busy) || migration.applied} onClick={()=>void applyMigration()}>{t("markdownOntology.import")}</Button>
+      <Button icon={Upload} type="button" variant="secondary" size="sm" disabled={Boolean(busy) || migration.applied} onClick={()=>void applyMigration()}>{t("markdownOntology.import")}</Button>
     </section>}
   </div>;
 }
