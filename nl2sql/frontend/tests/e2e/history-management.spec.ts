@@ -800,3 +800,34 @@ test.afterEach(async ({ page }, testInfo) => {
   if (testInfo.status === "skipped") return;
   await expectLocalUiFonts(page);
 });
+
+
+for (const theme of ["light", "dark"]) {
+  test(`構成管理者の実行履歴はユーザー名を重複せず表示する: ${theme}`, async ({ page, isMobile }, testInfo) => {
+    await page.addInitScript(value => {
+      localStorage.setItem("production-ready-nl2sql.ui", JSON.stringify({ state: { theme: value }, version: 0 }));
+    }, theme);
+    const userUuid = "00000000-0000-0000-0000-000000000002";
+    await mockHistory(page, [{
+      ...historyItems[0], actor_user_uuid: userUuid,
+      actor_login_user_id: "system_admin", actor_display_name: "system_admin（構成管理者）",
+    }]);
+    await page.goto("/history");
+    await expect(page.locator("html")).toHaveCSS("color-scheme", theme);
+    for (const width of isMobile ? [375] : [1280, 1920]) {
+      await page.setViewportSize({ width, height: 900 });
+      const row = page.getByRole("button", { name: "未入金の顧客を確認 の履歴を表示" });
+      await expect(row.getByTestId("history-executor")).toHaveText("実行ユーザー: system_admin（構成管理者）");
+      await row.focus();
+      await page.keyboard.press("Enter");
+      const detail = page.getByTestId("history-detail").getByTestId("history-executor");
+      await expect(detail).toContainText("実行ユーザー: system_admin（構成管理者）");
+      await expect(detail).toContainText(`ユーザー UUID: ${userUuid}`);
+      await expect(detail).not.toContainText("ユーザー情報なし");
+      await expectContained(row.getByTestId("history-executor"), row);
+      await expectContained(detail, page.getByTestId("history-detail"));
+      expect(await hasDocumentHorizontalScroll(page)).toBe(false);
+      await page.getByTestId("history-detail-header").screenshot({ path: testInfo.outputPath(`configured-admin-${theme}-${width}.png`) });
+    }
+  });
+}

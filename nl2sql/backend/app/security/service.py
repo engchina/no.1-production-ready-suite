@@ -148,6 +148,7 @@ _CONFIGURED_SYSTEM_ADMIN_USER_UUID = "00000000-0000-0000-0000-000000000002"
 _CONFIGURED_SYSTEM_ADMIN_SESSION_PREFIX = "nl2sql-system-admin-v1"
 _CONFIGURED_SYSTEM_ADMIN_TOKEN_TYPE = "configured-system-admin"  # nosec B105
 _FIXED_APP_ADMIN_LOGIN_USER_ID = "system_admin"
+_CONFIGURED_SYSTEM_ADMIN_DISPLAY_NAME = f"{_FIXED_APP_ADMIN_LOGIN_USER_ID}（構成管理者）"
 _APP_ADMIN_LOGIN_USER_ID_KEY = "APP_ADMIN_LOGIN_USER_ID"
 _LEGACY_APP_ADMIN_USERNAME_KEY = "APP_ADMIN_USERNAME"
 _APP_ADMIN_LOGIN_USER_PASSWORD_KEY = "APP_ADMIN_LOGIN_USER_PASSWORD"  # nosec B105
@@ -393,7 +394,20 @@ class SecurityService:
     ) -> dict[str, UserIdentity]:
         if not actor.is_system_admin:
             raise SecurityApiError(403, "履歴の実行者情報はシステム管理者のみ確認できます。")
-        return self.store.get_user_identities(user_uuids)
+        # 構成管理者は認証テーブルに存在しない。履歴表示には公開 identity だけを補完する。
+        stored_uuids = [
+            user_uuid
+            for user_uuid in user_uuids
+            if user_uuid and user_uuid != _CONFIGURED_SYSTEM_ADMIN_USER_UUID
+        ]
+        identities = self.store.get_user_identities(stored_uuids) if stored_uuids else {}
+        if _CONFIGURED_SYSTEM_ADMIN_USER_UUID in user_uuids:
+            identities[_CONFIGURED_SYSTEM_ADMIN_USER_UUID] = UserIdentity(
+                user_uuid=_CONFIGURED_SYSTEM_ADMIN_USER_UUID,
+                login_user_id=_FIXED_APP_ADMIN_LOGIN_USER_ID,
+                display_name=_CONFIGURED_SYSTEM_ADMIN_DISPLAY_NAME,
+            )
+        return identities
 
     def create_user(
         self,
@@ -1039,7 +1053,7 @@ class SecurityService:
         return Principal(
             user_uuid=_CONFIGURED_SYSTEM_ADMIN_USER_UUID,
             login_user_id=login_user_id,
-            display_name=f"{login_user_id}（構成管理者）",
+            display_name=_CONFIGURED_SYSTEM_ADMIN_DISPLAY_NAME,
             status="ACTIVE",
             force_password_change=False,
             role_codes=[SYSTEM_ADMIN_ROLE_CODE],

@@ -357,3 +357,64 @@ def test_oracle_history_user_identities_batch_only_public_fields(
     assert set(binds.values()) == {"user-1", "missing"}
     assert "user-1" not in sql
     assert "PASSWORD" not in sql and "ROLE" not in sql
+
+
+@pytest.mark.parametrize("factory", [_memory_service, _incremental_service])
+def test_history_resolves_configured_admin_without_changing_saved_identity(
+    factory: object, monkeypatch: pytest.MonkeyPatch, history_security: SecurityService
+) -> None:
+    configured_uuid = "00000000-0000-0000-0000-000000000002"
+    original = [_history(1, configured_uuid), _history(2, "unknown"), _history(3, "")]
+    service = factory(original)  # type: ignore[operator]
+    monkeypatch.setattr(nl2sql_router, "nl2sql_service", service)
+    before = service.list_history().model_dump()
+    for viewer in [_principal(admin=True), _principal(admin=True, user_uuid=configured_uuid)]:
+        data = nl2sql_router.history(_request(viewer)).data  # type: ignore[arg-type]
+        assert data is not None
+        items = {item.actor_user_uuid: item for item in data.items}
+        assert items[configured_uuid].actor_login_user_id == "system_admin"
+        assert items[configured_uuid].actor_display_name == "system_admin（構成管理者）"
+        for user_uuid in ["unknown", ""]:
+            assert items[user_uuid].actor_login_user_id == ""
+            assert items[user_uuid].actor_display_name == ""
+        assert service.list_history().model_dump() == before
+
+
+def test_configured_admin_history_identity_uses_no_credentials_or_auth_tables(
+    monkeypatch: pytest.MonkeyPatch, history_security: SecurityService
+) -> None:
+    configured_uuid = "00000000-0000-0000-0000-000000000002"
+    lookup = MagicMock(side_effect=AssertionError("auth tables must not be read"))
+    credentials = MagicMock(side_effect=AssertionError("credentials must not be read"))
+    monkeypatch.setattr(history_security.store, "get_user_identities", lookup)
+    monkeypatch.setattr(history_security, "_configured_system_admin_credentials", credentials)
+    admin = _principal(admin=True)
+    assert history_security.history_user_identities(admin, []) == {}
+    expected = UserIdentity(configured_uuid, "system_admin", "system_admin（構成管理者）")
+    assert history_security.history_user_identities(
+        admin, [configured_uuid, configured_uuid, ""]
+    ) == {configured_uuid: expected}
+    with pytest.raises(SecurityApiError) as exc:
+        history_security.history_user_identities(_principal(admin=False), [configured_uuid])
+    assert exc.value.status_code == 403
+    lookup.assert_not_called()
+    credentials.assert_not_called()
+
+
+def test_history_identity_resolves_only_reserved_uuid_and_keeps_other_users(
+    monkeypatch: pytest.MonkeyPatch, history_security: SecurityService
+) -> None:
+    configured_uuid = "00000000-0000-0000-0000-000000000002"
+    ordinary = UserIdentity("user-1", "another_admin", "別の管理者")
+    lookup = MagicMock(return_value={ordinary.user_uuid: ordinary})
+    monkeypatch.setattr(history_security.store, "get_user_identities", lookup)
+    result = history_security.history_user_identities(
+        _principal(admin=True), [configured_uuid, "user-1", "missing", ""]
+    )
+    lookup.assert_called_once_with(["user-1", "missing"])
+    assert result == {
+        "user-1": ordinary,
+        configured_uuid: UserIdentity(
+            configured_uuid, "system_admin", "system_admin（構成管理者）"
+        ),
+    }

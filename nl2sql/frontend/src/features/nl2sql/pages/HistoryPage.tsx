@@ -60,8 +60,9 @@ function HistoryExecutor({ item, detailed = false }: { item: HistoryItem; detail
   const uuid = item.actor_user_uuid?.trim();
   const loginId = item.actor_login_user_id?.trim();
   const name = item.actor_display_name?.trim();
+  const nameIncludesLoginId = name?.startsWith(`${loginId}（`) && name.endsWith("）");
   const identity = !uuid ? t("history.actor.unrecorded")
-    : loginId ? (name && name !== loginId ? t("history.actor.identity", { name, loginId }) : loginId)
+    : loginId ? (name && name !== loginId ? (nameIncludesLoginId ? name : t("history.actor.identity", { name, loginId })) : loginId)
     : t("history.actor.missing", { uuid });
   return (
     <span className="grid min-w-0 gap-1 text-sm leading-relaxed text-fg [overflow-wrap:anywhere]" data-testid="history-executor">
