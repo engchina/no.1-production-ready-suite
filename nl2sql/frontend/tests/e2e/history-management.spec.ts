@@ -318,14 +318,14 @@ test("管理者は実行ユーザーを一覧と詳細で確認し同名・削�
   await mockHistory(page, items);
   await page.goto("/history");
   const first = page.getByRole("button", { name: "未入金の顧客を確認 の履歴を表示" });
-  await expect(first.getByTestId("history-executor")).toHaveText("実行ユーザー: 同じ表示名（analyst-0）");
+  await expect(first.getByTestId("history-executor")).toHaveText("実行ユーザー: analyst-0（同じ表示名）");
   const second = page.getByRole("button", { name: "請求金額を確認 の履歴を表示" });
   await second.focus();
   await page.keyboard.press("Enter");
   const detail = page.getByTestId("history-detail").getByTestId("history-executor");
-  await expect(detail).toContainText("同じ表示名（analyst-1）");
+  await expect(detail).toContainText("analyst-1（同じ表示名）");
   await expect(detail).toContainText("ユーザー UUID: actor-1");
-  await expect(detail).toContainText("表示名とログイン ID は現在のユーザー情報です。");
+  await expect(detail).toContainText("ログイン ID と表示名は現在のユーザー情報です。");
   await page.getByRole("button", { name: "削除済みユーザーの履歴 の履歴を表示" }).click();
   await expect(detail).toContainText("ユーザー情報なし（deleted-user）");
   await page.getByRole("button", { name: "古い履歴 の履歴を表示" }).click();

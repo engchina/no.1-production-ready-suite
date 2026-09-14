@@ -61,12 +61,14 @@ import { MENU_PERMISSIONS } from "./menu-permissions";
 import {
   SecurityDetailField,
   SecurityEmptySelection,
+  SecurityIdentityLines,
   SecurityManagementPanelShell,
   SecurityPanelHeader,
   SecuritySearchField,
   securityFilteredCount,
 } from "./SecurityManagementShared";
 import { securityApi } from "./api";
+import { identitySecondaryName } from "./identity-label";
 import type { AssignedRole, SecurityRole, SecurityUser } from "./types";
 
 type UserPanelView = "list" | "create" | "edit";
@@ -235,10 +237,10 @@ export function SecurityUsersPage() {
         );
       })
       .sort((left, right) => {
-        if (sort.key === "login") return compareText(left.login_user_id, right.login_user_id, sort.direction);
         if (sort.key === "roles") return compareText(roleSummary(left), roleSummary(right), sort.direction);
         if (sort.key === "status") return compareText(userStatusLabel(left), userStatusLabel(right), sort.direction);
-        return compareText(left.display_name, right.display_name, sort.direction);
+        // 1 列目は ID を主表示するため、ID で並べる。
+        return compareText(left.login_user_id, right.login_user_id, sort.direction);
       });
   }, [roleById, search, sort, users]);
 
@@ -684,7 +686,7 @@ export function SecurityUsersPage() {
             className={`min-w-0 cursor-pointer text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
               selected ? "text-accent-fg" : "text-fg"
             }`}
-            aria-label={t("security.users.showUser", { name: user.display_name })}
+            aria-label={t("security.users.showUser", { name: user.login_user_id })}
             aria-current={selected ? "true" : undefined}
             onClick={(event) => {
               event.stopPropagation();
@@ -693,8 +695,7 @@ export function SecurityUsersPage() {
               setSelectedId(user.user_uuid);
             }}
           >
-            <span className="block break-words font-medium">{user.display_name}</span>
-            <span className="block break-all font-mono text-xs text-fg-muted">{user.login_user_id}</span>
+            <SecurityIdentityLines id={user.login_user_id} name={user.display_name} />
           </button>
         );
       },
@@ -809,7 +810,7 @@ export function SecurityUsersPage() {
                     setSelectedId(user.user_uuid);
                   }}
                   getRowKey={(user) => user.user_uuid}
-                  rowProps={(user) => ({ className: INFORMATION_TABLE_ROW_CLASS, "aria-label": t("security.users.showUser", { name: user.display_name }) })}
+                  rowProps={(user) => ({ className: INFORMATION_TABLE_ROW_CLASS, "aria-label": t("security.users.showUser", { name: user.login_user_id }) })}
                   ariaLabel={t("security.users.list")}
                   testId="security-users-grid"
                   scrollAriaLabel={t("security.common.listScrollLabel", {
@@ -1009,8 +1010,7 @@ export function SecurityUsersPage() {
                               onChange={() => selectRole(role.role_id)}
                             />
                             <span className="min-w-0">
-                              <span className="block break-words font-medium">{role.display_name}</span>
-                              <span className="block break-all font-mono text-xs text-fg-muted">{role.role_code}</span>
+                              <SecurityIdentityLines id={role.role_code} name={role.display_name} />
                               {hint ? <span className="mt-1 block text-xs leading-5 text-fg-muted">{hint}</span> : null}
                             </span>
                           </label>
@@ -1118,16 +1118,18 @@ function UserDetailPanel({
           <div className="flex flex-wrap items-center gap-2">
             <h2 id="security-users-detail-heading" className="flex min-w-0 items-center gap-2 text-base font-semibold text-fg">
               <UserRound size={20} aria-hidden="true" />
-              <span className="min-w-0 break-words">{user.display_name}</span>
+              <span className="min-w-0 break-all font-mono">{user.login_user_id}</span>
             </h2>
             <UserStatusBadges user={user} />
           </div>
-          <p className="mt-1 break-all font-mono text-xs text-fg-muted">{user.login_user_id}</p>
+          {identitySecondaryName(user.login_user_id, user.display_name) ? (
+            <p className="mt-1 break-words text-xs text-fg-muted">{user.display_name}</p>
+          ) : null}
         </div>
         {canManage ? (
           <ObjectActionBar
             actions={actions}
-            ariaLabel={`${t("security.common.actions")}: ${user.display_name}`}
+            ariaLabel={`${t("security.common.actions")}: ${user.login_user_id}`}
             testId="security-users-detail-actions"
           />
         ) : null}

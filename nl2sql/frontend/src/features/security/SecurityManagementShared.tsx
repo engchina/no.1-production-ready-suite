@@ -6,6 +6,8 @@ import { t } from "@/lib/i18n";
 import type { FixedSplitWidePane } from "@/lib/fixed-split-pane";
 import { cn } from "@/lib/utils";
 
+import { identitySecondaryName } from "./identity-label";
+
 export interface SecurityManagementMetric {
   label: string;
   value: string;
@@ -163,6 +165,28 @@ export function SecurityDetailField({
       <dt className="text-xs font-medium text-fg-muted">{label}</dt>
       <dd className="mt-1 min-w-0 break-words text-sm font-medium text-fg">{children}</dd>
     </div>
+  );
+}
+
+/**
+ * ID/コードと表示名の 2 段表示。1 行目 = ID（主表示・mono）、2 行目 = 表示名（muted）。
+ * 文字色は親（通常 `text-fg`、選択行は `text-accent-fg`）を継承する。
+ */
+export function SecurityIdentityLines({
+  id,
+  name,
+  className,
+}: {
+  id: string;
+  name?: string | null;
+  className?: string;
+}) {
+  const secondary = identitySecondaryName(id, name);
+  return (
+    <>
+      <span className={cn("block break-all font-mono font-medium", className)}>{id}</span>
+      {secondary ? <span className="block break-words text-xs text-fg-muted">{secondary}</span> : null}
+    </>
   );
 }
 

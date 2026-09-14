@@ -65,7 +65,8 @@ import {
 import { DbObjectName } from "@/features/nl2sql/components/DbObjectName";
 import { useAuth } from "./AuthProvider";
 import { MENU_PERMISSIONS } from "./menu-permissions";
-import { SecuritySearchField } from "./SecurityManagementShared";
+import { SecurityIdentityLines, SecuritySearchField } from "./SecurityManagementShared";
+import { identitySecondaryName } from "./identity-label";
 import { securityApi } from "./api";
 import type {
   DataEntitlement,
@@ -815,7 +816,8 @@ export function SecurityDeepSecPage() {
     const q = entitlementSearch.trim().toLowerCase();
     return entitlementRoles
       .filter((role) => (q ? entitlementRoleSearchText(role).includes(q) : true))
-      .sort((left, right) => left.display_name.localeCompare(right.display_name, "ja"));
+      // ロールコードを主表示するため、コードで並べる。
+      .sort((left, right) => left.role_code.localeCompare(right.role_code, "ja"));
   }, [entitlementRoles, entitlementSearch]);
   const visibleSelectedEntitlementRoleId =
     activeView === "data-permissions"
@@ -2077,8 +2079,7 @@ export function SecurityDeepSecPage() {
                           >
                             <span className="flex min-w-0 flex-wrap items-start justify-between gap-2">
                               <span className="min-w-0">
-                                <span className="block break-words text-sm font-medium">{role.display_name}</span>
-                                <span className="block break-all font-mono text-xs text-fg-muted">{role.role_code}</span>
+                                <SecurityIdentityLines id={role.role_code} name={role.display_name} className="text-sm" />
                               </span>
                               <StatusBadge variant={statusBadge.variant} label={statusBadge.label} />
                             </span>
@@ -2108,10 +2109,12 @@ export function SecurityDeepSecPage() {
                         <div className="grid min-w-0 gap-3 border-b border-border pb-3">
                           <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                             <div className="min-w-0">
-                              <h3 id="deepsec-entitlement-editor-title" className="break-words text-base font-semibold">
-                                {selectedEntitlementRole.display_name}
+                              <h3 id="deepsec-entitlement-editor-title" className="break-all font-mono text-base font-semibold">
+                                {selectedEntitlementRole.role_code}
                               </h3>
-                              <p className="mt-1 break-all font-mono text-xs text-fg-muted">{selectedEntitlementRole.role_code}</p>
+                              {identitySecondaryName(selectedEntitlementRole.role_code, selectedEntitlementRole.display_name) ? (
+                                <p className="mt-1 break-words text-xs text-fg-muted">{selectedEntitlementRole.display_name}</p>
+                              ) : null}
                             </div>
                             <div className="flex flex-wrap gap-2">
                               <StatusBadge
