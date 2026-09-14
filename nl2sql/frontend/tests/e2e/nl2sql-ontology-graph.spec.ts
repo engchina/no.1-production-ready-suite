@@ -581,6 +581,18 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
   );
 }
 
+async function expectEntireGraphInCanvas(playground: Locator) {
+  const canvas = playground.getByTestId("ontology-graph-canvas");
+  await expect.poll(() => canvas.evaluate(element => {
+    const frame = element.getBoundingClientRect();
+    const content = [...element.querySelectorAll("[data-ontology-lane-label], .react-flow__node")];
+    return content.length > 0 && content.every(item => {
+      const rect = item.getBoundingClientRect();
+      return rect.left >= frame.left && rect.right <= frame.right && rect.top >= frame.top && rect.bottom <= frame.bottom;
+    });
+  })).toBe(true);
+}
+
 for (const theme of ["light", "dark"]) {
   for (const width of [1280, 1920]) {
     test(`概念の種類を先頭にして操作枠を整列する ${theme} ${width}`, async ({ page }, testInfo) => {
@@ -623,6 +635,15 @@ for (const theme of ["light", "dark"]) {
         expect(Math.abs(boxes[2]!.y - boxes[3]!.y)).toBeLessThanOrEqual(1);
         expect(boxes[2]!.y).toBeGreaterThanOrEqual(boxes[0]!.y + boxes[0]!.height);
       }
+      const canvas = playground.getByTestId("ontology-graph-canvas");
+      expect(await canvas.evaluate(el => el.getBoundingClientRect().height / parseFloat(getComputedStyle(document.documentElement).fontSize))).toBeCloseTo(45, 0);
+      await expectEntireGraphInCanvas(playground);
+      await playground.getByRole("button", { name: "グラフを拡大", exact: true }).click();
+      const fit = playground.getByRole("button", { name: "グラフ全体を表示", exact: true });
+      await fit.focus();
+      await page.keyboard.press("Enter");
+      await expectEntireGraphInCanvas(playground);
+      await canvas.screenshot({ path: testInfo.outputPath(`fit-labels-${theme}-${width}.png`) });
       await filter.selectOption("object_type");
       await expect(filter).toHaveValue("object_type");
       await filter.selectOption("");

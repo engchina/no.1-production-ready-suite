@@ -289,9 +289,11 @@ const NODE_TYPES = { ontology: OntologyNodeCard };
 const EDGE_TYPES = { ontologyParallel: OntologyParallelEdge };
 
 function FlowControls({
+  onFitAll,
   onResetLayout,
   resetDisabled,
 }: {
+  onFitAll: () => void;
   onResetLayout: () => void;
   resetDisabled: boolean;
 }) {
@@ -320,7 +322,7 @@ function FlowControls({
         variant="ghost"
         aria-label={t("nl2sql.ontology.graphFit")}
         title={t("nl2sql.ontology.graphFit")}
-        onClick={() => void flow.fitView({ padding: 0.18, duration: 0 })} icon={Maximize2}>
+        onClick={onFitAll} icon={Maximize2}>
         </Button>
       <Button
         type="button"
@@ -528,7 +530,7 @@ function LaneOverlays({ lanes }: { lanes: OntologyGraphSemanticLane[] }) {
             width: 176,
           }}
         >
-          <span className="rounded-md border border-border bg-surface px-2 py-1 text-xs font-semibold leading-4 text-fg-muted shadow-sm">
+          <span data-ontology-lane-label className="rounded-md border border-border bg-surface px-2 py-1 text-xs font-semibold leading-4 text-fg-muted shadow-sm">
             {t(LANE_LABEL_KEYS[lane.id])}
           </span>
         </div>
@@ -683,11 +685,30 @@ function OntologyFlow({
     lastViewModeRef.current = currentViewMode;
     setPositionOverrides(new Map());
   }, [currentViewMode]);
+  const fitAll = useCallback((duration = 0) => {
+    const canvas = canvasRef.current;
+    const visibleNodes = flow.getNodes();
+    if (!canvas || visibleNodes.length === 0) return;
+    const bounds = flow.getNodesBounds(visibleNodes);
+    let left = bounds.x, top = bounds.y;
+    let right = bounds.x + bounds.width, bottom = bounds.y + bounds.height;
+    // ViewportPortal のラベルは fitView の対象外。実測範囲を graph 座標に戻して加える。
+    for (const label of canvas.querySelectorAll("[data-ontology-lane-label]")) {
+      const rect = label.getBoundingClientRect();
+      const start = flow.screenToFlowPosition({ x: rect.left, y: rect.top }, { snapToGrid: false });
+      const end = flow.screenToFlowPosition({ x: rect.right, y: rect.bottom }, { snapToGrid: false });
+      left = Math.min(left, start.x);
+      top = Math.min(top, start.y);
+      right = Math.max(right, end.x);
+      bottom = Math.max(bottom, end.y);
+    }
+    void flow.fitBounds({ x: left, y: top, width: right - left, height: bottom - top }, { padding: 0.18, duration });
+  }, [flow]);
   const resetLayout = () => {
     setPositionOverrides(new Map());
     // 上書きクリアの再レンダ後にフィットする(即時だと旧座標でフィットしてしまう)
     window.setTimeout(() => {
-      void flow.fitView({ padding: 0.18, duration: prefersReducedMotion() ? 0 : 300 });
+      fitAll(prefersReducedMotion() ? 0 : 300);
     }, 80);
   };
 
@@ -788,16 +809,18 @@ function OntologyFlow({
       const highlightTargets = (highlightNodeIdsRef.current ?? []).filter((id) =>
         layoutPositionsRef.current.has(id)
       );
-      void flow.fitView({
-        padding: 0.18,
-        duration: prefersReducedMotion() ? 0 : 300,
-        ...(highlightTargets.length > 0
-          ? { nodes: highlightTargets.map((id) => ({ id })) }
-          : {}),
-      });
+      if (highlightTargets.length > 0) {
+        void flow.fitView({
+          padding: 0.18,
+          duration: prefersReducedMotion() ? 0 : 300,
+          nodes: highlightTargets.map((id) => ({ id })),
+        });
+      } else {
+        fitAll(prefersReducedMotion() ? 0 : 300);
+      }
     }, 80);
     return () => window.clearTimeout(timer);
-  }, [visibleSignature, highlightSignature, flow, canvasVisible]);
+  }, [visibleSignature, highlightSignature, flow, canvasVisible, fitAll]);
 
   // インスペクタ等の外部選択で対象が画面外のときだけ、そのノードへセンタリングする
   // (fitView での全体リセットはしない。ズームは現状維持ベース)。
@@ -1102,7 +1125,8 @@ function OntologyFlow({
       </div>
       <div
         ref={canvasRef}
-        className="relative h-[32rem] min-h-80 overflow-hidden rounded-md border border-border bg-surface-sunken"
+        data-testid="ontology-graph-canvas"
+        className="relative h-[45rem] min-h-80 overflow-hidden rounded-md border border-border bg-surface-sunken"
       >
       {canvasVisible && <ReactFlow
         nodes={nodes}
@@ -1111,7 +1135,7 @@ function OntologyFlow({
         edgeTypes={EDGE_TYPES}
         fitView
         fitViewOptions={{ padding: 0.18 }}
-        minZoom={0.25}
+        minZoom={0.05}
         maxZoom={1.8}
         // 初期レイアウトは決定論(semantic matrix)。ドラッグ差分だけを positionOverrides に
         // 反映する controlled flow(内部選択は無効のまま。選択は onNodeClick + selected prop)。
@@ -1152,7 +1176,7 @@ function OntologyFlow({
             nodeStrokeColor={cssVar("--color-graph-line")}
           />
         ) : null}
-        <FlowControls onResetLayout={resetLayout} resetDisabled={positionOverrides.size === 0} />
+        <FlowControls onFitAll={() => fitAll()} onResetLayout={resetLayout} resetDisabled={positionOverrides.size === 0} />
       </ReactFlow>}
       <OntologyGraphLegend
         presentGroupIds={presentLegendGroupIds}
