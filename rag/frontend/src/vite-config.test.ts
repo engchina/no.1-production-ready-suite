@@ -18,7 +18,8 @@ function startDevServer(config: UserConfig) {
   const middlewarePaths: string[] = [];
   const warn = vi.fn();
   const server = { middlewares: { use: (path: string) => middlewarePaths.push(path) }, config: { logger: { warn } } };
-  (plugin?.configureServer as (server: ViteDevServer) => void)(server as unknown as ViteDevServer);
+  if (!plugin) throw new Error("hermetic API plugin が見つかりません");
+  (plugin.configureServer as (server: ViteDevServer) => void)(server as unknown as ViteDevServer);
   return { middlewarePaths, warn };
 }
 
