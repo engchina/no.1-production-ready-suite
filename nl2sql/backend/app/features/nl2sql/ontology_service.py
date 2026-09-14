@@ -18,6 +18,12 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ValidationError
 
+from .object_identity import (
+    catalog_match_key,
+    object_match_key,
+    split_match_key,
+    sql_identifier_token,
+)
 from .ontology_models import (
     ClarificationMode,
     ClarificationTurn,
@@ -135,36 +141,69 @@ def _copy_model[ModelT: BaseModel](value: ModelT) -> ModelT:
     return value.model_copy(deep=True)
 
 
-def _normalize_object_name(value: str) -> str:
-    return value.replace('"', "").strip().upper()
+def _sql_part_token(name: str, *, quoted: bool) -> str:
+    """SQL parser が返した識別子 1 部分の照合 token。不正な値は例外にせずそのまま返す。"""
+
+    if not str(name or "").strip():
+        return ""
+    try:
+        return sql_identifier_token(name, quoted=quoted)
+    except ValueError:
+        return str(name).strip()
 
 
-def _column_variants(owner: str, object_name: str, column_name: str) -> set[str]:
-    """列参照を owner / object の有無に依存せず比較できる形へ正規化する。"""
+def _variants_from_tokens(owner: str, object_name: str, column_name: str) -> set[str]:
+    """照合 token の owner / object / column から、修飾の有無に依存しない比較値を作る。"""
 
-    owner_name = _normalize_object_name(owner)
-    object_value = _normalize_object_name(object_name)
-    column_value = _normalize_object_name(column_name)
-    if not column_value:
+    if not column_name:
         return set()
-    values = {column_value}
-    if object_value:
-        values.add(f"{object_value}.{column_value}")
-    if owner_name and object_value:
-        values.add(f"{owner_name}.{object_value}.{column_value}")
+    values = {column_name}
+    if object_name:
+        values.add(f"{object_name}.{column_name}")
+    if owner and object_name:
+        values.add(f"{owner}.{object_name}.{column_name}")
     return values
 
 
-def _raw_column_variants(value: str) -> set[str]:
+def _column_variants(owner: str, object_name: str, column_name: str) -> set[str]:
+    """カタログ上の owner / object / column 名（大文字小文字を保持）の比較値。
+
+    `object_identity.catalog_match_key` の token で比べる。引用符を外して大文字化すると、
+    `SALES."Mixed_Case"."Amount"` と大文字の同名表・同名列を同じ列として扱う（#573）。
+    """
+
+    return _variants_from_tokens(
+        catalog_match_key(owner) if owner.strip() else "",
+        catalog_match_key(object_name) if object_name.strip() else "",
+        catalog_match_key(column_name) if column_name.strip() else "",
+    )
+
+
+def _reference_tokens(value: str) -> list[str]:
+    """SQL の表記の参照（`SALES."Mixed_Case"."Amount"`、各部は引用可）を照合 token に分ける。"""
+
+    return split_match_key(object_match_key(value))
+
+
+def _sql_table_key(table: Any) -> str:
+    """SQL の表参照（catalog / owner / 表名）の照合キー。"""
+
     parts = [
-        _normalize_object_name(part) for part in value.replace('"', "").split(".") if part.strip()
+        object_match_key(table.catalog) if table.catalog else "",
+        _sql_part_token(table.owner, quoted=table.owner_quoted),
+        _sql_part_token(table.name, quoted=table.name_quoted),
     ]
+    return ".".join(part for part in parts if part)
+
+
+def _raw_column_variants(value: str) -> set[str]:
+    parts = _reference_tokens(value)
     if not parts:
         return set()
     if len(parts) >= 3:
-        return _column_variants(parts[-3], parts[-2], parts[-1])
+        return _variants_from_tokens(parts[-3], parts[-2], parts[-1])
     if len(parts) == 2:
-        return _column_variants("", parts[0], parts[1])
+        return _variants_from_tokens("", parts[0], parts[1])
     return {parts[0]}
 
 
@@ -173,10 +212,14 @@ def _sql_alias_map(graph: SqlSemanticGraph) -> dict[str, tuple[str, str]]:
     for table in graph.tables:
         if table.is_cte:
             continue
-        target = (_normalize_object_name(table.owner), _normalize_object_name(table.name))
-        aliases[_normalize_object_name(table.name)] = target
-        if table.alias:
-            aliases[_normalize_object_name(table.alias)] = target
+        name = _sql_part_token(table.name, quoted=table.name_quoted)
+        target = (_sql_part_token(table.owner, quoted=table.owner_quoted), name)
+        aliases[name] = target
+        alias = table.alias.strip()
+        if alias:
+            # 別名の引用の有無は保持されないため、引用なし・引用ありの両方の解釈で引けるようにする。
+            aliases[object_match_key(alias)] = target
+            aliases[catalog_match_key(alias)] = target
     return aliases
 
 
@@ -184,19 +227,17 @@ def _sql_column_variants(
     value: str,
     aliases: Mapping[str, tuple[str, str]],
 ) -> set[str]:
-    parts = [
-        _normalize_object_name(part) for part in value.replace('"', "").split(".") if part.strip()
-    ]
+    parts = _reference_tokens(value)
     if not parts:
         return set()
     if len(parts) >= 3:
-        return _column_variants(parts[-3], parts[-2], parts[-1])
+        return _variants_from_tokens(parts[-3], parts[-2], parts[-1])
     if len(parts) == 2:
         qualifier, column_name = parts
         if qualifier in aliases:
             owner, object_name = aliases[qualifier]
-            return _column_variants(owner, object_name, column_name)
-        return _column_variants("", qualifier, column_name)
+            return _variants_from_tokens(owner, object_name, column_name)
+        return _variants_from_tokens("", qualifier, column_name)
     return {parts[0]}
 
 
@@ -227,7 +268,13 @@ def _node_column_variants(node: OntologyNode | None) -> set[str]:
         values.update(_raw_column_variants(technical))
         if "." not in technical:
             for owner, object_name in mapped_objects:
-                values.update(_column_variants(owner, object_name, technical))
+                values.update(
+                    _variants_from_tokens(
+                        catalog_match_key(owner) if owner.strip() else "",
+                        catalog_match_key(object_name) if object_name.strip() else "",
+                        object_match_key(technical),
+                    )
+                )
     return values
 
 
@@ -1477,11 +1524,10 @@ class OntologyQuerySessionService:
         allowed_short: set[str] = set()
         allowed_node_ids: set[str] = set()
         for physical in view.physical_objects:
-            short = _normalize_object_name(physical.object_name)
-            full = _normalize_object_name(
-                f"{physical.owner}.{physical.object_name}"
-                if physical.owner
-                else physical.object_name
+            # 物理 object はカタログ上の名前、SQL の表は引用規則の token で照合する（#573）。
+            short = catalog_match_key(physical.object_name)
+            full = (
+                catalog_match_key(physical.owner, physical.object_name) if physical.owner else short
             )
             allowed_short.add(short)
             allowed_full.add(full)
@@ -1491,8 +1537,8 @@ class OntologyQuerySessionService:
         for table in graph.tables:
             if table.is_cte:
                 continue
-            full = _normalize_object_name(table.qualified_name)
-            short = _normalize_object_name(table.name)
+            full = _sql_table_key(table)
+            short = _sql_part_token(table.name, quoted=table.name_quoted)
             explicitly_qualified = bool(table.catalog or table.owner)
             if (
                 explicitly_qualified
@@ -1519,13 +1565,13 @@ class OntologyQuerySessionService:
             if physical.node_id in intended_physical_ids
         ]
         intended_short_names = {
-            _normalize_object_name(physical.object_name) for physical in intended_objects
+            catalog_match_key(physical.object_name) for physical in intended_objects
         }
         intended_full_names = {
-            _normalize_object_name(
-                f"{physical.owner}.{physical.object_name}"
+            (
+                catalog_match_key(physical.owner, physical.object_name)
                 if physical.owner
-                else physical.object_name
+                else catalog_match_key(physical.object_name)
             )
             for physical in intended_objects
         }
@@ -1536,9 +1582,10 @@ class OntologyQuerySessionService:
             and intended_objects
             and (
                 bool(table.catalog or table.owner)
-                and _normalize_object_name(table.qualified_name) not in intended_full_names
+                and _sql_table_key(table) not in intended_full_names
                 or not bool(table.catalog or table.owner)
-                and _normalize_object_name(table.name) not in intended_short_names
+                and _sql_part_token(table.name, quoted=table.name_quoted)
+                not in intended_short_names
             )
         ]
         if extra_tables:
@@ -1770,12 +1817,12 @@ class OntologyQuerySessionService:
         def resolve_policy_target(column_key: str) -> tuple[set[str], str | None]:
             node = revision_nodes.get(column_key)
             if node is None:
-                normalized_key = _normalize_object_name(column_key)
+                normalized_key = object_match_key(column_key)
                 node = next(
                     (
                         candidate
                         for candidate in revision_nodes.values()
-                        if _normalize_object_name(candidate.technical_name) == normalized_key
+                        if object_match_key(candidate.technical_name) == normalized_key
                     ),
                     None,
                 )
@@ -2173,7 +2220,7 @@ class OntologyQuerySessionService:
                 normalized_granularity = dimension.granularity.strip().lower()
                 tokens = granularity_tokens.get(
                     normalized_granularity,
-                    {_normalize_object_name(dimension.granularity)},
+                    {dimension.granularity.replace('"', "").strip().upper()},
                 )
                 expression = graph.groups[matching_group_index].expression_sql.upper()
                 if not any(token in expression for token in tokens):
@@ -2276,15 +2323,15 @@ class OntologyQuerySessionService:
             if not table.is_cte
             and (
                 bool(table.catalog or table.owner)
-                and _normalize_object_name(table.qualified_name)
-                == _normalize_object_name(
-                    f"{physical.owner}.{physical.object_name}"
+                and _sql_table_key(table)
+                == (
+                    catalog_match_key(physical.owner, physical.object_name)
                     if physical.owner
-                    else physical.object_name
+                    else catalog_match_key(physical.object_name)
                 )
                 or not bool(table.catalog or table.owner)
-                and _normalize_object_name(table.name)
-                == _normalize_object_name(physical.object_name)
+                and _sql_part_token(table.name, quoted=table.name_quoted)
+                == catalog_match_key(physical.object_name)
             )
         }
         for entity in intent.entities:

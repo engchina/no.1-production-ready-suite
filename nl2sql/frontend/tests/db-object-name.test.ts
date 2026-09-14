@@ -3,12 +3,14 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
+  dbObjectKeyTokens,
   formatDbObjectName,
   formatDbObjectPart,
   formatEntitlementTargetName,
   normalizeDbIdentifierToken,
   normalizeDbObjectKey,
   splitDbObjectName,
+  sqlIdentifierToken,
 } from "../src/features/nl2sql/dbObjectIdentity.ts";
 import {
   objectMatches,
@@ -220,4 +222,20 @@ test("オントロジーの物理名は大文字化せず、引用名の node �
   );
   assert.notEqual(ontologyGraphObjectClusterKey(quoted), ontologyGraphObjectClusterKey(upper));
   assert.equal(ontologyGraphObjectClusterKey(upper), "object:SALES.MIXED_CASE");
+});
+
+test("dbObjectKeyTokens は SQL の表記を部分ごとの照合 token に分け、引用名だけ大文字小文字を保つ (#573)", () => {
+  assert.deepEqual(dbObjectKeyTokens('SALES."Mixed_Case"."Amount"'), ["SALES", '"Mixed_Case"', '"Amount"']);
+  assert.deepEqual(dbObjectKeyTokens("sales.mixed_case.amount"), ["SALES", "MIXED_CASE", "AMOUNT"]);
+  assert.deepEqual(dbObjectKeyTokens('"SALES"."A.B"'), ["SALES", '"A.B"']);
+  assert.deepEqual(dbObjectKeyTokens('SALES."broken'), []);
+  assert.deepEqual(dbObjectKeyTokens(""), []);
+});
+
+test("sqlIdentifierToken は SQL parser の識別子を引用の有無で解釈する (#573)", () => {
+  assert.equal(sqlIdentifierToken("Mixed_Case", true), '"Mixed_Case"');
+  assert.equal(sqlIdentifierToken("Mixed_Case", false), "MIXED_CASE");
+  assert.equal(sqlIdentifierToken("AMOUNT", true), "AMOUNT");
+  assert.equal(sqlIdentifierToken("", false), "");
+  assert.equal(sqlIdentifierToken(undefined, true), "");
 });

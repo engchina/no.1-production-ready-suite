@@ -455,6 +455,13 @@ export interface SqlSemanticItem {
   function_name?: string;
   clause?: string;
   is_cte?: boolean;
+  /**
+   * SQL で owner / 表（または別名）/ 列名が二重引用符で囲まれていたか。`SALES."Mixed_Case"` と
+   * 大文字の同名表 `SALES.MIXED_CASE` を区別して接地する（#573）。旧 artifact には無い。
+   */
+  owner_quoted?: boolean;
+  table_quoted?: boolean;
+  name_quoted?: boolean;
 }
 
 export interface SqlSemanticJoin extends SqlSemanticItem {

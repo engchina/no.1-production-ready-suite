@@ -186,6 +186,35 @@ def catalog_match_key(*parts: str) -> str:
         return ".".join(str(part or "") for part in parts)
 
 
+def split_match_key(key: str) -> list[str]:
+    """`object_match_key` / `catalog_match_key` の結果を部分 token に分ける。
+
+    引用名の中の `.`（`SALES."A.B"`）で分けない。引用符が壊れた値は `.` で単純に分ける。
+    """
+
+    try:
+        return _split_identifier_parts(key)
+    except ValueError:
+        return [part for part in str(key or "").split(".") if part]
+
+
+def object_part_name(value: str) -> str:
+    """入力 1 部分（`"Mixed_Case"` / `orders`）または照合 token を、カタログ上の名前にする。
+
+    `normalize_object_part` と同じ規則（引用名は引用符を外して大文字小文字を保ち、引用なしは
+    大文字）。SQL に `"..."` で埋め込む名前や、カタログの名前との比較に使う。不正な値は例外に
+    せず前後の空白を除いて返す（どの object にも一致しない）。
+    """
+
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    try:
+        return normalize_object_part(raw)
+    except ValueError:
+        return raw
+
+
 @dataclass(frozen=True, slots=True)
 class OracleObjectIdentity:
     """Owner-aware 的只读对象身份。"""
@@ -241,7 +270,9 @@ __all__ = [
     "normalize_object_part",
     "object_match_key",
     "object_name_tokens",
+    "object_part_name",
     "parse_object_identity",
     "qualified_object_name",
+    "split_match_key",
     "sql_identifier_token",
 ]

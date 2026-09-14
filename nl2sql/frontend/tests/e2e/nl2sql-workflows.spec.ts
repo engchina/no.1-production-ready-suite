@@ -6678,6 +6678,262 @@ test("未修飾列の単一表 SELECT は FROM 句の表だけを接地する", 
   });
 });
 
+test("引用名の表を参照する生成 SQL は大文字の同名表・同名列を接地しない (#573)", async ({ page }, testInfo) => {
+  await mockNl2SqlApi(page);
+  const questionText = "引用名の表の金額を表示";
+  const generatedSql = 'SELECT m."Amount", m.AMOUNT FROM SALES."Mixed_Case" m';
+  const columnNames = ["Amount", "AMOUNT"];
+  // backend の parse_oracle_sql は識別子ごとに引用の有無（*_quoted）を返す。
+  const sqlGraph = {
+    dialect: "oracle",
+    statement_type: "SELECT",
+    raw_sql: generatedSql,
+    ctes: [],
+    tables: [
+      {
+        id: "table-mixed-case",
+        scope_id: "scope_1",
+        owner: "SALES",
+        name: "Mixed_Case",
+        alias: "m",
+        qualified_name: "SALES.Mixed_Case",
+        source_sql: 'SALES."Mixed_Case" m',
+        owner_quoted: false,
+        name_quoted: true,
+        resolved_owner: "SALES",
+        resolved_qualified_name: 'SALES."Mixed_Case"',
+      },
+    ],
+    columns: [
+      {
+        id: "column-quoted-amount",
+        scope_id: "scope_1",
+        owner: "",
+        table: "m",
+        name: "Amount",
+        clause: "select",
+        expression_sql: 'm."Amount"',
+        owner_quoted: false,
+        table_quoted: false,
+        name_quoted: true,
+      },
+      {
+        id: "column-upper-amount",
+        scope_id: "scope_1",
+        owner: "",
+        table: "m",
+        name: "AMOUNT",
+        clause: "select",
+        expression_sql: "m.AMOUNT",
+        owner_quoted: false,
+        table_quoted: false,
+        name_quoted: false,
+      },
+    ],
+    projections: [
+      {
+        id: "projection-quoted-amount",
+        scope_id: "scope_1",
+        output_name: "Amount",
+        expression_sql: 'm."Amount"',
+        referenced_columns: ['m."Amount"'],
+      },
+      {
+        id: "projection-upper-amount",
+        scope_id: "scope_1",
+        output_name: "AMOUNT",
+        expression_sql: "m.AMOUNT",
+        referenced_columns: ["m.AMOUNT"],
+      },
+    ],
+    joins: [],
+    filters: [],
+    aggregates: [],
+    groups: [],
+    having: [],
+    orders: [],
+    windows: [],
+    limit: null,
+  };
+  // technical_name は backend の physical_identity_part と同じく、小文字を含む名前だけ引用する。
+  const identityPart = (name: string) => (name === name.toUpperCase() ? name : `"${name}"`);
+  const tableNode = (id: string, objectName: string, label: string) => ({
+    id,
+    kind: "table",
+    technical_name: `SALES.${identityPart(objectName)}`,
+    business_name_ja: label,
+    review_status: "approved",
+    metadata: { owner: "SALES", object_name: objectName },
+  });
+  const columnNode = (id: string, objectName: string, columnName: string, label: string) => ({
+    id,
+    kind: "column",
+    technical_name: `SALES.${identityPart(objectName)}.${identityPart(columnName)}`,
+    business_name_ja: label,
+    review_status: "approved",
+    metadata: { owner: "SALES", object_name: objectName, column_name: columnName },
+  });
+  const ontologyGraph = {
+    id: "revision-quoted",
+    nodes: [
+      tableNode("quoted-table", "Mixed_Case", "引用名の売上"),
+      tableNode("upper-table", "MIXED_CASE", "大文字の売上"),
+      columnNode("quoted-amount", "Mixed_Case", "Amount", "引用名の金額"),
+      columnNode("quoted-upper-amount", "Mixed_Case", "AMOUNT", "引用名の表の大文字列"),
+      columnNode("upper-amount", "MIXED_CASE", "AMOUNT", "大文字の金額"),
+    ],
+    edges: [],
+  };
+  const jobId = "job-quoted-grounding-573";
+
+  await page.unroute("**/api/nl2sql/jobs");
+  await page.route("**/api/nl2sql/jobs", (route) =>
+    fulfillJson(route, {
+      job_id: jobId,
+      status: "running",
+      created_at: "2026-09-14T10:00:00.000Z",
+      steps: [
+        { stage: "prepare_context", status: "done", elapsed_ms: 8 },
+        { stage: "generate_sql", status: "running", elapsed_ms: null },
+        { stage: "safety_check", status: "pending", elapsed_ms: null },
+        { stage: "execute_sql", status: "pending", elapsed_ms: null },
+        { stage: "format_results", status: "pending", elapsed_ms: null },
+      ],
+    })
+  );
+  await page.route(`**/api/nl2sql/jobs/${jobId}`, (route) =>
+    fulfillJson(route, {
+      job_id: jobId,
+      status: "done",
+      created_at: "2026-09-14T10:00:00.000Z",
+      started_at: "2026-09-14T10:00:00.000Z",
+      finished_at: "2026-09-14T10:00:00.050Z",
+      elapsed_ms: 50,
+      error_message: null,
+      steps: [
+        { stage: "prepare_context", status: "done", elapsed_ms: 8 },
+        { stage: "generate_sql", status: "done", elapsed_ms: 20 },
+        { stage: "safety_check", status: "done", elapsed_ms: 4 },
+        { stage: "execute_sql", status: "done", elapsed_ms: 12 },
+        { stage: "format_results", status: "done", elapsed_ms: 6 },
+      ],
+      timing: null,
+      result: {
+        history_id: "hist-quoted-grounding-573",
+        engine: "select_ai",
+        engine_meta: { profile: "mock_agent_profile" },
+        fallback_reason: "",
+        original_question: questionText,
+        rewritten_question: questionText,
+        generated_sql: generatedSql,
+        executable_sql: generatedSql,
+        explanation: "引用名の表の金額を取得します。",
+        safety: {
+          ...safety,
+          referenced_tables: ['SALES."Mixed_Case"'],
+          referenced_columns: ['SALES."Mixed_Case"."Amount"', 'SALES."Mixed_Case".AMOUNT'],
+        },
+        recommendations: [],
+        repaired_sql: "",
+        optimization_hints: [],
+        results: { columns: columnNames, rows: [{ Amount: 100, AMOUNT: 200 }], total: 1 },
+        timing,
+        interpretation: {
+          available: true,
+          question: {
+            available: true,
+            source: "deterministic",
+            original_question: questionText,
+            rewritten_question: questionText,
+            profile_id: "default",
+            profile_name: "PROFILE_ALL",
+            profile_category: "HR_ALL",
+            target_objects: ['SALES."Mixed_Case"'],
+            filters: [],
+            group_by: [],
+            order_by: [],
+            aggregations: [],
+            row_limit: null,
+            confidence: 0.9,
+            warnings: [],
+          },
+          sql: {
+            available: true,
+            source: "sql_semantics",
+            summary: 'SALES."Mixed_Case" を参照し、SELECT 操作を行います。',
+            statement_type: "SELECT",
+            tables: ['SALES."Mixed_Case"'],
+            columns: ['SALES."Mixed_Case"."Amount"', 'SALES."Mixed_Case".AMOUNT'],
+            joins: [],
+            filters: [],
+            aggregations: [],
+            group_by: [],
+            order_by: [],
+            limit: null,
+            logical_steps: ['SALES."Mixed_Case" を参照し、SELECT 操作を行います。'],
+            semantic_graph: sqlGraph,
+            warnings: [],
+          },
+          ontology_graph: ontologyGraph,
+          warnings: [],
+        },
+        show_prompt: null,
+      },
+    })
+  );
+  await page.route("**/api/nl2sql/profiles/default/ontology-view", (route) =>
+    fulfillJson(route, {
+      profile_ontology_view: {
+        id: "profile-view-quoted",
+        profile_id: "default",
+        ontology_revision_id: "revision-quoted",
+        node_ids: ontologyGraph.nodes.map((node) => node.id),
+        edge_ids: [],
+      },
+      ontology_graph: ontologyGraph,
+      materialized: true,
+      stale: false,
+      warnings_ja: [],
+    })
+  );
+
+  await page.goto("/query");
+  await nl2sqlQuestionInput(page).fill(questionText);
+  await page.getByRole("button", { name: "SQL を生成して実行" }).click();
+
+  const panel = page.getByTestId("nl2sql-sql-grounding-panel");
+  await expect(panel).toBeVisible();
+  // 表 1 + 列 2 = 3 件。`m.AMOUNT` は引用名の表の大文字列 AMOUNT に接地する。
+  await expect(panel).toContainText("SQL 全要素を接地");
+  await expect(panel).toContainText("SQL 要素 3 件を接地");
+
+  const grounded = (nodeId: string) =>
+    panel.getByTestId(`ontology-node-card-${nodeId}`).getAttribute("data-ontology-node-grounded");
+  for (const nodeId of ["quoted-table", "quoted-amount", "quoted-upper-amount"]) {
+    await expect
+      .poll(() => grounded(nodeId), { message: `接地すべきノード: ${nodeId}` })
+      .toBe("true");
+  }
+  for (const nodeId of ["upper-table", "upper-amount"]) {
+    const card = panel.getByTestId(`ontology-node-card-${nodeId}`);
+    if ((await card.count()) === 0) continue;
+    await expect
+      .poll(() => grounded(nodeId), { message: `接地してはならないノード: ${nodeId}` })
+      .toBe("false");
+  }
+  const list = panel.getByTestId("nl2sql-sql-grounding-list");
+  await expect(list).toContainText("引用名の売上");
+  await expect(list).not.toContainText("大文字の売上");
+  await expect(list).not.toContainText("大文字の金額");
+
+  await panel.screenshot({ path: testInfo.outputPath("sql-grounding-quoted-same-name.png") });
+
+  await page.setViewportSize({ width: 375, height: 900 });
+  await expect(panel).toBeVisible();
+  await expectNoHorizontalScroll(page);
+  await page.screenshot({ path: testInfo.outputPath("sql-grounding-quoted-same-name-375.png"), fullPage: true });
+});
+
 test("schema catalog が空のとき、ジョブ失敗からサンプルデータ投入で復旧できる", async ({ page }) => {
   await mockNl2SqlApi(page);
   let catalogPopulated = false;

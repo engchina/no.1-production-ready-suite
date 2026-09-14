@@ -18,9 +18,15 @@ from app.security.domain import Principal
 from app.security.permissions import SQL_EXECUTE_PERMISSION
 from app.security.request_actor import actor_scope
 
+from .object_identity import object_match_key, object_part_name
 from .ontology_definition_data_validation import quote_identifier
 from .ontology_definition_service import definition_fingerprint
-from .ontology_definition_validation import checked_expression, schema_objects
+from .ontology_definition_validation import (
+    checked_expression,
+    mapping_column_key,
+    mapping_object_key,
+    schema_objects,
+)
 from .ontology_definition_workspace import (
     ProfileOntologyWorkspaceService,
     authorize_definition_operation,
@@ -37,6 +43,7 @@ from .ontology_service import (
     OntologyNotFoundError,
     OntologyVersionConflictError,
 )
+from .ontology_sql_validation import identifier_token
 from .ontology_store import stable_ontology_id
 
 CAPABILITY_MANAGE = "nl2sql.ontology.capabilities.manage"
@@ -185,18 +192,29 @@ def checked_capability_sql(
     if {p.name for p in tree.find_all(exp.Placeholder)} - parameter_names:
         raise ValueError("未定義の SQL bind パラメーターがあります。")
     tables = list(tree.find_all(exp.Table))
+
+    def table_key(table: exp.Table) -> str:
+        # 引用規則の照合キー。大文字化すると `SALES."Mixed_Case"` だけの Profile で大文字の
+        # 同名表 `SALES.MIXED_CASE` も範囲内になる（#573）。
+        return f"{identifier_token(table.args.get('db'))}.{identifier_token(table.this)}"
+
     for table in tables:
-        if table.catalog or f"{table.db}.{table.name}".upper() not in schema:
+        if table.catalog or table_key(table) not in schema:
             raise ValueError("SQL の物理参照が Profile の範囲外です。")
     # 曖昧な列を実行へ渡さない。サブクエリ由来列は初版では明示的 backend 実装へ。
-    aliases = {t.alias_or_name.upper(): schema[f"{t.db}.{t.name}".upper()] for t in tables}
-    for column in tree.find_all(exp.Column):
-        candidates = [
-            cols
-            for alias, cols in aliases.items()
-            if not column.table or alias == column.table.upper()
+    aliases = {
+        identifier_token(t.args["alias"].this if t.args.get("alias") else t.this): schema[
+            table_key(t)
         ]
-        if sum(column.name.upper() in cols for cols in candidates) != 1:
+        for t in tables
+    }
+    for column in tree.find_all(exp.Column):
+        qualifier = identifier_token(column.args.get("table"))
+        name = identifier_token(column.this)
+        candidates = [
+            cols for alias, cols in aliases.items() if not qualifier or alias == qualifier
+        ]
+        if sum(name in cols for cols in candidates) != 1:
             raise ValueError("未許可または曖昧な列参照があります。")
     rendered = tree.sql(dialect="oracle")
     return (
@@ -262,12 +280,13 @@ class ProfileOntologyCapabilityService(ProfileOntologyWorkspaceService):
         if mapping.expression_sql:
             blocked("複合・計算ソースの直接更新には対応していません。")
         schema = self._schema(bundle.profile_id)
-        table = f"{mapping.owner}.{mapping.object_name}".upper()
+        table = mapping_object_key(mapping)
         source_objects = json.loads(
             str(self.runtime.prepare_build_schema_context(bundle.profile_id).schema_context)
         )["objects"]
         if not any(
-            f"{obj.get('owner', '')}.{obj.get('object_name', '')}".upper() == table
+            f"{object_match_key(str(obj.get('owner', '')))}."
+            f"{object_match_key(str(obj.get('object_name', '')))}" == table
             and obj.get("object_type") == "table"
             for obj in source_objects
         ):
@@ -278,11 +297,13 @@ class ProfileOntologyCapabilityService(ProfileOntologyWorkspaceService):
             if prop and prop.kind == "property" and len(prop.mappings) == 1:
                 m = prop.mappings[0]
                 if (
-                    f"{m.owner}.{m.object_name}".upper() == table
-                    and m.column_name.upper() in schema.get(table, set())
+                    mapping_object_key(m) == table
+                    and mapping_column_key(m) in schema.get(table, set())
                     and not m.expression_sql
                 ):
-                    columns[name] = m.column_name
+                    # 実行 SQL では `"..."` で囲むため、カタログ上の名前（`"Amount"` → Amount、
+                    # `amount` → AMOUNT）にする。
+                    columns[name] = object_part_name(m.column_name)
         if any(key not in columns for key in obj.primary_key):
             blocked("主キーの物理列 binding が必要です。")
         updates: dict[str, str] = {}
@@ -323,7 +344,10 @@ class ProfileOntologyCapabilityService(ProfileOntologyWorkspaceService):
         ):
             blocked("業務の前提条件を状態制約へ binding してください。")
         return {
-            "table": f"{quote_identifier(mapping.owner)}.{quote_identifier(mapping.object_name)}",
+            "table": (
+                f"{quote_identifier(object_part_name(mapping.owner))}."
+                f"{quote_identifier(object_part_name(mapping.object_name))}"
+            ),
             "columns": columns,
             "keys": obj.primary_key,
             "updates": updates,

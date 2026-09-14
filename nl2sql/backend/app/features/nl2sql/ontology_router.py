@@ -3056,6 +3056,7 @@ class OntologyApiRuntime:
                         from .ontology_unified_model import (
                             DEFINITIONS,
                             metric_definition_projection,
+                            physical_node_index,
                         )
 
                         definition = DEFINITIONS.validate_python([definition_raw])[0]
@@ -3064,7 +3065,7 @@ class OntologyApiRuntime:
                                 metric_definition_projection(
                                     definition,
                                     {n.technical_name: n.id for n in ontology.nodes},
-                                    {n.technical_name.upper(): n for n in ontology.nodes},
+                                    physical_node_index(ontology.nodes),
                                 )
                             )
                             continue
@@ -3389,10 +3390,12 @@ class OntologyApiRuntime:
             if value.strip()
         }
         node_by_id = {node.id: node for node in ontology.nodes}
-        node_by_technical = {node.technical_name.upper(): node for node in ontology.nodes}
+        # technical_name（`SALES."Mixed_Case".AMOUNT`）は引用規則の照合キーで引く。大文字化すると
+        # 大文字の同名表の列 policy と取り違える（#573）。
+        node_by_technical = {object_match_key(node.technical_name): node for node in ontology.nodes}
         policy_by_column: dict[tuple[str, str, str], ColumnQueryPolicy] = {}
         for key, column_policy in view.column_policies.items():
-            node = node_by_id.get(key) or node_by_technical.get(key.upper())
+            node = node_by_id.get(key) or node_by_technical.get(object_match_key(key))
             if node is None:
                 continue
             for mapping in node.physical_mappings:
