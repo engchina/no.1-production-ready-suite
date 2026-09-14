@@ -621,14 +621,22 @@ run_database_migrations() {
 
 wait_for_health() {
   local label="$1" url="$2" deadline=$((SECONDS + HEALTHCHECK_TIMEOUT_SECONDS))
+  local last_error="" last_status=0
   log "${label} health を待機します: ${url}"
   while true; do
-    if curl -fsS --max-time 5 "${url}" >/dev/null; then
+    # 起動直後の一時的な接続失敗は retry し、stderr は期限切れ時だけ表示する。
+    if last_error="$(curl -fsS --max-time 5 "${url}" 2>&1 >/dev/null)"; then
       log "${label} health を確認しました。"
       return 0
+    else
+      last_status=$?
     fi
     if [ "${SECONDS}" -ge "${deadline}" ]; then
-      fail "${label} health が ${HEALTHCHECK_TIMEOUT_SECONDS} 秒以内に成功しませんでした: ${url}"
+      if [ -n "${last_error}" ]; then
+        warn "${label} health の最終確認エラー (curl exit=${last_status}): ${last_error}"
+      fi
+      fail "${label} health が ${HEALTHCHECK_TIMEOUT_SECONDS} 秒以内に成功しませんでした (curl exit=${last_status}): ${url}"
+      return 1
     fi
     sleep "${HEALTHCHECK_INTERVAL_SECONDS}"
   done

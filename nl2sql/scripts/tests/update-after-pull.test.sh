@@ -392,6 +392,88 @@ test_root_lock_owner_transition() (
   exec 9>&-
 )
 
+test_health_retry_logging() (
+  local label="$1" scenario="$2"
+  local case_dir="${TEST_TMP_DIR}/health-${label}-${scenario}"
+  mkdir -p "${case_dir}"
+  # shellcheck source=/dev/null
+  source "${UPDATE_SCRIPT}"
+  HEALTHCHECK_TIMEOUT_SECONDS=0
+  HEALTHCHECK_INTERVAL_SECONDS=0
+  if [ "${scenario}" = "recovering" ]; then
+    HEALTHCHECK_TIMEOUT_SECONDS=10
+  fi
+  printf '0\n' > "${case_dir}/attempts"
+  curl() {
+    local attempts
+    attempts="$(cat "${case_dir}/attempts")"
+    attempts=$((attempts + 1))
+    printf '%s\n' "${attempts}" > "${case_dir}/attempts"
+    printf 'health-response-body\n'
+    case "${scenario}" in
+      immediate) return 0 ;;
+      recovering)
+        if [ "${attempts}" -gt 2 ]; then return 0; fi
+        printf 'curl: (7) Failed to connect\n' >&2
+        return 7
+        ;;
+      refused)
+        printf 'curl: (7) Failed to connect\n' >&2
+        return 7
+        ;;
+      http-error)
+        printf 'curl: (22) The requested URL returned error: 503\n' >&2
+        return 22
+        ;;
+      request-timeout)
+        printf 'curl: (28) Operation timed out\n' >&2
+        return 28
+        ;;
+    esac
+  }
+
+  local status=0
+  wait_for_health "${label}" "http://${label}.test/api/health" \
+    >"${case_dir}/output" 2>&1 || status=$?
+  if grep -Fq 'health-response-body' "${case_dir}/output"; then
+    fail_test "${label}/${scenario} leaked the health response body"
+  fi
+  grep -Fq "${label} health を待機します" "${case_dir}/output"
+  case "${scenario}" in
+    immediate|recovering)
+      [ "${status}" -eq 0 ] || fail_test "${label}/${scenario} did not recover"
+      grep -Fq "${label} health を確認しました" "${case_dir}/output"
+      if grep -Eq 'curl:|WARNING:|ERROR:' "${case_dir}/output"; then
+        fail_test "${label}/${scenario} leaked a transient health error"
+      fi
+      local expected_attempts=1
+      if [ "${scenario}" = "recovering" ]; then expected_attempts=3; fi
+      [ "$(cat "${case_dir}/attempts")" -eq "${expected_attempts}" ]
+      ;;
+    *)
+      [ "${status}" -ne 0 ] || fail_test "${label}/${scenario} unexpectedly succeeded"
+      grep -Fq "${label} health が 0 秒以内に成功しませんでした" "${case_dir}/output"
+      local expected_code=7 expected_error='Failed to connect'
+      case "${scenario}" in
+        http-error) expected_code=22; expected_error='503' ;;
+        request-timeout) expected_code=28; expected_error='Operation timed out' ;;
+      esac
+      grep -Fq "curl exit=${expected_code}" "${case_dir}/output"
+      grep -Fq "${expected_error}" "${case_dir}/output"
+      [ "$(grep -Fc 'curl:' "${case_dir}/output")" -eq 1 ]
+      if grep -Fq 'health を確認しました' "${case_dir}/output"; then
+        fail_test "${label}/${scenario} reported success on timeout"
+      fi
+      ;;
+  esac
+)
+
+for health_label in backend public; do
+  for health_scenario in immediate recovering refused http-error request-timeout; do
+    test_health_retry_logging "${health_label}" "${health_scenario}"
+  done
+done
+
 test_check_dispatch_is_non_mutating
 test_wallet_env_parser_does_not_source_secrets
 test_noninteractive_privilege_failure
