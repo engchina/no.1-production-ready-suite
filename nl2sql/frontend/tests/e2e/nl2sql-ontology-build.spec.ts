@@ -3037,3 +3037,85 @@ for (const theme of ["light", "dark"]) {
     });
   }
 }
+
+for (const terminal of ["succeeded", "failed", "cancelled"]) {
+  test(`構築処理中は既存定義を取り込めず終了後に復帰する (${terminal})`, async ({ page }, testInfo) => {
+    const state = await mockApi(page);
+    let status = terminal === "failed" ? "queued" : "running";
+    let imports = 0;
+    const payload = () => buildJob(status, status === "queued" ? "pending" : status === "running" ? "running" : terminal);
+    await page.route("**/api/nl2sql/profiles/*/ontology-build-jobs**", route => fulfillJson(route, { jobs: [payload().job] }));
+    await page.route("**/api/nl2sql/ontology-build/*", route => fulfillJson(route, payload()));
+    await page.route("**/ontology-markdown/migration-preview", route => {
+      imports += 1;
+      return fulfillJson(route, { id: "migration-1", markdown: generatedDraftMarkdown, draft_etag: state.draftMarkdownEtag, conflicts: [], applied: false });
+    });
+    await page.goto("/ontology-build?profile=default");
+    await expect(page.getByTestId("ontology-view-fetch")).toBeVisible();
+    await page.keyboard.press("Tab");
+    await expect(page.getByRole("link", { name: "本文へスキップ" })).toBeFocused();
+    await loadOntologyBuildWorkspace(page);
+    const importButton = page.getByRole("button", { name: "既存の定義を取り込む", exact: true });
+    await expect(importButton).toBeDisabled();
+    await importButton.evaluate(element => (element as HTMLButtonElement).click());
+    expect(imports).toBe(0);
+    if (terminal === "succeeded") {
+      const widths = testInfo.project.name === "desktop" ? [1280, 1920] : [375];
+      for (const width of widths) {
+        await page.setViewportSize({ width, height: 900 });
+        for (const theme of ["light", "dark"] as const) {
+          await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
+          await expect(importButton).toBeDisabled();
+          if (width === 1920) {
+            const title = await page.getByRole("heading", { name: "オントロジー構築", exact: true, level: 1 }).boundingBox();
+            const content = await page.locator("#ontology-query-playground-panel").boundingBox();
+            expect(title).not.toBeNull();
+            expect(content).not.toBeNull();
+            expect(Math.abs(title!.x - content!.x)).toBeLessThanOrEqual(1);
+          }
+          await importButton.scrollIntoViewIfNeeded();
+          await page.screenshot({ path: testInfo.outputPath(`import-disabled-${width}-${theme}.png`) });
+          expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+        }
+      }
+    }
+    status = terminal;
+    state.jobPolls = 2;
+    await expect(importButton).toBeEnabled();
+    await importButton.focus();
+    await expect(importButton).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect.poll(() => imports).toBe(1);
+  });
+}
+
+test("下書き未生成でも待機中なら既存定義を取り込める", async ({ page }) => {
+  await mockApi(page);
+  let imports = 0;
+  await page.route("**/ontology-markdown/migration-preview", route => {
+    imports += 1;
+    return fulfillJson(route, { id: "migration-empty", markdown: generatedDraftMarkdown, draft_etag: "", conflicts: [], applied: false });
+  });
+  await page.goto("/ontology-build?profile=default");
+  await loadOntologyBuildWorkspace(page);
+  await expect(page.getByTestId("ontology-markdown-draft-empty")).toBeVisible();
+  const importButton = page.getByRole("button", { name: "既存の定義を取り込む", exact: true });
+  await expect(importButton).toBeEnabled();
+  await importButton.click();
+  await expect.poll(() => imports).toBe(1);
+});
+
+test("取り込みプレビュー後に構築を開始すると反映も非活性になる", async ({ page }) => {
+  const state = await existingMarkdown(page);
+  let applied = 0;
+  await page.route("**/ontology-markdown/migration-preview", route => fulfillJson(route, { id: "migration-1", markdown: generatedDraftMarkdown, draft_etag: state.draftMarkdownEtag, conflicts: [], applied: false }));
+  await page.route("**/ontology-markdown/migrate", route => { applied += 1; return fulfillJson(route, markdownDraftPayload(generatedDraftMarkdown)); });
+  await page.route("**/api/nl2sql/ontology-build/*", route => fulfillJson(route, buildJob("running", "running")));
+  await page.getByRole("button", { name: "既存の定義を取り込む", exact: true }).click();
+  const apply = page.getByRole("button", { name: "Markdown 下書きに反映", exact: true });
+  await expect(apply).toBeEnabled();
+  await page.getByRole("button", { name: "AI 構築を実行", exact: true }).click();
+  await expect(apply).toBeDisabled();
+  await apply.evaluate(element => (element as HTMLButtonElement).click());
+  expect(applied).toBe(0);
+});

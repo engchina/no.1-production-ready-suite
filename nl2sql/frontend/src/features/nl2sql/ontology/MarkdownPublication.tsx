@@ -26,8 +26,8 @@ interface Preparation {
 }
 interface Migration { id: string; markdown: string; draft_etag: string; conflicts: string[]; applied: boolean }
 
-export function MarkdownPublication({ profileId, profileLabel, signature, disabled, save, onPublished, onMigrated, onBusyChange }: {
-  profileId: string; profileLabel: string; signature: string; disabled: boolean;
+export function MarkdownPublication({ profileId, profileLabel, signature, disabled, importDisabled, save, onPublished, onMigrated, onBusyChange }: {
+  profileId: string; profileLabel: string; signature: string; disabled: boolean; importDisabled: boolean;
   save: () => Promise<OntologyMarkdownState | null | undefined>;
   onPublished: (job: OntologyPublishJob) => void;
   onMigrated: (state: OntologyMarkdownState) => void;
@@ -66,6 +66,9 @@ export function MarkdownPublication({ profileId, profileLabel, signature, disabl
   const value = preparation.data;
   const dataValidationFailed = Number(value?.data_report?.errors ?? 0) > 0;
   const running = Boolean(value && ["queued", "running"].includes(value.status));
+  const importBlocked = importDisabled || Boolean(busy) || running || Boolean(execution.key);
+  const importBlockedRef = useRef(importBlocked);
+  importBlockedRef.current = importBlocked;
   useEffect(() => {
     onBusyChange(busy || running ? "markdown-check" : "");
     return () => onBusyChange("");
@@ -122,16 +125,17 @@ export function MarkdownPublication({ profileId, profileLabel, signature, disabl
     finally {setBusy("");}
   }
   async function previewMigration() {
+    if (importBlockedRef.current) return;
     setBusy("migration");setError("");
     try { const saved = await save(); if (!saved) return; setMigration(await apiPost<Migration>(`${endpoint}/migration-preview`, {})); }
     catch(e) {setError(e instanceof Error ? e.message : t("markdownOntology.failed"));}
     finally {setBusy("");}
   }
   async function applyMigration() {
-    if (!migration) return;
+    if (!migration || importBlockedRef.current) return;
     const consent = generation.current;
     if (!(await confirm({title:t("markdownOntology.import"),description:t("markdownOntology.importHint"),confirmLabel:t("markdownOntology.import"),tone:"info"}))) return;
-    if (consent !== generation.current) return;
+    if (consent !== generation.current || importBlockedRef.current) return;
     setBusy("migration");setError("");
     try { const result = await apiPost<OntologyMarkdownState>(`${endpoint}/migrate`, {preview_id:migration.id,draft_etag:migration.draft_etag}); if (!mounted.current) return; onMigrated(result); setMigration(null); }
     catch(e) {setError(e instanceof Error ? e.message : t("markdownOntology.failed"));}
@@ -140,7 +144,7 @@ export function MarkdownPublication({ profileId, profileLabel, signature, disabl
   return <div className="grid min-w-0 gap-3 border-t border-border pt-4" data-testid="ontology-publish-actions">
     <ContentActionBar ariaLabel={t("markdownOntology.actions")}>
       <Button icon={Upload} type="button" variant="primary" size="lg" disabled={disabled || Boolean(busy) || running || Boolean(execution.key)} loading={busy === "prepare" || running} onClick={() => void prepare()}>{t("profiles.ontologyBuild.publish")}</Button>
-      <Button icon={FileSearch} type="button" variant="secondary" size="lg" disabled={Boolean(busy) || running} onClick={() => void previewMigration()}>{t("markdownOntology.importPreview")}</Button>
+      <Button icon={FileSearch} type="button" variant="secondary" size="lg" disabled={importBlocked} onClick={() => void previewMigration()}>{t("markdownOntology.importPreview")}</Button>
     </ContentActionBar>
     {(error || preparation.isError) && <Banner severity="danger">{error || t("markdownOntology.refreshFailed")}</Banner>}
     {execution.key && <Button icon={RefreshCw} type="button" size="sm" variant="secondary" disabled={Boolean(busy)} onClick={() => void recover()}>{t("markdownOntology.checkOutcome")}</Button>}
@@ -173,7 +177,7 @@ export function MarkdownPublication({ profileId, profileLabel, signature, disabl
       <p>{t("markdownOntology.importHint")}</p>
       <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words rounded border border-border p-3 text-xs">{migration.markdown}</pre>
       {migration.conflicts.map((c,i)=><p key={i}>{c}</p>)}
-      <Button icon={Upload} type="button" variant="secondary" size="sm" disabled={Boolean(busy) || migration.applied} onClick={()=>void applyMigration()}>{t("markdownOntology.import")}</Button>
+      <Button icon={Upload} type="button" variant="secondary" size="sm" disabled={importBlocked || migration.applied} onClick={()=>void applyMigration()}>{t("markdownOntology.import")}</Button>
     </section>}
   </div>;
 }
