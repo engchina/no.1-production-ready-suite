@@ -150,7 +150,8 @@ export function ontologyGraphObjectClusterKey(node: OntologyNode): string | null
 }
 
 function enumParentClusterKey(node: OntologyNode, clusterByNodeId: Map<string, string>): string | null {
-  const parentId = node.enum_value_definition?.property_node_id;
+  const parentId = typeof node.metadata?.derived_from_definition_id === "string"
+    ? node.metadata.derived_from_definition_id : node.enum_value_definition?.property_node_id;
   return parentId ? clusterByNodeId.get(parentId) ?? null : null;
 }
 

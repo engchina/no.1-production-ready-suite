@@ -6,6 +6,8 @@ from collections.abc import Iterator
 from typing import Any, cast
 
 import sqlglot
+from rdflib import Literal
+from rdflib.namespace import XSD
 from sqlglot import exp
 from sqlglot.optimizer.scope import build_scope
 
@@ -23,6 +25,7 @@ from .ontology_definitions import (
     ProfileOntologyBundle,
     PropertyDefinition,
 )
+from .ontology_graph_semantics import XSD_TYPES
 from .ontology_sql_validation import (
     canonical_expression,
     expression_in_query,
@@ -158,6 +161,37 @@ def validate_definitions(
             error("DUPLICATE_NAME", "api_name", "概念名が重複しています。")
         if not item.id or sum(d.id == item.id for d in bundle.definitions) > 1:
             error("DUPLICATE_DEFINITION_ID", "id", "概念 ID は空でない一意な値が必要です。")
+        if isinstance(item, PropertyDefinition):
+            for field in ("value_type", "shared_property"):
+                target = definitions.get(getattr(item, field, ""))
+                if isinstance(target, PropertyDefinition) and target.data_type != item.data_type:
+                    error(
+                        "PROPERTY_DATA_TYPE_MISMATCH",
+                        field,
+                        f"{target.api_name} とデータ型が一致しません。",
+                    )
+            values = item.allowed_values
+            data_type = item.data_type
+            value_field = "allowed_values"
+        elif item.kind == "enumeration":
+            values = [member.code for member in item.values]
+            prop = definitions.get(item.property)
+            data_type = getattr(prop, "data_type", "")
+            value_field = "values"
+            if len(set(values)) != len(values):
+                error("ENUM_CODE_DUPLICATE", "values", "列挙コードが重複しています。")
+            if any(not member.code or not member.label_ja for member in item.values):
+                error("ENUM_MEMBER_INCOMPLETE", "values", "列挙コードと表示名が必要です。")
+        else:
+            values, data_type, value_field = [], "", ""
+        if data_type in XSD_TYPES:
+            for value in values:
+                if Literal(value, datatype=XSD[XSD_TYPES[data_type]]).ill_typed:
+                    error(
+                        "ALLOWED_VALUE_TYPE_INVALID",
+                        value_field,
+                        f"値 {value!r} は {data_type} の値ではありません。",
+                    )
         refs: list[tuple[str, str, set[str]]] = []
         if isinstance(item, ObjectTypeDefinition):
             refs.extend(

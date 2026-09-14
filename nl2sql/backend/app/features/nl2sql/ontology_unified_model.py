@@ -236,6 +236,8 @@ def legacy_definitions(graph: SchemaOntology) -> list[BusinessDefinition]:
     for node in graph.nodes:
         if node.kind.value in PHYSICAL_KINDS:
             continue
+        if node.kind.value == "enum_value" and node.metadata.get("derived_from_definition_id"):
+            continue  # 新形式の列挙メンバーは親 Enumeration の values に保存されている。
         if isinstance(node.metadata.get("definition"), dict):
             result.append(node.metadata["definition"])
             continue
@@ -597,6 +599,8 @@ def _join_conditions(sql: str, physical: dict[str, OntologyNode]) -> list[JoinCo
 def project_graph(
     base: SchemaOntology, definitions: list[BusinessDefinition], revision_id: str | None = None
 ) -> SchemaOntology:
+    from .ontology_graph_semantics import enum_graph_members, reference_semantics
+
     rid = revision_id or base.revision.id
     nodes = [
         n.model_copy(update={"revision_id": rid}, deep=True)
@@ -715,6 +719,7 @@ def project_graph(
             referenced = by_name.get(ref)
             if not referenced:
                 continue
+            edge_kind, predicate = reference_semantics(d, field)
             # Link Type 自体は辺。参照はその両端へ投影し、元の参照名も残す。
             targets = (
                 [by_name[n].id for n in (referenced.source, referenced.target) if n in by_name]
@@ -726,15 +731,24 @@ def project_graph(
                     OntologyEdge(
                         id=stable_ontology_id("concept_ref", d.id, field, ref, target_id),
                         revision_id=rid,
-                        kind="is_a" if field in {"implements", "extends"} else "uses",
+                        kind=edge_kind,
                         source_node_id=d.id,
                         target_node_id=target_id,
                         relationship_name_ja=FIELD_LABELS.get(field, field),
                         provenance=provenance,
                         review_status="approved",
-                        metadata={"reference_field": field, "reference_api_name": ref},
+                        metadata={
+                            "reference_field": field,
+                            "reference_api_name": ref,
+                            "semantic_predicate": predicate,
+                            "reference_definition_id": referenced.id,
+                            "reference_definition_kind": referenced.kind,
+                        },
                     )
                 )
+    enum_nodes, enum_edges = enum_graph_members(definitions, rid, provenance)
+    nodes.extend(enum_nodes)
+    edges.extend(enum_edges)
     return SchemaOntology(
         revision=base.revision.model_copy(update={"id": rid}),
         nodes=nodes,

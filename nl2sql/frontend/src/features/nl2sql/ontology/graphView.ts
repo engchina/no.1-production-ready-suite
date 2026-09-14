@@ -81,6 +81,10 @@ const GROUNDING_CONTEXT_EDGE_KINDS = new Set([
   "link_type",
   "uses",
   "is_a",
+  "domain",
+  "range",
+  "governs",
+  "has_value",
 ]);
 
 export function isOntologyDetailNodeKind(kind: string): boolean {
@@ -116,7 +120,7 @@ export function ontologyGraphForViewMode(
     return filterGraphByNodeIds(
       graph,
       new Set(
-        graph.nodes.filter((node) => PHYSICAL_ER_NODE_KINDS.has(node.kind)).map((node) => node.id)
+        graph.nodes.filter((node) => PHYSICAL_ER_NODE_KINDS.has(node.kind) && !node.metadata?.derived_from_definition_id).map((node) => node.id)
       )
     );
   }

@@ -2,7 +2,7 @@ import type { OntologyGraph, OntologyNodeKind } from "./types";
 
 export const conceptKinds = ["object_type", "property", "link_type", "interface", "function", "action_type", "shared_property", "value_type", "enumeration", "metric", "business_rule", "business_event", "object_set"] as const;
 export type ConceptKind = typeof conceptKinds[number];
-export function nodeConceptKind(kind: OntologyNodeKind): string {return kind === "business_entity" ? "object_type" : kind;}
+export function nodeConceptKind(kind: OntologyNodeKind): string {return kind === "business_entity" ? "object_type" : kind === "enum_value" ? "enumeration" : kind;}
 export function conceptGraph(graph: OntologyGraph, kind: string): OntologyGraph {
   if (!kind) return graph;
   const edges = graph.edges.filter(e => kind === "link_type" && (e.kind === "link_type" || e.kind === "business_relationship"));

@@ -1437,6 +1437,56 @@ test("サーバ検索結果のヒット一覧は最大高さを超えると縦�
   expect(invalidCoordinates).toEqual([]);
 });
 
+const typedSemanticGraph = {
+  nodes: [
+    { id: "object", kind: "object_type", business_name_ja: "受注", technical_name: "Order" },
+    { id: "property", kind: "property", business_name_ja: "状態", technical_name: "Order.status" },
+    { id: "value-type", kind: "value_type", business_name_ja: "状態コード型", technical_name: "StatusCode" },
+    { id: "enumeration", kind: "enumeration", business_name_ja: "受注状態", technical_name: "OrderStatus" },
+    { id: "member", kind: "enum_value", business_name_ja: "受付済", technical_name: "OrderStatus:OPEN", metadata: { derived_from_definition_id: "enumeration" }, enum_value_definition: { code: "OPEN", label_ja: "受付済", data_type: "string", physical_literal: "OPEN", property_node_id: "property" } },
+  ],
+  edges: [
+    { id: "domain", kind: "domain", source_node_id: "property", target_node_id: "object", relationship_name_ja: "所属オブジェクト", metadata: { semantic_predicate: "rdfs:domain" } },
+    { id: "range", kind: "range", source_node_id: "property", target_node_id: "value-type", relationship_name_ja: "値型", metadata: { semantic_predicate: "rdfs:range" } },
+    { id: "constraint", kind: "uses", source_node_id: "enumeration", target_node_id: "property", relationship_name_ja: "対象プロパティ" },
+    { id: "membership", kind: "has_value", source_node_id: "enumeration", target_node_id: "member", relationship_name_ja: "列挙メンバー", metadata: { semantic_predicate: "skos:hasTopConcept" } },
+  ],
+};
+
+for (const theme of ["light", "dark"]) {
+  for (const width of [1280, 1920]) {
+    test(`型付き意味グラフの列挙展開とキーボード選択 ${theme} ${width}`, async ({ page }, testInfo) => {
+      test.skip(testInfo.project.name !== "desktop" && width !== 1280, "モバイルは375幅で確認");
+      if (testInfo.project.name === "desktop") await page.setViewportSize({ width, height: 1000 });
+      await page.addInitScript((theme) => {
+        localStorage.setItem("production-ready-nl2sql.ui", JSON.stringify({ state: { sidebarCollapsed: false, collapsedSections: {}, theme }, version: 0 }));
+      }, theme);
+      await mockApi(page, { ontologyGraph: typedSemanticGraph });
+      await page.goto("/ontology-build?profile=default");
+      await expect(page.getByTestId("ontology-view-fetch")).toBeVisible();
+      await page.keyboard.press("Tab");
+      await expect(page.getByRole("link", { name: "本文へスキップ" })).toBeFocused();
+      await page.getByTestId("ontology-view-fetch").click();
+      const playground = page.getByRole("region", { name: "質問のオントロジー接地確認用グラフ" });
+      await openGraphIfCollapsed(page, playground);
+      await expect(playground.locator('.react-flow__edge[data-id="domain"]')).toHaveCount(1);
+      await expect(playground.locator('.react-flow__edge[data-id="range"]')).toHaveCount(1);
+      await playground.getByTestId("ontology-graph-details-toggle").check();
+      const filter = playground.getByRole("combobox", { name: "概念の種類", exact: true });
+      await filter.selectOption("enumeration");
+      await expect(playground.locator(".react-flow__node")).toHaveCount(2);
+      await expect(playground.locator('.react-flow__edge[data-id="membership"]')).toHaveCount(1);
+      const member = playground.locator('.react-flow__node[data-id="member"]');
+      await member.focus();
+      await page.keyboard.press("Enter");
+      await expect(member).toBeFocused();
+      await expect(playground.getByTestId("ontology-node-card-member")).toContainText("受付済");
+      await expectNoHorizontalScroll(page);
+      await playground.getByTestId("ontology-playground-graph-region").screenshot({ path: testInfo.outputPath(`typed-graph-${theme}-${width}.png`) });
+    });
+  }
+}
+
 // 各主要導線の最終状態で全テキスト・入力欄の字体継承を確認する。
 test.afterEach(async ({ page }, testInfo) => {
   if (testInfo.status === "skipped") return;

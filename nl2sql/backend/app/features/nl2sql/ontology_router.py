@@ -1455,7 +1455,12 @@ class OntologyApiRuntime:
                 if edge.kind == OntologyEdgeKind.DOMAIN and (
                     source_kind != OntologyNodeKind.PROPERTY
                     or target_kind
-                    not in {OntologyNodeKind.BUSINESS_ENTITY, OntologyNodeKind.BUSINESS_EVENT}
+                    not in {
+                        OntologyNodeKind.BUSINESS_ENTITY,
+                        OntologyNodeKind.BUSINESS_EVENT,
+                        OntologyNodeKind.OBJECT_TYPE,
+                        OntologyNodeKind.INTERFACE,
+                    }
                 ):
                     raise OntologyIntegrityError(
                         "ONTOLOGY_DOMAIN_ENDPOINT_INVALID",
@@ -1674,7 +1679,10 @@ class OntologyApiRuntime:
             enum_definition = node.enum_value_definition
             if enum_definition is not None:
                 target = node_by_id.get(enum_definition.property_node_id)
-                if target is None or target.kind != OntologyNodeKind.PROPERTY:
+                if target is None or target.kind not in {
+                    OntologyNodeKind.PROPERTY,
+                    OntologyNodeKind.SHARED_PROPERTY,
+                }:
                     finding_codes.append(f"{node.id}:ENUM_PROPERTY_UNKNOWN")
         if finding_codes:
             raise OntologyGateBlockedError(
@@ -4778,12 +4786,26 @@ class OntologyApiRuntime:
             for edge in ontology.edges:
                 if (
                     edge.source_node_id in safe
-                    and edge.kind in {OntologyEdgeKind.USES, OntologyEdgeKind.IS_A}
+                    and edge.kind
+                    in {
+                        OntologyEdgeKind.USES,
+                        OntologyEdgeKind.IS_A,
+                        OntologyEdgeKind.DOMAIN,
+                        OntologyEdgeKind.RANGE,
+                        OntologyEdgeKind.GOVERNS,
+                    }
                     and edge.target_node_id not in safe | (node_ids - typed.keys())
                 ):
                     safe.remove(edge.source_node_id)
                     changed = True
         node_ids = (node_ids - typed.keys()) | safe
+        # 列挙メンバーは定義から派生するため、親が範囲内の場合だけ含める。
+        for node in ontology.nodes:
+            parent = node.metadata.get("derived_from_definition_id")
+            if parent:
+                node_ids.discard(node.id)
+                if node.id in base.node_ids and parent in safe:
+                    node_ids.add(node.id)
         edges = [
             edge
             for edge in ontology.edges

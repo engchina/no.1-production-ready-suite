@@ -52,6 +52,28 @@ Interface の接地は下位の継承・実装を辿る。子 Interface の検�
 
 グラフには12種類の型付きノードと Link Type の選択可能な関係辺を投影する。Markdown と概念 ID を共有し、定義の説明・型固有フィールド・マッピング・証拠を詳細に表示する。「概念の種類」は主要6／補助7にまとめ、存在しない種類は該当なしとする。全体／接地パス／物理 ER を維持し、Function / Action の詳細に実行ボタンを出さない。物理マッピングを持たない概念は参照先のオブジェクト付近へ配置する。
 
+## 型付き graph の意味と検証
+
+新規構築・Markdown 公開では同じ `definitions` から次を投影する。保存済み snapshot は書き換えない。
+
+| 定義・情報 | graph / RDF / SHACL への反映 |
+| --- | --- |
+| Object Type / Interface | OWL Class。Interface の `extends` は `rdfs:subClassOf`、実装契約は `ont:implementsInterface` として区別する。 |
+| Property | 所属 object への `domain` 辺と `rdfs:domain`。基本型または Value Type を `rdfs:range` に出力する。 |
+| Shared Property / Value Type | 再利用参照と基本データ型を保持する。具体 Property に許容値を適用する。構造化 `object` の値型は独自語彙に保持し、XSD の基本型とは扱わない。 |
+| Enumeration | SKOS ConceptScheme と、定義 ID・コードから安定 ID を作る Concept メンバー。`skos:hasTopConcept` / `skos:inScheme` / `skos:notation`。メンバーは13分類の追加定義として数えず、「列・列挙値を表示」で展開する。 |
+| Function / Metric | `ont:dependsOn`、指標の `ont:hasGrain` / `ont:timeProperty`、式・集計・単位等の宣言。 |
+| Action / Event / Object Set | 所属 object、影響属性、時刻属性などを具体的な述語で参照する。実行操作は提供しない。 |
+| Business Rule | `ont:appliesTo` と条件式の宣言。SQL 文字列を自動で SHACL に変換しない。 |
+| Link Type | 選択可能な関係辺・OWL ObjectProperty。別定義からの必須リンク参照は、RDF では両端 object ではなくリンク自体の IRI を参照する。 |
+| 根拠・物理対応 | `prov:wasDerivedFrom` で資料 ID・位置・引用・検証状態へ接続する。物理マッピングは owner / object / column / SQL 式を保持する独立リソースにする。R2RML の実行系を導入するものではない。 |
+
+SHACL は具体 Property の基本型、必須値（主識別子を含む）、許容値と列挙範囲、Link Type の対象クラス・任意性・両方向の最大基数を検査する。共有属性の列挙制約は、それを参照する具体 Property に適用する。未知の基本型や任意 SQL の意味を推測して「検証済み」にしない。OWL の推論と、対象データに対する SHACL の適合検査は別の処理である。定義グラフだけの SHACL 成功は実 DB の全行が適合することを保証しない。
+
+列挙コードの重複・型に合わない許容値・共有型との不一致は対象定義とフィールド付きで報告する。Enum メンバーから旧形式へ変換して定義を二重生成せず、範囲を絞った検索では親定義と所属 object の範囲を守る。物理 ER には型付き定義から派生した Enum メンバーを混在させない。
+
+語彙の参照: [OWL 2](https://www.w3.org/TR/owl2-primer/)、[SKOS](https://www.w3.org/TR/skos-reference/)、[SHACL](https://www.w3.org/TR/shacl/)、[PROV-O](https://www.w3.org/TR/prov-o/)。`ont:*` は本システムの語彙であり、これらの標準述語とは区別する。
+
 ## 既存データの移行と廃止 API
 
 `POST .../migration-preview` は既存の定義を現在の Markdown へ取り込む内容を返す。`POST .../migrate` は preview ID と ETag を確認して下書きへ反映する。手書き本文と競合を残し、自動公開しない。概念 ID と移行マーカーにより再適用・応答喪失後の追跡で本文を重複追加しない。草稿がなければ新しい草稿を作る。過去の artifact は更新しない。

@@ -845,6 +845,12 @@ def migrate_profile_ontology_view(
         selected_node_ids.update(
             node.id for node in ontology.nodes if node.metadata.get("definition")
         )
+        selected_node_ids.update(
+            node.id
+            for node in ontology.nodes
+            if node.kind == OntologyNodeKind.ENUM_VALUE
+            and node.metadata.get("derived_from_definition_id") in selected_node_ids
+        )
     selected_edges = [
         edge
         for edge in ontology.edges
@@ -1022,7 +1028,10 @@ def retrieve_ontology_nodes(
             # 降り直すと、その上位だけを実装する別 object まで誤接地する。
             reverse_interface = (
                 source_node.kind == OntologyNodeKind.INTERFACE
-                and edge.kind == OntologyEdgeKind.IS_A
+                and (
+                    edge.kind == OntologyEdgeKind.IS_A
+                    or edge.metadata.get("reference_field") == "implements"
+                )
                 and edge.target_node_id == source_id
             )
             if (
@@ -1031,11 +1040,26 @@ def retrieve_ontology_nodes(
                 and not reverse_interface
             ):
                 continue
-            target = edge.source_node_id if reverse_interface else edge.target_node_id
+            reverse_member = (
+                source_node.kind == OntologyNodeKind.ENUM_VALUE
+                and edge.kind == OntologyEdgeKind.HAS_VALUE
+                and edge.target_node_id == source_id
+                and edge.source_node_id == source_node.metadata.get("derived_from_definition_id")
+            )
+            reverse = reverse_interface or reverse_member
+            target = edge.source_node_id if reverse else edge.target_node_id
             if (
                 edge.id not in profile_view.edge_ids
-                or (edge.source_node_id != source_id and not reverse_interface)
-                or edge.kind not in {OntologyEdgeKind.USES, OntologyEdgeKind.IS_A}
+                or (edge.source_node_id != source_id and not reverse)
+                or edge.kind
+                not in {
+                    OntologyEdgeKind.USES,
+                    OntologyEdgeKind.IS_A,
+                    OntologyEdgeKind.DOMAIN,
+                    OntologyEdgeKind.RANGE,
+                    OntologyEdgeKind.GOVERNS,
+                    OntologyEdgeKind.HAS_VALUE,
+                }
                 or target not in allowed_ids
             ):
                 continue

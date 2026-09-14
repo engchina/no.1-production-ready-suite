@@ -21,7 +21,7 @@ from .ontology_models import (
     ProfileOntologyView,
 )
 
-ONTOLOGY_RENDERER_VERSION = "ontology-semantic-renderer/1"
+ONTOLOGY_RENDERER_VERSION = "ontology-semantic-renderer/2"
 _PREFIXES = """@prefix ont: <urn:nl2sql:ontology:> .
 @prefix owl: <http://www.w3.org/2002/07/owl#> .
 @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
@@ -29,6 +29,7 @@ _PREFIXES = """@prefix ont: <urn:nl2sql:ontology:> .
 @prefix sh: <http://www.w3.org/ns/shacl#> .
 @prefix skos: <http://www.w3.org/2004/02/skos/core#> .
 @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix prov: <http://www.w3.org/ns/prov#> .
 """
 
 _NODE_KIND_LABELS_JA: dict[OntologyNodeKind, str] = {
@@ -114,6 +115,9 @@ def _label_lines(subject: str, node: OntologyNode) -> list[str]:
 
 
 def serialize_owl_turtle(ontology: SchemaOntology) -> str:
+    from .ontology_graph_semantics import REFERENCE_PREDICATES
+    from .ontology_typed_rdf import typed_rdf_lines
+
     lines = [_PREFIXES.rstrip(), ""]
     nodes = [node for node in ontology.nodes if node.review_status == OntologyReviewStatus.APPROVED]
     node_by_id = {node.id: node for node in nodes}
@@ -135,9 +139,22 @@ def serialize_owl_turtle(ontology: SchemaOntology) -> str:
             OntologyNodeKind.METRIC: "ont:Metric",
             OntologyNodeKind.BUSINESS_RULE: "ont:BusinessRule",
             OntologyNodeKind.BUSINESS_TERM: "skos:Concept",
+            OntologyNodeKind.SCHEMA: "ont:Schema",
+            OntologyNodeKind.TABLE: "ont:Table",
+            OntologyNodeKind.VIEW: "ont:View",
+            OntologyNodeKind.COLUMN: "ont:Column",
         }.get(node.kind)
         if node_type is None:
             continue
+        definition = node.metadata.get("definition")
+        definition = definition if isinstance(definition, dict) else {}
+        if (
+            node.kind in {OntologyNodeKind.PROPERTY, OntologyNodeKind.SHARED_PROPERTY}
+            and definition.get("data_type") == "object"
+        ):
+            node_type = "owl:ObjectProperty"
+        if node.kind == OntologyNodeKind.VALUE_TYPE and definition.get("data_type") == "object":
+            node_type = "ont:ValueType"
         lines.append(f"{subject} rdf:type {node_type} .")
         lines.extend(_label_lines(subject, node))
         if node.enum_value_definition is not None:
@@ -159,7 +176,16 @@ def serialize_owl_turtle(ontology: SchemaOntology) -> str:
             continue
         source = stable_node_iri(edge.source_node_id)
         target = stable_node_iri(edge.target_node_id)
-        if edge.kind == OntologyEdgeKind.IS_A:
+        semantic_predicate = edge.metadata.get("semantic_predicate")
+        if edge.metadata.get("reference_definition_kind") == "link_type":
+            continue  # 辺の定義への参照は typed_rdf_lines が直接出力する。
+        if isinstance(semantic_predicate, str) and semantic_predicate in {
+            *REFERENCE_PREDICATES.values(),
+            "skos:hasTopConcept",
+            "rdfs:domain",
+        }:
+            lines.append(f"{source} {semantic_predicate} {target} .")
+        elif edge.kind == OntologyEdgeKind.IS_A:
             lines.append(f"{source} rdfs:subClassOf {target} .")
         elif edge.kind == OntologyEdgeKind.DOMAIN:
             lines.append(f"{source} rdfs:domain {target} .")
@@ -181,6 +207,7 @@ def serialize_owl_turtle(ontology: SchemaOntology) -> str:
             lines.append(f"{predicate} rdfs:label {_literal(edge.relationship_name_ja)} .")
             lines.append(f"{predicate} rdfs:domain {source} .")
             lines.append(f"{predicate} rdfs:range {target} .")
+    lines.extend(typed_rdf_lines(ontology))
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -224,6 +251,8 @@ def _shape_for_expression(expression: BusinessRuleExpression) -> str:
 
 
 def serialize_shacl_turtle(ontology: SchemaOntology) -> str:
+    from .ontology_typed_rdf import typed_shacl_lines
+
     lines = [_PREFIXES.rstrip(), ""]
     approved_nodes = {
         node.id: node
@@ -238,7 +267,9 @@ def serialize_shacl_turtle(ontology: SchemaOntology) -> str:
     }
     enum_by_property: dict[str, list[OntologyNode]] = {}
     for node in approved_nodes.values():
-        if node.enum_value_definition is not None:
+        if node.enum_value_definition is not None and not node.metadata.get(
+            "derived_from_definition_id"
+        ):
             enum_by_property.setdefault(node.enum_value_definition.property_node_id, []).append(
                 node
             )
@@ -293,6 +324,7 @@ def serialize_shacl_turtle(ontology: SchemaOntology) -> str:
                 "",
             ]
         )
+    lines.extend(typed_shacl_lines(ontology))
     return "\n".join(lines).rstrip() + "\n"
 
 
