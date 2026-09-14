@@ -369,17 +369,18 @@ function ProfileList({
         icon={UserCog}
         title={t("profiles.list.title")}
         description={t("profiles.list.hint")}
-        action={
-          <StatusBadge icon={false} variant="info" label={t("profiles.objects.count", { count: totalCount })} />
-        }
       />
-      <div className="grid gap-2 rounded-md border border-border bg-surface-sunken p-3">
+      {/* 一覧の toolbar。検索欄だけを行全体に伸ばさず、件数と 2:1 で同じ行に置く。 */}
+      <div className="grid gap-2 rounded-md border border-border bg-surface-sunken p-3 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] lg:items-end lg:gap-x-6">
         <DbManagementSearchField
           label={t("profiles.list.search")}
           placeholder={t("profiles.list.searchPlaceholder")}
           value={search}
           onChange={onSearchChange}
         />
+        <div className="flex min-h-10 items-center lg:justify-end">
+          <StatusBadge icon={false} variant="info" label={t("profiles.objects.count", { count: totalCount })} />
+        </div>
       </div>
       {loading ? (
         <div className="grid gap-2" data-testid="profile-list-skeleton">
@@ -441,7 +442,7 @@ function ProfileList({
           selectedRowKey={selectedProfileId}
           onRowClick={onSelect}
           testId="profile-management-grid"
-          tableClassName="w-full min-w-0 max-w-[34rem] table-fixed"
+          tableClassName="w-full min-w-0 table-fixed"
           // 名前・カテゴリの 2 行セルが並ぶ一覧。横スクロールは出さず、縦だけ内部スクロールにする。
           className="max-h-[20rem] max-w-full overflow-x-hidden md:max-h-[30.5rem]"
           scrollAriaLabel={t("profiles.list.scrollLabel")}

@@ -37,7 +37,6 @@ import { useUpdateUploadStorageSettings, useUploadStorageSettings } from "@/lib/
 import { APP_ROUTES } from "@/lib/routes";
 import { useSettingsDraftGuard } from "@/lib/useSettingsDraftGuard";
 import { cn } from "@/lib/utils";
-import { READABLE_FORM_WIDTH } from "@/lib/form-layout";
 
 interface UploadStorageForm {
   backend: UploadStorageBackend;
@@ -194,7 +193,7 @@ export function UploadStorageSettingsClient() {
               </div>
             </div>
           </CardHeader>
-          <CardContent className={`space-y-5 ${READABLE_FORM_WIDTH}`}>
+          <CardContent className="space-y-5">
             <fieldset className="space-y-3">
               <legend className="text-sm font-medium text-fg">
                 {t("settings.uploadStorage.field.backend")}
@@ -234,7 +233,8 @@ export function UploadStorageSettingsClient() {
               />
             ) : (
               <div className="space-y-4">
-                <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+                {/* リージョン・ネームスペース・バケットは短い値なので、広い画面（2xl）では 1 行に並べる。 */}
+                <div className="grid grid-cols-1 gap-x-6 gap-y-4 lg:grid-cols-2 2xl:grid-cols-3">
                   <SelectField
                     id="upload-storage-object-storage-region"
                     label={t("settings.uploadStorage.field.objectStorageRegion")}
@@ -259,17 +259,18 @@ export function UploadStorageSettingsClient() {
                     readOnly
                     required requiredLabel={t("common.required")}
                   />
+                  <TextField
+                    id="upload-storage-bucket"
+                    label={t("settings.uploadStorage.field.objectStorageBucket")}
+                    value={form.objectStorageBucket}
+                    onValueChange={(value) => updateForm({ objectStorageBucket: value })}
+                    helper={t("settings.uploadStorage.helper.objectStorageBucket")}
+                    placeholder={DEFAULT_OBJECT_STORAGE_BUCKET}
+                    error={errors.objectStorageBucket}
+                    required requiredLabel={t("common.required")}
+                    className="lg:col-span-full 2xl:col-span-1"
+                  />
                 </div>
-                <TextField
-                  id="upload-storage-bucket"
-                  label={t("settings.uploadStorage.field.objectStorageBucket")}
-                  value={form.objectStorageBucket}
-                  onValueChange={(value) => updateForm({ objectStorageBucket: value })}
-                  helper={t("settings.uploadStorage.helper.objectStorageBucket")}
-                  placeholder={DEFAULT_OBJECT_STORAGE_BUCKET}
-                  error={errors.objectStorageBucket}
-                  required requiredLabel={t("common.required")}
-                />
                 {ociSettingsMissing ? (
                   <div className="flex flex-wrap items-center gap-3 rounded-md border border-warning-border bg-warning-subtle p-3">
                     <FormStatus

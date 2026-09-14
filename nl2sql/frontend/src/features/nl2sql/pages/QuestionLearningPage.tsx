@@ -757,7 +757,8 @@ function TrainingDataPanel({
         <CompactFact label={t("qcm.training.filtered")} value={formatNumber(examples.length)} />
       </div>
 
-      <div className="grid gap-3 rounded-md border border-border bg-surface-sunken p-3">
+      {/* 取込: ファイル選択（2）と置換オプション（1）を同じ行に置き、ドロップゾーンだけを行全体に伸ばさない。 */}
+      <div className="grid gap-3 rounded-md border border-border bg-surface-sunken p-3 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] lg:items-center lg:gap-x-6">
         <FileDropzone
           label={t("qcm.training.file")}
           accept={XLSX_TEMPLATE_FILE_FORMATS.accept}
@@ -783,12 +784,6 @@ function TrainingDataPanel({
           />
           <span>{t("learning.classifier.replace")}</span>
         </label>
-        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
-          <a className={linkButtonClass} href="/api/nl2sql/classifier/training-data/export.xlsx">
-            <Download size={16} aria-hidden="true" />
-            <span>{t("learning.classifier.exportXlsx")}</span>
-          </a>
-        </div>
       </div>
 
       {importSummary && (
@@ -807,12 +802,21 @@ function TrainingDataPanel({
       ))}
 
       <div className="grid gap-3">
-        <DbManagementSearchField
-          label={t("dbAdmin.search.label")}
-          placeholder={t("qcm.training.searchPlaceholder")}
-          value={search}
-          onChange={onSearchChange}
-        />
+        {/* 一覧の toolbar: 検索欄（2）と一覧全体の操作（XLSX 出力, 1）を同じ行に置く。 */}
+        <div className="grid gap-3 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] lg:items-end lg:gap-x-6">
+          <DbManagementSearchField
+            label={t("dbAdmin.search.label")}
+            placeholder={t("qcm.training.searchPlaceholder")}
+            value={search}
+            onChange={onSearchChange}
+          />
+          <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap lg:justify-end">
+            <a className={linkButtonClass} href="/api/nl2sql/classifier/training-data/export.xlsx">
+              <Download size={16} aria-hidden="true" />
+              <span>{t("learning.classifier.exportXlsx")}</span>
+            </a>
+          </div>
+        </div>
         <TrainingDataTable
           examples={examples}
           hasFilter={Boolean(search.trim())}
@@ -1292,7 +1296,7 @@ function TrainingCandidatesPanel({
       </div>
 
       <form
-        className="grid gap-3 rounded-md border border-border bg-surface-sunken p-3 md:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_13rem_16rem_auto] xl:items-end"
+        className="grid gap-3 rounded-md border border-border bg-surface-sunken p-3 md:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_13rem_16rem_auto] xl:items-end 2xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)_auto]"
         data-testid="qcm-candidate-filters"
         onSubmit={(event) => {
           event.preventDefault();

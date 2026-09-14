@@ -74,9 +74,10 @@ async function expectProfileListNoHorizontalOverflow(page: Page) {
   );
   expect(nameCellOverflow).toEqual([]);
   if (viewportWidth >= 768) {
-    expect(metrics.gridWidth).toBeLessThanOrEqual(34 * 16 + 1);
+    // wide 画面ではカードの中身も 100% を使う（#575）。一覧の表は幅を止めず、一覧の枠いっぱいに広げる。
     expect(Math.abs(metrics.gridLeft - metrics.listLeft)).toBeLessThanOrEqual(1);
-    expect(metrics.listRight - metrics.lastHeaderRight).toBeGreaterThan(80);
+    expect(metrics.gridWidth).toBeGreaterThanOrEqual(metrics.listOffsetWidth - 2);
+    expect(metrics.lastHeaderRight).toBeLessThanOrEqual(metrics.listRight + 1);
   }
 }
 

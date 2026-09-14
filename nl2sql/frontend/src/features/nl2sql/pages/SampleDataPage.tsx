@@ -394,7 +394,8 @@ export function SampleDataPage() {
           }
         />
 
-        <section className="grid min-w-0 gap-2" aria-label={t("dataTools.sample.dataset.label")}>
+        {/* 種類の選択（1）と、その説明・クエリ例（2）を同じ行に置き、選択欄だけを左に残さない。 */}
+        <section className="grid min-w-0 gap-2 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)] lg:items-end lg:gap-x-6" aria-label={t("dataTools.sample.dataset.label")}>
           <label className="grid gap-1 text-sm font-medium text-fg">
             <span>{t("dataTools.sample.dataset.label")}</span>
             <select
@@ -411,13 +412,15 @@ export function SampleDataPage() {
                 setSchemaRefreshJobId("");
                 setDataset(event.currentTarget.value as SampleDataset);
               }}
-              className="min-h-11 w-full min-w-0 rounded-md border border-border-control bg-surface px-3 py-2 focus:border-focus-ring focus:ring-2 focus:ring-focus-ring sm:max-w-md"
+              className="min-h-11 w-full min-w-0 rounded-md border border-border-control bg-surface px-3 py-2 focus:border-focus-ring focus:ring-2 focus:ring-focus-ring"
             >
               {SAMPLE_DATASETS.map((item) => <option key={item} value={item}>{t(`dataTools.sample.dataset.${item}`)}</option>)}
             </select>
           </label>
-          <p id="sample-data-dataset-description" className="text-sm text-fg-muted">{t(`dataTools.sample.dataset.${dataset}.description`)}</p>
-          <p className="text-sm text-fg-muted">{t(`dataTools.sample.dataset.${dataset}.example`)}</p>
+          <div className="grid min-w-0 gap-1 lg:min-h-11 lg:content-center">
+            <p id="sample-data-dataset-description" className="text-sm text-fg-muted">{t(`dataTools.sample.dataset.${dataset}.description`)}</p>
+            <p className="text-sm text-fg-muted">{t(`dataTools.sample.dataset.${dataset}.example`)}</p>
+          </div>
         </section>
 
         <DbObjectManagementTabs

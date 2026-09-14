@@ -74,7 +74,6 @@ import {
 import { useSettingsDraftGuard } from "@/lib/useSettingsDraftGuard";
 import { cn } from "@/lib/utils";
 import { ExecutionConfirmationField } from "@/features/nl2sql/components/DbAdminShared";
-import { READABLE_FORM_WIDTH } from "@/lib/form-layout";
 
 interface DatabaseSettingsForm {
   user: string;
@@ -396,8 +395,10 @@ export function DatabaseSettingsClient() {
               </div>
             </CardHeader>
 
-            <CardContent className={`space-y-5 p-6 ${READABLE_FORM_WIDTH}`}>
-              <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            <CardContent className="space-y-5 p-6">
+              {/* 接続情報は 2 列の grid。意味のペア（ユーザー / パスワード、接続方式 / Wallet ZIP、Wallet パスワード / サービス）を
+                  入力順のまま同じ行に置き、チェックボックスと案内は全幅にする。 */}
+              <div className="grid grid-cols-1 gap-x-6 gap-y-4 lg:grid-cols-2">
                 <TextField
                   id="oracle-user"
                   label={t("settings.database.field.dbUser")}
@@ -423,14 +424,15 @@ export function DatabaseSettingsClient() {
                   onToggleVisible={() => void togglePasswordVisible(settings)}
                   onChange={(value) => updateForm({ password: value })}
                 />
-              </div>
 
               {settings.has_password ? (
-                <SecretClearCheckbox
-                  checked={form.clearPassword}
-                  onChange={updatePasswordClear}
-                  label={t("settings.database.secrets.clearPassword")}
-                />
+                <div className="lg:col-span-full">
+                  <SecretClearCheckbox
+                    checked={form.clearPassword}
+                    onChange={updatePasswordClear}
+                    label={t("settings.database.secrets.clearPassword")}
+                  />
+                </div>
               ) : null}
 
               <SelectField<DatabaseConnectionSecurity>
@@ -454,7 +456,8 @@ export function DatabaseSettingsClient() {
               />
 
               {form.connectionSecurity === "wallet_mtls" ? (
-                <div className="space-y-4">
+                <>
+                  <div className="min-w-0">
                   <WalletUploadField
                     disabled={operationBusy}
                     settings={settings}
@@ -473,6 +476,7 @@ export function DatabaseSettingsClient() {
                       downloadWallet();
                     }}
                   />
+                  </div>
 
                   <PasswordField
                     id="oracle-wallet-password"
@@ -501,29 +505,41 @@ export function DatabaseSettingsClient() {
                     onChange={(value) => updateForm({ walletPassword: value })}
                   />
 
-                  {settings.has_wallet_password ? (
-                    <SecretClearCheckbox
-                      checked={form.clearWalletPassword}
-                      onChange={updateWalletPasswordClear}
-                      label={t("settings.database.secrets.clearWalletPassword")}
-                    />
-                  ) : null}
-                </div>
-              ) : (
-                <FormStatus
-                  tone="info"
-                  className="text-xs"
-                  message={t("settings.database.walletlessTls.walletSkipped")}
-                />
-              )}
+                  <WalletServiceField
+                    value={form.dsn}
+                    onChange={(value) => updateForm({ dsn: value })}
+                    services={settings.available_services}
+                    connectionSecurity={form.connectionSecurity}
+                    error={errors.dsn}
+                  />
 
-              <WalletServiceField
-                value={form.dsn}
-                onChange={(value) => updateForm({ dsn: value })}
-                services={settings.available_services}
-                connectionSecurity={form.connectionSecurity}
-                error={errors.dsn}
-              />
+                  {settings.has_wallet_password ? (
+                    <div className="lg:col-span-full">
+                      <SecretClearCheckbox
+                        checked={form.clearWalletPassword}
+                        onChange={updateWalletPasswordClear}
+                        label={t("settings.database.secrets.clearWalletPassword")}
+                      />
+                    </div>
+                  ) : null}
+                </>
+              ) : (
+                <>
+                  <WalletServiceField
+                    value={form.dsn}
+                    onChange={(value) => updateForm({ dsn: value })}
+                    services={settings.available_services}
+                    connectionSecurity={form.connectionSecurity}
+                    error={errors.dsn}
+                  />
+                  <FormStatus
+                    tone="info"
+                    className="text-xs lg:col-span-full"
+                    message={t("settings.database.walletlessTls.walletSkipped")}
+                  />
+                </>
+              )}
+              </div>
 
               <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
                 <Button type="submit" size="lg" loading={save.isPending} icon={Save}>
@@ -655,7 +671,7 @@ function SelectAiCredentialCard() {
           ) : null}
         </div>
       </CardHeader>
-      <CardContent className={`space-y-5 p-6 ${READABLE_FORM_WIDTH}`}>
+      <CardContent className="space-y-5 p-6">
         {status.isPending ? (
           <div className="grid gap-3 sm:grid-cols-2">
             <Skeleton className="h-20 w-full rounded-md" />
@@ -687,6 +703,8 @@ function SelectAiCredentialCard() {
               </Banner>
             ) : null}
 
+            {/* 広い画面では Credential の要約とリージョン選択を同じ行に置き、カード幅を使う。 */}
+            <div className="grid min-w-0 gap-3 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] lg:items-start lg:gap-6">
             <dl className="grid min-w-0 gap-3 sm:grid-cols-2">
               <CredentialSummary
                 label={t("settings.database.selectAiCredential.field.name")}
@@ -715,6 +733,7 @@ function SelectAiCredentialCard() {
               buttonClassName="h-11"
             />
             </fieldset>
+            </div>
 
             {data.oci_auth_ready ? (
               <FormStatus
@@ -1016,10 +1035,11 @@ function AdbManagementCard({
         </div>
       </CardHeader>
 
-      <CardContent className={`space-y-5 p-6 ${READABLE_FORM_WIDTH}`}>
+      <CardContent className="space-y-5 p-6">
         <p className="text-sm leading-relaxed text-fg-muted">{t("settings.adb.description")}</p>
 
-        <div className="space-y-4">
+        {/* リージョン（短い値）と OCID（長い値）を 1:2 で同じ行に置く。 */}
+        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)] lg:items-start">
           <SelectField
             id="adb-region"
             label={t("settings.adb.field.region")}

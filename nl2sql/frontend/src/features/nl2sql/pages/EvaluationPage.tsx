@@ -63,7 +63,6 @@ import type {
   QualityEvaluationStatus,
   QualityEvaluationVerdict,
 } from "../types";
-import { READABLE_FORM_WIDTH } from "@/lib/form-layout";
 
 const TERMINAL_STATUSES = new Set<QualityEvaluationStatus>([
   "completed",
@@ -394,7 +393,7 @@ export function EvaluationPage() {
             <LoadingState label={t("common.loading")} placement="panel" />
           ) : pageError ? null : (
             <form
-              className={`grid min-w-0 gap-5 ${READABLE_FORM_WIDTH}`}
+              className="grid min-w-0 gap-5"
               aria-label={t("qualityEvaluation.conditions.title")}
               noValidate
               onSubmit={(event) => {

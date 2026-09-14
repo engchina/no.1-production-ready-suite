@@ -165,7 +165,8 @@ function ExecutableDirectSqlPage() {
               setError("");
             }}
           />
-          <div className="grid gap-3 border-t border-border pt-4">
+          {/* 取得件数上限と実行ボタンを 1 行の操作行にまとめ、数値入力を行全体に伸ばさない（1:2）。 */}
+          <div className="grid gap-3 border-t border-border pt-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)] lg:items-center lg:gap-x-6">
             <RowLimitField
               value={rowLimitInput}
               onChange={setRowLimitInput}

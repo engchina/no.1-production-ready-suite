@@ -35,7 +35,6 @@ import { t } from "@/lib/i18n";
 import { INFORMATION_TABLE_ROW_CLASS, INFORMATION_TABLE_VISIBLE_ROWS } from "@/lib/list-density";
 import { useInitializeSystemTables, useSystemTablesStatus } from "@/lib/queries";
 import { systemTableControlsBusy, systemTableOperationMessageKey, systemTableStatusLabelKey } from "@/lib/system-tables";
-import { READABLE_FORM_WIDTH } from "@/lib/form-layout";
 
 const RECREATE_CONFIRMATION = "RECREATE_NL2SQL_SYSTEM_TABLES";
 
@@ -271,7 +270,8 @@ export function SystemTablesCard() {
 
             {mayExecute ? (
               <section className="border-t border-border pt-5" aria-labelledby="recreate-system-tables-title">
-                <div className={`space-y-3 ${READABLE_FORM_WIDTH}`}>
+                {/* 危険な操作区画は幅を止めず、広い画面では「影響の説明」と「確認語・実行」を左右に分けてカード幅を使う。 */}
+                <div className="grid gap-3 xl:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] xl:items-start xl:gap-6">
                   <div className="flex items-start gap-2">
                     <AlertTriangle className="mt-0.5 shrink-0 text-danger-fg" size={16} aria-hidden />
                     <div>

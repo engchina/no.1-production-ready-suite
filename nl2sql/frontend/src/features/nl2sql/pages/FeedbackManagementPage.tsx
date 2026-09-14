@@ -710,12 +710,13 @@ export function FeedbackManagementPage() {
                 }
               />
 
+              {/* profile の選択（1）と実行環境の情報（2）を、広い画面では同じ行に置く。 */}
               <section
-                className="grid min-w-0 gap-3 rounded-md border border-border bg-surface-sunken p-3"
+                className="grid min-w-0 gap-3 rounded-md border border-border bg-surface-sunken p-3 2xl:grid-cols-[minmax(0,1fr)_minmax(0,2fr)] 2xl:items-end 2xl:gap-x-6"
                 aria-label={t("feedbackManagement.entries.context")}
                 data-testid="feedback-management-entries-toolbar"
               >
-                <div className="grid min-w-0 gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end xl:max-w-3xl">
+                <div className="grid min-w-0 gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
                   {entriesProfileSelect}
                   <Button
                     type="button"

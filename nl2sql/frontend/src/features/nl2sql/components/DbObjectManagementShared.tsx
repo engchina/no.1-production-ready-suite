@@ -426,21 +426,31 @@ export function DbObjectSelectorToolbar({
           disabled={ownerPrefixField.disabled}
         />
       ) : (
-        <div className={children ? "grid gap-2 md:grid-cols-[minmax(0,1fr)_auto]" : "grid gap-2"}>
+        // 検索欄だけの toolbar。広い画面では検索欄を行全体に伸ばさず、操作と件数を 2:1 で同じ行に置く。
+        <div className={children || resultLabel ? "grid gap-2 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] lg:items-end lg:gap-x-6" : "grid gap-2"}>
           <DbManagementSearchField
             label={searchLabel}
             placeholder={searchPlaceholder}
             value={searchValue}
             onChange={onSearchChange}
           />
-          {children && (
-            <div className="grid min-w-0 gap-2 sm:grid-flow-col sm:auto-cols-max sm:items-end">
-              {children}
+          {(children || resultLabel) && (
+            <div className="grid min-w-0 gap-2 lg:min-h-10 lg:items-center">
+              {children && (
+                <div className="grid min-w-0 gap-2 sm:grid-flow-col sm:auto-cols-max sm:items-end">
+                  {children}
+                </div>
+              )}
+              {resultLabel && (
+                <p className="text-xs text-fg-muted lg:text-right" aria-live="polite">
+                  {resultLabel}
+                </p>
+              )}
             </div>
           )}
         </div>
       )}
-      {resultLabel && (
+      {resultLabel && ownerPrefixField && (
         <p className="text-xs text-fg-muted" aria-live="polite">
           {resultLabel}
         </p>
