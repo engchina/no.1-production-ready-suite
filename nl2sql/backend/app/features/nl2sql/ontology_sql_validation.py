@@ -1,4 +1,9 @@
-"""Oracle 式を Profile の表・列と SELECT の名前解決スコープで検証する。"""
+"""Oracle 式を Profile の表・列と SELECT の名前解決スコープで検証する。
+
+表・列は `object_identity` の照合 token で識別する。引用なしの識別子は大文字、`"Mixed_Case"` は
+大文字小文字を保つ（Oracle の引用規則）。大文字化して照合すると、`SALES."Mixed_Case"` と大文字の
+同名表 `SALES.MIXED_CASE` を同じ表として扱う（#573）。
+"""
 
 from __future__ import annotations
 
@@ -8,13 +13,48 @@ from sqlglot import exp
 from sqlglot.optimizer.qualify import qualify
 from sqlglot.optimizer.scope import Scope, build_scope, traverse_scope
 
+from .object_identity import (
+    is_unquoted_object_part,
+    object_part_name,
+    split_match_key,
+    sql_identifier_token,
+)
+
+
+def identifier_token(identifier: Any) -> str:
+    """sqlglot の識別子 1 部分を照合 token にする（引用なしは大文字、引用ありは保持）。"""
+
+    if identifier is None:
+        return ""
+    if isinstance(identifier, exp.Identifier):
+        name, quoted = identifier.name, bool(identifier.args.get("quoted"))
+    else:
+        name, quoted = str(getattr(identifier, "name", identifier) or ""), False
+    if not name:
+        return ""
+    try:
+        return sql_identifier_token(name, quoted=quoted)
+    except ValueError:
+        return name
+
+
+def token_identifier(value: str) -> exp.Identifier:
+    """照合 token または入力 1 部分（`"Amount"` / `amount`）を SQL の識別子にする。"""
+
+    name = object_part_name(value)
+    return exp.to_identifier(name, quoted=not is_unquoted_object_part(name))
+
+
+def _table_tokens(table: exp.Table) -> tuple[str, str]:
+    return identifier_token(table.args.get("db")), identifier_token(table.this)
+
 
 def physical_table(table: exp.Table, physical: dict[str, set[str]]) -> str:
+    owner, name = _table_tokens(table)
     matches = [
         key
         for key in physical
-        if key.split(".")[-1] == table.name.upper()
-        and (not table.db or key == f"{table.db}.{table.name}".upper())
+        if split_match_key(key)[-1:] == [name] and (not owner or key == f"{owner}.{name}")
     ]
     if table.catalog or len(matches) != 1:
         raise ValueError(f"SQL 表 {table.sql()} を Profile 内で一意に解決できません。")
@@ -25,7 +65,10 @@ def validated_sql(tree: exp.Expression, physical: dict[str, set[str]]) -> exp.Ex
     if isinstance(tree, exp.Query):
         schema: dict[str, Any] = {}
         for key, columns in physical.items():
-            owner, table = key.split(".", 1)
+            parts = split_match_key(key)
+            owner, table = (parts[0], parts[-1]) if len(parts) >= 2 else ("", parts[-1])
+            # sqlglot は schema の名前を Oracle の識別子として解釈する。照合 token
+            # （`"Mixed_Case"`）は引用名、`ORDERS` は引用なしの名前になる。
             schema.setdefault(owner, {})[table] = dict.fromkeys(columns, "UNKNOWN")
         # CTE は物理表ではない。各スコープの実ソースだけを Profile と照合する。
         for scope in traverse_scope(tree):
@@ -88,6 +131,7 @@ def expression_in_query(
 
     expression = expression.copy().transform(bind_physical_reference)
     name = "NL2SQL_ONTOLOGY_PREDICATE"
+    # 生成する列別名の衝突回避（物理 object の識別ではない）。
     while name in {p.alias_or_name.upper() for p in query.selects}:
         name += "_"
     augmented = query.select(exp.alias_(expression.copy(), name, quoted=True), append=True)
@@ -98,9 +142,13 @@ def expression_in_query(
 def physical_column(
     column: exp.Column, physical: dict[str, set[str]], scope: Scope | None = None
 ) -> str:
+    """列参照を Profile の `OWNER.OBJECT.COLUMN` 照合キー（各部は token）に解決する。"""
+
+    name = identifier_token(column.this)
     if scope is not None and column.table and not column.db:
         selected = scope.selected_sources.get(column.table)
         if selected is None:
+            # SELECT 内の表別名（`o`）は物理 object ではない。引用なしの別名は大文字で引く。
             selected = scope.selected_sources.get(column.table.upper())
         if selected:
             source = selected[1]
@@ -121,19 +169,21 @@ def physical_column(
                 return physical_column(value, physical, source)
             if isinstance(source, exp.Table):
                 key = physical_table(source, physical)
-                if column.name.upper() in physical[key]:
-                    return f"{key}.{column.name.upper()}"
+                if name in physical[key]:
+                    return f"{key}.{name}"
         raise ValueError(f"SQL 列 {column.sql()} の参照元を解決できません。")
+    owner = identifier_token(column.args.get("db"))
+    table = identifier_token(column.args.get("table"))
     matches = [
         key
         for key, columns in physical.items()
-        if column.name.upper() in columns
-        and (not column.table or key.split(".")[-1] == column.table.upper())
-        and (not column.db or key == f"{column.db}.{column.table}".upper())
+        if name in columns
+        and (not table or split_match_key(key)[-1:] == [table])
+        and (not owner or key == f"{owner}.{table}")
     ]
     if column.catalog or len(matches) != 1:
         raise ValueError(f"SQL 列 {column.sql()} を Profile 内で一意に解決できません。")
-    return f"{matches[0]}.{column.name.upper()}"
+    return f"{matches[0]}.{name}"
 
 
 def canonical_expression(
@@ -141,8 +191,10 @@ def canonical_expression(
 ) -> str:
     def resolve(node: exp.Expression) -> exp.Expression:
         if isinstance(node, exp.Column):
-            owner, table, column = physical_column(node, physical, scope).split(".")
-            return exp.column(column, table=table, db=owner)
+            owner, table, column = split_match_key(physical_column(node, physical, scope))[-3:]
+            return exp.column(
+                token_identifier(column), table=token_identifier(table), db=token_identifier(owner)
+            )
         return node
 
     return expression.copy().transform(resolve).sql(dialect="oracle")

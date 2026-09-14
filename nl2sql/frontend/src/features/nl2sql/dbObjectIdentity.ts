@@ -166,6 +166,37 @@ export function normalizeDbObjectKey(value: string | null | undefined): string {
 }
 
 /**
+ * 保存値・入力値・SQL の表記の `OBJECT` / `OWNER.OBJECT` / `OWNER.OBJECT.COLUMN`（各部は引用可）を、
+ * 部分ごとの照合 token に分ける。
+ *
+ * `normalizeDbObjectKey` と同じ規則（引用なしは大文字、`"..."` は大文字小文字を保持）。dot を含む
+ * 引用名も壊さない。表示・比較用のため例外を投げず、引用符が壊れた値は空配列を返す（どれにも
+ * 一致させない）。
+ */
+export function dbObjectKeyTokens(value: string | null | undefined): string[] {
+  try {
+    return splitIdentifierParts(value ?? "")
+      .map(formatDbAdminObjectPart)
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * SQL parser が返した識別子 1 部分（引用符を外した値と、引用されていたか）を照合 token にする。
+ *
+ * backend `object_identity.sql_identifier_token` と同じ規則: 引用されていない識別子は Oracle と同じく
+ * 大文字、引用された識別子は書かれたとおりに解釈する。`SALES."Mixed_Case"` の `Mixed_Case` を
+ * 大文字化すると、大文字の同名表 `SALES.MIXED_CASE` と区別できない（#573）。
+ */
+export function sqlIdentifierToken(name: string | null | undefined, quoted: boolean): string {
+  const raw = (name ?? "").trim();
+  if (!raw) return "";
+  return formatDbObjectPart(quoted ? raw : raw.toUpperCase());
+}
+
+/**
  * canonical な `OWNER.OBJECT` を owner / object の token に分ける。dot を含む引用名も壊さない。
  * 2 部分でない・引用符が壊れている場合は null。
  */

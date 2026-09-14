@@ -365,7 +365,7 @@ def test_profile_sync_no_longer_maps_object_list_errors_to_unsupported() -> None
 # --- オントロジー --------------------------------------------------------------
 
 
-def test_ontology_build_selects_exact_catalog_object_and_skips_quoted_profile_object() -> None:
+def test_ontology_build_selects_exact_catalog_object_for_upper_and_quoted_profile_objects() -> None:
     catalog = SchemaCatalog(
         refreshed_at="2026-09-14T00:00:00+00:00",
         current_owner="SALES",
@@ -381,9 +381,9 @@ def test_ontology_build_selects_exact_catalog_object_and_skips_quoted_profile_ob
 
     assert [(t.owner, t.table_name) for t in upper_selected] == [("SALES", "MIXED_CASE")]
     assert upper_warnings == [] and upper_errors == []
-    assert quoted_selected == []
-    assert quoted_errors == []
-    assert "オントロジーの AI 構築の対象にできません" in quoted_warnings[0]
+    # AI 構築も引用規則で照合するため、引用名の表を大文字の同名表と取り違えずに対象にする（#573）。
+    assert [(t.owner, t.table_name) for t in quoted_selected] == [("SALES", "Mixed_Case")]
+    assert quoted_warnings == [] and quoted_errors == []
 
 
 def test_profile_ontology_view_does_not_map_quoted_profile_object_to_upper_node() -> None:

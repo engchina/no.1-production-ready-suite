@@ -278,8 +278,10 @@ from .object_identity import (
     normalize_object_part,
     object_match_key,
     object_name_tokens,
+    object_part_name,
     parse_object_identity,
     qualified_object_name,
+    split_match_key,
     sql_identifier_token,
 )
 from .object_visibility import (
@@ -1045,10 +1047,14 @@ _PLSQL_DYNAMIC_SQL_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bopen\s+[^;]+?\s+for\b", re.IGNORECASE | re.DOTALL),
 )
 _SELECT_TOKEN = re.compile(r"\bselect\b", re.IGNORECASE)
-_SQL_IDENTIFIER = re.compile(r"[a-zA-Z_][\w$#]*")
 _STRICT_IDENTIFIER = re.compile(r"^[A-Z][A-Z0-9_]{0,127}$")
 _EXISTING_ORACLE_IDENTIFIER = re.compile(r"^[A-Z][A-Z0-9_$#]{0,127}$")
-_QUALIFIED_COLUMN = re.compile(r"([a-zA-Z_][\w$#]*)\s*\.\s*([a-zA-Z_*][\w$#*]*)", re.IGNORECASE)
+# 逆生成の列ラベル用。`"Amount"` のような引用識別子も 1 つの識別子として扱う（#573）。
+_SQL_IDENTIFIER_OR_QUOTED = r'(?:"(?:[^"]|"")+"|[a-zA-Z_][\w$#]*)'
+_QUOTED_AWARE_IDENTIFIER = re.compile(_SQL_IDENTIFIER_OR_QUOTED)
+_QUOTED_AWARE_QUALIFIED_COLUMN = re.compile(
+    rf"({_SQL_IDENTIFIER_OR_QUOTED})\s*\.\s*({_SQL_IDENTIFIER_OR_QUOTED}|\*)"
+)
 _COMMENT_TARGET = re.compile(
     r"^comment\s+on\s+([a-zA-Z_]+(?:\s+[a-zA-Z_]+)?(?:\s+[a-zA-Z_]+)?)\b",
     re.IGNORECASE,
@@ -2655,11 +2661,15 @@ def _extract_referenced_columns(sql: str, referenced_tables: list[str]) -> tuple
         expression = _strip_expression_alias(raw_expression)
         if re.search(r"(^|[^.\w$#])\*($|[^.\w$#])", expression):
             wildcard = True
-        qualified_matches = list(_QUALIFIED_COLUMN.finditer(expression))
+        qualified_matches = list(_QUOTED_AWARE_QUALIFIED_COLUMN.finditer(expression))
         if qualified_matches:
             for match in qualified_matches:
-                table_or_alias = match.group(1).upper()
-                column = match.group(2).upper()
+                # 列は Oracle の引用規則の token（`"Amount"` は大文字小文字を保持）。大文字化すると
+                # 大文字の同名列 `AMOUNT` の論理名を表示する（#573）。
+                table_or_alias = object_match_key(match.group(1))
+                column = (
+                    match.group(2) if match.group(2) == "*" else object_match_key(match.group(2))
+                )
                 if column == "*":
                     wildcard = True
                     continue
@@ -2670,9 +2680,10 @@ def _extract_referenced_columns(sql: str, referenced_tables: list[str]) -> tuple
                     columns.append(key)
             continue
         cleaned = re.sub(r"'[^']*'", " ", expression)
-        for token_match in _SQL_IDENTIFIER.finditer(cleaned):
-            token = token_match.group(0).upper()
-            if token in _SQL_RESERVED_OR_FUNCTIONS:
+        for token_match in _QUOTED_AWARE_IDENTIFIER.finditer(cleaned):
+            raw_token = token_match.group(0)
+            token = object_match_key(raw_token)
+            if not raw_token.startswith('"') and token in _SQL_RESERVED_OR_FUNCTIONS:
                 continue
             key = f"{single_table}.{token}" if single_table else token
             if key not in seen:
@@ -10449,14 +10460,15 @@ class Nl2SqlService:
     ) -> SchemaTable | None:
         if catalog is None:
             return None
-        normalized = value.strip().replace('"', "").upper()
-        object_name = normalized.rsplit(".", 1)[-1]
+        # 参照は SQL と同じ表記の照合キーで引く。引用符を外して大文字化すると、
+        # `SALES."Mixed_Case"` に大文字の同名表 `SALES.MIXED_CASE` の論理名を使う（#573）。
+        key = object_match_key(value)
+        object_name = (split_match_key(key) or [""])[-1]
         for table in catalog.tables:
-            qualified = self._catalog_qualified_name(table)
-            if (
-                normalized in {qualified, table.table_name.upper()}
-                or object_name == table.table_name.upper()
-            ):
+            if key == self._catalog_qualified_name(table):
+                return table
+        for table in catalog.tables:
+            if object_name and object_name == catalog_match_key(table.table_name):
                 return table
         return None
 
@@ -10500,12 +10512,12 @@ class Nl2SqlService:
     ) -> SchemaColumn | None:
         if catalog is None:
             return None
-        normalized_column = column_name.strip().replace('"', "").upper().rsplit(".", 1)[-1]
+        normalized_column = (split_match_key(object_match_key(column_name)) or [""])[-1]
         tables = [self._reverse_table_for_ref(value, catalog) for value in referenced]
         candidate_tables = [table for table in tables if table is not None] or catalog.tables
         for table in candidate_tables:
             for column in table.columns:
-                if column.column_name.upper() == normalized_column:
+                if catalog_match_key(column.column_name) == normalized_column:
                     return column
         return None
 
@@ -11168,11 +11180,15 @@ class Nl2SqlService:
             )
             if table is None:
                 continue
-            requested_columns = {column.upper() for column in target.columns}
+            # 列は adapter（`fetch_metadata_sample_values`）と同じくカタログ上の名前で持つ。
+            # 入力は引用規則で解釈する（`"Amount"` と `AMOUNT` を同じ列にしない、#573）。
+            requested_columns = {
+                object_part_name(_column_identifier_token(column)) for column in target.columns
+            }
             values = {
-                column.column_name.upper(): column.sample_values[: request.sample_limit]
+                column.column_name: column.sample_values[: request.sample_limit]
                 for column in table.columns
-                if (not requested_columns or column.column_name.upper() in requested_columns)
+                if (not requested_columns or column.column_name in requested_columns)
                 and column.sample_values
             }
             if values:
@@ -11199,7 +11215,7 @@ class Nl2SqlService:
             )
             lines: list[str] = []
             for column in target.columns:
-                values = column_samples.get(_normalize_identifier(column), [])
+                values = column_samples.get(object_part_name(_column_identifier_token(column)), [])
                 if values:
                     lines.append(f"{column}: {', '.join(values)}")
                     sample_count += len(values)
@@ -17580,11 +17596,14 @@ class Nl2SqlService:
                 )
             )
             if allowed is not None:
-                permitted = {name.upper() for name in allowed.table_names}
+                # schema_objects のキーと許可 object / 列は照合キー（引用名は大文字小文字を保持）。
+                # 大文字化すると `SALES."Mixed_Case"` だけ許可された実行で大文字の同名表の
+                # 業務定義まで prompt に含める（#573）。
+                permitted = {object_match_key(name) for name in allowed.table_names}
                 columns = {name: cols for name, cols in columns.items() if name in permitted}
                 if allowed.columns:
                     column_scope = {
-                        name.upper(): {col.upper() for col in cols}
+                        object_match_key(name): {_column_identifier_token(col) for col in cols}
                         for name, cols in allowed.columns.items()
                     }
                     columns = {

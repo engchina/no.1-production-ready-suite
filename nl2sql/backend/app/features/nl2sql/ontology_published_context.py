@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 import sqlglot
 
+from .object_identity import object_match_key
 from .ontology_definition_service import definition_fingerprint
 from .ontology_definition_validation import (
     definition_expressions,
     interface_contracts,
+    mapping_column_key,
+    mapping_object_key,
     validated_definition_expression,
 )
 from .ontology_definition_workspace import ProfileOntologyWorkspaceService
@@ -52,6 +56,27 @@ def _expressions_visible(
     return True
 
 
+def _allowed_scope(allowed_columns: Mapping[str, Iterable[str]]) -> dict[str, set[str]]:
+    """許可された object → 列を `object_identity` の照合キーにそろえる。
+
+    `schema_objects` と Profile の許可列はすでに照合キーのため値は変わらない。旧形式の小文字の
+    キー（`app.orders`）は引用なしの識別子として大文字に解釈する。大文字化はしない（#573）。
+    """
+
+    return {
+        object_match_key(name): {object_match_key(column) for column in columns}
+        for name, columns in allowed_columns.items()
+    }
+
+
+def _mappings_visible(definition: Any, allowed: dict[str, set[str]]) -> bool:
+    return all(
+        mapping_object_key(m) in allowed
+        and (not m.column_name or mapping_column_key(m) in allowed[mapping_object_key(m)])
+        for m in definition.mappings
+    )
+
+
 def published_context(
     runtime: Any,
     profile_id: str,
@@ -81,23 +106,12 @@ def published_context(
         from .ontology_definition_validation import schema_objects
 
         columns = schema_objects(json.loads(schema_context))
-        allowed = {
-            name.upper(): {c.upper() for c in cols}
-            for name, cols in (allowed_columns if allowed_columns is not None else columns).items()
-        }
+        allowed = _allowed_scope(allowed_columns if allowed_columns is not None else columns)
         definitions = {d.api_name: d for d in DEFINITIONS.validate_python(snapshot["definitions"])}
         selected = {
             name: d
             for name, d in definitions.items()
-            if _expressions_visible(d, allowed, definitions)
-            and all(
-                f"{m.owner}.{m.object_name}".upper() in allowed
-                and (
-                    not m.column_name
-                    or m.column_name.upper() in allowed[f"{m.owner}.{m.object_name}".upper()]
-                )
-                for m in d.mappings
-            )
+            if _expressions_visible(d, allowed, definitions) and _mappings_visible(d, allowed)
         }
         changed = True
         while changed:
@@ -126,20 +140,11 @@ def published_context(
             json.loads(str(runtime.prepare_build_schema_context(profile_id).schema_context))
         )
         allowed_columns = {name: list(columns) for name, columns in schema.items()}
-    allowed = {
-        name.upper(): {col.upper() for col in cols} for name, cols in allowed_columns.items()
-    }
+    allowed = _allowed_scope(allowed_columns)
     definitions = {d.api_name: d for d in bundle.definitions}
     selected = {}
     for name, d in definitions.items():
-        if _expressions_visible(d, allowed, definitions) and all(
-            f"{m.owner}.{m.object_name}".upper() in allowed
-            and (
-                not m.column_name
-                or m.column_name.upper() in allowed[f"{m.owner}.{m.object_name}".upper()]
-            )
-            for m in d.mappings
-        ):
+        if _expressions_visible(d, allowed, definitions) and _mappings_visible(d, allowed):
             selected[name] = d
     # 参照先が権限で落ちた定義は、間接経由でも prompt に混ぜない。
     changed = True

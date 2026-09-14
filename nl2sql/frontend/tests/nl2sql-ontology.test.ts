@@ -872,3 +872,166 @@ test("SQL 接地の表ラベルは backend が current schema で補った所有
 
   assert.deepEqual(result.unmatchedTables, ["APP.INVOICES", "HR.EMPLOYEES"]);
 });
+
+function quotedSameNameOntologyGraph(): OntologyGraph {
+  const table = (id: string, objectName: string, label: string) => ({
+    id,
+    kind: "table" as const,
+    technical_name: objectName === objectName.toUpperCase() ? `SALES.${objectName}` : `SALES."${objectName}"`,
+    business_name_ja: label,
+    review_status: "approved" as const,
+    metadata: { owner: "SALES", object_name: objectName },
+  });
+  const column = (id: string, objectName: string, columnName: string, label: string) => ({
+    id,
+    kind: "column" as const,
+    technical_name: `SALES.${objectName}.${columnName}`,
+    business_name_ja: label,
+    review_status: "approved" as const,
+    metadata: { owner: "SALES", object_name: objectName, column_name: columnName },
+  });
+  return {
+    nodes: [
+      table("upper-table", "MIXED_CASE", "大文字の表"),
+      table("quoted-table", "Mixed_Case", "引用名の表"),
+      column("upper-amount", "MIXED_CASE", "AMOUNT", "大文字の金額"),
+      column("upper-id", "MIXED_CASE", "ID", "大文字の ID"),
+      column("quoted-amount", "Mixed_Case", "Amount", "引用名の金額"),
+      column("quoted-upper-amount", "Mixed_Case", "AMOUNT", "引用名の表の大文字列"),
+      column("quoted-parent", "Mixed_Case", "PARENT_ID", "親 ID"),
+    ],
+    edges: [
+      {
+        id: "quoted-parent-fk",
+        kind: "foreign_key",
+        source_node_id: "quoted-table",
+        target_node_id: "upper-table",
+        relationship_name_ja: "親の表",
+        join_conditions: [
+          {
+            left: { owner: "SALES", object_name: "Mixed_Case", column_name: "PARENT_ID" },
+            right: { owner: "SALES", object_name: "MIXED_CASE", column_name: "ID" },
+          },
+        ],
+        review_status: "approved",
+      },
+    ],
+  } as unknown as OntologyGraph;
+}
+
+function emptySqlGraph(overrides: Partial<SqlSemanticGraph>): SqlSemanticGraph {
+  return {
+    dialect: "oracle",
+    statement_type: "SELECT",
+    ctes: [],
+    tables: [],
+    columns: [],
+    joins: [],
+    filters: [],
+    aggregates: [],
+    groups: [],
+    having: [],
+    orders: [],
+    windows: [],
+    ...overrides,
+  } as SqlSemanticGraph;
+}
+
+test("SQL 接地は引用名の表・列を大文字の同名表・同名列と区別する (#573)", () => {
+  const sqlGraph = emptySqlGraph({
+    raw_sql: 'SELECT m."Amount" FROM SALES."Mixed_Case" m',
+    tables: [
+      {
+        scope_id: "scope_root",
+        owner: "SALES",
+        name: "Mixed_Case",
+        alias: "m",
+        qualified_name: "SALES.Mixed_Case",
+        source_sql: 'SALES."Mixed_Case" m',
+        owner_quoted: false,
+        name_quoted: true,
+      },
+    ],
+    columns: [
+      {
+        scope_id: "scope_root",
+        table: "m",
+        name: "Amount",
+        clause: "select",
+        expression_sql: 'm."Amount"',
+        owner_quoted: false,
+        table_quoted: false,
+        name_quoted: true,
+      },
+    ],
+  });
+
+  const result = groundSqlSemanticGraphOnOntologyGraph(sqlGraph, quotedSameNameOntologyGraph());
+
+  assert.equal(result.status, "matched");
+  assert.deepEqual(result.matchedTables.map((item) => item.ontologyNodeIds), [["quoted-table"]]);
+  assert.deepEqual(result.matchedColumns.map((item) => item.ontologyNodeIds), [["quoted-amount", "quoted-table"]]);
+  assert.ok(!result.highlightNodeIds.includes("upper-table"));
+  assert.ok(!result.highlightNodeIds.includes("upper-amount"));
+  assert.ok(!result.highlightNodeIds.includes("quoted-upper-amount"));
+});
+
+test("引用しない同名表の SQL は大文字の表だけに接地し、引用名の表を強調しない (#573)", () => {
+  const sqlGraph = emptySqlGraph({
+    raw_sql: "SELECT mixed_case.amount FROM sales.mixed_case",
+    tables: [
+      {
+        owner: "sales",
+        name: "mixed_case",
+        qualified_name: "sales.mixed_case",
+        source_sql: "sales.mixed_case",
+        owner_quoted: false,
+        name_quoted: false,
+      },
+    ],
+    columns: [
+      {
+        table: "mixed_case",
+        name: "amount",
+        clause: "select",
+        expression_sql: "mixed_case.amount",
+        table_quoted: false,
+        name_quoted: false,
+      },
+    ],
+  });
+
+  const result = groundSqlSemanticGraphOnOntologyGraph(sqlGraph, quotedSameNameOntologyGraph());
+
+  assert.deepEqual(result.matchedTables.map((item) => item.ontologyNodeIds), [["upper-table"]]);
+  assert.deepEqual(result.matchedColumns.map((item) => item.ontologyNodeIds), [["upper-amount", "upper-table"]]);
+  assert.ok(!result.highlightNodeIds.includes("quoted-table"));
+});
+
+test("引用情報を持たない旧 artifact と Join 条件も SQL の表記の引用符で区別する (#573)", () => {
+  const sqlGraph = emptySqlGraph({
+    raw_sql:
+      'SELECT m."Amount" FROM SALES."Mixed_Case" m JOIN SALES.MIXED_CASE u ON m.PARENT_ID = u.ID',
+    tables: [
+      { name: "Mixed_Case", owner: "SALES", alias: "m", source_sql: 'SALES."Mixed_Case" m' },
+      { name: "MIXED_CASE", owner: "SALES", alias: "u", source_sql: "SALES.MIXED_CASE u" },
+    ],
+    projections: [{ expression_sql: 'm."Amount"', referenced_columns: ['m."Amount"'] }],
+    columns: [],
+    joins: [
+      {
+        left_source: 'SALES."Mixed_Case" m',
+        right_source: "SALES.MIXED_CASE u",
+        condition_sql: "m.PARENT_ID = u.ID",
+        referenced_columns: ["m.PARENT_ID", "u.ID"],
+      },
+    ],
+  });
+
+  const result = groundSqlSemanticGraphOnOntologyGraph(sqlGraph, quotedSameNameOntologyGraph());
+
+  assert.deepEqual(result.matchedTables.map((item) => item.ontologyNodeIds), [["quoted-table"], ["upper-table"]]);
+  assert.deepEqual(result.matchedColumns.map((item) => item.ontologyNodeIds), [["quoted-amount", "quoted-table"]]);
+  assert.deepEqual(result.matchedJoins.map((item) => item.ontologyEdgeIds), [["quoted-parent-fk"]]);
+  assert.deepEqual(result.unmatchedColumns, []);
+});

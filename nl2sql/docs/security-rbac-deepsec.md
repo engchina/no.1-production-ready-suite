@@ -296,7 +296,7 @@ SELECT e.ROLE_ID, e.ENTITLEMENT_ID, e.TARGET_OWNER, e.TARGET_OBJECT,
 | SQL 安全性検査（許可表の照合） | SQL の表参照は sqlglot の引用情報（`SqlTableReference.owner_quoted` / `name_quoted`）を使い、引用なしを大文字、引用ありを書かれたとおりに解釈する。`SALES.MIXED_CASE` だけを許可したとき `SELECT * FROM SALES."Mixed_Case"` を拒否し、逆も拒否する（修正前はどちらも `SALES.MIXED_CASE` として許可していた） |
 | SQL 生成の schema context | Profile の対象から schema catalog の詳細を読むとき、大文字小文字だけが異なる表の定義は使わない（#563 で schema catalog の詳細取得自体が大文字小文字を区別するようになった） |
 | Select AI の `object_list` | #564 で実 Oracle の挙動を確認し、引用が必要な owner / 表名は `{"owner": "SALES", "name": "\"Mixed_Case\""}` の token で反映する（下記「確認結果」）。#561 の時点では確認前のため `PROFILE_OBJECT_LIST_UNSUPPORTED` で同期を止めていたが、#564 で解除した。引用が不要な名前の `object_list` は従来と同じ |
-| オントロジー | 質問補完の代表値も引用規則どおりに Profile の対象へ絞る。node の識別と Profile の view は #563 で引用名に対応した（次節）。AI 構築は引き続き対象外 |
+| オントロジー | 質問補完の代表値も引用規則どおりに Profile の対象へ絞る。node の識別と Profile の view は #563、AI 構築・業務定義・SQL 接地は #573 で引用名に対応した（次節） |
 | DeepSec の関連テーブル候補（`GET /api/security/deepsec/relations`） | Profile の object が canonical な修飾名になるため、引用名の表を対象・関連テーブルとして選べる |
 | 画面（業務プロファイル・スキーマ参照） | 対象の選択・件数・一括選択・未保存判定のキーを `normalizeDbObjectKey`（`dbObjectIdentity.ts`）にそろえ、引用名を大文字化しない |
 
@@ -378,7 +378,7 @@ SELECT p.PROFILE_ID, p.NAME, j.OBJECT_KIND, j.OBJECT_KEY,
 | 詳細の代表値（`fetch_metadata_sample_values`） | owner / object / 列を引用規則で解釈し、辞書ビューの照合と `"..."` 引用に辞書上の名前を使う。修正前は引用符を外して大文字化し、大文字の同名表・同名列の値を取得していた |
 | オントロジーの node ID | `stable_physical_id` に渡す名前を `physical_identity_part` にした。大文字化しても変わらない名前（`ORDERS`、`売上`）は **既存の ID・technical_name・schema fingerprint を変えない**。小文字を含む名前だけ `"Mixed_Case"` を ID に含め、`technical_name` も `SALES."Mixed_Case"` にする。metadata / 物理参照の owner・object・column は辞書上の名前を保持する |
 | Profile の view・物理 scope の絞り込み・draft scope・質問補完の column policy | 引用規則の照合キーで対応付け、引用名の Profile を引用名の node に対応付ける（#561 の「対象にしない」扱いを解除） |
-| オントロジーの AI 構築 | schema context と LLM 出力の参照解決（`_ScopeResolver` / `_SchemaContextLookup`）が名前を大文字化して照合するため、小文字を含む引用名の表・列・関係は **引き続き対象外**（警告）。取り違えを避けるため、view に含まれていても AI 構築の context と参照解決から除く |
+| オントロジーの AI 構築 | #563 の時点では schema context と LLM 出力の参照解決が名前を大文字化して照合していたため、小文字を含む引用名の表・列・関係を対象外（警告）にしていた。#573 で引用規則に対応し、この除外を解除した（下記「オントロジーの AI 構築・業務定義・SQL 接地（Issue #573）」） |
 | 列単位の許可チェック（`allowed_objects.columns`） | 列名は引用規則の token で照合する。SQL の列参照は sqlglot の引用情報（`SqlColumnReference.owner_quoted` / `table_quoted` / `name_quoted`）で解釈する。`"Amount"` だけを許可したとき `SELECT AMOUNT` を拒否し、`AMOUNT` だけを許可したとき `SELECT "Amount"` を拒否する（修正前はどちらも `AMOUNT` として許可していた）。同名表を JOIN したときの表名修飾（`"Mixed_Case"."Amount"`）も引用規則で解決する |
 | 画面 | スキーマ参照の列詳細は token で要求する。業務プロファイルのスキーマ別グループは owner を大文字化せず、`"Sales"` と `SALES` を別グループとして件数・一括選択する（表示は SQL と同じ表記）。オントロジーの物理名表示とグラフの cluster も大文字化しない |
 
@@ -388,6 +388,28 @@ SELECT p.PROFILE_ID, p.NAME, j.OBJECT_KIND, j.OBJECT_KEY,
 - 修正前に保存された schema catalog の行は、小文字を含む名前も大文字化されている（列定義は大文字の同名表のもの、または取得できていない）。**DB 構造の全件再取得**で manifest の key が辞書上の名前に揃い、引用名の表は新しい行として取得される。大文字化された行は、大文字の同名表が無ければ削除され、あればその表の行として比較・更新される（targeted refresh は対象 object だけを更新する）。
 - オントロジーは、再取得後の catalog から作る次の revision で引用名の node が別 node になる。修正前の revision で 1 node に潰れていた同名表の業務定義・mapping は自動では付け替えない（どちらの表を意図したか判別できないため、ID が変わらない大文字の表の node に残る）。
 - API の入力: 引用なしの小文字（`/api/schema/objects/sales/orders`、`owner=sales`、列 `amount`）は従来どおり大文字として解釈する。辞書上の小文字の名前をそのまま渡していたクライアント（`owner=Sales`）は、`owner="Sales"` と引用して渡す必要がある。
+
+### オントロジーの AI 構築・業務定義・SQL 接地（Issue #573）
+
+#563 で残した「owner / object / column 名を大文字化して照合する」経路を、同じ引用規則にそろえた。
+照合キーは `object_identity.py` の `object_match_key`（SQL・LLM 出力・業務定義の mapping など、SQL と同じ表記の入力）と
+`catalog_match_key`（カタログ上の名前）で作り、SQL parser の識別子は `sql_identifier_token`（引用の有無）で解釈する。
+`SALES."Mixed_Case"` と大文字の同名表 `SALES.MIXED_CASE`、列 `"Amount"` と `AMOUNT` は常に別のものとして扱う。
+
+| 経路 | #573 以降の挙動 |
+|---|---|
+| AI 構築の schema context（`build_schema_context_from_catalog` / `build_schema_context`） | 名前は ontology の technical_name と同じ表記（`physical_identity_part`: 小文字を含む名前だけ `"Mixed_Case"`）で LLM に渡す。Profile の引用名の表・列・外部キー・ビュー依存を除外しない（#563 の警告「オントロジーの AI 構築の対象にできません（未対応）」を廃止）。system prompt で「schema_context の表記どおり、引用符と大文字小文字を保つ」ことを指示する |
+| LLM 出力・Q/A SQL の参照解決（`_ScopeResolver` / `_SchemaContextLookup` / `merge_build_extractions`） | LLM 出力は SQL と同じ表記として解釈する（引用しない `SALES.Mixed_Case` は Oracle と同じく `SALES.MIXED_CASE`）。Q/A SQL の表・列・Join 条件は SQL parser の引用情報で解決し、Join 候補の裏付け確認も列名の token で行う |
+| 業務定義の静的検証・実データ検証・公開版の scope（`ontology_definition_validation` / `ontology_sql_validation` / `ontology_definition_data_validation` / `ontology_published_context`） | `schema_objects` と mapping のキー、定義 SQL の表・列の解決、qualify 用 schema を照合キーにした。mapping を SQL の `"..."` に埋め込む前にカタログ上の名前へ戻す（修正前は `amount` を `"amount"` として小文字の別列を参照していた）。SQL 生成に渡す公開版の許可 object / 列も大文字化しない |
+| 能力（`ontology_capabilities`）・接地 graph（`ontology_unified_model`）・Mermaid（`ontology_mermaid`） | SQL の表・列、mapping、物理 node の索引（`physical_node_index`）を照合キーで引く。業務定義から作る物理参照の owner / object はカタログ上の名前にそろえる |
+| SQL の 3 者照合（`ontology_service`） | Profile 範囲外の表（`SQL_OBJECT_OUTSIDE_PROFILE`）、質問の解釈にない表、指標・dimension・filter の対象列を引用規則で照合する。`SqlSemanticGraph` の `referenced_columns` は引用符を保持する（`m."Amount"`）。引用されていない部分は SQL に書かれたままで、従来と同じ値 |
+| 逆生成の列ラベル・DB 管理のコメント / アノテーション SQL 用サンプル（`service.py`） | 引用識別子を 1 つの識別子として扱い、論理名・代表値を完全一致の列から引く |
+| 画面の SQL 接地（`sqlGrounding.ts`） | SQL の表・列は backend の引用情報（`owner_quoted` / `table_quoted` / `name_quoted`）、無い旧 artifact は引用符を保持した SQL の表記で解釈し、ontology node はカタログ上の名前で照合する（`dbObjectKeyTokens` / `sqlIdentifierToken` / `formatDbObjectPart`）。同名表を参照する SQL で別の表を強調しない |
+
+互換: 引用が不要な名前は、schema context の表記・`schema_objects` のキー・node ID・technical_name・schema fingerprint が
+従来と同じ（schema / migration の変更なし）。保存済みの業務定義の mapping（`APP` / `ORDERS`、小文字の `app` / `orders`）も
+従来どおり解決する。小文字を含む引用名の表を AI 構築の対象にした Profile は、schema context が変わるため公開済み業務版の
+再検証（`BUSINESS_SCOPE_CHANGED`）が必要になる。修正前に大文字の同名表として作られた業務定義は自動では付け替えない。
 
 ### 画面表示
 

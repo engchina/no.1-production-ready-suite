@@ -17,9 +17,15 @@ from app.security.permissions import SQL_EXECUTE_PERMISSION
 from app.security.request_actor import actor_scope
 from app.settings import get_settings
 
+from .object_identity import object_part_name
 from .ontology_definition_artifacts import render_definition_artifacts
 from .ontology_definition_service import definition_fingerprint
-from .ontology_definition_validation import checked_expression, schema_objects, validate_definitions
+from .ontology_definition_validation import (
+    checked_expression,
+    mapping_object_key,
+    schema_objects,
+    validate_definitions,
+)
 from .ontology_definition_workspace import (
     ProfileOntologyWorkspaceService,
     authorize_definition_operation,
@@ -34,6 +40,7 @@ from .ontology_service import (
     OntologyNotFoundError,
     OntologyVersionConflictError,
 )
+from .ontology_sql_validation import identifier_token
 from .ontology_store import stable_ontology_id
 
 
@@ -108,22 +115,24 @@ def check_data(
             continue
         mapping = obj.mappings[0]
         mapped = [p for p in props if isinstance(p, PropertyDefinition)]
-        if any(
-            (p.mappings[0].owner, p.mappings[0].object_name) != (mapping.owner, mapping.object_name)
-            for p in mapped
-        ):
+        if any(mapping_object_key(p.mappings[0]) != mapping_object_key(mapping) for p in mapped):
             skipped.append(
                 {"target": obj.id, "reason_ja": "複数ソースを結合する検証 SQL が必要です。"}
             )
             continue
+        # mapping は SQL と同じ表記（`"Amount"` / `amount`）。`"..."` で囲む前にカタログ上の名前へ
+        # 戻す。そのまま囲むと `"amount"`（小文字の別列）や `"""Amount"""` になる（#573）。
         columns = ", ".join(
-            f"{quote_identifier(p.mappings[0].column_name)} AS {quote_identifier(p.id)}"
+            f"{quote_identifier(object_part_name(p.mappings[0].column_name))} "
+            f"AS {quote_identifier(p.id)}"
             for p in mapped
         )
         # Profile 内で解決した識別子は二重引用符で escape。行数は Pydantic の範囲付き整数。
         sql = (
-            f"SELECT {columns} FROM {quote_identifier(mapping.owner)}."  # nosec B608
-            f"{quote_identifier(mapping.object_name)} FETCH FIRST {request.sample_limit} ROWS ONLY"
+            f"SELECT {columns} FROM "  # nosec B608
+            f"{quote_identifier(object_part_name(mapping.owner))}."
+            f"{quote_identifier(object_part_name(mapping.object_name))} "
+            f"FETCH FIRST {request.sample_limit} ROWS ONLY"
         )
         result = adapter.execute_select(sql, request.sample_limit)
         covered.append(obj.id)
@@ -162,7 +171,10 @@ def check_data(
 
             tree = checked_expression(case.sql, query=True)
             for table in tree.find_all(exp.Table):
-                if f"{table.db}.{table.name}".upper() not in allowed:
+                table_key = (
+                    f"{identifier_token(table.args.get('db'))}.{identifier_token(table.this)}"
+                )
+                if table_key not in allowed:
                     raise OntologyGateBlockedError(
                         "ACCEPTANCE_SQL_SCOPE",
                         "受入 SQL は Profile の OWNER.TABLE を明記してください。",

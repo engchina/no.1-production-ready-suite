@@ -1,3 +1,4 @@
+import { dbObjectKeyTokens, formatDbObjectPart, sqlIdentifierToken } from "../dbObjectIdentity";
 import type {
   OntologyEdge,
   OntologyGraph,
@@ -61,6 +62,8 @@ interface GroundingIndex {
 
 const TABLE_NODE_KINDS = new Set(["table", "view", "business_entity", "object_type", "business_event"]);
 const QUALIFIED_COLUMN_PATTERN = /(?:(?:"[^"]+"|[A-Za-z_][\w$#]*)\.){1,2}(?:"[^"]+"|[A-Za-z_][\w$#]*)/gu;
+/** 先頭の識別子パス（`SALES."Mixed_Case" m` の `SALES."Mixed_Case"`）。引用名内の空白・dot を保つ。 */
+const IDENTIFIER_PATH_PATTERN = /^\s*((?:"(?:[^"]|"")*"|[^\s."]+)(?:\s*\.\s*(?:"(?:[^"]|"")*"|[^\s."]+))*)/u;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -70,16 +73,45 @@ function jsonString(value: OntologyJsonValue | undefined): string {
   return typeof value === "string" ? value : "";
 }
 
-function normalizeIdentifier(value: string | undefined | null): string {
+/**
+ * SELECT の出力別名の判定用（物理 object の識別ではない）。別名は大文字で比べる。
+ * 表・列の照合には使わない。大文字化すると `"Amount"` と `AMOUNT` を区別できない（#573）。
+ */
+function normalizeAliasName(value: string | undefined | null): string {
   return String(value ?? "")
-    .normalize("NFKC")
     .trim()
     .replace(/^["'`[]+|["'`\]]+$/g, "")
     .toLocaleUpperCase("en-US");
 }
 
-function normalizeAlias(value: string | undefined | null): string {
-  return normalizeIdentifier(value).replace(/\s+/g, "");
+/**
+ * ontology node / Join 条件が持つカタログ上の名前（大文字小文字を保持）を照合 token にする。
+ * 引用が必要な名前だけ `"..."` で囲む（backend `catalog_match_key`）。
+ */
+function catalogToken(value: string | undefined | null): string {
+  return formatDbObjectPart(value);
+}
+
+/**
+ * SQL の表記の参照（`SALES."Mixed_Case"."Amount"`、`m.amount`）を部分ごとの照合 token に分ける。
+ * 引用なしは大文字、引用名は大文字小文字を保持する（backend `object_match_key`）。
+ * 別名や式が続く場合は先頭の識別子パスだけを使う。
+ */
+function referenceTokens(value: string | undefined | null): string[] {
+  const cleaned = String(value ?? "")
+    .replace(/`/g, "")
+    .replace(/\[/g, "")
+    .replace(/\]/g, "")
+    .trim();
+  const match = IDENTIFIER_PATH_PATTERN.exec(cleaned);
+  return match ? dbObjectKeyTokens(match[1]) : [];
+}
+
+/** SQL の表別名の照合 token。引用の有無は保持されないため、引用なし・引用ありの両方で登録する。 */
+function aliasTokens(value: string | undefined | null): string[] {
+  const raw = String(value ?? "").trim();
+  if (!raw) return [];
+  return dedupe([...dbObjectKeyTokens(raw).slice(-1), catalogToken(raw)].filter(Boolean));
 }
 
 function splitQualifiedName(value: string | undefined | null): {
@@ -87,14 +119,8 @@ function splitQualifiedName(value: string | undefined | null): {
   objectName: string;
   columnName: string;
 } {
-  const cleaned = String(value ?? "")
-    .replace(/"/g, "")
-    .replace(/`/g, "")
-    .replace(/\[/g, "")
-    .replace(/\]/g, "")
-    .trim();
-  const firstToken = cleaned.split(/\s+/u)[0] ?? "";
-  const parts = firstToken.split(".").map(normalizeIdentifier).filter(Boolean);
+  // technical_name は `SALES."Mixed_Case".AMOUNT` のように小文字を含む名前だけ引用される。
+  const parts = referenceTokens(value);
   if (parts.length >= 3) {
     return {
       owner: parts[parts.length - 3] ?? "",
@@ -109,14 +135,7 @@ function splitQualifiedName(value: string | undefined | null): {
 }
 
 function splitObjectName(value: string | undefined | null): ObjectIdentity | null {
-  const cleaned = String(value ?? "")
-    .replace(/"/g, "")
-    .replace(/`/g, "")
-    .replace(/\[/g, "")
-    .replace(/\]/g, "")
-    .trim();
-  const firstToken = cleaned.split(/\s+/u)[0] ?? "";
-  const parts = firstToken.split(".").map(normalizeIdentifier).filter(Boolean);
+  const parts = referenceTokens(value);
   if (parts.length >= 2) {
     return {
       owner: parts[parts.length - 2] ?? "",
@@ -136,18 +155,11 @@ function objectIdentityFromNode(node: OntologyNode): ObjectIdentity | null {
   const fallback = node.physical_mapping;
   const metadata = node.metadata ?? {};
   const technical = splitQualifiedName(node.technical_name);
-  const owner = normalizeIdentifier(
-    mapping?.owner ||
-      jsonString(metadata.owner) ||
-      fallback?.owner ||
-      (TABLE_NODE_KINDS.has(node.kind) || node.kind === "column" ? technical.owner : "")
-  );
-  const objectName = normalizeIdentifier(
-    mapping?.object_name ||
-      jsonString(metadata.object_name) ||
-      fallback?.object_name ||
-      (TABLE_NODE_KINDS.has(node.kind) || node.kind === "column" ? technical.objectName : "")
-  );
+  const allowTechnical = TABLE_NODE_KINDS.has(node.kind) || node.kind === "column";
+  const catalogOwner = mapping?.owner || jsonString(metadata.owner) || fallback?.owner;
+  const owner = catalogOwner ? catalogToken(catalogOwner) : allowTechnical ? technical.owner : "";
+  const catalogObject = mapping?.object_name || jsonString(metadata.object_name) || fallback?.object_name;
+  const objectName = catalogObject ? catalogToken(catalogObject) : allowTechnical ? technical.objectName : "";
   if (!objectName) return null;
   return {
     owner,
@@ -161,13 +173,9 @@ function columnIdentityFromNode(node: OntologyNode): ColumnIdentity | null {
   if (!object) return null;
   const columnRef = node.physical_mappings?.[0]?.column_refs?.[0];
   const metadata = node.metadata ?? {};
-  const technical = splitQualifiedName(node.technical_name);
-  const columnName = normalizeIdentifier(
-    columnRef?.column_name ||
-      jsonString(metadata.column_name) ||
-      node.physical_mapping?.column_name ||
-      technical.columnName
-  );
+  const catalogColumn =
+    columnRef?.column_name || jsonString(metadata.column_name) || node.physical_mapping?.column_name;
+  const columnName = catalogColumn ? catalogToken(catalogColumn) : splitQualifiedName(node.technical_name).columnName;
   if (!columnName) return null;
   return { ...object, columnName };
 }
@@ -211,17 +219,20 @@ function itemLabel(item: SqlSemanticItem | SqlSemanticJoin | string): string {
 
 function tableIdentityFromItem(item: SqlSemanticItem): ObjectIdentity | null {
   if (item.is_cte) return null;
-  const owner = normalizeIdentifier(item.owner);
-  const name = normalizeIdentifier(item.name || item.qualified_name || item.expression || item.source_sql);
-  if (owner && item.name) return { owner, objectName: normalizeIdentifier(item.name) };
-  const qualified = splitObjectName(item.qualified_name || item.source_sql || item.expression || item.name);
-  if (qualified?.objectName) {
+  // backend が識別子の引用の有無を返す場合はそれを正とする（`SALES."Mixed_Case"` は
+  // 大文字の同名表 `SALES.MIXED_CASE` と別の表、#573）。
+  if (item.name && (item.name_quoted !== undefined || item.owner_quoted !== undefined)) {
     return {
-      owner: owner || qualified.owner,
-      objectName: normalizeIdentifier(item.name) || qualified.objectName,
+      owner: sqlIdentifierToken(item.owner, Boolean(item.owner_quoted)),
+      objectName: sqlIdentifierToken(item.name, Boolean(item.name_quoted)),
     };
   }
-  if (name) return { owner, objectName: name };
+  // 引用情報を持たない旧 artifact は、引用符を保持した SQL の表記から読む。
+  const qualified = splitObjectName(item.source_sql || item.qualified_name || item.expression || item.name);
+  if (qualified?.objectName) {
+    const owner = referenceTokens(item.owner)[0] ?? "";
+    return { owner: owner || qualified.owner, objectName: qualified.objectName };
+  }
   return null;
 }
 
@@ -286,10 +297,9 @@ function tableAliasMap(sqlGraph: SqlSemanticGraph): Map<string, ObjectIdentity> 
     const table = normalizeSqlItem(rawTable);
     const identity = tableIdentityFromItem(table);
     if (!identity) continue;
-    const alias = normalizeAlias(table.alias);
-    if (alias) aliases.set(alias, identity);
-    if (table.name) aliases.set(normalizeAlias(table.name), identity);
-    if (table.qualified_name) aliases.set(normalizeAlias(table.qualified_name), identity);
+    for (const alias of aliasTokens(table.alias)) aliases.set(alias, identity);
+    aliases.set(identity.objectName, identity);
+    if (identity.owner) aliases.set(`${identity.owner}.${identity.objectName}`, identity);
   }
   return aliases;
 }
@@ -326,24 +336,27 @@ function scopeObjectsForItem(scope: TableScope, item: SqlSemanticItem): ObjectId
 
 function identityFromSourceName(source: string | undefined | null, aliases: Map<string, ObjectIdentity>): ObjectIdentity | null {
   const value = String(source ?? "").trim();
-  if (!value) return null;
-  const directAlias = aliases.get(normalizeAlias(value));
-  if (directAlias) return directAlias;
-  const parts = value.split(/\s+/u).filter(Boolean);
-  if (parts.length > 1) {
-    const alias = aliases.get(normalizeAlias(parts[parts.length - 1]));
-    if (alias) return alias;
-    const sourceIdentity = splitObjectName(parts[0]);
-    if (sourceIdentity?.objectName) return sourceIdentity;
+  // `SALES."Mixed_Case" m` を識別子パスと別名に分ける（引用名の中の空白で分けない）。
+  const match = IDENTIFIER_PATH_PATTERN.exec(value);
+  if (!match) return null;
+  const trailing = value.slice(match[0].length).trim().split(/\s+/u).filter(Boolean);
+  if (trailing.length === 0) {
+    const direct = aliases.get(dbObjectKeyTokens(match[1]).join("."));
+    if (direct) return direct;
+  } else {
+    for (const token of aliasTokens(trailing[trailing.length - 1])) {
+      const alias = aliases.get(token);
+      if (alias) return alias;
+    }
   }
-  return splitObjectName(value);
+  return splitObjectName(match[1]);
 }
 
 function columnIdentityFromPath(path: string, aliases: Map<string, ObjectIdentity>): ColumnIdentity | null {
-  const normalizedPath = String(path ?? "").trim();
-  if (!normalizedPath) return null;
-  const cleaned = normalizedPath.replace(/"/g, "").replace(/`/g, "");
-  const parts = cleaned.split(".").map(normalizeIdentifier).filter(Boolean);
+  return columnIdentityFromTokens(referenceTokens(path), aliases);
+}
+
+function columnIdentityFromTokens(parts: string[], aliases: Map<string, ObjectIdentity>): ColumnIdentity | null {
   if (parts.length >= 3) {
     return {
       owner: parts[parts.length - 3] ?? "",
@@ -352,7 +365,7 @@ function columnIdentityFromPath(path: string, aliases: Map<string, ObjectIdentit
     };
   }
   if (parts.length === 2) {
-    const aliasIdentity = aliases.get(normalizeAlias(parts[0]));
+    const aliasIdentity = aliases.get(parts[0] ?? "");
     if (aliasIdentity) return { ...aliasIdentity, columnName: parts[1] ?? "" };
     return { owner: "", objectName: parts[0] ?? "", columnName: parts[1] ?? "" };
   }
@@ -362,7 +375,17 @@ function columnIdentityFromPath(path: string, aliases: Map<string, ObjectIdentit
 
 function columnIdentitiesFromItem(item: SqlSemanticItem, aliases: Map<string, ObjectIdentity>): ColumnIdentity[] {
   const values = new Set<string>();
-  if (item.table && (item.column || item.name)) {
+  const identities: ColumnIdentity[] = [];
+  if (item.name && item.name_quoted !== undefined && !item.column) {
+    // backend の columns[] は owner / 表 / 列ごとに引用の有無を返す。大文字化せずに照合する（#573）。
+    const tokens = [
+      sqlIdentifierToken(item.owner, Boolean(item.owner_quoted)),
+      sqlIdentifierToken(item.table, Boolean(item.table_quoted)),
+      sqlIdentifierToken(item.name, Boolean(item.name_quoted)),
+    ].filter(Boolean);
+    const identity = columnIdentityFromTokens(tokens, aliases);
+    if (identity) identities.push(identity);
+  } else if (item.table && (item.column || item.name)) {
     values.add(`${item.table}.${item.column || item.name}`);
   } else if (item.column || (item.name && !item.function_name)) {
     values.add(item.column || item.name || "");
@@ -376,9 +399,10 @@ function columnIdentitiesFromItem(item: SqlSemanticItem, aliases: Map<string, Ob
     }
   }
   return dedupe(
-    [...values]
-      .map((value) => columnIdentityFromPath(value, aliases))
-      .filter((value): value is ColumnIdentity => Boolean(value?.columnName))
+    [
+      ...identities,
+      ...[...values].map((value) => columnIdentityFromPath(value, aliases)),
+    ].filter((value): value is ColumnIdentity => Boolean(value?.columnName))
   );
 }
 
@@ -393,17 +417,18 @@ function enrichColumnNodeIds(index: GroundingIndex, columnEntries: ColumnEntry[]
 }
 
 function endpointIdentity(endpoint: { owner?: string; object_name?: string; column_name?: string } | undefined): ColumnIdentity | null {
-  const objectName = normalizeIdentifier(endpoint?.object_name);
-  const columnName = normalizeIdentifier(endpoint?.column_name);
+  // Join 条件の端点はカタログ上の名前（大文字小文字を保持）。
+  const objectName = catalogToken(endpoint?.object_name);
+  const columnName = catalogToken(endpoint?.column_name);
   if (!objectName || !columnName) return null;
-  return { owner: normalizeIdentifier(endpoint?.owner), objectName, columnName };
+  return { owner: catalogToken(endpoint?.owner), objectName, columnName };
 }
 
 function columnIdentityFromObject(
   object: ObjectIdentity | null,
   columnName: string | undefined
 ): ColumnIdentity | null {
-  const normalized = normalizeIdentifier(columnName);
+  const normalized = catalogToken(columnName);
   if (!object || !normalized) return null;
   return { ...object, columnName: normalized };
 }
@@ -491,11 +516,11 @@ function computedOutputNames(sqlGraph: SqlSemanticGraph): Set<string> {
   const names = new Set<string>();
   for (const rawProjection of sqlGraph.projections ?? []) {
     const projection = normalizeSqlItem(rawProjection);
-    const outputName = normalizeIdentifier(projection.output_name);
+    const outputName = normalizeAliasName(projection.output_name);
     if (!outputName) continue;
     const referenced = (projection.referenced_columns ?? []).some((value) => {
       const parts = String(value).split(".");
-      return normalizeIdentifier(parts[parts.length - 1]) === outputName;
+      return normalizeAliasName(parts[parts.length - 1]) === outputName;
     });
     if (!referenced) names.add(outputName);
   }
@@ -578,7 +603,7 @@ export function groundSqlSemanticGraphOnOntologyGraph(
         Boolean(item.column) ||
         // columns[] 由来の未修飾列(clause 付き・table 空)も未接地として報告する。
         // ただし SELECT で作られた出力別名の参照は物理列ではないので除く。
-        Boolean(item.clause && item.name && !outputNames.has(normalizeIdentifier(item.name)));
+        Boolean(item.clause && item.name && !outputNames.has(normalizeAliasName(item.name)));
       if (hasColumnHint) unmatchedColumns.push(label);
       continue;
     }

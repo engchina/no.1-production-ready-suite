@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import re
 
+from app.features.nl2sql.object_identity import catalog_match_key, object_match_key
 from app.features.nl2sql.ontology_catalog import SchemaOntology
 from app.features.nl2sql.ontology_models import (
     OntologyEdge,
@@ -40,6 +41,20 @@ def _entity_name(node: OntologyNode) -> str:
     if owner and object_name:
         return f"{owner}.{object_name}"
     return node.technical_name or node.business_name_ja
+
+
+def _object_key(node: OntologyNode) -> str:
+    """表・ビュー node の照合キー（カタログ上の名前、引用名は大文字小文字を保持）。
+
+    `_entity_name(...).upper()` をキーにすると、`SALES."Mixed_Case"` と大文字の同名表
+    `SALES.MIXED_CASE` の列・FK マーカー・業務エンティティが混ざる（#573）。
+    """
+
+    owner = str(node.metadata.get("owner", "")).strip()
+    object_name = str(node.metadata.get("object_name", "")).strip()
+    if owner and object_name:
+        return catalog_match_key(owner, object_name)
+    return object_match_key(node.technical_name or node.business_name_ja)
 
 
 def _quoted(value: str) -> str:
@@ -86,7 +101,7 @@ def _resolve_object_node(
         return node
     for mapping in node.physical_mappings:
         ref = mapping.object_ref
-        resolved = object_node_by_key.get(f"{ref.owner}.{ref.object_name}".upper())
+        resolved = object_node_by_key.get(catalog_match_key(ref.owner, ref.object_name))
         if resolved is not None:
             return resolved
     return None
@@ -136,7 +151,7 @@ def render_mermaid_er(
     )
     omitted_entities = max(0, len(object_nodes) - max_entities)
     object_nodes = object_nodes[:max_entities]
-    object_node_by_key = {_entity_name(node).upper(): node for node in object_nodes}
+    object_node_by_key = {_object_key(node): node for node in object_nodes}
     included_node_ids = {node.id for node in object_nodes}
 
     # 表・ビューごとの列(ordinal 順)。view スコープ内の列だけを載せる。
@@ -146,7 +161,7 @@ def render_mermaid_er(
             continue
         owner = str(node.metadata.get("owner", "")).strip()
         object_name = str(node.metadata.get("object_name", "")).strip()
-        key = f"{owner}.{object_name}".upper()
+        key = catalog_match_key(owner, object_name)
         if key in object_node_by_key:
             columns_by_object.setdefault(key, []).append(node)
     for columns in columns_by_object.values():
@@ -181,8 +196,8 @@ def render_mermaid_er(
         for condition in edge.join_conditions:
             fk_column_keys.add(
                 (
-                    f"{condition.left.owner}.{condition.left.object_name}".upper(),
-                    condition.left.column_name.upper(),
+                    catalog_match_key(condition.left.owner, condition.left.object_name),
+                    catalog_match_key(condition.left.column_name),
                 )
             )
         notation = _CARDINALITY_NOTATION[edge.cardinality]
@@ -218,7 +233,7 @@ def render_mermaid_er(
         lines: list[str] = []
         if logical and logical != name.split(".")[-1]:
             lines.append(f"    %% {logical} = {name}")
-        columns = columns_by_object.get(name.upper(), []) if with_attributes else []
+        columns = columns_by_object.get(_object_key(node), []) if with_attributes else []
         if not columns:
             lines.append(header)
             return lines
@@ -226,10 +241,12 @@ def render_mermaid_er(
         for column in columns:
             raw_column_name = str(column.metadata.get("column_name", "")).strip() or column.id
             column_name = _attribute_name(column)
-            owner_key = (
-                f"{column.metadata.get('owner', '')}.{column.metadata.get('object_name', '')}"
-            ).upper()
-            marker = " FK" if (owner_key, raw_column_name.upper()) in fk_column_keys else ""
+            owner_key = catalog_match_key(
+                str(column.metadata.get("owner", "")), str(column.metadata.get("object_name", ""))
+            )
+            marker = (
+                " FK" if (owner_key, catalog_match_key(raw_column_name)) in fk_column_keys else ""
+            )
             logical_name = _label(column.business_name_ja)
             comments: list[str] = []
             if logical_name and logical_name.upper() != raw_column_name.upper():

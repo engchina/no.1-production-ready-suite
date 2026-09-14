@@ -27,9 +27,13 @@ from uuid import uuid4
 
 from app.features.nl2sql.models import Nl2SqlProfile, SchemaCatalog, SchemaTable
 from app.features.nl2sql.object_identity import (
+    catalog_match_key,
     format_object_part,
-    normalize_object_part,
+    is_unquoted_object_part,
+    object_match_key,
     object_name_tokens,
+    split_match_key,
+    sql_identifier_token,
 )
 from app.features.nl2sql.ontology_catalog import SchemaOntology, catalog_schema_fingerprint
 from app.features.nl2sql.ontology_definition_service import definition_fingerprint
@@ -79,6 +83,7 @@ from app.features.nl2sql.ontology_sources import (
 from app.features.nl2sql.ontology_store import (
     OntologyVersionConflict,
     canonical_json,
+    physical_identity_part,
     stable_ontology_id,
 )
 from app.features.nl2sql.sql_semantics import parse_oracle_sql
@@ -119,8 +124,36 @@ class OntologyBuildSchemaContext:
     errors: list[str] = field(default_factory=list)
 
 
-def _normalize_oracle_identifier(value: str) -> str:
-    return value.replace('"', "").strip().upper()
+def _context_name(value: str) -> str:
+    """カタログ上の owner / object / column 名を、AI 構築の schema context に載せる表記にする。
+
+    ontology node の technical_name と同じ `physical_identity_part`。大文字化しても変わらない名前
+    （`ORDERS`、`売上`）はそのまま、小文字を含む名前だけ `"Mixed_Case"` と SQL の引用表記にする。
+    LLM 出力と Q/A SQL の参照は `object_match_key`（引用規則）で照合するため、大文字の同名表
+    `SALES.MIXED_CASE` と取り違えない（#573）。引用が不要な名前の表記は従来と同じ値になる。
+    """
+
+    return physical_identity_part(value)
+
+
+def _sql_token(name: str, *, quoted: bool) -> str:
+    """SQL parser が返した識別子 1 部分の照合 token。不正な値は例外にせずそのまま返す。"""
+
+    if not str(name or "").strip():
+        return ""
+    try:
+        return sql_identifier_token(name, quoted=quoted)
+    except ValueError:
+        return str(name).strip()
+
+
+def _alias_tokens(alias: str) -> set[str]:
+    """SQL の表別名・CTE 名の照合 token（引用の有無は保持されないため両方の解釈を登録する）。"""
+
+    raw = str(alias or "").strip()
+    if not raw:
+        return set()
+    return {object_match_key(raw), catalog_match_key(raw)}
 
 
 def _schema_object_kind(table: SchemaTable) -> str:
@@ -128,38 +161,9 @@ def _schema_object_kind(table: SchemaTable) -> str:
 
 
 def _schema_object_label(table: SchemaTable) -> str:
-    owner = _normalize_oracle_identifier(table.owner or "APP")
-    name = _normalize_oracle_identifier(table.table_name)
+    owner = _context_name(table.owner or "APP")
+    name = _context_name(table.table_name)
     return f"{owner}.{name}" if owner else name
-
-
-def _is_case_sensitive_part(token: str) -> bool:
-    """大文字化すると別の名前になる（小文字を含む）引用名か。
-
-    `"売上"` や `"MY TABLE"` は大文字化しても同じ名前のため該当しない。
-    """
-
-    name = normalize_object_part(token)
-    return name != name.upper()
-
-
-def _has_case_sensitive_name(*names: str) -> bool:
-    """カタログ上の名前に、大文字化すると別の名前になる（小文字を含む）ものがあるか。"""
-
-    return any(str(name or "") != str(name or "").upper() for name in names)
-
-
-def _is_case_sensitive_physical_node(node: OntologyNode) -> bool:
-    """owner / object / column 名に、大文字化すると別の名前になる引用名を含む物理 node か。
-
-    schema ontology は #563 から `SALES."Mixed_Case"` を大文字の同名表と別 node にしたが、
-    AI 構築の schema context と参照解決（`_ScopeResolver` / `_SchemaContextLookup`）は名前を
-    大文字化して照合する。取り違えないよう、AI 構築ではこれらの node を扱わない。
-    """
-
-    return _has_case_sensitive_name(
-        *(str(node.metadata.get(key) or "") for key in ("owner", "object_name", "column_name"))
-    )
 
 
 def _catalog_object_part(value: str) -> str:
@@ -185,15 +189,6 @@ def _resolve_catalog_object(
         parts = []
     owner = parts[-2] if len(parts) >= 2 else ""
     object_name = parts[-1] if parts else ""
-    if any(_is_case_sensitive_part(part) for part in parts):
-        # AI 構築の schema context と LLM 出力の参照解決は owner / object / column 名を大文字化して
-        # 照合するため、小文字を含む引用名を大文字の同名表と区別できない。取り違えないよう
-        # AI 構築の対象から外して明示する（schema ontology・Profile の view は #563 で対応済み）。
-        return (
-            None,
-            f"「{raw_name}」は大文字小文字の混在を含む引用名のため、"
-            "オントロジーの AI 構築の対象にできません（未対応）。",
-        )
     matches = [
         table
         for table in candidates
@@ -254,9 +249,10 @@ def _selected_schema_objects(
 
 
 def _constraint_cardinality(detail: Any, source_table: SchemaTable) -> str:
-    source_columns = tuple(_normalize_oracle_identifier(value) for value in detail.columns)
+    # 制約の列はカタログ上の名前どうしで比べる（`"Amount"` と `AMOUNT` を同じ列にしない）。
+    source_columns = tuple(detail.columns)
     unique_column_sets = {
-        tuple(_normalize_oracle_identifier(value) for value in constraint.columns)
+        tuple(constraint.columns)
         for constraint in source_table.constraint_details
         if constraint.constraint_type in {"P", "U"}
     }
@@ -271,17 +267,14 @@ def build_schema_context_from_catalog(
 
     selected_objects, warnings, errors = _selected_schema_objects(profile, catalog)
     selected_keys = {
-        (
-            _normalize_oracle_identifier(table.owner or "APP"),
-            _normalize_oracle_identifier(table.table_name),
-        )
-        for table in selected_objects
+        catalog_match_key(table.owner or "APP", table.table_name) for table in selected_objects
     }
     objects: list[dict[str, Any]] = []
     relationships: list[dict[str, Any]] = []
     for table in selected_objects:
-        owner = _normalize_oracle_identifier(table.owner or "APP")
-        object_name = _normalize_oracle_identifier(table.table_name)
+        catalog_owner = table.owner or "APP"
+        owner = _context_name(catalog_owner)
+        object_name = _context_name(table.table_name)
         qualified_name = f"{owner}.{object_name}" if owner else object_name
         objects.append(
             {
@@ -294,10 +287,9 @@ def build_schema_context_from_catalog(
                 "row_count": table.row_count,
                 "columns": [
                     {
-                        "column": _normalize_oracle_identifier(column.column_name),
+                        "column": _context_name(column.column_name),
                         "qualified_column": (
-                            f"{qualified_name}."
-                            f"{_normalize_oracle_identifier(column.column_name)}"
+                            f"{qualified_name}.{_context_name(column.column_name)}"
                         ),
                         "data_type": column.data_type,
                         "nullable": column.nullable,
@@ -306,56 +298,50 @@ def build_schema_context_from_catalog(
                         "comment": column.comment,
                     }
                     for ordinal, column in enumerate(table.columns, start=1)
-                    # 小文字を含む引用名の列は大文字化すると同名列と区別できない（#563）。
-                    if not _has_case_sensitive_name(column.column_name)
                 ],
                 "constraints": [
                     {
                         "constraint_name": detail.constraint_name,
                         "constraint_type": detail.constraint_type,
-                        "columns": [
-                            _normalize_oracle_identifier(column) for column in detail.columns
-                        ],
+                        "columns": [_context_name(column) for column in detail.columns],
                     }
                     for detail in table.constraint_details
                     if detail.constraint_type in {"P", "U", "C"}
-                    and not _has_case_sensitive_name(*detail.columns)
                 ],
             }
         )
         for detail in table.constraint_details:
             if detail.constraint_type != "R" or not detail.referenced_table:
                 continue
-            target_owner = _normalize_oracle_identifier(detail.referenced_owner or owner)
-            target_name = _normalize_oracle_identifier(detail.referenced_table)
-            if (target_owner, target_name) not in selected_keys:
+            catalog_target_owner = detail.referenced_owner or catalog_owner
+            if catalog_match_key(catalog_target_owner, detail.referenced_table) not in (
+                selected_keys
+            ):
                 continue
-            if _has_case_sensitive_name(*detail.columns, *detail.referenced_columns):
-                continue
+            target = (
+                f"{_context_name(catalog_target_owner)}."
+                f"{_context_name(detail.referenced_table)}"
+            )
             relationships.append(
                 {
                     "id": detail.constraint_name,
                     "kind": "foreign_key",
                     "source_object": qualified_name,
-                    "target_object": f"{target_owner}.{target_name}",
-                    "relationship_name_ja": f"{qualified_name} → {target_owner}.{target_name}",
+                    "target_object": target,
+                    "relationship_name_ja": f"{qualified_name} → {target}",
                     "description_ja": f"Oracle 外部キー {detail.constraint_name}",
                     "cardinality": _constraint_cardinality(detail, table),
                     "review_status": "approved" if detail.status == "ENABLED" else "proposed",
                     "allowed_path": True,
                     "join_conditions": [
                         {
-                            "left": (f"{qualified_name}.{_normalize_oracle_identifier(left)}"),
-                            "right": (
-                                f"{target_owner}.{target_name}."
-                                f"{_normalize_oracle_identifier(right)}"
-                            ),
+                            "left": f"{qualified_name}.{_context_name(left)}",
+                            "right": f"{target}.{_context_name(right)}",
                             "operator": "=",
                             "ordinal": ordinal,
                             "expression": (
-                                f"{qualified_name}.{_normalize_oracle_identifier(left)} = "
-                                f"{target_owner}.{target_name}."
-                                f"{_normalize_oracle_identifier(right)}"
+                                f"{qualified_name}.{_context_name(left)} = "
+                                f"{target}.{_context_name(right)}"
                             ),
                         }
                         for ordinal, (left, right) in enumerate(
@@ -367,20 +353,22 @@ def build_schema_context_from_catalog(
             )
 
     for dependency in catalog.view_dependencies:
-        source_owner = _normalize_oracle_identifier(dependency.owner or "APP")
-        source_name = _normalize_oracle_identifier(dependency.view_name)
-        target_owner = _normalize_oracle_identifier(dependency.referenced_owner or source_owner)
-        target_name = _normalize_oracle_identifier(dependency.referenced_name)
-        if (source_owner, source_name) not in selected_keys:
+        catalog_source_owner = dependency.owner or "APP"
+        catalog_target_owner = dependency.referenced_owner or catalog_source_owner
+        if catalog_match_key(catalog_source_owner, dependency.view_name) not in selected_keys:
             continue
-        if (target_owner, target_name) not in selected_keys:
+        if catalog_match_key(catalog_target_owner, dependency.referenced_name) not in selected_keys:
             continue
+        source = f"{_context_name(catalog_source_owner)}.{_context_name(dependency.view_name)}"
+        target = (
+            f"{_context_name(catalog_target_owner)}.{_context_name(dependency.referenced_name)}"
+        )
         relationships.append(
             {
-                "id": f"view_dependency:{source_owner}.{source_name}:{target_owner}.{target_name}",
+                "id": f"view_dependency:{source}:{target}",
                 "kind": "view_dependency",
-                "source_object": f"{source_owner}.{source_name}",
-                "target_object": f"{target_owner}.{target_name}",
+                "source_object": source,
+                "target_object": target,
                 "relationship_name_ja": "参照",
                 "description_ja": "Oracle ビュー依存関係",
                 "cardinality": "unknown",
@@ -419,7 +407,12 @@ def build_schema_context_from_catalog(
 
 
 class _ScopeResolver:
-    """profile view 内の物理 object/column に限定した参照解決。"""
+    """profile view 内の物理 object/column に限定した参照解決。
+
+    キーは `object_identity` の照合キー（引用なしは大文字、引用名は大文字小文字を保持）。
+    LLM 出力・Q/A SQL の参照は SQL と同じ表記として `object_match_key` で解釈する。大文字化して
+    照合すると `SALES."Mixed_Case"` と大文字の同名表 `SALES.MIXED_CASE` を区別できない（#573）。
+    """
 
     def __init__(self, ontology: SchemaOntology, view: ProfileOntologyView) -> None:
         scoped = set(view.node_ids)
@@ -429,22 +422,26 @@ class _ScopeResolver:
         self.columns_by_name: dict[str, list[OntologyNode]] = {}
         self.sql_aliases: dict[str, set[str]] = {}
         for node in ontology.nodes:
-            if node.id not in scoped or _is_case_sensitive_physical_node(node):
+            if node.id not in scoped:
                 continue
+            owner = str(node.metadata.get("owner", ""))
+            name = str(node.metadata.get("object_name", ""))
             if node.kind in {OntologyNodeKind.TABLE, OntologyNodeKind.VIEW}:
-                owner = str(node.metadata.get("owner", "")).upper()
-                name = str(node.metadata.get("object_name", "")).upper()
-                self.objects[f"{owner}.{name}"] = node
-                self.objects_by_name.setdefault(name, []).append(node)
+                self.objects[catalog_match_key(owner, name)] = node
+                self.objects_by_name.setdefault(catalog_match_key(name), []).append(node)
             elif node.kind == OntologyNodeKind.COLUMN:
-                owner = str(node.metadata.get("owner", "")).upper()
-                name = str(node.metadata.get("object_name", "")).upper()
-                column = str(node.metadata.get("column_name", "")).upper()
-                self.columns[f"{owner}.{name}.{column}"] = node
-                self.columns_by_name.setdefault(column, []).append(node)
+                column = str(node.metadata.get("column_name", ""))
+                self.columns[catalog_match_key(owner, name, column)] = node
+                self.columns_by_name.setdefault(catalog_match_key(column), []).append(node)
+
+    @staticmethod
+    def _object_node_key(node: OntologyNode) -> str:
+        return catalog_match_key(
+            str(node.metadata.get("owner", "")), str(node.metadata.get("object_name", ""))
+        )
 
     def _resolve_object_key(self, reference: str) -> str | None:
-        key = reference.replace('"', "").strip().upper()
+        key = object_match_key(reference)
         if not key:
             return None
         if key in self.objects:
@@ -452,14 +449,11 @@ class _ScopeResolver:
         alias_targets = self.sql_aliases.get(key, set())
         if len(alias_targets) == 1:
             return next(iter(alias_targets))
-        parts = [part for part in key.split(".") if part]
+        parts = split_match_key(key)
         lookup_name = parts[-1] if parts else key
         candidates = self.objects_by_name.get(lookup_name, [])
         if len(candidates) == 1:
-            node = candidates[0]
-            owner = str(node.metadata.get("owner", "")).upper()
-            name = str(node.metadata.get("object_name", "")).upper()
-            return f"{owner}.{name}"
+            return self._object_node_key(candidates[0])
         return None
 
     def resolve_object(self, reference: str) -> OntologyNode | None:
@@ -476,27 +470,25 @@ class _ScopeResolver:
             for table in graph.tables:
                 if table.is_cte:
                     continue
-                owner = str(table.owner).strip().upper()
-                name = str(table.name).strip().upper()
+                owner = _sql_token(table.owner, quoted=table.owner_quoted)
+                name = _sql_token(table.name, quoted=table.name_quoted)
                 object_key = self._resolve_object_key(f"{owner}.{name}" if owner else name)
                 if object_key is None:
                     continue
-                for token in {name, str(table.alias).strip().upper()}:
+                for token in {name, *_alias_tokens(table.alias)}:
                     if token:
                         self.sql_aliases.setdefault(token, set()).add(object_key)
 
     def resolve_column(self, reference: str) -> OntologyNode | None:
-        key = reference.replace('"', "").strip().upper()
-        parts = [part for part in key.split(".") if part]
+        parts = split_match_key(object_match_key(reference))
         if len(parts) >= 3:
             exact = self.columns.get(".".join(parts[-3:]))
             if exact is not None:
                 return exact
-            object_column = ".".join(parts[-2:])
             matches = [
                 node
                 for node_key, node in self.columns.items()
-                if node_key.endswith(f".{object_column}")
+                if split_match_key(node_key)[-2:] == parts[-2:]
             ]
             return matches[0] if len(matches) == 1 else None
         if len(parts) == 2:
@@ -512,7 +504,7 @@ class _ScopeResolver:
             matches = [
                 node
                 for node_key, node in self.columns.items()
-                if node_key.endswith("." + ".".join(parts))
+                if split_match_key(node_key)[-2:] == parts
             ]
             return matches[0] if len(matches) == 1 else None
         if len(parts) == 1:
@@ -524,18 +516,24 @@ class _ScopeResolver:
 def _physical_object_label(node: OntologyNode) -> str:
     if node.physical_mappings:
         ref = node.physical_mappings[0].object_ref
-        return f"{ref.owner}.{ref.object_name}" if ref.owner else ref.object_name
+        object_name = _context_name(ref.object_name)
+        return f"{_context_name(ref.owner)}.{object_name}" if ref.owner else object_name
     owner = str(node.metadata.get("owner", "")).strip()
     object_name = str(node.metadata.get("object_name", "")).strip()
     if object_name:
-        return f"{owner}.{object_name}" if owner else object_name
+        return (
+            f"{_context_name(owner)}.{_context_name(object_name)}"
+            if owner
+            else _context_name(object_name)
+        )
     return node.technical_name or node.id
 
 
 def _column_ref_label(ref: Any) -> str:
-    owner = str(getattr(ref, "owner", "") or "").strip()
-    object_name = str(getattr(ref, "object_name", "") or "").strip()
-    column_name = str(getattr(ref, "column_name", "") or "").strip()
+    # カタログ上の名前を schema context と同じ表記（小文字を含む名前だけ `"..."`）で示す。
+    owner = _context_name(str(getattr(ref, "owner", "") or ""))
+    object_name = _context_name(str(getattr(ref, "object_name", "") or ""))
+    column_name = _context_name(str(getattr(ref, "column_name", "") or ""))
     if owner and object_name and column_name:
         return f"{owner}.{object_name}.{column_name}"
     if object_name and column_name:
@@ -557,10 +555,10 @@ def build_schema_context(ontology: SchemaOntology, view: ProfileOntologyView) ->
     scoped_edges = set(view.edge_ids)
     objects: dict[str, dict[str, Any]] = {}
     for node in sorted(ontology.nodes, key=lambda item: item.id):
-        if node.id not in scoped or _is_case_sensitive_physical_node(node):
+        if node.id not in scoped:
             continue
         if node.kind in {OntologyNodeKind.TABLE, OntologyNodeKind.VIEW}:
-            objects[node.technical_name] = {
+            objects[_ScopeResolver._object_node_key(node)] = {
                 "object": node.technical_name,
                 "object_type": node.kind.value,
                 "logical_name": node.business_name_ja,
@@ -569,20 +567,14 @@ def build_schema_context(ontology: SchemaOntology, view: ProfileOntologyView) ->
                 "columns": [],
             }
     for node in sorted(ontology.nodes, key=lambda item: item.id):
-        if (
-            node.id not in scoped
-            or node.kind != OntologyNodeKind.COLUMN
-            or _is_case_sensitive_physical_node(node)
-        ):
+        if node.id not in scoped or node.kind != OntologyNodeKind.COLUMN:
             continue
-        owner = str(node.metadata.get("owner", ""))
-        object_name = str(node.metadata.get("object_name", ""))
-        entry = objects.get(f"{owner}.{object_name}")
+        entry = objects.get(_ScopeResolver._object_node_key(node))
         if entry is None:
             continue
         entry["columns"].append(
             {
-                "column": str(node.metadata.get("column_name", "")),
+                "column": _context_name(str(node.metadata.get("column_name", ""))),
                 "data_type": str(node.metadata.get("data_type", "")),
                 "nullable": bool(node.metadata.get("nullable", True)),
                 "ordinal": node.metadata.get("ordinal"),
@@ -603,17 +595,7 @@ def build_schema_context(ontology: SchemaOntology, view: ProfileOntologyView) ->
             continue
         source = node_by_id.get(edge.source_node_id)
         target = node_by_id.get(edge.target_node_id)
-        if (
-            source is None
-            or target is None
-            or _is_case_sensitive_physical_node(source)
-            or _is_case_sensitive_physical_node(target)
-            or any(
-                _has_case_sensitive_name(ref.owner, ref.object_name, ref.column_name)
-                for condition in edge.join_conditions
-                for ref in (condition.left, condition.right)
-            )
-        ):
+        if source is None or target is None:
             continue
         relationships.append(
             {
@@ -798,13 +780,48 @@ def _build_result_counts_ja(
     return "、".join(parts)
 
 
+_QUOTED_SQL_IDENTIFIER_RE = re.compile(r'"(?:[^"]|"")*"')
+
+
+@dataclass(frozen=True)
+class _QaSqlColumns:
+    """Q/A SQL が参照する列（Join 候補の裏付け確認用）。"""
+
+    sql: str
+    # SQL parser が解決した列名の照合 token（引用なしは大文字、引用名は保持）。
+    tokens: frozenset[str]
+
+    @classmethod
+    def from_sql(cls, sql: str) -> _QaSqlColumns:
+        graph = parse_oracle_sql(sql).graph
+        columns = graph.columns if graph is not None else []
+        tokens = frozenset(_sql_token(column.name, quoted=column.name_quoted) for column in columns)
+        return cls(sql=sql, tokens=tokens)
+
+    def mentions(self, column_node: OntologyNode) -> bool:
+        name = str(column_node.metadata.get("column_name", ""))
+        if catalog_match_key(name) in self.tokens:
+            return True
+        # USING 句や解析できない SQL の列は文字列で確認する。引用が不要な名前は引用識別子を
+        # 除いた本文を大文字で探し（`"Amount"` を `AMOUNT` の出現と数えない）、引用名は
+        # `"Amount"` の表記そのものを探す（#573）。
+        if not name:
+            return False
+        if f'"{name}"' in self.sql:
+            return True
+        return (
+            is_unquoted_object_part(name)
+            and name in _QUOTED_SQL_IDENTIFIER_RE.sub(" ", self.sql).upper()
+        )
+
+
 def _convert_relationship(
     candidate: OntologyRelationshipCandidate,
     resolver: _ScopeResolver,
     *,
     revision_id: str,
     provenance: OntologyProvenance,
-    qa_sql_texts: list[str] | None,
+    qa_sql_texts: list[_QaSqlColumns] | None,
     result: _ConversionResult,
 ) -> None:
     source = resolver.resolve_object(candidate.source_object)
@@ -835,15 +852,14 @@ def _convert_relationship(
                 f"({item.left} {item.operator} {item.right}) を profile 範囲内に解決できません。"
             )
             return
-        if qa_sql_texts is not None:
-            left_column = str(left.metadata.get("column_name", "")).upper()
-            right_column = str(right.metadata.get("column_name", "")).upper()
-            if not any(left_column in sql and right_column in sql for sql in qa_sql_texts):
-                result.warnings.append(
-                    f"関係候補 {candidate.relationship_name_ja} の Join 列が Q/A の SQL に "
-                    "現れないため提案化しません。"
-                )
-                return
+        if qa_sql_texts is not None and not any(
+            sql.mentions(left) and sql.mentions(right) for sql in qa_sql_texts
+        ):
+            result.warnings.append(
+                f"関係候補 {candidate.relationship_name_ja} の Join 列が Q/A の SQL に "
+                "現れないため提案化しません。"
+            )
+            return
         join_conditions.append(
             JoinCondition(
                 # 検証(BUSINESS_COLUMN_MAPPING_SPOOFED)を通すため列の安定参照を複製する
@@ -985,7 +1001,9 @@ def convert_extraction_to_proposals(
         resolver.register_sql_aliases(qa_sql_texts)
     revision_id = ontology.revision.id
     result = _ConversionResult(warnings=list(extraction.warnings_ja))
-    normalized_qa = [sql.upper() for sql in qa_sql_texts] if qa_sql_texts is not None else None
+    normalized_qa = (
+        [_QaSqlColumns.from_sql(sql) for sql in qa_sql_texts] if qa_sql_texts is not None else None
+    )
 
     # 同義語は entity 候補の aliases に合流させる(対象 object が同じもの)。
     alias_by_object: dict[str, list[str]] = {}
@@ -1996,6 +2014,8 @@ _EXTRACTION_SYSTEM_PROMPT = (
     '"synonyms": [{"target": "OWNER.OBJECT", "aliases": ["..."], "evidence_ja": "..."}], '
     '"warnings_ja": ["..."]} '
     "。schema_context に存在しない owner/object/column を参照しないでください。"
+    "owner/object/column は schema_context の表記どおりに書き、二重引用符で囲まれた名前は"
+    '引用符と大文字小文字を保ってください(例: SALES."Mixed_Case"."Amount")。'
     "qa_pairs に schema_resolved_columns / schema_resolved_join_conditions がある場合は、"
     "SQL の alias 表記ではなく、その正規化済み参照を使ってください。"
     "抽出ルール: (1) 業務文中の名詞をエンティティ候補、動詞・述語を関係候補として抽出する。"
@@ -2052,9 +2072,11 @@ def merge_build_extractions(
 
     added = 0
     entities = list(base.entities)
-    entity_keys = {candidate.object_name.strip().upper() for candidate in entities}
+    # 参照は SQL と同じ表記の照合キーで重複排除する（`SALES."Mixed_Case"` と
+    # `SALES.MIXED_CASE` を同じ候補にしない、#573）。
+    entity_keys = {object_match_key(candidate.object_name) for candidate in entities}
     for candidate in addition.entities:
-        key = candidate.object_name.strip().upper()
+        key = object_match_key(candidate.object_name)
         if key in entity_keys:
             continue
         entity_keys.add(key)
@@ -2064,16 +2086,16 @@ def merge_build_extractions(
     relationships = list(base.relationships)
     relationship_keys = {
         (
-            relationship.source_object.strip().upper(),
-            relationship.target_object.strip().upper(),
+            object_match_key(relationship.source_object),
+            object_match_key(relationship.target_object),
             relationship.relationship_name_ja.strip(),
         )
         for relationship in relationships
     }
     for relationship in addition.relationships:
         relationship_key = (
-            relationship.source_object.strip().upper(),
-            relationship.target_object.strip().upper(),
+            object_match_key(relationship.source_object),
+            object_match_key(relationship.target_object),
             relationship.relationship_name_ja.strip(),
         )
         if relationship_key in relationship_keys:
@@ -2093,9 +2115,9 @@ def merge_build_extractions(
         added += 1
 
     synonyms = list(base.synonyms)
-    synonym_keys = {synonym.target.strip().upper() for synonym in synonyms}
+    synonym_keys = {object_match_key(synonym.target) for synonym in synonyms}
     for synonym in addition.synonyms:
-        synonym_key = synonym.target.strip().upper()
+        synonym_key = object_match_key(synonym.target)
         if synonym_key in synonym_keys:
             continue
         synonym_keys.add(synonym_key)
@@ -2255,6 +2277,13 @@ def _dedupe(values: Sequence[str]) -> list[str]:
 
 @dataclass(frozen=True)
 class _SchemaContextLookup:
+    """schema context の object / 列を、SQL の参照から引く索引。
+
+    キーは `object_identity` の照合キー（引用なしは大文字、引用名は大文字小文字を保持）、値は
+    schema context に載せた表記（`SALES."Mixed_Case"`）。引用符を外して大文字化すると、Q/A SQL の
+    `SALES."Mixed_Case"` を大文字の同名表 `SALES.MIXED_CASE` に解決する（#573）。
+    """
+
     objects: dict[str, str]
     objects_by_name: dict[str, tuple[str, ...]]
     columns: dict[str, str]
@@ -2269,27 +2298,25 @@ class _SchemaContextLookup:
         for item in schema_context.get("objects") or []:
             if not isinstance(item, Mapping):
                 continue
-            object_key = _schema_context_object_key(item)
+            object_key, object_label = _schema_context_object_key(item)
             if not object_key:
                 continue
-            objects[object_key] = object_key
-            object_name = object_key.split(".")[-1]
+            objects[object_key] = object_label
+            object_name = split_match_key(object_key)[-1]
             objects_by_name.setdefault(object_name, []).append(object_key)
             for raw_column in item.get("columns") or []:
-                column_name = ""
-                qualified_column = ""
                 if isinstance(raw_column, Mapping):
-                    column_name = _normalize_oracle_identifier(str(raw_column.get("column") or ""))
-                    qualified_column = _normalize_oracle_identifier(
-                        str(raw_column.get("qualified_column") or "")
-                    )
+                    column_label = str(raw_column.get("column") or "").strip()
+                    qualified_label = str(raw_column.get("qualified_column") or "").strip()
                 else:
-                    column_name = _normalize_oracle_identifier(str(raw_column))
-                if not column_name:
+                    column_label = str(raw_column).strip()
+                    qualified_label = ""
+                column_token = object_match_key(column_label)
+                if not column_token:
                     continue
-                qualified_column = qualified_column or f"{object_key}.{column_name}"
-                columns[qualified_column] = qualified_column
-                columns_by_name.setdefault(column_name, []).append(qualified_column)
+                column_key = f"{object_key}.{column_token}"
+                columns[column_key] = qualified_label or f"{object_label}.{column_label}"
+                columns_by_name.setdefault(column_token, []).append(column_key)
         return cls(
             objects=objects,
             objects_by_name={
@@ -2302,15 +2329,17 @@ class _SchemaContextLookup:
         )
 
     def resolve_object(self, owner: str, object_name: str) -> str | None:
-        normalized_owner = _normalize_oracle_identifier(owner)
-        normalized_object = _normalize_oracle_identifier(object_name)
-        if not normalized_object:
+        """owner / object の照合 token から object の照合キーを返す。"""
+
+        object_token = object_match_key(object_name)
+        if not object_token:
             return None
-        if normalized_owner:
-            key = f"{normalized_owner}.{normalized_object}"
+        owner_token = object_match_key(owner)
+        if owner_token:
+            key = f"{owner_token}.{object_token}"
             if key in self.objects:
                 return key
-        candidates = self.objects_by_name.get(normalized_object, ())
+        candidates = self.objects_by_name.get(object_token, ())
         return candidates[0] if len(candidates) == 1 else None
 
     def resolve_column(
@@ -2319,19 +2348,22 @@ class _SchemaContextLookup:
         *,
         object_keys: Sequence[str] = (),
     ) -> str | None:
-        normalized_column = _normalize_oracle_identifier(column_name)
-        if not normalized_column:
+        """列の照合 token から列の照合キーを返す。"""
+
+        column_token = object_match_key(column_name)
+        if not column_token:
             return None
         if object_keys:
-            matches = [
-                column
-                for object_key in object_keys
-                if (column := self.columns.get(f"{object_key}.{normalized_column}")) is not None
-            ]
-            matches = sorted(set(matches))
+            matches = sorted(
+                {
+                    column_key
+                    for object_key in object_keys
+                    if (column_key := f"{object_key}.{column_token}") in self.columns
+                }
+            )
             if len(matches) == 1:
                 return matches[0]
-        candidates = self.columns_by_name.get(normalized_column, ())
+        candidates = self.columns_by_name.get(column_token, ())
         return candidates[0] if len(candidates) == 1 else None
 
     def resolve_qualified_column(
@@ -2341,11 +2373,9 @@ class _SchemaContextLookup:
         aliases: Mapping[str, set[str]],
         statement_objects: Sequence[str],
     ) -> str | None:
-        parts = [
-            _normalize_oracle_identifier(part)
-            for part in reference.replace('"', "").split(".")
-            if part.strip()
-        ]
+        """SQL の列参照（`m."Amount"` 等、各部は SQL の表記）から列の照合キーを返す。"""
+
+        parts = split_match_key(object_match_key(reference))
         if not parts:
             return None
         column_name = parts[-1]
@@ -2362,38 +2392,44 @@ class _SchemaContextLookup:
         return self.resolve_column(column_name, object_keys=statement_objects)
 
 
-def _schema_context_object_key(item: Mapping[str, Any]) -> str:
-    owner = _normalize_oracle_identifier(str(item.get("owner") or ""))
-    object_name = _normalize_oracle_identifier(str(item.get("object_name") or ""))
+def _schema_context_object_key(item: Mapping[str, Any]) -> tuple[str, str]:
+    """schema context の object から（照合キー, 表記）を返す。"""
+
+    owner = str(item.get("owner") or "").strip()
+    object_name = str(item.get("object_name") or "").strip()
     if owner and object_name:
-        return f"{owner}.{object_name}"
-    raw_object = _normalize_oracle_identifier(str(item.get("object") or ""))
-    parts = [part for part in raw_object.split(".") if part]
+        return f"{object_match_key(owner)}.{object_match_key(object_name)}", (
+            f"{owner}.{object_name}"
+        )
+    raw_object = str(item.get("object") or "").strip()
+    parts = split_match_key(raw_object)
     if len(parts) >= 2:
-        return f"{parts[-2]}.{parts[-1]}"
-    return parts[0] if parts else object_name
+        return (
+            f"{object_match_key(parts[-2])}.{object_match_key(parts[-1])}",
+            ".".join(parts[-2:]),
+        )
+    if parts:
+        return object_match_key(parts[0]), parts[0]
+    return object_match_key(object_name), object_name
 
 
 def _explicit_projection_aliases(graph: Any) -> set[str]:
+    # SELECT の出力別名の判定（物理 object の識別ではない）。別名は大文字で比べる。
     aliases: set[str] = set()
     for projection in graph.projections:
-        output_name = _normalize_oracle_identifier(str(projection.output_name))
+        output_name = str(projection.output_name).replace('"', "").strip().upper()
         if not output_name:
             continue
-        expression = _normalize_oracle_identifier(str(projection.expression_sql))
+        expression = str(projection.expression_sql).replace('"', "").strip().upper()
         if f" AS {output_name}" in f" {expression} ":
             aliases.add(output_name)
     return aliases
 
 
 def _derived_sql_qualifiers(graph: Any) -> set[str]:
-    qualifiers = {
-        _normalize_oracle_identifier(str(cte.name)) for cte in graph.ctes if str(cte.name).strip()
-    }
+    qualifiers = {token for cte in graph.ctes for token in _alias_tokens(str(cte.name))}
     qualifiers.update(
-        _normalize_oracle_identifier(str(subquery.alias))
-        for subquery in graph.subqueries
-        if str(subquery.alias).strip()
+        token for subquery in graph.subqueries for token in _alias_tokens(str(subquery.alias))
     )
     return qualifiers
 
@@ -2404,11 +2440,11 @@ def _ignore_sql_column_reference(
     projection_aliases: set[str],
     derived_qualifiers: set[str],
 ) -> bool:
-    name = _normalize_oracle_identifier(str(column.name))
-    qualifier = _normalize_oracle_identifier(str(column.table))
+    name = _sql_token(str(column.name), quoted=bool(column.name_quoted))
+    qualifier = _sql_token(str(column.table), quoted=bool(column.table_quoted))
     if name in _ORACLE_PSEUDO_COLUMNS:
         return True
-    if not qualifier and name in projection_aliases:
+    if not qualifier and str(column.name).strip().upper() in projection_aliases:
         return True
     return bool(qualifier and qualifier in derived_qualifiers)
 
@@ -2429,37 +2465,41 @@ def _qa_pair_context_payload(schema_context: Mapping[str, Any], pair: QaPair) ->
     aliases: dict[str, set[str]] = {}
     alias_rows: list[dict[str, str]] = []
     resolved_objects: list[dict[str, str]] = []
+    resolved_object_keys: list[str] = []
     unresolved: list[str] = []
     for table in graph.tables:
         if table.is_cte:
             continue
-        object_key = lookup.resolve_object(str(table.owner), str(table.name))
+        owner_token = _sql_token(str(table.owner), quoted=bool(table.owner_quoted))
+        name_token = _sql_token(str(table.name), quoted=bool(table.name_quoted))
+        object_key = lookup.resolve_object(owner_token, name_token)
         sql_table = str(table.source_sql or table.qualified_name or table.name)
         if object_key is None:
             unresolved.append(sql_table)
             continue
+        object_label = lookup.objects[object_key]
+        resolved_object_keys.append(object_key)
         resolved_objects.append(
             {
                 "sql_table": sql_table,
-                "object": object_key,
+                "object": object_label,
                 "alias": str(table.alias or ""),
             }
         )
         statement_tokens = {
-            str(table.name),
-            str(table.qualified_name),
-            f"{table.owner}.{table.name}" if str(table.owner).strip() else "",
+            name_token,
+            f"{owner_token}.{name_token}" if owner_token else "",
         }
         for token in statement_tokens:
-            normalized = _normalize_oracle_identifier(token)
-            if normalized:
-                aliases.setdefault(normalized, set()).add(object_key)
-        alias = _normalize_oracle_identifier(str(table.alias or ""))
-        if alias:
+            if token:
+                aliases.setdefault(token, set()).add(object_key)
+        alias_tokens = _alias_tokens(str(table.alias or ""))
+        for alias in alias_tokens:
             aliases.setdefault(alias, set()).add(object_key)
-            alias_rows.append({"alias": alias, "object": object_key})
+        if alias_tokens:
+            alias_rows.append({"alias": object_match_key(str(table.alias)), "object": object_label})
 
-    statement_objects = _dedupe([item["object"] for item in resolved_objects])
+    statement_objects = _dedupe(resolved_object_keys)
     projection_aliases = _explicit_projection_aliases(graph)
     derived_qualifiers = _derived_sql_qualifiers(graph)
     resolved_columns: list[dict[str, str]] = []
@@ -2472,6 +2512,7 @@ def _qa_pair_context_payload(schema_context: Mapping[str, Any], pair: QaPair) ->
         ):
             ignored_aliases.append(str(column.expression_sql))
             continue
+        # expression_sql は SQL の表記（引用符を保持）なので、引用規則で解釈できる。
         resolved = lookup.resolve_qualified_column(
             str(column.expression_sql),
             aliases=aliases,
@@ -2483,15 +2524,16 @@ def _qa_pair_context_payload(schema_context: Mapping[str, Any], pair: QaPair) ->
         resolved_columns.append(
             {
                 "sql": str(column.expression_sql),
-                "column": resolved,
+                "column": lookup.columns[resolved],
                 "clause": str(column.clause),
             }
         )
 
     resolved_join_conditions: list[dict[str, Any]] = []
     for join in graph.joins:
+        # referenced_columns は SQL の表記（引用符を保持）なので、引用規則で解釈できる。
         columns = [
-            resolved
+            lookup.columns[resolved]
             for reference in join.referenced_columns
             if (
                 resolved := lookup.resolve_qualified_column(

@@ -9,29 +9,58 @@ import sqlglot
 from sqlglot import exp
 from sqlglot.optimizer.scope import build_scope
 
+from .object_identity import object_match_key
 from .ontology_definition_quality import inspect_definition_quality
 from .ontology_definitions import (
     ActionTypeDefinition,
     BusinessDefinition,
     BusinessEventDefinition,
     DefinitionFinding,
+    DefinitionMapping,
     InterfaceDefinition,
     ObjectSetDefinition,
     ObjectTypeDefinition,
     ProfileOntologyBundle,
     PropertyDefinition,
 )
-from .ontology_sql_validation import canonical_expression, expression_in_query, validated_sql
+from .ontology_sql_validation import (
+    canonical_expression,
+    expression_in_query,
+    token_identifier,
+    validated_sql,
+)
+
+
+def mapping_object_key(mapping: DefinitionMapping) -> str:
+    """物理マッピングの `OWNER.OBJECT` 照合キー。
+
+    mapping は SQL と同じ表記（引用なしは大文字、`"Mixed_Case"` は大文字小文字を保持）で解釈する。
+    大文字化すると `SALES."Mixed_Case"` の定義が大文字の同名表 `SALES.MIXED_CASE` にも一致する
+    （#573）。引用が不要な名前は従来のキー（大文字）と同じ値になる。
+    """
+
+    return f"{object_match_key(mapping.owner)}.{object_match_key(mapping.object_name)}"
+
+
+def mapping_column_key(mapping: DefinitionMapping) -> str:
+    """物理マッピングの列の照合 token（`mapping_object_key` と同じ規則）。"""
+
+    return object_match_key(mapping.column_name)
 
 
 def schema_objects(payload: dict[str, Any]) -> dict[str, set[str]]:
+    """AI 構築 schema context の object → 列を、`object_identity` の照合キーで返す。"""
+
     return {
-        f"{obj.get('owner', '')}.{obj.get('object_name', '')}".upper(): {
-            str(
-                col.get("column_name", col.get("column", col.get("name", "")))
-                if isinstance(col, dict)
-                else col
-            ).upper()
+        f"{object_match_key(str(obj.get('owner', '')))}."
+        f"{object_match_key(str(obj.get('object_name', '')))}": {
+            object_match_key(
+                str(
+                    col.get("column_name", col.get("column", col.get("name", "")))
+                    if isinstance(col, dict)
+                    else col
+                )
+            )
             for col in obj.get("columns", [])
         }
         for obj in payload.get("objects", [])
@@ -63,12 +92,12 @@ def definition_expressions(
 ) -> Iterator[tuple[str, str, dict[str, set[str]]]]:
     owner = definitions.get(getattr(item, "object_type", ""), item)
     mappings = item.mappings or owner.mappings
-    keys = {f"{m.owner}.{m.object_name}".upper() for m in mappings}
+    keys = {mapping_object_key(m) for m in mappings}
     local = {key: physical[key] for key in keys if key in physical} if mappings else physical
     for field in ("expression_sql", "filter_sql", "predicate_sql", "join_expression_sql"):
         yield field, getattr(item, field, ""), local
     for index, mapping in enumerate(item.mappings):
-        key = f"{mapping.owner}.{mapping.object_name}".upper()
+        key = mapping_object_key(mapping)
         yield f"mappings.{index}.expression_sql", mapping.expression_sql, (
             {key: physical[key]} if key in physical else {}
         )
@@ -253,9 +282,9 @@ def validate_definitions(
             if name and (name not in definitions or definitions[name].kind != "property"):
                 error("REFERENCE_INVALID", field, f"時刻プロパティ {name} を解決できません。")
         for mapping in item.mappings:
-            key = f"{mapping.owner}.{mapping.object_name}".upper()
+            key = mapping_object_key(mapping)
             if key not in physical or (
-                mapping.column_name and mapping.column_name.upper() not in physical[key]
+                mapping.column_name and mapping_column_key(mapping) not in physical[key]
             ):
                 error(
                     "MAPPING_OUTSIDE_PROFILE",
@@ -317,10 +346,12 @@ def validate_definitions(
                                 checked_expression(mapping.expression_sql)
                                 if mapping.expression_sql
                                 else exp.column(
-                                    mapping.column_name, table=mapping.object_name, db=mapping.owner
+                                    token_identifier(mapping.column_name),
+                                    table=token_identifier(mapping.object_name),
+                                    db=token_identifier(mapping.owner),
                                 )
                             )
-                            key = f"{mapping.owner}.{mapping.object_name}".upper()
+                            key = mapping_object_key(mapping)
                             local = {key: physical[key]} if key in physical else {}
                             result.add(canonical_expression(value, local))
                         return result

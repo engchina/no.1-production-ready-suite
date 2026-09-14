@@ -135,10 +135,29 @@ def _column_display(column: Any) -> str:
     return ".".join(part for part in parts if part)
 
 
+def _column_reference_sql(column: Any) -> str:
+    """列参照を SQL の表記で返す。引用された部分は `"Amount"` と引用符を残す。
+
+    `_column_display` は引用符を外すため、`"Amount"` と `AMOUNT` を区別できない。
+    `referenced_columns` を物理列と照合する側（オントロジーの SQL 接地）が引用規則で解釈できる
+    よう、引用の有無を保つ（#573）。引用されていない部分は SQL に書かれたままの値になる。
+    """
+
+    parts = []
+    for key in ("catalog", "db", "table", "this"):
+        identifier = column.args.get(key)
+        name = _text(identifier)
+        if not name:
+            continue
+        quoted = _identifier_quoted(identifier)
+        parts.append('"' + name.replace('"', '""') + '"' if quoted else name)
+    return ".".join(parts)
+
+
 def _columns(expression: Any, exp: Any) -> list[str]:
     if expression is None:
         return []
-    values = {_column_display(column) for column in expression.find_all(exp.Column)}
+    values = {_column_reference_sql(column) for column in expression.find_all(exp.Column)}
     return sorted(value for value in values if value)
 
 

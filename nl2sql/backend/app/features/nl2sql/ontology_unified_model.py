@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections.abc import Iterable
 from typing import Any
 
 from pydantic import TypeAdapter
 
+from .object_identity import catalog_match_key, object_match_key, object_part_name
 from .ontology_catalog import SchemaOntology
+from .ontology_definition_validation import mapping_column_key, mapping_object_key
 from .ontology_definitions import BusinessDefinition, MetricDefinitionV2
 from .ontology_models import (
     BusinessRuleDefinition,
@@ -22,6 +25,7 @@ from .ontology_models import (
     PhysicalMapping,
     PhysicalObjectRef,
 )
+from .ontology_sql_validation import identifier_token
 from .ontology_store import canonical_json, stable_ontology_id
 
 CONCEPT_LABELS = {
@@ -93,6 +97,35 @@ def api_name(value: str) -> str:
     return (result if result and result[0].isalpha() else "concept_" + result)[:128]
 
 
+def physical_node_index(nodes: Iterable[OntologyNode]) -> dict[str, OntologyNode]:
+    """物理 node（schema / 表 / ビュー / 列）を `object_identity` の照合キーで引く索引。
+
+    キーはカタログ上の owner / object / column 名から作る（`SALES."Mixed_Case".AMOUNT`）。
+    technical_name を大文字化したキーでは `SALES."Mixed_Case"` と大文字の同名表
+    `SALES.MIXED_CASE` を区別できない（#573）。引用が不要な名前のキーは従来と同じ値になる。
+    """
+
+    index: dict[str, OntologyNode] = {}
+    for node in nodes:
+        if node.kind.value not in PHYSICAL_KINDS:
+            continue
+        metadata = node.metadata
+        parts = [
+            str(metadata.get(key) or "")
+            for key in ("owner", "object_name", "column_name")
+            if str(metadata.get(key) or "")
+        ]
+        key = catalog_match_key(*parts) if parts else object_match_key(node.technical_name)
+        index.setdefault(key, node)
+    return index
+
+
+def sql_column_key(column: Any) -> str:
+    """SQL の列参照（`OWNER.OBJECT.COLUMN`、各部は引用可）を照合キーにする。"""
+
+    return ".".join(identifier_token(part) for part in column.parts)
+
+
 def metric_definition_projection(
     definition: MetricDefinitionV2,
     concept_ids: dict[str, str],
@@ -109,7 +142,7 @@ def metric_definition_projection(
         try:
             tree = sqlglot.parse_one(sql, read="oracle")
             for col in tree.find_all(exp.Column):
-                node = physical.get(".".join(part.name for part in col.parts).upper())
+                node = physical.get(sql_column_key(col))
                 if node and node.kind.value == "column":
                     columns.add(node.id)
         except sqlglot.errors.SqlglotError:
@@ -535,10 +568,7 @@ def _join_conditions(sql: str, physical: dict[str, OntologyNode]) -> list[JoinCo
             or not isinstance(part.expression, exp.Column)
         ):
             continue
-        pair = [
-            physical.get(".".join(p.name for p in col.parts).upper())
-            for col in (part.this, part.expression)
-        ]
+        pair = [physical.get(sql_column_key(col)) for col in (part.this, part.expression)]
         left, right = pair
         if (
             left is not None
@@ -566,7 +596,7 @@ def project_graph(
         for n in base.nodes
         if n.kind.value in PHYSICAL_KINDS
     ]
-    physical = {n.technical_name.upper(): n for n in nodes}
+    physical = physical_node_index(nodes)
     by_name = {d.api_name: d for d in definitions}
     edges = [
         e.model_copy(update={"revision_id": rid}, deep=True)
@@ -601,13 +631,15 @@ def project_graph(
             continue
         mappings = []
         for m in d.mappings:
-            obj = physical.get(f"{m.owner}.{m.object_name}".upper())
-            col = physical.get(f"{m.owner}.{m.object_name}.{m.column_name}".upper())
+            obj = physical.get(mapping_object_key(m))
+            col = physical.get(f"{mapping_object_key(m)}.{mapping_column_key(m)}")
             mappings.append(
                 PhysicalMapping(
                     object_ref=PhysicalObjectRef(
-                        owner=m.owner,
-                        object_name=m.object_name,
+                        # 物理 node の object_ref と同じくカタログ上の名前（`"Mixed_Case"` →
+                        # Mixed_Case、`orders` → ORDERS）。画面の SQL 接地が同じ規則で照合する。
+                        owner=object_part_name(m.owner),
+                        object_name=object_part_name(m.object_name),
                         node_id=obj.id if obj else "",
                         object_type="view" if obj and obj.kind.value == "view" else "table",
                     ),

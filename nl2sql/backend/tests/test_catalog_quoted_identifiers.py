@@ -467,7 +467,7 @@ def test_narrow_profile_view_selects_only_requested_quoted_object() -> None:
     ]
 
 
-def test_ai_build_scope_resolver_excludes_case_sensitive_nodes() -> None:
+def test_ai_build_scope_resolver_includes_case_sensitive_nodes() -> None:
     ontology = build_schema_ontology(_both_catalog())
     view = migrate_profile_ontology_view(
         Nl2SqlProfile(id="both", name="両方", allowed_tables=[UPPER, QUOTED]), ontology
@@ -476,12 +476,16 @@ def test_ai_build_scope_resolver_excludes_case_sensitive_nodes() -> None:
     resolver = _ScopeResolver(ontology, view)
     context = json.loads(build_schema_context(ontology, view))
     upper = resolver.resolve_object(UPPER)
+    quoted = resolver.resolve_object(QUOTED)
     column = resolver.resolve_column(f"{UPPER}.AMOUNT")
+    quoted_column = resolver.resolve_column(f'{QUOTED}."Amount"')
 
-    # AI 構築は大文字化して照合するため、小文字を含む引用名の node を扱わない（大文字表に解決）。
+    # AI 構築も引用規則で照合する（#573）。引用名の node を除外せず、大文字の同名表と区別する。
     assert upper is not None and upper.metadata["object_name"] == "MIXED_CASE"
+    assert quoted is not None and quoted.metadata["object_name"] == "Mixed_Case"
     assert column is not None and column.metadata["object_name"] == "MIXED_CASE"
-    assert [item["object"] for item in context["objects"]] == [UPPER]
+    assert quoted_column is not None and quoted_column.metadata["column_name"] == "Amount"
+    assert [item["object"] for item in context["objects"]] == [QUOTED, UPPER]
 
 
 # --- 列単位の許可チェック ---------------------------------------------------------------
