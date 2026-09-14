@@ -65,7 +65,7 @@ import {
 import { SelectAiFeedbackAddPanel } from "./components/SelectAiFeedbackAddPanel";
 import { isJobInFlight } from "./jobPersistence";
 import { prefillFromSearchParams } from "./queryPrefillState";
-import { appendQuestionTemplate, QUESTION_TEMPLATES } from "./questionTemplates";
+import { QUESTION_TEMPLATES } from "./questionTemplates";
 import { profileDisplayLabel } from "./profileDisplay";
 import type {
   HistoryData,
@@ -1170,7 +1170,7 @@ function ExecutableNl2SqlWorkbench() {
                   {/* クエリ（左）× スキーマ参照（右・常時表示）: 書きながら参照して即クリック挿入。 */}
                   <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] lg:items-start">
                     <div className="grid gap-2">
-                      {/* 入力を保持し、選択したテンプレートを末尾へ追記する。 */}
+                      {/* クエリの入力を補助するテンプレート行（選択時は全文置換）。 */}
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="text-xs font-medium text-fg-muted">{t("dbAdmin.runner.templates")}</span>
                         {QUESTION_TEMPLATES.map((template) => (
@@ -1181,18 +1181,17 @@ function ExecutableNl2SqlWorkbench() {
                             size="sm"
                             disabled={active}
                             onClick={() => {
-                              const appended = appendQuestionTemplate(question, template.body);
-                              if (!appended) return;
-                              setQuestion(appended.value);
+                              setQuestion(template.body);
                               setRewriteData(null);
                               setActionError("");
                               const el = questionTextareaRef.current;
                               if (el) {
                                 requestAnimationFrame(() => {
                                   el.focus({ preventScroll: true });
-                                  // 追記したテンプレートの最初の空欄へ移動する。
-                                  el.setSelectionRange(appended.caret, appended.caret);
-                                  el.scrollTop = el.scrollHeight;
+                                  // 1 行目「対象テーブル：」の直後にカーソルを置き、すぐ記入できるようにする
+                                  const firstLineEnd = template.body.indexOf("\n");
+                                  const caret = firstLineEnd === -1 ? template.body.length : firstLineEnd;
+                                  el.setSelectionRange(caret, caret);
                                 });
                               }
                             }}

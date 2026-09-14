@@ -3366,73 +3366,87 @@ test("スキーマ参照から連続挿入すると各項目が改行区切り�
   await expect(question).toHaveValue("\"請求\".\"請求金額\"\n\"請求\".\"請求金額\"");
 });
 
-test("クエリのテンプレートは入力を保持して追記し、自由入力は変更しない", async ({ page }, testInfo) => {
-  await mockNl2SqlApi(page);
-  let jobs = 0;
-  page.on("request", (request) => {
-    if (request.method() === "POST" && new URL(request.url()).pathname === "/api/nl2sql/jobs") jobs += 1;
-  });
-  await page.goto("/query");
-  const question = nl2sqlQuestionInput(page);
-  const freeInput = page.getByRole("button", { name: "自由入力", exact: true });
-  await expect(page.getByText("テンプレート:", { exact: true })).toBeVisible();
-  await freeInput.click();
-  await expect(question).toHaveValue("");
+for (const theme of ["light", "dark"]) {
+  for (const wide of [false, true]) {
+    test(`クエリのテンプレートは全置換し、自由入力で空に戻す: ${theme} ${wide ? "1920px" : "標準幅"}`, async ({ page, isMobile }, testInfo) => {
+      test.skip(wide && isMobile, "1920px は desktop project で検証する");
+      if (wide) await page.setViewportSize({ width: 1920, height: 1000 });
+      await page.addInitScript(value => {
+        localStorage.setItem("production-ready-nl2sql.ui", JSON.stringify({ state: { theme: value }, version: 0 }));
+      }, theme);
+      await mockNl2SqlApi(page);
+      let jobs = 0;
+      page.on("request", (request) => {
+        if (request.method() === "POST" && new URL(request.url()).pathname === "/api/nl2sql/jobs") jobs += 1;
+      });
+      await page.goto("/query");
+      await expect(page.locator("html")).toHaveCSS("color-scheme", theme);
+      const question = nl2sqlQuestionInput(page);
+      const freeInput = page.getByRole("button", { name: "自由入力", exact: true });
+      await expect(page.getByText("テンプレート:", { exact: true })).toBeVisible();
+      await freeInput.click();
+      await expect(question).toHaveValue("");
 
-  const original = "請求金額を一覧で見たい\n  2025年の請求を対象にする  ";
-  const templates = [
-    ["項目抽出", "対象テーブル：\n抽出項目：\n抽出条件："],
-    ["集計・グループ化", "対象テーブル：\n集計内容（件数・合計・平均など）：\n集計単位（グループ化）：\n抽出条件："],
-    ["上位N件・並び替え", "対象テーブル：\n抽出項目：\n並び替え（項目と昇順／降順）：\n表示件数（上位N件）：\n抽出条件："],
-    ["複数テーブル結合", "対象テーブル（複数可）：\nテーブル間の関連：\n抽出項目：\n抽出条件："],
-  ];
-  for (const [label, body] of templates) {
-    await question.fill(original);
-    // テキストが選択されていても、その範囲を上書きしない。
-    await question.focus();
-    await question.press("ControlOrMeta+A");
-    await page.getByRole("button", { name: label, exact: true }).click();
-    await expect(question).toHaveValue(`${original}\n${body}`);
-    await expect(question).toBeFocused();
-    const caret = await question.evaluate((el) => (el as HTMLTextAreaElement).selectionStart);
-    expect(caret).toBe(original.length + 1 + body.indexOf("\n"));
-    await freeInput.click();
-    await expect(question).toHaveValue(`${original}\n${body}`);
+      const original = "請求金額を一覧で見たい\n  2025年の請求を対象にする  ";
+      const templates = [
+        ["項目抽出", "対象テーブル：\n抽出項目：\n抽出条件："],
+        ["集計・グループ化", "対象テーブル：\n集計内容（件数・合計・平均など）：\n集計単位（グループ化）：\n抽出条件："],
+        ["上位N件・並び替え", "対象テーブル：\n抽出項目：\n並び替え（項目と昇順／降順）：\n表示件数（上位N件）：\n抽出条件："],
+        ["複数テーブル結合", "対象テーブル（複数可）：\nテーブル間の関連：\n抽出項目：\n抽出条件："],
+      ];
+      for (const [label, body] of templates) {
+        await question.fill(original);
+        // 選択範囲の有無によらず、クエリ全体をテンプレートで置き換える。
+        await question.focus();
+        await question.press("ControlOrMeta+A");
+        await page.getByRole("button", { name: label, exact: true }).click();
+        await expect(question).toHaveValue(body);
+        await expect(question).toBeFocused();
+        const caret = await question.evaluate((el) => (el as HTMLTextAreaElement).selectionStart);
+        expect(caret).toBe(body.indexOf("\n"));
+        await freeInput.click();
+        await expect(question).toHaveValue("");
+        await expect(question).toBeFocused();
+      }
+
+      // キーボードでも全置換し、スキーマ挿入は先頭の空欄に入る。
+      await question.fill(`${original}\n`);
+      const basic = page.getByRole("button", { name: "項目抽出", exact: true });
+      await basic.focus();
+      await page.keyboard.press("Enter");
+      const basicText = templates[0][1];
+      await expect(question).toHaveValue(basicText);
+      await openSchemaPicker(page);
+      await page.getByRole("button", { name: "請求 を開閉" }).click();
+      await page.getByRole("button", { name: /^請求金額 TOTAL_AMOUNT/ }).click();
+      const filled = `対象テーブル："請求"."請求金額"\n抽出項目：\n抽出条件：`;
+      await expect(question).toHaveValue(filled);
+      await basic.click();
+      await expect(question).toHaveValue(basicText);
+      await page.getByRole("button", { name: "集計・グループ化", exact: true }).click();
+      await expect(question).toHaveValue(templates[1][1]);
+      await page.reload();
+      await expect(question).toHaveValue(templates[1][1]);
+      await freeInput.click();
+      await expect(question).toHaveValue("");
+      await page.reload();
+      await expect(question).toHaveValue("");
+
+      // 空欄と長い入力のどちらからでもテンプレートだけに置き換える。
+      await question.fill("");
+      await basic.click();
+      await expect(question).toHaveValue(basicText);
+      const longQuestion = Array.from({ length: 25 }, (_, index) => `確認したい内容 ${index + 1}`).join("\n");
+      await question.fill(longQuestion);
+      await basic.click();
+      await expect(question).toHaveValue(basicText);
+      await expect.poll(() => question.evaluate((el) => el.scrollTop)).toBe(0);
+      await question.screenshot({ path: testInfo.outputPath("replaced-question-template.png") });
+      await expectNoHorizontalScroll(page);
+      expect(jobs).toBe(0);
+    });
   }
-
-  // 入力の末尾にある改行を利用し、キーボードでも同じように追記できる。
-  await question.fill(`${original}\n`);
-  const basic = page.getByRole("button", { name: "項目抽出", exact: true });
-  await basic.focus();
-  await page.keyboard.press("Enter");
-  const basicText = templates[0][1];
-  await expect(question).toHaveValue(`${original}\n${basicText}`);
-  await openSchemaPicker(page);
-  await page.getByRole("button", { name: "請求 を開閉" }).click();
-  await page.getByRole("button", { name: /^請求金額 TOTAL_AMOUNT/ }).click();
-  const filled = `${original}\n対象テーブル："請求"."請求金額"\n抽出項目：\n抽出条件：`;
-  await expect(question).toHaveValue(filled);
-  await basic.click();
-  await expect(question).toHaveValue(`${filled}\n${basicText}`);
-  await page.getByRole("button", { name: "集計・グループ化", exact: true }).click();
-  const appended = `${filled}\n${basicText}\n${templates[1][1]}`;
-  await expect(question).toHaveValue(appended);
-  await page.reload();
-  await expect(question).toHaveValue(appended);
-
-  // 空欄ではテンプレートだけを挿入し、長い入力では追加した欄を表示する。
-  await question.fill("");
-  await basic.click();
-  await expect(question).toHaveValue(basicText);
-  const longQuestion = Array.from({ length: 25 }, (_, index) => `確認したい内容 ${index + 1}`).join("\n");
-  await question.fill(longQuestion);
-  await basic.click();
-  await expect(question).toHaveValue(`${longQuestion}\n${basicText}`);
-  await expect.poll(() => question.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
-  await question.screenshot({ path: testInfo.outputPath("appended-question-template.png") });
-  await expectNoHorizontalScroll(page);
-  expect(jobs).toBe(0);
-});
+}
 
 test("スキーマピッカーは compact（checkbox なし・挿入でページがスクロールしない）", async ({ page }) => {
   await mockNl2SqlApi(page);
