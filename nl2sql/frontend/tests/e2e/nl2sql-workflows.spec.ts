@@ -116,13 +116,15 @@ async function expectRowLimitActionRow(input: Locator, button: Locator) {
   const buttonBox = await button.boundingBox();
   expect(inputBox).not.toBeNull();
   expect(buttonBox).not.toBeNull();
+  // 操作ボタンは取得件数上限（とヘルパーテキスト）の下の行。lg 以上では取得件数上限を 50% 幅にする。
+  expect(buttonBox!.y).toBeGreaterThan(inputBox!.y + inputBox!.height);
+  expect(buttonBox!.x).toBeLessThanOrEqual(inputBox!.x + 1);
+  const rowWidth = await input.evaluate((element) => element.closest("label")!.parentElement!.clientWidth);
   const viewport = input.page().viewportSize();
   if (viewport && viewport.width >= 1024) {
-    expect(buttonBox!.x).toBeGreaterThan(inputBox!.x + inputBox!.width);
-    expect(buttonBox!.y).toBeLessThan(inputBox!.y + inputBox!.height);
-    expect(buttonBox!.y + buttonBox!.height).toBeGreaterThan(inputBox!.y);
+    expect(inputBox!.width).toBeLessThanOrEqual(rowWidth / 2 + 1);
   } else {
-    expect(buttonBox!.y).toBeGreaterThan(inputBox!.y + inputBox!.height);
+    expect(inputBox!.width).toBeGreaterThan(rowWidth - 1);
   }
 }
 
