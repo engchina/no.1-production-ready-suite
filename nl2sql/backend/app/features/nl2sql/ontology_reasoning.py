@@ -7,6 +7,8 @@ import logging
 import threading
 import time
 from collections.abc import Mapping
+from contextlib import suppress
+from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 from uuid import uuid4
 
@@ -34,7 +36,7 @@ from .ontology_semantics import (
     validate_shacl_core,
 )
 from .ontology_service import OntologyStateConflictError, OntologyVersionConflictError
-from .ontology_store import OntologyStore, canonical_json
+from .ontology_store import OntologyStore, OntologyVersionConflict, canonical_json
 
 logger = logging.getLogger(__name__)
 _IN_FLIGHT_PUBLISH_STATUSES = frozenset(
@@ -69,6 +71,10 @@ class LocalOwl2RlMaterializer:
         return materialize_local_owl2rl(asserted_turtle)
 
 
+class PublishExecutionLost(RuntimeError):
+    """失効した公開 worker は成果物を更新しない。"""
+
+
 class OntologyPublishService:
     def __init__(
         self,
@@ -81,6 +87,8 @@ class OntologyPublishService:
         self._materializer = materializer or self._default_materializer()
         self._jobs: dict[str, OntologyPublishJob] = {}
         self._lock = threading.RLock()
+        self._execution_ids: dict[str, str] = {}
+        self._inprocess_jobs: set[str] = set()
 
     def _default_materializer(self) -> Owl2RlMaterializer:
         settings = get_settings()
@@ -160,6 +168,8 @@ class OntologyPublishService:
             }
         )
         if get_settings().nl2sql_ontology_worker_mode == "inprocess":
+            with self._lock:
+                self._inprocess_jobs.add(job.id)
             threading.Thread(
                 target=self._run_safely,
                 args=(job.id, etag),
@@ -168,39 +178,207 @@ class OntologyPublishService:
             ).start()
         return job.model_copy(deep=True)
 
-    def get(self, job_id: str) -> OntologyPublishJob | None:
-        with self._lock:
-            current = self._jobs.get(job_id)
-            if current is not None:
-                return current.model_copy(deep=True)
+    def peek(self, job_id: str) -> OntologyPublishJob | None:
         document = self.store.get_job(job_id)
         if document is None or document.get("job_type") != "publish":
             return None
         return OntologyPublishJob.model_validate(document["payload"])
 
-    def _save_job(self, job: OntologyPublishJob) -> None:
+    @staticmethod
+    def _expired(document: Mapping[str, Any]) -> bool:
+        job = OntologyPublishJob.model_validate(document["payload"])
+        try:
+            deadline = datetime.fromisoformat(str(document["deadline_at"]))
+        except (KeyError, ValueError, TypeError):
+            deadline = job.created_at + timedelta(
+                seconds=get_settings().nl2sql_ontology_publish_timeout_seconds
+            )
+        if deadline.tzinfo is None:
+            deadline = deadline.replace(tzinfo=UTC)
+        return utc_now() >= deadline
+
+    def _recover(self, job_id: str, *, interrupted: bool = False) -> OntologyPublishJob | None:
+        for _ in range(3):
+            document = self.store.get_job(job_id)
+            if document is None or document.get("job_type") != "publish":
+                return None
+            job = OntologyPublishJob.model_validate(document["payload"])
+            recoverable_failure = job.status == OntologyPublishStatus.FAILED and job.error_code in {
+                "ONTOLOGY_PUBLISH_TIMEOUT",
+                "ONTOLOGY_PUBLISH_INTERRUPTED",
+                "ONTOLOGY_PUBLISH_RECOVERY_REQUIRED",
+            }
+            if job.status not in _IN_FLIGHT_PUBLISH_STATUSES and not recoverable_failure:
+                return job
+            if not recoverable_failure and not interrupted and not self._expired(document):
+                return job
+            code = "ONTOLOGY_PUBLISH_INTERRUPTED" if interrupted else "ONTOLOGY_PUBLISH_TIMEOUT"
+            message = (
+                "バックエンドの停止により公開処理を中断しました。"
+                if interrupted
+                else "公開処理の実行期限を超えました。"
+            ) + "保存済みの版と公開状態を確認してから再実行してください。"
+            updates: dict[str, Any] = {
+                "status": OntologyPublishStatus.FAILED,
+                "error_code": code,
+                "error_message_ja": message,
+                "finished_at": utc_now(),
+            }
+            # 公開 commit 後に job 保存だけが失われたケースは再公開しない。
+            revision_doc = self.store.get_document("revisions", {"revision_id": job.revision_id})
+            revision = revision_doc.get("payload", {}) if revision_doc else {}
+            committed = (
+                revision.get("status") in {"published", "archived"}
+                and revision.get("reasoning_status") == "ready"
+                and (
+                    revision.get("publish_job_id") == job.id
+                    or (
+                        not revision.get("publish_job_id")
+                        and job.rdf_graph_name
+                        and revision.get("rdf_graph_name") == job.rdf_graph_name
+                    )
+                )
+            )
+            if recoverable_failure and not committed:
+                return job
+            if committed:
+                try:
+                    # draft は公開後に変更不可。コピーだけを再開し、head/推論は再送しない。
+                    self.runtime.copy_draft_markdown_to_published(
+                        job.revision_id, profile_id=job.profile_id
+                    )
+                    updates.update(
+                        status=OntologyPublishStatus.SUCCEEDED,
+                        error_code="",
+                        error_message_ja="",
+                        rdf_graph_name=revision.get("rdf_graph_name", ""),
+                        inferred_graph_name=revision.get("inferred_graph_name", ""),
+                        shacl_report_artifact_id=revision.get("shacl_report_artifact_id", ""),
+                        warnings_ja=[
+                            *job.warnings_ja,
+                            "公開済みの版を照合して完了状態を復元しました。再公開はしていません。",
+                        ],
+                    )
+                except Exception:
+                    logger.exception(
+                        "公開済み Markdown の復元に失敗しました。", extra={"job_id": job_id}
+                    )
+                    updates.update(
+                        error_code="ONTOLOGY_PUBLISH_RECOVERY_REQUIRED",
+                        error_message_ja=(
+                            "版の公開は完了していますが Markdown の保存確認に失敗しました。"
+                            "再公開せず管理者に保存状態の確認を依頼してください。"
+                        ),
+                    )
+            updated = job.model_copy(update=updates)
+            try:
+                self.store.save_job(
+                    {
+                        **document,
+                        "status": updated.status.value,
+                        "payload": updated.model_dump(mode="json"),
+                    },
+                    expected_etag=document["etag"],
+                )
+            except OntologyVersionConflict:
+                continue
+            if revision_doc and revision.get("status") == "draft" and not committed:
+                # 別 worker の新しい進捗・公開結果を古い失敗で上書きしない。
+                with suppress(OntologyVersionConflict):
+                    self.store.save_document(
+                        "revisions",
+                        {**revision_doc, "payload": {**revision, "reasoning_status": "failed"}},
+                        expected_etag=revision_doc["etag"],
+                    )
+            logger.warning(
+                "公開 job の中断状態を回復しました。",
+                extra={
+                    "job_id": job_id,
+                    "revision_id": job.revision_id,
+                    "error_code": updated.error_code,
+                    "status": updated.status.value,
+                },
+            )
+            return updated
+        return self.peek(job_id)
+
+    def get(self, job_id: str) -> OntologyPublishJob | None:
+        # API worker の古いキャッシュより永続状態を優先する。
+        return self._recover(job_id)
+
+    def shutdown(self) -> None:
         with self._lock:
-            self._jobs[job.id] = job.model_copy(deep=True)
+            owned = tuple(self._inprocess_jobs)
+        for job_id in owned:
+            try:
+                self._recover(job_id, interrupted=True)
+            except Exception:
+                logger.exception(
+                    "公開 job の停止状態を保存できませんでした。", extra={"job_id": job_id}
+                )
+
+    def _assert_execution(self, job_id: str) -> dict[str, Any]:
+        self._recover(job_id)
+        current = self.store.get_job(job_id)
+        with self._lock:
+            token = self._execution_ids.get(job_id)
+        if (
+            not current
+            or not token
+            or current.get("execution_id") != token
+            or OntologyPublishJob.model_validate(current["payload"]).status
+            not in _IN_FLIGHT_PUBLISH_STATUSES
+        ):
+            raise PublishExecutionLost(job_id)
+        return current
+
+    def _claim(self, job_id: str) -> bool:
+        job = self.get(job_id)
+        if not job or job.status != OntologyPublishStatus.QUEUED:
+            return False
+        current = self.store.get_job(job_id)
+        if current is None or current["payload"]["status"] != "queued":
+            return False
+        token = uuid4().hex
+        job.status = OntologyPublishStatus.MATERIALIZING
+        job.started_at = utc_now()
+        try:
+            self.store.save_job(
+                {
+                    **current,
+                    "status": job.status.value,
+                    "payload": job.model_dump(mode="json"),
+                    "execution_id": token,
+                    "claimed_at": time.time(),
+                },
+                expected_etag=current["etag"],
+            )
+        except OntologyVersionConflict:
+            return False
+        with self._lock:
+            self._execution_ids[job_id] = token
+        return True
+
+    def _save_job(self, job: OntologyPublishJob) -> None:
         current = self.store.get_job(job.id)
+        if current is not None:
+            current = self._assert_execution(job.id)
         document = {
+            **(current or {}),
             "job_id": job.id,
             "job_type": "publish",
             "profile_id": job.profile_id or "-",
             "status": job.status.value,
             "payload": job.model_dump(mode="json"),
-            **(
-                {
-                    "claimed_by": current.get("claimed_by"),
-                    "claimed_at": time.time(),
-                }
-                if current is not None and current.get("claimed_by")
-                else {}
-            ),
+            "deadline_at": (current or {}).get("deadline_at")
+            or (
+                job.created_at
+                + timedelta(seconds=get_settings().nl2sql_ontology_publish_timeout_seconds)
+            ).isoformat(),
         }
-        self.store.save_job(
-            document,
-            expected_etag=str(current["etag"]) if current is not None else None,
-        )
+        self.store.save_job(document, expected_etag=str(current["etag"]) if current else None)
+        with self._lock:
+            self._jobs[job.id] = job.model_copy(deep=True)
 
     def _update(self, job_id: str, **updates: Any) -> OntologyPublishJob:
         current = self.get(job_id)
@@ -211,24 +389,44 @@ class OntologyPublishService:
         return updated
 
     def _run_safely(self, job_id: str, etag: str) -> None:
+        if not self._claim(job_id):
+            with self._lock:
+                if job_id not in self._execution_ids:
+                    self._inprocess_jobs.discard(job_id)
+            return
         try:
-            self.run(job_id, etag=etag)
-        except Exception as exc:  # pragma: no cover - defensive worker boundary
+            self._run_claimed(job_id, etag=etag)
+        except (PublishExecutionLost, OntologyVersionConflict):
+            logger.info("失効した公開 worker の結果を破棄しました。", extra={"job_id": job_id})
+        except Exception as exc:
             logger.exception("Ontology publish worker failed", extra={"job_id": job_id})
-            self._update(
-                job_id,
-                status=OntologyPublishStatus.FAILED,
-                error_code="ONTOLOGY_PUBLISH_FAILED",
-                error_message_ja=str(exc),
-                finished_at=utc_now(),
-            )
-            failed_job = self.get(job_id)
-            if failed_job is not None:
-                try:
+            try:
+                current = self.peek(job_id)
+                revision = (
+                    self.store.get_document("revisions", {"revision_id": current.revision_id})
+                    if current
+                    else None
+                )
+                if revision and revision.get("payload", {}).get("publish_job_id") == job_id:
+                    self._recover(job_id, interrupted=True)
+                    return
+                self._update(
+                    job_id,
+                    status=OntologyPublishStatus.FAILED,
+                    error_code="ONTOLOGY_PUBLISH_FAILED",
+                    error_message_ja="公開処理に失敗しました。保存状態とバックエンドのログを確認してください。",
+                    finished_at=utc_now(),
+                )
+                failed_job = self.peek(job_id)
+                if failed_job is not None:
                     self._mark_draft_reasoning_failed(failed_job.revision_id)
-                except Exception:  # pragma: no cover - original failure remains primary
-                    logger.warning("ontology_reasoning_status_update_failed", exc_info=True)
-            record_job(job_type="publish", status="failed", error_code="unexpected")
+            except (PublishExecutionLost, OntologyVersionConflict):
+                pass
+            record_job(job_type="publish", status="failed", error_code=type(exc).__name__)
+        finally:
+            with self._lock:
+                self._execution_ids.pop(job_id, None)
+                self._inprocess_jobs.discard(job_id)
 
     def _active_job_for_revision(
         self,
@@ -237,19 +435,11 @@ class OntologyPublishService:
         etag: str,
         profile_id: str = "",
     ) -> OntologyPublishJob | None:
-        with self._lock:
-            cached_jobs = list(self._jobs.values())
-        for job in cached_jobs:
-            if (
-                job.revision_id == revision_id
-                and job.requested_etag == etag
-                and job.profile_id == profile_id
-                and job.status in _IN_FLIGHT_PUBLISH_STATUSES
-            ):
-                return job.model_copy(deep=True)
         for document in self.store.list_documents("jobs", {"job_type": "publish"}):
             try:
-                job = OntologyPublishJob.model_validate(document["payload"])
+                job = self.get(str(document["job_id"]))
+                if job is None:
+                    continue
             except Exception:
                 logger.warning(
                     "ontology_publish_job_restore_skipped",
@@ -295,6 +485,18 @@ class OntologyPublishService:
         return result
 
     def run(self, job_id: str, *, etag: str) -> OntologyPublishJob:
+        if not self._claim(job_id):
+            existing = self.get(job_id)
+            if existing is None:
+                raise RuntimeError("Ontology publish job が見つかりません。")
+            return existing
+        try:
+            return self._run_claimed(job_id, etag=etag)
+        finally:
+            with self._lock:
+                self._execution_ids.pop(job_id, None)
+
+    def _run_claimed(self, job_id: str, *, etag: str) -> OntologyPublishJob:
         initial_job = self.get(job_id)
         if initial_job is None:
             raise RuntimeError("Ontology publish job が見つかりません。")
@@ -307,6 +509,7 @@ class OntologyPublishService:
             status=OntologyPublishStatus.MATERIALIZING,
             started_at=utc_now(),
         )
+        self._assert_execution(job_id)
         self.runtime.update_reasoning_status(
             job.revision_id,
             OntologyReasoningStatus.MATERIALIZING,
@@ -328,6 +531,7 @@ class OntologyPublishService:
             )
         from rdflib import Graph
 
+        self._assert_execution(job_id)
         inferred_graph = Graph().parse(data=inferred_turtle, format="turtle")
         record_reasoning_triples(len(inferred_graph))
         self._update(
@@ -357,6 +561,13 @@ class OntologyPublishService:
                 report_text="SHACL Core validation is disabled for rollout.",
                 report_turtle="# SHACL Core validation is disabled for rollout.\n",
             )
+        self._update(
+            job_id,
+            shacl_conforms=validation.conforms if shacl_enabled else None,
+            warnings_ja=(
+                [] if shacl_enabled else ["段階導入設定により SHACL Core 検証をスキップしました。"]
+            ),
+        )
         artifact_values: Mapping[str, str] = {
             "ontology_owl_turtle": artifacts.owl_turtle,
             "ontology_inferred_turtle": inferred_turtle,
@@ -367,6 +578,7 @@ class OntologyPublishService:
         }
         report_artifact_id = ""
         for artifact_type, content in artifact_values.items():
+            self._assert_execution(job_id)
             artifact_id = f"ontology_artifact_{uuid4().hex}"
             self.store.save_artifact(
                 {
@@ -405,10 +617,13 @@ class OntologyPublishService:
                 error_code="ONTOLOGY_SHACL_VIOLATION",
             )
             return self.get(job_id) or job
+        self._assert_execution(job_id)
         self.runtime.finalize_semantic_publish(
             job.revision_id,
             etag=etag,
+            publication_guard=lambda: self._assert_execution(job_id),
             semantic_metadata={
+                "publish_job_id": job_id,
                 "reasoning_status": OntologyReasoningStatus.READY,
                 "rdf_graph_name": rdf_graph_name,
                 "inferred_graph_name": inferred_graph_name,
@@ -422,6 +637,7 @@ class OntologyPublishService:
                 },
             },
         )
+        self._assert_execution(job_id)
         markdown_publisher = getattr(self.runtime, "copy_draft_markdown_to_published", None)
         if callable(markdown_publisher):
             markdown_publisher(job.revision_id, profile_id=job.profile_id)

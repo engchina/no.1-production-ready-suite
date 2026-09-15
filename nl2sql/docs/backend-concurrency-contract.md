@@ -68,3 +68,11 @@ async def import_example(file: UploadFile) -> ApiResponse[ImportData]:
 - queued の ETag で実行を claim し、実行 ID を確認して結果を保存する。期限切れ・中断後の遅着結果は下書きを上書きしない。profile lock の削除には所有 job ID も指定し、新しい job の lock を削除しない。
 - 状態確認は認可後に行い、startup で全件を走査しない。同期 SDK の実行スレッド自体を強制停止する機構ではない。
 - 再実行は利用者の明示操作で新しい job を作る。保存済み入力を引き継ぎ、profile fingerprint と task/context が一致する既存の抽出 checkpoint を再利用する。保存済み下書きは保持し、自動公開しない。
+
+## 旧 Ontology 公開・推論
+
+- 旧 global revision API の OWL2RL / SHACL worker は `NL2SQL_ONTOLOGY_PUBLISH_TIMEOUT_SECONDS`（既定600秒）の絶対期限を保存する。現在の Profile Markdown snapshot 公開とは別の経路であり、Profile を指定した旧公開要求は引き続き拒否する。
+- GET は認可用 peek の後に store の最新状態を確認する。旧 job も作成日時から失効させ、inprocess の正常 shutdown は所有 job だけを off-loop で終了させる。startup は DB-free。
+- queued の ETag を claim し、実行 ID を持つ worker だけが進捗・成果物を書ける。推論・検証後と公開 head 切替直前にも失効を確認し、二重配送では推論を繰り返さない。
+- revision の `publish_job_id` / reasoning graph を照合する。既に公開 commit 済みなら immutable draft の Markdown コピーだけを補い、既存のコピーと head / revision 履歴を保持して job を完了させる。保存確認に失敗した場合は「版は公開済み」と明記し、再公開を案内しない。
+- 期限は同期スレッドを kill しない。遅着処理の後続 commit を制限し、commit 境界での停止は取得時の照合で収束させる。

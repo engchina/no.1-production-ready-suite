@@ -149,6 +149,7 @@ class OntologyRevision(OntologyContract):
     shacl_report_artifact_id: str = ""
     renderer_version: str = ""
     artifact_hashes: dict[str, str] = Field(default_factory=dict)
+    publish_job_id: str = ""
 
 
 class OntologyEvidenceLocatorKind(StrEnum):

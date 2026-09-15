@@ -22,6 +22,7 @@ from app.features.nl2sql.ontology_markdown_workspace import shutdown_markdown_pr
 from app.features.nl2sql.ontology_router import (
     OntologyApiRuntime,
     ontology_build_service,
+    ontology_publish_service,
     ontology_runtime,
 )
 from app.features.nl2sql.profile_sync import profile_sync_service
@@ -89,6 +90,7 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         await run_in_threadpool(profile_sync_service.shutdown)
         await run_in_threadpool(shutdown_markdown_preparations, ontology_runtime)
         await run_in_threadpool(ontology_build_service.shutdown)
+        await run_in_threadpool(ontology_publish_service.shutdown)
         close_oracle_pools()
 
 

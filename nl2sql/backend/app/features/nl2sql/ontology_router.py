@@ -1170,9 +1170,30 @@ class OntologyApiRuntime:
                 and (not profile_id or self._artifact_profile_id(document) == profile_id)
             ]
             saved: list[dict[str, Any]] = []
+            published_documents = [
+                item
+                for item in self.store.list_artifacts(revision_id)
+                if item.get("artifact_type") == _MARKDOWN_PUBLISHED_ARTIFACT_TYPE
+            ]
             for document in draft_documents:
                 document_profile_id = self._artifact_profile_id(document)
                 if not document_profile_id:
+                    continue
+                existing = next(
+                    (
+                        item
+                        for item in published_documents
+                        if self._artifact_profile_id(item) == document_profile_id
+                    ),
+                    None,
+                )
+                if existing is not None:
+                    if self._artifact_content(existing) != self._artifact_content(document):
+                        raise OntologyVersionConflictError(
+                            "PUBLISHED_MARKDOWN_MISMATCH",
+                            "公開済み Markdown が下書きと異なるため、自動で上書きできません。",
+                        )
+                    saved.append(existing)
                     continue
                 saved.append(
                     self._save_markdown_artifact(
@@ -1562,6 +1583,7 @@ class OntologyApiRuntime:
         request: OntologyPublishRequest,
         *,
         semantic_metadata: Mapping[str, Any] | None = None,
+        publication_guard: Callable[[], Any] | None = None,
     ) -> SchemaOntology:
         with self._lock:
             # 新形式の候補を旧 Markdown/global 公開入口でレビュー迂回させない。
@@ -1604,6 +1626,8 @@ class OntologyApiRuntime:
                 if item.revision.id == revision_id
                 or item.revision.status == OntologyRevisionStatus.PUBLISHED
             ]
+            if publication_guard is not None:
+                publication_guard()
             published = self.sessions.publish_revision(
                 revision_id,
                 etag=request.etag,
@@ -1641,6 +1665,7 @@ class OntologyApiRuntime:
         *,
         etag: str,
         semantic_metadata: Mapping[str, Any],
+        publication_guard: Callable[[], Any] | None = None,
     ) -> SchemaOntology:
         # 新 revision に必要な全 active profile view が揃うまで published head を
         # 切り替えない。生成失敗時は旧 published revision がそのまま提供される。
@@ -1649,6 +1674,7 @@ class OntologyApiRuntime:
             revision_id,
             OntologyPublishRequest(etag=etag),
             semantic_metadata=semantic_metadata,
+            publication_guard=publication_guard,
         )
 
     def _validate_typed_semantics_for_publish(self, ontology: SchemaOntology) -> None:
@@ -5683,7 +5709,7 @@ def get_ontology_publish_job(
                 )
             )
         )
-    job = _run_runtime_sync(ontology_publish_service.get, job_id)
+    job = _run_runtime_sync(ontology_publish_service.peek, job_id)
     if job is None:
         raise HTTPException(
             status_code=404,
@@ -5694,7 +5720,8 @@ def get_ontology_publish_job(
         )
     if job.profile_id:
         assert_profile_access(http_request, job.profile_id)
-    return ApiResponse(data=OntologyPublishJobData(job=job))
+    recovered = _run_runtime_sync(ontology_publish_service.get, job_id)
+    return ApiResponse(data=OntologyPublishJobData(job=recovered or job))
 
 
 @router.get(

@@ -193,6 +193,7 @@ class Settings(BaseServiceSettings):
     # 公開前の Markdown 解析は自動再送せず、待機時間を含む期限を永続化する。
     nl2sql_ontology_preparation_timeout_seconds: float = Field(default=600.0, gt=0)
     nl2sql_ontology_worker_poll_seconds: float = 1.0
+    nl2sql_ontology_publish_timeout_seconds: float = Field(default=600.0, gt=0)
     nl2sql_ontology_worker_claim_timeout_seconds: float = 3900.0
     nl2sql_ontology_build_timeout_seconds: float = Field(default=21600.0, gt=0)
     nl2sql_ontology_build_lease_seconds: float = Field(default=120.0, ge=30)

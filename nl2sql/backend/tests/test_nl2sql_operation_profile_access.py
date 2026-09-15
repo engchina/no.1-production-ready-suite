@@ -602,3 +602,35 @@ def test_ontology_profile_recommendation_and_session_routes_enforce_profile_acce
 
     assert confirm_exc.value.status_code == 403
     assert session_exc.value.status_code == 403
+
+
+def test_legacy_publish_checks_profile_before_recovery(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.features.nl2sql.ontology_models import OntologyPublishJob
+    from app.settings import get_settings
+
+    monkeypatch.setattr(get_settings(), "app_auth_enabled", True)
+    job = OntologyPublishJob(
+        id="publish-other", revision_id="revision", requested_etag="etag", profile_id="profile-b"
+    )
+
+    def forbidden(_job_id: str) -> None:
+        raise AssertionError("unauthorized request must not recover the job")
+
+    monkeypatch.setattr(
+        ontology_router,
+        "ontology_publish_service",
+        SimpleNamespace(
+            peek=lambda _id: job,
+            get=forbidden,
+        ),
+    )
+    monkeypatch.setattr(
+        ontology_router,
+        "ontology_runtime",
+        SimpleNamespace(
+            store=SimpleNamespace(get_artifact=lambda _id: None),
+        ),
+    )
+    with pytest.raises(HTTPException) as error:
+        ontology_router.get_ontology_publish_job(job.id, _request({"profile-a"}))
+    assert error.value.status_code == 403
