@@ -23,8 +23,9 @@ import time
 import unicodedata
 import uuid
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from contextlib import suppress
 from dataclasses import dataclass, field, replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal, NoReturn
 
@@ -471,6 +472,10 @@ class SelectAiDbProfileListRefreshSync:
     job_id: str = ""
     required: bool = False
     reason_code: str = ""
+
+
+class ProfileListRefreshExecutionLost(RuntimeError):
+    """失効した一覧更新の保存を拒否する。"""
 
 
 class SelectAiDbProfileListRefreshFullRequired(RuntimeError):
@@ -3077,6 +3082,8 @@ class Nl2SqlService:
         self._schema_refresh_dispatch_lock = threading.Lock()
         self._schema_refresh_dispatching_job_ids: set[str] = set()
         self._schema_refresh_worker_id = f"api:{uuid.uuid4()}"
+        self._profile_list_refresh_owned: dict[str, tuple[str, int]] = {}
+        self._profile_list_refresh_worker_id = f"api:{uuid.uuid4()}"
         self._profile_list_refresh_lock = threading.Lock()
         self._profile_list_refresh_dispatch_lock = threading.Lock()
         self._profile_list_refresh_dispatching_job_ids: set[str] = set()
@@ -15303,16 +15310,156 @@ class Nl2SqlService:
             status="ready",
         )
 
+    @staticmethod
+    def _profile_refresh_expired(job: SelectAiDbProfileRefreshJobData) -> bool:
+        try:
+            deadline = (
+                datetime.fromisoformat(job.deadline_at)
+                if job.deadline_at
+                else (
+                    datetime.fromisoformat(job.created_at)
+                    + timedelta(seconds=get_settings().nl2sql_profile_list_refresh_timeout_seconds)
+                )
+            )
+            if deadline.tzinfo is None:
+                deadline = deadline.replace(tzinfo=UTC)
+            if datetime.now(UTC) >= deadline:
+                return True
+            if job.status == SelectAiDbProfileRefreshStatus.RUNNING and job.lease_expires_at:
+                lease = datetime.fromisoformat(job.lease_expires_at)
+                if lease.tzinfo is None:
+                    lease = lease.replace(tzinfo=UTC)
+                return datetime.now(UTC) >= lease
+            return False
+        except (ValueError, TypeError):
+            return True
+
+    def _recover_profile_refresh_job(
+        self,
+        job_id: str,
+        *,
+        interrupted: bool = False,
+    ) -> SelectAiDbProfileRefreshJobData | None:
+        repository = self._refresh_job_repository
+        for _ in range(3):
+            current = repository.get_document(_SELECT_AI_DB_PROFILE_REFRESH_JOB_COLLECTION, job_id)
+            if current is None:
+                return None
+            job = SelectAiDbProfileRefreshJobData.model_validate(current)
+            if job.status not in {
+                SelectAiDbProfileRefreshStatus.PENDING,
+                SelectAiDbProfileRefreshStatus.RUNNING,
+            }:
+                return job
+            if interrupted:
+                with self._profile_list_refresh_dispatch_lock:
+                    owned = self._profile_list_refresh_owned.get(job_id)
+                    dispatched = job_id in self._profile_list_refresh_dispatching_job_ids
+                if job.status == SelectAiDbProfileRefreshStatus.RUNNING:
+                    if owned != (job.worker_id, job.attempt):
+                        return job
+                elif not dispatched:
+                    return job
+            elif not self._profile_refresh_expired(job):
+                return job
+            updated = job.model_copy(
+                update={
+                    "status": SelectAiDbProfileRefreshStatus.ERROR,
+                    "finished_at": _utc_now(),
+                    "error_code": (
+                        "profile_list_refresh_interrupted"
+                        if interrupted
+                        else "profile_list_refresh_timeout"
+                    ),
+                    "error_message": (
+                        "DB Profile 一覧更新を中断しました。保存済みの一覧を保持しています。"
+                        "状態を確認して一覧更新を再実行してください。"
+                    ),
+                }
+            )
+            expected = {
+                key: current.get(key)
+                for key in (
+                    "status",
+                    "worker_id",
+                    "attempt",
+                    "lease_expires_at",
+                    "deadline_at",
+                )
+            }
+            saved = repository.patch_document_if_current(
+                _SELECT_AI_DB_PROFILE_REFRESH_JOB_COLLECTION,
+                job_id,
+                updated.model_dump(mode="json"),
+                expected=expected,
+                status="error",
+            )
+            if saved is None:
+                continue
+            logger.warning(
+                "DB Profile 一覧更新を中断状態へ回復しました。",
+                extra={
+                    "job_id": job_id,
+                    "error_code": updated.error_code,
+                    "worker_id": job.worker_id,
+                    "attempt": job.attempt,
+                },
+            )
+            return SelectAiDbProfileRefreshJobData.model_validate(saved)
+        return self._load_select_ai_db_profile_refresh_job(job_id)
+
+    def shutdown_select_ai_db_profile_refresh_jobs(self) -> None:
+        with self._profile_list_refresh_dispatch_lock:
+            job_ids = (
+                set(self._profile_list_refresh_owned)
+                | self._profile_list_refresh_dispatching_job_ids
+            )
+        for job_id in job_ids:
+            try:
+                self._recover_profile_refresh_job(job_id, interrupted=True)
+            except Exception:
+                logger.exception(
+                    "DB Profile 一覧更新の中断を保存できませんでした。", extra={"job_id": job_id}
+                )
+
+    def _profile_refresh_owner(self, job_id: str) -> dict[str, Any]:
+        current = self._recover_profile_refresh_job(job_id)
+        with self._profile_list_refresh_dispatch_lock:
+            owned = self._profile_list_refresh_owned.get(job_id)
+        if (
+            not current
+            or not owned
+            or current.status != SelectAiDbProfileRefreshStatus.RUNNING
+            or owned != (current.worker_id, current.attempt)
+        ):
+            raise ProfileListRefreshExecutionLost(job_id)
+        return {"status": "running", "worker_id": owned[0], "attempt": owned[1]}
+
     def _save_select_ai_db_profile_refresh_job(
-        self, job: SelectAiDbProfileRefreshJobData
+        self,
+        job: SelectAiDbProfileRefreshJobData,
     ) -> SelectAiDbProfileRefreshJobData:
-        self._refresh_job_repository.put_document(
+        repository = self._refresh_job_repository
+        current = repository.get_document(_SELECT_AI_DB_PROFILE_REFRESH_JOB_COLLECTION, job.job_id)
+        if current is None:
+            repository.put_document(
+                _SELECT_AI_DB_PROFILE_REFRESH_JOB_COLLECTION,
+                job.job_id,
+                job.model_dump(mode="json"),
+                status=job.status.value,
+            )
+            return job.model_copy(deep=True)
+        saved = repository.patch_document_if_current(
             _SELECT_AI_DB_PROFILE_REFRESH_JOB_COLLECTION,
             job.job_id,
             job.model_dump(mode="json"),
+            expected=self._profile_refresh_owner(job.job_id),
             status=job.status.value,
+            require_live_lease=True,
         )
-        return job.model_copy(deep=True)
+        if saved is None:
+            raise ProfileListRefreshExecutionLost(job.job_id)
+        return SelectAiDbProfileRefreshJobData.model_validate(saved)
 
     def _load_select_ai_db_profile_refresh_job(
         self,
@@ -15330,13 +15477,10 @@ class Nl2SqlService:
         self,
         job_id: str,
     ) -> SelectAiDbProfileRefreshJobData | None:
-        job = self._load_select_ai_db_profile_refresh_job(job_id)
+        job = self._recover_profile_refresh_job(job_id)
         if job is None:
             return None
-        if job.status in {
-            SelectAiDbProfileRefreshStatus.PENDING,
-            SelectAiDbProfileRefreshStatus.RUNNING,
-        }:
+        if job.status == SelectAiDbProfileRefreshStatus.PENDING:
             self._dispatch_select_ai_db_profile_refresh_job(job.job_id)
         return job
 
@@ -15358,6 +15502,10 @@ class Nl2SqlService:
             source=source,
             target_profiles=targets,
             created_at=_utc_now(),
+            deadline_at=(
+                datetime.now(UTC)
+                + timedelta(seconds=get_settings().nl2sql_profile_list_refresh_timeout_seconds)
+            ).isoformat(),
         )
         saved = self._save_select_ai_db_profile_refresh_job(job)
         if dispatch:
@@ -15514,20 +15662,34 @@ class Nl2SqlService:
         if not self._profile_list_refresh_lock.acquire(blocking=False):
             return False
         try:
-            current = self._load_select_ai_db_profile_refresh_job(job_id)
-            if current is None or current.status not in {
-                SelectAiDbProfileRefreshStatus.PENDING,
-                SelectAiDbProfileRefreshStatus.RUNNING,
-            }:
+            current = self._recover_profile_refresh_job(job_id)
+            if current is None or current.status != SelectAiDbProfileRefreshStatus.PENDING:
                 return False
+            claimed = self._refresh_job_repository.claim_document(
+                _SELECT_AI_DB_PROFILE_REFRESH_JOB_COLLECTION,
+                worker_id=self._profile_list_refresh_worker_id,
+                lease_seconds=get_settings().nl2sql_profile_list_refresh_timeout_seconds,
+                entity_id=job_id,
+                exclusive=True,
+            )
+            if claimed is None:
+                return False
+            job = SelectAiDbProfileRefreshJobData.model_validate(claimed)
+            with self._profile_list_refresh_dispatch_lock:
+                self._profile_list_refresh_owned[job_id] = (job.worker_id, job.attempt)
             job = self._save_select_ai_db_profile_refresh_job(
-                current.model_copy(
+                job.model_copy(
                     update={
-                        "status": SelectAiDbProfileRefreshStatus.RUNNING,
                         "phase": SelectAiDbProfileRefreshPhase.FETCHING,
-                        "started_at": current.started_at or _utc_now(),
                         "error_code": "",
                         "error_message": "",
+                        "deadline_at": job.deadline_at
+                        or (
+                            datetime.fromisoformat(job.created_at)
+                            + timedelta(
+                                seconds=get_settings().nl2sql_profile_list_refresh_timeout_seconds
+                            )
+                        ).isoformat(),
                     }
                 )
             )
@@ -15568,6 +15730,7 @@ class Nl2SqlService:
                 else:
                     scoped_names = present_names
                 for name in sorted(scoped_names):
+                    self._profile_refresh_owner(job_id)
                     if name in present_names:
                         try:
                             to_upsert[name] = self._select_ai_db_profile_from_oracle_detail(name)
@@ -15616,67 +15779,92 @@ class Nl2SqlService:
                     }
                 )
             )
-            for name in sorted(deleted):
-                self._refresh_job_repository.delete_document(
+            completed = job.model_copy(
+                update={
+                    "status": SelectAiDbProfileRefreshStatus.DONE,
+                    "phase": SelectAiDbProfileRefreshPhase.DONE,
+                    "finished_at": _utc_now(),
+                    "scanned_profiles": total_profiles,
+                    "changed_profiles": len(changed),
+                    "deleted_profiles": len(deleted),
+                }
+            )
+            upserts: list[tuple[str, str, Mapping[str, Any], str, str]] = [
+                (
                     _SELECT_AI_DB_PROFILE_COLLECTION,
                     name,
+                    to_upsert[name].model_dump(mode="json"),
+                    "",
+                    to_upsert[name].status,
                 )
-            for name in sorted(changed):
-                profile = to_upsert[name]
-                self._refresh_job_repository.put_document(
-                    _SELECT_AI_DB_PROFILE_COLLECTION,
-                    name,
-                    profile.model_dump(mode="json"),
-                    status=profile.status,
-                )
-            self._save_select_ai_db_profile_refresh_meta(mode=job.mode)
-            self._save_select_ai_db_profile_refresh_job(
-                job.model_copy(
-                    update={
-                        "status": SelectAiDbProfileRefreshStatus.DONE,
-                        "phase": SelectAiDbProfileRefreshPhase.DONE,
-                        "finished_at": _utc_now(),
-                        "scanned_profiles": total_profiles,
-                        "changed_profiles": len(changed),
-                        "deleted_profiles": len(deleted),
-                    }
+                for name in sorted(changed)
+            ]
+            upserts.append(
+                (
+                    _SELECT_AI_DB_PROFILE_REFRESH_META_COLLECTION,
+                    "head",
+                    {
+                        "refreshed_at": _utc_now(),
+                        "mode": job.mode.value,
+                        "profile_count": len((set(existing) - deleted) | set(to_upsert)),
+                    },
+                    "",
+                    "ready",
                 )
             )
+            saved = self._refresh_job_repository.patch_document_if_current(
+                _SELECT_AI_DB_PROFILE_REFRESH_JOB_COLLECTION,
+                job_id,
+                completed.model_dump(mode="json"),
+                expected=self._profile_refresh_owner(job_id),
+                status="done",
+                require_live_lease=True,
+                upserts=upserts,
+                deletes=[(_SELECT_AI_DB_PROFILE_COLLECTION, name) for name in sorted(deleted)],
+            )
+            if saved is None:
+                raise ProfileListRefreshExecutionLost(job_id)
             return True
-        except SelectAiDbProfileListRefreshFullRequired as exc:
-            current = self._load_select_ai_db_profile_refresh_job(job_id)
-            if current is not None:
-                self._save_select_ai_db_profile_refresh_job(
-                    current.model_copy(
-                        update={
-                            "status": SelectAiDbProfileRefreshStatus.ERROR,
-                            "phase": SelectAiDbProfileRefreshPhase.FETCHING,
-                            "requires_full_refresh": True,
-                            "error_code": exc.reason_code,
-                            "error_message": _profile_list_refresh_required_warning(
-                                exc.reason_code
-                            ),
-                            "finished_at": _utc_now(),
-                        }
-                    )
-                )
+        except ProfileListRefreshExecutionLost:
+            logger.info(
+                "失効した DB Profile 一覧更新の結果を破棄しました。", extra={"job_id": job_id}
+            )
             return False
         except Exception as exc:
+            logger.exception("DB Profile 一覧更新に失敗しました。", extra={"job_id": job_id})
             current = self._load_select_ai_db_profile_refresh_job(job_id)
             if current is not None:
-                self._save_select_ai_db_profile_refresh_job(
-                    current.model_copy(
-                        update={
-                            "status": SelectAiDbProfileRefreshStatus.ERROR,
-                            "phase": SelectAiDbProfileRefreshPhase.FETCHING,
-                            "error_code": "profile_list_refresh_failed",
-                            "error_message": str(exc),
-                            "finished_at": _utc_now(),
-                        }
-                    )
+                code = (
+                    exc.reason_code
+                    if isinstance(exc, SelectAiDbProfileListRefreshFullRequired)
+                    else "profile_list_refresh_failed"
                 )
+                with suppress(ProfileListRefreshExecutionLost):
+                    self._save_select_ai_db_profile_refresh_job(
+                        current.model_copy(
+                            update={
+                                "status": SelectAiDbProfileRefreshStatus.ERROR,
+                                "phase": SelectAiDbProfileRefreshPhase.FETCHING,
+                                "requires_full_refresh": isinstance(
+                                    exc, SelectAiDbProfileListRefreshFullRequired
+                                ),
+                                "error_code": code,
+                                "error_message": (
+                                    _profile_list_refresh_required_warning(code)
+                                    if isinstance(exc, SelectAiDbProfileListRefreshFullRequired)
+                                    else (
+                                        "DB Profile 一覧更新に失敗しました。"
+                                        "バックエンドのログを確認してください。"
+                                    )
+                                ),
+                                "finished_at": _utc_now(),
+                            }
+                        )
+                    )
             return False
         finally:
+            with self._profile_list_refresh_dispatch_lock:
+                self._profile_list_refresh_owned.pop(job_id, None)
             self._profile_list_refresh_lock.release()
 
     def _record_select_ai_scope_state(

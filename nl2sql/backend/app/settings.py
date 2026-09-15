@@ -164,6 +164,7 @@ class Settings(BaseServiceSettings):
     nl2sql_schema_refresh_worker_enabled: bool = True
     # inprocess: local 開発用 thread、external: API は job 永続化だけを行う。
     nl2sql_schema_refresh_worker_mode: str = "inprocess"
+    nl2sql_profile_list_refresh_timeout_seconds: float = Field(default=600.0, ge=30)
     nl2sql_schema_refresh_lease_seconds: float = 900.0
     # 明示 system schema DDL が既存 DML lock の解放を待つ上限。
     nl2sql_system_schema_ddl_lock_timeout_seconds: int = Field(

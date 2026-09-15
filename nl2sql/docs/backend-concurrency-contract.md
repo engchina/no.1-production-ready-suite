@@ -84,3 +84,11 @@ async def import_example(file: UploadFile) -> ApiResponse[ImportData]:
 - レポートを含む bundle と hash 付き完了証跡を artifacts の同一 transaction で保存する。job の完了保存だけが失われた場合、証跡から結果を復元し、Oracle 検証 SQL を再送しない。
 - SQL_EXECUTE / Profile scope の認可、読み取り専用 SQL、sample_limit、検証後の Profile / schema fingerprint / bundle ETag 確認を維持する。sampled data を全 DB の検証済みとは扱わない。
 - inprocess の shutdown は所有 job のみを off-loop で回復し、pool close 前に実施する。同期 SQL スレッドの強制 kill は行わない。現在の Markdown snapshot のデータ検証とは別の旧 async API が対象。
+
+## Select AI DB Profile 一覧更新
+
+- `NL2SQL_PROFILE_LIST_REFRESH_TIMEOUT_SECONDS`（既定600秒）を絶対期限として永続化する。旧 pending/running は作成日時から回復し、期限・lease 切れを error として一覧更新の再実行を案内する。
+- 一覧更新 collection 内で有効な実行は1件にする。Oracle の exclusive claim は短い transaction 内で state table を lock して同 collection の生存 job を確認する。外部 DB の一覧・詳細取得は lock の外で実行する。通常の SQL job claim は従来の行単位 SKIP LOCKED のまま。
+- state repository の `patch_document_if_current()` は worker / attempt 等の比較と lease / deadline を row lock 内で確認する。Profile キャッシュの差分、更新メタ情報、job 完了を同一 transaction で保存し、失効・保存失敗で旧キャッシュを部分更新しない。
+- 取得時の回復は CAS 相当の条件付き更新を使い、生存 worker や完了済み job を上書きしない。running の GET は thread を再配送しない。
+- inprocess shutdown はこのサービスが dispatch / claim した job だけを pool close 前に off-loop で中断する。実 Oracle Profile の作成・変更を自動再送せず、再実行するのは一覧の読み取りのみ。

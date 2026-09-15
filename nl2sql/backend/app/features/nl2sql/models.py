@@ -1783,6 +1783,11 @@ class SelectAiDbProfileRefreshTarget(BaseModel):
 class SelectAiDbProfileRefreshJobData(BaseModel):
     """Oracle DB profile list refresh job."""
 
+    worker_id: str = ""
+    attempt: int = 0
+    heartbeat_at: str | None = None
+    lease_expires_at: str | None = None
+    deadline_at: str | None = None
     job_id: str
     status: SelectAiDbProfileRefreshStatus = SelectAiDbProfileRefreshStatus.PENDING
     mode: SelectAiDbProfileRefreshMode = SelectAiDbProfileRefreshMode.FULL

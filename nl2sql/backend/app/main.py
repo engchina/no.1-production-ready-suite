@@ -93,6 +93,7 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         await run_in_threadpool(ontology_build_service.shutdown)
         await run_in_threadpool(ontology_publish_service.shutdown)
         await run_in_threadpool(shutdown_validation_jobs, ontology_runtime)
+        await run_in_threadpool(nl2sql_service.shutdown_select_ai_db_profile_refresh_jobs)
         close_oracle_pools()
 
 

@@ -206,6 +206,60 @@ def _state_document_claimable(payload: Mapping[str, Any], now: datetime) -> bool
     return expires_at <= now
 
 
+def _state_document_matches_fence(
+    payload: Mapping[str, Any],
+    expected: Mapping[str, Any],
+    *,
+    require_live_lease: bool,
+) -> bool:
+    if any(payload.get(key) != value for key, value in expected.items()):
+        return False
+    if not require_live_lease:
+        return True
+    if payload.get("status") != "running" or _state_document_claimable(payload, datetime.now(UTC)):
+        return False
+    deadline = payload.get("deadline_at")
+    if deadline:
+        try:
+            expires = datetime.fromisoformat(str(deadline))
+            if expires.tzinfo is None:
+                expires = expires.replace(tzinfo=UTC)
+            return expires > datetime.now(UTC)
+        except ValueError:
+            return False
+    return True
+
+
+def _write_state_document(
+    cursor: Any,
+    collection: str,
+    entity_id: str,
+    payload: Mapping[str, Any],
+    profile_id: str,
+    status: str,
+) -> None:
+    payload_json = _canonical_json(dict(payload))
+    _set_clob_bind(cursor, "payload")
+    cursor.execute(
+        "MERGE INTO NL2SQL_STATE_DOCUMENTS t USING (SELECT :collection COLLECTION, "
+        ":entity_id ENTITY_ID FROM DUAL) s ON (t.COLLECTION = s.COLLECTION AND "
+        "t.ENTITY_ID = s.ENTITY_ID) WHEN MATCHED THEN UPDATE SET "
+        "t.PROFILE_ID = :profile_id, t.STATUS = :status, t.VERSION_NO = "
+        "t.VERSION_NO + 1, t.ETAG = :etag, t.PAYLOAD_JSON = :payload, "
+        "t.UPDATED_AT = SYSTIMESTAMP WHEN NOT MATCHED THEN INSERT "
+        "(COLLECTION, ENTITY_ID, PROFILE_ID, STATUS, VERSION_NO, ETAG, PAYLOAD_JSON) "
+        "VALUES (:collection, :entity_id, :profile_id, :status, 1, :etag, :payload)",
+        {
+            "collection": collection,
+            "entity_id": entity_id,
+            "profile_id": profile_id,
+            "status": status,
+            "etag": hashlib.sha256(payload_json.encode()).hexdigest(),
+            "payload": payload_json,
+        },
+    )
+
+
 def _claimed_state_document(
     payload: Mapping[str, Any],
     *,
@@ -540,6 +594,20 @@ class IncrementalNl2SqlRepository(Protocol):
         worker_id: str,
         lease_seconds: float,
         entity_id: str | None = None,
+        exclusive: bool = False,
+    ) -> dict[str, Any] | None: ...
+
+    def patch_document_if_current(
+        self,
+        collection: str,
+        entity_id: str,
+        updates: Mapping[str, Any],
+        *,
+        expected: Mapping[str, Any],
+        status: str = "",
+        require_live_lease: bool = False,
+        upserts: Sequence[tuple[str, str, Mapping[str, Any], str, str]] = (),
+        deletes: Sequence[tuple[str, str]] = (),
     ) -> dict[str, Any] | None: ...
 
     def put_document(
@@ -1008,9 +1076,17 @@ class MemoryIncrementalNl2SqlRepository:
         worker_id: str,
         lease_seconds: float,
         entity_id: str | None = None,
+        exclusive: bool = False,
     ) -> dict[str, Any] | None:
         now = datetime.now(UTC)
         with self._lock:
+            if exclusive and any(
+                key[0] == collection
+                and value.get("status") == "running"
+                and _state_document_matches_fence(value, {}, require_live_lease=True)
+                for key, value in self._documents.items()
+            ):
+                return None
             candidates: list[tuple[tuple[str, str], dict[str, Any], dict[str, Any]]] = []
             for key, value in self._documents.items():
                 item_collection, item_entity_id = key
@@ -1045,6 +1121,48 @@ class MemoryIncrementalNl2SqlRepository:
             }
             self._tokens[STATE_NAMESPACE] += 1
             return copy.deepcopy(claimed)
+
+    def patch_document_if_current(
+        self,
+        collection: str,
+        entity_id: str,
+        updates: Mapping[str, Any],
+        *,
+        expected: Mapping[str, Any],
+        status: str = "",
+        require_live_lease: bool = False,
+        upserts: Sequence[tuple[str, str, Mapping[str, Any], str, str]] = (),
+        deletes: Sequence[tuple[str, str]] = (),
+    ) -> dict[str, Any] | None:
+        with self._lock:
+            current = self.get_document(collection, entity_id)
+            if current is None or not _state_document_matches_fence(
+                current,
+                expected,
+                require_live_lease=require_live_lease,
+            ):
+                return None
+            updated = {**current, **copy.deepcopy(dict(updates))}
+            snapshot, tokens = copy.deepcopy(self._documents), dict(self._tokens)
+            try:
+                original = self._documents[(collection, entity_id)]
+                self.put_document(
+                    collection,
+                    entity_id,
+                    updated,
+                    profile_id=str(original.get("_profile_id") or ""),
+                    status=status or str(original.get("_status") or ""),
+                )
+                for item_collection, item_id in deletes:
+                    self.delete_document(item_collection, item_id)
+                for item_collection, item_id, payload, profile_id, item_status in upserts:
+                    self.put_document(
+                        item_collection, item_id, payload, profile_id=profile_id, status=item_status
+                    )
+            except Exception:
+                self._documents, self._tokens = snapshot, tokens
+                raise
+            return copy.deepcopy(updated)
 
     def put_document(
         self,
@@ -2044,6 +2162,7 @@ class OracleIncrementalNl2SqlRepository:
         worker_id: str,
         lease_seconds: float,
         entity_id: str | None = None,
+        exclusive: bool = False,
     ) -> dict[str, Any] | None:
         now = datetime.now(UTC)
         predicate = "COLLECTION = :collection AND STATUS IN ('pending', 'running')"
@@ -2057,6 +2176,23 @@ class OracleIncrementalNl2SqlRepository:
         )
         with self._connection_factory() as connection, connection.cursor() as cursor:
             try:
+                if exclusive:
+                    # 同 collection の別 job も含め短い claim transaction だけ直列化する。
+                    # Oracle/SDK 呼び出しはこの lock の外で行う。
+                    cursor.execute("LOCK TABLE NL2SQL_STATE_DOCUMENTS IN EXCLUSIVE MODE")
+                    cursor.execute(
+                        "SELECT PAYLOAD_JSON FROM NL2SQL_STATE_DOCUMENTS "
+                        "WHERE COLLECTION = :collection AND STATUS = 'running'",
+                        {"collection": collection},
+                    )
+                    if any(
+                        _state_document_matches_fence(
+                            json.loads(_read_lob(item[0])), {}, require_live_lease=True
+                        )
+                        for item in cursor.fetchall()
+                    ):
+                        connection.rollback()
+                        return None
                 # Oracle は row_limiting_clause と FOR UPDATE の併用を許可しない。
                 # SKIP LOCKED は fetch 時に行を lock するため、driver の内部 fetch も
                 # 小さく絞り、claim 候補だけを短時間 lock する。
@@ -2094,6 +2230,60 @@ class OracleIncrementalNl2SqlRepository:
                     return claimed
                 connection.commit()
                 return None
+            except Exception:
+                connection.rollback()
+                raise
+
+    def patch_document_if_current(
+        self,
+        collection: str,
+        entity_id: str,
+        updates: Mapping[str, Any],
+        *,
+        expected: Mapping[str, Any],
+        status: str = "",
+        require_live_lease: bool = False,
+        upserts: Sequence[tuple[str, str, Mapping[str, Any], str, str]] = (),
+        deletes: Sequence[tuple[str, str]] = (),
+    ) -> dict[str, Any] | None:
+        with self._connection_factory() as connection, connection.cursor() as cursor:
+            try:
+                cursor.execute(
+                    "SELECT PAYLOAD_JSON, PROFILE_ID, STATUS FROM NL2SQL_STATE_DOCUMENTS "
+                    "WHERE COLLECTION = :collection AND ENTITY_ID = :entity_id FOR UPDATE",
+                    {"collection": collection, "entity_id": entity_id},
+                )
+                row = cursor.fetchone()
+                current = json.loads(_read_lob(row[0])) if row else None
+                if current is None or not _state_document_matches_fence(
+                    current,
+                    expected,
+                    require_live_lease=require_live_lease,
+                ):
+                    connection.rollback()
+                    return None
+                updated = {**current, **copy.deepcopy(dict(updates))}
+                _write_state_document(
+                    cursor,
+                    collection,
+                    entity_id,
+                    updated,
+                    str(row[1] or ""),
+                    status or str(row[2] or ""),
+                )
+                for item_collection, item_id in deletes:
+                    cursor.execute(
+                        "DELETE FROM NL2SQL_STATE_DOCUMENTS "
+                        "WHERE COLLECTION = :collection AND ENTITY_ID = :entity_id",
+                        {"collection": item_collection, "entity_id": item_id},
+                    )
+                for item_collection, item_id, payload, profile_id, item_status in upserts:
+                    _write_state_document(
+                        cursor, item_collection, item_id, payload, profile_id, item_status
+                    )
+                self._bump_token(cursor, STATE_NAMESPACE)
+                connection.commit()
+                return updated
             except Exception:
                 connection.rollback()
                 raise
