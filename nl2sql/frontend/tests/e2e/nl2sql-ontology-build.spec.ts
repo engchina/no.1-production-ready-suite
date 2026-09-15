@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { expect, test, type Locator, type Page, type Route } from "@playwright/test";
 import { mockDatabaseGateReady, systemAdminMe } from "./_helpers/database-gate";
 import { dropFiles } from "./_helpers/file-dropzone";
@@ -3224,10 +3225,10 @@ for (const status of ["failed", "ready"] as const) {
         expect(metrics.scroll).toBeGreaterThan(metrics.client);
         await region.focus();
         await expect(region).toBeFocused();
-        await page.keyboard.press("End");
+        await region.press("End");
         await expect.poll(() => region.evaluate(element => element.scrollTop)).toBeGreaterThan(0);
         await expect.poll(() => region.evaluate(element => element.scrollHeight - element.clientHeight - element.scrollTop)).toBeLessThanOrEqual(1);
-        await page.keyboard.press("Home");
+        await region.press("Home");
         await expect.poll(() => region.evaluate(element => element.scrollTop)).toBe(0);
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
         await page.screenshot({ path: testInfo.outputPath(`diagnostics-${status}-${width}-${theme}.png`) });
@@ -3340,3 +3341,45 @@ for (const operationalWarning of [false, true]) {
     }
   });
 }
+
+
+test("従業員 Markdown は業務内容だけを整形表示して公開できる", async ({ page }, testInfo) => {
+  const content = readFileSync(new URL("../fixtures/ontology-employee.md", import.meta.url), "utf8");
+  const state = await mockApi(page);
+  state.jobPolls = 2;
+  state.draftMarkdown = content;
+  await page.goto("/ontology-build?profile=default");
+  await expect(page.getByTestId("ontology-view-fetch")).toBeVisible();
+  await page.keyboard.press("Tab");
+  await expect(page.getByRole("link", { name: "本文へスキップ" })).toBeFocused();
+  await loadOntologyBuildWorkspace(page);
+  const markdown = page.getByTestId("ontology-build-markdown");
+  const draft = markdown.getByRole("tab", { name: "Markdown オントロジー下書き" });
+  await draft.click();
+  const editor = markdown.getByTestId("ontology-markdown-draft-editor");
+  await expect(editor).toHaveValue(content);
+  expect(content).not.toMatch(/profile_concept_|source_id|verified|evidence|検証不能/);
+  for (const field of ["従業員番号", "氏名", "所属部門番号", "メールアドレス", "入社日", "給与"]) {
+    expect(content).toContain(`##### ${field}`);
+  }
+  for (const width of testInfo.project.name === "desktop" ? [1280, 1920] : [375]) {
+    await page.setViewportSize({ width, height: 900 });
+    for (const theme of ["light", "dark"]) {
+      await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
+      await editor.scrollIntoViewIfNeeded();
+      await editor.focus();
+      await expect(editor).toBeFocused();
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      await page.screenshot({ path: testInfo.outputPath(`clean-employee-${width}-${theme}.png`) });
+    }
+  }
+  await draft.press("End");
+  await expect(markdown.getByRole("tab", { name: "公開済み Markdown オントロジー" })).toBeFocused();
+  await page.keyboard.press("Home");
+  await expect(draft).toBeFocused();
+  await page.getByRole("button", { name: "オントロジーを公開", exact: true }).click();
+  await confirmPreparedPublish(page);
+  await expect.poll(() => state.published).toBe(true);
+  await markdown.getByRole("tab", { name: "公開済み Markdown オントロジー" }).click();
+  await expect(markdown.getByTestId("ontology-markdown-published-viewer")).toContainText("従業員番号");
+});

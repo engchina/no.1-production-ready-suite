@@ -833,12 +833,12 @@ def test_build_job_creates_markdown_draft_and_drops_outside_candidates(
     assert "#### 指標（Metric）" in finished.markdown_output
     assert "受注金額合計" in finished.markdown_output
     assert "APP.ORDERS.AMOUNT" in finished.markdown_output
-    assert "#### 業務ルール（Business Rule）" in finished.markdown_output
+    assert "#### 業務ルール（Business Rule）" not in finished.markdown_output
     assert "別名:" in finished.markdown_output
     assert "オーダー" in finished.markdown_output
-    assert "解決が必要な定義の競合" in finished.markdown_output
-    assert "## 採用外候補" in finished.markdown_output
-    assert "APP.SECRET" in finished.markdown_output
+    assert "解決が必要な定義の競合" not in finished.markdown_output
+    assert "## 採用外候補" not in finished.markdown_output
+    assert "APP.SECRET" not in finished.markdown_output
 
     assert runtime.list_profile_proposals("sales") == []
     state = runtime.ontology_markdown_state("sales")
@@ -2677,9 +2677,9 @@ _GLEANING_ADDITION = json.dumps(
         "metrics": [
             {
                 "metric_name_ja": "受注件数",
-                "expression_sql": "COUNT(APP.ORDERS.ORDER_ID)",
+                "expression_sql": "COUNT(APP.ORDERS.ID)",
                 "aggregation": "count",
-                "base_columns": ["APP.ORDERS.ORDER_ID"],
+                "base_columns": ["APP.ORDERS.ID"],
                 "unit": "件",
                 "description_ja": "受注の件数",
                 "evidence_ja": "追加パスで回収",

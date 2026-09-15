@@ -682,15 +682,25 @@ def test_build_content_notes_are_saved_without_becoming_conflicts_or_job_warning
     assert operational_warning in job.warnings_ja
     assert not any(note in job.warnings_ja for note in notes)
     markdown = job.markdown_output
-    definitions, supplements = markdown.split("## 記述範囲と補足", 1)
+    from app.features.nl2sql.ontology_markdown_workspace import GENERATED
+    from app.features.nl2sql.ontology_store import stable_ontology_id
+
+    workspace = MarkdownOntologyWorkspace(rt)
+    internal = workspace._read(
+        "sales", stable_ontology_id(GENERATED, "sales", job.draft_revision_id), GENERATED
+    )
     for note in notes:
-        assert note not in definitions
-        assert supplements.count(note) == 1
-    assert "証拠の資料・位置・原文を照合できません。" not in definitions
+        assert note not in markdown
+        assert any(d.get("message_ja") == note for d in internal["diagnostics"])
+    assert "profile_concept_" not in markdown
+    assert "source_id:" not in markdown
     for definition in all_concepts():
-        assert definitions.count(f"(`{definition.api_name}`)") == 1
-    # SQL/構造の不正は補足への降格で隠さない。
-    assert "### 解決が必要な定義の競合" in definitions
+        assert markdown.count(f"(`{definition.api_name}`)") == 1
+    preparation = workspace.prepare("sales", job.draft_etag, "check-invalid-sql", None)
+    workspace.run_preparation("sales", preparation["id"])
+    result = workspace.preparation("sales", preparation["id"])
+    assert result["status"] == "failed"
+    assert any(f.get("code") == "SQL_EXPRESSION_INVALID" for f in result["findings"])
     saved = rt.ontology_markdown_state("sales")
     assert saved.draft_markdown == markdown
 

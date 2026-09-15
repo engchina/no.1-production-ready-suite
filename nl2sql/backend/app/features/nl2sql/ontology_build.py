@@ -4874,6 +4874,7 @@ class OntologyBuildService:
                 *[d for result in validated_extractions for d in result.extraction.definitions],
             ],
         )
+        merge_conflicts = list(concept_conflicts)
         from .ontology_definition_validation import validate_definitions
         from .ontology_definitions import ProfileOntologyBundle
 
@@ -4920,6 +4921,11 @@ class OntologyBuildService:
                 ontology=ontology,
                 profile_view=view,
             )
+            if "## Q/A 由来 SQL 生成ルール" in markdown_output:
+                markdown_output = (
+                    "# オントロジー下書き\n\n## Q/A 由来 SQL 生成ルール"
+                    + markdown_output.split("## Q/A 由来 SQL 生成ルール", 1)[1]
+                )
             markdown_output = (
                 markdown_output.split("## 業務エンティティ", 1)[0].rstrip()
                 + "\n\n"
@@ -4929,18 +4935,6 @@ class OntologyBuildService:
                     [c for result in validated_extractions for c in result.extraction.coverage],
                 )
             )
-            if actionable_warnings:
-                markdown_output += "\n\n## 構築時の確認事項\n" + "\n".join(
-                    "- " + w for w in actionable_warnings
-                )
-            if content_notes:
-                markdown_output += "\n\n## 記述範囲と補足\n" + "\n".join(
-                    "- " + note for note in _unique_non_empty_messages(content_notes)
-                )
-            if proposal_rejections:
-                markdown_output += "\n\n## 採用外候補\n" + "\n".join(
-                    "- " + w for w in dict.fromkeys(proposal_rejections)
-                )
             self._set_definition_phase(job_id, "markdown", "succeeded")
             self._set_definition_phase(job_id, "save", "running")
         except Exception as exc:
@@ -4988,6 +4982,16 @@ class OntologyBuildService:
                 titles=[draft.title_ja for draft in draft_inputs],
                 markdown=markdown_output,
                 unified_definitions=unified_definitions,
+                definition_conflicts=merge_conflicts,
+                definition_diagnostics=[
+                    *[f.model_dump(mode="json") for f in build_findings],
+                    *[
+                        {"message_ja": message}
+                        for message in _unique_non_empty_messages(
+                            [*content_notes, *warnings, *proposal_rejections]
+                        )
+                    ],
+                ],
                 note=f"AI 構築 Markdown 下書き: {len(draft_inputs)} 件",
                 prepared_base=ontology,
                 on_progress=save_progress,

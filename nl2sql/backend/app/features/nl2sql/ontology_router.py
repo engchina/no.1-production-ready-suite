@@ -4418,6 +4418,8 @@ class OntologyApiRuntime:
         prepared_base: SchemaOntology | None = None,
         unified_definitions: list[Any] | None = None,
         on_progress: Callable[[str], None] | None = None,
+        definition_conflicts: list[str] | None = None,
+        definition_diagnostics: list[Any] | None = None,
     ) -> tuple[SchemaOntology, dict[str, Any]]:
         """AI 構築結果を proposal 登録せず、承認済み draft revision として保存する。"""
 
@@ -4496,6 +4498,17 @@ class OntologyApiRuntime:
                 artifact_type=_MARKDOWN_DRAFT_ARTIFACT_TYPE,
                 markdown=markdown,
             )
+            if unified_definitions is not None:
+                from .ontology_markdown_workspace import MarkdownOntologyWorkspace
+
+                MarkdownOntologyWorkspace(self).save_generated(
+                    profile_id,
+                    draft.revision.id,
+                    markdown,
+                    unified_definitions,
+                    definition_conflicts or [],
+                    definition_diagnostics or [],
+                )
             if on_progress is not None:
                 on_progress("Markdown 成果物を保存しました。")
             return draft, artifact

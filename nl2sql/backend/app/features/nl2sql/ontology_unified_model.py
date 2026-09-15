@@ -12,7 +12,8 @@ from pydantic import TypeAdapter
 from .object_identity import catalog_match_key, object_match_key, object_part_name
 from .ontology_catalog import SchemaOntology
 from .ontology_definition_validation import mapping_column_key, mapping_object_key
-from .ontology_definitions import BusinessDefinition, MetricDefinitionV2
+from .ontology_definitions import BusinessDefinition, MetricDefinitionV2, PropertyDefinition
+from .ontology_markdown_notes import is_developer_note
 from .ontology_models import (
     BusinessRuleDefinition,
     BusinessRuleExpression,
@@ -48,8 +49,33 @@ DEFINITIONS = TypeAdapter(list[BusinessDefinition])
 PHYSICAL_KINDS = {"schema", "table", "view", "column"}
 FIELD_LABELS = {
     "description_ja": "説明",
+    "grain_ja": "業務上の粒度",
+    "lifecycle_ja": "ライフサイクル",
+    "title_property": "表示名の項目",
+    "additivity": "加算特性",
+    "constraints_ja": "制約",
+    "interface": "インターフェース",
+    "interface_property": "インターフェースの項目",
+    "property_mapping": "項目の対応",
+    "assignments": "更新する項目",
+    "parameter": "入力項目",
+    "label_ja": "表示名",
+    "code": "値",
     "aliases": "別名",
-    "mappings": "物理マッピング",
+    "mappings": "対応する表・列",
+    "api_name": "識別名",
+    "name_ja": "名称",
+    "writable": "更新可能",
+    "timezone": "タイムゾーン",
+    "allowed_values": "選択可能な値",
+    "inverse_name_ja": "逆方向の関係名",
+    "optional": "任意の関係",
+    "intermediary_object": "中間オブジェクト",
+    "valid_time_ja": "有効期間",
+    "error_policy_ja": "エラー時の扱い",
+    "permission_requirement_ja": "必要な権限",
+    "failure_policy_ja": "失敗時の扱い",
+    "severity": "違反時の扱い",
     "primary_key": "主識別子",
     "properties": "プロパティ",
     "implements": "実装するインターフェース",
@@ -348,13 +374,126 @@ def legacy_definitions(graph: SchemaOntology) -> list[BusinessDefinition]:
     return DEFINITIONS.validate_python(result)
 
 
+def concept_name_key(name: str) -> str:
+    return name.replace("_", "").casefold()
+
+
+def resolve_concept_name(name: str, definitions: list[BusinessDefinition]) -> str:
+    if any(d.api_name == name for d in definitions):
+        return name
+    matches = {
+        d.api_name for d in definitions if concept_name_key(d.api_name) == concept_name_key(name)
+    }
+    return next(iter(matches)) if len(matches) == 1 else name
+
+
+def is_reconciled_spelling_issue(
+    message: str, original: list[BusinessDefinition], merged: list[BusinessDefinition]
+) -> bool:
+    """LLM の表記差診断は、機械的な統合結果で解消を確認できたものだけ除外する。"""
+    target, separator, detail = message.partition(" / ")
+    if not separator or len(original) <= len(merged):
+        return False
+    canonical = resolve_concept_name(target, merged)
+    definition = next((d for d in merged if d.api_name == canonical), None)
+    if definition is None:
+        return False
+    if definition.kind == "object_type" and re.fullmatch(
+        r"プロパティ命名競合: (snake_case vs PascalCase|PascalCase vs snake_case)", detail
+    ):
+        properties = [d for d in original if d.kind == "property" and d.object_type == target]
+        return bool(properties) and all(
+            any(
+                m.kind == "property"
+                and m.object_type == canonical
+                and m.api_name == resolve_concept_name(d.api_name, merged)
+                for m in merged
+            )
+            for d in properties
+        )
+    return (
+        definition.kind == "property"
+        and definition.data_type == "number"
+        and bool(re.fullmatch(r"データ型: (number vs integer|integer vs number)", detail))
+        and {
+            d.data_type
+            for d in original
+            if d.kind == "property" and resolve_concept_name(d.api_name, merged) == canonical
+        }
+        == {"integer", "number"}
+    )
+
+
+def _normalize_definition_spellings(
+    definitions: list[BusinessDefinition],
+) -> list[BusinessDefinition]:
+    """同じ属性・物理列に限定して表記差を統合する。別の業務属性は併合しない。"""
+    values = [d.model_copy(deep=True) for d in definitions]
+    groups: dict[tuple[Any, ...], list[PropertyDefinition]] = {}
+    for d in values:
+        if d.kind == "object_type":
+            for m in d.mappings:
+                # 表への対応を列 SQL として誤生成した場合だけ、構造化された表対応を正とする。
+                if not m.column_name and object_match_key(m.expression_sql) == mapping_object_key(
+                    m
+                ):
+                    m.expression_sql = ""
+        if d.kind != "property" or not d.mappings:
+            continue
+        columns = tuple(
+            sorted(
+                {
+                    mapping_column_key(m)
+                    for m in d.mappings
+                    if m.column_name and not m.expression_sql
+                }
+            )
+        )
+        if not columns or any(not m.column_name or m.expression_sql for m in d.mappings):
+            continue
+        key = (concept_name_key(d.api_name), concept_name_key(d.object_type), columns)
+        groups.setdefault(key, []).append(d)
+    for group in groups.values():
+        first = group[0]
+        identity = next((d.id for d in group if d.id), "")
+        for d in group:
+            d.api_name = first.api_name
+            d.id = identity
+        types = {getattr(d, "data_type", "") for d in group}
+        if types == {"integer", "number"}:
+            # integer は number の部分集合。根拠なしに整数制約を追加しない。
+            for d in group:
+                d.data_type = "number"
+    for d_index, d in enumerate(values):
+        raw = d.model_dump(mode="json")
+        for field, _ in definition_references(d):
+            if isinstance(raw.get(field), str):
+                raw[field] = resolve_concept_name(raw[field], values)
+            elif isinstance(raw.get(field), list) and all(isinstance(v, str) for v in raw[field]):
+                raw[field] = [resolve_concept_name(v, values) for v in raw[field]]
+        for field in ("source", "target"):
+            if isinstance(raw.get(field), str):
+                raw[field] = resolve_concept_name(raw[field], values)
+        for impl in raw.get("implements", []):
+            impl["interface"] = resolve_concept_name(impl["interface"], values)
+            for binding in impl["property_mapping"]:
+                binding["property"] = resolve_concept_name(binding["property"], values)
+        for assignment in raw.get("assignments", []):
+            assignment["property"] = resolve_concept_name(assignment["property"], values)
+        normalized = DEFINITIONS.validate_python([raw])[0]
+        # 未指定の既定値を明示的な変更と誤認し、統合競合を増やさない。
+        normalized.__pydantic_fields_set__ = set(d.model_fields_set)
+        values[d_index] = normalized
+    return values
+
+
 def merge_definitions(
     profile_id: str, definitions: list[BusinessDefinition]
 ) -> tuple[list[BusinessDefinition], list[str]]:
     merged: dict[tuple[str, str], BusinessDefinition] = {}
     conflicts: list[str] = []
     remap: dict[str, str] = {}
-    for original in definitions:
+    for original in _normalize_definition_spellings(definitions):
         item = original.model_copy(deep=True)
         # 単一バッチ内の重複も除去する。複数定義の併合時だけに限定しない。
         for field in ("aliases", "evidence", "missing_information_ja", "mappings"):
@@ -482,20 +621,15 @@ def render_concepts(
 ) -> str:
     lines = [
         "## オントロジーの概念定義",
-        "この章の業務定義・関係・条件を SQL 生成と接地確認に使用します。",
+        "業務で使用する対象、項目、関係をまとめています。",
     ]
-    reasons = {c.kind: c.reason_ja for c in coverage or []}
-    for i, (kind, label) in enumerate(CONCEPT_LABELS.items()):
-        if i in (0, 6):
-            lines.append("### 主要概念（6種類）" if i == 0 else "### 補助概念（7種類）")
-        lines.append(f"#### {label}")
+    for kind, label in CONCEPT_LABELS.items():
         matches = [d for d in definitions if d.kind == kind]
         if not matches:
-            lines.append(
-                "- " + (reasons.get(kind) or "根拠となる定義がありません。資料を確認してください。")
-            )
+            continue
+        lines.extend(["", f"#### {label}", ""])
         for d in matches:
-            lines.extend([f"##### {d.name_ja} (`{d.api_name}`)", f"- 概念 ID: `{d.id}`"])
+            lines.append(f"##### {d.name_ja} (`{d.api_name}`)")
             for field, value in d.model_dump(mode="json").items():
                 if field in {
                     "id",
@@ -505,12 +639,17 @@ def render_concepts(
                     "review_status",
                     "origin",
                     "implementation_key",
+                    "evidence",
+                    "missing_information_ja",
                 } or value in ("", [], None):
                     continue
                 lines.append(f"- {FIELD_LABELS.get(field, field)}: {_human(value)}")
-    if conflicts:
-        lines.extend(["### 解決が必要な定義の競合", *[f"- {c}" for c in conflicts]])
-    return "\n\n".join(lines)
+            notes = [note for note in d.missing_information_ja if not is_developer_note(note)]
+            if notes:
+                lines.append(f"- 補足: {_human(list(dict.fromkeys(notes)))}")
+            lines.append("")
+    # 診断と根拠の構造は保存成果物に保持する。業務本文には混ぜない。
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def definition_references(d: BusinessDefinition) -> list[tuple[str, str]]:
