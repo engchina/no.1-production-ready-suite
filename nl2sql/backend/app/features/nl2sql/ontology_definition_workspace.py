@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
@@ -111,6 +112,7 @@ class ProfileOntologyWorkspaceService(ProfileOntologyDefinitionService):
         expected_etag: str,
         *,
         extra: list[tuple[dict[str, Any], str | None]] | None = None,
+        commit_guard: Callable[[], None] | None = None,
     ) -> ProfileOntologyBundle:
         current = self.document(bundle.profile_id, bundle.id, "profile_ontology_bundle_v2")
         if ProfileOntologyBundle.model_validate_json(
@@ -141,6 +143,8 @@ class ProfileOntologyWorkspaceService(ProfileOntologyDefinitionService):
             for kind in DEFINITION_KINDS
         ]
         bundle.etag = definition_fingerprint(bundle.model_dump(mode="json", exclude={"etag"}))
+        if commit_guard:
+            commit_guard()
         self.store.save_documents_atomic(
             "artifacts",
             [

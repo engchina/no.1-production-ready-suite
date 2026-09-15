@@ -3373,6 +3373,14 @@ async def test_lifespan_interrupts_build_jobs_off_loop_before_closing_pools(
         assert threading.get_ident() != loop_thread
         calls.append("publish_shutdown")
 
+    def validation_shutdown(runtime: Any) -> None:
+        assert threading.get_ident() != loop_thread
+        from app.features.nl2sql.ontology_router import ontology_runtime
+
+        assert runtime is ontology_runtime
+        calls.append("validation_shutdown")
+
+    monkeypatch.setattr(main, "shutdown_validation_jobs", validation_shutdown)
     monkeypatch.setattr("app.main.ontology_publish_service.shutdown", publish_shutdown)
     monkeypatch.setattr("app.main.profile_sync_service.shutdown", profile_shutdown)
     monkeypatch.setattr(main, "shutdown_markdown_preparations", preparation_shutdown)
@@ -3385,5 +3393,6 @@ async def test_lifespan_interrupts_build_jobs_off_loop_before_closing_pools(
         "preparation_shutdown",
         "build_shutdown",
         "publish_shutdown",
+        "validation_shutdown",
         "close_pools",
     ]

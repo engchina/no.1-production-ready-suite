@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import time
-from datetime import UTC, date, datetime
+from collections.abc import Callable
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
+from uuid import uuid4
 
 from pyshacl import validate as shacl_validate
 from rdflib import RDF, XSD, Graph, Literal, Namespace, URIRef
@@ -41,7 +44,128 @@ from .ontology_service import (
     OntologyVersionConflictError,
 )
 from .ontology_sql_validation import identifier_token
-from .ontology_store import stable_ontology_id
+from .ontology_store import OntologyVersionConflict, stable_ontology_id
+
+logger = logging.getLogger(__name__)
+_inprocess_jobs: set[tuple[int, str]] = set()
+_dispatch_lock = threading.Lock()
+_RECEIPT_TYPE = "ontology_data_validation_receipt"
+_RECOVERABLE_CODES = {"ONTOLOGY_VALIDATION_TIMEOUT", "ONTOLOGY_VALIDATION_INTERRUPTED"}
+
+
+class ValidationExecutionLost(RuntimeError):
+    """中断された実データ検証の遅着結果を破棄する。"""
+
+
+def _receipt_id(job_id: str) -> str:
+    return stable_ontology_id("data_validation_receipt", job_id)
+
+
+def _expired(job: dict[str, Any]) -> bool:
+    try:
+        if job.get("deadline_at"):
+            deadline = datetime.fromisoformat(str(job["deadline_at"]))
+        else:
+            deadline = datetime.fromisoformat(str(job["created_at"])) + timedelta(
+                seconds=get_settings().nl2sql_ontology_validation_timeout_seconds
+            )
+        if deadline.tzinfo is None:
+            deadline = deadline.replace(tzinfo=UTC)
+        return datetime.now(UTC) >= deadline
+    except (KeyError, ValueError, TypeError):
+        return True
+
+
+def _recover_job(runtime: Any, job_id: str, *, interrupted: bool = False) -> dict[str, Any] | None:
+    for _ in range(3):
+        current = runtime.store.get_job(job_id)
+        if current is None or current.get("job_type") != "definition_validation":
+            return None
+        recoverable = current.get("error_code") in _RECOVERABLE_CODES
+        if current["status"] in {"succeeded", "failed", "cancelled"} and not recoverable:
+            return dict(current)
+        if not interrupted and not recoverable and not _expired(current):
+            return dict(current)
+        receipt = runtime.store.get_artifact(_receipt_id(job_id))
+        evidence = json.loads(receipt["content"]) if receipt else {}
+        committed = (
+            receipt
+            and receipt.get("profile_id") == current["profile_id"]
+            and receipt.get("artifact_type") == _RECEIPT_TYPE
+            and evidence.get("job_id") == job_id
+            and evidence.get("request_hash") == current.get("request_hash")
+            and receipt.get("content_hash") == definition_fingerprint(evidence)
+        )
+        if recoverable and not committed:
+            return dict(current)
+        updates = {
+            "status": "succeeded" if committed else "failed",
+            "finished_at": datetime.now(UTC).isoformat(),
+            "error_code": (
+                ""
+                if committed
+                else (
+                    "ONTOLOGY_VALIDATION_INTERRUPTED"
+                    if interrupted
+                    else "ONTOLOGY_VALIDATION_TIMEOUT"
+                )
+            ),
+            "error_message_ja": (
+                ""
+                if committed
+                else (
+                    "実データ検証を中断しました。保存済み定義は保持されています。状態を確認して検証を再実行してください。"
+                )
+            ),
+            **({"report": evidence["report"], "recovered_from_receipt": True} if committed else {}),
+        }
+        try:
+            saved = runtime.store.save_job({**current, **updates}, expected_etag=current["etag"])
+        except OntologyVersionConflict:
+            continue
+        logger.warning(
+            "実データ検証 job の中断状態を回復しました。",
+            extra={
+                "job_id": job_id,
+                "profile_id": current["profile_id"],
+                "error_code": updates["error_code"],
+                "status": updates["status"],
+            },
+        )
+        return dict(saved)
+    current = runtime.store.get_job(job_id)
+    return dict(current) if current else None
+
+
+def _assert_execution(runtime: Any, owned: dict[str, Any]) -> None:
+    current = _recover_job(runtime, owned["job_id"])
+    if (
+        not current
+        or current["status"] != "running"
+        or current.get("execution_id") != owned["execution_id"]
+        or current["etag"] != owned["etag"]
+    ):
+        raise ValidationExecutionLost(owned["job_id"])
+
+
+def shutdown_validation_jobs(runtime: Any) -> None:
+    with _dispatch_lock:
+        jobs = [job_id for owner, job_id in _inprocess_jobs if owner == id(runtime)]
+    for job_id in jobs:
+        try:
+            _recover_job(runtime, job_id, interrupted=True)
+        except Exception:
+            logger.exception(
+                "実データ検証 job の停止状態を保存できませんでした。", extra={"job_id": job_id}
+            )
+
+
+def _run_inprocess(runtime: Any, job_id: str) -> None:
+    try:
+        run_validation_job(runtime, job_id)
+    finally:
+        with _dispatch_lock:
+            _inprocess_jobs.discard((id(runtime), job_id))
 
 
 def quote_identifier(value: str) -> str:
@@ -74,7 +198,11 @@ def property_literal(value: Any, data_type: str) -> Literal:
 
 
 def check_data(
-    runtime: Any, bundle: ProfileOntologyBundle, request: DefinitionDataValidationRequest
+    runtime: Any,
+    bundle: ProfileOntologyBundle,
+    request: DefinitionDataValidationRequest,
+    *,
+    execution_guard: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     schema = json.loads(str(runtime.prepare_build_schema_context(bundle.profile_id).schema_context))
     errors = [f for f in validate_definitions(bundle, schema) if f.severity == "error"]
@@ -134,6 +262,8 @@ def check_data(
             f"{quote_identifier(object_part_name(mapping.object_name))} "
             f"FETCH FIRST {request.sample_limit} ROWS ONLY"
         )
+        if execution_guard:
+            execution_guard()
         result = adapter.execute_select(sql, request.sample_limit)
         covered.append(obj.id)
         for index, row in enumerate(result.rows):
@@ -147,6 +277,8 @@ def check_data(
                         (subject, URIRef(ns[prop.id]), property_literal(value, prop.data_type))
                     )
     artifacts = render_definition_artifacts(bundle)
+    if execution_guard:
+        execution_guard()
     conforms, _report_graph, report_text = shacl_validate(
         graph,
         shacl_graph=Graph().parse(data=artifacts["shacl_turtle"], format="turtle"),
@@ -179,6 +311,8 @@ def check_data(
                         "ACCEPTANCE_SQL_SCOPE",
                         "受入 SQL は Profile の OWNER.TABLE を明記してください。",
                     )
+            if execution_guard:
+                execution_guard()
             result = adapter.execute_select(case.sql, request.sample_limit)
             sql_ok = result.rows == case.expected_rows
         cases.append(
@@ -227,7 +361,6 @@ def start_validation_job(
 ) -> dict[str, Any]:
     who = authorize_definition_operation(profile_id, actor, SQL_EXECUTE_PERMISSION)
     svc = ProfileOntologyWorkspaceService(runtime)
-    svc._draft(profile_id, bundle_id, etag)
     if not key:
         raise OntologyGateBlockedError("IDEMPOTENCY_REQUIRED", "Idempotency-Key が必要です。")
     job_id = stable_ontology_id("ontology_validation", profile_id, who, key)
@@ -244,7 +377,8 @@ def start_validation_job(
             raise OntologyVersionConflictError(
                 "IDEMPOTENCY_KEY_REUSED", "同じキーを別の検証に使用できません。"
             )
-        return dict(existing)
+        return _recover_job(runtime, job_id) or dict(existing)
+    svc._draft(profile_id, bundle_id, etag)
     job = dict(
         runtime.store.save_job(
             {
@@ -254,26 +388,51 @@ def start_validation_job(
                 "status": "queued",
                 "payload": payload,
                 "request_hash": fingerprint,
+                "deadline_at": (
+                    datetime.now(UTC)
+                    + timedelta(seconds=get_settings().nl2sql_ontology_validation_timeout_seconds)
+                ).isoformat(),
             }
         )
     )
     if get_settings().nl2sql_ontology_worker_mode == "inprocess":
-        threading.Thread(target=run_validation_job, args=(runtime, job_id), daemon=True).start()
+        with _dispatch_lock:
+            _inprocess_jobs.add((id(runtime), job_id))
+        try:
+            threading.Thread(target=_run_inprocess, args=(runtime, job_id), daemon=True).start()
+        except Exception:
+            with _dispatch_lock:
+                _inprocess_jobs.discard((id(runtime), job_id))
+            _recover_job(runtime, job_id, interrupted=True)
+            raise
     return job
 
 
 def run_validation_job(runtime: Any, job_id: str) -> None:
-    job = runtime.store.get_job(job_id)
+    job = _recover_job(runtime, job_id)
     if (
         job is None
-        or job.get("job_type") != "definition_validation"
-        or job.get("status") in {"succeeded", "failed", "cancelled"}
+        or job.get("status") not in {"queued", "claimed"}
+        or job.get("execution_id")
+        or (job.get("status") == "claimed" and job.get("claimed_from_status") != "queued")
     ):
         return
     try:
-        job = runtime.store.save_job(
-            {**job, "status": "running", "claimed_at": time.time()}, expected_etag=job["etag"]
+        job = dict(
+            runtime.store.save_job(
+                {
+                    **job,
+                    "status": "running",
+                    "claimed_at": time.time(),
+                    "execution_id": uuid4().hex,
+                    "started_at": datetime.now(UTC).isoformat(),
+                },
+                expected_etag=job["etag"],
+            )
         )
+    except OntologyVersionConflict:
+        return
+    try:
         payload = job["payload"]
         actor = None
         if get_settings().app_auth_enabled and not get_settings().local_debug_enabled:
@@ -285,8 +444,12 @@ def run_validation_job(runtime: Any, job_id: str) -> None:
         bundle = svc._draft(job["profile_id"], payload["bundle_id"], payload["etag"])
         with actor_scope(payload["actor"], is_system_admin=bool(actor and actor.is_system_admin)):
             report = check_data(
-                runtime, bundle, DefinitionDataValidationRequest.model_validate(payload["request"])
+                runtime,
+                bundle,
+                DefinitionDataValidationRequest.model_validate(payload["request"]),
+                execution_guard=lambda: _assert_execution(runtime, job),
             )
+        _assert_execution(runtime, job)
         # Validate scope again after the actual queries; concurrent edits invalidate this report.
         if bundle.profile_fingerprint != definition_fingerprint(
             runtime._strict_profile(bundle.profile_id).model_dump(mode="json")
@@ -308,23 +471,51 @@ def run_validation_job(runtime: Any, job_id: str) -> None:
         bundle.validation_report["errors"] = (
             sum(f.severity == "error" for f in bundle.findings) + report["errors"]
         )
-        svc._commit(bundle, payload["etag"])
-        current = runtime.store.get_job(job_id)
-        runtime.store.save_job(
-            {**current, "status": "succeeded", "report": report}, expected_etag=current["etag"]
+        receipt = svc.artifact(
+            bundle.profile_id,
+            _receipt_id(job_id),
+            _RECEIPT_TYPE,
+            {"job_id": job_id, "request_hash": job["request_hash"], "report": report},
         )
+        # bundle と完了証跡を同じ transaction で保存し、job 状態だけが失われても照合できる。
+        svc._commit(
+            bundle,
+            payload["etag"],
+            extra=[(receipt, None)],
+            commit_guard=lambda: _assert_execution(runtime, job),
+        )
+        _assert_execution(runtime, job)
+        runtime.store.save_job(
+            {
+                **job,
+                "status": "succeeded",
+                "report": report,
+                "finished_at": datetime.now(UTC).isoformat(),
+            },
+            expected_etag=job["etag"],
+        )
+    except ValidationExecutionLost:
+        logger.info("失効した実データ検証の結果を破棄しました。", extra={"job_id": job_id})
     except Exception as exc:
-        current = runtime.store.get_job(job_id)
-        if current is not None:
+        logger.exception("実データ検証に失敗しました。", extra={"job_id": job_id})
+        try:
+            _assert_execution(runtime, job)
+            # report commit 後の job 保存障害は再照合し、SQL を再送しない。
+            if runtime.store.get_artifact(_receipt_id(job_id)):
+                _recover_job(runtime, job_id, interrupted=True)
+                return
             runtime.store.save_job(
                 {
-                    **current,
+                    **job,
                     "status": "failed",
                     "error_message_ja": getattr(exc, "message_ja", "実データ検証に失敗しました。"),
                     "error_code": getattr(exc, "code", type(exc).__name__),
+                    "finished_at": datetime.now(UTC).isoformat(),
                 },
-                expected_etag=current["etag"],
+                expected_etag=job["etag"],
             )
+        except (ValidationExecutionLost, OntologyVersionConflict):
+            pass
 
 
 def read_validation_job(runtime: Any, profile_id: str, job_id: str) -> dict[str, Any]:
@@ -336,4 +527,4 @@ def read_validation_job(runtime: Any, profile_id: str, job_id: str) -> dict[str,
         or job.get("job_type") != "definition_validation"
     ):
         raise OntologyNotFoundError("VALIDATION_JOB_NOT_FOUND", "検証 job が見つかりません。")
-    return dict(job)
+    return _recover_job(runtime, job_id) or dict(job)

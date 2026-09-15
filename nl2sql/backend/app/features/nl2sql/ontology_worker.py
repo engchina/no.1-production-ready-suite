@@ -46,6 +46,7 @@ class OntologyWorker:
         jobs.sort(key=lambda item: (str(item.get("created_at") or ""), str(item["job_id"])))
         for document in jobs:
             claimed = dict(document)
+            claimed["claimed_from_status"] = document["status"]
             claimed["status"] = "claimed"
             claimed["claimed_by"] = self.worker_id
             claimed["claimed_at"] = now

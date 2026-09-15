@@ -76,3 +76,11 @@ async def import_example(file: UploadFile) -> ApiResponse[ImportData]:
 - queued の ETag を claim し、実行 ID を持つ worker だけが進捗・成果物を書ける。推論・検証後と公開 head 切替直前にも失効を確認し、二重配送では推論を繰り返さない。
 - revision の `publish_job_id` / reasoning graph を照合する。既に公開 commit 済みなら immutable draft の Markdown コピーだけを補い、既存のコピーと head / revision 履歴を保持して job を完了させる。保存確認に失敗した場合は「版は公開済み」と明記し、再公開を案内しない。
 - 期限は同期スレッドを kill しない。遅着処理の後続 commit を制限し、commit 境界での停止は取得時の照合で収束させる。
+
+## 旧実データ検証 job
+
+- `NL2SQL_ONTOLOGY_VALIDATION_TIMEOUT_SECONDS`（既定600秒）の絶対期限を保存し、旧 job は作成日時で判定する。認可済みの GET / 同じキーの再送で失効状態を回復する。再実行は新しいキーで明示的に開始する。
+- queued（external worker の queued 由来 claim を含む）だけを CAS で開始し、実行 ID と取得済み ETag を保持する。running の再配送・期限切れ後の SQL 結果を破棄し、SQL の次の呼び出し・検証レポート commit 前にも失効を確認する。
+- レポートを含む bundle と hash 付き完了証跡を artifacts の同一 transaction で保存する。job の完了保存だけが失われた場合、証跡から結果を復元し、Oracle 検証 SQL を再送しない。
+- SQL_EXECUTE / Profile scope の認可、読み取り専用 SQL、sample_limit、検証後の Profile / schema fingerprint / bundle ETag 確認を維持する。sampled data を全 DB の検証済みとは扱わない。
+- inprocess の shutdown は所有 job のみを off-loop で回復し、pool close 前に実施する。同期 SQL スレッドの強制 kill は行わない。現在の Markdown snapshot のデータ検証とは別の旧 async API が対象。
