@@ -242,6 +242,133 @@ def test_publish_uses_confirmed_snapshot_without_second_llm_and_keeps_history() 
         svc.snapshot("support", job.id)
 
 
+def test_warning_only_publication_keeps_complete_diagnostics_without_revalidation() -> None:
+    from app.features.nl2sql.ontology_markdown_workspace import PREPARATION
+
+    rt, svc, parser, preparation = prepared_workspace()
+    assert preparation["status"] == "ready"
+    assert preparation["findings"]
+    assert all(f["severity"] == "warning" for f in preparation["findings"])
+    # 読取り専用の標本検証レポートも公開版に固定する。
+    preparation["data_report"] = {"errors": 0, "instance_count": 1, "sample_limit": 50}
+    svc._write("sales", preparation["id"], PREPARATION, preparation)
+    job = svc.publish(
+        "sales",
+        MarkdownConfirmRequest(
+            preparation_id=preparation["id"], draft_etag=preparation["draft_etag"], confirmed=True
+        ),
+        "with-warnings",
+        None,
+    )
+    expected = MarkdownOntologyWorkspace(rt).publication_diagnostics("sales", job.id)
+    assert expected["available"] is True
+    assert expected["findings"] == preparation["findings"]
+    assert expected["data_report"] == preparation["data_report"]
+    state = rt.ontology_markdown_state("sales")
+    assert state.published_findings == preparation["findings"]
+    assert state.published_data_report == preparation["data_report"]
+    assert state.published_diagnostics_available
+    assert parser.calls == 1
+    with pytest.raises(OntologyNotFoundError):
+        svc.publication_diagnostics("support", job.id)
+
+
+def test_legacy_snapshot_recovers_saved_warning_diagnostics() -> None:
+    from app.features.nl2sql.ontology_markdown_workspace import SNAPSHOT
+
+    rt, svc, parser, preparation = prepared_workspace()
+    job = svc.publish(
+        "sales",
+        MarkdownConfirmRequest(
+            preparation_id=preparation["id"], draft_etag=preparation["draft_etag"], confirmed=True
+        ),
+        "legacy-diagnostics",
+        None,
+    )
+    snapshot = svc.snapshot("sales", job.id)
+    assert snapshot is not None
+    snapshot.pop("findings")
+    snapshot.pop("data_report")
+    svc._write("sales", job.id, SNAPSHOT, snapshot)
+    assert rt.ontology_markdown_state("sales").published_findings == preparation["findings"]
+    assert parser.calls == 1
+    snapshot.pop("preparation_id")
+    svc._write("sales", job.id, SNAPSHOT, snapshot)
+    assert not rt.ontology_markdown_state("sales").published_diagnostics_available
+
+
+def test_sql_resolution_error_still_blocks_warning_publication() -> None:
+    from app.features.nl2sql.ontology_definitions import DefinitionMapping
+
+    rt, svc, parser, _ = prepared_workspace()
+    parser.definitions[1] = parser.definitions[1].model_copy(
+        update={
+            "mappings": [
+                DefinitionMapping(
+                    owner="APP", object_name="ORDERS", expression_sql="APP.ORDERS.MISSING_COLUMN"
+                )
+            ]
+        }
+    )
+    etag = rt.ontology_markdown_state("sales").draft_etag
+    preparation = svc.prepare("sales", etag, "invalid-sql", None)
+    svc.run_preparation("sales", preparation["id"])
+    result = svc.preparation("sales", preparation["id"])
+    assert result["status"] == "failed"
+    assert any(f["severity"] == "error" for f in result["findings"])
+    assert any(f["severity"] == "warning" for f in result["findings"])
+    with pytest.raises(OntologyVersionConflictError):
+        svc.publish(
+            "sales",
+            MarkdownConfirmRequest(preparation_id=result["id"], draft_etag=etag, confirmed=True),
+            "invalid-publication",
+            None,
+        )
+    assert svc.snapshot("sales") is None
+
+
+async def test_historical_diagnostics_api_enforces_profile_access(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fastapi import FastAPI
+    from httpx import ASGITransport, AsyncClient
+    from test_nl2sql_ontology_access import _principal
+
+    from app.features.nl2sql.ontology_markdown_router import create_markdown_router
+    from app.features.nl2sql.ontology_router import _raise_domain_error
+
+    rt, svc, _, preparation = prepared_workspace()
+    job = svc.publish(
+        "sales",
+        MarkdownConfirmRequest(
+            preparation_id=preparation["id"], draft_etag=preparation["draft_etag"], confirmed=True
+        ),
+        "diagnostics-api",
+        None,
+    )
+    monkeypatch.setattr(get_settings(), "app_auth_enabled", True)
+    app = FastAPI()
+
+    @app.middleware("http")
+    async def principal(
+        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
+        request.state.principal = _principal({"sales"}, profile_manager=False)
+        return await call_next(request)
+
+    app.include_router(create_markdown_router(lambda: rt, _raise_domain_error))
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            f"/profiles/sales/ontology-markdown/publications/{job.id}/diagnostics"
+        )
+        assert response.status_code == 200
+        assert response.json()["data"]["findings"] == preparation["findings"]
+        forbidden = await client.get(
+            f"/profiles/support/ontology-markdown/publications/{job.id}/diagnostics"
+        )
+        assert forbidden.status_code == 403
+
+
 def test_historical_sql_context_keeps_original_markdown_after_new_publication(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -279,6 +406,8 @@ def test_historical_sql_context_keeps_original_markdown_after_new_publication(
         "next-publication",
         None,
     )
+    assert svc.publication_diagnostics("sales", old.id)["findings"] == first["findings"]
+    assert svc.publication_diagnostics("sales", latest.id)["snapshot_id"] == latest.id
     monkeypatch.setattr(ontology_router, "ontology_runtime", rt)
     service = Nl2SqlService(store=MemoryNl2SqlStore())
     request = JobCreateRequest(profile_id="sales", question="受注", use_ontology_context=True)

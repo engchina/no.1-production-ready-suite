@@ -115,6 +115,28 @@ class MarkdownOntologyWorkspace(ProfileOntologyWorkspaceService):
             return None
         return self._read(profile_id, identity, SNAPSHOT)
 
+    def publication_diagnostics(self, profile_id: str, snapshot_id: str) -> dict[str, Any]:
+        snapshot = self._read(profile_id, snapshot_id, SNAPSHOT)
+        return self._snapshot_diagnostics(profile_id, snapshot)
+
+    def _snapshot_diagnostics(self, profile_id: str, snapshot: dict[str, Any]) -> dict[str, Any]:
+        source = snapshot
+        # 旧公開版は保存済み preparation から読む。再解析・再検証はしない。
+        if (
+            "findings" not in source
+            and snapshot.get("preparation_id")
+            and self.store.get_artifact(snapshot["preparation_id"])
+        ):
+            source = self._read(profile_id, snapshot["preparation_id"], PREPARATION)
+        return {
+            "snapshot_id": snapshot["id"],
+            "display_version": snapshot["display_version"],
+            "published_at": snapshot["published_at"],
+            "available": "findings" in source,
+            "findings": source.get("findings", []),
+            "data_report": source.get("data_report"),
+        }
+
     def _read(self, profile_id: str, identity: str, kind: str) -> dict[str, Any]:
         record = self.document(profile_id, identity, kind)
         value = dict(json.loads(record["content"]))
@@ -657,6 +679,8 @@ class MarkdownOntologyWorkspace(ProfileOntologyWorkspaceService):
             profile_hash=value["profile_hash"],
             schema_hash=value["schema_hash"],
             preparation_id=value["id"],
+            findings=value.get("findings", []),
+            data_report=value.get("data_report"),
             source_revision_id=value["source_revision_id"],
             request=request.model_dump(),
             publish_job=job.model_dump(mode="json"),

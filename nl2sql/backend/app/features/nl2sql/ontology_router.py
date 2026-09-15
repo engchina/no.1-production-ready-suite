@@ -444,6 +444,9 @@ class OntologyMarkdownState(OntologyContract):
     published_version: int | None = Field(default=None, ge=1)
     draft_etag: str = ""
     published_at: datetime | None = None
+    published_findings: list[dict[str, Any]] = Field(default_factory=list)
+    published_data_report: dict[str, Any] | None = None
+    published_diagnostics_available: bool = False
 
 
 class OntologyMarkdownDraftPatch(OntologyContract):
@@ -1007,7 +1010,9 @@ class OntologyApiRuntime:
 
             from .ontology_markdown_workspace import MarkdownOntologyWorkspace
 
-            snapshot = MarkdownOntologyWorkspace(self).snapshot(profile_id)
+            workspace = MarkdownOntologyWorkspace(self)
+            snapshot = workspace.snapshot(profile_id)
+            diagnostics = workspace._snapshot_diagnostics(profile_id, snapshot) if snapshot else {}
             if snapshot:
                 published_document = {"content": snapshot["markdown"]}
                 published_revision = SchemaOntology.model_validate(snapshot["graph"]).revision
@@ -1024,6 +1029,9 @@ class OntologyApiRuntime:
                 ),
                 draft_etag=str(draft_document.get("etag") or "") if draft_document else "",
                 published_at=published_revision.published_at if published_revision else None,
+                published_findings=diagnostics.get("findings", []),
+                published_data_report=diagnostics.get("data_report"),
+                published_diagnostics_available=diagnostics.get("available", False),
             )
 
     def save_ontology_markdown_draft(

@@ -67,6 +67,16 @@ def create_markdown_router(runtime: Any, raise_error: Any) -> APIRouter:
             raise_error(exc)
             raise
 
+    @router.get("/profiles/{profile_id}/ontology-markdown/publications/{snapshot_id}/diagnostics")
+    def diagnostics(profile_id: str, snapshot_id: str, request: Request) -> ApiResponse[Any]:
+        try:
+            return ApiResponse(
+                data=service(request, profile_id).publication_diagnostics(profile_id, snapshot_id)
+            )
+        except Exception as exc:
+            raise_error(exc)
+            raise
+
     @router.post("/profiles/{profile_id}/ontology-markdown/publish")
     def publish(
         profile_id: str,

@@ -42,6 +42,14 @@ Q/A の補助的な `DUAL` / `SYS.DUAL` 参照は SQL の名前解決に限っ�
 
 準備後に Markdown / Profile / Schema / 公開 head が変わった場合は再確認する。公開応答が失われた場合は `GET .../publication-outcome?key=...` で照会し、自動再送しない。準備タスクの再開時に解析済み結果を再利用し、中断して結果のない LLM 呼出しは黙示再送しない。
 
+### 公開診断と警告の保持
+
+- 公開前の error / warning は最大18remの縦スクロール領域に表示する。同一 severity・メッセージを1回に集約し、件数と対象の definition ID / field / code を確認できる。表示上の集約で元の診断を削除しない。
+- `EVIDENCE_UNRESOLVED` / `INFERENCE_WITHOUT_EVIDENCE` など warning のみなら、警告を確認したうえで公開できる。SQL の列解決・構造・参照の error や標本検証の error は公開を阻止する。
+- 公開時点の `findings` と `data_report` は immutable snapshot に含める。後続の公開でも旧版の記録は変更しない。公開済みタブで確認し、版 ID を含む JSON をダウンロードできる。
+- 過去版は `GET /api/nl2sql/profiles/{profile_id}/ontology-markdown/publications/{snapshot_id}/diagnostics` で取得できる。Profile の閲覧権限と snapshot の Profile 所有権を確認し、元の findings・標本検証レポートを返す。
+- 旧 snapshot に診断 field がない場合は保存済み preparation を参照する。記録が残っていない場合は `available=false` として区別し、「警告なし」とは扱わない。再解析・再検証は行わない。
+
 ## SQL とグラフ
 
 接地確認グラフは、選択 Profile の公開 Markdown revision が存在し、取得した graph の revision が一致する場合だけ表示する。未公開時は公開を案内する空状態とし、物理 Schema の fallback を公開図として扱わない。公開後・再試行時は公開状態と graph を再取得し、版不一致時は旧図を表示せず再試行を案内する。Profile 切替や graph の版変更時は以前の接地・サーバ検索結果を保持しない。

@@ -13,14 +13,15 @@ import { t } from "@/lib/i18n";
 import { randomUuid } from "@/lib/randomUuid";
 import { useWorkspaceState, useResetExecutionConsent } from "@/components/WorkspaceState";
 import { ContentActionBar } from "@/components/ContentActionBar";
-import type { OntologyMarkdownState, OntologyPublishJob } from "./types";
+import type { OntologyFinding, OntologyMarkdownState, OntologyPublishJob } from "./types";
+import { OntologyFindings } from "./OntologyFindings";
 import { DefinitionFields, TechnicalDetails } from "./ontologyResultPresentation";
 
 type Definition = Record<string, unknown>;
 interface Preparation {
   id: string; status: string; draft_etag: string; expected_head: string; display_version: number;
   error_message_ja: string;
-  findings: { severity: string; message_ja?: string; message?: string }[];
+  findings: OntologyFinding[];
   differences: { id: string; before: Definition | null; after: Definition | null }[];
   data_report?: Record<string, unknown>;
 }
@@ -60,6 +61,9 @@ export function MarkdownPublication({ profileId, profileLabel, signature, disabl
     refetchInterval: query => ["queued", "running"].includes(query.state.data?.status ?? "") ? 1000 : false,
   });
   const value = preparation.data;
+  const findings = [...(value?.findings ?? []), ...(value?.error_message_ja ? [{ severity: "error", message_ja: value.error_message_ja }] : [])];
+  const hasErrors = findings.some(finding => finding.severity === "error");
+  const hasWarnings = findings.some(finding => finding.severity === "warning");
   const dataValidationFailed = Number(value?.data_report?.errors ?? 0) > 0;
   const running = Boolean(value && ["queued", "running"].includes(value.status));
   useEffect(() => {
@@ -79,7 +83,7 @@ export function MarkdownPublication({ profileId, profileLabel, signature, disabl
     finally { setBusy(""); }
   }
   async function publish() {
-    if (!value || value.status !== "ready" || preparation.isError) return;
+    if (!value || value.status !== "ready" || preparation.isError || hasErrors || dataValidationFailed) return;
     const consent = generation.current;
     if (!(await confirm({title:t("profiles.ontologyBuild.publish"), description:t("markdownOntology.confirm", {profile:profileLabel,version:String(value.display_version)}),confirmLabel:t("profiles.ontologyBuild.publish"),tone:"info"}))) return;
     if (consent !== generation.current) return;
@@ -121,13 +125,14 @@ export function MarkdownPublication({ profileId, profileLabel, signature, disabl
     <ContentActionBar ariaLabel={t("markdownOntology.actions")}>
       <Button icon={Upload} type="button" variant="primary" size="lg" disabled={disabled || Boolean(busy) || running || Boolean(execution.key)} loading={busy === "prepare" || running} onClick={() => void prepare()}>{t("profiles.ontologyBuild.publish")}</Button>
     </ContentActionBar>
-    {(error || preparation.isError) && <Banner severity="danger">{error || t("markdownOntology.refreshFailed")}</Banner>}
+    {(error || preparation.isError) && <Banner severity="danger"><div tabIndex={0} className="max-h-72 overflow-y-auto break-words">{error || t("markdownOntology.refreshFailed")}</div></Banner>}
     {execution.key && <Button icon={RefreshCw} type="button" size="sm" variant="secondary" disabled={Boolean(busy)} onClick={() => void recover()}>{t("markdownOntology.checkOutcome")}</Button>}
     {value && <section className="grid min-w-0 gap-3" aria-label={t("markdownOntology.check")}>
       <h3 className="text-sm font-semibold">{t("markdownOntology.check")}</h3>
-      <StatusBadge variant={dataValidationFailed || value.status === "failed" ? "danger" : value.status === "ready" ? "success" : "info"} label={t(`markdownOntology.status.${dataValidationFailed ? "failed" : value.status}`)} />
-      {value.error_message_ja && <Banner severity="danger">{value.error_message_ja}</Banner>}
-      {value.findings?.map((f,i)=><p key={i} className="break-words text-sm">{f.message_ja || f.message}</p>)}
+      <StatusBadge variant={hasErrors || dataValidationFailed || value.status === "failed" ? "danger" : value.status === "ready" ? hasWarnings ? "warning" : "success" : "info"} label={t(`markdownOntology.status.${hasErrors || dataValidationFailed ? "failed" : value.status}`)} />
+      {hasErrors && <Banner severity="danger">{t("markdownOntology.errorsBlockPublish")}</Banner>}
+      {value.status === "ready" && hasWarnings && !hasErrors && !dataValidationFailed && <Banner severity="warning">{t("markdownOntology.warningsPublishable")}</Banner>}
+      <OntologyFindings findings={findings} label={t("markdownOntology.findings")} />
       {value.differences?.map(d=><details key={d.id} className="min-w-0 rounded border border-border p-3">
         <summary className="cursor-pointer text-sm">{String((d.after || d.before)?.name_ja ?? d.id)} · {t(d.before ? d.after ? "markdownOntology.changed" : "markdownOntology.removed" : "markdownOntology.added")}</summary>
         <div className="grid min-w-0 gap-3 py-3 md:grid-cols-2"><div><p>{t("markdownOntology.before")}</p><DefinitionFields definition={d.before ?? {}} /></div><div><p>{t("markdownOntology.after")}</p><DefinitionFields definition={d.after ?? {}} /></div></div>
@@ -145,7 +150,7 @@ export function MarkdownPublication({ profileId, profileLabel, signature, disabl
           </div>}
         </details>
         {dataValidationFailed && <Banner severity="danger">{t("markdownOntology.dataValidationFailed")}</Banner>}
-        <ContentActionBar ariaLabel={t("markdownOntology.actions")}><Button icon={Upload} type="button" variant="primary" size="lg" disabled={Boolean(busy) || Boolean(execution.key) || preparation.isError || dataValidationFailed} loading={busy === "publish"} onClick={()=>void publish()}>{t("markdownOntology.confirmPublish")}</Button></ContentActionBar>
+        <ContentActionBar ariaLabel={t("markdownOntology.actions")}><Button icon={Upload} type="button" variant="primary" size="lg" disabled={Boolean(busy) || Boolean(execution.key) || preparation.isError || hasErrors || dataValidationFailed} loading={busy === "publish"} onClick={()=>void publish()}>{t("markdownOntology.confirmPublish")}</Button></ContentActionBar>
       </>}
     </section>}
   </div>;

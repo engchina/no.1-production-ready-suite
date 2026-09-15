@@ -1,5 +1,6 @@
 import { buildEventStage, orderedBuildProgress } from "./unifiedConcepts";
 import { MarkdownPublication } from "./MarkdownPublication";
+import { PublishedOntologyDiagnostics } from "./PublishedOntologyDiagnostics";
 import { useWorkspaceState } from "@/components/WorkspaceState";
 import { useUnsavedChangesGuard } from "@/lib/useUnsavedChangesGuard";
 import {
@@ -1879,6 +1880,7 @@ export function OntologyBuildSection({
             className="grid min-w-0 gap-2"
           >
             {publishedMarkdown.trim() ? (
+              <>
               <div
                 data-surface="code"
                 data-testid="ontology-markdown-published-viewer"
@@ -1889,6 +1891,8 @@ export function OntologyBuildSection({
                   <code>{publishedMarkdown}</code>
                 </pre>
               </div>
+              {markdownState && <PublishedOntologyDiagnostics state={markdownState} />}
+              </>
             ) : (
               // 公開前は巨大なコードビューア枠を出さず、簡潔な空状態にする
               <div

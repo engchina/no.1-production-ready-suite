@@ -3182,3 +3182,108 @@ for (const reason of ["timeout", "restart"] as const) {
     await expect(page.getByTestId("ontology-markdown-draft-editor")).toHaveValue(generatedDraftMarkdown);
   });
 }
+
+for (const status of ["failed", "ready"] as const) {
+  test(`公開診断を限高・集約しエラーを阻止する (${status})`, async ({ page }, testInfo) => {
+    const state = await mockApi(page);
+    state.jobPolls = 2;
+    state.draftMarkdown = generatedDraftMarkdown;
+    const message = "証拠の資料・位置・原文を照合できません。";
+    const error = "Oracle SQL 式を検証できません: 対象列がありません。";
+    const findings = [
+      ...Array.from({ length: 100 }, (_, i) => ({ severity: "warning", code: "EVIDENCE_UNRESOLVED", definition_id: `concept-${i}`, field: "evidence", message_ja: message })),
+      ...Array.from({ length: 20 }, (_, i) => ({ severity: "warning", message_ja: `追加の確認事項 ${i}` })),
+      { severity: "error", code: "SQL_EXPRESSION_INVALID", definition_id: "Order.id", field: "mappings.0.expression_sql", message_ja: error },
+    ];
+    const preparation = { id: "diagnostics", status, draft_etag: state.draftMarkdownEtag, expected_head: "", display_version: 4, findings, differences: [], error_message_ja: error };
+    await page.route("**/ontology-markdown/prepare", route => fulfillJson(route, preparation));
+    await page.route("**/ontology-markdown/preparations/*", route => fulfillJson(route, preparation));
+    await page.goto("/ontology-build?profile=default");
+    await expect(page.getByTestId("ontology-view-fetch")).toBeVisible();
+    await page.keyboard.press("Tab");
+    await expect(page.getByRole("link", { name: "本文へスキップ" })).toBeFocused();
+    await loadOntologyBuildWorkspace(page);
+    await page.getByRole("button", { name: "オントロジーを公開", exact: true }).click();
+    const region = page.getByRole("region", { name: "公開前のエラー・警告", exact: true });
+    await expect(region.getByText(message, { exact: true })).toHaveCount(1);
+    await expect(region.getByText(error, { exact: true })).toHaveCount(1);
+    await expect(region.getByText("100 件", { exact: true })).toBeVisible();
+    const confirm = page.getByRole("button", { name: "確認した内容を公開", exact: true });
+    if (status === "ready") await expect(confirm).toBeDisabled();
+    else await expect(confirm).toHaveCount(0);
+    for (const width of testInfo.project.name === "desktop" ? [1280, 1920] : [375]) {
+      await page.setViewportSize({ width, height: 900 });
+      for (const theme of ["light", "dark"] as const) {
+        await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
+        await region.scrollIntoViewIfNeeded();
+        const metrics = await region.evaluate(element => ({
+          height: element.getBoundingClientRect().height, max: 18 * parseFloat(getComputedStyle(document.documentElement).fontSize),
+          scroll: element.scrollHeight, client: element.clientHeight,
+        }));
+        expect(metrics.height).toBeLessThanOrEqual(metrics.max + 1);
+        expect(metrics.scroll).toBeGreaterThan(metrics.client);
+        await region.focus();
+        await expect(region).toBeFocused();
+        await page.keyboard.press("End");
+        await expect.poll(() => region.evaluate(element => element.scrollTop)).toBeGreaterThan(0);
+        await expect.poll(() => region.evaluate(element => element.scrollHeight - element.clientHeight - element.scrollTop)).toBeLessThanOrEqual(1);
+        await page.keyboard.press("Home");
+        await expect.poll(() => region.evaluate(element => element.scrollTop)).toBe(0);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+        await page.screenshot({ path: testInfo.outputPath(`diagnostics-${status}-${width}-${theme}.png`) });
+      }
+    }
+    await region.locator("summary").first().press("Enter");
+    await expect(region.getByText("Order.id / mappings.0.expression_sql / SQL_EXPRESSION_INVALID", { exact: true })).toBeVisible();
+    expect(state.published).toBe(false);
+  });
+}
+
+test("警告のみで公開し再読込後も診断を参照・保存できる", async ({ page }, testInfo) => {
+  const state = await existingMarkdown(page);
+  const message = "根拠を確認できない推論です。業務担当者の確認が必要です。";
+  const findings = Array.from({ length: 40 }, (_, i) => ({ severity: "warning", code: "INFERENCE_WITHOUT_EVIDENCE", definition_id: `property-${i}`, field: "evidence", message_ja: message }));
+  const preparation = { id: "warnings", status: "ready", draft_etag: state.draftMarkdownEtag, expected_head: "", display_version: 4, findings, differences: [], error_message_ja: "" };
+  await page.route("**/ontology-markdown/prepare", route => fulfillJson(route, preparation));
+  await page.route("**/ontology-markdown/preparations/*", route => fulfillJson(route, preparation));
+  await page.route("**/api/nl2sql/profiles/*/ontology-markdown", route => fulfillJson(route, {
+    ...markdownDraftPayload(state.draftMarkdown), draft_etag: state.draftMarkdownEtag,
+    published_markdown: state.published ? state.draftMarkdown : "",
+    published_revision: state.published ? { ...ontologyView.ontology_graph.revision, id: "revision-draft-4", version: 4, status: "published" } : null,
+    published_version: state.published ? 4 : null,
+    published_findings: state.published ? findings : [], published_diagnostics_available: state.published,
+    published_data_report: state.published ? { errors: 0, instance_count: 1 } : null,
+  }));
+  await page.getByRole("button", { name: "オントロジーを公開", exact: true }).click();
+  await expect(page.getByText(/警告がありますが公開できます/)).toBeVisible();
+  await expect(page.getByRole("region", { name: "公開前のエラー・警告", exact: true }).getByText(message, { exact: true })).toHaveCount(1);
+  await confirmPreparedPublish(page);
+  await expect(page.getByText("オントロジーを公開しました。", { exact: true })).toBeVisible();
+  await page.getByRole("tab", { name: "公開済み Markdown オントロジー", exact: true }).click();
+  const saved = page.getByRole("region", { name: "公開版 v4 の検証記録", exact: true });
+  await expect(saved.getByText(message, { exact: true })).toBeVisible();
+  await page.reload();
+  await loadOntologyBuildWorkspace(page);
+  await page.getByRole("tab", { name: "公開済み Markdown オントロジー", exact: true }).click();
+  await expect(saved.getByText(message, { exact: true })).toHaveCount(1);
+  await saved.locator("summary").first().press("Enter");
+  await expect(saved.getByText("property-39 / evidence / INFERENCE_WITHOUT_EVIDENCE", { exact: true })).toBeVisible();
+  const downloadPromise = page.waitForEvent("download");
+  await saved.getByRole("button", { name: "検証記録をダウンロード", exact: true }).click();
+  const download = await downloadPromise;
+  const path = testInfo.outputPath("diagnostics.json");
+  await download.saveAs(path);
+  const { readFile } = await import("node:fs/promises");
+  const record = JSON.parse(await readFile(path, "utf-8"));
+  expect(record.findings).toEqual(findings);
+  expect(record.data_report).toEqual({ errors: 0, instance_count: 1 });
+  expect(record.snapshot_id).toBe("revision-draft-4");
+  for (const width of testInfo.project.name === "desktop" ? [1280, 1920] : [375]) {
+    await page.setViewportSize({ width, height: 900 });
+    for (const theme of ["light", "dark"] as const) {
+      await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      await saved.screenshot({ path: testInfo.outputPath(`published-diagnostics-${width}-${theme}.png`) });
+    }
+  }
+});

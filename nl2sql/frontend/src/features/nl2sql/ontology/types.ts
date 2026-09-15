@@ -718,6 +718,15 @@ export interface OntologyContextSearchResult {
   context_hash: string;
 }
 
+export interface OntologyFinding {
+  severity: string;
+  message_ja?: string;
+  message?: string;
+  code?: string;
+  definition_id?: string;
+  field?: string;
+}
+
 export interface OntologyMarkdownState {
   draft_markdown: string;
   published_markdown: string;
@@ -727,6 +736,9 @@ export interface OntologyMarkdownState {
   published_version?: number | null;
   draft_etag: string;
   published_at?: string | null;
+  published_findings?: OntologyFinding[];
+  published_data_report?: Record<string, unknown> | null;
+  published_diagnostics_available?: boolean;
 }
 
 export interface OntologyMarkdownDraftPatch {
