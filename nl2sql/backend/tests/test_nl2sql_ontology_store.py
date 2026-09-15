@@ -532,3 +532,53 @@ def test_oracle_store_does_not_run_ddl_until_ensure_schema_is_called() -> None:
     assert database.commits == 0
     assert database.rollbacks == 0
     assert database.executed == ["SELECT 1 FROM NL2SQL_ONTOLOGY_REVISIONS WHERE 1 = 0"]
+
+
+def test_oracle_bulk_json_uses_string_binds_and_preserves_large_japanese_payloads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import oracledb
+
+    database = _SchemaDatabase()
+    store = OracleOntologyStore(connection_factory=database.connection)
+    bindings: list[Any] = []
+    original = _SchemaCursor.executemany
+
+    def capture(cursor: _SchemaCursor, sql: str, rows: list[dict[str, Any]]) -> None:
+        bindings.append(cursor.input_sizes["payload_json"])
+        original(cursor, sql, rows)
+
+    monkeypatch.setattr(_SchemaCursor, "executemany", capture)
+    documents = [
+        ({"artifact_id": f"artifact-{i}", "content": "日" * (12000 if i == 256 else 20)}, None)
+        for i in range(513)
+    ]
+    stored = store.save_documents_atomic("artifacts", documents)
+    assert [len(rows) for _sql, rows in database.executed_many] == [256, 256, 1]
+    assert isinstance(bindings[0], int)
+    assert bindings[1] == oracledb.DB_TYPE_CLOB
+    assert isinstance(bindings[2], int)
+    assert [item["content"] for item in stored] == [doc["content"] for doc, _ in documents]
+    assert database.commits == 1
+    assert database.rollbacks == 0
+
+
+def test_oracle_bulk_json_rolls_back_all_batches_when_later_batch_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = _SchemaDatabase()
+    store = OracleOntologyStore(connection_factory=database.connection)
+    original = _SchemaCursor.executemany
+
+    def fail_second(cursor: _SchemaCursor, sql: str, rows: list[dict[str, Any]]) -> None:
+        if database.executed_many:
+            raise RuntimeError("second batch failed")
+        original(cursor, sql, rows)
+
+    monkeypatch.setattr(_SchemaCursor, "executemany", fail_second)
+    with pytest.raises(RuntimeError, match="second batch failed"):
+        store.save_documents_atomic(
+            "artifacts", [({"artifact_id": f"artifact-{i}"}, None) for i in range(257)]
+        )
+    assert database.commits == 0
+    assert database.rollbacks == 1

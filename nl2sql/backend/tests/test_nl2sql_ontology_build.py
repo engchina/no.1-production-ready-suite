@@ -2801,3 +2801,125 @@ def test_batch_max_chars_limits_content_per_call(
     assert len(batches) >= 3  # 1000 字上限なら 2 chunk/batch 程度に分かれる
     for batch in batches:
         assert sum(len(unit.text) for unit in batch) <= 1000
+
+
+def test_shutdown_interrupts_owned_job_and_late_worker_cannot_revive_it(
+    harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    import threading
+
+    runtime, store, _legacy = harness
+    service = OntologyBuildService(runtime)
+    entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+
+    def blocked_run(job_id: str, _text: str, _pairs: list[QaPair]) -> None:
+        service._update(job_id, lambda job: setattr(job, "status", OntologyBuildStatus.RUNNING))
+        service._set_definition_phase(job_id, "save", "running")
+        entered.set()
+        try:
+            assert release.wait(5)
+            service._update(
+                job_id, lambda job: setattr(job, "status", OntologyBuildStatus.SUCCEEDED)
+            )
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(service, "_run_safely", blocked_run)
+    job = service.start("sales")
+    try:
+        assert entered.wait(5)
+        reader = OntologyBuildService(runtime)
+        assert reader.get(job.id) is not None
+        reader.shutdown()
+        record = store.get_document("jobs", {"job_id": job.id})
+        assert record is not None
+        assert record["status"] == "running"
+        service.shutdown()
+        record = store.get_document("jobs", {"job_id": job.id})
+        assert record is not None
+        assert record["status"] == "cancelled"
+        assert record["payload"]["error_code"] == "ONTOLOGY_BUILD_PROCESS_STOPPED"
+        assert record["payload"]["finished_at"]
+        assert all(p["status"] == "skipped" for p in record["payload"]["definition_phases"])
+        assert "再実行してください" in record["payload"]["error_message_ja"]
+        assert any(
+            getattr(r, "event", "") == "ontology_build_process_stopped" for r in caplog.records
+        )
+    finally:
+        release.set()
+        assert finished.wait(5)
+    record = store.get_document("jobs", {"job_id": job.id})
+    assert record is not None
+    assert record["status"] == "cancelled"
+
+
+def test_shutdown_keeps_external_job_and_finished_job(
+    harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, store, _legacy = harness
+    monkeypatch.setattr(get_settings(), "nl2sql_ontology_worker_mode", "external")
+    service = OntologyBuildService(runtime)
+    job = service.start("sales")
+    service.shutdown()
+    record = store.get_document("jobs", {"job_id": job.id})
+    assert record is not None
+    assert record["status"] == "queued"
+    service._update(job.id, lambda item: setattr(item, "status", OntologyBuildStatus.SUCCEEDED))
+    service._inprocess_jobs.add(job.id)
+    service.shutdown()
+    record = store.get_document("jobs", {"job_id": job.id})
+    assert record is not None
+    assert record["status"] == "succeeded"
+
+
+def test_shutdown_retries_concurrent_progress_write(
+    harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, store, _legacy = harness
+    monkeypatch.setattr(get_settings(), "nl2sql_ontology_worker_mode", "external")
+    service = OntologyBuildService(runtime)
+    job = service.start("sales")
+    service._inprocess_jobs.add(job.id)
+    original = service._save_cancelled
+    calls = 0
+
+    def conflict_once(*args: Any, **kwargs: Any) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OntologyVersionConflict("concurrent progress")
+        original(*args, **kwargs)
+
+    monkeypatch.setattr(service, "_save_cancelled", conflict_once)
+    service.shutdown()
+    assert calls == 2
+    record = store.get_document("jobs", {"job_id": job.id})
+    assert record is not None
+    assert record["status"] == "cancelled"
+
+
+def test_restored_inprocess_job_refreshes_after_independent_worker_completes(
+    harness: tuple[OntologyApiRuntime, InMemoryOntologyStore, _FakeLegacyNl2SqlService],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, store, _legacy = harness
+    monkeypatch.setattr(get_settings(), "nl2sql_ontology_worker_mode", "external")
+    writer = OntologyBuildService(runtime)
+    job = writer.start("sales")
+    monkeypatch.setattr(get_settings(), "nl2sql_ontology_worker_mode", "inprocess")
+    reader = OntologyBuildService(runtime)
+    snapshot = reader.get(job.id)
+    assert snapshot is not None
+    assert snapshot.status == OntologyBuildStatus.QUEUED
+    record = store.get_document("jobs", {"job_id": job.id})
+    assert record is not None
+    record["status"] = "succeeded"
+    record["payload"]["status"] = "succeeded"
+    store.save_document("jobs", record, expected_etag=record["etag"])
+    snapshot = reader.get(job.id)
+    assert snapshot is not None
+    assert snapshot.status == OntologyBuildStatus.SUCCEEDED

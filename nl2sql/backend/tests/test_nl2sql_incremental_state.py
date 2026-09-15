@@ -3342,3 +3342,24 @@ def test_migration_dry_run_accepts_empty_snapshot_and_ddl_is_versioned() -> None
     assert summary["schema_objects"] == 0
     statements = _split_ddl("CREATE TABLE A (ID NUMBER);\nCREATE INDEX IX_A ON A (ID);")
     assert len(statements) == 2
+
+
+async def test_lifespan_interrupts_build_jobs_off_loop_before_closing_pools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import threading
+
+    import app.main as main
+
+    loop_thread = threading.get_ident()
+    calls: list[str] = []
+
+    def shutdown() -> None:
+        assert threading.get_ident() != loop_thread
+        calls.append("build_shutdown")
+
+    monkeypatch.setattr("app.main.ontology_build_service.shutdown", shutdown)
+    monkeypatch.setattr(main, "close_oracle_pools", lambda: calls.append("close_pools"))
+    async with main.lifespan(FastAPI()):
+        assert calls == []
+    assert calls == ["build_shutdown", "close_pools"]

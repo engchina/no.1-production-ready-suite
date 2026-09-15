@@ -11,13 +11,18 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from pr_backend_core import configure_logging, create_app
 from pythonjsonlogger.json import JsonFormatter
+from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import JSONResponse
 
 from app.api.problems import api_problem_response, request_id_for, validation_field_problems
 from app.api.router import api_router
 from app.clients.oracle_runtime import close_oracle_pools
-from app.features.nl2sql.ontology_router import OntologyApiRuntime, ontology_runtime
+from app.features.nl2sql.ontology_router import (
+    OntologyApiRuntime,
+    ontology_build_service,
+    ontology_runtime,
+)
 from app.features.nl2sql.service import (
     SCHEMA_CATALOG_EMPTY_ERROR_CODE,
     DbAdminOperationFailed,
@@ -79,6 +84,7 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         synthetic_stop.set()
+        await run_in_threadpool(ontology_build_service.shutdown)
         close_oracle_pools()
 
 

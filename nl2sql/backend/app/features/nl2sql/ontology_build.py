@@ -2743,6 +2743,8 @@ class OntologyBuildService:
         self._source_storage = source_storage or OntologySourceStorage()
         self._jobs: dict[str, OntologyBuildJob] = {}
         self._inputs: dict[str, dict[str, Any]] = {}
+        # store から復元した job と、このプロセスが実行している job を区別する。
+        self._inprocess_jobs: set[str] = set()
         # _persist_job の read-modify-write を直列化する(worker thread と API thread の競合防止)
         self._persist_lock = threading.RLock()
         self._lock = threading.Lock()
@@ -2861,22 +2863,68 @@ class OntologyBuildService:
                     }
                 )
             if get_settings().nl2sql_ontology_worker_mode == "inprocess":
+                with self._lock:
+                    self._inprocess_jobs.add(job.id)
                 thread = threading.Thread(
-                    target=self._run_safely,
+                    target=self._run_inprocess,
                     args=(job.id, business_text, pairs),
                     daemon=True,
                 )
                 thread.start()
             return job.model_copy(deep=True)
         except Exception:
+            with self._lock:
+                self._inprocess_jobs.discard(job.id)
             self._release_profile_job_lock(profile_id, job.id)
             raise
 
+    def _run_inprocess(self, job_id: str, business_text: str, qa_pairs: list[QaPair]) -> None:
+        try:
+            self._run_safely(job_id, business_text, qa_pairs)
+        finally:
+            with self._lock:
+                self._inprocess_jobs.discard(job_id)
+
+    def shutdown(self) -> None:
+        """再ロードで消える自プロセスの daemon job を永続的に中断する。"""
+
+        with self._lock:
+            job_ids = tuple(self._inprocess_jobs)
+        for job_id in job_ids:
+            for attempt in range(3):
+                try:
+                    document = self._runtime.store.get_document("jobs", {"job_id": job_id})
+                    job = self._job_from_document(document)
+                    if document is None or job is None or job.status in _TERMINAL_STATUSES:
+                        break
+                    self._save_cancelled(
+                        document,
+                        job,
+                        "バックエンドの停止・再起動により構築を中断しました。再実行してください。",
+                        code="ONTOLOGY_BUILD_PROCESS_STOPPED",
+                    )
+                    logger.warning(
+                        "バックエンドの停止・再起動によりオントロジー構築を中断しました。"
+                        "保存済み入力から再実行してください。",
+                        extra={"event": "ontology_build_process_stopped", "job_id": job_id},
+                    )
+                    break
+                except OntologyVersionConflict:
+                    if attempt < 2:
+                        continue
+                    logger.exception(
+                        "ontology_build_shutdown_state_conflict", extra={"job_id": job_id}
+                    )
+                except Exception:
+                    logger.exception("ontology_build_shutdown_failed", extra={"job_id": job_id})
+                    break
+
     def get(self, job_id: str) -> OntologyBuildJob | None:
-        # external worker モードでは worker だけが進捗を書くため store が正
-        # (in-memory は queued のまま止まって見える)。inprocess では実行スレッドが
-        # 先に in-memory を更新するため従来どおり in-memory が正。
-        if get_settings().nl2sql_ontology_worker_mode == "external":
+        # 自プロセスの実行 thread だけは保存前の進捗を返す。再ロード後に復元した
+        # job と external job は store が正(独立 worker の復旧結果も反映する)。
+        with self._lock:
+            owns_execution = job_id in self._inprocess_jobs
+        if not owns_execution or get_settings().nl2sql_ontology_worker_mode == "external":
             restored = self._restore_from_store(job_id)
             if restored is not None:
                 return self._normalize_job_for_response(restored)
@@ -3049,6 +3097,8 @@ class OntologyBuildService:
         document: dict[str, Any],
         job: OntologyBuildJob,
         message_ja: str,
+        *,
+        code: str = "",
     ) -> None:
         """job を CANCELLED として ETag 付きで保存し、in-memory も同期する。"""
 
@@ -3056,6 +3106,12 @@ class OntologyBuildService:
         job.status = OntologyBuildStatus.CANCELLED
         job.error_message_ja = message_ja
         job.finished_at = now
+        if code:
+            job.error_code = code
+        for phase in job.definition_phases:
+            if phase.status in {"pending", "running"}:
+                phase.status = "skipped"
+                phase.finished_at = now.isoformat()
         for step in job.steps:
             if step.status in {
                 OntologyBuildStepStatus.PENDING,
@@ -3063,7 +3119,7 @@ class OntologyBuildService:
             }:
                 step.status = OntologyBuildStepStatus.SKIPPED
                 step.finished_at = now
-        job.events.append(OntologyBuildEvent(at=now, message_ja=message_ja))
+        job.events.append(OntologyBuildEvent(at=now, message_ja=message_ja, code=code))
         del job.events[:-_MAX_JOB_EVENTS]
         self._runtime.store.save_document(
             "jobs",

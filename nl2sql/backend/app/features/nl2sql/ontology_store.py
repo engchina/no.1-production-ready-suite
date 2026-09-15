@@ -60,6 +60,8 @@ ONTOLOGY_COLLECTIONS: tuple[OntologyCollection, ...] = (
 )
 IDEMPOTENCY_KEY_STORAGE_MAX_BYTES = 160
 _ORACLE_ROW_LOCK_WAIT_MAX_SECONDS = 30
+_ORACLE_INSERT_BATCH_SIZE = 256
+_ORACLE_STRING_BIND_MAX_BYTES = 32767
 
 _ID_KIND = re.compile(r"[^a-z0-9_]+")
 _UNORDERED_SCHEMA_COLLECTIONS = frozenset(
@@ -1168,7 +1170,6 @@ class OracleOntologyStore(_ConvenienceMethods):
                                 expected_etag=None,
                             )
                         )
-                    _set_payload_clob_input_size(cursor)
                     self._insert_documents(cursor, spec, prepared_documents)
                     connection.commit()
                     return prepared_documents
@@ -1322,7 +1323,7 @@ class OracleOntologyStore(_ConvenienceMethods):
         spec: _CollectionSpec,
         documents: Sequence[Mapping[str, Any]],
     ) -> None:
-        """新規 document 群を Oracle array binding の 1 batch で挿入する。"""
+        """小さい JSON は文字列で batch bind し、行ごとの一時 LOB 往復を避ける。"""
 
         if not documents:
             return
@@ -1353,7 +1354,20 @@ class OracleOntologyStore(_ConvenienceMethods):
             if spec.has_embedding:
                 binds["embedding"] = _embedding_bind_value(document.get("embedding"))
             rows.append(binds)
-        cursor.executemany(sql, rows)
+        for offset in range(0, len(rows), _ORACLE_INSERT_BATCH_SIZE):
+            batch = rows[offset : offset + _ORACLE_INSERT_BATCH_SIZE]
+            payloads = [row["payload_json"] for row in batch]
+            set_input_sizes = getattr(cursor, "setinputsizes", None)
+            if callable(set_input_sizes):
+                if max(len(payload.encode("utf-8")) for payload in payloads) <= (
+                    _ORACLE_STRING_BIND_MAX_BYTES
+                ):
+                    set_input_sizes(payload_json=max(len(payload) for payload in payloads))
+                else:
+                    # 大きい本文は従来の CLOB bind を維持する。分割しても commit は
+                    # 呼出元で一度だけ行い、後続 batch の失敗時は全件 rollback する。
+                    _set_payload_clob_input_size(cursor)
+            cursor.executemany(sql, batch)
 
     def _update_document(
         self,
