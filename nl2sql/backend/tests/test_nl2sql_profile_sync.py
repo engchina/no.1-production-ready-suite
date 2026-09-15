@@ -474,3 +474,131 @@ def test_select_ai_credential_preflight_happens_before_profile_drop(
     assert any("USER_CREDENTIALS" in sql for sql in statements)
     assert all("DROP_PROFILE" not in sql for sql in statements)
     assert all("CREATE_PROFILE" not in sql for sql in statements)
+
+
+@pytest.mark.parametrize("status", ["queued", "running"])
+def test_profile_sync_old_job_expires_on_read_without_oracle_replay(
+    monkeypatch: pytest.MonkeyPatch,
+    status: str,
+) -> None:
+    from app.features.nl2sql.models import ProfileSyncJobData
+
+    monkeypatch.setattr("app.features.nl2sql.profile_sync.get_settings", _settings)
+    store = InMemoryOntologyStore()
+    service = _FakeProfileService()
+    job = ProfileSyncJobData(
+        job_id="old-sync",
+        profile_id="profile-1",
+        status=status,
+        created_at="2020-01-01T00:00:00+00:00",
+    )
+    store.save_job(
+        {
+            "job_id": job.job_id,
+            "job_type": "profile_sync",
+            "profile_id": job.profile_id,
+            "status": status,
+            "payload": job.model_dump(mode="json"),
+        }
+    )
+    sync = ProfileSyncService(service=service, store_provider=lambda: store)  # type: ignore[arg-type]
+    assert sync.peek(job.job_id).status.value == status  # type: ignore[union-attr]
+    expired = sync.get(job.job_id)
+    assert expired and expired.status == ProfileSyncJobStatus.FAILED
+    assert expired.error_code == "PROFILE_SYNC_TIMEOUT"
+    assert "状態を確認" in expired.error_message_ja
+    assert sync.run_persisted(job.job_id).status == ProfileSyncJobStatus.FAILED
+    assert service.oracle_calls == 0
+
+
+@pytest.mark.parametrize("ending", ["shutdown", "timeout", "cancel"])
+def test_profile_sync_late_oracle_return_does_not_update_state_or_start_agent(
+    monkeypatch: pytest.MonkeyPatch,
+    ending: str,
+) -> None:
+    import threading
+
+    configured = _settings()
+    configured.nl2sql_ontology_worker_mode = "inprocess"
+    monkeypatch.setattr("app.features.nl2sql.profile_sync.get_settings", lambda: configured)
+    started, release = threading.Event(), threading.Event()
+    threads: list[threading.Thread] = []
+    original_start = threading.Thread.start
+
+    def start(thread: threading.Thread) -> None:
+        threads.append(thread)
+        original_start(thread)
+
+    monkeypatch.setattr(threading.Thread, "start", start)
+
+    class BlockingService(_FakeProfileService):
+        def upsert_profile_select_ai_profile(
+            self, profile_id: str, request: object
+        ) -> SelectAiDbProfileMutationData:
+            started.set()
+            assert release.wait(5)
+            return super().upsert_profile_select_ai_profile(profile_id, request)
+
+    store = InMemoryOntologyStore()
+    service = BlockingService()
+    sync = ProfileSyncService(service=service, store_provider=lambda: store)  # type: ignore[arg-type]
+    queued = sync.start(
+        "profile-1",
+        ProfileSyncJobRequest(confirmation="ADMIN_EXECUTE", rebuild_agent_assets=True),
+        idempotency_key=ending,
+    )
+    try:
+        assert started.wait(5)
+        observer = ProfileSyncService(service=service, store_provider=lambda: store)  # type: ignore[arg-type]
+        observer.shutdown()
+        assert observer.get(queued.job_id).status == ProfileSyncJobStatus.RUNNING  # type: ignore[union-attr]
+        if ending == "shutdown":
+            sync.shutdown()
+        elif ending == "timeout":
+            monkeypatch.setattr(ProfileSyncService, "_expired", staticmethod(lambda job: True))
+        else:
+            observer.cancel_for_profile("profile-1")
+        terminal = observer.get(queued.job_id)
+        assert terminal and terminal.status in {
+            ProfileSyncJobStatus.FAILED,
+            ProfileSyncJobStatus.CANCELLED,
+        }
+        if ending != "cancel":
+            with pytest.raises(ValueError, match="前回の Oracle 呼び出し"):
+                sync.retry(queued.job_id)
+    finally:
+        release.set()
+        for thread in threads:
+            thread.join(5)
+            assert not thread.is_alive()
+    assert sync.get(queued.job_id) == terminal
+    assert service.oracle_calls == 1 and service.agent_calls == 0
+
+
+def test_profile_sync_concurrent_claim_only_mutates_oracle_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import threading
+    from typing import Any
+
+    monkeypatch.setattr("app.features.nl2sql.profile_sync.get_settings", _settings)
+    store = InMemoryOntologyStore()
+    service = _FakeProfileService()
+    sync = ProfileSyncService(service=service, store_provider=lambda: store)  # type: ignore[arg-type]
+    job = sync.start(
+        "profile-1", ProfileSyncJobRequest(confirmation="ADMIN_EXECUTE"), idempotency_key="race"
+    )
+    barrier = threading.Barrier(2)
+    original = sync._save
+
+    def save(value: Any, **kwargs: Any) -> dict[str, Any]:
+        if kwargs.get("claim"):
+            barrier.wait(timeout=5)
+        return original(value, **kwargs)
+
+    monkeypatch.setattr(sync, "_save", save)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        list(executor.map(sync.run_persisted, [job.job_id, job.job_id]))
+    assert service.oracle_calls == 1
+    assert sync.run_persisted(job.job_id).status == ProfileSyncJobStatus.SUCCEEDED
+    assert service.oracle_calls == 1

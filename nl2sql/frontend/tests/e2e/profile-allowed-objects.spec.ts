@@ -1266,6 +1266,106 @@ test("Oracle 反映失敗を明示し Ontology に触れず再試行できる", 
   expect(ontologyRequests).toBe(0);
 });
 
+test("Oracle 反映の再起動・期限切れを表示して明示的に再試行できる", async ({ page }, testInfo) => {
+  await mockProfileApi(page);
+  let ontologyRequests = 0;
+  let retryCalls = 0;
+  let retried = false;
+  page.on("request", (request) => {
+    if (request.url().includes("/ontology-view")) ontologyRequests += 1;
+  });
+  await page.route("**/api/nl2sql/oracle-sync-jobs/*/retry", async (route) => {
+    retryCalls += 1;
+    retried = true;
+    await fulfillJson(route, {
+      job_id: "profile-sync-retry",
+      profile_id: "default",
+      profile_etag: "etag-default",
+      status: "queued",
+      phase: "queued",
+      rebuild_agent_assets: false,
+      error_code: "",
+      error_message_ja: "",
+      retry_of_job_id: "profile-sync-default",
+      created_at: "2026-07-22T00:00:02Z",
+    });
+  });
+  await page.route("**/api/nl2sql/oracle-sync-jobs/*", async (route) => {
+    await fulfillJson(route, {
+      job_id: retried ? "profile-sync-retry" : "profile-sync-default",
+      profile_id: "default",
+      profile_etag: "etag-default",
+      status: retried ? "succeeded" : "failed",
+      phase: retried ? "succeeded" : "failed",
+      rebuild_agent_assets: false,
+      error_code: retried ? "" : "PROFILE_SYNC_TIMEOUT",
+      error_message_ja: retried ? "" : "Oracle 反映の実行期限を超えました。反映済みの可能性があるため、Oracle Profile と Agent の状態を確認してから再試行してください。",
+      created_at: "2026-07-22T00:00:00Z",
+      finished_at: "2026-07-22T00:00:01Z",
+      oracle_result: retried
+        ? {
+            runtime: "oracle",
+            executed: true,
+            status: "saved",
+            profile_name: "NL2SQL_DEFAULT_PROFILE",
+            original_name: "",
+            ddl: [],
+            profile: dbProfiles.profiles[0],
+            warnings: [],
+            engine_meta: {},
+          }
+        : null,
+    });
+  });
+
+  await page.goto("/profiles");
+  const profileRow = page.getByRole("row").filter({ hasText: "既定プロファイル" });
+  await profileRow.locator("td").nth(1).click();
+  await page.getByLabel("名称").fill("DEFAULT_PROFILE");
+  await page.getByLabel("実行確認語").fill("ADMIN_EXECUTE");
+  const save = page.getByRole("button", { name: "保存", exact: true });
+  await save.click();
+  // 保存が通ると実行確認語はクリアされ、破壊的操作のゲートが再武装する。
+  await expect(page.getByLabel("実行確認語")).toHaveValue("");
+  await expect(save).toBeDisabled();
+
+  const status = page.getByTestId("profile-save-progress");
+  await expect(status).toContainText(
+    "業務 Profile は保存されましたが、Oracle 反映に失敗しました。"
+  );
+  await expect(status).toContainText("Oracle 反映の実行期限を超えました。反映済みの可能性があるため、Oracle Profile と Agent の状態を確認してから再試行してください。");
+  await expect(page.getByTestId("profile-save-step-save_profile")).toHaveAttribute(
+    "data-step-status",
+    "done"
+  );
+  await expect(page.getByTestId("profile-save-step-sync_oracle_profile")).toHaveAttribute(
+    "data-step-status",
+    "error"
+  );
+  expect(ontologyRequests).toBe(0);
+
+  const retry = status.getByRole("button", { name: "Oracle 反映を再試行" });
+  for (const width of (testInfo.project.name === "desktop" ? [1280, 1920] : [375])) {
+    await page.setViewportSize({ width, height: 900 });
+    for (const theme of ["light", "dark"] as const) {
+      await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
+      await retry.focus();
+      await expect(retry).toBeFocused();
+      await page.screenshot({ path: testInfo.outputPath(`profile-sync-recovery-${width}-${theme}.png`) });
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    }
+  }
+  expect(retryCalls).toBe(0);
+  await retry.focus();
+  await expect(retry).toBeFocused();
+  await page.keyboard.press("Enter");
+
+  await expect(status).toHaveAttribute("data-job-status", "succeeded");
+  expect(retryCalls).toBe(1);
+  expect(ontologyRequests).toBe(0);
+});
+
+
 test("新規保存直後の Oracle 反映再試行は保存時の確認語を再利用する", async ({ page }) => {
   await mockProfileApi(page);
   const savedProfile = {

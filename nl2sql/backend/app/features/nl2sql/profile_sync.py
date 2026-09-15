@@ -8,7 +8,7 @@ import re
 import threading
 import time
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
@@ -66,6 +66,10 @@ def _profile_sync_public_error(exc: Exception) -> tuple[str, str]:
     return "PROFILE_SYNC_FAILED", f"{message} 再試行してください。"
 
 
+class ProfileSyncExecutionLost(RuntimeError):
+    """中断・別 worker の更新で、この実行の保存権限が失われた。"""
+
+
 class ProfileSyncService:
     """Oracle Profile 同期を API process / external worker で共有する。"""
 
@@ -79,6 +83,7 @@ class ProfileSyncService:
         self._store_provider = store_provider or self._default_store
         self._jobs: dict[str, ProfileSyncJobData] = {}
         self._lock = threading.RLock()
+        self._inprocess_jobs: set[str] = set()
 
     @staticmethod
     def _default_store() -> OntologyStore:
@@ -123,6 +128,7 @@ class ProfileSyncService:
                 original_name=original_name,
                 rebuild_agent_assets=request.rebuild_agent_assets,
                 created_at=_now(),
+                deadline_at=self._new_deadline(),
             )
             reservation = {
                 "operation": "profile_sync",
@@ -162,12 +168,7 @@ class ProfileSyncService:
                         extra={"job_id": job.job_id},
                     )
                 raise
-        if get_settings().nl2sql_ontology_worker_mode == "inprocess":
-            threading.Thread(
-                target=self._run_safely,
-                args=(job.job_id,),
-                daemon=True,
-            ).start()
+        self._dispatch(job.job_id)
         return job.model_copy(deep=True)
 
     def _idempotent_job(
@@ -182,14 +183,127 @@ class ProfileSyncService:
             raise ValueError("同じ Idempotency-Key が別の Oracle Profile 同期に使用されています。")
         return self.get(str(existing.get("resource_id") or ""))
 
-    def get(self, job_id: str) -> ProfileSyncJobData | None:
+    @staticmethod
+    def _new_deadline() -> str:
+        return (
+            datetime.now(UTC)
+            + timedelta(seconds=max(1.0, get_settings().nl2sql_profile_sync_job_timeout_seconds))
+        ).isoformat()
+
+    @staticmethod
+    def _expired(job: ProfileSyncJobData) -> bool:
+        timestamp = job.deadline_at or job.created_at or job.started_at
+        if not timestamp:
+            return True
+        try:
+            deadline = datetime.fromisoformat(timestamp)
+            if deadline.tzinfo is None:
+                deadline = deadline.replace(tzinfo=UTC)
+            if not job.deadline_at:
+                deadline += timedelta(
+                    seconds=max(1.0, get_settings().nl2sql_profile_sync_job_timeout_seconds)
+                )
+            return deadline <= datetime.now(UTC)
+        except ValueError:
+            return True
+
+    def peek(self, job_id: str) -> ProfileSyncJobData | None:
+        """認可前の存在・scope 確認。状態の変更や再 dispatch はしない。"""
         document = self.store.get_job(job_id)
         if document is None or document.get("job_type") != "profile_sync":
             return None
-        job = ProfileSyncJobData.model_validate(document["payload"])
+        return ProfileSyncJobData.model_validate(document["payload"])
+
+    def get(self, job_id: str) -> ProfileSyncJobData | None:
+        job = self.peek(job_id)
+        if job and job.status not in _TERMINAL_STATUSES and self._expired(job):
+            self._interrupt(
+                job_id,
+                "PROFILE_SYNC_TIMEOUT",
+                "Oracle 反映の実行期限を超えました。反映済みの可能性があるため、"
+                "Oracle Profile と Agent の状態を確認してから再試行してください。",
+            )
+            return self.peek(job_id)
+        return job
+
+    def _dispatch(self, job_id: str) -> None:
+        if get_settings().nl2sql_ontology_worker_mode != "inprocess":
+            return
         with self._lock:
-            self._jobs[job_id] = job
-        return job.model_copy(deep=True)
+            if job_id in self._inprocess_jobs:
+                return
+            self._inprocess_jobs.add(job_id)
+
+        def run() -> None:
+            try:
+                self._run_safely(job_id)
+            finally:
+                with self._lock:
+                    self._inprocess_jobs.discard(job_id)
+
+        try:
+            threading.Thread(target=run, daemon=True, name=f"{job_id}-worker").start()
+        except Exception:
+            with self._lock:
+                self._inprocess_jobs.discard(job_id)
+            self._interrupt(
+                job_id,
+                "PROFILE_SYNC_DISPATCH_FAILED",
+                "Oracle 反映を開始できませんでした。再試行してください。",
+            )
+            raise
+
+    def shutdown(self) -> None:
+        with self._lock:
+            owned = tuple(self._inprocess_jobs)
+        for job_id in owned:
+            try:
+                self._interrupt(
+                    job_id,
+                    "PROFILE_SYNC_INTERRUPTED",
+                    "サーバーの停止により Oracle 反映の結果を確認できません。"
+                    "Oracle Profile と Agent の状態を確認してから再試行してください。",
+                )
+            except Exception as exc:
+                logger.error(
+                    "Oracle 反映の中断状態を保存できません。次回取得時に期限を確認します。",
+                    extra={"job_id": job_id, "error_type": type(exc).__name__},
+                )
+
+    def _interrupt(self, job_id: str, code: str, message: str) -> None:
+        for _ in range(3):
+            document = self.store.get_job(job_id)
+            if not document or document.get("job_type") != "profile_sync":
+                return
+            job = ProfileSyncJobData.model_validate(document["payload"])
+            if job.status in _TERMINAL_STATUSES:
+                return
+            if code == "PROFILE_SYNC_TIMEOUT" and not self._expired(job):
+                return
+            failed = job.model_copy(
+                update={
+                    "status": ProfileSyncJobStatus.FAILED,
+                    "phase": ProfileSyncJobPhase.FAILED,
+                    "error_code": code,
+                    "error_message_ja": message,
+                    "finished_at": _now(),
+                }
+            )
+            try:
+                self._save(failed, previous=document)
+            except OntologyVersionConflict:
+                continue
+            logger.warning(
+                message,
+                extra={
+                    "job_id": job_id,
+                    "profile_id": job.profile_id,
+                    "error_code": code,
+                    "phase": job.phase.value,
+                },
+            )
+            return
+        raise OntologyVersionConflict("profile_sync_interruption_conflict")
 
     def retry(self, job_id: str) -> ProfileSyncJobData:
         previous = self.get(job_id)
@@ -197,6 +311,12 @@ class ProfileSyncService:
             raise KeyError(job_id)
         if previous.status != ProfileSyncJobStatus.FAILED:
             raise ValueError("失敗した Oracle Profile 同期 job だけを再試行できます。")
+        with self._lock:
+            if job_id in self._inprocess_jobs:
+                raise ValueError(
+                    "前回の Oracle 呼び出しが終了するまで再試行できません。"
+                    "状態を再確認してください。"
+                )
         profile = self._service.get_profile(previous.profile_id)
         job = ProfileSyncJobData(
             job_id=f"profile_sync_{uuid4().hex}",
@@ -206,10 +326,10 @@ class ProfileSyncService:
             rebuild_agent_assets=previous.rebuild_agent_assets,
             retry_of_job_id=previous.job_id,
             created_at=_now(),
+            deadline_at=self._new_deadline(),
         )
         self._save(job)
-        if get_settings().nl2sql_ontology_worker_mode == "inprocess":
-            threading.Thread(target=self._run_safely, args=(job.job_id,), daemon=True).start()
+        self._dispatch(job.job_id)
         return job.model_copy(deep=True)
 
     def cancel_for_profile(self, profile_id: str) -> int:
@@ -217,20 +337,31 @@ class ProfileSyncService:
         for document in self.store.list_documents("jobs", {"profile_id": profile_id}):
             if document.get("job_type") != "profile_sync":
                 continue
-            job = ProfileSyncJobData.model_validate(document["payload"])
-            if job.status in _TERMINAL_STATUSES:
-                continue
-            cancelled_job = job.model_copy(
-                update={
-                    "status": ProfileSyncJobStatus.CANCELLED,
-                    "phase": ProfileSyncJobPhase.CANCELLED,
-                    "error_code": "PROFILE_DELETED",
-                    "error_message_ja": "業務 Profile が削除されたため同期を中止しました。",
-                    "finished_at": _now(),
-                }
-            )
-            self._save(cancelled_job)
-            cancelled += 1
+            for attempt in range(3):
+                job = ProfileSyncJobData.model_validate(document["payload"])
+                if job.status in _TERMINAL_STATUSES:
+                    break
+                cancelled_job = job.model_copy(
+                    update={
+                        "status": ProfileSyncJobStatus.CANCELLED,
+                        "phase": ProfileSyncJobPhase.CANCELLED,
+                        "error_code": "PROFILE_DELETED",
+                        "error_message_ja": "業務 Profile が削除されたため同期を中止しました。",
+                        "finished_at": _now(),
+                    }
+                )
+                try:
+                    self._save(cancelled_job, previous=document)
+                except OntologyVersionConflict:
+                    if attempt == 2:
+                        raise
+                    current = self.store.get_job(job.job_id)
+                    if current is None:
+                        break
+                    document = current
+                    continue
+                cancelled += 1
+                break
         return cancelled
 
     def run_persisted(self, job_id: str) -> ProfileSyncJobData:
@@ -246,111 +377,144 @@ class ProfileSyncService:
         job = self.get(job_id)
         if job is None:
             raise RuntimeError("Oracle Profile 同期 job が見つかりません。")
-        if job.status == ProfileSyncJobStatus.CANCELLED:
+        # 実行中の再配送は再送しない。終了済み job も再実行しない。
+        if job.status != ProfileSyncJobStatus.QUEUED:
             return job
-        deadline = time.monotonic() + max(
-            1.0,
-            get_settings().nl2sql_profile_sync_job_timeout_seconds,
-        )
+        document = self.store.get_job(job_id)
+        if document is None or document["payload"]["status"] != "queued":
+            return self.get(job_id) or job
         running = job.model_copy(
             update={
                 "status": ProfileSyncJobStatus.RUNNING,
                 "phase": ProfileSyncJobPhase.SYNCING_ORACLE_PROFILE,
-                "started_at": job.started_at or _now(),
+                "started_at": _now(),
                 "error_code": "",
                 "error_message_ja": "",
             }
         )
-        self._save(running)
-        self._assert_current_profile(running)
-
-        oracle_result = self._service.upsert_profile_select_ai_profile(
-            running.profile_id,
-            ProfileSelectAiProfileRequest(
-                confirmation="ADMIN_EXECUTE",
-                reason="profile-sync-job",
-                original_name=running.original_name,
-            ),
-        )
-        if not oracle_result.executed or oracle_result.status == "error":
-            warning = " ".join(oracle_result.warnings).strip()
-            raise RuntimeError(warning or "Oracle DBMS_CLOUD_AI Profile の反映に失敗しました。")
-        update_data: dict[str, Any] = {"oracle_result": oracle_result}
-        if running.original_name.strip():
-            profile = self._service.clear_profile_select_ai_previous_name(
-                running.profile_id,
-                expected_etag=running.profile_etag,
-            )
-            update_data["profile_etag"] = profile.etag
-        running = running.model_copy(update=update_data)
-        self._assert_deadline(deadline)
-        self._assert_not_cancelled(running.job_id)
-
-        if running.rebuild_agent_assets:
-            running = running.model_copy(
-                update={"phase": ProfileSyncJobPhase.REBUILDING_AGENT_ASSETS}
-            )
-            self._save(running)
-            agent_result = self._service.refresh_select_ai_agent_assets(
-                running.profile_id,
-                profile_already_synced=True,
-            )
-            if not agent_result.refreshed:
-                raise RuntimeError(
-                    agent_result.warning or "Select AI Agent asset の再構築に失敗しました。"
-                )
-            running = running.model_copy(update={"agent_result": agent_result})
-
-        self._assert_deadline(deadline)
-        self._assert_not_cancelled(running.job_id)
-        running = running.model_copy(update={"phase": ProfileSyncJobPhase.VERIFYING})
-        self._save(running)
-        self._assert_current_profile(running)
-        succeeded = running.model_copy(
-            update={
-                "status": ProfileSyncJobStatus.SUCCEEDED,
-                "phase": ProfileSyncJobPhase.SUCCEEDED,
-                "finished_at": _now(),
-            }
-        )
-        self._save(succeeded)
-        record_job(job_type="profile_sync", status="succeeded")
-        return succeeded.model_copy(deep=True)
-
-    def _run_safely(self, job_id: str) -> None:
         try:
-            self._execute(job_id)
-        except Exception as exc:  # pragma: no cover - 最終防壁は status で検証する
-            error_code, public_message = _profile_sync_public_error(exc)
+            document = self._save(running, previous=document, claim=True)
+        except OntologyVersionConflict:
+            return self.get(job_id) or job
+        logger.info(
+            "Oracle Profile の反映を開始しました。",
+            extra={"job_id": job_id, "profile_id": job.profile_id, "deadline_at": job.deadline_at},
+        )
+        try:
+            self._assert_current_profile(running)
+            self._assert_execution(document)
+            oracle_result = self._service.upsert_profile_select_ai_profile(
+                running.profile_id,
+                ProfileSelectAiProfileRequest(
+                    confirmation="ADMIN_EXECUTE",
+                    reason="profile-sync-job",
+                    original_name=running.original_name,
+                ),
+            )
+            if not oracle_result.executed or oracle_result.status == "error":
+                raise RuntimeError(
+                    " ".join(oracle_result.warnings).strip()
+                    or "Oracle Profile の反映に失敗しました。"
+                )
+            running = running.model_copy(update={"oracle_result": oracle_result})
+            document = self._save_owned(running, document)
+            if running.original_name.strip():
+                self._assert_execution(document)
+                profile = self._service.clear_profile_select_ai_previous_name(
+                    running.profile_id, expected_etag=running.profile_etag
+                )
+                running = running.model_copy(update={"profile_etag": profile.etag})
+                document = self._save_owned(running, document)
+            if running.rebuild_agent_assets:
+                running = running.model_copy(
+                    update={"phase": ProfileSyncJobPhase.REBUILDING_AGENT_ASSETS}
+                )
+                document = self._save_owned(running, document)
+                self._assert_execution(document)
+                agent_result = self._service.refresh_select_ai_agent_assets(
+                    running.profile_id, profile_already_synced=True
+                )
+                if not agent_result.refreshed:
+                    raise RuntimeError(
+                        agent_result.warning or "Select AI Agent asset の再構築に失敗しました。"
+                    )
+                running = running.model_copy(update={"agent_result": agent_result})
+            running = running.model_copy(update={"phase": ProfileSyncJobPhase.VERIFYING})
+            document = self._save_owned(running, document)
+            self._assert_current_profile(running)
+            running = running.model_copy(
+                update={
+                    "status": ProfileSyncJobStatus.SUCCEEDED,
+                    "phase": ProfileSyncJobPhase.SUCCEEDED,
+                    "finished_at": _now(),
+                }
+            )
+            self._save_owned(running, document)
+            record_job(job_type="profile_sync", status="succeeded")
+            logger.info(
+                "Oracle Profile の反映が完了しました。",
+                extra={"job_id": job_id, "profile_id": job.profile_id},
+            )
+            return running
+        except (ProfileSyncExecutionLost, OntologyVersionConflict):
+            logger.info(
+                "中断または競合後の Oracle 反映結果を破棄しました。", extra={"job_id": job_id}
+            )
+        except Exception as exc:
+            code, message = _profile_sync_public_error(exc)
             oracle_code_match = _ORACLE_ERROR_CODE_RE.search(str(exc))
             logger.warning(
-                "profile_sync_job_failed",
-                exc_info=True,
+                "Oracle Profile の反映に失敗しました。",
                 extra={
                     "job_id": job_id,
-                    "error_code": error_code,
+                    "profile_id": job.profile_id,
+                    "phase": running.phase.value,
+                    "error_code": code,
+                    "error_type": type(exc).__name__,
                     "oracle_error_code": (
                         oracle_code_match.group(0).upper() if oracle_code_match else ""
                     ),
                 },
             )
-            current = self.get(job_id)
-            if current is None or current.status == ProfileSyncJobStatus.CANCELLED:
-                return
-            failed = current.model_copy(
+            failed = running.model_copy(
                 update={
                     "status": ProfileSyncJobStatus.FAILED,
                     "phase": ProfileSyncJobPhase.FAILED,
-                    "error_code": error_code,
-                    "error_message_ja": public_message,
+                    "error_code": code,
+                    "error_message_ja": message,
                     "finished_at": _now(),
                 }
             )
-            self._save(failed)
-            record_job(
-                job_type="profile_sync",
-                status="failed",
-                error_code=error_code,
+            try:
+                self._save_owned(failed, document)
+                record_job(job_type="profile_sync", status="failed", error_code=code)
+            except (ProfileSyncExecutionLost, OntologyVersionConflict):
+                pass
+        return self.get(job_id) or job
+
+    def _assert_execution(self, document: dict[str, Any]) -> None:
+        current = self.get(str(document["job_id"]))
+        latest = self.store.get_job(str(document["job_id"]))
+        if (
+            current is None
+            or current.status != ProfileSyncJobStatus.RUNNING
+            or latest is None
+            or latest["etag"] != document["etag"]
+        ):
+            raise ProfileSyncExecutionLost()
+
+    def _save_owned(self, job: ProfileSyncJobData, document: dict[str, Any]) -> dict[str, Any]:
+        self._assert_execution(document)
+        return self._save(job, previous=document)
+
+    def _run_safely(self, job_id: str) -> None:
+        try:
+            self._execute(job_id)
+        except Exception as exc:
+            # DB 保存自体の失敗は期限の読み取り回復に委ね、別実行の状態を上書きしない。
+            logger.error(
+                "Oracle 反映の実行・保存に失敗しました。DB 接続ログを確認してください。",
+                extra={"job_id": job_id, "error_type": type(exc).__name__},
             )
 
     def _assert_current_profile(self, job: ProfileSyncJobData) -> None:
@@ -365,36 +529,29 @@ class ProfileSyncService:
         value = getattr(profile.select_ai_config, "previous_profile_name", "")
         return value.strip() if isinstance(value, str) else ""
 
-    def _assert_not_cancelled(self, job_id: str) -> None:
-        current = self.get(job_id)
-        if current is not None and current.status == ProfileSyncJobStatus.CANCELLED:
-            raise RuntimeError("業務 Profile が削除されたため同期を中止しました。")
-
-    @staticmethod
-    def _assert_deadline(deadline: float) -> None:
-        if time.monotonic() > deadline:
-            seconds = max(1.0, get_settings().nl2sql_profile_sync_job_timeout_seconds)
-            raise TimeoutError(f"Oracle Profile 同期 job が {seconds:g} 秒の期限を超えました。")
-
-    def _save(self, job: ProfileSyncJobData) -> None:
-        current = self.store.get_job(job.job_id)
+    def _save(
+        self,
+        job: ProfileSyncJobData,
+        *,
+        previous: dict[str, Any] | None = None,
+        claim: bool = False,
+    ) -> dict[str, Any]:
         document: dict[str, Any] = {
+            **(previous or {}),
             "job_id": job.job_id,
             "job_type": "profile_sync",
             "profile_id": job.profile_id,
             "status": job.status.value,
             "payload": job.model_dump(mode="json"),
         }
-        if current is not None:
-            for field in ("claimed_by", "claimed_at"):
-                if current.get(field) is not None:
-                    document[field] = current[field]
-        self.store.save_job(
-            document,
-            expected_etag=str(current["etag"]) if current is not None else None,
+        if claim:
+            document.update(claimed_by=f"profile-sync:{uuid4().hex}", claimed_at=time.time())
+        saved = self.store.save_job(
+            document, expected_etag=str(previous["etag"]) if previous else None
         )
         with self._lock:
             self._jobs[job.job_id] = job.model_copy(deep=True)
+        return saved
 
 
 profile_sync_service = ProfileSyncService()

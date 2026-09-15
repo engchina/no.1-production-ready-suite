@@ -52,3 +52,11 @@ async def import_example(file: UploadFile) -> ApiResponse[ImportData]:
 - 強制終了や旧版が残した `queued` / `running` は、状態取得時に期限を確認して `PREPARATION_TIMEOUT` に収束する。旧レコードは作成日時と設定値から期限を求める。
 - 実行開始と結果保存は同じ成果物の ETag を使う。重複配送は解析を再送せず、中断・期限切れ後の遅着結果は破棄する。期限は同期 HTTP スレッドを強制 kill するものではない。
 - エラー後は画面から公開前の確認を再実行する。解析成功後も、差分・検証結果を確認してから公開するゲートを維持する。
+
+## Oracle Profile 同期
+
+- `NL2SQL_PROFILE_SYNC_JOB_TIMEOUT_SECONDS`（既定 300 秒）の期限を job payload の `deadline_at` に保存する。旧 job は作成日時から判定し、取得時に期限切れを `PROFILE_SYNC_TIMEOUT` へ収束させる。
+- API は認可用 `peek()` の後に scope を確認し、初めて状態を回復する `get()` を呼ぶ。起動時の DB 読み取りは行わない。
+- 同期開始は queued の取得済み ETag で claim する。各 phase / 終了 / 失敗の保存と次の Oracle 操作の前に、その実行が保持する ETag を検証する。running / terminal の再配送で Oracle 反映を再送しない。
+- 正常停止では、このプロセスが開始した job を off-loop で中断してから pool を閉じる。同期呼び出しの強制 kill は行わず、中断後の戻り値を破棄し後続 phase を開始しない。
+- Oracle 操作は部分反映の可能性があるため、中断は成功と断定しない。日本語メッセージで Oracle Profile / Agent の確認を促し、明示的な再試行だけを受け付ける。自プロセスの前回呼び出しがまだ残っている場合は再試行を拒否する。

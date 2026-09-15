@@ -186,8 +186,11 @@ class _ProfileSyncService:
             )
         }
 
-    def get(self, job_id: str) -> ProfileSyncJobData | None:
+    def peek(self, job_id: str) -> ProfileSyncJobData | None:
         return self.jobs.get(job_id)
+
+    def get(self, job_id: str) -> ProfileSyncJobData | None:
+        raise AssertionError("認可前に状態回復を実行してはいけません")
 
     def retry(self, job_id: str) -> ProfileSyncJobData:
         self.retried.append(job_id)

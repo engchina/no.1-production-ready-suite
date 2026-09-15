@@ -24,6 +24,7 @@ from app.features.nl2sql.ontology_router import (
     ontology_build_service,
     ontology_runtime,
 )
+from app.features.nl2sql.profile_sync import profile_sync_service
 from app.features.nl2sql.service import (
     SCHEMA_CATALOG_EMPTY_ERROR_CODE,
     DbAdminOperationFailed,
@@ -85,6 +86,7 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         synthetic_stop.set()
+        await run_in_threadpool(profile_sync_service.shutdown)
         await run_in_threadpool(shutdown_markdown_preparations, ontology_runtime)
         await run_in_threadpool(ontology_build_service.shutdown)
         close_oracle_pools()

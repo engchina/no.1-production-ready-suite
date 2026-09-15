@@ -985,11 +985,11 @@ def get_profile_oracle_sync_job(
 
     from .profile_sync import profile_sync_service
 
-    job = profile_sync_service.get(job_id)
+    job = profile_sync_service.peek(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="指定された同期 job が見つかりません。")
     _assert_profile_access(request, job.profile_id)
-    return ApiResponse(data=job)
+    return ApiResponse(data=profile_sync_service.get(job_id) or job)
 
 
 @router.post(
@@ -1006,7 +1006,7 @@ def retry_profile_oracle_sync_job(
     from .profile_sync import profile_sync_service
 
     try:
-        job = profile_sync_service.get(job_id)
+        job = profile_sync_service.peek(job_id)
         if job is None:
             raise KeyError(job_id)
         _assert_profile_access(request, job.profile_id)

@@ -1895,6 +1895,7 @@ class ProfileSyncJobData(BaseModel):
     error_message_ja: str = ""
     retry_of_job_id: str = ""
     created_at: str = ""
+    deadline_at: str = ""
     started_at: str = ""
     finished_at: str = ""
 
