@@ -181,6 +181,7 @@ def test_observer_worker_rereads_in_flight_job_until_owner_finishes(
     assert first is not None
     assert first.status == JobStatus.PENDING
 
+    assert owner._claim_nl2sql_job(worker_id="owner", job_id=created.job_id) is not None
     with owner._lock:  # noqa: SLF001
         stored = owner._jobs[created.job_id]  # noqa: SLF001
         stored.status = JobStatus.DONE
@@ -193,7 +194,7 @@ def test_observer_worker_rereads_in_flight_job_until_owner_finishes(
     assert second.status == JobStatus.DONE
 
 
-def test_owner_worker_keeps_local_state_authoritative_for_its_own_job(
+def test_owner_worker_returns_persisted_state_after_execution_is_replaced(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(get_settings(), "nl2sql_job_worker_mode", "external")
@@ -203,14 +204,14 @@ def test_owner_worker_keeps_local_state_authoritative_for_its_own_job(
     created = owner.start_job(_request(), actor_user_uuid="user-1", actor_is_system_admin=True)
     assert owner.run_next_nl2sql_job(job_id=created.job_id, worker_id="worker-owner") is True
 
-    # 別 worker が DB 上の snapshot を書き換えても、実行中プロセスは自分の状態を返す。
+    # 別 worker の終端状態を、実行元の process も保存済みの正本から返す。
     document = repository.get_document("jobs", created.job_id)
     assert document is not None
     repository.put_document("jobs", created.job_id, {**document, "status": "error"})
 
     job = owner.get_job(created.job_id)
     assert job is not None
-    assert job.status == JobStatus.RUNNING
+    assert job.status == JobStatus.ERROR
 
 
 def test_external_worker_mode_enqueues_without_inprocess_dispatch(

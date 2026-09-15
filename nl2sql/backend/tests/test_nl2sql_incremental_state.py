@@ -1150,6 +1150,8 @@ def test_completed_job_stays_done_when_final_result_persistence_fails() -> None:
         steps=_new_job_steps(),
     )
 
+    service._persist_job(job_id)
+    assert service._claim_nl2sql_job(worker_id="owner", job_id=job_id) is not None
     service._run_job(job_id)  # noqa: SLF001
 
     job = service.get_job(job_id)

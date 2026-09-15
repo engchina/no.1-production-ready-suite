@@ -98,3 +98,26 @@ async def import_example(file: UploadFile) -> ApiResponse[ImportData]:
 - schema refresh の heartbeat / phase / 完了 / 失敗保存は、保存済みの `running`、`worker_id`、`attempt`、未失効 lease が一致する場合だけ受理する。例外処理で最新 job を読み直して新 worker の権限を借りない。
 - catalog の差分適用は同じ transaction で job 行を lock して所有権を検証し、その後 catalog head / object / column / constraint / dependency を更新する。接管後の旧 worker は catalog や job を変更しない。
 - lease 切れの再 claim は metadata の再取得として維持する。catalog commit 後に job 完了保存前で終了しても、次の worker は保存済み manifest と照合して完了できる。DDL・ユーザ SQL の再実行はこの worker の責務に含めない。
+
+### SQL 生成の lease 接管と結果保存 (#646)
+
+- claim の `worker_id` / `attempt` は実行 thread に固定し、terminal payload の worker field をクリアしても保存条件として保持する。別 thread の接管により process 内 cache が置換された場合も旧実行は新しい権限を借りない。
+- heartbeat / phase / error / result の保存は永続 job 行の `running` と所有権・未失効 lease を確認する。結果と history は同じ transaction で保存し、遅着結果の history 追加も拒否する。
+- 各 stage と最終保存前で所有権・キャンセルを確認する。外部呼び出し中の thread は強制停止せず、戻った時点で継続と保存を拒否する。既に実行を開始した read-only SQL は取り消せない場合がある。
+- GET は実行元 process を含めて永続 job を正本とする。結果保存障害時の手元の結果＋警告は、元の lease と所有権がなお有効な場合だけ表示し、新 worker の状態を隠さない。
+
+### バックグラウンド起動経路の横断確認 (#639)
+
+2026-09-15 時点の `threading.Thread` / `ThreadPoolExecutor` / `create_task` の起動経路を再検索した。SQL 生成・schema refresh・DB Profile 一覧更新以外は次の契約で処理する。
+
+| 機能 | 回復と再実行の契約 | 検証 |
+| --- | --- | --- |
+| Profile 同期 | deadline / shutdown、元の ETag。Oracle の反映状態が不明な場合、確認せず反映を自動再送しない | #635 / #640 |
+| Ontology AI 構築 | deadline / heartbeat lease / 実行 ID。中断を表示し、入力と checkpoint を保持した明示的 retry | #636 / #641 |
+| 旧公開・推論 | deadline / 実行 ID。既に公開された revision の receipt を照合し、公開操作を繰り返さない | #637 / #642 |
+| 旧実データ検証 | deadline / 実行 ID / ETag。保存済み report receipt で回復し、SQL を再送しない | #638 / #644 |
+| Markdown 公開準備 | deadline / shutdown / ETag。解析の自動再送なし | #633 / #634、`test_nl2sql_markdown_preparation_lifecycle.py` |
+| SQL 生成評価 | lease / worker / attempt による条件付き保存。中断 attempt を timeout と記録し、遅着結果を破棄 | `test_nl2sql_quality_evaluation.py` |
+| 合成データ生成 | Oracle operation / session を照合。確認不能時は状態不明を表示し、生成呼び出しを再送しない | `test_nl2sql_synthetic_runs.py` |
+
+実 DB は job テーブルの SELECT 集計で確認し、回復のために生成・公開・反映操作を呼ばない。2026-09-15 12:18 JST の対象集計では、ontology / SQL job / schema refresh / DB Profile 一覧更新 / 評価 / 合成データに pending・running 等の残留はなかった。これは同時点の観測であり、将来の全外部障害を保証するものではない。

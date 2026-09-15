@@ -76,6 +76,7 @@ from .incremental_store import (
     _decode_cursor,
     _profile_matches_query,
     _profile_search_key,
+    _state_document_matches_fence,
     normalize_profile_sort,
     paginate_sorted_profiles,
 )
@@ -473,6 +474,10 @@ class SelectAiDbProfileListRefreshSync:
     job_id: str = ""
     required: bool = False
     reason_code: str = ""
+
+
+class JobExecutionLost(RuntimeError):
+    """接管または期限切れ後の SQL job 実行を中止する。"""
 
 
 class ProfileListRefreshExecutionLost(RuntimeError):
@@ -2850,6 +2855,7 @@ class StoredJob:
     # 自プロセスの worker スレッドが実行している job か。False は他 worker / 再起動前の
     # snapshot 由来で、in-flight の間は repository を正本として読み直す(永続化しない)。
     owned: bool = False
+    execution_owner: tuple[str, int] | None = None
 
 
 _NL2SQL_JOB_STAGES = (
@@ -3083,6 +3089,7 @@ class Nl2SqlService:
         self._schema_refresh_dispatch_lock = threading.Lock()
         self._schema_refresh_dispatching_job_ids: set[str] = set()
         self._schema_refresh_worker_id = f"api:{uuid.uuid4()}"
+        self._job_execution_context = threading.local()
         self._profile_list_refresh_owned: dict[str, tuple[str, int]] = {}
         self._profile_list_refresh_worker_id = f"api:{uuid.uuid4()}"
         self._profile_list_refresh_lock = threading.Lock()
@@ -3818,10 +3825,93 @@ class Nl2SqlService:
             return str(payload.get("feedback_rating") or "unrated")
         return str(payload.get("status") or "")
 
+    def _job_execution_owner(self, job: StoredJob) -> tuple[str, int] | None:
+        context: dict[str, tuple[str, int]] = getattr(self._job_execution_context, "owners", {})
+        return context.get(job.job_id, job.execution_owner)
+
+    def _execution_job_locked(self, job_id: str) -> StoredJob:
+        job = self._jobs[job_id]
+        if (
+            self._incremental_repository is not None
+            and job.execution_owner != self._job_execution_owner(job)
+        ):
+            raise JobExecutionLost(job_id)
+        return job
+
+    def _set_job_execution_owner(self, job: StoredJob) -> None:
+        owners = getattr(self._job_execution_context, "owners", {})
+        owners[job.job_id] = (job.worker_id, job.attempt)
+        self._job_execution_context.owners = owners
+        job.execution_owner = (job.worker_id, job.attempt)
+
+    def _assert_job_execution(self, job_id: str) -> None:
+        repository = self._incremental_repository
+        if repository is None:
+            return
+        with self._lock:
+            job = self._jobs.get(job_id)
+            owner = self._job_execution_owner(job) if job else None
+        if job is None or owner is None or job.execution_owner != owner:
+            raise JobExecutionLost(job_id)
+        try:
+            current = repository.get_document("jobs", job_id)
+        except Exception as exc:
+            self._raise_incremental_repository_failure(
+                operation="job_owner_probe",
+                exc=exc,
+                operation_error_code="job_owner_query_failed",
+            )
+        if current is None or not _state_document_matches_fence(
+            current,
+            {"status": "running", "worker_id": owner[0], "attempt": owner[1]},
+            require_live_lease=True,
+        ):
+            raise JobExecutionLost(job_id)
+
+    def _persist_job_snapshot(self, job: StoredJob, history: HistoryItem | None = None) -> None:
+        payload = self._job_to_snapshot(job)
+        documents = [("jobs", job.job_id, payload)]
+        if history is not None:
+            documents.append(("history", history.id, history.model_dump(mode="json")))
+        repository = self._incremental_repository
+        if repository is None or (job.status == JobStatus.PENDING and job.attempt == 0):
+            self._persist_entities(documents)
+            return
+        owner = self._job_execution_owner(job)
+        if owner is None or job.execution_owner != owner:
+            raise JobExecutionLost(job.job_id)
+        try:
+            saved = repository.patch_document_if_current(
+                "jobs",
+                job.job_id,
+                payload,
+                expected={"status": "running", "worker_id": owner[0], "attempt": owner[1]},
+                status=job.status.value,
+                require_live_lease=True,
+                upserts=[
+                    (
+                        collection,
+                        identity,
+                        item,
+                        str(item.get("profile_id") or ""),
+                        self._document_status(collection, item),
+                    )
+                    for collection, identity, item in documents[1:]
+                ],
+            )
+        except Exception as exc:
+            self._raise_incremental_repository_failure(
+                operation="job_save",
+                exc=exc,
+                operation_error_code="incremental_document_save_failed",
+            )
+        if saved is None:
+            raise JobExecutionLost(job.job_id)
+
     def _persist_job(self, job_id: str) -> None:
         with self._lock:
-            payload = self._job_to_snapshot(self._jobs[job_id])
-        self._persist_entities([("jobs", job_id, payload)])
+            job = replace(self._jobs[job_id])
+        self._persist_job_snapshot(job)
 
     def _snapshot_locked(self) -> dict[str, Any]:
         return {
@@ -3940,31 +4030,35 @@ class Nl2SqlService:
         job.lease_expires_at = None
 
     def _load_job_record(self, job_id: str) -> StoredJob | None:
-        """job をプロセス内 cache と repository から解決する。
-
-        自プロセスが実行していない(owned=False)in-flight job は cache があっても
-        repository を読み直す。gunicorn の複数 worker 構成で別 worker が進めた状態を
-        取りこぼさないため。running job は lease 付き worker queue で再 claim 可能なため、
-        読み取り時には interrupted 化しない。
-        """
-
+        """永続状態を返し、実行中のローカル object を他 worker の snapshot で置換しない。"""
         with self._lock:
-            job = self._jobs.get(job_id)
-            refresh = job is not None and not job.owned and job.status in _IN_FLIGHT_JOB_STATUSES
+            local = self._jobs.get(job_id)
         repository = self._incremental_repository
-        if (job is None or refresh) and repository is not None:
-            try:
-                document = repository.get_document("jobs", job_id)
-            except Exception as exc:
-                self._raise_incremental_repository_failure(
-                    operation="job_load",
-                    exc=exc,
-                    operation_error_code="job_query_failed",
-                )
-            if document is not None:
-                job = self._job_from_snapshot(document)
-                with self._lock:
-                    self._jobs[job_id] = job
+        if repository is None:
+            return local
+        try:
+            document = repository.get_document("jobs", job_id)
+        except Exception as exc:
+            self._raise_incremental_repository_failure(
+                operation="job_load",
+                exc=exc,
+                operation_error_code="job_query_failed",
+            )
+        if document is None:
+            return None
+        # 完了結果の保存障害時だけ、同じ実行がまだ有効なら手元の結果と警告を表示する。
+        if local is not None and local.warning_message and local.execution_owner:
+            worker_id, attempt = local.execution_owner
+            if _state_document_matches_fence(
+                document,
+                {"status": "running", "worker_id": worker_id, "attempt": attempt},
+                require_live_lease=True,
+            ):
+                return local
+        job = self._job_from_snapshot(document)
+        with self._lock:
+            if local is None or not local.owned:
+                self._jobs[job_id] = job
         return job
 
     def _job_from_snapshot(self, data: dict[str, Any]) -> StoredJob:
@@ -6559,8 +6653,9 @@ class Nl2SqlService:
     ) -> None:
         """実処理と UI の段階表示を同じ job snapshot 上で進める。"""
 
+        self._assert_job_execution(job_id)
         with self._lock:
-            job = self._jobs[job_id]
+            job = self._execution_job_locked(job_id)
             known_stages = {step.stage for step in job.steps}
             requested_stages = {
                 stage for stage in (completed_stage, running_stage) if stage is not None
@@ -6756,6 +6851,7 @@ class Nl2SqlService:
                 return None
             claimed = self._job_from_snapshot(payload)
             claimed.owned = True
+            self._set_job_execution_owner(claimed)
             with self._lock:
                 self._jobs[claimed.job_id] = claimed
             return claimed
@@ -6816,9 +6912,11 @@ class Nl2SqlService:
 
         ローカルフラグに加えて repository 上のキャンセル要求も確認する。gunicorn の
         複数 worker 構成では cancel API が別プロセスへ届くため、ローカルフラグだけでは
-        止まらない。repository の確認失敗は job を落とさず無視する(次の境界で再確認)。
+        止まらない。キャンセル要求の取得失敗は次の境界で再確認する。
+        実行所有権の取得失敗は別に扱い、確認できないまま次の外部呼び出しへ進めない。
         """
 
+        self._assert_job_execution(job_id)
         with self._lock:
             job = self._jobs.get(job_id)
             if job is None:
@@ -17498,7 +17596,17 @@ class Nl2SqlService:
                 actor_is_system_admin = pending.actor_is_system_admin
             with actor_scope(actor_user_uuid, is_system_admin=actor_is_system_admin):
                 self._run_job(job_id)
+        except JobExecutionLost:
+            logger.info("nl2sql_job_execution_lost", extra={"job_id": job_id})
         except Exception as exc:  # pragma: no cover - defensive boundary
+            try:
+                self._assert_job_execution(job_id)
+            except JobExecutionLost:
+                logger.info("nl2sql_job_late_error_discarded", extra={"job_id": job_id})
+                return
+            except Exception:
+                logger.exception("nl2sql_job_error_owner_probe_failed", extra={"job_id": job_id})
+                return
             with self._lock:
                 job = self._jobs.get(job_id)
                 if job is None:
@@ -17507,6 +17615,11 @@ class Nl2SqlService:
                         "nl2sql_job_failed_without_record",
                         extra={"job_id": job_id, "exception_type": type(exc).__name__},
                     )
+                    return
+                if (
+                    self._incremental_repository is not None
+                    and job.execution_owner != self._job_execution_owner(job)
+                ):
                     return
                 job.status = JobStatus.ERROR
                 if isinstance(exc, JobCancelledError):
@@ -17551,6 +17664,9 @@ class Nl2SqlService:
                         "exception_type": type(persist_exc).__name__,
                     },
                 )
+        finally:
+            owners = getattr(self._job_execution_context, "owners", {})
+            owners.pop(job_id, None)
 
     def _build_interpretation_artifact(
         self,
@@ -17839,9 +17955,10 @@ class Nl2SqlService:
             return None
 
     def _run_job(self, job_id: str) -> None:
+        self._assert_job_execution(job_id)
         total_started = time.monotonic()
         with self._lock:
-            job = self._jobs[job_id]
+            job = self._execution_job_locked(job_id)
             job.status = JobStatus.RUNNING
             job.started_at = job.started_at or _utc_now()
             job.timing = TimingEnvelope(created_at=job.created_at, started_at=job.started_at)
@@ -18042,7 +18159,7 @@ class Nl2SqlService:
         )
         result = result.model_copy(update={"timing": timing})
         with self._lock:
-            job = self._jobs[job_id]
+            job = self._execution_job_locked(job_id)
             final_steps = [
                 (
                     step.model_copy(
@@ -18095,13 +18212,9 @@ class Nl2SqlService:
             lease_expires_at=None,
         )
         persistence_warning: str | None = None
+        self._raise_if_job_cancelled(job_id)
         try:
-            self._persist_entities(
-                [
-                    ("jobs", job_id, self._job_to_snapshot(published)),
-                    ("history", history_item.id, history_item.model_dump(mode="json")),
-                ]
-            )
+            self._persist_job_snapshot(published, history_item)
         except (Nl2SqlPersistenceUnavailable, Nl2SqlRepositoryOperationFailed) as exc:
             persistence_warning = _JOB_RESULT_PERSISTENCE_WARNING
             logger.exception(
@@ -18114,7 +18227,7 @@ class Nl2SqlService:
                 },
             )
         with self._lock:
-            job = self._jobs[job_id]
+            job = self._execution_job_locked(job_id)
             job.steps = final_steps
             job.status = final_status
             job.error_message = final_error_message
