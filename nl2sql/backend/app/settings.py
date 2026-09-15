@@ -190,6 +190,8 @@ class Settings(BaseServiceSettings):
     nl2sql_ontology_extraction_gleaning_passes: int = 1
     # 1 回の抽出呼び出しに載せる資料本文の上限(チャンクが大きいほど抽出漏れが増えるため)。
     nl2sql_ontology_extraction_batch_max_chars: int = 12000
+    # 公開前の Markdown 解析は自動再送せず、待機時間を含む期限を永続化する。
+    nl2sql_ontology_preparation_timeout_seconds: float = Field(default=600.0, gt=0)
     nl2sql_ontology_worker_poll_seconds: float = 1.0
     nl2sql_ontology_worker_claim_timeout_seconds: float = 3900.0
     # Oracle Profile 同期は永続 job で実行し、DB round-trip と job 全体を別々に制限する。

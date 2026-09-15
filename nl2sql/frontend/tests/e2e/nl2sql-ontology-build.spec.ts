@@ -3090,3 +3090,47 @@ test("既存定義取り込みの廃止後も草稿の保存と公開を操作�
   await confirmPreparedPublish(page);
   await expect.poll(() => state.published).toBe(true);
 });
+
+for (const reason of ["timeout", "restart"] as const) {
+  test(`公開準備の${reason}後に再試行し、確認前は公開しない`, async ({ page }, testInfo) => {
+    const state = await existingMarkdown(page);
+    let attempts = 0;
+    let failed = false;
+    const message = reason === "timeout"
+      ? "Markdown の解析が実行期限を超えました。Enterprise AI の接続・応答状況を確認し、再度公開前の確認を実行してください。"
+      : "サーバーの再起動により Markdown の解析が中断されました。再度公開前の確認を実行してください。";
+    const preparation = () => ({
+      id: `recovery-${attempts}`, status: attempts > 1 ? "ready" : failed ? "failed" : "running",
+      draft_etag: state.draftMarkdownEtag, expected_head: "", display_version: 4,
+      findings: [], differences: [], error_message_ja: failed && attempts === 1 ? message : "",
+    });
+    await page.route("**/api/nl2sql/profiles/*/ontology-markdown/prepare", route => {
+      attempts++;
+      return fulfillJson(route, preparation());
+    });
+    await page.route("**/api/nl2sql/profiles/*/ontology-markdown/preparations/*", route => fulfillJson(route, preparation()));
+    const publish = page.getByRole("button", { name: "オントロジーを公開", exact: true });
+    await publish.click();
+    await expect(publish).toBeDisabled();
+    await expect(page.getByText("Markdown を解析・検証しています", { exact: true })).toBeVisible();
+    failed = true;
+    await expect(page.getByText(message, { exact: true })).toBeVisible();
+    await expect(publish).toBeEnabled();
+    const widths = testInfo.project.name === "desktop" ? [1280, 1920] : [375];
+    for (const width of widths) {
+      await page.setViewportSize({ width, height: 900 });
+      for (const theme of ["light", "dark"] as const) {
+        await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
+        await publish.focus();
+        await expect(publish).toBeFocused();
+        await page.screenshot({ path: testInfo.outputPath(`preparation-${reason}-${width}-${theme}.png`) });
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      }
+    }
+    await page.keyboard.press("Enter");
+    await expect(page.getByRole("button", { name: "確認した内容を公開", exact: true })).toBeVisible();
+    expect(attempts).toBe(2);
+    expect(state.published).toBe(false);
+    await expect(page.getByTestId("ontology-markdown-draft-editor")).toHaveValue(generatedDraftMarkdown);
+  });
+}

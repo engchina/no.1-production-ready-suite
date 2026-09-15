@@ -3358,8 +3358,16 @@ async def test_lifespan_interrupts_build_jobs_off_loop_before_closing_pools(
         assert threading.get_ident() != loop_thread
         calls.append("build_shutdown")
 
+    def preparation_shutdown(runtime: Any) -> None:
+        assert threading.get_ident() != loop_thread
+        from app.features.nl2sql.ontology_router import ontology_runtime
+
+        assert runtime is ontology_runtime
+        calls.append("preparation_shutdown")
+
+    monkeypatch.setattr(main, "shutdown_markdown_preparations", preparation_shutdown)
     monkeypatch.setattr("app.main.ontology_build_service.shutdown", shutdown)
     monkeypatch.setattr(main, "close_oracle_pools", lambda: calls.append("close_pools"))
     async with main.lifespan(FastAPI()):
         assert calls == []
-    assert calls == ["build_shutdown", "close_pools"]
+    assert calls == ["preparation_shutdown", "build_shutdown", "close_pools"]

@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import threading
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -32,7 +33,7 @@ from .ontology_service import (
     OntologyNotFoundError,
     OntologyVersionConflictError,
 )
-from .ontology_store import canonical_json, stable_ontology_id
+from .ontology_store import OntologyVersionConflict, canonical_json, stable_ontology_id
 from .ontology_unified_model import (
     CONCEPT_ORDER,
     DEFINITIONS,
@@ -43,6 +44,31 @@ from .ontology_unified_model import (
 PREPARATION = "ontology_markdown_preparation"
 SNAPSHOT = "ontology_markdown_snapshot"
 HEAD = "ontology_markdown_head"
+logger = logging.getLogger(__name__)
+_preparation_lock = threading.Lock()
+_inprocess_preparations: dict[tuple[int, str], tuple[MarkdownOntologyWorkspace, str]] = {}
+
+
+def shutdown_markdown_preparations(runtime: Any) -> None:
+    """このプロセスが開始した解析だけを終了扱いにする。DB I/O は off-loop。"""
+    with _preparation_lock:
+        owned = [
+            (key, entry) for key, entry in _inprocess_preparations.items() if key[0] == id(runtime)
+        ]
+    for (_, identity), (workspace, profile_id) in owned:
+        try:
+            workspace._fail_preparation(
+                profile_id,
+                identity,
+                "PREPARATION_INTERRUPTED",
+                "サーバーの再起動により Markdown の解析が中断されました。"
+                "再度公開前の確認を実行してください。",
+            )
+        except Exception as exc:
+            logger.error(
+                "公開準備の中断状態を保存できませんでした。次回取得時に実行期限を確認します。",
+                extra={"job_id": identity, "error_type": type(exc).__name__},
+            )
 
 
 def now() -> str:
@@ -160,6 +186,10 @@ class MarkdownOntologyWorkspace(ProfileOntologyWorkspaceService):
             schema=schema,
             expected_head=self.head(profile_id)["snapshot_id"],
             created_at=now(),
+            deadline_at=(
+                datetime.now(UTC)
+                + timedelta(seconds=get_settings().nl2sql_ontology_preparation_timeout_seconds)
+            ).isoformat(),
             findings=[],
             differences=[],
             definitions=[],
@@ -177,32 +207,140 @@ class MarkdownOntologyWorkspace(ProfileOntologyWorkspaceService):
             }
         )
         if get_settings().nl2sql_ontology_worker_mode == "inprocess":
+            with _preparation_lock:
+                _inprocess_preparations[(id(self.runtime), identity)] = (self, profile_id)
             threading.Thread(
-                target=self.run_preparation, args=(profile_id, identity), daemon=True
+                target=self._run_inprocess, args=(profile_id, identity), daemon=True
             ).start()
         return value
 
+    def _run_inprocess(self, profile_id: str, identity: str) -> None:
+        try:
+            self.run_preparation(profile_id, identity)
+        except Exception as exc:
+            logger.error(
+                "公開準備の実行・保存に失敗しました。ジョブ ID で DB 接続ログを確認してください。",
+                extra={
+                    "job_id": identity,
+                    "profile_id": profile_id,
+                    "error_type": type(exc).__name__,
+                },
+            )
+        finally:
+            with _preparation_lock:
+                _inprocess_preparations.pop((id(self.runtime), identity), None)
+
+    def _preparation_record(
+        self, profile_id: str, identity: str
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        record = self.document(profile_id, identity, PREPARATION)
+        value = dict(json.loads(record["content"]))
+        if definition_fingerprint(value) != record["content_hash"]:
+            raise OntologyGateBlockedError(
+                "ARTIFACT_HASH_MISMATCH", "成果物の整合性を確認できません。"
+            )
+        return record, value
+
+    @staticmethod
+    def _remaining(value: dict[str, Any]) -> float:
+        # 旧版の実行中レコードにも期限を適用し、強制終了後の孤児を取得時に収束させる。
+        deadline = (
+            datetime.fromisoformat(value["deadline_at"])
+            if value.get("deadline_at")
+            else datetime.fromisoformat(value["created_at"])
+            + timedelta(seconds=get_settings().nl2sql_ontology_preparation_timeout_seconds)
+        )
+        return (deadline - datetime.now(UTC)).total_seconds()
+
+    def _sync_preparation_job(self, profile_id: str, identity: str) -> None:
+        # 別テーブルの job は成果物を正本として修復する。競合時は最新状態を読み直す。
+        for _ in range(3):
+            record, value = self._preparation_record(profile_id, identity)
+            job = self.store.get_job(identity)
+            status = {"ready": "succeeded", "published": "succeeded"}.get(
+                value["status"], value["status"]
+            )
+            if not job or (job["status"] == status and job.get("payload") == value):
+                return
+            try:
+                self.store.save_job(
+                    {**job, "status": status, "payload": value}, expected_etag=job["etag"]
+                )
+            except OntologyVersionConflict:
+                continue
+            latest = self.store.get_artifact(identity)
+            if latest and latest["etag"] == record["etag"]:
+                return
+        logger.warning(
+            "公開準備ジョブの状態同期が競合しました。次回取得時に再確認します。",
+            extra={"job_id": identity, "profile_id": profile_id},
+        )
+
+    def _fail_preparation(self, profile_id: str, identity: str, code: str, message: str) -> None:
+        for _ in range(3):
+            record, value = self._preparation_record(profile_id, identity)
+            if value["status"] not in {"queued", "running"}:
+                break
+            value.update(
+                status="failed", error_code=code, error_message_ja=message, finished_at=now()
+            )
+            try:
+                self.store.save_artifact(
+                    self.artifact(profile_id, identity, PREPARATION, value),
+                    expected_etag=record["etag"],
+                )
+            except OntologyVersionConflict:
+                continue
+            logger.warning(
+                message, extra={"job_id": identity, "profile_id": profile_id, "error_code": code}
+            )
+            break
+        self._sync_preparation_job(profile_id, identity)
+
     def preparation(self, profile_id: str, identity: str) -> dict[str, Any]:
-        return self._read(profile_id, identity, PREPARATION)
+        value = self._read(profile_id, identity, PREPARATION)
+        if value["status"] in {"queued", "running"} and self._remaining(value) <= 0:
+            self._fail_preparation(
+                profile_id,
+                identity,
+                "PREPARATION_TIMEOUT",
+                "Markdown の解析が実行期限を超えました。"
+                "Enterprise AI の接続・応答状況を確認し、再度公開前の確認を実行してください。",
+            )
+            value = self._read(profile_id, identity, PREPARATION)
+        self._sync_preparation_job(profile_id, identity)
+        return value
 
     def run_preparation(self, profile_id: str, identity: str) -> None:
-        value = self.preparation(profile_id, identity)
-        if value["status"] in {"ready", "failed", "published"}:
+        self.preparation(profile_id, identity)
+        record, value = self._preparation_record(profile_id, identity)
+        # 同時 claim や再配送で解析を再送しない。中断・期限切れは別の遷移で扱う。
+        if value["status"] != "queued":
+            return
+        value.update(status="running", started_at=now())
+        try:
+            record = self.store.save_artifact(
+                self.artifact(profile_id, identity, PREPARATION, value),
+                expected_etag=record["etag"],
+            )
+        except OntologyVersionConflict:
             return
         try:
+            self._sync_preparation_job(profile_id, identity)
+            logger.info(
+                "公開準備を開始しました。Enterprise AI で Markdown を解析します。",
+                extra={
+                    "job_id": identity,
+                    "profile_id": profile_id,
+                    "deadline_at": value.get("deadline_at"),
+                },
+            )
             if get_settings().app_auth_enabled and not get_settings().local_debug_enabled:
                 from app.security.service import get_security_service
 
                 authorize_definition_operation(
                     profile_id, get_security_service().principal_for_worker(value["actor"])
                 )
-            # 中断後の再 claim では同じ解析を黙示再送しない。
-            if value["status"] == "running":
-                raise OntologyGateBlockedError(
-                    "PREPARATION_INTERRUPTED", "解析が中断されました。再確認してください。"
-                )
-            value["status"] = "running"
-            self._write(profile_id, identity, PREPARATION, value)
             from .structured_outputs import response_format
 
             client = getattr(self.runtime.legacy_service, "_enterprise_ai_client", None)
@@ -234,6 +372,12 @@ class MarkdownOntologyWorkspace(ProfileOntologyWorkspaceService):
                 ),
                 response_format=response_format(MarkdownExtraction),
                 max_output_tokens=get_settings().nl2sql_ontology_extraction_max_output_tokens,
+                timeout_seconds=max(1.0, self._remaining(value)),
+                max_retries=0,
+            )
+            logger.info(
+                "Markdown の解析応答を受信しました。定義・行の網羅性を検証します。",
+                extra={"job_id": identity, "profile_id": profile_id},
             )
             parsed = MarkdownExtraction.model_validate_json(str(output))
             definitions, conflicts = merge_definitions(profile_id, parsed.definitions)
@@ -322,19 +466,48 @@ class MarkdownOntologyWorkspace(ProfileOntologyWorkspaceService):
             )
         except Exception as exc:
             value["status"] = "failed"
-            value["error_message_ja"] = getattr(exc, "message_ja", str(exc))
-        value["finished_at"] = now()
-        self._write(profile_id, identity, PREPARATION, value)
-        job = self.store.get_job(identity)
-        if job:
-            self.store.save_job(
-                {
-                    **job,
-                    "status": "succeeded" if value["status"] == "ready" else "failed",
-                    "payload": value,
-                },
-                expected_etag=job["etag"],
+            value["error_code"] = getattr(exc, "code", "PREPARATION_FAILED")
+            value["error_message_ja"] = getattr(
+                exc,
+                "message_ja",
+                "Markdown の解析に失敗しました。"
+                "Enterprise AI の接続・応答状況を確認し、再度公開前の確認を実行してください。",
             )
+            logger.error(
+                "公開準備の解析・検証に失敗しました。",
+                extra={
+                    "job_id": identity,
+                    "profile_id": profile_id,
+                    "error_code": value["error_code"],
+                    "error_type": type(exc).__name__,
+                },
+            )
+        # timeout / shutdown の状態を遅着結果で上書きしない。
+        self.preparation(profile_id, identity)
+        value["finished_at"] = now()
+        try:
+            self.store.save_artifact(
+                self.artifact(profile_id, identity, PREPARATION, value),
+                expected_etag=record["etag"],
+            )
+        except OntologyVersionConflict:
+            logger.info(
+                "中断・期限切れ後の公開準備結果を破棄しました。",
+                extra={"job_id": identity, "profile_id": profile_id},
+            )
+            return
+        self._sync_preparation_job(profile_id, identity)
+        logger.info(
+            "公開準備が終了しました。",
+            extra={
+                "job_id": identity,
+                "profile_id": profile_id,
+                "status": value["status"],
+                "elapsed_seconds": (
+                    datetime.now(UTC) - datetime.fromisoformat(value["started_at"])
+                ).total_seconds(),
+            },
+        )
 
     def _bundle(
         self, value: dict[str, Any], definitions: list[BusinessDefinition] | None = None

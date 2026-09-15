@@ -18,6 +18,7 @@ from starlette.responses import JSONResponse
 from app.api.problems import api_problem_response, request_id_for, validation_field_problems
 from app.api.router import api_router
 from app.clients.oracle_runtime import close_oracle_pools
+from app.features.nl2sql.ontology_markdown_workspace import shutdown_markdown_preparations
 from app.features.nl2sql.ontology_router import (
     OntologyApiRuntime,
     ontology_build_service,
@@ -84,6 +85,7 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         synthetic_stop.set()
+        await run_in_threadpool(shutdown_markdown_preparations, ontology_runtime)
         await run_in_threadpool(ontology_build_service.shutdown)
         close_oracle_pools()
 
