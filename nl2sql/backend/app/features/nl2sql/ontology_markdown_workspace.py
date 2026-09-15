@@ -36,10 +36,8 @@ from .ontology_store import canonical_json, stable_ontology_id
 from .ontology_unified_model import (
     CONCEPT_ORDER,
     DEFINITIONS,
-    legacy_definitions,
     merge_definitions,
     project_graph,
-    render_concepts,
 )
 
 PREPARATION = "ontology_markdown_preparation"
@@ -75,11 +73,6 @@ class MarkdownConfirmRequest(BaseModel):
     draft_etag: str
     expected_head: str = ""
     confirmed: Literal[True]
-
-
-class MarkdownMigrationRequest(BaseModel):
-    preview_id: str = ""
-    draft_etag: str = ""
 
 
 class MarkdownOntologyWorkspace(ProfileOntologyWorkspaceService):
@@ -543,98 +536,3 @@ class MarkdownOntologyWorkspace(ProfileOntologyWorkspaceService):
         )
         # 公開後の graph は profile/head 読取時に同じ snapshot から登録する。
         return job
-
-    def migration_preview(self, profile_id: str, actor: Any) -> dict[str, Any]:
-        authorize_definition_operation(profile_id, actor)
-        state = self.runtime.ontology_markdown_state(profile_id)
-        bundles = self.list_results(profile_id)
-        prepared = self.runtime.prepare_build_schema_context(profile_id)
-        current = self.runtime.build_proposal_scope(
-            profile_id, schema_fingerprint=str(prepared.schema_fingerprint)
-        )[1]
-        definitions, conflicts = merge_definitions(
-            profile_id,
-            [*legacy_definitions(current), *[d for b in bundles[:1] for d in b.definitions]],
-        )
-        base = state.draft_markdown or state.published_markdown
-        existing_ids = set(re.findall(r"概念 ID: `([^`]+)`", base))
-        definitions = [d for d in definitions if d.id not in existing_ids]
-        migration_hash = definition_fingerprint([d.model_dump(mode="json") for d in definitions])
-        marker = f"<!-- nl2sql:migration:{migration_hash} -->"
-        already_imported = marker in base or not definitions
-        identity = stable_ontology_id(
-            "markdown_migration",
-            profile_id,
-            definition_fingerprint([base, [d.model_dump(mode="json") for d in definitions]]),
-        )
-        prior = self.store.get_artifact(identity)
-        if prior:
-            return dict(
-                json.loads(
-                    self.document(profile_id, identity, "ontology_markdown_migration")["content"]
-                )
-            )
-        # 元文を保ち、差分を確認する。旧章も公開前解析で統合される。
-        value = dict(
-            id=identity,
-            profile_id=profile_id,
-            draft_etag=state.draft_etag,
-            base_revision_id=(
-                state.draft_revision.id if state.draft_revision else current.revision.id
-            ),
-            markdown=(
-                base
-                if already_imported
-                else base + "\n\n" + render_concepts(definitions, conflicts) + "\n\n" + marker
-            ),
-            marker=marker,
-            scope=list(self._scope(profile_id)[:2]),
-            conflicts=conflicts,
-            applied=already_imported,
-        )
-        return self._write(profile_id, identity, "ontology_markdown_migration", value)
-
-    def apply_migration(
-        self, profile_id: str, request: MarkdownMigrationRequest, actor: Any
-    ) -> Any:
-        authorize_definition_operation(profile_id, actor)
-        value = json.loads(
-            self.document(profile_id, request.preview_id, "ontology_markdown_migration")["content"]
-        )
-        if value["applied"]:
-            return self.runtime.ontology_markdown_state(profile_id)
-        state = self.runtime.ontology_markdown_state(profile_id)
-        # 応答喪失や適用記録保存前の停止でも、保存済み本文を再追加しない。
-        if value["marker"] in state.draft_markdown:
-            value["applied"] = True
-            self._write(profile_id, request.preview_id, "ontology_markdown_migration", value)
-            return state
-        if value["scope"] != list(self._scope(profile_id)[:2]):
-            raise OntologyVersionConflictError(
-                "ONTOLOGY_SCOPE_CHANGED",
-                "Profile または Schema が変更されました。移行を再確認してください。",
-            )
-        if state.draft_etag != request.draft_etag or state.draft_etag != value["draft_etag"]:
-            raise OntologyVersionConflictError(
-                "MARKDOWN_DRAFT_CHANGED", "下書きが変更されました。移行内容を再確認してください。"
-            )
-        if state.draft_revision and state.draft_revision.status == "draft":
-            from .ontology_router import OntologyMarkdownDraftPatch
-
-            result = self.runtime.save_ontology_markdown_draft(
-                profile_id,
-                OntologyMarkdownDraftPatch(markdown=value["markdown"], base_etag=state.draft_etag),
-            )
-        else:
-            self.runtime.create_build_markdown_draft(
-                profile_id=profile_id,
-                base_revision_id=value["base_revision_id"],
-                payloads=[],
-                titles=[],
-                markdown=value["markdown"],
-                note="既存13分類の Markdown 移行",
-            )
-            result = self.runtime.ontology_markdown_state(profile_id)
-        value["applied"] = True
-        self._write(profile_id, request.preview_id, "ontology_markdown_migration", value)
-        return result

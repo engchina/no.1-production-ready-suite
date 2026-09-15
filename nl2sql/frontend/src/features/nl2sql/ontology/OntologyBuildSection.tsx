@@ -1903,11 +1903,9 @@ export function OntologyBuildSection({
           key={profileId} profileId={profileId} profileLabel={profileLabel ?? profileId}
           signature={`${draftMarkdown}\n${publishedRevision?.id ?? ""}\n${publishedRevision?.etag ?? ""}`}
           disabled={!canEditDraftRevision || publishRunning || busy !== ""}
-          importDisabled={jobRunning || publishRunning || busy !== ""}
           save={async () => draftDirty ? await saveDraftMarkdown({silent:true}) : markdownState}
           onPublished={setPublishJob}
           onBusyChange={setBusy}
-          onMigrated={state => applyMarkdownState(state, {reason:"save"})}
         />}
         {!markdownLoading && publishJob ? (
           <div

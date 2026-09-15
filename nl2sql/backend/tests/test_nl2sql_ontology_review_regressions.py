@@ -28,7 +28,6 @@ from app.features.nl2sql.ontology_definitions import (
 )
 from app.features.nl2sql.ontology_markdown_workspace import (
     MarkdownConfirmRequest,
-    MarkdownOntologyWorkspace,
 )
 from app.features.nl2sql.ontology_models import (
     BusinessRuleDefinition,
@@ -65,7 +64,7 @@ def settings(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.parametrize("restart", [False, True])
-def test_builds_and_migration_do_not_copy_another_profiles_concepts(
+def test_builds_do_not_copy_another_profiles_concepts(
     monkeypatch: pytest.MonkeyPatch,
     restart: bool,
 ) -> None:
@@ -103,9 +102,6 @@ def test_builds_and_migration_do_not_copy_another_profiles_concepts(
         assert other not in job.markdown_output
         assert all(other not in prompt for prompt in client.calls)
         assert concept in job.markdown_output
-        if concept == "SalesPrivate":
-            preview = MarkdownOntologyWorkspace(rt).migration_preview("support", None)
-            assert "SalesPrivate" not in preview["markdown"]
         if concept == "SalesNew":
             assert "SalesPrivate" in job.markdown_output  # 同じ Profile の定義は保持する。
         if restart:

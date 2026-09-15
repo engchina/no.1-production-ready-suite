@@ -504,35 +504,19 @@ def test_all_types_publish_edit_and_keep_the_original_snapshot() -> None:
     assert original["markdown"] not in published_context(rt, "sales", first.id, {})
 
 
-def test_migration_is_previewed_idempotent_and_recovers_after_response_loss(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from app.features.nl2sql.ontology_markdown_workspace import MarkdownMigrationRequest
+async def test_removed_definition_import_api_is_not_exposed() -> None:
+    from httpx import ASGITransport, AsyncClient
 
-    rt, svc, _, original = prepared_workspace()
-    svc.save_build(
-        profile_id="sales",
-        job_id="legacy",
-        definitions=model(),
-        source_revision_id=original["source_revision_id"],
-        schema_fingerprint="schema",
-    )
-    preview = svc.migration_preview("sales", None)
-    assert original["markdown"] in preview["markdown"]
-    assert not preview["applied"] and not svc.head("sales")["snapshot_id"]
-    request = MarkdownMigrationRequest(preview_id=preview["id"], draft_etag=preview["draft_etag"])
-    write = svc._write
+    from app.main import app
 
-    def lost_result(*args: Any, **kwargs: Any) -> dict[str, Any]:
-        if args[2] == "ontology_markdown_migration":
-            raise RuntimeError("response lost after draft saved")
-        return write(*args, **kwargs)
-
-    monkeypatch.setattr(svc, "_write", lost_result)
-    with pytest.raises(RuntimeError):
-        svc.apply_migration("sales", request, None)
-    saved = rt.ontology_markdown_state("sales").draft_markdown
-    monkeypatch.setattr(svc, "_write", write)
-    assert svc.apply_migration("sales", request, None).draft_markdown == saved
-    assert svc.migration_preview("sales", None)["applied"]
-    assert not svc.head("sales")["snapshot_id"]
+    paths = app.openapi()["paths"]
+    prefix = "/api/nl2sql/profiles/{profile_id}/ontology-markdown"
+    assert f"{prefix}/prepare" in paths
+    assert f"{prefix}/publish" in paths
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        for suffix in ("migration-preview", "migrate"):
+            assert f"{prefix}/{suffix}" not in paths
+            response = await client.post(
+                f"/api/nl2sql/profiles/sales/ontology-markdown/{suffix}", json={}
+            )
+            assert response.status_code == 404

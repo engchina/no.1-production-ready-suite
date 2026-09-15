@@ -1,4 +1,4 @@
-"""Markdown 公開準備・確認・旧定義取込の Profile 所有 API。"""
+"""Markdown 公開準備・確認の Profile 所有 API。"""
 
 from typing import Any
 
@@ -8,7 +8,6 @@ from pr_backend_core import ApiResponse
 from .ontology_definitions import DefinitionDataValidationRequest
 from .ontology_markdown_workspace import (
     MarkdownConfirmRequest,
-    MarkdownMigrationRequest,
     MarkdownOntologyWorkspace,
     MarkdownPrepareRequest,
 )
@@ -101,32 +100,6 @@ def create_markdown_router(runtime: Any, raise_error: Any) -> APIRouter:
                 svc.snapshot(profile_id, identity) if svc.store.get_artifact(identity) else None
             )
             return ApiResponse(data={"job": snapshot["publish_job"] if snapshot else None})
-        except Exception as exc:
-            raise_error(exc)
-            raise
-
-    @router.post("/profiles/{profile_id}/ontology-markdown/migration-preview")
-    def migration_preview(profile_id: str, request: Request) -> ApiResponse[Any]:
-        try:
-            return ApiResponse(
-                data=service(request, profile_id).migration_preview(
-                    profile_id, principal_from_request(request)
-                )
-            )
-        except Exception as exc:
-            raise_error(exc)
-            raise
-
-    @router.post("/profiles/{profile_id}/ontology-markdown/migrate")
-    def migrate(
-        profile_id: str, body: MarkdownMigrationRequest, request: Request
-    ) -> ApiResponse[Any]:
-        try:
-            return ApiResponse(
-                data=service(request, profile_id).apply_migration(
-                    profile_id, body, principal_from_request(request)
-                )
-            )
         except Exception as exc:
             raise_error(exc)
             raise

@@ -1,4 +1,4 @@
-import { FileSearch, RefreshCw, ShieldCheck, Upload } from "lucide-react";
+import { RefreshCw, ShieldCheck, Upload } from "lucide-react";
 import {
   Banner,
   Button,
@@ -24,13 +24,11 @@ interface Preparation {
   differences: { id: string; before: Definition | null; after: Definition | null }[];
   data_report?: Record<string, unknown>;
 }
-interface Migration { id: string; markdown: string; draft_etag: string; conflicts: string[]; applied: boolean }
 
-export function MarkdownPublication({ profileId, profileLabel, signature, disabled, importDisabled, save, onPublished, onMigrated, onBusyChange }: {
-  profileId: string; profileLabel: string; signature: string; disabled: boolean; importDisabled: boolean;
+export function MarkdownPublication({ profileId, profileLabel, signature, disabled, save, onPublished, onBusyChange }: {
+  profileId: string; profileLabel: string; signature: string; disabled: boolean;
   save: () => Promise<OntologyMarkdownState | null | undefined>;
   onPublished: (job: OntologyPublishJob) => void;
-  onMigrated: (state: OntologyMarkdownState) => void;
   onBusyChange: (busy:string) => void;
 }) {
   const endpoint = `/api/nl2sql/profiles/${encodeURIComponent(profileId)}/ontology-markdown`;
@@ -40,7 +38,6 @@ export function MarkdownPublication({ profileId, profileLabel, signature, disabl
   const [error, setError] = useState("");
   const [acceptanceError, setAcceptanceError] = useState("");
   const [busy, setBusy] = useState("");
-  const [migration, setMigration] = useState<Migration | null>(null);
   const generation = useRef(0);
   const mounted = useRef(true);
   useEffect(() => {
@@ -53,7 +50,6 @@ export function MarkdownPublication({ profileId, profileLabel, signature, disabl
     if (signature !== lastSignature.current) {
       lastSignature.current = signature;
       setPreparationId("");
-      setMigration(null);
     }
   }, [signature, setPreparationId]);
   const confirm = useConfirm();
@@ -66,9 +62,6 @@ export function MarkdownPublication({ profileId, profileLabel, signature, disabl
   const value = preparation.data;
   const dataValidationFailed = Number(value?.data_report?.errors ?? 0) > 0;
   const running = Boolean(value && ["queued", "running"].includes(value.status));
-  const importBlocked = importDisabled || Boolean(busy) || running || Boolean(execution.key);
-  const importBlockedRef = useRef(importBlocked);
-  importBlockedRef.current = importBlocked;
   useEffect(() => {
     onBusyChange(busy || running ? "markdown-check" : "");
     return () => onBusyChange("");
@@ -124,27 +117,9 @@ export function MarkdownPublication({ profileId, profileLabel, signature, disabl
     catch(e) {setError(e instanceof Error ? e.message : t("markdownOntology.failed"));}
     finally {setBusy("");}
   }
-  async function previewMigration() {
-    if (importBlockedRef.current) return;
-    setBusy("migration");setError("");
-    try { const saved = await save(); if (!saved) return; setMigration(await apiPost<Migration>(`${endpoint}/migration-preview`, {})); }
-    catch(e) {setError(e instanceof Error ? e.message : t("markdownOntology.failed"));}
-    finally {setBusy("");}
-  }
-  async function applyMigration() {
-    if (!migration || importBlockedRef.current) return;
-    const consent = generation.current;
-    if (!(await confirm({title:t("markdownOntology.import"),description:t("markdownOntology.importHint"),confirmLabel:t("markdownOntology.import"),tone:"info"}))) return;
-    if (consent !== generation.current || importBlockedRef.current) return;
-    setBusy("migration");setError("");
-    try { const result = await apiPost<OntologyMarkdownState>(`${endpoint}/migrate`, {preview_id:migration.id,draft_etag:migration.draft_etag}); if (!mounted.current) return; onMigrated(result); setMigration(null); }
-    catch(e) {setError(e instanceof Error ? e.message : t("markdownOntology.failed"));}
-    finally {setBusy("");}
-  }
   return <div className="grid min-w-0 gap-3 border-t border-border pt-4" data-testid="ontology-publish-actions">
     <ContentActionBar ariaLabel={t("markdownOntology.actions")}>
       <Button icon={Upload} type="button" variant="primary" size="lg" disabled={disabled || Boolean(busy) || running || Boolean(execution.key)} loading={busy === "prepare" || running} onClick={() => void prepare()}>{t("profiles.ontologyBuild.publish")}</Button>
-      <Button icon={FileSearch} type="button" variant="secondary" size="lg" disabled={importBlocked} onClick={() => void previewMigration()}>{t("markdownOntology.importPreview")}</Button>
     </ContentActionBar>
     {(error || preparation.isError) && <Banner severity="danger">{error || t("markdownOntology.refreshFailed")}</Banner>}
     {execution.key && <Button icon={RefreshCw} type="button" size="sm" variant="secondary" disabled={Boolean(busy)} onClick={() => void recover()}>{t("markdownOntology.checkOutcome")}</Button>}
@@ -172,12 +147,6 @@ export function MarkdownPublication({ profileId, profileLabel, signature, disabl
         {dataValidationFailed && <Banner severity="danger">{t("markdownOntology.dataValidationFailed")}</Banner>}
         <ContentActionBar ariaLabel={t("markdownOntology.actions")}><Button icon={Upload} type="button" variant="primary" size="lg" disabled={Boolean(busy) || Boolean(execution.key) || preparation.isError || dataValidationFailed} loading={busy === "publish"} onClick={()=>void publish()}>{t("markdownOntology.confirmPublish")}</Button></ContentActionBar>
       </>}
-    </section>}
-    {migration && <section className="grid gap-3" aria-label={t("markdownOntology.importPreview")}>
-      <p>{t("markdownOntology.importHint")}</p>
-      <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words rounded border border-border p-3 text-xs">{migration.markdown}</pre>
-      {migration.conflicts.map((c,i)=><p key={i}>{c}</p>)}
-      <Button icon={Upload} type="button" variant="secondary" size="sm" disabled={importBlocked || migration.applied} onClick={()=>void applyMigration()}>{t("markdownOntology.import")}</Button>
     </section>}
   </div>;
 }

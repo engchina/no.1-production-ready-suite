@@ -76,9 +76,9 @@ SHACL は具体 Property の基本型、必須値（主識別子を含む）、�
 
 語彙の参照: [OWL 2](https://www.w3.org/TR/owl2-primer/)、[SKOS](https://www.w3.org/TR/skos-reference/)、[SHACL](https://www.w3.org/TR/shacl/)、[PROV-O](https://www.w3.org/TR/prov-o/)。`ont:*` は本システムの語彙であり、これらの標準述語とは区別する。
 
-## 既存データの移行と廃止 API
+## 廃止 API
 
-`POST .../migration-preview` は既存の定義を現在の Markdown へ取り込む内容を返す。`POST .../migrate` は preview ID と ETag を確認して下書きへ反映する。手書き本文と競合を残し、自動公開しない。概念 ID と移行マーカーにより再適用・応答喪失後の追跡で本文を重複追加しない。草稿がなければ新しい草稿を作る。過去の artifact は更新しない。
+既存定義を Markdown 草稿へ取り込む UI と専用の `POST .../migration-preview` / `POST .../migrate` は廃止した。旧 endpoint は 404 を返す。保存済みの草稿・公開版・成果物は保持する。
 
 独立した定義の編集・解析・適用・レビュー・検証・公開・切戻し、能力 binding / invoke / preview / execute の HTTP mutation は認証・Profile アクセス検査後に `410 Gone` を返す。歴史的な構築結果・公開履歴・実行結果の GET は読み取り専用で残す。
 
