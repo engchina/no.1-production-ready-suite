@@ -1,4 +1,5 @@
 import { StatusBadge } from "@engchina/production-ready-ui";
+import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
 import { t } from "@/lib/i18n";
 import type { OntologyFinding } from "./types";
 
@@ -21,17 +22,20 @@ export function OntologyFindings({ findings, label }: {
     Number(b.severity === "error") - Number(a.severity === "error")
   );
   return <div role="region" aria-label={label} tabIndex={0}
-    className="max-h-72 min-w-0 overflow-y-auto overscroll-contain rounded border border-border p-3">
-    <ul className="grid min-w-0 gap-3">
-      {ordered.map(([key, group]) => <li key={key} className="grid min-w-0 gap-2">
+    className="max-h-72 min-w-0 overflow-y-auto overscroll-contain rounded-md border border-border bg-surface p-4">
+    <ul className="grid min-w-0 gap-4">
+      {ordered.map(([key, group]) => <li key={key} className="grid min-w-0 gap-2 border-b border-border pb-4 last:border-b-0 last:pb-0">
         <div className="flex flex-wrap items-center gap-2">
           <StatusBadge variant={group.severity === "error" ? "danger" : "warning"}
             label={t(group.severity === "error" ? "markdownOntology.blockingError" : "markdownOntology.warning")} />
           <span className="text-xs text-fg-muted">{t("markdownOntology.occurrences", { count: group.items.length })}</span>
         </div>
         <p className="whitespace-pre-wrap break-words text-sm">{group.message}</p>
-        <details className="min-w-0 text-xs">
-          <summary className="cursor-pointer">{t("markdownOntology.findingTargets")}</summary>
+        <details className="group/disclosure min-w-0 text-xs">
+          <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring [&::-webkit-details-marker]:hidden">
+            <span>{t("markdownOntology.findingTargets")}</span>
+            <DisclosureChevron expanded="group" size={16} className="text-fg-muted" />
+          </summary>
           <ul className="grid min-w-0 gap-1 pt-2">
             {[...new Set(group.items.map(item => [item.definition_id, item.field, item.code].filter(Boolean).join(" / ") || t("markdownOntology.generalFinding")))].map(target =>
               <li key={target} className="break-all text-fg-muted">{target}</li>

@@ -12,6 +12,7 @@ import { ApiError, apiGet, apiPost } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { randomUuid } from "@/lib/randomUuid";
 import { useWorkspaceState, useResetExecutionConsent } from "@/components/WorkspaceState";
+import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
 import { ContentActionBar } from "@/components/ContentActionBar";
 import type { OntologyFinding, OntologyMarkdownState, OntologyPublishJob } from "./types";
 import { OntologyFindings } from "./OntologyFindings";
@@ -128,26 +129,46 @@ export function MarkdownPublication({ profileId, profileLabel, signature, disabl
     {(error || preparation.isError) && <Banner severity="danger"><div tabIndex={0} className="max-h-72 overflow-y-auto break-words">{error || t("markdownOntology.refreshFailed")}</div></Banner>}
     {execution.key && <Button icon={RefreshCw} type="button" size="sm" variant="secondary" disabled={Boolean(busy)} onClick={() => void recover()}>{t("markdownOntology.checkOutcome")}</Button>}
     {value && <section className="grid min-w-0 gap-3" aria-label={t("markdownOntology.check")}>
+      <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
       <h3 className="text-sm font-semibold">{t("markdownOntology.check")}</h3>
       <StatusBadge variant={hasErrors || dataValidationFailed || value.status === "failed" ? "danger" : value.status === "ready" ? hasWarnings ? "warning" : "success" : "info"} label={t(`markdownOntology.status.${hasErrors || dataValidationFailed ? "failed" : value.status}`)} />
+      </div>
       {hasErrors && <Banner severity="danger">{t("markdownOntology.errorsBlockPublish")}</Banner>}
       {value.status === "ready" && hasWarnings && !hasErrors && !dataValidationFailed && <Banner severity="warning">{t("markdownOntology.warningsPublishable")}</Banner>}
       <OntologyFindings findings={findings} label={t("markdownOntology.findings")} />
-      {value.differences?.map(d=><details key={d.id} className="min-w-0 rounded border border-border p-3">
-        <summary className="cursor-pointer text-sm">{String((d.after || d.before)?.name_ja ?? d.id)} · {t(d.before ? d.after ? "markdownOntology.changed" : "markdownOntology.removed" : "markdownOntology.added")}</summary>
-        <div className="grid min-w-0 gap-3 py-3 md:grid-cols-2"><div><p>{t("markdownOntology.before")}</p><DefinitionFields definition={d.before ?? {}} /></div><div><p>{t("markdownOntology.after")}</p><DefinitionFields definition={d.after ?? {}} /></div></div>
+      {value.differences?.map(d=><details key={d.id} className="group/disclosure min-w-0 rounded-md border border-border bg-surface" data-testid="ontology-publication-difference">
+        <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-medium text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring [&::-webkit-details-marker]:hidden">
+          <span className="min-w-0 flex-1 break-words">{String((d.after || d.before)?.name_ja ?? d.id)}</span>
+          <StatusBadge variant={d.before ? d.after ? "info" : "danger" : "success"} label={t(d.before ? d.after ? "markdownOntology.changed" : "markdownOntology.removed" : "markdownOntology.added")} />
+          <DisclosureChevron expanded="group" size={16} className="text-fg-muted" />
+        </summary>
+        <div className="grid min-w-0 gap-4 border-t border-border p-4 md:grid-cols-2">
+          <div className="min-w-0 space-y-3"><h4 className="text-sm font-semibold text-fg-muted">{t("markdownOntology.before")}</h4><DefinitionFields definition={d.before ?? {}} /></div>
+          <div className="min-w-0 space-y-3"><h4 className="text-sm font-semibold text-fg-muted">{t("markdownOntology.after")}</h4><DefinitionFields definition={d.after ?? {}} /></div>
+        </div>
       </details>)}
       {value.status === "ready" && <>
-        <details><summary className="cursor-pointer text-sm">{t("markdownOntology.dataValidation")}</summary>
-          <label className="grid gap-2 text-sm">{t("markdownOntology.acceptance")}<textarea className="min-h-24 w-full rounded border border-border-control bg-surface p-3" value={acceptance} aria-invalid={Boolean(acceptanceError)} aria-describedby="markdown-acceptance-hint markdown-acceptance-error" onChange={e=>{setAcceptance(e.target.value);setAcceptanceError("");}} /></label>
-          <p id="markdown-acceptance-hint" className="text-xs text-fg-muted">{t("markdownOntology.acceptanceHint")}</p>
-          <FieldError id="markdown-acceptance-error" message={acceptanceError} />
-          <Button icon={ShieldCheck} type="button" variant="secondary" size="sm" disabled={Boolean(busy)} onClick={()=>void dataValidation()}>{t("markdownOntology.dataValidation")}</Button>
-          {value.data_report && <div className="grid gap-3">
-            <DefinitionFields definition={Object.fromEntries(["checked_at", "sample_limit", "instance_count", "errors", "acceptance_cases"].filter(key => key in value.data_report!).map(key => [key, value.data_report![key]]))} />
-            <p className="text-xs text-fg-muted">{t("markdownOntology.sampledOnly")}</p>
-            <TechnicalDetails value={value.data_report} />
-          </div>}
+        <details className="group/disclosure min-w-0 rounded-md border border-border bg-surface" data-testid="ontology-publication-data-validation">
+          <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-medium text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring [&::-webkit-details-marker]:hidden">
+            <span className="flex min-w-0 items-center gap-2"><ShieldCheck size={16} className="shrink-0 text-fg-muted" aria-hidden="true" />{t("markdownOntology.dataValidation")}</span>
+            <DisclosureChevron expanded="group" size={16} className="text-fg-muted" />
+          </summary>
+          <div className="grid min-w-0 gap-4 border-t border-border p-4">
+            <div className="space-y-2">
+              <label htmlFor="markdown-acceptance" className="block text-sm font-medium text-fg">{t("markdownOntology.acceptance")}</label>
+              <textarea id="markdown-acceptance" rows={5} className="min-h-32 w-full resize-y rounded-md border border-border-control bg-surface px-3 py-2 font-mono text-sm leading-6 text-fg outline-none focus:border-focus-ring focus:ring-2 focus:ring-focus-ring" value={acceptance} aria-invalid={Boolean(acceptanceError)} aria-describedby="markdown-acceptance-hint markdown-acceptance-error" onChange={e=>{setAcceptance(e.target.value);setAcceptanceError("");}} />
+              <p id="markdown-acceptance-hint" className="text-xs leading-relaxed text-fg-muted">{t("markdownOntology.acceptanceHint")}</p>
+              <FieldError id="markdown-acceptance-error" message={acceptanceError} />
+            </div>
+            <ContentActionBar ariaLabel={t("markdownOntology.dataValidation")}>
+              <Button icon={ShieldCheck} type="button" variant="secondary" size="md" disabled={Boolean(busy)} loading={busy === "data"} onClick={()=>void dataValidation()}>{t("markdownOntology.dataValidation")}</Button>
+            </ContentActionBar>
+            {value.data_report && <div className="grid min-w-0 gap-3 border-t border-border pt-4">
+              <DefinitionFields definition={Object.fromEntries(["checked_at", "sample_limit", "instance_count", "errors", "acceptance_cases"].filter(key => key in value.data_report!).map(key => [key, value.data_report![key]]))} />
+              <p className="text-xs leading-relaxed text-fg-muted">{t("markdownOntology.sampledOnly")}</p>
+              <TechnicalDetails value={value.data_report} />
+            </div>}
+          </div>
         </details>
         {dataValidationFailed && <Banner severity="danger">{t("markdownOntology.dataValidationFailed")}</Banner>}
         <ContentActionBar ariaLabel={t("markdownOntology.actions")}><Button icon={Upload} type="button" variant="primary" size="lg" disabled={Boolean(busy) || Boolean(execution.key) || preparation.isError || hasErrors || dataValidationFailed} loading={busy === "publish"} onClick={()=>void publish()}>{t("markdownOntology.confirmPublish")}</Button></ContentActionBar>

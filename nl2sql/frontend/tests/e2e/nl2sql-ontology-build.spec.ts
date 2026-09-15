@@ -3383,3 +3383,73 @@ test("従業員 Markdown は業務内容だけを整形表示して公開でき�
   await markdown.getByRole("tab", { name: "公開済み Markdown オントロジー" }).click();
   await expect(markdown.getByTestId("ontology-markdown-published-viewer")).toContainText("従業員番号");
 });
+
+test("公開確認は標準の折りたたみ・フォーム・状態表示を使用する", async ({ page }, testInfo) => {
+  const state = await mockApi(page);
+  state.jobPolls = 2;
+  state.draftMarkdown = generatedDraftMarkdown;
+  const titles = ["従業員情報", "従業員ID（主キー）", "メールアドレス", "所属部署ID（外部キー）", "従業員氏名", "入社日", "給与"];
+  const preparation = {
+    id: "ui-review", status: "ready", draft_etag: state.draftMarkdownEtag, expected_head: "", display_version: 4,
+    findings: Array.from({ length: 14 }, (_, index) => ({ severity: "warning", code: "EVIDENCE_UNRESOLVED", definition_id: `Employee.${index}`, field: "evidence", message_ja: "証拠の資料・位置・原文を照合できません。" })),
+    differences: titles.map((name_ja, index) => ({ id: `field-${index}`, before: index === 1 ? { name_ja, data_type: "integer" } : null, after: { name_ja, data_type: "number" } })),
+    error_message_ja: "",
+  };
+  await page.route("**/ontology-markdown/prepare", route => fulfillJson(route, preparation));
+  await page.route("**/ontology-markdown/preparations/*", route => fulfillJson(route, preparation));
+  let validationCalls = 0;
+  await page.route("**/ontology-markdown/preparations/*/validate-data", route => {
+    validationCalls += 1;
+    expect(route.request().postDataJSON()).toEqual({ confirmed: true, acceptance_cases: [] });
+    return fulfillJson(route, {});
+  });
+  await page.goto("/ontology-build?profile=default");
+  await expect(page.getByTestId("ontology-view-fetch")).toBeVisible();
+  await page.keyboard.press("Tab");
+  await expect(page.getByRole("link", { name: "本文へスキップ" })).toBeFocused();
+  await loadOntologyBuildWorkspace(page);
+  await page.getByRole("button", { name: "オントロジーを公開", exact: true }).click();
+  const check = page.getByRole("region", { name: "公開前の確認", exact: true });
+  const differences = check.getByTestId("ontology-publication-difference");
+  await expect(differences).toHaveCount(7);
+  const differenceSummary = differences.nth(1).locator("summary");
+  await differenceSummary.focus();
+  await differenceSummary.press("Enter");
+  await expect(differences.nth(1).getByRole("heading", { name: "変更前", exact: true })).toBeVisible();
+  await expect(differences.nth(1)).toContainText("integer");
+  await expect(differences.nth(1)).toContainText("number");
+  const validation = check.getByTestId("ontology-publication-data-validation");
+  const summary = validation.locator("summary").first();
+  await summary.press("Space");
+  const input = validation.getByRole("textbox", { name: "受入テスト（JSON 配列）" });
+  await expect(input).toBeVisible();
+  await input.fill("{bad");
+  const validate = validation.getByRole("button", { name: "実データの検証", exact: true });
+  await validate.click();
+  await expect(input).toHaveAttribute("aria-invalid", "true");
+  await expect(validation.getByText("有効な JSON 配列を入力してください。", { exact: true })).toBeVisible();
+  expect(validationCalls).toBe(0);
+  await input.fill("[]");
+  for (const width of testInfo.project.name === "desktop" ? [1280, 1920] : [375]) {
+    await page.setViewportSize({ width, height: 1000 });
+    for (const theme of ["light", "dark"]) {
+      await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
+      await validation.scrollIntoViewIfNeeded();
+      await input.focus();
+      await expect(input).toBeFocused();
+      expect(await input.evaluate(element => getComputedStyle(element).boxShadow)).not.toBe("none");
+      for (const disclosure of [differenceSummary, summary]) {
+        expect(await disclosure.evaluate(element => getComputedStyle(element).listStyleType)).toBe("none");
+        await expect(disclosure.locator("svg").last()).toHaveAttribute("aria-hidden", "true");
+        expect((await disclosure.boundingBox())!.height).toBeGreaterThanOrEqual(await disclosure.evaluate(() => 2.75 * parseFloat(getComputedStyle(document.documentElement).fontSize)));
+      }
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      await page.screenshot({ path: testInfo.outputPath(`publication-standard-${width}-${theme}.png`) });
+    }
+  }
+  await validate.click();
+  await expect.poll(() => validationCalls).toBe(1);
+  await expect(check.getByRole("button", { name: "確認した内容を公開", exact: true })).toBeEnabled();
+  await summary.press("Enter");
+  await expect(input).toBeHidden();
+});
