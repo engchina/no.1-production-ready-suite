@@ -381,7 +381,13 @@ function visibleOntologyBuildWarnings(job: OntologyBuildJob): string[] {
   const warnings = job.warnings_ja
     .map((warning) => warning.trim())
     .filter(Boolean)
-    .filter((warning) => !isInternalOntologyBuildDiagnostic(warning));
+    .filter((warning) => !isInternalOntologyBuildDiagnostic(warning))
+    // 旧ジョブの資料不足も Markdown の補足として扱う。
+    .filter((warning) => !(
+      warning.endsWith("証拠の資料・位置・原文を照合できません。") ||
+      warning.endsWith("根拠を確認できない推論です。業務担当者の確認が必要です。") ||
+      (warning.startsWith("business_text_chunks") && warning.includes("正の業務記述なし"))
+    ));
   if (job.status !== "succeeded" && job.status !== "succeeded_with_warnings") return warnings;
   return warnings.filter((warning) => !isNonActionableOntologyBuildRejection(warning));
 }

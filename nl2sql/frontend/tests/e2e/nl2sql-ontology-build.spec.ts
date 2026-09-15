@@ -3287,3 +3287,56 @@ test("警告のみで公開し再読込後も診断を参照・保存できる",
     }
   }
 });
+
+for (const operationalWarning of [false, true]) {
+  test(`構築の資料不足は Markdown の補足に保持する (${operationalWarning})`, async ({ page }, testInfo) => {
+    const state = await mockApi(page);
+    state.jobPolls = 2;
+    const notes = [
+      "business_text_chunks はすべて検証エラー文のみで正の業務記述なし",
+      ...["department_id", "employee_id", "employee_name", "email", "hire_date", "salary"].map(
+        field => `${field} / evidence: 証拠の資料・位置・原文を照合できません。`
+      ),
+    ];
+    state.draftMarkdown = generatedDraftMarkdown + "\n\n## 記述範囲と補足\n" + notes.map(note => `- ${note}`).join("\n");
+    const payload = buildJob("succeeded", "succeeded");
+    payload.job.markdown_output = state.draftMarkdown;
+    payload.job.warnings_ja = [...notes, ...(operationalWarning ? ["資料の一部で抽出に失敗しました。"] : [])];
+    await page.route("**/api/nl2sql/profiles/*/ontology-build-jobs**", route => fulfillJson(route, { jobs: [payload.job] }));
+    await page.route("**/api/nl2sql/ontology-build/*", route => fulfillJson(route, payload));
+    await page.goto("/ontology-build?profile=default");
+    await expect(page.getByTestId("ontology-view-fetch")).toBeVisible();
+    await page.keyboard.press("Tab");
+    await expect(page.getByRole("link", { name: "本文へスキップ" })).toBeFocused();
+    await loadOntologyBuildWorkspace(page);
+    const progress = page.getByTestId("ontology-build-steps");
+    const summary = progress.locator("summary").filter({ hasText: "警告" });
+    await expect(summary).toHaveCount(operationalWarning ? 1 : 0);
+    if (operationalWarning) {
+      await expect(summary).toContainText("(1)");
+      await summary.press("Enter");
+      await expect(progress.getByText("資料の一部で抽出に失敗しました。", { exact: true })).toBeVisible();
+    }
+    for (const note of notes) await expect(progress.getByText(note, { exact: true })).toHaveCount(0);
+    const markdown = page.getByTestId("ontology-build-markdown");
+    const draftTab = markdown.getByRole("tab", { name: "Markdown オントロジー下書き" });
+    await draftTab.click();
+    const editor = markdown.getByTestId("ontology-markdown-draft-editor");
+    await expect(editor).toHaveValue(state.draftMarkdown);
+    await draftTab.press("End");
+    await expect(markdown.getByRole("tab", { name: "公開済み Markdown オントロジー" })).toBeFocused();
+    await page.keyboard.press("Home");
+    await expect(draftTab).toBeFocused();
+    for (const width of testInfo.project.name === "desktop" ? [1280, 1920] : [375]) {
+      await page.setViewportSize({ width, height: 900 });
+      for (const theme of ["light", "dark"]) {
+        await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
+        await editor.scrollIntoViewIfNeeded();
+        await editor.focus();
+        await expect(editor).toBeFocused();
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+        await page.screenshot({ path: testInfo.outputPath(`content-notes-${width}-${theme}.png`) });
+      }
+    }
+  });
+}

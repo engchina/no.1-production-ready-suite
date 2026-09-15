@@ -649,3 +649,85 @@ async def test_removed_definition_import_api_is_not_exposed() -> None:
                 f"/api/nl2sql/profiles/sales/ontology-markdown/{suffix}", json={}
             )
             assert response.status_code == 404
+
+
+def test_build_content_notes_are_saved_without_becoming_conflicts_or_job_warnings() -> None:
+    from test_nl2sql_ontology_build import _FakeEnterpriseAiClient, _wait_for_job
+
+    from app.features.nl2sql.ontology_build import OntologyBuildService
+
+    notes = [
+        "business_text_chunks はすべて検証エラー文のみで正の業務記述なし",
+        "Order.id / evidence: 証拠の資料・位置・原文を照合できません。",
+    ]
+    operational_warning = "資料の一部で抽出に失敗しました。"
+    definitions = [d.model_dump(mode="json") for d in all_concepts()]
+    next(d for d in definitions if d["kind"] == "metric")[
+        "expression_sql"
+    ] = "COUNT(APP.ORDERS.MISSING_COLUMN)"
+    rt, legacy = runtime()
+    legacy._enterprise_ai_client = _FakeEnterpriseAiClient(
+        json.dumps(
+            {
+                "definitions": definitions,
+                "warnings_ja": [*notes, *notes, operational_warning],
+            }
+        )
+    )
+    build = OntologyBuildService(rt)
+    queued = build.start("sales", business_text="受注の業務定義")
+    build.run_persisted(queued.id)
+    job = _wait_for_job(build, queued.id)
+    assert job.status == "succeeded", job.error_message_ja
+    assert operational_warning in job.warnings_ja
+    assert not any(note in job.warnings_ja for note in notes)
+    markdown = job.markdown_output
+    definitions, supplements = markdown.split("## 記述範囲と補足", 1)
+    for note in notes:
+        assert note not in definitions
+        assert supplements.count(note) == 1
+    assert "証拠の資料・位置・原文を照合できません。" not in definitions
+    for definition in all_concepts():
+        assert definitions.count(f"(`{definition.api_name}`)") == 1
+    # SQL/構造の不正は補足への降格で隠さない。
+    assert "### 解決が必要な定義の競合" in definitions
+    saved = rt.ontology_markdown_state("sales")
+    assert saved.draft_markdown == markdown
+
+
+def test_content_notes_can_be_published_as_context_without_losing_definitions() -> None:
+    rt, svc, parser, _ = prepared_workspace()
+    markdown = (
+        "受注を受注番号で識別する。\n\n## 記述範囲と補足\n"
+        "- Order.id / evidence: 証拠の資料・位置・原文を照合できません。"
+    )
+    state = rt.save_ontology_markdown_draft(
+        "sales",
+        OntologyMarkdownDraftPatch(
+            markdown=markdown, base_etag=rt.ontology_markdown_state("sales").draft_etag
+        ),
+    )
+    parser.lines.append(
+        {
+            "start_line": 3,
+            "end_line": 4,
+            "disposition": "context",
+            "reason_ja": "資料不足に関する補足であり業務定義ではありません。",
+        }
+    )
+    preparation = svc.prepare("sales", state.draft_etag, "with-content-notes", None)
+    svc.run_preparation("sales", preparation["id"])
+    preparation = svc.preparation("sales", preparation["id"])
+    assert preparation["status"] == "ready", preparation
+    svc.publish(
+        "sales",
+        MarkdownConfirmRequest(
+            preparation_id=preparation["id"], draft_etag=state.draft_etag, confirmed=True
+        ),
+        "publish-with-content-notes",
+        None,
+    )
+    assert rt.ontology_markdown_state("sales").published_markdown == markdown
+    snapshot = svc.snapshot("sales")
+    assert snapshot is not None
+    assert len(snapshot["definitions"]) == len(parser.definitions)

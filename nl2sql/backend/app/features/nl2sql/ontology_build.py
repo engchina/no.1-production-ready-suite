@@ -756,11 +756,20 @@ def _is_internal_diagnostic_warning(message: str) -> bool:
     return any(pattern.search(message) for pattern in _INTERNAL_DIAGNOSTIC_WARNING_PATTERNS)
 
 
+def _is_content_note(message: str) -> bool:
+    """資料の不足は下書きの補足に保持し、実行上の警告とは分ける。"""
+    return (
+        message.endswith("証拠の資料・位置・原文を照合できません。")
+        or message.endswith("根拠を確認できない推論です。業務担当者の確認が必要です。")
+        or (message.startswith("business_text_chunks") and "正の業務記述なし" in message)
+    )
+
+
 def _split_ontology_build_warnings(messages: Iterable[str]) -> tuple[list[str], list[str]]:
     actionable: list[str] = []
     proposal_rejections: list[str] = []
     for message in _unique_non_empty_messages(messages):
-        if _is_internal_diagnostic_warning(message):
+        if _is_internal_diagnostic_warning(message) or _is_content_note(message):
             continue
         if _is_non_actionable_proposal_rejection(message):
             proposal_rejections.append(message)
@@ -2031,6 +2040,9 @@ _EXTRACTION_SYSTEM_PROMPT = (
     "資料にない任意の概念・契約を生成しなかったことや既存 ID の再利用などの"
     "正常な処理方針を warnings_ja に重複記録しない。"
     "warnings_ja は根拠の矛盾や抽出失敗など利用者の確認・修正が必要な問題に限定する。"
+    "業務説明が空、検証メッセージのみ、または根拠資料が不足していること自体は警告にしない。"
+    "記述できる定義を schema_context や資料から生成し、不明な情報は創作せず"
+    "missing_information_ja または coverage の理由に記録する。検証メッセージを業務定義にしない。"
     "関係の cardinality は one_to_one / one_to_many / many_to_one / many_to_many を"
     "主キー・一意制約と資料から判断し、不明なら unknown と理由を記録する。"
     "指標は expression_sql/filter_sql/aggregation/grain/distinct_keys/"
@@ -4570,7 +4582,8 @@ class OntologyBuildService:
                     " definitions にまとめて抽出してください。同義語は各定義の aliases に含め、"
                     "名詞をエンティティ、"
                     "動詞・述語を関係の手がかりとして読み取り、schema_context に対応づかない"
-                    "内容は warnings_ja に残してください。"
+                    "内容は coverage の理由または対象定義の missing_information_ja に"
+                    "残してください。"
                 )
                 try:
                     text_batches = _batch_text_units(schema_payload, text_units, prompt)
@@ -4834,6 +4847,11 @@ class OntologyBuildService:
             "Markdown 下書きをレンダリング中…",
         )
         actionable_warnings, proposal_rejections = _split_ontology_build_warnings(warnings)
+        content_notes = [
+            message
+            for message in _unique_non_empty_messages([*job.warnings_ja, *warnings])
+            if _is_content_note(message)
+        ]
         from .ontology_unified_model import legacy_definitions, merge_definitions, render_concepts
 
         candidate_request = self._runtime._proposal_payloads_upsert_draft_request(
@@ -4871,7 +4889,14 @@ class OntologyBuildService:
         )
         build_findings = validate_definitions(provisional, json.loads(schema_context))
         concept_conflicts.extend(
-            f"{f.definition_id} / {f.field}: {f.message_ja}" for f in build_findings
+            f"{f.definition_id} / {f.field}: {f.message_ja}"
+            for f in build_findings
+            if f.severity == "error"
+        )
+        content_notes.extend(
+            f"{f.definition_id} / {f.field}: {f.message_ja}"
+            for f in build_findings
+            if f.severity == "warning"
         )
         self._set_definition_phase(
             job_id,
@@ -4907,6 +4932,10 @@ class OntologyBuildService:
             if actionable_warnings:
                 markdown_output += "\n\n## 構築時の確認事項\n" + "\n".join(
                     "- " + w for w in actionable_warnings
+                )
+            if content_notes:
+                markdown_output += "\n\n## 記述範囲と補足\n" + "\n".join(
+                    "- " + note for note in _unique_non_empty_messages(content_notes)
                 )
             if proposal_rejections:
                 markdown_output += "\n\n## 採用外候補\n" + "\n".join(

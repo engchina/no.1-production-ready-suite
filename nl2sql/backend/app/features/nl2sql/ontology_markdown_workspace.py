@@ -389,6 +389,9 @@ class MarkdownOntologyWorkspace(ProfileOntologyWorkspaceService):
                     "locator=line:N、原文引用を記録する。"
                     "lines で空白以外の全行を分類する。定義行には対応 api_name、"
                     "文脈のみの行には理由、曖昧・矛盾・未対応は unresolved と理由を返す。"
+                    "『記述範囲と補足』の資料不足・根拠照合の注記は文脈として分類し、"
+                    "注記だけを理由に issues_ja へ追加しない。"
+                    "定義自体の矛盾や不正な SQL は検証する。"
                     "文脈を定義として捏造しない。implementation_key や実行権限は作らない。"
                     "削除された定義を以前の情報から復元しない。"
                 ),
