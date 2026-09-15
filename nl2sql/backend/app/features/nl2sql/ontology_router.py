@@ -6425,7 +6425,7 @@ async def start_ontology_build(
     response_model=ApiResponse[OntologyBuildJobData],
 )
 def get_ontology_build_job(job_id: str, http_request: Request) -> ApiResponse[OntologyBuildJobData]:
-    job = _run_runtime_sync(ontology_build_service.get, job_id)
+    job = _run_runtime_sync(ontology_build_service.peek, job_id)
     if job is None:
         raise HTTPException(
             status_code=404,
@@ -6435,7 +6435,8 @@ def get_ontology_build_job(job_id: str, http_request: Request) -> ApiResponse[On
             },
         )
     assert_profile_access(http_request, job.profile_id)
-    return ApiResponse(data=OntologyBuildJobData(job=job))
+    recovered = _run_runtime_sync(ontology_build_service.get, job_id)
+    return ApiResponse(data=OntologyBuildJobData(job=recovered or job))
 
 
 @router.get(
@@ -6526,7 +6527,7 @@ def delete_profile_ontology_source_document(
 def cancel_ontology_build_job(
     job_id: str, http_request: Request
 ) -> ApiResponse[OntologyBuildJobData]:
-    current = _run_runtime_sync(ontology_build_service.get, job_id)
+    current = _run_runtime_sync(ontology_build_service.peek, job_id)
     if current is not None:
         assert_profile_access(http_request, current.profile_id)
     try:
@@ -6546,7 +6547,7 @@ def retry_ontology_build_job(
 ) -> ApiResponse[OntologyBuildJobData]:
     """failed/cancelled job を保存済み入力から再実行する(新規 job を返す)。"""
 
-    current = _run_runtime_sync(ontology_build_service.get, job_id)
+    current = _run_runtime_sync(ontology_build_service.peek, job_id)
     if current is not None:
         assert_profile_access(http_request, current.profile_id)
     try:

@@ -637,8 +637,13 @@ export function OntologyBuildSection({
   const groupedEvents = useMemo(() => (job ? groupBuildEvents(job) : null), [job]);
   const markdownDraftStale = job ? markdownDraftGenerationIsStale(job, nowTick) : false;
   const unscopedBuildError =
-    job?.status === "failed" && !schemaScopeFailure && job.error_message_ja
-      ? `${job.error_message_ja} ${t("profiles.ontologyBuild.error.retryHint")}`
+    (job?.status === "failed" ||
+      (job?.status === "cancelled" &&
+        ["ONTOLOGY_BUILD_TIMEOUT", "ONTOLOGY_BUILD_WORKER_LOST", "ONTOLOGY_BUILD_PROCESS_STOPPED"].includes(job.error_code ?? ""))) &&
+    !schemaScopeFailure && job.error_message_ja
+      ? job.status === "cancelled"
+        ? job.error_message_ja
+        : `${job.error_message_ja} ${t("profiles.ontologyBuild.error.retryHint")}`
       : "";
   const buildWarnings = job ? visibleOntologyBuildWarnings(job) : [];
   const publishedMarkdown = markdownState?.published_markdown ?? "";

@@ -21,6 +21,7 @@ from app.features.nl2sql.ontology_definitions import (
     ObjectTypeDefinition,
 )
 from app.features.nl2sql.ontology_models import OntologyBuildStepName
+from app.settings import get_settings
 
 
 def test_evidence_must_match_profile_source_location_hash_and_verbatim_excerpt() -> None:
@@ -138,9 +139,14 @@ def test_staged_worker_and_checkpoint_reuse_after_service_restart(
         context="固定入力",
         progress_ja="検査",
     )
+    # 完了済み実行には追記せず、所有権を持つ実行の checkpoint を明示 retry へ継承する。
+    monkeypatch.setattr(get_settings(), "nl2sql_ontology_worker_mode", "external")
+    checkpoint_job = service.start("sales", business_text="検査用入力")
+    assert service._claim_execution(checkpoint_job.id)
     results, warnings = service._execute_llm_task(
-        job.id, legacy._enterprise_ai_client, task, label="検査"
+        checkpoint_job.id, legacy._enterprise_ai_client, task, label="検査"
     )
+    service.cancel(checkpoint_job.id)
     assert results and not warnings
     restarted = OntologyBuildService(rt)
 
@@ -148,8 +154,10 @@ def test_staged_worker_and_checkpoint_reuse_after_service_restart(
         raise AssertionError("saved batch must not invoke LLM")
 
     monkeypatch.setattr(restarted, "_generate_extraction", forbidden)
+    retried = restarted.retry(checkpoint_job.id)
+    assert restarted._claim_execution(retried.id)
     restored, warnings = restarted._execute_llm_task(
-        job.id, legacy._enterprise_ai_client, task, label="検査"
+        retried.id, legacy._enterprise_ai_client, task, label="検査"
     )
     assert restored[0].extraction == results[0].extraction
     assert not warnings

@@ -2520,6 +2520,54 @@ test("失敗した構築 job は「再実行」ボタンで retry API から再�
   await expect(page.getByTestId("ontology-build-steps")).toContainText("オントロジー構築の処理状況");
 });
 
+test("強制終了した構築は理由と下書きを表示し保存済み入力から再実行できる", async ({ page }, testInfo) => {
+  await existingMarkdown(page);
+  const failedJob = buildJob("cancelled", "failed");
+  failedJob.job.error_message_ja = "構築処理の実行プロセスとの接続が失われました。保存済み入力と抽出結果を使って再実行してください。";
+  Object.assign(failedJob.job, { error_code: "ONTOLOGY_BUILD_WORKER_LOST" });
+  await page.route("**/api/nl2sql/profiles/*/ontology-build-jobs**", (route) =>
+    fulfillJson(route, { jobs: [failedJob.job] })
+  );
+  await page.route("**/api/nl2sql/ontology-build/job-1", route => fulfillJson(route, failedJob));
+  let retryCalled = 0;
+  const retriedJob = buildJob("running", "running");
+  retriedJob.job.id = "job-retried";
+  await page.route("**/api/nl2sql/ontology-build/job-1/retry", (route) => {
+    retryCalled += 1;
+    return fulfillJson(route, retriedJob);
+  });
+  await page.route("**/api/nl2sql/ontology-build/job-retried", (route) =>
+    fulfillJson(route, retriedJob)
+  );
+
+  await page.goto("/ontology-build?profile=default");
+  await loadOntologyBuildWorkspace(page);
+  const retryButton = page.getByTestId("ontology-build-retry");
+  await expect(retryButton).toBeVisible();
+  await expect(page.getByTestId("ontology-markdown-draft-editor")).toHaveValue(generatedDraftMarkdown);
+  await expect(page.getByText(failedJob.job.error_message_ja, { exact: false }).first()).toBeVisible();
+  for (const width of (testInfo.project.name === "desktop" ? [1280, 1920] : [375])) {
+    await page.setViewportSize({ width, height: 900 });
+    for (const theme of ["light", "dark"] as const) {
+      await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
+      await retryButton.focus();
+      await expect(retryButton).toBeFocused();
+      await page.screenshot({ path: testInfo.outputPath(`build-worker-lost-${width}-${theme}.png`) });
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    }
+  }
+  expect(retryCalled).toBe(0);
+  await page.keyboard.press("Enter");
+
+  await expect
+    .poll(() => retryCalled, { timeout: 8_000 })
+    .toBeGreaterThan(0);
+  // 新 job の進捗カードへ切り替わる(失敗バナーは消える)
+  await expect(page.getByTestId("ontology-build-retry")).toHaveCount(0);
+  await expect(page.getByTestId("ontology-build-steps")).toContainText("オントロジー構築の処理状況");
+});
+
+
 test("公開済み Markdown が無いときは公開日時を表示しない(revision だけ公開済み)", async ({ page }) => {
   await mockApi(page);
   await page.unroute("**/api/nl2sql/profiles/*/ontology-markdown");

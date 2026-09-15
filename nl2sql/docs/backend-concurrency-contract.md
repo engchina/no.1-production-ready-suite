@@ -60,3 +60,11 @@ async def import_example(file: UploadFile) -> ApiResponse[ImportData]:
 - 同期開始は queued の取得済み ETag で claim する。各 phase / 終了 / 失敗の保存と次の Oracle 操作の前に、その実行が保持する ETag を検証する。running / terminal の再配送で Oracle 反映を再送しない。
 - 正常停止では、このプロセスが開始した job を off-loop で中断してから pool を閉じる。同期呼び出しの強制 kill は行わず、中断後の戻り値を破棄し後続 phase を開始しない。
 - Oracle 操作は部分反映の可能性があるため、中断は成功と断定しない。日本語メッセージで Oracle Profile / Agent の確認を促し、明示的な再試行だけを受け付ける。自プロセスの前回呼び出しがまだ残っている場合は再試行を拒否する。
+
+## オントロジー AI 構築
+
+- `NL2SQL_ONTOLOGY_BUILD_TIMEOUT_SECONDS`（既定 21600 秒）の絶対期限と `NL2SQL_ONTOLOGY_BUILD_LEASE_SECONDS`（既定 120 秒）の heartbeat を永続化する。長い LLM 呼び出し中も heartbeat を更新する。
+- 取得・履歴・次の開始時に失われた実行を `cancelled` へ収束させ、`ONTOLOGY_BUILD_TIMEOUT` / `ONTOLOGY_BUILD_WORKER_LOST` を表示する。旧 job は作成日時・開始日時・イベント日時を使う。external worker の queued は heartbeat 不在だけでは中断しない。
+- queued の ETag で実行を claim し、実行 ID を確認して結果を保存する。期限切れ・中断後の遅着結果は下書きを上書きしない。profile lock の削除には所有 job ID も指定し、新しい job の lock を削除しない。
+- 状態確認は認可後に行い、startup で全件を走査しない。同期 SDK の実行スレッド自体を強制停止する機構ではない。
+- 再実行は利用者の明示操作で新しい job を作る。保存済み入力を引き継ぎ、profile fingerprint と task/context が一致する既存の抽出 checkpoint を再利用する。保存済み下書きは保持し、自動公開しない。

@@ -21,6 +21,7 @@ import threading
 import time
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 from uuid import uuid4
@@ -2730,6 +2731,10 @@ _TERMINAL_STEP_STATUSES = {
 }
 
 
+class OntologyBuildExecutionLost(RuntimeError):
+    """失効した実行が新しい状態・成果物を更新するのを止める。"""
+
+
 class OntologyBuildService:
     """永続 job。local は thread、production は独立 worker から同じ run を呼ぶ。"""
 
@@ -2745,6 +2750,7 @@ class OntologyBuildService:
         self._inputs: dict[str, dict[str, Any]] = {}
         # store から復元した job と、このプロセスが実行している job を区別する。
         self._inprocess_jobs: set[str] = set()
+        self._execution_ids: dict[str, str] = {}
         # _persist_job の read-modify-write を直列化する(worker thread と API thread の競合防止)
         self._persist_lock = threading.RLock()
         self._lock = threading.Lock()
@@ -2761,6 +2767,7 @@ class OntologyBuildService:
         initial_warnings: list[str] | None = None,
         source_documents: list[OntologySourceDocument] | None = None,
         idempotency_key: str | None = None,
+        checkpoint_job_ids: Sequence[str] = (),
     ) -> OntologyBuildJob:
         # 未知 profile を非同期 error に隠さない。重いオントロジー同期は worker 側の
         # 「スキーマ情報の準備」ステップで行い、POST は即時に job を返す。
@@ -2850,6 +2857,7 @@ class OntologyBuildService:
                     "run_schema_naming": run_schema_naming,
                     "run_qa_extraction": run_qa_extraction,
                     "run_text_extraction": run_text_extraction,
+                    "checkpoint_job_ids": list(checkpoint_job_ids),
                 }
             self._persist_job(job)
             if idempotency_key:
@@ -2885,6 +2893,123 @@ class OntologyBuildService:
             with self._lock:
                 self._inprocess_jobs.discard(job_id)
 
+    def _recover_document(self, document: dict[str, Any] | None) -> dict[str, Any] | None:
+        """heartbeat が消えた実行を読み取り時に終了させる。LLM は再送しない。"""
+        for attempt in range(3):
+            job = self._job_from_document(document)
+            if not document or not job or job.status in _TERMINAL_STATUSES:
+                return document
+            settings = get_settings()
+            deadline = document.get("deadline_at")
+            expires = (
+                datetime.fromisoformat(str(deadline))
+                if deadline
+                else job.created_at
+                + timedelta(seconds=settings.nl2sql_ontology_build_timeout_seconds)
+            )
+            if expires.tzinfo is None:
+                expires = expires.replace(tzinfo=UTC)
+            last_seen = max(
+                value if value.tzinfo else value.replace(tzinfo=UTC)
+                for value in (
+                    job.created_at,
+                    job.started_at or job.created_at,
+                    *(event.at for event in job.events),
+                )
+            )
+            heartbeat = document.get("heartbeat_at")
+            if heartbeat:
+                last_seen = datetime.fromisoformat(str(heartbeat))
+            if last_seen.tzinfo is None:
+                last_seen = last_seen.replace(tzinfo=UTC)
+            timed_out = utc_now() >= expires
+            lost = (
+                job.status != OntologyBuildStatus.QUEUED
+                or document.get("dispatch_mode", settings.nl2sql_ontology_worker_mode)
+                == "inprocess"
+            ) and (
+                (utc_now() - last_seen).total_seconds()
+                >= settings.nl2sql_ontology_build_lease_seconds
+            )
+            if not timed_out and not lost:
+                return document
+            code = "ONTOLOGY_BUILD_TIMEOUT" if timed_out else "ONTOLOGY_BUILD_WORKER_LOST"
+            message = (
+                "構築の実行期限を超えました。"
+                if timed_out
+                else "構築処理の実行プロセスとの接続が失われました。"
+            ) + "保存済み入力と抽出結果を使って再実行してください。"
+            try:
+                self._save_cancelled(document, job, message, code=code)
+                logger.warning(
+                    message,
+                    extra={"job_id": job.id, "profile_id": job.profile_id, "error_code": code},
+                )
+                return cast(dict[str, Any] | None, self._runtime.store.get_job(job.id))
+            except OntologyVersionConflict:
+                document = self._runtime.store.get_job(job.id)
+                if attempt == 2:
+                    raise
+        return document
+
+    def _claim_execution(self, job_id: str) -> str | None:
+        document = self._recover_document(self._runtime.store.get_job(job_id))
+        job = self._job_from_document(document)
+        if not document or not job or job.status != OntologyBuildStatus.QUEUED:
+            return None
+        token = uuid4().hex
+        job.status = OntologyBuildStatus.RUNNING
+        job.started_at = utc_now()
+        try:
+            self._runtime.store.save_job(
+                {
+                    **document,
+                    "status": "running",
+                    "payload": job.model_dump(mode="json"),
+                    "execution_id": token,
+                    "heartbeat_at": utc_now().isoformat(),
+                    "claimed_by": token,
+                    "claimed_at": time.time(),
+                },
+                expected_etag=document["etag"],
+            )
+        except OntologyVersionConflict:
+            return None
+        with self._lock:
+            self._execution_ids[job_id] = token
+            self._jobs[job_id] = job
+        return token
+
+    def _heartbeat(self, job_id: str, token: str) -> bool:
+        for _ in range(3):
+            document = self._recover_document(self._runtime.store.get_job(job_id))
+            if (
+                not document
+                or document.get("execution_id") != token
+                or document["status"] != "running"
+            ):
+                return False
+            try:
+                self._runtime.store.save_job(
+                    {**document, "heartbeat_at": utc_now().isoformat(), "claimed_at": time.time()},
+                    expected_etag=document["etag"],
+                )
+                return True
+            except OntologyVersionConflict:
+                continue
+        return True
+
+    def _assert_execution(self, job_id: str) -> None:
+        document = self._recover_document(self._runtime.store.get_job(job_id))
+        with self._lock:
+            token = self._execution_ids.get(job_id)
+        if (
+            not document
+            or document["status"] == "cancelled"
+            or (document.get("execution_id") and document.get("execution_id") != token)
+        ):
+            raise OntologyBuildExecutionLost(job_id)
+
     def shutdown(self) -> None:
         """再ロードで消える自プロセスの daemon job を永続的に中断する。"""
 
@@ -2919,7 +3044,17 @@ class OntologyBuildService:
                     logger.exception("ontology_build_shutdown_failed", extra={"job_id": job_id})
                     break
 
+    def peek(self, job_id: str) -> OntologyBuildJob | None:
+        """scope 認可前は復旧の書き込みを行わない。"""
+        return self._job_from_document(self._runtime.store.get_job(job_id))
+
     def get(self, job_id: str) -> OntologyBuildJob | None:
+        document = self._recover_document(self._runtime.store.get_job(job_id))
+        stored = self._job_from_document(document)
+        if stored and stored.status in _TERMINAL_STATUSES:
+            with self._lock:
+                self._jobs[job_id] = stored
+            return self._normalize_job_for_response(stored)
         # 自プロセスの実行 thread だけは保存前の進捗を返す。再ロード後に復元した
         # job と external job は store が正(独立 worker の復旧結果も反映する)。
         with self._lock:
@@ -2931,6 +3066,9 @@ class OntologyBuildService:
         with self._lock:
             job = self._jobs.get(job_id)
             if job is not None:
+                # 終端は永続化後に返す。未保存の failed を見て直ちに retry する競合を防ぐ。
+                if job.status in _TERMINAL_STATUSES and stored is not None:
+                    return self._normalize_job_for_response(stored)
                 return self._normalize_job_for_response(job)
         restored = self._restore_from_store(job_id)
         return self._normalize_job_for_response(restored) if restored is not None else None
@@ -3143,9 +3281,10 @@ class OntologyBuildService:
 
         documents = self._runtime.store.list_documents("jobs", {"profile_id": profile_id})
         jobs = [
-            OntologyBuildJob.model_validate(document["payload"])
+            job
             for document in documents
             if document.get("job_type") == "build"
+            if (job := self._job_from_document(self._recover_document(document))) is not None
         ]
         jobs.sort(key=lambda job: (job.created_at, job.id), reverse=True)
         return [self._normalize_job_for_response(job) for job in jobs[: max(1, limit)]]
@@ -3219,7 +3358,7 @@ class OntologyBuildService:
     def retry(self, job_id: str) -> OntologyBuildJob:
         """failed/cancelled job を保存済み入力から新規 job として再実行する。"""
 
-        document = self._runtime.store.get_document("jobs", {"job_id": job_id})
+        document = self._recover_document(self._runtime.store.get_job(job_id))
         if document is None or document.get("job_type") != "build":
             raise OntologyNotFoundError(
                 "ONTOLOGY_BUILD_JOB_NOT_FOUND",
@@ -3268,6 +3407,7 @@ class OntologyBuildService:
             ),
             source_documents=sources,
             idempotency_key=f"retry:{job_id}:{uuid4().hex}",
+            checkpoint_job_ids=[job_id, *payload.get("checkpoint_job_ids", [])],
         )
 
     def _acquire_profile_job_lock(self, profile_id: str, job_id: str) -> None:
@@ -3337,6 +3477,7 @@ class OntologyBuildService:
             {
                 "operation": _PROFILE_ACTIVE_LOCK_OPERATION,
                 "idempotency_key": profile_id,
+                "resource_id": job_id,
             },
         )
 
@@ -3344,7 +3485,7 @@ class OntologyBuildService:
         job_id = str(lock.get("resource_id") or "")
         if not job_id:
             return None
-        document = self._runtime.store.get_document("jobs", {"job_id": job_id})
+        document = self._recover_document(self._runtime.store.get_job(job_id))
         job = self._job_from_document(document)
         if job is None:
             payload = lock.get("payload")
@@ -3372,22 +3513,14 @@ class OntologyBuildService:
         return job if job.status not in _TERMINAL_STATUSES else None
 
     def _find_active_profile_job(self, profile_id: str) -> OntologyBuildJob | None:
-        jobs: list[OntologyBuildJob] = []
-        for document in self._runtime.store.list_documents("jobs", {"profile_id": profile_id}):
-            job = self._job_from_document(document)
-            if job is not None:
-                jobs.append(job)
-        with self._lock:
-            jobs.extend(
-                job.model_copy(deep=True)
-                for job in self._jobs.values()
-                if job.profile_id == profile_id
-            )
-        active = [job for job in jobs if job.status not in _TERMINAL_STATUSES]
-        if not active:
-            return None
-        active.sort(key=lambda job: (job.created_at, job.id))
-        return active[0]
+        jobs = [
+            job
+            for document in self._runtime.store.list_documents("jobs", {"profile_id": profile_id})
+            if (job := self._job_from_document(self._recover_document(document))) is not None
+            and job.status not in _TERMINAL_STATUSES
+        ]
+        jobs.sort(key=lambda job: (job.created_at, job.id))
+        return jobs[0] if jobs else None
 
     @staticmethod
     def _job_from_document(document: Mapping[str, Any] | None) -> OntologyBuildJob | None:
@@ -3488,7 +3621,7 @@ class OntologyBuildService:
         # etag を読み直して再試行する。persisted が CANCELLED になっていたら cancel を優先する。
         with self._persist_lock:
             for attempt in range(3):
-                current = self._runtime.store.get_document("jobs", {"job_id": job.id})
+                current = self._recover_document(self._runtime.store.get_job(job.id))
                 if (
                     current is not None
                     and current.get("status") == OntologyBuildStatus.CANCELLED.value
@@ -3499,7 +3632,10 @@ class OntologyBuildService:
                         self._jobs[job.id] = cancelled
                     return
                 with self._lock:
+                    token = self._execution_ids.get(job.id)
                     input_payload = self._inputs.get(job.id)
+                if current and current.get("execution_id") and current["execution_id"] != token:
+                    raise OntologyBuildExecutionLost(job.id)
                 if input_payload is None and current is not None:
                     current_input = current.get("input_payload")
                     input_payload = dict(current_input) if isinstance(current_input, dict) else {}
@@ -3507,6 +3643,17 @@ class OntologyBuildService:
                     self._runtime.store.save_document(
                         "jobs",
                         {
+                            **(current or {}),
+                            "deadline_at": (current or {}).get("deadline_at")
+                            or (
+                                job.created_at
+                                + timedelta(
+                                    seconds=get_settings().nl2sql_ontology_build_timeout_seconds
+                                )
+                            ).isoformat(),
+                            "dispatch_mode": (current or {}).get(
+                                "dispatch_mode", get_settings().nl2sql_ontology_worker_mode
+                            ),
                             "job_id": job.id,
                             "job_type": "build",
                             "profile_id": job.profile_id,
@@ -3824,6 +3971,23 @@ class OntologyBuildService:
             "ontology_batch", job_id, task.name.value, task.prompt, task.context
         )
         checkpoint = self._runtime.store.get_artifact(checkpoint_id)
+        if checkpoint is None and job is not None:
+            with self._lock:
+                prior_ids = list(self._inputs.get(job_id, {}).get("checkpoint_job_ids", []))
+            for prior_id in prior_ids:
+                prior = self._job_from_document(self._runtime.store.get_job(prior_id))
+                if (
+                    not prior
+                    or prior.profile_id != job.profile_id
+                    or prior.profile_fingerprint != job.profile_fingerprint
+                ):
+                    continue
+                previous_id = stable_ontology_id(
+                    "ontology_batch", prior_id, task.name.value, task.prompt, task.context
+                )
+                checkpoint = self._runtime.store.get_artifact(previous_id)
+                if checkpoint is not None:
+                    break
         if (
             checkpoint is not None
             and job is not None
@@ -3914,8 +4078,29 @@ class OntologyBuildService:
         return [], [f"{task.name.value} の抽出に失敗しました: {last_error}"]
 
     def _run_safely(self, job_id: str, business_text: str, qa_pairs: list[QaPair]) -> None:
+        token = self._claim_execution(job_id)
+        if token is None:
+            return
+        stop = threading.Event()
+
+        def renew() -> None:
+            interval = min(30.0, get_settings().nl2sql_ontology_build_lease_seconds / 3)
+            while not stop.wait(interval):
+                try:
+                    if not self._heartbeat(job_id, token):
+                        return
+                except Exception as exc:
+                    logger.warning(
+                        "構築 heartbeat の保存に失敗しました。期限失効後は結果を破棄します。",
+                        extra={"job_id": job_id, "error_type": type(exc).__name__},
+                    )
+
+        heartbeat = threading.Thread(target=renew, daemon=True, name=f"{job_id}-heartbeat")
         try:
+            heartbeat.start()
             self._run(job_id, business_text, qa_pairs)
+        except OntologyBuildExecutionLost:
+            logger.info("失効した構築処理を停止しました。", extra={"job_id": job_id})
         except Exception as exc:  # pragma: no cover - 予期しない障害の最終防壁
             logger.warning("ontology_build_job_failed", exc_info=True)
             current = self.get(job_id)
@@ -3930,6 +4115,11 @@ class OntologyBuildService:
 
             self._update(job_id, mutate)
             record_job(job_type="build", status="failed", error_code="unexpected")
+        finally:
+            stop.set()
+            with self._lock:
+                if self._execution_ids.get(job_id) == token:
+                    self._execution_ids.pop(job_id, None)
 
     def _fail(
         self,
@@ -4743,6 +4933,7 @@ class OntologyBuildService:
         self._emit(job_id, f"Markdown 下書きをレンダリングしました({len(markdown_output)} 文字)。")
 
         def save_progress(message_ja: str) -> None:
+            self._assert_execution(job_id)
             # 保存完了イベントには機械可読コードを付け、frontend は文言正規表現ではなく
             # このコードで Markdown 下書きの再取得を判断できるようにする。
             code = "MARKDOWN_DRAFT_UPDATED" if "保存しました" in message_ja else ""
@@ -4803,6 +4994,7 @@ class OntologyBuildService:
 
         from .ontology_definition_service import ProfileOntologyDefinitionService
 
+        self._assert_execution(job_id)
         bundle = ProfileOntologyDefinitionService(self._runtime).save_build(
             profile_id=job.profile_id,
             job_id=job_id,
