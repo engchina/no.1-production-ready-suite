@@ -44,7 +44,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 
-import { Button } from "@engchina/production-ready-ui";
+import { Button, StatusBadge } from "@engchina/production-ready-ui";
 import { cn } from "@/lib/utils";
 
 import { t } from "@/lib/i18n";
@@ -249,10 +249,15 @@ const OntologyNodeCard = memo(function OntologyNodeCard({
       </span>
       <span className="grid min-w-0 gap-0.5">
         <span
-          className="inline-flex max-w-full items-center justify-self-start truncate rounded border border-current/20 px-1.5 py-0.5 text-xs font-semibold leading-3 opacity-75"
+          className="min-w-0 justify-self-start"
           data-testid="ontology-node-kind-label"
         >
-          {display.kindLabel}
+          <StatusBadge
+            variant="info"
+            icon={false}
+            label={display.kindLabel}
+            className="max-w-full whitespace-normal text-left"
+          />
         </span>
         <span className="block truncate text-sm font-semibold leading-5">
           {display.primaryLabel}

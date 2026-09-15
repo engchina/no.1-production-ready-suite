@@ -1313,6 +1313,8 @@ test("ノードはドラッグで移動でき、リセットで決定論レイ�
   // アニメーション中に boundingBox を取るとポインタ位置からノードがずれ、
   // ノードドラッグではなくキャンバスのパンになってしまう。
   await page.waitForTimeout(700);
+  // カードの実測高さで物理表が画面下へ移る場合も、ドラッグ対象を表示して座標を取る。
+  await node.scrollIntoViewIfNeeded();
   const initialTransform = await node.evaluate((el) => el.style.transform);
   const resetButton = playground.getByTestId("ontology-graph-reset-layout");
   await expect(resetButton).toBeDisabled();
@@ -1576,4 +1578,47 @@ test("公開済み Profile から未公開 Profile へ切り替えると graph �
   await page.getByTestId("ontology-build-profile-select").selectOption("default");
   await page.getByTestId("ontology-view-fetch").click();
   await expect(panel.getByTestId("ontology-playground-question")).toHaveValue("");
+});
+
+test("ノード種別は共有バッジで長い日本語名を欠けずに表示する", async ({ page }, testInfo) => {
+  await mockApi(page, { ontologyGraph: typedSemanticGraph });
+  await page.goto("/ontology-build?profile=default");
+  await page.getByTestId("ontology-view-fetch").click();
+  const playground = page.getByRole("region", { name: "質問のオントロジー接地確認用グラフ" });
+  await openGraphIfCollapsed(page, playground);
+  for (const width of testInfo.project.name === "desktop" ? [1280, 1920] : [375]) {
+    await page.setViewportSize({ width, height: 1000 });
+    for (const theme of ["light", "dark"]) {
+      await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
+      for (const [id, label] of [["object", "オブジェクト型（Object Type）"], ["property", "プロパティ（Property）"]]) {
+        await playground.getByRole("combobox", { name: "概念の種類", exact: true }).selectOption(id === "object" ? "object_type" : "property");
+        const card = playground.getByTestId(`ontology-node-card-${id}`);
+        const badge = card.getByTestId("ontology-node-kind-label").locator("[data-status-variant]");
+        await expect(badge).toHaveText(label);
+        await expect(badge).toHaveAttribute("data-status-variant", "info");
+        const geometry = await badge.evaluate(element => {
+          const box = element.getBoundingClientRect();
+          const card = element.closest("[data-ontology-node-kind]")!.getBoundingClientRect();
+          const range = document.createRange();
+          range.selectNodeContents(element);
+          const text = range.getBoundingClientRect();
+          return {
+            clipped: element.scrollWidth > element.clientWidth || element.scrollHeight > element.clientHeight,
+            fits: text.left >= box.left && text.right <= box.right && text.top >= box.top && text.bottom <= box.bottom,
+            inside: box.left >= card.left && box.right <= card.right && box.top >= card.top && box.bottom <= card.bottom,
+            opacity: getComputedStyle(element.parentElement!).opacity,
+          };
+        });
+        expect(geometry).toEqual({ clipped: false, fits: true, inside: true, opacity: "1" });
+        await playground.getByTestId("ontology-playground-graph-region").screenshot({ path: testInfo.outputPath(`node-kind-${id}-${width}-${theme}.png`) });
+      }
+      await expectNoHorizontalScroll(page);
+      await playground.getByTestId("ontology-playground-graph-region").screenshot({ path: testInfo.outputPath(`node-kind-badges-${width}-${theme}.png`) });
+    }
+  }
+  await playground.getByRole("combobox", { name: "概念の種類", exact: true }).selectOption("object_type");
+  const object = playground.locator('.react-flow__node[data-id="object"]');
+  await object.focus();
+  await page.keyboard.press("Enter");
+  await expect(object).toBeFocused();
 });
