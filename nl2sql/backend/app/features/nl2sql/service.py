@@ -71,6 +71,7 @@ from .incremental_store import (
     IncrementalVersionConflict,
     MemoryIncrementalNl2SqlRepository,
     OracleIncrementalNl2SqlRepository,
+    SchemaRefreshExecutionLost,
     VersionedTtlCache,
     _decode_cursor,
     _profile_matches_query,
@@ -4481,13 +4482,14 @@ class Nl2SqlService:
                 ).isoformat(),
             }
         )
-        return repository.save_refresh_job(renewed)
+        return repository.save_refresh_job(renewed, expected_owner=job)
 
     def _run_schema_refresh_job(self, job_id: str | None) -> bool:
         repository = self._refresh_job_repository
         if not self._schema_refresh_lock.acquire(blocking=False):
             return False
         claimed_job_id = job_id or ""
+        job: SchemaRefreshJob | None = None
         try:
             refresh_observation = observe_schema_refresh()
             refresh_state = refresh_observation.__enter__()
@@ -4501,7 +4503,7 @@ class Nl2SqlService:
             claimed_job_id = job.job_id
             phase_started = time.monotonic()
             job = repository.save_refresh_job(
-                job.model_copy(update={"phase": SchemaRefreshPhase.SCANNING})
+                job.model_copy(update={"phase": SchemaRefreshPhase.SCANNING}), expected_owner=job
             )
             stored_manifest = repository.schema_manifest()
             target_keys = self._schema_refresh_target_keys(job)
@@ -4537,7 +4539,8 @@ class Nl2SqlService:
                         "phase": SchemaRefreshPhase.FETCHING,
                         "total_objects": refresh_total_objects,
                     }
-                )
+                ),
+                expected_owner=job,
             )
             incoming_keys = set(incoming_manifest)
             if job.mode == SchemaRefreshMode.TARGETED:
@@ -4588,7 +4591,8 @@ class Nl2SqlService:
                             "phase": SchemaRefreshPhase.PERSISTING,
                             "processed_objects": refresh_total_objects,
                         }
-                    )
+                    ),
+                    expected_owner=job,
                 )
                 head = repository.get_catalog_head()
                 SCHEMA_REFRESH_PHASE_SECONDS.labels(phase="persisting").observe(
@@ -4659,13 +4663,15 @@ class Nl2SqlService:
                             "phase": SchemaRefreshPhase.PERSISTING,
                             "processed_objects": refresh_total_objects,
                         }
-                    )
+                    ),
+                    expected_owner=job,
                 )
                 head = repository.apply_schema_refresh(
                     catalog=merged,
                     manifest=publish_manifest,
                     changed_keys=changed_keys,
                     deleted_keys=deleted_keys,
+                    execution=job,
                 )
                 SCHEMA_REFRESH_PHASE_SECONDS.labels(phase="persisting").observe(
                     time.monotonic() - phase_started
@@ -4689,7 +4695,8 @@ class Nl2SqlService:
                         "deleted_objects": len(deleted_keys),
                         "catalog_version": head.catalog_version,
                     }
-                )
+                ),
+                expected_owner=job,
             )
             refresh_state["status"] = "done"
             SCHEMA_REFRESH_PENDING_AGE_SECONDS.set(0)
@@ -4704,6 +4711,9 @@ class Nl2SqlService:
                 },
             )
             return True
+        except SchemaRefreshExecutionLost:
+            logger.info("schema_refresh_execution_lost", extra={"job_id": claimed_job_id})
+            return False
         except SchemaRefreshFullRequired as exc:
             logger.warning(
                 "schema_refresh_job_requires_full_refresh",
@@ -4713,20 +4723,22 @@ class Nl2SqlService:
                 },
             )
             SCHEMA_REFRESH_ERRORS.labels(error_code=exc.reason_code).inc()
-            failed = repository.get_refresh_job(claimed_job_id) if claimed_job_id else None
+            failed = job
             if failed is not None:
-                repository.save_refresh_job(
-                    failed.model_copy(
-                        update={
-                            "status": SchemaRefreshJobStatus.ERROR,
-                            "finished_at": _utc_now(),
-                            "heartbeat_at": _utc_now(),
-                            "lease_expires_at": None,
-                            "error_code": exc.reason_code,
-                            "requires_full_refresh": True,
-                        }
+                with suppress(SchemaRefreshExecutionLost):
+                    repository.save_refresh_job(
+                        failed.model_copy(
+                            update={
+                                "status": SchemaRefreshJobStatus.ERROR,
+                                "finished_at": _utc_now(),
+                                "heartbeat_at": _utc_now(),
+                                "lease_expires_at": None,
+                                "error_code": exc.reason_code,
+                                "requires_full_refresh": True,
+                            }
+                        ),
+                        expected_owner=failed,
                     )
-                )
             return False
         except Exception as exc:
             logger.exception(
@@ -4737,19 +4749,21 @@ class Nl2SqlService:
                 },
             )
             SCHEMA_REFRESH_ERRORS.labels(error_code="schema_refresh_failed").inc()
-            failed = repository.get_refresh_job(claimed_job_id) if claimed_job_id else None
+            failed = job
             if failed is not None:
-                repository.save_refresh_job(
-                    failed.model_copy(
-                        update={
-                            "status": SchemaRefreshJobStatus.ERROR,
-                            "finished_at": _utc_now(),
-                            "heartbeat_at": _utc_now(),
-                            "lease_expires_at": None,
-                            "error_code": "schema_refresh_failed",
-                        }
+                with suppress(SchemaRefreshExecutionLost):
+                    repository.save_refresh_job(
+                        failed.model_copy(
+                            update={
+                                "status": SchemaRefreshJobStatus.ERROR,
+                                "finished_at": _utc_now(),
+                                "heartbeat_at": _utc_now(),
+                                "lease_expires_at": None,
+                                "error_code": "schema_refresh_failed",
+                            }
+                        ),
+                        expected_owner=failed,
                     )
-                )
             return False
         finally:
             observation = locals().get("refresh_observation")

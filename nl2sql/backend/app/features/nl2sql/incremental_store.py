@@ -60,6 +60,10 @@ class IncrementalStoreNotMigrated(IncrementalStoreError):
     """必要な versioned migration が未適用。"""
 
 
+class SchemaRefreshExecutionLost(IncrementalStoreError):
+    """DB 構造更新の実行権限が失効している。"""
+
+
 class IncrementalVersionConflict(IncrementalStoreError):
     """ETag が現在値と一致しない。"""
 
@@ -228,6 +232,27 @@ def _state_document_matches_fence(
         except ValueError:
             return False
     return True
+
+
+def _assert_schema_refresh_owner(
+    current: SchemaRefreshJob | None, expected: SchemaRefreshJob
+) -> None:
+    if current is None or not _state_document_matches_fence(
+        current.model_dump(mode="json"),
+        {"status": "running", "worker_id": expected.worker_id, "attempt": expected.attempt},
+        require_live_lease=True,
+    ):
+        raise SchemaRefreshExecutionLost(expected.job_id)
+
+
+def _lock_schema_refresh_owner(cursor: Any, expected: SchemaRefreshJob) -> None:
+    cursor.execute(
+        "SELECT PAYLOAD_JSON FROM NL2SQL_SCHEMA_REFRESH_JOBS " "WHERE JOB_ID = :job_id FOR UPDATE",
+        {"job_id": expected.job_id},
+    )
+    row = cursor.fetchone()
+    current = SchemaRefreshJob.model_validate_json(_read_lob(row[0])) if row else None
+    _assert_schema_refresh_owner(current, expected)
 
 
 def _write_state_document(
@@ -569,9 +594,12 @@ class IncrementalNl2SqlRepository(Protocol):
         manifest: Mapping[tuple[str, str], str],
         changed_keys: set[tuple[str, str]],
         deleted_keys: set[tuple[str, str]],
+        execution: SchemaRefreshJob | None = None,
     ) -> SchemaCatalogHead: ...
 
-    def save_refresh_job(self, job: SchemaRefreshJob) -> SchemaRefreshJob: ...
+    def save_refresh_job(
+        self, job: SchemaRefreshJob, *, expected_owner: SchemaRefreshJob | None = None
+    ) -> SchemaRefreshJob: ...
 
     def get_refresh_job(self, job_id: str) -> SchemaRefreshJob | None: ...
 
@@ -974,9 +1002,12 @@ class MemoryIncrementalNl2SqlRepository:
         manifest: Mapping[tuple[str, str], str],
         changed_keys: set[tuple[str, str]],
         deleted_keys: set[tuple[str, str]],
+        execution: SchemaRefreshJob | None = None,
     ) -> SchemaCatalogHead:
         del changed_keys, deleted_keys
         with self._lock:
+            if execution is not None:
+                _assert_schema_refresh_owner(self._refresh_jobs.get(execution.job_id), execution)
             self._catalog = filter_user_visible_catalog(catalog).model_copy(deep=True)
             self._manifest = {
                 key: value
@@ -987,8 +1018,12 @@ class MemoryIncrementalNl2SqlRepository:
             self._tokens[SCHEMA_NAMESPACE] += 1
             return self.get_catalog_head()
 
-    def save_refresh_job(self, job: SchemaRefreshJob) -> SchemaRefreshJob:
+    def save_refresh_job(
+        self, job: SchemaRefreshJob, *, expected_owner: SchemaRefreshJob | None = None
+    ) -> SchemaRefreshJob:
         with self._lock:
+            if expected_owner is not None:
+                _assert_schema_refresh_owner(self._refresh_jobs.get(job.job_id), expected_owner)
             self._refresh_jobs[job.job_id] = job.model_copy(deep=True)
             return job.model_copy(deep=True)
 
@@ -1901,6 +1936,7 @@ class OracleIncrementalNl2SqlRepository:
         manifest: Mapping[tuple[str, str], str],
         changed_keys: set[tuple[str, str]],
         deleted_keys: set[tuple[str, str]],
+        execution: SchemaRefreshJob | None = None,
     ) -> SchemaCatalogHead:
         catalog = filter_user_visible_catalog(catalog)
         manifest = {
@@ -1914,6 +1950,8 @@ class OracleIncrementalNl2SqlRepository:
         table_by_key = {(table.owner, table.table_name): table for table in catalog.tables}
         with self._connection_factory() as connection, connection.cursor() as cursor:
             try:
+                if execution is not None:
+                    _lock_schema_refresh_owner(cursor, execution)
                 cursor.execute(
                     "SELECT CATALOG_VERSION FROM NL2SQL_SCHEMA_CATALOG_HEAD "
                     "WHERE HEAD_KEY = 'active' FOR UPDATE"
@@ -1989,33 +2027,41 @@ class OracleIncrementalNl2SqlRepository:
                 raise
         return self.get_catalog_head()
 
-    def save_refresh_job(self, job: SchemaRefreshJob) -> SchemaRefreshJob:
+    def save_refresh_job(
+        self, job: SchemaRefreshJob, *, expected_owner: SchemaRefreshJob | None = None
+    ) -> SchemaRefreshJob:
         payload = _canonical_json(job.model_dump(mode="json"))
         heartbeat_at = datetime.fromisoformat(job.heartbeat_at) if job.heartbeat_at else None
         lease_expires_at = (
             datetime.fromisoformat(job.lease_expires_at) if job.lease_expires_at else None
         )
         with self._connection_factory() as connection, connection.cursor() as cursor:
-            cursor.execute(
-                "MERGE INTO NL2SQL_SCHEMA_REFRESH_JOBS t USING (SELECT :job_id JOB_ID "
-                "FROM DUAL) s ON (t.JOB_ID = s.JOB_ID) WHEN MATCHED THEN UPDATE SET "
-                "t.STATUS = :status, t.WORKER_ID = :worker_id, "
-                "t.HEARTBEAT_AT = :heartbeat_at, t.LEASE_EXPIRES_AT = :lease_expires_at, "
-                "t.ATTEMPT_NO = :attempt, t.PAYLOAD_JSON = :payload, "
-                "t.UPDATED_AT = SYSTIMESTAMP "
-                "WHEN NOT MATCHED THEN INSERT (JOB_ID, STATUS, PAYLOAD_JSON) "
-                "VALUES (:job_id, :status, :payload)",
-                {
-                    "job_id": job.job_id,
-                    "status": job.status.value,
-                    "worker_id": job.worker_id,
-                    "heartbeat_at": heartbeat_at,
-                    "lease_expires_at": lease_expires_at,
-                    "attempt": job.attempt,
-                    "payload": payload,
-                },
-            )
-            connection.commit()
+            try:
+                if expected_owner is not None:
+                    _lock_schema_refresh_owner(cursor, expected_owner)
+                cursor.execute(
+                    "MERGE INTO NL2SQL_SCHEMA_REFRESH_JOBS t USING (SELECT :job_id JOB_ID "
+                    "FROM DUAL) s ON (t.JOB_ID = s.JOB_ID) WHEN MATCHED THEN UPDATE SET "
+                    "t.STATUS = :status, t.WORKER_ID = :worker_id, "
+                    "t.HEARTBEAT_AT = :heartbeat_at, t.LEASE_EXPIRES_AT = :lease_expires_at, "
+                    "t.ATTEMPT_NO = :attempt, t.PAYLOAD_JSON = :payload, "
+                    "t.UPDATED_AT = SYSTIMESTAMP "
+                    "WHEN NOT MATCHED THEN INSERT (JOB_ID, STATUS, PAYLOAD_JSON) "
+                    "VALUES (:job_id, :status, :payload)",
+                    {
+                        "job_id": job.job_id,
+                        "status": job.status.value,
+                        "worker_id": job.worker_id,
+                        "heartbeat_at": heartbeat_at,
+                        "lease_expires_at": lease_expires_at,
+                        "attempt": job.attempt,
+                        "payload": payload,
+                    },
+                )
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
         return job.model_copy(deep=True)
 
     def get_refresh_job(self, job_id: str) -> SchemaRefreshJob | None:

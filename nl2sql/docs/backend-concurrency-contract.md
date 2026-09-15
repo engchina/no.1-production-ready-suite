@@ -92,3 +92,9 @@ async def import_example(file: UploadFile) -> ApiResponse[ImportData]:
 - state repository の `patch_document_if_current()` は worker / attempt 等の比較と lease / deadline を row lock 内で確認する。Profile キャッシュの差分、更新メタ情報、job 完了を同一 transaction で保存し、失効・保存失敗で旧キャッシュを部分更新しない。
 - 取得時の回復は CAS 相当の条件付き更新を使い、生存 worker や完了済み job を上書きしない。running の GET は thread を再配送しない。
 - inprocess shutdown はこのサービスが dispatch / claim した job だけを pool close 前に off-loop で中断する。実 Oracle Profile の作成・変更を自動再送せず、再実行するのは一覧の読み取りのみ。
+
+### DB 構造再取得の実行所有権 (#645)
+
+- schema refresh の heartbeat / phase / 完了 / 失敗保存は、保存済みの `running`、`worker_id`、`attempt`、未失効 lease が一致する場合だけ受理する。例外処理で最新 job を読み直して新 worker の権限を借りない。
+- catalog の差分適用は同じ transaction で job 行を lock して所有権を検証し、その後 catalog head / object / column / constraint / dependency を更新する。接管後の旧 worker は catalog や job を変更しない。
+- lease 切れの再 claim は metadata の再取得として維持する。catalog commit 後に job 完了保存前で終了しても、次の worker は保存済み manifest と照合して完了できる。DDL・ユーザ SQL の再実行はこの worker の責務に含めない。
