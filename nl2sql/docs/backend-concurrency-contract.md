@@ -104,7 +104,9 @@ async def import_example(file: UploadFile) -> ApiResponse[ImportData]:
 - claim の `worker_id` / `attempt` は実行 thread に固定し、terminal payload の worker field をクリアしても保存条件として保持する。別 thread の接管により process 内 cache が置換された場合も旧実行は新しい権限を借りない。
 - heartbeat / phase / error / result の保存は永続 job 行の `running` と所有権・未失効 lease を確認する。結果と history は同じ transaction で保存し、遅着結果の history 追加も拒否する。
 - 各 stage と最終保存前で所有権・キャンセルを確認する。外部呼び出し中の thread は強制停止せず、戻った時点で継続と保存を拒否する。既に実行を開始した read-only SQL は取り消せない場合がある。
+- SQL job の同期実行中は専用 heartbeat thread が `min(30秒, lease / 3)`（lease は最低30秒）ごとに元の worker / attempt で時刻 field だけを条件付き更新する。長い生成・実行・結果整形も対象とし、進捗や結果の snapshot を heartbeat から書き戻さない。実行終了時に停止を通知し、DB I/O 中の thread の join は1秒までとする。一時的な保存障害はログに残して次の tick で再試行するが、失効・接管後の lease は復活させない。
 - GET は実行元 process を含めて永続 job を正本とする。結果保存障害時の手元の結果＋警告は、元の lease と所有権がなお有効な場合だけ表示し、新 worker の状態を隠さない。
+- GET の DB 読取り後、cache 更新の lock 内で現在の entry を再確認する。読取り途中で claim された実行 object と所有権を、取得した古い snapshot で置換しない（#650 / #651）。
 
 ### バックグラウンド起動経路の横断確認 (#639)
 

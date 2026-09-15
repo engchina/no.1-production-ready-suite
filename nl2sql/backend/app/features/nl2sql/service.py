@@ -22,8 +22,8 @@ import threading
 import time
 import unicodedata
 import uuid
-from collections.abc import Callable, Iterable, Mapping, Sequence
-from contextlib import suppress
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -3868,6 +3868,67 @@ class Nl2SqlService:
         ):
             raise JobExecutionLost(job_id)
 
+    def _heartbeat_job(self, job_id: str, owner: tuple[str, int]) -> bool:
+        """元の claim の時刻だけを更新し、並行する進捗・結果保存を巻き戻さない。"""
+        repository = self._incremental_repository
+        if repository is None:
+            return False
+        now = datetime.now(UTC)
+        lease_seconds = max(30.0, get_settings().nl2sql_job_lease_seconds)
+        return (
+            repository.patch_document_if_current(
+                "jobs",
+                job_id,
+                {
+                    "heartbeat_at": now.isoformat(),
+                    "lease_expires_at": (now + timedelta(seconds=lease_seconds)).isoformat(),
+                },
+                expected={"status": "running", "worker_id": owner[0], "attempt": owner[1]},
+                require_live_lease=True,
+            )
+            is not None
+        )
+
+    @staticmethod
+    def _job_heartbeat_interval_seconds() -> float:
+        return min(30.0, max(30.0, get_settings().nl2sql_job_lease_seconds) / 3)
+
+    @contextmanager
+    def _keep_job_lease_alive(self, job_id: str) -> Iterator[None]:
+        if self._incremental_repository is None:
+            yield
+            return
+        with self._lock:
+            job = self._execution_job_locked(job_id)
+            owner = self._job_execution_owner(job)
+        if owner is None:
+            raise JobExecutionLost(job_id)
+        stop = threading.Event()
+
+        def renew() -> None:
+            while not stop.wait(self._job_heartbeat_interval_seconds()):
+                try:
+                    if not self._heartbeat_job(job_id, owner):
+                        return
+                except Exception:
+                    # 一時障害では次の tick で再試行する。失効した lease は復活させない。
+                    logger.warning(
+                        "nl2sql_job_heartbeat_failed",
+                        exc_info=True,
+                        extra={"job_id": job_id, "worker_id": owner[0], "attempt": owner[1]},
+                    )
+
+        heartbeat = threading.Thread(
+            target=renew, daemon=True, name=f"nl2sql-job-heartbeat-{job_id}"
+        )
+        heartbeat.start()
+        try:
+            yield
+        finally:
+            stop.set()
+            # DB 障害中の同期 I/O を待って job の終了を止めない。
+            heartbeat.join(timeout=1.0)
+
     def _persist_job_snapshot(self, job: StoredJob, history: HistoryItem | None = None) -> None:
         payload = self._job_to_snapshot(job)
         documents = [("jobs", job.job_id, payload)]
@@ -4057,7 +4118,9 @@ class Nl2SqlService:
                 return local
         job = self._job_from_snapshot(document)
         with self._lock:
-            if local is None or not local.owned:
+            # DB 読取り中に claim された実行の所有権を古い snapshot で消さない。
+            current = self._jobs.get(job_id)
+            if current is None or not current.owned:
                 self._jobs[job_id] = job
         return job
 
@@ -17594,7 +17657,10 @@ class Nl2SqlService:
                     return
                 actor_user_uuid = pending.actor_user_uuid
                 actor_is_system_admin = pending.actor_is_system_admin
-            with actor_scope(actor_user_uuid, is_system_admin=actor_is_system_admin):
+            with (
+                self._keep_job_lease_alive(job_id),
+                actor_scope(actor_user_uuid, is_system_admin=actor_is_system_admin),
+            ):
                 self._run_job(job_id)
         except JobExecutionLost:
             logger.info("nl2sql_job_execution_lost", extra={"job_id": job_id})
