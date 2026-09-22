@@ -10609,6 +10609,24 @@ for (const pageId of ["comment-management", "annotation-management", "domain-man
     await expectLargeActionButton(executePanel.getByRole("button", { name: "SQL 実行", exact: true }));
     await expectNoHorizontalScroll(page);
   });
+
+  test(`${pageId} は再読込後に選択対象の詳細を取り直し、読込中のまま止まらない`, async ({ page }) => {
+    // 開発サーバー(StrictMode)で effect が二重実行されても、再活性化時の 1 回の応答で loading が解除される(#675)。
+    await mockNl2SqlApi(page);
+    await page.goto(`/${pageId}`);
+    await page.getByRole("checkbox", { name: /INVOICES/ }).check();
+    await page.getByRole("button", { name: "情報を取得", exact: true }).click();
+    const inputPanel = page.locator(`#${pageId}-panel-input`);
+    await expect(inputPanel.getByLabel("構造情報")).toHaveValue(/APP\.INVOICES/);
+    await dismissToasts(page);
+
+    await page.reload();
+    await expect(page.getByRole("tab", { name: "入力確認・SQL生成", exact: true })).toHaveAttribute("aria-selected", "true");
+    await expect(inputPanel.getByLabel("構造情報")).toHaveValue(/APP\.INVOICES/, { timeout: 15_000 });
+    await expect(page.getByTestId(`${pageId}-input-detail-skeleton`)).toHaveCount(0);
+    await expect(page.getByText("選択対象は未確認です")).toHaveCount(0);
+    await expect(inputPanel.getByRole("button", { name: "SQL 生成", exact: true })).toBeEnabled();
+  });
 }
 
 test("JOIN WHERE and metadata read result branches replace their result areas with shared skeletons", async ({ page }) => {

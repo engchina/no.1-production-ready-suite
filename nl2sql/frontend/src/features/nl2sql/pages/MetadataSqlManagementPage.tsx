@@ -254,7 +254,9 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
   const selectionSignature = JSON.stringify([...selectedKeys].sort());
   const currentSelection = useRef(selectionSignature);
   currentSelection.current = selectionSignature;
-  useEffect(() => () => { validationSequence.current += 1; }, []);
+  // unmount 時に sequence を進める cleanup は置かない。開発モードの StrictMode は mount → 疑似 unmount → 再 mount で
+  // effect を二重実行するため、cleanup で sequence が進むと再活性化時の唯一の応答が「古い」と判定されて破棄され、
+  // loading が解除されない(#675)。画面は keep-alive で実 unmount はアプリ終了時だけなので不要。
   const [validated, setValidated] = useState(false);
   const [checkedAt, setCheckedAt] = useState("");
   const [loading, setLoading] = useState("");
@@ -294,7 +296,6 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
     generationSequence.current += 1;
     setLoading((current) => current === "generate" ? "" : current);
   }, [generationSignature]);
-  useEffect(() => () => { generationSequence.current += 1; }, []);
   const panels = useMemo(
     () =>
       [

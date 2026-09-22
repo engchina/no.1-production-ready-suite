@@ -11777,6 +11777,7 @@ class Nl2SqlService:
                     if request.operation != "create"
                     else "複数テーブルで共通する列が無いため "
                     "deterministic のドメイン候補はありません。"
+                    "共通列を持つ表を一緒に選ぶか、OCI Enterprise AI の生成を使ってください。"
                 )
             ]
         deterministic = MetadataSqlGenerateData(
