@@ -12,7 +12,7 @@ import json
 import logging
 import re
 import time
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import contextmanager, suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -137,6 +137,38 @@ def _coerce_text(value: Any) -> str:
     if callable(read):
         return str(read())
     return str(value)
+
+
+# ドメインの NOT NULL は ALL_DOMAIN_COLS.NULLABLE で復元するため、同義の CHECK は除外する。
+_DOMAIN_NOT_NULL_CONDITION = re.compile(r'^"?[\w$#]+"?\s+IS\s+NOT\s+NULL$', re.IGNORECASE)
+
+
+def _domain_display_name(owner: str, name: str) -> str:
+    try:
+        return qualified_object_name(owner, name)
+    except ValueError:
+        return f"{owner}.{name}" if owner else name
+
+
+def _domain_column_type(row: Sequence[Any]) -> str:
+    """ALL_DOMAIN_COLS の 1 行を型文字列にする。
+
+    row = (data_type, data_length, char_length, data_precision, data_scale, ...)。
+    """
+    data_type = str(row[0] or "").upper()
+    data_length, char_length, precision, scale = row[1], row[2], row[3], row[4]
+    if data_type in {"VARCHAR2", "VARCHAR", "CHAR"} and data_length:
+        return f"{data_type}({int(data_length)})"
+    if data_type in {"NVARCHAR2", "NCHAR"} and (char_length or data_length):
+        return f"{data_type}({int(char_length or data_length)})"
+    if data_type == "NUMBER" and precision is not None:
+        suffix = f",{int(scale)}" if scale else ""
+        return f"NUMBER({int(precision)}{suffix})"
+    if data_type == "FLOAT" and precision is not None:
+        return f"FLOAT({int(precision)})"
+    if data_type == "RAW" and data_length:
+        return f"RAW({int(data_length)})"
+    return data_type
 
 
 def _coerce_result_value(value: Any) -> Any:
@@ -1167,6 +1199,186 @@ class OracleNl2SqlAdapter:
                 except Exception:
                     column.sample_values = []
 
+    def fetch_domain_inventory(
+        self, targets: list[dict[str, Any]]
+    ) -> tuple[list[dict[str, Any]], list[str]]:
+        """対象表の列に付いた SQL ドメインの定義と schema 内の関連付け列を集める。
+
+        23ai 以降の ALL_TAB_COLS.DOMAIN_NAME / ALL_DOMAINS / ALL_DOMAIN_COLS /
+        ALL_DOMAIN_CONSTRAINTS / ALL_ANNOTATIONS_USAGE を使う。dictionary 列が無い版
+        (ORA-00904)では warning を付けて空を返し、作成フローを壊さない。
+        """
+        warnings: list[str] = []
+        domain_keys: list[tuple[str, str]] = []
+        domains: list[dict[str, Any]] = []
+        try:
+            with self.connection() as conn, conn.cursor() as cursor:
+                for target in targets:
+                    identity = parse_object_identity(
+                        str(target.get("object_name") or ""),
+                        default_owner=str(target.get("owner") or "") or self.settings.oracle_user,
+                    )
+                    try:
+                        cursor.execute(
+                            """
+                            SELECT DISTINCT domain_owner, domain_name
+                            FROM all_tab_cols
+                            WHERE owner = :owner AND table_name = :table_name
+                              AND domain_name IS NOT NULL
+                            """,
+                            {"owner": identity.owner, "table_name": identity.object_name},
+                        )
+                    except Exception as exc:
+                        warnings.append(
+                            "この Oracle ではドメインの dictionary 列を参照できないため"
+                            f"既存ドメインを取得しませんでした: {exc}"
+                        )
+                        return [], warnings
+                    for domain_owner, domain_name in cursor.fetchall():
+                        key = (str(domain_owner or ""), str(domain_name or ""))
+                        if all(key) and key not in domain_keys:
+                            domain_keys.append(key)
+                for owner, name in domain_keys:
+                    try:
+                        definition = self._load_domain_definition(cursor, owner, name)
+                    except Exception as exc:
+                        warnings.append(f"{owner}.{name}: ドメイン定義の取得に失敗しました: {exc}")
+                        continue
+                    if definition is not None:
+                        domains.append(definition)
+        except OracleAdapterError:
+            raise
+        except Exception as exc:
+            raise OracleAdapterError(f"ドメイン情報の取得に失敗しました: {exc}") from exc
+        return domains, warnings
+
+    def _load_domain_definition(self, cursor: Any, owner: str, name: str) -> dict[str, Any] | None:
+        cursor.execute(
+            """
+            SELECT cols, type, data_display, data_order
+            FROM all_domains
+            WHERE owner = :owner AND name = :name
+            """,
+            {"owner": owner, "name": name},
+        )
+        head = cursor.fetchone()
+        if head is None:
+            return None
+        cols = int(head[0] or 0)
+        kind = str(head[1] or "").upper()
+        if kind == "FLEXIBLE":
+            domain_type = "flexible"
+        elif kind == "ENUMERATED":
+            domain_type = "enumerated"
+        elif cols > 1:
+            domain_type = "multi_column"
+        else:
+            domain_type = "single"
+        display = _coerce_text(head[2]).strip()
+        order = _coerce_text(head[3]).strip()
+
+        cursor.execute(
+            """
+            SELECT data_type, data_length, char_length, data_precision, data_scale,
+                   nullable, exact
+            FROM all_domain_cols
+            WHERE owner = :owner AND domain_name = :name AND data_type_id = 1
+            ORDER BY column_id
+            """,
+            {"owner": owner, "name": name},
+        )
+        column_rows = cursor.fetchall()
+        data_type = ""
+        strict = False
+        nullable = True
+        if column_rows and domain_type == "single":
+            first = column_rows[0]
+            data_type = _domain_column_type(first)
+            nullable = str(first[5] or "Y").upper() == "Y"
+            strict = bool(first[6])
+
+        cursor.execute(
+            """
+            SELECT search_condition
+            FROM all_domain_constraints
+            WHERE domain_owner = :owner AND domain_name = :name AND constraint_type = 'C'
+            ORDER BY name
+            """,
+            {"owner": owner, "name": name},
+        )
+        constraints = []
+        for (condition,) in cursor.fetchall():
+            text = _coerce_text(condition).strip()
+            if text and not _DOMAIN_NOT_NULL_CONDITION.match(text):
+                constraints.append(text)
+
+        cursor.execute(
+            """
+            SELECT c.owner, c.table_name, c.column_name
+            FROM all_tab_cols c
+            WHERE c.domain_owner = :owner AND c.domain_name = :name
+              AND c.hidden_column = 'NO'
+              AND EXISTS (
+                SELECT 1 FROM all_tables t
+                WHERE t.owner = c.owner AND t.table_name = c.table_name
+              )
+            ORDER BY c.owner, c.table_name, c.column_id
+            """,
+            {"owner": owner, "name": name},
+        )
+        columns = [
+            {
+                "owner": str(row[0] or ""),
+                "table_name": str(row[1] or ""),
+                "column_name": str(row[2] or ""),
+            }
+            for row in cursor.fetchall()
+        ]
+        return {
+            "owner": owner,
+            "name": name,
+            "domain_type": domain_type,
+            "data_type": data_type,
+            "strict": strict,
+            "nullable": nullable,
+            "constraints": constraints,
+            "display": display,
+            "order": order,
+            "annotations": self._load_domain_annotations(cursor, owner, name),
+            "columns": columns,
+        }
+
+    def _load_domain_annotations(self, cursor: Any, owner: str, name: str) -> list[dict[str, str]]:
+        """ドメインの annotation を列レベル → オブジェクトレベルの順で重複なく集める。
+
+        ALL_ANNOTATIONS_USAGE の owner 列名は版で異なりうるため SELECT * で列名を見て絞る。
+        """
+        cursor.execute(
+            """
+            SELECT * FROM all_annotations_usage
+            WHERE object_name = :name AND object_type = 'DOMAIN'
+            """,
+            {"name": name},
+        )
+        names = [str(item[0]).upper() for item in cursor.description or []]
+        rows = cursor.fetchall()
+        owner_index = next((names.index(c) for c in ("OWNER", "OBJECT_OWNER") if c in names), -1)
+        column_index = names.index("COLUMN_NAME") if "COLUMN_NAME" in names else -1
+        name_index = names.index("ANNOTATION_NAME")
+        value_index = names.index("ANNOTATION_VALUE")
+        ordered = sorted(rows, key=lambda row: 0 if column_index >= 0 and row[column_index] else 1)
+        annotations: list[dict[str, str]] = []
+        seen: set[str] = set()
+        for row in ordered:
+            if owner_index >= 0 and str(row[owner_index] or "") != owner:
+                continue
+            annotation_name = str(row[name_index] or "")
+            if not annotation_name or annotation_name.upper() in seen:
+                continue
+            seen.add(annotation_name.upper())
+            annotations.append({"name": annotation_name, "value": _coerce_text(row[value_index])})
+        return annotations
+
     def fetch_metadata_sample_values(
         self, targets: list[dict[str, Any]], sample_limit: int
     ) -> tuple[dict[str, dict[str, list[str]]], list[str]]:
@@ -1468,6 +1680,23 @@ class OracleNl2SqlAdapter:
         row_count: int | None = None
         ddl = ""
         with self.connection() as conn, conn.cursor() as cursor:
+            domain_names: dict[str, str] = {}
+            try:
+                cursor.execute(
+                    """
+                    SELECT column_name, domain_owner, domain_name
+                    FROM all_tab_cols
+                    WHERE owner = :owner AND table_name = :object_name
+                      AND domain_name IS NOT NULL
+                    """,
+                    {"owner": identity.owner, "object_name": safe_name},
+                )
+                for column_name, domain_owner, domain_name in cursor.fetchall():
+                    domain_names[str(column_name or "")] = _domain_display_name(
+                        str(domain_owner or ""), str(domain_name or "")
+                    )
+            except Exception:  # nosec B110 - 23ai 未満は DOMAIN_NAME 列が無い(ORA-00904)
+                domain_names = {}
             cursor.execute(
                 """
                 SELECT c.column_name,
@@ -1500,6 +1729,7 @@ class OracleNl2SqlAdapter:
                         data_type=str(data_type or ""),
                         nullable=str(nullable or "Y").upper() == "Y",
                         comment=_coerce_text(column_comment),
+                        domain_name=domain_names.get(str(column_name or ""), ""),
                     )
                 )
             cursor.execute(

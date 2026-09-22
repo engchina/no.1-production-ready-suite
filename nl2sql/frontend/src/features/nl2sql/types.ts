@@ -38,6 +38,8 @@ export interface SchemaColumn {
   nullable: boolean;
   comment: string;
   sample_values: string[];
+  /** 列に関連付いた SQL ドメイン(OWNER.NAME)。23ai 以降の dictionary から取得。無ければ空。 */
+  domain_name?: string;
 }
 
 export interface SchemaTable {
@@ -1204,6 +1206,45 @@ export interface MetadataSqlSampleData {
   warnings: string[];
 }
 
+export type DomainOperation = "create" | "update" | "rebuild" | "delete";
+
+export interface DomainAnnotation {
+  name: string;
+  value: string;
+}
+
+export interface DomainColumnRef {
+  owner: string;
+  table_name: string;
+  column_name: string;
+}
+
+export interface DomainDefinition {
+  owner: string;
+  name: string;
+  qualified_name?: string;
+  domain_type: "single" | "multi_column" | "enumerated" | "flexible";
+  data_type: string;
+  strict: boolean;
+  nullable: boolean;
+  constraints: string[];
+  display: string;
+  order: string;
+  annotations: DomainAnnotation[];
+  columns: DomainColumnRef[];
+}
+
+export interface DomainInventoryPayload {
+  targets: MetadataSqlTarget[];
+}
+
+export interface DomainInventoryData {
+  domains: DomainDefinition[];
+  domain_text: string;
+  runtime: string;
+  warnings: string[];
+}
+
 export interface MetadataSqlGeneratePayload {
   targets: MetadataSqlTarget[];
   structure_text: string;
@@ -1211,6 +1252,10 @@ export interface MetadataSqlGeneratePayload {
   foreign_key_text: string;
   sample_text: string;
   extra_text: string;
+  /** ドメイン管理だけが送る。 */
+  operation?: DomainOperation;
+  domain_text?: string;
+  domains?: DomainDefinition[];
 }
 
 export interface MetadataSqlGenerateData {

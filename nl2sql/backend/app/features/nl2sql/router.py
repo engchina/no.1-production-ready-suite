@@ -85,6 +85,8 @@ from .models import (
     DbAdminTruncateTableRequest,
     DemoLearningData,
     DiagnosticsData,
+    DomainInventoryData,
+    DomainInventoryRequest,
     ExecuteRequest,
     FeedbackClearData,
     FeedbackData,
@@ -2157,6 +2159,15 @@ def generate_annotation_sql(
 def apply_annotations(req: AnnotationApplyRequest) -> ApiResponse[AnnotationApplyData]:
     """Oracle annotation の restricted execution。"""
     return ApiResponse(data=nl2sql_service.apply_annotations(req))
+
+
+@router.post("/domains/inventory", response_model=ApiResponse[DomainInventoryData])
+def domain_inventory(req: DomainInventoryRequest) -> ApiResponse[DomainInventoryData]:
+    """対象表の列に付いた既存ドメインの定義と関連付け先を返す。"""
+    try:
+        return ApiResponse(data=nl2sql_service.get_domain_inventory(req))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/domains/generate-sql", response_model=ApiResponse[MetadataSqlGenerateData])

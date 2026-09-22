@@ -65,6 +65,9 @@ import type {
   DbAdminExecuteData,
   DbAdminObjectSummary,
   DbAdminStatementPolicy,
+  DomainInventoryData,
+  DomainInventoryPayload,
+  DomainOperation,
   MetadataSqlGenerateData,
   MetadataSqlGeneratePayload,
   MetadataSqlSampleData,
@@ -218,6 +221,8 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
   const [activePanel, setActivePanel] = useWorkspaceState<MetadataPanel>("activePanel", "targets");
   const [selectedKeys, setSelectedKeys] = useWorkspaceState<string[]>("selectedKeys", []);
   const [details, setDetails] = useState<DbAdminObjectDetail[]>([]);
+  const [domainInventory, setDomainInventory] = useState<DomainInventoryData | null>(null);
+  const [domainOperation, setDomainOperation] = useWorkspaceState<DomainOperation>("domainOperation", "create");
   const [sampleLimit, setSampleLimit] = useWorkspaceState("sampleLimit", 10);
   const [refreshedSampleText, setRefreshedSampleText] = useState<string | null>(null);
   const [extraText, setExtraText] = useWorkspaceState("extraText", MODE_CONFIG[mode].extraText);
@@ -273,7 +278,13 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
     [details, sampleLimit]
   );
   const generationSequence = useRef(0);
-  const generationSignature = JSON.stringify([selectionSignature, inputTexts, sampleLimit, extraText]);
+  const generationSignature = JSON.stringify([
+    selectionSignature,
+    inputTexts,
+    sampleLimit,
+    extraText,
+    mode === "domain" ? [domainOperation, domainInventory?.domain_text ?? ""] : null,
+  ]);
   const currentGenerationSignature = useRef(generationSignature);
   currentGenerationSignature.current = generationSignature;
   useEffect(() => {
@@ -404,6 +415,7 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
     );
     setValidated(false);
     setDetails([]);
+    setDomainInventory(null);
     setRefreshedSampleText(null);
     setGenerated(null);
   };
@@ -428,6 +440,7 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
     }
     setValidated(false);
     setDetails([]);
+    setDomainInventory(null);
     setRefreshedSampleText(null);
     setGenerated(null);
   };
@@ -471,8 +484,26 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
         }));
         nextDetails.push(...batchDetails);
       }
+      let nextInventory: DomainInventoryData | null = null;
+      if (mode === "domain") {
+        // 既存ドメイン(定義と関連付け先)は更新/再作成/削除の判断材料。取得失敗は warning として残し、作成は続行できる。
+        const inventoryPayload: DomainInventoryPayload = {
+          targets: selectedTargets.filter((target) => target.object_type === "table"),
+        };
+        try {
+          nextInventory = await apiPost<DomainInventoryData>("/api/nl2sql/domains/inventory", inventoryPayload);
+        } catch (err) {
+          nextInventory = {
+            domains: [],
+            domain_text: "",
+            runtime: "",
+            warnings: [err instanceof Error ? err.message : t("metadataSql.error.details")],
+          };
+        }
+      }
       if (sequence !== validationSequence.current || validatingSelection !== currentSelection.current) return;
       setDetails(nextDetails);
+      setDomainInventory(nextInventory);
       setValidated(true);
       setCheckedAt(new Date().toISOString());
       if (!preserveWork) { setRefreshedSampleText(null); setGenerated(null); }
@@ -526,10 +557,20 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
         foreign_key_text: inputTexts.foreignKeyText,
         sample_text: samples.sample_text,
         extra_text: extraText,
+        ...(mode === "domain"
+          ? {
+              operation: domainOperation,
+              domain_text: domainInventory?.domain_text ?? "",
+              domains: domainInventory?.domains ?? [],
+            }
+          : {}),
       };
       const generatedSql = await apiPost<MetadataSqlGenerateData>(generatePath, payload);
       if (!isCurrent()) return;
-      setGenerated({ ...generatedSql, warnings: [...samples.warnings, ...generatedSql.warnings] });
+      setGenerated({
+        ...generatedSql,
+        warnings: [...(domainInventory?.warnings ?? []), ...samples.warnings, ...generatedSql.warnings],
+      });
       setGenerationResetSignal((value) => value + 1);
       toast.success(t("metadataSql.toast.generated"));
     } catch (err) {
@@ -692,6 +733,15 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
             sampleText={refreshedSampleText ?? inputTexts.sampleText}
             extraText={extraText}
             loading={loading === "generate"}
+            domain={
+              mode === "domain"
+                ? {
+                    operation: domainOperation,
+                    inventory: domainInventory,
+                    onOperationChange: setDomainOperation,
+                  }
+                : null
+            }
             onSampleLimitChange={(value) => {
               setSampleLimit(value);
               setRefreshedSampleText(null);
@@ -976,6 +1026,7 @@ function MetadataInputPanel({
   sampleText,
   extraText,
   loading,
+  domain,
   onSampleLimitChange,
   onExtraTextChange,
   onGenerate,
@@ -989,6 +1040,12 @@ function MetadataInputPanel({
   sampleText: string;
   extraText: string;
   loading: boolean;
+  /** ドメイン管理だけ: 操作種別と既存ドメイン。 */
+  domain: {
+    operation: DomainOperation;
+    inventory: DomainInventoryData | null;
+    onOperationChange: (value: DomainOperation) => void;
+  } | null;
   onSampleLimitChange: (value: number) => void;
   onExtraTextChange: (value: string) => void;
   onGenerate: () => void;
@@ -1016,6 +1073,20 @@ function MetadataInputPanel({
 
           <div className="grid gap-3 rounded-md border border-border bg-surface-sunken p-3">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+              {domain ? (
+                <DbManagementSelectField
+                  label={t("metadataSql.domain.operation")}
+                  value={domain.operation}
+                  options={[
+                    { value: "create", label: t("metadataSql.domain.operation.create") },
+                    { value: "update", label: t("metadataSql.domain.operation.update") },
+                    { value: "rebuild", label: t("metadataSql.domain.operation.rebuild") },
+                    { value: "delete", label: t("metadataSql.domain.operation.delete") },
+                  ]}
+                  className="sm:w-72"
+                  onChange={domain.onOperationChange}
+                />
+              ) : null}
               <label className="grid min-w-0 gap-1 text-sm font-medium text-fg sm:w-44">
                 <span>{t("metadataSql.input.sampleLimit")}</span>
                 <input
@@ -1039,7 +1110,19 @@ function MetadataInputPanel({
             <MetadataTextarea label={t("metadataSql.input.sample")} value={sampleText} rows={8} />
             <MetadataTextarea label={t("metadataSql.input.pk")} value={inputTexts.primaryKeyText} rows={5} />
             <MetadataTextarea label={t("metadataSql.input.fk")} value={inputTexts.foreignKeyText} rows={5} />
+            {domain ? (
+              <MetadataTextarea
+                label={t("metadataSql.input.domains")}
+                value={domain.inventory?.domain_text || (detailsReady ? t("metadataSql.input.domainsEmpty") : "")}
+                rows={8}
+              />
+            ) : null}
           </div>
+          {domain?.inventory?.warnings.map((warning) => (
+            <p key={warning} className="rounded-md border border-warning-border bg-warning-subtle px-3 py-2 text-sm text-warning-fg">
+              {warning}
+            </p>
+          ))}
 
           <label className="grid gap-1 text-sm font-medium text-fg">
             <span>{t("metadataSql.input.extra")}</span>

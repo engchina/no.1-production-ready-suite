@@ -33,6 +33,8 @@ from app.features.nl2sql.models import (
     DbAdminJoinWhereRequest,
     DbAdminStatementsRequest,
     DbAdminTruncateTableRequest,
+    DomainDefinition,
+    DomainInventoryRequest,
     MetadataSqlGenerateRequest,
     MetadataSqlSampleRequest,
     Nl2SqlEngine,
@@ -5319,7 +5321,7 @@ def test_domain_generation_uses_enterprise_ai_and_falls_back_on_violations() -> 
     )
     assert "CHECK 制約を付け" in enterprise_ai.calls[0]["prompt"]
     assert "ALTER TABLE APP.ORD_TXN MODIFY (CUST_ID) ADD DOMAIN" in enterprise_ai.calls[0]["prompt"]
-    assert "選択された表以外の ALTER TABLE は出力しない" in enterprise_ai.calls[0]["system_prompt"]
+    assert "COLUMNS 以外の ALTER TABLE は出力しない" in enterprise_ai.calls[0]["system_prompt"]
 
     no_samples = FakeEnterpriseAiClient("CREATE DOMAIN APP.X_DOM AS NUMBER;")
     service._enterprise_ai_client = no_samples
@@ -5339,5 +5341,253 @@ def test_domain_generation_uses_enterprise_ai_and_falls_back_on_violations() -> 
         "ALTER TABLE APP.ORDERS MODIFY (CUSTOMER_ID DOMAIN APP.CUSTOMER_ID_DOM);"
     )
     outside = service.generate_domain_sql(request)
+    assert outside.source == "deterministic"
+    assert any("選択した表以外" in warning for warning in outside.warnings)
+
+
+_DOMAIN_INVENTORY: dict[str, Any] = {
+    "owner": "APP",
+    "name": "CUSTOMER_ID_D",
+    "domain_type": "single",
+    "data_type": "NUMBER(10)",
+    "strict": True,
+    "nullable": False,
+    "constraints": ["VALUE > 0"],
+    "display": "",
+    "order": "",
+    "annotations": [
+        {"name": "DESCRIPTION", "value": "Unique identifier for a customer."},
+        {"name": "ALIASES", "value": "customer id, 顧客ID"},
+    ],
+    "columns": [
+        {"owner": "APP", "table_name": "CUSTOMERS", "column_name": "CUSTOMER_ID"},
+        {"owner": "APP", "table_name": "ORDERS", "column_name": "CUSTOMER_ID"},
+        {"owner": "APP", "table_name": "SALES", "column_name": "CUSTOMER_ID"},
+    ],
+}
+
+_DOMAIN_STRUCTURE_WITH_DOMAIN = _DOMAIN_STRUCTURE_TEXT.replace(
+    "- CUSTOMER_ID: NUMBER NULLABLE=N COMMENT=顧客ID",
+    "- CUSTOMER_ID: NUMBER NULLABLE=N DOMAIN=APP.CUSTOMER_ID_D COMMENT=顧客ID",
+)
+
+
+class _FakeDomainInventoryAdapter:
+    def __init__(self, result: tuple[list[dict[str, Any]], list[str]] | Exception) -> None:
+        self.result = result
+        self.calls: list[list[dict[str, Any]]] = []
+
+    def fetch_domain_inventory(
+        self, targets: list[dict[str, Any]]
+    ) -> tuple[list[dict[str, Any]], list[str]]:
+        self.calls.append(targets)
+        if isinstance(self.result, Exception):
+            raise self.result
+        return self.result
+
+
+def test_metadata_input_objects_parse_domain_before_comment() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    objects = service._metadata_input_objects(
+        MetadataSqlGenerateRequest(
+            structure_text=(
+                "OBJECT: APP.SALES\nTYPE: table\nCOMMENT: 売上\nCOLUMNS:\n"
+                "- STAT_CD: CHAR(1) NULLABLE=N DOMAIN=APP.SALES_STATUS_D COMMENT=状態 DOMAIN=偽\n"
+                "- AMT: NUMBER(12,2) NULLABLE=Y COMMENT=金額 DOMAIN=APP.NOT_A_DOMAIN"
+            )
+        )
+    )
+    assert objects[0]["columns"] == [
+        {
+            "name": "STAT_CD",
+            "data_type": "CHAR(1)",
+            "comment": "状態 DOMAIN=偽",
+            "domain_name": "APP.SALES_STATUS_D",
+        },
+        {
+            "name": "AMT",
+            "data_type": "NUMBER(12,2)",
+            "comment": "金額 DOMAIN=APP.NOT_A_DOMAIN",
+            "domain_name": "",
+        },
+    ]
+
+
+def test_domain_inventory_uses_oracle_adapter_and_degrades_without_oracle() -> None:
+    adapter = _FakeDomainInventoryAdapter(([_DOMAIN_INVENTORY], ["dictionary warning"]))
+    service = _OracleRuntimeService(adapter)
+    request = DomainInventoryRequest(
+        targets=[
+            {"object_name": "SALES", "object_type": "table"},
+            {"object_name": "SALES_V", "object_type": "view"},
+        ]
+    )
+
+    inventory = service.get_domain_inventory(request)
+
+    assert adapter.calls == [[{"owner": "", "object_name": "SALES", "object_type": "table"}]]
+    assert inventory.runtime == "oracle"
+    assert inventory.warnings == ["dictionary warning"]
+    assert [domain.qualified_name for domain in inventory.domains] == ["APP.CUSTOMER_ID_D"]
+    assert inventory.domain_text.splitlines() == [
+        "DOMAIN: APP.CUSTOMER_ID_D",
+        "TYPE: NUMBER(10) STRICT NOT NULL",
+        "CHECK: VALUE > 0",
+        "ANNOTATIONS: \"DESCRIPTION\"='Unique identifier for a customer.'; "
+        "\"ALIASES\"='customer id, 顧客ID'",
+        "COLUMNS: APP.CUSTOMERS.CUSTOMER_ID, APP.ORDERS.CUSTOMER_ID, APP.SALES.CUSTOMER_ID",
+    ]
+
+    failing = _OracleRuntimeService(_FakeDomainInventoryAdapter(OracleAdapterError("ORA-12541")))
+    degraded = failing.get_domain_inventory(request)
+    assert degraded.domains == []
+    assert any("ORA-12541" in warning for warning in degraded.warnings)
+
+    memory = Nl2SqlService(store=MemoryNl2SqlStore()).get_domain_inventory(request)
+    assert memory.runtime == "deterministic"
+    assert memory.domains == []
+    assert any("deterministic runtime" in warning for warning in memory.warnings)
+
+    views_only = service.get_domain_inventory(
+        DomainInventoryRequest(targets=[{"object_name": "SALES_V", "object_type": "view"}])
+    )
+    assert views_only.domains == [] and views_only.warnings == []
+
+
+def test_deterministic_domain_create_skips_columns_with_existing_domain() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service._enterprise_ai_client = FakeEnterpriseAiClient(configured=False)
+
+    result = service.generate_domain_sql(
+        _domain_request(structure_text=_DOMAIN_STRUCTURE_WITH_DOMAIN)
+    )
+
+    assert "CUSTOMER_ID_D" not in result.sql
+    assert 'CREATE DOMAIN IF NOT EXISTS "APP"."REGION_D"' in result.sql
+    assert any(
+        "既にドメインが付いた列" in warning and "APP.SALES.CUSTOMER_ID" in warning
+        for warning in result.warnings
+    )
+
+
+def test_deterministic_domain_update_rebuild_and_delete() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service._enterprise_ai_client = FakeEnterpriseAiClient(configured=False)
+    inventory = DomainDefinition.model_validate(_DOMAIN_INVENTORY)
+
+    update = service.generate_domain_sql(
+        _domain_request(
+            structure_text=_DOMAIN_STRUCTURE_WITH_DOMAIN,
+            operation="update",
+            domains=[inventory],
+        )
+    )
+    assert update.sql == (
+        'ALTER DOMAIN "APP"."CUSTOMER_ID_D" '
+        "ANNOTATIONS (ADD OR REPLACE \"DESCRIPTION\" '顧客ID');"
+    )
+    assert any("再作成を使ってください" in warning for warning in update.warnings)
+
+    rebuild = service.generate_domain_sql(
+        _domain_request(
+            structure_text=_DOMAIN_STRUCTURE_WITH_DOMAIN,
+            operation="rebuild",
+            domains=[inventory],
+        )
+    )
+    assert rebuild.sql.splitlines() == [
+        'DROP DOMAIN "APP"."CUSTOMER_ID_D" FORCE;',
+        'CREATE DOMAIN "APP"."CUSTOMER_ID_D" AS NUMBER(10) STRICT NOT NULL '
+        "CONSTRAINT CHECK (VALUE > 0) "
+        "ANNOTATIONS (\"DESCRIPTION\" 'Unique identifier for a customer.', "
+        "\"ALIASES\" 'customer id, 顧客ID');",
+        'ALTER TABLE "APP"."CUSTOMERS" MODIFY ("CUSTOMER_ID") ADD DOMAIN "APP"."CUSTOMER_ID_D";',
+        'ALTER TABLE "APP"."ORDERS" MODIFY ("CUSTOMER_ID") ADD DOMAIN "APP"."CUSTOMER_ID_D";',
+        'ALTER TABLE "APP"."SALES" MODIFY ("CUSTOMER_ID") ADD DOMAIN "APP"."CUSTOMER_ID_D";',
+    ]
+    assert rebuild.warnings[0].startswith("再作成は DROP DOMAIN FORCE")
+    assert any("選択外の列 APP.ORDERS.CUSTOMER_ID" in warning for warning in rebuild.warnings)
+
+    enumerated = inventory.model_copy(
+        update={"name": "STATUS_D", "domain_type": "enumerated", "data_type": ""}
+    )
+    skipped = service.generate_domain_sql(
+        _domain_request(
+            structure_text=_DOMAIN_STRUCTURE_WITH_DOMAIN.replace(
+                "APP.CUSTOMER_ID_D", "APP.STATUS_D"
+            ),
+            operation="rebuild",
+            domains=[enumerated],
+        )
+    )
+    assert skipped.sql == ""
+    assert any("enumerated ドメインは自動で再作成できません" in w for w in skipped.warnings)
+
+    delete = service.generate_domain_sql(
+        _domain_request(
+            structure_text=_DOMAIN_STRUCTURE_WITH_DOMAIN,
+            operation="delete",
+            domains=[inventory],
+        )
+    )
+    assert delete.sql.splitlines() == [
+        'ALTER TABLE "APP"."CUSTOMERS" MODIFY ("CUSTOMER_ID") DROP DOMAIN;',
+        'ALTER TABLE "APP"."SALES" MODIFY ("CUSTOMER_ID") DROP DOMAIN;',
+    ]
+    assert any("他の列(APP.ORDERS.CUSTOMER_ID)で使用中" in warning for warning in delete.warnings)
+
+    only_selected = inventory.model_copy(update={"columns": inventory.columns[::2]})
+    dropped = service.generate_domain_sql(
+        _domain_request(
+            structure_text=_DOMAIN_STRUCTURE_WITH_DOMAIN,
+            operation="delete",
+            domains=[only_selected],
+        )
+    )
+    assert dropped.sql.splitlines()[-1] == 'DROP DOMAIN "APP"."CUSTOMER_ID_D";'
+
+    # inventory が無く構造情報の DOMAIN= だけの場合は、関連付け解除だけを生成する。
+    blind = service.generate_domain_sql(
+        _domain_request(structure_text=_DOMAIN_STRUCTURE_WITH_DOMAIN, operation="delete")
+    )
+    assert "DROP DOMAIN;" in blind.sql and 'DROP DOMAIN "APP"' not in blind.sql
+    assert any("関連付け先を取得できない" in warning for warning in blind.warnings)
+
+
+def test_domain_generation_prompt_carries_operation_and_allows_inventory_tables() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    inventory = DomainDefinition.model_validate(_DOMAIN_INVENTORY)
+    request = _domain_request(
+        structure_text=_DOMAIN_STRUCTURE_WITH_DOMAIN,
+        operation="rebuild",
+        domains=[inventory],
+        domain_text="DOMAIN: APP.CUSTOMER_ID_D\nCOLUMNS: APP.ORDERS.CUSTOMER_ID",
+    )
+    enterprise_ai = FakeEnterpriseAiClient(
+        "DROP DOMAIN APP.CUSTOMER_ID_D FORCE;\n"
+        "CREATE DOMAIN APP.CUSTOMER_ID_D AS NUMBER(10) "
+        "ANNOTATIONS (\"DESCRIPTION\" 'Unique identifier for a customer.');\n"
+        "ALTER TABLE APP.ORDERS MODIFY (CUSTOMER_ID) ADD DOMAIN APP.CUSTOMER_ID_D;\n"
+        "ALTER TABLE APP.SALES MODIFY (CUSTOMER_ID) ADD DOMAIN APP.CUSTOMER_ID_D;"
+    )
+    service._enterprise_ai_client = enterprise_ai
+
+    result = service.generate_domain_sql(request)
+
+    assert result.source == "oci_enterprise_ai"
+    assert result.sql.startswith("DROP DOMAIN APP.CUSTOMER_ID_D FORCE;")
+    assert "ALTER TABLE APP.ORDERS MODIFY (CUSTOMER_ID) ADD DOMAIN APP.CUSTOMER_ID_D;" in result.sql
+    assert result.warnings == [
+        "再作成は DROP DOMAIN FORCE で関連付けと制約を一旦外してから作り直します。"
+        "途中で失敗した場合は残りの文を確認して再実行してください。"
+        "DEFAULT / COLLATE は復元しません。"
+    ]
+    assert "操作: 再作成" in enterprise_ai.calls[0]["prompt"]
+    assert "<既存ドメイン>\nDOMAIN: APP.CUSTOMER_ID_D" in enterprise_ai.calls[0]["context"]
+
+    service._enterprise_ai_client = FakeEnterpriseAiClient(
+        "ALTER TABLE APP.OTHER MODIFY (CUSTOMER_ID) DROP DOMAIN;"
+    )
+    outside = service.generate_domain_sql(request.model_copy(update={"operation": "delete"}))
     assert outside.source == "deterministic"
     assert any("選択した表以外" in warning for warning in outside.warnings)

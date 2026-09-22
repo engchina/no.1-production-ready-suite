@@ -113,6 +113,8 @@ class SchemaColumn(BaseModel):
     nullable: bool = True
     comment: str = ""
     sample_values: list[str] = Field(default_factory=list)
+    domain_name: str = ""
+    """列に関連付いた SQL ドメイン(OWNER.NAME)。23ai 以降の dictionary から取得。無ければ空。"""
 
 
 class SchemaConstraintDetail(BaseModel):
@@ -2329,6 +2331,61 @@ class MetadataSqlTarget(BaseModel):
         return str(value or "table").lower()
 
 
+class DomainAnnotation(BaseModel):
+    """ドメインに付いた annotation(名前と値)。"""
+
+    name: str = Field(min_length=1, max_length=1024)
+    value: str = Field(default="", max_length=4000)
+
+
+class DomainColumnRef(BaseModel):
+    """ドメインが関連付いた表の列。"""
+
+    owner: str = ""
+    table_name: str = Field(min_length=1, max_length=128)
+    column_name: str = Field(min_length=1, max_length=128)
+
+
+class DomainDefinition(BaseModel):
+    """dictionary(ALL_DOMAINS 等)から復元した既存ドメインの定義。"""
+
+    owner: str = Field(min_length=1, max_length=128)
+    name: str = Field(min_length=1, max_length=128)
+    domain_type: Literal["single", "multi_column", "enumerated", "flexible"] = "single"
+    data_type: str = ""
+    strict: bool = False
+    nullable: bool = True
+    constraints: list[str] = Field(default_factory=list)
+    display: str = ""
+    order: str = ""
+    annotations: list[DomainAnnotation] = Field(default_factory=list)
+    columns: list[DomainColumnRef] = Field(default_factory=list)
+    """schema 内でこのドメインが関連付いた全ての表列(選択外の表を含む)。"""
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def qualified_name(self) -> str:
+        return qualified_object_name(self.owner, self.name)
+
+
+class DomainInventoryRequest(BaseModel):
+    """対象表の列に付いた既存ドメインの取得要求。"""
+
+    targets: list[MetadataSqlTarget] = Field(default_factory=list, max_length=100)
+
+
+class DomainInventoryData(BaseModel):
+    """既存ドメインの定義と、LLM へ渡す表示テキスト。"""
+
+    domains: list[DomainDefinition] = Field(default_factory=list)
+    domain_text: str = ""
+    runtime: str = "deterministic"
+    warnings: list[str] = Field(default_factory=list)
+
+
+DomainOperation = Literal["create", "update", "rebuild", "delete"]
+
+
 class MetadataSqlSampleTarget(MetadataSqlTarget):
     """対象オブジェクトから代表値を取得するための列指定。"""
 
@@ -2360,6 +2417,10 @@ class MetadataSqlGenerateRequest(BaseModel):
     foreign_key_text: str = ""
     sample_text: str = ""
     extra_text: str = ""
+    operation: DomainOperation = "create"
+    """ドメイン管理だけが使う操作種別。コメント/アノテーションでは無視する。"""
+    domain_text: str = ""
+    domains: list[DomainDefinition] = Field(default_factory=list, max_length=200)
 
 
 class MetadataSqlGenerateData(BaseModel):

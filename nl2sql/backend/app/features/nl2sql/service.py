@@ -161,6 +161,11 @@ from .models import (
     DiagnosticReadiness,
     DiagnosticsData,
     DiagnosticSmokeCheck,
+    DomainAnnotation,
+    DomainColumnRef,
+    DomainDefinition,
+    DomainInventoryData,
+    DomainInventoryRequest,
     EngineTiming,
     ExplainPlanData,
     FeedbackClearData,
@@ -1933,6 +1938,123 @@ def _domain_data_type(value: str) -> str:
     normalized = re.sub(r"\s*\)", ")", normalized)
     normalized = re.sub(r"\s*,\s*", ",", normalized)
     return normalized if _DOMAIN_DATA_TYPE_RE.match(normalized) else ""
+
+
+def _domain_create_statement(domain: DomainDefinition, *, if_not_exists: bool) -> str:
+    """単一列ドメインの CREATE DOMAIN 文を定義から組み立てる。"""
+    identity = OracleObjectIdentity(owner=domain.owner, object_name=domain.name)
+    exists = "IF NOT EXISTS " if if_not_exists else ""
+    parts = [f"CREATE DOMAIN {exists}{_quote_object_identity(identity)} AS {domain.data_type}"]
+    if domain.strict:
+        parts.append("STRICT")
+    if not domain.nullable:
+        parts.append("NOT NULL")
+    parts.extend(f"CONSTRAINT CHECK ({condition})" for condition in domain.constraints)
+    if domain.display:
+        parts.append(f"DISPLAY {domain.display}")
+    if domain.order:
+        parts.append(f"ORDER {domain.order}")
+    if domain.annotations:
+        items = ", ".join(
+            (
+                f"{_quote_identifier(item.name)} {_quote_sql_string(item.value)}"
+                if item.value
+                else _quote_identifier(item.name)
+            )
+            for item in domain.annotations
+        )
+        parts.append(f"ANNOTATIONS ({items})")
+    return " ".join(parts) + ";"
+
+
+def _format_domain_inventory(domains: Sequence[DomainDefinition]) -> str:
+    """既存ドメインを、入力確認の表示と LLM context に共通のテキストへ整形する。"""
+    blocks: list[str] = []
+    for domain in domains:
+        type_parts = [domain.data_type or domain.domain_type.upper()]
+        if domain.strict:
+            type_parts.append("STRICT")
+        if not domain.nullable:
+            type_parts.append("NOT NULL")
+        lines = [f"DOMAIN: {domain.qualified_name}", f"TYPE: {' '.join(type_parts)}"]
+        if domain.domain_type != "single":
+            lines.append(f"KIND: {domain.domain_type}")
+        lines.extend(f"CHECK: {condition}" for condition in domain.constraints)
+        if domain.display:
+            lines.append(f"DISPLAY: {domain.display}")
+        if domain.order:
+            lines.append(f"ORDER: {domain.order}")
+        if domain.annotations:
+            lines.append(
+                "ANNOTATIONS: "
+                + "; ".join(
+                    (
+                        f"{_quote_identifier(item.name)}={_quote_sql_string(item.value)}"
+                        if item.value
+                        else _quote_identifier(item.name)
+                    )
+                    for item in domain.annotations
+                )
+            )
+        lines.append(
+            "COLUMNS: "
+            + (
+                ", ".join(
+                    f"{_qualified_display_name(ref.owner, ref.table_name)}.{ref.column_name}"
+                    for ref in domain.columns
+                )
+                or "-"
+            )
+        )
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)
+
+
+_DOMAIN_OPERATION_PROMPTS: dict[str, str] = {
+    "create": (
+        "操作: 作成。既存ドメインが無い列だけを対象に CREATE DOMAIN と "
+        "ALTER TABLE ... MODIFY (<列>) ADD DOMAIN を生成する。"
+        "構造情報で DOMAIN= が付いた列は既に関連付け済みなので対象外にする。"
+    ),
+    "update": (
+        "操作: 更新。<既存ドメイン> の各ドメインに対して ALTER DOMAIN <OWNER>.<ドメイン> "
+        "ANNOTATIONS (ADD OR REPLACE ...) / ADD|MODIFY DISPLAY <式> / ADD|MODIFY ORDER <式> "
+        "だけを生成する。型・CHECK 制約は変えられない。CREATE DOMAIN と ALTER TABLE は"
+        "生成しない。\n"
+        "例: ALTER DOMAIN APP.CUSTOMER_ID_D ANNOTATIONS "
+        "(ADD OR REPLACE \"ALIASES\" 'customer id, 顧客ID, 顧客番号');"
+    ),
+    "rebuild": (
+        "操作: 再作成。<既存ドメイン> のドメインごとに、"
+        "DROP DOMAIN <OWNER>.<ドメイン> FORCE; → CREATE DOMAIN(既存の型・制約・DISPLAY・ORDER を"
+        "引き継ぎ、ANNOTATIONS を改善)→ <既存ドメイン> の COLUMNS に列挙された全ての列へ "
+        "ALTER TABLE ... MODIFY (<列>) ADD DOMAIN の順に生成する(選択外の表の列も含める)。"
+        "IF NOT EXISTS は付けない。\n"
+        "例: DROP DOMAIN APP.SALES_STATUS_D FORCE;\n"
+        "CREATE DOMAIN APP.SALES_STATUS_D AS CHAR(1) CONSTRAINT CHECK (VALUE IN ('P', 'C', 'X')) "
+        "ANNOTATIONS (\"DESCRIPTION\" 'Sales order status code.', "
+        "\"VALUES\" 'P = pending; C = confirmed; X = cancelled');\n"
+        "ALTER TABLE APP.ORD_TXN MODIFY (STAT_CD) ADD DOMAIN APP.SALES_STATUS_D;"
+    ),
+    "delete": (
+        "操作: 削除。選択した表の DOMAIN= 付きの列ごとに "
+        "ALTER TABLE <OWNER>.<表> MODIFY (<列>) DROP DOMAIN; を生成し、"
+        "<既存ドメイン> の COLUMNS が全て解除対象に含まれるドメインだけ "
+        "DROP DOMAIN <OWNER>.<ドメイン>; を生成する。他の表で使用中のドメインは DROP しない。"
+        "FORCE は使わない。CREATE DOMAIN は生成しない。\n"
+        "例: ALTER TABLE APP.ORD_TXN MODIFY (STAT_CD) DROP DOMAIN;\n"
+        "DROP DOMAIN APP.SALES_STATUS_D;"
+    ),
+}
+
+_DOMAIN_UPDATE_WARNING = (
+    "ALTER DOMAIN で変更できるのは DISPLAY / ORDER / ドメインオブジェクトの ANNOTATIONS です。"
+    "型・CHECK 制約・列へ継承される annotation を変えるには再作成を使ってください。"
+)
+_DOMAIN_REBUILD_WARNING = (
+    "再作成は DROP DOMAIN FORCE で関連付けと制約を一旦外してから作り直します。"
+    "途中で失敗した場合は残りの文を確認して再実行してください。DEFAULT / COLLATE は復元しません。"
+)
 
 
 def _metadata_object_kind(value: str | None) -> Literal["table", "view", "materialized_view"]:
@@ -11568,24 +11690,57 @@ class Nl2SqlService:
                 }
             )
 
+    def get_domain_inventory(self, request: DomainInventoryRequest) -> DomainInventoryData:
+        """対象表の列に付いた既存ドメインを dictionary から集め、LLM 向けテキストも返す。"""
+        runtime = "oracle" if self._use_oracle_runtime() else "deterministic"
+        warnings: list[str] = []
+        domains: list[DomainDefinition] = []
+        table_targets = [
+            target.model_dump()
+            for target in request.targets
+            if _metadata_object_kind(target.object_type) == "table"
+        ]
+        if not table_targets:
+            return DomainInventoryData(runtime=runtime)
+        if self._use_oracle_runtime():
+            try:
+                raw_domains, adapter_warnings = self._oracle_adapter.fetch_domain_inventory(
+                    table_targets
+                )
+                warnings.extend(adapter_warnings)
+                domains = [DomainDefinition.model_validate(item) for item in raw_domains]
+            except (OracleAdapterError, ValueError) as exc:
+                warnings.append(f"既存ドメインの取得に失敗しました: {exc}")
+        else:
+            warnings.append("deterministic runtime のため既存ドメインを取得できません。")
+        return DomainInventoryData(
+            domains=domains,
+            domain_text=_format_domain_inventory(domains),
+            runtime=runtime,
+            warnings=warnings,
+        )
+
     def generate_domain_sql(
         self,
         request: MetadataSqlGenerateRequest,
     ) -> MetadataSqlGenerateData:
-        """ドメイン管理の SQL 生成(CREATE DOMAIN + 列関連付け)を Enterprise AI へ再マップする。"""
+        """ドメイン管理の SQL 生成(作成/更新/再作成/削除)を Enterprise AI へ再マップする。"""
         started = time.monotonic()
         created_at = _utc_now()
-        deterministic_sql = self._deterministic_domain_sql(request)
+        deterministic_sql, deterministic_warnings = self._deterministic_domain_sql(request)
+        if not deterministic_sql:
+            deterministic_warnings = deterministic_warnings + [
+                (
+                    "deterministic のドメイン候補はありません。"
+                    if request.operation != "create"
+                    else "複数テーブルで共通する列が無いため "
+                    "deterministic のドメイン候補はありません。"
+                )
+            ]
         deterministic = MetadataSqlGenerateData(
             sql=deterministic_sql,
             source="deterministic",
-            warnings=(
-                []
-                if deterministic_sql
-                else [
-                    "複数テーブルで共通する列が無いため deterministic のドメイン候補はありません。"
-                ]
-            ),
+            warnings=deterministic_warnings,
             timing=self._timing(created_at, started, "domain_sql_generate"),
         )
         if not self._enterprise_ai_client.is_configured():
@@ -11602,14 +11757,15 @@ class Nl2SqlService:
                 prompt=(
                     "以下の情報に基づき、Oracle Database 23ai 以降の SQL ドメイン"
                     "(CREATE DOMAIN)と、その列への関連付け"
-                    "(ALTER TABLE ... MODIFY (<列>) ADD DOMAIN <ドメイン>)の SQL のみを"
+                    "(ALTER TABLE ... MODIFY (<列>) ADD DOMAIN <ドメイン>)、"
+                    "および ALTER DOMAIN / DROP DOMAIN / MODIFY (<列>) DROP DOMAIN の SQL のみを"
                     "生成してください。\n\n"
                     "出力ルール:\n"
-                    "- 純粋な CREATE DOMAIN / ALTER TABLE ... MODIFY (<列>) ADD DOMAIN "
-                    "ステートメントのみを出力\n"
+                    "- 純粋な CREATE DOMAIN / ALTER DOMAIN / DROP DOMAIN / "
+                    "ALTER TABLE ... MODIFY (<列>) ADD|DROP DOMAIN ステートメントのみを出力\n"
                     "- Markdown 記号、説明文、前置きは出力しない\n"
-                    "- CREATE DOMAIN を先に、ALTER TABLE をその後に出力\n"
                     "- ドメインは A-Z 順、ALTER TABLE はテーブル A-Z 順・列は定義順\n\n"
+                    f"{_DOMAIN_OPERATION_PROMPTS[request.operation]}\n\n"
                     "ドメインの設計:\n"
                     "- 顧客ID・地域・状態・金額のように業務上の意味を持つ値を "
                     "1 ドメイン = 1 業務値として定義する\n"
@@ -11629,7 +11785,7 @@ class Nl2SqlService:
                     '"UNITS"(金額・数量の単位)。annotation 名は二重引用符で囲む\n'
                     "- COMMENT: は入力メタデータの項目名であり、annotation 名として使用しない\n"
                     "- ビュー/マテリアライズドビューの列にはドメインを関連付けない\n\n"
-                    "参考例:\n"
+                    "参考例(作成):\n"
                     "CREATE DOMAIN IF NOT EXISTS APP.CUSTOMER_ID_D AS NUMBER(10) "
                     "ANNOTATIONS (\"DESCRIPTION\" 'Unique identifier for a customer.', "
                     "\"ALIASES\" 'customer id, customer number, 顧客ID, 顧客番号');\n"
@@ -11642,7 +11798,11 @@ class Nl2SqlService:
                     "ALTER TABLE APP.CUST_MST MODIFY (CUST_ID) ADD DOMAIN APP.CUSTOMER_ID_D;\n"
                     "ALTER TABLE APP.ORD_TXN MODIFY (CUST_ID) ADD DOMAIN APP.CUSTOMER_ID_D;"
                 ),
-                context=self._metadata_generation_context(request),
+                context=(
+                    self._metadata_generation_context(request)
+                    + "\n\n<既存ドメイン>\n"
+                    + (request.domain_text.strip() or "-")
+                ),
                 system_prompt=(
                     "あなたは Oracle Database の専門家です。純粋な SQL ドメイン定義と"
                     "列への関連付け SQL のみを出力してください。\n"
@@ -11651,8 +11811,12 @@ class Nl2SqlService:
                     "ANNOTATIONS (<annotation>);\n"
                     "関連付け: ALTER TABLE <OWNER>.<表> MODIFY (<列>) ADD DOMAIN "
                     "<OWNER>.<ドメイン>;\n"
+                    "更新: ALTER DOMAIN <OWNER>.<ドメイン> ANNOTATIONS (ADD OR REPLACE ...);\n"
+                    "解除: ALTER TABLE <OWNER>.<表> MODIFY (<列>) DROP DOMAIN; / "
+                    "DROP DOMAIN <OWNER>.<ドメイン> [FORCE];\n"
                     "対象表は必ず OWNER.OBJECT の owner 修飾を保持し、ドメインも同じ owner で"
-                    "修飾してください。選択された表以外の ALTER TABLE は出力しないでください。"
+                    "修飾してください。選択された表と <既存ドメイン> の COLUMNS 以外の "
+                    "ALTER TABLE は出力しないでください。"
                     "annotation 名は Oracle 識別子で、未引用の COMMENT は禁止します。"
                     "値内の単一引用符は '' にエスケープし、annotation 値は最大 4000 文字です。"
                 ),
@@ -11673,7 +11837,14 @@ class Nl2SqlService:
             return MetadataSqlGenerateData(
                 sql=sql,
                 source="oci_enterprise_ai",
-                warnings=[],
+                warnings=[
+                    warning
+                    for warning in (
+                        _DOMAIN_UPDATE_WARNING if request.operation == "update" else "",
+                        _DOMAIN_REBUILD_WARNING if request.operation == "rebuild" else "",
+                    )
+                    if warning
+                ],
                 timing=self._timing(created_at, started, "domain_sql_generate"),
             )
         except (EnterpriseAiDirectError, ValueError, TypeError) as exc:
@@ -11690,13 +11861,21 @@ class Nl2SqlService:
         sql: str,
         request: MetadataSqlGenerateRequest,
     ) -> bool:
-        """ALTER TABLE の対象が、選択した表(owner 解決済み)の範囲に収まるかを検証する。"""
+        """ALTER TABLE の対象が、選択した表と既存ドメインの関連付け先(owner 解決済み)に収まるか。"""
         if not request.targets:
             return True
+        current_owner = self._current_schema_owner()
         allowed = {
             self._db_admin_object_identity(target.object_name, target.owner).qualified_name
             for target in request.targets
         }
+        for domain in request.domains:
+            for ref in domain.columns:
+                allowed.add(
+                    OracleObjectIdentity(
+                        owner=ref.owner or current_owner, object_name=ref.table_name
+                    ).qualified_name
+                )
         for statement in _split_sql_statements(sql):
             match = re.match(
                 rf"^alter\s+table\s+({_SQL_OBJECT_REF})",
@@ -11713,28 +11892,18 @@ class Nl2SqlService:
                 return False
         return True
 
-    def _deterministic_domain_sql(self, request: MetadataSqlGenerateRequest) -> str:
-        """複数テーブルで同名・同型の列だけを共有ドメイン候補にする。
+    def _domain_target_columns(
+        self, request: MetadataSqlGenerateRequest
+    ) -> list[tuple[OracleObjectIdentity, str, str, str, str]]:
+        """選択した表の列を (表, 列名, 型, 説明, 既存ドメイン) で集める。
 
-        ドメインの価値は「同じ業務値の定義を複数表で再利用する」ことにあるため、
-        単一テーブルにしか無い列は候補にしない(業務値の判断は Enterprise AI に委ねる)。
-        列型は長さ付きの構造情報を優先し、無ければ catalog の型を使う。
+        列型は長さ付きの構造情報を優先し、無ければ catalog の型を使う。ビュー/MV は除く。
         """
-        members: dict[tuple[str, str, str], list[tuple[OracleObjectIdentity, str, str]]] = {}
-
-        def add(
-            identity: OracleObjectIdentity, column_name: str, data_type: str, label: str
-        ) -> None:
-            normalized_type = _domain_data_type(data_type)
-            if not normalized_type:
-                return
-            key = (identity.owner, _normalize_identifier(column_name), normalized_type)
-            members.setdefault(key, []).append((identity, column_name, label))
-
         selected = {
             self._db_admin_object_identity(target.object_name, target.owner).qualified_name
             for target in request.targets
         }
+        rows: list[tuple[OracleObjectIdentity, str, str, str, str]] = []
         input_objects = self._metadata_input_objects(request)
         if input_objects:
             for item in input_objects:
@@ -11745,36 +11914,251 @@ class Nl2SqlService:
                     continue
                 for column in item["columns"]:
                     name = str(column["name"])
-                    add(identity, name, str(column["data_type"]), str(column["comment"]) or name)
-        else:
-            target_types = self._metadata_target_types(request)
-            for table in self._selected_metadata_tables(request):
-                identity = OracleObjectIdentity(owner=table.owner, object_name=table.table_name)
-                object_type = target_types.get(identity.qualified_name, table.table_type)
-                if _metadata_object_kind(object_type) != "table":
-                    continue
-                for column in table.columns:
-                    label = column.comment or column.logical_name or column.column_name
-                    add(identity, column.column_name, column.data_type, label)
-
-        statements: list[str] = []
-        for (owner, column_name, data_type), columns in sorted(members.items()):
-            if len({identity.qualified_name for identity, _name, _label in columns}) < 2:
+                    rows.append(
+                        (
+                            identity,
+                            name,
+                            str(column["data_type"]),
+                            str(column["comment"]) or name,
+                            str(column.get("domain_name") or ""),
+                        )
+                    )
+            return rows
+        target_types = self._metadata_target_types(request)
+        for table in self._selected_metadata_tables(request):
+            identity = OracleObjectIdentity(owner=table.owner, object_name=table.table_name)
+            object_type = target_types.get(identity.qualified_name, table.table_type)
+            if _metadata_object_kind(object_type) != "table":
                 continue
-            domain = OracleObjectIdentity(owner=owner, object_name=f"{column_name[:126]}_D")
-            statements.append(
-                f"CREATE DOMAIN IF NOT EXISTS {_quote_object_identity(domain)} AS {data_type} "
-                f'ANNOTATIONS ("DESCRIPTION" {_quote_sql_string(columns[0][2])});'
+            for column in table.columns:
+                label = column.comment or column.logical_name or column.column_name
+                rows.append(
+                    (identity, column.column_name, column.data_type, label, column.domain_name)
+                )
+        return rows
+
+    def _selected_domain_usage(
+        self,
+        columns: Sequence[tuple[OracleObjectIdentity, str, str, str, str]],
+        inventory: Mapping[str, DomainDefinition],
+    ) -> dict[str, list[tuple[OracleObjectIdentity, str, str]]]:
+        """選択した表の列ごとの既存ドメインを、構造情報の DOMAIN= と inventory の両方から集める。"""
+        current_owner = self._current_schema_owner()
+        selected_tables = {identity.qualified_name for identity, *_ in columns}
+        labels = {
+            (identity.qualified_name, _normalize_identifier(name)): label
+            for identity, name, _type, label, _domain in columns
+        }
+        usage: dict[str, list[tuple[OracleObjectIdentity, str, str]]] = {}
+
+        def add(key: str, identity: OracleObjectIdentity, name: str, label: str) -> None:
+            bucket = usage.setdefault(key, [])
+            if any(
+                existing.qualified_name == identity.qualified_name
+                and _normalize_identifier(existing_name) == _normalize_identifier(name)
+                for existing, existing_name, _label in bucket
+            ):
+                return
+            bucket.append((identity, name, label))
+
+        for identity, name, _type, label, domain_name in columns:
+            if not domain_name:
+                continue
+            try:
+                key = self._db_admin_object_identity(domain_name).qualified_name
+            except ValueError:
+                continue
+            add(key, identity, name, label)
+        for domain in inventory.values():
+            for ref in domain.columns:
+                identity = OracleObjectIdentity(
+                    owner=ref.owner or current_owner, object_name=ref.table_name
+                )
+                if identity.qualified_name not in selected_tables:
+                    continue
+                label = labels.get(
+                    (identity.qualified_name, _normalize_identifier(ref.column_name)),
+                    ref.column_name,
+                )
+                add(domain.qualified_name, identity, ref.column_name, label)
+        for bucket in usage.values():
+            bucket.sort(key=lambda item: (item[0].qualified_name.upper(), item[1].upper()))
+        return usage
+
+    def _deterministic_domain_sql(
+        self, request: MetadataSqlGenerateRequest
+    ) -> tuple[str, list[str]]:
+        columns = self._domain_target_columns(request)
+        inventory = {domain.qualified_name: domain for domain in request.domains}
+        if request.operation == "create":
+            return self._deterministic_domain_create(columns)
+        usage = self._selected_domain_usage(columns, inventory)
+        if not usage:
+            return "", ["選択した表の列に既存ドメインがありません。"]
+        if request.operation == "update":
+            return self._deterministic_domain_update(usage)
+        if request.operation == "rebuild":
+            return self._deterministic_domain_rebuild(usage, inventory, columns)
+        return self._deterministic_domain_delete(usage, inventory)
+
+    def _deterministic_domain_create(
+        self, columns: Sequence[tuple[OracleObjectIdentity, str, str, str, str]]
+    ) -> tuple[str, list[str]]:
+        """複数テーブルで同名・同型の列だけを共有ドメイン候補にする。
+
+        ドメインの価値は「同じ業務値の定義を複数表で再利用する」ことにあるため、
+        単一テーブルにしか無い列は候補にしない(業務値の判断は Enterprise AI に委ねる)。
+        既にドメインが付いた列は対象外(更新/再作成/削除を使う)。
+        """
+        warnings: list[str] = []
+        members: dict[tuple[str, str, str], list[tuple[OracleObjectIdentity, str, str]]] = {}
+        skipped: list[str] = []
+        for identity, name, data_type, label, domain_name in columns:
+            if domain_name:
+                skipped.append(f"{identity.qualified_name}.{name}")
+                continue
+            normalized_type = _domain_data_type(data_type)
+            if not normalized_type:
+                continue
+            key = (identity.owner, _normalize_identifier(name), normalized_type)
+            members.setdefault(key, []).append((identity, name, label))
+        if skipped:
+            warnings.append(
+                "既にドメインが付いた列は作成対象から外しました(更新/再作成/削除を使ってください): "
+                + ", ".join(skipped)
             )
+        statements: list[str] = []
+        for (owner, column_name, data_type), group in sorted(members.items()):
+            if len({identity.qualified_name for identity, _name, _label in group}) < 2:
+                continue
+            domain = DomainDefinition(
+                owner=owner,
+                name=f"{column_name[:126]}_D",
+                data_type=data_type,
+                annotations=[DomainAnnotation(name="DESCRIPTION", value=group[0][2])],
+            )
+            statements.append(_domain_create_statement(domain, if_not_exists=True))
+            domain_identity = OracleObjectIdentity(owner=owner, object_name=domain.name)
             for identity, name, _label in sorted(
-                columns, key=lambda item: item[0].qualified_name.upper()
+                group, key=lambda item: item[0].qualified_name.upper()
             ):
                 statements.append(
                     f"ALTER TABLE {_quote_object_identity(identity)} "
                     f"MODIFY ({_quote_identifier(name)}) "
-                    f"ADD DOMAIN {_quote_object_identity(domain)};"
+                    f"ADD DOMAIN {_quote_object_identity(domain_identity)};"
                 )
-        return "\n".join(statements)
+        return "\n".join(statements), warnings
+
+    def _deterministic_domain_update(
+        self, usage: Mapping[str, Sequence[tuple[OracleObjectIdentity, str, str]]]
+    ) -> tuple[str, list[str]]:
+        statements = [
+            f"ALTER DOMAIN {_quote_object_identity(self._db_admin_object_identity(key))} "
+            f'ANNOTATIONS (ADD OR REPLACE "DESCRIPTION" {_quote_sql_string(usage[key][0][2])});'
+            for key in sorted(usage)
+        ]
+        return "\n".join(statements), [_DOMAIN_UPDATE_WARNING]
+
+    def _deterministic_domain_rebuild(
+        self,
+        usage: Mapping[str, Sequence[tuple[OracleObjectIdentity, str, str]]],
+        inventory: Mapping[str, DomainDefinition],
+        columns: Sequence[tuple[OracleObjectIdentity, str, str, str, str]],
+    ) -> tuple[str, list[str]]:
+        current_owner = self._current_schema_owner()
+        selected_tables = {identity.qualified_name for identity, *_ in columns}
+        statements: list[str] = []
+        warnings: list[str] = []
+        for key in sorted(usage):
+            domain = inventory.get(key)
+            if domain is None:
+                warnings.append(f"{key}: 定義を取得できないため再作成 SQL を生成しません。")
+                continue
+            if domain.domain_type != "single" or not domain.data_type:
+                warnings.append(f"{key}: {domain.domain_type} ドメインは自動で再作成できません。")
+                continue
+            identity = OracleObjectIdentity(owner=domain.owner, object_name=domain.name)
+            statements.append(f"DROP DOMAIN {_quote_object_identity(identity)} FORCE;")
+            definition = (
+                domain
+                if domain.annotations
+                else domain.model_copy(
+                    update={
+                        "annotations": [
+                            DomainAnnotation(name="DESCRIPTION", value=usage[key][0][2])
+                        ]
+                    }
+                )
+            )
+            statements.append(_domain_create_statement(definition, if_not_exists=False))
+            refs = domain.columns or [
+                DomainColumnRef(owner=table.owner, table_name=table.object_name, column_name=name)
+                for table, name, _label in usage[key]
+            ]
+            outside: list[str] = []
+            for ref in sorted(
+                refs, key=lambda item: (item.owner, item.table_name, item.column_name)
+            ):
+                table = OracleObjectIdentity(
+                    owner=ref.owner or current_owner, object_name=ref.table_name
+                )
+                statements.append(
+                    f"ALTER TABLE {_quote_object_identity(table)} "
+                    f"MODIFY ({_quote_identifier(ref.column_name)}) "
+                    f"ADD DOMAIN {_quote_object_identity(identity)};"
+                )
+                if table.qualified_name not in selected_tables:
+                    outside.append(f"{table.qualified_name}.{ref.column_name}")
+            if outside:
+                warnings.append(
+                    f"{key}: 選択外の列 {', '.join(outside)} も再関連付けに含めました。"
+                )
+        if statements:
+            warnings.insert(0, _DOMAIN_REBUILD_WARNING)
+        return "\n".join(statements), warnings
+
+    def _deterministic_domain_delete(
+        self,
+        usage: Mapping[str, Sequence[tuple[OracleObjectIdentity, str, str]]],
+        inventory: Mapping[str, DomainDefinition],
+    ) -> tuple[str, list[str]]:
+        current_owner = self._current_schema_owner()
+        statements: list[str] = []
+        warnings: list[str] = []
+        for key in sorted(usage):
+            identity = self._db_admin_object_identity(key)
+            for table, name, _label in usage[key]:
+                statements.append(
+                    f"ALTER TABLE {_quote_object_identity(table)} "
+                    f"MODIFY ({_quote_identifier(name)}) DROP DOMAIN;"
+                )
+            domain = inventory.get(key)
+            if domain is None:
+                warnings.append(f"{key}: 関連付け先を取得できないため DROP DOMAIN は生成しません。")
+                continue
+            removed = {
+                (table.qualified_name, _normalize_identifier(name)) for table, name, _ in usage[key]
+            }
+            remaining = [
+                f"{_qualified_display_name(ref.owner or current_owner, ref.table_name)}"
+                f".{ref.column_name}"
+                for ref in domain.columns
+                if (
+                    OracleObjectIdentity(
+                        owner=ref.owner or current_owner, object_name=ref.table_name
+                    ).qualified_name,
+                    _normalize_identifier(ref.column_name),
+                )
+                not in removed
+            ]
+            if remaining:
+                warnings.append(
+                    f"{key}: 他の列({', '.join(remaining)})で使用中のため "
+                    "DROP DOMAIN は生成しません。"
+                )
+                continue
+            statements.append(f"DROP DOMAIN {_quote_object_identity(identity)};")
+        return "\n".join(statements), warnings
 
     def _metadata_generation_context(self, request: MetadataSqlGenerateRequest) -> str:
         targets = ", ".join(
@@ -11871,11 +12255,15 @@ class Nl2SqlService:
                 match = re.search(r"\sCOMMENT=(.*)$", line)
                 comment = match.group(1).strip() if match else ""
                 data_type = re.split(r"\sNULLABLE=", remainder, maxsplit=1)[0].strip()
+                # DOMAIN= は COMMENT= より前に置かれる(コメント本文の DOMAIN= を拾わない)。
+                head = line.split(" COMMENT=", 1)[0]
+                domain_match = re.search(r"\sDOMAIN=(\S+)", head)
                 current["columns"].append(
                     {
                         "name": column_name.strip(),
                         "data_type": data_type,
                         "comment": "" if comment == "-" else comment,
+                        "domain_name": domain_match.group(1) if domain_match else "",
                     }
                 )
         return [item for item in objects if item.get("name")]

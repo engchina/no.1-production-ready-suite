@@ -2510,6 +2510,30 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
       timing,
     })
   );
+  await page.route("**/api/nl2sql/domains/inventory", (route) =>
+    fulfillJson(route, {
+      domains: [
+        {
+          owner: "APP",
+          name: "TOTAL_AMOUNT_D",
+          qualified_name: "APP.TOTAL_AMOUNT_D",
+          domain_type: "single",
+          data_type: "NUMBER",
+          strict: false,
+          nullable: true,
+          constraints: [],
+          display: "",
+          order: "",
+          annotations: [{ name: "DESCRIPTION", value: "税込請求金額" }],
+          columns: [{ owner: "APP", table_name: "INVOICES", column_name: "TOTAL_AMOUNT" }],
+        },
+      ],
+      domain_text:
+        "DOMAIN: APP.TOTAL_AMOUNT_D\nTYPE: NUMBER\nANNOTATIONS: \"DESCRIPTION\"='税込請求金額'\nCOLUMNS: APP.INVOICES.TOTAL_AMOUNT",
+      runtime: "oracle",
+      warnings: [],
+    })
+  );
   await page.route("**/api/nl2sql/domains/generate-sql", (route) =>
     fulfillJson(route, {
       sql:
@@ -10547,6 +10571,17 @@ for (const pageId of ["comment-management", "annotation-management", "domain-man
     await fetchButton.press("Enter");
     const inputPanel = page.locator(`#${pageId}-panel-input`);
     await expect(inputPanel.getByLabel("構造情報")).toHaveValue(/APP\.INVOICES/);
+    if (pageId === "domain-management") {
+      // ドメイン管理だけ: 操作種別と既存ドメイン(定義・関連付け先)を入力確認で見せる。
+      // 包み込み label は option 文言も含むため、accessible name(role)で特定する。
+      const operation = inputPanel.getByRole("combobox", { name: "操作", exact: true });
+      await expect(operation).toHaveValue("create");
+      await expect(inputPanel.getByRole("textbox", { name: "既存ドメイン", exact: true })).toHaveValue(/DOMAIN: APP\.TOTAL_AMOUNT_D/);
+      await operation.selectOption("rebuild");
+      await expect(operation).toHaveValue("rebuild");
+    } else {
+      await expect(inputPanel.getByRole("combobox", { name: "操作", exact: true })).toHaveCount(0);
+    }
     await dismissToasts(page);
     const generateButton = inputPanel.getByRole("button", { name: "SQL 生成", exact: true });
     await expectLargeActionButton(generateButton);

@@ -22,6 +22,8 @@ export function buildMetadataInputTexts(
           (column) =>
             `- ${column.column_name}: ${column.data_type} ` +
             `NULLABLE=${column.nullable ? "Y" : "N"} ` +
+            // 既存ドメインは COMMENT より前に置く(コメント本文と混ざらない)。
+            (column.domain_name ? `DOMAIN=${column.domain_name} ` : "") +
             `COMMENT=${column.comment || column.logical_name || "-"}`
         ),
       ].join("\n")
