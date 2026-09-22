@@ -408,7 +408,7 @@ function AppLayout({ children }: { children: ReactNode }) {
   useMainScrollRestoration(mainRef, location, navigationType);
 
   return (
-    <AppShell sidebar={<AppSidebar />} mainClassName="[contain:layout]" skipLinkLabel={t("common.skipToMain")}>
+    <AppShell sidebar={<AppSidebar />} skipLinkLabel={t("common.skipToMain")}>
       {children}
     </AppShell>
   );

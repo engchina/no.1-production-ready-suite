@@ -57,7 +57,8 @@ async function expectMainScrollDoesNotExposeTrailingBlank(panel: Locator) {
     return {
       clientHeight: main.clientHeight,
       scrollHeight: main.scrollHeight,
-      trailingBlank: main.scrollHeight - panelBottomInScrollContent,
+      // 画面に収まる工程では余白＝残りの viewport なので、超過分だけを測る。
+      trailingBlank: main.scrollHeight - Math.max(panelBottomInScrollContent, main.clientHeight),
     };
   });
   expect(metrics).not.toBeNull();
@@ -2889,6 +2890,8 @@ for (const scenario of metadataScenarios) {
       const panel = page.locator(`#${scenario.idPrefix}-panel-${id}`);
       await expect(panel).toBeVisible();
       expect(await topLevelPanelStyle(page, id, scenario.idPrefix)).toEqual(targetsStyle);
+      // 一覧が内部スクロールを持つ工程でも、ページ末尾に空白を作らない(#664)。
+      await expectMainScrollDoesNotExposeTrailingBlank(panel);
     }
 
     const hasPageHorizontalScroll = await page.evaluate(
