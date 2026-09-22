@@ -149,6 +149,8 @@
 | DP-DOM-008 | 操作=再作成 | SQL 生成 → 実行 | `DROP DOMAIN ... FORCE` → `CREATE DOMAIN`(型・STRICT・NOT NULL・CHECK・ANNOTATIONS を引き継ぎ)→ COLUMNS の全列へ `ADD DOMAIN`。`USER_ANNOTATIONS_USAGE` の継承 annotation が復元される |
 | DP-DOM-009 | 操作=削除 | 一部の表だけ選択して SQL 生成 | 選択列の `MODIFY (<列>) DROP DOMAIN` のみ。他表で使用中なら `DROP DOMAIN` は生成されず warning。全ての関連付け先を選ぶと `DROP DOMAIN` が付く |
 
+DP-DOM-001〜009 の実 DB 版は `backend/tests/test_domain_management_oracle_live.py` に自動化している(CI では実行しない)。`.env` の接続先で `cd backend && NL2SQL_RUN_ORACLE_INTEGRATION=1 uv run pytest tests/test_domain_management_oracle_live.py -s` を実行すると、一意な接頭辞の検証表を作成して作成 → 把握 → 更新 → 再作成 → CHECK/STRICT ドメインへの付け替え → 削除を `domain_sql` policy で流し、finally で削除する(Oracle 23.26.3.3.0 / 26ai で確認済み)。
+
 ## 用語・同義語
 
 | ID | データ | 手順 | 期待結果 |

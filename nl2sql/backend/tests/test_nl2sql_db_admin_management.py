@@ -5237,17 +5237,24 @@ def test_statement_policy_domain_sql() -> None:
                 "ALTER TABLE SALES MODIFY (CUSTOMER_ID) DROP DOMAIN PRESERVE CONSTRAINTS;\n"
                 "ALTER TABLE ADDRESSES MODIFY (CITY, STATE, ZIP) ADD DOMAIN US_CITY;\n"
                 "ALTER DOMAIN CUSTOMER_ID_DOM ANNOTATIONS (Description '顧客番号');\n"
-                "DROP DOMAIN CUSTOMER_ID_DOM FORCE PRESERVE"
+                "DROP DOMAIN CUSTOMER_ID_DOM FORCE PRESERVE;\n"
+                # 生成 SQL は引用識別子なので引用付きも通す(実 DB で検出、#673)。
+                'ALTER TABLE "APP"."SALES" MODIFY ("CUSTOMER_ID") '
+                'ADD DOMAIN "APP"."CUSTOMER_ID_D";\n'
+                'ALTER TABLE "APP"."SALES" MODIFY ("CUSTOMER_ID") DROP DOMAIN;\n'
+                'DROP DOMAIN "APP"."CUSTOMER_ID_D" FORCE'
             ),
             policy="domain_sql",
         )
     )
-    assert [item.status for item in allowed.statements] == ["confirmation_required"] * 8
+    assert [item.status for item in allowed.statements] == ["confirmation_required"] * 11
 
     for sql in (
         "ALTER TABLE SALES MODIFY (STATUS VARCHAR2(40))",
         # リテラル内の domain では通さない(列型変更の抜け道を塞ぐ)。
         "ALTER TABLE SALES MODIFY (STATUS VARCHAR2(40) DEFAULT 'domain')",
+        'ALTER TABLE "APP"."SALES" MODIFY ("STATUS" VARCHAR2(40) DEFAULT \'domain\')',
+        'ALTER TABLE "APP"."SALES" MODIFY ("DOMAIN" VARCHAR2(40))',
         "ALTER TABLE SALES ADD (NOTE VARCHAR2(10) DOMAIN NOTE_DOM)",
         "ALTER TABLE SALES DROP COLUMN STATUS",
         "CREATE TABLE SALES (ID NUMBER)",

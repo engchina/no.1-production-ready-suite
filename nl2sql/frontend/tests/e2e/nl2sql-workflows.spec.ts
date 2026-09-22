@@ -10559,6 +10559,20 @@ for (const pageId of ["comment-management", "annotation-management", "domain-man
   test(`${pageId} の取得・SQL 生成ボタンは共通の主操作サイズでキーボード実行できる`, async ({ page }, testInfo) => {
     await mockNl2SqlApi(page);
     await page.goto(`/${pageId}`);
+    // ヘッダーの操作群は説明文の長さに関わらずタイトルと同じ行(右上)に並ぶ(#672)。1280 / 1920 の両幅で確認する。
+    if (testInfo.project.name === "desktop") {
+      for (const width of [1280, 1920]) {
+        await page.setViewportSize({ width, height: 900 });
+        const headingBox = await page.getByRole("heading", { level: 1 }).first().boundingBox();
+        const schemaRefreshBox = await page
+          .getByRole("button", { name: "DB 構造を再取得", exact: true })
+          .boundingBox();
+        if (!headingBox || !schemaRefreshBox) throw new Error("header layout not measurable");
+        expect(schemaRefreshBox.y, `width=${width}`).toBeLessThan(headingBox.y + headingBox.height);
+        expect(schemaRefreshBox.x, `width=${width}`).toBeGreaterThan(headingBox.x + headingBox.width);
+      }
+      await page.setViewportSize({ width: 1280, height: 900 });
+    }
     const fetchButton = page.getByRole("button", { name: "情報を取得", exact: true });
     await expectLargeActionButton(fetchButton);
     await expect(fetchButton).toBeDisabled();

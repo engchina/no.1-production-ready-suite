@@ -3387,8 +3387,8 @@ const nl2sqlJa = {
   "dataMgmt.schemaJob.phase.error": "失敗",
 
   "metadataSql.comment.subtitle": "テーブル・ビューを選択し、COMMENT ON SQL を生成して確認語入力後に適用します。",
-  "metadataSql.annotation.subtitle": "テーブル・ビューを選択し、Oracle ANNOTATIONS SQL(DESCRIPTION / ALIASES / VALUES / UNITS / JOIN COLUMN)を生成して確認語入力後に適用します。Select AI で使うには業務プロファイルの「アノテーションを利用」を有効にしてください。",
-  "metadataSql.domain.subtitle": "テーブル・ビューを選択し、Oracle SQL ドメインの作成・更新・再作成・削除と列への関連付け SQL を生成して確認語入力後に適用します。継承される annotation を Select AI で使うには業務プロファイルの「アノテーションを利用」を有効にしてください。",
+  "metadataSql.annotation.subtitle": "テーブル・ビューを選択し、Oracle ANNOTATIONS SQL を生成して確認語入力後に適用します。",
+  "metadataSql.domain.subtitle": "テーブル・ビューを選択し、Oracle SQL ドメインの SQL を生成して確認語入力後に適用します。",
   "metadataSql.domain.operation": "操作",
   "metadataSql.domain.operation.create": "作成(新規ドメインと関連付け)",
   "metadataSql.domain.operation.update": "更新(ALTER DOMAIN)",

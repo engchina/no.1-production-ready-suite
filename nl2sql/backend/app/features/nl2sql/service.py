@@ -1900,9 +1900,10 @@ _DB_ADMIN_POLICY_LABELS = {
 
 _DOMAIN_DDL_RE = _DB_ADMIN_STATEMENT_POLICIES["domain_sql"][0]
 _DOMAIN_COLUMN_ASSOCIATION_RE = re.compile(
-    rf"^alter\s+table\s+{_SQL_OBJECT_REF}\s+modify\b.*\bdomain\b",
-    re.IGNORECASE | re.DOTALL,
+    rf"^alter\s+table\s+{_SQL_OBJECT_REF}\s+modify\b",
+    re.IGNORECASE,
 )
+_DOMAIN_KEYWORD_RE = re.compile(r"\bdomain\b", re.IGNORECASE)
 
 
 def _is_domain_ddl(statement: str) -> bool:
@@ -1913,8 +1914,11 @@ def _is_domain_ddl(statement: str) -> bool:
 def _domain_statement_error(statement: str) -> str:
     if _DOMAIN_DDL_RE.match(statement):
         return ""
-    # 列型変更だけの MODIFY を通さないよう、リテラルをマスクした上で DOMAIN 句の有無を見る。
-    if _DOMAIN_COLUMN_ASSOCIATION_RE.match(_mask_sql_literals_and_comments(statement)):
+    # 対象表の判定は元の文で行う(マスクは引用識別子を引用符ごと空白にするため一致しない)。
+    # 列型変更だけの MODIFY を通さないよう、DOMAIN 句の有無はリテラルをマスクした文で見る。
+    if _DOMAIN_COLUMN_ASSOCIATION_RE.match(statement) and _DOMAIN_KEYWORD_RE.search(
+        _mask_sql_literals_and_comments(statement)
+    ):
         return ""
     return f"禁止された操作です。{_DB_ADMIN_POLICY_LABELS['domain_sql']} のみ実行できます。"
 
