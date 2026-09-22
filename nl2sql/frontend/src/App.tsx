@@ -98,6 +98,11 @@ const AnnotationManagementPage = lazy(() =>
     default: module.AnnotationManagementPage,
   }))
 );
+const DomainManagementPage = lazy(() =>
+  import("@/features/nl2sql/pages/MetadataSqlManagementPage").then((module) => ({
+    default: module.DomainManagementPage,
+  }))
+);
 const ProfileManagementPage = lazy(() =>
   import("@/features/nl2sql/pages/ProfileManagementPage").then((module) => ({
     default: module.ProfileManagementPage,
@@ -195,6 +200,7 @@ const KEEP_ALIVE_PAGES = [
   { path: APP_ROUTES.adminSql, element: <AdminSqlPage /> },
   { path: APP_ROUTES.commentManagement, element: <CommentManagementPage /> },
   { path: APP_ROUTES.annotationManagement, element: <AnnotationManagementPage /> },
+  { path: APP_ROUTES.domainManagement, element: <DomainManagementPage /> },
   { path: APP_ROUTES.tableManagement, element: <TableManagementPage /> },
   { path: APP_ROUTES.viewManagement, element: <ViewManagementPage /> },
   { path: APP_ROUTES.dataManagement, element: <DataManagementPage /> },

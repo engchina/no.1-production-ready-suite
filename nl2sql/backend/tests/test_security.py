@@ -1943,13 +1943,27 @@ def test_every_api_route_is_classified_by_manifest() -> None:
             "menu.data_management",
             "menu.comment_management",
             "menu.annotation_management",
+            "menu.domain_management",
         }
     )
     assert permission_for_route("GET", "/nl2sql/db-admin/tables/{table_name}") == frozenset(
-        {"menu.table_management", "menu.comment_management", "menu.annotation_management"}
+        {
+            "menu.table_management",
+            "menu.comment_management",
+            "menu.annotation_management",
+            "menu.domain_management",
+        }
     )
     assert permission_for_route("GET", "/nl2sql/db-admin/views/{view_name}") == frozenset(
-        {"menu.view_management", "menu.comment_management", "menu.annotation_management"}
+        {
+            "menu.view_management",
+            "menu.comment_management",
+            "menu.annotation_management",
+            "menu.domain_management",
+        }
+    )
+    assert permission_for_route("POST", "/nl2sql/domains/generate-sql") == frozenset(
+        {"menu.domain_management"}
     )
     assert permission_for_route("GET", "/nl2sql/profiles/search") == frozenset(
         {PROFILE_READ_PERMISSION}
@@ -4858,6 +4872,7 @@ def test_data_preparation_actions_enforce_policy_and_revalidate_roles(
         "data_dml": "data_management",
         "comment_sql": "comment_management",
         "annotation_sql": "annotation_management",
+        "domain_sql": "domain_management",
     }
 
     async def exercise() -> None:

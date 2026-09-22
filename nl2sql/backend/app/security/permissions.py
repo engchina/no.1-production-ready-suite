@@ -133,6 +133,7 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
     ),
     _menu_permission("menu.comment_management", "データ準備", "コメント管理"),
     _menu_permission("menu.annotation_management", "データ準備", "アノテーション管理"),
+    _menu_permission("menu.domain_management", "データ準備", "ドメイン管理"),
     _menu_permission(
         "menu.glossary_rules",
         "データ準備",
@@ -355,6 +356,7 @@ DATA_PREP_MENUS = frozenset(
         "menu.data_management",
         "menu.comment_management",
         "menu.annotation_management",
+        "menu.domain_management",
         "menu.glossary_rules",
         "menu.global_rules",
         "menu.sample_data",
@@ -387,6 +389,7 @@ SCHEMA_READ_MENUS = frozenset(
         "menu.data_management",
         "menu.comment_management",
         "menu.annotation_management",
+        "menu.domain_management",
         "menu.profiles",
         "menu.ontology_build",
         "menu.glossary_rules",
@@ -404,6 +407,7 @@ LEGACY_PERMISSION_ALIASES: dict[str, tuple[str, ...]] = {
         "menu.data_management",
         "menu.comment_management",
         "menu.annotation_management",
+        "menu.domain_management",
         "menu.sample_data",
     ),
     "documents.upload": ("menu.data_management", "menu.sample_data"),
@@ -581,12 +585,14 @@ def permission_for_route(method: str, route_path: str) -> frozenset[str] | None:
                 "menu.table_management",
                 "menu.comment_management",
                 "menu.annotation_management",
+                "menu.domain_management",
             )
         if route_path.startswith("/nl2sql/db-admin/views"):
             return _allowed(
                 "menu.view_management",
                 "menu.comment_management",
                 "menu.annotation_management",
+                "menu.domain_management",
             )
         if route_path.endswith("/truncate-table"):
             return _allowed("menu.table_management", "menu.data_management")
@@ -605,6 +611,7 @@ def permission_for_route(method: str, route_path: str) -> frozenset[str] | None:
                 "menu.data_management",
                 "menu.comment_management",
                 "menu.annotation_management",
+                "menu.domain_management",
             )
         if route_path.endswith("/execute"):
             return _allowed("menu.admin_sql")
@@ -616,6 +623,7 @@ def permission_for_route(method: str, route_path: str) -> frozenset[str] | None:
                 "menu.data_management",
                 "menu.comment_management",
                 "menu.annotation_management",
+                "menu.domain_management",
             )
         if method == "GET":
             return DATA_PREP_MENUS
@@ -626,8 +634,14 @@ def permission_for_route(method: str, route_path: str) -> frozenset[str] | None:
         return _allowed("menu.comment_management")
     if route_path.startswith("/nl2sql/annotations"):
         return _allowed("menu.annotation_management")
+    if route_path.startswith("/nl2sql/domains"):
+        return _allowed("menu.domain_management")
     if route_path.startswith("/nl2sql/metadata-samples"):
-        return _allowed("menu.comment_management", "menu.annotation_management")
+        return _allowed(
+            "menu.comment_management",
+            "menu.annotation_management",
+            "menu.domain_management",
+        )
     if route_path.startswith("/nl2sql/synthetic-data"):
         return _allowed("menu.sample_data", "menu.data_management")
     if route_path.startswith("/nl2sql/profiles/search"):

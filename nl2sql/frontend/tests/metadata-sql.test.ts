@@ -60,6 +60,8 @@ test("metadata SQL management pages keep execution state across navigation", () 
   assert.match(keepAliveBlock, /<CommentManagementPage \/>/u);
   assert.match(keepAliveBlock, /APP_ROUTES\.annotationManagement/u);
   assert.match(keepAliveBlock, /<AnnotationManagementPage \/>/u);
+  assert.match(keepAliveBlock, /APP_ROUTES\.domainManagement/u);
+  assert.match(keepAliveBlock, /<DomainManagementPage \/>/u);
   assert.doesNotMatch(
     appSource,
     /<Route path=\{APP_ROUTES\.commentManagement\} element=\{<CommentManagementPage \/>/u
@@ -67,5 +69,9 @@ test("metadata SQL management pages keep execution state across navigation", () 
   assert.doesNotMatch(
     appSource,
     /<Route path=\{APP_ROUTES\.annotationManagement\} element=\{<AnnotationManagementPage \/>/u
+  );
+  assert.doesNotMatch(
+    appSource,
+    /<Route path=\{APP_ROUTES\.domainManagement\} element=\{<DomainManagementPage \/>/u
   );
 });

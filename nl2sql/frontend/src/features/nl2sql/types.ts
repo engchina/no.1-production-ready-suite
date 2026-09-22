@@ -1179,7 +1179,8 @@ export type DbAdminStatementPolicy =
   | "view_ddl"
   | "data_dml"
   | "comment_sql"
-  | "annotation_sql";
+  | "annotation_sql"
+  | "domain_sql";
 
 export interface MetadataSqlTarget {
   owner?: string;

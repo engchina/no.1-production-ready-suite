@@ -2510,6 +2510,16 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
       timing,
     })
   );
+  await page.route("**/api/nl2sql/domains/generate-sql", (route) =>
+    fulfillJson(route, {
+      sql:
+        "CREATE DOMAIN IF NOT EXISTS \"APP\".\"TOTAL_AMOUNT_D\" AS NUMBER ANNOTATIONS (\"DESCRIPTION\" '税込請求金額');\n" +
+        "ALTER TABLE \"APP\".\"INVOICES\" MODIFY (\"TOTAL_AMOUNT\") ADD DOMAIN \"APP\".\"TOTAL_AMOUNT_D\";",
+      source: "deterministic",
+      warnings: [],
+      timing,
+    })
+  );
   await page.route("**/api/nl2sql/synthetic-cases**", (route) =>
     fulfillJson(route, {
       cases: [
@@ -10521,7 +10531,7 @@ test("data preparation read results use the shared detail skeleton without stale
   await expect(page.getByText('CREATE TABLE "INVOICES"')).toHaveCount(0);
 });
 
-for (const pageId of ["comment-management", "annotation-management"]) {
+for (const pageId of ["comment-management", "annotation-management", "domain-management"]) {
   test(`${pageId} の取得・SQL 生成ボタンは共通の主操作サイズでキーボード実行できる`, async ({ page }, testInfo) => {
     await mockNl2SqlApi(page);
     await page.goto(`/${pageId}`);
@@ -10546,7 +10556,7 @@ for (const pageId of ["comment-management", "annotation-management"]) {
     await page.screenshot({ path: testInfo.outputPath(`${pageId}-generate.png`) });
     await generateButton.press("Enter");
     const executePanel = page.locator(`#${pageId}-panel-execute`);
-    await expect(executePanel.getByLabel("SQL(セミコロン区切りで複数文を入力可能)")).toHaveValue(/COMMENT ON|ALTER TABLE/);
+    await expect(executePanel.getByLabel("SQL(セミコロン区切りで複数文を入力可能)")).toHaveValue(/COMMENT ON|ALTER TABLE|CREATE DOMAIN/);
     await expectLargeActionButton(executePanel.getByRole("button", { name: "SQL 実行", exact: true }));
     await expectNoHorizontalScroll(page);
   });

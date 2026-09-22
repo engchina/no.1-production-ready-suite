@@ -838,6 +838,7 @@ DbAdminStatementPolicy = Literal[
     "data_dml",
     "comment_sql",
     "annotation_sql",
+    "domain_sql",
 ]
 
 

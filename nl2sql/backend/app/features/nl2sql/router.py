@@ -2159,6 +2159,17 @@ def apply_annotations(req: AnnotationApplyRequest) -> ApiResponse[AnnotationAppl
     return ApiResponse(data=nl2sql_service.apply_annotations(req))
 
 
+@router.post("/domains/generate-sql", response_model=ApiResponse[MetadataSqlGenerateData])
+def generate_domain_sql(
+    req: MetadataSqlGenerateRequest,
+) -> ApiResponse[MetadataSqlGenerateData]:
+    """ドメイン管理の CREATE DOMAIN / ALTER TABLE ... MODIFY (... DOMAIN ...) SQL を生成する。"""
+    try:
+        return ApiResponse(data=nl2sql_service.generate_domain_sql(req))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get("/db-admin/tables", response_model=ApiResponse[DbAdminObjectsData])
 def db_admin_tables() -> ApiResponse[DbAdminObjectsData]:
     """DB admin table 一覧を返す。"""

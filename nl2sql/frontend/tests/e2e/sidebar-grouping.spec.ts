@@ -114,7 +114,7 @@ test("サイドバーを producer / consumer 思想のユーザー向け 5 セ�
   const menuIconSignatures = await sidebar.locator("nav a svg").evaluateAll((icons) =>
     icons.map((icon) => icon.innerHTML.replace(/\s+/g, " ").trim())
   );
-  expect(menuIconSignatures).toHaveLength(27);
+  expect(menuIconSignatures).toHaveLength(28);
   expect(new Set(menuIconSignatures).size).toBe(menuIconSignatures.length);
 
   for (const section of ["データ準備", "AI 活用", "改善・運用", "セキュリティ管理", "システム設定"]) {
@@ -142,6 +142,7 @@ test("サイドバーを producer / consumer 思想のユーザー向け 5 セ�
     "データの管理",
     "コメント管理",
     "アノテーション管理",
+    "ドメイン管理",
     "サンプルデータ管理",
     "業務プロファイル",
     "用語・同義語",

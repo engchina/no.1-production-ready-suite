@@ -51,6 +51,7 @@ const EXPECTED_ICON_NAMES_BY_LABEL_KEY = new Map<string, string>([
   ["nav.dataManagement", "FileSpreadsheet"],
   ["nav.commentManagement", "MessageSquareText"],
   ["nav.annotationManagement", "Tags"],
+  ["nav.domainManagement", "Shapes"],
   ["nav.glossaryRules", "BookA"],
   ["nav.globalRules", "ScrollText"],
   ["nav.sampleData", "Boxes"],

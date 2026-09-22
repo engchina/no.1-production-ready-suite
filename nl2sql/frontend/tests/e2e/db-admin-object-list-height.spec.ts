@@ -204,6 +204,11 @@ const metadataScenarios = [
     path: "/annotation-management",
     idPrefix: "annotation-management",
   },
+  {
+    title: "ドメイン管理",
+    path: "/domain-management",
+    idPrefix: "domain-management",
+  },
 ] as const;
 
 const fixedTargetVisibleRows = 5;

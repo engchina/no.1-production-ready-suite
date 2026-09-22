@@ -11,6 +11,7 @@ export const APP_ROUTES = {
   sampleData: "/sample-data",
   commentManagement: "/comment-management",
   annotationManagement: "/annotation-management",
+  domainManagement: "/domain-management",
   query: "/query",
   profiles: "/profiles",
   ontologyBuild: "/ontology-build",

@@ -12,6 +12,7 @@
 | データの管理 | テーブル/ビュー表示、WHERE/limit、Excel 出力、既存表 CSV 取込、合成データ生成 | `POST /db-admin/preview-data`, `POST /db-admin/upload-csv`, `POST /synthetic-data/generate` |
 | コメント管理 | 対象選択、構造/サンプル取得、COMMENT SQL 生成、実行、policy block | `POST /metadata-samples`, `POST /comments/generate-sql`, `POST /db-admin/statements` |
 | アノテーション管理 | 対象選択、構造/サンプル取得、ANNOTATIONS SQL 生成、実行、policy block | `POST /annotations/generate-sql`, `POST /db-admin/statements` |
+| ドメイン管理 | 対象選択、構造/サンプル取得、CREATE DOMAIN + 列関連付け SQL 生成、実行、policy block | `POST /domains/generate-sql`, `POST /db-admin/statements` |
 | 用語・同義語 | Excel 取込/出力、プレビュー、ページング、エラー表示 | `GET /legacy-learning-material`, `POST /legacy-learning-material/terms/import`, `GET /legacy-learning-material/terms/export.xlsx` |
 | 共通ルール | Excel 取込/出力、プレビュー、ページング、エラー表示 | `POST /legacy-learning-material/rules/import`, `GET /legacy-learning-material/rules/export.xlsx` |
 | 検証用サンプルデータ | sample package 状態、tables/views/data/all 取込、削除、確認語 | `GET /sample-data`, `POST /sample-data/import`, `POST /sample-data/delete` |
@@ -130,6 +131,16 @@
 | DP-ANN-002 | 生成 SQL | `ADMIN_EXECUTE` で実行 | success。素の `ADD` は `ADD IF NOT EXISTS` へ正規化され再実行安全 |
 | DP-ANN-003 | 不正 annotation | `ALTER TABLE TD_NL2SQL_ORDERS DROP COLUMN STATUS` | `annotation_sql` policy で blocked |
 | DP-ANN-004 | view annotation | `V_TD_NL2SQL_OPEN_ORDERS` | `ALTER VIEW ... ANNOTATIONS` が実行できる |
+
+## ドメイン管理
+
+| ID | データ | 手順 | 期待結果 |
+|---|---|---|---|
+| DP-DOM-001 | `TD_NL2SQL_CUSTOMERS`, `TD_NL2SQL_ORDERS` | 対象選択、情報取得、SQL 生成 | 共通列(例: `CUSTOMER_ID`)の `CREATE DOMAIN IF NOT EXISTS ... ANNOTATIONS ("DESCRIPTION" ...)` と各表の `ALTER TABLE ... MODIFY (<列>) ADD DOMAIN <ドメイン>` |
+| DP-DOM-002 | 生成 SQL | `ADMIN_EXECUTE` で実行 | success。`USER_TAB_COLS.DOMAIN_NAME` と `USER_ANNOTATIONS_USAGE` に継承 annotation が載る。CREATE DOMAIN 単独では Schema job を投入しない |
+| DP-DOM-003 | 列型変更だけの MODIFY | `ALTER TABLE TD_NL2SQL_ORDERS MODIFY (STATUS VARCHAR2(40))` | `domain_sql` policy で blocked(DOMAIN 句が無い) |
+| DP-DOM-004 | 単一テーブル | `TD_NL2SQL_ORDERS` のみ選択、Enterprise AI 未設定 | deterministic 候補なしの warning。SQL 欄は空で実行不可 |
+| DP-DOM-005 | 関連付け解除 | `ALTER TABLE TD_NL2SQL_ORDERS MODIFY (CUSTOMER_ID) DROP DOMAIN` → `DROP DOMAIN CUSTOMER_ID_D` | いずれも `domain_sql` policy で実行できる |
 
 ## 用語・同義語
 

@@ -73,7 +73,7 @@ import type {
   SchemaRefreshJob,
 } from "../types";
 
-type MetadataMode = "comment" | "annotation";
+type MetadataMode = "comment" | "annotation" | "domain";
 type MetadataPanel = "targets" | "input" | "execute";
 type TargetFilter = "all" | "table" | "view";
 type TargetSortKey = "name" | "object_type" | "owner";
@@ -102,12 +102,71 @@ const ANNOTATION_EXTRA_TEXT =
   "例(表): ALTER TABLE USERS ANNOTATIONS (ADD OR REPLACE UI_Display 'Users');\n" +
   "例(列): ALTER TABLE USERS MODIFY (ID ANNOTATIONS (ADD OR REPLACE UI_Display 'ID'));";
 
+const DOMAIN_EXTRA_TEXT =
+  "SQLドメインの安全な適用ガイド:\n" +
+  "- 1ドメイン = 1業務値(顧客ID、地域、状態、金額など)。複数テーブルで同じ意味の列は同じドメインを共有する\n" +
+  "- ドメインの型は列と同じ基本型にし、長さ・精度は列以下にする(STRICTは付けない)。文字型は長さ必須\n" +
+  "- 既存データが違反しうるCHECK制約は付けない(サンプルから値集合が明確な場合のみ)\n" +
+  "- ANNOTATIONSは \"DESCRIPTION\"(意味)、\"ALIASES\"(英語・日本語の同義語)、\"VALUES\"(コード値の意味)、\"UNITS\"(単位)で付ける。annotation名COMMENTは使わない\n" +
+  "- ビュー/MVの列には関連付けない。既にドメインが付いた列は MODIFY (<列>) DROP DOMAIN で外してから付け替える\n" +
+  "例(定義): CREATE DOMAIN IF NOT EXISTS CUSTOMER_ID_D AS NUMBER(10) ANNOTATIONS (\"DESCRIPTION\" 'Unique identifier for a customer.', \"ALIASES\" 'customer id, 顧客ID, 顧客番号');\n" +
+  "例(関連付け): ALTER TABLE ORD_TXN MODIFY (CUST_ID) ADD DOMAIN CUSTOMER_ID_D;";
+
+const MODE_CONFIG = {
+  comment: {
+    pageId: "comment-management",
+    policy: "comment_sql",
+    generatePath: "/api/nl2sql/comments/generate-sql",
+    titleKey: "nav.commentManagement",
+    subtitleKey: "metadataSql.comment.subtitle",
+    runnerKey: "metadataSql.comment.runner",
+    placeholderKey: "metadataSql.comment.placeholder",
+    extraText: "",
+  },
+  annotation: {
+    pageId: "annotation-management",
+    policy: "annotation_sql",
+    generatePath: "/api/nl2sql/annotations/generate-sql",
+    titleKey: "nav.annotationManagement",
+    subtitleKey: "metadataSql.annotation.subtitle",
+    runnerKey: "metadataSql.annotation.runner",
+    placeholderKey: "metadataSql.annotation.placeholder",
+    extraText: ANNOTATION_EXTRA_TEXT,
+  },
+  domain: {
+    pageId: "domain-management",
+    policy: "domain_sql",
+    generatePath: "/api/nl2sql/domains/generate-sql",
+    titleKey: "nav.domainManagement",
+    subtitleKey: "metadataSql.domain.subtitle",
+    runnerKey: "metadataSql.domain.runner",
+    placeholderKey: "metadataSql.domain.placeholder",
+    extraText: DOMAIN_EXTRA_TEXT,
+  },
+} as const satisfies Record<
+  MetadataMode,
+  {
+    pageId: string;
+    policy: DbAdminStatementPolicy;
+    generatePath: string;
+    titleKey: Parameters<typeof t>[0];
+    subtitleKey: Parameters<typeof t>[0];
+    runnerKey: Parameters<typeof t>[0];
+    placeholderKey: Parameters<typeof t>[0];
+    extraText: string;
+  }
+>;
+
 export function CommentManagementPage() {
   return <MetadataSqlManagementPage mode="comment" />;
 }
 
 export function AnnotationManagementPage() {
   return <MetadataSqlManagementPage mode="annotation" />;
+}
+
+export function DomainManagementPage() {
+  return <MetadataSqlManagementPage mode="domain" />;
 }
 
 function schemaRefreshRequiresFull(job: SchemaRefreshJob | null) {
@@ -154,14 +213,14 @@ function objectListLoadMoreErrorMessage(error: unknown, fallbackKey: Parameters<
 }
 
 function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
-  const pageId = mode === "comment" ? "comment-management" : "annotation-management";
+  const { pageId, policy, generatePath } = MODE_CONFIG[mode];
   useWorkspaceRevalidation();
   const [activePanel, setActivePanel] = useWorkspaceState<MetadataPanel>("activePanel", "targets");
   const [selectedKeys, setSelectedKeys] = useWorkspaceState<string[]>("selectedKeys", []);
   const [details, setDetails] = useState<DbAdminObjectDetail[]>([]);
   const [sampleLimit, setSampleLimit] = useWorkspaceState("sampleLimit", 10);
   const [refreshedSampleText, setRefreshedSampleText] = useState<string | null>(null);
-  const [extraText, setExtraText] = useWorkspaceState("extraText", mode === "annotation" ? ANNOTATION_EXTRA_TEXT : "");
+  const [extraText, setExtraText] = useWorkspaceState("extraText", MODE_CONFIG[mode].extraText);
   const [generated, setGenerated] = useState<MetadataSqlGenerateData | null>(null);
   const [generationResetSignal, setGenerationResetSignal] = useWorkspaceState("generationResetSignal", 0);
   const [targetSearch, setTargetSearch] = useWorkspaceState("targetSearch", "");
@@ -222,7 +281,6 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
     setLoading((current) => current === "generate" ? "" : current);
   }, [generationSignature]);
   useEffect(() => () => { generationSequence.current += 1; }, []);
-  const policy: DbAdminStatementPolicy = mode === "comment" ? "comment_sql" : "annotation_sql";
   const panels = useMemo(
     () =>
       [
@@ -469,11 +527,7 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
         sample_text: samples.sample_text,
         extra_text: extraText,
       };
-      const path =
-        mode === "comment"
-          ? "/api/nl2sql/comments/generate-sql"
-          : "/api/nl2sql/annotations/generate-sql";
-      const generatedSql = await apiPost<MetadataSqlGenerateData>(path, payload);
+      const generatedSql = await apiPost<MetadataSqlGenerateData>(generatePath, payload);
       if (!isCurrent()) return;
       setGenerated({ ...generatedSql, warnings: [...samples.warnings, ...generatedSql.warnings] });
       setGenerationResetSignal((value) => value + 1);
@@ -488,12 +542,8 @@ function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
   return (
     <>
       <PageHeader wide
-        title={t(mode === "comment" ? "nav.commentManagement" : "nav.annotationManagement")}
-        subtitle={t(
-          mode === "comment"
-            ? "metadataSql.comment.subtitle"
-            : "metadataSql.annotation.subtitle"
-        )}
+        title={t(MODE_CONFIG[mode].titleKey)}
+        subtitle={t(MODE_CONFIG[mode].subtitleKey)}
         meta={
           firstObjectPage?.refreshed_at
             ? t("common.schemaRefreshedAt", {
@@ -1086,12 +1136,8 @@ function MetadataExecutePanel({
             policy={policy}
             executionBlocked={executionBlocked}
             draftScope={draftScope}
-            title={t(mode === "comment" ? "metadataSql.comment.runner" : "metadataSql.annotation.runner")}
-            placeholder={t(
-              mode === "comment"
-                ? "metadataSql.comment.placeholder"
-                : "metadataSql.annotation.placeholder"
-            )}
+            title={t(MODE_CONFIG[mode].runnerKey)}
+            placeholder={t(MODE_CONFIG[mode].placeholderKey)}
             initialSql={generated?.sql}
             resetSignal={resetSignal}
             executeOnly

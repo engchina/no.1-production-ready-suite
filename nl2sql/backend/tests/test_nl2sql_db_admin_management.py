@@ -65,6 +65,7 @@ from app.features.nl2sql.service import (
     _admin_statement_type,
     _db_admin_error,
     _normalize_oracle_sql_text,
+    _schema_refresh_targets_for_statements,
     _split_sql_statements,
     _statements_change_schema,
 )
@@ -5141,3 +5142,202 @@ def test_named_target_confirmation_rejects_admin_execute_master_word() -> None:
         )
     )
     assert synthetic_named.status == "requires_oracle"
+
+
+_DOMAIN_STRUCTURE_TEXT = (
+    "OBJECT: APP.SALES\nTYPE: table\nCOMMENT: 売上\n"
+    "COLUMNS:\n"
+    "- SALES_ID: NUMBER NULLABLE=N COMMENT=売上ID\n"
+    "- CUSTOMER_ID: NUMBER NULLABLE=N COMMENT=顧客ID\n"
+    "- STATUS: VARCHAR2(10) NULLABLE=Y COMMENT=売上状態\n"
+    "- REGION: VARCHAR2(20 CHAR) NULLABLE=Y COMMENT=O'Brien 地域\n\n"
+    "OBJECT: APP.CUSTOMERS\nTYPE: table\nCOMMENT: 顧客\n"
+    "COLUMNS:\n"
+    "- CUSTOMER_ID: NUMBER NULLABLE=N COMMENT=顧客ID\n"
+    "- STATUS: VARCHAR2(20) NULLABLE=Y COMMENT=顧客状態\n"
+    "- REGION: VARCHAR2(20 CHAR) NULLABLE=Y COMMENT=地域\n\n"
+    "OBJECT: APP.SALES_V\nTYPE: view\nCOMMENT: 売上ビュー\n"
+    "COLUMNS:\n"
+    "- CUSTOMER_ID: NUMBER NULLABLE=Y COMMENT=顧客ID\n"
+)
+
+
+def _domain_request(**overrides: Any) -> MetadataSqlGenerateRequest:
+    payload: dict[str, Any] = {
+        "targets": [
+            {"object_name": "SALES", "object_type": "table"},
+            {"object_name": "CUSTOMERS", "object_type": "table"},
+            {"object_name": "SALES_V", "object_type": "view"},
+        ],
+        "structure_text": _DOMAIN_STRUCTURE_TEXT,
+    }
+    payload.update(overrides)
+    return MetadataSqlGenerateRequest.model_validate(payload)
+
+
+def test_statement_policy_domain_sql() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    allowed = service.execute_db_admin_statements(
+        DbAdminStatementsRequest(
+            sql=(
+                "CREATE DOMAIN IF NOT EXISTS APP.CUSTOMER_ID_DOM AS NUMBER "
+                "ANNOTATIONS (UI_Display '顧客ID');\n"
+                "CREATE DOMAIN ORDER_STATUS_DOM AS VARCHAR2(10) "
+                "CONSTRAINT CHECK (ORDER_STATUS_DOM IN ('NEW', 'CLOSED'));\n"
+                "ALTER TABLE APP.SALES MODIFY (CUSTOMER_ID DOMAIN APP.CUSTOMER_ID_DOM);\n"
+                "ALTER TABLE SALES MODIFY CUSTOMER_ID DOMAIN CUSTOMER_ID_DOM;\n"
+                "ALTER TABLE SALES MODIFY (CUSTOMER_ID) DROP DOMAIN PRESERVE CONSTRAINTS;\n"
+                "ALTER TABLE ADDRESSES MODIFY (CITY, STATE, ZIP) ADD DOMAIN US_CITY;\n"
+                "ALTER DOMAIN CUSTOMER_ID_DOM ANNOTATIONS (Description '顧客番号');\n"
+                "DROP DOMAIN CUSTOMER_ID_DOM FORCE PRESERVE"
+            ),
+            policy="domain_sql",
+        )
+    )
+    assert [item.status for item in allowed.statements] == ["confirmation_required"] * 8
+
+    for sql in (
+        "ALTER TABLE SALES MODIFY (STATUS VARCHAR2(40))",
+        # リテラル内の domain では通さない(列型変更の抜け道を塞ぐ)。
+        "ALTER TABLE SALES MODIFY (STATUS VARCHAR2(40) DEFAULT 'domain')",
+        "ALTER TABLE SALES ADD (NOTE VARCHAR2(10) DOMAIN NOTE_DOM)",
+        "ALTER TABLE SALES DROP COLUMN STATUS",
+        "CREATE TABLE SALES (ID NUMBER)",
+        "DROP TABLE SALES",
+    ):
+        blocked = service.execute_db_admin_statements(
+            DbAdminStatementsRequest(sql=sql, policy="domain_sql")
+        )
+        assert blocked.statements[0].status == "blocked", sql
+        assert blocked.statements[0].error_code == "DB_ADMIN_DOMAIN_SQL_POLICY_VIOLATION", sql
+        assert "CREATE DOMAIN" in blocked.statements[0].error_message
+
+
+def test_domain_ddl_skips_schema_refresh_but_column_association_targets_table() -> None:
+    assert not _statements_change_schema(
+        [
+            "CREATE DOMAIN X_DOM AS NUMBER",
+            "ALTER DOMAIN X_DOM DROP DISPLAY",
+            "DROP DOMAIN X_DOM FORCE",
+        ]
+    )
+    statements = [
+        "CREATE DOMAIN IF NOT EXISTS APP.X_DOM AS NUMBER",
+        "ALTER TABLE APP.SALES MODIFY (X DOMAIN APP.X_DOM)",
+    ]
+    assert _statements_change_schema(statements)
+    targets = _schema_refresh_targets_for_statements(statements, current_owner="APP")
+    assert targets is not None
+    assert [(target.owner, target.object_name) for target in targets] == [("APP", "SALES")]
+
+
+def test_deterministic_domain_sql_groups_shared_columns_across_tables() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service._enterprise_ai_client = FakeEnterpriseAiClient(configured=False)
+
+    result = service.generate_domain_sql(_domain_request())
+
+    assert result.source == "deterministic"
+    assert result.sql.splitlines() == [
+        'CREATE DOMAIN IF NOT EXISTS "APP"."CUSTOMER_ID_D" AS NUMBER '
+        "ANNOTATIONS (\"DESCRIPTION\" '顧客ID');",
+        'ALTER TABLE "APP"."CUSTOMERS" MODIFY ("CUSTOMER_ID") ADD DOMAIN "APP"."CUSTOMER_ID_D";',
+        'ALTER TABLE "APP"."SALES" MODIFY ("CUSTOMER_ID") ADD DOMAIN "APP"."CUSTOMER_ID_D";',
+        'CREATE DOMAIN IF NOT EXISTS "APP"."REGION_D" AS VARCHAR2(20 CHAR) '
+        "ANNOTATIONS (\"DESCRIPTION\" 'O''Brien 地域');",
+        'ALTER TABLE "APP"."CUSTOMERS" MODIFY ("REGION") ADD DOMAIN "APP"."REGION_D";',
+        'ALTER TABLE "APP"."SALES" MODIFY ("REGION") ADD DOMAIN "APP"."REGION_D";',
+    ]
+    # 型が違う同名列は共有せず、単一表だけの列とビュー列は候補にしない。
+    assert "STATUS" not in result.sql
+    assert "SALES_ID" not in result.sql
+    assert "SALES_V" not in result.sql
+    assert any("Enterprise AI が未設定" in warning for warning in result.warnings)
+
+    single = service.generate_domain_sql(
+        _domain_request(targets=[{"object_name": "SALES", "object_type": "table"}])
+    )
+    assert single.sql == ""
+    assert any("複数テーブルで共通する列" in warning for warning in single.warnings)
+
+    # 長さ無しの文字型(catalog の生の型)はドメイン定義に使えないため候補から外す。
+    service._catalog = SchemaCatalog(
+        refreshed_at="2026-09-22T00:00:00+00:00",
+        tables=[
+            SchemaTable(
+                table_name="A_TABLE",
+                logical_name="A",
+                columns=[
+                    SchemaColumn(column_name="CODE", logical_name="コード", data_type="VARCHAR2"),
+                    SchemaColumn(column_name="QTY", logical_name="数量", data_type="NUMBER"),
+                ],
+            ),
+            SchemaTable(
+                table_name="B_TABLE",
+                logical_name="B",
+                columns=[
+                    SchemaColumn(column_name="CODE", logical_name="コード", data_type="VARCHAR2"),
+                    SchemaColumn(column_name="QTY", logical_name="数量", data_type="NUMBER"),
+                ],
+            ),
+        ],
+    )
+    from_catalog = service.generate_domain_sql(
+        _domain_request(
+            targets=[
+                {"object_name": "A_TABLE", "object_type": "table"},
+                {"object_name": "B_TABLE", "object_type": "table"},
+            ],
+            structure_text="",
+        )
+    )
+    assert 'CREATE DOMAIN IF NOT EXISTS "APP"."QTY_D" AS NUMBER' in from_catalog.sql
+    assert "CODE_D" not in from_catalog.sql
+
+
+def test_domain_generation_uses_enterprise_ai_and_falls_back_on_violations() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    request = _domain_request(sample_text="OBJECT: APP.SALES\nSTATUS: NEW, CLOSED")
+    enterprise_ai = FakeEnterpriseAiClient(
+        "```sql\n"
+        "CREATE DOMAIN IF NOT EXISTS APP.CUSTOMER_ID_DOM AS NUMBER "
+        "ANNOTATIONS (UI_Display '顧客ID', Description '顧客番号');\n"
+        "ALTER TABLE APP.CUSTOMERS MODIFY (CUSTOMER_ID DOMAIN APP.CUSTOMER_ID_DOM);\n"
+        "ALTER TABLE APP.SALES MODIFY (CUSTOMER_ID DOMAIN APP.CUSTOMER_ID_DOM)\n"
+        "```"
+    )
+    service._enterprise_ai_client = enterprise_ai
+
+    result = service.generate_domain_sql(request)
+
+    assert result.source == "oci_enterprise_ai"
+    assert result.sql == (
+        "CREATE DOMAIN IF NOT EXISTS APP.CUSTOMER_ID_DOM AS NUMBER "
+        "ANNOTATIONS (UI_Display '顧客ID', Description '顧客番号');\n"
+        "ALTER TABLE APP.CUSTOMERS MODIFY (CUSTOMER_ID DOMAIN APP.CUSTOMER_ID_DOM);\n"
+        "ALTER TABLE APP.SALES MODIFY (CUSTOMER_ID DOMAIN APP.CUSTOMER_ID_DOM);"
+    )
+    assert "CHECK 制約を付け" in enterprise_ai.calls[0]["prompt"]
+    assert "ALTER TABLE APP.ORD_TXN MODIFY (CUST_ID) ADD DOMAIN" in enterprise_ai.calls[0]["prompt"]
+    assert "選択された表以外の ALTER TABLE は出力しない" in enterprise_ai.calls[0]["system_prompt"]
+
+    no_samples = FakeEnterpriseAiClient("CREATE DOMAIN APP.X_DOM AS NUMBER;")
+    service._enterprise_ai_client = no_samples
+    service.generate_domain_sql(_domain_request())
+    assert "サンプルが無いため CHECK 制約は付けない" in no_samples.calls[0]["prompt"]
+
+    service._enterprise_ai_client = FakeEnterpriseAiClient(
+        "ALTER TABLE APP.SALES MODIFY (STATUS VARCHAR2(40));"
+    )
+    policy_fallback = service.generate_domain_sql(request)
+    assert policy_fallback.source == "deterministic"
+    assert 'CREATE DOMAIN IF NOT EXISTS "APP"."CUSTOMER_ID_D"' in policy_fallback.sql
+    assert any("fallback" in warning for warning in policy_fallback.warnings)
+
+    service._enterprise_ai_client = FakeEnterpriseAiClient(
+        "CREATE DOMAIN IF NOT EXISTS APP.CUSTOMER_ID_DOM AS NUMBER;\n"
+        "ALTER TABLE APP.ORDERS MODIFY (CUSTOMER_ID DOMAIN APP.CUSTOMER_ID_DOM);"
+    )
+    outside = service.generate_domain_sql(request)
+    assert outside.source == "deterministic"
+    assert any("選択した表以外" in warning for warning in outside.warnings)

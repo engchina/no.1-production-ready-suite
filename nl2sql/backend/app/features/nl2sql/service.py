@@ -1561,6 +1561,7 @@ def _statements_change_schema(statements: Sequence[str]) -> bool:
 
     return any(
         _admin_statement_type(statement) in _SCHEMA_MUTATION_STATEMENT_TYPES
+        and not _is_domain_ddl(statement)
         for statement in statements
     )
 
@@ -1744,6 +1745,8 @@ def _schema_refresh_targets_for_statements(
     for statement in statements:
         if _admin_statement_type(statement) not in _SCHEMA_MUTATION_STATEMENT_TYPES:
             continue
+        if _is_domain_ddl(statement):
+            continue
         target = _schema_refresh_target_for_statement(
             statement,
             current_owner=current_owner,
@@ -1865,6 +1868,13 @@ _DB_ADMIN_STATEMENT_POLICIES: dict[str, tuple[re.Pattern[str], ...]] = {
         re.compile(r"^comment\s+on\s+(table|column|materialized\s+view)\b", re.IGNORECASE),
     ),
     "annotation_sql": (re.compile(r"^alter\s+(table|view|materialized\s+view)\b", re.IGNORECASE),),
+    "domain_sql": (
+        re.compile(
+            r"^(create\s+(usecase\s+)?(flexible\s+)?domain|alter\s+domain|drop\s+domain)\b",
+            re.IGNORECASE,
+        ),
+        re.compile(r"^alter\s+table\b", re.IGNORECASE),
+    ),
 }
 
 _DB_ADMIN_POLICY_LABELS = {
@@ -1876,7 +1886,53 @@ _DB_ADMIN_POLICY_LABELS = {
         "ALTER TABLE MODIFY ... ANNOTATIONS / ALTER TABLE ANNOTATIONS / "
         "ALTER VIEW ANNOTATIONS / ALTER MATERIALIZED VIEW ANNOTATIONS"
     ),
+    "domain_sql": (
+        "CREATE DOMAIN / ALTER DOMAIN / DROP DOMAIN / "
+        "ALTER TABLE MODIFY (... DOMAIN ...) / ALTER TABLE MODIFY (...) ADD|DROP DOMAIN"
+    ),
 }
+
+_DOMAIN_DDL_RE = _DB_ADMIN_STATEMENT_POLICIES["domain_sql"][0]
+_DOMAIN_COLUMN_ASSOCIATION_RE = re.compile(
+    rf"^alter\s+table\s+{_SQL_OBJECT_REF}\s+modify\b.*\bdomain\b",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _is_domain_ddl(statement: str) -> bool:
+    """CREATE/ALTER/DROP DOMAIN は catalog に載らないため Schema 再取得の対象にしない。"""
+    return bool(_DOMAIN_DDL_RE.match(_strip_leading_sql_comments(statement).strip()))
+
+
+def _domain_statement_error(statement: str) -> str:
+    if _DOMAIN_DDL_RE.match(statement):
+        return ""
+    # 列型変更だけの MODIFY を通さないよう、リテラルをマスクした上で DOMAIN 句の有無を見る。
+    if _DOMAIN_COLUMN_ASSOCIATION_RE.match(_mask_sql_literals_and_comments(statement)):
+        return ""
+    return f"禁止された操作です。{_DB_ADMIN_POLICY_LABELS['domain_sql']} のみ実行できます。"
+
+
+# CREATE DOMAIN が受け付ける組込み型。文字型は長さ必須なので長さ無しの VARCHAR2 等は候補外。
+_DOMAIN_DATA_TYPE_RE = re.compile(
+    r"^(?:"
+    r"(?:N?VARCHAR2|N?CHAR|VARCHAR)\(\d+(?: (?:CHAR|BYTE))?\)"
+    r"|NUMBER(?:\((?:\d+|\*)(?:,-?\d+)?\))?"
+    r"|FLOAT(?:\(\d+\))?|BINARY_FLOAT|BINARY_DOUBLE"
+    r"|DATE|TIMESTAMP(?:\(\d+\))?(?: WITH(?: LOCAL)? TIME ZONE)?"
+    r"|INTERVAL YEAR(?:\(\d+\))? TO MONTH|INTERVAL DAY(?:\(\d+\))? TO SECOND(?:\(\d+\))?"
+    r"|RAW\(\d+\)|BLOB|CLOB|NCLOB|BFILE|JSON|BOOLEAN"
+    r")$"
+)
+
+
+def _domain_data_type(value: str) -> str:
+    """列型をドメイン定義に使える形へ正規化する(使えない型は空文字)。"""
+    normalized = re.sub(r"\s+", " ", str(value or "").strip().upper())
+    normalized = re.sub(r"\s*\(\s*", "(", normalized)
+    normalized = re.sub(r"\s*\)", ")", normalized)
+    normalized = re.sub(r"\s*,\s*", ",", normalized)
+    return normalized if _DOMAIN_DATA_TYPE_RE.match(normalized) else ""
 
 
 def _metadata_object_kind(value: str | None) -> Literal["table", "view", "materialized_view"]:
@@ -1979,6 +2035,8 @@ def _db_admin_policy_error(statement: str, policy: str) -> str:
     stripped = _strip_leading_sql_comments(statement).strip()
     if policy == "annotation_sql":
         return _annotation_statement_error(stripped)
+    if policy == "domain_sql":
+        return _domain_statement_error(stripped)
     for pattern in _DB_ADMIN_STATEMENT_POLICIES[policy]:
         if pattern.match(stripped):
             return ""
@@ -11510,6 +11568,214 @@ class Nl2SqlService:
                 }
             )
 
+    def generate_domain_sql(
+        self,
+        request: MetadataSqlGenerateRequest,
+    ) -> MetadataSqlGenerateData:
+        """ドメイン管理の SQL 生成(CREATE DOMAIN + 列関連付け)を Enterprise AI へ再マップする。"""
+        started = time.monotonic()
+        created_at = _utc_now()
+        deterministic_sql = self._deterministic_domain_sql(request)
+        deterministic = MetadataSqlGenerateData(
+            sql=deterministic_sql,
+            source="deterministic",
+            warnings=(
+                []
+                if deterministic_sql
+                else [
+                    "複数テーブルで共通する列が無いため deterministic のドメイン候補はありません。"
+                ]
+            ),
+            timing=self._timing(created_at, started, "domain_sql_generate"),
+        )
+        if not self._enterprise_ai_client.is_configured():
+            return deterministic.model_copy(
+                update={
+                    "warnings": deterministic.warnings
+                    + ["OCI Enterprise AI が未設定のため deterministic SQL を使用しました。"]
+                }
+            )
+        try:
+            has_samples = bool(request.sample_text.strip())
+            raw = self._enterprise_ai_client.generate(
+                response_format=response_format(SqlOutput),
+                prompt=(
+                    "以下の情報に基づき、Oracle Database 23ai 以降の SQL ドメイン"
+                    "(CREATE DOMAIN)と、その列への関連付け"
+                    "(ALTER TABLE ... MODIFY (<列>) ADD DOMAIN <ドメイン>)の SQL のみを"
+                    "生成してください。\n\n"
+                    "出力ルール:\n"
+                    "- 純粋な CREATE DOMAIN / ALTER TABLE ... MODIFY (<列>) ADD DOMAIN "
+                    "ステートメントのみを出力\n"
+                    "- Markdown 記号、説明文、前置きは出力しない\n"
+                    "- CREATE DOMAIN を先に、ALTER TABLE をその後に出力\n"
+                    "- ドメインは A-Z 順、ALTER TABLE はテーブル A-Z 順・列は定義順\n\n"
+                    "ドメインの設計:\n"
+                    "- 顧客ID・地域・状態・金額のように業務上の意味を持つ値を "
+                    "1 ドメイン = 1 業務値として定義する\n"
+                    "- 複数テーブルで同じ意味を持つ列は同じドメインを共有させる\n"
+                    "- ドメインの型は列と同じ基本型にし、長さ・精度は列と同じか列より小さくする"
+                    "(STRICT は付けない)。文字型は必ず長さを付ける\n"
+                    + (
+                        "- サンプル値から取りうる値が明確に列挙できる場合のみ CHECK 制約を付け、"
+                        "確証がなければ制約は付けない\n"
+                        if has_samples
+                        else "- サンプルが無いため CHECK 制約は付けない\n"
+                    )
+                    + "- ANNOTATIONS は Select AI が読む語彙で付ける: "
+                    '"DESCRIPTION"(業務上の意味)、'
+                    '"ALIASES"(英語と日本語の同義語をカンマ区切り)、'
+                    '"VALUES"(コード値の意味。サンプルから明確な場合のみ)、'
+                    '"UNITS"(金額・数量の単位)。annotation 名は二重引用符で囲む\n'
+                    "- COMMENT: は入力メタデータの項目名であり、annotation 名として使用しない\n"
+                    "- ビュー/マテリアライズドビューの列にはドメインを関連付けない\n\n"
+                    "参考例:\n"
+                    "CREATE DOMAIN IF NOT EXISTS APP.CUSTOMER_ID_D AS NUMBER(10) "
+                    "ANNOTATIONS (\"DESCRIPTION\" 'Unique identifier for a customer.', "
+                    "\"ALIASES\" 'customer id, customer number, 顧客ID, 顧客番号');\n"
+                    "CREATE DOMAIN IF NOT EXISTS APP.SALES_STATUS_D AS CHAR(1) "
+                    "CONSTRAINT SALES_STATUS_D_CK CHECK (VALUE IN ('P', 'C', 'X')) "
+                    "ANNOTATIONS (\"DESCRIPTION\" 'Sales order status code.', "
+                    "\"ALIASES\" 'order status, 受注状態, 売上状態', "
+                    '"VALUES" \'P = pending (処理中); C = confirmed (確定済み); '
+                    "X = cancelled (取消済み).');\n"
+                    "ALTER TABLE APP.CUST_MST MODIFY (CUST_ID) ADD DOMAIN APP.CUSTOMER_ID_D;\n"
+                    "ALTER TABLE APP.ORD_TXN MODIFY (CUST_ID) ADD DOMAIN APP.CUSTOMER_ID_D;"
+                ),
+                context=self._metadata_generation_context(request),
+                system_prompt=(
+                    "あなたは Oracle Database の専門家です。純粋な SQL ドメイン定義と"
+                    "列への関連付け SQL のみを出力してください。\n"
+                    "定義: CREATE DOMAIN IF NOT EXISTS <OWNER>.<ドメイン> AS <型> "
+                    "[CONSTRAINT <名前> CHECK (VALUE ...)] [DISPLAY <式>] "
+                    "ANNOTATIONS (<annotation>);\n"
+                    "関連付け: ALTER TABLE <OWNER>.<表> MODIFY (<列>) ADD DOMAIN "
+                    "<OWNER>.<ドメイン>;\n"
+                    "対象表は必ず OWNER.OBJECT の owner 修飾を保持し、ドメインも同じ owner で"
+                    "修飾してください。選択された表以外の ALTER TABLE は出力しないでください。"
+                    "annotation 名は Oracle 識別子で、未引用の COMMENT は禁止します。"
+                    "値内の単一引用符は '' にエスケープし、annotation 値は最大 4000 文字です。"
+                ),
+            )
+            raw = SqlOutput.model_validate_json(raw).sql
+            sql = self._clean_generated_metadata_sql(raw, "domain_sql")
+            if not self._domain_sql_targets_allowed(sql, request):
+                warning = (
+                    "生成 SQL が選択した表以外を変更するか owner 修飾を保持しなかったため "
+                    "deterministic SQL を使用しました。"
+                )
+                return deterministic.model_copy(
+                    update={
+                        "warnings": deterministic.warnings + [warning],
+                        "timing": self._timing(created_at, started, "domain_sql_generate"),
+                    }
+                )
+            return MetadataSqlGenerateData(
+                sql=sql,
+                source="oci_enterprise_ai",
+                warnings=[],
+                timing=self._timing(created_at, started, "domain_sql_generate"),
+            )
+        except (EnterpriseAiDirectError, ValueError, TypeError) as exc:
+            return deterministic.model_copy(
+                update={
+                    "warnings": deterministic.warnings
+                    + [f"Enterprise AI domain SQL 生成に失敗したため fallback しました: {exc}"],
+                    "timing": self._timing(created_at, started, "domain_sql_generate"),
+                }
+            )
+
+    def _domain_sql_targets_allowed(
+        self,
+        sql: str,
+        request: MetadataSqlGenerateRequest,
+    ) -> bool:
+        """ALTER TABLE の対象が、選択した表(owner 解決済み)の範囲に収まるかを検証する。"""
+        if not request.targets:
+            return True
+        allowed = {
+            self._db_admin_object_identity(target.object_name, target.owner).qualified_name
+            for target in request.targets
+        }
+        for statement in _split_sql_statements(sql):
+            match = re.match(
+                rf"^alter\s+table\s+({_SQL_OBJECT_REF})",
+                _strip_leading_sql_comments(statement).strip(),
+                flags=re.IGNORECASE,
+            )
+            if match is None:
+                continue
+            try:
+                identity = self._db_admin_object_identity(_normalize_object_ref(match.group(1)))
+            except ValueError:
+                return False
+            if identity.qualified_name not in allowed:
+                return False
+        return True
+
+    def _deterministic_domain_sql(self, request: MetadataSqlGenerateRequest) -> str:
+        """複数テーブルで同名・同型の列だけを共有ドメイン候補にする。
+
+        ドメインの価値は「同じ業務値の定義を複数表で再利用する」ことにあるため、
+        単一テーブルにしか無い列は候補にしない(業務値の判断は Enterprise AI に委ねる)。
+        列型は長さ付きの構造情報を優先し、無ければ catalog の型を使う。
+        """
+        members: dict[tuple[str, str, str], list[tuple[OracleObjectIdentity, str, str]]] = {}
+
+        def add(
+            identity: OracleObjectIdentity, column_name: str, data_type: str, label: str
+        ) -> None:
+            normalized_type = _domain_data_type(data_type)
+            if not normalized_type:
+                return
+            key = (identity.owner, _normalize_identifier(column_name), normalized_type)
+            members.setdefault(key, []).append((identity, column_name, label))
+
+        selected = {
+            self._db_admin_object_identity(target.object_name, target.owner).qualified_name
+            for target in request.targets
+        }
+        input_objects = self._metadata_input_objects(request)
+        if input_objects:
+            for item in input_objects:
+                if _metadata_object_kind(str(item["type"])) != "table":
+                    continue
+                identity = self._db_admin_object_identity(str(item["name"]))
+                if selected and identity.qualified_name not in selected:
+                    continue
+                for column in item["columns"]:
+                    name = str(column["name"])
+                    add(identity, name, str(column["data_type"]), str(column["comment"]) or name)
+        else:
+            target_types = self._metadata_target_types(request)
+            for table in self._selected_metadata_tables(request):
+                identity = OracleObjectIdentity(owner=table.owner, object_name=table.table_name)
+                object_type = target_types.get(identity.qualified_name, table.table_type)
+                if _metadata_object_kind(object_type) != "table":
+                    continue
+                for column in table.columns:
+                    label = column.comment or column.logical_name or column.column_name
+                    add(identity, column.column_name, column.data_type, label)
+
+        statements: list[str] = []
+        for (owner, column_name, data_type), columns in sorted(members.items()):
+            if len({identity.qualified_name for identity, _name, _label in columns}) < 2:
+                continue
+            domain = OracleObjectIdentity(owner=owner, object_name=f"{column_name[:126]}_D")
+            statements.append(
+                f"CREATE DOMAIN IF NOT EXISTS {_quote_object_identity(domain)} AS {data_type} "
+                f'ANNOTATIONS ("DESCRIPTION" {_quote_sql_string(columns[0][2])});'
+            )
+            for identity, name, _label in sorted(
+                columns, key=lambda item: item[0].qualified_name.upper()
+            ):
+                statements.append(
+                    f"ALTER TABLE {_quote_object_identity(identity)} "
+                    f"MODIFY ({_quote_identifier(name)}) "
+                    f"ADD DOMAIN {_quote_object_identity(domain)};"
+                )
+        return "\n".join(statements)
+
     def _metadata_generation_context(self, request: MetadataSqlGenerateRequest) -> str:
         targets = ", ".join(
             (
@@ -11601,11 +11867,16 @@ class Nl2SqlService:
                 comment = line.removeprefix("COMMENT:").strip()
                 current["comment"] = "" if comment == "-" else comment
             elif line.startswith("- "):
-                column_name = line[2:].split(":", 1)[0].strip()
+                column_name, _sep, remainder = line[2:].partition(":")
                 match = re.search(r"\sCOMMENT=(.*)$", line)
                 comment = match.group(1).strip() if match else ""
+                data_type = re.split(r"\sNULLABLE=", remainder, maxsplit=1)[0].strip()
                 current["columns"].append(
-                    {"name": column_name, "comment": "" if comment == "-" else comment}
+                    {
+                        "name": column_name.strip(),
+                        "data_type": data_type,
+                        "comment": "" if comment == "-" else comment,
+                    }
                 )
         return [item for item in objects if item.get("name")]
 
@@ -11736,7 +12007,7 @@ class Nl2SqlService:
                     continue
             policy_error = _db_admin_policy_error(candidate, policy)
             if policy_error:
-                if policy == "annotation_sql":
+                if policy in {"annotation_sql", "domain_sql"}:
                     raise ValueError(policy_error)
                 continue
             if policy == "annotation_sql":
@@ -14055,6 +14326,7 @@ class Nl2SqlService:
             "data_dml": "menu.data_management",
             "comment_sql": "menu.comment_management",
             "annotation_sql": "menu.annotation_management",
+            "domain_sql": "menu.domain_management",
         }
         self._require_db_admin_permission(permissions[request.policy])
         return self._execute_db_admin_statements(request)
