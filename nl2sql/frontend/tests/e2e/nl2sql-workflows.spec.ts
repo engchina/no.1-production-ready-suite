@@ -1220,7 +1220,7 @@ async function mockNl2SqlApi(page: Page): Promise<MockApiState> {
           message: invalidAnnotationName ? "" : "executed",
           elapsed_ms: 0,
           error_message: invalidAnnotationName
-            ? "ORA-11548 相当: annotation 名 COMMENT は Oracle の予約語です。説明には UI_Display を使用するか、意図的な名前であれば \"COMMENT\" と二重引用符で囲んでください。"
+            ? "ORA-11548 相当: annotation 名 COMMENT は Oracle の予約語です。説明には \"DESCRIPTION\" を使用するか、意図的な名前であれば \"COMMENT\" と二重引用符で囲んでください。"
             : "",
           error_code: invalidAnnotationName ? "ORA-11548" : "",
         },
@@ -14547,7 +14547,7 @@ test("annotation management explains ORA-11548 before Oracle execution", async (
   await expect(
     executePanel.getByText(/ANNOTATIONS 句の annotation 名が不足しているか/)
   ).toBeVisible();
-  await expect(executePanel.getByText("説明用の annotation 名は UI_Display に変更してください。"))
+  await expect(executePanel.getByText('説明用の annotation 名は "DESCRIPTION" に変更してください。'))
     .toBeVisible();
   await expect(executePanel.getByText(/"COMMENT" のように二重引用符/)).toBeVisible();
 
@@ -14562,7 +14562,7 @@ test("annotation management explains ORA-11548 before Oracle execution", async (
 
   await page.setViewportSize({ width: 375, height: 900 });
   await expectNoHorizontalScroll(page);
-  await expect(executePanel.getByText("説明用の annotation 名は UI_Display に変更してください。"))
+  await expect(executePanel.getByText('説明用の annotation 名は "DESCRIPTION" に変更してください。'))
     .toBeVisible();
 });
 
@@ -14582,7 +14582,7 @@ for (const scenario of [
     message: "この文はアノテーション管理で実行できません。",
     sql: "ALTER TABLE APP.INVOICES ADD X NUMBER;",
     exampleLabel: "テーブルのアノテーション",
-    exampleSql: 'ALTER TABLE "EXAMPLE_SCHEMA"."EXAMPLE_TABLE"\n  ANNOTATIONS (ADD IF NOT EXISTS UI_Display \'対象の説明\');',
+    exampleSql: 'ALTER TABLE "EXAMPLE_SCHEMA"."EXAMPLE_TABLE"\n  ANNOTATIONS (ADD IF NOT EXISTS "DESCRIPTION" \'対象の説明\');',
     count: 2,
   },
 ]) {

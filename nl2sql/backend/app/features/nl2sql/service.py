@@ -1889,7 +1889,8 @@ _DB_ADMIN_POLICY_LABELS = {
     "comment_sql": "COMMENT ON TABLE/COLUMN/MATERIALIZED VIEW",
     "annotation_sql": (
         "ALTER TABLE MODIFY ... ANNOTATIONS / ALTER TABLE ANNOTATIONS / "
-        "ALTER VIEW ANNOTATIONS / ALTER MATERIALIZED VIEW ANNOTATIONS"
+        "ALTER VIEW ANNOTATIONS / ALTER VIEW MODIFY ... ANNOTATIONS / "
+        "ALTER MATERIALIZED VIEW ANNOTATIONS"
     ),
     "domain_sql": (
         "CREATE DOMAIN / ALTER DOMAIN / DROP DOMAIN / "
@@ -2187,6 +2188,7 @@ def _annotation_statement_error(statement: str) -> str:
         rf"^alter\s+table\s+{object_ref}\s+modify\s*\(.+\s+annotations\s*\(.+\)\s*\)\s*$",
         rf"^alter\s+table\s+{object_ref}\s+modify\s+.+\s+annotations\s*\(.+\)\s*$",
         rf"^alter\s+view\s+{object_ref}\s+annotations\s*\(.+\)\s*$",
+        rf"^alter\s+view\s+{object_ref}\s+modify\s*\(.+\s+annotations\s*\(.+\)\s*\)\s*$",
         rf"^alter\s+materialized\s+view\s+{object_ref}\s+annotations\s*\(.+\)\s*$",
     )
     if any(re.match(pattern, norm, flags=re.IGNORECASE) for pattern in allowed_patterns):
@@ -2311,7 +2313,7 @@ def _annotation_clause_error(statement: str) -> str:
             if name.upper() == "COMMENT" and not quoted:
                 return (
                     "ORA-11548 相当: annotation 名 COMMENT は Oracle の予約語です。"
-                    "説明には UI_Display を使用するか、意図的な名前であれば "
+                    '説明には "DESCRIPTION" を使用するか、意図的な名前であれば '
                     '"COMMENT" と二重引用符で囲んでください。'
                 )
     return ""
@@ -11420,18 +11422,19 @@ class Nl2SqlService:
                 AnnotationSuggestion(
                     object_name=table.table_name,
                     object_type=object_type,
-                    annotation_name="Display",
+                    annotation_name="DESCRIPTION",
                     annotation_value=table_value,
                 )
             )
-            if object_type != "table":
+            # ビュー列は ALTER VIEW ... MODIFY で annotation できる。MV 列は対象外。
+            if object_type == "materialized_view":
                 continue
             for column in table.columns:
                 suggestions.append(
                     AnnotationSuggestion(
                         object_name=f"{table.table_name}.{column.column_name}",
                         object_type="column",
-                        annotation_name="Display",
+                        annotation_name="DESCRIPTION",
                         annotation_value=column.comment
                         or column.logical_name
                         or column.column_name,
@@ -11466,7 +11469,17 @@ class Nl2SqlService:
                 response_format=response_format(SqlOutput),
                 prompt=(
                     "以下の情報に基づき、Oracle COMMENT ON 文のみを生成してください。"
-                    "説明文、前置き、markdown code fence は出力しないでください。"
+                    "説明文、前置き、markdown code fence は出力しないでください。\n\n"
+                    "コメントの書き方(Select AI が業務用語を正しく SQL に変換できるようにする):\n"
+                    "- 表: 1 行が何を表すか"
+                    "(例: 'Customer master. One row represents one customer.')\n"
+                    "- 列: 業務上の意味に加え、コード値の意味"
+                    "(例: 'A means active and I means inactive.')、金額・数量の単位"
+                    "(例: 'in Japanese yen')、外部キー情報から分かる結合先"
+                    "(例: 'Join with ORD_TXN.CUST_ID.')を含める\n"
+                    "- コード値の意味はコメント・サンプル・追加入力に根拠がある場合だけ書き、"
+                    "推測しない\n"
+                    "- 利用者が質問で使う日本語の業務名(同義語)も併記する"
                 ),
                 context=self._metadata_generation_context(request),
                 system_prompt=(
@@ -11591,14 +11604,19 @@ class Nl2SqlService:
         self,
         request: MetadataSqlGenerateRequest,
     ) -> MetadataSqlGenerateData:
-        """SQL Assist アノテーション管理の SQL 生成を OCI Enterprise AI へ再マップする。"""
+        """アノテーション管理の SQL 生成を OCI Enterprise AI へ再マップする。
+
+        語彙は Select AI が業務用語を SQL に変換するのに効く "DESCRIPTION" / "ALIASES" /
+        "VALUES" / "UNITS" / "JOIN COLUMN"(Oracle AI Database 26ai の検証記事に準拠)。
+        """
         started = time.monotonic()
         created_at = _utc_now()
-        deterministic_sql = self._deterministic_annotation_sql(request)
+        deterministic_sql, deterministic_warnings = self._deterministic_annotation_sql(request)
         deterministic = MetadataSqlGenerateData(
             sql=deterministic_sql,
             source="deterministic",
-            warnings=[] if deterministic_sql else ["ANNOTATIONS 対象がありません。"],
+            warnings=deterministic_warnings
+            + ([] if deterministic_sql else ["ANNOTATIONS 対象がありません。"]),
             timing=self._timing(created_at, started, "annotation_sql_generate"),
         )
         if not self._enterprise_ai_client.is_configured():
@@ -11613,33 +11631,51 @@ class Nl2SqlService:
             raw = self._enterprise_ai_client.generate(
                 response_format=response_format(SqlOutput),
                 prompt=(
-                    "以下の情報に基づき、Oracle ALTER TABLE/ALTER VIEW/"
-                    "ALTER MATERIALIZED VIEW の ANNOTATIONS 文のみを"
-                    "生成してください。\n\n"
+                    "以下の情報に基づき、Select AI(NL2SQL)が業務用語を正しく SQL に変換できる"
+                    "ように、Oracle ALTER TABLE/ALTER VIEW/ALTER MATERIALIZED VIEW の "
+                    "ANNOTATIONS 文のみを生成してください。\n\n"
                     "出力ルール:\n"
                     "- 純粋な ALTER TABLE/ALTER VIEW/ALTER MATERIALIZED VIEW "
                     "ANNOTATIONS ステートメントのみを出力\n"
                     "- Markdown 記号、説明文、前置きは出力しない\n"
                     "- テーブル・ビューは A-Z 順、列は定義順で出力\n"
-                    "- ビュー列の annotation は生成しない\n\n"
-                    "annotation の割り当て:\n"
-                    "- COMMENT: は入力メタデータの項目名であり、annotation 名として使用しない\n"
-                    "- 表・ビュー・列の説明や表示名には UI_Display を使用\n"
-                    "- 列型には data_type、NULL 可否には nullable を使用\n"
+                    "- 既存値を更新するため ADD OR REPLACE を使う\n"
+                    "- マテリアライズドビューの列の annotation は生成しない"
+                    "(表・ビューの列は生成する)\n\n"
+                    "annotation の語彙(名前は二重引用符で囲む):\n"
+                    '- "DESCRIPTION": 表なら「1 行が何を表すか」、列なら業務上の意味\n'
+                    '- "ALIASES": 利用者が質問で使う同義語を英語と日本語でカンマ区切り\n'
+                    "- \"VALUES\": コード値と意味(例: 'A = active (有効); I = inactive (休眠).')。"
                     + (
-                        "- サンプルがあるため sample_header / sample_data を生成可能\n"
+                        "サンプル・コメントに根拠がある場合だけ付け、推測しない\n"
                         if has_samples
-                        else "- サンプルが無いため sample_header / sample_data を生成しない\n"
+                        else "サンプルが無いためコメントに根拠がある場合だけ付け、推測しない\n"
                     )
-                    + "- annotation 名 COMMENT は生成しない\n\n"
+                    + '- "UNITS": 金額・数量・日時の単位や通貨\n'
+                    '- "JOIN COLUMN": 外部キー情報から結合先'
+                    "(例: 'Join with CUST_MST.CUST_ID.')\n"
+                    "- COMMENT: は入力メタデータの項目名であり、annotation 名として使用しない\n"
+                    "- data_type / nullable / sample_header / sample_data は Select AI が DDL から"
+                    "得るため生成しない\n"
+                    '- 構造情報で DOMAIN= が付いた列はドメインから "DESCRIPTION" 等を継承するため、'
+                    '表固有の "JOIN COLUMN" だけを付ける\n\n'
                     "参考例:\n"
-                    "ALTER TABLE T1 ANNOTATIONS (ADD OR REPLACE UI_Display 'Table 1');\n"
-                    "ALTER TABLE T1 MODIFY (ID ANNOTATIONS "
-                    "(ADD OR REPLACE UI_Display 'ID', ADD OR REPLACE data_type 'NUMBER', "
-                    "ADD OR REPLACE nullable 'N'));\n"
-                    "ALTER VIEW SALES_V ANNOTATIONS (ADD OR REPLACE UI_Display 'Sales View');\n"
-                    "ALTER MATERIALIZED VIEW SALES_MV ANNOTATIONS "
-                    "(ADD OR REPLACE UI_Display 'Sales MV');"
+                    'ALTER TABLE APP.CUST_MST ANNOTATIONS (ADD OR REPLACE "DESCRIPTION" '
+                    "'Customer master. One row represents one customer.', "
+                    "ADD OR REPLACE \"ALIASES\" 'customers, 顧客, 顧客マスター');\n"
+                    "ALTER TABLE APP.CUST_MST MODIFY (STAT_CD ANNOTATIONS ("
+                    "ADD OR REPLACE \"DESCRIPTION\" 'Customer status code.', "
+                    "ADD OR REPLACE \"ALIASES\" 'customer status, 顧客状態, 有効顧客', "
+                    "ADD OR REPLACE \"VALUES\" 'A = active (有効); I = inactive (休眠).'));\n"
+                    "ALTER TABLE APP.ORD_TXN MODIFY (CUST_ID ANNOTATIONS ("
+                    "ADD OR REPLACE \"JOIN COLUMN\" 'Join with CUST_MST.CUST_ID.'));\n"
+                    'ALTER VIEW APP.SALES_V ANNOTATIONS (ADD OR REPLACE "DESCRIPTION" '
+                    "'Confirmed sales per active customer. One row represents one customer.');\n"
+                    "ALTER VIEW APP.SALES_V MODIFY (CONFIRMED_AMT ANNOTATIONS ("
+                    "ADD OR REPLACE \"DESCRIPTION\" 'Total confirmed net sales amount.', "
+                    "ADD OR REPLACE \"UNITS\" 'Japanese yen (JPY).'));\n"
+                    "ALTER MATERIALIZED VIEW APP.SALES_MV ANNOTATIONS ("
+                    "ADD OR REPLACE \"DESCRIPTION\" 'Monthly sales summary.');"
                 ),
                 context=self._metadata_generation_context(request),
                 system_prompt=(
@@ -11648,9 +11684,10 @@ class Nl2SqlService:
                     "テーブル: ALTER TABLE <表> ANNOTATIONS (<annotation>);\n"
                     "列: ALTER TABLE <表> MODIFY (<列> ANNOTATIONS (<annotation>));\n"
                     "ビュー: ALTER VIEW <ビュー> ANNOTATIONS (<annotation>);\n"
+                    "ビュー列: ALTER VIEW <ビュー> MODIFY (<列> ANNOTATIONS (<annotation>));\n"
                     "マテリアライズドビュー: ALTER MATERIALIZED VIEW <MV> "
                     "ANNOTATIONS (<annotation>);\n"
-                    "ビュー/MV 列への annotation は生成しないでください。\n"
+                    "MV 列への annotation は生成しないでください。"
                     "対象は必ず OWNER.OBJECT の owner 修飾を保持してください。"
                     "更新を反映する生成 SQL では ADD OR REPLACE を使用してください。"
                     "ADD / DROP / REPLACE も使用できます。annotation 名は Oracle 識別子です。"
@@ -11660,10 +11697,11 @@ class Nl2SqlService:
                 ),
             )
             raw = SqlOutput.model_validate_json(raw).sql
+            # sample_header / sample_data は Select AI に不要なため常に除外する。
             sql = self._clean_generated_metadata_sql(
                 raw,
                 "annotation_sql",
-                has_annotation_samples=has_samples,
+                has_annotation_samples=False,
             )
             if not self._metadata_sql_preserves_targets(sql, request):
                 warning = (
@@ -12310,8 +12348,41 @@ class Nl2SqlService:
                 )
         return "\n".join(statements)
 
-    def _deterministic_annotation_sql(self, request: MetadataSqlGenerateRequest) -> str:
+    def _deterministic_annotation_sql(
+        self, request: MetadataSqlGenerateRequest
+    ) -> tuple[str, list[str]]:
+        """表・ビュー・列に "DESCRIPTION" を付ける決定論 SQL。
+
+        ビュー列は ALTER VIEW ... MODIFY で付け、MV 列は付けない。ドメインが付いた列は
+        ドメインから annotation を継承するため重複を避けて生成しない。
+        """
+
+        def object_statement(
+            identity: OracleObjectIdentity,
+            object_type: Literal["table", "view", "materialized_view"],
+            value: str,
+        ) -> str:
+            return (
+                f"ALTER {_annotation_ddl_kind_for_metadata(object_type)} "
+                f"{_quote_object_identity(identity)} "
+                f'ANNOTATIONS (ADD OR REPLACE "DESCRIPTION" {_quote_sql_string(value)});'
+            )
+
+        def column_statement(
+            identity: OracleObjectIdentity,
+            object_type: Literal["table", "view", "materialized_view"],
+            column_name: str,
+            value: str,
+        ) -> str:
+            return (
+                f"ALTER {_annotation_ddl_kind_for_metadata(object_type)} "
+                f"{_quote_object_identity(identity)} "
+                f"MODIFY ({_quote_identifier(column_name)} "
+                f'ANNOTATIONS (ADD OR REPLACE "DESCRIPTION" {_quote_sql_string(value)}));'
+            )
+
         statements: list[str] = []
+        skipped: list[str] = []
         target_types = self._metadata_target_types(request)
         selected_tables = sorted(
             self._selected_metadata_tables(request),
@@ -12319,62 +12390,59 @@ class Nl2SqlService:
         )
         for table in selected_tables:
             identity = OracleObjectIdentity(owner=table.owner, object_name=table.table_name)
-            object_value = table.comment or table.logical_name or table.table_name
             object_type = _metadata_object_kind(
                 target_types.get(identity.qualified_name, table.table_type)
             )
-            if object_type != "table":
-                statements.append(
-                    f"ALTER {_annotation_ddl_kind_for_metadata(object_type)} "
-                    f"{_quote_object_identity(identity)} "
-                    "ANNOTATIONS (ADD OR REPLACE UI_Display "
-                    f"{_quote_sql_string(object_value)});"
-                )
-                continue
             statements.append(
-                f"ALTER TABLE {_quote_object_identity(identity)} "
-                "ANNOTATIONS (ADD OR REPLACE UI_Display "
-                f"{_quote_sql_string(object_value)});"
+                object_statement(
+                    identity, object_type, table.comment or table.logical_name or table.table_name
+                )
             )
+            if object_type == "materialized_view":
+                continue
             for column in table.columns:
-                column_value = column.comment or column.logical_name or column.column_name
+                if column.domain_name:
+                    skipped.append(f"{identity.qualified_name}.{column.column_name}")
+                    continue
                 statements.append(
-                    f"ALTER TABLE {_quote_object_identity(identity)} "
-                    f"MODIFY ({_quote_identifier(column.column_name)} "
-                    "ANNOTATIONS (ADD OR REPLACE UI_Display "
-                    f"{_quote_sql_string(column_value)}));"
+                    column_statement(
+                        identity,
+                        object_type,
+                        column.column_name,
+                        column.comment or column.logical_name or column.column_name,
+                    )
                 )
-        if selected_tables:
-            return "\n".join(statements)
-        for item in sorted(
-            self._metadata_input_objects(request),
-            key=lambda value: str(value["name"]).upper(),
-        ):
-            identity = self._db_admin_object_identity(str(item["name"]))
-            object_value = item["comment"] or item["name"]
-            object_type = _metadata_object_kind(str(item["type"]))
-            if object_type != "table":
+        if not selected_tables:
+            for item in sorted(
+                self._metadata_input_objects(request),
+                key=lambda value: str(value["name"]).upper(),
+            ):
+                identity = self._db_admin_object_identity(str(item["name"]))
+                object_type = _metadata_object_kind(str(item["type"]))
                 statements.append(
-                    f"ALTER {_annotation_ddl_kind_for_metadata(object_type)} "
-                    f"{_quote_object_identity(identity)} "
-                    "ANNOTATIONS (ADD OR REPLACE UI_Display "
-                    f"{_quote_sql_string(object_value)});"
+                    object_statement(identity, object_type, item["comment"] or item["name"])
                 )
-                continue
-            statements.append(
-                f"ALTER TABLE {_quote_object_identity(identity)} "
-                "ANNOTATIONS (ADD OR REPLACE UI_Display "
-                f"{_quote_sql_string(object_value)});"
+                if object_type == "materialized_view":
+                    continue
+                for column in item["columns"]:
+                    if column.get("domain_name"):
+                        skipped.append(f"{identity.qualified_name}.{column['name']}")
+                        continue
+                    statements.append(
+                        column_statement(
+                            identity,
+                            object_type,
+                            column["name"],
+                            column["comment"] or column["name"],
+                        )
+                    )
+        warnings: list[str] = []
+        if skipped:
+            warnings.append(
+                'ドメインが付いた列はドメインから annotation を継承するため "DESCRIPTION" を'
+                "生成しませんでした: " + ", ".join(skipped)
             )
-            for column in item["columns"]:
-                column_value = column["comment"] or column["name"]
-                statements.append(
-                    f"ALTER TABLE {_quote_object_identity(identity)} "
-                    f"MODIFY ({_quote_identifier(column['name'])} "
-                    "ANNOTATIONS (ADD OR REPLACE UI_Display "
-                    f"{_quote_sql_string(column_value)}));"
-                )
-        return "\n".join(statements)
+        return "\n".join(statements), warnings
 
     def _clean_generated_metadata_sql(
         self,
@@ -12771,10 +12839,8 @@ class Nl2SqlService:
             if table is None:
                 raise ValueError(f"{item.object_name}: catalog に存在しない table です。")
             catalog_object_type = _catalog_metadata_object_kind(table)
-            if catalog_object_type != "table":
-                raise ValueError(
-                    f"{item.object_name}: ビュー/MV の列 annotation は生成できません。"
-                )
+            if catalog_object_type == "materialized_view":
+                raise ValueError(f"{item.object_name}: MV の列 annotation は生成できません。")
             column = self._find_catalog_column(table, column_name)
             if column is None:
                 raise ValueError(f"{item.object_name}: catalog に存在しない column です。")
@@ -12785,7 +12851,8 @@ class Nl2SqlService:
                 annotation_name=annotation_name,
                 annotation_value=annotation_value,
                 sql=(
-                    f"ALTER TABLE {_quote_object_identity(identity)} "
+                    f"ALTER {_annotation_ddl_kind_for_metadata(catalog_object_type)} "
+                    f"{_quote_object_identity(identity)} "
                     f"MODIFY ({_quote_identifier(column.column_name)} "
                     f"ANNOTATIONS (ADD OR REPLACE {annotation_name} "
                     f"{_quote_sql_string(annotation_value)}));"

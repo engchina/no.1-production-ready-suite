@@ -131,6 +131,9 @@
 | DP-ANN-002 | 生成 SQL | `ADMIN_EXECUTE` で実行 | success。素の `ADD` は `ADD IF NOT EXISTS` へ正規化され再実行安全 |
 | DP-ANN-003 | 不正 annotation | `ALTER TABLE TD_NL2SQL_ORDERS DROP COLUMN STATUS` | `annotation_sql` policy で blocked |
 | DP-ANN-004 | view annotation | `V_TD_NL2SQL_OPEN_ORDERS` | `ALTER VIEW ... ANNOTATIONS` が実行できる |
+| DP-ANN-005 | view 列 annotation | `V_TD_NL2SQL_OPEN_ORDERS` の列 | `ALTER VIEW ... MODIFY (<列> ANNOTATIONS (...))` が生成・実行できる(MV 列は生成されない) |
+| DP-ANN-006 | 語彙 | `TD_NL2SQL_ORDERS` の STATUS 列(サンプルあり) | `"DESCRIPTION"` / `"ALIASES"` / `"VALUES"` / `"UNITS"` / `"JOIN COLUMN"` が生成され、`data_type` / `nullable` / `sample_*` は生成されない。ドメイン付き列には `"JOIN COLUMN"` 等の表固有情報だけ |
+| DP-ANN-007 | Select AI 連携 | 業務プロファイルの「アノテーションを利用」= true で SQL 生成 | `DBMS_CLOUD_AI.GENERATE(action=>'showprompt')` に annotation が含まれ、コード値(例: `'A'`)の WHERE 条件が正しく生成される |
 
 ## ドメイン管理
 

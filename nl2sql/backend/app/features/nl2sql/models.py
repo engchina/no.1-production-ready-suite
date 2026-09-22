@@ -2257,7 +2257,7 @@ class AnnotationSuggestion(BaseModel):
 
     object_name: str
     object_type: str = "table"
-    annotation_name: str = "Display"
+    annotation_name: str = "DESCRIPTION"
     annotation_value: str
 
 
@@ -2274,7 +2274,7 @@ class AnnotationApplyItem(BaseModel):
 
     object_name: str = Field(min_length=1, max_length=260)
     object_type: str = Field(default="table", min_length=1, max_length=32)
-    annotation_name: str = Field(default="Display", min_length=1, max_length=64)
+    annotation_name: str = Field(default="DESCRIPTION", min_length=1, max_length=64)
     annotation_value: str = Field(min_length=1, max_length=4000)
 
 

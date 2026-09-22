@@ -138,7 +138,8 @@ const DEFAULT_SELECT_AI_CONFIG: ProfileSelectAiConfig = {
   max_tokens: SELECT_AI_MAX_TOKENS_MAX,
   enforce_object_list: true,
   comments: true,
-  annotations: false,
+  // ANNOTATIONS / ドメイン継承 annotation を Select AI の prompt へ渡す(既定 false だと効かない)。
+  annotations: true,
   constraints: true,
   role: "",
   additional_instructions: "",

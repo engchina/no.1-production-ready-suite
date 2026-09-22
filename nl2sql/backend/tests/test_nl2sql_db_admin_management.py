@@ -1160,6 +1160,7 @@ def test_statement_policy_comment_and_annotation_sql() -> None:
                 "ALTER TABLE T1 MODIFY (ID ANNOTATIONS (UI_Display 'ID'));\n"
                 "ALTER TABLE T1 MODIFY ID ANNOTATIONS (UI_Display 'ID');\n"
                 "ALTER VIEW V1 ANNOTATIONS (UI_Display 'V1');\n"
+                "ALTER VIEW V1 MODIFY (ID ANNOTATIONS (\"DESCRIPTION\" 'ID'));\n"
                 "ALTER TABLE T1 ANNOTATIONS (Business_Label '業務名');\n"
                 "ALTER TABLE T1 ANNOTATIONS (ADD IF NOT EXISTS \"COMMENT\" '説明');\n"
                 "ALTER MATERIALIZED VIEW MV1 ANNOTATIONS (UI_Display 'MV1')"
@@ -1167,7 +1168,7 @@ def test_statement_policy_comment_and_annotation_sql() -> None:
             policy="annotation_sql",
         )
     )
-    assert [item.status for item in annotation_ok.statements] == ["confirmation_required"] * 7
+    assert [item.status for item in annotation_ok.statements] == ["confirmation_required"] * 8
 
     annotation_ng = service.execute_db_admin_statements(
         DbAdminStatementsRequest(sql="ALTER TABLE T1 ADD C1 NUMBER", policy="annotation_sql")
@@ -1248,7 +1249,7 @@ def test_annotation_comment_name_is_blocked_before_oracle_execution() -> None:
     assert {item.status for item in result.statements} == {"blocked"}
     assert all("ORA-11548" in item.error_message for item in result.statements)
     assert all(item.error_code == "ORA-11548" for item in result.statements)
-    assert all("UI_Display" in item.error_message for item in result.statements)
+    assert all('"DESCRIPTION"' in item.error_message for item in result.statements)
 
 
 def test_admin_sql_splitter_handles_comments_literals_and_plsql_blocks() -> None:
@@ -1971,8 +1972,13 @@ def test_annotation_generation_ports_reference_prompt_and_filters_sample_annotat
     assert result.source == "oci_enterprise_ai"
     assert result.sql == "ALTER TABLE T1 ANNOTATIONS (ADD IF NOT EXISTS UI_Display 'T, One');"
     assert "COMMENT: は入力メタデータ" in enterprise_ai.calls[0]["prompt"]
-    assert "sample_header / sample_data を生成しない" in enterprise_ai.calls[0]["prompt"]
+    assert "sample_header / sample_data は Select AI が DDL から得るため生成しない" in (
+        enterprise_ai.calls[0]["prompt"]
+    )
+    assert '"JOIN COLUMN": 外部キー情報から結合先' in enterprise_ai.calls[0]["prompt"]
+    assert "サンプルが無いためコメントに根拠がある場合だけ付け" in enterprise_ai.calls[0]["prompt"]
     assert "未引用の COMMENT は禁止" in enterprise_ai.calls[0]["system_prompt"]
+    assert "ビュー列: ALTER VIEW <ビュー> MODIFY" in enterprise_ai.calls[0]["system_prompt"]
 
     with_samples_ai = FakeEnterpriseAiClient(
         "ALTER TABLE T1 ANNOTATIONS "
@@ -1987,9 +1993,11 @@ def test_annotation_generation_ports_reference_prompt_and_filters_sample_annotat
         )
     )
 
-    assert "sample_header 'ID,NAME'" in with_samples.sql
-    assert "sample_data '1,A'" in with_samples.sql
-    assert "sample_header / sample_data を生成可能" in with_samples_ai.calls[0]["prompt"]
+    # サンプルがあっても sample_header / sample_data は Select AI に不要なため常に除外する。
+    assert "sample_header" not in with_samples.sql
+    assert "sample_data" not in with_samples.sql
+    assert with_samples.sql == "ALTER TABLE T1 ANNOTATIONS (ADD IF NOT EXISTS UI_Display 'T One');"
+    assert "サンプル・コメントに根拠がある場合だけ付け" in with_samples_ai.calls[0]["prompt"]
 
 
 def test_invalid_ai_comment_annotation_falls_back_to_idempotent_ui_display_sql() -> None:
@@ -2007,7 +2015,7 @@ def test_invalid_ai_comment_annotation_falls_back_to_idempotent_ui_display_sql()
     )
 
     assert result.source == "deterministic"
-    assert "ADD OR REPLACE UI_Display" in result.sql
+    assert 'ADD OR REPLACE "DESCRIPTION"' in result.sql
     assert "ADD IF NOT EXISTS COMMENT" not in result.sql
     assert any("ORA-11548" in warning for warning in result.warnings)
 
@@ -2063,8 +2071,12 @@ def test_deterministic_annotation_sql_sorts_objects_and_escapes_values() -> None
         'ALTER TABLE "APP"."B_TABLE"'
     )
     assert "O''Brien" in result.sql
-    assert "ADD OR REPLACE UI_Display" in result.sql
-    assert 'MODIFY ("V_ID"' not in result.sql
+    assert 'ADD OR REPLACE "DESCRIPTION"' in result.sql
+    # ビュー列は ALTER VIEW ... MODIFY で annotation する(記事パターン 5)。
+    assert (
+        'ALTER VIEW "APP"."V_TABLE" MODIFY ("V_ID" ANNOTATIONS '
+        "(ADD OR REPLACE \"DESCRIPTION\" 'View ID'));"
+    ) in result.sql
 
 
 def test_metadata_sql_uses_oracle_view_and_materialized_view_syntax() -> None:
@@ -2130,8 +2142,9 @@ def test_metadata_sql_uses_oracle_view_and_materialized_view_syntax() -> None:
     assert "COMMENT ON VIEW" not in comments.sql
     assert 'ALTER VIEW "APP"."SALES_V"' in annotations.sql
     assert 'ALTER MATERIALIZED VIEW "APP"."SALES_MV"' in annotations.sql
-    assert "ADD OR REPLACE UI_Display" in annotations.sql
-    assert "MODIFY" not in annotations.sql
+    assert 'ADD OR REPLACE "DESCRIPTION"' in annotations.sql
+    # ビュー列は MODIFY で annotation し、MV 列は生成しない。
+    assert 'ALTER MATERIALIZED VIEW "APP"."SALES_MV" MODIFY' not in annotations.sql
 
 
 def test_comment_apply_reports_partial_oracle_execution(
@@ -2301,8 +2314,41 @@ def test_annotation_candidates_normalize_mv_and_skip_view_columns() -> None:
     suggestions = service.suggest_annotations().suggestions
     assert [(item.object_name, item.object_type) for item in suggestions] == [
         ("SALES_V", "view"),
+        ("SALES_V.SALES_ID", "column"),
         ("SALES_MV", "materialized_view"),
     ]
+    assert {item.annotation_name for item in suggestions} == {"DESCRIPTION"}
+
+    view_column = service.apply_annotations(
+        AnnotationApplyRequest(
+            items=[
+                {
+                    "object_name": "SALES_V.SALES_ID",
+                    "object_type": "column",
+                    "annotation_value": "売上ID",
+                }
+            ],
+            confirmation="ADMIN_EXECUTE",
+        )
+    )
+    assert view_column.statements[0].sql == (
+        'ALTER VIEW "APP"."SALES_V" MODIFY ("SALES_ID" '
+        "ANNOTATIONS (ADD OR REPLACE DESCRIPTION '売上ID'));"
+    )
+    mv_column = service.apply_annotations(
+        AnnotationApplyRequest(
+            items=[
+                {
+                    "object_name": "SALES_MV.SALES_ID",
+                    "object_type": "column",
+                    "annotation_value": "売上ID",
+                }
+            ],
+            confirmation="ADMIN_EXECUTE",
+        )
+    )
+    assert mv_column.statements == []
+    assert any("MV の列 annotation" in warning for warning in mv_column.warnings)
 
     mv_apply = service.apply_annotations(
         AnnotationApplyRequest(
@@ -5591,3 +5637,38 @@ def test_domain_generation_prompt_carries_operation_and_allows_inventory_tables(
     outside = service.generate_domain_sql(request.model_copy(update={"operation": "delete"}))
     assert outside.source == "deterministic"
     assert any("選択した表以外" in warning for warning in outside.warnings)
+
+
+def test_deterministic_annotation_skips_domain_columns_and_comment_prompt_guides_codes() -> None:
+    service = Nl2SqlService(store=MemoryNl2SqlStore())
+    service._enterprise_ai_client = FakeEnterpriseAiClient(configured=False)
+
+    result = service.generate_annotation_sql(
+        MetadataSqlGenerateRequest(
+            targets=[{"object_name": "SALES", "object_type": "table"}],
+            structure_text=(
+                "OBJECT: APP.SALES\nTYPE: table\nCOMMENT: 売上\nCOLUMNS:\n"
+                "- CUST_ID: NUMBER(10) NULLABLE=N DOMAIN=APP.CUSTOMER_ID_D COMMENT=顧客ID\n"
+                "- AMT: NUMBER(12,2) NULLABLE=N COMMENT=売上金額"
+            ),
+        )
+    )
+    assert result.sql.splitlines() == [
+        'ALTER TABLE "APP"."SALES" ANNOTATIONS (ADD OR REPLACE "DESCRIPTION" \'売上\');',
+        'ALTER TABLE "APP"."SALES" MODIFY ("AMT" ANNOTATIONS '
+        "(ADD OR REPLACE \"DESCRIPTION\" '売上金額'));",
+    ]
+    assert any("APP.SALES.CUST_ID" in warning for warning in result.warnings)
+
+    enterprise_ai = FakeEnterpriseAiClient("COMMENT ON TABLE APP.SALES IS 'Sales orders.';")
+    service._enterprise_ai_client = enterprise_ai
+    comments = service.generate_comment_sql(
+        MetadataSqlGenerateRequest(
+            targets=[{"object_name": "SALES", "object_type": "table"}],
+            structure_text="OBJECT: APP.SALES\nTYPE: table\nCOMMENT: 売上",
+        )
+    )
+    assert comments.source == "oci_enterprise_ai"
+    assert "コード値の意味" in enterprise_ai.calls[0]["prompt"]
+    assert "Join with ORD_TXN.CUST_ID." in enterprise_ai.calls[0]["prompt"]
+    assert "推測しない" in enterprise_ai.calls[0]["prompt"]

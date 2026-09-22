@@ -97,13 +97,15 @@ interface MetadataTargetItem extends MetadataSqlTarget {
 
 const ANNOTATION_EXTRA_TEXT =
   "ANNOTATIONSの安全な適用ガイド:\n" +
-  "- DROPとADDは同一文で混在させず、別々のALTER文に分割\n" +
-  "- 既存値を更新する場合はADD OR REPLACEを使う\n" +
-  "- 新規のみ追加したい場合はADD IF NOT EXISTSを使う\n" +
-  "- COMMENT: は入力項目名であり、説明用annotation名にはUI_Displayを使う\n" +
-  "- 値内の'は''へエスケープし、予約語や空白を含むannotation名は二重引用符で囲む\n" +
-  "例(表): ALTER TABLE USERS ANNOTATIONS (ADD OR REPLACE UI_Display 'Users');\n" +
-  "例(列): ALTER TABLE USERS MODIFY (ID ANNOTATIONS (ADD OR REPLACE UI_Display 'ID'));";
+  "- 語彙は \"DESCRIPTION\"(意味)、\"ALIASES\"(英語・日本語の同義語)、\"VALUES\"(コード値の意味)、\"UNITS\"(単位)、\"JOIN COLUMN\"(結合先)。名前は二重引用符で囲む\n" +
+  "- COMMENT: は入力項目名であり、annotation名には使わない。data_type / nullable は生成しない\n" +
+  "- VALUESはコメント・サンプルに根拠がある場合だけ付け、推測しない\n" +
+  "- DROPとADDは同一文で混在させず、別々のALTER文に分割。既存値の更新はADD OR REPLACE、新規のみはADD IF NOT EXISTS\n" +
+  "- DOMAIN=が付いた列はドメインから継承されるため \"JOIN COLUMN\" など表固有の情報だけを付ける\n" +
+  "- Select AIで使うには業務プロファイルの「アノテーションを利用」を有効にする\n" +
+  "例(表): ALTER TABLE CUST_MST ANNOTATIONS (ADD OR REPLACE \"DESCRIPTION\" 'Customer master. One row represents one customer.', ADD OR REPLACE \"ALIASES\" 'customers, 顧客');\n" +
+  "例(列): ALTER TABLE CUST_MST MODIFY (STAT_CD ANNOTATIONS (ADD OR REPLACE \"VALUES\" 'A = active (有効); I = inactive (休眠).'));\n" +
+  "例(ビュー列): ALTER VIEW SALES_V MODIFY (AMT ANNOTATIONS (ADD OR REPLACE \"UNITS\" 'Japanese yen (JPY).'));";
 
 const DOMAIN_EXTRA_TEXT =
   "SQLドメインの安全な適用ガイド:\n" +
