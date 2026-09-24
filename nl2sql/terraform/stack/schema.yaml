@@ -1,0 +1,687 @@
+title: "Deploy Production Ready NL2SQL on Oracle Cloud Infrastructure"
+stackDescription: "Deploy Production Ready NL2SQL on an OCI Compute instance with Oracle Autonomous AI Database 26ai, Nginx, and systemd. Configure AI runtime settings after startup from the application System Settings."
+schemaVersion: 1.1.0
+version: "20260901.3"
+locale: "en"
+
+variableGroups:
+  - title: Hidden
+    visible: false
+    variables:
+      - adb_compute_model
+      - application_git_url
+      - application_git_ref
+      - platform_git_url
+      - platform_git_ref
+      - app_environment
+      - app_auth_cookie_secure
+      - existing_oracle_wallet_password
+      - adb_is_mtls_connection_required
+
+  - title: Required Configuration
+    visible: true
+    variables:
+      - region
+      - compartment_ocid
+      - availability_domain
+      - vcn_ai_vcn_id
+
+  - title: Application Source
+    visible: true
+    variables:
+      - application_port
+
+  - title: Application Administrator
+    visible: true
+    variables:
+      - app_admin_login_user_id
+      - app_admin_login_user_password
+
+  - title: Autonomous AI Database
+    visible: true
+    variables:
+      - adb_compartment_ocid
+      - adb_deployment_mode
+
+  - title: Existing Autonomous AI Database
+    visible:
+      eq:
+        - adb_deployment_mode
+        - "既存の Autonomous AI Database を選択"
+    variables:
+      - existing_adb_ocid
+      - existing_oracle_user
+      - existing_oracle_password
+      - existing_oracle_dsn
+
+  - title: New Autonomous AI Database
+    visible:
+      eq:
+        - adb_deployment_mode
+        - "新規 Autonomous AI Database の作成"
+    variables:
+      - adb_display_name
+      - adb_name
+      - adb_workload
+      - adb_db_version
+      - adb_compute_count
+      - adb_is_auto_scaling_enabled
+      - adb_data_storage_size_in_tbs
+      - adb_is_auto_scaling_for_storage_enabled
+      - adb_is_elastic_pool_enabled
+      - adb_resource_pool_size
+      - adb_resource_pool_storage_size_in_tbs
+      - license_model
+      - adb_backup_retention_period_in_days
+      - adb_password
+
+  - title: "ネットワーク・アクセス"
+    visible:
+      eq:
+        - adb_deployment_mode
+        - "新規 Autonomous AI Database の作成"
+    variables:
+      - adb_network_access_type
+      - adb_private_endpoint_vcn_compartment_id
+      - adb_private_endpoint_vcn_id
+      - adb_private_endpoint_subnet_compartment_id
+      - adb_subnet_id
+      - adb_acl_notation_type
+      - adb_acl_vcn_compartment_id
+      - adb_acl_vcn_id
+      - adb_acl_subnet_compartment_id
+      - adb_acl_subnet_id
+      - adb_acl_cidr_blocks
+
+  - title: Deep Data Security
+    visible: true
+    variables:
+      - oracle_deepsec_enabled
+      - oracle_deepsec_data_user_password
+
+  - title: Compute
+    visible: true
+    variables:
+      - instance_display_name
+      - instance_image_source_id
+      - instance_shape
+      - instance_flex_shape_ocpus
+      - instance_flex_shape_memory
+      - instance_boot_volume_size
+      - instance_boot_volume_vpus
+      - subnet_ai_subnet_id
+      - ssh_authorized_keys
+
+variables:
+  region:
+    title: Region
+    type: oci:identity:region:name
+    required: true
+    visible: false
+    default: "ap-osaka-1"
+
+  compartment_ocid:
+    type: oci:identity:compartment:id
+    required: true
+    visible: true
+    title: "Create in compartment"
+
+  availability_domain:
+    type: oci:identity:availabilitydomain:name
+    required: true
+    visible: true
+    title: "Availability domain"
+    dependsOn:
+      region: ${region}
+      compartmentId: ${compartment_ocid}
+
+  vcn_ai_vcn_id:
+    type: oci:core:vcn:id
+    required: true
+    visible: true
+    title: "VCN"
+    description: "Select an existing virtual cloud network."
+    dependsOn:
+      compartmentId: ${compartment_ocid}
+
+  application_git_url:
+    type: string
+    required: true
+    visible: false
+    title: "Application Git URL"
+    default: "https://github.com/engchina/no.1-production-ready-nl2sql.git"
+
+  application_git_ref:
+    type: string
+    required: true
+    visible: false
+    title: "Application Git ref"
+    description: "Branch or tag to clone. The default deploys main."
+    default: "main"
+
+  platform_git_url:
+    type: string
+    required: true
+    visible: false
+    title: "Platform Git URL"
+    default: "https://github.com/engchina/no.1-production-ready-platform.git"
+
+  platform_git_ref:
+    type: string
+    required: true
+    visible: false
+    title: "Platform Git ref"
+    description: "Branch or tag for shared backend/ui packages."
+    default: "main"
+
+  application_port:
+    type: number
+    required: true
+    visible: true
+    title: "Application port"
+    description: "TCP port exposed by host Nginx and the instance firewall."
+    default: 80
+
+  app_environment:
+    type: enum
+    required: true
+    visible: false
+    title: "Application environment"
+    description: "Use local for direct HTTP access. Use production only behind HTTPS and set Secure cookies."
+    enum:
+      - "local"
+      - "staging"
+      - "production"
+    default: "local"
+
+  app_auth_cookie_secure:
+    type: boolean
+    required: true
+    visible: false
+    title: "Secure auth cookies"
+    description: "Set true when the app is served through HTTPS."
+    default: false
+
+  app_admin_login_user_id:
+    type: enum
+    required: true
+    visible: true
+    title: "Application administrator login user ID"
+    description: "Fixed login user ID for the built-in SYSTEM_ADMIN configuration administrator. It must be exactly system_admin and is independent from the database connection user."
+    enum:
+      - "system_admin"
+    default: "system_admin"
+
+  app_admin_login_user_password:
+    type: password
+    required: true
+    visible: true
+    title: "Application administrator password"
+    description: "Login password for the built-in SYSTEM_ADMIN configuration administrator. Uses the same rule as the database password."
+    confirmation: true
+    pattern: '^[^"\r\n]{12,30}$'
+
+  oracle_deepsec_data_user_password:
+    type: password
+    required: false
+    visible:
+      eq:
+        - oracle_deepsec_enabled
+        - true
+    title: "DeepSec DATA USER password"
+    description: "Value written to ORACLE_DEEPSEC_DATA_USER_PASSWORD for the shared DEEPSEC_DATA_USER Deep Data Security data connection."
+    confirmation: true
+    pattern: '^[^"\r\n]{12,256}$'
+
+  oracle_deepsec_enabled:
+    type: boolean
+    required: true
+    visible: true
+    title: "ORACLE_DEEPSEC_ENABLED"
+    description: "Deep Data Securityを有効にする場合はオンにします。オンの場合のみDeepSec DATA USER passwordが必要です。"
+    default: true
+
+  adb_compartment_ocid:
+    type: oci:identity:compartment:id
+    required: true
+    visible: true
+    title: "ADBのコンパートメント"
+    description: "新規Autonomous AI Databaseの作成先、または既存Autonomous AI Databaseの候補を絞り込むコンパートメントを選択します。Computeのデプロイ先には影響しません。"
+    default: compartment_ocid
+
+  adb_deployment_mode:
+    type: enum
+    required: true
+    visible: true
+    title: "ADBの利用方法"
+    description: "新規Autonomous AI Databaseを作成するか、選択したコンパートメント内の既存Autonomous AI Databaseを使用するかを選択します。"
+    enum:
+      - "新規 Autonomous AI Database の作成"
+      - "既存の Autonomous AI Database を選択"
+    default: "新規 Autonomous AI Database の作成"
+
+  existing_adb_ocid:
+    type: oci:database:autonomousdatabase:id
+    required: false
+    visible: true
+    title: "既存のAutonomous AI Database"
+    description: "選択したコンパートメント内の既存ADBを選択します。TerraformがWalletを生成し、接続設定をbackend/.envへ反映します。"
+    dependsOn:
+      compartmentId: ${adb_compartment_ocid}
+
+  existing_oracle_user:
+    type: string
+    required: false
+    visible: true
+    title: "Existing DB username"
+    description: "Value written to ORACLE_USER in backend/.env."
+    default: "ADMIN"
+
+  existing_oracle_password:
+    type: password
+    required: false
+    visible: true
+    title: "Existing DB password"
+    description: "Value written to ORACLE_PASSWORD in backend/.env."
+    confirmation: true
+
+  existing_oracle_dsn:
+    type: string
+    required: false
+    visible: true
+    title: "Existing DB DSN"
+    description: "Optional. Value written to ORACLE_DSN in backend/.env. Leave blank to use <selected ADB db_name>_high, for example NL2SQLADB -> nl2sqladb_high."
+
+  existing_oracle_wallet_password:
+    type: password
+    required: false
+    visible: false
+    title: "Existing DB wallet password"
+    description: "Hidden compatibility input. Existing ADB wallet generation reuses the existing DB password."
+    confirmation: true
+
+  adb_display_name:
+    type: string
+    required: false
+    visible: true
+    title: "ADB display name"
+    description: "Leave blank to use the database name."
+
+  adb_name:
+    type: string
+    required: true
+    visible: true
+    title: "Database name"
+    description: "ADB database name. Default is NL2SQLADB."
+    default: "NL2SQLADB"
+    pattern: "^[A-Za-z][A-Za-z0-9]{0,13}$"
+
+  adb_workload:
+    type: enum
+    required: true
+    visible: true
+    title: "Workload type"
+    enum:
+      - "OLTP"
+      - "AJD"
+      - "APEX"
+      - "LH"
+    default: "LH"
+
+  adb_db_version:
+    type: enum
+    required: true
+    visible: true
+    title: "Database version"
+    enum:
+      - "19c"
+      - "23ai"
+      - "26ai"
+    default: "26ai"
+
+  adb_compute_model:
+    type: enum
+    required: true
+    visible: false
+    title: "Compute model"
+    enum:
+      - "ECPU"
+      - "OCPU"
+    default: "ECPU"
+
+  adb_compute_count:
+    type: number
+    required: true
+    visible: true
+    title: "ECPU count"
+    default: 2
+
+  adb_is_auto_scaling_enabled:
+    type: boolean
+    required: true
+    visible: true
+    title: "CPU auto scaling"
+    default: false
+
+  adb_data_storage_size_in_tbs:
+    type: number
+    required: true
+    visible: true
+    title: "Storage (TB)"
+    default: 1
+
+  adb_is_auto_scaling_for_storage_enabled:
+    type: boolean
+    required: true
+    visible: true
+    title: "Storage auto scaling"
+    default: false
+
+  adb_is_elastic_pool_enabled:
+    type: boolean
+    required: true
+    visible: true
+    title: "Enable elastic pool"
+    default: false
+
+  adb_resource_pool_size:
+    type: number
+    required: true
+    visible:
+      eq:
+        - adb_is_elastic_pool_enabled
+        - true
+    title: "Elastic pool size"
+    default: 0
+
+  adb_resource_pool_storage_size_in_tbs:
+    type: number
+    required: true
+    visible:
+      eq:
+        - adb_is_elastic_pool_enabled
+        - true
+    title: "Elastic pool storage (TB)"
+    default: 0
+
+  license_model:
+    type: enum
+    required: true
+    visible: true
+    title: "License type"
+    enum:
+      - "BRING_YOUR_OWN_LICENSE"
+      - "LICENSE_INCLUDED"
+    default: "LICENSE_INCLUDED"
+
+  adb_backup_retention_period_in_days:
+    type: number
+    required: true
+    visible: true
+    title: "Automatic backup retention period (days)"
+    default: 1
+
+  adb_password:
+    type: password
+    required: false
+    visible: true
+    title: "Database ADMIN password"
+    description: "Used for the ADB ADMIN user, wallet password, and Oracle connection password."
+    confirmation: true
+    pattern: '^$|^[^"\r\n]{12,30}$'
+
+  adb_network_access_type:
+    type: enum
+    required: true
+    visible: true
+    title: "アクセス・タイプ"
+    description: "Autonomous AI Databaseのネットワーク・アクセスを選択します。すべての場所からのセキュア・アクセスはパブリック・エンドポイントを使用し、許可されたIPおよびVCN限定のセキュア・アクセスはACLで接続元を制限し、プライベート・エンドポイント・アクセスのみは指定したVCN内のプライベート・エンドポイントを使用します。"
+    enum:
+      - "すべての場所からのセキュア・アクセス"
+      - "許可されたIPおよびVCN限定のセキュア・アクセス"
+      - "プライベート・エンドポイント・アクセスのみ"
+    default: "プライベート・エンドポイント・アクセスのみ"
+
+  adb_private_endpoint_vcn_compartment_id:
+    type: oci:identity:compartment:id
+    required: true
+    visible:
+      eq:
+        - adb_network_access_type
+        - "プライベート・エンドポイント・アクセスのみ"
+    title: "VCNのコンパートメント"
+    description: "プライベート・エンドポイントで使用するVCNが存在するコンパートメントを選択します。"
+    default: compartment_ocid
+
+  adb_private_endpoint_vcn_id:
+    type: oci:core:vcn:id
+    required: true
+    visible:
+      eq:
+        - adb_network_access_type
+        - "プライベート・エンドポイント・アクセスのみ"
+    title: "仮想クラウド・ネットワーク"
+    description: "Autonomous AI Databaseのプライベート・エンドポイントで使用するVCNを選択します。"
+    dependsOn:
+      compartmentId: ${adb_private_endpoint_vcn_compartment_id}
+
+  adb_private_endpoint_subnet_compartment_id:
+    type: oci:identity:compartment:id
+    required: true
+    visible:
+      eq:
+        - adb_network_access_type
+        - "プライベート・エンドポイント・アクセスのみ"
+    title: "サブネットのコンパートメント"
+    description: "Autonomous AI Databaseをアタッチするサブネットが存在するコンパートメントを選択します。"
+    default: compartment_ocid
+
+  adb_subnet_id:
+    type: oci:core:subnet:id
+    required: true
+    visible:
+      eq:
+        - adb_network_access_type
+        - "プライベート・エンドポイント・アクセスのみ"
+    title: "サブネット"
+    description: "Autonomous AI Databaseのプライベート・エンドポイントをアタッチするサブネットを選択します。"
+    dependsOn:
+      compartmentId: ${adb_private_endpoint_subnet_compartment_id}
+      vcnId: ${adb_private_endpoint_vcn_id}
+
+  adb_acl_notation_type:
+    type: enum
+    required: true
+    visible:
+      eq:
+        - adb_network_access_type
+        - "許可されたIPおよびVCN限定のセキュア・アクセス"
+    title: "IP表記法タイプ"
+    description: "ACLで許可する接続元を、VCNまたはIPアドレス/CIDRブロックから選択します。"
+    enum:
+      - "VCN"
+      - "IPアドレスまたはCIDRブロック"
+    default: "VCN"
+
+  adb_acl_vcn_compartment_id:
+    type: oci:identity:compartment:id
+    required: true
+    visible:
+      and:
+        - eq:
+            - adb_network_access_type
+            - "許可されたIPおよびVCN限定のセキュア・アクセス"
+        - eq:
+            - adb_acl_notation_type
+            - "VCN"
+    title: "VCNのコンパートメント"
+    description: "アクセスを許可するVCNのコンパートメントを選択します。"
+    default: compartment_ocid
+
+  adb_acl_vcn_id:
+    type: oci:core:vcn:id
+    required: true
+    visible:
+      and:
+        - eq:
+            - adb_network_access_type
+            - "許可されたIPおよびVCN限定のセキュア・アクセス"
+        - eq:
+            - adb_acl_notation_type
+            - "VCN"
+    title: "許可する仮想クラウド・ネットワーク"
+    description: "Service Gateway経由でAutonomous AI Databaseへのアクセスを許可するVCNを選択します。"
+    dependsOn:
+      compartmentId: ${adb_acl_vcn_compartment_id}
+
+  adb_acl_subnet_compartment_id:
+    type: oci:identity:compartment:id
+    required: false
+    visible:
+      and:
+        - eq:
+            - adb_network_access_type
+            - "許可されたIPおよびVCN限定のセキュア・アクセス"
+        - eq:
+            - adb_acl_notation_type
+            - "VCN"
+    title: "サブネットのコンパートメント"
+    description: "アクセスを許可するサブネットのコンパートメントを選択します。サブネットを指定しない場合は選択したVCN全体を許可します。"
+    default: compartment_ocid
+
+  adb_acl_subnet_id:
+    type: oci:core:subnet:id
+    required: false
+    visible:
+      and:
+        - eq:
+            - adb_network_access_type
+            - "許可されたIPおよびVCN限定のセキュア・アクセス"
+        - eq:
+            - adb_acl_notation_type
+            - "VCN"
+    title: "許可するサブネット（オプション）"
+    description: "選択したサブネットのCIDRをVCNアクセス制御ルールへ追加します。未選択の場合はVCN全体を許可します。"
+    dependsOn:
+      compartmentId: ${adb_acl_subnet_compartment_id}
+      vcnId: ${adb_acl_vcn_id}
+
+  adb_acl_cidr_blocks:
+    type: string
+    required: false
+    visible:
+      and:
+        - eq:
+            - adb_network_access_type
+            - "許可されたIPおよびVCN限定のセキュア・アクセス"
+        - eq:
+            - adb_acl_notation_type
+            - "IPアドレスまたはCIDRブロック"
+    title: "許可するIPアドレスまたはCIDRブロック"
+    description: "パブリック・インターネットからの接続を許可するクライアントのパブリックIPアドレスまたはパブリックCIDRブロックをカンマ区切りで入力します。"
+
+  adb_is_mtls_connection_required:
+    type: boolean
+    required: true
+    visible: false
+    title: "相互TLS (mTLS)認証が必要"
+    description: "既定では有効です。Thinモードは生成したWalletでmTLS接続します。Walletを使用しない一方向TLSのADBだけ無効にしてください。"
+    default: true
+
+  instance_display_name:
+    type: string
+    required: true
+    visible: true
+    title: "Compute instance name"
+    default: "NL2SQL_INSTANCE"
+
+  instance_image_source_id:
+    type: enum
+    required: true
+    visible: true
+    title: "Compute image"
+    description: "Choose the Ubuntu image according to your region."
+    enum:
+      - "ocid1.image.oc1.ap-tokyo-1.aaaaaaaaoiusqhftxmiyjlulnxx5mdnqfv6pjx4hdcoks3exn7gsrcwpkpdq"
+      - "ocid1.image.oc1.ap-osaka-1.aaaaaaaa7sbmd5q54w466eojxqwqfvvp554awzjpt2behuwsiefrxnwomq5a"
+    default: "ocid1.image.oc1.ap-osaka-1.aaaaaaaa7sbmd5q54w466eojxqwqfvvp554awzjpt2behuwsiefrxnwomq5a"
+
+  instance_shape:
+    type: enum
+    required: true
+    visible: true
+    title: "Compute shape"
+    enum:
+      - "VM.Standard.E4.Flex"
+      - "VM.Standard.E5.Flex"
+    default: "VM.Standard.E5.Flex"
+
+  instance_flex_shape_ocpus:
+    type: number
+    required: true
+    visible: true
+    title: "Compute OCPUs"
+    default: 2
+
+  instance_flex_shape_memory:
+    type: number
+    required: true
+    visible: true
+    title: "Compute memory (GB)"
+    default: 16
+
+  instance_boot_volume_size:
+    type: number
+    required: true
+    visible: true
+    title: "Boot volume size (GB)"
+    default: 100
+
+  instance_boot_volume_vpus:
+    type: number
+    required: true
+    visible: true
+    title: "Boot volume VPUs/GB"
+    default: 10
+
+  subnet_ai_subnet_id:
+    type: oci:core:subnet:id
+    required: true
+    visible: true
+    title: "Compute subnet"
+    description: "Select a public or private subnet. Public IP assignment is detected automatically from the selected subnet."
+    dependsOn:
+      compartmentId: ${compartment_ocid}
+      vcnId: ${vcn_ai_vcn_id}
+
+  ssh_authorized_keys:
+    type: oci:core:ssh:publickey
+    required: true
+    visible: true
+    title: "SSHキーの追加"
+    description: "SSHキーペアを自動生成するか、既存の公開キーをアップロードまたは貼り付けて、ubuntuユーザーのSSH接続に使用します。"
+
+outputs:
+  autonomous_database_ocid:
+    title: "Autonomous AI Database OCID"
+    displayText: "Autonomous AI Database OCID"
+    type: copyableString
+    visible: true
+
+  autonomous_database_high_connection_string:
+    title: "Autonomous AI Database HIGH connection string"
+    displayText: "Autonomous AI Database HIGH connection string"
+    type: copyableString
+    visible: true
+
+  ssh_to_instance:
+    title: "SSH command"
+    displayText: "SSH command"
+    type: copyableString
+    visible: true
+
+  application_url:
+    title: "Application URL"
+    displayText: "Application URL"
+    type: copyableString
+    visible: true

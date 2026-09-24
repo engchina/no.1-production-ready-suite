@@ -1,0 +1,440 @@
+import { AlertTriangle, DatabaseZap, RefreshCw, RotateCcw } from "lucide-react";
+import {
+  Banner,
+  DataTable,
+  toast,
+  Button,
+  StatusBadge,
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+  Skeleton,
+} from "@engchina/production-ready-ui";
+
+import { useEffect, useRef, useState } from "react";
+
+import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
+import { TimedLoadingState } from "@/components/ProcessingState";
+import { DatabaseUnavailableNotice } from "@/components/system/DatabaseUnavailableNotice";
+import { ExecutionConfirmationField } from "@/features/nl2sql/components/DbAdminShared";
+import { DbObjectName } from "@/features/nl2sql/components/DbObjectName";
+import { useAuth } from "@/features/security/AuthProvider";
+import { MENU_PERMISSIONS } from "@/features/security/menu-permissions";
+import {
+  ApiError,
+  type SystemObjectMetadata,
+  type SystemObjectType,
+  type SystemTableSchemaStatus,
+  type SystemTablesOperationData,
+  type SystemTablesStatusData,
+} from "@/lib/api";
+import { formatDateTime, formatNumber } from "@/lib/format";
+import { t } from "@/lib/i18n";
+import { INFORMATION_TABLE_ROW_CLASS, INFORMATION_TABLE_VISIBLE_ROWS } from "@/lib/list-density";
+import { useInitializeSystemTables, useSystemTablesStatus } from "@/lib/queries";
+import { systemTableControlsBusy, systemTableOperationMessageKey, systemTableStatusLabelKey } from "@/lib/system-tables";
+
+const RECREATE_CONFIRMATION = "RECREATE_NL2SQL_SYSTEM_TABLES";
+
+const STATUS_VARIANTS = {
+  ready: "success",
+  missing: "neutral",
+  partial: "warning",
+  outdated: "info",
+} as const;
+
+function statusLabel(status: SystemTableSchemaStatus): string {
+  return t(systemTableStatusLabelKey(status));
+}
+
+function operationSuccessMessage(result: SystemTablesOperationData): string {
+  return t(systemTableOperationMessageKey(result.operation));
+}
+
+function previousFailureDetail(errorCode: string | null): string {
+  if (errorCode === "ORA-00054") {
+    return t("settings.database.systemTables.previousFailureLockDetail");
+  }
+  return t("settings.database.systemTables.previousFailureDetail", {
+    code: errorCode ?? "-",
+  });
+}
+
+function systemObjects(data: SystemTablesStatusData): SystemObjectMetadata[] {
+  if (data.objects) return data.objects;
+  return data.tables.map((table) => ({ ...table, object_type: "TABLE" }));
+}
+
+function objectTypeLabel(objectType: SystemObjectType): string {
+  return t(
+    `settings.database.systemTables.table.objectType.${objectType.toLowerCase()}`
+  );
+}
+
+/** Versioned NL2SQL system table の状態と明示 DDL 操作。 */
+export function SystemTablesCard() {
+  const { hasPermission } = useAuth();
+  const statusQuery = useSystemTablesStatus();
+  const operation = useInitializeSystemTables();
+  const [operationError, setOperationError] = useState("");
+  const operationErrorRef = useRef<HTMLDivElement>(null);
+  const [recreateConfirmation, setRecreateConfirmation] = useState("");
+  const recreateConfirmed = recreateConfirmation.trim() === RECREATE_CONFIRMATION;
+
+  const data = statusQuery.data;
+  const mayExecute = hasPermission(MENU_PERMISSIONS.settingsSystemTables);
+  const schemaOperationRunning = data?.operation_state.status === "running";
+  const busy = statusQuery.isFetching || statusQuery.isError || !data || systemTableControlsBusy(
+    operation.isPending,
+    data?.operation_state.status
+  );
+
+  useEffect(() => {
+    if (operationError) {
+      operationErrorRef.current?.focus();
+    }
+  }, [operationError]);
+
+  useEffect(() => {
+    if (statusQuery.isFetching) setRecreateConfirmation("");
+  }, [statusQuery.isFetching]);
+
+  const execute = (recreate: boolean) => {
+    if (busy || !mayExecute || (recreate && !recreateConfirmed)) return;
+    setRecreateConfirmation("");
+    setOperationError("");
+    operation.mutate(
+      {
+        recreate,
+        confirmation: recreate ? RECREATE_CONFIRMATION : undefined,
+      },
+      {
+        onSuccess: (result) => {
+          toast.success(operationSuccessMessage(result));
+          if (recreate) setRecreateConfirmation("");
+        },
+        onError: (cause) => {
+          if (cause instanceof ApiError) {
+            setOperationError(cause.message);
+            return;
+          }
+          setOperationError(
+            `${t("settings.database.systemTables.error.operation")} ${t("settings.database.systemTables.error.recovery")}`
+          );
+        },
+      }
+    );
+  };
+
+  const refreshStatus = async () => {
+    setRecreateConfirmation("");
+    setOperationError("");
+    const result = await statusQuery.refetch();
+    if (!result.error) {
+      toast.success(t("common.action.refreshed"));
+    }
+  };
+
+  return (
+    <Card
+      id="system-tables"
+      className="min-w-0 max-w-full scroll-mt-24 rounded-md"
+      aria-busy={busy}
+    >
+      <CardHeader className="p-6 pb-0">
+        <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border pb-5">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <DatabaseZap size={20} aria-hidden />
+              <CardTitle className="text-base">
+                {t("settings.database.systemTables.title")}
+              </CardTitle>
+            </div>
+            <CardDescription className="mt-2 leading-relaxed">
+              {t("settings.database.systemTables.description")}
+            </CardDescription>
+          </div>
+          {data ? (
+            <div className="flex flex-wrap items-center gap-2" aria-live="polite">
+              <StatusBadge
+                variant={STATUS_VARIANTS[data.status]}
+                label={statusLabel(data.status)}
+              />
+              {schemaOperationRunning ? (
+                <StatusBadge
+                  variant="info"
+                  label={t("settings.database.systemTables.operation.running")}
+                />
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      </CardHeader>
+
+      <CardContent className="min-w-0 space-y-5 p-6">
+        {statusQuery.isPending ? <SystemTablesSkeleton /> : null}
+
+        {statusQuery.isError ? (
+          <DatabaseUnavailableNotice
+            mode="banner"
+            onRetry={() => void refreshStatus()}
+            isRetrying={statusQuery.isFetching}
+          />
+        ) : null}
+
+        {data ? (
+          <>
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <SummaryItem
+                label={t("settings.database.systemTables.summary.tables")}
+                value={`${formatNumber(data.existing_table_count)} / ${formatNumber(data.expected_table_count)}`}
+              />
+              <SummaryItem
+                label={t("settings.database.systemTables.summary.objects")}
+                value={`${formatNumber(data.existing_object_count)} / ${formatNumber(data.expected_object_count)}`}
+                description={t("settings.database.systemTables.summary.objectsHint")}
+              />
+              <SummaryItem
+                label={t("settings.database.systemTables.summary.head")}
+                value={`v${data.schema_head}`}
+              />
+              <SummaryItem
+                label={t("settings.database.systemTables.summary.epoch")}
+                value={formatNumber(data.operation_state.schema_epoch)}
+              />
+            </div>
+
+            {data.status !== "ready" ? (
+              <Banner
+                severity={data.status === "missing" ? "info" : "warning"}
+                title={statusLabel(data.status)}
+              >
+                {t(`settings.database.systemTables.statusHint.${data.status}`, {
+                  count: data.missing_objects.length,
+                })}
+              </Banner>
+            ) : null}
+
+            {operationError ? (
+              <div
+                ref={operationErrorRef}
+                tabIndex={-1}
+                data-testid="system-tables-operation-error"
+                className="rounded-md focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+              >
+                <Banner
+                  severity="danger"
+                  title={t("settings.database.systemTables.error.operationTitle")}
+                >
+                  {operationError}
+                </Banner>
+              </div>
+            ) : data.operation_state.status === "failed" ? (
+              <Banner
+                severity="danger"
+                title={t("settings.database.systemTables.previousFailure")}
+              >
+                {previousFailureDetail(data.operation_state.last_error_code)}
+              </Banner>
+            ) : null}
+
+            {!mayExecute ? (
+              <Banner severity="info">
+                {t("settings.database.systemTables.readOnly")}
+              </Banner>
+            ) : null}
+
+            <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
+              {mayExecute ? (
+                <Button type="button"
+                  size="md"
+                  onClick={() => execute(false)}
+                  loading={operation.isPending && operation.variables?.recreate === false}
+                  disabled={busy} icon={DatabaseZap}>
+                  {t("settings.database.systemTables.action.initialize")}
+                </Button>
+              ) : null}
+              <Button type="button"
+                size="md"
+                variant="secondary"
+                onClick={() => void refreshStatus()}
+                loading={statusQuery.isFetching}
+                disabled={operation.isPending} icon={RefreshCw}>
+                {t("settings.database.systemTables.action.refresh")}
+              </Button>
+            </div>
+
+            <SystemTablesDetails data={data} />
+
+            {mayExecute ? (
+              <section className="border-t border-border pt-5" aria-labelledby="recreate-system-tables-title">
+                {/* 危険な操作区画は幅を止めず、広い画面では「影響の説明」と「確認語・実行」を左右に分けてカード幅を使う。 */}
+                <div className="grid gap-3 xl:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] xl:items-start xl:gap-6">
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle className="mt-0.5 shrink-0 text-danger-fg" size={16} aria-hidden />
+                    <div>
+                      <h3 id="recreate-system-tables-title" className="text-sm font-semibold text-fg">
+                        {t("settings.database.systemTables.recreate.sectionTitle")}
+                      </h3>
+                      <p className="mt-1 text-xs leading-relaxed text-fg-muted">
+                        {t("settings.database.systemTables.recreate.sectionDescription")}
+                      </p>
+                    </div>
+                  </div>
+                  <ExecutionConfirmationField
+                    value={recreateConfirmation}
+                    onChange={setRecreateConfirmation}
+                    confirmed={recreateConfirmed}
+                    placeholder={RECREATE_CONFIRMATION}
+                    expectedLabel={RECREATE_CONFIRMATION}
+                    helper={t("dbAdmin.confirmation.helper.danger", {
+                      phrase: RECREATE_CONFIRMATION,
+                    })}
+                    disabled={busy}
+                    actions={
+                      <Button type="button"
+                        size="lg"
+                        variant="danger"
+                        className="w-full sm:w-auto"
+                        onClick={() => execute(true)}
+                        loading={operation.isPending && operation.variables?.recreate === true}
+                        disabled={busy || !recreateConfirmed} icon={RotateCcw}>
+                        {t("settings.database.systemTables.action.recreate")}
+                      </Button>
+                    }
+                  />
+                </div>
+              </section>
+            ) : null}
+          </>
+        ) : null}
+      </CardContent>
+    </Card>
+  );
+}
+
+function SummaryItem({
+  label,
+  value,
+  description,
+}: {
+  label: string;
+  value: string;
+  description?: string;
+}) {
+  return (
+    <div className="rounded-md border border-border bg-surface-hover p-3">
+      <p className="text-xs text-fg-muted">{label}</p>
+      <p className="mt-1 font-sans text-sm font-semibold text-fg">{value}</p>
+      {description ? (
+        <p className="mt-1 text-xs leading-relaxed text-fg-muted">{description}</p>
+      ) : null}
+    </div>
+  );
+}
+
+function SystemTablesSkeleton() {
+  return (
+    <TimedLoadingState
+      label={t("settings.database.systemTables.loading")}
+      operationKey="system-tables-status"
+      placement="panel"
+      testId="system-tables-loading"
+    >
+      <Skeleton className="h-16 w-full rounded-md" />
+      <Skeleton className="h-10 w-full rounded-md" />
+    </TimedLoadingState>
+  );
+}
+
+function SystemTablesDetails({ data }: { data: SystemTablesStatusData }) {
+  const objects = systemObjects(data);
+
+  return (
+    <details className="group/disclosure min-w-0 rounded-md border border-border">
+      <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-medium text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring [&::-webkit-details-marker]:hidden">
+        <span>
+          {t("settings.database.systemTables.details.title", {
+            existing: data.existing_object_count,
+            expected: data.expected_object_count,
+          })}
+        </span>
+        <DisclosureChevron expanded="group" size={16} className="text-fg-muted" />
+      </summary>
+      <div className="min-w-0 border-t border-border p-4">
+        <p className="mb-3 text-xs leading-relaxed text-fg-muted">
+          {t("settings.database.systemTables.details.versions", {
+            applied: data.applied_versions.join(", ") || "-",
+            pending: data.pending_versions.join(", ") || "-",
+          })}
+        </p>
+        <DataTable
+          columns={[
+            {
+              key: "name",
+              header: t("settings.database.systemTables.table.name"),
+              rowHeader: true,
+              render: (object) => <DbObjectName object={object} size="xs" />,
+            },
+            {
+              key: "type",
+              header: t("settings.database.systemTables.table.type"),
+              className: "whitespace-nowrap",
+              render: (object) => objectTypeLabel(object.object_type),
+            },
+            {
+              key: "status",
+              header: t("settings.database.systemTables.table.status"),
+              render: (object) => (
+                <StatusBadge
+                  variant={object.exists ? "success" : "neutral"}
+                  label={t(object.exists ? "settings.database.systemTables.table.exists" : "settings.database.systemTables.table.missing")}
+                />
+              ),
+            },
+            {
+              key: "rows",
+              header: t("settings.database.systemTables.table.rows"),
+              align: "right",
+              className: "tabular-nums",
+              render: (object) =>
+                object.object_type !== "TABLE"
+                  ? t("settings.database.systemTables.table.notApplicable")
+                  : object.estimated_rows == null
+                    ? "—"
+                    : formatNumber(object.estimated_rows),
+            },
+            {
+              key: "created",
+              header: t("settings.database.systemTables.table.created"),
+              className: "whitespace-nowrap text-fg-muted",
+              render: (object) => formatDateTime(object.created_at),
+            },
+            {
+              key: "analyzed",
+              header: t("settings.database.systemTables.table.analyzed"),
+              className: "whitespace-nowrap text-fg-muted",
+              render: (object) =>
+                object.object_type === "TABLE"
+                  ? formatDateTime(object.last_analyzed_at)
+                  : t("settings.database.systemTables.table.notApplicable"),
+            },
+          ]}
+          rows={objects}
+          getRowKey={(object) => `${object.object_type}:${object.name}`}
+          rowProps={() => ({ className: INFORMATION_TABLE_ROW_CLASS })}
+          tableClassName="w-full min-w-[60rem]"
+          scrollAriaLabel={t("settings.database.systemTables.table.scrollLabel", {
+            existing: data.existing_object_count,
+            expected: data.expected_object_count,
+          })}
+          scrollTestId="system-tables-scroll-region"
+          stickyHeader
+          visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
+        />
+      </div>
+    </details>
+  );
+}

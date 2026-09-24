@@ -1,0 +1,1013 @@
+import {
+  confirmDatabaseUnavailable,
+  isDatabaseReadinessRequest,
+  PERSISTENCE_RECOVERY_PATH,
+  reportDatabaseOperationalFailure,
+  shouldConfirmDatabaseUnavailable,
+  type DatabaseOperationalFailure,
+} from "./database-load-error.ts";
+import { t } from "./i18n";
+
+export interface ApiEnvelope<T> {
+  data: T;
+  error?: string;
+  error_code?: string;
+  request_id?: string;
+  problem?: ApiProblem;
+}
+
+export interface ApiFieldProblem {
+  pointer: string;
+  code: string;
+  message: string;
+}
+
+export interface ApiProblem {
+  type: string;
+  title: string;
+  status: number;
+  detail: string;
+  code: string;
+  request_id: string;
+  retryable: boolean;
+  field_errors: ApiFieldProblem[];
+}
+
+export interface ApiErrorDetails {
+  summary?: string;
+  cause?: string;
+  actions?: string[];
+  target_name?: string;
+  target_type?: string;
+  operation?: string;
+  raw_message?: string;
+}
+
+export interface ApiRequestOptions {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  headers?: HeadersInit;
+}
+
+const UNSAFE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
+export function isAbortError(cause: unknown): boolean {
+  return cause instanceof Error && cause.name === "AbortError";
+}
+
+export function isTimeoutError(cause: unknown): boolean {
+  return cause instanceof Error && cause.name === "TimeoutError";
+}
+
+function requestSignal(options: ApiRequestOptions): AbortSignal | undefined {
+  if (!options.timeoutMs || options.timeoutMs <= 0) return options.signal;
+  const timeoutSignal = AbortSignal.timeout(options.timeoutMs);
+  return options.signal ? AbortSignal.any([options.signal, timeoutSignal]) : timeoutSignal;
+}
+
+function readCookie(name: string): string | null {
+  if (typeof document === "undefined") return null;
+  const prefix = `${encodeURIComponent(name)}=`;
+  const item = document.cookie.split(";").map((value) => value.trim()).find((value) => value.startsWith(prefix));
+  return item ? decodeURIComponent(item.slice(prefix.length)) : null;
+}
+
+let inFlightPersistenceRecovery: Promise<boolean> | null = null;
+
+function recoverPersistenceForSafeRead(): Promise<boolean> {
+  if (inFlightPersistenceRecovery) return inFlightPersistenceRecovery;
+  let recovery: Promise<boolean>;
+  recovery = (async () => {
+    const headers = new Headers({ Accept: "application/json" });
+    const csrfToken = readCookie("nl2sql_csrf");
+    if (csrfToken) headers.set("X-CSRF-Token", csrfToken);
+    try {
+      const response = await fetch(PERSISTENCE_RECOVERY_PATH, {
+        method: "POST",
+        headers,
+        credentials: "include",
+        signal: AbortSignal.timeout(5_000),
+      });
+      if (!response.ok) return false;
+      const payload = (await response.json()) as {
+        data?: { ready?: unknown; writable?: unknown };
+      };
+      return payload.data?.ready === true && payload.data?.writable === true;
+    } catch {
+      return false;
+    }
+  })().finally(() => {
+    if (inFlightPersistenceRecovery === recovery) inFlightPersistenceRecovery = null;
+  });
+  inFlightPersistenceRecovery = recovery;
+  return recovery;
+}
+
+function notifyAuthStatus(response: Response) {
+  if (typeof window === "undefined") return;
+  if (response.status === 401) window.dispatchEvent(new CustomEvent("app-auth-unauthorized"));
+  if (response.status === 403) {
+    window.dispatchEvent(
+      new CustomEvent("app-auth-forbidden", {
+        detail: { requestId: response.headers.get("X-Request-ID") || undefined },
+      })
+    );
+  }
+}
+
+async function recoverAndRetrySafeRequest(
+  path: string,
+  method: string,
+  init: RequestInit,
+  failure: DatabaseOperationalFailure | null
+): Promise<Response | null> {
+  if (
+    failure?.kind !== "persistence" ||
+    (method !== "GET" && method !== "HEAD") ||
+    !(await recoverPersistenceForSafeRead())
+  ) {
+    return null;
+  }
+  try {
+    return await fetch(path, init);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * アプリ全体の API 境界。Cookie セッション、CSRF、認証状態イベントを一箇所で扱う。
+ */
+export async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  const method = (init.method ?? "GET").toUpperCase();
+  const headers = new Headers(init.headers);
+  headers.set("Accept", headers.get("Accept") ?? "application/json");
+  if (UNSAFE_METHODS.has(method)) {
+    const csrfToken = readCookie("nl2sql_csrf");
+    if (csrfToken) headers.set("X-CSRF-Token", csrfToken);
+  }
+  const requestInit = { ...init, headers, credentials: "include" } satisfies RequestInit;
+  let response: Response;
+  try {
+    response = await fetch(path, requestInit);
+  } catch (cause) {
+    if (isAbortError(cause) || isTimeoutError(cause)) throw cause;
+    if (!isDatabaseReadinessRequest(path)) {
+      let failure: DatabaseOperationalFailure | null = null;
+      await confirmDatabaseUnavailable(fetch, (next) => {
+        failure = next;
+      });
+      const retried = await recoverAndRetrySafeRequest(path, method, requestInit, failure);
+      if (retried) {
+        notifyAuthStatus(retried);
+        return retried;
+      }
+      if (failure) reportDatabaseOperationalFailure(failure);
+    }
+    throw cause;
+  }
+  notifyAuthStatus(response);
+  if (shouldConfirmDatabaseUnavailable(path, response.status)) {
+    let failure: DatabaseOperationalFailure | null = null;
+    await confirmDatabaseUnavailable(fetch, (next) => {
+      failure = next;
+    });
+    const retried = await recoverAndRetrySafeRequest(path, method, requestInit, failure);
+    if (retried) {
+      notifyAuthStatus(retried);
+      return retried;
+    }
+    if (failure) reportDatabaseOperationalFailure(failure);
+  }
+  return response;
+}
+
+async function parseJson<T>(response: Response): Promise<T> {
+  const payload = (await response.json()) as ApiEnvelope<T> & {
+    error_messages?: unknown;
+    detail?: unknown;
+    error_details?: ApiErrorDetails;
+  };
+  if (!response.ok) {
+    // 共通例外ハンドラは ApiResponse { error_messages: [...] } 形式で返す
+    const errorMessages = payload.error_messages;
+    const detailMessages =
+      typeof payload.detail === "object" && payload.detail !== null && "errors" in payload.detail
+        ? (payload.detail as { errors?: unknown }).errors
+        : undefined;
+    const messages = Array.isArray(detailMessages)
+      ? detailMessages.map(String)
+      : Array.isArray(errorMessages) && errorMessages.length > 0
+        ? errorMessages.map(String)
+        : [
+            payload.error ||
+              (payload.detail ? String(payload.detail) : "API リクエストに失敗しました"),
+          ];
+    const problem = decodeApiProblem(payload.problem);
+    const requestId = problem?.request_id || response.headers.get("X-Request-ID") || payload.request_id;
+    throw new ApiError(
+      response.status,
+      messages,
+      payload.error_code,
+      payload.error_details,
+      problem,
+      requestId
+    );
+  }
+  return payload.data;
+}
+
+export interface ApiResponseMetadata<T> {
+  data: T;
+  etag: string;
+}
+
+export async function apiGet<T>(path: string, options: ApiRequestOptions = {}): Promise<T> {
+  const response = await apiFetch(path, { signal: requestSignal(options) });
+  return parseJson<T>(response);
+}
+
+export async function apiGetWithMetadata<T>(
+  path: string,
+  options: ApiRequestOptions = {}
+): Promise<ApiResponseMetadata<T>> {
+  const response = await apiFetch(path, { signal: requestSignal(options) });
+  const data = await parseJson<T>(response);
+  return { data, etag: response.headers.get("ETag")?.replaceAll('"', "") ?? "" };
+}
+
+export async function apiPost<T>(
+  path: string,
+  body?: unknown,
+  options: ApiRequestOptions = {}
+): Promise<T> {
+  const headers = new Headers(options.headers);
+  headers.set("Accept", "application/json");
+  headers.set("Content-Type", "application/json");
+  const response = await apiFetch(path, {
+    method: "POST",
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body),
+    signal: requestSignal(options),
+  });
+  return parseJson<T>(response);
+}
+
+export async function apiPostForm<T>(
+  path: string,
+  body: FormData,
+  options: ApiRequestOptions = {}
+): Promise<T> {
+  const response = await apiFetch(path, {
+    method: "POST",
+    body,
+    signal: requestSignal(options),
+  });
+  return parseJson<T>(response);
+}
+
+export async function apiPatch<T>(
+  path: string,
+  body?: unknown,
+  headers: Record<string, string> = {},
+  options: ApiRequestOptions = {}
+): Promise<T> {
+  const response = await apiFetch(path, {
+    method: "PATCH",
+    headers: { Accept: "application/json", "Content-Type": "application/json", ...headers },
+    body: body === undefined ? undefined : JSON.stringify(body),
+    signal: requestSignal(options),
+  });
+  return parseJson<T>(response);
+}
+
+export async function apiDelete<T>(
+  path: string,
+  headers: Record<string, string> = {},
+  options: ApiRequestOptions = {}
+): Promise<T> {
+  const response = await apiFetch(path, {
+    method: "DELETE",
+    headers: { Accept: "application/json", ...headers },
+    signal: requestSignal(options),
+  });
+  return parseJson<T>(response);
+}
+
+export type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | JsonValue[]
+  | { [key: string]: JsonValue };
+
+export type ModelSettingsSecretSource = "environment" | "legacy_json" | "missing";
+export type ModelSettingsTestStatus = "success" | "failed";
+export type ModelSettingsTestTargetType =
+  | "enterprise_text"
+  | "enterprise_vision"
+  | "embedding"
+  | "rerank";
+export type UploadStorageBackend = "local" | "oci";
+export type DatabaseConnectionTestStatus = "success" | "failed";
+export type OciConfigTestStatus = "success" | "failed";
+export type OciConfigTestStageKey = "config_format" | "key_file" | "region" | "authentication";
+export type OciConfigTestStageStatus = "success" | "failed" | "skipped";
+
+export interface OciConfigTestStage {
+  key: OciConfigTestStageKey;
+  status: OciConfigTestStageStatus;
+  message: string;
+  action: string | null;
+}
+
+export interface DatabaseStatusData {
+  context_id?: string;
+  status: "ok" | "not_configured" | "setup_required" | "unreachable";
+  check: string;
+  detail: string | null;
+}
+
+export interface PersistenceStatusData {
+  mode: "memory" | "oracle";
+  ready: boolean;
+  durable: boolean;
+  writable: boolean;
+  snapshot_loaded: boolean;
+  reason_code: string | null;
+  checked_at: string;
+  state_backend?: "incremental" | "legacy_snapshot";
+  circuit_state?: "closed" | "open" | "half_open";
+  retry_after_seconds?: number;
+}
+
+export interface SettingsApiResponse<T> {
+  data: T | null;
+  error_messages: string[];
+  warning_messages: string[];
+  error_code?: string;
+  problem?: ApiProblem;
+  request_id?: string;
+}
+
+export interface EnterpriseAiConfiguredModel {
+  model_id: string;
+  display_name: string;
+  vision_enabled: boolean;
+}
+
+export type EnterpriseAiVlmInputMode = "auto" | "files_api" | "inline_image";
+
+export interface EnterpriseAiModelSettings {
+  endpoint: string;
+  project_ocid: string;
+  api_key: string;
+  has_api_key: boolean;
+  clear_api_key: boolean;
+  models: EnterpriseAiConfiguredModel[];
+  default_model_id: string;
+  api_path: string;
+  vlm_input_mode: EnterpriseAiVlmInputMode;
+  text_payload_template: string;
+  vision_payload_template: string;
+  text_response_path: string;
+  vision_response_path: string;
+  timeout_seconds: number;
+  max_retries: number;
+  llm_max_output_tokens: number;
+  vlm_max_output_tokens: number;
+}
+
+export interface GenerativeAiModelSettings {
+  embedding_model: string;
+  embedding_dim: number;
+  rerank_model: string;
+}
+
+export interface ModelSettingsPayload {
+  enterprise_ai: EnterpriseAiModelSettings;
+  generative_ai: GenerativeAiModelSettings;
+}
+
+export interface ModelSettingsData {
+  settings: ModelSettingsPayload;
+  model_settings_file: string;
+  source: "runtime";
+  secret_source: ModelSettingsSecretSource;
+  legacy_secret_detected: boolean;
+}
+
+export interface ModelSettingsTestRequest {
+  settings: ModelSettingsPayload;
+  target_type: ModelSettingsTestTargetType;
+  model_id: string;
+  vision_enabled: boolean;
+}
+
+export interface ModelSettingsTestResult {
+  status: ModelSettingsTestStatus;
+  target_type: ModelSettingsTestTargetType;
+  model_id: string;
+  message: string;
+  troubleshooting: string[];
+  raw_error: string | null;
+  error_type: string | null;
+  elapsed_ms: number;
+  checked_at: string;
+  details: Record<string, string | number | boolean | null>;
+}
+
+export type DatabaseConnectionSecurity = "wallet_mtls" | "walletless_tls";
+
+export interface DatabaseSettingsData {
+  user: string;
+  dsn: string;
+  driver_mode: "thin" | "thick";
+  connection_security: DatabaseConnectionSecurity;
+  client_lib_dir: string;
+  wallet_dir: string;
+  wallet_uploaded: boolean;
+  available_services: string[];
+  has_password: boolean;
+  has_wallet_password: boolean;
+  readiness: string;
+  embedding_dimension: number;
+  vector_column: string;
+  adb_ocid: string;
+  region: string;
+  config_source: "runtime";
+}
+
+export type SelectAiCredentialRegion = "ap-osaka-1" | "us-chicago-1";
+export type SelectAiCredentialOperation = "created" | "recreated" | "already_exists";
+
+export interface SelectAiCredentialData {
+  credential_name: "OCI_CRED";
+  schema_name: string;
+  exists: boolean;
+  region: SelectAiCredentialRegion;
+  oci_auth_ready: boolean;
+  missing_fields: string[];
+  operation: SelectAiCredentialOperation | null;
+}
+
+export interface SelectAiCredentialCreateRequest {
+  region: SelectAiCredentialRegion;
+  confirmation: string;
+  recreate: boolean;
+}
+
+export type SystemTableSchemaStatus = "missing" | "partial" | "outdated" | "ready";
+export type SystemTableOperationStatus = "idle" | "running" | "failed";
+export type SystemTableOperationResult =
+  | "no_op"
+  | "initialized"
+  | "migrated"
+  | "recreated";
+
+export interface SystemTableMissingObject {
+  name: string;
+  object_type: "TABLE" | "INDEX" | "SEQUENCE" | "PACKAGE" | "PACKAGE BODY";
+}
+
+export interface SystemTableMetadata {
+  name: string;
+  exists: boolean;
+  estimated_rows: number | null;
+  created_at: string | null;
+  last_analyzed_at: string | null;
+}
+
+export type SystemObjectType = "TABLE" | "INDEX" | "SEQUENCE" | "PACKAGE" | "PACKAGE BODY";
+
+export interface SystemObjectMetadata {
+  name: string;
+  /** 接続ユーザーの schema と所有者付き名前。旧 backend では未返却。 */
+  owner?: string;
+  qualified_name?: string;
+  object_type: SystemObjectType;
+  exists: boolean;
+  estimated_rows: number | null;
+  created_at: string | null;
+  last_analyzed_at: string | null;
+}
+
+export interface SystemTableOperationState {
+  status: SystemTableOperationStatus;
+  operation_kind: "initialize" | "recreate" | null;
+  lease_expires_at: string | null;
+  last_error_code: string | null;
+  schema_epoch: number;
+  updated_at: string | null;
+}
+
+export interface SystemTablesStatusData {
+  status: SystemTableSchemaStatus;
+  schema_head: number;
+  applied_versions: number[];
+  pending_versions: number[];
+  expected_object_count: number;
+  existing_object_count: number;
+  expected_table_count: number;
+  existing_table_count: number;
+  missing_objects: SystemTableMissingObject[];
+  tables: SystemTableMetadata[];
+  objects?: SystemObjectMetadata[];
+  operation_state: SystemTableOperationState;
+}
+
+export interface SystemTablesInitializeRequest {
+  recreate: boolean;
+  confirmation?: string;
+}
+
+export interface SystemTablesOperationData extends SystemTablesStatusData {
+  operation: SystemTableOperationResult;
+  dropped_object_count: number;
+  created_object_count: number;
+}
+
+export type DatabaseWalletDownloadStatus = "downloaded" | "already_configured";
+
+export interface DatabaseWalletDownloadData {
+  status: DatabaseWalletDownloadStatus;
+  settings: DatabaseSettingsData;
+}
+
+export interface DatabasePasswordRevealData {
+  password: string;
+}
+
+export interface SchemaOwnersData {
+  current_owner: string;
+  owners: Array<{
+    owner: string;
+    is_current: boolean;
+    table_count: number;
+    view_count: number;
+  }>;
+  excluded_oracle_maintained_count: number;
+}
+
+export type AdbOperationStatus =
+  | "success"
+  | "not_configured"
+  | "error"
+  | "accepted"
+  | "already_available"
+  | "already_stopped"
+  | "cannot_start"
+  | "cannot_stop";
+
+export interface AdbInfoData {
+  status: AdbOperationStatus;
+  message: string;
+  error_code?: string | null;
+  id: string | null;
+  display_name: string | null;
+  lifecycle_state: string | null;
+  db_name: string | null;
+  cpu_core_count: number | null;
+  data_storage_size_in_tbs: number | null;
+  region: string | null;
+}
+
+export interface AdbSettingsUpdate {
+  adb_ocid: string;
+  region: string;
+}
+
+export interface DatabaseSettingsUpdate {
+  user: string;
+  dsn: string;
+  connection_security?: DatabaseConnectionSecurity;
+  wallet_dir: string;
+  password?: string;
+  wallet_password?: string;
+  clear_password?: boolean;
+  clear_wallet_password?: boolean;
+}
+
+export interface DatabaseConnectionTestResult {
+  status: DatabaseConnectionTestStatus;
+  readiness: string;
+  message: string;
+  elapsed_ms: number;
+  troubleshooting: string[];
+  details: Record<string, string | number | boolean | null>;
+  checked_at: string;
+  error_type: string | null;
+}
+
+export interface UploadStorageSettingsData {
+  backend: UploadStorageBackend;
+  local_storage_dir: string;
+  object_storage_region: string;
+  object_storage_namespace: string;
+  object_storage_bucket: string;
+  readiness: string;
+  max_upload_bytes: number;
+  config_source: "runtime";
+}
+
+export interface UploadStorageSettingsUpdate {
+  backend: UploadStorageBackend;
+  local_storage_dir: string;
+  object_storage_region?: string;
+  object_storage_namespace?: string;
+  object_storage_bucket: string;
+}
+
+export type OciConfigField =
+  | "user"
+  | "fingerprint"
+  | "tenancy"
+  | "region"
+  | "key_file";
+
+export interface OciConfigReadRequest {
+  config_file: string;
+  profile: string;
+}
+
+export interface OciConfigReadData {
+  profile: string;
+  user: string;
+  fingerprint: string;
+  tenancy: string;
+  region: string;
+  key_file: string;
+  applied_fields: OciConfigField[];
+}
+
+export interface OciSettingsUpdate {
+  user: string;
+  fingerprint: string;
+  tenancy: string;
+  region: string;
+}
+
+export interface OciSettingsData {
+  config_file: string;
+  profile: string;
+  user: string;
+  fingerprint: string;
+  tenancy: string;
+  region: string;
+  key_file: string;
+  key_file_exists: boolean;
+  config_file_exists: boolean;
+  config_source: "runtime";
+}
+
+export interface OciObjectStorageSettingsUpdate {
+  object_storage_region: string;
+  object_storage_namespace: string;
+}
+
+export interface OciConfigTestResult {
+  status: OciConfigTestStatus;
+  profile: string;
+  config_file: string;
+  key_file: string;
+  config_file_exists: boolean;
+  key_file_exists: boolean;
+  missing_fields: OciConfigField[];
+  permission_issues: string[];
+  oci_directory_mode: string | null;
+  config_file_mode: string | null;
+  key_file_mode: string | null;
+  message: string;
+  elapsed_ms: number;
+  checked_at: string;
+  error_type: string | null;
+  stages: OciConfigTestStage[];
+  region: string | null;
+  auth_check_operation: string | null;
+  http_status: number | null;
+  service_code: string | null;
+  request_id: string | null;
+}
+
+export interface OciObjectStorageNamespaceRequest {
+  config_file: string;
+  profile: string;
+  region: string;
+}
+
+export interface OciObjectStorageNamespaceData {
+  namespace: string;
+}
+
+export interface OciPrivateKeyUploadData {
+  key_file: string;
+  saved: boolean;
+}
+
+/** API 由来のエラー。`messages` は日本語のユーザー向け文言。 */
+export class ApiError extends Error {
+  readonly status: number;
+  /** 表示用メッセージ。認証・rate limit・5xx・migration 未適用では request ID を付与する */
+  readonly messages: string[];
+  /** リクエスト ID を付与していない元メッセージ(利用者向けに ID を出したくない画面で使う) */
+  readonly baseMessages: string[];
+  readonly errorCode?: string;
+  readonly details?: ApiErrorDetails;
+  readonly problem?: ApiProblem;
+  readonly fieldErrors: ApiFieldProblem[];
+  readonly requestId?: string;
+  readonly retryable: boolean;
+
+  constructor(
+    status: number,
+    messages: string[],
+    errorCode?: string,
+    details?: ApiErrorDetails,
+    problem?: ApiProblem,
+    requestId?: string
+  ) {
+    const baseMessages = messages.length > 0 ? messages : [`APIエラー (${status})`];
+    const displayMessages = errorMessagesWithRequestId(
+      status,
+      baseMessages,
+      problem?.request_id || requestId,
+      problem?.code ?? errorCode
+    );
+    super(displayMessages[0] ?? `APIエラー (${status})`);
+    this.name = "ApiError";
+    this.status = status;
+    this.messages = displayMessages;
+    this.baseMessages = baseMessages;
+    this.errorCode = problem?.code ?? errorCode;
+    this.details = details;
+    this.problem = problem;
+    this.fieldErrors = problem?.field_errors ?? [];
+    this.requestId = problem?.request_id || requestId;
+    this.retryable = problem?.retryable ?? false;
+  }
+}
+
+/** 新旧 envelope の共存期間中、妥当な problem だけを採用する。 */
+export function decodeApiProblem(value: unknown): ApiProblem | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const candidate = value as Partial<ApiProblem>;
+  if (
+    typeof candidate.type !== "string" ||
+    typeof candidate.title !== "string" ||
+    typeof candidate.status !== "number" ||
+    typeof candidate.detail !== "string" ||
+    typeof candidate.code !== "string"
+  ) {
+    return undefined;
+  }
+  const fieldErrors = Array.isArray(candidate.field_errors)
+    ? candidate.field_errors.filter(isApiFieldProblem)
+    : [];
+  return {
+    type: candidate.type,
+    title: candidate.title,
+    status: candidate.status,
+    detail: candidate.detail,
+    code: candidate.code,
+    request_id: typeof candidate.request_id === "string" ? candidate.request_id : "",
+    retryable: candidate.retryable === true,
+    field_errors: fieldErrors,
+  };
+}
+
+function isApiFieldProblem(value: unknown): value is ApiFieldProblem {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<ApiFieldProblem>;
+  return (
+    typeof candidate.pointer === "string" &&
+    candidate.pointer.startsWith("/") &&
+    typeof candidate.code === "string" &&
+    typeof candidate.message === "string"
+  );
+}
+
+function errorMessagesWithRequestId(
+  status: number,
+  messages: string[],
+  requestId?: string | null,
+  errorCode?: string
+): string[] {
+  if (
+    !requestId ||
+    !(
+      status === 401 ||
+      status === 403 ||
+      status === 429 ||
+      status >= 500 ||
+      errorCode === "SECURITY_SCHEMA_MIGRATION_REQUIRED"
+    )
+  ) {
+    return messages;
+  }
+  const [first, ...rest] = messages;
+  return [
+    t("common.errorWithRequestId", {
+      message: first || t("security.common.saveError"),
+      requestId,
+    }),
+    ...rest,
+  ];
+}
+
+async function parseSettingsEnvelope<T>(response: Response): Promise<SettingsApiResponse<T>> {
+  try {
+    const payload = (await response.json()) as Partial<SettingsApiResponse<T>> &
+      Partial<ApiEnvelope<T>> & { detail?: unknown };
+    const errorMessages =
+      payload.error_messages ??
+      (payload.error ? [payload.error] : payload.detail ? [String(payload.detail)] : []);
+    return {
+      data: payload.data ?? null,
+      error_messages: errorMessages,
+      warning_messages: payload.warning_messages ?? [],
+      error_code: payload.error_code,
+      problem: decodeApiProblem(payload.problem),
+      request_id: payload.request_id,
+    };
+  } catch {
+    return { data: null, error_messages: [], warning_messages: [] };
+  }
+}
+
+async function settingsRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await apiFetch(path, {
+    ...init,
+    headers: {
+      Accept: "application/json",
+      ...init?.headers,
+    },
+  });
+  const envelope = await parseSettingsEnvelope<T>(response);
+  if (!response.ok) {
+    const requestId = envelope.problem?.request_id || response.headers.get("X-Request-ID") || envelope.request_id;
+    const messages =
+      envelope.error_messages.length > 0
+        ? envelope.error_messages
+        : [`APIエラー (${response.status})`];
+    throw new ApiError(
+      response.status,
+      messages,
+      envelope.error_code,
+      undefined,
+      envelope.problem,
+      requestId
+    );
+  }
+  return envelope.data as T;
+}
+
+function jsonBody(body: unknown): RequestInit {
+  return {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  };
+}
+
+export const api = {
+  getDatabaseStatus: (options: ApiRequestOptions = {}) =>
+    settingsRequest<DatabaseStatusData>("/api/ready/database", {
+      signal: options.signal,
+    }),
+  getPersistenceStatus: (options: ApiRequestOptions = {}) =>
+    settingsRequest<PersistenceStatusData>("/api/nl2sql/persistence", {
+      signal: options.signal,
+    }),
+  recoverPersistence: () =>
+    settingsRequest<PersistenceStatusData>("/api/nl2sql/persistence/recover", {
+      method: "POST",
+    }),
+  getModelSettings: (options: ApiRequestOptions = {}) =>
+    settingsRequest<ModelSettingsData>("/api/settings/model", {
+      signal: options.signal,
+    }),
+  updateModelSettings: (body: ModelSettingsPayload) =>
+    settingsRequest<ModelSettingsData>("/api/settings/model", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  testModelSettings: (body: ModelSettingsTestRequest) =>
+    settingsRequest<ModelSettingsTestResult>("/api/settings/model/test", jsonBody(body)),
+
+  getDatabaseSettings: (options: ApiRequestOptions = {}) =>
+    settingsRequest<DatabaseSettingsData>("/api/settings/database", {
+      signal: options.signal,
+    }),
+  getSelectAiCredential: (options: ApiRequestOptions = {}) =>
+    settingsRequest<SelectAiCredentialData>(
+      "/api/settings/database/select-ai-credential",
+      { signal: options.signal }
+    ),
+  createSelectAiCredential: (body: SelectAiCredentialCreateRequest) =>
+    settingsRequest<SelectAiCredentialData>(
+      "/api/settings/database/select-ai-credential",
+      jsonBody(body)
+    ),
+  getSystemTablesStatus: (options: ApiRequestOptions = {}) =>
+    settingsRequest<SystemTablesStatusData>("/api/settings/database/system-tables", {
+      signal: options.signal,
+    }),
+  initializeSystemTables: (body: SystemTablesInitializeRequest) =>
+    settingsRequest<SystemTablesOperationData>(
+      "/api/settings/database/system-tables/initialize",
+      jsonBody(body)
+    ),
+  getSchemaOwners: (options: ApiRequestOptions = {}) =>
+    settingsRequest<SchemaOwnersData>("/api/schema/owners", {
+      signal: options.signal,
+    }),
+  updateDatabaseSettings: (body: DatabaseSettingsUpdate) =>
+    settingsRequest<DatabaseSettingsData>("/api/settings/database", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  uploadDatabaseWallet: (file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return settingsRequest<DatabaseSettingsData>("/api/settings/database/wallet", {
+      method: "POST",
+      body: form,
+    });
+  },
+  downloadDatabaseWallet: () =>
+    settingsRequest<DatabaseWalletDownloadData>(
+      "/api/settings/database/wallet/download",
+      { method: "POST" }
+    ),
+  revealDatabasePassword: () =>
+    settingsRequest<DatabasePasswordRevealData>(
+      "/api/settings/database/password/reveal",
+      { method: "POST" }
+    ),
+  testDatabaseSettings: (body: DatabaseSettingsUpdate) =>
+    settingsRequest<DatabaseConnectionTestResult>(
+      "/api/settings/database/test",
+      jsonBody(body)
+    ),
+
+  getAdbInfo: (options: ApiRequestOptions = {}) =>
+    settingsRequest<AdbInfoData>("/api/settings/database/adb", {
+      signal: options.signal,
+    }),
+  updateAdbSettings: (body: AdbSettingsUpdate) =>
+    settingsRequest<AdbInfoData>("/api/settings/database/adb/settings", jsonBody(body)),
+  startAdb: () =>
+    settingsRequest<AdbInfoData>("/api/settings/database/adb/start", { method: "POST" }),
+  stopAdb: () =>
+    settingsRequest<AdbInfoData>("/api/settings/database/adb/stop", { method: "POST" }),
+
+  getUploadStorageSettings: (options: ApiRequestOptions = {}) =>
+    settingsRequest<UploadStorageSettingsData>("/api/settings/upload-storage", {
+      signal: options.signal,
+    }),
+  updateUploadStorageSettings: (body: UploadStorageSettingsUpdate) =>
+    settingsRequest<UploadStorageSettingsData>("/api/settings/upload-storage", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+
+  getOciSettings: (options: ApiRequestOptions = {}) =>
+    settingsRequest<OciSettingsData>("/api/settings/oci", {
+      signal: options.signal,
+    }),
+  updateOciSettings: (body: OciSettingsUpdate) =>
+    settingsRequest<OciSettingsData>("/api/settings/oci", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  updateOciObjectStorageSettings: (body: OciObjectStorageSettingsUpdate) =>
+    settingsRequest<UploadStorageSettingsData>("/api/settings/oci/object-storage", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  readOciConfig: (body: OciConfigReadRequest) =>
+    settingsRequest<OciConfigReadData>("/api/settings/oci/config/read", jsonBody(body)),
+  testOciConfig: () =>
+    settingsRequest<OciConfigTestResult>("/api/settings/oci/config/test", {
+      method: "POST",
+    }),
+  readOciObjectStorageNamespace: (body: OciObjectStorageNamespaceRequest) =>
+    settingsRequest<OciObjectStorageNamespaceData>(
+      "/api/settings/oci/object-storage/namespace",
+      jsonBody(body)
+    ),
+  uploadOciPrivateKey: (file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return settingsRequest<OciPrivateKeyUploadData>("/api/settings/oci/key-file", {
+      method: "POST",
+      body: form,
+    });
+  },
+};

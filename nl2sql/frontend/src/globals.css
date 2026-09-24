@@ -1,0 +1,210 @@
+@import "tailwindcss";
+
+/*
+ * Production Ready NL2SQL — グローバルスタイル
+ * 色・型・余白・角丸・影・テーマは共有 UI パッケージ（platform の docs/design-system/）が正本。
+ * ここには NL2SQL 固有の書体と画面固有のレイアウトだけを書く。
+ */
+@import "@engchina/production-ready-ui/styles.css";
+
+/* 共有コンポーネントの utility クラスを Tailwind v4 のスキャン対象に含める。 */
+@source "../node_modules/@engchina/production-ready-ui/dist";
+
+/*
+ * 等幅書体。NL2SQL は Google Sans Code を @fontsource で自前ホストしているためここで定義する。
+ * RAG / Agent も自前ホストしたら platform の --font-mono に寄せる。
+ */
+:root {
+  --font-mono: "Google Sans Code", "Noto Sans JP", "Roboto", monospace;
+}
+
+/* サイドバー内のローカル DEBUG 状態（暗い面のスコープ内で warning トークンを使う）。 */
+.sidebar-debug-status {
+  border-color: var(--color-warning-border);
+  background: var(--color-warning-subtle);
+  color: var(--color-warning-fg);
+}
+
+@layer base {
+  /* Tailwind の既定等幅スタックをローカル配信のコード用フォントへ揃える。 */
+  code,
+  kbd,
+  samp,
+  pre {
+    font-family: var(--font-mono);
+  }
+
+  pre {
+    min-width: 0;
+    max-width: 100%;
+    overflow-x: auto;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  pre code {
+    white-space: inherit;
+    overflow-wrap: inherit;
+  }
+}
+
+@layer components {
+  .fixed-split-pane {
+    display: grid;
+    min-width: 0;
+    gap: 1rem;
+  }
+
+  .fixed-split-pane__divider {
+    display: none;
+  }
+
+  .fixed-split-pane__panel {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  @media (min-width: 1280px) {
+    .fixed-split-pane[data-split-layout="split"] {
+      grid-template-columns: var(--fixed-split-columns);
+      align-items: stretch;
+      gap: 0;
+    }
+
+    .fixed-split-pane[data-split-layout="split"] > .fixed-split-pane__panel {
+      grid-row: 1;
+      min-width: 0;
+      max-width: 100%;
+      overflow-x: clip;
+    }
+
+    .fixed-split-pane[data-split-layout="split"] > .fixed-split-pane__panel > * {
+      min-width: 0;
+      max-width: 100%;
+    }
+
+    .fixed-split-pane[data-split-layout="split"] > .fixed-split-pane__panel--left {
+      grid-column: 1;
+      padding-right: 0.5rem;
+    }
+
+    .fixed-split-pane[data-split-layout="split"] > .fixed-split-pane__panel--right {
+      grid-column: 3;
+      padding-left: 0.5rem;
+    }
+
+    .fixed-split-pane[data-split-layout="split"] > .fixed-split-pane__divider {
+      position: relative;
+      z-index: 1;
+      grid-row: 1;
+      grid-column: 2;
+      display: flex;
+      width: 14px;
+      min-height: 100%;
+      min-width: 14px;
+      max-width: 14px;
+      align-items: center;
+      justify-content: center;
+      color: color-mix(in srgb, var(--color-fg-muted) 74%, transparent);
+      cursor: col-resize;
+      outline: none;
+      touch-action: none;
+      user-select: none;
+    }
+
+    .fixed-split-pane__divider::before {
+      content: "";
+      position: absolute;
+      inset: 0.75rem 1px;
+      border-radius: 999px;
+      background: transparent;
+      transition:
+        background-color 160ms ease,
+        box-shadow 160ms ease;
+    }
+
+    .fixed-split-pane__line {
+      position: absolute;
+      inset-block: 0.875rem;
+      left: 50%;
+      width: 2px;
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--color-border) 88%, var(--color-fg-muted) 12%);
+      transform: translateX(-50%);
+      transition:
+        background-color 160ms ease,
+        box-shadow 160ms ease;
+    }
+
+    .fixed-split-pane__grip {
+      position: relative;
+      z-index: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      align-items: center;
+      padding: 0.5rem 0.1875rem;
+      border: 1px solid color-mix(in srgb, var(--color-border) 84%, transparent);
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--color-surface) 96%, transparent);
+      box-shadow: 0 12px 24px -22px color-mix(in srgb, var(--color-fg) 34%, transparent);
+      transition:
+        background-color 160ms ease,
+        border-color 160ms ease,
+        box-shadow 160ms ease,
+        transform 160ms ease;
+    }
+
+    .fixed-split-pane__dot {
+      width: 3px;
+      height: 3px;
+      border-radius: 999px;
+      background: currentColor;
+      opacity: 0.76;
+    }
+
+    .fixed-split-pane__divider:hover,
+    .fixed-split-pane__divider:focus-visible,
+    .fixed-split-pane__divider[data-dragging="true"] {
+      color: var(--color-accent-fg);
+    }
+
+    .fixed-split-pane__divider:hover::before,
+    .fixed-split-pane__divider:focus-visible::before,
+    .fixed-split-pane__divider[data-dragging="true"]::before {
+      background: color-mix(in srgb, var(--color-accent-fg) 10%, transparent);
+      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-accent-fg) 12%, transparent);
+    }
+
+    .fixed-split-pane__divider:focus-visible::before {
+      box-shadow:
+        inset 0 0 0 1px color-mix(in srgb, var(--color-accent-fg) 12%, transparent),
+        inset 0 0 0 3px color-mix(in srgb, var(--color-focus-ring) 24%, transparent);
+    }
+
+    .fixed-split-pane__divider:hover .fixed-split-pane__line,
+    .fixed-split-pane__divider:focus-visible .fixed-split-pane__line,
+    .fixed-split-pane__divider[data-dragging="true"] .fixed-split-pane__line {
+      background: color-mix(in srgb, var(--color-accent-fg) 58%, var(--color-border));
+      box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-accent-fg) 12%, transparent);
+    }
+
+    .fixed-split-pane__divider:hover .fixed-split-pane__grip,
+    .fixed-split-pane__divider:focus-visible .fixed-split-pane__grip,
+    .fixed-split-pane__divider[data-dragging="true"] .fixed-split-pane__grip {
+      border-color: color-mix(in srgb, var(--color-accent-fg) 28%, var(--color-border));
+      background: color-mix(in srgb, var(--color-accent-fg) 10%, var(--color-surface));
+      box-shadow: 0 18px 36px -28px color-mix(in srgb, var(--color-accent-fg) 42%, transparent);
+      transform: scale(1.02);
+    }
+
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .fixed-split-pane__divider::before,
+    .fixed-split-pane__line,
+    .fixed-split-pane__grip {
+      transition: none;
+    }
+  }
+}

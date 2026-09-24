@@ -1,0 +1,575 @@
+"""OCI Enterprise AI direct NL2SQL client.
+
+OCI Generative AI chat API は使わず、Enterprise AI の OpenAI-compatible
+HTTP endpoint contract だけを扱う。未設定の local/CI では service 側が
+deterministic fallback を使う。
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import time
+from base64 import b64encode
+from collections.abc import Mapping
+from typing import Any, Protocol, cast
+
+import httpx
+
+from app.settings import Settings, enterprise_ai_default_model_id, enterprise_ai_vision_model_id
+
+from .structured_outputs import validate_json_output
+
+
+class EnterpriseAiDirectError(RuntimeError):
+    """Enterprise AI direct 呼び出しの実行時エラー。"""
+
+    def __init__(
+        self, message: str, *, code: str = "provider_error", retryable: bool = False
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.retryable = retryable
+
+
+class EnterpriseAiDirectClient(Protocol):
+    """Service が必要とする Enterprise AI direct 境界。"""
+
+    def is_configured(self) -> bool:
+        """Return whether the endpoint, API key, and model are configured."""
+        ...
+
+    def model_id(self) -> str:
+        """Return the configured text model id."""
+        ...
+
+    def generate(
+        self,
+        *,
+        prompt: str,
+        context: str,
+        system_prompt: str,
+        timeout_seconds: float | None = None,
+        max_output_tokens: int | None = None,
+        max_retries: int | None = None,
+        response_format: Mapping[str, Any] | None = None,
+    ) -> str:
+        """Return raw generated text from Enterprise AI."""
+        ...
+
+
+class OciEnterpriseAiDirectClient:
+    """Small synchronous HTTP client for OCI Enterprise AI LLM endpoint."""
+
+    def __init__(self, settings: Settings) -> None:
+        self.settings = settings
+
+    def is_configured(self) -> bool:
+        return bool(
+            self.settings.oci_enterprise_ai_endpoint.strip()
+            and self.settings.oci_enterprise_ai_api_key.strip()
+            and self.model_id()
+        )
+
+    def model_id(self) -> str:
+        return (
+            enterprise_ai_default_model_id(self.settings)
+            or self.settings.oci_enterprise_ai_default_model.strip()
+            or self.settings.oci_enterprise_ai_llm_model.strip()
+        )
+
+    def generate(
+        self,
+        *,
+        prompt: str,
+        context: str,
+        system_prompt: str,
+        timeout_seconds: float | None = None,
+        max_output_tokens: int | None = None,
+        max_retries: int | None = None,
+        response_format: Mapping[str, Any] | None = None,
+    ) -> str:
+        if not self.is_configured():
+            raise EnterpriseAiDirectError("OCI Enterprise AI Direct が未設定です。")
+        payload = _build_payload(
+            settings=self.settings,
+            model_id=self.model_id(),
+            prompt=prompt,
+            context=context,
+            system_prompt=system_prompt,
+            max_output_tokens=max_output_tokens,
+            response_format=response_format,
+        )
+        response = self._post_json(
+            payload,
+            path=self.settings.oci_enterprise_ai_llm_path,
+            timeout_seconds=timeout_seconds,
+            max_retries=max_retries,
+        )
+        return _parse_response(
+            response,
+            response_path=self.settings.oci_enterprise_ai_llm_response_path,
+            response_format=response_format,
+        )
+
+    def vision_model_id(self) -> str:
+        return enterprise_ai_vision_model_id(self.settings) or self.model_id()
+
+    def generate_from_image(
+        self,
+        image_bytes: bytes,
+        prompt: str,
+        *,
+        mime_type: str = "image/jpeg",
+        response_format: Mapping[str, Any] | None = None,
+    ) -> str:
+        if not self.is_configured():
+            raise EnterpriseAiDirectError("OCI Enterprise AI Direct が未設定です。")
+        model_id = self.vision_model_id()
+        if not model_id:
+            raise EnterpriseAiDirectError("OCI Enterprise AI Vision model が未設定です。")
+        payload = _build_image_payload(
+            settings=self.settings,
+            model_id=model_id,
+            image_bytes=image_bytes,
+            prompt=prompt,
+            mime_type=mime_type,
+            response_format=response_format,
+        )
+        response = self._post_json(
+            payload,
+            path=getattr(self.settings, "oci_enterprise_ai_vlm_path", "")
+            or self.settings.oci_enterprise_ai_llm_path,
+        )
+        return _parse_response(
+            response,
+            response_path=self.settings.oci_enterprise_ai_vlm_response_path,
+            response_format=response_format,
+        )
+
+    def _post_json(
+        self,
+        payload: Mapping[str, Any],
+        *,
+        path: str,
+        timeout_seconds: float | None = None,
+        max_retries: int | None = None,
+    ) -> Mapping[str, Any]:
+        url = _join_endpoint_path(
+            self.settings.oci_enterprise_ai_endpoint,
+            path,
+        )
+        headers = {
+            "accept": "application/json",
+            "content-type": "application/json",
+            "authorization": f"Bearer {self.settings.oci_enterprise_ai_api_key.strip()}",
+        }
+        if project := self.settings.oci_enterprise_ai_project_ocid.strip():
+            headers["OpenAI-Project"] = project
+        timeout = float(
+            timeout_seconds
+            if timeout_seconds is not None
+            else self.settings.oci_enterprise_ai_timeout_seconds
+        )
+        retry_count = max(
+            int(
+                max_retries
+                if max_retries is not None
+                else self.settings.oci_enterprise_ai_max_retries
+            ),
+            0,
+        )
+        retryable = {429, 500, 502, 503, 504}
+        last_error = ""
+        with httpx.Client(timeout=timeout) as client:
+            for attempt in range(retry_count + 1):
+                try:
+                    response = client.post(url, headers=headers, json=dict(payload))
+                except httpx.TimeoutException as exc:
+                    last_error = f"timeout after {timeout:.1f}s"
+                    if attempt < retry_count:
+                        time.sleep(min(0.2 * (attempt + 1), 1.0))
+                        continue
+                    raise EnterpriseAiDirectError(
+                        last_error, code="timeout", retryable=True
+                    ) from exc
+                except httpx.HTTPError as exc:
+                    last_error = str(exc)
+                    if attempt < retry_count:
+                        time.sleep(min(0.2 * (attempt + 1), 1.0))
+                        continue
+                    raise EnterpriseAiDirectError(
+                        f"OCI Enterprise AI HTTP error: {exc}", code="connection", retryable=True
+                    ) from exc
+                if response.status_code in retryable and attempt < retry_count:
+                    last_error = f"HTTP {response.status_code}: {response.text[:300]}"
+                    time.sleep(min(0.2 * (attempt + 1), 1.0))
+                    continue
+                if response.status_code >= 400:
+                    raise EnterpriseAiDirectError(
+                        f"OCI Enterprise AI HTTP {response.status_code}: {response.text[:500]}",
+                        code=(
+                            "authentication"
+                            if response.status_code in {401, 403}
+                            else (
+                                "rate_limit"
+                                if response.status_code == 429
+                                else (
+                                    "unavailable"
+                                    if response.status_code in retryable
+                                    else "request"
+                                )
+                            )
+                        ),
+                        retryable=response.status_code in retryable,
+                    )
+                try:
+                    parsed = response.json()
+                except ValueError as exc:
+                    raise EnterpriseAiDirectError(
+                        "OCI Enterprise AI response が JSON ではありません。",
+                        code="response_format",
+                        retryable=True,
+                    ) from exc
+                if not isinstance(parsed, Mapping):
+                    raise EnterpriseAiDirectError(
+                        "OCI Enterprise AI response が object ではありません。",
+                        code="response_format",
+                        retryable=True,
+                    )
+                return parsed
+        raise EnterpriseAiDirectError(last_error or "OCI Enterprise AI call failed.")
+
+
+def _build_payload(
+    *,
+    settings: Settings,
+    model_id: str,
+    prompt: str,
+    context: str,
+    system_prompt: str,
+    max_output_tokens: int | None = None,
+    response_format: Mapping[str, Any] | None = None,
+) -> Mapping[str, Any]:
+    if response_format is not None:
+        system_prompt += (
+            "\n出力形式は text.format の JSON Schema を最優先する。"
+            "指定された JSON object だけを返す。"
+            "SQL・Markdown・自然言語は対応する文字列 field 内に格納する。"
+        )
+    values: dict[str, Any] = {
+        "model": model_id,
+        "prompt": prompt,
+        "context": context,
+        "system_prompt": system_prompt,
+        "instructions": system_prompt,
+        "user_message": f"{context}\n\n質問:\n{prompt}",
+        "max_output_tokens": int(
+            max_output_tokens
+            if max_output_tokens is not None
+            else settings.oci_enterprise_ai_llm_max_output_tokens
+        ),
+        "temperature": 0,
+        "response_format": dict(response_format) if response_format is not None else "",
+    }
+    if settings.oci_enterprise_ai_llm_payload_template.strip():
+        return _with_output_format(
+            _render_payload_template(
+                settings.oci_enterprise_ai_llm_payload_template,
+                values,
+            ),
+            response_format,
+        )
+    payload: dict[str, Any] = {
+        "model": model_id,
+        "instructions": system_prompt,
+        "input": [{"role": "user", "content": values["user_message"]}],
+        "temperature": values["temperature"],
+        "max_output_tokens": values["max_output_tokens"],
+    }
+    return _with_output_format(payload, response_format)
+
+
+def _build_image_payload(
+    *,
+    settings: Settings,
+    model_id: str,
+    image_bytes: bytes,
+    prompt: str,
+    mime_type: str,
+    response_format: Mapping[str, Any] | None = None,
+) -> Mapping[str, Any]:
+    if response_format is not None:
+        prompt += (
+            "\n出力形式は text.format の JSON Schema を最優先する。"
+            "抽出した全文を text に格納した JSON object だけを返す。"
+        )
+    image_base64 = b64encode(image_bytes).decode("ascii")
+    data_url = f"data:{mime_type};base64,{image_base64}"
+    values: dict[str, Any] = {
+        "model": model_id,
+        "prompt": prompt,
+        "response_format": dict(response_format) if response_format is not None else "",
+        "image_base64": image_base64,
+        "image_data_url": data_url,
+        "mime_type": mime_type,
+        "max_output_tokens": int(
+            getattr(settings, "oci_enterprise_ai_vlm_max_output_tokens", 65536)
+        ),
+        "temperature": 0,
+    }
+    if settings.oci_enterprise_ai_vlm_payload_template.strip():
+        return _with_output_format(
+            _render_payload_template(settings.oci_enterprise_ai_vlm_payload_template, values),
+            response_format,
+        )
+    return _with_output_format(
+        {
+            "model": model_id,
+            "input": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": prompt},
+                        {"type": "input_image", "image_url": data_url},
+                    ],
+                }
+            ],
+            "temperature": values["temperature"],
+            "max_output_tokens": values["max_output_tokens"],
+        },
+        response_format,
+    )
+
+
+def _with_output_format(
+    payload: Mapping[str, Any], response_format: Mapping[str, Any] | None
+) -> Mapping[str, Any]:
+    if response_format is None:
+        return payload
+    result = dict(payload)
+    text = dict(result.get("text") or {})
+    text["format"] = dict(response_format)
+    result["text"] = text
+    return result
+
+
+def _render_payload_template(template: str, values: Mapping[str, Any]) -> Mapping[str, Any]:
+    try:
+        parsed = json.loads(template)
+    except ValueError as exc:
+        raise EnterpriseAiDirectError(
+            "OCI_ENTERPRISE_AI_LLM_PAYLOAD_TEMPLATE は JSON object で指定してください。"
+        ) from exc
+    rendered = _render_template_value(parsed, values)
+    if not isinstance(rendered, Mapping):
+        raise EnterpriseAiDirectError(
+            "OCI_ENTERPRISE_AI_LLM_PAYLOAD_TEMPLATE は JSON object を返す必要があります。"
+        )
+    return rendered
+
+
+def _render_template_value(value: object, values: Mapping[str, Any]) -> object:
+    if isinstance(value, str):
+        for key, replacement in values.items():
+            token = "${" + key + "}"
+            if value == token:
+                return replacement
+            value = value.replace(token, str(replacement))
+        return value
+    if isinstance(value, list):
+        return [_render_template_value(item, values) for item in value]
+    if isinstance(value, Mapping):
+        return {str(key): _render_template_value(item, values) for key, item in value.items()}
+    return value
+
+
+def _parse_response(
+    response: Mapping[str, Any], *, response_path: str, response_format: Mapping[str, Any] | None
+) -> str:
+    if response_format is None:
+        return _parse_generated_text(response, response_path=response_path)
+    _raise_for_response_error(response)
+    if response.get("status") in {"incomplete", "failed", "cancelled", "queued", "in_progress"}:
+        raise EnterpriseAiDirectError(
+            "Structured Outputs の応答が未完了です。出力上限とモデル設定を確認してください。",
+            code="incomplete",
+        )
+
+    def check_refusal(value: object) -> None:
+        if isinstance(value, Mapping):
+            if value.get("type") == "refusal" or value.get("refusal"):
+                raise EnterpriseAiDirectError(
+                    "Enterprise AI が応答を拒否しました。入力内容を確認してください。",
+                    code="refusal",
+                )
+            for key in ("output", "content", "choices", "message"):
+                check_refusal(value.get(key))
+        elif isinstance(value, list):
+            for item in value:
+                check_refusal(item)
+
+    check_refusal(response)
+    candidate = _select_response_path(response, response_path)
+
+    def text(value: object) -> str:
+        if isinstance(value, str):
+            return value
+        if isinstance(value, Mapping):
+            if value.get("type") in {"reasoning", "function_call", "tool_call"}:
+                return ""
+            for key in ("output_text", "text", "content", "output", "choices", "message"):
+                if key in value:
+                    found = text(value[key])
+                    if found:
+                        return found
+        if isinstance(value, list):
+            return "".join(text(item) for item in value)
+        return ""
+
+    try:
+        return validate_json_output(text(candidate), response_format)
+    except ValueError as exc:
+        raise EnterpriseAiDirectError(str(exc), code="response_format", retryable=True) from exc
+
+
+def _parse_generated_text(response: Mapping[str, Any], *, response_path: str) -> str:
+    candidate = _select_response_path(response, response_path)
+    _raise_for_response_error(candidate)
+    text = _extract_text_candidate(candidate)
+    if text.strip():
+        return text.strip()
+    raise EnterpriseAiDirectError(
+        "OCI Enterprise AI response に text がありません。",
+        code="response_format",
+        retryable=True,
+    )
+
+
+def _select_response_path(payload: object, path: str) -> object:
+    cleaned = path.strip()
+    if not cleaned:
+        return payload
+    if not cleaned.startswith("/"):
+        raise EnterpriseAiDirectError(
+            "OCI_ENTERPRISE_AI_LLM_RESPONSE_PATH は / で始まる JSON Pointer 形式です。"
+        )
+    current = payload
+    for raw_segment in cleaned.split("/")[1:]:
+        segment = raw_segment.replace("~1", "/").replace("~0", "~")
+        if isinstance(current, Mapping):
+            if segment not in current:
+                raise EnterpriseAiDirectError(f"response path の key が見つかりません: {segment}")
+            current = current[segment]
+            continue
+        if isinstance(current, list):
+            if not segment.isdigit():
+                raise EnterpriseAiDirectError(f"response path の list index が不正です: {segment}")
+            index = int(segment)
+            if index >= len(current):
+                raise EnterpriseAiDirectError(
+                    f"response path の list index が範囲外です: {segment}"
+                )
+            current = current[index]
+            continue
+        raise EnterpriseAiDirectError("response path が object/list 以外に到達しました。")
+    return current
+
+
+def _raise_for_response_error(candidate: object) -> None:
+    if not isinstance(candidate, Mapping):
+        return
+    error = candidate.get("error")
+    if not error:
+        return
+    if isinstance(error, Mapping):
+        message = str(error.get("message") or error.get("code") or error)
+    else:
+        message = str(error)
+    raise EnterpriseAiDirectError(f"OCI Enterprise AI response error: {message}")
+
+
+def _extract_text_candidate(candidate: object) -> str:
+    if isinstance(candidate, str):
+        return _extract_text_from_json_string(candidate) or candidate
+    if isinstance(candidate, Mapping):
+        tool_payload = _extract_tool_call_payload(candidate)
+        if tool_payload is not None:
+            return _extract_text_candidate(tool_payload)
+        if message := candidate.get("message"):
+            return _extract_text_candidate(message)
+        for key in ("content", "text", "answer", "output_text", "generated_text"):
+            value = candidate.get(key)
+            if isinstance(value, str):
+                return value
+            if isinstance(value, list):
+                return "\n".join(
+                    part for part in (_extract_text_candidate(item) for item in value) if part
+                )
+        for key in ("output", "outputs", "data", "response", "result", "choices"):
+            value = candidate.get(key)
+            if isinstance(value, (Mapping, list)):
+                text = _extract_text_candidate(value)
+                if text:
+                    return text
+    if isinstance(candidate, list):
+        return "\n".join(
+            part for part in (_extract_text_candidate(item) for item in candidate) if part
+        )
+    return ""
+
+
+def _extract_text_from_json_string(value: str) -> str:
+    cleaned = _strip_json_fence(value)
+    object_text = _extract_json_object_text(cleaned)
+    if object_text is None:
+        return ""
+    try:
+        parsed = json.loads(object_text)
+    except ValueError:
+        return ""
+    if not isinstance(parsed, Mapping):
+        return ""
+    return _extract_text_candidate(parsed)
+
+
+def _extract_tool_call_payload(candidate: Mapping[str, Any]) -> object | None:
+    function_call = candidate.get("function_call")
+    if isinstance(function_call, Mapping):
+        return _extract_function_arguments(function_call)
+    tool_calls = candidate.get("tool_calls")
+    if isinstance(tool_calls, list) and tool_calls:
+        first_tool_call = tool_calls[0]
+        if isinstance(first_tool_call, Mapping):
+            function = first_tool_call.get("function")
+            if isinstance(function, Mapping):
+                return _extract_function_arguments(function)
+            return _extract_function_arguments(first_tool_call)
+    return None
+
+
+def _extract_function_arguments(function: Mapping[str, Any]) -> object | None:
+    arguments = function.get("arguments")
+    if isinstance(arguments, str):
+        try:
+            return cast(object, json.loads(arguments))
+        except ValueError:
+            return arguments
+    return cast(object | None, arguments)
+
+
+def _strip_json_fence(value: str) -> str:
+    match = re.match(r"^\s*```(?:json)?\s*(.*?)\s*```\s*$", value, flags=re.I | re.S)
+    return match.group(1).strip() if match else value.strip()
+
+
+def _extract_json_object_text(value: str) -> str | None:
+    start = value.find("{")
+    end = value.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return None
+    return value[start : end + 1]
+
+
+def _join_endpoint_path(endpoint: str, path: str) -> str:
+    return f"{endpoint.rstrip('/')}/{(path or '/responses').lstrip('/')}"

@@ -1,0 +1,2598 @@
+"""NL2SQL API models.
+
+外部サービスへ依存しない契約をここに集約する。Oracle / OCI の実呼び出しは
+service 層の adapter に閉じ込め、API と UI は同じ shape を使い続ける。
+"""
+
+from __future__ import annotations
+
+import re
+from collections.abc import Mapping
+from enum import StrEnum
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
+
+from .object_identity import qualified_object_name
+from .ontology_models import OntologySqlGenerationContext
+
+_CONTROL_CHARACTER_RE = re.compile(r"[\x00-\x08\x0B-\x0C\x0E-\x1F]")
+
+
+class Nl2SqlEngine(StrEnum):
+    """NL2SQL 実行エンジン。"""
+
+    SELECT_AI = "select_ai"
+    SELECT_AI_AGENT = "select_ai_agent"
+    ENTERPRISE_AI_DIRECT = "enterprise_ai_direct"
+
+
+class JobStatus(StrEnum):
+    """非同期ジョブ状態。"""
+
+    PENDING = "pending"
+    RUNNING = "running"
+    DONE = "done"
+    ERROR = "error"
+
+
+class JobStepStatus(StrEnum):
+    """非同期ジョブ内の処理段階。"""
+
+    PENDING = "pending"
+    RUNNING = "running"
+    DONE = "done"
+    ERROR = "error"
+    SKIPPED = "skipped"
+
+
+class FeedbackRating(StrEnum):
+    """検索結果へのフィードバック。"""
+
+    GOOD = "good"
+    BAD = "bad"
+
+
+class SampleDataset(StrEnum):
+    """業務別サンプル。未指定は従来の人事サンプル。"""
+
+    HR = "hr"
+    SALES = "sales"
+    INQUIRIES = "inquiries"
+
+
+class SampleDataStep(StrEnum):
+    """SQL Assist sample data import step."""
+
+    TABLES = "tables"
+    VIEWS = "views"
+    DATA = "data"
+    ALL = "all"
+
+
+class StageTiming(BaseModel):
+    """処理段階ごとの経過時間。"""
+
+    stage: str
+    elapsed_ms: int
+
+
+class EngineTiming(BaseModel):
+    """SQL 生成エンジンの試行ごとの経過時間。"""
+
+    engine: str
+    elapsed_ms: int
+    status: Literal["success", "failed", "skipped"]
+    error: str = ""
+
+
+class JobStepData(BaseModel):
+    """UI へ公開する非同期ジョブの段階別進捗。"""
+
+    stage: str
+    status: JobStepStatus = JobStepStatus.PENDING
+    elapsed_ms: int | None = None
+
+
+class TimingEnvelope(BaseModel):
+    """同期/非同期レスポンス共通の時間情報。"""
+
+    created_at: str
+    started_at: str | None = None
+    finished_at: str | None = None
+    elapsed_ms: int | None = None
+    stage_timings: list[StageTiming] = Field(default_factory=list)
+
+
+class SchemaColumn(BaseModel):
+    """Oracle column metadata for UI schema picking."""
+
+    column_name: str
+    logical_name: str
+    data_type: str
+    nullable: bool = True
+    comment: str = ""
+    sample_values: list[str] = Field(default_factory=list)
+    domain_name: str = ""
+    """列に関連付いた SQL ドメイン(OWNER.NAME)。23ai 以降の dictionary から取得。無ければ空。"""
+
+
+class SchemaConstraintDetail(BaseModel):
+    """順序を保った Oracle constraint metadata。"""
+
+    constraint_name: str
+    constraint_type: Literal["P", "R", "U", "C"]
+    owner: str = "APP"
+    table_name: str
+    columns: list[str] = Field(default_factory=list)
+    referenced_owner: str | None = None
+    referenced_table: str | None = None
+    referenced_columns: list[str] = Field(default_factory=list)
+    delete_rule: str = "NO ACTION"
+    status: str = "ENABLED"
+    deferrable: str = "NOT DEFERRABLE"
+
+
+class SchemaViewDependency(BaseModel):
+    """Oracle view から参照 object への lineage。"""
+
+    owner: str = "APP"
+    view_name: str
+    referenced_owner: str = "APP"
+    referenced_name: str
+    referenced_type: str = "TABLE"
+
+
+class SchemaTable(BaseModel):
+    """Oracle table metadata for NL2SQL object restriction."""
+
+    table_name: str
+    logical_name: str
+    owner: str = "APP"
+    table_type: str = "table"
+    comment: str = ""
+    row_count: int | None = None
+    columns: list[SchemaColumn] = Field(default_factory=list)
+    constraints: list[str] = Field(default_factory=list)
+    constraint_details: list[SchemaConstraintDetail] = Field(default_factory=list)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def qualified_name(self) -> str:
+        """查询/API 专用的规范对象身份。"""
+
+        return qualified_object_name(self.owner, self.table_name)
+
+
+class SchemaOwnerSummary(BaseModel):
+    """当前连接用户可访问的一个非 Oracle 维护 schema。"""
+
+    owner: str
+    is_current: bool = False
+    table_count: int = 0
+    view_count: int = 0
+
+
+class SchemaOwnersData(BaseModel):
+    """Schema 发现结果。"""
+
+    current_owner: str
+    owners: list[SchemaOwnerSummary] = Field(default_factory=list)
+    excluded_oracle_maintained_count: int = 0
+
+
+class SchemaCatalog(BaseModel):
+    """UI が表示する schema catalog."""
+
+    refreshed_at: str
+    tables: list[SchemaTable]
+    schema_fingerprint: str = ""
+    view_dependencies: list[SchemaViewDependency] = Field(default_factory=list)
+    current_owner: str = ""
+    excluded_oracle_maintained_count: int = 0
+
+
+class SchemaCatalogHead(BaseModel):
+    """大規模 catalog を読み込まずに返せる active catalog metadata。"""
+
+    catalog_version: int = 0
+    schema_fingerprint: str = ""
+    refreshed_at: str = ""
+    object_count: int = 0
+    column_count: int = 0
+    change_token: int = 0
+    etag: str = ""
+
+
+class SchemaObjectSummary(BaseModel):
+    """Schema picker / search 用の軽量 object 行。"""
+
+    owner: str
+    object_name: str
+    object_type: str = "TABLE"
+    logical_name: str = ""
+    comment: str = ""
+    row_count: int | None = None
+    column_count: int = 0
+    last_ddl_at: str = ""
+
+
+class SchemaObjectPage(BaseModel):
+    """Keyset cursor で返す schema object page。"""
+
+    items: list[SchemaObjectSummary] = Field(default_factory=list)
+    next_cursor: str | None = None
+    total: int | None = None
+    table_count: int = 0
+    view_count: int = 0
+    counts_included: bool = True
+    refreshed_at: str = ""
+    catalog_version: int = 0
+
+
+class SchemaObjectDetail(BaseModel):
+    """選択された object だけを展開した schema detail。"""
+
+    table: SchemaTable
+    dependencies: list[SchemaViewDependency] = Field(default_factory=list)
+    catalog_version: int = 0
+    etag: str = ""
+
+
+class AllowedObjects(BaseModel):
+    """ユーザーが今回の質問で許可する table / column 範囲。"""
+
+    table_names: list[str] = Field(default_factory=list)
+    columns: dict[str, list[str]] = Field(default_factory=dict)
+    enforce_table_scope: bool = False
+
+
+SELECT_AI_MAX_TOKENS_MIN = 4096
+SELECT_AI_MAX_TOKENS_MAX = 32000
+PROFILE_IDENTIFIER_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]*$")
+
+
+def normalize_profile_identifier(value: str) -> str:
+    return value.strip().upper()
+
+
+def validate_profile_identifier(value: str) -> str:
+    if not PROFILE_IDENTIFIER_PATTERN.fullmatch(value):
+        raise ValueError("名称は英字で開始し、英字・数字・アンダースコアのみ使用できます。")
+    return value
+
+
+class ProfileSelectAiConfig(BaseModel):
+    """業務 profile から Oracle DBMS_CLOUD_AI profile を作るための設定。"""
+
+    profile_name: str = ""
+    previous_profile_name: str = ""
+    region: str = ""
+    model: str = ""
+    embedding_model: str = "cohere.embed-v4.0"
+    max_tokens: int = Field(
+        default=SELECT_AI_MAX_TOKENS_MAX,
+        ge=SELECT_AI_MAX_TOKENS_MIN,
+        le=SELECT_AI_MAX_TOKENS_MAX,
+    )
+    enforce_object_list: bool = True
+    comments: bool = True
+    annotations: bool = False
+    constraints: bool = False
+    role: str = ""
+    additional_instructions: str = ""
+
+
+class ProfileSelectAiConfigPatch(BaseModel):
+    """Profile PATCH 用の Select AI 設定差分。"""
+
+    profile_name: str | None = None
+    region: str | None = None
+    model: str | None = None
+    embedding_model: str | None = None
+    max_tokens: int | None = Field(
+        default=None,
+        ge=SELECT_AI_MAX_TOKENS_MIN,
+        le=SELECT_AI_MAX_TOKENS_MAX,
+    )
+    enforce_object_list: bool | None = None
+    comments: bool | None = None
+    annotations: bool | None = None
+    constraints: bool | None = None
+    role: str | None = None
+    additional_instructions: str | None = None
+
+
+class Nl2SqlProfile(BaseModel):
+    """業務/Profile 単位の NL2SQL 設定。"""
+
+    id: str
+    name: str
+    category: str = ""
+    description: str = ""
+    allowed_tables: list[str] = Field(default_factory=list)
+    allowed_views: list[str] = Field(default_factory=list)
+    glossary: dict[str, str] = Field(default_factory=dict)
+    sql_rules: list[str] = Field(default_factory=list)
+    default_row_limit: int = 100
+    safety_policy: str = "select_only"
+    few_shot_examples: list[dict[str, str]] = Field(default_factory=list)
+    select_ai_config: ProfileSelectAiConfig = Field(default_factory=ProfileSelectAiConfig)
+    archived: bool = False
+    version: int = Field(default=1, ge=1)
+    etag: str = ""
+    updated_at: str = ""
+    object_scope_version: int = Field(default=1, ge=1)
+
+
+class ProfileSummary(BaseModel):
+    """一覧で full profile payload を転送しないための summary。"""
+
+    id: str
+    name: str
+    category: str = ""
+    description: str = ""
+    archived: bool = False
+    allowed_table_count: int = 0
+    allowed_view_count: int = 0
+    glossary_count: int = 0
+    few_shot_count: int = 0
+    version: int = 1
+    etag: str = ""
+    updated_at: str = ""
+
+
+class ProfileUsageContext(BaseModel):
+    """AI 活用画面が参照する profile の最小利用コンテキスト。"""
+
+    id: str
+    name: str
+    category: str = ""
+    description: str = ""
+    allowed_tables: list[str] = Field(default_factory=list)
+    allowed_views: list[str] = Field(default_factory=list)
+    archived: bool = False
+    object_scope_version: int = 1
+    version: int = 1
+    etag: str = ""
+    updated_at: str = ""
+
+
+class ProfileSummaryPage(BaseModel):
+    """業務 profile の keyset cursor page。"""
+
+    items: list[ProfileSummary] = Field(default_factory=list)
+    next_cursor: str | None = None
+    total: int | None = None
+    change_token: int = 0
+
+
+class SchemaRefreshJobStatus(StrEnum):
+    """Schema refresh worker の永続 job 状態。"""
+
+    PENDING = "pending"
+    RUNNING = "running"
+    DONE = "done"
+    ERROR = "error"
+
+
+class SchemaRefreshPhase(StrEnum):
+    """Schema refresh の安定した進捗 phase。"""
+
+    QUEUED = "queued"
+    SCANNING = "scanning"
+    FETCHING = "fetching"
+    PERSISTING = "persisting"
+    DONE = "done"
+
+
+class SchemaRefreshMode(StrEnum):
+    """Schema refresh の実行範囲。"""
+
+    FULL = "full"
+    TARGETED = "targeted"
+
+
+class SchemaRefreshTargetObject(BaseModel):
+    """Targeted schema refresh で Oracle へ確認する object。"""
+
+    owner: str
+    object_name: str
+    object_type: Literal["table", "view", "materialized_view", "unknown"] = "unknown"
+    expected_state: Literal["present", "absent", "unknown"] = "unknown"
+
+
+class SchemaRefreshJob(BaseModel):
+    """非同期 schema refresh の公開契約。"""
+
+    job_id: str
+    status: SchemaRefreshJobStatus = SchemaRefreshJobStatus.PENDING
+    mode: SchemaRefreshMode = SchemaRefreshMode.FULL
+    source: str = "manual"
+    target_objects: list[SchemaRefreshTargetObject] = Field(default_factory=list)
+    requires_full_refresh: bool = False
+    created_at: str
+    started_at: str | None = None
+    finished_at: str | None = None
+    worker_id: str = ""
+    heartbeat_at: str | None = None
+    lease_expires_at: str | None = None
+    attempt: int = 0
+    phase: SchemaRefreshPhase = SchemaRefreshPhase.QUEUED
+    processed_objects: int = 0
+    total_objects: int = 0
+    scanned_objects: int = 0
+    changed_objects: int = 0
+    deleted_objects: int = 0
+    catalog_version: int | None = None
+    error_code: str = ""
+
+
+class SchemaRefreshActiveJobData(BaseModel):
+    """画面復帰時に再接続する実行中 schema refresh job。"""
+
+    active_job: SchemaRefreshJob | None = None
+
+
+def _normalize_glossary_payload(value: Any) -> Any:
+    """Profile API から受ける glossary は空キーと制御文字を保存前に拒否する。"""
+
+    if value is None or not isinstance(value, Mapping):
+        return value
+    normalized: dict[str, str] = {}
+    for raw_key, raw_definition in value.items():
+        key = str(raw_key or "").strip()
+        definition = str(raw_definition or "").strip()
+        if not key:
+            raise ValueError("用語キーは空にできません。")
+        if _CONTROL_CHARACTER_RE.search(key) or _CONTROL_CHARACTER_RE.search(definition):
+            raise ValueError("用語キーと定義に制御文字は使用できません。")
+        if definition:
+            normalized[key] = definition
+    return normalized
+
+
+class ProfileUpsertRequest(BaseModel):
+    """Profile 作成/更新 request."""
+
+    name: str = Field(min_length=1)
+    category: str = ""
+    description: str = ""
+    allowed_tables: list[str] = Field(default_factory=list)
+    allowed_views: list[str] = Field(default_factory=list)
+    glossary: dict[str, str] = Field(default_factory=dict)
+    sql_rules: list[str] = Field(default_factory=list)
+    default_row_limit: int = Field(default=100, ge=1, le=5000)
+    safety_policy: str = "select_only"
+    few_shot_examples: list[dict[str, str]] = Field(default_factory=list)
+    select_ai_config: ProfileSelectAiConfig = Field(default_factory=ProfileSelectAiConfig)
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def normalize_name(cls, value: object) -> object:
+        if isinstance(value, str):
+            return normalize_profile_identifier(value)
+        return value
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        return validate_profile_identifier(value)
+
+    @field_validator("glossary", mode="before")
+    @classmethod
+    def normalize_glossary(cls, value: Any) -> Any:
+        return _normalize_glossary_payload(value)
+
+    @model_validator(mode="after")
+    def align_select_ai_profile_name(self) -> ProfileUpsertRequest:
+        self.select_ai_config = self.select_ai_config.model_copy(
+            update={"profile_name": self.name, "previous_profile_name": ""}
+        )
+        return self
+
+
+class ProfilePatchRequest(BaseModel):
+    """Profile 更新 request。省略された項目は既存値を保持する。"""
+
+    name: str | None = Field(default=None, min_length=1)
+    category: str | None = None
+    description: str | None = None
+    allowed_tables: list[str] | None = None
+    allowed_views: list[str] | None = None
+    glossary: dict[str, str] | None = None
+    sql_rules: list[str] | None = None
+    default_row_limit: int | None = Field(default=None, ge=1, le=5000)
+    safety_policy: str | None = None
+    few_shot_examples: list[dict[str, str]] | None = None
+    select_ai_config: ProfileSelectAiConfigPatch | None = None
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def normalize_name(cls, value: object) -> object:
+        if isinstance(value, str):
+            return normalize_profile_identifier(value)
+        return value
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str | None) -> str | None:
+        return validate_profile_identifier(value) if value is not None else value
+
+    @field_validator("glossary", mode="before")
+    @classmethod
+    def normalize_glossary(cls, value: Any) -> Any:
+        return _normalize_glossary_payload(value)
+
+
+class StrictMutationRequest(BaseModel):
+    """Reject stale mutation fields instead of silently changing their meaning."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class AdminExecutionConfirmation(StrictMutationRequest):
+    """Common confirmation fields for admin/destructive operations."""
+
+    confirmation: str = ""
+    reason: str = ""
+
+
+class ProfileSelectAiProfileRequest(AdminExecutionConfirmation):
+    """業務 profile から DBMS_CLOUD_AI profile を作成する request."""
+
+    attributes_override: dict[str, Any] | None = None
+    original_name: str = ""
+
+
+class ProfileLearningMaterialImportData(BaseModel):
+    """Terms / rules / few-shot learning material import response."""
+
+    profile_id: str
+    profile_name: str
+    mode: str = "merge"
+    imported_terms: int = 0
+    imported_rules: int = 0
+    imported_examples: int = 0
+    skipped_count: int = 0
+    warnings: list[str] = Field(default_factory=list)
+    profile: Nl2SqlProfile
+
+
+class LegacyLearningMaterialData(BaseModel):
+    """全 profile で共有するグローバル用語と旧 rules 互換データ."""
+
+    glossary: dict[str, str] = Field(default_factory=dict)
+    rules: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy_rule_entries(cls, value: Any) -> Any:
+        """旧 snapshot の CATEGORY/RULE 行を、順序を保って全局ルールへ移行する。"""
+        if not isinstance(value, dict) or "rules" in value:
+            return value
+        migrated = dict(value)
+        rules: list[str] = []
+        seen: set[str] = set()
+        for entry in migrated.pop("rule_entries", []) or []:
+            rule = str(entry.get("rule") if isinstance(entry, dict) else "").strip()
+            if rule and rule not in seen:
+                seen.add(rule)
+                rules.append(rule)
+        migrated["rules"] = rules
+        return migrated
+
+
+class SafetyReport(BaseModel):
+    """SQL safety analysis."""
+
+    is_safe: bool
+    is_select_only: bool
+    row_limit_applied: int
+    blocked_reason: str = ""
+    warnings: list[str] = Field(default_factory=list)
+    referenced_tables: list[str] = Field(default_factory=list)
+    referenced_columns: list[str] = Field(default_factory=list)
+
+
+class QueryResults(BaseModel):
+    """SQL execution results."""
+
+    columns: list[str]
+    rows: list[dict[str, Any]]
+    total: int
+    returned_count: int | None = None
+    has_more: bool = False
+    truncated: bool = False
+    execution_context: Literal[
+        "deterministic",
+        "oracle_data_plane",
+        "deepsec_data_plane",
+        "admin_control_plane",
+    ] = "deterministic"
+    vpd_context_enforced: bool = False
+
+    @model_validator(mode="after")
+    def fill_returned_count(self) -> QueryResults:
+        if self.returned_count is None:
+            self.returned_count = len(self.rows)
+        return self
+
+
+class ExplainPlanOperation(BaseModel):
+    """Oracle PLAN_TABLE の安全な要約行。"""
+
+    operation: str
+    options: str = ""
+    owner: str = ""
+    object_name: str = ""
+    cost: int | None = None
+    cardinality: int | None = None
+    bytes: int | None = None
+
+
+class ExplainPlanData(BaseModel):
+    """意味 gate と独立した性能 check。利用不可でも実行許可は変更しない。"""
+
+    available: bool = False
+    total_cost: int | None = None
+    estimated_cardinality: int | None = None
+    full_table_scans: list[str] = Field(default_factory=list)
+    operations: list[ExplainPlanOperation] = Field(default_factory=list)
+    warning: str = ""
+
+
+class DbAdminObjectSummary(BaseModel):
+    """Database admin table/view summary."""
+
+    name: str
+    owner: str = ""
+    qualified_name: str = ""
+    object_type: str = "table"
+    row_count: int | None = None
+    comment: str = ""
+
+    @model_validator(mode="after")
+    def fill_qualified_name(self) -> DbAdminObjectSummary:
+        if self.qualified_name or not self.owner:
+            return self
+        self.qualified_name = qualified_object_name(self.owner, self.name)
+        return self
+
+
+class DbAdminObjectDetail(BaseModel):
+    """Database admin table/view detail with columns and DDL."""
+
+    name: str
+    owner: str = ""
+    qualified_name: str = ""
+    object_type: str = "table"
+    row_count: int | None = None
+    comment: str = ""
+    columns: list[SchemaColumn] = Field(default_factory=list)
+    constraints: list[str] = Field(default_factory=list)
+    ddl: str = ""
+    warnings: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def fill_qualified_name(self) -> DbAdminObjectDetail:
+        if self.qualified_name or not self.owner:
+            return self
+        self.qualified_name = qualified_object_name(self.owner, self.name)
+        return self
+
+
+class DbAdminObjectsData(BaseModel):
+    """Database admin object list response."""
+
+    runtime: str = "deterministic"
+    items: list[DbAdminObjectSummary] = Field(default_factory=list)
+    refreshed_at: str = ""
+    warnings: list[str] = Field(default_factory=list)
+
+
+class DbAdminObjectPage(BaseModel):
+    """管理画面向けの軽量・keyset page。Catalog/CLOB は読み込まない。"""
+
+    runtime: str = "deterministic"
+    owner: str = ""
+    items: list[DbAdminObjectSummary] = Field(default_factory=list)
+    total: int = 0
+    table_count: int = 0
+    view_count: int = 0
+    counts_included: bool = True
+    next_cursor: str | None = None
+    refreshed_at: str = ""
+    catalog_version: int = 0
+    warnings: list[str] = Field(default_factory=list)
+
+
+class DbAdminDropTableRequest(AdminExecutionConfirmation):
+    """Drop table execution request."""
+
+    table_name: str = Field(min_length=1)
+    owner: str = ""
+    purge: bool = True
+
+
+class DbAdminTruncateTableRequest(AdminExecutionConfirmation):
+    """Truncate table data execution request."""
+
+    table_name: str = Field(min_length=1)
+    owner: str = ""
+
+
+class DbAdminStatementResult(BaseModel):
+    """One admin SQL statement execution result."""
+
+    index: int
+    statement_type: str
+    status: str
+    sql: str = ""
+    row_count: int | None = None
+    message: str = ""
+    elapsed_ms: int = 0
+    error_message: str = ""
+    error_code: str = ""
+
+
+class DbAdminExecuteRequest(AdminExecutionConfirmation):
+    """Admin SQL executor request.
+
+    This intentionally lives outside the normal SELECT-only NL2SQL query path.
+    """
+
+    sql: str = Field(min_length=1)
+    row_limit: int = Field(default=100, ge=1, le=100000)
+
+
+class DbAdminExecuteData(BaseModel):
+    """Admin SQL executor response."""
+
+    executed: bool = False
+    runtime: str = "deterministic"
+    execution_context: Literal[
+        "deterministic",
+        "oracle_data_plane",
+        "deepsec_data_plane",
+        "admin_control_plane",
+    ] = "deterministic"
+    vpd_context_enforced: bool = False
+    select_result: QueryResults | None = None
+    statements: list[DbAdminStatementResult] = Field(default_factory=list)
+    committed: bool = False
+    rolled_back: bool = False
+    schema_refresh_job_id: str = ""
+    schema_refresh_required: bool = False
+    schema_refresh_reason_code: str = ""
+    warnings: list[str] = Field(default_factory=list)
+    timing: TimingEnvelope
+
+
+class DbObjectNameRef(BaseModel):
+    """表示用の所有者付き object 名（qualified_object_name と同じ規則）。"""
+
+    name: str
+    owner: str = ""
+    qualified_name: str = ""
+
+
+class SampleDataInfo(BaseModel):
+    """Optional SQL Assist sample package status."""
+
+    dataset: SampleDataset = SampleDataset.HR
+    runtime: str = "deterministic"
+    profile_id: str = ""
+    confirmation: str = "ADMIN_EXECUTE"
+    objects: list[str] = Field(default_factory=list)
+    # sample object を作成する schema（current schema）と、objects の所有者付き名前。
+    owner: str = ""
+    object_refs: list[DbObjectNameRef] = Field(default_factory=list)
+    imported_objects: list[str] = Field(default_factory=list)
+    # 同名だが種類・列構成がサンプル定義と異なり、利用者のものとみなしたオブジェクト。
+    conflicting_objects: list[str] = Field(default_factory=list)
+    # 旧名（SAMPLE_NL2SQL_ 接頭辞）で残っているサンプルオブジェクト。削除時に併せて削除する。
+    legacy_objects: list[str] = Field(default_factory=list)
+    sql: dict[str, list[str]] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class SampleDataMutationRequest(AdminExecutionConfirmation):
+    """Sample data import/delete execution request."""
+
+    dataset: SampleDataset = SampleDataset.HR
+    step: SampleDataStep = SampleDataStep.ALL
+
+
+class SampleDataMutationData(BaseModel):
+    """Sample data import/delete response."""
+
+    operation: str
+    dataset: SampleDataset = SampleDataset.HR
+    step: SampleDataStep = SampleDataStep.ALL
+    runtime: str = "deterministic"
+    executed: bool = False
+    objects: list[str] = Field(default_factory=list)
+    statements: list[DbAdminStatementResult] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    profile_id: str = ""
+    schema_refresh_job_id: str = ""
+    schema_refresh_required: bool = False
+    schema_refresh_reason_code: str = ""
+    timing: TimingEnvelope
+
+
+class DbAdminImportTabularRequest(AdminExecutionConfirmation):
+    """CSV/XLSX/XLS tabular import execution request."""
+
+    table_name: str = Field(min_length=1)
+    content_base64: str = Field(min_length=1)
+    filename: str = "upload.csv"
+    sheet_name: str = ""
+    mode: str = "create"
+    max_rows: int | None = Field(default=None, ge=1, le=50000)
+
+
+DbAdminStatementPolicy = Literal[
+    "table_ddl",
+    "view_ddl",
+    "data_dml",
+    "comment_sql",
+    "annotation_sql",
+    "domain_sql",
+]
+
+
+class DbAdminStatementsRequest(AdminExecutionConfirmation):
+    """文種 whitelist 付き複数 statement 実行 request(SQL Assist 移植)。"""
+
+    sql: str = Field(min_length=1)
+    policy: DbAdminStatementPolicy
+
+
+class DbAdminDropViewRequest(AdminExecutionConfirmation):
+    """Drop view execution request."""
+
+    view_name: str = Field(min_length=1)
+    owner: str = ""
+
+
+class DbAdminDataPreviewRequest(BaseModel):
+    """テーブル/ビューのデータ表示 request。"""
+
+    object_name: str = Field(min_length=1)
+    owner: str = ""
+    limit: int = Field(default=100, ge=1, le=100000)
+    where_clause: str = ""
+
+
+class DbAdminDataPreviewData(BaseModel):
+    """テーブル/ビューのデータ表示 response。"""
+
+    runtime: str = "deterministic"
+    sql: str = ""
+    results: QueryResults
+    warnings: list[str] = Field(default_factory=list)
+
+
+class DbAdminCsvUploadRequest(AdminExecutionConfirmation):
+    """既存テーブルへの CSV アップロード(INSERT / TRUNCATE&INSERT)request。"""
+
+    table_name: str = Field(min_length=1)
+    owner: str = ""
+    content_base64: str = Field(min_length=1)
+    filename: str = "upload.csv"
+    mode: Literal["insert", "truncate_insert"] = "insert"
+    max_rows: int | None = Field(default=None, ge=1, le=50000)
+
+
+class DbAdminCsvUploadData(BaseModel):
+    """CSV アップロード execution response。"""
+
+    table_name: str
+    filename: str = ""
+    mode: str = "insert"
+    matched_columns: list[str] = Field(default_factory=list)
+    unmatched_csv_columns: list[str] = Field(default_factory=list)
+    row_count: int = 0
+    success_count: int = 0
+    error_count: int = 0
+    row_errors: list[str] = Field(default_factory=list)
+    hint: str = ""
+    executed: bool = False
+    runtime: str = "deterministic"
+    sample_rows: list[dict[str, str | None]] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    timing: TimingEnvelope
+
+
+class DbAdminAiAnalysisRequest(BaseModel):
+    """Admin SQL 実行結果の AI 分析 request。"""
+
+    sql: str = ""
+    result_text: str = ""
+    target: Literal["table", "view", "data", "comment", "annotation"] = "table"
+
+
+class DbAdminAiAnalysisData(BaseModel):
+    """Admin SQL 実行結果の AI 分析 response。"""
+
+    analysis: str = ""
+    source: str = "deterministic"
+    warnings: list[str] = Field(default_factory=list)
+
+
+class DbAdminJoinWhereRequest(BaseModel):
+    """ビュー DDL の JOIN/WHERE 条件抽出 request。"""
+
+    ddl: str = Field(min_length=1)
+    prompt_profile: Literal["sql_structure"] = "sql_structure"
+
+
+class DbAdminJoinWhereData(BaseModel):
+    """ビュー DDL の JOIN/WHERE 条件抽出 response。"""
+
+    join_text: str = "None"
+    where_text: str = "None"
+    source: str = "deterministic"
+    warnings: list[str] = Field(default_factory=list)
+    prompt_profile: Literal["sql_structure"] = "sql_structure"
+    structure_markdown: str = ""
+
+
+class Nl2SqlResult(BaseModel):
+    """NL2SQL job result."""
+
+    business_release_id: str = ""
+    history_id: str = ""
+    engine: Nl2SqlEngine
+    engine_meta: dict[str, Any] = Field(default_factory=dict)
+    fallback_reason: str = ""
+    original_question: str
+    rewritten_question: str
+    generated_sql: str
+    executable_sql: str
+    explanation: str
+    safety: SafetyReport
+    recommendations: list[str] = Field(default_factory=list)
+    repaired_sql: str = ""
+    optimization_hints: list[str] = Field(default_factory=list)
+    results: QueryResults
+    timing: TimingEnvelope
+    interpretation: Nl2SqlInterpretationArtifact | None = None
+    show_prompt: Nl2SqlShowPromptArtifact | None = None
+
+
+class Nl2SqlQuestionInterpretation(BaseModel):
+    """検索質問を業務実行向けに解釈した表示用 artifact。"""
+
+    available: bool = False
+    source: str = "deterministic"
+    original_question: str = ""
+    rewritten_question: str = ""
+    profile_id: str = ""
+    profile_name: str = ""
+    profile_category: str = ""
+    target_objects: list[str] = Field(default_factory=list)
+    filters: list[str] = Field(default_factory=list)
+    group_by: list[str] = Field(default_factory=list)
+    order_by: list[str] = Field(default_factory=list)
+    aggregations: list[str] = Field(default_factory=list)
+    row_limit: int | None = None
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class Nl2SqlLogicalStep(BaseModel):
+    """処理手順 1 件を業務者向け(business)/技術者向け(technical)で併記する。"""
+
+    kind: str = ""
+    business: str = ""
+    technical: str = ""
+
+
+class Nl2SqlLogicalStructureItem(BaseModel):
+    """SQL 論理構造 1 項目を業務者向け/技術者向けで併記する。"""
+
+    kind: str = ""
+    business: str = ""
+    technical: str = ""
+
+
+class Nl2SqlSqlInterpretation(BaseModel):
+    """生成 SQL の意味構造を表示する artifact。"""
+
+    available: bool = False
+    source: str = "sql_semantics"
+    summary: str = ""
+    statement_type: str = ""
+    tables: list[str] = Field(default_factory=list)
+    columns: list[str] = Field(default_factory=list)
+    joins: list[str] = Field(default_factory=list)
+    filters: list[str] = Field(default_factory=list)
+    aggregations: list[str] = Field(default_factory=list)
+    group_by: list[str] = Field(default_factory=list)
+    order_by: list[str] = Field(default_factory=list)
+    limit: int | None = None
+    # 生成 SQL を業務向けに説明する決定論の処理手順(include_interpretation 時のみ非空)。
+    logical_steps: list[str] = Field(default_factory=list)
+    # 同じ手順を業務者向け/技術者向けで併記する構造化版(UI は空でなければこちらを描画)。
+    logical_step_details: list[Nl2SqlLogicalStep] = Field(default_factory=list)
+    semantic_graph: dict[str, Any] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class Nl2SqlOntologyGraphSnapshot(BaseModel):
+    """SQL 生成結果に同梱する profile-scoped Ontology graph snapshot。"""
+
+    revision_id: str = ""
+    revision: dict[str, Any] | None = None
+    nodes: list[dict[str, Any]] = Field(default_factory=list)
+    edges: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class Nl2SqlInterpretationArtifact(BaseModel):
+    """質問解釈と SQL 意味グラフの表示用 artifact。"""
+
+    available: bool = False
+    question: Nl2SqlQuestionInterpretation = Field(default_factory=Nl2SqlQuestionInterpretation)
+    sql: Nl2SqlSqlInterpretation = Field(default_factory=Nl2SqlSqlInterpretation)
+    ontology_graph: Nl2SqlOntologyGraphSnapshot | None = None
+    # use_ontology_context のエコー。False のとき UI は Ontology 接地確認を表示しない。
+    # 既存永続 job(フィールド無し)は従来挙動を保つため default True。
+    ontology_grounding_enabled: bool = True
+    warnings: list[str] = Field(default_factory=list)
+
+
+class Nl2SqlShowPromptArtifact(BaseModel):
+    """Select AI showprompt の表示用 artifact。"""
+
+    available: bool = False
+    engine: Nl2SqlEngine = Nl2SqlEngine.SELECT_AI
+    action: str = "showprompt"
+    prompt: str = ""
+    unavailable_reason: str = ""
+    warnings: list[str] = Field(default_factory=list)
+
+
+class SelectAiRequestOverrides(BaseModel):
+    """1 回の DBMS_CLOUD_AI.GENERATE 呼び出しだけに適用する属性。"""
+
+    role: str = ""
+    additional_instructions: str = ""
+
+    def has_values(self) -> bool:
+        return bool(self.role.strip() or self.additional_instructions.strip())
+
+
+def _validate_select_ai_request_overrides(
+    engine: Nl2SqlEngine, overrides: SelectAiRequestOverrides | None
+) -> None:
+    if overrides is not None and overrides.has_values() and engine != Nl2SqlEngine.SELECT_AI:
+        raise ValueError("select_ai_overrides は engine=select_ai の場合のみ指定できます。")
+
+
+class PreviewRequest(BaseModel):
+    """自然言語から SQL を生成し、実行せずに safety を返す。"""
+
+    question: str = Field(min_length=1)
+    engine: Nl2SqlEngine = Nl2SqlEngine.SELECT_AI
+    profile_id: str | None = None
+    allowed_objects: AllowedObjects = Field(default_factory=AllowedObjects)
+    row_limit: int | None = Field(default=None, ge=1, le=5000)
+    select_ai_overrides: SelectAiRequestOverrides | None = None
+    ontology_context: OntologySqlGenerationContext | None = None
+    use_glossary: bool = False
+
+    @model_validator(mode="after")
+    def validate_select_ai_overrides(self) -> PreviewRequest:
+        _validate_select_ai_request_overrides(self.engine, self.select_ai_overrides)
+        return self
+
+
+class PreviewData(BaseModel):
+    """Preview response.
+
+    既存テスト互換のため sql/is_safe/row_limit/note を残し、詳細情報を足す。
+    """
+
+    sql: str
+    is_safe: bool
+    row_limit: int
+    note: str
+    engine: Nl2SqlEngine = Nl2SqlEngine.SELECT_AI
+    engine_meta: dict[str, Any] = Field(default_factory=dict)
+    fallback_reason: str = ""
+    rewritten_question: str = ""
+    executable_sql: str = ""
+    safety: SafetyReport | None = None
+    recommendations: list[str] = Field(default_factory=list)
+    repaired_sql: str = ""
+    optimization_hints: list[str] = Field(default_factory=list)
+    timing: TimingEnvelope | None = None
+
+
+class ExecuteRequest(BaseModel):
+    """Profile と独立した SQL execution request.
+
+    実行スコープは route 側で principal に許可された業務プロファイル群へ強制される。
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    sql: str = Field(min_length=1)
+    allowed_objects: AllowedObjects = Field(default_factory=AllowedObjects)
+    # 未指定/null は「total result maximum なし」として保持する。
+    # driver memory 保護は Oracle adapter の batch fetch で行い、100 件へ暗黙正規化しない。
+    row_limit: int | None = Field(default=None, ge=1, le=100000)
+
+
+class JobCreateRequest(BaseModel):
+    """非同期 NL2SQL job create request."""
+
+    question: str = Field(min_length=1)
+    engine: Nl2SqlEngine = Nl2SqlEngine.SELECT_AI
+    profile_id: str | None = None
+    allowed_objects: AllowedObjects = Field(default_factory=AllowedObjects)
+    row_limit: int | None = Field(default=None, ge=1, le=5000)
+    select_ai_overrides: SelectAiRequestOverrides | None = None
+    use_glossary: bool = False
+    use_ontology_context: bool = True
+    include_interpretation: bool = False
+    include_show_prompt: bool = False
+
+    @model_validator(mode="after")
+    def validate_select_ai_overrides(self) -> JobCreateRequest:
+        _validate_select_ai_request_overrides(self.engine, self.select_ai_overrides)
+        return self
+
+
+class JobCreateData(BaseModel):
+    """非同期 job create response."""
+
+    job_id: str
+    status: JobStatus
+    created_at: str
+    steps: list[JobStepData] = Field(default_factory=list)
+
+
+class JobData(BaseModel):
+    """非同期 job status response."""
+
+    business_release_id: str = ""
+    job_id: str
+    status: JobStatus
+    created_at: str
+    started_at: str | None = None
+    finished_at: str | None = None
+    elapsed_ms: int | None = None
+    result: Nl2SqlResult | None = None
+    error_message: str | None = None
+    # 機械判定用の失敗分類(例: SCHEMA_CATALOG_EMPTY)。表示文言は error_message が正本。
+    error_code: str | None = None
+    warning_message: str | None = None
+    timing: TimingEnvelope | None = None
+    steps: list[JobStepData] = Field(default_factory=list)
+
+
+class HistoryItem(BaseModel):
+    """検索履歴。"""
+
+    business_release_id: str = ""
+    id: str
+    question: str
+    engine: Nl2SqlEngine
+    generated_sql: str
+    created_at: str
+    elapsed_ms: int | None = None
+    generation_elapsed_ms: int | None = None
+    engine_timings: list[EngineTiming] = Field(default_factory=list)
+    stage_timings: list[StageTiming] = Field(default_factory=list)
+    feedback_rating: FeedbackRating | None = None
+    profile_id: str = ""
+    profile_name: str = ""
+    profile_category: str = ""
+    rewritten_question: str = ""
+    executable_sql: str = ""
+    safety_is_safe: bool = True
+    result_row_count: int = 0
+    result_columns: list[str] = Field(default_factory=list)
+    feedback_comment: str = ""
+    feedback_updated_at: str = ""
+    admin_feedback_rating: FeedbackRating | None = None
+    admin_feedback_content: str = ""
+    admin_feedback_updated_at: str = ""
+    session_id: str = ""
+    actor_user_uuid: str = ""
+    # 履歴 API の管理者向け応答で現在のユーザー情報を補完する。
+    actor_login_user_id: str = ""
+    actor_display_name: str = ""
+    ontology_trace_summary: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def drop_legacy_feedback_rating(cls, value: Any) -> Any:
+        """廃止済み評価(旧 needs_review 等)を持つ snapshot は None(未評価)へ縮退する。"""
+        if not isinstance(value, dict):
+            return value
+        rating = value.get("feedback_rating")
+        if rating is not None and rating not in tuple(FeedbackRating):
+            migrated = dict(value)
+            migrated["feedback_rating"] = None
+            return migrated
+        return value
+
+
+class HistoryData(BaseModel):
+    """検索履歴 response(cursor pagination)。"""
+
+    items: list[HistoryItem]
+    # 続きがあるときだけ非空。UI は「さらに読み込む」でこの cursor を渡す。
+    next_cursor: str = ""
+    # フィルタ適用後の総件数(read model が数えられないときは None)。
+    total: int | None = None
+
+
+class FeedbackRequest(BaseModel):
+    """検索結果への feedback request."""
+
+    history_id: str
+    rating: FeedbackRating
+    comment: str = ""
+    feedback_content: str = ""
+
+    @model_validator(mode="after")
+    def normalize_feedback_content(self) -> FeedbackRequest:
+        """UI の feedback_content 名と既存 comment 名を互換にする。"""
+        if not self.comment and self.feedback_content:
+            self.comment = self.feedback_content
+        elif not self.feedback_content and self.comment:
+            self.feedback_content = self.comment
+        return self
+
+
+class FeedbackData(BaseModel):
+    """Feedback response."""
+
+    history_id: str
+    rating: FeedbackRating
+    saved: bool
+    comment: str = ""
+    feedback_content: str = ""
+
+
+class FeedbackClearData(BaseModel):
+    """アプリ内 feedback を履歴を残したまま解除した response。"""
+
+    history_id: str
+    cleared: bool = True
+
+
+class FeedbackRecord(HistoryItem):
+    """管理画面向けのアプリ内 feedback と classifier 連携状態。"""
+
+    training_status: str = ""
+    training_example_id: str = ""
+
+
+class FeedbackListData(BaseModel):
+    """Cursor pagination 対応のアプリ内 feedback 一覧。"""
+
+    items: list[FeedbackRecord] = Field(default_factory=list)
+    total: int = 0
+    next_cursor: str = ""
+
+
+class FeedbackIndexRequest(StrictMutationRequest):
+    """Feedback learning index management request."""
+
+    include_bad: bool = Field(
+        default=False,
+        deprecated=True,
+        description="互換用の非推奨フィールドです。現在は管理者レビューが良い履歴のみ索引対象です。",
+    )
+
+
+class FeedbackIndexData(BaseModel):
+    """Feedback learning vector index status / operation response."""
+
+    operation: str
+    status: str
+    executed: bool = False
+    runtime: str = "deterministic"
+    source_history_count: int = 0
+    indexable_count: int = 0
+    indexed_count: int = 0
+    vector_dimension: int = 1536
+    vector_backend: str = "oracle_26ai"
+    embedding_provider: str = "oci_genai"
+    embedding_model: str = ""
+    embedding_configured: bool = False
+    ddl: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    timing: TimingEnvelope
+
+
+class FeedbackVectorEntry(BaseModel):
+    """Feedback vector/index management row shown in Learning operations."""
+
+    history_id: str
+    question: str
+    generated_sql: str
+    profile_id: str = ""
+    profile_name: str = ""
+    profile_category: str = ""
+    feedback_rating: FeedbackRating | None = None
+    feedback_comment: str = ""
+    admin_feedback_rating: FeedbackRating | None = None
+    admin_feedback_content: str = ""
+    admin_feedback_updated_at: str = ""
+    indexed: bool = False
+    created_at: str = ""
+
+
+class FeedbackEntriesData(BaseModel):
+    """Feedback management entries response."""
+
+    items: list[FeedbackVectorEntry] = Field(default_factory=list)
+    total: int = 0
+    indexed_count: int = 0
+    warnings: list[str] = Field(default_factory=list)
+
+
+class FeedbackEntriesDeleteRequest(BaseModel):
+    """Delete feedback/history entries from the learning store."""
+
+    history_ids: list[str] = Field(default_factory=list)
+
+
+class FeedbackSearchConfigRequest(BaseModel):
+    """Similarity search defaults used when request does not override them."""
+
+    similarity_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+    match_limit: int | None = Field(default=None, ge=1, le=20)
+
+
+class FeedbackSearchConfigData(BaseModel):
+    """Current feedback learning retrieval config."""
+
+    similarity_threshold: float = 0.0
+    match_limit: int = 3
+
+
+class DemoLearningData(BaseModel):
+    """Demo learning data seed response."""
+
+    seeded_history_count: int
+    seeded_feedback_count: int
+    history_ids: list[str] = Field(default_factory=list)
+    profile_ids: list[str] = Field(default_factory=list)
+    message: str
+
+
+class SimilarHistoryRequest(BaseModel):
+    """類似履歴検索 request."""
+
+    question: str = Field(min_length=1)
+    profile_id: str | None = None
+    engine: Nl2SqlEngine | None = None
+    limit: int | None = Field(default=None, ge=1, le=20)
+
+
+class SimilarHistoryItem(BaseModel):
+    """類似履歴の 1 件。"""
+
+    history_id: str
+    question: str
+    sql: str
+    profile_id: str = ""
+    profile_name: str = ""
+    score: float
+    reason: str
+
+
+class SimilarHistoryData(BaseModel):
+    """類似履歴検索 response."""
+
+    items: list[SimilarHistoryItem] = Field(default_factory=list)
+    used_for_generation: bool = True
+    engine: Nl2SqlEngine | None = None
+
+
+class ProfileRecommendationRequest(BaseModel):
+    """質問から業務 profile / schema 範囲を推薦する request."""
+
+    question: str = Field(min_length=1)
+    current_profile_id: str | None = None
+
+
+class ProfileRecommendationCandidate(BaseModel):
+    """Profile recommendation candidate."""
+
+    profile_id: str
+    profile_name: str
+    score: float
+    matched_terms: list[str] = Field(default_factory=list)
+    allowed_tables: list[str] = Field(default_factory=list)
+    category: str = ""
+
+
+class ProfileRecommendationData(BaseModel):
+    """Profile recommendation response."""
+
+    recommended_profile_id: str
+    recommended_profile_name: str
+    recommended_profile_category: str = ""
+    confidence: float
+    confidence_threshold: float = 0.3
+    reason: str
+    rewritten_question: str
+    recommended_allowed_objects: AllowedObjects
+    candidates: list[ProfileRecommendationCandidate] = Field(default_factory=list)
+    recommendation_source: str = "deterministic"
+    classifier_version: str = ""
+    category_scores: dict[str, float] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class ClassifierTrainingExample(BaseModel):
+    """Imported classifier training example."""
+
+    id: str
+    category: str
+    text: str
+    profile_id: str = ""
+    profile_name: str = ""
+    profile_category: str = ""
+    source: str = ""
+    source_type: Literal["file", "feedback"] = "file"
+    source_history_id: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+
+
+class ClassifierTrainingExampleUpdateRequest(BaseModel):
+    """Training example の質問/Profile 対応を修正する request。"""
+
+    text: str = Field(min_length=1)
+    profile_id: str = Field(min_length=1)
+
+
+class ClassifierTrainingCandidate(BaseModel):
+    """SQL feedback から導出した classifier training 候補。"""
+
+    history_id: str
+    question: str
+    profile_id: str = ""
+    profile_name: str = ""
+    profile_category: str = ""
+    feedback_rating: FeedbackRating | None = None
+    feedback_comment: str = ""
+    created_at: str = ""
+    status: Literal[
+        "pending",
+        "added",
+        "already_covered",
+        "conflict",
+        "profile_missing",
+        "source_changed",
+    ]
+    eligible: bool = False
+    training_example_id: str = ""
+    conflict_profile_ids: list[str] = Field(default_factory=list)
+
+
+class ClassifierTrainingCandidatesData(BaseModel):
+    """Cursor pagination 対応の feedback training 候補一覧。"""
+
+    items: list[ClassifierTrainingCandidate] = Field(default_factory=list)
+    total: int = 0
+    next_cursor: str = ""
+    pending_count: int = 0
+    added_count: int = 0
+    attention_count: int = 0
+
+
+class ClassifierFeedbackSelection(BaseModel):
+    """Feedback 候補の確認対象。profile_id は確認時の修正値を許可する。"""
+
+    history_id: str = Field(min_length=1)
+    profile_id: str = ""
+
+
+class ClassifierFeedbackImportRequest(BaseModel):
+    """確認済み feedback を training data に追加する request。"""
+
+    items: list[ClassifierFeedbackSelection] = Field(min_length=1, max_length=100)
+
+
+class ClassifierFeedbackImportResult(BaseModel):
+    """Feedback ごとの追加結果。"""
+
+    history_id: str
+    status: str
+    training_example_id: str = ""
+    profile_id: str = ""
+    message: str = ""
+
+
+class ClassifierFeedbackImportData(BaseModel):
+    """Feedback training data 追加 response。"""
+
+    imported_count: int = 0
+    skipped_count: int = 0
+    total_examples: int = 0
+    stale: bool = False
+    results: list[ClassifierFeedbackImportResult] = Field(default_factory=list)
+
+
+class ClassifierImportData(BaseModel):
+    """Classifier training data import response."""
+
+    imported_count: int
+    skipped_count: int = 0
+    total_examples: int
+    categories: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    examples: list[ClassifierTrainingExample] = Field(default_factory=list)
+
+
+class ClassifierTrainingDataData(BaseModel):
+    """Classifier training data listing response."""
+
+    total_examples: int = 0
+    categories: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    examples: list[ClassifierTrainingExample] = Field(default_factory=list)
+
+
+class ClassifierStatusData(BaseModel):
+    """Classifier training/runtime status."""
+
+    ready: bool = False
+    trained: bool = False
+    stale: bool = False
+    classifier_version: str = ""
+    updated_at: str = ""
+    example_count: int = 0
+    category_count: int = 0
+    categories: list[str] = Field(default_factory=list)
+    embedding_model: str = ""
+    vector_dimension: int = 1536
+    persistence_mode: str = "memory"
+    recommendation_source: str = "deterministic"
+    metrics: dict[str, float | int | str] = Field(default_factory=dict)
+    trained_example_count: int = 0
+    pending_change_count: int = 0
+    warnings: list[str] = Field(default_factory=list)
+
+
+class ClassifierModelInfo(BaseModel):
+    """Persisted current classifier model metadata."""
+
+    version: str
+    active: bool = False
+    updated_at: str = ""
+    category_count: int = 0
+    categories: list[str] = Field(default_factory=list)
+    embedding_model: str = ""
+    vector_dimension: int = 1536
+    metrics: dict[str, float | int | str] = Field(default_factory=dict)
+    source: str = "oracle_state"
+
+
+class ClassifierModelImportData(BaseModel):
+    """Single classifier model artifact import response.
+
+    ``active_version`` is retained for compatibility with the former registry API.
+    """
+
+    imported: bool = False
+    active_version: str = ""
+    model: ClassifierModelInfo | None = None
+    warnings: list[str] = Field(default_factory=list)
+
+
+class ClassifierTrainRequest(BaseModel):
+    """Train LogisticRegression classifier from imported examples."""
+
+    min_examples_per_category: int = Field(default=1, ge=1, le=100)
+
+
+class ClassifierPredictRequest(BaseModel):
+    """Classifier prediction request."""
+
+    question: str = Field(min_length=1)
+    top_k: int = Field(default=3, ge=1, le=10)
+
+
+class ClassifierPredictionCandidate(BaseModel):
+    """Classifier prediction candidate mapped to a profile when possible."""
+
+    category: str
+    score: float
+    profile_id: str = ""
+    profile_name: str = ""
+    profile_category: str = ""
+
+
+class ClassifierPredictionData(BaseModel):
+    """Classifier prediction response."""
+
+    recommendation_source: str
+    classifier_version: str = ""
+    predicted_category: str = ""
+    confidence: float = 0.0
+    candidates: list[ClassifierPredictionCandidate] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class RewriteRequest(BaseModel):
+    """Question rewrite request."""
+
+    question: str = Field(min_length=1)
+    profile_id: str | None = None
+    use_glossary: bool = True
+    # LLM 書き換えを廃止したため未使用。既存 client 互換のため field だけ残す。
+    extra_prompt: str = ""
+
+
+class RewriteData(BaseModel):
+    """Question rewrite response."""
+
+    original_question: str
+    rewritten_question: str
+    source: str = "deterministic"
+    model: str = ""
+    warnings: list[str] = Field(default_factory=list)
+
+
+class AnalyzeRequest(BaseModel):
+    """SQL analysis request."""
+
+    sql: str = Field(min_length=1)
+    allowed_objects: AllowedObjects = Field(default_factory=AllowedObjects)
+    row_limit: int | None = Field(default=None, ge=1, le=5000)
+    use_llm: bool = False
+
+
+class AnalyzeData(BaseModel):
+    """SQL analysis response."""
+
+    safety: SafetyReport
+    explanation: str
+    recommendations: list[str]
+    executable_sql: str
+    repaired_sql: str = ""
+    optimization_hints: list[str] = Field(default_factory=list)
+    structure_summary: str = ""
+    risk_level: str = "low"
+    statement_type: str = "SELECT"
+    object_names: list[str] = Field(default_factory=list)
+    column_names: list[str] = Field(default_factory=list)
+    conditions: list[str] = Field(default_factory=list)
+    group_by: list[str] = Field(default_factory=list)
+    order_by: list[str] = Field(default_factory=list)
+    risk_findings: list[str] = Field(default_factory=list)
+    repair_candidates: list[str] = Field(default_factory=list)
+    operations: list[str] = Field(default_factory=list)
+    filters: list[str] = Field(default_factory=list)
+    joins: list[str] = Field(default_factory=list)
+    aggregations: list[str] = Field(default_factory=list)
+    llm_enhanced: bool = False
+    llm_warnings: list[str] = Field(default_factory=list)
+
+
+class AssetRefreshData(BaseModel):
+    """Select AI / Agent asset refresh response."""
+
+    engine: Nl2SqlEngine
+    refreshed: bool
+    status: str = "ready"
+    refreshed_at: str = ""
+    profile_name: str = ""
+    team_name: str = ""
+    warning: str = ""
+    asset_names: dict[str, str] = Field(default_factory=dict)
+    engine_meta: dict[str, Any] = Field(default_factory=dict)
+
+
+class AssetCleanupData(BaseModel):
+    """Select AI / Agent asset cleanup response."""
+
+    engine: Nl2SqlEngine
+    executed: bool
+    status: str = "error"
+    cleaned_at: str = ""
+    profile_name: str = ""
+    team_name: str = ""
+    warning: str = ""
+    asset_names: dict[str, str] = Field(default_factory=dict)
+    engine_meta: dict[str, Any] = Field(default_factory=dict)
+    profile_list_refresh_job_id: str = ""
+    profile_list_refresh_required: bool = False
+    profile_list_refresh_reason_code: str = ""
+
+
+class AssetCleanupRequest(AdminExecutionConfirmation):
+    """Select AI / Agent asset cleanup request."""
+
+    profile_id: str | None = None
+    engines: list[Nl2SqlEngine] = Field(
+        default_factory=lambda: [Nl2SqlEngine.SELECT_AI_AGENT, Nl2SqlEngine.SELECT_AI]
+    )
+
+
+class ProfileDeleteData(BaseModel):
+    """業務 profile 削除と Oracle asset cleanup の結果。"""
+
+    profile: Nl2SqlProfile
+    oracle_cleanup: list[AssetCleanupData] = Field(default_factory=list)
+
+
+class SelectAiDbProfile(BaseModel):
+    """Oracle DBMS_CLOUD_AI profile metadata."""
+
+    name: str
+    status: str = "unknown"
+    owner: str = ""
+    created_at: str = ""
+    description: str = ""
+    category: str = ""
+    object_list: list[dict[str, Any]] = Field(default_factory=list)
+    tables: list[str] = Field(default_factory=list)
+    views: list[str] = Field(default_factory=list)
+    region: str = ""
+    model: str = ""
+    embedding_model: str = ""
+    schema_text: str = ""
+    context_ddl: str = ""
+    attributes: dict[str, Any] = Field(default_factory=dict)
+
+
+class SelectAiDbProfileRefreshMode(StrEnum):
+    """Oracle DB profile list refresh の実行範囲。"""
+
+    FULL = "full"
+    TARGETED = "targeted"
+
+
+class SelectAiDbProfileRefreshStatus(StrEnum):
+    """Oracle DB profile list refresh job の状態。"""
+
+    PENDING = "pending"
+    RUNNING = "running"
+    DONE = "done"
+    ERROR = "error"
+
+
+class SelectAiDbProfileRefreshPhase(StrEnum):
+    """Oracle DB profile list refresh job の進捗段階。"""
+
+    QUEUED = "queued"
+    FETCHING = "fetching"
+    PERSISTING = "persisting"
+    DONE = "done"
+
+
+class SelectAiDbProfileRefreshTarget(BaseModel):
+    """Targeted DB profile refresh で確認する profile。"""
+
+    profile_name: str
+    expected_state: Literal["present", "absent", "unknown"] = "unknown"
+
+
+class SelectAiDbProfileRefreshJobData(BaseModel):
+    """Oracle DB profile list refresh job."""
+
+    worker_id: str = ""
+    attempt: int = 0
+    heartbeat_at: str | None = None
+    lease_expires_at: str | None = None
+    deadline_at: str | None = None
+    job_id: str
+    status: SelectAiDbProfileRefreshStatus = SelectAiDbProfileRefreshStatus.PENDING
+    mode: SelectAiDbProfileRefreshMode = SelectAiDbProfileRefreshMode.FULL
+    source: str = "manual"
+    target_profiles: list[SelectAiDbProfileRefreshTarget] = Field(default_factory=list)
+    requires_full_refresh: bool = False
+    phase: SelectAiDbProfileRefreshPhase = SelectAiDbProfileRefreshPhase.QUEUED
+    created_at: str
+    started_at: str | None = None
+    finished_at: str | None = None
+    total_profiles: int = 0
+    processed_profiles: int = 0
+    scanned_profiles: int = 0
+    changed_profiles: int = 0
+    deleted_profiles: int = 0
+    error_code: str = ""
+    error_message: str = ""
+
+
+class SelectAiDbProfilesData(BaseModel):
+    """Oracle Select AI profile list response."""
+
+    runtime: str = "deterministic"
+    profiles: list[SelectAiDbProfile] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    profile_list_refresh_required: bool = False
+    profile_list_refresh_reason_code: str = ""
+
+
+class SelectAiDbProfileDropRequest(AdminExecutionConfirmation):
+    """Drop an Oracle Select AI profile by exact profile name."""
+
+
+class SelectAiDbProfileDetailData(BaseModel):
+    """Oracle Select AI profile detail response."""
+
+    runtime: str = "deterministic"
+    profile: SelectAiDbProfile
+    warnings: list[str] = Field(default_factory=list)
+
+
+class SelectAiDbProfileUpsertRequest(AdminExecutionConfirmation):
+    """Create/update an Oracle Select AI profile from low-level attributes JSON."""
+
+    profile_name: str = Field(min_length=1)
+    attributes: dict[str, Any] = Field(default_factory=dict)
+    description: str = ""
+    category: str = ""
+    original_name: str = ""
+
+
+class SelectAiDbProfileMutationData(BaseModel):
+    """Oracle Select AI profile create/update/import/export mutation response."""
+
+    runtime: str = "deterministic"
+    executed: bool = False
+    status: str = "error"
+    profile_name: str = ""
+    original_name: str = ""
+    ddl: list[str] = Field(default_factory=list)
+    profile: SelectAiDbProfile | None = None
+    warnings: list[str] = Field(default_factory=list)
+    engine_meta: dict[str, Any] = Field(default_factory=dict)
+    profile_list_refresh_job_id: str = ""
+    profile_list_refresh_required: bool = False
+    profile_list_refresh_reason_code: str = ""
+
+
+class ProfileSyncJobStatus(StrEnum):
+    """業務 Profile から Oracle asset へ反映する永続 job 状態。"""
+
+    QUEUED = "queued"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class ProfileSyncJobPhase(StrEnum):
+    """Oracle Profile 同期のユーザー向け進捗段階。"""
+
+    QUEUED = "queued"
+    SYNCING_ORACLE_PROFILE = "syncing_oracle_profile"
+    REBUILDING_AGENT_ASSETS = "rebuilding_agent_assets"
+    VERIFYING = "verifying"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class ProfileSyncJobRequest(AdminExecutionConfirmation):
+    """Oracle Profile 同期を受け付ける要求。確認語は job へ保存しない。"""
+
+    rebuild_agent_assets: bool = False
+
+
+class ProfileSyncJobData(BaseModel):
+    """永続 Oracle Profile 同期 job。"""
+
+    job_id: str = Field(min_length=1)
+    profile_id: str = Field(min_length=1)
+    profile_etag: str = ""
+    original_name: str = ""
+    status: ProfileSyncJobStatus = ProfileSyncJobStatus.QUEUED
+    phase: ProfileSyncJobPhase = ProfileSyncJobPhase.QUEUED
+    rebuild_agent_assets: bool = False
+    oracle_result: SelectAiDbProfileMutationData | None = None
+    agent_result: AssetRefreshData | None = None
+    error_code: str = ""
+    error_message_ja: str = ""
+    retry_of_job_id: str = ""
+    created_at: str = ""
+    deadline_at: str = ""
+    started_at: str = ""
+    finished_at: str = ""
+
+
+class SelectAiProfilesExportData(BaseModel):
+    """Select AI profiles JSON export response."""
+
+    profiles: list[SelectAiDbProfile] = Field(default_factory=list)
+    exported_at: str = ""
+
+
+class SelectAiProfilesImportRequest(AdminExecutionConfirmation):
+    """Import Select AI profile JSON definitions."""
+
+    profiles: list[SelectAiDbProfile] = Field(default_factory=list)
+    replace_existing: bool = False
+
+
+class SelectAiFeedbackEntry(BaseModel):
+    """Oracle Select AI feedback vector table row."""
+
+    content: str = ""
+    sql_id: str = ""
+    sql_text: str = ""
+    attributes: dict[str, Any] = Field(default_factory=dict)
+    raw_attributes: str = ""
+
+
+class SelectAiFeedbackEntriesData(BaseModel):
+    """Oracle Select AI feedback management list response."""
+
+    runtime: str = "deterministic"
+    profile_name: str = ""
+    index_name: str = ""
+    table_name: str = ""
+    # feedback vector table の所有者（current schema）と所有者付きの表名。
+    table_owner: str = ""
+    table_qualified_name: str = ""
+    items: list[SelectAiFeedbackEntry] = Field(default_factory=list)
+    total: int = 0
+    warnings: list[str] = Field(default_factory=list)
+
+
+class SelectAiFeedbackDeleteRequest(BaseModel):
+    """Delete one Oracle Select AI feedback entry by SQL text."""
+
+    profile_name: str = Field(min_length=1)
+    sql_text: str = Field(min_length=1)
+
+
+class SelectAiFeedbackVectorIndexRequest(BaseModel):
+    """Update Oracle Select AI feedback vector index attributes."""
+
+    profile_name: str = Field(min_length=1)
+    similarity_threshold: float = Field(default=0.9, ge=0.1, le=0.95)
+    match_limit: int = Field(default=3, ge=1, le=5)
+
+
+class SelectAiFeedbackAddRequest(BaseModel):
+    """Add one DBMS_CLOUD_AI feedback item from the SQL generation flow."""
+
+    profile_id: str = Field(default="default", min_length=1)
+    profile_name: str = ""
+    question: str = Field(min_length=1)
+    feedback_type: Literal["positive", "negative"] = "positive"
+    response: str = ""
+    feedback_content: str = ""
+    generated_sql: str = ""
+
+    @model_validator(mode="after")
+    def validate_feedback_payload(self) -> SelectAiFeedbackAddRequest:
+        if self.feedback_type == "negative" and not self.response.strip():
+            raise ValueError("negative feedback では修正SQL(response)が必須です。")
+        return self
+
+
+class SelectAiFeedbackAddData(BaseModel):
+    """DBMS_CLOUD_AI feedback ADD mutation response."""
+
+    runtime: str = "deterministic"
+    executed: bool = False
+    status: str = "error"
+    profile_name: str = ""
+    index_name: str = ""
+    table_name: str = ""
+    sql_text: str = ""
+    stored_feedback_type: str = ""
+    plsql_preview: str = ""
+    warnings: list[str] = Field(default_factory=list)
+    engine_meta: dict[str, Any] = Field(default_factory=dict)
+
+
+class AdminFeedbackReviewRequest(BaseModel):
+    """管理者によるアプリ内 feedback review request。"""
+
+    history_id: str = Field(min_length=1)
+    rating: FeedbackRating
+    feedback_content: str = ""
+    register_select_ai_feedback: bool = False
+    select_ai_response: str = ""
+    select_ai_profile_name: str = ""
+
+
+class SimilarHistoryPublishData(BaseModel):
+    """管理者 review に連動した類似履歴公開状態。"""
+
+    history_id: str = ""
+    status: Literal["published", "unpublished", "skipped", "warning"] = "skipped"
+    runtime: str = "deterministic"
+    executed: bool = False
+    table_name: str = ""
+    index_name: str = ""
+    warnings: list[str] = Field(default_factory=list)
+
+
+class AdminFeedbackReviewData(BaseModel):
+    """管理者 feedback review response."""
+
+    history_id: str
+    rating: FeedbackRating
+    saved: bool
+    feedback_content: str = ""
+    select_ai_feedback: SelectAiFeedbackAddData | None = None
+    similar_history_publish: SimilarHistoryPublishData | None = None
+
+
+class SelectAiFeedbackMutationData(BaseModel):
+    """Oracle Select AI feedback mutation response."""
+
+    runtime: str = "deterministic"
+    executed: bool = False
+    status: str = "error"
+    profile_name: str = ""
+    index_name: str = ""
+    table_name: str = ""
+    warnings: list[str] = Field(default_factory=list)
+    engine_meta: dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentTeamRunRequest(BaseModel):
+    """Select AI Agent team run request."""
+
+    prompt: str = Field(min_length=1)
+    team_name: str = ""
+    profile_id: str | None = None
+    conversation_id: str = ""
+    tool_name: str = ""
+
+
+class AgentTeamRunData(BaseModel):
+    """Select AI Agent team run response."""
+
+    team_name: str
+    prompt: str
+    generated_sql: str = ""
+    conversation_id: str = ""
+    runtime: str = "deterministic"
+    warnings: list[str] = Field(default_factory=list)
+    engine_meta: dict[str, Any] = Field(default_factory=dict)
+
+
+class SelectAiAgentAsset(BaseModel):
+    """Select AI Agent asset names and attributes."""
+
+    profile_id: str = ""
+    profile_name: str = ""
+    tool_name: str = ""
+    agent_name: str = ""
+    task_name: str = ""
+    team_name: str = ""
+    source: str = "state"
+    attributes: dict[str, Any] = Field(default_factory=dict)
+
+
+class SelectAiAgentAssetsData(BaseModel):
+    """Select AI Agent assets response."""
+
+    runtime: str = "deterministic"
+    items: list[SelectAiAgentAsset] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class AgentToolRunRequest(BaseModel):
+    """Select AI Agent tool run request."""
+
+    prompt: str = Field(min_length=1)
+    tool_name: str = Field(min_length=1)
+    conversation_id: str = ""
+
+
+class AgentConversationCreateRequest(BaseModel):
+    """Create Select AI Agent conversation request."""
+
+    profile_id: str | None = None
+    team_name: str = ""
+
+
+class AgentConversationCreateData(BaseModel):
+    """Create Select AI Agent conversation response."""
+
+    conversation_id: str = ""
+    runtime: str = "deterministic"
+    warnings: list[str] = Field(default_factory=list)
+
+
+class AgentConversationItem(BaseModel):
+    """Select AI Agent conversation prompt item."""
+
+    conversation_id: str
+    prompt: str
+    response: str = ""
+    created_at: str = ""
+    team_name: str = ""
+
+
+class AgentConversationsData(BaseModel):
+    """Select AI Agent conversation history response."""
+
+    runtime: str = "deterministic"
+    items: list[AgentConversationItem] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class ReverseSqlRequest(BaseModel):
+    """SQL から自然言語説明を生成する request."""
+
+    sql: str = Field(min_length=1)
+    profile_id: str | None = None
+    use_glossary: bool = False
+
+
+class StructureToSqlRequest(BaseModel):
+    """編集した論理構造のみを SQL 生成要件として受け付ける。"""
+
+    logical_structure: str = Field(min_length=1, max_length=100_000)
+    profile_id: str | None = None
+    use_glossary: bool = False
+
+
+class QuestionToSqlRequest(BaseModel):
+    """表示中の自然言語質問と対象 Profile だけを SQL 生成要件として受け付ける。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    question: str = Field(min_length=1, max_length=100_000)
+    profile_id: str | None = None
+
+
+class StructureToSqlOutput(BaseModel):
+    """LLM は再構築不能の場合に空 SQL と理由を返す。成功 API 応答とは分離する。"""
+
+    sql: str
+    explanation: str = ""
+
+
+class StructureToSqlData(BaseModel):
+    sql: str = Field(min_length=1)
+    explanation: str = ""
+    source: str = "oci_enterprise_ai"
+    warnings: list[str] = Field(default_factory=list)
+
+
+class ReverseStructureOutput(BaseModel):
+    logical_structure: str = Field(min_length=1, max_length=100_000)
+
+
+class ReverseQuestionOutput(BaseModel):
+    question: str = Field(min_length=1, max_length=100_000)
+    explanation: str = ""
+    logical_steps: list[str] = Field(default_factory=list, max_length=20)
+
+
+class ReverseSqlData(BaseModel):
+    """SQL reverse explanation response."""
+
+    question: str
+    explanation: str
+    referenced_tables: list[str]
+    sql_structure: str = ""
+    logical_structure: str = ""
+    logical_structure_items: list[Nl2SqlLogicalStructureItem] = Field(default_factory=list)
+    logical_steps: list[str] = Field(default_factory=list)
+    logical_step_details: list[Nl2SqlLogicalStep] = Field(default_factory=list)
+    source: str = "deterministic"
+    warnings: list[str] = Field(default_factory=list)
+
+
+class CommentSuggestion(BaseModel):
+    """Table / column comment suggestion."""
+
+    object_name: str
+    object_type: str
+    suggested_comment: str
+
+
+class CommentSuggestionRequest(BaseModel):
+    """Comment generation options."""
+
+    use_llm: bool = False
+    max_items: int = Field(default=120, ge=1, le=500)
+
+
+class CommentSuggestionData(BaseModel):
+    """Comment suggestions response."""
+
+    suggestions: list[CommentSuggestion]
+    source: str = "deterministic"
+    warnings: list[str] = Field(default_factory=list)
+
+
+class CommentApplyItem(BaseModel):
+    """Table / column comment apply request item."""
+
+    object_name: str = Field(min_length=1, max_length=260)
+    object_type: str = Field(default="column", min_length=1, max_length=32)
+    comment: str = Field(min_length=1, max_length=4000)
+
+
+class CommentApplyRequest(AdminExecutionConfirmation):
+    """Restricted COMMENT ON execution request."""
+
+    items: list[CommentApplyItem] = Field(default_factory=list)
+
+
+class CommentApplyStatement(BaseModel):
+    """Generated COMMENT ON statement result."""
+
+    object_name: str
+    object_type: str
+    comment: str
+    sql: str
+    status: str = "pending"
+    error_message: str = ""
+
+
+class CommentApplyData(BaseModel):
+    """Restricted COMMENT ON execution response."""
+
+    executed: bool = False
+    runtime: str = "deterministic"
+    statements: list[CommentApplyStatement] = Field(default_factory=list)
+    schema_refresh_job_id: str = ""
+    schema_refresh_required: bool = False
+    schema_refresh_reason_code: str = ""
+    warnings: list[str] = Field(default_factory=list)
+    timing: TimingEnvelope
+
+
+class AnnotationSuggestion(BaseModel):
+    """Oracle 23ai annotation suggestion for a table/view/column."""
+
+    object_name: str
+    object_type: str = "table"
+    annotation_name: str = "DESCRIPTION"
+    annotation_value: str
+
+
+class AnnotationSuggestionData(BaseModel):
+    """Annotation suggestions response."""
+
+    suggestions: list[AnnotationSuggestion] = Field(default_factory=list)
+    source: str = "deterministic"
+    warnings: list[str] = Field(default_factory=list)
+
+
+class AnnotationApplyItem(BaseModel):
+    """Annotation apply request item."""
+
+    object_name: str = Field(min_length=1, max_length=260)
+    object_type: str = Field(default="table", min_length=1, max_length=32)
+    annotation_name: str = Field(default="DESCRIPTION", min_length=1, max_length=64)
+    annotation_value: str = Field(min_length=1, max_length=4000)
+
+
+class AnnotationApplyRequest(AdminExecutionConfirmation):
+    """Restricted Oracle annotation execution request."""
+
+    items: list[AnnotationApplyItem] = Field(default_factory=list)
+
+
+class AnnotationApplyStatement(BaseModel):
+    """Generated Oracle annotation statement result."""
+
+    object_name: str
+    object_type: str
+    annotation_name: str
+    annotation_value: str
+    sql: str
+    status: str = "pending"
+    error_message: str = ""
+
+
+class AnnotationApplyData(BaseModel):
+    """Oracle annotation apply response."""
+
+    executed: bool = False
+    runtime: str = "deterministic"
+    statements: list[AnnotationApplyStatement] = Field(default_factory=list)
+    schema_refresh_job_id: str = ""
+    schema_refresh_required: bool = False
+    schema_refresh_reason_code: str = ""
+    warnings: list[str] = Field(default_factory=list)
+    timing: TimingEnvelope
+
+
+class MetadataSqlTarget(BaseModel):
+    """Comment / annotation generation target object."""
+
+    owner: str = ""
+    object_name: str = Field(min_length=1, max_length=260)
+    object_type: Literal[
+        "table",
+        "view",
+        "materialized_view",
+        "materialized view",
+        "TABLE",
+        "VIEW",
+        "MATERIALIZED_VIEW",
+        "MATERIALIZED VIEW",
+    ] = "table"
+
+    @field_validator("object_type", mode="before")
+    @classmethod
+    def normalize_object_type(cls, value: str) -> str:
+        return str(value or "table").lower()
+
+
+class DomainAnnotation(BaseModel):
+    """ドメインに付いた annotation(名前と値)。"""
+
+    name: str = Field(min_length=1, max_length=1024)
+    value: str = Field(default="", max_length=4000)
+
+
+class DomainColumnRef(BaseModel):
+    """ドメインが関連付いた表の列。"""
+
+    owner: str = ""
+    table_name: str = Field(min_length=1, max_length=128)
+    column_name: str = Field(min_length=1, max_length=128)
+
+
+class DomainDefinition(BaseModel):
+    """dictionary(ALL_DOMAINS 等)から復元した既存ドメインの定義。"""
+
+    owner: str = Field(min_length=1, max_length=128)
+    name: str = Field(min_length=1, max_length=128)
+    domain_type: Literal["single", "multi_column", "enumerated", "flexible"] = "single"
+    data_type: str = ""
+    strict: bool = False
+    nullable: bool = True
+    constraints: list[str] = Field(default_factory=list)
+    display: str = ""
+    order: str = ""
+    annotations: list[DomainAnnotation] = Field(default_factory=list)
+    columns: list[DomainColumnRef] = Field(default_factory=list)
+    """schema 内でこのドメインが関連付いた全ての表列(選択外の表を含む)。"""
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def qualified_name(self) -> str:
+        return qualified_object_name(self.owner, self.name)
+
+
+class DomainInventoryRequest(BaseModel):
+    """対象表の列に付いた既存ドメインの取得要求。"""
+
+    targets: list[MetadataSqlTarget] = Field(default_factory=list, max_length=100)
+
+
+class DomainInventoryData(BaseModel):
+    """既存ドメインの定義と、LLM へ渡す表示テキスト。"""
+
+    domains: list[DomainDefinition] = Field(default_factory=list)
+    domain_text: str = ""
+    runtime: str = "deterministic"
+    warnings: list[str] = Field(default_factory=list)
+
+
+DomainOperation = Literal["create", "update", "rebuild", "delete"]
+
+
+class MetadataSqlSampleTarget(MetadataSqlTarget):
+    """対象オブジェクトから代表値を取得するための列指定。"""
+
+    columns: list[str] = Field(default_factory=list, max_length=1000)
+
+
+class MetadataSqlSampleRequest(BaseModel):
+    """コメント/アノテーション SQL 生成前のサンプル再取得要求。"""
+
+    targets: list[MetadataSqlSampleTarget] = Field(default_factory=list, max_length=100)
+    sample_limit: int = Field(default=10, ge=0, le=100)
+
+
+class MetadataSqlSampleData(BaseModel):
+    """SQL 生成に渡す再取得済みサンプル。"""
+
+    sample_text: str = ""
+    sample_count: int = 0
+    runtime: str = "deterministic"
+    warnings: list[str] = Field(default_factory=list)
+
+
+class MetadataSqlGenerateRequest(BaseModel):
+    """SQL Assist comment / annotation generation input."""
+
+    targets: list[MetadataSqlTarget] = Field(default_factory=list)
+    structure_text: str = ""
+    primary_key_text: str = ""
+    foreign_key_text: str = ""
+    sample_text: str = ""
+    extra_text: str = ""
+    operation: DomainOperation = "create"
+    """ドメイン管理だけが使う操作種別。コメント/アノテーションでは無視する。"""
+    domain_text: str = ""
+    domains: list[DomainDefinition] = Field(default_factory=list, max_length=200)
+
+
+class MetadataSqlGenerateData(BaseModel):
+    """Generated comment / annotation SQL."""
+
+    sql: str = ""
+    source: str = "deterministic"
+    warnings: list[str] = Field(default_factory=list)
+    timing: TimingEnvelope
+
+
+class SyntheticDataGenerateRequest(AdminExecutionConfirmation):
+    """DBMS_CLOUD_AI synthetic table data generation request."""
+
+    table_name: str = ""
+    object_list: list[str] = Field(default_factory=list)
+    row_count: int = Field(default=10, ge=1, le=10000)
+    rows_per_table: int | None = Field(default=None, ge=1, le=10000)
+    profile_id: str | None = None
+    profile_name: str = ""
+    user_prompt: str = ""
+    extra_prompt: str = ""
+    sample_rows: int = Field(default=0, ge=0, le=100)
+    use_comments: bool = True
+
+
+class SyntheticDataOperationData(BaseModel):
+    """Synthetic DB data generation operation response."""
+
+    table_name: str
+    object_list: list[str] = Field(default_factory=list)
+    row_count: int
+    executed: bool = False
+    runtime: str = "deterministic"
+    status: str = "error"
+    message: str = ""
+    warnings: list[str] = Field(default_factory=list)
+    engine_meta: dict[str, Any] = Field(default_factory=dict)
+    timing: TimingEnvelope
+
+
+class SyntheticDataResultsData(BaseModel):
+    """Synthetic DB data result preview from a generated table."""
+
+    table_name: str
+    runtime: str = "deterministic"
+    results: QueryResults
+    warnings: list[str] = Field(default_factory=list)
+
+
+class DiagnosticCheck(BaseModel):
+    """接続/設定診断の 1 項目。"""
+
+    name: str
+    status: str
+    message: str
+
+
+class AgentPrivilegeCheckData(BaseModel):
+    """Select AI Agent privilege / dictionary-view readiness check response."""
+
+    runtime: str = "deterministic"
+    status: str = "warning"
+    checks: list[DiagnosticCheck] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class DiagnosticReadiness(BaseModel):
+    """運用 readiness の集約表示。"""
+
+    area: str
+    label: str
+    status: str
+    summary: str
+    next_action: str = ""
+    related_checks: list[str] = Field(default_factory=list)
+
+
+class DiagnosticSmokeCheck(BaseModel):
+    """Manual/live smoke check item for Oracle / OCI NL2SQL engines."""
+
+    id: str
+    label: str
+    category: str
+    status: str
+    method: str = ""
+    endpoint: str = ""
+    request_hint: str = ""
+    command: str = ""
+    expected: str
+    next_action: str = ""
+    related_readiness: list[str] = Field(default_factory=list)
+
+
+class DiagnosticConfigVar(BaseModel):
+    """診断設定ガイドで表示する env var。値は返さず状態だけ返す。"""
+
+    name: str
+    status: str
+    required: bool = True
+    note: str = ""
+
+
+class DiagnosticConfigGuide(BaseModel):
+    """OCI / Oracle 設定を完了するための非 secret ガイド。"""
+
+    id: str
+    label: str
+    status: str
+    summary: str
+    next_action: str = ""
+    required_env_vars: list[DiagnosticConfigVar] = Field(default_factory=list)
+    optional_env_vars: list[DiagnosticConfigVar] = Field(default_factory=list)
+    env_template: str = ""
+    smoke_command: str = ""
+    related_readiness: list[str] = Field(default_factory=list)
+
+
+class DiagnosticsData(BaseModel):
+    """OCI / Oracle / engine 設定診断 response."""
+
+    checks: list[DiagnosticCheck]
+    readiness: list[DiagnosticReadiness] = Field(default_factory=list)
+    smoke_checks: list[DiagnosticSmokeCheck] = Field(default_factory=list)
+    config_guides: list[DiagnosticConfigGuide] = Field(default_factory=list)
+
+
+class PersistenceStatusData(BaseModel):
+    """NL2SQL 共有状態の永続化可用性。"""
+
+    mode: Literal["memory", "oracle"]
+    ready: bool
+    durable: bool
+    writable: bool
+    snapshot_loaded: bool = Field(
+        description="Deprecated: incremental backend は snapshot をロードしません。",
+        deprecated=True,
+    )
+    reason_code: str | None = None
+    checked_at: str
+    state_backend: Literal["incremental", "legacy_snapshot"] = "legacy_snapshot"
+    circuit_state: Literal["closed", "open", "half_open"] = "closed"
+    retry_after_seconds: int = 0
+
+
+class CsvImportColumn(BaseModel):
+    """CSV import column mapping."""
+
+    source_name: str
+    column_name: str
+    data_type: str
+    nullable: bool = True
+
+
+class DbAdminImportTabularData(BaseModel):
+    """Tabular import execution response."""
+
+    table_name: str
+    # 取込先の schema（current schema）と所有者付きの表名。
+    owner: str = ""
+    qualified_name: str = ""
+    filename: str = ""
+    sheet_name: str = ""
+    mode: str = "create"
+    columns: list[CsvImportColumn]
+    row_count: int
+    executed: bool
+    ddl: str
+    insert_sql: str
+    schema_refresh_job_id: str = ""
+    schema_refresh_required: bool = False
+    schema_refresh_reason_code: str = ""
+    warnings: list[str] = Field(default_factory=list)
+    sample_rows: list[dict[str, str | None]] = Field(default_factory=list)
+    timing: TimingEnvelope

@@ -1,0 +1,312 @@
+import { Pagination } from "@/components/Pagination";
+import { useEffect, useRef, useState } from "react";
+import { Download, Layers3, RefreshCw } from "lucide-react";
+
+import {
+  Button,
+  DataTable,
+  EmptyState,
+  toast,
+  usePagination,
+  StatusBadge,
+  PageHeader,
+  PageBody,
+} from "@engchina/production-ready-ui";
+
+import { ProcessingIndicator } from "@/components/ProcessingState";
+import { PageNotice } from "@/components/page-notice";
+import { FileDropzone } from "@/components/ui/file-dropzone";
+import { apiFetch, apiGet, isAbortError } from "@/lib/api";
+import { t } from "@/lib/i18n";
+import { XLSX_TEMPLATE_FILE_FORMATS } from "@/lib/tabular-file-formats";
+import { downloadBlob } from "../components/DbAdminShared";
+import { DbManagementLoadingSkeleton, DbObjectManagementPanelShell, DbObjectPanelHeader } from "../components/DbObjectManagementShared";
+import type { LegacyLearningMaterialData } from "../types";
+
+const GLOBAL_RULES_ID = "global-rules";
+const RULES_PAGE_SIZE = 10;
+const RULE_PREVIEW_TEXT_CLASS =
+  "max-h-[15rem] min-w-0 overflow-y-auto whitespace-pre-wrap [overflow-wrap:anywhere] pr-2 leading-6";
+
+export function GlobalRulesPage() {
+  const [rules, setRules] = useState<string[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [busy, setBusy] = useState(false);
+  // danger（原因+対処）のみ Banner で常設表示。成功の「瞬間」は toast で 1 回通知する（messaging-spec §9 P1）。
+  const [errorText, setErrorText] = useState<string | null>(null);
+  const [lastLoadedAt, setLastLoadedAt] = useState("");
+  const [filename, setFilename] = useState("");
+  const loadSequence = useRef(0);
+  const loadControllerRef = useRef<AbortController | null>(null);
+  const initialLoadStartedRef = useRef(false);
+  const cleanupTimerRef = useRef<number | null>(null);
+
+  const load = async (announce = false) => {
+    if (loading || busy) return;
+    loadControllerRef.current?.abort();
+    const sequence = loadSequence.current + 1;
+    loadSequence.current = sequence;
+    setLoading(true);
+    setErrorText(null);
+    const controller = new AbortController();
+    loadControllerRef.current = controller;
+    try {
+      const data = await apiGet<LegacyLearningMaterialData>(
+        "/api/nl2sql/legacy-learning-material",
+        { signal: controller.signal }
+      );
+      if (controller.signal.aborted || sequence !== loadSequence.current) return;
+      setRules(data.rules);
+      setLastLoadedAt(new Date().toISOString());
+      if (announce) {
+        toast.success(t("globalRules.message.serverLoaded"));
+      }
+    } catch (err) {
+      if (isAbortError(err) || controller.signal.aborted || sequence !== loadSequence.current) {
+        return;
+      }
+      setErrorText(err instanceof Error ? err.message : t("globalRules.error.load"));
+    } finally {
+      if (loadControllerRef.current === controller) loadControllerRef.current = null;
+      if (sequence === loadSequence.current) setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (cleanupTimerRef.current !== null) {
+      window.clearTimeout(cleanupTimerRef.current);
+      cleanupTimerRef.current = null;
+    }
+    if (!initialLoadStartedRef.current) {
+      initialLoadStartedRef.current = true;
+      void load();
+    }
+    return () => {
+      cleanupTimerRef.current = window.setTimeout(() => {
+        cleanupTimerRef.current = null;
+        loadSequence.current += 1;
+        loadControllerRef.current?.abort();
+      }, 0);
+    };
+  }, []);
+
+  const importRules = async (file: File) => {
+    if (loading || busy) return;
+    loadSequence.current += 1;
+    loadControllerRef.current?.abort();
+    setFilename(file.name);
+    setBusy(true);
+    setErrorText(null);
+    try {
+      const data = await uploadRulesFile(file);
+      setRules(data.rules);
+      setLastLoadedAt(new Date().toISOString());
+      toast.success(t("globalRules.message.imported", { count: data.rules.length }));
+    } catch (err) {
+      setErrorText(err instanceof Error ? err.message : t("globalRules.error.import"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const exportRules = async () => {
+    if (loading || busy) return;
+    setBusy(true);
+    setErrorText(null);
+    try {
+      const response = await apiFetch("/api/nl2sql/legacy-learning-material/rules/export.xlsx", {
+        headers: { Accept: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" },
+      });
+      if (!response.ok) throw new Error(t("globalRules.error.export"));
+      downloadBlob("rules.xlsx", await response.blob());
+      toast.success(t("common.action.downloaded"));
+    } catch (err) {
+      setErrorText(err instanceof Error ? err.message : t("globalRules.error.export"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <PageHeader wide
+        title={t("globalRules.title")}
+        subtitle={t("globalRules.subtitle")}
+        actions={[
+          {
+            id: "refresh",
+            kind: "utility",
+            label: t("common.action.refresh"),
+            icon: RefreshCw,
+            onClick: () => load(true),
+            loading,
+            disabled: busy,
+          },
+        ]}
+      />
+      <PageBody wide className="grid gap-4">
+        <PageNotice notice={errorText ? { tone: "danger", message: errorText } : null} />
+
+        <DbObjectManagementPanelShell
+          id="global-rules-panel"
+          labelledBy="global-rules-panel-heading"
+          idPrefix={GLOBAL_RULES_ID}
+          ariaLabel={t("globalRules.workspace")}
+          processing={
+            loading && lastLoadedAt ? (
+              <ProcessingIndicator
+                active
+                label={t("common.processing.refreshing")}
+                operationKey="global-rules-refresh"
+                placement="workspace"
+                className="rounded-md border border-border bg-surface-sunken px-3 py-2"
+                testId="global-rules-workspace-processing"
+                activityIcon="none"
+              />
+            ) : undefined
+          }
+        >
+          <section className="grid min-w-0 content-start gap-3 rounded-md border border-border bg-surface-sunken p-3">
+            <DbObjectPanelHeader
+              headingId="global-rules-panel-heading"
+              title={t("globalRules.title")}
+              description={t("globalRules.hint")}
+              icon={Layers3}
+              action={
+                <StatusBadge
+                  icon={false}
+                  variant="neutral"
+                  label={t("globalRules.count", { count: rules.length })}
+                />
+              }
+            />
+            <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
+              <FileDropzone
+                label={t("globalRules.import")}
+                ariaLabel={t("globalRules.import")}
+                accept={XLSX_TEMPLATE_FILE_FORMATS.accept}
+                selectedText={filename}
+                formatLabel={XLSX_TEMPLATE_FILE_FORMATS.formatLabel}
+                replaceText={t("glossary.file.replaceWorkbook")}
+                icon="spreadsheet"
+                required
+                disabled={busy || loading}
+                loading={busy}
+                dataTestId="global-rules-file"
+                onFiles={([file]) => void importRules(file)}
+              />
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                touchTarget className="md:self-end"
+                loading={busy}
+                disabled={loading}
+                onClick={() => void exportRules()} icon={Download}>
+                <span>{t("globalRules.export")}</span>
+              </Button>
+            </div>
+            {loading && !lastLoadedAt ? (
+              <DbManagementLoadingSkeleton
+                idPrefix="global-rules"
+                ariaLabel={t("globalRules.loading")}
+                variant="list"
+                rows={6}
+              />
+            ) : (
+              <RulesPreviewTable rules={rules} />
+            )}
+          </section>
+        </DbObjectManagementPanelShell>
+      </PageBody>
+    </>
+  );
+}
+
+async function uploadRulesFile(file: File): Promise<LegacyLearningMaterialData> {
+  const form = new FormData();
+  form.append("file", file);
+  const response = await apiFetch("/api/nl2sql/legacy-learning-material/rules/import", {
+    method: "POST",
+    body: form,
+    headers: { Accept: "application/json" },
+  });
+  const payload = (await response.json().catch(() => ({}))) as {
+    data?: LegacyLearningMaterialData;
+    error?: unknown;
+    detail?: unknown;
+    error_messages?: unknown;
+  };
+  if (!response.ok || !payload.data) {
+    throw new Error(importErrorMessage(payload, t("globalRules.error.import")));
+  }
+  return payload.data;
+}
+
+function importErrorMessage(
+  payload: { error?: unknown; detail?: unknown; error_messages?: unknown },
+  fallback: string
+): string {
+  if (Array.isArray(payload.error_messages) && payload.error_messages.length > 0) {
+    return payload.error_messages.map(String).join(" ");
+  }
+  const message = payload.error ?? payload.detail;
+  return typeof message === "string" && message.trim() ? message : fallback;
+}
+
+function RulesPreviewTable({ rules }: { rules: string[] }) {
+  const { page: currentPage, setPage, totalPages, pageItems: visibleRows, range } = usePagination(
+    rules,
+    RULES_PAGE_SIZE
+  );
+  const start = range.start === 0 ? 0 : range.start - 1;
+
+  if (rules.length === 0) {
+    return (
+      <div className="rounded-md border border-border bg-surface p-4">
+        <EmptyState title={t("globalRules.empty")} hint={t("globalRules.emptyHint")} />
+      </div>
+    );
+  }
+
+  return (
+    <div className="grid gap-2" data-testid="global-rules-preview">
+      <DataTable
+        columns={[
+          {
+            key: "number",
+            header: t("glossary.preview.rowNumber"),
+            align: "right",
+            headerClassName: "w-12",
+            className: "tabular-nums text-fg-muted",
+            render: (_, index) => <span data-testid="global-rules-row-number">{start + index + 1}</span>,
+          },
+          {
+            key: "rule",
+            header: "RULE",
+            className: "min-w-0 align-top text-sm",
+            render: (rule) => (
+              <div className={RULE_PREVIEW_TEXT_CLASS} data-testid="global-rules-preview-text">
+                {rule}
+              </div>
+            ),
+          },
+        ]}
+        rows={visibleRows}
+        getRowKey={(rule, index) => `${start + index}-${rule.slice(0, 24)}`}
+        tableClassName="w-full table-fixed"
+      />
+      <Pagination
+        page={currentPage}
+        totalPages={totalPages}
+        onPageChange={setPage}
+        summary={t("glossary.pagination.range", { start: range.start, end: range.end, total: range.total })}
+        pageIndicator={t("glossary.pagination.page", { page: currentPage, total: totalPages })}
+        prevLabel={t("glossary.pagination.prev")}
+        nextLabel={t("glossary.pagination.next")}
+        ariaLabel={t("globalRules.pagination.label")}
+        testId="global-rules-pagination"
+      />
+    </div>
+  );
+}

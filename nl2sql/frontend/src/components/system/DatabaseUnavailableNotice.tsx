@@ -1,0 +1,177 @@
+import { ArrowRight, Database, DatabaseZap, RefreshCw, Settings } from "lucide-react";
+import { Link } from "react-router-dom";
+
+import {
+  Banner,
+  Button,
+  buttonVariants,
+} from "@engchina/production-ready-ui";
+
+import { t, type I18nKey } from "@/lib/i18n";
+import { APP_ROUTES } from "@/lib/routes";
+
+const DATABASE_SETTINGS_TARGET = `${APP_ROUTES.settingsDatabase}#adb-management`;
+const SYSTEM_TABLES_TARGET = APP_ROUTES.settingsSystemTables;
+
+export type DatabaseNoticeStatus =
+  | "not_configured"
+  | "setup_required"
+  | "unreachable"
+  | "check_failed"
+  | "persistence";
+
+const NOTICE_COPY: Record<
+  DatabaseNoticeStatus,
+  { title: I18nKey; message: I18nKey }
+> = {
+  not_configured: {
+    title: "dbGate.notConfigured.title",
+    message: "dbGate.notConfigured.message",
+  },
+  setup_required: {
+    title: "dbGate.setupRequired.title",
+    message: "dbGate.setupRequired.message",
+  },
+  unreachable: {
+    title: "dbGate.unreachable.title",
+    message: "dbGate.unreachable.message",
+  },
+  check_failed: {
+    title: "dbGate.checkFailed.title",
+    message: "dbGate.checkFailed.message",
+  },
+  persistence: {
+    title: "dbGate.persistenceFailed.title",
+    message: "dbGate.persistenceFailed.message",
+  },
+};
+
+export function DatabaseUnavailableNotice({
+  mode = "gate",
+  returnTo,
+  onRetry,
+  isRetrying = false,
+  status = "unreachable",
+  reasonCode,
+}: {
+  mode?: "gate" | "banner";
+  returnTo?: string;
+  onRetry: () => void;
+  isRetrying?: boolean;
+  status?: DatabaseNoticeStatus;
+  reasonCode?: string | null;
+}) {
+  const copy = NOTICE_COPY[status];
+  if (mode === "banner") {
+    return (
+      <Banner
+        severity="warning"
+        title={t(copy.title)}
+        action={
+          <Button type="button" size="md" variant="secondary" onClick={onRetry} loading={isRetrying} icon={RefreshCw}>
+            {t("common.retry")}
+          </Button>
+        }
+      />
+    );
+  }
+
+  const action =
+    status === "setup_required"
+      ? {
+          href: SYSTEM_TABLES_TARGET,
+          labelKey: "dbGate.openSystemTables",
+          icon: DatabaseZap,
+          hintKey: "dbGate.setupRequired.settingsHint",
+        }
+      : {
+          href: DATABASE_SETTINGS_TARGET,
+          labelKey: "dbGate.openDatabaseSettings",
+          icon: Settings,
+          hintKey: "dbGate.settingsHint",
+        };
+
+  return (
+    <div className="grid min-h-dvh place-items-center p-4 sm:p-6">
+      <section
+        className="w-full max-w-lg rounded-xl border border-border bg-surface p-6 text-center shadow-sm sm:p-8"
+        aria-labelledby="database-unavailable-title"
+      >
+        <div
+          className="mx-auto grid size-12 place-items-center rounded-full bg-warning-subtle text-warning-fg"
+          aria-hidden
+        >
+          <Database size={24} />
+        </div>
+        <h1
+          id="database-unavailable-title"
+          className="mt-5 text-lg font-semibold text-fg"
+        >
+          {t(copy.title)}
+        </h1>
+        <NoticeContent
+          returnTo={returnTo}
+          onRetry={onRetry}
+          isRetrying={isRetrying}
+          messageKey={copy.message}
+          reasonCode={reasonCode}
+          primaryAction={action}
+        />
+      </section>
+    </div>
+  );
+}
+
+function NoticeContent({
+  returnTo,
+  onRetry,
+  isRetrying,
+  messageKey,
+  reasonCode,
+  primaryAction,
+}: {
+  returnTo?: string;
+  onRetry: () => void;
+  isRetrying: boolean;
+  messageKey: I18nKey;
+  reasonCode?: string | null;
+  primaryAction: {
+    href: string;
+    labelKey: I18nKey;
+    icon: typeof Settings;
+    hintKey: I18nKey;
+  };
+}) {
+  const PrimaryActionIcon = primaryAction.icon;
+  return (
+    <>
+      <p className="mx-auto mt-2 max-w-md text-sm leading-relaxed text-fg-muted">
+        {t(messageKey)}
+      </p>
+      {reasonCode ? (
+        <p className="mt-2 text-xs text-fg-muted" role="status">
+          {t("dbGate.reasonCode", { code: reasonCode })}
+        </p>
+      ) : null}
+
+      <div className="mt-6 flex flex-wrap items-center justify-center gap-2">
+        <Link
+          to={primaryAction.href}
+          state={returnTo ? { returnTo } : undefined}
+          className={buttonVariants({ variant: "primary", size: "md" })}
+        >
+          <PrimaryActionIcon size={16} aria-hidden />
+          {t(primaryAction.labelKey)}
+          <ArrowRight size={16} aria-hidden />
+        </Link>
+        <Button type="button" size="md" variant="secondary" onClick={onRetry} loading={isRetrying} icon={RefreshCw}>
+          {t("common.retry")}
+        </Button>
+      </div>
+
+      <p className="mt-6 border-t border-border pt-4 text-xs leading-relaxed text-fg-muted">
+        {t(primaryAction.hintKey)}
+      </p>
+    </>
+  );
+}
