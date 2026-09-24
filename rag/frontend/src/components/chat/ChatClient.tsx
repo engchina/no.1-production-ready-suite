@@ -15,6 +15,7 @@ import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 import { FeedbackControls } from "@/components/feedback/FeedbackControls";
 import { CitationCard } from "@/components/search/CitationCard";
+import { DocragAnswerPanel } from "@/components/search/DocragAnswerPanel";
 import { EmptyState, ErrorState, LoadingState } from "@/components/StateViews";
 import type { ChatMessage, ConversationSummary, RetrievedChunk } from "@/lib/api";
 import { ApiError } from "@/lib/api";
@@ -44,6 +45,8 @@ interface LiveColumn {
   traceId: string | null;
   errorMessage: string | null;
   guardrailWarnings: string[];
+  /** DocRAG 回答エンジンの根拠・実行記録(standard では null)。 */
+  docrag: unknown;
 }
 
 interface LiveTurn {
@@ -82,6 +85,7 @@ function AssistantColumn({
   streaming,
   errorMessage,
   guardrailWarnings,
+  docrag = null,
   showLabel,
   className,
 }: {
@@ -94,6 +98,7 @@ function AssistantColumn({
   streaming: boolean;
   errorMessage: string | null;
   guardrailWarnings: string[];
+  docrag?: unknown;
   showLabel: boolean;
   className?: string;
 }) {
@@ -134,6 +139,7 @@ function AssistantColumn({
           {guardrailWarnings.join(" / ")}
         </Banner>
       ) : null}
+      {!streaming && !errorMessage && docrag ? <DocragAnswerPanel docrag={docrag} /> : null}
       {!streaming && !errorMessage ? (
         <FeedbackControls
           traceId={traceId}
@@ -189,6 +195,7 @@ function MessageTurn({
     streaming: boolean;
     errorMessage: string | null;
     guardrailWarnings: string[];
+    docrag?: unknown;
   }[];
 }) {
   const compare = columns.length > 1;
@@ -227,6 +234,7 @@ function MessageTurn({
             streaming={column.streaming}
             errorMessage={column.errorMessage}
             guardrailWarnings={column.guardrailWarnings}
+            docrag={column.docrag}
             showLabel={compare}
             className={
               compare && columns.length % 2 === 1 && index === columns.length - 1
@@ -444,6 +452,7 @@ export function ChatClient() {
                 traceId: null,
                 errorMessage: null,
                 guardrailWarnings: [],
+                docrag: null,
               })),
             });
           },
@@ -460,10 +469,11 @@ export function ChatClient() {
               };
             });
           },
-          onMetadata: ({ model_id, trace_id, guardrail_warnings }) =>
+          onMetadata: ({ model_id, trace_id, guardrail_warnings, docrag }) =>
             updateColumn(model_id, {
               traceId: trace_id,
               guardrailWarnings: guardrail_warnings,
+              docrag: docrag ?? null,
             }),
           onCitations: (modelId, citations) => updateColumn(modelId, { citations }),
           onModelDone: ({ model_id }) => updateColumn(model_id, { status: "done" }),
@@ -510,6 +520,7 @@ export function ChatClient() {
         streaming: column.status === "streaming",
         errorMessage: column.errorMessage,
         guardrailWarnings: column.guardrailWarnings,
+        docrag: column.docrag,
       }))
     : [];
 

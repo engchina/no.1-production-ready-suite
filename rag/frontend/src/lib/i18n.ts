@@ -2750,6 +2750,7 @@ export const ja = {
   "search.docrag.title": "回答の根拠と実行記録（DocRAG）",
   "search.docrag.confidence": "信頼度: {value}",
   "search.docrag.humanReview": "人手確認が必要",
+  "search.docrag.rewritten": "会話の流れから補った質問: {question}",
   "search.docrag.insufficient": "根拠が不足している点: {reason}",
   "search.docrag.evidence": "根拠の構成",
   "search.docrag.steps": "実行記録",

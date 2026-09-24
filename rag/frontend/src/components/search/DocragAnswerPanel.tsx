@@ -29,6 +29,11 @@ export function DocragAnswerPanel({ docrag }: { docrag: unknown }) {
           />
         ) : null}
       </div>
+      {data.rewrittenQuestion ? (
+        <p className="break-words text-xs leading-relaxed text-fg-muted">
+          {t("search.docrag.rewritten", { question: data.rewrittenQuestion })}
+        </p>
+      ) : null}
       {data.insufficientReason ? (
         <p className="text-xs leading-relaxed text-fg-muted">
           {t("search.docrag.insufficient", { reason: data.insufficientReason })}

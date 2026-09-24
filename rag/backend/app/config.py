@@ -760,6 +760,13 @@ class Settings(BaseSettings):
             "(回答モデルが画像入力に対応する場合のみ有効化する)。"
         ),
     )
+    rag_docrag_history_rewrite_enabled: bool = Field(
+        default=True,
+        description=(
+            "チャットで DocRAG 回答エンジンを使うとき、会話履歴から最新の質問を"
+            "単独の質問へ書き換える(履歴がある場合だけ LLM 呼び出しが 1 回増える)。"
+        ),
+    )
     rag_docrag_profile: Literal["generic", "legacy"] = Field(
         default="generic",
         description=(

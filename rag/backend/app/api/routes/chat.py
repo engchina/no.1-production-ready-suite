@@ -417,6 +417,8 @@ async def _stream_chat_events(
                         "answer": result.answer,
                         "guardrail_warnings": result.guardrail_warnings,
                         "elapsed_ms": result.elapsed_ms,
+                        # DocRAG 回答エンジンの根拠・実行記録(standard では None)。
+                        "docrag": result.diagnostics.docrag,
                         "citations": [
                             citation.model_dump(mode="json") for citation in result.citations
                         ],
@@ -485,6 +487,7 @@ async def _stream_chat_events(
                         "trace_id": payload["trace_id"],
                         "elapsed_ms": payload["elapsed_ms"],
                         "guardrail_warnings": payload["guardrail_warnings"],
+                        "docrag": payload.get("docrag"),
                     },
                 )
                 for chunk in _answer_chunks(str(payload["answer"])):
