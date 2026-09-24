@@ -740,7 +740,11 @@ export interface KnowledgeBaseQueryConfig {
   generation_profile: GenerationProfileName | null;
   guardrail_policy: GuardrailPolicyName | null;
   evaluation_suite: EvaluationSuiteName | null;
+  /** 回答エンジン(standard / docrag)。null / 未指定はグローバル継承。 */
+  answer_engine?: AnswerEngineName | null;
 }
+
+export type AnswerEngineName = "standard" | "docrag";
 
 /** KB 単位の構築設定。query は legacy 互換として読めるが KB runtime では使わない。 */
 export interface KnowledgeBaseAdapterConfig {
@@ -1044,6 +1048,8 @@ export interface SearchDiagnostics {
   knowledge_base_count: number;
   business_view_applied?: string | null;
   config_fingerprint: string;
+  /** DocRAG 回答エンジンの記録(standard では null)。 */
+  docrag?: Record<string, JsonValue> | null;
 }
 
 export interface SearchRetrievalBreakdown {

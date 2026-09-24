@@ -1,0 +1,173 @@
+"""DocRAG 回答エンジン(rag_poc 回答フロー + backend 検索)の統合テスト(外部 I/O はスタブ)。"""
+
+import json
+import re
+from typing import Any
+
+import pytest
+from docrag.models.llm import (
+    CragRetrievalGradeOutput,
+    GroundedAudit,
+    GroundedDraft,
+    QueryRoutingOutput,
+)
+
+from app.config import Settings
+from app.rag.docrag_answer import DocragAnswerEngine
+from app.schemas.search import RetrievedChunk, SearchMode, SearchRequest
+
+PARENT_TEXT = "受注入力画面\n受注番号を入力し、登録ボタンを押します。"
+
+
+def _chunk(chunk_id: str, text: str, seq: int) -> RetrievedChunk:
+    return RetrievedChunk(
+        document_id="doc-1",
+        chunk_id=chunk_id,
+        text=text,
+        score=0.9,
+        file_name="manual.pdf",
+        metadata={
+            "chunk_group_id": "chunk-docling-p000001",
+            "docrag_parent_text": PARENT_TEXT,
+            "docrag_search_text": f"Source file: manual.pdf\nChild text: {text}",
+            "docrag_chunk_seq": seq,
+            "page_start": 1,
+            "page_end": 1,
+            "docrag_metadata_json": json.dumps(
+                {
+                    "schema_version": 4,
+                    "active": True,
+                    "atomic": False,
+                    "content_hash": f"h{seq}",
+                    "classification": {},
+                    "source_categories": ["Text"],
+                    "section_path": ["受注入力画面"],
+                    "section_path_sources": ["section_header"],
+                }
+            ),
+            "docrag_source_record_refs_json": json.dumps(
+                [{"record_id": f"docling-p1-{seq}", "page": 1, "seq_no": seq}]
+            ),
+        },
+    )
+
+
+class FakeOracle:
+    def __init__(self) -> None:
+        self.filters: list[dict[str, str]] = []
+        self.chunks = [
+            _chunk("doc-1:c1", "受注番号を入力し、登録ボタンを押します。", 1),
+            _chunk("doc-1:c2", "登録後は受注一覧に表示されます。", 2),
+        ]
+
+    async def hybrid_search(
+        self,
+        query: str,
+        embedding: list[float],
+        top_k: int,
+        mode: SearchMode = SearchMode.HYBRID,
+        filters: dict[str, str] | None = None,
+    ) -> list[RetrievedChunk]:
+        self.filters.append(dict(filters or {}))
+        return self.chunks[:1]
+
+    async def context_group_siblings(
+        self, anchors: list[RetrievedChunk], *, max_chunks_per_group: int
+    ) -> list[RetrievedChunk]:
+        return self.chunks[1:]
+
+
+class FakeGenAi:
+    async def embed(
+        self, texts: list[str], *, input_type: str = "SEARCH_DOCUMENT"
+    ) -> list[list[float]]:
+        return [[0.1] * 4 for _ in texts]
+
+    async def rerank(self, query: str, documents: list[str], top_n: int) -> list[tuple[int, float]]:
+        return [(index, 1.0 - index * 0.1) for index in range(len(documents))][:top_n]
+
+
+def _fake_llm(system: str, prompt: str, settings: Any, schema: type, **options: Any) -> Any:
+    if schema is QueryRoutingOutput:
+        return QueryRoutingOutput(
+            strategy="simple_retrieval", reason="単純な手順の質問", queries=[]
+        )
+    if schema is CragRetrievalGradeOutput:
+        return CragRetrievalGradeOutput(
+            reason="十分", sufficient=True, confidence=0.9, rewritten_query=""
+        )
+    if schema is GroundedDraft:
+        body = "受注番号を入力し、登録ボタンを押します。"
+        match = re.search(r"\[(E[0-9]+)\].*?" + re.escape(body), prompt, re.DOTALL)
+        items = (
+            [{"kind": "rule", "text": body, "evidence_id": match.group(1), "quote": body}]
+            if match
+            else []
+        )
+        return GroundedDraft.model_validate(
+            {"summary": "手順", "items": items, "confidence": "high"}
+        )
+    if schema is GroundedAudit:
+        return GroundedAudit.model_validate(
+            {
+                "goal_alignment": "aligned",
+                "summary_supported": True,
+                "reviews": [
+                    {
+                        "index": 0,
+                        "support": "supported",
+                        "applicability": "matched",
+                        "reason": "原文",
+                    }
+                ],
+            }
+        )
+    raise AssertionError(f"unexpected schema: {schema.__name__}")
+
+
+async def test_docrag_engine_answers_with_backend_search_and_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import docrag.adapters.oci as docrag_oci
+
+    monkeypatch.setattr(docrag_oci, "parse_text_response", _fake_llm)
+    oracle = FakeOracle()
+    engine = DocragAnswerEngine(
+        Settings(rag_answer_engine="docrag", rag_domain_keywords=["受注番号"]),
+        oracle=oracle,  # type: ignore[arg-type]
+        genai=FakeGenAi(),  # type: ignore[arg-type]
+    )
+    request = SearchRequest(query="受注の登録方法は？", filters={"knowledge_base_id": "kb-1"})
+
+    outcome = await engine.run(request)
+
+    assert "登録ボタン" in outcome.answer
+    assert oracle.filters and oracle.filters[0]["knowledge_base_id"] == "kb-1"
+    assert outcome.citations
+    assert outcome.citations[0].chunk_id == "doc-1:c1"
+    assert "docrag_role" in outcome.citations[0].metadata
+    diagnostics = outcome.diagnostics
+    assert diagnostics["execution_steps"]
+    assert diagnostics["evidence_tree"]
+    assert diagnostics["evidence_tree"][0]["children"]
+
+
+async def test_pipeline_delegates_to_docrag_engine(monkeypatch: pytest.MonkeyPatch) -> None:
+    import docrag.adapters.oci as docrag_oci
+
+    from app.rag.pipeline import RagPipeline
+
+    monkeypatch.setattr(docrag_oci, "parse_text_response", _fake_llm)
+    pipeline = RagPipeline(
+        settings=Settings(rag_answer_engine="docrag"),
+        oracle=FakeOracle(),  # type: ignore[arg-type]
+        genai=FakeGenAi(),  # type: ignore[arg-type]
+    )
+
+    response = await pipeline.run(SearchRequest(query="受注の登録方法は？"))
+
+    assert "登録ボタン" in response.answer
+    assert response.citations[0].chunk_id == "doc-1:c1"
+    assert response.diagnostics.retrieval_strategy == "docrag"
+    assert response.diagnostics.docrag is not None
+    assert response.diagnostics.docrag["evidence_tree"]

@@ -240,6 +240,8 @@ class SearchDiagnostics(BaseModel):
     query_expansion_source: str = "off"
     # ツリー検索の踏破記録(候補 section と selected/candidate 判定)。監査用・非機密。
     tree_search_path: list[dict[str, object]] = Field(default_factory=list)
+    # DocRAG 回答エンジンの記録(信頼度・人手確認・実行記録・根拠木)。standard では None。
+    docrag: dict[str, JsonValue] | None = None
     post_retrieval_pipeline: str = "custom"
     generation_profile: str = "grounded_concise"
     generation_config_source: Literal["request", "business_view", "global"] = "global"

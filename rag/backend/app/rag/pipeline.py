@@ -8,6 +8,7 @@ import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from time import perf_counter
+from typing import cast
 
 from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
 from app.clients.oci_genai import OciGenAiClient
@@ -16,6 +17,7 @@ from app.config import Settings, enterprise_ai_default_model_id, get_settings
 from app.rag.agentic_adapter import resolve_agentic_adapter
 from app.rag.audit import AuditOutcome, record_rag_search_audit
 from app.rag.diagnostics import build_search_diagnostics
+from app.rag.docrag_answer import DOCRAG_ANSWER_ENGINE, DocragAnswerEngine
 from app.rag.generation_adapter import (
     generation_repair_enabled,
     resolve_generation_adapter,
@@ -68,6 +70,7 @@ from app.rag.retrieval_strategy import (
 from app.schemas.common import JsonValue
 from app.schemas.search import (
     RetrievedChunk,
+    SearchDiagnostics,
     SearchMode,
     SearchRequest,
     SearchResponse,
@@ -289,6 +292,15 @@ class RagPipeline:
                 guardrail_warnings=query_guardrail.warnings,
                 elapsed_ms=elapsed,
                 diagnostics=diagnostics,
+            )
+
+        if self._settings.rag_answer_engine == DOCRAG_ANSWER_ENGINE:
+            return await self._run_docrag(
+                request,
+                trace_id=trace_id,
+                started_at=started_at,
+                query_guardrail=query_guardrail,
+                token_callback=token_callback,
             )
 
         error_stage = "embedding"
@@ -1494,6 +1506,58 @@ class RagPipeline:
             anchors,
             dependency_candidates,
             max_chunks_per_anchor=self._settings.rag_context_dependency_max_chunks,
+        )
+
+    async def _run_docrag(
+        self,
+        request: SearchRequest,
+        *,
+        trace_id: str,
+        started_at: float,
+        query_guardrail: GuardrailResult,
+        token_callback: SearchTokenCallback | None,
+    ) -> SearchResponse:
+        """DocRAG(rag_poc)の根拠付き回答エンジンで回答する。回答側ガードレールは共通。"""
+        engine = DocragAnswerEngine(
+            self._settings,
+            oracle=self._oracle,
+            genai=self._genai,
+            runtime_knowledge_payload=self._settings.rag_runtime_knowledge or None,
+        )
+        outcome = await engine.run(request)
+        answer_guardrail = await asyncio.to_thread(
+            self._guardrails.validate_answer, outcome.answer, outcome.context_text
+        )
+        record_guardrail_findings(
+            "answer",
+            answer_guardrail.findings,
+            "blocked" if not answer_guardrail.allowed else "warning",
+        )
+        final_answer = answer_guardrail.sanitized_text
+        if token_callback is not None and final_answer:
+            await token_callback(SearchTokenDelta(trace_id=trace_id, text=final_answer))
+        diagnostics = SearchDiagnostics(
+            mode=request.mode.value,
+            retrieval_strategy="docrag",
+            retrieval_strategy_adapter="docrag_grounded",
+            guardrail_degraded=(
+                query_guardrail.backend_degraded or answer_guardrail.backend_degraded
+            ),
+            docrag=cast(dict[str, JsonValue], outcome.diagnostics),
+        )
+        outcome_label: AuditOutcome = "success" if answer_guardrail.allowed else "blocked"
+        elapsed = elapsed_ms(started_at)
+        record_rag_request(
+            request.mode.value, outcome_label, elapsed / 1000, len(outcome.citations)
+        )
+        return SearchResponse(
+            answer=final_answer,
+            citations=outcome.citations,
+            trace_id=trace_id,
+            guardrail_warnings=[*query_guardrail.warnings, *answer_guardrail.warnings],
+            elapsed_ms=elapsed,
+            diagnostics=diagnostics,
+            answer_replaced=final_answer != outcome.answer,
         )
 
     async def _expand_context_neighbors(
