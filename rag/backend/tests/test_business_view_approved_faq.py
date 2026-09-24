@@ -3,7 +3,7 @@
 import io
 
 import pytest
-from openpyxl import Workbook
+from openpyxl import Workbook  # type: ignore[import-untyped]
 
 from app.api.routes import business_view_knowledge as knowledge_route
 from app.main import app
