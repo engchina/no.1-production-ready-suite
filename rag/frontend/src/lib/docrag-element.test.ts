@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { DocumentElement } from "@/lib/api";
-import { docragVisionDetails, elementVision, tableHtmlToText } from "./docrag-element";
+import { docragVisionDetails, elementCropUrl, elementVision, tableHtmlToText } from "./docrag-element";
 
 function element(metadata: DocumentElement["metadata"]): DocumentElement {
   return { kind: "figure", text: "", order: 0, metadata } as DocumentElement;
@@ -73,5 +73,27 @@ describe("docragVisionDetails", () => {
     expect(docragVisionDetails(extraction, "docling-p1-3")?.excludedReason).toBe("ロゴ");
     expect(docragVisionDetails(extraction, "missing")).toBeNull();
     expect(docragVisionDetails({}, "docling-p1-2")).toBeNull();
+  });
+});
+
+describe("elementCropUrl", () => {
+  it("bbox とページ寸法から crop API の URL を作る", () => {
+    const url = elementCropUrl("doc 1", {
+      kind: "figure",
+      text: "",
+      order: 0,
+      page_number: 2,
+      bbox: [10, 20, 110, 70],
+      metadata: { page_width: 1000, page_height: 1400 },
+    } as DocumentElement);
+    expect(url).toBe(
+      "/api/documents/doc%201/crop?page=2&x0=10&y0=20&x1=110&y1=70&page_width=1000&page_height=1400"
+    );
+  });
+
+  it("位置情報が足りなければ null", () => {
+    expect(
+      elementCropUrl("doc-1", { kind: "figure", text: "", order: 0 } as DocumentElement)
+    ).toBeNull();
   });
 });
