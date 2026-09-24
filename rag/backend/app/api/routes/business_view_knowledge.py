@@ -10,7 +10,9 @@ from typing import Annotated
 from docrag.knowledge.approved_faq import ApprovedFaqImportRow, ApprovedFaqRecord
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 
+from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import OracleClient
+from app.config import get_settings
 from app.rag.business_view_knowledge import (
     APPROVED_FAQ_PREVIEW_ROWS,
     ApprovedFaqMutation,
@@ -270,8 +272,22 @@ async def suggest_business_view_approved_faq(
     """質問に近い承認済み FAQ(類似問)を返す。回答前の提示に使う。"""
     oracle = OracleClient()
     await _require_business_view(oracle, business_view_id)
+    settings = get_settings()
+    genai = (
+        OciGenAiClient(settings=settings) if settings.rag_approved_faq_semantic_enabled else None
+    )
     suggestions = await suggest_approved_faq(
-        oracle, business_view_id, request.query, limit=request.limit
+        oracle,
+        business_view_id,
+        request.query,
+        limit=request.limit,
+        embed=(
+            (lambda texts, input_type: genai.embed(texts, input_type=input_type))
+            if genai is not None
+            else None
+        ),
+        embedding_model=settings.oci_genai_embedding_model,
+        embedding_dimensions=settings.oci_genai_embedding_dim,
     )
     return ApiResponse(
         data=ApprovedFaqSuggestionsData(

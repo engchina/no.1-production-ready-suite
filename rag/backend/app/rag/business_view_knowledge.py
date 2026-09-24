@@ -7,13 +7,14 @@ payload 形式と正規化・候補生成は rag_poc(DocRAG)の ``docrag.knowled
 from __future__ import annotations
 
 import json
+import logging
 import tempfile
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Awaitable, Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Protocol
+from typing import Literal, Protocol
 
 from docrag.knowledge.approved_faq import (
     APPROVED_FAQ_IMPORT_MODES,
@@ -22,13 +23,18 @@ from docrag.knowledge.approved_faq import (
     ApprovedFaqImportRow,
     ApprovedFaqMutationResult,
     ApprovedFaqRecord,
+    ApprovedFaqSemanticIndex,
     ApprovedFaqSuggestion,
+    _approved_faq_semantic_questions,
     add_approved_faq_record,
     apply_approved_faq_import_rows,
+    approved_faq_records_signature,
+    build_approved_faq_semantic_index,
     delete_approved_faq_records,
     load_approved_faq_excel_rows,
     load_approved_faq_payload,
     load_approved_faq_records,
+    load_approved_faq_semantic_index,
     suggest_approved_faq_questions,
 )
 from docrag.knowledge.domain_keyword_candidates import (
@@ -50,6 +56,8 @@ from docrag.retrieval.text_search_tokenizer import (
     TEXT_SEARCH_TOKENIZER_SUDACHI,
     TextSearchTokenizerConfig,
 )
+
+logger = logging.getLogger(__name__)
 
 DOMAIN_KEYWORDS_KIND = "domain_keywords"
 DEFAULT_CANDIDATE_LIMIT = 50
@@ -135,6 +143,10 @@ async def suggest_domain_keywords(
 # --- Approved FAQ(類似問)-----------------------------------------------------
 
 APPROVED_FAQ_KIND = "approved_faq"
+FAQ_SEMANTIC_CACHE_KEY = "semantic_index_cache"
+# (texts, input_type) -> vectors。backend の Cohere embedding(OciGenAiClient.embed)を渡す。
+FaqEmbedInputType = Literal["SEARCH_DOCUMENT", "SEARCH_QUERY"]
+FaqEmbedder = Callable[[list[str], FaqEmbedInputType], Awaitable[list[list[float]]]]
 APPROVED_FAQ_PREVIEW_ROWS = 10
 
 
@@ -229,12 +241,82 @@ async def suggest_approved_faq(
     question: str,
     *,
     limit: int = DEFAULT_APPROVED_FAQ_SUGGESTION_LIMIT,
+    embed: FaqEmbedder | None = None,
+    embedding_model: str = "",
+    embedding_dimensions: int = 1536,
 ) -> list[ApprovedFaqSuggestion]:
-    """質問に近い承認済み FAQ を返す(文字列類似度。LLM / embedding は使わない)。"""
-    records = await load_approved_faq(store, business_view_id)
-    if not records or not question.strip():
+    """質問に近い承認済み FAQ を返す。
+
+    文字列類似度に加え、embed 指定時は rag_poc の意味照合(FAQ 質問の embedding index)を使う。
+    index は FAQ payload の ``semantic_index_cache`` に保持し、FAQ 集合の署名が変われば作り直す。
+    embedding に失敗しても文字列照合で続ける。
+    """
+    payload = await store.get_business_view_knowledge(business_view_id, APPROVED_FAQ_KIND)
+    if payload is None or not question.strip():
         return []
-    return suggest_approved_faq_questions(question, records, limit=limit)
+    with _faq_file(payload) as path:
+        records = load_approved_faq_records(path)
+    if not records:
+        return []
+    semantic_index: ApprovedFaqSemanticIndex | None = None
+    query_embedding: list[float] | None = None
+    if embed is not None:
+        try:
+            semantic_index, cache = await _faq_semantic_index(
+                payload, records, embed, model=embedding_model, dimensions=embedding_dimensions
+            )
+            if cache is not None:
+                await store.save_business_view_knowledge(
+                    business_view_id,
+                    APPROVED_FAQ_KIND,
+                    {**payload, FAQ_SEMANTIC_CACHE_KEY: cache},
+                )
+            query_embedding = (await embed([question], "SEARCH_QUERY"))[0]
+        except Exception as exc:  # 意味照合は補助。文字列照合で続ける。
+            logger.warning("approved faq semantic matching failed", extra={"error": str(exc)})
+            semantic_index, query_embedding = None, None
+    return suggest_approved_faq_questions(
+        question,
+        records,
+        semantic_index=semantic_index,
+        semantic_query_embedding=query_embedding,
+        limit=limit,
+    )
+
+
+async def _faq_semantic_index(
+    payload: Mapping[str, object],
+    records: list[ApprovedFaqRecord],
+    embed: FaqEmbedder,
+    *,
+    model: str,
+    dimensions: int,
+) -> tuple[ApprovedFaqSemanticIndex, dict[str, object] | None]:
+    """保存済み index を再利用し、無効なら FAQ 質問を embedding して作り直す(新 cache を返す)。"""
+    with tempfile.TemporaryDirectory(prefix="approved-faq-semantic-") as work:
+        cache_path = Path(work) / "semantic_index.json"
+        cached = payload.get(FAQ_SEMANTIC_CACHE_KEY)
+        if isinstance(cached, dict):
+            cache_path.write_text(json.dumps(cached, ensure_ascii=False), encoding="utf-8")
+            index = load_approved_faq_semantic_index(
+                cache_path,
+                model=model,
+                dimensions=dimensions,
+                records_signature=approved_faq_records_signature(records),
+            )
+            if index is not None:
+                return index, None
+        questions = [question for _, question in _approved_faq_semantic_questions(records)]
+        vectors = await embed(questions, "SEARCH_DOCUMENT") if questions else []
+        index = build_approved_faq_semantic_index(
+            cache_path,
+            records,
+            model=model,
+            dimensions=dimensions,
+            embedder=lambda texts, settings: vectors,
+            settings=None,
+        )
+        return index, json.loads(cache_path.read_text(encoding="utf-8"))
 
 
 def is_direct_faq_match(suggestion: ApprovedFaqSuggestion) -> bool:
