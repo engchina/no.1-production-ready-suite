@@ -446,6 +446,40 @@ standard = [
 ]
 
 [[package]]
+name = "docrag-core"
+version = "0.2.0"
+source = { editable = "../../../packages/docrag_core" }
+dependencies = [
+    { name = "openai" },
+    { name = "pydantic" },
+]
+
+[package.optional-dependencies]
+docling = [
+    { name = "docling" },
+    { name = "pillow" },
+    { name = "pypdfium2" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "docling", marker = "extra == 'docling'", specifier = ">=2.0" },
+    { name = "openai", specifier = ">=1.99,<2" },
+    { name = "openpyxl", marker = "extra == 'excel'", specifier = ">=3.1" },
+    { name = "pandas", marker = "extra == 'excel'", specifier = ">=2.0" },
+    { name = "pillow", marker = "extra == 'docling'", specifier = ">=10.0" },
+    { name = "pillow", marker = "extra == 'pdf'", specifier = ">=10.0" },
+    { name = "pydantic", specifier = ">=2.0" },
+    { name = "pypdfium2", marker = "extra == 'docling'", specifier = ">=5.0,<6.0" },
+    { name = "pypdfium2", marker = "extra == 'pdf'", specifier = ">=5.0,<6.0" },
+    { name = "pystemmer", marker = "extra == 'japanese'", specifier = "==3.1.0" },
+    { name = "sudachidict-full", marker = "extra == 'japanese'", specifier = "==20260723" },
+    { name = "sudachipy", marker = "extra == 'japanese'", specifier = "==0.6.11" },
+    { name = "xlrd", marker = "extra == 'excel'", specifier = ">=2.0" },
+]
+provides-extras = ["docling", "pdf", "japanese", "excel"]
+
+[[package]]
 name = "et-xmlfile"
 version = "2.0.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1438,6 +1472,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "docling" },
+    { name = "docrag-core", extra = ["docling"] },
     { name = "onnxruntime" },
     { name = "rag-parser-core", extra = ["service"] },
 ]
@@ -1445,6 +1480,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "docling", specifier = "==2.103.0" },
+    { name = "docrag-core", extras = ["docling"], editable = "../../../packages/docrag_core" },
     { name = "onnxruntime", specifier = ">=1.20" },
     { name = "rag-parser-core", extras = ["service"], editable = "../../../packages/rag_parser_core" },
 ]

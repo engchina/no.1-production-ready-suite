@@ -18,7 +18,7 @@ from fastapi import FastAPI, File, Form, UploadFile
 from rag_parser_core.result import ParseHealth, ParseResponse, service_failure_warning
 from rag_parser_core.service import _detect_version, _parse_source_profile
 
-from app.docrag.extraction import analyze_source
+from app.extraction import analyze_source
 
 _BACKEND = "docling"
 logger = logging.getLogger(__name__)

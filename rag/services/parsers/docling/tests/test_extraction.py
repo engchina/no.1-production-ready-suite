@@ -5,8 +5,8 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 from rag_parser_core.extraction import StructuredExtraction
 
-from app.docrag.extraction import DOCRAG_LAYOUT_ARTIFACT, layout_to_extraction
-from app.docrag.layout import LayoutRecord, PageImage
+from app.extraction import DOCRAG_LAYOUT_ARTIFACT, layout_to_extraction
+from docrag.models.layout import LayoutRecord, PageImage
 from app.main import app
 
 
