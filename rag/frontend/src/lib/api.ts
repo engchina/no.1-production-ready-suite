@@ -2915,6 +2915,15 @@ export const api = {
       `/api/business-views/${encodeURIComponent(id)}/approved-faq/suggest`,
       jsonBody({ query })
     ),
+  listDocragAnswers: (businessViewId: string, limit = 50) =>
+    request<DocragAnswerSummary[]>(
+      `/api/search/answers?${new URLSearchParams({
+        business_view_id: businessViewId,
+        limit: String(limit),
+      }).toString()}`
+    ),
+  getDocragAnswer: (traceId: string) =>
+    request<DocragAnswerDetail>(`/api/search/answers/${encodeURIComponent(traceId)}`),
   getRuntimeKnowledge: (id: string) =>
     request<RuntimeKnowledgeData>(
       `/api/business-views/${encodeURIComponent(id)}/runtime-knowledge`
@@ -3309,4 +3318,22 @@ export interface RuntimeKnowledgePreviewData {
   expanded_question: string;
   matched_terms: string[];
   matched_rules: string[];
+}
+
+// --- 保存済み DocRAG 回答(rag_poc の answer JSON 相当) ---
+export interface DocragAnswerSummary {
+  trace_id: string;
+  business_view_id: string | null;
+  surface: "search" | "chat";
+  answer_engine: string;
+  question: string;
+  rewritten_question: string | null;
+  confidence: string | null;
+  created_at: string;
+}
+
+export interface DocragAnswerDetail extends DocragAnswerSummary {
+  answer: string;
+  citations: RetrievedChunk[];
+  docrag: Record<string, JsonValue>;
 }

@@ -48,6 +48,7 @@ import { t, type I18nKey } from "@/lib/i18n";
 import { APP_ROUTES } from "@/lib/routes";
 import { useBusinessViews } from "@/lib/queries";
 import { formatDateTime } from "@/lib/format";
+import { DocragAnswerHistory } from "./DocragAnswerHistory";
 import { DocragAnswerPanel } from "./DocragAnswerPanel";
 import { ApprovedFaqAnswer, ApprovedFaqSuggestions } from "./ApprovedFaqSuggestions";
 
@@ -689,6 +690,12 @@ export function SearchClient() {
             </>
           )}
         </section>
+        {businessViewIds.length > 0 ? (
+          <DocragAnswerHistory
+            key={`${businessViewIds[0]}-${meta?.trace_id ?? ""}`}
+            businessViewId={businessViewIds[0]}
+          />
+        ) : null}
       </PageBody>
     </div>
   );

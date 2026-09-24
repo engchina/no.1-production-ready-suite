@@ -932,6 +932,24 @@ export function useEditRuntimeKnowledge(businessViewId: string) {
   });
 }
 
+/** 保存済み DocRAG 回答の一覧(業務ビュー単位、新しい順)。 */
+export function useDocragAnswers(businessViewId: string | null) {
+  return useQuery({
+    queryKey: ["docrag-answers", businessViewId],
+    queryFn: () => api.listDocragAnswers(businessViewId as string),
+    enabled: Boolean(businessViewId),
+  });
+}
+
+/** 保存済み DocRAG 回答 1 件。traceId が null の間は取得しない。 */
+export function useDocragAnswer(traceId: string | null) {
+  return useQuery({
+    queryKey: ["docrag-answer", traceId],
+    queryFn: () => api.getDocragAnswer(traceId as string),
+    enabled: Boolean(traceId),
+  });
+}
+
 /** 業務ビュー作成。 */
 export function useCreateBusinessView() {
   const qc = useQueryClient();

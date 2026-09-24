@@ -403,3 +403,62 @@ async def test_docrag_rewrite_failure_keeps_original_question(
 
     assert oracle.queries[0] == _nfkc("それの登録方法は？")
     assert "登録ボタン" in response.answer
+
+
+class SavingOracle(FakeOracle):
+    def __init__(self, *, fail: bool = False) -> None:
+        super().__init__()
+        self.saved: list[dict[str, Any]] = []
+        self.fail = fail
+
+    async def save_answer_record(self, record: dict[str, Any]) -> None:
+        if self.fail:
+            raise RuntimeError("db down")
+        self.saved.append(dict(record))
+
+
+async def test_docrag_answer_is_saved_per_surface(monkeypatch: pytest.MonkeyPatch) -> None:
+    import docrag.adapters.oci as docrag_oci
+
+    from app.rag.pipeline import RagPipeline
+
+    monkeypatch.setattr(docrag_oci, "parse_text_response", _fake_llm)
+    oracle = SavingOracle()
+    pipeline = RagPipeline(
+        settings=Settings(rag_answer_engine="docrag"),
+        oracle=oracle,  # type: ignore[arg-type]
+        genai=FakeGenAi(),  # type: ignore[arg-type]
+    )
+
+    response = await pipeline.run(
+        SearchRequest(query="受注の登録方法は？", business_view_ids=["bv-1"]), trace_id="trace-1"
+    )
+    await pipeline.run(SearchRequest(query="受注の登録方法は？"), trace_id="trace-2", history=[])
+
+    first, second = oracle.saved
+    assert first["trace_id"] == "trace-1"
+    assert first["business_view_id"] == "bv-1"
+    assert first["surface"] == "search"
+    assert first["answer"] == response.answer
+    assert first["citations"][0]["chunk_id"] == "doc-1:c1"
+    assert first["diagnostics"]["evidence_tree"]
+    assert second["surface"] == "chat"
+
+
+async def test_docrag_answer_save_failure_still_returns_answer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import docrag.adapters.oci as docrag_oci
+
+    from app.rag.pipeline import RagPipeline
+
+    monkeypatch.setattr(docrag_oci, "parse_text_response", _fake_llm)
+    pipeline = RagPipeline(
+        settings=Settings(rag_answer_engine="docrag"),
+        oracle=SavingOracle(fail=True),  # type: ignore[arg-type]
+        genai=FakeGenAi(),  # type: ignore[arg-type]
+    )
+
+    response = await pipeline.run(SearchRequest(query="受注の登録方法は？"))
+
+    assert "登録ボタン" in response.answer

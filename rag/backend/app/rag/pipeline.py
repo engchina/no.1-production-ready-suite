@@ -1593,6 +1593,16 @@ class RagPipeline:
             elapsed_ms=elapsed,
             diagnostics=diagnostics,
         )
+        await self._save_docrag_answer(
+            trace_id=trace_id,
+            request=request,
+            question=original_query,
+            rewritten_question=rewritten_query,
+            answer=final_answer,
+            citations=outcome.citations,
+            diagnostics=diagnostics.docrag or {},
+            surface="search" if history is None else "chat",
+        )
         return SearchResponse(
             answer=final_answer,
             citations=outcome.citations,
@@ -1602,6 +1612,42 @@ class RagPipeline:
             diagnostics=diagnostics,
             answer_replaced=final_answer != outcome.answer,
         )
+
+    async def _save_docrag_answer(
+        self,
+        *,
+        trace_id: str,
+        request: SearchRequest,
+        question: str,
+        rewritten_question: str,
+        answer: str,
+        citations: list[RetrievedChunk],
+        diagnostics: Mapping[str, JsonValue],
+        surface: str,
+    ) -> None:
+        """DocRAG 回答を保存する(rag_poc の answer JSON 保存に相当)。失敗しても回答は返す。"""
+        business_view_id = (
+            request.business_view_ids[0] if request.business_view_ids else request.business_view_id
+        )
+        try:
+            await self._oracle.save_answer_record(
+                {
+                    "trace_id": trace_id,
+                    "business_view_id": business_view_id,
+                    "surface": surface,
+                    "answer_engine": DOCRAG_ANSWER_ENGINE,
+                    "question": question,
+                    "rewritten_question": rewritten_question,
+                    "answer": answer,
+                    "citations": [citation.model_dump(mode="json") for citation in citations],
+                    "diagnostics": dict(diagnostics),
+                }
+            )
+        except Exception as exc:  # 保存は補助。回答の返却を止めない。
+            logger.warning(
+                "docrag answer record save failed",
+                extra={"trace_id": trace_id, "error": str(exc)},
+            )
 
     async def _rewrite_query_with_history(self, query: str, history: Sequence[ChatTurn]) -> str:
         """会話履歴を踏まえ、最新の質問を単独で意味の通る質問へ書き換える。
