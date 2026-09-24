@@ -1,17 +1,6 @@
-# --- frontend (packages/ui) ---
-node_modules
-packages/*/node_modules
-packages/ui/dist/
-
-# --- backend (packages/backend_core, Python/uv) ---
-.venv
-**/__pycache__/
-*.egg-info/
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-htmlcov/
-.coverage
-
-*.log
+# 製品ごとの .gitignore は各ディレクトリ(platform/ rag/ nl2sql/ agent/)に置く。
+node_modules/
+.venv/
+__pycache__/
 .DS_Store
+.claude/worktrees/
