@@ -37,7 +37,7 @@ _COMMON_EXTRACTION_RECIPE_FIELDS: tuple[str, ...] = (
     "rag_parser_asr_enabled",
 )
 _BACKEND_EXTRACTION_RECIPE_FIELDS: dict[str, tuple[str, ...]] = {
-    "docling": ("rag_parser_docling_enabled",),
+    "docling": ("rag_parser_docling_enabled", "rag_parser_docling_vision_enabled"),
     "marker": ("rag_parser_marker_enabled",),
     "unstructured": ("rag_parser_unstructured_enabled",),
     "unlimited_ocr": (

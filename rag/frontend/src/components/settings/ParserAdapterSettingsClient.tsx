@@ -11,6 +11,7 @@ import {
   FieldError,
   FormStatus,
   Skeleton,
+  Switch,
 } from "@engchina/production-ready-ui";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
@@ -65,6 +66,7 @@ import { cn } from "@/lib/utils";
 type ParserAdapterForm = {
   adapter_backend: ParserAdapterBackend;
   docling_enabled: boolean;
+  docling_vision_enabled: boolean;
   marker_enabled: boolean;
   unstructured_enabled: boolean;
   unlimited_ocr_enabled: boolean;
@@ -81,7 +83,7 @@ type ExternalParserConnectionForm = {
 };
 type ParserAdapterFlagField = Exclude<
   keyof ParserAdapterForm,
-  "adapter_backend" | "connections"
+  "adapter_backend" | "connections" | "docling_vision_enabled"
 >;
 type ConnectionFieldErrors = Record<string, string>;
 
@@ -254,6 +256,7 @@ export function ParserAdapterSettingsClient() {
         errorMessage={save.isError ? saveError : null}
         connectionErrors={connectionErrors}
         onBackendChange={selectBackend}
+        onVisionChange={(checked) => updateForm({ docling_vision_enabled: checked })}
         onConnectionChange={updateConnection}
         onReset={resetForm}
         onSubmit={submit}
@@ -285,6 +288,7 @@ function OverviewCard({
   errorMessage,
   connectionErrors,
   onBackendChange,
+  onVisionChange,
   onConnectionChange,
   onReset,
   onSubmit,
@@ -297,6 +301,7 @@ function OverviewCard({
   errorMessage: string | null;
   connectionErrors: ConnectionFieldErrors;
   onBackendChange: (backend: ParserAdapterBackend) => void;
+  onVisionChange: (checked: boolean) => void;
   onConnectionChange: (
     backend: ExternalParserBackendName,
     update: Partial<ExternalParserConnectionForm>
@@ -468,6 +473,24 @@ function OverviewCard({
               </div>
             ))}
           </div>
+          {form.adapter_backend === "docling" ? (
+            <div className="flex items-start justify-between gap-4 rounded-md border border-border bg-surface p-3">
+              <div className="min-w-0">
+                <div className="text-sm font-medium text-fg">
+                  {t("settings.parserAdapters.doclingVision.label")}
+                </div>
+                <p className="mt-1 text-xs leading-relaxed text-fg-muted">
+                  {t("settings.parserAdapters.doclingVision.hint")}
+                </p>
+              </div>
+              <Switch
+                checked={form.docling_vision_enabled}
+                disabled={saving}
+                aria-label={t("settings.parserAdapters.doclingVision.label")}
+                onCheckedChange={onVisionChange}
+              />
+            </div>
+          ) : null}
           {form.adapter_backend === "local" ? (
             <p className="text-xs leading-relaxed text-warning-fg">
               {t("settings.parserAdapters.legacyBackendNotice")}
@@ -1368,6 +1391,7 @@ function formFromSettings(settings: ParserAdapterSettingsData): ParserAdapterFor
   return {
     adapter_backend: normalizeBackend(settings.adapter_backend),
     docling_enabled: enabledByBackend.get("docling") ?? false,
+    docling_vision_enabled: settings.docling_vision_enabled ?? false,
     marker_enabled: enabledByBackend.get("marker") ?? false,
     unstructured_enabled: enabledByBackend.get("unstructured") ?? false,
     unlimited_ocr_enabled: enabledByBackend.get("unlimited_ocr") ?? false,
@@ -1417,6 +1441,7 @@ function serializeForm(form: ParserAdapterForm) {
   return JSON.stringify({
     adapter_backend: form.adapter_backend,
     docling_enabled: form.docling_enabled,
+    docling_vision_enabled: form.docling_vision_enabled,
     marker_enabled: form.marker_enabled,
     unstructured_enabled: form.unstructured_enabled,
     unlimited_ocr_enabled: form.unlimited_ocr_enabled,
@@ -1431,6 +1456,7 @@ function parserSettingsUpdate(form: ParserAdapterForm): ParserAdapterSettingsUpd
   return {
     adapter_backend: form.adapter_backend,
     docling_enabled: form.docling_enabled,
+    docling_vision_enabled: form.docling_vision_enabled,
     marker_enabled: form.marker_enabled,
     unstructured_enabled: form.unstructured_enabled,
     unlimited_ocr_enabled: form.unlimited_ocr_enabled,

@@ -6,6 +6,7 @@ import {
   Clipboard,
   Hash,
   Layers3,
+  ImageIcon,
   ListChecks,
   Table2,
 } from "lucide-react";
@@ -29,6 +30,7 @@ import {
   parseStructuredExtraction,
   summarizeDocumentElements,
 } from "@/lib/extraction";
+import { elementVision, tableHtmlToText } from "@/lib/docrag-element";
 import { scrollFocusedControlIntoView } from "@/lib/focus-scroll";
 import { formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
@@ -392,6 +394,7 @@ function ElementItem({
 }) {
   const id = elementKey(element);
   const lowConfidence = typeof element.confidence === "number" && element.confidence < 0.65;
+  const vision = elementVision(element);
   return (
     <li>
       <button
@@ -434,9 +437,23 @@ function ElementItem({
           ) : null}
         </div>
         <div className="mt-2">
-          <ExtractedText text={element.text} clamp />
+          <ExtractedText text={tableHtmlToText(element.text)} clamp />
         </div>
+        {vision?.retrievalText ? (
+          <p className="mt-2 line-clamp-3 border-l-2 border-accent-emphasis pl-2 text-xs leading-relaxed text-fg-muted">
+            {vision.retrievalText}
+          </p>
+        ) : null}
         <div className="mt-2 flex flex-wrap items-center gap-2">
+          {vision?.status ? (
+            <InfoChip
+              icon={ImageIcon}
+              label={t("flow.extraction.vision.status", { status: visionStatusLabel(vision.status) })}
+            />
+          ) : null}
+          {vision?.excluded ? (
+            <InfoChip icon={ImageIcon} label={t("flow.extraction.vision.excluded")} />
+          ) : null}
           <InfoChip
             icon={Hash}
             label={element.source_parser ? `${id} / ${element.source_parser}` : id}
@@ -584,6 +601,13 @@ function CopyRawTextButton({ text }: { text: string }) {
       </Button>
     </span>
   );
+}
+
+function visionStatusLabel(status: string): string {
+  if (status === "succeeded") return t("flow.extraction.vision.succeeded");
+  if (status === "failed") return t("flow.extraction.vision.failed");
+  if (status === "skipped") return t("flow.extraction.vision.skipped");
+  return status;
 }
 
 function elementKindLabel(kind: string): string {

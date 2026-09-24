@@ -171,7 +171,14 @@ services:
       context: .
       dockerfile: services/parsers/docling/Dockerfile
       args: *hf-build-args
-    environment: *hf-env
+    environment:
+      <<: *hf-env
+      # DocRAG の Vision 図説明(レシピで有効化時のみ)は openai SDK で OCI Enterprise AI を呼ぶ。
+      OCI_ENTERPRISE_AI_ENDPOINT: ${OCI_ENTERPRISE_AI_ENDPOINT:-}
+      OCI_ENTERPRISE_AI_API_KEY: ${OCI_ENTERPRISE_AI_API_KEY:-}
+      OCI_ENTERPRISE_AI_PROJECT_OCID: ${OCI_ENTERPRISE_AI_PROJECT_OCID:-}
+      OCI_ENTERPRISE_AI_VLM_MODEL: ${OCI_ENTERPRISE_AI_VLM_MODEL:-}
+      OCI_ENTERPRISE_AI_DEFAULT_MODEL: ${OCI_ENTERPRISE_AI_DEFAULT_MODEL:-}
     restart: unless-stopped
 
   parser-marker:

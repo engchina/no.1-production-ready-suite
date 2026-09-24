@@ -127,6 +127,12 @@ class ParserServiceClient:
         url = resolve_service_base_url(self._settings, field)
         return url or None
 
+    def _parser_options(self, backend: str) -> dict[str, object]:
+        """backend 固有のレシピ設定を parser サービスへ渡す(現状 docling の Vision のみ)。"""
+        if backend == "docling":
+            return {"vision_enabled": bool(self._settings.rag_parser_docling_vision_enabled)}
+        return {}
+
     def runner(
         self,
         backend: str,
@@ -181,6 +187,7 @@ class ParserServiceClient:
             "source_profile": (
                 source_profile.model_dump_json() if source_profile is not None else "null"
             ),
+            "parser_options": json.dumps(self._parser_options(backend)),
         }
         try:
             payload = self._post_parse_json(backend, url, files=files, data=data)

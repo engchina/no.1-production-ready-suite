@@ -6,6 +6,8 @@ requires-python = ">=3.12"
 dependencies = [
     "rag-parser-core[service]",
     "docling==2.103.0",
+    # DocRAG 解析は RapidOCR(ONNX)で OCR する。docling は onnxruntime を必須依存に含めない。
+    "onnxruntime>=1.20",
 ]
 
 [tool.uv.sources]

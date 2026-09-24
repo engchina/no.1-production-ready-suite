@@ -68,9 +68,7 @@ class SourceDerivation(BaseModel):
     derived_content_type: str | None = None
     derived_sha256: str | None = None
     page_map: dict[str, int] = Field(default_factory=dict)
-    created_at: str = Field(
-        default_factory=lambda: datetime.now(UTC).isoformat()
-    )
+    created_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
     warnings: list[str] = Field(default_factory=list)
 
 

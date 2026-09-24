@@ -174,9 +174,11 @@ def create_service_parse_app(
         effective_content_type = content_type or (
             profile.content_type if profile is not None else ""
         )
-        effective_document_id = (document_id or "").strip() or (
-            profile.content_sha256 if profile is not None else ""
-        ) or "document"
+        effective_document_id = (
+            (document_id or "").strip()
+            or (profile.content_sha256 if profile is not None else "")
+            or "document"
+        )
         return await parse(
             source_bytes, effective_content_type, profile, effective_document_id, prompt
         )

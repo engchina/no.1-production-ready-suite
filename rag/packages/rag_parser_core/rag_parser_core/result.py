@@ -51,9 +51,7 @@ SERVICE_ADAPTER_BACKENDS = frozenset(
 )
 
 # 外部 adapter 実行の注入点。backend は HTTP runner を、service/test は in-process を渡す。
-ExternalAdapterRunner = Callable[
-    [str, bytes, "SourceProfile | None", str], "ParserRegistryResult"
-]
+ExternalAdapterRunner = Callable[[str, bytes, "SourceProfile | None", str], "ParserRegistryResult"]
 
 
 @dataclass(frozen=True)

@@ -706,6 +706,7 @@ export interface KnowledgeBaseIngestionConfig {
   preprocess_profile: PreprocessProfileName | null;
   parser_adapter_backend: ParserAdapterBackend | null;
   parser_docling_enabled: boolean | null;
+  parser_docling_vision_enabled?: boolean | null;
   parser_marker_enabled: boolean | null;
   parser_unstructured_enabled: boolean | null;
   parser_unlimited_ocr_enabled: boolean | null;
@@ -1779,11 +1780,13 @@ export interface ParserAdapterSettingsData {
   capabilities: ParserBackendCapabilityData[];
   connections: ExternalParserConnectionData[];
   config_source: "runtime";
+  docling_vision_enabled?: boolean;
 }
 
 export interface ParserAdapterSettingsUpdate {
   adapter_backend: ParserAdapterBackend;
   docling_enabled?: boolean;
+  docling_vision_enabled?: boolean;
   marker_enabled?: boolean;
   unstructured_enabled?: boolean;
   unlimited_ocr_enabled?: boolean;

@@ -91,6 +91,7 @@ const GRAPH_OPTIONS: SelectFieldOption<GraphProfileName>[] = GRAPH_VALUES.map(
 const EDITED_FIELDS: Array<keyof DocumentProcessingConfig> = [
   "preprocess_profile",
   "parser_adapter_backend",
+  "parser_docling_vision_enabled",
   "chunking_strategy",
   "chunk_context_header_enabled",
   "graph_profile",
@@ -107,6 +108,7 @@ function emptyConfig(): DocumentProcessingConfig {
     preprocess_profile: null,
     parser_adapter_backend: null,
     parser_docling_enabled: null,
+    parser_docling_vision_enabled: null,
     parser_marker_enabled: null,
     parser_unstructured_enabled: null,
     parser_unlimited_ocr_enabled: null,
@@ -411,6 +413,16 @@ export function DocumentProcessingConfigPanel({
                   hint={parserHint}
                   warning={parserWarning}
                 />
+                {effectiveParserBackend === "docling" ? (
+                  <BooleanRow
+                    id={`document-docling-vision-${documentId}`}
+                    label={t("settings.parserAdapters.doclingVision.label")}
+                    value={form.parser_docling_vision_enabled ?? null}
+                    effectiveValue={configs.effective.parser_docling_vision_enabled ?? null}
+                    disabled={disabled}
+                    onChange={(value) => update({ parser_docling_vision_enabled: value })}
+                  />
+                ) : null}
                 <SelectRow
                   id={`document-chunking-${documentId}`}
                   label={t("knowledgeBases.adapter.field.chunkingStrategy")}
