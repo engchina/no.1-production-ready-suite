@@ -6,7 +6,7 @@ from collections.abc import AsyncIterator, Iterable
 from contextlib import suppress
 from time import perf_counter
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from app.clients.oracle import CustomPromptNotConfiguredError, OracleClient
@@ -27,6 +27,8 @@ from app.rag.rate_limit import enforce_rate_limit
 from app.schemas.common import ApiResponse
 from app.schemas.feedback import CitationFeedbackRequest, CitationFeedbackResponse
 from app.schemas.search import (
+    AnswerRecordDetail,
+    AnswerRecordSummary,
     SearchRequest,
     SearchResponse,
 )
@@ -412,3 +414,33 @@ def _sse_event(event: str, data: object) -> str:
     """SSE イベント文字列を生成する。"""
     payload = json.dumps(data, ensure_ascii=False)
     return f"event: {event}\ndata: {payload}\n\n"
+
+
+@router.get("/answers", response_model=ApiResponse[list[AnswerRecordSummary]])
+async def list_docrag_answers(
+    business_view_id: str | None = Query(default=None, max_length=128),
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> ApiResponse[list[AnswerRecordSummary]]:
+    """保存済み DocRAG 回答を新しい順に返す(業務ビューで絞り込み可)。"""
+    rows = await OracleClient().list_answer_records(
+        business_view_id=business_view_id, limit=limit, offset=offset
+    )
+    return ApiResponse(data=[AnswerRecordSummary.model_validate(row) for row in rows])
+
+
+@router.get("/answers/{trace_id}", response_model=ApiResponse[AnswerRecordDetail])
+async def get_docrag_answer(trace_id: str) -> ApiResponse[AnswerRecordDetail]:
+    """保存済み DocRAG 回答 1 件(回答・引用・根拠と実行記録)を返す。"""
+    row = await OracleClient().get_answer_record(trace_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="回答が見つかりません。")
+    return ApiResponse(
+        data=AnswerRecordDetail.model_validate(
+            {
+                **row,
+                "citations": row.get("citations_json") or [],
+                "docrag": row.get("diagnostics_json") or {},
+            }
+        )
+    )

@@ -227,3 +227,63 @@ test("類似問を使わない場合は DocRAG 回答と根拠パネルを表示
   await expect(panel.getByText("回答に使用")).toBeVisible();
   await expectNoPageOverflow(page);
 });
+
+test("DocRAG の回答履歴から過去の回答・根拠を開き直せる", async ({ page }) => {
+  await mockCommon(page);
+  await mockBusinessViewApi(page);
+  await page.route("**/api/search/answers**", (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/answers/trace-old")) {
+      return route.fulfill({
+        json: envelope({
+          trace_id: "trace-old",
+          business_view_id: "bv-1",
+          surface: "search",
+          answer_engine: "docrag",
+          question: "受注を取り消すには？",
+          rewritten_question: null,
+          confidence: "medium",
+          created_at: "2026-09-25T01:00:00Z",
+          answer: "受注一覧で取消ボタンを押します。",
+          citations: [],
+          docrag: {
+            confidence: "medium",
+            needs_human_review: false,
+            execution_steps: [],
+            evidence_tree: [],
+          },
+        }),
+      });
+    }
+    return route.fulfill({
+      json: envelope([
+        {
+          trace_id: "trace-old",
+          business_view_id: "bv-1",
+          surface: "search",
+          answer_engine: "docrag",
+          question: "受注を取り消すには？",
+          rewritten_question: null,
+          confidence: "medium",
+          created_at: "2026-09-25T01:00:00Z",
+        },
+      ]),
+    });
+  });
+
+  await page.goto("/search");
+  await page.getByRole("combobox", { name: /対象の業務ビュー/ }).click();
+  await page
+    .getByRole("listbox", { name: /対象の業務ビュー/ })
+    .getByRole("option", { name: /受注サポート/ })
+    .click();
+  await page.keyboard.press("Escape");
+
+  const history = page.getByRole("list", { name: "DocRAG の回答履歴" });
+  await history.getByRole("button", { name: /受注を取り消すには？/ }).click();
+  await expect(page.getByText("受注一覧で取消ボタンを押します。")).toBeVisible();
+  await expect(
+    page.getByRole("region", { name: "回答の根拠と実行記録（DocRAG）" }).getByText("信頼度: medium")
+  ).toBeVisible();
+  await expectNoPageOverflow(page);
+});

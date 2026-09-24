@@ -478,3 +478,24 @@ def validate_rerank_top_n(top_k: int, rerank_top_n: int) -> None:
     """rerank_top_n は top_k 以下に制限する。"""
     if rerank_top_n > top_k:
         raise ValueError("rerank_top_n は top_k 以下にしてください。")
+
+
+class AnswerRecordSummary(BaseModel):
+    """保存済み DocRAG 回答の一覧行(本文・根拠は含めない)。"""
+
+    trace_id: str
+    business_view_id: str | None = None
+    surface: Literal["search", "chat"]
+    answer_engine: str
+    question: str
+    rewritten_question: str | None = None
+    confidence: str | None = None
+    created_at: datetime
+
+
+class AnswerRecordDetail(AnswerRecordSummary):
+    """保存済み DocRAG 回答(本文・引用・根拠と実行記録)。"""
+
+    answer: str
+    citations: list[RetrievedChunk] = Field(default_factory=list)
+    docrag: dict[str, JsonValue] = Field(default_factory=dict)

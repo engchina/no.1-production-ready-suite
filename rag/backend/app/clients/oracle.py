@@ -2121,6 +2121,94 @@ class OracleClient:
         refs = await self._resolve_knowledge_base_refs(view.config.normalized_knowledge_base_ids())
         return view.model_copy(update={"knowledge_bases": refs})
 
+    async def save_answer_record(self, record: Mapping[str, object]) -> None:
+        """DocRAG 回答を保存する(同じ trace_id は上書き)。"""
+        binds = {
+            "trace_id": record["trace_id"],
+            "business_view_id": record.get("business_view_id"),
+            "surface": record["surface"],
+            "answer_engine": record["answer_engine"],
+            "question": record["question"],
+            "rewritten_question": record.get("rewritten_question") or None,
+            "answer": record["answer"],
+            "citations_json": _json_bind(record.get("citations") or []),
+            "diagnostics_json": _json_bind(record.get("diagnostics") or {}),
+        }
+
+        def operation(connection: OracleConnectionProtocol) -> None:
+            _execute(
+                connection,
+                """
+                MERGE INTO rag_answer_records target
+                USING (SELECT :trace_id AS trace_id FROM dual) source
+                ON (target.trace_id = source.trace_id)
+                WHEN MATCHED THEN UPDATE SET
+                    target.business_view_id = :business_view_id,
+                    target.surface = :surface,
+                    target.answer_engine = :answer_engine,
+                    target.question = :question,
+                    target.rewritten_question = :rewritten_question,
+                    target.answer = :answer,
+                    target.citations_json = :citations_json,
+                    target.diagnostics_json = :diagnostics_json
+                WHEN NOT MATCHED THEN INSERT (
+                    trace_id, business_view_id, surface, answer_engine, question,
+                    rewritten_question, answer, citations_json, diagnostics_json
+                ) VALUES (
+                    :trace_id, :business_view_id, :surface, :answer_engine, :question,
+                    :rewritten_question, :answer, :citations_json, :diagnostics_json
+                )
+                """,
+                binds,
+                input_sizes=_json_input_sizes("citations_json", "diagnostics_json"),
+            )
+
+        await self._run_transaction(operation)
+
+    async def list_answer_records(
+        self,
+        *,
+        business_view_id: str | None,
+        limit: int,
+        offset: int = 0,
+    ) -> list[dict[str, object]]:
+        """保存済み DocRAG 回答を新しい順に返す(本文・JSON は含めない一覧用)。"""
+        where = "WHERE business_view_id = :business_view_id" if business_view_id else ""
+        binds: dict[str, object] = {"limit": limit, "offset": offset}
+        if business_view_id:
+            binds["business_view_id"] = business_view_id
+        rows = await self._fetch_all(
+            f"""
+            SELECT trace_id, business_view_id, surface, answer_engine, question,
+                   rewritten_question, created_at,
+                   JSON_VALUE(diagnostics_json, '$.confidence') AS confidence
+            FROM rag_answer_records
+            {where}
+            ORDER BY created_at DESC, trace_id DESC
+            OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY
+            """,
+            binds,
+        )
+        return rows
+
+    async def get_answer_record(self, trace_id: str) -> dict[str, object] | None:
+        """保存済み DocRAG 回答を 1 件返す。"""
+        row = await self._fetch_one(
+            """
+            SELECT trace_id, business_view_id, surface, answer_engine, question,
+                   rewritten_question, answer, citations_json, diagnostics_json, created_at
+            FROM rag_answer_records
+            WHERE trace_id = :trace_id
+            """,
+            {"trace_id": trace_id},
+        )
+        if row is None:
+            return None
+        for key in ("citations_json", "diagnostics_json"):
+            if isinstance(row.get(key), str):
+                row[key] = json.loads(str(row[key]))
+        return row
+
     async def get_business_view_knowledge(
         self,
         business_view_id: str,
@@ -11286,6 +11374,31 @@ CREATE TABLE {table_name} (
         kind IN ('domain_keywords', 'approved_faq', 'runtime_knowledge')
     )
 );
+""".strip()
+
+
+def oracle_answer_record_schema_sql(
+    table_name: str = "rag_answer_records",
+) -> str:
+    """DocRAG 回答の保存 table DDL(rag_poc の answer JSON 保存に相当)。"""
+
+    return f"""
+CREATE TABLE {table_name} (
+    trace_id            VARCHAR2(64) PRIMARY KEY,
+    business_view_id    VARCHAR2(64),
+    surface             VARCHAR2(16) NOT NULL,
+    answer_engine       VARCHAR2(32) NOT NULL,
+    question            CLOB NOT NULL,
+    rewritten_question  CLOB,
+    answer              CLOB NOT NULL,
+    citations_json      JSON NOT NULL,
+    diagnostics_json    JSON NOT NULL,
+    created_at          TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    CONSTRAINT {table_name}_surface_ck CHECK (surface IN ('search', 'chat'))
+);
+
+CREATE INDEX {table_name}_view_idx
+    ON {table_name} (business_view_id, created_at DESC);
 """.strip()
 
 

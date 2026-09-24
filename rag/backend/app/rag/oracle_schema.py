@@ -16,6 +16,7 @@ from typing import Any
 from app.clients.oracle import (
     ORACLE_TEXT_LEXER,
     oracle_agent_memory_schema_sql,
+    oracle_answer_record_schema_sql,
     oracle_business_view_knowledge_schema_sql,
     oracle_business_view_schema_sql,
     oracle_chunk_set_schema_sql,
@@ -164,6 +165,11 @@ def oracle_schema_sections() -> list[OracleSchemaSection]:
             name="business_views",
             table_name="rag_business_views",
             sql=oracle_business_view_schema_sql(),
+        ),
+        OracleSchemaSection(
+            name="answer_records",
+            table_name="rag_answer_records",
+            sql=oracle_answer_record_schema_sql(),
         ),
         OracleSchemaSection(
             name="business_view_knowledge",
@@ -421,6 +427,11 @@ def oracle_schema_migration_sections() -> list[OracleSchemaSection]:
             name="20260925_001_business_view_knowledge",
             table_name="rag_business_view_knowledge",
             sql=_business_view_knowledge_migration_sql(),
+        ),
+        OracleSchemaSection(
+            name="20260925_002_answer_records",
+            table_name="rag_answer_records",
+            sql=_answer_records_migration_sql(),
         ),
     ]
 
@@ -1574,6 +1585,48 @@ BEGIN
         'RAG_FEEDBACK_USER_TRACE_IDX',
         'tenant_id_hash, user_id_hash, trace_id, created_at DESC'
     );
+END;
+/
+""".strip()
+
+
+def _answer_records_migration_sql() -> str:
+    """DocRAG 回答の保存表と業務ビュー別の新しい順 index を追加する。"""
+
+    return """
+DECLARE
+    v_table_count NUMBER;
+    v_index_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_table_count
+    FROM user_tables
+    WHERE table_name = 'RAG_ANSWER_RECORDS';
+
+    IF v_table_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE TABLE rag_answer_records ('
+            || 'trace_id VARCHAR2(64) PRIMARY KEY,'
+            || 'business_view_id VARCHAR2(64),'
+            || 'surface VARCHAR2(16) NOT NULL,'
+            || 'answer_engine VARCHAR2(32) NOT NULL,'
+            || 'question CLOB NOT NULL,'
+            || 'rewritten_question CLOB,'
+            || 'answer CLOB NOT NULL,'
+            || 'citations_json JSON NOT NULL,'
+            || 'diagnostics_json JSON NOT NULL,'
+            || 'created_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,'
+            || 'CONSTRAINT rag_answer_records_surface_ck CHECK '
+            || '(surface IN (''search'', ''chat'')))';
+    END IF;
+
+    SELECT COUNT(*) INTO v_index_count
+    FROM user_indexes
+    WHERE index_name = 'RAG_ANSWER_RECORDS_VIEW_IDX';
+    IF v_index_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_answer_records_view_idx '
+            || 'ON rag_answer_records (business_view_id, created_at DESC)';
+    END IF;
 END;
 /
 """.strip()

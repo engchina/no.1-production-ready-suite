@@ -15,6 +15,7 @@ import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 import { FeedbackControls } from "@/components/feedback/FeedbackControls";
 import { CitationCard } from "@/components/search/CitationCard";
+import { SavedDocragAnswer } from "@/components/search/DocragAnswerHistory";
 import { DocragAnswerPanel } from "@/components/search/DocragAnswerPanel";
 import { EmptyState, ErrorState, LoadingState } from "@/components/StateViews";
 import type { ChatMessage, ConversationSummary, RetrievedChunk } from "@/lib/api";
@@ -28,6 +29,7 @@ import {
   useConversation,
   useConversations,
   useCreateConversation,
+  useDocragAnswers,
   useUpdateConversation,
 } from "@/lib/queries";
 import { useQueryClient } from "@tanstack/react-query";
@@ -86,6 +88,7 @@ function AssistantColumn({
   errorMessage,
   guardrailWarnings,
   docrag = null,
+  savedDocrag = false,
   showLabel,
   className,
 }: {
@@ -99,6 +102,8 @@ function AssistantColumn({
   errorMessage: string | null;
   guardrailWarnings: string[];
   docrag?: unknown;
+  /** 保存済み DocRAG 回答がある(trace_id から根拠と実行記録を開ける)。 */
+  savedDocrag?: boolean;
   showLabel: boolean;
   className?: string;
 }) {
@@ -140,6 +145,14 @@ function AssistantColumn({
         </Banner>
       ) : null}
       {!streaming && !errorMessage && docrag ? <DocragAnswerPanel docrag={docrag} /> : null}
+      {!streaming && !errorMessage && !docrag && savedDocrag && traceId ? (
+        <details className="border-t border-border pt-1">
+          <summary className="flex min-h-11 cursor-pointer items-center px-2 text-sm font-medium text-fg">
+            {t("chat.docrag.open")}
+          </summary>
+          <SavedDocragAnswer traceId={traceId} businessViewId={businessViewId} showAnswer={false} />
+        </details>
+      ) : null}
       {!streaming && !errorMessage ? (
         <FeedbackControls
           traceId={traceId}
@@ -196,6 +209,7 @@ function MessageTurn({
     errorMessage: string | null;
     guardrailWarnings: string[];
     docrag?: unknown;
+    savedDocrag?: boolean;
   }[];
 }) {
   const compare = columns.length > 1;
@@ -235,6 +249,7 @@ function MessageTurn({
             errorMessage={column.errorMessage}
             guardrailWarnings={column.guardrailWarnings}
             docrag={column.docrag}
+            savedDocrag={column.savedDocrag}
             showLabel={compare}
             className={
               compare && columns.length % 2 === 1 && index === columns.length - 1
@@ -258,6 +273,17 @@ export function ChatClient() {
   const businessViews = businessViewsQuery.data?.items ?? [];
   const [businessViewId, setBusinessViewId] = useState<string | null>(() =>
     searchParams.get("business_view_id")
+  );
+  // 保存済み DocRAG 回答の trace_id(チャット分)。該当する回答だけ根拠と実行記録を開ける。
+  const docragAnswersQuery = useDocragAnswers(businessViewId);
+  const docragTraceIds = useMemo(
+    () =>
+      new Set(
+        (docragAnswersQuery.data ?? [])
+          .filter((answer) => answer.surface === "chat")
+          .map((answer) => answer.trace_id)
+      ),
+    [docragAnswersQuery.data]
   );
 
   const conversationsQuery = useConversations({
@@ -480,6 +506,7 @@ export function ChatClient() {
           onModelError: ({ model_id, message }) =>
             updateColumn(model_id, { status: "error", errorMessage: message }),
           onAllDone: async () => {
+            void queryClient.invalidateQueries({ queryKey: ["docrag-answers"] });
             await queryClient.invalidateQueries({ queryKey: ["conversations"] });
             setLiveTurn(null);
           },
@@ -737,6 +764,9 @@ export function ChatClient() {
                         streaming: false,
                         errorMessage: reply.status === "ERROR" ? reply.content : null,
                         guardrailWarnings: reply.guardrail_warnings,
+                        savedDocrag: Boolean(
+                          reply.trace_id && docragTraceIds.has(reply.trace_id)
+                        ),
                       }))}
                     />
                   ))}
