@@ -1990,6 +1990,8 @@ export interface RetrievalSettingsData {
   gap_stop: boolean;
   corrective_retrieval: boolean;
   business_fit_weighting: boolean;
+  /** 全文検索の分割方式(業務ビューの上書きが優先)。 */
+  text_search_tokenizer: TextSearchTokenizerName;
   modes: RetrievalStrategyStatusData[];
   config_source: "runtime";
 }
@@ -2002,6 +2004,7 @@ export interface RetrievalSettingsUpdate {
   gap_stop?: boolean;
   corrective_retrieval?: boolean;
   business_fit_weighting?: boolean;
+  text_search_tokenizer?: TextSearchTokenizerName;
 }
 
 // --- 設定: Grounding アダプター ---

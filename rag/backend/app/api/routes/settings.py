@@ -2753,6 +2753,7 @@ def _retrieval_settings_data(settings: Settings) -> RetrievalSettingsData:
         gap_stop=runtime.gap_stop,
         corrective_retrieval=runtime.corrective_retrieval,
         business_fit_weighting=runtime.business_fit_weighting,
+        text_search_tokenizer=settings.rag_text_search_tokenizer,
         modes=_retrieval_status_data(runtime.modes),
         config_source="runtime",
     )
@@ -2790,6 +2791,8 @@ def _retrieval_settings_updates(
         updates["rag_retrieval_corrective_enabled"] = payload.corrective_retrieval
     if payload.business_fit_weighting is not None:
         updates["rag_retrieval_business_fit_weighting_enabled"] = payload.business_fit_weighting
+    if payload.text_search_tokenizer is not None:
+        updates["rag_text_search_tokenizer"] = payload.text_search_tokenizer
     return updates
 
 
@@ -2803,6 +2806,7 @@ def _apply_retrieval_settings(target: Settings, source: Settings) -> None:
     target.rag_retrieval_business_fit_weighting_enabled = (
         source.rag_retrieval_business_fit_weighting_enabled
     )
+    target.rag_text_search_tokenizer = source.rag_text_search_tokenizer
 
 
 def _persist_retrieval_settings(settings: Settings) -> None:
@@ -2824,6 +2828,7 @@ def _persist_retrieval_settings(settings: Settings) -> None:
             "RAG_RETRIEVAL_BUSINESS_FIT_WEIGHTING_ENABLED": _format_env_bool(
                 settings.rag_retrieval_business_fit_weighting_enabled
             ),
+            "RAG_TEXT_SEARCH_TOKENIZER": settings.rag_text_search_tokenizer,
         },
         section_comment="# Retrieval アダプター",
         error_detail="検索方法設定を backend/.env へ保存できませんでした。",

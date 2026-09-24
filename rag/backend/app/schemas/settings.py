@@ -878,6 +878,8 @@ class RetrievalSettingsData(BaseModel):
     gap_stop: bool
     corrective_retrieval: bool
     business_fit_weighting: bool
+    # 全文検索(Oracle Text)の分割方式。業務ビューの query.text_search_tokenizer が優先する。
+    text_search_tokenizer: Literal["builtin", "sudachi"] = "builtin"
     modes: list[RetrievalStrategyStatusData] = Field(default_factory=list)
     config_source: Literal["runtime"]
 
@@ -894,6 +896,7 @@ class RetrievalSettingsUpdate(BaseModel):
     gap_stop: bool | None = None
     corrective_retrieval: bool | None = None
     business_fit_weighting: bool | None = None
+    text_search_tokenizer: Literal["builtin", "sudachi"] | None = None
 
     @model_validator(mode="after")
     def validate_any_field(self) -> "RetrievalSettingsUpdate":
@@ -907,6 +910,7 @@ class RetrievalSettingsUpdate(BaseModel):
                 self.gap_stop,
                 self.corrective_retrieval,
                 self.business_fit_weighting,
+                self.text_search_tokenizer,
             )
         ):
             raise ValueError("更新する検索方法設定を 1 つ以上指定してください。")
