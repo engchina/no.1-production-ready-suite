@@ -1234,6 +1234,7 @@ def _model_settings_document(
         "parser_adapters": {
             "adapter_backend": parser_settings.rag_parser_adapter_backend,
             "docling_enabled": parser_settings.rag_parser_docling_enabled,
+            "docling_vision_enabled": parser_settings.rag_parser_docling_vision_enabled,
             "marker_enabled": parser_settings.rag_parser_marker_enabled,
             "unstructured_enabled": parser_settings.rag_parser_unstructured_enabled,
             "unlimited_ocr_enabled": parser_settings.rag_parser_unlimited_ocr_enabled,
@@ -2169,6 +2170,7 @@ def _parser_adapter_settings_data(settings: Settings) -> ParserAdapterSettingsDa
     return ParserAdapterSettingsData(
         adapter_backend=runtime.adapter_backend,
         effective_order=list(runtime.effective_order),
+        docling_vision_enabled=settings.rag_parser_docling_vision_enabled,
         service_backends=_parser_service_backends_data(settings),
         adapters=[
             ParserAdapterStatusData(
@@ -2361,6 +2363,10 @@ def _parser_adapter_settings_candidate(
             payload.docling_enabled,
             base.rag_parser_docling_enabled,
         ),
+        "rag_parser_docling_vision_enabled": _optional_bool(
+            payload.docling_vision_enabled,
+            base.rag_parser_docling_vision_enabled,
+        ),
         "rag_parser_marker_enabled": _optional_bool(
             payload.marker_enabled,
             base.rag_parser_marker_enabled,
@@ -2404,6 +2410,7 @@ def _apply_parser_adapter_settings(target: Settings, source: Settings) -> None:
     """保存済み parser adapter 設定を現在プロセスへ反映する。"""
     target.rag_parser_adapter_backend = source.rag_parser_adapter_backend
     target.rag_parser_docling_enabled = source.rag_parser_docling_enabled
+    target.rag_parser_docling_vision_enabled = source.rag_parser_docling_vision_enabled
     target.rag_parser_marker_enabled = source.rag_parser_marker_enabled
     target.rag_parser_unstructured_enabled = source.rag_parser_unstructured_enabled
     target.rag_parser_unlimited_ocr_enabled = source.rag_parser_unlimited_ocr_enabled

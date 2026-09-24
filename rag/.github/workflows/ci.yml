@@ -89,6 +89,32 @@ jobs:
         # GHSA-537c-gmf6-5ccf の ignore は不要になった。ignore を戻す場合は理由をここへ明記する。
         run: uv run pip-audit
 
+  docrag-core:
+    name: DocRAG core
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/docrag_core
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      # rag_poc(DocRAG)由来の解析・分割・回答・FAQ/ドメインキーワードの回帰テスト。
+      # docling/torch は入れず、PDF 描画・日本語分割・Excel の任意依存だけを入れる。
+      - name: Test docrag_core
+        run: |
+          uv venv -p 3.12 .venv
+          uv pip install -p .venv/bin/python -e ".[pdf,japanese,excel,oracle]" pytest
+          .venv/bin/python -m pytest -q tests
+
   frontend:
     name: Frontend
     runs-on: ubuntu-latest

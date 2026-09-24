@@ -183,6 +183,9 @@ export const ja = {
   "settings.parserAdapters.backend.oci_document_understanding.description":
     "OCI Document Understanding の非同期 job で日本語 OCR/表抽出",
   "settings.parserAdapters.capabilities": "対応形式",
+  "settings.parserAdapters.doclingVision.label": "図・画像を AI で読み取る（Vision）",
+  "settings.parserAdapters.doclingVision.hint":
+    "図や画像を含む表を Vision モデルで説明し、検索できる本文にします。画像 1 枚ごとに LLM の呼び出しと解析時間がかかります。",
   "settings.parserAdapters.legacyBackendNotice":
     "旧『local』設定です。未選択時は既定の Unstructured で解析します(内蔵フォールバックは廃止)。下から解析方式を選ぶと上書きされます。",
   "settings.parserAdapters.serviceBackend.unconfigured": "未設定",
@@ -2216,6 +2219,11 @@ export const ja = {
   "flow.extraction.navigation.title": "章節ナビゲーション",
   "flow.extraction.assets.title": "図表の要約",
   "flow.extraction.fields.title": "抽出項目",
+  "flow.extraction.vision.status": "Vision: {status}",
+  "flow.extraction.vision.succeeded": "説明済み",
+  "flow.extraction.vision.failed": "失敗",
+  "flow.extraction.vision.skipped": "対象外",
+  "flow.extraction.vision.excluded": "装飾画像（検索対象外）",
   "flow.extraction.kind.title": "見出し",
   "flow.extraction.kind.text": "本文",
   "flow.extraction.kind.list": "リスト",

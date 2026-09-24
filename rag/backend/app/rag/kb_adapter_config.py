@@ -57,6 +57,7 @@ _INGESTION_FIELD_MAP: dict[str, str] = {
     "preprocess_profile": "rag_preprocess_profile",
     "parser_adapter_backend": "rag_parser_adapter_backend",
     "parser_docling_enabled": "rag_parser_docling_enabled",
+    "parser_docling_vision_enabled": "rag_parser_docling_vision_enabled",
     "parser_marker_enabled": "rag_parser_marker_enabled",
     "parser_unstructured_enabled": "rag_parser_unstructured_enabled",
     "parser_unlimited_ocr_enabled": "rag_parser_unlimited_ocr_enabled",
@@ -117,6 +118,7 @@ class KnowledgeBaseIngestionConfig(BaseModel):
     preprocess_profile: PreprocessProfile | None = None
     parser_adapter_backend: ParserAdapterBackend | None = None
     parser_docling_enabled: bool | None = None
+    parser_docling_vision_enabled: bool | None = None
     parser_marker_enabled: bool | None = None
     parser_unstructured_enabled: bool | None = None
     parser_unlimited_ocr_enabled: bool | None = None

@@ -27,9 +27,7 @@ NUMBERED_HEADING = re.compile(
 )
 BULLET_LINE = re.compile(r"^\s*(?:[-*・]|\d+[.)）]|[（(]\d+[）)])\s+")
 TABLE_LINE = re.compile(r"^\s*\|.+\|\s*$")
-FENCED_CODE_START = re.compile(
-    r"^\s*(?P<fence>`{3,}|~{3,})(?P<language>[\w.+#-]*)\s*$"
-)
+FENCED_CODE_START = re.compile(r"^\s*(?P<fence>`{3,}|~{3,})(?P<language>[\w.+#-]*)\s*$")
 FENCED_CODE_ENDS = {
     "`": re.compile(r"^\s*`{3,}\s*$"),
     "~": re.compile(r"^\s*~{3,}\s*$"),
@@ -42,12 +40,8 @@ DISPLAY_MATH_ENDS = {
     "\\[": re.compile(r"^.*\\\]\s*$"),
 }
 LATEX_EQUATION_ENV_NAMES = r"(?:equation|align|gather|multline)\*?"
-LATEX_EQUATION_BEGIN = re.compile(
-    rf"^\s*\\begin\{{(?P<env>{LATEX_EQUATION_ENV_NAMES})\}}"
-)
-LATEX_EQUATION_END = re.compile(
-    rf"^.*\\end\{{(?P<env>{LATEX_EQUATION_ENV_NAMES})\}}\s*$"
-)
+LATEX_EQUATION_BEGIN = re.compile(rf"^\s*\\begin\{{(?P<env>{LATEX_EQUATION_ENV_NAMES})\}}")
+LATEX_EQUATION_END = re.compile(rf"^.*\\end\{{(?P<env>{LATEX_EQUATION_ENV_NAMES})\}}\s*$")
 PAGE_MARKER = re.compile(
     r"^\s*(?:-{2,}\s*)?(?:page|ページ|頁)\s*(?P<page>\d+)\s*(?:-{2,})?\s*$",
     re.IGNORECASE,
@@ -821,8 +815,7 @@ def _annotate_inferred_table_continuity(
         table_sequence += 1
         table_id = f"inferred-table-{table_sequence:04d}"
         total_body_rows = sum(
-            _inferred_table_body_row_count(element.text)
-            for _, element in indexed_elements
+            _inferred_table_body_row_count(element.text) for _, element in indexed_elements
         )
         column_count = len(signature)
         row_offset = 0
@@ -847,10 +840,7 @@ def _annotate_inferred_table_continuity(
             row_offset += body_rows
     if not replacements:
         return elements
-    return [
-        replacements.get(index, element)
-        for index, element in enumerate(elements)
-    ]
+    return [replacements.get(index, element) for index, element in enumerate(elements)]
 
 
 def _inferred_table_signature(text: str) -> tuple[str, ...]:
@@ -881,10 +871,7 @@ def _is_markdown_separator_line(line: str) -> bool:
 
 def _markdown_table_cells(line: str) -> list[str]:
     body = line.strip().strip("|")
-    return [
-        cell.replace("\\|", "|").strip()
-        for cell in re.split(r"(?<!\\)\|", body)
-    ]
+    return [cell.replace("\\|", "|").strip() for cell in re.split(r"(?<!\\)\|", body)]
 
 
 def _append_element(

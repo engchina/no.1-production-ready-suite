@@ -292,9 +292,7 @@ class OciDocumentUnderstandingService:
         namespace = self._config.resolve_namespace()
         output_bucket = self._config.resolve_output_bucket()
         prefix = "/".join(
-            part
-            for part in (self._config.output_prefix.strip().strip("/"), job_id)
-            if part
+            part for part in (self._config.output_prefix.strip().strip("/"), job_id) if part
         )
         listed = self._storage().list_objects(namespace, output_bucket, prefix=prefix)
         objects = getattr(getattr(listed, "data", listed), "objects", []) or []

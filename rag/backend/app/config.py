@@ -244,6 +244,7 @@ class _PersistedParserAdapterSettings(BaseModel):
 
     adapter_backend: ParserAdapterBackend = "unstructured"
     docling_enabled: bool = False
+    docling_vision_enabled: bool = False
     marker_enabled: bool = False
     unstructured_enabled: bool = True
     unlimited_ocr_enabled: bool = False
@@ -1068,6 +1069,13 @@ class Settings(BaseSettings):
             "Docling adapter を feature flag で有効化する。未導入時は安全に fallback する。"
         ),
     )
+    rag_parser_docling_vision_enabled: bool = Field(
+        default=False,
+        description=(
+            "Docling 解析で図・画像を含む表を Vision(openai SDK)で説明する。"
+            "画像 1 枚ごとに LLM 呼び出しと時間を消費する。"
+        ),
+    )
     rag_parser_marker_enabled: bool = Field(
         default=False,
         description="Marker adapter を feature flag で有効化する。未導入時は安全に fallback する。",
@@ -1873,6 +1881,7 @@ def _apply_persisted_model_settings(
         return
     settings.rag_parser_adapter_backend = parser.adapter_backend
     settings.rag_parser_docling_enabled = parser.docling_enabled
+    settings.rag_parser_docling_vision_enabled = parser.docling_vision_enabled
     settings.rag_parser_marker_enabled = parser.marker_enabled
     settings.rag_parser_unstructured_enabled = parser.unstructured_enabled
     settings.rag_parser_unlimited_ocr_enabled = parser.unlimited_ocr_enabled

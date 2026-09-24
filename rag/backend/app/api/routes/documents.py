@@ -130,6 +130,7 @@ DOCUMENT_PROCESSING_OUTPUT_GROUPS: dict[str, tuple[str, ...]] = {
     "parser_adapter_backend": (
         "parser_adapter_backend",
         "parser_docling_enabled",
+        "parser_docling_vision_enabled",
         "parser_marker_enabled",
         "parser_unstructured_enabled",
         "parser_unlimited_ocr_enabled",

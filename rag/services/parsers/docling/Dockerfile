@@ -6,13 +6,15 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     UV_CACHE_DIR=/tmp/uv-cache \
     # 焼き込み/named volume のキャッシュ先を appuser 配下に固定する。
-    HF_HOME=/home/appuser/.cache/huggingface
+    HF_HOME=/home/appuser/.cache/huggingface \
+    DOCRAG_OUTPUT_DIR=/tmp/docrag-runs
 
 COPY --from=ghcr.io/astral-sh/uv:0.11.3 /uv /uvx /bin/
 
 # 共有 contract package と service を repo 相対レイアウトで配置し、
 # pyproject の path source(../../../packages/rag_parser_core)を解決可能にする。
 COPY packages/rag_parser_core /build/packages/rag_parser_core
+COPY packages/docrag_core /build/packages/docrag_core
 WORKDIR /build/services/parsers/docling
 COPY services/parsers/docling/pyproject.toml services/parsers/docling/README.md ./
 RUN uv sync --no-install-project \

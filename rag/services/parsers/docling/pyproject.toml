@@ -5,11 +5,16 @@ description = "Docling parser microservice (independent dependency boundary)"
 requires-python = ">=3.12"
 dependencies = [
     "rag-parser-core[service]",
+    # rag_poc(DocRAG)の解析実装(読み順・表補修・Vision 図説明)。
+    "docrag-core[docling]",
     "docling==2.103.0",
+    # DocRAG 解析は RapidOCR(ONNX)で OCR する。docling は onnxruntime を必須依存に含めない。
+    "onnxruntime>=1.20",
 ]
 
 [tool.uv.sources]
 rag-parser-core = { path = "../../../packages/rag_parser_core", editable = true }
+docrag-core = { path = "../../../packages/docrag_core", editable = true }
 
 [build-system]
 requires = ["hatchling"]
