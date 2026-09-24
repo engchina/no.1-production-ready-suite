@@ -2858,6 +2858,21 @@ export const api = {
     request<BusinessViewDetail>(`/api/business-views/${encodeURIComponent(id)}/archive`, {
       method: "POST",
     }),
+  getDomainKeywords: (id: string) =>
+    request<DomainKeywordsData>(
+      `/api/business-views/${encodeURIComponent(id)}/domain-keywords`
+    ),
+  saveDomainKeywords: (id: string, keywords: string[]) =>
+    request<DomainKeywordsData>(`/api/business-views/${encodeURIComponent(id)}/domain-keywords`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ keywords }),
+    }),
+  suggestDomainKeywords: (id: string) =>
+    request<DomainKeywordSuggestionData>(
+      `/api/business-views/${encodeURIComponent(id)}/domain-keywords/suggest`,
+      { method: "POST" }
+    ),
 
   // チャット（会話 / マルチモデル比較）
   listConversations: (params: { business_view_id?: string; limit?: number; offset?: number } = {}) => {
@@ -3149,3 +3164,22 @@ export const api = {
     });
   },
 };
+
+// --- 業務ビューの知識: ドメインキーワード(rag_poc DocRAG 由来) ---
+export interface DomainKeywordsData {
+  business_view_id: string;
+  keywords: string[];
+}
+
+export interface DomainKeywordCandidateData {
+  keyword: string;
+  score: number;
+  frequency: number;
+  chunk_count: number;
+  document_count: number;
+}
+
+export interface DomainKeywordSuggestionData {
+  candidates: DomainKeywordCandidateData[];
+  processed_chunk_count: number;
+}

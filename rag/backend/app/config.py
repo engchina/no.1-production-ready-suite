@@ -740,6 +740,20 @@ class Settings(BaseSettings):
         le=1000,
         description="Hybrid retrieval の Reciprocal Rank Fusion 定数。",
     )
+    rag_text_search_tokenizer: Literal["builtin", "sudachi"] = Field(
+        default="builtin",
+        description=(
+            "Oracle Text 全文検索クエリの分割方式。sudachi は rag_poc(DocRAG)の Sudachi 分割。"
+            "業務ビューにドメインキーワードがある場合は builtin でも DocRAG の分割で組み立てる。"
+        ),
+    )
+    rag_domain_keywords: list[str] = Field(
+        default_factory=list,
+        description=(
+            "リクエスト単位で業務ビューから解決するドメインキーワード。"
+            "全文検索で分割せず 1 語として優先する。"
+        ),
+    )
     rag_query_expansion_enabled: bool = Field(
         default=True,
         description="retrieval 前に deterministic な業務同義語 query expansion を行う。",

@@ -1742,6 +1742,25 @@ export const ja = {
   "pager.next": "次へ",
   "pager.range": "{start} - {end} / {total} 件",
 
+  "businessViews.knowledge.title": "業務ビューの知識",
+  "businessViews.knowledge.description":
+    "この業務ビューの検索・回答だけに使うドメインキーワードなどを管理します。ナレッジベースや文書には影響しません。",
+  "businessViews.domainKeywords.title": "ドメインキーワード",
+  "businessViews.domainKeywords.editorLabel": "登録キーワード（1 行に 1 語）",
+  "businessViews.domainKeywords.help":
+    "質問に含まれる登録キーワードを、分割せず 1 語として全文検索で優先します。登録数を増やすだけで検索精度が上がるとは限りません。",
+  "businessViews.domainKeywords.placeholder": "伝票区分\n受注番号\nORA-01555",
+  "businessViews.domainKeywords.save": "保存",
+  "businessViews.domainKeywords.saved": "ドメインキーワードを保存しました（{count} 件）",
+  "businessViews.domainKeywords.saveError": "ドメインキーワードを保存できませんでした。",
+  "businessViews.domainKeywords.count": "{count} 件",
+  "businessViews.domainKeywords.candidates": "キーワード候補",
+  "businessViews.domainKeywords.suggest": "候補を生成",
+  "businessViews.domainKeywords.suggestHelp":
+    "参照ナレッジベースの配信中チャンクから頻出語を抽出します。選んだ候補は左の一覧に追加され、保存するまで反映されません。",
+  "businessViews.domainKeywords.suggestError": "キーワード候補を生成できませんでした。",
+  "businessViews.domainKeywords.noCandidates": "追加できる候補はありません。",
+  "businessViews.domainKeywords.candidateStats": "出現 {frequency} 回 / {documents} 文書",
   "businessViews.subtitle":
     "複数の知識ベースを業務視点で束ね、業務ごとに検索・回答方針を設定します。",
   "businessViews.create.title": "業務ビューを作成",

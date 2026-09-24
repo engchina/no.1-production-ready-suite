@@ -2121,6 +2121,101 @@ class OracleClient:
         refs = await self._resolve_knowledge_base_refs(view.config.normalized_knowledge_base_ids())
         return view.model_copy(update={"knowledge_bases": refs})
 
+    async def get_business_view_knowledge(
+        self,
+        business_view_id: str,
+        kind: str,
+    ) -> dict[str, object] | None:
+        """業務ビューの知識 payload(JSON)を返す。未登録は None。"""
+        row = await self._fetch_one(
+            """
+            SELECT payload_json
+            FROM rag_business_view_knowledge
+            WHERE business_view_id = :business_view_id AND kind = :kind
+            """,
+            {"business_view_id": business_view_id, "kind": kind},
+        )
+        if row is None:
+            return None
+        payload = row.get("payload_json")
+        if isinstance(payload, str):
+            payload = json.loads(payload)
+        return payload if isinstance(payload, dict) else None
+
+    async def save_business_view_knowledge(
+        self,
+        business_view_id: str,
+        kind: str,
+        payload: Mapping[str, object],
+    ) -> None:
+        """業務ビューの知識 payload を upsert する(revision を進める)。"""
+        binds = {
+            "business_view_id": business_view_id,
+            "kind": kind,
+            "payload_json": _json_bind(dict(payload)),
+        }
+
+        def operation(connection: OracleConnectionProtocol) -> None:
+            _execute(
+                connection,
+                """
+                MERGE INTO rag_business_view_knowledge target
+                USING (
+                    SELECT :business_view_id AS business_view_id, :kind AS kind FROM dual
+                ) source
+                ON (
+                    target.business_view_id = source.business_view_id
+                    AND target.kind = source.kind
+                )
+                WHEN MATCHED THEN UPDATE SET
+                    target.payload_json = :payload_json,
+                    target.revision = target.revision + 1,
+                    target.updated_at = SYSTIMESTAMP
+                WHEN NOT MATCHED THEN INSERT (business_view_id, kind, payload_json)
+                    VALUES (source.business_view_id, source.kind, :payload_json)
+                """,
+                binds,
+                input_sizes=_json_input_sizes("payload_json"),
+            )
+
+        await self._run_transaction(operation)
+
+    async def list_business_view_chunk_texts(
+        self,
+        knowledge_base_ids: Sequence[str],
+        *,
+        limit: int,
+    ) -> list[tuple[str, str, str]]:
+        """業務ビューが参照する KB の配信中 chunk を (chunk_id, document_id, text) で返す。
+
+        ドメインキーワード候補の TF-IDF コーパスに使う。
+        """
+        ids = [kb_id for kb_id in dict.fromkeys(knowledge_base_ids) if kb_id][:100]
+        if not ids:
+            return []
+        placeholders = ", ".join(f":kb_{index}" for index in range(len(ids)))
+        binds: dict[str, object] = {f"kb_{index}": kb_id for index, kb_id in enumerate(ids)}
+        binds["limit"] = max(1, int(limit))
+        rows = await self._fetch_all(
+            f"""
+            SELECT c.chunk_id, c.document_id, c.search_text
+            FROM rag_chunks c
+            JOIN rag_chunk_sets cs ON cs.chunk_set_id = c.chunk_set_id AND cs.is_serving = 1
+            WHERE c.document_id IN (
+                SELECT dkb.document_id
+                FROM rag_document_knowledge_bases dkb
+                WHERE dkb.knowledge_base_id IN ({placeholders})
+            )
+            ORDER BY c.document_id, c.chunk_index
+            FETCH FIRST :limit ROWS ONLY
+            """,
+            binds,
+        )
+        return [
+            (str(row["chunk_id"]), str(row["document_id"]), str(row.get("search_text") or ""))
+            for row in rows
+        ]
+
     async def update_business_view(
         self,
         business_view_id: str,
@@ -4182,7 +4277,7 @@ class OracleClient:
         self, query: str, top_k: int, filters: dict[str, str]
     ) -> list[RetrievedChunk]:
         """Oracle Text で keyword chunk を取得する。"""
-        text_query = _oracle_text_query(query)
+        text_query = _oracle_text_query(query, settings=self._settings)
         if text_query is None:
             return []
         where_sql, binds = _oracle_retrieval_where(filters)
@@ -11171,6 +11266,29 @@ def _pem_file_is_encrypted(path: Path) -> bool:
     return "BEGIN ENCRYPTED PRIVATE KEY" in text or "PROC-TYPE: 4,ENCRYPTED" in text
 
 
+def oracle_business_view_knowledge_schema_sql(
+    table_name: str = "rag_business_view_knowledge",
+) -> str:
+    """業務ビュー単位の知識(ドメインキーワード / Approved FAQ / 用語・ルール)の DDL。
+
+    rag_poc(DocRAG)の JSON payload 形式をそのまま 1 行 1 種別で保持する。
+    """
+
+    return f"""
+CREATE TABLE {table_name} (
+    business_view_id  VARCHAR2(64) NOT NULL,
+    kind              VARCHAR2(32) NOT NULL,
+    payload_json      JSON NOT NULL,
+    revision          NUMBER(19) DEFAULT 1 NOT NULL,
+    updated_at        TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    CONSTRAINT {table_name}_pk PRIMARY KEY (business_view_id, kind),
+    CONSTRAINT {table_name}_kind_ck CHECK (
+        kind IN ('domain_keywords', 'approved_faq', 'runtime_knowledge')
+    )
+);
+""".strip()
+
+
 def oracle_prompt_version_schema_sql(
     table_name: str = "rag_prompt_versions",
 ) -> str:
@@ -12794,11 +12912,38 @@ def oracle_text_terms(query: str) -> list[str]:
     return _unique_optional_sequence(terms)[:ORACLE_TEXT_MAX_TERMS]
 
 
-def _oracle_text_query(query: str) -> str | None:
+def _oracle_text_query(query: str, *, settings: Settings | None = None) -> str | None:
+    if settings is not None and (
+        settings.rag_domain_keywords or settings.rag_text_search_tokenizer == "sudachi"
+    ):
+        return _docrag_oracle_text_query(query, settings)
     unique_terms = oracle_text_terms(query)
     if not unique_terms:
         return None
     return " ACCUM ".join(f"{{{term}}}" for term in unique_terms)
+
+
+def _docrag_oracle_text_query(query: str, settings: Settings) -> str | None:
+    """rag_poc(DocRAG)の分割でドメインキーワードを 1 語として優先した Oracle Text query。"""
+    from docrag.retrieval.text_search_tokenizer import (
+        TEXT_SEARCH_TOKENIZER_REGEX,
+        TEXT_SEARCH_TOKENIZER_SUDACHI,
+        TextSearchTokenizerConfig,
+        build_oracle_text_query,
+        tokenize_text_search_query,
+    )
+
+    mode = (
+        TEXT_SEARCH_TOKENIZER_SUDACHI
+        if settings.rag_text_search_tokenizer == "sudachi"
+        else TEXT_SEARCH_TOKENIZER_REGEX
+    )
+    terms = tokenize_text_search_query(
+        query,
+        domain_keywords=settings.rag_domain_keywords,
+        config=TextSearchTokenizerConfig(mode=mode),
+    )
+    return build_oracle_text_query(terms) or None
 
 
 def _english_query_term(raw_token: str, token: str) -> str | None:

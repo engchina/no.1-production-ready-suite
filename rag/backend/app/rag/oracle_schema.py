@@ -16,6 +16,7 @@ from typing import Any
 from app.clients.oracle import (
     ORACLE_TEXT_LEXER,
     oracle_agent_memory_schema_sql,
+    oracle_business_view_knowledge_schema_sql,
     oracle_business_view_schema_sql,
     oracle_chunk_set_schema_sql,
     oracle_conversation_schema_sql,
@@ -163,6 +164,11 @@ def oracle_schema_sections() -> list[OracleSchemaSection]:
             name="business_views",
             table_name="rag_business_views",
             sql=oracle_business_view_schema_sql(),
+        ),
+        OracleSchemaSection(
+            name="business_view_knowledge",
+            table_name="rag_business_view_knowledge",
+            sql=oracle_business_view_knowledge_schema_sql(),
         ),
         OracleSchemaSection(
             name="prompt_versions",
@@ -410,6 +416,11 @@ def oracle_schema_migration_sections() -> list[OracleSchemaSection]:
             name="20260703_002_feedback_details",
             table_name="rag_feedback_details",
             sql=_feedback_details_migration_sql(),
+        ),
+        OracleSchemaSection(
+            name="20260925_001_business_view_knowledge",
+            table_name="rag_business_view_knowledge",
+            sql=_business_view_knowledge_migration_sql(),
         ),
     ]
 
@@ -1563,6 +1574,34 @@ BEGIN
         'RAG_FEEDBACK_USER_TRACE_IDX',
         'tenant_id_hash, user_id_hash, trace_id, created_at DESC'
     );
+END;
+/
+""".strip()
+
+
+def _business_view_knowledge_migration_sql() -> str:
+    """業務ビュー単位の知識(ドメインキーワード / Approved FAQ / 用語・ルール)表を追加する。"""
+
+    return """
+DECLARE
+    v_table_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_table_count
+    FROM user_tables
+    WHERE table_name = 'RAG_BUSINESS_VIEW_KNOWLEDGE';
+
+    IF v_table_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE TABLE rag_business_view_knowledge ('
+            || 'business_view_id VARCHAR2(64) NOT NULL,'
+            || 'kind VARCHAR2(32) NOT NULL,'
+            || 'payload_json JSON NOT NULL,'
+            || 'revision NUMBER(19) DEFAULT 1 NOT NULL,'
+            || 'updated_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,'
+            || 'CONSTRAINT rag_business_view_knowledge_pk PRIMARY KEY (business_view_id, kind),'
+            || 'CONSTRAINT rag_business_view_knowledge_kind_ck CHECK ('
+            || 'kind IN (''domain_keywords'', ''approved_faq'', ''runtime_knowledge'')))';
+    END IF;
 END;
 /
 """.strip()
