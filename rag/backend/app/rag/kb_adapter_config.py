@@ -91,6 +91,7 @@ _QUERY_FIELD_MAP: dict[str, str] = {
     "guardrail_policy": "rag_guardrail_policy",
     "evaluation_suite": "rag_evaluation_suite",
     "answer_engine": "rag_answer_engine",
+    "text_search_tokenizer": "rag_text_search_tokenizer",
 }
 
 # 外部 parser adapter backend -> その有効化 feature flag(Settings フィールド名)。
@@ -176,6 +177,8 @@ class KnowledgeBaseQueryConfig(BaseModel):
     evaluation_suite: EvaluationSuiteName | None = None
     # 回答エンジン(standard / docrag)。None はグローバル継承。
     answer_engine: Literal["standard", "docrag"] | None = None
+    # 全文検索の分割方式(builtin / sudachi)。None はグローバル継承。
+    text_search_tokenizer: Literal["builtin", "sudachi"] | None = None
 
 
 class KnowledgeBaseAdapterConfig(BaseModel):

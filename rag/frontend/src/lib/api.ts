@@ -742,7 +742,11 @@ export interface KnowledgeBaseQueryConfig {
   evaluation_suite: EvaluationSuiteName | null;
   /** 回答エンジン(standard / docrag)。null / 未指定はグローバル継承。 */
   answer_engine?: AnswerEngineName | null;
+  /** 全文検索の分割方式(builtin / sudachi)。null / 未指定はグローバル継承。 */
+  text_search_tokenizer?: TextSearchTokenizerName | null;
 }
+
+export type TextSearchTokenizerName = "builtin" | "sudachi";
 
 export type AnswerEngineName = "standard" | "docrag";
 

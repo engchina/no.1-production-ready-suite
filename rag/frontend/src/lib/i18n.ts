@@ -1743,6 +1743,9 @@ export const ja = {
   "pager.range": "{start} - {end} / {total} 件",
 
   "businessViews.field.answerEngine": "回答エンジン",
+  "businessViews.field.tokenizer": "全文検索の分割方式",
+  "businessViews.tokenizer.builtin": "標準（文字種の区切り）",
+  "businessViews.tokenizer.sudachi": "Sudachi（形態素解析・DocRAG）",
   "businessViews.answerEngine.standard": "標準",
   "businessViews.answerEngine.docrag": "DocRAG（根拠照合・監査付き）",
   "businessViews.faq.title": "Approved FAQ（類似問）",

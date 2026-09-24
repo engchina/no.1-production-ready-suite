@@ -171,3 +171,41 @@ async def test_pipeline_delegates_to_docrag_engine(monkeypatch: pytest.MonkeyPat
     assert response.diagnostics.retrieval_strategy == "docrag"
     assert response.diagnostics.docrag is not None
     assert response.diagnostics.docrag["evidence_tree"]
+
+
+async def test_docrag_pipeline_records_search_audit(monkeypatch: pytest.MonkeyPatch) -> None:
+    import docrag.adapters.oci as docrag_oci
+
+    import app.rag.pipeline as pipeline_module
+
+    monkeypatch.setattr(docrag_oci, "parse_text_response", _fake_llm)
+    audits: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        pipeline_module, "record_rag_search_audit", lambda **kwargs: audits.append(kwargs)
+    )
+    pipeline = pipeline_module.RagPipeline(
+        settings=Settings(rag_answer_engine="docrag"),
+        oracle=FakeOracle(),  # type: ignore[arg-type]
+        genai=FakeGenAi(),  # type: ignore[arg-type]
+    )
+
+    response = await pipeline.run(SearchRequest(query="受注の登録方法は？"))
+
+    assert len(audits) == 1
+    assert audits[0]["outcome"] == "success"
+    assert audits[0]["citations"] == response.citations
+    assert audits[0]["diagnostics"].docrag is not None
+
+
+def test_business_view_overrides_text_search_tokenizer() -> None:
+    from app.rag.business_view_config import BusinessViewConfig, resolve_business_view_settings
+    from app.rag.kb_adapter_config import KnowledgeBaseQueryConfig
+
+    config = BusinessViewConfig(
+        knowledge_base_ids=["kb-1"],
+        query=KnowledgeBaseQueryConfig(text_search_tokenizer="sudachi"),
+    )
+
+    settings, _ = resolve_business_view_settings(Settings(), config)
+
+    assert settings.rag_text_search_tokenizer == "sudachi"
