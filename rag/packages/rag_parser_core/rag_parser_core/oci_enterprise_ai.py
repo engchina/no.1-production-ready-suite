@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import json
 import os
 import re
@@ -21,6 +22,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 import httpx
+import openai
 from charset_normalizer import from_bytes
 from pydantic import ValidationError
 
@@ -123,7 +125,6 @@ FILE_EXTENSION_BY_MIME_TYPE = {
     "text/markdown": ".md",
     "text/plain": ".txt",
 }
-RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
 TEMPLATE_TOKEN_RE = re.compile(r"\$\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
 JSON_FENCE_RE = re.compile(r"^\s*```(?:json)?\s*(.*?)\s*```\s*$", re.IGNORECASE | re.DOTALL)
 ENTERPRISE_AI_ENVELOPE_KEYS = (
@@ -747,10 +748,23 @@ class OciEnterpriseAiClient:
 
 
 class _DefaultEnterpriseAiTransport:
-    """httpx による OpenAI-compatible Enterprise AI transport。"""
+    """openai SDK による OpenAI-compatible Enterprise AI transport。
+
+    再試行(429/5xx/接続・timeout、Retry-After 尊重)は SDK の max_retries に任せる。
+    SDK 例外は既存の httpx 例外経路へ変換し、上位のエラーメッセージ整形を維持する。
+    """
 
     def __init__(self, config: OciEnterpriseAiConfig) -> None:
         self._config = config
+
+    def _client(self, timeout: float) -> openai.AsyncOpenAI:
+        # URL は呼び出し側で絶対 URL に組み立て済み。認証ヘッダも headers で明示的に渡す。
+        return openai.AsyncOpenAI(
+            api_key=self._config.oci_enterprise_ai_api_key.strip() or "unset",
+            base_url=self._config.oci_enterprise_ai_endpoint.strip() or None,
+            max_retries=self._config.oci_enterprise_ai_max_retries,
+            timeout=timeout,
+        )
 
     async def post_json(
         self,
@@ -760,32 +774,17 @@ class _DefaultEnterpriseAiTransport:
         headers: Mapping[str, str],
         timeout: float,
     ) -> Mapping[str, Any]:
-        body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-        attempts = self._config.oci_enterprise_ai_max_retries + 1
-        async with httpx.AsyncClient(follow_redirects=False) as client:
-            last_transport_error: httpx.TransportError | None = None
-            for attempt in range(attempts):
-                try:
-                    response = await client.post(
-                        url,
-                        content=body,
-                        headers=headers,
-                        timeout=timeout,
-                    )
-                except httpx.TransportError as exc:
-                    last_transport_error = exc
-                    if attempt + 1 < attempts:
-                        await asyncio.sleep(_retry_delay(attempt))
-                        continue
-                    raise
-                if response.status_code in RETRYABLE_STATUS_CODES and attempt + 1 < attempts:
-                    await asyncio.sleep(_retry_delay(attempt, response=response))
-                    continue
-                _raise_for_status_with_body(response, "OCI Enterprise AI endpoint")
-                return _json_response_object(response)
-        if last_transport_error is not None:
-            raise last_transport_error
-        raise RuntimeError("OCI Enterprise AI endpoint の呼び出しに失敗しました。")
+        async with (
+            self._client(timeout) as client,
+            _translated_openai_errors("OCI Enterprise AI endpoint"),
+        ):
+            response = await client.post(
+                url,
+                cast_to=httpx.Response,
+                body=dict(payload),
+                options={"headers": dict(headers)},
+            )
+            return _json_response_object(response)
 
     async def stream_json(
         self,
@@ -795,45 +794,26 @@ class _DefaultEnterpriseAiTransport:
         headers: Mapping[str, str],
         timeout: float,
     ) -> AsyncIterator[str]:
-        body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-        attempts = self._config.oci_enterprise_ai_max_retries + 1
-        async with httpx.AsyncClient(follow_redirects=False) as client:
-            for attempt in range(attempts):
-                try:
-                    async with client.stream(
-                        "POST",
-                        url,
-                        content=body,
-                        headers=headers,
-                        timeout=timeout,
-                    ) as response:
-                        if (
-                            response.status_code in RETRYABLE_STATUS_CODES
-                            and attempt + 1 < attempts
-                        ):
-                            await response.aread()
-                            await asyncio.sleep(_retry_delay(attempt, response=response))
-                            continue
-                        if response.is_error:
-                            content = await response.aread()
-                            error_response = httpx.Response(
-                                response.status_code,
-                                content=content,
-                                headers=response.headers,
-                                request=response.request,
-                            )
-                            _raise_for_status_with_body(
-                                error_response, "OCI Enterprise AI endpoint"
-                            )
-                        async for line in response.aiter_lines():
-                            yield line
-                        return
-                except httpx.TransportError:
-                    if attempt + 1 < attempts:
-                        await asyncio.sleep(_retry_delay(attempt))
-                        continue
+        async with (
+            self._client(timeout) as client,
+            _translated_openai_errors("OCI Enterprise AI endpoint"),
+        ):
+            stream = await client.post(
+                url,
+                cast_to=object,
+                body=dict(payload),
+                options={"headers": dict(headers)},
+                stream=True,
+                stream_cls=openai.AsyncStream[object],
+            )
+            try:
+                async for event in stream:
+                    yield "data: " + json.dumps(event, ensure_ascii=False)
+            except openai.APIError as exc:
+                if isinstance(exc, openai.APIStatusError | openai.APIConnectionError):
                     raise
-        raise RuntimeError("OCI Enterprise AI endpoint の streaming 呼び出しに失敗しました。")
+                # SSE 内の error event。既存の _raise_for_response_error 経路で扱わせる。
+                yield "data: " + json.dumps({"error": exc.body or str(exc)}, ensure_ascii=False)
 
     async def upload_file(
         self,
@@ -846,28 +826,18 @@ class _DefaultEnterpriseAiTransport:
         headers: Mapping[str, str],
         timeout: float,
     ) -> Mapping[str, Any]:
-        attempts = self._config.oci_enterprise_ai_max_retries + 1
-        async with httpx.AsyncClient(follow_redirects=False) as client:
-            for attempt in range(attempts):
-                try:
-                    response = await client.post(
-                        url,
-                        data={"purpose": purpose},
-                        files={"file": (file_name, content, mime_type)},
-                        headers=headers,
-                        timeout=timeout,
-                    )
-                except httpx.TransportError:
-                    if attempt + 1 < attempts:
-                        await asyncio.sleep(_retry_delay(attempt))
-                        continue
-                    raise
-                if response.status_code in RETRYABLE_STATUS_CODES and attempt + 1 < attempts:
-                    await asyncio.sleep(_retry_delay(attempt, response=response))
-                    continue
-                _raise_for_status_with_body(response, "OCI Enterprise AI Files API")
-                return _json_response_object(response)
-        raise RuntimeError("OCI Enterprise AI Files API の呼び出しに失敗しました。")
+        async with (
+            self._client(timeout) as client,
+            _translated_openai_errors("OCI Enterprise AI Files API"),
+        ):
+            response = await client.post(
+                url,
+                cast_to=httpx.Response,
+                body={"purpose": purpose},
+                files=[("file", (file_name, content, mime_type))],
+                options={"headers": {**headers, "Content-Type": "multipart/form-data"}},
+            )
+            return _json_response_object(response)
 
     async def delete(
         self,
@@ -876,10 +846,30 @@ class _DefaultEnterpriseAiTransport:
         headers: Mapping[str, str],
         timeout: float,
     ) -> Mapping[str, Any]:
-        async with httpx.AsyncClient(follow_redirects=False) as client:
-            response = await client.delete(url, headers=headers, timeout=timeout)
-            _raise_for_status_with_body(response, "OCI Enterprise AI Files API")
+        async with (
+            self._client(timeout) as client,
+            _translated_openai_errors("OCI Enterprise AI Files API"),
+        ):
+            response = await client.delete(
+                url,
+                cast_to=httpx.Response,
+                options={"headers": dict(headers)},
+            )
             return _json_response_object(response)
+
+
+@contextlib.asynccontextmanager
+async def _translated_openai_errors(label: str) -> AsyncIterator[None]:
+    """openai SDK 例外を既存の httpx 例外(本文付き HTTPStatusError / timeout / 接続)へ変換する。"""
+    try:
+        yield
+    except openai.APIStatusError as exc:
+        _raise_for_status_with_body(exc.response, label)
+        raise
+    except openai.APITimeoutError as exc:
+        raise httpx.TimeoutException(str(exc), request=exc.request) from exc
+    except openai.APIConnectionError as exc:
+        raise httpx.TransportError(str(exc), request=exc.request) from exc
 
 
 def _rag_user_message(prompt: str, context: str) -> str:
