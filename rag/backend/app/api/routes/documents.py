@@ -33,6 +33,7 @@ from app.clients.oracle import DocumentDeleteBlockedByRunningIngestionError, Ora
 from app.config import CHUNKING_STRATEGIES_WITH_MIN_CHARS, Settings, get_settings
 from app.db_degradation import load_or_degrade
 from app.rag.chunking import Chunk, chunk_extraction_with_strategy
+from app.rag.docrag_chunking import DOCRAG_CHUNKING_STRATEGY, build_docrag_chunks
 from app.rag.extraction_field_adapter import load_field_schema
 from app.rag.ingestion import (
     IngestionCancelledError,
@@ -939,15 +940,18 @@ async def preview_document_recipe_chunks(
     )
     extraction = StructuredExtraction.model_validate(artifact["extraction_json"])
     try:
-        chunks = chunk_extraction_with_strategy(
-            extraction,
-            strategy=candidate.rag_chunking_strategy,
-            chunk_size=candidate.rag_chunk_size,
-            overlap=candidate.rag_chunk_overlap,
-            child_size=candidate.rag_chunk_child_size,
-            min_chars=candidate.rag_chunk_min_chars,
-            delimiter=candidate.rag_chunk_delimiter,
-        )
+        if candidate.rag_chunking_strategy == DOCRAG_CHUNKING_STRATEGY:
+            chunks = build_docrag_chunks(extraction, source_name=detail.file_name)
+        else:
+            chunks = chunk_extraction_with_strategy(
+                extraction,
+                strategy=candidate.rag_chunking_strategy,
+                chunk_size=candidate.rag_chunk_size,
+                overlap=candidate.rag_chunk_overlap,
+                child_size=candidate.rag_chunk_child_size,
+                min_chars=candidate.rag_chunk_min_chars,
+                delimiter=candidate.rag_chunk_delimiter,
+            )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

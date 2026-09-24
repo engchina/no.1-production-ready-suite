@@ -23,6 +23,7 @@ CHUNKING_STRATEGY_ORDER: tuple[ChunkingStrategyName, ...] = (
     "page_level",
     "fixed_size",
     "fixed_delimiter",
+    "docrag_small_to_big",
 )
 
 
@@ -73,6 +74,12 @@ CHUNKING_STRATEGY_SPECS: dict[ChunkingStrategyName, ChunkingStrategySpec] = {
         origin="fixed_delimiter_split",
         recommended_for=("text", "custom_separator"),
     ),
+    # rag_poc(DocRAG)の Small-to-Big。docling(DocRAG)の解析結果が必要。
+    "docrag_small_to_big": ChunkingStrategySpec(
+        name="docrag_small_to_big",
+        origin="docrag_small_to_big",
+        recommended_for=("pdf", "manual", "table", "screenshot"),
+    ),
 }
 
 
@@ -122,7 +129,7 @@ def normalize_chunking_strategy(value: object) -> ChunkingStrategyName:
     """未知の戦略名は既定 structure_aware へ寄せる。撤去済み戦略は後継へ読み替える。"""
     normalized = str(value).casefold()
     normalized = _LEGACY_STRATEGY_ALIASES.get(normalized, normalized)
-    if normalized in CHUNKING_STRATEGIES:
+    if normalized in CHUNKING_STRATEGIES or normalized == "docrag_small_to_big":
         return normalized  # type: ignore[return-value]
     return DEFAULT_CHUNKING_STRATEGY
 

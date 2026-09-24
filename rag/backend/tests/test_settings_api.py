@@ -757,6 +757,7 @@ def test_chunking_settings_reports_runtime_strategy_and_params(
         "page_level",
         "fixed_size",
         "fixed_delimiter",
+        "docrag_small_to_big",
     ]
     selected = [item["name"] for item in body["strategies"] if item["selected"]]
     assert selected == ["page_level"]

@@ -78,6 +78,7 @@ const CHUNKING_VALUES = [
   "page_level",
   "fixed_size",
   "fixed_delimiter",
+  "docrag_small_to_big",
 ] as const;
 const CHUNKING_OPTIONS: SelectFieldOption<ChunkingStrategyName>[] = CHUNKING_VALUES.map(
   (value) => ({ value, label: t(`settings.chunking.strategy.${value}` as I18nKey) })

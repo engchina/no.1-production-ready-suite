@@ -63,6 +63,7 @@ ChunkingStrategy = Literal[
     "page_level",
     "fixed_size",
     "fixed_delimiter",
+    "docrag_small_to_big",
 ]
 CHUNKING_STRATEGIES_WITH_MIN_CHARS: set[ChunkingStrategy] = {
     "structure_aware",

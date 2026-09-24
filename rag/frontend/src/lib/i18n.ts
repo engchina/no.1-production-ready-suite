@@ -358,6 +358,9 @@ export const ja = {
   "settings.chunking.strategy.fixed_delimiter": "固定分割符",
   "settings.chunking.strategy.fixed_delimiter.description":
     "指定した分割符文字列で機械的に分割",
+  "settings.chunking.strategy.docrag_small_to_big": "DocRAG 親子分割",
+  "settings.chunking.strategy.docrag_small_to_big.description":
+    "Docling の解析結果から見出し・表・図を保ったまま子を切り出し、親の節を回答文脈に使う（文書解析が Docling のときに利用）",
   "settings.chunking.params.title": "戦略別パラメータ",
   "settings.chunking.params.description":
     "選択中の分割方式で使うパラメータだけを設定します。",

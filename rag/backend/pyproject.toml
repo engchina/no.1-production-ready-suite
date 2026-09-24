@@ -24,6 +24,9 @@ dependencies = [
     "pymupdf>=1.26,<2",
     "rag-parser-core",
     "rag-pipeline-core",
+    # rag_poc(DocRAG)由来の Small-to-Big 分割・検索・根拠付き回答・FAQ/ドメインキーワード。
+    # 日本語分割(Sudachi)と FAQ の Excel 取込を使う。docling/torch は入れない。
+    "docrag-core[japanese,excel]",
     "production-ready-backend-core",
 ]
 
@@ -47,6 +50,7 @@ conflicts = [[{ extra = "marker" }, { extra = "unstructured" }]]
 [tool.uv.sources]
 rag-parser-core = { path = "../packages/rag_parser_core", editable = true }
 rag-pipeline-core = { path = "../packages/rag_pipeline_core", editable = true }
+docrag-core = { path = "../packages/docrag_core", editable = true }
 # 共有 backend インフラ（platform repo の sibling パス）。変更時は uv lock 再生成が必要。
 production-ready-backend-core = { path = "../../no.1-production-ready-platform/packages/backend_core", editable = true }
 

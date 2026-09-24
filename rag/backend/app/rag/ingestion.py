@@ -48,6 +48,11 @@ from app.rag.asset_summary import summarize_assets
 from app.rag.audit import record_rag_ingestion_audit
 from app.rag.chunking import Chunk, chunk_extraction_with_strategy
 from app.rag.chunking_strategy import resolve_chunking_params
+from app.rag.docrag_chunking import (
+    DOCRAG_CHUNKING_STRATEGY,
+    build_docrag_chunks,
+    docrag_search_text,
+)
 from app.rag.extraction_field_adapter import (
     FieldDefinition,
     extract_fields_from_extraction,
@@ -831,6 +836,7 @@ class IngestionPipeline:
                 quality_report=quality_report,
                 parser_profile=quality_report.parser_profile,
                 cancel_checker=cancel_checker,
+                source_name=detail.file_name,
             )
             chunks = _chunks_with_context_headers(
                 chunks,
@@ -1002,6 +1008,7 @@ class IngestionPipeline:
         quality_report: IngestionQualityReport,
         parser_profile: str,
         cancel_checker: Callable[[], Awaitable[bool]] | None = None,
+        source_name: str = "",
     ) -> list[Chunk]:
         """抽出結果から chunk を作る。embedding/index は行わない。"""
         text = _text_for_chunking(extraction)
@@ -1011,6 +1018,9 @@ class IngestionPipeline:
         chunking_params = resolve_chunking_params(self._settings)
 
         def _run_chunking() -> list[Chunk]:
+            if chunking_params.strategy == DOCRAG_CHUNKING_STRATEGY:
+                # DocRAG の親子分割は docling レイアウトを入力にするため backend 内で行う。
+                return build_docrag_chunks(extraction, source_name=source_name)
             request = ChunkingStageRequest(
                 extraction=extraction,
                 strategy=chunking_params.strategy,
@@ -1091,6 +1101,7 @@ class IngestionPipeline:
             quality_report=quality_report,
             parser_profile=parser_profile,
             cancel_checker=cancel_checker,
+            source_name=document_title,
         )
         chunks = _chunks_with_context_headers(
             chunks,
@@ -1120,8 +1131,11 @@ class IngestionPipeline:
         保存される chunk 本文・引用表示は変えず、chunk metadata の context_header を使う。
         """
         if not self._settings.rag_chunk_context_header_enabled:
-            return [chunk.text for chunk in chunks]
-        return [_embedding_input_with_context_header(chunk) for chunk in chunks]
+            return [docrag_search_text(chunk.metadata) or chunk.text for chunk in chunks]
+        return [
+            docrag_search_text(chunk.metadata) or _embedding_input_with_context_header(chunk)
+            for chunk in chunks
+        ]
 
     async def _run_embedding_index_phase(
         self,

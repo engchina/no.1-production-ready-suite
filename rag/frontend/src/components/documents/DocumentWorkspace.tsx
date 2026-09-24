@@ -245,6 +245,7 @@ const CHUNK_PREVIEW_STRATEGIES: SelectFieldOption<ChunkingStrategyName>[] = [
   "page_level",
   "fixed_size",
   "fixed_delimiter",
+  "docrag_small_to_big",
 ].map((value) => ({
   value: value as ChunkingStrategyName,
   label: t(`settings.chunking.strategy.${value}` as I18nKey),
