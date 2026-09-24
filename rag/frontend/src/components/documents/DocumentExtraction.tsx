@@ -30,10 +30,10 @@ import {
   parseStructuredExtraction,
   summarizeDocumentElements,
 } from "@/lib/extraction";
-import { elementVision, tableHtmlToText } from "@/lib/docrag-element";
+import { docragVisionDetails, elementVision, tableHtmlToText } from "@/lib/docrag-element";
 import { scrollFocusedControlIntoView } from "@/lib/focus-scroll";
 import { formatNumber } from "@/lib/format";
-import { t } from "@/lib/i18n";
+import { t, type I18nKey } from "@/lib/i18n";
 import { tableCellKey, tableCellRef } from "@/lib/table-cell-focus";
 
 import { ExtractedText, InfoChip } from "./extraction-bits";
@@ -194,6 +194,7 @@ export function DocumentExtraction({
                     elementKey(element) === selectedElementId ? selectedElementRef : undefined
                   }
                   onSelect={onElementSelect}
+                  visionDetails={docragVisionDetails(extraction, elementKey(element))}
                 />
               ))}
             </ol>
@@ -386,11 +387,13 @@ function ElementItem({
   selected,
   buttonRef,
   onSelect,
+  visionDetails = null,
 }: {
   element: DocumentElement;
   selected: boolean;
   buttonRef?: Ref<HTMLButtonElement>;
   onSelect?: (elementId: string) => void;
+  visionDetails?: ReturnType<typeof docragVisionDetails>;
 }) {
   const id = elementKey(element);
   const lowConfidence = typeof element.confidence === "number" && element.confidence < 0.65;
@@ -460,6 +463,7 @@ function ElementItem({
           />
         </div>
       </button>
+      {visionDetails ? <VisionDetails details={visionDetails} /> : null}
     </li>
   );
 }
@@ -600,6 +604,38 @@ function CopyRawTextButton({ text }: { text: string }) {
         {state === "success" ? t("flow.extraction.copied") : t("flow.extraction.copyRawText")}
       </Button>
     </span>
+  );
+}
+
+/** rag_poc viewer の VisualDetails 相当: Vision が読み取った構造化項目と除外理由。 */
+function VisionDetails({
+  details,
+}: {
+  details: NonNullable<ReturnType<typeof docragVisionDetails>>;
+}) {
+  return (
+    <details className="mt-1 rounded-md border border-border bg-surface px-3 py-2">
+      <summary className="cursor-pointer text-xs font-medium text-fg">
+        {t("flow.extraction.vision.details")}
+      </summary>
+      {details.excludedReason ? (
+        <p className="mt-2 text-xs text-fg-muted">
+          {t("flow.extraction.vision.excludedReason", { reason: details.excludedReason })}
+        </p>
+      ) : null}
+      {details.lines.length ? (
+        <dl className="mt-2 space-y-1.5 text-xs">
+          {details.lines.map((line) => (
+            <div key={line.field}>
+              <dt className="font-medium text-fg">
+                {t(`flow.extraction.vision.field.${line.field}` as I18nKey)}
+              </dt>
+              <dd className="whitespace-pre-wrap break-words text-fg-muted">{line.value}</dd>
+            </div>
+          ))}
+        </dl>
+      ) : null}
+    </details>
   );
 }
 
