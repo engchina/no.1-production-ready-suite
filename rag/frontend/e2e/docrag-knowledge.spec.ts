@@ -228,11 +228,20 @@ test("類似問を使わない場合は DocRAG 回答と根拠パネルを表示
   await expectNoPageOverflow(page);
 });
 
-test("DocRAG の回答履歴から過去の回答・根拠を開き直せる", async ({ page }) => {
+test("DocRAG の回答履歴から過去の回答・根拠を開き直し、削除できる", async ({ page }) => {
   await mockCommon(page);
   await mockBusinessViewApi(page);
+  await page.route("**/api/settings/answer-records", (route) =>
+    route.fulfill({ json: envelope({ retention_days: 90, config_source: "runtime" }) })
+  );
+  let deleted = false;
   await page.route("**/api/search/answers**", (route) => {
     const path = new URL(route.request().url()).pathname;
+    if (route.request().method() === "DELETE") {
+      deleted = true;
+      return route.fulfill({ json: envelope({ trace_id: "trace-old" }) });
+    }
+    if (deleted) return route.fulfill({ json: envelope([]) });
     if (path.endsWith("/answers/trace-old")) {
       return route.fulfill({
         json: envelope({
@@ -285,5 +294,12 @@ test("DocRAG の回答履歴から過去の回答・根拠を開き直せる", a
   await expect(
     page.getByRole("region", { name: "回答の根拠と実行記録（DocRAG）" }).getByText("信頼度: medium")
   ).toBeVisible();
+  await expect(page.getByText("保存から 90 日を過ぎた回答は自動で削除されます。")).toBeVisible();
   await expectNoPageOverflow(page);
+
+  await page.getByRole("button", { name: "この回答を削除" }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "削除" }).click();
+  await expect(page.getByText("保存された DocRAG の回答はまだありません。")).toBeVisible();
+  await expect(page.getByText("受注一覧で取消ボタンを押します。")).toHaveCount(0);
+  expect(deleted).toBe(true);
 });

@@ -27,6 +27,7 @@ from app.rag.rate_limit import enforce_rate_limit
 from app.schemas.common import ApiResponse
 from app.schemas.feedback import CitationFeedbackRequest, CitationFeedbackResponse
 from app.schemas.search import (
+    AnswerRecordDeleteResult,
     AnswerRecordDetail,
     AnswerRecordSummary,
     SearchRequest,
@@ -444,3 +445,11 @@ async def get_docrag_answer(trace_id: str) -> ApiResponse[AnswerRecordDetail]:
             }
         )
     )
+
+
+@router.delete("/answers/{trace_id}", response_model=ApiResponse[AnswerRecordDeleteResult])
+async def delete_docrag_answer(trace_id: str) -> ApiResponse[AnswerRecordDeleteResult]:
+    """保存済み DocRAG 回答を 1 件削除する。"""
+    if not await OracleClient().delete_answer_record(trace_id):
+        raise HTTPException(status_code=404, detail="回答が見つかりません。")
+    return ApiResponse(data=AnswerRecordDeleteResult(trace_id=trace_id))

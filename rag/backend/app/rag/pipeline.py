@@ -1643,6 +1643,10 @@ class RagPipeline:
                     "diagnostics": dict(diagnostics),
                 }
             )
+            if self._settings.rag_answer_record_retention_days > 0:
+                await self._oracle.purge_answer_records(
+                    self._settings.rag_answer_record_retention_days
+                )
         except Exception as exc:  # 保存は補助。回答の返却を止めない。
             logger.warning(
                 "docrag answer record save failed",

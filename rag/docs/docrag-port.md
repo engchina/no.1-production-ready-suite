@@ -45,7 +45,7 @@ KB（ナレッジベース）は検索対象の範囲を決めるだけで、上
 5. **検索**：
    - 業務ビューを選んで検索すると、先に類似する承認済み FAQ を照会する。候補があれば「この FAQ の回答を使う（LLM を使わない）」か「類似問を使用しない」を選ぶ。
    - DocRAG の回答には「回答の根拠と実行記録（DocRAG）」パネル（信頼度、人手確認、根拠の構成、実行記録）が付く。
-   - 過去の DocRAG 回答は、検索画面の「DocRAG の回答履歴」から回答・根拠・実行記録ごと開き直せる。チャットでは各回答の「保存された根拠と実行記録を開く」から開く。
+   - 過去の DocRAG 回答は、検索画面の「DocRAG の回答履歴」から回答・根拠・実行記録ごと開き直せる。チャットでは各回答の「保存された根拠と実行記録を開く」から開く。どちらも「この回答を削除」で個別に削除できる。
 6. **チャット**：DocRAG エンジンでも会話履歴を使う。直前までの会話から質問を単独で意味が通る形に書き換えてから検索・回答する（書き換え後の質問は回答パネルに表示する）。
 
 ## 設定一覧
@@ -58,6 +58,7 @@ KB（ナレッジベース）は検索対象の範囲を決めるだけで、上
 | `RAG_APPROVED_FAQ_SEMANTIC_ENABLED` | `true` | 類似問の照合に embedding の意味類似度を加える |
 | `RAG_DOCRAG_ANSWER_VISION_ENABLED` | `false` | DocRAG 回答で根拠の図を切り出して回答モデルへ添付する。回答モデルが画像入力に対応する場合だけ有効にする |
 | `RAG_DOCRAG_HISTORY_REWRITE_ENABLED` | `true` | チャットで DocRAG エンジンを使うとき、会話履歴から質問を書き換える |
+| `RAG_ANSWER_RECORD_RETENTION_DAYS` | `90` | DocRAG 回答記録の保存日数（`0` は無期限）。検索・回答設定 > 回答スタイルの「DocRAG 回答の保存期間」で変更できる |
 | `RAG_DOCRAG_PROFILE` | `generic` | `legacy` で業務固有の分類・日本語問い合わせ規則を有効にする。規則は `DOCRAG_DOMAIN_PROFILE_FILE` の JSON から読む（書式は rag_poc の `domain_profile.example.json`）。業務固有の profile は同梱していない |
 | `DOCRAG_RENDER_DPI`（docling サービス） | `300` | 解析時のページ画像の解像度。bbox はこの画像の px 座標になる |
 
@@ -67,7 +68,7 @@ docling サービスの Vision は、backend のサービス管理が橋渡し�
 
 - **業務ビューの知識**：`rag_business_view_knowledge`（業務ビュー × 種別、rag_poc の JSON payload のまま）。表は「システム設定 > データベース」のシステムテーブルから、migration `20260925_001_business_view_knowledge` で作成する。
 - **親子チャンク**：子を `rag_chunks` に保存する。親の本文（`docrag_parent_text`）、検索用テキスト（`docrag_search_text`）、metadata v4（`docrag_metadata_json`）は子の metadata に持つ。
-- **DocRAG の回答**：`rag_answer_records`（trace_id 単位で質問・書き換え後の質問・回答・引用・DocRAG の診断情報）。migration `20260925_002_answer_records` で作成する。保存に失敗しても回答は返す。
+- **DocRAG の回答**：`rag_answer_records`（trace_id 単位で質問・書き換え後の質問・回答・引用・DocRAG の診断情報）。migration `20260925_002_answer_records` で作成する。保存に失敗しても回答は返す。保存期間を過ぎた記録は、回答の保存時と保存期間の設定変更時に削除する。
 - **切り出し画像**：保存しない。プレビューは `GET /api/documents/{id}/crop` で、回答時は一時ディレクトリで都度作る。
 
 ## rag_poc との差分

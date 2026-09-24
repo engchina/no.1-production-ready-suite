@@ -3861,3 +3861,37 @@ def _wallet_zip(entries: dict[str, str] | None = None) -> bytes:
         for name, content in wallet_entries.items():
             archive.writestr(name, content)
     return buffer.getvalue()
+
+
+def test_update_answer_record_settings_persists_retention_and_purges(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """DocRAG 回答記録の保持日数を .env へ保存し、期限切れの記録を削除する(0 は削除しない)。"""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_answer_record_retention_days", 90)
+    env_file = _settings_env_file(monkeypatch, tmp_path)
+    purged: list[int] = []
+
+    class FakeOracleClient:
+        async def purge_answer_records(self, retention_days: int) -> int:
+            purged.append(retention_days)
+            return 3
+
+    monkeypatch.setattr(settings_routes, "OracleClient", FakeOracleClient)
+
+    assert client.get("/api/settings/answer-records").json()["data"]["retention_days"] == 90
+
+    resp = client.patch("/api/settings/answer-records", json={"retention_days": 30})
+    assert resp.status_code == 200
+    assert resp.json()["data"] == {"retention_days": 30, "config_source": "runtime"}
+    assert settings.rag_answer_record_retention_days == 30
+    assert "RAG_ANSWER_RECORD_RETENTION_DAYS=30" in env_file.read_text(encoding="utf-8")
+
+    assert (
+        client.patch("/api/settings/answer-records", json={"retention_days": 0}).status_code == 200
+    )
+    assert purged == [30]
+    assert (
+        client.patch("/api/settings/answer-records", json={"retention_days": -1}).status_code == 422
+    )

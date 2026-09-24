@@ -2209,6 +2209,32 @@ class OracleClient:
                 row[key] = json.loads(str(row[key]))
         return row
 
+    async def delete_answer_record(self, trace_id: str) -> bool:
+        """保存済み DocRAG 回答を 1 件削除する。削除した場合 True。"""
+
+        def operation(connection: OracleConnectionProtocol) -> int:
+            return _execute_count(
+                connection,
+                "DELETE FROM rag_answer_records WHERE trace_id = :trace_id",
+                {"trace_id": trace_id},
+            )
+
+        return await self._run_transaction(operation) > 0
+
+    async def purge_answer_records(self, retention_days: int) -> int:
+        """保持期間を過ぎた DocRAG 回答を削除し、削除件数を返す。"""
+
+        # ponytail: created_at 単独 index なしの全走査。記録が大量になったら index を足す。
+        def operation(connection: OracleConnectionProtocol) -> int:
+            return _execute_count(
+                connection,
+                "DELETE FROM rag_answer_records "
+                "WHERE created_at < SYSTIMESTAMP - NUMTODSINTERVAL(:days, 'DAY')",
+                {"days": retention_days},
+            )
+
+        return await self._run_transaction(operation)
+
     async def get_business_view_knowledge(
         self,
         business_view_id: str,
@@ -8346,6 +8372,20 @@ def _execute(
             if filtered_input_sizes:
                 cursor.setinputsizes(**filtered_input_sizes)
         cursor.execute(normalized, _binds_for_sql(normalized, binds))
+    finally:
+        cursor.close()
+
+
+def _execute_count(
+    connection: OracleConnectionProtocol,
+    statement: str,
+    binds: Mapping[str, object],
+) -> int:
+    """DML を実行して影響行数を返す。"""
+    cursor = connection.cursor()
+    try:
+        cursor.execute(_normalize_sql(statement), binds)
+        return int(getattr(cursor, "rowcount", 0) or 0)
     finally:
         cursor.close()
 

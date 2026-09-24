@@ -2085,6 +2085,12 @@ export interface GenerationSettingsData {
   custom_prompt_configured: boolean;
 }
 
+/** DocRAG 回答記録の保持日数(0 は無期限)。 */
+export interface AnswerRecordSettingsData {
+  retention_days: number;
+  config_source: "runtime";
+}
+
 export interface GenerationSettingsUpdate {
   profile: GenerationProfileName;
   expected_revision?: number;
@@ -2924,6 +2930,10 @@ export const api = {
     ),
   getDocragAnswer: (traceId: string) =>
     request<DocragAnswerDetail>(`/api/search/answers/${encodeURIComponent(traceId)}`),
+  deleteDocragAnswer: (traceId: string) =>
+    request<{ trace_id: string }>(`/api/search/answers/${encodeURIComponent(traceId)}`, {
+      method: "DELETE",
+    }),
   getRuntimeKnowledge: (id: string) =>
     request<RuntimeKnowledgeData>(
       `/api/business-views/${encodeURIComponent(id)}/runtime-knowledge`
@@ -3134,6 +3144,14 @@ export const api = {
 
   // 設定: Generation アダプター
   getGenerationSettings: () => request<GenerationSettingsData>("/api/settings/generation"),
+  getAnswerRecordSettings: () =>
+    request<AnswerRecordSettingsData>("/api/settings/answer-records"),
+  updateAnswerRecordSettings: (body: { retention_days: number }) =>
+    request<AnswerRecordSettingsData>("/api/settings/answer-records", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
   updateGenerationSettings: (body: GenerationSettingsUpdate) =>
     request<GenerationSettingsData>("/api/settings/generation", {
       method: "PATCH",

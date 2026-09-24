@@ -144,6 +144,8 @@ from app.schemas.settings import (
     AgenticProfileStatusData,
     AgenticSettingsData,
     AgenticSettingsUpdate,
+    AnswerRecordSettingsData,
+    AnswerRecordSettingsUpdate,
     ChunkingSettingsData,
     ChunkingSettingsUpdate,
     ChunkingStrategyStatusData,
@@ -762,6 +764,37 @@ def _prompt_versions_data(
             for version in versions
         ],
     )
+
+
+@router.get("/answer-records", response_model=ApiResponse[AnswerRecordSettingsData])
+async def get_answer_record_settings() -> ApiResponse[AnswerRecordSettingsData]:
+    """DocRAG 回答記録の保持日数を返す。"""
+    return ApiResponse(
+        data=AnswerRecordSettingsData(
+            retention_days=get_settings().rag_answer_record_retention_days
+        )
+    )
+
+
+@router.patch("/answer-records", response_model=ApiResponse[AnswerRecordSettingsData])
+async def update_answer_record_settings(
+    payload: AnswerRecordSettingsUpdate,
+) -> ApiResponse[AnswerRecordSettingsData]:
+    """保持日数を backend/.env と現在プロセスへ反映し、期限切れの記録を削除する。"""
+    settings = get_settings()
+    _write_env_values(
+        BACKEND_ENV_FILE,
+        {"RAG_ANSWER_RECORD_RETENTION_DAYS": str(payload.retention_days)},
+        section_comment="# DocRAG 回答記録",
+        error_detail="回答記録の保持設定を backend/.env へ保存できませんでした。",
+    )
+    settings.rag_answer_record_retention_days = payload.retention_days
+    if payload.retention_days > 0:
+        try:
+            await OracleClient().purge_answer_records(payload.retention_days)
+        except Exception as exc:  # 次の回答保存時にも削除するため、設定保存は止めない。
+            logger.warning("answer record purge failed", extra={"error": str(exc)})
+    return ApiResponse(data=AnswerRecordSettingsData(retention_days=payload.retention_days))
 
 
 @router.get("/prompts", response_model=ApiResponse[PromptVersionsData])

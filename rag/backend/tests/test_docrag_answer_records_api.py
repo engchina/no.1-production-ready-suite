@@ -25,10 +25,15 @@ RECORD: dict[str, Any] = {
 class FakeAnswerOracle:
     def __init__(self) -> None:
         self.list_calls: list[dict[str, Any]] = []
+        self.deleted: list[str] = []
 
     async def list_answer_records(self, **kwargs: Any) -> list[dict[str, Any]]:
         self.list_calls.append(kwargs)
         return [{**RECORD, "confidence": "high"}]
+
+    async def delete_answer_record(self, trace_id: str) -> bool:
+        self.deleted.append(trace_id)
+        return trace_id == "trace-1"
 
     async def get_answer_record(self, trace_id: str) -> dict[str, Any] | None:
         if trace_id != "trace-1":
@@ -63,3 +68,12 @@ def test_list_and_get_saved_docrag_answers(fake_oracle: FakeAnswerOracle) -> Non
     assert data["citations"][0]["chunk_id"] == "doc-1:c1"
     assert data["docrag"]["confidence"] == "high"
     assert client.get("/api/search/answers/missing").status_code == 404
+
+
+def test_delete_saved_docrag_answer(fake_oracle: FakeAnswerOracle) -> None:
+    deleted = client.delete("/api/search/answers/trace-1")
+
+    assert deleted.status_code == 200
+    assert deleted.json()["data"] == {"trace_id": "trace-1"}
+    assert client.delete("/api/search/answers/missing").status_code == 404
+    assert fake_oracle.deleted == ["trace-1", "missing"]
