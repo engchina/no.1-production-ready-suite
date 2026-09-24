@@ -4903,6 +4903,7 @@ source = { editable = "../packages/rag_parser_core" }
 dependencies = [
     { name = "charset-normalizer" },
     { name = "httpx" },
+    { name = "openai" },
     { name = "pydantic" },
 ]
 
@@ -4912,6 +4913,7 @@ requires-dist = [
     { name = "fastapi", marker = "extra == 'service'", specifier = ">=0.121,<1.0" },
     { name = "gunicorn", marker = "extra == 'service'", specifier = ">=23,<24" },
     { name = "httpx", specifier = ">=0.27" },
+    { name = "openai", specifier = ">=1.99,<2" },
     { name = "pydantic", specifier = ">=2.11" },
     { name = "python-multipart", marker = "extra == 'service'", specifier = ">=0.0.20" },
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'service'", specifier = ">=0.37" },

@@ -7,8 +7,12 @@ requires-python = ">=3.12"
 dependencies = [
     "pydantic>=2.11",
     "charset-normalizer>=3.4,<4",
-    # oci_enterprise_ai(共有 VLM/LLM core)が OpenAI 互換 transport に使う。
+    # oci_enterprise_ai(共有 VLM/LLM core)は openai SDK で OCI OpenAI 互換 API を呼ぶ。
+    # httpx は SDK 例外を既存のエラー経路へ変換するために直接参照する。
     "httpx>=0.27",
+    # ponytail: marker-pdf が openai<2 を要求し backend の universal lock が 1.x に固定されるため、
+    # 全サービスで同じ major(httpx 例外型)に揃える。marker 依存が外れたら上限を上げる。
+    "openai>=1.99,<2",
 ]
 
 [project.optional-dependencies]
