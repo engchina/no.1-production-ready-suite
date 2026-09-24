@@ -464,8 +464,10 @@ docling = [
 [package.metadata]
 requires-dist = [
     { name = "docling", marker = "extra == 'docling'", specifier = ">=2.0" },
+    { name = "oci", marker = "extra == 'oracle'", specifier = ">=2.185.0" },
     { name = "openai", specifier = ">=1.99,<2" },
     { name = "openpyxl", marker = "extra == 'excel'", specifier = ">=3.1" },
+    { name = "oracledb", marker = "extra == 'oracle'", specifier = ">=2.5.0" },
     { name = "pandas", marker = "extra == 'excel'", specifier = ">=2.0" },
     { name = "pillow", marker = "extra == 'docling'", specifier = ">=10.0" },
     { name = "pillow", marker = "extra == 'pdf'", specifier = ">=10.0" },
@@ -477,7 +479,7 @@ requires-dist = [
     { name = "sudachipy", marker = "extra == 'japanese'", specifier = "==0.6.11" },
     { name = "xlrd", marker = "extra == 'excel'", specifier = ">=2.0" },
 ]
-provides-extras = ["docling", "pdf", "japanese", "excel"]
+provides-extras = ["docling", "pdf", "japanese", "oracle", "excel"]
 
 [[package]]
 name = "et-xmlfile"
