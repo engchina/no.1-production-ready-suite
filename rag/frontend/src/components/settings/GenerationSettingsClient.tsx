@@ -10,11 +10,13 @@ import {
   CardTitle,
   Button,
   FormStatus,
+  SelectField,
   Skeleton,
+  type SelectFieldOption,
 } from "@engchina/production-ready-ui";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { RotateCcw, Save, Sparkles } from "lucide-react";
+import { Archive, RotateCcw, Save, Sparkles } from "lucide-react";
 
 import { ErrorState } from "@/components/StateViews";
 import {
@@ -23,7 +25,12 @@ import {
   type GenerationProfileStatusData,
 } from "@/lib/api";
 import { t, type I18nKey } from "@/lib/i18n";
-import { useGenerationSettings, useUpdateGenerationSettings } from "@/lib/queries";
+import {
+  useAnswerRecordSettings,
+  useGenerationSettings,
+  useUpdateAnswerRecordSettings,
+  useUpdateGenerationSettings,
+} from "@/lib/queries";
 import { APP_ROUTES } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 
@@ -247,7 +254,89 @@ export function GenerationSettingsClient() {
           </div>
         </CardContent>
       </Card>
+      <AnswerRecordRetentionCard />
     </PageBody>
+  );
+}
+
+const RETENTION_OPTIONS: SelectFieldOption<string>[] = [
+  ...[30, 90, 180, 365].map((days) => ({
+    value: String(days),
+    label: t("settings.answerRecords.days", { days }),
+  })),
+  { value: "0", label: t("settings.answerRecords.unlimited") },
+];
+
+/** DocRAG 回答記録の保持日数(全体設定)。 */
+function AnswerRecordRetentionCard() {
+  const query = useAnswerRecordSettings();
+  const save = useUpdateAnswerRecordSettings();
+  const [draft, setDraft] = useState<string | null>(null);
+  const current = query.data ? String(query.data.retention_days) : null;
+  const value = draft ?? current;
+  const options =
+    current && !RETENTION_OPTIONS.some((item) => item.value === current)
+      ? [...RETENTION_OPTIONS, { value: current, label: t("settings.answerRecords.days", { days: current }) }]
+      : RETENTION_OPTIONS;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Archive size={16} className="text-accent-fg" aria-hidden />
+          {t("settings.answerRecords.title")}
+        </CardTitle>
+        <CardDescription>{t("settings.answerRecords.description")}</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {query.isPending ? <Skeleton className="h-10 w-full max-w-md" /> : null}
+        {query.isError ? (
+          <FormStatus tone="danger" message={t("settings.answerRecords.loadError")} />
+        ) : null}
+        {value !== null ? (
+          <div className="flex flex-col gap-3 md:flex-row md:items-end">
+            <div className="w-full max-w-md">
+              <SelectField
+                id="answer-record-retention"
+                label={t("settings.answerRecords.field")}
+                value={value}
+                options={options}
+                onValueChange={(next) => {
+                  if (!next) return;
+                  save.reset();
+                  setDraft(next);
+                }}
+              />
+            </div>
+            <Button
+              type="button"
+              size="lg"
+              icon={Save}
+              loading={save.isPending}
+              disabled={value === current}
+              onClick={() =>
+                save.mutate(Number(value), { onSuccess: () => setDraft(null) })
+              }
+            >
+              {t("settings.answerRecords.save")}
+            </Button>
+          </div>
+        ) : null}
+        {save.isSuccess ? (
+          <FormStatus tone="success" message={t("settings.answerRecords.saved")} />
+        ) : null}
+        {save.isError ? (
+          <FormStatus
+            tone="danger"
+            message={
+              save.error instanceof ApiError
+                ? save.error.message
+                : t("settings.answerRecords.saveError")
+            }
+          />
+        ) : null}
+      </CardContent>
+    </Card>
   );
 }
 

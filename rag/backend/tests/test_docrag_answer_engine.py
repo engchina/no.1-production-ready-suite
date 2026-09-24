@@ -409,12 +409,17 @@ class SavingOracle(FakeOracle):
     def __init__(self, *, fail: bool = False) -> None:
         super().__init__()
         self.saved: list[dict[str, Any]] = []
+        self.purged: list[int] = []
         self.fail = fail
 
     async def save_answer_record(self, record: dict[str, Any]) -> None:
         if self.fail:
             raise RuntimeError("db down")
         self.saved.append(dict(record))
+
+    async def purge_answer_records(self, retention_days: int) -> int:
+        self.purged.append(retention_days)
+        return 0
 
 
 async def test_docrag_answer_is_saved_per_surface(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -443,6 +448,28 @@ async def test_docrag_answer_is_saved_per_surface(monkeypatch: pytest.MonkeyPatc
     assert first["citations"][0]["chunk_id"] == "doc-1:c1"
     assert first["diagnostics"]["evidence_tree"]
     assert second["surface"] == "chat"
+    assert oracle.purged == [90, 90]  # 既定の保持日数で保存のたびに期限切れを削除する
+
+
+async def test_docrag_answer_purge_skipped_when_retention_unlimited(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import docrag.adapters.oci as docrag_oci
+
+    from app.rag.pipeline import RagPipeline
+
+    monkeypatch.setattr(docrag_oci, "parse_text_response", _fake_llm)
+    oracle = SavingOracle()
+    pipeline = RagPipeline(
+        settings=Settings(rag_answer_engine="docrag", rag_answer_record_retention_days=0),
+        oracle=oracle,  # type: ignore[arg-type]
+        genai=FakeGenAi(),  # type: ignore[arg-type]
+    )
+
+    await pipeline.run(SearchRequest(query="受注の登録方法は？"), trace_id="trace-1")
+
+    assert len(oracle.saved) == 1
+    assert oracle.purged == []
 
 
 async def test_docrag_answer_save_failure_still_returns_answer(

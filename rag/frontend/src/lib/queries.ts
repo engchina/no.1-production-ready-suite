@@ -950,6 +950,39 @@ export function useDocragAnswer(traceId: string | null) {
   });
 }
 
+/** 保存済み DocRAG 回答の削除。一覧・詳細のキャッシュを捨てる。 */
+export function useDeleteDocragAnswer() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (traceId: string) => api.deleteDocragAnswer(traceId),
+    onSuccess: (_data, traceId) => {
+      qc.removeQueries({ queryKey: ["docrag-answer", traceId] });
+      qc.invalidateQueries({ queryKey: ["docrag-answers"] });
+    },
+  });
+}
+
+/** DocRAG 回答記録の保持日数。 */
+export function useAnswerRecordSettings() {
+  return useQuery({
+    queryKey: ["settings", "answer-records"],
+    queryFn: api.getAnswerRecordSettings,
+  });
+}
+
+/** DocRAG 回答記録の保持日数を保存する(期限切れは backend が削除する)。 */
+export function useUpdateAnswerRecordSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (retentionDays: number) =>
+      api.updateAnswerRecordSettings({ retention_days: retentionDays }),
+    onSuccess: (data) => {
+      qc.setQueryData(["settings", "answer-records"], data);
+      qc.invalidateQueries({ queryKey: ["docrag-answers"] });
+    },
+  });
+}
+
 /** 業務ビュー作成。 */
 export function useCreateBusinessView() {
   const qc = useQueryClient();

@@ -767,6 +767,14 @@ class Settings(BaseSettings):
             "単独の質問へ書き換える(履歴がある場合だけ LLM 呼び出しが 1 回増える)。"
         ),
     )
+    rag_answer_record_retention_days: int = Field(
+        default=90,
+        ge=0,
+        le=3650,
+        description=(
+            "DocRAG 回答記録の保持日数。0 は無期限。回答保存時と設定変更時に期限切れを削除する。"
+        ),
+    )
     rag_docrag_profile: Literal["generic", "legacy"] = Field(
         default="generic",
         description=(

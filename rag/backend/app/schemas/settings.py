@@ -1009,6 +1009,19 @@ class GenerationSettingsData(BaseModel):
     custom_prompt_configured: bool
 
 
+class AnswerRecordSettingsData(BaseModel):
+    """DocRAG 回答記録の保持設定。retention_days=0 は無期限。"""
+
+    retention_days: int = Field(ge=0, le=3650)
+    config_source: Literal["runtime"] = "runtime"
+
+
+class AnswerRecordSettingsUpdate(BaseModel):
+    """DocRAG 回答記録の保持設定の更新 payload。"""
+
+    retention_days: int = Field(ge=0, le=3650)
+
+
 class GenerationSettingsUpdate(BaseModel):
     """回答スタイル設定の更新 payload。"""
 

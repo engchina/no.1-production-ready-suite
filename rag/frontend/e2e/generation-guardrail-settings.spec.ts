@@ -77,6 +77,42 @@ test("回答スタイル設定は回答スタイルを保存できる", async ({
   await expectNoHorizontalOverflow(page);
 });
 
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 760, collapse: false },
+  { name: "mobile", width: 375, height: 812, collapse: true },
+]) {
+  test(`DocRAG 回答の保存期間を保存できる (${viewport.name})`, async ({ page }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    if (viewport.collapse) await collapseSidebar(page);
+    await mockGeneration(page);
+    let saved: unknown = null;
+    await page.route("**/api/settings/answer-records", async (route) => {
+      if (route.request().method() === "PATCH") {
+        saved = route.request().postDataJSON();
+        await route.fulfill({
+          json: { data: { retention_days: 0, config_source: "runtime" }, error_messages: [], warning_messages: [] },
+        });
+        return;
+      }
+      await route.fulfill({
+        json: { data: { retention_days: 90, config_source: "runtime" }, error_messages: [], warning_messages: [] },
+      });
+    });
+
+    await page.goto("/settings/generation");
+    const save = page.getByRole("button", { name: "保存期間を保存" });
+    await expect(save).toBeDisabled();
+    await page.getByRole("combobox", { name: "保存期間" }).click();
+    await page.getByRole("option", { name: "無期限（手動で削除）" }).click();
+    await save.click();
+
+    await expect(page.getByText("保存期間を保存しました。")).toBeVisible();
+    expect(saved).toEqual({ retention_days: 0 });
+    await expect(save).toBeDisabled();
+    await expectNoHorizontalOverflow(page);
+  });
+}
+
 test("カスタム回答スタイル選択でプロンプト版管理への導線が出る", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
   await page.route("**/api/settings/generation", async (route) => {

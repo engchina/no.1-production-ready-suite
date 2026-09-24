@@ -1,4 +1,4 @@
-import { History } from "lucide-react";
+import { History, Trash2 } from "lucide-react";
 import { useState } from "react";
 
 import {
@@ -11,13 +11,19 @@ import {
   FormStatus,
   Skeleton,
   StatusBadge,
+  useConfirm,
 } from "@engchina/production-ready-ui";
 
 import { ApiError } from "@/lib/api";
 import { confidenceVariant } from "@/lib/docrag-answer";
 import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
-import { useDocragAnswer, useDocragAnswers } from "@/lib/queries";
+import {
+  useAnswerRecordSettings,
+  useDeleteDocragAnswer,
+  useDocragAnswer,
+  useDocragAnswers,
+} from "@/lib/queries";
 
 import { CitationCard } from "./CitationCard";
 import { DocragAnswerPanel } from "./DocragAnswerPanel";
@@ -29,6 +35,7 @@ export function DocragAnswerHistory({
   businessViewId: string;
 }) {
   const list = useDocragAnswers(businessViewId);
+  const retention = useAnswerRecordSettings().data?.retention_days;
   const [selected, setSelected] = useState<string | null>(null);
   const answers = list.data ?? [];
   return (
@@ -38,7 +45,16 @@ export function DocragAnswerHistory({
           <History size={16} className="text-accent-fg" aria-hidden />
           {t("search.history.title")}
         </CardTitle>
-        <CardDescription>{t("search.history.description")}</CardDescription>
+        <CardDescription>
+          {t("search.history.description")}
+          {retention === undefined
+            ? null
+            : ` ${
+                retention > 0
+                  ? t("search.history.retention", { days: retention })
+                  : t("search.history.retentionUnlimited")
+              }`}
+        </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
         {list.isPending ? <Skeleton className="h-16 w-full" /> : null}
@@ -62,7 +78,7 @@ export function DocragAnswerHistory({
                 <Button
                   size="sm"
                   variant={selected === item.trace_id ? "secondary" : "ghost"}
-                  className="h-auto w-full justify-start py-1.5 text-left"
+                  className="h-auto w-full flex-wrap justify-start py-1.5 text-left [&>span]:whitespace-normal!"
                   aria-pressed={selected === item.trace_id}
                   onClick={() =>
                     setSelected(
@@ -96,6 +112,7 @@ export function DocragAnswerHistory({
           <SavedDocragAnswer
             traceId={selected}
             businessViewId={businessViewId}
+            onDeleted={() => setSelected(null)}
           />
         ) : null}
       </CardContent>
@@ -108,12 +125,28 @@ export function SavedDocragAnswer({
   traceId,
   businessViewId,
   showAnswer = true,
+  onDeleted,
 }: {
   traceId: string;
   businessViewId: string;
   showAnswer?: boolean;
+  onDeleted?: () => void;
 }) {
   const detail = useDocragAnswer(traceId);
+  const remove = useDeleteDocragAnswer();
+  const confirm = useConfirm();
+
+  async function handleDelete() {
+    const confirmed = await confirm({
+      title: t("search.history.deleteTitle"),
+      description: t("search.history.deleteDescription"),
+      confirmLabel: t("common.delete"),
+      tone: "danger",
+    });
+    if (!confirmed) return;
+    remove.mutate(traceId, { onSuccess: () => onDeleted?.() });
+  }
+
   if (detail.isPending) return <Skeleton className="h-24 w-full" />;
   if (detail.isError || !detail.data) {
     return (
@@ -155,6 +188,29 @@ export function SavedDocragAnswer({
           ))}
         </ul>
       ) : null}
+      <div className="flex flex-wrap items-center justify-end gap-2 border-t border-border pt-3">
+        {remove.isError ? (
+          <FormStatus
+            tone="danger"
+            message={
+              remove.error instanceof ApiError
+                ? remove.error.message
+                : t("search.history.deleteError")
+            }
+          />
+        ) : null}
+        <Button
+          type="button"
+          variant="ghost"
+          tone="danger"
+          size="sm"
+          icon={Trash2}
+          loading={remove.isPending}
+          onClick={() => void handleDelete()}
+        >
+          {t("search.history.delete")}
+        </Button>
+      </div>
     </div>
   );
 }

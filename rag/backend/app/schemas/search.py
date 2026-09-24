@@ -499,3 +499,9 @@ class AnswerRecordDetail(AnswerRecordSummary):
     answer: str
     citations: list[RetrievedChunk] = Field(default_factory=list)
     docrag: dict[str, JsonValue] = Field(default_factory=dict)
+
+
+class AnswerRecordDeleteResult(BaseModel):
+    """DocRAG 回答の削除結果。"""
+
+    trace_id: str
