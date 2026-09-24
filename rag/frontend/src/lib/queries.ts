@@ -82,6 +82,7 @@ import {
   type UploadIngestionMode,
   type UploadStorageSettingsUpdate,
   type ApprovedFaqMutationData,
+  type RuntimeKnowledgeEditRequest,
 } from "./api";
 
 export const queryKeys = {
@@ -907,6 +908,26 @@ export function useApprovedFaqMutation<TArgs>(
     mutationFn,
     onSuccess: (data) => {
       qc.setQueryData(["business-views", businessViewId, "approved-faq"], data);
+    },
+  });
+}
+
+/** 業務ビューの用語・ルール。 */
+export function useRuntimeKnowledge(businessViewId: string) {
+  return useQuery({
+    queryKey: ["business-views", businessViewId, "runtime-knowledge"],
+    queryFn: () => api.getRuntimeKnowledge(businessViewId),
+  });
+}
+
+/** 用語・ルールの 1 行追加・更新・削除。 */
+export function useEditRuntimeKnowledge(businessViewId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: RuntimeKnowledgeEditRequest) =>
+      api.editRuntimeKnowledge(businessViewId, body),
+    onSuccess: (data) => {
+      qc.setQueryData(["business-views", businessViewId, "runtime-knowledge"], data);
     },
   });
 }

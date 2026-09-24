@@ -23,8 +23,9 @@ import {
 } from "@/lib/queries";
 
 import { ApprovedFaqManager } from "./ApprovedFaqManager";
+import { RuntimeKnowledgeManager } from "./RuntimeKnowledgeManager";
 
-type KnowledgeTab = "domainKeywords" | "approvedFaq";
+type KnowledgeTab = "domainKeywords" | "approvedFaq" | "runtimeKnowledge";
 
 /** 業務ビュー単位の知識(ドメインキーワード等)。編集中の業務ビューにだけ表示する。 */
 export function BusinessViewKnowledgePanel({
@@ -53,6 +54,7 @@ export function BusinessViewKnowledgePanel({
               label: t("businessViews.domainKeywords.title"),
             },
             { id: "approvedFaq", label: t("businessViews.faq.title") },
+            { id: "runtimeKnowledge", label: t("businessViews.runtime.title") },
           ]}
         />
         <div
@@ -62,8 +64,10 @@ export function BusinessViewKnowledgePanel({
         >
           {tab === "domainKeywords" ? (
             <DomainKeywordsEditor businessViewId={businessViewId} />
-          ) : (
+          ) : tab === "approvedFaq" ? (
             <ApprovedFaqManager businessViewId={businessViewId} />
+          ) : (
+            <RuntimeKnowledgeManager businessViewId={businessViewId} />
           )}
         </div>
       </CardContent>
