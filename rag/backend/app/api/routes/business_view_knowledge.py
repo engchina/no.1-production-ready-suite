@@ -16,10 +16,13 @@ from app.rag.business_view_knowledge import (
     ApprovedFaqMutation,
     add_approved_faq,
     delete_approved_faq,
+    edit_runtime_knowledge,
     import_approved_faq,
     is_direct_faq_match,
     load_approved_faq,
     load_domain_keywords,
+    load_runtime_knowledge_payload,
+    preview_runtime_knowledge,
     read_approved_faq_excel,
     save_domain_keywords,
     suggest_approved_faq,
@@ -41,6 +44,10 @@ from app.schemas.business_view_knowledge import (
     DomainKeywordsData,
     DomainKeywordSuggestionData,
     DomainKeywordsUpdate,
+    RuntimeKnowledgeData,
+    RuntimeKnowledgeEditRequest,
+    RuntimeKnowledgePreviewData,
+    RuntimeKnowledgePreviewRequest,
 )
 from app.schemas.common import ApiResponse
 
@@ -279,5 +286,82 @@ async def suggest_business_view_approved_faq(
                 )
                 for item in suggestions
             ]
+        )
+    )
+
+
+# --- 用語・ルール(runtime knowledge)-------------------------------------------
+
+
+def _runtime_knowledge_data(
+    business_view_id: str, payload: dict[str, object]
+) -> RuntimeKnowledgeData:
+    return RuntimeKnowledgeData.model_validate(
+        {
+            "business_view_id": business_view_id,
+            "terms": payload.get("terms") or [],
+            "rules": payload.get("rules") or [],
+        }
+    )
+
+
+@router.get(
+    "/{business_view_id}/runtime-knowledge",
+    response_model=ApiResponse[RuntimeKnowledgeData],
+)
+async def get_runtime_knowledge(business_view_id: str) -> ApiResponse[RuntimeKnowledgeData]:
+    """業務ビューの用語・ルールを返す。"""
+    oracle = OracleClient()
+    await _require_business_view(oracle, business_view_id)
+    payload = await load_runtime_knowledge_payload(oracle, business_view_id)
+    return ApiResponse(data=_runtime_knowledge_data(business_view_id, payload))
+
+
+@router.post(
+    "/{business_view_id}/runtime-knowledge/edit",
+    response_model=ApiResponse[RuntimeKnowledgeData],
+)
+async def post_runtime_knowledge_edit(
+    business_view_id: str, request: RuntimeKnowledgeEditRequest
+) -> ApiResponse[RuntimeKnowledgeData]:
+    """用語またはルールを 1 行追加・更新・削除する。"""
+    oracle = OracleClient()
+    await _require_business_view(oracle, business_view_id)
+    try:
+        payload = await edit_runtime_knowledge(
+            oracle,
+            business_view_id,
+            kind=request.kind,
+            selected=request.selected,
+            name=request.name,
+            title=request.title,
+            labels=request.labels,
+            content=request.content,
+            source=request.source,
+            enabled=request.enabled,
+            delete=request.delete,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return ApiResponse(data=_runtime_knowledge_data(business_view_id, payload))
+
+
+@router.post(
+    "/{business_view_id}/runtime-knowledge/preview",
+    response_model=ApiResponse[RuntimeKnowledgePreviewData],
+)
+async def post_runtime_knowledge_preview(
+    business_view_id: str, request: RuntimeKnowledgePreviewRequest
+) -> ApiResponse[RuntimeKnowledgePreviewData]:
+    """照合テスト: 質問に一致する用語・ルールと拡張後の検索文を返す(保存しない)。"""
+    oracle = OracleClient()
+    await _require_business_view(oracle, business_view_id)
+    payload = await load_runtime_knowledge_payload(oracle, business_view_id)
+    context = await asyncio.to_thread(preview_runtime_knowledge, payload, request.question)
+    return ApiResponse(
+        data=RuntimeKnowledgePreviewData(
+            expanded_question=context.expanded_question,
+            matched_terms=[term.term for term in context.matched_terms],
+            matched_rules=[rule.title or rule.rule_id for rule in context.matched_rules],
         )
     )

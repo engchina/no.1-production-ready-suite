@@ -13,7 +13,7 @@ from app.clients.oracle import CustomPromptNotConfiguredError, OracleClient
 from app.config import Settings, get_settings
 from app.rag.audit import record_rag_search_audit
 from app.rag.business_view_config import resolve_business_view_settings
-from app.rag.business_view_knowledge import load_domain_keywords
+from app.rag.business_view_knowledge import RUNTIME_KNOWLEDGE_KIND, load_domain_keywords
 from app.rag.diagnostics import build_search_diagnostics
 from app.rag.generation_config import (
     apply_generation_profile,
@@ -154,6 +154,12 @@ async def _resolve_query_context(
                         domain_keywords.append(keyword)
             if domain_keywords:
                 settings = settings.model_copy(update={"rag_domain_keywords": domain_keywords})
+            # 用語・ルールは DocRAG 回答エンジンだけが使う(先頭の業務ビューのもの)。
+            runtime_knowledge = await oracle.get_business_view_knowledge(
+                views[0].id, RUNTIME_KNOWLEDGE_KIND
+            )
+            if runtime_knowledge:
+                settings = settings.model_copy(update={"rag_runtime_knowledge": runtime_knowledge})
             applied_view = ",".join(view.id for view in views) if (applied or kb_ids) else None
             return effective_request, settings, None, applied_view
 

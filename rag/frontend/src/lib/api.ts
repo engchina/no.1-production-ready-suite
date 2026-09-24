@@ -2908,6 +2908,20 @@ export const api = {
       `/api/business-views/${encodeURIComponent(id)}/approved-faq/suggest`,
       jsonBody({ query })
     ),
+  getRuntimeKnowledge: (id: string) =>
+    request<RuntimeKnowledgeData>(
+      `/api/business-views/${encodeURIComponent(id)}/runtime-knowledge`
+    ),
+  editRuntimeKnowledge: (id: string, body: RuntimeKnowledgeEditRequest) =>
+    request<RuntimeKnowledgeData>(
+      `/api/business-views/${encodeURIComponent(id)}/runtime-knowledge/edit`,
+      jsonBody(body)
+    ),
+  previewRuntimeKnowledge: (id: string, question: string) =>
+    request<RuntimeKnowledgePreviewData>(
+      `/api/business-views/${encodeURIComponent(id)}/runtime-knowledge/preview`,
+      jsonBody({ question })
+    ),
   suggestDomainKeywords: (id: string) =>
     request<DomainKeywordSuggestionData>(
       `/api/business-views/${encodeURIComponent(id)}/domain-keywords/suggest`,
@@ -3261,4 +3275,31 @@ export interface ApprovedFaqSuggestionData {
 
 export interface ApprovedFaqSuggestionsData {
   suggestions: ApprovedFaqSuggestionData[];
+}
+
+// --- 業務ビューの知識: 用語・ルール(runtime knowledge) ---
+export type RuntimeKnowledgeKind = "terms" | "rules";
+
+export interface RuntimeKnowledgeData {
+  business_view_id: string;
+  terms: Record<string, JsonValue>[];
+  rules: Record<string, JsonValue>[];
+}
+
+export interface RuntimeKnowledgeEditRequest {
+  kind: RuntimeKnowledgeKind;
+  selected?: string | null;
+  name?: string;
+  title?: string;
+  labels?: string;
+  content?: string;
+  source?: string;
+  enabled?: boolean;
+  delete?: boolean;
+}
+
+export interface RuntimeKnowledgePreviewData {
+  expanded_question: string;
+  matched_terms: string[];
+  matched_rules: string[];
 }

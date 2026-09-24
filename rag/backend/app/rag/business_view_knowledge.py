@@ -41,6 +41,11 @@ from docrag.knowledge.domain_keywords import (
     MAX_DOMAIN_KEYWORDS,
     normalize_domain_keywords,
 )
+from docrag.knowledge.runtime_knowledge import (
+    RuntimeKnowledgeContext,
+    build_runtime_knowledge_context,
+)
+from docrag.knowledge.runtime_knowledge_management import edit_knowledge, load_knowledge_snapshot
 from docrag.retrieval.text_search_tokenizer import (
     TEXT_SEARCH_TOKENIZER_SUDACHI,
     TextSearchTokenizerConfig,
@@ -244,3 +249,70 @@ def _faq_file(payload: Mapping[str, object] | None) -> Iterator[Path]:
         if payload is not None:
             path.write_text(json.dumps(dict(payload), ensure_ascii=False), encoding="utf-8")
         yield path
+
+
+# --- 用語・ルール(runtime knowledge)-------------------------------------------
+
+RUNTIME_KNOWLEDGE_KIND = "runtime_knowledge"
+
+
+async def load_runtime_knowledge_payload(
+    store: BusinessViewKnowledgeStore, business_view_id: str
+) -> dict[str, object]:
+    """業務ビューの用語・ルール payload を返す(未登録は空の標準形式)。"""
+    payload = await store.get_business_view_knowledge(business_view_id, RUNTIME_KNOWLEDGE_KIND)
+    return payload or {"schema_version": 1, "terms": [], "rules": []}
+
+
+async def edit_runtime_knowledge(
+    store: BusinessViewKnowledgeStore,
+    business_view_id: str,
+    *,
+    kind: str,
+    selected: str | None,
+    name: str = "",
+    title: str = "",
+    labels: str = "",
+    content: str = "",
+    source: str = "",
+    enabled: bool = True,
+    delete: bool = False,
+) -> dict[str, object]:
+    """rag_poc の edit_knowledge を一時ファイル上で実行し、結果を DB へ保存する。"""
+    payload = await load_runtime_knowledge_payload(store, business_view_id)
+    with _runtime_knowledge_dir(payload) as (work_dir, path):
+        snapshot = load_knowledge_snapshot(work_dir, path)
+        updated, _ = edit_knowledge(
+            snapshot,
+            kind,
+            selected,
+            name=name,
+            title=title,
+            labels=labels,
+            content=content,
+            source=source,
+            enabled=enabled,
+            delete=delete,
+            confirmed=delete,
+        )
+    await store.save_business_view_knowledge(
+        business_view_id, RUNTIME_KNOWLEDGE_KIND, dict(updated.payload)
+    )
+    return dict(updated.payload)
+
+
+def preview_runtime_knowledge(
+    payload: Mapping[str, object], question: str
+) -> RuntimeKnowledgeContext:
+    """質問に一致する用語・ルールと拡張後の検索文を返す(保存しない)。"""
+    with _runtime_knowledge_dir(payload) as (work_dir, path):
+        return build_runtime_knowledge_context(question, work_dir, path)
+
+
+@contextmanager
+def _runtime_knowledge_dir(payload: Mapping[str, object]) -> Iterator[tuple[Path, Path]]:
+    with tempfile.TemporaryDirectory(prefix="runtime-knowledge-") as work:
+        work_dir = Path(work)
+        path = work_dir / "runtime_knowledge.json"
+        path.write_text(json.dumps(dict(payload), ensure_ascii=False), encoding="utf-8")
+        yield work_dir, path
