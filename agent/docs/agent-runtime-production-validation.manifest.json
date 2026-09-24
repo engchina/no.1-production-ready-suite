@@ -1,0 +1,167 @@
+{
+  "schema_version": "1.0",
+  "name": "agent-runtime-production-validation",
+  "required_mode": "live",
+  "artifacts": [
+    "backend/validation-runner-readiness.<environment>.json",
+    "backend/validation-runner-readiness.<environment>.md",
+    "backend/validation-preflight.<environment>.json",
+    "backend/validation-preflight.<environment>.md",
+    "backend/validation-evidence.<environment>.json",
+    "backend/validation-evidence.<environment>.md",
+    "backend/validation-review.<environment>.json",
+    "backend/validation-bundle.<environment>.json",
+    "backend/validation-bundle.<environment>.md",
+    "backend/validation-archive.<environment>.json",
+    "backend/validation-archive.<environment>.md",
+    "backend/validation-archive-dir.<environment>.json",
+    "backend/validation-archive-dir.<environment>.md",
+    "backend/validation-upload.<environment>.json",
+    "backend/validation-upload.<environment>.md",
+    "backend/validation-chain.<environment>.json",
+    "backend/validation-chain.<environment>.md",
+    "docs/agent-runtime-production-validation.manifest.json"
+  ],
+  "entrypoints": {
+    "local_wrapper": "scripts/validate-production-evidence.sh",
+    "local_rehearsal": "scripts/rehearse-production-release-chain.sh",
+    "github_workflow": ".github/workflows/production-validation.yml",
+    "runner_readiness": "backend/scripts/agent_runtime_runner_readiness_check.py",
+    "preflight": "backend/scripts/agent_runtime_validation_preflight.py",
+    "collector": "backend/scripts/agent_runtime_collect_validation_evidence.py",
+    "validator": "backend/scripts/agent_runtime_validate_evidence.py",
+    "release_review_scaffold": "backend/scripts/agent_runtime_scaffold_release_review.py",
+    "release_review_gate": "backend/scripts/agent_runtime_release_gate_check.py",
+    "release_bundle_builder": "backend/scripts/agent_runtime_build_release_bundle.py",
+    "release_archiver": "backend/scripts/agent_runtime_archive_release_bundle.py",
+    "release_archive_dir_verifier": "backend/scripts/agent_runtime_verify_release_archive_dir.py",
+    "release_archive_uploader": "backend/scripts/agent_runtime_upload_release_archive.py",
+    "release_chain_verifier": "backend/scripts/agent_runtime_verify_release_chain.py"
+  },
+  "required_sections": {
+    "oracle": {
+      "purpose": "Oracle normalized runtime store write/audit benchmark",
+      "required_evidence_paths": [
+        "oracle.payload.write_duration_ms",
+        "oracle.payload.audit_p95_ms",
+        "oracle.payload.violations"
+      ],
+      "success_criteria": [
+        "oracle.ok == true",
+        "oracle.payload.ok == true",
+        "oracle.payload.violations == []"
+      ]
+    },
+    "rbac_jwks": {
+      "purpose": "IdP JWKS fetch and key rotation evidence",
+      "required_evidence_paths": [
+        "rbac_jwks.payload.checks.jwks.key_count",
+        "rbac_jwks.payload.checks.jwks_rotation.rotated_count"
+      ],
+      "success_criteria": [
+        "rbac_jwks.ok == true",
+        "rbac_jwks.payload.ok == true",
+        "rbac_jwks.payload.checks.jwks_rotation.ok == true"
+      ]
+    },
+    "mcp_oauth": {
+      "purpose": "MCP gateway OAuth/JWKS/tools-list evidence",
+      "required_evidence_paths": [
+        "mcp_oauth.payload.checks.oauth_token.expires_in",
+        "mcp_oauth.payload.checks.tools_list.tool_count"
+      ],
+      "success_criteria": [
+        "mcp_oauth.ok == true",
+        "mcp_oauth.payload.ok == true",
+        "mcp_oauth.payload.checks.tools_list.ok == true"
+      ]
+    },
+    "container_sandbox": {
+      "purpose": "Rootless/seccomp/no-new-privileges/userns sandbox evidence",
+      "required_evidence_paths": [
+        "container_sandbox.payload.checks.security_profile.properties.rootless",
+        "container_sandbox.payload.checks.smoke.ok"
+      ],
+      "success_criteria": [
+        "container_sandbox.ok == true",
+        "container_sandbox.payload.ok == true",
+        "container_sandbox.payload.checks.security_profile.ok == true",
+        "container_sandbox.payload.checks.smoke.ok == true"
+      ]
+    }
+  },
+  "release_gate": {
+    "runner_readiness_command": "uv run python scripts/agent_runtime_runner_readiness_check.py --environment <environment> --container-runtime docker --manifest ../docs/agent-runtime-production-validation.manifest.json --output validation-runner-readiness.<environment>.json --summary-markdown validation-runner-readiness.<environment>.md",
+    "runner_readiness_summary_markdown": "backend/validation-runner-readiness.<environment>.md",
+    "runner_readiness_checks": [
+      "required_secret_groups",
+      "container_runtime",
+      "entrypoints",
+      "validation_manifest",
+      "archive_root",
+      "object_storage",
+      "retention_confirmation"
+    ],
+    "validator_command": "uv run python scripts/agent_runtime_validate_evidence.py validation-evidence.<environment>.json --manifest ../docs/agent-runtime-production-validation.manifest.json",
+    "preflight_readiness_key": "release_chain.ready",
+    "preflight_content_gate": true,
+    "preflight_summary_markdown": "backend/validation-preflight.<environment>.md",
+    "review_scaffold_command": "uv run python scripts/agent_runtime_scaffold_release_review.py validation-evidence.<environment>.json --manifest ../docs/agent-runtime-production-validation.manifest.json --environment <environment> --output validation-review.<environment>.json",
+    "review_gate_command": "uv run python scripts/agent_runtime_release_gate_check.py validation-evidence.<environment>.json validation-review.<environment>.json --manifest ../docs/agent-runtime-production-validation.manifest.json --environment <environment>",
+    "bundle_command": "uv run python scripts/agent_runtime_build_release_bundle.py validation-evidence.<environment>.json validation-review.<environment>.json --runner-readiness validation-runner-readiness.<environment>.json --preflight validation-preflight.<environment>.json --summary-markdown validation-evidence.<environment>.md --manifest ../docs/agent-runtime-production-validation.manifest.json --environment <environment> --output validation-bundle.<environment>.json --bundle-summary-markdown validation-bundle.<environment>.md --retention-days 365 --archive-location release-record/evidence-bundle --archive-owner <owner>",
+    "bundle_summary_markdown": "backend/validation-bundle.<environment>.md",
+    "archive_command": "uv run python scripts/agent_runtime_archive_release_bundle.py validation-bundle.<environment>.json --bundle-summary-markdown validation-bundle.<environment>.md --archive-root <archive-root> --output validation-archive.<environment>.json --archive-summary-markdown validation-archive.<environment>.md",
+    "archive_summary_markdown": "backend/validation-archive.<environment>.md",
+    "archive_dir_verify_command": "uv run python scripts/agent_runtime_verify_release_archive_dir.py validation-archive.<environment>.json --environment <environment> --output validation-archive-dir.<environment>.json --summary-markdown validation-archive-dir.<environment>.md",
+    "archive_dir_summary_markdown": "backend/validation-archive-dir.<environment>.md",
+    "upload_command": "uv run python scripts/agent_runtime_upload_release_archive.py validation-archive.<environment>.json --bucket-name <bucket> --namespace <namespace> --object-prefix agent-runtime/release-archives --output validation-upload.<environment>.json --upload-summary-markdown validation-upload.<environment>.md",
+    "upload_summary_markdown": "backend/validation-upload.<environment>.md",
+    "chain_verify_command": "uv run python scripts/agent_runtime_verify_release_chain.py --environment <environment> --runner-readiness validation-runner-readiness.<environment>.json --preflight validation-preflight.<environment>.json --evidence validation-evidence.<environment>.json --evidence-summary validation-evidence.<environment>.md --review validation-review.<environment>.json --bundle validation-bundle.<environment>.json --bundle-summary validation-bundle.<environment>.md --archive-record validation-archive.<environment>.json --archive-dir-verification validation-archive-dir.<environment>.json --require-archive --require-archive-dir-verification --upload-manifest validation-upload.<environment>.json --require-upload --manifest ../docs/agent-runtime-production-validation.manifest.json --output validation-chain.<environment>.json --summary-markdown validation-chain.<environment>.md",
+    "chain_summary_markdown": "backend/validation-chain.<environment>.md",
+    "rehearsal_command": "scripts/rehearse-production-release-chain.sh",
+    "rehearsal_check_all_skip_env": "SKIP_RELEASE_REHEARSAL",
+    "github_review_inputs": [
+      "review_json_path",
+      "bundle_json_path",
+      "retention_days",
+      "archive_location",
+      "archive_owner",
+      "archive_root",
+      "upload_bucket_name",
+      "upload_namespace",
+      "upload_object_prefix",
+      "execute_upload",
+      "retention_confirmed"
+    ],
+    "archive_policy": {
+      "default_retention_days": 365,
+      "default_archive_location": "release-record/evidence-bundle",
+      "immutable_storage_required": true,
+      "archive_hash_verification": true,
+      "archive_dir_hash_verification": true,
+      "upload_hash_verification": true,
+      "chain_hash_verification": true,
+      "local_archive_root_env": "VALIDATION_ARCHIVE_ROOT",
+      "local_upload_retention_confirmed_env": "VALIDATION_OCI_RETENTION_CONFIRMED",
+      "github_archive_root_input": "archive_root",
+      "github_upload_bucket_input": "upload_bucket_name",
+      "github_upload_retention_confirmed_input": "retention_confirmed",
+      "owner_required": true,
+      "github_artifact_retention_days": 14
+    },
+    "rejects_dry_run": true,
+    "secret_scan": true,
+    "requires_human_review": true,
+    "required_review_checklist": [
+      "validator_passed",
+      "live_mode_confirmed",
+      "runner_readiness_accepted",
+      "secrets_absent",
+      "oracle_sla_accepted",
+      "rbac_jwks_accepted",
+      "mcp_oauth_accepted",
+      "container_sandbox_accepted",
+      "rollback_plan_confirmed"
+    ]
+  }
+}

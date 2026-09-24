@@ -1,0 +1,167 @@
+name: production-ready-agent-control-plane
+
+x-control-plane-environment: &control-plane-environment
+  AGENT_RUNTIME_REPOSITORY_BACKEND: ${AGENT_RUNTIME_REPOSITORY_BACKEND:-memory}
+  AGENT_RUNTIME_DISPATCH_MODE: ${AGENT_RUNTIME_DISPATCH_MODE:-in_process}
+  AGENT_RUNTIME_BINDINGS_DIR: /var/lib/control-plane/bindings
+  AGENT_CONTROL_PLANE_PUBLIC_BASE_URL: ${AGENT_CONTROL_PLANE_PUBLIC_BASE_URL:-http://control-plane:8000/api}
+  AGENT_CONTROL_PLANE_MCP_TOKEN_SECRET: ${AGENT_CONTROL_PLANE_MCP_TOKEN_SECRET:-}
+  AGENT_RUNTIME_SERVICE_CONTROL_ENABLED: "false"
+  AGENT_RUNTIME_ORACLE_DSN: ${AGENT_RUNTIME_ORACLE_DSN:-}
+  AGENT_RUNTIME_ORACLE_USER: ${AGENT_RUNTIME_ORACLE_USER:-}
+  AGENT_RUNTIME_ORACLE_PASSWORD: ${AGENT_RUNTIME_ORACLE_PASSWORD:-}
+  OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
+  HERMES_API_SERVER_KEY: ${HERMES_API_SERVER_KEY:-}
+  DEER_FLOW_INTERNAL_AUTH_TOKEN: ${DEER_FLOW_INTERNAL_AUTH_TOKEN:-}
+
+services:
+  control-plane:
+    build:
+      context: ..
+      dockerfile: no.1-production-ready-agent/backend/Dockerfile
+    image: production-ready-agent-control-plane:local
+    restart: unless-stopped
+    environment: *control-plane-environment
+    ports:
+      - "${CONTROL_PLANE_PORT:-8000}:8000"
+    volumes:
+      - control-plane-state:/var/lib/control-plane
+    networks:
+      - control-plane-internal
+      - runtime-egress
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    security_opt:
+      - no-new-privileges:true
+
+  runtime-dispatcher:
+    profiles: [dispatcher]
+    image: production-ready-agent-control-plane:local
+    restart: unless-stopped
+    command: ["python", "-m", "app.features.agent.runtime_dispatcher"]
+    environment:
+      <<: *control-plane-environment
+      AGENT_RUNTIME_DISPATCH_MODE: external
+    volumes:
+      - control-plane-state:/var/lib/control-plane
+    networks:
+      - control-plane-internal
+      - runtime-egress
+    depends_on:
+      control-plane:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+
+  runtime-openclaw:
+    profiles: [openclaw]
+    image: ghcr.io/openclaw/openclaw@sha256:af7ea052cf216f581fb18fabada01552356c53717461c0399b623cba7ecad4b1
+    restart: unless-stopped
+    command: ["node", "dist/index.js", "gateway", "--bind", "lan", "--port", "18789"]
+    environment:
+      HOME: /home/node
+      OPENCLAW_HOME: /home/node
+      OPENCLAW_STATE_DIR: /home/node/.openclaw
+      OPENCLAW_CONFIG_PATH: /home/node/.openclaw/openclaw.json
+      OPENCLAW_CONFIG_DIR: /home/node/.openclaw
+      OPENCLAW_WORKSPACE_DIR: /home/node/.openclaw/workspace
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
+      OPENCLAW_DISABLE_BONJOUR: "1"
+    ports:
+      - "${OPENCLAW_PORT:-18789}:18789"
+    volumes:
+      - openclaw-state:/home/node/.openclaw
+      - openclaw-auth:/home/node/.config/openclaw
+      - control-plane-state:/var/lib/control-plane:ro
+    networks:
+      - control-plane-internal
+      - runtime-egress
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:18789/readyz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    cap_drop: [NET_RAW, NET_ADMIN]
+    security_opt:
+      - no-new-privileges:true
+
+  runtime-hermes:
+    profiles: [hermes]
+    image: docker.io/nousresearch/hermes-agent@sha256:245b638344f8db4a67a18d487bc4d0a9d80c29aec3ae577da5aa9780a419e8d2
+    restart: unless-stopped
+    command: ["gateway", "run"]
+    environment:
+      API_SERVER_HOST: 0.0.0.0
+      API_SERVER_KEY: ${HERMES_API_SERVER_KEY:-}
+    ports:
+      - "${HERMES_PORT:-8642}:8642"
+    volumes:
+      - hermes-state:/opt/data
+      - control-plane-state:/var/lib/control-plane:ro
+    networks:
+      - control-plane-internal
+      - runtime-egress
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8642/health', timeout=3)"
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    security_opt:
+      - no-new-privileges:true
+
+  runtime-deerflow:
+    profiles: [deerflow]
+    image: ghcr.io/bytedance/deer-flow@sha256:bd3e961b52095a1cb92762458725c2c49f85a2385b4705b43674d32c9db1fa8a
+    restart: unless-stopped
+    environment:
+      DEER_FLOW_INTERNAL_AUTH_TOKEN: ${DEER_FLOW_INTERNAL_AUTH_TOKEN:-}
+    ports:
+      - "${DEERFLOW_PORT:-2026}:2026"
+    volumes:
+      - deerflow-state:/app/.deer-flow
+      - control-plane-state:/var/lib/control-plane:ro
+    networks:
+      - control-plane-internal
+      - runtime-egress
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:2026/api/models', timeout=3)"
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    security_opt:
+      - no-new-privileges:true
+
+networks:
+  control-plane-internal:
+    internal: true
+  runtime-egress:
+
+volumes:
+  control-plane-state:
+  openclaw-state:
+  openclaw-auth:
+  hermes-state:
+  deerflow-state:

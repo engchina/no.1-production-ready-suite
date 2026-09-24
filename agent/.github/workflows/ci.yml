@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Full Checks
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: no.1-production-ready-agent
+    steps:
+      # app と shared platform repo を sibling に並べ、backend/frontend の
+      # ../../no.1-production-ready-platform path dependency を CI でも解決する。
+      - name: Checkout app
+        uses: actions/checkout@v4
+        with:
+          path: no.1-production-ready-agent
+
+      - name: Checkout shared platform packages
+        uses: actions/checkout@v4
+        with:
+          repository: engchina/no.1-production-ready-platform
+          ref: main
+          path: no.1-production-ready-platform
+          token: ${{ secrets.SHARED_UI_REPO_TOKEN || github.token }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            no.1-production-ready-agent/frontend/package-lock.json
+            no.1-production-ready-platform/package-lock.json
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: no.1-production-ready-agent/backend/uv.lock
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build shared UI package
+        working-directory: no.1-production-ready-platform
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install frontend dependencies
+        working-directory: no.1-production-ready-agent/frontend
+        run: npm ci
+
+      - name: Install Playwright browsers
+        working-directory: no.1-production-ready-agent/frontend
+        run: npx playwright install --with-deps chromium
+
+      - name: Run standard checks
+        run: scripts/check-all.sh
+        env:
+          UV_SYNC_ARGS: "--locked --dev"
