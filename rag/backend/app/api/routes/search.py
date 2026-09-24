@@ -13,6 +13,7 @@ from app.clients.oracle import CustomPromptNotConfiguredError, OracleClient
 from app.config import Settings, get_settings
 from app.rag.audit import record_rag_search_audit
 from app.rag.business_view_config import resolve_business_view_settings
+from app.rag.business_view_knowledge import load_domain_keywords
 from app.rag.diagnostics import build_search_diagnostics
 from app.rag.generation_config import (
     apply_generation_profile,
@@ -145,6 +146,14 @@ async def _resolve_query_context(
                 settings = validate_effective_generation_settings(settings)
             except CustomPromptNotConfiguredError as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
+            # 業務ビューのドメインキーワードは全文検索で 1 語として優先する(複数ビューは和集合)。
+            domain_keywords: list[str] = []
+            for view in views:
+                for keyword in await load_domain_keywords(oracle, view.id):
+                    if keyword not in domain_keywords:
+                        domain_keywords.append(keyword)
+            if domain_keywords:
+                settings = settings.model_copy(update={"rag_domain_keywords": domain_keywords})
             applied_view = ",".join(view.id for view in views) if (applied or kb_ids) else None
             return effective_request, settings, None, applied_view
 

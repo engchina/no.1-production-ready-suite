@@ -47,6 +47,7 @@ import {
 } from "@/lib/queries";
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
+import { BusinessViewKnowledgePanel } from "./BusinessViewKnowledgePanel";
 
 const LIMIT = 20;
 const FILTERS: (BusinessViewStatus | "ALL")[] = ["ALL", "ACTIVE", "ARCHIVED"];
@@ -195,13 +196,16 @@ export function BusinessViewManagementClient() {
         />
 
         {editingId && editingDetail.data ? (
-          <BusinessViewForm
-            key={editingId}
-            mode="edit"
-            initial={editingDetail.data}
-            onDone={() => setEditingId(null)}
-            onCancel={() => setEditingId(null)}
-          />
+          <>
+            <BusinessViewForm
+              key={editingId}
+              mode="edit"
+              initial={editingDetail.data}
+              onDone={() => setEditingId(null)}
+              onCancel={() => setEditingId(null)}
+            />
+            <BusinessViewKnowledgePanel key={`knowledge-${editingId}`} businessViewId={editingId} />
+          </>
         ) : (
           <BusinessViewForm mode="create" onDone={() => setOffset(0)} />
         )}

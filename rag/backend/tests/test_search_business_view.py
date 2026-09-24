@@ -63,6 +63,11 @@ class FakeViewOracle:
     def __init__(self, views: dict[str, BusinessViewConfig]) -> None:
         self._views = views
 
+    async def get_business_view_knowledge(
+        self, business_view_id: str, kind: str
+    ) -> dict[str, object] | None:
+        return None
+
     async def get_business_view(self, business_view_id: str) -> BusinessViewDetail | None:
         config = self._views.get(business_view_id)
         if config is None:
@@ -321,6 +326,11 @@ class FakeViewAndKbOracle:
     ) -> None:
         self._views = views
         self._kb_configs = kb_configs
+
+    async def get_business_view_knowledge(
+        self, business_view_id: str, kind: str
+    ) -> dict[str, object] | None:
+        return None
 
     async def get_business_view(self, business_view_id: str) -> BusinessViewDetail | None:
         config = self._views.get(business_view_id)

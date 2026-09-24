@@ -862,6 +862,32 @@ export function useBusinessView(id: string | null) {
   });
 }
 
+/** 業務ビューのドメインキーワード。 */
+export function useDomainKeywords(businessViewId: string) {
+  return useQuery({
+    queryKey: ["business-views", businessViewId, "domain-keywords"],
+    queryFn: () => api.getDomainKeywords(businessViewId),
+  });
+}
+
+/** ドメインキーワードの保存(全置換)。 */
+export function useSaveDomainKeywords(businessViewId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (keywords: string[]) => api.saveDomainKeywords(businessViewId, keywords),
+    onSuccess: (data) => {
+      qc.setQueryData(["business-views", businessViewId, "domain-keywords"], data);
+    },
+  });
+}
+
+/** 参照 KB からドメインキーワード候補を生成する(保存しない)。 */
+export function useSuggestDomainKeywords(businessViewId: string) {
+  return useMutation({
+    mutationFn: () => api.suggestDomainKeywords(businessViewId),
+  });
+}
+
 /** 業務ビュー作成。 */
 export function useCreateBusinessView() {
   const qc = useQueryClient();
