@@ -81,6 +81,7 @@ import {
   type AgenticSettingsUpdate,
   type UploadIngestionMode,
   type UploadStorageSettingsUpdate,
+  type ApprovedFaqMutationData,
 } from "./api";
 
 export const queryKeys = {
@@ -885,6 +886,28 @@ export function useSaveDomainKeywords(businessViewId: string) {
 export function useSuggestDomainKeywords(businessViewId: string) {
   return useMutation({
     mutationFn: () => api.suggestDomainKeywords(businessViewId),
+  });
+}
+
+/** 業務ビューの承認済み FAQ(類似問)。 */
+export function useApprovedFaq(businessViewId: string) {
+  return useQuery({
+    queryKey: ["business-views", businessViewId, "approved-faq"],
+    queryFn: () => api.getApprovedFaq(businessViewId),
+  });
+}
+
+/** FAQ の追加・削除・取込。成功時は一覧 cache を結果で置き換える。 */
+export function useApprovedFaqMutation<TArgs>(
+  businessViewId: string,
+  mutationFn: (args: TArgs) => Promise<ApprovedFaqMutationData>
+) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn,
+    onSuccess: (data) => {
+      qc.setQueryData(["business-views", businessViewId, "approved-faq"], data);
+    },
   });
 }
 

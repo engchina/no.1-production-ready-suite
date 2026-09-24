@@ -35,7 +35,9 @@ import {
 } from "@/components/feedback/FeedbackControls";
 import { EmptyState, ErrorState, LoadingState } from "@/components/StateViews";
 import {
+  api,
   ApiError,
+  type ApprovedFaqSuggestionData,
   type BusinessViewSummary,
   type RetrievedChunk,
   type SearchDiagnostics,
@@ -47,6 +49,7 @@ import { APP_ROUTES } from "@/lib/routes";
 import { useBusinessViews } from "@/lib/queries";
 import { formatDateTime } from "@/lib/format";
 import { DocragAnswerPanel } from "./DocragAnswerPanel";
+import { ApprovedFaqAnswer, ApprovedFaqSuggestions } from "./ApprovedFaqSuggestions";
 
 type Phase = "idle" | "streaming" | "done" | "cancelled" | "error";
 
@@ -158,6 +161,8 @@ export function SearchClient() {
   const [businessViewIds, setBusinessViewIds] = useState<string[]>([]);
   const [scopeError, setScopeError] = useState("");
   const [run, setRun] = useState<SearchRun | null>(null);
+  const [faqSuggestions, setFaqSuggestions] = useState<ApprovedFaqSuggestionData[] | null>(null);
+  const [faqAnswer, setFaqAnswer] = useState<ApprovedFaqSuggestionData | null>(null);
   const [elapsedNowMs, setElapsedNowMs] = useState(Date.now());
   const abortRef = useRef<AbortController | null>(null);
   const navigate = useNavigate();
@@ -181,7 +186,7 @@ export function SearchClient() {
     return () => window.clearInterval(timer);
   }, [phase, runStartedAtMs]);
 
-  const submit = async () => {
+  const submit = async (skipFaq = false) => {
     const trimmed = query.trim();
     if (!trimmed || phase === "streaming") return;
     if (businessViewIds.length === 0) {
@@ -190,6 +195,20 @@ export function SearchClient() {
     }
     setScopeError("");
     setSubmittedQuery(trimmed);
+    setFaqSuggestions(null);
+    setFaqAnswer(null);
+    if (!skipFaq) {
+      // 業務ビューの承認済み FAQ に類似問があれば、回答生成の前に提示する(rag_poc の類似問)。
+      try {
+        const faq = await api.suggestApprovedFaq(businessViewIds[0], trimmed);
+        if (faq.suggestions.length > 0) {
+          setFaqSuggestions(faq.suggestions);
+          return;
+        }
+      } catch {
+        // 類似問の照会に失敗しても通常の回答生成は続ける。
+      }
+    }
 
     abortRef.current?.abort();
     const controller = new AbortController();
@@ -539,7 +558,18 @@ export function SearchClient() {
           </Card>
 
           {/* 状態別表示 */}
-          {phase === "idle" ? (
+          {faqSuggestions ? (
+            <ApprovedFaqSuggestions
+              suggestions={faqSuggestions}
+              onUse={(suggestion) => {
+                setFaqSuggestions(null);
+                setFaqAnswer(suggestion);
+              }}
+              onSkip={() => void submit(true)}
+            />
+          ) : faqAnswer ? (
+            <ApprovedFaqAnswer suggestion={faqAnswer} />
+          ) : phase === "idle" ? (
             <Card>
               <CardContent className="pt-5">
                 <EmptyState title={t("search.initial")} hint={t("search.initialHint")} />

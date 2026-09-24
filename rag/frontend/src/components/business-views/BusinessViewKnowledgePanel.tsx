@@ -22,7 +22,9 @@ import {
   useSuggestDomainKeywords,
 } from "@/lib/queries";
 
-type KnowledgeTab = "domainKeywords";
+import { ApprovedFaqManager } from "./ApprovedFaqManager";
+
+type KnowledgeTab = "domainKeywords" | "approvedFaq";
 
 /** 業務ビュー単位の知識(ドメインキーワード等)。編集中の業務ビューにだけ表示する。 */
 export function BusinessViewKnowledgePanel({
@@ -50,14 +52,19 @@ export function BusinessViewKnowledgePanel({
               id: "domainKeywords",
               label: t("businessViews.domainKeywords.title"),
             },
+            { id: "approvedFaq", label: t("businessViews.faq.title") },
           ]}
         />
         <div
           role="tabpanel"
-          id="business-view-knowledge-panel-domainKeywords"
-          aria-labelledby="business-view-knowledge-tab-domainKeywords"
+          id={`business-view-knowledge-panel-${tab}`}
+          aria-labelledby={`business-view-knowledge-tab-${tab}`}
         >
-          <DomainKeywordsEditor businessViewId={businessViewId} />
+          {tab === "domainKeywords" ? (
+            <DomainKeywordsEditor businessViewId={businessViewId} />
+          ) : (
+            <ApprovedFaqManager businessViewId={businessViewId} />
+          )}
         </div>
       </CardContent>
     </Card>

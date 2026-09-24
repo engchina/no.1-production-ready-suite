@@ -4,16 +4,39 @@ rag_poc(DocRAG)の「ドメインキーワード管理」を業務ビュー層�
 KB・文書レシピには持たせず、検索時は業務ビューのキーワードだけを使う。
 """
 
-from fastapi import APIRouter, HTTPException, Query
+import asyncio
+from typing import Annotated
+
+from docrag.knowledge.approved_faq import ApprovedFaqImportRow, ApprovedFaqRecord
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 
 from app.clients.oracle import OracleClient
 from app.rag.business_view_knowledge import (
+    APPROVED_FAQ_PREVIEW_ROWS,
+    ApprovedFaqMutation,
+    add_approved_faq,
+    delete_approved_faq,
+    import_approved_faq,
+    is_direct_faq_match,
+    load_approved_faq,
     load_domain_keywords,
+    read_approved_faq_excel,
     save_domain_keywords,
+    suggest_approved_faq,
     suggest_domain_keywords,
 )
 from app.schemas.business_view import BusinessViewDetail
 from app.schemas.business_view_knowledge import (
+    ApprovedFaqAddRequest,
+    ApprovedFaqDeleteRequest,
+    ApprovedFaqImportPreviewData,
+    ApprovedFaqImportRowData,
+    ApprovedFaqListData,
+    ApprovedFaqMutationData,
+    ApprovedFaqRecordData,
+    ApprovedFaqSuggestionData,
+    ApprovedFaqSuggestionsData,
+    ApprovedFaqSuggestRequest,
     DomainKeywordCandidateData,
     DomainKeywordsData,
     DomainKeywordSuggestionData,
@@ -22,6 +45,7 @@ from app.schemas.business_view_knowledge import (
 from app.schemas.common import ApiResponse
 
 router = APIRouter()
+MAX_FAQ_EXCEL_BYTES = 10 * 1024 * 1024
 
 
 async def _require_business_view(oracle: OracleClient, business_view_id: str) -> BusinessViewDetail:
@@ -95,5 +119,165 @@ async def suggest_business_view_domain_keywords(
                 for item in result.candidates
             ],
             processed_chunk_count=result.processed_chunk_count,
+        )
+    )
+
+
+# --- Approved FAQ(類似問)-----------------------------------------------------
+
+
+def _faq_record_data(record: ApprovedFaqRecord) -> ApprovedFaqRecordData:
+    return ApprovedFaqRecordData(
+        id=record.id,
+        question=record.question,
+        answer=record.approved_answer,
+        alternate_questions=list(record.alternate_questions),
+        status=record.status,
+    )
+
+
+def _faq_mutation_data(
+    business_view_id: str, mutation: ApprovedFaqMutation
+) -> ApprovedFaqMutationData:
+    return ApprovedFaqMutationData(
+        business_view_id=business_view_id,
+        records=[_faq_record_data(record) for record in mutation.records],
+        inserted_count=mutation.inserted_count,
+        deleted_count=mutation.deleted_count,
+    )
+
+
+@router.get(
+    "/{business_view_id}/approved-faq",
+    response_model=ApiResponse[ApprovedFaqListData],
+)
+async def get_approved_faq(business_view_id: str) -> ApiResponse[ApprovedFaqListData]:
+    """業務ビューの承認済み FAQ 一覧を返す。"""
+    oracle = OracleClient()
+    await _require_business_view(oracle, business_view_id)
+    records = await load_approved_faq(oracle, business_view_id)
+    return ApiResponse(
+        data=ApprovedFaqListData(
+            business_view_id=business_view_id,
+            records=[_faq_record_data(record) for record in records],
+        )
+    )
+
+
+@router.post(
+    "/{business_view_id}/approved-faq",
+    response_model=ApiResponse[ApprovedFaqMutationData],
+)
+async def post_approved_faq(
+    business_view_id: str, request: ApprovedFaqAddRequest
+) -> ApiResponse[ApprovedFaqMutationData]:
+    """FAQ を 1 件追加する(同じ質問は置き換え)。"""
+    oracle = OracleClient()
+    await _require_business_view(oracle, business_view_id)
+    try:
+        mutation = await add_approved_faq(
+            oracle, business_view_id, question=request.question, answer=request.answer
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return ApiResponse(data=_faq_mutation_data(business_view_id, mutation))
+
+
+@router.post(
+    "/{business_view_id}/approved-faq/delete",
+    response_model=ApiResponse[ApprovedFaqMutationData],
+)
+async def delete_business_view_approved_faq(
+    business_view_id: str, request: ApprovedFaqDeleteRequest
+) -> ApiResponse[ApprovedFaqMutationData]:
+    """ID を指定して FAQ を削除する。"""
+    oracle = OracleClient()
+    await _require_business_view(oracle, business_view_id)
+    try:
+        mutation = await delete_approved_faq(oracle, business_view_id, request.ids)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return ApiResponse(data=_faq_mutation_data(business_view_id, mutation))
+
+
+async def _excel_rows(file: UploadFile) -> list[ApprovedFaqImportRow]:
+    content = await file.read()
+    if len(content) > MAX_FAQ_EXCEL_BYTES:
+        raise HTTPException(status_code=413, detail="Excel ファイルが大きすぎます(上限 10MB)。")
+    try:
+        return await asyncio.to_thread(read_approved_faq_excel, content, file.filename or "")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post(
+    "/{business_view_id}/approved-faq/import/preview",
+    response_model=ApiResponse[ApprovedFaqImportPreviewData],
+)
+async def preview_approved_faq_import(
+    business_view_id: str, file: Annotated[UploadFile, File()]
+) -> ApiResponse[ApprovedFaqImportPreviewData]:
+    """Excel(QUESTION / ANSWER 列)の取込内容を先頭 10 件だけ返す(保存しない)。"""
+    await _require_business_view(OracleClient(), business_view_id)
+    rows = await _excel_rows(file)
+    return ApiResponse(
+        data=ApprovedFaqImportPreviewData(
+            total=len(rows),
+            rows=[
+                ApprovedFaqImportRowData(
+                    question=row.question, answer=row.approved_answer, row=row.row
+                )
+                for row in rows[:APPROVED_FAQ_PREVIEW_ROWS]
+            ],
+        )
+    )
+
+
+@router.post(
+    "/{business_view_id}/approved-faq/import",
+    response_model=ApiResponse[ApprovedFaqMutationData],
+)
+async def import_business_view_approved_faq(
+    business_view_id: str,
+    file: Annotated[UploadFile, File()],
+    mode: Annotated[str, Form()] = "INSERT",
+) -> ApiResponse[ApprovedFaqMutationData]:
+    """Excel から FAQ を取り込む。INSERT は同じ質問をスキップ、DELETE_THEN_INSERT は置き換え。"""
+    oracle = OracleClient()
+    await _require_business_view(oracle, business_view_id)
+    rows = await _excel_rows(file)
+    try:
+        mutation = await import_approved_faq(oracle, business_view_id, rows, mode=mode)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return ApiResponse(data=_faq_mutation_data(business_view_id, mutation))
+
+
+@router.post(
+    "/{business_view_id}/approved-faq/suggest",
+    response_model=ApiResponse[ApprovedFaqSuggestionsData],
+)
+async def suggest_business_view_approved_faq(
+    business_view_id: str, request: ApprovedFaqSuggestRequest
+) -> ApiResponse[ApprovedFaqSuggestionsData]:
+    """質問に近い承認済み FAQ(類似問)を返す。回答前の提示に使う。"""
+    oracle = OracleClient()
+    await _require_business_view(oracle, business_view_id)
+    suggestions = await suggest_approved_faq(
+        oracle, business_view_id, request.query, limit=request.limit
+    )
+    return ApiResponse(
+        data=ApprovedFaqSuggestionsData(
+            suggestions=[
+                ApprovedFaqSuggestionData(
+                    id=item.record.id,
+                    question=item.record.question,
+                    matched_question=item.matched_question,
+                    answer=item.record.approved_answer,
+                    score=round(item.score, 4),
+                    direct=is_direct_faq_match(item),
+                )
+                for item in suggestions
+            ]
         )
     )
