@@ -1,0 +1,28 @@
+[project]
+name = "preprocess-pii-redact-service"
+version = "0.1.0"
+description = "前処理(Preprocess)microservice: PII マスク(Presidio + 日本語 NER、外部 SaaS 非使用)"
+requires-python = ">=3.12"
+dependencies = [
+    "rag-parser-core[service]",
+    "presidio-analyzer>=2.2,<3.0",
+    "presidio-anonymizer>=2.2,<3.0",
+    "spacy>=3.7,<4.0",
+]
+
+[tool.uv.sources]
+rag-parser-core = { path = "../../../packages/rag_parser_core", editable = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]

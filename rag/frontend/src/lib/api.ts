@@ -1,0 +1,3357 @@
+/**
+ * バックエンド API クライアント。
+ *
+ * - レスポンスは共通エンベロープ `ApiResponse<T>`（snake_case）。
+ * - `/api/*` は Vite dev/preview proxy または Docker nginx proxy でバックエンドへ転送される。
+ * - 型はバックエンドの Pydantic スキーマ（snake_case）にそのまま対応させる。
+ */
+
+import { t } from "./i18n";
+
+export const API_REQUEST_TIMEOUT_MS = resolveTimeoutMs(
+  import.meta.env.VITE_API_TIMEOUT_MS,
+  30_000
+);
+// バックエンドは DB 停止時 dashboard_query_timeout_seconds(既定 8 秒)で縮退応答する。
+// フロント側は縮退応答が届くよう十分な余裕を取り、全画面エラーに落ちないようにする。
+export const DASHBOARD_REQUEST_TIMEOUT_MS = resolveTimeoutMs(
+  import.meta.env.VITE_DASHBOARD_API_TIMEOUT_MS,
+  15_000
+);
+
+/** DB 停止時に warning_messages を併せて返す閲覧系レスポンス。 */
+export type Degradable<T> = T & { warning_messages: string[] };
+export type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | JsonValue[]
+  | { [key: string]: JsonValue };
+
+export type FileStatus =
+  | "UPLOADED"
+  | "PREPROCESSING"
+  | "PREPROCESSED"
+  | "INGESTING"
+  | "REVIEW"
+  | "CHUNKING"
+  | "CHUNKED"
+  | "INDEXING"
+  | "INDEXED"
+  | "ERROR";
+export type SearchMode = "hybrid" | "vector" | "keyword";
+export type SearchStrategy = "hybrid" | "graph_local" | "graph_global";
+export type KnowledgeBaseStatus = "ACTIVE" | "ARCHIVED";
+export type CitationFeedbackRating = "helpful" | "not_helpful";
+export type CitationFeedbackReason =
+  | "incorrect"
+  | "incomplete"
+  | "missing_evidence"
+  | "not_relevant"
+  | "answer_untrusted";
+export type FeedbackTargetType = "answer" | "citation";
+export type FeedbackSourceSurface = "search" | "chat";
+export type UploadIngestionMode = "manual";
+export type SourceModality =
+  | "pdf"
+  | "image"
+  | "text"
+  | "html"
+  | "email"
+  | "office"
+  | "audio"
+  | "unknown";
+export type SourcePreviewKind =
+  | "pdf"
+  | "image"
+  | "text"
+  | "html"
+  | "email"
+  | "office"
+  | "unsupported";
+export type IngestionJobStatus =
+  | "QUEUED"
+  | "RUNNING"
+  | "SUCCEEDED"
+  | "FAILED"
+  | "SKIPPED"
+  | "CANCELLED";
+export type EvaluationFailureReason =
+  | "retrieval_miss"
+  | "partial_recall"
+  | "unexpected_retrieval"
+  | "answer_keyword_miss"
+  | "low_groundedness"
+  | "guardrail_warning"
+  | "content_kind_miss"
+  | "section_miss"
+  | "case_error";
+export type EvaluationMetricName =
+  | "precision_at_k"
+  | "recall_at_k"
+  | "mrr"
+  | "answer_keyword_hit_rate"
+  | "groundedness_pass_rate"
+  | "citation_traceability_coverage"
+  | "bbox_citation_coverage"
+  | "element_lineage_coverage"
+  | "content_kind_hit_rate"
+  | "section_coverage"
+  | "faithfulness"
+  | "context_precision"
+  | "context_recall"
+  | "response_relevancy"
+  | "noise_sensitivity";
+export type ModelSettingsCheckStatus = "ok" | "missing" | "invalid";
+export type ModelSettingsTestStatus = "success" | "failed";
+export type ModelSettingsTestTargetType =
+  | "enterprise_text"
+  | "enterprise_vision"
+  | "embedding"
+  | "rerank";
+export type UploadStorageBackend = "local" | "oci";
+export type DatabaseConnectionTestStatus = "success" | "failed" | "skipped";
+export type OciConfigTestStatus = "success" | "failed";
+export type OciConfigTestStageKey = "config_format" | "key_file" | "region" | "authentication";
+export type OciConfigTestStageStatus = "success" | "failed" | "skipped";
+
+export interface OciConfigTestStage {
+  key: OciConfigTestStageKey;
+  status: OciConfigTestStageStatus;
+  message: string;
+  action: string | null;
+}
+export type ParserAdapterBackend =
+  | "local"
+  | "docling"
+  | "marker"
+  | "unstructured"
+  | "unlimited_ocr"
+  | "mineru"
+  | "dots_ocr"
+  | "glm_ocr"
+  | "oci_genai_vision"
+  // enterprise_ai_vlm は oci_genai_vision の後方互換エイリアス(legacy 保存値の表示用)。
+  | "enterprise_ai_vlm"
+  | "oci_document_understanding";
+export type ParserServiceBackendName = "oci_genai_vision" | "oci_document_understanding";
+export type ParserAdapterBackendName =
+  | "docling"
+  | "marker"
+  | "unstructured"
+  | "unlimited_ocr"
+  | "mineru"
+  | "dots_ocr"
+  | "glm_ocr";
+export type ExternalParserBackendName =
+  | "unlimited_ocr"
+  | "mineru"
+  | "dots_ocr"
+  | "glm_ocr";
+export type ExternalParserProtocol = "mineru_file_parse" | "openai_chat_completions";
+export type ExternalParserConnectionStatus =
+  | "available"
+  | "unconfigured"
+  | "unreachable"
+  | "model_missing"
+  | "invalid_response";
+export type ParserAdapterStatus = "active" | "available" | "disabled" | "ignored" | "missing";
+export type ParserAdapterScoreBackend = "local" | ParserAdapterBackendName;
+export type ParserAdapterScoreStatus =
+  | "recommended"
+  | "eligible"
+  | "available"
+  | "disabled"
+  | "ignored"
+  | "missing";
+export type ParserAdapterContractStatus =
+  | "passed"
+  | "failed"
+  | "fallback"
+  | "available"
+  | "ignored"
+  | "disabled"
+  | "missing"
+  | "unsupported"
+  | "fixture_missing";
+export type ParserAdapterSourceKind =
+  | "pdf"
+  | "image"
+  | "office"
+  | "html"
+  | "email"
+  | "audio"
+  | "text"
+  | "unknown";
+
+export interface ApiResponse<T> {
+  data: T | null;
+  error_messages: string[];
+  warning_messages: string[];
+}
+
+export interface Page<T> {
+  items: T[];
+  total: number;
+  limit: number;
+  offset: number;
+  has_next: boolean;
+}
+
+// --- 認証 ---
+export interface AuthUser {
+  id: string;
+  name: string;
+  role: string;
+}
+
+export interface AuthStatus {
+  mode: "local" | "production" | string;
+  auth_required: boolean;
+  authenticated: boolean;
+  user: AuthUser | null;
+  expires_at: number | null;
+  /** チャット(会話)機能が有効か(運用キルスイッチ)。 */
+  chat_enabled: boolean;
+}
+
+export interface LoginRequestBody {
+  username: string;
+  password: string;
+  remember_me: boolean;
+}
+
+// --- ダッシュボード ---
+export interface DashboardStats {
+  total_uploads: number;
+  uploads_this_month: number;
+  total_indexed: number;
+  indexed_this_month: number;
+  searchable_rows: number;
+}
+
+export interface DashboardIngestionQuality {
+  document_count: number;
+  structured_document_count: number;
+  element_count: number;
+  table_count: number;
+  figure_count: number;
+  formula_count: number;
+  list_count: number;
+  page_count: number;
+  low_confidence_count: number;
+  fallback_document_count: number;
+  failed_segment_document_count: number;
+  segment_artifact_cache_miss_document_count: number;
+  long_document_count: number;
+  average_page_coverage: number;
+  risk_counts: Record<string, number>;
+  parser_profile_counts: Record<string, number>;
+  parser_backend_counts: Record<string, number>;
+  warning_counts: Record<string, number>;
+  chunk_profile_counts: Record<string, number>;
+  content_kind_counts: Record<string, number>;
+}
+
+export interface DashboardActivity {
+  id: string;
+  type: "UPLOAD" | "INDEXING";
+  file_name: string;
+  timestamp: string;
+  status: FileStatus;
+  category_name: string | null;
+}
+
+export interface DashboardSystemInfo {
+  status: "online" | "degraded" | "offline";
+  version: string;
+  searchable_rows: number;
+  checks: Record<string, string>;
+}
+
+export interface DashboardSummary {
+  stats: DashboardStats;
+  ingestion_quality: DashboardIngestionQuality;
+  recent_activities: DashboardActivity[];
+  system: DashboardSystemInfo;
+}
+
+// --- ヘルスチェック ---
+export interface HealthData {
+  status: "ok" | "degraded" | "error" | string;
+  version: string;
+  message: string | null;
+  checks: Record<string, string>;
+}
+
+export type DatabaseAvailability =
+  | "ok"
+  | "not_configured"
+  | "unreachable"
+  | "setup_required";
+
+export interface DatabaseStatusData {
+  status: DatabaseAvailability;
+  check: string;
+  detail: string | null;
+  schema_status: SystemTableSchemaStatus | null;
+}
+
+// --- ドキュメント ---
+export interface KnowledgeBaseRef {
+  id: string;
+  name: string;
+}
+
+export interface SourceProfile {
+  original_file_name: string;
+  sanitized_file_name: string;
+  extension: string | null;
+  content_type: string;
+  inferred_content_type: string | null;
+  file_size_bytes: number;
+  content_sha256: string;
+  modality: SourceModality;
+  parser_profile: string;
+  parser_backend: string;
+  parser_version: string;
+  preview_kind: SourcePreviewKind;
+  text_charset: string | null;
+  duplicate_of_document_id: string | null;
+  unsupported_reason: string | null;
+  quality_status: "ready" | "warning" | string;
+  quality_warnings: string[];
+}
+
+export type IngestionJobPhase = "PREPROCESS" | "EXTRACT" | "CHUNK" | "INDEX";
+
+export interface DocumentElementTextEdit {
+  element_id: string;
+  text: string;
+}
+
+export interface DocumentTableCellTextEdit {
+  table_id: string;
+  row: number;
+  col: number;
+  text: string;
+}
+
+export interface DocumentReviewEditsRequest {
+  element_edits?: DocumentElementTextEdit[];
+  table_cell_edits?: DocumentTableCellTextEdit[];
+}
+
+export interface DocumentApproveRequest extends DocumentReviewEditsRequest {
+  raw_text?: string | null;
+}
+
+export interface IngestionJob {
+  id: string;
+  document_id: string;
+  recipe_id: string | null;
+  recipe_revision: number | null;
+  status: IngestionJobStatus;
+  phase: IngestionJobPhase;
+  parser_profile: string;
+  quality_warnings: string[];
+  skip_reason: string | null;
+  error_message: string | null;
+  attempt_count: number;
+  max_attempts: number;
+  queued_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+export interface DocumentSummary {
+  id: string;
+  file_name: string;
+  status: FileStatus;
+  category_name: string | null;
+  content_type: string | null;
+  file_size_bytes: number | null;
+  content_sha256: string | null;
+  duplicate_of_document_id: string | null;
+  uploaded_at: string;
+  indexed_at: string | null;
+  knowledge_bases: KnowledgeBaseRef[];
+  source_profile: SourceProfile | null;
+}
+
+export interface DuplicateDocumentRef {
+  id: string;
+  file_name: string;
+  status: FileStatus;
+  uploaded_at: string;
+  indexed_at: string | null;
+}
+
+export interface DocumentPreprocessArtifact {
+  derivation_id: string;
+  profile: string;
+  converted: boolean;
+  converter_name: string | null;
+  converter_version: string | null;
+  source_content_type: string | null;
+  source_sha256: string | null;
+  object_storage_path: string | null;
+  content_type: string | null;
+  sha256: string | null;
+  file_name: string;
+  page_map: Record<string, number>;
+  warnings: string[];
+}
+
+export interface DocumentElement {
+  kind: string;
+  text: string;
+  order: number;
+  element_id?: string | null;
+  parent_id?: string | null;
+  content_kind?: string | null;
+  source_parser?: string | null;
+  page_number?: number | null;
+  bbox?: number[] | null;
+  section_path?: string[];
+  confidence?: number | null;
+  metadata?: Record<string, string | number | boolean | null>;
+}
+
+export interface ExtractionPage {
+  page_number: number;
+  label?: string | null;
+  width?: number | null;
+  height?: number | null;
+  rotation?: number | null;
+  element_ids: string[];
+  metadata?: Record<string, string | number | boolean | null>;
+}
+
+export interface ExtractionTableCell {
+  row: number;
+  col: number;
+  text: string;
+  row_span: number;
+  col_span: number;
+  page_number?: number | null;
+  bbox?: number[] | null;
+  confidence?: number | null;
+  metadata?: Record<string, string | number | boolean | null>;
+}
+
+export interface ExtractionTable {
+  table_id: string;
+  element_id?: string | null;
+  page_number?: number | null;
+  caption?: string | null;
+  cells: ExtractionTableCell[];
+  metadata?: Record<string, string | number | boolean | null>;
+}
+
+export interface ExtractionAsset {
+  asset_id: string;
+  kind: string;
+  object_path?: string | null;
+  page_number?: number | null;
+  bbox?: number[] | null;
+  alt_text?: string | null;
+  /** 図表 VLM 要約(有効時のみ)。 */
+  summary?: string | null;
+  metadata?: Record<string, string | number | boolean | null>;
+}
+
+/** 章節 navigation tree のノード(ナビゲーション要約 有効時は summary 付き)。 */
+export interface DocumentNavigationNode {
+  section_id: string;
+  title: string;
+  section_path: string[];
+  depth: number;
+  parent_section_id: string | null;
+  page_start: number | null;
+  page_end: number | null;
+  summary: string | null;
+}
+
+/** schema 駆動で抽出した項目(メタデータ/項目抽出 有効時のみ)。 */
+export interface ExtractionField {
+  name: string;
+  value: string;
+  value_type: string;
+  confidence: number | null;
+  page_number: number | null;
+}
+
+export interface StructuredExtraction {
+  raw_text: string;
+  document_type: string;
+  confidence: number;
+  warnings: string[];
+  elements: DocumentElement[];
+  pages: ExtractionPage[];
+  tables: ExtractionTable[];
+  assets: ExtractionAsset[];
+  parser_artifacts: Record<string, string | number | boolean | null>;
+}
+
+export interface DocumentDetail extends DocumentSummary {
+  object_storage_path: string | null;
+  preprocess_artifact: DocumentPreprocessArtifact | null;
+  extraction: Record<string, unknown>;
+  error_message: string | null;
+  duplicate_source: DuplicateDocumentRef | null;
+}
+
+export interface DocumentDeleteResult {
+  id: string;
+  file_name: string;
+  object_storage_path: string | null;
+  object_deleted: boolean;
+  artifact_deleted_count: number;
+  artifact_delete_failed_count: number;
+}
+
+export interface UploadResult {
+  id: string;
+  file_name: string;
+  status: FileStatus;
+  file_size_bytes: number;
+  content_sha256: string;
+  duplicate_of_document_id: string | null;
+  knowledge_bases: KnowledgeBaseRef[];
+  source_profile: SourceProfile;
+  ingestion_started: boolean;
+  ingestion_job: IngestionJob | null;
+}
+
+export interface BatchUploadFailedItem {
+  file_name: string;
+  status_code: number;
+  message: string;
+  source_profile: SourceProfile | null;
+}
+
+export interface DocumentChunkView {
+  document_id: string;
+  chunk_id: string;
+  chunk_index: number;
+  text: string;
+  page_start: number | null;
+  page_end: number | null;
+  bbox: number[] | null;
+  section_path: string | null;
+  content_kind: string | null;
+  chunk_group_id: string | null;
+  source_parser: string | null;
+  element_ids: string[];
+  metadata: Record<string, JsonValue>;
+}
+
+/** 文書の chunk_set(variant = 1 レシピのチャンク集合)1 件分。 */
+export type DocumentLayerStatusName =
+  | "not_requested"
+  | "planned_only"
+  | "materialized"
+  | "needs_reingest"
+  | "error";
+
+export interface DocumentMaterializationLayerStatus {
+  layer_id: string | null;
+  requested: boolean;
+  status: DocumentLayerStatusName;
+  reason: string | null;
+}
+
+export interface DocumentChunkSetLayerStatuses {
+  metadata: DocumentMaterializationLayerStatus;
+  graph: DocumentMaterializationLayerStatus;
+  navigation: DocumentMaterializationLayerStatus;
+}
+
+export interface DocumentChunkSet {
+  chunk_set_id: string;
+  extraction_recipe_id: string | null;
+  extraction_status: DocumentLayerStatusName;
+  extraction_reason: string | null;
+  status: string;
+  chunk_count: number;
+  vector_count: number;
+  /** 配信中(serving)か。文書につき 1 つだけ true。candidate(実験)は false。 */
+  is_serving: boolean;
+  /** chunk_set の作成日時。診断行の「chunk_set 作成」表示に使う。 */
+  created_at: string | null;
+  /** 親抽出(extraction)の ID。parser×preprocess ごとに分かれる 2 階層の上位キー。 */
+  extraction_id: string | null;
+  /** 親抽出の parser backend(2 階層表示のラベル)。 */
+  parser: string | null;
+  /** 親抽出の前処理プロファイル(2 階層表示のラベル)。 */
+  preprocess: string | null;
+  knowledge_base_ids: string[];
+  serving_knowledge_base_ids: string[];
+  layer_statuses: DocumentChunkSetLayerStatuses;
+}
+
+/** 別 chunking レシピで候補 chunk_set を試す実験リクエスト(分割軸・最低 1 項目)。 */
+export interface ChunkSetExperimentRequest {
+  chunking_strategy?: string;
+  chunk_size?: number;
+  chunk_overlap?: number;
+  chunk_child_size?: number;
+  chunk_min_chars?: number;
+  chunk_delimiter?: string;
+}
+
+export interface DocumentChunkPreviewRequest {
+  chunking_strategy?: ChunkingStrategyName;
+  chunk_size?: number;
+  chunk_overlap?: number;
+  chunk_child_size?: number;
+  chunk_min_chars?: number;
+  chunk_delimiter?: string;
+  chunk_context_header_enabled?: boolean;
+}
+
+export interface DocumentChunkPreviewStats {
+  chunk_count: number;
+  min_chars: number;
+  average_chars: number;
+  max_chars: number;
+  overflow_count: number;
+  embedding_overflow_count: number;
+}
+
+export interface DocumentChunkPreviewResponse {
+  chunks: DocumentChunkView[];
+  stats: DocumentChunkPreviewStats;
+  warnings: string[];
+}
+
+/**
+ * parser/前処理を変えた候補を**再抽出**(非同期ジョブ)で試す実験リクエスト(最低 1 項目)。
+ * 抽出結果が変わるため chunk-set-experiments(分割のみ)と違い再抽出が必要。
+ */
+export interface ParserExtractionExperimentRequest {
+  preprocess_profile?: string;
+  parser_adapter_backend?: string;
+}
+
+export type DocumentExtractionExportFormat = "json" | "markdown" | "html" | "chunks";
+
+export interface DocumentExtractionExport {
+  document_id: string;
+  file_name: string;
+  format: DocumentExtractionExportFormat;
+  content_type: string;
+  content: string;
+  payload: Record<string, unknown>;
+  chunks: DocumentChunkView[];
+  parser_backend: string | null;
+  parser_profile: string | null;
+  page_count: number;
+  element_count: number;
+  table_count: number;
+  asset_count: number;
+}
+
+export interface IngestionSegment {
+  segment_id: string;
+  document_id: string;
+  recipe_id: string | null;
+  status: string;
+  parser_backend: string;
+  parser_profile: string;
+  page_start: number | null;
+  page_end: number | null;
+  progress_unit: "page" | "slide" | "sheet" | "source" | string;
+  progress_start: number | null;
+  progress_end: number | null;
+  attempt_count: number;
+  artifact_path: string | null;
+  error_code: string | null;
+  error_message: string | null;
+}
+
+export interface DocumentStats {
+  total: number;
+  by_status: Partial<Record<FileStatus, number>>;
+}
+
+export interface BatchUploadResult {
+  items: UploadResult[];
+  failed_items: BatchUploadFailedItem[];
+  total_count: number;
+  uploaded_count: number;
+  failed_count: number;
+  queued_count: number;
+  skipped_count: number;
+}
+
+// --- ナレッジベース ---
+export interface KnowledgeBaseSummary extends KnowledgeBaseRef {
+  description: string | null;
+  status: KnowledgeBaseStatus;
+  default_search_mode: SearchMode;
+  document_count: number;
+  indexed_document_count: number;
+  error_document_count: number;
+  searchable_chunk_count: number;
+  created_at: string;
+  updated_at: string;
+  archived_at: string | null;
+}
+
+/** KB 単位の取込上書き(Parser/Chunking)。null はグローバル継承。 */
+export interface KnowledgeBaseIngestionConfig {
+  preprocess_profile: PreprocessProfileName | null;
+  parser_adapter_backend: ParserAdapterBackend | null;
+  parser_docling_enabled: boolean | null;
+  parser_docling_vision_enabled?: boolean | null;
+  parser_marker_enabled: boolean | null;
+  parser_unstructured_enabled: boolean | null;
+  parser_unlimited_ocr_enabled: boolean | null;
+  parser_mineru_enabled: boolean | null;
+  parser_dots_ocr_enabled: boolean | null;
+  parser_glm_ocr_enabled: boolean | null;
+  chunking_strategy: ChunkingStrategyName | null;
+  chunk_size: number | null;
+  chunk_overlap: number | null;
+  chunk_child_size: number | null;
+  chunk_min_chars: number | null;
+  graph_profile: GraphProfileName | null;
+  field_extraction_enabled: boolean | null;
+  asset_summary_enabled: boolean | null;
+  navigation_summary_enabled: boolean | null;
+  auto_parse_after_preprocess_enabled: boolean | null;
+  auto_chunk_after_extract_enabled: boolean | null;
+  auto_index_after_chunk_enabled: boolean | null;
+}
+
+/** 検索・回答設定。Business View の query 設定として使う。 */
+export interface KnowledgeBaseQueryConfig {
+  retrieval_strategy: RetrievalStrategyName | null;
+  /** 検索方法の合成トグル(null はグローバル継承)。 */
+  retrieval_query_expansion: boolean | null;
+  retrieval_query_expansion_llm: boolean | null;
+  retrieval_gap_stop: boolean | null;
+  retrieval_corrective: boolean | null;
+  retrieval_business_fit_weighting: boolean | null;
+  post_retrieval_pipeline: PostRetrievalPipelineName | null;
+  generation_profile: GenerationProfileName | null;
+  guardrail_policy: GuardrailPolicyName | null;
+  evaluation_suite: EvaluationSuiteName | null;
+  /** 回答エンジン(standard / docrag)。null / 未指定はグローバル継承。 */
+  answer_engine?: AnswerEngineName | null;
+  /** 全文検索の分割方式(builtin / sudachi)。null / 未指定はグローバル継承。 */
+  text_search_tokenizer?: TextSearchTokenizerName | null;
+}
+
+export type TextSearchTokenizerName = "builtin" | "sudachi";
+
+export type AnswerEngineName = "standard" | "docrag";
+
+/** KB 単位の構築設定。query は legacy 互換として読めるが KB runtime では使わない。 */
+export interface KnowledgeBaseAdapterConfig {
+  version: number;
+  ingestion: KnowledgeBaseIngestionConfig;
+  query: KnowledgeBaseQueryConfig;
+}
+
+export interface KnowledgeBaseDetail extends KnowledgeBaseSummary {
+  retrieval_config: Record<string, unknown>;
+  adapter_config: KnowledgeBaseAdapterConfig;
+  /** KB 構築設定をグローバル既定で埋めた解決済み設定(表示専用)。 */
+  effective_adapter_config?: KnowledgeBaseAdapterConfig | null;
+  /** 既存 retrieval_config に legacy query 設定が残っており、現在は無視されている。 */
+  legacy_query_config_ignored?: boolean;
+}
+
+export const DEFAULT_KNOWLEDGE_BASE_NAME = "DEFAULT";
+
+export interface KnowledgeBaseGraphNode {
+  id: string;
+  name: string;
+  type: string | null;
+  confidence: number;
+}
+
+export interface KnowledgeBaseGraphEdge {
+  id: string;
+  source: string;
+  target: string;
+  type: string | null;
+  confidence: number;
+}
+
+export interface KnowledgeBaseGraphData {
+  status: "ok" | "empty";
+  nodes: KnowledgeBaseGraphNode[];
+  edges: KnowledgeBaseGraphEdge[];
+  truncated: boolean;
+}
+
+export interface KnowledgeBaseCreateRequest {
+  name: string;
+  description?: string | null;
+  default_search_mode?: SearchMode;
+  retrieval_config?: Record<string, unknown>;
+  adapter_config?: KnowledgeBaseAdapterConfig | null;
+}
+
+export interface KnowledgeBaseUpdateRequest {
+  name?: string | null;
+  description?: string | null;
+  default_search_mode?: SearchMode | null;
+  retrieval_config?: Record<string, unknown> | null;
+  adapter_config?: KnowledgeBaseAdapterConfig | null;
+}
+
+export type BusinessViewStatus = "ACTIVE" | "ARCHIVED";
+
+export const DEFAULT_BUSINESS_VIEW_NAME = "DEFAULT";
+
+export interface BusinessViewRef {
+  id: string;
+  name: string;
+}
+
+/** 配信モード。1 文書が複数 chunk_set を持つときの検索時配信方法。 */
+export type ServingMode = "single" | "fused" | "routed";
+
+/** Business View の設定一式。query は検索・回答設定。 */
+export interface BusinessViewConfig {
+  version: number;
+  knowledge_base_ids: string[];
+  query: KnowledgeBaseQueryConfig;
+  system_prompt: string | null;
+  default_language: string | null;
+  serving_mode: ServingMode;
+}
+
+export interface BusinessViewSummary extends BusinessViewRef {
+  description: string | null;
+  status: BusinessViewStatus;
+  knowledge_base_count: number;
+  created_at: string;
+  updated_at: string;
+  archived_at: string | null;
+}
+
+export interface BusinessViewDetail extends BusinessViewSummary {
+  config: BusinessViewConfig;
+  knowledge_bases: KnowledgeBaseRef[];
+}
+
+export interface BusinessViewCreateRequest {
+  name: string;
+  description?: string | null;
+  config?: BusinessViewConfig;
+}
+
+export interface BusinessViewUpdateRequest {
+  name?: string | null;
+  description?: string | null;
+  config?: BusinessViewConfig;
+}
+
+/** 文書の取込設定スナップショット(3 層モデル: 文書単位の単一レシピ)と global 既定とのドリフト状況。 */
+export interface DocumentIngestionConfigData {
+  document_id: string;
+  is_indexed: boolean;
+  processing_config: DocumentProcessingConfig;
+  effective_processing_config: DocumentProcessingConfig;
+  effective_preprocess_profile: PreprocessProfileName;
+  effective_chunking_strategy: string;
+  effective_parser_adapter_backend: string;
+  observed_chunking_strategy: string | null;
+  observed_parser_backend: string | null;
+  chunking_drift: boolean;
+  parser_drift: boolean;
+  config_drift: boolean;
+  drift_fields: string[];
+}
+
+export interface DocumentProcessingConfig extends KnowledgeBaseIngestionConfig {
+  chunk_context_header_enabled: boolean | null;
+}
+
+export type DocumentRecipeStepStatus =
+  | "PENDING"
+  | "QUEUED"
+  | "RUNNING"
+  | "NEEDS_REVIEW"
+  | "SUCCEEDED"
+  | "FAILED"
+  | "CANCELLED";
+
+export interface DocumentRecipeStep {
+  phase: IngestionJobPhase;
+  status: DocumentRecipeStepStatus;
+  started_at: string | null;
+  finished_at: string | null;
+  error_message: string | null;
+}
+
+export interface DocumentRecipeView {
+  recipe_id: string;
+  document_id: string;
+  slot_no: 1 | 2 | 3;
+  status: FileStatus;
+  failed_phase: IngestionJobPhase | null;
+  processing_config: DocumentProcessingConfig;
+  effective_processing_config: DocumentProcessingConfig;
+  preprocess_artifact: DocumentPreprocessArtifact | null;
+  active_extraction_recipe_id: string | null;
+  active_chunk_set_id: string | null;
+  chunk_count: number;
+  vector_count: number;
+  config_revision: number;
+  materialized_revision: number | null;
+  searchable: boolean;
+  needs_reprocessing: boolean;
+  error_message: string | null;
+  steps: DocumentRecipeStep[];
+  created_at: string;
+  updated_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+export interface DocumentRecipeDeleteResult {
+  recipe_id: string;
+  document_id: string;
+  removed_chunk_set_count: number;
+}
+
+export interface KnowledgeBaseDocumentAssignmentRequest {
+  document_ids: string[];
+}
+
+export interface DocumentKnowledgeBaseReplaceRequest {
+  knowledge_base_ids: string[];
+}
+
+// --- 検索 ---
+export interface SearchRequestBody {
+  query: string;
+  top_k?: number;
+  rerank_top_n?: number;
+  mode?: SearchMode;
+  strategy?: SearchStrategy;
+  filters?: Record<string, string>;
+  knowledge_base_ids?: string[];
+  business_view_id?: string | null;
+  business_view_ids?: string[];
+  generation_profile?: GenerationProfileName | null;
+}
+
+export interface RetrievedChunk {
+  document_id: string;
+  chunk_id: string;
+  text: string;
+  score: number;
+  rerank_score: number | null;
+  file_name: string | null;
+  category_name: string | null;
+  metadata: Record<string, JsonValue>;
+}
+
+// --- チャット（会話 / マルチモデル比較）---
+export type ConversationStatus = "ACTIVE" | "ARCHIVED";
+export type MessageRole = "USER" | "ASSISTANT" | "SYSTEM";
+export type MessageStatus = "STREAMING" | "COMPLETE" | "ERROR";
+
+export interface ChatMessage {
+  message_id: string;
+  conversation_id: string;
+  role: MessageRole;
+  content: string;
+  model: string | null;
+  citations: RetrievedChunk[];
+  guardrail_warnings: string[];
+  trace_id: string | null;
+  status: MessageStatus;
+  reply_to_message_id: string | null;
+  created_at: string;
+}
+
+export interface ConversationSummary {
+  id: string;
+  business_view_id: string;
+  title: string | null;
+  status: ConversationStatus;
+  message_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ConversationDetail extends ConversationSummary {
+  messages: ChatMessage[];
+}
+
+export interface ConversationCreateBody {
+  business_view_id: string;
+  title?: string | null;
+}
+
+export interface ConversationUpdateBody {
+  title: string;
+}
+
+export interface ChatMessageRequestBody {
+  content: string;
+  model_ids?: string[];
+  mode?: SearchMode;
+  top_k?: number;
+}
+
+export interface CompareModel {
+  model_id: string;
+  display_name: string;
+}
+
+export interface SearchDiagnostics {
+  adapter: string;
+  mode: string;
+  retrieval_strategy: string;
+  generation_profile?: GenerationProfileName | string;
+  generation_config_source?: "request" | "business_view" | "global";
+  generation_contract_mode?: "groundedness" | "format_validated" | "json_schema" | "custom";
+  generation_attempt_count?: number;
+  generation_repair_count?: number;
+  generation_validation_codes?: string[];
+  custom_prompt_version_id?: string | null;
+  guardrail_backend?: GuardrailBackend;
+  guardrail_degraded?: boolean;
+  route_reason: string;
+  keyword_terms: string[];
+  retrieval_breakdown: SearchRetrievalBreakdown;
+  retrieval_candidates: SearchRetrievalCandidate[];
+  graph_hit_count: number;
+  fallback_reason: string | null;
+  stream_stage_timings: Record<string, number>;
+  top_k: number;
+  rerank_top_n: number;
+  retrieved_count: number;
+  reranked_count: number;
+  deduplicated_count: number;
+  context_diversified_count: number;
+  context_group_expanded_count: number;
+  context_expanded_count: number;
+  context_adaptive_expanded_count: number;
+  context_dependency_promoted_count: number;
+  context_compressed_count: number;
+  context_compression_saved_chars: number;
+  citation_count: number;
+  context_chars: number;
+  context_window_chars: number;
+  rrf_k: number;
+  query_variant_count: number;
+  oracle_vector_target_accuracy: number;
+  filter_keys: string[];
+  knowledge_base_count: number;
+  business_view_applied?: string | null;
+  config_fingerprint: string;
+  /** DocRAG 回答エンジンの記録(standard では null)。 */
+  docrag?: Record<string, JsonValue> | null;
+}
+
+export interface SearchRetrievalBreakdown {
+  vector_count: number;
+  keyword_count: number;
+  overlap_count: number;
+  fused_count: number;
+  fusion_dropped_count: number;
+  rerank_input_count: number;
+  rerank_kept_count: number;
+  rerank_dropped_count: number;
+  evidence_count: number;
+  citation_count: number;
+  dropped_count: number;
+}
+
+export interface SearchRetrievalCandidate {
+  chunk_id: string;
+  document_id: string;
+  text?: string;
+  file_name: string | null;
+  sources: string[];
+  vector_rank: number | null;
+  vector_score: number | null;
+  keyword_rank: number | null;
+  keyword_score: number | null;
+  rrf_score: number | null;
+  rerank_rank: number | null;
+  rerank_score: number | null;
+  status: string;
+  drop_reason: string | null;
+}
+
+export interface SearchResponse {
+  answer: string;
+  citations: RetrievedChunk[];
+  trace_id: string;
+  guardrail_warnings: string[];
+  elapsed_ms: number;
+  diagnostics: SearchDiagnostics;
+}
+
+export interface CitationFeedbackRequestBody {
+  trace_id: string;
+  document_id: string;
+  chunk_id: string;
+  rating: CitationFeedbackRating;
+  reason?: CitationFeedbackReason | null;
+  comment?: string | null;
+}
+
+export interface CitationFeedbackResponse {
+  feedback_id: string;
+  trace_id: string;
+  document_id: string;
+  chunk_id: string;
+  rating: CitationFeedbackRating;
+}
+
+export interface FeedbackRequestBody {
+  trace_id: string;
+  business_view_id: string;
+  target_type: FeedbackTargetType;
+  source_surface: FeedbackSourceSurface;
+  document_id?: string | null;
+  chunk_id?: string | null;
+  message_id?: string | null;
+  content_snapshot?: FeedbackContentSnapshot | null;
+  rating: CitationFeedbackRating;
+  reason?: CitationFeedbackReason | null;
+  comment?: string | null;
+}
+
+export interface FeedbackSubmissionResponse extends FeedbackRequestBody {
+  feedback_id: string;
+}
+
+export interface CurrentFeedbackItem
+  extends Omit<FeedbackSubmissionResponse, "business_view_id" | "source_surface"> {
+  business_view_id: string | null;
+  source_surface: FeedbackSourceSurface | null;
+  created_at: string;
+}
+
+export interface FeedbackCitationSnapshot {
+  document_id: string;
+  chunk_id: string;
+  file_name: string | null;
+  section_title: string | null;
+  page_number: number | null;
+  content_preview: string | null;
+  rerank_score: number | null;
+}
+
+export interface FeedbackContentSnapshot {
+  question: string;
+  answer: string;
+  citations: FeedbackCitationSnapshot[];
+}
+
+export interface FeedbackReasonCount {
+  reason: CitationFeedbackReason;
+  count: number;
+}
+
+export interface FeedbackSummary {
+  total: number;
+  helpful_count: number;
+  not_helpful_count: number;
+  helpful_rate: number;
+  answer_total: number;
+  answer_helpful_rate: number;
+  citation_total: number;
+  citation_helpful_rate: number;
+  reason_counts: FeedbackReasonCount[];
+}
+
+export interface FeedbackItem extends CurrentFeedbackItem {
+  business_view_name: string | null;
+  conversation_id: string | null;
+  conversation_title: string | null;
+  message_id: string | null;
+  model: string | null;
+  file_name: string | null;
+  question_preview: string | null;
+  comment_preview: string | null;
+  has_comment: boolean;
+}
+
+export interface FeedbackExecutionInfo {
+  outcome: string | null;
+  search_mode: string | null;
+  elapsed_ms: number | null;
+  retrieved_count: number | null;
+  reranked_count: number | null;
+  citation_count: number | null;
+  guardrail_codes: string[];
+  config_fingerprint: string | null;
+}
+
+export interface FeedbackDetail extends FeedbackItem {
+  content_source: "chat_message" | "search_snapshot" | null;
+  question: string | null;
+  answer: string | null;
+  comment: string | null;
+  citations: FeedbackCitationSnapshot[];
+  execution: FeedbackExecutionInfo;
+}
+
+export interface FeedbackDashboard {
+  summary: FeedbackSummary;
+  previous_summary: FeedbackSummary | null;
+  items: Page<FeedbackItem>;
+}
+
+export interface FeedbackListParams {
+  business_view_id?: string;
+  target_type?: FeedbackTargetType;
+  rating?: CitationFeedbackRating;
+  reason?: CitationFeedbackReason;
+  period_days?: number | null;
+  q?: string;
+  sort_order?: "newest" | "oldest";
+  limit?: number;
+  offset?: number;
+}
+
+// --- 評価 ---
+export interface EvaluationCase {
+  id: string;
+  query: string;
+  relevant_document_ids: string[];
+  expected_answer_keywords: string[];
+  expected_content_kind?: string | null;
+  expected_section_paths?: string[];
+}
+
+export interface EvaluationThresholds {
+  precision_at_k?: number | null;
+  recall_at_k?: number | null;
+  mrr?: number | null;
+  answer_keyword_hit_rate?: number | null;
+  groundedness_pass_rate?: number | null;
+  citation_traceability_coverage?: number | null;
+  bbox_citation_coverage?: number | null;
+  element_lineage_coverage?: number | null;
+  content_kind_hit_rate?: number | null;
+  section_coverage?: number | null;
+  faithfulness?: number | null;
+  context_precision?: number | null;
+  context_recall?: number | null;
+  response_relevancy?: number | null;
+  noise_sensitivity?: number | null;
+}
+
+export interface EvaluationRunRequestBody {
+  cases: EvaluationCase[];
+  top_k?: number;
+  rerank_top_n?: number;
+  mode?: SearchMode;
+  filters?: Record<string, string>;
+  knowledge_base_ids?: string[];
+  thresholds?: EvaluationThresholds | null;
+  suite?: EvaluationSuiteName | null;
+  rag_overrides?: EvaluationRagOverrides | null;
+}
+
+export interface EvaluationCaseResult {
+  case_id: string;
+  trace_id: string;
+  status: "success" | "error";
+  retrieved_document_ids: string[];
+  relevant_document_ids: string[];
+  hit_document_ids: string[];
+  precision_at_k: number;
+  recall_at_k: number;
+  reciprocal_rank: number;
+  answer_keyword_hit: boolean;
+  groundedness_passed: boolean;
+  groundedness_score: number;
+  grounding_overlap_count: number;
+  grounding_answer_feature_count: number;
+  faithfulness: number;
+  context_precision: number;
+  context_recall: number;
+  response_relevancy: number;
+  noise_sensitivity: number;
+  citation_traceability_coverage: number;
+  bbox_citation_coverage: number;
+  element_lineage_coverage: number;
+  content_kind_hit_rate: number;
+  section_coverage: number;
+  guardrail_warnings: string[];
+  failure_reasons: EvaluationFailureReason[];
+  diagnostics: SearchDiagnostics;
+  elapsed_ms: number;
+  error_type: string | null;
+  error_message: string | null;
+}
+
+export interface EvaluationThresholdFailure {
+  metric: EvaluationMetricName;
+  actual: number;
+  threshold: number;
+}
+
+export interface EvaluationMetrics {
+  case_count: number;
+  error_count: number;
+  evaluation_suite: EvaluationSuiteName;
+  evaluated_k: number;
+  precision_at_k: number;
+  recall_at_k: number;
+  mrr: number;
+  answer_keyword_hit_rate: number;
+  groundedness_pass_rate: number;
+  faithfulness: number;
+  context_precision: number;
+  context_recall: number;
+  response_relevancy: number;
+  noise_sensitivity: number;
+  citation_traceability_coverage: number;
+  bbox_citation_coverage: number;
+  element_lineage_coverage: number;
+  content_kind_hit_rate: number;
+  section_coverage: number;
+  passed: boolean;
+  threshold_failures: EvaluationThresholdFailure[];
+  failure_reason_counts: Partial<Record<EvaluationFailureReason, number>>;
+  case_results: EvaluationCaseResult[];
+  ingestion_quality: EvaluationIngestionQualitySummary;
+}
+
+export interface EvaluationIngestionQualitySummary {
+  document_count: number;
+  table_document_count: number;
+  figure_document_count: number;
+  formula_document_count: number;
+  low_confidence_document_count: number;
+  fallback_document_count: number;
+  failed_segment_document_count: number;
+  segment_artifact_cache_miss_document_count: number;
+  long_document_count: number;
+  average_page_coverage: number;
+  warning_counts: Record<string, number>;
+  risk_counts: Record<string, number>;
+  parser_profile_counts: Record<string, number>;
+}
+
+export interface EvaluationRagOverrides {
+  rrf_k?: number | null;
+  query_expansion_enabled?: boolean | null;
+  query_expansion_max_variants?: number | null;
+  context_window_chars?: number | null;
+  context_neighbor_window?: number | null;
+  context_diversity_lambda?: number | null;
+  context_adaptive_expansion_enabled?: boolean | null;
+  context_adaptive_neighbor_window?: number | null;
+  context_adaptive_min_overlap?: number | null;
+  context_group_expansion_enabled?: boolean | null;
+  context_group_max_chunks?: number | null;
+  context_dependency_promotion_enabled?: boolean | null;
+  context_dependency_max_chunks?: number | null;
+  context_compression_enabled?: boolean | null;
+  context_compression_max_sentences?: number | null;
+  context_compression_max_chars_per_chunk?: number | null;
+  oracle_vector_target_accuracy?: number | null;
+}
+
+export interface EvaluationExperiment {
+  id: string;
+  top_k: number;
+  rerank_top_n: number;
+  mode: SearchMode;
+  filters: Record<string, string>;
+  knowledge_base_ids?: string[];
+  rag_overrides?: EvaluationRagOverrides | null;
+}
+
+export interface EvaluationCompareRequestBody {
+  cases: EvaluationCase[];
+  experiments: EvaluationExperiment[];
+  ranking_metric?: EvaluationMetricName;
+  thresholds?: EvaluationThresholds | null;
+  suite?: EvaluationSuiteName | null;
+}
+
+export interface EvaluationExperimentResult {
+  rank: number;
+  ranking_score: number;
+  experiment: EvaluationExperiment;
+  metrics: EvaluationMetrics;
+}
+
+export interface EvaluationCompareResponse {
+  ranking_metric: EvaluationMetricName;
+  best_experiment_id: string | null;
+  results: EvaluationExperimentResult[];
+}
+
+// --- 設定: モデル ---
+export interface EnterpriseAiConfiguredModel {
+  model_id: string;
+  display_name: string;
+  vision_enabled: boolean;
+}
+
+export type EnterpriseAiVlmInputMode = "files_api" | "inline_image";
+
+export interface EnterpriseAiModelSettings {
+  endpoint: string;
+  project_ocid: string;
+  api_key: string;
+  has_api_key: boolean;
+  clear_api_key: boolean;
+  models: EnterpriseAiConfiguredModel[];
+  default_model_id: string;
+  api_path: string;
+  vlm_input_mode: EnterpriseAiVlmInputMode;
+  text_payload_template: string;
+  vision_payload_template: string;
+  text_response_path: string;
+  vision_response_path: string;
+  timeout_seconds: number;
+  max_retries: number;
+}
+
+export interface GenerativeAiModelSettings {
+  embedding_model: string;
+  embedding_dim: number;
+  rerank_model: string;
+}
+
+export interface ModelSettingsPayload {
+  enterprise_ai: EnterpriseAiModelSettings;
+  generative_ai: GenerativeAiModelSettings;
+}
+
+export interface ModelSettingsData {
+  settings: ModelSettingsPayload;
+  checks: Record<"enterprise_ai" | "generative_ai" | "embedding_dim", ModelSettingsCheckStatus>;
+  model_settings_file: string;
+  source: "runtime";
+}
+
+export interface ModelSettingsTestRequest {
+  settings: ModelSettingsPayload;
+  target_type: ModelSettingsTestTargetType;
+  model_id: string;
+  vision_enabled: boolean;
+}
+
+export interface ModelSettingsTestResult {
+  status: ModelSettingsTestStatus;
+  target_type: ModelSettingsTestTargetType;
+  model_id: string;
+  message: string;
+  troubleshooting: string[];
+  raw_error: string | null;
+  error_type: string | null;
+  elapsed_ms: number;
+  checked_at: string;
+  details: Record<string, string | number | boolean | null>;
+}
+
+// --- 設定: データベース ---
+export interface DatabaseSettingsData {
+  user: string;
+  dsn: string;
+  wallet_dir: string;
+  wallet_uploaded: boolean;
+  available_services: string[];
+  has_password: boolean;
+  has_wallet_password: boolean;
+  readiness: string;
+  embedding_dimension: number;
+  vector_column: string;
+  adb_ocid: string;
+  region: string;
+  config_source: "runtime";
+}
+
+export type AdbOperationStatus =
+  | "success"
+  | "not_configured"
+  | "error"
+  | "accepted"
+  | "already_available"
+  | "already_stopped"
+  | "cannot_start"
+  | "cannot_stop";
+
+export interface AdbInfoData {
+  status: AdbOperationStatus;
+  message: string;
+  id: string | null;
+  display_name: string | null;
+  lifecycle_state: string | null;
+  db_name: string | null;
+  cpu_core_count: number | null;
+  data_storage_size_in_tbs: number | null;
+  region: string | null;
+}
+
+export interface AdbSettingsUpdate {
+  adb_ocid: string;
+  region: string;
+}
+
+export interface DatabaseSettingsUpdate {
+  user: string;
+  dsn: string;
+  wallet_dir: string;
+  password?: string;
+  wallet_password?: string;
+  clear_password?: boolean;
+  clear_wallet_password?: boolean;
+}
+
+export interface DatabaseConnectionTestResult {
+  status: DatabaseConnectionTestStatus;
+  readiness: string;
+  message: string;
+  elapsed_ms: number;
+  troubleshooting: string[];
+  details: Record<string, string | number | boolean | null>;
+  checked_at: string;
+  error_type: string | null;
+}
+
+export type SystemTableSchemaStatus = "missing" | "partial" | "outdated" | "ready";
+export type SystemTableOperationStatus = "idle" | "running" | "failed";
+export type SystemTableOperationKind = "initialize" | "recreate";
+export type SystemTableOperationResult =
+  | "no_op"
+  | "initialized"
+  | "migrated"
+  | "recreated";
+
+export interface SystemTableObjectData {
+  name: string;
+  object_type: string;
+}
+
+export interface SystemTableMetadata {
+  name: string;
+  exists: boolean;
+  estimated_rows: number | null;
+  created_at: string | null;
+  last_analyzed_at: string | null;
+}
+
+export interface SystemTableOperationState {
+  status: SystemTableOperationStatus;
+  operation_kind: SystemTableOperationKind | null;
+  lease_expires_at: string | null;
+  last_error_code: string | null;
+  schema_epoch: number;
+  updated_at: string | null;
+}
+
+export interface SystemTablesStatusData {
+  status: SystemTableSchemaStatus;
+  schema_version: string;
+  schema_head: string;
+  applied_versions: string[];
+  pending_versions: string[];
+  expected_object_count: number;
+  existing_object_count: number;
+  expected_table_count: number;
+  existing_table_count: number;
+  missing_objects: SystemTableObjectData[];
+  retired_objects: SystemTableObjectData[];
+  tables: SystemTableMetadata[];
+  operation_state: SystemTableOperationState;
+}
+
+export interface SystemTablesInitializeRequest {
+  recreate: boolean;
+  confirmation?: string;
+}
+
+export interface SystemTablesOperationData extends SystemTablesStatusData {
+  operation: SystemTableOperationResult;
+  dropped_object_count: number;
+  created_object_count: number;
+}
+
+// --- 設定: HuggingFace モデルダウンロード ---
+export interface HuggingFaceSettingsData {
+  endpoint: string;
+  token_configured: boolean;
+  config_source: "runtime";
+}
+
+export interface HuggingFaceSettingsUpdate {
+  endpoint: string;
+  token?: string;
+  clear_token?: boolean;
+}
+
+// --- 設定: アップロード保存先 ---
+export interface UploadStorageSettingsData {
+  backend: UploadStorageBackend;
+  local_storage_dir: string;
+  object_storage_region: string;
+  object_storage_namespace: string;
+  object_storage_bucket: string;
+  readiness: string;
+  max_upload_bytes: number;
+  config_source: "runtime";
+}
+
+export interface UploadStorageSettingsUpdate {
+  backend: UploadStorageBackend;
+  local_storage_dir: string;
+  object_storage_namespace?: string;
+  object_storage_bucket: string;
+}
+
+// --- 設定: Parser adapter ---
+export interface ParserAdapterStatusData {
+  backend: ParserAdapterBackendName;
+  package_name: string;
+  import_name: string;
+  distribution_name: string | null;
+  install_package: string;
+  enabled: boolean;
+  selected: boolean;
+  installed: boolean;
+  status: ParserAdapterStatus;
+  version: string | null;
+  warning_code: string | null;
+}
+
+export interface ParserAdapterScorecardEntryData {
+  backend: ParserAdapterScoreBackend;
+  rank: number;
+  score: number;
+  status: ParserAdapterScoreStatus;
+  recommended: boolean;
+  executable: boolean;
+  selected: boolean;
+  enabled: boolean;
+  installed: boolean;
+  metric_source: string;
+  metric_count: number;
+  signals: Record<string, number>;
+  reason_codes: string[];
+  warning_codes: string[];
+}
+
+export interface ParserAdapterScorecardData {
+  selected_backend: ParserAdapterBackend;
+  recommended_backend: ParserAdapterScoreBackend;
+  metrics_source: string;
+  metrics_applied_to: ParserAdapterScoreBackend | null;
+  entries: ParserAdapterScorecardEntryData[];
+}
+
+export interface ParserAdapterSourceRouteData {
+  source_kind: ParserAdapterSourceKind | string;
+  candidate_order: ParserAdapterScoreBackend[];
+  attempted_order: ParserAdapterScoreBackend[];
+  active_order: ParserAdapterScoreBackend[];
+  selected_backend: ParserAdapterScoreBackend;
+  reason_codes: string[];
+  warning_codes: string[];
+}
+
+export interface ParserAdapterBackendSourceMatrixData {
+  evidence_source: "runtime_routes";
+  required_source_kinds: string[];
+  covered_source_kinds: string[];
+  missing_source_kinds: string[];
+  backend_source_kinds: Partial<Record<ParserAdapterScoreBackend, string[]>>;
+  route_evidence: ParserAdapterSourceRouteData[];
+}
+
+export interface ParserAdapterContractCaseData {
+  backend: ParserAdapterBackendName;
+  source_kind: string;
+  fixture_name: string;
+  content_type: string;
+  status: ParserAdapterContractStatus;
+  blocking: boolean;
+  parser_backend: string | null;
+  parser_version: string | null;
+  adapter_import_name: string | null;
+  adapter_distribution_name: string | null;
+  adapter_package_version: string | null;
+  template: string | null;
+  element_count: number;
+  page_count: number;
+  table_count: number;
+  table_cell_count: number;
+  asset_count: number;
+  bbox_count: number;
+  warning_codes: string[];
+  reason_codes: string[];
+}
+
+export interface ParserAdapterContractSummaryData {
+  passed: boolean;
+  case_count: number;
+  blocking_failure_count: number;
+  source_kinds: string[];
+  backends: ParserAdapterBackendName[];
+  passed_source_kinds: string[];
+  missing_source_kinds: string[];
+  blocking_failure_source_kinds: string[];
+  blocking_failure_backends: ParserAdapterBackendName[];
+  backend_status_counts: Partial<Record<ParserAdapterBackendName, Partial<Record<string, number>>>>;
+  backend_source_status: Partial<Record<ParserAdapterBackendName, Record<string, string>>>;
+  backend_source_status_counts: Partial<
+    Record<ParserAdapterBackendName, Record<string, Partial<Record<string, number>>>>
+  >;
+  source_kind_status_counts: Record<string, Partial<Record<string, number>>>;
+  backend_passed_source_kinds: Partial<Record<ParserAdapterBackendName, string[]>>;
+  scenarios: string[];
+  passed_scenarios: string[];
+  missing_scenarios: string[];
+  blocking_failure_scenarios: string[];
+  backend_passed_scenarios: Partial<Record<ParserAdapterBackendName, string[]>>;
+  reason_code_counts: Record<string, number>;
+  warning_code_counts: Record<string, number>;
+  blocking_failure_reason_counts: Record<string, number>;
+  blocking_failures: Array<{
+    backend?: string;
+    source_kind?: string;
+    status?: string;
+    warning_codes?: string[];
+    reason_codes?: string[];
+  }>;
+}
+
+export interface ParserAdapterContractData {
+  passed: boolean;
+  fixture_root: string;
+  source_kinds: string[];
+  backends: ParserAdapterBackendName[];
+  case_count: number;
+  blocking_failure_count: number;
+  cases: ParserAdapterContractCaseData[];
+  summary: ParserAdapterContractSummaryData;
+  config_source: "runtime";
+}
+
+export interface ParserServiceBackendData {
+  backend: ParserServiceBackendName;
+  selected: boolean;
+  configured: boolean;
+  warning_code: string | null;
+}
+
+export interface ParserBackendCapabilityData {
+  backend: string;
+  modalities: string[];
+  extensions: string[];
+}
+
+export interface ExternalParserConnectionData {
+  backend: ExternalParserBackendName;
+  protocol: ExternalParserProtocol;
+  endpoint: string;
+  model: string | null;
+  api_key_configured: boolean;
+  configured: boolean;
+}
+
+export interface ExternalParserConnectionUpdate {
+  backend: ExternalParserBackendName;
+  endpoint?: string;
+  model?: string;
+  api_key?: string;
+  clear_api_key?: boolean;
+}
+
+export interface ExternalParserConnectionStatusData {
+  backend: ExternalParserBackendName;
+  status: ExternalParserConnectionStatus;
+  version: string | null;
+  warning_code: string | null;
+}
+
+export interface ParserAdapterSettingsData {
+  adapter_backend: ParserAdapterBackend;
+  effective_order: ParserAdapterBackendName[];
+  adapters: ParserAdapterStatusData[];
+  service_backends: ParserServiceBackendData[];
+  scorecard: ParserAdapterScorecardData;
+  source_routes: ParserAdapterSourceRouteData[];
+  backend_source_kind_matrix: ParserAdapterBackendSourceMatrixData;
+  capabilities: ParserBackendCapabilityData[];
+  connections: ExternalParserConnectionData[];
+  config_source: "runtime";
+  docling_vision_enabled?: boolean;
+}
+
+export interface ParserAdapterSettingsUpdate {
+  adapter_backend: ParserAdapterBackend;
+  docling_enabled?: boolean;
+  docling_vision_enabled?: boolean;
+  marker_enabled?: boolean;
+  unstructured_enabled?: boolean;
+  unlimited_ocr_enabled?: boolean;
+  mineru_enabled?: boolean;
+  dots_ocr_enabled?: boolean;
+  glm_ocr_enabled?: boolean;
+  connections?: ExternalParserConnectionUpdate[];
+}
+
+// --- 設定: Chunking アダプター ---
+export type ChunkingStrategyName =
+  | "structure_aware"
+  | "recursive_character"
+  | "hierarchical_parent_child"
+  | "markdown_heading"
+  | "page_level"
+  | "fixed_size"
+  | "fixed_delimiter"
+  | "docrag_small_to_big";
+
+// --- 設定: 前処理(Preprocess)アダプター ---
+export type PreprocessProfileName =
+  | "passthrough"
+  | "office_to_pdf"
+  | "pdf_to_page_images"
+  | "csv_to_json"
+  | "excel_to_json"
+  | "url_to_markdown"
+  | "image_enhance"
+  | "pii_redact";
+
+export interface PreprocessProfileStatusData {
+  name: PreprocessProfileName;
+  origin: string;
+  recommended_for: string[];
+  selected: boolean;
+  in_process: boolean;
+  requires_service: boolean;
+  available: boolean;
+}
+
+export interface PreprocessSettingsData {
+  profile: PreprocessProfileName;
+  service_enabled: boolean;
+  service_url: string;
+  canonical_artifact_prefix: string;
+  profiles: PreprocessProfileStatusData[];
+  config_source: "runtime";
+}
+
+export interface PreprocessSettingsUpdate {
+  profile: PreprocessProfileName;
+}
+
+// --- サービス管理（前処理 / Parser マイクロサービスの稼働可視化・起動/停止）---
+export type ServiceCategory =
+  | "preprocess"
+  | "parser"
+  | "chunking"
+  | "vector_index"
+  | "retrieval"
+  | "grounding"
+  | "generation"
+  | "guardrail"
+  | "evaluation"
+  | "graphrag"
+  | "agentic";
+export type ServiceProfile = "cpu" | "gpu" | "oci";
+export type ServiceRuntimeStatus =
+  | "running"
+  | "degraded"
+  | "stopped"
+  | "unconfigured"
+  | "in_process";
+export type ServiceExecutionPolicy =
+  | "required_no_fallback"
+  | "in_process_when_disabled"
+  | "selected_adapter";
+export type ServiceAction = "start" | "stop" | "restart" | "build" | "remove";
+
+export interface ServiceModelCacheData {
+  container_path: string;
+  volume_name: string;
+  editable: false;
+}
+
+export interface ServiceCatalogItemData {
+  service_id: string;
+  category: ServiceCategory;
+  profile: ServiceProfile;
+  label_key: string;
+  execution_policy: ServiceExecutionPolicy;
+  deployable: boolean;
+  configured: boolean;
+  model_cache: ServiceModelCacheData | null;
+}
+
+export interface ServiceStatusData extends ServiceCatalogItemData {
+  status: ServiceRuntimeStatus;
+}
+
+export type DeploymentMode = "dev" | "prod";
+
+export interface ServiceCatalogData {
+  control_enabled: boolean;
+  deployment_mode: DeploymentMode;
+  services: ServiceCatalogItemData[];
+}
+
+export interface ServiceListData {
+  control_enabled: boolean;
+  deployment_mode: DeploymentMode;
+  services: ServiceStatusData[];
+}
+
+export interface ServiceControlResultData {
+  service_id: string;
+  action: ServiceAction;
+  status: ServiceRuntimeStatus;
+}
+
+export type ServiceLogsSource = "docker";
+
+export interface ServiceLogsData {
+  service_id: string;
+  source: ServiceLogsSource;
+  lines: number;
+  content: string;
+}
+
+export interface ChunkingStrategyStatusData {
+  name: ChunkingStrategyName;
+  origin: string;
+  recommended_for: string[];
+  selected: boolean;
+  uses_child_size: boolean;
+}
+
+export interface ChunkingSettingsData {
+  strategy: ChunkingStrategyName;
+  chunk_size: number;
+  overlap: number;
+  child_size: number;
+  min_chars: number;
+  delimiter: string;
+  context_header_enabled: boolean;
+  strategies: ChunkingStrategyStatusData[];
+  config_source: "runtime";
+}
+
+export interface ChunkingSettingsUpdate {
+  strategy: ChunkingStrategyName;
+  chunk_size: number;
+  overlap: number;
+  child_size: number;
+  min_chars: number;
+  delimiter: string;
+  context_header_enabled: boolean;
+}
+
+// --- 設定: Retrieval アダプター ---
+/** 検索モード(新形式・排他選択)。 */
+export type RetrievalModeName =
+  | "hybrid_rrf"
+  | "vector"
+  | "keyword"
+  | "graph_augmented"
+  | "reasoning_tree_search";
+
+/** legacy 複合値込みの読み取り互換型。保存は RetrievalModeName のみ。 */
+export type RetrievalStrategyName =
+  | RetrievalModeName
+  | "business_context_strict"
+  | "corrective_multi_query";
+
+export interface RetrievalStrategyStatusData {
+  name: RetrievalStrategyName;
+  origin: string;
+  recommended_for: string[];
+  selected: boolean;
+  gap_stop: boolean;
+  corrective_retrieval: boolean;
+  business_fit_weighting: boolean;
+}
+
+export interface RetrievalSettingsData {
+  mode: RetrievalModeName;
+  legacy_strategy: RetrievalStrategyName | null;
+  query_expansion: boolean;
+  query_expansion_llm: boolean;
+  gap_stop: boolean;
+  corrective_retrieval: boolean;
+  business_fit_weighting: boolean;
+  /** 全文検索の分割方式(業務ビューの上書きが優先)。 */
+  text_search_tokenizer: TextSearchTokenizerName;
+  modes: RetrievalStrategyStatusData[];
+  config_source: "runtime";
+}
+
+/** 部分更新。null/undefined のフィールドは変更しない。 */
+export interface RetrievalSettingsUpdate {
+  mode?: RetrievalModeName;
+  query_expansion?: boolean;
+  query_expansion_llm?: boolean;
+  gap_stop?: boolean;
+  corrective_retrieval?: boolean;
+  business_fit_weighting?: boolean;
+  text_search_tokenizer?: TextSearchTokenizerName;
+}
+
+// --- 設定: Grounding アダプター ---
+export type PostRetrievalPipelineName =
+  | "custom"
+  | "lean"
+  | "verified_context"
+  | "context_enrich"
+  | "compact"
+  | "full_governed";
+
+export type GroundingExpansionMode = "none" | "neighbor" | "group" | "adaptive";
+
+export interface GroundingPipelineStatusData {
+  name: PostRetrievalPipelineName;
+  origin: string;
+  recommended_for: string[];
+  selected: boolean;
+  dependency_promotion: boolean;
+  diversity: boolean;
+  expansion_mode: GroundingExpansionMode;
+  compression: boolean;
+  corrective: boolean;
+}
+
+export interface GroundingSettingsData {
+  pipeline: PostRetrievalPipelineName;
+  dependency_promotion_enabled: boolean;
+  diversity_enabled: boolean;
+  expansion_mode: GroundingExpansionMode;
+  compression_enabled: boolean;
+  /** CRAG(補正検索)の evidence grade 判定パラメータ。 */
+  crag_low_confidence_threshold: number;
+  crag_high_confidence_threshold: number;
+  crag_max_hops: number;
+  crag_low_evidence_abstain: boolean;
+  pipelines: GroundingPipelineStatusData[];
+  config_source: "runtime";
+}
+
+/** 部分更新。undefined のフィールドは変更しない。 */
+export interface GroundingSettingsUpdate {
+  pipeline?: PostRetrievalPipelineName;
+  crag_low_confidence_threshold?: number;
+  crag_high_confidence_threshold?: number;
+  crag_max_hops?: number;
+  crag_low_evidence_abstain?: boolean;
+}
+
+// --- 設定: Generation アダプター ---
+export type GenerationProfileName =
+  | "grounded_concise"
+  | "detailed_cited"
+  | "strict_extractive"
+  | "structured_json"
+  | "bilingual_ja_en"
+  | "inline_cited"
+  | "custom";
+
+export interface GenerationProfileStatusData {
+  name: GenerationProfileName;
+  origin: string;
+  recommended_for: string[];
+  selected: boolean;
+  structured_output: boolean;
+  contract_mode: "groundedness" | "format_validated" | "json_schema" | "custom";
+  repair_enabled: boolean;
+}
+
+export interface GenerationSettingsData {
+  profile: GenerationProfileName;
+  structured_output: boolean;
+  profiles: GenerationProfileStatusData[];
+  config_source: "oracle";
+  revision: number;
+  updated_at: string;
+  active_prompt_version_id: string | null;
+  custom_prompt_configured: boolean;
+}
+
+/** DocRAG 回答記録の保持日数(0 は無期限)。 */
+export interface AnswerRecordSettingsData {
+  retention_days: number;
+  config_source: "runtime";
+}
+
+export interface GenerationSettingsUpdate {
+  profile: GenerationProfileName;
+  expected_revision?: number;
+}
+
+// --- 設定: 回答プロンプト版(custom 回答スタイルが使用) ---
+export interface PromptVersionData {
+  version_id: string;
+  name: string;
+  system_prompt: string;
+  note: string;
+  created_at: string;
+  created_by: string;
+  active: boolean;
+}
+
+export interface PromptVersionsData {
+  active_version_id: string | null;
+  versions: PromptVersionData[];
+  settings_revision: number;
+}
+
+export interface PromptVersionCreate {
+  name: string;
+  system_prompt: string;
+  note?: string;
+  activate?: boolean;
+}
+
+// --- 設定: Guardrail アダプター ---
+export type GuardrailPolicyName = "standard" | "strict" | "lenient" | "regulated";
+
+export interface GuardrailPolicyStatusData {
+  name: GuardrailPolicyName;
+  origin: string;
+  recommended_for: string[];
+  selected: boolean;
+  grounding_min_overlap: number;
+  grounding_min_ratio: number;
+  audit_emphasis: boolean;
+}
+
+/** メタデータ/項目抽出のスキーマ定義(検索・回答設定)。 */
+export interface ExtractionFieldsSettingsData {
+  fields: Array<{ name: string; description: string; value_type: string }>;
+}
+
+export interface GuardrailSettingsData {
+  policy: GuardrailPolicyName;
+  block_prompt_injection: boolean;
+  mask_sensitive_identifiers: boolean;
+  max_query_chars: number;
+  grounding_min_overlap: number;
+  grounding_min_ratio: number;
+  audit_emphasis: boolean;
+  policies: GuardrailPolicyStatusData[];
+  backend: GuardrailBackend;
+  oci_configured: boolean;
+  oci_warning_code: string | null;
+  config_source: "runtime";
+}
+
+export interface GuardrailSettingsUpdate {
+  policy: GuardrailPolicyName;
+  backend?: GuardrailBackend;
+}
+
+export type GuardrailBackend = "local" | "oci_guardrails";
+
+// --- 設定: Vector Index アダプター ---
+export type VectorIndexProfileName = "balanced" | "accurate" | "fast";
+
+export interface VectorIndexProfileStatusData {
+  name: VectorIndexProfileName;
+  origin: string;
+  recommended_for: string[];
+  selected: boolean;
+  target_accuracy: number;
+  neighbors: number;
+  efconstruction: number;
+  distance: string;
+}
+
+export interface VectorIndexSettingsData {
+  profile: VectorIndexProfileName;
+  target_accuracy: number;
+  neighbors: number;
+  efconstruction: number;
+  distance: string;
+  requires_reprovision: boolean;
+  profiles: VectorIndexProfileStatusData[];
+  reindex_sql: string;
+  config_source: "runtime";
+}
+
+export interface VectorIndexSettingsUpdate {
+  profile: VectorIndexProfileName;
+}
+
+// --- 設定: Evaluation アダプター ---
+export type EvaluationSuiteName =
+  | "request_only"
+  | "retrieval_focused"
+  | "balanced"
+  | "strict_ci"
+  | "ragas_like";
+
+export interface EvaluationSuiteStatusData {
+  name: EvaluationSuiteName;
+  origin: string;
+  recommended_for: string[];
+  selected: boolean;
+  thresholds: Record<string, number>;
+}
+
+export interface EvaluationSettingsData {
+  suite: EvaluationSuiteName;
+  thresholds: Record<string, number>;
+  suites: EvaluationSuiteStatusData[];
+  config_source: "runtime";
+}
+
+export interface EvaluationSettingsUpdate {
+  suite: EvaluationSuiteName;
+}
+
+// --- 設定: GraphRAG アダプター ---
+export type GraphProfileName = "off" | "entities" | "full";
+
+export interface GraphProfileStatusData {
+  name: GraphProfileName;
+  origin: string;
+  recommended_for: string[];
+  selected: boolean;
+  enabled: boolean;
+  build_claims: boolean;
+  build_community_summaries: boolean;
+}
+
+export interface GraphSettingsData {
+  profile: GraphProfileName;
+  enabled: boolean;
+  build_claims: boolean;
+  build_community_summaries: boolean;
+  profiles: GraphProfileStatusData[];
+  config_source: "runtime";
+}
+
+export interface GraphSettingsUpdate {
+  profile: GraphProfileName;
+}
+
+// --- 設定: Agentic アダプター ---
+export type AgenticProfileName =
+  | "off"
+  | "smart_routing"
+  | "query_rewrite"
+  | "hyde"
+  | "decompose"
+  | "multi_hop";
+
+export interface AgenticProfileStatusData {
+  name: AgenticProfileName;
+  origin: string;
+  recommended_for: string[];
+  selected: boolean;
+  enabled: boolean;
+  rewrite: boolean;
+  decompose: boolean;
+  multi_hop: boolean;
+  hyde: boolean;
+}
+
+export interface AgenticSettingsData {
+  profile: AgenticProfileName;
+  enabled: boolean;
+  rewrite: boolean;
+  decompose: boolean;
+  multi_hop: boolean;
+  max_subqueries: number;
+  profiles: AgenticProfileStatusData[];
+  config_source: "runtime";
+}
+
+export interface AgenticSettingsUpdate {
+  profile: AgenticProfileName;
+  max_subqueries: number;
+}
+
+// --- 設定: OCI config ---
+export type OciConfigField =
+  | "user"
+  | "fingerprint"
+  | "tenancy"
+  | "region"
+  | "key_file";
+
+export interface OciConfigReadRequest {
+  config_file: string;
+  profile: string;
+}
+
+export interface OciConfigReadData {
+  profile: string;
+  user: string;
+  fingerprint: string;
+  tenancy: string;
+  region: string;
+  key_file: string;
+  applied_fields: OciConfigField[];
+}
+
+export interface OciSettingsUpdate {
+  user: string;
+  fingerprint: string;
+  tenancy: string;
+  region: string;
+}
+
+export interface OciSettingsData {
+  config_file: string;
+  profile: string;
+  user: string;
+  fingerprint: string;
+  tenancy: string;
+  region: string;
+  key_file: string;
+  key_file_exists: boolean;
+  config_file_exists: boolean;
+  config_source: "runtime";
+}
+
+export interface OciObjectStorageSettingsUpdate {
+  object_storage_region: string;
+  object_storage_namespace: string;
+}
+
+export interface OciConfigTestResult {
+  status: OciConfigTestStatus;
+  profile: string;
+  config_file: string;
+  key_file: string;
+  config_file_exists: boolean;
+  key_file_exists: boolean;
+  missing_fields: OciConfigField[];
+  permission_issues: string[];
+  oci_directory_mode: string | null;
+  config_file_mode: string | null;
+  key_file_mode: string | null;
+  message: string;
+  elapsed_ms: number;
+  checked_at: string;
+  error_type: string | null;
+  stages: OciConfigTestStage[];
+  region: string | null;
+  auth_check_operation: string | null;
+  http_status: number | null;
+  service_code: string | null;
+  request_id: string | null;
+}
+
+export interface OciObjectStorageNamespaceRequest {
+  config_file: string;
+  profile: string;
+  region: string;
+}
+
+export interface OciObjectStorageNamespaceData {
+  namespace: string;
+}
+
+export interface OciPrivateKeyUploadData {
+  key_file: string;
+  saved: boolean;
+}
+
+/** API 由来のエラー。`messages` は日本語のユーザー向け文言。 */
+export class ApiError extends Error {
+  readonly status: number;
+  readonly messages: string[];
+
+  constructor(status: number, messages: string[]) {
+    super(messages[0] ?? `APIエラー (${status})`);
+    this.name = "ApiError";
+    this.status = status;
+    this.messages = messages.length > 0 ? messages : [`APIエラー (${status})`];
+  }
+}
+
+function resolveTimeoutMs(value: unknown, fallbackMs: number): number {
+  const parsed = typeof value === "string" ? Number(value) : Number.NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallbackMs;
+}
+
+function runtimeApiTimeoutOverrideMs(): number | null {
+  if (typeof window === "undefined") return null;
+  const value = Number(
+    (window as unknown as { __RAG_API_TIMEOUT_MS__?: string | number })
+      .__RAG_API_TIMEOUT_MS__
+  );
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function timeoutMessage(timeoutMs: number): string {
+  return t("common.api.timeout", { seconds: Math.ceil(timeoutMs / 1000) });
+}
+
+async function parseEnvelope<T>(res: Response): Promise<ApiResponse<T>> {
+  try {
+    return (await res.json()) as ApiResponse<T>;
+  } catch {
+    return { data: null, error_messages: [], warning_messages: [] };
+  }
+}
+
+/** ApiResponse エンベロープを取得し、エラー時は ApiError を投げる。 */
+async function requestEnvelope<T>(
+  path: string,
+  init?: RequestInit,
+  options: { allowStatus?: number[]; timeoutMs?: number } = {}
+): Promise<ApiResponse<T>> {
+  const timeoutMs =
+    runtimeApiTimeoutOverrideMs() ?? options.timeoutMs ?? API_REQUEST_TIMEOUT_MS;
+  const controller = new AbortController();
+  const externalSignal = init?.signal;
+  let timedOut = false;
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+  const abortFromExternal = () => controller.abort(externalSignal?.reason);
+  if (externalSignal?.aborted) {
+    abortFromExternal();
+  } else {
+    externalSignal?.addEventListener("abort", abortFromExternal, { once: true });
+  }
+
+  if (timeoutMs > 0) {
+    timeoutId = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, timeoutMs);
+  }
+
+  try {
+    const res = await fetch(path, {
+      ...init,
+      credentials: "same-origin",
+      signal: controller.signal,
+      headers: {
+        Accept: "application/json",
+        ...(init?.headers ?? {}),
+      },
+    });
+    const envelope = await parseEnvelope<T>(res);
+    if (!res.ok && !options.allowStatus?.includes(res.status)) {
+      const messages = envelope.error_messages?.length
+        ? envelope.error_messages
+        : [`APIエラー (${res.status})`];
+      throw new ApiError(res.status, messages);
+    }
+    return envelope;
+  } catch (error) {
+    if (timedOut) {
+      throw new ApiError(408, [timeoutMessage(timeoutMs)]);
+    }
+    throw error;
+  } finally {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
+    externalSignal?.removeEventListener("abort", abortFromExternal);
+  }
+}
+
+/** ApiResponse を展開し data のみ返す。エラー時は ApiError を投げる。 */
+async function request<T>(
+  path: string,
+  init?: RequestInit,
+  options: { allowStatus?: number[]; timeoutMs?: number } = {}
+): Promise<T> {
+  const envelope = await requestEnvelope<T>(path, init, options);
+  return envelope.data as T;
+}
+
+/**
+ * DB 停止時に縮退応答(空 data + warning_messages)を返す閲覧系 API 用。
+ * data オブジェクトへ `warning_messages` を併設して返すため、既存の
+ * data アクセス(`page.items` 等)を壊さずに縮退状態を画面へ伝えられる。
+ */
+async function requestDegradable<T extends object>(
+  path: string,
+  init?: RequestInit,
+  options: { allowStatus?: number[]; timeoutMs?: number } = {}
+): Promise<Degradable<T>> {
+  const envelope = await requestEnvelope<T>(path, init, options);
+  return {
+    ...(envelope.data as T),
+    warning_messages: envelope.warning_messages ?? [],
+  };
+}
+
+function jsonBody(body: unknown): RequestInit {
+  return {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  };
+}
+
+function ingestionJobSearch(force: boolean, phase: IngestionJobPhase): string {
+  const search = new URLSearchParams();
+  if (force) search.set("force", "true");
+  search.set("phase", phase);
+  return search.toString();
+}
+
+export const api = {
+  // 認証
+  getAuthStatus: () => request<AuthStatus>("/api/auth/me"),
+  login: (body: LoginRequestBody) => request<AuthStatus>("/api/auth/login", jsonBody(body)),
+  logout: () => request<AuthStatus>("/api/auth/logout", { method: "POST" }),
+
+  // ヘルスチェック
+  getReadiness: () => request<HealthData>("/api/ready", undefined, { allowStatus: [503] }),
+
+  // データベース利用可否(設定の有無 + 実接続プローブ)。DB ゲートが参照する。
+  getDatabaseStatus: () => request<DatabaseStatusData>("/api/ready/database"),
+
+  // ダッシュボード
+  getDashboardSummary: () =>
+    request<DashboardSummary>("/api/dashboard/summary", undefined, {
+      timeoutMs: DASHBOARD_REQUEST_TIMEOUT_MS,
+    }),
+
+  // ドキュメント
+  listDocuments: (params: {
+    status?: FileStatus;
+    q?: string;
+    knowledge_base_id?: string;
+    limit?: number;
+    offset?: number;
+  } = {}) => {
+    const search = new URLSearchParams();
+    if (params.status) search.set("status", params.status);
+    if (params.q) search.set("q", params.q);
+    if (params.knowledge_base_id) search.set("knowledge_base_id", params.knowledge_base_id);
+    if (params.limit != null) search.set("limit", String(params.limit));
+    if (params.offset != null) search.set("offset", String(params.offset));
+    const qs = search.toString();
+    return requestDegradable<Page<DocumentSummary>>(`/api/documents${qs ? `?${qs}` : ""}`);
+  },
+  getDocument: (id: string) => request<DocumentDetail>(`/api/documents/${encodeURIComponent(id)}`),
+  listDocumentChunks: (id: string) =>
+    request<DocumentChunkView[]>(`/api/documents/${encodeURIComponent(id)}/chunks`),
+  listDocumentChunkSets: (id: string) =>
+    request<DocumentChunkSet[]>(`/api/documents/${encodeURIComponent(id)}/chunk-sets`),
+  listDocumentRecipes: (id: string) =>
+    request<DocumentRecipeView[]>(`/api/documents/${encodeURIComponent(id)}/recipes`),
+  createDocumentRecipe: (id: string, copyFromRecipeId: string | null) =>
+    request<DocumentRecipeView>(
+      `/api/documents/${encodeURIComponent(id)}/recipes`,
+      jsonBody({ copy_from_recipe_id: copyFromRecipeId })
+    ),
+  updateDocumentRecipe: (id: string, recipeId: string, body: DocumentProcessingConfig) =>
+    request<DocumentRecipeView>(
+      `/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(recipeId)}`,
+      { ...jsonBody(body), method: "PUT" }
+    ),
+  deleteDocumentRecipe: (id: string, recipeId: string) =>
+    request<DocumentRecipeDeleteResult>(
+      `/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(recipeId)}`,
+      { method: "DELETE" }
+    ),
+  listDocumentRecipeChunks: (id: string, recipeId: string) =>
+    request<DocumentChunkView[]>(
+      `/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(recipeId)}/chunks`
+    ),
+  previewDocumentRecipeChunks: (
+    id: string,
+    recipeId: string,
+    body: DocumentChunkPreviewRequest
+  ) =>
+    request<DocumentChunkPreviewResponse>(
+      `/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(
+        recipeId
+      )}/chunk-preview`,
+      jsonBody(body)
+    ),
+  exportDocumentRecipeExtraction: (
+    id: string,
+    recipeId: string,
+    format: DocumentExtractionExportFormat = "markdown"
+  ) => {
+    const search = new URLSearchParams({ format });
+    return request<DocumentExtractionExport>(
+      `/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(
+        recipeId
+      )}/extraction-export?${search.toString()}`
+    );
+  },
+  createChunkSetExperiment: (id: string, body: ChunkSetExperimentRequest) =>
+    request<DocumentChunkSet>(
+      `/api/documents/${encodeURIComponent(id)}/chunk-set-experiments`,
+      jsonBody(body)
+    ),
+  promoteChunkSetExperiment: (id: string, chunkSetId: string) =>
+    request<DocumentChunkSet>(
+      `/api/documents/${encodeURIComponent(id)}/chunk-set-experiments/${encodeURIComponent(
+        chunkSetId
+      )}/promote`,
+      { method: "POST" }
+    ),
+  createParserExtractionExperiment: (id: string, body: ParserExtractionExperimentRequest) =>
+    request<IngestionJob>(
+      `/api/documents/${encodeURIComponent(id)}/parser-extraction-experiments`,
+      jsonBody(body)
+    ),
+  getDocumentIngestionConfig: (id: string) =>
+    request<DocumentIngestionConfigData>(
+      `/api/documents/${encodeURIComponent(id)}/ingestion-config`
+    ),
+  updateDocumentIngestionConfig: (id: string, body: DocumentProcessingConfig) =>
+    request<DocumentIngestionConfigData>(
+      `/api/documents/${encodeURIComponent(id)}/ingestion-config`,
+      { ...jsonBody(body), method: "PUT" }
+    ),
+  exportDocumentExtraction: (id: string, format: DocumentExtractionExportFormat = "markdown") => {
+    const search = new URLSearchParams({ format });
+    return request<DocumentExtractionExport>(
+      `/api/documents/${encodeURIComponent(id)}/extraction-export?${search.toString()}`
+    );
+  },
+  listDocumentIngestionJobs: (id: string) =>
+    request<IngestionJob[]>(`/api/documents/${encodeURIComponent(id)}/ingestion-jobs`),
+  listDocumentIngestionSegments: (id: string) =>
+    request<IngestionSegment[]>(`/api/documents/${encodeURIComponent(id)}/ingestion-segments`),
+  deleteDocument: (id: string) =>
+    request<DocumentDeleteResult>(`/api/documents/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
+  getDocumentStats: () => requestDegradable<DocumentStats>("/api/documents/stats"),
+  listDocumentKnowledgeBases: (id: string) =>
+    request<KnowledgeBaseRef[]>(`/api/documents/${encodeURIComponent(id)}/knowledge-bases`),
+  replaceDocumentKnowledgeBases: (id: string, body: DocumentKnowledgeBaseReplaceRequest) =>
+    request<KnowledgeBaseRef[]>(`/api/documents/${encodeURIComponent(id)}/knowledge-bases`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  uploadDocument: (
+    file: File,
+    knowledgeBaseIds: string[] = [],
+    ingestionMode: UploadIngestionMode = "manual"
+  ) => {
+    const form = new FormData();
+    form.append("file", file);
+    for (const id of knowledgeBaseIds) {
+      form.append("knowledge_base_ids", id);
+    }
+    form.append("ingestion_mode", ingestionMode);
+    return request<UploadResult>("/api/documents/upload", { method: "POST", body: form });
+  },
+  batchUploadDocuments: (
+    files: File[],
+    knowledgeBaseIds: string[] = [],
+    ingestionMode: UploadIngestionMode = "manual"
+  ) => {
+    const form = new FormData();
+    for (const file of files) {
+      form.append("files", file);
+    }
+    for (const id of knowledgeBaseIds) {
+      form.append("knowledge_base_ids", id);
+    }
+    form.append("ingestion_mode", ingestionMode);
+    return request<BatchUploadResult>("/api/documents/batch-upload", {
+      method: "POST",
+      body: form,
+    });
+  },
+  ingestDocument: (id: string, force = false, phase: IngestionJobPhase = "PREPROCESS") =>
+    request<IngestionJob>(
+      `/api/documents/${encodeURIComponent(id)}/ingestion-jobs?${ingestionJobSearch(force, phase)}`,
+      { method: "POST" }
+    ),
+  enqueueDocumentIngestionJob: (
+    id: string,
+    force = false,
+    phase: IngestionJobPhase = "PREPROCESS"
+  ) =>
+    request<IngestionJob>(
+      `/api/documents/${encodeURIComponent(id)}/ingestion-jobs?${ingestionJobSearch(force, phase)}`,
+      { method: "POST" }
+    ),
+  enqueueDocumentRecipeJob: (
+    id: string,
+    recipeId: string,
+    phase: IngestionJobPhase = "PREPROCESS"
+  ) =>
+    request<IngestionJob>(
+      `/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(
+        recipeId
+      )}/ingestion-jobs?phase=${encodeURIComponent(phase)}`,
+      { method: "POST" }
+    ),
+  retryFailedDocumentIngestionSegments: (id: string, recipeId?: string | null) =>
+    request<IngestionJob>(
+      `/api/documents/${encodeURIComponent(id)}/ingestion-segments/retry${
+        recipeId ? `?recipe_id=${encodeURIComponent(recipeId)}` : ""
+      }`,
+      { method: "POST" }
+    ),
+  /** 現在の確認段階を承認し、次の取込 stage を投入する。任意で抽出テキスト修正を伴う。 */
+  approveDocument: (id: string, payload?: DocumentApproveRequest) =>
+    request<IngestionJob>(
+      `/api/documents/${encodeURIComponent(id)}/approve`,
+      payload ? jsonBody(payload) : { method: "POST" }
+    ),
+  approveDocumentRecipe: (id: string, recipeId: string, payload?: DocumentApproveRequest) =>
+    request<IngestionJob>(
+      `/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(
+        recipeId
+      )}/approve`,
+      payload ? jsonBody(payload) : { method: "POST" }
+    ),
+  /** REVIEW 中の構造化要素修正を保存する。Chunk job は開始しない。 */
+  saveDocumentReviewEdits: (id: string, payload: DocumentReviewEditsRequest) =>
+    request<DocumentDetail>(`/api/documents/${encodeURIComponent(id)}/review-edits`, {
+      ...jsonBody(payload),
+      method: "PATCH",
+    }),
+  saveDocumentRecipeReviewEdits: (
+    id: string,
+    recipeId: string,
+    payload: DocumentReviewEditsRequest
+  ) =>
+    request<DocumentRecipeView>(
+      `/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(
+        recipeId
+      )}/review-edits`,
+      { ...jsonBody(payload), method: "PATCH" }
+    ),
+  /** REVIEW(確認待ち)文書を却下し、UPLOADED へ戻す。 */
+  rejectDocument: (id: string) =>
+    request<DocumentDetail>(`/api/documents/${encodeURIComponent(id)}/reject`, {
+      method: "POST",
+    }),
+  listIngestionJobs: (params: {
+    status?: IngestionJobStatus;
+    limit?: number;
+    offset?: number;
+  } = {}) => {
+    const search = new URLSearchParams();
+    if (params.status) search.set("status", params.status);
+    if (params.limit != null) search.set("limit", String(params.limit));
+    if (params.offset != null) search.set("offset", String(params.offset));
+    const qs = search.toString();
+    return requestDegradable<Page<IngestionJob>>(
+      `/api/documents/ingestion-jobs${qs ? `?${qs}` : ""}`
+    );
+  },
+  getIngestionJob: (id: string) =>
+    request<IngestionJob>(`/api/documents/ingestion-jobs/${encodeURIComponent(id)}`),
+  drainIngestionJobs: (limit = 50) =>
+    request<IngestionJob[]>(`/api/documents/ingestion-jobs/drain?limit=${limit}`, {
+      method: "POST",
+    }),
+  retryIngestionJob: (id: string, force = false) =>
+    request<IngestionJob>(
+      `/api/documents/ingestion-jobs/${encodeURIComponent(id)}/retry${force ? "?force=true" : ""}`,
+      { method: "POST" }
+    ),
+  cancelIngestionJob: (id: string) =>
+    request<IngestionJob>(`/api/documents/ingestion-jobs/${encodeURIComponent(id)}/cancel`, {
+      method: "POST",
+    }),
+  /** 原本/処理後ファイルの配信 URL（プレビュー/ダウンロード用）。 */
+  documentContentUrl: (
+    id: string,
+    options: {
+      variant?: "original" | "prepared";
+      disposition?: "inline" | "attachment";
+    } = {}
+  ) => {
+    const search = new URLSearchParams();
+    if (options.variant) search.set("variant", options.variant);
+    if (options.disposition) search.set("disposition", options.disposition);
+    const qs = search.toString();
+    return `/api/documents/${encodeURIComponent(id)}/content${qs ? `?${qs}` : ""}`;
+  },
+  documentRecipeContentUrl: (
+    id: string,
+    recipeId: string,
+    options: {
+      variant?: "original" | "prepared";
+      disposition?: "inline" | "attachment";
+    } = {}
+  ) => {
+    const search = new URLSearchParams();
+    if (options.variant) search.set("variant", options.variant);
+    if (options.disposition) search.set("disposition", options.disposition);
+    const qs = search.toString();
+    return `/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(
+      recipeId
+    )}/content${qs ? `?${qs}` : ""}`;
+  },
+
+  // ナレッジベース
+  listKnowledgeBases: (params: {
+    status?: KnowledgeBaseStatus;
+    q?: string;
+    limit?: number;
+    offset?: number;
+  } = {}) => {
+    const search = new URLSearchParams();
+    if (params.status) search.set("status", params.status);
+    if (params.q) search.set("q", params.q);
+    if (params.limit != null) search.set("limit", String(params.limit));
+    if (params.offset != null) search.set("offset", String(params.offset));
+    const qs = search.toString();
+    return requestDegradable<Page<KnowledgeBaseSummary>>(
+      `/api/knowledge-bases${qs ? `?${qs}` : ""}`
+    );
+  },
+  getKnowledgeBase: (id: string) =>
+    request<KnowledgeBaseDetail>(`/api/knowledge-bases/${encodeURIComponent(id)}`),
+  getKnowledgeBaseGraph: (id: string, limit = 80) =>
+    request<KnowledgeBaseGraphData>(
+      `/api/knowledge-bases/${encodeURIComponent(id)}/graph?limit=${limit}`
+    ),
+  createKnowledgeBase: (body: KnowledgeBaseCreateRequest) =>
+    request<KnowledgeBaseDetail>("/api/knowledge-bases", jsonBody(body)),
+  updateKnowledgeBase: (id: string, body: KnowledgeBaseUpdateRequest) =>
+    request<KnowledgeBaseDetail>(`/api/knowledge-bases/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  archiveKnowledgeBase: (id: string) =>
+    request<KnowledgeBaseDetail>(`/api/knowledge-bases/${encodeURIComponent(id)}/archive`, {
+      method: "POST",
+    }),
+  assignDocumentsToKnowledgeBase: (
+    id: string,
+    body: KnowledgeBaseDocumentAssignmentRequest
+  ) =>
+    request<KnowledgeBaseDetail>(
+      `/api/knowledge-bases/${encodeURIComponent(id)}/documents`,
+      jsonBody(body)
+    ),
+  removeDocumentFromKnowledgeBase: (knowledgeBaseId: string, documentId: string) =>
+    request<KnowledgeBaseDetail>(
+      `/api/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}/documents/${encodeURIComponent(
+        documentId
+      )}`,
+      { method: "DELETE" }
+    ),
+
+  // 業務ビュー(Business View)
+  listBusinessViews: (params: {
+    status?: BusinessViewStatus;
+    q?: string;
+    limit?: number;
+    offset?: number;
+  } = {}) => {
+    const search = new URLSearchParams();
+    if (params.status) search.set("status", params.status);
+    if (params.q) search.set("q", params.q);
+    if (params.limit != null) search.set("limit", String(params.limit));
+    if (params.offset != null) search.set("offset", String(params.offset));
+    const qs = search.toString();
+    return requestDegradable<Page<BusinessViewSummary>>(
+      `/api/business-views${qs ? `?${qs}` : ""}`
+    );
+  },
+  getBusinessView: (id: string) =>
+    request<BusinessViewDetail>(`/api/business-views/${encodeURIComponent(id)}`),
+  createBusinessView: (body: BusinessViewCreateRequest) =>
+    request<BusinessViewDetail>("/api/business-views", jsonBody(body)),
+  updateBusinessView: (id: string, body: BusinessViewUpdateRequest) =>
+    request<BusinessViewDetail>(`/api/business-views/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  archiveBusinessView: (id: string) =>
+    request<BusinessViewDetail>(`/api/business-views/${encodeURIComponent(id)}/archive`, {
+      method: "POST",
+    }),
+  getDomainKeywords: (id: string) =>
+    request<DomainKeywordsData>(
+      `/api/business-views/${encodeURIComponent(id)}/domain-keywords`
+    ),
+  saveDomainKeywords: (id: string, keywords: string[]) =>
+    request<DomainKeywordsData>(`/api/business-views/${encodeURIComponent(id)}/domain-keywords`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ keywords }),
+    }),
+  getApprovedFaq: (id: string) =>
+    request<ApprovedFaqListData>(`/api/business-views/${encodeURIComponent(id)}/approved-faq`),
+  addApprovedFaq: (id: string, body: { question: string; answer: string }) =>
+    request<ApprovedFaqMutationData>(
+      `/api/business-views/${encodeURIComponent(id)}/approved-faq`,
+      jsonBody(body)
+    ),
+  deleteApprovedFaq: (id: string, ids: string[]) =>
+    request<ApprovedFaqMutationData>(
+      `/api/business-views/${encodeURIComponent(id)}/approved-faq/delete`,
+      jsonBody({ ids })
+    ),
+  previewApprovedFaqImport: (id: string, file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return request<ApprovedFaqImportPreviewData>(
+      `/api/business-views/${encodeURIComponent(id)}/approved-faq/import/preview`,
+      { method: "POST", body: form }
+    );
+  },
+  importApprovedFaq: (id: string, file: File, mode: ApprovedFaqImportMode) => {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("mode", mode);
+    return request<ApprovedFaqMutationData>(
+      `/api/business-views/${encodeURIComponent(id)}/approved-faq/import`,
+      { method: "POST", body: form }
+    );
+  },
+  suggestApprovedFaq: (id: string, query: string) =>
+    request<ApprovedFaqSuggestionsData>(
+      `/api/business-views/${encodeURIComponent(id)}/approved-faq/suggest`,
+      jsonBody({ query })
+    ),
+  listDocragAnswers: (businessViewId: string, limit = 50) =>
+    request<DocragAnswerSummary[]>(
+      `/api/search/answers?${new URLSearchParams({
+        business_view_id: businessViewId,
+        limit: String(limit),
+      }).toString()}`
+    ),
+  getDocragAnswer: (traceId: string) =>
+    request<DocragAnswerDetail>(`/api/search/answers/${encodeURIComponent(traceId)}`),
+  deleteDocragAnswer: (traceId: string) =>
+    request<{ trace_id: string }>(`/api/search/answers/${encodeURIComponent(traceId)}`, {
+      method: "DELETE",
+    }),
+  getRuntimeKnowledge: (id: string) =>
+    request<RuntimeKnowledgeData>(
+      `/api/business-views/${encodeURIComponent(id)}/runtime-knowledge`
+    ),
+  editRuntimeKnowledge: (id: string, body: RuntimeKnowledgeEditRequest) =>
+    request<RuntimeKnowledgeData>(
+      `/api/business-views/${encodeURIComponent(id)}/runtime-knowledge/edit`,
+      jsonBody(body)
+    ),
+  previewRuntimeKnowledge: (id: string, question: string) =>
+    request<RuntimeKnowledgePreviewData>(
+      `/api/business-views/${encodeURIComponent(id)}/runtime-knowledge/preview`,
+      jsonBody({ question })
+    ),
+  suggestDomainKeywords: (id: string) =>
+    request<DomainKeywordSuggestionData>(
+      `/api/business-views/${encodeURIComponent(id)}/domain-keywords/suggest`,
+      { method: "POST" }
+    ),
+
+  // チャット（会話 / マルチモデル比較）
+  listConversations: (params: { business_view_id?: string; limit?: number; offset?: number } = {}) => {
+    const search = new URLSearchParams();
+    if (params.business_view_id) search.set("business_view_id", params.business_view_id);
+    if (params.limit != null) search.set("limit", String(params.limit));
+    if (params.offset != null) search.set("offset", String(params.offset));
+    const qs = search.toString();
+    return requestDegradable<Page<ConversationSummary>>(
+      `/api/chat/conversations${qs ? `?${qs}` : ""}`
+    );
+  },
+  createConversation: (body: ConversationCreateBody) =>
+    request<ConversationDetail>("/api/chat/conversations", jsonBody(body)),
+  getConversation: (id: string) =>
+    request<ConversationDetail>(`/api/chat/conversations/${encodeURIComponent(id)}`),
+  updateConversation: (id: string, body: ConversationUpdateBody) =>
+    request<ConversationSummary>(`/api/chat/conversations/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  archiveConversation: (id: string) =>
+    request<ConversationSummary>(`/api/chat/conversations/${encodeURIComponent(id)}/archive`, {
+      method: "POST",
+    }),
+  listCompareModels: () => request<CompareModel[]>("/api/chat/models"),
+
+  // 検索
+  search: (body: SearchRequestBody) => request<SearchResponse>("/api/search", jsonBody(body)),
+  submitCitationFeedback: (body: CitationFeedbackRequestBody) =>
+    request<CitationFeedbackResponse>("/api/search/citation-feedback", jsonBody(body)),
+  submitFeedback: (body: FeedbackRequestBody) =>
+    request<FeedbackSubmissionResponse>("/api/feedback", jsonBody(body)),
+  getCurrentFeedback: (traceId: string) => {
+    const search = new URLSearchParams({ trace_id: traceId });
+    return request<CurrentFeedbackItem[]>(`/api/feedback/current?${search.toString()}`);
+  },
+  listFeedback: (params: FeedbackListParams = {}) => {
+    const search = new URLSearchParams();
+    if (params.business_view_id) search.set("business_view_id", params.business_view_id);
+    if (params.target_type) search.set("target_type", params.target_type);
+    if (params.rating) search.set("rating", params.rating);
+    if (params.reason) search.set("reason", params.reason);
+    if (params.period_days != null) search.set("period_days", String(params.period_days));
+    if (params.q) search.set("q", params.q);
+    if (params.sort_order) search.set("sort_order", params.sort_order);
+    if (params.limit != null) search.set("limit", String(params.limit));
+    if (params.offset != null) search.set("offset", String(params.offset));
+    const qs = search.toString();
+    return request<FeedbackDashboard>(`/api/feedback${qs ? `?${qs}` : ""}`);
+  },
+  getFeedbackDetail: (id: string) =>
+    request<FeedbackDetail>(`/api/feedback/${encodeURIComponent(id)}`),
+
+  // 評価
+  runEvaluation: (body: EvaluationRunRequestBody) =>
+    request<EvaluationMetrics>("/api/evaluation/run", jsonBody(body)),
+  compareEvaluation: (body: EvaluationCompareRequestBody) =>
+    request<EvaluationCompareResponse>("/api/evaluation/compare", jsonBody(body)),
+
+  // 設定: モデル
+  getModelSettings: () => request<ModelSettingsData>("/api/settings/model"),
+  updateModelSettings: (body: ModelSettingsPayload) =>
+    request<ModelSettingsData>("/api/settings/model", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  checkModelSettings: (body: ModelSettingsPayload) =>
+    request<ModelSettingsData>("/api/settings/model/check", jsonBody(body)),
+  testModelSettings: (body: ModelSettingsTestRequest) =>
+    request<ModelSettingsTestResult>("/api/settings/model/test", jsonBody(body)),
+
+  // 設定: データベース
+  getDatabaseSettings: () => request<DatabaseSettingsData>("/api/settings/database"),
+  updateDatabaseSettings: (body: DatabaseSettingsUpdate) =>
+    request<DatabaseSettingsData>("/api/settings/database", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  uploadDatabaseWallet: (file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return request<DatabaseSettingsData>("/api/settings/database/wallet", {
+      method: "POST",
+      body: form,
+    });
+  },
+  testDatabaseSettings: (body: DatabaseSettingsUpdate) =>
+    request<DatabaseConnectionTestResult>("/api/settings/database/test", jsonBody(body)),
+  getSystemTablesStatus: () =>
+    request<SystemTablesStatusData>("/api/settings/database/system-tables"),
+  initializeSystemTables: (body: SystemTablesInitializeRequest) =>
+    request<SystemTablesOperationData>(
+      "/api/settings/database/system-tables/initialize",
+      jsonBody(body)
+    ),
+
+  // 設定: Autonomous Database 管理
+  getAdbInfo: () => request<AdbInfoData>("/api/settings/database/adb"),
+  updateAdbSettings: (body: AdbSettingsUpdate) =>
+    request<AdbInfoData>("/api/settings/database/adb/settings", jsonBody(body)),
+  startAdb: () => request<AdbInfoData>("/api/settings/database/adb/start", { method: "POST" }),
+  stopAdb: () => request<AdbInfoData>("/api/settings/database/adb/stop", { method: "POST" }),
+
+  // 設定: HuggingFace モデルダウンロード
+  getHuggingFaceSettings: () =>
+    request<HuggingFaceSettingsData>("/api/settings/huggingface"),
+  updateHuggingFaceSettings: (body: HuggingFaceSettingsUpdate) =>
+    request<HuggingFaceSettingsData>("/api/settings/huggingface", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+
+  // 設定: アップロード保存先
+  getUploadStorageSettings: () =>
+    request<UploadStorageSettingsData>("/api/settings/upload-storage"),
+  updateUploadStorageSettings: (body: UploadStorageSettingsUpdate) =>
+    request<UploadStorageSettingsData>("/api/settings/upload-storage", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  getParserAdapterSettings: () =>
+    request<ParserAdapterSettingsData>("/api/settings/parser-adapters"),
+  getParserAdapterContract: () =>
+    request<ParserAdapterContractData>("/api/settings/parser-adapters/contract"),
+  getExternalParserStatus: (backend: ExternalParserBackendName) =>
+    request<ExternalParserConnectionStatusData>(
+      `/api/settings/parser-adapters/${encodeURIComponent(backend)}/status`
+    ),
+  updateParserAdapterSettings: (body: ParserAdapterSettingsUpdate) =>
+    request<ParserAdapterSettingsData>("/api/settings/parser-adapters", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+
+  // サービス管理: 前処理 / Parser マイクロサービスの稼働可視化・起動/停止
+  getServiceCatalog: () => request<ServiceCatalogData>("/api/services/catalog"),
+  getServiceStatus: (serviceId: string) =>
+    request<ServiceStatusData>(`/api/services/${encodeURIComponent(serviceId)}/status`),
+  getServiceLogs: (serviceId: string, lines = 200) =>
+    request<ServiceLogsData>(
+      `/api/services/${encodeURIComponent(serviceId)}/logs?lines=${encodeURIComponent(String(lines))}`
+    ),
+  getServices: () => request<ServiceListData>("/api/services"),
+  controlService: (serviceId: string, action: ServiceAction) =>
+    request<ServiceControlResultData>(
+      `/api/services/${encodeURIComponent(serviceId)}/${action}`,
+      { method: "POST" }
+    ),
+
+  // 設定: Chunking アダプター
+  getPreprocessSettings: () => request<PreprocessSettingsData>("/api/settings/preprocess"),
+  updatePreprocessSettings: (body: PreprocessSettingsUpdate) =>
+    request<PreprocessSettingsData>("/api/settings/preprocess", {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+  getChunkingSettings: () => request<ChunkingSettingsData>("/api/settings/chunking"),
+  updateChunkingSettings: (body: ChunkingSettingsUpdate) =>
+    request<ChunkingSettingsData>("/api/settings/chunking", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+
+  // 設定: Retrieval アダプター
+  getRetrievalSettings: () => request<RetrievalSettingsData>("/api/settings/retrieval"),
+  updateRetrievalSettings: (body: RetrievalSettingsUpdate) =>
+    request<RetrievalSettingsData>("/api/settings/retrieval", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+
+  // 設定: Grounding アダプター
+  getGroundingSettings: () => request<GroundingSettingsData>("/api/settings/grounding"),
+  updateGroundingSettings: (body: GroundingSettingsUpdate) =>
+    request<GroundingSettingsData>("/api/settings/grounding", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+
+  // 設定: Generation アダプター
+  getGenerationSettings: () => request<GenerationSettingsData>("/api/settings/generation"),
+  getAnswerRecordSettings: () =>
+    request<AnswerRecordSettingsData>("/api/settings/answer-records"),
+  updateAnswerRecordSettings: (body: { retention_days: number }) =>
+    request<AnswerRecordSettingsData>("/api/settings/answer-records", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  updateGenerationSettings: (body: GenerationSettingsUpdate) =>
+    request<GenerationSettingsData>("/api/settings/generation", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+
+  // 設定: 回答プロンプト版
+  getPromptVersions: () => request<PromptVersionsData>("/api/settings/prompts"),
+  createPromptVersion: (body: PromptVersionCreate) =>
+    request<PromptVersionsData>("/api/settings/prompts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  activatePromptVersion: (versionId: string) =>
+    request<PromptVersionsData>(
+      `/api/settings/prompts/${encodeURIComponent(versionId)}/activate`,
+      { method: "POST" }
+    ),
+
+  // 設定: Guardrail アダプター
+  getExtractionFieldsSettings: () =>
+    request<ExtractionFieldsSettingsData>("/api/settings/extraction-fields"),
+  getGuardrailSettings: () => request<GuardrailSettingsData>("/api/settings/guardrail"),
+  updateGuardrailSettings: (body: GuardrailSettingsUpdate) =>
+    request<GuardrailSettingsData>("/api/settings/guardrail", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+
+  // 設定: Vector Index アダプター
+  getVectorIndexSettings: () => request<VectorIndexSettingsData>("/api/settings/vector-index"),
+  updateVectorIndexSettings: (body: VectorIndexSettingsUpdate) =>
+    request<VectorIndexSettingsData>("/api/settings/vector-index", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+
+  // 設定: Evaluation アダプター
+  getEvaluationSettings: () => request<EvaluationSettingsData>("/api/settings/evaluation-suite"),
+  updateEvaluationSettings: (body: EvaluationSettingsUpdate) =>
+    request<EvaluationSettingsData>("/api/settings/evaluation-suite", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+
+  // 設定: GraphRAG アダプター
+  getGraphSettings: () => request<GraphSettingsData>("/api/settings/graph"),
+  updateGraphSettings: (body: GraphSettingsUpdate) =>
+    request<GraphSettingsData>("/api/settings/graph", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+
+  // 設定: Agentic アダプター
+  getAgenticSettings: () => request<AgenticSettingsData>("/api/settings/agentic"),
+  updateAgenticSettings: (body: AgenticSettingsUpdate) =>
+    request<AgenticSettingsData>("/api/settings/agentic", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+
+  // 設定: OCI config
+  getOciSettings: () => request<OciSettingsData>("/api/settings/oci"),
+  updateOciSettings: (body: OciSettingsUpdate) =>
+    request<OciSettingsData>("/api/settings/oci", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  updateOciObjectStorageSettings: (body: OciObjectStorageSettingsUpdate) =>
+    request<UploadStorageSettingsData>("/api/settings/oci/object-storage", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  readOciConfig: (body: OciConfigReadRequest) =>
+    request<OciConfigReadData>("/api/settings/oci/config/read", jsonBody(body)),
+  testOciConfig: () =>
+    request<OciConfigTestResult>("/api/settings/oci/config/test", { method: "POST" }),
+  readOciObjectStorageNamespace: (body: OciObjectStorageNamespaceRequest) =>
+    request<OciObjectStorageNamespaceData>(
+      "/api/settings/oci/object-storage/namespace",
+      jsonBody(body)
+    ),
+  uploadOciPrivateKey: (file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return request<OciPrivateKeyUploadData>("/api/settings/oci/key-file", {
+      method: "POST",
+      body: form,
+    });
+  },
+};
+
+// --- 業務ビューの知識: ドメインキーワード(rag_poc DocRAG 由来) ---
+export interface DomainKeywordsData {
+  business_view_id: string;
+  keywords: string[];
+}
+
+export interface DomainKeywordCandidateData {
+  keyword: string;
+  score: number;
+  frequency: number;
+  chunk_count: number;
+  document_count: number;
+}
+
+export interface DomainKeywordSuggestionData {
+  candidates: DomainKeywordCandidateData[];
+  processed_chunk_count: number;
+}
+
+// --- 業務ビューの知識: Approved FAQ(類似問) ---
+export type ApprovedFaqImportMode = "INSERT" | "DELETE_THEN_INSERT";
+
+export interface ApprovedFaqRecordData {
+  id: string;
+  question: string;
+  answer: string;
+  alternate_questions: string[];
+  status: string;
+}
+
+export interface ApprovedFaqListData {
+  business_view_id: string;
+  records: ApprovedFaqRecordData[];
+}
+
+export interface ApprovedFaqMutationData extends ApprovedFaqListData {
+  inserted_count: number;
+  deleted_count: number;
+}
+
+export interface ApprovedFaqImportPreviewData {
+  total: number;
+  rows: { question: string; answer: string; row: number }[];
+}
+
+export interface ApprovedFaqSuggestionData {
+  id: string;
+  question: string;
+  matched_question: string;
+  answer: string;
+  score: number;
+  direct: boolean;
+}
+
+export interface ApprovedFaqSuggestionsData {
+  suggestions: ApprovedFaqSuggestionData[];
+}
+
+// --- 業務ビューの知識: 用語・ルール(runtime knowledge) ---
+export type RuntimeKnowledgeKind = "terms" | "rules";
+
+export interface RuntimeKnowledgeData {
+  business_view_id: string;
+  terms: Record<string, JsonValue>[];
+  rules: Record<string, JsonValue>[];
+}
+
+export interface RuntimeKnowledgeEditRequest {
+  kind: RuntimeKnowledgeKind;
+  selected?: string | null;
+  name?: string;
+  title?: string;
+  labels?: string;
+  content?: string;
+  source?: string;
+  enabled?: boolean;
+  delete?: boolean;
+}
+
+export interface RuntimeKnowledgePreviewData {
+  expanded_question: string;
+  matched_terms: string[];
+  matched_rules: string[];
+}
+
+// --- 保存済み DocRAG 回答(rag_poc の answer JSON 相当) ---
+export interface DocragAnswerSummary {
+  trace_id: string;
+  business_view_id: string | null;
+  surface: "search" | "chat";
+  answer_engine: string;
+  question: string;
+  rewritten_question: string | null;
+  confidence: string | null;
+  created_at: string;
+}
+
+export interface DocragAnswerDetail extends DocragAnswerSummary {
+  answer: string;
+  citations: RetrievedChunk[];
+  docrag: Record<string, JsonValue>;
+}

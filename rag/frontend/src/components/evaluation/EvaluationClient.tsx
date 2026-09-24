@@ -1,0 +1,944 @@
+import {
+  PageBody,
+  PageHeader,
+  Banner,
+  Button,
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+  SelectField,
+  type SelectFieldOption,
+} from "@engchina/production-ready-ui";
+import {
+  AlertTriangle,
+  BarChart3,
+  CheckCircle2,
+  ClipboardCheck,
+  FileSearch,
+  FlaskConical,
+  GitCompare,
+  Settings2,
+  XCircle,
+} from "lucide-react";
+import { type FormEvent, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
+
+import { EmptyState } from "@/components/StateViews";
+import { KnowledgeBaseScopePicker } from "@/components/knowledge-bases/KnowledgeBaseScopePicker";
+import {
+  ApiError,
+  type EvaluationCompareResponse,
+  type EvaluationExperiment,
+  type EvaluationMetricName,
+  type EvaluationMetrics,
+  type EvaluationRunRequestBody,
+  type EvaluationSuiteName,
+  type EvaluationSuiteStatusData,
+} from "@/lib/api";
+import { t, type I18nKey } from "@/lib/i18n";
+import { useCompareEvaluation, useEvaluationSettings, useRunEvaluation } from "@/lib/queries";
+import { APP_ROUTES } from "@/lib/routes";
+import { qualityCodeLabel } from "@/lib/source-profile-labels";
+import { cn } from "@/lib/utils";
+
+/** suite セレクタの「設定の既定に従う」を表す擬似値(suite を送らない)。 */
+const DEFAULT_SUITE_VALUE = "__default__" as const;
+type SuiteSelection = EvaluationSuiteName | typeof DEFAULT_SUITE_VALUE;
+
+const SUITE_ORDER: EvaluationSuiteName[] = [
+  "request_only",
+  "retrieval_focused",
+  "balanced",
+  "strict_ci",
+  "ragas_like",
+];
+
+const SAMPLE_REQUEST = JSON.stringify(
+  {
+    cases: [
+      {
+        id: "policy-approval-flow-basic",
+        query: "経費申請の承認フローを教えてください。",
+        relevant_document_ids: ["doc-expense-policy"],
+        expected_answer_keywords: ["部門長", "承認"],
+        expected_content_kind: "text",
+        expected_section_paths: ["経費申請 > 承認フロー"],
+      },
+    ],
+    top_k: 10,
+    rerank_top_n: 5,
+    mode: "hybrid",
+    filters: { status: "INDEXED" },
+  },
+  null,
+  2
+);
+
+const SAMPLE_EXPERIMENTS = JSON.stringify(
+  [
+    {
+      id: "hybrid-k10",
+      top_k: 10,
+      rerank_top_n: 5,
+      mode: "hybrid",
+      filters: { status: "INDEXED" },
+    },
+    {
+      id: "keyword-k10",
+      top_k: 10,
+      rerank_top_n: 5,
+      mode: "keyword",
+      filters: { status: "INDEXED" },
+    },
+  ],
+  null,
+  2
+);
+
+const RANKING_METRICS: EvaluationMetricName[] = [
+  "mrr",
+  "recall_at_k",
+  "precision_at_k",
+  "answer_keyword_hit_rate",
+  "groundedness_pass_rate",
+  "citation_traceability_coverage",
+  "bbox_citation_coverage",
+  "element_lineage_coverage",
+  "content_kind_hit_rate",
+  "section_coverage",
+  "faithfulness",
+  "context_precision",
+  "context_recall",
+  "response_relevancy",
+  "noise_sensitivity",
+];
+const RANKING_METRIC_OPTIONS = RANKING_METRICS.map((metric) => ({
+  value: metric,
+  label: metricLabel(metric),
+})) satisfies SelectFieldOption<EvaluationMetricName>[];
+
+/** RAG golden set 評価画面。 */
+export function EvaluationClient() {
+  const runMutation = useRunEvaluation();
+  const compareMutation = useCompareEvaluation();
+  const settingsQuery = useEvaluationSettings();
+  const [requestJson, setRequestJson] = useState(SAMPLE_REQUEST);
+  const [experimentsJson, setExperimentsJson] = useState(SAMPLE_EXPERIMENTS);
+  const [rankingMetric, setRankingMetric] = useState<EvaluationMetricName>("mrr");
+  const [knowledgeBaseIds, setKnowledgeBaseIds] = useState<string[]>([]);
+  const [suite, setSuite] = useState<SuiteSelection>(DEFAULT_SUITE_VALUE);
+  const [runError, setRunError] = useState("");
+  const [compareError, setCompareError] = useState("");
+
+  const parsedRequest = useMemo(() => parseEvaluationRequest(requestJson), [requestJson]);
+  const parsedExperiments = useMemo(() => parseExperiments(experimentsJson), [experimentsJson]);
+  const canRun = parsedRequest.ok;
+  const canCompare = parsedRequest.ok && parsedExperiments.ok;
+
+  const globalSuite = settingsQuery.data?.suite ?? null;
+  const suiteStatuses = settingsQuery.data?.suites ?? [];
+  const effectiveSuiteName: EvaluationSuiteName | null =
+    suite === DEFAULT_SUITE_VALUE ? globalSuite : suite;
+  const requestHasThresholds = parsedRequest.ok && hasThresholds(parsedRequest.value.thresholds);
+
+  const runEvaluation = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!parsedRequest.ok) return;
+    setRunError("");
+    runMutation.reset();
+    try {
+      const body = applyRequestKnowledgeBaseScope(parsedRequest.value, knowledgeBaseIds);
+      await runMutation.mutateAsync(
+        suite === DEFAULT_SUITE_VALUE ? body : { ...body, suite }
+      );
+    } catch (error) {
+      setRunError(error instanceof ApiError ? error.message : t("evaluation.error.run"));
+    }
+  };
+
+  const compareEvaluation = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!parsedRequest.ok || !parsedExperiments.ok) return;
+    setCompareError("");
+    compareMutation.reset();
+    try {
+      await compareMutation.mutateAsync({
+        cases: parsedRequest.value.cases,
+        thresholds: parsedRequest.value.thresholds ?? null,
+        experiments: applyExperimentKnowledgeBaseScope(parsedExperiments.value, knowledgeBaseIds),
+        ranking_metric: rankingMetric,
+        ...(suite === DEFAULT_SUITE_VALUE ? {} : { suite }),
+      });
+    } catch (error) {
+      setCompareError(error instanceof ApiError ? error.message : t("evaluation.error.compare"));
+    }
+  };
+
+  const validationMessage = !parsedRequest.ok ? parsedRequest.error : "";
+  const experimentValidationMessage = !parsedExperiments.ok ? parsedExperiments.error : "";
+
+  return (
+    <div>
+      <PageHeader wide title={t("nav.evaluation")} subtitle={t("evaluation.subtitle")} />
+      <PageBody wide>
+        <Card className="min-w-0">
+          <CardContent className="pt-5">
+            <KnowledgeBaseScopePicker
+              selectedIds={knowledgeBaseIds}
+              onChange={setKnowledgeBaseIds}
+              disabled={runMutation.isPending || compareMutation.isPending}
+              helper={t("evaluation.knowledgeBaseScope.helper")}
+            />
+          </CardContent>
+        </Card>
+
+        <SuiteSelector
+          suite={suite}
+          onChange={setSuite}
+          globalSuite={globalSuite}
+          effectiveSuiteName={effectiveSuiteName}
+          suiteStatuses={suiteStatuses}
+          requestHasThresholds={requestHasThresholds}
+          requestThresholds={parsedRequest.ok ? (parsedRequest.value.thresholds ?? null) : null}
+        />
+
+        <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_420px]">
+          <Card className="min-w-0">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <FlaskConical size={16} className="text-accent-fg" aria-hidden />
+                {t("evaluation.input.title")}
+              </CardTitle>
+              <CardDescription>{t("evaluation.input.description")}</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <form className="space-y-4" onSubmit={(event) => void runEvaluation(event)}>
+                <JsonField
+                  id="evaluation-request-json"
+                  label={t("evaluation.input.label")}
+                  value={requestJson}
+                  rows={18}
+                  placeholder={t("evaluation.input.placeholder")}
+                  onChange={setRequestJson}
+                />
+                {validationMessage ? <ValidationNotice message={validationMessage} /> : null}
+                {runError ? <ErrorNotice message={runError} /> : null}
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button type="submit" loading={runMutation.isPending} disabled={!canRun} icon={BarChart3}>
+                    {t("evaluation.actions.run")}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onClick={() => {
+                      setRequestJson(SAMPLE_REQUEST);
+                      setRunError("");
+                    }}
+                  >
+                    {t("evaluation.actions.loadSample")}
+                  </Button>
+                </div>
+              </form>
+            </CardContent>
+          </Card>
+
+          <Card className="min-w-0">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <GitCompare size={16} className="text-accent-fg" aria-hidden />
+                {t("evaluation.compare.title")}
+              </CardTitle>
+              <CardDescription>{t("evaluation.compare.description")}</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <form className="space-y-4" onSubmit={(event) => void compareEvaluation(event)}>
+                <SelectField
+                  id="evaluation-ranking-metric"
+                  label={t("evaluation.compare.metric")}
+                  value={rankingMetric}
+                  options={RANKING_METRIC_OPTIONS}
+                  onValueChange={setRankingMetric}
+                />
+                <JsonField
+                  id="evaluation-experiments-json"
+                  label={t("evaluation.compare.experiments")}
+                  value={experimentsJson}
+                  rows={13}
+                  placeholder={t("evaluation.compare.placeholder")}
+                  onChange={setExperimentsJson}
+                />
+                {experimentValidationMessage ? (
+                  <ValidationNotice message={experimentValidationMessage} />
+                ) : null}
+                {compareError ? <ErrorNotice message={compareError} /> : null}
+                <Button
+                  type="submit"
+                  className="w-full"
+                  loading={compareMutation.isPending}
+                  disabled={!canCompare} icon={GitCompare}>
+                  {t("evaluation.actions.compare")}
+                </Button>
+              </form>
+            </CardContent>
+          </Card>
+        </div>
+
+        {runMutation.data ? (
+          <EvaluationResult metrics={runMutation.data} />
+        ) : (
+          <Card>
+            <CardContent className="pt-5">
+              <EmptyState
+                title={t("evaluation.result.empty")}
+                hint={t("evaluation.result.emptyHint")}
+              />
+            </CardContent>
+          </Card>
+        )}
+
+        {compareMutation.data ? <CompareResult comparison={compareMutation.data} /> : null}
+      </PageBody>
+    </div>
+  );
+}
+
+function SuiteSelector({
+  suite,
+  onChange,
+  globalSuite,
+  effectiveSuiteName,
+  suiteStatuses,
+  requestHasThresholds,
+  requestThresholds,
+}: {
+  suite: SuiteSelection;
+  onChange: (value: SuiteSelection) => void;
+  globalSuite: EvaluationSuiteName | null;
+  effectiveSuiteName: EvaluationSuiteName | null;
+  suiteStatuses: EvaluationSuiteStatusData[];
+  requestHasThresholds: boolean;
+  requestThresholds: EvaluationRunRequestBody["thresholds"];
+}) {
+  const defaultLabel = globalSuite
+    ? t("evaluation.suite.followDefaultWith", { suite: suiteLabel(globalSuite) })
+    : t("evaluation.suite.followDefault");
+  const options: SelectFieldOption<SuiteSelection>[] = [
+    { value: DEFAULT_SUITE_VALUE, label: defaultLabel },
+    ...SUITE_ORDER.map((name) => ({ value: name, label: suiteLabel(name) })),
+  ];
+  const effectiveStatus = effectiveSuiteName
+    ? (suiteStatuses.find((item) => item.name === effectiveSuiteName) ?? null)
+    : null;
+  // request JSON に thresholds があるときは backend が request 側を優先するため、
+  // プレビューも実際に適用される request の値を表示する(スイート既定値ではなく)。
+  const thresholdEntries = requestHasThresholds
+    ? Object.entries(requestThresholds ?? {}).filter(
+        (entry): entry is [string, number] => typeof entry[1] === "number"
+      )
+    : Object.entries(effectiveStatus?.thresholds ?? {});
+
+  return (
+    <Card className="min-w-0">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <ClipboardCheck size={16} className="text-accent-fg" aria-hidden />
+          {t("evaluation.suite.title")}
+        </CardTitle>
+        <CardDescription>{t("evaluation.suite.description")}</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <SelectField
+          id="evaluation-suite"
+          label={t("evaluation.suite.label")}
+          value={suite}
+          options={options}
+          onValueChange={onChange}
+        />
+        <div className="rounded-md border border-border bg-surface-hover p-3">
+          <p className="text-xs font-medium text-fg-muted">
+            {requestHasThresholds
+              ? t("evaluation.suite.thresholdsPreviewOverride")
+              : t("evaluation.suite.thresholdsPreview")}
+          </p>
+          {thresholdEntries.length ? (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {thresholdEntries.map(([metric, value]) => (
+                <span
+                  key={metric}
+                  className="inline-flex min-h-6 items-center rounded-md bg-surface px-2 text-xs font-medium text-fg ring-1 ring-border"
+                >
+                  {metricLabel(metric as EvaluationMetricName)}
+                  <span className="tnum ml-1 font-semibold text-accent-fg">{value}</span>
+                </span>
+              ))}
+            </div>
+          ) : (
+            <p className="mt-2 text-sm text-fg">{t("evaluation.suite.noThresholds")}</p>
+          )}
+        </div>
+        {requestHasThresholds ? (
+          <Banner severity="info">{t("evaluation.suite.manualOverrideNote")}</Banner>
+        ) : null}
+        <Link
+          to={APP_ROUTES.settingsEvaluation}
+          className="inline-flex items-center gap-1.5 text-sm font-medium text-accent-fg hover:underline"
+        >
+          <Settings2 size={14} aria-hidden />
+          {t("evaluation.suite.settingsLink")}
+        </Link>
+      </CardContent>
+    </Card>
+  );
+}
+
+function EvaluationResult({ metrics }: { metrics: EvaluationMetrics }) {
+  return (
+    <section className="min-w-0 space-y-4" aria-labelledby="evaluation-result-title">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 id="evaluation-result-title" className="text-base font-semibold text-fg">
+          {t("evaluation.result.title")}
+        </h2>
+        <div className="flex flex-wrap items-center gap-2">
+          {metrics.evaluation_suite ? (
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface-sunken px-2.5 py-1 text-xs font-medium text-fg-muted">
+              <ClipboardCheck size={14} aria-hidden />
+              {t("evaluation.suite.applied")}: {suiteLabel(metrics.evaluation_suite)}
+            </span>
+          ) : null}
+          <StatusBadge passed={metrics.passed} />
+        </div>
+      </div>
+      <MetricGrid metrics={metrics} />
+      <IngestionQualityPanel metrics={metrics} />
+
+      {metrics.threshold_failures.length ? (
+        <Banner severity="warning" title={t("evaluation.thresholdFailures")}>
+          <ul className="space-y-1">
+            {metrics.threshold_failures.map((failure) => (
+              <li key={failure.metric}>
+                {metricLabel(failure.metric)}: {formatPercent(failure.actual)} /{" "}
+                {formatPercent(failure.threshold)}
+              </li>
+            ))}
+          </ul>
+        </Banner>
+      ) : null}
+
+      {Object.keys(metrics.failure_reason_counts).length ? (
+        <div className="rounded-md border border-border bg-surface p-4 text-sm">
+          <p className="font-medium text-fg">{t("evaluation.failureReasons")}</p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {Object.entries(metrics.failure_reason_counts).map(([reason, count]) => (
+              <span
+                key={reason}
+                className="rounded-full border border-border bg-surface-sunken px-2.5 py-1 text-xs text-fg-muted"
+              >
+                {reason}: {count}
+              </span>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      <CaseTable metrics={metrics} />
+    </section>
+  );
+}
+
+function IngestionQualityPanel({ metrics }: { metrics: EvaluationMetrics }) {
+  const quality = metrics.ingestion_quality;
+  const warningEntries = Object.entries(quality.warning_counts);
+  const parserEntries = Object.entries(quality.parser_profile_counts);
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <FileSearch size={16} className="text-accent-fg" aria-hidden />
+          {t("evaluation.ingestionQuality.title")}
+        </CardTitle>
+        <CardDescription>{t("evaluation.ingestionQuality.description")}</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <QualityStat
+            label={t("evaluation.ingestionQuality.documents")}
+            value={quality.document_count}
+          />
+          <QualityStat
+            label={t("evaluation.ingestionQuality.tables")}
+            value={quality.table_document_count}
+          />
+          <QualityStat
+            label={t("evaluation.ingestionQuality.figures")}
+            value={quality.figure_document_count}
+          />
+          <QualityStat
+            label={t("evaluation.ingestionQuality.longDocuments")}
+            value={quality.long_document_count}
+          />
+          <QualityStat
+            label={t("evaluation.ingestionQuality.formulas")}
+            value={quality.formula_document_count ?? 0}
+          />
+          <QualityStat
+            label={t("evaluation.ingestionQuality.lowConfidence")}
+            value={quality.low_confidence_document_count ?? 0}
+          />
+          <QualityStat
+            label={t("evaluation.ingestionQuality.fallbacks")}
+            value={quality.fallback_document_count ?? 0}
+          />
+          <QualityStat
+            label={t("evaluation.ingestionQuality.failedSegments")}
+            value={quality.failed_segment_document_count ?? 0}
+          />
+          <QualityStat
+            label={t("evaluation.ingestionQuality.segmentArtifactMisses")}
+            value={quality.segment_artifact_cache_miss_document_count ?? 0}
+          />
+          <QualityStat
+            label={t("evaluation.ingestionQuality.pageCoverage")}
+            value={`${formatPercent(quality.average_page_coverage ?? 0)}`}
+          />
+        </div>
+
+        {quality.risk_counts.high || quality.risk_counts.medium ? (
+          <Banner severity="warning" title={t("evaluation.ingestionQuality.riskTitle")}>
+            <p>
+              {t("evaluation.ingestionQuality.riskSummary", {
+                high: quality.risk_counts.high ?? 0,
+                medium: quality.risk_counts.medium ?? 0,
+              })}
+            </p>
+          </Banner>
+        ) : null}
+
+        <div className="grid gap-4 lg:grid-cols-2">
+          <QualityChipGroup
+            title={t("evaluation.ingestionQuality.warnings")}
+            emptyText={t("evaluation.ingestionQuality.noWarnings")}
+            entries={warningEntries}
+            icon="warning"
+          />
+          <QualityChipGroup
+            title={t("evaluation.ingestionQuality.parserProfiles")}
+            emptyText={t("evaluation.ingestionQuality.noParserProfiles")}
+            entries={parserEntries}
+          />
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function QualityStat({ label, value }: { label: string; value: number | string }) {
+  return (
+    <div className="rounded-md border border-border bg-surface-sunken p-3">
+      <p className="text-xs text-fg-muted">{label}</p>
+      <p className="tnum mt-1 text-xl font-semibold text-fg">{value}</p>
+    </div>
+  );
+}
+
+function QualityChipGroup({
+  title,
+  emptyText,
+  entries,
+  icon,
+}: {
+  title: string;
+  emptyText: string;
+  entries: [string, number][];
+  icon?: "warning";
+}) {
+  return (
+    <div className="rounded-md border border-border bg-surface-sunken p-3">
+      <p className="text-sm font-medium text-fg">{title}</p>
+      {entries.length ? (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {entries.map(([name, count]) => (
+            <span
+              key={name}
+              className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-2.5 py-1 text-xs text-fg-muted"
+            >
+              {icon === "warning" ? <AlertTriangle size={14} aria-hidden /> : null}
+              {qualityLabel(name)}: {count}
+            </span>
+          ))}
+        </div>
+      ) : (
+        <p className="mt-2 text-sm text-fg-muted">{emptyText}</p>
+      )}
+    </div>
+  );
+}
+
+function MetricGrid({ metrics }: { metrics: EvaluationMetrics }) {
+  const items = [
+    { label: t("evaluation.metric.precision"), value: formatPercent(metrics.precision_at_k) },
+    { label: t("evaluation.metric.recall"), value: formatPercent(metrics.recall_at_k) },
+    { label: t("evaluation.metric.mrr"), value: formatPercent(metrics.mrr) },
+    {
+      label: t("evaluation.metric.answerHit"),
+      value: formatPercent(metrics.answer_keyword_hit_rate),
+    },
+    {
+      label: t("evaluation.metric.groundedness"),
+      value: formatPercent(metrics.groundedness_pass_rate),
+    },
+    {
+      label: t("evaluation.metric.citationTraceability"),
+      value: formatPercent(metrics.citation_traceability_coverage),
+    },
+    {
+      label: t("evaluation.metric.bboxCitation"),
+      value: formatPercent(metrics.bbox_citation_coverage),
+    },
+    {
+      label: t("evaluation.metric.elementLineage"),
+      value: formatPercent(metrics.element_lineage_coverage),
+    },
+    {
+      label: t("evaluation.metric.contentKindHit"),
+      value: formatPercent(metrics.content_kind_hit_rate),
+    },
+    {
+      label: t("evaluation.metric.sectionCoverage"),
+      value: formatPercent(metrics.section_coverage),
+    },
+    { label: t("evaluation.metric.faithfulness"), value: formatPercent(metrics.faithfulness) },
+    {
+      label: t("evaluation.metric.contextPrecision"),
+      value: formatPercent(metrics.context_precision),
+    },
+    {
+      label: t("evaluation.metric.contextRecall"),
+      value: formatPercent(metrics.context_recall),
+    },
+    {
+      label: t("evaluation.metric.responseRelevancy"),
+      value: formatPercent(metrics.response_relevancy),
+    },
+    {
+      label: t("evaluation.metric.noiseSensitivity"),
+      value: formatPercent(metrics.noise_sensitivity),
+    },
+    {
+      label: t("evaluation.metric.errors"),
+      value: `${metrics.error_count} / ${metrics.case_count}`,
+    },
+  ];
+
+  return (
+    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+      {items.map((item) => (
+        <Card key={item.label}>
+          <CardContent className="pt-5">
+            <p className="text-xs text-fg-muted">{item.label}</p>
+            <p className="tnum mt-2 text-2xl font-semibold text-fg">{item.value}</p>
+          </CardContent>
+        </Card>
+      ))}
+    </div>
+  );
+}
+
+function qualityLabel(value: string) {
+  return qualityCodeLabel(value);
+}
+
+function CaseTable({ metrics }: { metrics: EvaluationMetrics }) {
+  return (
+    <section aria-labelledby="evaluation-cases-title">
+      <h3 id="evaluation-cases-title" className="mb-3 text-sm font-semibold text-fg">
+        {t("evaluation.cases")}
+      </h3>
+      <div className="overflow-hidden rounded-lg border border-border bg-surface">
+        <div className="max-h-[480px] overflow-auto [scrollbar-gutter:stable]">
+          <table className="w-full min-w-[680px] text-left text-sm">
+            <thead className="sticky top-0 z-10 bg-surface-sunken text-xs text-fg-muted shadow-[inset_0_-1px_0_var(--color-border)]">
+              <tr>
+                <th className="whitespace-nowrap px-3 py-2 font-medium sm:px-4 sm:py-3">{t("evaluation.case.id")}</th>
+                <th className="hidden whitespace-nowrap px-3 py-2 font-medium sm:table-cell sm:px-4 sm:py-3">{t("evaluation.metric.precision")}</th>
+                <th className="hidden whitespace-nowrap px-3 py-2 font-medium sm:table-cell sm:px-4 sm:py-3">{t("evaluation.metric.recall")}</th>
+                <th className="whitespace-nowrap px-3 py-2 font-medium sm:px-4 sm:py-3">{t("evaluation.metric.mrr")}</th>
+                <th className="whitespace-nowrap px-3 py-2 font-medium sm:px-4 sm:py-3">{t("evaluation.case.hit")}</th>
+                <th className="hidden whitespace-nowrap px-3 py-2 font-medium md:table-cell sm:px-4 sm:py-3">{t("evaluation.case.failures")}</th>
+                <th className="hidden whitespace-nowrap px-3 py-2 font-medium lg:table-cell sm:px-4 sm:py-3">{t("evaluation.case.trace")}</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {metrics.case_results.map((result) => (
+                <tr key={result.case_id}>
+                  <td className="break-words px-3 py-2 font-medium text-fg sm:px-4 sm:py-3">{result.case_id}</td>
+                  <td className="tnum hidden whitespace-nowrap px-3 py-2 sm:table-cell sm:px-4 sm:py-3">{formatPercent(result.precision_at_k)}</td>
+                  <td className="tnum hidden whitespace-nowrap px-3 py-2 sm:table-cell sm:px-4 sm:py-3">{formatPercent(result.recall_at_k)}</td>
+                  <td className="tnum whitespace-nowrap px-3 py-2 sm:px-4 sm:py-3">{formatPercent(result.reciprocal_rank)}</td>
+                  <td className="px-3 py-2 sm:px-4 sm:py-3">
+                    <BooleanIcon value={result.answer_keyword_hit && result.groundedness_passed} />
+                  </td>
+                  <td className="hidden break-words px-3 py-2 text-xs text-fg-muted md:table-cell sm:px-4 sm:py-3">
+                    {result.failure_reasons.length ? result.failure_reasons.join(", ") : "-"}
+                  </td>
+                  <td className="tnum hidden whitespace-nowrap px-3 py-2 text-xs text-fg-muted lg:table-cell sm:px-4 sm:py-3">
+                    {result.trace_id.slice(0, 12)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function CompareResult({ comparison }: { comparison: EvaluationCompareResponse }) {
+  return (
+    <section className="min-w-0 space-y-3" aria-labelledby="evaluation-compare-title">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 id="evaluation-compare-title" className="text-base font-semibold text-fg">
+          {t("evaluation.compare.title")}
+        </h2>
+        {comparison.best_experiment_id ? (
+          <span className="rounded-full bg-success-subtle px-3 py-1 text-xs font-medium text-success-fg">
+            {t("evaluation.compare.best")}: {comparison.best_experiment_id}
+          </span>
+        ) : null}
+      </div>
+      <div className="overflow-hidden rounded-lg border border-border bg-surface">
+        {/* contain:paint で横スクロール領域を確実に封じ込める。main の [contain:layout] 配下では
+            縦スクロールが発生しない scroll container が min-width をもつ表を祖先へ伝播させ、
+            ページが横スクロール(崩れ)するため(決定論的に再現・検証済み)。 */}
+        <div className="overflow-auto [contain:paint]">
+          <table className="w-full min-w-[640px] text-left text-sm">
+            <thead className="bg-surface-sunken text-xs text-fg-muted">
+              <tr>
+                <th className="whitespace-nowrap px-3 py-2 font-medium sm:px-4 sm:py-3">{t("evaluation.compare.rank")}</th>
+                <th className="whitespace-nowrap px-3 py-2 font-medium sm:px-4 sm:py-3">{t("evaluation.compare.experiment")}</th>
+                <th className="whitespace-nowrap px-3 py-2 font-medium sm:px-4 sm:py-3">{t("evaluation.compare.score")}</th>
+                <th className="hidden whitespace-nowrap px-3 py-2 font-medium md:table-cell sm:px-4 sm:py-3">{t("evaluation.metric.precision")}</th>
+                <th className="hidden whitespace-nowrap px-3 py-2 font-medium md:table-cell sm:px-4 sm:py-3">{t("evaluation.metric.recall")}</th>
+                <th className="hidden whitespace-nowrap px-3 py-2 font-medium md:table-cell sm:px-4 sm:py-3">{t("evaluation.metric.mrr")}</th>
+                <th className="whitespace-nowrap px-3 py-2 font-medium sm:px-4 sm:py-3">
+                  <span className="sr-only">{t("evaluation.status.passed")}</span>
+                </th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {comparison.results.map((result) => (
+                <tr key={result.experiment.id}>
+                  <td className="tnum whitespace-nowrap px-3 py-2 sm:px-4 sm:py-3">{result.rank}</td>
+                  <td className="break-words px-3 py-2 font-medium text-fg sm:px-4 sm:py-3">
+                    {result.experiment.id}
+                  </td>
+                  <td className="tnum whitespace-nowrap px-3 py-2 sm:px-4 sm:py-3">{formatPercent(result.ranking_score)}</td>
+                  <td className="tnum hidden whitespace-nowrap px-3 py-2 md:table-cell sm:px-4 sm:py-3">
+                    {formatPercent(result.metrics.precision_at_k)}
+                  </td>
+                  <td className="tnum hidden whitespace-nowrap px-3 py-2 md:table-cell sm:px-4 sm:py-3">{formatPercent(result.metrics.recall_at_k)}</td>
+                  <td className="tnum hidden whitespace-nowrap px-3 py-2 md:table-cell sm:px-4 sm:py-3">{formatPercent(result.metrics.mrr)}</td>
+                  <td className="px-3 py-2 sm:px-4 sm:py-3">
+                    <StatusBadge passed={result.metrics.passed} compact />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function JsonField({
+  id,
+  label,
+  value,
+  rows,
+  placeholder,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  value: string;
+  rows: number;
+  placeholder: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <div className="space-y-1.5">
+      <label htmlFor={id} className="text-sm font-medium text-fg">
+        {label}
+      </label>
+      <textarea
+        id={id}
+        value={value}
+        rows={rows}
+        placeholder={placeholder}
+        onChange={(event) => onChange(event.target.value)}
+        className="min-w-0 w-full resize-y rounded-md border border-border-control bg-surface px-3 py-2 font-mono text-xs leading-relaxed text-fg outline-none transition-colors placeholder:text-fg-muted focus-visible:border-focus-ring"
+      />
+    </div>
+  );
+}
+
+function ValidationNotice({ message }: { message: string }) {
+  return <Banner severity="warning">{message}</Banner>;
+}
+
+function ErrorNotice({ message }: { message: string }) {
+  return <Banner severity="danger">{message}</Banner>;
+}
+
+function applyRequestKnowledgeBaseScope(
+  request: EvaluationRunRequestBody,
+  knowledgeBaseIds: string[]
+): EvaluationRunRequestBody {
+  if (knowledgeBaseIds.length === 0) return request;
+  return {
+    ...request,
+    filters: stripKnowledgeBaseFilter(request.filters) ?? {},
+    knowledge_base_ids: knowledgeBaseIds,
+  };
+}
+
+function applyExperimentKnowledgeBaseScope(
+  experiments: EvaluationExperiment[],
+  knowledgeBaseIds: string[]
+): EvaluationExperiment[] {
+  if (knowledgeBaseIds.length === 0) return experiments;
+  return experiments.map((experiment) => ({
+    ...experiment,
+    filters: stripKnowledgeBaseFilter(experiment.filters) ?? {},
+    knowledge_base_ids: knowledgeBaseIds,
+  }));
+}
+
+function stripKnowledgeBaseFilter(
+  filters: Record<string, string> | undefined
+): Record<string, string> | undefined {
+  if (!filters) return undefined;
+  const next = { ...filters };
+  delete next.knowledge_base_id;
+  return Object.keys(next).length ? next : undefined;
+}
+
+function StatusBadge({ passed, compact = false }: { passed: boolean; compact?: boolean }) {
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium",
+        passed ? "bg-success-subtle text-success-fg" : "bg-danger-subtle text-danger-fg"
+      )}
+    >
+      {passed ? (
+        <CheckCircle2 size={14} aria-hidden />
+      ) : (
+        <XCircle size={14} aria-hidden />
+      )}
+      {compact ? (
+        <span className="sr-only">
+          {passed ? t("evaluation.status.passed") : t("evaluation.status.failed")}
+        </span>
+      ) : passed ? (
+        t("evaluation.status.passed")
+      ) : (
+        t("evaluation.status.failed")
+      )}
+    </span>
+  );
+}
+
+function BooleanIcon({ value }: { value: boolean }) {
+  return value ? (
+    <CheckCircle2 size={16} className="text-success-fg" aria-label={t("evaluation.status.passed")} />
+  ) : (
+    <XCircle size={16} className="text-danger-fg" aria-label={t("evaluation.status.failed")} />
+  );
+}
+
+function parseEvaluationRequest(raw: string): ParseResult<EvaluationRunRequestBody> {
+  const parsed = parseJson(raw);
+  if (!parsed.ok) return parsed;
+  if (!isRecord(parsed.value) || !Array.isArray(parsed.value.cases)) {
+    return { ok: false, error: t("evaluation.input.noCases") };
+  }
+  if (parsed.value.cases.length < 1) {
+    return { ok: false, error: t("evaluation.input.noCases") };
+  }
+  return { ok: true, value: parsed.value as unknown as EvaluationRunRequestBody };
+}
+
+function parseExperiments(raw: string): ParseResult<EvaluationExperiment[]> {
+  const parsed = parseJson(raw);
+  if (!parsed.ok) return parsed;
+  if (!Array.isArray(parsed.value) || parsed.value.length < 1) {
+    return { ok: false, error: t("evaluation.input.invalidJson") };
+  }
+  return { ok: true, value: parsed.value as unknown as EvaluationExperiment[] };
+}
+
+function parseJson(raw: string): ParseResult<unknown> {
+  try {
+    return { ok: true, value: JSON.parse(raw) };
+  } catch {
+    return { ok: false, error: t("evaluation.input.invalidJson") };
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function formatPercent(value: number) {
+  return `${Math.round(value * 1000) / 10}%`;
+}
+
+function metricLabel(metric: EvaluationMetricName) {
+  switch (metric) {
+    case "precision_at_k":
+      return t("evaluation.metric.precision");
+    case "recall_at_k":
+      return t("evaluation.metric.recall");
+    case "mrr":
+      return t("evaluation.metric.mrr");
+    case "answer_keyword_hit_rate":
+      return t("evaluation.metric.answerHit");
+    case "groundedness_pass_rate":
+      return t("evaluation.metric.groundedness");
+    case "citation_traceability_coverage":
+      return t("evaluation.metric.citationTraceability");
+    case "bbox_citation_coverage":
+      return t("evaluation.metric.bboxCitation");
+    case "element_lineage_coverage":
+      return t("evaluation.metric.elementLineage");
+    case "content_kind_hit_rate":
+      return t("evaluation.metric.contentKindHit");
+    case "section_coverage":
+      return t("evaluation.metric.sectionCoverage");
+    case "faithfulness":
+      return t("evaluation.metric.faithfulness");
+    case "context_precision":
+      return t("evaluation.metric.contextPrecision");
+    case "context_recall":
+      return t("evaluation.metric.contextRecall");
+    case "response_relevancy":
+      return t("evaluation.metric.responseRelevancy");
+    case "noise_sensitivity":
+      return t("evaluation.metric.noiseSensitivity");
+  }
+}
+
+function suiteLabel(name: EvaluationSuiteName) {
+  return t(`settings.evaluation.suite.${name}` as I18nKey);
+}
+
+function hasThresholds(thresholds: EvaluationRunRequestBody["thresholds"]): boolean {
+  if (!thresholds) return false;
+  return Object.values(thresholds).some((value) => value !== null && value !== undefined);
+}
+
+type ParseResult<T> = { ok: true; value: T } | { ok: false; error: string };

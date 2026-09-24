@@ -1,0 +1,40 @@
+{
+  "cases": [
+    {
+      "id": "policy-approval-flow-basic",
+      "query": "経費申請の承認フローを教えてください。",
+      "relevant_document_ids": ["doc-expense-policy"],
+      "expected_answer_keywords": ["部門長", "承認"],
+      "expected_content_kind": "text",
+      "expected_section_paths": ["経費申請 > 承認フロー"]
+    },
+    {
+      "id": "manual-troubleshooting-basic",
+      "query": "検索結果が表示されない場合の確認項目は何ですか。",
+      "relevant_document_ids": ["doc-search-troubleshooting"],
+      "expected_answer_keywords": ["インデックス", "再実行"],
+      "expected_content_kind": "list",
+      "expected_section_paths": ["検索運用マニュアル > トラブルシュート"]
+    }
+  ],
+  "top_k": 10,
+  "rerank_top_n": 5,
+  "mode": "hybrid",
+  "filters": {
+    "status": "INDEXED"
+  },
+  "rag_overrides": {
+    "rrf_k": 60,
+    "context_window_chars": 12000,
+    "oracle_vector_target_accuracy": 95
+  },
+  "thresholds": {
+    "precision_at_k": 0.4,
+    "recall_at_k": 0.8,
+    "mrr": 0.7,
+    "answer_keyword_hit_rate": 0.8,
+    "groundedness_pass_rate": 0.9,
+    "content_kind_hit_rate": 0.8,
+    "section_coverage": 0.8
+  }
+}

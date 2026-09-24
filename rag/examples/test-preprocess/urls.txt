@@ -1,0 +1,4 @@
+# url_to_markdown 用: 1 行 1 URL。# 始まりと空行は無視される。
+# 実ネット取得 + SSRF ガード(公開 IP のみ許可)。社内環境では到達可能な公開 URL に置き換える。
+https://example.com/
+https://www.iana.org/help/example-domains

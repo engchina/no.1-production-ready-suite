@@ -1,0 +1,126 @@
+# dev(backend をホストで uv 起動)向けの compose override。
+#
+# dev では backend はホストプロセス、各マイクロサービスはコンテナで動かす。ホストの
+# backend が各サービスの /health・/parse 等を叩けるよう、コンテナの 8000 を localhost の
+# dev_port(catalog の ServiceCatalogEntry.dev_port)へ公開する。ポートは catalog と一致させる。
+#
+# サービス管理画面(dev)は内部で次を実行する:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d <service_id>
+# GPU ASR は base 側の profiles:["gpu"] を継承するため
+# --profile gpu が併用される。oci parser は profiles:["oci"]。
+# 推論サーバー(SGLang/vLLM)は各 parser イメージへ内包するため、別建ての sidecar ポート公開は不要。
+#
+# モデルは dev では **イメージへ焼き込まず**(BAKE_MODELS=0)、parser ごとの Docker
+# named volume を ~/.cache へ mount して永続化する。host の絶対パス・UID に依存しない。
+# 初回 DL は HuggingFace 設定の token/ミラーを使い、通常の down/restart では保持される。
+x-dev-no-bake: &dev-no-bake
+  args:
+    BAKE_MODELS: "0"
+
+services:
+  # ---- 前処理(preprocess)----
+  preprocess-office-to-pdf:
+    ports:
+      - "127.0.0.1:18010:8000"
+
+  preprocess-pdf-to-page-images:
+    ports:
+      - "127.0.0.1:18011:8000"
+
+  preprocess-csv-to-json:
+    ports:
+      - "127.0.0.1:18012:8000"
+
+  preprocess-excel-to-json:
+    ports:
+      - "127.0.0.1:18013:8000"
+
+  preprocess-url-to-markdown:
+    ports:
+      - "127.0.0.1:18014:8000"
+
+  preprocess-image-enhance:
+    ports:
+      - "127.0.0.1:18015:8000"
+
+  preprocess-pii-redact:
+    ports:
+      - "127.0.0.1:18016:8000"
+
+  # ---- 解析(parser CPU)----
+  parser-docling:
+    build: *dev-no-bake
+    volumes:
+      - parser-docling-model-cache:/home/appuser/.cache
+    ports:
+      - "127.0.0.1:18020:8000"
+
+  parser-marker:
+    build: *dev-no-bake
+    volumes:
+      - parser-marker-model-cache:/home/appuser/.cache
+    ports:
+      - "127.0.0.1:18021:8000"
+
+  parser-unstructured:
+    ports:
+      - "127.0.0.1:18022:8000"
+
+  # ---- 解析(parser GPU / ASR のみ)----
+  parser-asr:
+    build: *dev-no-bake
+    volumes:
+      - parser-asr-model-cache:/home/appuser/.cache
+    ports:
+      - "127.0.0.1:18026:8000"
+
+  # ---- 解析(parser OCI)----
+  parser-oci-genai-vision:
+    ports:
+      - "127.0.0.1:18027:8000"
+
+  parser-oci-document-understanding:
+    ports:
+      - "127.0.0.1:18028:8000"
+
+  # ---- pipeline ステージ ----
+  pipeline-chunking:
+    ports:
+      - "127.0.0.1:18030:8000"
+
+  pipeline-vector-index:
+    ports:
+      - "127.0.0.1:18031:8000"
+
+  pipeline-graphrag:
+    ports:
+      - "127.0.0.1:18032:8000"
+
+  pipeline-generation:
+    ports:
+      - "127.0.0.1:18033:8000"
+
+  pipeline-guardrail:
+    ports:
+      - "127.0.0.1:18034:8000"
+
+  pipeline-agentic:
+    ports:
+      - "127.0.0.1:18035:8000"
+
+  pipeline-grounding:
+    ports:
+      - "127.0.0.1:18036:8000"
+
+  pipeline-evaluation:
+    ports:
+      - "127.0.0.1:18037:8000"
+
+  pipeline-retrieval:
+    ports:
+      - "127.0.0.1:18038:8000"
+
+volumes:
+  parser-docling-model-cache:
+  parser-marker-model-cache:
+  parser-asr-model-cache:

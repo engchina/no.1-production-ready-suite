@@ -1,0 +1,824 @@
+"use client";
+
+import {
+  PageBody,
+  Button,
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+  FormStatus,
+  Skeleton,
+} from "@engchina/production-ready-ui";
+import { Fragment, useState } from "react";
+import type { UseQueryResult } from "@tanstack/react-query";
+import {
+  AlertTriangle,
+  Check,
+  CheckCircle2,
+  ChevronDown,
+  CircleSlash,
+  Clipboard,
+  Container,
+  Cpu,
+  HardDriveDownload,
+  Hammer,
+  MinusCircle,
+  Play,
+  RefreshCw,
+  Server,
+  SlidersHorizontal,
+  Square,
+  TerminalSquare,
+  Trash2,
+  type LucideIcon,
+} from "lucide-react";
+
+import { ErrorState } from "@/components/StateViews";
+import { useConfirm } from "@/components/ui/confirm-dialog";
+import {
+  ApiError,
+  type DeploymentMode,
+  type ServiceCatalogItemData,
+  type ServiceExecutionPolicy,
+  type ServiceLogsData,
+  type ServiceModelCacheData,
+  type ServiceProfile,
+  type ServiceRuntimeStatus,
+} from "@/lib/api";
+import { t, type I18nKey } from "@/lib/i18n";
+import {
+  useControlService,
+  useServiceCatalog,
+  useServiceLogs,
+  useServiceStatusQueries,
+} from "@/lib/queries";
+import { toast } from "@/lib/toast";
+import { cn } from "@/lib/utils";
+
+export type DisplayRuntimeStatus = ServiceRuntimeStatus | "loading" | "error";
+type DisplayServiceData = ServiceCatalogItemData & {
+  status: DisplayRuntimeStatus;
+  statusReady: boolean;
+};
+
+const PROFILE_META: Record<ServiceProfile, { className: string; labelKey: I18nKey }> = {
+  cpu: { className: "bg-surface-hover text-fg-muted", labelKey: "settings.services.profile.cpu" },
+  gpu: { className: "bg-accent-muted text-accent-fg-strong", labelKey: "settings.services.profile.gpu" },
+  oci: { className: "bg-info-subtle text-info-fg", labelKey: "settings.services.profile.oci" },
+};
+export const SERVICE_PROFILE_ORDER: ServiceProfile[] = ["cpu", "gpu", "oci"];
+const PROFILE_GROUP_META: Record<
+  ServiceProfile,
+  { suffixKey: I18nKey; noteKey: I18nKey | null }
+> = {
+  cpu: { suffixKey: "settings.services.cpuSuffix", noteKey: "settings.services.cpuNote" },
+  gpu: { suffixKey: "settings.services.gpuSuffix", noteKey: "settings.services.gpuNote" },
+  oci: { suffixKey: "settings.services.ociSuffix", noteKey: "settings.services.ociNote" },
+};
+
+export function serviceExecutionPolicyLabelKey(policy: ServiceExecutionPolicy): I18nKey {
+  switch (policy) {
+    case "required_no_fallback":
+      return "settings.services.executionPolicy.requiredNoFallback";
+    case "in_process_when_disabled":
+      return "settings.services.executionPolicy.inProcessWhenDisabled";
+    case "selected_adapter":
+      return "settings.services.executionPolicy.selectedAdapter";
+  }
+}
+
+export function serviceStoppedHintKey(policy: ServiceExecutionPolicy): I18nKey | null {
+  switch (policy) {
+    case "required_no_fallback":
+      return "settings.services.requiredStoppedHint";
+    case "in_process_when_disabled":
+      return "settings.services.optionalStoppedHint.inProcess";
+    case "selected_adapter":
+      return "settings.services.optionalStoppedHint.selectedAdapter";
+  }
+}
+
+/** 前処理 / Parser マイクロサービスの稼働可視化・起動/停止を行う設定画面。 */
+export function ServicesManagementClient() {
+  const query = useServiceCatalog();
+  const serviceIds = query.data?.services.map((service) => service.service_id) ?? [];
+  const statusQueries = useServiceStatusQueries(serviceIds);
+  const control = useControlService();
+  const confirm = useConfirm();
+  // クリックした行・操作だけにスピナーを出すための識別子(`${serviceId}:${action}`)。
+  const [pending, setPending] = useState<string | null>(null);
+  const [logsServiceId, setLogsServiceId] = useState<string | null>(null);
+  const logsQuery = useServiceLogs(logsServiceId);
+
+  if (query.isPending) {
+    return (
+      <PageBody wide>
+        <Skeleton className="h-40 w-full rounded-lg" />
+        <Skeleton className="h-40 w-full rounded-lg" />
+      </PageBody>
+    );
+  }
+
+  if (query.isError) {
+    return (
+      <PageBody wide>
+        <ErrorState
+          message={
+            query.error instanceof ApiError
+              ? query.error.message
+              : t("settings.services.loadError")
+          }
+          onRetry={() => void query.refetch()}
+        />
+      </PageBody>
+    );
+  }
+
+  const data = query.data;
+  if (!data) return null;
+
+  const displayServices = data.services.map<DisplayServiceData>((service, index) => {
+    const statusQuery = statusQueries[index];
+    const statusData = statusQuery?.data;
+    if (statusData) {
+      return {
+        ...service,
+        ...statusData,
+        statusReady: true,
+      };
+    }
+    return {
+      ...service,
+      status: statusQuery?.isError ? "error" : "loading",
+      statusReady: false,
+    };
+  });
+  const controlEnabled = data.control_enabled;
+  const deploymentMode = data.deployment_mode;
+  // サービス管理ページのセクションは検索・回答フロー順(サイドナビと一致)で表示する。
+  // 各ステージは CPU/GPU/OCI のうち存在するプロファイルごとにグループを分けて表示する。
+  const PIPELINE_STAGE_ORDER: { category: string; labelKey: I18nKey }[] = [
+    { category: "preprocess", labelKey: "settings.services.stage.preprocess" },
+    { category: "parser", labelKey: "settings.services.stage.parser" },
+    { category: "chunking", labelKey: "settings.services.stage.chunking" },
+    { category: "vector_index", labelKey: "settings.services.stage.vectorIndex" },
+    { category: "retrieval", labelKey: "settings.services.stage.retrieval" },
+    { category: "grounding", labelKey: "settings.services.stage.grounding" },
+    { category: "generation", labelKey: "settings.services.stage.generation" },
+    { category: "guardrail", labelKey: "settings.services.stage.guardrail" },
+    { category: "evaluation", labelKey: "settings.services.stage.evaluation" },
+    { category: "graphrag", labelKey: "settings.services.stage.graphrag" },
+    { category: "agentic", labelKey: "settings.services.stage.agentic" },
+  ];
+  // プロファイル表示順と suffix/note。GPU/OCI は単独でも opt-in/要件を note で明示する。
+  const PROFILE_ORDER = SERVICE_PROFILE_ORDER.map((profile) => ({
+    profile,
+    ...PROFILE_GROUP_META[profile],
+  }));
+  const stageGroups = PIPELINE_STAGE_ORDER.map(({ category, labelKey }) => {
+    const label = t(labelKey);
+    const groups = PROFILE_ORDER.map((p) => ({
+      ...p,
+      services: displayServices.filter((s) => s.category === category && s.profile === p.profile),
+    })).filter((g) => g.services.length > 0);
+    return { category, label, groups };
+  });
+
+  async function act(
+    service: DisplayServiceData,
+    action: "start" | "stop" | "build" | "remove"
+  ) {
+    if (action === "stop" || action === "remove") {
+      const key = action === "stop" ? "stop" : "remove";
+      const ok = await confirm({
+        title: t(`settings.services.confirm.${key}.title` as I18nKey),
+        description: t(`settings.services.confirm.${key}.description` as I18nKey, {
+          service: serviceLabel(service),
+        }),
+        confirmLabel: t(`settings.services.confirm.${key}.confirm` as I18nKey),
+        cancelLabel: t("settings.services.confirm.cancel"),
+        tone: "danger",
+      });
+      if (!ok) return;
+    }
+    setPending(`${service.service_id}:${action}`);
+    control.mutate(
+      { serviceId: service.service_id, action },
+      {
+        onSuccess: () => {
+          const toastKey: I18nKey =
+            action === "start"
+              ? "settings.services.toast.started"
+              : action === "build"
+                ? "settings.services.toast.built"
+                : action === "remove"
+                  ? "settings.services.toast.removed"
+                  : "settings.services.toast.stopped";
+          toast.success(t(toastKey, { service: serviceLabel(service) }));
+        },
+        onError: (error) => {
+          toast.error(
+            t("settings.services.toast.failed", { service: serviceLabel(service) }),
+            {
+              description:
+                error instanceof ApiError ? error.message : undefined,
+            }
+          );
+        },
+        onSettled: () => setPending(null),
+      }
+    );
+  }
+
+  const latestStatusUpdatedAt = Math.max(
+    0,
+    ...statusQueries.map((statusQuery) => statusQuery.dataUpdatedAt)
+  );
+  const lastUpdated = Math.max(query.dataUpdatedAt, latestStatusUpdatedAt);
+  const lastUpdatedText = lastUpdated
+    ? new Date(lastUpdated).toLocaleTimeString("ja-JP")
+    : null;
+  const statusFetching = statusQueries.some((statusQuery) => statusQuery.isFetching);
+
+  function refreshServices() {
+    void query.refetch();
+    for (const statusQuery of statusQueries) {
+      void statusQuery.refetch();
+    }
+  }
+
+  function toggleLogs(service: DisplayServiceData) {
+    setLogsServiceId((current) => (current === service.service_id ? null : service.service_id));
+  }
+
+  return (
+    <PageBody wide>
+      <Card>
+        <CardHeader>
+          <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-info-subtle text-info-fg">
+                <Server size={20} aria-hidden />
+              </div>
+              <div>
+                <CardTitle>{t("settings.services.overview.title")}</CardTitle>
+                <CardDescription>
+                  {t("settings.services.overview.description")}
+                </CardDescription>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-3">
+              <ModeBadge mode={deploymentMode} />
+              <ControlBadge enabled={controlEnabled} />
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                loading={query.isFetching || statusFetching}
+                onClick={refreshServices}
+                aria-label={t("settings.services.refresh")} icon={RefreshCw}>
+                {t("settings.services.refresh")}
+              </Button>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          {controlEnabled ? (
+            <FormStatus
+              tone="info"
+              message={t(
+                deploymentMode === "dev"
+                  ? "settings.services.mode.dev.hint"
+                  : "settings.services.mode.prod.hint"
+              )}
+            />
+          ) : (
+            <FormStatus tone="info" message={t("settings.services.controlDisabled.hint")} />
+          )}
+          <ServiceCommandsDisclosure mode={deploymentMode} />
+          {lastUpdatedText ? (
+            <p className="text-xs tabular-nums text-fg-muted">
+              {t("settings.services.lastUpdated", { time: lastUpdatedText })}
+            </p>
+          ) : null}
+        </CardContent>
+      </Card>
+
+      {stageGroups.map((stage) => {
+        // 単一プロファイルかつ CPU のときだけ suffix 無しのステージ名にする。
+        // 複数プロファイル、または GPU/OCI は suffix(+note)を付けて区別・要件を明示する。
+        const multi = stage.groups.length > 1;
+        return (
+          <Fragment key={stage.category}>
+            {stage.groups.map((g) => (
+              <ServiceGroup
+                key={`${stage.category}-${g.profile}`}
+                title={
+                  multi || g.profile !== "cpu"
+                    ? t(g.suffixKey, { stage: stage.label })
+                    : stage.label
+                }
+                note={
+                  // CPU note(Unstructured 既定)は解析(parser)ステージのみ。前処理 CPU には出さない。
+                  g.noteKey && (g.profile !== "cpu" || stage.category === "parser")
+                    ? t(g.noteKey)
+                    : undefined
+                }
+                services={g.services}
+                controlEnabled={controlEnabled}
+                pending={pending}
+                logsServiceId={logsServiceId}
+                logsQuery={logsQuery}
+                onAct={act}
+                onToggleLogs={toggleLogs}
+              />
+            ))}
+          </Fragment>
+        );
+      })}
+    </PageBody>
+  );
+}
+
+/** 起動前に推奨するビルド/準備コマンドを、RAG 検索の詳細条件と同じ折りたたみで提示する(既定で閉じる)。 */
+function ServiceCommandsDisclosure({ mode }: { mode: DeploymentMode }) {
+  const [open, setOpen] = useState(false);
+  // dev は override を重ねた compose、prod は base のみ(control.py の build hint と一致)。
+  const files = mode === "dev" ? "-f docker-compose.yml -f docker-compose.dev.yml " : "";
+  const commands = [
+    {
+      label: t("settings.services.commands.buildAll.label"),
+      command: `docker compose ${files}build`,
+    },
+    {
+      label: t("settings.services.commands.buildGpu.label"),
+      command: `docker compose ${files}--profile gpu build parser-asr`,
+    },
+  ];
+  return (
+    <div className="rounded-md border border-border bg-surface-sunken">
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls="service-commands"
+        onPointerDown={(event) => {
+          event.preventDefault();
+          setOpen((value) => !value);
+        }}
+        onKeyDown={(event) => {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          event.preventDefault();
+          setOpen((value) => !value);
+        }}
+        className="flex w-full cursor-pointer items-center gap-1.5 px-3 py-2 text-left text-sm font-medium text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+      >
+        <SlidersHorizontal size={14} className="text-accent-fg" aria-hidden />
+        {t("settings.services.commands.title")}
+      </button>
+      {open ? (
+        <div id="service-commands" className="space-y-2 border-t border-border p-3">
+          <p className="text-xs leading-relaxed text-fg-muted">
+            {t("settings.services.commands.description")}
+          </p>
+          {commands.map((entry) => (
+            <CommandRow key={entry.label} label={entry.label} command={entry.command} />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** ラベル付きコマンドを等幅表示し、ワンクリックでクリップボードへコピーする行。 */
+function CommandRow({ label, command }: { label: string; command: string }) {
+  const [copied, setCopied] = useState(false);
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(command);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      /* clipboard 不可環境では手動選択にフォールバック */
+    }
+  }
+  return (
+    <div className="space-y-1">
+      <p className="text-xs font-medium text-fg">{label}</p>
+      <div className="flex items-stretch gap-2">
+        <code className="flex-1 overflow-x-auto whitespace-nowrap rounded border border-border bg-surface px-3 py-2 font-mono text-xs text-fg">
+          {command}
+        </code>
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          className="shrink-0 whitespace-nowrap"
+          icon={copied ? Check : Clipboard}
+          onClick={() => void copy()}
+        >
+          {copied ? t("settings.preview.copy.copied") : t("settings.services.commands.copy")}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function ServiceGroup({
+  title,
+  note,
+  services,
+  controlEnabled,
+  pending,
+  logsServiceId,
+  logsQuery,
+  onAct,
+  onToggleLogs,
+}: {
+  title: string;
+  note?: string;
+  services: DisplayServiceData[];
+  controlEnabled: boolean;
+  pending: string | null;
+  logsServiceId: string | null;
+  logsQuery: UseQueryResult<ServiceLogsData>;
+  onAct: (service: DisplayServiceData, action: "start" | "stop" | "build" | "remove") => void;
+  onToggleLogs: (service: DisplayServiceData) => void;
+}) {
+  if (services.length === 0) return null;
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">{title}</CardTitle>
+        {note ? <CardDescription>{note}</CardDescription> : null}
+      </CardHeader>
+      <CardContent className="space-y-2">
+        <ul className="divide-y divide-border">
+          {services.map((service) => (
+            <ServiceRow
+              key={service.service_id}
+              service={service}
+              controlEnabled={controlEnabled}
+              pending={pending}
+              logsOpen={logsServiceId === service.service_id}
+              logsQuery={logsQuery}
+              onAct={onAct}
+              onToggleLogs={onToggleLogs}
+            />
+          ))}
+        </ul>
+      </CardContent>
+    </Card>
+  );
+}
+
+function ServiceRow({
+  service,
+  controlEnabled,
+  pending,
+  logsOpen,
+  logsQuery,
+  onAct,
+  onToggleLogs,
+}: {
+  service: DisplayServiceData;
+  controlEnabled: boolean;
+  pending: string | null;
+  logsOpen: boolean;
+  logsQuery: UseQueryResult<ServiceLogsData>;
+  onAct: (service: DisplayServiceData, action: "start" | "stop" | "build" | "remove") => void;
+  onToggleLogs: (service: DisplayServiceData) => void;
+}) {
+  const deployable = service.deployable;
+  const running = service.status === "running";
+  const stopped = service.status === "stopped";
+  const statusLoading = service.status === "loading";
+  const statusError = service.status === "error";
+  const required = service.execution_policy === "required_no_fallback";
+  const stoppedHintKey = stopped ? serviceStoppedHintKey(service.execution_policy) : null;
+  const startPending = pending === `${service.service_id}:start`;
+  const stopPending = pending === `${service.service_id}:stop`;
+  const buildPending = pending === `${service.service_id}:build`;
+  const removePending = pending === `${service.service_id}:remove`;
+  // ponytail: このサービス自身の操作中だけ自分の起動/停止/build/削除を排他する(他サービスは無関係)
+  const thisPending = startPending || stopPending || buildPending || removePending;
+  let controlHint: string | undefined;
+  if (!controlEnabled) {
+    controlHint = t("settings.services.controlDisabled.hint");
+  } else if (statusLoading) {
+    controlHint = t("settings.services.statusLoadingHint");
+  } else if (statusError) {
+    controlHint = t("settings.services.statusLoadErrorHint");
+  } else if (stoppedHintKey) {
+    controlHint = t(stoppedHintKey);
+  }
+
+  const logsPanelId = `service-logs-${service.service_id}`;
+
+  return (
+    <li className="py-3">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="text-sm font-semibold text-fg">{serviceLabel(service)}</p>
+            <ServiceExecutionPolicyBadge policy={service.execution_policy} />
+          </div>
+          <p className="font-mono text-xs text-fg-muted">{service.service_id}</p>
+          {service.model_cache ? <ServiceModelCacheRow cache={service.model_cache} /> : null}
+          {stoppedHintKey ? (
+            <p
+              className={cn(
+                "mt-1 flex items-center gap-1 text-xs",
+                required ? "font-medium text-danger-fg" : "text-fg-muted"
+              )}
+            >
+              {required ? <AlertTriangle size={14} aria-hidden /> : null}
+              {t(stoppedHintKey)}
+            </p>
+          ) : null}
+          {!deployable ? (
+            <p className="mt-1 text-xs text-fg-muted">{t("settings.services.futureServiceHint")}</p>
+          ) : null}
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <ServiceStatusBadge status={service.status} />
+          {deployable ? (
+            <>
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={() => onToggleLogs(service)}
+                aria-expanded={logsOpen}
+                aria-controls={logsPanelId}
+                aria-label={`${serviceLabel(service)} ${t("settings.services.action.logs")}`} icon={TerminalSquare} trailingIcon={ChevronDown}>
+                {logsOpen
+                  ? t("settings.services.action.hideLogs")
+                  : t("settings.services.action.logs")}
+              </Button>
+              <div className="flex flex-wrap justify-end gap-2" title={controlHint}>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  loading={buildPending}
+                  disabled={!controlEnabled || (thisPending && !buildPending)}
+                  onClick={() => onAct(service, "build")}
+                  aria-label={`${serviceLabel(service)} ${t("settings.services.action.build")}`} icon={Hammer}>
+                  {t("settings.services.action.build")}
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  loading={startPending}
+                  disabled={
+                    !controlEnabled ||
+                    !service.statusReady ||
+                    running ||
+                    (thisPending && !startPending)
+                  }
+                  onClick={() => onAct(service, "start")}
+                  aria-label={`${serviceLabel(service)} ${t("settings.services.action.start")}`} icon={Play}>
+                  {t("settings.services.action.start")}
+                </Button>
+                <Button
+                  type="button"
+                  variant="danger"
+                  size="sm"
+                  loading={stopPending}
+                  disabled={
+                    !controlEnabled ||
+                    !service.statusReady ||
+                    stopped ||
+                    (thisPending && !stopPending)
+                  }
+                  onClick={() => onAct(service, "stop")}
+                  aria-label={`${serviceLabel(service)} ${t("settings.services.action.stop")}`} icon={Square}>
+                  {t("settings.services.action.stop")}
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  className="text-danger-fg hover:bg-danger-subtle"
+                  loading={removePending}
+                  disabled={!controlEnabled || (thisPending && !removePending)}
+                  onClick={() => onAct(service, "remove")}
+                  aria-label={`${serviceLabel(service)} ${t("settings.services.action.remove")}`} icon={Trash2}>
+                  {t("settings.services.action.remove")}
+                </Button>
+              </div>
+            </>
+          ) : null}
+        </div>
+      </div>
+      {logsOpen ? (
+        <ServiceLogPanel id={logsPanelId} service={service} logsQuery={logsQuery} />
+      ) : null}
+    </li>
+  );
+}
+
+function ServiceExecutionPolicyBadge({ policy }: { policy: ServiceExecutionPolicy }) {
+  return (
+    <span
+      className={cn(
+        "inline-flex min-h-5 items-center rounded-full px-2 py-0.5 text-xs font-medium",
+        policy === "required_no_fallback"
+          ? "bg-danger-subtle text-danger-fg"
+          : policy === "in_process_when_disabled"
+            ? "bg-info-subtle text-info-fg"
+            : "bg-surface-hover text-fg-muted"
+      )}
+    >
+      {t(serviceExecutionPolicyLabelKey(policy))}
+    </span>
+  );
+}
+
+function ServiceLogPanel({
+  id,
+  service,
+  logsQuery,
+}: {
+  id: string;
+  service: DisplayServiceData;
+  logsQuery: UseQueryResult<ServiceLogsData>;
+}) {
+  const content = logsQuery.data?.content ?? "";
+  const sourceKey = "settings.services.logs.source.docker";
+
+  async function copyLogs() {
+    try {
+      await navigator.clipboard.writeText(content);
+      toast.success(t("settings.services.logs.copied"));
+    } catch {
+      toast.error(t("settings.services.logs.copyFailed"));
+    }
+  }
+
+  return (
+    <div
+      id={id}
+      data-surface="code"
+      className="mt-3 overflow-hidden rounded-md border border-border bg-surface text-fg"
+    >
+      <div className="flex flex-col gap-2 border-b border-border bg-surface-raised px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
+          <p className="text-xs font-semibold text-fg">
+            {t("settings.services.logs.title", { service: serviceLabel(service) })}
+          </p>
+          {logsQuery.data ? (
+            <p className="mt-0.5 text-xs text-fg-muted">
+              {t(sourceKey as I18nKey, { lines: String(logsQuery.data.lines) })}
+            </p>
+          ) : null}
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            loading={logsQuery.isFetching}
+            onClick={() => void logsQuery.refetch()}
+            aria-label={t("settings.services.logs.refresh")} icon={RefreshCw}>
+            {t("settings.services.logs.refresh")}
+          </Button>
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            disabled={!content}
+            onClick={() => void copyLogs()}
+            aria-label={t("settings.services.logs.copy")} icon={Clipboard}>
+            {t("settings.services.logs.copy")}
+          </Button>
+        </div>
+      </div>
+      {logsQuery.isPending ? (
+        <div className="flex min-h-28 items-center gap-2 px-3 py-4 text-xs text-fg-muted">
+          <RefreshCw size={14} className="animate-spin" aria-hidden />
+          {t("settings.services.logs.loading")}
+        </div>
+      ) : logsQuery.isError ? (
+        <div className="px-3 py-4 text-xs text-danger-fg" role="alert">
+          {logsQuery.error instanceof ApiError
+            ? logsQuery.error.message
+            : t("settings.services.logs.loadError")}
+        </div>
+      ) : content ? (
+        <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-words px-3 py-3 font-mono text-xs leading-relaxed text-fg">
+          {content}
+        </pre>
+      ) : (
+        <div className="px-3 py-4 text-xs text-fg-muted">
+          {t("settings.services.logs.empty")}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** 配備モード(dev/prod とも docker compose。dev は dev override でポート公開)を示すバッジ(色だけに頼らずアイコン+ラベル併記)。 */
+function ModeBadge({ mode }: { mode: DeploymentMode }) {
+  const Icon = mode === "dev" ? TerminalSquare : Container;
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium",
+        mode === "dev" ? "bg-info-subtle text-info-fg" : "bg-accent-muted text-accent-fg-strong"
+      )}
+    >
+      <Icon size={14} aria-hidden />
+      {t(mode === "dev" ? "settings.services.mode.dev" : "settings.services.mode.prod")}
+    </span>
+  );
+}
+
+/** 起動/停止が全体で有効か無効かを示すバッジ。 */
+function ControlBadge({ enabled }: { enabled: boolean }) {
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium",
+        enabled ? "bg-success-subtle text-success-fg" : "bg-surface-hover text-fg-muted"
+      )}
+    >
+      {t("settings.services.controlEnabled")}:{" "}
+      {enabled
+        ? t("settings.services.controlEnabled.on")
+        : t("settings.services.controlEnabled.off")}
+    </span>
+  );
+}
+
+export function ServiceProfileBadge({ profile }: { profile: ServiceProfile }) {
+  const meta = PROFILE_META[profile];
+  return (
+    <span
+      className={cn(
+        "inline-flex rounded-sm px-1.5 py-0.5 text-xs font-medium whitespace-nowrap",
+        meta.className
+      )}
+    >
+      {t(meta.labelKey)}
+    </span>
+  );
+}
+
+const STATUS_META: Record<
+  DisplayRuntimeStatus,
+  { className: string; icon: LucideIcon; spin?: boolean }
+> = {
+  running: { className: "bg-success-subtle text-success-fg", icon: CheckCircle2 },
+  degraded: { className: "bg-warning-subtle text-warning-fg", icon: AlertTriangle },
+  stopped: { className: "bg-surface-hover text-fg-muted", icon: CircleSlash },
+  unconfigured: { className: "bg-surface-hover text-fg-muted", icon: MinusCircle },
+  in_process: { className: "bg-info-subtle text-info-fg", icon: Cpu },
+  loading: { className: "bg-surface-hover text-fg-muted", icon: RefreshCw, spin: true },
+  error: { className: "bg-danger-subtle text-danger-fg", icon: AlertTriangle },
+};
+
+/** 稼働状態バッジ(色だけに頼らずアイコン+日本語ラベル併記)。 */
+export function ServiceStatusBadge({ status }: { status: DisplayRuntimeStatus }) {
+  const meta = STATUS_META[status];
+  const Icon = meta.icon;
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium",
+        meta.className
+      )}
+    >
+      <Icon size={14} className={meta.spin ? "animate-spin" : undefined} aria-hidden />
+      {t(`settings.services.status.${status}` as I18nKey)}
+    </span>
+  );
+}
+
+function serviceLabel(service: ServiceCatalogItemData): string {
+  return t(service.label_key as I18nKey);
+}
+
+/** モデルキャッシュの Docker volume とコンテナ内パスを表示する行。 */
+function ServiceModelCacheRow({ cache }: { cache: ServiceModelCacheData }) {
+  return (
+    <p
+      className="mt-1 flex flex-wrap items-center gap-1 text-xs text-fg-muted"
+      title={t("settings.services.modelCache.hint")}
+    >
+      <HardDriveDownload size={14} aria-hidden />
+      <span className="text-fg-muted">{t("settings.services.modelCache.label")}:</span>
+      <span className="font-mono break-all text-fg">{cache.volume_name}</span>
+      <span aria-hidden>→</span>
+      <span className="font-mono break-all text-fg">{cache.container_path}</span>
+      <span className="rounded-sm bg-surface-hover px-1.5 py-0.5 text-xs font-medium text-fg-muted">
+        {t("settings.services.modelCache.readonly")}
+      </span>
+    </p>
+  );
+}
+
+export default ServicesManagementClient;

@@ -1,0 +1,353 @@
+"""サービスカタログ。
+
+前処理(`services/preprocess/*`)と Parser(`services/parsers/*`)の各マイクロサービスを
+1 つの静的レジストリに統合する。`service_id` は docker-compose.yml の service 名と一致させ、
+起動/停止(compose 制御)と稼働状態プローブ(/health)の双方の正本にする。
+
+URL 設定名は既存実装(`parser_adapter_readiness._SERVICE_URL_FIELDS` /
+`preprocess_strategy.PREPROCESS_SERVICE_URL_ATTRS`)と一致させる。
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Literal
+from urllib.parse import urlparse
+
+from app.config import Settings
+
+ServiceCategory = Literal[
+    "preprocess",
+    "parser",
+    # pipeline 各ステージのプラグイン(マイクロサービス)化。順次追加する。
+    "chunking",
+    "vector_index",
+    "retrieval",
+    "grounding",
+    "generation",
+    "guardrail",
+    "evaluation",
+    "graphrag",
+    "agentic",
+]
+# cpu/gpu はローカル ML 依存の重さで分ける。oci は OCI クラウドサービスを呼ぶ薄い
+# プロキシ microservice(GPU 不要・OCI 認証はメイン設定を継承)。
+ServiceProfile = Literal["cpu", "gpu", "oci"]
+ServiceExecutionPolicy = Literal[
+    "required_no_fallback",
+    "in_process_when_disabled",
+    "selected_adapter",
+]
+
+
+@dataclass(frozen=True)
+class ServiceCatalogEntry:
+    """1 マイクロサービスのメタデータ。
+
+    - ``service_id``: docker compose の service 名(allowlist の鍵)。
+    - ``url_field``: base URL を持つ Settings フィールド名(prod の /health 問い合わせ用)。
+    - ``label_key``: フロントの i18n キー(表示名)。
+    - ``working_dir``: リポジトリ root からのサービス実装の相対パス。
+    - ``dev_port``: dev で ``docker-compose.dev.yml`` が localhost に公開するポート。
+    - ``execution_policy``: 停止時・未使用時の runtime 契約。UI/API で fallback 境界を明示する。
+    - ``deployable``: UI/API からデプロイ操作(起動/停止/ビルド/削除)を提供するか。
+      ``execution_policy``(停止時の fallback 契約)とは別軸。False のステージは backend 内処理
+      (``rag_pipeline_core``)で動作し、サービス化は将来対応(操作系を出さず /health も叩かない)。
+    - ``model_cache_path``: モデル DL を行うサービスのコンテナ内キャッシュ親(``~/.cache``)。
+      HF・docling・mineru など tool 別キャッシュをまとめて含めるため ``huggingface`` ではなく
+      ``.cache`` 親を指す。dev では parser ごとの Docker named volume をここへ mount する。
+      None のサービスはモデル DL なし(マウント対象外)。
+    """
+
+    service_id: str
+    category: ServiceCategory
+    profile: ServiceProfile
+    url_field: str
+    label_key: str
+    working_dir: str
+    dev_port: int
+    execution_policy: ServiceExecutionPolicy = "selected_adapter"
+    deployable: bool = True
+    model_cache_path: str | None = None
+
+
+# パイプライン順に並べる(前処理 → Parser CPU → Parser GPU)。
+SERVICE_CATALOG: tuple[ServiceCatalogEntry, ...] = (
+    ServiceCatalogEntry(
+        service_id="preprocess-office-to-pdf",
+        category="preprocess",
+        profile="cpu",
+        url_field="rag_preprocess_office_to_pdf_service_url",
+        label_key="settings.services.item.preprocessOfficeToPdf",
+        working_dir="services/preprocess/office_to_pdf",
+        dev_port=18010,
+    ),
+    ServiceCatalogEntry(
+        service_id="preprocess-pdf-to-page-images",
+        category="preprocess",
+        profile="cpu",
+        url_field="rag_preprocess_pdf_to_page_images_service_url",
+        label_key="settings.services.item.preprocessPdfToPageImages",
+        working_dir="services/preprocess/pdf_to_page_images",
+        dev_port=18011,
+    ),
+    ServiceCatalogEntry(
+        service_id="preprocess-csv-to-json",
+        category="preprocess",
+        profile="cpu",
+        url_field="rag_preprocess_csv_to_json_service_url",
+        label_key="settings.services.item.preprocessCsvToJson",
+        working_dir="services/preprocess/csv_to_json",
+        dev_port=18012,
+    ),
+    ServiceCatalogEntry(
+        service_id="preprocess-excel-to-json",
+        category="preprocess",
+        profile="cpu",
+        url_field="rag_preprocess_excel_to_json_service_url",
+        label_key="settings.services.item.preprocessExcelToJson",
+        working_dir="services/preprocess/excel_to_json",
+        dev_port=18013,
+    ),
+    ServiceCatalogEntry(
+        service_id="preprocess-url-to-markdown",
+        category="preprocess",
+        profile="cpu",
+        url_field="rag_preprocess_url_to_markdown_service_url",
+        label_key="settings.services.item.preprocessUrlToMarkdown",
+        working_dir="services/preprocess/url_to_markdown",
+        dev_port=18014,
+    ),
+    ServiceCatalogEntry(
+        service_id="preprocess-image-enhance",
+        category="preprocess",
+        profile="cpu",
+        url_field="rag_preprocess_image_enhance_service_url",
+        label_key="settings.services.item.preprocessImageEnhance",
+        working_dir="services/preprocess/image_enhance",
+        dev_port=18015,
+    ),
+    ServiceCatalogEntry(
+        service_id="preprocess-pii-redact",
+        category="preprocess",
+        profile="cpu",
+        url_field="rag_preprocess_pii_redact_service_url",
+        label_key="settings.services.item.preprocessPiiRedact",
+        working_dir="services/preprocess/pii_redact",
+        dev_port=18016,
+    ),
+    ServiceCatalogEntry(
+        service_id="parser-docling",
+        category="parser",
+        profile="cpu",
+        url_field="rag_parser_docling_service_url",
+        label_key="settings.services.item.parserDocling",
+        working_dir="services/parsers/docling",
+        dev_port=18020,
+        model_cache_path="/home/appuser/.cache",
+    ),
+    ServiceCatalogEntry(
+        service_id="parser-marker",
+        category="parser",
+        profile="cpu",
+        url_field="rag_parser_marker_service_url",
+        label_key="settings.services.item.parserMarker",
+        working_dir="services/parsers/marker",
+        dev_port=18021,
+        model_cache_path="/home/appuser/.cache",
+    ),
+    ServiceCatalogEntry(
+        service_id="parser-unstructured",
+        category="parser",
+        profile="cpu",
+        url_field="rag_parser_unstructured_service_url",
+        label_key="settings.services.item.parserUnstructured",
+        working_dir="services/parsers/unstructured",
+        dev_port=18022,
+    ),
+    ServiceCatalogEntry(
+        service_id="parser-asr",
+        category="parser",
+        profile="gpu",
+        url_field="rag_parser_asr_service_url",
+        label_key="settings.services.item.parserAsr",
+        working_dir="services/parsers/asr",
+        dev_port=18026,
+        model_cache_path="/home/appuser/.cache",
+    ),
+    # ---- parser マイクロサービス(OCI クラウド・OCI 認証はメイン設定を継承)----
+    # OCI を呼ぶだけの軽量プロキシ。dev も docker で起動し、OCI 認証はメイン設定を env で継承する。
+    ServiceCatalogEntry(
+        service_id="parser-oci-genai-vision",
+        category="parser",
+        profile="oci",
+        url_field="rag_parser_oci_genai_vision_service_url",
+        label_key="settings.services.item.parserOciGenaiVision",
+        working_dir="services/parsers/oci_genai_vision",
+        dev_port=18027,
+    ),
+    ServiceCatalogEntry(
+        service_id="parser-oci-document-understanding",
+        category="parser",
+        profile="oci",
+        url_field="rag_parser_oci_document_understanding_service_url",
+        label_key="settings.services.item.parserOciDocumentUnderstanding",
+        working_dir="services/parsers/oci_document_understanding",
+        dev_port=18028,
+    ),
+    # ---- pipeline ステージのプラグイン(マイクロサービス)----
+    ServiceCatalogEntry(
+        service_id="pipeline-chunking",
+        category="chunking",
+        profile="cpu",
+        url_field="rag_chunking_service_url",
+        label_key="settings.services.item.pipelineChunking",
+        working_dir="services/pipeline/chunking",
+        dev_port=18030,
+        execution_policy="in_process_when_disabled",
+        deployable=False,
+    ),
+    ServiceCatalogEntry(
+        service_id="pipeline-vector-index",
+        category="vector_index",
+        profile="cpu",
+        url_field="rag_vector_index_service_url",
+        label_key="settings.services.item.pipelineVectorIndex",
+        working_dir="services/pipeline/vector_index",
+        dev_port=18031,
+        execution_policy="in_process_when_disabled",
+        deployable=False,
+    ),
+    ServiceCatalogEntry(
+        service_id="pipeline-graphrag",
+        category="graphrag",
+        profile="cpu",
+        url_field="rag_graph_service_url",
+        label_key="settings.services.item.pipelineGraphrag",
+        working_dir="services/pipeline/graphrag",
+        dev_port=18032,
+        execution_policy="in_process_when_disabled",
+        deployable=False,
+    ),
+    ServiceCatalogEntry(
+        service_id="pipeline-generation",
+        category="generation",
+        profile="cpu",
+        url_field="rag_generation_service_url",
+        label_key="settings.services.item.pipelineGeneration",
+        working_dir="services/pipeline/generation",
+        dev_port=18033,
+        execution_policy="in_process_when_disabled",
+    ),
+    ServiceCatalogEntry(
+        service_id="pipeline-guardrail",
+        category="guardrail",
+        profile="cpu",
+        url_field="rag_guardrail_service_url",
+        label_key="settings.services.item.pipelineGuardrail",
+        working_dir="services/pipeline/guardrail",
+        dev_port=18034,
+        execution_policy="in_process_when_disabled",
+        deployable=False,
+    ),
+    ServiceCatalogEntry(
+        service_id="pipeline-agentic",
+        category="agentic",
+        profile="cpu",
+        url_field="rag_agentic_service_url",
+        label_key="settings.services.item.pipelineAgentic",
+        working_dir="services/pipeline/agentic",
+        dev_port=18035,
+        execution_policy="in_process_when_disabled",
+        deployable=False,
+    ),
+    ServiceCatalogEntry(
+        service_id="pipeline-grounding",
+        category="grounding",
+        profile="cpu",
+        url_field="rag_grounding_service_url",
+        label_key="settings.services.item.pipelineGrounding",
+        working_dir="services/pipeline/grounding",
+        dev_port=18036,
+        execution_policy="in_process_when_disabled",
+        deployable=False,
+    ),
+    ServiceCatalogEntry(
+        service_id="pipeline-evaluation",
+        category="evaluation",
+        profile="cpu",
+        url_field="rag_evaluation_service_url",
+        label_key="settings.services.item.pipelineEvaluation",
+        working_dir="services/pipeline/evaluation",
+        dev_port=18037,
+        execution_policy="in_process_when_disabled",
+        deployable=False,
+    ),
+    ServiceCatalogEntry(
+        service_id="pipeline-retrieval",
+        category="retrieval",
+        profile="cpu",
+        url_field="rag_retrieval_service_url",
+        label_key="settings.services.item.pipelineRetrieval",
+        working_dir="services/pipeline/retrieval",
+        dev_port=18038,
+        execution_policy="in_process_when_disabled",
+    ),
+)
+
+_CATALOG_BY_ID: dict[str, ServiceCatalogEntry] = {
+    entry.service_id: entry for entry in SERVICE_CATALOG
+}
+_CATALOG_BY_URL_FIELD: dict[str, ServiceCatalogEntry] = {
+    entry.url_field: entry for entry in SERVICE_CATALOG
+}
+
+
+def get_catalog_entry(service_id: str) -> ServiceCatalogEntry | None:
+    """service_id に対応するカタログエントリを返す(allowlist 照合)。未知なら None。"""
+    return _CATALOG_BY_ID.get(service_id)
+
+
+def is_dev_mode(settings: Settings) -> bool:
+    """local 環境が dev か判定する。
+
+    ``ENVIRONMENT`` を流用し、``prod``/``production`` 以外は dev とみなす
+    (readiness の production 判定と整合)。dev/prod とも docker compose で起動/停止し、
+    dev のみ ``docker-compose.dev.yml`` を重ねてコンテナのポートを localhost へ公開する。
+    """
+    return settings.environment.strip().lower() not in {"prod", "production"}
+
+
+def resolve_service_base_url(settings: Settings, url_field: str) -> str:
+    """設定 ``url_field`` のサービス base URL を dev/prod に応じて解決する(末尾スラッシュ除去)。
+
+    dev では docker compose の service 名(``parser-docling`` 等)をホストから解決できない。
+    そこで **設定が docker 既定(host が compose service 名)のときだけ** catalog の
+    ``dev_port`` から ``http://127.0.0.1:<port>`` に書き換える(``docker-compose.dev.yml`` で
+    コンテナの同ポートを localhost へ公開)。空欄(=未設定)や明示上書き(localhost 等)は
+    そのまま尊重する。prod は常に設定値そのまま。
+
+    稼働プローブ(/health)と取込の HTTP 委譲(/parse・/convert)で **同じ解決**を使い、
+    dev で「画面では到達できるのに取込では docker 名で失敗」という不整合を防ぐ。
+    """
+    raw = str(getattr(settings, url_field, "") or "").strip().rstrip("/")
+    entry = _CATALOG_BY_URL_FIELD.get(url_field)
+    if entry is None or not is_dev_mode(settings) or not raw:
+        return raw
+    # docker 既定(host == compose service 名)のみ localhost:<dev_port> へ。明示上書きは尊重。
+    host = urlparse(raw).hostname
+    if host == entry.service_id:
+        return f"http://127.0.0.1:{entry.dev_port}"
+    return raw
+
+
+def service_health_url(settings: Settings, entry: ServiceCatalogEntry) -> str:
+    """エントリの /health base URL を返す(dev は 127.0.0.1:<dev_port>、prod は url_field)。"""
+    return resolve_service_base_url(settings, entry.url_field)
+
+
+def service_model_cache_volume_name(entry: ServiceCatalogEntry) -> str | None:
+    """モデル DL を行うサービスの Compose named volume 論理名を返す。"""
+    if entry.model_cache_path is None:
+        return None
+    return f"{entry.service_id}-model-cache"

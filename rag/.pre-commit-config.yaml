@@ -1,0 +1,25 @@
+# pre-commit hook 設定 — コミット前にシークレット混入を検出して阻止する。
+#
+# セットアップ(各開発者が一度だけ実行):
+#   1. gitleaks バイナリを導入  https://github.com/gitleaks/gitleaks#installing
+#        macOS:  brew install gitleaks
+#        Linux:  GitHub Releases の tar.gz を展開し PATH に置く
+#   2. pre-commit を導入        uv tool install pre-commit   (または pipx install pre-commit)
+#   3. hook を有効化            pre-commit install
+#
+# 手動で全ファイルを走査:  pre-commit run --all-files
+#
+# gitleaks を Go からビルドせず、PATH 上の既存バイナリを使う(language: system)。
+# これにより古い Go 環境でもビルド失敗せず、CI と同一バイナリ挙動を再現できる。
+
+minimum_pre_commit_version: "3.0.0"
+
+repos:
+  - repo: local
+    hooks:
+      - id: gitleaks
+        name: gitleaks (detect hardcoded secrets)
+        description: ステージ済みの差分にシークレットが含まれていないか検査する
+        entry: gitleaks git --pre-commit --staged --redact --no-banner --config .gitleaks.toml
+        language: system
+        pass_filenames: false

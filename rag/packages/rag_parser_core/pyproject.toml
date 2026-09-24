@@ -1,0 +1,49 @@
+[project]
+name = "rag-parser-core"
+version = "0.1.0"
+description = "Shared parser contract (schemas + remap) for backend and parser microservices"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic>=2.11",
+    "charset-normalizer>=3.4,<4",
+    # oci_enterprise_ai(共有 VLM/LLM core)は openai SDK で OCI OpenAI 互換 API を呼ぶ。
+    # httpx は SDK 例外を既存のエラー経路へ変換するために直接参照する。
+    "httpx>=0.27",
+    # ponytail: marker-pdf が openai<2 を要求し backend の universal lock が 1.x に固定されるため、
+    # 全サービスで同じ major(httpx 例外型)に揃える。marker 依存が外れたら上限を上げる。
+    "openai>=1.99,<2",
+]
+
+[project.optional-dependencies]
+# parser マイクロサービスが共通 FastAPI app factory(service.py)を使うための extra。
+# core 本体の依存は軽量に保ち、HTTP サーバ依存はこの extra に隔離する。
+service = [
+    "fastapi>=0.121,<1.0",
+    "uvicorn[standard]>=0.37",
+    "gunicorn>=23,<24",
+    "python-multipart>=0.0.20",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["rag_parser_core"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.black]
+line-length = 100
+target-version = ["py312"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = ["pydantic.mypy"]
