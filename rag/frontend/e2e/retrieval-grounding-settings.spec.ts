@@ -100,6 +100,8 @@ test("検索方法設定はモードとトグルを保存できる", async ({ pa
   await keyword.click();
   await expect(keyword).toHaveAttribute("aria-checked", "true");
   await page.getByRole("switch", { name: "補正検索" }).click();
+  await page.getByRole("combobox", { name: "全文検索の分割方式" }).click();
+  await page.getByRole("option", { name: "Sudachi（形態素解析・DocRAG）" }).click();
   await expect(page.getByText("未保存の変更があります。")).toBeVisible();
 
   await page.getByRole("button", { name: "保存" }).click();
@@ -112,6 +114,7 @@ test("検索方法設定はモードとトグルを保存できる", async ({ pa
     gap_stop: false,
     corrective_retrieval: true,
     business_fit_weighting: false,
+    text_search_tokenizer: "sudachi",
   });
   await expectNoHorizontalOverflow(page);
 });
@@ -258,6 +261,7 @@ function retrievalEnvelope(
       gap_stop: false,
       corrective_retrieval: false,
       business_fit_weighting: false,
+      text_search_tokenizer: "builtin",
       modes: statuses,
       config_source: "runtime",
       ...overrides,

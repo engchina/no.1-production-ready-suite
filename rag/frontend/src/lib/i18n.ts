@@ -1744,6 +1744,8 @@ export const ja = {
 
   "businessViews.field.answerEngine": "回答エンジン",
   "businessViews.field.tokenizer": "全文検索の分割方式",
+  "settings.retrieval.tokenizer.description":
+    "キーワード検索（Oracle Text）の検索語の切り出し方です。Sudachi は日本語を形態素で分割し、業務ビューのドメインキーワードを 1 語として優先します。業務ビューで個別に上書きできます。",
   "businessViews.tokenizer.builtin": "標準（文字種の区切り）",
   "businessViews.tokenizer.sudachi": "Sudachi（形態素解析・DocRAG）",
   "businessViews.answerEngine.standard": "標準",

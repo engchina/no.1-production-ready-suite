@@ -9,8 +9,10 @@ import {
   CardTitle,
   Button,
   FormStatus,
+  SelectField,
   Skeleton,
   Switch,
+  type SelectFieldOption,
 } from "@engchina/production-ready-ui";
 import { useEffect, useState } from "react";
 import { CheckCircle2, RotateCcw, Save, Search } from "lucide-react";
@@ -22,6 +24,7 @@ import {
   type RetrievalSettingsData,
   type RetrievalStrategyName,
   type RetrievalStrategyStatusData,
+  type TextSearchTokenizerName,
 } from "@/lib/api";
 import { t, type I18nKey } from "@/lib/i18n";
 import { useRetrievalSettings, useUpdateRetrievalSettings } from "@/lib/queries";
@@ -43,7 +46,13 @@ interface RetrievalForm {
   gap_stop: boolean;
   corrective_retrieval: boolean;
   business_fit_weighting: boolean;
+  text_search_tokenizer: TextSearchTokenizerName;
 }
+
+const TOKENIZER_OPTIONS: SelectFieldOption<TextSearchTokenizerName>[] = [
+  { value: "builtin", label: t("businessViews.tokenizer.builtin") },
+  { value: "sudachi", label: t("businessViews.tokenizer.sudachi") },
+];
 
 function formFromSettings(settings: RetrievalSettingsData): RetrievalForm {
   return {
@@ -53,6 +62,7 @@ function formFromSettings(settings: RetrievalSettingsData): RetrievalForm {
     gap_stop: settings.gap_stop,
     corrective_retrieval: settings.corrective_retrieval,
     business_fit_weighting: settings.business_fit_weighting,
+    text_search_tokenizer: settings.text_search_tokenizer ?? "builtin",
   };
 }
 
@@ -250,6 +260,16 @@ export function RetrievalSettingsClient() {
                 onChange={(checked) => updateForm({ corrective_retrieval: checked })}
               />
             </div>
+          </div>
+          <div className="max-w-md">
+            <SelectField
+              id="retrieval-text-search-tokenizer"
+              label={t("businessViews.field.tokenizer")}
+              helper={t("settings.retrieval.tokenizer.description")}
+              value={form.text_search_tokenizer}
+              options={TOKENIZER_OPTIONS}
+              onValueChange={(value) => value && updateForm({ text_search_tokenizer: value })}
+            />
           </div>
           <div className="flex flex-col gap-3 border-t border-border pt-4 md:flex-row md:items-center md:justify-between">
             <div className="min-h-6">
