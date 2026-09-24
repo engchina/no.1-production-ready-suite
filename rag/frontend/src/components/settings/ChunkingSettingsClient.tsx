@@ -60,6 +60,7 @@ const STRATEGY_ORDER: ChunkingStrategyName[] = [
   "page_level",
   "fixed_size",
   "fixed_delimiter",
+  "docrag_small_to_big",
 ];
 
 const STRATEGY_PARAM_FIELDS: Record<ChunkingStrategyName, ChunkingParamField[]> = {
@@ -70,6 +71,8 @@ const STRATEGY_PARAM_FIELDS: Record<ChunkingStrategyName, ChunkingParamField[]> 
   page_level: ["chunk_size", "overlap", "min_chars"],
   fixed_size: ["chunk_size", "overlap"],
   fixed_delimiter: ["delimiter"],
+  // 親子サイズは rag_poc の既定(子 1000 字・親 6000 字)で固定する。
+  docrag_small_to_big: [],
 };
 
 /** 文書分割方式の現在設定とパラメータを管理する設定画面。 */
@@ -539,6 +542,7 @@ function chunkStrategyDiagramShapes(strategy: ChunkingStrategyName) {
         </>
       );
     case "hierarchical_parent_child":
+    case "docrag_small_to_big":
       // 親ブロックの中に子チャンク
       return (
         <>

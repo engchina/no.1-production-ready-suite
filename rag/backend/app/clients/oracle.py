@@ -29,6 +29,7 @@ from app.rag.business_view_config import (
     parse_business_view_config,
 )
 from app.rag.chunking import Chunk
+from app.rag.docrag_chunking import docrag_search_text
 from app.rag.graph_index import (
     GraphClaim,
     GraphCommunitySummary,
@@ -10531,6 +10532,9 @@ def _agent_memory_chunk_from_row(
 
 def _chunk_search_text(chunk: Chunk) -> str:
     """Oracle Text には文脈ヘッダを含め、表示本文は chunk.text のまま保つ。"""
+    if search_text := docrag_search_text(chunk.metadata):
+        # DocRAG は文書・節・親要約・表/図文脈を前置した rag_poc の search_text を索引する。
+        return search_text
     header = str(chunk.metadata.get("context_header") or "").strip()
     return f"{header}\n{chunk.text}" if header else chunk.text
 

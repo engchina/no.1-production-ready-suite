@@ -1804,7 +1804,8 @@ export type ChunkingStrategyName =
   | "markdown_heading"
   | "page_level"
   | "fixed_size"
-  | "fixed_delimiter";
+  | "fixed_delimiter"
+  | "docrag_small_to_big";
 
 // --- 設定: 前処理(Preprocess)アダプター ---
 export type PreprocessProfileName =
