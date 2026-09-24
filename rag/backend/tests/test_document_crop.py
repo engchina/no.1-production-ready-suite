@@ -7,6 +7,7 @@ import pytest
 
 from app.api.routes import documents as documents_route
 from app.main import app
+from app.rag import document_crop
 from tests.support import AsgiTestClient
 
 client = AsgiTestClient(app)
@@ -40,7 +41,7 @@ def _install(monkeypatch: pytest.MonkeyPatch, data: bytes) -> None:
             return data
 
     monkeypatch.setattr(documents_route, "OracleClient", FakeOracle)
-    monkeypatch.setattr(documents_route, "ObjectStorageClient", FakeStorage)
+    monkeypatch.setattr(document_crop, "ObjectStorageClient", FakeStorage)
 
 
 def _size(png: bytes) -> tuple[int, int]:

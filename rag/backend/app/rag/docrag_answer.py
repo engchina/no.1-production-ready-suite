@@ -14,8 +14,10 @@ rag_poc の ``answer_question_result``(質問ルーティング / CRAG / 親子�
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
+import re
 import tempfile
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -30,6 +32,7 @@ from app.config import (
     enterprise_ai_vision_model_id,
 )
 from app.rag.docrag_chunking import docrag_search_text
+from app.rag.document_crop import DocumentSourceNotFoundError, crop_png, load_parsed_source
 from app.schemas.search import RetrievedChunk, SearchMode, SearchRequest
 
 T = TypeVar("T")
@@ -52,9 +55,14 @@ class DocragAnswerOutcome:
 
 @dataclass
 class _SearchState:
-    """検索で見つけた backend chunk を chunk_id で保持し、引用へ戻すために使う。"""
+    """検索で見つけた backend chunk を chunk_id で保持し、引用へ戻すために使う。
+
+    work_dir は docrag の output_dir。根拠画像を ``<work_dir>/<run>/crops/`` へ切り出す。
+    """
 
     chunks: dict[str, RetrievedChunk] = field(default_factory=dict)
+    work_dir: Path | None = None
+    sources: dict[str, bytes | None] = field(default_factory=dict)
 
 
 def build_docrag_settings(
@@ -78,6 +86,9 @@ def build_docrag_settings(
         "LLM_RETRIES": str(int(settings.oci_enterprise_ai_max_retries)),
         # 別プロセスの domain_profile.json を拾わないよう、legacy 指定時も明示パスだけを読む。
         "DOCRAG_DOMAIN_PROFILE_FILE": os.environ.get("DOCRAG_DOMAIN_PROFILE_FILE", ""),
+        "DOCRAG_ANSWER_LLM_SUPPORTS_VISION": (
+            "1" if settings.rag_docrag_answer_vision_enabled else "0"
+        ),
     }
     if runtime_knowledge_path is not None:
         environ["RUNTIME_KNOWLEDGE_PATH"] = str(runtime_knowledge_path)
@@ -106,6 +117,7 @@ class DocragAnswerEngine:
         state = _SearchState()
         with tempfile.TemporaryDirectory(prefix="docrag-answer-") as work:
             work_dir = Path(work)
+            state.work_dir = work_dir
             runtime_path = None
             if self._runtime_knowledge_payload:
                 runtime_path = work_dir / "runtime_knowledge.json"
@@ -194,6 +206,11 @@ class DocragAnswerEngine:
         )
         for sibling in siblings:
             state.chunks.setdefault(sibling.chunk_id, sibling)
+        if self._settings.rag_docrag_answer_vision_enabled:
+            for chunk in [*anchors, *siblings]:
+                await self._materialize_image_evidence(chunk, state)
+            anchors = [state.chunks[chunk.chunk_id] for chunk in anchors]
+            siblings = [state.chunks.get(chunk.chunk_id, chunk) for chunk in siblings]
         children = [
             _stored_child(chunk, rrf_score=fused.get(chunk.chunk_id, 0.0)) for chunk in anchors
         ]
@@ -204,6 +221,68 @@ class DocragAnswerEngine:
         return HybridSearchResult(
             child_chunks=children, all_chunks=[*all_children.values(), *parents]
         )
+
+    async def _materialize_image_evidence(self, chunk: RetrievedChunk, state: _SearchState) -> None:
+        """根拠 chunk の image_evidence を作業ディレクトリへ切り出し、crop_path を差し替える。
+
+        rag_poc の answer_images は ``output_dir / source_run_id / crop_path`` を読むため、
+        文書ごとの run ディレクトリへ PNG を書き、metadata(docrag_metadata_json)を書き換える。
+        切り出せない画像は添付しない(回答は続ける)。
+        """
+        metadata = _docrag_metadata(chunk)
+        images = metadata.get("image_evidence")
+        width = chunk.metadata.get("page_width")
+        height = chunk.metadata.get("page_height")
+        if not isinstance(images, list) or not images or state.work_dir is None:
+            return
+        if not isinstance(width, int | float) or not isinstance(height, int | float):
+            return
+        run_id = _document_run_id(chunk.document_id)
+        crop_dir = state.work_dir / run_id / "crops"
+        for image in images:
+            if not isinstance(image, dict):
+                continue
+            bbox = image.get("bbox")
+            page = _int(image.get("page"))
+            image_id = str(image.get("image_id") or image.get("record_id") or "").strip()
+            if not image_id or page < 1 or not isinstance(bbox, list) or len(bbox) != 4:
+                continue
+            name = f"{_safe_name(image_id)}.png"
+            target = crop_dir / name
+            if not target.is_file():
+                source = await self._parsed_source(chunk.document_id, state)
+                if source is None:
+                    return
+                try:
+                    png = await asyncio.to_thread(
+                        crop_png,
+                        source,
+                        page,
+                        (float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3])),
+                        (float(width), float(height)),
+                    )
+                except ValueError:
+                    continue
+                crop_dir.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(png)
+            image["source_run_id"] = run_id
+            image["crop_path"] = f"crops/{name}"
+        state.chunks[chunk.chunk_id] = chunk.model_copy(
+            update={
+                "metadata": {
+                    **chunk.metadata,
+                    "docrag_metadata_json": json.dumps(metadata, ensure_ascii=False, default=str),
+                }
+            }
+        )
+
+    async def _parsed_source(self, document_id: str, state: _SearchState) -> bytes | None:
+        if document_id not in state.sources:
+            try:
+                state.sources[document_id] = await load_parsed_source(self._oracle, document_id)
+            except (DocumentSourceNotFoundError, ValueError):
+                state.sources[document_id] = None
+        return state.sources[document_id]
 
     async def _rerank(self, query: str, documents: list[str], top_n: int | None) -> list[Any]:
         from docrag.models.llm import RerankTextRank
@@ -249,6 +328,14 @@ def _docrag_metadata(chunk: RetrievedChunk) -> dict[str, Any]:
         "section_path": [part for part in section.split(" > ") if part],
         "section_path_sources": [],
     }
+
+
+def _document_run_id(document_id: str) -> str:
+    return hashlib.sha256(document_id.encode("utf-8")).hexdigest()[:16]
+
+
+def _safe_name(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]", "_", value)[:120]
 
 
 def _int(value: object, default: int = 0) -> int:

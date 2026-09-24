@@ -209,3 +209,102 @@ def test_business_view_overrides_text_search_tokenizer() -> None:
     settings, _ = resolve_business_view_settings(Settings(), config)
 
     assert settings.rag_text_search_tokenizer == "sudachi"
+
+
+def _pdf_with_figure() -> bytes:
+    import fitz  # type: ignore[import-untyped]
+
+    document = fitz.open()
+    page = document.new_page(width=500, height=700)
+    page.draw_rect(fitz.Rect(0, 0, 50, 35), color=(0, 0, 1), fill=(0, 0, 1))
+    data: bytes = document.tobytes()
+    document.close()
+    return data
+
+
+def _figure_oracle() -> FakeOracle:
+    oracle = FakeOracle()
+    figure = oracle.chunks[0]
+    metadata = json.loads(str(figure.metadata["docrag_metadata_json"]))
+    metadata["image_evidence"] = [
+        {
+            "image_id": "docling-p1-5",
+            "record_id": "docling-p1-5",
+            "page": 1,
+            "bbox": [0, 0, 100, 70],
+            "crop_path": "docling/visuals/missing.png",
+            "embedding_modality": "image_caption_fallback",
+        }
+    ]
+    oracle.chunks[0] = figure.model_copy(
+        update={
+            "metadata": {
+                **figure.metadata,
+                "page_width": 1000,
+                "page_height": 1400,
+                "docrag_metadata_json": json.dumps(metadata),
+            }
+        }
+    )
+    return oracle
+
+
+async def test_docrag_attaches_cropped_evidence_images_when_vision_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import docrag.adapters.oci as docrag_oci
+
+    import app.rag.docrag_answer as engine_module
+
+    loaded: list[str] = []
+
+    async def fake_source(oracle: object, document_id: str) -> bytes:
+        loaded.append(document_id)
+        return _pdf_with_figure()
+
+    images_seen: list[list[str]] = []
+
+    def fake_multimodal(
+        system: str, prompt: str, image_paths: list[Any], settings: Any, schema: type, **kw: Any
+    ) -> Any:
+        from pathlib import Path
+
+        images_seen.append([str(path) for path in image_paths])
+        assert all(Path(path).read_bytes().startswith(b"\x89PNG") for path in image_paths)
+        return _fake_llm(system, prompt, settings, schema, **kw)
+
+    monkeypatch.setattr(engine_module, "load_parsed_source", fake_source)
+    monkeypatch.setattr(docrag_oci, "parse_text_response", _fake_llm)
+    monkeypatch.setattr(docrag_oci, "parse_multimodal_response", fake_multimodal)
+    engine = DocragAnswerEngine(
+        Settings(rag_answer_engine="docrag", rag_docrag_answer_vision_enabled=True),
+        oracle=_figure_oracle(),  # type: ignore[arg-type]
+        genai=FakeGenAi(),  # type: ignore[arg-type]
+    )
+
+    outcome = await engine.run(SearchRequest(query="受注登録画面のボタンは？"))
+
+    assert loaded == ["doc-1"]
+    assert images_seen and images_seen[0][0].endswith("crops/docling-p1-5.png")
+    assert "登録ボタン" in outcome.answer
+
+
+async def test_docrag_does_not_crop_when_vision_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    import docrag.adapters.oci as docrag_oci
+
+    import app.rag.docrag_answer as engine_module
+
+    async def fail_source(oracle: object, document_id: str) -> bytes:
+        raise AssertionError("vision disabled では原本を読まない")
+
+    monkeypatch.setattr(engine_module, "load_parsed_source", fail_source)
+    monkeypatch.setattr(docrag_oci, "parse_text_response", _fake_llm)
+    engine = DocragAnswerEngine(
+        Settings(rag_answer_engine="docrag"),
+        oracle=_figure_oracle(),  # type: ignore[arg-type]
+        genai=FakeGenAi(),  # type: ignore[arg-type]
+    )
+
+    outcome = await engine.run(SearchRequest(query="受注登録画面のボタンは？"))
+
+    assert "登録ボタン" in outcome.answer

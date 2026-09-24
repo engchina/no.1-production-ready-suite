@@ -753,6 +753,13 @@ class Settings(BaseSettings):
             "(質問ルーティング / CRAG / 生成 + 監査ラウンド)を使う。"
         ),
     )
+    rag_docrag_answer_vision_enabled: bool = Field(
+        default=False,
+        description=(
+            "DocRAG 回答で根拠の図を切り出し、回答モデルへ画像として添付する"
+            "(回答モデルが画像入力に対応する場合のみ有効化する)。"
+        ),
+    )
     rag_docrag_profile: Literal["generic", "legacy"] = Field(
         default="generic",
         description=(
