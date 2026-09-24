@@ -18,7 +18,18 @@ BASE = "/api/business-views/bv-1/approved-faq"
 def fake_oracle(monkeypatch: pytest.MonkeyPatch) -> FakeKnowledgeOracle:
     fake = FakeKnowledgeOracle()
     monkeypatch.setattr(knowledge_route, "OracleClient", lambda: fake)
+    monkeypatch.setattr(knowledge_route, "OciGenAiClient", StubGenAi)
     return fake
+
+
+class StubGenAi:
+    """意味照合の embedding を決定論化する(外部 OCI を呼ばない)。"""
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        pass
+
+    async def embed(self, texts: list[str], *, input_type: str = "") -> list[list[float]]:
+        return [[1.0 if "取り消" in text else 0.0, 1.0] + [0.0] * 1534 for text in texts]
 
 
 def _excel(rows: list[tuple[str, str]]) -> bytes:

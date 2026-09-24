@@ -740,6 +740,12 @@ class Settings(BaseSettings):
         le=1000,
         description="Hybrid retrieval の Reciprocal Rank Fusion 定数。",
     )
+    rag_approved_faq_semantic_enabled: bool = Field(
+        default=True,
+        description=(
+            "Approved FAQ(類似問)の照合に embedding の意味類似度を加える(rag_poc と同じ既定 ON)。"
+        ),
+    )
     rag_answer_engine: Literal["standard", "docrag"] = Field(
         default="standard",
         description=(
