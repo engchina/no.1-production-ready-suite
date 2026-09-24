@@ -6,10 +6,31 @@ payload 形式と正規化・候補生成は rag_poc(DocRAG)の ``docrag.knowled
 
 from __future__ import annotations
 
+import json
+import tempfile
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Protocol
 
+from docrag.knowledge.approved_faq import (
+    APPROVED_FAQ_IMPORT_MODES,
+    DEFAULT_APPROVED_FAQ_DIRECT_MATCH_MIN_SCORE,
+    DEFAULT_APPROVED_FAQ_SUGGESTION_LIMIT,
+    ApprovedFaqImportRow,
+    ApprovedFaqMutationResult,
+    ApprovedFaqRecord,
+    ApprovedFaqSuggestion,
+    add_approved_faq_record,
+    apply_approved_faq_import_rows,
+    delete_approved_faq_records,
+    load_approved_faq_excel_rows,
+    load_approved_faq_payload,
+    load_approved_faq_records,
+    suggest_approved_faq_questions,
+)
 from docrag.knowledge.domain_keyword_candidates import (
     DomainKeywordCandidate,
     DomainKeywordSourceText,
@@ -104,3 +125,122 @@ async def suggest_domain_keywords(
         limit=limit,
     )
     return DomainKeywordSuggestion(candidates=candidates, processed_chunk_count=len(sources))
+
+
+# --- Approved FAQ(類似問)-----------------------------------------------------
+
+APPROVED_FAQ_KIND = "approved_faq"
+APPROVED_FAQ_PREVIEW_ROWS = 10
+
+
+@dataclass(frozen=True)
+class ApprovedFaqMutation:
+    records: list[ApprovedFaqRecord]
+    inserted_count: int
+    deleted_count: int
+
+
+async def load_approved_faq(
+    store: BusinessViewKnowledgeStore, business_view_id: str
+) -> list[ApprovedFaqRecord]:
+    """業務ビューの承認済み FAQ を返す。"""
+    payload = await store.get_business_view_knowledge(business_view_id, APPROVED_FAQ_KIND)
+    if payload is None:
+        return []
+    with _faq_file(payload) as path:
+        return load_approved_faq_records(path)
+
+
+async def mutate_approved_faq(
+    store: BusinessViewKnowledgeStore,
+    business_view_id: str,
+    operation: Callable[[Path], ApprovedFaqMutationResult],
+) -> ApprovedFaqMutation:
+    """rag_poc の FAQ 更新関数(ファイル前提)を一時ファイル上で実行し、結果を DB へ保存する。
+
+    ponytail: 同時編集は後勝ち。競合検出が必要になったら revision を条件に MERGE する。
+    """
+    payload = await store.get_business_view_knowledge(business_view_id, APPROVED_FAQ_KIND)
+    with _faq_file(payload) as path:
+        result = operation(path)
+        updated = load_approved_faq_payload(path)
+        records = load_approved_faq_records(path)
+    await store.save_business_view_knowledge(business_view_id, APPROVED_FAQ_KIND, updated)
+    return ApprovedFaqMutation(
+        records=records,
+        inserted_count=result.inserted_count,
+        deleted_count=result.deleted_count,
+    )
+
+
+async def add_approved_faq(
+    store: BusinessViewKnowledgeStore, business_view_id: str, *, question: str, answer: str
+) -> ApprovedFaqMutation:
+    return await mutate_approved_faq(
+        store,
+        business_view_id,
+        lambda path: add_approved_faq_record(path, question=question, approved_answer=answer),
+    )
+
+
+async def delete_approved_faq(
+    store: BusinessViewKnowledgeStore, business_view_id: str, ids: list[str]
+) -> ApprovedFaqMutation:
+    return await mutate_approved_faq(
+        store, business_view_id, lambda path: delete_approved_faq_records(path, ids)
+    )
+
+
+def read_approved_faq_excel(content: bytes, file_name: str) -> list[ApprovedFaqImportRow]:
+    """QUESTION / ANSWER 列の Excel を FAQ 取込行へ読む(不正な形式は ValueError)。"""
+    suffix = Path(file_name or "").suffix.lower()
+    if suffix not in {".xlsx", ".xls"}:
+        raise ValueError("Excel ファイル(.xlsx / .xls)を指定してください。")
+    with tempfile.TemporaryDirectory(prefix="approved-faq-") as work:
+        path = Path(work) / Path(file_name).name
+        path.write_bytes(content)
+        return load_approved_faq_excel_rows(path)
+
+
+async def import_approved_faq(
+    store: BusinessViewKnowledgeStore,
+    business_view_id: str,
+    rows: list[ApprovedFaqImportRow],
+    *,
+    mode: str,
+) -> ApprovedFaqMutation:
+    if mode not in APPROVED_FAQ_IMPORT_MODES:
+        raise ValueError(f"取込モードが不正です: {mode}")
+    return await mutate_approved_faq(
+        store,
+        business_view_id,
+        lambda path: apply_approved_faq_import_rows(path, rows, mode=mode),
+    )
+
+
+async def suggest_approved_faq(
+    store: BusinessViewKnowledgeStore,
+    business_view_id: str,
+    question: str,
+    *,
+    limit: int = DEFAULT_APPROVED_FAQ_SUGGESTION_LIMIT,
+) -> list[ApprovedFaqSuggestion]:
+    """質問に近い承認済み FAQ を返す(文字列類似度。LLM / embedding は使わない)。"""
+    records = await load_approved_faq(store, business_view_id)
+    if not records or not question.strip():
+        return []
+    return suggest_approved_faq_questions(question, records, limit=limit)
+
+
+def is_direct_faq_match(suggestion: ApprovedFaqSuggestion) -> bool:
+    """rag_poc と同じく 0.92 以上を FAQ 回答をそのまま使える候補とみなす。"""
+    return suggestion.score >= DEFAULT_APPROVED_FAQ_DIRECT_MATCH_MIN_SCORE
+
+
+@contextmanager
+def _faq_file(payload: Mapping[str, object] | None) -> Iterator[Path]:
+    with tempfile.TemporaryDirectory(prefix="approved-faq-") as work:
+        path = Path(work) / "approved_faq.json"
+        if payload is not None:
+            path.write_text(json.dumps(dict(payload), ensure_ascii=False), encoding="utf-8")
+        yield path

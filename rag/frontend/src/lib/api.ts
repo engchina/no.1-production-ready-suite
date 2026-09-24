@@ -2874,6 +2874,40 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ keywords }),
     }),
+  getApprovedFaq: (id: string) =>
+    request<ApprovedFaqListData>(`/api/business-views/${encodeURIComponent(id)}/approved-faq`),
+  addApprovedFaq: (id: string, body: { question: string; answer: string }) =>
+    request<ApprovedFaqMutationData>(
+      `/api/business-views/${encodeURIComponent(id)}/approved-faq`,
+      jsonBody(body)
+    ),
+  deleteApprovedFaq: (id: string, ids: string[]) =>
+    request<ApprovedFaqMutationData>(
+      `/api/business-views/${encodeURIComponent(id)}/approved-faq/delete`,
+      jsonBody({ ids })
+    ),
+  previewApprovedFaqImport: (id: string, file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return request<ApprovedFaqImportPreviewData>(
+      `/api/business-views/${encodeURIComponent(id)}/approved-faq/import/preview`,
+      { method: "POST", body: form }
+    );
+  },
+  importApprovedFaq: (id: string, file: File, mode: ApprovedFaqImportMode) => {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("mode", mode);
+    return request<ApprovedFaqMutationData>(
+      `/api/business-views/${encodeURIComponent(id)}/approved-faq/import`,
+      { method: "POST", body: form }
+    );
+  },
+  suggestApprovedFaq: (id: string, query: string) =>
+    request<ApprovedFaqSuggestionsData>(
+      `/api/business-views/${encodeURIComponent(id)}/approved-faq/suggest`,
+      jsonBody({ query })
+    ),
   suggestDomainKeywords: (id: string) =>
     request<DomainKeywordSuggestionData>(
       `/api/business-views/${encodeURIComponent(id)}/domain-keywords/suggest`,
@@ -3188,4 +3222,43 @@ export interface DomainKeywordCandidateData {
 export interface DomainKeywordSuggestionData {
   candidates: DomainKeywordCandidateData[];
   processed_chunk_count: number;
+}
+
+// --- 業務ビューの知識: Approved FAQ(類似問) ---
+export type ApprovedFaqImportMode = "INSERT" | "DELETE_THEN_INSERT";
+
+export interface ApprovedFaqRecordData {
+  id: string;
+  question: string;
+  answer: string;
+  alternate_questions: string[];
+  status: string;
+}
+
+export interface ApprovedFaqListData {
+  business_view_id: string;
+  records: ApprovedFaqRecordData[];
+}
+
+export interface ApprovedFaqMutationData extends ApprovedFaqListData {
+  inserted_count: number;
+  deleted_count: number;
+}
+
+export interface ApprovedFaqImportPreviewData {
+  total: number;
+  rows: { question: string; answer: string; row: number }[];
+}
+
+export interface ApprovedFaqSuggestionData {
+  id: string;
+  question: string;
+  matched_question: string;
+  answer: string;
+  score: number;
+  direct: boolean;
+}
+
+export interface ApprovedFaqSuggestionsData {
+  suggestions: ApprovedFaqSuggestionData[];
 }
