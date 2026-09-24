@@ -1550,6 +1550,18 @@ class RagPipeline:
         record_rag_request(
             request.mode.value, outcome_label, elapsed / 1000, len(outcome.citations)
         )
+        record_rag_search_audit(
+            trace_id=trace_id,
+            outcome=outcome_label,
+            mode=request.mode,
+            sanitized_query=query_guardrail.sanitized_text,
+            filters=request.filters,
+            findings=[*query_guardrail.findings, *answer_guardrail.findings],
+            retrieved_count=len(outcome.citations),
+            citations=outcome.citations,
+            elapsed_ms=elapsed,
+            diagnostics=diagnostics,
+        )
         return SearchResponse(
             answer=final_answer,
             citations=outcome.citations,

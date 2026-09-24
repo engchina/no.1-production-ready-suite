@@ -46,6 +46,7 @@ for (const viewport of [
     await expect(settings.getByRole("heading", { level: 3 })).toHaveText([
       "検索方法",
       "検索オプション",
+      "全文検索の分割方式",
       "根拠確認",
       "回答エンジン",
       "回答スタイル",
@@ -54,9 +55,9 @@ for (const viewport of [
       "品質評価",
     ]);
     await expect(settings.getByRole("heading", { name: "検索インデックス" })).toHaveCount(0);
-    // 継承 chip: セレクト6行(回答エンジンを含む) + 検索オプションの三値トグル5行。
-    await expect(settings.getByRole("button", { name: "グローバル既定を継承" })).toHaveCount(11);
-    await expect(settings.getByRole("button", { name: "業務ビューで上書き" })).toHaveCount(6);
+    // 継承 chip: セレクト7行(分割方式・回答エンジンを含む) + 検索オプションの三値トグル5行。
+    await expect(settings.getByRole("button", { name: "グローバル既定を継承" })).toHaveCount(12);
+    await expect(settings.getByRole("button", { name: "業務ビューで上書き" })).toHaveCount(7);
     await expect(page.getByLabel("回答の役割・口調")).toBeVisible();
     await expectNoPageOverflow(page);
   });
