@@ -3,6 +3,8 @@ export type DocragDiagnostics = {
   confidence: string;
   needsHumanReview: boolean | null;
   insufficientReason: string;
+  /** チャットで会話履歴から書き換えた質問(書き換えなしは空)。 */
+  rewrittenQuestion: string;
   generatedQueries: string[];
   steps: {
     name: string;
@@ -50,6 +52,7 @@ export function parseDocragDiagnostics(
         ? raw.needs_human_review
         : null,
     insufficientReason: String(raw.insufficient_reason ?? ""),
+    rewrittenQuestion: String(raw.rewritten_question ?? ""),
     generatedQueries: list(raw.generated_queries).map(String).filter(Boolean),
     steps: list(raw.execution_steps).map((step) => {
       const item = record(step);

@@ -308,3 +308,98 @@ async def test_docrag_does_not_crop_when_vision_disabled(monkeypatch: pytest.Mon
     outcome = await engine.run(SearchRequest(query="受注登録画面のボタンは？"))
 
     assert "登録ボタン" in outcome.answer
+
+
+def _nfkc(text: str) -> str:
+    """rag_poc は質問を NFKC 正規化してから検索する(全角「？」→「?」)。"""
+    import unicodedata
+
+    return unicodedata.normalize("NFKC", text)
+
+
+class QueryRecordingOracle(FakeOracle):
+    def __init__(self) -> None:
+        super().__init__()
+        self.queries: list[str] = []
+
+    async def hybrid_search(
+        self,
+        query: str,
+        embedding: list[float],
+        top_k: int,
+        mode: SearchMode = SearchMode.HYBRID,
+        filters: dict[str, str] | None = None,
+    ) -> list[RetrievedChunk]:
+        self.queries.append(query)
+        return await super().hybrid_search(query, embedding, top_k, mode, filters)
+
+
+class RewriteLlm:
+    def __init__(self, reply: str | Exception) -> None:
+        self.reply = reply
+        self.calls: list[tuple[str, str]] = []
+
+    async def generate(self, prompt: str, context: str, **kwargs: Any) -> str:
+        self.calls.append((prompt, context))
+        if isinstance(self.reply, Exception):
+            raise self.reply
+        return self.reply
+
+
+async def _run_chat(
+    monkeypatch: pytest.MonkeyPatch, llm: RewriteLlm, *, history: bool
+) -> tuple[Any, QueryRecordingOracle]:
+    import docrag.adapters.oci as docrag_oci
+
+    from app.rag.pipeline import ChatTurn, RagPipeline
+
+    monkeypatch.setattr(docrag_oci, "parse_text_response", _fake_llm)
+    oracle = QueryRecordingOracle()
+    pipeline = RagPipeline(
+        settings=Settings(rag_answer_engine="docrag"),
+        oracle=oracle,  # type: ignore[arg-type]
+        genai=FakeGenAi(),  # type: ignore[arg-type]
+        llm=llm,  # type: ignore[arg-type]
+    )
+    turns = (
+        [
+            ChatTurn(role="USER", content="受注入力画面の使い方は？"),
+            ChatTurn(role="ASSISTANT", content="受注番号を入力して登録します。"),
+        ]
+        if history
+        else None
+    )
+    response = await pipeline.run(SearchRequest(query="それの登録方法は？"), history=turns)
+    return response, oracle
+
+
+async def test_docrag_chat_rewrites_question_from_history(monkeypatch: pytest.MonkeyPatch) -> None:
+    llm = RewriteLlm("受注入力画面での受注の登録方法は？")
+
+    response, oracle = await _run_chat(monkeypatch, llm, history=True)
+
+    assert llm.calls and "受注入力画面の使い方" in llm.calls[0][1]
+    assert oracle.queries[0] == _nfkc("受注入力画面での受注の登録方法は？")
+    assert response.diagnostics.docrag is not None
+    assert response.diagnostics.docrag["original_question"] == "それの登録方法は？"
+    assert response.diagnostics.docrag["rewritten_question"] == "受注入力画面での受注の登録方法は？"
+
+
+async def test_docrag_single_question_does_not_rewrite(monkeypatch: pytest.MonkeyPatch) -> None:
+    llm = RewriteLlm("使われないはず")
+
+    response, oracle = await _run_chat(monkeypatch, llm, history=False)
+
+    assert llm.calls == []
+    assert oracle.queries[0] == _nfkc("それの登録方法は？")
+    assert response.diagnostics.docrag is not None
+    assert response.diagnostics.docrag["rewritten_question"] == ""
+
+
+async def test_docrag_rewrite_failure_keeps_original_question(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response, oracle = await _run_chat(monkeypatch, RewriteLlm(RuntimeError("down")), history=True)
+
+    assert oracle.queries[0] == _nfkc("それの登録方法は？")
+    assert "登録ボタン" in response.answer

@@ -8,6 +8,7 @@ describe("parseDocragDiagnostics", () => {
       confidence: "high",
       needs_human_review: false,
       insufficient_reason: "",
+      rewritten_question: "受注入力画面での受注の登録方法は？",
       generated_queries: ["受注 登録"],
       execution_steps: [
         {
@@ -33,6 +34,7 @@ describe("parseDocragDiagnostics", () => {
         },
       ],
     });
+    expect(parsed?.rewrittenQuestion).toBe("受注入力画面での受注の登録方法は？");
     expect(parsed?.steps[0]).toEqual({
       name: "質問の理解",
       status: "complete",

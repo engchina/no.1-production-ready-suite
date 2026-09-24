@@ -636,3 +636,37 @@ test("長い日本語の会話名でも一覧が横へはみ出さない", async
   await page.getByRole("option", { name: "経理アシスタント" }).click();
   await expectNoPageOverflow(page);
 });
+
+test("DocRAG 回答ではチャットにも根拠パネルと会話から補った質問を表示する", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const docrag = {
+    confidence: "high",
+    needs_human_review: false,
+    insufficient_reason: "",
+    original_question: "それの上限は？",
+    rewritten_question: "経費精算の上限額は？",
+    generated_queries: [],
+    execution_steps: [{ name: "質問の理解", status: "complete", elapsed_seconds: 0.2, llm_calls: 0 }],
+    evidence_tree: [],
+  };
+  const streamBody = [
+    sseStart,
+    `event: delta\ndata: ${JSON.stringify({ model_id: "m1", text: "経費の上限は 10 万円です。" })}\n\n`,
+    `event: metadata\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1", trace_id: "t1", elapsed_ms: 5, guardrail_warnings: [], docrag })}\n\n`,
+    `event: citations\ndata: ${JSON.stringify({ model_id: "m1", citations: [] })}\n\n`,
+    `event: done\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1" })}\n\n`,
+  ].join("");
+  await mockChat(page, "ready", [], { streamBody });
+
+  await page.goto("/chat");
+  await page.getByRole("combobox", { name: "業務ビュー" }).click();
+  await page.getByRole("option", { name: "経理アシスタント" }).click();
+  await page.getByRole("button", { name: "新しい会話" }).click();
+  await page.getByRole("textbox").fill(userMessage.content);
+  await page.getByRole("button", { name: "送信" }).click();
+
+  const panel = page.getByRole("region", { name: "回答の根拠と実行記録（DocRAG）" });
+  await expect(panel).toBeVisible();
+  await expect(panel.getByText("会話の流れから補った質問: 経費精算の上限額は？")).toBeVisible();
+  await expect(panel.getByText("信頼度: high")).toBeVisible();
+});
