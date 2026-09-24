@@ -4780,6 +4780,88 @@ async def document_content(
     )
 
 
+MAX_CROP_PIXELS = 4000 * 4000
+
+
+@router.get("/{document_id}/crop")
+async def document_crop(
+    document_id: str,
+    page: Annotated[int, Query(ge=1, le=10000)],
+    x0: Annotated[float, Query(ge=0)],
+    y0: Annotated[float, Query(ge=0)],
+    x1: Annotated[float, Query(gt=0)],
+    y1: Annotated[float, Query(gt=0)],
+    page_width: Annotated[float, Query(gt=0)],
+    page_height: Annotated[float, Query(gt=0)],
+    dpi: Annotated[int, Query(ge=36, le=300)] = 150,
+) -> Response:
+    """解析に使ったファイルから bbox の領域を PNG で切り出す(解析結果プレビュー用)。
+
+    bbox は解析結果のページ画像 px 座標(page_width / page_height 基準)。ファイル準備後の
+    artifact があればそれ(解析対象)を、無ければ原本を開く。画像ファイルは 1 ページとして扱う。
+    """
+    if x1 <= x0 or y1 <= y0 or x1 > page_width * 1.001 or y1 > page_height * 1.001:
+        raise HTTPException(status_code=422, detail="切り出し範囲が不正です。")
+    oracle = OracleClient()
+    detail = await oracle.get_document(document_id)
+    if detail is None or detail.object_storage_path is None:
+        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
+    artifact = detail.preprocess_artifact
+    path = (
+        artifact.object_storage_path
+        if artifact is not None and artifact.object_storage_path
+        else detail.object_storage_path
+    )
+    try:
+        data = await ObjectStorageClient().get(path)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="原本ファイルが見つかりません。") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="原本ファイルの参照パスが不正です。") from exc
+    try:
+        png = await asyncio.to_thread(
+            _crop_png, data, page, (x0, y0, x1, y1), (page_width, page_height), dpi
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return Response(
+        content=png,
+        media_type="image/png",
+        headers={"Cache-Control": "private, max-age=300", "X-Content-Type-Options": "nosniff"},
+    )
+
+
+def _crop_png(
+    data: bytes,
+    page_number: int,
+    bbox: tuple[float, float, float, float],
+    page_size: tuple[float, float],
+    dpi: int,
+) -> bytes:
+    """PDF / 画像の 1 ページから bbox を切り出して PNG にする(pymupdf)。"""
+    import fitz  # type: ignore[import-untyped]
+
+    try:
+        document = fitz.open(stream=data)
+    except Exception as exc:
+        raise ValueError("このファイルは切り出しに対応していません。") from exc
+    with document:
+        if page_number > document.page_count:
+            raise ValueError("ページ番号がファイルのページ数を超えています。")
+        page = document[page_number - 1]
+        scale_x = page.rect.width / page_size[0]
+        scale_y = page.rect.height / page_size[1]
+        clip = (
+            fitz.Rect(bbox[0] * scale_x, bbox[1] * scale_y, bbox[2] * scale_x, bbox[3] * scale_y)
+            & page.rect
+        )
+        zoom = dpi / 72
+        if clip.is_empty or clip.width * clip.height * zoom * zoom > MAX_CROP_PIXELS:
+            raise ValueError("切り出し範囲が不正です。")
+        pixmap = page.get_pixmap(clip=clip, matrix=fitz.Matrix(zoom, zoom))
+        return bytes(pixmap.tobytes("png"))
+
+
 async def _document_content_response(
     detail: DocumentDetail,
     *,

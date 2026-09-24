@@ -125,3 +125,32 @@ export function docragVisionDetails(
   if (!lines.length && !excludedReason) return null;
   return { lines, excludedReason };
 }
+
+/** 図・表要素の切り出し画像 URL(crop API)。bbox / ページ寸法が無ければ null。 */
+export function elementCropUrl(documentId: string, element: DocumentElement): string | null {
+  const bbox = element.bbox;
+  const metadata = element.metadata ?? {};
+  const width = metadata.page_width;
+  const height = metadata.page_height;
+  if (
+    !bbox ||
+    bbox.length !== 4 ||
+    typeof element.page_number !== "number" ||
+    typeof width !== "number" ||
+    typeof height !== "number"
+  ) {
+    return null;
+  }
+  const [x0, y0, x1, y1] = bbox;
+  if (!(x1 > x0 && y1 > y0)) return null;
+  const search = new URLSearchParams({
+    page: String(element.page_number),
+    x0: String(Math.max(0, x0)),
+    y0: String(Math.max(0, y0)),
+    x1: String(Math.min(width, x1)),
+    y1: String(Math.min(height, y1)),
+    page_width: String(width),
+    page_height: String(height),
+  });
+  return `/api/documents/${encodeURIComponent(documentId)}/crop?${search.toString()}`;
+}

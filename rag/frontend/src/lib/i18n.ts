@@ -2307,6 +2307,7 @@ export const ja = {
   "flow.extraction.assets.title": "図表の要約",
   "flow.extraction.fields.title": "抽出項目",
   "flow.extraction.vision.details": "Vision の読み取り内容",
+  "flow.extraction.vision.cropAlt": "解析に使ったファイルから切り出した図・表の画像",
   "flow.extraction.vision.excludedReason": "装飾として検索対象外: {reason}",
   "flow.extraction.vision.field.visual_kind": "図の種類",
   "flow.extraction.vision.field.main_topic": "主題",

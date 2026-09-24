@@ -30,7 +30,12 @@ import {
   parseStructuredExtraction,
   summarizeDocumentElements,
 } from "@/lib/extraction";
-import { docragVisionDetails, elementVision, tableHtmlToText } from "@/lib/docrag-element";
+import {
+  docragVisionDetails,
+  elementCropUrl,
+  elementVision,
+  tableHtmlToText,
+} from "@/lib/docrag-element";
 import { scrollFocusedControlIntoView } from "@/lib/focus-scroll";
 import { formatNumber } from "@/lib/format";
 import { t, type I18nKey } from "@/lib/i18n";
@@ -83,8 +88,11 @@ export function DocumentExtraction({
   focusSelectedTableCell = false,
   onElementSelect,
   onTableCellSelect,
+  documentId = null,
 }: {
   extraction: Record<string, unknown>;
+  /** 指定時は図・表の Vision 詳細に切り出し画像(crop API)を表示する。 */
+  documentId?: string | null;
   selectedElementId?: string | null;
   selectedTableCellKey?: string | null;
   focusRequestKey?: string | null;
@@ -195,6 +203,7 @@ export function DocumentExtraction({
                   }
                   onSelect={onElementSelect}
                   visionDetails={docragVisionDetails(extraction, elementKey(element))}
+                  cropUrl={documentId ? elementCropUrl(documentId, element) : null}
                 />
               ))}
             </ol>
@@ -388,12 +397,14 @@ function ElementItem({
   buttonRef,
   onSelect,
   visionDetails = null,
+  cropUrl = null,
 }: {
   element: DocumentElement;
   selected: boolean;
   buttonRef?: Ref<HTMLButtonElement>;
   onSelect?: (elementId: string) => void;
   visionDetails?: ReturnType<typeof docragVisionDetails>;
+  cropUrl?: string | null;
 }) {
   const id = elementKey(element);
   const lowConfidence = typeof element.confidence === "number" && element.confidence < 0.65;
@@ -463,7 +474,7 @@ function ElementItem({
           />
         </div>
       </button>
-      {visionDetails ? <VisionDetails details={visionDetails} /> : null}
+      {visionDetails ? <VisionDetails details={visionDetails} cropUrl={cropUrl} /> : null}
     </li>
   );
 }
@@ -610,14 +621,24 @@ function CopyRawTextButton({ text }: { text: string }) {
 /** rag_poc viewer の VisualDetails 相当: Vision が読み取った構造化項目と除外理由。 */
 function VisionDetails({
   details,
+  cropUrl,
 }: {
   details: NonNullable<ReturnType<typeof docragVisionDetails>>;
+  cropUrl: string | null;
 }) {
   return (
     <details className="mt-1 rounded-md border border-border bg-surface px-3 py-2">
       <summary className="cursor-pointer text-xs font-medium text-fg">
         {t("flow.extraction.vision.details")}
       </summary>
+      {cropUrl ? (
+        <img
+          src={cropUrl}
+          alt={t("flow.extraction.vision.cropAlt")}
+          loading="lazy"
+          className="mt-2 max-h-48 max-w-full rounded border border-border bg-surface-sunken object-contain"
+        />
+      ) : null}
       {details.excludedReason ? (
         <p className="mt-2 text-xs text-fg-muted">
           {t("flow.extraction.vision.excludedReason", { reason: details.excludedReason })}

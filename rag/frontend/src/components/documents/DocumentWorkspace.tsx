@@ -1323,6 +1323,7 @@ export function DocumentWorkspace({
                 ) : (
                   <DocumentExtraction
                     extraction={selectedExtraction}
+                    documentId={documentId}
                     selectedElementId={selectedElementId}
                     selectedTableCellKey={selectedTableCellKey}
                     focusRequestKey={focusRequest?.key ?? null}
