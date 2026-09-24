@@ -186,7 +186,19 @@ export function SearchClient() {
     return () => window.clearInterval(timer);
   }, [phase, runStartedAtMs]);
 
+  // pointerdown と click の両方から呼ばれる。類似問の照会を await する間も二重送信しないよう ref で守る。
+  const submittingRef = useRef(false);
   const submit = async (skipFaq = false) => {
+    if (submittingRef.current) return;
+    submittingRef.current = true;
+    try {
+      await runSubmit(skipFaq);
+    } finally {
+      submittingRef.current = false;
+    }
+  };
+
+  const runSubmit = async (skipFaq: boolean) => {
     const trimmed = query.trim();
     if (!trimmed || phase === "streaming") return;
     if (businessViewIds.length === 0) {

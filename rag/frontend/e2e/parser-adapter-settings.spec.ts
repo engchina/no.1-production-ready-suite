@@ -320,6 +320,7 @@ test("文書解析設定は使用エンジンを保存できる", async ({ page 
   expect(savedPayload).toEqual({
     adapter_backend: "mineru",
     docling_enabled: false,
+    docling_vision_enabled: false,
     marker_enabled: false,
     unstructured_enabled: false,
     unlimited_ocr_enabled: false,
