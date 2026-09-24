@@ -4,8 +4,10 @@ import pytest
 from pytest import MonkeyPatch
 
 from app.api.routes import business_view_knowledge as knowledge_route
+from app.api.routes import search as search_route
 from app.main import app
-from app.rag.business_view_config import BusinessViewConfig, KnowledgeBaseQueryConfig
+from app.rag.business_view_config import BusinessViewConfig
+from app.rag.kb_adapter_config import KnowledgeBaseQueryConfig
 from tests import test_search_business_view as search_tests
 from tests.support import AsgiTestClient
 from tests.test_business_view_domain_keywords import FakeKnowledgeOracle
@@ -75,7 +77,7 @@ def test_search_context_carries_business_view_runtime_knowledge(monkeypatch: Mon
     )
     search_tests._install(monkeypatch, {"bv-1": config})
     monkeypatch.setattr(
-        search_tests.search_route,
+        search_route,
         "OracleClient",
         lambda *_args, **_kwargs: KnowledgeViewOracle({"bv-1": config}),
     )
