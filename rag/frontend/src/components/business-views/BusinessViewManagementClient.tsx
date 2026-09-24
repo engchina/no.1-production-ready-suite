@@ -24,6 +24,7 @@ import { useConfirm } from "@/components/ui/confirm-dialog";
 import {
   ApiError,
   DEFAULT_BUSINESS_VIEW_NAME,
+  type AnswerEngineName,
   type BusinessViewConfig,
   type BusinessViewDetail,
   type BusinessViewStatus,
@@ -110,6 +111,10 @@ const GENERATION_OPTIONS: SelectFieldOption<GenerationProfileName>[] = [
   { value: "bilingual_ja_en", label: t("settings.generation.profile.bilingual_ja_en") },
   { value: "inline_cited", label: t("settings.generation.profile.inline_cited") },
   { value: "custom", label: t("settings.generation.profile.custom") },
+];
+const ANSWER_ENGINE_OPTIONS: SelectFieldOption<AnswerEngineName>[] = [
+  { value: "standard", label: t("businessViews.answerEngine.standard") },
+  { value: "docrag", label: t("businessViews.answerEngine.docrag") },
 ];
 const GUARDRAIL_OPTIONS: SelectFieldOption<GuardrailPolicyName>[] = [
   { value: "standard", label: t("settings.guardrail.policy.standard") },
@@ -553,6 +558,15 @@ function BusinessViewForm({
                 defaultOnOverride="verified_context"
                 disabled={pending}
                 onChange={(value) => updateQuery({ post_retrieval_pipeline: value })}
+              />
+              <QuerySelectRow
+                id="business-view-answer-engine"
+                label={t("businessViews.field.answerEngine")}
+                value={config.query.answer_engine ?? null}
+                options={ANSWER_ENGINE_OPTIONS}
+                defaultOnOverride="docrag"
+                disabled={pending}
+                onChange={(value) => updateQuery({ answer_engine: value })}
               />
               <QuerySelectRow
                 id="business-view-generation"

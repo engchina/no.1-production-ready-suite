@@ -740,11 +740,33 @@ class Settings(BaseSettings):
         le=1000,
         description="Hybrid retrieval の Reciprocal Rank Fusion 定数。",
     )
+    rag_answer_engine: Literal["standard", "docrag"] = Field(
+        default="standard",
+        description=(
+            "回答エンジン。docrag は rag_poc(DocRAG)の根拠付き回答"
+            "(質問ルーティング / CRAG / 生成 + 監査ラウンド)を使う。"
+        ),
+    )
+    rag_docrag_profile: Literal["generic", "legacy"] = Field(
+        default="generic",
+        description=(
+            "DocRAG の業務 profile。legacy は DOCRAG_DOMAIN_PROFILE_FILE の業務分類・"
+            "日本語問い合わせ規則を有効化する(既定 OFF)。"
+        ),
+    )
     rag_text_search_tokenizer: Literal["builtin", "sudachi"] = Field(
         default="builtin",
         description=(
             "Oracle Text 全文検索クエリの分割方式。sudachi は rag_poc(DocRAG)の Sudachi 分割。"
             "業務ビューにドメインキーワードがある場合は builtin でも DocRAG の分割で組み立てる。"
+        ),
+    )
+    rag_runtime_knowledge: dict[str, object] = Field(
+        default_factory=dict,
+        description=(
+            "リクエスト単位で業務ビューから解決する用語・ルール"
+            "(rag_poc runtime knowledge payload)。"
+            "DocRAG 回答エンジンだけが使う。"
         ),
     )
     rag_domain_keywords: list[str] = Field(

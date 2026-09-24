@@ -90,6 +90,7 @@ _QUERY_FIELD_MAP: dict[str, str] = {
     "generation_profile": "rag_generation_profile",
     "guardrail_policy": "rag_guardrail_policy",
     "evaluation_suite": "rag_evaluation_suite",
+    "answer_engine": "rag_answer_engine",
 }
 
 # 外部 parser adapter backend -> その有効化 feature flag(Settings フィールド名)。
@@ -173,6 +174,8 @@ class KnowledgeBaseQueryConfig(BaseModel):
         description="legacy 読み取り専用。共有検索インデックスは Business View で上書きしない。",
     )
     evaluation_suite: EvaluationSuiteName | None = None
+    # 回答エンジン(standard / docrag)。None はグローバル継承。
+    answer_engine: Literal["standard", "docrag"] | None = None
 
 
 class KnowledgeBaseAdapterConfig(BaseModel):

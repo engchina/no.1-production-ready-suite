@@ -46,6 +46,7 @@ import { t, type I18nKey } from "@/lib/i18n";
 import { APP_ROUTES } from "@/lib/routes";
 import { useBusinessViews } from "@/lib/queries";
 import { formatDateTime } from "@/lib/format";
+import { DocragAnswerPanel } from "./DocragAnswerPanel";
 
 type Phase = "idle" | "streaming" | "done" | "cancelled" | "error";
 
@@ -605,6 +606,9 @@ export function SearchClient() {
                   ) : null}
                   {meta && phase === "done" ? (
                     <SearchExecutionMeta meta={meta} />
+                  ) : null}
+                  {meta && phase === "done" && meta.diagnostics?.docrag ? (
+                    <DocragAnswerPanel docrag={meta.diagnostics.docrag} />
                   ) : null}
                 </CardContent>
               </Card>

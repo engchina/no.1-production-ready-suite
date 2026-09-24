@@ -135,6 +135,12 @@ def _backend_chunk(
             "text_sha256": hashlib.sha256(child.text.encode("utf-8")).hexdigest(),
             # metadata v4 全体(display_regions / image_evidence 等)は JSON で保持する。
             "docrag_metadata_json": json.dumps(metadata, ensure_ascii=False, default=str),
+            # 回答根拠の record 対応(bbox ハイライト)に使う。
+            "docrag_source_record_refs_json": json.dumps(
+                child.source_record_refs, ensure_ascii=False, default=str
+            ),
+            "docrag_source_seq_ranges_json": json.dumps(child.source_seq_ranges, default=str),
+            "docrag_chunk_seq": child.chunk_seq,
         },
     )
 
