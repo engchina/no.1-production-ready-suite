@@ -461,7 +461,6 @@ function RecentIngestionJobsPanel() {
 function IngestionJobBadge({ job }: { job: IngestionJob | null | undefined }) {
   if (!job) return null;
   const status = job.status;
-  const Icon = jobIcon(status);
   return (
     <span
       className={cn(
@@ -469,28 +468,28 @@ function IngestionJobBadge({ job }: { job: IngestionJob | null | undefined }) {
         jobBadgeClass(status)
       )}
     >
-      <Icon size={14} aria-hidden className={status === "RUNNING" ? "animate-spin" : ""} />
+      <JobStatusIcon status={status} />
       {t(jobStatusKey(status))}
     </span>
   );
 }
 
-function jobIcon(status: IngestionJob["status"]) {
+/** ジョブ状態のアイコン（実行中だけ回す）。アイコンの選択を render 中のコンポーネント生成にしない。 */
+function JobStatusIcon({ status }: { status: IngestionJob["status"] }) {
   switch (status) {
-    case "QUEUED":
-      return Clock3;
     case "RUNNING":
-      return Loader2;
+      return <Loader2 size={14} aria-hidden className="animate-spin" />;
     case "SUCCEEDED":
-      return CheckCircle2;
+      return <CheckCircle2 size={14} aria-hidden className="" />;
     case "FAILED":
-      return XCircle;
+      return <XCircle size={14} aria-hidden className="" />;
     case "SKIPPED":
-      return AlertTriangle;
+      return <AlertTriangle size={14} aria-hidden className="" />;
     case "CANCELLED":
-      return Ban;
+      return <Ban size={14} aria-hidden className="" />;
+    case "QUEUED":
     default:
-      return Clock3;
+      return <Clock3 size={14} aria-hidden className="" />;
   }
 }
 

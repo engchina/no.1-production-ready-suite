@@ -415,22 +415,26 @@ function bboxOverlayStyle(rect: BboxOverlayRect): CSSProperties {
 }
 
 function TextPreview({ url }: { url: string }) {
-  const [text, setText] = useState<string | null>(null);
-  const [error, setError] = useState(false);
+  // 取得結果は URL ごとに持つ。URL が変わった直後は前の結果を使わず、読込中として扱う。
+  const [result, setResult] = useState<{ url: string; text: string | null; error: boolean } | null>(
+    null
+  );
+  const text = result?.url === url ? result.text : null;
+  const error = result?.url === url ? result.error : false;
 
   useEffect(() => {
     const controller = new AbortController();
-    setText(null);
-    setError(false);
     fetch(url, { signal: controller.signal })
       .then(async (res) => {
         if (!res.ok) throw new Error(String(res.status));
         const charset = charsetFromContentType(res.headers.get("Content-Type"));
         return decodeText(await res.arrayBuffer(), charset);
       })
-      .then(setText)
+      .then((decoded) => setResult({ url, text: decoded, error: false }))
       .catch((e: unknown) => {
-        if (!(e instanceof DOMException && e.name === "AbortError")) setError(true);
+        if (!(e instanceof DOMException && e.name === "AbortError")) {
+          setResult({ url, text: null, error: true });
+        }
       });
     return () => controller.abort();
   }, [url]);

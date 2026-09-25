@@ -127,6 +127,8 @@ import { t, type I18nKey } from "@/lib/i18n";
 import { useCustomLeaveGuard, useLeaveGuard } from "@/lib/leave-guard";
 import { formatBytes, formatDateTime, formatNumber, parseApiDateTime } from "@/lib/format";
 import { scrollFocusedControlIntoView } from "@/lib/focus-scroll";
+import { useValuesChanged } from "@/lib/render-sync";
+import { useNowMs } from "@/lib/use-now-ms";
 import {
   type BboxCoordinateMode,
   type BboxOverlayUnit,
@@ -293,8 +295,11 @@ export function DocumentWorkspace({
     chunkPreviewForm(selectedRecipe)
   );
   const resetChunkPreview = chunkPreview.reset;
+  // 選ぶレシピが変わったレンダーで、分割プレビューの入力をそのレシピの値に戻す。
+  const recipeChanged = useValuesChanged([selectedRecipe, selectedRecipeId]);
+  if (recipeChanged) setChunkPreviewSettings(chunkPreviewForm(selectedRecipe));
+  // 前のレシピのプレビュー結果（mutation の状態）は effect で捨てる。
   useEffect(() => {
-    setChunkPreviewSettings(chunkPreviewForm(selectedRecipe));
     resetChunkPreview();
   }, [resetChunkPreview, selectedRecipe, selectedRecipeId]);
   const chunkSetsQuery = useDocumentChunkSets(documentId);
@@ -335,7 +340,8 @@ export function DocumentWorkspace({
     useState<"chunk" | "element" | "table_cell">("chunk");
   const [focusRequest, setFocusRequest] = useState<WorkspaceFocusRequest | null>(null);
   const [urlFallbackFocus, setUrlFallbackFocus] = useState<UrlFallbackFocus | null>(null);
-  const appliedFocusRequestRef = useRef<string | null>(null);
+  // 適用済みの URL フォーカス要求（同じ要求で選択を上書きし直さないため）。
+  const [appliedFocusRequest, setAppliedFocusRequest] = useState<string | null>(null);
   const requestedChunkId = searchParams.get("chunk_id");
   const requestedElementId = searchParams.get("element_id");
   const requestedTableId = searchParams.get("table_id");
@@ -411,7 +417,6 @@ export function DocumentWorkspace({
   const status = selectedRecipe?.status ?? query.data?.status ?? "UPLOADED";
   const latestDocumentJob = recipeJobs[0] ?? null;
   const latestDocumentJobActive = ingestionJobIsActive(latestDocumentJob?.status);
-  const [elapsedNowMs, setElapsedNowMs] = useState(() => Date.now());
   const queuedIngestionJobStatus = queuedJob.data?.status ?? enqueueIngestion.data?.status;
   const approvedIngestionJobStatus = approvedJob.data?.status ?? approveDocument.data?.status;
   const retriedSegmentJobStatus = retriedSegmentJob.data?.status ?? retryFailedSegments.data?.status;
@@ -565,11 +570,10 @@ export function DocumentWorkspace({
   const refetchRecipes = recipesQuery.refetch;
   const refetchExtractionExport = extractionExportQuery.refetch;
   const refetchExtractionJson = extractionJsonQuery.refetch;
-  useEffect(() => {
-    if (!selectedRecipe?.preprocess_artifact && previewVariant === "prepared") {
-      setPreviewVariant("original");
-    }
-  }, [previewVariant, selectedRecipe?.preprocess_artifact]);
+  // 変換後の原本がないレシピでは、変換後のプレビューを選べないので原本に戻す（render 中に調整）。
+  if (!selectedRecipe?.preprocess_artifact && previewVariant === "prepared") {
+    setPreviewVariant("original");
+  }
   const resetEnqueueIngestion = enqueueIngestion.reset;
   useEffect(() => {
     const errorStatus =
@@ -737,26 +741,43 @@ export function DocumentWorkspace({
     selectedRecipe?.active_extraction_recipe_id,
   ]);
 
-  useEffect(() => {
-    if (!latestDocumentJobActive) return;
-    setElapsedNowMs(Date.now());
-    const timer = window.setInterval(() => setElapsedNowMs(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, [latestDocumentJob?.id, latestDocumentJob?.started_at, latestDocumentJobActive]);
+  // ジョブの実行中だけ 1 秒ごとに時計を進め、ジョブが変わったら刻み直す。
+  const elapsedNowMs = useNowMs(
+    latestDocumentJobActive,
+    `${latestDocumentJob?.id ?? ""}\u0000${latestDocumentJob?.started_at ?? ""}`
+  );
 
-  useEffect(() => {
-    if (
-      !activeSubmittedJob &&
-      (status === "INDEXED" ||
-        status === "ERROR" ||
-        status === "PREPROCESSED" ||
-        status === "REVIEW")
-    ) {
-      setLocalWatchProcessing(false);
-    }
-  }, [activeSubmittedJob, status]);
+  // ジョブの有無か状態が変わったレンダーで、処理が終わっていれば投入直後の監視をやめる。
+  const watchSourceChanged = useValuesChanged([activeSubmittedJob, status]);
+  if (
+    watchSourceChanged &&
+    !activeSubmittedJob &&
+    (status === "INDEXED" ||
+      status === "ERROR" ||
+      status === "PREPROCESSED" ||
+      status === "REVIEW")
+  ) {
+    setLocalWatchProcessing(false);
+  }
 
-  useEffect(() => {
+  // URL の指定（chunk / 要素 / 表セル / ページ）と表示中の chunk が変わったレンダーで、選択とフォーカス要求を合わせる。
+  // 依存が変わったときだけ動かす（effect の deps と同じ）ので、同じ要求を二度適用しない。
+  const focusSourceChanged = useValuesChanged([
+    displayedChunks,
+    parsedExtraction.elements,
+    parsedExtraction.tables,
+    requestedCellCol,
+    requestedCellRef,
+    requestedCellRow,
+    requestedChunkId,
+    requestedElementId,
+    requestedFormulaCellRef,
+    requestedTableId,
+    requestedUrlFocus,
+    selectedChunkId,
+    selectedElementId,
+  ]);
+  const applyRequestedFocus = () => {
     const chunks = displayedChunks;
     if (
       !chunks.length &&
@@ -796,7 +817,7 @@ export function DocumentWorkspace({
       : requestedElementId
         ? `element:${requestedElementId}`
         : null;
-    if (requestedFocusKey && appliedFocusRequestRef.current !== requestedFocusKey) {
+    if (requestedFocusKey && appliedFocusRequest !== requestedFocusKey) {
       if (requestedCell) {
         const linkedElementId = requestedCell.table.element_id ?? requestedElementId;
         const linkedChunk = requestedChunkId
@@ -810,7 +831,7 @@ export function DocumentWorkspace({
         setUrlFallbackFocus(requestedUrlFocus);
         setPreviewFocusSource("table_cell");
         setFocusRequest({ key: requestedFocusKey, target: "table_cell" });
-        appliedFocusRequestRef.current = requestedFocusKey;
+        setAppliedFocusRequest(requestedFocusKey);
         return;
       }
       if (requestedChunkId) {
@@ -826,7 +847,7 @@ export function DocumentWorkspace({
           setUrlFallbackFocus(requestedUrlFocus);
           setPreviewFocusSource("chunk");
           setFocusRequest({ key: requestedFocusKey, target: "chunk" });
-          appliedFocusRequestRef.current = requestedFocusKey;
+          setAppliedFocusRequest(requestedFocusKey);
           return;
         }
       } else if (requestedElementId) {
@@ -843,23 +864,23 @@ export function DocumentWorkspace({
           setUrlFallbackFocus(requestedUrlFocus);
           setPreviewFocusSource("element");
           setFocusRequest({ key: requestedFocusKey, target: "element" });
-          appliedFocusRequestRef.current = requestedFocusKey;
+          setAppliedFocusRequest(requestedFocusKey);
           return;
         }
       }
       if (requestedUrlFocus) {
         setUrlFallbackFocus(requestedUrlFocus);
-        appliedFocusRequestRef.current = requestedUrlFocus.key;
+        setAppliedFocusRequest(requestedUrlFocus.key);
         return;
       }
     }
     if (
       requestedUrlFocus &&
       !requestedFocusKey &&
-      appliedFocusRequestRef.current !== requestedUrlFocus.key
+      appliedFocusRequest !== requestedUrlFocus.key
     ) {
       setUrlFallbackFocus(requestedUrlFocus);
-      appliedFocusRequestRef.current = requestedUrlFocus.key;
+      setAppliedFocusRequest(requestedUrlFocus.key);
       return;
     }
     if (requestedElementId && selectedElementId === requestedElementId) {
@@ -880,21 +901,8 @@ export function DocumentWorkspace({
     setSelectedChunkId(firstChunk.chunk_id);
     setSelectedElementId(firstChunk.element_ids[0] ?? null);
     setSelectedTableCellKey(null);
-  }, [
-    displayedChunks,
-    parsedExtraction.elements,
-    parsedExtraction.tables,
-    requestedCellCol,
-    requestedCellRef,
-    requestedCellRow,
-    requestedChunkId,
-    requestedElementId,
-    requestedFormulaCellRef,
-    requestedTableId,
-    requestedUrlFocus,
-    selectedChunkId,
-    selectedElementId,
-  ]);
+  };
+  if (focusSourceChanged) applyRequestedFocus();
 
   if (query.isPending) return <Skeleton className="h-80 w-full rounded-lg" />;
   if (query.isError) {
@@ -2759,18 +2767,18 @@ function DocumentKnowledgeBaseEditor({
   const [selectedIds, setSelectedIds] = useState(initialIds);
   const [savedIds, setSavedIds] = useState(initialIds);
 
-  useEffect(() => {
-    if (membership.data) return;
+  // 所属 KB の取得前は文書一覧の値、取得後は取得した値を、変わったレンダーで選択と保存値に入れる。
+  const initialChanged = useValuesChanged([initialIdsKey, initialIds, membership.data]);
+  const membershipChanged = useValuesChanged([membership.data]);
+  if (initialChanged && !membership.data) {
     setSelectedIds(initialIds);
     setSavedIds(initialIds);
-  }, [initialIdsKey, initialIds, membership.data]);
-
-  useEffect(() => {
-    if (!membership.data) return;
+  }
+  if (membershipChanged && membership.data) {
     const ids = membership.data.map((knowledgeBase) => knowledgeBase.id);
     setSelectedIds(ids);
     setSavedIds(ids);
-  }, [membership.data]);
+  }
 
   const isDirty = !isSameIdSet(selectedIds, savedIds);
   // KB 所属の未保存の選択（順序は無視して集合で比べる）があるときだけ離脱を確認する。
