@@ -27,6 +27,10 @@ from zipfile import BadZipFile, ZipFile
 from cryptography.hazmat.primitives.serialization import load_pem_private_key
 from fastapi import APIRouter, File, HTTPException, Request, Response, UploadFile
 from pr_backend_core import ApiResponse
+from pr_system_settings.upload_storage import (
+    build_upload_storage_router,
+    upload_storage_settings_data,
+)
 from starlette.responses import JSONResponse
 
 from app.api.concurrency import run_sync_io
@@ -101,7 +105,6 @@ from app.schemas.settings import (
     SystemTablesOperationData,
     SystemTablesStatusData,
     UploadStorageSettingsData,
-    UploadStorageSettingsUpdate,
 )
 from app.settings import (
     BACKEND_ENV_FILE,
@@ -116,6 +119,14 @@ from app.settings import (
 )
 
 router = APIRouter(prefix="/settings", tags=["settings"])
+# アップロード保存先は3製品共通の実装（platform の pr_system_settings。#97）。
+# テストで get_settings / BACKEND_ENV_FILE を差し替えられるよう、呼出時に module の値を参照する。
+router.include_router(
+    build_upload_storage_router(
+        get_settings=lambda: get_settings(),
+        env_file=lambda: BACKEND_ENV_FILE,
+    )
+)
 logger = logging.getLogger(__name__)
 run_in_threadpool = run_sync_io
 ENV_ASSIGNMENT_RE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=")
@@ -731,23 +742,6 @@ async def stop_adb() -> ApiResponse[AdbInfoData]:
     return ApiResponse(data=await _control_adb(get_settings(), action="stop"))
 
 
-@router.get("/upload-storage", response_model=ApiResponse[UploadStorageSettingsData])
-def get_upload_storage_settings() -> ApiResponse[UploadStorageSettingsData]:
-    return ApiResponse(data=_upload_storage_settings_data(get_settings()))
-
-
-@router.patch("/upload-storage", response_model=ApiResponse[UploadStorageSettingsData])
-def update_upload_storage_settings(
-    payload: UploadStorageSettingsUpdate,
-) -> ApiResponse[UploadStorageSettingsData]:
-    settings = get_settings()
-    candidate = _upload_storage_settings_candidate(settings, payload)
-    _validate_upload_storage_settings(candidate)
-    _persist_upload_storage_settings(candidate)
-    _apply_upload_storage_settings(settings, candidate)
-    return ApiResponse(data=_upload_storage_settings_data(settings))
-
-
 @router.get("/oci", response_model=ApiResponse[OciSettingsData])
 def get_oci_settings() -> ApiResponse[OciSettingsData]:
     return ApiResponse(data=_oci_settings_data(get_settings()))
@@ -776,7 +770,7 @@ def update_oci_object_storage_settings(
     _persist_oci_object_storage_settings(candidate)
     settings.object_storage_region = candidate.object_storage_region
     settings.object_storage_namespace = candidate.object_storage_namespace
-    return ApiResponse(data=_upload_storage_settings_data(settings))
+    return ApiResponse(data=upload_storage_settings_data(settings))
 
 
 @router.post("/oci/config/read", response_model=ApiResponse[OciConfigReadData])
@@ -1865,99 +1859,6 @@ def _persist_adb_settings(settings: Settings) -> None:
         section_comment="# Oracle Autonomous Database 管理",
         error_detail="ADB 設定を backend/.env へ保存できませんでした。",
     )
-
-
-def _upload_storage_settings_data(settings: Settings) -> UploadStorageSettingsData:
-    backend = getattr(settings, "upload_storage_backend", "local")
-    if backend not in {"local", "oci"}:
-        backend = "local"
-    namespace = getattr(settings, "object_storage_namespace", "")
-    bucket = getattr(settings, "object_storage_bucket", "")
-    local_dir = getattr(settings, "local_storage_dir", "")
-    region = getattr(settings, "object_storage_region", "") or getattr(settings, "oci_region", "")
-    readiness = (
-        "ok"
-        if (backend == "local" and local_dir)
-        or (backend == "oci" and region and namespace and bucket)
-        else "missing"
-    )
-    return UploadStorageSettingsData(
-        backend=backend,
-        local_storage_dir=local_dir,
-        object_storage_region=region,
-        object_storage_namespace=namespace,
-        object_storage_bucket=bucket,
-        readiness=readiness,
-        max_upload_bytes=getattr(settings, "max_upload_bytes", 104857600),
-        config_source="runtime",
-    )
-
-
-def _upload_storage_settings_candidate(
-    base: Settings,
-    payload: UploadStorageSettingsUpdate,
-) -> Settings:
-    updates = {
-        "upload_storage_backend": payload.backend,
-        "local_storage_dir": payload.local_storage_dir.strip(),
-        "object_storage_region": (
-            payload.object_storage_region.strip()
-            if payload.object_storage_region is not None
-            else base.object_storage_region or base.oci_region
-        ),
-        "object_storage_namespace": (
-            payload.object_storage_namespace.strip()
-            if payload.object_storage_namespace is not None
-            else base.object_storage_namespace
-        ),
-        "object_storage_bucket": payload.object_storage_bucket.strip(),
-    }
-    return base.model_copy(update=updates)
-
-
-def _validate_upload_storage_settings(settings: Settings) -> None:
-    if settings.upload_storage_backend != "oci":
-        return
-
-    missing_fields = [
-        label
-        for label, value in (
-            ("Object Storage リージョン", settings.object_storage_region),
-            ("Object Storage namespace", settings.object_storage_namespace),
-            ("Object Storage bucket", settings.object_storage_bucket),
-        )
-        if not value.strip()
-    ]
-    if missing_fields:
-        raise HTTPException(
-            status_code=422,
-            detail="OCI Object Storage 設定が不足しています: " + ", ".join(missing_fields),
-        )
-
-
-def _persist_upload_storage_settings(settings: Settings) -> None:
-    values = {
-        "UPLOAD_STORAGE_BACKEND": settings.upload_storage_backend,
-        "LOCAL_STORAGE_DIR": settings.local_storage_dir,
-    }
-    if settings.upload_storage_backend == "oci":
-        values["OBJECT_STORAGE_REGION"] = settings.object_storage_region
-        values["OBJECT_STORAGE_NAMESPACE"] = settings.object_storage_namespace
-        values["OBJECT_STORAGE_BUCKET"] = settings.object_storage_bucket
-    _write_env_values(
-        BACKEND_ENV_FILE,
-        values,
-        section_comment="# アップロード保存先",
-        error_detail="アップロード保存先設定を backend/.env へ保存できませんでした。",
-    )
-
-
-def _apply_upload_storage_settings(target: Settings, source: Settings) -> None:
-    target.upload_storage_backend = source.upload_storage_backend
-    target.local_storage_dir = source.local_storage_dir
-    target.object_storage_region = source.object_storage_region
-    target.object_storage_namespace = source.object_storage_namespace
-    target.object_storage_bucket = source.object_storage_bucket
 
 
 def _oci_settings_data(settings: Settings) -> OciSettingsData:

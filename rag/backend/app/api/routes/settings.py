@@ -22,6 +22,10 @@ from zipfile import BadZipFile, ZipFile
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
+from pr_system_settings.upload_storage import (
+    build_upload_storage_router,
+    upload_storage_settings_data,
+)
 from rag_parser_core.capabilities import ADAPTER_CAPABILITIES, supported_modalities
 from rag_pipeline_core.retrieval import decompose_retrieval_strategy
 
@@ -133,7 +137,6 @@ from app.rag.vector_index_adapter import (
 from app.readiness import (
     READINESS_OK,
     oracle_readiness_check,
-    upload_storage_readiness_checks,
 )
 from app.schemas.common import ApiResponse
 from app.schemas.evaluation import EvaluationThresholds
@@ -220,7 +223,6 @@ from app.schemas.settings import (
     SystemTablesOperationData,
     SystemTablesStatusData,
     UploadStorageSettingsData,
-    UploadStorageSettingsUpdate,
     VectorIndexProfileStatusData,
     VectorIndexSettingsData,
     VectorIndexSettingsUpdate,
@@ -244,6 +246,15 @@ ORACLE_WALLET_SKIPPED_FILES = frozenset(
 )
 MODEL_SETTINGS_FILE_MODE = 0o600
 BACKEND_ENV_FILE = Path(__file__).resolve().parents[3] / ".env"
+
+# アップロード保存先は3製品共通の実装（platform の pr_system_settings。#97）。
+# テストで get_settings / BACKEND_ENV_FILE を差し替えられるよう、呼出時に module の値を参照する。
+router.include_router(
+    build_upload_storage_router(
+        get_settings=lambda: get_settings(),
+        env_file=lambda: BACKEND_ENV_FILE,
+    )
+)
 ENV_FILE_MODE = 0o600
 ENV_ASSIGNMENT_RE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=")
 ORACLE_ERROR_CODE_RE = re.compile(r"\b(?:ORA|DPY|DPI)-\d{4,5}\b", re.IGNORECASE)
@@ -561,24 +572,6 @@ async def start_adb() -> ApiResponse[AdbInfoData]:
 async def stop_adb() -> ApiResponse[AdbInfoData]:
     """Autonomous Database を停止する。"""
     return ApiResponse(data=await _control_adb(get_settings(), action="stop"))
-
-
-@router.get("/upload-storage", response_model=ApiResponse[UploadStorageSettingsData])
-async def get_upload_storage_settings() -> ApiResponse[UploadStorageSettingsData]:
-    """現在のアップロード原本保存先設定を返す。"""
-    return ApiResponse(data=_upload_storage_settings_data(get_settings()))
-
-
-@router.patch("/upload-storage", response_model=ApiResponse[UploadStorageSettingsData])
-async def update_upload_storage_settings(
-    payload: UploadStorageSettingsUpdate,
-) -> ApiResponse[UploadStorageSettingsData]:
-    """アップロード原本保存先を backend/.env と現在プロセスへ反映する。"""
-    settings = get_settings()
-    candidate = _upload_storage_settings_candidate(settings, payload)
-    _persist_upload_storage_settings(candidate)
-    _apply_upload_storage_settings(settings, candidate)
-    return ApiResponse(data=_upload_storage_settings_data(settings))
 
 
 @router.get("/parser-adapters", response_model=ApiResponse[ParserAdapterSettingsData])
@@ -1020,7 +1013,7 @@ async def update_oci_object_storage_settings(
     _persist_oci_object_storage_settings(candidate)
     settings.object_storage_region = candidate.object_storage_region
     settings.object_storage_namespace = candidate.object_storage_namespace
-    return ApiResponse(data=_upload_storage_settings_data(settings))
+    return ApiResponse(data=upload_storage_settings_data(settings))
 
 
 @router.post("/oci/config/read", response_model=ApiResponse[OciConfigReadData])
@@ -2158,20 +2151,6 @@ def _remove_tmp_wallet_dir(path: Path) -> None:
         shutil.rmtree(path, ignore_errors=True)
 
 
-def _upload_storage_settings_data(settings: Settings) -> UploadStorageSettingsData:
-    """Settings からアップロード保存先の表示用データを作る。"""
-    return UploadStorageSettingsData(
-        backend=settings.upload_storage_backend,
-        local_storage_dir=settings.local_storage_dir,
-        object_storage_region=settings.object_storage_region,
-        object_storage_namespace=settings.object_storage_namespace,
-        object_storage_bucket=settings.object_storage_bucket,
-        readiness=_upload_storage_readiness(settings),
-        max_upload_bytes=settings.max_upload_bytes,
-        config_source="runtime",
-    )
-
-
 def _parser_service_backends_data(settings: Settings) -> list[ParserServiceBackendData]:
     """service 系 parser backend の選択状態と設定可用性を作る。"""
     selected = str(getattr(settings, "rag_parser_adapter_backend", "local"))
@@ -2459,42 +2438,6 @@ def _apply_parser_adapter_settings(target: Settings, source: Settings) -> None:
 
 def _optional_bool(value: bool | None, fallback: bool) -> bool:
     return fallback if value is None else value
-
-
-def _upload_storage_settings_candidate(
-    base: Settings,
-    payload: UploadStorageSettingsUpdate,
-) -> Settings:
-    """更新 payload を適用した一時 Settings を作る。"""
-    updates = {
-        "upload_storage_backend": payload.backend,
-        "local_storage_dir": payload.local_storage_dir,
-        "object_storage_namespace": (
-            payload.object_storage_namespace
-            if payload.object_storage_namespace is not None
-            else base.object_storage_namespace
-        ),
-        "object_storage_bucket": payload.object_storage_bucket,
-    }
-    return base.model_copy(update=updates)
-
-
-def _persist_upload_storage_settings(settings: Settings) -> None:
-    """アップロード保存先設定を backend/.env へ永続化する。"""
-    values = {
-        "UPLOAD_STORAGE_BACKEND": settings.upload_storage_backend,
-        "LOCAL_STORAGE_DIR": settings.local_storage_dir,
-    }
-    if settings.upload_storage_backend == "oci":
-        values["OBJECT_STORAGE_REGION"] = settings.object_storage_region
-        values["OBJECT_STORAGE_NAMESPACE"] = settings.object_storage_namespace
-        values["OBJECT_STORAGE_BUCKET"] = settings.object_storage_bucket
-    _write_env_values(
-        BACKEND_ENV_FILE,
-        values,
-        section_comment="# アップロード保存先",
-        error_detail="アップロード保存先設定を backend/.env へ保存できませんでした。",
-    )
 
 
 def _graph_settings_data(settings: Settings) -> GraphSettingsData:
@@ -3155,20 +3098,6 @@ def _replace_env_file(path: Path, content: str) -> None:
         path.chmod(mode)
     finally:
         tmp_path.unlink(missing_ok=True)
-
-
-def _apply_upload_storage_settings(target: Settings, source: Settings) -> None:
-    """アップロード保存先関連設定だけ現在プロセスへ反映する。"""
-    target.upload_storage_backend = source.upload_storage_backend
-    target.local_storage_dir = source.local_storage_dir
-    target.object_storage_namespace = source.object_storage_namespace
-    target.object_storage_bucket = source.object_storage_bucket
-
-
-def _upload_storage_readiness(settings: Settings) -> str:
-    """アップロード保存先の readiness status を返す。"""
-    checks = upload_storage_readiness_checks(settings)
-    return next(iter(checks.values()), "missing")
 
 
 def _write_oci_config(settings: Settings, payload: OciSettingsUpdate) -> Path:

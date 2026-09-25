@@ -15,6 +15,7 @@ ARG PLATFORM_DIR=platform
 # 依存解決（uv.lock を尊重）。
 COPY ${APP_DIR}/backend/pyproject.toml ${APP_DIR}/backend/uv.lock ./${APP_DIR}/backend/
 COPY ${PLATFORM_DIR}/packages/backend_core ./${PLATFORM_DIR}/packages/backend_core
+COPY ${PLATFORM_DIR}/packages/system_settings_backend ./${PLATFORM_DIR}/packages/system_settings_backend
 
 WORKDIR /app/${APP_DIR}/backend
 RUN uv sync --locked --no-dev

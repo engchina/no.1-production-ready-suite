@@ -17,6 +17,7 @@ dependencies = [
   "charset-normalizer>=3.4",
   "prometheus-client>=0.24",
   "production-ready-backend-core",
+  "production-ready-system-settings-backend",
   "oci>=2.160",
   "oracledb>=3.4",
   "scikit-learn>=1.7",
@@ -58,6 +59,7 @@ dev = [
 [tool.uv.sources]
 # テンプレを <app>/backend へ展開したときの相対パス。
 production-ready-backend-core = { path = "../../platform/packages/backend_core", editable = true }
+production-ready-system-settings-backend = { path = "../../platform/packages/system_settings_backend", editable = true }
 
 [build-system]
 requires = ["hatchling"]

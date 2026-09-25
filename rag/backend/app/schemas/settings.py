@@ -6,6 +6,14 @@ from datetime import UTC, datetime
 from typing import Literal, get_args
 from urllib.parse import urlsplit
 
+# アップロード保存先の schema は3製品共通（platform の pr_system_settings。#97）。
+# 互換のため re-export する。
+from pr_system_settings.upload_storage import (
+    UploadStorageSettingsData as UploadStorageSettingsData,
+)
+from pr_system_settings.upload_storage import (
+    UploadStorageSettingsUpdate as UploadStorageSettingsUpdate,
+)
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -31,7 +39,6 @@ from app.config import (
     PostRetrievalPipeline,
     PreprocessProfile,
     RetrievalStrategy,
-    UploadStorageBackend,
     VectorIndexProfile,
 )
 
@@ -423,50 +430,6 @@ class HuggingFaceSettingsUpdate(BaseModel):
     def strip_text(cls, value: str) -> str:
         """前後空白を設定値へ混入させない。"""
         return value.strip()
-
-
-class UploadStorageSettingsData(BaseModel):
-    """アップロード原本保存先の表示用データ。"""
-
-    backend: UploadStorageBackend
-    local_storage_dir: str
-    object_storage_region: str
-    object_storage_namespace: str
-    object_storage_bucket: str
-    readiness: str
-    max_upload_bytes: int
-    config_source: Literal["runtime"]
-
-
-class UploadStorageSettingsUpdate(BaseModel):
-    """アップロード原本保存先の更新 payload。"""
-
-    backend: UploadStorageBackend
-    local_storage_dir: str = Field(default="", max_length=1024)
-    object_storage_namespace: str | None = Field(default=None, max_length=256)
-    object_storage_bucket: str = Field(default="", max_length=256)
-
-    @field_validator("local_storage_dir", "object_storage_bucket")
-    @classmethod
-    def strip_text(cls, value: str) -> str:
-        """前後空白を設定値へ混入させない。"""
-        return value.strip()
-
-    @field_validator("object_storage_namespace")
-    @classmethod
-    def strip_optional_text(cls, value: str | None) -> str | None:
-        """省略時は既存の OCI 認証設定 namespace を保持する。"""
-        return value.strip() if value is not None else None
-
-    @field_validator("object_storage_namespace", "object_storage_bucket")
-    @classmethod
-    def validate_object_storage_name(cls, value: str | None) -> str | None:
-        """OCI Object Storage の namespace / bucket 名で危険な文字を拒否する。"""
-        if value and not re.fullmatch(r"[A-Za-z0-9._-]+", value):
-            raise ValueError(
-                "Object Storage の値は英数字、ハイフン、アンダースコア、ドットで入力してください。"
-            )
-        return value
 
 
 class ExternalParserConnectionData(BaseModel):
