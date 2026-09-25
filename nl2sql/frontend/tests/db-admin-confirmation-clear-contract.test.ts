@@ -19,7 +19,7 @@ const profileManagementPage = readFileSync(
   "utf8",
 );
 const clearActionButton = readFileSync(
-  new URL("../src/components/ui/clear-action-button.tsx", import.meta.url),
+  new URL("../../../platform/packages/ui/src/components/ui/clear-action-button.tsx", import.meta.url),
   "utf8",
 );
 const fileDropzone = readFileSync(
@@ -42,7 +42,7 @@ test("DDL/comment/annotation runners expose a shared clear action that resets gu
     "/** 検索フィルタ付き",
   );
 
-  assert.match(dbAdminShared, /import \{ ClearActionButton \}/u);
+  assert.match(dbAdminShared, /import \{[^}]*\bClearActionButton\b[^}]*\} from "@engchina\/production-ready-ui"/u);
   assert.match(runner, /const canClearRunner = Boolean\(sql \|\| confirmation \|\| result \|\| message \|\| executionRun\)/u);
   assert.match(
     runner,
@@ -64,7 +64,7 @@ test("new guarded clear actions can opt in to same-row button height", () => {
 test("table import wizard clear action resets import form, result, and dropzone validation state", () => {
   const importWizard = section(tableManagementPage, "function ImportWizard", "function schemaRefreshRequiresFull");
 
-  assert.match(tableManagementPage, /import \{ ClearActionButton \}/u);
+  assert.match(tableManagementPage, /import \{[^}]*\bClearActionButton\b[^}]*\} from "@engchina\/production-ready-ui"/u);
   assert.match(importWizard, /resetSignal=\{fileResetSignal\}/u);
   assert.match(
     importWizard,
@@ -84,7 +84,7 @@ test("data management CSV and synthetic guarded actions expose clear buttons", (
   const csvWorkspace = section(dataManagementPage, "function CsvUploadWorkspace", "function SyntheticWorkspace");
   const syntheticWorkspace = section(dataManagementPage, "function SyntheticWorkspace", "function DbProfileRefreshNotice");
 
-  assert.match(dataManagementPage, /import \{ ClearActionButton \}/u);
+  assert.match(dataManagementPage, /import \{[^}]*\bClearActionButton\b[^}]*\} from "@engchina\/production-ready-ui"/u);
   assert.match(csvWorkspace, /resetSignal=\{fileResetSignal\}/u);
   assert.match(
     csvWorkspace,
@@ -118,7 +118,7 @@ test("business profile clear action resets only the Oracle execution gate and jo
     "  const editor = (",
   );
 
-  assert.match(profileManagementPage, /import \{ ClearActionButton \}/u);
+  assert.match(profileManagementPage, /import \{[^}]*\bClearActionButton\b[^}]*\} from "@engchina\/production-ready-ui"/u);
   assert.match(editor, /canClearOracleExecution: boolean/u);
   assert.match(editor, /onOracleExecutionClear: \(\) => void/u);
   assert.match(

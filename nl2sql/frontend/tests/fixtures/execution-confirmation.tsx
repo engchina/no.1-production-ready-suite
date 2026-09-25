@@ -2,8 +2,7 @@ import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { Play } from "lucide-react";
 import { ExecutionConfirmationField } from "../../src/features/nl2sql/components/DbAdminShared";
-import { Button } from "@engchina/production-ready-ui";
-import { ClearActionButton } from "../../src/components/ui/clear-action-button";
+import { Button, ClearActionButton } from "@engchina/production-ready-ui";
 import { t } from "../../src/lib/i18n";
 import "../../src/globals.css";
 

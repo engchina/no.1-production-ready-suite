@@ -10,6 +10,7 @@ import {
   FormStatus,
   PageBody,
   useConfirm,
+  BulkSelectionActions,
 } from "@engchina/production-ready-ui";
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -26,7 +27,6 @@ import { useSearchParams } from "react-router-dom";
 
 
 
-import { BulkSelectionActions } from "@/components/BulkSelectionActions";
 import { ProcessingIndicator } from "@/components/ProcessingState";
 import { ErrorState, LoadingState } from "@/components/StateViews";
 import { usePageNotice, PageNotice } from "@/components/page-notice";

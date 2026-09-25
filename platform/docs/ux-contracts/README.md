@@ -20,8 +20,8 @@ RAG / NL2SQL / Agent の3製品に共通する「画面の振る舞い」の規�
 
 ## 実装の置き場所
 
-- 規約に出てくる部品のうち、`@engchina/production-ready-ui`（`packages/ui`）にあるもの（`Button` / `PageHeader` / `Banner` / `FormStatus` / `FieldError` / `DataTable` / `Pagination` / `MessageText` / `useConfirm` / `toast` など）は、それを使う。
-- `RowActionMenu` / `ObjectActionBar` / `ContentActionBar` / `FixedSplitPane` / `ActionResultRegion` / `BulkSelectionActions` / `SortHeader` / `TimedLoadingState` などは、現時点では NL2SQL の frontend に参照実装がある。`packages/ui` へ移すまでは、他製品で作り直さず、移設の Issue（#70 の後続）で扱う。
+- 規約に出てくる部品のうち、`@engchina/production-ready-ui`（`packages/ui`）にあるもの（`Button` / `PageHeader` / `Banner` / `FormStatus` / `FieldError` / `DataTable` / `Pagination` / `MessageText` / `useConfirm` / `toast` / `ContentActionBar` / `BulkSelectionActions` / `ClearActionButton` / `ActionResultRegion` など）は、それを使う。並べ替えの列頭は `DataTable` の `sort` が持つ。
+- `RowActionMenu` / `ObjectActionBar` / `FixedSplitPane` / `ProcessingIndicator` / `TimedLoadingState` は、現時点では NL2SQL の frontend に参照実装がある。他製品で作り直さず、`packages/ui` への移設（engchina/no.1-production-ready-suite#120）を待つ。
 
 ## 経緯
 

@@ -7,6 +7,7 @@ import {
   PageHeader,
   PageBody,
   useConfirm,
+  ActionResultRegion,
 } from "@engchina/production-ready-ui";
 import {
   useCallback,
@@ -30,7 +31,6 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 
 
 import { TimedLoadingState } from "@/components/ProcessingState";
-import { ActionResultRegion } from "@/components/ActionResultRegion";
 import { PageNotice } from "@/components/page-notice";
 import { EmptyState } from "@/components/StateViews";
 import { DisclosureChevron } from "@/components/ui/disclosure-chevron";

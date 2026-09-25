@@ -17,8 +17,10 @@ import {
   StatusBadge,
   Tabs,
   cn,
+  ClearActionButton,
+  ActionResultRegion,
+  ContentActionBar,
 } from "@engchina/production-ready-ui";
-import { ClearActionButton } from "@/components/ui/clear-action-button";
 import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
 import {
   useEffect,
@@ -39,8 +41,6 @@ import {
 } from "lucide-react";
 
 
-import { ActionResultRegion } from "@/components/ActionResultRegion";
-import { ContentActionBar } from "@/components/ContentActionBar";
 import {
   ExecutionActivityPanel,
   type ExecutionActivityStatus,

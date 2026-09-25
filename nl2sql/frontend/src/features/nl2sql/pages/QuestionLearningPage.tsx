@@ -14,6 +14,7 @@ import {
   PageHeader,
   PageBody,
   useConfirm,
+  BulkSelectionActions,
 } from "@engchina/production-ready-ui";
 import {
   useEffect,
@@ -37,7 +38,6 @@ import { Save,
 import { useSearchParams } from "react-router-dom";
 
 
-import { BulkSelectionActions } from "@/components/BulkSelectionActions";
 import { RowActionMenu, type EntityAction } from "@/components/ObjectActions";
 import { PageHeaderStatusBadge } from "@/components/PageHeaderStatusBadge";
 import { ProcessingIndicator } from "@/components/ProcessingState";

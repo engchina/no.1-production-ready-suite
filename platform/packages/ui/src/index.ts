@@ -36,6 +36,15 @@ export {
   type ConfirmOptions,
   type ConfirmDefaultLabels,
 } from "./components/ui/confirm-dialog";
+export { ContentActionBar } from "./components/ui/content-action-bar";
+export {
+  BulkSelectionActions,
+  type BulkSelectionActionsProps,
+} from "./components/ui/bulk-selection-actions";
+export {
+  ClearActionButton,
+  type ClearActionButtonProps,
+} from "./components/ui/clear-action-button";
 export {
   toneIcon,
   toneText,
@@ -50,6 +59,10 @@ export {
   ErrorState,
   EmptyState,
 } from "./components/feedback/state-views";
+export {
+  ActionResultRegion,
+  type ActionResultRegionProps,
+} from "./components/feedback/action-result-region";
 
 // --- data ---
 export {
