@@ -9,7 +9,12 @@ from pathlib import Path
 from typing import Any, Literal, Self
 
 from pr_system_settings.model import EnterpriseAiConfiguredModel as EnterpriseAiConfiguredModel
-from pr_system_settings.model import ModelSecretStateMixin, ModelSettingsSection, ModelSettingsStore
+from pr_system_settings.model import (
+    ModelSecretStateMixin,
+    ModelSettingsSection,
+    ModelSettingsStore,
+    SectionSecret,
+)
 from pr_system_settings.model import (
     enterprise_ai_default_model_id as enterprise_ai_default_model_id,
 )
@@ -1717,9 +1722,17 @@ def _dump_parser_adapters(settings: Settings) -> dict[str, Any]:
 
 
 # モデル設定の読み書きは3製品共通（platform の pr_system_settings。#103）。
-# RAG は同じファイルに parser adapter の設定（parser の API key を含む）を同居させる。
+# RAG は同じファイルに parser adapter の設定を同居させる。
 PARSER_ADAPTERS_SECTION = ModelSettingsSection(
-    name="parser_adapters", load=_load_parser_adapters, dump=_dump_parser_adapters
+    name="parser_adapters",
+    load=_load_parser_adapters,
+    dump=_dump_parser_adapters,
+    # parser の API key は JSON に書かず、モデル設定の API key と同じ .env に保存する（#106）。
+    secrets=tuple(
+        SectionSecret(key=key, attr=f"rag_parser_{key}", env=f"RAG_PARSER_{key.upper()}")
+        for key in _PARSER_ADAPTER_FIELDS
+        if key.endswith("_api_key")
+    ),
 )
 MODEL_SETTINGS_STORE = ModelSettingsStore(
     resolve_path=lambda settings: resolve_model_settings_file(settings.model_settings_file),

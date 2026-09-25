@@ -523,7 +523,7 @@ async def update_parser_adapter_settings(
     """任意 parser adapter の backend/feature flag を共有設定と runtime へ反映する。"""
     settings = get_settings()
     # モデル設定と同じ model-settings.json を、同じロックの下で書き換える（#103）。
-    # 旧 JSON に API key が残っていれば、ここで backend/.env へ移す。
+    # API key（モデル・parser）は JSON に書かず .env に保存し、旧 JSON に残っていれば移す（#106）。
     try:
         with MODEL_SETTINGS_STORE.lock(settings):
             MODEL_SETTINGS_STORE.reload_if_changed(settings)
@@ -535,8 +535,8 @@ async def update_parser_adapter_settings(
             status_code=500,
             detail="設定を共有永続化ファイルへ保存できませんでした。",
         ) from exc
-    _apply_parser_adapter_settings(settings, candidate)
-    settings.set_runtime_enterprise_ai_api_key(api_key)
+    # 保存したファイルから読み直し、runtime を保存した状態にそろえる。
+    MODEL_SETTINGS_STORE.load(settings, refresh_secret=True)
     return ApiResponse(data=_parser_adapter_settings_data(settings))
 
 
@@ -1781,24 +1781,6 @@ def _parser_adapter_settings_candidate(
             clear=connection.clear_api_key,
         )
     return base.model_copy(update=updates)
-
-
-def _apply_parser_adapter_settings(target: Settings, source: Settings) -> None:
-    """保存済み parser adapter 設定を現在プロセスへ反映する。"""
-    target.rag_parser_adapter_backend = source.rag_parser_adapter_backend
-    target.rag_parser_docling_enabled = source.rag_parser_docling_enabled
-    target.rag_parser_docling_vision_enabled = source.rag_parser_docling_vision_enabled
-    target.rag_parser_marker_enabled = source.rag_parser_marker_enabled
-    target.rag_parser_unstructured_enabled = source.rag_parser_unstructured_enabled
-    target.rag_parser_unlimited_ocr_enabled = source.rag_parser_unlimited_ocr_enabled
-    target.rag_parser_mineru_enabled = source.rag_parser_mineru_enabled
-    target.rag_parser_dots_ocr_enabled = source.rag_parser_dots_ocr_enabled
-    target.rag_parser_glm_ocr_enabled = source.rag_parser_glm_ocr_enabled
-    for spec in ENGINE_SPECS.values():
-        setattr(target, spec.endpoint_field, getattr(source, spec.endpoint_field))
-        if spec.model_field:
-            setattr(target, spec.model_field, getattr(source, spec.model_field))
-        setattr(target, spec.api_key_field, getattr(source, spec.api_key_field))
 
 
 def _optional_bool(value: bool | None, fallback: bool) -> bool:
