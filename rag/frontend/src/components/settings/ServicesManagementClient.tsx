@@ -9,7 +9,9 @@ import {
   CardHeader,
   CardTitle,
   FormStatus,
+  RowActionMenu,
   Skeleton,
+  type EntityAction,
 } from "@engchina/production-ready-ui";
 import { Fragment, useState } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
@@ -17,7 +19,6 @@ import {
   AlertTriangle,
   Check,
   CheckCircle2,
-  ChevronDown,
   CircleSlash,
   Clipboard,
   Container,
@@ -98,6 +99,14 @@ export function serviceStoppedHintKey(policy: ServiceExecutionPolicy): I18nKey |
     case "selected_adapter":
       return "settings.services.optionalStoppedHint.selectedAdapter";
   }
+}
+
+/**
+ * 行に常に表示する起動 / 停止のどちらか 1 つを状態から決める（#158）。
+ * 稼働中・一部異常は「停止」、それ以外（停止中・未設定・状態の取得中 / 失敗）は「起動」。
+ */
+export function servicePrimaryAction(status: DisplayRuntimeStatus): "start" | "stop" {
+  return status === "running" || status === "degraded" ? "stop" : "start";
 }
 
 /** 前処理 / Parser マイクロサービスの稼働可視化・起動/停止を行う設定画面。 */
@@ -491,7 +500,6 @@ function ServiceRow({
   onToggleLogs: (service: DisplayServiceData) => void;
 }) {
   const deployable = service.deployable;
-  const running = service.status === "running";
   const stopped = service.status === "stopped";
   const statusLoading = service.status === "loading";
   const statusError = service.status === "error";
@@ -515,9 +523,51 @@ function ServiceRow({
   }
 
   const logsPanelId = `service-logs-${service.service_id}`;
+  const primaryAction = servicePrimaryAction(service.status);
+  const primaryPending = primaryAction === "start" ? startPending : stopPending;
+  // degraded は停止を主操作にするが、従来どおり起動(再作成)もメニューから選べる。
+  const secondaryStartPending = primaryAction === "stop" && startPending;
+  // ログ・ビルド・削除などの副操作は行に 1 個の RowActionMenu にまとめる（buttons.md §5.1）。
+  const rowActions: EntityAction[] = [
+    {
+      id: "logs",
+      label: logsOpen ? t("settings.services.action.hideLogs") : t("settings.services.action.logs"),
+      icon: TerminalSquare,
+      testId: `service-action-logs-${service.service_id}`,
+      onSelect: () => onToggleLogs(service),
+    },
+    {
+      id: "start",
+      label: t("settings.services.action.start"),
+      icon: Play,
+      visible: service.status === "degraded",
+      loading: secondaryStartPending,
+      disabled: !controlEnabled || !service.statusReady || (thisPending && !startPending),
+      onSelect: () => onAct(service, "start"),
+    },
+    {
+      id: "build",
+      label: t("settings.services.action.build"),
+      icon: Hammer,
+      loading: buildPending,
+      disabled: !controlEnabled || (thisPending && !buildPending),
+      testId: `service-action-build-${service.service_id}`,
+      onSelect: () => onAct(service, "build"),
+    },
+    {
+      id: "remove",
+      label: t("settings.services.action.remove"),
+      icon: Trash2,
+      tone: "danger",
+      loading: removePending,
+      disabled: !controlEnabled || (thisPending && !removePending),
+      testId: `service-action-remove-${service.service_id}`,
+      onSelect: () => onAct(service, "remove"),
+    },
+  ];
 
   return (
-    <li className="py-3">
+    <li className="py-3" data-testid={`service-row-${service.service_id}`}>
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
@@ -545,71 +595,29 @@ function ServiceRow({
           <ServiceStatusBadge status={service.status} />
           {deployable ? (
             <>
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                onClick={() => onToggleLogs(service)}
-                aria-expanded={logsOpen}
-                aria-controls={logsPanelId}
-                aria-label={`${serviceLabel(service)} ${t("settings.services.action.logs")}`} icon={TerminalSquare} trailingIcon={ChevronDown}>
-                {logsOpen
-                  ? t("settings.services.action.hideLogs")
-                  : t("settings.services.action.logs")}
-              </Button>
-              <div className="flex flex-wrap justify-end gap-2" title={controlHint}>
+              {/* 行に常に出すのは状態に応じた起動 / 停止の 1 つだけ（#158）。 */}
+              <span className="inline-flex" title={controlHint}>
                 <Button
                   type="button"
                   variant="secondary"
+                  tone={primaryAction === "stop" ? "danger" : "default"}
                   size="sm"
-                  loading={buildPending}
-                  disabled={!controlEnabled || (thisPending && !buildPending)}
-                  onClick={() => onAct(service, "build")}
-                  aria-label={`${serviceLabel(service)} ${t("settings.services.action.build")}`} icon={Hammer}>
-                  {t("settings.services.action.build")}
+                  loading={primaryPending}
+                  disabled={!controlEnabled || !service.statusReady || (thisPending && !primaryPending)}
+                  onClick={() => onAct(service, primaryAction)}
+                  aria-label={`${serviceLabel(service)} ${t(`settings.services.action.${primaryAction}` as I18nKey)}`}
+                  icon={primaryAction === "stop" ? Square : Play}
+                  data-testid={`service-primary-action-${service.service_id}`}
+                >
+                  {t(`settings.services.action.${primaryAction}` as I18nKey)}
                 </Button>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  loading={startPending}
-                  disabled={
-                    !controlEnabled ||
-                    !service.statusReady ||
-                    running ||
-                    (thisPending && !startPending)
-                  }
-                  onClick={() => onAct(service, "start")}
-                  aria-label={`${serviceLabel(service)} ${t("settings.services.action.start")}`} icon={Play}>
-                  {t("settings.services.action.start")}
-                </Button>
-                <Button
-                  type="button"
-                  variant="danger"
-                  size="sm"
-                  loading={stopPending}
-                  disabled={
-                    !controlEnabled ||
-                    !service.statusReady ||
-                    stopped ||
-                    (thisPending && !stopPending)
-                  }
-                  onClick={() => onAct(service, "stop")}
-                  aria-label={`${serviceLabel(service)} ${t("settings.services.action.stop")}`} icon={Square}>
-                  {t("settings.services.action.stop")}
-                </Button>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  className="text-danger-fg hover:bg-danger-subtle"
-                  loading={removePending}
-                  disabled={!controlEnabled || (thisPending && !removePending)}
-                  onClick={() => onAct(service, "remove")}
-                  aria-label={`${serviceLabel(service)} ${t("settings.services.action.remove")}`} icon={Trash2}>
-                  {t("settings.services.action.remove")}
-                </Button>
-              </div>
+              </span>
+              <RowActionMenu
+                actions={rowActions}
+                ariaLabel={t("common.objectActions.aria", { name: serviceLabel(service) })}
+                loading={buildPending || removePending || secondaryStartPending}
+                testId={`service-row-actions-${service.service_id}`}
+              />
             </>
           ) : null}
         </div>
