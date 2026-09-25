@@ -63,7 +63,39 @@ async function mockApi(page: Page) {
       // リージョン SelectField の選択済み値を確認するため region を返す。
       await route.fulfill({
         json: {
-          data: { region: "us-chicago-1" },
+          data: {
+            config_file: "~/.oci/config",
+            profile: "DEFAULT",
+            user: "",
+            fingerprint: "",
+            tenancy: "",
+            region: "us-chicago-1",
+            key_file: "",
+            key_file_exists: false,
+            config_file_exists: false,
+            config_source: "runtime",
+          },
+          error_messages: [],
+          warning_messages: [],
+        },
+      });
+      return;
+    }
+
+    if (url.pathname === "/api/settings/upload-storage") {
+      // 共有 OCI 認証画面は Object Storage の値もここから読む（#100）。
+      await route.fulfill({
+        json: {
+          data: {
+            backend: "local",
+            local_storage_dir: "/u01/data/production-ready-rag",
+            object_storage_region: "",
+            object_storage_namespace: "",
+            object_storage_bucket: "",
+            readiness: "ok",
+            max_upload_bytes: 209715200,
+            config_source: "runtime",
+          },
           error_messages: [],
           warning_messages: [],
         },

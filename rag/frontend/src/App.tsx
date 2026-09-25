@@ -230,9 +230,25 @@ function useMainScrollRestoration(
     };
 
     if (pathnameChanged) main.focus({ preventScroll: true });
+    // 共有設定画面などは戻ったあとに非同期で読み込み直し、高さが後から伸びる。
+    // 目標位置に届くまで最大 2 秒フレームごとに再試行し、利用者が操作したら止める。
+    const deadline = performance.now() + 2000;
+    let animationFrame = 0;
+    const restore = () => {
+      scroll();
+      if (location.hash || Math.abs(main.scrollTop - nextTop) <= 1) return;
+      if (performance.now() > deadline) return;
+      animationFrame = window.requestAnimationFrame(restore);
+    };
+    const stop = () => window.cancelAnimationFrame(animationFrame);
+    const userEvents = ["wheel", "touchstart", "keydown", "pointerdown"] as const;
+    userEvents.forEach((type) => main.addEventListener(type, stop, { passive: true }));
     scroll();
-    const animationFrame = window.requestAnimationFrame(scroll);
-    return () => window.cancelAnimationFrame(animationFrame);
+    animationFrame = window.requestAnimationFrame(restore);
+    return () => {
+      stop();
+      userEvents.forEach((type) => main.removeEventListener(type, stop));
+    };
   }, [location.hash, location.pathname, mainRef, navigationType, scrollKey]);
 }
 

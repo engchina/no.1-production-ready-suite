@@ -28,3 +28,33 @@ export {
   type UploadStorageSettingsData,
   type UploadStorageSettingsUpdate,
 } from "./upload-storage/types";
+
+// OCI 認証（#100）
+export { OciSettingsPage, type OciSettingsPageProps } from "./oci/OciSettingsPage";
+export { OCI_MESSAGES, type OciMessageKey } from "./oci/messages";
+export type {
+  OciConfigField,
+  OciConfigReadData,
+  OciConfigReadRequest,
+  OciConfigTestResult,
+  OciConfigTestStage,
+  OciConfigTestStageKey,
+  OciConfigTestStageStatus,
+  OciConfigTestStatus,
+  OciObjectStorageNamespaceData,
+  OciObjectStorageNamespaceRequest,
+  OciObjectStorageSettingsUpdate,
+  OciPrivateKeyUploadData,
+  OciSettingsApi,
+  OciSettingsData,
+  OciSettingsUpdate,
+} from "./oci/types";
+export {
+  DEFAULT_OCI_SETTINGS,
+  normalizeOciSettingsDraft,
+  validateOciSettingsDraft,
+  type OciSettingsDraft,
+  type OciSettingsField,
+  type OciValidationCode,
+  type OciValidationResult,
+} from "./oci/ociSettings";

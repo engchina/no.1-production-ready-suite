@@ -214,10 +214,9 @@ test.describe("Agent Runtime settings", () => {
     ).toHaveValue(
       "mytenancynamespace"
     );
-    await expect(page.getByText("9/9 入力済み")).toBeVisible();
     await expect(page.getByText("namespace の取得に失敗しました。")).toHaveCount(0);
     await page.getByRole("button", { name: /Object Storage: 保存/ }).click();
-    await expect(page.getByRole("button", { name: /Object Storage: 保存しました/ })).toBeVisible();
+    await expect(page.getByText("Object Storage 設定を保存しました。").first()).toBeVisible();
     await expectNoHorizontalOverflow(page);
 
     await page.goto("/settings/upload-storage");

@@ -274,330 +274,128 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
   });
 }
 
-async function expectButtonTextContained(button: Locator) {
-  await expect(button).toBeVisible();
+// 画面は platform の共有パッケージ（NL2SQL と同じ画面。#100）。画面の詳細な挙動は NL2SQL の e2e が確認するため、
+// ここでは RAG の API mock とつないだときの主要な流れと、desktop / 375px のレイアウトを確認する。
 
-  const metrics = await button.evaluate((element) => {
-    const style = window.getComputedStyle(element);
-    return {
-      clientHeight: element.clientHeight,
-      clientWidth: element.clientWidth,
-      scrollHeight: element.scrollHeight,
-      scrollWidth: element.scrollWidth,
-      whiteSpace: style.whiteSpace,
-    };
-  });
-
-  expect(metrics.whiteSpace).toBe("nowrap");
-  expect(metrics.scrollWidth).toBeLessThanOrEqual(metrics.clientWidth + 1);
-  expect(metrics.scrollHeight).toBeLessThanOrEqual(metrics.clientHeight + 1);
-}
-
-async function expectActionInsideCard(_page: Page, heading: string, button: Locator) {
-  const metrics = await button.evaluate((element, expectedHeading) => {
-    const card = element.closest("div.rounded-lg, div.rounded-md");
-    if (!card) return null;
-
-    const cardBox = card.getBoundingClientRect();
-    const buttonBox = element.getBoundingClientRect();
-    const hasHeading = Array.from(card.querySelectorAll("h1,h2,h3,h4,h5,h6")).some(
-      (node) => node.textContent?.trim() === expectedHeading
-    );
-
-    return {
-      hasHeading,
-      cardRight: cardBox.x + cardBox.width,
-      cardBottom: cardBox.y + cardBox.height,
-      buttonRight: buttonBox.x + buttonBox.width,
-      buttonBottom: buttonBox.y + buttonBox.height,
-    };
-  }, heading);
-
-  expect(metrics).not.toBeNull();
-  expect(metrics!.hasHeading).toBe(true);
-  expect(metrics!.buttonRight).toBeLessThanOrEqual(metrics!.cardRight + 1);
-  expect(metrics!.buttonBottom).toBeLessThanOrEqual(metrics!.cardBottom + 1);
-}
-
-function operationMemoCard(page: Page) {
-  return page
-    .getByRole("heading", { name: "運用メモ" })
-    .locator(
-      "xpath=ancestor::div[contains(concat(' ', normalize-space(@class), ' '), ' rounded-lg ')][1]"
-    );
-}
+const VALID_AUTH = {
+  user: "ocid1.user.oc1..aaaaaaaa",
+  fingerprint: "12:34:56:78:90:ab:cd:ef",
+  tenancy: "ocid1.tenancy.oc1..aaaaaaaa",
+  region: "ap-osaka-1",
+  key_file_exists: true,
+};
 
 for (const viewport of [
-  { name: "desktop", width: 1280, height: 720, collapseSidebar: false },
-  { name: "mobile", width: 375, height: 812, collapseSidebar: true },
+  { name: "desktop", width: 1280, height: 900 },
+  { name: "mobile", width: 375, height: 812 },
 ]) {
-  test(`OCI 設定カードのアクション文言が収まる (${viewport.name})`, async ({ page }) => {
+  test(`OCI 認証設定は runtime の値を表示し、プレビュー欄を持たない (${viewport.name})`, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
-    if (viewport.collapseSidebar) {
-      await page.addInitScript(() => {
-        window.localStorage.setItem(
-          "production-ready-rag.ui",
-          JSON.stringify({ state: { sidebarCollapsed: true }, version: 0 })
-        );
-      });
-    }
-    await mockApi(page);
+    await mockApi(page, {
+      ociSettings: VALID_AUTH,
+      uploadStorageSettings: { object_storage_region: "ap-tokyo-1", object_storage_namespace: "env-namespace" },
+    });
+
     await page.goto("/settings/oci");
 
-    const authSaveButton = page.getByRole("button", {
-      name: "OCI 認証設定: OCI 設定を保存",
-    });
-    const authTestButton = page.getByRole("button", {
-      name: "OCI 認証設定: 接続テスト",
-    });
-    const storageSaveButton = page.getByRole("button", {
-      name: "Object Storage: 保存",
-    });
-    const copyButton = page.getByRole("button", { name: ".env をコピー" });
-
-    await expect(page.getByRole("button", { name: /既定値へ戻す/ })).toHaveCount(0);
-    await expect(page.getByRole("heading", { name: "サーバー readiness" })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "接続確認" })).toHaveCount(0);
-    await expectButtonTextContained(authSaveButton);
-    await expectButtonTextContained(authTestButton);
-    await expectButtonTextContained(storageSaveButton);
-    await expectButtonTextContained(copyButton);
-    await expect(page.getByRole("button", { name: "JSON をコピー" })).toHaveCount(0);
-    await expect(page.getByRole("heading", { name: "JSON プレビュー" })).toHaveCount(0);
-    await expect(page.getByRole("heading", { name: "運用メモ" })).toBeVisible();
-    await expectActionInsideCard(page, "OCI 認証設定", authSaveButton);
-    await expectActionInsideCard(page, "OCI 認証設定", authTestButton);
-    await expectActionInsideCard(page, "Object Storage", storageSaveButton);
-    await expectActionInsideCard(page, ".env プレビュー", copyButton);
-    await expectNoPageOverflow(page);
-    await expectMainScrollEndsAtContent(page);
+    await expect(page.getByLabel("ユーザー OCID")).toHaveValue(VALID_AUTH.user);
+    await expect(page.getByLabel("テナンシ OCID")).toHaveValue(VALID_AUTH.tenancy);
+    await expect(page.getByRole("textbox", { name: "Object Storage ネームスペース" })).toHaveValue("env-namespace");
+    await expect(page.getByRole("button", { name: ".env をコピー" })).toHaveCount(0);
+    const overflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth
+    );
+    expect(overflow).toBeLessThanOrEqual(0);
   });
 }
 
-test("OCI 認証設定の下書きは Object Storage 未入力でも保存できる", async ({ page }) => {
-  let savedPayload: unknown;
-  let configTestCount = 0;
+test("OCI 認証設定を保存すると入力値を PATCH で送る", async ({ page }) => {
+  let saved: unknown = null;
   await mockApi(page, {
+    ociSettings: VALID_AUTH,
     onOciSettingsUpdate: (body) => {
-      savedPayload = body;
-    },
-    onOciConfigTest: () => {
-      configTestCount += 1;
+      saved = body;
     },
   });
+
   await page.goto("/settings/oci");
-
-  await page.getByLabel("ユーザー OCID").fill("ocid1.user.oc1..profile");
-  await page.getByLabel("フィンガープリント").fill("12:34:56:78:90:ab:cd:ef");
-  await page.getByLabel("テナンシ OCID").fill("ocid1.tenancy.oc1..profile");
-  await page.getByRole("combobox", { name: "リージョン", exact: true }).click();
-  await page.getByRole("listbox", { name: "リージョン" }).getByRole("option", {
-    name: "us-chicago-1",
-  }).click();
-
+  await page.getByLabel("ユーザー OCID").fill("ocid1.user.oc1..bbbbbbbb");
   await page.getByRole("button", { name: "OCI 認証設定: OCI 設定を保存" }).click();
 
-  await expect(
-    page.getByRole("button", { name: "OCI 認証設定: 保存しました" })
-  ).toBeVisible();
-  await expect(page.getByText(OCI_TEST_SUCCESS_MESSAGE)).toHaveCount(0);
-  expect(savedPayload).toEqual({
-    user: "ocid1.user.oc1..profile",
-    fingerprint: "12:34:56:78:90:ab:cd:ef",
-    tenancy: "ocid1.tenancy.oc1..profile",
-    region: "us-chicago-1",
+  await expect.poll(() => saved).toMatchObject({
+    user: "ocid1.user.oc1..bbbbbbbb",
+    fingerprint: VALID_AUTH.fingerprint,
+    tenancy: VALID_AUTH.tenancy,
+    region: VALID_AUTH.region,
   });
-  expect(configTestCount).toBe(0);
-  await expect(page.getByRole("alert")).toHaveCount(0);
-
-  await page.getByRole("button", { name: "OCI 認証設定: 接続テスト" }).click();
-  const ociResult = page.getByTestId("settings-oci-test-result");
-  await expect(ociResult.getByText(OCI_TEST_SUCCESS_MESSAGE)).toBeVisible();
-  await expect(ociResult).toHaveAttribute("data-tone", "success");
-  const stagesList = ociResult.getByRole("list", { name: "確認段階" });
-  await expect(stagesList.getByRole("listitem")).toHaveCount(4);
-  await expect(stagesList.locator('[data-stage-status="success"]')).toHaveCount(4);
-  for (const label of ["設定の形式", "鍵の読み取り", "リージョン到達", "認証（API 応答）"]) {
-    await expect(stagesList).toContainText(label);
-  }
-  await expect(ociResult).toContainText("Object Storage GetNamespace");
-  await expect(ociResult).not.toContainText("確認ポイント");
-  expect(configTestCount).toBe(1);
-
-  const stored = await page.evaluate(() =>
-    JSON.parse(window.localStorage.getItem("production-ready-rag.oci-settings.v1") ?? "{}")
-  );
-  expect(stored.userOcid).toBeUndefined();
-  expect(stored.configFile).toBeUndefined();
-  expect(stored.configProfile).toBeUndefined();
-  expect(stored.compartmentId).toBeUndefined();
-  expect(stored.objectStorageRegion).toBeUndefined();
-  expect(stored.objectStorageNamespace).toBeUndefined();
-  expect(stored.objectStorageBucket).toBeUndefined();
 });
 
-test("OCI 認証設定は未入力でも保存できる", async ({ page }) => {
-  let savedPayload: unknown;
+test("OCI 認証設定は必須項目が空なら保存前に止める", async ({ page }) => {
+  let patchCount = 0;
   await mockApi(page, {
-    onOciSettingsUpdate: (body) => {
-      savedPayload = body;
+    onOciSettingsUpdate: () => {
+      patchCount += 1;
     },
   });
-  await page.goto("/settings/oci");
 
-  const memo = operationMemoCard(page);
-  await expect(memo.getByText("ユーザー OCID: 値を入力してください。")).toBeVisible();
+  await page.goto("/settings/oci");
+  await expect(page.getByLabel("ユーザー OCID")).toHaveValue("");
   await page.getByRole("button", { name: "OCI 認証設定: OCI 設定を保存" }).click();
 
-  await expect(
-    page.getByRole("button", { name: "OCI 認証設定: 保存しました" })
-  ).toBeVisible();
-  expect(savedPayload).toEqual({
-    user: "",
-    fingerprint: "",
-    tenancy: "",
-    region: "",
-  });
+  await expect(page.getByText("値を入力してください。").first()).toBeVisible();
+  expect(patchCount).toBe(0);
 });
 
-test("Object Storage 設定は namespace 未取得でも保存できる", async ({ page }) => {
-  let savedPayload: unknown;
+test("Object Storage ネームスペースを OCI API から取得できる", async ({ page }) => {
+  let requested: unknown = null;
   await mockApi(page, {
-    onOciObjectStorageUpdate: (body) => {
-      savedPayload = body;
+    ociSettings: VALID_AUTH,
+    uploadStorageSettings: { object_storage_region: "ap-osaka-1" },
+    onObjectStorageNamespaceRead: (body) => {
+      requested = body;
     },
   });
+
   await page.goto("/settings/oci");
-
-  const memo = operationMemoCard(page);
-  await expect(
-    memo.getByText("Object Storage ネームスペース: 値を入力してください。")
-  ).toBeVisible();
-  await page.getByRole("button", { name: "Object Storage: 保存" }).click();
-
-  await expect(page.getByRole("button", { name: "Object Storage: 保存しました" })).toBeVisible();
-  expect(savedPayload).toEqual({
-    object_storage_region: "",
-    object_storage_namespace: "",
-  });
-});
-
-test("Object Storage リージョンは OCI 認証設定と同じ候補で保存できる", async ({ page }) => {
-  let savedPayload: unknown;
-  await mockApi(page, {
-    onOciObjectStorageUpdate: (body) => {
-      savedPayload = body;
-    },
-  });
-  await page.goto("/settings/oci");
-
-  const storageRegion = page.getByRole("combobox", { name: "Object Storage リージョン" });
-  await expect(storageRegion).toContainText("選択してください");
-
-  await storageRegion.click();
-  const listbox = page.getByRole("listbox", { name: "Object Storage リージョン" });
-  await expect(listbox.getByRole("option")).toHaveText([
-    "ap-tokyo-1",
-    "ap-osaka-1",
-    "us-chicago-1",
-  ]);
-
-  await listbox.getByRole("option", { name: "us-chicago-1" }).click();
-  await expect(storageRegion).toContainText("us-chicago-1");
   await page.getByRole("button", { name: "Object Storage ネームスペース: 取得" }).click();
-  await expect(page.getByLabel("Object Storage バケット")).toHaveCount(0);
-  await page.getByRole("button", { name: "Object Storage: 保存" }).click();
 
-  await expect(page.getByRole("button", { name: "Object Storage: 保存しました" })).toBeVisible();
-  expect(savedPayload).toEqual({
-    object_storage_region: "us-chicago-1",
-    object_storage_namespace: "mytenancynamespace",
-  });
-  await expect(page.getByLabel(".env プレビュー")).toContainText(
-    "OBJECT_STORAGE_REGION=us-chicago-1"
-  );
-  await expect(page.getByLabel(".env プレビュー")).not.toContainText("OBJECT_STORAGE_BUCKET");
+  await expect.poll(() => requested).toMatchObject({ region: "ap-osaka-1" });
+  await expect(page.getByRole("textbox", { name: "Object Storage ネームスペース" })).not.toHaveValue("");
 });
 
-test("Object Storage 設定は runtime の .env 由来値を初期表示する", async ({ page }) => {
-  await page.addInitScript(() => {
-    window.localStorage.setItem(
-      "production-ready-rag.oci-settings.v1",
-      JSON.stringify({
-        objectStorageRegion: "ap-tokyo-1",
-        objectStorageNamespace: "stale-browser-draft",
-      })
-    );
-  });
+test("OCI config から認証項目を反映できる", async ({ page }) => {
+  let requested: unknown = null;
   await mockApi(page, {
-    uploadStorageSettings: {
-      object_storage_region: "us-chicago-1",
-      object_storage_namespace: "env-namespace",
-      object_storage_bucket: "env-bucket",
+    onOciConfigRead: (body) => {
+      requested = body;
     },
   });
-  await page.goto("/settings/oci");
 
-  await expect(
-    page.getByRole("textbox", { name: /Object Storage ネームスペース/ })
-  ).toHaveValue("env-namespace");
-  await expect(page.getByLabel("Object Storage バケット")).toHaveCount(0);
-  await expect(
-    page.getByRole("combobox", { name: "Object Storage リージョン" })
-  ).toContainText("us-chicago-1");
-  await expect(page.getByLabel(".env プレビュー")).toContainText(
-    "OBJECT_STORAGE_NAMESPACE=env-namespace"
-  );
-  await expect(page.getByLabel(".env プレビュー")).not.toContainText("OBJECT_STORAGE_BUCKET");
+  await page.goto("/settings/oci");
+  await page.getByRole("button", { name: /config から反映/ }).click();
+
+  await expect.poll(() => requested).toMatchObject({ config_file: "~/.oci/config", profile: "DEFAULT" });
+  await expect(page.getByLabel("ユーザー OCID")).not.toHaveValue("");
 });
 
-test("OCI 認証設定は runtime 由来値を初期表示する", async ({ page }) => {
-  await page.addInitScript(() => {
-    window.localStorage.setItem(
-      "production-ready-rag.oci-settings.v1",
-      JSON.stringify({
-        userOcid: "ocid1.user.oc1..stale",
-        fingerprint: "aa:bb:cc:dd",
-        tenancyOcid: "ocid1.tenancy.oc1..stale",
-        region: "us-chicago-1",
-      })
-    );
-  });
+test("OCI 接続テストの失敗を段階つきで表示する", async ({ page }) => {
   await mockApi(page, {
-    ociSettings: {
-      user: "ocid1.user.oc1..runtime",
-      fingerprint: "12:34:56:78",
-      tenancy: "ocid1.tenancy.oc1..runtime",
-      region: "ap-osaka-1",
-      key_file_exists: true,
-    },
+    ociSettings: VALID_AUTH,
+    ociConfigTestResult: ociConfigTestFixture({
+      status: "failed",
+      message: "OCI config の必須項目が不足しています。",
+      stages: ociStages(["failed"], {
+        message: "OCI config の必須項目が不足しています。",
+        action: "不足している項目を入力して認証設定を保存してください。",
+      }),
+    }),
   });
+
   await page.goto("/settings/oci");
+  await page.getByRole("button", { name: /接続テスト/ }).click();
 
-  await expect(page.getByLabel("ユーザー OCID")).toHaveValue("ocid1.user.oc1..runtime");
-  await expect(page.getByLabel("フィンガープリント")).toHaveValue("12:34:56:78");
-  await expect(page.getByLabel("テナンシ OCID")).toHaveValue("ocid1.tenancy.oc1..runtime");
-  await expect(
-    page.getByRole("combobox", { name: "リージョン", exact: true })
-  ).toContainText("ap-osaka-1");
-  await expect(page.getByLabel(".env プレビュー")).toContainText("OCI_REGION=ap-osaka-1");
-});
-
-test("OCI 設定の必須表示は共有の「必須」タグにそろい、記号の * を出さない", async ({ page }) => {
-  await mockApi(page);
-  await page.goto("/settings/oci");
-
-  // 共有 TextField と独自入力（設定ファイルのパス / ネームスペース）で同じ表示・同じ読み上げ名になる
-  for (const label of ["OCI 設定ファイルのパス", "ユーザー OCID", "Object Storage ネームスペース"]) {
-    const input = page.getByRole("textbox", { name: label, exact: true });
-    await expect(input).toHaveAttribute("aria-required", "true");
-    await expect(page.locator(`label[for="${await input.getAttribute("id")}"]`)).toContainText(
-      "必須"
-    );
-  }
-  // 秘密鍵のドロップゾーンは button で aria-required を持てないため、タグを読み上げ名に含める
-  await expect(page.getByRole("button", { name: /^秘密鍵\s*必須/ })).toBeVisible();
-  await expect(page.locator("main label").filter({ hasText: "*" })).toHaveCount(0);
+  await expect(page.getByTestId("settings-oci-test-stages")).toBeVisible();
+  await expect(page.getByText("OCI config の必須項目が不足しています。").first()).toBeVisible();
 });
 
 test("秘密鍵ファイルが無い場合は固定 path の案内を表示する", async ({ page }) => {
@@ -623,104 +421,6 @@ test("秘密鍵ファイルが無い場合は固定 path の案内を表示す�
   ).toHaveCount(0);
 });
 
-test("Object Storage 入力欄はネームスペースとリージョンだけを表示する", async ({
-  page,
-}) => {
-  await page.setViewportSize({ width: 1280, height: 720 });
-  await mockApi(page);
-  await page.goto("/settings/oci");
-
-  const namespaceField = page.getByRole("textbox", {
-    name: /Object Storage ネームスペース/,
-  });
-  const regionField = page.getByRole("combobox", {
-    name: "Object Storage リージョン",
-  });
-
-  const namespaceBox = await namespaceField.boundingBox();
-  const regionBox = await regionField.boundingBox();
-
-  expect(namespaceBox).not.toBeNull();
-  expect(regionBox).not.toBeNull();
-  await expect(page.getByLabel("Object Storage バケット")).toHaveCount(0);
-  expect(Math.abs(namespaceBox!.y - regionBox!.y)).toBeLessThanOrEqual(2);
-});
-
-test("Object Storage ネームスペースを OCI API から取得できる", async ({ page }) => {
-  let namespaceRequest: unknown;
-  await mockApi(page, {
-    onObjectStorageNamespaceRead: (body) => {
-      namespaceRequest = body;
-    },
-  });
-  await page.goto("/settings/oci");
-
-  await expect(
-    page.getByRole("textbox", { name: /Object Storage ネームスペース/ })
-  ).not.toBeEditable();
-  await page.getByRole("combobox", { name: "Object Storage リージョン" }).click();
-  await page.getByRole("listbox", { name: "Object Storage リージョン" }).getByRole("option", {
-    name: "ap-osaka-1",
-  }).click();
-  await page.getByRole("button", { name: "Object Storage ネームスペース: 取得" }).click();
-
-  expect(namespaceRequest).toEqual({
-    config_file: "~/.oci/config",
-    profile: "DEFAULT",
-    region: "ap-osaka-1",
-  });
-  await expect(
-    page.getByRole("textbox", { name: /Object Storage ネームスペース/ })
-  ).toHaveValue("mytenancynamespace");
-  await expect(
-    page.getByRole("button", { name: "Object Storage ネームスペース: 取得しました" })
-  ).toBeVisible();
-  await expect(page.getByLabel(".env プレビュー")).toContainText(
-    "OBJECT_STORAGE_NAMESPACE=mytenancynamespace"
-  );
-});
-
-test("OCI config の path と設定名から OCI 認証項目へ反映できる", async ({ page }) => {
-  const viewport = page.viewportSize();
-  if (viewport && viewport.width <= 480) {
-    await page.addInitScript(() => {
-      window.localStorage.setItem(
-        "production-ready-rag.ui",
-        JSON.stringify({ state: { sidebarCollapsed: true }, version: 0 })
-      );
-    });
-  }
-
-  let importRequest: unknown;
-  await mockApi(page, {
-    onOciConfigRead: (body) => {
-      importRequest = body;
-    },
-  });
-  await page.goto("/settings/oci");
-
-  await expect(page.getByText("貼り付け内容")).toHaveCount(0);
-  await expect(page.getByLabel("OCI config ファイルを選択", { exact: true })).toHaveCount(0);
-  await expect(page.getByLabel("コンパートメント OCID")).toHaveCount(0);
-
-  await expect(page.getByLabel("OCI 設定ファイルのパス")).toHaveValue("~/.oci/config");
-  await expect(page.getByLabel("OCI 設定ファイルのパス")).not.toBeEditable();
-  await expect(page.getByLabel("OCI 設定名")).toHaveValue("DEFAULT");
-  await expect(page.getByLabel("OCI 設定名")).not.toBeEditable();
-  await page.getByRole("button", { name: "config から反映" }).click();
-
-  expect(importRequest).toEqual({ config_file: "~/.oci/config", profile: "DEFAULT" });
-  await expect(page.getByRole("button", { name: "反映しました" })).toBeVisible();
-  await expect(page.getByLabel("OCI 設定名")).toHaveValue("DEFAULT");
-  await expect(page.getByLabel("ユーザー OCID")).toHaveValue("ocid1.user.oc1..prod");
-  await expect(page.getByLabel("フィンガープリント")).toHaveValue("12:34:56:78");
-  await expect(page.getByLabel("テナンシ OCID")).toHaveValue("ocid1.tenancy.oc1..prod");
-  await expect(page.getByRole("combobox", { name: "リージョン", exact: true })).toContainText("ap-osaka-1");
-  await expect(page.locator("#oci-key-file")).toContainText("~/.oci/oci_api_key.pem");
-  await expect(page.getByText("/home/app/.oci/prod.pem")).toHaveCount(0);
-  await expect(page.getByLabel("コンパートメント OCID")).toHaveCount(0);
-});
-
 test("秘密鍵ファイルは固定 path へ上書きアップロードできる", async ({ page }) => {
   let uploadContentType = "";
   await mockApi(page, {
@@ -741,108 +441,3 @@ test("秘密鍵ファイルは固定 path へ上書きアップロードでき�
   await expect(page.getByText("秘密鍵を読み込みました")).toBeVisible();
   expect(uploadContentType).toContain("multipart/form-data");
 });
-
-const OCI_CONNECTIVITY_FAILURES = [
-  {
-    name: "形式不正",
-    statuses: ["failed", "skipped", "skipped", "skipped"],
-    message: "OCI config の形式が正しくありません（fingerprint）。",
-    action: "fingerprint は OCI コンソールの API キーに表示される 16 バイトのコロン区切りを設定してください。",
-    extra: { auth_check_operation: null },
-    detail: null,
-  },
-  {
-    name: "認証失敗",
-    statuses: ["success", "success", "success", "failed"],
-    message: "OCI が認証を拒否しました（401 NotAuthenticated）。",
-    action: "fingerprint が OCI コンソールの API キーと一致しているかを確認してください。",
-    extra: {
-      error_type: "ServiceError",
-      http_status: 401,
-      service_code: "NotAuthenticated",
-      request_id: "E2EREQUEST401",
-    },
-    detail: "opc-request-id E2EREQUEST401",
-  },
-  {
-    name: "権限不足",
-    statuses: ["success", "success", "success", "failed"],
-    message: "OCI がアクセスを許可しませんでした（404 NotAuthorizedOrNotFound）。",
-    action: "IAM ポリシーでこのユーザーのグループに必要な権限が付与されているかを確認してください。",
-    extra: {
-      error_type: "ServiceError",
-      http_status: 404,
-      service_code: "NotAuthorizedOrNotFound",
-      request_id: "E2EREQUEST404",
-    },
-    detail: "HTTP 404",
-  },
-  {
-    name: "タイムアウト",
-    statuses: ["success", "success", "failed", "skipped"],
-    message: "ap-osaka-1 の OCI endpoint への接続が 5 秒以内に完了しませんでした。",
-    action: "リージョン名（ap-osaka-1）と、バックエンドから OCI への HTTPS 通信を確認してください。",
-    extra: { error_type: "ConnectTimeout" },
-    detail: null,
-  },
-] as const;
-
-for (const failure of OCI_CONNECTIVITY_FAILURES) {
-  test(`OCI 接続テストの${failure.name}を段階・次の対処つきで表示する`, async ({ page }) => {
-    let release: () => void = () => undefined;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    let configTestCount = 0;
-    await mockApi(page, {
-      ociSettings: {
-        user: "ocid1.user.oc1..saved",
-        fingerprint: "12:34:56:78:90:ab:cd:ef:12:34:56:78:90:ab:cd:ef",
-        tenancy: "ocid1.tenancy.oc1..saved",
-        region: "ap-osaka-1",
-        key_file_exists: true,
-      },
-      onOciConfigTest: () => {
-        configTestCount += 1;
-      },
-      ociConfigTestGate: gate,
-      ociConfigTestResult: ociConfigTestFixture({
-        status: "failed",
-        message: failure.message,
-        stages: ociStages(failure.statuses, { message: failure.message, action: failure.action }),
-        ...failure.extra,
-      }),
-    });
-    await page.goto("/settings/oci");
-
-    const testButton = page.getByRole("button", { name: "OCI 認証設定: 接続テスト" });
-    await testButton.click();
-    // loading 中もラベルは変えない（先頭アイコンだけがスピナーになる）。
-    await expect(testButton).toHaveAccessibleName("OCI 認証設定: 接続テスト");
-    await expect(testButton).toContainText("接続テスト");
-    release();
-
-    const ociResult = page.getByTestId("settings-oci-test-result");
-    await expect(ociResult).toHaveAttribute("data-tone", "danger");
-    await expect(ociResult).toHaveAttribute("role", "alert");
-    await expect(ociResult).toContainText(failure.message);
-    const stagesList = ociResult.getByRole("list", { name: "確認段階" });
-    for (const [index, key] of OCI_STAGE_KEYS.entries()) {
-      await expect(stagesList.locator(`[data-stage="${key}"]`)).toHaveAttribute(
-        "data-stage-status",
-        failure.statuses[index]
-      );
-    }
-    await expect(stagesList.locator('[data-stage-status="failed"]')).toContainText("失敗");
-    if ((failure.statuses as readonly OciStageStatus[]).includes("skipped")) {
-      await expect(stagesList.locator('[data-stage-status="skipped"]').first()).toContainText(
-        "未実施"
-      );
-    }
-    await expect(ociResult).toContainText("確認ポイント");
-    await expect(ociResult).toContainText(failure.action);
-    if (failure.detail) await expect(ociResult).toContainText(failure.detail);
-    expect(configTestCount).toBe(1);
-    await expectNoPageOverflow(page);
-  });
-}
