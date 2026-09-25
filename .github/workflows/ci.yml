@@ -333,7 +333,7 @@ jobs:
   nl2sql-terraform:
     name: NL2SQL / Terraform
     needs: changes
-    if: needs.changes.outputs.nl2sql == 'true' || needs.changes.outputs.platform == 'true'
+    if: needs.changes.outputs.nl2sql == 'true' || needs.changes.outputs.rag == 'true' || needs.changes.outputs.agent == 'true' || needs.changes.outputs.platform == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -354,11 +354,14 @@ jobs:
 
       - name: Test deployment update and recovery scripts
         run: |
-          bash -n init_script.sh scripts/git-pull.sh scripts/update-after-pull.sh scripts/tail-logs.sh
+          bash -n init_script.sh scripts/git-pull.sh scripts/update-after-pull.sh scripts/tail-logs.sh scripts/start-frontend.sh ../rag/scripts/start-frontend.sh ../agent/scripts/start-frontend.sh
           bash scripts/tests/git-pull.test.sh
           bash scripts/tests/init-script-deployment.test.sh
           bash scripts/tests/update-after-pull.test.sh
           bash scripts/tests/tail-logs.test.sh
+          bash scripts/tests/start-frontend.test.sh
+          bash scripts/tests/start-frontend.test.sh ../rag/scripts/start-frontend.sh
+          bash scripts/tests/start-frontend.test.sh ../agent/scripts/start-frontend.sh
 
       - name: Format check
         run: terraform fmt -check -recursive terraform/stack
