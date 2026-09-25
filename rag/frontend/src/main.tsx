@@ -1,6 +1,6 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { BrowserRouter } from "react-router-dom";
+import { RouterProvider, createBrowserRouter } from "react-router-dom";
 import { initTheme } from "@engchina/production-ready-ui";
 
 import { App } from "./App";
@@ -17,12 +17,21 @@ if (!root) {
   throw new Error("root element が見つかりません。");
 }
 
-createRoot(root).render(
-  <StrictMode>
-    <BrowserRouter>
+// 既存のルート定義（App の <Routes>）はそのまま、全体を data router の 1 つの splat route に載せる。
+// data router にすると、共有の離脱ガードがブラウザの戻る/進むも確認できる（useBlocker。#138）。
+const router = createBrowserRouter([
+  {
+    path: "*",
+    element: (
       <Providers>
         <App />
       </Providers>
-    </BrowserRouter>
+    ),
+  },
+]);
+
+createRoot(root).render(
+  <StrictMode>
+    <RouterProvider router={router} />
   </StrictMode>
 );

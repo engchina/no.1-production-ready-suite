@@ -19,7 +19,10 @@ test("ConfirmProvider には NL2SQL の文言とルート遷移の key を渡す
   assert.match(main, /labels=\{\{ confirm: t\("common\.confirm"\), cancel: t\("common\.cancel"\) \}\}/u);
   assert.match(main, /const location = useLocation\(\);/u);
   assert.match(main, /navigationKey=\{location\.key\}/u);
-  assert.match(main, /<BrowserRouter>[\s\S]*<AppConfirmProvider>[\s\S]*<\/AppConfirmProvider>[\s\S]*<\/BrowserRouter>/u);
+  // data router（#138）の splat route の中に ConfirmProvider を置く。
+  assert.match(main, /function RootLayout\(\)[\s\S]*<AppConfirmProvider>[\s\S]*<\/AppConfirmProvider>/u);
+  assert.match(main, /createBrowserRouter\(\[\{ path: "\*", element: <RootLayout \/> \}\]\)/u);
+  assert.match(main, /<RouterProvider router=\{router\} \/>/u);
 });
 
 test("画面固有のモーダルは共有 z-dialog の暗幕を body 直下に出す", () => {

@@ -280,9 +280,10 @@ test("編集画面はルート遷移とタブ離脱の両方を未保存ガー�
     ),
     "utf8",
   );
-  // BrowserRouter では useBlocker(data router 専用)が使えないため、
-  // 内部リンクの click を capture 段階で受ける。
-  assert.doesNotMatch(guard, /useBlocker\(/u);
+  // 内部リンクの click を capture 段階で受ける。戻る/進む（POP）だけを、data router の中で
+  // useBlocker で確認する（画面内のボタンが自分で確認した後の navigate を二重に止めない。#138）。
+  assert.match(guard, /UNSAFE_DataRouterContext/u);
+  assert.match(guard, /historyAction === "POP"/u);
   assert.match(guard, /document\.addEventListener\("click", handleClick, true\)/u);
   assert.match(guard, /window\.addEventListener\("beforeunload", handleBeforeUnload\)/u);
   assert.match(guard, /url\.origin !== window\.location\.origin/u);

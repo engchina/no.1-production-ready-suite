@@ -101,6 +101,31 @@ test.describe("未保存変更の離脱ガード", () => {
     await expect(page).toHaveURL(/\/settings\/oci$/);
   });
 
+  test("変更があるとブラウザの戻る/進むでも確認し、キャンセルで URL と入力が残る（#138）", async ({ page }) => {
+    await mockHuggingFace(page);
+    await page.goto("/settings/huggingface");
+    await expect(page.locator("#hf-endpoint")).toBeVisible();
+    // 未変更の移動と戻るは確認しない（SPA 内の履歴を 1 つ積む）。
+    await openFromSidebar(page, "OCI 認証設定");
+    await expect(page).toHaveURL(/\/settings\/oci$/);
+    await page.goBack();
+    await expect(page).toHaveURL(/\/settings\/huggingface$/);
+    await expect(page.getByRole("alertdialog")).toHaveCount(0);
+
+    await page.locator("#hf-endpoint").fill("https://hf-mirror.com");
+    await expect.poll(() => beforeUnloadPrevented(page)).toBe(true);
+    await page.goForward();
+    const dialog = page.getByRole("alertdialog", { name: "変更を破棄しますか" });
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole("button", { name: "キャンセル" }).click();
+    await expect(page).toHaveURL(/\/settings\/huggingface$/);
+    await expect(page.locator("#hf-endpoint")).toHaveValue("https://hf-mirror.com");
+
+    await page.goForward();
+    await dialog.getByRole("button", { name: "破棄して移動" }).click();
+    await expect(page).toHaveURL(/\/settings\/oci$/);
+  });
+
   test("保存に成功すると基準が更新され、確認なしで移動できる", async ({ page }) => {
     let current = { endpoint: "", token_configured: false, config_source: "runtime" };
     await page.route("**/api/settings/huggingface", async (route) => {

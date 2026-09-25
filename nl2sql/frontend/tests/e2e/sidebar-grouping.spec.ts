@@ -372,6 +372,9 @@ test("アクティブ経路のセクションは保存済み折りたたみ状�
 test("セクション見出しはキーボードで開閉できる", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto("/");
+  // root は最初の許可画面へ振り分ける。data router の navigate は非同期なので、振り分けが終わってから
+  // 操作する（振り分け後の画面で、現在地のセクションに合わせて開閉状態が作り直されるため）。
+  await expect(page).not.toHaveURL(/\/$/);
 
   const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
   const toggle = sidebar.getByRole("button", { name: "セキュリティ管理 を展開" });
