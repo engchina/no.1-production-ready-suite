@@ -59,9 +59,20 @@ export const NAV_SECTIONS: NavSection[] = [
     ],
   },
   {
-    titleKey: "nav.section.settings",
+    // Agent 固有の運用設定（接続先と Control Plane のバックアップ。#87）。
+    titleKey: "nav.section.operations",
     items: [
       { href: APP_ROUTES.settingsConnection, labelKey: "nav.settingsConnection", icon: KeyRound },
+      { href: APP_ROUTES.settingsExternalRag, labelKey: "nav.settingsExternalRag", icon: Settings },
+      { href: APP_ROUTES.settingsExternalNl2Sql, labelKey: "nav.settingsExternalNl2Sql", icon: Settings },
+      { href: APP_ROUTES.settingsExternalMcp, labelKey: "nav.settingsExternalMcp", icon: Settings },
+      { href: APP_ROUTES.settingsRuntimeSnapshot, labelKey: "nav.settingsRuntimeSnapshot", icon: DatabaseBackup },
+    ],
+  },
+  {
+    // 3製品で共通のシステム設定（画面は platform の共有パッケージ。#70）。
+    titleKey: "nav.section.settings",
+    items: [
       {
         href: APP_ROUTES.settingsOci,
         labelKey: "nav.settingsOci",
@@ -81,10 +92,6 @@ export const NAV_SECTIONS: NavSection[] = [
         sidebarLabelKey: "nav.settingsDatabase.sidebar",
         icon: DatabaseBackup,
       },
-      { href: APP_ROUTES.settingsExternalRag, labelKey: "nav.settingsExternalRag", icon: Settings },
-      { href: APP_ROUTES.settingsExternalNl2Sql, labelKey: "nav.settingsExternalNl2Sql", icon: Settings },
-      { href: APP_ROUTES.settingsExternalMcp, labelKey: "nav.settingsExternalMcp", icon: Settings },
-      { href: APP_ROUTES.settingsRuntimeSnapshot, labelKey: "nav.settingsRuntimeSnapshot", icon: DatabaseBackup },
       { href: APP_ROUTES.settingsAppearance, labelKey: "nav.settingsAppearance", icon: Palette },
     ],
   },

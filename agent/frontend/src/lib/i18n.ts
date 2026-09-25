@@ -15,6 +15,7 @@ const agentJa = {
   "nav.section.overview": "概要",
   "nav.section.runtime": "実行",
   "nav.section.controlPlane": "Control Plane",
+  "nav.section.operations": "運用設定",
   "nav.section.settings": "システム設定",
   "nav.settingsAppearance": "外観",
   "appearance.subtitle": "配色テーマ（ライト / ダーク）を切り替えます。既定はライトです。",
