@@ -383,7 +383,7 @@ export function SearchClient() {
                   title={t("search.businessViewRequired.title")}
                   hint={t("search.businessViewRequired.hint")}
                   action={
-                    <Button onClick={() => navigate(APP_ROUTES.businessViews)} icon={Plus}>
+                    <Button onClick={() => navigate(`${APP_ROUTES.businessViews}?id=new`)} icon={Plus}>
                       {t("search.businessViewRequired.cta")}
                     </Button>
                   }

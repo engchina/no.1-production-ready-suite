@@ -3,11 +3,14 @@
 import {
   PageBody,
   PageHeader,
+  Banner,
   Button,
   Card,
   CardContent,
   CardHeader,
   CardTitle,
+  DataTable,
+  type DataTableColumn,
   type EntityAction,
   FieldError,
   FormStatus,
@@ -15,14 +18,20 @@ import {
   RowActionMenu,
   SelectField,
   type SelectFieldOption,
+  StatusBadge,
   ToggleChip,
 } from "@engchina/production-ready-ui";
-import { Archive, Sparkles, UserCog } from "lucide-react";
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { Archive, ArrowLeft, FilePen, Plus, RotateCcw, Save, Sparkles } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 
 import { DegradedBanner } from "@/components/DegradedBanner";
-import { EmptyState, ErrorState } from "@/components/StateViews";
+import { EmptyState, ErrorState, LoadingState } from "@/components/StateViews";
 import { KnowledgeBaseScopePicker } from "@/components/knowledge-bases/KnowledgeBaseScopePicker";
+import {
+  EditorBreadcrumbs,
+  MissingEditorTarget,
+  RowTitleButton,
+} from "@/components/layout/EntityLayout";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import {
   ApiError,
@@ -41,7 +50,8 @@ import {
   type RetrievalModeName,
   type RetrievalStrategyName,
 } from "@/lib/api";
-import { formatDateTime } from "@/lib/format";
+import { useEditorRoute } from "@/lib/editor-route";
+import { formatDateTime, formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { useCustomLeaveGuard } from "@/lib/leave-guard";
 import {
@@ -51,6 +61,7 @@ import {
   useCreateBusinessView,
   useUpdateBusinessView,
 } from "@/lib/queries";
+import { APP_ROUTES } from "@/lib/routes";
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { readWorkspace, removeWorkspace, useWorkspaceState, writeWorkspace } from "@/lib/workspace-state";
@@ -58,13 +69,16 @@ import { BusinessViewKnowledgePanel } from "./BusinessViewKnowledgePanel";
 
 const LIMIT = 20;
 
+/**
+ * 一覧の絞り込み・検索・ページ。編集対象は URL の `?id=` が唯一の情報源なので、ここには持たない（#147）。
+ * #132 の保存値に残る `editingId` は読み捨てる。
+ */
 interface BusinessViewListView {
   filter: BusinessViewStatus | "ALL";
   q: string;
   offset: number;
-  editingId: string | null;
 }
-const INITIAL_VIEW: BusinessViewListView = { filter: "ACTIVE", q: "", offset: 0, editingId: null };
+const INITIAL_VIEW: BusinessViewListView = { filter: "ACTIVE", q: "", offset: 0 };
 
 function isBusinessViewListView(value: unknown): value is BusinessViewListView {
   const view = value as BusinessViewListView;
@@ -74,8 +88,7 @@ function isBusinessViewListView(value: unknown): value is BusinessViewListView {
     (FILTERS as unknown[]).includes(view.filter) &&
     typeof view.q === "string" &&
     Number.isInteger(view.offset) &&
-    view.offset >= 0 &&
-    (view.editingId === null || typeof view.editingId === "string")
+    view.offset >= 0
   );
 }
 
@@ -97,6 +110,15 @@ function isBusinessViewDraft(value: unknown): value is BusinessViewDraft {
     Array.isArray(draft.config.knowledge_base_ids) &&
     typeof draft.config.query === "object"
   );
+}
+
+function isDraftOrNull(value: unknown): value is BusinessViewDraft | null {
+  return value === null || isBusinessViewDraft(value);
+}
+
+/** 業務ビューごとの未保存の下書き（`?id=` の値で分ける。新規は `new`）。 */
+function readDraft(scope: string): BusinessViewDraft | null {
+  return readWorkspace<BusinessViewDraft | null>("businessViews.draft", null, isDraftOrNull, scope);
 }
 
 /** KB の並び順は意味を持たないため、集合として比べる。 */
@@ -219,30 +241,45 @@ function emptyConfig(): BusinessViewConfig {
   };
 }
 
-/** 業務ビュー(Business View)管理。複数 KB を業務視点で束ね、検索・回答方針と persona を設定する。 */
+
+/**
+ * 業務ビュー(Business View)管理。複数 KB を業務視点で束ね、検索・回答方針と persona を設定する。
+ * A 型（一覧 → 全画面エディタ）。編集対象は URL の `?id=`（なし = 一覧 / `new` = 新規 / `<id>` = 編集）。
+ */
 export function BusinessViewManagementClient() {
+  const editor = useEditorRoute();
+  const { target } = editor;
+
+  if (target.kind === "list") {
+    return <BusinessViewList onOpen={(id) => editor.openItem(id)} onCreate={editor.openNew} />;
+  }
+  if (target.kind === "new") {
+    return (
+      <BusinessViewEditor
+        key="new"
+        onBack={() => editor.backToList()}
+        onSaved={(id) => editor.openItem(id, { replace: true })}
+        onArchived={() => editor.backToList({ replace: true })}
+      />
+    );
+  }
+  return (
+    <BusinessViewEditRoute
+      key={target.id}
+      id={target.id}
+      onBack={() => editor.backToList()}
+      onArchived={() => editor.backToList({ replace: true })}
+    />
+  );
+}
+
+/**
+ * 業務ビュー 1 件の操作。一覧の行（RowActionMenu）とエディタ（ObjectActionBar）で同じ定義を使う
+ * （buttons.md §5.1）。編集は選択の導線なので、名前のボタンと行のクリックに置く。
+ */
+function useBusinessViewActions(onArchived?: (id: string) => void) {
   const confirm = useConfirm();
-  // 絞り込み・検索・ページ・編集対象は、ページを行き来しても再読込しても残す（workspace-state.md）。
-  const [view, setView] = useWorkspaceState("businessViews.view", INITIAL_VIEW, isBusinessViewListView);
-  const { filter, q, offset, editingId } = view;
-  const [search, setSearch] = useState(q);
-  const setFilter = (next: BusinessViewStatus | "ALL") => setView((current) => ({ ...current, filter: next }));
-  const setQ = (next: string) => setView((current) => ({ ...current, q: next }));
-  const setOffset = (next: number) => setView((current) => ({ ...current, offset: next }));
-  const setEditingId = (next: string | null) => setView((current) => ({ ...current, editingId: next }));
-
-  const status = filter === "ALL" ? undefined : filter;
-  const query = useBusinessViews({ status, q: q || undefined, limit: LIMIT, offset });
-  const page = query.data;
-  const items = useMemo(() => page?.items ?? [], [page?.items]);
   const archive = useArchiveBusinessView();
-  const editingDetail = useBusinessView(editingId);
-  const editingMissing = Boolean(editingId) && editingDetail.isError;
-
-  // 復元した編集対象が削除・取得失敗なら、別の対象へ置き換えずに編集を閉じる。
-  useEffect(() => {
-    if (editingMissing) setView((current) => ({ ...current, editingId: null }));
-  }, [editingMissing, setView]);
 
   const handleArchive = async (view: BusinessViewSummary) => {
     const ok = await confirm({
@@ -255,17 +292,15 @@ export function BusinessViewManagementClient() {
     if (!ok) return;
     archive.mutate(view.id, {
       onSuccess: () => {
-        if (editingId === view.id) setEditingId(null);
         toast.success(t("businessViews.toast.archived"));
+        onArchived?.(view.id);
       },
       onError: (error) =>
         toast.error(error instanceof ApiError ? error.message : t("businessViews.error.archive")),
     });
   };
 
-  // 業務ビュー 1 件の操作。一覧のカード（RowActionMenu）と編集フォーム（ObjectActionBar）で
-  // 同じ定義を使う（buttons.md §5.1）。編集は選択の導線なので名前のボタンとカードのクリックに置く。
-  const businessViewActions = (target: BusinessViewSummary): EntityAction[] => {
+  return (target: BusinessViewSummary): EntityAction[] => {
     const isDefault = target.name === DEFAULT_BUSINESS_VIEW_NAME;
     return [
       {
@@ -282,10 +317,48 @@ export function BusinessViewManagementClient() {
       },
     ];
   };
+}
+
+function BusinessViewList({
+  onOpen,
+  onCreate,
+}: {
+  onOpen: (id: string) => void;
+  onCreate: () => void;
+}) {
+  // 絞り込み・検索・ページは、ページを行き来しても再読込しても残す（workspace-state.md）。
+  const [view, setView] = useWorkspaceState("businessViews.view", INITIAL_VIEW, isBusinessViewListView);
+  const { filter, q, offset } = view;
+  const [search, setSearch] = useState(q);
+  const setFilter = (next: BusinessViewStatus | "ALL") =>
+    setView((current) => ({ ...current, filter: next, offset: 0 }));
+  const setQ = (next: string) => setView((current) => ({ ...current, q: next, offset: 0 }));
+  const setOffset = (next: number) => setView((current) => ({ ...current, offset: next }));
+
+  const status = filter === "ALL" ? undefined : filter;
+  const query = useBusinessViews({ status, q: q || undefined, limit: LIMIT, offset });
+  const page = query.data;
+  const items = useMemo(() => page?.items ?? [], [page?.items]);
+  const actionsFor = useBusinessViewActions();
+  // 新規作成の下書きはエディタを閉じても同じタブに残る。一覧から再開できるようにする。
+  const [newDraft] = useState(() => readDraft("new"));
 
   return (
     <div>
-      <PageHeader wide title={t("nav.businessViews")} subtitle={t("businessViews.subtitle")} />
+      <PageHeader
+        wide
+        title={t("nav.businessViews")}
+        subtitle={t("businessViews.subtitle")}
+        actions={[
+          {
+            id: "create",
+            kind: "primary",
+            label: t("businessViews.actions.newView"),
+            icon: Plus,
+            onClick: onCreate,
+          },
+        ]}
+      />
       <PageBody wide className="grid grid-cols-1 gap-5">
         <DegradedBanner
           messages={page?.warning_messages}
@@ -293,21 +366,14 @@ export function BusinessViewManagementClient() {
           isRetrying={query.isFetching}
         />
 
-        {editingId && editingDetail.data ? (
-          <>
-            <BusinessViewForm
-              key={editingId}
-              mode="edit"
-              initial={editingDetail.data}
-              objectActions={businessViewActions(editingDetail.data)}
-              onDone={() => setEditingId(null)}
-              onCancel={() => setEditingId(null)}
-            />
-            <BusinessViewKnowledgePanel key={`knowledge-${editingId}`} businessViewId={editingId} />
-          </>
-        ) : (
-          <BusinessViewForm mode="create" onDone={() => setOffset(0)} />
-        )}
+        {newDraft ? (
+          <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-surface-sunken p-3">
+            <FormStatus tone="info" message={t("businessViews.draftPending")} />
+            <Button size="sm" variant="secondary" icon={FilePen} onClick={onCreate}>
+              {t("businessViews.actions.openDraft")}
+            </Button>
+          </div>
+        ) : null}
 
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div
@@ -316,14 +382,7 @@ export function BusinessViewManagementClient() {
             aria-label={t("businessViews.filter.aria")}
           >
             {FILTERS.map((item) => (
-              <ToggleChip
-                key={item}
-                selected={filter === item}
-                onClick={() => {
-                  setFilter(item);
-                  setOffset(0);
-                }}
-              >
+              <ToggleChip key={item} selected={filter === item} onClick={() => setFilter(item)}>
                 {item === "ALL"
                   ? t("businessViews.filter.all")
                   : item === "ACTIVE"
@@ -339,7 +398,6 @@ export function BusinessViewManagementClient() {
             onSubmit={(event) => {
               event.preventDefault();
               setQ(search.trim());
-              setOffset(0);
             }}
           >
             <input
@@ -363,132 +421,233 @@ export function BusinessViewManagementClient() {
             onRetry={() => void query.refetch()}
           />
         ) : items.length === 0 && !query.isFetching ? (
-          <EmptyState
-            title={t("businessViews.empty.title")}
-            hint={t("businessViews.empty.description")}
-          />
+          <Card>
+            <EmptyState
+              title={t("businessViews.empty.title")}
+              hint={t("businessViews.empty.description")}
+            />
+          </Card>
         ) : (
-          <ul className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-            {items.map((view) => (
-              <BusinessViewCard
-                key={view.id}
-                view={view}
-                editing={editingId === view.id}
-                actions={businessViewActions(view)}
-                onEdit={() => setEditingId(view.id)}
-              />
-            ))}
-          </ul>
+          <>
+            <DataTable<BusinessViewSummary>
+              columns={businessViewColumns({ onOpen, actionsFor })}
+              rows={items}
+              getRowKey={(item) => item.id}
+              loading={query.isPending}
+              // 行の操作以外の領域のクリックでエディタを開く（page-archetypes.md §0-7）。
+              // アーカイブ済みは編集できないため開かない。
+              onRowClick={(item) => {
+                if (item.status !== "ARCHIVED") onOpen(item.id);
+              }}
+              rowProps={(item) => ({
+                className: cn("align-top", item.status === "ARCHIVED" && "cursor-default"),
+                "data-testid": `business-view-row-${item.id}`,
+              })}
+              stickyHeader
+              className="bounded-scroll-area-lg"
+              tableClassName="w-full min-w-[720px] text-sm"
+              ariaLabel={t("businessViews.list.aria")}
+            />
+            <div className="flex items-center justify-between">
+              <span className="tnum text-xs text-fg-muted">
+                {t("pager.range", {
+                  start: page && page.total === 0 ? 0 : offset + 1,
+                  end: offset + items.length,
+                  total: formatNumber(page?.total ?? 0),
+                })}
+              </span>
+              <div className="flex gap-2">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={offset === 0}
+                  onClick={() => setOffset(Math.max(0, offset - LIMIT))}
+                >
+                  {t("pager.prev")}
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={!page?.has_next}
+                  onClick={() => setOffset(offset + LIMIT)}
+                >
+                  {t("pager.next")}
+                </Button>
+              </div>
+            </div>
+          </>
         )}
       </PageBody>
     </div>
   );
 }
 
-function BusinessViewCard({
-  view,
-  editing,
-  actions,
-  onEdit,
+/** 一覧の列定義。名前列を行見出しにし、操作列は右寄せにする。 */
+function businessViewColumns({
+  onOpen,
+  actionsFor,
 }: {
-  view: BusinessViewSummary;
-  editing: boolean;
-  actions: EntityAction[];
-  onEdit: () => void;
-}) {
-  const isArchived = view.status === "ARCHIVED";
-  return (
-    // カードの操作以外の領域のクリックで編集対象に選ぶ。キーボードは名前のボタンで選ぶ
-    // （page-archetypes.md §0-7）。アーカイブ済みは編集できないため選択の導線を出さない。
-    <li
-      aria-current={editing || undefined}
-      onClick={isArchived ? undefined : onEdit}
-      className={cn(
-        "flex min-w-0 flex-col rounded-lg border p-4 transition-colors",
-        editing ? "border-accent-emphasis bg-accent-subtle" : "border-border bg-surface",
-        !isArchived && !editing && "cursor-pointer hover:bg-surface-hover"
-      )}
-    >
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <p className="flex items-center gap-1.5 font-medium text-fg">
-            <UserCog size={16} className="shrink-0 text-accent-fg" aria-hidden />
-            {isArchived ? (
-              <span className="truncate">{view.name}</span>
-            ) : (
-              <button
-                type="button"
-                aria-label={t("businessViews.actions.editNamed", { name: view.name })}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onEdit();
-                }}
-                className="min-w-0 truncate rounded-sm text-left hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-              >
-                {view.name}
-              </button>
-            )}
-          </p>
-          {view.description ? (
-            <p className="mt-1 line-clamp-2 text-xs text-fg-muted">{view.description}</p>
-          ) : null}
-        </div>
-        <div className="flex shrink-0 items-center gap-1">
-          <span
-            className={cn(
-              "rounded-full px-2 py-0.5 text-xs font-medium",
-              isArchived ? "bg-surface-hover text-fg-muted" : "bg-success-subtle text-success-fg"
-            )}
-          >
-            {t(`businessViews.status.${view.status}` as const)}
-          </span>
-          <RowActionMenu
-            actions={actions}
-            ariaLabel={t("common.objectActions.aria", { name: view.name })}
-            testId={`business-view-row-actions-${view.id}`}
+  onOpen: (id: string) => void;
+  actionsFor: (view: BusinessViewSummary) => EntityAction[];
+}): DataTableColumn<BusinessViewSummary>[] {
+  return [
+    {
+      key: "name",
+      header: t("businessViews.col.name"),
+      rowHeader: true,
+      className: "max-w-[22rem]",
+      render: (view) =>
+        view.status === "ARCHIVED" ? (
+          <div className="min-w-0">
+            <p className="break-words font-medium text-fg-muted">{view.name}</p>
+            {view.description ? (
+              <p className="mt-0.5 line-clamp-2 text-xs text-fg-muted">{view.description}</p>
+            ) : null}
+          </div>
+        ) : (
+          <RowTitleButton
+            title={view.name}
+            subtitle={view.description ?? undefined}
+            ariaLabel={t("businessViews.actions.editNamed", { name: view.name })}
+            onClick={() => onOpen(view.id)}
           />
-        </div>
-      </div>
-      <dl className="mt-3 space-y-1 text-xs text-fg-muted">
-        <div>{t("businessViews.list.knowledgeBaseCount", { count: view.knowledge_base_count })}</div>
-        <div>{t("businessViews.list.updatedAt", { value: formatDateTime(view.updated_at) })}</div>
-      </dl>
-    </li>
+        ),
+    },
+    {
+      key: "status",
+      header: t("businessViews.col.status"),
+      render: (view) => (
+        <StatusBadge
+          variant={view.status === "ARCHIVED" ? "neutral" : "success"}
+          label={t(`businessViews.status.${view.status}` as const)}
+        />
+      ),
+    },
+    {
+      key: "knowledgeBases",
+      header: t("businessViews.col.knowledgeBases"),
+      align: "right",
+      className: "tnum text-fg-muted",
+      render: (view) => formatNumber(view.knowledge_base_count),
+    },
+    {
+      key: "updated",
+      header: t("businessViews.col.updated"),
+      className: "tnum whitespace-nowrap text-fg-muted",
+      render: (view) => formatDateTime(view.updated_at),
+    },
+    {
+      key: "actions",
+      header: t("businessViews.col.actions"),
+      align: "right",
+      render: (view) => (
+        <RowActionMenu
+          actions={actionsFor(view)}
+          ariaLabel={t("common.objectActions.aria", { name: view.name })}
+          testId={`business-view-row-actions-${view.id}`}
+        />
+      ),
+    },
+  ];
+}
+
+/** `?id=<id>` の対象を読み込んでエディタを出す。見つからないときは一覧へ戻る導線を出す（別の対象へ置き換えない）。 */
+function BusinessViewEditRoute({
+  id,
+  onBack,
+  onArchived,
+}: {
+  id: string;
+  onBack: () => void;
+  onArchived: () => void;
+}) {
+  const detail = useBusinessView(id);
+
+  if (detail.data) {
+    return (
+      <BusinessViewEditor
+        initial={detail.data}
+        onBack={onBack}
+        onSaved={() => undefined}
+        onArchived={onArchived}
+      />
+    );
+  }
+
+  const notFound = detail.error instanceof ApiError && detail.error.status === 404;
+  return (
+    <div>
+      <PageHeader
+        wide
+        title={t("nav.businessViews")}
+        breadcrumbs={
+          <EditorBreadcrumbs
+            listLabel={t("nav.businessViews")}
+            listHref={APP_ROUTES.businessViews}
+            current={id}
+          />
+        }
+        // 見つからないときは本文の「一覧へ戻る」だけにし、同じボタンを重ねない。
+        actions={
+          notFound
+            ? undefined
+            : [
+                {
+                  id: "back",
+                  kind: "secondary",
+                  label: t("common.backToList"),
+                  icon: ArrowLeft,
+                  onClick: onBack,
+                },
+              ]
+        }
+      />
+      <PageBody wide>
+        {detail.isPending ? (
+          <LoadingState rows={6} label={t("nav.businessViews")} />
+        ) : notFound ? (
+          <Card>
+            <MissingEditorTarget id={id} onBack={onBack} />
+          </Card>
+        ) : (
+          <ErrorState
+            message={
+              detail.error instanceof ApiError ? detail.error.message : t("businessViews.error.title")
+            }
+            onRetry={() => void detail.refetch()}
+          />
+        )}
+      </PageBody>
+    </div>
   );
 }
 
-function BusinessViewForm({
-  mode,
+/** 業務ビューの全画面エディタ（新規 / 編集）。上部に 戻る / 保存、エディタの見出しに対象の操作を置く。 */
+function BusinessViewEditor({
   initial,
-  objectActions,
-  onDone,
-  onCancel,
+  onBack,
+  onSaved,
+  onArchived,
 }: {
-  mode: "create" | "edit";
   initial?: BusinessViewDetail;
-  /** 編集中の業務ビューの操作（一覧のカードと同じ定義）。 */
-  objectActions?: EntityAction[];
-  onDone: (id: string) => void;
-  onCancel?: () => void;
+  onBack: () => void;
+  onSaved: (id: string) => void;
+  onArchived: () => void;
 }) {
+  const mode: "create" | "edit" = initial ? "edit" : "create";
   const create = useCreateBusinessView();
   const update = useUpdateBusinessView();
   const confirm = useConfirm();
-  // 未保存の下書きは同じタブの sessionStorage に残し、再読込・ページ往復で再開できるようにする。
+  const actionsFor = useBusinessViewActions(onArchived);
+  const formRef = useRef<HTMLFormElement>(null);
+  // 未保存の下書きは同じタブの sessionStorage に `?id=` の値ごとに残し、再読込・ページ往復で再開できるようにする。
   const draftScope = initial?.id ?? "new";
-  const [baseline] = useState<BusinessViewDraft>(() => ({
+  const [baseline, setBaseline] = useState<BusinessViewDraft>(() => ({
     name: initial?.name ?? "",
     description: initial?.description ?? "",
     config: initial?.config ? normalizeBusinessViewConfig(initial.config) : emptyConfig(),
   }));
-  const [restored] = useState(() =>
-    readWorkspace<BusinessViewDraft | null>(
-      "businessViews.draft",
-      null,
-      (value): value is BusinessViewDraft | null => value === null || isBusinessViewDraft(value),
-      draftScope
-    )
-  );
+  const [restored] = useState(() => readDraft(draftScope));
   const [name, setName] = useState(restored?.name ?? baseline.name);
   const [description, setDescription] = useState(restored?.description ?? baseline.description);
   const [config, setConfig] = useState<BusinessViewConfig>(restored?.config ?? baseline.config);
@@ -502,16 +661,30 @@ function BusinessViewForm({
   }, [dirty, draft, draftScope]);
 
   // 下書きはこのタブに残るため、確認では「破棄」ではなく未保存であることを伝える。
-  useCustomLeaveGuard(dirty, () =>
+  const confirmLeave = () =>
     confirm({
       title: t("businessViews.leaveGuard.title"),
       description: t("businessViews.leaveGuard.description"),
       confirmLabel: t("businessViews.leaveGuard.confirm"),
       tone: "warning",
       dismissOnOverlay: false,
-    })
-  );
+    });
+  useCustomLeaveGuard(dirty, confirmLeave);
+
+  const back = async () => {
+    if (dirty && !(await confirmLeave())) return;
+    onBack();
+  };
+
+  const discard = () => {
+    setName(baseline.name);
+    setDescription(baseline.description);
+    setConfig(baseline.config);
+    setTouched(false);
+  };
+
   const isDefault = initial?.name === DEFAULT_BUSINESS_VIEW_NAME;
+  const isArchived = initial?.status === "ARCHIVED";
 
   const pending = create.isPending || update.isPending;
   const nameError = touched && !isDefault ? validateBusinessViewName(name) : null;
@@ -525,6 +698,7 @@ function BusinessViewForm({
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (isArchived) return;
     setTouched(true);
     if (validateBusinessViewName(name, isDefault) || config.knowledge_base_ids.length === 0) return;
     if (mode === "edit" && initial) {
@@ -539,9 +713,11 @@ function BusinessViewForm({
         },
         {
           onSuccess: (detail) => {
+            // 保存した値を基準にして dirty を判定し直す（下書きも消える）。
+            setBaseline(draft);
             removeWorkspace("businessViews.draft", draftScope);
             toast.success(t("businessViews.toast.updated"));
-            onDone(detail.id);
+            onSaved(detail.id);
           },
           onError: (error) =>
             toast.error(
@@ -555,13 +731,11 @@ function BusinessViewForm({
       { name: name.trim(), description: description.trim() || null, config },
       {
         onSuccess: (detail) => {
+          setBaseline(draft);
           removeWorkspace("businessViews.draft", draftScope);
-          setName("");
-          setDescription("");
-          setConfig(emptyConfig());
-          setTouched(false);
           toast.success(t("businessViews.toast.created"));
-          onDone(detail.id);
+          // 作成した対象のエディタへ履歴を積まずに移る（戻るで空の新規フォームへ戻さない）。
+          onSaved(detail.id);
         },
         onError: (error) =>
           toast.error(error instanceof ApiError ? error.message : t("businessViews.error.create")),
@@ -569,296 +743,330 @@ function BusinessViewForm({
     );
   };
 
+  const title = initial?.name ?? t("businessViews.create.title");
+
   return (
-    <Card>
-      <CardHeader className="flex-row flex-wrap items-start justify-between gap-3">
-        <CardTitle className="flex items-center gap-2">
-          <Sparkles size={20} className="text-accent-fg" aria-hidden />
-          {mode === "edit" ? t("businessViews.edit.title") : t("businessViews.create.title")}
-        </CardTitle>
-        {mode === "edit" && initial && objectActions ? (
-          <ObjectActionBar
-            actions={objectActions}
-            ariaLabel={t("common.objectActions.aria", { name: initial.name })}
-            moreLabel={t("common.objectActions.more")}
-            testId="business-view-detail-actions"
+    <div>
+      <PageHeader
+        wide
+        title={title}
+        subtitle={initial ? initial.description || t("businessViews.subtitle") : t("businessViews.subtitle")}
+        breadcrumbs={
+          <EditorBreadcrumbs
+            listLabel={t("nav.businessViews")}
+            listHref={APP_ROUTES.businessViews}
+            current={title}
           />
+        }
+        actions={[
+          {
+            id: "back",
+            kind: "secondary",
+            label: t("common.backToList"),
+            icon: ArrowLeft,
+            onClick: () => void back(),
+          },
+          {
+            id: "save",
+            kind: "primary",
+            label: mode === "edit" ? t("businessViews.actions.save") : t("businessViews.actions.create"),
+            icon: mode === "edit" ? Save : Sparkles,
+            loading: pending,
+            disabled: isArchived,
+            onClick: () => formRef.current?.requestSubmit(),
+          },
+        ]}
+        moreActionsLabel={t("common.objectActions.more")}
+      />
+      <PageBody wide className="grid grid-cols-1 gap-5">
+        {isArchived ? (
+          <Banner severity="warning">{t("businessViews.archivedReadonly")}</Banner>
         ) : null}
-      </CardHeader>
-      <CardContent>
-        <form onSubmit={handleSubmit} className="space-y-5">
-          {restored && dirty ? (
-            <FormStatus tone="info" message={t("businessViews.draftRestored")} />
-          ) : null}
-          <div className="grid gap-3 md:grid-cols-[minmax(0,18rem)_minmax(0,1fr)]">
-            <div>
-              <label htmlFor="business-view-name" className="text-sm font-medium text-fg">
-                {t("businessViews.field.name")}
-              </label>
-              <input
-                id="business-view-name"
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-                onBlur={() => setTouched(true)}
-                readOnly={isDefault}
-                aria-readonly={isDefault || undefined}
-                placeholder={t("businessViews.field.namePlaceholder")}
-                aria-invalid={Boolean(nameError)}
-                aria-describedby={
-                  [isDefault ? NAME_HELPER_ID : "", nameError ? NAME_ERROR_ID : ""]
-                    .filter(Boolean)
-                    .join(" ") || undefined
-                }
-                className={cn(
-                  "mt-1 h-9 w-full rounded-md border border-border-control px-3 text-sm outline-none focus-visible:border-focus-ring",
-                  isDefault ? "cursor-default bg-surface-sunken text-fg-muted" : "bg-surface-sunken"
-                )}
+        <Card>
+          <CardHeader className="flex-row flex-wrap items-start justify-between gap-3">
+            <CardTitle className="flex items-center gap-2">
+              <Sparkles size={20} className="text-accent-fg" aria-hidden />
+              {t("businessViews.form.title")}
+            </CardTitle>
+            {initial ? (
+              <ObjectActionBar
+                actions={actionsFor(initial)}
+                ariaLabel={t("common.objectActions.aria", { name: initial.name })}
+                moreLabel={t("common.objectActions.more")}
+                testId="business-view-detail-actions"
               />
-              {isDefault ? (
-                <p id={NAME_HELPER_ID} className="mt-1 text-xs text-fg-muted">
-                  {t("businessViews.default.nameFixed")}
-                </p>
+            ) : null}
+          </CardHeader>
+          <CardContent>
+            <form ref={formRef} onSubmit={handleSubmit} className="space-y-5">
+              {restored && dirty ? (
+                <FormStatus tone="info" message={t("businessViews.draftRestored")} />
               ) : null}
-              <FieldError id={NAME_ERROR_ID} message={nameError} className="mt-1" />
-            </div>
-            <div>
-              <label
-                htmlFor="business-view-description"
-                className="text-sm font-medium text-fg"
-              >
-                {t("businessViews.field.description")}
-              </label>
-              <input
-                id="business-view-description"
-                value={description}
-                onChange={(event) => setDescription(event.target.value)}
-                placeholder={t("businessViews.field.descriptionPlaceholder")}
-                className="mt-1 h-9 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:border-focus-ring"
-              />
-            </div>
-          </div>
-
-          <div>
-            <KnowledgeBaseScopePicker
-              selectedIds={config.knowledge_base_ids}
-              onChange={(ids) => setConfig((current) => ({ ...current, knowledge_base_ids: ids }))}
-              disabled={pending || isDefault}
-              label={t("businessViews.field.knowledgeBases")}
-              helper={
-                isDefault
-                  ? t("businessViews.default.knowledgeBaseFixed")
-                  : t("businessViews.field.knowledgeBasesHelper")
-              }
-              emptySelectionText={t("businessViews.knowledgeBasesRequired")}
-            />
-            <FieldError id={SCOPE_ERROR_ID} message={scopeError} className="mt-1" />
-          </div>
-
-          <fieldset className="space-y-3 rounded-lg border border-border p-4">
-            <legend className="px-1 text-sm font-semibold text-fg">
-              {t("businessViews.query.title")}
-            </legend>
-            <p className="text-xs text-fg-muted">{t("businessViews.query.helper")}</p>
-            <div className="space-y-3">
-              <QuerySelectRow
-                id="business-view-retrieval"
-                label={t("businessViews.field.retrieval")}
-                value={config.query.retrieval_strategy as RetrievalModeName | null}
-                options={RETRIEVAL_OPTIONS}
-                defaultOnOverride="vector"
-                disabled={pending}
-                onChange={(value) => updateQuery({ retrieval_strategy: value })}
-              />
-              <div className="grid gap-3 rounded-lg border border-border bg-surface-sunken p-3 md:grid-cols-[minmax(10rem,14rem)_minmax(0,1fr)]">
-                <h3 className="text-sm font-medium text-fg">
-                  {t("settings.retrieval.toggles")}
-                </h3>
-                <div className="min-w-0 space-y-2">
-                  <QueryToggleRow
-                    label={t("settings.retrieval.queryExpansion")}
-                    value={config.query.retrieval_query_expansion}
-                    disabled={pending}
-                    onChange={(value) => updateQuery({ retrieval_query_expansion: value })}
+              <div className="grid gap-3 md:grid-cols-[minmax(0,18rem)_minmax(0,1fr)]">
+                <div>
+                  <label htmlFor="business-view-name" className="text-sm font-medium text-fg">
+                    {t("businessViews.field.name")}
+                  </label>
+                  <input
+                    id="business-view-name"
+                    value={name}
+                    onChange={(event) => setName(event.target.value)}
+                    onBlur={() => setTouched(true)}
+                    readOnly={isDefault}
+                    aria-readonly={isDefault || undefined}
+                    placeholder={t("businessViews.field.namePlaceholder")}
+                    aria-invalid={Boolean(nameError)}
+                    aria-describedby={
+                      [isDefault ? NAME_HELPER_ID : "", nameError ? NAME_ERROR_ID : ""]
+                        .filter(Boolean)
+                        .join(" ") || undefined
+                    }
+                    className={cn(
+                      "mt-1 h-9 w-full rounded-md border border-border-control px-3 text-sm outline-none focus-visible:border-focus-ring",
+                      isDefault ? "cursor-default bg-surface-sunken text-fg-muted" : "bg-surface-sunken"
+                    )}
                   />
-                  <QueryToggleRow
-                    label={t("settings.retrieval.toggle.queryExpansionLlm")}
-                    value={config.query.retrieval_query_expansion_llm}
-                    disabled={pending}
-                    onChange={(value) => updateQuery({ retrieval_query_expansion_llm: value })}
-                  />
-                  <QueryToggleRow
-                    label={t("settings.retrieval.gapStop")}
-                    value={config.query.retrieval_gap_stop}
-                    disabled={pending}
-                    onChange={(value) => updateQuery({ retrieval_gap_stop: value })}
-                  />
-                  <QueryToggleRow
-                    label={t("settings.retrieval.businessFit")}
-                    value={config.query.retrieval_business_fit_weighting}
-                    disabled={pending}
-                    onChange={(value) => updateQuery({ retrieval_business_fit_weighting: value })}
-                  />
-                  <QueryToggleRow
-                    label={t("settings.retrieval.corrective")}
-                    value={config.query.retrieval_corrective}
-                    disabled={pending}
-                    onChange={(value) => updateQuery({ retrieval_corrective: value })}
+                  {isDefault ? (
+                    <p id={NAME_HELPER_ID} className="mt-1 text-xs text-fg-muted">
+                      {t("businessViews.default.nameFixed")}
+                    </p>
+                  ) : null}
+                  <FieldError id={NAME_ERROR_ID} message={nameError} className="mt-1" />
+                </div>
+                <div>
+                  <label
+                    htmlFor="business-view-description"
+                    className="text-sm font-medium text-fg"
+                  >
+                    {t("businessViews.field.description")}
+                  </label>
+                  <input
+                    id="business-view-description"
+                    value={description}
+                    onChange={(event) => setDescription(event.target.value)}
+                    placeholder={t("businessViews.field.descriptionPlaceholder")}
+                    className="mt-1 h-9 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:border-focus-ring"
                   />
                 </div>
               </div>
-              <QuerySelectRow
-                id="business-view-tokenizer"
-                label={t("businessViews.field.tokenizer")}
-                value={config.query.text_search_tokenizer ?? null}
-                options={TOKENIZER_OPTIONS}
-                defaultOnOverride="sudachi"
-                disabled={pending}
-                onChange={(value) => updateQuery({ text_search_tokenizer: value })}
-              />
-              <QuerySelectRow
-                id="business-view-grounding"
-                label={t("businessViews.field.grounding")}
-                value={config.query.post_retrieval_pipeline}
-                options={GROUNDING_OPTIONS}
-                defaultOnOverride="verified_context"
-                disabled={pending}
-                onChange={(value) => updateQuery({ post_retrieval_pipeline: value })}
-              />
-              <QuerySelectRow
-                id="business-view-answer-engine"
-                label={t("businessViews.field.answerEngine")}
-                value={config.query.answer_engine ?? null}
-                options={ANSWER_ENGINE_OPTIONS}
-                defaultOnOverride="docrag"
-                disabled={pending}
-                onChange={(value) => updateQuery({ answer_engine: value })}
-              />
-              <QuerySelectRow
-                id="business-view-generation"
-                label={t("businessViews.field.generation")}
-                value={config.query.generation_profile}
-                options={GENERATION_OPTIONS}
-                defaultOnOverride="detailed_cited"
-                disabled={pending}
-                onChange={(value) => updateQuery({ generation_profile: value })}
-              />
-              <div className="grid gap-3 rounded-lg border border-border bg-surface-sunken p-3 md:grid-cols-[minmax(10rem,14rem)_minmax(0,1fr)]">
-                <h3 className="text-sm font-medium text-fg">
-                  {t("businessViews.field.prompt")}
-                </h3>
-                <div className="min-w-0 space-y-3">
-                  <div>
-                    <label
-                      htmlFor="business-view-system-prompt"
-                      className="text-sm font-medium text-fg"
-                    >
-                      {t("businessViews.field.systemPrompt")}
-                    </label>
-                    <textarea
-                      id="business-view-system-prompt"
-                      value={config.system_prompt ?? ""}
-                      onChange={(event) =>
-                        setConfig((current) => ({
-                          ...current,
-                          system_prompt: event.target.value || null,
-                        }))
-                      }
-                      placeholder={t("businessViews.field.systemPromptPlaceholder")}
-                      rows={3}
-                      disabled={pending}
-                      className="mt-1 w-full rounded-md border border-border-control bg-surface-sunken px-3 py-2 text-sm outline-none focus-visible:border-focus-ring disabled:cursor-not-allowed disabled:opacity-50"
-                    />
-                    <p className="mt-1 text-xs text-fg-muted">
-                      {t("businessViews.field.systemPromptHelper")}
-                    </p>
-                  </div>
-                  <div className="grid gap-x-6 gap-y-4 lg:grid-cols-2">
-                    <div>
-                      <label
-                        htmlFor="business-view-language"
-                        className="text-sm font-medium text-fg"
-                      >
-                        {t("businessViews.field.defaultLanguage")}
-                      </label>
-                      <input
-                        id="business-view-language"
-                        value={config.default_language ?? ""}
-                        onChange={(event) =>
-                          setConfig((current) => ({
-                            ...current,
-                            default_language: event.target.value || null,
-                          }))
-                        }
-                        placeholder={t("businessViews.field.defaultLanguagePlaceholder")}
+
+              <div>
+                <KnowledgeBaseScopePicker
+                  selectedIds={config.knowledge_base_ids}
+                  onChange={(ids) => setConfig((current) => ({ ...current, knowledge_base_ids: ids }))}
+                  disabled={pending || isDefault}
+                  label={t("businessViews.field.knowledgeBases")}
+                  helper={
+                    isDefault
+                      ? t("businessViews.default.knowledgeBaseFixed")
+                      : t("businessViews.field.knowledgeBasesHelper")
+                  }
+                  emptySelectionText={t("businessViews.knowledgeBasesRequired")}
+                />
+                <FieldError id={SCOPE_ERROR_ID} message={scopeError} className="mt-1" />
+              </div>
+
+              <fieldset className="space-y-3 rounded-lg border border-border p-4">
+                <legend className="px-1 text-sm font-semibold text-fg">
+                  {t("businessViews.query.title")}
+                </legend>
+                <p className="text-xs text-fg-muted">{t("businessViews.query.helper")}</p>
+                <div className="space-y-3">
+                  <QuerySelectRow
+                    id="business-view-retrieval"
+                    label={t("businessViews.field.retrieval")}
+                    value={config.query.retrieval_strategy as RetrievalModeName | null}
+                    options={RETRIEVAL_OPTIONS}
+                    defaultOnOverride="vector"
+                    disabled={pending}
+                    onChange={(value) => updateQuery({ retrieval_strategy: value })}
+                  />
+                  <div className="grid gap-3 rounded-lg border border-border bg-surface-sunken p-3 md:grid-cols-[minmax(10rem,14rem)_minmax(0,1fr)]">
+                    <h3 className="text-sm font-medium text-fg">
+                      {t("settings.retrieval.toggles")}
+                    </h3>
+                    <div className="min-w-0 space-y-2">
+                      <QueryToggleRow
+                        label={t("settings.retrieval.queryExpansion")}
+                        value={config.query.retrieval_query_expansion}
                         disabled={pending}
-                        className="mt-1 h-9 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:border-focus-ring disabled:cursor-not-allowed disabled:opacity-50"
+                        onChange={(value) => updateQuery({ retrieval_query_expansion: value })}
+                      />
+                      <QueryToggleRow
+                        label={t("settings.retrieval.toggle.queryExpansionLlm")}
+                        value={config.query.retrieval_query_expansion_llm}
+                        disabled={pending}
+                        onChange={(value) => updateQuery({ retrieval_query_expansion_llm: value })}
+                      />
+                      <QueryToggleRow
+                        label={t("settings.retrieval.gapStop")}
+                        value={config.query.retrieval_gap_stop}
+                        disabled={pending}
+                        onChange={(value) => updateQuery({ retrieval_gap_stop: value })}
+                      />
+                      <QueryToggleRow
+                        label={t("settings.retrieval.businessFit")}
+                        value={config.query.retrieval_business_fit_weighting}
+                        disabled={pending}
+                        onChange={(value) => updateQuery({ retrieval_business_fit_weighting: value })}
+                      />
+                      <QueryToggleRow
+                        label={t("settings.retrieval.corrective")}
+                        value={config.query.retrieval_corrective}
+                        disabled={pending}
+                        onChange={(value) => updateQuery({ retrieval_corrective: value })}
                       />
                     </div>
                   </div>
+                  <QuerySelectRow
+                    id="business-view-tokenizer"
+                    label={t("businessViews.field.tokenizer")}
+                    value={config.query.text_search_tokenizer ?? null}
+                    options={TOKENIZER_OPTIONS}
+                    defaultOnOverride="sudachi"
+                    disabled={pending}
+                    onChange={(value) => updateQuery({ text_search_tokenizer: value })}
+                  />
+                  <QuerySelectRow
+                    id="business-view-grounding"
+                    label={t("businessViews.field.grounding")}
+                    value={config.query.post_retrieval_pipeline}
+                    options={GROUNDING_OPTIONS}
+                    defaultOnOverride="verified_context"
+                    disabled={pending}
+                    onChange={(value) => updateQuery({ post_retrieval_pipeline: value })}
+                  />
+                  <QuerySelectRow
+                    id="business-view-answer-engine"
+                    label={t("businessViews.field.answerEngine")}
+                    value={config.query.answer_engine ?? null}
+                    options={ANSWER_ENGINE_OPTIONS}
+                    defaultOnOverride="docrag"
+                    disabled={pending}
+                    onChange={(value) => updateQuery({ answer_engine: value })}
+                  />
+                  <QuerySelectRow
+                    id="business-view-generation"
+                    label={t("businessViews.field.generation")}
+                    value={config.query.generation_profile}
+                    options={GENERATION_OPTIONS}
+                    defaultOnOverride="detailed_cited"
+                    disabled={pending}
+                    onChange={(value) => updateQuery({ generation_profile: value })}
+                  />
+                  <div className="grid gap-3 rounded-lg border border-border bg-surface-sunken p-3 md:grid-cols-[minmax(10rem,14rem)_minmax(0,1fr)]">
+                    <h3 className="text-sm font-medium text-fg">
+                      {t("businessViews.field.prompt")}
+                    </h3>
+                    <div className="min-w-0 space-y-3">
+                      <div>
+                        <label
+                          htmlFor="business-view-system-prompt"
+                          className="text-sm font-medium text-fg"
+                        >
+                          {t("businessViews.field.systemPrompt")}
+                        </label>
+                        <textarea
+                          id="business-view-system-prompt"
+                          value={config.system_prompt ?? ""}
+                          onChange={(event) =>
+                            setConfig((current) => ({
+                              ...current,
+                              system_prompt: event.target.value || null,
+                            }))
+                          }
+                          placeholder={t("businessViews.field.systemPromptPlaceholder")}
+                          rows={3}
+                          disabled={pending}
+                          className="mt-1 w-full rounded-md border border-border-control bg-surface-sunken px-3 py-2 text-sm outline-none focus-visible:border-focus-ring disabled:cursor-not-allowed disabled:opacity-50"
+                        />
+                        <p className="mt-1 text-xs text-fg-muted">
+                          {t("businessViews.field.systemPromptHelper")}
+                        </p>
+                      </div>
+                      <div className="grid gap-x-6 gap-y-4 lg:grid-cols-2">
+                        <div>
+                          <label
+                            htmlFor="business-view-language"
+                            className="text-sm font-medium text-fg"
+                          >
+                            {t("businessViews.field.defaultLanguage")}
+                          </label>
+                          <input
+                            id="business-view-language"
+                            value={config.default_language ?? ""}
+                            onChange={(event) =>
+                              setConfig((current) => ({
+                                ...current,
+                                default_language: event.target.value || null,
+                              }))
+                            }
+                            placeholder={t("businessViews.field.defaultLanguagePlaceholder")}
+                            disabled={pending}
+                            className="mt-1 h-9 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:border-focus-ring disabled:cursor-not-allowed disabled:opacity-50"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <QuerySelectRow
+                    id="business-view-guardrail"
+                    label={t("businessViews.field.guardrail")}
+                    value={config.query.guardrail_policy}
+                    options={GUARDRAIL_OPTIONS}
+                    defaultOnOverride="strict"
+                    disabled={pending}
+                    onChange={(value) => updateQuery({ guardrail_policy: value })}
+                  />
+                  <QuerySelectRow
+                    id="business-view-evaluation"
+                    label={t("businessViews.field.evaluation")}
+                    value={config.query.evaluation_suite}
+                    options={EVALUATION_OPTIONS}
+                    defaultOnOverride="balanced"
+                    disabled={pending}
+                    onChange={(value) => updateQuery({ evaluation_suite: value })}
+                  />
                 </div>
-              </div>
-              <QuerySelectRow
-                id="business-view-guardrail"
-                label={t("businessViews.field.guardrail")}
-                value={config.query.guardrail_policy}
-                options={GUARDRAIL_OPTIONS}
-                defaultOnOverride="strict"
-                disabled={pending}
-                onChange={(value) => updateQuery({ guardrail_policy: value })}
-              />
-              <QuerySelectRow
-                id="business-view-evaluation"
-                label={t("businessViews.field.evaluation")}
-                value={config.query.evaluation_suite}
-                options={EVALUATION_OPTIONS}
-                defaultOnOverride="balanced"
-                disabled={pending}
-                onChange={(value) => updateQuery({ evaluation_suite: value })}
-              />
-            </div>
-          </fieldset>
+              </fieldset>
 
-          <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
-            <Button size="lg" loading={pending} type="submit" icon={Sparkles}>
-              {mode === "edit"
-                ? t("businessViews.actions.save")
-                : t("businessViews.actions.create")}
-            </Button>
-            {mode === "edit" && onCancel ? (
-              <Button
-                size="lg"
-                variant="ghost"
-                type="button"
-                onClick={() => {
-                  // 編集のキャンセルは下書きを明示的に捨てる操作。
-                  removeWorkspace("businessViews.draft", draftScope);
-                  onCancel();
-                }}
-                disabled={pending}
-              >
-                {t("businessViews.actions.cancel")}
-              </Button>
-            ) : null}
-            <FormStatus
-              tone="danger"
-              message={
-                create.isError
-                  ? create.error instanceof ApiError
-                    ? create.error.message
-                    : t("businessViews.error.create")
-                  : update.isError
-                    ? update.error instanceof ApiError
-                      ? update.error.message
-                      : t("businessViews.error.update")
-                    : null
-              }
-            />
-          </div>
-        </form>
-      </CardContent>
-    </Card>
+              <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  type="button"
+                  icon={RotateCcw}
+                  onClick={discard}
+                  disabled={!dirty || pending}
+                >
+                  {t("businessViews.actions.discard")}
+                </Button>
+                <FormStatus
+                  tone="danger"
+                  message={
+                    create.isError
+                      ? create.error instanceof ApiError
+                        ? create.error.message
+                        : t("businessViews.error.create")
+                      : update.isError
+                        ? update.error instanceof ApiError
+                          ? update.error.message
+                          : t("businessViews.error.update")
+                        : null
+                  }
+                />
+              </div>
+            </form>
+          </CardContent>
+        </Card>
+        {initial ? (
+          <BusinessViewKnowledgePanel key={`knowledge-${initial.id}`} businessViewId={initial.id} />
+        ) : null}
+      </PageBody>
+    </div>
   );
 }
+
 
 function validateBusinessViewName(name: string, allowDefault = false) {
   const cleaned = name.trim();
