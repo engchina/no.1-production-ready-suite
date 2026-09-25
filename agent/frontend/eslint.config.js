@@ -1,5 +1,6 @@
 import js from "@eslint/js";
 import globals from "globals";
+import reactHooks from "eslint-plugin-react-hooks";
 import tseslint from "typescript-eslint";
 
 import adherence from "../../platform/docs/design-system/adherence.oxlintrc.json" with { type: "json" };
@@ -38,6 +39,13 @@ export default tseslint.config(
   // ルールをコピーせず同じセレクタを ESLint 標準の no-restricted-syntax / no-restricted-imports に渡す
   // （platform AGENTS.md「lint」節）。CI は platform を sibling に checkout するので同じ相対パスで解決できる。
   // アプリ固有のルールを足す場合は、同じルール名で上書きせず別のルール名にする（adherence のセレクタが消える）。
+  // react-hooks 7 の recommended（React Compiler 系の set-state-in-effect / refs / purity 等を含む）をそのまま使う
+  // （#179。RAG #154 と同じ方針）。
+  {
+    files: ["src/**/*.{ts,tsx}"],
+    plugins: { "react-hooks": reactHooks },
+    rules: reactHooks.configs.recommended.rules,
+  },
   {
     files: ["src/**/*.{ts,tsx}"],
     rules: {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
@@ -87,6 +87,7 @@ import {
 } from "@/components/EntityLayout";
 import { useEditorRoute } from "@/lib/editor-route";
 import { t } from "@/lib/i18n";
+import { useValuesChanged } from "@/lib/render-sync";
 import { APP_ROUTES } from "@/lib/routes";
 import { sameDraft, useDirtySources, useEditorLeaveGuard, useSettingsLeaveGuard } from "@/lib/leave-guard";
 import {
@@ -172,17 +173,34 @@ function useRunEventWebSocket(
   const [lastError, setLastError] = useState<string | null>(null);
   const [lastEventId, setLastEventId] = useState<string | null>(null);
   const [reconnectAttempts, setReconnectAttempts] = useState(0);
+  const inactive = !enabled || !runId || !runStatus || isRunTerminal(runStatus);
+
+  // Run が変わったレンダーで、前の Run の接続情報を消す（effect で setState しない）。
+  const runChanged = useValuesChanged([runId ?? null]);
+  if (runChanged) {
+    setReconnectAttempts(0);
+    setLastEventId(null);
+    setLastHeartbeat(null);
+    setLastAck(null);
+    setLastError(null);
+  }
+  // 接続し直す条件（下の effect の deps）が変わったレンダーで、接続状態を初期化する。
+  // 接続しない間は idle、接続する場合は新しい接続を張る前の connecting にする。
+  const connectionChanged = useValuesChanged([enabled, onRuntimeEvent, runId, runStatus]);
+  if (connectionChanged) {
+    if (inactive) {
+      setStatus("idle");
+    } else {
+      setStatus("connecting");
+      setLastError(null);
+    }
+  }
 
   useEffect(() => {
     if (activeRunIdRef.current !== runId) {
       activeRunIdRef.current = runId ?? null;
       reconnectAttemptRef.current = 0;
       lastEventIdRef.current = null;
-      setReconnectAttempts(0);
-      setLastEventId(null);
-      setLastHeartbeat(null);
-      setLastAck(null);
-      setLastError(null);
     }
 
     if (!enabled || !runId || !runStatus || isRunTerminal(runStatus)) {
@@ -192,7 +210,6 @@ function useRunEventWebSocket(
       }
       socketRef.current?.close();
       socketRef.current = null;
-      setStatus("idle");
       return;
     }
 
@@ -220,8 +237,11 @@ function useRunEventWebSocket(
       }
       const socket = new WebSocket(runEventWebSocketUrl(activeRunId, lastEventIdRef.current));
       socketRef.current = socket;
-      setStatus(isReconnect ? "reconnecting" : "connecting");
-      setLastError(null);
+      // 初回の接続（connecting）は render 中に設定済み。再接続だけここで状態を変える。
+      if (isReconnect) {
+        setStatus("reconnecting");
+        setLastError(null);
+      }
 
       socket.onopen = () => {
         if (socketRef.current === socket && !disposed) {
@@ -756,7 +776,7 @@ export function RunsPage() {
   // 一時保存に失敗した下書きは、離脱の前に破棄を確認する。
   useEditorLeaveGuard(!goalSaved && goal !== DEFAULT_RUN_GOAL);
 
-  const runItems = runs.data?.runs ?? [];
+  const runItems = useMemo(() => runs.data?.runs ?? [], [runs.data?.runs]);
   const runIds = useMemo(() => runs.data?.runs.map((run) => run.id), [runs.data?.runs]);
   const restoredSelection = useRestoredSelectionCheck(selectedRunId, runIds);
   const selectedRun = runItems.find((run) => run.id === selectedRunId) ?? runItems[0];
@@ -773,7 +793,7 @@ export function RunsPage() {
     if (selectedRunId && runItems.length && !runItems.some((run) => run.id === selectedRunId)) {
       setSelectedRunId(runItems[0].id);
     }
-  }, [runItems, selectedRunId]);
+  }, [runItems, selectedRunId, setSelectedRunId]);
 
   const refreshRuntimeEvents = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: ["runs"] });
@@ -1788,7 +1808,9 @@ export function ExternalSettingsPage({ kind }: { kind: "rag" | "nl2sql" }) {
   const [defaultLimit, setDefaultLimit] = useState("100");
   const [baseline, setBaseline] = useState<ExternalSettingsDraft | null>(null);
 
-  useEffect(() => {
+  // server 値が変わったレンダーで、フォームと比較の基準を server 値に戻す。
+  const serverChanged = useValuesChanged([settings.data]);
+  if (serverChanged) {
     const current = settings.data;
     if (current) {
       const saved = {
@@ -1801,7 +1823,7 @@ export function ExternalSettingsPage({ kind }: { kind: "rag" | "nl2sql" }) {
       setDefaultLimit(saved.defaultLimit);
       setBaseline(saved);
     }
-  }, [settings.data]);
+  }
 
   const draft: ExternalSettingsDraft = { baseUrl, timeoutSeconds, defaultLimit };
   // RAG では既定件数を扱わないので比較から外す。
@@ -3879,11 +3901,10 @@ export function CommandPolicySettingsPage() {
   const [formError, setFormError] = useState<string | null>(null);
   const [baseline, setBaseline] = useState<CommandPolicyDraft | null>(null);
 
-  useEffect(() => {
+  // server 値が変わったレンダーで、フォームと比較の基準を server 値に戻す（effect で setState しない）。
+  const serverChanged = useValuesChanged([settings.data]);
+  if (serverChanged && settings.data) {
     const current = settings.data;
-    if (!current) {
-      return;
-    }
     setEnabled(current.enabled);
     setWorkspaceRoot(current.workspace_root);
     setAllowedPrefixes(current.allowed_prefixes.join("\n"));
@@ -3903,7 +3924,7 @@ export function CommandPolicySettingsPage() {
       artifactStoragePath: current.artifact_storage_path,
     });
     setFormError(null);
-  }, [settings.data]);
+  }
 
   // prefix は集合として比べる（順序・重複・空行の違いは変更に数えない）。#87
   const draft: CommandPolicyDraft = {
@@ -4116,11 +4137,10 @@ export function ToolPolicySettingsPage() {
   const [toolPolicies, setToolPolicies] = useState<Record<string, ToolPolicyChoice>>({});
   const [baseline, setBaseline] = useState<ToolPolicyDraft | null>(null);
 
-  useEffect(() => {
+  // server 値が変わったレンダーで、フォームと比較の基準を server 値に戻す（effect で setState しない）。
+  const serverChanged = useValuesChanged([settings.data]);
+  if (serverChanged && settings.data) {
     const current = settings.data;
-    if (!current) {
-      return;
-    }
     const nextPolicies: Record<string, ToolPolicyChoice> = {};
     current.allow.forEach((name) => {
       nextPolicies[name] = "allow";
@@ -4134,7 +4154,7 @@ export function ToolPolicySettingsPage() {
     setDefaultMode(current.default_mode);
     setToolPolicies(nextPolicies);
     setBaseline(toolPolicyDraftOf(current.default_mode, nextPolicies));
-  }, [settings.data]);
+  }
 
   const draft = toolPolicyDraftOf(defaultMode, toolPolicies);
   useSettingsLeaveGuard(baseline !== null && !sameDraft(draft, baseline), mutation.isPending);
@@ -4278,11 +4298,10 @@ export function RuntimeSafetySettingsPage() {
   const [formError, setFormError] = useState<string | null>(null);
   const [baseline, setBaseline] = useState<{ maxToolCalls: string; maxPendingApprovals: string } | null>(null);
 
-  useEffect(() => {
+  // server 値が変わったレンダーで、フォームと比較の基準を server 値に戻す（effect で setState しない）。
+  const serverChanged = useValuesChanged([settings.data]);
+  if (serverChanged && settings.data) {
     const current = settings.data;
-    if (!current) {
-      return;
-    }
     setMaxToolCalls(String(current.max_tool_calls_per_run));
     setMaxPendingApprovals(String(current.max_pending_approvals_per_run));
     setBaseline({
@@ -4290,7 +4309,7 @@ export function RuntimeSafetySettingsPage() {
       maxPendingApprovals: String(current.max_pending_approvals_per_run),
     });
     setFormError(null);
-  }, [settings.data]);
+  }
 
   const draft = { maxToolCalls, maxPendingApprovals };
   useSettingsLeaveGuard(baseline !== null && !sameDraft(draft, baseline), mutation.isPending);
@@ -4402,12 +4421,11 @@ export function RuntimeSnapshotSettingsPage() {
   // インポート JSON と理由は未保存の下書き。確認語は保存も復元もしない（離脱で state ごと消える）。#87
   useSettingsLeaveGuard(importText.trim() !== "" || reason.trim() !== "", importSnapshot.isPending);
 
-  useEffect(() => {
-    if (!snapshot.data) {
-      return;
-    }
+  // 取得したスナップショットが変わったレンダーで、エクスポート欄を取り直す（effect で setState しない）。
+  const snapshotChanged = useValuesChanged([snapshot.data]);
+  if (snapshotChanged && snapshot.data) {
     setExportText(JSON.stringify(snapshot.data, null, 2));
-  }, [snapshot.data]);
+  }
 
   function parseImportSnapshot(): RuntimeSnapshot | null {
     setFormError(null);
@@ -4702,7 +4720,10 @@ function agentDraftOf(agent: AgentProfile | undefined): AgentDraft {
 /** エディタの dirty を親へ知らせる。unmount 時は false を知らせる。 */
 function useReportDirty(dirty: boolean, onDirtyChange: (dirty: boolean) => void) {
   const callbackRef = useRef(onDirtyChange);
-  callbackRef.current = onDirtyChange;
+  // 最新の callback を commit 時に入れる（render 中に ref を書かない）。下の effect より先に走る。
+  useLayoutEffect(() => {
+    callbackRef.current = onDirtyChange;
+  });
   useEffect(() => {
     callbackRef.current(dirty);
   }, [dirty]);
@@ -4773,10 +4794,8 @@ function AgentEditorView({
   // 保存済みの内容が変わったときだけフォームを取り直す。有効状態の切替や他の Agent の保存による
   // 一覧の再取得で、編集中の内容を上書きしない（#87）。
   const isExisting = Boolean(agent);
-  useEffect(() => {
-    if (!isExisting) {
-      return;
-    }
+  const savedChanged = useValuesChanged([isExisting, savedKey]);
+  if (savedChanged && isExisting) {
     const next = JSON.parse(savedKey) as AgentDraft;
     setName(next.name);
     setAgentDescription(next.description);
@@ -4784,7 +4803,7 @@ function AgentEditorView({
     setSkillIds(next.skill_ids);
     setBaseline(next);
     setFormError(null);
-  }, [isExisting, savedKey]);
+  }
 
   const draft: AgentDraft = {
     name,
@@ -5033,11 +5052,10 @@ function RuntimeBindingsPanel({
   const rowBusy = patchBinding.isPending || deleteBinding.isPending || syncBinding.isPending;
   const error = createBinding.error ?? patchBinding.error ?? deleteBinding.error ?? syncBinding.error;
 
-  useEffect(() => {
-    if (!runtimeId && candidates[0]) {
-      setRuntimeId(candidates[0].id);
-    }
-  }, [candidates, runtimeId]);
+  // Runtime が未選択のまま候補が揃ったら、先頭の候補を選ぶ（effect で setState しない。選べば条件が外れる）。
+  if (!runtimeId && candidates[0]) {
+    setRuntimeId(candidates[0].id);
+  }
 
   async function removeBinding(binding: RuntimeBinding) {
     const ok = await confirm({
