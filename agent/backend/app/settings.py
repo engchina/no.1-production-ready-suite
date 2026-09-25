@@ -151,6 +151,10 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     agent_runtime_oracle_dsn: str | None = None
     agent_runtime_oracle_user: str | None = None
     agent_runtime_oracle_password: str | None = None
+    # ADB の Wallet(mTLS) で接続する場合の Wallet 展開先と Wallet password（Thin mode）。
+    # 未設定なら従来どおり user/password/dsn だけで接続する。
+    agent_runtime_oracle_wallet_dir: str | None = None
+    agent_runtime_oracle_wallet_password: str | None = None
     agent_runtime_oracle_table: str = "AGENT_RUNTIME_CHECKPOINTS"
     agent_runtime_oracle_checkpoint_key: str = "default"
     agent_runtime_oracle_create_schema: bool = True
