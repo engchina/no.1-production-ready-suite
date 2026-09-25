@@ -42,6 +42,7 @@ import {
   useFeedbackDashboard,
   useFeedbackDetail,
 } from "@/lib/queries";
+import { useValuesChanged } from "@/lib/render-sync";
 import { APP_ROUTES } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 
@@ -99,7 +100,9 @@ export function FeedbackClient() {
     if (changed) setSearchParams(next, { replace: true });
   }, [searchParams, setSearchParams, urlState]);
 
-  useEffect(() => setSearchDraft(urlState.q), [urlState.q]);
+  // URL の検索語が変わったレンダーで、入力欄を URL の値に合わせる。
+  const urlQueryChanged = useValuesChanged([urlState.q]);
+  if (urlQueryChanged) setSearchDraft(urlState.q);
 
   useEffect(() => {
     if (searchDraft === urlState.q) return;
@@ -571,7 +574,9 @@ function FeedbackDetailPanel({
   const [tab, setTab] = useState<DetailTab>("content");
   const query = useFeedbackDetail(feedbackId);
 
-  useEffect(() => setTab("content"), [feedbackId]);
+  // 別のフィードバックを選んだレンダーで、タブを「内容」に戻す。
+  const feedbackChanged = useValuesChanged([feedbackId]);
+  if (feedbackChanged) setTab("content");
 
   useEffect(() => {
     if (!feedbackId || !revealRef.current) return;

@@ -17,7 +17,7 @@ import {
 } from "@engchina/production-ready-ui";
 import { Link } from "react-router-dom";
 import { RotateCcw, Search as SearchIcon, Sparkles, Trash2, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
 import { DegradedBanner } from "@/components/DegradedBanner";
@@ -102,18 +102,17 @@ export function FileListClient() {
   // 投入直後は UPLOADED→INGESTING の引き継ぎに数秒かかり、その瞬間はまだ非アクティブ。
   // この窓の間もポーリングを続けて取込開始を確実に拾う。
   const [graceActive, setGraceActive] = useState(false);
-  const graceTimerRef = useRef<number | null>(null);
+  // 窓を開き直すたびに増やす。増えるたびに 30 秒のタイマーを掛け直す（前のタイマーは cleanup で消える）。
+  const [graceWindow, setGraceWindow] = useState(0);
   const startGraceWindow = () => {
     setGraceActive(true);
-    if (graceTimerRef.current != null) window.clearTimeout(graceTimerRef.current);
-    graceTimerRef.current = window.setTimeout(() => setGraceActive(false), 30_000);
+    setGraceWindow((current) => current + 1);
   };
-  useEffect(
-    () => () => {
-      if (graceTimerRef.current != null) window.clearTimeout(graceTimerRef.current);
-    },
-    []
-  );
+  useEffect(() => {
+    if (graceWindow === 0) return;
+    const timer = window.setTimeout(() => setGraceActive(false), 30_000);
+    return () => window.clearTimeout(timer);
+  }, [graceWindow]);
   const query = useDocuments(
     {
       status,

@@ -11,6 +11,7 @@ import {
   useState,
 } from "react";
 
+import { useValuesChanged } from "@/lib/render-sync";
 import { cn } from "@/lib/utils";
 
 interface MultiSelectComboboxStrings {
@@ -105,9 +106,11 @@ export function MultiSelectCombobox<T>({
     .map((id) => items.find((item) => getId(item) === id))
     .filter((item): item is T => Boolean(item));
 
-  useEffect(() => {
+  // 候補数が変わったレンダーで、選択位置を候補の範囲に収める。
+  const filteredCountChanged = useValuesChanged([filtered.length]);
+  if (filteredCountChanged) {
     setActiveIndex((index) => Math.min(index, Math.max(0, filtered.length - 1)));
-  }, [filtered.length]);
+  }
 
   useEffect(() => {
     if (!open) return;
