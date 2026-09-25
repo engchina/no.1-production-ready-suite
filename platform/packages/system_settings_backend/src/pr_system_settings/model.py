@@ -16,7 +16,7 @@ import os
 import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -247,6 +247,10 @@ class ModelSecretStateMixin(BaseModel):
             self._set_api_key(normalized)
             self._model_secret_source = "legacy_json"  # nosec B105
 
+    def mark_legacy_model_secret_detected(self) -> None:
+        """製品固有の節（parser など）の secret が旧 JSON に残っていることを記録する。"""
+        self._legacy_model_secret_detected = True
+
     def _set_api_key(self, value: str) -> None:
         # Settings 側のフィールド（mixin 自体は持たない）。
         setattr(self, "oci_enterprise_ai_api_key", value)  # noqa: B010
@@ -464,16 +468,28 @@ class _PersistedModelSettings(BaseModel):
 
 
 @dataclass(frozen=True)
+class SectionSecret:
+    """製品固有の節の中の secret。JSON には書かず `.env` に保存する（#106）。"""
+
+    key: str  # 節の中の key（旧 JSON の読込互換）
+    attr: str  # Settings の属性名
+    env: str  # `.env` の変数名
+
+
+@dataclass(frozen=True)
 class ModelSettingsSection:
     """model-settings.json に同居させる製品固有の節（RAG の `parser_adapters` など）。
 
     - `load(settings, raw, version)`：読込時に呼ぶ。節がなければ `raw` は None。
     - `dump(settings)`：保存時に呼び、節の中身を返す。モデル設定の保存でも消さない。
+    - `secrets`：節の中の secret。`dump` が返しても JSON からは除き、`.env` に保存する。
+      読込の優先順位は API key と同じ（`.env` の値 > プロセスの環境変数 > 旧 JSON の値）。
     """
 
     name: str
     load: Callable[[Any, Mapping[str, Any] | None, int], None]
     dump: Callable[[Any], Mapping[str, Any]]
+    secrets: Sequence[SectionSecret] = field(default_factory=tuple)
 
 
 class ModelSettingsStore:
@@ -513,6 +529,12 @@ class ModelSettingsStore:
         )
         path = self.path(settings)
         if not path.is_file():
+            # JSON がなくても、`.env` にある節の secret は使う。
+            env_values = _dotenv_values(self.env_file(settings))
+            for section in self._sections:
+                self._apply_section_secrets(
+                    settings, section, None, env_values, refresh=refresh_secret
+                )
             self._loaded = (str(path), None)
             return
         try:
@@ -522,12 +544,13 @@ class ModelSettingsStore:
                 raise ValueError("JSON object ではありません。")
             persisted = _PersistedModelSettings.model_validate(raw)
             self._apply(settings, persisted)
+            env_values = _dotenv_values(self.env_file(settings))
             for section in self._sections:
                 section_raw = raw.get(section.name)
-                section.load(
-                    settings,
-                    section_raw if isinstance(section_raw, Mapping) else None,
-                    persisted.version,
+                section_map = section_raw if isinstance(section_raw, Mapping) else None
+                section.load(settings, section_map, persisted.version)
+                self._apply_section_secrets(
+                    settings, section, section_map, env_values, refresh=refresh_secret
                 )
         except (OSError, ValueError) as exc:
             raise ValueError(f"モデル設定ファイルを読み込めません: {path}") from exc
@@ -573,12 +596,21 @@ class ModelSettingsStore:
         するため。`lock()` の中で呼ぶ。失敗時は OSError を送出する。
         """
         env_file = self.env_file(settings)
-        previous = _dotenv_value(env_file)
-        self._write_api_key(env_file, api_key.strip() or None)
+        values: dict[str, str | None] = {ENTERPRISE_AI_API_KEY_ENV: api_key.strip() or None}
+        for section in self._sections:
+            for secret in section.secrets:
+                values[secret.env] = str(getattr(settings, secret.attr, "") or "").strip() or None
+        current = _dotenv_values(env_file)
+        for name, value in values.items():
+            # 環境変数から来ただけの値は `.env` に書かない（環境変数を変えたら追従させる）。
+            if name not in current and value == (os.environ.get(name) or "").strip():
+                values[name] = None
+        previous = {name: current.get(name) or None for name in values}
+        _write_env_secrets(env_file, values)
         try:
             self.write_document(settings, payload)
         except OSError:
-            self._write_api_key(env_file, previous or None)
+            _write_env_secrets(env_file, previous)
             raise
 
     def write_document(self, settings: Any, payload: ModelSettingsPayload) -> None:
@@ -586,7 +618,12 @@ class ModelSettingsStore:
         path = self.path(settings)
         document = _model_settings_document(payload)
         for section in self._sections:
-            document[section.name] = dict(section.dump(settings))
+            secret_keys = {secret.key for secret in section.secrets}
+            document[section.name] = {
+                key: value
+                for key, value in section.dump(settings).items()
+                if key not in secret_keys
+            }
         _ensure_directory(path.parent)
         tmp_path = path.with_name(f".{path.name}.tmp-{uuid4().hex}")
         try:
@@ -616,11 +653,29 @@ class ModelSettingsStore:
 
     @staticmethod
     def _write_api_key(env_file: Path, value: str | None) -> None:
-        write_env_values(
-            env_file,
-            {ENTERPRISE_AI_API_KEY_ENV: value},
-            section_comment="# OCI Enterprise AI secret",
-        )
+        _write_env_secrets(env_file, {ENTERPRISE_AI_API_KEY_ENV: value})
+
+    @staticmethod
+    def _apply_section_secrets(
+        settings: Any,
+        section: ModelSettingsSection,
+        raw: Mapping[str, Any] | None,
+        env_values: Mapping[str, str | None],
+        *,
+        refresh: bool,
+    ) -> None:
+        """節の secret を `.env` > 環境変数 > 旧 JSON の順で決める。"""
+        for secret in section.secrets:
+            legacy = str((raw or {}).get(secret.key) or "").strip()
+            if legacy:
+                settings.mark_legacy_model_secret_detected()
+            value = env_values.get(secret.env)
+            if value is None:
+                value = os.environ.get(secret.env)
+            if value is None and not legacy and refresh:
+                value = ""  # 別 worker が削除した（`.env` から消えた）
+            if value is not None:
+                setattr(settings, secret.attr, value.strip())
 
     @staticmethod
     def _apply(settings: Any, persisted: _PersistedModelSettings) -> None:
@@ -676,10 +731,16 @@ def _model_settings_document(payload: ModelSettingsPayload) -> dict[str, Any]:
     }
 
 
+def _dotenv_values(env_file: Path) -> dict[str, str | None]:
+    return dict(dotenv_values(env_file)) if env_file.is_file() else {}
+
+
 def _dotenv_value(env_file: Path) -> str | None:
-    if not env_file.is_file():
-        return None
-    return dotenv_values(env_file).get(ENTERPRISE_AI_API_KEY_ENV)
+    return _dotenv_values(env_file).get(ENTERPRISE_AI_API_KEY_ENV)
+
+
+def _write_env_secrets(env_file: Path, values: Mapping[str, str | None]) -> None:
+    write_env_values(env_file, values, section_comment="# モデル設定の secret（画面から保存）")
 
 
 def _ensure_directory(path: Path) -> None:
@@ -869,11 +930,9 @@ def save_model_settings(
         raise HTTPException(
             status_code=500, detail="モデル設定を永続化ファイルへ保存できませんでした。"
         ) from exc
-    apply_model_settings(settings, payload)
-    # 空（削除）なら、プロセスの環境変数の key に戻る（再読込時と同じ規則）。
-    settings.set_runtime_enterprise_ai_api_key(
-        api_key or os.environ.get(ENTERPRISE_AI_API_KEY_ENV, "")
-    )
+    # 保存したファイルから読み直し、runtime を保存した状態にそろえる。
+    # API key を削除した場合は、プロセスの環境変数の key に戻る（再読込時と同じ規則）。
+    store.load(settings, refresh_secret=True)
 
 
 def build_model_router(
