@@ -8,13 +8,15 @@ import {
   Banner,
   DataTable,
   type DataTableColumn,
+  type EntityAction,
+  RowActionMenu,
   SelectField,
   type SelectFieldOption,
   ToggleChip,
   Skeleton,
 } from "@engchina/production-ready-ui";
 import { Link } from "react-router-dom";
-import { Search as SearchIcon, Sparkles, Trash2, X } from "lucide-react";
+import { RotateCcw, Search as SearchIcon, Sparkles, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
@@ -387,7 +389,8 @@ export function FileListClient() {
                   enqueueIngestion.variables?.id === doc.id,
                 isDeleting: (doc) =>
                   deleteDocument.isPending && deleteDocument.variables === doc.id,
-                actionsDisabled: bulkBusy,
+                // 一括選択中は行の操作を止め、一括操作のバーに集める（buttons.md §5.1）。
+                actionsDisabled: bulkBusy || selection.count > 0,
               })}
               rows={items}
               getRowKey={(doc) => doc.id}
@@ -538,36 +541,58 @@ function documentColumns({
       key: "actions",
       header: t("fileList.col.actions"),
       align: "right",
-      render: (doc) => {
-        const ingesting = isIngesting(doc);
-        const deleting = isDeleting(doc);
-        return (
-          <div className="flex justify-end gap-2">
-            {(doc.status === "UPLOADED" || doc.status === "ERROR") && (
-              <Button
-                size="sm"
-                loading={ingesting}
-                disabled={deleting || actionsDisabled}
-                onClick={() => onIngest(doc, false)}
-                icon={Sparkles}
-              >
-                {t(doc.status === "ERROR" ? "flow.retry.preprocess" : "action.enqueueIngestion")}
-              </Button>
-            )}
-            <Button
-              variant="danger"
-              size="sm"
-              loading={deleting}
-              disabled={ingesting || actionsDisabled}
-              onClick={() => onDelete(doc)}
-              aria-label={t("fileList.delete.aria", { name: doc.file_name })}
-              icon={Trash2}
-            >
-              {t("fileList.delete.action")}
-            </Button>
-          </div>
-        );
-      },
+      render: (doc) => (
+        <RowActionMenu
+          actions={documentActions(doc, { onIngest, onDelete, isIngesting, isDeleting })}
+          ariaLabel={t("common.objectActions.aria", { name: doc.file_name })}
+          loading={isIngesting(doc) || isDeleting(doc)}
+          disabled={actionsDisabled}
+          testId={`file-list-row-actions-${doc.id}`}
+        />
+      ),
+    },
+  ];
+}
+
+/**
+ * 文書 1 件に対する操作（buttons.md §5.1）。行は RowActionMenu 1 個にまとめ、
+ * 削除は danger の項目として確認ダイアログ（runDelete の useConfirm）を通す。
+ */
+function documentActions(
+  doc: DocumentSummary,
+  {
+    onIngest,
+    onDelete,
+    isIngesting,
+    isDeleting,
+  }: {
+    onIngest: (doc: DocumentSummary, force: boolean) => void;
+    onDelete: (doc: DocumentSummary) => void;
+    isIngesting: (doc: DocumentSummary) => boolean;
+    isDeleting: (doc: DocumentSummary) => boolean;
+  }
+): EntityAction[] {
+  const ingesting = isIngesting(doc);
+  const deleting = isDeleting(doc);
+  return [
+    {
+      id: "ingest",
+      label: t(doc.status === "ERROR" ? "flow.retry.preprocess" : "action.enqueueIngestion"),
+      icon: doc.status === "ERROR" ? RotateCcw : Sparkles,
+      visible: INGESTIBLE.has(doc.status),
+      loading: ingesting,
+      disabled: deleting,
+      onSelect: () => onIngest(doc, false),
+    },
+    {
+      id: "delete",
+      label: t("fileList.delete.action"),
+      ariaLabel: t("fileList.delete.aria", { name: doc.file_name }),
+      icon: Trash2,
+      tone: "danger",
+      loading: deleting,
+      disabled: ingesting,
+      onSelect: () => onDelete(doc),
     },
   ];
 }

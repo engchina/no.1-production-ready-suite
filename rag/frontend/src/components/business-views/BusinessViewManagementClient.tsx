@@ -8,13 +8,16 @@ import {
   CardContent,
   CardHeader,
   CardTitle,
+  type EntityAction,
   FieldError,
   FormStatus,
+  ObjectActionBar,
+  RowActionMenu,
   SelectField,
   type SelectFieldOption,
   ToggleChip,
 } from "@engchina/production-ready-ui";
-import { Archive, Pencil, Sparkles, UserCog } from "lucide-react";
+import { Archive, Sparkles, UserCog } from "lucide-react";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 
 import { DegradedBanner } from "@/components/DegradedBanner";
@@ -260,6 +263,26 @@ export function BusinessViewManagementClient() {
     });
   };
 
+  // 業務ビュー 1 件の操作。一覧のカード（RowActionMenu）と編集フォーム（ObjectActionBar）で
+  // 同じ定義を使う（buttons.md §5.1）。編集は選択の導線なので名前のボタンとカードのクリックに置く。
+  const businessViewActions = (target: BusinessViewSummary): EntityAction[] => {
+    const isDefault = target.name === DEFAULT_BUSINESS_VIEW_NAME;
+    return [
+      {
+        id: "archive",
+        label: t("businessViews.actions.archive"),
+        ariaLabel: isDefault ? t("businessViews.default.archiveDisabled") : undefined,
+        icon: Archive,
+        tone: "danger",
+        visible: target.status !== "ARCHIVED",
+        disabled: isDefault || archive.isPending,
+        loading: archive.isPending && archive.variables === target.id,
+        testId: `business-view-archive-${target.id}`,
+        onSelect: () => handleArchive(target),
+      },
+    ];
+  };
+
   return (
     <div>
       <PageHeader wide title={t("nav.businessViews")} subtitle={t("businessViews.subtitle")} />
@@ -276,6 +299,7 @@ export function BusinessViewManagementClient() {
               key={editingId}
               mode="edit"
               initial={editingDetail.data}
+              objectActions={businessViewActions(editingDetail.data)}
               onDone={() => setEditingId(null)}
               onCancel={() => setEditingId(null)}
             />
@@ -349,9 +373,9 @@ export function BusinessViewManagementClient() {
               <BusinessViewCard
                 key={view.id}
                 view={view}
-                archiving={archive.isPending}
+                editing={editingId === view.id}
+                actions={businessViewActions(view)}
                 onEdit={() => setEditingId(view.id)}
-                onArchive={() => void handleArchive(view)}
               />
             ))}
           </ul>
@@ -363,58 +387,72 @@ export function BusinessViewManagementClient() {
 
 function BusinessViewCard({
   view,
-  archiving,
+  editing,
+  actions,
   onEdit,
-  onArchive,
 }: {
   view: BusinessViewSummary;
-  archiving: boolean;
+  editing: boolean;
+  actions: EntityAction[];
   onEdit: () => void;
-  onArchive: () => void;
 }) {
   const isArchived = view.status === "ARCHIVED";
-  const isDefault = view.name === DEFAULT_BUSINESS_VIEW_NAME;
   return (
-    <li className="flex min-w-0 flex-col rounded-lg border border-border bg-surface p-4">
+    // カードの操作以外の領域のクリックで編集対象に選ぶ。キーボードは名前のボタンで選ぶ
+    // （page-archetypes.md §0-7）。アーカイブ済みは編集できないため選択の導線を出さない。
+    <li
+      aria-current={editing || undefined}
+      onClick={isArchived ? undefined : onEdit}
+      className={cn(
+        "flex min-w-0 flex-col rounded-lg border p-4 transition-colors",
+        editing ? "border-accent-emphasis bg-accent-subtle" : "border-border bg-surface",
+        !isArchived && !editing && "cursor-pointer hover:bg-surface-hover"
+      )}
+    >
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <p className="flex items-center gap-1.5 truncate font-medium text-fg">
+          <p className="flex items-center gap-1.5 font-medium text-fg">
             <UserCog size={16} className="shrink-0 text-accent-fg" aria-hidden />
-            <span className="truncate">{view.name}</span>
+            {isArchived ? (
+              <span className="truncate">{view.name}</span>
+            ) : (
+              <button
+                type="button"
+                aria-label={t("businessViews.actions.editNamed", { name: view.name })}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onEdit();
+                }}
+                className="min-w-0 truncate rounded-sm text-left hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+              >
+                {view.name}
+              </button>
+            )}
           </p>
           {view.description ? (
             <p className="mt-1 line-clamp-2 text-xs text-fg-muted">{view.description}</p>
           ) : null}
         </div>
-        <span
-          className={cn(
-            "shrink-0 rounded-full px-2 py-0.5 text-xs font-medium",
-            isArchived ? "bg-surface-hover text-fg-muted" : "bg-success-subtle text-success-fg"
-          )}
-        >
-          {t(`businessViews.status.${view.status}` as const)}
-        </span>
+        <div className="flex shrink-0 items-center gap-1">
+          <span
+            className={cn(
+              "rounded-full px-2 py-0.5 text-xs font-medium",
+              isArchived ? "bg-surface-hover text-fg-muted" : "bg-success-subtle text-success-fg"
+            )}
+          >
+            {t(`businessViews.status.${view.status}` as const)}
+          </span>
+          <RowActionMenu
+            actions={actions}
+            ariaLabel={t("common.objectActions.aria", { name: view.name })}
+            testId={`business-view-row-actions-${view.id}`}
+          />
+        </div>
       </div>
       <dl className="mt-3 space-y-1 text-xs text-fg-muted">
         <div>{t("businessViews.list.knowledgeBaseCount", { count: view.knowledge_base_count })}</div>
         <div>{t("businessViews.list.updatedAt", { value: formatDateTime(view.updated_at) })}</div>
       </dl>
-      <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-border pt-3">
-        <Button size="sm" variant="secondary" onClick={onEdit} disabled={isArchived} icon={Pencil}>
-          {t("businessViews.actions.edit")}
-        </Button>
-        {!isArchived ? (
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={onArchive}
-            disabled={archiving || isDefault}
-            aria-label={isDefault ? t("businessViews.default.archiveDisabled") : undefined}
-            title={isDefault ? t("businessViews.default.archiveDisabled") : undefined} icon={Archive}>
-            {t("businessViews.actions.archive")}
-          </Button>
-        ) : null}
-      </div>
     </li>
   );
 }
@@ -422,11 +460,14 @@ function BusinessViewCard({
 function BusinessViewForm({
   mode,
   initial,
+  objectActions,
   onDone,
   onCancel,
 }: {
   mode: "create" | "edit";
   initial?: BusinessViewDetail;
+  /** 編集中の業務ビューの操作（一覧のカードと同じ定義）。 */
+  objectActions?: EntityAction[];
   onDone: (id: string) => void;
   onCancel?: () => void;
 }) {
@@ -530,11 +571,19 @@ function BusinessViewForm({
 
   return (
     <Card>
-      <CardHeader>
+      <CardHeader className="flex-row flex-wrap items-start justify-between gap-3">
         <CardTitle className="flex items-center gap-2">
           <Sparkles size={20} className="text-accent-fg" aria-hidden />
           {mode === "edit" ? t("businessViews.edit.title") : t("businessViews.create.title")}
         </CardTitle>
+        {mode === "edit" && initial && objectActions ? (
+          <ObjectActionBar
+            actions={objectActions}
+            ariaLabel={t("common.objectActions.aria", { name: initial.name })}
+            moreLabel={t("common.objectActions.more")}
+            testId="business-view-detail-actions"
+          />
+        ) : null}
       </CardHeader>
       <CardContent>
         <form onSubmit={handleSubmit} className="space-y-5">
