@@ -835,14 +835,14 @@ def test_oci_settings_defaults_match_rag_when_credentials_missing(
     config_file = str(tmp_path / "missing_oci_config")
     key_file = str(tmp_path / "missing_oci_api_key.pem")
     monkeypatch.setattr(agent_router, "_oci_settings_state", None)
-    monkeypatch.setattr(agent_router, "_upload_storage_settings_state", None)
     monkeypatch.setattr(agent_router, "OCI_PRIVATE_KEY_FILE", key_file)
     monkeypatch.setattr(
         agent_router,
         "get_settings",
         lambda: SimpleNamespace(
             upload_storage_backend=None,
-            local_storage_dir=None,
+            # 保存先の既定値は Settings が持つ（共有 API は Settings の値をそのまま返す。#97）。
+            local_storage_dir="/u01/data/production-ready-agent",
             object_storage_region=None,
             object_storage_namespace=None,
             object_storage_bucket=None,
@@ -1313,7 +1313,6 @@ def test_upload_storage_save_writes_env_like_rag(
     tmp_path: Path,
 ) -> None:
     env_file = tmp_path / ".env"
-    monkeypatch.setattr(agent_router, "_upload_storage_settings_state", None)
     monkeypatch.setattr(agent_router, "BACKEND_ENV_FILE", env_file)
     settings = _settings_fixture()
     monkeypatch.setattr(agent_router, "get_settings", lambda: settings)
@@ -1323,6 +1322,7 @@ def test_upload_storage_save_writes_env_like_rag(
         json={
             "backend": "oci",
             "local_storage_dir": "/var/uploads",
+            "object_storage_region": "us-chicago-1",
             "object_storage_namespace": "mytenancynamespace",
             "object_storage_bucket": "rag-uploads",
         },
@@ -1331,11 +1331,35 @@ def test_upload_storage_save_writes_env_like_rag(
     assert resp.status_code == 200
     env_text = env_file.read_text(encoding="utf-8")
     assert "UPLOAD_STORAGE_BACKEND=oci" in env_text
+    assert "OBJECT_STORAGE_REGION=us-chicago-1" in env_text
     assert "LOCAL_STORAGE_DIR=/var/uploads" in env_text
     assert "OBJECT_STORAGE_NAMESPACE=mytenancynamespace" in env_text
     assert "OBJECT_STORAGE_BUCKET=rag-uploads" in env_text
     assert settings.upload_storage_backend == "oci"
     assert settings.object_storage_bucket == "rag-uploads"
+
+
+def test_upload_storage_save_failure_keeps_previous_values(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """保存に失敗したら runtime も GET も保存前の値のまま（#97 の回帰テスト）。"""
+    monkeypatch.setattr(
+        agent_router, "BACKEND_ENV_FILE", tmp_path
+    )  # directory なので書込みに失敗する
+    settings = _settings_fixture()
+    before = settings.local_storage_dir
+    monkeypatch.setattr(agent_router, "get_settings", lambda: settings)
+
+    resp = client.patch(
+        "/api/settings/upload-storage",
+        json={"backend": "local", "local_storage_dir": "/var/changed"},
+    )
+
+    assert resp.status_code == 500
+    assert settings.local_storage_dir == before
+    after = client.get("/api/settings/upload-storage").json()["data"]
+    assert after["local_storage_dir"] == before
 
 
 def test_model_settings_save_persists_json_like_rag(

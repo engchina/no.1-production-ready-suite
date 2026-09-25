@@ -19,6 +19,7 @@ dependencies = [
   "pyyaml>=6.0",
   "websockets>=15,<17",
   "production-ready-backend-core",
+  "production-ready-system-settings-backend",
 ]
 
 [dependency-groups]
@@ -37,6 +38,7 @@ dev = [
 [tool.uv.sources]
 # テンプレを <app>/backend へ展開したときの相対パス。
 production-ready-backend-core = { path = "../../platform/packages/backend_core", editable = true }
+production-ready-system-settings-backend = { path = "../../platform/packages/system_settings_backend", editable = true }
 
 [build-system]
 requires = ["hatchling"]

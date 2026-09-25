@@ -18,6 +18,8 @@ COPY agent/backend/pyproject.toml \
      agent/backend/uv.lock ./backend/
 COPY platform/packages/backend_core \
      /platform/packages/backend_core
+COPY platform/packages/system_settings_backend \
+     /platform/packages/system_settings_backend
 
 WORKDIR /app/backend
 RUN uv sync --locked --no-dev

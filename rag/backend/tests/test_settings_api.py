@@ -3597,6 +3597,7 @@ def test_update_upload_storage_settings_can_apply_namespace_from_oci_settings_dr
 ) -> None:
     settings = get_settings()
     monkeypatch.setattr(settings, "object_storage_namespace", "")
+    monkeypatch.setattr(settings, "object_storage_region", "us-chicago-1")
     env_file = _upload_storage_env_file(monkeypatch, tmp_path)
 
     resp = client.patch(
@@ -3626,6 +3627,7 @@ def test_update_upload_storage_settings_does_not_mutate_runtime_when_env_write_f
     monkeypatch.setattr(settings, "local_storage_dir", "/old/uploads")
     monkeypatch.setattr(settings, "object_storage_namespace", "global-namespace")
     monkeypatch.setattr(settings, "object_storage_bucket", "old-bucket")
+    monkeypatch.setattr(settings, "object_storage_region", "us-chicago-1")
     monkeypatch.setattr(settings_routes, "BACKEND_ENV_FILE", tmp_path)
 
     resp = client.patch(
@@ -3644,13 +3646,17 @@ def test_update_upload_storage_settings_does_not_mutate_runtime_when_env_write_f
     assert settings.object_storage_bucket == "old-bucket"
 
 
-def test_update_upload_storage_settings_allows_missing_selected_backend_fields(
+def test_update_upload_storage_settings_rejects_missing_selected_backend_fields(
     monkeypatch: MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    """OCI の必須項目が欠けていれば保存しない（#97 で NL2SQL の仕様に統一）。"""
     settings = get_settings()
+    monkeypatch.setattr(settings, "upload_storage_backend", "local")
     monkeypatch.setattr(settings, "object_storage_namespace", "global-namespace")
+    monkeypatch.setattr(settings, "object_storage_region", "us-chicago-1")
     env_file = _upload_storage_env_file(monkeypatch, tmp_path)
+    before = env_file.read_text(encoding="utf-8") if env_file.exists() else None
 
     resp = client.patch(
         "/api/settings/upload-storage",
@@ -3661,25 +3667,22 @@ def test_update_upload_storage_settings_allows_missing_selected_backend_fields(
         },
     )
 
-    assert resp.status_code == 200
-    body = resp.json()["data"]
-    assert body["backend"] == "oci"
-    assert body["readiness"] == "missing"
-    assert settings.upload_storage_backend == "oci"
-    assert settings.object_storage_namespace == "global-namespace"
-    assert settings.object_storage_bucket == ""
-    persisted = env_file.read_text(encoding="utf-8")
-    assert "OBJECT_STORAGE_NAMESPACE=global-namespace" in persisted
-    assert "OBJECT_STORAGE_BUCKET=" in persisted
+    assert resp.status_code == 422
+    assert settings.upload_storage_backend == "local"
+    after = env_file.read_text(encoding="utf-8") if env_file.exists() else None
+    assert after == before
 
 
-def test_update_upload_storage_settings_allows_missing_global_namespace(
+def test_update_upload_storage_settings_rejects_missing_global_namespace(
     monkeypatch: MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    """namespace が未設定のまま OCI を選ぶと保存しない（#97 で NL2SQL の仕様に統一）。"""
     settings = get_settings()
+    monkeypatch.setattr(settings, "upload_storage_backend", "local")
     monkeypatch.setattr(settings, "object_storage_namespace", "")
-    env_file = _upload_storage_env_file(monkeypatch, tmp_path)
+    monkeypatch.setattr(settings, "object_storage_region", "us-chicago-1")
+    _upload_storage_env_file(monkeypatch, tmp_path)
 
     resp = client.patch(
         "/api/settings/upload-storage",
@@ -3690,15 +3693,9 @@ def test_update_upload_storage_settings_allows_missing_global_namespace(
         },
     )
 
-    assert resp.status_code == 200
-    body = resp.json()["data"]
-    assert body["backend"] == "oci"
-    assert body["readiness"] == "missing"
-    assert settings.object_storage_namespace == ""
-    assert settings.object_storage_bucket == "rag-originals"
-    persisted = env_file.read_text(encoding="utf-8")
-    assert "OBJECT_STORAGE_NAMESPACE=" in persisted
-    assert "OBJECT_STORAGE_BUCKET=rag-originals" in persisted
+    assert resp.status_code == 422
+    assert "Object Storage namespace" in str(resp.json())
+    assert settings.upload_storage_backend == "local"
 
 
 def _database_env_file(

@@ -38,6 +38,7 @@ services:
       dockerfile: backend/Dockerfile
       additional_contexts:
         backend_core: ../platform/packages/backend_core
+        system_settings_backend: ../platform/packages/system_settings_backend
     env_file:
       - path: ./backend/.env
         required: false
@@ -92,6 +93,7 @@ services:
       dockerfile: backend/Dockerfile
       additional_contexts:
         backend_core: ../platform/packages/backend_core
+        system_settings_backend: ../platform/packages/system_settings_backend
     env_file:
       - path: ./backend/.env
         required: false

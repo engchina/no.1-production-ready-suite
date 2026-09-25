@@ -151,6 +151,50 @@ jobs:
       - name: Dependency audit
         run: uv run pip-audit
 
+  platform-system-settings-backend:
+    name: Platform / system_settings_backend (pr_system_settings)
+    needs: changes
+    if: needs.changes.outputs.platform == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: platform/packages/system_settings_backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: platform/packages/system_settings_backend/uv.lock
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --locked --dev
+
+      - name: Format check
+        run: uv run black --check .
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Type check
+        run: uv run mypy src
+
+      - name: Test
+        run: uv run pytest --cov=pr_system_settings
+
+      - name: Security scan
+        run: uv run bandit -r src
+
+      - name: Dependency audit
+        run: uv run pip-audit
+
   # ---------------------------------------------------------------- rag
 
   rag-backend:
@@ -619,6 +663,7 @@ jobs:
       - secret-scan
       - platform-ui
       - platform-backend-core
+      - platform-system-settings-backend
       - rag-backend
       - rag-docrag-core
       - rag-frontend
