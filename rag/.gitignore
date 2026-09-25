@@ -253,3 +253,6 @@ IDENTITY.md
 SOUL.md
 TOOLS.md
 USER.md
+
+# docrag の既定の出力先（DOCRAG_OUTPUT_DIR 未設定時。parser サービスを起動すると作られる）
+.runs/
