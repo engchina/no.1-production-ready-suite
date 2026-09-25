@@ -1,6 +1,31 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 import { mockDatabaseReady } from "./_helpers";
+
+/** 等幅書体（--font-mono）が Google Sans Code で、code / .font-mono に効くことを確かめる。 */
+async function checkMonoFont(page: Page) {
+  const result = await page.evaluate(async () => {
+    const code = document.createElement("code");
+    code.textContent = "SELECT 1200000";
+    const utility = document.createElement("span");
+    utility.className = "font-mono";
+    utility.textContent = "doc-0001";
+    document.body.append(code, utility);
+    const counts: number[] = [];
+    for (const weight of [400, 500, 600, 700]) {
+      const faces = await document.fonts.load(`${weight} 14px "Google Sans Code"`, "SELECT 1200000");
+      counts.push(faces.filter((face) => face.status === "loaded").length);
+    }
+    const families = [getComputedStyle(code).fontFamily, getComputedStyle(utility).fontFamily];
+    code.remove();
+    utility.remove();
+    return { counts, families };
+  });
+  expect(result.counts.every((count) => count > 0), "Google Sans Code 400/500/600/700").toBe(true);
+  for (const family of result.families) {
+    expect(family).toBe('"Google Sans Code", "Noto Sans JP", Roboto, monospace');
+  }
+}
 
 /**
  * 自前ホスト Web フォント(@fontsource / オフライン)の検証。
@@ -63,5 +88,11 @@ test.describe("自前ホストフォント", () => {
       Array.from(document.fonts).map((f) => f.family)
     );
     expect(fontSources).toContain("Noto Sans JP");
+  });
+
+  test("等幅書体は Google Sans Code を自前ホストし、code と font-mono に効く", async ({ page }) => {
+    await mockDatabaseReady(page);
+    await page.goto("/");
+    await checkMonoFont(page);
   });
 });
