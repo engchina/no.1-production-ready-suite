@@ -1,11 +1,11 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { CheckCircle2, CircleAlert, Clock3 } from "lucide-react";
 
-import { useOperationTiming, type UseOperationTimingOptions } from "@/components/ProcessingState";
 import { useWorkspaceActive } from "@/components/WorkspaceState";
 import { formatDateTime } from "@/lib/format";
 
 import { t } from "@/lib/i18n";
+import { useOperationTiming, type UseOperationTimingOptions } from "@engchina/production-ready-ui";
 
 export type ExecutionActivityStatus = "running" | "success" | "error";
 type ExecutionActivityTone = "info" | "success" | "danger";

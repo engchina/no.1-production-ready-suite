@@ -29,6 +29,7 @@ import {
   CardDescription,
   CardHeader,
   CardTitle,
+  DataTable,
   EmptyState,
   ErrorState,
   LoadingState,
@@ -37,6 +38,7 @@ import {
   Switch,
   toast,
   useConfirm,
+  type DataTableColumn,
   type StatusVariant,
   PageBody,
 } from "@engchina/production-ready-ui";
@@ -767,7 +769,7 @@ export function RunsPage() {
                   id="run-agent"
                   value={agentId}
                   onChange={(event) => onAgentChange(event.target.value)}
-                  className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 >
                   {(agents.data?.agents ?? []).filter((agent) => agent.enabled).map((agent) => (
                     <option key={agent.id} value={agent.id}>
@@ -781,7 +783,7 @@ export function RunsPage() {
                   id="run-goal"
                   value={goal}
                   onChange={(event) => setGoal(event.target.value)}
-                  className="min-h-24 w-full rounded-md border border-border bg-surface-sunken px-3 py-2 text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className="min-h-24 w-full rounded-md border border-border-control bg-surface-sunken px-3 py-2 text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 />
               </Field>
               <Field label={t("run.form.binding")} htmlFor="run-binding">
@@ -789,7 +791,7 @@ export function RunsPage() {
                   id="run-binding"
                   value={bindingId}
                   onChange={(event) => setBindingId(event.target.value)}
-                  className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 >
                   <option value="">
                     {defaultBinding
@@ -1001,7 +1003,7 @@ export function AuditPage() {
                   id="audit-run-id"
                   value={runId}
                   onChange={(event) => setRunId(event.target.value)}
-                  className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 />
               </Field>
               <Field label={t("audit.toolName")} htmlFor="audit-tool-name">
@@ -1009,7 +1011,7 @@ export function AuditPage() {
                   id="audit-tool-name"
                   value={toolName}
                   onChange={(event) => setToolName(event.target.value)}
-                  className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 >
                   <option value="">{t("common.all")}</option>
                   {(tools.data?.tools ?? []).map((tool) => (
@@ -1024,7 +1026,7 @@ export function AuditPage() {
                   id="audit-step-status"
                   value={stepStatus}
                   onChange={(event) => setStepStatus(event.target.value)}
-                  className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 >
                   <option value="">{t("common.all")}</option>
                   {["pending", "running", "waiting_approval", "completed", "failed", "cancelled"].map((status) => (
@@ -1039,7 +1041,7 @@ export function AuditPage() {
                   id="audit-approval-status"
                   value={approvalStatus}
                   onChange={(event) => setApprovalStatus(event.target.value)}
-                  className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 >
                   <option value="">{t("common.all")}</option>
                   {["pending", "approved", "rejected", "cancelled"].map((status) => (
@@ -1054,7 +1056,7 @@ export function AuditPage() {
                   id="audit-error-code"
                   value={errorCode}
                   onChange={(event) => setErrorCode(event.target.value)}
-                  className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 />
               </Field>
               <Field label={t("audit.guardrailWarnings")} htmlFor="audit-warning-filter">
@@ -1062,7 +1064,7 @@ export function AuditPage() {
                   id="audit-warning-filter"
                   value={warnings}
                   onChange={(event) => setWarnings(event.target.value as AuditWarningsFilter)}
-                  className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 >
                   <option value="any">{t("common.all")}</option>
                   <option value="true">{t("audit.hasWarnings")}</option>
@@ -1077,7 +1079,7 @@ export function AuditPage() {
                   max="1000"
                   value={limit}
                   onChange={(event) => setLimit(event.target.value)}
-                  className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 />
               </Field>
             </div>
@@ -1117,91 +1119,113 @@ export function AuditPage() {
 }
 
 function AuditRecordsTable({ records }: { records: ToolCallAuditRecord[] }) {
+  const columns: DataTableColumn<ToolCallAuditRecord>[] = [
+    {
+      key: "run_goal",
+      header: t("audit.runGoal"),
+      className: "max-w-72",
+      render: (record) => (
+        <>
+          <p className="break-words text-sm font-medium text-fg [overflow-wrap:anywhere]">{record.run_goal}</p>
+          <p className="mt-1 break-all text-xs text-fg-muted">{record.run_id}</p>
+          <p className="mt-1 text-xs text-fg-muted">{formatDate(record.run_created_at)}</p>
+        </>
+      ),
+    },
+    {
+      key: "tool_name",
+      header: t("audit.toolName"),
+      render: (record) => (
+        <>
+          <p className="break-all font-medium text-fg">{record.tool_name}</p>
+          {record.error_code ? (
+            <p className="mt-1 break-words text-xs text-danger-fg [overflow-wrap:anywhere]">{record.error_code}</p>
+          ) : null}
+        </>
+      ),
+    },
+    {
+      key: "status",
+      header: t("audit.stepStatus"),
+      render: (record) => (
+        <StatusBadge variant={stepStatusVariant[record.status] ?? "neutral"} label={record.status} />
+      ),
+    },
+    {
+      key: "approval_status",
+      header: t("audit.approvalStatus"),
+      render: (record) =>
+        record.approval_status ? (
+          <StatusBadge variant={approvalStatusVariant(record.approval_status)} label={record.approval_status} />
+        ) : (
+          <span className="text-xs text-fg-muted">-</span>
+        ),
+    },
+    {
+      key: "policy_decision",
+      header: t("run.auditPolicy"),
+      className: "text-xs text-fg",
+      render: (record) => record.policy_decision ?? "-",
+    },
+    {
+      key: "permission_level",
+      header: t("common.permission"),
+      render: (record) => (
+        <StatusBadge
+          variant={permissionStatusVariant(record.permission_level)}
+          label={record.permission_level ?? "-"}
+          icon={false}
+        />
+      ),
+    },
+    {
+      key: "guardrail_warnings",
+      header: t("audit.guardrailWarnings"),
+      className: "max-w-64",
+      render: (record) =>
+        record.guardrail_warnings.length ? (
+          <div className="space-y-1">
+            {record.guardrail_warnings.map((warning) => (
+              <p key={warning} className="break-words text-xs text-warning-fg [overflow-wrap:anywhere]">
+                {warning}
+              </p>
+            ))}
+          </div>
+        ) : (
+          <span className="text-xs text-fg-muted">-</span>
+        ),
+    },
+    {
+      key: "duration_ms",
+      header: t("run.auditDuration"),
+      className: "text-xs text-fg",
+      render: (record) =>
+        record.duration_ms === null || record.duration_ms === undefined ? "-" : `${record.duration_ms}ms`,
+    },
+    {
+      key: "trace_id",
+      header: t("run.auditTrace"),
+      className: "max-w-48",
+      render: (record) => (
+        <>
+          <p className="break-all text-xs text-fg-muted">{record.trace_id ?? "-"}</p>
+          {record.artifact_ids.length ? (
+            <p className="mt-1 text-xs text-fg-muted">{`${t("run.auditArtifacts")}: ${record.artifact_ids.length}`}</p>
+          ) : null}
+        </>
+      ),
+    },
+  ];
+
   return (
-    <div className="w-full overflow-x-auto">
-      <table className="w-full min-w-[980px] border-collapse text-left text-sm">
-        <thead>
-          <tr className="border-b border-border text-xs text-fg-muted">
-            <th className="px-3 py-2 font-medium">{t("audit.runGoal")}</th>
-            <th className="px-3 py-2 font-medium">{t("audit.toolName")}</th>
-            <th className="px-3 py-2 font-medium">{t("audit.stepStatus")}</th>
-            <th className="px-3 py-2 font-medium">{t("audit.approvalStatus")}</th>
-            <th className="px-3 py-2 font-medium">{t("run.auditPolicy")}</th>
-            <th className="px-3 py-2 font-medium">{t("common.permission")}</th>
-            <th className="px-3 py-2 font-medium">{t("audit.guardrailWarnings")}</th>
-            <th className="px-3 py-2 font-medium">{t("run.auditDuration")}</th>
-            <th className="px-3 py-2 font-medium">{t("run.auditTrace")}</th>
-          </tr>
-        </thead>
-        <tbody>
-          {records.map((record) => (
-            <tr key={`${record.run_id}:${record.step_id}`} className="border-b border-border/70 align-top">
-              <td className="max-w-72 px-3 py-3">
-                <p className="break-words text-sm font-medium text-fg [overflow-wrap:anywhere]">
-                  {record.run_goal}
-                </p>
-                <p className="mt-1 break-all text-xs text-fg-muted">{record.run_id}</p>
-                <p className="mt-1 text-xs text-fg-muted">{formatDate(record.run_created_at)}</p>
-              </td>
-              <td className="px-3 py-3">
-                <p className="break-all font-medium text-fg">{record.tool_name}</p>
-                {record.error_code ? (
-                  <p className="mt-1 break-words text-xs text-danger-fg [overflow-wrap:anywhere]">
-                    {record.error_code}
-                  </p>
-                ) : null}
-              </td>
-              <td className="px-3 py-3">
-                <StatusBadge
-                  variant={stepStatusVariant[record.status] ?? "neutral"}
-                  label={record.status}
-                />
-              </td>
-              <td className="px-3 py-3">
-                {record.approval_status ? (
-                  <StatusBadge
-                    variant={approvalStatusVariant(record.approval_status)}
-                    label={record.approval_status}
-                  />
-                ) : (
-                  <span className="text-xs text-fg-muted">-</span>
-                )}
-              </td>
-              <td className="px-3 py-3 text-xs text-fg">{record.policy_decision ?? "-"}</td>
-              <td className="px-3 py-3">
-                <StatusBadge
-                  variant={permissionStatusVariant(record.permission_level)}
-                  label={record.permission_level ?? "-"}
-                  icon={false}
-                />
-              </td>
-              <td className="max-w-64 px-3 py-3">
-                {record.guardrail_warnings.length ? (
-                  <div className="space-y-1">
-                    {record.guardrail_warnings.map((warning) => (
-                      <p key={warning} className="break-words text-xs text-warning-fg [overflow-wrap:anywhere]">
-                        {warning}
-                      </p>
-                    ))}
-                  </div>
-                ) : (
-                  <span className="text-xs text-fg-muted">-</span>
-                )}
-              </td>
-              <td className="px-3 py-3 text-xs text-fg">
-                {record.duration_ms === null || record.duration_ms === undefined ? "-" : `${record.duration_ms}ms`}
-              </td>
-              <td className="max-w-48 px-3 py-3">
-                <p className="break-all text-xs text-fg-muted">{record.trace_id ?? "-"}</p>
-                {record.artifact_ids.length ? (
-                  <p className="mt-1 text-xs text-fg-muted">{`${t("run.auditArtifacts")}: ${record.artifact_ids.length}`}</p>
-                ) : null}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <DataTable
+      rows={records}
+      columns={columns}
+      getRowKey={(record) => `${record.run_id}:${record.step_id}`}
+      rowProps={() => ({ className: "align-top" })}
+      tableClassName="w-full min-w-[980px]"
+      ariaLabel={t("audit.records")}
+    />
   );
 }
 
@@ -1302,7 +1326,7 @@ export function MemoryPage() {
                   id="memory-kind"
                   value={kind}
                   onChange={(event) => setKind(event.target.value as MemoryKind)}
-                  className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 >
                   <option value="user_preference">{t("memory.kind.userPreference")}</option>
                   <option value="tool_learning">{t("memory.kind.toolLearning")}</option>
@@ -1315,7 +1339,7 @@ export function MemoryPage() {
                   id="memory-content"
                   value={content}
                   onChange={(event) => setContent(event.target.value)}
-                  className="min-h-28 w-full rounded-md border border-border bg-surface-sunken px-3 py-2 text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className="min-h-28 w-full rounded-md border border-border-control bg-surface-sunken px-3 py-2 text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 />
               </Field>
               <Field label={t("memory.metadata")} htmlFor="memory-metadata">
@@ -1323,7 +1347,7 @@ export function MemoryPage() {
                   id="memory-metadata"
                   value={metadataText}
                   onChange={(event) => setMetadataText(event.target.value)}
-                  className="min-h-24 w-full rounded-md border border-border bg-surface-sunken px-3 py-2 font-mono text-xs leading-5 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className="min-h-24 w-full rounded-md border border-border-control bg-surface-sunken px-3 py-2 font-mono text-xs leading-5 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   spellCheck={false}
                 />
               </Field>
@@ -1341,7 +1365,7 @@ export function MemoryPage() {
                 id="memory-search"
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
               />
             </Field>
             </CardContent>
@@ -1508,7 +1532,7 @@ function McpDiscoveryPanel({ configured }: { configured: boolean }) {
               id="mcp-discovery-server-id"
               value={serverId}
               onChange={(event) => setServerId(event.target.value)}
-              className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+              className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
             />
           </Field>
           <Field label={t("settings.mcpDiscovery.traceId")} htmlFor="mcp-discovery-trace-id">
@@ -1516,7 +1540,7 @@ function McpDiscoveryPanel({ configured }: { configured: boolean }) {
               id="mcp-discovery-trace-id"
               value={traceId}
               onChange={(event) => setTraceId(event.target.value)}
-              className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+              className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
             />
           </Field>
           <Button
@@ -1550,32 +1574,45 @@ function McpDiscoveryPanel({ configured }: { configured: boolean }) {
 }
 
 function McpToolsList({ tools }: { tools: ExternalMcpToolInfo[] }) {
+  const mcpToolColumns: DataTableColumn<ExternalMcpToolInfo>[] = [
+    { key: "name", header: t("settings.mcpDiscovery.tool"), className: "font-mono text-xs text-fg" },
+    {
+      key: "description",
+      header: t("settings.mcpDiscovery.descriptionColumn"),
+      className: "max-w-sm text-fg-muted",
+      render: (tool) => tool.description || "-",
+    },
+    {
+      key: "server_id",
+      header: t("settings.mcpDiscovery.server"),
+      className: "text-fg-muted",
+      render: (tool) => tool.server_id ?? "-",
+    },
+    {
+      key: "input_schema",
+      header: t("settings.mcpDiscovery.inputSchema"),
+      className: "text-fg-muted",
+      render: (tool) => schemaSummary(tool.input_schema),
+    },
+    {
+      key: "output_schema",
+      header: t("settings.mcpDiscovery.outputSchema"),
+      className: "text-fg-muted",
+      render: (tool) => schemaSummary(tool.output_schema),
+    },
+  ];
+
   return (
     <div className="min-w-0">
-      <div className="hidden overflow-x-auto md:block">
-        <table className="w-full min-w-[720px] border-collapse text-left text-sm">
-          <thead>
-            <tr className="border-b border-border text-xs text-fg-muted">
-              <th className="px-3 py-2 font-medium">{t("settings.mcpDiscovery.tool")}</th>
-              <th className="px-3 py-2 font-medium">{t("settings.mcpDiscovery.descriptionColumn")}</th>
-              <th className="px-3 py-2 font-medium">{t("settings.mcpDiscovery.server")}</th>
-              <th className="px-3 py-2 font-medium">{t("settings.mcpDiscovery.inputSchema")}</th>
-              <th className="px-3 py-2 font-medium">{t("settings.mcpDiscovery.outputSchema")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {tools.map((tool) => (
-              <tr key={`${tool.server_id ?? "default"}:${tool.name}`} className="border-b border-border/70 last:border-0">
-                <td className="px-3 py-3 align-top font-mono text-xs text-fg">{tool.name}</td>
-                <td className="max-w-sm px-3 py-3 align-top text-fg-muted">{tool.description || "-"}</td>
-                <td className="px-3 py-3 align-top text-fg-muted">{tool.server_id ?? "-"}</td>
-                <td className="px-3 py-3 align-top text-fg-muted">{schemaSummary(tool.input_schema)}</td>
-                <td className="px-3 py-3 align-top text-fg-muted">{schemaSummary(tool.output_schema)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <DataTable
+        className="hidden md:block"
+        rows={tools}
+        columns={mcpToolColumns}
+        getRowKey={(tool) => `${tool.server_id ?? "default"}:${tool.name}`}
+        rowProps={() => ({ className: "align-top" })}
+        tableClassName="w-full min-w-[720px]"
+        ariaLabel={t("settings.mcpDiscovery.title")}
+      />
       <div className="grid gap-3 md:hidden">
         {tools.map((tool) => (
           <div key={`${tool.server_id ?? "default"}:${tool.name}`} className="rounded-md border border-border p-3">
@@ -1924,49 +1961,63 @@ function McpServerTable({
   onSetDefault: (serverId: string) => void;
   busy: boolean;
 }) {
+  const columns: DataTableColumn<ExternalMcpServerSettings>[] = [
+    {
+      key: "server_id",
+      header: t("settings.mcpServers.serverId"),
+      render: (server) => (
+        <div className="flex items-center gap-2">
+          <span className="font-mono text-xs text-fg">{server.server_id}</span>
+          {server.is_default ? (
+            <StatusBadge variant="info" label={t("settings.mcpServers.default")} icon={false} />
+          ) : null}
+        </div>
+      ),
+    },
+    {
+      key: "label",
+      header: t("settings.mcpServers.label"),
+      className: "text-fg-muted",
+      render: (server) => server.label || "-",
+    },
+    {
+      key: "base_url",
+      header: t("settings.baseUrl"),
+      className: "max-w-xs break-all text-fg-muted",
+      render: (server) => server.base_url || "-",
+    },
+    {
+      key: "auth_mode",
+      header: t("settings.mcpServers.auth"),
+      className: "text-fg-muted",
+      render: (server) => mcpAuthLabel(server.auth_mode),
+    },
+    {
+      key: "actions",
+      header: t("settings.mcpServers.actions"),
+      render: (server) => (
+        <McpServerActions
+          server={server}
+          onEdit={onEdit}
+          onDelete={onDelete}
+          onSetDefault={onSetDefault}
+          busy={busy}
+        />
+      ),
+    },
+  ];
+
   return (
     <div className="min-w-0">
-      <div className="hidden overflow-x-auto md:block">
-        <table className="w-full min-w-[760px] border-collapse text-left text-sm">
-          <thead>
-            <tr className="border-b border-border text-xs text-fg-muted">
-              <th className="px-3 py-2 font-medium">{t("settings.mcpServers.serverId")}</th>
-              <th className="px-3 py-2 font-medium">{t("settings.mcpServers.label")}</th>
-              <th className="px-3 py-2 font-medium">{t("settings.baseUrl")}</th>
-              <th className="px-3 py-2 font-medium">{t("settings.mcpServers.auth")}</th>
-              <th className="px-3 py-2 font-medium">{t("settings.mcpServers.actions")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {servers.map((server) => (
-              <tr key={server.server_id} className="border-b border-border/70 last:border-0">
-                <td className="px-3 py-3 align-top">
-                  <div className="flex items-center gap-2">
-                    <span className="font-mono text-xs text-fg">{server.server_id}</span>
-                    {server.is_default ? (
-                      <StatusBadge variant="info" label={t("settings.mcpServers.default")} icon={false} />
-                    ) : null}
-                  </div>
-                </td>
-                <td className="px-3 py-3 align-top text-fg-muted">{server.label || "-"}</td>
-                <td className="max-w-xs break-all px-3 py-3 align-top text-fg-muted">
-                  {server.base_url || "-"}
-                </td>
-                <td className="px-3 py-3 align-top text-fg-muted">{mcpAuthLabel(server.auth_mode)}</td>
-                <td className="px-3 py-3 align-top">
-                  <McpServerActions
-                    server={server}
-                    onEdit={onEdit}
-                    onDelete={onDelete}
-                    onSetDefault={onSetDefault}
-                    busy={busy}
-                  />
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <DataTable
+        className="hidden md:block"
+        rows={servers}
+        columns={columns}
+        getRowKey={(server) => server.server_id}
+        rowProps={() => ({ className: "align-top" })}
+        tableClassName="w-full min-w-[760px]"
+        ariaLabel={t("settings.mcpServers.title")}
+      />
       <div className="grid gap-3 md:hidden">
         {servers.map((server) => (
           <div key={server.server_id} className="space-y-2 rounded-md border border-border p-3">
@@ -2382,56 +2433,60 @@ function SkillTable({
   onDetail: (skillId: string) => void;
   busy: boolean;
 }) {
+  const columns: DataTableColumn<AgentSkill>[] = [
+    {
+      key: "name",
+      header: t("skills.skill"),
+      render: (skill) => (
+        <>
+          <p className="text-sm font-medium text-fg">{skill.name}</p>
+          <p className="font-mono text-xs text-fg-muted">{skill.id}</p>
+        </>
+      ),
+    },
+    {
+      key: "source",
+      header: t("skills.source"),
+      render: (skill) => (
+        <StatusBadge variant={skillSourceVariant(skill.source)} label={skillSourceLabel(skill.source)} icon={false} />
+      ),
+    },
+    {
+      key: "enabled",
+      header: t("common.status"),
+      render: (skill) => (
+        <StatusBadge
+          variant={skill.enabled ? "success" : "neutral"}
+          label={skill.enabled ? t("agent.enabled") : t("agent.disabled")}
+        />
+      ),
+    },
+    {
+      key: "tags",
+      header: t("skills.tags"),
+      className: "text-xs text-fg-muted",
+      render: (skill) => (skill.tags.length ? skill.tags.join(", ") : "-"),
+    },
+    {
+      key: "actions",
+      header: t("settings.mcpServers.actions"),
+      render: (skill) => (
+        <SkillActions skill={skill} onEdit={onEdit} onDelete={onDelete} onDetail={onDetail} busy={busy} />
+      ),
+    },
+  ];
+
   return (
     <div className="min-w-0">
-      <div className="hidden overflow-x-auto md:block">
-        <table className="w-full min-w-[760px] border-collapse text-left text-sm">
-          <thead>
-            <tr className="border-b border-border text-xs text-fg-muted">
-              <th className="px-3 py-2 font-medium">{t("skills.skill")}</th>
-              <th className="px-3 py-2 font-medium">{t("skills.source")}</th>
-              <th className="px-3 py-2 font-medium">{t("common.status")}</th>
-              <th className="px-3 py-2 font-medium">{t("skills.tags")}</th>
-              <th className="px-3 py-2 font-medium">{t("settings.mcpServers.actions")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {skills.map((skill) => (
-              <tr key={skill.id} className="border-b border-border/70 last:border-0">
-                <td className="px-3 py-3 align-top">
-                  <p className="text-sm font-medium text-fg">{skill.name}</p>
-                  <p className="font-mono text-xs text-fg-muted">{skill.id}</p>
-                </td>
-                <td className="px-3 py-3 align-top">
-                  <StatusBadge
-                    variant={skillSourceVariant(skill.source)}
-                    label={skillSourceLabel(skill.source)}
-                    icon={false}
-                  />
-                </td>
-                <td className="px-3 py-3 align-top">
-                  <StatusBadge
-                    variant={skill.enabled ? "success" : "neutral"}
-                    label={skill.enabled ? t("agent.enabled") : t("agent.disabled")}
-                  />
-                </td>
-                <td className="px-3 py-3 align-top text-xs text-fg-muted">
-                  {skill.tags.length ? skill.tags.join(", ") : "-"}
-                </td>
-                <td className="px-3 py-3 align-top">
-                  <SkillActions
-                    skill={skill}
-                    onEdit={onEdit}
-                    onDelete={onDelete}
-                    onDetail={onDetail}
-                    busy={busy}
-                  />
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <DataTable
+        className="hidden md:block"
+        rows={skills}
+        columns={columns}
+        getRowKey={(skill) => skill.id}
+        rowProps={() => ({ className: "align-top" })}
+        tableClassName="w-full min-w-[760px]"
+        ariaLabel={t("skills.title")}
+      />
       <div className="grid gap-3 md:hidden">
         {skills.map((skill) => (
           <div key={skill.id} className="space-y-2 rounded-md border border-border p-3">
@@ -2743,56 +2798,70 @@ function PluginTable({
   onUninstall: (plugin: PluginSummary) => void;
   busy: boolean;
 }) {
+  const columns: DataTableColumn<PluginSummary>[] = [
+    {
+      key: "name",
+      header: t("plugins.title"),
+      render: (plugin) => (
+        <>
+          <p className="text-sm font-medium text-fg">{plugin.name}</p>
+          <p className="font-mono text-xs text-fg-muted">
+            {plugin.id} · v{plugin.version}
+          </p>
+        </>
+      ),
+    },
+    {
+      key: "source",
+      header: t("plugins.source"),
+      className: "text-fg-muted",
+      render: (plugin) => (plugin.marketplace_id ? plugin.marketplace_id : t("plugins.sourceManual")),
+    },
+    {
+      key: "bundle",
+      header: t("plugins.bundle"),
+      render: (plugin) => <PluginBundle plugin={plugin} />,
+    },
+    {
+      key: "enabled",
+      header: t("plugins.enabledLabel"),
+      render: (plugin) => (
+        <Switch
+          checked={plugin.enabled}
+          aria-label={`${t("plugins.enabledLabel")} ${plugin.id}`}
+          onCheckedChange={(checked) => onToggle(plugin.id, checked)}
+        />
+      ),
+    },
+    {
+      key: "actions",
+      header: t("settings.mcpServers.actions"),
+      render: (plugin) => (
+        <Button
+          size="sm"
+          variant="danger"
+          onClick={() => onUninstall(plugin)}
+          disabled={busy}
+          aria-label={`${t("plugins.uninstall")} ${plugin.id}`}
+          icon={Trash2}
+        >
+          {t("plugins.uninstall")}
+        </Button>
+      ),
+    },
+  ];
+
   return (
     <div className="min-w-0">
-      <div className="hidden overflow-x-auto md:block">
-        <table className="w-full min-w-[760px] border-collapse text-left text-sm">
-          <thead>
-            <tr className="border-b border-border text-xs text-fg-muted">
-              <th className="px-3 py-2 font-medium">{t("plugins.title")}</th>
-              <th className="px-3 py-2 font-medium">{t("plugins.source")}</th>
-              <th className="px-3 py-2 font-medium">{t("plugins.bundle")}</th>
-              <th className="px-3 py-2 font-medium">{t("plugins.enabledLabel")}</th>
-              <th className="px-3 py-2 font-medium">{t("settings.mcpServers.actions")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {plugins.map((plugin) => (
-              <tr key={plugin.id} className="border-b border-border/70 last:border-0">
-                <td className="px-3 py-3 align-top">
-                  <p className="text-sm font-medium text-fg">{plugin.name}</p>
-                  <p className="font-mono text-xs text-fg-muted">
-                    {plugin.id} · v{plugin.version}
-                  </p>
-                </td>
-                <td className="px-3 py-3 align-top text-fg-muted">
-                  {plugin.marketplace_id ? plugin.marketplace_id : t("plugins.sourceManual")}
-                </td>
-                <td className="px-3 py-3 align-top">
-                  <PluginBundle plugin={plugin} />
-                </td>
-                <td className="px-3 py-3 align-top">
-                  <Switch
-                    checked={plugin.enabled}
-                    aria-label={`${t("plugins.enabledLabel")} ${plugin.id}`}
-                    onCheckedChange={(checked) => onToggle(plugin.id, checked)}
-                  />
-                </td>
-                <td className="px-3 py-3 align-top">
-                  <Button
-                    size="sm"
-                    variant="danger"
-                    onClick={() => onUninstall(plugin)}
-                    disabled={busy}
-                    aria-label={`${t("plugins.uninstall")} ${plugin.id}`} icon={Trash2}>
-                    {t("plugins.uninstall")}
-                  </Button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <DataTable
+        className="hidden md:block"
+        rows={plugins}
+        columns={columns}
+        getRowKey={(plugin) => plugin.id}
+        rowProps={() => ({ className: "align-top" })}
+        tableClassName="w-full min-w-[760px]"
+        ariaLabel={t("plugins.title")}
+      />
       <div className="grid gap-3 md:hidden">
         {plugins.map((plugin) => (
           <div key={plugin.id} className="space-y-2 rounded-md border border-border p-3">
@@ -3245,7 +3314,7 @@ export function CommandPolicySettingsPage() {
                     id="command-policy-workspace-root"
                     value={workspaceRoot}
                     onChange={(event) => setWorkspaceRoot(event.target.value)}
-                    className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   />
                 </Field>
                 <Field label={t("settings.commandPolicy.outputLimit")} htmlFor="command-policy-output-limit">
@@ -3255,7 +3324,7 @@ export function CommandPolicySettingsPage() {
                     min="1"
                     value={outputLimit}
                     onChange={(event) => setOutputLimit(event.target.value)}
-                    className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   />
                 </Field>
                 <Field label={t("settings.commandPolicy.defaultTimeout")} htmlFor="command-policy-default-timeout">
@@ -3266,7 +3335,7 @@ export function CommandPolicySettingsPage() {
                     step="0.1"
                     value={defaultTimeout}
                     onChange={(event) => setDefaultTimeout(event.target.value)}
-                    className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   />
                 </Field>
                 <Field label={t("settings.commandPolicy.maxTimeout")} htmlFor="command-policy-max-timeout">
@@ -3277,7 +3346,7 @@ export function CommandPolicySettingsPage() {
                     step="0.1"
                     value={maxTimeout}
                     onChange={(event) => setMaxTimeout(event.target.value)}
-                    className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   />
                 </Field>
               </div>
@@ -3288,7 +3357,7 @@ export function CommandPolicySettingsPage() {
                   value={allowedPrefixes}
                   onChange={(event) => setAllowedPrefixes(event.target.value)}
                   rows={5}
-                  className="min-h-32 w-full rounded-md border border-border bg-surface-sunken px-3 py-2 font-mono text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className="min-h-32 w-full rounded-md border border-border-control bg-surface-sunken px-3 py-2 font-mono text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 />
                 <p className="mt-1 text-xs leading-5 text-fg-muted">{t("settings.commandPolicy.allowedPrefixesHint")}</p>
               </Field>
@@ -3299,7 +3368,7 @@ export function CommandPolicySettingsPage() {
                     id="command-policy-artifact-storage"
                     value={artifactStorageBackend}
                     onChange={(event) => setArtifactStorageBackend(event.target.value as "inline" | "filesystem")}
-                    className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   >
                     <option value="inline">{t("settings.commandPolicy.inline")}</option>
                     <option value="filesystem">{t("settings.commandPolicy.filesystem")}</option>
@@ -3311,7 +3380,7 @@ export function CommandPolicySettingsPage() {
                     id="command-policy-artifact-path"
                     value={artifactStoragePath}
                     onChange={(event) => setArtifactStoragePath(event.target.value)}
-                    className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   />
                 </Field>
               </div>
@@ -3408,7 +3477,7 @@ export function ToolPolicySettingsPage() {
                   id="tool-policy-default-mode"
                   value={defaultMode}
                   onChange={(event) => setDefaultMode(event.target.value as "approval" | "deny")}
-                  className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring sm:max-w-xs"
+                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring sm:max-w-xs"
                 >
                   <option value="approval">{t("settings.toolPolicy.defaultModeApproval")}</option>
                   <option value="deny">{t("settings.toolPolicy.defaultModeDeny")}</option>
@@ -3454,7 +3523,7 @@ export function ToolPolicySettingsPage() {
                             id={`tool-policy-${tool.name}`}
                             value={policy}
                             onChange={(event) => setPolicy(tool.name, event.target.value as ToolPolicyChoice)}
-                            className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                            className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                           >
                             <option value="default">{t("settings.toolPolicy.default")}</option>
                             <option value="allow">{t("settings.toolPolicy.allow")}</option>
@@ -3550,7 +3619,7 @@ export function RuntimeSafetySettingsPage() {
                     min="0"
                     value={maxToolCalls}
                     onChange={(event) => setMaxToolCalls(event.target.value)}
-                    className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   />
                 </Field>
                 <Field
@@ -3563,7 +3632,7 @@ export function RuntimeSafetySettingsPage() {
                     min="0"
                     value={maxPendingApprovals}
                     onChange={(event) => setMaxPendingApprovals(event.target.value)}
-                    className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   />
                 </Field>
               </div>
@@ -3719,7 +3788,7 @@ export function RuntimeSnapshotSettingsPage() {
                   id="runtime-snapshot-export"
                   value={exportText}
                   readOnly
-                  className="min-h-80 w-full rounded-md border border-border bg-surface-sunken px-3 py-2 font-mono text-xs leading-5 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className="min-h-80 w-full rounded-md border border-border-control bg-surface-sunken px-3 py-2 font-mono text-xs leading-5 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   spellCheck={false}
                 />
               </Field>
@@ -3749,7 +3818,7 @@ export function RuntimeSnapshotSettingsPage() {
                   setImportText(event.target.value);
                   setValidationResult(null);
                 }}
-                className="min-h-80 w-full rounded-md border border-border bg-surface-sunken px-3 py-2 font-mono text-xs leading-5 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                className="min-h-80 w-full rounded-md border border-border-control bg-surface-sunken px-3 py-2 font-mono text-xs leading-5 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 spellCheck={false}
               />
             </Field>
@@ -3758,7 +3827,7 @@ export function RuntimeSnapshotSettingsPage() {
                 id="runtime-snapshot-reason"
                 value={reason}
                 onChange={(event) => setReason(event.target.value)}
-                className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
               />
             </Field>
             <div className="flex flex-wrap gap-2">
@@ -3778,7 +3847,7 @@ export function RuntimeSnapshotSettingsPage() {
                   onChange={(event) => setConfirmText(event.target.value)}
                   placeholder={t("settings.snapshot.confirmPlaceholder")}
                   aria-describedby="runtime-snapshot-confirm-hint"
-                  className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 />
                 <p id="runtime-snapshot-confirm-hint" className="mt-1 text-xs leading-5 text-fg-muted">
                   {t("settings.snapshot.confirmRequired")}
@@ -3967,7 +4036,7 @@ function AgentEditor({
             id={`${agent?.id ?? "new"}-agent-name`}
             value={name}
             onChange={(event) => setName(event.target.value)}
-            className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+            className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
           />
         </Field>
         <Field label={t("agent.description")} htmlFor={`${agent?.id ?? "new"}-agent-description`}>
@@ -3975,7 +4044,7 @@ function AgentEditor({
             id={`${agent?.id ?? "new"}-agent-description`}
             value={agentDescription}
             onChange={(event) => setAgentDescription(event.target.value)}
-            className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+            className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
           />
         </Field>
         <Field label={t("agent.instructions")} htmlFor={`${agent?.id ?? "new"}-agent-instructions`}>
@@ -3983,7 +4052,7 @@ function AgentEditor({
             id={`${agent?.id ?? "new"}-agent-instructions`}
             value={instructions}
             onChange={(event) => setInstructions(event.target.value)}
-            className="min-h-24 w-full rounded-md border border-border bg-surface-sunken px-3 py-2 text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+            className="min-h-24 w-full rounded-md border border-border-control bg-surface-sunken px-3 py-2 text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
           />
         </Field>
         <label className="flex min-h-11 items-center gap-2 rounded-md border border-border px-3 py-2 text-sm text-fg">
@@ -4138,7 +4207,7 @@ function RuntimeBindingsPanel({
               id={`${agent.id}-binding-runtime`}
               value={runtimeId}
               onChange={(event) => setRuntimeId(event.target.value)}
-              className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm"
+              className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm"
             >
               {candidates.map((runtime) => (
                 <option key={runtime.id} value={runtime.id}>
@@ -4152,7 +4221,7 @@ function RuntimeBindingsPanel({
               id={`${agent.id}-binding-native-ref`}
               value={nativeAgentRef}
               onChange={(event) => setNativeAgentRef(event.target.value)}
-              className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm"
+              className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm"
             />
           </Field>
         </div>
@@ -5136,29 +5205,19 @@ function StructuredResultTable({ result }: { result: StructuredResult }) {
         <CardTitle>{t("run.structuredResult")}</CardTitle>
         <CardDescription>{result.sql ?? t("run.sqlHidden")}</CardDescription>
       </CardHeader>
-      <CardContent className="overflow-x-auto">
-        <table className="w-full min-w-[560px] border-collapse text-left text-sm">
-          <thead>
-            <tr className="border-b border-border">
-              {result.columns.map((column) => (
-                <th key={column.name} className="px-3 py-2 font-medium text-fg-muted">
-                  {column.label ?? column.name}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {result.rows.map((row, index) => (
-              <tr key={String(index)} className="border-b border-border/70">
-                {result.columns.map((column) => (
-                  <td key={column.name} className="px-3 py-2 text-fg">
-                    {formatValue(row[column.name])}
-                  </td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <CardContent>
+        <DataTable
+          rows={result.rows}
+          columns={result.columns.map((column): DataTableColumn<Record<string, unknown>> => ({
+            key: column.name,
+            header: column.label ?? column.name,
+            render: (row) => formatValue(row[column.name]),
+          }))}
+          getRowKey={(_, index) => index}
+          tableClassName="w-full min-w-[560px]"
+          ariaLabel={t("run.structuredResult")}
+          empty={t("common.empty.title")}
+        />
       </CardContent>
     </Card>
   );
