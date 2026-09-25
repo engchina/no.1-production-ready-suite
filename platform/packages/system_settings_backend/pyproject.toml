@@ -10,6 +10,7 @@ dependencies = [
   "pydantic>=2.11",
   "python-multipart>=0.0.20",
   "cryptography>=50.0.0",
+  "python-dotenv>=1.0",
   "production-ready-backend-core",
 ]
 

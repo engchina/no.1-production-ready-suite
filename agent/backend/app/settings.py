@@ -4,9 +4,18 @@ from functools import lru_cache
 from pathlib import Path
 
 from pr_backend_core.config import BaseServiceSettings
+from pr_system_settings.model import (
+    EnterpriseAiConfiguredModel,
+    ModelSecretStateMixin,
+    ModelSettingsStore,
+)
+from pydantic import Field
+
+BACKEND_DIR = Path(__file__).resolve().parents[1]
+BACKEND_ENV_FILE = BACKEND_DIR / ".env"
 
 
-class Settings(BaseServiceSettings):
+class Settings(ModelSecretStateMixin, BaseServiceSettings):
     """サービス固有設定。
 
     OCI/Oracle 等の接続設定はここに追加する（例: oracle_dsn, oci_region ...）。
@@ -48,7 +57,10 @@ class Settings(BaseServiceSettings):
     oci_enterprise_ai_endpoint: str = ""
     oci_enterprise_ai_project_ocid: str = ""
     oci_enterprise_ai_api_key: str = ""
+    oci_enterprise_ai_models: list[EnterpriseAiConfiguredModel] = Field(default_factory=list)
     oci_enterprise_ai_default_model: str = ""
+    oci_enterprise_ai_llm_model: str = ""
+    oci_enterprise_ai_vlm_model: str = ""
     oci_enterprise_ai_llm_path: str = "/responses"
     oci_enterprise_ai_vlm_path: str = "/responses"
     oci_enterprise_ai_vlm_input_mode: str = "auto"
@@ -215,7 +227,34 @@ class Settings(BaseServiceSettings):
         return (self.oracle_wallet_dir or "").strip()
 
 
+def resolve_model_settings_file(path_value: str) -> Path:
+    """MODEL_SETTINGS_FILE を backend/.env と同じディレクトリ基準で解決する。"""
+    path = Path(path_value.strip() or "model-settings.json").expanduser()
+    return path if path.is_absolute() else (BACKEND_DIR / path).resolve()
+
+
+# モデル設定の読み書きは3製品共通（platform の pr_system_settings。#103）。
+MODEL_SETTINGS_STORE = ModelSettingsStore(
+    resolve_path=lambda settings: resolve_model_settings_file(settings.model_settings_file),
+    env_file=lambda _settings: BACKEND_ENV_FILE,
+)
+
+
 @lru_cache
+def _settings_singleton() -> Settings:
+    settings = Settings()
+    MODEL_SETTINGS_STORE.load(settings)
+    return settings
+
+
 def get_settings() -> Settings:
-    """設定シングルトン。"""
-    return Settings()
+    """設定シングルトン。保存済みのモデル設定が更新されていれば再読込する。"""
+    settings = _settings_singleton()
+    MODEL_SETTINGS_STORE.reload_if_changed(settings)
+    return settings
+
+
+def reset_settings_cache() -> None:
+    """テストや明示的な再初期化のため Settings singleton を破棄する。"""
+    _settings_singleton.cache_clear()
+    MODEL_SETTINGS_STORE.reset()

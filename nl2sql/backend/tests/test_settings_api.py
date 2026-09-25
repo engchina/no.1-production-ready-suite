@@ -16,8 +16,10 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from dotenv import dotenv_values
 from fastapi import HTTPException
 from pr_system_settings import oci as shared_oci
+from pr_system_settings.model import ModelSettingsStore, sanitize_model_test_error
 from pytest import MonkeyPatch
 
+import app.settings as app_settings
 from app.clients.oci_database import (
     AutonomousDatabaseInfo,
     OciDatabaseClient,
@@ -1659,6 +1661,7 @@ def test_update_model_settings_persists_v2_json_and_env_secret(
     env_file.chmod(0o600)
     monkeypatch.setattr(settings, "model_settings_file", str(model_settings_file))
     monkeypatch.setattr(settings_router, "BACKEND_ENV_FILE", env_file)
+    monkeypatch.setattr(app_settings, "BACKEND_ENV_FILE", env_file)
     settings.set_runtime_enterprise_ai_api_key("saved-secret")
 
     resp = client.patch(
@@ -1709,7 +1712,7 @@ def test_update_model_settings_persists_v2_json_and_env_secret(
     ]
     assert models[1]["vision_enabled"] is True
     document = json.loads(model_settings_file.read_text(encoding="utf-8"))
-    assert document["version"] == 2
+    assert document["version"] == 3
     assert "api_key" not in document["enterprise_ai"]
     assert document["enterprise_ai"]["models"][1]["model_id"] == "mistral.vision-model"
     assert document["generative_ai"]["embedding_dim"] == 1536
@@ -1732,7 +1735,7 @@ def test_enterprise_ai_api_key_env_update_and_clear_are_atomic(
     env_file.chmod(0o600)
     monkeypatch.setattr(settings_router, "BACKEND_ENV_FILE", env_file)
 
-    settings_router._persist_enterprise_ai_api_key("new-secret")
+    ModelSettingsStore._write_api_key(env_file, "new-secret")
 
     updated = env_file.read_text(encoding="utf-8")
     assert "old-secret" not in updated
@@ -1741,7 +1744,7 @@ def test_enterprise_ai_api_key_env_update_and_clear_are_atomic(
     assert "DEBUG=true" in updated
     assert stat.S_IMODE(env_file.stat().st_mode) == 0o600
 
-    settings_router._persist_enterprise_ai_api_key("")
+    ModelSettingsStore._write_api_key(env_file, None)
 
     cleared = env_file.read_text(encoding="utf-8")
     assert "OCI_ENTERPRISE_AI_API_KEY" not in cleared
@@ -1826,10 +1829,10 @@ def test_environment_model_secret_takes_precedence_over_v1_json(tmp_path: Path) 
     assert settings.legacy_model_secret_detected is True
 
 
-def test_v2_model_settings_never_reads_api_key_field(tmp_path: Path) -> None:
+def test_v3_model_settings_never_reads_api_key_field(tmp_path: Path) -> None:
     model_settings_file = tmp_path / "model-settings.json"
     model_settings_file.write_text(
-        '{"version":2,"enterprise_ai":{"api_key":"must-not-load"}}',
+        '{"version":3,"enterprise_ai":{"api_key":"must-not-load"}}',
         encoding="utf-8",
     )
     settings = Settings(_env_file=None, model_settings_file=str(model_settings_file))
@@ -1944,7 +1947,7 @@ def test_model_settings_test_calls_enterprise_client(monkeypatch: MonkeyPatch) -
 
 
 def test_model_settings_error_sanitizer_never_returns_secret() -> None:
-    sanitized = settings_router._sanitize_model_test_error(
+    sanitized = sanitize_model_test_error(
         "gateway rejected Bearer request-secret with status 401",
         ["request-secret"],
     )

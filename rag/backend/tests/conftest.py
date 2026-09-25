@@ -39,6 +39,8 @@ def _oracle_db_session() -> None:
 def isolated_local_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """各テストで保存先とテスト補助 store を分離する。"""
     monkeypatch.setenv("MODEL_SETTINGS_FILE", str(tmp_path / "model-settings.json"))
+    # モデル設定の API key は JSON と同じ tmp ディレクトリの .env に保存される（#103）。
+    monkeypatch.delenv("OCI_ENTERPRISE_AI_API_KEY", raising=False)
     reset_local_store()
     reset_rate_limiter()
     reset_guardrail_static_cache()
@@ -117,7 +119,7 @@ def _reset_runtime_settings(settings: Settings, tmp_path: Path) -> None:
     settings.model_settings_file = str(tmp_path / "model-settings.json")
     settings.oci_enterprise_ai_endpoint = ""
     settings.oci_enterprise_ai_project_ocid = ""
-    settings.oci_enterprise_ai_api_key = ""
+    settings.set_runtime_enterprise_ai_api_key("")
     settings.oci_enterprise_ai_models = []
     settings.oci_enterprise_ai_default_model = ""
     settings.oci_enterprise_ai_llm_model = ""

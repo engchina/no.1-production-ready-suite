@@ -1490,6 +1490,7 @@ dependencies = [
     { name = "fastapi" },
     { name = "production-ready-backend-core" },
     { name = "pydantic" },
+    { name = "python-dotenv" },
     { name = "python-multipart" },
 ]
 
@@ -1500,6 +1501,7 @@ requires-dist = [
     { name = "oci", marker = "extra == 'oci'", specifier = ">=2.168" },
     { name = "production-ready-backend-core", editable = "../../platform/packages/backend_core" },
     { name = "pydantic", specifier = ">=2.11" },
+    { name = "python-dotenv", specifier = ">=1.0" },
     { name = "python-multipart", specifier = ">=0.0.20" },
 ]
 provides-extras = ["oci"]

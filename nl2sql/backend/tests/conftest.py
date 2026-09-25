@@ -14,6 +14,8 @@ import threading
 from collections.abc import Callable
 from typing import Any
 
+import pytest
+
 os.environ["ENABLE_METRICS"] = "false"
 os.environ["DEBUG"] = "false"
 os.environ["NL2SQL_SYNTHETIC_WORKER_MODE"] = "external"
@@ -70,3 +72,11 @@ def _install_test_threadpool_for_asgi_tests() -> None:
 
 
 _install_test_threadpool_for_asgi_tests()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_model_secret_env_file(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """モデル設定の API key の読み書きを、開発者の backend/.env から切り離す（#103）。"""
+    import app.settings as app_settings
+
+    monkeypatch.setattr(app_settings, "BACKEND_ENV_FILE", tmp_path / "model-secret.env")

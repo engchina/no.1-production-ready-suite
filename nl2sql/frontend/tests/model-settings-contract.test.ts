@@ -7,8 +7,12 @@ const settingsE2eSource = readFileSync(
   new URL("./e2e/nl2sql-system-settings.spec.ts", import.meta.url),
   "utf8"
 );
+// モデル設定の schema は3製品共通の pr_system_settings.model にある（#103）。
 const backendSettingsSchemaSource = readFileSync(
-  new URL("../../backend/app/schemas/settings.py", import.meta.url),
+  new URL(
+    "../../../platform/packages/system_settings_backend/src/pr_system_settings/model.py",
+    import.meta.url
+  ),
   "utf8"
 );
 

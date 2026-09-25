@@ -9,6 +9,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
+from pr_system_settings.model import MODEL_SETTINGS_DOCUMENT_VERSION
+
 from app.settings import Settings
 
 Severity = Literal["error", "warning", "info"]
@@ -241,7 +243,7 @@ def _audit_model_settings(result: ConfigAuditResult, path: Path) -> None:
         result.findings.append(
             AuditFinding("error", "MODEL_SETTINGS_LEGACY_SECRET", ("enterprise_ai.api_key",))
         )
-    if version != 2:
+    if version != MODEL_SETTINGS_DOCUMENT_VERSION:
         result.findings.append(AuditFinding("warning", "MODEL_SETTINGS_VERSION_LEGACY"))
     _audit_env_permissions(result, path, code="MODEL_SETTINGS_PERMISSIONS_NOT_0600")
 
