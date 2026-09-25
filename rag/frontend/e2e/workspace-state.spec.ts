@@ -148,7 +148,7 @@ test.describe("未保存変更の離脱ガード", () => {
   test("業務ビューの下書きは確認のうえ移動しても、このタブに戻ると復元される", async ({ page }) => {
     await page.route("**/api/business-views**", (route) => route.fulfill(pageEnvelope([])));
     await page.route("**/api/knowledge-bases**", (route) => route.fulfill(pageEnvelope([])));
-    await page.goto("/business-views");
+    await page.goto("/business-views?id=new");
     const name = page.locator("#business-view-name");
     await name.fill("購買アシスタント");
 
@@ -157,8 +157,14 @@ test.describe("未保存変更の離脱ガード", () => {
     await expect(dialog).toBeVisible();
     await dialog.getByRole("button", { name: "移動する" }).click();
     await expect(page).toHaveURL(/\/search$/);
+    // エディタのパンくずにも同じ名前のリンクがあるため、検索画面へ描画し終えてからサイドナビを押す。
+    await expect(page.getByRole("heading", { name: "RAG 検索", level: 1 })).toBeVisible();
 
+    // サイドナビは一覧へ戻る（編集対象は ?id= が唯一の情報源。#147）。新規の下書きは一覧から再開する。
     await openFromSidebar(page, "業務ビュー (Business View)");
+    await expect(page).toHaveURL(/\/business-views$/);
+    await page.getByRole("button", { name: "下書きを開く" }).click();
+    await expect(page).toHaveURL(/\/business-views\?id=new$/);
     await expect(page.locator("#business-view-name")).toHaveValue("購買アシスタント");
     await expect(page.getByText("保存していない下書きを復元しました。")).toBeVisible();
   });

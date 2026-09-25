@@ -1,4 +1,4 @@
-import { Pencil, Save, Search, Trash2, X } from "lucide-react";
+import { Save, Search, Trash2, X } from "lucide-react";
 import { useState } from "react";
 
 import {
@@ -11,8 +11,11 @@ import {
   Switch,
   TextField,
   toast,
+  useConfirm,
   type SelectFieldOption,
 } from "@engchina/production-ready-ui";
+
+import { RowTitleButton } from "@/components/layout/EntityLayout";
 
 import {
   api,
@@ -82,6 +85,14 @@ function formFromRow(kind: RuntimeKnowledgeKind, row: Row): FormState {
   };
 }
 
+function rowKey(kind: RuntimeKnowledgeKind, row: Row): string {
+  return kind === "terms" ? text(row.term) : text(row.id);
+}
+
+function rowName(kind: RuntimeKnowledgeKind, row: Row): string {
+  return kind === "terms" ? text(row.term) : text(row.title) || text(row.id);
+}
+
 function errorMessage(error: unknown, fallback: string) {
   return error instanceof ApiError ? error.message : fallback;
 }
@@ -94,6 +105,7 @@ export function RuntimeKnowledgeManager({
 }) {
   const query = useRuntimeKnowledge(businessViewId);
   const save = useEditRuntimeKnowledge(businessViewId);
+  const confirm = useConfirm();
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   // 読み込んだ行（または空の新規）を基準に、未保存の入力だけを離脱ガードの対象にする。
   const [baseline, setBaseline] = useState<FormState>(EMPTY_FORM);
@@ -140,6 +152,19 @@ export function RuntimeKnowledgeManager({
       },
     );
 
+  const confirmDelete = async () => {
+    const ok = await confirm({
+      title: t("businessViews.runtime.deleteConfirm.title"),
+      description: t("businessViews.runtime.deleteConfirm.description", {
+        name: form.selected ?? "",
+      }),
+      confirmLabel: t("businessViews.faq.delete"),
+      tone: "danger",
+      dismissOnOverlay: false,
+    });
+    if (ok) submit(true);
+  };
+
   const runPreview = async () => {
     setPreviewing(true);
     try {
@@ -164,12 +189,15 @@ export function RuntimeKnowledgeManager({
               : "businessViews.runtime.ruleTitle",
           ),
           rowHeader: true,
+          // 名前のボタンと行のクリックで編集フォームへ読み込む（page-archetypes.md §0-7）。
           render: (row) => (
-            <span className="break-words">
-              {kind === "terms"
-                ? text(row.term)
-                : text(row.title) || text(row.id)}
-            </span>
+            <RowTitleButton
+              title={rowName(kind, row)}
+              ariaLabel={t("businessViews.runtime.editNamed", {
+                name: rowName(kind, row),
+              })}
+              onClick={() => load(formFromRow(kind, row))}
+            />
           ),
         },
         {
@@ -201,24 +229,11 @@ export function RuntimeKnowledgeManager({
               />
             ),
         },
-        {
-          key: "actions",
-          header: t("businessViews.faq.actions"),
-          align: "right",
-          render: (row) => (
-            <Button
-              size="sm"
-              variant="ghost"
-              icon={Pencil}
-              onClick={() => load(formFromRow(kind, row))}
-            >
-              {t("businessViews.runtime.edit")}
-            </Button>
-          ),
-        },
       ]}
       rows={rows}
-      getRowKey={(row) => (kind === "terms" ? text(row.term) : text(row.id))}
+      getRowKey={(row) => rowKey(kind, row)}
+      onRowClick={(row) => load(formFromRow(kind, row))}
+      selectedRowKey={form.kind === kind ? form.selected : null}
       loading={query.isPending}
       dense
       empty={<EmptyState title={t("businessViews.runtime.empty")} />}
@@ -328,7 +343,7 @@ export function RuntimeKnowledgeManager({
                   variant="danger"
                   icon={Trash2}
                   disabled={save.isPending}
-                  onClick={() => submit(true)}
+                  onClick={() => void confirmDelete()}
                 >
                   {t("businessViews.faq.delete")}
                 </Button>
