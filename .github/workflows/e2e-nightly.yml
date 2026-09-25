@@ -1,0 +1,71 @@
+name: E2E Nightly
+
+# RAG / NL2SQL の Playwright E2E を毎晩 main で全件実行する（#133）。
+# PR の CI（ci.yml の rag-e2e / nl2sql-e2e）は変更のあった製品だけを実行するので、
+# 変更の無い製品の回帰や、遅い環境でだけ出る flaky をここで拾う。Agent の E2E は ci.yml の agent-checks が実行する。
+
+on:
+  schedule:
+    - cron: "0 18 * * *" # 03:00 JST
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    name: ${{ matrix.product }} / E2E nightly (${{ matrix.shard }}/${{ matrix.total }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { product: rag, node: "22", shard: 1, total: 2 }
+          - { product: rag, node: "22", shard: 2, total: 2 }
+          - { product: nl2sql, node: "24", shard: 1, total: 8 }
+          - { product: nl2sql, node: "24", shard: 2, total: 8 }
+          - { product: nl2sql, node: "24", shard: 3, total: 8 }
+          - { product: nl2sql, node: "24", shard: 4, total: 8 }
+          - { product: nl2sql, node: "24", shard: 5, total: 8 }
+          - { product: nl2sql, node: "24", shard: 6, total: 8 }
+          - { product: nl2sql, node: "24", shard: 7, total: 8 }
+          - { product: nl2sql, node: "24", shard: 8, total: 8 }
+    defaults:
+      run:
+        working-directory: ${{ matrix.product }}/frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: |
+            ${{ matrix.product }}/frontend/package-lock.json
+            platform/package-lock.json
+
+      - name: Build shared UI package
+        working-directory: platform
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Playwright E2E
+        run: npx playwright test --shard=${{ matrix.shard }}/${{ matrix.total }} --workers=1
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: nightly-${{ matrix.product }}-playwright-${{ matrix.shard }}
+          path: ${{ matrix.product }}/frontend/test-results
+          retention-days: 7
