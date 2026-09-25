@@ -304,14 +304,63 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # lint / type check / dependency audit / Playwright E2E は CI では実行しない
-      # (nl2sql と同一構成)。型検査は build の `tsc --noEmit` が兼ねる。
-      # lint / audit / E2E はローカル検証と PR review で確認する。
+      # 型検査は build の `tsc --noEmit` が兼ねる。Playwright E2E は rag-e2e job（#133）。
+      # lint / audit はローカル検証と PR review で確認する。
       - name: Unit test
         run: npm test
 
       - name: Build
         run: npm run build
+
+  rag-e2e:
+    name: RAG / E2E (${{ matrix.shard }}/2)
+    needs: changes
+    if: needs.changes.outputs.rag == 'true' || needs.changes.outputs.platform == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    defaults:
+      run:
+        working-directory: rag/frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            rag/frontend/package-lock.json
+            platform/package-lock.json
+
+      - name: Build shared UI package
+        working-directory: platform
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      # desktop / mobile の 2 project を shard で分けて実行する（#133）。CI=true で retries 2。
+      - name: Playwright E2E
+        run: npx playwright test --shard=${{ matrix.shard }}/2
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: rag-playwright-${{ matrix.shard }}
+          path: rag/frontend/test-results
+          retention-days: 7
 
   rag-compose:
     name: RAG / Docker Compose
@@ -552,6 +601,56 @@ jobs:
       - name: Build
         run: npm run build
 
+  nl2sql-e2e:
+    name: NL2SQL / E2E (${{ matrix.shard }}/4)
+    needs: changes
+    if: needs.changes.outputs.nl2sql == 'true' || needs.changes.outputs.platform == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    defaults:
+      run:
+        working-directory: nl2sql/frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: |
+            nl2sql/frontend/package-lock.json
+            platform/package-lock.json
+
+      - name: Build shared UI package
+        working-directory: platform
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      # desktop / mobile の 2 project を shard で分けて実行する（#133）。CI=true で retries 2。
+      - name: Playwright E2E
+        run: npx playwright test --shard=${{ matrix.shard }}/4
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: nl2sql-playwright-${{ matrix.shard }}
+          path: nl2sql/frontend/test-results
+          retention-days: 7
+
   nl2sql-backend:
     name: NL2SQL / Backend
     needs: changes
@@ -670,9 +769,11 @@ jobs:
       - rag-backend
       - rag-docrag-core
       - rag-frontend
+      - rag-e2e
       - rag-compose
       - nl2sql-terraform
       - nl2sql-frontend
+      - nl2sql-e2e
       - nl2sql-backend
       - agent-checks
     runs-on: ubuntu-latest
