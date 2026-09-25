@@ -258,7 +258,7 @@ test.beforeEach(async ({ page }) => {
   await mockDatabasePage(page);
 });
 
-test("システム設定の独立メニューからシステムテーブル管理を開ける", async ({ page }) => {
+test("運用設定のメニューからシステムテーブル管理を開ける", async ({ page }) => {
   await page.route("**/api/settings/database/system-tables", (route) =>
     fulfill(route, systemTables("ready"))
   );
@@ -266,6 +266,12 @@ test("システム設定の独立メニューからシステムテーブル管�
   await page.goto("/settings/database");
   await expect(page.locator("#system-tables")).toHaveCount(0);
 
+  // システムテーブルは「運用設定」（既定で折りたたみ）にある（#81）。
+  // 375px のアイコン表示ではセクションを折りたたまないため、展開ボタンがあるときだけ押す。
+  const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
+  await expect(sidebar.getByRole("link", { name: "データベース" })).toBeVisible();
+  const expandOperations = sidebar.getByRole("button", { name: "運用設定 を展開" });
+  if (await expandOperations.isVisible()) await expandOperations.click();
   await page.getByRole("link", { name: "システムテーブル" }).click();
   await expect(page).toHaveURL(/\/settings\/system-tables$/);
   await expect(page.getByRole("heading", { name: "システムテーブル管理" })).toBeVisible();

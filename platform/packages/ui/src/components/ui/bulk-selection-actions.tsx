@@ -1,7 +1,7 @@
 import { CheckSquare, X } from "lucide-react";
 
-import { Button, type ButtonProps } from "@engchina/production-ready-ui";
-import { cn } from "@/lib/utils";
+import { Button, type ButtonProps } from "./button";
+import { cn } from "../../lib/utils";
 
 export interface BulkSelectionActionsProps {
   selectLabel: string;

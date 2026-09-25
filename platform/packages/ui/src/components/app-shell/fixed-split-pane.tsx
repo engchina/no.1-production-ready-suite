@@ -14,6 +14,7 @@ import {
 
 import {
   FIXED_SPLIT_DIVIDER_SIZE_PX,
+  FIXED_SPLIT_STORAGE_PREFIX,
   FIXED_SPLIT_DEFAULT_MIN_PANE_WIDTH_PX,
   FIXED_SPLIT_KEYBOARD_FAST_STEP_PX,
   FIXED_SPLIT_KEYBOARD_STEP_PX,
@@ -32,11 +33,29 @@ import {
   type FixedSplitPaneState,
   type FixedSplitRatio,
   type FixedSplitWidePane,
-} from "@/lib/fixed-split-pane";
-import { t } from "@/lib/i18n";
-import { cn } from "@/lib/utils";
+} from "../../lib/fixed-split-pane";
+import { cn } from "../../lib/utils";
 
-interface FixedSplitPaneProps {
+/** 分割ペインの文言。製品の i18n で上書きできる。 */
+export interface FixedSplitPaneLabels {
+  /** divider（role="separator"）の読み上げ名。 */
+  separator: string;
+  /** divider の操作の案内。 */
+  hint: string;
+  equal: string;
+  leftWide: string;
+  rightWide: string;
+}
+
+export const DEFAULT_FIXED_SPLIT_PANE_LABELS: FixedSplitPaneLabels = {
+  separator: "左右ペインの表示比率",
+  hint: "ドラッグで調整・ダブルクリックで表示比率を切替",
+  equal: "左右 1:1",
+  leftWide: "左を広く表示",
+  rightWide: "右を広く表示",
+};
+
+export interface FixedSplitPaneProps {
   splitId: string;
   preferredWidePane: FixedSplitWidePane;
   left: ReactNode;
@@ -46,23 +65,30 @@ interface FixedSplitPaneProps {
   rightClassName?: string;
   minLeftPaneWidthPx?: number;
   minRightPaneWidthPx?: number;
+  /** 比率を保存する localStorage key の前置き（既定 `production-ready.fixedSplitPane`）。 */
+  storagePrefix?: string;
+  labels?: Partial<FixedSplitPaneLabels>;
 }
 
-function readStoredState(splitId: string, preferredWidePane: FixedSplitWidePane): FixedSplitPaneState {
+function readStoredState(
+  splitId: string,
+  preferredWidePane: FixedSplitWidePane,
+  storagePrefix: string,
+): FixedSplitPaneState {
   const fallbackState = fixedSplitStateForPreferredWidePane(preferredWidePane);
   if (typeof window === "undefined") return fallbackState;
   try {
-    const value = window.localStorage.getItem(fixedSplitStorageKey(splitId));
+    const value = window.localStorage.getItem(fixedSplitStorageKey(splitId, storagePrefix));
     return parseFixedSplitStorageValue(value, fallbackState);
   } catch {
     return fallbackState;
   }
 }
 
-function valueText(ratio: FixedSplitRatio) {
-  if (ratio === "leftWide") return t("fixedSplitPane.value.leftWide");
-  if (ratio === "rightWide") return t("fixedSplitPane.value.rightWide");
-  return t("fixedSplitPane.value.equal");
+function valueText(ratio: FixedSplitRatio, labels: FixedSplitPaneLabels) {
+  if (ratio === "leftWide") return labels.leftWide;
+  if (ratio === "rightWide") return labels.rightWide;
+  return labels.equal;
 }
 
 export function FixedSplitPane({
@@ -75,7 +101,10 @@ export function FixedSplitPane({
   rightClassName,
   minLeftPaneWidthPx = FIXED_SPLIT_DEFAULT_MIN_PANE_WIDTH_PX,
   minRightPaneWidthPx = FIXED_SPLIT_DEFAULT_MIN_PANE_WIDTH_PX,
+  storagePrefix = FIXED_SPLIT_STORAGE_PREFIX,
+  labels: labelOverrides,
 }: FixedSplitPaneProps) {
+  const labels = { ...DEFAULT_FIXED_SPLIT_PANE_LABELS, ...labelOverrides };
   const rootRef = useRef<HTMLDivElement | null>(null);
   const hintId = useId();
   const dragStartXRef = useRef(0);
@@ -85,7 +114,7 @@ export function FixedSplitPane({
   const previousBodyCursorRef = useRef("");
   const previousBodyUserSelectRef = useRef("");
   const [splitState, setSplitState] = useState<FixedSplitPaneState>(() =>
-    readStoredState(splitId, preferredWidePane)
+    readStoredState(splitId, preferredWidePane, storagePrefix)
   );
   const [isDragging, setIsDragging] = useState(false);
   const [rootWidth, setRootWidth] = useState(0);
@@ -94,17 +123,17 @@ export function FixedSplitPane({
   );
 
   useEffect(() => {
-    setSplitState(readStoredState(splitId, preferredWidePane));
-  }, [preferredWidePane, splitId]);
+    setSplitState(readStoredState(splitId, preferredWidePane, storagePrefix));
+  }, [preferredWidePane, splitId, storagePrefix]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
     try {
-      window.localStorage.setItem(fixedSplitStorageKey(splitId), serializeFixedSplitState(splitState));
+      window.localStorage.setItem(fixedSplitStorageKey(splitId, storagePrefix), serializeFixedSplitState(splitState));
     } catch {
       // Storage が無効な環境では現在セッション内の state だけで動かす。
     }
-  }, [splitId, splitState]);
+  }, [splitId, splitState, storagePrefix]);
 
   useEffect(() => {
     return () => {
@@ -299,12 +328,12 @@ export function FixedSplitPane({
       <div
         role="separator"
         aria-orientation="vertical"
-        aria-label={t("fixedSplitPane.separatorLabel")}
+        aria-label={labels.separator}
         aria-describedby={hintId}
         aria-valuemin={Math.ceil(fractionBounds.minFraction * 100)}
         aria-valuemax={Math.floor(fractionBounds.maxFraction * 100)}
         aria-valuenow={Math.round(constrainedLeftFraction * 100)}
-        aria-valuetext={`${valueText(splitState.ratio)} ${Math.round(constrainedLeftFraction * 100)}%`}
+        aria-valuetext={`${valueText(splitState.ratio, labels)} ${Math.round(constrainedLeftFraction * 100)}%`}
         tabIndex={0}
         className="fixed-split-pane__divider"
         data-dragging={isDragging ? "true" : "false"}
@@ -320,7 +349,7 @@ export function FixedSplitPane({
           <span className="fixed-split-pane__dot" />
         </span>
         <span id={hintId} className="sr-only">
-          {t("fixedSplitPane.hint")}
+          {labels.hint}
         </span>
       </div>
       <div

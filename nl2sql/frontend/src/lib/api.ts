@@ -9,6 +9,48 @@ import {
 import { t } from "./i18n";
 
 // OCI 認証 API の型は platform の共有パッケージが正本（#100）。
+// モデル設定の API 型は3製品共通（platform の共有パッケージ。#103）。
+// データベース設定の API 型は3製品共通（platform の共有パッケージ。#108）。
+export type {
+  AdbInfoData,
+  AdbOperationStatus,
+  AdbSettingsUpdate,
+  DatabaseConnectionSecurity,
+  DatabaseConnectionTestResult,
+  DatabaseConnectionTestStatus,
+  DatabasePasswordRevealData,
+  DatabaseSettingsData,
+  DatabaseSettingsUpdate,
+  DatabaseWalletDownloadData,
+} from "@engchina/production-ready-system-settings";
+import type {
+  AdbInfoData,
+  AdbSettingsUpdate,
+  DatabaseConnectionTestResult,
+  DatabasePasswordRevealData,
+  DatabaseSettingsData,
+  DatabaseSettingsUpdate,
+  DatabaseWalletDownloadData,
+} from "@engchina/production-ready-system-settings";
+export type {
+  EnterpriseAiConfiguredModel,
+  EnterpriseAiModelSettings,
+  EnterpriseAiVlmInputMode,
+  GenerativeAiModelSettings,
+  ModelSettingsData,
+  ModelSettingsPayload,
+  ModelSettingsSecretSource,
+  ModelSettingsTestRequest,
+  ModelSettingsTestResult,
+  ModelSettingsTestStatus,
+  ModelSettingsTestTargetType,
+} from "@engchina/production-ready-system-settings";
+import type {
+  ModelSettingsData,
+  ModelSettingsPayload,
+  ModelSettingsTestRequest,
+  ModelSettingsTestResult,
+} from "@engchina/production-ready-system-settings";
 export type {
   OciConfigField,
   OciConfigReadData,
@@ -102,13 +144,18 @@ export function isTimeoutError(cause: unknown): boolean {
 function requestSignal(options: ApiRequestOptions): AbortSignal | undefined {
   if (!options.timeoutMs || options.timeoutMs <= 0) return options.signal;
   const timeoutSignal = AbortSignal.timeout(options.timeoutMs);
-  return options.signal ? AbortSignal.any([options.signal, timeoutSignal]) : timeoutSignal;
+  return options.signal
+    ? AbortSignal.any([options.signal, timeoutSignal])
+    : timeoutSignal;
 }
 
 function readCookie(name: string): string | null {
   if (typeof document === "undefined") return null;
   const prefix = `${encodeURIComponent(name)}=`;
-  const item = document.cookie.split(";").map((value) => value.trim()).find((value) => value.startsWith(prefix));
+  const item = document.cookie
+    .split(";")
+    .map((value) => value.trim())
+    .find((value) => value.startsWith(prefix));
   return item ? decodeURIComponent(item.slice(prefix.length)) : null;
 }
 
@@ -137,7 +184,8 @@ function recoverPersistenceForSafeRead(): Promise<boolean> {
       return false;
     }
   })().finally(() => {
-    if (inFlightPersistenceRecovery === recovery) inFlightPersistenceRecovery = null;
+    if (inFlightPersistenceRecovery === recovery)
+      inFlightPersistenceRecovery = null;
   });
   inFlightPersistenceRecovery = recovery;
   return recovery;
@@ -145,12 +193,15 @@ function recoverPersistenceForSafeRead(): Promise<boolean> {
 
 function notifyAuthStatus(response: Response) {
   if (typeof window === "undefined") return;
-  if (response.status === 401) window.dispatchEvent(new CustomEvent("app-auth-unauthorized"));
+  if (response.status === 401)
+    window.dispatchEvent(new CustomEvent("app-auth-unauthorized"));
   if (response.status === 403) {
     window.dispatchEvent(
       new CustomEvent("app-auth-forbidden", {
-        detail: { requestId: response.headers.get("X-Request-ID") || undefined },
-      })
+        detail: {
+          requestId: response.headers.get("X-Request-ID") || undefined,
+        },
+      }),
     );
   }
 }
@@ -159,7 +210,7 @@ async function recoverAndRetrySafeRequest(
   path: string,
   method: string,
   init: RequestInit,
-  failure: DatabaseOperationalFailure | null
+  failure: DatabaseOperationalFailure | null,
 ): Promise<Response | null> {
   if (
     failure?.kind !== "persistence" ||
@@ -178,7 +229,10 @@ async function recoverAndRetrySafeRequest(
 /**
  * アプリ全体の API 境界。Cookie セッション、CSRF、認証状態イベントを一箇所で扱う。
  */
-export async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
+export async function apiFetch(
+  path: string,
+  init: RequestInit = {},
+): Promise<Response> {
   const method = (init.method ?? "GET").toUpperCase();
   const headers = new Headers(init.headers);
   headers.set("Accept", headers.get("Accept") ?? "application/json");
@@ -186,7 +240,11 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
     const csrfToken = readCookie("nl2sql_csrf");
     if (csrfToken) headers.set("X-CSRF-Token", csrfToken);
   }
-  const requestInit = { ...init, headers, credentials: "include" } satisfies RequestInit;
+  const requestInit = {
+    ...init,
+    headers,
+    credentials: "include",
+  } satisfies RequestInit;
   let response: Response;
   try {
     response = await fetch(path, requestInit);
@@ -197,7 +255,12 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
       await confirmDatabaseUnavailable(fetch, (next) => {
         failure = next;
       });
-      const retried = await recoverAndRetrySafeRequest(path, method, requestInit, failure);
+      const retried = await recoverAndRetrySafeRequest(
+        path,
+        method,
+        requestInit,
+        failure,
+      );
       if (retried) {
         notifyAuthStatus(retried);
         return retried;
@@ -212,7 +275,12 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
     await confirmDatabaseUnavailable(fetch, (next) => {
       failure = next;
     });
-    const retried = await recoverAndRetrySafeRequest(path, method, requestInit, failure);
+    const retried = await recoverAndRetrySafeRequest(
+      path,
+      method,
+      requestInit,
+      failure,
+    );
     if (retried) {
       notifyAuthStatus(retried);
       return retried;
@@ -232,7 +300,9 @@ async function parseJson<T>(response: Response): Promise<T> {
     // 共通例外ハンドラは ApiResponse { error_messages: [...] } 形式で返す
     const errorMessages = payload.error_messages;
     const detailMessages =
-      typeof payload.detail === "object" && payload.detail !== null && "errors" in payload.detail
+      typeof payload.detail === "object" &&
+      payload.detail !== null &&
+      "errors" in payload.detail
         ? (payload.detail as { errors?: unknown }).errors
         : undefined;
     const messages = Array.isArray(detailMessages)
@@ -241,17 +311,22 @@ async function parseJson<T>(response: Response): Promise<T> {
         ? errorMessages.map(String)
         : [
             payload.error ||
-              (payload.detail ? String(payload.detail) : "API リクエストに失敗しました"),
+              (payload.detail
+                ? String(payload.detail)
+                : "API リクエストに失敗しました"),
           ];
     const problem = decodeApiProblem(payload.problem);
-    const requestId = problem?.request_id || response.headers.get("X-Request-ID") || payload.request_id;
+    const requestId =
+      problem?.request_id ||
+      response.headers.get("X-Request-ID") ||
+      payload.request_id;
     throw new ApiError(
       response.status,
       messages,
       payload.error_code,
       payload.error_details,
       problem,
-      requestId
+      requestId,
     );
   }
   return payload.data;
@@ -262,24 +337,30 @@ export interface ApiResponseMetadata<T> {
   etag: string;
 }
 
-export async function apiGet<T>(path: string, options: ApiRequestOptions = {}): Promise<T> {
+export async function apiGet<T>(
+  path: string,
+  options: ApiRequestOptions = {},
+): Promise<T> {
   const response = await apiFetch(path, { signal: requestSignal(options) });
   return parseJson<T>(response);
 }
 
 export async function apiGetWithMetadata<T>(
   path: string,
-  options: ApiRequestOptions = {}
+  options: ApiRequestOptions = {},
 ): Promise<ApiResponseMetadata<T>> {
   const response = await apiFetch(path, { signal: requestSignal(options) });
   const data = await parseJson<T>(response);
-  return { data, etag: response.headers.get("ETag")?.replaceAll('"', "") ?? "" };
+  return {
+    data,
+    etag: response.headers.get("ETag")?.replaceAll('"', "") ?? "",
+  };
 }
 
 export async function apiPost<T>(
   path: string,
   body?: unknown,
-  options: ApiRequestOptions = {}
+  options: ApiRequestOptions = {},
 ): Promise<T> {
   const headers = new Headers(options.headers);
   headers.set("Accept", "application/json");
@@ -296,7 +377,7 @@ export async function apiPost<T>(
 export async function apiPostForm<T>(
   path: string,
   body: FormData,
-  options: ApiRequestOptions = {}
+  options: ApiRequestOptions = {},
 ): Promise<T> {
   const response = await apiFetch(path, {
     method: "POST",
@@ -310,11 +391,15 @@ export async function apiPatch<T>(
   path: string,
   body?: unknown,
   headers: Record<string, string> = {},
-  options: ApiRequestOptions = {}
+  options: ApiRequestOptions = {},
 ): Promise<T> {
   const response = await apiFetch(path, {
     method: "PATCH",
-    headers: { Accept: "application/json", "Content-Type": "application/json", ...headers },
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      ...headers,
+    },
     body: body === undefined ? undefined : JSON.stringify(body),
     signal: requestSignal(options),
   });
@@ -324,7 +409,7 @@ export async function apiPatch<T>(
 export async function apiDelete<T>(
   path: string,
   headers: Record<string, string> = {},
-  options: ApiRequestOptions = {}
+  options: ApiRequestOptions = {},
 ): Promise<T> {
   const response = await apiFetch(path, {
     method: "DELETE",
@@ -335,21 +420,7 @@ export async function apiDelete<T>(
 }
 
 export type JsonValue =
-  | string
-  | number
-  | boolean
-  | null
-  | JsonValue[]
-  | { [key: string]: JsonValue };
-
-export type ModelSettingsSecretSource = "environment" | "legacy_json" | "missing";
-export type ModelSettingsTestStatus = "success" | "failed";
-export type ModelSettingsTestTargetType =
-  | "enterprise_text"
-  | "enterprise_vision"
-  | "embedding"
-  | "rerank";
-export type DatabaseConnectionTestStatus = "success" | "failed";
+  string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 
 export interface DatabaseStatusData {
   context_id?: string;
@@ -380,96 +451,9 @@ export interface SettingsApiResponse<T> {
   request_id?: string;
 }
 
-export interface EnterpriseAiConfiguredModel {
-  model_id: string;
-  display_name: string;
-  vision_enabled: boolean;
-}
-
-export type EnterpriseAiVlmInputMode = "auto" | "files_api" | "inline_image";
-
-export interface EnterpriseAiModelSettings {
-  endpoint: string;
-  project_ocid: string;
-  api_key: string;
-  has_api_key: boolean;
-  clear_api_key: boolean;
-  models: EnterpriseAiConfiguredModel[];
-  default_model_id: string;
-  api_path: string;
-  vlm_input_mode: EnterpriseAiVlmInputMode;
-  text_payload_template: string;
-  vision_payload_template: string;
-  text_response_path: string;
-  vision_response_path: string;
-  timeout_seconds: number;
-  max_retries: number;
-  llm_max_output_tokens: number;
-  vlm_max_output_tokens: number;
-}
-
-export interface GenerativeAiModelSettings {
-  embedding_model: string;
-  embedding_dim: number;
-  rerank_model: string;
-}
-
-export interface ModelSettingsPayload {
-  enterprise_ai: EnterpriseAiModelSettings;
-  generative_ai: GenerativeAiModelSettings;
-}
-
-export interface ModelSettingsData {
-  settings: ModelSettingsPayload;
-  model_settings_file: string;
-  source: "runtime";
-  secret_source: ModelSettingsSecretSource;
-  legacy_secret_detected: boolean;
-}
-
-export interface ModelSettingsTestRequest {
-  settings: ModelSettingsPayload;
-  target_type: ModelSettingsTestTargetType;
-  model_id: string;
-  vision_enabled: boolean;
-}
-
-export interface ModelSettingsTestResult {
-  status: ModelSettingsTestStatus;
-  target_type: ModelSettingsTestTargetType;
-  model_id: string;
-  message: string;
-  troubleshooting: string[];
-  raw_error: string | null;
-  error_type: string | null;
-  elapsed_ms: number;
-  checked_at: string;
-  details: Record<string, string | number | boolean | null>;
-}
-
-export type DatabaseConnectionSecurity = "wallet_mtls" | "walletless_tls";
-
-export interface DatabaseSettingsData {
-  user: string;
-  dsn: string;
-  driver_mode: "thin" | "thick";
-  connection_security: DatabaseConnectionSecurity;
-  client_lib_dir: string;
-  wallet_dir: string;
-  wallet_uploaded: boolean;
-  available_services: string[];
-  has_password: boolean;
-  has_wallet_password: boolean;
-  readiness: string;
-  embedding_dimension: number;
-  vector_column: string;
-  adb_ocid: string;
-  region: string;
-  config_source: "runtime";
-}
-
 export type SelectAiCredentialRegion = "ap-osaka-1" | "us-chicago-1";
-export type SelectAiCredentialOperation = "created" | "recreated" | "already_exists";
+export type SelectAiCredentialOperation =
+  "created" | "recreated" | "already_exists";
 
 export interface SelectAiCredentialData {
   credential_name: "OCI_CRED";
@@ -487,13 +471,11 @@ export interface SelectAiCredentialCreateRequest {
   recreate: boolean;
 }
 
-export type SystemTableSchemaStatus = "missing" | "partial" | "outdated" | "ready";
+export type SystemTableSchemaStatus =
+  "missing" | "partial" | "outdated" | "ready";
 export type SystemTableOperationStatus = "idle" | "running" | "failed";
 export type SystemTableOperationResult =
-  | "no_op"
-  | "initialized"
-  | "migrated"
-  | "recreated";
+  "no_op" | "initialized" | "migrated" | "recreated";
 
 export interface SystemTableMissingObject {
   name: string;
@@ -508,7 +490,8 @@ export interface SystemTableMetadata {
   last_analyzed_at: string | null;
 }
 
-export type SystemObjectType = "TABLE" | "INDEX" | "SEQUENCE" | "PACKAGE" | "PACKAGE BODY";
+export type SystemObjectType =
+  "TABLE" | "INDEX" | "SEQUENCE" | "PACKAGE" | "PACKAGE BODY";
 
 export interface SystemObjectMetadata {
   name: string;
@@ -559,15 +542,6 @@ export interface SystemTablesOperationData extends SystemTablesStatusData {
 
 export type DatabaseWalletDownloadStatus = "downloaded" | "already_configured";
 
-export interface DatabaseWalletDownloadData {
-  status: DatabaseWalletDownloadStatus;
-  settings: DatabaseSettingsData;
-}
-
-export interface DatabasePasswordRevealData {
-  password: string;
-}
-
 export interface SchemaOwnersData {
   current_owner: string;
   owners: Array<{
@@ -577,56 +551,6 @@ export interface SchemaOwnersData {
     view_count: number;
   }>;
   excluded_oracle_maintained_count: number;
-}
-
-export type AdbOperationStatus =
-  | "success"
-  | "not_configured"
-  | "error"
-  | "accepted"
-  | "already_available"
-  | "already_stopped"
-  | "cannot_start"
-  | "cannot_stop";
-
-export interface AdbInfoData {
-  status: AdbOperationStatus;
-  message: string;
-  error_code?: string | null;
-  id: string | null;
-  display_name: string | null;
-  lifecycle_state: string | null;
-  db_name: string | null;
-  cpu_core_count: number | null;
-  data_storage_size_in_tbs: number | null;
-  region: string | null;
-}
-
-export interface AdbSettingsUpdate {
-  adb_ocid: string;
-  region: string;
-}
-
-export interface DatabaseSettingsUpdate {
-  user: string;
-  dsn: string;
-  connection_security?: DatabaseConnectionSecurity;
-  wallet_dir: string;
-  password?: string;
-  wallet_password?: string;
-  clear_password?: boolean;
-  clear_wallet_password?: boolean;
-}
-
-export interface DatabaseConnectionTestResult {
-  status: DatabaseConnectionTestStatus;
-  readiness: string;
-  message: string;
-  elapsed_ms: number;
-  troubleshooting: string[];
-  details: Record<string, string | number | boolean | null>;
-  checked_at: string;
-  error_type: string | null;
 }
 
 /** API 由来のエラー。`messages` は日本語のユーザー向け文言。 */
@@ -649,14 +573,15 @@ export class ApiError extends Error {
     errorCode?: string,
     details?: ApiErrorDetails,
     problem?: ApiProblem,
-    requestId?: string
+    requestId?: string,
   ) {
-    const baseMessages = messages.length > 0 ? messages : [`APIエラー (${status})`];
+    const baseMessages =
+      messages.length > 0 ? messages : [`APIエラー (${status})`];
     const displayMessages = errorMessagesWithRequestId(
       status,
       baseMessages,
       problem?.request_id || requestId,
-      problem?.code ?? errorCode
+      problem?.code ?? errorCode,
     );
     super(displayMessages[0] ?? `APIエラー (${status})`);
     this.name = "ApiError";
@@ -694,7 +619,8 @@ export function decodeApiProblem(value: unknown): ApiProblem | undefined {
     status: candidate.status,
     detail: candidate.detail,
     code: candidate.code,
-    request_id: typeof candidate.request_id === "string" ? candidate.request_id : "",
+    request_id:
+      typeof candidate.request_id === "string" ? candidate.request_id : "",
     retryable: candidate.retryable === true,
     field_errors: fieldErrors,
   };
@@ -715,7 +641,7 @@ function errorMessagesWithRequestId(
   status: number,
   messages: string[],
   requestId?: string | null,
-  errorCode?: string
+  errorCode?: string,
 ): string[] {
   if (
     !requestId ||
@@ -739,13 +665,19 @@ function errorMessagesWithRequestId(
   ];
 }
 
-async function parseSettingsEnvelope<T>(response: Response): Promise<SettingsApiResponse<T>> {
+async function parseSettingsEnvelope<T>(
+  response: Response,
+): Promise<SettingsApiResponse<T>> {
   try {
     const payload = (await response.json()) as Partial<SettingsApiResponse<T>> &
       Partial<ApiEnvelope<T>> & { detail?: unknown };
     const errorMessages =
       payload.error_messages ??
-      (payload.error ? [payload.error] : payload.detail ? [String(payload.detail)] : []);
+      (payload.error
+        ? [payload.error]
+        : payload.detail
+          ? [String(payload.detail)]
+          : []);
     return {
       data: payload.data ?? null,
       error_messages: errorMessages,
@@ -759,7 +691,10 @@ async function parseSettingsEnvelope<T>(response: Response): Promise<SettingsApi
   }
 }
 
-async function settingsRequest<T>(path: string, init?: RequestInit): Promise<T> {
+async function settingsRequest<T>(
+  path: string,
+  init?: RequestInit,
+): Promise<T> {
   const response = await apiFetch(path, {
     ...init,
     headers: {
@@ -769,7 +704,10 @@ async function settingsRequest<T>(path: string, init?: RequestInit): Promise<T> 
   });
   const envelope = await parseSettingsEnvelope<T>(response);
   if (!response.ok) {
-    const requestId = envelope.problem?.request_id || response.headers.get("X-Request-ID") || envelope.request_id;
+    const requestId =
+      envelope.problem?.request_id ||
+      response.headers.get("X-Request-ID") ||
+      envelope.request_id;
     const messages =
       envelope.error_messages.length > 0
         ? envelope.error_messages
@@ -780,7 +718,7 @@ async function settingsRequest<T>(path: string, init?: RequestInit): Promise<T> 
       envelope.error_code,
       undefined,
       envelope.problem,
-      requestId
+      requestId,
     );
   }
   return envelope.data as T;
@@ -818,7 +756,10 @@ export const api = {
       body: JSON.stringify(body),
     }),
   testModelSettings: (body: ModelSettingsTestRequest) =>
-    settingsRequest<ModelSettingsTestResult>("/api/settings/model/test", jsonBody(body)),
+    settingsRequest<ModelSettingsTestResult>(
+      "/api/settings/model/test",
+      jsonBody(body),
+    ),
 
   getDatabaseSettings: (options: ApiRequestOptions = {}) =>
     settingsRequest<DatabaseSettingsData>("/api/settings/database", {
@@ -827,21 +768,24 @@ export const api = {
   getSelectAiCredential: (options: ApiRequestOptions = {}) =>
     settingsRequest<SelectAiCredentialData>(
       "/api/settings/database/select-ai-credential",
-      { signal: options.signal }
+      { signal: options.signal },
     ),
   createSelectAiCredential: (body: SelectAiCredentialCreateRequest) =>
     settingsRequest<SelectAiCredentialData>(
       "/api/settings/database/select-ai-credential",
-      jsonBody(body)
+      jsonBody(body),
     ),
   getSystemTablesStatus: (options: ApiRequestOptions = {}) =>
-    settingsRequest<SystemTablesStatusData>("/api/settings/database/system-tables", {
-      signal: options.signal,
-    }),
+    settingsRequest<SystemTablesStatusData>(
+      "/api/settings/database/system-tables",
+      {
+        signal: options.signal,
+      },
+    ),
   initializeSystemTables: (body: SystemTablesInitializeRequest) =>
     settingsRequest<SystemTablesOperationData>(
       "/api/settings/database/system-tables/initialize",
-      jsonBody(body)
+      jsonBody(body),
     ),
   getSchemaOwners: (options: ApiRequestOptions = {}) =>
     settingsRequest<SchemaOwnersData>("/api/schema/owners", {
@@ -856,25 +800,28 @@ export const api = {
   uploadDatabaseWallet: (file: File) => {
     const form = new FormData();
     form.append("file", file);
-    return settingsRequest<DatabaseSettingsData>("/api/settings/database/wallet", {
-      method: "POST",
-      body: form,
-    });
+    return settingsRequest<DatabaseSettingsData>(
+      "/api/settings/database/wallet",
+      {
+        method: "POST",
+        body: form,
+      },
+    );
   },
   downloadDatabaseWallet: () =>
     settingsRequest<DatabaseWalletDownloadData>(
       "/api/settings/database/wallet/download",
-      { method: "POST" }
+      { method: "POST" },
     ),
   revealDatabasePassword: () =>
     settingsRequest<DatabasePasswordRevealData>(
       "/api/settings/database/password/reveal",
-      { method: "POST" }
+      { method: "POST" },
     ),
   testDatabaseSettings: (body: DatabaseSettingsUpdate) =>
     settingsRequest<DatabaseConnectionTestResult>(
       "/api/settings/database/test",
-      jsonBody(body)
+      jsonBody(body),
     ),
 
   getAdbInfo: (options: ApiRequestOptions = {}) =>
@@ -882,11 +829,18 @@ export const api = {
       signal: options.signal,
     }),
   updateAdbSettings: (body: AdbSettingsUpdate) =>
-    settingsRequest<AdbInfoData>("/api/settings/database/adb/settings", jsonBody(body)),
+    settingsRequest<AdbInfoData>(
+      "/api/settings/database/adb/settings",
+      jsonBody(body),
+    ),
   startAdb: () =>
-    settingsRequest<AdbInfoData>("/api/settings/database/adb/start", { method: "POST" }),
+    settingsRequest<AdbInfoData>("/api/settings/database/adb/start", {
+      method: "POST",
+    }),
   stopAdb: () =>
-    settingsRequest<AdbInfoData>("/api/settings/database/adb/stop", { method: "POST" }),
+    settingsRequest<AdbInfoData>("/api/settings/database/adb/stop", {
+      method: "POST",
+    }),
 
   getUploadStorageSettings: (options: ApiRequestOptions = {}) =>
     settingsRequest<UploadStorageSettingsData>("/api/settings/upload-storage", {
@@ -910,13 +864,19 @@ export const api = {
       body: JSON.stringify(body),
     }),
   updateOciObjectStorageSettings: (body: OciObjectStorageSettingsUpdate) =>
-    settingsRequest<UploadStorageSettingsData>("/api/settings/oci/object-storage", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    }),
+    settingsRequest<UploadStorageSettingsData>(
+      "/api/settings/oci/object-storage",
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      },
+    ),
   readOciConfig: (body: OciConfigReadRequest) =>
-    settingsRequest<OciConfigReadData>("/api/settings/oci/config/read", jsonBody(body)),
+    settingsRequest<OciConfigReadData>(
+      "/api/settings/oci/config/read",
+      jsonBody(body),
+    ),
   testOciConfig: () =>
     settingsRequest<OciConfigTestResult>("/api/settings/oci/config/test", {
       method: "POST",
@@ -924,14 +884,17 @@ export const api = {
   readOciObjectStorageNamespace: (body: OciObjectStorageNamespaceRequest) =>
     settingsRequest<OciObjectStorageNamespaceData>(
       "/api/settings/oci/object-storage/namespace",
-      jsonBody(body)
+      jsonBody(body),
     ),
   uploadOciPrivateKey: (file: File) => {
     const form = new FormData();
     form.append("file", file);
-    return settingsRequest<OciPrivateKeyUploadData>("/api/settings/oci/key-file", {
-      method: "POST",
-      body: form,
-    });
+    return settingsRequest<OciPrivateKeyUploadData>(
+      "/api/settings/oci/key-file",
+      {
+        method: "POST",
+        body: form,
+      },
+    );
   },
 };

@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# 引数で RAG / Agent の start-frontend.sh も同じ契約で検証できる（既定は NL2SQL）。
 TEST_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+START_FRONTEND_SCRIPT="$(cd "$(dirname "${1:-${TEST_SCRIPT_DIR}/../start-frontend.sh}")" && pwd)/$(basename "${1:-start-frontend.sh}")"
 TEST_TMP_DIR="$(mktemp -d)"
 trap 'rm -rf -- "${TEST_TMP_DIR}"' EXIT
 
@@ -16,7 +18,7 @@ mkdir -p \
   "${APP_DIR}/frontend/node_modules/@engchina/production-ready-ui" \
   "${UI_DIR}" \
   "${MOCK_BIN_DIR}"
-cp "${TEST_SCRIPT_DIR}/../start-frontend.sh" "${APP_DIR}/scripts/start-frontend.sh"
+cp "${START_FRONTEND_SCRIPT}" "${APP_DIR}/scripts/start-frontend.sh"
 cp "${TEST_SCRIPT_DIR}/fixtures/npm" "${MOCK_BIN_DIR}/npm"
 chmod +x "${MOCK_BIN_DIR}/npm"
 

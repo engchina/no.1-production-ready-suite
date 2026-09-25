@@ -24,6 +24,7 @@ import {
   type GenerationProfileName,
   type GenerationProfileStatusData,
 } from "@/lib/api";
+import { useLeaveGuard } from "@/lib/leave-guard";
 import { t, type I18nKey } from "@/lib/i18n";
 import {
   useAnswerRecordSettings,
@@ -58,6 +59,9 @@ export function GenerationSettingsClient() {
       setProfile(query.data.profile);
     }
   }, [query.data, profile]);
+
+  // 未保存の選択があるときだけ、サイドナビ・内部リンク・再読込での離脱を確認する。
+  useLeaveGuard(Boolean(query.data && profile !== null && profile !== query.data.profile));
 
   if (query.isPending) {
     return (
@@ -274,6 +278,7 @@ function AnswerRecordRetentionCard() {
   const [draft, setDraft] = useState<string | null>(null);
   const current = query.data ? String(query.data.retention_days) : null;
   const value = draft ?? current;
+  useLeaveGuard(draft !== null && current !== null && draft !== current);
   const options =
     current && !RETENTION_OPTIONS.some((item) => item.value === current)
       ? [...RETENTION_OPTIONS, { value: current, label: t("settings.answerRecords.days", { days: current }) }]

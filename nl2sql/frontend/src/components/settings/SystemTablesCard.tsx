@@ -11,12 +11,12 @@ import {
   CardHeader,
   CardTitle,
   Skeleton,
+  TimedLoadingState,
+  DisclosureChevron,
 } from "@engchina/production-ready-ui";
 
 import { useEffect, useRef, useState } from "react";
 
-import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
-import { TimedLoadingState } from "@/components/ProcessingState";
 import { DatabaseUnavailableNotice } from "@/components/system/DatabaseUnavailableNotice";
 import { ExecutionConfirmationField } from "@/features/nl2sql/components/DbAdminShared";
 import { DbObjectName } from "@/features/nl2sql/components/DbObjectName";

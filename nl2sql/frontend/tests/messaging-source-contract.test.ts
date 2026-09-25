@@ -32,7 +32,6 @@ test("business pages do not create raw alert live regions", () => {
 test("handwritten danger surfaces stay limited to structured state and field controls", () => {
   const allowedOccurrenceCounts = new Map<string, number>([
     ["src/components/ExecutionActivityPanel.tsx", 1],
-    ["src/components/settings/DatabaseSettingsClient.tsx", 1],
     ["src/components/ui/file-dropzone.tsx", 1],
     ["src/features/nl2sql/components/DbAdminShared.tsx", 2],
     ["src/features/nl2sql/components/WorkflowProgressStrip.tsx", 1],

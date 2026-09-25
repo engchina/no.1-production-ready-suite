@@ -156,8 +156,13 @@ test.describe("AI Agent Control Plane", () => {
     await page.goto("/agents");
 
     await expect(page.getByRole("heading", { name: "業務 Agent", level: 1 })).toBeVisible();
+    // 一覧は既定の実行先だけを示し、Skill の選択と実行先の管理は全画面エディタで行う（#137）。
+    await expect(page.getByRole("table", { name: "業務 Agent 一覧" }).getByText("default-profile")).toBeVisible();
+    await page.getByRole("button", { name: "汎用業務 Agent default", exact: true }).click();
+    await expect(page).toHaveURL(/\/agents\?id=default$/);
+    await expect(page.getByRole("heading", { name: "汎用業務 Agent", level: 1 })).toBeVisible();
     await expect(page.getByText("業務 RAG 調査").first()).toBeVisible();
-    await expect(page.getByText("実行先", { exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "実行先", exact: true })).toBeVisible();
     await expect(page.getByText("default-profile")).toBeVisible();
     await expect(page.getByText("利用可能ツール")).toHaveCount(0);
     await expect(page.getByText("Command allowed prefixes")).toHaveCount(0);

@@ -10,20 +10,19 @@ import {
 } from "react";
 import { MoreHorizontal } from "lucide-react";
 
-import { FloatingActionMenu } from "@/components/FloatingMenu";
-import { Button } from "@engchina/production-ready-ui";
-import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
-import { t } from "@/lib/i18n";
-import { restoreMenuTriggerFocus } from "@/lib/menu-focus";
-import { cn } from "@/lib/utils";
-import { splitObjectActions, visibleEntityActions, type EntityAction } from "./ObjectActionsCore";
+import { restoreMenuTriggerFocus } from "../../lib/menu-focus";
+import { cn } from "../../lib/utils";
+import { Button } from "../ui/button";
+import { DisclosureChevron } from "../ui/disclosure-chevron";
+import { FloatingActionMenu } from "../ui/floating-menu";
+import { splitObjectActions, visibleEntityActions, type EntityAction } from "./object-actions-core";
 
 export {
   splitObjectActions,
   visibleEntityActions,
   type EntityAction,
   type EntityActionTone,
-} from "./ObjectActionsCore";
+} from "./object-actions-core";
 
 function useActionMenu() {
   const [open, setOpen] = useState(false);
@@ -202,10 +201,13 @@ export function RowActionMenu({
 export function ObjectActionBar({
   actions,
   ariaLabel,
+  moreLabel = "その他の操作",
   testId,
 }: {
   actions: readonly EntityAction[];
   ariaLabel: string;
+  /** overflow メニューを開くボタンの文言（製品の i18n で上書きできる）。 */
+  moreLabel?: string;
   testId?: string;
 }) {
   const { inline, overflow } = useMemo(() => splitObjectActions(actions), [actions]);
@@ -256,7 +258,7 @@ export function ObjectActionBar({
             data-testid={testId ? `${testId}-more` : undefined}
             onClick={() => setOpen((current) => !current)}
           >
-            <span>{t("common.actions.more")}</span>
+            <span>{moreLabel}</span>
             <DisclosureChevron expanded={open} size={16} />
           </Button>
           {open ? (

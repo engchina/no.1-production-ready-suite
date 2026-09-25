@@ -22,6 +22,7 @@ import {
   type GuardrailPolicyName,
   type GuardrailPolicyStatusData,
 } from "@/lib/api";
+import { useLeaveGuard } from "@/lib/leave-guard";
 import { t, type I18nKey } from "@/lib/i18n";
 import { useGuardrailSettings, useUpdateGuardrailSettings } from "@/lib/queries";
 import { APP_ROUTES } from "@/lib/routes";
@@ -43,6 +44,14 @@ export function GuardrailSettingsClient() {
       setBackend(query.data.backend);
     }
   }, [query.data]);
+
+  // 未保存の選択があるときだけ、サイドナビ・内部リンク・再読込での離脱を確認する。
+  useLeaveGuard(Boolean(
+      query.data &&
+        policy !== null &&
+        backend !== null &&
+        (policy !== query.data.policy || backend !== query.data.backend)
+    ));
 
   if (query.isPending) {
     return (

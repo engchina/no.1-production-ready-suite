@@ -124,6 +124,7 @@ import {
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { toast } from "@/lib/toast";
 import { t, type I18nKey } from "@/lib/i18n";
+import { useCustomLeaveGuard, useLeaveGuard } from "@/lib/leave-guard";
 import { formatBytes, formatDateTime, formatNumber, parseApiDateTime } from "@/lib/format";
 import { scrollFocusedControlIntoView } from "@/lib/focus-scroll";
 import {
@@ -346,48 +347,15 @@ export function DocumentWorkspace({
   const hasReviewEdits =
     (reviewEdits.element_edits?.length ?? 0) > 0 ||
     (reviewEdits.table_cell_edits?.length ?? 0) > 0;
-  const allowReviewNavigationRef = useRef(false);
-  useEffect(() => {
-    if (!hasReviewEdits) return;
-    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
-      if (allowReviewNavigationRef.current) return;
-      event.preventDefault();
-      event.returnValue = "";
-    };
-    const handleLinkClick = (event: MouseEvent) => {
-      if (allowReviewNavigationRef.current || event.defaultPrevented || event.button !== 0) return;
-      if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-      const target = event.target instanceof Element ? event.target : null;
-      const anchor = target?.closest<HTMLAnchorElement>("a[href]");
-      if (!anchor || anchor.target === "_blank" || anchor.hasAttribute("download")) return;
-      const next = new URL(anchor.href, window.location.href);
-      const current = new URL(window.location.href);
-      if (
-        next.origin === current.origin &&
-        next.pathname === current.pathname &&
-        next.search === current.search
-      ) {
-        return;
-      }
-      event.preventDefault();
-      void confirm({
-        title: t("flow.review.edit.leaveTitle"),
-        description: t("flow.review.edit.leaveDescription"),
-        confirmLabel: t("flow.review.edit.leaveConfirm"),
-        tone: "warning",
-      }).then((confirmed) => {
-        if (!confirmed) return;
-        allowReviewNavigationRef.current = true;
-        window.location.assign(next.href);
-      });
-    };
-    window.addEventListener("beforeunload", handleBeforeUnload);
-    document.addEventListener("click", handleLinkClick, true);
-    return () => {
-      window.removeEventListener("beforeunload", handleBeforeUnload);
-      document.removeEventListener("click", handleLinkClick, true);
-    };
-  }, [confirm, hasReviewEdits]);
+  // 抽出確認の未保存編集は共有の離脱ガードで守る（内部リンク・サイドナビ・再読込・タブを閉じる）。
+  useCustomLeaveGuard(hasReviewEdits, () =>
+    confirm({
+      title: t("flow.review.edit.leaveTitle"),
+      description: t("flow.review.edit.leaveDescription"),
+      confirmLabel: t("flow.review.edit.leaveConfirm"),
+      tone: "warning",
+    })
+  );
   // インスペクタ右ペインのタブ。要素/表セル指定の deep-link は構造化要素を、
   // chunk のみの引用 deep-link は Chunk タブを初期表示する。
   const [inspectorTab, setInspectorTab] = useState<"text" | "extraction" | "chunks" | "export">(() => {
@@ -2805,6 +2773,8 @@ function DocumentKnowledgeBaseEditor({
   }, [membership.data]);
 
   const isDirty = !isSameIdSet(selectedIds, savedIds);
+  // KB 所属の未保存の選択（順序は無視して集合で比べる）があるときだけ離脱を確認する。
+  useLeaveGuard(isDirty);
   const canSave = selectedIds.length > 0 && isDirty && !membership.isPending;
 
   const onSave = () => {

@@ -5,6 +5,7 @@ import {
   Button,
   Card,
   CardContent,
+  DataTable,
   SelectField,
   type SelectFieldOption,
   StatusBadge,
@@ -14,7 +15,6 @@ import {
   ChevronLeft,
   ChevronRight,
   ExternalLink,
-  Eye,
   FileText,
   FilterX,
   MessageSquareText,
@@ -23,10 +23,11 @@ import {
   ThumbsUp,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { EmptyState, ErrorState, LoadingState } from "@/components/StateViews";
+import { RagSplitPane, RowTitleButton } from "@/components/layout/EntityLayout";
 import type {
   CitationFeedbackRating,
   CitationFeedbackReason,
@@ -72,7 +73,8 @@ export function FeedbackClient() {
   const [searchParams, setSearchParams] = useSearchParams();
   const urlState = useMemo(() => parseFeedbackUrl(searchParams), [searchParams]);
   const [searchDraft, setSearchDraft] = useState(urlState.q);
-  const lastTriggerRef = useRef<HTMLButtonElement | null>(null);
+  // 利用者が行を選んだ直後だけ、縦積み（xl 未満）の詳細へフォーカスを移す（URL からの復元では動かさない）。
+  const revealDetailRef = useRef(false);
   const params = useMemo(() => feedbackListParams(urlState), [urlState]);
   const query = useFeedbackDashboard(params);
   const businessViewsQuery = useBusinessViews({ status: "ACTIVE", limit: 100, offset: 0 });
@@ -131,14 +133,18 @@ export function FeedbackClient() {
     setSearchParams(new URLSearchParams("period=30&sort=newest&size=50&page=1"));
   }
 
-  function openDetail(id: string, trigger: HTMLButtonElement) {
-    lastTriggerRef.current = trigger;
+  // B 型の選択。行の操作以外の領域のクリック（キーボードは先頭セルの名前のボタン）で選び、
+  // 選んだ行は URL の `feedback` に持つ（再読込・戻る / 進むで同じ行が開く）。
+  function selectFeedback(id: string) {
+    if (id === urlState.feedbackId) return;
+    revealDetailRef.current = true;
     setParam("feedback", id, false);
   }
 
   function closeDetail() {
+    const id = urlState.feedbackId;
     setParam("feedback", null, false);
-    window.requestAnimationFrame(() => lastTriggerRef.current?.focus());
+    window.requestAnimationFrame(() => focusRowButton(id));
   }
 
   const businessViewOptions: SelectFieldOption[] = [
@@ -283,15 +289,37 @@ export function FeedbackClient() {
               </div>
 
               {page?.items.length ? (
-                <>
-                  <FeedbackTable items={page.items} onOpen={openDetail} />
-                  <FeedbackCards items={page.items} onOpen={openDetail} />
-                  <Pagination
-                    current={urlState.page}
-                    total={totalPages}
-                    onChange={(nextPage) => setParam("page", String(nextPage), false)}
-                  />
-                </>
+                <RagSplitPane
+                  splitId="feedback-list"
+                  // 一覧は情報の密な表なので、一覧側を既定で広くする（詳細は divider で広げられる）。
+                  preferredWidePane="left"
+                  left={
+                    <>
+                      <FeedbackTable
+                        items={page.items}
+                        selectedId={urlState.feedbackId || null}
+                        onSelect={selectFeedback}
+                      />
+                      <FeedbackCards
+                        items={page.items}
+                        selectedId={urlState.feedbackId || null}
+                        onSelect={selectFeedback}
+                      />
+                      <Pagination
+                        current={urlState.page}
+                        total={totalPages}
+                        onChange={(nextPage) => setParam("page", String(nextPage), false)}
+                      />
+                    </>
+                  }
+                  right={
+                    <FeedbackDetailPanel
+                      feedbackId={urlState.feedbackId || null}
+                      revealRef={revealDetailRef}
+                      onClose={closeDetail}
+                    />
+                  }
+                />
               ) : (
                 <Card>
                   <CardContent className="pt-5">
@@ -303,8 +331,37 @@ export function FeedbackClient() {
           </>
         ) : null}
       </PageBody>
-      <FeedbackDetailDialog feedbackId={urlState.feedbackId || null} onClose={closeDetail} />
     </div>
+  );
+}
+
+/** 選択を閉じた後、その行の名前のボタンへフォーカスを戻す（表示中の表 / カードのどちらか）。 */
+function focusRowButton(id: string) {
+  if (!id) return;
+  const candidates = Array.from(
+    document.querySelectorAll<HTMLElement>(`[data-feedback-row-button="${CSS.escape(id)}"]`)
+  );
+  candidates.find((element) => element.offsetParent !== null)?.focus();
+}
+
+function questionSummary(item: FeedbackItem) {
+  return item.question_preview ?? item.conversation_title ?? item.comment_preview ?? t("feedback.list.legacyPreview");
+}
+
+/** 問題の概要の補足（評価時間・業務ビュー・コメントの有無）。 */
+function QuestionMeta({ item }: { item: FeedbackItem }) {
+  return (
+    <>
+      <span className="tabular-nums">{formatDateTime(item.created_at)}</span>
+      {" · "}
+      <span>{item.business_view_name ?? t("feedback.list.unknownBusinessView")}</span>
+      {item.has_comment ? (
+        <span className="ml-2 inline-flex items-center gap-1">
+          <MessageSquareText size={14} aria-hidden />
+          {t("feedback.list.hasComment")}
+        </span>
+      ) : null}
+    </>
   );
 }
 
@@ -367,73 +424,121 @@ function Metric({ label, value, detail, delta }: { label: string; value: string;
   );
 }
 
-function FeedbackTable({ items, onOpen }: { items: FeedbackItem[]; onOpen: (id: string, trigger: HTMLButtonElement) => void }) {
+function FeedbackTable({
+  items,
+  selectedId,
+  onSelect,
+}: {
+  items: FeedbackItem[];
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+}) {
+  /*
+    分割ペインの一覧側に置くため、列は 評価・問題の概要・理由・対象 / 送信元 に絞る（モデルと実行情報は詳細の「実行情報」）。
+    折り返さない列（評価・対象）は w-px + whitespace-nowrap で内容の幅に縮め、
+    理由は min-w で潰れず max-w で広がりすぎないようにし、残りの幅を問題の概要に渡す。
+  */
   return (
-    <div className="hidden max-h-[60vh] overflow-auto rounded-lg border border-border bg-surface md:block">
-      {/*
-        列幅は固定しない（table-fixed の固定幅だと「役に立たなかった」等の折り返さない値が次の列に重なる）。
-        折り返さない列（時間・評価・対象・操作）は w-px + whitespace-nowrap で内容の幅に縮め、
-        折り返す列（理由・業務ビュー）は min-w で潰れず max-w で広がりすぎないようにし、残りの幅を問題の概要に渡す。
-      */}
-      <table className="w-full min-w-[1260px] border-collapse text-left text-xs">
-        <thead className="sticky top-0 z-20 bg-surface-sunken text-fg-muted shadow-[0_1px_0_var(--color-border)] backdrop-blur">
-          <tr>
-            <TableHead className={NOWRAP_COLUMN}>{t("feedback.table.time")}</TableHead>
-            <TableHead className={NOWRAP_COLUMN}>{t("feedback.filters.rating")}</TableHead>
-            <TableHead className="min-w-40">{t("feedback.filters.reason")}</TableHead>
-            <TableHead className="min-w-36">{t("feedback.filters.businessView")}</TableHead>
-            <TableHead className={NOWRAP_COLUMN}>{t("feedback.table.targetSource")}</TableHead>
-            <TableHead className={NOWRAP_COLUMN}>{t("feedback.list.model")}</TableHead>
-            <TableHead>{t("feedback.table.question")}</TableHead>
-            <TableHead className={cn(NOWRAP_COLUMN, "text-right")}>{t("feedback.table.actions")}</TableHead>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-border">
-          {items.map((item) => (
-            <tr key={item.feedback_id} className="align-top transition-colors hover:bg-surface-hover">
-              <TableCell className={cn(NOWRAP_COLUMN, "tabular-nums text-fg-muted")}>{formatDateTime(item.created_at)}</TableCell>
-              <TableCell className={NOWRAP_COLUMN}><RatingBadge rating={item.rating} /></TableCell>
-              <TableCell><span className="line-clamp-2 max-w-48">{item.reason ? t(REASON_LABEL_KEYS[item.reason]) : "—"}</span></TableCell>
-              <TableCell><span className="line-clamp-2 max-w-48">{item.business_view_name ?? t("feedback.list.unknownBusinessView")}</span></TableCell>
-              <TableCell className={NOWRAP_COLUMN}>{targetSource(item)}</TableCell>
-              <TableCell className={NOWRAP_COLUMN}><span className="block w-36 truncate" title={item.model ?? undefined}>{item.model ?? "—"}</span></TableCell>
-              <TableCell>
-                <p className="line-clamp-2 max-w-xl text-sm leading-5 text-fg">{item.question_preview ?? item.conversation_title ?? item.comment_preview ?? t("feedback.list.legacyPreview")}</p>
-                {item.has_comment ? <span className="mt-1 inline-flex items-center gap-1 text-xs text-fg-muted"><MessageSquareText size={11} aria-hidden />{t("feedback.list.hasComment")}</span> : null}
-              </TableCell>
-              <TableCell className={cn(NOWRAP_COLUMN, "text-right")}>
-                <Button type="button" variant="secondary" size="sm" onClick={(event) => onOpen(item.feedback_id, event.currentTarget)} icon={Eye}>
-                  {t("feedback.list.openDetail")}
-                </Button>
-              </TableCell>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <DataTable<FeedbackItem>
+      columns={[
+        {
+          key: "rating",
+          header: t("feedback.filters.rating"),
+          headerClassName: NOWRAP_COLUMN,
+          className: cn(CELL_PAD, NOWRAP_COLUMN),
+          render: (item) => <RatingBadge rating={item.rating} />,
+        },
+        {
+          key: "question",
+          header: t("feedback.table.question"),
+          rowHeader: true,
+          className: cn(CELL_PAD, "min-w-48"),
+          render: (item) => (
+            <RowTitleButton
+              title={questionSummary(item)}
+              subtitle={<QuestionMeta item={item} />}
+              ariaLabel={t("feedback.list.selectNamed", { name: questionSummary(item) })}
+              onClick={() => onSelect(item.feedback_id)}
+              dataAttributes={{ "data-feedback-row-button": item.feedback_id }}
+            />
+          ),
+        },
+        {
+          key: "reason",
+          header: t("feedback.filters.reason"),
+          headerClassName: "min-w-24",
+          className: CELL_PAD,
+          render: (item) => <span className="line-clamp-2 max-w-40">{item.reason ? t(REASON_LABEL_KEYS[item.reason]) : "—"}</span>,
+        },
+        {
+          key: "targetSource",
+          header: t("feedback.table.targetSource"),
+          headerClassName: NOWRAP_COLUMN,
+          className: cn(CELL_PAD, NOWRAP_COLUMN),
+          render: (item) => targetSource(item),
+        },
+      ]}
+      rows={items}
+      getRowKey={(item) => item.feedback_id}
+      onRowClick={(item) => onSelect(item.feedback_id)}
+      selectedRowKey={selectedId}
+      rowProps={(item) => ({ className: "align-top", "data-testid": `feedback-row-${item.feedback_id}` })}
+      stickyHeader
+      className="hidden max-h-[60vh] overflow-auto md:block"
+      tableClassName="w-full min-w-[36rem] border-collapse"
+      ariaLabel={t("feedback.list.title")}
+    />
   );
 }
 
-function FeedbackCards({ items, onOpen }: { items: FeedbackItem[]; onOpen: (id: string, trigger: HTMLButtonElement) => void }) {
+function FeedbackCards({
+  items,
+  selectedId,
+  onSelect,
+}: {
+  items: FeedbackItem[];
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+}) {
   return (
-    <ul className="space-y-2 md:hidden">
-      {items.map((item) => (
-        <li key={item.feedback_id} className="rounded-lg border border-border bg-surface p-3">
-          <div className="flex items-start justify-between gap-2">
-            <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-2"><RatingBadge rating={item.rating} /><span className="text-xs tabular-nums text-fg-muted">{formatDateTime(item.created_at)}</span></div>
-              <p className="mt-2 line-clamp-2 text-sm font-medium leading-5 text-fg">{item.question_preview ?? item.conversation_title ?? item.comment_preview ?? t("feedback.list.legacyPreview")}</p>
+    <ul className="space-y-2 md:hidden" aria-label={t("feedback.list.title")}>
+      {items.map((item) => {
+        const current = item.feedback_id === selectedId;
+        return (
+          // カードの操作以外の領域のクリックで選ぶ。キーボードは問題の概要のボタンで選ぶ（page-archetypes.md §0-7）。
+          <li
+            key={item.feedback_id}
+            aria-current={current ? "true" : undefined}
+            onClick={(event) => {
+              if ((event.target as HTMLElement).closest("button, a")) return;
+              onSelect(item.feedback_id);
+            }}
+            className={cn(
+              "cursor-pointer rounded-lg border p-3 transition-colors",
+              current ? "border-accent-emphasis bg-accent-subtle" : "border-border bg-surface hover:bg-surface-hover"
+            )}
+          >
+            <div className="flex flex-wrap items-center gap-2">
+              <RatingBadge rating={item.rating} />
+              <span className="text-xs tabular-nums text-fg-muted">{formatDateTime(item.created_at)}</span>
             </div>
-            <Button type="button" variant="secondary" size="sm" aria-label={t("feedback.list.openDetail")} onClick={(event) => onOpen(item.feedback_id, event.currentTarget)} icon={Eye}></Button>
-          </div>
-          <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
-            <Metadata label={t("feedback.filters.reason")} value={item.reason ? t(REASON_LABEL_KEYS[item.reason]) : "—"} />
-            <Metadata label={t("feedback.filters.businessView")} value={item.business_view_name ?? t("feedback.list.unknownBusinessView")} />
-            <Metadata label={t("feedback.table.targetSource")} value={targetSource(item)} />
-            <Metadata label={t("feedback.list.model")} value={item.model ?? "—"} />
-          </dl>
-        </li>
-      ))}
+            <div className="mt-2">
+              <RowTitleButton
+                title={questionSummary(item)}
+                ariaLabel={t("feedback.list.selectNamed", { name: questionSummary(item) })}
+                onClick={() => onSelect(item.feedback_id)}
+                dataAttributes={{ "data-feedback-row-button": item.feedback_id }}
+              />
+            </div>
+            <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+              <Metadata label={t("feedback.filters.reason")} value={item.reason ? t(REASON_LABEL_KEYS[item.reason]) : "—"} />
+              <Metadata label={t("feedback.filters.businessView")} value={item.business_view_name ?? t("feedback.list.unknownBusinessView")} />
+              <Metadata label={t("feedback.table.targetSource")} value={targetSource(item)} />
+              <Metadata label={t("feedback.list.model")} value={item.model ?? "—"} />
+            </dl>
+          </li>
+        );
+      })}
     </ul>
   );
 }
@@ -452,39 +557,55 @@ function Pagination({ current, total, onChange }: { current: number; total: numb
   );
 }
 
-function FeedbackDetailDialog({ feedbackId, onClose }: { feedbackId: string | null; onClose: () => void }) {
-  const dialogRef = useRef<HTMLDialogElement>(null);
+/** B 型の詳細側。選んだフィードバックを内容 / 根拠 / 実行情報のタブで見せる。 */
+function FeedbackDetailPanel({
+  feedbackId,
+  revealRef,
+  onClose,
+}: {
+  feedbackId: string | null;
+  revealRef: MutableRefObject<boolean>;
+  onClose: () => void;
+}) {
+  const headingRef = useRef<HTMLHeadingElement>(null);
   const [tab, setTab] = useState<DetailTab>("content");
   const query = useFeedbackDetail(feedbackId);
 
-  useEffect(() => {
-    const dialog = dialogRef.current;
-    if (!dialog) return;
-    if (feedbackId && !dialog.open) dialog.showModal();
-    if (!feedbackId && dialog.open) dialog.close();
-  }, [feedbackId]);
-
   useEffect(() => setTab("content"), [feedbackId]);
 
-  function close() {
-    dialogRef.current?.close();
+  useEffect(() => {
+    if (!feedbackId || !revealRef.current) return;
+    revealRef.current = false;
+    // 縦積み（xl 未満）では詳細が一覧の下にあるため、選んだら詳細の見出しへ移る。横並びではフォーカスを行に残す。
+    if (!window.matchMedia("(min-width: 1280px)").matches) headingRef.current?.focus();
+  }, [feedbackId, revealRef]);
+
+  if (!feedbackId) {
+    return (
+      <Card>
+        <CardContent className="pt-5">
+          <EmptyState title={t("feedback.detail.emptyTitle")} hint={t("feedback.detail.emptyHint")} />
+        </CardContent>
+      </Card>
+    );
   }
 
   return (
-    <dialog
-      ref={dialogRef}
-      aria-labelledby="feedback-detail-title"
-      className="m-0 ml-auto h-dvh max-h-dvh w-full max-w-none overflow-hidden border-0 border-l border-border bg-surface-overlay p-0 text-fg shadow-[var(--shadow-dialog)] backdrop:bg-[var(--scrim)] md:w-[min(42rem,92vw)]"
-      onClose={onClose}
-      onClick={(event) => { if (event.target === dialogRef.current) close(); }}
-    >
-      <div className="flex h-full min-h-0 flex-col">
+    <Card>
+      <section aria-labelledby="feedback-detail-title" className="flex min-h-0 flex-col">
         <header className="flex items-start justify-between gap-3 border-b border-border px-4 py-3 sm:px-5">
           <div className="min-w-0">
-            <h2 id="feedback-detail-title" className="text-base font-semibold text-fg">{t("feedback.detail.title")}</h2>
-            <p className="mt-0.5 truncate text-xs font-mono text-fg-muted" title={feedbackId ?? undefined}>{feedbackId ? shortId(feedbackId) : "—"}</p>
+            <h2
+              id="feedback-detail-title"
+              ref={headingRef}
+              tabIndex={-1}
+              className="scroll-mt-4 rounded-sm text-base font-semibold text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+            >
+              {t("feedback.detail.title")}
+            </h2>
+            <p className="mt-0.5 truncate font-mono text-xs text-fg-muted" title={feedbackId}>{shortId(feedbackId)}</p>
           </div>
-          <Button type="button" variant="ghost" size="md" className="size-11 px-0" aria-label={t("feedback.detail.close")} onClick={close} icon={X}></Button>
+          <Button type="button" variant="ghost" size="md" iconOnly aria-label={t("feedback.detail.close")} onClick={onClose} icon={X} />
         </header>
         <div className="px-4 sm:px-5">
           <Tabs
@@ -498,7 +619,7 @@ function FeedbackDetailDialog({ feedbackId, onClose }: { feedbackId: string | nu
             }))}
           />
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5">
+        <div className="p-4 sm:p-5">
           {query.isLoading ? (
             <LoadingState rows={6} label={t("feedback.detail.title")} />
           ) : query.isError ? (
@@ -507,8 +628,8 @@ function FeedbackDetailDialog({ feedbackId, onClose }: { feedbackId: string | nu
             <DetailPanel detail={query.data} tab={tab} />
           ) : null}
         </div>
-      </div>
-    </dialog>
+      </section>
+    </Card>
   );
 }
 
@@ -620,14 +741,8 @@ function RatingBadge({ rating }: { rating: CitationFeedbackRating }) {
 
 /** 折り返さない値の列。w-px で内容の幅まで縮め、nowrap で次の列へはみ出させない。 */
 const NOWRAP_COLUMN = "w-px whitespace-nowrap";
-
-function TableHead({ children, className }: { children: React.ReactNode; className?: string }) {
-  return <th scope="col" className={cn("px-3 py-2 font-medium", className)}>{children}</th>;
-}
-
-function TableCell({ children, className }: { children: React.ReactNode; className?: string }) {
-  return <td className={cn("px-3 py-2.5", className)}>{children}</td>;
-}
+/** 明細行のセル余白（2 行の問題の概要を読みやすくするため DataTable 既定より縦を広げる）。 */
+const CELL_PAD = "py-2.5";
 
 function Metadata({ label, value }: { label: string; value: string }) {
   return <div className="min-w-0"><dt className="text-fg-muted">{label}</dt><dd className="mt-0.5 line-clamp-2 text-fg">{value}</dd></div>;

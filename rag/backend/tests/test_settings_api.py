@@ -19,8 +19,9 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from dotenv import dotenv_values
+from pr_system_settings import database as shared_database
 from pr_system_settings import oci_connectivity
-from pr_system_settings.model import save_model_settings
+from pr_system_settings.model import ModelSettingsStore, save_model_settings
 from pytest import MonkeyPatch
 
 from app.api.routes import settings as settings_routes
@@ -33,10 +34,10 @@ from app.clients.oracle import (
 )
 from app.config import (
     MODEL_SETTINGS_STORE,
+    PARSER_ADAPTERS_SECTION,
     Settings,
     get_settings,
     load_persisted_model_settings,
-    reload_persisted_model_settings_if_changed,
 )
 from app.main import app
 from app.rag import parser_adapter_readiness
@@ -57,10 +58,13 @@ async def _run_inline(operation: Any) -> Any:
     return operation()
 
 
+def _saved_env_value(settings: Settings, name: str) -> str | None:
+    """model-settings.json と同じディレクトリの .env（テストでは tmp）に保存された secret。"""
+    return dotenv_values(MODEL_SETTINGS_STORE.env_file(settings)).get(name)
+
+
 def _saved_enterprise_ai_api_key(settings: Settings) -> str | None:
-    """model-settings.json と同じディレクトリの .env（テストでは tmp）に保存された API key。"""
-    env_file = MODEL_SETTINGS_STORE.env_file(settings)
-    return dotenv_values(env_file).get("OCI_ENTERPRISE_AI_API_KEY")
+    return _saved_env_value(settings, "OCI_ENTERPRISE_AI_API_KEY")
 
 
 def test_model_settings_vision_test_image_is_valid_jpeg() -> None:
@@ -456,7 +460,9 @@ def test_update_external_parser_connection_retains_and_clears_secret(
     assert settings.rag_parser_mineru_api_key == "top-secret"
     persisted = json.loads(Path(settings.model_settings_file).read_text(encoding="utf-8"))
     assert persisted["parser_adapters"]["mineru_api_host"] == "https://mineru.example.com"
-    assert persisted["parser_adapters"]["mineru_api_key"] == "top-secret"
+    # parser の API key も JSON ではなく .env に保存する（#106）。
+    assert "mineru_api_key" not in persisted["parser_adapters"]
+    assert _saved_env_value(settings, "RAG_PARSER_MINERU_API_KEY") == "top-secret"
 
     cleared = client.patch(
         "/api/settings/parser-adapters",
@@ -485,7 +491,13 @@ def test_parser_settings_shared_file_reloads_in_worker_and_model_save_preserves_
         rag_parser_glm_ocr_api_host="",
         rag_parser_glm_ocr_api_key="",
     )
-    load_persisted_model_settings(worker_settings)
+    # 別 worker は別プロセスなので、読込状態を持つ store も別になる。
+    worker_store = ModelSettingsStore(
+        resolve_path=lambda current: Path(current.model_settings_file),
+        env_file=lambda current: MODEL_SETTINGS_STORE.env_file(current),
+        sections=(PARSER_ADAPTERS_SECTION,),
+    )
+    worker_store.load(worker_settings)
 
     response = client.patch(
         "/api/settings/parser-adapters",
@@ -509,7 +521,7 @@ def test_parser_settings_shared_file_reloads_in_worker_and_model_save_preserves_
     # API key は JSON ではなく backend/.env に保存する（#103）。
     assert "api_key" not in persisted["enterprise_ai"]
     assert _saved_enterprise_ai_api_key(settings) == "existing-model-secret"
-    reload_persisted_model_settings_if_changed(worker_settings)
+    worker_store.reload_if_changed(worker_settings)
     assert worker_settings.rag_parser_adapter_backend == "glm_ocr"
     assert worker_settings.rag_parser_glm_ocr_api_host == "https://glm.example.com/v1"
     assert worker_settings.rag_parser_glm_ocr_model == "glm-production"
@@ -520,7 +532,8 @@ def test_parser_settings_shared_file_reloads_in_worker_and_model_save_preserves_
     assert model_response.status_code == 200
     persisted = json.loads(settings_file.read_text(encoding="utf-8"))
     assert _saved_enterprise_ai_api_key(settings) == "sk-update-secret"
-    assert persisted["parser_adapters"]["glm_ocr_api_key"] == "parser-secret"
+    assert "glm_ocr_api_key" not in persisted["parser_adapters"]
+    assert _saved_env_value(settings, "RAG_PARSER_GLM_OCR_API_KEY") == "parser-secret"
     assert persisted["parser_adapters"]["glm_ocr_model"] == "glm-production"
 
 
@@ -590,7 +603,8 @@ def test_parallel_model_and_parser_updates_preserve_both_sections(
 
     persisted = json.loads(settings_file.read_text(encoding="utf-8"))
     assert _saved_enterprise_ai_api_key(settings) == "sk-update-secret"
-    assert persisted["parser_adapters"]["glm_ocr_api_key"] == "parser-secret"
+    assert "glm_ocr_api_key" not in persisted["parser_adapters"]
+    assert _saved_env_value(settings, "RAG_PARSER_GLM_OCR_API_KEY") == "parser-secret"
     assert persisted["parser_adapters"]["glm_ocr_model"] == "glm-production"
     lock_file = settings_file.with_name(f"{settings_file.name}.lock")
     assert stat.S_IMODE(lock_file.stat().st_mode) == 0o600
@@ -2831,7 +2845,8 @@ def test_get_database_settings_masks_secrets(monkeypatch: MonkeyPatch) -> None:
     assert body["has_wallet_password"] is True
     assert body["wallet_uploaded"] is False
     assert body["available_services"] == []
-    assert body["readiness"] == "ok"
+    # #108 から readiness は NL2SQL と同じく Wallet のファイルも確認する。
+    assert body["readiness"] == "wallet_not_found"
     assert body["vector_column"] == "VECTOR(1536, FLOAT32)"
     assert "super-secret-password" not in resp.text
     assert "wallet-secret" not in resp.text
@@ -2874,7 +2889,10 @@ def test_update_database_settings_mutates_runtime_without_echoing_secret(
     assert resp.status_code == 200
     assert settings.oracle_user == "rag_app"
     assert settings.oracle_dsn == "adb.example.com/rag"
-    assert settings.oracle_wallet_dir == settings.resolved_oracle_wallet_dir
+    # 画面から送られた Wallet 保存先を保存する（NL2SQL と同じ。#108）。
+    # RAG が実際に使う保存先は ORACLE_CLIENT_LIB_DIR/network/admin のまま変わらない。
+    assert settings.oracle_wallet_dir == "/opt/oracle/wallet"
+    assert settings.resolved_oracle_wallet_dir == "/opt/oracle/instantclient_23_26/network/admin"
     assert settings.oracle_password == "old-secret"
     assert resp.json()["data"]["wallet_dir"] == settings.resolved_oracle_wallet_dir
     assert resp.json()["data"]["has_password"] is True
@@ -2982,6 +3000,7 @@ def test_database_connection_test_uses_candidate_without_mutating_runtime(
         assert candidate.oracle_password == "candidate-secret"
         assert candidate.oracle_dsn == "adb.example.com/rag"
 
+    _write_thick_wallet(Path(settings.resolved_oracle_wallet_dir))
     monkeypatch.setattr(settings_routes, "test_oracle_connection", fake_test_oracle_connection)
 
     resp = client.post(
@@ -3016,8 +3035,7 @@ def test_database_connection_test_returns_wallet_password_guidance(
     monkeypatch.setattr(settings, "oracle_client_lib_dir", str(tmp_path / "instantclient_23_26"))
     monkeypatch.setattr(settings, "oracle_wallet_dir", "")
     monkeypatch.setattr(settings, "oracle_wallet_password", "")
-    wallet_dir = Path(settings.resolved_oracle_wallet_dir)
-    wallet_dir.mkdir(parents=True)
+    _write_thick_wallet(Path(settings.resolved_oracle_wallet_dir))
 
     async def fake_test_oracle_connection(candidate: Settings) -> None:
         raise OracleWalletPasswordRequiredError("Wallet パスワードを入力してください。")
@@ -3055,6 +3073,7 @@ def test_database_connection_test_returns_timeout_guidance(
     async def fake_test_oracle_connection(candidate: Settings) -> None:
         raise OracleConnectionTimeoutError("Oracle 26ai 接続テストが 15 秒でタイムアウトしました。")
 
+    _write_thick_wallet(Path(settings.resolved_oracle_wallet_dir))
     monkeypatch.setattr(settings_routes, "test_oracle_connection", fake_test_oracle_connection)
 
     resp = client.post(
@@ -3097,6 +3116,7 @@ def test_database_connection_test_classifies_oracle_operational_error(
             "ORA-01017: invalid username/password; logon denied candidate-secret"
         )
 
+    _write_thick_wallet(Path(settings.resolved_oracle_wallet_dir))
     monkeypatch.setattr(settings_routes, "test_oracle_connection", fake_test_oracle_connection)
 
     resp = client.post(
@@ -3139,6 +3159,7 @@ def test_database_connection_test_classifies_adb_acl_rejection(
             "ORA-12506: listener rejected connection based on service ACL filtering"
         )
 
+    _write_thick_wallet(Path(settings.resolved_oracle_wallet_dir))
     monkeypatch.setattr(settings_routes, "test_oracle_connection", fake_test_oracle_connection)
 
     resp = client.post(
@@ -3214,6 +3235,7 @@ def test_get_database_settings_extracts_available_services_from_wallet_dir(
         ),
         encoding="utf-8",
     )
+    _write_thick_wallet(wallet_dir)
 
     resp = client.get("/api/settings/database")
 
@@ -3304,12 +3326,28 @@ def _make_fake_database_client(
     return _FakeDatabaseClient
 
 
+def _write_thick_wallet(wallet_dir: Path, services: Sequence[str] = ("ragdb_high",)) -> None:
+    """RAG の既定（Thick mode）で必要な Wallet ファイルを置く。
+
+    #108 から接続テスト前の readiness が NL2SQL と同じく Wallet のファイルを確認する。
+    """
+    wallet_dir.mkdir(parents=True, exist_ok=True)
+    tnsnames = wallet_dir / "tnsnames.ora"
+    if not tnsnames.exists():
+        tnsnames.write_text(
+            "".join(f"{service} = (DESCRIPTION = ...)\n" for service in services),
+            encoding="utf-8",
+        )
+    (wallet_dir / "sqlnet.ora").write_text("WALLET_LOCATION = ...\n", encoding="utf-8")
+    (wallet_dir / "cwallet.sso").write_bytes(b"sso")
+
+
 def _patch_adb_client(
     monkeypatch: MonkeyPatch,
     lifecycle_state: str,
     calls: list[str],
 ) -> None:
-    from app.clients.oci_database import OciDatabaseClient
+    from pr_system_settings.oci_database import OciDatabaseClient
 
     fake_client = _make_fake_database_client(lifecycle_state, calls)()
 
@@ -3320,7 +3358,7 @@ def _patch_adb_client(
             sdk_call_runner=_run_inline,
         )
 
-    monkeypatch.setattr(settings_routes, "OciDatabaseClient", _factory)
+    monkeypatch.setattr(shared_database, "OciDatabaseClient", _factory)
 
 
 def test_get_adb_info_returns_not_configured_without_ocid(
@@ -3823,3 +3861,36 @@ def test_update_answer_record_settings_persists_retention_and_purges(
     assert (
         client.patch("/api/settings/answer-records", json={"retention_days": -1}).status_code == 422
     )
+
+
+def test_legacy_parser_api_key_in_json_moves_to_env_on_parser_save() -> None:
+    """旧 JSON（v2）に残っている parser の API key は読み込み、次の保存で .env へ移す（#106）。"""
+    settings = get_settings()
+    settings_file = Path(settings.model_settings_file)
+    settings_file.write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "enterprise_ai": {"models": []},
+                "generative_ai": {},
+                "parser_adapters": {
+                    "adapter_backend": "mineru",
+                    "mineru_enabled": True,
+                    "mineru_api_host": "https://mineru.example.com",
+                    "mineru_api_key": "legacy-parser-secret",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    load_persisted_model_settings(settings)
+    assert settings.rag_parser_mineru_api_key == "legacy-parser-secret"
+    assert settings.legacy_model_secret_detected is True
+
+    resp = client.patch("/api/settings/parser-adapters", json={"adapter_backend": "mineru"})
+
+    assert resp.status_code == 200
+    assert "legacy-parser-secret" not in settings_file.read_text(encoding="utf-8")
+    assert _saved_env_value(settings, "RAG_PARSER_MINERU_API_KEY") == "legacy-parser-secret"
+    assert settings.rag_parser_mineru_api_key == "legacy-parser-secret"
+    assert settings.legacy_model_secret_detected is False

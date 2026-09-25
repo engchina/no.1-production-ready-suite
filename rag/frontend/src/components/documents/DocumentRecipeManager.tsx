@@ -9,6 +9,7 @@ import {
   Copy,
   Eye,
   LoaderCircle,
+  Play,
   Plus,
   RotateCcw,
   Search,
@@ -33,7 +34,9 @@ import { CitationCard } from "@/components/search/CitationCard";
 import {
   Banner,
   Button,
+  type EntityAction,
   FormStatus,
+  ObjectActionBar,
   SelectField,
   Skeleton,
 } from "@engchina/production-ready-ui";
@@ -206,6 +209,28 @@ export function DocumentRecipeManager({
 
   const processPending = enqueue.isPending || approve.isPending;
   const processError = enqueue.error ?? approve.error;
+  // 選択中のレシピの操作（buttons.md §5.1）。処理は非破壊の高頻度操作として表示し、
+  // 削除は danger として「その他の操作」に入れ、確認ダイアログ（handleDelete）を通す。
+  const recipeActions: EntityAction[] = [
+    {
+      id: "process",
+      label: processButtonLabel(selected),
+      icon: selected.status === "ERROR" ? RotateCcw : Play,
+      loading: processPending,
+      disabled: active,
+      onSelect: handleProcess,
+    },
+    {
+      id: "delete",
+      label: t("documents.recipes.delete"),
+      ariaLabel: atMinimum ? t("documents.recipes.deleteDisabledMin") : undefined,
+      icon: Trash2,
+      tone: "danger",
+      loading: deleteRecipe.isPending,
+      disabled: atMinimum || active || deleteRecipe.isPending,
+      onSelect: handleDelete,
+    },
+  ];
 
   return (
     <section aria-label={t("documents.recipes.title")} className="space-y-3">
@@ -277,26 +302,12 @@ export function DocumentRecipeManager({
               {t("documents.recipes.updated", { time: formatDateTime(selected.updated_at) })}
             </p>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={() => void handleDelete()}
-              disabled={atMinimum || active || deleteRecipe.isPending}
-              title={atMinimum ? t("documents.recipes.min") : undefined} icon={Trash2}>
-              {t("documents.recipes.delete")}
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              onClick={handleProcess}
-              loading={processPending}
-              disabled={active}
-            >
-              {processButtonLabel(selected)}
-            </Button>
-          </div>
+          <ObjectActionBar
+            actions={recipeActions}
+            ariaLabel={t("common.objectActions.aria", { name: recipeName(selected) })}
+            moreLabel={t("common.objectActions.more")}
+            testId="document-recipe-actions"
+          />
         </div>
 
         <RecipeSteps recipe={selected} />
@@ -721,7 +732,7 @@ function RecipeComparison({
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
                 placeholder={t("documents.experiment.compare.placeholder")}
-                className="mt-1 h-10 w-full rounded-md border border-border bg-surface px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+                className="mt-1 h-10 w-full rounded-md border border-border-control bg-surface px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
                 onKeyDown={(event) => {
                   if (event.key === "Enter") void run();
                 }}

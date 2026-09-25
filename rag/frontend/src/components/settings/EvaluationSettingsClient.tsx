@@ -20,6 +20,7 @@ import {
   type EvaluationSuiteName,
   type EvaluationSuiteStatusData,
 } from "@/lib/api";
+import { useLeaveGuard } from "@/lib/leave-guard";
 import { t, type I18nKey } from "@/lib/i18n";
 import { useEvaluationSettings, useUpdateEvaluationSettings } from "@/lib/queries";
 import { cn } from "@/lib/utils";
@@ -49,6 +50,9 @@ export function EvaluationSettingsClient() {
       setSuite(serverSuite);
     }
   }, [query.data]);
+
+  // 未保存の選択があるときだけ、サイドナビ・内部リンク・再読込での離脱を確認する。
+  useLeaveGuard(Boolean(query.data && suite !== null && suite !== query.data.suite));
 
   if (query.isPending) {
     return (

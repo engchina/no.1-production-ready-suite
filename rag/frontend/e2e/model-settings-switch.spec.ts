@@ -43,6 +43,8 @@ function createModelSettings() {
         vision_response_path: "",
         timeout_seconds: 60,
         max_retries: 3,
+        llm_max_output_tokens: 1200,
+        vlm_max_output_tokens: 65536,
       },
       generative_ai: {
         embedding_model: "cohere.embed-v4.0",
@@ -50,13 +52,10 @@ function createModelSettings() {
         rerank_model: "cohere.rerank-v4.0-fast",
       },
     },
-    checks: {
-      enterprise_ai: "ok",
-      generative_ai: "ok",
-      embedding_dim: "ok",
-    },
     model_settings_file: "model-settings.json",
     source: "runtime",
+    secret_source: "environment",
+    legacy_secret_detected: false,
   };
 }
 
@@ -104,25 +103,27 @@ for (const viewport of [
       "aria-checked",
       "true"
     );
-    await expect(page.getByLabel("API パス")).toHaveValue("/responses");
-    await expect(page.getByRole("combobox", { name: "VLM 入力方式" })).toContainText(
-      "Files API"
-    );
-    await expect(page.getByLabel("最大リトライ回数")).toHaveValue("3");
-    await expect(page.getByText("カスタム gateway payload")).toHaveCount(0);
+    // 共有画面（NL2SQL と同じ。#103）は詳細項目・構成状態・プレビューを表示しない。
+    await expect(page.getByLabel("API パス")).toHaveCount(0);
+    await expect(page.getByRole("combobox", { name: "VLM 入力方式" })).toHaveCount(0);
+    await expect(page.getByLabel("最大リトライ回数")).toHaveCount(0);
     await expect(page.getByLabel("回答生成 payload template")).toHaveCount(0);
-    await expect(page.getByLabel("Vision/OCR payload template")).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "構成状態" })).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: ".env プレビュー" })).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "JSON プレビュー" })).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "運用メモ" })).toHaveCount(0);
     await expect(
       page.getByText("OpenAI-compatible gateway の Bearer 認証で使います。")
     ).toBeVisible();
-    await expect(page.getByText("LLM モデル ID")).toHaveCount(0);
-    await expect(page.getByText("VLM モデル ID")).toHaveCount(0);
+    await expect(page.getByPlaceholder("業務 RAG 標準").first()).toBeVisible();
 
     await expectControlContentToBeVerticallyCentered(
       page.getByRole("switch", { name: "Vision 2" }),
       "span[aria-hidden='true']"
     );
-    const saveButton = page.getByRole("button", { name: "モデル設定: 保存" });
+    const enterpriseSave = page.getByRole("button", { name: "OCI Enterprise AI: 保存" });
+    const modelsSave = page.getByRole("button", { name: "登録モデル: 保存" });
+    const genaiSave = page.getByRole("button", { name: "OCI Generative AI: 保存" });
     const enterpriseTestButton = page.getByRole("button", { name: "enterprise-llm をテスト" });
     const embeddingTestButton = page.getByRole("button", {
       name: "cohere.embed-v4.0 をテスト",
@@ -130,80 +131,60 @@ for (const viewport of [
     const rerankTestButton = page.getByRole("button", {
       name: "cohere.rerank-v4.0-fast をテスト",
     });
-
-    await expect(page.getByRole("heading", { name: "構成状態" })).toHaveCount(1);
-    await expect(page.getByRole("button", { name: "モデル設定: 構成チェック" })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "モデル設定: 元に戻す" })).toHaveCount(0);
-    await expect(page.getByRole("heading", { name: ".env プレビュー" })).toBeVisible();
-    await expect(page.getByLabel(".env プレビュー")).toContainText(
-      "MODEL_SETTINGS_FILE=model-settings.json"
-    );
-    await expect(page.getByRole("heading", { name: "JSON プレビュー" })).toBeVisible();
-    await expect(page.getByLabel("JSON プレビュー")).toContainText('"version": 1');
-    await expect(page.getByLabel("JSON プレビュー")).toContainText(
-      '"api_key": "<保存済み secret>"'
-    );
-    await expect(page.getByLabel("JSON プレビュー")).toContainText(
-      '"vlm_input_mode": "files_api"'
-    );
-    await expect(page.getByRole("heading", { name: "運用メモ" })).toBeVisible();
-    await expectActionInsideCard(page, "OCI Generative AI", saveButton);
-    await expectActionInsideCard(page, "OCI Enterprise AI", enterpriseTestButton);
+    await expectActionInsideCard(page, "OCI Enterprise AI", enterpriseSave);
+    await expectActionInsideCard(page, "登録モデル", modelsSave);
+    await expectActionInsideCard(page, "登録モデル", enterpriseTestButton);
+    await expectActionInsideCard(page, "OCI Generative AI", genaiSave);
     await expectActionInsideCard(page, "OCI Generative AI", embeddingTestButton);
     await expectActionInsideCard(page, "OCI Generative AI", rerankTestButton);
 
     for (const button of [
-      saveButton,
+      enterpriseSave,
+      modelsSave,
+      genaiSave,
       enterpriseTestButton,
       embeddingTestButton,
       rerankTestButton,
       page.getByRole("button", { name: "追加" }),
       page.getByRole("button", { name: "モデルを削除 1" }),
     ]) {
-      await expectControlContentToBeVerticallyCentered(
-        button,
-        "svg"
-      );
+      await expectControlContentToBeVerticallyCentered(button, "svg");
     }
     await expectNoPageOverflow(page);
     await expectMainScrollEndsAtContent(page);
   });
 }
 
-test("モデル設定は未充足の構成でも運用メモに注意を出して保存できる", async ({ page }) => {
+test("モデル設定は節ごとに保存し、画面にない項目は保存済みの値を送る", async ({ page }) => {
   let savedPayload: unknown;
   await mockModelSettings(page, (payload) => {
     savedPayload = payload;
   });
   await page.goto("/settings/model");
 
-  await page.getByRole("combobox", { name: "VLM 入力方式" }).click();
-  await page.getByRole("option", { name: /Inline image/ }).click();
-  await page.getByLabel("モデル ID 1").fill("");
-  await page.getByLabel("モデル ID 2").fill("");
-  const saveButton = page.getByRole("button", { name: "モデル設定: 保存" });
-  await expect(saveButton).toBeEnabled();
+  await page.getByLabel("モデル ID 2").fill("enterprise-vision-v2");
+  await page.getByPlaceholder(
+    "https://inference.generativeai.us-chicago-1.oci.oraclecloud.com/openai/v1"
+  ).fill("https://unsaved.example");
+  await page.getByRole("button", { name: "登録モデル: 保存" }).click();
 
-  const memo = operationMemoCard(page);
-  await expect(
-    memo.getByText("Enterprise AI のモデル ID を 1 件以上入力してください。")
-  ).toBeVisible();
-  await expect(
-    page.getByRole("alert").getByText("Enterprise AI のモデル ID を 1 件以上入力してください。")
-  ).toHaveCount(0);
-
-  await saveButton.click();
-
-  await expect(page.getByText("モデル設定を保存しました。")).toBeVisible();
+  await expect(page.getByText("登録モデルを保存しました。").first()).toBeVisible();
   expect(savedPayload).toMatchObject({
     enterprise_ai: {
-      vlm_input_mode: "inline_image",
-      models: [
-        { model_id: "" },
-        { model_id: "" },
-      ],
+      // 別の節（Enterprise AI 接続）の未保存の入力は送らない。
+      endpoint: "",
+      api_path: "/responses",
+      vlm_input_mode: "files_api",
+      text_payload_template: '{"input":{"messages":"${messages}","params":"${parameters}"}}',
+      models: [{ model_id: "enterprise-llm" }, { model_id: "enterprise-vision-v2" }],
     },
   });
+  // 保存していない節の入力は画面に残る。
+  await expect(
+    page.getByPlaceholder(
+      "https://inference.generativeai.us-chicago-1.oci.oraclecloud.com/openai/v1"
+    )
+  ).toHaveValue("https://unsaved.example");
 });
 
 test("モデル設定はモデルごとのテスト成功と失敗を行内に表示する", async ({ page }) => {
@@ -224,9 +205,9 @@ test("モデル設定はモデルごとのテスト成功と失敗を行内に�
   await expect(page.getByText("確認ポイント")).toBeVisible();
   await expect(page.getByText("OCI config、設定名、region")).toBeVisible();
 
-  await page.getByText("実際のエラー詳細").click();
-  await expect(page.getByText("エラー種別: ServiceError")).toBeVisible();
-  await expect(page.getByText("401 Unauthorized: invalid model")).toBeVisible();
+  await expect(page.getByText("ServiceError")).toBeVisible();
+  // 共有の結果パネルは生のエラー文を表示しない（NL2SQL と同じ。#103）。
+  await expect(page.getByText("401 Unauthorized: invalid model")).toHaveCount(0);
 });
 
 async function mockModelSettings(page: Page, onPatch?: (payload: unknown) => void) {
@@ -236,15 +217,7 @@ async function mockModelSettings(page: Page, onPatch?: (payload: unknown) => voi
     if (request.method() === "PATCH") {
       const payload = request.postDataJSON();
       onPatch?.(payload);
-      data = {
-        ...data,
-        settings: payload,
-        checks: {
-          enterprise_ai: "missing",
-          generative_ai: "ok",
-          embedding_dim: "ok",
-        },
-      };
+      data = { ...data, settings: payload };
     }
     await route.fulfill({
       json: {
@@ -282,14 +255,6 @@ async function mockModelSettings(page: Page, onPatch?: (payload: unknown) => voi
       },
     });
   });
-}
-
-function operationMemoCard(page: Page) {
-  return page
-    .getByRole("heading", { name: "運用メモ" })
-    .locator(
-      "xpath=ancestor::div[contains(concat(' ', normalize-space(@class), ' '), ' rounded-lg ')][1]"
-    );
 }
 
 async function expectActionInsideCard(

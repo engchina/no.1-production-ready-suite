@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const componentSource = readFileSync(
-  new URL("../src/components/ContentActionBar.tsx", import.meta.url),
+  new URL("../../../platform/packages/ui/src/components/ui/content-action-bar.tsx", import.meta.url),
   "utf8"
 );
 const dbObjectSource = readFileSync(

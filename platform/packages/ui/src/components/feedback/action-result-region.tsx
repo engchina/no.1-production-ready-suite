@@ -8,7 +8,7 @@ import {
   type ReactNode,
 } from "react";
 
-import { Banner } from "@engchina/production-ready-ui";
+import { Banner } from "../ui/banner";
 
 export interface ActionResultRegionProps {
   loading: boolean;

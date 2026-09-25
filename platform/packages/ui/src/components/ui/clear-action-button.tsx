@@ -1,7 +1,7 @@
 import { X } from "lucide-react";
 
-import { cn } from "@engchina/production-ready-ui";
-import { Button, type ButtonProps } from "@engchina/production-ready-ui";
+import { cn } from "../../lib/utils";
+import { Button, type ButtonProps } from "./button";
 
 export interface ClearActionButtonProps
   extends Omit<ButtonProps, "aria-label" | "children" | "type" | "variant"> {

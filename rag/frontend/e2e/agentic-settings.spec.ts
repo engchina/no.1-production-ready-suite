@@ -24,7 +24,7 @@ for (const viewport of [
 
     await page.goto("/settings/agentic");
 
-    await expect(page.getByRole("heading", { name: "高度な検索" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "高度な検索", exact: true, level: 1 })).toBeVisible();
     await expect(page.getByRole("radio", { name: /計画なし/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /スマートルーティング/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /検索向けに 1 回 LLM で書き換え/ })).toBeVisible();

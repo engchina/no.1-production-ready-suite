@@ -2,19 +2,36 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Clock3 } from "lucide-react";
 
 import {
-  Button,
-  Spinner,
-} from "@engchina/production-ready-ui";
-
-import {
   elapsedMsBetween,
   elapsedMsSince,
   formatElapsedClock,
   type OperationTimestamp,
-} from "@/lib/operationTiming";
-import { t } from "@/lib/i18n";
+} from "../../lib/operation-timing";
+import { Button } from "../ui/button";
+import { Spinner } from "../ui/spinner";
 
 const DEFAULT_SLOW_AFTER_MS = 10_000;
+
+/** 処理中表示の文言。製品の i18n で上書きできる。 */
+export interface ProcessingLabels {
+  /** 実行中の経過時間の見出し。 */
+  elapsed: string;
+  /** 完了後の所要時間の見出し。 */
+  duration: string;
+  /** `finalLabel` がないときの完了の文言。 */
+  completed: string;
+  /** 遅延の案内。 */
+  slow: string;
+  cancel: string;
+}
+
+export const DEFAULT_PROCESSING_LABELS: ProcessingLabels = {
+  elapsed: "経過時間",
+  duration: "処理時間",
+  completed: "処理が完了しました",
+  slow: "通常より時間がかかっています。",
+  cancel: "キャンセル",
+};
 
 /**
  * 処理が影響する最小領域。
@@ -122,6 +139,7 @@ export interface ProcessingIndicatorProps extends UseOperationTimingOptions {
   activityIcon?: ProcessingActivityIcon;
   /** 別の live region が状態遷移を通知する場合は false にして二重読み上げを避ける。 */
   announceActivity?: boolean;
+  labels?: Partial<ProcessingLabels>;
 }
 
 /** 処理ラベル・spinner・経過時間・取消を一列にまとめた全画面共通表示。 */
@@ -136,10 +154,12 @@ export function ProcessingIndicator({
   announceSlow = true,
   activityIcon = "spinner",
   announceActivity = true,
+  labels: labelOverrides,
   ...timingOptions
 }: ProcessingIndicatorProps) {
+  const labels = { ...DEFAULT_PROCESSING_LABELS, ...labelOverrides };
   const timing = useOperationTiming(timingOptions);
-  const displayLabel = timing.active ? label : finalLabel ?? t("common.processing.completed");
+  const displayLabel = timing.active ? label : finalLabel ?? labels.completed;
   const showActivityIcon = activityIcon === "spinner";
 
   return (
@@ -169,11 +189,11 @@ export function ProcessingIndicator({
             className="inline-flex min-h-7 items-center gap-1.5 whitespace-nowrap rounded-md border border-border bg-surface px-2 py-1 text-xs font-medium text-fg-muted"
             role="timer"
             aria-live="off"
-            aria-label={`${timing.active ? t("common.processing.elapsed") : t("common.processing.duration")} ${timing.elapsedClock}`}
+            aria-label={`${timing.active ? labels.elapsed : labels.duration} ${timing.elapsedClock}`}
             data-testid={testId ? `${testId}-timer` : undefined}
           >
             <Clock3 size={14} aria-hidden="true" />
-            <span>{timing.active ? t("common.processing.elapsed") : t("common.processing.duration")}</span>
+            <span>{timing.active ? labels.elapsed : labels.duration}</span>
             <span className="min-w-[3.25rem] text-right font-sans tabular-nums text-fg">
               {timing.elapsedClock}
             </span>
@@ -183,10 +203,9 @@ export function ProcessingIndicator({
               type="button"
               variant="ghost"
               size="sm"
-
               onClick={onCancel}
             >
-              {t("common.cancel")}
+              {labels.cancel}
             </Button>
           ) : null}
         </span>
@@ -197,7 +216,7 @@ export function ProcessingIndicator({
           role={announceSlow ? "status" : undefined}
           data-testid={testId ? `${testId}-slow` : undefined}
         >
-          {t("common.processing.slow")}
+          {labels.slow}
         </p>
       ) : null}
     </div>
@@ -215,6 +234,7 @@ export interface TimedLoadingStateProps {
   testId?: string;
   framed?: boolean;
   activityIcon?: ProcessingActivityIcon;
+  labels?: Partial<ProcessingLabels>;
 }
 
 /** Skeleton/結果領域の寸法を保ったまま共通 timer を付ける loading container。 */
@@ -229,6 +249,7 @@ export function TimedLoadingState({
   testId,
   framed = true,
   activityIcon,
+  labels,
 }: TimedLoadingStateProps) {
   const effectiveActivityIcon = activityIcon ?? (placement === "result" ? "none" : "spinner");
 
@@ -251,6 +272,7 @@ export function TimedLoadingState({
         placement={placement}
         testId={testId ? `${testId}-processing` : undefined}
         activityIcon={effectiveActivityIcon}
+        labels={labels}
       />
       {children}
     </section>

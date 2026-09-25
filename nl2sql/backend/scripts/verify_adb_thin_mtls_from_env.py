@@ -177,9 +177,11 @@ def load_env(env_file: Path) -> dict[str, str]:
 
 def refresh_wallet_from_oci() -> bool:
     try:
-        from app.clients.oci_database import OciDatabaseClient
-        from app.features.settings import router as settings_router
-        from app.settings import get_settings
+        from pr_system_settings import database as shared_database
+        from pr_system_settings.oci_database import OciDatabaseClient
+
+        from app.clients.oracle import close_oracle_pool
+        from app.settings import BACKEND_ENV_FILE, get_settings
     except Exception as exc:
         print(f"refresh_wallet_error=import_failed ({type(exc).__name__}: {exc})")
         return False
@@ -191,7 +193,7 @@ def refresh_wallet_from_oci() -> bool:
             print("refresh_wallet_error=missing_oracle_adb_ocid")
             return False
         try:
-            password = settings_router._wallet_download_password(settings)
+            password = shared_database.wallet_download_password(settings)
         except Exception as exc:
             print(f"refresh_wallet_error={type(exc).__name__}: {exc}")
             return False
@@ -203,12 +205,14 @@ def refresh_wallet_from_oci() -> bool:
                 adb_ocid,
                 password,
                 generate_type,
-                settings_router.ORACLE_WALLET_MAX_BYTES,
+                shared_database.ORACLE_WALLET_MAX_BYTES,
             )
-            settings_data = settings_router._install_downloaded_database_wallet(
+            settings_data = shared_database.install_downloaded_database_wallet(
                 settings,
                 wallet_zip,
                 password,
+                env_file=BACKEND_ENV_FILE,
+                on_saved=lambda _settings: close_oracle_pool(),
             )
         except Exception as exc:
             print(f"refresh_wallet_error={type(exc).__name__}: {exc}")

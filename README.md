@@ -4,7 +4,7 @@ Oracle / OCI 上で動く本番品質の AI 業務アプリ群（**RAG / NL2SQL 
 
 | ディレクトリ | 内容 |
 |---|---|
-| [`platform/`](./platform/) | 共通基盤。共有 UI `@engchina/production-ready-ui`、共有 backend `pr_backend_core`、デザインシステム |
+| [`platform/`](./platform/) | 共通基盤。共有 UI `@engchina/production-ready-ui`、共有のシステム設定（`@engchina/production-ready-system-settings` / `pr_system_settings`）、共有 backend `pr_backend_core`、デザインシステム、3 製品共通の UX 契約（[`platform/docs/ux-contracts/`](./platform/docs/ux-contracts/README.md)） |
 | [`rag/`](./rag/) | Production Ready RAG — 文書のナレッジ構築と、業務ビューからの検索・回答 |
 | [`nl2sql/`](./nl2sql/) | Production Ready NL2SQL — SQL 専用の自然言語問い合わせ |
 | [`agent/`](./agent/) | Production Control Plane for AI Agents — Business Agent・Skill・Runtime の管理 |

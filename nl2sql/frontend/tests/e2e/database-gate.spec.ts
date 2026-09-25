@@ -334,7 +334,7 @@ test("migration 未適用では通常機能を止め、システムテーブル�
   const systemTablesLink = await expectDatabaseGate(page, {
     title: "データベース接続済み・初期化が必要です",
     message:
-      "データベースへの接続は確認できましたが、NL2SQL のシステムテーブルが初期化されていません。システム設定の「システムテーブル」から作成・更新してください。",
+      "データベースへの接続は確認できましたが、NL2SQL のシステムテーブルが初期化されていません。運用設定の「システムテーブル」から作成・更新してください。",
     actionName: "システムテーブルを開く",
     actionHref: "/settings/system-tables",
     settingsHint:

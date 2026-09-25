@@ -51,3 +51,47 @@ test("サイドナビのシステム設定に外観がある", async ({ page }) 
   await page.goto("/settings/appearance");
   await expect(page.getByRole("link", { name: "外観" })).toHaveAttribute("href", "/settings/appearance");
 });
+
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 800 },
+  { name: "mobile", width: 375, height: 812 },
+]) {
+  test(`サイドナビは運用設定のあとに共通のシステム設定を並べる (${viewport.name})`, async ({ page }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.goto("/settings/appearance");
+    const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
+
+    // 「… → 運用設定 → システム設定」の順（#87）。
+    const sectionIds = await sidebar
+      .locator('[id^="nav-section-nav-section-"]')
+      .evaluateAll((elements) => elements.map((element) => element.id));
+    expect(sectionIds.slice(-2)).toEqual([
+      "nav-section-nav-section-operations",
+      "nav-section-nav-section-settings",
+    ]);
+
+    // 運用設定は Agent 固有の5項目、システム設定は3製品共通の5項目。
+    const operations = sidebar.locator("#nav-section-nav-section-operations");
+    const settings = sidebar.locator("#nav-section-nav-section-settings");
+    await expect(operations.getByRole("link")).toHaveCount(5);
+    await expect(settings.getByRole("link")).toHaveCount(5);
+    for (const href of [
+      "/settings/connection",
+      "/settings/external-rag",
+      "/settings/external-nl2sql",
+      "/settings/external-mcp",
+      "/settings/runtime-snapshot",
+    ]) {
+      await expect(operations.locator(`a[href="${href}"]`)).toHaveCount(1);
+    }
+    for (const href of [
+      "/settings/oci",
+      "/settings/upload-storage",
+      "/settings/model",
+      "/settings/database",
+      "/settings/appearance",
+    ]) {
+      await expect(settings.locator(`a[href="${href}"]`)).toHaveCount(1);
+    }
+  });
+}

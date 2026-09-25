@@ -5,7 +5,7 @@ import test from "node:test";
 const apiSource = readFileSync(new URL("../src/lib/api.ts", import.meta.url), "utf8");
 const queriesSource = readFileSync(new URL("../src/lib/queries.ts", import.meta.url), "utf8");
 const databaseSettingsSource = readFileSync(
-  new URL("../src/components/settings/DatabaseSettingsClient.tsx", import.meta.url),
+  new URL("../src/components/settings/SelectAiCredentialCard.tsx", import.meta.url),
   "utf8",
 );
 const profilePageSource = readFileSync(

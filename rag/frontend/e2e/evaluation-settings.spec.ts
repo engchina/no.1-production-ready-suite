@@ -24,7 +24,7 @@ for (const viewport of [
 
     await page.goto("/settings/evaluation");
 
-    await expect(page.getByRole("heading", { name: "品質評価" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "品質評価", exact: true, level: 1 })).toBeVisible();
     await expect(page.getByRole("radio", { name: /リクエスト準拠/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /厳格 CI/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /Ragas 観点/ })).toBeVisible();

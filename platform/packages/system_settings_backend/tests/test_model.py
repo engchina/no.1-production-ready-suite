@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import stat
 from collections.abc import Mapping
 from pathlib import Path
@@ -21,6 +20,7 @@ from pr_system_settings.model import (
     ModelSettingsSection,
     ModelSettingsStore,
     ModelSettingsTestRequest,
+    SectionSecret,
     build_model_router,
 )
 
@@ -51,6 +51,7 @@ class FakeSettings(ModelSecretStateMixin):
     oci_genai_embedding_dim: int = 1536
     oci_genai_rerank_model: str = "cohere.rerank-v4.0-fast"
     parser_backend: str = "unstructured"
+    parser_api_key: str = ""
 
 
 PAYLOAD: dict[str, Any] = {
@@ -68,21 +69,27 @@ PAYLOAD: dict[str, Any] = {
 }
 
 
+PARSER_KEY_ENV = "TEST_PARSER_API_KEY"
+
+
 def _load_parser(settings: Any, raw: Mapping[str, Any] | None, version: int) -> None:
     if raw is not None:
         settings.parser_backend = raw["backend"]
+        settings.parser_api_key = raw.get("api_key", settings.parser_api_key)
 
 
 PARSER_SECTION = ModelSettingsSection(
     name="parser_adapters",
     load=_load_parser,
-    dump=lambda settings: {"backend": settings.parser_backend},
+    dump=lambda settings: {"backend": settings.parser_backend, "api_key": settings.parser_api_key},
+    secrets=(SectionSecret(key="api_key", attr="parser_api_key", env=PARSER_KEY_ENV),),
 )
 
 
 @pytest.fixture(autouse=True)
 def _no_process_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(ENTERPRISE_AI_API_KEY_ENV, raising=False)
+    monkeypatch.delenv(PARSER_KEY_ENV, raising=False)
 
 
 def make_store(tmp_path: Path) -> ModelSettingsStore:
@@ -262,18 +269,25 @@ def test_model_test_requires_model_id(tmp_path: Path) -> None:
     assert data["data"]["raw_error"] == "テストするモデル ID を入力してください。"
 
 
-def test_process_environment_key_is_not_overridden_by_env_file(
+def test_saved_key_overrides_process_environment_key(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    settings = FakeSettings()
+    """画面で保存した key はプロセスの環境変数より優先し、削除すると環境変数へ戻る。"""
+    monkeypatch.setenv(ENTERPRISE_AI_API_KEY_ENV, "sk-process")
+    settings = FakeSettings(oci_enterprise_ai_api_key="sk-process")
     store = make_store(tmp_path)
     store.load(settings)
-    make_client(settings, store).patch("/api/settings/model", json=PAYLOAD)
-    monkeypatch.setenv(ENTERPRISE_AI_API_KEY_ENV, "sk-process")
-    os.utime(tmp_path / "model-settings.json", ns=(1, 1))
+    client = make_client(settings, store)
 
-    store.reload_if_changed(settings)
+    client.patch("/api/settings/model", json=PAYLOAD)
+    data = client.get("/api/settings/model").json()["data"]
+    assert settings.oci_enterprise_ai_api_key == "sk-new"
+    assert data["settings"]["enterprise_ai"]["has_api_key"] is True
 
+    clear = {**PAYLOAD, "enterprise_ai": {**PAYLOAD["enterprise_ai"], "clear_api_key": True}}
+    cleared = client.patch("/api/settings/model", json=clear).json()["data"]
+    assert cleared["settings"]["enterprise_ai"]["has_api_key"] is True
+    client.get("/api/settings/model")
     assert settings.oci_enterprise_ai_api_key == "sk-process"
 
 
@@ -300,3 +314,66 @@ def test_key_saved_in_env_file_is_used_on_startup(tmp_path: Path) -> None:
     make_store(tmp_path).load(settings)
     assert settings.oci_enterprise_ai_api_key == "sk-volume"
     assert settings.model_secret_source == "environment"
+
+
+def test_section_secret_is_saved_only_in_env_file(tmp_path: Path) -> None:
+    settings = FakeSettings(parser_api_key="parser-secret")
+    store = make_store(tmp_path)
+    store.load(settings)
+    make_client(settings, store).patch("/api/settings/model", json=PAYLOAD)
+
+    document = (tmp_path / "model-settings.json").read_text(encoding="utf-8")
+    assert "parser-secret" not in document
+    assert dotenv_values(tmp_path / ".env")[PARSER_KEY_ENV] == "parser-secret"
+
+    other = FakeSettings()
+    make_store(tmp_path).load(other)
+    assert other.parser_api_key == "parser-secret"
+
+
+def test_legacy_section_secret_is_used_and_moved_to_env_file(tmp_path: Path) -> None:
+    legacy = {
+        "version": 2,
+        "enterprise_ai": {"models": []},
+        "parser_adapters": {"backend": "mineru", "api_key": "legacy-parser"},
+    }
+    (tmp_path / "model-settings.json").write_text(json.dumps(legacy), encoding="utf-8")
+    settings = FakeSettings()
+    store = make_store(tmp_path)
+    store.load(settings)
+    assert settings.parser_api_key == "legacy-parser"
+    assert settings.legacy_model_secret_detected is True
+
+    make_client(settings, store).patch("/api/settings/model", json=PAYLOAD)
+
+    assert "legacy-parser" not in (tmp_path / "model-settings.json").read_text(encoding="utf-8")
+    assert dotenv_values(tmp_path / ".env")[PARSER_KEY_ENV] == "legacy-parser"
+    assert settings.parser_api_key == "legacy-parser"
+    assert settings.legacy_model_secret_detected is False
+
+
+def test_section_secret_prefers_env_file_then_process_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(PARSER_KEY_ENV, "from-process")
+    (tmp_path / ".env").write_text(f"{PARSER_KEY_ENV}=from-screen\n", encoding="utf-8")
+    settings = FakeSettings()
+    make_store(tmp_path).load(settings)
+    assert settings.parser_api_key == "from-screen"
+
+    (tmp_path / ".env").write_text("", encoding="utf-8")
+    other = FakeSettings()
+    make_store(tmp_path).load(other)
+    assert other.parser_api_key == "from-process"
+
+
+def test_value_from_process_environment_is_not_written_to_env_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(PARSER_KEY_ENV, "from-process")
+    settings = FakeSettings(parser_api_key="from-process")
+    store = make_store(tmp_path)
+    store.load(settings)
+    make_client(settings, store).patch("/api/settings/model", json=PAYLOAD)
+    assert PARSER_KEY_ENV not in dotenv_values(tmp_path / ".env")
+    assert settings.parser_api_key == "from-process"

@@ -10,6 +10,10 @@ import {
   FormStatus,
   PageBody,
   useConfirm,
+  BulkSelectionActions,
+  ProcessingIndicator,
+  DisclosureChevron,
+  RowActionMenu,
 } from "@engchina/production-ready-ui";
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -26,16 +30,12 @@ import { useSearchParams } from "react-router-dom";
 
 
 
-import { BulkSelectionActions } from "@/components/BulkSelectionActions";
-import { ProcessingIndicator } from "@/components/ProcessingState";
 import { ErrorState, LoadingState } from "@/components/StateViews";
 import { usePageNotice, PageNotice } from "@/components/page-notice";
-import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
 import { FileDropzone } from "@/components/ui/file-dropzone";
 import { FieldLabel } from "@/components/ui/required-field";
 import { ApiError, apiDelete, apiFetch, apiGet, apiPost, apiPostForm } from "@/lib/api";
 import { downloadBlob, downloadFilename } from "@/lib/download";
-import { RowActionMenu } from "@/components/ObjectActions";
 import { t } from "@/lib/i18n";
 import { toastError } from "@/lib/toast";
 import { XLSX_TEMPLATE_FILE_FORMATS } from "@/lib/tabular-file-formats";
@@ -861,7 +861,7 @@ export function EvaluationPage() {
                           >
                             {t("qualityEvaluation.action.view")}
                           </Button>
-                          {/* 中止・削除は行内に並べず、行メニューにまとめる（docs/frontend-button-spec.md §5.1）。 */}
+                          {/* 中止・削除は行内に並べず、行メニューにまとめる（platform/docs/ux-contracts/buttons.md §5.1）。 */}
                           <RowActionMenu
                             ariaLabel={t("qualityEvaluation.action.rowActions", { job: profileRecordDisplayLabel(job) })}
                             testId={`quality-evaluation-job-actions-${job.job_id}`}

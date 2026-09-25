@@ -9,6 +9,12 @@ async function expectNoHorizontalOverflow(page: Page) {
   expect(hasNoOverflow).toBe(true);
 }
 
+/** 行の操作メニュー（RowActionMenu）を開いて項目を選ぶ。 */
+async function chooseRowAction(page: Page, name: string, item: string) {
+  await page.getByRole("button", { name: `${name} の操作` }).click();
+  await page.getByRole("menuitem", { name: item }).click();
+}
+
 async function expectDocumentScrollLocked(page: Page) {
   await page.evaluate(() => window.scrollTo(0, 1000));
   const metrics = await page.evaluate(() => ({
@@ -233,8 +239,8 @@ test.describe("Agent Runtime settings", () => {
     await page.goto("/settings/model");
     await expect(page.getByRole("heading", { name: "モデル設定", level: 1 })).toBeVisible();
     await page.getByRole("textbox", { name: "API key" }).fill("test-api-key");
-    await page.getByRole("button", { name: /保存/ }).click();
-    await expect(page.getByText("モデル設定を保存しました")).toBeVisible();
+    await page.getByRole("button", { name: "OCI Enterprise AI: 保存" }).click();
+    await expect(page.getByText("OCI Enterprise AI 接続設定を保存しました。").first()).toBeVisible();
     expect(mockApi.lastRequest("PATCH", "/api/settings/model")?.body).toMatchObject({
       enterprise_ai: { api_key: "test-api-key" },
     });
@@ -306,20 +312,23 @@ test.describe("Agent Runtime settings", () => {
     await expect(page.getByRole("heading", { name: "MCP サーバー" })).toBeVisible();
     await expectNoHorizontalOverflow(page);
 
-    // サーバーを追加(フォームと探索パネルで Server ID ラベルが重複するため id 指定)
+    // サーバーを追加（全画面エディタ ?id=new。フォームと探索パネルで Server ID ラベルが重複するため id 指定）
     await page.getByRole("button", { name: "サーバーを追加" }).click();
+    await expect(page).toHaveURL(/\/settings\/external-mcp\?id=new$/);
     await page.locator("#mcp-server-id").fill("crm");
     await page.locator("#mcp-server-label").fill("CRM Gateway");
     await page.locator("#mcp-server-base-url").fill("http://mcp.example.test/jsonrpc");
     await page.locator("#mcp-server-timeout").fill("7");
     await page.getByRole("button", { name: "作成" }).click();
     await expect(page.getByText("サーバーを追加しました")).toBeVisible();
-
-    // crm 行が描画され、既定に切り替えられる
-    await page.getByRole("button", { name: "既定にする crm" }).click();
+    // 作成後は作成した対象のエディタへ移り、概要の ObjectActionBar で既定に切り替えられる
+    await expect(page).toHaveURL(/\?id=crm$/);
+    await expect(page.getByRole("heading", { name: "CRM Gateway", level: 1 })).toBeVisible();
+    await page.getByTestId("mcp-server-object-actions").getByRole("button", { name: "既定にする" }).click();
     await expect(page.getByText("既定サーバーを変更しました")).toBeVisible();
 
-    // tool 探索(crm の mock gateway を引く)
+    // tool 探索（一覧に戻って crm の mock gateway を引く）
+    await page.getByRole("button", { name: "一覧に戻る" }).click();
     await expect(page.getByRole("heading", { name: "MCP tools/list" })).toBeVisible();
     await page.locator("#mcp-discovery-server-id").fill("crm");
     await page.locator("#mcp-discovery-trace-id").fill("trace-ui-mcp-list");
@@ -333,27 +342,23 @@ test.describe("Agent Runtime settings", () => {
     await expectNoHorizontalOverflow(page);
     await page.setViewportSize({ width: 1280, height: 800 });
 
-    // 削除(crm を消すと既定は default へ戻る)
-    await page.getByRole("button", { name: "削除 crm" }).click();
+    // 削除（行メニュー → 確認。crm を消すと既定は default へ戻る）
+    await chooseRowAction(page, "crm", "削除");
     await page.getByRole("button", { name: "削除", exact: true }).click();
     await expect(page.getByText("サーバーを削除しました")).toBeVisible();
-    await expect(page.getByRole("button", { name: "削除 crm" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "crm の操作" })).toHaveCount(0);
   });
 
   test("スキルを追加・編集・削除でき、ビルトインは保護される", async ({ page }) => {
     await page.goto("/skills");
 
     await expect(page.getByRole("heading", { name: "スキル", level: 1 })).toBeVisible();
-    // ビルトインは詳細はあるが編集・削除は持たない
-    await expect(
-      page.getByRole("button", { name: "詳細 business_rag_research" })
-    ).toBeVisible();
-    await expect(
-      page.getByRole("button", { name: "編集 business_rag_research" })
-    ).toHaveCount(0);
-    await expect(
-      page.getByRole("button", { name: "削除 business_rag_research" })
-    ).toHaveCount(0);
+    // ビルトインは詳細を開けるが、行メニュー（削除）を持たない
+    await expect(page.getByRole("button", { name: "業務 RAG 調査 の操作" })).toHaveCount(0);
+    await page.getByRole("button", { name: /業務 RAG 調査/ }).click();
+    await expect(page.getByText("このスキルは読み取り専用です", { exact: false })).toBeVisible();
+    await expect(page.getByRole("button", { name: "保存" })).toHaveCount(0);
+    await page.getByRole("button", { name: "一覧に戻る" }).click();
     await expectNoHorizontalOverflow(page);
 
     // 追加
@@ -366,27 +371,27 @@ test.describe("Agent Runtime settings", () => {
     await page.getByLabel("Resource ID (JSON)").fill('["prompt.e2e"]');
     await page.getByRole("button", { name: "作成" }).click();
     await expect(page.getByText("スキルを追加しました")).toBeVisible();
-    await expect(page.getByRole("button", { name: "詳細 e2e_custom" })).toBeVisible();
-
-    // 詳細(progressive disclosure: MCP/resource 依存を表示)
-    await page.getByRole("button", { name: "詳細 e2e_custom" }).click();
-    await expect(page.locator("pre").filter({ hasText: "external_rag_search" })).toBeVisible();
+    await expect(page).toHaveURL(/\/skills\?id=e2e_custom$/);
+    // URL の更新は画面の切替（transition）より先に終わるため、編集のエディタが出たことを待つ。
+    await expect(page.getByRole("heading", { name: "E2E カスタム", level: 1 })).toBeVisible();
+    await expect(page.locator("#skill-id")).toBeDisabled();
+    await expect(page.getByLabel("MCP 依存 (JSON)")).toHaveValue(/external_rag_search/);
 
     // 編集
-    await page.getByRole("button", { name: "編集 e2e_custom" }).click();
     await page.getByLabel("名前").fill("E2E カスタム改");
     await page.getByRole("button", { name: "保存" }).click();
     await expect(page.getByText("スキルを更新しました")).toBeVisible();
 
-    // 宣言の再読込
+    // 宣言の再読込（一覧のページ操作）
+    await page.getByRole("button", { name: "一覧に戻る" }).click();
     await page.getByRole("button", { name: "宣言を再読込" }).click();
     await expect(page.getByText("宣言スキルを再読込しました")).toBeVisible();
 
-    // 削除
-    await page.getByRole("button", { name: "削除 e2e_custom" }).click();
+    // 削除（行メニュー → 確認）
+    await chooseRowAction(page, "E2E カスタム改", "削除");
     await page.getByRole("button", { name: "削除", exact: true }).click();
     await expect(page.getByText("スキルを削除しました")).toBeVisible();
-    await expect(page.getByRole("button", { name: "詳細 e2e_custom" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /E2E カスタム改/ })).toHaveCount(0);
 
     await page.setViewportSize({ width: 375, height: 812 });
     await expectNoHorizontalOverflow(page);
@@ -425,17 +430,21 @@ test.describe("Agent Runtime settings", () => {
     await page.locator("#plugin-manifest").fill(manifest);
     await page.getByRole("button", { name: "install", exact: true }).click();
     await expect(page.getByText("連携機能をインストールしました")).toBeVisible();
-    await expect(page.getByRole("button", { name: "アンインストール ui_plugin" })).toBeVisible();
+    // install 後は連携機能の詳細へ移り、manifest の内容を確認できる
+    await expect(page).toHaveURL(/\/plugins\?id=ui_plugin$/);
+    await expect(page.locator("pre").filter({ hasText: "ui_plugin_skill" })).toBeVisible();
 
-    // 無効化(switch トグル)
-    await page.getByRole("switch", { name: "有効 ui_plugin" }).click();
+    // 無効化（詳細の ObjectActionBar）
+    await page.getByTestId("plugin-object-actions").getByRole("button", { name: "無効にする" }).click();
     await expect(page.getByText("連携機能の有効状態を更新しました")).toBeVisible();
 
-    // アンインストール
-    await page.getByRole("button", { name: "アンインストール ui_plugin" }).click();
+    // アンインストール（詳細の「その他の操作」→ 確認。一覧へ戻る）
+    await page.getByTestId("plugin-object-actions-more").click();
+    await page.getByRole("menuitem", { name: "アンインストール" }).click();
     await page.getByRole("button", { name: "アンインストール", exact: true }).click();
     await expect(page.getByText("連携機能をアンインストールしました")).toBeVisible();
-    await expect(page.getByRole("button", { name: "アンインストール ui_plugin" })).toHaveCount(0);
+    await expect(page).toHaveURL(/\/plugins$/);
+    await expect(page.getByRole("button", { name: "ui_plugin の操作" })).toHaveCount(0);
   });
 
   test("marketplace を追加・refresh・install できる", async ({ page }) => {
@@ -449,26 +458,26 @@ test.describe("Agent Runtime settings", () => {
     await page.locator("#mkt-url").fill("http://marketplace.example.test/marketplace");
     await page.getByRole("button", { name: "作成" }).click();
     await expect(page.getByText("マーケットプレイスを追加しました")).toBeVisible();
+    await expect(page).toHaveURL(/\?id=fixture_market$/);
+    await expect(page.getByRole("heading", { name: "Fixture Market", level: 1 })).toBeVisible();
 
-    // リモート HTTP 取得
-    await page.getByRole("button", { name: "更新 fixture_market" }).click();
+    // リモート HTTP 取得（詳細の ObjectActionBar）→ 利用可能な連携機能を行メニューから install
+    await expect(page.getByText("連携機能がありません。URL を更新してください。")).toBeVisible();
+    await page.getByTestId("marketplace-object-actions").getByRole("button", { name: "更新" }).click();
     await expect(page.getByText("連携機能一覧を更新しました")).toBeVisible();
-
-    // 閲覧 → install
-    await page.getByRole("button", { name: "連携機能を見る fixture_market" }).click();
     await expect(page.getByRole("heading", { name: "利用可能な連携機能" })).toBeVisible();
     await expect(page.getByText("Fixture Plugin")).toBeVisible();
-    await page.getByRole("button", { name: "install fixture_plugin" }).click();
+    await chooseRowAction(page, "fixture_plugin", "インストール");
     await expect(page.getByText("連携機能をインストールしました")).toBeVisible();
 
     // cleanup: plugins ページでアンインストール、marketplace を削除
     await page.goto("/plugins");
-    await page.getByRole("button", { name: "アンインストール fixture_plugin" }).click();
+    await chooseRowAction(page, "fixture_plugin", "アンインストール");
     await page.getByRole("button", { name: "アンインストール", exact: true }).click();
     await expect(page.getByText("連携機能をアンインストールしました")).toBeVisible();
 
     await page.goto("/plugins/marketplaces");
-    await page.getByRole("button", { name: "削除 fixture_market" }).click();
+    await chooseRowAction(page, "fixture_market", "削除");
     await page.getByRole("button", { name: "削除", exact: true }).click();
     await expect(page.getByText("マーケットプレイスを削除しました")).toBeVisible();
     await expectNoHorizontalOverflow(page);
@@ -518,6 +527,8 @@ test.describe("Agent Runtime settings", () => {
     await page.goto("/agents");
 
     await expect(page.getByRole("heading", { name: "業務 Agent", level: 1 })).toBeVisible();
+    await page.getByRole("button", { name: "業務 Agent を作成" }).click();
+    await expect(page).toHaveURL(/\/agents\?id=new$/);
     await page.locator("#new-agent-name").fill("RAG Skill Agent");
     await page.locator("#new-agent-description").fill("Skill で能力を選択する");
     await page
@@ -528,6 +539,7 @@ test.describe("Agent Runtime settings", () => {
       .check();
     await page.getByRole("button", { name: "作成" }).first().click();
     await expect(page.getByText("Agent を作成しました")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "RAG Skill Agent", level: 1 })).toBeVisible();
     await expect(page.getByText("Command allowed prefixes")).toHaveCount(0);
     await expectNoHorizontalOverflow(page);
 

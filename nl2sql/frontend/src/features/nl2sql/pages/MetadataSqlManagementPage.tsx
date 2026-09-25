@@ -17,12 +17,12 @@ import {
   StatusBadge,
   PageHeader,
   PageBody,
+  BulkSelectionActions,
+  ContentActionBar,
+  ProcessingIndicator,
 } from "@engchina/production-ready-ui";
 
 
-import { BulkSelectionActions } from "@/components/BulkSelectionActions";
-import { ContentActionBar } from "@/components/ContentActionBar";
-import { ProcessingIndicator } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";
 import { ErrorState } from "@/components/StateViews";
 import { IdentifierText } from "@/components/IdentifierText";

@@ -9,6 +9,47 @@
 import { t } from "./i18n";
 
 // OCI 認証 API の型は platform の共有パッケージが正本（#100）。
+// モデル設定の API 型は3製品共通（platform の共有パッケージ。#103）。
+// データベース設定の API 型は3製品共通（platform の共有パッケージ。#108）。
+export type {
+  AdbInfoData,
+  AdbOperationStatus,
+  AdbSettingsUpdate,
+  DatabaseConnectionSecurity,
+  DatabaseConnectionTestResult,
+  DatabaseConnectionTestStatus,
+  DatabasePasswordRevealData,
+  DatabaseSettingsData,
+  DatabaseSettingsUpdate,
+  DatabaseWalletDownloadData,
+} from "@engchina/production-ready-system-settings";
+import type {
+  AdbInfoData,
+  AdbSettingsUpdate,
+  DatabaseConnectionTestResult,
+  DatabaseSettingsData,
+  DatabaseSettingsUpdate,
+  DatabaseWalletDownloadData,
+} from "@engchina/production-ready-system-settings";
+export type {
+  EnterpriseAiConfiguredModel,
+  EnterpriseAiModelSettings,
+  EnterpriseAiVlmInputMode,
+  GenerativeAiModelSettings,
+  ModelSettingsData,
+  ModelSettingsPayload,
+  ModelSettingsSecretSource,
+  ModelSettingsTestRequest,
+  ModelSettingsTestResult,
+  ModelSettingsTestStatus,
+  ModelSettingsTestTargetType,
+} from "@engchina/production-ready-system-settings";
+import type {
+  ModelSettingsData,
+  ModelSettingsPayload,
+  ModelSettingsTestRequest,
+  ModelSettingsTestResult,
+} from "@engchina/production-ready-system-settings";
 export type {
   OciConfigField,
   OciConfigReadData,
@@ -50,24 +91,19 @@ import type {
 
 export const API_REQUEST_TIMEOUT_MS = resolveTimeoutMs(
   import.meta.env.VITE_API_TIMEOUT_MS,
-  30_000
+  30_000,
 );
 // バックエンドは DB 停止時 dashboard_query_timeout_seconds(既定 8 秒)で縮退応答する。
 // フロント側は縮退応答が届くよう十分な余裕を取り、全画面エラーに落ちないようにする。
 export const DASHBOARD_REQUEST_TIMEOUT_MS = resolveTimeoutMs(
   import.meta.env.VITE_DASHBOARD_API_TIMEOUT_MS,
-  15_000
+  15_000,
 );
 
 /** DB 停止時に warning_messages を併せて返す閲覧系レスポンス。 */
 export type Degradable<T> = T & { warning_messages: string[] };
 export type JsonValue =
-  | string
-  | number
-  | boolean
-  | null
-  | JsonValue[]
-  | { [key: string]: JsonValue };
+  string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 
 export type FileStatus =
   | "UPLOADED"
@@ -94,29 +130,11 @@ export type FeedbackTargetType = "answer" | "citation";
 export type FeedbackSourceSurface = "search" | "chat";
 export type UploadIngestionMode = "manual";
 export type SourceModality =
-  | "pdf"
-  | "image"
-  | "text"
-  | "html"
-  | "email"
-  | "office"
-  | "audio"
-  | "unknown";
+  "pdf" | "image" | "text" | "html" | "email" | "office" | "audio" | "unknown";
 export type SourcePreviewKind =
-  | "pdf"
-  | "image"
-  | "text"
-  | "html"
-  | "email"
-  | "office"
-  | "unsupported";
+  "pdf" | "image" | "text" | "html" | "email" | "office" | "unsupported";
 export type IngestionJobStatus =
-  | "QUEUED"
-  | "RUNNING"
-  | "SUCCEEDED"
-  | "FAILED"
-  | "SKIPPED"
-  | "CANCELLED";
+  "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED" | "SKIPPED" | "CANCELLED";
 export type EvaluationFailureReason =
   | "retrieval_miss"
   | "partial_recall"
@@ -143,14 +161,6 @@ export type EvaluationMetricName =
   | "context_recall"
   | "response_relevancy"
   | "noise_sensitivity";
-export type ModelSettingsCheckStatus = "ok" | "missing" | "invalid";
-export type ModelSettingsTestStatus = "success" | "failed";
-export type ModelSettingsTestTargetType =
-  | "enterprise_text"
-  | "enterprise_vision"
-  | "embedding"
-  | "rerank";
-export type DatabaseConnectionTestStatus = "success" | "failed" | "skipped";
 
 export type ParserAdapterBackend =
   | "local"
@@ -165,7 +175,8 @@ export type ParserAdapterBackend =
   // enterprise_ai_vlm は oci_genai_vision の後方互換エイリアス(legacy 保存値の表示用)。
   | "enterprise_ai_vlm"
   | "oci_document_understanding";
-export type ParserServiceBackendName = "oci_genai_vision" | "oci_document_understanding";
+export type ParserServiceBackendName =
+  "oci_genai_vision" | "oci_document_understanding";
 export type ParserAdapterBackendName =
   | "docling"
   | "marker"
@@ -175,26 +186,20 @@ export type ParserAdapterBackendName =
   | "dots_ocr"
   | "glm_ocr";
 export type ExternalParserBackendName =
-  | "unlimited_ocr"
-  | "mineru"
-  | "dots_ocr"
-  | "glm_ocr";
-export type ExternalParserProtocol = "mineru_file_parse" | "openai_chat_completions";
+  "unlimited_ocr" | "mineru" | "dots_ocr" | "glm_ocr";
+export type ExternalParserProtocol =
+  "mineru_file_parse" | "openai_chat_completions";
 export type ExternalParserConnectionStatus =
   | "available"
   | "unconfigured"
   | "unreachable"
   | "model_missing"
   | "invalid_response";
-export type ParserAdapterStatus = "active" | "available" | "disabled" | "ignored" | "missing";
+export type ParserAdapterStatus =
+  "active" | "available" | "disabled" | "ignored" | "missing";
 export type ParserAdapterScoreBackend = "local" | ParserAdapterBackendName;
 export type ParserAdapterScoreStatus =
-  | "recommended"
-  | "eligible"
-  | "available"
-  | "disabled"
-  | "ignored"
-  | "missing";
+  "recommended" | "eligible" | "available" | "disabled" | "ignored" | "missing";
 export type ParserAdapterContractStatus =
   | "passed"
   | "failed"
@@ -206,14 +211,7 @@ export type ParserAdapterContractStatus =
   | "unsupported"
   | "fixture_missing";
 export type ParserAdapterSourceKind =
-  | "pdf"
-  | "image"
-  | "office"
-  | "html"
-  | "email"
-  | "audio"
-  | "text"
-  | "unknown";
+  "pdf" | "image" | "office" | "html" | "email" | "audio" | "text" | "unknown";
 
 export interface ApiResponse<T> {
   data: T | null;
@@ -316,10 +314,7 @@ export interface HealthData {
 }
 
 export type DatabaseAvailability =
-  | "ok"
-  | "not_configured"
-  | "unreachable"
-  | "setup_required";
+  "ok" | "not_configured" | "unreachable" | "setup_required";
 
 export interface DatabaseStatusData {
   status: DatabaseAvailability;
@@ -666,7 +661,8 @@ export interface ParserExtractionExperimentRequest {
   parser_adapter_backend?: string;
 }
 
-export type DocumentExtractionExportFormat = "json" | "markdown" | "html" | "chunks";
+export type DocumentExtractionExportFormat =
+  "json" | "markdown" | "html" | "chunks";
 
 export interface DocumentExtractionExport {
   document_id: string;
@@ -1046,7 +1042,8 @@ export interface SearchDiagnostics {
   retrieval_strategy: string;
   generation_profile?: GenerationProfileName | string;
   generation_config_source?: "request" | "business_view" | "global";
-  generation_contract_mode?: "groundedness" | "format_validated" | "json_schema" | "custom";
+  generation_contract_mode?:
+    "groundedness" | "format_validated" | "json_schema" | "custom";
   generation_attempt_count?: number;
   generation_repair_count?: number;
   generation_validation_codes?: string[];
@@ -1161,8 +1158,10 @@ export interface FeedbackSubmissionResponse extends FeedbackRequestBody {
   feedback_id: string;
 }
 
-export interface CurrentFeedbackItem
-  extends Omit<FeedbackSubmissionResponse, "business_view_id" | "source_surface"> {
+export interface CurrentFeedbackItem extends Omit<
+  FeedbackSubmissionResponse,
+  "business_view_id" | "source_surface"
+> {
   business_view_id: string | null;
   source_surface: FeedbackSourceSurface | null;
   created_at: string;
@@ -1425,144 +1424,14 @@ export interface EvaluationCompareResponse {
 }
 
 // --- 設定: モデル ---
-export interface EnterpriseAiConfiguredModel {
-  model_id: string;
-  display_name: string;
-  vision_enabled: boolean;
-}
-
-export type EnterpriseAiVlmInputMode = "files_api" | "inline_image";
-
-export interface EnterpriseAiModelSettings {
-  endpoint: string;
-  project_ocid: string;
-  api_key: string;
-  has_api_key: boolean;
-  clear_api_key: boolean;
-  models: EnterpriseAiConfiguredModel[];
-  default_model_id: string;
-  api_path: string;
-  vlm_input_mode: EnterpriseAiVlmInputMode;
-  text_payload_template: string;
-  vision_payload_template: string;
-  text_response_path: string;
-  vision_response_path: string;
-  timeout_seconds: number;
-  max_retries: number;
-}
-
-export interface GenerativeAiModelSettings {
-  embedding_model: string;
-  embedding_dim: number;
-  rerank_model: string;
-}
-
-export interface ModelSettingsPayload {
-  enterprise_ai: EnterpriseAiModelSettings;
-  generative_ai: GenerativeAiModelSettings;
-}
-
-export interface ModelSettingsData {
-  settings: ModelSettingsPayload;
-  // 共有 API（#103）は返さない。画面は 4b で共通化する。
-  checks?: Record<"enterprise_ai" | "generative_ai" | "embedding_dim", ModelSettingsCheckStatus>;
-  model_settings_file: string;
-  source: "runtime";
-}
-
-export interface ModelSettingsTestRequest {
-  settings: ModelSettingsPayload;
-  target_type: ModelSettingsTestTargetType;
-  model_id: string;
-  vision_enabled: boolean;
-}
-
-export interface ModelSettingsTestResult {
-  status: ModelSettingsTestStatus;
-  target_type: ModelSettingsTestTargetType;
-  model_id: string;
-  message: string;
-  troubleshooting: string[];
-  raw_error: string | null;
-  error_type: string | null;
-  elapsed_ms: number;
-  checked_at: string;
-  details: Record<string, string | number | boolean | null>;
-}
-
 // --- 設定: データベース ---
-export interface DatabaseSettingsData {
-  user: string;
-  dsn: string;
-  wallet_dir: string;
-  wallet_uploaded: boolean;
-  available_services: string[];
-  has_password: boolean;
-  has_wallet_password: boolean;
-  readiness: string;
-  embedding_dimension: number;
-  vector_column: string;
-  adb_ocid: string;
-  region: string;
-  config_source: "runtime";
-}
 
-export type AdbOperationStatus =
-  | "success"
-  | "not_configured"
-  | "error"
-  | "accepted"
-  | "already_available"
-  | "already_stopped"
-  | "cannot_start"
-  | "cannot_stop";
-
-export interface AdbInfoData {
-  status: AdbOperationStatus;
-  message: string;
-  id: string | null;
-  display_name: string | null;
-  lifecycle_state: string | null;
-  db_name: string | null;
-  cpu_core_count: number | null;
-  data_storage_size_in_tbs: number | null;
-  region: string | null;
-}
-
-export interface AdbSettingsUpdate {
-  adb_ocid: string;
-  region: string;
-}
-
-export interface DatabaseSettingsUpdate {
-  user: string;
-  dsn: string;
-  wallet_dir: string;
-  password?: string;
-  wallet_password?: string;
-  clear_password?: boolean;
-  clear_wallet_password?: boolean;
-}
-
-export interface DatabaseConnectionTestResult {
-  status: DatabaseConnectionTestStatus;
-  readiness: string;
-  message: string;
-  elapsed_ms: number;
-  troubleshooting: string[];
-  details: Record<string, string | number | boolean | null>;
-  checked_at: string;
-  error_type: string | null;
-}
-
-export type SystemTableSchemaStatus = "missing" | "partial" | "outdated" | "ready";
+export type SystemTableSchemaStatus =
+  "missing" | "partial" | "outdated" | "ready";
 export type SystemTableOperationStatus = "idle" | "running" | "failed";
 export type SystemTableOperationKind = "initialize" | "recreate";
 export type SystemTableOperationResult =
-  | "no_op"
-  | "initialized"
-  | "migrated"
-  | "recreated";
+  "no_op" | "initialized" | "migrated" | "recreated";
 
 export interface SystemTableObjectData {
   name: string;
@@ -1720,13 +1589,22 @@ export interface ParserAdapterContractSummaryData {
   missing_source_kinds: string[];
   blocking_failure_source_kinds: string[];
   blocking_failure_backends: ParserAdapterBackendName[];
-  backend_status_counts: Partial<Record<ParserAdapterBackendName, Partial<Record<string, number>>>>;
-  backend_source_status: Partial<Record<ParserAdapterBackendName, Record<string, string>>>;
+  backend_status_counts: Partial<
+    Record<ParserAdapterBackendName, Partial<Record<string, number>>>
+  >;
+  backend_source_status: Partial<
+    Record<ParserAdapterBackendName, Record<string, string>>
+  >;
   backend_source_status_counts: Partial<
-    Record<ParserAdapterBackendName, Record<string, Partial<Record<string, number>>>>
+    Record<
+      ParserAdapterBackendName,
+      Record<string, Partial<Record<string, number>>>
+    >
   >;
   source_kind_status_counts: Record<string, Partial<Record<string, number>>>;
-  backend_passed_source_kinds: Partial<Record<ParserAdapterBackendName, string[]>>;
+  backend_passed_source_kinds: Partial<
+    Record<ParserAdapterBackendName, string[]>
+  >;
   scenarios: string[];
   passed_scenarios: string[];
   missing_scenarios: string[];
@@ -1880,15 +1758,9 @@ export type ServiceCategory =
   | "agentic";
 export type ServiceProfile = "cpu" | "gpu" | "oci";
 export type ServiceRuntimeStatus =
-  | "running"
-  | "degraded"
-  | "stopped"
-  | "unconfigured"
-  | "in_process";
+  "running" | "degraded" | "stopped" | "unconfigured" | "in_process";
 export type ServiceExecutionPolicy =
-  | "required_no_fallback"
-  | "in_process_when_disabled"
-  | "selected_adapter";
+  "required_no_fallback" | "in_process_when_disabled" | "selected_adapter";
 export type ServiceAction = "start" | "stop" | "restart" | "build" | "remove";
 
 export interface ServiceModelCacheData {
@@ -1982,9 +1854,7 @@ export type RetrievalModeName =
 
 /** legacy 複合値込みの読み取り互換型。保存は RetrievalModeName のみ。 */
 export type RetrievalStrategyName =
-  | RetrievalModeName
-  | "business_context_strict"
-  | "corrective_multi_query";
+  RetrievalModeName | "business_context_strict" | "corrective_multi_query";
 
 export interface RetrievalStrategyStatusData {
   name: RetrievalStrategyName;
@@ -2135,7 +2005,8 @@ export interface PromptVersionCreate {
 }
 
 // --- 設定: Guardrail アダプター ---
-export type GuardrailPolicyName = "standard" | "strict" | "lenient" | "regulated";
+export type GuardrailPolicyName =
+  "standard" | "strict" | "lenient" | "regulated";
 
 export interface GuardrailPolicyStatusData {
   name: GuardrailPolicyName;
@@ -2318,7 +2189,7 @@ function runtimeApiTimeoutOverrideMs(): number | null {
   if (typeof window === "undefined") return null;
   const value = Number(
     (window as unknown as { __RAG_API_TIMEOUT_MS__?: string | number })
-      .__RAG_API_TIMEOUT_MS__
+      .__RAG_API_TIMEOUT_MS__,
   );
   return Number.isFinite(value) && value > 0 ? value : null;
 }
@@ -2339,10 +2210,12 @@ async function parseEnvelope<T>(res: Response): Promise<ApiResponse<T>> {
 async function requestEnvelope<T>(
   path: string,
   init?: RequestInit,
-  options: { allowStatus?: number[]; timeoutMs?: number } = {}
+  options: { allowStatus?: number[]; timeoutMs?: number } = {},
 ): Promise<ApiResponse<T>> {
   const timeoutMs =
-    runtimeApiTimeoutOverrideMs() ?? options.timeoutMs ?? API_REQUEST_TIMEOUT_MS;
+    runtimeApiTimeoutOverrideMs() ??
+    options.timeoutMs ??
+    API_REQUEST_TIMEOUT_MS;
   const controller = new AbortController();
   const externalSignal = init?.signal;
   let timedOut = false;
@@ -2352,7 +2225,9 @@ async function requestEnvelope<T>(
   if (externalSignal?.aborted) {
     abortFromExternal();
   } else {
-    externalSignal?.addEventListener("abort", abortFromExternal, { once: true });
+    externalSignal?.addEventListener("abort", abortFromExternal, {
+      once: true,
+    });
   }
 
   if (timeoutMs > 0) {
@@ -2395,7 +2270,7 @@ async function requestEnvelope<T>(
 async function request<T>(
   path: string,
   init?: RequestInit,
-  options: { allowStatus?: number[]; timeoutMs?: number } = {}
+  options: { allowStatus?: number[]; timeoutMs?: number } = {},
 ): Promise<T> {
   const envelope = await requestEnvelope<T>(path, init, options);
   return envelope.data as T;
@@ -2409,7 +2284,7 @@ async function request<T>(
 async function requestDegradable<T extends object>(
   path: string,
   init?: RequestInit,
-  options: { allowStatus?: number[]; timeoutMs?: number } = {}
+  options: { allowStatus?: number[]; timeoutMs?: number } = {},
 ): Promise<Degradable<T>> {
   const envelope = await requestEnvelope<T>(path, init, options);
   return {
@@ -2436,11 +2311,13 @@ function ingestionJobSearch(force: boolean, phase: IngestionJobPhase): string {
 export const api = {
   // 認証
   getAuthStatus: () => request<AuthStatus>("/api/auth/me"),
-  login: (body: LoginRequestBody) => request<AuthStatus>("/api/auth/login", jsonBody(body)),
+  login: (body: LoginRequestBody) =>
+    request<AuthStatus>("/api/auth/login", jsonBody(body)),
   logout: () => request<AuthStatus>("/api/auth/logout", { method: "POST" }),
 
   // ヘルスチェック
-  getReadiness: () => request<HealthData>("/api/ready", undefined, { allowStatus: [503] }),
+  getReadiness: () =>
+    request<HealthData>("/api/ready", undefined, { allowStatus: [503] }),
 
   // データベース利用可否(設定の有無 + 実接続プローブ)。DB ゲートが参照する。
   getDatabaseStatus: () => request<DatabaseStatusData>("/api/ready/database"),
@@ -2452,124 +2329,159 @@ export const api = {
     }),
 
   // ドキュメント
-  listDocuments: (params: {
-    status?: FileStatus;
-    q?: string;
-    knowledge_base_id?: string;
-    limit?: number;
-    offset?: number;
-  } = {}) => {
+  listDocuments: (
+    params: {
+      status?: FileStatus;
+      q?: string;
+      knowledge_base_id?: string;
+      limit?: number;
+      offset?: number;
+    } = {},
+  ) => {
     const search = new URLSearchParams();
     if (params.status) search.set("status", params.status);
     if (params.q) search.set("q", params.q);
-    if (params.knowledge_base_id) search.set("knowledge_base_id", params.knowledge_base_id);
+    if (params.knowledge_base_id)
+      search.set("knowledge_base_id", params.knowledge_base_id);
     if (params.limit != null) search.set("limit", String(params.limit));
     if (params.offset != null) search.set("offset", String(params.offset));
     const qs = search.toString();
-    return requestDegradable<Page<DocumentSummary>>(`/api/documents${qs ? `?${qs}` : ""}`);
+    return requestDegradable<Page<DocumentSummary>>(
+      `/api/documents${qs ? `?${qs}` : ""}`,
+    );
   },
-  getDocument: (id: string) => request<DocumentDetail>(`/api/documents/${encodeURIComponent(id)}`),
+  getDocument: (id: string) =>
+    request<DocumentDetail>(`/api/documents/${encodeURIComponent(id)}`),
   listDocumentChunks: (id: string) =>
-    request<DocumentChunkView[]>(`/api/documents/${encodeURIComponent(id)}/chunks`),
+    request<DocumentChunkView[]>(
+      `/api/documents/${encodeURIComponent(id)}/chunks`,
+    ),
   listDocumentChunkSets: (id: string) =>
-    request<DocumentChunkSet[]>(`/api/documents/${encodeURIComponent(id)}/chunk-sets`),
+    request<DocumentChunkSet[]>(
+      `/api/documents/${encodeURIComponent(id)}/chunk-sets`,
+    ),
   listDocumentRecipes: (id: string) =>
-    request<DocumentRecipeView[]>(`/api/documents/${encodeURIComponent(id)}/recipes`),
+    request<DocumentRecipeView[]>(
+      `/api/documents/${encodeURIComponent(id)}/recipes`,
+    ),
   createDocumentRecipe: (id: string, copyFromRecipeId: string | null) =>
     request<DocumentRecipeView>(
       `/api/documents/${encodeURIComponent(id)}/recipes`,
-      jsonBody({ copy_from_recipe_id: copyFromRecipeId })
+      jsonBody({ copy_from_recipe_id: copyFromRecipeId }),
     ),
-  updateDocumentRecipe: (id: string, recipeId: string, body: DocumentProcessingConfig) =>
+  updateDocumentRecipe: (
+    id: string,
+    recipeId: string,
+    body: DocumentProcessingConfig,
+  ) =>
     request<DocumentRecipeView>(
       `/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(recipeId)}`,
-      { ...jsonBody(body), method: "PUT" }
+      { ...jsonBody(body), method: "PUT" },
     ),
   deleteDocumentRecipe: (id: string, recipeId: string) =>
     request<DocumentRecipeDeleteResult>(
       `/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(recipeId)}`,
-      { method: "DELETE" }
+      { method: "DELETE" },
     ),
   listDocumentRecipeChunks: (id: string, recipeId: string) =>
     request<DocumentChunkView[]>(
-      `/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(recipeId)}/chunks`
+      `/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(recipeId)}/chunks`,
     ),
   previewDocumentRecipeChunks: (
     id: string,
     recipeId: string,
-    body: DocumentChunkPreviewRequest
+    body: DocumentChunkPreviewRequest,
   ) =>
     request<DocumentChunkPreviewResponse>(
       `/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(
-        recipeId
+        recipeId,
       )}/chunk-preview`,
-      jsonBody(body)
+      jsonBody(body),
     ),
   exportDocumentRecipeExtraction: (
     id: string,
     recipeId: string,
-    format: DocumentExtractionExportFormat = "markdown"
+    format: DocumentExtractionExportFormat = "markdown",
   ) => {
     const search = new URLSearchParams({ format });
     return request<DocumentExtractionExport>(
       `/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(
-        recipeId
-      )}/extraction-export?${search.toString()}`
+        recipeId,
+      )}/extraction-export?${search.toString()}`,
     );
   },
   createChunkSetExperiment: (id: string, body: ChunkSetExperimentRequest) =>
     request<DocumentChunkSet>(
       `/api/documents/${encodeURIComponent(id)}/chunk-set-experiments`,
-      jsonBody(body)
+      jsonBody(body),
     ),
   promoteChunkSetExperiment: (id: string, chunkSetId: string) =>
     request<DocumentChunkSet>(
       `/api/documents/${encodeURIComponent(id)}/chunk-set-experiments/${encodeURIComponent(
-        chunkSetId
+        chunkSetId,
       )}/promote`,
-      { method: "POST" }
+      { method: "POST" },
     ),
-  createParserExtractionExperiment: (id: string, body: ParserExtractionExperimentRequest) =>
+  createParserExtractionExperiment: (
+    id: string,
+    body: ParserExtractionExperimentRequest,
+  ) =>
     request<IngestionJob>(
       `/api/documents/${encodeURIComponent(id)}/parser-extraction-experiments`,
-      jsonBody(body)
+      jsonBody(body),
     ),
   getDocumentIngestionConfig: (id: string) =>
     request<DocumentIngestionConfigData>(
-      `/api/documents/${encodeURIComponent(id)}/ingestion-config`
+      `/api/documents/${encodeURIComponent(id)}/ingestion-config`,
     ),
   updateDocumentIngestionConfig: (id: string, body: DocumentProcessingConfig) =>
     request<DocumentIngestionConfigData>(
       `/api/documents/${encodeURIComponent(id)}/ingestion-config`,
-      { ...jsonBody(body), method: "PUT" }
+      { ...jsonBody(body), method: "PUT" },
     ),
-  exportDocumentExtraction: (id: string, format: DocumentExtractionExportFormat = "markdown") => {
+  exportDocumentExtraction: (
+    id: string,
+    format: DocumentExtractionExportFormat = "markdown",
+  ) => {
     const search = new URLSearchParams({ format });
     return request<DocumentExtractionExport>(
-      `/api/documents/${encodeURIComponent(id)}/extraction-export?${search.toString()}`
+      `/api/documents/${encodeURIComponent(id)}/extraction-export?${search.toString()}`,
     );
   },
   listDocumentIngestionJobs: (id: string) =>
-    request<IngestionJob[]>(`/api/documents/${encodeURIComponent(id)}/ingestion-jobs`),
+    request<IngestionJob[]>(
+      `/api/documents/${encodeURIComponent(id)}/ingestion-jobs`,
+    ),
   listDocumentIngestionSegments: (id: string) =>
-    request<IngestionSegment[]>(`/api/documents/${encodeURIComponent(id)}/ingestion-segments`),
+    request<IngestionSegment[]>(
+      `/api/documents/${encodeURIComponent(id)}/ingestion-segments`,
+    ),
   deleteDocument: (id: string) =>
     request<DocumentDeleteResult>(`/api/documents/${encodeURIComponent(id)}`, {
       method: "DELETE",
     }),
-  getDocumentStats: () => requestDegradable<DocumentStats>("/api/documents/stats"),
+  getDocumentStats: () =>
+    requestDegradable<DocumentStats>("/api/documents/stats"),
   listDocumentKnowledgeBases: (id: string) =>
-    request<KnowledgeBaseRef[]>(`/api/documents/${encodeURIComponent(id)}/knowledge-bases`),
-  replaceDocumentKnowledgeBases: (id: string, body: DocumentKnowledgeBaseReplaceRequest) =>
-    request<KnowledgeBaseRef[]>(`/api/documents/${encodeURIComponent(id)}/knowledge-bases`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    }),
+    request<KnowledgeBaseRef[]>(
+      `/api/documents/${encodeURIComponent(id)}/knowledge-bases`,
+    ),
+  replaceDocumentKnowledgeBases: (
+    id: string,
+    body: DocumentKnowledgeBaseReplaceRequest,
+  ) =>
+    request<KnowledgeBaseRef[]>(
+      `/api/documents/${encodeURIComponent(id)}/knowledge-bases`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      },
+    ),
   uploadDocument: (
     file: File,
     knowledgeBaseIds: string[] = [],
-    ingestionMode: UploadIngestionMode = "manual"
+    ingestionMode: UploadIngestionMode = "manual",
   ) => {
     const form = new FormData();
     form.append("file", file);
@@ -2577,12 +2489,15 @@ export const api = {
       form.append("knowledge_base_ids", id);
     }
     form.append("ingestion_mode", ingestionMode);
-    return request<UploadResult>("/api/documents/upload", { method: "POST", body: form });
+    return request<UploadResult>("/api/documents/upload", {
+      method: "POST",
+      body: form,
+    });
   },
   batchUploadDocuments: (
     files: File[],
     knowledgeBaseIds: string[] = [],
-    ingestionMode: UploadIngestionMode = "manual"
+    ingestionMode: UploadIngestionMode = "manual",
   ) => {
     const form = new FormData();
     for (const file of files) {
@@ -2597,109 +2512,133 @@ export const api = {
       body: form,
     });
   },
-  ingestDocument: (id: string, force = false, phase: IngestionJobPhase = "PREPROCESS") =>
+  ingestDocument: (
+    id: string,
+    force = false,
+    phase: IngestionJobPhase = "PREPROCESS",
+  ) =>
     request<IngestionJob>(
       `/api/documents/${encodeURIComponent(id)}/ingestion-jobs?${ingestionJobSearch(force, phase)}`,
-      { method: "POST" }
+      { method: "POST" },
     ),
   enqueueDocumentIngestionJob: (
     id: string,
     force = false,
-    phase: IngestionJobPhase = "PREPROCESS"
+    phase: IngestionJobPhase = "PREPROCESS",
   ) =>
     request<IngestionJob>(
       `/api/documents/${encodeURIComponent(id)}/ingestion-jobs?${ingestionJobSearch(force, phase)}`,
-      { method: "POST" }
+      { method: "POST" },
     ),
   enqueueDocumentRecipeJob: (
     id: string,
     recipeId: string,
-    phase: IngestionJobPhase = "PREPROCESS"
+    phase: IngestionJobPhase = "PREPROCESS",
   ) =>
     request<IngestionJob>(
       `/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(
-        recipeId
+        recipeId,
       )}/ingestion-jobs?phase=${encodeURIComponent(phase)}`,
-      { method: "POST" }
+      { method: "POST" },
     ),
-  retryFailedDocumentIngestionSegments: (id: string, recipeId?: string | null) =>
+  retryFailedDocumentIngestionSegments: (
+    id: string,
+    recipeId?: string | null,
+  ) =>
     request<IngestionJob>(
       `/api/documents/${encodeURIComponent(id)}/ingestion-segments/retry${
         recipeId ? `?recipe_id=${encodeURIComponent(recipeId)}` : ""
       }`,
-      { method: "POST" }
+      { method: "POST" },
     ),
   /** 現在の確認段階を承認し、次の取込 stage を投入する。任意で抽出テキスト修正を伴う。 */
   approveDocument: (id: string, payload?: DocumentApproveRequest) =>
     request<IngestionJob>(
       `/api/documents/${encodeURIComponent(id)}/approve`,
-      payload ? jsonBody(payload) : { method: "POST" }
+      payload ? jsonBody(payload) : { method: "POST" },
     ),
-  approveDocumentRecipe: (id: string, recipeId: string, payload?: DocumentApproveRequest) =>
+  approveDocumentRecipe: (
+    id: string,
+    recipeId: string,
+    payload?: DocumentApproveRequest,
+  ) =>
     request<IngestionJob>(
       `/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(
-        recipeId
+        recipeId,
       )}/approve`,
-      payload ? jsonBody(payload) : { method: "POST" }
+      payload ? jsonBody(payload) : { method: "POST" },
     ),
   /** REVIEW 中の構造化要素修正を保存する。Chunk job は開始しない。 */
   saveDocumentReviewEdits: (id: string, payload: DocumentReviewEditsRequest) =>
-    request<DocumentDetail>(`/api/documents/${encodeURIComponent(id)}/review-edits`, {
-      ...jsonBody(payload),
-      method: "PATCH",
-    }),
+    request<DocumentDetail>(
+      `/api/documents/${encodeURIComponent(id)}/review-edits`,
+      {
+        ...jsonBody(payload),
+        method: "PATCH",
+      },
+    ),
   saveDocumentRecipeReviewEdits: (
     id: string,
     recipeId: string,
-    payload: DocumentReviewEditsRequest
+    payload: DocumentReviewEditsRequest,
   ) =>
     request<DocumentRecipeView>(
       `/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(
-        recipeId
+        recipeId,
       )}/review-edits`,
-      { ...jsonBody(payload), method: "PATCH" }
+      { ...jsonBody(payload), method: "PATCH" },
     ),
   /** REVIEW(確認待ち)文書を却下し、UPLOADED へ戻す。 */
   rejectDocument: (id: string) =>
     request<DocumentDetail>(`/api/documents/${encodeURIComponent(id)}/reject`, {
       method: "POST",
     }),
-  listIngestionJobs: (params: {
-    status?: IngestionJobStatus;
-    limit?: number;
-    offset?: number;
-  } = {}) => {
+  listIngestionJobs: (
+    params: {
+      status?: IngestionJobStatus;
+      limit?: number;
+      offset?: number;
+    } = {},
+  ) => {
     const search = new URLSearchParams();
     if (params.status) search.set("status", params.status);
     if (params.limit != null) search.set("limit", String(params.limit));
     if (params.offset != null) search.set("offset", String(params.offset));
     const qs = search.toString();
     return requestDegradable<Page<IngestionJob>>(
-      `/api/documents/ingestion-jobs${qs ? `?${qs}` : ""}`
+      `/api/documents/ingestion-jobs${qs ? `?${qs}` : ""}`,
     );
   },
   getIngestionJob: (id: string) =>
-    request<IngestionJob>(`/api/documents/ingestion-jobs/${encodeURIComponent(id)}`),
+    request<IngestionJob>(
+      `/api/documents/ingestion-jobs/${encodeURIComponent(id)}`,
+    ),
   drainIngestionJobs: (limit = 50) =>
-    request<IngestionJob[]>(`/api/documents/ingestion-jobs/drain?limit=${limit}`, {
-      method: "POST",
-    }),
+    request<IngestionJob[]>(
+      `/api/documents/ingestion-jobs/drain?limit=${limit}`,
+      {
+        method: "POST",
+      },
+    ),
   retryIngestionJob: (id: string, force = false) =>
     request<IngestionJob>(
       `/api/documents/ingestion-jobs/${encodeURIComponent(id)}/retry${force ? "?force=true" : ""}`,
-      { method: "POST" }
+      { method: "POST" },
     ),
   cancelIngestionJob: (id: string) =>
-    request<IngestionJob>(`/api/documents/ingestion-jobs/${encodeURIComponent(id)}/cancel`, {
-      method: "POST",
-    }),
+    request<IngestionJob>(
+      `/api/documents/ingestion-jobs/${encodeURIComponent(id)}/cancel`,
+      {
+        method: "POST",
+      },
+    ),
   /** 原本/処理後ファイルの配信 URL（プレビュー/ダウンロード用）。 */
   documentContentUrl: (
     id: string,
     options: {
       variant?: "original" | "prepared";
       disposition?: "inline" | "attachment";
-    } = {}
+    } = {},
   ) => {
     const search = new URLSearchParams();
     if (options.variant) search.set("variant", options.variant);
@@ -2713,24 +2652,26 @@ export const api = {
     options: {
       variant?: "original" | "prepared";
       disposition?: "inline" | "attachment";
-    } = {}
+    } = {},
   ) => {
     const search = new URLSearchParams();
     if (options.variant) search.set("variant", options.variant);
     if (options.disposition) search.set("disposition", options.disposition);
     const qs = search.toString();
     return `/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(
-      recipeId
+      recipeId,
     )}/content${qs ? `?${qs}` : ""}`;
   },
 
   // ナレッジベース
-  listKnowledgeBases: (params: {
-    status?: KnowledgeBaseStatus;
-    q?: string;
-    limit?: number;
-    offset?: number;
-  } = {}) => {
+  listKnowledgeBases: (
+    params: {
+      status?: KnowledgeBaseStatus;
+      q?: string;
+      limit?: number;
+      offset?: number;
+    } = {},
+  ) => {
     const search = new URLSearchParams();
     if (params.status) search.set("status", params.status);
     if (params.q) search.set("q", params.q);
@@ -2738,50 +2679,63 @@ export const api = {
     if (params.offset != null) search.set("offset", String(params.offset));
     const qs = search.toString();
     return requestDegradable<Page<KnowledgeBaseSummary>>(
-      `/api/knowledge-bases${qs ? `?${qs}` : ""}`
+      `/api/knowledge-bases${qs ? `?${qs}` : ""}`,
     );
   },
   getKnowledgeBase: (id: string) =>
-    request<KnowledgeBaseDetail>(`/api/knowledge-bases/${encodeURIComponent(id)}`),
+    request<KnowledgeBaseDetail>(
+      `/api/knowledge-bases/${encodeURIComponent(id)}`,
+    ),
   getKnowledgeBaseGraph: (id: string, limit = 80) =>
     request<KnowledgeBaseGraphData>(
-      `/api/knowledge-bases/${encodeURIComponent(id)}/graph?limit=${limit}`
+      `/api/knowledge-bases/${encodeURIComponent(id)}/graph?limit=${limit}`,
     ),
   createKnowledgeBase: (body: KnowledgeBaseCreateRequest) =>
     request<KnowledgeBaseDetail>("/api/knowledge-bases", jsonBody(body)),
   updateKnowledgeBase: (id: string, body: KnowledgeBaseUpdateRequest) =>
-    request<KnowledgeBaseDetail>(`/api/knowledge-bases/${encodeURIComponent(id)}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    }),
+    request<KnowledgeBaseDetail>(
+      `/api/knowledge-bases/${encodeURIComponent(id)}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      },
+    ),
   archiveKnowledgeBase: (id: string) =>
-    request<KnowledgeBaseDetail>(`/api/knowledge-bases/${encodeURIComponent(id)}/archive`, {
-      method: "POST",
-    }),
+    request<KnowledgeBaseDetail>(
+      `/api/knowledge-bases/${encodeURIComponent(id)}/archive`,
+      {
+        method: "POST",
+      },
+    ),
   assignDocumentsToKnowledgeBase: (
     id: string,
-    body: KnowledgeBaseDocumentAssignmentRequest
+    body: KnowledgeBaseDocumentAssignmentRequest,
   ) =>
     request<KnowledgeBaseDetail>(
       `/api/knowledge-bases/${encodeURIComponent(id)}/documents`,
-      jsonBody(body)
+      jsonBody(body),
     ),
-  removeDocumentFromKnowledgeBase: (knowledgeBaseId: string, documentId: string) =>
+  removeDocumentFromKnowledgeBase: (
+    knowledgeBaseId: string,
+    documentId: string,
+  ) =>
     request<KnowledgeBaseDetail>(
       `/api/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}/documents/${encodeURIComponent(
-        documentId
+        documentId,
       )}`,
-      { method: "DELETE" }
+      { method: "DELETE" },
     ),
 
   // 業務ビュー(Business View)
-  listBusinessViews: (params: {
-    status?: BusinessViewStatus;
-    q?: string;
-    limit?: number;
-    offset?: number;
-  } = {}) => {
+  listBusinessViews: (
+    params: {
+      status?: BusinessViewStatus;
+      q?: string;
+      limit?: number;
+      offset?: number;
+    } = {},
+  ) => {
     const search = new URLSearchParams();
     if (params.status) search.set("status", params.status);
     if (params.q) search.set("q", params.q);
@@ -2789,51 +2743,64 @@ export const api = {
     if (params.offset != null) search.set("offset", String(params.offset));
     const qs = search.toString();
     return requestDegradable<Page<BusinessViewSummary>>(
-      `/api/business-views${qs ? `?${qs}` : ""}`
+      `/api/business-views${qs ? `?${qs}` : ""}`,
     );
   },
   getBusinessView: (id: string) =>
-    request<BusinessViewDetail>(`/api/business-views/${encodeURIComponent(id)}`),
+    request<BusinessViewDetail>(
+      `/api/business-views/${encodeURIComponent(id)}`,
+    ),
   createBusinessView: (body: BusinessViewCreateRequest) =>
     request<BusinessViewDetail>("/api/business-views", jsonBody(body)),
   updateBusinessView: (id: string, body: BusinessViewUpdateRequest) =>
-    request<BusinessViewDetail>(`/api/business-views/${encodeURIComponent(id)}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    }),
+    request<BusinessViewDetail>(
+      `/api/business-views/${encodeURIComponent(id)}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      },
+    ),
   archiveBusinessView: (id: string) =>
-    request<BusinessViewDetail>(`/api/business-views/${encodeURIComponent(id)}/archive`, {
-      method: "POST",
-    }),
+    request<BusinessViewDetail>(
+      `/api/business-views/${encodeURIComponent(id)}/archive`,
+      {
+        method: "POST",
+      },
+    ),
   getDomainKeywords: (id: string) =>
     request<DomainKeywordsData>(
-      `/api/business-views/${encodeURIComponent(id)}/domain-keywords`
+      `/api/business-views/${encodeURIComponent(id)}/domain-keywords`,
     ),
   saveDomainKeywords: (id: string, keywords: string[]) =>
-    request<DomainKeywordsData>(`/api/business-views/${encodeURIComponent(id)}/domain-keywords`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ keywords }),
-    }),
+    request<DomainKeywordsData>(
+      `/api/business-views/${encodeURIComponent(id)}/domain-keywords`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ keywords }),
+      },
+    ),
   getApprovedFaq: (id: string) =>
-    request<ApprovedFaqListData>(`/api/business-views/${encodeURIComponent(id)}/approved-faq`),
+    request<ApprovedFaqListData>(
+      `/api/business-views/${encodeURIComponent(id)}/approved-faq`,
+    ),
   addApprovedFaq: (id: string, body: { question: string; answer: string }) =>
     request<ApprovedFaqMutationData>(
       `/api/business-views/${encodeURIComponent(id)}/approved-faq`,
-      jsonBody(body)
+      jsonBody(body),
     ),
   deleteApprovedFaq: (id: string, ids: string[]) =>
     request<ApprovedFaqMutationData>(
       `/api/business-views/${encodeURIComponent(id)}/approved-faq/delete`,
-      jsonBody({ ids })
+      jsonBody({ ids }),
     ),
   previewApprovedFaqImport: (id: string, file: File) => {
     const form = new FormData();
     form.append("file", file);
     return request<ApprovedFaqImportPreviewData>(
       `/api/business-views/${encodeURIComponent(id)}/approved-faq/import/preview`,
-      { method: "POST", body: form }
+      { method: "POST", body: form },
     );
   },
   importApprovedFaq: (id: string, file: File, mode: ApprovedFaqImportMode) => {
@@ -2842,91 +2809,115 @@ export const api = {
     form.append("mode", mode);
     return request<ApprovedFaqMutationData>(
       `/api/business-views/${encodeURIComponent(id)}/approved-faq/import`,
-      { method: "POST", body: form }
+      { method: "POST", body: form },
     );
   },
   suggestApprovedFaq: (id: string, query: string) =>
     request<ApprovedFaqSuggestionsData>(
       `/api/business-views/${encodeURIComponent(id)}/approved-faq/suggest`,
-      jsonBody({ query })
+      jsonBody({ query }),
     ),
   listDocragAnswers: (businessViewId: string, limit = 50) =>
     request<DocragAnswerSummary[]>(
       `/api/search/answers?${new URLSearchParams({
         business_view_id: businessViewId,
         limit: String(limit),
-      }).toString()}`
+      }).toString()}`,
     ),
   getDocragAnswer: (traceId: string) =>
-    request<DocragAnswerDetail>(`/api/search/answers/${encodeURIComponent(traceId)}`),
+    request<DocragAnswerDetail>(
+      `/api/search/answers/${encodeURIComponent(traceId)}`,
+    ),
   deleteDocragAnswer: (traceId: string) =>
-    request<{ trace_id: string }>(`/api/search/answers/${encodeURIComponent(traceId)}`, {
-      method: "DELETE",
-    }),
+    request<{ trace_id: string }>(
+      `/api/search/answers/${encodeURIComponent(traceId)}`,
+      {
+        method: "DELETE",
+      },
+    ),
   getRuntimeKnowledge: (id: string) =>
     request<RuntimeKnowledgeData>(
-      `/api/business-views/${encodeURIComponent(id)}/runtime-knowledge`
+      `/api/business-views/${encodeURIComponent(id)}/runtime-knowledge`,
     ),
   editRuntimeKnowledge: (id: string, body: RuntimeKnowledgeEditRequest) =>
     request<RuntimeKnowledgeData>(
       `/api/business-views/${encodeURIComponent(id)}/runtime-knowledge/edit`,
-      jsonBody(body)
+      jsonBody(body),
     ),
   previewRuntimeKnowledge: (id: string, question: string) =>
     request<RuntimeKnowledgePreviewData>(
       `/api/business-views/${encodeURIComponent(id)}/runtime-knowledge/preview`,
-      jsonBody({ question })
+      jsonBody({ question }),
     ),
   suggestDomainKeywords: (id: string) =>
     request<DomainKeywordSuggestionData>(
       `/api/business-views/${encodeURIComponent(id)}/domain-keywords/suggest`,
-      { method: "POST" }
+      { method: "POST" },
     ),
 
   // チャット（会話 / マルチモデル比較）
-  listConversations: (params: { business_view_id?: string; limit?: number; offset?: number } = {}) => {
+  listConversations: (
+    params: { business_view_id?: string; limit?: number; offset?: number } = {},
+  ) => {
     const search = new URLSearchParams();
-    if (params.business_view_id) search.set("business_view_id", params.business_view_id);
+    if (params.business_view_id)
+      search.set("business_view_id", params.business_view_id);
     if (params.limit != null) search.set("limit", String(params.limit));
     if (params.offset != null) search.set("offset", String(params.offset));
     const qs = search.toString();
     return requestDegradable<Page<ConversationSummary>>(
-      `/api/chat/conversations${qs ? `?${qs}` : ""}`
+      `/api/chat/conversations${qs ? `?${qs}` : ""}`,
     );
   },
   createConversation: (body: ConversationCreateBody) =>
     request<ConversationDetail>("/api/chat/conversations", jsonBody(body)),
   getConversation: (id: string) =>
-    request<ConversationDetail>(`/api/chat/conversations/${encodeURIComponent(id)}`),
+    request<ConversationDetail>(
+      `/api/chat/conversations/${encodeURIComponent(id)}`,
+    ),
   updateConversation: (id: string, body: ConversationUpdateBody) =>
-    request<ConversationSummary>(`/api/chat/conversations/${encodeURIComponent(id)}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    }),
+    request<ConversationSummary>(
+      `/api/chat/conversations/${encodeURIComponent(id)}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      },
+    ),
   archiveConversation: (id: string) =>
-    request<ConversationSummary>(`/api/chat/conversations/${encodeURIComponent(id)}/archive`, {
-      method: "POST",
-    }),
+    request<ConversationSummary>(
+      `/api/chat/conversations/${encodeURIComponent(id)}/archive`,
+      {
+        method: "POST",
+      },
+    ),
   listCompareModels: () => request<CompareModel[]>("/api/chat/models"),
 
   // 検索
-  search: (body: SearchRequestBody) => request<SearchResponse>("/api/search", jsonBody(body)),
+  search: (body: SearchRequestBody) =>
+    request<SearchResponse>("/api/search", jsonBody(body)),
   submitCitationFeedback: (body: CitationFeedbackRequestBody) =>
-    request<CitationFeedbackResponse>("/api/search/citation-feedback", jsonBody(body)),
+    request<CitationFeedbackResponse>(
+      "/api/search/citation-feedback",
+      jsonBody(body),
+    ),
   submitFeedback: (body: FeedbackRequestBody) =>
     request<FeedbackSubmissionResponse>("/api/feedback", jsonBody(body)),
   getCurrentFeedback: (traceId: string) => {
     const search = new URLSearchParams({ trace_id: traceId });
-    return request<CurrentFeedbackItem[]>(`/api/feedback/current?${search.toString()}`);
+    return request<CurrentFeedbackItem[]>(
+      `/api/feedback/current?${search.toString()}`,
+    );
   },
   listFeedback: (params: FeedbackListParams = {}) => {
     const search = new URLSearchParams();
-    if (params.business_view_id) search.set("business_view_id", params.business_view_id);
+    if (params.business_view_id)
+      search.set("business_view_id", params.business_view_id);
     if (params.target_type) search.set("target_type", params.target_type);
     if (params.rating) search.set("rating", params.rating);
     if (params.reason) search.set("reason", params.reason);
-    if (params.period_days != null) search.set("period_days", String(params.period_days));
+    if (params.period_days != null)
+      search.set("period_days", String(params.period_days));
     if (params.q) search.set("q", params.q);
     if (params.sort_order) search.set("sort_order", params.sort_order);
     if (params.limit != null) search.set("limit", String(params.limit));
@@ -2941,7 +2932,10 @@ export const api = {
   runEvaluation: (body: EvaluationRunRequestBody) =>
     request<EvaluationMetrics>("/api/evaluation/run", jsonBody(body)),
   compareEvaluation: (body: EvaluationCompareRequestBody) =>
-    request<EvaluationCompareResponse>("/api/evaluation/compare", jsonBody(body)),
+    request<EvaluationCompareResponse>(
+      "/api/evaluation/compare",
+      jsonBody(body),
+    ),
 
   // 設定: モデル
   getModelSettings: () => request<ModelSettingsData>("/api/settings/model"),
@@ -2952,10 +2946,14 @@ export const api = {
       body: JSON.stringify(body),
     }),
   testModelSettings: (body: ModelSettingsTestRequest) =>
-    request<ModelSettingsTestResult>("/api/settings/model/test", jsonBody(body)),
+    request<ModelSettingsTestResult>(
+      "/api/settings/model/test",
+      jsonBody(body),
+    ),
 
   // 設定: データベース
-  getDatabaseSettings: () => request<DatabaseSettingsData>("/api/settings/database"),
+  getDatabaseSettings: () =>
+    request<DatabaseSettingsData>("/api/settings/database"),
   updateDatabaseSettings: (body: DatabaseSettingsUpdate) =>
     request<DatabaseSettingsData>("/api/settings/database", {
       method: "PATCH",
@@ -2970,22 +2968,36 @@ export const api = {
       body: form,
     });
   },
+  downloadDatabaseWallet: () =>
+    request<DatabaseWalletDownloadData>(
+      "/api/settings/database/wallet/download",
+      {
+        method: "POST",
+      },
+    ),
   testDatabaseSettings: (body: DatabaseSettingsUpdate) =>
-    request<DatabaseConnectionTestResult>("/api/settings/database/test", jsonBody(body)),
+    request<DatabaseConnectionTestResult>(
+      "/api/settings/database/test",
+      jsonBody(body),
+    ),
   getSystemTablesStatus: () =>
     request<SystemTablesStatusData>("/api/settings/database/system-tables"),
   initializeSystemTables: (body: SystemTablesInitializeRequest) =>
     request<SystemTablesOperationData>(
       "/api/settings/database/system-tables/initialize",
-      jsonBody(body)
+      jsonBody(body),
     ),
 
   // 設定: Autonomous Database 管理
   getAdbInfo: () => request<AdbInfoData>("/api/settings/database/adb"),
   updateAdbSettings: (body: AdbSettingsUpdate) =>
     request<AdbInfoData>("/api/settings/database/adb/settings", jsonBody(body)),
-  startAdb: () => request<AdbInfoData>("/api/settings/database/adb/start", { method: "POST" }),
-  stopAdb: () => request<AdbInfoData>("/api/settings/database/adb/stop", { method: "POST" }),
+  startAdb: () =>
+    request<AdbInfoData>("/api/settings/database/adb/start", {
+      method: "POST",
+    }),
+  stopAdb: () =>
+    request<AdbInfoData>("/api/settings/database/adb/stop", { method: "POST" }),
 
   // 設定: HuggingFace モデルダウンロード
   getHuggingFaceSettings: () =>
@@ -3009,10 +3021,12 @@ export const api = {
   getParserAdapterSettings: () =>
     request<ParserAdapterSettingsData>("/api/settings/parser-adapters"),
   getParserAdapterContract: () =>
-    request<ParserAdapterContractData>("/api/settings/parser-adapters/contract"),
+    request<ParserAdapterContractData>(
+      "/api/settings/parser-adapters/contract",
+    ),
   getExternalParserStatus: (backend: ExternalParserBackendName) =>
     request<ExternalParserConnectionStatusData>(
-      `/api/settings/parser-adapters/${encodeURIComponent(backend)}/status`
+      `/api/settings/parser-adapters/${encodeURIComponent(backend)}/status`,
     ),
   updateParserAdapterSettings: (body: ParserAdapterSettingsUpdate) =>
     request<ParserAdapterSettingsData>("/api/settings/parser-adapters", {
@@ -3024,26 +3038,30 @@ export const api = {
   // サービス管理: 前処理 / Parser マイクロサービスの稼働可視化・起動/停止
   getServiceCatalog: () => request<ServiceCatalogData>("/api/services/catalog"),
   getServiceStatus: (serviceId: string) =>
-    request<ServiceStatusData>(`/api/services/${encodeURIComponent(serviceId)}/status`),
+    request<ServiceStatusData>(
+      `/api/services/${encodeURIComponent(serviceId)}/status`,
+    ),
   getServiceLogs: (serviceId: string, lines = 200) =>
     request<ServiceLogsData>(
-      `/api/services/${encodeURIComponent(serviceId)}/logs?lines=${encodeURIComponent(String(lines))}`
+      `/api/services/${encodeURIComponent(serviceId)}/logs?lines=${encodeURIComponent(String(lines))}`,
     ),
   getServices: () => request<ServiceListData>("/api/services"),
   controlService: (serviceId: string, action: ServiceAction) =>
     request<ServiceControlResultData>(
       `/api/services/${encodeURIComponent(serviceId)}/${action}`,
-      { method: "POST" }
+      { method: "POST" },
     ),
 
   // 設定: Chunking アダプター
-  getPreprocessSettings: () => request<PreprocessSettingsData>("/api/settings/preprocess"),
+  getPreprocessSettings: () =>
+    request<PreprocessSettingsData>("/api/settings/preprocess"),
   updatePreprocessSettings: (body: PreprocessSettingsUpdate) =>
     request<PreprocessSettingsData>("/api/settings/preprocess", {
       method: "PATCH",
       body: JSON.stringify(body),
     }),
-  getChunkingSettings: () => request<ChunkingSettingsData>("/api/settings/chunking"),
+  getChunkingSettings: () =>
+    request<ChunkingSettingsData>("/api/settings/chunking"),
   updateChunkingSettings: (body: ChunkingSettingsUpdate) =>
     request<ChunkingSettingsData>("/api/settings/chunking", {
       method: "PATCH",
@@ -3052,7 +3070,8 @@ export const api = {
     }),
 
   // 設定: Retrieval アダプター
-  getRetrievalSettings: () => request<RetrievalSettingsData>("/api/settings/retrieval"),
+  getRetrievalSettings: () =>
+    request<RetrievalSettingsData>("/api/settings/retrieval"),
   updateRetrievalSettings: (body: RetrievalSettingsUpdate) =>
     request<RetrievalSettingsData>("/api/settings/retrieval", {
       method: "PATCH",
@@ -3061,7 +3080,8 @@ export const api = {
     }),
 
   // 設定: Grounding アダプター
-  getGroundingSettings: () => request<GroundingSettingsData>("/api/settings/grounding"),
+  getGroundingSettings: () =>
+    request<GroundingSettingsData>("/api/settings/grounding"),
   updateGroundingSettings: (body: GroundingSettingsUpdate) =>
     request<GroundingSettingsData>("/api/settings/grounding", {
       method: "PATCH",
@@ -3070,7 +3090,8 @@ export const api = {
     }),
 
   // 設定: Generation アダプター
-  getGenerationSettings: () => request<GenerationSettingsData>("/api/settings/generation"),
+  getGenerationSettings: () =>
+    request<GenerationSettingsData>("/api/settings/generation"),
   getAnswerRecordSettings: () =>
     request<AnswerRecordSettingsData>("/api/settings/answer-records"),
   updateAnswerRecordSettings: (body: { retention_days: number }) =>
@@ -3097,13 +3118,14 @@ export const api = {
   activatePromptVersion: (versionId: string) =>
     request<PromptVersionsData>(
       `/api/settings/prompts/${encodeURIComponent(versionId)}/activate`,
-      { method: "POST" }
+      { method: "POST" },
     ),
 
   // 設定: Guardrail アダプター
   getExtractionFieldsSettings: () =>
     request<ExtractionFieldsSettingsData>("/api/settings/extraction-fields"),
-  getGuardrailSettings: () => request<GuardrailSettingsData>("/api/settings/guardrail"),
+  getGuardrailSettings: () =>
+    request<GuardrailSettingsData>("/api/settings/guardrail"),
   updateGuardrailSettings: (body: GuardrailSettingsUpdate) =>
     request<GuardrailSettingsData>("/api/settings/guardrail", {
       method: "PATCH",
@@ -3112,7 +3134,8 @@ export const api = {
     }),
 
   // 設定: Vector Index アダプター
-  getVectorIndexSettings: () => request<VectorIndexSettingsData>("/api/settings/vector-index"),
+  getVectorIndexSettings: () =>
+    request<VectorIndexSettingsData>("/api/settings/vector-index"),
   updateVectorIndexSettings: (body: VectorIndexSettingsUpdate) =>
     request<VectorIndexSettingsData>("/api/settings/vector-index", {
       method: "PATCH",
@@ -3121,7 +3144,8 @@ export const api = {
     }),
 
   // 設定: Evaluation アダプター
-  getEvaluationSettings: () => request<EvaluationSettingsData>("/api/settings/evaluation-suite"),
+  getEvaluationSettings: () =>
+    request<EvaluationSettingsData>("/api/settings/evaluation-suite"),
   updateEvaluationSettings: (body: EvaluationSettingsUpdate) =>
     request<EvaluationSettingsData>("/api/settings/evaluation-suite", {
       method: "PATCH",
@@ -3139,7 +3163,8 @@ export const api = {
     }),
 
   // 設定: Agentic アダプター
-  getAgenticSettings: () => request<AgenticSettingsData>("/api/settings/agentic"),
+  getAgenticSettings: () =>
+    request<AgenticSettingsData>("/api/settings/agentic"),
   updateAgenticSettings: (body: AgenticSettingsUpdate) =>
     request<AgenticSettingsData>("/api/settings/agentic", {
       method: "PATCH",
@@ -3164,11 +3189,13 @@ export const api = {
   readOciConfig: (body: OciConfigReadRequest) =>
     request<OciConfigReadData>("/api/settings/oci/config/read", jsonBody(body)),
   testOciConfig: () =>
-    request<OciConfigTestResult>("/api/settings/oci/config/test", { method: "POST" }),
+    request<OciConfigTestResult>("/api/settings/oci/config/test", {
+      method: "POST",
+    }),
   readOciObjectStorageNamespace: (body: OciObjectStorageNamespaceRequest) =>
     request<OciObjectStorageNamespaceData>(
       "/api/settings/oci/object-storage/namespace",
-      jsonBody(body)
+      jsonBody(body),
     ),
   uploadOciPrivateKey: (file: File) => {
     const form = new FormData();

@@ -17,9 +17,9 @@ import {
   DataTable,
   EmptyState,
   StatusBadge,
+  ClearActionButton,
+  DisclosureChevron,
 } from "@engchina/production-ready-ui";
-import { ClearActionButton } from "@/components/ui/clear-action-button";
-import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
 import { ErrorState } from "@/components/StateViews";
 
 

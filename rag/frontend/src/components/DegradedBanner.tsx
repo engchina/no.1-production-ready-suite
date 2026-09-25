@@ -14,7 +14,7 @@ import { t } from "@/lib/i18n";
  *
  * 全画面エラーにはせず、ページ本体(空状態)はそのまま表示しつつ、
  * 落ち着いた warning トーンで状況と復旧導線(再試行 / DB 設定)を示す。
- * docs/frontend-messaging-spec.md の Banner(状況提示)チャネルに従う。
+ * platform/docs/ux-contracts/messaging.md の Banner(状況提示)チャネルに従う。
  */
 export function DegradedBanner({
   messages,

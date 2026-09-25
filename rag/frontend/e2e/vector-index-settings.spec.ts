@@ -24,7 +24,7 @@ for (const viewport of [
 
     await page.goto("/settings/vector-index");
 
-    await expect(page.getByRole("heading", { name: "検索インデックス" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "検索インデックス", exact: true, level: 1 })).toBeVisible();
     await expect(page.getByRole("radio", { name: /バランス/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /高精度/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /高速/ })).toBeVisible();
