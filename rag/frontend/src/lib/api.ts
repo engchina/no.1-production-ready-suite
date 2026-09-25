@@ -8,6 +8,35 @@
 
 import { t } from "./i18n";
 
+// OCI 認証 API の型は platform の共有パッケージが正本（#100）。
+export type {
+  OciConfigField,
+  OciConfigReadData,
+  OciConfigReadRequest,
+  OciConfigTestResult,
+  OciConfigTestStage,
+  OciConfigTestStageKey,
+  OciConfigTestStageStatus,
+  OciConfigTestStatus,
+  OciObjectStorageNamespaceData,
+  OciObjectStorageNamespaceRequest,
+  OciObjectStorageSettingsUpdate,
+  OciPrivateKeyUploadData,
+  OciSettingsData,
+  OciSettingsUpdate,
+} from "@engchina/production-ready-system-settings";
+import type {
+  OciConfigReadData,
+  OciConfigReadRequest,
+  OciConfigTestResult,
+  OciObjectStorageNamespaceData,
+  OciObjectStorageNamespaceRequest,
+  OciObjectStorageSettingsUpdate,
+  OciPrivateKeyUploadData,
+  OciSettingsData,
+  OciSettingsUpdate,
+} from "@engchina/production-ready-system-settings";
+
 // アップロード保存先 API の型は platform の共有パッケージが正本（#97）。
 export type {
   UploadStorageBackend,
@@ -122,16 +151,7 @@ export type ModelSettingsTestTargetType =
   | "embedding"
   | "rerank";
 export type DatabaseConnectionTestStatus = "success" | "failed" | "skipped";
-export type OciConfigTestStatus = "success" | "failed";
-export type OciConfigTestStageKey = "config_format" | "key_file" | "region" | "authentication";
-export type OciConfigTestStageStatus = "success" | "failed" | "skipped";
 
-export interface OciConfigTestStage {
-  key: OciConfigTestStageKey;
-  status: OciConfigTestStageStatus;
-  message: string;
-  action: string | null;
-}
 export type ParserAdapterBackend =
   | "local"
   | "docling"
@@ -1607,7 +1627,6 @@ export interface HuggingFaceSettingsUpdate {
 
 // --- 設定: アップロード保存先 ---
 
-
 // --- 設定: Parser adapter ---
 export interface ParserAdapterStatusData {
   backend: ParserAdapterBackendName;
@@ -2275,91 +2294,6 @@ export interface AgenticSettingsUpdate {
 }
 
 // --- 設定: OCI config ---
-export type OciConfigField =
-  | "user"
-  | "fingerprint"
-  | "tenancy"
-  | "region"
-  | "key_file";
-
-export interface OciConfigReadRequest {
-  config_file: string;
-  profile: string;
-}
-
-export interface OciConfigReadData {
-  profile: string;
-  user: string;
-  fingerprint: string;
-  tenancy: string;
-  region: string;
-  key_file: string;
-  applied_fields: OciConfigField[];
-}
-
-export interface OciSettingsUpdate {
-  user: string;
-  fingerprint: string;
-  tenancy: string;
-  region: string;
-}
-
-export interface OciSettingsData {
-  config_file: string;
-  profile: string;
-  user: string;
-  fingerprint: string;
-  tenancy: string;
-  region: string;
-  key_file: string;
-  key_file_exists: boolean;
-  config_file_exists: boolean;
-  config_source: "runtime";
-}
-
-export interface OciObjectStorageSettingsUpdate {
-  object_storage_region: string;
-  object_storage_namespace: string;
-}
-
-export interface OciConfigTestResult {
-  status: OciConfigTestStatus;
-  profile: string;
-  config_file: string;
-  key_file: string;
-  config_file_exists: boolean;
-  key_file_exists: boolean;
-  missing_fields: OciConfigField[];
-  permission_issues: string[];
-  oci_directory_mode: string | null;
-  config_file_mode: string | null;
-  key_file_mode: string | null;
-  message: string;
-  elapsed_ms: number;
-  checked_at: string;
-  error_type: string | null;
-  stages: OciConfigTestStage[];
-  region: string | null;
-  auth_check_operation: string | null;
-  http_status: number | null;
-  service_code: string | null;
-  request_id: string | null;
-}
-
-export interface OciObjectStorageNamespaceRequest {
-  config_file: string;
-  profile: string;
-  region: string;
-}
-
-export interface OciObjectStorageNamespaceData {
-  namespace: string;
-}
-
-export interface OciPrivateKeyUploadData {
-  key_file: string;
-  saved: boolean;
-}
 
 /** API 由来のエラー。`messages` は日本語のユーザー向け文言。 */
 export class ApiError extends Error {
