@@ -3,7 +3,7 @@ import tsParser from "@typescript-eslint/parser";
 import tsPlugin from "@typescript-eslint/eslint-plugin";
 import reactHooks from "eslint-plugin-react-hooks";
 // CI / ローカルとも platform repo を sibling に置く（package.json の file: リンクと同じ前提）。
-import adherence from "../../no.1-production-ready-platform/docs/design-system/adherence.oxlintrc.json" with { type: "json" };
+import adherence from "../../platform/docs/design-system/adherence.oxlintrc.json" with { type: "json" };
 
 const { rules: adherenceRules } = adherence.overrides[0];
 

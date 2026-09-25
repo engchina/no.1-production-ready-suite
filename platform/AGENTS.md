@@ -145,13 +145,13 @@ Issue の要点と、この変更が必要な理由を記載する。bug fix で
 ```jsonc
 // oxlint（frontend/.oxlintrc.json）
 {
-  "extends": ["../../no.1-production-ready-platform/docs/design-system/adherence.oxlintrc.json"]
+  "extends": ["../../platform/docs/design-system/adherence.oxlintrc.json"]
 }
 ```
 
 ```js
 // ESLint（frontend/eslint.config.mjs）— 同じセレクタを ESLint 標準の no-restricted-syntax に渡す
-import adherence from "../../no.1-production-ready-platform/docs/design-system/adherence.oxlintrc.json" with { type: "json" };
+import adherence from "../../platform/docs/design-system/adherence.oxlintrc.json" with { type: "json" };
 const { rules } = adherence.overrides[0];
 export default [
   // …

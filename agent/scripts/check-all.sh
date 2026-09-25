@@ -10,7 +10,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 BACKEND_DIR="${ROOT_DIR}/backend"
 FRONTEND_DIR="${ROOT_DIR}/frontend"
-PLATFORM_DIR="${ROOT_DIR}/../no.1-production-ready-platform"
+PLATFORM_DIR="${ROOT_DIR}/../platform"
 
 SKIP_BACKEND="${SKIP_BACKEND:-0}"
 SKIP_FRONTEND="${SKIP_FRONTEND:-0}"
@@ -57,7 +57,7 @@ run_backend_tool() {
 ensure_platform_sibling() {
   if [ ! -d "${PLATFORM_DIR}" ]; then
     echo "[check-all] 共有 platform repo が見つかりません: ${PLATFORM_DIR}" >&2
-    echo "[check-all] no.1-production-ready-agent と no.1-production-ready-platform を sibling に配置してください。" >&2
+    echo "[check-all] monorepo(no.1-production-ready-suite)の agent/ と platform/ がそろっていることを確認してください。" >&2
     exit 1
   fi
 }

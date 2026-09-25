@@ -14,10 +14,10 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 # 依存解決（uv.lock を尊重）。
-COPY no.1-production-ready-agent/backend/pyproject.toml \
-     no.1-production-ready-agent/backend/uv.lock ./backend/
-COPY no.1-production-ready-platform/packages/backend_core \
-     /no.1-production-ready-platform/packages/backend_core
+COPY agent/backend/pyproject.toml \
+     agent/backend/uv.lock ./backend/
+COPY platform/packages/backend_core \
+     /platform/packages/backend_core
 
 WORKDIR /app/backend
 RUN uv sync --locked --no-dev
@@ -36,7 +36,7 @@ RUN apt-get update \
 WORKDIR /app/backend
 COPY --from=builder /app/backend/.venv ./.venv
 
-COPY no.1-production-ready-agent/backend/ ./
+COPY agent/backend/ ./
 
 EXPOSE 8000
 CMD ["gunicorn", "app.main:app", \

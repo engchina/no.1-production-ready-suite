@@ -66,7 +66,7 @@ npm run build         # dist/index.js + dist/index.d.ts + dist/tokens.css
 ```jsonc
 // frontend/package.json
 "dependencies": {
-  "@engchina/production-ready-ui": "file:../../no.1-production-ready-platform/packages/ui"
+  "@engchina/production-ready-ui": "file:../../platform/packages/ui"
 }
 ```
 

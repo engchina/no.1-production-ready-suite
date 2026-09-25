@@ -20,7 +20,7 @@ RUN apt-get update \
 COPY packages/rag_parser_core /build/packages/rag_parser_core
 COPY packages/rag_pipeline_core /build/packages/rag_pipeline_core
 COPY packages/docrag_core /build/packages/docrag_core
-COPY --from=backend_core . /no.1-production-ready-platform/packages/backend_core
+COPY --from=backend_core . /platform/packages/backend_core
 WORKDIR /build/backend
 COPY backend/pyproject.toml backend/uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project \

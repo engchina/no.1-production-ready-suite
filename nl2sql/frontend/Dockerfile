@@ -2,8 +2,8 @@
 #   docker build -f no.1-production-ready-nl2sql/frontend/Dockerfile .
 FROM node:22-slim AS build
 
-ARG APP_DIR=no.1-production-ready-nl2sql
-ARG PLATFORM_DIR=no.1-production-ready-platform
+ARG APP_DIR=nl2sql
+ARG PLATFORM_DIR=platform
 
 WORKDIR /app
 COPY ${PLATFORM_DIR}/package.json ${PLATFORM_DIR}/package-lock.json ./${PLATFORM_DIR}/
@@ -24,7 +24,7 @@ COPY ${APP_DIR}/frontend/ ./
 RUN npm run build
 
 FROM nginx:1.27-alpine
-ARG APP_DIR=no.1-production-ready-nl2sql
-COPY --from=build /app/no.1-production-ready-nl2sql/frontend/dist /usr/share/nginx/html
+ARG APP_DIR=nl2sql
+COPY --from=build /app/nl2sql/frontend/dist /usr/share/nginx/html
 COPY ${APP_DIR}/frontend/nginx.conf /etc/nginx/conf.d/default.conf
 EXPOSE 80

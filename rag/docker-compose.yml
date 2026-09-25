@@ -37,7 +37,7 @@ services:
       context: .
       dockerfile: backend/Dockerfile
       additional_contexts:
-        backend_core: ../no.1-production-ready-platform/packages/backend_core
+        backend_core: ../platform/packages/backend_core
     env_file:
       - path: ./backend/.env
         required: false
@@ -91,7 +91,7 @@ services:
       context: .
       dockerfile: backend/Dockerfile
       additional_contexts:
-        backend_core: ../no.1-production-ready-platform/packages/backend_core
+        backend_core: ../platform/packages/backend_core
     env_file:
       - path: ./backend/.env
         required: false

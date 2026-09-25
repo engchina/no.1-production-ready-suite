@@ -18,7 +18,7 @@ Claude Design（design system プロジェクト）
 packages/ui  =  @engchina/production-ready-ui
     唯一の実装。3アプリが共有する 1 パッケージ。
         │
-        │  file:../../no.1-production-ready-platform/packages/ui
+        │  file:../../platform/packages/ui
         ↓
 RAG / NL2SQL / Agent
     業務ロジックとナビゲーションだけを持つ。
@@ -254,7 +254,7 @@ prop の妥当性（`Button` に存在しない prop を渡す等）は lint で
 ## 8. バージョン運用
 
 現在3アプリは `file:` リンクでローカルのソースを直接参照しています
-（`/u01/workspace/no.1-production-ready-platform/packages/ui`）。
+（`/u01/workspace/no.1-production-ready-suite/platform/packages/ui`）。
 
 この構成では **`packages/ui` を壊すと3アプリが同時に壊れます。** そのため:
 

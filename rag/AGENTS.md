@@ -153,7 +153,7 @@ RAG の製品語は **ナレッジ構築**、**業務ビュー**、**検索・�
 
 ## デザインシステム / UI（platform が正本）
 
-- **UI に触る変更（`frontend/`）の前に、platform リポジトリの [docs/design-system/ARCHITECTURE.md](../no.1-production-ready-platform/docs/design-system/ARCHITECTURE.md) を読む。** ワークスペースに sibling の `../no.1-production-ready-platform` が無い場合は GitHub の `engchina/no.1-production-ready-platform` の `docs/design-system/` を参照する。
+- **UI に触る変更（`frontend/`）の前に、platform リポジトリの [docs/design-system/ARCHITECTURE.md](../platform/docs/design-system/ARCHITECTURE.md) を読む。** ワークスペースに sibling の `../no.1-production-ready-platform` が無い場合は GitHub の `engchina/no.1-production-ready-platform` の `docs/design-system/` を参照する。
   - トークン値・コンポーネント仕様・意図的な見た目の変更点: 同 `README.md`
   - 実装の参照: 同 `components-reference.md`
   - 共通の禁止事項とレビュー観点: platform の `AGENTS.md`「デザインシステム / UI」節

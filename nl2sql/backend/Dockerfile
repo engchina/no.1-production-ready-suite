@@ -9,8 +9,8 @@ ENV PYTHONUNBUFFERED=1 \
 WORKDIR /app
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
-ARG APP_DIR=no.1-production-ready-nl2sql
-ARG PLATFORM_DIR=no.1-production-ready-platform
+ARG APP_DIR=nl2sql
+ARG PLATFORM_DIR=platform
 
 # 依存解決（uv.lock を尊重）。
 COPY ${APP_DIR}/backend/pyproject.toml ${APP_DIR}/backend/uv.lock ./${APP_DIR}/backend/

@@ -34,7 +34,7 @@
 ## 2. 見た目とサイズの正本
 
 色・高さ・アイコン枠・loading・disabled・フォーカスは platform の
-[README §4 Button](../../no.1-production-ready-platform/docs/design-system/README.md) と
+[README §4 Button](../../platform/docs/design-system/README.md) と
 共通 `Button` が管理する。役割×配置の選択表も同節を正とする。
 本アプリでは寸法・色・角丸の上書きや共有ボタンの再実装をしない。
 

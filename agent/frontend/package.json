@@ -13,7 +13,7 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
-    "@engchina/production-ready-ui": "file:../../no.1-production-ready-platform/packages/ui",
+    "@engchina/production-ready-ui": "file:../../platform/packages/ui",
     "@tanstack/react-query": "^5.62.0",
     "lucide-react": "^0.468.0",
     "react": "19.1.0",

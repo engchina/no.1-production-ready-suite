@@ -1,0 +1,8 @@
+# nl2sql / agent の compose は suite root を build context にする(rag は rag/ を使う)。
+.git
+**/node_modules
+**/.venv
+**/__pycache__
+**/test-results
+**/playwright-report
+.claude

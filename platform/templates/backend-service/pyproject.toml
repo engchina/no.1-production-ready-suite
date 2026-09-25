@@ -34,7 +34,7 @@ dev = [
 
 [tool.uv.sources]
 # テンプレを <app>/backend へ展開したときの相対パス。
-production-ready-backend-core = { path = "../../no.1-production-ready-platform/packages/backend_core", editable = true }
+production-ready-backend-core = { path = "../../platform/packages/backend_core", editable = true }
 
 [build-system]
 requires = ["hatchling"]

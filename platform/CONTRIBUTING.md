@@ -39,7 +39,7 @@
 1. このパッケージで `vX.Y.Z` タグを push → `release.yml` が GitHub Packages へ publish。
 2. 各アプリ `frontend/package.json` を変更:
    ```diff
-   - "@engchina/production-ready-ui": "file:../../no.1-production-ready-platform/packages/ui",
+   - "@engchina/production-ready-ui": "file:../../platform/packages/ui",
    + "@engchina/production-ready-ui": "^X.Y.Z",
    ```
 3. 各アプリ `frontend/` に `.npmrc`（`.npmrc.example` 参照）を置き、`@engchina` scope を GitHub Packages に向ける。

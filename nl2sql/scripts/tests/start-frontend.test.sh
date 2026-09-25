@@ -5,8 +5,8 @@ TEST_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEST_TMP_DIR="$(mktemp -d)"
 trap 'rm -rf -- "${TEST_TMP_DIR}"' EXIT
 
-APP_DIR="${TEST_TMP_DIR}/no.1-production-ready-nl2sql"
-PLATFORM_DIR="${TEST_TMP_DIR}/no.1-production-ready-platform"
+APP_DIR="${TEST_TMP_DIR}/nl2sql"
+PLATFORM_DIR="${TEST_TMP_DIR}/platform"
 UI_DIR="${PLATFORM_DIR}/packages/ui"
 MOCK_BIN_DIR="${TEST_TMP_DIR}/bin"
 NPM_CALL_LOG="${TEST_TMP_DIR}/npm-calls.log"

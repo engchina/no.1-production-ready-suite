@@ -73,7 +73,7 @@ backend/
 dependencies = ["production-ready-backend-core"]
 
 [tool.uv.sources]
-production-ready-backend-core = { path = "../../no.1-production-ready-platform/packages/backend_core", editable = true }
+production-ready-backend-core = { path = "../../platform/packages/backend_core", editable = true }
 ```
 
 > path source 変更時は **`uv lock` 再生成**。CI は platform を sibling に checkout して解決する

@@ -52,7 +52,7 @@ rag-parser-core = { path = "../packages/rag_parser_core", editable = true }
 rag-pipeline-core = { path = "../packages/rag_pipeline_core", editable = true }
 docrag-core = { path = "../packages/docrag_core", editable = true }
 # 共有 backend インフラ（platform repo の sibling パス）。変更時は uv lock 再生成が必要。
-production-ready-backend-core = { path = "../../no.1-production-ready-platform/packages/backend_core", editable = true }
+production-ready-backend-core = { path = "../../platform/packages/backend_core", editable = true }
 
 [dependency-groups]
 dev = [

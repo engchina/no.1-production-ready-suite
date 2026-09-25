@@ -8,7 +8,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 FRONTEND_DIR="${ROOT_DIR}/frontend"
-SHARED_PLATFORM_DIR="${SHARED_PLATFORM_DIR:-${ROOT_DIR}/../no.1-production-ready-platform}"
+SHARED_PLATFORM_DIR="${SHARED_PLATFORM_DIR:-${ROOT_DIR}/../platform}"
 SHARED_UI_DIR="${SHARED_UI_DIR:-${SHARED_PLATFORM_DIR}/packages/ui}"
 
 HOST="${HOST:-0.0.0.0}"
@@ -25,7 +25,7 @@ fi
 prepare_shared_ui() {
   if [ ! -f "${SHARED_UI_DIR}/package.json" ]; then
     echo "[frontend] 共有 UI パッケージが見つかりません: ${SHARED_UI_DIR}" >&2
-    echo "[frontend] no.1-production-ready-platform を NL2SQL リポジトリと同じ親ディレクトリに配置してください。" >&2
+    echo "[frontend] monorepo(no.1-production-ready-suite)の platform/ が nl2sql/ と同じ階層にあることを確認してください。" >&2
     echo "[frontend] 別の場所に配置した場合は SHARED_PLATFORM_DIR または SHARED_UI_DIR を指定してください。" >&2
     return 1
   fi

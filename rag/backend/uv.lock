@@ -4033,7 +4033,7 @@ wheels = [
 [[package]]
 name = "production-ready-backend-core"
 version = "0.1.0"
-source = { editable = "../../no.1-production-ready-platform/packages/backend_core" }
+source = { editable = "../../platform/packages/backend_core" }
 dependencies = [
     { name = "fastapi" },
     { name = "prometheus-client" },
@@ -4129,7 +4129,7 @@ requires-dist = [
     { name = "marker-pdf", extras = ["full"], marker = "extra == 'marker'", specifier = "==1.10.2" },
     { name = "oci", specifier = ">=2.168" },
     { name = "oracledb", specifier = ">=3.4" },
-    { name = "production-ready-backend-core", editable = "../../no.1-production-ready-platform/packages/backend_core" },
+    { name = "production-ready-backend-core", editable = "../../platform/packages/backend_core" },
     { name = "prometheus-client", specifier = ">=0.24" },
     { name = "pydantic", specifier = ">=2.11" },
     { name = "pydantic-settings", specifier = ">=2.7" },

@@ -2,7 +2,7 @@ import js from "@eslint/js";
 import globals from "globals";
 import tseslint from "typescript-eslint";
 
-import adherence from "../../no.1-production-ready-platform/docs/design-system/adherence.oxlintrc.json" with { type: "json" };
+import adherence from "../../platform/docs/design-system/adherence.oxlintrc.json" with { type: "json" };
 
 const { rules: adherenceRules } = adherence.overrides[0];
 

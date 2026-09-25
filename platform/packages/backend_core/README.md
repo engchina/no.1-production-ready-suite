@@ -61,7 +61,7 @@ uv run ruff check . && uv run mypy src
 dependencies = ["production-ready-backend-core"]
 
 [tool.uv.sources]
-production-ready-backend-core = { path = "../../no.1-production-ready-platform/packages/backend_core", editable = true }
+production-ready-backend-core = { path = "../../platform/packages/backend_core", editable = true }
 ```
 
 > path source を変更したら **`uv lock` の再生成**が必要。安定後は GitHub Release / index 配布へ切替可能。
