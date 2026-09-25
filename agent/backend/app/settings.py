@@ -219,6 +219,21 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     agent_artifact_storage_path: str = ".agent-artifacts"
 
     @property
+    def oracle_driver_mode(self) -> str:
+        """Agent は python-oracledb の Thin mode だけで接続する（Wallet の判定用）。"""
+        return "thin"
+
+    @property
+    def oracle_connection_security(self) -> str:
+        """Agent は Wallet mTLS だけに対応する。"""
+        return "wallet_mtls"
+
+    @property
+    def resolved_oracle_adb_region(self) -> str:
+        """ADB 管理用の region。未設定なら OCI_REGION / ORACLE_REGION を使う。"""
+        return (self.oracle_adb_region or self.oci_region or self.oracle_region or "").strip()
+
+    @property
     def resolved_oracle_wallet_dir(self) -> str:
         """参照実装と同じく ORACLE_CLIENT_LIB_DIR/network/admin を Wallet 配置先にする。"""
         client_lib_dir = self.oracle_client_lib_dir.strip()

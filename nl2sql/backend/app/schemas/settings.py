@@ -1,7 +1,19 @@
 """設定 API のスキーマ。secret はレスポンスに含めない。"""
 
-from datetime import UTC, datetime
 from typing import Literal
+
+# データベース設定の schema は3製品共通（pr_system_settings。#108）。互換のため re-export する。
+from pr_system_settings.database import AdbInfoData as AdbInfoData
+from pr_system_settings.database import AdbOperationStatus as AdbOperationStatus
+from pr_system_settings.database import AdbSettingsUpdate as AdbSettingsUpdate
+from pr_system_settings.database import DatabaseConnectionSecurity as DatabaseConnectionSecurity
+from pr_system_settings.database import DatabaseConnectionTestResult as DatabaseConnectionTestResult
+from pr_system_settings.database import DatabaseConnectionTestStatus as DatabaseConnectionTestStatus
+from pr_system_settings.database import DatabasePasswordRevealData as DatabasePasswordRevealData
+from pr_system_settings.database import DatabaseSettingsData as DatabaseSettingsData
+from pr_system_settings.database import DatabaseSettingsUpdate as DatabaseSettingsUpdate
+from pr_system_settings.database import DatabaseWalletDownloadData as DatabaseWalletDownloadData
+from pr_system_settings.database import DatabaseWalletDownloadStatus as DatabaseWalletDownloadStatus
 
 # モデル設定の schema は3製品共通（pr_system_settings。#103）。互換のため re-export する。
 from pr_system_settings.model import (
@@ -49,52 +61,12 @@ from pr_system_settings.upload_storage import (
 )
 from pydantic import BaseModel, Field, field_validator
 
-DatabaseConnectionTestStatus = Literal["success", "failed"]
-DatabaseConnectionSecurity = Literal["wallet_mtls", "walletless_tls"]
-DatabaseWalletDownloadStatus = Literal["downloaded", "already_configured"]
 SelectAiCredentialRegion = Literal["ap-osaka-1", "us-chicago-1"]
 SelectAiCredentialOperation = Literal["created", "recreated", "already_exists"]
-AdbOperationStatus = Literal[
-    "success",
-    "not_configured",
-    "error",
-    "accepted",
-    "already_available",
-    "already_stopped",
-    "cannot_start",
-    "cannot_stop",
-]
 SystemTableSchemaStatus = Literal["missing", "partial", "outdated", "ready"]
 SystemTableOperationStatus = Literal["idle", "running", "failed"]
 SystemTableOperationKind = Literal["initialize", "recreate"]
 SystemTableOperationResult = Literal["no_op", "initialized", "migrated", "recreated"]
-
-
-class DatabaseSettingsData(BaseModel):
-    """Oracle 26ai 接続設定の表示用データ。"""
-
-    user: str
-    dsn: str
-    driver_mode: Literal["thin", "thick"]
-    connection_security: DatabaseConnectionSecurity
-    client_lib_dir: str
-    wallet_dir: str
-    wallet_uploaded: bool
-    available_services: list[str]
-    has_password: bool
-    has_wallet_password: bool
-    readiness: str
-    embedding_dimension: int
-    vector_column: str
-    adb_ocid: str
-    region: str
-    config_source: Literal["runtime"]
-
-
-class DatabasePasswordRevealData(BaseModel):
-    """明示操作でのみ返す Oracle DB password。通常の設定取得には含めない。"""
-
-    password: str = Field(default="", max_length=4096)
 
 
 class SelectAiCredentialData(BaseModel):
@@ -120,77 +92,6 @@ class SelectAiCredentialCreateRequest(BaseModel):
     @classmethod
     def strip_confirmation(cls, value: str) -> str:
         return value.strip()
-
-
-class DatabaseWalletDownloadData(BaseModel):
-    """OCI からの Wallet 取得結果。ZIP や生成 password は含めない。"""
-
-    status: DatabaseWalletDownloadStatus
-    settings: DatabaseSettingsData
-
-
-class AdbSettingsUpdate(BaseModel):
-    """Autonomous Database 操作対象の OCID と region の更新 payload。"""
-
-    adb_ocid: str = Field(default="", max_length=512)
-    region: str = Field(default="", max_length=128)
-
-    @field_validator("adb_ocid", "region")
-    @classmethod
-    def strip_text(cls, value: str) -> str:
-        """前後空白を設定値へ混入させない。"""
-        return value.strip()
-
-
-class AdbInfoData(BaseModel):
-    """Autonomous Database の情報 / 操作結果の表示用データ。"""
-
-    status: AdbOperationStatus
-    message: str
-    error_code: str | None = None
-    id: str | None = None
-    display_name: str | None = None
-    lifecycle_state: str | None = None
-    db_name: str | None = None
-    cpu_core_count: int | None = None
-    data_storage_size_in_tbs: float | None = None
-    region: str | None = None
-
-
-class DatabaseSettingsUpdate(BaseModel):
-    """Oracle 26ai 接続設定の更新 payload。
-
-    password / wallet_password は未指定または空文字なら既存値を保持する。
-    clear_* が true の場合だけ保存済み secret を削除する。
-    """
-
-    user: str = Field(default="", max_length=256)
-    dsn: str = Field(default="", max_length=1024)
-    connection_security: DatabaseConnectionSecurity | None = None
-    wallet_dir: str = Field(default="", max_length=1024)
-    password: str | None = Field(default=None, max_length=4096)
-    wallet_password: str | None = Field(default=None, max_length=4096)
-    clear_password: bool = False
-    clear_wallet_password: bool = False
-
-    @field_validator("user", "dsn", "wallet_dir")
-    @classmethod
-    def strip_text(cls, value: str) -> str:
-        """前後空白を設定値へ混入させない。"""
-        return value.strip()
-
-
-class DatabaseConnectionTestResult(BaseModel):
-    """Oracle 26ai 接続テスト結果。"""
-
-    status: DatabaseConnectionTestStatus
-    readiness: str
-    message: str
-    elapsed_ms: int
-    troubleshooting: list[str] = Field(default_factory=list)
-    details: dict[str, str | int | float | bool | None] = Field(default_factory=dict)
-    checked_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
-    error_type: str | None = None
 
 
 class SystemTableMissingObject(BaseModel):

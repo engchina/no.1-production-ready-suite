@@ -19,6 +19,7 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from dotenv import dotenv_values
+from pr_system_settings import database as shared_database
 from pr_system_settings import oci_connectivity
 from pr_system_settings.model import ModelSettingsStore, save_model_settings
 from pytest import MonkeyPatch
@@ -2844,7 +2845,8 @@ def test_get_database_settings_masks_secrets(monkeypatch: MonkeyPatch) -> None:
     assert body["has_wallet_password"] is True
     assert body["wallet_uploaded"] is False
     assert body["available_services"] == []
-    assert body["readiness"] == "ok"
+    # #108 から readiness は NL2SQL と同じく Wallet のファイルも確認する。
+    assert body["readiness"] == "wallet_not_found"
     assert body["vector_column"] == "VECTOR(1536, FLOAT32)"
     assert "super-secret-password" not in resp.text
     assert "wallet-secret" not in resp.text
@@ -2887,7 +2889,10 @@ def test_update_database_settings_mutates_runtime_without_echoing_secret(
     assert resp.status_code == 200
     assert settings.oracle_user == "rag_app"
     assert settings.oracle_dsn == "adb.example.com/rag"
-    assert settings.oracle_wallet_dir == settings.resolved_oracle_wallet_dir
+    # 画面から送られた Wallet 保存先を保存する（NL2SQL と同じ。#108）。
+    # RAG が実際に使う保存先は ORACLE_CLIENT_LIB_DIR/network/admin のまま変わらない。
+    assert settings.oracle_wallet_dir == "/opt/oracle/wallet"
+    assert settings.resolved_oracle_wallet_dir == "/opt/oracle/instantclient_23_26/network/admin"
     assert settings.oracle_password == "old-secret"
     assert resp.json()["data"]["wallet_dir"] == settings.resolved_oracle_wallet_dir
     assert resp.json()["data"]["has_password"] is True
@@ -2995,6 +3000,7 @@ def test_database_connection_test_uses_candidate_without_mutating_runtime(
         assert candidate.oracle_password == "candidate-secret"
         assert candidate.oracle_dsn == "adb.example.com/rag"
 
+    _write_thick_wallet(Path(settings.resolved_oracle_wallet_dir))
     monkeypatch.setattr(settings_routes, "test_oracle_connection", fake_test_oracle_connection)
 
     resp = client.post(
@@ -3029,8 +3035,7 @@ def test_database_connection_test_returns_wallet_password_guidance(
     monkeypatch.setattr(settings, "oracle_client_lib_dir", str(tmp_path / "instantclient_23_26"))
     monkeypatch.setattr(settings, "oracle_wallet_dir", "")
     monkeypatch.setattr(settings, "oracle_wallet_password", "")
-    wallet_dir = Path(settings.resolved_oracle_wallet_dir)
-    wallet_dir.mkdir(parents=True)
+    _write_thick_wallet(Path(settings.resolved_oracle_wallet_dir))
 
     async def fake_test_oracle_connection(candidate: Settings) -> None:
         raise OracleWalletPasswordRequiredError("Wallet パスワードを入力してください。")
@@ -3068,6 +3073,7 @@ def test_database_connection_test_returns_timeout_guidance(
     async def fake_test_oracle_connection(candidate: Settings) -> None:
         raise OracleConnectionTimeoutError("Oracle 26ai 接続テストが 15 秒でタイムアウトしました。")
 
+    _write_thick_wallet(Path(settings.resolved_oracle_wallet_dir))
     monkeypatch.setattr(settings_routes, "test_oracle_connection", fake_test_oracle_connection)
 
     resp = client.post(
@@ -3110,6 +3116,7 @@ def test_database_connection_test_classifies_oracle_operational_error(
             "ORA-01017: invalid username/password; logon denied candidate-secret"
         )
 
+    _write_thick_wallet(Path(settings.resolved_oracle_wallet_dir))
     monkeypatch.setattr(settings_routes, "test_oracle_connection", fake_test_oracle_connection)
 
     resp = client.post(
@@ -3152,6 +3159,7 @@ def test_database_connection_test_classifies_adb_acl_rejection(
             "ORA-12506: listener rejected connection based on service ACL filtering"
         )
 
+    _write_thick_wallet(Path(settings.resolved_oracle_wallet_dir))
     monkeypatch.setattr(settings_routes, "test_oracle_connection", fake_test_oracle_connection)
 
     resp = client.post(
@@ -3227,6 +3235,7 @@ def test_get_database_settings_extracts_available_services_from_wallet_dir(
         ),
         encoding="utf-8",
     )
+    _write_thick_wallet(wallet_dir)
 
     resp = client.get("/api/settings/database")
 
@@ -3317,12 +3326,28 @@ def _make_fake_database_client(
     return _FakeDatabaseClient
 
 
+def _write_thick_wallet(wallet_dir: Path, services: Sequence[str] = ("ragdb_high",)) -> None:
+    """RAG の既定（Thick mode）で必要な Wallet ファイルを置く。
+
+    #108 から接続テスト前の readiness が NL2SQL と同じく Wallet のファイルを確認する。
+    """
+    wallet_dir.mkdir(parents=True, exist_ok=True)
+    tnsnames = wallet_dir / "tnsnames.ora"
+    if not tnsnames.exists():
+        tnsnames.write_text(
+            "".join(f"{service} = (DESCRIPTION = ...)\n" for service in services),
+            encoding="utf-8",
+        )
+    (wallet_dir / "sqlnet.ora").write_text("WALLET_LOCATION = ...\n", encoding="utf-8")
+    (wallet_dir / "cwallet.sso").write_bytes(b"sso")
+
+
 def _patch_adb_client(
     monkeypatch: MonkeyPatch,
     lifecycle_state: str,
     calls: list[str],
 ) -> None:
-    from app.clients.oci_database import OciDatabaseClient
+    from pr_system_settings.oci_database import OciDatabaseClient
 
     fake_client = _make_fake_database_client(lifecycle_state, calls)()
 
@@ -3333,7 +3358,7 @@ def _patch_adb_client(
             sdk_call_runner=_run_inline,
         )
 
-    monkeypatch.setattr(settings_routes, "OciDatabaseClient", _factory)
+    monkeypatch.setattr(shared_database, "OciDatabaseClient", _factory)
 
 
 def test_get_adb_info_returns_not_configured_without_ocid(

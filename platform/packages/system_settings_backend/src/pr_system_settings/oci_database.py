@@ -1,4 +1,4 @@
-"""OCI Autonomous Database 管理クライアント。"""
+"""OCI Autonomous Database 管理クライアント（NL2SQL から移設。#108）。"""
 
 from __future__ import annotations
 
@@ -8,8 +8,8 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from app.clients.oci_auth import load_oci_config_without_prompt
-from app.settings import Settings, get_settings
+from .oci import oci_config_file, oci_profile
+from .oci_auth import load_oci_config_without_prompt
 
 type SdkCallRunner = Callable[[Callable[[], Any]], Awaitable[Any]]
 type WalletDetailsFactory = Callable[..., Any]
@@ -61,12 +61,12 @@ class OciDatabaseClient:
 
     def __init__(
         self,
-        settings: Settings | None = None,
+        settings: Any,
         database_client: DatabaseSdkClientProtocol | None = None,
         sdk_call_runner: SdkCallRunner | None = None,
         wallet_details_factory: WalletDetailsFactory | None = None,
     ) -> None:
-        self._settings = settings or get_settings()
+        self._settings = settings
         self._database_client = database_client
         self._sdk_call_runner = sdk_call_runner or _run_sdk_call_in_thread
         self._wallet_details_factory = wallet_details_factory
@@ -120,14 +120,16 @@ class OciDatabaseClient:
 
         oci_config = importlib.import_module("oci.config")
         database = importlib.import_module("oci.database")
+        region = str(getattr(self._settings, "resolved_oracle_adb_region", "") or "")
         config = load_oci_config_without_prompt(
             oci_config,
-            self._settings.oci_config_file,
-            self._settings.resolved_oci_config_profile,
-            region=self._settings.resolved_oracle_adb_region or None,
+            oci_config_file(self._settings),
+            oci_profile(self._settings),
+            region=region or None,
         )
-        self._database_client = database.DatabaseClient(config)
-        return self._database_client
+        client: DatabaseSdkClientProtocol = database.DatabaseClient(config)
+        self._database_client = client
+        return client
 
 
 def _to_info(data: Any) -> AutonomousDatabaseInfo:

@@ -1,10 +1,19 @@
 """設定 API のスキーマ。secret はレスポンスに含めない。"""
 
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Literal, get_args
 from urllib.parse import urlsplit
 
 # OCI 認証の schema は3製品共通（platform の pr_system_settings。#100）。互換のため re-export する。
+# データベース設定の schema は3製品共通（pr_system_settings。#108）。互換のため re-export する。
+from pr_system_settings.database import AdbInfoData as AdbInfoData
+from pr_system_settings.database import AdbOperationStatus as AdbOperationStatus
+from pr_system_settings.database import AdbSettingsUpdate as AdbSettingsUpdate
+from pr_system_settings.database import DatabaseConnectionTestResult as DatabaseConnectionTestResult
+from pr_system_settings.database import DatabaseConnectionTestStatus as DatabaseConnectionTestStatus
+from pr_system_settings.database import DatabaseSettingsData as DatabaseSettingsData
+from pr_system_settings.database import DatabaseSettingsUpdate as DatabaseSettingsUpdate
+
 # モデル設定の schema は3製品共通（pr_system_settings。#103）。互換のため re-export する。
 from pr_system_settings.model import (
     EnterpriseAiModelEntrySettings as EnterpriseAiModelEntrySettings,
@@ -71,7 +80,6 @@ from app.config import (
     VectorIndexProfile,
 )
 
-DatabaseConnectionTestStatus = Literal["success", "failed"]
 ParserAdapterBackendName = Literal[
     "docling",
     "marker",
@@ -124,24 +132,6 @@ _CHUNKING_STRATEGIES_WITH_MIN_CHARS: set[ChunkingStrategy] = {
     "markdown_heading",
     "page_level",
 }
-
-
-class DatabaseSettingsData(BaseModel):
-    """Oracle 26ai 接続設定の表示用データ。"""
-
-    user: str
-    dsn: str
-    wallet_dir: str
-    wallet_uploaded: bool
-    available_services: list[str]
-    has_password: bool
-    has_wallet_password: bool
-    readiness: str
-    embedding_dimension: int
-    vector_column: str
-    adb_ocid: str
-    region: str
-    config_source: Literal["runtime"]
 
 
 SystemTableSchemaStatus = Literal["missing", "partial", "outdated", "ready"]
@@ -209,67 +199,6 @@ class SystemTablesOperationData(SystemTablesStatusData):
     operation: SystemTableOperationResult
     dropped_object_count: int
     created_object_count: int
-
-
-AdbOperationStatus = Literal[
-    "success",
-    "not_configured",
-    "error",
-    "accepted",
-    "already_available",
-    "already_stopped",
-    "cannot_start",
-    "cannot_stop",
-]
-
-
-class AdbSettingsUpdate(BaseModel):
-    """Autonomous Database 操作対象の OCID と region の更新 payload。"""
-
-    adb_ocid: str = Field(default="", max_length=512)
-    region: str = Field(default="", max_length=128)
-
-    @field_validator("adb_ocid", "region")
-    @classmethod
-    def strip_text(cls, value: str) -> str:
-        """前後空白を設定値へ混入させない。"""
-        return value.strip()
-
-
-class AdbInfoData(BaseModel):
-    """Autonomous Database の情報 / 操作結果の表示用データ。"""
-
-    status: AdbOperationStatus
-    message: str
-    id: str | None = None
-    display_name: str | None = None
-    lifecycle_state: str | None = None
-    db_name: str | None = None
-    cpu_core_count: int | None = None
-    data_storage_size_in_tbs: float | None = None
-    region: str | None = None
-
-
-class DatabaseSettingsUpdate(BaseModel):
-    """Oracle 26ai 接続設定の更新 payload。
-
-    password / wallet_password は未指定または空文字なら既存値を保持する。
-    clear_* が true の場合だけ保存済み secret を削除する。
-    """
-
-    user: str = Field(default="", max_length=256)
-    dsn: str = Field(default="", max_length=1024)
-    wallet_dir: str = Field(default="", max_length=1024)
-    password: str | None = Field(default=None, max_length=4096)
-    wallet_password: str | None = Field(default=None, max_length=4096)
-    clear_password: bool = False
-    clear_wallet_password: bool = False
-
-    @field_validator("user", "dsn", "wallet_dir")
-    @classmethod
-    def strip_text(cls, value: str) -> str:
-        """前後空白を設定値へ混入させない。"""
-        return value.strip()
 
 
 class HuggingFaceSettingsData(BaseModel):
@@ -1090,16 +1019,3 @@ class AgenticSettingsUpdate(BaseModel):
 
     profile: AgenticProfileName
     max_subqueries: int = Field(default=3, ge=1, le=8)
-
-
-class DatabaseConnectionTestResult(BaseModel):
-    """Oracle 接続検証の結果。"""
-
-    status: DatabaseConnectionTestStatus
-    readiness: str
-    message: str
-    elapsed_ms: int = 0
-    troubleshooting: list[str] = Field(default_factory=list)
-    details: dict[str, str | int | float | bool | None] = Field(default_factory=dict)
-    checked_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
-    error_type: str | None = None
