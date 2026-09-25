@@ -7,7 +7,6 @@ OCI 認証、アップロード保存先、モデル、データベース設定�
 
 import fcntl
 import io
-import json
 import logging
 import re
 import shutil
@@ -25,6 +24,7 @@ from zipfile import BadZipFile, ZipFile
 from cryptography.hazmat.primitives.serialization import load_pem_private_key
 from fastapi import APIRouter, File, HTTPException, Request, Response, UploadFile
 from pr_backend_core import ApiResponse
+from pr_system_settings.model import build_model_router
 from pr_system_settings.oci import build_oci_router
 from pr_system_settings.oci import oci_config_file as _oci_config_file
 from pr_system_settings.oci import oci_profile as _oci_profile
@@ -72,14 +72,7 @@ from app.schemas.settings import (
     DatabaseSettingsData,
     DatabaseSettingsUpdate,
     DatabaseWalletDownloadData,
-    EnterpriseAiModelEntrySettings,
-    EnterpriseAiModelSettings,
-    GenerativeAiModelSettings,
-    ModelSettingsData,
-    ModelSettingsPayload,
     ModelSettingsTestRequest,
-    ModelSettingsTestResult,
-    ModelSettingsTestTargetType,
     SelectAiCredentialCreateRequest,
     SelectAiCredentialData,
     SystemTablesInitializeRequest,
@@ -88,14 +81,9 @@ from app.schemas.settings import (
 )
 from app.settings import (
     BACKEND_ENV_FILE,
+    MODEL_SETTINGS_STORE,
     Settings,
-    enterprise_ai_default_model_id,
-    enterprise_ai_model_catalog,
     get_settings,
-    resolve_model_settings_file,
-)
-from app.settings import (
-    EnterpriseAiConfiguredModel as SettingsEnterpriseAiConfiguredModel,
 )
 
 router = APIRouter(prefix="/settings", tags=["settings"])
@@ -113,6 +101,14 @@ router.include_router(
     build_oci_router(
         get_settings=lambda: get_settings(),
         env_file=lambda: BACKEND_ENV_FILE,
+    )
+)
+# モデル設定も3製品共通の実装（pr_system_settings.model。#103）。
+router.include_router(
+    build_model_router(
+        get_settings=lambda: get_settings(),
+        store=MODEL_SETTINGS_STORE,
+        run_model_test=lambda settings, request: _run_model_settings_test(settings, request),
     )
 )
 logger = logging.getLogger(__name__)
@@ -138,7 +134,6 @@ ORACLE_WALLET_REQUIRED_FILES = ORACLE_WALLET_THIN_REQUIRED_FILES
 ORACLE_WALLET_SKIPPED_FILES = frozenset(
     {"readme", "keystore.jks", "truststore.jks", "ojdbc.properties", "ewallet.p12"}
 )
-MODEL_SETTINGS_FILE_MODE = 0o600
 ORACLE_ERROR_CODE_RE = re.compile(r"\b(?:ORA|DPY|DPI)-\d{4,5}\b", re.IGNORECASE)
 SECRET_REVEAL_HEADERS = {"Cache-Control": "no-store", "Pragma": "no-cache"}
 MODEL_TEST_IMAGE_BYTES = b64decode(
@@ -212,52 +207,6 @@ class _SelectAiCredentialConfigurationError(RuntimeError):
         self.public_message = public_message
         self.missing_fields = list(dict.fromkeys(missing_fields))
         super().__init__(public_message)
-
-
-@router.get("/model", response_model=ApiResponse[ModelSettingsData])
-def get_model_settings() -> ApiResponse[ModelSettingsData]:
-    settings = get_settings()
-    payload = _model_payload(settings)
-    return ApiResponse(data=_model_settings_data(payload, settings))
-
-
-@router.patch("/model", response_model=ApiResponse[ModelSettingsData])
-def update_model_settings(payload: ModelSettingsPayload) -> ApiResponse[ModelSettingsData]:
-    settings = get_settings()
-    resolved_payload = _model_settings_with_resolved_secret(settings, payload)
-    resolved_api_key = resolved_payload.enterprise_ai.api_key
-    _persist_enterprise_ai_api_key(resolved_api_key)
-    _persist_model_settings(settings, resolved_payload)
-    _apply_model_settings(settings, payload)
-    settings.set_runtime_enterprise_ai_api_key(resolved_api_key)
-    return ApiResponse(data=_model_settings_data(_model_payload(settings), settings))
-
-
-@router.post("/model/test", response_model=ApiResponse[ModelSettingsTestResult])
-async def test_model_settings(
-    request: ModelSettingsTestRequest,
-) -> ApiResponse[ModelSettingsTestResult]:
-    started = time.perf_counter()
-    settings = get_settings()
-    candidate = _model_test_candidate_settings(settings, request)
-    try:
-        details = await _run_model_settings_test(candidate, request)
-    except Exception as exc:
-        return ApiResponse(
-            data=_failed_model_test_result(
-                request,
-                exc,
-                elapsed_ms=_elapsed_ms(started),
-                secrets=[candidate.oci_enterprise_ai_api_key],
-            )
-        )
-    return ApiResponse(
-        data=_successful_model_test_result(
-            request,
-            details=details,
-            elapsed_ms=_elapsed_ms(started),
-        )
-    )
 
 
 @router.get("/database", response_model=ApiResponse[DatabaseSettingsData])
@@ -719,287 +668,11 @@ async def stop_adb() -> ApiResponse[AdbInfoData]:
     return ApiResponse(data=await _control_adb(get_settings(), action="stop"))
 
 
-def _model_payload(settings: Settings) -> ModelSettingsPayload:
-    configured_models = enterprise_ai_model_catalog(settings)
-    models = [
-        EnterpriseAiModelEntrySettings(
-            model_id=model.model_id,
-            display_name=model.display_name,
-            vision_enabled=model.vision_enabled,
-        )
-        for model in configured_models
-    ]
-    if not models:
-        models.append(
-            EnterpriseAiModelEntrySettings(model_id="", display_name="", vision_enabled=False)
-        )
-    api_path = settings.oci_enterprise_ai_llm_path or settings.oci_enterprise_ai_vlm_path
-    return ModelSettingsPayload(
-        enterprise_ai=EnterpriseAiModelSettings(
-            endpoint=getattr(settings, "oci_enterprise_ai_endpoint", ""),
-            project_ocid=getattr(settings, "oci_enterprise_ai_project_ocid", ""),
-            api_key="",
-            has_api_key=bool(getattr(settings, "oci_enterprise_ai_api_key", "")),
-            models=models,
-            default_model_id=enterprise_ai_default_model_id(settings),
-            api_path=api_path or "/responses",
-            vlm_input_mode=getattr(settings, "oci_enterprise_ai_vlm_input_mode", "auto"),
-            text_payload_template=getattr(settings, "oci_enterprise_ai_llm_payload_template", ""),
-            vision_payload_template=getattr(settings, "oci_enterprise_ai_vlm_payload_template", ""),
-            text_response_path=getattr(settings, "oci_enterprise_ai_llm_response_path", ""),
-            vision_response_path=getattr(settings, "oci_enterprise_ai_vlm_response_path", ""),
-            timeout_seconds=getattr(settings, "oci_enterprise_ai_timeout_seconds", 600.0),
-            max_retries=getattr(settings, "oci_enterprise_ai_max_retries", 3),
-            llm_max_output_tokens=getattr(
-                settings, "oci_enterprise_ai_llm_max_output_tokens", 1200
-            ),
-            vlm_max_output_tokens=getattr(
-                settings, "oci_enterprise_ai_vlm_max_output_tokens", 65536
-            ),
-        ),
-        generative_ai=GenerativeAiModelSettings(
-            embedding_model=getattr(settings, "oci_genai_embedding_model", "")
-            or getattr(settings, "oci_genai_embed_model_id", "cohere.embed-v4.0"),
-            embedding_dim=getattr(settings, "oci_genai_embedding_dim", 1536),
-            rerank_model=getattr(settings, "oci_genai_rerank_model", "")
-            or getattr(settings, "oci_genai_rerank_model_id", "cohere.rerank-v4.0-fast"),
-        ),
-    )
-
-
-def _apply_model_settings(settings: Settings, payload: ModelSettingsPayload) -> None:
-    enterprise = payload.enterprise_ai
-    generative = payload.generative_ai
-    settings.oci_enterprise_ai_endpoint = enterprise.endpoint
-    settings.oci_enterprise_ai_project_ocid = enterprise.project_ocid
-    settings.oci_enterprise_ai_api_key = _secret_value(
-        current=settings.oci_enterprise_ai_api_key,
-        update=enterprise.api_key,
-        clear=enterprise.clear_api_key,
-    )
-    settings.oci_enterprise_ai_models = [
-        SettingsEnterpriseAiConfiguredModel(
-            model_id=model.model_id,
-            display_name=model.display_name,
-            vision_enabled=model.vision_enabled,
-        )
-        for model in enterprise.models
-        if model.model_id
-    ]
-    settings.oci_enterprise_ai_default_model = enterprise.default_model_id
-    default_model = enterprise.default_model_id
-    vision_model = next(
-        (
-            model.model_id
-            for model in enterprise.models
-            if model.model_id == default_model and model.vision_enabled
-        ),
-        "",
-    ) or next(
-        (model.model_id for model in enterprise.models if model.model_id and model.vision_enabled),
-        default_model,
-    )
-    settings.oci_enterprise_ai_llm_model = default_model
-    settings.oci_enterprise_ai_vlm_model = vision_model
-    settings.oci_enterprise_ai_llm_path = enterprise.api_path
-    settings.oci_enterprise_ai_vlm_path = enterprise.api_path
-    settings.oci_enterprise_ai_vlm_input_mode = enterprise.vlm_input_mode
-    settings.oci_enterprise_ai_llm_payload_template = enterprise.text_payload_template
-    settings.oci_enterprise_ai_vlm_payload_template = enterprise.vision_payload_template
-    settings.oci_enterprise_ai_llm_response_path = enterprise.text_response_path
-    settings.oci_enterprise_ai_vlm_response_path = enterprise.vision_response_path
-    settings.oci_enterprise_ai_timeout_seconds = enterprise.timeout_seconds
-    settings.oci_enterprise_ai_max_retries = enterprise.max_retries
-    settings.oci_enterprise_ai_llm_max_output_tokens = enterprise.llm_max_output_tokens
-    settings.oci_enterprise_ai_vlm_max_output_tokens = enterprise.vlm_max_output_tokens
-    settings.oci_genai_embedding_model = generative.embedding_model
-    settings.oci_genai_embedding_dim = generative.embedding_dim
-    settings.oci_genai_rerank_model = generative.rerank_model
-    settings.oci_genai_embed_model_id = generative.embedding_model
-    settings.oci_genai_rerank_model_id = generative.rerank_model
-
-
-def _model_settings_with_resolved_secret(
-    settings: Settings,
-    payload: ModelSettingsPayload,
-) -> ModelSettingsPayload:
-    enterprise = payload.enterprise_ai
-    resolved_api_key = _secret_value(
-        current=settings.oci_enterprise_ai_api_key,
-        update=enterprise.api_key,
-        clear=enterprise.clear_api_key,
-    )
-    resolved_enterprise = enterprise.model_copy(
-        update={
-            "api_key": resolved_api_key,
-            "has_api_key": bool(resolved_api_key.strip()),
-            "clear_api_key": False,
-        }
-    )
-    return payload.model_copy(update={"enterprise_ai": resolved_enterprise})
-
-
-def _persist_model_settings(settings: Settings, payload: ModelSettingsPayload) -> None:
-    """モデル設定を RAG と同じ JSON document へ atomic に保存する。"""
-    path = _resolve_model_settings_file(settings.model_settings_file)
-    document = _model_settings_document(payload)
-    tmp_path = path.with_name(f".{path.name}.tmp-{uuid4().hex}")
-    try:
-        _ensure_model_settings_directory(path.parent)
-        tmp_path.write_text(
-            json.dumps(document, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
-        tmp_path.chmod(MODEL_SETTINGS_FILE_MODE)
-        tmp_path.replace(path)
-        path.chmod(MODEL_SETTINGS_FILE_MODE)
-    except OSError as exc:
-        raise HTTPException(
-            status_code=500,
-            detail="モデル設定を永続化ファイルへ保存できませんでした。",
-        ) from exc
-    finally:
-        tmp_path.unlink(missing_ok=True)
-
-
-def _model_settings_document(payload: ModelSettingsPayload) -> dict[str, object]:
-    enterprise = payload.enterprise_ai
-    generative = payload.generative_ai
-    return {
-        "version": 2,
-        "enterprise_ai": {
-            "endpoint": enterprise.endpoint,
-            "project_ocid": enterprise.project_ocid,
-            "models": [
-                {
-                    "model_id": model.model_id,
-                    "display_name": model.display_name,
-                    "vision_enabled": model.vision_enabled,
-                }
-                for model in enterprise.models
-                if model.model_id
-            ],
-            "default_model_id": enterprise.default_model_id,
-            "api_path": enterprise.api_path,
-            "vlm_input_mode": enterprise.vlm_input_mode,
-            "text_payload_template": enterprise.text_payload_template,
-            "vision_payload_template": enterprise.vision_payload_template,
-            "text_response_path": enterprise.text_response_path,
-            "vision_response_path": enterprise.vision_response_path,
-            "timeout_seconds": enterprise.timeout_seconds,
-            "max_retries": enterprise.max_retries,
-            "llm_max_output_tokens": enterprise.llm_max_output_tokens,
-            "vlm_max_output_tokens": enterprise.vlm_max_output_tokens,
-        },
-        "generative_ai": {
-            "embedding_model": generative.embedding_model,
-            "embedding_dim": generative.embedding_dim,
-            "rerank_model": generative.rerank_model,
-        },
-    }
-
-
-def _resolve_model_settings_file(path_value: str) -> Path:
-    return resolve_model_settings_file(path_value)
-
-
-def _ensure_model_settings_directory(path: Path) -> None:
-    existed = path.exists()
-    path.mkdir(mode=OCI_DIRECTORY_MODE, parents=True, exist_ok=True)
-    if not existed:
-        path.chmod(OCI_DIRECTORY_MODE)
-
-
-def _model_settings_data(payload: ModelSettingsPayload, settings: Settings) -> ModelSettingsData:
-    """payload を API data へ変換する。"""
-    return ModelSettingsData(
-        settings=_public_model_settings_payload(payload),
-        model_settings_file=settings.model_settings_file,
-        source="runtime",
-        secret_source=settings.model_secret_source,
-        legacy_secret_detected=settings.legacy_model_secret_detected,
-    )
-
-
-def _persist_enterprise_ai_api_key(api_key: str) -> None:
-    """Enterprise AI API Key を唯一の secret source である backend/.env へ保存する。"""
-    normalized = api_key.strip()
-    _write_env_values(
-        BACKEND_ENV_FILE,
-        {"OCI_ENTERPRISE_AI_API_KEY": normalized or None},
-        section_comment="# OCI Enterprise AI secret",
-        error_detail="Enterprise AI API Key を backend/.env へ保存できませんでした。",
-    )
-
-
-def _public_model_settings_payload(payload: ModelSettingsPayload) -> ModelSettingsPayload:
-    """secret を除いたモデル設定 payload を返す。"""
-    enterprise_ai = payload.enterprise_ai.model_copy(
-        update={
-            "api_key": "",
-            "has_api_key": (
-                not payload.enterprise_ai.clear_api_key
-                and (
-                    payload.enterprise_ai.has_api_key or _is_present(payload.enterprise_ai.api_key)
-                )
-            ),
-            "clear_api_key": False,
-        }
-    )
-    return ModelSettingsPayload(
-        enterprise_ai=enterprise_ai,
-        generative_ai=payload.generative_ai,
-    )
-
-
-def _is_present(value: str) -> bool:
-    """空白のみの値を未設定として扱う。"""
-    return bool(value.strip())
-
-
-def _model_test_candidate_settings(
-    base: Settings,
-    request: ModelSettingsTestRequest,
-) -> Settings:
-    """保存前 payload を実テスト用の一時 Settings へ変換する。"""
-    resolved_payload = _model_settings_with_resolved_secret(base, request.settings)
-    candidate = base.model_copy(deep=True)
-    _apply_model_settings(candidate, resolved_payload)
-    _apply_model_test_target(candidate, request)
-    return candidate
-
-
-def _apply_model_test_target(settings: Settings, request: ModelSettingsTestRequest) -> None:
-    """対象モデルだけをテスト呼び出しに使うよう Settings を調整する。"""
-    model_id = request.model_id.strip()
-    if request.target_type == "enterprise_text":
-        settings.oci_enterprise_ai_default_model = model_id
-        settings.oci_enterprise_ai_llm_model = model_id
-    elif request.target_type == "enterprise_vision":
-        settings.oci_enterprise_ai_default_model = model_id
-        settings.oci_enterprise_ai_vlm_model = model_id
-        settings.oci_enterprise_ai_models = [
-            SettingsEnterpriseAiConfiguredModel(
-                model_id=model.model_id,
-                display_name=model.display_name,
-                vision_enabled=(model.model_id == model_id or model.vision_enabled),
-            )
-            for model in enterprise_ai_model_catalog(settings)
-        ]
-    elif request.target_type == "embedding":
-        settings.oci_genai_embedding_model = model_id
-        settings.oci_genai_embed_model_id = model_id
-    elif request.target_type == "rerank":
-        settings.oci_genai_rerank_model = model_id
-        settings.oci_genai_rerank_model_id = model_id
-
-
 async def _run_model_settings_test(
     settings: Settings,
     request: ModelSettingsTestRequest,
 ) -> dict[str, str | int | float | bool | None]:
-    """対象モデルの実 API 呼び出しを行い、表示用 details を返す。"""
-    _require_model_test_id(request)
+    """対象モデルの実 API 呼び出しを行い、表示用 details を返す（共有 router の hook）。"""
     if request.target_type == "enterprise_text":
         text = await OciEnterpriseAiClient(settings=settings).generate(
             "モデル接続テストです。短く応答してください。",
@@ -1033,149 +706,6 @@ async def _run_model_settings_test(
     )
     top_score = ranks[0][1] if ranks else None
     return {"ranked_count": len(ranks), "top_score": top_score}
-
-
-def _require_model_test_id(request: ModelSettingsTestRequest) -> None:
-    """空の model_id は実 API 呼び出し前に分かりやすく失敗させる。"""
-    if not request.model_id.strip():
-        raise ValueError("テストするモデル ID を入力してください。")
-
-
-def _successful_model_test_result(
-    request: ModelSettingsTestRequest,
-    *,
-    details: dict[str, str | int | float | bool | None],
-    elapsed_ms: int,
-) -> ModelSettingsTestResult:
-    return ModelSettingsTestResult(
-        status="success",
-        target_type=request.target_type,
-        model_id=request.model_id,
-        message=_model_test_success_message(request.target_type, request.model_id),
-        troubleshooting=[],
-        elapsed_ms=elapsed_ms,
-        details=details,
-    )
-
-
-def _failed_model_test_result(
-    request: ModelSettingsTestRequest,
-    exc: Exception,
-    *,
-    elapsed_ms: int,
-    secrets: list[str],
-) -> ModelSettingsTestResult:
-    raw_error = _sanitize_model_test_error(str(exc), secrets)
-    return ModelSettingsTestResult(
-        status="failed",
-        target_type=request.target_type,
-        model_id=request.model_id,
-        message=_model_test_failure_message(request.target_type, request.model_id),
-        troubleshooting=_model_test_troubleshooting(
-            request.target_type,
-            raw_error,
-            type(exc).__name__,
-        ),
-        raw_error=raw_error,
-        error_type=type(exc).__name__,
-        elapsed_ms=elapsed_ms,
-        details={},
-    )
-
-
-def _model_test_success_message(target_type: ModelSettingsTestTargetType, model_id: str) -> str:
-    """モデル種別別の成功メッセージ。"""
-    if target_type == "enterprise_text":
-        return f"Enterprise AI の回答生成モデル「{model_id}」から応答を取得しました。"
-    if target_type == "enterprise_vision":
-        return (
-            f"Enterprise AI の Vision モデル「{model_id}」から構造化抽出レスポンスを取得しました。"
-        )
-    if target_type == "embedding":
-        return f"Embedding モデル「{model_id}」で 1536 次元ベクトルを取得しました。"
-    return f"Rerank モデル「{model_id}」から順位スコアを取得しました。"
-
-
-def _model_test_failure_message(target_type: ModelSettingsTestTargetType, model_id: str) -> str:
-    """モデル種別別の失敗メッセージ。"""
-    if target_type in {"enterprise_text", "enterprise_vision"}:
-        return f"Enterprise AI モデル「{model_id or '未入力'}」のテストに失敗しました。"
-    if target_type == "embedding":
-        return f"Embedding モデル「{model_id or '未入力'}」のテストに失敗しました。"
-    return f"Rerank モデル「{model_id or '未入力'}」のテストに失敗しました。"
-
-
-def _model_test_troubleshooting(
-    target_type: ModelSettingsTestTargetType,
-    raw_error: str,
-    error_type: str,
-) -> list[str]:
-    """実エラーからユーザーが次に確認しやすい項目を返す。"""
-    lowered = f"{raw_error} {error_type}".lower()
-    tips: list[str] = []
-    if target_type in {"enterprise_text", "enterprise_vision"}:
-        tips.extend(
-            [
-                "Endpoint URL、API パス、Project OCID、API key が Enterprise AI の"
-                " OpenAI-compatible gateway と一致しているか確認してください。",
-                "モデル ID が Enterprise AI 側の model deployment / gateway で"
-                "利用可能か確認してください。",
-            ]
-        )
-        if "response path" in lowered or "回答 text" in raw_error or "構造化抽出" in raw_error:
-            tips.append(
-                "独自 gateway の場合は payload template と response path が"
-                "実レスポンスの JSON 構造に合っているか確認してください。"
-            )
-    else:
-        tips.extend(
-            [
-                "OCI config file、profile、region、compartment OCID が"
-                "バックエンド実行環境から参照できるか確認してください。",
-                "モデル ID と IAM policy が OCI Generative AI Inference の"
-                " embedding/rerank 呼び出しを許可しているか確認してください。",
-            ]
-        )
-    if any(token in lowered for token in ("401", "unauthorized", "authentication")):
-        tips.append(
-            "認証エラーです。API key / OCI config の資格情報を再発行または再保存してください。"
-        )
-    if any(token in lowered for token in ("403", "notauthorized", "not authorized", "forbidden")):
-        tips.append(
-            "権限エラーです。Project / compartment / IAM policy の対象が"
-            "このモデル呼び出しを許可しているか確認してください。"
-        )
-    if any(token in lowered for token in ("404", "not found")):
-        tips.append(
-            "Endpoint、API パス、model ID のいずれかが見つかっていません。"
-            "リージョンと model deployment 名も確認してください。"
-        )
-    if any(token in lowered for token in ("timeout", "timed out")):
-        tips.append(
-            "タイムアウトです。ネットワーク経路を確認し、"
-            "必要ならタイムアウト秒数を一時的に長くしてください。"
-        )
-    if any(token in lowered for token in ("429", "quota", "rate")):
-        tips.append(
-            "レート制限または quota の可能性があります。"
-            "しばらく待つか service limit を確認してください。"
-        )
-    if any(token in lowered for token in ("500", "502", "503", "504")):
-        tips.append(
-            "サービス側または gateway 側の一時障害の可能性があります。"
-            "少し待って再試行し、OCI 側の稼働状況を確認してください。"
-        )
-    return list(dict.fromkeys(tips))
-
-
-def _sanitize_model_test_error(raw_error: str, secrets: list[str]) -> str:
-    """実エラーは残しつつ、既知の secret だけを伏せる。"""
-    sanitized = raw_error.strip() or "詳細メッセージは返されませんでした。"
-    for secret in secrets:
-        cleaned = secret.strip()
-        if cleaned:
-            sanitized = sanitized.replace(cleaned, "<secret>")
-    return sanitized[:2000]
 
 
 def _database_settings_data(settings: Settings) -> DatabaseSettingsData:

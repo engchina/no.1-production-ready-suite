@@ -3,11 +3,18 @@
 環境変数 / `.env` から読み込む。シークレットはコードにハードコードしない。
 """
 
-import json
+from collections.abc import Mapping
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal, Self
+from typing import Any, Literal, Self
 
+from pr_system_settings.model import EnterpriseAiConfiguredModel as EnterpriseAiConfiguredModel
+from pr_system_settings.model import ModelSecretStateMixin, ModelSettingsSection, ModelSettingsStore
+from pr_system_settings.model import (
+    enterprise_ai_default_model_id as enterprise_ai_default_model_id,
+)
+from pr_system_settings.model import enterprise_ai_model_catalog as enterprise_ai_model_catalog
+from pr_system_settings.model import enterprise_ai_vision_model_id as enterprise_ai_vision_model_id
 from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from rag_pipeline_core.chunking import (
@@ -158,88 +165,6 @@ DEFAULT_MODEL_SETTINGS_FILE = "model-settings.json"
 DEFAULT_LOCAL_STORAGE_DIR = "/u01/data/production-ready-rag"
 
 
-class EnterpriseAiConfiguredModel(BaseModel):
-    """OCI Enterprise AI provider に登録する LLM。"""
-
-    model_id: str = Field(default="", max_length=256)
-    display_name: str = Field(default="", max_length=256)
-    vision_enabled: bool = Field(default=False)
-
-    @field_validator("model_id", "display_name")
-    @classmethod
-    def strip_text(cls, value: str) -> str:
-        """前後空白を設定値へ混入させない。"""
-        return value.strip()
-
-
-class _PersistedEnterpriseAiSettings(BaseModel):
-    """UI から保存された Enterprise AI モデル設定。"""
-
-    endpoint: str = Field(default="", max_length=2048)
-    project_ocid: str = Field(default="", max_length=512)
-    api_key: str = Field(default="", max_length=4096)
-    models: list[EnterpriseAiConfiguredModel] = Field(default_factory=list, max_length=20)
-    default_model_id: str = Field(default="", max_length=256)
-    api_path: str = Field(default="/responses", max_length=512)
-    vlm_input_mode: EnterpriseAiVlmInputMode = "files_api"
-    text_payload_template: str = Field(default="", max_length=20000)
-    vision_payload_template: str = Field(default="", max_length=20000)
-    text_response_path: str = Field(default="", max_length=1024)
-    vision_response_path: str = Field(default="", max_length=1024)
-    timeout_seconds: float = Field(default=600.0, gt=0.0, le=600.0)
-    max_retries: int = Field(default=3, ge=0, le=5)
-    llm_max_output_tokens: int = Field(default=1200, ge=1, le=65536)
-    vlm_max_output_tokens: int = Field(default=65536, ge=1, le=65536)
-
-    @field_validator(
-        "endpoint",
-        "project_ocid",
-        "api_key",
-        "default_model_id",
-        "api_path",
-        "text_payload_template",
-        "vision_payload_template",
-        "text_response_path",
-        "vision_response_path",
-    )
-    @classmethod
-    def strip_text(cls, value: str) -> str:
-        """前後空白を設定値へ混入させない。"""
-        return value.strip()
-
-    @field_validator("vlm_input_mode", mode="before")
-    @classmethod
-    def normalize_legacy_vlm_input_mode(cls, value: object) -> object:
-        """廃止済み旧値は明示的な Files API へ寄せる。"""
-        if str(value).strip().casefold() == "auto":
-            return "files_api"
-        return value
-
-    @model_validator(mode="after")
-    def validate_model_catalog(self) -> "_PersistedEnterpriseAiSettings":
-        """保存済み catalog の重複と default 参照を検証する。"""
-        model_ids = [model.model_id for model in self.models if model.model_id]
-        if len(model_ids) != len(set(model_ids)):
-            raise ValueError("Enterprise AI の model ID は重複できません。")
-        if self.default_model_id and self.default_model_id not in model_ids:
-            raise ValueError("Enterprise AI default model は catalog 内から選択してください。")
-        return self
-
-
-class _PersistedGenerativeAiSettings(BaseModel):
-    """UI から保存された OCI Generative AI embedding/rerank 設定。"""
-
-    embedding_model: str = Field(default="cohere.embed-v4.0", max_length=256)
-    embedding_dim: int = Field(default=1536, ge=1536, le=1536)
-    rerank_model: str = Field(default="cohere.rerank-v4.0-fast", max_length=256)
-
-    @field_validator("embedding_model", "rerank_model")
-    @classmethod
-    def strip_text(cls, value: str) -> str:
-        """前後空白を設定値へ混入させない。"""
-        return value.strip()
-
-
 class _PersistedParserAdapterSettings(BaseModel):
     """UI から保存された文書解析 backend と外部接続設定。"""
 
@@ -265,28 +190,7 @@ class _PersistedParserAdapterSettings(BaseModel):
     glm_ocr_api_key: str = Field(default="", max_length=4096)
 
 
-class _PersistedModelSettings(BaseModel):
-    """UI 保存用の共有ランタイム設定ファイル schema。"""
-
-    version: Literal[1, 2] = 1
-    enterprise_ai: _PersistedEnterpriseAiSettings = Field(
-        default_factory=_PersistedEnterpriseAiSettings
-    )
-    generative_ai: _PersistedGenerativeAiSettings = Field(
-        default_factory=_PersistedGenerativeAiSettings
-    )
-    # v1 には存在しない。None なら環境変数由来の parser 設定を維持する。
-    parser_adapters: _PersistedParserAdapterSettings | None = None
-
-    @model_validator(mode="after")
-    def validate_versioned_sections(self) -> "_PersistedModelSettings":
-        """v2 は parser 設定を必須とし、破損した部分保存を拒否する。"""
-        if self.version == 2 and self.parser_adapters is None:
-            raise ValueError("v2 設定には parser_adapters が必要です。")
-        return self
-
-
-class Settings(BaseSettings):
+class Settings(ModelSecretStateMixin, BaseSettings):
     """環境変数ベースの設定。"""
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
@@ -1764,89 +1668,6 @@ class Settings(BaseSettings):
         return self.oracle_adb_region.strip() or self.oci_region.strip()
 
 
-_MODEL_SETTINGS_STATE: dict[str, int | str | None] = {"path": None, "mtime_ns": None}
-
-
-def enterprise_ai_model_catalog(
-    settings: Settings,
-) -> list[EnterpriseAiConfiguredModel]:
-    """Enterprise AI の登録モデル一覧を返す。旧 LLM/VLM 設定からも補完する。"""
-    configured = [
-        model
-        for model in (
-            _coerce_enterprise_ai_model(item)
-            for item in getattr(settings, "oci_enterprise_ai_models", [])
-        )
-        if model.model_id
-    ]
-    if configured:
-        return configured
-    return _legacy_enterprise_ai_model_catalog(settings)
-
-
-def enterprise_ai_default_model_id(settings: Settings) -> str:
-    """通常の LLM 呼び出しで使う既定モデル ID を返す。"""
-    configured_default = getattr(settings, "oci_enterprise_ai_default_model", "").strip()
-    if configured_default:
-        return configured_default
-    legacy_default = getattr(settings, "oci_enterprise_ai_llm_model", "").strip()
-    if legacy_default:
-        return legacy_default
-    catalog = enterprise_ai_model_catalog(settings)
-    return catalog[0].model_id if catalog else ""
-
-
-def enterprise_ai_vision_model_id(settings: Settings) -> str:
-    """Vision/OCR 呼び出しで使うモデル ID を返す。"""
-    catalog = enterprise_ai_model_catalog(settings)
-    default_model = enterprise_ai_default_model_id(settings)
-    for model in catalog:
-        if model.model_id == default_model and model.vision_enabled:
-            return model.model_id
-    for model in catalog:
-        if model.vision_enabled:
-            return model.model_id
-    legacy_vision = getattr(settings, "oci_enterprise_ai_vlm_model", "").strip()
-    if legacy_vision:
-        return legacy_vision
-    return ""
-
-
-def _coerce_enterprise_ai_model(
-    value: EnterpriseAiConfiguredModel | dict[str, object],
-) -> EnterpriseAiConfiguredModel:
-    """Settings の model_construct や env JSON 由来の値を model object へ寄せる。"""
-    if isinstance(value, EnterpriseAiConfiguredModel):
-        return value
-    return EnterpriseAiConfiguredModel.model_validate(value)
-
-
-def _legacy_enterprise_ai_model_catalog(
-    settings: Settings,
-) -> list[EnterpriseAiConfiguredModel]:
-    """旧 LLM/VLM model ID から新しい model catalog を作る。"""
-    llm_model = getattr(settings, "oci_enterprise_ai_llm_model", "").strip()
-    vlm_model = getattr(settings, "oci_enterprise_ai_vlm_model", "").strip()
-    models: list[EnterpriseAiConfiguredModel] = []
-    if llm_model:
-        models.append(
-            EnterpriseAiConfiguredModel(
-                model_id=llm_model,
-                display_name=llm_model,
-                vision_enabled=bool(vlm_model and vlm_model == llm_model),
-            )
-        )
-    if vlm_model and vlm_model != llm_model:
-        models.append(
-            EnterpriseAiConfiguredModel(
-                model_id=vlm_model,
-                display_name=vlm_model,
-                vision_enabled=True,
-            )
-        )
-    return models
-
-
 @lru_cache
 def _settings_singleton() -> Settings:
     """環境変数/.env と永続化ファイルから初期 Settings を作る。"""
@@ -1865,8 +1686,7 @@ def get_settings() -> Settings:
 def reset_settings_cache() -> None:
     """テストや明示的な再初期化のため Settings singleton を破棄する。"""
     _settings_singleton.cache_clear()
-    _MODEL_SETTINGS_STATE["path"] = None
-    _MODEL_SETTINGS_STATE["mtime_ns"] = None
+    MODEL_SETTINGS_STORE.reset()
 
 
 def resolve_model_settings_file(path_value: str) -> Path:
@@ -1878,117 +1698,44 @@ def resolve_model_settings_file(path_value: str) -> Path:
     return (BACKEND_ROOT / path).resolve()
 
 
+_PARSER_ADAPTER_FIELDS = tuple(_PersistedParserAdapterSettings.model_fields)
+
+
+def _load_parser_adapters(settings: Settings, raw: Mapping[str, Any] | None, version: int) -> None:
+    """model-settings.json の parser 節を Settings へ反映する（v1 にはない）。"""
+    if raw is None:
+        if version >= 2:
+            raise ValueError("v2 以降の設定には parser_adapters が必要です。")
+        return
+    parser = _PersistedParserAdapterSettings.model_validate(raw)
+    for name in _PARSER_ADAPTER_FIELDS:
+        setattr(settings, f"rag_parser_{name}", getattr(parser, name))
+
+
+def _dump_parser_adapters(settings: Settings) -> dict[str, Any]:
+    return {name: getattr(settings, f"rag_parser_{name}") for name in _PARSER_ADAPTER_FIELDS}
+
+
+# モデル設定の読み書きは3製品共通（platform の pr_system_settings。#103）。
+# RAG は同じファイルに parser adapter の設定（parser の API key を含む）を同居させる。
+PARSER_ADAPTERS_SECTION = ModelSettingsSection(
+    name="parser_adapters", load=_load_parser_adapters, dump=_dump_parser_adapters
+)
+MODEL_SETTINGS_STORE = ModelSettingsStore(
+    resolve_path=lambda settings: resolve_model_settings_file(settings.model_settings_file),
+    # API key は JSON と同じディレクトリの `.env` に保存する。開発では backend/.env。
+    # コンテナでは JSON と同じ volume に置き、API と取込 worker が同じ key を読む。
+    env_file=lambda settings: resolve_model_settings_file(settings.model_settings_file).parent
+    / ".env",
+    sections=(PARSER_ADAPTERS_SECTION,),
+)
+
+
 def load_persisted_model_settings(settings: Settings) -> None:
     """UI 保存済みの共有ランタイム設定 JSON があれば Settings へ上書き適用する。"""
-    path = resolve_model_settings_file(settings.model_settings_file)
-    if not path.is_file():
-        _remember_model_settings_file(path, None)
-        return
-
-    try:
-        stat_result = path.stat()
-        data = json.loads(path.read_text(encoding="utf-8"))
-        persisted = _PersistedModelSettings.model_validate(data)
-    except (OSError, ValueError) as exc:
-        raise ValueError(f"モデル設定ファイルを読み込めません: {path}") from exc
-
-    _apply_persisted_model_settings(settings, persisted)
-    _remember_model_settings_file(path, stat_result.st_mtime_ns)
+    MODEL_SETTINGS_STORE.load(settings)
 
 
 def reload_persisted_model_settings_if_changed(settings: Settings) -> None:
     """別 worker が保存した共有ランタイム設定を次回リクエストで取り込む。"""
-    path = resolve_model_settings_file(settings.model_settings_file)
-    mtime_ns = _model_settings_mtime_ns(path)
-    if _MODEL_SETTINGS_STATE["path"] == str(path) and _MODEL_SETTINGS_STATE["mtime_ns"] == mtime_ns:
-        return
-    if mtime_ns is None:
-        _remember_model_settings_file(path, None)
-        return
-    load_persisted_model_settings(settings)
-
-
-def _apply_persisted_model_settings(
-    settings: Settings,
-    persisted: _PersistedModelSettings,
-) -> None:
-    """永続化 schema を既存 Settings フィールドへ再マッピングする。"""
-    enterprise_ai = persisted.enterprise_ai
-    generative_ai = persisted.generative_ai
-    models = [model for model in enterprise_ai.models if model.model_id]
-    default_model = enterprise_ai.default_model_id or (models[0].model_id if models else "")
-
-    settings.oci_enterprise_ai_endpoint = enterprise_ai.endpoint
-    settings.oci_enterprise_ai_project_ocid = enterprise_ai.project_ocid
-    settings.oci_enterprise_ai_api_key = enterprise_ai.api_key
-    settings.oci_enterprise_ai_models = models
-    settings.oci_enterprise_ai_default_model = default_model
-    settings.oci_enterprise_ai_llm_model = default_model
-    settings.oci_enterprise_ai_vlm_model = _persisted_vision_model_id(models, default_model)
-    settings.oci_enterprise_ai_llm_path = enterprise_ai.api_path
-    settings.oci_enterprise_ai_vlm_path = enterprise_ai.api_path
-    settings.oci_enterprise_ai_vlm_input_mode = enterprise_ai.vlm_input_mode
-    settings.oci_enterprise_ai_llm_payload_template = enterprise_ai.text_payload_template
-    settings.oci_enterprise_ai_vlm_payload_template = enterprise_ai.vision_payload_template
-    settings.oci_enterprise_ai_llm_response_path = enterprise_ai.text_response_path
-    settings.oci_enterprise_ai_vlm_response_path = enterprise_ai.vision_response_path
-    settings.oci_enterprise_ai_timeout_seconds = enterprise_ai.timeout_seconds
-    settings.oci_enterprise_ai_max_retries = enterprise_ai.max_retries
-    settings.oci_enterprise_ai_llm_max_output_tokens = enterprise_ai.llm_max_output_tokens
-    settings.oci_enterprise_ai_vlm_max_output_tokens = enterprise_ai.vlm_max_output_tokens
-
-    settings.oci_genai_embedding_model = generative_ai.embedding_model
-    settings.oci_genai_embedding_dim = generative_ai.embedding_dim
-    settings.oci_genai_rerank_model = generative_ai.rerank_model
-
-    parser = persisted.parser_adapters
-    if parser is None:
-        return
-    settings.rag_parser_adapter_backend = parser.adapter_backend
-    settings.rag_parser_docling_enabled = parser.docling_enabled
-    settings.rag_parser_docling_vision_enabled = parser.docling_vision_enabled
-    settings.rag_parser_marker_enabled = parser.marker_enabled
-    settings.rag_parser_unstructured_enabled = parser.unstructured_enabled
-    settings.rag_parser_unlimited_ocr_enabled = parser.unlimited_ocr_enabled
-    settings.rag_parser_mineru_enabled = parser.mineru_enabled
-    settings.rag_parser_dots_ocr_enabled = parser.dots_ocr_enabled
-    settings.rag_parser_glm_ocr_enabled = parser.glm_ocr_enabled
-    settings.rag_parser_unlimited_ocr_api_host = parser.unlimited_ocr_api_host
-    settings.rag_parser_unlimited_ocr_model = parser.unlimited_ocr_model
-    settings.rag_parser_unlimited_ocr_api_key = parser.unlimited_ocr_api_key
-    settings.rag_parser_mineru_api_host = parser.mineru_api_host
-    settings.rag_parser_mineru_api_key = parser.mineru_api_key
-    settings.rag_parser_dots_ocr_api_host = parser.dots_ocr_api_host
-    settings.rag_parser_dots_ocr_model = parser.dots_ocr_model
-    settings.rag_parser_dots_ocr_api_key = parser.dots_ocr_api_key
-    settings.rag_parser_glm_ocr_api_host = parser.glm_ocr_api_host
-    settings.rag_parser_glm_ocr_model = parser.glm_ocr_model
-    settings.rag_parser_glm_ocr_api_key = parser.glm_ocr_api_key
-
-
-def _persisted_vision_model_id(
-    models: list[EnterpriseAiConfiguredModel],
-    default_model: str,
-) -> str:
-    """Vision/OCR 用 model を default 優先で選ぶ。"""
-    for model in models:
-        if model.model_id == default_model and model.vision_enabled:
-            return model.model_id
-    for model in models:
-        if model.vision_enabled:
-            return model.model_id
-    return ""
-
-
-def _model_settings_mtime_ns(path: Path) -> int | None:
-    """モデル設定ファイルの mtime を nanosecond で返す。存在しなければ None。"""
-    try:
-        return path.stat().st_mtime_ns if path.is_file() else None
-    except OSError:
-        return None
-
-
-def _remember_model_settings_file(path: Path, mtime_ns: int | None) -> None:
-    """現在プロセスが最後に取り込んだ設定ファイル情報を記録する。"""
-    _MODEL_SETTINGS_STATE["path"] = str(path)
-    _MODEL_SETTINGS_STATE["mtime_ns"] = mtime_ns
+    MODEL_SETTINGS_STORE.reload_if_changed(settings)

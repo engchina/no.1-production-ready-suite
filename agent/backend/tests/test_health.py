@@ -25,10 +25,12 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from pr_system_settings import oci as shared_oci
 from pr_system_settings import oci_connectivity
+from pr_system_settings.model import ModelSettingsTestRequest
 from pytest import MonkeyPatch, importorskip
 from starlette.websockets import WebSocket
 
 import app.features.agent.router as agent_router
+import app.settings as app_settings
 from app.features.agent.config import runtime_config_store
 from app.features.agent.router import stream_run_events_websocket
 from app.features.agent.runtime import (
@@ -55,7 +57,7 @@ from app.observability import (
     trace_export_retry_worker_running,
     trace_exporter_status,
 )
-from app.settings import get_settings
+from app.settings import Settings, reset_settings_cache
 
 
 class _AsgiTestClient:
@@ -649,7 +651,7 @@ def _reset_planner() -> None:
 
 def _enable_rbac(monkeypatch: MonkeyPatch) -> None:
     monkeypatch.setenv("AGENT_RBAC_ENABLED", "true")
-    get_settings.cache_clear()
+    reset_settings_cache()
 
 
 def _disable_rbac(monkeypatch: MonkeyPatch) -> None:
@@ -674,7 +676,7 @@ def _disable_rbac(monkeypatch: MonkeyPatch) -> None:
 
     _jwt_jwks_cache.clear()
     _rbac_policy_cache.clear()
-    get_settings.cache_clear()
+    reset_settings_cache()
 
 
 def _signed_identity_header(
@@ -767,7 +769,7 @@ def _enable_command_tool(monkeypatch: MonkeyPatch, *, allowed_prefixes: str = "e
     monkeypatch.setenv("AGENT_COMMAND_TOOLS_ENABLED", "true")
     monkeypatch.setenv("AGENT_COMMAND_ALLOWED_PREFIXES", allowed_prefixes)
     monkeypatch.setenv("AGENT_COMMAND_WORKSPACE_ROOT", str(Path.cwd()))
-    get_settings.cache_clear()
+    reset_settings_cache()
     runtime_config_store.patch_command_policy(
         enabled=True,
         workspace_root=str(Path.cwd()),
@@ -796,7 +798,7 @@ def _disable_command_tool(monkeypatch: MonkeyPatch) -> None:
     monkeypatch.delenv("AGENT_COMMAND_WORKSPACE_ROOT", raising=False)
     monkeypatch.delenv("AGENT_ARTIFACT_STORAGE_BACKEND", raising=False)
     monkeypatch.delenv("AGENT_ARTIFACT_STORAGE_PATH", raising=False)
-    get_settings.cache_clear()
+    reset_settings_cache()
     runtime_config_store.patch_command_policy(
         enabled=False,
         workspace_root=".",
@@ -1359,17 +1361,17 @@ def test_upload_storage_save_failure_keeps_previous_values(
     assert after["local_storage_dir"] == before
 
 
-def test_model_settings_save_persists_json_like_rag(
+def test_model_settings_save_persists_json_and_env_secret(
     monkeypatch: MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     settings_file = tmp_path / "model-settings.json"
-    monkeypatch.setattr(agent_router, "_model_settings_state", None)
-    monkeypatch.setattr(
-        agent_router,
-        "get_settings",
-        lambda: _settings_fixture(model_settings_file=str(settings_file)),
-    )
+    env_file = tmp_path / ".env"
+    monkeypatch.setattr(app_settings, "BACKEND_ENV_FILE", env_file)
+    monkeypatch.delenv("OCI_ENTERPRISE_AI_API_KEY", raising=False)
+    settings = Settings(_env_file=None, model_settings_file=str(settings_file))
+    app_settings.MODEL_SETTINGS_STORE.load(settings)
+    monkeypatch.setattr(agent_router, "get_settings", lambda: settings)
     payload = {
         "enterprise_ai": {
             "endpoint": "https://enterprise.example.test",
@@ -1407,7 +1409,10 @@ def test_model_settings_save_persists_json_like_rag(
 
     assert resp.status_code == 200
     saved = json.loads(settings_file.read_text(encoding="utf-8"))
-    assert saved["enterprise_ai"]["api_key"] == "enterprise-secret"
+    # API key は JSON ではなく backend/.env に保存する（NL2SQL と同じ。#103）。
+    assert "api_key" not in saved["enterprise_ai"]
+    assert "OCI_ENTERPRISE_AI_API_KEY=enterprise-secret" in env_file.read_text(encoding="utf-8")
+    assert settings.oci_enterprise_ai_models[0].model_id == "enterprise-model"
     assert saved["enterprise_ai"]["default_model_id"] == "enterprise-model"
     assert saved["generative_ai"]["embedding_dim"] == 1536
     assert stat.S_IMODE(settings_file.stat().st_mode) == 0o600
@@ -1416,25 +1421,20 @@ def test_model_settings_save_persists_json_like_rag(
     assert data["settings"]["enterprise_ai"]["has_api_key"] is True
 
 
-def test_model_settings_test_runs_real_test_helper_like_rag(
+def test_model_settings_test_uses_saved_secret_for_blank_key(
     monkeypatch: MonkeyPatch,
 ) -> None:
     async def fake_run_model_settings_test(
         settings: object,
-        request: agent_router.ModelSettingsTestRequest,
+        request: ModelSettingsTestRequest,
     ) -> dict[str, str | int | float | bool | None]:
-        assert cast(Any, settings).enterprise_ai_api_key == "saved-secret"
+        assert cast(Any, settings).oci_enterprise_ai_api_key == "saved-secret"
+        assert cast(Any, settings).oci_enterprise_ai_default_model == "enterprise-model"
         assert request.target_type == "enterprise_text"
         return {"response_chars": 2, "surface": "llm"}
 
-    monkeypatch.setattr(
-        agent_router,
-        "get_settings",
-        lambda: _settings_fixture(
-            enterprise_ai_api_key="saved-secret",
-            oci_enterprise_ai_api_key="saved-secret",
-        ),
-    )
+    saved = Settings(_env_file=None, oci_enterprise_ai_api_key="saved-secret")
+    monkeypatch.setattr(agent_router, "get_settings", lambda: saved)
     monkeypatch.setattr(agent_router, "_run_model_settings_test", fake_run_model_settings_test)
     payload = {
         "enterprise_ai": {
@@ -1564,7 +1564,7 @@ def test_observability_trace_events_are_filterable_and_sanitized() -> None:
 
 def test_observability_trace_sampling_keeps_priority_events(monkeypatch: MonkeyPatch) -> None:
     monkeypatch.setenv("AGENT_TRACE_SAMPLE_RATE", "0")
-    get_settings.cache_clear()
+    reset_settings_cache()
     try:
         record_runtime_event(
             "tool.completed",
@@ -1586,7 +1586,7 @@ def test_observability_trace_sampling_keeps_priority_events(monkeypatch: MonkeyP
         kept = client.get("/api/observability/events?run_id=run_sample_keep")
     finally:
         monkeypatch.delenv("AGENT_TRACE_SAMPLE_RATE", raising=False)
-        get_settings.cache_clear()
+        reset_settings_cache()
 
     assert dropped.json()["data"]["total"] == 0
     assert kept.json()["data"]["total"] >= 1
@@ -1700,7 +1700,7 @@ def test_trace_event_exporter_sends_sanitized_payload(monkeypatch: MonkeyPatch) 
     monkeypatch.setenv("AGENT_TRACE_EXPORTER_API_KEY", "trace-secret")
     monkeypatch.setenv("AGENT_TRACE_EXPORTER_TIMEOUT_SECONDS", "1.5")
     monkeypatch.setattr("app.observability.httpx.Client", FakeTraceClient)
-    get_settings.cache_clear()
+    reset_settings_cache()
     try:
         record_runtime_event(
             "tool.completed",
@@ -1718,7 +1718,7 @@ def test_trace_event_exporter_sends_sanitized_payload(monkeypatch: MonkeyPatch) 
         monkeypatch.delenv("AGENT_TRACE_EXPORTER_URL", raising=False)
         monkeypatch.delenv("AGENT_TRACE_EXPORTER_API_KEY", raising=False)
         monkeypatch.delenv("AGENT_TRACE_EXPORTER_TIMEOUT_SECONDS", raising=False)
-        get_settings.cache_clear()
+        reset_settings_cache()
 
     assert calls[0]["url"] == "https://trace.example.test/events"
     assert calls[0]["headers"]["Authorization"] == "Bearer trace-secret"
@@ -1768,7 +1768,7 @@ def test_opentelemetry_exporter_sends_otlp_trace_payload(monkeypatch: MonkeyPatc
     monkeypatch.setenv("AGENT_OPENTELEMETRY_ENDPOINT", "https://otel.example.test")
     monkeypatch.setenv("AGENT_TRACE_EXPORTER_TIMEOUT_SECONDS", "1.25")
     monkeypatch.setattr("app.observability.httpx.Client", FakeTraceClient)
-    get_settings.cache_clear()
+    reset_settings_cache()
     try:
         record_runtime_event(
             "tool.completed",
@@ -1785,7 +1785,7 @@ def test_opentelemetry_exporter_sends_otlp_trace_payload(monkeypatch: MonkeyPatc
     finally:
         monkeypatch.delenv("AGENT_OPENTELEMETRY_ENDPOINT", raising=False)
         monkeypatch.delenv("AGENT_TRACE_EXPORTER_TIMEOUT_SECONDS", raising=False)
-        get_settings.cache_clear()
+        reset_settings_cache()
 
     assert calls[0]["url"] == "https://otel.example.test/v1/traces"
     assert calls[0]["headers"]["Content-Type"] == "application/json"
@@ -1848,7 +1848,7 @@ def test_langfuse_exporter_sends_sanitized_span_metadata(monkeypatch: MonkeyPatc
     monkeypatch.setenv("AGENT_LANGFUSE_HOST", "https://langfuse.example.test")
     monkeypatch.setenv("AGENT_LANGFUSE_PUBLIC_KEY", "pk-test")
     monkeypatch.setenv("AGENT_LANGFUSE_SECRET_KEY", "sk-test")
-    get_settings.cache_clear()
+    reset_settings_cache()
     try:
         record_runtime_event(
             "tool.completed",
@@ -1866,7 +1866,7 @@ def test_langfuse_exporter_sends_sanitized_span_metadata(monkeypatch: MonkeyPatc
         monkeypatch.delenv("AGENT_LANGFUSE_HOST", raising=False)
         monkeypatch.delenv("AGENT_LANGFUSE_PUBLIC_KEY", raising=False)
         monkeypatch.delenv("AGENT_LANGFUSE_SECRET_KEY", raising=False)
-        get_settings.cache_clear()
+        reset_settings_cache()
 
     assert clients == [
         {
@@ -1913,7 +1913,7 @@ def test_trace_exporter_retry_queue_flushes_failed_events(monkeypatch: MonkeyPat
     clear_trace_export_retry_queue()
     monkeypatch.setenv("AGENT_TRACE_EXPORTER_URL", "https://trace.example.test/events")
     monkeypatch.setattr("app.observability.httpx.Client", FlakyTraceClient)
-    get_settings.cache_clear()
+    reset_settings_cache()
     try:
         record_runtime_event(
             "tool.failed",
@@ -1929,7 +1929,7 @@ def test_trace_exporter_retry_queue_flushes_failed_events(monkeypatch: MonkeyPat
         after = trace_exporter_status()
     finally:
         monkeypatch.delenv("AGENT_TRACE_EXPORTER_URL", raising=False)
-        get_settings.cache_clear()
+        reset_settings_cache()
         clear_trace_export_retry_queue()
 
     assert queued.retry_queue_size == 1
@@ -1994,7 +1994,7 @@ def test_trace_exporter_retry_worker_flushes_due_events(monkeypatch: MonkeyPatch
     monkeypatch.setenv("AGENT_TRACE_EXPORTER_RETRY_WORKER_INTERVAL_SECONDS", "0.01")
     monkeypatch.setenv("AGENT_TRACE_EXPORTER_RETRY_WORKER_BATCH_SIZE", "10")
     monkeypatch.setattr("app.observability.httpx.Client", FlakyTraceClient)
-    get_settings.cache_clear()
+    reset_settings_cache()
     try:
         record_runtime_event(
             "tool.failed",
@@ -2013,7 +2013,7 @@ def test_trace_exporter_retry_worker_flushes_due_events(monkeypatch: MonkeyPatch
         monkeypatch.delenv("AGENT_TRACE_EXPORTER_RETRY_BASE_DELAY_SECONDS", raising=False)
         monkeypatch.delenv("AGENT_TRACE_EXPORTER_RETRY_WORKER_INTERVAL_SECONDS", raising=False)
         monkeypatch.delenv("AGENT_TRACE_EXPORTER_RETRY_WORKER_BATCH_SIZE", raising=False)
-        get_settings.cache_clear()
+        reset_settings_cache()
         clear_trace_export_retry_queue()
 
     assert after.retry_queue_size == 0
@@ -2046,7 +2046,7 @@ def test_trace_event_exporter_failure_does_not_break_runtime(
 
     monkeypatch.setenv("AGENT_TRACE_EXPORTER_URL", "https://trace.example.test/events")
     monkeypatch.setattr("app.observability.httpx.Client", TimeoutTraceClient)
-    get_settings.cache_clear()
+    reset_settings_cache()
     try:
         record_runtime_event(
             "tool.failed",
@@ -2059,7 +2059,7 @@ def test_trace_event_exporter_failure_does_not_break_runtime(
         status = trace_exporter_status()
     finally:
         monkeypatch.delenv("AGENT_TRACE_EXPORTER_URL", raising=False)
-        get_settings.cache_clear()
+        reset_settings_cache()
         clear_trace_export_retry_queue()
 
     assert status.configured is True
@@ -2089,6 +2089,22 @@ def _assert_oci_actions_require_admin() -> None:
         blocked = client.post(path, json=body)
         assert blocked.status_code == 403, path
     assert client.get("/api/settings/oci").status_code == 200
+
+
+def test_rbac_limits_model_save_and_test_to_admin(monkeypatch: MonkeyPatch) -> None:
+    """モデル設定の保存と、外部へ通信する接続テストは管理者に限定する（#103）。"""
+    _enable_rbac(monkeypatch)
+    try:
+        settings = {
+            "enterprise_ai": {"endpoint": "", "project_ocid": ""},
+            "generative_ai": {},
+        }
+        assert client.patch("/api/settings/model", json=settings).status_code == 403
+        test_body = {"settings": settings, "target_type": "rerank", "model_id": "rr"}
+        assert client.post("/api/settings/model/test", json=test_body).status_code == 403
+        assert client.get("/api/settings/model").status_code == 200
+    finally:
+        _disable_rbac(monkeypatch)
 
 
 def test_rbac_blocks_admin_settings_without_required_role(monkeypatch: MonkeyPatch) -> None:
@@ -2222,7 +2238,7 @@ def test_rbac_actor_policy_source_filters_roles_views_and_agents(
             }
         ),
     )
-    get_settings.cache_clear()
+    reset_settings_cache()
     alice_headers = {"X-Agent-Actor": "alice"}
     bob_headers = {"X-Agent-Actor": "bob"}
     try:
@@ -2283,7 +2299,7 @@ def test_rbac_external_policy_source_filters_roles_views_and_agents(
     monkeypatch.setenv("AGENT_RBAC_POLICY_URL", "https://policy.example.test/agent-rbac")
     monkeypatch.setenv("AGENT_RBAC_POLICY_API_KEY", "policy-secret")
     monkeypatch.setenv("AGENT_RBAC_POLICY_CACHE_SECONDS", "0")
-    get_settings.cache_clear()
+    reset_settings_cache()
     calls: list[dict[str, Any]] = []
 
     class PolicyClient:
@@ -2395,7 +2411,7 @@ def test_rbac_signed_identity_header_filters_roles_views_and_agents(
 ) -> None:
     _enable_rbac(monkeypatch)
     monkeypatch.setenv("AGENT_RBAC_IDENTITY_HMAC_SECRET", "identity-secret")
-    get_settings.cache_clear()
+    reset_settings_cache()
     signed_headers = {
         "X-Agent-Identity": _signed_identity_header(
             {
@@ -2526,7 +2542,7 @@ def test_rbac_jwt_bearer_identity_filters_roles_views_and_agents(
     monkeypatch.setenv("AGENT_RBAC_JWT_HS256_SECRET", "jwt-secret")
     monkeypatch.setenv("AGENT_RBAC_JWT_ISSUER", "https://issuer.example.test")
     monkeypatch.setenv("AGENT_RBAC_JWT_AUDIENCE", "agent-runtime")
-    get_settings.cache_clear()
+    reset_settings_cache()
     now = datetime.now(UTC).timestamp()
     jwt_headers = {
         "Authorization": "Bearer "
@@ -2668,7 +2684,7 @@ def test_rbac_jwt_rs256_uses_jwks(
     )
     monkeypatch.setenv("AGENT_RBAC_JWT_ISSUER", "https://issuer.example.test")
     monkeypatch.setenv("AGENT_RBAC_JWT_AUDIENCE", "agent-runtime")
-    get_settings.cache_clear()
+    reset_settings_cache()
     monkeypatch.setattr("app.features.agent.router.httpx.Client", JwksClient)
     token = _jwt_rs256_bearer_token(
         {
@@ -7465,7 +7481,7 @@ def test_sandbox_command_artifact_can_use_filesystem_content_store(
     artifact_root = tmp_path / "agent-artifacts"
     monkeypatch.setenv("AGENT_ARTIFACT_STORAGE_BACKEND", "filesystem")
     monkeypatch.setenv("AGENT_ARTIFACT_STORAGE_PATH", str(artifact_root))
-    get_settings.cache_clear()
+    reset_settings_cache()
     runtime_config_store.patch_command_policy(
         artifact_storage_backend="filesystem",
         artifact_storage_path=str(artifact_root),

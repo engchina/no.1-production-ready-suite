@@ -1323,13 +1323,6 @@ export function useUpdateModelSettings() {
   });
 }
 
-/** モデル設定の保存前チェック。 */
-export function useCheckModelSettings() {
-  return useMutation({
-    mutationFn: (payload: ModelSettingsPayload) => api.checkModelSettings(payload),
-  });
-}
-
 /** モデル単位の実 API テスト。 */
 export function useTestModelSettings() {
   return useMutation({

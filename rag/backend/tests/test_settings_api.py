@@ -18,7 +18,9 @@ from zipfile import ZipFile
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
+from dotenv import dotenv_values
 from pr_system_settings import oci_connectivity
+from pr_system_settings.model import save_model_settings
 from pytest import MonkeyPatch
 
 from app.api.routes import settings as settings_routes
@@ -30,6 +32,7 @@ from app.clients.oracle import (
     StoredGenerationSettings,
 )
 from app.config import (
+    MODEL_SETTINGS_STORE,
     Settings,
     get_settings,
     load_persisted_model_settings,
@@ -52,6 +55,12 @@ VLM_TEMPLATE = '{"input":"${data_base64}"}'
 async def _run_inline(operation: Any) -> Any:
     """テスト用 fake SDK 呼び出しをスレッドへ逃がさず同期実行する。"""
     return operation()
+
+
+def _saved_enterprise_ai_api_key(settings: Settings) -> str | None:
+    """model-settings.json と同じディレクトリの .env（テストでは tmp）に保存された API key。"""
+    env_file = MODEL_SETTINGS_STORE.env_file(settings)
+    return dotenv_values(env_file).get("OCI_ENTERPRISE_AI_API_KEY")
 
 
 def test_model_settings_vision_test_image_is_valid_jpeg() -> None:
@@ -401,7 +410,7 @@ def test_update_parser_adapter_settings_persists_shared_gpu_flags_and_preserves_
     assert settings.rag_parser_dots_ocr_enabled is False
     assert settings.rag_parser_glm_ocr_enabled is True
     persisted = json.loads(Path(settings.model_settings_file).read_text(encoding="utf-8"))
-    assert persisted["version"] == 2
+    assert persisted["version"] == 3
     parser = persisted["parser_adapters"]
     assert parser["adapter_backend"] == "mineru"
     assert parser["docling_enabled"] is True
@@ -468,7 +477,7 @@ def test_parser_settings_shared_file_reloads_in_worker_and_model_save_preserves_
     settings = get_settings()
     settings_file = Path(settings.model_settings_file)
     monkeypatch.setattr(settings, "oci_enterprise_ai_endpoint", "https://existing.example.com")
-    monkeypatch.setattr(settings, "oci_enterprise_ai_api_key", "existing-model-secret")
+    settings.set_runtime_enterprise_ai_api_key("existing-model-secret")
     worker_settings = Settings(
         _env_file=None,
         model_settings_file=str(settings_file),
@@ -497,7 +506,9 @@ def test_parser_settings_shared_file_reloads_in_worker_and_model_save_preserves_
     assert response.status_code == 200
     persisted = json.loads(settings_file.read_text(encoding="utf-8"))
     assert persisted["enterprise_ai"]["endpoint"] == "https://existing.example.com"
-    assert persisted["enterprise_ai"]["api_key"] == "existing-model-secret"
+    # API key は JSON ではなく backend/.env に保存する（#103）。
+    assert "api_key" not in persisted["enterprise_ai"]
+    assert _saved_enterprise_ai_api_key(settings) == "existing-model-secret"
     reload_persisted_model_settings_if_changed(worker_settings)
     assert worker_settings.rag_parser_adapter_backend == "glm_ocr"
     assert worker_settings.rag_parser_glm_ocr_api_host == "https://glm.example.com/v1"
@@ -508,7 +519,7 @@ def test_parser_settings_shared_file_reloads_in_worker_and_model_save_preserves_
 
     assert model_response.status_code == 200
     persisted = json.loads(settings_file.read_text(encoding="utf-8"))
-    assert persisted["enterprise_ai"]["api_key"] == "sk-update-secret"
+    assert _saved_enterprise_ai_api_key(settings) == "sk-update-secret"
     assert persisted["parser_adapters"]["glm_ocr_api_key"] == "parser-secret"
     assert persisted["parser_adapters"]["glm_ocr_model"] == "glm-production"
 
@@ -519,12 +530,12 @@ def test_parallel_model_and_parser_updates_preserve_both_sections(
     settings = get_settings()
     settings_file = Path(settings.model_settings_file)
     settings.oci_enterprise_ai_endpoint = "https://existing.example.com"
-    settings.oci_enterprise_ai_api_key = "existing-model-secret"
+    settings.set_runtime_enterprise_ai_api_key("existing-model-secret")
     parser_inside_persist = Event()
     model_started = Event()
     allow_parser_write = Event()
     original_get_settings = get_settings
-    original_persist = settings_routes._persist_model_settings
+    original_persist = MODEL_SETTINGS_STORE.write_document
 
     def signal_model_start() -> Settings:
         current = original_get_settings()
@@ -542,7 +553,7 @@ def test_parallel_model_and_parser_updates_preserve_both_sections(
         original_persist(candidate, payload)
 
     monkeypatch.setattr(settings_routes, "get_settings", signal_model_start)
-    monkeypatch.setattr(settings_routes, "_persist_model_settings", pause_first_persist)
+    monkeypatch.setattr(MODEL_SETTINGS_STORE, "write_document", pause_first_persist)
     parser_update = ParserAdapterSettingsUpdate.model_validate(
         {
             "adapter_backend": "glm_ocr",
@@ -566,8 +577,7 @@ def test_parallel_model_and_parser_updates_preserve_both_sections(
         )
         assert parser_inside_persist.wait(timeout=2)
         model_future = pool.submit(
-            asyncio.run,
-            settings_routes.update_model_settings(model_update),
+            lambda: save_model_settings(signal_model_start(), MODEL_SETTINGS_STORE, model_update)
         )
         assert model_started.wait(timeout=2)
         time.sleep(0.05)
@@ -579,7 +589,7 @@ def test_parallel_model_and_parser_updates_preserve_both_sections(
         model_future.result(timeout=2)
 
     persisted = json.loads(settings_file.read_text(encoding="utf-8"))
-    assert persisted["enterprise_ai"]["api_key"] == "sk-update-secret"
+    assert _saved_enterprise_ai_api_key(settings) == "sk-update-secret"
     assert persisted["parser_adapters"]["glm_ocr_api_key"] == "parser-secret"
     assert persisted["parser_adapters"]["glm_ocr_model"] == "glm-production"
     lock_file = settings_file.with_name(f"{settings_file.name}.lock")
@@ -1739,11 +1749,6 @@ def test_get_model_settings_returns_runtime_values(monkeypatch: MonkeyPatch) -> 
     assert body["settings"]["enterprise_ai"]["vlm_max_output_tokens"] == 65536
     assert body["settings"]["generative_ai"]["embedding_dim"] == 1536
     assert "sk-runtime-secret" not in resp.text
-    assert body["checks"] == {
-        "enterprise_ai": "ok",
-        "generative_ai": "ok",
-        "embedding_dim": "ok",
-    }
 
 
 def test_update_model_settings_mutates_runtime_settings() -> None:
@@ -1753,7 +1758,6 @@ def test_update_model_settings_mutates_runtime_settings() -> None:
 
     assert resp.status_code == 200
     body = resp.json()["data"]
-    assert body["checks"]["enterprise_ai"] == "ok"
     assert body["model_settings_file"] == get_settings().model_settings_file
     settings = get_settings()
     assert settings.oci_enterprise_ai_endpoint == "https://enterprise-ai.example"
@@ -1794,8 +1798,10 @@ def test_update_model_settings_persists_private_json(tmp_path: Path) -> None:
     assert stat.S_IMODE(settings_file.parent.stat().st_mode) == 0o700
     assert stat.S_IMODE(settings_file.stat().st_mode) == 0o600
     persisted = json.loads(settings_file.read_text(encoding="utf-8"))
-    assert persisted["version"] == 2
-    assert persisted["enterprise_ai"]["api_key"] == "sk-update-secret"
+    assert persisted["version"] == 3
+    # API key は JSON ではなく backend/.env に保存する（#103）。
+    assert "api_key" not in persisted["enterprise_ai"]
+    assert _saved_enterprise_ai_api_key(settings) == "sk-update-secret"
     assert persisted["enterprise_ai"]["models"] == [
         {
             "model_id": "enterprise-llm",
@@ -1903,34 +1909,6 @@ def test_update_model_settings_does_not_mutate_runtime_when_persist_fails(
     assert resp.status_code == 500
     assert settings.oci_enterprise_ai_endpoint == "https://old-enterprise.example"
     assert settings.oci_enterprise_ai_api_key == "sk-old-secret"
-
-
-def test_check_model_settings_does_not_mutate_runtime_settings(
-    monkeypatch: MonkeyPatch,
-) -> None:
-    settings = get_settings()
-    monkeypatch.setattr(settings, "oci_enterprise_ai_endpoint", "")
-
-    resp = client.post("/api/settings/model/check", json=_payload())
-
-    assert resp.status_code == 200
-    assert resp.json()["data"]["checks"]["enterprise_ai"] == "ok"
-    assert settings.oci_enterprise_ai_endpoint == ""
-
-
-def test_check_model_settings_masks_candidate_api_key() -> None:
-    payload = _payload()
-    payload["enterprise_ai"]["api_key"] = "sk-check-secret"
-    payload["enterprise_ai"]["has_api_key"] = False
-
-    resp = client.post("/api/settings/model/check", json=payload)
-
-    assert resp.status_code == 200
-    body = resp.json()["data"]
-    assert body["checks"]["enterprise_ai"] == "ok"
-    assert body["settings"]["enterprise_ai"]["api_key"] == ""
-    assert body["settings"]["enterprise_ai"]["has_api_key"] is True
-    assert "sk-check-secret" not in resp.text
 
 
 def test_model_settings_test_enterprise_text_uses_candidate_without_mutating_runtime(
@@ -2086,20 +2064,6 @@ def test_model_settings_test_returns_real_error_with_troubleshooting_and_masks_s
     assert "sk-update-secret" not in resp.text
 
 
-def test_model_settings_missing_values_are_reported() -> None:
-    payload = _payload()
-    payload["enterprise_ai"]["endpoint"] = ""
-    payload["generative_ai"]["rerank_model"] = ""
-
-    resp = client.post("/api/settings/model/check", json=payload)
-
-    assert resp.status_code == 200
-    body = resp.json()["data"]
-    assert body["checks"]["enterprise_ai"] == "missing"
-    assert body["checks"]["generative_ai"] == "missing"
-    assert body["checks"]["embedding_dim"] == "ok"
-
-
 def test_model_settings_rejects_null_endpoint() -> None:
     payload = _payload()
     payload["enterprise_ai"]["endpoint"] = None
@@ -2119,52 +2083,19 @@ def test_update_model_settings_allows_invalid_readiness_fields() -> None:
     resp = client.patch("/api/settings/model", json=payload)
 
     assert resp.status_code == 200
-    body = resp.json()["data"]
-    assert body["checks"]["enterprise_ai"] == "invalid"
     settings = get_settings()
     assert settings.oci_enterprise_ai_endpoint == "enterprise-ai.example"
     assert settings.oci_enterprise_ai_project_ocid == "not-an-ocid"
     assert settings.oci_enterprise_ai_llm_path == "responses"
 
 
-def test_model_settings_requires_enterprise_ai_api_key() -> None:
-    payload = _payload()
-    payload["enterprise_ai"]["api_key"] = ""
-    payload["enterprise_ai"]["has_api_key"] = False
-
-    resp = client.post("/api/settings/model/check", json=payload)
-
-    assert resp.status_code == 200
-    assert resp.json()["data"]["checks"]["enterprise_ai"] == "missing"
-
-
-def test_model_settings_requires_enterprise_ai_model_catalog() -> None:
-    payload = _payload()
-    payload["enterprise_ai"]["models"] = []
-    payload["enterprise_ai"]["default_model_id"] = ""
-
-    resp = client.post("/api/settings/model/check", json=payload)
-
-    assert resp.status_code == 200
-    assert resp.json()["data"]["checks"]["enterprise_ai"] == "missing"
-
-
 def test_enterprise_ai_model_settings_defaults_max_retries_to_three() -> None:
     """設定 API スキーマの最大リトライ回数既定値は 3。"""
     assert EnterpriseAiModelSettings().max_retries == 3
-    assert EnterpriseAiModelSettings().vlm_input_mode == "files_api"
+    # 共有 schema（#103）の既定は auto。RAG の runtime は auto を files_api として扱う。
+    assert EnterpriseAiModelSettings().vlm_input_mode == "auto"
     assert EnterpriseAiModelSettings().llm_max_output_tokens == 1200
     assert EnterpriseAiModelSettings().vlm_max_output_tokens == 65536
-
-
-def test_model_settings_reports_invalid_default_model() -> None:
-    payload = _payload()
-    payload["enterprise_ai"]["default_model_id"] = "missing-model"
-
-    resp = client.post("/api/settings/model/check", json=payload)
-
-    assert resp.status_code == 200
-    assert resp.json()["data"]["checks"]["enterprise_ai"] == "invalid"
 
 
 def test_model_settings_rejects_invalid_payload_template() -> None:

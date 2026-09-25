@@ -1,11 +1,24 @@
 """設定 API のスキーマ。secret はレスポンスに含めない。"""
 
-import json
 from datetime import UTC, datetime
 from typing import Literal, get_args
 from urllib.parse import urlsplit
 
 # OCI 認証の schema は3製品共通（platform の pr_system_settings。#100）。互換のため re-export する。
+# モデル設定の schema は3製品共通（pr_system_settings。#103）。互換のため re-export する。
+from pr_system_settings.model import (
+    EnterpriseAiModelEntrySettings as EnterpriseAiModelEntrySettings,
+)
+from pr_system_settings.model import EnterpriseAiModelSettings as EnterpriseAiModelSettings
+from pr_system_settings.model import EnterpriseAiVlmInputMode as EnterpriseAiVlmInputMode
+from pr_system_settings.model import GenerativeAiModelSettings as GenerativeAiModelSettings
+from pr_system_settings.model import ModelSettingsData as ModelSettingsData
+from pr_system_settings.model import ModelSettingsPayload as ModelSettingsPayload
+from pr_system_settings.model import ModelSettingsSecretSource as ModelSettingsSecretSource
+from pr_system_settings.model import ModelSettingsTestRequest as ModelSettingsTestRequest
+from pr_system_settings.model import ModelSettingsTestResult as ModelSettingsTestResult
+from pr_system_settings.model import ModelSettingsTestStatus as ModelSettingsTestStatus
+from pr_system_settings.model import ModelSettingsTestTargetType as ModelSettingsTestTargetType
 from pr_system_settings.oci import OciConfigField as OciConfigField
 from pr_system_settings.oci import OciConfigReadData as OciConfigReadData
 from pr_system_settings.oci import OciConfigReadRequest as OciConfigReadRequest
@@ -46,7 +59,6 @@ from app.config import (
     CHUNK_SIZE_MIN_CHARS,
     AgenticProfile,
     ChunkingStrategy,
-    EnterpriseAiVlmInputMode,
     EvaluationSuite,
     GenerationProfile,
     GraphProfile,
@@ -59,9 +71,6 @@ from app.config import (
     VectorIndexProfile,
 )
 
-ModelSettingsCheckStatus = Literal["ok", "missing", "invalid"]
-ModelSettingsTestStatus = Literal["success", "failed"]
-ModelSettingsTestTargetType = Literal["enterprise_text", "enterprise_vision", "embedding", "rerank"]
 DatabaseConnectionTestStatus = Literal["success", "failed"]
 ParserAdapterBackendName = Literal[
     "docling",
@@ -115,163 +124,6 @@ _CHUNKING_STRATEGIES_WITH_MIN_CHARS: set[ChunkingStrategy] = {
     "markdown_heading",
     "page_level",
 }
-
-
-class EnterpriseAiModelEntrySettings(BaseModel):
-    """OCI Enterprise AI provider に登録する LLM。"""
-
-    model_id: str = Field(default="", max_length=256)
-    display_name: str = Field(default="", max_length=256)
-    vision_enabled: bool = False
-
-    @field_validator("model_id", "display_name")
-    @classmethod
-    def strip_text(cls, value: str) -> str:
-        """前後空白を設定値へ混入させない。"""
-        return value.strip()
-
-
-class EnterpriseAiModelSettings(BaseModel):
-    """OCI Enterprise AI モデル provider 設定。"""
-
-    endpoint: str = Field(default="", max_length=2048)
-    project_ocid: str = Field(default="", max_length=512)
-    api_key: str = Field(default="", max_length=4096)
-    has_api_key: bool = False
-    clear_api_key: bool = False
-    models: list[EnterpriseAiModelEntrySettings] = Field(default_factory=list, max_length=20)
-    default_model_id: str = Field(default="", max_length=256)
-    api_path: str = Field(default="/responses", max_length=512)
-    vlm_input_mode: EnterpriseAiVlmInputMode = "files_api"
-    text_payload_template: str = Field(default="", max_length=20000)
-    vision_payload_template: str = Field(default="", max_length=20000)
-    text_response_path: str = Field(default="", max_length=1024)
-    vision_response_path: str = Field(default="", max_length=1024)
-    timeout_seconds: float = Field(default=600.0, gt=0.0, le=600.0)
-    max_retries: int = Field(default=3, ge=0, le=5)
-    llm_max_output_tokens: int = Field(default=1200, ge=1, le=65536)
-    vlm_max_output_tokens: int = Field(default=65536, ge=1, le=65536)
-
-    @field_validator(
-        "endpoint",
-        "project_ocid",
-        "api_key",
-        "default_model_id",
-        "api_path",
-        "text_payload_template",
-        "vision_payload_template",
-        "text_response_path",
-        "vision_response_path",
-    )
-    @classmethod
-    def strip_text(cls, value: str) -> str:
-        """前後空白を設定値へ混入させない。"""
-        return value.strip()
-
-    @field_validator("endpoint")
-    @classmethod
-    def validate_endpoint(cls, value: str) -> str:
-        """endpoint の readiness 判定は保存後のチェックへ委譲する。"""
-        return value
-
-    @field_validator("project_ocid")
-    @classmethod
-    def validate_project_ocid(cls, value: str) -> str:
-        """project OCID の readiness 判定は保存後のチェックへ委譲する。"""
-        return value
-
-    @field_validator("api_path")
-    @classmethod
-    def validate_api_path(cls, value: str) -> str:
-        """API path の readiness 判定は保存後のチェックへ委譲する。"""
-        return value
-
-    @field_validator("text_payload_template", "vision_payload_template")
-    @classmethod
-    def validate_payload_template(cls, value: str) -> str:
-        """payload template は空または JSON object 文字列だけを許可する。"""
-        if not value:
-            return value
-        try:
-            parsed = json.loads(value)
-        except ValueError as exc:
-            raise ValueError("payload template は JSON object で入力してください。") from exc
-        if not isinstance(parsed, dict):
-            raise ValueError("payload template は JSON object で入力してください。")
-        return value
-
-    @field_validator("text_response_path", "vision_response_path")
-    @classmethod
-    def validate_response_path(cls, value: str) -> str:
-        """response path は空または JSON Pointer 形式だけを許可する。"""
-        if value and not value.startswith("/"):
-            raise ValueError("response path は / で始まる JSON Pointer で入力してください。")
-        return value
-
-
-class GenerativeAiModelSettings(BaseModel):
-    """OCI Generative AI（embedding/rerank）モデル設定。"""
-
-    embedding_model: str = Field(default="cohere.embed-v4.0", max_length=256)
-    embedding_dim: int = Field(
-        default=1536,
-        ge=1536,
-        le=1536,
-        description="Oracle VECTOR(1536, FLOAT32) と互換にするため 1536 固定。",
-    )
-    rerank_model: str = Field(default="cohere.rerank-v4.0-fast", max_length=256)
-
-    @field_validator("embedding_model", "rerank_model")
-    @classmethod
-    def strip_text(cls, value: str) -> str:
-        """前後空白を設定値へ混入させない。"""
-        return value.strip()
-
-
-class ModelSettingsPayload(BaseModel):
-    """モデル設定の読み書き payload。"""
-
-    enterprise_ai: EnterpriseAiModelSettings
-    generative_ai: GenerativeAiModelSettings
-
-
-class ModelSettingsData(BaseModel):
-    """モデル設定 API のレスポンス data。"""
-
-    settings: ModelSettingsPayload
-    checks: dict[str, ModelSettingsCheckStatus]
-    model_settings_file: str
-    source: Literal["runtime"]
-
-
-class ModelSettingsTestRequest(BaseModel):
-    """保存前のモデル設定で特定モデルを実 API に対してテストする request。"""
-
-    settings: ModelSettingsPayload
-    target_type: ModelSettingsTestTargetType
-    model_id: str = Field(default="", max_length=256)
-    vision_enabled: bool = False
-
-    @field_validator("model_id")
-    @classmethod
-    def strip_model_id(cls, value: str) -> str:
-        """前後空白を設定値へ混入させない。"""
-        return value.strip()
-
-
-class ModelSettingsTestResult(BaseModel):
-    """モデル単位の実接続テスト結果。"""
-
-    status: ModelSettingsTestStatus
-    target_type: ModelSettingsTestTargetType
-    model_id: str
-    message: str
-    troubleshooting: list[str] = Field(default_factory=list)
-    raw_error: str | None = None
-    error_type: str | None = None
-    elapsed_ms: int
-    checked_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
-    details: dict[str, str | int | float | bool | None] = Field(default_factory=dict)
 
 
 class DatabaseSettingsData(BaseModel):

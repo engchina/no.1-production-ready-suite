@@ -1464,7 +1464,8 @@ export interface ModelSettingsPayload {
 
 export interface ModelSettingsData {
   settings: ModelSettingsPayload;
-  checks: Record<"enterprise_ai" | "generative_ai" | "embedding_dim", ModelSettingsCheckStatus>;
+  // 共有 API（#103）は返さない。画面は 4b で共通化する。
+  checks?: Record<"enterprise_ai" | "generative_ai" | "embedding_dim", ModelSettingsCheckStatus>;
   model_settings_file: string;
   source: "runtime";
 }
@@ -2950,8 +2951,6 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }),
-  checkModelSettings: (body: ModelSettingsPayload) =>
-    request<ModelSettingsData>("/api/settings/model/check", jsonBody(body)),
   testModelSettings: (body: ModelSettingsTestRequest) =>
     request<ModelSettingsTestResult>("/api/settings/model/test", jsonBody(body)),
 

@@ -26,7 +26,7 @@ from io import StringIO
 from pathlib import Path, PurePosixPath
 from time import monotonic
 from types import SimpleNamespace
-from typing import Any, Literal, cast
+from typing import Any, cast
 from uuid import uuid4
 from zipfile import BadZipFile, ZipFile
 
@@ -45,6 +45,13 @@ from fastapi import (
 )
 from fastapi.responses import Response, StreamingResponse
 from pr_backend_core import ApiResponse
+from pr_system_settings.model import (
+    EnterpriseAiModelSettings,
+    GenerativeAiModelSettings,
+    ModelSettingsTestRequest,
+    build_model_router,
+    model_payload,
+)
 from pr_system_settings.oci import build_oci_router
 from pr_system_settings.oci_auth import (
     load_oci_config_without_prompt as _load_oci_config_without_prompt,
@@ -138,7 +145,7 @@ from app.observability import (
     patch_trace_policy,
     trace_exporter_status,
 )
-from app.settings import get_settings
+from app.settings import MODEL_SETTINGS_STORE, get_settings
 
 router = APIRouter(tags=["agent-runtime"])
 
@@ -147,7 +154,6 @@ BACKEND_ENV_FILE = BACKEND_ROOT / ".env"
 PASSPHRASE_CONFIG_KEYS = frozenset({"pass_phrase", "passphrase", "key_password"})
 ENV_ASSIGNMENT_RE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=")
 ENV_FILE_MODE = 0o600
-MODEL_SETTINGS_FILE_MODE = 0o600
 ORACLE_WALLET_MAX_BYTES = 20 * 1024 * 1024
 ORACLE_WALLET_MAX_EXTRACTED_BYTES = 100 * 1024 * 1024
 ORACLE_WALLET_DIR_NAME = "wallet"
@@ -162,14 +168,6 @@ MODEL_TEST_IMAGE_BYTES = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9s"
     "AAAAASUVORK5CYII="
 )
-ModelSettingsCheckStatus = Literal["ok", "missing", "invalid"]
-ModelSettingsTestStatus = Literal["success", "failed"]
-ModelSettingsTestTargetType = Literal[
-    "enterprise_text",
-    "enterprise_vision",
-    "embedding",
-    "rerank",
-]
 _WEBSOCKET_COMMAND_DEDUPE_TTL_SECONDS = 300.0
 _WEBSOCKET_COMMAND_DEDUPE_MAX_ENTRIES = 2000
 _websocket_command_dedupe: dict[tuple[str, str], tuple[str, float]] = {}
@@ -337,120 +335,6 @@ class PlannerSettingsPatch(BaseModel):
     fallback_to_heuristic: bool | None = None
     allowed_tool_names: list[str] | None = None
     allow_command_generation: bool | None = None
-
-
-class EnterpriseAiConfiguredModel(BaseModel):
-    model_id: str = Field(default="", max_length=256)
-    display_name: str = Field(default="", max_length=256)
-    vision_enabled: bool = False
-
-    @field_validator("model_id", "display_name")
-    @classmethod
-    def strip_text(cls, value: str) -> str:
-        return value.strip()
-
-
-class EnterpriseAiModelSettings(BaseModel):
-    endpoint: str = Field(default="", max_length=2048)
-    project_ocid: str = Field(default="", max_length=512)
-    api_key: str = Field(default="", max_length=4096)
-    has_api_key: bool = False
-    clear_api_key: bool = False
-    models: list[EnterpriseAiConfiguredModel] = Field(default_factory=list, max_length=20)
-    default_model_id: str = Field(default="", max_length=256)
-    api_path: str = Field(default="/responses", max_length=512)
-    vlm_input_mode: str = "auto"
-    text_payload_template: str = Field(default="", max_length=20000)
-    vision_payload_template: str = Field(default="", max_length=20000)
-    text_response_path: str = Field(default="", max_length=1024)
-    vision_response_path: str = Field(default="", max_length=1024)
-    timeout_seconds: float = Field(default=600.0, gt=0.0, le=600.0)
-    max_retries: int = Field(default=3, ge=0, le=5)
-    llm_max_output_tokens: int = Field(default=1200, ge=1, le=65536)
-    vlm_max_output_tokens: int = Field(default=65536, ge=1, le=65536)
-
-    @field_validator(
-        "endpoint",
-        "project_ocid",
-        "api_key",
-        "default_model_id",
-        "api_path",
-        "text_payload_template",
-        "vision_payload_template",
-        "text_response_path",
-        "vision_response_path",
-    )
-    @classmethod
-    def strip_text(cls, value: str) -> str:
-        return value.strip()
-
-    @field_validator("text_payload_template", "vision_payload_template")
-    @classmethod
-    def validate_payload_template(cls, value: str) -> str:
-        if not value:
-            return value
-        try:
-            parsed = json.loads(value)
-        except ValueError as exc:
-            raise ValueError("payload template は JSON object で入力してください。") from exc
-        if not isinstance(parsed, dict):
-            raise ValueError("payload template は JSON object で入力してください。")
-        return value
-
-    @field_validator("text_response_path", "vision_response_path")
-    @classmethod
-    def validate_response_path(cls, value: str) -> str:
-        if value and not value.startswith("/"):
-            raise ValueError("response path は / で始まる JSON Pointer で入力してください。")
-        return value
-
-
-class GenerativeAiModelSettings(BaseModel):
-    embedding_model: str = Field(default="cohere.embed-v4.0", max_length=256)
-    embedding_dim: int = Field(default=1536, ge=1536, le=1536)
-    rerank_model: str = Field(default="cohere.rerank-v4.0-fast", max_length=256)
-
-    @field_validator("embedding_model", "rerank_model")
-    @classmethod
-    def strip_text(cls, value: str) -> str:
-        return value.strip()
-
-
-class ModelSettingsPayload(BaseModel):
-    enterprise_ai: EnterpriseAiModelSettings
-    generative_ai: GenerativeAiModelSettings
-
-
-class ModelSettingsData(BaseModel):
-    settings: ModelSettingsPayload
-    checks: dict[str, ModelSettingsCheckStatus]
-    model_settings_file: str
-    source: Literal["runtime"]
-
-
-class ModelSettingsTestRequest(BaseModel):
-    settings: ModelSettingsPayload
-    target_type: ModelSettingsTestTargetType
-    model_id: str = Field(default="", max_length=256)
-    vision_enabled: bool = False
-
-    @field_validator("model_id")
-    @classmethod
-    def strip_model_id(cls, value: str) -> str:
-        return value.strip()
-
-
-class ModelSettingsTestResult(BaseModel):
-    status: ModelSettingsTestStatus
-    target_type: ModelSettingsTestTargetType
-    model_id: str
-    message: str
-    troubleshooting: list[str] = Field(default_factory=list)
-    raw_error: str | None = None
-    error_type: str | None = None
-    elapsed_ms: int = 0
-    checked_at: str
-    details: dict[str, str | int | float | bool | None] = Field(default_factory=dict)
 
 
 class DatabaseSettingsData(BaseModel):
@@ -623,9 +507,20 @@ router.include_router(
     ),
     prefix="/settings",
 )
+# モデル設定も3製品共通の実装（pr_system_settings.model。#103）。
+# 接続テストは外部へ通信するため管理者に限定する。
+router.include_router(
+    build_model_router(
+        get_settings=lambda: get_settings(),
+        store=MODEL_SETTINGS_STORE,
+        run_model_test=lambda settings, request: _run_model_settings_test(settings, request),
+        write_dependencies=[Depends(require_admin)],
+        action_dependencies=[Depends(require_admin)],
+    ),
+    prefix="/settings",
+)
 
 
-_model_settings_state: ModelSettingsPayload | None = None
 _database_settings_state: DatabaseSettingsData | None = None
 _adb_info_state: AdbInfoData | None = None
 
@@ -798,533 +693,29 @@ def _replace_env_file(path: Path, content: str) -> None:
         tmp_path.unlink(missing_ok=True)
 
 
-def _model_settings_path(settings: object) -> Path:
-    raw_path = _settings_str_from(settings, "model_settings_file", "model-settings.json")
-    path = Path(raw_path).expanduser()
-    return path if path.is_absolute() else BACKEND_ROOT / path
-
-
-def _load_persisted_model_settings(settings: object) -> ModelSettingsPayload | None:
-    path = _model_settings_path(settings)
-    if not path.is_file():
-        return None
-    try:
-        document = json.loads(path.read_text(encoding="utf-8"))
-        payload = ModelSettingsPayload.model_validate(
-            {
-                "enterprise_ai": document.get("enterprise_ai", {}),
-                "generative_ai": document.get("generative_ai", {}),
-            }
-        )
-    except (OSError, ValueError, TypeError) as exc:
-        raise HTTPException(
-            status_code=500,
-            detail="モデル設定ファイルを読み取れませんでした。",
-        ) from exc
-    _apply_model_settings(settings, payload)
-    return payload
-
-
-def _persist_model_settings(settings: object, payload: ModelSettingsPayload) -> None:
-    path = _model_settings_path(settings)
-    document = _model_settings_document(payload)
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = path.with_name(f".{path.name}.tmp-{uuid4().hex}")
-        try:
-            tmp_path.write_text(
-                json.dumps(document, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-                encoding="utf-8",
-            )
-            tmp_path.chmod(MODEL_SETTINGS_FILE_MODE)
-            tmp_path.replace(path)
-            path.chmod(MODEL_SETTINGS_FILE_MODE)
-        finally:
-            tmp_path.unlink(missing_ok=True)
-    except OSError as exc:
-        raise HTTPException(
-            status_code=500,
-            detail="モデル設定を永続化ファイルへ保存できませんでした。",
-        ) from exc
-
-
-def _model_settings_document(payload: ModelSettingsPayload) -> dict[str, object]:
-    enterprise_ai = payload.enterprise_ai
-    generative_ai = payload.generative_ai
-    return {
-        "version": 1,
-        "enterprise_ai": {
-            "endpoint": enterprise_ai.endpoint,
-            "project_ocid": enterprise_ai.project_ocid,
-            "api_key": enterprise_ai.api_key,
-            "models": [
-                {
-                    "model_id": model.model_id,
-                    "display_name": model.display_name,
-                    "vision_enabled": model.vision_enabled,
-                }
-                for model in enterprise_ai.models
-                if model.model_id
-            ],
-            "default_model_id": enterprise_ai.default_model_id,
-            "api_path": enterprise_ai.api_path,
-            "vlm_input_mode": enterprise_ai.vlm_input_mode,
-            "text_payload_template": enterprise_ai.text_payload_template,
-            "vision_payload_template": enterprise_ai.vision_payload_template,
-            "text_response_path": enterprise_ai.text_response_path,
-            "vision_response_path": enterprise_ai.vision_response_path,
-            "timeout_seconds": enterprise_ai.timeout_seconds,
-            "max_retries": enterprise_ai.max_retries,
-            "llm_max_output_tokens": enterprise_ai.llm_max_output_tokens,
-            "vlm_max_output_tokens": enterprise_ai.vlm_max_output_tokens,
-        },
-        "generative_ai": {
-            "embedding_model": generative_ai.embedding_model,
-            "embedding_dim": generative_ai.embedding_dim,
-            "rerank_model": generative_ai.rerank_model,
-        },
-    }
-
-
-def _model_settings_with_resolved_secret(
-    settings: object,
-    request: ModelSettingsPayload,
-) -> ModelSettingsPayload:
-    current_api_key = str(
-        _settings_first_from(
-            settings,
-            ("oci_enterprise_ai_api_key", "enterprise_ai_api_key"),
-        )
-    )
-    enterprise_ai = request.enterprise_ai
-    resolved_api_key = _secret_value(
-        current=current_api_key,
-        update=enterprise_ai.api_key,
-        clear=enterprise_ai.clear_api_key,
-    )
-    resolved_enterprise_ai = enterprise_ai.model_copy(
-        update={
-            "api_key": resolved_api_key,
-            "has_api_key": bool(resolved_api_key.strip()),
-            "clear_api_key": False,
-        }
-    )
-    return request.model_copy(update={"enterprise_ai": resolved_enterprise_ai})
-
-
-def _apply_model_settings(settings: object, payload: ModelSettingsPayload) -> None:
-    enterprise_ai = payload.enterprise_ai
-    generative_ai = payload.generative_ai
-    models = [model for model in enterprise_ai.models if model.model_id]
-    default_model = enterprise_ai.default_model_id or (models[0].model_id if models else "")
-    vision_model = (
-        next((model.model_id for model in models if model.vision_enabled), default_model)
-        if models
-        else ""
-    )
-    updates: dict[str, object] = {
-        "enterprise_ai_endpoint": enterprise_ai.endpoint,
-        "enterprise_ai_project_ocid": enterprise_ai.project_ocid,
-        "enterprise_ai_api_key": enterprise_ai.api_key,
-        "enterprise_ai_default_model_id": default_model,
-        "enterprise_ai_api_path": enterprise_ai.api_path,
-        "enterprise_ai_vlm_input_mode": enterprise_ai.vlm_input_mode,
-        "enterprise_ai_text_payload_template": enterprise_ai.text_payload_template,
-        "enterprise_ai_vision_payload_template": enterprise_ai.vision_payload_template,
-        "enterprise_ai_text_response_path": enterprise_ai.text_response_path,
-        "enterprise_ai_vision_response_path": enterprise_ai.vision_response_path,
-        "enterprise_ai_timeout_seconds": enterprise_ai.timeout_seconds,
-        "enterprise_ai_max_retries": enterprise_ai.max_retries,
-        "enterprise_ai_llm_max_output_tokens": enterprise_ai.llm_max_output_tokens,
-        "enterprise_ai_vlm_max_output_tokens": enterprise_ai.vlm_max_output_tokens,
-        "oci_enterprise_ai_endpoint": enterprise_ai.endpoint,
-        "oci_enterprise_ai_project_ocid": enterprise_ai.project_ocid,
-        "oci_enterprise_ai_api_key": enterprise_ai.api_key,
-        "oci_enterprise_ai_models": models,
-        "oci_enterprise_ai_default_model": default_model,
-        "oci_enterprise_ai_llm_model": default_model,
-        "oci_enterprise_ai_vlm_model": vision_model,
-        "oci_enterprise_ai_llm_path": enterprise_ai.api_path,
-        "oci_enterprise_ai_vlm_path": enterprise_ai.api_path,
-        "oci_enterprise_ai_vlm_input_mode": enterprise_ai.vlm_input_mode,
-        "oci_enterprise_ai_llm_payload_template": enterprise_ai.text_payload_template,
-        "oci_enterprise_ai_vlm_payload_template": enterprise_ai.vision_payload_template,
-        "oci_enterprise_ai_llm_response_path": enterprise_ai.text_response_path,
-        "oci_enterprise_ai_vlm_response_path": enterprise_ai.vision_response_path,
-        "oci_enterprise_ai_timeout_seconds": enterprise_ai.timeout_seconds,
-        "oci_enterprise_ai_max_retries": enterprise_ai.max_retries,
-        "oci_enterprise_ai_llm_max_output_tokens": enterprise_ai.llm_max_output_tokens,
-        "oci_enterprise_ai_vlm_max_output_tokens": enterprise_ai.vlm_max_output_tokens,
-        "embedding_model": generative_ai.embedding_model,
-        "embedding_dim": generative_ai.embedding_dim,
-        "rerank_model": generative_ai.rerank_model,
-        "oci_genai_embedding_model": generative_ai.embedding_model,
-        "oci_genai_embedding_dim": generative_ai.embedding_dim,
-        "oci_genai_rerank_model": generative_ai.rerank_model,
-    }
-    for key, value in updates.items():
-        try:
-            setattr(settings, key, value)
-        except (AttributeError, ValueError):
-            continue
-
-
-def _get_model_settings_state() -> ModelSettingsPayload:
-    global _model_settings_state
-    if _model_settings_state is None:
-        settings = get_settings()
-        persisted = _load_persisted_model_settings(settings)
-        if persisted is not None:
-            public_payload = _public_model_settings_payload(persisted)
-            _model_settings_state = public_payload.model_copy(deep=True)
-            return _model_settings_state.model_copy(deep=True)
-        model_id = str(
-            _settings_first_from(
-                settings,
-                (
-                    "oci_enterprise_ai_default_model",
-                    "enterprise_ai_default_model_id",
-                    "agent_planner_oci_responses_model",
-                ),
-            )
-            or "enterprise-llm"
-        )
-        api_key = str(
-            _settings_first_from(
-                settings,
-                (
-                    "oci_enterprise_ai_api_key",
-                    "enterprise_ai_api_key",
-                    "agent_planner_oci_responses_api_key",
-                ),
-            )
-        )
-        _model_settings_state = ModelSettingsPayload(
-            enterprise_ai=EnterpriseAiModelSettings(
-                endpoint=str(
-                    _settings_first_from(
-                        settings,
-                        (
-                            "oci_enterprise_ai_endpoint",
-                            "enterprise_ai_endpoint",
-                            "agent_planner_oci_responses_base_url",
-                        ),
-                    )
-                ),
-                project_ocid=str(
-                    _settings_first_from(
-                        settings,
-                        (
-                            "oci_enterprise_ai_project_ocid",
-                            "enterprise_ai_project_ocid",
-                            "agent_planner_oci_responses_project",
-                        ),
-                    )
-                ),
-                api_key="",
-                has_api_key=bool(api_key),
-                models=_enterprise_model_catalog(settings, model_id),
-                default_model_id=model_id,
-                api_path=str(
-                    _settings_first_from(
-                        settings,
-                        ("oci_enterprise_ai_llm_path", "enterprise_ai_api_path"),
-                        "/responses",
-                    )
-                ),
-                vlm_input_mode=str(
-                    _settings_first_from(
-                        settings,
-                        ("oci_enterprise_ai_vlm_input_mode", "enterprise_ai_vlm_input_mode"),
-                        "auto",
-                    )
-                ),
-                text_payload_template=str(
-                    _settings_first_from(
-                        settings,
-                        (
-                            "oci_enterprise_ai_llm_payload_template",
-                            "enterprise_ai_text_payload_template",
-                        ),
-                    )
-                ),
-                vision_payload_template=str(
-                    _settings_first_from(
-                        settings,
-                        (
-                            "oci_enterprise_ai_vlm_payload_template",
-                            "enterprise_ai_vision_payload_template",
-                        ),
-                    )
-                ),
-                text_response_path=_json_pointer_or_empty(
-                    str(
-                        _settings_first_from(
-                            settings,
-                            (
-                                "oci_enterprise_ai_llm_response_path",
-                                "enterprise_ai_text_response_path",
-                            ),
-                        )
-                    )
-                ),
-                vision_response_path=_json_pointer_or_empty(
-                    str(
-                        _settings_first_from(
-                            settings,
-                            (
-                                "oci_enterprise_ai_vlm_response_path",
-                                "enterprise_ai_vision_response_path",
-                            ),
-                        )
-                    )
-                ),
-                timeout_seconds=_coerce_float(
-                    _settings_first_from(
-                        settings,
-                        ("oci_enterprise_ai_timeout_seconds", "enterprise_ai_timeout_seconds"),
-                        600.0,
-                    ),
-                    600.0,
-                ),
-                max_retries=_coerce_int(
-                    _settings_first_from(
-                        settings,
-                        ("oci_enterprise_ai_max_retries", "enterprise_ai_max_retries"),
-                        3,
-                    ),
-                    3,
-                ),
-                llm_max_output_tokens=_coerce_int(
-                    _settings_first_from(
-                        settings,
-                        (
-                            "oci_enterprise_ai_llm_max_output_tokens",
-                            "enterprise_ai_llm_max_output_tokens",
-                        ),
-                        1200,
-                    ),
-                    1200,
-                ),
-                vlm_max_output_tokens=_coerce_int(
-                    _settings_first_from(
-                        settings,
-                        (
-                            "oci_enterprise_ai_vlm_max_output_tokens",
-                            "enterprise_ai_vlm_max_output_tokens",
-                        ),
-                        65536,
-                    ),
-                    65536,
-                ),
-            ),
-            generative_ai=GenerativeAiModelSettings(
-                embedding_model=str(
-                    _settings_first_from(
-                        settings,
-                        ("oci_genai_embedding_model", "embedding_model"),
-                        "cohere.embed-v4.0",
-                    )
-                ),
-                embedding_dim=_coerce_int(
-                    _settings_first_from(
-                        settings,
-                        ("oci_genai_embedding_dim", "embedding_dim"),
-                        1536,
-                    ),
-                    1536,
-                ),
-                rerank_model=str(
-                    _settings_first_from(
-                        settings,
-                        ("oci_genai_rerank_model", "rerank_model"),
-                        "cohere.rerank-v4.0-fast",
-                    )
-                ),
-            ),
-        )
-    return _model_settings_state.model_copy(deep=True)
-
-
-def _enterprise_model_catalog(
-    settings: object,
-    fallback_model_id: str,
-) -> list[EnterpriseAiConfiguredModel]:
-    raw_models = _settings_first_from(settings, ("oci_enterprise_ai_models",), [])
-    models: list[EnterpriseAiConfiguredModel] = []
-    if isinstance(raw_models, list):
-        for item in raw_models:
-            try:
-                if isinstance(item, EnterpriseAiConfiguredModel):
-                    model = item
-                elif isinstance(item, Mapping):
-                    model = EnterpriseAiConfiguredModel.model_validate(item)
-                else:
-                    continue
-            except ValueError:
-                continue
-            if model.model_id:
-                models.append(model)
-    if models:
-        return models
-    if not fallback_model_id:
-        return []
-    return [
-        EnterpriseAiConfiguredModel(
-            model_id=fallback_model_id,
-            display_name="業務 RAG 標準",
-            vision_enabled=True,
-        )
-    ]
-
-
-def _set_model_settings_state(payload: ModelSettingsPayload) -> ModelSettingsPayload:
-    global _model_settings_state
-    current = _get_model_settings_state()
-    stored = payload.model_copy(deep=True)
-    resolved_api_key = _secret_value(
-        current="__saved__" if current.enterprise_ai.has_api_key else "",
-        update=stored.enterprise_ai.api_key,
-        clear=stored.enterprise_ai.clear_api_key,
-    )
-    stored.enterprise_ai.has_api_key = bool(resolved_api_key.strip())
-    stored.enterprise_ai.api_key = ""
-    stored.enterprise_ai.clear_api_key = False
-    _model_settings_state = stored
-    return stored.model_copy(deep=True)
-
-
-def _model_settings_checks(payload: ModelSettingsPayload) -> dict[str, ModelSettingsCheckStatus]:
-    return {
-        "enterprise_ai": _enterprise_ai_status(payload.enterprise_ai),
-        "generative_ai": _generative_ai_status(payload.generative_ai),
-        "embedding_dim": _embedding_dim_status(payload.generative_ai),
-    }
-
-
-def _enterprise_ai_status(settings: EnterpriseAiModelSettings) -> ModelSettingsCheckStatus:
-    required = (settings.endpoint, settings.project_ocid, settings.api_path)
-    if not all(_is_present(value) for value in required):
-        return "missing"
-    if not settings.endpoint.startswith(("http://", "https://")):
-        return "invalid"
-    if not settings.project_ocid.startswith("ocid1.generativeaiproject."):
-        return "invalid"
-    if not settings.api_path.startswith(("/", "http://", "https://")):
-        return "invalid"
-    if not _secret_is_available(settings):
-        return "missing"
-    model_ids = [model.model_id for model in settings.models if _is_present(model.model_id)]
-    if len(model_ids) != len(settings.models):
-        return "missing"
-    if len(model_ids) != len(set(model_ids)):
-        return "invalid"
-    if not model_ids or not _is_present(settings.default_model_id):
-        return "missing"
-    if settings.default_model_id not in model_ids:
-        return "invalid"
-    if not any(model.vision_enabled for model in settings.models if _is_present(model.model_id)):
-        return "missing"
-    return "ok"
-
-
-def _generative_ai_status(settings: GenerativeAiModelSettings) -> ModelSettingsCheckStatus:
-    if _embedding_dim_status(settings) == "invalid":
-        return "invalid"
-    required = (settings.embedding_model, settings.rerank_model)
-    return "ok" if all(_is_present(value) for value in required) else "missing"
-
-
-def _embedding_dim_status(settings: GenerativeAiModelSettings) -> ModelSettingsCheckStatus:
-    return "ok" if settings.embedding_dim == 1536 else "invalid"
-
-
-def _model_settings_data(
-    payload: ModelSettingsPayload | None = None,
-    settings: object | None = None,
-) -> ModelSettingsData:
-    settings_payload = payload or _get_model_settings_state()
-    runtime_settings = settings or get_settings()
-    return ModelSettingsData(
-        settings=_public_model_settings_payload(settings_payload),
-        checks=_model_settings_checks(settings_payload),
-        model_settings_file=_settings_str_from(
-            runtime_settings,
-            "model_settings_file",
-            "model-settings.json",
-        ),
-        source="runtime",
-    )
-
-
 async def _run_model_settings_test(
-    settings: object,
+    settings: Any,
     request: ModelSettingsTestRequest,
 ) -> dict[str, str | int | float | bool | None]:
-    _require_model_test_id(request)
-    payload = _apply_model_test_target(
-        _model_settings_with_resolved_secret(settings, request.settings),
-        request,
+    """対象モデルの実 API 呼び出しを行い、表示用 details を返す（共有 router の hook）。
+
+    `settings` は保存前の入力値と対象モデルを反映した一時 Settings（#103）。
+    """
+    payload = model_payload(settings)
+    enterprise_ai = payload.enterprise_ai.model_copy(
+        update={"api_key": settings.oci_enterprise_ai_api_key}
     )
     if request.target_type == "enterprise_text":
-        text = await _run_enterprise_text_model_test(payload.enterprise_ai)
+        text = await _run_enterprise_text_model_test(enterprise_ai)
         return {"response_chars": len(text), "surface": "llm"}
     if request.target_type == "enterprise_vision":
-        text = await _run_enterprise_vision_model_test(payload.enterprise_ai)
+        text = await _run_enterprise_vision_model_test(enterprise_ai)
         return {"response_chars": len(text), "surface": "vision"}
     if request.target_type == "embedding":
         vector_dim = await _run_oci_embedding_model_test(settings, payload.generative_ai)
         return {"vector_dim": vector_dim, "input_count": 1}
     ranked_count, top_score = await _run_oci_rerank_model_test(settings, payload.generative_ai)
     return {"ranked_count": ranked_count, "top_score": top_score}
-
-
-def _apply_model_test_target(
-    payload: ModelSettingsPayload,
-    request: ModelSettingsTestRequest,
-) -> ModelSettingsPayload:
-    model_id = request.model_id.strip()
-    if request.target_type in {"enterprise_text", "enterprise_vision"}:
-        enterprise_ai = payload.enterprise_ai
-        models = [
-            model.model_copy(
-                update={
-                    "vision_enabled": (
-                        model.vision_enabled
-                        or (
-                            request.target_type == "enterprise_vision"
-                            and model.model_id == model_id
-                        )
-                    )
-                }
-            )
-            for model in enterprise_ai.models
-        ]
-        if model_id and all(model.model_id != model_id for model in models):
-            models.append(
-                EnterpriseAiConfiguredModel(
-                    model_id=model_id,
-                    display_name=model_id,
-                    vision_enabled=request.target_type == "enterprise_vision",
-                )
-            )
-        return payload.model_copy(
-            update={
-                "enterprise_ai": enterprise_ai.model_copy(
-                    update={"default_model_id": model_id, "models": models}
-                )
-            }
-        )
-    if request.target_type == "embedding":
-        generative_ai = payload.generative_ai.model_copy(update={"embedding_model": model_id})
-    else:
-        generative_ai = payload.generative_ai.model_copy(update={"rerank_model": model_id})
-    return payload.model_copy(update={"generative_ai": generative_ai})
-
-
-def _require_model_test_id(request: ModelSettingsTestRequest) -> None:
-    if not request.model_id.strip():
-        raise ValueError("テストするモデル ID を入力してください。")
 
 
 async def _run_enterprise_text_model_test(settings: EnterpriseAiModelSettings) -> str:
@@ -1579,151 +970,11 @@ def _oci_genai_inference_client(settings: object) -> object:
     return genai.GenerativeAiInferenceClient(config)
 
 
-def _successful_model_test_result(
-    request: ModelSettingsTestRequest,
-    *,
-    details: dict[str, str | int | float | bool | None],
-    elapsed_ms: int,
-) -> ModelSettingsTestResult:
-    return ModelSettingsTestResult(
-        status="success",
-        target_type=request.target_type,
-        model_id=request.model_id,
-        message=_model_test_success_message(request.target_type, request.model_id),
-        troubleshooting=[],
-        elapsed_ms=elapsed_ms,
-        checked_at=_now_iso(),
-        details=details,
-    )
-
-
-def _failed_model_test_result(
-    request: ModelSettingsTestRequest,
-    exc: Exception,
-    *,
-    elapsed_ms: int,
-    secrets: list[str],
-) -> ModelSettingsTestResult:
-    raw_error = _sanitize_model_test_error(str(exc), secrets)
-    return ModelSettingsTestResult(
-        status="failed",
-        target_type=request.target_type,
-        model_id=request.model_id,
-        message=_model_test_failure_message(request.target_type, request.model_id),
-        troubleshooting=_model_test_troubleshooting(
-            request.target_type,
-            raw_error,
-            type(exc).__name__,
-        ),
-        raw_error=raw_error,
-        error_type=type(exc).__name__,
-        elapsed_ms=elapsed_ms,
-        checked_at=_now_iso(),
-        details={},
-    )
-
-
-def _model_test_success_message(target_type: ModelSettingsTestTargetType, model_id: str) -> str:
-    if target_type == "enterprise_text":
-        return f"Enterprise AI の回答生成モデル「{model_id}」から応答を取得しました。"
-    if target_type == "enterprise_vision":
-        return (
-            f"Enterprise AI の Vision モデル「{model_id}」から"
-            "構造化抽出レスポンスを取得しました。"
-        )
-    if target_type == "embedding":
-        return f"Embedding モデル「{model_id}」で 1536 次元ベクトルを取得しました。"
-    return f"Rerank モデル「{model_id}」から順位スコアを取得しました。"
-
-
-def _model_test_failure_message(target_type: ModelSettingsTestTargetType, model_id: str) -> str:
-    if target_type in {"enterprise_text", "enterprise_vision"}:
-        return f"Enterprise AI モデル「{model_id or '未入力'}」のテストに失敗しました。"
-    if target_type == "embedding":
-        return f"Embedding モデル「{model_id or '未入力'}」のテストに失敗しました。"
-    return f"Rerank モデル「{model_id or '未入力'}」のテストに失敗しました。"
-
-
-def _model_test_troubleshooting(
-    target_type: ModelSettingsTestTargetType,
-    raw_error: str,
-    error_type: str,
-) -> list[str]:
-    lowered = f"{raw_error} {error_type}".lower()
-    tips: list[str] = []
-    if target_type in {"enterprise_text", "enterprise_vision"}:
-        tips.extend(
-            [
-                "Endpoint URL、API パス、Project OCID、API key が Enterprise AI の"
-                " OpenAI-compatible gateway と一致しているか確認してください。",
-                "モデル ID が Enterprise AI 側の model deployment / gateway で"
-                "利用可能か確認してください。",
-            ]
-        )
-        if "response path" in lowered or "回答 text" in raw_error:
-            tips.append(
-                "独自 gateway の場合は payload template と response path が"
-                "実レスポンスの JSON 構造に合っているか確認してください。"
-            )
-    else:
-        tips.extend(
-            [
-                "OCI config file、profile、region、compartment OCID が"
-                "バックエンド実行環境から参照できるか確認してください。",
-                "モデル ID と IAM policy が OCI Generative AI Inference の"
-                " embedding/rerank 呼び出しを許可しているか確認してください。",
-            ]
-        )
-    if any(token in lowered for token in ("401", "unauthorized", "authentication")):
-        tips.append(
-            "認証エラーです。API key / OCI config の資格情報を" "再発行または再保存してください。"
-        )
-    if any(token in lowered for token in ("403", "notauthorized", "not authorized", "forbidden")):
-        tips.append("権限エラーです。Project / compartment / IAM policy を確認してください。")
-    if any(token in lowered for token in ("404", "not found")):
-        tips.append("Endpoint、API パス、model ID、リージョンを確認してください。")
-    if any(token in lowered for token in ("timeout", "timed out")):
-        tips.append("タイムアウトです。ネットワーク経路を確認してください。")
-    if any(token in lowered for token in ("429", "quota", "rate")):
-        tips.append("レート制限または quota の可能性があります。")
-    if any(token in lowered for token in ("500", "502", "503", "504")):
-        tips.append("サービス側または gateway 側の一時障害の可能性があります。")
-    return list(dict.fromkeys(tips))
-
-
-def _sanitize_model_test_error(raw_error: str, secrets: list[str]) -> str:
-    sanitized = raw_error.strip() or "詳細メッセージは返されませんでした。"
-    for secret in secrets:
-        cleaned = secret.strip()
-        if cleaned:
-            sanitized = sanitized.replace(cleaned, "<secret>")
-    return sanitized[:2000]
-
-
 def _require_non_empty(value: str, label: str) -> str:
     cleaned = value.strip()
     if not cleaned:
         raise ValueError(f"{label} を設定してください。")
     return cleaned
-
-
-def _public_model_settings_payload(payload: ModelSettingsPayload) -> ModelSettingsPayload:
-    enterprise_ai = payload.enterprise_ai.model_copy(
-        update={
-            "api_key": "",
-            "has_api_key": (
-                not payload.enterprise_ai.clear_api_key
-                and (
-                    payload.enterprise_ai.has_api_key or _is_present(payload.enterprise_ai.api_key)
-                )
-            ),
-            "clear_api_key": False,
-        }
-    )
-    return ModelSettingsPayload(
-        enterprise_ai=enterprise_ai,
-        generative_ai=payload.generative_ai,
-    )
 
 
 def _get_database_settings_state() -> DatabaseSettingsData:
@@ -2326,55 +1577,6 @@ def _safe_wallet_filename(file_name: str | None) -> str:
 def _remove_tmp_wallet_dir(path: Path) -> None:
     if path.exists():
         shutil.rmtree(path, ignore_errors=True)
-
-
-@router.get("/settings/model", response_model=ApiResponse[ModelSettingsData])
-async def get_model_settings() -> ApiResponse[ModelSettingsData]:
-    return ApiResponse(data=_model_settings_data())
-
-
-@router.patch("/settings/model", response_model=ApiResponse[ModelSettingsData])
-async def patch_model_settings(
-    patch: ModelSettingsPayload,
-    _: None = Depends(require_admin),
-) -> ApiResponse[ModelSettingsData]:
-    settings = get_settings()
-    resolved = _model_settings_with_resolved_secret(settings, patch)
-    _persist_model_settings(settings, resolved)
-    _apply_model_settings(settings, resolved)
-    return ApiResponse(data=_model_settings_data(_set_model_settings_state(resolved), settings))
-
-
-@router.post("/settings/model/check", response_model=ApiResponse[ModelSettingsData])
-async def check_model_settings(patch: ModelSettingsPayload) -> ApiResponse[ModelSettingsData]:
-    return ApiResponse(data=_model_settings_data(patch))
-
-
-@router.post("/settings/model/test", response_model=ApiResponse[ModelSettingsTestResult])
-async def test_model_settings(
-    request: ModelSettingsTestRequest,
-) -> ApiResponse[ModelSettingsTestResult]:
-    started = monotonic()
-    settings = get_settings()
-    resolved = _model_settings_with_resolved_secret(settings, request.settings)
-    try:
-        details = await _run_model_settings_test(settings, request)
-    except Exception as exc:  # noqa: BLE001 - 外部 SDK/API の多様な例外を表示用に握る
-        return ApiResponse(
-            data=_failed_model_test_result(
-                request,
-                exc,
-                elapsed_ms=_elapsed_ms(started),
-                secrets=[resolved.enterprise_ai.api_key],
-            )
-        )
-    return ApiResponse(
-        data=_successful_model_test_result(
-            request,
-            details=details,
-            elapsed_ms=_elapsed_ms(started),
-        )
-    )
 
 
 @router.get("/settings/database", response_model=ApiResponse[DatabaseSettingsData])

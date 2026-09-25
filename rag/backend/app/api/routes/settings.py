@@ -2,16 +2,13 @@
 
 import asyncio
 import base64
-import fcntl
 import io
-import json
 import logging
 import re
 import shutil
 import stat
 import time
-from collections.abc import Iterable, Iterator, Mapping
-from contextlib import contextmanager
+from collections.abc import Iterable, Mapping
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Literal
 from uuid import uuid4
@@ -19,6 +16,7 @@ from zipfile import BadZipFile, ZipFile
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
+from pr_system_settings.model import build_model_router, model_payload
 from pr_system_settings.oci import build_oci_router
 from pr_system_settings.oci import test_oci_config as _test_oci_config
 from pr_system_settings.upload_storage import (
@@ -48,13 +46,9 @@ from app.clients.oracle import (
     test_oracle_connection,
 )
 from app.config import (
-    EnterpriseAiConfiguredModel,
+    MODEL_SETTINGS_STORE,
     Settings,
-    enterprise_ai_default_model_id,
-    enterprise_ai_model_catalog,
     get_settings,
-    load_persisted_model_settings,
-    resolve_model_settings_file,
 )
 from app.rag.agentic_adapter import (
     agentic_adapter_runtime_settings,
@@ -139,8 +133,6 @@ from app.schemas.settings import (
     DatabaseConnectionTestResult,
     DatabaseSettingsData,
     DatabaseSettingsUpdate,
-    EnterpriseAiModelEntrySettings,
-    EnterpriseAiModelSettings,
     EvaluationSettingsData,
     EvaluationSettingsUpdate,
     EvaluationSuiteStatusData,
@@ -152,7 +144,6 @@ from app.schemas.settings import (
     GenerationProfileStatusData,
     GenerationSettingsData,
     GenerationSettingsUpdate,
-    GenerativeAiModelSettings,
     GraphProfileStatusData,
     GraphSettingsData,
     GraphSettingsUpdate,
@@ -164,12 +155,7 @@ from app.schemas.settings import (
     GuardrailSettingsUpdate,
     HuggingFaceSettingsData,
     HuggingFaceSettingsUpdate,
-    ModelSettingsCheckStatus,
-    ModelSettingsData,
-    ModelSettingsPayload,
     ModelSettingsTestRequest,
-    ModelSettingsTestResult,
-    ModelSettingsTestTargetType,
     OciConfigField,
     ParserAdapterBackendSourceMatrixData,
     ParserAdapterContractCaseData,
@@ -211,7 +197,6 @@ ORACLE_WALLET_REQUIRED_FILES = frozenset(
 ORACLE_WALLET_SKIPPED_FILES = frozenset(
     {"readme", "keystore.jks", "truststore.jks", "ojdbc.properties", "ewallet.p12"}
 )
-MODEL_SETTINGS_FILE_MODE = 0o600
 BACKEND_ENV_FILE = Path(__file__).resolve().parents[3] / ".env"
 
 # アップロード保存先は3製品共通の実装（platform の pr_system_settings。#97）。
@@ -227,6 +212,14 @@ router.include_router(
     build_oci_router(
         get_settings=lambda: get_settings(),
         env_file=lambda: BACKEND_ENV_FILE,
+    )
+)
+# モデル設定も3製品共通の実装（pr_system_settings.model。#103）。
+router.include_router(
+    build_model_router(
+        get_settings=lambda: get_settings(),
+        store=MODEL_SETTINGS_STORE,
+        run_model_test=lambda settings, request: _run_model_settings_test(settings, request),
     )
 )
 ENV_FILE_MODE = 0o600
@@ -293,65 +286,6 @@ MODEL_TEST_IMAGE_BYTES = base64.b64decode(
     "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
     "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAD//2Q=="
 )
-
-
-@router.get("/model", response_model=ApiResponse[ModelSettingsData])
-async def get_model_settings() -> ApiResponse[ModelSettingsData]:
-    """現在のモデル設定を返す。"""
-    settings = get_settings()
-    payload = _payload_from_settings(settings)
-    return ApiResponse(data=_model_settings_data(payload, settings))
-
-
-@router.patch("/model", response_model=ApiResponse[ModelSettingsData])
-async def update_model_settings(
-    request: ModelSettingsPayload,
-) -> ApiResponse[ModelSettingsData]:
-    """モデル設定を永続化し、ランタイム設定へ反映する。"""
-    settings = get_settings()
-    with _model_settings_write_lock(settings):
-        load_persisted_model_settings(settings)
-        resolved_request = _model_settings_with_resolved_secret(settings, request)
-        _persist_model_settings(settings, resolved_request)
-        _apply_model_settings(settings, request)
-    payload = _payload_from_settings(settings)
-    return ApiResponse(data=_model_settings_data(payload, settings))
-
-
-@router.post("/model/check", response_model=ApiResponse[ModelSettingsData])
-async def check_model_settings(
-    request: ModelSettingsPayload,
-) -> ApiResponse[ModelSettingsData]:
-    """保存前のモデル設定を検証する。外部 AI API への推論呼び出しは行わない。"""
-    return ApiResponse(data=_model_settings_data(request, get_settings()))
-
-
-@router.post("/model/test", response_model=ApiResponse[ModelSettingsTestResult])
-async def test_model_settings(
-    request: ModelSettingsTestRequest,
-) -> ApiResponse[ModelSettingsTestResult]:
-    """保存前のモデル設定を使い、対象モデルだけを実 API で検証する。"""
-    started = time.perf_counter()
-    settings = get_settings()
-    candidate = _model_test_candidate_settings(settings, request)
-    try:
-        details = await _run_model_settings_test(candidate, request)
-    except Exception as exc:
-        return ApiResponse(
-            data=_failed_model_test_result(
-                request,
-                exc,
-                elapsed_ms=_elapsed_ms(started),
-                secrets=[candidate.oci_enterprise_ai_api_key],
-            )
-        )
-    return ApiResponse(
-        data=_successful_model_test_result(
-            request,
-            details=details,
-            elapsed_ms=_elapsed_ms(started),
-        )
-    )
 
 
 @router.get("/database", response_model=ApiResponse[DatabaseSettingsData])
@@ -588,15 +522,21 @@ async def update_parser_adapter_settings(
 ) -> ApiResponse[ParserAdapterSettingsData]:
     """任意 parser adapter の backend/feature flag を共有設定と runtime へ反映する。"""
     settings = get_settings()
-    with _model_settings_write_lock(settings):
-        load_persisted_model_settings(settings)
-        candidate = _parser_adapter_settings_candidate(settings, payload)
-        model_payload = _model_settings_with_resolved_secret(
-            settings,
-            _payload_from_settings(settings),
-        )
-        _persist_model_settings(candidate, model_payload)
-        _apply_parser_adapter_settings(settings, candidate)
+    # モデル設定と同じ model-settings.json を、同じロックの下で書き換える（#103）。
+    # 旧 JSON に API key が残っていれば、ここで backend/.env へ移す。
+    try:
+        with MODEL_SETTINGS_STORE.lock(settings):
+            MODEL_SETTINGS_STORE.reload_if_changed(settings)
+            candidate = _parser_adapter_settings_candidate(settings, payload)
+            api_key = settings.oci_enterprise_ai_api_key
+            MODEL_SETTINGS_STORE.save(candidate, model_payload(settings), api_key=api_key)
+    except OSError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="設定を共有永続化ファイルへ保存できませんでした。",
+        ) from exc
+    _apply_parser_adapter_settings(settings, candidate)
+    settings.set_runtime_enterprise_ai_api_key(api_key)
     return ApiResponse(data=_parser_adapter_settings_data(settings))
 
 
@@ -954,275 +894,11 @@ async def update_agentic_settings(
     return ApiResponse(data=_agentic_settings_data(settings))
 
 
-def _payload_from_settings(settings: Settings) -> ModelSettingsPayload:
-    """Settings から UI 用 payload を組み立てる。"""
-    api_path = settings.oci_enterprise_ai_llm_path or settings.oci_enterprise_ai_vlm_path
-    return ModelSettingsPayload(
-        enterprise_ai=EnterpriseAiModelSettings(
-            endpoint=settings.oci_enterprise_ai_endpoint,
-            project_ocid=settings.oci_enterprise_ai_project_ocid,
-            api_key="",
-            has_api_key=bool(settings.oci_enterprise_ai_api_key.strip()),
-            clear_api_key=False,
-            models=[
-                EnterpriseAiModelEntrySettings(
-                    model_id=model.model_id,
-                    display_name=model.display_name,
-                    vision_enabled=model.vision_enabled,
-                )
-                for model in enterprise_ai_model_catalog(settings)
-            ],
-            default_model_id=enterprise_ai_default_model_id(settings),
-            api_path=api_path or "/responses",
-            vlm_input_mode=settings.oci_enterprise_ai_vlm_input_mode,
-            text_payload_template=settings.oci_enterprise_ai_llm_payload_template,
-            vision_payload_template=settings.oci_enterprise_ai_vlm_payload_template,
-            text_response_path=settings.oci_enterprise_ai_llm_response_path,
-            vision_response_path=settings.oci_enterprise_ai_vlm_response_path,
-            timeout_seconds=settings.oci_enterprise_ai_timeout_seconds,
-            max_retries=settings.oci_enterprise_ai_max_retries,
-            llm_max_output_tokens=settings.oci_enterprise_ai_llm_max_output_tokens,
-            vlm_max_output_tokens=settings.oci_enterprise_ai_vlm_max_output_tokens,
-        ),
-        generative_ai=GenerativeAiModelSettings(
-            embedding_model=settings.oci_genai_embedding_model,
-            embedding_dim=settings.oci_genai_embedding_dim,
-            rerank_model=settings.oci_genai_rerank_model,
-        ),
-    )
-
-
-def _apply_model_settings(settings: Settings, request: ModelSettingsPayload) -> None:
-    """API payload を Settings シングルトンへ反映する。"""
-    enterprise_ai = request.enterprise_ai
-    generative_ai = request.generative_ai
-
-    settings.oci_enterprise_ai_endpoint = enterprise_ai.endpoint or ""
-    settings.oci_enterprise_ai_project_ocid = enterprise_ai.project_ocid
-    settings.oci_enterprise_ai_api_key = _secret_value(
-        current=settings.oci_enterprise_ai_api_key,
-        update=enterprise_ai.api_key,
-        clear=enterprise_ai.clear_api_key,
-    )
-    settings.oci_enterprise_ai_models = [
-        EnterpriseAiConfiguredModel(
-            model_id=model.model_id,
-            display_name=model.display_name,
-            vision_enabled=model.vision_enabled,
-        )
-        for model in enterprise_ai.models
-        if model.model_id
-    ]
-    settings.oci_enterprise_ai_default_model = enterprise_ai.default_model_id
-    default_model = enterprise_ai.default_model_id
-    vision_model = next(
-        (
-            model.model_id
-            for model in enterprise_ai.models
-            if model.model_id == default_model and model.vision_enabled
-        ),
-        "",
-    ) or next(
-        (
-            model.model_id
-            for model in enterprise_ai.models
-            if model.model_id and model.vision_enabled
-        ),
-        default_model,
-    )
-    settings.oci_enterprise_ai_llm_model = default_model
-    settings.oci_enterprise_ai_vlm_model = vision_model
-    settings.oci_enterprise_ai_llm_path = enterprise_ai.api_path
-    settings.oci_enterprise_ai_vlm_path = enterprise_ai.api_path
-    settings.oci_enterprise_ai_vlm_input_mode = enterprise_ai.vlm_input_mode
-    settings.oci_enterprise_ai_llm_payload_template = enterprise_ai.text_payload_template
-    settings.oci_enterprise_ai_vlm_payload_template = enterprise_ai.vision_payload_template
-    settings.oci_enterprise_ai_llm_response_path = enterprise_ai.text_response_path
-    settings.oci_enterprise_ai_vlm_response_path = enterprise_ai.vision_response_path
-    settings.oci_enterprise_ai_timeout_seconds = enterprise_ai.timeout_seconds
-    settings.oci_enterprise_ai_max_retries = enterprise_ai.max_retries
-    settings.oci_enterprise_ai_llm_max_output_tokens = enterprise_ai.llm_max_output_tokens
-    settings.oci_enterprise_ai_vlm_max_output_tokens = enterprise_ai.vlm_max_output_tokens
-
-    settings.oci_genai_embedding_model = generative_ai.embedding_model
-    settings.oci_genai_embedding_dim = generative_ai.embedding_dim
-    settings.oci_genai_rerank_model = generative_ai.rerank_model
-
-
-def _model_settings_with_resolved_secret(
-    settings: Settings,
-    request: ModelSettingsPayload,
-) -> ModelSettingsPayload:
-    """保存用 payload では既存 secret の保持/削除を解決しておく。"""
-    enterprise_ai = request.enterprise_ai
-    resolved_api_key = _secret_value(
-        current=settings.oci_enterprise_ai_api_key,
-        update=enterprise_ai.api_key,
-        clear=enterprise_ai.clear_api_key,
-    )
-    resolved_enterprise_ai = enterprise_ai.model_copy(
-        update={
-            "api_key": resolved_api_key,
-            "has_api_key": bool(resolved_api_key.strip()),
-            "clear_api_key": False,
-        }
-    )
-    return request.model_copy(update={"enterprise_ai": resolved_enterprise_ai})
-
-
-@contextmanager
-def _model_settings_write_lock(settings: Settings) -> Iterator[None]:
-    """共有設定の read-modify-write を worker 間で直列化する。"""
-    path = resolve_model_settings_file(settings.model_settings_file)
-    lock_path = path.with_name(f"{path.name}.lock")
-    try:
-        _ensure_model_settings_directory(lock_path.parent)
-        with lock_path.open("a", encoding="utf-8") as lock_file:
-            lock_path.chmod(MODEL_SETTINGS_FILE_MODE)
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
-    except OSError as exc:
-        raise HTTPException(
-            status_code=500,
-            detail="設定の共有ロックを取得できませんでした。",
-        ) from exc
-
-
-def _persist_model_settings(settings: Settings, payload: ModelSettingsPayload) -> None:
-    """共有ランタイム設定を JSON ファイルへ atomic に保存する。"""
-    path = resolve_model_settings_file(settings.model_settings_file)
-    document = _model_settings_document(payload, settings)
-    try:
-        _ensure_model_settings_directory(path.parent)
-        tmp_path = path.with_name(f".{path.name}.tmp-{uuid4().hex}")
-        try:
-            tmp_path.write_text(
-                json.dumps(document, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-                encoding="utf-8",
-            )
-            tmp_path.chmod(MODEL_SETTINGS_FILE_MODE)
-            tmp_path.replace(path)
-            path.chmod(MODEL_SETTINGS_FILE_MODE)
-        finally:
-            tmp_path.unlink(missing_ok=True)
-    except OSError as exc:
-        raise HTTPException(
-            status_code=500,
-            detail="設定を共有永続化ファイルへ保存できませんでした。",
-        ) from exc
-
-
-def _model_settings_document(
-    payload: ModelSettingsPayload,
-    parser_settings: Settings,
-) -> dict[str, object]:
-    """モデルと parser 接続を保つ共有永続化 document へ変換する。"""
-    enterprise_ai = payload.enterprise_ai
-    generative_ai = payload.generative_ai
-    return {
-        "version": 2,
-        "enterprise_ai": {
-            "endpoint": enterprise_ai.endpoint,
-            "project_ocid": enterprise_ai.project_ocid,
-            "api_key": enterprise_ai.api_key,
-            "models": [
-                {
-                    "model_id": model.model_id,
-                    "display_name": model.display_name,
-                    "vision_enabled": model.vision_enabled,
-                }
-                for model in enterprise_ai.models
-                if model.model_id
-            ],
-            "default_model_id": enterprise_ai.default_model_id,
-            "api_path": enterprise_ai.api_path,
-            "vlm_input_mode": enterprise_ai.vlm_input_mode,
-            "text_payload_template": enterprise_ai.text_payload_template,
-            "vision_payload_template": enterprise_ai.vision_payload_template,
-            "text_response_path": enterprise_ai.text_response_path,
-            "vision_response_path": enterprise_ai.vision_response_path,
-            "timeout_seconds": enterprise_ai.timeout_seconds,
-            "max_retries": enterprise_ai.max_retries,
-            "llm_max_output_tokens": enterprise_ai.llm_max_output_tokens,
-            "vlm_max_output_tokens": enterprise_ai.vlm_max_output_tokens,
-        },
-        "generative_ai": {
-            "embedding_model": generative_ai.embedding_model,
-            "embedding_dim": generative_ai.embedding_dim,
-            "rerank_model": generative_ai.rerank_model,
-        },
-        "parser_adapters": {
-            "adapter_backend": parser_settings.rag_parser_adapter_backend,
-            "docling_enabled": parser_settings.rag_parser_docling_enabled,
-            "docling_vision_enabled": parser_settings.rag_parser_docling_vision_enabled,
-            "marker_enabled": parser_settings.rag_parser_marker_enabled,
-            "unstructured_enabled": parser_settings.rag_parser_unstructured_enabled,
-            "unlimited_ocr_enabled": parser_settings.rag_parser_unlimited_ocr_enabled,
-            "mineru_enabled": parser_settings.rag_parser_mineru_enabled,
-            "dots_ocr_enabled": parser_settings.rag_parser_dots_ocr_enabled,
-            "glm_ocr_enabled": parser_settings.rag_parser_glm_ocr_enabled,
-            "unlimited_ocr_api_host": parser_settings.rag_parser_unlimited_ocr_api_host,
-            "unlimited_ocr_model": parser_settings.rag_parser_unlimited_ocr_model,
-            "unlimited_ocr_api_key": parser_settings.rag_parser_unlimited_ocr_api_key,
-            "mineru_api_host": parser_settings.rag_parser_mineru_api_host,
-            "mineru_api_key": parser_settings.rag_parser_mineru_api_key,
-            "dots_ocr_api_host": parser_settings.rag_parser_dots_ocr_api_host,
-            "dots_ocr_model": parser_settings.rag_parser_dots_ocr_model,
-            "dots_ocr_api_key": parser_settings.rag_parser_dots_ocr_api_key,
-            "glm_ocr_api_host": parser_settings.rag_parser_glm_ocr_api_host,
-            "glm_ocr_model": parser_settings.rag_parser_glm_ocr_model,
-            "glm_ocr_api_key": parser_settings.rag_parser_glm_ocr_api_key,
-        },
-    }
-
-
-def _model_test_candidate_settings(
-    base: Settings,
-    request: ModelSettingsTestRequest,
-) -> Settings:
-    """保存前 payload を実テスト用の一時 Settings へ変換する。"""
-    resolved_payload = _model_settings_with_resolved_secret(base, request.settings)
-    candidate = base.model_copy(deep=True)
-    _apply_model_settings(candidate, resolved_payload)
-    _apply_model_test_target(candidate, request)
-    return candidate
-
-
-def _apply_model_test_target(
-    settings: Settings,
-    request: ModelSettingsTestRequest,
-) -> None:
-    """対象モデルだけをテスト呼び出しに使うよう Settings を調整する。"""
-    model_id = request.model_id.strip()
-    if request.target_type == "enterprise_text":
-        settings.oci_enterprise_ai_default_model = model_id
-        settings.oci_enterprise_ai_llm_model = model_id
-    elif request.target_type == "enterprise_vision":
-        settings.oci_enterprise_ai_default_model = model_id
-        settings.oci_enterprise_ai_vlm_model = model_id
-        settings.oci_enterprise_ai_models = [
-            EnterpriseAiConfiguredModel(
-                model_id=model.model_id,
-                display_name=model.display_name,
-                vision_enabled=(model.model_id == model_id or model.vision_enabled),
-            )
-            for model in settings.oci_enterprise_ai_models
-        ]
-    elif request.target_type == "embedding":
-        settings.oci_genai_embedding_model = model_id
-    elif request.target_type == "rerank":
-        settings.oci_genai_rerank_model = model_id
-
-
 async def _run_model_settings_test(
     settings: Settings,
     request: ModelSettingsTestRequest,
 ) -> dict[str, str | int | float | bool | None]:
-    """対象モデルの実 API 呼び出しを行い、表示用 details を返す。"""
-    _require_model_test_id(request)
+    """対象モデルの実 API 呼び出しを行い、表示用 details を返す（共有 router の hook）。"""
     if request.target_type == "enterprise_text":
         text = await OciEnterpriseAiClient(settings=settings).generate(
             "モデル接続テストです。短く応答してください。",
@@ -1256,151 +932,6 @@ async def _run_model_settings_test(
     )
     top_score = ranks[0][1] if ranks else None
     return {"ranked_count": len(ranks), "top_score": top_score}
-
-
-def _require_model_test_id(request: ModelSettingsTestRequest) -> None:
-    """空の model_id は実 API 呼び出し前に分かりやすく失敗させる。"""
-    if not request.model_id.strip():
-        raise ValueError("テストするモデル ID を入力してください。")
-
-
-def _successful_model_test_result(
-    request: ModelSettingsTestRequest,
-    *,
-    details: dict[str, str | int | float | bool | None],
-    elapsed_ms: int,
-) -> ModelSettingsTestResult:
-    """成功時のモデルテスト結果を作る。"""
-    return ModelSettingsTestResult(
-        status="success",
-        target_type=request.target_type,
-        model_id=request.model_id,
-        message=_model_test_success_message(request.target_type, request.model_id),
-        troubleshooting=[],
-        elapsed_ms=elapsed_ms,
-        details=details,
-    )
-
-
-def _failed_model_test_result(
-    request: ModelSettingsTestRequest,
-    exc: Exception,
-    *,
-    elapsed_ms: int,
-    secrets: list[str],
-) -> ModelSettingsTestResult:
-    """失敗時のモデルテスト結果を作る。"""
-    raw_error = _sanitize_model_test_error(str(exc), secrets)
-    return ModelSettingsTestResult(
-        status="failed",
-        target_type=request.target_type,
-        model_id=request.model_id,
-        message=_model_test_failure_message(request.target_type, request.model_id),
-        troubleshooting=_model_test_troubleshooting(
-            request.target_type,
-            raw_error,
-            type(exc).__name__,
-        ),
-        raw_error=raw_error,
-        error_type=type(exc).__name__,
-        elapsed_ms=elapsed_ms,
-        details={},
-    )
-
-
-def _model_test_success_message(target_type: ModelSettingsTestTargetType, model_id: str) -> str:
-    """モデル種別別の成功メッセージ。"""
-    if target_type == "enterprise_text":
-        return f"Enterprise AI の回答生成モデル「{model_id}」から応答を取得しました。"
-    if target_type == "enterprise_vision":
-        return (
-            f"Enterprise AI の Vision モデル「{model_id}」から構造化抽出レスポンスを取得しました。"
-        )
-    if target_type == "embedding":
-        return f"Embedding モデル「{model_id}」で 1536 次元ベクトルを取得しました。"
-    return f"Rerank モデル「{model_id}」から順位スコアを取得しました。"
-
-
-def _model_test_failure_message(target_type: ModelSettingsTestTargetType, model_id: str) -> str:
-    """モデル種別別の失敗メッセージ。"""
-    if target_type in {"enterprise_text", "enterprise_vision"}:
-        return f"Enterprise AI モデル「{model_id or '未入力'}」のテストに失敗しました。"
-    if target_type == "embedding":
-        return f"Embedding モデル「{model_id or '未入力'}」のテストに失敗しました。"
-    return f"Rerank モデル「{model_id or '未入力'}」のテストに失敗しました。"
-
-
-def _model_test_troubleshooting(
-    target_type: ModelSettingsTestTargetType,
-    raw_error: str,
-    error_type: str,
-) -> list[str]:
-    """実エラーからユーザーが次に確認しやすい項目を返す。"""
-    lowered = f"{raw_error} {error_type}".lower()
-    tips: list[str] = []
-    if target_type in {"enterprise_text", "enterprise_vision"}:
-        tips.extend(
-            [
-                "Endpoint URL、API パス、Project OCID、API key が Enterprise AI の"
-                " OpenAI-compatible gateway と一致しているか確認してください。",
-                "モデル ID が Enterprise AI 側の model deployment / gateway で"
-                "利用可能か確認してください。",
-            ]
-        )
-        if "response path" in lowered or "回答 text" in raw_error or "構造化抽出" in raw_error:
-            tips.append(
-                "独自 gateway の場合は payload template と response path が"
-                "実レスポンスの JSON 構造に合っているか確認してください。"
-            )
-    else:
-        tips.extend(
-            [
-                "OCI config file、profile、region、compartment OCID が"
-                "バックエンド実行環境から参照できるか確認してください。",
-                "モデル ID と IAM policy が OCI Generative AI Inference の"
-                " embedding/rerank 呼び出しを許可しているか確認してください。",
-            ]
-        )
-    if any(token in lowered for token in ("401", "unauthorized", "authentication")):
-        tips.append(
-            "認証エラーです。API key / OCI config の資格情報を再発行または再保存してください。"
-        )
-    if any(token in lowered for token in ("403", "notauthorized", "not authorized", "forbidden")):
-        tips.append(
-            "権限エラーです。Project / compartment / IAM policy の対象が"
-            "このモデル呼び出しを許可しているか確認してください。"
-        )
-    if any(token in lowered for token in ("404", "not found")):
-        tips.append(
-            "Endpoint、API パス、model ID のいずれかが見つかっていません。"
-            "リージョンと model deployment 名も確認してください。"
-        )
-    if any(token in lowered for token in ("timeout", "timed out")):
-        tips.append(
-            "タイムアウトです。ネットワーク経路を確認し、"
-            "必要ならタイムアウト秒数を一時的に長くしてください。"
-        )
-    if any(token in lowered for token in ("429", "quota", "rate")):
-        tips.append(
-            "レート制限または quota の可能性があります。"
-            "しばらく待つか service limit を確認してください。"
-        )
-    if any(token in lowered for token in ("500", "502", "503", "504")):
-        tips.append(
-            "サービス側または gateway 側の一時障害の可能性があります。"
-            "少し待って再試行し、OCI 側の稼働状況を確認してください。"
-        )
-    return list(dict.fromkeys(tips))
-
-
-def _sanitize_model_test_error(raw_error: str, secrets: list[str]) -> str:
-    """実エラーは残しつつ、既知の secret だけを伏せる。"""
-    sanitized = raw_error.strip() or "詳細メッセージは返されませんでした。"
-    for secret in secrets:
-        cleaned = secret.strip()
-        if cleaned:
-            sanitized = sanitized.replace(cleaned, "<secret>")
-    return sanitized[:2000]
 
 
 def _elapsed_ms(started: float) -> int:
@@ -1528,14 +1059,6 @@ def _database_connection_troubleshooting(
             "ネットワーク設定を確認してください。"
         )
     return list(dict.fromkeys(tips))
-
-
-def _ensure_model_settings_directory(path: Path) -> None:
-    """モデル設定保存先を作る。既存ディレクトリの権限は勝手に変えない。"""
-    existed = path.exists()
-    path.mkdir(mode=OCI_DIRECTORY_MODE, parents=True, exist_ok=True)
-    if not existed:
-        path.chmod(OCI_DIRECTORY_MODE)
 
 
 def _database_settings_data(settings: Settings) -> DatabaseSettingsData:
@@ -2921,97 +2444,3 @@ def _secret_value(*, current: str, update: str | None, clear: bool) -> str:
     if update is not None and update != "":
         return update
     return current
-
-
-def _model_settings_data(payload: ModelSettingsPayload, settings: Settings) -> ModelSettingsData:
-    """payload と静的チェック結果を API data へ変換する。"""
-    return ModelSettingsData(
-        settings=_public_model_settings_payload(payload),
-        checks={
-            "enterprise_ai": _enterprise_ai_status(payload.enterprise_ai),
-            "generative_ai": _generative_ai_status(payload.generative_ai),
-            "embedding_dim": _embedding_dim_status(payload.generative_ai),
-        },
-        model_settings_file=settings.model_settings_file,
-        source="runtime",
-    )
-
-
-def _public_model_settings_payload(
-    payload: ModelSettingsPayload,
-) -> ModelSettingsPayload:
-    """secret を除いたモデル設定 payload を返す。"""
-    enterprise_ai = payload.enterprise_ai.model_copy(
-        update={
-            "api_key": "",
-            "has_api_key": (
-                not payload.enterprise_ai.clear_api_key
-                and (
-                    payload.enterprise_ai.has_api_key or _is_present(payload.enterprise_ai.api_key)
-                )
-            ),
-            "clear_api_key": False,
-        }
-    )
-    return ModelSettingsPayload(
-        enterprise_ai=enterprise_ai,
-        generative_ai=payload.generative_ai,
-    )
-
-
-def _enterprise_ai_status(
-    settings: EnterpriseAiModelSettings,
-) -> ModelSettingsCheckStatus:
-    """Enterprise AI の必須設定が揃っているか確認する。"""
-    required = (settings.endpoint, settings.project_ocid, settings.api_path)
-    if not all(_is_present(value or "") for value in required):
-        return "missing"
-    if not settings.endpoint or not settings.endpoint.startswith(("http://", "https://")):
-        return "invalid"
-    if not settings.project_ocid.startswith("ocid1.generativeaiproject."):
-        return "invalid"
-    if not settings.api_path.startswith(("/", "http://", "https://")):
-        return "invalid"
-    if not _secret_is_available(settings):
-        return "missing"
-    model_ids = [model.model_id for model in settings.models if _is_present(model.model_id)]
-    if len(model_ids) != len(settings.models):
-        return "missing"
-    if len(model_ids) != len(set(model_ids)):
-        return "invalid"
-    if not model_ids or not _is_present(settings.default_model_id):
-        return "missing"
-    if settings.default_model_id not in model_ids:
-        return "invalid"
-    if not any(model.vision_enabled for model in settings.models if _is_present(model.model_id)):
-        return "missing"
-    return "ok"
-
-
-def _generative_ai_status(
-    settings: GenerativeAiModelSettings,
-) -> ModelSettingsCheckStatus:
-    """Generative AI の必須設定が揃っているか確認する。"""
-    if _embedding_dim_status(settings) == "invalid":
-        return "invalid"
-    required = (settings.embedding_model, settings.rerank_model)
-    return "ok" if all(_is_present(value) for value in required) else "missing"
-
-
-def _embedding_dim_status(
-    settings: GenerativeAiModelSettings,
-) -> ModelSettingsCheckStatus:
-    """Oracle 26ai VECTOR 列と embedding 次元の互換性を確認する。"""
-    return "ok" if settings.embedding_dim == 1536 else "invalid"
-
-
-def _is_present(value: str) -> bool:
-    """空白のみの値を未設定として扱う。"""
-    return bool(value.strip())
-
-
-def _secret_is_available(settings: EnterpriseAiModelSettings) -> bool:
-    """新規入力または保存済み Enterprise AI API key があるか確認する。"""
-    if settings.clear_api_key:
-        return False
-    return _is_present(settings.api_key) or settings.has_api_key
