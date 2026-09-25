@@ -11,8 +11,19 @@ def test_frontend_image_uses_reproducible_build_install() -> None:
     """frontend build image は lockfile で再現可能に依存解決する。"""
     dockerfile = (REPO_ROOT / "frontend" / "Dockerfile").read_text(encoding="utf-8")
 
-    assert "RUN npm ci\n" in dockerfile
-    assert "RUN npm install" not in dockerfile
+    # 共有パッケージ（platform）と frontend の両方を lockfile から入れる（#177）。
+    assert "RUN cd platform && npm ci && npm run build\n" in dockerfile
+    assert "RUN cd rag/frontend && npm ci\n" in dockerfile
+    assert "npm install" not in dockerfile
+
+
+def test_frontend_image_resolves_platform_packages() -> None:
+    """compose は platform を別 context で渡す（frontend の file: 依存のため。#177）。"""
+    dockerfile = (REPO_ROOT / "frontend" / "Dockerfile").read_text(encoding="utf-8")
+    compose = (REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+
+    assert "COPY --from=platform package.json package-lock.json ./platform/" in dockerfile
+    assert "platform: ../platform" in compose
 
 
 def test_frontend_image_serves_static_assets_with_unprivileged_nginx() -> None:
@@ -20,8 +31,8 @@ def test_frontend_image_serves_static_assets_with_unprivileged_nginx() -> None:
     dockerfile = (REPO_ROOT / "frontend" / "Dockerfile").read_text(encoding="utf-8")
 
     assert "FROM nginxinc/nginx-unprivileged:1.27-alpine AS runner" in dockerfile
-    assert "COPY --from=builder /app/dist /usr/share/nginx/html" in dockerfile
-    assert "COPY --from=builder /app/node_modules" not in dockerfile
+    assert "COPY --from=builder /src/rag/frontend/dist /usr/share/nginx/html" in dockerfile
+    assert "node_modules /" not in dockerfile
 
 
 def test_backend_image_runs_as_non_root_app_user() -> None:
