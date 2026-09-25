@@ -1795,10 +1795,14 @@ class AgentRuntimeOracleCheckpointRepository(AgentRuntimeRepository):
         checkpoint_key: str = "default",
         create_schema: bool = True,
         connect_factory: OracleConnectFactory | None = None,
+        wallet_dir: str | None = None,
+        wallet_password: str | None = None,
     ) -> None:
         self._oracle_dsn = dsn
         self._oracle_user = user
         self._oracle_password = password
+        self._oracle_wallet_dir = (wallet_dir or "").strip() or None
+        self._oracle_wallet_password = wallet_password or None
         self._oracle_table_name = _validate_oracle_identifier(table_name)
         self._oracle_checkpoint_key = checkpoint_key
         self._oracle_connect_factory = connect_factory
@@ -1811,11 +1815,22 @@ class AgentRuntimeOracleCheckpointRepository(AgentRuntimeRepository):
         if self._oracle_connect_factory is not None:
             return self._oracle_connect_factory()
         oracledb = import_module("oracledb")
-        return oracledb.connect(
-            user=self._oracle_user,
-            password=self._oracle_password,
-            dsn=self._oracle_dsn,
-        )
+        return oracledb.connect(**self._oracle_connect_kwargs())
+
+    def _oracle_connect_kwargs(self) -> dict[str, object]:
+        """Thin mode の接続引数。Wallet(mTLS) 指定時だけ config_dir 等を足す。"""
+        kwargs: dict[str, object] = {
+            "user": self._oracle_user,
+            "password": self._oracle_password,
+            "dsn": self._oracle_dsn,
+        }
+        if self._oracle_wallet_dir:
+            wallet_dir = str(Path(self._oracle_wallet_dir).expanduser())
+            kwargs["config_dir"] = wallet_dir
+            kwargs["wallet_location"] = wallet_dir
+        if self._oracle_wallet_password:
+            kwargs["wallet_password"] = self._oracle_wallet_password
+        return kwargs
 
     def _ensure_oracle_schema(self) -> None:
         ddl = f"""
@@ -1933,6 +1948,8 @@ class AgentRuntimeOracleNormalizedRepository(AgentRuntimeOracleCheckpointReposit
         projection_write_mode: str = "replace",
         create_schema: bool = True,
         connect_factory: OracleConnectFactory | None = None,
+        wallet_dir: str | None = None,
+        wallet_password: str | None = None,
     ) -> None:
         self._oracle_projection_prefix = _validate_oracle_identifier(projection_prefix)
         self._oracle_projection_tables = _oracle_projection_tables(self._oracle_projection_prefix)
@@ -1948,6 +1965,8 @@ class AgentRuntimeOracleNormalizedRepository(AgentRuntimeOracleCheckpointReposit
             checkpoint_key=checkpoint_key,
             create_schema=create_schema,
             connect_factory=connect_factory,
+            wallet_dir=wallet_dir,
+            wallet_password=wallet_password,
         )
 
     def _ensure_oracle_schema(self) -> None:
@@ -3375,6 +3394,8 @@ def build_runtime_repository() -> AgentRuntimeRepositoryContract:
                 projection_retention_days=(settings.agent_runtime_oracle_projection_retention_days),
                 projection_write_mode=settings.agent_runtime_oracle_projection_write_mode,
                 create_schema=settings.agent_runtime_oracle_create_schema,
+                wallet_dir=settings.agent_runtime_oracle_wallet_dir,
+                wallet_password=settings.agent_runtime_oracle_wallet_password,
             )
         return AgentRuntimeOracleCheckpointRepository(
             dsn=dsn,
@@ -3383,6 +3404,8 @@ def build_runtime_repository() -> AgentRuntimeRepositoryContract:
             table_name=settings.agent_runtime_oracle_table,
             checkpoint_key=settings.agent_runtime_oracle_checkpoint_key,
             create_schema=settings.agent_runtime_oracle_create_schema,
+            wallet_dir=settings.agent_runtime_oracle_wallet_dir,
+            wallet_password=settings.agent_runtime_oracle_wallet_password,
         )
     if backend in {"memory", "in_memory", "file", "file_snapshot"}:
         snapshot_path = (
