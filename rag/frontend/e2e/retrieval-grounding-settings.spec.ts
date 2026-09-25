@@ -32,7 +32,7 @@ for (const viewport of [
 
     await page.goto("/settings/retrieval");
 
-    await expect(page.getByRole("heading", { name: "検索方法" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "検索方法", exact: true, level: 1 })).toBeVisible();
     // 検索モードは 4 択。legacy 複合方法はカードとして出さない。
     await expect(page.getByRole("radio", { name: /ハイブリッド/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /ベクトル/ })).toBeVisible();
@@ -65,7 +65,7 @@ for (const viewport of [
 
     await page.goto("/settings/grounding");
 
-    await expect(page.getByRole("heading", { name: "根拠確認" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "根拠確認", exact: true, level: 1 })).toBeVisible();
     await expect(page.getByRole("radio", { name: /カスタム/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /フルガバナンス/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /カスタム/ })).toContainText("高度な設定");
