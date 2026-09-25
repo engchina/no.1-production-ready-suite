@@ -313,7 +313,7 @@ import { Ellipsis, RefreshCw, Upload } from "lucide-react";
 - `wordBreak: "break-word"` を廃止 → 日本語が任意の文字で分断される問題を解消
 - ヘッダーの地を `--color-surface-sunken` に
 - 見出しセルは折り返さない。並べ替えボタンの高さは `--button-height-sm`（タッチ端末 44px）
-- 一覧用の optional props（platform #56）: `stickyHeader`、`visibleRows`（表頭 + 先頭 N 行の実測高さで内部スクロール）、`scrollAriaLabel`（キーボードでスクロールできる region）、`selectedRowKey` / `isRowSelected`、`rowProps`、`renderRowDetail`、列の `rowHeader`。詳細は `components-reference.md`。**アプリで `<table>` を手書きしない**
+- 一覧用の optional props（platform #56）: `stickyHeader`、`visibleRows`（表頭 + 先頭 N 行の実測高さで内部スクロール）、`scrollAriaLabel`（キーボードでスクロールできる region）、`selectedRowKey` / `isRowSelected`、`rowProps`、`renderRowDetail`、列の `rowHeader`。詳細は `components-reference.md`。**アプリで `<table>` を手書きしない**（例外は、元の文書の表を再現して編集する見出しなしのグリッドだけ。#129）
 
 ### `AppShell`（変更）
 
