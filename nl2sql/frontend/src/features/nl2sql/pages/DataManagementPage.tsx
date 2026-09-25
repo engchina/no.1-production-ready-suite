@@ -19,13 +19,14 @@ import {
   ContentActionBar,
   ClearActionButton,
   ProcessingIndicator,
+  ObjectActionBar,
+  type EntityAction,
 } from "@engchina/production-ready-ui";
 
 import { SyntheticRunPanel, useSyntheticRuns, historyExpired, type SyntheticRun } from "../syntheticRuns";
 import { SyntheticReview } from "../SyntheticReview";
 
 
-import { ObjectActionBar, type EntityAction } from "@/components/ObjectActions";
 import { PageNotice } from "@/components/page-notice";
 import { ErrorState } from "@/components/StateViews";
 import { FileDropzone } from "@/components/ui/file-dropzone";

@@ -88,13 +88,13 @@ usePagination<T>(items: T[], pageSize?: number)
 | 行 | 一覧の 1 行 | `RowActionMenu` |
 | コンテンツ | 直下のコード / プレビュー / 結果 | `ContentActionBar` の右側 |
 
-`RowActionMenu` / `ObjectActionBar` / `FixedSplitPane` はまだ `packages/ui` にない（[README](./README.md#実装の置き場所)）。
+いずれも `@engchina/production-ready-ui` から使う。
 
 ---
 
 ## 3. 分割ペイン
 
-`FixedSplitPane` を B / C 型のページで同じ規約で使う。
+`@engchina/production-ready-ui` の `FixedSplitPane` を B / C 型のページで同じ規約で使う。構造 CSS は共有の `tokens.css` が配布する。
 
 - `splitId` は `<feature>-<view>`（例：`table-management-list`）。localStorage の key は部品に任せる。
 - `preferredWidePane`：一覧 + 詳細では詳細側（通常 `right`）を既定で広くする。

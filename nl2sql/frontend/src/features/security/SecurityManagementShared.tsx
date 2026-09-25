@@ -1,12 +1,13 @@
 import { Children, type ReactNode } from "react";
 import { Search, type LucideIcon } from "lucide-react";
 
-import { FixedSplitPane } from "@/components/layout/FixedSplitPane";
+import { FIXED_SPLIT_STORAGE_PREFIX } from "@/lib/ui-store";
 import { t } from "@/lib/i18n";
-import type { FixedSplitWidePane } from "@/lib/fixed-split-pane";
+import type { FixedSplitWidePane } from "@engchina/production-ready-ui";
 import { cn } from "@/lib/utils";
 
 import { identitySecondaryName } from "./identity-label";
+import { FixedSplitPane } from "@engchina/production-ready-ui";
 
 export interface SecurityManagementMetric {
   label: string;
@@ -49,6 +50,7 @@ export function SecurityManagementPanelShell({
     >
       {splitPaneId ? (
         <FixedSplitPane
+          storagePrefix={FIXED_SPLIT_STORAGE_PREFIX}
           splitId={splitPaneId}
           preferredWidePane={preferredWidePane}
           left={panelChildren[0]}

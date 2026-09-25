@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const source = readFileSync(
-  new URL("../src/components/ui/disclosure-chevron.tsx", import.meta.url),
+  new URL("../../../platform/packages/ui/src/components/ui/disclosure-chevron.tsx", import.meta.url),
   "utf8"
 );
 

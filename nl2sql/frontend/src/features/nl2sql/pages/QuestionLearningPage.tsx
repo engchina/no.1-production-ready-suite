@@ -16,6 +16,8 @@ import {
   useConfirm,
   BulkSelectionActions,
   ProcessingIndicator,
+  RowActionMenu,
+  type EntityAction,
 } from "@engchina/production-ready-ui";
 import {
   useEffect,
@@ -39,7 +41,6 @@ import { Save,
 import { useSearchParams } from "react-router-dom";
 
 
-import { RowActionMenu, type EntityAction } from "@/components/ObjectActions";
 import { PageHeaderStatusBadge } from "@/components/PageHeaderStatusBadge";
 import { PageNotice } from "@/components/page-notice";
 import { useUnsavedChangesGuard } from "@/lib/useUnsavedChangesGuard";

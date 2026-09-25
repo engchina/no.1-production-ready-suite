@@ -38,6 +38,15 @@ export {
 } from "./components/ui/confirm-dialog";
 export { ContentActionBar } from "./components/ui/content-action-bar";
 export {
+  DisclosureChevron,
+  type DisclosureChevronProps,
+} from "./components/ui/disclosure-chevron";
+export {
+  FloatingActionMenu,
+  type FloatingMenuPlacement,
+} from "./components/ui/floating-menu";
+export { restoreMenuTriggerFocus } from "./lib/menu-focus";
+export {
   BulkSelectionActions,
   type BulkSelectionActionsProps,
 } from "./components/ui/bulk-selection-actions";
@@ -97,6 +106,14 @@ export {
   type PaginationRange,
 } from "./components/data/pagination";
 export {
+  RowActionMenu,
+  ObjectActionBar,
+  splitObjectActions,
+  visibleEntityActions,
+  type EntityAction,
+  type EntityActionTone,
+} from "./components/data/object-actions";
+export {
   DataTable,
   type DataTableProps,
   type DataTableColumn,
@@ -111,6 +128,13 @@ export { AppShell } from "./components/app-shell/AppShell";
 export { Sidebar, SidebarAccountFooter, type SidebarFooterAction, type SidebarProps } from "./components/app-shell/Sidebar";
 export { PageHeader, type PageHeaderAction } from "./components/app-shell/PageHeader";
 export { PageBody, Section } from "./components/app-shell/PageBody";
+export {
+  FixedSplitPane,
+  DEFAULT_FIXED_SPLIT_PANE_LABELS,
+  type FixedSplitPaneProps,
+  type FixedSplitPaneLabels,
+} from "./components/app-shell/fixed-split-pane";
+export * from "./lib/fixed-split-pane";
 export {
   Breadcrumbs,
   type BreadcrumbItem,
