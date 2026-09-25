@@ -38,6 +38,15 @@ export {
 } from "./components/ui/confirm-dialog";
 export { ContentActionBar } from "./components/ui/content-action-bar";
 export {
+  DisclosureChevron,
+  type DisclosureChevronProps,
+} from "./components/ui/disclosure-chevron";
+export {
+  FloatingActionMenu,
+  type FloatingMenuPlacement,
+} from "./components/ui/floating-menu";
+export { restoreMenuTriggerFocus } from "./lib/menu-focus";
+export {
   BulkSelectionActions,
   type BulkSelectionActionsProps,
 } from "./components/ui/bulk-selection-actions";
@@ -96,6 +105,14 @@ export {
   type PaginationProps,
   type PaginationRange,
 } from "./components/data/pagination";
+export {
+  RowActionMenu,
+  ObjectActionBar,
+  splitObjectActions,
+  visibleEntityActions,
+  type EntityAction,
+  type EntityActionTone,
+} from "./components/data/object-actions";
 export {
   DataTable,
   type DataTableProps,

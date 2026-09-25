@@ -88,7 +88,7 @@ usePagination<T>(items: T[], pageSize?: number)
 | 行 | 一覧の 1 行 | `RowActionMenu` |
 | コンテンツ | 直下のコード / プレビュー / 結果 | `ContentActionBar` の右側 |
 
-`RowActionMenu` / `ObjectActionBar` / `FixedSplitPane` はまだ `packages/ui` にない（[README](./README.md#実装の置き場所)）。
+`FixedSplitPane` はまだ `packages/ui` にない（[README](./README.md#実装の置き場所)）。
 
 ---
 

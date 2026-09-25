@@ -7,11 +7,11 @@ const source = readFileSync(
   "utf8"
 );
 const floatingSource = readFileSync(
-  new URL("../src/components/FloatingMenu.tsx", import.meta.url),
+  new URL("../../../platform/packages/ui/src/components/ui/floating-menu.tsx", import.meta.url),
   "utf8"
 );
 const menuFocusSource = readFileSync(
-  new URL("../src/lib/menu-focus.ts", import.meta.url),
+  new URL("../../../platform/packages/ui/src/lib/menu-focus.ts", import.meta.url),
   "utf8"
 );
 

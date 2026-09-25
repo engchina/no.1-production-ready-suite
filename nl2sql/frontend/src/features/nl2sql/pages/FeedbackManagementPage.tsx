@@ -31,10 +31,11 @@ import {
   useConfirm,
   SelectField,
   ProcessingIndicator,
+  ObjectActionBar,
+  type EntityAction,
 } from "@engchina/production-ready-ui";
 
 import { FormActionBar } from "@/components/FormActionBar";
-import { ObjectActionBar, type EntityAction } from "@/components/ObjectActions";
 import { FixedSplitPane } from "@/components/layout/FixedSplitPane";
 
 import { PageNotice } from "@/components/page-notice";

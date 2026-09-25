@@ -6,6 +6,7 @@ import {
   FieldError,
   useConfirm,
   ContentActionBar,
+  DisclosureChevron,
 } from "@engchina/production-ready-ui";
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -13,7 +14,6 @@ import { ApiError, apiGet, apiPost } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { randomUuid } from "@/lib/randomUuid";
 import { useWorkspaceState, useResetExecutionConsent } from "@/components/WorkspaceState";
-import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
 import type { OntologyFinding, OntologyMarkdownState, OntologyPublishJob } from "./types";
 import { OntologyFindings } from "./OntologyFindings";
 import { DefinitionFields, TechnicalDetails } from "./ontologyResultPresentation";

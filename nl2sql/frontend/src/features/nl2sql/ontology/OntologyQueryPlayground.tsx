@@ -18,8 +18,8 @@ import {
   EmptyState,
   StatusBadge,
   ClearActionButton,
+  DisclosureChevron,
 } from "@engchina/production-ready-ui";
-import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
 import { ErrorState } from "@/components/StateViews";
 
 

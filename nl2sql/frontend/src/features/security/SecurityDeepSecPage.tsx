@@ -17,8 +17,8 @@ import {
   useConfirm,
   BulkSelectionActions,
   ProcessingIndicator,
+  DisclosureChevron,
 } from "@engchina/production-ready-ui";
-import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useDatabaseStatus } from "@/lib/queries";

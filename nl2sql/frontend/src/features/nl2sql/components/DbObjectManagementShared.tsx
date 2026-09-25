@@ -24,6 +24,10 @@ import {
   TimedLoadingState,
   type ProcessingActivityIcon,
   type ProcessingPlacement,
+  ObjectActionBar,
+  RowActionMenu,
+  type EntityAction,
+  type EntityActionTone,
 } from "@engchina/production-ready-ui";
 
 import { DialogOverlayPortal } from "@/components/ui/dialog-overlay";
@@ -33,12 +37,6 @@ import {
   DbOwnerPrefixFilterField,
   type DbObjectFilterFieldProps,
 } from "@/components/DbObjectFilterFields";
-import {
-  ObjectActionBar,
-  RowActionMenu,
-  type EntityAction,
-  type EntityActionTone,
-} from "@/components/ObjectActions";
 import { FixedSplitPane } from "@/components/layout/FixedSplitPane";
 import { ErrorState } from "@/components/StateViews";
 import { IdentifierText } from "@/components/IdentifierText";

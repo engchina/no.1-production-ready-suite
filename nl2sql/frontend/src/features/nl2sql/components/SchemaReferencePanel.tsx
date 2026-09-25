@@ -6,8 +6,8 @@ import {
   Banner,
   Skeleton,
   TimedLoadingState,
+  DisclosureChevron,
 } from "@engchina/production-ready-ui";
-import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
 
 import { t } from "@/lib/i18n";
 import { SchemaRefreshProcessing } from "./SchemaRefreshFeedback";
