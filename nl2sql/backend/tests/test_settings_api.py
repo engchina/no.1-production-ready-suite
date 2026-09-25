@@ -15,6 +15,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from dotenv import dotenv_values
 from fastapi import HTTPException
+from pr_system_settings import oci as shared_oci
 from pytest import MonkeyPatch
 
 from app.clients.oci_database import (
@@ -440,7 +441,7 @@ def test_read_object_storage_namespace_uses_oci_sdk(
     # importlib.import_module 自体を書き換えると、TestClient/AnyIO の遅延 import まで
     # 偽装されて request が待ち続けるため、router が参照する module だけを差し替える。
     monkeypatch.setattr(
-        settings_router,
+        shared_oci,
         "importlib",
         SimpleNamespace(import_module=fake_import_module),
     )
@@ -474,7 +475,7 @@ def test_read_object_storage_namespace_reports_oci_errors(
         raise AssertionError(f"unexpected module import: {name}")
 
     monkeypatch.setattr(
-        settings_router,
+        shared_oci,
         "importlib",
         SimpleNamespace(import_module=fake_import_module),
     )
@@ -521,7 +522,7 @@ def test_read_object_storage_namespace_refuses_encrypted_private_key_without_pro
         raise AssertionError(f"unexpected module import: {name}")
 
     monkeypatch.setattr(
-        settings_router,
+        shared_oci,
         "importlib",
         SimpleNamespace(import_module=fake_import_module),
     )
@@ -2411,12 +2412,12 @@ def test_failed_settings_persistence_preserves_runtime(
     settings = get_settings()
     before = settings.model_dump()
 
-    def fail_persist(candidate: Settings) -> None:
+    def fail_persist(candidate: Settings, *_args: object) -> None:
         assert candidate is not settings
         raise HTTPException(status_code=500, detail="設定を保存できませんでした。")
 
     if target == "object_storage":
-        monkeypatch.setattr(settings_router, "_persist_oci_object_storage_settings", fail_persist)
+        monkeypatch.setattr(shared_oci, "_persist_oci_object_storage_settings", fail_persist)
         response = client.patch(
             "/api/settings/oci/object-storage",
             json={

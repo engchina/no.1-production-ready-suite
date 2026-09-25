@@ -8,14 +8,21 @@ license = { text = "MIT" }
 dependencies = [
   "fastapi>=0.121,<1.0",
   "pydantic>=2.11",
+  "python-multipart>=0.0.20",
+  "cryptography>=50.0.0",
   "production-ready-backend-core",
 ]
+
+[project.optional-dependencies]
+# OCI SDK は接続テスト / namespace 取得 / 設定読込で遅延 import する（3製品は既に依存している）。
+oci = ["oci>=2.168"]
 
 [tool.uv.sources]
 production-ready-backend-core = { path = "../backend_core", editable = true }
 
 [dependency-groups]
 dev = [
+  "oci>=2.168",
   "httpx==0.28.1",
   "pytest>=8.3",
   "pytest-cov>=6.0",

@@ -1,9 +1,26 @@
 """設定 API のスキーマ。secret はレスポンスに含めない。"""
 
 import json
-import re
 from datetime import UTC, datetime
 from typing import Literal
+
+# OCI 認証の schema は3製品共通（platform の pr_system_settings。#100）。互換のため re-export する。
+from pr_system_settings.oci import OciConfigField as OciConfigField
+from pr_system_settings.oci import OciConfigReadData as OciConfigReadData
+from pr_system_settings.oci import OciConfigReadRequest as OciConfigReadRequest
+from pr_system_settings.oci import OciConfigTestResult as OciConfigTestResult
+from pr_system_settings.oci import OciConfigTestStage as OciConfigTestStage
+from pr_system_settings.oci import OciConfigTestStageKey as OciConfigTestStageKey
+from pr_system_settings.oci import OciConfigTestStageStatus as OciConfigTestStageStatus
+from pr_system_settings.oci import OciConfigTestStatus as OciConfigTestStatus
+from pr_system_settings.oci import OciObjectStorageNamespaceData as OciObjectStorageNamespaceData
+from pr_system_settings.oci import (
+    OciObjectStorageNamespaceRequest as OciObjectStorageNamespaceRequest,
+)
+from pr_system_settings.oci import OciObjectStorageSettingsUpdate as OciObjectStorageSettingsUpdate
+from pr_system_settings.oci import OciPrivateKeyUploadData as OciPrivateKeyUploadData
+from pr_system_settings.oci import OciSettingsData as OciSettingsData
+from pr_system_settings.oci import OciSettingsUpdate as OciSettingsUpdate
 
 # アップロード保存先の schema は3製品共通（platform の pr_system_settings。#97）。
 # 互換のため re-export する。
@@ -27,8 +44,6 @@ DatabaseConnectionSecurity = Literal["wallet_mtls", "walletless_tls"]
 DatabaseWalletDownloadStatus = Literal["downloaded", "already_configured"]
 SelectAiCredentialRegion = Literal["ap-osaka-1", "us-chicago-1"]
 SelectAiCredentialOperation = Literal["created", "recreated", "already_exists"]
-OciConfigTestStatus = Literal["success", "failed"]
-OciConfigField = Literal["user", "fingerprint", "tenancy", "region", "key_file"]
 AdbOperationStatus = Literal[
     "success",
     "not_configured",
@@ -400,148 +415,3 @@ class SystemTablesOperationData(SystemTablesStatusData):
     operation: SystemTableOperationResult
     dropped_object_count: int
     created_object_count: int
-
-
-class OciConfigReadRequest(BaseModel):
-    """OCI config file の profile 読み取り request。"""
-
-    config_file: str = Field(default="~/.oci/config", max_length=1024)
-    profile: str = Field(default="DEFAULT", max_length=128)
-
-    @field_validator("config_file", "profile")
-    @classmethod
-    def strip_text(cls, value: str) -> str:
-        """前後空白を設定値へ混入させない。"""
-        return value.strip()
-
-
-class OciConfigReadData(BaseModel):
-    """OCI config profile から読み取った UI 反映値。"""
-
-    profile: str
-    user: str = ""
-    fingerprint: str = ""
-    tenancy: str = ""
-    region: str = ""
-    key_file: str = ""
-    applied_fields: list[OciConfigField] = Field(default_factory=list)
-
-
-class OciSettingsUpdate(BaseModel):
-    """OCI config / profile の更新 payload。"""
-
-    user: str = Field(default="", max_length=512)
-    fingerprint: str = Field(default="", max_length=256)
-    tenancy: str = Field(default="", max_length=512)
-    region: str = Field(default="", max_length=128)
-
-    @field_validator("user", "fingerprint", "tenancy", "region")
-    @classmethod
-    def strip_text(cls, value: str) -> str:
-        """前後空白を設定値へ混入させない。"""
-        return value.strip()
-
-
-class OciSettingsData(BaseModel):
-    """OCI 認証設定画面の表示用データ。"""
-
-    config_file: str
-    profile: str
-    user: str
-    fingerprint: str
-    tenancy: str
-    region: str
-    key_file: str
-    key_file_exists: bool
-    config_file_exists: bool
-    config_source: Literal["runtime"]
-
-
-class OciObjectStorageSettingsUpdate(BaseModel):
-    """OCI Object Storage 共通設定の更新 payload。"""
-
-    object_storage_region: str = Field(default="", max_length=128)
-    object_storage_namespace: str = Field(default="", max_length=256)
-
-    @field_validator("object_storage_region", "object_storage_namespace")
-    @classmethod
-    def strip_text(cls, value: str) -> str:
-        """前後空白を設定値へ混入させない。"""
-        return value.strip()
-
-    @field_validator("object_storage_namespace")
-    @classmethod
-    def validate_namespace(cls, value: str) -> str:
-        """OCI Object Storage namespace で危険な文字を拒否する。"""
-        if value and not re.fullmatch(r"[A-Za-z0-9._-]+", value):
-            raise ValueError(
-                "Object Storage namespace は英数字、ハイフン、アンダースコア、"
-                "ドットで入力してください。"
-            )
-        return value
-
-
-OciConfigTestStageKey = Literal["config_format", "key_file", "region", "authentication"]
-OciConfigTestStageStatus = Literal["success", "failed", "skipped"]
-
-
-class OciConfigTestStage(BaseModel):
-    """OCI 接続テストの 1 段階の結果。秘密の値は含めない。"""
-
-    key: OciConfigTestStageKey
-    status: OciConfigTestStageStatus
-    message: str
-    action: str | None = None
-
-
-class OciConfigTestResult(BaseModel):
-    """OCI config / 秘密鍵 / 認証付き API 呼び出しの段階的な検証結果。"""
-
-    status: OciConfigTestStatus
-    profile: str
-    config_file: str
-    key_file: str
-    config_file_exists: bool
-    key_file_exists: bool
-    missing_fields: list[OciConfigField] = Field(default_factory=list)
-    permission_issues: list[str] = Field(default_factory=list)
-    oci_directory_mode: str | None = None
-    config_file_mode: str | None = None
-    key_file_mode: str | None = None
-    message: str
-    elapsed_ms: int = Field(ge=0)
-    checked_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
-    error_type: str | None = None
-    stages: list[OciConfigTestStage] = Field(default_factory=list)
-    region: str | None = None
-    auth_check_operation: str | None = None
-    http_status: int | None = None
-    service_code: str | None = None
-    request_id: str | None = None
-
-
-class OciObjectStorageNamespaceRequest(BaseModel):
-    """Object Storage namespace 取得 request。"""
-
-    config_file: str = Field(default="~/.oci/config", max_length=1024)
-    profile: str = Field(default="DEFAULT", max_length=128)
-    region: str = Field(default="", max_length=128)
-
-    @field_validator("config_file", "profile", "region")
-    @classmethod
-    def strip_text(cls, value: str) -> str:
-        """前後空白を設定値へ混入させない。"""
-        return value.strip()
-
-
-class OciObjectStorageNamespaceData(BaseModel):
-    """Object Storage namespace 取得結果。"""
-
-    namespace: str
-
-
-class OciPrivateKeyUploadData(BaseModel):
-    """OCI API 秘密鍵アップロード結果。"""
-
-    key_file: str
-    saved: bool

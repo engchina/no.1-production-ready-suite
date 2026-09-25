@@ -23,11 +23,12 @@ import anyio
 import httpx
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
+from pr_system_settings import oci as shared_oci
+from pr_system_settings import oci_connectivity
 from pytest import MonkeyPatch, importorskip
 from starlette.websockets import WebSocket
 
 import app.features.agent.router as agent_router
-from app import oci_connectivity
 from app.features.agent.config import runtime_config_store
 from app.features.agent.router import stream_run_events_websocket
 from app.features.agent.runtime import (
@@ -834,8 +835,7 @@ def test_oci_settings_defaults_match_rag_when_credentials_missing(
 ) -> None:
     config_file = str(tmp_path / "missing_oci_config")
     key_file = str(tmp_path / "missing_oci_api_key.pem")
-    monkeypatch.setattr(agent_router, "_oci_settings_state", None)
-    monkeypatch.setattr(agent_router, "OCI_PRIVATE_KEY_FILE", key_file)
+    monkeypatch.setattr(shared_oci, "OCI_PRIVATE_KEY_FILE", key_file)
     monkeypatch.setattr(
         agent_router,
         "get_settings",
@@ -949,7 +949,7 @@ def test_oci_object_storage_namespace_reads_from_sdk_like_rag(
             return FakeObjectStorage
         raise AssertionError(name)
 
-    monkeypatch.setattr(agent_router, "import_module", fake_import_module)
+    monkeypatch.setattr(shared_oci, "importlib", SimpleNamespace(import_module=fake_import_module))
 
     resp = client.post(
         "/api/settings/oci/object-storage/namespace",
@@ -977,9 +977,8 @@ def test_oci_settings_save_writes_config_and_env_like_rag(
     config_file = tmp_path / ".oci" / "config"
     env_file = tmp_path / ".env"
     key_file = tmp_path / ".oci" / "oci_api_key.pem"
-    monkeypatch.setattr(agent_router, "_oci_settings_state", None)
     monkeypatch.setattr(agent_router, "BACKEND_ENV_FILE", env_file)
-    monkeypatch.setattr(agent_router, "OCI_PRIVATE_KEY_FILE", str(key_file))
+    monkeypatch.setattr(shared_oci, "OCI_PRIVATE_KEY_FILE", str(key_file))
     monkeypatch.setattr(
         agent_router,
         "get_settings",
@@ -1019,9 +1018,8 @@ def test_oci_settings_save_does_not_write_empty_defaults_like_rag(
     config_file = tmp_path / ".oci" / "config"
     env_file = tmp_path / ".env"
     key_file = tmp_path / ".oci" / "oci_api_key.pem"
-    monkeypatch.setattr(agent_router, "_oci_settings_state", None)
     monkeypatch.setattr(agent_router, "BACKEND_ENV_FILE", env_file)
-    monkeypatch.setattr(agent_router, "OCI_PRIVATE_KEY_FILE", str(key_file))
+    monkeypatch.setattr(shared_oci, "OCI_PRIVATE_KEY_FILE", str(key_file))
     settings = _settings_fixture(oci_config_file=str(config_file), oci_region="us-chicago-1")
     monkeypatch.setattr(agent_router, "get_settings", lambda: settings)
 
@@ -1046,8 +1044,7 @@ def test_upload_oci_private_key_writes_pem_like_rag(
     tmp_path: Path,
 ) -> None:
     key_file = tmp_path / ".oci" / "oci_api_key.pem"
-    monkeypatch.setattr(agent_router, "_oci_settings_state", None)
-    monkeypatch.setattr(agent_router, "OCI_PRIVATE_KEY_FILE", str(key_file))
+    monkeypatch.setattr(shared_oci, "OCI_PRIVATE_KEY_FILE", str(key_file))
     monkeypatch.setattr(agent_router, "get_settings", lambda: _settings_fixture())
     pem = b"-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----\n"
 
@@ -1101,7 +1098,7 @@ def test_oci_config_test_checks_files_permissions_and_key_like_rag(
         encoding="utf-8",
     )
     config_file.chmod(0o600)
-    monkeypatch.setattr(agent_router, "OCI_PRIVATE_KEY_FILE", str(key_file))
+    monkeypatch.setattr(shared_oci, "OCI_PRIVATE_KEY_FILE", str(key_file))
     monkeypatch.setattr(
         agent_router,
         "get_settings",
@@ -2069,6 +2066,29 @@ def test_trace_event_exporter_failure_does_not_break_runtime(
     assert status.last_error == "webhook:timeout"
     assert status.last_error_at is not None
     assert status.retry_queue_size == 1
+
+
+def test_rbac_limits_oci_actions_to_admin(monkeypatch: MonkeyPatch) -> None:
+    """OCI の config 読込・接続テスト・namespace 取得も管理者に限定する（#100）。"""
+    _enable_rbac(monkeypatch)
+    try:
+        _assert_oci_actions_require_admin()
+    finally:
+        _disable_rbac(monkeypatch)
+
+
+def _assert_oci_actions_require_admin() -> None:
+    for path, body in (
+        ("/api/settings/oci/config/read", {"config_file": "~/.oci/config", "profile": "DEFAULT"}),
+        ("/api/settings/oci/config/test", None),
+        (
+            "/api/settings/oci/object-storage/namespace",
+            {"config_file": "~/.oci/config", "profile": "DEFAULT", "region": "ap-osaka-1"},
+        ),
+    ):
+        blocked = client.post(path, json=body)
+        assert blocked.status_code == 403, path
+    assert client.get("/api/settings/oci").status_code == 200
 
 
 def test_rbac_blocks_admin_settings_without_required_role(monkeypatch: MonkeyPatch) -> None:

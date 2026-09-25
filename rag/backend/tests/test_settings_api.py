@@ -18,10 +18,10 @@ from zipfile import ZipFile
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
+from pr_system_settings import oci_connectivity
 from pytest import MonkeyPatch
 
 from app.api.routes import settings as settings_routes
-from app.clients import oci_connectivity
 from app.clients.external_parser import ExternalParserClient
 from app.clients.oracle import (
     GenerationSettingsRevisionConflictError,
@@ -2736,7 +2736,7 @@ def test_read_object_storage_namespace_uses_oci_sdk(
             return SimpleNamespace(ObjectStorageClient=FakeObjectStorageClient)
         raise AssertionError(f"unexpected module import: {name}")
 
-    monkeypatch.setattr("app.api.routes.settings.importlib.import_module", fake_import_module)
+    monkeypatch.setattr("pr_system_settings.oci.importlib.import_module", fake_import_module)
     config_file = tmp_path / "config"
 
     resp = client.post(
@@ -2766,7 +2766,7 @@ def test_read_object_storage_namespace_reports_oci_errors(
             raise RuntimeError("sdk unavailable")
         raise AssertionError(f"unexpected module import: {name}")
 
-    monkeypatch.setattr("app.api.routes.settings.importlib.import_module", fake_import_module)
+    monkeypatch.setattr("pr_system_settings.oci.importlib.import_module", fake_import_module)
 
     resp = client.post(
         "/api/settings/oci/object-storage/namespace",
@@ -2812,7 +2812,7 @@ def test_read_object_storage_namespace_refuses_encrypted_private_key_without_pro
             return SimpleNamespace(ObjectStorageClient=FakeObjectStorageClient)
         raise AssertionError(f"unexpected module import: {name}")
 
-    monkeypatch.setattr("app.api.routes.settings.importlib.import_module", fake_import_module)
+    monkeypatch.setattr("pr_system_settings.oci.importlib.import_module", fake_import_module)
 
     resp = client.post(
         "/api/settings/oci/object-storage/namespace",

@@ -11,12 +11,12 @@ from pathlib import Path
 
 import httpx
 import pytest
+from pr_system_settings import oci as shared_oci
 
 from app.api import health as health_routes
 from app.features.nl2sql import router as nl2sql_router
 from app.features.nl2sql.models import DbAdminObjectsData, SchemaObjectPage
 from app.features.schema import router as schema_router
-from app.features.settings import router as settings_router
 from app.main import app
 from app.readiness import READINESS_OK
 from app.settings import get_settings
@@ -340,7 +340,7 @@ def test_blocked_settings_namespace_route_does_not_block_security_api(
         _block_until_released(block.entered, block.release)
         return "testnamespace"
 
-    monkeypatch.setattr(settings_router, "_read_object_storage_namespace", blocking_namespace)
+    monkeypatch.setattr(shared_oci, "_read_object_storage_namespace", blocking_namespace)
 
     asyncio.run(
         _assert_permissions_return_while_blocked(
