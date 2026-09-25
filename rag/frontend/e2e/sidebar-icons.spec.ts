@@ -42,7 +42,8 @@ for (const viewport of [
     await expect(ociSettings).toBeVisible();
     await expect(modelSettings).toBeVisible();
     await expect(ociSettings.locator("svg").first()).toHaveClass(/lucide-key-round/);
-    await expect(modelSettings.locator("svg").first()).toHaveClass(/lucide-settings/);
+    // システム設定の共通5項目のアイコンは共有パッケージが決める（NL2SQL と同じ。#116）。
+    await expect(modelSettings.locator("svg").first()).toHaveClass(/lucide-brain-cog/);
   });
 
   test(`sidebar brand and short labels are stable on ${viewport.name}`, async ({ page }) => {

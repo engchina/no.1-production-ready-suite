@@ -1,11 +1,9 @@
 import {
-  Palette,
   BadgeCheck,
   Bot,
   Boxes,
   ClipboardList,
   DatabaseBackup,
-  Cloud,
   KeyRound,
   LayoutDashboard,
   PlayCircle,
@@ -14,6 +12,8 @@ import {
   Store,
   type LucideIcon,
 } from "lucide-react";
+
+import { SYSTEM_SETTINGS_NAV_ITEMS } from "@engchina/production-ready-system-settings";
 
 import { APP_ROUTES } from "@/lib/routes";
 import type { I18nKey } from "@/lib/i18n";
@@ -72,27 +72,6 @@ export const NAV_SECTIONS: NavSection[] = [
   {
     // 3製品で共通のシステム設定（画面は platform の共有パッケージ。#70）。
     titleKey: "nav.section.settings",
-    items: [
-      {
-        href: APP_ROUTES.settingsOci,
-        labelKey: "nav.settingsOci",
-        sidebarLabelKey: "nav.settingsOci.sidebar",
-        icon: KeyRound,
-      },
-      { href: APP_ROUTES.settingsUploadStorage, labelKey: "nav.settingsUploadStorage", icon: Cloud },
-      {
-        href: APP_ROUTES.settingsModel,
-        labelKey: "nav.settingsModel",
-        sidebarLabelKey: "nav.settingsModel.sidebar",
-        icon: Settings,
-      },
-      {
-        href: APP_ROUTES.settingsDatabase,
-        labelKey: "nav.settingsDatabase",
-        sidebarLabelKey: "nav.settingsDatabase.sidebar",
-        icon: DatabaseBackup,
-      },
-      { href: APP_ROUTES.settingsAppearance, labelKey: "nav.settingsAppearance", icon: Palette },
-    ],
+    items: [...SYSTEM_SETTINGS_NAV_ITEMS],
   },
 ];

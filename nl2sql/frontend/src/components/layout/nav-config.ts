@@ -1,20 +1,15 @@
 import {
   BookA,
   Boxes,
-  BrainCog,
   BrainCircuit,
-  Cloud,
-  Database,
   Eye,
   FileCode2,
   FileSpreadsheet,
   FlaskConical,
   History,
-  KeyRound,
   MessageSquareCode,
   MessageSquareText,
   Network,
-  Palette,
   ScrollText,
   Shapes,
   Shield,
@@ -32,6 +27,11 @@ import {
 
 import { MENU_PERMISSIONS } from "@/features/security/menu-permissions";
 import type { I18nKey } from "@/lib/i18n";
+import {
+  SYSTEM_SETTINGS_NAV_ITEMS,
+  type SystemSettingsKey,
+} from "@engchina/production-ready-system-settings";
+
 import { APP_ROUTES } from "@/lib/routes";
 
 export interface NavItem {
@@ -49,6 +49,15 @@ export interface NavSection {
   /** 保存値がない場合に、このセクションを初期状態で折りたたむか。 */
   initiallyCollapsed?: boolean;
 }
+
+/** 共通5項目（共有パッケージ）に付ける NL2SQL の menu 権限。 */
+const SYSTEM_SETTINGS_MENU_PERMISSIONS = {
+  oci: MENU_PERMISSIONS.settingsOci,
+  uploadStorage: MENU_PERMISSIONS.settingsUploadStorage,
+  model: MENU_PERMISSIONS.settingsModel,
+  database: MENU_PERMISSIONS.settingsDatabase,
+  appearance: MENU_PERMISSIONS.settingsAppearance,
+} satisfies Record<SystemSettingsKey, string>;
 
 /** NL2SQL コンソールのサイドナビ構成（共有 Sidebar が消費する）。 */
 export const NAV_SECTIONS: NavSection[] = [
@@ -126,31 +135,10 @@ export const NAV_SECTIONS: NavSection[] = [
     // 3製品で共通のシステム設定（画面は platform の共有パッケージ。#70）。
     titleKey: "nav.section.settings",
     initiallyCollapsed: true,
-    items: [
-      {
-        href: APP_ROUTES.settingsOci,
-        labelKey: "nav.settingsOci",
-        sidebarLabelKey: "nav.settingsOci.sidebar",
-        icon: KeyRound,
-        permission: MENU_PERMISSIONS.settingsOci,
-      },
-      { href: APP_ROUTES.settingsUploadStorage, labelKey: "nav.settingsUploadStorage", icon: Cloud, permission: MENU_PERMISSIONS.settingsUploadStorage },
-      {
-        href: APP_ROUTES.settingsModel,
-        labelKey: "nav.settingsModel",
-        sidebarLabelKey: "nav.settingsModel.sidebar",
-        icon: BrainCog,
-        permission: MENU_PERMISSIONS.settingsModel,
-      },
-      {
-        href: APP_ROUTES.settingsDatabase,
-        labelKey: "nav.settingsDatabase",
-        sidebarLabelKey: "nav.settingsDatabase.sidebar",
-        icon: Database,
-        permission: MENU_PERMISSIONS.settingsDatabase,
-      },
-      { href: APP_ROUTES.settingsAppearance, labelKey: "nav.settingsAppearance", icon: Palette, permission: MENU_PERMISSIONS.settingsAppearance },
-    ],
+    items: SYSTEM_SETTINGS_NAV_ITEMS.map((item) => ({
+      ...item,
+      permission: SYSTEM_SETTINGS_MENU_PERMISSIONS[item.key],
+    })),
   },
 ];
 
