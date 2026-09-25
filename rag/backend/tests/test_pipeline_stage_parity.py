@@ -55,7 +55,9 @@ def _run(app: FastAPI, request: BaseModel, response_model: type[BaseModel]) -> B
     route = next(
         route
         for route in app.routes
-        if isinstance(route, APIRoute) and route.path == "/run" and "POST" in route.methods
+        if isinstance(route, APIRoute)
+        and route.path == "/run"
+        and "POST" in (route.methods or set())
     )
     return response_model.model_validate(route.endpoint(request))
 

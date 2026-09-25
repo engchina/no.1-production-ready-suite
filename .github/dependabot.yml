@@ -47,6 +47,11 @@ updates:
         update-types: ["version-update:semver-major"]
       - dependency-name: fastapi
         update-types: ["version-update:semver-major"]
+      # 外部 parser の extra は rag/services/parsers/* のサービスと同じ版に固定している
+      # （tests/test_config.py が一致を確認する）。解析結果が変わるため、サービスと同時に上げる。
+      - dependency-name: docling
+      - dependency-name: unstructured
+      - dependency-name: marker-pdf
 
   # frontend
   - package-ecosystem: npm
