@@ -2696,8 +2696,11 @@ async function unifiedGraphFixture(page: Page) {
 async function openUnifiedGraph(page: Page) {
   const panel=page.locator("#ontology-query-playground-panel");
   const expand=panel.getByRole("button",{name:"グラフを表示",exact:true});
+  const modeAll=panel.getByTestId("ontology-graph-mode-all");
+  // 展開ボタンかモード切替のどちらかが描画されるまで待ってから判断する（その瞬間の isVisible だけでは、遅い環境で展開を飛ばす）。
+  await expect(expand.or(modeAll).filter({visible:true}).first()).toBeVisible();
   if(await expand.isVisible()) await expand.click();
-  await panel.getByTestId("ontology-graph-mode-all").click();
+  await modeAll.click();
   return panel;
 }
 

@@ -32,6 +32,7 @@ from pytest import MonkeyPatch, importorskip
 from starlette.websockets import WebSocket
 
 import app.features.agent.router as agent_router
+import app.features.agent.runtime as runtime_module
 import app.settings as app_settings
 from app.features.agent.config import runtime_config_store
 from app.features.agent.router import stream_run_events_websocket
@@ -2978,6 +2979,52 @@ def test_runtime_repository_persists_checkpoint_to_oracle() -> None:
     assert restored.get_run(completed.id).status == "completed"
     assert decided.approvals[0].status == "rejected"
     assert memory[0].metadata["run_id"] == completed.id
+
+
+def test_runtime_repository_oracle_connect_passes_wallet_only_when_configured(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Terraform stack の ADB(mTLS) 接続用に Wallet 引数を Thin mode へ渡す。"""
+    store = _FakeOracleStore()
+    captured: list[dict[str, object]] = []
+
+    class FakeOracleDb:
+        @staticmethod
+        def connect(**kwargs: object) -> _FakeOracleConnection:
+            captured.append(kwargs)
+            return _FakeOracleConnection(store)
+
+    def fake_import_module(name: str) -> object:
+        if name == "oracledb":
+            return FakeOracleDb
+        raise AssertionError(name)
+
+    monkeypatch.setattr(runtime_module, "import_module", fake_import_module)
+
+    AgentRuntimeOracleCheckpointRepository(
+        dsn="agentadb_high",
+        user="ADMIN",
+        password="secret",
+        wallet_dir="/u01/aipoc/wallet",
+        wallet_password="wallet-secret",
+    )
+    assert captured[0] == {
+        "user": "ADMIN",
+        "password": "secret",
+        "dsn": "agentadb_high",
+        "config_dir": "/u01/aipoc/wallet",
+        "wallet_location": "/u01/aipoc/wallet",
+        "wallet_password": "wallet-secret",
+    }
+
+    captured.clear()
+    AgentRuntimeOracleCheckpointRepository(
+        dsn="fake-dsn",
+        user="runtime",
+        password="secret",
+        wallet_dir="  ",
+    )
+    assert captured[0] == {"user": "runtime", "password": "secret", "dsn": "fake-dsn"}
 
 
 def test_runtime_repository_persists_normalized_oracle_projection() -> None:

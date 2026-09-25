@@ -180,6 +180,18 @@ function ExecutableNl2SqlWorkbench() {
   const [engine, setEngine] = useWorkspaceState<Nl2SqlEngine>("engine", "select_ai");
   const [profileId, setProfileId] = useWorkspaceState("profileId", "");
   const [question, setQuestion] = useWorkspaceState(`question:${profileId}`, "");
+  // プロファイル未確定（""）の間に入力した質問は、確定した時点で新しいプロファイルの下書きへ
+  // 引き継ぐ。質問はプロファイルごとに保存するため、引き継がないと key が変わって入力が消える（#168）。
+  const unresolvedQuestionRef = useRef("");
+  useEffect(() => {
+    if (!profileId) unresolvedQuestionRef.current = question;
+  }, [profileId, question]);
+  useEffect(() => {
+    const carried = unresolvedQuestionRef.current;
+    if (!profileId || !carried.trim()) return;
+    unresolvedQuestionRef.current = "";
+    setQuestion((current) => (current.trim() ? current : carried));
+  }, [profileId, setQuestion]);
   const [selection, setSelection] = useState<SchemaSelection>(() => emptySelection());
   const [result, setResult] = useState<Nl2SqlResult | null>(null);
   const [recommendation, setRecommendation] = useState<ProfileRecommendationData | null>(null);
