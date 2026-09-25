@@ -1,0 +1,5 @@
+# rag/frontend の image が additional_contexts で platform を読むときに、手元の生成物を入れない（#177）。
+**/node_modules
+**/dist
+**/.venv
+**/__pycache__
