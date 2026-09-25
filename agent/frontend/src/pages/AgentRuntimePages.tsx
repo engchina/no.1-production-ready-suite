@@ -769,7 +769,7 @@ export function RunsPage() {
                   id="run-agent"
                   value={agentId}
                   onChange={(event) => onAgentChange(event.target.value)}
-                  className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 >
                   {(agents.data?.agents ?? []).filter((agent) => agent.enabled).map((agent) => (
                     <option key={agent.id} value={agent.id}>
@@ -783,7 +783,7 @@ export function RunsPage() {
                   id="run-goal"
                   value={goal}
                   onChange={(event) => setGoal(event.target.value)}
-                  className="min-h-24 w-full rounded-md border border-border bg-surface-sunken px-3 py-2 text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className="min-h-24 w-full rounded-md border border-border-control bg-surface-sunken px-3 py-2 text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 />
               </Field>
               <Field label={t("run.form.binding")} htmlFor="run-binding">
@@ -791,7 +791,7 @@ export function RunsPage() {
                   id="run-binding"
                   value={bindingId}
                   onChange={(event) => setBindingId(event.target.value)}
-                  className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 >
                   <option value="">
                     {defaultBinding
@@ -1003,7 +1003,7 @@ export function AuditPage() {
                   id="audit-run-id"
                   value={runId}
                   onChange={(event) => setRunId(event.target.value)}
-                  className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 />
               </Field>
               <Field label={t("audit.toolName")} htmlFor="audit-tool-name">
@@ -1011,7 +1011,7 @@ export function AuditPage() {
                   id="audit-tool-name"
                   value={toolName}
                   onChange={(event) => setToolName(event.target.value)}
-                  className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 >
                   <option value="">{t("common.all")}</option>
                   {(tools.data?.tools ?? []).map((tool) => (
@@ -1026,7 +1026,7 @@ export function AuditPage() {
                   id="audit-step-status"
                   value={stepStatus}
                   onChange={(event) => setStepStatus(event.target.value)}
-                  className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 >
                   <option value="">{t("common.all")}</option>
                   {["pending", "running", "waiting_approval", "completed", "failed", "cancelled"].map((status) => (
@@ -1041,7 +1041,7 @@ export function AuditPage() {
                   id="audit-approval-status"
                   value={approvalStatus}
                   onChange={(event) => setApprovalStatus(event.target.value)}
-                  className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 >
                   <option value="">{t("common.all")}</option>
                   {["pending", "approved", "rejected", "cancelled"].map((status) => (
@@ -1056,7 +1056,7 @@ export function AuditPage() {
                   id="audit-error-code"
                   value={errorCode}
                   onChange={(event) => setErrorCode(event.target.value)}
-                  className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 />
               </Field>
               <Field label={t("audit.guardrailWarnings")} htmlFor="audit-warning-filter">
@@ -1064,7 +1064,7 @@ export function AuditPage() {
                   id="audit-warning-filter"
                   value={warnings}
                   onChange={(event) => setWarnings(event.target.value as AuditWarningsFilter)}
-                  className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 >
                   <option value="any">{t("common.all")}</option>
                   <option value="true">{t("audit.hasWarnings")}</option>
@@ -1079,7 +1079,7 @@ export function AuditPage() {
                   max="1000"
                   value={limit}
                   onChange={(event) => setLimit(event.target.value)}
-                  className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 />
               </Field>
             </div>
@@ -1326,7 +1326,7 @@ export function MemoryPage() {
                   id="memory-kind"
                   value={kind}
                   onChange={(event) => setKind(event.target.value as MemoryKind)}
-                  className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 >
                   <option value="user_preference">{t("memory.kind.userPreference")}</option>
                   <option value="tool_learning">{t("memory.kind.toolLearning")}</option>
@@ -1339,7 +1339,7 @@ export function MemoryPage() {
                   id="memory-content"
                   value={content}
                   onChange={(event) => setContent(event.target.value)}
-                  className="min-h-28 w-full rounded-md border border-border bg-surface-sunken px-3 py-2 text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className="min-h-28 w-full rounded-md border border-border-control bg-surface-sunken px-3 py-2 text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 />
               </Field>
               <Field label={t("memory.metadata")} htmlFor="memory-metadata">
@@ -1347,7 +1347,7 @@ export function MemoryPage() {
                   id="memory-metadata"
                   value={metadataText}
                   onChange={(event) => setMetadataText(event.target.value)}
-                  className="min-h-24 w-full rounded-md border border-border bg-surface-sunken px-3 py-2 font-mono text-xs leading-5 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className="min-h-24 w-full rounded-md border border-border-control bg-surface-sunken px-3 py-2 font-mono text-xs leading-5 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   spellCheck={false}
                 />
               </Field>
@@ -1365,7 +1365,7 @@ export function MemoryPage() {
                 id="memory-search"
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
               />
             </Field>
             </CardContent>
@@ -1532,7 +1532,7 @@ function McpDiscoveryPanel({ configured }: { configured: boolean }) {
               id="mcp-discovery-server-id"
               value={serverId}
               onChange={(event) => setServerId(event.target.value)}
-              className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+              className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
             />
           </Field>
           <Field label={t("settings.mcpDiscovery.traceId")} htmlFor="mcp-discovery-trace-id">
@@ -1540,7 +1540,7 @@ function McpDiscoveryPanel({ configured }: { configured: boolean }) {
               id="mcp-discovery-trace-id"
               value={traceId}
               onChange={(event) => setTraceId(event.target.value)}
-              className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+              className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
             />
           </Field>
           <Button
@@ -3314,7 +3314,7 @@ export function CommandPolicySettingsPage() {
                     id="command-policy-workspace-root"
                     value={workspaceRoot}
                     onChange={(event) => setWorkspaceRoot(event.target.value)}
-                    className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   />
                 </Field>
                 <Field label={t("settings.commandPolicy.outputLimit")} htmlFor="command-policy-output-limit">
@@ -3324,7 +3324,7 @@ export function CommandPolicySettingsPage() {
                     min="1"
                     value={outputLimit}
                     onChange={(event) => setOutputLimit(event.target.value)}
-                    className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   />
                 </Field>
                 <Field label={t("settings.commandPolicy.defaultTimeout")} htmlFor="command-policy-default-timeout">
@@ -3335,7 +3335,7 @@ export function CommandPolicySettingsPage() {
                     step="0.1"
                     value={defaultTimeout}
                     onChange={(event) => setDefaultTimeout(event.target.value)}
-                    className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   />
                 </Field>
                 <Field label={t("settings.commandPolicy.maxTimeout")} htmlFor="command-policy-max-timeout">
@@ -3346,7 +3346,7 @@ export function CommandPolicySettingsPage() {
                     step="0.1"
                     value={maxTimeout}
                     onChange={(event) => setMaxTimeout(event.target.value)}
-                    className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   />
                 </Field>
               </div>
@@ -3357,7 +3357,7 @@ export function CommandPolicySettingsPage() {
                   value={allowedPrefixes}
                   onChange={(event) => setAllowedPrefixes(event.target.value)}
                   rows={5}
-                  className="min-h-32 w-full rounded-md border border-border bg-surface-sunken px-3 py-2 font-mono text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className="min-h-32 w-full rounded-md border border-border-control bg-surface-sunken px-3 py-2 font-mono text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 />
                 <p className="mt-1 text-xs leading-5 text-fg-muted">{t("settings.commandPolicy.allowedPrefixesHint")}</p>
               </Field>
@@ -3368,7 +3368,7 @@ export function CommandPolicySettingsPage() {
                     id="command-policy-artifact-storage"
                     value={artifactStorageBackend}
                     onChange={(event) => setArtifactStorageBackend(event.target.value as "inline" | "filesystem")}
-                    className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   >
                     <option value="inline">{t("settings.commandPolicy.inline")}</option>
                     <option value="filesystem">{t("settings.commandPolicy.filesystem")}</option>
@@ -3380,7 +3380,7 @@ export function CommandPolicySettingsPage() {
                     id="command-policy-artifact-path"
                     value={artifactStoragePath}
                     onChange={(event) => setArtifactStoragePath(event.target.value)}
-                    className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   />
                 </Field>
               </div>
@@ -3477,7 +3477,7 @@ export function ToolPolicySettingsPage() {
                   id="tool-policy-default-mode"
                   value={defaultMode}
                   onChange={(event) => setDefaultMode(event.target.value as "approval" | "deny")}
-                  className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring sm:max-w-xs"
+                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring sm:max-w-xs"
                 >
                   <option value="approval">{t("settings.toolPolicy.defaultModeApproval")}</option>
                   <option value="deny">{t("settings.toolPolicy.defaultModeDeny")}</option>
@@ -3523,7 +3523,7 @@ export function ToolPolicySettingsPage() {
                             id={`tool-policy-${tool.name}`}
                             value={policy}
                             onChange={(event) => setPolicy(tool.name, event.target.value as ToolPolicyChoice)}
-                            className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                            className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                           >
                             <option value="default">{t("settings.toolPolicy.default")}</option>
                             <option value="allow">{t("settings.toolPolicy.allow")}</option>
@@ -3619,7 +3619,7 @@ export function RuntimeSafetySettingsPage() {
                     min="0"
                     value={maxToolCalls}
                     onChange={(event) => setMaxToolCalls(event.target.value)}
-                    className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   />
                 </Field>
                 <Field
@@ -3632,7 +3632,7 @@ export function RuntimeSafetySettingsPage() {
                     min="0"
                     value={maxPendingApprovals}
                     onChange={(event) => setMaxPendingApprovals(event.target.value)}
-                    className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   />
                 </Field>
               </div>
@@ -3788,7 +3788,7 @@ export function RuntimeSnapshotSettingsPage() {
                   id="runtime-snapshot-export"
                   value={exportText}
                   readOnly
-                  className="min-h-80 w-full rounded-md border border-border bg-surface-sunken px-3 py-2 font-mono text-xs leading-5 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className="min-h-80 w-full rounded-md border border-border-control bg-surface-sunken px-3 py-2 font-mono text-xs leading-5 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   spellCheck={false}
                 />
               </Field>
@@ -3818,7 +3818,7 @@ export function RuntimeSnapshotSettingsPage() {
                   setImportText(event.target.value);
                   setValidationResult(null);
                 }}
-                className="min-h-80 w-full rounded-md border border-border bg-surface-sunken px-3 py-2 font-mono text-xs leading-5 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                className="min-h-80 w-full rounded-md border border-border-control bg-surface-sunken px-3 py-2 font-mono text-xs leading-5 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 spellCheck={false}
               />
             </Field>
@@ -3827,7 +3827,7 @@ export function RuntimeSnapshotSettingsPage() {
                 id="runtime-snapshot-reason"
                 value={reason}
                 onChange={(event) => setReason(event.target.value)}
-                className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
               />
             </Field>
             <div className="flex flex-wrap gap-2">
@@ -3847,7 +3847,7 @@ export function RuntimeSnapshotSettingsPage() {
                   onChange={(event) => setConfirmText(event.target.value)}
                   placeholder={t("settings.snapshot.confirmPlaceholder")}
                   aria-describedby="runtime-snapshot-confirm-hint"
-                  className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 />
                 <p id="runtime-snapshot-confirm-hint" className="mt-1 text-xs leading-5 text-fg-muted">
                   {t("settings.snapshot.confirmRequired")}
@@ -4036,7 +4036,7 @@ function AgentEditor({
             id={`${agent?.id ?? "new"}-agent-name`}
             value={name}
             onChange={(event) => setName(event.target.value)}
-            className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+            className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
           />
         </Field>
         <Field label={t("agent.description")} htmlFor={`${agent?.id ?? "new"}-agent-description`}>
@@ -4044,7 +4044,7 @@ function AgentEditor({
             id={`${agent?.id ?? "new"}-agent-description`}
             value={agentDescription}
             onChange={(event) => setAgentDescription(event.target.value)}
-            className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+            className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
           />
         </Field>
         <Field label={t("agent.instructions")} htmlFor={`${agent?.id ?? "new"}-agent-instructions`}>
@@ -4052,7 +4052,7 @@ function AgentEditor({
             id={`${agent?.id ?? "new"}-agent-instructions`}
             value={instructions}
             onChange={(event) => setInstructions(event.target.value)}
-            className="min-h-24 w-full rounded-md border border-border bg-surface-sunken px-3 py-2 text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+            className="min-h-24 w-full rounded-md border border-border-control bg-surface-sunken px-3 py-2 text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
           />
         </Field>
         <label className="flex min-h-11 items-center gap-2 rounded-md border border-border px-3 py-2 text-sm text-fg">
@@ -4207,7 +4207,7 @@ function RuntimeBindingsPanel({
               id={`${agent.id}-binding-runtime`}
               value={runtimeId}
               onChange={(event) => setRuntimeId(event.target.value)}
-              className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm"
+              className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm"
             >
               {candidates.map((runtime) => (
                 <option key={runtime.id} value={runtime.id}>
@@ -4221,7 +4221,7 @@ function RuntimeBindingsPanel({
               id={`${agent.id}-binding-native-ref`}
               value={nativeAgentRef}
               onChange={(event) => setNativeAgentRef(event.target.value)}
-              className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm"
+              className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm"
             />
           </Field>
         </div>
