@@ -861,7 +861,7 @@ export function EvaluationPage() {
                           >
                             {t("qualityEvaluation.action.view")}
                           </Button>
-                          {/* 中止・削除は行内に並べず、行メニューにまとめる（docs/frontend-button-spec.md §5.1）。 */}
+                          {/* 中止・削除は行内に並べず、行メニューにまとめる（platform/docs/ux-contracts/buttons.md §5.1）。 */}
                           <RowActionMenu
                             ariaLabel={t("qualityEvaluation.action.rowActions", { job: profileRecordDisplayLabel(job) })}
                             testId={`quality-evaluation-job-actions-${job.job_id}`}

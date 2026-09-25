@@ -6,7 +6,7 @@ export const ja = {
   "app.sidebarTitle.line1": "Production Ready",
   "app.sidebarTitle.line2": "RAG",
 
-  // 共通メッセージ機構・ボタン（docs/frontend-messaging-spec.md / frontend-button-spec.md）
+  // 共通メッセージ機構・ボタン（platform/docs/ux-contracts/messaging.md / buttons.md）
   "common.confirm": "実行",
   "common.cancel": "キャンセル",
   "common.dismiss": "閉じる",

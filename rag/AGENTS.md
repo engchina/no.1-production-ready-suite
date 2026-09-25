@@ -73,13 +73,13 @@ RAG の製品語は **ナレッジ構築**、**業務ビュー**、**検索・�
   - **検索・回答設定**: ファイル準備、文書解析、文書分割、検索インデックス、検索方法、根拠確認、回答スタイル、回答プロンプト、安全チェック、品質評価、GraphRAG、エージェント計画。
   - **運用設定**: HuggingFace 設定、サービス管理（RAG 固有の運用項目）。
   - **システム設定**: OCI 認証、アップロード保存先、モデル、データベース、外観（3製品で共通。画面と API は platform の共有パッケージ）。
-- メッセージ機構は [docs/frontend-messaging-spec.md](./docs/frontend-messaging-spec.md) を正本とする。
-- ボタンの大きさ・スタイル・アイコン・loading・ヘッダーの並び順は platform の `docs/design-system/` を正本とし、画面内の配置と命名は [docs/frontend-button-spec.md](./docs/frontend-button-spec.md) に従う。
+- 画面の振る舞い（メッセージ機構・ボタンの役割と配置・ページの型・状態保持・横断的な保守契約）は platform の [UX 契約](../platform/docs/ux-contracts/README.md) を正本とする。RAG 固有の差分（文書詳細の失敗表示）は [docs/frontend-messaging-spec.md](./docs/frontend-messaging-spec.md) に書く。
+- ボタンの大きさ・スタイル・アイコン・loading・ヘッダーの並び順は platform の `docs/design-system/` を正本とし、画面内の配置と命名は [UX 契約 buttons.md](../platform/docs/ux-contracts/buttons.md) に従う。
 
 ## デザインシステム / UI
 
 - 共通ルール（platform が正本・禁止事項・画面の構成・lint・UI 変更の検証）は [../AGENTS.md](../AGENTS.md)「デザインシステム / UI」に従う。lint は `frontend/eslint.config.mjs` が `../../platform/docs/design-system/adherence.oxlintrc.json` を import する。
-- 本ディレクトリの `docs/frontend-button-spec.md` / `docs/frontend-messaging-spec.md` は、デザインシステムが規定しない範囲でのみ有効とする。
+- 本ディレクトリの `docs/frontend-messaging-spec.md` は、デザインシステムと UX 契約が規定しない範囲でのみ有効とする。
 
 ### RAG 固有
 
