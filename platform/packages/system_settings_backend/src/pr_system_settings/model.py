@@ -411,7 +411,9 @@ def resolve_api_key(settings: Any, payload: ModelSettingsPayload) -> str:
     """保存後の API key（空欄は現在値を保持、`clear_api_key` は削除）。"""
     enterprise = payload.enterprise_ai
     return _secret_value(
-        current=_api_key_of(settings), update=enterprise.api_key, clear=enterprise.clear_api_key
+        current=_api_key_of(settings),
+        update=enterprise.api_key,
+        clear=enterprise.clear_api_key,
     )
 
 

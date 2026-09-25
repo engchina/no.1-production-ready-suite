@@ -1,3 +1,5 @@
 # gitleaks の誤検知を fingerprint 単位で除外する（#71 の monorepo 取り込み時に確認済み）。
 # nl2sql のサイドナビ設定にある i18n キー（nav.section の値）を generic-api-key と誤検知したもの。
 8b9a0b9e330650cda08aadef9ca2e178d1393d5a:nl2sql/frontend/src/components/layout/nav-config.ts:generic-api-key:39
+# pr_system_settings.model の resolve_api_key（payload の api_key を引数に渡す行）を誤検知したもの（#103）。
+8cb12f5a5bc52ebbed7566c7d9b6f29e6607bdfb:platform/packages/system_settings_backend/src/pr_system_settings/model.py:generic-api-key:414
