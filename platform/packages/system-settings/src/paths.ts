@@ -3,5 +3,7 @@
  * 各製品の lib/routes.ts はこの値を参照する。
  */
 export const SYSTEM_SETTINGS_PATHS = {
+  oci: "/settings/oci",
+  uploadStorage: "/settings/upload-storage",
   appearance: "/settings/appearance",
 } as const;

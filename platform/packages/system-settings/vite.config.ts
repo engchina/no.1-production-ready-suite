@@ -4,7 +4,7 @@ import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
 // ライブラリモード: 共有システム設定画面を ESM で出力する。
-// React と共有 UI（@engchina/production-ready-ui）は消費側のものを使う（external）。
+// React / router / React Query / アイコン / 共有 UI は消費側のものを使う（external）。
 export default defineConfig({
   plugins: [react()],
   build: {
@@ -14,7 +14,15 @@ export default defineConfig({
       fileName: () => "index.js",
     },
     rollupOptions: {
-      external: ["react", "react/jsx-runtime", "react-dom", "@engchina/production-ready-ui"],
+      external: [
+        "react",
+        "react/jsx-runtime",
+        "react-dom",
+        "react-router-dom",
+        "@tanstack/react-query",
+        "lucide-react",
+        "@engchina/production-ready-ui",
+      ],
     },
     sourcemap: true,
     emptyOutDir: true,

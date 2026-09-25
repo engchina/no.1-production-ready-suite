@@ -8,6 +8,17 @@
 
 import { t } from "./i18n";
 
+// アップロード保存先 API の型は platform の共有パッケージが正本（#97）。
+export type {
+  UploadStorageBackend,
+  UploadStorageSettingsData,
+  UploadStorageSettingsUpdate,
+} from "@engchina/production-ready-system-settings";
+import type {
+  UploadStorageSettingsData,
+  UploadStorageSettingsUpdate,
+} from "@engchina/production-ready-system-settings";
+
 export const API_REQUEST_TIMEOUT_MS = resolveTimeoutMs(
   import.meta.env.VITE_API_TIMEOUT_MS,
   30_000
@@ -110,7 +121,6 @@ export type ModelSettingsTestTargetType =
   | "enterprise_vision"
   | "embedding"
   | "rerank";
-export type UploadStorageBackend = "local" | "oci";
 export type DatabaseConnectionTestStatus = "success" | "failed" | "skipped";
 export type OciConfigTestStatus = "success" | "failed";
 export type OciConfigTestStageKey = "config_format" | "key_file" | "region" | "authentication";
@@ -1596,23 +1606,7 @@ export interface HuggingFaceSettingsUpdate {
 }
 
 // --- 設定: アップロード保存先 ---
-export interface UploadStorageSettingsData {
-  backend: UploadStorageBackend;
-  local_storage_dir: string;
-  object_storage_region: string;
-  object_storage_namespace: string;
-  object_storage_bucket: string;
-  readiness: string;
-  max_upload_bytes: number;
-  config_source: "runtime";
-}
 
-export interface UploadStorageSettingsUpdate {
-  backend: UploadStorageBackend;
-  local_storage_dir: string;
-  object_storage_namespace?: string;
-  object_storage_bucket: string;
-}
 
 // --- 設定: Parser adapter ---
 export interface ParserAdapterStatusData {
