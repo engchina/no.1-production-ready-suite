@@ -1,11 +1,11 @@
 import { PageHeaderStatusBadge } from "@/components/PageHeaderStatusBadge";
-import { ProcessingIndicator, type ProcessingPlacement } from "@/components/ProcessingState";
 
 import { useSchemaRefreshCoordinator } from "../SchemaRefreshCoordinator";
 import {
   schemaRefreshHeaderPresentation,
   schemaRefreshProcessingLabel,
 } from "../schemaRefreshPresentation";
+import { ProcessingIndicator, type ProcessingPlacement } from "@engchina/production-ready-ui";
 
 export function SchemaRefreshHeaderStatus({ testId }: { testId?: string }) {
   const { error, isStarting, job } = useSchemaRefreshCoordinator();

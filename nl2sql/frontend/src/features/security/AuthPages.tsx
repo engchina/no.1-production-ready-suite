@@ -8,13 +8,13 @@ import {
   CardTitle,
   TextField,
   toast,
+  ProcessingIndicator,
 } from "@engchina/production-ready-ui";
 import { useState, type FormEvent, type ReactNode } from "react";
 import { ArrowLeft, KeyRound, LogIn, LogOut, ShieldCheck } from "lucide-react";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
 
 
-import { ProcessingIndicator } from "@/components/ProcessingState";
 import { FieldLabel } from "@/components/ui/required-field";
 import { ApiError } from "@/lib/api";
 import { t } from "@/lib/i18n";

@@ -1,8 +1,7 @@
-import { Skeleton } from "@engchina/production-ready-ui";
+import { Skeleton, TimedLoadingState } from "@engchina/production-ready-ui";
 import { DatabaseSettingsPage } from "@engchina/production-ready-system-settings";
 import { useQueryClient } from "@tanstack/react-query";
 
-import { TimedLoadingState } from "@/components/ProcessingState";
 import { SelectAiCredentialCard } from "@/components/settings/SelectAiCredentialCard";
 import { ApiError, api } from "@/lib/api";
 import { t } from "@/lib/i18n";
