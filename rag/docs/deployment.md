@@ -57,7 +57,11 @@ ln -s "${NEW}" "${OLD}"
 
 ## 本番構成
 
-推奨:
+OCI Resource Manager の Terraform stack（[`terraform/stack/`](../terraform/README.md)）は、Compute 1 台で `docker-compose.yml`
+（backend / ingestion-worker / 前処理 / CPU parser）を動かし、host の Nginx が frontend を配信する構成を作る。
+ADB（Oracle 26ai）と Wallet も stack が用意し、RAG の system schema はアプリの CLI（`app.rag.system_schema_cli initialize`）で適用する。
+
+規模が大きくなった場合の推奨:
 
 - Frontend: Vite build artifact を配信する nginx container を OCI Container Instances または OKE に配置。
 - Backend: FastAPI + Uvicorn/Gunicorn container を OKE に配置。

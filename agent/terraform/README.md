@@ -22,7 +22,9 @@ python agent/scripts/verify_terraform_stack_contract.py agent/dist/production-re
 ```
 
 出力は `agent/dist/production-ready-agent-terraform-stack.zip` です。この zip を Resource Manager へ upload して stack を作成します。
-release（`agent-v*` tag）と Deploy ボタンは、製品共通の release workflow（#94）で扱います。
+release は製品共通の `.github/workflows/terraform-release.yml` が `agent-v*` の tag から作ります（#94）。最初の release（`agent-v0.1.0`）を作った後は、次のボタンで配備できます（tag を固定して参照します。`releases/latest` は別製品の release を指しうるため使いません）。
+
+[![Deploy to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?region=ap-osaka-1&zipUrl=https://github.com/engchina/no.1-production-ready-suite/releases/download/agent-v0.1.0/production-ready-agent-terraform-stack.zip)
 
 CI（`.github/workflows/ci.yml` の `Agent / Terraform`）は、`terraform fmt` / `terraform validate`（Terraform 1.5.7）、
 zip の契約検証、`scripts/tests/init-script-deployment.test.sh` を実行します。実テナンシーへの配備確認は手動で行います。
