@@ -84,7 +84,7 @@ RAG の製品語は **ナレッジ構築**、**業務ビュー**、**検索・�
 ### RAG 固有
 
 - 移行時に `ToggleChip` をタブとして使っている箇所（ビューの切替）を `Tabs` に置き換え、絞り込みの箇所だけ `ToggleChip` に残す。
-- `--font-mono`（ID・ログ・SQL の等幅書体）は、本リポジトリで `@fontsource/google-sans-code` を自前ホストしてから定義する。
+- `--font-mono`（ID・ログ・SQL の等幅書体）は platform の共有 tokens が定義する。書体ファイルは `frontend/src/fonts.css` で `@fontsource/google-sans-code` を自前ホストする。
 
 ## RAG 設定責務
 
