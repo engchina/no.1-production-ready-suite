@@ -10,6 +10,28 @@ import { t } from "./i18n";
 
 // OCI 認証 API の型は platform の共有パッケージが正本（#100）。
 // モデル設定の API 型は3製品共通（platform の共有パッケージ。#103）。
+// データベース設定の API 型は3製品共通（platform の共有パッケージ。#108）。
+export type {
+  AdbInfoData,
+  AdbOperationStatus,
+  AdbSettingsUpdate,
+  DatabaseConnectionSecurity,
+  DatabaseConnectionTestResult,
+  DatabaseConnectionTestStatus,
+  DatabasePasswordRevealData,
+  DatabaseSettingsData,
+  DatabaseSettingsUpdate,
+  DatabaseWalletDownloadData,
+} from "@engchina/production-ready-system-settings";
+import type {
+  AdbInfoData,
+  AdbSettingsUpdate,
+  DatabaseConnectionTestResult,
+  DatabasePasswordRevealData,
+  DatabaseSettingsData,
+  DatabaseSettingsUpdate,
+  DatabaseWalletDownloadData,
+} from "@engchina/production-ready-system-settings";
 export type {
   EnterpriseAiConfiguredModel,
   EnterpriseAiModelSettings,
@@ -400,8 +422,6 @@ export async function apiDelete<T>(
 export type JsonValue =
   string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 
-export type DatabaseConnectionTestStatus = "success" | "failed";
-
 export interface DatabaseStatusData {
   context_id?: string;
   status: "ok" | "not_configured" | "setup_required" | "unreachable";
@@ -429,27 +449,6 @@ export interface SettingsApiResponse<T> {
   error_code?: string;
   problem?: ApiProblem;
   request_id?: string;
-}
-
-export type DatabaseConnectionSecurity = "wallet_mtls" | "walletless_tls";
-
-export interface DatabaseSettingsData {
-  user: string;
-  dsn: string;
-  driver_mode: "thin" | "thick";
-  connection_security: DatabaseConnectionSecurity;
-  client_lib_dir: string;
-  wallet_dir: string;
-  wallet_uploaded: boolean;
-  available_services: string[];
-  has_password: boolean;
-  has_wallet_password: boolean;
-  readiness: string;
-  embedding_dimension: number;
-  vector_column: string;
-  adb_ocid: string;
-  region: string;
-  config_source: "runtime";
 }
 
 export type SelectAiCredentialRegion = "ap-osaka-1" | "us-chicago-1";
@@ -543,15 +542,6 @@ export interface SystemTablesOperationData extends SystemTablesStatusData {
 
 export type DatabaseWalletDownloadStatus = "downloaded" | "already_configured";
 
-export interface DatabaseWalletDownloadData {
-  status: DatabaseWalletDownloadStatus;
-  settings: DatabaseSettingsData;
-}
-
-export interface DatabasePasswordRevealData {
-  password: string;
-}
-
 export interface SchemaOwnersData {
   current_owner: string;
   owners: Array<{
@@ -561,56 +551,6 @@ export interface SchemaOwnersData {
     view_count: number;
   }>;
   excluded_oracle_maintained_count: number;
-}
-
-export type AdbOperationStatus =
-  | "success"
-  | "not_configured"
-  | "error"
-  | "accepted"
-  | "already_available"
-  | "already_stopped"
-  | "cannot_start"
-  | "cannot_stop";
-
-export interface AdbInfoData {
-  status: AdbOperationStatus;
-  message: string;
-  error_code?: string | null;
-  id: string | null;
-  display_name: string | null;
-  lifecycle_state: string | null;
-  db_name: string | null;
-  cpu_core_count: number | null;
-  data_storage_size_in_tbs: number | null;
-  region: string | null;
-}
-
-export interface AdbSettingsUpdate {
-  adb_ocid: string;
-  region: string;
-}
-
-export interface DatabaseSettingsUpdate {
-  user: string;
-  dsn: string;
-  connection_security?: DatabaseConnectionSecurity;
-  wallet_dir: string;
-  password?: string;
-  wallet_password?: string;
-  clear_password?: boolean;
-  clear_wallet_password?: boolean;
-}
-
-export interface DatabaseConnectionTestResult {
-  status: DatabaseConnectionTestStatus;
-  readiness: string;
-  message: string;
-  elapsed_ms: number;
-  troubleshooting: string[];
-  details: Record<string, string | number | boolean | null>;
-  checked_at: string;
-  error_type: string | null;
 }
 
 /** API 由来のエラー。`messages` は日本語のユーザー向け文言。 */

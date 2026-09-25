@@ -507,6 +507,10 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
         return state.databaseSettings;
       }
     }
+    if (method === "POST" && at("settings", "database", "wallet", "download")) {
+      // 共有画面（#108）は ADB の保存後に OCI から Wallet の取得を試みる。
+      return { status: "already_configured", settings: state.databaseSettings };
+    }
     if (method === "GET" && at("settings", "database", "adb")) return state.adbInfo;
     if (method === "POST" && at("settings", "database", "adb", "settings")) {
       const adbOcid = String(body.adb_ocid ?? "").trim();

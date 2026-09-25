@@ -15,6 +15,9 @@ interface DatabaseSettingsData {
   vector_column: string;
   adb_ocid: string;
   region: string;
+  driver_mode: "thin" | "thick";
+  connection_security: "wallet_mtls" | "walletless_tls";
+  client_lib_dir: string;
   config_source: "runtime";
 }
 
@@ -42,6 +45,9 @@ const databaseSettings: DatabaseSettingsData = {
   vector_column: "VECTOR(1536, FLOAT32)",
   adb_ocid: "",
   region: "ap-osaka-1",
+  driver_mode: "thick",
+  connection_security: "wallet_mtls",
+  client_lib_dir: "/u01/aipoc/instantclient_23_26",
   config_source: "runtime",
 };
 
@@ -92,38 +98,31 @@ test("データベース設定から Wallet ZIP をアップロードできる",
   await expect(page.getByRole("heading", { name: "データベース設定" }).first()).toBeVisible();
   await expect(page.getByLabel("データベースユーザー")).toHaveValue("rag_app");
   await expect(page.getByLabel("データベースパスワード")).toBeVisible();
-  // Wallet 状態・Readiness は右「構成状態」パネル(form 外)に一本化。左フォームは保存先パスのみ。
-  await expect(main.getByText("未検出")).toBeVisible();
-  await expect(
-    page.getByText("Wallet保存先: /u01/aipoc/instantclient_23_26/network/admin")
-  ).toBeVisible();
-  await expect(page.getByRole("heading", { name: ".env プレビュー" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "運用メモ" })).toBeVisible();
-  await expect(page.getByLabel(".env プレビュー")).toContainText("ORACLE_USER=rag_app");
-  await expect(page.getByText("認証方式")).toBeVisible();
-  await expect(main.getByText("アダプタ")).toHaveCount(0);
-  await expect(main.getByText("反映先")).toHaveCount(0);
-  await expect(main.getByText("サービス名候補")).toHaveCount(0);
+  // 共有画面（NL2SQL と同じ。#108）は右側の構成状態・.env プレビュー・運用メモを持たない。
+  await expect(main.getByText("Wallet状態:")).toBeVisible();
+  await expect(main.getByText("未設定", { exact: true })).toBeVisible();
+  await expect(main.getByText("/u01/aipoc/instantclient_23_26/network/admin")).toBeVisible();
+  await expect(page.getByRole("heading", { name: ".env プレビュー" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "運用メモ" })).toHaveCount(0);
+  await expect(page.getByText("認証方式")).toHaveCount(0);
   await expect(main.getByText("Embedding 次元")).toHaveCount(0);
   await expect(main.getByText("ベクトル列")).toHaveCount(0);
-  await page.getByLabel("Wallet ZIP ファイルを選択").setInputFiles({
+  // RAG は Walletless TLS を使わないため、接続セキュリティの選択は出さない。
+  await expect(page.getByLabel("接続セキュリティ")).toHaveCount(0);
+  await page.getByTestId("oracle-wallet-upload-input").setInputFiles({
     name: "Wallet_RAGDB.zip",
     mimeType: "application/zip",
     buffer: Buffer.from("wallet-zip"),
   });
 
   await expect(
-    page.getByText("Wallet ZIP をアップロードしました: Wallet_RAGDB.zip")
+    page.getByText("Wallet ZIP をアップロードしました: Wallet_RAGDB.zip").first()
   ).toBeVisible();
-  await expect(main.getByText("Readiness: OK")).toBeVisible();
-  await expect(main.getByText("サービス名候補")).toHaveCount(0);
-  await expect(main.getByText("Embedding 次元")).toHaveCount(0);
-  await expect(page.getByText("ベクトル列")).toHaveCount(0);
+  await expect(main.getByText("設定済み", { exact: true })).toBeVisible();
   const walletService = page.getByRole("combobox", { name: "サービス名 / DSN" });
   await walletService.click();
   await page.getByRole("option", { name: "ragdb_high" }).click();
   await expect(walletService).toContainText("ragdb_high");
-  await expect(page.getByLabel(".env プレビュー")).toContainText("ORACLE_DSN=ragdb_high");
 });
 
 test("保存済み DB 認証 secret をチェックボックスで削除できる", async ({ page }) => {
@@ -146,7 +145,8 @@ test("保存済み DB 認証 secret をチェックボックスで削除でき�
 
   const password = page.getByLabel("データベースパスワード", { exact: true });
   await expect(page.getByText("保存済みパスワードを削除する")).toBeVisible();
-  await expect(page.getByText("保存済み Wallet パスワードを削除する")).toHaveCount(0);
+  // 共有画面は Wallet パスワードの入力と削除も持つ（NL2SQL と同じ。#108）。
+  await expect(page.getByText("保存済み Wallet パスワードを削除する")).toBeVisible();
 
   await page.getByLabel("保存済みパスワードを削除する").check();
   await expect(password).toBeDisabled();
@@ -210,7 +210,8 @@ for (const viewport of [
 
     await page.goto("/settings/database");
 
-    const button = page.getByRole("button", { name: /Wallet ファイルをアップロード/ });
+    // Wallet ZIP のアップロードは共有のドロップ領域（NL2SQL と同じ。#108）。
+    const button = page.getByTestId("oracle-wallet-upload-dropzone");
     await expect(button).toBeVisible();
     const metrics = await button.evaluate((element) => ({
       clientHeight: element.clientHeight,

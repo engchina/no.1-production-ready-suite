@@ -1,5 +1,26 @@
 // OCI 認証 API の型は platform の共有パッケージが正本（#100）。
 // モデル設定の API 型は3製品共通（platform の共有パッケージ。#103）。
+// データベース設定の API 型は3製品共通（platform の共有パッケージ。#108）。
+export type {
+  AdbInfoData,
+  AdbOperationStatus,
+  AdbSettingsUpdate,
+  DatabaseConnectionSecurity,
+  DatabaseConnectionTestResult,
+  DatabaseConnectionTestStatus,
+  DatabasePasswordRevealData,
+  DatabaseSettingsData,
+  DatabaseSettingsUpdate,
+  DatabaseWalletDownloadData,
+} from "@engchina/production-ready-system-settings";
+import type {
+  AdbInfoData,
+  AdbSettingsUpdate,
+  DatabaseConnectionTestResult,
+  DatabaseSettingsData,
+  DatabaseSettingsUpdate,
+  DatabaseWalletDownloadData,
+} from "@engchina/production-ready-system-settings";
 export type {
   EnterpriseAiConfiguredModel,
   EnterpriseAiModelSettings,
@@ -596,72 +617,6 @@ export interface ApprovalDecisionPayload {
   comment?: string;
 }
 
-export type DatabaseConnectionTestStatus = "success" | "failed" | "skipped";
-
-export interface DatabaseSettingsData {
-  user: string;
-  dsn: string;
-  wallet_dir: string;
-  wallet_uploaded: boolean;
-  available_services: string[];
-  has_password: boolean;
-  has_wallet_password: boolean;
-  readiness: string;
-  embedding_dimension: number;
-  vector_column: string;
-  adb_ocid: string;
-  region: string;
-  config_source: "runtime";
-}
-
-export type AdbOperationStatus =
-  | "success"
-  | "not_configured"
-  | "error"
-  | "accepted"
-  | "already_available"
-  | "already_stopped"
-  | "cannot_start"
-  | "cannot_stop";
-
-export interface AdbInfoData {
-  status: AdbOperationStatus;
-  message: string;
-  id: string | null;
-  display_name: string | null;
-  lifecycle_state: string | null;
-  db_name: string | null;
-  cpu_core_count: number | null;
-  data_storage_size_in_tbs: number | null;
-  region: string | null;
-}
-
-export interface AdbSettingsUpdate {
-  adb_ocid: string;
-  region: string;
-}
-
-export interface DatabaseSettingsUpdate {
-  user: string;
-  dsn: string;
-  wallet_dir: string;
-  password?: string;
-  wallet_password?: string;
-  clear_password?: boolean;
-  clear_wallet_password?: boolean;
-}
-
-export interface DatabaseConnectionTestResult {
-  status: DatabaseConnectionTestStatus;
-  readiness: string;
-  message: string;
-  elapsed_ms: number;
-  troubleshooting: string[];
-  details: Record<string, string | number | boolean | null>;
-  checked_at: string;
-  error_type: string | null;
-}
-
 export class ApiError extends Error {
   readonly status: number;
   readonly messages: string[];
@@ -1060,6 +1015,13 @@ export const api = {
       body: form,
     });
   },
+  downloadDatabaseWallet: () =>
+    request<DatabaseWalletDownloadData>(
+      "/api/settings/database/wallet/download",
+      {
+        method: "POST",
+      },
+    ),
   testDatabaseSettings: (body: DatabaseSettingsUpdate) =>
     request<DatabaseConnectionTestResult>(
       "/api/settings/database/test",

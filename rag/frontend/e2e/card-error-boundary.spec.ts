@@ -105,7 +105,7 @@ test("system table カードが throw しても ADB 管理カードは表示さ�
   await expect(page.getByLabel("ADB OCID")).toHaveValue(
     "ocid1.autonomousdatabase.oc1..rag"
   );
-  await expect(page.getByText("状態: 停止済み")).toBeVisible();
+  await expect(page.getByText("OCI ADB: 停止済み")).toBeVisible();
 
   // データベース接続設定フォームも残る(ページ見出しとカード見出しの 2 箇所)。
   await expect(
