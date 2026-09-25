@@ -9,26 +9,21 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
-import io
 import json
 import os
 import re
-import shutil
 import stat
 from asyncio import sleep, wait_for
 from collections.abc import Iterable, Mapping
 from csv import DictWriter
 from datetime import UTC, datetime
-from email import policy
-from email.parser import BytesParser
 from importlib import import_module
 from io import StringIO
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from time import monotonic
 from types import SimpleNamespace
 from typing import Any, cast
 from uuid import uuid4
-from zipfile import BadZipFile, ZipFile
 
 import httpx
 from anyio import fail_after
@@ -45,6 +40,7 @@ from fastapi import (
 )
 from fastapi.responses import Response, StreamingResponse
 from pr_backend_core import ApiResponse
+from pr_system_settings.database import build_database_router
 from pr_system_settings.model import (
     EnterpriseAiModelSettings,
     GenerativeAiModelSettings,
@@ -59,7 +55,7 @@ from pr_system_settings.oci_auth import (
 from pr_system_settings.upload_storage import (
     build_upload_storage_router,
 )
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 
 from app.features.agent.config import runtime_config_store
 from app.features.agent.control_plane import (
@@ -154,16 +150,6 @@ BACKEND_ENV_FILE = BACKEND_ROOT / ".env"
 PASSPHRASE_CONFIG_KEYS = frozenset({"pass_phrase", "passphrase", "key_password"})
 ENV_ASSIGNMENT_RE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=")
 ENV_FILE_MODE = 0o600
-ORACLE_WALLET_MAX_BYTES = 20 * 1024 * 1024
-ORACLE_WALLET_MAX_EXTRACTED_BYTES = 100 * 1024 * 1024
-ORACLE_WALLET_DIR_NAME = "wallet"
-ORACLE_WALLET_REQUIRED_FILES = frozenset(
-    {"tnsnames.ora", "sqlnet.ora", "cwallet.sso", "ewallet.pem"}
-)
-ORACLE_WALLET_SKIPPED_FILES = frozenset(
-    {"readme", "keystore.jks", "truststore.jks", "ojdbc.properties", "ewallet.p12"}
-)
-ORACLE_ERROR_CODE_RE = re.compile(r"\b(?:ORA|DPY|DPI)-\d{4,5}\b", re.IGNORECASE)
 MODEL_TEST_IMAGE_BYTES = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9s"
     "AAAAASUVORK5CYII="
@@ -337,70 +323,6 @@ class PlannerSettingsPatch(BaseModel):
     allow_command_generation: bool | None = None
 
 
-class DatabaseSettingsData(BaseModel):
-    user: str = ""
-    dsn: str = ""
-    wallet_dir: str = ""
-    wallet_uploaded: bool = False
-    available_services: list[str] = Field(default_factory=list)
-    has_password: bool = False
-    has_wallet_password: bool = False
-    readiness: str = "missing"
-    embedding_dimension: int = 1536
-    vector_column: str = "VECTOR(1536, FLOAT32)"
-    adb_ocid: str = ""
-    region: str = ""
-    config_source: str = "runtime"
-
-
-class DatabaseSettingsUpdate(BaseModel):
-    user: str = Field(default="", max_length=256)
-    dsn: str = Field(default="", max_length=1024)
-    wallet_dir: str = Field(default="", max_length=1024)
-    password: str | None = Field(default=None, max_length=4096)
-    wallet_password: str | None = Field(default=None, max_length=4096)
-    clear_password: bool = False
-    clear_wallet_password: bool = False
-
-    @field_validator("user", "dsn", "wallet_dir")
-    @classmethod
-    def strip_text(cls, value: str) -> str:
-        return value.strip()
-
-
-class DatabaseConnectionTestResult(BaseModel):
-    status: str
-    readiness: str
-    message: str
-    elapsed_ms: int = 0
-    troubleshooting: list[str] = Field(default_factory=list)
-    details: dict[str, str | int | float | bool | None] = Field(default_factory=dict)
-    checked_at: str
-    error_type: str | None = None
-
-
-class AdbInfoData(BaseModel):
-    status: str = "not_configured"
-    message: str = ""
-    id: str | None = None
-    display_name: str | None = None
-    lifecycle_state: str | None = None
-    db_name: str | None = None
-    cpu_core_count: int | None = None
-    data_storage_size_in_tbs: int | None = None
-    region: str | None = None
-
-
-class AdbSettingsUpdate(BaseModel):
-    adb_ocid: str = Field(default="", max_length=512)
-    region: str = Field(default="", max_length=128)
-
-    @field_validator("adb_ocid", "region")
-    @classmethod
-    def strip_text(cls, value: str) -> str:
-        return value.strip()
-
-
 class ToolAuditRecord(BaseModel):
     step_id: str
     tool_name: str
@@ -507,6 +429,18 @@ router.include_router(
     ),
     prefix="/settings",
 )
+# データベース設定も3製品共通の実装（pr_system_settings.database。#108）。
+# 接続は Agent の Thin mode 実装を渡す。接続テストも管理者に限定する。
+router.include_router(
+    build_database_router(
+        get_settings=lambda: get_settings(),
+        env_file=lambda: BACKEND_ENV_FILE,
+        test_connection=lambda candidate: _test_database_connection(candidate),
+        write_dependencies=[Depends(require_admin)],
+        action_dependencies=[Depends(require_admin)],
+    ),
+    prefix="/settings",
+)
 # モデル設定も3製品共通の実装（pr_system_settings.model。#103）。
 # 接続テストは外部へ通信するため管理者に限定する。
 router.include_router(
@@ -521,10 +455,6 @@ router.include_router(
 )
 
 
-_database_settings_state: DatabaseSettingsData | None = None
-_adb_info_state: AdbInfoData | None = None
-
-
 def _settings_attr(name: str, default: object) -> object:
     return getattr(get_settings(), name, default)
 
@@ -536,25 +466,6 @@ def _settings_str_from(settings: object, name: str, default: str = "") -> str:
 
 def _settings_str(name: str, default: str = "") -> str:
     return _settings_str_from(get_settings(), name, default)
-
-
-def _resolved_oracle_adb_region(settings: object) -> str:
-    return (
-        _settings_str_from(settings, "oracle_adb_region")
-        or _settings_str_from(settings, "oci_region")
-        or _settings_str_from(settings, "oracle_region")
-    )
-
-
-def _settings_first_from(settings: object, names: tuple[str, ...], default: object = "") -> object:
-    for name in names:
-        value = getattr(settings, name, None)
-        if value is None:
-            continue
-        if isinstance(value, str) and not value:
-            continue
-        return value
-    return default
 
 
 def _settings_int_from(settings: object, name: str, default: int) -> int:
@@ -595,18 +506,6 @@ def _coerce_float(value: object, default: float) -> float:
 
 def _settings_float(name: str, default: float) -> float:
     return _settings_float_from(get_settings(), name, default)
-
-
-def _now_iso() -> str:
-    return datetime.now(UTC).isoformat()
-
-
-def _secret_value(*, current: str, update: str | None, clear: bool) -> str:
-    if clear:
-        return ""
-    if update is not None and update != "":
-        return update
-    return current
 
 
 def _is_present(value: str) -> bool:
@@ -977,233 +876,22 @@ def _require_non_empty(value: str, label: str) -> str:
     return cleaned
 
 
-def _get_database_settings_state() -> DatabaseSettingsData:
-    global _database_settings_state
-    if _database_settings_state is None:
-        _database_settings_state = _database_settings_data(get_settings())
-    return _database_settings_state.model_copy(deep=True)
-
-
-def _set_database_settings_state(patch: DatabaseSettingsUpdate) -> DatabaseSettingsData:
-    global _database_settings_state
-    candidate = _database_settings_candidate(_get_database_settings_state(), patch)
-    _database_settings_state = candidate
-    return candidate.model_copy(deep=True)
-
-
-def _database_settings_data(settings: object) -> DatabaseSettingsData:
-    dsn = str(_settings_first_from(settings, ("oracle_dsn", "agent_runtime_oracle_dsn")))
-    user = str(_settings_first_from(settings, ("oracle_user", "agent_runtime_oracle_user")))
-    wallet_dir = _settings_str_from(settings, "resolved_oracle_wallet_dir") or _settings_str_from(
-        settings,
-        "oracle_wallet_dir",
-    )
-    wallet_path = Path(wallet_dir).expanduser() if wallet_dir else None
-    if wallet_path is not None:
-        _sanitize_database_wallet_dir(wallet_path)
-    wallet_uploaded = wallet_path is not None and wallet_path.is_dir()
-    available_services = (
-        _extract_wallet_services(wallet_path) if wallet_path is not None and wallet_uploaded else []
-    )
-    has_password = bool(
-        _settings_first_from(settings, ("oracle_password", "agent_runtime_oracle_password"))
-    )
-    embedding_dim = _coerce_int(
-        _settings_first_from(settings, ("oci_genai_embedding_dim", "embedding_dim"), 1536),
-        1536,
-    )
-    data = DatabaseSettingsData(
-        user=user,
-        dsn=dsn,
-        wallet_dir=wallet_dir,
-        wallet_uploaded=wallet_uploaded,
-        available_services=available_services,
-        has_password=has_password,
-        has_wallet_password=bool(_settings_str_from(settings, "oracle_wallet_password")),
-        embedding_dimension=embedding_dim,
-        vector_column=f"VECTOR({embedding_dim}, FLOAT32)",
-        adb_ocid=_settings_str_from(settings, "oracle_adb_ocid")
-        or _settings_str_from(settings, "adb_ocid"),
-        region=_resolved_oracle_adb_region(settings),
-        config_source="runtime",
-    )
-    data.readiness = _database_readiness(data)
-    return data
-
-
-def _extract_wallet_services(wallet_path: Path) -> list[str]:
-    tnsnames = wallet_path / "tnsnames.ora"
-    if not tnsnames.is_file():
-        return []
-    try:
-        content = tnsnames.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return []
-    reserved_names = {
-        "ADDRESS",
-        "ADDRESS_LIST",
-        "CONNECT_DATA",
-        "DESCRIPTION",
-        "DESCRIPTION_LIST",
-        "HOST",
-        "PORT",
-        "PROTOCOL",
-        "SECURITY",
-        "SERVICE_NAME",
-        "SSL_SERVER_CERT_DN",
-    }
-    services: list[str] = []
-    seen: set[str] = set()
-    for match in re.finditer(r"(?m)^([A-Za-z0-9_.-]+)\s*=", content):
-        service = match.group(1)
-        normalized = service.upper()
-        if normalized in reserved_names or normalized in seen:
-            continue
-        seen.add(normalized)
-        services.append(service)
-    return services
-
-
-def _sanitize_database_wallet_dir(wallet_path: Path) -> None:
-    if not wallet_path.is_dir():
-        return
-    for file_name in ORACLE_WALLET_SKIPPED_FILES:
-        try:
-            path = wallet_path / file_name
-            if path.is_file():
-                path.unlink()
-        except OSError:
-            continue
-
-
-def _database_settings_candidate(
-    base: DatabaseSettingsData,
-    payload: DatabaseSettingsUpdate,
-) -> DatabaseSettingsData:
-    candidate = base.model_copy(
-        update={
-            "user": payload.user,
-            "dsn": payload.dsn,
-            "wallet_dir": payload.wallet_dir or base.wallet_dir,
-            "available_services": [payload.dsn] if payload.dsn else [],
-            "has_password": bool(
-                _secret_value(
-                    current="__saved__" if base.has_password else "",
-                    update=payload.password,
-                    clear=payload.clear_password,
-                )
+async def _test_database_connection(candidate: Any) -> None:
+    """共有 router の接続 hook。Agent は python-oracledb の Thin mode だけで接続する。"""
+    await _test_oracle_connection(
+        SimpleNamespace(
+            oracle_user=_settings_str_from(candidate, "oracle_user"),
+            oracle_dsn=_settings_str_from(candidate, "oracle_dsn"),
+            oracle_password=_settings_str_from(candidate, "oracle_password"),
+            oracle_wallet_dir=_settings_str_from(candidate, "resolved_oracle_wallet_dir"),
+            oracle_wallet_password=_settings_str_from(candidate, "oracle_wallet_password"),
+            oracle_tcp_connect_timeout_seconds=getattr(
+                candidate, "oracle_tcp_connect_timeout_seconds", 10.0
             ),
-            "has_wallet_password": bool(
-                _secret_value(
-                    current="__saved__" if base.has_wallet_password else "",
-                    update=payload.wallet_password,
-                    clear=payload.clear_wallet_password,
-                )
+            oracle_db_test_timeout_seconds=getattr(
+                candidate, "oracle_db_test_timeout_seconds", 15.0
             ),
-        }
-    )
-    candidate.readiness = _database_readiness(candidate)
-    return candidate
-
-
-def _database_readiness(data: DatabaseSettingsData) -> str:
-    if not data.user or not data.dsn:
-        return "missing"
-    if not (data.has_password or data.wallet_uploaded or data.has_wallet_password):
-        return "missing_credentials"
-    return "ok"
-
-
-def _persist_database_settings(
-    settings: object,
-    data: DatabaseSettingsData,
-    payload: DatabaseSettingsUpdate,
-) -> None:
-    oracle_password = _secret_value(
-        current=_settings_str_from(settings, "oracle_password")
-        or _settings_str_from(settings, "agent_runtime_oracle_password"),
-        update=payload.password,
-        clear=payload.clear_password,
-    )
-    wallet_password = _secret_value(
-        current=_settings_str_from(settings, "oracle_wallet_password"),
-        update=payload.wallet_password,
-        clear=payload.clear_wallet_password,
-    )
-    values = {
-        "ORACLE_USER": data.user,
-        "ORACLE_PASSWORD": oracle_password,
-        "ORACLE_DSN": data.dsn,
-        "ORACLE_CLIENT_LIB_DIR": _settings_str_from(
-            settings,
-            "oracle_client_lib_dir",
-            "/u01/aipoc/instantclient_23_26",
-        ),
-        "ORACLE_WALLET_PASSWORD": wallet_password,
-    }
-    if not values["ORACLE_CLIENT_LIB_DIR"].strip() and data.wallet_dir:
-        values["ORACLE_WALLET_DIR"] = data.wallet_dir
-    _write_env_values(
-        BACKEND_ENV_FILE,
-        values,
-        section_comment="# Oracle 26ai",
-        error_detail="Oracle 26ai 接続設定を backend/.env へ保存できませんでした。",
-    )
-    _set_if_possible(settings, "oracle_user", data.user)
-    _set_if_possible(settings, "oracle_password", oracle_password)
-    _set_if_possible(settings, "oracle_dsn", data.dsn)
-    _set_if_possible(settings, "oracle_wallet_dir", data.wallet_dir)
-    _set_if_possible(settings, "oracle_wallet_password", wallet_password)
-
-
-def _persist_adb_settings(settings: object, data: DatabaseSettingsData) -> None:
-    _write_env_values(
-        BACKEND_ENV_FILE,
-        {
-            "ORACLE_ADB_OCID": data.adb_ocid,
-            "ORACLE_ADB_REGION": data.region,
-        },
-        section_comment="# Oracle Autonomous Database 管理",
-        error_detail="ADB 設定を backend/.env へ保存できませんでした。",
-    )
-    _set_if_possible(settings, "oracle_adb_ocid", data.adb_ocid)
-    _set_if_possible(settings, "adb_ocid", data.adb_ocid)
-    _set_if_possible(settings, "oracle_adb_region", data.region)
-
-
-def _database_connection_test_candidate(
-    settings: object,
-    payload: DatabaseSettingsUpdate,
-) -> SimpleNamespace:
-    base = _database_settings_data(settings)
-    candidate = _database_settings_candidate(base, payload)
-    oracle_password = _secret_value(
-        current=_settings_str_from(settings, "oracle_password")
-        or _settings_str_from(settings, "agent_runtime_oracle_password"),
-        update=payload.password,
-        clear=payload.clear_password,
-    )
-    wallet_password = _secret_value(
-        current=_settings_str_from(settings, "oracle_wallet_password"),
-        update=payload.wallet_password,
-        clear=payload.clear_wallet_password,
-    )
-    return SimpleNamespace(
-        oracle_user=candidate.user,
-        oracle_dsn=candidate.dsn,
-        oracle_password=oracle_password,
-        oracle_wallet_dir=candidate.wallet_dir,
-        oracle_wallet_password=wallet_password,
-        oracle_tcp_connect_timeout_seconds=_coerce_float(
-            _settings_first_from(settings, ("oracle_tcp_connect_timeout_seconds",), 10.0),
-            10.0,
-        ),
-        oracle_db_test_timeout_seconds=_coerce_float(
-            _settings_first_from(settings, ("oracle_db_test_timeout_seconds",), 15.0),
-            15.0,
-        ),
-        readiness=_database_readiness(candidate),
-        display_dsn=candidate.dsn,
+        )
     )
 
 
@@ -1254,110 +942,6 @@ def _oracle_connect_kwargs(settings: SimpleNamespace) -> dict[str, object]:
     return kwargs
 
 
-def _oracle_error_codes(error_text: str) -> list[str]:
-    return list(dict.fromkeys(match.upper() for match in ORACLE_ERROR_CODE_RE.findall(error_text)))
-
-
-def _database_connection_error_message(exc: Exception, oracle_error_codes: list[str]) -> str:
-    if getattr(exc, "safe_for_user", False):
-        return str(exc)
-
-    code_label = f"（{', '.join(oracle_error_codes)}）" if oracle_error_codes else ""
-    code_set = set(oracle_error_codes)
-    if isinstance(exc, ModuleNotFoundError):
-        return "python-oracledb がインストールされていないため、Oracle 26ai へ接続できません。"
-    if "ORA-01017" in code_set:
-        return (
-            f"Oracle 26ai へ接続できませんでした{code_label}。"
-            "ユーザー名または DB パスワードを確認してください。"
-        )
-    if "ORA-12154" in code_set:
-        return (
-            f"Oracle 26ai へ接続できませんでした{code_label}。"
-            "Wallet サービス名が tnsnames.ora に存在するか確認してください。"
-        )
-    if "ORA-12506" in code_set:
-        return (
-            f"Oracle 26ai へ接続できませんでした{code_label}。"
-            "ADB のアクセス制御リストまたは network ACL が"
-            "この接続元を許可しているか確認してください。"
-        )
-    if code_set & {"ORA-12514", "ORA-12505"}:
-        return (
-            f"Oracle 26ai へ接続できませんでした{code_label}。"
-            "Wallet サービス名と ADB の稼働状態を確認してください。"
-        )
-    if code_set & {"ORA-12541", "DPY-6005", "DPY-6000"}:
-        return (
-            f"Oracle 26ai へ接続できませんでした{code_label}。"
-            "ADB の listener と TCPS 1522 への到達性を確認してください。"
-        )
-    if "DPY-4011" in code_set:
-        return (
-            f"Oracle 26ai へ接続できませんでした{code_label}。"
-            "Wallet ZIP と Wallet パスワードを確認してください。"
-        )
-    if code_set & {"DPI-1047", "DPI-1072"}:
-        return (
-            f"Oracle 26ai へ接続できませんでした{code_label}。"
-            "Oracle Instant Client の配置を確認してください。"
-        )
-    if oracle_error_codes:
-        return (
-            f"Oracle 26ai へ接続できませんでした{code_label}。"
-            "下の確認ポイントと backend ログを確認してください。"
-        )
-    return "Oracle 26ai へ接続できませんでした。下の確認ポイントと backend ログを確認してください。"
-
-
-def _database_connection_troubleshooting(
-    *,
-    readiness: str,
-    error_text: str = "",
-    error_type: str = "",
-) -> list[str]:
-    tips: list[str] = []
-    if readiness == "missing":
-        tips.append("ユーザー名、DSN、Wallet ZIP が入力・アップロード済みか確認してください。")
-    if readiness == "missing_credentials":
-        tips.append("DB パスワードまたは Wallet パスワードが保存済みか確認してください。")
-
-    combined = f"{error_text} {error_type}".lower()
-    if "modulenotfounderror" in combined or "oracledb" in combined:
-        tips.append("backend の依存関係に python-oracledb が含まれているか確認してください。")
-    if any(token in combined for token in ("timeout", "timed out", "oracleconnectiontimeouterror")):
-        tips.append(
-            "接続テストがタイムアウトしました。ADB が起動中か、ネットワーク経路から "
-            "TCPS 1522 に到達できるか確認してください。"
-        )
-    if "ora-01017" in combined:
-        tips.append("ユーザー名または DB パスワードが正しいか確認してください。")
-    if "ora-12154" in combined or "tns" in combined:
-        tips.append("Wallet サービス名が tnsnames.ora に存在するか確認してください。")
-    if "ora-12506" in combined:
-        tips.append("ADB のアクセス制御リストまたは network ACL を確認してください。")
-    if "dpy-4011" in combined:
-        tips.append("Wallet ZIP と Wallet パスワードを確認してください。")
-    if "dpi-1047" in combined:
-        tips.append(
-            "Oracle Instant Client が必要な実行環境では" "配置とライブラリパスを確認してください。"
-        )
-    if not tips:
-        tips.append("backend ログの Oracle エラーコードと設定値を確認してください。")
-    return list(dict.fromkeys(tips))
-
-
-def _elapsed_ms(started: float) -> int:
-    return max(0, round((monotonic() - started) * 1000))
-
-
-def _set_if_possible(target: object, name: str, value: object) -> None:
-    try:
-        setattr(target, name, value)
-    except (AttributeError, ValueError):
-        return
-
-
 class OracleConnectionTimeoutError(RuntimeError):
     safe_for_user = True
 
@@ -1375,346 +959,9 @@ def _has_pass_phrase(config: Mapping[str, object]) -> bool:
     return any(str(config.get(key, "") or "").strip() for key in PASSPHRASE_CONFIG_KEYS)
 
 
-def _get_adb_info_state() -> AdbInfoData:
-    global _adb_info_state
-    if _adb_info_state is None:
-        database = _get_database_settings_state()
-        _adb_info_state = AdbInfoData(
-            status="success" if database.adb_ocid else "not_configured",
-            message=(
-                "ADB OCID が設定されています。" if database.adb_ocid else "ADB OCID が未設定です。"
-            ),
-            id=database.adb_ocid or None,
-            display_name=None,
-            lifecycle_state="AVAILABLE" if database.adb_ocid else None,
-            db_name=None,
-            region=database.region or None,
-        )
-    return _adb_info_state.model_copy(deep=True)
-
-
-def _set_adb_info_state(patch: AdbSettingsUpdate) -> AdbInfoData:
-    global _adb_info_state, _database_settings_state
-    database = _get_database_settings_state()
-    database.adb_ocid = patch.adb_ocid.strip()
-    database.region = patch.region.strip()
-    _database_settings_state = database
-    _adb_info_state = AdbInfoData(
-        status="success" if database.adb_ocid else "not_configured",
-        message="ADB OCID を保存しました。" if database.adb_ocid else "ADB OCID が未設定です。",
-        id=database.adb_ocid or None,
-        lifecycle_state="AVAILABLE" if database.adb_ocid else None,
-        region=database.region or None,
-    )
-    return _adb_info_state.model_copy(deep=True)
-
-
-async def _uploaded_filename(request: Request) -> str:
-    body = await request.body()
-    if not body:
-        return ""
-    preview = body[:4096].decode("latin-1", errors="ignore")
-    marker = 'filename="'
-    start = preview.find(marker)
-    if start < 0:
-        return ""
-    start += len(marker)
-    end = preview.find('"', start)
-    return preview[start:end] if end >= start else ""
-
-
-async def _uploaded_file_from_request(request: Request) -> tuple[str, bytes]:
-    body = await request.body()
-    if not body:
-        return "", b""
-    content_type = request.headers.get("content-type", "")
-    if "multipart/form-data" not in content_type:
-        return "", body
-
-    message = BytesParser(policy=policy.default).parsebytes(
-        b"Content-Type: "
-        + content_type.encode("utf-8", errors="ignore")
-        + b"\r\nMIME-Version: 1.0\r\n\r\n"
-        + body
-    )
-    for part in message.iter_parts():
-        filename = part.get_filename()
-        if not filename:
-            continue
-        payload = part.get_payload(decode=True)
-        return filename, payload if isinstance(payload, bytes) else b""
-    return "", b""
-
-
-def _install_database_wallet(settings: object, data: bytes, file_name: str | None) -> Path:
-    safe_name = _safe_wallet_filename(file_name)
-    if not safe_name.lower().endswith(".zip"):
-        raise HTTPException(
-            status_code=415,
-            detail="Oracle Wallet は ZIP ファイルを選択してください。",
-        )
-    if not data:
-        raise HTTPException(status_code=400, detail="空の Wallet ZIP はアップロードできません。")
-    if len(data) > ORACLE_WALLET_MAX_BYTES:
-        raise HTTPException(status_code=413, detail="Wallet ZIP のサイズが上限を超えています。")
-
-    target = _wallet_storage_root(settings)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    tmp_dir = target.parent / f".{target.name}.tmp-{uuid4().hex}"
-    try:
-        wallet_dir = _extract_wallet_zip(data, tmp_dir)
-        if target.exists():
-            if target.is_dir():
-                shutil.rmtree(target)
-            else:
-                target.unlink()
-        shutil.move(str(wallet_dir), str(target))
-        return target
-    except HTTPException:
-        raise
-    except OSError as exc:
-        raise HTTPException(
-            status_code=500,
-            detail="Wallet ZIP をバックエンドの保存先へ展開できませんでした。",
-        ) from exc
-    finally:
-        _remove_tmp_wallet_dir(tmp_dir)
-
-
-def _wallet_storage_root(settings: object) -> Path:
-    configured = _settings_str_from(settings, "resolved_oracle_wallet_dir") or _settings_str_from(
-        settings,
-        "oracle_wallet_dir",
-    )
-    if not configured:
-        configured = str(BACKEND_ROOT / ".oracle" / ORACLE_WALLET_DIR_NAME)
-    return Path(configured).expanduser().resolve()
-
-
-def _extract_wallet_zip(data: bytes, target_dir: Path) -> Path:
-    extracted_files: list[Path] = []
-    total_uncompressed = 0
-    try:
-        with ZipFile(io.BytesIO(data)) as archive:
-            members = [member for member in archive.infolist() if not member.is_dir()]
-            if not members:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Wallet ZIP にファイルが含まれていません。",
-                )
-            for member in members:
-                total_uncompressed += member.file_size
-                if total_uncompressed > ORACLE_WALLET_MAX_EXTRACTED_BYTES:
-                    raise HTTPException(
-                        status_code=413,
-                        detail="Wallet ZIP の展開後サイズが上限を超えています。",
-                    )
-                destination = _wallet_member_destination(target_dir, member.filename)
-                if destination.name.lower() in ORACLE_WALLET_SKIPPED_FILES:
-                    continue
-                if _zip_member_is_symlink(member.external_attr):
-                    raise HTTPException(
-                        status_code=400,
-                        detail="Wallet ZIP にシンボリックリンクは含められません。",
-                    )
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                with archive.open(member) as src, destination.open("wb") as dst:
-                    shutil.copyfileobj(src, dst)
-                extracted_files.append(destination)
-    except BadZipFile as exc:
-        raise HTTPException(
-            status_code=400,
-            detail="Wallet ZIP の形式を確認してください。",
-        ) from exc
-
-    wallet_dir = _find_wallet_config_dir(extracted_files)
-    if wallet_dir is None:
-        required = ", ".join(sorted(ORACLE_WALLET_REQUIRED_FILES))
-        raise HTTPException(
-            status_code=400,
-            detail=f"Wallet ZIP に {required} が含まれているか確認してください。",
-        )
-    return wallet_dir
-
-
-def _wallet_member_destination(root: Path, member_name: str) -> Path:
-    path = PurePosixPath(member_name.replace("\\", "/"))
-    if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
-        raise HTTPException(
-            status_code=400,
-            detail="Wallet ZIP に安全でないファイルパスが含まれています。",
-        )
-    destination = (root.joinpath(*path.parts)).resolve()
-    resolved_root = root.resolve()
-    if resolved_root != destination and resolved_root not in destination.parents:
-        raise HTTPException(
-            status_code=400,
-            detail="Wallet ZIP に安全でないファイルパスが含まれています。",
-        )
-    return destination
-
-
-def _find_wallet_config_dir(extracted_files: list[Path]) -> Path | None:
-    candidates = {path.parent for path in extracted_files}
-    for candidate in sorted(candidates, key=lambda path: len(path.parts)):
-        names = {path.name.lower() for path in extracted_files if path.parent == candidate}
-        if ORACLE_WALLET_REQUIRED_FILES.issubset(names):
-            return candidate
-    return None
-
-
 def _zip_member_is_symlink(external_attr: int) -> bool:
     mode = external_attr >> 16
     return bool(mode and stat.S_ISLNK(mode))
-
-
-def _safe_wallet_filename(file_name: str | None) -> str:
-    name = PurePosixPath((file_name or "wallet.zip").replace("\\", "/")).name.strip()
-    name = re.sub(r"[\x00-\x1f\x7f]+", "_", name).strip(" .")
-    return name[:255] if name else "wallet.zip"
-
-
-def _remove_tmp_wallet_dir(path: Path) -> None:
-    if path.exists():
-        shutil.rmtree(path, ignore_errors=True)
-
-
-@router.get("/settings/database", response_model=ApiResponse[DatabaseSettingsData])
-async def get_database_settings() -> ApiResponse[DatabaseSettingsData]:
-    return ApiResponse(data=_get_database_settings_state())
-
-
-@router.patch("/settings/database", response_model=ApiResponse[DatabaseSettingsData])
-async def patch_database_settings(
-    patch: DatabaseSettingsUpdate,
-    _: None = Depends(require_admin),
-) -> ApiResponse[DatabaseSettingsData]:
-    settings = get_settings()
-    data = _set_database_settings_state(patch)
-    _persist_database_settings(settings, data, patch)
-    return ApiResponse(data=_database_settings_data(settings))
-
-
-@router.post("/settings/database/wallet", response_model=ApiResponse[DatabaseSettingsData])
-async def upload_database_wallet(
-    request: Request,
-    _: None = Depends(require_admin),
-) -> ApiResponse[DatabaseSettingsData]:
-    global _database_settings_state
-    settings = get_settings()
-    filename, content = await _uploaded_file_from_request(request)
-    wallet_dir = _install_database_wallet(settings, content, filename)
-    _set_if_possible(settings, "oracle_wallet_dir", str(wallet_dir))
-    data = _database_settings_data(settings)
-    _database_settings_state = data
-    return ApiResponse(data=data)
-
-
-@router.post("/settings/database/test", response_model=ApiResponse[DatabaseConnectionTestResult])
-async def test_database_settings(
-    patch: DatabaseSettingsUpdate,
-) -> ApiResponse[DatabaseConnectionTestResult]:
-    started = monotonic()
-    candidate = _database_connection_test_candidate(get_settings(), patch)
-    readiness = str(candidate.readiness)
-    if readiness != "ok":
-        return ApiResponse(
-            data=DatabaseConnectionTestResult(
-                status="failed",
-                readiness=readiness,
-                message="Oracle 26ai 接続に必要な設定が不足しています。",
-                elapsed_ms=_elapsed_ms(started),
-                troubleshooting=_database_connection_troubleshooting(readiness=readiness),
-                checked_at=_now_iso(),
-                error_type=readiness,
-                details={"dsn": str(candidate.display_dsn) or None},
-            )
-        )
-
-    try:
-        await _test_oracle_connection(candidate)
-    except Exception as exc:  # noqa: BLE001 - Oracle SDK の多様な例外を表示用に握る
-        oracle_error_codes = _oracle_error_codes(str(exc))
-        return ApiResponse(
-            data=DatabaseConnectionTestResult(
-                status="failed",
-                readiness=readiness,
-                message=_database_connection_error_message(exc, oracle_error_codes),
-                elapsed_ms=_elapsed_ms(started),
-                troubleshooting=_database_connection_troubleshooting(
-                    readiness=readiness,
-                    error_text=str(exc),
-                    error_type=type(exc).__name__,
-                ),
-                checked_at=_now_iso(),
-                error_type=type(exc).__name__,
-                details={
-                    "timeout_seconds": float(candidate.oracle_db_test_timeout_seconds),
-                    "tcp_connect_timeout_seconds": float(
-                        candidate.oracle_tcp_connect_timeout_seconds
-                    ),
-                    "oracle_error_codes": ", ".join(oracle_error_codes) or None,
-                    "dsn": str(candidate.display_dsn) or None,
-                },
-            )
-        )
-
-    return ApiResponse(
-        data=DatabaseConnectionTestResult(
-            status="success",
-            readiness=readiness,
-            message="Oracle 26ai への接続に成功しました。",
-            elapsed_ms=_elapsed_ms(started),
-            troubleshooting=[],
-            checked_at=_now_iso(),
-            details={
-                "timeout_seconds": float(candidate.oracle_db_test_timeout_seconds),
-                "tcp_connect_timeout_seconds": float(candidate.oracle_tcp_connect_timeout_seconds),
-                "dsn": str(candidate.display_dsn) or None,
-            },
-        )
-    )
-
-
-@router.get("/settings/database/adb", response_model=ApiResponse[AdbInfoData])
-async def get_adb_info() -> ApiResponse[AdbInfoData]:
-    return ApiResponse(data=_get_adb_info_state())
-
-
-@router.post("/settings/database/adb/settings", response_model=ApiResponse[AdbInfoData])
-async def patch_adb_settings(
-    patch: AdbSettingsUpdate,
-    _: None = Depends(require_admin),
-) -> ApiResponse[AdbInfoData]:
-    info = _set_adb_info_state(patch)
-    _persist_adb_settings(get_settings(), _get_database_settings_state())
-    return ApiResponse(data=info)
-
-
-@router.post("/settings/database/adb/start", response_model=ApiResponse[AdbInfoData])
-async def start_adb(_: None = Depends(require_admin)) -> ApiResponse[AdbInfoData]:
-    global _adb_info_state
-    info = _get_adb_info_state()
-    if not info.id:
-        return ApiResponse(data=info)
-    info.status = "accepted"
-    info.message = "ADB 起動要求を受け付けました。"
-    info.lifecycle_state = "AVAILABLE"
-    _adb_info_state = info
-    return ApiResponse(data=info)
-
-
-@router.post("/settings/database/adb/stop", response_model=ApiResponse[AdbInfoData])
-async def stop_adb(_: None = Depends(require_admin)) -> ApiResponse[AdbInfoData]:
-    global _adb_info_state
-    info = _get_adb_info_state()
-    if not info.id:
-        return ApiResponse(data=info)
-    info.status = "accepted"
-    info.message = "ADB 停止要求を受け付けました。"
-    info.lifecycle_state = "STOPPED"
-    _adb_info_state = info
-    return ApiResponse(data=info)
 
 
 @router.get("/runtime/snapshot", response_model=ApiResponse[AgentRuntimeSnapshot])

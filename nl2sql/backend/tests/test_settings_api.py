@@ -15,16 +15,17 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from dotenv import dotenv_values
 from fastapi import HTTPException
+from pr_system_settings import database as shared_database
 from pr_system_settings import oci as shared_oci
 from pr_system_settings.model import ModelSettingsStore, sanitize_model_test_error
-from pytest import MonkeyPatch
-
-import app.settings as app_settings
-from app.clients.oci_database import (
+from pr_system_settings.oci_database import (
     AutonomousDatabaseInfo,
     OciDatabaseClient,
     WalletDownloadTooLargeError,
 )
+from pytest import MonkeyPatch
+
+import app.settings as app_settings
 from app.features.nl2sql.oracle_adapter import (
     OracleNl2SqlAdapter,
     SelectAiCredentialExistsError,
@@ -709,7 +710,7 @@ def test_upload_database_wallet_extracts_to_thick_resolved_wallet_dir(
     assert (wallet_dir / "tnsnames.ora").is_file()
     assert not (wallet_dir / "readme").exists()
     assert stat.S_IMODE(wallet_dir.stat().st_mode) == 0o700
-    for file_name in settings_router._database_wallet_required_files(settings.oracle_driver_mode):
+    for file_name in shared_database.database_wallet_required_files(settings.oracle_driver_mode):
         assert stat.S_IMODE((wallet_dir / file_name).stat().st_mode) == 0o600
 
 
@@ -725,14 +726,14 @@ def test_database_wallet_state_uses_thin_mtls_required_files(
     monkeypatch.setattr(settings, "oracle_client_lib_dir", "")
     monkeypatch.setattr(settings, "oracle_wallet_dir", str(wallet_dir))
 
-    data = settings_router._database_settings_data(settings)
+    data = shared_database.database_settings_data(settings)
 
     assert data.wallet_uploaded is False
     assert data.available_services == []
 
     (wallet_dir / "ewallet.pem").write_text("dummy", encoding="utf-8")
 
-    configured = settings_router._database_settings_data(settings)
+    configured = shared_database.database_settings_data(settings)
 
     assert configured.wallet_uploaded is True
     assert configured.available_services == ["mydb_high"]
@@ -801,7 +802,7 @@ def test_download_database_wallet_creates_missing_wallet_dir(
             )
             return _wallet_zip_bytes()
 
-    monkeypatch.setattr(settings_router, "OciDatabaseClient", FakeDatabaseClient)
+    monkeypatch.setattr(shared_database, "OciDatabaseClient", FakeDatabaseClient)
 
     assert not wallet_dir.exists()
 
@@ -820,7 +821,7 @@ def test_download_database_wallet_creates_missing_wallet_dir(
     assert dotenv_values(tmp_path / ".env")["ORACLE_WALLET_PASSWORD"] == settings.oracle_password
     assert (wallet_dir / "tnsnames.ora").is_file()
     assert stat.S_IMODE(wallet_dir.stat().st_mode) == 0o700
-    for file_name in settings_router._database_wallet_required_files(settings.oracle_driver_mode):
+    for file_name in shared_database.database_wallet_required_files(settings.oracle_driver_mode):
         assert stat.S_IMODE((wallet_dir / file_name).stat().st_mode) == 0o600
 
 
@@ -861,7 +862,7 @@ def test_download_database_wallet_repairs_partial_serverless_wallet(
             return _wallet_zip_bytes()
 
     pool_closed: list[bool] = []
-    monkeypatch.setattr(settings_router, "OciDatabaseClient", FakeDatabaseClient)
+    monkeypatch.setattr(shared_database, "OciDatabaseClient", FakeDatabaseClient)
     monkeypatch.setattr(settings_router, "close_oracle_pool", lambda: pool_closed.append(True))
 
     resp = client.post("/api/settings/database/wallet/download")
@@ -873,7 +874,7 @@ def test_download_database_wallet_repairs_partial_serverless_wallet(
     assert body["data"]["settings"]["available_services"] == ["mydb_high"]
     assert captured["get_ocid"] == settings.oracle_adb_ocid
     assert captured["generate_type"] == "SINGLE"
-    assert captured["max_bytes"] == settings_router.ORACLE_WALLET_MAX_BYTES
+    assert captured["max_bytes"] == shared_database.ORACLE_WALLET_MAX_BYTES
     password = str(captured["password"])
     assert password == previous_wallet_password
     assert password != settings.oracle_password
@@ -882,7 +883,7 @@ def test_download_database_wallet_repairs_partial_serverless_wallet(
     assert password not in resp.text
     assert pool_closed == [True]
     assert stat.S_IMODE(wallet_dir.stat().st_mode) == 0o700
-    for file_name in settings_router._database_wallet_required_files(settings.oracle_driver_mode):
+    for file_name in shared_database.database_wallet_required_files(settings.oracle_driver_mode):
         assert stat.S_IMODE((wallet_dir / file_name).stat().st_mode) == 0o600
 
 
@@ -910,7 +911,7 @@ def test_download_database_wallet_omits_generate_type_for_dedicated(
             captured["generate_type"] = generate_type
             return _wallet_zip_bytes()
 
-    monkeypatch.setattr(settings_router, "OciDatabaseClient", FakeDatabaseClient)
+    monkeypatch.setattr(shared_database, "OciDatabaseClient", FakeDatabaseClient)
 
     resp = client.post("/api/settings/database/wallet/download")
 
@@ -923,13 +924,13 @@ def test_download_database_wallet_is_idempotent_when_complete(
     tmp_path: Path,
 ) -> None:
     settings = _configure_wallet_download(monkeypatch, tmp_path)
-    settings_router._install_database_wallet(settings, _wallet_zip_bytes(), "wallet.zip")
+    shared_database.install_database_wallet(settings, _wallet_zip_bytes(), "wallet.zip")
 
     class UnexpectedDatabaseClient:
         def __init__(self, settings: Settings) -> None:
             raise AssertionError("complete Wallet must not call OCI")
 
-    monkeypatch.setattr(settings_router, "OciDatabaseClient", UnexpectedDatabaseClient)
+    monkeypatch.setattr(shared_database, "OciDatabaseClient", UnexpectedDatabaseClient)
 
     resp = client.post("/api/settings/database/wallet/download")
 
@@ -942,7 +943,7 @@ def test_download_database_wallet_refreshes_when_wallet_password_is_invalid(
     tmp_path: Path,
 ) -> None:
     settings = _configure_wallet_download(monkeypatch, tmp_path)
-    settings_router._install_database_wallet(settings, _wallet_zip_bytes(), "wallet.zip")
+    shared_database.install_database_wallet(settings, _wallet_zip_bytes(), "wallet.zip")
     monkeypatch.setattr(settings, "oracle_wallet_password", "wrong-wallet-password")
     captured: dict[str, Any] = {}
 
@@ -968,9 +969,9 @@ def test_download_database_wallet_refreshes_when_wallet_password_is_invalid(
             )
             return _wallet_zip_bytes()
 
-    monkeypatch.setattr(settings_router, "OciDatabaseClient", FakeDatabaseClient)
+    monkeypatch.setattr(shared_database, "OciDatabaseClient", FakeDatabaseClient)
     monkeypatch.setattr(
-        settings_router,
+        shared_database,
         "_database_wallet_password_is_usable",
         lambda *_, **__: False,
     )
@@ -1038,7 +1039,7 @@ def test_download_database_wallet_maps_oci_error_without_leaking_details(
         async def get_autonomous_database(self, adb_ocid: str) -> AutonomousDatabaseInfo:
             raise RuntimeError("SDK secret detail must not leak")
 
-    monkeypatch.setattr(settings_router, "OciDatabaseClient", FailingDatabaseClient)
+    monkeypatch.setattr(shared_database, "OciDatabaseClient", FailingDatabaseClient)
 
     resp = client.post("/api/settings/database/wallet/download")
 
@@ -1069,7 +1070,7 @@ def test_download_database_wallet_rejects_invalid_upstream_zip(
         ) -> bytes:
             return b"not-a-wallet-zip"
 
-    monkeypatch.setattr(settings_router, "OciDatabaseClient", InvalidWalletClient)
+    monkeypatch.setattr(shared_database, "OciDatabaseClient", InvalidWalletClient)
 
     resp = client.post("/api/settings/database/wallet/download")
 
@@ -1099,7 +1100,7 @@ def test_download_database_wallet_maps_stream_limit_to_413(
         ) -> bytes:
             raise WalletDownloadTooLargeError
 
-    monkeypatch.setattr(settings_router, "OciDatabaseClient", OversizedWalletClient)
+    monkeypatch.setattr(shared_database, "OciDatabaseClient", OversizedWalletClient)
 
     resp = client.post("/api/settings/database/wallet/download")
 
@@ -1113,7 +1114,7 @@ def test_database_wallet_install_lock_returns_conflict(
 ) -> None:
     settings = _configure_wallet_download(monkeypatch, tmp_path)
 
-    with settings_router._database_wallet_install_lock(settings):
+    with shared_database.database_wallet_install_lock(settings):
         resp = client.post(
             "/api/settings/database/wallet",
             files={"file": ("wallet.zip", _wallet_zip_bytes(), "application/zip")},
@@ -1158,7 +1159,7 @@ def test_database_wallet_install_failure_restores_existing_wallet(
     tmp_path: Path,
 ) -> None:
     settings = _configure_wallet_download(monkeypatch, tmp_path)
-    wallet_dir = settings_router._install_database_wallet(
+    wallet_dir = shared_database.install_database_wallet(
         settings,
         _wallet_zip_bytes(),
         "old-wallet.zip",
@@ -1168,7 +1169,7 @@ def test_database_wallet_install_failure_restores_existing_wallet(
     def fail_permissions(path: Path) -> None:
         raise OSError("simulated chmod failure")
 
-    monkeypatch.setattr(settings_router, "_secure_database_wallet", fail_permissions)
+    monkeypatch.setattr(shared_database, "_secure_database_wallet", fail_permissions)
 
     resp = client.post(
         "/api/settings/database/wallet",
@@ -1188,7 +1189,7 @@ def test_database_wallet_config_persist_failure_rolls_back_existing_wallet(
     tmp_path: Path,
 ) -> None:
     settings = _configure_wallet_download(monkeypatch, tmp_path)
-    wallet_dir = settings_router._install_database_wallet(
+    wallet_dir = shared_database.install_database_wallet(
         settings,
         _wallet_zip_bytes(),
         "old-wallet.zip",
@@ -1196,13 +1197,13 @@ def test_database_wallet_config_persist_failure_rolls_back_existing_wallet(
     old_tnsnames = (wallet_dir / "tnsnames.ora").read_bytes()
     (wallet_dir / "ewallet.pem").unlink()
 
-    def fail_persist(_settings: Settings) -> None:
+    def fail_persist(_settings: Settings, _env_file: Path) -> None:
         raise HTTPException(
             status_code=500,
             detail="/secret/backend/.env contains SuperSecret123",
         )
 
-    monkeypatch.setattr(settings_router, "_persist_database_settings", fail_persist)
+    monkeypatch.setattr(shared_database, "_persist_database_settings", fail_persist)
 
     class FakeDatabaseClient:
         def __init__(self, settings: Settings) -> None:
@@ -1220,7 +1221,7 @@ def test_database_wallet_config_persist_failure_rolls_back_existing_wallet(
         ) -> bytes:
             return _wallet_zip_bytes()
 
-    monkeypatch.setattr(settings_router, "OciDatabaseClient", FakeDatabaseClient)
+    monkeypatch.setattr(shared_database, "OciDatabaseClient", FakeDatabaseClient)
 
     resp = client.post(
         "/api/settings/database/wallet/download",
@@ -1242,7 +1243,7 @@ def test_upload_database_wallet_rejects_zip_slip_without_overwriting(
     tmp_path: Path,
 ) -> None:
     settings = _configure_wallet_download(monkeypatch, tmp_path)
-    wallet_dir = settings_router._install_database_wallet(
+    wallet_dir = shared_database.install_database_wallet(
         settings,
         _wallet_zip_bytes(),
         "old-wallet.zip",
@@ -1288,7 +1289,7 @@ def test_upload_database_wallet_enforces_extracted_size_limit(
     tmp_path: Path,
 ) -> None:
     _configure_wallet_download(monkeypatch, tmp_path)
-    monkeypatch.setattr(settings_router, "ORACLE_WALLET_MAX_EXTRACTED_BYTES", 8)
+    monkeypatch.setattr(shared_database, "ORACLE_WALLET_MAX_EXTRACTED_BYTES", 8)
 
     resp = client.post(
         "/api/settings/database/wallet",
@@ -2050,7 +2051,7 @@ def test_adb_start_uses_oci_database_client(monkeypatch: MonkeyPatch) -> None:
         async def start_autonomous_database(self, adb_ocid: str) -> None:
             calls.append(("start", adb_ocid))
 
-    monkeypatch.setattr(settings_router, "OciDatabaseClient", FakeDatabaseClient)
+    monkeypatch.setattr(shared_database, "OciDatabaseClient", FakeDatabaseClient)
 
     resp = client.post("/api/settings/database/adb/start")
 
@@ -2077,7 +2078,7 @@ def test_adb_info_failure_returns_safe_error_code(monkeypatch: MonkeyPatch) -> N
         async def get_autonomous_database(self, adb_ocid: str) -> AutonomousDatabaseInfo:
             raise RuntimeError(_raw_adb_oci_failure())
 
-    monkeypatch.setattr(settings_router, "OciDatabaseClient", FakeDatabaseClient)
+    monkeypatch.setattr(shared_database, "OciDatabaseClient", FakeDatabaseClient)
 
     resp = client.get("/api/settings/database/adb")
 
@@ -2110,7 +2111,7 @@ def test_adb_start_failure_returns_safe_error_code(monkeypatch: MonkeyPatch) -> 
         async def start_autonomous_database(self, adb_ocid: str) -> None:
             raise RuntimeError(_raw_adb_oci_failure())
 
-    monkeypatch.setattr(settings_router, "OciDatabaseClient", FakeDatabaseClient)
+    monkeypatch.setattr(shared_database, "OciDatabaseClient", FakeDatabaseClient)
 
     resp = client.post("/api/settings/database/adb/start")
 
@@ -2143,7 +2144,7 @@ def test_adb_stop_failure_returns_safe_error_code(monkeypatch: MonkeyPatch) -> N
         async def stop_autonomous_database(self, adb_ocid: str) -> None:
             raise RuntimeError(_raw_adb_oci_failure())
 
-    monkeypatch.setattr(settings_router, "OciDatabaseClient", FakeDatabaseClient)
+    monkeypatch.setattr(shared_database, "OciDatabaseClient", FakeDatabaseClient)
 
     resp = client.post("/api/settings/database/adb/stop")
 
@@ -2195,7 +2196,7 @@ def test_update_adb_settings_persists_dedicated_region(
                 data_storage_size_in_tbs=1,
             )
 
-    monkeypatch.setattr(settings_router, "OciDatabaseClient", FakeDatabaseClient)
+    monkeypatch.setattr(shared_database, "OciDatabaseClient", FakeDatabaseClient)
 
     resp = client.post(
         "/api/settings/database/adb/settings",
@@ -2429,7 +2430,7 @@ def test_failed_settings_persistence_preserves_runtime(
             },
         )
     else:
-        monkeypatch.setattr(settings_router, "_persist_adb_settings", fail_persist)
+        monkeypatch.setattr(shared_database, "_persist_adb_settings", fail_persist)
         response = client.post(
             "/api/settings/database/adb/settings",
             json={"adb_ocid": "ocid1.autonomousdatabase.oc1..changed", "region": "ap-tokyo-1"},

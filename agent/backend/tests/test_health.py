@@ -23,9 +23,11 @@ import anyio
 import httpx
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
+from pr_system_settings import database as shared_database
 from pr_system_settings import oci as shared_oci
 from pr_system_settings import oci_connectivity
 from pr_system_settings.model import ModelSettingsTestRequest
+from pr_system_settings.oci_database import AutonomousDatabaseInfo
 from pytest import MonkeyPatch, importorskip
 from starlette.websockets import WebSocket
 
@@ -91,6 +93,9 @@ class _AsgiTestClient:
 
 
 client = _AsgiTestClient()
+
+
+TEST_WALLET_PEM = "-----BEGIN PRIVATE KEY-----\nMIIB\n-----END PRIVATE KEY-----\n"
 
 
 def _settings_fixture(**overrides: object) -> SimpleNamespace:
@@ -1135,13 +1140,9 @@ def test_upload_database_wallet_extracts_zip_like_rag(
 ) -> None:
     wallet_dir = tmp_path / "wallet"
     env_file = tmp_path / ".env"
-    monkeypatch.setattr(agent_router, "_database_settings_state", None)
     monkeypatch.setattr(agent_router, "BACKEND_ENV_FILE", env_file)
-    monkeypatch.setattr(
-        agent_router,
-        "get_settings",
-        lambda: _settings_fixture(oracle_wallet_dir=str(wallet_dir)),
-    )
+    settings = Settings(_env_file=None, oracle_client_lib_dir="", oracle_wallet_dir=str(wallet_dir))
+    monkeypatch.setattr(agent_router, "get_settings", lambda: settings)
     archive = io.BytesIO()
     with zipfile.ZipFile(archive, "w") as wallet:
         wallet.writestr("tnsnames.ora", "mydb_high = (DESCRIPTION=(ADDRESS=(HOST=db)))\n")
@@ -1173,10 +1174,12 @@ def test_database_save_preserves_uploaded_wallet_and_writes_env_like_rag(
         "mydb_high = (DESCRIPTION=(ADDRESS=(HOST=db)))\n",
         encoding="utf-8",
     )
+    # Agent は Thin mode なので tnsnames.ora と ewallet.pem が必要（NL2SQL と同じ判定。#108）。
+    (wallet_dir / "ewallet.pem").write_text(TEST_WALLET_PEM, encoding="utf-8")
     env_file = tmp_path / ".env"
-    monkeypatch.setattr(agent_router, "_database_settings_state", None)
     monkeypatch.setattr(agent_router, "BACKEND_ENV_FILE", env_file)
-    settings = _settings_fixture(
+    settings = Settings(
+        _env_file=None,
         oracle_user="OLD",
         oracle_password="old-password",
         oracle_dsn="old_dsn",
@@ -1216,11 +1219,27 @@ def test_adb_settings_save_writes_dedicated_region_env(
     tmp_path: Path,
 ) -> None:
     env_file = tmp_path / ".env"
-    settings = _settings_fixture()
-    monkeypatch.setattr(agent_router, "_database_settings_state", None)
-    monkeypatch.setattr(agent_router, "_adb_info_state", None)
+    settings = Settings(_env_file=None)
     monkeypatch.setattr(agent_router, "BACKEND_ENV_FILE", env_file)
     monkeypatch.setattr(agent_router, "get_settings", lambda: settings)
+
+    class FakeOciDatabaseClient:
+        """ADB は共有の OCI client で実際に呼ぶ（#108）。テストでは OCI を呼ばない。"""
+
+        def __init__(self, settings: object) -> None:
+            self.settings = settings
+
+        async def get_autonomous_database(self, adb_ocid: str) -> AutonomousDatabaseInfo:
+            return AutonomousDatabaseInfo(
+                id=adb_ocid,
+                display_name="agentdb",
+                lifecycle_state="AVAILABLE",
+                db_name="AGENTDB",
+                cpu_core_count=2,
+                data_storage_size_in_tbs=1.0,
+            )
+
+    monkeypatch.setattr(shared_database, "OciDatabaseClient", FakeOciDatabaseClient)
 
     resp = client.post(
         "/api/settings/database/adb/settings",
@@ -1241,6 +1260,7 @@ def test_adb_settings_save_writes_dedicated_region_env(
 
 def test_database_connection_test_uses_oracledb_like_rag(
     monkeypatch: MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     captured: dict[str, object] = {}
 
@@ -1273,17 +1293,21 @@ def test_database_connection_test_uses_oracledb_like_rag(
         raise AssertionError(name)
 
     monkeypatch.setattr(agent_router, "import_module", fake_import_module)
-    monkeypatch.setattr(
-        agent_router,
-        "get_settings",
-        lambda: _settings_fixture(
-            oracle_user="ADMIN",
-            oracle_password="secret",
-            oracle_dsn="mydb_high",
-            oracle_tcp_connect_timeout_seconds=3.0,
-            oracle_db_test_timeout_seconds=5.0,
-        ),
+    wallet_dir = tmp_path / "wallet"
+    wallet_dir.mkdir()
+    (wallet_dir / "tnsnames.ora").write_text("mydb_high = (DESCRIPTION=...)\n", encoding="utf-8")
+    (wallet_dir / "ewallet.pem").write_text(TEST_WALLET_PEM, encoding="utf-8")
+    settings = Settings(
+        _env_file=None,
+        oracle_user="ADMIN",
+        oracle_password="secret",
+        oracle_dsn="mydb_high",
+        oracle_client_lib_dir="",
+        oracle_wallet_dir=str(wallet_dir),
+        oracle_tcp_connect_timeout_seconds=3.0,
+        oracle_db_test_timeout_seconds=5.0,
     )
+    monkeypatch.setattr(agent_router, "get_settings", lambda: settings)
 
     resp = client.post(
         "/api/settings/database/test",
@@ -1304,6 +1328,9 @@ def test_database_connection_test_uses_oracledb_like_rag(
         "retry_delay": 0,
         "tcp_connect_timeout": 3.0,
         "password": "secret",
+        # readiness が Wallet を確認するため、接続にも Wallet を渡す（#108）。
+        "config_dir": str(wallet_dir),
+        "wallet_location": str(wallet_dir),
     }
 
 
@@ -2103,6 +2130,18 @@ def test_rbac_limits_model_save_and_test_to_admin(monkeypatch: MonkeyPatch) -> N
         test_body = {"settings": settings, "target_type": "rerank", "model_id": "rr"}
         assert client.post("/api/settings/model/test", json=test_body).status_code == 403
         assert client.get("/api/settings/model").status_code == 200
+    finally:
+        _disable_rbac(monkeypatch)
+
+
+def test_rbac_limits_database_test_and_wallet_download_to_admin(monkeypatch: MonkeyPatch) -> None:
+    """DB 接続テストと OCI からの Wallet 取得も管理者に限定する（#108）。"""
+    _enable_rbac(monkeypatch)
+    try:
+        assert client.post("/api/settings/database/test", json={}).status_code == 403
+        assert client.post("/api/settings/database/wallet/download").status_code == 403
+        assert client.post("/api/settings/database/adb/start").status_code == 403
+        assert client.get("/api/settings/database").status_code == 200
     finally:
         _disable_rbac(monkeypatch)
 

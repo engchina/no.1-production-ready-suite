@@ -1660,6 +1660,16 @@ class Settings(ModelSecretStateMixin, BaseSettings):
         return self
 
     @property
+    def oracle_driver_mode(self) -> str:
+        """RAG は ORACLE_CLIENT_LIB_DIR があれば Thick mode で接続する（Wallet の判定用）。"""
+        return "thick" if self.oracle_client_lib_dir.strip() else "thin"
+
+    @property
+    def oracle_connection_security(self) -> str:
+        """RAG は Wallet mTLS だけに対応する（Walletless TLS は接続処理が未対応）。"""
+        return "wallet_mtls"
+
+    @property
     def resolved_oracle_wallet_dir(self) -> str:
         """参照実装と同じく ORACLE_CLIENT_LIB_DIR/network/admin を Wallet 配置先にする。"""
         client_lib_dir = self.oracle_client_lib_dir.strip()
