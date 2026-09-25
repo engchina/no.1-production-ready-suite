@@ -95,6 +95,6 @@ test("クリアボタンで入力をリセットし、件数フッターを更�
   await dialog.getByRole("button", { name: "検索をクリア" }).click();
   await expect(input).toHaveValue("");
   await expect(input).toBeFocused();
-  // 全件 = NAV_SECTIONS の総項目数(業務ビュー5[チャット・フィードバック含む]+ナレッジ構築4+検索・回答設定13[概要+12工程]+システム設定6=28)。
-  await expect(dialog.getByText("28 件", { exact: true })).toBeVisible();
+  // 全件 = NAV_SECTIONS の総項目数(業務ビュー5[チャット・フィードバック含む]+ナレッジ構築4+検索・回答設定13[概要+12工程]+運用設定2+システム設定5=29)。
+  await expect(dialog.getByText("29 件", { exact: true })).toBeVisible();
 });

@@ -165,7 +165,25 @@ export const NAV_SECTIONS: NavSection[] = [
     ],
   },
   {
-    // インフラ・接続まわりのシステム設定。
+    // RAG 固有の運用設定（モデルの取得先、parser などのサービスの起動・停止）。
+    titleKey: "nav.section.operations",
+    items: [
+      {
+        href: APP_ROUTES.settingsHuggingface,
+        labelKey: "nav.settingsHuggingface",
+        sidebarLabelKey: "nav.settingsHuggingface.sidebar",
+        icon: HardDriveDownload,
+      },
+      {
+        href: APP_ROUTES.settingsServices,
+        labelKey: "nav.settingsServices",
+        sidebarLabelKey: "nav.settingsServices.sidebar",
+        icon: Server,
+      },
+    ],
+  },
+  {
+    // 3製品で共通のシステム設定（画面は platform の共有パッケージ。#70）。
     titleKey: "nav.section.settings",
     items: [
       {
@@ -186,18 +204,6 @@ export const NAV_SECTIONS: NavSection[] = [
         labelKey: "nav.settingsDatabase",
         sidebarLabelKey: "nav.settingsDatabase.sidebar",
         icon: Database,
-      },
-      {
-        href: APP_ROUTES.settingsHuggingface,
-        labelKey: "nav.settingsHuggingface",
-        sidebarLabelKey: "nav.settingsHuggingface.sidebar",
-        icon: HardDriveDownload,
-      },
-      {
-        href: APP_ROUTES.settingsServices,
-        labelKey: "nav.settingsServices",
-        sidebarLabelKey: "nav.settingsServices.sidebar",
-        icon: Server,
       },
       { href: APP_ROUTES.settingsAppearance, labelKey: "nav.settingsAppearance", icon: Palette },
     ],
