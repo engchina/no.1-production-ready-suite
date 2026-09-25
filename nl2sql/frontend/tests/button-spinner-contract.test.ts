@@ -4,8 +4,9 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 const srcDir = fileURLToPath(new URL("../src", import.meta.url));
+// データベース設定の画面は共有パッケージにある（#108）。
 const databaseSettingsSource = readFileSync(
-  new URL("../src/components/settings/DatabaseSettingsClient.tsx", import.meta.url),
+  new URL("../../../platform/packages/system-settings/src/database/DatabaseSettingsPage.tsx", import.meta.url),
   "utf8"
 );
 

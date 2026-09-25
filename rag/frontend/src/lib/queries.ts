@@ -13,11 +13,9 @@ import {
 
 import {
   api,
-  type AdbSettingsUpdate,
   type ChunkSetExperimentRequest,
   type ParserExtractionExperimentRequest,
   type DashboardActivity,
-  type DatabaseSettingsUpdate,
   type HuggingFaceSettingsUpdate,
   type DocumentApproveRequest,
   type DocumentChunkPreviewRequest,
@@ -92,8 +90,7 @@ export const queryKeys = {
     knowledge_base_id?: string;
     limit?: number;
     offset?: number;
-  }) =>
-    ["documents", params] as const,
+  }) => ["documents", params] as const,
   document: (id: string) => ["documents", id] as const,
   documentChunks: (id: string) => ["documents", id, "chunks"] as const,
   documentChunkSets: (id: string) => ["documents", id, "chunk-sets"] as const,
@@ -103,19 +100,34 @@ export const queryKeys = {
   documentRecipeExtractionExport: (
     id: string,
     recipeId: string,
-    format: DocumentExtractionExportFormat
-  ) => ["documents", id, "recipes", recipeId, "extraction-export", format] as const,
-  documentExtractionExport: (id: string, format: DocumentExtractionExportFormat) =>
-    ["documents", id, "extraction-export", format] as const,
-  documentIngestionJobs: (id: string) => ["documents", id, "ingestion-jobs"] as const,
+    format: DocumentExtractionExportFormat,
+  ) =>
+    [
+      "documents",
+      id,
+      "recipes",
+      recipeId,
+      "extraction-export",
+      format,
+    ] as const,
+  documentExtractionExport: (
+    id: string,
+    format: DocumentExtractionExportFormat,
+  ) => ["documents", id, "extraction-export", format] as const,
+  documentIngestionJobs: (id: string) =>
+    ["documents", id, "ingestion-jobs"] as const,
   documentIngestionSegments: (id: string) =>
     ["documents", id, "ingestion-segments"] as const,
   documentIngestionConfig: (id: string) =>
     ["documents", id, "ingestion-config"] as const,
-  documentKnowledgeBases: (id: string) => ["documents", id, "knowledge-bases"] as const,
+  documentKnowledgeBases: (id: string) =>
+    ["documents", id, "knowledge-bases"] as const,
   documentStats: ["documents", "stats"] as const,
-  ingestionJobs: (params: { status?: IngestionJobStatus; limit?: number; offset?: number }) =>
-    ["documents", "ingestion-jobs", params] as const,
+  ingestionJobs: (params: {
+    status?: IngestionJobStatus;
+    limit?: number;
+    offset?: number;
+  }) => ["documents", "ingestion-jobs", params] as const,
   knowledgeBases: (params: {
     status?: KnowledgeBaseStatus;
     q?: string;
@@ -131,10 +143,14 @@ export const queryKeys = {
     offset?: number;
   }) => ["business-views", params] as const,
   businessView: (id: string) => ["business-views", id] as const,
-  conversations: (params: { business_view_id?: string; limit?: number; offset?: number }) =>
-    ["conversations", params] as const,
+  conversations: (params: {
+    business_view_id?: string;
+    limit?: number;
+    offset?: number;
+  }) => ["conversations", params] as const,
   conversation: (id: string) => ["conversations", id] as const,
-  currentFeedback: (traceId: string) => ["feedback", "current", traceId] as const,
+  currentFeedback: (traceId: string) =>
+    ["feedback", "current", traceId] as const,
   feedback: (params: FeedbackListParams) => ["feedback", params] as const,
   feedbackDetail: (id: string) => ["feedback", "detail", id] as const,
   compareModels: ["chat", "models"] as const,
@@ -163,8 +179,10 @@ export const queryKeys = {
   agenticSettings: ["settings", "agentic"] as const,
   services: ["services"] as const,
   serviceCatalog: ["services", "catalog"] as const,
-  serviceStatus: (serviceId: string) => ["services", "status", serviceId] as const,
-  serviceLogs: (serviceId: string, lines: number) => ["services", "logs", serviceId, lines] as const,
+  serviceStatus: (serviceId: string) =>
+    ["services", "status", serviceId] as const,
+  serviceLogs: (serviceId: string, lines: number) =>
+    ["services", "logs", serviceId, lines] as const,
 };
 
 const DOCUMENT_EXTRACTION_EXPORT_FORMATS: DocumentExtractionExportFormat[] = [
@@ -177,38 +195,51 @@ const DOCUMENT_EXTRACTION_EXPORT_FORMATS: DocumentExtractionExportFormat[] = [
 function clearDocumentProcessingCache(
   qc: QueryClient,
   documentId: string,
-  options: { clearPreprocessArtifact?: boolean } = {}
+  options: { clearPreprocessArtifact?: boolean } = {},
 ) {
-  qc.setQueryData<DocumentDetail | undefined>(queryKeys.document(documentId), (current) =>
-    current
-      ? {
-          ...current,
-          status: "UPLOADED",
-          preprocess_artifact: options.clearPreprocessArtifact
-            ? null
-            : current.preprocess_artifact,
-          extraction: {},
-          error_message: null,
-          indexed_at: null,
-        }
-      : current
+  qc.setQueryData<DocumentDetail | undefined>(
+    queryKeys.document(documentId),
+    (current) =>
+      current
+        ? {
+            ...current,
+            status: "UPLOADED",
+            preprocess_artifact: options.clearPreprocessArtifact
+              ? null
+              : current.preprocess_artifact,
+            extraction: {},
+            error_message: null,
+            indexed_at: null,
+          }
+        : current,
   );
   qc.setQueryData(queryKeys.documentChunks(documentId), []);
   qc.setQueryData(queryKeys.documentIngestionSegments(documentId), []);
   qc.removeQueries({ queryKey: queryKeys.documentChunkSets(documentId) });
   for (const format of DOCUMENT_EXTRACTION_EXPORT_FORMATS) {
-    qc.removeQueries({ queryKey: queryKeys.documentExtractionExport(documentId, format) });
+    qc.removeQueries({
+      queryKey: queryKeys.documentExtractionExport(documentId, format),
+    });
   }
 }
 
-function invalidateDocumentProcessingQueries(qc: QueryClient, documentId: string) {
+function invalidateDocumentProcessingQueries(
+  qc: QueryClient,
+  documentId: string,
+) {
   qc.invalidateQueries({ queryKey: ["documents"] });
   qc.invalidateQueries({ queryKey: queryKeys.document(documentId) });
   qc.invalidateQueries({ queryKey: queryKeys.documentChunks(documentId) });
   qc.invalidateQueries({ queryKey: queryKeys.documentChunkSets(documentId) });
-  qc.invalidateQueries({ queryKey: ["documents", documentId, "extraction-export"] });
-  qc.invalidateQueries({ queryKey: queryKeys.documentIngestionJobs(documentId) });
-  qc.invalidateQueries({ queryKey: queryKeys.documentIngestionSegments(documentId) });
+  qc.invalidateQueries({
+    queryKey: ["documents", documentId, "extraction-export"],
+  });
+  qc.invalidateQueries({
+    queryKey: queryKeys.documentIngestionJobs(documentId),
+  });
+  qc.invalidateQueries({
+    queryKey: queryKeys.documentIngestionSegments(documentId),
+  });
   qc.invalidateQueries({ queryKey: ["documents", "ingestion-jobs"] });
   qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
 }
@@ -221,12 +252,8 @@ function invalidateDocumentProcessingQueries(qc: QueryClient, documentId: string
  */
 
 /** 取込/索引が進行中で一覧を再取得すべき文書状態。 */
-export const DOCUMENT_ACTIVE_STATUSES: ReadonlySet<FileStatus> = new Set<FileStatus>([
-  "PREPROCESSING",
-  "INGESTING",
-  "CHUNKING",
-  "INDEXING",
-]);
+export const DOCUMENT_ACTIVE_STATUSES: ReadonlySet<FileStatus> =
+  new Set<FileStatus>(["PREPROCESSING", "INGESTING", "CHUNKING", "INDEXING"]);
 
 /** ADB が起動/停止などの遷移中で lifecycle を再取得すべき状態。 */
 export const ADB_TRANSITIONAL_STATES: ReadonlySet<string> = new Set<string>([
@@ -246,9 +273,11 @@ export const ACTIVE_REFETCH_INTERVAL_MS = 4000;
 
 /** 文書一覧に取込/索引進行中の文書が含まれるか。 */
 export function documentsHaveActiveWork(
-  items: ReadonlyArray<Pick<DocumentSummary, "status">> | undefined
+  items: ReadonlyArray<Pick<DocumentSummary, "status">> | undefined,
 ): boolean {
-  return Boolean(items?.some((item) => DOCUMENT_ACTIVE_STATUSES.has(item.status)));
+  return Boolean(
+    items?.some((item) => DOCUMENT_ACTIVE_STATUSES.has(item.status)),
+  );
 }
 
 /** ADB lifecycle が遷移中か。 */
@@ -258,24 +287,30 @@ export function adbIsTransitioning(state: string | null | undefined): boolean {
 
 /** ダッシュボードの最近のアクティビティに進行中の処理が含まれるか。 */
 export function dashboardHasActiveWork(
-  activities: ReadonlyArray<Pick<DashboardActivity, "status">> | undefined
+  activities: ReadonlyArray<Pick<DashboardActivity, "status">> | undefined,
 ): boolean {
-  return Boolean(activities?.some((activity) => DOCUMENT_ACTIVE_STATUSES.has(activity.status)));
+  return Boolean(
+    activities?.some((activity) =>
+      DOCUMENT_ACTIVE_STATUSES.has(activity.status),
+    ),
+  );
 }
 
 /** 取込 job がまだキュー待ち/実行中か。 */
 export function ingestionJobIsActive(
-  status: IngestionJobStatus | null | undefined
+  status: IngestionJobStatus | null | undefined,
 ): boolean {
   return status === "QUEUED" || status === "RUNNING";
 }
 
 /** 取込 segment がまだキュー待ち/実行中か。 */
 export function ingestionSegmentHasActiveWork(
-  segments: ReadonlyArray<{ status: string }> | undefined
+  segments: ReadonlyArray<{ status: string }> | undefined,
 ): boolean {
   return Boolean(
-    segments?.some((segment) => segment.status === "QUEUED" || segment.status === "RUNNING")
+    segments?.some(
+      (segment) => segment.status === "QUEUED" || segment.status === "RUNNING",
+    ),
   );
 }
 
@@ -293,8 +328,14 @@ export function documentWorkspaceShouldRefresh({
   segmentStatuses?: ReadonlyArray<string | null | undefined>;
 }): boolean {
   if (jobStatuses.some(ingestionJobIsActive)) return true;
-  if (segmentStatuses.some((status) => status === "QUEUED" || status === "RUNNING")) return true;
-  if (documentStatus != null && DOCUMENT_ACTIVE_STATUSES.has(documentStatus)) return true;
+  if (
+    segmentStatuses.some(
+      (status) => status === "QUEUED" || status === "RUNNING",
+    )
+  )
+    return true;
+  if (documentStatus != null && DOCUMENT_ACTIVE_STATUSES.has(documentStatus))
+    return true;
 
   // PREPROCESSED / REVIEW / CHUNKED / INDEXED / ERROR は通常は安定状態。ただし job 投入直後の
   // 引き継ぎ窓では mutation 側の job status が上の判定に入るため、ここでは止めてよい。
@@ -304,7 +345,9 @@ export function documentWorkspaceShouldRefresh({
     documentStatus === "PREPROCESSED" ||
     documentStatus === "REVIEW";
   const stageReview = documentStatus === "CHUNKED";
-  return Boolean((watchProcessing || localWatchProcessing) && !terminal && !stageReview);
+  return Boolean(
+    (watchProcessing || localWatchProcessing) && !terminal && !stageReview,
+  );
 }
 
 /** データベース利用可否(DB ゲート用)。設定ページ以外を開く前に参照する。 */
@@ -347,7 +390,7 @@ export function useDocuments(
     limit?: number;
     offset?: number;
   },
-  options: { graceActive?: boolean } = {}
+  options: { graceActive?: boolean } = {},
 ) {
   return useQuery({
     queryKey: queryKeys.documents({
@@ -368,7 +411,7 @@ export function useDocuments(
 /** ドキュメント詳細。 */
 export function useDocument(
   id: string | null,
-  options: { refetchInterval?: number | false } = {}
+  options: { refetchInterval?: number | false } = {},
 ) {
   return useQuery({
     queryKey: queryKeys.document(id ?? ""),
@@ -402,8 +445,13 @@ export function useDocumentChunkSets(id: string | null, enabled = true) {
 export function useCreateChunkSetExperiment() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, body }: { id: string; body: ChunkSetExperimentRequest }) =>
-      api.createChunkSetExperiment(id, body),
+    mutationFn: ({
+      id,
+      body,
+    }: {
+      id: string;
+      body: ChunkSetExperimentRequest;
+    }) => api.createChunkSetExperiment(id, body),
     onSuccess: (_chunkSet, { id }) => {
       qc.invalidateQueries({ queryKey: queryKeys.documentChunkSets(id) });
     },
@@ -417,8 +465,13 @@ export function useCreateChunkSetExperiment() {
  */
 export function useCreateParserExtractionExperiment() {
   return useMutation({
-    mutationFn: ({ id, body }: { id: string; body: ParserExtractionExperimentRequest }) =>
-      api.createParserExtractionExperiment(id, body),
+    mutationFn: ({
+      id,
+      body,
+    }: {
+      id: string;
+      body: ParserExtractionExperimentRequest;
+    }) => api.createParserExtractionExperiment(id, body),
   });
 }
 
@@ -437,7 +490,7 @@ export function usePromoteChunkSetExperiment() {
 /** 文書 extraction の監査用 export view。 */
 export function useDocumentExtractionExport(
   id: string | null,
-  format: DocumentExtractionExportFormat
+  format: DocumentExtractionExportFormat,
 ) {
   return useQuery({
     queryKey: queryKeys.documentExtractionExport(id ?? "", format),
@@ -475,11 +528,19 @@ export function useRetryFailedDocumentIngestionSegments() {
       api.retryFailedDocumentIngestionSegments(id, recipeId),
     onSuccess: (job, variables) => {
       qc.invalidateQueries({ queryKey: queryKeys.document(variables.id) });
-      qc.invalidateQueries({ queryKey: queryKeys.documentRecipes(variables.id) });
-      qc.invalidateQueries({ queryKey: queryKeys.documentIngestionJobs(variables.id) });
-      qc.invalidateQueries({ queryKey: queryKeys.documentIngestionSegments(variables.id) });
+      qc.invalidateQueries({
+        queryKey: queryKeys.documentRecipes(variables.id),
+      });
+      qc.invalidateQueries({
+        queryKey: queryKeys.documentIngestionJobs(variables.id),
+      });
+      qc.invalidateQueries({
+        queryKey: queryKeys.documentIngestionSegments(variables.id),
+      });
       qc.invalidateQueries({ queryKey: ["documents", "ingestion-jobs"] });
-      qc.invalidateQueries({ queryKey: ["documents", "ingestion-jobs", job.id] });
+      qc.invalidateQueries({
+        queryKey: ["documents", "ingestion-jobs", job.id],
+      });
       qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
     },
   });
@@ -516,7 +577,9 @@ export function useDocumentRecipes(id: string | null) {
     refetchInterval: (query) => {
       const recipes = query.state.data;
       return recipes?.some((recipe) =>
-        recipe.steps.some((step) => step.status === "QUEUED" || step.status === "RUNNING")
+        recipe.steps.some(
+          (step) => step.status === "QUEUED" || step.status === "RUNNING",
+        ),
       )
         ? 1_500
         : false;
@@ -524,10 +587,14 @@ export function useDocumentRecipes(id: string | null) {
   });
 }
 
-export function useDocumentRecipeChunks(id: string | null, recipeId: string | null) {
+export function useDocumentRecipeChunks(
+  id: string | null,
+  recipeId: string | null,
+) {
   return useQuery({
     queryKey: queryKeys.documentRecipeChunks(id ?? "", recipeId ?? ""),
-    queryFn: () => api.listDocumentRecipeChunks(id as string, recipeId as string),
+    queryFn: () =>
+      api.listDocumentRecipeChunks(id as string, recipeId as string),
     enabled: id != null && recipeId != null,
     retry: false,
   });
@@ -550,11 +617,20 @@ export function usePreviewDocumentRecipeChunks() {
 export function useDocumentRecipeExtractionExport(
   id: string | null,
   recipeId: string | null,
-  format: DocumentExtractionExportFormat
+  format: DocumentExtractionExportFormat,
 ) {
   return useQuery({
-    queryKey: queryKeys.documentRecipeExtractionExport(id ?? "", recipeId ?? "", format),
-    queryFn: () => api.exportDocumentRecipeExtraction(id as string, recipeId as string, format),
+    queryKey: queryKeys.documentRecipeExtractionExport(
+      id ?? "",
+      recipeId ?? "",
+      format,
+    ),
+    queryFn: () =>
+      api.exportDocumentRecipeExtraction(
+        id as string,
+        recipeId as string,
+        format,
+      ),
     enabled: id != null && recipeId != null,
     retry: false,
   });
@@ -563,8 +639,12 @@ export function useDocumentRecipeExtractionExport(
 function invalidateDocumentRecipeQueries(qc: QueryClient, documentId: string) {
   qc.invalidateQueries({ queryKey: queryKeys.documentRecipes(documentId) });
   qc.invalidateQueries({ queryKey: ["documents", documentId, "recipes"] });
-  qc.invalidateQueries({ queryKey: queryKeys.documentIngestionJobs(documentId) });
-  qc.invalidateQueries({ queryKey: queryKeys.documentIngestionSegments(documentId) });
+  qc.invalidateQueries({
+    queryKey: queryKeys.documentIngestionJobs(documentId),
+  });
+  qc.invalidateQueries({
+    queryKey: queryKeys.documentIngestionSegments(documentId),
+  });
   qc.invalidateQueries({ queryKey: queryKeys.document(documentId) });
 }
 
@@ -573,7 +653,8 @@ export function useCreateDocumentRecipe() {
   return useMutation({
     mutationFn: ({ id, copyFrom }: { id: string; copyFrom: string | null }) =>
       api.createDocumentRecipe(id, copyFrom),
-    onSuccess: (_recipe, variables) => invalidateDocumentRecipeQueries(qc, variables.id),
+    onSuccess: (_recipe, variables) =>
+      invalidateDocumentRecipeQueries(qc, variables.id),
   });
 }
 
@@ -582,7 +663,8 @@ export function useDeleteDocumentRecipe() {
   return useMutation({
     mutationFn: ({ id, recipeId }: { id: string; recipeId: string }) =>
       api.deleteDocumentRecipe(id, recipeId),
-    onSuccess: (_result, variables) => invalidateDocumentRecipeQueries(qc, variables.id),
+    onSuccess: (_result, variables) =>
+      invalidateDocumentRecipeQueries(qc, variables.id),
   });
 }
 
@@ -602,7 +684,9 @@ export function useUpdateDocumentRecipe() {
       qc.setQueryData(
         queryKeys.documentRecipes(variables.id),
         (current: Array<typeof recipe> | undefined) =>
-          current?.map((item) => (item.recipe_id === recipe.recipe_id ? recipe : item))
+          current?.map((item) =>
+            item.recipe_id === recipe.recipe_id ? recipe : item,
+          ),
       );
     },
   });
@@ -620,7 +704,8 @@ export function useEnqueueDocumentRecipeJob() {
       recipeId: string;
       phase: IngestionJobPhase;
     }) => api.enqueueDocumentRecipeJob(id, recipeId, phase),
-    onSuccess: (_job, variables) => invalidateDocumentRecipeQueries(qc, variables.id),
+    onSuccess: (_job, variables) =>
+      invalidateDocumentRecipeQueries(qc, variables.id),
   });
 }
 
@@ -636,7 +721,8 @@ export function useApproveDocumentRecipe() {
       recipeId: string;
       payload?: DocumentApproveRequest;
     }) => api.approveDocumentRecipe(id, recipeId, payload),
-    onSuccess: (_job, variables) => invalidateDocumentRecipeQueries(qc, variables.id),
+    onSuccess: (_job, variables) =>
+      invalidateDocumentRecipeQueries(qc, variables.id),
   });
 }
 
@@ -652,7 +738,8 @@ export function useSaveDocumentRecipeReviewEdits() {
       recipeId: string;
       payload: DocumentReviewEditsRequest;
     }) => api.saveDocumentRecipeReviewEdits(id, recipeId, payload),
-    onSuccess: (_recipe, variables) => invalidateDocumentRecipeQueries(qc, variables.id),
+    onSuccess: (_recipe, variables) =>
+      invalidateDocumentRecipeQueries(qc, variables.id),
   });
 }
 
@@ -660,8 +747,13 @@ export function useSaveDocumentRecipeReviewEdits() {
 export function useUpdateDocumentIngestionConfig() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, config }: { id: string; config: DocumentProcessingConfig }) =>
-      api.updateDocumentIngestionConfig(id, config),
+    mutationFn: ({
+      id,
+      config,
+    }: {
+      id: string;
+      config: DocumentProcessingConfig;
+    }) => api.updateDocumentIngestionConfig(id, config),
     onSuccess: (data, variables) => {
       qc.setQueryData(queryKeys.documentIngestionConfig(variables.id), data);
     },
@@ -680,10 +772,16 @@ export function useReplaceDocumentKnowledgeBases() {
       payload: DocumentKnowledgeBaseReplaceRequest;
     }) => api.replaceDocumentKnowledgeBases(id, payload),
     onSuccess: (_refs, variables) => {
-      qc.invalidateQueries({ queryKey: queryKeys.documentKnowledgeBases(variables.id) });
+      qc.invalidateQueries({
+        queryKey: queryKeys.documentKnowledgeBases(variables.id),
+      });
       qc.invalidateQueries({ queryKey: queryKeys.document(variables.id) });
-      qc.invalidateQueries({ queryKey: queryKeys.documentIngestionConfig(variables.id) });
-      qc.invalidateQueries({ queryKey: queryKeys.documentChunkSets(variables.id) });
+      qc.invalidateQueries({
+        queryKey: queryKeys.documentIngestionConfig(variables.id),
+      });
+      qc.invalidateQueries({
+        queryKey: queryKeys.documentChunkSets(variables.id),
+      });
       qc.invalidateQueries({ queryKey: ["documents"] });
       qc.invalidateQueries({ queryKey: ["knowledge-bases"] });
       qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
@@ -751,11 +849,13 @@ export function useBatchUploadDocuments() {
 }
 
 /** 取込 job 一覧。 */
-export function useIngestionJobs(params: {
-  status?: IngestionJobStatus;
-  limit?: number;
-  offset?: number;
-} = {}) {
+export function useIngestionJobs(
+  params: {
+    status?: IngestionJobStatus;
+    limit?: number;
+    offset?: number;
+  } = {},
+) {
   return useQuery({
     queryKey: queryKeys.ingestionJobs(params),
     queryFn: () => api.listIngestionJobs(params),
@@ -769,7 +869,8 @@ export function useIngestionJob(id: string | null) {
     queryKey: ["documents", "ingestion-jobs", id] as const,
     queryFn: () => api.getIngestionJob(id as string),
     enabled: id != null,
-    refetchInterval: (query) => (ingestionJobIsActive(query.state.data?.status) ? 2000 : false),
+    refetchInterval: (query) =>
+      ingestionJobIsActive(query.state.data?.status) ? 2000 : false,
   });
 }
 
@@ -807,7 +908,8 @@ export function useKnowledgeBaseGraph(id: string | null) {
 export function useCreateKnowledgeBase() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (payload: KnowledgeBaseCreateRequest) => api.createKnowledgeBase(payload),
+    mutationFn: (payload: KnowledgeBaseCreateRequest) =>
+      api.createKnowledgeBase(payload),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["knowledge-bases"] });
       qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
@@ -819,8 +921,13 @@ export function useCreateKnowledgeBase() {
 export function useUpdateKnowledgeBase() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, payload }: { id: string; payload: KnowledgeBaseUpdateRequest }) =>
-      api.updateKnowledgeBase(id, payload),
+    mutationFn: ({
+      id,
+      payload,
+    }: {
+      id: string;
+      payload: KnowledgeBaseUpdateRequest;
+    }) => api.updateKnowledgeBase(id, payload),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["knowledge-bases"] });
     },
@@ -873,9 +980,13 @@ export function useDomainKeywords(businessViewId: string) {
 export function useSaveDomainKeywords(businessViewId: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (keywords: string[]) => api.saveDomainKeywords(businessViewId, keywords),
+    mutationFn: (keywords: string[]) =>
+      api.saveDomainKeywords(businessViewId, keywords),
     onSuccess: (data) => {
-      qc.setQueryData(["business-views", businessViewId, "domain-keywords"], data);
+      qc.setQueryData(
+        ["business-views", businessViewId, "domain-keywords"],
+        data,
+      );
     },
   });
 }
@@ -898,7 +1009,7 @@ export function useApprovedFaq(businessViewId: string) {
 /** FAQ の追加・削除・取込。成功時は一覧 cache を結果で置き換える。 */
 export function useApprovedFaqMutation<TArgs>(
   businessViewId: string,
-  mutationFn: (args: TArgs) => Promise<ApprovedFaqMutationData>
+  mutationFn: (args: TArgs) => Promise<ApprovedFaqMutationData>,
 ) {
   const qc = useQueryClient();
   return useMutation({
@@ -924,7 +1035,10 @@ export function useEditRuntimeKnowledge(businessViewId: string) {
     mutationFn: (body: RuntimeKnowledgeEditRequest) =>
       api.editRuntimeKnowledge(businessViewId, body),
     onSuccess: (data) => {
-      qc.setQueryData(["business-views", businessViewId, "runtime-knowledge"], data);
+      qc.setQueryData(
+        ["business-views", businessViewId, "runtime-knowledge"],
+        data,
+      );
     },
   });
 }
@@ -984,7 +1098,8 @@ export function useUpdateAnswerRecordSettings() {
 export function useCreateBusinessView() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (payload: BusinessViewCreateRequest) => api.createBusinessView(payload),
+    mutationFn: (payload: BusinessViewCreateRequest) =>
+      api.createBusinessView(payload),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["business-views"] });
     },
@@ -995,8 +1110,13 @@ export function useCreateBusinessView() {
 export function useUpdateBusinessView() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, payload }: { id: string; payload: BusinessViewUpdateRequest }) =>
-      api.updateBusinessView(id, payload),
+    mutationFn: ({
+      id,
+      payload,
+    }: {
+      id: string;
+      payload: BusinessViewUpdateRequest;
+    }) => api.updateBusinessView(id, payload),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["business-views"] });
     },
@@ -1030,7 +1150,8 @@ export function useConversation(id: string | null) {
 export function useCreateConversation() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (payload: ConversationCreateBody) => api.createConversation(payload),
+    mutationFn: (payload: ConversationCreateBody) =>
+      api.createConversation(payload),
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ["conversations"] });
     },
@@ -1052,19 +1173,25 @@ export function useSubmitFeedback() {
   return useMutation({
     mutationFn: (payload: FeedbackRequestBody) => api.submitFeedback(payload),
     onSuccess: (saved) => {
-      qc.setQueryData(queryKeys.currentFeedback(saved.trace_id), (current: unknown) => {
-        const items = Array.isArray(current) ? current : [];
-        const remaining = items.filter((item) => {
-          if (!item || typeof item !== "object") return false;
-          const candidate = item as Partial<typeof saved>;
-          return !(
-            candidate.target_type === saved.target_type &&
-            (candidate.document_id ?? null) === (saved.document_id ?? null) &&
-            (candidate.chunk_id ?? null) === (saved.chunk_id ?? null)
-          );
-        });
-        return [...remaining, { ...saved, created_at: new Date().toISOString() }];
-      });
+      qc.setQueryData(
+        queryKeys.currentFeedback(saved.trace_id),
+        (current: unknown) => {
+          const items = Array.isArray(current) ? current : [];
+          const remaining = items.filter((item) => {
+            if (!item || typeof item !== "object") return false;
+            const candidate = item as Partial<typeof saved>;
+            return !(
+              candidate.target_type === saved.target_type &&
+              (candidate.document_id ?? null) === (saved.document_id ?? null) &&
+              (candidate.chunk_id ?? null) === (saved.chunk_id ?? null)
+            );
+          });
+          return [
+            ...remaining,
+            { ...saved, created_at: new Date().toISOString() },
+          ];
+        },
+      );
       qc.invalidateQueries({ queryKey: ["feedback"] });
     },
   });
@@ -1091,8 +1218,13 @@ export function useFeedbackDetail(id: string | null) {
 export function useUpdateConversation() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, payload }: { id: string; payload: ConversationUpdateBody }) =>
-      api.updateConversation(id, payload),
+    mutationFn: ({
+      id,
+      payload,
+    }: {
+      id: string;
+      payload: ConversationUpdateBody;
+    }) => api.updateConversation(id, payload),
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ["conversations"] });
     },
@@ -1137,8 +1269,13 @@ export function useAssignDocumentsToKnowledgeBase() {
 export function useRemoveDocumentFromKnowledgeBase() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ knowledgeBaseId, documentId }: { knowledgeBaseId: string; documentId: string }) =>
-      api.removeDocumentFromKnowledgeBase(knowledgeBaseId, documentId),
+    mutationFn: ({
+      knowledgeBaseId,
+      documentId,
+    }: {
+      knowledgeBaseId: string;
+      documentId: string;
+    }) => api.removeDocumentFromKnowledgeBase(knowledgeBaseId, documentId),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["knowledge-bases"] });
       qc.invalidateQueries({ queryKey: ["documents"] });
@@ -1160,7 +1297,10 @@ export function useIngestDocument() {
       phase?: IngestionJobPhase;
     }) => api.enqueueDocumentIngestionJob(id, force, phase),
     onSuccess: (job) => {
-      if ((job.phase === "PREPROCESS" || job.phase === "EXTRACT") && job.status === "QUEUED") {
+      if (
+        (job.phase === "PREPROCESS" || job.phase === "EXTRACT") &&
+        job.status === "QUEUED"
+      ) {
         clearDocumentProcessingCache(qc, job.document_id, {
           clearPreprocessArtifact: job.phase === "PREPROCESS",
         });
@@ -1184,7 +1324,10 @@ export function useEnqueueDocumentIngestionJob() {
       phase?: IngestionJobPhase;
     }) => api.enqueueDocumentIngestionJob(id, force, phase),
     onSuccess: (job) => {
-      if ((job.phase === "PREPROCESS" || job.phase === "EXTRACT") && job.status === "QUEUED") {
+      if (
+        (job.phase === "PREPROCESS" || job.phase === "EXTRACT") &&
+        job.status === "QUEUED"
+      ) {
         clearDocumentProcessingCache(qc, job.document_id, {
           clearPreprocessArtifact: job.phase === "PREPROCESS",
         });
@@ -1198,14 +1341,25 @@ export function useEnqueueDocumentIngestionJob() {
 export function useApproveDocument() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, payload }: { id: string; payload?: DocumentApproveRequest }) =>
-      api.approveDocument(id, payload),
+    mutationFn: ({
+      id,
+      payload,
+    }: {
+      id: string;
+      payload?: DocumentApproveRequest;
+    }) => api.approveDocument(id, payload),
     onSuccess: (job) => {
       qc.invalidateQueries({ queryKey: ["documents"] });
       qc.invalidateQueries({ queryKey: queryKeys.document(job.document_id) });
-      qc.invalidateQueries({ queryKey: queryKeys.documentChunkSets(job.document_id) });
-      qc.invalidateQueries({ queryKey: queryKeys.documentIngestionJobs(job.document_id) });
-      qc.invalidateQueries({ queryKey: queryKeys.documentIngestionSegments(job.document_id) });
+      qc.invalidateQueries({
+        queryKey: queryKeys.documentChunkSets(job.document_id),
+      });
+      qc.invalidateQueries({
+        queryKey: queryKeys.documentIngestionJobs(job.document_id),
+      });
+      qc.invalidateQueries({
+        queryKey: queryKeys.documentIngestionSegments(job.document_id),
+      });
       qc.invalidateQueries({ queryKey: ["documents", "ingestion-jobs"] });
       qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
     },
@@ -1216,8 +1370,13 @@ export function useApproveDocument() {
 export function useSaveDocumentReviewEdits() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, payload }: { id: string; payload: DocumentReviewEditsRequest }) =>
-      api.saveDocumentReviewEdits(id, payload),
+    mutationFn: ({
+      id,
+      payload,
+    }: {
+      id: string;
+      payload: DocumentReviewEditsRequest;
+    }) => api.saveDocumentReviewEdits(id, payload),
     onSuccess: (detail) => {
       qc.setQueryData(queryKeys.document(detail.id), detail);
       qc.invalidateQueries({
@@ -1244,7 +1403,8 @@ export function useRejectDocument() {
 export function useDrainIngestionJobs() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ limit = 50 }: { limit?: number } = {}) => api.drainIngestionJobs(limit),
+    mutationFn: ({ limit = 50 }: { limit?: number } = {}) =>
+      api.drainIngestionJobs(limit),
     onSuccess: (jobs) => {
       qc.invalidateQueries({ queryKey: ["documents"] });
       qc.invalidateQueries({ queryKey: ["documents", "ingestion-jobs"] });
@@ -1265,8 +1425,12 @@ export function useRetryIngestionJob() {
     onSuccess: (job) => {
       qc.invalidateQueries({ queryKey: ["documents"] });
       qc.invalidateQueries({ queryKey: queryKeys.document(job.document_id) });
-      qc.invalidateQueries({ queryKey: queryKeys.documentIngestionJobs(job.document_id) });
-      qc.invalidateQueries({ queryKey: queryKeys.documentIngestionSegments(job.document_id) });
+      qc.invalidateQueries({
+        queryKey: queryKeys.documentIngestionJobs(job.document_id),
+      });
+      qc.invalidateQueries({
+        queryKey: queryKeys.documentIngestionSegments(job.document_id),
+      });
       qc.invalidateQueries({ queryKey: ["documents", "ingestion-jobs"] });
       qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
     },
@@ -1290,14 +1454,16 @@ export function useCancelIngestionJob() {
 /** RAG golden set 評価。 */
 export function useRunEvaluation() {
   return useMutation({
-    mutationFn: (payload: EvaluationRunRequestBody) => api.runEvaluation(payload),
+    mutationFn: (payload: EvaluationRunRequestBody) =>
+      api.runEvaluation(payload),
   });
 }
 
 /** RAG 設定比較。 */
 export function useCompareEvaluation() {
   return useMutation({
-    mutationFn: (payload: EvaluationCompareRequestBody) => api.compareEvaluation(payload),
+    mutationFn: (payload: EvaluationCompareRequestBody) =>
+      api.compareEvaluation(payload),
   });
 }
 
@@ -1306,14 +1472,6 @@ export function useModelSettings() {
   return useQuery({
     queryKey: queryKeys.modelSettings,
     queryFn: api.getModelSettings,
-  });
-}
-
-/** データベース設定。 */
-export function useDatabaseSettings() {
-  return useQuery({
-    queryKey: queryKeys.databaseSettings,
-    queryFn: api.getDatabaseSettings,
   });
 }
 
@@ -1340,18 +1498,6 @@ export function useInitializeSystemTables() {
   });
 }
 
-/** データベース設定のランタイム保存。 */
-export function useUpdateDatabaseSettings() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (payload: DatabaseSettingsUpdate) => api.updateDatabaseSettings(payload),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: queryKeys.databaseSettings });
-      qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
-    },
-  });
-}
-
 /** HuggingFace モデルダウンロード設定。 */
 export function useHuggingFaceSettings() {
   return useQuery({
@@ -1364,71 +1510,11 @@ export function useHuggingFaceSettings() {
 export function useUpdateHuggingFaceSettings() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (payload: HuggingFaceSettingsUpdate) => api.updateHuggingFaceSettings(payload),
+    mutationFn: (payload: HuggingFaceSettingsUpdate) =>
+      api.updateHuggingFaceSettings(payload),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: queryKeys.huggingfaceSettings });
     },
-  });
-}
-
-/** Oracle Wallet ZIP のアップロード。 */
-export function useUploadDatabaseWallet() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (file: File) => api.uploadDatabaseWallet(file),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: queryKeys.databaseSettings });
-      qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
-    },
-  });
-}
-
-/** データベース接続テスト。 */
-export function useTestDatabaseSettings() {
-  return useMutation({
-    mutationFn: (payload: DatabaseSettingsUpdate) => api.testDatabaseSettings(payload),
-  });
-}
-
-/** Autonomous Database 情報。起動/停止などの遷移中だけ自動再取得する。 */
-export function useAdbInfo() {
-  return useQuery({
-    queryKey: queryKeys.adbInfo,
-    queryFn: api.getAdbInfo,
-    refetchInterval: (query) =>
-      adbIsTransitioning(query.state.data?.lifecycle_state)
-        ? ACTIVE_REFETCH_INTERVAL_MS
-        : false,
-  });
-}
-
-/** ADB 操作対象 OCID / region の保存（最新情報を返す）。 */
-export function useUpdateAdbSettings() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (payload: AdbSettingsUpdate) => api.updateAdbSettings(payload),
-    onSuccess: (data) => {
-      qc.setQueryData(queryKeys.adbInfo, data);
-      qc.invalidateQueries({ queryKey: queryKeys.databaseSettings });
-    },
-  });
-}
-
-/** ADB 起動。 */
-export function useStartAdb() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: () => api.startAdb(),
-    onSuccess: (data) => qc.setQueryData(queryKeys.adbInfo, data),
-  });
-}
-
-/** ADB 停止。 */
-export function useStopAdb() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: () => api.stopAdb(),
-    onSuccess: (data) => qc.setQueryData(queryKeys.adbInfo, data),
   });
 }
 
@@ -1463,7 +1549,7 @@ export function useParserAdapterContract() {
 /** 保存済みの外部 GPU parser 接続を確認する。 */
 export function useExternalParserStatus(
   backend: ExternalParserBackendName,
-  enabled = false
+  enabled = false,
 ) {
   return useQuery<ExternalParserConnectionStatusData>({
     queryKey: queryKeys.externalParserStatus(backend),
@@ -1472,7 +1558,6 @@ export function useExternalParserStatus(
     retry: false,
   });
 }
-
 
 /** GraphRAG アダプター(知識グラフ構築)の runtime 設定。 */
 export function useGraphSettings() {
@@ -1487,7 +1572,8 @@ export function useGraphSettings() {
 export function useUpdateGraphSettings() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (payload: GraphSettingsUpdate) => api.updateGraphSettings(payload),
+    mutationFn: (payload: GraphSettingsUpdate) =>
+      api.updateGraphSettings(payload),
     onSuccess: (data) => {
       qc.setQueryData(queryKeys.graphSettings, data);
       qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
@@ -1508,7 +1594,8 @@ export function useAgenticSettings() {
 export function useUpdateAgenticSettings() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (payload: AgenticSettingsUpdate) => api.updateAgenticSettings(payload),
+    mutationFn: (payload: AgenticSettingsUpdate) =>
+      api.updateAgenticSettings(payload),
     onSuccess: (data) => {
       qc.setQueryData(queryKeys.agenticSettings, data);
       qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
@@ -1529,7 +1616,8 @@ export function useEvaluationSettings() {
 export function useUpdateEvaluationSettings() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (payload: EvaluationSettingsUpdate) => api.updateEvaluationSettings(payload),
+    mutationFn: (payload: EvaluationSettingsUpdate) =>
+      api.updateEvaluationSettings(payload),
     onSuccess: (data) => {
       qc.setQueryData(queryKeys.evaluationSettings, data);
     },
@@ -1549,7 +1637,8 @@ export function useVectorIndexSettings() {
 export function useUpdateVectorIndexSettings() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (payload: VectorIndexSettingsUpdate) => api.updateVectorIndexSettings(payload),
+    mutationFn: (payload: VectorIndexSettingsUpdate) =>
+      api.updateVectorIndexSettings(payload),
     onSuccess: (data) => {
       qc.setQueryData(queryKeys.vectorIndexSettings, data);
       qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
@@ -1570,7 +1659,8 @@ export function useGenerationSettings() {
 export function useUpdateGenerationSettings() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (payload: GenerationSettingsUpdate) => api.updateGenerationSettings(payload),
+    mutationFn: (payload: GenerationSettingsUpdate) =>
+      api.updateGenerationSettings(payload),
     onSuccess: (data) => {
       qc.setQueryData(queryKeys.generationSettings, data);
       qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
@@ -1597,7 +1687,8 @@ function invalidatePromptDependents(qc: QueryClient, data: PromptVersionsData) {
 export function useCreatePromptVersion() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (payload: PromptVersionCreate) => api.createPromptVersion(payload),
+    mutationFn: (payload: PromptVersionCreate) =>
+      api.createPromptVersion(payload),
     onSuccess: (data) => invalidatePromptDependents(qc, data),
   });
 }
@@ -1634,7 +1725,8 @@ export function useGuardrailSettings() {
 export function useUpdateGuardrailSettings() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (payload: GuardrailSettingsUpdate) => api.updateGuardrailSettings(payload),
+    mutationFn: (payload: GuardrailSettingsUpdate) =>
+      api.updateGuardrailSettings(payload),
     onSuccess: (data) => {
       qc.setQueryData(queryKeys.guardrailSettings, data);
       qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
@@ -1655,7 +1747,8 @@ export function useRetrievalSettings() {
 export function useUpdateRetrievalSettings() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (payload: RetrievalSettingsUpdate) => api.updateRetrievalSettings(payload),
+    mutationFn: (payload: RetrievalSettingsUpdate) =>
+      api.updateRetrievalSettings(payload),
     onSuccess: (data) => {
       qc.setQueryData(queryKeys.retrievalSettings, data);
       qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
@@ -1676,7 +1769,8 @@ export function useGroundingSettings() {
 export function useUpdateGroundingSettings() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (payload: GroundingSettingsUpdate) => api.updateGroundingSettings(payload),
+    mutationFn: (payload: GroundingSettingsUpdate) =>
+      api.updateGroundingSettings(payload),
     onSuccess: (data) => {
       qc.setQueryData(queryKeys.groundingSettings, data);
       qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
@@ -1694,7 +1788,9 @@ export function usePreprocessSettings() {
 }
 
 /** マイクロサービス一覧の静的メタデータ。稼働プローブは行わず、画面初期表示を軽くする。 */
-export function useServiceCatalog(options: { refetchInterval?: number | false } = {}) {
+export function useServiceCatalog(
+  options: { refetchInterval?: number | false } = {},
+) {
   return useQuery<ServiceCatalogData>({
     queryKey: queryKeys.serviceCatalog,
     queryFn: api.getServiceCatalog,
@@ -1706,7 +1802,7 @@ export function useServiceCatalog(options: { refetchInterval?: number | false } 
 /** マイクロサービスの稼働状態をサービス単位で取得する。 */
 export function useServiceStatusQueries(
   serviceIds: string[],
-  options: { refetchInterval?: number | false } = {}
+  options: { refetchInterval?: number | false } = {},
 ): UseQueryResult<ServiceStatusData>[] {
   return useQueries({
     queries: serviceIds.map((serviceId) => ({
@@ -1729,7 +1825,9 @@ export function useServiceLogs(serviceId: string | null, lines = 200) {
 }
 
 /** マイクロサービスの稼働状態一覧。既定 5s でポーリングして稼働状況をライブ表示する。 */
-export function useServices(options: { refetchInterval?: number | false } = {}) {
+export function useServices(
+  options: { refetchInterval?: number | false } = {},
+) {
   return useQuery<ServiceListData>({
     queryKey: queryKeys.services,
     queryFn: api.getServices,
@@ -1746,7 +1844,8 @@ export function useControlService() {
     unknown,
     { serviceId: string; action: ServiceAction }
   >({
-    mutationFn: ({ serviceId, action }) => api.controlService(serviceId, action),
+    mutationFn: ({ serviceId, action }) =>
+      api.controlService(serviceId, action),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: queryKeys.services });
     },
@@ -1757,7 +1856,8 @@ export function useControlService() {
 export function useUpdatePreprocessSettings() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (payload: PreprocessSettingsUpdate) => api.updatePreprocessSettings(payload),
+    mutationFn: (payload: PreprocessSettingsUpdate) =>
+      api.updatePreprocessSettings(payload),
     onSuccess: (data) => {
       qc.setQueryData(queryKeys.preprocessSettings, data);
       qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
@@ -1777,7 +1877,8 @@ export function useChunkingSettings() {
 export function useUpdateChunkingSettings() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (payload: ChunkingSettingsUpdate) => api.updateChunkingSettings(payload),
+    mutationFn: (payload: ChunkingSettingsUpdate) =>
+      api.updateChunkingSettings(payload),
     onSuccess: (data) => {
       qc.setQueryData(queryKeys.chunkingSettings, data);
       qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });

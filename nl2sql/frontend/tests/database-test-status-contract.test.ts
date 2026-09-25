@@ -2,9 +2,13 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-const apiSource = readFileSync(new URL("../src/lib/api.ts", import.meta.url), "utf8");
+// データベース設定の画面と型は3製品共通の共有パッケージにある（#108）。
+const apiSource = readFileSync(
+  new URL("../../../platform/packages/system-settings/src/database/types.ts", import.meta.url),
+  "utf8"
+);
 const databaseSettingsSource = readFileSync(
-  new URL("../src/components/settings/DatabaseSettingsClient.tsx", import.meta.url),
+  new URL("../../../platform/packages/system-settings/src/database/DatabaseSettingsPage.tsx", import.meta.url),
   "utf8"
 );
 const settingsE2eSource = readFileSync(

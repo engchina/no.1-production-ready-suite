@@ -37,6 +37,9 @@ const databaseSettings = {
   vector_column: "VECTOR(1536, FLOAT32)",
   adb_ocid: "ocid1.autonomousdatabase.oc1..rag",
   region: "ap-osaka-1",
+  driver_mode: "thick" as const,
+  connection_security: "wallet_mtls" as const,
+  client_lib_dir: "/u01/aipoc/instantclient_23_26",
   config_source: "runtime" as const,
 };
 
@@ -102,6 +105,11 @@ async function mockDatabaseAndAdb(page: Page, handlers: AdbMockHandlers) {
       await route.fulfill(envelope(handlers.onSaveSettings?.(payload) ?? handlers.info()));
       return;
     }
+    if (url.pathname === "/api/settings/database/wallet/download") {
+      // ADB の保存 / 再取得のあとに Wallet の自動取得を試みる（共有画面。#108）。
+      await route.fulfill(envelope({ status: "already_configured", settings: databaseSettings }));
+      return;
+    }
     if (url.pathname === "/api/settings/database/system-tables") {
       await route.fulfill({ json: SYSTEM_TABLES_STATUS_OK });
       return;
@@ -139,11 +147,11 @@ test("ADB 管理パネルが情報を表示し起動操作できる", async ({ p
     page.getByRole("heading", { name: "Autonomous Database 管理" })
   ).toBeVisible();
   await expect(page.getByLabel("ADB OCID")).toHaveValue("ocid1.autonomousdatabase.oc1..rag");
-  await expect(page.getByText("状態: 停止済み")).toBeVisible();
+  await expect(page.getByText("OCI ADB: 停止済み")).toBeVisible();
 
   await page.getByRole("button", { name: "起動", exact: true }).click();
 
-  await expect(page.getByText("状態: 起動中")).toBeVisible();
+  await expect(page.getByText("OCI ADB: 起動中")).toBeVisible();
   await expect(page.getByText("操作履歴")).toBeVisible();
   await expect(
     page.getByText("データベース 'RAG ADB' の起動を開始しました。")
@@ -199,12 +207,12 @@ test("起動後に lifecycle がポーリングで自動更新される(STARTING
 
   await page.goto("/settings/database");
 
-  await expect(page.getByText("状態: 停止済み")).toBeVisible();
+  await expect(page.getByText("OCI ADB: 停止済み")).toBeVisible();
   await page.getByRole("button", { name: "起動", exact: true }).click();
-  await expect(page.getByText("状態: 起動中")).toBeVisible();
+  await expect(page.getByText("OCI ADB: 起動中")).toBeVisible();
 
   // クリックや「情報を再取得」なしで、ポーリングにより起動済みへ更新される。
-  await expect(page.getByText("状態: 起動済み")).toBeVisible({ timeout: 15000 });
+  await expect(page.getByText("OCI ADB: 起動済み")).toBeVisible({ timeout: 15000 });
 });
 
 test("起動済み ADB を停止操作できる", async ({ page }) => {
@@ -223,11 +231,11 @@ test("起動済み ADB を停止操作できる", async ({ page }) => {
 
   await page.goto("/settings/database");
 
-  await expect(page.getByText("状態: 起動済み")).toBeVisible();
+  await expect(page.getByText("OCI ADB: 起動済み")).toBeVisible();
 
   await page.getByRole("button", { name: "停止", exact: true }).click();
 
-  await expect(page.getByText("状態: 停止中")).toBeVisible();
+  await expect(page.getByText("OCI ADB: 停止中")).toBeVisible();
   await expect(
     page.getByText("データベース 'RAG ADB' の停止を開始しました。")
   ).toBeVisible();
