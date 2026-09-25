@@ -602,7 +602,7 @@ jobs:
         run: npm run build
 
   nl2sql-e2e:
-    name: NL2SQL / E2E (${{ matrix.shard }}/4)
+    name: NL2SQL / E2E (${{ matrix.shard }}/8)
     needs: changes
     if: needs.changes.outputs.nl2sql == 'true' || needs.changes.outputs.platform == 'true'
     runs-on: ubuntu-latest
@@ -610,7 +610,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     defaults:
       run:
         working-directory: nl2sql/frontend
@@ -640,8 +640,10 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       # desktop / mobile の 2 project を shard で分けて実行する（#133）。CI=true で retries 2。
+      # 4 vCPU の runner で 2 worker + Vite dev server だと時刻・描画待ちの test が負荷で落ちるため、
+      # worker は 1 にして shard を増やす（RAG も CI では 1 worker。#175）。
       - name: Playwright E2E
-        run: npx playwright test --shard=${{ matrix.shard }}/4
+        run: npx playwright test --shard=${{ matrix.shard }}/8 --workers=1
 
       - name: Upload Playwright report
         if: failure()
