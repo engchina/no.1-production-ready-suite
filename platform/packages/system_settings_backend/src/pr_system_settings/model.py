@@ -601,14 +601,17 @@ class ModelSettingsStore:
             tmp_path.unlink(missing_ok=True)
 
     def _environment_api_key(self, settings: Any, *, refresh: bool) -> str | None:
-        """`.env` の API key。None は「分からないので現在の基準値を使う」。"""
-        # プロセス環境変数は `.env` より優先される（pydantic-settings と同じ）。
-        if ENTERPRISE_AI_API_KEY_ENV in os.environ:
-            return os.environ[ENTERPRISE_AI_API_KEY_ENV]
+        """実効の API key。None は「分からないので現在の基準値を使う」。
+
+        画面で保存した値（`.env` にある key）を、プロセスの環境変数より優先する。
+        `.env` に key がなければ環境変数を使う（画面で削除した場合も環境変数へ戻る）。
+        """
         env_file = self.env_file(settings)
         value = _dotenv_value(env_file)
         if value is not None:
             return value
+        if ENTERPRISE_AI_API_KEY_ENV in os.environ:
+            return os.environ[ENTERPRISE_AI_API_KEY_ENV]
         return "" if refresh and env_file.is_file() else None
 
     @staticmethod
@@ -867,7 +870,10 @@ def save_model_settings(
             status_code=500, detail="モデル設定を永続化ファイルへ保存できませんでした。"
         ) from exc
     apply_model_settings(settings, payload)
-    settings.set_runtime_enterprise_ai_api_key(api_key)
+    # 空（削除）なら、プロセスの環境変数の key に戻る（再読込時と同じ規則）。
+    settings.set_runtime_enterprise_ai_api_key(
+        api_key or os.environ.get(ENTERPRISE_AI_API_KEY_ENV, "")
+    )
 
 
 def build_model_router(

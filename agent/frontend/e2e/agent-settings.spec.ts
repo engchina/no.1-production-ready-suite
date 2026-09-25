@@ -233,8 +233,8 @@ test.describe("Agent Runtime settings", () => {
     await page.goto("/settings/model");
     await expect(page.getByRole("heading", { name: "モデル設定", level: 1 })).toBeVisible();
     await page.getByRole("textbox", { name: "API key" }).fill("test-api-key");
-    await page.getByRole("button", { name: /保存/ }).click();
-    await expect(page.getByText("モデル設定を保存しました")).toBeVisible();
+    await page.getByRole("button", { name: "OCI Enterprise AI: 保存" }).click();
+    await expect(page.getByText("OCI Enterprise AI 接続設定を保存しました。").first()).toBeVisible();
     expect(mockApi.lastRequest("PATCH", "/api/settings/model")?.body).toMatchObject({
       enterprise_ai: { api_key: "test-api-key" },
     });

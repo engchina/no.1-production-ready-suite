@@ -1605,13 +1605,10 @@
         "rerank_model": "cohere.rerank-v4.0-fast"
       }
     },
-    "checks": {
-      "enterprise_ai": "missing",
-      "generative_ai": "ok",
-      "embedding_dim": "ok"
-    },
     "model_settings_file": "model-settings.json",
-    "source": "runtime"
+    "source": "runtime",
+    "secret_source": "missing",
+    "legacy_secret_detected": false
   },
   "databaseSettings": {
     "user": "",

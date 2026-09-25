@@ -44,8 +44,6 @@ import {
   type BusinessViewUpdateRequest,
   type ConversationCreateBody,
   type ConversationUpdateBody,
-  type ModelSettingsPayload,
-  type ModelSettingsTestRequest,
   type ParserAdapterContractData,
   type ParserAdapterSettingsUpdate,
   type ParserAdapterSettingsData,
@@ -80,7 +78,6 @@ import {
   type AgenticSettingsData,
   type AgenticSettingsUpdate,
   type UploadIngestionMode,
-  type UploadStorageSettingsUpdate,
   type ApprovedFaqMutationData,
   type RuntimeKnowledgeEditRequest,
 } from "./api";
@@ -1309,24 +1306,6 @@ export function useModelSettings() {
   return useQuery({
     queryKey: queryKeys.modelSettings,
     queryFn: api.getModelSettings,
-  });
-}
-
-/** モデル設定の保存。 */
-export function useUpdateModelSettings() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (payload: ModelSettingsPayload) => api.updateModelSettings(payload),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: queryKeys.modelSettings });
-    },
-  });
-}
-
-/** モデル単位の実 API テスト。 */
-export function useTestModelSettings() {
-  return useMutation({
-    mutationFn: (payload: ModelSettingsTestRequest) => api.testModelSettings(payload),
   });
 }
 

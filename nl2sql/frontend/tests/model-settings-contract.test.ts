@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-const apiSource = readFileSync(new URL("../src/lib/api.ts", import.meta.url), "utf8");
+// モデル設定の API 型は共有パッケージにある（#103）。
+const apiSource = readFileSync(
+  new URL("../../../platform/packages/system-settings/src/model/types.ts", import.meta.url),
+  "utf8"
+);
 const settingsE2eSource = readFileSync(
   new URL("./e2e/nl2sql-system-settings.spec.ts", import.meta.url),
   "utf8"

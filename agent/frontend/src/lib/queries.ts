@@ -9,8 +9,6 @@ import {
   api,
   type AdbSettingsUpdate,
   type DatabaseSettingsUpdate,
-  type ModelSettingsPayload,
-  type ModelSettingsTestRequest,
 } from "./api";
 
 export const queryKeys = {
@@ -37,29 +35,6 @@ export const ACTIVE_REFETCH_INTERVAL_MS = 4000;
 
 export function adbIsTransitioning(state: string | null | undefined): boolean {
   return state != null && ADB_TRANSITIONAL_STATES.has(state);
-}
-
-export function useModelSettings() {
-  return useQuery({
-    queryKey: queryKeys.modelSettings,
-    queryFn: api.getModelSettings,
-  });
-}
-
-export function useUpdateModelSettings() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (payload: ModelSettingsPayload) => api.updateModelSettings(payload),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: queryKeys.modelSettings });
-    },
-  });
-}
-
-export function useTestModelSettings() {
-  return useMutation({
-    mutationFn: (payload: ModelSettingsTestRequest) => api.testModelSettings(payload),
-  });
 }
 
 export function useDatabaseSettings() {

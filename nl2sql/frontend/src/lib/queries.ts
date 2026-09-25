@@ -4,8 +4,6 @@ import {
   api,
   type AdbSettingsUpdate,
   type DatabaseSettingsUpdate,
-  type ModelSettingsPayload,
-  type ModelSettingsTestRequest,
   type SelectAiCredentialCreateRequest,
   type SystemTablesInitializeRequest,
 } from "@/lib/api";
@@ -74,29 +72,6 @@ export function useRecoverPersistence() {
   return useMutation({
     mutationFn: api.recoverPersistence,
     onSuccess: (data) => qc.setQueryData(queryKeys.persistenceStatus, data),
-  });
-}
-
-export function useModelSettings() {
-  return useQuery({
-    queryKey: queryKeys.modelSettings,
-    queryFn: ({ signal }) => api.getModelSettings({ signal }),
-  });
-}
-
-export function useUpdateModelSettings() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (payload: ModelSettingsPayload) => api.updateModelSettings(payload),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: queryKeys.modelSettings });
-    },
-  });
-}
-
-export function useTestModelSettings() {
-  return useMutation({
-    mutationFn: (payload: ModelSettingsTestRequest) => api.testModelSettings(payload),
   });
 }
 

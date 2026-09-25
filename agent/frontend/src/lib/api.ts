@@ -1,5 +1,24 @@
-
 // OCI 認証 API の型は platform の共有パッケージが正本（#100）。
+// モデル設定の API 型は3製品共通（platform の共有パッケージ。#103）。
+export type {
+  EnterpriseAiConfiguredModel,
+  EnterpriseAiModelSettings,
+  EnterpriseAiVlmInputMode,
+  GenerativeAiModelSettings,
+  ModelSettingsData,
+  ModelSettingsPayload,
+  ModelSettingsSecretSource,
+  ModelSettingsTestRequest,
+  ModelSettingsTestResult,
+  ModelSettingsTestStatus,
+  ModelSettingsTestTargetType,
+} from "@engchina/production-ready-system-settings";
+import type {
+  ModelSettingsData,
+  ModelSettingsPayload,
+  ModelSettingsTestRequest,
+  ModelSettingsTestResult,
+} from "@engchina/production-ready-system-settings";
 export type {
   OciConfigField,
   OciConfigReadData,
@@ -81,7 +100,13 @@ export interface RunStep {
   id: string;
   run_id: string;
   kind: string;
-  status: "pending" | "running" | "waiting_approval" | "completed" | "failed" | "cancelled";
+  status:
+    | "pending"
+    | "running"
+    | "waiting_approval"
+    | "completed"
+    | "failed"
+    | "cancelled";
   tool_call?: ToolCall | null;
   tool_result?: ToolResult | null;
   approval_id?: string | null;
@@ -119,7 +144,13 @@ export interface RunState {
   external_run_id?: string | null;
   external_cursor?: string | null;
   runtime_capabilities: RuntimeCapabilities;
-  status: "queued" | "running" | "waiting_approval" | "completed" | "failed" | "cancelled";
+  status:
+    | "queued"
+    | "running"
+    | "waiting_approval"
+    | "completed"
+    | "failed"
+    | "cancelled";
   steps: RunStep[];
   events: RunEvent[];
   approvals: ApprovalRequest[];
@@ -232,7 +263,8 @@ export interface AgentProfilePatchPayload {
   enabled?: boolean;
 }
 
-export type MemoryKind = "run_summary" | "user_preference" | "tool_learning" | "note";
+export type MemoryKind =
+  "run_summary" | "user_preference" | "tool_learning" | "note";
 
 export interface MemoryEntry {
   id: string;
@@ -528,7 +560,8 @@ export interface RuntimeDefinition {
   managed_service_id?: string | null;
   capabilities: RuntimeCapabilities;
   enabled: boolean;
-  status: "unknown" | "running" | "degraded" | "stopped" | "disabled" | "legacy";
+  status:
+    "unknown" | "running" | "degraded" | "stopped" | "disabled" | "legacy";
   created_at: string;
   updated_at: string;
 }
@@ -563,79 +596,7 @@ export interface ApprovalDecisionPayload {
   comment?: string;
 }
 
-export type ModelSettingsCheckStatus = "ok" | "missing" | "invalid";
-export type ModelSettingsTestStatus = "success" | "failed";
-export type ModelSettingsTestTargetType =
-  | "enterprise_text"
-  | "enterprise_vision"
-  | "embedding"
-  | "rerank";
 export type DatabaseConnectionTestStatus = "success" | "failed" | "skipped";
-
-export interface EnterpriseAiConfiguredModel {
-  model_id: string;
-  display_name: string;
-  vision_enabled: boolean;
-}
-
-export type EnterpriseAiVlmInputMode = "auto" | "files_api" | "inline_image";
-
-export interface EnterpriseAiModelSettings {
-  endpoint: string;
-  project_ocid: string;
-  api_key: string;
-  has_api_key: boolean;
-  clear_api_key: boolean;
-  models: EnterpriseAiConfiguredModel[];
-  default_model_id: string;
-  api_path: string;
-  vlm_input_mode: EnterpriseAiVlmInputMode;
-  text_payload_template: string;
-  vision_payload_template: string;
-  text_response_path: string;
-  vision_response_path: string;
-  timeout_seconds: number;
-  max_retries: number;
-}
-
-export interface GenerativeAiModelSettings {
-  embedding_model: string;
-  embedding_dim: number;
-  rerank_model: string;
-}
-
-export interface ModelSettingsPayload {
-  enterprise_ai: EnterpriseAiModelSettings;
-  generative_ai: GenerativeAiModelSettings;
-}
-
-export interface ModelSettingsData {
-  settings: ModelSettingsPayload;
-  // 共有 API（#103）は返さない。画面は 4b で共通化する。
-  checks?: Record<"enterprise_ai" | "generative_ai" | "embedding_dim", ModelSettingsCheckStatus>;
-  model_settings_file: string;
-  source: "runtime";
-}
-
-export interface ModelSettingsTestRequest {
-  settings: ModelSettingsPayload;
-  target_type: ModelSettingsTestTargetType;
-  model_id: string;
-  vision_enabled: boolean;
-}
-
-export interface ModelSettingsTestResult {
-  status: ModelSettingsTestStatus;
-  target_type: ModelSettingsTestTargetType;
-  model_id: string;
-  message: string;
-  troubleshooting: string[];
-  raw_error: string | null;
-  error_type: string | null;
-  elapsed_ms: number;
-  checked_at: string;
-  details: Record<string, string | number | boolean | null>;
-}
 
 export interface DatabaseSettingsData {
   user: string;
@@ -733,8 +694,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (!response.ok) {
     let detail = response.statusText;
     try {
-      const body = (await response.json()) as { detail?: unknown; error_messages?: unknown };
-      if (Array.isArray(body.error_messages) && typeof body.error_messages[0] === "string") {
+      const body = (await response.json()) as {
+        detail?: unknown;
+        error_messages?: unknown;
+      };
+      if (
+        Array.isArray(body.error_messages) &&
+        typeof body.error_messages[0] === "string"
+      ) {
         detail = body.error_messages[0];
       } else if (typeof body.detail === "string") {
         detail = body.detail;
@@ -780,52 +747,73 @@ function externalMcpToolsQuery(filters: ExternalMcpToolsFilters): string {
 }
 
 export const agentApi = {
-  listRuntimes: () => request<{ runtimes: RuntimeDefinition[] }>("/api/runtimes"),
+  listRuntimes: () =>
+    request<{ runtimes: RuntimeDefinition[] }>("/api/runtimes"),
   patchRuntime: (runtimeId: string, payload: Partial<RuntimeDefinition>) =>
-    request<RuntimeDefinition>(`/api/runtimes/${encodeURIComponent(runtimeId)}`, {
-      method: "PATCH",
-      body: JSON.stringify(payload),
-    }),
+    request<RuntimeDefinition>(
+      `/api/runtimes/${encodeURIComponent(runtimeId)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+      },
+    ),
   probeRuntime: (runtimeId: string) =>
-    request<RuntimeDefinition>(`/api/runtimes/${encodeURIComponent(runtimeId)}/status`),
+    request<RuntimeDefinition>(
+      `/api/runtimes/${encodeURIComponent(runtimeId)}/status`,
+    ),
   runtimeServiceAction: (
     serviceId: string,
-    action: "pull" | "start" | "stop" | "restart" | "remove"
+    action: "pull" | "start" | "stop" | "restart" | "remove",
   ) =>
     request<Record<string, unknown>>(
       `/api/runtimes/services/${encodeURIComponent(serviceId)}/${action}`,
-      { method: "POST" }
+      { method: "POST" },
     ),
   runtimeServiceLogs: (serviceId: string) =>
-    request<{ content: string }>(`/api/runtimes/services/${encodeURIComponent(serviceId)}/logs`),
+    request<{ content: string }>(
+      `/api/runtimes/services/${encodeURIComponent(serviceId)}/logs`,
+    ),
   listRuntimeBindings: (agentId?: string) =>
     request<{ bindings: RuntimeBinding[] }>(
-      `/api/runtime-bindings${agentId ? `?agent_id=${encodeURIComponent(agentId)}` : ""}`
+      `/api/runtime-bindings${agentId ? `?agent_id=${encodeURIComponent(agentId)}` : ""}`,
     ),
   createRuntimeBinding: (payload: RuntimeBindingWritePayload) =>
     request<RuntimeBinding>("/api/runtime-bindings", {
       method: "POST",
       body: JSON.stringify(payload),
     }),
-  patchRuntimeBinding: (bindingId: string, payload: Partial<RuntimeBindingWritePayload>) =>
-    request<RuntimeBinding>(`/api/runtime-bindings/${encodeURIComponent(bindingId)}`, {
-      method: "PATCH",
-      body: JSON.stringify(payload),
-    }),
+  patchRuntimeBinding: (
+    bindingId: string,
+    payload: Partial<RuntimeBindingWritePayload>,
+  ) =>
+    request<RuntimeBinding>(
+      `/api/runtime-bindings/${encodeURIComponent(bindingId)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+      },
+    ),
   deleteRuntimeBinding: (bindingId: string) =>
     request<{ bindings: RuntimeBinding[] }>(
       `/api/runtime-bindings/${encodeURIComponent(bindingId)}`,
-      { method: "DELETE" }
+      { method: "DELETE" },
     ),
   syncRuntimeBinding: (bindingId: string) =>
-    request<RuntimeBinding>(`/api/runtime-bindings/${encodeURIComponent(bindingId)}/sync`, {
-      method: "POST",
-    }),
+    request<RuntimeBinding>(
+      `/api/runtime-bindings/${encodeURIComponent(bindingId)}/sync`,
+      {
+        method: "POST",
+      },
+    ),
   listRuns: () => request<{ runs: RunState[] }>("/api/runs"),
   createRun: (payload: CreateRunPayload) =>
-    request<RunState>("/api/runs", { method: "POST", body: JSON.stringify(payload) }),
+    request<RunState>("/api/runs", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   getRun: (runId: string) => request<RunState>(`/api/runs/${runId}`),
-  getRunAudit: (runId: string) => request<RunAuditData>(`/api/runs/${runId}/audit`),
+  getRunAudit: (runId: string) =>
+    request<RunAuditData>(`/api/runs/${runId}/audit`),
   listToolCallAudit: (filters: ToolCallAuditFilters) =>
     request<ToolCallAuditData>(`/api/audit/tool-calls${auditQuery(filters)}`),
   toolCallAuditCsvUrl: (filters: ToolCallAuditFilters) =>
@@ -834,9 +822,12 @@ export const agentApi = {
     request<{ artifacts: Artifact[] }>(`/api/runs/${runId}/artifacts`),
   getRunArtifact: (runId: string, artifactId: string) =>
     request<Artifact>(`/api/runs/${runId}/artifacts/${artifactId}`),
-  cancelRun: (runId: string) => request<RunState>(`/api/runs/${runId}/cancel`, { method: "POST" }),
-  resumeRun: (runId: string) => request<RunState>(`/api/runs/${runId}/resume`, { method: "POST" }),
-  replayRun: (runId: string) => request<RunState>(`/api/runs/${runId}/replay`, { method: "POST" }),
+  cancelRun: (runId: string) =>
+    request<RunState>(`/api/runs/${runId}/cancel`, { method: "POST" }),
+  resumeRun: (runId: string) =>
+    request<RunState>(`/api/runs/${runId}/resume`, { method: "POST" }),
+  replayRun: (runId: string) =>
+    request<RunState>(`/api/runs/${runId}/replay`, { method: "POST" }),
   decideApproval: (approvalId: string, payload: ApprovalDecisionPayload) =>
     request<RunState>(`/api/approvals/${approvalId}/decision`, {
       method: "POST",
@@ -845,39 +836,54 @@ export const agentApi = {
   listTools: () => request<{ tools: ToolDefinition[] }>("/api/tools"),
   listAgents: () => request<{ agents: AgentProfile[] }>("/api/agents"),
   createAgent: (payload: AgentProfileWritePayload) =>
-    request<AgentProfile>("/api/agents", { method: "POST", body: JSON.stringify(payload) }),
+    request<AgentProfile>("/api/agents", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   patchAgent: (agentId: string, payload: AgentProfilePatchPayload) =>
-    request<AgentProfile>(`/api/agents/${agentId}`, { method: "PATCH", body: JSON.stringify(payload) }),
-  getObservabilityStatus: () => request<ObservabilityStatus>("/api/observability/status"),
-  getTracePolicySettings: () => request<TracePolicySettings>("/api/settings/trace-policy"),
+    request<AgentProfile>(`/api/agents/${agentId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  getObservabilityStatus: () =>
+    request<ObservabilityStatus>("/api/observability/status"),
+  getTracePolicySettings: () =>
+    request<TracePolicySettings>("/api/settings/trace-policy"),
   patchTracePolicySettings: (payload: Partial<TracePolicySettings>) =>
     request<TracePolicySettings>("/api/settings/trace-policy", {
       method: "PATCH",
       body: JSON.stringify(payload),
     }),
   flushTraceExportRetryQueue: (limit = 100, force = false) =>
-    request<TraceExportRetryData>(`/api/observability/export-retry/flush?limit=${limit}&force=${force}`, {
-      method: "POST",
-    }),
-  getRuntimeSafetySettings: () => request<RuntimeSafetySettings>("/api/settings/runtime-safety"),
+    request<TraceExportRetryData>(
+      `/api/observability/export-retry/flush?limit=${limit}&force=${force}`,
+      {
+        method: "POST",
+      },
+    ),
+  getRuntimeSafetySettings: () =>
+    request<RuntimeSafetySettings>("/api/settings/runtime-safety"),
   patchRuntimeSafetySettings: (payload: Partial<RuntimeSafetySettings>) =>
     request<RuntimeSafetySettings>("/api/settings/runtime-safety", {
       method: "PATCH",
       body: JSON.stringify(payload),
     }),
-  exportRuntimeSnapshot: () => request<RuntimeSnapshot>("/api/runtime/snapshot"),
+  exportRuntimeSnapshot: () =>
+    request<RuntimeSnapshot>("/api/runtime/snapshot"),
   importRuntimeSnapshot: (payload: RuntimeSnapshotImportPayload) =>
     request<RuntimeSnapshotImportResult>("/api/runtime/snapshot/import", {
       method: "POST",
       body: JSON.stringify(payload),
     }),
-  getToolPolicySettings: () => request<ToolPolicySettings>("/api/settings/tool-policy"),
+  getToolPolicySettings: () =>
+    request<ToolPolicySettings>("/api/settings/tool-policy"),
   patchToolPolicySettings: (payload: Partial<ToolPolicySettings>) =>
     request<ToolPolicySettings>("/api/settings/tool-policy", {
       method: "PATCH",
       body: JSON.stringify(payload),
     }),
-  getCommandPolicySettings: () => request<CommandPolicySettings>("/api/settings/command-policy"),
+  getCommandPolicySettings: () =>
+    request<CommandPolicySettings>("/api/settings/command-policy"),
   patchCommandPolicySettings: (payload: Partial<CommandPolicySettings>) =>
     request<CommandPolicySettings>("/api/settings/command-policy", {
       method: "PATCH",
@@ -889,14 +895,22 @@ export const agentApi = {
       body: JSON.stringify({ query, limit: 20 }),
     }),
   addMemory: (payload: MemoryCreatePayload) =>
-    request<MemoryEntry>("/api/memory", { method: "POST", body: JSON.stringify(payload) }),
-  getExternalRagSettings: () => request<ExternalServiceSettings>("/api/settings/external-rag"),
-  patchExternalRagSettings: (payload: { base_url?: string | null; timeout_seconds?: number }) =>
+    request<MemoryEntry>("/api/memory", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  getExternalRagSettings: () =>
+    request<ExternalServiceSettings>("/api/settings/external-rag"),
+  patchExternalRagSettings: (payload: {
+    base_url?: string | null;
+    timeout_seconds?: number;
+  }) =>
     request<ExternalServiceSettings>("/api/settings/external-rag", {
       method: "PATCH",
       body: JSON.stringify(payload),
     }),
-  getExternalNl2SqlSettings: () => request<ExternalServiceSettings>("/api/settings/external-nl2sql"),
+  getExternalNl2SqlSettings: () =>
+    request<ExternalServiceSettings>("/api/settings/external-nl2sql"),
   patchExternalNl2SqlSettings: (payload: {
     base_url?: string | null;
     timeout_seconds?: number;
@@ -906,7 +920,8 @@ export const agentApi = {
       method: "PATCH",
       body: JSON.stringify(payload),
     }),
-  getExternalMcpSettings: () => request<ExternalServiceSettings>("/api/settings/external-mcp"),
+  getExternalMcpSettings: () =>
+    request<ExternalServiceSettings>("/api/settings/external-mcp"),
   patchExternalMcpSettings: (payload: {
     base_url?: string | null;
     timeout_seconds?: number;
@@ -917,7 +932,9 @@ export const agentApi = {
       body: JSON.stringify(payload),
     }),
   listExternalMcpTools: (filters: ExternalMcpToolsFilters) =>
-    request<ExternalMcpToolsData>(`/api/tools/external-mcp${externalMcpToolsQuery(filters)}`),
+    request<ExternalMcpToolsData>(
+      `/api/tools/external-mcp${externalMcpToolsQuery(filters)}`,
+    ),
   listExternalMcpServers: () =>
     request<ExternalMcpServersData>("/api/settings/external-mcp-servers"),
   createExternalMcpServer: (payload: ExternalMcpServerWritePayload) =>
@@ -925,26 +942,32 @@ export const agentApi = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
-  updateExternalMcpServer: (serverId: string, payload: ExternalMcpServerWritePayload) =>
+  updateExternalMcpServer: (
+    serverId: string,
+    payload: ExternalMcpServerWritePayload,
+  ) =>
     request<ExternalMcpServerSettings>(
       `/api/settings/external-mcp-servers/${encodeURIComponent(serverId)}`,
-      { method: "PATCH", body: JSON.stringify(payload) }
+      { method: "PATCH", body: JSON.stringify(payload) },
     ),
   deleteExternalMcpServer: (serverId: string) =>
     request<ExternalMcpServersData>(
       `/api/settings/external-mcp-servers/${encodeURIComponent(serverId)}`,
-      { method: "DELETE" }
+      { method: "DELETE" },
     ),
   setDefaultExternalMcpServer: (serverId: string) =>
     request<ExternalMcpServersData>(
       `/api/settings/external-mcp-servers/${encodeURIComponent(serverId)}/default`,
-      { method: "POST" }
+      { method: "POST" },
     ),
   listSkills: () => request<AgentSkillListData>("/api/skills"),
   getSkill: (skillId: string) =>
     request<AgentSkill>(`/api/skills/${encodeURIComponent(skillId)}`),
   createSkill: (payload: AgentSkillWritePayload) =>
-    request<AgentSkill>("/api/skills", { method: "POST", body: JSON.stringify(payload) }),
+    request<AgentSkill>("/api/skills", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   updateSkill: (skillId: string, payload: AgentSkillWritePayload) =>
     request<AgentSkill>(`/api/skills/${encodeURIComponent(skillId)}`, {
       method: "PATCH",
@@ -954,7 +977,8 @@ export const agentApi = {
     request<AgentSkillListData>(`/api/skills/${encodeURIComponent(skillId)}`, {
       method: "DELETE",
     }),
-  reloadSkills: () => request<AgentSkillListData>("/api/skills/reload", { method: "POST" }),
+  reloadSkills: () =>
+    request<AgentSkillListData>("/api/skills/reload", { method: "POST" }),
   listPlugins: () => request<PluginListData>("/api/plugins"),
   getPlugin: (pluginId: string) =>
     request<PluginRecord>(`/api/plugins/${encodeURIComponent(pluginId)}`),
@@ -962,15 +986,22 @@ export const agentApi = {
     manifest?: PluginManifest;
     marketplace_id?: string;
     plugin_id?: string;
-  }) => request<PluginRecord>("/api/plugins", { method: "POST", body: JSON.stringify(payload) }),
+  }) =>
+    request<PluginRecord>("/api/plugins", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   setPluginEnabled: (pluginId: string, enabled: boolean) =>
     request<PluginRecord>(`/api/plugins/${encodeURIComponent(pluginId)}`, {
       method: "PATCH",
       body: JSON.stringify({ enabled }),
     }),
   uninstallPlugin: (pluginId: string) =>
-    request<PluginListData>(`/api/plugins/${encodeURIComponent(pluginId)}`, { method: "DELETE" }),
-  reloadPlugins: () => request<PluginListData>("/api/plugins/reload", { method: "POST" }),
+    request<PluginListData>(`/api/plugins/${encodeURIComponent(pluginId)}`, {
+      method: "DELETE",
+    }),
+  reloadPlugins: () =>
+    request<PluginListData>("/api/plugins/reload", { method: "POST" }),
   listPluginMarketplaces: () =>
     request<MarketplaceSourcesData>("/api/plugins/marketplaces"),
   addPluginMarketplace: (payload: {
@@ -986,16 +1017,16 @@ export const agentApi = {
   refreshPluginMarketplace: (marketplaceId: string) =>
     request<MarketplaceSource>(
       `/api/plugins/marketplaces/${encodeURIComponent(marketplaceId)}/refresh`,
-      { method: "POST" }
+      { method: "POST" },
     ),
   listMarketplacePlugins: (marketplaceId: string) =>
     request<MarketplaceListing>(
-      `/api/plugins/marketplaces/${encodeURIComponent(marketplaceId)}/plugins`
+      `/api/plugins/marketplaces/${encodeURIComponent(marketplaceId)}/plugins`,
     ),
   deletePluginMarketplace: (marketplaceId: string) =>
     request<MarketplaceSourcesData>(
       `/api/plugins/marketplaces/${encodeURIComponent(marketplaceId)}`,
-      { method: "DELETE" }
+      { method: "DELETE" },
     ),
 };
 
@@ -1008,9 +1039,13 @@ export const api = {
       body: JSON.stringify(body),
     }),
   testModelSettings: (body: ModelSettingsTestRequest) =>
-    request<ModelSettingsTestResult>("/api/settings/model/test", jsonBody(body)),
+    request<ModelSettingsTestResult>(
+      "/api/settings/model/test",
+      jsonBody(body),
+    ),
 
-  getDatabaseSettings: () => request<DatabaseSettingsData>("/api/settings/database"),
+  getDatabaseSettings: () =>
+    request<DatabaseSettingsData>("/api/settings/database"),
   updateDatabaseSettings: (body: DatabaseSettingsUpdate) =>
     request<DatabaseSettingsData>("/api/settings/database", {
       method: "PATCH",
@@ -1026,13 +1061,20 @@ export const api = {
     });
   },
   testDatabaseSettings: (body: DatabaseSettingsUpdate) =>
-    request<DatabaseConnectionTestResult>("/api/settings/database/test", jsonBody(body)),
+    request<DatabaseConnectionTestResult>(
+      "/api/settings/database/test",
+      jsonBody(body),
+    ),
 
   getAdbInfo: () => request<AdbInfoData>("/api/settings/database/adb"),
   updateAdbSettings: (body: AdbSettingsUpdate) =>
     request<AdbInfoData>("/api/settings/database/adb/settings", jsonBody(body)),
-  startAdb: () => request<AdbInfoData>("/api/settings/database/adb/start", { method: "POST" }),
-  stopAdb: () => request<AdbInfoData>("/api/settings/database/adb/stop", { method: "POST" }),
+  startAdb: () =>
+    request<AdbInfoData>("/api/settings/database/adb/start", {
+      method: "POST",
+    }),
+  stopAdb: () =>
+    request<AdbInfoData>("/api/settings/database/adb/stop", { method: "POST" }),
 
   getUploadStorageSettings: () =>
     request<UploadStorageSettingsData>("/api/settings/upload-storage"),
@@ -1059,11 +1101,13 @@ export const api = {
   readOciConfig: (body: OciConfigReadRequest) =>
     request<OciConfigReadData>("/api/settings/oci/config/read", jsonBody(body)),
   testOciConfig: () =>
-    request<OciConfigTestResult>("/api/settings/oci/config/test", { method: "POST" }),
+    request<OciConfigTestResult>("/api/settings/oci/config/test", {
+      method: "POST",
+    }),
   readOciObjectStorageNamespace: (body: OciObjectStorageNamespaceRequest) =>
     request<OciObjectStorageNamespaceData>(
       "/api/settings/oci/object-storage/namespace",
-      jsonBody(body)
+      jsonBody(body),
     ),
   uploadOciPrivateKey: (file: File) => {
     const form = new FormData();
