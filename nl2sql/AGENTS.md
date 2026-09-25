@@ -91,8 +91,8 @@
 **状態モデル / UX パターン**:
 - ファイル状態: `UPLOADED → INGESTING(parse/抽出) → REVIEW(プレビュー確認待ち) → INDEXING → INDEXED`(+ `ERROR`)を **StatusBadge** で可視化する。**ファイル処理は 2 段階(parse → 人がプレビュー確認 → index)を方針とする。** parse/抽出の完了後はいったん `REVIEW` で停止し、`DocumentPreviewWorkspace` で抽出結果を人手で確認・承認(必要なら帳票項目を修正)してから後段の chunk/embed/index を実行する。**人手のプレビュー確認・承認ゲートを通過した文書のみ検索対象にする。** 抽出 artifact は再利用し、確認・承認は index 実行前の必須ゲートとする。
 - ページネーション、確認ダイアログ、トースト通知、一括選択(全選択/選択件数表示)を共通コンポーネント化。
-- **メッセージ機構(通知・成功/エラー・フォーム検証・確認ダイアログ・空/読込/エラー状態)は [docs/frontend-messaging-spec.md](./docs/frontend-messaging-spec.md) を正本とする。** 関連 UI を新規実装・改修するときは必ず同 spec の 6 チャネル / 4 トーン / i18n 規約に従うこと。
-- **ボタンの大きさ・スタイル・アイコン・loading・ヘッダーの並び順は platform の `docs/design-system/` を正本とし、画面内の配置と命名は [docs/frontend-button-spec.md](./docs/frontend-button-spec.md) に従う。** アクションは共通 `<Button>` を使い、size(sm/md/lg)・variant(primary/secondary/ghost/danger)・配置・aria-label/文言キー規則を揃える。類似機能は同じ size・variant にすること。
+- **画面の振る舞い(メッセージ機構・ボタンの役割と配置・ページの型・状態保持)は platform の [UX 契約](../platform/docs/ux-contracts/README.md) を正本とする。** NL2SQL 固有の差分は [docs/frontend-messaging-spec.md](./docs/frontend-messaging-spec.md) / [docs/frontend-button-spec.md](./docs/frontend-button-spec.md) / [docs/frontend-page-archetypes-spec.md](./docs/frontend-page-archetypes-spec.md) に書く。関連 UI を新規実装・改修するときは 6 チャネル / 4 トーン / i18n 規約に従うこと。
+- **ボタンの大きさ・スタイル・アイコン・loading・ヘッダーの並び順は platform の `docs/design-system/` を正本とし、画面内の配置と命名は [UX 契約 buttons.md](../platform/docs/ux-contracts/buttons.md) に従う。** アクションは共通 `<Button>` を使い、size(sm/md/lg)・variant(primary/secondary/ghost/danger)・配置・aria-label/文言キー規則を揃える。類似機能は同じ size・variant にすること。
 - データ取得・通知・ページングは hooks に集約する。状態管理は TanStack Query + Zustand を使う。
 
 **タイポグラフィ/デザイン原則**:
@@ -233,44 +233,18 @@ npm run lint && npm run build
 
 ## 横断的な保守・セキュリティ契約
 
+3製品共通の契約（更新 API とデータの所有範囲、認可と状態遷移のサーバー側強制、i18n の変更と E2E の locator、ページ遷移・再読込のときの状態保持、未保存変更の離脱ガード）は platform の [UX 契約](../platform/docs/ux-contracts/README.md)（[cross-cutting.md](../platform/docs/ux-contracts/cross-cutting.md) / [workspace-state.md](../platform/docs/ux-contracts/workspace-state.md)）を正本とする。本節には NL2SQL 固有の規則だけを書く。
+
 > 本節は [Issue #168](https://github.com/engchina/no.1-production-ready-nl2sql/issues/168) / [PR #178](https://github.com/engchina/no.1-production-ready-nl2sql/pull/178)、[Issue #169](https://github.com/engchina/no.1-production-ready-nl2sql/issues/169) / [PR #179](https://github.com/engchina/no.1-production-ready-nl2sql/pull/179)、[Issue #170](https://github.com/engchina/no.1-production-ready-nl2sql/issues/170) / [PR #180](https://github.com/engchina/no.1-production-ready-nl2sql/pull/180)、[Issue #181](https://github.com/engchina/no.1-production-ready-nl2sql/issues/181) / [PR #182](https://github.com/engchina/no.1-production-ready-nl2sql/pull/182)、[Issue #183](https://github.com/engchina/no.1-production-ready-nl2sql/issues/183) / [PR #189](https://github.com/engchina/no.1-production-ready-nl2sql/pull/189)、[Issue #184](https://github.com/engchina/no.1-production-ready-nl2sql/issues/184)、[Issue #185](https://github.com/engchina/no.1-production-ready-nl2sql/issues/185) で得た再発防止策を、実装時に検証可能な契約としてまとめたものである。
 
-### 更新 API とデータ所有境界
+### role の権限昇格の防止
 
-- `PATCH` / `PUT` の request schema と frontend payload には、**そのユースケースが所有して更新する field だけ**を含める。別画面・別 endpoint が管理する subresource を「現在値の送り返し」で兼用しない。受信した未所有 field を tuple や簡略 DTO に射影して再構築してはならない。
-- 更新対象外の subresource は永続化済み record をそのまま保持する。特に `entitlement_id`、対象 owner/object、列、filter、外部 resource 名、checksum、apply/lifecycle 状態のような identity・適用状態を、欠落した DTO や既定値で `DELETE → INSERT` 置換しない。
-- identity から Oracle 側 resource 名を導出する object を変更・再採番するときは、既存 resource の cleanup / migration / orphan 検出を同じ変更で設計する。外部 resource を残したまま UI・管理 record から不可視にしてはならない。
-- 部分更新の回帰テストは「変更した field」だけでなく、**所有外 field の全不変条件**を更新前後で検証する。API request/response、domain service、InMemory/Oracle store の各境界を横断して lossy conversion が起きないことを固定する。
-
-### 認可・状態遷移の server-side 強制
-
-- ボタン非表示・disabled は UX であり認可境界ではない。すべての mutation は store 更新前の backend domain service で actor の実効権限と resource 状態を検証し、API 直呼びでも迂回できないようにする。InMemory と Oracle で判定・status code・状態保持を一致させる。
-- archive 済み resource は、明示的な restore/delete フローを除いて immutable とする。通常の更新 endpoint は `409` で拒否し、更新による暗黙 restore や、一部 field だけの書換えを許可しない。
 - `SYSTEM_ADMIN` 以外が role を更新するとき、追加される実効権限 `expand_permissions(new) - expand_permissions(current)` は actor 自身の実効権限の部分集合でなければならず、違反は `403` で拒否する。暗黙 permission と `grants_all_profile_access` 相当の profile 管理権限も展開後に評価し、自分・他人いずれの role 経由でも権限昇格を許可しない。未保持の既存権限を削除する操作は妨げない。
 - role 作成は未割当のため現行どおり許可できるが、user への role 割当では既存の実効権限部分集合 check を必須とする。role/assignment 変更が次 request から再計算される前提で、変更直後の許可・拒否まで API 回帰テストに含める。
 
-### i18n 変更と E2E locator
+### 状態保持の実装範囲（Issue #298）
 
-- i18n の key/value 改名は UI 変更として扱う。translation diff から旧文言を列挙し、実装だけでなく `frontend/tests` 全体を検索して、`getByRole` / `getByLabel` / region / empty-state 等の locator と期待文言を同じ変更で更新する。一部 spec の追随だけで完了としない。
-- 文言変更の検証では、該当 locator を使う Playwright spec を desktop と `mobile-375` の両方で実行する。既存 skip は理由を明記し、`build` / logic test だけでは locator の陳腐化を検出できないことを前提にする。
-
-### ページ遷移・再読込時の状態保持（Issue #298）
-
-- **ユーザーの作業進捗を保持し、変化するサーバーデータを再検証し、実行意思は再確認する。** データの再取得と入力のリセットを同一操作にしない。全項目の無条件リセット／無条件永続化は禁止する。
-- 同じユーザー・DB・Schema・Profile・対象の作業では、Tab、検索・フィルタ・ソート・ページング、展開項目、一覧へ戻る際のスクロール位置を保持する。対象変更や削除で無効になった位置・項目だけを調整し、別対象へ黙って置換しない。
-- クエリ、手編集 SQL、未保存フォームは草稿として保持する。バックグラウンド再取得でユーザー編集を上書きしない。再読込への保存は明示的な allowlist と期限を持つ同一タブの一時保存に限定し、SQL、全結果、全フォームを `localStorage` に一括永続化しない。保存不可時は黙って成功扱いせず、離脱保護を提供する。
-- 生成 SQL・取得済み構造情報・実行結果は時点を持つスナップショットとして扱う。「前回の実行結果」と実行日時を表示し、入力が変われば現在の入力は未実行と示す。以前の結果を現在の SQL の成功として表示しない。
-- 一覧・存在・権限・処理進捗は再取得／再検証する。既存情報を表示したまま背景更新できるが、失敗時は旧情報であることと再試行方法を示す。ページ復帰だけで LLM 生成、SQL 実行、mutation を再送しない。進行中 job は ID でサーバー状態を確認する。
-- 生成対象の選択は保持して存在・権限を再検証する。削除等の破壊的な一括選択、確認ダイアログ、`ADMIN_EXECUTE` 等の確認語はページ離脱・復帰時に解除する。SQL・対象・実行条件が変わった場合も確認を無効にし、backend の認可・確認ゲートを迂回しない。
-- 一時状態・query cache はユーザー／DB context で隔離する。logout・認証失効・アカウント変更時に削除し、DB／Schema／Profile の変更時に他 context の草稿・結果・確認を流用しない。失効した対象はエラーとして説明し、選択の黙示置換をしない。パスワード・一時 credential は復元対象外。
-- ブラウザを閉じた後・別ログインへの作業継続は、明示的な保存草稿／workspace 機能として設計する。表示設定は従来の個人設定として保持できるが、ページ内の一時草稿を恒久保存の代わりにしない。
-- 操作名と責務を区別する：`最新情報を取得` は入力を保持した再取得、`入力をクリア` は指定入力の消去、`新しい作業を開始` は作業全体の初期化。新しい作業の開始で未保存編集を破棄する場合は確認を伴う。
-- 回帰テストは desktop / mobile-375 の往復ナビ・back/forward・再読込、草稿と選択保持、確認解除、旧結果の識別、取得失敗、logout／context 切替時の隔離を含める。
-
-### 未保存変更の離脱ガード
-
-- `isDirty` を使う編集画面は、画面内の「戻る」だけでなく、side navigation・内部 link・reload・tab close を含む**すべての離脱経路**を共通 guard で保護する。dirty 判定は順序に意味のない集合/配列を canonicalize して比較し、保存成功後は保存済み baseline と確認状態を更新する。
-- 現行の `<BrowserRouter>` では内部 link の capture と `beforeunload` を共通 hook に集約する。修飾 key 付き click、`target="_blank"`、download、外部 origin、同一 URL は妨げない。browser の back/forward(`popstate`)を完全に保護する必要が生じた場合は、不完全な履歴差し戻しを追加せず `createBrowserRouter` への移行を別 Issue で設計する。
+- 保存の namespace・期限・対象画面・検証の spec は [docs/frontend-workspace-state-spec.md](./docs/frontend-workspace-state-spec.md) に書く。SQL・生成 SQL・`ADMIN_EXECUTE` などの確認語は共通契約の「入力」「生成した結果」「確認語」として扱う。
 
 ## テスト/検証方針
 

@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-// docs/frontend-messaging-spec.md §3.5 ConfirmDialog の振る舞いを検証する。
+// platform/docs/ux-contracts/messaging.md §3.5 ConfirmDialog の振る舞いを検証する。
 // モデル設定のモデル削除（破壊的操作）に確認ゲートが入っていることを確認する。
 
 const authStatus = {
