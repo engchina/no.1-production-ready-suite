@@ -11,7 +11,7 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 # 依存解決（uv.lock を尊重）。
 COPY backend/pyproject.toml backend/uv.lock ./backend/
 # 共有 backend_core を path source 解決のため同梱（build context = repo root）。
-# COPY ../no.1-production-ready-platform/packages/backend_core ... は CI/Compose 側で配置する。
+# COPY ../../platform/packages/backend_core ... は CI/Compose 側で配置する（monorepo の platform/）。
 
 WORKDIR /app/backend
 RUN uv sync --locked --no-dev

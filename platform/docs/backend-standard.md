@@ -76,5 +76,4 @@ dependencies = ["production-ready-backend-core"]
 production-ready-backend-core = { path = "../../platform/packages/backend_core", editable = true }
 ```
 
-> path source 変更時は **`uv lock` 再生成**。CI は platform を sibling に checkout して解決する
-> （[`consume-in-ci.md`](./consume-in-ci.md)）。安定後は Release / index 配布へ切替可能。
+> path source 変更時は **`uv lock` 再生成**。monorepo なので CI もローカルも同じ相対パス（`../../platform/…`）で解決する。

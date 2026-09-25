@@ -31,12 +31,12 @@ Business Agent ───────────────→ Skill → MCP / 
 
 ## ローカル開発
 
-workspace には共有 package の sibling repo が必要です。
+monorepo `no.1-production-ready-suite` の `agent/` で作業します。共有 package は同じ repository の `../platform/` を相対パスで参照します。
 
 ```text
-<workspace>/
-  no.1-production-ready-agent/
-  no.1-production-ready-platform/
+no.1-production-ready-suite/
+  platform/
+  agent/
 ```
 
 ```bash
