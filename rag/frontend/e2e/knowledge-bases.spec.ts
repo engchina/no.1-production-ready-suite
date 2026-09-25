@@ -84,7 +84,8 @@ test("知識ベース管理で作成、文書追加、文書解除、アーカ�
 
   // 詳細ページで文書を外す。
   const assignedDocument = page.locator("li").filter({ hasText: "guide.txt" });
-  await assignedDocument.getByRole("button", { name: "外す" }).click();
+  await assignedDocument.getByRole("button", { name: "guide.txt の操作" }).click();
+  await page.getByRole("menuitem", { name: "外す" }).click();
   const removeDialog = page.getByRole("alertdialog", { name: "所属から外しますか？" });
   await expect(removeDialog).toBeVisible();
   await removeDialog.getByRole("button", { name: "外す" }).click();
@@ -95,7 +96,8 @@ test("知識ベース管理で作成、文書追加、文書解除、アーカ�
   // 一覧へ戻ってアーカイブする。
   await page.goto("/knowledge-bases");
   const createdRow = page.locator("tr").filter({ hasText: "設計資料" });
-  await createdRow.getByRole("button", { name: "アーカイブ" }).click();
+  await createdRow.getByRole("button", { name: "設計資料 の操作" }).click();
+  await page.getByRole("menuitem", { name: "アーカイブ" }).click();
   const archiveDialog = page.getByRole("alertdialog", { name: "知識ベースをアーカイブしますか？" });
   await expect(archiveDialog).toBeVisible();
   await archiveDialog.getByRole("button", { name: "アーカイブ" }).click();
@@ -105,6 +107,50 @@ test("知識ベース管理で作成、文書追加、文書解除、アーカ�
   await expect(page.getByRole("link", { name: "設計資料" })).toHaveCount(0);
   await expectNoPageOverflow(page);
 });
+
+// #131: 一覧の行（RowActionMenu）と同じ操作の定義を、詳細では ObjectActionBar で出す。
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 800 },
+  { name: "mobile", width: 375, height: 812 },
+]) {
+  test(`詳細の ObjectActionBar からアーカイブでき、メニューは Esc でフォーカスを戻す (${viewport.name})`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    const state = createKnowledgeBaseState();
+    await mockKnowledgeBaseApi(page, state);
+
+    await page.goto("/knowledge-bases/kb-1");
+    await expect(page.getByRole("heading", { name: "社内規程", level: 1 })).toBeVisible();
+
+    const bar = page.getByRole("group", { name: "社内規程 の操作" });
+    // 危険な操作は常時表示せず「その他の操作」へ入れる（buttons.md §5.1）。
+    await expect(bar.getByRole("button", { name: "アーカイブ" })).toHaveCount(0);
+    const more = bar.getByRole("button", { name: "その他の操作" });
+    await more.focus();
+    await page.keyboard.press("Enter");
+    await expect(page.getByRole("menuitem", { name: "アーカイブ" })).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("menu")).toHaveCount(0);
+    await expect(more).toBeFocused();
+
+    await more.click();
+    await page.getByRole("menuitem", { name: "アーカイブ" }).click();
+    const dialog = page.getByRole("alertdialog", { name: "知識ベースをアーカイブしますか？" });
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole("button", { name: "キャンセル" }).click();
+    expect(state.knowledgeBases[0].status).toBe("ACTIVE");
+
+    await more.click();
+    await page.getByRole("menuitem", { name: "アーカイブ" }).click();
+    await dialog.getByRole("button", { name: "アーカイブ" }).click();
+    await expect(page.getByText("知識ベースをアーカイブしました。").first()).toBeVisible();
+    expect(state.knowledgeBases[0].status).toBe("ARCHIVED");
+    // アーカイブ済みには出せる操作がないため、操作のバーごと消える。
+    await expect(bar).toHaveCount(0);
+    await expectNoPageOverflow(page);
+  });
+}
 
 test("狭い画面幅(375px)でもページ全体が横スクロール(崩れ)しない", async ({ page }) => {
   const state = createKnowledgeBaseState();
@@ -150,9 +196,10 @@ test("DEFAULT は先頭表示され、予約名として保護される", async 
 
   const rows = page.locator("tbody tr");
   await expect(rows.first()).toContainText("DEFAULT");
-  await expect(
-    rows.first().getByRole("button", { name: "DEFAULT はアーカイブできません" })
-  ).toBeDisabled();
+  // アーカイブは行の RowActionMenu に入り、DEFAULT では理由付きで無効（#131）。
+  await rows.first().getByRole("button", { name: "DEFAULT の操作" }).click();
+  await expect(page.getByRole("menuitem", { name: "DEFAULT はアーカイブできません" })).toBeDisabled();
+  await page.keyboard.press("Escape");
 
   await page.getByRole("textbox", { name: "名前", exact: true }).fill("default");
   await page.getByRole("button", { name: "作成" }).click();

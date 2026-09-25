@@ -40,7 +40,7 @@ for (const viewport of [
 
     await page.goto("/settings/parser-adapters");
 
-    await expect(page.getByRole("heading", { name: "文書解析" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "文書解析", exact: true, level: 1 })).toBeVisible();
     await expect(page.getByRole("radio", { name: /^Local/ })).toHaveCount(0);
     await expect(page.getByRole("radio", { name: /Docling.*CPU.*稼働中/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /Marker.*CPU.*停止/ })).toBeVisible();

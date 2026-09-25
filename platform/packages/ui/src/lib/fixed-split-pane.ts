@@ -1,4 +1,5 @@
-export const FIXED_SPLIT_STORAGE_PREFIX = "production-ready-nl2sql.fixedSplitPane";
+// 分割比率の保存先（localStorage）の既定の前置き。製品は FixedSplitPane の storagePrefix で上書きできる。
+export const FIXED_SPLIT_STORAGE_PREFIX = "production-ready.fixedSplitPane";
 export const GOLDEN_RATIO = 1.618;
 export const FIXED_SPLIT_MIN_FRACTION = 0.25;
 export const FIXED_SPLIT_MAX_FRACTION = 0.75;
@@ -25,8 +26,8 @@ interface FixedSplitStorageValue {
   leftFraction?: unknown;
 }
 
-export function fixedSplitStorageKey(splitId: string) {
-  return `${FIXED_SPLIT_STORAGE_PREFIX}.${splitId}`;
+export function fixedSplitStorageKey(splitId: string, prefix = FIXED_SPLIT_STORAGE_PREFIX) {
+  return `${prefix}.${splitId}`;
 }
 
 export function isFixedSplitRatio(value: string | null): value is FixedSplitRatio {

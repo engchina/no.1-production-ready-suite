@@ -1,4 +1,10 @@
-import { ConfirmProvider, Toaster, toast, useConfirm } from "@engchina/production-ready-ui";
+import {
+  ConfirmProvider,
+  Toaster,
+  toast,
+  useConfirm,
+  RowActionMenu,
+} from "@engchina/production-ready-ui";
 import { MemoryRouter } from "react-router-dom";
 import { DataTable, type DataTableSort } from "@engchina/production-ready-ui";
 import { useState } from "react";
@@ -6,7 +12,6 @@ import { createRoot } from "react-dom/client";
 import { Copy, Eye, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { Button, buttonVariants, PageHeader } from "@engchina/production-ready-ui";
 import { FormActionBar } from "../../src/components/FormActionBar";
-import { RowActionMenu } from "../../src/components/ObjectActions";
 import { Pagination } from "../../src/components/Pagination";
 import { ErrorState } from "../../src/components/StateViews";
 import "../../src/globals.css";

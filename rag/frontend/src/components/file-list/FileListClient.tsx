@@ -6,13 +6,17 @@ import {
   Button,
   Card,
   Banner,
+  DataTable,
+  type DataTableColumn,
+  type EntityAction,
+  RowActionMenu,
   SelectField,
   type SelectFieldOption,
   ToggleChip,
   Skeleton,
 } from "@engchina/production-ready-ui";
 import { Link } from "react-router-dom";
-import { Search as SearchIcon, Sparkles, Trash2, X } from "lucide-react";
+import { RotateCcw, Search as SearchIcon, Sparkles, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
@@ -36,9 +40,9 @@ import {
 import { useSelection } from "@/lib/useSelection";
 import { APP_ROUTES } from "@/lib/routes";
 import { t } from "@/lib/i18n";
-import { cn } from "@/lib/utils";
 import { formatBytes, formatDateTime, formatNumber } from "@/lib/format";
 import { toast } from "@/lib/toast";
+import { useWorkspaceState } from "@/lib/workspace-state";
 
 const LIMIT = 20;
 const FILTERS: (FileStatus | "ALL")[] = [
@@ -55,15 +59,41 @@ const FILTERS: (FileStatus | "ALL")[] = [
 ];
 const INGESTIBLE: ReadonlySet<FileStatus> = new Set(["UPLOADED", "ERROR"]);
 
+interface FileListView {
+  filter: FileStatus | "ALL";
+  q: string;
+  knowledgeBaseId: string;
+  offset: number;
+}
+const INITIAL_VIEW: FileListView = { filter: "ALL", q: "", knowledgeBaseId: "ALL", offset: 0 };
+
+function isFileListView(value: unknown): value is FileListView {
+  const view = value as FileListView;
+  return (
+    typeof view === "object" &&
+    view !== null &&
+    (FILTERS as unknown[]).includes(view.filter) &&
+    typeof view.q === "string" &&
+    typeof view.knowledgeBaseId === "string" &&
+    Number.isInteger(view.offset) &&
+    view.offset >= 0
+  );
+}
+
 /** 取込対象ドキュメントの一覧。絞り込み・検索・ページング・一括選択・行内アクション。 */
 export function FileListClient() {
   const qc = useQueryClient();
   const confirm = useConfirm();
-  const [filter, setFilter] = useState<FileStatus | "ALL">("ALL");
-  const [search, setSearch] = useState("");
-  const [q, setQ] = useState("");
-  const [knowledgeBaseId, setKnowledgeBaseId] = useState("ALL");
-  const [offset, setOffset] = useState(0);
+  // 絞り込み・検索・ページは、ページを行き来しても再読込しても残す（workspace-state.md）。
+  // 一括削除につながる行の選択は保存せず、ページを離れたら解除する。
+  const [view, setView] = useWorkspaceState("fileList.view", INITIAL_VIEW, isFileListView);
+  const { filter, q, knowledgeBaseId, offset } = view;
+  const [search, setSearch] = useState(q);
+  const setFilter = (next: FileStatus | "ALL") => setView((current) => ({ ...current, filter: next }));
+  const setQ = (next: string) => setView((current) => ({ ...current, q: next }));
+  const setKnowledgeBaseId = (next: string) =>
+    setView((current) => ({ ...current, knowledgeBaseId: next }));
+  const setOffset = (next: number) => setView((current) => ({ ...current, offset: next }));
   const [bulkIngest, setBulkIngest] = useState<{ done: number; total: number } | null>(null);
   const [bulkDelete, setBulkDelete] = useState<{ done: number; total: number } | null>(null);
 
@@ -95,6 +125,17 @@ export function FileListClient() {
     { graceActive }
   );
   const knowledgeBases = useKnowledgeBases({ status: "ACTIVE", limit: 100, offset: 0 });
+  // 復元した KB 絞り込みが削除・アーカイブ済みなら、その条件だけ「すべて」に戻す。
+  const knowledgeBaseFilterMissing =
+    knowledgeBaseId !== "ALL" &&
+    Boolean(knowledgeBases.data) &&
+    !knowledgeBases.data?.has_next &&
+    !knowledgeBases.data?.items.some((knowledgeBase) => knowledgeBase.id === knowledgeBaseId);
+  useEffect(() => {
+    if (knowledgeBaseFilterMissing) {
+      setView((current) => ({ ...current, knowledgeBaseId: "ALL", offset: 0 }));
+    }
+  }, [knowledgeBaseFilterMissing, setView]);
 
   const enqueueIngestion = useEnqueueDocumentIngestionJob();
   const deleteDocument = useDeleteDocument();
@@ -331,58 +372,33 @@ export function FileListClient() {
           <Skeleton className="h-64 w-full rounded-lg" />
         ) : items.length > 0 ? (
           <>
-            <Card className="overflow-hidden">
-              <div className="bounded-scroll-area-lg overflow-x-auto">
-                <table className="min-w-[980px] w-full text-sm">
-                  <thead className="sticky top-0 z-10 bg-surface-sunken text-left text-fg-muted shadow-[inset_0_-1px_0_var(--color-border)]">
-                    <tr>
-                      <th className="w-10 px-4 py-3">
-                        <input
-                          type="checkbox"
-                          checked={allSelected}
-                          onChange={() => selection.toggleAll(pageIds)}
-                          aria-label={t("fileList.selectAllAria")}
-                          className="cursor-pointer accent-[var(--color-accent-emphasis)]"
-                        />
-                      </th>
-                      <th className="px-4 py-3 font-medium">{t("fileList.col.fileName")}</th>
-                      <th className="px-4 py-3 font-medium">{t("fileList.col.knowledgeBases")}</th>
-                      <th className="px-4 py-3 font-medium">{t("fileList.col.category")}</th>
-                      <th className="px-4 py-3 font-medium">{t("fileList.col.status")}</th>
-                      <th className="px-4 py-3 text-right font-medium">{t("fileList.col.size")}</th>
-                      <th className="px-4 py-3 font-medium">{t("fileList.col.uploadedAt")}</th>
-                      <th className="px-4 py-3 text-right font-medium">{t("fileList.col.actions")}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {items.map((doc) => (
-                      <Row
-                        key={doc.id}
-                        doc={doc}
-                        selected={selection.isSelected(doc.id)}
-                        onToggle={() => selection.toggle(doc.id)}
-                        onIngest={(force) =>
-                          enqueueIngestion.mutate(
-                            { id: doc.id, force },
-                            { onSuccess: startGraceWindow }
-                          )
-                        }
-                        onDelete={() => void runDelete(doc)}
-                        ingesting={
-                          enqueueIngestion.isPending &&
-                          enqueueIngestion.variables?.id === doc.id
-                        }
-                        deleting={
-                          deleteDocument.isPending &&
-                          deleteDocument.variables === doc.id
-                        }
-                        actionsDisabled={bulkBusy}
-                      />
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </Card>
+            <DataTable<DocumentSummary>
+              columns={documentColumns({
+                allSelected,
+                onToggleAll: () => selection.toggleAll(pageIds),
+                isSelected: (doc) => selection.isSelected(doc.id),
+                onToggle: (doc) => selection.toggle(doc.id),
+                onIngest: (doc, force) =>
+                  enqueueIngestion.mutate(
+                    { id: doc.id, force },
+                    { onSuccess: startGraceWindow }
+                  ),
+                onDelete: (doc) => void runDelete(doc),
+                isIngesting: (doc) =>
+                  enqueueIngestion.isPending &&
+                  enqueueIngestion.variables?.id === doc.id,
+                isDeleting: (doc) =>
+                  deleteDocument.isPending && deleteDocument.variables === doc.id,
+                // 一括選択中は行の操作を止め、一括操作のバーに集める（buttons.md §5.1）。
+                actionsDisabled: bulkBusy || selection.count > 0,
+              })}
+              rows={items}
+              getRowKey={(doc) => doc.id}
+              isRowSelected={(doc) => selection.isSelected(doc.id)}
+              stickyHeader
+              className="bounded-scroll-area-lg"
+              tableClassName="w-full min-w-[980px] text-sm"
+            />
 
             {/* ページネーション */}
             <div className="flex items-center justify-between">
@@ -431,37 +447,57 @@ export function FileListClient() {
   );
 }
 
-function Row({
-  doc,
-  selected,
+/** 一覧の列定義。先頭列は一括選択のチェックボックス、ファイル名列を行見出しにする。 */
+function documentColumns({
+  allSelected,
+  onToggleAll,
+  isSelected,
   onToggle,
   onIngest,
   onDelete,
-  ingesting,
-  deleting,
+  isIngesting,
+  isDeleting,
   actionsDisabled,
 }: {
-  doc: DocumentSummary;
-  selected: boolean;
-  onToggle: () => void;
-  onIngest: (force: boolean) => void;
-  onDelete: () => void;
-  ingesting: boolean;
-  deleting: boolean;
+  allSelected: boolean;
+  onToggleAll: () => void;
+  isSelected: (doc: DocumentSummary) => boolean;
+  onToggle: (doc: DocumentSummary) => void;
+  onIngest: (doc: DocumentSummary, force: boolean) => void;
+  onDelete: (doc: DocumentSummary) => void;
+  isIngesting: (doc: DocumentSummary) => boolean;
+  isDeleting: (doc: DocumentSummary) => boolean;
   actionsDisabled: boolean;
-}) {
-  return (
-    <tr className={cn("border-t border-border", selected && "bg-info-subtle")}>
-      <td className="px-4 py-3">
+}): DataTableColumn<DocumentSummary>[] {
+  return [
+    {
+      key: "select",
+      header: (
         <input
           type="checkbox"
-          checked={selected}
-          onChange={onToggle}
+          checked={allSelected}
+          onChange={onToggleAll}
+          aria-label={t("fileList.selectAllAria")}
+          className="cursor-pointer accent-[var(--color-accent-emphasis)]"
+        />
+      ),
+      headerClassName: "w-10",
+      render: (doc) => (
+        <input
+          type="checkbox"
+          checked={isSelected(doc)}
+          onChange={() => onToggle(doc)}
           aria-label={t("fileList.selectRowAria")}
           className="cursor-pointer accent-[var(--color-accent-emphasis)]"
         />
-      </td>
-      <td className="max-w-[260px] px-4 py-3">
+      ),
+    },
+    {
+      key: "fileName",
+      header: t("fileList.col.fileName"),
+      rowHeader: true,
+      className: "max-w-[260px]",
+      render: (doc) => (
         <Link
           to={`${APP_ROUTES.documents}/${doc.id}`}
           className="block truncate font-medium text-accent-fg hover:underline"
@@ -469,40 +505,96 @@ function Row({
         >
           {doc.file_name}
         </Link>
-      </td>
-      <td className="max-w-[240px] px-4 py-3">
-        <KnowledgeBaseChips knowledgeBases={doc.knowledge_bases ?? []} />
-      </td>
-      <td className="px-4 py-3 text-fg-muted">{doc.category_name ?? "—"}</td>
-      <td className="px-4 py-3">
-        <StatusBadge status={doc.status} />
-      </td>
-      <td className="tnum px-4 py-3 text-right text-fg-muted">{formatBytes(doc.file_size_bytes)}</td>
-      <td className="tnum px-4 py-3 text-fg-muted">{formatDateTime(doc.uploaded_at)}</td>
-      <td className="px-4 py-3">
-        <div className="flex justify-end gap-2">
-          {(doc.status === "UPLOADED" || doc.status === "ERROR") && (
-            <Button
-              size="sm"
-              loading={ingesting}
-              disabled={deleting || actionsDisabled}
-              onClick={() => onIngest(false)} icon={Sparkles}>
-              {t(doc.status === "ERROR" ? "flow.retry.preprocess" : "action.enqueueIngestion")}
-            </Button>
-          )}
-          <Button
-            variant="danger"
-            size="sm"
-            loading={deleting}
-            disabled={ingesting || actionsDisabled}
-            onClick={onDelete}
-            aria-label={t("fileList.delete.aria", { name: doc.file_name })} icon={Trash2}>
-            {t("fileList.delete.action")}
-          </Button>
-        </div>
-      </td>
-    </tr>
-  );
+      ),
+    },
+    {
+      key: "knowledgeBases",
+      header: t("fileList.col.knowledgeBases"),
+      className: "max-w-[240px]",
+      render: (doc) => <KnowledgeBaseChips knowledgeBases={doc.knowledge_bases ?? []} />,
+    },
+    {
+      key: "category",
+      header: t("fileList.col.category"),
+      className: "text-fg-muted",
+      render: (doc) => doc.category_name ?? "—",
+    },
+    {
+      key: "status",
+      header: t("fileList.col.status"),
+      render: (doc) => <StatusBadge status={doc.status} />,
+    },
+    {
+      key: "size",
+      header: t("fileList.col.size"),
+      align: "right",
+      className: "tnum text-fg-muted",
+      render: (doc) => formatBytes(doc.file_size_bytes),
+    },
+    {
+      key: "uploadedAt",
+      header: t("fileList.col.uploadedAt"),
+      className: "tnum text-fg-muted",
+      render: (doc) => formatDateTime(doc.uploaded_at),
+    },
+    {
+      key: "actions",
+      header: t("fileList.col.actions"),
+      align: "right",
+      render: (doc) => (
+        <RowActionMenu
+          actions={documentActions(doc, { onIngest, onDelete, isIngesting, isDeleting })}
+          ariaLabel={t("common.objectActions.aria", { name: doc.file_name })}
+          loading={isIngesting(doc) || isDeleting(doc)}
+          disabled={actionsDisabled}
+          testId={`file-list-row-actions-${doc.id}`}
+        />
+      ),
+    },
+  ];
+}
+
+/**
+ * 文書 1 件に対する操作（buttons.md §5.1）。行は RowActionMenu 1 個にまとめ、
+ * 削除は danger の項目として確認ダイアログ（runDelete の useConfirm）を通す。
+ */
+function documentActions(
+  doc: DocumentSummary,
+  {
+    onIngest,
+    onDelete,
+    isIngesting,
+    isDeleting,
+  }: {
+    onIngest: (doc: DocumentSummary, force: boolean) => void;
+    onDelete: (doc: DocumentSummary) => void;
+    isIngesting: (doc: DocumentSummary) => boolean;
+    isDeleting: (doc: DocumentSummary) => boolean;
+  }
+): EntityAction[] {
+  const ingesting = isIngesting(doc);
+  const deleting = isDeleting(doc);
+  return [
+    {
+      id: "ingest",
+      label: t(doc.status === "ERROR" ? "flow.retry.preprocess" : "action.enqueueIngestion"),
+      icon: doc.status === "ERROR" ? RotateCcw : Sparkles,
+      visible: INGESTIBLE.has(doc.status),
+      loading: ingesting,
+      disabled: deleting,
+      onSelect: () => onIngest(doc, false),
+    },
+    {
+      id: "delete",
+      label: t("fileList.delete.action"),
+      ariaLabel: t("fileList.delete.aria", { name: doc.file_name }),
+      icon: Trash2,
+      tone: "danger",
+      loading: deleting,
+      disabled: ingesting,
+      onSelect: () => onDelete(doc),
+    },
+  ];
 }
 
 function KnowledgeBaseChips({ knowledgeBases }: { knowledgeBases: KnowledgeBaseRef[] }) {

@@ -10,6 +10,8 @@ import {
   Button,
   FormStatus,
   RequiredBadge,
+  RowActionMenu,
+  type EntityAction,
   Skeleton,
   Switch,
   TextField,
@@ -20,6 +22,7 @@ import { CheckCircle2, FileText, Plus } from "lucide-react";
 import { ErrorState } from "@/components/StateViews";
 import { ApiError, type PromptVersionData } from "@/lib/api";
 import { t } from "@/lib/i18n";
+import { useLeaveGuard } from "@/lib/leave-guard";
 import { usePromptVersions, useCreatePromptVersion, useActivatePromptVersion } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 
@@ -37,6 +40,9 @@ export function PromptVersionsClient() {
   const [note, setNote] = useState("");
   const [activateOnCreate, setActivateOnCreate] = useState(true);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+
+  // 作成前の新しい版の入力があるときだけ離脱を確認する（作成成功で入力は空に戻る）。
+  useLeaveGuard(Boolean(name.trim() || systemPrompt.trim() || note.trim()));
 
   if (query.isPending) {
     return (
@@ -89,6 +95,23 @@ export function PromptVersionsClient() {
         },
       }
     );
+  }
+
+  // 版 1 件の操作。行に 1 個の RowActionMenu にまとめる（buttons.md §5.1）。
+  // 有効な版は badge で示し、有効化は理由付きで無効にする。
+  function versionActions(version: PromptVersionData): EntityAction[] {
+    return [
+      {
+        id: "activate",
+        label: t("settings.prompts.actions.activate"),
+        ariaLabel: version.active ? t("settings.prompts.actions.alreadyActive") : undefined,
+        icon: CheckCircle2,
+        disabled: version.active || activate.isPending,
+        loading: activate.isPending && activate.variables === version.version_id,
+        testId: `prompt-version-activate-${version.version_id}`,
+        onSelect: () => onActivate(version.version_id),
+      },
+    ];
   }
 
   function onActivate(versionId: string) {
@@ -183,8 +206,7 @@ export function PromptVersionsClient() {
                 <VersionRow
                   key={version.version_id}
                   version={version}
-                  busy={activate.isPending}
-                  onActivate={() => onActivate(version.version_id)}
+                  actions={versionActions(version)}
                 />
               ))}
             </ul>
@@ -218,12 +240,10 @@ function Field({
 
 function VersionRow({
   version,
-  busy,
-  onActivate,
+  actions,
 }: {
   version: PromptVersionData;
-  busy: boolean;
-  onActivate: () => void;
+  actions: EntityAction[];
 }) {
   return (
     <li
@@ -249,19 +269,13 @@ function VersionRow({
           <p className="mt-1 break-words text-xs leading-relaxed text-fg-muted">{version.note}</p>
         ) : null}
       </div>
-      <Button
-        type="button"
-        variant="secondary"
-        size="sm"
-        disabled={version.active || busy}
-        onClick={onActivate}
-        className="shrink-0"
-        aria-label={`${t("settings.prompts.actions.activate")} ${version.name}`}
-      >
-        {version.active
-          ? t("settings.prompts.list.activeBadge")
-          : t("settings.prompts.actions.activate")}
-      </Button>
+      <div className="shrink-0 self-end sm:self-center">
+        <RowActionMenu
+          actions={actions}
+          ariaLabel={t("common.objectActions.aria", { name: version.name })}
+          testId={`prompt-version-row-actions-${version.version_id}`}
+        />
+      </div>
     </li>
   );
 }

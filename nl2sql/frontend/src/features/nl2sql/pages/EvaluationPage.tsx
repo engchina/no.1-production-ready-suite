@@ -12,6 +12,8 @@ import {
   useConfirm,
   BulkSelectionActions,
   ProcessingIndicator,
+  DisclosureChevron,
+  RowActionMenu,
 } from "@engchina/production-ready-ui";
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -30,12 +32,10 @@ import { useSearchParams } from "react-router-dom";
 
 import { ErrorState, LoadingState } from "@/components/StateViews";
 import { usePageNotice, PageNotice } from "@/components/page-notice";
-import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
 import { FileDropzone } from "@/components/ui/file-dropzone";
 import { FieldLabel } from "@/components/ui/required-field";
 import { ApiError, apiDelete, apiFetch, apiGet, apiPost, apiPostForm } from "@/lib/api";
 import { downloadBlob, downloadFilename } from "@/lib/download";
-import { RowActionMenu } from "@/components/ObjectActions";
 import { t } from "@/lib/i18n";
 import { toastError } from "@/lib/toast";
 import { XLSX_TEMPLATE_FILE_FORMATS } from "@/lib/tabular-file-formats";

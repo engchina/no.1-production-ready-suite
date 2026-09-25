@@ -9,6 +9,7 @@ import {
   useConfirm,
   ActionResultRegion,
   TimedLoadingState,
+  DisclosureChevron,
 } from "@engchina/production-ready-ui";
 import {
   useCallback,
@@ -33,7 +34,6 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { PageNotice } from "@/components/page-notice";
 import { EmptyState } from "@/components/StateViews";
-import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
 import { FieldLabel } from "@/components/ui/required-field";
 import { useAuth } from "@/features/security/AuthProvider";
 import {

@@ -18,5 +18,9 @@
 ## 未保存変更の離脱ガード
 
 - `isDirty` を使う編集画面は、画面内の「戻る」だけでなく、サイドナビ・内部リンク・再読込・タブを閉じる操作を含む**すべての離脱の経路**を共通の guard で守る。dirty の判定は、順序に意味のない集合 / 配列を正規化して比べ、保存に成功したら保存済みの基準と確認の状態を更新する。
-- `<BrowserRouter>` では内部リンクの capture と `beforeunload` を共通の hook にまとめる。修飾キー付きのクリック、`target="_blank"`、download、外部の origin、同じ URL は妨げない。ブラウザの back / forward（`popstate`）まで完全に守る必要が出たら、不完全な履歴の差し戻しを足さず、`createBrowserRouter` への移行を別の Issue で設計する。
+- 3製品とも data router（`createBrowserRouter` + `RouterProvider`。既存の `<Routes>` は 1 つの splat route の中にそのまま置く）で動かす（#138）。共有の `useUnsavedChangesGuard` は次の 3 経路を守る。
+  - 内部リンク：click を capture 段階で受けて確認する。修飾キー付きのクリック、`target="_blank"`、download、外部の origin、同じ URL は妨げない。
+  - 再読込・タブを閉じる：`beforeunload`。
+  - ブラウザの back / forward：`useBlocker` で `historyAction === "POP"` の移動だけを止めて確認し、キャンセルなら URL を元に戻す。
+- 画面内のボタンが自分で確認してから `navigate` する流れ（PUSH / REPLACE）は hook で止めない（二重に確認しないため）。そのようなボタンは、移動の前に必ず同じ確認を通す。
 - 共有パッケージの画面（`@engchina/production-ready-system-settings` など）は、離脱の確認の文言を props（`draftGuardMessages` など）で受け取る。

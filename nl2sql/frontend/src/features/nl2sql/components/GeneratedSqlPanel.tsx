@@ -7,8 +7,8 @@ import {
   toast,
   StatusBadge,
   ContentActionBar,
+  DisclosureChevron,
 } from "@engchina/production-ready-ui";
-import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
 
 import { LogicalStepsList } from "./LogicalStepsList";
 import { copyTextToClipboard } from "@/lib/clipboard";

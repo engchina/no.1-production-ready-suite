@@ -20,8 +20,8 @@ import {
   ClearActionButton,
   ActionResultRegion,
   ContentActionBar,
+  DisclosureChevron,
 } from "@engchina/production-ready-ui";
-import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
 import {
   useEffect,
   useId,

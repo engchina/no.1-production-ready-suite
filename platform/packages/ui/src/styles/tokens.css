@@ -32,6 +32,9 @@
 @import "./tokens/base.css";
 @import "./tokens/a11y.css";
 
+/* 共有コンポーネントの構造 CSS（utility で表せない grid 配置・::before 等）。 */
+@import "./structure/fixed-split-pane.css";
+
 @theme inline {
   /* TIER 2 — 意味トークン（bg-surface / text-fg-muted / border-border-control …）。
      TIER 1（--neutral-* 等の原色）はユーティリティに露出させないため登録しない。 */

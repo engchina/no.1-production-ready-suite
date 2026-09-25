@@ -4,6 +4,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { CardErrorBoundary } from "@/components/CardErrorBoundary";
 import { SystemTablesCard } from "@/components/settings/SystemTablesCard";
 import { ApiError, api } from "@/lib/api";
+import { draftGuardMessages } from "@/lib/leave-guard";
 import { t } from "@/lib/i18n";
 import { queryKeys } from "@/lib/queries";
 
@@ -13,6 +14,7 @@ export function DatabaseSettingsClient() {
   return (
     <DatabaseSettingsPage
       api={api}
+      draftGuardMessages={draftGuardMessages()}
       errorMessage={(error) => (error instanceof ApiError ? error.message : undefined)}
       onDatabaseChanged={async () => {
         await queryClient.invalidateQueries({ queryKey: queryKeys.databaseStatus });

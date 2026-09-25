@@ -82,6 +82,8 @@ Prompt、Workflow、Template、Runtime 固有設定を直接参照してはな�
 - 空、読込、エラー、degraded、未 Binding、capability 非対応を明示する。
 - 画面の振る舞い（メッセージ機構・ボタンの役割と配置・ページの型・状態保持・横断的な保守契約）は
   platform の [UX 契約](../platform/docs/ux-contracts/README.md) を正本とする。
+- 各ページの型（A〜D）の割り当て、離脱ガードの対象画面、作業状態として残す field は
+  [docs/frontend-page-archetypes-spec.md](./docs/frontend-page-archetypes-spec.md) に書く。
 - UI/UX 作業では必ず `ui-ux-pro-max` skill を使い、desktop と 375px、キーボード操作を
   Playwright で確認する。
 

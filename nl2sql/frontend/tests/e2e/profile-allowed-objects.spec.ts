@@ -871,10 +871,12 @@ test("業務プロファイルの更新操作はテーブル管理と同じ文�
       "DB Profile 一覧を再取得",
       "新規作成",
     ]);
-    // 更新系は utility = ghost(bg-transparent)。
-    await expect(refreshButton).toHaveClass(/\bbg-transparent\b/);
-    await expect(schemaRefreshButton).toHaveClass(/\bbg-transparent\b/);
-    await expect(dbProfileRefreshButton).toHaveClass(/\bbg-transparent\b/);
+    // 更新系は utility。共有 PageHeader は utility を secondary と同じ枠付きの見た目で描く（UX 契約 buttons.md §5）。
+    for (const button of [refreshButton, schemaRefreshButton, dbProfileRefreshButton]) {
+      await expect(button).toHaveClass(/\bborder-border-control\b/);
+      await expect(button).toHaveClass(/\bbg-surface\b/);
+      await expect(button).not.toHaveClass(/\bbg-transparent\b/);
+    }
 
     const [createBox, refreshBox, schemaRefreshBox, dbProfileRefreshBox] = await Promise.all([
       createButton.boundingBox(),

@@ -24,7 +24,7 @@ for (const viewport of [
 
     await page.goto("/settings/generation");
 
-    await expect(page.getByRole("heading", { name: "回答スタイル" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "回答スタイル", exact: true, level: 1 })).toBeVisible();
     await expect(page.getByRole("radio", { name: /根拠重視・簡潔/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /構造化 JSON/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /逐句出典付与/ })).toBeVisible();
@@ -43,7 +43,7 @@ for (const viewport of [
 
     await page.goto("/settings/guardrail");
 
-    await expect(page.getByRole("heading", { name: "安全チェック" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "安全チェック", exact: true, level: 1 })).toBeVisible();
     await expect(page.getByRole("radio", { name: /標準/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /規制対応/ })).toBeVisible();
     await expect(page.getByRole("link", { name: "安全チェック" })).toHaveAttribute(

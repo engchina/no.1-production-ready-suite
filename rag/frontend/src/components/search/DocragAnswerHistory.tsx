@@ -8,7 +8,9 @@ import {
   CardDescription,
   CardHeader,
   CardTitle,
+  type EntityAction,
   FormStatus,
+  ObjectActionBar,
   Skeleton,
   StatusBadge,
   useConfirm,
@@ -161,17 +163,39 @@ export function SavedDocragAnswer({
     );
   }
   const record = detail.data;
+  // 保存された回答 1 件の操作。危険な操作だけなので ObjectActionBar の「その他の操作」に入り、
+  // 確定は確認ダイアログで行う（buttons.md §5.1）。
+  const actions: EntityAction[] = [
+    {
+      id: "delete",
+      label: t("search.history.delete"),
+      icon: Trash2,
+      tone: "danger",
+      disabled: remove.isPending,
+      loading: remove.isPending,
+      testId: `docrag-answer-delete-${record.trace_id}`,
+      onSelect: () => void handleDelete(),
+    },
+  ];
   return (
     <div className="space-y-3 rounded-md border border-border bg-surface-sunken p-3">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <p className="min-w-0 flex-1 break-words text-xs text-fg-muted">
+          {showAnswer
+            ? t("search.history.question", { question: record.question })
+            : t("search.history.savedAt", { value: formatDateTime(record.created_at) })}
+        </p>
+        <ObjectActionBar
+          actions={actions}
+          ariaLabel={t("common.objectActions.aria", { name: t("search.history.objectName") })}
+          moreLabel={t("common.objectActions.more")}
+          testId="docrag-answer-actions"
+        />
+      </div>
       {showAnswer ? (
-        <>
-          <p className="break-words text-xs text-fg-muted">
-            {t("search.history.question", { question: record.question })}
-          </p>
-          <p className="whitespace-pre-wrap text-sm leading-relaxed text-fg">
-            {record.answer}
-          </p>
-        </>
+        <p className="whitespace-pre-wrap text-sm leading-relaxed text-fg">
+          {record.answer}
+        </p>
       ) : null}
       <DocragAnswerPanel docrag={record.docrag} />
       {record.citations.length > 0 ? (
@@ -188,29 +212,16 @@ export function SavedDocragAnswer({
           ))}
         </ul>
       ) : null}
-      <div className="flex flex-wrap items-center justify-end gap-2 border-t border-border pt-3">
-        {remove.isError ? (
-          <FormStatus
-            tone="danger"
-            message={
-              remove.error instanceof ApiError
-                ? remove.error.message
-                : t("search.history.deleteError")
-            }
-          />
-        ) : null}
-        <Button
-          type="button"
-          variant="ghost"
+      {remove.isError ? (
+        <FormStatus
           tone="danger"
-          size="sm"
-          icon={Trash2}
-          loading={remove.isPending}
-          onClick={() => void handleDelete()}
-        >
-          {t("search.history.delete")}
-        </Button>
-      </div>
+          message={
+            remove.error instanceof ApiError
+              ? remove.error.message
+              : t("search.history.deleteError")
+          }
+        />
+      ) : null}
     </div>
   );
 }
