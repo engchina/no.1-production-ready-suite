@@ -4,10 +4,9 @@ locals {
     false,
   )
 
-  app_name          = "production-ready-nl2sql"
-  app_repo_dir      = "no.1-production-ready-nl2sql"
-  platform_repo_dir = "no.1-production-ready-platform"
-  wallet_dir_host   = "/u01/aipoc/wallet"
+  app_name        = "production-ready-nl2sql"
+  app_repo_dir    = "no.1-production-ready-suite/nl2sql"
+  wallet_dir_host = "/u01/aipoc/wallet"
   oracle_connection_security = (
     var.adb_is_mtls_connection_required ? "wallet_mtls" : "walletless_tls"
   )
@@ -74,8 +73,6 @@ EOT
     backend_env         = base64gzip(local.backend_env)
     compartment_ocid    = var.compartment_ocid
     db_dsn              = local.effective_oracle_dsn
-    platform_git_ref    = var.platform_git_ref
-    platform_git_url    = var.platform_git_url
     region              = var.region
     wallet_content      = data.external.wallet_files.result.wallet_content
     wallet_dir_host     = local.wallet_dir_host

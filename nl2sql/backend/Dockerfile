@@ -1,5 +1,5 @@
-# 本番は Gunicorn + UvicornWorker。build context は workspace root を想定する:
-#   docker build -f no.1-production-ready-nl2sql/backend/Dockerfile .
+# 本番は Gunicorn + UvicornWorker。build context は suite（monorepo）root を想定する:
+#   docker build -f nl2sql/backend/Dockerfile .  (suite root で実行)
 # 共有 backend_core（path 依存）も同梱できるようにする。
 FROM python:3.12-slim AS base
 

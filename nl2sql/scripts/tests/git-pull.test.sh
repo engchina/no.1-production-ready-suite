@@ -11,49 +11,41 @@ export GIT_COMMITTER_NAME="${GIT_AUTHOR_NAME}" GIT_COMMITTER_EMAIL="${GIT_AUTHOR
 
 fail_test() { printf 'git-pull test failed: %s\n' "$*" >&2; exit 1; }
 
+# suite repository（nl2sql/ と platform/ を含む monorepo）を1つ用意する。
 setup_case() {
   CASE_DIR="${TEST_TMP_DIR}/$1"
-  APP_DIR="${CASE_DIR}/no.1-production-ready-nl2sql"
-  PLATFORM_DIR="${CASE_DIR}/no.1-production-ready-platform"
+  SUITE_DIR="${CASE_DIR}/no.1-production-ready-suite"
+  SEED_DIR="${CASE_DIR}/suite-seed"
   mkdir -p "${CASE_DIR}"
-  local name dest
-  for name in platform app; do
-    git init --bare --quiet --initial-branch=main "${CASE_DIR}/${name}.git"
-    git init --quiet --initial-branch=main "${CASE_DIR}/${name}-seed"
-    printf 'initial\n' > "${CASE_DIR}/${name}-seed/version.txt"
-    if [ "${name}" = app ]; then
-      mkdir -p "${CASE_DIR}/${name}-seed/scripts"
-      cp "${PULL_SCRIPT}" "${CASE_DIR}/${name}-seed/scripts/git-pull.sh"
-    fi
-    git -C "${CASE_DIR}/${name}-seed" add .
-    git -C "${CASE_DIR}/${name}-seed" commit --quiet -m initial
-    git -C "${CASE_DIR}/${name}-seed" remote add origin "${CASE_DIR}/${name}.git"
-    git -C "${CASE_DIR}/${name}-seed" push --quiet -u origin main
-    dest="${PLATFORM_DIR}"
-    if [ "${name}" = app ]; then dest="${APP_DIR}"; fi
-    git clone --quiet "${CASE_DIR}/${name}.git" "${dest}"
-  done
-  INITIAL_APP="$(git -C "${APP_DIR}" rev-parse HEAD)"
-  INITIAL_PLATFORM="$(git -C "${PLATFORM_DIR}" rev-parse HEAD)"
+  git init --bare --quiet --initial-branch=main "${CASE_DIR}/suite.git"
+  git init --quiet --initial-branch=main "${SEED_DIR}"
+  mkdir -p "${SEED_DIR}/nl2sql/scripts" "${SEED_DIR}/platform"
+  printf 'initial\n' > "${SEED_DIR}/nl2sql/version.txt"
+  printf 'initial\n' > "${SEED_DIR}/platform/version.txt"
+  cp "${PULL_SCRIPT}" "${SEED_DIR}/nl2sql/scripts/git-pull.sh"
+  git -C "${SEED_DIR}" add .
+  git -C "${SEED_DIR}" commit --quiet -m initial
+  git -C "${SEED_DIR}" remote add origin "${CASE_DIR}/suite.git"
+  git -C "${SEED_DIR}" push --quiet -u origin main
+  git clone --quiet "${CASE_DIR}/suite.git" "${SUITE_DIR}"
+  INITIAL_HEAD="$(git -C "${SUITE_DIR}" rev-parse HEAD)"
 }
 
 advance_remote() {
-  local name="$1"
-  printf 'remote update\n' >> "${CASE_DIR}/${name}-seed/version.txt"
-  if [ "${name}" = app ]; then
-    # 実行中の pull スクリプト自体が更新される場合も正常終了する。
-    printf '\n# updated script\n' >> "${CASE_DIR}/app-seed/scripts/git-pull.sh"
-  fi
-  git -C "${CASE_DIR}/${name}-seed" add .
-  git -C "${CASE_DIR}/${name}-seed" commit --quiet -m remote-update
-  git -C "${CASE_DIR}/${name}-seed" push --quiet origin main
+  printf 'remote update\n' >> "${SEED_DIR}/platform/version.txt"
+  printf 'remote update\n' >> "${SEED_DIR}/nl2sql/version.txt"
+  # 実行中の pull スクリプト自体が更新される場合も正常終了する。
+  printf '\n# updated script\n' >> "${SEED_DIR}/nl2sql/scripts/git-pull.sh"
+  git -C "${SEED_DIR}" add .
+  git -C "${SEED_DIR}" commit --quiet -m remote-update
+  git -C "${SEED_DIR}" push --quiet origin main
 }
 
 run_pull() (
   cd "${TEST_TMP_DIR}"
-  # 呼出元 directory に依存せず、スクリプト位置から両 repository を解決する。
-  unset APP_REPO_DIR PLATFORM_REPO_DIR
-  bash "${APP_DIR}/scripts/git-pull.sh"
+  # 呼出元 directory に依存せず、スクリプト位置から suite root を解決する。
+  unset SUITE_REPO_DIR
+  bash "${SUITE_DIR}/nl2sql/scripts/git-pull.sh"
 )
 
 expect_failure() {
@@ -61,90 +53,84 @@ expect_failure() {
     fail_test 'failed pull allowed deployment'
   fi
   test ! -e "${CASE_DIR}/deployed"
-  if grep -Fq '両 repository の更新が完了' "${CASE_DIR}/output"; then
+  if grep -Fq 'suite repository の更新が完了' "${CASE_DIR}/output"; then
     fail_test 'failed pull reported success'
   fi
 }
 
 assert_unchanged() {
-  [ "$(git -C "${APP_DIR}" rev-parse HEAD)" = "${INITIAL_APP}" ]
-  [ "$(git -C "${PLATFORM_DIR}" rev-parse HEAD)" = "${INITIAL_PLATFORM}" ]
+  [ "$(git -C "${SUITE_DIR}" rev-parse HEAD)" = "${INITIAL_HEAD}" ]
 }
 
 setup_case success
-advance_remote platform
-advance_remote app
-mkdir -p "${APP_DIR}/backend"
-printf 'keep lock\n' > "${APP_DIR}/backend/..env.lock"
+advance_remote
+mkdir -p "${SUITE_DIR}/nl2sql/backend"
+printf 'keep lock\n' > "${SUITE_DIR}/nl2sql/backend/..env.lock"
 run_pull >"${CASE_DIR}/output" 2>&1
-for name in platform app; do
-  dest="${PLATFORM_DIR}"
-  if [ "${name}" = app ]; then dest="${APP_DIR}"; fi
-  [ "$(git -C "${dest}" rev-parse HEAD)" = "$(git -C "${CASE_DIR}/${name}-seed" rev-parse HEAD)" ]
-done
-grep -Fxq 'keep lock' "${APP_DIR}/backend/..env.lock"
-grep -Fq '両 repository の更新が完了' "${CASE_DIR}/output"
-platform_line="$(grep -n 'platform: origin/main' "${CASE_DIR}/output" | cut -d: -f1)"
-app_line="$(grep -n 'NL2SQL: origin/main' "${CASE_DIR}/output" | cut -d: -f1)"
-[ "${platform_line}" -lt "${app_line}" ]
+[ "$(git -C "${SUITE_DIR}" rev-parse HEAD)" = "$(git -C "${SEED_DIR}" rev-parse HEAD)" ]
+grep -Fxq 'keep lock' "${SUITE_DIR}/nl2sql/backend/..env.lock"
+grep -Fq 'suite: origin/main' "${CASE_DIR}/output"
+grep -Fq 'suite repository の更新が完了' "${CASE_DIR}/output"
 run_pull >"${CASE_DIR}/noop-output" 2>&1
-grep -Fq '両 repository の更新が完了' "${CASE_DIR}/noop-output"
+grep -Fq 'suite repository の更新が完了' "${CASE_DIR}/noop-output"
 
 for scenario in dirty staged branch detached missing missing-origin; do
   setup_case "${scenario}"
-  advance_remote platform
+  advance_remote
   case "${scenario}" in
-    dirty) printf 'local edit\n' >> "${APP_DIR}/version.txt" ;;
+    dirty) printf 'local edit\n' >> "${SUITE_DIR}/nl2sql/version.txt" ;;
     staged)
-      printf 'local edit\n' >> "${APP_DIR}/version.txt"
-      git -C "${APP_DIR}" add version.txt
+      printf 'local edit\n' >> "${SUITE_DIR}/nl2sql/version.txt"
+      git -C "${SUITE_DIR}" add nl2sql/version.txt
       ;;
-    branch) git -C "${APP_DIR}" switch --quiet -c local-work ;;
-    detached) git -C "${APP_DIR}" checkout --quiet --detach ;;
-    missing) mv "${APP_DIR}/.git" "${CASE_DIR}/saved-git" ;;
-    missing-origin) git -C "${APP_DIR}" remote remove origin ;;
+    branch) git -C "${SUITE_DIR}" switch --quiet -c local-work ;;
+    detached) git -C "${SUITE_DIR}" checkout --quiet --detach ;;
+    missing) mv "${SUITE_DIR}/.git" "${CASE_DIR}/saved-git" ;;
+    missing-origin) git -C "${SUITE_DIR}" remote remove origin ;;
   esac
   expect_failure
-  [ "$(git -C "${PLATFORM_DIR}" rev-parse HEAD)" = "${INITIAL_PLATFORM}" ]
   case "${scenario}" in
-    dirty|staged) grep -Fq 'local edit' "${APP_DIR}/version.txt" ;;
+    dirty|staged) grep -Fq 'local edit' "${SUITE_DIR}/nl2sql/version.txt" ;;
+    missing) ;;
+    *) assert_unchanged ;;
   esac
 done
 
-setup_case platform-fetch-failure
-advance_remote app
-git -C "${PLATFORM_DIR}" remote set-url origin "${CASE_DIR}/unavailable.git"
+# nl2sql/ と platform/ がそろっていない repository（旧構成など）では更新しない。
+setup_case missing-platform
+advance_remote
+git -C "${SUITE_DIR}" rm --quiet -r platform
+git -C "${SUITE_DIR}" commit --quiet -m drop-platform
+local_head="$(git -C "${SUITE_DIR}" rev-parse HEAD)"
+expect_failure
+[ "$(git -C "${SUITE_DIR}" rev-parse HEAD)" = "${local_head}" ]
+grep -Fq 'platform/ がありません' "${CASE_DIR}/output"
+
+setup_case fetch-failure
+advance_remote
+git -C "${SUITE_DIR}" remote set-url origin "${CASE_DIR}/unavailable.git"
 expect_failure
 assert_unchanged
-grep -Fq 'platform: pull に失敗' "${CASE_DIR}/output"
-
-setup_case app-fetch-failure
-advance_remote platform
-git -C "${APP_DIR}" remote set-url origin "${CASE_DIR}/unavailable.git"
-expect_failure
-[ "$(git -C "${PLATFORM_DIR}" rev-parse HEAD)" = "$(git -C "${CASE_DIR}/platform-seed" rev-parse HEAD)" ]
-[ "$(git -C "${APP_DIR}" rev-parse HEAD)" = "${INITIAL_APP}" ]
-grep -Fq 'NL2SQL: pull に失敗' "${CASE_DIR}/output"
+grep -Fq 'suite: pull に失敗' "${CASE_DIR}/output"
 
 for scenario in diverged ahead; do
   setup_case "${scenario}"
-  printf 'local commit\n' > "${PLATFORM_DIR}/local.txt"
-  git -C "${PLATFORM_DIR}" add local.txt
-  git -C "${PLATFORM_DIR}" commit --quiet -m local-commit
-  local_head="$(git -C "${PLATFORM_DIR}" rev-parse HEAD)"
-  if [ "${scenario}" = diverged ]; then advance_remote platform; fi
+  printf 'local commit\n' > "${SUITE_DIR}/platform/local.txt"
+  git -C "${SUITE_DIR}" add platform/local.txt
+  git -C "${SUITE_DIR}" commit --quiet -m local-commit
+  local_head="$(git -C "${SUITE_DIR}" rev-parse HEAD)"
+  if [ "${scenario}" = diverged ]; then advance_remote; fi
   expect_failure
-  [ "$(git -C "${PLATFORM_DIR}" rev-parse HEAD)" = "${local_head}" ]
-  [ "$(git -C "${APP_DIR}" rev-parse HEAD)" = "${INITIAL_APP}" ]
+  [ "$(git -C "${SUITE_DIR}" rev-parse HEAD)" = "${local_head}" ]
 done
 
 setup_case untracked-conflict
-printf 'remote file\n' > "${CASE_DIR}/platform-seed/conflict.txt"
-advance_remote platform
-printf 'local file\n' > "${PLATFORM_DIR}/conflict.txt"
+printf 'remote file\n' > "${SEED_DIR}/platform/conflict.txt"
+advance_remote
+printf 'local file\n' > "${SUITE_DIR}/platform/conflict.txt"
 expect_failure
 assert_unchanged
-grep -Fxq 'local file' "${PLATFORM_DIR}/conflict.txt"
+grep -Fxq 'local file' "${SUITE_DIR}/platform/conflict.txt"
 
 bash "${PULL_SCRIPT}" --help >"${TEST_TMP_DIR}/help"
 grep -Fq 'Usage:' "${TEST_TMP_DIR}/help"

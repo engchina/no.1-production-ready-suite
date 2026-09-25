@@ -437,9 +437,9 @@ variable "application_port" {
 }
 
 variable "application_git_url" {
-  description = "Git repository URL for Production Ready NL2SQL."
+  description = "Git repository URL for the Production Ready suite monorepo (contains nl2sql/ and platform/)."
   type        = string
-  default     = "https://github.com/engchina/no.1-production-ready-nl2sql.git"
+  default     = "https://github.com/engchina/no.1-production-ready-suite.git"
 
   validation {
     condition     = trimspace(var.application_git_url) != ""
@@ -448,7 +448,7 @@ variable "application_git_url" {
 }
 
 variable "application_git_ref" {
-  description = "Git branch or tag used to deploy Production Ready NL2SQL."
+  description = "Git branch or tag of the Production Ready suite used to deploy NL2SQL."
   type        = string
   default     = "main"
 
@@ -458,27 +458,6 @@ variable "application_git_ref" {
   }
 }
 
-variable "platform_git_url" {
-  description = "Git repository URL for the shared Production Ready platform packages."
-  type        = string
-  default     = "https://github.com/engchina/no.1-production-ready-platform.git"
-
-  validation {
-    condition     = trimspace(var.platform_git_url) != ""
-    error_message = "platform_git_url must be a non-empty Git URL."
-  }
-}
-
-variable "platform_git_ref" {
-  description = "Git branch or tag used to deploy shared Production Ready platform packages."
-  type        = string
-  default     = "main"
-
-  validation {
-    condition     = trimspace(var.platform_git_ref) != ""
-    error_message = "platform_git_ref must be a non-empty Git ref."
-  }
-}
 
 variable "app_environment" {
   description = "Application ENVIRONMENT. Direct HTTP deployments use local with DEBUG=false; production requires app_auth_cookie_secure=true."

@@ -9,16 +9,19 @@ Generative AI.
 Click the button below to open OCI Resource Manager with the Osaka region
 (`ap-osaka-1`) selected by default.
 
-[![Deploy to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?region=ap-osaka-1&zipUrl=https://github.com/engchina/no.1-production-ready-nl2sql/releases/download/v0.1.31/production-ready-nl2sql-terraform-stack.zip)
+[![Deploy to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?region=ap-osaka-1&zipUrl=https://github.com/engchina/no.1-production-ready-suite/releases/download/nl2sql-v0.1.32/production-ready-nl2sql-terraform-stack.zip)
 
-The button downloads the v0.1.31 Terraform Resource Manager stack release asset:
+The button downloads the nl2sql-v0.1.32 Terraform Resource Manager stack release asset
+from the `no.1-production-ready-suite` monorepo:
 
 `production-ready-nl2sql-terraform-stack.zip`
 
 Latest release:
-[v0.1.31](https://github.com/engchina/no.1-production-ready-nl2sql/releases/tag/v0.1.31).
-To use the moving latest release instead of this pinned version, replace
-`releases/download/v0.1.31` with `releases/latest/download` in the deploy URL.
+[nl2sql-v0.1.32](https://github.com/engchina/no.1-production-ready-suite/releases/tag/nl2sql-v0.1.32).
+The monorepo publishes releases for several products, so always pin the
+`nl2sql-v*` tag instead of `releases/latest`. Releases up to v0.1.31 remain in the
+archived `no.1-production-ready-nl2sql` repository, but they clone the old
+two-repository layout and must not be used for new deployments.
 
 The Compute deployment serves the frontend through Nginx on HTTP port `80` and
 proxies API calls through the same origin at `/api/...`.
@@ -29,9 +32,11 @@ and troubleshooting, see [terraform/README.md](terraform/README.md).
 
 ## OCI Compute のソース更新後の再デプロイ
 
-[`scripts/update-after-pull.sh`](scripts/update-after-pull.sh) は、NL2SQL と同じ親ディレクトリにある
-`/u01/aipoc/no.1-production-ready-platform` のローカルソース更新も NL2SQL に反映します。
-**スクリプト自身は `git pull` を含む Git 操作を行わないため、先に両リポジトリを更新してください。**
+NL2SQL は monorepo `/u01/aipoc/no.1-production-ready-suite` の `nl2sql/` に、共有 platform は同じ repository の
+`platform/` に配置します。[`scripts/update-after-pull.sh`](scripts/update-after-pull.sh) は `platform/` の更新も NL2SQL に反映します。
+**スクリプト自身は `git pull` を含む Git 操作を行わないため、先に suite repository を更新してください。**
+旧構成（`/u01/aipoc/no.1-production-ready-nl2sql` と `/u01/aipoc/no.1-production-ready-platform` の2つの repository）から
+移行する場合は [docs/monorepo-server-migration.md](docs/monorepo-server-migration.md) の手順に従ってください。
 
 **実行前に、Oracle データベースが起動済みで、Compute から接続可能であることを確認してください。**
 OCI Autonomous Database が `Stopped`（停止済み）の場合は起動し、`Starting`（起動処理中）の場合は
@@ -41,31 +46,22 @@ DB に接続できず migration が失敗すると、frontend のビルドが成
 旧 frontend が維持され、external worker は停止・無効化されます。
 
 通常のデプロイユーザー (`ubuntu`) で、次のコマンドを実行します。
-[`scripts/git-pull.sh`](scripts/git-pull.sh) が platform → NL2SQL の順に更新し、
-**両方の pull が成功した場合だけ** `&&` に続く再デプロイを実行します。
+[`scripts/git-pull.sh`](scripts/git-pull.sh) が suite repository を更新し、
+**pull が成功した場合だけ** `&&` に続く再デプロイを実行します。
 
 ```bash
-cd /u01/aipoc/no.1-production-ready-nl2sql &&
+cd /u01/aipoc/no.1-production-ready-suite/nl2sql &&
 ./scripts/git-pull.sh && sudo ./scripts/update-after-pull.sh
 ```
 
 ソースの取得だけなら `./scripts/git-pull.sh` を実行します（`sudo` は不要）。
 DB の起動が必要なのは再デプロイ時で、ソース取得だけなら DB 接続は不要です。
-両 repository が `main` で追跡ファイルに未保存変更がないことを事前確認し、
+suite repository が `main` で追跡ファイルに未保存変更がないことを事前確認し、
 `git pull --ff-only --no-rebase origin main` の後に取得 commit と `HEAD` の一致を検証します。
 branch の自動切替や変更の破棄・stash は行いません。未追跡ファイル（例: `backend/..env.lock`）は
 保持しますが、取得ファイルとの衝突は Git が拒否します。失敗時はエラーを確認してから再実行してください。
-途中まで更新された repository は元に戻さないため、両方が成功するまで再デプロイへ進まないでください。
-共有 platform は既定で NL2SQL と同じ親 directory を参照し、別配置では `PLATFORM_REPO_DIR` を指定できます。
-
-古い checkout に `scripts/git-pull.sh` がまだない場合は、最初の一度だけ NL2SQL の `main` で
-次を実行してスクリプトを取得します。
-
-```bash
-cd /u01/aipoc/no.1-production-ready-nl2sql &&
-git pull --ff-only origin main &&
-./scripts/git-pull.sh && sudo ./scripts/update-after-pull.sh
-```
+pull が成功するまで再デプロイへ進まないでください。
+共有 platform は既定で suite repository の `platform/` を参照し、別配置では `PLATFORM_REPO_DIR` を指定できます。
 
 引数なしで実行すると、共有コンポーネントの更新を次のように反映します。
 

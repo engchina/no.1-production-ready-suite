@@ -6,13 +6,13 @@ NL2SQL. The stack provisions:
 - Oracle Autonomous AI Database 26ai, or connection settings for an existing ADB
 - A generated ADB wallet for the selected/new ADB
 - One OCI Compute instance
-- A cloud-init bootstrap that clones the repositories and runs the application
+- A cloud-init bootstrap that clones the suite monorepo and runs the application
   directly on Compute with Nginx and systemd
 
 The default application source is:
 
-- `https://github.com/engchina/no.1-production-ready-nl2sql.git`, ref `main`
-- `https://github.com/engchina/no.1-production-ready-platform.git`, ref `main`
+- `https://github.com/engchina/no.1-production-ready-suite.git`, ref `main`
+  (NL2SQL is `nl2sql/` and the shared packages are `platform/` in the same clone)
 
 ## Deploy
 
@@ -21,9 +21,9 @@ The default application source is:
 Click the button below to open OCI Resource Manager with the Osaka region
 (`ap-osaka-1`) selected by default.
 
-[![Deploy to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?region=ap-osaka-1&zipUrl=https://github.com/engchina/no.1-production-ready-nl2sql/releases/download/v0.1.31/production-ready-nl2sql-terraform-stack.zip)
+[![Deploy to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?region=ap-osaka-1&zipUrl=https://github.com/engchina/no.1-production-ready-suite/releases/download/nl2sql-v0.1.32/production-ready-nl2sql-terraform-stack.zip)
 
-The button uses the v0.1.31 GitHub Release asset named
+The button uses the nl2sql-v0.1.32 GitHub Release asset (in `no.1-production-ready-suite`) named
 `production-ready-nl2sql-terraform-stack.zip`. Publish that release with the
 asset before using the one-click deploy URL.
 
@@ -153,12 +153,13 @@ The release workflow publishes:
 - `production-ready-nl2sql-terraform-stack.zip`
 - `production-ready-nl2sql-terraform-stack.zip.sha256`
 
-The README deploy button intentionally targets the latest-release download URL so
-future releases can replace the asset without changing documentation.
+The README deploy button pins an `nl2sql-v*` release tag. The suite monorepo
+publishes releases for several products, so `releases/latest` may not point to an
+NL2SQL release.
 
 ## Runtime Notes
 
-The bootstrap script writes `/u01/aipoc/no.1-production-ready-nl2sql/backend/.env`
+The bootstrap script writes `/u01/aipoc/no.1-production-ready-suite/nl2sql/backend/.env`
 on the instance and starts in the background from cloud-init, matching the
 proven No.1-SQL-Assist Terraform bootstrap pattern. Track progress in
 `/var/log/cloud-init-custom.log` and `/var/log/nl2sql-init.log` until the
@@ -262,7 +263,7 @@ rewrite `backend/.env`, the Wallet contents, systemd units, or the Nginx
 configuration.
 
 ```bash
-cd /u01/aipoc/no.1-production-ready-nl2sql
+cd /u01/aipoc/no.1-production-ready-suite/nl2sql
 ./scripts/update-after-pull.sh --check
 ./scripts/update-after-pull.sh --repair-only
 ./scripts/update-after-pull.sh
@@ -303,8 +304,8 @@ active. If the final public/Nginx health check fails, the previous frontend is
 restored while the successfully initialized backend and workers remain running.
 The command log is appended to `/var/log/nl2sql-update.log`.
 
-The sibling shared platform checkout defaults to
-`/u01/aipoc/no.1-production-ready-platform`. For a nonstandard installation,
+The shared platform defaults to `platform/` in the same suite checkout
+(`/u01/aipoc/no.1-production-ready-suite/platform`). For a nonstandard installation,
 override `PLATFORM_REPO_DIR`. `BACKEND_HEALTH_URL`, `PUBLIC_HEALTH_URL`,
 `HEALTHCHECK_TIMEOUT_SECONDS`, and `HEALTHCHECK_INTERVAL_SECONDS` are also
 available for nondefault ports or health-check timing.
@@ -319,7 +320,7 @@ renders the backend's JSON log lines in human-readable form. It never restarts
 or otherwise mutates a service. Run it on the Compute instance:
 
 ```bash
-cd /u01/aipoc/no.1-production-ready-nl2sql
+cd /u01/aipoc/no.1-production-ready-suite/nl2sql
 ./scripts/tail-logs.sh --status          # unit state + backend/public health check
 ./scripts/tail-logs.sh                   # follow the four application units
 ./scripts/tail-logs.sh --backend         # backend only
@@ -337,7 +338,7 @@ The equivalent manual commands, and everything the script does not cover:
 ```bash
 sudo tail -f /var/log/cloud-init-custom.log
 sudo tail -f /var/log/nl2sql-init.log
-cd /u01/aipoc/no.1-production-ready-nl2sql
+cd /u01/aipoc/no.1-production-ready-suite/nl2sql
 sudo systemctl status production-ready-nl2sql-backend
 sudo journalctl -u production-ready-nl2sql-backend -f
 sudo journalctl -u production-ready-nl2sql-schema-refresh-worker -f
@@ -413,7 +414,7 @@ ready yet the application still starts in degraded mode. Check
 `/var/log/nl2sql-init.log` for `WARNING: Continuing in degraded mode`, then run:
 
 ```bash
-cd /u01/aipoc/no.1-production-ready-nl2sql/backend
+cd /u01/aipoc/no.1-production-ready-suite/nl2sql/backend
 sudo -u ubuntu /usr/local/bin/uv run python -m app.cli.nl2sql_system_schema --initialize
 sudo -u ubuntu /usr/local/bin/uv run python -m app.cli.app_security_migrate --apply --skip-bootstrap
 sudo systemctl restart production-ready-nl2sql-backend

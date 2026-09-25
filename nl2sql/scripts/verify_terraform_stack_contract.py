@@ -41,8 +41,8 @@ ACL_CIDR_DESCRIPTION = (
     "パブリックIPアドレスまたはパブリックCIDRブロックをカンマ区切りで"
     "入力します。"
 )
-APPLICATION_GIT_URL = "https://github.com/engchina/no.1-production-ready-nl2sql.git"
-PLATFORM_GIT_URL = "https://github.com/engchina/no.1-production-ready-platform.git"
+# NL2SQL と共有 platform は monorepo（nl2sql/ と platform/）から1回の clone で取得する。
+APPLICATION_GIT_URL = "https://github.com/engchina/no.1-production-ready-suite.git"
 CHICAGO_COMPUTE_IMAGE = (
     "ocid1.image.oc1.us-chicago-1.aaaaaaaal25tbfrlwhh27tzgiatqr3oq5y3qzz7wgpezjouvjk2cdfdr4mnq"
 )
@@ -141,8 +141,6 @@ def verify(package_path: Path) -> None:
         [
             "- application_git_url",
             "- application_git_ref",
-            "- platform_git_url",
-            "- platform_git_ref",
             "- existing_oracle_wallet_password",
             "- adb_is_mtls_connection_required",
         ],
@@ -167,8 +165,6 @@ def verify(package_path: Path) -> None:
         for name in (
             "application_git_url",
             "application_git_ref",
-            "platform_git_url",
-            "platform_git_ref",
         )
         if f"- {name}" in application_source_group.group(0)
     ]
@@ -197,8 +193,6 @@ def verify(package_path: Path) -> None:
     git_source_defaults = {
         "application_git_url": APPLICATION_GIT_URL,
         "application_git_ref": "main",
-        "platform_git_url": PLATFORM_GIT_URL,
-        "platform_git_ref": "main",
     }
     for name, default in git_source_defaults.items():
         schema_block = _schema_variable(schema, name)
@@ -511,22 +505,31 @@ def verify(package_path: Path) -> None:
             "ORACLE_DEEPSEC_ENABLED=${var.oracle_deepsec_enabled}",
             "ORACLE_DEEPSEC_DATA_USER_PASSWORD=${var.oracle_deepsec_enabled ? "
             'var.oracle_deepsec_data_user_password : ""}',
-            'wallet_dir_host   = "/u01/aipoc/wallet"',
+            'wallet_dir_host = "/u01/aipoc/wallet"',
             "application_git_ref = var.application_git_ref",
             "application_git_url = var.application_git_url",
-            "platform_git_ref    = var.platform_git_ref",
-            "platform_git_url    = var.platform_git_url",
         ],
         context="runtime deployment compartment",
     )
+    for source_name, source in (
+        ("schema.yaml", schema),
+        ("variables.tf", variables),
+        ("locals.tf", locals_source),
+        ("bootstrap", bootstrap),
+    ):
+        if "platform_git_" in source or "no.1-production-ready-platform" in source:
+            raise AssertionError(
+                f"{source_name} must not clone the shared platform separately (use the suite monorepo)"
+            )
     _require_all(
         bootstrap,
         [
             'APP_ROOT="/u01/aipoc"',
             "run_application_init",
             'bash "$${init_script}"',
-            'clone_or_update_repo "${application_git_url}" "${application_git_ref}"',
-            'clone_or_update_repo "${platform_git_url}" "${platform_git_ref}"',
+            'SUITE_REPO_DIR="$${APP_ROOT}/no.1-production-ready-suite"',
+            'APP_REPO_DIR="$${SUITE_REPO_DIR}/nl2sql"',
+            'clone_or_update_repo "${application_git_url}" "${application_git_ref}" "$${SUITE_REPO_DIR}"',
             "Nginx listens on TCP port",
         ],
         context="direct Compute bootstrap",

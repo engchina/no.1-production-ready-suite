@@ -11,8 +11,6 @@ variableGroups:
       - adb_compute_model
       - application_git_url
       - application_git_ref
-      - platform_git_url
-      - platform_git_ref
       - app_environment
       - app_auth_cookie_secure
       - existing_oracle_wallet_password
@@ -149,7 +147,8 @@ variables:
     required: true
     visible: false
     title: "Application Git URL"
-    default: "https://github.com/engchina/no.1-production-ready-nl2sql.git"
+    description: "Production Ready suite monorepo (nl2sql/ and platform/)."
+    default: "https://github.com/engchina/no.1-production-ready-suite.git"
 
   application_git_ref:
     type: string
@@ -159,20 +158,6 @@ variables:
     description: "Branch or tag to clone. The default deploys main."
     default: "main"
 
-  platform_git_url:
-    type: string
-    required: true
-    visible: false
-    title: "Platform Git URL"
-    default: "https://github.com/engchina/no.1-production-ready-platform.git"
-
-  platform_git_ref:
-    type: string
-    required: true
-    visible: false
-    title: "Platform Git ref"
-    description: "Branch or tag for shared backend/ui packages."
-    default: "main"
 
   application_port:
     type: number

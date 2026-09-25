@@ -8,11 +8,13 @@ SCRIPT_PATH="${SCRIPT_DIR}/$(basename "${BASH_SOURCE[0]}")"
 DEFAULT_REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 APP_REPO_DIR="${APP_REPO_DIR:-${DEFAULT_REPO_DIR}}"
-APP_ROOT="${APP_ROOT:-$(cd "${APP_REPO_DIR}/.." && pwd)}"
+# APP_REPO_DIR は suite repository（no.1-production-ready-suite）の nl2sql/。APP_ROOT はその suite の親。
+SUITE_REPO_DIR="$(dirname "${APP_REPO_DIR}")"
+APP_ROOT="${APP_ROOT:-$(cd "${SUITE_REPO_DIR}/.." && pwd)}"
 BACKEND_DIR="${APP_REPO_DIR}/backend"
 BACKEND_ENV_FILE="${BACKEND_DIR}/.env"
 FRONTEND_DIR="${APP_REPO_DIR}/frontend"
-PLATFORM_REPO_DIR="${PLATFORM_REPO_DIR:-${APP_ROOT}/no.1-production-ready-platform}"
+PLATFORM_REPO_DIR="${PLATFORM_REPO_DIR:-${SUITE_REPO_DIR}/platform}"
 APP_USER="${APP_USER:-ubuntu}"
 APP_GROUP="${APP_GROUP:-ubuntu}"
 WALLET_DIR="${WALLET_DIR:-${APP_ROOT}/wallet}"
@@ -76,7 +78,7 @@ test_mode_enabled() {
     /tmp/*) ;;
     *) return 1 ;;
   esac
-  [ "${APP_REPO_DIR}" = "${APP_ROOT}/no.1-production-ready-nl2sql" ] && \
+  [ "${APP_REPO_DIR}" = "${APP_ROOT}/no.1-production-ready-suite/nl2sql" ] && \
     [ "${WALLET_DIR}" = "${APP_ROOT}/wallet" ] && \
     [ "${RECOVERY_ROOT}" = "${APP_ROOT}/recovery" ] && \
     [ "${UPDATE_LOG_PATH}" = "${APP_ROOT}/update.log" ] && \
@@ -160,7 +162,7 @@ passwordless sudo がない環境では sudo ./scripts/update-after-pull.sh で�
 root 起動時も build、依存同期、database CLI は ubuntu へ降権して実行します。
 
 Environment overrides:
-  PLATFORM_REPO_DIR             共有 platform リポジトリ
+  PLATFORM_REPO_DIR             共有 platform directory (default: suite の platform/)
   BACKEND_HEALTH_URL            backend の直接 health URL
   PUBLIC_HEALTH_URL             Nginx 経由の health URL
   HEALTHCHECK_TIMEOUT_SECONDS   health 待機上限秒 (default: 90)
@@ -232,9 +234,9 @@ validate_fixed_oci_layout() {
     [ "${APP_USER}" = "ubuntu" ] || fail "実行ユーザー設定は ubuntu である必要があります。"
     [ "${APP_GROUP}" = "ubuntu" ] || fail "実行グループ設定は ubuntu である必要があります。"
     [ "${APP_ROOT}" = "/u01/aipoc" ] || fail "APP_ROOT は /u01/aipoc 固定です。"
-    [ "${APP_REPO_DIR}" = "/u01/aipoc/no.1-production-ready-nl2sql" ] || \
+    [ "${APP_REPO_DIR}" = "/u01/aipoc/no.1-production-ready-suite/nl2sql" ] || \
       fail "アプリケーションパスが OCI の固定パスではありません。"
-    [ "${BACKEND_ENV_FILE}" = "/u01/aipoc/no.1-production-ready-nl2sql/backend/.env" ] || \
+    [ "${BACKEND_ENV_FILE}" = "/u01/aipoc/no.1-production-ready-suite/nl2sql/backend/.env" ] || \
       fail "backend/.env が OCI の固定パスではありません。"
     [ "${WALLET_DIR}" = "/u01/aipoc/wallet" ] || fail "Wallet path は /u01/aipoc/wallet 固定です。"
     [ "${RECOVERY_ROOT}" = "/u01/aipoc/recovery" ] || fail "recovery path は /u01/aipoc/recovery 固定です。"

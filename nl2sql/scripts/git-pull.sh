@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# 共有 platform と NL2SQL の main を取得し、成功後にだけ再デプロイへ進める。
+# monorepo（no.1-production-ready-suite）の main を取得し、成功後にだけ再デプロイへ進める。
+# NL2SQL（nl2sql/）と共有 platform（platform/）は同じ repository に含まれるため、pull は1回だけ行う。
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-APP_REPO_DIR="${APP_REPO_DIR:-$(cd "${SCRIPT_DIR}/.." && pwd)}"
-PLATFORM_REPO_DIR="${PLATFORM_REPO_DIR:-$(dirname "${APP_REPO_DIR}")/no.1-production-ready-platform}"
+SUITE_REPO_DIR="${SUITE_REPO_DIR:-$(cd "${SCRIPT_DIR}/../.." && pwd)}"
 
 log() { printf '[nl2sql-pull] %s\n' "$*"; }
 fail() { printf '[nl2sql-pull] ERROR: %s\n' "$*" >&2; return 1; }
@@ -13,15 +13,14 @@ usage() {
   cat <<'EOF'
 Usage: ./scripts/git-pull.sh
 
-通常のデプロイユーザーで実行し、platform → NL2SQL の順に main を更新します。
-両 repository は main branch で、追跡ファイルに未保存変更がないことが前提です。
+通常のデプロイユーザーで実行し、suite repository（nl2sql/ と platform/ を含む）の main を更新します。
+repository は main branch で、追跡ファイルに未保存変更がないことが前提です。
 git pull --ff-only origin main を使い、取得した commit と HEAD の一致を確認します。
-失敗時は非ゼロで終了します。途中まで成功した repository は元に戻しません。
+失敗時は非ゼロで終了し、HEAD は変更しません。
 未追跡ファイルは保持します。取得ファイルと衝突する場合は Git が更新を拒否します。
 
 Environment overrides:
-  APP_REPO_DIR       NL2SQL repository (default: このスクリプトの親)
-  PLATFORM_REPO_DIR  共有 platform repository (default: NL2SQL と同じ親 directory)
+  SUITE_REPO_DIR  suite repository の root (default: このスクリプトの2階層上)
 
 再デプロイまで行う場合:
   ./scripts/git-pull.sh && sudo ./scripts/update-after-pull.sh
@@ -78,12 +77,16 @@ main() {
   fi
   if [ "$#" -ne 0 ]; then usage >&2; return 2; fi
   command -v git >/dev/null || { fail "git が見つかりません。"; return 1; }
-  # 両方のローカル状態を先に確認し、既知の問題があればどちらも更新しない。
-  check_repository platform "${PLATFORM_REPO_DIR}" || return 1
-  check_repository NL2SQL "${APP_REPO_DIR}" || return 1
-  pull_repository platform "${PLATFORM_REPO_DIR}" || return 1
-  pull_repository NL2SQL "${APP_REPO_DIR}" || return 1
-  log "両 repository の更新が完了しました。再デプロイへ進めます。"
+  check_repository suite "${SUITE_REPO_DIR}" || return 1
+  local dir
+  for dir in nl2sql platform; do
+    [ -d "${SUITE_REPO_DIR}/${dir}" ] || {
+      fail "suite: ${dir}/ がありません。no.1-production-ready-suite の root を指定してください: ${SUITE_REPO_DIR}"
+      return 1
+    }
+  done
+  pull_repository suite "${SUITE_REPO_DIR}" || return 1
+  log "suite repository の更新が完了しました。再デプロイへ進めます。"
 }
 
 # pull によって実行中のファイルが更新されても、読込済みの関数だけで最後まで実行する。

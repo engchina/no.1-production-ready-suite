@@ -10,8 +10,10 @@ fi
 APP_ROOT="${APP_ROOT:-/u01/aipoc}"
 APP_USER="${APP_USER:-ubuntu}"
 APP_GROUP="${APP_GROUP:-${APP_USER}}"
-APP_REPO_DIR="${APP_ROOT}/no.1-production-ready-nl2sql"
-PLATFORM_REPO_DIR="${APP_ROOT}/no.1-production-ready-platform"
+# NL2SQL と共有 platform は monorepo（no.1-production-ready-suite）の nl2sql/ と platform/ にある。
+SUITE_REPO_DIR="${APP_ROOT}/no.1-production-ready-suite"
+APP_REPO_DIR="${SUITE_REPO_DIR}/nl2sql"
+PLATFORM_REPO_DIR="${SUITE_REPO_DIR}/platform"
 BACKEND_DIR="${APP_REPO_DIR}/backend"
 FRONTEND_DIR="${APP_REPO_DIR}/frontend"
 DATA_DIR="/u01/data/production-ready-nl2sql"
@@ -396,7 +398,8 @@ prepare_filesystem() {
   install -d -m 0755 -o "${APP_USER}" -g "${APP_GROUP}" "${DATA_DIR}"
   migrate_legacy_data_dir
   install -d -m 0700 -o "${APP_USER}" -g "${APP_GROUP}" "${WALLET_DIR}"
-  chown -R "${APP_USER}:${APP_GROUP}" "${APP_REPO_DIR}" "${PLATFORM_REPO_DIR}" "${DATA_DIR}" "${WALLET_DIR}"
+  # git-pull.sh を APP_USER で実行できるよう、.git を含む suite 全体を APP_USER の所有にする。
+  chown -R "${APP_USER}:${APP_GROUP}" "${SUITE_REPO_DIR}" "${DATA_DIR}" "${WALLET_DIR}"
   chown -h "${APP_USER}:${APP_GROUP}" "${LEGACY_DATA_DIR}" 2>/dev/null || true
 }
 

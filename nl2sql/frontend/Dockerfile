@@ -1,5 +1,5 @@
-# build context は workspace root を想定する:
-#   docker build -f no.1-production-ready-nl2sql/frontend/Dockerfile .
+# build context は suite（monorepo）root を想定する:
+#   docker build -f nl2sql/frontend/Dockerfile .  (suite root で実行)
 FROM node:22-slim AS build
 
 ARG APP_DIR=nl2sql

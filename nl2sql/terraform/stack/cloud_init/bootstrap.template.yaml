@@ -58,8 +58,9 @@ write_files:
       export DEBIAN_FRONTEND=noninteractive
 
       APP_ROOT="/u01/aipoc"
-      APP_REPO_DIR="$${APP_ROOT}/no.1-production-ready-nl2sql"
-      PLATFORM_REPO_DIR="$${APP_ROOT}/no.1-production-ready-platform"
+      # NL2SQL と共有 platform は monorepo の nl2sql/ と platform/ にあるため、clone は1回だけ行う。
+      SUITE_REPO_DIR="$${APP_ROOT}/no.1-production-ready-suite"
+      APP_REPO_DIR="$${SUITE_REPO_DIR}/nl2sql"
       APPLICATION_PORT="${application_port}"
 
       log() {
@@ -118,8 +119,7 @@ write_files:
       }
 
       configure_firewall
-      clone_or_update_repo "${application_git_url}" "${application_git_ref}" "$${APP_REPO_DIR}"
-      clone_or_update_repo "${platform_git_url}" "${platform_git_ref}" "$${PLATFORM_REPO_DIR}"
+      clone_or_update_repo "${application_git_url}" "${application_git_ref}" "$${SUITE_REPO_DIR}"
       run_application_init
       log "Deployment finished. Nginx listens on TCP port $${APPLICATION_PORT}."
 runcmd:
