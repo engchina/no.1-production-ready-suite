@@ -171,7 +171,8 @@ Issue の要点と、この変更が必要な理由を記載する。bug fix で
 ### 既存ルールとの優先順位
 
 - トークン・コンポーネントの見た目と振る舞い（サイズ・variant・アイコン・loading・ヘッダーの並び順・フォーカス・ダークテーマ）は、`ui-ux-pro-max` skill の一般論や各製品の `docs/` より `platform/docs/design-system/` を優先する。
-- 各製品の `docs/frontend-button-spec.md` / `docs/frontend-messaging-spec.md` 等は、デザインシステムが規定しない範囲（画面内の配置・文言キーの命名・通知チャネルの使い分け等）でのみ有効とする。
+- 画面の振る舞い（画面内の配置・文言キーの命名・通知チャネルの使い分け・ページの型・状態保持等）は `platform/docs/ux-contracts/` を3製品共通の正本とする。
+- 各製品の `docs/frontend-*.md` は、デザインシステムと UX 契約が規定しない製品固有の差分（割り当て・例外・記録）だけを書く。
 
 ### UI 変更の検証
 

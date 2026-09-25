@@ -3,9 +3,11 @@ import {
   Button,
   EmptyState,
   MessageText,
+  TimedLoadingState,
+  type ProcessingActivityIcon,
+  type ProcessingPlacement,
 } from "@engchina/production-ready-ui";
 
-import { TimedLoadingState, type ProcessingActivityIcon, type ProcessingPlacement } from "@/components/ProcessingState";
 import { t } from "@/lib/i18n";
 
 export { EmptyState };

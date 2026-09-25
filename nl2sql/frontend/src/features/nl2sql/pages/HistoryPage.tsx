@@ -26,11 +26,12 @@ import {
   PageHeader,
   Tabs,
   PageBody,
+  ProcessingIndicator,
+  TimedLoadingState,
 } from "@engchina/production-ready-ui";
 import { useAuth } from "@/features/security/AuthProvider";
 
 import { PageNotice } from "@/components/page-notice";
-import { ProcessingIndicator, TimedLoadingState } from "@/components/ProcessingState";
 import { apiGet, isAbortError } from "@/lib/api";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";

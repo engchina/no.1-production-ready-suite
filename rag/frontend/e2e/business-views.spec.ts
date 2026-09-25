@@ -25,18 +25,22 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 760 },
   { name: "mobile", width: 375, height: 812 },
 ]) {
-  test(`業務ビュー管理は作成フォームを表示し横崩れしない (${viewport.name})`, async ({
+  test(`業務ビューの作成エディタは設定を表示し横崩れしない (${viewport.name})`, async ({
     page,
   }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await mockBusinessViews(page, []);
 
-    await page.goto("/business-views");
+    await page.goto("/business-views?id=new");
 
-    await expect(
-      page.getByRole("heading", { name: "業務ビュー (Business View)" })
-    ).toBeVisible();
     await expect(page.getByRole("heading", { name: "業務ビューを作成" })).toBeVisible();
+    // A 型のエディタはパンくず（一覧 › 対象名）を出す（page-archetypes.md §1 A）。
+    const breadcrumbs = page.getByRole("navigation", { name: "パンくず" });
+    await expect(breadcrumbs.getByRole("link", { name: "業務ビュー (Business View)" })).toHaveAttribute(
+      "href",
+      "/business-views"
+    );
+    await expect(breadcrumbs.getByText("業務ビューを作成")).toHaveAttribute("aria-current", "page");
     await expect(page.getByLabel("名前", { exact: true })).toBeVisible();
     await expect(page.getByText("参照する知識ベース", { exact: false }).first()).toBeVisible();
     // 知識ベースはコンボボックスを開くと候補として現れる。
@@ -65,7 +69,7 @@ for (const viewport of [
 
 test("業務ビューの回答スタイルは逐句引用とカスタムを選べる", async ({ page }) => {
   await mockBusinessViews(page, []);
-  await page.goto("/business-views");
+  await page.goto("/business-views?id=new");
   const generationSetting = page
     .getByRole("heading", { name: "回答スタイル", level: 3 })
     .locator("..");
@@ -77,14 +81,17 @@ test("業務ビューの回答スタイルは逐句引用とカスタムを選�
   await expect(page.getByRole("option", { name: "カスタム" })).toBeVisible();
 });
 
-test("業務ビューを作成すると参照 KB と方針を含めて POST する", async ({ page }) => {
-  await page.setViewportSize({ width: 1280, height: 760 });
+test("業務ビューを作成すると参照 KB と方針を含めて POST し、作成した業務ビューのエディタへ置き換えて移る", async ({
+  page,
+}) => {
   let createBody: Record<string, unknown> | null = null;
   await mockBusinessViews(page, [], (body) => {
     createBody = body;
   });
 
   await page.goto("/business-views");
+  await page.getByRole("button", { name: "新規作成" }).click();
+  await expect(page).toHaveURL(/\/business-views\?id=new$/);
 
   await page.getByRole("combobox", { name: "参照する知識ベース" }).click();
   await page.getByRole("option", { name: /社内規程/ }).click();
@@ -115,6 +122,14 @@ test("業務ビューを作成すると参照 KB と方針を含めて POST す�
   ).toBe(false);
   // 3 層モデルでは配信モード UI を持たず、常に全 recipe を融合する。
   expect((createBody?.config as { serving_mode?: string })?.serving_mode).toBe("fused");
+
+  // 作成に成功したら作成した業務ビューのエディタへ replace で移る（戻るで空の新規フォームへ戻らない）。
+  await expect(page).toHaveURL(/\/business-views\?id=bv-new$/);
+  await expect(page.getByRole("heading", { name: "経理ビュー", level: 1 })).toBeVisible();
+  await expect(page.getByRole("button", { name: "保存する" })).toBeVisible();
+  await page.goBack();
+  await expect(page).toHaveURL(/\/business-views$/);
+  await expect(page.getByRole("button", { name: "新規作成" })).toBeVisible();
 });
 
 for (const viewport of [
@@ -132,9 +147,24 @@ for (const viewport of [
 
     await page.goto("/business-views");
 
-    const card = page.getByRole("listitem").filter({ hasText: "DEFAULT" });
-    await expect(card.getByRole("button", { name: "DEFAULT はアーカイブできません" })).toBeDisabled();
-    await card.getByRole("button", { name: "編集" }).click();
+    const row = page.getByTestId("business-view-row-bv-default");
+    // アーカイブは行の RowActionMenu に入り、DEFAULT では理由付きで無効（#131）。
+    await row.getByRole("button", { name: "DEFAULT の操作" }).click();
+    await expect(page.getByRole("menuitem", { name: "DEFAULT はアーカイブできません" })).toBeDisabled();
+    await page.keyboard.press("Escape");
+    await expect(row.getByRole("button", { name: "DEFAULT の操作" })).toBeFocused();
+    // キーボードは先頭セルの名前のボタンで全画面エディタを開く（page-archetypes.md §0-7）。
+    await row.getByRole("button", { name: "DEFAULT を編集" }).focus();
+    await page.keyboard.press("Enter");
+    await expect(page).toHaveURL(/\/business-views\?id=bv-default$/);
+    await expect(page.getByRole("heading", { name: "DEFAULT", level: 1 })).toBeVisible();
+    // エディタの操作のバーにも同じ定義（DEFAULT はアーカイブ不可）を出す。
+    await page
+      .getByTestId("business-view-detail-actions")
+      .getByRole("button", { name: "その他の操作" })
+      .click();
+    await expect(page.getByRole("menuitem", { name: "DEFAULT はアーカイブできません" })).toBeDisabled();
+    await page.keyboard.press("Escape");
 
     await expect(page.getByLabel("名前", { exact: true })).toHaveAttribute("readonly", "");
     await expect(page.getByText("DEFAULT の名前は変更できません。")).toBeVisible();
@@ -157,7 +187,7 @@ for (const viewport of [
 
 test("業務ビュー作成では DEFAULT を予約名として拒否する", async ({ page }) => {
   await mockBusinessViews(page, []);
-  await page.goto("/business-views");
+  await page.goto("/business-views?id=new");
 
   await page.getByLabel("名前", { exact: true }).fill(" default ");
   await page.getByLabel("名前", { exact: true }).blur();
@@ -268,7 +298,8 @@ for (const viewport of [
 
     // CTA は業務ビュー管理へ遷移する。
     await page.getByRole("button", { name: "業務ビューを作成" }).click();
-    await expect(page).toHaveURL(/\/business-views$/);
+    await expect(page).toHaveURL(/\/business-views\?id=new$/);
+    await expect(page.getByRole("heading", { name: "業務ビューを作成" })).toBeVisible();
   });
 }
 
@@ -331,6 +362,132 @@ test("RAG 検索は DEFAULT を候補表示するが自動選択しない", asyn
   await expect(page.getByText("対象の業務ビューを選択してください。")).toBeVisible();
 });
 
+const accountingView: BusinessViewSummaryFixture = {
+  id: "bv-1",
+  name: "経理ビュー",
+  description: "経費精算の相談",
+  status: "ACTIVE",
+  knowledge_base_count: 1,
+  created_at: "2026-06-19T00:00:00Z",
+  updated_at: "2026-06-19T00:00:00Z",
+  archived_at: null,
+};
+
+test("業務ビューは行のクリックで ?id= の全画面エディタを開き、再読込・戻る / 進むで同じ対象を開く", async ({
+  page,
+}) => {
+  await mockBusinessViews(page, [accountingView]);
+  await page.goto("/business-views");
+
+  const row = page.getByTestId("business-view-row-bv-1");
+  // 行の操作以外の領域（参照 KB の列）のクリックで開く。
+  await row.getByRole("cell").nth(2).click();
+  await expect(page).toHaveURL(/\/business-views\?id=bv-1$/);
+  await expect(page.getByRole("heading", { name: "経理ビュー", level: 1 })).toBeVisible();
+  const breadcrumbs = page.getByRole("navigation", { name: "パンくず" });
+  await expect(breadcrumbs.getByText("経理ビュー")).toHaveAttribute("aria-current", "page");
+  await expect(page.getByLabel("名前", { exact: true })).toHaveValue("経理ビュー");
+  await expect(page.getByRole("heading", { name: "業務ビューの知識" })).toBeVisible();
+  await expectNoPageOverflow(page);
+
+  await page.reload();
+  await expect(page.getByLabel("名前", { exact: true })).toHaveValue("経理ビュー");
+
+  await page.goBack();
+  await expect(page).toHaveURL(/\/business-views$/);
+  await expect(page.getByTestId("business-view-row-bv-1")).toBeVisible();
+  await page.goForward();
+  await expect(page).toHaveURL(/\/business-views\?id=bv-1$/);
+  await expect(page.getByLabel("名前", { exact: true })).toHaveValue("経理ビュー");
+
+  // 一覧へ戻るボタンは履歴に積んで一覧へ移る。
+  await clickBackToList(page);
+  await expect(page).toHaveURL(/\/business-views$/);
+});
+
+test("業務ビューのエディタは未保存の変更があるとパンくずでの移動を確認し、下書きを対象ごとに残す", async ({
+  page,
+}) => {
+  await mockBusinessViews(page, [accountingView]);
+  await page.goto("/business-views?id=bv-1");
+  await page.getByLabel("説明", { exact: true }).fill("経費と出張の相談");
+
+  await page
+    .getByRole("navigation", { name: "パンくず" })
+    .getByRole("link", { name: "業務ビュー (Business View)" })
+    .click();
+  const dialog = page.getByRole("alertdialog", { name: "保存していない変更があります" });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "キャンセル" }).click();
+  await expect(page).toHaveURL(/\?id=bv-1$/);
+
+  await clickBackToList(page);
+  await page
+    .getByRole("alertdialog", { name: "保存していない変更があります" })
+    .getByRole("button", { name: "移動する" })
+    .click();
+  await expect(page).toHaveURL(/\/business-views$/);
+
+  // 同じ対象を開き直すと下書きを復元する。新規（?id=new）には持ち込まない。
+  await page.getByRole("button", { name: "経理ビュー を編集" }).click();
+  await expect(page.getByLabel("説明", { exact: true })).toHaveValue("経費と出張の相談");
+  await expect(page.getByText("保存していない下書きを復元しました。")).toBeVisible();
+  await page.getByRole("button", { name: "変更を元に戻す" }).click();
+  await expect(page.getByLabel("説明", { exact: true })).toHaveValue("経費精算の相談");
+  await page.goto("/business-views?id=new");
+  await expect(page.getByLabel("説明", { exact: true })).toHaveValue("");
+});
+
+test("URL の業務ビューが存在しないときは別の対象へ置き換えず、一覧へ戻る導線を出す", async ({ page }) => {
+  await mockBusinessViews(page, [accountingView]);
+  await page.goto("/business-views?id=bv-missing");
+
+  await expect(page.getByText("対象が見つかりません")).toBeVisible();
+  await expect(page.getByText("「bv-missing」は削除されたか、存在しません。")).toBeVisible();
+  await expect(page.getByLabel("名前", { exact: true })).toHaveCount(0);
+  await expect(page).toHaveURL(/\?id=bv-missing$/);
+  await expectNoPageOverflow(page);
+
+  await page.getByRole("button", { name: "一覧へ戻る" }).click();
+  await expect(page).toHaveURL(/\/business-views$/);
+  await expect(page.getByTestId("business-view-row-bv-1")).toBeVisible();
+});
+
+test("エディタからアーカイブすると確認のうえ一覧へ置き換えて戻る", async ({ page }) => {
+  let archived = false;
+  await mockBusinessViews(page, [accountingView], undefined, () => {
+    archived = true;
+  });
+  await page.goto("/business-views");
+  await page.getByRole("button", { name: "経理ビュー を編集" }).click();
+  await expect(page).toHaveURL(/\?id=bv-1$/);
+
+  await page
+    .getByTestId("business-view-detail-actions")
+    .getByRole("button", { name: "その他の操作" })
+    .click();
+  await page.getByRole("menuitem", { name: "アーカイブ" }).click();
+  const dialog = page.getByRole("alertdialog", { name: "業務ビューをアーカイブしますか?" });
+  await dialog.getByRole("button", { name: "アーカイブ" }).click();
+  await expect.poll(() => archived).toBe(true);
+  await expect(page).toHaveURL(/\/business-views$/);
+  // アーカイブ後は replace で一覧へ戻るため、戻るで消えた対象のエディタへ戻らない。
+  await page.goBack();
+  await expect(page).toHaveURL(/\/business-views$/);
+});
+
+/** エディタの「一覧へ戻る」。375px ではページ操作の「その他の操作」に入る（主操作 1 つ + その他）。 */
+async function clickBackToList(page: Page) {
+  const actions = page.getByRole("group", { name: "ページ操作" });
+  const direct = actions.getByRole("button", { name: "一覧へ戻る" });
+  if (await direct.isVisible()) {
+    await direct.click();
+    return;
+  }
+  await actions.getByRole("button", { name: "その他の操作" }).click();
+  await page.getByRole("menuitem", { name: "一覧へ戻る" }).click();
+}
+
 interface BusinessViewSummaryFixture {
   id: string;
   name: string;
@@ -345,41 +502,89 @@ interface BusinessViewSummaryFixture {
 async function mockBusinessViews(
   page: Page,
   items: BusinessViewSummaryFixture[],
-  onCreate?: (body: Record<string, unknown>) => void
+  onCreate?: (body: Record<string, unknown>) => void,
+  onArchive?: (id: string) => void
 ) {
+  const details = new Map<string, Record<string, unknown>>(
+    items.map((item) => [
+      item.id,
+      {
+        ...item,
+        config: {
+          version: 1,
+          knowledge_base_ids: ["kb-1"],
+          query: {
+            retrieval_strategy: null,
+            post_retrieval_pipeline: null,
+            generation_profile: null,
+            guardrail_policy: null,
+            evaluation_suite: null,
+          },
+          system_prompt: null,
+          default_language: null,
+          serving_mode: "fused",
+        },
+        knowledge_bases: [{ id: "kb-1", name: "社内規程" }],
+      },
+    ])
+  );
+  const envelope = (data: unknown) => ({ json: { data, error_messages: [], warning_messages: [] } });
   await page.route("**/api/business-views**", async (route) => {
     const request = route.request();
-    if (request.method() === "POST") {
+    const pathname = new URL(request.url()).pathname;
+    const id = pathname.split("/")[3];
+    if (request.method() === "POST" && pathname === "/api/business-views") {
       const body = request.postDataJSON() as Record<string, unknown>;
       onCreate?.(body);
-      await route.fulfill({
-        json: {
-          data: {
-            id: "bv-new",
-            name: body.name,
-            description: body.description ?? null,
-            status: "ACTIVE",
-            knowledge_base_count:
-              (body.config as { knowledge_base_ids?: string[] })?.knowledge_base_ids?.length ?? 0,
-            config: body.config,
-            knowledge_bases: [],
-            created_at: "2026-06-19T00:00:00Z",
-            updated_at: "2026-06-19T00:00:00Z",
-            archived_at: null,
-          },
-          error_messages: [],
-          warning_messages: [],
-        },
-      });
+      const created = {
+        id: "bv-new",
+        name: body.name,
+        description: body.description ?? null,
+        status: "ACTIVE",
+        knowledge_base_count:
+          (body.config as { knowledge_base_ids?: string[] })?.knowledge_base_ids?.length ?? 0,
+        config: body.config,
+        knowledge_bases: [],
+        created_at: "2026-06-19T00:00:00Z",
+        updated_at: "2026-06-19T00:00:00Z",
+        archived_at: null,
+      };
+      details.set("bv-new", created);
+      await route.fulfill(envelope(created));
       return;
     }
-    await route.fulfill({
-      json: {
-        data: { items, total: items.length, limit: 50, offset: 0, has_next: false },
-        error_messages: [],
-        warning_messages: [],
-      },
-    });
+    if (pathname.endsWith("/archive")) {
+      onArchive?.(id);
+      await route.fulfill(envelope({ ...details.get(id), status: "ARCHIVED" }));
+      return;
+    }
+    if (pathname.endsWith("/domain-keywords")) {
+      await route.fulfill(envelope({ business_view_id: id, keywords: [] }));
+      return;
+    }
+    if (pathname.endsWith("/approved-faq")) {
+      await route.fulfill(envelope({ business_view_id: id, records: [] }));
+      return;
+    }
+    if (pathname.endsWith("/runtime-knowledge")) {
+      await route.fulfill(envelope({ business_view_id: id, terms: [], rules: [] }));
+      return;
+    }
+    if (id) {
+      const detail = details.get(id);
+      if (!detail) {
+        await route.fulfill({
+          status: 404,
+          json: { data: null, error_messages: ["業務ビューが見つかりません。"], warning_messages: [] },
+        });
+        return;
+      }
+      await route.fulfill(envelope(detail));
+      return;
+    }
+    await route.fulfill(
+      envelope({ items, total: items.length, limit: 50, offset: 0, has_next: false })
+    );
   });
 }
 

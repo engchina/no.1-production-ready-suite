@@ -23,6 +23,7 @@ import { ApiError } from "@/lib/api";
 import { streamChatMessage, type ChatColumn } from "@/lib/chat-stream";
 import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
+import { isNullableString, useWorkspaceState } from "@/lib/workspace-state";
 import {
   useBusinessViews,
   useCompareModels,
@@ -271,9 +272,25 @@ export function ChatClient() {
 
   const businessViewsQuery = useBusinessViews({ status: "ACTIVE", limit: 50, offset: 0 });
   const businessViews = businessViewsQuery.data?.items ?? [];
-  const [businessViewId, setBusinessViewId] = useState<string | null>(() =>
-    searchParams.get("business_view_id")
+  // 選択中の業務ビュー・会話・入力中の下書きは、ページを行き来しても再読込しても残す
+  // （workspace-state.md）。URL の deep-link があればそちらを優先する。
+  const urlBusinessViewId = searchParams.get("business_view_id");
+  const urlConversationId = searchParams.get("conversation_id");
+  const [businessViewId, setBusinessViewId] = useWorkspaceState<string | null>(
+    "chat.businessViewId",
+    null,
+    isNullableString,
+    urlBusinessViewId ?? undefined
   );
+  // 復元した業務ビューがアーカイブ・削除済みなら選択を外す（別の業務ビューへ置き換えない）。
+  const businessViewMissing =
+    Boolean(businessViewId) &&
+    Boolean(businessViewsQuery.data) &&
+    !businessViewsQuery.data?.has_next &&
+    !businessViews.some((view) => view.id === businessViewId);
+  useEffect(() => {
+    if (businessViewMissing) setBusinessViewId(null);
+  }, [businessViewMissing, setBusinessViewId]);
   // 保存済み DocRAG 回答の trace_id(チャット分)。該当する回答だけ根拠と実行記録を開ける。
   const docragAnswersQuery = useDocragAnswers(businessViewId);
   const docragTraceIds = useMemo(
@@ -293,8 +310,11 @@ export function ChatClient() {
   });
   const conversations = conversationsQuery.data?.items ?? [];
 
-  const [activeId, setActiveId] = useState<string | null>(() =>
-    searchParams.get("conversation_id")
+  const [activeId, setActiveId] = useWorkspaceState<string | null>(
+    "chat.conversationId",
+    null,
+    isNullableString,
+    urlConversationId ?? (urlBusinessViewId ? null : undefined)
   );
   const conversationQuery = useConversation(activeId);
   const persistedMessages = useMemo(
@@ -307,7 +327,7 @@ export function ChatClient() {
   const compareModelsQuery = useCompareModels();
   const compareModels = compareModelsQuery.data ?? [];
 
-  const [composer, setComposer] = useState("");
+  const [composer, setComposer] = useWorkspaceState("chat.composer", "");
   const [selectedModelIds, setSelectedModelIds] = useState<string[]>([]);
   const [liveTurn, setLiveTurn] = useState<LiveTurn | null>(null);
   const [sending, setSending] = useState(false);
@@ -331,7 +351,7 @@ export function ChatClient() {
     setErrorText("");
     setEditingId(null);
     setTitleError("");
-  }, [businessViewId]);
+  }, [businessViewId, setActiveId]);
 
   // メッセージが増えたら末尾までスクロールする。
   useEffect(() => {
@@ -655,7 +675,7 @@ export function ChatClient() {
                                     cancelRename();
                                   }
                                 }}
-                                className="h-11 min-w-0 flex-1 rounded-md border border-border bg-surface-sunken px-2 text-base text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring disabled:opacity-60 sm:h-9 sm:text-sm"
+                                className="h-11 min-w-0 flex-1 rounded-md border border-border-control bg-surface-sunken px-2 text-sm text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring disabled:opacity-60 sm:h-9 sm:text-sm"
                               />
                               <Button
                                 type="button"
@@ -817,7 +837,7 @@ export function ChatClient() {
                     activeId ? t("chat.composer.placeholder") : t("chat.composer.selectConversation")
                   }
                   disabled={!activeId || sending}
-                  className="min-h-11 min-w-0 flex-1 resize-y rounded-md border border-border bg-surface-sunken p-2 text-sm text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring disabled:opacity-60"
+                  className="min-h-11 min-w-0 flex-1 resize-y rounded-md border border-border-control bg-surface-sunken p-2 text-sm text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring disabled:opacity-60"
                 />
                 {sending ? (
                   <Button

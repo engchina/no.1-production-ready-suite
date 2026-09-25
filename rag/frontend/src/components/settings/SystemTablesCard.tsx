@@ -14,6 +14,7 @@ import {
   CardDescription,
   CardHeader,
   CardTitle,
+  DataTable,
   FormStatus,
   Skeleton,
 } from "@engchina/production-ready-ui";
@@ -22,6 +23,7 @@ import { useEffect, useRef, useState } from "react";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import {
   ApiError,
+  type SystemTableMetadata,
   type SystemTableSchemaStatus,
   type SystemTablesOperationData,
   type SystemTablesStatusData,
@@ -387,71 +389,58 @@ function SystemTablesDetails({ data }: { data: SystemTablesStatusData }) {
             pending: data.pending_versions.join(", ") || "-",
           })}
         </p>
-        <div
-          role="region"
-          tabIndex={0}
-          aria-label={t("settings.database.systemTables.table.scrollLabel")}
-          data-testid="system-tables-scroll-region"
-          className="max-h-[27rem] max-w-full overflow-auto rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-        >
-          <table className="w-full min-w-[680px] border-collapse text-left text-sm">
-            <thead className="sticky top-0 z-10 bg-surface-sunken">
-              <tr className="border-b border-border text-xs text-fg-muted">
-                <th scope="col" className="px-3 py-2 font-medium">
-                  {t("settings.database.systemTables.table.name")}
-                </th>
-                <th scope="col" className="px-3 py-2 font-medium">
-                  {t("settings.database.systemTables.table.status")}
-                </th>
-                <th scope="col" className="px-3 py-2 text-right font-medium">
-                  {t("settings.database.systemTables.table.rows")}
-                </th>
-                <th scope="col" className="px-3 py-2 font-medium">
-                  {t("settings.database.systemTables.table.created")}
-                </th>
-                <th scope="col" className="px-3 py-2 font-medium">
-                  {t("settings.database.systemTables.table.analyzed")}
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.tables.map((table) => (
-                <tr
-                  key={table.name}
-                  className="border-b border-border last:border-b-0"
-                >
-                  <th
-                    scope="row"
-                    className="whitespace-nowrap px-3 py-2 font-mono text-xs font-medium text-fg"
-                  >
-                    {table.name}
-                  </th>
-                  <td className="px-3 py-2">
-                    <StatusBadge
-                      variant={table.exists ? "success" : "neutral"}
-                      label={t(
-                        table.exists
-                          ? "settings.database.systemTables.table.exists"
-                          : "settings.database.systemTables.table.missing"
-                      )}
-                    />
-                  </td>
-                  <td className="px-3 py-2 text-right tabular-nums text-fg">
-                    {table.estimated_rows == null
-                      ? "—"
-                      : formatNumber(table.estimated_rows)}
-                  </td>
-                  <td className="whitespace-nowrap px-3 py-2 text-fg-muted">
-                    {formatDateTime(table.created_at)}
-                  </td>
-                  <td className="whitespace-nowrap px-3 py-2 text-fg-muted">
-                    {formatDateTime(table.last_analyzed_at)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <DataTable<SystemTableMetadata>
+          columns={[
+            {
+              key: "name",
+              header: t("settings.database.systemTables.table.name"),
+              rowHeader: true,
+              className: "whitespace-nowrap font-mono text-xs font-medium text-fg",
+              render: (table) => table.name,
+            },
+            {
+              key: "status",
+              header: t("settings.database.systemTables.table.status"),
+              render: (table) => (
+                <StatusBadge
+                  variant={table.exists ? "success" : "neutral"}
+                  label={t(
+                    table.exists
+                      ? "settings.database.systemTables.table.exists"
+                      : "settings.database.systemTables.table.missing"
+                  )}
+                />
+              ),
+            },
+            {
+              key: "rows",
+              header: t("settings.database.systemTables.table.rows"),
+              align: "right",
+              className: "tabular-nums text-fg",
+              render: (table) =>
+                table.estimated_rows == null ? "—" : formatNumber(table.estimated_rows),
+            },
+            {
+              key: "created",
+              header: t("settings.database.systemTables.table.created"),
+              className: "whitespace-nowrap text-fg-muted",
+              render: (table) => formatDateTime(table.created_at),
+            },
+            {
+              key: "analyzed",
+              header: t("settings.database.systemTables.table.analyzed"),
+              className: "whitespace-nowrap text-fg-muted",
+              render: (table) => formatDateTime(table.last_analyzed_at),
+            },
+          ]}
+          rows={data.tables}
+          getRowKey={(table) => table.name}
+          stickyHeader
+          scrollAriaLabel={t("settings.database.systemTables.table.scrollLabel")}
+          scrollTestId="system-tables-scroll-region"
+          className="max-h-[27rem] max-w-full"
+          tableClassName="w-full min-w-[680px] text-sm"
+        />
       </div>
     </details>
   );

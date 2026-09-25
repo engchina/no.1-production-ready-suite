@@ -8,17 +8,20 @@ import {
   CardContent,
   CardHeader,
   CardTitle,
+  DataTable,
+  type DataTableColumn,
+  type EntityAction,
   FieldError,
   FormStatus,
+  RowActionMenu,
   ToggleChip,
 } from "@engchina/production-ready-ui";
-import { Archive, Database, Search } from "lucide-react";
+import { Database, Search } from "lucide-react";
 import { useMemo, useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 import { DegradedBanner } from "@/components/DegradedBanner";
 import { EmptyState, ErrorState } from "@/components/StateViews";
-import { useConfirm } from "@/components/ui/confirm-dialog";
 import {
   ApiError,
   DEFAULT_KNOWLEDGE_BASE_NAME,
@@ -27,59 +30,62 @@ import {
 } from "@/lib/api";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
-import {
-  useArchiveKnowledgeBase,
-  useCreateKnowledgeBase,
-  useKnowledgeBases,
-} from "@/lib/queries";
+import { useLeaveGuard } from "@/lib/leave-guard";
+import { useCreateKnowledgeBase, useKnowledgeBases } from "@/lib/queries";
 import { APP_ROUTES } from "@/lib/routes";
 import { toast } from "@/lib/toast";
+import { useWorkspaceState } from "@/lib/workspace-state";
 import {
   KnowledgeBaseStatusPill,
   knowledgeBaseStatusLabel,
 } from "./KnowledgeBaseStatusPill";
+import { useKnowledgeBaseActions } from "./knowledge-base-actions";
 
 const LIMIT = 20;
+
+interface KnowledgeBaseListView {
+  filter: KnowledgeBaseStatus | "ALL";
+  q: string;
+  offset: number;
+}
+const INITIAL_VIEW: KnowledgeBaseListView = { filter: "ACTIVE", q: "", offset: 0 };
+
+function isKnowledgeBaseListView(value: unknown): value is KnowledgeBaseListView {
+  const view = value as KnowledgeBaseListView;
+  return (
+    typeof view === "object" &&
+    view !== null &&
+    (FILTERS as unknown[]).includes(view.filter) &&
+    typeof view.q === "string" &&
+    Number.isInteger(view.offset) &&
+    view.offset >= 0
+  );
+}
 const FILTERS: (KnowledgeBaseStatus | "ALL")[] = ["ALL", "ACTIVE", "ARCHIVED"];
 const NAME_ERROR_ID = "knowledge-base-name-error";
 
 /** ナレッジベース一覧。作成・一覧・アーカイブを扱う。詳細(所属文書・構築設定)は詳細ページへ。 */
 export function KnowledgeBaseManagementClient() {
-  const confirm = useConfirm();
   const navigate = useNavigate();
-  const [filter, setFilter] = useState<KnowledgeBaseStatus | "ALL">("ACTIVE");
-  const [search, setSearch] = useState("");
-  const [q, setQ] = useState("");
-  const [offset, setOffset] = useState(0);
+  // 絞り込み・検索・ページは、ページを行き来しても再読込しても残す（workspace-state.md）。
+  const [view, setView] = useWorkspaceState("knowledgeBases.view", INITIAL_VIEW, isKnowledgeBaseListView);
+  const { filter, q, offset } = view;
+  const [search, setSearch] = useState(q);
+  const setFilter = (next: KnowledgeBaseStatus | "ALL") => setView((current) => ({ ...current, filter: next }));
+  const setQ = (next: string) => setView((current) => ({ ...current, q: next }));
+  const setOffset = (next: number) => setView((current) => ({ ...current, offset: next }));
 
   const status = filter === "ALL" ? undefined : filter;
   const query = useKnowledgeBases({ status, q: q || undefined, limit: LIMIT, offset });
   const page = query.data;
   const items = useMemo(() => page?.items ?? [], [page?.items]);
 
-  const archive = useArchiveKnowledgeBase();
+  // 行の操作（アーカイブ）は詳細ページの ObjectActionBar と同じ定義を使う。
+  const knowledgeBaseActions = useKnowledgeBaseActions();
 
   const resetView = (fn: () => void) => {
     fn();
     setOffset(0);
-  };
-
-  const handleArchive = async (knowledgeBase: KnowledgeBaseSummary) => {
-    const ok = await confirm({
-      title: t("knowledgeBases.confirm.archive.title"),
-      description: t("knowledgeBases.confirm.archive.description", {
-        name: knowledgeBase.name,
-      }),
-      confirmLabel: t("knowledgeBases.actions.archive"),
-      tone: "danger",
-      dismissOnOverlay: false,
-    });
-    if (!ok) return;
-    archive.mutate(knowledgeBase.id, {
-      onSuccess: () => toast.success(t("knowledgeBases.toast.archived")),
-      onError: (error) =>
-        toast.error(error instanceof ApiError ? error.message : t("knowledgeBases.error.archive")),
-    });
   };
 
   return (
@@ -144,32 +150,14 @@ export function KnowledgeBaseManagementClient() {
           <KnowledgeBaseListSkeleton />
         ) : items.length > 0 ? (
           <>
-            <Card className="overflow-hidden">
-              <div className="bounded-scroll-area-lg overflow-x-auto">
-                <table className="w-full min-w-[760px] text-sm">
-                  <thead className="sticky top-0 z-10 bg-surface-sunken text-left text-fg-muted shadow-[inset_0_-1px_0_var(--color-border)]">
-                    <tr>
-                      <th className="px-4 py-3 font-medium">{t("knowledgeBases.col.name")}</th>
-                      <th className="px-4 py-3 font-medium">{t("knowledgeBases.col.status")}</th>
-                      <th className="px-4 py-3 text-right font-medium">{t("knowledgeBases.col.documents")}</th>
-                      <th className="px-4 py-3 text-right font-medium">{t("knowledgeBases.col.indexed")}</th>
-                      <th className="px-4 py-3 font-medium">{t("knowledgeBases.col.updated")}</th>
-                      <th className="px-4 py-3 text-right font-medium">{t("knowledgeBases.col.actions")}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {items.map((knowledgeBase) => (
-                      <KnowledgeBaseRow
-                        key={knowledgeBase.id}
-                        knowledgeBase={knowledgeBase}
-                        archiving={archive.isPending && archive.variables === knowledgeBase.id}
-                        onArchive={() => void handleArchive(knowledgeBase)}
-                      />
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </Card>
+            <DataTable<KnowledgeBaseSummary>
+              columns={knowledgeBaseColumns({ actionsFor: knowledgeBaseActions })}
+              rows={items}
+              getRowKey={(knowledgeBase) => knowledgeBase.id}
+              stickyHeader
+              className="bounded-scroll-area-lg"
+              tableClassName="w-full min-w-[760px] text-sm"
+            />
 
             <div className="flex items-center justify-between">
               <span className="tnum text-xs text-fg-muted">
@@ -214,6 +202,8 @@ function KnowledgeBaseCreateForm({ onCreated }: { onCreated: (id: string) => voi
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [touched, setTouched] = useState(false);
+  // 作成前の入力があるときだけ離脱を確認する（作成成功で入力は空に戻る）。
+  useLeaveGuard(Boolean(name.trim() || description.trim()));
 
   const nameError = touched ? validateKnowledgeBaseName(name) : null;
 
@@ -301,55 +291,70 @@ function KnowledgeBaseCreateForm({ onCreated }: { onCreated: (id: string) => voi
   );
 }
 
-function KnowledgeBaseRow({
-  knowledgeBase,
-  archiving,
-  onArchive,
+/** 一覧の列定義。名前列を行見出しにし、操作列は右寄せにする。 */
+function knowledgeBaseColumns({
+  actionsFor,
 }: {
-  knowledgeBase: KnowledgeBaseSummary;
-  archiving: boolean;
-  onArchive: () => void;
-}) {
-  const isDefault = knowledgeBase.name === DEFAULT_KNOWLEDGE_BASE_NAME;
-  return (
-    <tr className="border-t border-border">
-      <td className="max-w-[18rem] px-4 py-3">
-        <Link
-          to={`${APP_ROUTES.knowledgeBases}/${knowledgeBase.id}`}
-          className="block max-w-full font-medium text-accent-fg hover:underline"
-        >
-          <span className="block truncate">{knowledgeBase.name}</span>
-        </Link>
-        {knowledgeBase.description ? (
-          <p className="mt-1 truncate text-xs text-fg-muted">{knowledgeBase.description}</p>
-        ) : null}
-      </td>
-      <td className="px-4 py-3">
-        <KnowledgeBaseStatusPill status={knowledgeBase.status} />
-      </td>
-      <td className="tnum px-4 py-3 text-right text-fg-muted">
-        {formatNumber(knowledgeBase.document_count)}
-      </td>
-      <td className="tnum px-4 py-3 text-right text-fg-muted">
-        {formatNumber(knowledgeBase.indexed_document_count)}
-      </td>
-      <td className="tnum px-4 py-3 text-fg-muted">{formatDateTime(knowledgeBase.updated_at)}</td>
-      <td className="px-4 py-3">
-        <div className="flex justify-end">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={onArchive}
-            loading={archiving}
-            disabled={knowledgeBase.status === "ARCHIVED" || isDefault}
-            aria-label={isDefault ? t("knowledgeBases.default.archiveDisabled") : undefined}
-            title={isDefault ? t("knowledgeBases.default.archiveDisabled") : undefined} icon={Archive}>
-            {t("knowledgeBases.actions.archive")}
-          </Button>
-        </div>
-      </td>
-    </tr>
-  );
+  actionsFor: (knowledgeBase: KnowledgeBaseSummary) => EntityAction[];
+}): DataTableColumn<KnowledgeBaseSummary>[] {
+  return [
+    {
+      key: "name",
+      header: t("knowledgeBases.col.name"),
+      rowHeader: true,
+      className: "max-w-[18rem]",
+      render: (knowledgeBase) => (
+        <>
+          <Link
+            to={`${APP_ROUTES.knowledgeBases}/${knowledgeBase.id}`}
+            className="block max-w-full font-medium text-accent-fg hover:underline"
+          >
+            <span className="block truncate">{knowledgeBase.name}</span>
+          </Link>
+          {knowledgeBase.description ? (
+            <p className="mt-1 truncate text-xs text-fg-muted">{knowledgeBase.description}</p>
+          ) : null}
+        </>
+      ),
+    },
+    {
+      key: "status",
+      header: t("knowledgeBases.col.status"),
+      render: (knowledgeBase) => <KnowledgeBaseStatusPill status={knowledgeBase.status} />,
+    },
+    {
+      key: "documents",
+      header: t("knowledgeBases.col.documents"),
+      align: "right",
+      className: "tnum text-fg-muted",
+      render: (knowledgeBase) => formatNumber(knowledgeBase.document_count),
+    },
+    {
+      key: "indexed",
+      header: t("knowledgeBases.col.indexed"),
+      align: "right",
+      className: "tnum text-fg-muted",
+      render: (knowledgeBase) => formatNumber(knowledgeBase.indexed_document_count),
+    },
+    {
+      key: "updated",
+      header: t("knowledgeBases.col.updated"),
+      className: "tnum text-fg-muted",
+      render: (knowledgeBase) => formatDateTime(knowledgeBase.updated_at),
+    },
+    {
+      key: "actions",
+      header: t("knowledgeBases.col.actions"),
+      align: "right",
+      render: (knowledgeBase) => (
+        <RowActionMenu
+          actions={actionsFor(knowledgeBase)}
+          ariaLabel={t("common.objectActions.aria", { name: knowledgeBase.name })}
+          testId={`knowledge-base-row-actions-${knowledgeBase.id}`}
+        />
+      ),
+    },
+  ];
 }
 
 function validateKnowledgeBaseName(name: string) {

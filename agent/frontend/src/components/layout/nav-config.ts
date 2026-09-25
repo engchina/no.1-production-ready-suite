@@ -1,11 +1,9 @@
 import {
-  Palette,
   BadgeCheck,
   Bot,
   Boxes,
   ClipboardList,
   DatabaseBackup,
-  Cloud,
   KeyRound,
   LayoutDashboard,
   PlayCircle,
@@ -14,6 +12,8 @@ import {
   Store,
   type LucideIcon,
 } from "lucide-react";
+
+import { SYSTEM_SETTINGS_NAV_ITEMS } from "@engchina/production-ready-system-settings";
 
 import { APP_ROUTES } from "@/lib/routes";
 import type { I18nKey } from "@/lib/i18n";
@@ -59,33 +59,19 @@ export const NAV_SECTIONS: NavSection[] = [
     ],
   },
   {
-    titleKey: "nav.section.settings",
+    // Agent 固有の運用設定（接続先と Control Plane のバックアップ。#87）。
+    titleKey: "nav.section.operations",
     items: [
       { href: APP_ROUTES.settingsConnection, labelKey: "nav.settingsConnection", icon: KeyRound },
-      {
-        href: APP_ROUTES.settingsOci,
-        labelKey: "nav.settingsOci",
-        sidebarLabelKey: "nav.settingsOci.sidebar",
-        icon: KeyRound,
-      },
-      { href: APP_ROUTES.settingsUploadStorage, labelKey: "nav.settingsUploadStorage", icon: Cloud },
-      {
-        href: APP_ROUTES.settingsModel,
-        labelKey: "nav.settingsModel",
-        sidebarLabelKey: "nav.settingsModel.sidebar",
-        icon: Settings,
-      },
-      {
-        href: APP_ROUTES.settingsDatabase,
-        labelKey: "nav.settingsDatabase",
-        sidebarLabelKey: "nav.settingsDatabase.sidebar",
-        icon: DatabaseBackup,
-      },
       { href: APP_ROUTES.settingsExternalRag, labelKey: "nav.settingsExternalRag", icon: Settings },
       { href: APP_ROUTES.settingsExternalNl2Sql, labelKey: "nav.settingsExternalNl2Sql", icon: Settings },
       { href: APP_ROUTES.settingsExternalMcp, labelKey: "nav.settingsExternalMcp", icon: Settings },
       { href: APP_ROUTES.settingsRuntimeSnapshot, labelKey: "nav.settingsRuntimeSnapshot", icon: DatabaseBackup },
-      { href: APP_ROUTES.settingsAppearance, labelKey: "nav.settingsAppearance", icon: Palette },
     ],
+  },
+  {
+    // 3製品で共通のシステム設定（画面は platform の共有パッケージ。#70）。
+    titleKey: "nav.section.settings",
+    items: [...SYSTEM_SETTINGS_NAV_ITEMS],
   },
 ];

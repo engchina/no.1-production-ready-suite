@@ -10,9 +10,11 @@ import {
   FormStatus,
   Skeleton,
   PageBody,
+  ProcessingIndicator,
+  TimedLoadingState,
+  FixedSplitPane,
 } from "@engchina/production-ready-ui";
 
-import { ProcessingIndicator, TimedLoadingState } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";
 import { FieldLabel } from "@/components/ui/required-field";
 import { apiGet, apiPost, isAbortError } from "@/lib/api";
@@ -27,7 +29,7 @@ import {
   type DbObjectTab,
 } from "../components/DbObjectManagementShared";
 import { QuestionText } from "../components/QuestionText";
-import { FixedSplitPane } from "@/components/layout/FixedSplitPane";
+import { FIXED_SPLIT_STORAGE_PREFIX } from "@/lib/ui-store";
 import { profileDisplayLabel } from "../profileDisplay";
 import { DbObjectName } from "../components/DbObjectName";
 import { formatDbObjectName } from "../dbObjectIdentity";
@@ -351,6 +353,7 @@ export function SqlToQuestionPage() {
           topContent={renderStepIndicator("input")}
         >
           <FixedSplitPane
+            storagePrefix={FIXED_SPLIT_STORAGE_PREFIX}
             splitId="sql-to-question-input"
             preferredWidePane="left"
             left={

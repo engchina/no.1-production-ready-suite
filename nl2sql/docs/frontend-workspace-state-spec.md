@@ -1,6 +1,6 @@
 # ページ遷移と作業状態の仕様
 
-正本の原則は [AGENTS.md](../AGENTS.md) の「ページ遷移・再読込時の状態保持」。Issue #298 の実装範囲と保存境界をここに記載する。
+正本の原則は platform の [UX 契約 workspace-state.md](../../platform/docs/ux-contracts/workspace-state.md)。Issue #298 の実装範囲と保存境界をここに記載する。
 
 ## 保存境界
 

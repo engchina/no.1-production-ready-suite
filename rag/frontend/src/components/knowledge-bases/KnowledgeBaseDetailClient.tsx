@@ -1,6 +1,6 @@
 "use client";
 
-import { FilePlus2, Files, Trash2 } from "lucide-react";
+import { FilePlus2, Files, Unlink } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
@@ -12,6 +12,8 @@ import {
   CardHeader,
   CardTitle,
   FormStatus,
+  ObjectActionBar,
+  RowActionMenu,
   SelectField,
   type SelectFieldOption,
 } from "@engchina/production-ready-ui";
@@ -35,10 +37,13 @@ import { KnowledgeBaseGraphView } from "./KnowledgeBaseGraphView";
 import { KnowledgeBasePipelineCanvas } from "./KnowledgeBasePipelineCanvas";
 import { KnowledgeBaseSearchTestPanel } from "./KnowledgeBaseSearchTestPanel";
 import { KnowledgeBaseStatusPill } from "./KnowledgeBaseStatusPill";
+import { useKnowledgeBaseActions } from "./knowledge-base-actions";
 
 /** ナレッジベース詳細ページ。概要・所属文書・構築設定(構築フロー + フォーム)を全幅で扱う。 */
 export function KnowledgeBaseDetailClient({ knowledgeBaseId }: { knowledgeBaseId: string }) {
   const detail = useKnowledgeBase(knowledgeBaseId);
+  // 一覧の行（RowActionMenu）と同じ操作の定義を ObjectActionBar に渡す（buttons.md §5.1）。
+  const knowledgeBaseActions = useKnowledgeBaseActions();
 
   if (detail.isPending) {
     return (
@@ -66,8 +71,16 @@ export function KnowledgeBaseDetailClient({ knowledgeBaseId }: { knowledgeBaseId
         <CardContent className="space-y-5 pt-6">
           <div>
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <h1 className="min-w-0 truncate text-xl font-semibold text-fg">{kb.name}</h1>
-              <KnowledgeBaseStatusPill status={kb.status} />
+              <div className="flex min-w-0 items-center gap-3">
+                <h1 className="min-w-0 truncate text-xl font-semibold text-fg">{kb.name}</h1>
+                <KnowledgeBaseStatusPill status={kb.status} />
+              </div>
+              <ObjectActionBar
+                actions={knowledgeBaseActions(kb)}
+                ariaLabel={t("common.objectActions.aria", { name: kb.name })}
+                moreLabel={t("common.objectActions.more")}
+                testId="knowledge-base-detail-actions"
+              />
             </div>
             {kb.description ? <p className="mt-1 text-sm text-fg-muted">{kb.description}</p> : null}
           </div>
@@ -289,14 +302,20 @@ function KnowledgeBaseDocumentRow({
       >
         {document.file_name}
       </Link>
-      <Button
-        variant="ghost"
-        size="sm"
-        onClick={onRemove}
+      <RowActionMenu
+        actions={[
+          {
+            id: "remove",
+            label: t("knowledgeBases.actions.remove"),
+            icon: Unlink,
+            loading: removing,
+            onSelect: onRemove,
+          },
+        ]}
+        ariaLabel={t("common.objectActions.aria", { name: document.file_name })}
         loading={removing}
-        className="shrink-0 whitespace-nowrap" icon={Trash2}>
-        {t("knowledgeBases.actions.remove")}
-      </Button>
+        testId={`knowledge-base-document-actions-${document.id}`}
+      />
     </li>
   );
 }

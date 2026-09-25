@@ -796,7 +796,7 @@ test("desktop shows stale attempt diagnostics and cancels a running job", async 
 });
 
 async function openJobActions(page: Page, jobId: string) {
-  // 中止・削除は行内に並べず、行メニュー（その他の操作）にまとめる（docs/frontend-button-spec.md §5.1）。
+  // 中止・削除は行内に並べず、行メニュー（その他の操作）にまとめる（platform/docs/ux-contracts/buttons.md §5.1）。
   await page.getByTestId(`quality-evaluation-job-actions-${jobId}-trigger`).click();
   return page.getByRole("menu");
 }

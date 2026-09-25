@@ -9,6 +9,7 @@ import {
   CardDescription,
   CardHeader,
   CardTitle,
+  DataTable,
   EmptyState,
   ErrorState,
   LoadingState,
@@ -17,6 +18,7 @@ import {
   type StatusVariant,
   PageBody,
   buttonVariants,
+  type DataTableColumn,
   cn,
 } from "@engchina/production-ready-ui";
 
@@ -32,6 +34,28 @@ const statusVariant: Record<RunState["status"], StatusVariant> = {
   failed: "danger",
   cancelled: "warning",
 };
+
+// 最新 Run 一覧の列定義（表示のみ。並べ替えは行わない）。
+const latestRunColumns: DataTableColumn<RunState>[] = [
+  { key: "goal", header: "Run", className: "text-fg" },
+  {
+    key: "status",
+    header: t("common.status"),
+    render: (run) => <StatusBadge variant={statusVariant[run.status]} label={run.status} />,
+  },
+  {
+    key: "tool",
+    header: t("common.tool"),
+    className: "text-fg-muted",
+    render: (run) => run.steps[0]?.tool_call?.name ?? t("run.form.noTool"),
+  },
+  {
+    key: "updated_at",
+    header: t("common.updatedAt"),
+    className: "text-fg-muted",
+    render: (run) => formatDate(run.updated_at),
+  },
+];
 
 export function DashboardPage() {
   const runs = useQuery({ queryKey: ["runs"], queryFn: agentApi.listRuns, refetchInterval: 5000 });
@@ -99,39 +123,20 @@ export function DashboardPage() {
                 <EmptyState title={t("common.empty.title")} hint={t("common.empty.hint")} />
               ) : null}
               {latestRuns.length ? (
-                <div className="overflow-x-auto">
-                  <table className="w-full min-w-[560px] text-left text-sm">
-                    <thead>
-                      <tr className="border-b border-border text-xs text-fg-muted">
-                        <th className="px-3 py-2 font-medium">Run</th>
-                        <th className="px-3 py-2 font-medium">{t("common.status")}</th>
-                        <th className="px-3 py-2 font-medium">{t("common.tool")}</th>
-                        <th className="px-3 py-2 font-medium">{t("common.updatedAt")}</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {latestRuns.map((run) => (
-                        <tr key={run.id} className="border-b border-border/70">
-                          <td className="px-3 py-2 text-fg">{run.goal}</td>
-                          <td className="px-3 py-2">
-                            <StatusBadge variant={statusVariant[run.status]} label={run.status} />
-                          </td>
-                          <td className="px-3 py-2 text-fg-muted">
-                            {run.steps[0]?.tool_call?.name ?? t("run.form.noTool")}
-                          </td>
-                          <td className="px-3 py-2 text-fg-muted">{formatDate(run.updated_at)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                <DataTable
+                  rows={latestRuns}
+                  getRowKey={(run) => run.id}
+                  columns={latestRunColumns}
+                  tableClassName="w-full min-w-[560px]"
+                  ariaLabel={t("run.latest")}
+                />
               ) : null}
             </CardContent>
           </Card>
 
           <Card>
             <CardHeader>
-              <CardTitle>{t("nav.section.settings")}</CardTitle>
+              <CardTitle>{t("nav.section.operations")}</CardTitle>
               <CardDescription>{t("page.settings.subtitle")}</CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">

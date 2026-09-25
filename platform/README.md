@@ -13,6 +13,7 @@ templates/
   backend-service/  FastAPI サービス雛形（backend_core 利用）
 docs/
   design-system/    デザインシステムの正本（ARCHITECTURE / README / components-reference / adherence lint）
+  ux-contracts/     3 製品共通の画面の振る舞いの正本（ボタン・通知・ページの型・作業状態・横断契約。#118）
   backend-standard.md  共有 backend の標準
 ```
 
@@ -39,13 +40,18 @@ docs/
 packages/ui/
   src/
     styles/tokens.css        デザイントークン(CSS 変数 + @theme + base + keyframes)
-    lib/utils.ts             cn()
+    styles/structure/        utility で表せない共有部品の構造 CSS（FixedSplitPane）
+    lib/                     cn() / 経過時間の計算 / 分割比率の計算 / メニューのフォーカス復帰
     components/
       ui/                    Button / Card / Switch / Skeleton / Select / Banner /
-                             Toast / MessageText / ConfirmDialog / ToggleChip / FieldError / FormStatus
-      feedback/              LoadingState / ErrorState / EmptyState
-      data/                  StatusBadge(汎用 variant)
-      app-shell/             AppShell / Sidebar / PageHeader / Breadcrumbs
+                             Toast / MessageText / ConfirmDialog / ToggleChip / Tabs / FieldError / FormStatus /
+                             ContentActionBar / BulkSelectionActions / ClearActionButton /
+                             FloatingActionMenu / DisclosureChevron
+      feedback/              LoadingState / ErrorState / EmptyState /
+                             ActionResultRegion / ProcessingIndicator / TimedLoadingState
+      data/                  StatusBadge(汎用 variant) / DataTable / Pagination /
+                             RowActionMenu / ObjectActionBar（EntityAction）
+      app-shell/             AppShell / Sidebar / PageHeader / PageBody / Section / Breadcrumbs / FixedSplitPane
     navigation/types.ts      NavItem / NavSection / NavLinkComponent / SidebarLabels
     store/                   createUiStore(factory) / toast store
     index.ts                 公開 API バレル

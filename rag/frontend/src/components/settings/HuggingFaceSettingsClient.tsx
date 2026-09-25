@@ -33,6 +33,7 @@ import {
   type HuggingFaceSettingsUpdate,
 } from "@/lib/api";
 import { t } from "@/lib/i18n";
+import { useLeaveGuard } from "@/lib/leave-guard";
 import { useHuggingFaceSettings, useUpdateHuggingFaceSettings } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 
@@ -79,6 +80,15 @@ export function HuggingFaceSettingsClient() {
       },
     });
   }
+
+  // token は保存しない。入力中の endpoint / token / 削除指定があるときだけ離脱を確認する。
+  const baseline = optimistic ?? query.data;
+  useLeaveGuard(
+    Boolean(
+      baseline &&
+        (form.endpoint !== baseline.endpoint || form.token !== "" || form.clearToken)
+    )
+  );
 
   if (query.isPending) {
     return (

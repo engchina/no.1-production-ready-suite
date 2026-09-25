@@ -12,6 +12,9 @@ import {
   FieldError,
   PageBody,
   useConfirm,
+  ProcessingIndicator,
+  ObjectActionBar,
+  type EntityAction,
 } from "@engchina/production-ready-ui";
 import {
   useEffect,
@@ -36,8 +39,6 @@ import {
 
 
 import { FormActionBar, entityActionToFormAction } from "@/components/FormActionBar";
-import { ObjectActionBar, type EntityAction } from "@/components/ObjectActions";
-import { ProcessingIndicator } from "@/components/ProcessingState";
 import { ErrorState } from "@/components/StateViews";
 import { FieldLabel, FieldLegend } from "@/components/ui/required-field";
 import { ApiError, isAbortError } from "@/lib/api";

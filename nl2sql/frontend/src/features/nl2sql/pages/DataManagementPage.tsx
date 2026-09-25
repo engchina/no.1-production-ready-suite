@@ -15,19 +15,20 @@ import {
   PageHeader,
   PageBody,
   RequiredBadge,
+  BulkSelectionActions,
+  ContentActionBar,
+  ClearActionButton,
+  ProcessingIndicator,
+  ObjectActionBar,
+  type EntityAction,
 } from "@engchina/production-ready-ui";
 
 import { SyntheticRunPanel, useSyntheticRuns, historyExpired, type SyntheticRun } from "../syntheticRuns";
 import { SyntheticReview } from "../SyntheticReview";
 
 
-import { BulkSelectionActions } from "@/components/BulkSelectionActions";
-import { ContentActionBar } from "@/components/ContentActionBar";
-import { ObjectActionBar, type EntityAction } from "@/components/ObjectActions";
-import { ProcessingIndicator } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";
 import { ErrorState } from "@/components/StateViews";
-import { ClearActionButton } from "@/components/ui/clear-action-button";
 import { FileDropzone } from "@/components/ui/file-dropzone";
 import { apiFetch, apiGet, apiPost, isTimeoutError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";

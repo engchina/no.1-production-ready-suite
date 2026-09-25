@@ -5,6 +5,9 @@ import logging
 from unittest.mock import MagicMock
 
 import pytest
+from fastapi import FastAPI
+from httpx import ASGITransport, AsyncClient
+from pr_system_settings import database as shared_database
 from pythonjsonlogger.json import JsonFormatter
 
 from app.clients.oracle import OracleConnectionTimeoutError
@@ -107,10 +110,13 @@ async def test_settings_connection_test_logs_safe_diagnostics(
     async def fail(_settings: Settings) -> None:
         raise error
 
-    monkeypatch.setattr(settings_router, "_database_readiness", lambda _: "ok")
+    monkeypatch.setattr(shared_database, "database_readiness", lambda *_: "ok")
     monkeypatch.setattr(settings_router, "test_oracle_connection", fail)
-    result = await settings_router.test_database_settings()
-    assert result.data is not None and result.data.status == "failed"
+    app = FastAPI()
+    app.include_router(settings_router.router)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/settings/database/test")
+    assert response.json()["data"]["status"] == "failed"
     record = next(r for r in caplog.records if r.message == "database_connection_test_failed")
     assert record.__dict__["summary"]
     assert record.__dict__["suggested_action"]

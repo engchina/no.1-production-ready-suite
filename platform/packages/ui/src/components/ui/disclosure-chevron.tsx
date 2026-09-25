@@ -1,6 +1,6 @@
 import { ChevronDown, type LucideProps } from "lucide-react";
 
-import { cn } from "@/lib/utils";
+import { cn } from "../../lib/utils";
 
 export interface DisclosureChevronProps extends Omit<LucideProps, "aria-hidden"> {
   /**

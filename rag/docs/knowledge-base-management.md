@@ -452,7 +452,7 @@ knowledgeBaseDetail: "/knowledge-bases/:id"
   - 検索対象チャンク
   - 更新日時
   - 操作
-- empty / loading / error state は `docs/frontend-messaging-spec.md` に従う。
+- empty / loading / error state は platform の `docs/ux-contracts/messaging.md` に従う。
 
 UI 方針:
 
@@ -561,8 +561,8 @@ UI 実装時の必須確認:
 - icon-only button は tooltip と aria-label を持つ。
 - keyboard だけで作成、編集、所属変更、検索実行ができる。
 - focus ring を消さない。
-- loading / empty / error / success state を `docs/frontend-messaging-spec.md` に合わせる。
-- button size / variant / 配置は `docs/frontend-button-spec.md` に合わせる。
+- loading / empty / error / success state を platform の `docs/ux-contracts/messaging.md` に合わせる。
+- button size / variant / 配置は platform の `docs/design-system/` と `docs/ux-contracts/buttons.md` に合わせる。
 
 ## 9. Backend 実装方針
 

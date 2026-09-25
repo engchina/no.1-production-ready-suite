@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  ArrowLeft,
   Brain,
   Check,
   Download,
@@ -8,9 +9,10 @@ import {
   GitBranch,
   ListChecks,
   Minus,
-  Pencil,
   PlayCircle,
   Plus,
+  Power,
+  PowerOff,
   RefreshCw,
   Save,
   Server,
@@ -29,14 +31,22 @@ import {
   CardDescription,
   CardHeader,
   CardTitle,
+  DataTable,
   EmptyState,
   ErrorState,
   LoadingState,
+  ObjectActionBar,
   PageHeader,
+  RowActionMenu,
+  Section,
   StatusBadge,
   Switch,
   toast,
   useConfirm,
+  type DataTableColumn,
+  visibleEntityActions,
+  type EntityAction,
+  type PageHeaderAction,
   type StatusVariant,
   PageBody,
 } from "@engchina/production-ready-ui";
@@ -44,7 +54,7 @@ import {
 import {
   agentApi,
   type AgentProfile,
-  type AgentProfileWritePayload,
+  type AgentProfilePatchPayload,
   type AgentSkill,
   type Artifact,
   type ApprovalRequest,
@@ -54,6 +64,7 @@ import {
   type MarketplaceSource,
   type PluginManifest,
   type PluginSummary,
+  type MemoryEntry,
   type MemoryKind,
   type RuntimeSnapshot,
   type RuntimeSnapshotImportResult,
@@ -68,7 +79,24 @@ import {
   type ToolAuditRecord,
   type ToolDefinition,
 } from "@/lib/api";
+import {
+  AgentSplitPane,
+  EditorBreadcrumbs,
+  MissingEditorTarget,
+  RowTitleButton,
+} from "@/components/EntityLayout";
+import { useEditorRoute } from "@/lib/editor-route";
 import { t } from "@/lib/i18n";
+import { APP_ROUTES } from "@/lib/routes";
+import { sameDraft, useDirtySources, useEditorLeaveGuard, useSettingsLeaveGuard } from "@/lib/leave-guard";
+import {
+  isNullableString,
+  isOneOf,
+  isString,
+  useRestoredSelectionCheck,
+  useWorkspaceState,
+  type WorkspaceValidator,
+} from "@/lib/workspace-state";
 
 type ToolPolicyChoice = "default" | "allow" | "ask" | "deny";
 type RunStreamMode = "sse" | "websocket";
@@ -341,6 +369,7 @@ function isRunTerminal(status: RunState["status"]): boolean {
 
 export function AgentsPage() {
   const queryClient = useQueryClient();
+  const editor = useEditorRoute();
   const agents = useQuery({ queryKey: ["agents"], queryFn: agentApi.listAgents });
   const skills = useQuery({ queryKey: ["skills"], queryFn: agentApi.listSkills });
   const runtimes = useQuery({ queryKey: ["runtimes"], queryFn: agentApi.listRuntimes });
@@ -348,110 +377,173 @@ export function AgentsPage() {
     queryKey: ["runtime-bindings"],
     queryFn: () => agentApi.listRuntimeBindings(),
   });
-  const createAgent = useMutation({
-    mutationFn: agentApi.createAgent,
+  const toggleAgent = useMutation({
+    mutationFn: (agent: AgentProfile) => agentApi.patchAgent(agent.id, { enabled: !agent.enabled }),
     onSuccess: () => {
-      toast.success(t("agent.created"));
+      toast.success(t("agent.enabledUpdated"));
       void queryClient.invalidateQueries({ queryKey: ["agents"] });
     },
+    onError: (error) => toast.error(error.message),
   });
-  const patchAgent = useMutation({
-    mutationFn: ({ agent, payload }: { agent: AgentProfile; payload: AgentProfileWritePayload }) =>
-      agentApi.patchAgent(agent.id, payload),
-    onSuccess: () => {
-      toast.success(t("agent.saved"));
-      void queryClient.invalidateQueries({ queryKey: ["agents"] });
+
+  // 一覧の行と詳細（エディタの概要）で同じ定義を使う（UX 契約 buttons.md §5.1）。
+  const agentActions = (agent: AgentProfile): EntityAction[] => [
+    {
+      id: "toggle-enabled",
+      label: agent.enabled ? t("agent.disable") : t("agent.enable"),
+      icon: agent.enabled ? PowerOff : Power,
+      disabled: toggleAgent.isPending,
+      onSelect: () => toggleAgent.mutate(agent),
     },
-  });
-  const refreshBindings = () => {
-    void queryClient.invalidateQueries({ queryKey: ["runtime-bindings"] });
-  };
-  const createBinding = useMutation({
-    mutationFn: agentApi.createRuntimeBinding,
-    onSuccess: () => {
-      toast.success(t("binding.saved"));
-      refreshBindings();
-    },
-  });
-  const patchBinding = useMutation({
-    mutationFn: ({ binding, payload }: { binding: RuntimeBinding; payload: Partial<RuntimeBinding> }) =>
-      agentApi.patchRuntimeBinding(binding.id, payload),
-    onSuccess: refreshBindings,
-  });
-  const deleteBinding = useMutation({
-    mutationFn: agentApi.deleteRuntimeBinding,
-    onSuccess: refreshBindings,
-  });
-  const syncBinding = useMutation({
-    mutationFn: agentApi.syncRuntimeBinding,
-    onSuccess: refreshBindings,
-  });
-  const availableSkills = skills.data?.skills ?? [];
+  ];
+
+  const agentList = agents.data?.agents ?? [];
+  const bindingList = bindings.data?.bindings ?? [];
+  const { target } = editor;
+
+  if (target.kind === "list") {
+    return (
+      <>
+        <PageHeader
+          wide
+          title={t("nav.agents")}
+          subtitle={t("page.agents.subtitle")}
+          actions={[
+            { id: "create", kind: "primary", label: t("agent.create"), icon: Plus, onClick: editor.openNew },
+          ]}
+        />
+        <PageBody wide>
+          <QueryState query={agents}>
+            {skills.error ? <Banner severity="danger">{skills.error.message}</Banner> : null}
+            <Section title={t("agent.list")}>
+              <AgentTable
+                agents={agentList}
+                bindings={bindingList}
+                onOpen={(agent) => editor.openItem(agent.id)}
+                actionsFor={agentActions}
+              />
+            </Section>
+          </QueryState>
+        </PageBody>
+      </>
+    );
+  }
+
+  const agent = target.kind === "edit" ? agentList.find((candidate) => candidate.id === target.id) : undefined;
+  if (target.kind === "edit" && !agent) {
+    return (
+      <>
+        <PageHeader
+          wide
+          title={t("nav.agents")}
+          breadcrumbs={
+            <EditorBreadcrumbs listLabel={t("nav.agents")} listHref={APP_ROUTES.agents} current={target.id} />
+          }
+        />
+        <PageBody wide>
+          <QueryState query={agents}>
+            <MissingEditorTarget id={target.id} onBack={() => editor.backToList()} />
+          </QueryState>
+        </PageBody>
+      </>
+    );
+  }
 
   return (
-    <>
-      <PageHeader wide title={t("nav.agents")} subtitle={t("page.agents.subtitle")} />
-      <PageBody wide className="grid min-w-0 grid-cols-1 gap-5 xl:grid-cols-[420px_minmax(0,1fr)]">
-        <AgentEditor
-          title={t("agent.create")}
-          description={t("page.agents.subtitle")}
-          availableSkills={availableSkills}
-          pending={createAgent.isPending}
-          error={createAgent.error}
-          onSave={(payload) => createAgent.mutate(payload)}
-        />
-        <QueryState query={agents}>
-          <div className="grid min-w-0 gap-4">
-            {skills.error ? <Banner severity="danger">{skills.error.message}</Banner> : null}
-            {(agents.data?.agents ?? []).length ? (
-              (agents.data?.agents ?? []).map((agent) => (
-                <div key={agent.id} className="space-y-4">
-                  <AgentEditor
-                    agent={agent}
-                    title={agent.name}
-                    description={agent.id}
-                    availableSkills={availableSkills}
-                    pending={patchAgent.isPending}
-                    error={patchAgent.error}
-                    onSave={(payload) => patchAgent.mutate({ agent, payload })}
-                  />
-                  <RuntimeBindingsPanel
-                    agent={agent}
-                    bindings={(bindings.data?.bindings ?? []).filter(
-                      (binding) => binding.agent_id === agent.id
-                    )}
-                    runtimes={runtimes.data?.runtimes ?? []}
-                    pending={
-                      createBinding.isPending ||
-                      patchBinding.isPending ||
-                      deleteBinding.isPending ||
-                      syncBinding.isPending
-                    }
-                    error={
-                      createBinding.error ??
-                      patchBinding.error ??
-                      deleteBinding.error ??
-                      syncBinding.error
-                    }
-                    onCreate={(payload) => createBinding.mutate(payload)}
-                    onDefault={(binding) =>
-                      patchBinding.mutate({ binding, payload: { is_default: true } })
-                    }
-                    onSync={(binding) => syncBinding.mutate(binding.id)}
-                    onDelete={(binding) => deleteBinding.mutate(binding.id)}
-                  />
-                </div>
-              ))
-            ) : (
-              <EmptyState title={t("common.empty.title")} />
-            )}
-          </div>
-        </QueryState>
-      </PageBody>
-    </>
+    <AgentEditorView
+      key={agent?.id ?? "new"}
+      agent={agent}
+      availableSkills={skills.data?.skills ?? []}
+      skillsError={skills.error}
+      bindings={agent ? bindingList.filter((binding) => binding.agent_id === agent.id) : []}
+      runtimes={runtimes.data?.runtimes ?? []}
+      actions={agent ? agentActions(agent) : []}
+      onBack={() => editor.backToList()}
+      onCreated={(created) => editor.openItem(created.id, { replace: true })}
+    />
   );
 }
 
+function AgentTable({
+  agents,
+  bindings,
+  onOpen,
+  actionsFor,
+}: {
+  agents: AgentProfile[];
+  bindings: RuntimeBinding[];
+  onOpen: (agent: AgentProfile) => void;
+  actionsFor: (agent: AgentProfile) => EntityAction[];
+}) {
+  const columns: DataTableColumn<AgentProfile>[] = [
+    {
+      key: "name",
+      header: t("agent.name"),
+      rowHeader: true,
+      render: (agent) => <RowTitleButton title={agent.name} subtitle={agent.id} onClick={() => onOpen(agent)} />,
+    },
+    {
+      key: "description",
+      header: t("agent.description"),
+      className: "max-w-xs text-fg-muted",
+      render: (agent) => agent.description || "-",
+    },
+    {
+      key: "skills",
+      header: t("agent.skillCount"),
+      align: "right",
+      className: "tabular-nums",
+      render: (agent) => agent.skill_ids.length,
+    },
+    {
+      key: "binding",
+      header: t("agent.defaultBinding"),
+      render: (agent) => {
+        const binding = bindings.find((candidate) => candidate.agent_id === agent.id && candidate.is_default);
+        return binding ? (
+          <span className="break-all text-xs text-fg">{binding.native_agent_ref}</span>
+        ) : (
+          <StatusBadge variant="warning" label={t("agent.unbound")} />
+        );
+      },
+    },
+    {
+      key: "enabled",
+      header: t("common.status"),
+      render: (agent) => (
+        <StatusBadge
+          variant={agent.enabled ? "success" : "neutral"}
+          label={agent.enabled ? t("agent.enabled") : t("agent.disabled")}
+        />
+      ),
+    },
+    {
+      key: "actions",
+      header: t("settings.mcpServers.actions"),
+      align: "right",
+      render: (agent) => (
+        <RowActionMenu
+          actions={actionsFor(agent)}
+          ariaLabel={t("common.entityActions", { name: agent.name })}
+          testId={`agent-row-actions-${agent.id}`}
+        />
+      ),
+    },
+  ];
+
+  return (
+    <DataTable
+      rows={agents}
+      columns={columns}
+      getRowKey={(agent) => agent.id}
+      onRowClick={onOpen}
+      rowProps={(agent) => ({ className: "align-top", "data-testid": `agent-row-${agent.id}` })}
+      tableClassName="w-full min-w-[46rem]"
+      ariaLabel={t("agent.list")}
+      empty={<EmptyState title={t("common.empty.title")} />}
+    />
+  );
+}
 export function RuntimesPage() {
   const queryClient = useQueryClient();
   const runtimes = useQuery({ queryKey: ["runtimes"], queryFn: agentApi.listRuntimes });
@@ -600,6 +692,8 @@ export function RuntimesPage() {
   );
 }
 
+const DEFAULT_RUN_GOAL = "外部データを確認して要点を整理する";
+
 export function RunsPage() {
   const queryClient = useQueryClient();
   const confirm = useConfirm();
@@ -641,14 +735,30 @@ export function RunsPage() {
       refreshRunQueries();
     },
   });
-  const [goal, setGoal] = useState("外部データを確認して要点を整理する");
+  // 作業状態（目標の下書き・選択中の Run・購読方式）はこのタブの sessionStorage に残す（#87）。
+  // Agent / Binding は実行条件なので残さず、戻るたびに選び直す（実行の意思は確認し直す）。
+  const [goal, setGoal, goalSaved] = useWorkspaceState("runs", "goal", DEFAULT_RUN_GOAL, isString);
   const [agentId, setAgentId] = useState("default");
   const [bindingId, setBindingId] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
-  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
-  const [streamMode, setStreamMode] = useState<RunStreamMode>("sse");
+  const [selectedRunId, setSelectedRunId] = useWorkspaceState(
+    "runs",
+    "selectedRunId",
+    null as string | null,
+    isNullableString
+  );
+  const [streamMode, setStreamMode] = useWorkspaceState(
+    "runs",
+    "streamMode",
+    "sse" as RunStreamMode,
+    isOneOf<RunStreamMode>(["sse", "websocket"])
+  );
+  // 一時保存に失敗した下書きは、離脱の前に破棄を確認する。
+  useEditorLeaveGuard(!goalSaved && goal !== DEFAULT_RUN_GOAL);
 
   const runItems = runs.data?.runs ?? [];
+  const runIds = useMemo(() => runs.data?.runs.map((run) => run.id), [runs.data?.runs]);
+  const restoredSelection = useRestoredSelectionCheck(selectedRunId, runIds);
   const selectedRun = runItems.find((run) => run.id === selectedRunId) ?? runItems[0];
   const agentBindings = (bindings.data?.bindings ?? []).filter(
     (binding) => binding.agent_id === agentId && binding.enabled
@@ -742,6 +852,39 @@ export function RunsPage() {
     }
   }
 
+  const actionPending = cancelRun.isPending || resumeRun.isPending || replayRun.isPending;
+  // 一覧の行と詳細で同じ定義を使う（UX 契約 buttons.md §5.1）。取消は確認してから送る。
+  const runActions = (run: RunState): EntityAction[] => {
+    const { isExternal, canCancel, canResume } = runCapabilities(run);
+    return [
+      {
+        id: "resume",
+        label: t("run.resume"),
+        icon: PlayCircle,
+        visible: canResume,
+        disabled: actionPending,
+        onSelect: () => resumeRun.mutate(run.id),
+      },
+      {
+        id: "replay",
+        label: t("run.replay"),
+        icon: RefreshCw,
+        visible: !isExternal,
+        disabled: actionPending,
+        onSelect: () => replayRun.mutate(run.id),
+      },
+      {
+        id: "cancel",
+        label: t("run.cancel"),
+        icon: X,
+        tone: "danger",
+        visible: canCancel,
+        disabled: actionPending,
+        onSelect: () => cancelLatestRun(run),
+      },
+    ];
+  };
+
   return (
     <>
       <PageHeader
@@ -754,100 +897,112 @@ export function RunsPage() {
           </Button>
         }
       />
-      <PageBody wide className="grid min-w-0 grid-cols-1 gap-5 xl:grid-cols-[420px_minmax(0,1fr)]">
-        <div className="min-w-0 space-y-5">
-          <Card className="min-w-0">
-            <CardHeader>
-              <CardTitle>{t("run.form.submit")}</CardTitle>
-              <CardDescription>{t("run.runtime")}</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <Field label={t("run.form.agent")} htmlFor="run-agent">
-                <select
-                  id="run-agent"
-                  value={agentId}
-                  onChange={(event) => onAgentChange(event.target.value)}
-                  className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                >
-                  {(agents.data?.agents ?? []).filter((agent) => agent.enabled).map((agent) => (
-                    <option key={agent.id} value={agent.id}>
-                      {agent.name}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-              <Field label={t("run.form.goal")} htmlFor="run-goal">
-                <textarea
-                  id="run-goal"
-                  value={goal}
-                  onChange={(event) => setGoal(event.target.value)}
-                  className="min-h-24 w-full rounded-md border border-border bg-surface-sunken px-3 py-2 text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+      <PageBody wide>
+        <AgentSplitPane
+          splitId="runs-list"
+          left={
+            <div className="min-w-0 space-y-5">
+              <Card className="min-w-0">
+                <CardHeader>
+                  <CardTitle>{t("run.form.submit")}</CardTitle>
+                  <CardDescription>{t("run.runtime")}</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <Field label={t("run.form.agent")} htmlFor="run-agent">
+                    <select
+                      id="run-agent"
+                      value={agentId}
+                      onChange={(event) => onAgentChange(event.target.value)}
+                      className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    >
+                      {(agents.data?.agents ?? []).filter((agent) => agent.enabled).map((agent) => (
+                        <option key={agent.id} value={agent.id}>
+                          {agent.name}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                  <Field label={t("run.form.goal")} htmlFor="run-goal">
+                    <textarea
+                      id="run-goal"
+                      value={goal}
+                      onChange={(event) => setGoal(event.target.value)}
+                      className="min-h-24 w-full rounded-md border border-border-control bg-surface-sunken px-3 py-2 text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    />
+                  </Field>
+                  <Field label={t("run.form.binding")} htmlFor="run-binding">
+                    <select
+                      id="run-binding"
+                      value={bindingId}
+                      onChange={(event) => setBindingId(event.target.value)}
+                      className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    >
+                      <option value="">
+                        {defaultBinding
+                          ? `${t("run.form.defaultBinding")}: ${defaultBinding.native_agent_ref}`
+                          : t("run.form.selectBinding")}
+                      </option>
+                      {agentBindings.map((binding) => (
+                        <option key={binding.id} value={binding.id}>
+                          {binding.native_agent_ref} / {binding.runtime_id}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                  {!agentBindings.length ? <Banner severity="warning">{t("run.unbound")}</Banner> : null}
+                  {formError ? <Banner severity="danger">{formError}</Banner> : null}
+                  {!goalSaved ? <Banner severity="warning">{t("workspace.draftNotSaved")}</Banner> : null}
+                  {createRun.error ? <Banner severity="danger">{createRun.error.message}</Banner> : null}
+                  <Button onClick={submitRun} loading={createRun.isPending} className="w-full" icon={PlayCircle}>
+                    {t("run.form.submit")}
+                  </Button>
+                </CardContent>
+              </Card>
+
+              <QueryState query={runs}>
+                {restoredSelection.missing ? (
+                  <Banner severity="warning">{t("workspace.selectionMissing")}</Banner>
+                ) : null}
+                <RunHistoryList
+                  runs={runItems}
+                  selectedRunId={selectedRun?.id ?? null}
+                  actionsFor={runActions}
+                  onSelect={(runId) => {
+                    restoredSelection.dismiss();
+                    setSelectedRunId(runId);
+                  }}
                 />
-              </Field>
-              <Field label={t("run.form.binding")} htmlFor="run-binding">
-                <select
-                  id="run-binding"
-                  value={bindingId}
-                  onChange={(event) => setBindingId(event.target.value)}
-                  className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                >
-                  <option value="">
-                    {defaultBinding
-                      ? `${t("run.form.defaultBinding")}: ${defaultBinding.native_agent_ref}`
-                      : t("run.form.selectBinding")}
-                  </option>
-                  {agentBindings.map((binding) => (
-                    <option key={binding.id} value={binding.id}>
-                      {binding.native_agent_ref} / {binding.runtime_id}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-              {!agentBindings.length ? (
-                <Banner severity="warning">{t("run.unbound")}</Banner>
-              ) : null}
-              {formError ? <Banner severity="danger">{formError}</Banner> : null}
-              {createRun.error ? <Banner severity="danger">{createRun.error.message}</Banner> : null}
-              <Button onClick={submitRun} loading={createRun.isPending} className="w-full" icon={PlayCircle}>
-                {t("run.form.submit")}
-              </Button>
-            </CardContent>
-          </Card>
-
-          <QueryState query={runs}>
-            <RunHistoryList
-              runs={runItems}
-              selectedRunId={selectedRun?.id ?? null}
-              onSelect={setSelectedRunId}
-            />
-          </QueryState>
-        </div>
-
-        <QueryState query={runs}>
-          {selectedRun ? (
-            <RunDetail
-              run={selectedRun}
-              actionPending={cancelRun.isPending || resumeRun.isPending || replayRun.isPending}
-              onCancel={() => void cancelLatestRun(selectedRun)}
-              onWebSocketCancel={() => void cancelLatestRun(selectedRun, true)}
-              onResume={() => resumeRun.mutate(selectedRun.id)}
-              onWebSocketResume={() => websocketState.sendResume()}
-              onWebSocketApprovalDecision={(approvalId, approved) =>
-                websocketState.sendApprovalDecision(approvalId, approved)
-              }
-              onReplay={() => replayRun.mutate(selectedRun.id)}
-              streamMode={streamMode}
-              onStreamModeChange={setStreamMode}
-              websocketState={websocketState}
-            />
-          ) : (
-            <EmptyState title={t("common.empty.title")} />
-          )}
-        </QueryState>
+              </QueryState>
+            </div>
+          }
+          right={
+            <QueryState query={runs}>
+              {selectedRun ? (
+                <RunDetail
+                  run={selectedRun}
+                  actions={runActions(selectedRun)}
+                  actionPending={actionPending}
+                  onWebSocketCancel={() => void cancelLatestRun(selectedRun, true)}
+                  onWebSocketResume={() => websocketState.sendResume()}
+                  onWebSocketApprovalDecision={(approvalId, approved) =>
+                    websocketState.sendApprovalDecision(approvalId, approved)
+                  }
+                  streamMode={streamMode}
+                  onStreamModeChange={setStreamMode}
+                  websocketState={websocketState}
+                />
+              ) : (
+                <EmptyState title={t("common.empty.title")} hint={t("run.selectHint")} />
+              )}
+            </QueryState>
+          }
+        />
       </PageBody>
     </>
   );
 }
+
+type ApprovalRow = { run: RunState; approval: ApprovalRequest };
 
 export function ApprovalsPage() {
   const queryClient = useQueryClient();
@@ -864,17 +1019,21 @@ export function ApprovalsPage() {
       void queryClient.invalidateQueries({ queryKey: ["runs"] });
       void queryClient.invalidateQueries({ queryKey: ["memory"] });
     },
+    onError: (error) => toast.error(error.message),
   });
-  const approvals = useMemo(
+  const approvals = useMemo<ApprovalRow[]>(
     () => (runs.data?.runs ?? []).flatMap((run) => run.approvals.map((approval) => ({ run, approval }))),
     [runs.data?.runs]
   );
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const selected = approvals.find((row) => row.approval.id === selectedId) ?? approvals[0];
 
   async function decideApproval(approval: ApprovalRequest, approved: boolean) {
     const ok = await confirm({
       title: approved ? t("run.approveTitle") : t("run.rejectTitle"),
       description: approval.tool_call.name,
       confirmLabel: approved ? t("common.approve") : t("common.reject"),
+      cancelLabel: t("common.cancel"),
       tone: approved ? "info" : "danger",
     });
     if (ok) {
@@ -882,51 +1041,124 @@ export function ApprovalsPage() {
     }
   }
 
+  // 一覧の行と詳細で同じ定義を使う。判断は保留中の承認だけに出す。
+  const approvalActions = (approval: ApprovalRequest): EntityAction[] => [
+    {
+      id: "approve",
+      label: t("common.approve"),
+      icon: Check,
+      visible: approval.status === "pending",
+      disabled: decide.isPending,
+      onSelect: () => decideApproval(approval, true),
+    },
+    {
+      id: "reject",
+      label: t("common.reject"),
+      icon: X,
+      tone: "danger",
+      visible: approval.status === "pending",
+      disabled: decide.isPending,
+      onSelect: () => decideApproval(approval, false),
+    },
+  ];
+
+  const columns: DataTableColumn<ApprovalRow>[] = [
+    {
+      key: "tool",
+      header: t("common.tool"),
+      rowHeader: true,
+      render: ({ run, approval }) => (
+        <RowTitleButton
+          title={approval.tool_call.name}
+          subtitle={run.goal}
+          current={approval.id === selected?.approval.id}
+          onClick={() => setSelectedId(approval.id)}
+        />
+      ),
+    },
+    {
+      key: "status",
+      header: t("common.status"),
+      render: ({ approval }) => (
+        <StatusBadge variant={approvalStatusVariant(approval.status)} label={approval.status} />
+      ),
+    },
+    {
+      key: "actions",
+      header: t("run.actions"),
+      align: "right",
+      render: ({ approval }) => (
+        <RowActionMenu
+          actions={approvalActions(approval)}
+          ariaLabel={t("common.entityActions", { name: approval.tool_call.name })}
+          testId={`approval-row-actions-${approval.id}`}
+        />
+      ),
+    },
+  ];
+
   return (
     <>
       <PageHeader wide title={t("nav.approvals")} subtitle={t("page.approvals.subtitle")} />
       <PageBody wide>
         <QueryState query={runs}>
-          {approvals.length ? (
-            <div className="grid gap-4">
-              {approvals.map(({ run, approval }) => (
-                <Card key={approval.id}>
-                  <CardHeader className="flex-row items-start justify-between gap-4">
-                    <div>
-                      <CardTitle>{approval.tool_call.name}</CardTitle>
-                      <CardDescription>{run.goal}</CardDescription>
-                    </div>
-                    <StatusBadge
-                      variant={approval.status === "pending" ? "warning" : approval.status === "approved" ? "success" : "danger"}
-                      label={approval.status}
+          <AgentSplitPane
+            splitId="approvals-list"
+            left={
+              <Section title={t("approval.list")}>
+                <DataTable
+                  rows={approvals}
+                  columns={columns}
+                  getRowKey={({ approval }) => approval.id}
+                  selectedRowKey={selected?.approval.id ?? null}
+                  onRowClick={({ approval }) => setSelectedId(approval.id)}
+                  rowProps={() => ({ className: "align-top" })}
+                  ariaLabel={t("approval.list")}
+                  empty={<EmptyState title={t("common.empty.title")} />}
+                />
+              </Section>
+            }
+            right={
+              selected ? (
+                <Section
+                  title={t("approval.detail")}
+                  aria-label={t("approval.detail")}
+                  actions={
+                    <ObjectActionBar
+                      actions={approvalActions(selected.approval)}
+                      ariaLabel={t("common.entityActions", { name: selected.approval.tool_call.name })}
+                      moreLabel={t("common.moreActions")}
+                      testId="approval-object-actions"
                     />
-                  </CardHeader>
-                  <CardContent className="space-y-3">
-                    <JsonPreview value={approval.tool_call.arguments} />
-                    {approval.status === "pending" ? (
-                      <div className="flex flex-wrap gap-2">
-                        <Button
-                          size="sm"
-                          onClick={() => void decideApproval(approval, true)}
-                          loading={decide.isPending} icon={Check}>
-                          {t("common.approve")}
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="danger"
-                          onClick={() => void decideApproval(approval, false)}
-                          loading={decide.isPending} icon={X}>
-                          {t("common.reject")}
-                        </Button>
+                  }
+                >
+                  <Card className="min-w-0">
+                    <CardHeader className="flex-row flex-wrap items-start justify-between gap-4">
+                      <div className="min-w-0">
+                        <CardTitle>{selected.approval.tool_call.name}</CardTitle>
+                        <CardDescription className="break-words [overflow-wrap:anywhere]">
+                          {selected.run.goal}
+                        </CardDescription>
                       </div>
-                    ) : null}
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-          ) : (
-            <EmptyState title={t("common.empty.title")} />
-          )}
+                      <StatusBadge
+                        variant={approvalStatusVariant(selected.approval.status)}
+                        label={selected.approval.status}
+                      />
+                    </CardHeader>
+                    <CardContent className="space-y-3">
+                      <div className="grid gap-2 text-xs text-fg-muted sm:grid-cols-2">
+                        <span className="break-all">{`${t("audit.runId")}: ${selected.run.id}`}</span>
+                        <span>{`${t("audit.runStatus")}: ${selected.run.status}`}</span>
+                      </div>
+                      <JsonPanel title={t("approval.arguments")} value={selected.approval.tool_call.arguments} />
+                    </CardContent>
+                  </Card>
+                </Section>
+              ) : (
+                <EmptyState title={t("common.empty.title")} hint={t("approval.selectHint")} />
+              )
+            }
+          />
         </QueryState>
       </PageBody>
     </>
@@ -935,42 +1167,82 @@ export function ApprovalsPage() {
 
 type AuditWarningsFilter = "any" | "true" | "false";
 
+/** 監査の絞り込みフォーム。入力中の条件と適用済みの条件をこの形で sessionStorage に残す（#87）。 */
+interface AuditFilterForm {
+  runId: string;
+  toolName: string;
+  stepStatus: string;
+  approvalStatus: string;
+  errorCode: string;
+  warnings: AuditWarningsFilter;
+  limit: string;
+}
+
+const DEFAULT_AUDIT_FILTER_FORM: AuditFilterForm = {
+  runId: "",
+  toolName: "",
+  stepStatus: "",
+  approvalStatus: "",
+  errorCode: "",
+  warnings: "any",
+  limit: "100",
+};
+
+const isAuditFilterForm: WorkspaceValidator<AuditFilterForm> = (value): value is AuditFilterForm => {
+  if (typeof value !== "object" || value === null) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    Object.keys(DEFAULT_AUDIT_FILTER_FORM).every((key) => typeof record[key] === "string") &&
+    ["any", "true", "false"].includes(record.warnings as string)
+  );
+};
+
+function auditFiltersOf(form: AuditFilterForm): ToolCallAuditFilters {
+  const parsedLimit = Number(form.limit);
+  return {
+    run_id: form.runId.trim() || undefined,
+    tool_name: form.toolName || undefined,
+    status: form.stepStatus || undefined,
+    approval_status: form.approvalStatus || undefined,
+    error_code: form.errorCode.trim() || undefined,
+    has_guardrail_warnings: form.warnings === "any" ? undefined : form.warnings === "true",
+    limit: Number.isInteger(parsedLimit) && parsedLimit > 0 ? parsedLimit : 100,
+    offset: 0,
+  };
+}
+
 export function AuditPage() {
   const tools = useQuery({ queryKey: ["tools"], queryFn: agentApi.listTools });
-  const [runId, setRunId] = useState("");
-  const [toolName, setToolName] = useState("");
-  const [stepStatus, setStepStatus] = useState("");
-  const [approvalStatus, setApprovalStatus] = useState("");
-  const [errorCode, setErrorCode] = useState("");
-  const [warnings, setWarnings] = useState<AuditWarningsFilter>("any");
-  const [limit, setLimit] = useState("100");
-  const [appliedFilters, setAppliedFilters] = useState<ToolCallAuditFilters>({ limit: 100 });
+  const [filterForm, setFilterForm] = useWorkspaceState(
+    "audit",
+    "filterForm",
+    DEFAULT_AUDIT_FILTER_FORM,
+    isAuditFilterForm
+  );
+  const [appliedForm, setAppliedForm] = useWorkspaceState(
+    "audit",
+    "appliedForm",
+    DEFAULT_AUDIT_FILTER_FORM,
+    isAuditFilterForm
+  );
+  const appliedFilters = useMemo(() => auditFiltersOf(appliedForm), [appliedForm]);
   const audit = useQuery({
     queryKey: ["audit", "tool-calls", appliedFilters],
     queryFn: () => agentApi.listToolCallAudit(appliedFilters),
   });
+  const { runId, toolName, stepStatus, approvalStatus, errorCode, warnings, limit } = filterForm;
 
-  function currentFilters(): ToolCallAuditFilters {
-    const parsedLimit = Number(limit);
-    return {
-      run_id: runId.trim() || undefined,
-      tool_name: toolName || undefined,
-      status: stepStatus || undefined,
-      approval_status: approvalStatus || undefined,
-      error_code: errorCode.trim() || undefined,
-      has_guardrail_warnings: warnings === "any" ? undefined : warnings === "true",
-      limit: Number.isInteger(parsedLimit) && parsedLimit > 0 ? parsedLimit : 100,
-      offset: 0,
-    };
+  function setFilter<K extends keyof AuditFilterForm>(key: K, value: AuditFilterForm[K]) {
+    setFilterForm((current) => ({ ...current, [key]: value }));
   }
 
   function applyFilters() {
-    setAppliedFilters(currentFilters());
+    setAppliedForm(filterForm);
   }
 
   function downloadCsv() {
     const link = document.createElement("a");
-    link.href = agentApi.toolCallAuditCsvUrl(currentFilters());
+    link.href = agentApi.toolCallAuditCsvUrl(auditFiltersOf(filterForm));
     link.download = "agent-tool-call-audit.csv";
     link.click();
     toast.success(t("audit.csvDownloaded"));
@@ -1000,16 +1272,16 @@ export function AuditPage() {
                 <input
                   id="audit-run-id"
                   value={runId}
-                  onChange={(event) => setRunId(event.target.value)}
-                  className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  onChange={(event) => setFilter("runId", event.target.value)}
+                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 />
               </Field>
               <Field label={t("audit.toolName")} htmlFor="audit-tool-name">
                 <select
                   id="audit-tool-name"
                   value={toolName}
-                  onChange={(event) => setToolName(event.target.value)}
-                  className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  onChange={(event) => setFilter("toolName", event.target.value)}
+                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 >
                   <option value="">{t("common.all")}</option>
                   {(tools.data?.tools ?? []).map((tool) => (
@@ -1023,8 +1295,8 @@ export function AuditPage() {
                 <select
                   id="audit-step-status"
                   value={stepStatus}
-                  onChange={(event) => setStepStatus(event.target.value)}
-                  className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  onChange={(event) => setFilter("stepStatus", event.target.value)}
+                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 >
                   <option value="">{t("common.all")}</option>
                   {["pending", "running", "waiting_approval", "completed", "failed", "cancelled"].map((status) => (
@@ -1038,8 +1310,8 @@ export function AuditPage() {
                 <select
                   id="audit-approval-status"
                   value={approvalStatus}
-                  onChange={(event) => setApprovalStatus(event.target.value)}
-                  className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  onChange={(event) => setFilter("approvalStatus", event.target.value)}
+                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 >
                   <option value="">{t("common.all")}</option>
                   {["pending", "approved", "rejected", "cancelled"].map((status) => (
@@ -1053,16 +1325,16 @@ export function AuditPage() {
                 <input
                   id="audit-error-code"
                   value={errorCode}
-                  onChange={(event) => setErrorCode(event.target.value)}
-                  className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  onChange={(event) => setFilter("errorCode", event.target.value)}
+                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 />
               </Field>
               <Field label={t("audit.guardrailWarnings")} htmlFor="audit-warning-filter">
                 <select
                   id="audit-warning-filter"
                   value={warnings}
-                  onChange={(event) => setWarnings(event.target.value as AuditWarningsFilter)}
-                  className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  onChange={(event) => setFilter("warnings", event.target.value as AuditWarningsFilter)}
+                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 >
                   <option value="any">{t("common.all")}</option>
                   <option value="true">{t("audit.hasWarnings")}</option>
@@ -1076,8 +1348,8 @@ export function AuditPage() {
                   min="1"
                   max="1000"
                   value={limit}
-                  onChange={(event) => setLimit(event.target.value)}
-                  className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  onChange={(event) => setFilter("limit", event.target.value)}
+                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 />
               </Field>
             </div>
@@ -1117,91 +1389,113 @@ export function AuditPage() {
 }
 
 function AuditRecordsTable({ records }: { records: ToolCallAuditRecord[] }) {
+  const columns: DataTableColumn<ToolCallAuditRecord>[] = [
+    {
+      key: "run_goal",
+      header: t("audit.runGoal"),
+      className: "max-w-72",
+      render: (record) => (
+        <>
+          <p className="break-words text-sm font-medium text-fg [overflow-wrap:anywhere]">{record.run_goal}</p>
+          <p className="mt-1 break-all text-xs text-fg-muted">{record.run_id}</p>
+          <p className="mt-1 text-xs text-fg-muted">{formatDate(record.run_created_at)}</p>
+        </>
+      ),
+    },
+    {
+      key: "tool_name",
+      header: t("audit.toolName"),
+      render: (record) => (
+        <>
+          <p className="break-all font-medium text-fg">{record.tool_name}</p>
+          {record.error_code ? (
+            <p className="mt-1 break-words text-xs text-danger-fg [overflow-wrap:anywhere]">{record.error_code}</p>
+          ) : null}
+        </>
+      ),
+    },
+    {
+      key: "status",
+      header: t("audit.stepStatus"),
+      render: (record) => (
+        <StatusBadge variant={stepStatusVariant[record.status] ?? "neutral"} label={record.status} />
+      ),
+    },
+    {
+      key: "approval_status",
+      header: t("audit.approvalStatus"),
+      render: (record) =>
+        record.approval_status ? (
+          <StatusBadge variant={approvalStatusVariant(record.approval_status)} label={record.approval_status} />
+        ) : (
+          <span className="text-xs text-fg-muted">-</span>
+        ),
+    },
+    {
+      key: "policy_decision",
+      header: t("run.auditPolicy"),
+      className: "text-xs text-fg",
+      render: (record) => record.policy_decision ?? "-",
+    },
+    {
+      key: "permission_level",
+      header: t("common.permission"),
+      render: (record) => (
+        <StatusBadge
+          variant={permissionStatusVariant(record.permission_level)}
+          label={record.permission_level ?? "-"}
+          icon={false}
+        />
+      ),
+    },
+    {
+      key: "guardrail_warnings",
+      header: t("audit.guardrailWarnings"),
+      className: "max-w-64",
+      render: (record) =>
+        record.guardrail_warnings.length ? (
+          <div className="space-y-1">
+            {record.guardrail_warnings.map((warning) => (
+              <p key={warning} className="break-words text-xs text-warning-fg [overflow-wrap:anywhere]">
+                {warning}
+              </p>
+            ))}
+          </div>
+        ) : (
+          <span className="text-xs text-fg-muted">-</span>
+        ),
+    },
+    {
+      key: "duration_ms",
+      header: t("run.auditDuration"),
+      className: "text-xs text-fg",
+      render: (record) =>
+        record.duration_ms === null || record.duration_ms === undefined ? "-" : `${record.duration_ms}ms`,
+    },
+    {
+      key: "trace_id",
+      header: t("run.auditTrace"),
+      className: "max-w-48",
+      render: (record) => (
+        <>
+          <p className="break-all text-xs text-fg-muted">{record.trace_id ?? "-"}</p>
+          {record.artifact_ids.length ? (
+            <p className="mt-1 text-xs text-fg-muted">{`${t("run.auditArtifacts")}: ${record.artifact_ids.length}`}</p>
+          ) : null}
+        </>
+      ),
+    },
+  ];
+
   return (
-    <div className="w-full overflow-x-auto">
-      <table className="w-full min-w-[980px] border-collapse text-left text-sm">
-        <thead>
-          <tr className="border-b border-border text-xs text-fg-muted">
-            <th className="px-3 py-2 font-medium">{t("audit.runGoal")}</th>
-            <th className="px-3 py-2 font-medium">{t("audit.toolName")}</th>
-            <th className="px-3 py-2 font-medium">{t("audit.stepStatus")}</th>
-            <th className="px-3 py-2 font-medium">{t("audit.approvalStatus")}</th>
-            <th className="px-3 py-2 font-medium">{t("run.auditPolicy")}</th>
-            <th className="px-3 py-2 font-medium">{t("common.permission")}</th>
-            <th className="px-3 py-2 font-medium">{t("audit.guardrailWarnings")}</th>
-            <th className="px-3 py-2 font-medium">{t("run.auditDuration")}</th>
-            <th className="px-3 py-2 font-medium">{t("run.auditTrace")}</th>
-          </tr>
-        </thead>
-        <tbody>
-          {records.map((record) => (
-            <tr key={`${record.run_id}:${record.step_id}`} className="border-b border-border/70 align-top">
-              <td className="max-w-72 px-3 py-3">
-                <p className="break-words text-sm font-medium text-fg [overflow-wrap:anywhere]">
-                  {record.run_goal}
-                </p>
-                <p className="mt-1 break-all text-xs text-fg-muted">{record.run_id}</p>
-                <p className="mt-1 text-xs text-fg-muted">{formatDate(record.run_created_at)}</p>
-              </td>
-              <td className="px-3 py-3">
-                <p className="break-all font-medium text-fg">{record.tool_name}</p>
-                {record.error_code ? (
-                  <p className="mt-1 break-words text-xs text-danger-fg [overflow-wrap:anywhere]">
-                    {record.error_code}
-                  </p>
-                ) : null}
-              </td>
-              <td className="px-3 py-3">
-                <StatusBadge
-                  variant={stepStatusVariant[record.status] ?? "neutral"}
-                  label={record.status}
-                />
-              </td>
-              <td className="px-3 py-3">
-                {record.approval_status ? (
-                  <StatusBadge
-                    variant={approvalStatusVariant(record.approval_status)}
-                    label={record.approval_status}
-                  />
-                ) : (
-                  <span className="text-xs text-fg-muted">-</span>
-                )}
-              </td>
-              <td className="px-3 py-3 text-xs text-fg">{record.policy_decision ?? "-"}</td>
-              <td className="px-3 py-3">
-                <StatusBadge
-                  variant={permissionStatusVariant(record.permission_level)}
-                  label={record.permission_level ?? "-"}
-                  icon={false}
-                />
-              </td>
-              <td className="max-w-64 px-3 py-3">
-                {record.guardrail_warnings.length ? (
-                  <div className="space-y-1">
-                    {record.guardrail_warnings.map((warning) => (
-                      <p key={warning} className="break-words text-xs text-warning-fg [overflow-wrap:anywhere]">
-                        {warning}
-                      </p>
-                    ))}
-                  </div>
-                ) : (
-                  <span className="text-xs text-fg-muted">-</span>
-                )}
-              </td>
-              <td className="px-3 py-3 text-xs text-fg">
-                {record.duration_ms === null || record.duration_ms === undefined ? "-" : `${record.duration_ms}ms`}
-              </td>
-              <td className="max-w-48 px-3 py-3">
-                <p className="break-all text-xs text-fg-muted">{record.trace_id ?? "-"}</p>
-                {record.artifact_ids.length ? (
-                  <p className="mt-1 text-xs text-fg-muted">{`${t("run.auditArtifacts")}: ${record.artifact_ids.length}`}</p>
-                ) : null}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <DataTable
+      rows={records}
+      columns={columns}
+      getRowKey={(record) => `${record.run_id}:${record.step_id}`}
+      rowProps={() => ({ className: "align-top" })}
+      tableClassName="w-full min-w-[980px]"
+      ariaLabel={t("audit.records")}
+    />
   );
 }
 
@@ -1233,17 +1527,60 @@ function permissionStatusVariant(permission?: string | null): StatusVariant {
 
 export function ToolsPage() {
   const tools = useQuery({ queryKey: ["tools"], queryFn: agentApi.listTools });
+  const [selectedName, setSelectedName] = useState<string | null>(null);
+  const list = tools.data?.tools ?? [];
+  const selected = list.find((tool) => tool.name === selectedName) ?? list[0];
+
+  const columns: DataTableColumn<ToolDefinition>[] = [
+    {
+      key: "name",
+      header: t("common.tool"),
+      rowHeader: true,
+      render: (tool) => (
+        <RowTitleButton
+          title={tool.name}
+          current={tool.name === selected?.name}
+          onClick={() => setSelectedName(tool.name)}
+        />
+      ),
+    },
+    {
+      key: "permission",
+      header: t("common.permission"),
+      render: (tool) => (
+        <StatusBadge variant={permissionStatusVariant(tool.permission_level)} label={tool.permission_level} icon={false} />
+      ),
+    },
+  ];
 
   return (
     <>
       <PageHeader wide title={t("nav.tools")} subtitle={t("page.tools.subtitle")} />
       <PageBody wide>
         <QueryState query={tools}>
-          <div className="grid gap-4 xl:grid-cols-2">
-            {(tools.data?.tools ?? []).map((tool) => (
-              <ToolCard key={tool.name} tool={tool} />
-            ))}
-          </div>
+          <AgentSplitPane
+            splitId="tools-list"
+            left={
+              <Section title={t("tool.list")}>
+                <DataTable
+                  rows={list}
+                  columns={columns}
+                  getRowKey={(tool) => tool.name}
+                  selectedRowKey={selected?.name ?? null}
+                  onRowClick={(tool) => setSelectedName(tool.name)}
+                  ariaLabel={t("tool.list")}
+                  empty={<EmptyState title={t("common.empty.title")} />}
+                />
+              </Section>
+            }
+            right={
+              selected ? (
+                <ToolCard tool={selected} />
+              ) : (
+                <EmptyState title={t("common.empty.title")} hint={t("tool.selectHint")} />
+              )
+            }
+          />
         </QueryState>
       </PageBody>
     </>
@@ -1252,11 +1589,13 @@ export function ToolsPage() {
 
 export function MemoryPage() {
   const queryClient = useQueryClient();
-  const [query, setQuery] = useState("");
+  // 検索語は作業状態として残し、登録フォームの未保存の入力は離脱ガードで守る（#87）。
+  const [query, setQuery] = useWorkspaceState("memory", "query", "", isString);
   const [kind, setKind] = useState<MemoryKind>("user_preference");
   const [content, setContent] = useState("");
   const [metadataText, setMetadataText] = useState("{}");
   const [formError, setFormError] = useState<string | null>(null);
+  const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null);
   const memory = useQuery({
     queryKey: ["memory", query],
     queryFn: () => agentApi.searchMemory(query),
@@ -1272,6 +1611,8 @@ export function MemoryPage() {
     },
   });
 
+  useEditorLeaveGuard(content.trim() !== "" || metadataText.trim() !== "{}", addMemory.isPending);
+
   function submitMemory() {
     setFormError(null);
     if (!content.trim()) {
@@ -1286,90 +1627,134 @@ export function MemoryPage() {
     }
   }
 
+  const entries = memory.data?.entries ?? [];
+  const selectedEntry = entries.find((entry) => entry.id === selectedEntryId) ?? entries[0];
+  const memoryColumns: DataTableColumn<MemoryEntry>[] = [
+    {
+      key: "content",
+      header: t("memory.content"),
+      rowHeader: true,
+      render: (entry) => (
+        <RowTitleButton
+          title={entry.content.length > 80 ? `${entry.content.slice(0, 80)}…` : entry.content}
+          subtitle={formatDate(entry.created_at)}
+          current={entry.id === selectedEntry?.id}
+          onClick={() => setSelectedEntryId(entry.id)}
+        />
+      ),
+    },
+    {
+      key: "kind",
+      header: t("memory.kind"),
+      render: (entry) => <StatusBadge variant="info" label={entry.kind} icon={false} />,
+    },
+  ];
+
   return (
     <>
       <PageHeader wide title={t("nav.memory")} subtitle={t("page.memory.subtitle")} />
-      <PageBody wide>
-        <div className="grid min-w-0 grid-cols-1 gap-5 xl:grid-cols-[420px_minmax(0,1fr)]">
+      <PageBody wide className="space-y-6">
+        <Section title={t("memory.create")} description={t("page.memory.subtitle")}>
           <Card className="min-w-0">
-            <CardHeader>
-              <CardTitle>{t("memory.create")}</CardTitle>
-              <CardDescription>{t("page.memory.subtitle")}</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <Field label={t("memory.kind")} htmlFor="memory-kind">
-                <select
-                  id="memory-kind"
-                  value={kind}
-                  onChange={(event) => setKind(event.target.value as MemoryKind)}
-                  className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                >
-                  <option value="user_preference">{t("memory.kind.userPreference")}</option>
-                  <option value="tool_learning">{t("memory.kind.toolLearning")}</option>
-                  <option value="note">{t("memory.kind.note")}</option>
-                  <option value="run_summary">{t("memory.kind.runSummary")}</option>
-                </select>
-              </Field>
-              <Field label={t("memory.content")} htmlFor="memory-content">
-                <textarea
-                  id="memory-content"
-                  value={content}
-                  onChange={(event) => setContent(event.target.value)}
-                  className="min-h-28 w-full rounded-md border border-border bg-surface-sunken px-3 py-2 text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                />
-              </Field>
-              <Field label={t("memory.metadata")} htmlFor="memory-metadata">
-                <textarea
-                  id="memory-metadata"
-                  value={metadataText}
-                  onChange={(event) => setMetadataText(event.target.value)}
-                  className="min-h-24 w-full rounded-md border border-border bg-surface-sunken px-3 py-2 font-mono text-xs leading-5 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                  spellCheck={false}
-                />
-              </Field>
-              {formError ? <Banner severity="danger">{formError}</Banner> : null}
-              {addMemory.error ? <Banner severity="danger">{addMemory.error.message}</Banner> : null}
-              <Button onClick={submitMemory} loading={addMemory.isPending} className="w-full" icon={Save}>
-                {t("memory.create")}
-              </Button>
+            <CardContent className="grid min-w-0 gap-4 pt-5 lg:grid-cols-2">
+              <div className="min-w-0 space-y-4">
+                <Field label={t("memory.kind")} htmlFor="memory-kind">
+                  <select
+                    id="memory-kind"
+                    value={kind}
+                    onChange={(event) => setKind(event.target.value as MemoryKind)}
+                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  >
+                    <option value="user_preference">{t("memory.kind.userPreference")}</option>
+                    <option value="tool_learning">{t("memory.kind.toolLearning")}</option>
+                    <option value="note">{t("memory.kind.note")}</option>
+                    <option value="run_summary">{t("memory.kind.runSummary")}</option>
+                  </select>
+                </Field>
+                <Field label={t("memory.content")} htmlFor="memory-content">
+                  <textarea
+                    id="memory-content"
+                    value={content}
+                    onChange={(event) => setContent(event.target.value)}
+                    className="min-h-28 w-full rounded-md border border-border-control bg-surface-sunken px-3 py-2 text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  />
+                </Field>
+              </div>
+              <div className="min-w-0 space-y-4">
+                <Field label={t("memory.metadata")} htmlFor="memory-metadata">
+                  <textarea
+                    id="memory-metadata"
+                    value={metadataText}
+                    onChange={(event) => setMetadataText(event.target.value)}
+                    className="min-h-28 w-full rounded-md border border-border-control bg-surface-sunken px-3 py-2 font-mono text-xs leading-5 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    spellCheck={false}
+                  />
+                </Field>
+                {formError ? <Banner severity="danger">{formError}</Banner> : null}
+                {addMemory.error ? <Banner severity="danger">{addMemory.error.message}</Banner> : null}
+                <Button onClick={submitMemory} loading={addMemory.isPending} icon={Save}>
+                  {t("memory.create")}
+                </Button>
+              </div>
             </CardContent>
           </Card>
-          <Card className="min-w-0">
-            <CardContent className="pt-5">
-            <Field label={t("common.search")} htmlFor="memory-search">
-              <input
-                id="memory-search"
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-              />
-            </Field>
-            </CardContent>
-          </Card>
-        </div>
-        <QueryState query={memory}>
-          {(memory.data?.entries ?? []).length ? (
-            <div className="grid min-w-0 gap-3">
-              {(memory.data?.entries ?? []).map((entry) => (
-                <Card key={entry.id} className="min-w-0">
-                  <CardContent className="min-w-0 space-y-2 pt-5">
+        </Section>
+        <AgentSplitPane
+          splitId="memory-list"
+          left={
+            <Section title={t("memory.list")}>
+              <Field label={t("common.search")} htmlFor="memory-search">
+                <input
+                  id="memory-search"
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                />
+              </Field>
+              <QueryState query={memory}>
+                <DataTable
+                  rows={entries}
+                  columns={memoryColumns}
+                  getRowKey={(entry) => entry.id}
+                  selectedRowKey={selectedEntry?.id ?? null}
+                  onRowClick={(entry) => setSelectedEntryId(entry.id)}
+                  rowProps={() => ({ className: "align-top" })}
+                  ariaLabel={t("memory.list")}
+                  empty={<EmptyState title={t("common.empty.title")} />}
+                />
+              </QueryState>
+            </Section>
+          }
+          right={
+            selectedEntry ? (
+              <Section title={t("memory.detail")} aria-label={t("memory.detail")}>
+                <Card className="min-w-0">
+                  <CardContent className="min-w-0 space-y-3 pt-5">
                     <div className="flex flex-wrap items-center gap-2">
-                      <StatusBadge variant="info" label={entry.kind} icon={false} />
-                      <span className="text-xs text-fg-muted">{formatDate(entry.created_at)}</span>
+                      <StatusBadge variant="info" label={selectedEntry.kind} icon={false} />
+                      <span className="text-xs text-fg-muted">{formatDate(selectedEntry.created_at)}</span>
                     </div>
-                    <p className="break-words text-sm leading-6 text-fg [overflow-wrap:anywhere]">{entry.content}</p>
-                    <JsonPreview value={entry.metadata} />
+                    <p className="whitespace-pre-wrap break-words text-sm leading-6 text-fg [overflow-wrap:anywhere]">
+                      {selectedEntry.content}
+                    </p>
+                    <JsonPanel title={t("memory.metadata")} value={selectedEntry.metadata} />
                   </CardContent>
                 </Card>
-              ))}
-            </div>
-          ) : (
-            <EmptyState title={t("common.empty.title")} />
-          )}
-        </QueryState>
+              </Section>
+            ) : (
+              <EmptyState title={t("common.empty.title")} hint={t("memory.selectHint")} />
+            )
+          }
+        />
       </PageBody>
     </>
   );
+}
+
+interface ExternalSettingsDraft {
+  baseUrl: string;
+  timeoutSeconds: string;
+  defaultLimit: string;
 }
 
 export function ExternalSettingsPage({ kind }: { kind: "rag" | "nl2sql" }) {
@@ -1401,22 +1786,39 @@ export function ExternalSettingsPage({ kind }: { kind: "rag" | "nl2sql" }) {
   const [baseUrl, setBaseUrl] = useState("");
   const [timeoutSeconds, setTimeoutSeconds] = useState("10");
   const [defaultLimit, setDefaultLimit] = useState("100");
+  const [baseline, setBaseline] = useState<ExternalSettingsDraft | null>(null);
 
   useEffect(() => {
     const current = settings.data;
     if (current) {
-      setBaseUrl(current.base_url ?? "");
-      setTimeoutSeconds(String(current.timeout_seconds));
-      setDefaultLimit(String(current.default_limit ?? 100));
+      const saved = {
+        baseUrl: current.base_url ?? "",
+        timeoutSeconds: String(current.timeout_seconds),
+        defaultLimit: String(current.default_limit ?? 100),
+      };
+      setBaseUrl(saved.baseUrl);
+      setTimeoutSeconds(saved.timeoutSeconds);
+      setDefaultLimit(saved.defaultLimit);
+      setBaseline(saved);
     }
   }, [settings.data]);
 
+  const draft: ExternalSettingsDraft = { baseUrl, timeoutSeconds, defaultLimit };
+  // RAG では既定件数を扱わないので比較から外す。
+  const comparable = (value: ExternalSettingsDraft) => (isNl2Sql ? value : { ...value, defaultLimit: "" });
+  const isDirty = baseline !== null && !sameDraft(comparable(draft), comparable(baseline));
+  useSettingsLeaveGuard(isDirty, mutation.isPending);
+
   function save() {
-    mutation.mutate({
-      base_url: baseUrl,
-      timeout_seconds: Number(timeoutSeconds),
-      default_limit: isNl2Sql ? Number(defaultLimit) : undefined,
-    });
+    const submitted = draft;
+    mutation.mutate(
+      {
+        base_url: baseUrl,
+        timeout_seconds: Number(timeoutSeconds),
+        default_limit: isNl2Sql ? Number(defaultLimit) : undefined,
+      },
+      { onSuccess: () => setBaseline(submitted) }
+    );
   }
 
   return (
@@ -1508,7 +1910,7 @@ function McpDiscoveryPanel({ configured }: { configured: boolean }) {
               id="mcp-discovery-server-id"
               value={serverId}
               onChange={(event) => setServerId(event.target.value)}
-              className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+              className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
             />
           </Field>
           <Field label={t("settings.mcpDiscovery.traceId")} htmlFor="mcp-discovery-trace-id">
@@ -1516,7 +1918,7 @@ function McpDiscoveryPanel({ configured }: { configured: boolean }) {
               id="mcp-discovery-trace-id"
               value={traceId}
               onChange={(event) => setTraceId(event.target.value)}
-              className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+              className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
             />
           </Field>
           <Button
@@ -1550,32 +1952,45 @@ function McpDiscoveryPanel({ configured }: { configured: boolean }) {
 }
 
 function McpToolsList({ tools }: { tools: ExternalMcpToolInfo[] }) {
+  const mcpToolColumns: DataTableColumn<ExternalMcpToolInfo>[] = [
+    { key: "name", header: t("settings.mcpDiscovery.tool"), className: "font-mono text-xs text-fg" },
+    {
+      key: "description",
+      header: t("settings.mcpDiscovery.descriptionColumn"),
+      className: "max-w-sm text-fg-muted",
+      render: (tool) => tool.description || "-",
+    },
+    {
+      key: "server_id",
+      header: t("settings.mcpDiscovery.server"),
+      className: "text-fg-muted",
+      render: (tool) => tool.server_id ?? "-",
+    },
+    {
+      key: "input_schema",
+      header: t("settings.mcpDiscovery.inputSchema"),
+      className: "text-fg-muted",
+      render: (tool) => schemaSummary(tool.input_schema),
+    },
+    {
+      key: "output_schema",
+      header: t("settings.mcpDiscovery.outputSchema"),
+      className: "text-fg-muted",
+      render: (tool) => schemaSummary(tool.output_schema),
+    },
+  ];
+
   return (
     <div className="min-w-0">
-      <div className="hidden overflow-x-auto md:block">
-        <table className="w-full min-w-[720px] border-collapse text-left text-sm">
-          <thead>
-            <tr className="border-b border-border text-xs text-fg-muted">
-              <th className="px-3 py-2 font-medium">{t("settings.mcpDiscovery.tool")}</th>
-              <th className="px-3 py-2 font-medium">{t("settings.mcpDiscovery.descriptionColumn")}</th>
-              <th className="px-3 py-2 font-medium">{t("settings.mcpDiscovery.server")}</th>
-              <th className="px-3 py-2 font-medium">{t("settings.mcpDiscovery.inputSchema")}</th>
-              <th className="px-3 py-2 font-medium">{t("settings.mcpDiscovery.outputSchema")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {tools.map((tool) => (
-              <tr key={`${tool.server_id ?? "default"}:${tool.name}`} className="border-b border-border/70 last:border-0">
-                <td className="px-3 py-3 align-top font-mono text-xs text-fg">{tool.name}</td>
-                <td className="max-w-sm px-3 py-3 align-top text-fg-muted">{tool.description || "-"}</td>
-                <td className="px-3 py-3 align-top text-fg-muted">{tool.server_id ?? "-"}</td>
-                <td className="px-3 py-3 align-top text-fg-muted">{schemaSummary(tool.input_schema)}</td>
-                <td className="px-3 py-3 align-top text-fg-muted">{schemaSummary(tool.output_schema)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <DataTable
+        className="hidden md:block"
+        rows={tools}
+        columns={mcpToolColumns}
+        getRowKey={(tool) => `${tool.server_id ?? "default"}:${tool.name}`}
+        rowProps={() => ({ className: "align-top" })}
+        tableClassName="w-full min-w-[720px]"
+        ariaLabel={t("settings.mcpDiscovery.title")}
+      />
       <div className="grid gap-3 md:hidden">
         {tools.map((tool) => (
           <div key={`${tool.server_id ?? "default"}:${tool.name}`} className="rounded-md border border-border p-3">
@@ -1656,93 +2071,50 @@ const EMPTY_MCP_FORM: McpServerFormState = {
   oauthScope: "",
 };
 
+function mcpFormOf(server: ExternalMcpServerSettings | undefined): McpServerFormState {
+  if (!server) return EMPTY_MCP_FORM;
+  return {
+    ...EMPTY_MCP_FORM,
+    serverId: server.server_id,
+    label: server.label ?? "",
+    baseUrl: server.base_url ?? "",
+    timeoutSeconds: String(server.timeout_seconds),
+  };
+}
+
 export function McpServersPage() {
   const queryClient = useQueryClient();
   const confirm = useConfirm();
+  const editor = useEditorRoute();
   const servers = useQuery({
     queryKey: ["mcp-servers"],
     queryFn: agentApi.listExternalMcpServers,
   });
-  const [form, setForm] = useState<McpServerFormState>(EMPTY_MCP_FORM);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [formOpen, setFormOpen] = useState(false);
 
   function invalidate() {
-    void queryClient.invalidateQueries({ queryKey: ["mcp-servers"] });
-    void queryClient.invalidateQueries({ queryKey: ["external-mcp-tools"] });
+    return Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["mcp-servers"] }),
+      queryClient.invalidateQueries({ queryKey: ["external-mcp-tools"] }),
+    ]);
   }
-
-  const saveMutation = useMutation({
-    mutationFn: () => {
-      const payload = {
-        label: form.label || null,
-        base_url: form.baseUrl,
-        timeout_seconds: Number(form.timeoutSeconds),
-        session_id: form.sessionId || undefined,
-        oauth_token_url: form.oauthTokenUrl || undefined,
-        oauth_client_id: form.oauthClientId || undefined,
-        oauth_client_secret: form.oauthClientSecret || undefined,
-        oauth_scope: form.oauthScope || undefined,
-      };
-      if (editingId) {
-        return agentApi.updateExternalMcpServer(editingId, payload);
-      }
-      return agentApi.createExternalMcpServer({ server_id: form.serverId.trim(), ...payload });
-    },
-    onSuccess: () => {
-      toast.success(editingId ? t("settings.mcpServers.updated") : t("settings.mcpServers.created"));
-      closeForm();
-      invalidate();
-    },
-  });
 
   const setDefaultMutation = useMutation({
     mutationFn: (serverId: string) => agentApi.setDefaultExternalMcpServer(serverId),
     onSuccess: () => {
       toast.success(t("settings.mcpServers.defaultUpdated"));
-      invalidate();
+      void invalidate();
     },
+    onError: (error) => toast.error(error.message),
   });
 
   const deleteMutation = useMutation({
     mutationFn: (serverId: string) => agentApi.deleteExternalMcpServer(serverId),
     onSuccess: () => {
       toast.success(t("settings.mcpServers.deleted"));
-      invalidate();
+      void invalidate();
     },
+    onError: (error) => toast.error(error.message),
   });
-
-  function openCreate() {
-    setEditingId(null);
-    setForm(EMPTY_MCP_FORM);
-    setFormOpen(true);
-  }
-
-  function openEdit(server: ExternalMcpServerSettings) {
-    setEditingId(server.server_id);
-    setForm({
-      ...EMPTY_MCP_FORM,
-      serverId: server.server_id,
-      label: server.label ?? "",
-      baseUrl: server.base_url ?? "",
-      timeoutSeconds: String(server.timeout_seconds),
-    });
-    setFormOpen(true);
-  }
-
-  function closeForm() {
-    setFormOpen(false);
-    setEditingId(null);
-    setForm(EMPTY_MCP_FORM);
-  }
-
-  function save() {
-    if (!editingId && !form.serverId.trim()) {
-      toast.error(t("settings.mcpServers.idRequired"));
-      return;
-    }
-    saveMutation.mutate();
-  }
 
   async function remove(server: ExternalMcpServerSettings) {
     const ok = await confirm({
@@ -1752,290 +2124,386 @@ export function McpServersPage() {
       cancelLabel: t("common.cancel"),
       tone: "danger",
     });
-    if (ok) {
-      deleteMutation.mutate(server.server_id);
-    }
+    if (!ok) return;
+    deleteMutation.mutate(server.server_id, {
+      // エディタから削除したら、消えた対象へ戻れないよう履歴を置き換えて一覧へ戻る。
+      onSuccess: () => {
+        if (editor.target.kind === "edit") editor.backToList({ replace: true });
+      },
+    });
   }
 
-  const list = servers.data?.servers ?? [];
-  const anyConfigured = list.some((server) => server.configured);
   const busy = setDefaultMutation.isPending || deleteMutation.isPending;
+  // 一覧の行と詳細（エディタの概要）で同じ定義を使う（UX 契約 buttons.md §5.1）。
+  const serverActions = (server: ExternalMcpServerSettings): EntityAction[] => [
+    {
+      id: "set-default",
+      label: t("settings.mcpServers.setDefault"),
+      icon: Star,
+      visible: !server.is_default,
+      disabled: busy,
+      onSelect: () => setDefaultMutation.mutate(server.server_id),
+    },
+    {
+      id: "delete",
+      label: t("settings.mcpServers.delete"),
+      icon: Trash2,
+      tone: "danger",
+      disabled: server.server_id === "default" || busy,
+      onSelect: () => remove(server),
+    },
+  ];
+
+  const list = servers.data?.servers ?? [];
+  const { target } = editor;
+  const listTitle = t("nav.settingsExternalMcp");
+
+  if (target.kind === "list") {
+    const anyConfigured = list.some((server) => server.configured);
+    return (
+      <>
+        <PageHeader
+          wide
+          title={listTitle}
+          subtitle={t("page.settings.mcp.subtitle")}
+          actions={[
+            {
+              id: "create",
+              kind: "primary",
+              label: t("settings.mcpServers.add"),
+              icon: Plus,
+              onClick: editor.openNew,
+            },
+          ]}
+        />
+        <PageBody wide className="space-y-6">
+          <QueryState query={servers}>
+            <Section title={t("settings.mcpServers.title")} description={t("settings.mcpServers.description")}>
+              <McpServerTable
+                servers={list}
+                onOpen={(server) => editor.openItem(server.server_id)}
+                actionsFor={serverActions}
+              />
+            </Section>
+            <McpDiscoveryPanel configured={anyConfigured} />
+          </QueryState>
+        </PageBody>
+      </>
+    );
+  }
+
+  const server = target.kind === "edit" ? list.find((candidate) => candidate.server_id === target.id) : undefined;
+  if (target.kind === "edit" && !server) {
+    return (
+      <>
+        <PageHeader
+          wide
+          title={listTitle}
+          breadcrumbs={
+            <EditorBreadcrumbs listLabel={listTitle} listHref={APP_ROUTES.settingsExternalMcp} current={target.id} />
+          }
+        />
+        <PageBody wide>
+          <QueryState query={servers}>
+            <MissingEditorTarget id={target.id} onBack={() => editor.backToList()} />
+          </QueryState>
+        </PageBody>
+      </>
+    );
+  }
+
+  return (
+    <McpServerEditor
+      key={server?.server_id ?? "new"}
+      server={server}
+      actions={server ? serverActions(server) : []}
+      onBack={() => editor.backToList()}
+      onSaved={async (serverId) => {
+        await invalidate();
+        editor.openItem(serverId, { replace: true });
+      }}
+    />
+  );
+}
+
+/** 外部 MCP サーバーの全画面エディタ（A 型。`?id=new` / `?id=<server id>`）。 */
+function McpServerEditor({
+  server,
+  actions,
+  onBack,
+  onSaved,
+}: {
+  server?: ExternalMcpServerSettings;
+  actions: EntityAction[];
+  onBack: () => void;
+  onSaved: (serverId: string) => Promise<void>;
+}) {
+  const [form, setForm] = useState<McpServerFormState>(() => mcpFormOf(server));
+  const [formBaseline, setFormBaseline] = useState<McpServerFormState>(() => mcpFormOf(server));
+  const editingId = server?.server_id ?? null;
+
+  // 送る内容は mutate の引数で渡す（クリック直前の入力を closure の古い state で送らない）。
+  const saveMutation = useMutation({
+    mutationFn: (current: McpServerFormState) => {
+      const payload = {
+        label: current.label || null,
+        base_url: current.baseUrl,
+        timeout_seconds: Number(current.timeoutSeconds),
+        session_id: current.sessionId || undefined,
+        oauth_token_url: current.oauthTokenUrl || undefined,
+        oauth_client_id: current.oauthClientId || undefined,
+        oauth_client_secret: current.oauthClientSecret || undefined,
+        oauth_scope: current.oauthScope || undefined,
+      };
+      if (editingId) {
+        return agentApi.updateExternalMcpServer(editingId, payload);
+      }
+      return agentApi.createExternalMcpServer({ server_id: current.serverId.trim(), ...payload });
+    },
+    onSuccess: async (saved, current) => {
+      toast.success(editingId ? t("settings.mcpServers.updated") : t("settings.mcpServers.created"));
+      // secret 欄は保存後に空へ戻す（値は保持も表示もしない）。
+      const next = { ...current, sessionId: "", oauthClientSecret: "" };
+      setForm(next);
+      setFormBaseline(next);
+      await onSaved(saved.server_id ?? current.serverId.trim());
+    },
+  });
+
+  // 開いた時点の内容から変わっていれば未保存（secret 欄も含む。値は保存しない）。#87
+  const formDirty = !sameDraft(form, formBaseline);
+  const { confirmClose } = useEditorLeaveGuard(formDirty, saveMutation.isPending);
+
+  async function back() {
+    if (await confirmClose()) onBack();
+  }
+
+  function save() {
+    if (!editingId && !form.serverId.trim()) {
+      toast.error(t("settings.mcpServers.idRequired"));
+      return;
+    }
+    saveMutation.mutate(form);
+  }
+
+  const listTitle = t("nav.settingsExternalMcp");
+  const title = server ? server.label || server.server_id : t("settings.mcpServers.addTitle");
 
   return (
     <>
-      <PageHeader wide title={t("nav.settingsExternalMcp")} subtitle={t("page.settings.mcp.subtitle")} />
-      <PageBody wide>
-<div className="space-y-5">
-        <QueryState query={servers}>
-          <Card>
-            <CardHeader className="flex flex-row items-start justify-between gap-3">
-              <div className="space-y-1">
-                <CardTitle>{t("settings.mcpServers.title")}</CardTitle>
-                <CardDescription>{t("settings.mcpServers.description")}</CardDescription>
-              </div>
-              <Button size="sm" onClick={openCreate} icon={Plus}>
-                {t("settings.mcpServers.add")}
-              </Button>
-            </CardHeader>
-            <CardContent>
-              {list.length === 0 ? (
-                <EmptyState title={t("settings.mcpServers.empty")} />
-              ) : (
-                <McpServerTable
-                  servers={list}
-                  onEdit={openEdit}
-                  onDelete={remove}
-                  onSetDefault={(id) => setDefaultMutation.mutate(id)}
-                  busy={busy}
+      <PageHeader
+        wide
+        title={title}
+        subtitle={server ? server.server_id : t("page.settings.mcp.subtitle")}
+        breadcrumbs={
+          <EditorBreadcrumbs listLabel={listTitle} listHref={APP_ROUTES.settingsExternalMcp} current={title} />
+        }
+        actions={[
+          { id: "back", kind: "secondary", label: t("common.backToList"), icon: ArrowLeft, onClick: () => void back() },
+          {
+            id: "save",
+            kind: "primary",
+            label: editingId ? t("common.save") : t("common.create"),
+            icon: Save,
+            loading: saveMutation.isPending,
+            onClick: save,
+          },
+        ]}
+        moreActionsLabel={t("common.moreActions")}
+      />
+      <PageBody wide className="space-y-6">
+        {server ? (
+          <Section
+            title={t("editor.overview")}
+            actions={
+              <ObjectActionBar
+                actions={actions}
+                ariaLabel={t("common.entityActions", { name: server.server_id })}
+                moreLabel={t("common.moreActions")}
+                testId="mcp-server-object-actions"
+              />
+            }
+          >
+            <div className="flex flex-wrap items-center gap-2">
+              {server.is_default ? (
+                <StatusBadge variant="info" label={t("settings.mcpServers.default")} icon={false} />
+              ) : null}
+              <StatusBadge
+                variant={server.configured ? "success" : "warning"}
+                label={server.configured ? t("common.configured") : t("common.notConfigured")}
+              />
+              <span className="text-xs text-fg-muted">
+                {`${t("settings.mcpServers.auth")}: ${mcpAuthLabel(server.auth_mode)}`}
+              </span>
+            </div>
+          </Section>
+        ) : null}
+        {saveMutation.error ? <Banner severity="danger">{(saveMutation.error as Error).message}</Banner> : null}
+        <Section title={t("mcpServers.connection")} description={t("settings.apiKeyManaged")}>
+          <Card className="min-w-0">
+            <CardContent className="space-y-4 pt-5">
+              <Field label={t("settings.mcpServers.serverId")} htmlFor="mcp-server-id">
+                <input
+                  id="mcp-server-id"
+                  value={form.serverId}
+                  disabled={Boolean(editingId)}
+                  onChange={(event) => setForm({ ...form, serverId: event.target.value })}
+                  className={editingId ? `${INPUT_CLASS} opacity-60` : INPUT_CLASS}
                 />
-              )}
+                <p className="mt-1 text-xs leading-5 text-fg-muted">{t("settings.mcpServers.serverIdHint")}</p>
+              </Field>
+              <Field label={t("settings.mcpServers.label")} htmlFor="mcp-server-label">
+                <input
+                  id="mcp-server-label"
+                  value={form.label}
+                  onChange={(event) => setForm({ ...form, label: event.target.value })}
+                  className={INPUT_CLASS}
+                />
+              </Field>
+              <Field label={t("settings.baseUrl")} htmlFor="mcp-server-base-url">
+                <input
+                  id="mcp-server-base-url"
+                  value={form.baseUrl}
+                  onChange={(event) => setForm({ ...form, baseUrl: event.target.value })}
+                  className={INPUT_CLASS}
+                />
+              </Field>
+              <Field label={t("settings.timeout")} htmlFor="mcp-server-timeout">
+                <input
+                  id="mcp-server-timeout"
+                  type="number"
+                  min="1"
+                  value={form.timeoutSeconds}
+                  onChange={(event) => setForm({ ...form, timeoutSeconds: event.target.value })}
+                  className={INPUT_CLASS}
+                />
+              </Field>
+              <Field label={t("settings.mcpSessionId")} htmlFor="mcp-server-session">
+                <input
+                  id="mcp-server-session"
+                  value={form.sessionId}
+                  autoComplete="off"
+                  onChange={(event) => setForm({ ...form, sessionId: event.target.value })}
+                  className={INPUT_CLASS}
+                />
+              </Field>
             </CardContent>
           </Card>
-
-          {formOpen ? (
-            <Card>
-              <CardHeader>
-                <CardTitle>
-                  {editingId ? t("settings.mcpServers.editTitle") : t("settings.mcpServers.addTitle")}
-                </CardTitle>
-                <CardDescription>{t("settings.apiKeyManaged")}</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <Field label={t("settings.mcpServers.serverId")} htmlFor="mcp-server-id">
-                  <input
-                    id="mcp-server-id"
-                    value={form.serverId}
-                    disabled={Boolean(editingId)}
-                    onChange={(event) => setForm({ ...form, serverId: event.target.value })}
-                    className={editingId ? `${INPUT_CLASS} opacity-60` : INPUT_CLASS}
-                  />
-                  <p className="mt-1 text-xs leading-5 text-fg-muted">
-                    {t("settings.mcpServers.serverIdHint")}
-                  </p>
-                </Field>
-                <Field label={t("settings.mcpServers.label")} htmlFor="mcp-server-label">
-                  <input
-                    id="mcp-server-label"
-                    value={form.label}
-                    onChange={(event) => setForm({ ...form, label: event.target.value })}
-                    className={INPUT_CLASS}
-                  />
-                </Field>
-                <Field label={t("settings.baseUrl")} htmlFor="mcp-server-base-url">
-                  <input
-                    id="mcp-server-base-url"
-                    value={form.baseUrl}
-                    onChange={(event) => setForm({ ...form, baseUrl: event.target.value })}
-                    className={INPUT_CLASS}
-                  />
-                </Field>
-                <Field label={t("settings.timeout")} htmlFor="mcp-server-timeout">
-                  <input
-                    id="mcp-server-timeout"
-                    type="number"
-                    min="1"
-                    value={form.timeoutSeconds}
-                    onChange={(event) => setForm({ ...form, timeoutSeconds: event.target.value })}
-                    className={INPUT_CLASS}
-                  />
-                </Field>
-                <Field label={t("settings.mcpSessionId")} htmlFor="mcp-server-session">
-                  <input
-                    id="mcp-server-session"
-                    value={form.sessionId}
-                    autoComplete="off"
-                    onChange={(event) => setForm({ ...form, sessionId: event.target.value })}
-                    className={INPUT_CLASS}
-                  />
-                </Field>
-                <div className="grid gap-4 md:grid-cols-2">
-                  <Field label={t("settings.mcpServers.oauthTokenUrl")} htmlFor="mcp-server-oauth-token">
-                    <input
-                      id="mcp-server-oauth-token"
-                      value={form.oauthTokenUrl}
-                      onChange={(event) => setForm({ ...form, oauthTokenUrl: event.target.value })}
-                      className={INPUT_CLASS}
-                    />
-                  </Field>
-                  <Field label={t("settings.mcpServers.oauthScope")} htmlFor="mcp-server-oauth-scope">
-                    <input
-                      id="mcp-server-oauth-scope"
-                      value={form.oauthScope}
-                      onChange={(event) => setForm({ ...form, oauthScope: event.target.value })}
-                      className={INPUT_CLASS}
-                    />
-                  </Field>
-                  <Field label={t("settings.mcpServers.oauthClientId")} htmlFor="mcp-server-oauth-client">
-                    <input
-                      id="mcp-server-oauth-client"
-                      value={form.oauthClientId}
-                      autoComplete="off"
-                      onChange={(event) => setForm({ ...form, oauthClientId: event.target.value })}
-                      className={INPUT_CLASS}
-                    />
-                  </Field>
-                  <Field
-                    label={t("settings.mcpServers.oauthClientSecret")}
-                    htmlFor="mcp-server-oauth-secret"
-                  >
-                    <input
-                      id="mcp-server-oauth-secret"
-                      type="password"
-                      value={form.oauthClientSecret}
-                      autoComplete="off"
-                      onChange={(event) => setForm({ ...form, oauthClientSecret: event.target.value })}
-                      className={INPUT_CLASS}
-                    />
-                  </Field>
-                </div>
-                {saveMutation.error ? (
-                  <Banner severity="danger">{(saveMutation.error as Error).message}</Banner>
-                ) : null}
-                <div className="flex gap-2">
-                  <Button onClick={save} loading={saveMutation.isPending} icon={Save}>
-                    {editingId ? t("common.save") : t("common.create")}
-                  </Button>
-                  <Button variant="ghost" onClick={closeForm} icon={X}>
-                    {t("common.cancel")}
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-          ) : null}
-
-          <McpDiscoveryPanel configured={anyConfigured} />
-        </QueryState>
-      </div>
-</PageBody>
+        </Section>
+        <Section title={t("mcpServers.oauth")}>
+          <Card className="min-w-0">
+            <CardContent className="grid gap-4 pt-5 md:grid-cols-2">
+              <Field label={t("settings.mcpServers.oauthTokenUrl")} htmlFor="mcp-server-oauth-token">
+                <input
+                  id="mcp-server-oauth-token"
+                  value={form.oauthTokenUrl}
+                  onChange={(event) => setForm({ ...form, oauthTokenUrl: event.target.value })}
+                  className={INPUT_CLASS}
+                />
+              </Field>
+              <Field label={t("settings.mcpServers.oauthScope")} htmlFor="mcp-server-oauth-scope">
+                <input
+                  id="mcp-server-oauth-scope"
+                  value={form.oauthScope}
+                  onChange={(event) => setForm({ ...form, oauthScope: event.target.value })}
+                  className={INPUT_CLASS}
+                />
+              </Field>
+              <Field label={t("settings.mcpServers.oauthClientId")} htmlFor="mcp-server-oauth-client">
+                <input
+                  id="mcp-server-oauth-client"
+                  value={form.oauthClientId}
+                  autoComplete="off"
+                  onChange={(event) => setForm({ ...form, oauthClientId: event.target.value })}
+                  className={INPUT_CLASS}
+                />
+              </Field>
+              <Field label={t("settings.mcpServers.oauthClientSecret")} htmlFor="mcp-server-oauth-secret">
+                <input
+                  id="mcp-server-oauth-secret"
+                  type="password"
+                  value={form.oauthClientSecret}
+                  autoComplete="off"
+                  onChange={(event) => setForm({ ...form, oauthClientSecret: event.target.value })}
+                  className={INPUT_CLASS}
+                />
+              </Field>
+            </CardContent>
+          </Card>
+        </Section>
+      </PageBody>
     </>
   );
 }
 
 function McpServerTable({
   servers,
-  onEdit,
-  onDelete,
-  onSetDefault,
-  busy,
+  onOpen,
+  actionsFor,
 }: {
   servers: ExternalMcpServerSettings[];
-  onEdit: (server: ExternalMcpServerSettings) => void;
-  onDelete: (server: ExternalMcpServerSettings) => void;
-  onSetDefault: (serverId: string) => void;
-  busy: boolean;
+  onOpen: (server: ExternalMcpServerSettings) => void;
+  actionsFor: (server: ExternalMcpServerSettings) => EntityAction[];
 }) {
-  return (
-    <div className="min-w-0">
-      <div className="hidden overflow-x-auto md:block">
-        <table className="w-full min-w-[760px] border-collapse text-left text-sm">
-          <thead>
-            <tr className="border-b border-border text-xs text-fg-muted">
-              <th className="px-3 py-2 font-medium">{t("settings.mcpServers.serverId")}</th>
-              <th className="px-3 py-2 font-medium">{t("settings.mcpServers.label")}</th>
-              <th className="px-3 py-2 font-medium">{t("settings.baseUrl")}</th>
-              <th className="px-3 py-2 font-medium">{t("settings.mcpServers.auth")}</th>
-              <th className="px-3 py-2 font-medium">{t("settings.mcpServers.actions")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {servers.map((server) => (
-              <tr key={server.server_id} className="border-b border-border/70 last:border-0">
-                <td className="px-3 py-3 align-top">
-                  <div className="flex items-center gap-2">
-                    <span className="font-mono text-xs text-fg">{server.server_id}</span>
-                    {server.is_default ? (
-                      <StatusBadge variant="info" label={t("settings.mcpServers.default")} icon={false} />
-                    ) : null}
-                  </div>
-                </td>
-                <td className="px-3 py-3 align-top text-fg-muted">{server.label || "-"}</td>
-                <td className="max-w-xs break-all px-3 py-3 align-top text-fg-muted">
-                  {server.base_url || "-"}
-                </td>
-                <td className="px-3 py-3 align-top text-fg-muted">{mcpAuthLabel(server.auth_mode)}</td>
-                <td className="px-3 py-3 align-top">
-                  <McpServerActions
-                    server={server}
-                    onEdit={onEdit}
-                    onDelete={onDelete}
-                    onSetDefault={onSetDefault}
-                    busy={busy}
-                  />
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      <div className="grid gap-3 md:hidden">
-        {servers.map((server) => (
-          <div key={server.server_id} className="space-y-2 rounded-md border border-border p-3">
-            <div className="flex items-center justify-between gap-2">
-              <span className="font-mono text-xs text-fg">{server.server_id}</span>
-              {server.is_default ? (
-                <StatusBadge variant="info" label={t("settings.mcpServers.default")} icon={false} />
-              ) : null}
-            </div>
-            <p className="text-sm text-fg-muted">{server.label || "-"}</p>
-            <p className="break-all text-xs text-fg-muted">{server.base_url || "-"}</p>
-            <p className="text-xs text-fg-muted">
-              {t("settings.mcpServers.auth")}: {mcpAuthLabel(server.auth_mode)}
-            </p>
-            <McpServerActions
-              server={server}
-              onEdit={onEdit}
-              onDelete={onDelete}
-              onSetDefault={onSetDefault}
-              busy={busy}
-            />
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
+  const columns: DataTableColumn<ExternalMcpServerSettings>[] = [
+    {
+      key: "server_id",
+      header: t("settings.mcpServers.serverId"),
+      rowHeader: true,
+      render: (server) => (
+        <div className="flex flex-wrap items-center gap-2">
+          <RowTitleButton title={server.server_id} onClick={() => onOpen(server)} />
+          {server.is_default ? (
+            <StatusBadge variant="info" label={t("settings.mcpServers.default")} icon={false} />
+          ) : null}
+        </div>
+      ),
+    },
+    {
+      key: "label",
+      header: t("settings.mcpServers.label"),
+      className: "text-fg-muted",
+      render: (server) => server.label || "-",
+    },
+    {
+      key: "base_url",
+      header: t("settings.baseUrl"),
+      className: "max-w-xs break-all text-fg-muted",
+      render: (server) => server.base_url || "-",
+    },
+    {
+      key: "auth_mode",
+      header: t("settings.mcpServers.auth"),
+      className: "text-fg-muted",
+      render: (server) => mcpAuthLabel(server.auth_mode),
+    },
+    {
+      key: "actions",
+      header: t("settings.mcpServers.actions"),
+      align: "right",
+      render: (server) => (
+        <RowActionMenu
+          actions={actionsFor(server)}
+          ariaLabel={t("common.entityActions", { name: server.server_id })}
+          // 既定の default サーバーは既定化も削除もできない。使える項目の無いメニューは開かせない。
+          disabled={visibleEntityActions(actionsFor(server)).every((action) => action.disabled)}
+          testId={`mcp-server-row-actions-${server.server_id}`}
+        />
+      ),
+    },
+  ];
 
-function McpServerActions({
-  server,
-  onEdit,
-  onDelete,
-  onSetDefault,
-  busy,
-}: {
-  server: ExternalMcpServerSettings;
-  onEdit: (server: ExternalMcpServerSettings) => void;
-  onDelete: (server: ExternalMcpServerSettings) => void;
-  onSetDefault: (serverId: string) => void;
-  busy: boolean;
-}) {
   return (
-    <div className="flex flex-wrap gap-2">
-      {!server.is_default ? (
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={() => onSetDefault(server.server_id)}
-          disabled={busy}
-          aria-label={`${t("settings.mcpServers.setDefault")} ${server.server_id}`} icon={Star}>
-          {t("settings.mcpServers.setDefault")}
-        </Button>
-      ) : null}
-      <Button
-        size="sm"
-        variant="secondary"
-        onClick={() => onEdit(server)}
-        aria-label={`${t("settings.mcpServers.edit")} ${server.server_id}`} icon={Pencil}>
-        {t("settings.mcpServers.edit")}
-      </Button>
-      <Button
-        size="sm"
-        variant="danger"
-        onClick={() => onDelete(server)}
-        disabled={server.server_id === "default" || busy}
-        aria-label={`${t("settings.mcpServers.delete")} ${server.server_id}`} icon={Trash2}>
-        {t("settings.mcpServers.delete")}
-      </Button>
-    </div>
+    <DataTable
+      rows={servers}
+      columns={columns}
+      getRowKey={(server) => server.server_id}
+      onRowClick={onOpen}
+      rowProps={() => ({ className: "align-top" })}
+      tableClassName="w-full min-w-[44rem]"
+      ariaLabel={t("settings.mcpServers.title")}
+      empty={<EmptyState title={t("settings.mcpServers.empty")} />}
+    />
   );
 }
 
@@ -2081,96 +2549,201 @@ function skillSourceVariant(source: string): StatusVariant {
   return source === "builtin" ? "neutral" : "info";
 }
 
+function skillFormOf(skill: AgentSkill | undefined): SkillFormState {
+  if (!skill) return EMPTY_SKILL_FORM;
+  return {
+    id: skill.id,
+    name: skill.name,
+    description: skill.description,
+    instructions: skill.instructions,
+    tags: skill.tags.join(", "),
+    enabled: skill.enabled,
+    mcpRequirementsJson: JSON.stringify(skill.mcp_requirements, null, 2),
+    resourceIdsJson: JSON.stringify(skill.resource_ids, null, 2),
+  };
+}
+
 export function SkillsPage() {
   const queryClient = useQueryClient();
   const confirm = useConfirm();
+  const editor = useEditorRoute();
   const skills = useQuery({ queryKey: ["skills"], queryFn: agentApi.listSkills });
-  const [form, setForm] = useState<SkillFormState>(EMPTY_SKILL_FORM);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [formOpen, setFormOpen] = useState(false);
-  const [detailId, setDetailId] = useState<string | null>(null);
-  const [formError, setFormError] = useState<string | null>(null);
 
   function invalidate() {
-    void queryClient.invalidateQueries({ queryKey: ["skills"] });
+    return queryClient.invalidateQueries({ queryKey: ["skills"] });
   }
-
-  const saveMutation = useMutation({
-    mutationFn: () => {
-      const mcpRequirements = JSON.parse(form.mcpRequirementsJson) as {
-        server_id: string;
-        tool_names: string[];
-      }[];
-      const resourceIds = JSON.parse(form.resourceIdsJson) as string[];
-      const payload = {
-        name: form.name,
-        description: form.description,
-        instructions: form.instructions,
-        tags: form.tags
-          .split(",")
-          .map((tag) => tag.trim())
-          .filter(Boolean),
-        enabled: form.enabled,
-        mcp_requirements: mcpRequirements,
-        resource_ids: resourceIds,
-        tool_calls: [],
-      };
-      if (editingId) {
-        return agentApi.updateSkill(editingId, payload);
-      }
-      return agentApi.createSkill({ id: form.id.trim(), ...payload });
-    },
-    onSuccess: () => {
-      toast.success(editingId ? t("skills.updated") : t("skills.created"));
-      closeForm();
-      invalidate();
-    },
-  });
 
   const deleteMutation = useMutation({
     mutationFn: (skillId: string) => agentApi.deleteSkill(skillId),
     onSuccess: () => {
       toast.success(t("skills.deleted"));
-      invalidate();
+      void invalidate();
     },
+    onError: (error) => toast.error(error.message),
   });
 
   const reloadMutation = useMutation({
     mutationFn: () => agentApi.reloadSkills(),
     onSuccess: () => {
       toast.success(t("skills.reloaded"));
-      invalidate();
+      void invalidate();
     },
   });
 
-  function openCreate() {
-    setEditingId(null);
-    setForm(EMPTY_SKILL_FORM);
-    setFormError(null);
-    setFormOpen(true);
-  }
-
-  function openEdit(skill: AgentSkill) {
-    setEditingId(skill.id);
-    setForm({
-      id: skill.id,
-      name: skill.name,
-      description: skill.description,
-      instructions: skill.instructions,
-      tags: skill.tags.join(", "),
-      enabled: skill.enabled,
-      mcpRequirementsJson: JSON.stringify(skill.mcp_requirements, null, 2),
-      resourceIdsJson: JSON.stringify(skill.resource_ids, null, 2),
+  async function remove(skill: AgentSkill) {
+    const ok = await confirm({
+      title: t("skills.confirmDeleteTitle"),
+      description: t("skills.confirmDeleteMessage", { id: skill.id }),
+      confirmLabel: t("skills.delete"),
+      cancelLabel: t("common.cancel"),
+      tone: "danger",
     });
-    setFormError(null);
-    setFormOpen(true);
+    if (!ok) return;
+    deleteMutation.mutate(skill.id, {
+      // エディタから削除したら、消えた対象へ戻れないよう履歴を置き換えて一覧へ戻る。
+      onSuccess: () => {
+        if (editor.target.kind === "edit") editor.backToList({ replace: true });
+      },
+    });
   }
 
-  function closeForm() {
-    setFormOpen(false);
-    setEditingId(null);
-    setForm(EMPTY_SKILL_FORM);
-    setFormError(null);
+  // 一覧の行と詳細（エディタの概要）で同じ定義を使う。ビルトイン / ファイル / env は読み取り専用。
+  const skillActions = (skill: AgentSkill): EntityAction[] => [
+    {
+      id: "delete",
+      label: t("skills.delete"),
+      icon: Trash2,
+      tone: "danger",
+      visible: skill.source === "runtime",
+      disabled: deleteMutation.isPending,
+      onSelect: () => remove(skill),
+    },
+  ];
+
+  const list = skills.data?.skills ?? [];
+  const { target } = editor;
+
+  if (target.kind === "list") {
+    return (
+      <>
+        <PageHeader
+          wide
+          title={t("skills.title")}
+          subtitle={t("page.skills.subtitle")}
+          actions={[
+            {
+              id: "reload",
+              kind: "utility",
+              label: t("skills.reload"),
+              icon: RefreshCw,
+              loading: reloadMutation.isPending,
+              onClick: () => reloadMutation.mutate(),
+            },
+            { id: "create", kind: "primary", label: t("skills.add"), icon: Plus, onClick: editor.openNew },
+          ]}
+          moreActionsLabel={t("common.moreActions")}
+        />
+        <PageBody wide>
+          <QueryState query={skills}>
+            <Section title={t("skills.list")} description={t("skills.description")}>
+              <SkillTable
+                skills={list}
+                onOpen={(skill) => editor.openItem(skill.id)}
+                actionsFor={skillActions}
+              />
+            </Section>
+          </QueryState>
+        </PageBody>
+      </>
+    );
+  }
+
+  const skill = target.kind === "edit" ? list.find((candidate) => candidate.id === target.id) : undefined;
+  if (target.kind === "edit" && !skill) {
+    return (
+      <>
+        <PageHeader
+          wide
+          title={t("skills.title")}
+          breadcrumbs={<EditorBreadcrumbs listLabel={t("skills.title")} listHref={APP_ROUTES.skills} current={target.id} />}
+        />
+        <PageBody wide>
+          <QueryState query={skills}>
+            <MissingEditorTarget id={target.id} onBack={() => editor.backToList()} />
+          </QueryState>
+        </PageBody>
+      </>
+    );
+  }
+
+  return (
+    <SkillEditor
+      key={skill?.id ?? "new"}
+      skill={skill}
+      actions={skill ? skillActions(skill) : []}
+      onBack={() => editor.backToList()}
+      onSaved={async (skillId) => {
+        await invalidate();
+        editor.openItem(skillId, { replace: true });
+      }}
+    />
+  );
+}
+
+/**
+ * Skill の全画面エディタ（A 型。`?id=new` / `?id=<skill id>`）。
+ * 実行時に追加した Skill だけを編集でき、ビルトイン / ファイル / env の Skill は読み取り専用の詳細を出す。
+ */
+function SkillEditor({
+  skill,
+  actions,
+  onBack,
+  onSaved,
+}: {
+  skill?: AgentSkill;
+  actions: EntityAction[];
+  onBack: () => void;
+  onSaved: (skillId: string) => Promise<void>;
+}) {
+  const [form, setForm] = useState<SkillFormState>(() => skillFormOf(skill));
+  const [formBaseline, setFormBaseline] = useState<SkillFormState>(() => skillFormOf(skill));
+  const [formError, setFormError] = useState<string | null>(null);
+  const editingId = skill?.id ?? null;
+  const editable = !skill || skill.source === "runtime";
+
+  // 送る内容は mutate の引数で渡す（クリック直前の入力を closure の古い state で送らない）。
+  const saveMutation = useMutation({
+    mutationFn: (current: SkillFormState) => {
+      const payload = {
+        name: current.name,
+        description: current.description,
+        instructions: current.instructions,
+        tags: current.tags
+          .split(",")
+          .map((tag) => tag.trim())
+          .filter(Boolean),
+        enabled: current.enabled,
+        mcp_requirements: JSON.parse(current.mcpRequirementsJson) as { server_id: string; tool_names: string[] }[],
+        resource_ids: JSON.parse(current.resourceIdsJson) as string[],
+        tool_calls: [],
+      };
+      if (editingId) {
+        return agentApi.updateSkill(editingId, payload);
+      }
+      return agentApi.createSkill({ id: current.id.trim(), ...payload });
+    },
+    onSuccess: async (saved, current) => {
+      toast.success(editingId ? t("skills.updated") : t("skills.created"));
+      setFormBaseline(current);
+      await onSaved(saved.id);
+    },
+  });
+
+  const formDirty = editable && !sameDraft(form, formBaseline);
+  const { confirmClose } = useEditorLeaveGuard(formDirty, saveMutation.isPending);
+
+  async function back() {
+    if (await confirmClose()) onBack();
   }
 
   function save() {
@@ -2183,424 +2756,425 @@ export function SkillsPage() {
       setFormError(t("skills.nameRequired"));
       return;
     }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(form.mcpRequirementsJson);
-    } catch {
-      setFormError(t("skills.invalidJson"));
-      return;
+    for (const json of [form.mcpRequirementsJson, form.resourceIdsJson]) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(json);
+      } catch {
+        setFormError(t("skills.invalidJson"));
+        return;
+      }
+      if (!Array.isArray(parsed)) {
+        setFormError(t("skills.invalidJson"));
+        return;
+      }
     }
-    if (!Array.isArray(parsed)) {
-      setFormError(t("skills.invalidJson"));
-      return;
-    }
-    try {
-      parsed = JSON.parse(form.resourceIdsJson);
-    } catch {
-      setFormError(t("skills.invalidJson"));
-      return;
-    }
-    if (!Array.isArray(parsed)) {
-      setFormError(t("skills.invalidJson"));
-      return;
-    }
-    saveMutation.mutate();
+    saveMutation.mutate(form);
   }
 
-  async function remove(skill: AgentSkill) {
-    const ok = await confirm({
-      title: t("skills.confirmDeleteTitle"),
-      description: t("skills.confirmDeleteMessage", { id: skill.id }),
-      confirmLabel: t("skills.delete"),
-      cancelLabel: t("common.cancel"),
-      tone: "danger",
+  const title = skill ? skill.name : t("skills.addTitle");
+  const headerActions: PageHeaderAction[] = [
+    { id: "back", kind: "secondary", label: t("common.backToList"), icon: ArrowLeft, onClick: () => void back() },
+  ];
+  if (editable) {
+    headerActions.push({
+      id: "save",
+      kind: "primary",
+      label: editingId ? t("common.save") : t("common.create"),
+      icon: Save,
+      loading: saveMutation.isPending,
+      onClick: save,
     });
-    if (ok) {
-      deleteMutation.mutate(skill.id);
-    }
   }
-
-  const list = skills.data?.skills ?? [];
-  const detail = detailId ? (list.find((skill) => skill.id === detailId) ?? null) : null;
 
   return (
     <>
-      <PageHeader wide title={t("skills.title")} subtitle={t("page.skills.subtitle")} />
-      <PageBody wide>
-<div className="space-y-5">
-        <QueryState query={skills}>
-          <Card>
-            <CardHeader className="gap-3 sm:flex-row sm:items-start sm:justify-between">
-              <div className="min-w-0 space-y-1">
-                <CardTitle>{t("skills.title")}</CardTitle>
-                <CardDescription>{t("skills.description")}</CardDescription>
-              </div>
-              <div className="flex shrink-0 flex-wrap gap-2">
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  onClick={() => reloadMutation.mutate()}
-                  loading={reloadMutation.isPending} icon={RefreshCw}>
-                  {t("skills.reload")}
-                </Button>
-                <Button size="sm" onClick={openCreate} icon={Plus}>
-                  {t("skills.add")}
-                </Button>
-              </div>
-            </CardHeader>
-            <CardContent>
-              {list.length === 0 ? (
-                <EmptyState title={t("skills.empty")} />
-              ) : (
-                <SkillTable
-                  skills={list}
-                  onEdit={openEdit}
-                  onDelete={remove}
-                  onDetail={(id) => setDetailId((current) => (current === id ? null : id))}
-                  busy={deleteMutation.isPending}
-                />
-              )}
-            </CardContent>
-          </Card>
-
-          {detail ? <SkillDetailCard skill={detail} onClose={() => setDetailId(null)} /> : null}
-
-          {formOpen ? (
-            <Card>
-              <CardHeader>
-                <CardTitle>{editingId ? t("skills.editTitle") : t("skills.addTitle")}</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <Field label={t("skills.id")} htmlFor="skill-id">
-                  <input
-                    id="skill-id"
-                    value={form.id}
-                    disabled={Boolean(editingId)}
-                    onChange={(event) => setForm({ ...form, id: event.target.value })}
-                    className={editingId ? `${INPUT_CLASS} opacity-60` : INPUT_CLASS}
-                  />
-                </Field>
-                <Field label={t("skills.name")} htmlFor="skill-name">
-                  <input
-                    id="skill-name"
-                    value={form.name}
-                    onChange={(event) => setForm({ ...form, name: event.target.value })}
-                    className={INPUT_CLASS}
-                  />
-                </Field>
-                <Field label={t("agent.description")} htmlFor="skill-description">
-                  <input
-                    id="skill-description"
-                    value={form.description}
-                    onChange={(event) => setForm({ ...form, description: event.target.value })}
-                    className={INPUT_CLASS}
-                  />
-                </Field>
-                <Field label={t("skills.instructions")} htmlFor="skill-instructions">
-                  <textarea
-                    id="skill-instructions"
-                    value={form.instructions}
-                    rows={3}
-                    onChange={(event) => setForm({ ...form, instructions: event.target.value })}
-                    className={TEXTAREA_CLASS}
-                  />
-                </Field>
-                <Field label={t("skills.tags")} htmlFor="skill-tags">
-                  <input
-                    id="skill-tags"
-                    value={form.tags}
-                    onChange={(event) => setForm({ ...form, tags: event.target.value })}
-                    className={INPUT_CLASS}
-                  />
-                  <p className="mt-1 text-xs leading-5 text-fg-muted">{t("skills.tagsHint")}</p>
-                </Field>
-                <Field label={t("skills.mcpRequirements")} htmlFor="skill-mcp-requirements">
-                  <textarea
-                    id="skill-mcp-requirements"
-                    value={form.mcpRequirementsJson}
-                    rows={8}
-                    spellCheck={false}
-                    onChange={(event) =>
-                      setForm({ ...form, mcpRequirementsJson: event.target.value })
-                    }
-                    className={`${TEXTAREA_CLASS} font-mono`}
-                  />
-                  <p className="mt-1 text-xs leading-5 text-fg-muted">
-                    {t("skills.mcpRequirementsHint")}
-                  </p>
-                </Field>
-                <Field label={t("skills.resourceIds")} htmlFor="skill-resource-ids">
-                  <textarea
-                    id="skill-resource-ids"
-                    value={form.resourceIdsJson}
-                    rows={4}
-                    spellCheck={false}
-                    onChange={(event) => setForm({ ...form, resourceIdsJson: event.target.value })}
-                    className={`${TEXTAREA_CLASS} font-mono`}
-                  />
-                </Field>
-                <label className="flex items-center gap-2 text-sm text-fg">
-                  <Switch
-                    checked={form.enabled}
-                    aria-label={t("skills.enabledLabel")}
-                    onCheckedChange={(checked) => setForm({ ...form, enabled: checked })}
-                  />
-                  {t("skills.enabledLabel")}
-                </label>
-                {formError ? <Banner severity="danger">{formError}</Banner> : null}
-                {saveMutation.error ? (
-                  <Banner severity="danger">{(saveMutation.error as Error).message}</Banner>
-                ) : null}
-                <div className="flex gap-2">
-                  <Button onClick={save} loading={saveMutation.isPending} icon={Save}>
-                    {editingId ? t("common.save") : t("common.create")}
-                  </Button>
-                  <Button variant="ghost" onClick={closeForm} icon={X}>
-                    {t("common.cancel")}
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-          ) : null}
-        </QueryState>
-      </div>
-</PageBody>
+      <PageHeader
+        wide
+        title={title}
+        subtitle={skill ? skill.id : t("page.skills.subtitle")}
+        breadcrumbs={<EditorBreadcrumbs listLabel={t("skills.title")} listHref={APP_ROUTES.skills} current={title} />}
+        actions={headerActions}
+        moreActionsLabel={t("common.moreActions")}
+      />
+      <PageBody wide className="space-y-6">
+        {skill ? (
+          <Section
+            title={t("editor.overview")}
+            description={skill.description || undefined}
+            actions={
+              <ObjectActionBar
+                actions={actions}
+                ariaLabel={t("common.entityActions", { name: skill.name })}
+                moreLabel={t("common.moreActions")}
+                testId="skill-object-actions"
+              />
+            }
+          >
+            <div className="flex flex-wrap items-center gap-2">
+              <StatusBadge variant={skillSourceVariant(skill.source)} label={skillSourceLabel(skill.source)} icon={false} />
+              <StatusBadge
+                variant={skill.enabled ? "success" : "neutral"}
+                label={skill.enabled ? t("agent.enabled") : t("agent.disabled")}
+              />
+            </div>
+            {!editable ? <Banner severity="info">{t("skills.readOnly")}</Banner> : null}
+          </Section>
+        ) : null}
+        {skill && !editable ? (
+          <SkillReadOnlyDetail skill={skill} />
+        ) : (
+          <>
+            {formError ? <Banner severity="danger">{formError}</Banner> : null}
+            {saveMutation.error ? <Banner severity="danger">{(saveMutation.error as Error).message}</Banner> : null}
+            <Section title={t("skills.basic")}>
+              <Card className="min-w-0">
+                <CardContent className="space-y-4 pt-5">
+                  <Field label={t("skills.id")} htmlFor="skill-id">
+                    <input
+                      id="skill-id"
+                      value={form.id}
+                      disabled={Boolean(editingId)}
+                      onChange={(event) => setForm({ ...form, id: event.target.value })}
+                      className={editingId ? `${INPUT_CLASS} opacity-60` : INPUT_CLASS}
+                    />
+                  </Field>
+                  <Field label={t("skills.name")} htmlFor="skill-name">
+                    <input
+                      id="skill-name"
+                      value={form.name}
+                      onChange={(event) => setForm({ ...form, name: event.target.value })}
+                      className={INPUT_CLASS}
+                    />
+                  </Field>
+                  <Field label={t("agent.description")} htmlFor="skill-description">
+                    <input
+                      id="skill-description"
+                      value={form.description}
+                      onChange={(event) => setForm({ ...form, description: event.target.value })}
+                      className={INPUT_CLASS}
+                    />
+                  </Field>
+                  <Field label={t("skills.instructions")} htmlFor="skill-instructions">
+                    <textarea
+                      id="skill-instructions"
+                      value={form.instructions}
+                      rows={3}
+                      onChange={(event) => setForm({ ...form, instructions: event.target.value })}
+                      className={TEXTAREA_CLASS}
+                    />
+                  </Field>
+                  <Field label={t("skills.tags")} htmlFor="skill-tags">
+                    <input
+                      id="skill-tags"
+                      value={form.tags}
+                      onChange={(event) => setForm({ ...form, tags: event.target.value })}
+                      className={INPUT_CLASS}
+                    />
+                    <p className="mt-1 text-xs leading-5 text-fg-muted">{t("skills.tagsHint")}</p>
+                  </Field>
+                  <label className="flex items-center gap-2 text-sm text-fg">
+                    <Switch
+                      checked={form.enabled}
+                      aria-label={t("skills.enabledLabel")}
+                      onCheckedChange={(checked) => setForm({ ...form, enabled: checked })}
+                    />
+                    {t("skills.enabledLabel")}
+                  </label>
+                </CardContent>
+              </Card>
+            </Section>
+            <Section title={t("skills.dependencies")}>
+              <Card className="min-w-0">
+                <CardContent className="space-y-4 pt-5">
+                  <Field label={t("skills.mcpRequirements")} htmlFor="skill-mcp-requirements">
+                    <textarea
+                      id="skill-mcp-requirements"
+                      value={form.mcpRequirementsJson}
+                      rows={8}
+                      spellCheck={false}
+                      onChange={(event) => setForm({ ...form, mcpRequirementsJson: event.target.value })}
+                      className={`${TEXTAREA_CLASS} font-mono`}
+                    />
+                    <p className="mt-1 text-xs leading-5 text-fg-muted">{t("skills.mcpRequirementsHint")}</p>
+                  </Field>
+                  <Field label={t("skills.resourceIds")} htmlFor="skill-resource-ids">
+                    <textarea
+                      id="skill-resource-ids"
+                      value={form.resourceIdsJson}
+                      rows={4}
+                      spellCheck={false}
+                      onChange={(event) => setForm({ ...form, resourceIdsJson: event.target.value })}
+                      className={`${TEXTAREA_CLASS} font-mono`}
+                    />
+                  </Field>
+                </CardContent>
+              </Card>
+            </Section>
+          </>
+        )}
+      </PageBody>
     </>
   );
 }
 
 function SkillTable({
   skills,
-  onEdit,
-  onDelete,
-  onDetail,
-  busy,
+  onOpen,
+  actionsFor,
 }: {
   skills: AgentSkill[];
-  onEdit: (skill: AgentSkill) => void;
-  onDelete: (skill: AgentSkill) => void;
-  onDetail: (skillId: string) => void;
-  busy: boolean;
+  onOpen: (skill: AgentSkill) => void;
+  actionsFor: (skill: AgentSkill) => EntityAction[];
 }) {
+  const columns: DataTableColumn<AgentSkill>[] = [
+    {
+      key: "name",
+      header: t("skills.skill"),
+      rowHeader: true,
+      render: (skill) => <RowTitleButton title={skill.name} subtitle={skill.id} onClick={() => onOpen(skill)} />,
+    },
+    {
+      key: "source",
+      header: t("skills.source"),
+      render: (skill) => (
+        <StatusBadge variant={skillSourceVariant(skill.source)} label={skillSourceLabel(skill.source)} icon={false} />
+      ),
+    },
+    {
+      key: "enabled",
+      header: t("common.status"),
+      render: (skill) => (
+        <StatusBadge
+          variant={skill.enabled ? "success" : "neutral"}
+          label={skill.enabled ? t("agent.enabled") : t("agent.disabled")}
+        />
+      ),
+    },
+    {
+      key: "tags",
+      header: t("skills.tags"),
+      className: "text-xs text-fg-muted",
+      render: (skill) => (skill.tags.length ? skill.tags.join(", ") : "-"),
+    },
+    {
+      key: "actions",
+      header: t("settings.mcpServers.actions"),
+      align: "right",
+      render: (skill) => (
+        <RowActionMenu
+          actions={actionsFor(skill)}
+          ariaLabel={t("common.entityActions", { name: skill.name })}
+          testId={`skill-row-actions-${skill.id}`}
+        />
+      ),
+    },
+  ];
+
   return (
-    <div className="min-w-0">
-      <div className="hidden overflow-x-auto md:block">
-        <table className="w-full min-w-[760px] border-collapse text-left text-sm">
-          <thead>
-            <tr className="border-b border-border text-xs text-fg-muted">
-              <th className="px-3 py-2 font-medium">{t("skills.skill")}</th>
-              <th className="px-3 py-2 font-medium">{t("skills.source")}</th>
-              <th className="px-3 py-2 font-medium">{t("common.status")}</th>
-              <th className="px-3 py-2 font-medium">{t("skills.tags")}</th>
-              <th className="px-3 py-2 font-medium">{t("settings.mcpServers.actions")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {skills.map((skill) => (
-              <tr key={skill.id} className="border-b border-border/70 last:border-0">
-                <td className="px-3 py-3 align-top">
-                  <p className="text-sm font-medium text-fg">{skill.name}</p>
-                  <p className="font-mono text-xs text-fg-muted">{skill.id}</p>
-                </td>
-                <td className="px-3 py-3 align-top">
-                  <StatusBadge
-                    variant={skillSourceVariant(skill.source)}
-                    label={skillSourceLabel(skill.source)}
-                    icon={false}
-                  />
-                </td>
-                <td className="px-3 py-3 align-top">
-                  <StatusBadge
-                    variant={skill.enabled ? "success" : "neutral"}
-                    label={skill.enabled ? t("agent.enabled") : t("agent.disabled")}
-                  />
-                </td>
-                <td className="px-3 py-3 align-top text-xs text-fg-muted">
-                  {skill.tags.length ? skill.tags.join(", ") : "-"}
-                </td>
-                <td className="px-3 py-3 align-top">
-                  <SkillActions
-                    skill={skill}
-                    onEdit={onEdit}
-                    onDelete={onDelete}
-                    onDetail={onDetail}
-                    busy={busy}
-                  />
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      <div className="grid gap-3 md:hidden">
-        {skills.map((skill) => (
-          <div key={skill.id} className="space-y-2 rounded-md border border-border p-3">
-            <div className="flex items-start justify-between gap-2">
-              <div className="min-w-0">
-                <p className="text-sm font-medium text-fg [overflow-wrap:anywhere]">{skill.name}</p>
-                <p className="break-all font-mono text-xs text-fg-muted">{skill.id}</p>
-              </div>
-              <StatusBadge
-                variant={skillSourceVariant(skill.source)}
-                label={skillSourceLabel(skill.source)}
-                icon={false}
-                className="shrink-0"
-              />
-            </div>
-            <div className="flex items-center gap-2">
-              <StatusBadge
-                variant={skill.enabled ? "success" : "neutral"}
-                label={skill.enabled ? t("agent.enabled") : t("agent.disabled")}
-              />
-              <span className="text-xs text-fg-muted">
-                {skill.tags.length ? skill.tags.join(", ") : "-"}
-              </span>
-            </div>
-            <SkillActions
-              skill={skill}
-              onEdit={onEdit}
-              onDelete={onDelete}
-              onDetail={onDetail}
-              busy={busy}
-            />
-          </div>
-        ))}
-      </div>
-    </div>
+    <DataTable
+      rows={skills}
+      columns={columns}
+      getRowKey={(skill) => skill.id}
+      onRowClick={onOpen}
+      rowProps={(skill) => ({ className: "align-top", "data-testid": `skill-row-${skill.id}` })}
+      tableClassName="w-full min-w-[44rem]"
+      ariaLabel={t("skills.list")}
+      empty={<EmptyState title={t("skills.empty")} />}
+    />
   );
 }
 
-function SkillActions({
-  skill,
-  onEdit,
-  onDelete,
-  onDetail,
-  busy,
-}: {
-  skill: AgentSkill;
-  onEdit: (skill: AgentSkill) => void;
-  onDelete: (skill: AgentSkill) => void;
-  onDetail: (skillId: string) => void;
-  busy: boolean;
-}) {
-  const editable = skill.source === "runtime";
+function SkillReadOnlyDetail({ skill }: { skill: AgentSkill }) {
   return (
-    <div className="flex flex-wrap gap-2">
-      <Button
-        size="sm"
-        variant="ghost"
-        onClick={() => onDetail(skill.id)}
-        aria-label={`${t("skills.detail")} ${skill.id}`} icon={FileText}>
-        {t("skills.detail")}
-      </Button>
-      {editable ? (
-        <>
-          <Button
-            size="sm"
-            variant="secondary"
-            onClick={() => onEdit(skill)}
-            aria-label={`${t("skills.edit")} ${skill.id}`} icon={Pencil}>
-            {t("skills.edit")}
-          </Button>
-          <Button
-            size="sm"
-            variant="danger"
-            onClick={() => onDelete(skill)}
-            disabled={busy}
-            aria-label={`${t("skills.delete")} ${skill.id}`} icon={Trash2}>
-            {t("skills.delete")}
-          </Button>
-        </>
-      ) : null}
-    </div>
-  );
-}
-
-function SkillDetailCard({ skill, onClose }: { skill: AgentSkill; onClose: () => void }) {
-  return (
-    <Card>
-      <CardHeader className="flex flex-row items-start justify-between gap-3">
-        <div className="space-y-1">
-          <CardTitle>{skill.name}</CardTitle>
-          <CardDescription>{skill.description || skill.id}</CardDescription>
-        </div>
-        <Button size="sm" variant="ghost" onClick={onClose} aria-label={t("common.cancel")} icon={X}>
-          </Button>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="flex flex-wrap items-center gap-2">
-          <StatusBadge
-            variant={skillSourceVariant(skill.source)}
-            label={skillSourceLabel(skill.source)}
-            icon={false}
-          />
-          <StatusBadge
-            variant={skill.enabled ? "success" : "neutral"}
-            label={skill.enabled ? t("agent.enabled") : t("agent.disabled")}
-          />
-        </div>
-        {skill.source !== "runtime" ? (
-          <Banner severity="info">{t("skills.readOnly")}</Banner>
-        ) : null}
-        {skill.instructions ? (
-          <div>
-            <p className="mb-1 text-xs font-medium text-fg-muted">{t("skills.instructions")}</p>
-            <p className="whitespace-pre-wrap text-sm leading-6 text-fg">
-              {skill.instructions}
-            </p>
-          </div>
-        ) : null}
-        <JsonPanel title={t("skills.mcpRequirements")} value={skill.mcp_requirements} />
-        <JsonPanel title={t("skills.resourceIds")} value={skill.resource_ids} />
-      </CardContent>
-    </Card>
+    <>
+      <Section title={t("skills.instructions")}>
+        <Card className="min-w-0">
+          <CardContent className="space-y-3 pt-5">
+            <p className="whitespace-pre-wrap text-sm leading-6 text-fg">{skill.instructions || "-"}</p>
+            <p className="text-xs text-fg-muted">{`${t("skills.tags")}: ${skill.tags.length ? skill.tags.join(", ") : "-"}`}</p>
+          </CardContent>
+        </Card>
+      </Section>
+      <Section title={t("skills.dependencies")}>
+        <Card className="min-w-0">
+          <CardContent className="grid min-w-0 gap-4 pt-5 md:grid-cols-2">
+            <JsonPanel title={t("skills.mcpRequirements")} value={skill.mcp_requirements} />
+            <JsonPanel title={t("skills.resourceIds")} value={skill.resource_ids} />
+          </CardContent>
+        </Card>
+      </Section>
+    </>
   );
 }
 
 export function PluginsPage() {
   const queryClient = useQueryClient();
   const confirm = useConfirm();
+  const editor = useEditorRoute();
   const plugins = useQuery({ queryKey: ["plugins"], queryFn: agentApi.listPlugins });
-  const [manifestJson, setManifestJson] = useState("");
-  const [formOpen, setFormOpen] = useState(false);
-  const [formError, setFormError] = useState<string | null>(null);
 
   function invalidate() {
-    void queryClient.invalidateQueries({ queryKey: ["plugins"] });
-    void queryClient.invalidateQueries({ queryKey: ["skills"] });
-    void queryClient.invalidateQueries({ queryKey: ["mcp-servers"] });
-    void queryClient.invalidateQueries({ queryKey: ["agents"] });
+    return Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["plugins"] }),
+      queryClient.invalidateQueries({ queryKey: ["plugin"] }),
+      queryClient.invalidateQueries({ queryKey: ["skills"] }),
+      queryClient.invalidateQueries({ queryKey: ["mcp-servers"] }),
+      queryClient.invalidateQueries({ queryKey: ["agents"] }),
+    ]);
   }
 
-  const installMutation = useMutation({
-    mutationFn: () =>
-      agentApi.installPlugin({ manifest: JSON.parse(manifestJson) as PluginManifest }),
-    onSuccess: () => {
-      toast.success(t("plugins.installed"));
-      setFormOpen(false);
-      setManifestJson("");
-      invalidate();
-    },
-  });
   const enabledMutation = useMutation({
-    mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) =>
-      agentApi.setPluginEnabled(id, enabled),
+    mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) => agentApi.setPluginEnabled(id, enabled),
     onSuccess: () => {
       toast.success(t("plugins.enabledUpdated"));
-      invalidate();
+      void invalidate();
     },
+    onError: (error) => toast.error(error.message),
   });
   const uninstallMutation = useMutation({
     mutationFn: (id: string) => agentApi.uninstallPlugin(id),
     onSuccess: () => {
       toast.success(t("plugins.uninstalled"));
-      invalidate();
+      void invalidate();
     },
+    onError: (error) => toast.error(error.message),
   });
   const reloadMutation = useMutation({
     mutationFn: () => agentApi.reloadPlugins(),
-    onSuccess: invalidate,
+    onSuccess: () => void invalidate(),
   });
+
+  async function uninstall(plugin: PluginSummary) {
+    const ok = await confirm({
+      title: t("plugins.confirmUninstallTitle"),
+      description: t("plugins.confirmUninstallMessage", { id: plugin.id }),
+      confirmLabel: t("plugins.uninstall"),
+      cancelLabel: t("common.cancel"),
+      tone: "danger",
+    });
+    if (!ok) return;
+    uninstallMutation.mutate(plugin.id, {
+      onSuccess: () => {
+        if (editor.target.kind === "edit") editor.backToList({ replace: true });
+      },
+    });
+  }
+
+  const busy = uninstallMutation.isPending || enabledMutation.isPending;
+  // 一覧の行と詳細で同じ定義を使う（UX 契約 buttons.md §5.1）。
+  const pluginActions = (plugin: PluginSummary): EntityAction[] => [
+    {
+      id: "toggle-enabled",
+      label: plugin.enabled ? t("plugins.disable") : t("plugins.enable"),
+      icon: plugin.enabled ? PowerOff : Power,
+      disabled: busy,
+      onSelect: () => enabledMutation.mutate({ id: plugin.id, enabled: !plugin.enabled }),
+    },
+    {
+      id: "uninstall",
+      label: t("plugins.uninstall"),
+      icon: Trash2,
+      tone: "danger",
+      disabled: busy,
+      onSelect: () => uninstall(plugin),
+    },
+  ];
+
+  const list = plugins.data?.plugins ?? [];
+  const { target } = editor;
+
+  if (target.kind === "list") {
+    return (
+      <>
+        <PageHeader
+          wide
+          title={t("plugins.title")}
+          subtitle={t("page.plugins.subtitle")}
+          actions={[
+            {
+              id: "reload",
+              kind: "utility",
+              label: t("skills.reload"),
+              icon: RefreshCw,
+              loading: reloadMutation.isPending,
+              onClick: () => reloadMutation.mutate(),
+            },
+            { id: "install", kind: "primary", label: t("plugins.install"), icon: Plus, onClick: editor.openNew },
+          ]}
+          moreActionsLabel={t("common.moreActions")}
+        />
+        <PageBody wide>
+          <QueryState query={plugins}>
+            <Section title={t("plugins.title")} description={t("plugins.description")}>
+              <PluginTable
+                plugins={list}
+                onOpen={(plugin) => editor.openItem(plugin.id)}
+                actionsFor={pluginActions}
+              />
+            </Section>
+          </QueryState>
+        </PageBody>
+      </>
+    );
+  }
+
+  if (target.kind === "new") {
+    return (
+      <PluginInstallEditor
+        onBack={() => editor.backToList()}
+        onInstalled={async (pluginId) => {
+          await invalidate();
+          editor.openItem(pluginId, { replace: true });
+        }}
+      />
+    );
+  }
+
+  const plugin = list.find((candidate) => candidate.id === target.id);
+  if (!plugin) {
+    return (
+      <>
+        <PageHeader
+          wide
+          title={t("plugins.title")}
+          breadcrumbs={<EditorBreadcrumbs listLabel={t("plugins.title")} listHref={APP_ROUTES.plugins} current={target.id} />}
+        />
+        <PageBody wide>
+          <QueryState query={plugins}>
+            <MissingEditorTarget id={target.id} onBack={() => editor.backToList()} />
+          </QueryState>
+        </PageBody>
+      </>
+    );
+  }
+
+  return <PluginDetail plugin={plugin} actions={pluginActions(plugin)} onBack={() => editor.backToList()} />;
+}
+
+/** manifest から install する全画面エディタ（`?id=new`）。入力中の manifest を未保存の変更として守る（#87）。 */
+function PluginInstallEditor({
+  onBack,
+  onInstalled,
+}: {
+  onBack: () => void;
+  onInstalled: (pluginId: string) => Promise<void>;
+}) {
+  const [manifestJson, setManifestJson] = useState("");
+  const [formError, setFormError] = useState<string | null>(null);
+  const installMutation = useMutation({
+    mutationFn: (manifest: PluginManifest) => agentApi.installPlugin({ manifest }),
+    onSuccess: async (record) => {
+      toast.success(t("plugins.installed"));
+      setManifestJson("");
+      await onInstalled(record.id);
+    },
+  });
+  const { confirmClose } = useEditorLeaveGuard(manifestJson.trim() !== "", installMutation.isPending);
+
+  async function back() {
+    if (await confirmClose()) onBack();
+  }
 
   function install() {
     setFormError(null);
@@ -2615,109 +3189,134 @@ export function PluginsPage() {
       setFormError(t("plugins.invalidJson"));
       return;
     }
-    installMutation.mutate();
+    installMutation.mutate(parsed as PluginManifest);
   }
 
-  async function uninstall(plugin: PluginSummary) {
-    const ok = await confirm({
-      title: t("plugins.confirmUninstallTitle"),
-      description: t("plugins.confirmUninstallMessage", { id: plugin.id }),
-      confirmLabel: t("plugins.uninstall"),
-      cancelLabel: t("common.cancel"),
-      tone: "danger",
-    });
-    if (ok) {
-      uninstallMutation.mutate(plugin.id);
-    }
-  }
+  const title = t("plugins.installTitle");
+  return (
+    <>
+      <PageHeader
+        wide
+        title={title}
+        subtitle={t("page.plugins.subtitle")}
+        breadcrumbs={<EditorBreadcrumbs listLabel={t("plugins.title")} listHref={APP_ROUTES.plugins} current={title} />}
+        actions={[
+          { id: "back", kind: "secondary", label: t("common.backToList"), icon: ArrowLeft, onClick: () => void back() },
+          {
+            id: "install",
+            kind: "primary",
+            label: t("plugins.installSubmit"),
+            icon: Download,
+            loading: installMutation.isPending,
+            onClick: install,
+          },
+        ]}
+        moreActionsLabel={t("common.moreActions")}
+      />
+      <PageBody wide className="space-y-6">
+        {formError ? <Banner severity="danger">{formError}</Banner> : null}
+        {installMutation.error ? <Banner severity="danger">{(installMutation.error as Error).message}</Banner> : null}
+        <Section title={t("plugins.manifest")} description={t("plugins.manifestHint")}>
+          <Card className="min-w-0">
+            <CardContent className="pt-5">
+              <Field label={t("plugins.manifest")} htmlFor="plugin-manifest">
+                <textarea
+                  id="plugin-manifest"
+                  value={manifestJson}
+                  rows={16}
+                  spellCheck={false}
+                  onChange={(event) => setManifestJson(event.target.value)}
+                  className={`${TEXTAREA_CLASS} font-mono`}
+                />
+              </Field>
+            </CardContent>
+          </Card>
+        </Section>
+      </PageBody>
+    </>
+  );
+}
 
-  const list = plugins.data?.plugins ?? [];
-  const busy = uninstallMutation.isPending || enabledMutation.isPending;
+/** インストール済み連携の詳細（`?id=<plugin id>`）。manifest は変更できないため閲覧と対象の操作だけを出す。 */
+function PluginDetail({
+  plugin,
+  actions,
+  onBack,
+}: {
+  plugin: PluginSummary;
+  actions: EntityAction[];
+  onBack: () => void;
+}) {
+  const record = useQuery({
+    queryKey: ["plugin", plugin.id],
+    queryFn: () => agentApi.getPlugin(plugin.id),
+  });
+  const manifest = record.data?.manifest;
 
   return (
     <>
-      <PageHeader wide title={t("plugins.title")} subtitle={t("page.plugins.subtitle")} />
-      <PageBody wide>
-<div className="space-y-5">
-        <QueryState query={plugins}>
-          <Card>
-            <CardHeader className="gap-3 sm:flex-row sm:items-start sm:justify-between">
-              <div className="min-w-0 space-y-1">
-                <CardTitle>{t("plugins.title")}</CardTitle>
-                <CardDescription>{t("plugins.description")}</CardDescription>
-              </div>
-              <div className="flex shrink-0 flex-wrap gap-2">
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  onClick={() => reloadMutation.mutate()}
-                  loading={reloadMutation.isPending} icon={RefreshCw}>
-                  {t("skills.reload")}
-                </Button>
-                <Button
-                  size="sm"
-                  onClick={() => {
-                    setFormOpen(true);
-                    setFormError(null);
-                  }} icon={Plus}>
-                  {t("plugins.install")}
-                </Button>
-              </div>
-            </CardHeader>
-            <CardContent>
-              {list.length === 0 ? (
-                <EmptyState title={t("plugins.empty")} />
-              ) : (
-                <PluginTable
-                  plugins={list}
-                  onToggle={(id, enabled) => enabledMutation.mutate({ id, enabled })}
-                  onUninstall={uninstall}
-                  busy={busy}
-                />
-              )}
-            </CardContent>
-          </Card>
-
-          {formOpen ? (
-            <Card>
-              <CardHeader>
-                <CardTitle>{t("plugins.installTitle")}</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <Field label={t("plugins.manifest")} htmlFor="plugin-manifest">
-                  <textarea
-                    id="plugin-manifest"
-                    value={manifestJson}
-                    rows={12}
-                    spellCheck={false}
-                    onChange={(event) => setManifestJson(event.target.value)}
-                    className={`${TEXTAREA_CLASS} font-mono`}
+      <PageHeader
+        wide
+        title={plugin.name}
+        subtitle={`${plugin.id} · v${plugin.version}`}
+        breadcrumbs={<EditorBreadcrumbs listLabel={t("plugins.title")} listHref={APP_ROUTES.plugins} current={plugin.name} />}
+        actions={[
+          { id: "back", kind: "secondary", label: t("common.backToList"), icon: ArrowLeft, onClick: onBack },
+        ]}
+      />
+      <PageBody wide className="space-y-6">
+        <Section
+          title={t("editor.overview")}
+          description={plugin.description || undefined}
+          actions={
+            <ObjectActionBar
+              actions={actions}
+              ariaLabel={t("common.entityActions", { name: plugin.name })}
+              moreLabel={t("common.moreActions")}
+              testId="plugin-object-actions"
+            />
+          }
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <StatusBadge
+              variant={plugin.enabled ? "success" : "neutral"}
+              label={plugin.enabled ? t("agent.enabled") : t("agent.disabled")}
+            />
+            <span className="text-xs text-fg-muted">
+              {`${t("plugins.source")}: ${plugin.marketplace_id ? plugin.marketplace_id : t("plugins.sourceManual")}`}
+            </span>
+          </div>
+          <PluginBundle plugin={plugin} />
+          {plugin.warnings.map((warning) => (
+            <Banner key={warning} severity="warning">
+              {warning}
+            </Banner>
+          ))}
+        </Section>
+        <Section title={t("plugins.contents")}>
+          <QueryState query={record}>
+            {manifest ? (
+              <Card className="min-w-0">
+                <CardContent className="grid min-w-0 gap-4 pt-5 xl:grid-cols-3">
+                  <JsonPanel
+                    title={t("plugins.skills")}
+                    value={(manifest.skills ?? []).map((skill) => ({ id: skill.id, name: skill.name }))}
                   />
-                  <p className="mt-1 text-xs leading-5 text-fg-muted">{t("plugins.manifestHint")}</p>
-                </Field>
-                {formError ? <Banner severity="danger">{formError}</Banner> : null}
-                {installMutation.error ? (
-                  <Banner severity="danger">{(installMutation.error as Error).message}</Banner>
-                ) : null}
-                <div className="flex gap-2">
-                  <Button onClick={install} loading={installMutation.isPending} icon={Download}>
-                    {t("plugins.installSubmit")}
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    onClick={() => {
-                      setFormOpen(false);
-                      setFormError(null);
-                    }} icon={X}>
-                    {t("common.cancel")}
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-          ) : null}
-        </QueryState>
-      </div>
-</PageBody>
+                  <JsonPanel title={t("plugins.mcp")} value={manifest.mcp_servers ?? []} />
+                  <JsonPanel
+                    title={t("plugins.resources")}
+                    value={(manifest.resources ?? []).map((resource) => ({
+                      id: resource.id,
+                      kind: resource.kind,
+                      name: resource.name,
+                    }))}
+                  />
+                </CardContent>
+              </Card>
+            ) : null}
+          </QueryState>
+        </Section>
+      </PageBody>
     </>
   );
 }
@@ -2734,156 +3333,103 @@ function PluginBundle({ plugin }: { plugin: PluginSummary }) {
 
 function PluginTable({
   plugins,
-  onToggle,
-  onUninstall,
-  busy,
+  onOpen,
+  actionsFor,
 }: {
   plugins: PluginSummary[];
-  onToggle: (id: string, enabled: boolean) => void;
-  onUninstall: (plugin: PluginSummary) => void;
-  busy: boolean;
+  onOpen: (plugin: PluginSummary) => void;
+  actionsFor: (plugin: PluginSummary) => EntityAction[];
 }) {
+  const columns: DataTableColumn<PluginSummary>[] = [
+    {
+      key: "name",
+      header: t("plugins.title"),
+      rowHeader: true,
+      render: (plugin) => (
+        <RowTitleButton title={plugin.name} subtitle={`${plugin.id} · v${plugin.version}`} onClick={() => onOpen(plugin)} />
+      ),
+    },
+    {
+      key: "source",
+      header: t("plugins.source"),
+      className: "text-fg-muted",
+      render: (plugin) => (plugin.marketplace_id ? plugin.marketplace_id : t("plugins.sourceManual")),
+    },
+    {
+      key: "bundle",
+      header: t("plugins.bundle"),
+      render: (plugin) => <PluginBundle plugin={plugin} />,
+    },
+    {
+      key: "enabled",
+      header: t("plugins.enabledLabel"),
+      render: (plugin) => (
+        <StatusBadge
+          variant={plugin.enabled ? "success" : "neutral"}
+          label={plugin.enabled ? t("agent.enabled") : t("agent.disabled")}
+        />
+      ),
+    },
+    {
+      key: "actions",
+      header: t("settings.mcpServers.actions"),
+      align: "right",
+      render: (plugin) => (
+        <RowActionMenu
+          actions={actionsFor(plugin)}
+          ariaLabel={t("common.entityActions", { name: plugin.id })}
+          testId={`plugin-row-actions-${plugin.id}`}
+        />
+      ),
+    },
+  ];
+
   return (
-    <div className="min-w-0">
-      <div className="hidden overflow-x-auto md:block">
-        <table className="w-full min-w-[760px] border-collapse text-left text-sm">
-          <thead>
-            <tr className="border-b border-border text-xs text-fg-muted">
-              <th className="px-3 py-2 font-medium">{t("plugins.title")}</th>
-              <th className="px-3 py-2 font-medium">{t("plugins.source")}</th>
-              <th className="px-3 py-2 font-medium">{t("plugins.bundle")}</th>
-              <th className="px-3 py-2 font-medium">{t("plugins.enabledLabel")}</th>
-              <th className="px-3 py-2 font-medium">{t("settings.mcpServers.actions")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {plugins.map((plugin) => (
-              <tr key={plugin.id} className="border-b border-border/70 last:border-0">
-                <td className="px-3 py-3 align-top">
-                  <p className="text-sm font-medium text-fg">{plugin.name}</p>
-                  <p className="font-mono text-xs text-fg-muted">
-                    {plugin.id} · v{plugin.version}
-                  </p>
-                </td>
-                <td className="px-3 py-3 align-top text-fg-muted">
-                  {plugin.marketplace_id ? plugin.marketplace_id : t("plugins.sourceManual")}
-                </td>
-                <td className="px-3 py-3 align-top">
-                  <PluginBundle plugin={plugin} />
-                </td>
-                <td className="px-3 py-3 align-top">
-                  <Switch
-                    checked={plugin.enabled}
-                    aria-label={`${t("plugins.enabledLabel")} ${plugin.id}`}
-                    onCheckedChange={(checked) => onToggle(plugin.id, checked)}
-                  />
-                </td>
-                <td className="px-3 py-3 align-top">
-                  <Button
-                    size="sm"
-                    variant="danger"
-                    onClick={() => onUninstall(plugin)}
-                    disabled={busy}
-                    aria-label={`${t("plugins.uninstall")} ${plugin.id}`} icon={Trash2}>
-                    {t("plugins.uninstall")}
-                  </Button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      <div className="grid gap-3 md:hidden">
-        {plugins.map((plugin) => (
-          <div key={plugin.id} className="space-y-2 rounded-md border border-border p-3">
-            <div className="flex items-start justify-between gap-2">
-              <div className="min-w-0">
-                <p className="text-sm font-medium text-fg [overflow-wrap:anywhere]">{plugin.name}</p>
-                <p className="break-all font-mono text-xs text-fg-muted">
-                  {plugin.id} · v{plugin.version}
-                </p>
-              </div>
-              <Switch
-                className="shrink-0"
-                checked={plugin.enabled}
-                aria-label={`${t("plugins.enabledLabel")} ${plugin.id}`}
-                onCheckedChange={(checked) => onToggle(plugin.id, checked)}
-              />
-            </div>
-            <PluginBundle plugin={plugin} />
-            <Button
-              size="sm"
-              variant="danger"
-              onClick={() => onUninstall(plugin)}
-              disabled={busy}
-              aria-label={`${t("plugins.uninstall")} ${plugin.id}`} icon={Trash2}>
-              {t("plugins.uninstall")}
-            </Button>
-          </div>
-        ))}
-      </div>
-    </div>
+    <DataTable
+      rows={plugins}
+      columns={columns}
+      getRowKey={(plugin) => plugin.id}
+      onRowClick={onOpen}
+      rowProps={() => ({ className: "align-top" })}
+      tableClassName="w-full min-w-[46rem]"
+      ariaLabel={t("plugins.title")}
+      empty={<EmptyState title={t("plugins.empty")} />}
+    />
   );
 }
+
+const EMPTY_MARKETPLACE_FORM = { id: "", name: "", url: "" };
 
 export function PluginMarketplacesPage() {
   const queryClient = useQueryClient();
   const confirm = useConfirm();
+  const editor = useEditorRoute();
   const markets = useQuery({
     queryKey: ["plugin-marketplaces"],
     queryFn: agentApi.listPluginMarketplaces,
   });
-  const [form, setForm] = useState({ id: "", name: "", url: "" });
-  const [formOpen, setFormOpen] = useState(false);
-  const [browseId, setBrowseId] = useState<string | null>(null);
 
   function invalidate() {
-    void queryClient.invalidateQueries({ queryKey: ["plugin-marketplaces"] });
-  }
-  function invalidatePlugins() {
-    void queryClient.invalidateQueries({ queryKey: ["plugins"] });
-    void queryClient.invalidateQueries({ queryKey: ["skills"] });
-    void queryClient.invalidateQueries({ queryKey: ["mcp-servers"] });
-    void queryClient.invalidateQueries({ queryKey: ["agents"] });
+    return queryClient.invalidateQueries({ queryKey: ["plugin-marketplaces"] });
   }
 
-  const addMutation = useMutation({
-    mutationFn: () =>
-      agentApi.addPluginMarketplace({
-        id: form.id.trim(),
-        name: form.name || undefined,
-        url: form.url || undefined,
-      }),
-    onSuccess: () => {
-      toast.success(t("marketplaces.added"));
-      setFormOpen(false);
-      setForm({ id: "", name: "", url: "" });
-      invalidate();
-    },
-  });
   const refreshMutation = useMutation({
     mutationFn: (id: string) => agentApi.refreshPluginMarketplace(id),
     onSuccess: (_data, id) => {
       toast.success(t("marketplaces.refreshed"));
-      invalidate();
+      void invalidate();
       void queryClient.invalidateQueries({ queryKey: ["marketplace-plugins", id] });
     },
+    onError: (error) => toast.error(error.message),
   });
   const deleteMutation = useMutation({
     mutationFn: (id: string) => agentApi.deletePluginMarketplace(id),
     onSuccess: () => {
       toast.success(t("marketplaces.deleted"));
-      invalidate();
+      void invalidate();
     },
+    onError: (error) => toast.error(error.message),
   });
-
-  function add() {
-    if (!form.id.trim()) {
-      toast.error(t("marketplaces.idRequired"));
-      return;
-    }
-    addMutation.mutate();
-  }
 
   async function remove(source: MarketplaceSource) {
     const ok = await confirm({
@@ -2893,181 +3439,289 @@ export function PluginMarketplacesPage() {
       cancelLabel: t("common.cancel"),
       tone: "danger",
     });
-    if (ok) {
-      if (browseId === source.id) {
-        setBrowseId(null);
-      }
-      deleteMutation.mutate(source.id);
-    }
+    if (!ok) return;
+    deleteMutation.mutate(source.id, {
+      onSuccess: () => {
+        if (editor.target.kind === "edit") editor.backToList({ replace: true });
+      },
+    });
   }
 
-  const list = markets.data?.marketplaces ?? [];
   const busy = refreshMutation.isPending || deleteMutation.isPending;
+  // 一覧の行と詳細で同じ定義を使う（UX 契約 buttons.md §5.1）。
+  const marketplaceActions = (source: MarketplaceSource): EntityAction[] => [
+    {
+      id: "refresh",
+      label: t("marketplaces.refresh"),
+      icon: RefreshCw,
+      disabled: busy,
+      loading: refreshMutation.isPending && refreshMutation.variables === source.id,
+      onSelect: () => refreshMutation.mutate(source.id),
+    },
+    {
+      id: "delete",
+      label: t("marketplaces.delete"),
+      icon: Trash2,
+      tone: "danger",
+      disabled: busy,
+      onSelect: () => remove(source),
+    },
+  ];
+
+  const list = markets.data?.marketplaces ?? [];
+  const { target } = editor;
+
+  if (target.kind === "list") {
+    return (
+      <>
+        <PageHeader
+          wide
+          title={t("marketplaces.title")}
+          subtitle={t("page.pluginMarketplaces.subtitle")}
+          actions={[
+            { id: "create", kind: "primary", label: t("marketplaces.add"), icon: Plus, onClick: editor.openNew },
+          ]}
+        />
+        <PageBody wide>
+          <QueryState query={markets}>
+            <Section title={t("marketplaces.list")} description={t("marketplaces.description")}>
+              <MarketplaceTable
+                sources={list}
+                onOpen={(source) => editor.openItem(source.id)}
+                actionsFor={marketplaceActions}
+              />
+            </Section>
+          </QueryState>
+        </PageBody>
+      </>
+    );
+  }
+
+  if (target.kind === "new") {
+    return (
+      <MarketplaceAddEditor
+        onBack={() => editor.backToList()}
+        onAdded={async (id) => {
+          await invalidate();
+          editor.openItem(id, { replace: true });
+        }}
+      />
+    );
+  }
+
+  const source = list.find((candidate) => candidate.id === target.id);
+  if (!source) {
+    return (
+      <>
+        <PageHeader
+          wide
+          title={t("marketplaces.title")}
+          breadcrumbs={
+            <EditorBreadcrumbs listLabel={t("marketplaces.title")} listHref={APP_ROUTES.pluginMarketplaces} current={target.id} />
+          }
+        />
+        <PageBody wide>
+          <QueryState query={markets}>
+            <MissingEditorTarget id={target.id} onBack={() => editor.backToList()} />
+          </QueryState>
+        </PageBody>
+      </>
+    );
+  }
 
   return (
+    <MarketplaceDetail
+      source={source}
+      actions={marketplaceActions(source)}
+      onBack={() => editor.backToList()}
+      onInstalled={() => {
+        void queryClient.invalidateQueries({ queryKey: ["plugins"] });
+        void queryClient.invalidateQueries({ queryKey: ["skills"] });
+        void queryClient.invalidateQueries({ queryKey: ["mcp-servers"] });
+        void queryClient.invalidateQueries({ queryKey: ["agents"] });
+      }}
+    />
+  );
+}
+
+/** マーケットプレイスを追加する全画面エディタ（`?id=new`）。 */
+function MarketplaceAddEditor({ onBack, onAdded }: { onBack: () => void; onAdded: (id: string) => Promise<void> }) {
+  const [form, setForm] = useState(EMPTY_MARKETPLACE_FORM);
+  const addMutation = useMutation({
+    mutationFn: (current: typeof EMPTY_MARKETPLACE_FORM) =>
+      agentApi.addPluginMarketplace({
+        id: current.id.trim(),
+        name: current.name || undefined,
+        url: current.url || undefined,
+      }),
+    onSuccess: async (source) => {
+      toast.success(t("marketplaces.added"));
+      setForm(EMPTY_MARKETPLACE_FORM);
+      await onAdded(source.id);
+    },
+  });
+  const { confirmClose } = useEditorLeaveGuard(!sameDraft(form, EMPTY_MARKETPLACE_FORM), addMutation.isPending);
+
+  async function back() {
+    if (await confirmClose()) onBack();
+  }
+
+  function add() {
+    if (!form.id.trim()) {
+      toast.error(t("marketplaces.idRequired"));
+      return;
+    }
+    addMutation.mutate(form);
+  }
+
+  const title = t("marketplaces.addTitle");
+  return (
     <>
-      <PageHeader wide title={t("marketplaces.title")} subtitle={t("page.pluginMarketplaces.subtitle")} />
-      <PageBody wide>
-<div className="space-y-5">
-        <QueryState query={markets}>
-          <Card>
-            <CardHeader className="flex flex-row items-start justify-between gap-3">
-              <div className="space-y-1">
-                <CardTitle>{t("marketplaces.title")}</CardTitle>
-                <CardDescription>{t("marketplaces.description")}</CardDescription>
-              </div>
-              <Button size="sm" onClick={() => setFormOpen(true)} icon={Plus}>
-                {t("marketplaces.add")}
-              </Button>
-            </CardHeader>
-            <CardContent>
-              {list.length === 0 ? (
-                <EmptyState title={t("marketplaces.empty")} />
-              ) : (
-                <MarketplaceTable
-                  sources={list}
-                  onRefresh={(id) => refreshMutation.mutate(id)}
-                  onBrowse={(id) => setBrowseId((current) => (current === id ? null : id))}
-                  onDelete={remove}
-                  busy={busy}
+      <PageHeader
+        wide
+        title={title}
+        subtitle={t("page.pluginMarketplaces.subtitle")}
+        breadcrumbs={
+          <EditorBreadcrumbs listLabel={t("marketplaces.title")} listHref={APP_ROUTES.pluginMarketplaces} current={title} />
+        }
+        actions={[
+          { id: "back", kind: "secondary", label: t("common.backToList"), icon: ArrowLeft, onClick: () => void back() },
+          {
+            id: "create",
+            kind: "primary",
+            label: t("common.create"),
+            icon: Save,
+            loading: addMutation.isPending,
+            onClick: add,
+          },
+        ]}
+        moreActionsLabel={t("common.moreActions")}
+      />
+      <PageBody wide className="space-y-6">
+        {addMutation.error ? <Banner severity="danger">{(addMutation.error as Error).message}</Banner> : null}
+        <Section title={t("marketplaces.overview")}>
+          <Card className="min-w-0">
+            <CardContent className="space-y-4 pt-5">
+              <Field label={t("marketplaces.id")} htmlFor="mkt-id">
+                <input
+                  id="mkt-id"
+                  value={form.id}
+                  onChange={(event) => setForm({ ...form, id: event.target.value })}
+                  className={INPUT_CLASS}
                 />
-              )}
+              </Field>
+              <Field label={t("marketplaces.name")} htmlFor="mkt-name">
+                <input
+                  id="mkt-name"
+                  value={form.name}
+                  onChange={(event) => setForm({ ...form, name: event.target.value })}
+                  className={INPUT_CLASS}
+                />
+              </Field>
+              <Field label={t("marketplaces.url")} htmlFor="mkt-url">
+                <input
+                  id="mkt-url"
+                  value={form.url}
+                  onChange={(event) => setForm({ ...form, url: event.target.value })}
+                  className={INPUT_CLASS}
+                />
+                <p className="mt-1 text-xs leading-5 text-fg-muted">{t("marketplaces.urlHint")}</p>
+              </Field>
             </CardContent>
           </Card>
-
-          {browseId ? (
-            <MarketplaceBrowse marketplaceId={browseId} onInstalled={invalidatePlugins} />
-          ) : null}
-
-          {formOpen ? (
-            <Card>
-              <CardHeader>
-                <CardTitle>{t("marketplaces.addTitle")}</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <Field label={t("marketplaces.id")} htmlFor="mkt-id">
-                  <input
-                    id="mkt-id"
-                    value={form.id}
-                    onChange={(event) => setForm({ ...form, id: event.target.value })}
-                    className={INPUT_CLASS}
-                  />
-                </Field>
-                <Field label={t("marketplaces.name")} htmlFor="mkt-name">
-                  <input
-                    id="mkt-name"
-                    value={form.name}
-                    onChange={(event) => setForm({ ...form, name: event.target.value })}
-                    className={INPUT_CLASS}
-                  />
-                </Field>
-                <Field label={t("marketplaces.url")} htmlFor="mkt-url">
-                  <input
-                    id="mkt-url"
-                    value={form.url}
-                    onChange={(event) => setForm({ ...form, url: event.target.value })}
-                    className={INPUT_CLASS}
-                  />
-                  <p className="mt-1 text-xs leading-5 text-fg-muted">{t("marketplaces.urlHint")}</p>
-                </Field>
-                {addMutation.error ? (
-                  <Banner severity="danger">{(addMutation.error as Error).message}</Banner>
-                ) : null}
-                <div className="flex gap-2">
-                  <Button onClick={add} loading={addMutation.isPending} icon={Save}>
-                    {t("common.create")}
-                  </Button>
-                  <Button variant="ghost" onClick={() => setFormOpen(false)} icon={X}>
-                    {t("common.cancel")}
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-          ) : null}
-        </QueryState>
-      </div>
-</PageBody>
+        </Section>
+      </PageBody>
     </>
   );
 }
 
 function MarketplaceTable({
   sources,
-  onRefresh,
-  onBrowse,
-  onDelete,
-  busy,
+  onOpen,
+  actionsFor,
 }: {
   sources: MarketplaceSource[];
-  onRefresh: (id: string) => void;
-  onBrowse: (id: string) => void;
-  onDelete: (source: MarketplaceSource) => void;
-  busy: boolean;
+  onOpen: (source: MarketplaceSource) => void;
+  actionsFor: (source: MarketplaceSource) => EntityAction[];
 }) {
+  const columns: DataTableColumn<MarketplaceSource>[] = [
+    {
+      key: "name",
+      header: t("marketplaces.name"),
+      rowHeader: true,
+      render: (source) => (
+        <RowTitleButton title={source.name || source.id} subtitle={source.id} onClick={() => onOpen(source)} />
+      ),
+    },
+    {
+      key: "url",
+      header: t("marketplaces.url"),
+      className: "max-w-xs break-all text-xs text-fg-muted",
+      render: (source) => source.url || "-",
+    },
+    {
+      key: "plugin_count",
+      header: t("marketplaces.pluginCount"),
+      align: "right",
+      className: "tabular-nums",
+      render: (source) => source.plugin_count,
+    },
+    {
+      key: "status",
+      header: t("common.status"),
+      render: (source) =>
+        source.last_error ? (
+          <StatusBadge variant="warning" label={t("common.error")} />
+        ) : (
+          <StatusBadge variant="success" label={t("common.valid")} />
+        ),
+    },
+    {
+      key: "actions",
+      header: t("settings.mcpServers.actions"),
+      align: "right",
+      render: (source) => (
+        <RowActionMenu
+          actions={actionsFor(source)}
+          ariaLabel={t("common.entityActions", { name: source.id })}
+          testId={`marketplace-row-actions-${source.id}`}
+        />
+      ),
+    },
+  ];
+
   return (
-    <div className="grid gap-3">
-      {sources.map((source) => (
-        <div key={source.id} className="space-y-2 rounded-md border border-border p-3">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="min-w-0">
-              <p className="text-sm font-medium text-fg [overflow-wrap:anywhere]">{source.name || source.id}</p>
-              <p className="break-all font-mono text-xs text-fg-muted">{source.id}</p>
-            </div>
-            <StatusBadge
-              variant="info"
-              label={`${t("marketplaces.pluginCount")}: ${source.plugin_count}`}
-              icon={false}
-            />
-          </div>
-          {source.url ? <p className="break-all text-xs text-fg-muted">{source.url}</p> : null}
-          {source.last_error ? (
-            <Banner severity="warning">{source.last_error}</Banner>
-          ) : null}
-          <div className="flex flex-wrap gap-2 pt-1">
-            <Button
-              size="sm"
-              variant="secondary"
-              onClick={() => onRefresh(source.id)}
-              disabled={busy}
-              aria-label={`${t("marketplaces.refresh")} ${source.id}`} icon={RefreshCw}>
-              {t("marketplaces.refresh")}
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => onBrowse(source.id)}
-              aria-label={`${t("marketplaces.browse")} ${source.id}`} icon={FileText}>
-              {t("marketplaces.browse")}
-            </Button>
-            <Button
-              size="sm"
-              variant="danger"
-              onClick={() => onDelete(source)}
-              disabled={busy}
-              aria-label={`${t("marketplaces.delete")} ${source.id}`} icon={Trash2}>
-              {t("marketplaces.delete")}
-            </Button>
-          </div>
-        </div>
-      ))}
-    </div>
+    <DataTable
+      rows={sources}
+      columns={columns}
+      getRowKey={(source) => source.id}
+      onRowClick={onOpen}
+      rowProps={() => ({ className: "align-top" })}
+      tableClassName="w-full min-w-[44rem]"
+      ariaLabel={t("marketplaces.list")}
+      empty={<EmptyState title={t("marketplaces.empty")} />}
+    />
   );
 }
 
-function MarketplaceBrowse({
-  marketplaceId,
+/** マーケットプレイスの詳細（`?id=<marketplace id>`）。配布元の情報と、そこから install できる連携機能を出す。 */
+function MarketplaceDetail({
+  source,
+  actions,
+  onBack,
   onInstalled,
 }: {
-  marketplaceId: string;
+  source: MarketplaceSource;
+  actions: EntityAction[];
+  onBack: () => void;
   onInstalled: () => void;
 }) {
   const listing = useQuery({
-    queryKey: ["marketplace-plugins", marketplaceId],
-    queryFn: () => agentApi.listMarketplacePlugins(marketplaceId),
+    queryKey: ["marketplace-plugins", source.id],
+    queryFn: () => agentApi.listMarketplacePlugins(source.id),
   });
   const installMutation = useMutation({
-    mutationFn: (pluginId: string) =>
-      agentApi.installPlugin({ marketplace_id: marketplaceId, plugin_id: pluginId }),
+    mutationFn: (pluginId: string) => agentApi.installPlugin({ marketplace_id: source.id, plugin_id: pluginId }),
     onSuccess: () => {
       toast.success(t("plugins.installed"));
       onInstalled();
@@ -3076,49 +3730,106 @@ function MarketplaceBrowse({
     onError: (error) => toast.error((error as Error).message),
   });
   const plugins = listing.data?.plugins ?? [];
+  const title = source.name || source.id;
+
+  const columns: DataTableColumn<PluginManifest>[] = [
+    {
+      key: "name",
+      header: t("plugins.title"),
+      rowHeader: true,
+      render: (manifest) => (
+        <div className="min-w-0">
+          <p className="text-sm font-medium text-fg">{manifest.name}</p>
+          <p className="font-mono text-xs text-fg-muted">
+            {manifest.id}
+            {manifest.version ? ` · v${manifest.version}` : ""}
+          </p>
+        </div>
+      ),
+    },
+    {
+      key: "description",
+      header: t("agent.description"),
+      className: "max-w-sm text-xs text-fg-muted",
+      render: (manifest) => manifest.description || "-",
+    },
+    {
+      key: "actions",
+      header: t("settings.mcpServers.actions"),
+      align: "right",
+      render: (manifest) => (
+        <RowActionMenu
+          actions={[
+            {
+              id: "install",
+              label: t("marketplaces.install"),
+              icon: Download,
+              disabled: installMutation.isPending,
+              loading: installMutation.isPending && installMutation.variables === manifest.id,
+              onSelect: () => installMutation.mutate(manifest.id),
+            },
+          ]}
+          ariaLabel={t("common.entityActions", { name: manifest.id })}
+          testId={`marketplace-plugin-row-actions-${manifest.id}`}
+        />
+      ),
+    },
+  ];
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{t("marketplaces.available")}</CardTitle>
-      </CardHeader>
-      <CardContent>
-        {listing.isLoading ? (
-          <LoadingState rows={3} label={t("common.loading")} />
-        ) : listing.error ? (
-          <Banner severity="danger">{(listing.error as Error).message}</Banner>
-        ) : plugins.length === 0 ? (
-          <EmptyState title={t("marketplaces.availableEmpty")} />
-        ) : (
-          <div className="grid gap-3">
-            {plugins.map((manifest) => (
-              <div
-                key={manifest.id}
-                className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border p-3"
-              >
-                <div className="min-w-0">
-                  <p className="text-sm font-medium text-fg">{manifest.name}</p>
-                  <p className="font-mono text-xs text-fg-muted">
-                    {manifest.id}
-                    {manifest.version ? ` · v${manifest.version}` : ""}
-                  </p>
-                  {manifest.description ? (
-                    <p className="text-xs text-fg-muted">{manifest.description}</p>
-                  ) : null}
-                </div>
-                <Button
-                  size="sm"
-                  onClick={() => installMutation.mutate(manifest.id)}
-                  loading={installMutation.isPending}
-                  aria-label={`${t("marketplaces.installFrom")} ${manifest.id}`} icon={Download}>
-                  {t("marketplaces.installFrom")}
-                </Button>
-              </div>
-            ))}
+    <>
+      <PageHeader
+        wide
+        title={title}
+        subtitle={source.id}
+        breadcrumbs={
+          <EditorBreadcrumbs listLabel={t("marketplaces.title")} listHref={APP_ROUTES.pluginMarketplaces} current={title} />
+        }
+        actions={[
+          { id: "back", kind: "secondary", label: t("common.backToList"), icon: ArrowLeft, onClick: onBack },
+        ]}
+      />
+      <PageBody wide className="space-y-6">
+        <Section
+          title={t("editor.overview")}
+          actions={
+            <ObjectActionBar
+              actions={actions}
+              ariaLabel={t("common.entityActions", { name: source.id })}
+              moreLabel={t("common.moreActions")}
+              testId="marketplace-object-actions"
+            />
+          }
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <StatusBadge
+              variant="info"
+              label={`${t("marketplaces.pluginCount")}: ${source.plugin_count}`}
+              icon={false}
+            />
+            <span className="break-all text-xs text-fg-muted">{source.url || "-"}</span>
           </div>
-        )}
-      </CardContent>
-    </Card>
+          {source.last_error ? <Banner severity="warning">{source.last_error}</Banner> : null}
+        </Section>
+        <Section title={t("marketplaces.available")}>
+          {listing.isLoading ? (
+            <LoadingState rows={3} label={t("common.loading")} />
+          ) : listing.error ? (
+            <Banner severity="danger">{(listing.error as Error).message}</Banner>
+          ) : (
+            <DataTable
+              rows={plugins}
+              columns={columns}
+              getRowKey={(manifest) => manifest.id}
+              rowProps={() => ({ className: "align-top" })}
+              tableClassName="w-full min-w-[36rem]"
+              ariaLabel={t("marketplaces.available")}
+              empty={<EmptyState title={t("marketplaces.availableEmpty")} />}
+            />
+          )}
+        </Section>
+      </PageBody>
+    </>
   );
 }
 
@@ -3131,6 +3842,17 @@ function parseCommandPrefixes(value: string): string[] {
         .filter(Boolean)
     )
   );
+}
+
+interface CommandPolicyDraft {
+  enabled: boolean;
+  workspaceRoot: string;
+  allowedPrefixes: string[];
+  defaultTimeout: string;
+  maxTimeout: string;
+  outputLimit: string;
+  artifactStorageBackend: "inline" | "filesystem";
+  artifactStoragePath: string;
 }
 
 export function CommandPolicySettingsPage() {
@@ -3155,6 +3877,7 @@ export function CommandPolicySettingsPage() {
   const [artifactStorageBackend, setArtifactStorageBackend] = useState<"inline" | "filesystem">("inline");
   const [artifactStoragePath, setArtifactStoragePath] = useState(".agent-artifacts");
   const [formError, setFormError] = useState<string | null>(null);
+  const [baseline, setBaseline] = useState<CommandPolicyDraft | null>(null);
 
   useEffect(() => {
     const current = settings.data;
@@ -3169,8 +3892,31 @@ export function CommandPolicySettingsPage() {
     setOutputLimit(String(current.output_limit_bytes));
     setArtifactStorageBackend(current.artifact_storage_backend);
     setArtifactStoragePath(current.artifact_storage_path);
+    setBaseline({
+      enabled: current.enabled,
+      workspaceRoot: current.workspace_root,
+      allowedPrefixes: parseCommandPrefixes(current.allowed_prefixes.join("\n")).sort(),
+      defaultTimeout: String(current.default_timeout_seconds),
+      maxTimeout: String(current.max_timeout_seconds),
+      outputLimit: String(current.output_limit_bytes),
+      artifactStorageBackend: current.artifact_storage_backend,
+      artifactStoragePath: current.artifact_storage_path,
+    });
     setFormError(null);
   }, [settings.data]);
+
+  // prefix は集合として比べる（順序・重複・空行の違いは変更に数えない）。#87
+  const draft: CommandPolicyDraft = {
+    enabled,
+    workspaceRoot,
+    allowedPrefixes: parseCommandPrefixes(allowedPrefixes).sort(),
+    defaultTimeout,
+    maxTimeout,
+    outputLimit,
+    artifactStorageBackend,
+    artifactStoragePath,
+  };
+  useSettingsLeaveGuard(baseline !== null && !sameDraft(draft, baseline), mutation.isPending);
 
   function save() {
     const parsedDefaultTimeout = Number(defaultTimeout);
@@ -3192,16 +3938,20 @@ export function CommandPolicySettingsPage() {
       return;
     }
     setFormError(null);
-    mutation.mutate({
-      enabled,
-      workspace_root: workspaceRoot,
-      allowed_prefixes: parseCommandPrefixes(allowedPrefixes),
-      default_timeout_seconds: parsedDefaultTimeout,
-      max_timeout_seconds: parsedMaxTimeout,
-      output_limit_bytes: parsedOutputLimit,
-      artifact_storage_backend: artifactStorageBackend,
-      artifact_storage_path: artifactStoragePath,
-    });
+    const submitted = draft;
+    mutation.mutate(
+      {
+        enabled,
+        workspace_root: workspaceRoot,
+        allowed_prefixes: parseCommandPrefixes(allowedPrefixes),
+        default_timeout_seconds: parsedDefaultTimeout,
+        max_timeout_seconds: parsedMaxTimeout,
+        output_limit_bytes: parsedOutputLimit,
+        artifact_storage_backend: artifactStorageBackend,
+        artifact_storage_path: artifactStoragePath,
+      },
+      { onSuccess: () => setBaseline(submitted) }
+    );
   }
 
   return (
@@ -3245,7 +3995,7 @@ export function CommandPolicySettingsPage() {
                     id="command-policy-workspace-root"
                     value={workspaceRoot}
                     onChange={(event) => setWorkspaceRoot(event.target.value)}
-                    className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   />
                 </Field>
                 <Field label={t("settings.commandPolicy.outputLimit")} htmlFor="command-policy-output-limit">
@@ -3255,7 +4005,7 @@ export function CommandPolicySettingsPage() {
                     min="1"
                     value={outputLimit}
                     onChange={(event) => setOutputLimit(event.target.value)}
-                    className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   />
                 </Field>
                 <Field label={t("settings.commandPolicy.defaultTimeout")} htmlFor="command-policy-default-timeout">
@@ -3266,7 +4016,7 @@ export function CommandPolicySettingsPage() {
                     step="0.1"
                     value={defaultTimeout}
                     onChange={(event) => setDefaultTimeout(event.target.value)}
-                    className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   />
                 </Field>
                 <Field label={t("settings.commandPolicy.maxTimeout")} htmlFor="command-policy-max-timeout">
@@ -3277,7 +4027,7 @@ export function CommandPolicySettingsPage() {
                     step="0.1"
                     value={maxTimeout}
                     onChange={(event) => setMaxTimeout(event.target.value)}
-                    className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   />
                 </Field>
               </div>
@@ -3288,7 +4038,7 @@ export function CommandPolicySettingsPage() {
                   value={allowedPrefixes}
                   onChange={(event) => setAllowedPrefixes(event.target.value)}
                   rows={5}
-                  className="min-h-32 w-full rounded-md border border-border bg-surface-sunken px-3 py-2 font-mono text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className="min-h-32 w-full rounded-md border border-border-control bg-surface-sunken px-3 py-2 font-mono text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 />
                 <p className="mt-1 text-xs leading-5 text-fg-muted">{t("settings.commandPolicy.allowedPrefixesHint")}</p>
               </Field>
@@ -3299,7 +4049,7 @@ export function CommandPolicySettingsPage() {
                     id="command-policy-artifact-storage"
                     value={artifactStorageBackend}
                     onChange={(event) => setArtifactStorageBackend(event.target.value as "inline" | "filesystem")}
-                    className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   >
                     <option value="inline">{t("settings.commandPolicy.inline")}</option>
                     <option value="filesystem">{t("settings.commandPolicy.filesystem")}</option>
@@ -3311,7 +4061,7 @@ export function CommandPolicySettingsPage() {
                     id="command-policy-artifact-path"
                     value={artifactStoragePath}
                     onChange={(event) => setArtifactStoragePath(event.target.value)}
-                    className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   />
                 </Field>
               </div>
@@ -3330,6 +4080,24 @@ export function CommandPolicySettingsPage() {
   );
 }
 
+interface ToolPolicyDraft {
+  defaultMode: "approval" | "deny";
+  policies: Array<[string, ToolPolicyChoice]>;
+}
+
+/** 「既定」は未指定と同じ意味なので外し、ツール名で並べて比べる。 */
+function toolPolicyDraftOf(
+  defaultMode: "approval" | "deny",
+  policies: Record<string, ToolPolicyChoice>
+): ToolPolicyDraft {
+  return {
+    defaultMode,
+    policies: Object.entries(policies)
+      .filter(([, policy]) => policy !== "default")
+      .sort(([left], [right]) => left.localeCompare(right)),
+  };
+}
+
 export function ToolPolicySettingsPage() {
   const queryClient = useQueryClient();
   const tools = useQuery({ queryKey: ["tools"], queryFn: agentApi.listTools });
@@ -3346,6 +4114,7 @@ export function ToolPolicySettingsPage() {
   });
   const [defaultMode, setDefaultMode] = useState<"approval" | "deny">("approval");
   const [toolPolicies, setToolPolicies] = useState<Record<string, ToolPolicyChoice>>({});
+  const [baseline, setBaseline] = useState<ToolPolicyDraft | null>(null);
 
   useEffect(() => {
     const current = settings.data;
@@ -3364,7 +4133,11 @@ export function ToolPolicySettingsPage() {
     });
     setDefaultMode(current.default_mode);
     setToolPolicies(nextPolicies);
+    setBaseline(toolPolicyDraftOf(current.default_mode, nextPolicies));
   }, [settings.data]);
+
+  const draft = toolPolicyDraftOf(defaultMode, toolPolicies);
+  useSettingsLeaveGuard(baseline !== null && !sameDraft(draft, baseline), mutation.isPending);
 
   function setPolicy(toolName: string, policy: ToolPolicyChoice) {
     setToolPolicies((current) => ({ ...current, [toolName]: policy }));
@@ -3383,12 +4156,16 @@ export function ToolPolicySettingsPage() {
         deny.push(toolName);
       }
     }
-    mutation.mutate({
-      default_mode: defaultMode,
-      allow: allow.sort(),
-      ask: ask.sort(),
-      deny: deny.sort(),
-    });
+    const submitted = draft;
+    mutation.mutate(
+      {
+        default_mode: defaultMode,
+        allow: allow.sort(),
+        ask: ask.sort(),
+        deny: deny.sort(),
+      },
+      { onSuccess: () => setBaseline(submitted) }
+    );
   }
 
   return (
@@ -3408,7 +4185,7 @@ export function ToolPolicySettingsPage() {
                   id="tool-policy-default-mode"
                   value={defaultMode}
                   onChange={(event) => setDefaultMode(event.target.value as "approval" | "deny")}
-                  className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring sm:max-w-xs"
+                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring sm:max-w-xs"
                 >
                   <option value="approval">{t("settings.toolPolicy.defaultModeApproval")}</option>
                   <option value="deny">{t("settings.toolPolicy.defaultModeDeny")}</option>
@@ -3454,7 +4231,7 @@ export function ToolPolicySettingsPage() {
                             id={`tool-policy-${tool.name}`}
                             value={policy}
                             onChange={(event) => setPolicy(tool.name, event.target.value as ToolPolicyChoice)}
-                            className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                            className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                           >
                             <option value="default">{t("settings.toolPolicy.default")}</option>
                             <option value="allow">{t("settings.toolPolicy.allow")}</option>
@@ -3499,6 +4276,7 @@ export function RuntimeSafetySettingsPage() {
   const [maxToolCalls, setMaxToolCalls] = useState("20");
   const [maxPendingApprovals, setMaxPendingApprovals] = useState("5");
   const [formError, setFormError] = useState<string | null>(null);
+  const [baseline, setBaseline] = useState<{ maxToolCalls: string; maxPendingApprovals: string } | null>(null);
 
   useEffect(() => {
     const current = settings.data;
@@ -3507,8 +4285,15 @@ export function RuntimeSafetySettingsPage() {
     }
     setMaxToolCalls(String(current.max_tool_calls_per_run));
     setMaxPendingApprovals(String(current.max_pending_approvals_per_run));
+    setBaseline({
+      maxToolCalls: String(current.max_tool_calls_per_run),
+      maxPendingApprovals: String(current.max_pending_approvals_per_run),
+    });
     setFormError(null);
   }, [settings.data]);
+
+  const draft = { maxToolCalls, maxPendingApprovals };
+  useSettingsLeaveGuard(baseline !== null && !sameDraft(draft, baseline), mutation.isPending);
 
   function save() {
     const parsedMaxToolCalls = Number(maxToolCalls);
@@ -3523,10 +4308,14 @@ export function RuntimeSafetySettingsPage() {
       return;
     }
     setFormError(null);
-    mutation.mutate({
-      max_tool_calls_per_run: parsedMaxToolCalls,
-      max_pending_approvals_per_run: parsedMaxPendingApprovals,
-    });
+    const submitted = draft;
+    mutation.mutate(
+      {
+        max_tool_calls_per_run: parsedMaxToolCalls,
+        max_pending_approvals_per_run: parsedMaxPendingApprovals,
+      },
+      { onSuccess: () => setBaseline(submitted) }
+    );
   }
 
   return (
@@ -3550,7 +4339,7 @@ export function RuntimeSafetySettingsPage() {
                     min="0"
                     value={maxToolCalls}
                     onChange={(event) => setMaxToolCalls(event.target.value)}
-                    className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   />
                 </Field>
                 <Field
@@ -3563,7 +4352,7 @@ export function RuntimeSafetySettingsPage() {
                     min="0"
                     value={maxPendingApprovals}
                     onChange={(event) => setMaxPendingApprovals(event.target.value)}
-                    className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   />
                 </Field>
               </div>
@@ -3594,6 +4383,10 @@ export function RuntimeSnapshotSettingsPage() {
       if (result.imported) {
         toast.success(t("settings.snapshot.imported"));
         void queryClient.invalidateQueries();
+        // 置換が済んだ入力は下書きではなくなるので空に戻す（確認語も解除する）。#87
+        setImportText("");
+        setReason("");
+        setConfirmText("");
       } else {
         toast.success(t("settings.snapshot.validated"));
       }
@@ -3606,6 +4399,8 @@ export function RuntimeSnapshotSettingsPage() {
   const [confirmText, setConfirmText] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
   const [validationResult, setValidationResult] = useState<RuntimeSnapshotImportResult | null>(null);
+  // インポート JSON と理由は未保存の下書き。確認語は保存も復元もしない（離脱で state ごと消える）。#87
+  useSettingsLeaveGuard(importText.trim() !== "" || reason.trim() !== "", importSnapshot.isPending);
 
   useEffect(() => {
     if (!snapshot.data) {
@@ -3719,7 +4514,7 @@ export function RuntimeSnapshotSettingsPage() {
                   id="runtime-snapshot-export"
                   value={exportText}
                   readOnly
-                  className="min-h-80 w-full rounded-md border border-border bg-surface-sunken px-3 py-2 font-mono text-xs leading-5 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className="min-h-80 w-full rounded-md border border-border-control bg-surface-sunken px-3 py-2 font-mono text-xs leading-5 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                   spellCheck={false}
                 />
               </Field>
@@ -3749,7 +4544,7 @@ export function RuntimeSnapshotSettingsPage() {
                   setImportText(event.target.value);
                   setValidationResult(null);
                 }}
-                className="min-h-80 w-full rounded-md border border-border bg-surface-sunken px-3 py-2 font-mono text-xs leading-5 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                className="min-h-80 w-full rounded-md border border-border-control bg-surface-sunken px-3 py-2 font-mono text-xs leading-5 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 spellCheck={false}
               />
             </Field>
@@ -3758,7 +4553,7 @@ export function RuntimeSnapshotSettingsPage() {
                 id="runtime-snapshot-reason"
                 value={reason}
                 onChange={(event) => setReason(event.target.value)}
-                className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
               />
             </Field>
             <div className="flex flex-wrap gap-2">
@@ -3778,7 +4573,7 @@ export function RuntimeSnapshotSettingsPage() {
                   onChange={(event) => setConfirmText(event.target.value)}
                   placeholder={t("settings.snapshot.confirmPlaceholder")}
                   aria-describedby="runtime-snapshot-confirm-hint"
-                  className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 />
                 <p id="runtime-snapshot-confirm-hint" className="mt-1 text-xs leading-5 text-fg-muted">
                   {t("settings.snapshot.confirmRequired")}
@@ -3887,41 +4682,125 @@ function summarizeSnapshot(snapshot: RuntimeSnapshot): RuntimeSnapshotSummary {
   };
 }
 
-function AgentEditor({
+interface AgentDraft {
+  name: string;
+  description: string;
+  instructions: string;
+  skill_ids: string[];
+}
+
+function agentDraftOf(agent: AgentProfile | undefined): AgentDraft {
+  return {
+    name: agent?.name ?? "",
+    description: agent?.description ?? "",
+    instructions: agent?.instructions ?? "",
+    // Skill の選択は集合なので並べ替えて比べる。
+    skill_ids: [...(agent?.skill_ids ?? [])].sort(),
+  };
+}
+
+/** エディタの dirty を親へ知らせる。unmount 時は false を知らせる。 */
+function useReportDirty(dirty: boolean, onDirtyChange: (dirty: boolean) => void) {
+  const callbackRef = useRef(onDirtyChange);
+  callbackRef.current = onDirtyChange;
+  useEffect(() => {
+    callbackRef.current(dirty);
+  }, [dirty]);
+  useEffect(() => () => callbackRef.current(false), []);
+}
+
+/**
+ * 業務 Agent の全画面エディタ（A 型。`?id=new` / `?id=<agent id>`）。
+ * 有効 / 無効は対象の操作（一覧の行メニュー・概要の ObjectActionBar）で切り替え、フォームの下書きには含めない
+ * （切り替えで一覧を取り直しても、編集中の内容を上書きしない）。新規作成だけは初期状態をフォームで選ぶ。
+ */
+function AgentEditorView({
   agent,
-  title,
-  description,
   availableSkills,
-  pending,
-  error,
-  onSave,
+  skillsError,
+  bindings,
+  runtimes,
+  actions,
+  onBack,
+  onCreated,
 }: {
   agent?: AgentProfile;
-  title: string;
-  description: string;
   availableSkills: AgentSkill[];
-  pending: boolean;
-  error: Error | null;
-  onSave: (payload: AgentProfileWritePayload) => void;
+  skillsError: Error | null;
+  bindings: RuntimeBinding[];
+  runtimes: RuntimeDefinition[];
+  actions: EntityAction[];
+  onBack: () => void;
+  onCreated: (agent: AgentProfile) => void;
 }) {
-  const [name, setName] = useState(agent?.name ?? "");
-  const [agentDescription, setAgentDescription] = useState(agent?.description ?? "");
-  const [instructions, setInstructions] = useState(agent?.instructions ?? "");
-  const [enabled, setEnabled] = useState(agent?.enabled ?? true);
-  const [skillIds, setSkillIds] = useState<string[]>(agent?.skill_ids ?? []);
+  const queryClient = useQueryClient();
+  const saved = agentDraftOf(agent);
+  const savedKey = JSON.stringify(saved);
+  const [name, setName] = useState(saved.name);
+  const [agentDescription, setAgentDescription] = useState(saved.description);
+  const [instructions, setInstructions] = useState(saved.instructions);
+  const [newEnabled, setNewEnabled] = useState(true);
+  const [skillIds, setSkillIds] = useState<string[]>(saved.skill_ids);
+  const [baseline, setBaseline] = useState<AgentDraft>(saved);
   const [formError, setFormError] = useState<string | null>(null);
 
+  const createAgent = useMutation({
+    mutationFn: agentApi.createAgent,
+    onSuccess: async (created) => {
+      toast.success(t("agent.created"));
+      setBaseline(draft);
+      // 一覧を取り直してから作成した Agent のエディタへ移る（戻るで空の新規フォームへ戻さない）。
+      await queryClient.invalidateQueries({ queryKey: ["agents"] });
+      onCreated(created);
+    },
+  });
+  const patchAgent = useMutation({
+    mutationFn: (payload: AgentProfilePatchPayload) => agentApi.patchAgent(agent?.id ?? "", payload),
+    onSuccess: (_data, payload) => {
+      toast.success(t("agent.saved"));
+      // 保存に成功した内容を基準にする（一覧の再取得を待たずに dirty を解く）。
+      setBaseline({
+        name: payload.name ?? "",
+        description: payload.description ?? "",
+        instructions: payload.instructions ?? "",
+        skill_ids: [...(payload.skill_ids ?? [])].sort(),
+      });
+      void queryClient.invalidateQueries({ queryKey: ["agents"] });
+    },
+  });
+  const pending = createAgent.isPending || patchAgent.isPending;
+
+  // 保存済みの内容が変わったときだけフォームを取り直す。有効状態の切替や他の Agent の保存による
+  // 一覧の再取得で、編集中の内容を上書きしない（#87）。
+  const isExisting = Boolean(agent);
   useEffect(() => {
-    if (!agent) {
+    if (!isExisting) {
       return;
     }
-    setName(agent.name);
-    setAgentDescription(agent.description);
-    setInstructions(agent.instructions);
-    setEnabled(agent.enabled);
-    setSkillIds(agent.skill_ids);
+    const next = JSON.parse(savedKey) as AgentDraft;
+    setName(next.name);
+    setAgentDescription(next.description);
+    setInstructions(next.instructions);
+    setSkillIds(next.skill_ids);
+    setBaseline(next);
     setFormError(null);
-  }, [agent]);
+  }, [isExisting, savedKey]);
+
+  const draft: AgentDraft = {
+    name,
+    description: agentDescription,
+    instructions,
+    skill_ids: [...skillIds].sort(),
+  };
+  // Agent のフォームと Binding 追加フォームの dirty を集約して 1 つの離脱ガードで守る（#87）。
+  const dirtySources = useDirtySources();
+  const formDirty = !sameDraft(draft, baseline) || (!agent && !newEnabled);
+  useReportDirty(formDirty, (dirty) => dirtySources.report("agent", dirty));
+  const { confirmClose } = useEditorLeaveGuard(dirtySources.anyDirty, pending);
+
+  async function back() {
+    if (await confirmClose()) onBack();
+  }
 
   function toggleSkill(skillId: string) {
     setSkillIds((current) =>
@@ -3937,72 +4816,120 @@ function AgentEditor({
       setFormError(t("agent.nameRequired"));
       return;
     }
-    onSave({
+    const payload = {
       name: name.trim(),
       description: agentDescription.trim(),
       instructions: instructions.trim(),
       skill_ids: skillIds,
-      enabled,
-    });
+    };
+    if (agent) {
+      setName(payload.name);
+      setAgentDescription(payload.description);
+      setInstructions(payload.instructions);
+      patchAgent.mutate(payload);
+      return;
+    }
+    createAgent.mutate({ ...payload, enabled: newEnabled });
   }
 
+  const fieldId = agent?.id ?? "new";
+  const title = agent ? agent.name : t("agent.create");
+  const error = createAgent.error ?? patchAgent.error;
+
   return (
-    <Card className="min-w-0">
-      <CardHeader className="flex-row flex-wrap items-start justify-between gap-4">
-        <div className="min-w-0">
-          <CardTitle>{title}</CardTitle>
-          <CardDescription>{description}</CardDescription>
-        </div>
-        <StatusBadge
-          variant={enabled ? "success" : "neutral"}
-          label={enabled ? t("agent.enabled") : t("agent.disabled")}
-        />
-      </CardHeader>
-      <CardContent className="space-y-4">
-        {agent?.migration_required ? (
-          <Banner severity="warning">{t("agent.migrationRequired")}</Banner>
+    <>
+      <PageHeader
+        wide
+        title={title}
+        subtitle={agent ? agent.id : t("page.agents.subtitle")}
+        breadcrumbs={<EditorBreadcrumbs listLabel={t("nav.agents")} listHref={APP_ROUTES.agents} current={title} />}
+        actions={[
+          { id: "back", kind: "secondary", label: t("common.backToList"), icon: ArrowLeft, onClick: () => void back() },
+          {
+            id: "save",
+            kind: "primary",
+            label: agent ? t("common.save") : t("common.create"),
+            icon: Save,
+            loading: pending,
+            onClick: saveAgent,
+          },
+        ]}
+        moreActionsLabel={t("common.moreActions")}
+      />
+      <PageBody wide className="space-y-6">
+        {agent ? (
+          <Section
+            title={t("editor.overview")}
+            actions={
+              <ObjectActionBar
+                actions={actions}
+                ariaLabel={t("common.entityActions", { name: agent.name })}
+                moreLabel={t("common.moreActions")}
+                testId="agent-object-actions"
+              />
+            }
+          >
+            <div className="flex flex-wrap items-center gap-2">
+              <StatusBadge
+                variant={agent.enabled ? "success" : "neutral"}
+                label={agent.enabled ? t("agent.enabled") : t("agent.disabled")}
+              />
+              <span className="text-xs text-fg-muted">{`${t("common.updatedAt")}: ${formatDate(agent.updated_at)}`}</span>
+            </div>
+            {agent.migration_required ? <Banner severity="warning">{t("agent.migrationRequired")}</Banner> : null}
+          </Section>
         ) : null}
-        <Field label={t("agent.name")} htmlFor={`${agent?.id ?? "new"}-agent-name`}>
-          <input
-            id={`${agent?.id ?? "new"}-agent-name`}
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-          />
-        </Field>
-        <Field label={t("agent.description")} htmlFor={`${agent?.id ?? "new"}-agent-description`}>
-          <input
-            id={`${agent?.id ?? "new"}-agent-description`}
-            value={agentDescription}
-            onChange={(event) => setAgentDescription(event.target.value)}
-            className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-          />
-        </Field>
-        <Field label={t("agent.instructions")} htmlFor={`${agent?.id ?? "new"}-agent-instructions`}>
-          <textarea
-            id={`${agent?.id ?? "new"}-agent-instructions`}
-            value={instructions}
-            onChange={(event) => setInstructions(event.target.value)}
-            className="min-h-24 w-full rounded-md border border-border bg-surface-sunken px-3 py-2 text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-          />
-        </Field>
-        <label className="flex min-h-11 items-center gap-2 rounded-md border border-border px-3 py-2 text-sm text-fg">
-          <input
-            type="checkbox"
-            checked={enabled}
-            onChange={(event) => setEnabled(event.target.checked)}
-            className="h-4 w-4"
-          />
-          {t("agent.enabled")}
-        </label>
-        <div className="space-y-2">
-          <p className="text-sm font-medium text-fg">{t("agent.skills")}</p>
+        {formError ? <Banner severity="danger">{formError}</Banner> : null}
+        {error ? <Banner severity="danger">{error.message}</Banner> : null}
+        <Section title={t("agent.basic")}>
+          <Card className="min-w-0">
+            <CardContent className="space-y-4 pt-5">
+              <Field label={t("agent.name")} htmlFor={`${fieldId}-agent-name`}>
+                <input
+                  id={`${fieldId}-agent-name`}
+                  value={name}
+                  onChange={(event) => setName(event.target.value)}
+                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                />
+              </Field>
+              <Field label={t("agent.description")} htmlFor={`${fieldId}-agent-description`}>
+                <input
+                  id={`${fieldId}-agent-description`}
+                  value={agentDescription}
+                  onChange={(event) => setAgentDescription(event.target.value)}
+                  className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                />
+              </Field>
+              <Field label={t("agent.instructions")} htmlFor={`${fieldId}-agent-instructions`}>
+                <textarea
+                  id={`${fieldId}-agent-instructions`}
+                  value={instructions}
+                  onChange={(event) => setInstructions(event.target.value)}
+                  className="min-h-24 w-full rounded-md border border-border-control bg-surface-sunken px-3 py-2 text-sm leading-6 outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                />
+              </Field>
+              {!agent ? (
+                <label className="flex min-h-11 items-center gap-2 rounded-md border border-border px-3 py-2 text-sm text-fg">
+                  <input
+                    type="checkbox"
+                    checked={newEnabled}
+                    onChange={(event) => setNewEnabled(event.target.checked)}
+                    className="h-4 w-4"
+                  />
+                  {t("agent.enabled")}
+                </label>
+              ) : null}
+            </CardContent>
+          </Card>
+        </Section>
+        <Section title={t("agent.skills")}>
+          {skillsError ? <Banner severity="danger">{skillsError.message}</Banner> : null}
           {availableSkills.length ? (
             <div className="grid gap-2 md:grid-cols-2">
               {availableSkills.map((skill) => (
                 <label
                   key={skill.id}
-                  className="flex min-h-11 min-w-0 flex-col items-stretch justify-between gap-2 rounded-md border border-border px-3 py-2 text-sm md:flex-row md:items-center"
+                  className="flex min-h-11 min-w-0 flex-col items-stretch justify-between gap-2 rounded-md border border-border bg-surface px-3 py-2 text-sm md:flex-row md:items-center"
                 >
                   <span className="flex min-w-0 flex-1 items-start gap-2">
                     <input
@@ -4015,9 +4942,7 @@ function AgentEditor({
                       <span className="block break-words font-medium leading-5 text-fg [overflow-wrap:anywhere]">
                         {skill.name}
                       </span>
-                      <span className="mt-1 block text-xs leading-5 text-fg-muted">
-                        {skill.description}
-                      </span>
+                      <span className="mt-1 block text-xs leading-5 text-fg-muted">{skill.description}</span>
                     </span>
                   </span>
                   <span className="flex shrink-0 flex-wrap items-center gap-1.5">
@@ -4026,9 +4951,7 @@ function AgentEditor({
                       label={skillSourceLabel(skill.source)}
                       icon={false}
                     />
-                    {skill.enabled ? null : (
-                      <StatusBadge variant="neutral" label={t("agent.disabled")} />
-                    )}
+                    {skill.enabled ? null : <StatusBadge variant="neutral" label={t("agent.disabled")} />}
                   </span>
                 </label>
               ))}
@@ -4036,47 +4959,79 @@ function AgentEditor({
           ) : (
             <Banner severity="warning">{t("agent.skillsUnavailable")}</Banner>
           )}
-        </div>
-        {formError ? <Banner severity="danger">{formError}</Banner> : null}
-        {error ? <Banner severity="danger">{error.message}</Banner> : null}
-        <Button onClick={saveAgent} loading={pending} icon={Save}>
-          {agent ? t("common.save") : t("common.create")}
-        </Button>
-      </CardContent>
-    </Card>
+        </Section>
+        {agent ? (
+          <RuntimeBindingsPanel
+            agent={agent}
+            bindings={bindings}
+            runtimes={runtimes}
+            onDirtyChange={(dirty) => dirtySources.report("binding", dirty)}
+          />
+        ) : null}
+      </PageBody>
+    </>
   );
 }
 
+function bindingSyncVariant(status: string): StatusVariant {
+  if (status === "ready") return "success";
+  if (status === "error") return "danger";
+  return "warning";
+}
+
+/** Agent の実行先（Runtime Binding）。登録済みの行の操作は RowActionMenu にまとめ、削除は確認する。 */
 function RuntimeBindingsPanel({
   agent,
   bindings,
   runtimes,
-  pending,
-  error,
-  onCreate,
-  onDefault,
-  onSync,
-  onDelete,
+  onDirtyChange,
 }: {
   agent: AgentProfile;
   bindings: RuntimeBinding[];
   runtimes: RuntimeDefinition[];
-  pending: boolean;
-  error: Error | null;
-  onCreate: (payload: {
-    agent_id: string;
-    runtime_id: string;
-    native_agent_ref: string;
-    is_default: boolean;
-    enabled: boolean;
-  }) => void;
-  onDefault: (binding: RuntimeBinding) => void;
-  onSync: (binding: RuntimeBinding) => void;
-  onDelete: (binding: RuntimeBinding) => void;
+  onDirtyChange: (dirty: boolean) => void;
 }) {
+  const queryClient = useQueryClient();
+  const confirm = useConfirm();
   const candidates = runtimes.filter((runtime) => runtime.kind !== "legacy_native");
-  const [runtimeId, setRuntimeId] = useState(candidates[0]?.id ?? "");
+  const defaultRuntimeId = candidates[0]?.id ?? "";
+  const [runtimeId, setRuntimeId] = useState(defaultRuntimeId);
   const [nativeAgentRef, setNativeAgentRef] = useState(agent.id);
+  // 既定値（先頭の Runtime と Agent ID）から変えた入力を未保存の変更として扱う（#87）。
+  const dirty =
+    nativeAgentRef !== agent.id || (runtimeId !== "" && runtimeId !== defaultRuntimeId);
+  useReportDirty(dirty, onDirtyChange);
+
+  const refreshBindings = () => {
+    void queryClient.invalidateQueries({ queryKey: ["runtime-bindings"] });
+  };
+  const createBinding = useMutation({
+    mutationFn: agentApi.createRuntimeBinding,
+    onSuccess: () => {
+      toast.success(t("binding.saved"));
+      setRuntimeId(defaultRuntimeId);
+      setNativeAgentRef(agent.id);
+      refreshBindings();
+    },
+  });
+  const patchBinding = useMutation({
+    mutationFn: ({ binding, payload }: { binding: RuntimeBinding; payload: Partial<RuntimeBinding> }) =>
+      agentApi.patchRuntimeBinding(binding.id, payload),
+    onSuccess: refreshBindings,
+  });
+  const deleteBinding = useMutation({
+    mutationFn: agentApi.deleteRuntimeBinding,
+    onSuccess: () => {
+      toast.success(t("binding.deleted"));
+      refreshBindings();
+    },
+  });
+  const syncBinding = useMutation({
+    mutationFn: agentApi.syncRuntimeBinding,
+    onSuccess: refreshBindings,
+  });
+  const rowBusy = patchBinding.isPending || deleteBinding.isPending || syncBinding.isPending;
+  const error = createBinding.error ?? patchBinding.error ?? deleteBinding.error ?? syncBinding.error;
 
   useEffect(() => {
     if (!runtimeId && candidates[0]) {
@@ -4084,108 +5039,204 @@ function RuntimeBindingsPanel({
     }
   }, [candidates, runtimeId]);
 
-  return (
-    <Card className="min-w-0">
-      <CardHeader>
-        <CardTitle>{t("binding.title")}</CardTitle>
-        <CardDescription>{t("binding.description")}</CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        {bindings.length ? (
-          <div className="grid gap-2">
-            {bindings.map((binding) => (
-              <div
-                key={binding.id}
-                className="flex min-w-0 flex-wrap items-center justify-between gap-3 rounded-md border border-border p-3"
-              >
-                <div className="min-w-0">
-                  <p className="break-words text-sm font-medium text-fg">
-                    {binding.native_agent_ref}
-                  </p>
-                  <p className="mt-1 break-all text-xs text-fg-muted">{binding.runtime_id}</p>
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <StatusBadge
-                    variant={binding.sync_status === "ready" ? "success" : binding.sync_status === "error" ? "danger" : "warning"}
-                    label={binding.sync_status}
-                  />
-                  {!binding.is_default ? (
-                    <Button size="sm" variant="secondary" onClick={() => onDefault(binding)}>
-                      {t("binding.makeDefault")}
-                    </Button>
-                  ) : (
-                    <StatusBadge variant="info" label={t("binding.default")} icon={false} />
-                  )}
-                  <Button size="sm" variant="secondary" onClick={() => onSync(binding)} icon={RefreshCw}>
-                    {t("binding.sync")}
-                  </Button>
-                  <Button size="sm" variant="danger" onClick={() => onDelete(binding)} icon={Trash2}>
-                    {t("common.delete")}
-                  </Button>
-                </div>
-                {binding.sync_error ? (
-                  <p className="w-full text-xs text-danger-fg">{binding.sync_error}</p>
-                ) : null}
-              </div>
-            ))}
-          </div>
-        ) : (
-          <Banner severity="warning">{t("binding.empty")}</Banner>
-        )}
-        <div className="grid gap-3 md:grid-cols-2">
-          <Field label={t("binding.runtime")} htmlFor={`${agent.id}-binding-runtime`}>
-            <select
-              id={`${agent.id}-binding-runtime`}
-              value={runtimeId}
-              onChange={(event) => setRuntimeId(event.target.value)}
-              className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm"
-            >
-              {candidates.map((runtime) => (
-                <option key={runtime.id} value={runtime.id}>
-                  {runtime.name}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label={t("binding.nativeAgentRef")} htmlFor={`${agent.id}-binding-native-ref`}>
-            <input
-              id={`${agent.id}-binding-native-ref`}
-              value={nativeAgentRef}
-              onChange={(event) => setNativeAgentRef(event.target.value)}
-              className="h-10 w-full rounded-md border border-border bg-surface-sunken px-3 text-sm"
-            />
-          </Field>
+  async function removeBinding(binding: RuntimeBinding) {
+    const ok = await confirm({
+      title: t("binding.deleteTitle"),
+      description: t("binding.deleteMessage", { ref: binding.native_agent_ref, runtime: binding.runtime_id }),
+      confirmLabel: t("common.delete"),
+      cancelLabel: t("common.cancel"),
+      tone: "danger",
+    });
+    if (ok) deleteBinding.mutate(binding.id);
+  }
+
+  const bindingActions = (binding: RuntimeBinding): EntityAction[] => [
+    {
+      id: "make-default",
+      label: t("binding.makeDefault"),
+      icon: Star,
+      visible: !binding.is_default,
+      disabled: rowBusy,
+      onSelect: () => patchBinding.mutate({ binding, payload: { is_default: true } }),
+    },
+    {
+      id: "sync",
+      label: t("binding.sync"),
+      icon: RefreshCw,
+      disabled: rowBusy,
+      onSelect: () => syncBinding.mutate(binding.id),
+    },
+    {
+      id: "delete",
+      label: t("common.delete"),
+      icon: Trash2,
+      tone: "danger",
+      disabled: rowBusy,
+      onSelect: () => removeBinding(binding),
+    },
+  ];
+
+  const columns: DataTableColumn<RuntimeBinding>[] = [
+    {
+      key: "native_agent_ref",
+      header: t("binding.nativeAgentRef"),
+      rowHeader: true,
+      render: (binding) => (
+        <div className="min-w-0">
+          <p className="break-words text-sm font-medium text-fg">{binding.native_agent_ref}</p>
+          <p className="mt-0.5 break-all text-xs text-fg-muted">{binding.runtime_id}</p>
         </div>
-        {error ? <Banner severity="danger">{error.message}</Banner> : null}
-        <Button
-          variant="secondary"
-          loading={pending}
-          disabled={!runtimeId || !nativeAgentRef.trim()}
-          onClick={() =>
-            onCreate({
-              agent_id: agent.id,
-              runtime_id: runtimeId,
-              native_agent_ref: nativeAgentRef.trim(),
-              is_default: !bindings.length,
-              enabled: true,
-            })
-          } icon={Plus}>
-          {t("binding.add")}
-        </Button>
-      </CardContent>
-    </Card>
+      ),
+    },
+    {
+      key: "sync_status",
+      header: t("binding.syncStatus"),
+      render: (binding) => (
+        <div className="space-y-1">
+          <StatusBadge variant={bindingSyncVariant(binding.sync_status)} label={binding.sync_status} />
+          {binding.sync_error ? <p className="text-xs text-danger-fg">{binding.sync_error}</p> : null}
+        </div>
+      ),
+    },
+    {
+      key: "is_default",
+      header: t("binding.default"),
+      render: (binding) =>
+        binding.is_default ? <StatusBadge variant="info" label={t("binding.default")} icon={false} /> : "-",
+    },
+    {
+      key: "actions",
+      header: t("settings.mcpServers.actions"),
+      align: "right",
+      render: (binding) => (
+        <RowActionMenu
+          actions={bindingActions(binding)}
+          ariaLabel={t("common.entityActions", { name: binding.native_agent_ref })}
+          testId={`binding-row-actions-${binding.id}`}
+        />
+      ),
+    },
+  ];
+
+  return (
+    <Section title={t("binding.title")} description={t("binding.description")}>
+      <Card className="min-w-0">
+        <CardContent className="space-y-4 pt-5">
+          {bindings.length ? (
+            <DataTable
+              rows={bindings}
+              columns={columns}
+              getRowKey={(binding) => binding.id}
+              rowProps={() => ({ className: "align-top" })}
+              tableClassName="w-full min-w-[36rem]"
+              ariaLabel={t("binding.list")}
+            />
+          ) : (
+            <Banner severity="warning">{t("binding.empty")}</Banner>
+          )}
+          <div className="grid gap-3 md:grid-cols-2">
+            <Field label={t("binding.runtime")} htmlFor={`${agent.id}-binding-runtime`}>
+              <select
+                id={`${agent.id}-binding-runtime`}
+                value={runtimeId}
+                onChange={(event) => setRuntimeId(event.target.value)}
+                className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm"
+              >
+                {candidates.map((runtime) => (
+                  <option key={runtime.id} value={runtime.id}>
+                    {runtime.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label={t("binding.nativeAgentRef")} htmlFor={`${agent.id}-binding-native-ref`}>
+              <input
+                id={`${agent.id}-binding-native-ref`}
+                value={nativeAgentRef}
+                onChange={(event) => setNativeAgentRef(event.target.value)}
+                className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm"
+              />
+            </Field>
+          </div>
+          {error ? <Banner severity="danger">{error.message}</Banner> : null}
+          <Button
+            variant="secondary"
+            loading={createBinding.isPending}
+            disabled={!runtimeId || !nativeAgentRef.trim()}
+            onClick={() =>
+              createBinding.mutate({
+                agent_id: agent.id,
+                runtime_id: runtimeId,
+                native_agent_ref: nativeAgentRef.trim(),
+                is_default: !bindings.length,
+                enabled: true,
+              })
+            }
+            icon={Plus}
+          >
+            {t("binding.add")}
+          </Button>
+        </CardContent>
+      </Card>
+    </Section>
   );
+}
+/** Run の取消・再開の可否。一覧の行メニューと詳細の ObjectActionBar・ストリーム操作で同じ判定を使う。 */
+function runCapabilities(run: RunState): { isExternal: boolean; canCancel: boolean; canResume: boolean } {
+  const isExternal = Boolean(run.binding_id);
+  return {
+    isExternal,
+    canCancel:
+      ["queued", "running", "waiting_approval"].includes(run.status) &&
+      (!isExternal || run.runtime_capabilities.cancel),
+    canResume: !isExternal && ["running", "waiting_approval"].includes(run.status),
+  };
 }
 
 function RunHistoryList({
   runs,
   selectedRunId,
   onSelect,
+  actionsFor,
 }: {
   runs: RunState[];
   selectedRunId: string | null;
   onSelect: (runId: string) => void;
+  actionsFor: (run: RunState) => EntityAction[];
 }) {
+  const columns: DataTableColumn<RunState>[] = [
+    {
+      key: "goal",
+      header: t("run.form.goal"),
+      rowHeader: true,
+      render: (run) => (
+        <RowTitleButton
+          title={run.goal}
+          subtitle={`${run.agent_id} / ${formatDate(run.created_at)}`}
+          current={run.id === selectedRunId}
+          onClick={() => onSelect(run.id)}
+        />
+      ),
+    },
+    {
+      key: "status",
+      header: t("common.status"),
+      render: (run) => <StatusBadge variant={statusVariant[run.status]} label={run.status} />,
+    },
+    {
+      key: "actions",
+      header: t("run.actions"),
+      align: "right",
+      render: (run) => (
+        <RowActionMenu
+          actions={actionsFor(run)}
+          ariaLabel={t("common.entityActions", { name: run.id })}
+          testId={`run-row-actions-${run.id}`}
+        />
+      ),
+    },
+  ];
+
   return (
     <Card className="min-w-0">
       <CardHeader>
@@ -4193,40 +5244,16 @@ function RunHistoryList({
         <CardDescription>{t("run.historyDescription")}</CardDescription>
       </CardHeader>
       <CardContent>
-        {runs.length ? (
-          <div className="space-y-2" role="list" aria-label={t("run.history")}>
-            {runs.map((run) => {
-              const selected = run.id === selectedRunId;
-              return (
-                <button
-                  key={run.id}
-                  type="button"
-                  aria-pressed={selected}
-                  onClick={() => onSelect(run.id)}
-                  className={`min-h-16 w-full min-w-0 max-w-full overflow-hidden rounded-md border px-3 py-2 text-left transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring ${
-                    selected
-                      ? "border-accent-emphasis bg-accent-subtle"
-                      : "border-border bg-surface hover:bg-surface-hover"
-                  }`}
-                >
-                  <span className="flex items-start justify-between gap-2">
-                    <span className="min-w-0">
-                      <span className="line-clamp-2 text-sm font-medium leading-5 text-fg">
-                        {run.goal}
-                      </span>
-                      <span className="mt-1 block break-words text-xs text-fg-muted [overflow-wrap:anywhere]">
-                        {`${run.agent_id} / ${formatDate(run.created_at)}`}
-                      </span>
-                    </span>
-                    <StatusBadge variant={statusVariant[run.status]} label={run.status} />
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        ) : (
-          <EmptyState title={t("common.empty.title")} />
-        )}
+        <DataTable
+          rows={runs}
+          columns={columns}
+          getRowKey={(run) => run.id}
+          selectedRowKey={selectedRunId}
+          onRowClick={(run) => onSelect(run.id)}
+          rowProps={(run) => ({ className: "align-top", "data-testid": `run-row-${run.id}` })}
+          ariaLabel={t("run.history")}
+          empty={<EmptyState title={t("common.empty.title")} />}
+        />
       </CardContent>
     </Card>
   );
@@ -4234,46 +5261,46 @@ function RunHistoryList({
 
 function RunDetail({
   run,
+  actions,
   actionPending,
-  onCancel,
   onWebSocketCancel,
-  onResume,
   onWebSocketResume,
   onWebSocketApprovalDecision,
-  onReplay,
   streamMode,
   onStreamModeChange,
   websocketState,
 }: {
   run: RunState;
+  actions: EntityAction[];
   actionPending: boolean;
-  onCancel: () => void;
   onWebSocketCancel: () => void;
-  onResume: () => void;
   onWebSocketResume: () => void;
   onWebSocketApprovalDecision: (approvalId: string, approved: boolean) => void;
-  onReplay: () => void;
   streamMode: RunStreamMode;
   onStreamModeChange: (mode: RunStreamMode) => void;
   websocketState: RunWebSocketState;
 }) {
   const structured = getStructuredResult(run);
-  const isExternal = Boolean(run.binding_id);
-  const canCancel =
-    ["queued", "running", "waiting_approval"].includes(run.status) &&
-    (!isExternal || run.runtime_capabilities.cancel);
-  const canResume = !isExternal && ["running", "waiting_approval"].includes(run.status);
+  const { isExternal, canCancel, canResume } = runCapabilities(run);
   const pendingApproval = run.approvals.find((approval) => approval.status === "pending");
 
   return (
-    <section className="space-y-5">
+    <section className="space-y-5" aria-label={t("run.detail")}>
       <Card>
         <CardHeader className="flex-row flex-wrap items-start justify-between gap-4">
           <div className="min-w-0">
-            <CardTitle>{t("run.detail")}</CardTitle>
+            <div className="flex flex-wrap items-center gap-2">
+              <CardTitle>{t("run.detail")}</CardTitle>
+              <StatusBadge variant={statusVariant[run.status]} label={run.status} />
+            </div>
             <CardDescription className="break-words [overflow-wrap:anywhere]">{run.id}</CardDescription>
           </div>
-          <StatusBadge variant={statusVariant[run.status]} label={run.status} />
+          <ObjectActionBar
+            actions={actions}
+            ariaLabel={t("run.actions")}
+            moreLabel={t("common.moreActions")}
+            testId="run-object-actions"
+          />
         </CardHeader>
         <CardContent className="space-y-3">
           <p className="text-sm leading-6 text-fg">{run.goal}</p>
@@ -4284,41 +5311,9 @@ function RunDetail({
             <span>{`${t("common.createdAt")}: ${formatDate(run.created_at)}`}</span>
             <span>{`${t("common.updatedAt")}: ${formatDate(run.updated_at)}`}</span>
           </div>
-          {isExternal && !run.runtime_capabilities.cancel && canCancel === false && !isRunTerminal(run.status) ? (
+          {isExternal && !run.runtime_capabilities.cancel && !isRunTerminal(run.status) ? (
             <Banner severity="warning">{t("run.cancelUnsupported")}</Banner>
           ) : null}
-          <div className="flex flex-wrap gap-2 pt-1" aria-label={t("run.actions")}>
-            {canCancel ? (
-              <Button
-                variant="danger"
-                size="sm"
-                onClick={onCancel}
-                loading={actionPending}
-                aria-label={t("run.cancel")} icon={X}>
-                {t("run.cancel")}
-              </Button>
-            ) : null}
-            {canResume ? (
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={onResume}
-                loading={actionPending}
-                aria-label={t("run.resume")} icon={PlayCircle}>
-                {t("run.resume")}
-              </Button>
-            ) : null}
-            {!isExternal ? (
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={onReplay}
-                loading={actionPending}
-                aria-label={t("run.replay")} icon={RefreshCw}>
-                {t("run.replay")}
-              </Button>
-            ) : null}
-          </div>
         </CardContent>
       </Card>
 
@@ -5136,29 +6131,19 @@ function StructuredResultTable({ result }: { result: StructuredResult }) {
         <CardTitle>{t("run.structuredResult")}</CardTitle>
         <CardDescription>{result.sql ?? t("run.sqlHidden")}</CardDescription>
       </CardHeader>
-      <CardContent className="overflow-x-auto">
-        <table className="w-full min-w-[560px] border-collapse text-left text-sm">
-          <thead>
-            <tr className="border-b border-border">
-              {result.columns.map((column) => (
-                <th key={column.name} className="px-3 py-2 font-medium text-fg-muted">
-                  {column.label ?? column.name}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {result.rows.map((row, index) => (
-              <tr key={String(index)} className="border-b border-border/70">
-                {result.columns.map((column) => (
-                  <td key={column.name} className="px-3 py-2 text-fg">
-                    {formatValue(row[column.name])}
-                  </td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <CardContent>
+        <DataTable
+          rows={result.rows}
+          columns={result.columns.map((column): DataTableColumn<Record<string, unknown>> => ({
+            key: column.name,
+            header: column.label ?? column.name,
+            render: (row) => formatValue(row[column.name]),
+          }))}
+          getRowKey={(_, index) => index}
+          tableClassName="w-full min-w-[560px]"
+          ariaLabel={t("run.structuredResult")}
+          empty={t("common.empty.title")}
+        />
       </CardContent>
     </Card>
   );

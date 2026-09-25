@@ -44,9 +44,28 @@ test("サイドバーのセクション再編とラベルを確認", async ({ pa
     await expect(pipelineSection.getByText(label, { exact: true })).toBeVisible();
   }
 
-  // システム設定の短縮ラベル
-  for (const label of ["OCI 認証", "アップロード保存先", "モデル", "データベース"]) {
-    await expect(sidebar.getByText(label, { exact: true })).toBeVisible();
+  // セクションは「… → 検索・回答設定 → 運用設定 → システム設定」の順に並ぶ（#80）。
+  const sectionIds = await sidebar
+    .locator('[id^="nav-section-nav-section-"]')
+    .evaluateAll((elements) => elements.map((element) => element.id));
+  expect(sectionIds.slice(-3)).toEqual([
+    "nav-section-nav-section-pipeline",
+    "nav-section-nav-section-operations",
+    "nav-section-nav-section-settings",
+  ]);
+
+  // 運用設定は RAG 固有の項目だけを持つ。
+  const operationsSection = sidebar.locator("#nav-section-nav-section-operations");
+  await expect(sidebar.getByText("運用設定", { exact: true })).toBeVisible();
+  await expect(operationsSection.getByRole("link")).toHaveCount(2);
+  await expect(operationsSection.getByRole("link", { name: /HuggingFace/ })).toBeVisible();
+  await expect(operationsSection.getByRole("link", { name: /サービス管理/ })).toBeVisible();
+
+  // システム設定は3製品で共通の5項目だけを持つ。
+  const settingsSection = sidebar.locator("#nav-section-nav-section-settings");
+  await expect(settingsSection.getByRole("link")).toHaveCount(5);
+  for (const label of ["OCI 認証", "アップロード保存先", "モデル", "データベース", "外観"]) {
+    await expect(settingsSection.getByText(label, { exact: true })).toBeVisible();
   }
 
   // ページタイトルもユーザー向けの業務語にする。

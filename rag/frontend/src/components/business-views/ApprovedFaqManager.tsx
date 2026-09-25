@@ -6,9 +6,11 @@ import {
   DataTable,
   EmptyState,
   FormStatus,
+  RowActionMenu,
   SelectField,
   TextField,
   toast,
+  useConfirm,
   type SelectFieldOption,
 } from "@engchina/production-ready-ui";
 
@@ -20,6 +22,7 @@ import {
   type ApprovedFaqRecordData,
 } from "@/lib/api";
 import { t } from "@/lib/i18n";
+import { useLeaveGuard } from "@/lib/leave-guard";
 import { useApprovedFaq, useApprovedFaqMutation } from "@/lib/queries";
 
 const IMPORT_MODE_OPTIONS: SelectFieldOption<ApprovedFaqImportMode>[] = [
@@ -63,6 +66,28 @@ export function ApprovedFaqManager({
     null,
   );
   const [previewError, setPreviewError] = useState("");
+  const confirm = useConfirm();
+
+  // FAQ の削除は取り消せないため、行のメニューから確認ダイアログを通す（buttons.md §5.1）。
+  const handleDelete = async (row: ApprovedFaqRecordData) => {
+    const ok = await confirm({
+      title: t("businessViews.faq.deleteConfirm.title"),
+      description: t("businessViews.faq.deleteConfirm.description", {
+        question: row.question,
+      }),
+      confirmLabel: t("businessViews.faq.delete"),
+      tone: "danger",
+      dismissOnOverlay: false,
+    });
+    if (!ok) return;
+    remove.mutate([row.id], {
+      onSuccess: () => toast.success(t("businessViews.faq.deleted")),
+      onError: (error) =>
+        toast.error(errorMessage(error, t("businessViews.faq.saveError"))),
+    });
+  };
+  // 追加前の Q&A 入力があるときだけ離脱を確認する。
+  useLeaveGuard(Boolean(question.trim() || answer.trim()));
 
   const selectFile = async (next: File | null) => {
     setFile(next);
@@ -102,24 +127,21 @@ export function ApprovedFaqManager({
             header: t("businessViews.faq.actions"),
             align: "right",
             render: (row) => (
-              <Button
-                size="sm"
-                variant="ghost"
-                icon={Trash2}
+              <RowActionMenu
+                actions={[
+                  {
+                    id: "delete",
+                    label: t("businessViews.faq.delete"),
+                    icon: Trash2,
+                    tone: "danger",
+                    loading: remove.isPending && remove.variables?.includes(row.id),
+                    onSelect: () => handleDelete(row),
+                  },
+                ]}
+                ariaLabel={t("common.objectActions.aria", { name: row.question })}
                 loading={remove.isPending && remove.variables?.includes(row.id)}
-                onClick={() =>
-                  remove.mutate([row.id], {
-                    onSuccess: () =>
-                      toast.success(t("businessViews.faq.deleted")),
-                    onError: (error) =>
-                      toast.error(
-                        errorMessage(error, t("businessViews.faq.saveError")),
-                      ),
-                  })
-                }
-              >
-                {t("businessViews.faq.delete")}
-              </Button>
+                testId={`approved-faq-row-actions-${row.id}`}
+              />
             ),
           },
         ]}

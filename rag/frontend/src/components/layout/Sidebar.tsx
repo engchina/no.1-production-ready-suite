@@ -10,6 +10,7 @@ import {
 
 import { useAuth } from "@/lib/auth";
 import { t } from "@/lib/i18n";
+import { confirmPendingLeave } from "@/lib/leave-guard";
 import { APP_ROUTES } from "@/lib/routes";
 import { useUiStore } from "@/lib/ui-store";
 import { NAV_SECTIONS } from "./nav-config";
@@ -59,6 +60,8 @@ export function Sidebar() {
   };
 
   async function handleLogout() {
+    // ログアウトは画面を離れる操作。未保存の編集があれば先に確認する。
+    if (!(await confirmPendingLeave())) return;
     await auth.logout();
     navigate(APP_ROUTES.login, { replace: true });
   }

@@ -1,4 +1,4 @@
-import { Pencil, Save, Search, Trash2, X } from "lucide-react";
+import { Save, Search, Trash2, X } from "lucide-react";
 import { useState } from "react";
 
 import {
@@ -11,8 +11,11 @@ import {
   Switch,
   TextField,
   toast,
+  useConfirm,
   type SelectFieldOption,
 } from "@engchina/production-ready-ui";
+
+import { RowTitleButton } from "@/components/layout/EntityLayout";
 
 import {
   api,
@@ -22,6 +25,7 @@ import {
   type RuntimeKnowledgePreviewData,
 } from "@/lib/api";
 import { t } from "@/lib/i18n";
+import { useLeaveGuard } from "@/lib/leave-guard";
 import { useEditRuntimeKnowledge, useRuntimeKnowledge } from "@/lib/queries";
 
 type Row = Record<string, JsonValue>;
@@ -63,6 +67,11 @@ function list(value: JsonValue | undefined): string[] {
     : [];
 }
 
+/** 種類の切替だけでは dirty にしない（入力値と編集対象を比べる）。 */
+function editableSnapshot({ selected, name, title, labels, content, enabled }: FormState) {
+  return JSON.stringify([selected, name, title, labels, content, enabled]);
+}
+
 function formFromRow(kind: RuntimeKnowledgeKind, row: Row): FormState {
   const identity = kind === "terms" ? text(row.term) : text(row.id);
   return {
@@ -74,6 +83,14 @@ function formFromRow(kind: RuntimeKnowledgeKind, row: Row): FormState {
     content: text(kind === "terms" ? row.description : row.content),
     enabled: ACTIVE_STATUSES.has(text(row.status)),
   };
+}
+
+function rowKey(kind: RuntimeKnowledgeKind, row: Row): string {
+  return kind === "terms" ? text(row.term) : text(row.id);
+}
+
+function rowName(kind: RuntimeKnowledgeKind, row: Row): string {
+  return kind === "terms" ? text(row.term) : text(row.title) || text(row.id);
 }
 
 function errorMessage(error: unknown, fallback: string) {
@@ -88,7 +105,15 @@ export function RuntimeKnowledgeManager({
 }) {
   const query = useRuntimeKnowledge(businessViewId);
   const save = useEditRuntimeKnowledge(businessViewId);
+  const confirm = useConfirm();
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
+  // 読み込んだ行（または空の新規）を基準に、未保存の入力だけを離脱ガードの対象にする。
+  const [baseline, setBaseline] = useState<FormState>(EMPTY_FORM);
+  const load = (next: FormState) => {
+    setForm(next);
+    setBaseline(next);
+  };
+  useLeaveGuard(editableSnapshot(form) !== editableSnapshot(baseline));
   const [question, setQuestion] = useState("");
   const [preview, setPreview] = useState<RuntimeKnowledgePreviewData | null>(
     null,
@@ -111,7 +136,7 @@ export function RuntimeKnowledgeManager({
       },
       {
         onSuccess: () => {
-          setForm({ ...EMPTY_FORM, kind: form.kind });
+          load({ ...EMPTY_FORM, kind: form.kind });
           toast.success(
             t(
               remove
@@ -126,6 +151,19 @@ export function RuntimeKnowledgeManager({
           ),
       },
     );
+
+  const confirmDelete = async () => {
+    const ok = await confirm({
+      title: t("businessViews.runtime.deleteConfirm.title"),
+      description: t("businessViews.runtime.deleteConfirm.description", {
+        name: form.selected ?? "",
+      }),
+      confirmLabel: t("businessViews.faq.delete"),
+      tone: "danger",
+      dismissOnOverlay: false,
+    });
+    if (ok) submit(true);
+  };
 
   const runPreview = async () => {
     setPreviewing(true);
@@ -151,12 +189,15 @@ export function RuntimeKnowledgeManager({
               : "businessViews.runtime.ruleTitle",
           ),
           rowHeader: true,
+          // 名前のボタンと行のクリックで編集フォームへ読み込む（page-archetypes.md §0-7）。
           render: (row) => (
-            <span className="break-words">
-              {kind === "terms"
-                ? text(row.term)
-                : text(row.title) || text(row.id)}
-            </span>
+            <RowTitleButton
+              title={rowName(kind, row)}
+              ariaLabel={t("businessViews.runtime.editNamed", {
+                name: rowName(kind, row),
+              })}
+              onClick={() => load(formFromRow(kind, row))}
+            />
           ),
         },
         {
@@ -188,24 +229,11 @@ export function RuntimeKnowledgeManager({
               />
             ),
         },
-        {
-          key: "actions",
-          header: t("businessViews.faq.actions"),
-          align: "right",
-          render: (row) => (
-            <Button
-              size="sm"
-              variant="ghost"
-              icon={Pencil}
-              onClick={() => setForm(formFromRow(kind, row))}
-            >
-              {t("businessViews.runtime.edit")}
-            </Button>
-          ),
-        },
       ]}
       rows={rows}
-      getRowKey={(row) => (kind === "terms" ? text(row.term) : text(row.id))}
+      getRowKey={(row) => rowKey(kind, row)}
+      onRowClick={(row) => load(formFromRow(kind, row))}
+      selectedRowKey={form.kind === kind ? form.selected : null}
       loading={query.isPending}
       dense
       empty={<EmptyState title={t("businessViews.runtime.empty")} />}
@@ -315,7 +343,7 @@ export function RuntimeKnowledgeManager({
                   variant="danger"
                   icon={Trash2}
                   disabled={save.isPending}
-                  onClick={() => submit(true)}
+                  onClick={() => void confirmDelete()}
                 >
                   {t("businessViews.faq.delete")}
                 </Button>
@@ -323,7 +351,7 @@ export function RuntimeKnowledgeManager({
                   size="sm"
                   variant="ghost"
                   icon={X}
-                  onClick={() => setForm({ ...EMPTY_FORM, kind: form.kind })}
+                  onClick={() => load({ ...EMPTY_FORM, kind: form.kind })}
                 >
                   {t("businessViews.runtime.cancel")}
                 </Button>

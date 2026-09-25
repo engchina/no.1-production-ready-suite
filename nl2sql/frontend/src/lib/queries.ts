@@ -2,10 +2,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
   api,
-  type AdbSettingsUpdate,
-  type DatabaseSettingsUpdate,
-  type ModelSettingsPayload,
-  type ModelSettingsTestRequest,
   type SelectAiCredentialCreateRequest,
   type SystemTablesInitializeRequest,
 } from "@/lib/api";
@@ -24,31 +20,26 @@ export const queryKeys = {
 
 const ACTIVE_REFETCH_INTERVAL_MS = 4000;
 
-const ADB_TRANSITIONAL_STATES: ReadonlySet<string> = new Set([
-  "STARTING",
-  "STOPPING",
-  "PROVISIONING",
-  "TERMINATING",
-  "UPDATING",
-  "RESTORING",
-  "BACKUP_IN_PROGRESS",
-  "MAINTENANCE_IN_PROGRESS",
-  "ROLE_CHANGE_IN_PROGRESS",
-]);
-
-function adbIsTransitioning(state: string | null | undefined): boolean {
-  return state != null && ADB_TRANSITIONAL_STATES.has(state);
-}
-
-export function useDatabaseStatus({ enabled = true }: { enabled?: boolean } = {}) {
+export function useDatabaseStatus({
+  enabled = true,
+}: { enabled?: boolean } = {}) {
   const qc = useQueryClient();
   return useQuery({
     queryKey: queryKeys.databaseStatus,
     queryFn: async ({ signal }) => {
       const next = await api.getDatabaseStatus({ signal });
-      const previous = qc.getQueryData<import("@/lib/api").DatabaseStatusData>(queryKeys.databaseStatus);
-      if (previous?.context_id && next.context_id && previous.context_id !== next.context_id) {
-        const business = { predicate: (query: { queryKey: readonly unknown[] }) => ["nl2sql", "schema"].includes(String(query.queryKey[0])) };
+      const previous = qc.getQueryData<import("@/lib/api").DatabaseStatusData>(
+        queryKeys.databaseStatus,
+      );
+      if (
+        previous?.context_id &&
+        next.context_id &&
+        previous.context_id !== next.context_id
+      ) {
+        const business = {
+          predicate: (query: { queryKey: readonly unknown[] }) =>
+            ["nl2sql", "schema"].includes(String(query.queryKey[0])),
+        };
         await qc.cancelQueries(business);
         qc.removeQueries(business);
       }
@@ -60,7 +51,9 @@ export function useDatabaseStatus({ enabled = true }: { enabled?: boolean } = {}
   });
 }
 
-export function usePersistenceStatus({ enabled = true }: { enabled?: boolean } = {}) {
+export function usePersistenceStatus({
+  enabled = true,
+}: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: queryKeys.persistenceStatus,
     queryFn: ({ signal }) => api.getPersistenceStatus({ signal }),
@@ -74,36 +67,6 @@ export function useRecoverPersistence() {
   return useMutation({
     mutationFn: api.recoverPersistence,
     onSuccess: (data) => qc.setQueryData(queryKeys.persistenceStatus, data),
-  });
-}
-
-export function useModelSettings() {
-  return useQuery({
-    queryKey: queryKeys.modelSettings,
-    queryFn: ({ signal }) => api.getModelSettings({ signal }),
-  });
-}
-
-export function useUpdateModelSettings() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (payload: ModelSettingsPayload) => api.updateModelSettings(payload),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: queryKeys.modelSettings });
-    },
-  });
-}
-
-export function useTestModelSettings() {
-  return useMutation({
-    mutationFn: (payload: ModelSettingsTestRequest) => api.testModelSettings(payload),
-  });
-}
-
-export function useDatabaseSettings() {
-  return useQuery({
-    queryKey: queryKeys.databaseSettings,
-    queryFn: ({ signal }) => api.getDatabaseSettings({ signal }),
   });
 }
 
@@ -121,7 +84,8 @@ export function useCreateSelectAiCredential() {
     mutationFn: (payload: SelectAiCredentialCreateRequest) =>
       api.createSelectAiCredential(payload),
     onSuccess: (data) => qc.setQueryData(queryKeys.selectAiCredential, data),
-    onError: () => qc.invalidateQueries({ queryKey: queryKeys.selectAiCredential }),
+    onError: () =>
+      qc.invalidateQueries({ queryKey: queryKeys.selectAiCredential }),
   });
 }
 
@@ -165,95 +129,3 @@ export function useSchemaOwners() {
     retry: false,
   });
 }
-
-export function useUpdateDatabaseSettings() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (payload: DatabaseSettingsUpdate) => api.updateDatabaseSettings(payload),
-    onSuccess: async () => {
-      await qc.invalidateQueries({ queryKey: queryKeys.databaseStatus });
-      qc.invalidateQueries({ queryKey: queryKeys.databaseSettings });
-    },
-  });
-}
-
-export function useUploadDatabaseWallet() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (file: File) => api.uploadDatabaseWallet(file),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: queryKeys.databaseSettings });
-    },
-  });
-}
-
-export function useDownloadDatabaseWallet() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: api.downloadDatabaseWallet,
-    onSuccess: (data) => {
-      qc.setQueryData(queryKeys.databaseSettings, data.settings);
-      qc.invalidateQueries({ queryKey: queryKeys.databaseStatus });
-    },
-  });
-}
-
-export function useRevealDatabasePassword() {
-  return useMutation({
-    mutationFn: api.revealDatabasePassword,
-  });
-}
-
-export function useTestDatabaseSettings() {
-  return useMutation({
-    mutationFn: (payload: DatabaseSettingsUpdate) => api.testDatabaseSettings(payload),
-  });
-}
-
-export function useAdbInfo() {
-  return useQuery({
-    queryKey: queryKeys.adbInfo,
-    queryFn: ({ signal }) => api.getAdbInfo({ signal }),
-    retry: false,
-    refetchInterval: (query) =>
-      adbIsTransitioning(query.state.data?.lifecycle_state)
-        ? ACTIVE_REFETCH_INTERVAL_MS
-        : false,
-  });
-}
-
-export function useUpdateAdbSettings() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (payload: AdbSettingsUpdate) => api.updateAdbSettings(payload),
-    onSuccess: (data) => {
-      qc.setQueryData(queryKeys.adbInfo, data);
-      qc.invalidateQueries({ queryKey: queryKeys.databaseSettings });
-    },
-  });
-}
-
-export function useStartAdb() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: () => api.startAdb(),
-    // 操作開始前の ADB 情報リクエストが遅れて STOPPED を書き戻すと、
-    // STARTING のポーリングが開始されないため in-flight query を無効化する。
-    onMutate: () => qc.cancelQueries({ queryKey: queryKeys.adbInfo }),
-    onSuccess: (data) => {
-      qc.setQueryData(queryKeys.adbInfo, data);
-      qc.invalidateQueries({ queryKey: queryKeys.databaseStatus });
-    },
-  });
-}
-
-export function useStopAdb() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: () => api.stopAdb(),
-    onMutate: () => qc.cancelQueries({ queryKey: queryKeys.adbInfo }),
-    onSuccess: (data) => qc.setQueryData(queryKeys.adbInfo, data),
-  });
-}
-
-

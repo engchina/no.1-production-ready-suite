@@ -9,7 +9,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 
-import { cn } from "@/lib/utils";
+import { cn } from "../../lib/utils";
 
 const MENU_GAP = 4;
 const MENU_VIEWPORT_PADDING = 8;

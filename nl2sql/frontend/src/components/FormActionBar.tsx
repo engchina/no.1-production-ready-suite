@@ -9,12 +9,15 @@ import {
 } from "react";
 import { type LucideIcon } from "lucide-react";
 
-import { FloatingActionMenu } from "@/components/FloatingMenu";
-import { Button, buttonVariants } from "@engchina/production-ready-ui";
-import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
-import type { EntityAction } from "@/components/ObjectActionsCore";
+import {
+  Button,
+  buttonVariants,
+  FloatingActionMenu,
+  DisclosureChevron,
+  restoreMenuTriggerFocus,
+  type EntityAction,
+} from "@engchina/production-ready-ui";
 import { t } from "@/lib/i18n";
-import { restoreMenuTriggerFocus } from "@/lib/menu-focus";
 import { cn } from "@/lib/utils";
 
 export interface FormActionDescriptor {

@@ -32,8 +32,8 @@
    上書きしていないトークンがライト値のまま残るため。 */
 :root, [data-theme], [data-surface] {
   --font-sans: "Noto Sans JP", "Roboto", system-ui, -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
-  /* ponytail: --font-mono（Google Sans Code）は RAG / Agent が書体を自前ホストしておらず、font-mono が
-     プロポーショナルの Noto Sans JP に落ちるため未定義のまま。各アプリが @fontsource を入れる PR 5 で定義する。 */
+  /* 等幅書体。3製品とも Google Sans Code を @fontsource で自前ホストする（#75）。 */
+  --font-mono: "Google Sans Code", "Noto Sans JP", "Roboto", monospace;
 
   /* ── 面 (surface) ──────────────────────────────────────────────────────
      ライトでは「浮き」を影で、ダークでは「浮き」を明るさで表現します。

@@ -35,6 +35,7 @@ import { DatabaseGate } from "@/components/system/DatabaseGate";
 import { ChatClient } from "@/components/chat/ChatClient";
 import { SearchClient } from "@/components/search/SearchClient";
 import { ErrorState } from "@/components/StateViews";
+import { RememberedSearchParams } from "@/components/RememberedSearchParams";
 import { DatabaseSettingsClient } from "@/components/settings/DatabaseSettingsClient";
 import { HuggingFaceSettingsClient } from "@/components/settings/HuggingFaceSettingsClient";
 import { AppearanceSettings } from "@/components/settings/AppearanceSettings";
@@ -96,7 +97,14 @@ export function App() {
         <Route path={APP_ROUTES.chat} element={<ChatClient />} />
         <Route path={APP_ROUTES.search} element={<SearchClient />} />
         <Route path={APP_ROUTES.evaluation} element={<EvaluationClient />} />
-        <Route path={APP_ROUTES.feedback} element={<FeedbackClient />} />
+        <Route
+          path={APP_ROUTES.feedback}
+          element={
+            <RememberedSearchParams field="feedback.search">
+              <FeedbackClient />
+            </RememberedSearchParams>
+          }
+        />
         <Route path={APP_ROUTES.settingsPipeline} element={<SettingsPipelineRoute />} />
         <Route path={APP_ROUTES.settingsOci} element={<SettingsOciRoute />} />
         <Route

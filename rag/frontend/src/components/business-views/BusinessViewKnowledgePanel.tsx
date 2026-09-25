@@ -16,6 +16,7 @@ import {
 
 import { ApiError } from "@/lib/api";
 import { t } from "@/lib/i18n";
+import { useLeaveGuard } from "@/lib/leave-guard";
 import {
   useDomainKeywords,
   useSaveDomainKeywords,
@@ -102,6 +103,7 @@ function DomainKeywordsEditor({ businessViewId }: { businessViewId: string }) {
 
   const current = parseKeywords(text);
   const dirty = current.join("\n") !== saved.join("\n");
+  useLeaveGuard(dirty);
   const candidates = (suggest.data?.candidates ?? []).filter(
     (candidate) => !current.includes(candidate.keyword),
   );

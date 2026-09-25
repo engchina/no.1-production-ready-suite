@@ -73,9 +73,17 @@ Prompt、Workflow、Template、Runtime 固有設定を直接参照してはな�
 - 日本語フォントは `"Noto Sans JP", "Roboto", system-ui, sans-serif`、本文 14px。
 - ナビは「業務 Agent / Skill / Runtime / Run / 承認・監査 / Marketplace」を主要導線とする。
   Plugin、Tools、Planner、Memory を独立ナビに戻さない。
+- 設定は2セクションに分ける。**運用設定**：Agent 接続設定 / 外部 RAG / 外部 NL2SQL / 外部 MCP /
+  Control Plane バックアップ（Agent 固有）。**システム設定**：OCI 認証 / アップロード保存先 / モデル /
+  データベース / 外観（3製品で共通。画面と API は platform の共有パッケージ）。
+  ツール権限 / Command Policy / Runtime Safety はナビに出さない（Control Plane 化で外した方針を維持）。
 - Agent 編集画面は Skill 選択だけ。実行先は Agent 詳細の Binding panel、Run では Binding
   上書きだけを表示する。
 - 空、読込、エラー、degraded、未 Binding、capability 非対応を明示する。
+- 画面の振る舞い（メッセージ機構・ボタンの役割と配置・ページの型・状態保持・横断的な保守契約）は
+  platform の [UX 契約](../platform/docs/ux-contracts/README.md) を正本とする。
+- 各ページの型（A〜D）の割り当て、離脱ガードの対象画面、作業状態として残す field は
+  [docs/frontend-page-archetypes-spec.md](./docs/frontend-page-archetypes-spec.md) に書く。
 - UI/UX 作業では必ず `ui-ux-pro-max` skill を使い、desktop と 375px、キーボード操作を
   Playwright で確認する。
 
