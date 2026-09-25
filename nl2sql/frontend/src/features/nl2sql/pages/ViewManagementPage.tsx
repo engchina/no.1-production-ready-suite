@@ -11,8 +11,8 @@ import {
   PageBody,
   ContentActionBar,
   ProcessingIndicator,
+  DisclosureChevron,
 } from "@engchina/production-ready-ui";
-import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
 
 import { PageNotice } from "@/components/page-notice";
 import { apiFetch, apiPost, isTimeoutError } from "@/lib/api";

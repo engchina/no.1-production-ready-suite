@@ -11,8 +11,8 @@ import {
   useConfirm,
   ContentActionBar,
   TimedLoadingState,
+  DisclosureChevron,
 } from "@engchina/production-ready-ui";
-import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
 import {
   useCallback,
   useEffect,

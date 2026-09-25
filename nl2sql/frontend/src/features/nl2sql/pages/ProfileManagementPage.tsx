@@ -28,11 +28,11 @@ import {
   BulkSelectionActions,
   ClearActionButton,
   ProcessingIndicator,
+  ObjectActionBar,
 } from "@engchina/production-ready-ui";
 import { ErrorState } from "@/components/StateViews";
 import { IdentifierText } from "@/components/IdentifierText";
 
-import { ObjectActionBar } from "@/components/ObjectActions";
 import { PageHeaderStatusBadge } from "@/components/PageHeaderStatusBadge";
 import { PageNotice } from "@/components/page-notice";
 import { FieldLabel } from "@/components/ui/required-field";

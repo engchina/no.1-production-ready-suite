@@ -1,5 +1,4 @@
-import { StatusBadge } from "@engchina/production-ready-ui";
-import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
+import { StatusBadge, DisclosureChevron } from "@engchina/production-ready-ui";
 import { t } from "@/lib/i18n";
 import type { OntologyFinding } from "./types";
 
