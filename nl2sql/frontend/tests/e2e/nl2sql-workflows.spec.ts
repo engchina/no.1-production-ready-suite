@@ -15164,6 +15164,8 @@ test("workspace: 管理 SQL の草稿を往復と再読込で復元し確認と�
   await expect.poll(() => executions).toBe(1);
   await expect(panel.getByTestId("admin-sql-execution-activity")).toContainText("実行日時:");
   await page.locator('a[href="/table-management"]').first().click();
+  // data router の遷移は非同期。離れたことを確かめてから戻る（確認語の解除はページを離れたときに起きる）。
+  await expect(page).toHaveURL(/\/table-management$/);
   await page.locator('a[href="/admin-sql"]').first().click();
   await expect(input).toHaveValue(sql + ";");
   await expect(confirmation).toHaveValue("");
