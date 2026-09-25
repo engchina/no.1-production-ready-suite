@@ -89,7 +89,10 @@ test("取込中の文書がポーリングで索引済みに自動遷移する",
   const row = page.locator("tbody tr").filter({ hasText: "report.pdf" });
   await expect(row).toContainText("解析（抽出）中");
   const errorRow = page.locator("tbody tr").filter({ hasText: "failed.pdf" });
-  await expect(errorRow.getByRole("button", { name: "ファイル準備を再実行" })).toBeVisible();
+  // 行の操作は RowActionMenu にまとまっている（#131）。失敗行のメニューに再実行が出る。
+  await errorRow.getByRole("button", { name: "failed.pdf の操作" }).click();
+  await expect(page.getByRole("menuitem", { name: "ファイル準備を再実行" })).toBeVisible();
+  await page.keyboard.press("Escape");
 
   // クリックやリロードなしで、ポーリングにより索引済みへ更新される。
   await expect(row).toContainText("索引済み", { timeout: 15000 });

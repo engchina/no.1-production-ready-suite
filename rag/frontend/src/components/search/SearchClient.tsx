@@ -48,6 +48,7 @@ import { t, type I18nKey } from "@/lib/i18n";
 import { APP_ROUTES } from "@/lib/routes";
 import { useBusinessViews } from "@/lib/queries";
 import { formatDateTime } from "@/lib/format";
+import { isOneOf, useWorkspaceState } from "@/lib/workspace-state";
 import { DocragAnswerHistory } from "./DocragAnswerHistory";
 import { DocragAnswerPanel } from "./DocragAnswerPanel";
 import { ApprovedFaqAnswer, ApprovedFaqSuggestions } from "./ApprovedFaqSuggestions";
@@ -143,23 +144,33 @@ const STAGE_LABEL: Record<string, I18nKey> = {
 
 /** RAG 検索画面。回答を SSE でストリーミング表示する。 */
 export function SearchClient() {
-  const [query, setQuery] = useState("");
+  // 入力中の質問・業務ビュー・詳細条件は、ページを行き来しても再読込しても残す（workspace-state.md）。
+  // 回答・引用などの結果は保存せず、戻っただけで検索を送り直さない。
+  const [query, setQuery] = useWorkspaceState("search.query", "");
   const [submittedQuery, setSubmittedQuery] = useState("");
-  const [mode, setMode] = useState<SearchMode>("hybrid");
+  const [mode, setMode] = useWorkspaceState<SearchMode>("search.mode", "hybrid", isOneOf(MODES));
   const [phase, setPhase] = useState<Phase>("idle");
   const [answer, setAnswer] = useState("");
   const [citations, setCitations] = useState<RetrievedChunk[]>([]);
   const [meta, setMeta] = useState<Meta | null>(null);
   const [errorText, setErrorText] = useState("");
-  const [contentKind, setContentKind] = useState<ContentKindFilter>("");
-  const [sectionTitle, setSectionTitle] = useState("");
-  const [sectionPath, setSectionPath] = useState("");
-  const [topK, setTopK] = useState<TopKOption>(DEFAULT_TOP_K);
-  const [rerankTopN, setRerankTopN] = useState<RerankTopNOption>(DEFAULT_RERANK_TOP_N);
-  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [contentKind, setContentKind] = useWorkspaceState<ContentKindFilter>(
+    "search.contentKind",
+    "",
+    isOneOf(CONTENT_KIND_OPTIONS)
+  );
+  const [sectionTitle, setSectionTitle] = useWorkspaceState("search.sectionTitle", "");
+  const [sectionPath, setSectionPath] = useWorkspaceState("search.sectionPath", "");
+  const [topK, setTopK] = useWorkspaceState<TopKOption>("search.topK", DEFAULT_TOP_K, isOneOf(TOP_K_OPTIONS));
+  const [rerankTopN, setRerankTopN] = useWorkspaceState<RerankTopNOption>(
+    "search.rerankTopN",
+    DEFAULT_RERANK_TOP_N,
+    isOneOf(RERANK_TOP_N_OPTIONS)
+  );
+  const [advancedOpen, setAdvancedOpen] = useWorkspaceState("search.advancedOpen", false);
   const [sectionFiltersOpen, setSectionFiltersOpen] = useState(false);
   const [appliedFilters, setAppliedFilters] = useState<Record<string, string>>({});
-  const [businessViewIds, setBusinessViewIds] = useState<string[]>([]);
+  const [businessViewIds, setBusinessViewIds] = useWorkspaceState<string[]>("search.businessViewIds", []);
   const [scopeError, setScopeError] = useState("");
   const [run, setRun] = useState<SearchRun | null>(null);
   const [faqSuggestions, setFaqSuggestions] = useState<ApprovedFaqSuggestionData[] | null>(null);
@@ -169,6 +180,17 @@ export function SearchClient() {
   const navigate = useNavigate();
   const businessViewsQuery = useBusinessViews({ status: "ACTIVE", limit: 50, offset: 0 });
   const businessViews = businessViewsQuery.data?.items ?? [];
+  // 復元した業務ビューのうち、アーカイブ・削除されたものだけ選択から外す（別の対象へ置き換えない）。
+  const staleBusinessViewIds =
+    businessViewsQuery.data && !businessViewsQuery.data.has_next
+      ? businessViewIds.filter((id) => !businessViews.some((view) => view.id === id))
+      : [];
+  const staleBusinessViewKey = staleBusinessViewIds.join(",");
+  useEffect(() => {
+    if (!staleBusinessViewKey) return;
+    const stale = new Set(staleBusinessViewKey.split(","));
+    setBusinessViewIds((current) => current.filter((id) => !stale.has(id)));
+  }, [staleBusinessViewKey, setBusinessViewIds]);
   const hasSectionFilters = Boolean(sectionTitle.trim()) || Boolean(sectionPath.trim());
   const hasFilters =
     Boolean(contentKind) || hasSectionFilters;
@@ -361,7 +383,7 @@ export function SearchClient() {
                   title={t("search.businessViewRequired.title")}
                   hint={t("search.businessViewRequired.hint")}
                   action={
-                    <Button onClick={() => navigate(APP_ROUTES.businessViews)} icon={Plus}>
+                    <Button onClick={() => navigate(`${APP_ROUTES.businessViews}?id=new`)} icon={Plus}>
                       {t("search.businessViewRequired.cta")}
                     </Button>
                   }

@@ -257,15 +257,96 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       return findOr404(state.runtimes, "id", second, "runtime");
     }
   }
-  if (head === "runtime-bindings" && method === "GET" && at("runtime-bindings")) {
-    const agentId = query.get("agent_id");
-    return {
-      bindings: agentId ? state.bindings.filter((binding) => binding.agent_id === agentId) : state.bindings,
-    };
+  if (head === "runtime-bindings") {
+    if (method === "GET" && at("runtime-bindings")) {
+      const agentId = query.get("agent_id");
+      return {
+        bindings: agentId ? state.bindings.filter((binding) => binding.agent_id === agentId) : state.bindings,
+      };
+    }
+    if (method === "POST" && at("runtime-bindings")) {
+      const binding: Json = {
+        id: `binding-${String(body.agent_id)}-${state.bindings.length + 1}`,
+        is_default: false,
+        enabled: true,
+        policy: {},
+        sync_status: "pending",
+        sync_error: null,
+        created_at: MOCK_NOW,
+        updated_at: MOCK_NOW,
+        ...body,
+      };
+      if (binding.is_default) {
+        state.bindings.forEach((other) => {
+          if (other.agent_id === binding.agent_id) other.is_default = false;
+        });
+      }
+      state.bindings.push(binding);
+      return binding;
+    }
+    if (at("runtime-bindings", "*", "sync") && method === "POST") {
+      const binding = findOr404(state.bindings, "id", second, "binding");
+      binding.sync_status = "ready";
+      return binding;
+    }
+    if (at("runtime-bindings", "*")) {
+      const binding = findOr404(state.bindings, "id", second, "binding");
+      if (method === "PATCH") {
+        if (body.is_default) {
+          state.bindings.forEach((other) => {
+            if (other.agent_id === binding.agent_id) other.is_default = false;
+          });
+        }
+        Object.assign(binding, body);
+        return binding;
+      }
+      if (method === "DELETE") {
+        state.bindings = state.bindings.filter((candidate) => candidate.id !== second);
+        return { bindings: state.bindings };
+      }
+    }
   }
 
-  // --- Run / 監査 ---
+  // --- Run / 承認 / 監査 ---
   if (method === "GET" && at("runs")) return { runs: state.runs };
+  if (head === "runs" && second) {
+    const run = findOr404(state.runs, "id", second, "run");
+    if (method === "GET" && at("runs", "*", "audit")) {
+      return { run_id: run.id, goal: run.goal, status: run.status, records: [] };
+    }
+    if (method === "GET" && at("runs", "*", "artifacts")) return { artifacts: [] };
+    if (method === "POST" && at("runs", "*", "cancel")) {
+      run.status = "cancelled";
+      return run;
+    }
+    if (method === "POST" && at("runs", "*", "resume")) return run;
+    if (method === "POST" && at("runs", "*", "replay")) {
+      const replay = { ...clone(run), id: `${String(run.id)}-replay-${state.runs.length}`, status: "completed" };
+      state.runs.unshift(replay);
+      return replay;
+    }
+  }
+  if (method === "POST" && at("approvals", "*", "decision")) {
+    for (const run of state.runs) {
+      const approval = ((run.approvals as Json[] | undefined) ?? []).find((candidate) => candidate.id === second);
+      if (approval) {
+        approval.status = body.approved ? "approved" : "rejected";
+        approval.decided_by = body.decided_by ?? null;
+        return run;
+      }
+    }
+    throw new HttpError(404, `approval not found: ${second}`);
+  }
+  if (method === "POST" && at("memory")) {
+    const entry = {
+      id: `memory-${state.memory.length + 1}`,
+      metadata: {},
+      created_at: MOCK_NOW,
+      ...body,
+    };
+    state.memory.unshift(entry);
+    return entry;
+  }
   if (method === "GET" && at("audit", "tool-calls")) {
     return { total: 0, offset: 0, limit: 100, filters: {}, records: [] };
   }
@@ -293,6 +374,11 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
         ...body,
       };
       state.agents.push(agent);
+      return agent;
+    }
+    if (method === "PATCH" && at("agents", "*")) {
+      const agent = findOr404(state.agents, "id", second, "agent");
+      Object.assign(agent, body, { updated_at: MOCK_NOW });
       return agent;
     }
   }

@@ -38,7 +38,8 @@ import {
   nextFixedSplitStateFromFraction,
   parseFixedSplitStorageValue,
   serializeFixedSplitState,
-} from "../src/lib/fixed-split-pane.ts";
+} from "@engchina/production-ready-ui";
+import { FIXED_SPLIT_STORAGE_PREFIX } from "../src/lib/ui-store.ts";
 import {
   previewExecutePayload,
   previewToJob,
@@ -121,7 +122,7 @@ test("table insertion builds logical and physical table identifiers", () => {
 
 test("fixed split pane stores ratio per page split id", () => {
   assert.equal(
-    fixedSplitStorageKey("profile-management-oracle"),
+    fixedSplitStorageKey("profile-management-oracle", FIXED_SPLIT_STORAGE_PREFIX),
     "production-ready-nl2sql.fixedSplitPane.profile-management-oracle"
   );
   assert.equal(isFixedSplitRatio("leftWide"), true);

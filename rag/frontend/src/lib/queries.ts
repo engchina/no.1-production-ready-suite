@@ -13,6 +13,7 @@ import {
 
 import {
   api,
+  ApiError,
   type ChunkSetExperimentRequest,
   type ParserExtractionExperimentRequest,
   type DashboardActivity,
@@ -965,6 +966,9 @@ export function useBusinessView(id: string | null) {
     queryKey: queryKeys.businessView(id ?? ""),
     queryFn: () => api.getBusinessView(id as string),
     enabled: id != null,
+    // URL の `?id=` の対象が無い（404）ときは再試行せず、すぐ「見つかりません」を出す。
+    retry: (failureCount, error) =>
+      !(error instanceof ApiError && error.status === 404) && failureCount < 3,
   });
 }
 

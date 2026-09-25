@@ -48,6 +48,7 @@ import {
   type ParserServiceBackendName,
   type ServiceProfile,
 } from "@/lib/api";
+import { useLeaveGuard } from "@/lib/leave-guard";
 import { t, type I18nKey } from "@/lib/i18n";
 import {
   findParserCapability,
@@ -147,6 +148,9 @@ export function ParserAdapterSettingsClient() {
       setForm(formFromSettings(query.data));
     }
   }, [query.data, save.isPending]);
+
+  // 未保存の選択があるときだけ、サイドナビ・内部リンク・再読込での離脱を確認する。
+  useLeaveGuard(Boolean(query.data && form && serializeForm(form) !== serializeForm(formFromSettings(query.data))));
 
   if (query.isPending) {
     return (

@@ -33,11 +33,12 @@ import {
   PageBody,
   useConfirm,
   BulkSelectionActions,
+  ProcessingIndicator,
+  ObjectActionBar,
+  type EntityAction,
 } from "@engchina/production-ready-ui";
 
 import { FormActionBar, entityActionToFormAction } from "@/components/FormActionBar";
-import { ObjectActionBar, type EntityAction } from "@/components/ObjectActions";
-import { ProcessingIndicator } from "@/components/ProcessingState";
 import { FieldLabel } from "@/components/ui/required-field";
 import { ApiError, isAbortError } from "@/lib/api";
 import {

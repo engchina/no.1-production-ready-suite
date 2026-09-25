@@ -114,7 +114,13 @@ test("別の版を有効化できる", async ({ page }) => {
   });
 
   await page.goto("/settings/prompts");
-  await page.getByRole("button", { name: "有効化 監査版" }).click();
+  // 有効化は行の RowActionMenu に入る（#147）。有効な版は理由付きで無効。
+  await page.getByRole("button", { name: "標準版 の操作" }).click();
+  await expect(page.getByRole("menuitem", { name: "この版はすでに有効です" })).toBeDisabled();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("button", { name: "標準版 の操作" })).toBeFocused();
+  await page.getByRole("button", { name: "監査版 の操作" }).click();
+  await page.getByRole("menuitem", { name: "有効化" }).click();
 
   await expect(page.getByText("回答プロンプト版を有効化しました。")).toBeVisible();
   expect(activatedUrl).toContain("/api/settings/prompts/v2/activate");

@@ -7,8 +7,8 @@ import {
   Button,
   StatusBadge,
   FormStatus,
+  ProcessingIndicator,
 } from "@engchina/production-ready-ui";
-import { ProcessingIndicator } from "@/components/ProcessingState";
 import { apiGet } from "@/lib/api";
 import { useDatabaseStatus } from "@/lib/queries";
 import { t } from "@/lib/i18n";

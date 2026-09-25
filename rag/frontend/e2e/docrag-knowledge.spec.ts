@@ -129,7 +129,8 @@ for (const viewport of [
     await mockBusinessViewApi(page);
 
     await page.goto("/business-views");
-    await page.getByRole("button", { name: "編集" }).first().click();
+    await page.getByRole("button", { name: "受注サポート を編集" }).click();
+    await expect(page).toHaveURL(/\/business-views\?id=bv-1$/);
 
     const panel = page.getByRole("heading", { name: "業務ビューの知識" });
     await expect(panel).toBeVisible();
@@ -145,6 +146,19 @@ for (const viewport of [
     await page.getByRole("tab", { name: "用語・ルール" }).click();
     await expect(page.getByRole("rowheader", { name: "受注" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "照合テスト" })).toBeVisible();
+    // 用語・ルールは行のクリック（キーボードは名前のボタン）でフォームへ読み込み、選んだ行を aria-current で示す（#147）。
+    const termRow = page.getByRole("row").filter({ has: page.getByRole("rowheader", { name: "受注" }) });
+    await termRow.getByText("オーダー").click();
+    await expect(termRow).toHaveAttribute("aria-current", "true");
+    await expect(page.getByRole("heading", { name: "編集中: 受注" })).toBeVisible();
+    await expect(page.getByLabel("別名（1 行に 1 つ）")).toHaveValue("オーダー");
+    await expect(page.getByRole("button", { name: "受注 を編集" })).toBeVisible();
+    // 削除は確認ダイアログを通す（キャンセルでは送らない）。
+    await page.getByRole("button", { name: "削除", exact: true }).click();
+    const deleteDialog = page.getByRole("alertdialog", { name: "この用語・ルールを削除しますか？" });
+    await expect(deleteDialog).toBeVisible();
+    await deleteDialog.getByRole("button", { name: "キャンセル" }).click();
+    await expect(deleteDialog).toHaveCount(0);
     await expectNoPageOverflow(page);
   });
 }
@@ -297,8 +311,19 @@ test("DocRAG の回答履歴から過去の回答・根拠を開き直し、削�
   await expect(page.getByText("保存から 90 日を過ぎた回答は自動で削除されます。")).toBeVisible();
   await expectNoPageOverflow(page);
 
-  await page.getByRole("button", { name: "この回答を削除" }).click();
-  await page.getByRole("alertdialog").getByRole("button", { name: "削除" }).click();
+  // 削除は保存された回答の ObjectActionBar（危険な操作だけなので「その他の操作」）に入り、確認を通す（#147）。
+  const answerActions = page.getByRole("group", { name: "保存された回答 の操作" });
+  await answerActions.getByRole("button", { name: "その他の操作" }).click();
+  await page.getByRole("menuitem", { name: "この回答を削除" }).click();
+  const confirmDialog = page.getByRole("alertdialog", { name: "保存された回答を削除しますか？" });
+  await confirmDialog.getByRole("button", { name: "キャンセル" }).click();
+  await expect(confirmDialog).toHaveCount(0);
+  await expect(answerActions.getByRole("button", { name: "その他の操作" })).toBeFocused();
+  expect(deleted).toBe(false);
+
+  await answerActions.getByRole("button", { name: "その他の操作" }).click();
+  await page.getByRole("menuitem", { name: "この回答を削除" }).click();
+  await confirmDialog.getByRole("button", { name: "削除" }).click();
   await expect(page.getByText("保存された DocRAG の回答はまだありません。")).toBeVisible();
   await expect(page.getByText("受注一覧で取消ボタンを押します。")).toHaveCount(0);
   expect(deleted).toBe(true);

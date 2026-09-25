@@ -10,10 +10,10 @@ import {
   PageHeader,
   PageBody,
   ContentActionBar,
+  ProcessingIndicator,
+  DisclosureChevron,
 } from "@engchina/production-ready-ui";
-import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
 
-import { ProcessingIndicator } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";
 import { apiFetch, apiPost, isTimeoutError } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";

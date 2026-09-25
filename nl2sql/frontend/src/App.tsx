@@ -20,8 +20,7 @@ import { WorkspaceBoundary, WorkspaceDraftWarning, WorkspacePage } from "@/compo
 import { useDatabaseStatus } from "@/lib/queries";
 
 import { AppSidebar } from "@/components/layout/AppSidebar";
-import { PageHeader, AppShell, PageBody } from "@engchina/production-ready-ui";
-import { TimedLoadingState } from "@/components/ProcessingState";
+import { PageHeader, AppShell, PageBody, TimedLoadingState } from "@engchina/production-ready-ui";
 import { DatabaseGate } from "@/components/system/DatabaseGate";
 import { SyntheticRunNotifications } from "@/features/nl2sql/syntheticRuns";
 import { SchemaRefreshCoordinator } from "@/features/nl2sql/SchemaRefreshCoordinator";

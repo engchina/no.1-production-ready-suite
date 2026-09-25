@@ -22,6 +22,7 @@ import {
   type AgenticSettingsData,
   type AgenticSettingsUpdate,
 } from "@/lib/api";
+import { useLeaveGuard } from "@/lib/leave-guard";
 import { t, type I18nKey } from "@/lib/i18n";
 import { useAgenticSettings, useUpdateAgenticSettings } from "@/lib/queries";
 import { cn } from "@/lib/utils";
@@ -47,6 +48,14 @@ export function AgenticSettingsClient() {
       setForm(formFromSettings(query.data));
     }
   }, [query.data, save.isPending]);
+
+  // 未保存の選択があるときだけ、サイドナビ・内部リンク・再読込での離脱を確認する。
+  useLeaveGuard(Boolean(
+      query.data &&
+        form &&
+        (form.profile !== query.data.profile ||
+          form.max_subqueries !== formFromSettings(query.data).max_subqueries)
+    ));
 
   if (query.isPending) {
     return (

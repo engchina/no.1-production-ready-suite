@@ -53,7 +53,9 @@ test("文書インデックスからアップロード済みドキュメント�
 
   await expect(page.getByRole("heading", { name: "文書インデックス" })).toBeVisible();
   await expect(page.getByRole("link", { name: "policy.txt" })).toBeVisible();
-  await page.getByRole("button", { name: "policy.txt を削除" }).click();
+  // 行の操作は RowActionMenu 1 個にまとまっている（#131 / buttons.md §5.1）。
+  await page.getByRole("button", { name: "policy.txt の操作" }).click();
+  await page.getByRole("menuitem", { name: "policy.txt を削除" }).click();
 
   const dialog = page.getByRole("alertdialog", { name: "このドキュメントを削除しますか？" });
   await expect(dialog).toBeVisible();
@@ -65,6 +67,87 @@ test("文書インデックスからアップロード済みドキュメント�
   await expect(page.getByRole("link", { name: "guide.txt" })).toBeVisible();
   expect(deletedId).toBe("doc-1");
   await expectNoHorizontalOverflow(page);
+});
+
+// #131: 行の操作は RowActionMenu 1 個にまとめる（buttons.md §5.1）。desktop / mobile の両 project で動く。
+test("行の操作メニューは Enter で開き、Esc で閉じてトリガーへフォーカスを戻す", async ({ page }) => {
+  const documents: DocumentSummary[] = [
+    documentSummary("doc-1", "policy.txt", "UPLOADED"),
+    documentSummary("doc-2", "guide.txt", "INDEXED"),
+  ];
+  await mockDocumentIndexApi(page, documents, () => {});
+
+  await page.goto("/file-list");
+
+  const row = page.locator("tbody tr").filter({ hasText: "policy.txt" });
+  // 行内のボタンはメニューのトリガー 1 個だけ（文字ボタンを並べない）。
+  await expect(row.getByRole("button")).toHaveCount(1);
+  const trigger = row.getByRole("button", { name: "policy.txt の操作" });
+  await expect(trigger).toHaveAttribute("aria-haspopup", "menu");
+  await expect(trigger).toHaveAttribute("aria-expanded", "false");
+
+  await trigger.focus();
+  await page.keyboard.press("Enter");
+  const menu = page.getByRole("menu");
+  await expect(menu).toBeVisible();
+  await expect(trigger).toHaveAttribute("aria-expanded", "true");
+  // 取込と削除が 1 つのメニューに入り、先頭の項目へフォーカスが移る。
+  await expect(menu.getByRole("menuitem")).toHaveText(["ファイル準備を実行", "削除"]);
+  await expect(menu.getByRole("menuitem", { name: "ファイル準備を実行" })).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(menu.getByRole("menuitem", { name: "policy.txt を削除" })).toBeFocused();
+
+  await page.keyboard.press("Escape");
+  await expect(menu).toHaveCount(0);
+  await expect(trigger).toBeFocused();
+  await expect(trigger).toHaveAttribute("aria-expanded", "false");
+
+  // 索引済みの行は取込の操作を出さず、削除だけを持つ。
+  await page
+    .locator("tbody tr")
+    .filter({ hasText: "guide.txt" })
+    .getByRole("button", { name: "guide.txt の操作" })
+    .click();
+  await expect(page.getByRole("menu").getByRole("menuitem")).toHaveText(["削除"]);
+  await page.keyboard.press("Escape");
+  await expectNoHorizontalOverflow(page);
+});
+
+test("行のメニューからの削除は確認ダイアログを通り、キャンセルでは削除しない", async ({ page }) => {
+  const documents: DocumentSummary[] = [documentSummary("doc-1", "policy.txt", "UPLOADED")];
+  let deleteCalls = 0;
+  await mockDocumentIndexApi(page, documents, (id) => {
+    deleteCalls += 1;
+    const index = documents.findIndex((document) => document.id === id);
+    if (index >= 0) documents.splice(index, 1);
+  });
+
+  await page.goto("/file-list");
+
+  const trigger = page.getByRole("button", { name: "policy.txt の操作" });
+  await trigger.click();
+  await page.getByRole("menuitem", { name: "policy.txt を削除" }).click();
+  const dialog = page.getByRole("alertdialog", { name: "このドキュメントを削除しますか？" });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "キャンセル" }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "policy.txt" })).toBeVisible();
+  expect(deleteCalls).toBe(0);
+
+  // 一括選択の間は行の操作を止め、一括操作のバーへ集める。
+  await page.locator("tbody tr").filter({ hasText: "policy.txt" }).getByRole("checkbox").check();
+  await expect(trigger).toBeDisabled();
+  await page.getByRole("button", { name: "選択解除" }).click();
+  await expect(trigger).toBeEnabled();
+
+  await trigger.click();
+  await page.getByRole("menuitem", { name: "policy.txt を削除" }).click();
+  await page
+    .getByRole("alertdialog", { name: "このドキュメントを削除しますか？" })
+    .getByRole("button", { name: "削除" })
+    .click();
+  await expect(page.getByText("「policy.txt」を削除しました。").first()).toBeVisible();
+  expect(deleteCalls).toBe(1);
 });
 
 test("選択したドキュメントを一括削除できる", async ({ page }) => {

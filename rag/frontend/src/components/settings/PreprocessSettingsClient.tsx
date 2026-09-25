@@ -20,6 +20,7 @@ import {
   type PreprocessProfileName,
   type PreprocessProfileStatusData,
 } from "@/lib/api";
+import { useLeaveGuard } from "@/lib/leave-guard";
 import { t, type I18nKey } from "@/lib/i18n";
 import { usePreprocessSettings, useUpdatePreprocessSettings } from "@/lib/queries";
 import { cn } from "@/lib/utils";
@@ -47,6 +48,9 @@ export function PreprocessSettingsClient() {
       setProfile(query.data.profile);
     }
   }, [query.data, save.isPending]);
+
+  // 未保存の選択があるときだけ、サイドナビ・内部リンク・再読込での離脱を確認する。
+  useLeaveGuard(Boolean(query.data && profile !== null && profile !== query.data.profile));
 
   if (query.isPending) {
     return (

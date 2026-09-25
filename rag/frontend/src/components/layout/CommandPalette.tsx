@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { CornerDownLeft, Search, X } from "lucide-react";
 
 import { t } from "@/lib/i18n";
+import { confirmPendingLeave } from "@/lib/leave-guard";
 import { cn } from "@/lib/utils";
 import { NAV_SECTIONS, type NavItem } from "./nav-config";
 
@@ -110,7 +111,12 @@ function CommandPaletteDialog({ onClose }: { onClose: () => void }) {
     const entry = results[index];
     if (!entry) return;
     onClose();
-    navigate(entry.item.href);
+    const href = entry.item.href;
+    if (href === window.location.pathname) return;
+    // navigate() は共有ガードの click 捕捉を通らないため、未保存の編集があれば先に確認する。
+    void confirmPendingLeave().then((confirmed) => {
+      if (confirmed) navigate(href);
+    });
   }
 
   function onKeyDown(event: React.KeyboardEvent) {
@@ -163,7 +169,7 @@ function CommandPaletteDialog({ onClose }: { onClose: () => void }) {
             onChange={(event) => setQuery(event.target.value)}
             placeholder={t("command.search.placeholder")}
             // グローバルのフォーム focus 枠(inset ring)を打ち消し、パレットらしいシームレスな検索にする。
-            className="h-14 w-full bg-transparent text-base leading-6 text-fg caret-accent-fg outline-none placeholder:text-fg-muted focus-visible:shadow-none!"
+            className="h-14 w-full bg-transparent text-sm leading-6 text-fg caret-accent-fg outline-none placeholder:text-fg-muted focus-visible:shadow-none!"
           />
           {query ? (
             <button

@@ -73,7 +73,7 @@ RAG の製品語は **ナレッジ構築**、**業務ビュー**、**検索・�
   - **検索・回答設定**: ファイル準備、文書解析、文書分割、検索インデックス、検索方法、根拠確認、回答スタイル、回答プロンプト、安全チェック、品質評価、GraphRAG、エージェント計画。
   - **運用設定**: HuggingFace 設定、サービス管理（RAG 固有の運用項目）。
   - **システム設定**: OCI 認証、アップロード保存先、モデル、データベース、外観（3製品で共通。画面と API は platform の共有パッケージ）。
-- 画面の振る舞い（メッセージ機構・ボタンの役割と配置・ページの型・状態保持・横断的な保守契約）は platform の [UX 契約](../platform/docs/ux-contracts/README.md) を正本とする。RAG 固有の差分（文書詳細の失敗表示）は [docs/frontend-messaging-spec.md](./docs/frontend-messaging-spec.md) に書く。
+- 画面の振る舞い（メッセージ機構・ボタンの役割と配置・ページの型・状態保持・横断的な保守契約）は platform の [UX 契約](../platform/docs/ux-contracts/README.md) を正本とする。RAG 固有の差分は [docs/frontend-messaging-spec.md](./docs/frontend-messaging-spec.md)（文書詳細の失敗表示）、[docs/frontend-workspace-state-spec.md](./docs/frontend-workspace-state-spec.md)（離脱ガードと作業状態の保持の対象・保存 key）、[docs/frontend-page-archetypes-spec.md](./docs/frontend-page-archetypes-spec.md)（各ページのページの型 A〜D と、対象の操作の `RowActionMenu` / `ObjectActionBar` への割り当て・例外）に書く。
 - ボタンの大きさ・スタイル・アイコン・loading・ヘッダーの並び順は platform の `docs/design-system/` を正本とし、画面内の配置と命名は [UX 契約 buttons.md](../platform/docs/ux-contracts/buttons.md) に従う。
 
 ## デザインシステム / UI
@@ -84,7 +84,7 @@ RAG の製品語は **ナレッジ構築**、**業務ビュー**、**検索・�
 ### RAG 固有
 
 - 移行時に `ToggleChip` をタブとして使っている箇所（ビューの切替）を `Tabs` に置き換え、絞り込みの箇所だけ `ToggleChip` に残す。
-- `--font-mono`（ID・ログ・SQL の等幅書体）は、本リポジトリで `@fontsource/google-sans-code` を自前ホストしてから定義する。
+- `--font-mono`（ID・ログ・SQL の等幅書体）は platform の共有 tokens が定義する。書体ファイルは `frontend/src/fonts.css` で `@fontsource/google-sans-code` を自前ホストする。
 
 ## RAG 設定責務
 
