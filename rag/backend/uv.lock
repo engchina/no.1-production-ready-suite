@@ -4122,7 +4122,7 @@ requires-dist = [
     { name = "docling", marker = "extra == 'docling'", specifier = "==2.103.0" },
     { name = "docrag-core", extras = ["japanese", "excel"], editable = "../packages/docrag_core" },
     { name = "fastapi", specifier = ">=0.121,<1.0" },
-    { name = "gunicorn", specifier = ">=23,<27" },
+    { name = "gunicorn", specifier = ">=26,<27" },
     { name = "httpx", specifier = "==0.28.1" },
     { name = "marker-pdf", extras = ["full"], marker = "extra == 'marker'", specifier = "==1.10.2" },
     { name = "oci", specifier = ">=2.168" },
