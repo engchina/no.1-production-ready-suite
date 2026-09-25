@@ -153,6 +153,8 @@ export function ReviewTextEditor({
                 <p className="text-xs text-fg-muted">{table.caption}</p>
               ) : null}
               <div className="overflow-auto rounded-md border border-border">
+                {/* DataTable の例外（#129）: 元の文書の表を再現して各セルを直接編集するグリッドで、
+                    見出し行がなく列数も表ごとに変わるため、一覧用の DataTable では表せない。 */}
                 <table className="w-full border-collapse text-sm">
                   <tbody>
                     {Array.from(new Set(table.cells.map((cell) => cell.row)))
