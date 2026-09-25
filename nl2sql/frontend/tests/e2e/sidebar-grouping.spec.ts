@@ -90,7 +90,7 @@ test("サイドバーを producer / consumer 思想のユーザー向け 5 セ�
     "aria-expanded",
     "true"
   );
-  for (const section of ["データ準備", "改善・運用", "セキュリティ管理", "システム設定"]) {
+  for (const section of ["データ準備", "改善・運用", "セキュリティ管理", "運用設定", "システム設定"]) {
     await expect(sidebar.getByRole("button", { name: `${section} を展開` })).toHaveAttribute(
       "aria-expanded",
       "false"
@@ -117,21 +117,24 @@ test("サイドバーを producer / consumer 思想のユーザー向け 5 セ�
   expect(menuIconSignatures).toHaveLength(28);
   expect(new Set(menuIconSignatures).size).toBe(menuIconSignatures.length);
 
-  for (const section of ["データ準備", "AI 活用", "改善・運用", "セキュリティ管理", "システム設定"]) {
+  for (const section of ["データ準備", "AI 活用", "改善・運用", "セキュリティ管理", "運用設定", "システム設定"]) {
     await expect(sidebar.getByText(section, { exact: true })).toBeVisible();
   }
 
   const aiUseBox = await sidebar.getByText("AI 活用", { exact: true }).boundingBox();
   const dataPrepareBox = await sidebar.getByText("データ準備", { exact: true }).boundingBox();
   const securityBox = await sidebar.getByText("セキュリティ管理", { exact: true }).boundingBox();
+  const operationsBox = await sidebar.getByText("運用設定", { exact: true }).boundingBox();
   const settingsBox = await sidebar.getByText("システム設定", { exact: true }).boundingBox();
-  if (!aiUseBox || !dataPrepareBox || !securityBox || !settingsBox) {
+  if (!aiUseBox || !dataPrepareBox || !securityBox || !operationsBox || !settingsBox) {
     throw new Error("セクション見出しの位置を取得できませんでした。");
   }
   expect(aiUseBox.y).toBeLessThan(dataPrepareBox.y);
-  expect(securityBox.y).toBeLessThan(settingsBox.y);
+  // 「… → セキュリティ管理 → 運用設定 → システム設定」の順に並ぶ（#81）。
+  expect(securityBox.y).toBeLessThan(operationsBox.y);
+  expect(operationsBox.y).toBeLessThan(settingsBox.y);
 
-  for (const section of ["データ準備", "改善・運用", "セキュリティ管理", "システム設定"]) {
+  for (const section of ["データ準備", "改善・運用", "セキュリティ管理", "運用設定", "システム設定"]) {
     await sidebar.getByRole("button", { name: `${section} を展開` }).click();
   }
 

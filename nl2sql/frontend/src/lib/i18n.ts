@@ -52,6 +52,7 @@ const nl2sqlJa = {
   "nav.section.use": "AI 活用",
   "nav.section.improve": "改善・運用",
   "nav.section.security": "セキュリティ管理",
+  "nav.section.operations": "運用設定",
   "nav.section.settings": "システム設定",
 
   "nav.tableManagement": "テーブルの管理",
@@ -2728,7 +2729,7 @@ const nl2sqlJa = {
   "settings.database.systemTables.recreate.sectionDescription":
     "NL2SQL の中核データを削除して migration を最初から適用します。削除したデータは復元できません。",
   "dbGate.setupRequired.message":
-    "データベースへの接続は確認できましたが、NL2SQL のシステムテーブルが初期化されていません。システム設定の「システムテーブル」から作成・更新してください。",
+    "データベースへの接続は確認できましたが、NL2SQL のシステムテーブルが初期化されていません。運用設定の「システムテーブル」から作成・更新してください。",
 
   "dataTools.confirmation": "確認語",
   "dataTools.action.refresh": "データ更新",

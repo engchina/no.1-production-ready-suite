@@ -109,6 +109,21 @@ export const NAV_SECTIONS: NavSection[] = [
     ],
   },
   {
+    // NL2SQL 固有の運用設定（#81）。
+    titleKey: "nav.section.operations",
+    initiallyCollapsed: true,
+    items: [
+      {
+        href: APP_ROUTES.settingsSystemTables,
+        labelKey: "nav.settingsSystemTables",
+        sidebarLabelKey: "nav.settingsSystemTables.sidebar",
+        icon: TableProperties,
+        permission: MENU_PERMISSIONS.settingsSystemTables,
+      },
+    ],
+  },
+  {
+    // 3製品で共通のシステム設定（画面は platform の共有パッケージ。#70）。
     titleKey: "nav.section.settings",
     initiallyCollapsed: true,
     items: [
@@ -133,13 +148,6 @@ export const NAV_SECTIONS: NavSection[] = [
         sidebarLabelKey: "nav.settingsDatabase.sidebar",
         icon: Database,
         permission: MENU_PERMISSIONS.settingsDatabase,
-      },
-      {
-        href: APP_ROUTES.settingsSystemTables,
-        labelKey: "nav.settingsSystemTables",
-        sidebarLabelKey: "nav.settingsSystemTables.sidebar",
-        icon: TableProperties,
-        permission: MENU_PERMISSIONS.settingsSystemTables,
       },
       { href: APP_ROUTES.settingsAppearance, labelKey: "nav.settingsAppearance", icon: Palette, permission: MENU_PERMISSIONS.settingsAppearance },
     ],
