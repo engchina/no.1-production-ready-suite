@@ -311,7 +311,11 @@ services:
     restart: unless-stopped
 
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      # file:../../platform/packages/* を解決するため、platform を別の context として渡す（#177）。
+      additional_contexts:
+        platform: ../platform
     environment:
       - BACKEND_URL=http://backend:8000
     ports:
