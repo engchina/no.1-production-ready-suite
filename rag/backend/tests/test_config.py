@@ -327,9 +327,9 @@ def test_parser_adapter_per_adapter_extras_are_declared_and_conflict_free() -> N
     )
     optional = pyproject["project"]["optional-dependencies"]
 
-    assert optional["docling"] == ["docling==2.103.0"]
+    assert optional["docling"] == ["docling==2.129.0"]
     assert optional["marker"] == ["marker-pdf[full]==1.10.2"]
-    assert optional["unstructured"] == ["unstructured[all-docs]==0.23.1"]
+    assert optional["unstructured"] == ["unstructured[all-docs]==0.27.8"]
     # 共存不可な combined extra は提供しない(サービス分離の理由)。
     assert "parser-adapters" not in optional
     # marker と unstructured は uv conflicts で排他宣言する。
