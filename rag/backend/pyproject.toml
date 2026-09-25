@@ -39,9 +39,9 @@ dependencies = [
 # marker(pillow<11)と unstructured(pillow>=11.1)は同一環境で共存不可のため、
 # combined extra は提供しない。runtime backend / 既定 `uv sync` は parser を一切入れない。
 [project.optional-dependencies]
-docling = ["docling==2.103.0"]
+docling = ["docling==2.129.0"]
 marker = ["marker-pdf[full]==1.10.2"]
-unstructured = ["unstructured[all-docs]==0.23.1"]
+unstructured = ["unstructured[all-docs]==0.27.8"]
 
 [tool.uv]
 # marker と unstructured は pillow 系で共存不可。conflicts 宣言で universal lock を成立させる

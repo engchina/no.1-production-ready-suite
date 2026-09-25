@@ -5231,6 +5231,33 @@ test("検索結果は 10 件ごとにページングする", async ({ page }) =>
   await expect(page.getByRole("cell", { name: "顧客01" })).toBeVisible();
 });
 
+test("プロファイルの読み込み中に入力した質問は、プロファイルの確定後も残り実行できる（#168）", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  // プロファイルの一覧と既定の応答を止め、確定する前に質問を入力する（遅い環境の再現）。
+  let releaseProfiles!: () => void;
+  const profilesGate = new Promise<void>((resolve) => {
+    releaseProfiles = resolve;
+  });
+  for (const pattern of [
+    "**/api/nl2sql/profiles",
+    "**/api/nl2sql/profiles/default",
+    "**/api/nl2sql/profiles/search?*",
+  ]) {
+    await page.route(pattern, async (route) => {
+      await profilesGate;
+      await route.fallback();
+    });
+  }
+
+  await page.goto("/query");
+  const input = nl2sqlQuestionInput(page);
+  await input.fill("読み込み中に入力した質問");
+  releaseProfiles();
+
+  await expect(page.getByRole("button", { name: "SQL を生成して実行" })).toBeEnabled();
+  await expect(input).toHaveValue("読み込み中に入力した質問");
+});
+
 test("SQL を生成して実行すると実処理の段階別進捗と結果を表示する", async ({ page, context, baseURL }) => {
   const api = await mockNl2SqlApi(page);
   await page.emulateMedia({ reducedMotion: "reduce" });
@@ -15137,6 +15164,8 @@ test("workspace: 管理 SQL の草稿を往復と再読込で復元し確認と�
   await expect.poll(() => executions).toBe(1);
   await expect(panel.getByTestId("admin-sql-execution-activity")).toContainText("実行日時:");
   await page.locator('a[href="/table-management"]').first().click();
+  // data router の遷移は非同期。離れたことを確かめてから戻る（確認語の解除はページを離れたときに起きる）。
+  await expect(page).toHaveURL(/\/table-management$/);
   await page.locator('a[href="/admin-sql"]').first().click();
   await expect(input).toHaveValue(sql + ";");
   await expect(confirmation).toHaveValue("");
