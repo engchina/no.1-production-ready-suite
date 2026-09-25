@@ -12,26 +12,22 @@ title = "Production Ready suite - gitleaks"
 useDefault = true
 
 # --- プロジェクト全体の allowlist(誤検知のみを限定的に除外)---
+# CI の gitleaks-action は gitleaks 8.24 系を使うため、8.25 以降の [[allowlists]] ではなく
+# 単一の [allowlist] で書く(paths / regexes / stopwords のいずれかに一致すれば除外。複数 [[allowlists]] と同じ OR 条件)。
 
-[[allowlists]]
-description = "テスト/E2E fixture は意図的なダミー鍵を含むため除外(CI の secret-scan 除外と同じ方針)"
+[allowlist]
+description = "テスト fixture・テンプレート・明確なダミー値のみを限定的に除外する(実シークレットは検出させる)"
 paths = [
+  # テスト/E2E fixture は意図的なダミー鍵を含む
   '''(rag|nl2sql|agent)/backend/tests/.*''',
   '''nl2sql/docs/test-data/.*''',
   '''rag/frontend/e2e/.*''',
   '''rag/frontend/src/lib/api\.test\.ts''',
-]
-
-[[allowlists]]
-description = "テンプレート/サンプル設定ファイルは空 placeholder のみ"
-paths = [
+  # テンプレート/サンプル設定ファイルは空 placeholder のみ
   '''.*\.env\.example''',
 ]
-
-[[allowlists]]
-description = "テスト/ドキュメント中の明確なダミー値のみ限定除外(広い stopword は実鍵を隠すため使わない)"
 regexes = [
-  # `\nabc\n` を本体とする例示専用のダミー PRIVATE KEY ブロック
+  # `\nabc\n` を本体とする例示専用のダミー PRIVATE KEY ブロック(広い stopword は実鍵を隠すため使わない)
   '''-----BEGIN (ENCRYPTED |RSA |EC |OPENSSH )?PRIVATE KEY-----\\?n?abc\\?n?-----END''',
 ]
 stopwords = [
