@@ -17,7 +17,7 @@
 - 生の hex（`#1a73c1` 等）と生の px を書く。トークンを `var()` で参照する。
 - 製品の `globals.css` に色トークンを定義する。`globals.css` で `@import "tailwindcss"` の後に `@import "@engchina/production-ready-ui/styles.css"` する（`main.tsx` から JS で import すると共有ユーティリティが生成されない）。
 - `TextField` / `PageHeader` / ボタン等の共有コンポーネントを再実装する。
-- `<table>` を手書きする。`DataTable` を使う。
+- `<table>` を手書きする。`DataTable` を使う。例外は「元の文書の表を再現して編集するグリッド」（見出し行がなく、列数が表ごとに変わるもの。RAG の `ReviewTextEditor.tsx`）だけで、使う理由をコードのコメントに書く（#129）。
 - `<div style={{ padding: "1.5rem 2rem" }}>` のような余白コンテナを手書きする。`PageBody` を使う。
 - `ToggleChip` をタブ代わりに使う。タブ＝ビュー切替は `Tabs`、チップ＝データの絞り込みは `ToggleChip`。
 - `loading` 中にボタンのラベルを「実行中…」等に差し替える。ラベルは変えず、先頭アイコンがスピナーに置き換わる。
