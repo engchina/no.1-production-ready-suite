@@ -11,14 +11,6 @@
 @source "../node_modules/@engchina/production-ready-ui/dist";
 @source "../node_modules/@engchina/production-ready-system-settings/dist";
 
-/*
- * 等幅書体。NL2SQL は Google Sans Code を @fontsource で自前ホストしているためここで定義する。
- * RAG / Agent も自前ホストしたら platform の --font-mono に寄せる。
- */
-:root {
-  --font-mono: "Google Sans Code", "Noto Sans JP", "Roboto", monospace;
-}
-
 /* サイドバー内のローカル DEBUG 状態（暗い面のスコープ内で warning トークンを使う）。 */
 .sidebar-debug-status {
   border-color: var(--color-warning-border);

@@ -122,7 +122,7 @@
 - **残すもの（ドメイン固有）**
   - `WorkflowProgressStrip`
   - オントロジー / 関係グラフ。配色は `--color-graph-*`（種別 = 塗り、状態 = 線）
-- `--font-mono`（Google Sans Code）は本リポジトリが `@fontsource` で自前ホストして定義する。
+- `--font-mono`（Google Sans Code）は platform の共有 tokens が定義する。書体ファイルは本リポジトリが `@fontsource/google-sans-code` で自前ホストする。
 
 ## ディレクトリ構成
 
