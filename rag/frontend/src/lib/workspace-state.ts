@@ -158,20 +158,19 @@ export function useWorkspaceState<T>(
   const [value, setValue] = useState<T>(() =>
     override !== undefined ? override : readWorkspace(field, initial, isValid)
   );
-  const [failed, setFailed] = useState(false);
+  const unchanged = JSON.stringify(value) === JSON.stringify(initial);
+  // 値を保存し、保存できず初期値から変わっていれば、再読込・タブを閉じる操作を確認する。
+  // 保存の成否は state に持たず、同じ effect で確認の登録まで決める。
   useEffect(() => {
-    setFailed(!writeWorkspace(field, value));
-  }, [field, value]);
-  const unprotected = failed && JSON.stringify(value) !== JSON.stringify(initial);
-  useEffect(() => {
-    if (!unprotected) return;
+    const saved = writeWorkspace(field, value);
+    if (saved || unchanged) return;
     const protect = (event: BeforeUnloadEvent) => {
       event.preventDefault();
       event.returnValue = "";
     };
     window.addEventListener("beforeunload", protect);
     return () => window.removeEventListener("beforeunload", protect);
-  }, [unprotected]);
+  }, [field, value, unchanged]);
   return [value, setValue];
 }
 

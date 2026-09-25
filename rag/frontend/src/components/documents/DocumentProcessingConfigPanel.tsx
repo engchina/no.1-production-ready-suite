@@ -23,6 +23,7 @@ import {
 } from "@/lib/api";
 import { t, type I18nKey } from "@/lib/i18n";
 import { useLeaveGuard } from "@/lib/leave-guard";
+import { useValuesChanged } from "@/lib/render-sync";
 import {
   findParserCapability,
   formatSupportedFormats,
@@ -238,9 +239,9 @@ export function DocumentProcessingConfigPanel({
   const configs = useMemo(() => (data ? resolvedConfigs(data) : null), [data]);
   const [form, setForm] = useState<DocumentProcessingConfig>(emptyConfig);
 
-  useEffect(() => {
-    if (configs) setForm(configs.processing);
-  }, [configs]);
+  // 設定が変わったレンダーで、フォームを保存値に戻す。
+  const configsChanged = useValuesChanged([configs]);
+  if (configsChanged && configs) setForm(configs.processing);
 
   const dirty = configs ? JSON.stringify(form) !== JSON.stringify(configs.processing) : false;
   // レシピの未保存の上書き設定があるときだけ離脱を確認する。
