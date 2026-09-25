@@ -11,7 +11,7 @@ import {
   FormStatus,
   Skeleton,
 } from "@engchina/production-ready-ui";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { CheckCircle2, RotateCcw, Save, ShieldAlert } from "lucide-react";
 import { Link } from "react-router-dom";
 
@@ -23,6 +23,7 @@ import {
   type GuardrailPolicyStatusData,
 } from "@/lib/api";
 import { useLeaveGuard } from "@/lib/leave-guard";
+import { useValuesChanged } from "@/lib/render-sync";
 import { t, type I18nKey } from "@/lib/i18n";
 import { useGuardrailSettings, useUpdateGuardrailSettings } from "@/lib/queries";
 import { APP_ROUTES } from "@/lib/routes";
@@ -38,12 +39,12 @@ export function GuardrailSettingsClient() {
   const [backend, setBackend] = useState<GuardrailBackend | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (query.data) {
-      setPolicy(query.data.policy);
-      setBackend(query.data.backend);
-    }
-  }, [query.data]);
+  // server 値が変わったレンダーで、選択を server 値に戻す。
+  const serverChanged = useValuesChanged([query.data]);
+  if (serverChanged && query.data) {
+    setPolicy(query.data.policy);
+    setBackend(query.data.backend);
+  }
 
   // 未保存の選択があるときだけ、サイドナビ・内部リンク・再読込での離脱を確認する。
   useLeaveGuard(Boolean(

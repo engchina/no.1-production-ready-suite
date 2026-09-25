@@ -12,7 +12,7 @@ import {
   Skeleton,
   Switch,
 } from "@engchina/production-ready-ui";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { CheckCircle2, RotateCcw, Save, ShieldCheck } from "lucide-react";
 
 import { ErrorState } from "@/components/StateViews";
@@ -81,12 +81,10 @@ export function GroundingSettingsClient() {
   const [form, setForm] = useState<GroundingForm | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
-  useEffect(() => {
-    // 初期化時のみ server 値で同期する。dirty な未保存選択は背景 refetch で上書きしない。
-    if (query.data && form === null) {
-      setForm(formFromSettings(query.data));
-    }
-  }, [query.data, form]);
+  // 初期化時のみ render 中に server 値で同期する。dirty な未保存選択は背景 refetch で上書きしない。
+  if (query.data && form === null) {
+    setForm(formFromSettings(query.data));
+  }
 
   // 未保存の選択があるときだけ、サイドナビ・内部リンク・再読込での離脱を確認する。
   useLeaveGuard(Boolean(query.data && form && isDirty(form, query.data)));
