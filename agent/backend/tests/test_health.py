@@ -5161,7 +5161,11 @@ def test_production_validation_manifest_documents_required_sections() -> None:
         / "agent-runtime-production-validation.manifest.json"
     )
     workflow_path = (
-        Path(__file__).resolve().parents[2] / ".github" / "workflows" / "production-validation.yml"
+        # monorepo（#71）では workflow は suite root の .github に置く。
+        Path(__file__).resolve().parents[3]
+        / ".github"
+        / "workflows"
+        / "agent-production-validation.yml"
     )
     runbook_path = (
         Path(__file__).resolve().parents[2] / "docs" / "agent-runtime-production-validation.md"
@@ -5330,62 +5334,20 @@ def test_production_validation_manifest_documents_required_sections() -> None:
         "container_sandbox_accepted",
         "rollback_plan_confirmed",
     }
-    assert (
-        "no.1-production-ready-agent/docs/agent-runtime-production-validation.manifest.json"
-        in workflow
-    )
-    assert (
-        "no.1-production-ready-agent/backend/validation-runner-readiness."
-        "${{ inputs.environment }}.json" in workflow
-    )
-    assert (
-        "no.1-production-ready-agent/backend/validation-runner-readiness."
-        "${{ inputs.environment }}.md" in workflow
-    )
-    assert (
-        "no.1-production-ready-agent/backend/validation-review.${{ inputs.environment }}.json"
-        in workflow
-    )
-    assert (
-        "no.1-production-ready-agent/backend/validation-bundle.${{ inputs.environment }}.json"
-        in workflow
-    )
-    assert (
-        "no.1-production-ready-agent/backend/validation-bundle.${{ inputs.environment }}.md"
-        in workflow
-    )
-    assert (
-        "no.1-production-ready-agent/backend/validation-archive.${{ inputs.environment }}.json"
-        in workflow
-    )
-    assert (
-        "no.1-production-ready-agent/backend/validation-archive.${{ inputs.environment }}.md"
-        in workflow
-    )
-    assert (
-        "no.1-production-ready-agent/backend/validation-archive-dir.${{ inputs.environment }}.json"
-        in workflow
-    )
-    assert (
-        "no.1-production-ready-agent/backend/validation-archive-dir.${{ inputs.environment }}.md"
-        in workflow
-    )
-    assert (
-        "no.1-production-ready-agent/backend/validation-upload.${{ inputs.environment }}.json"
-        in workflow
-    )
-    assert (
-        "no.1-production-ready-agent/backend/validation-upload.${{ inputs.environment }}.md"
-        in workflow
-    )
-    assert (
-        "no.1-production-ready-agent/backend/validation-chain.${{ inputs.environment }}.json"
-        in workflow
-    )
-    assert (
-        "no.1-production-ready-agent/backend/validation-chain.${{ inputs.environment }}.md"
-        in workflow
-    )
+    assert "agent/docs/agent-runtime-production-validation.manifest.json" in workflow
+    assert "agent/backend/validation-runner-readiness." "${{ inputs.environment }}.json" in workflow
+    assert "agent/backend/validation-runner-readiness." "${{ inputs.environment }}.md" in workflow
+    assert "agent/backend/validation-review.${{ inputs.environment }}.json" in workflow
+    assert "agent/backend/validation-bundle.${{ inputs.environment }}.json" in workflow
+    assert "agent/backend/validation-bundle.${{ inputs.environment }}.md" in workflow
+    assert "agent/backend/validation-archive.${{ inputs.environment }}.json" in workflow
+    assert "agent/backend/validation-archive.${{ inputs.environment }}.md" in workflow
+    assert "agent/backend/validation-archive-dir.${{ inputs.environment }}.json" in workflow
+    assert "agent/backend/validation-archive-dir.${{ inputs.environment }}.md" in workflow
+    assert "agent/backend/validation-upload.${{ inputs.environment }}.json" in workflow
+    assert "agent/backend/validation-upload.${{ inputs.environment }}.md" in workflow
+    assert "agent/backend/validation-chain.${{ inputs.environment }}.json" in workflow
+    assert "agent/backend/validation-chain.${{ inputs.environment }}.md" in workflow
     assert "review_json_path:" in workflow
     assert "bundle_json_path:" in workflow
     assert "retention_days:" in workflow

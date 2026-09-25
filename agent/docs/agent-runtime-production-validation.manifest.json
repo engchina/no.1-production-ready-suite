@@ -25,7 +25,7 @@
   "entrypoints": {
     "local_wrapper": "scripts/validate-production-evidence.sh",
     "local_rehearsal": "scripts/rehearse-production-release-chain.sh",
-    "github_workflow": ".github/workflows/production-validation.yml",
+    "github_workflow": "../.github/workflows/agent-production-validation.yml",
     "runner_readiness": "backend/scripts/agent_runtime_runner_readiness_check.py",
     "preflight": "backend/scripts/agent_runtime_validation_preflight.py",
     "collector": "backend/scripts/agent_runtime_collect_validation_evidence.py",

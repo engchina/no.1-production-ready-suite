@@ -48,6 +48,8 @@ from app.schemas.extraction import (
 from app.schemas.search import RetrievedChunk
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+# monorepo（#71）では GitHub workflow は suite root（rag/ の親）の .github に置く。
+SUITE_ROOT = REPO_ROOT.parent
 
 
 def test_parser_fallback_rate_reads_quality_report_and_artifacts() -> None:
@@ -2252,7 +2254,7 @@ def test_file_processing_golden_cli_fails_when_parser_routing_regresses(
 
 def test_nightly_workflow_runs_file_processing_gate_before_api_skip() -> None:
     """nightly workflow は API base URL がなくても parser/file-processing artifact を作る。"""
-    workflow = (REPO_ROOT / ".github/workflows/rag-evaluation-nightly.yml").read_text(
+    workflow = (SUITE_ROOT / ".github/workflows/rag-evaluation-nightly.yml").read_text(
         encoding="utf-8"
     )
 

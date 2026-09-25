@@ -3,6 +3,8 @@
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+# monorepo（#71）では GitHub workflow は suite root（rag/ の親）の .github に置く。
+SUITE_ROOT = REPO_ROOT.parent
 
 
 def test_frontend_image_uses_reproducible_build_install() -> None:
@@ -92,7 +94,7 @@ def test_frontend_build_does_not_fetch_remote_fonts() -> None:
 
 def test_nightly_rag_workflow_runs_search_load_gate() -> None:
     """nightly RAG gate は評価 trend と検索 p95 trend を同じ artifact に残す。"""
-    workflow = (REPO_ROOT / ".github" / "workflows" / "rag-evaluation-nightly.yml").read_text(
+    workflow = (SUITE_ROOT / ".github" / "workflows" / "rag-evaluation-nightly.yml").read_text(
         encoding="utf-8"
     )
 
@@ -107,7 +109,7 @@ def test_nightly_rag_workflow_runs_search_load_gate() -> None:
 
 def test_nightly_rag_workflow_runs_parser_adapter_contract_gate() -> None:
     """nightly RAG gate は外部 parser adapter の schema remap smoke を任意に厳格化できる。"""
-    workflow = (REPO_ROOT / ".github" / "workflows" / "rag-evaluation-nightly.yml").read_text(
+    workflow = (SUITE_ROOT / ".github" / "workflows" / "rag-evaluation-nightly.yml").read_text(
         encoding="utf-8"
     )
 

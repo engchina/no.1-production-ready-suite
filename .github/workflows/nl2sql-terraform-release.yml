@@ -1,13 +1,15 @@
-name: Terraform Release Package
+name: NL2SQL Terraform Release Package
+
+# monorepo では tag を製品ごとに分ける（#71）。NL2SQL の release tag は nl2sql-v*。
 
 on:
   push:
     tags:
-      - "v*"
+      - "nl2sql-v*"
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag to create or update"
+        description: "Release tag to create or update (nl2sql-v*)"
         required: true
         type: string
 
@@ -18,11 +20,14 @@ jobs:
   package:
     name: Package and publish Terraform stack
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: nl2sql
     env:
       PACKAGE_NAME: production-ready-nl2sql-terraform-stack.zip
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
     steps:
-      - name: Checkout app
+      - name: Checkout
         uses: actions/checkout@v6
 
       - name: Set up Python
@@ -46,11 +51,11 @@ jobs:
         run: terraform fmt -check -recursive terraform/stack
 
       - name: Initialize Terraform
-        working-directory: terraform/stack
+        working-directory: nl2sql/terraform/stack
         run: terraform init -backend=false
 
       - name: Validate Terraform
-        working-directory: terraform/stack
+        working-directory: nl2sql/terraform/stack
         run: terraform validate
 
       - name: Build Terraform stack package

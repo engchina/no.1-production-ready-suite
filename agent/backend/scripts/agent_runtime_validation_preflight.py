@@ -138,7 +138,8 @@ def _release_chain_status(
             ROOT_DIR / "scripts" / "rehearse-production-release-chain.sh"
         ),
         "github_workflow": _entrypoint_status(
-            ROOT_DIR / ".github" / "workflows" / "production-validation.yml",
+            # monorepo（#71）では workflow は suite root（agent/ の親）の .github に置く。
+            ROOT_DIR.parent / ".github" / "workflows" / "agent-production-validation.yml",
             executable_required=False,
         ),
         "runner_readiness": _entrypoint_status(

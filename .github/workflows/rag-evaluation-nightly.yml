@@ -80,26 +80,16 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: no.1-production-ready-rag/backend
+        working-directory: rag/backend
     steps:
-      - name: Checkout app
+      - name: Checkout
         uses: actions/checkout@v7
-        with:
-          path: no.1-production-ready-rag
-
-      - name: Checkout shared platform packages
-        uses: actions/checkout@v7
-        with:
-          repository: engchina/no.1-production-ready-platform
-          ref: main
-          path: no.1-production-ready-platform
-          token: ${{ secrets.SHARED_UI_REPO_TOKEN || github.token }}
 
       - name: Set up uv
         uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
-          cache-dependency-glob: no.1-production-ready-rag/backend/uv.lock
+          cache-dependency-glob: rag/backend/uv.lock
 
       - name: Set up Python
         uses: actions/setup-python@v7
@@ -331,5 +321,5 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: rag-evaluation-nightly
-          path: no.1-production-ready-rag/artifacts/
+          path: rag/artifacts/
           if-no-files-found: ignore

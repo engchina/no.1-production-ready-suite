@@ -16,12 +16,14 @@
 # 対象範囲は段階導入。まず CI が検証している backend / frontend / actions から始める。
 # services/*（22 個の pyproject.toml と 24 個の Dockerfile）は CI 検証対象外で PR 数も
 # 多くなるため、本設定には含めない。運用が安定してから ecosystem を追加する。
+# monorepo（#71）では rag の backend / frontend と root の GitHub Actions を対象にする。
+# nl2sql / agent / platform の追加は、運用が安定してから ecosystem を足す。
 version: 2
 updates:
   # backend: uv ecosystem は pyproject.toml と uv.lock を直接扱う。
   # 注意: pyproject.toml に version 制約が無い依存は lock 更新の PR が作られない。
   - package-ecosystem: uv
-    directory: /backend
+    directory: /rag/backend
     schedule:
       interval: weekly
       day: monday
@@ -48,7 +50,7 @@ updates:
 
   # frontend
   - package-ecosystem: npm
-    directory: /frontend
+    directory: /rag/frontend
     schedule:
       interval: weekly
       day: monday

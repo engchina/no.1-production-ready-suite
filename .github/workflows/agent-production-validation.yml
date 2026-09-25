@@ -118,26 +118,16 @@ jobs:
     environment: ${{ inputs.environment }}
     defaults:
       run:
-        working-directory: no.1-production-ready-agent
+        working-directory: agent
     steps:
       - name: Checkout app
         uses: actions/checkout@v4
-        with:
-          path: no.1-production-ready-agent
-
-      - name: Checkout shared platform packages
-        uses: actions/checkout@v4
-        with:
-          repository: engchina/no.1-production-ready-platform
-          ref: main
-          path: no.1-production-ready-platform
-          token: ${{ secrets.SHARED_UI_REPO_TOKEN || github.token }}
 
       - name: Set up uv
         uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
-          cache-dependency-glob: no.1-production-ready-agent/backend/uv.lock
+          cache-dependency-glob: agent/backend/uv.lock
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -145,11 +135,11 @@ jobs:
           python-version: "3.12"
 
       - name: Install backend dependencies
-        working-directory: no.1-production-ready-agent/backend
+        working-directory: agent/backend
         run: uv sync --locked --dev
 
       - name: Runner release readiness
-        working-directory: no.1-production-ready-agent/backend
+        working-directory: agent/backend
         env:
           AGENT_RUNTIME_ORACLE_DSN: ${{ secrets.AGENT_RUNTIME_ORACLE_DSN }}
           AGENT_RUNTIME_ORACLE_USER: ${{ secrets.AGENT_RUNTIME_ORACLE_USER }}
@@ -195,7 +185,7 @@ jobs:
           uv run python "${readiness_args[@]}"
 
       - name: Preflight validation configuration
-        working-directory: no.1-production-ready-agent/backend
+        working-directory: agent/backend
         env:
           AGENT_RUNTIME_ORACLE_DSN: ${{ secrets.AGENT_RUNTIME_ORACLE_DSN }}
           AGENT_RUNTIME_ORACLE_USER: ${{ secrets.AGENT_RUNTIME_ORACLE_USER }}
@@ -223,7 +213,7 @@ jobs:
       - name: Collect validation evidence
         id: collect
         continue-on-error: true
-        working-directory: no.1-production-ready-agent/backend
+        working-directory: agent/backend
         env:
           AGENT_RUNTIME_ORACLE_DSN: ${{ secrets.AGENT_RUNTIME_ORACLE_DSN }}
           AGENT_RUNTIME_ORACLE_USER: ${{ secrets.AGENT_RUNTIME_ORACLE_USER }}
@@ -256,7 +246,7 @@ jobs:
             --summary-markdown "validation-evidence.${{ inputs.environment }}.md"
 
       - name: Validate live evidence
-        working-directory: no.1-production-ready-agent/backend
+        working-directory: agent/backend
         run: |
           uv run python scripts/agent_runtime_validate_evidence.py \
             "validation-evidence.${{ inputs.environment }}.json" \
@@ -264,7 +254,7 @@ jobs:
 
       - name: Build release bundle
         if: ${{ inputs.review_json_path != '' }}
-        working-directory: no.1-production-ready-agent/backend
+        working-directory: agent/backend
         env:
           REVIEW_JSON_PATH: ${{ inputs.review_json_path }}
           BUNDLE_JSON_PATH: ${{ inputs.bundle_json_path }}
@@ -379,7 +369,7 @@ jobs:
 
       - name: Write evidence summary
         if: always()
-        working-directory: no.1-production-ready-agent/backend
+        working-directory: agent/backend
         run: |
           if [ -f "validation-runner-readiness.${{ inputs.environment }}.md" ]; then
             cat "validation-runner-readiness.${{ inputs.environment }}.md" >> "${GITHUB_STEP_SUMMARY}"
@@ -496,21 +486,21 @@ jobs:
           name: agent-runtime-validation-${{ inputs.environment }}
           retention-days: 14
           path: |
-            no.1-production-ready-agent/backend/validation-runner-readiness.${{ inputs.environment }}.json
-            no.1-production-ready-agent/backend/validation-runner-readiness.${{ inputs.environment }}.md
-            no.1-production-ready-agent/backend/validation-preflight.${{ inputs.environment }}.json
-            no.1-production-ready-agent/backend/validation-preflight.${{ inputs.environment }}.md
-            no.1-production-ready-agent/backend/validation-evidence.${{ inputs.environment }}.json
-            no.1-production-ready-agent/backend/validation-evidence.${{ inputs.environment }}.md
-            no.1-production-ready-agent/backend/validation-review.${{ inputs.environment }}.json
-            no.1-production-ready-agent/backend/validation-bundle.${{ inputs.environment }}.json
-            no.1-production-ready-agent/backend/validation-bundle.${{ inputs.environment }}.md
-            no.1-production-ready-agent/backend/validation-archive.${{ inputs.environment }}.json
-            no.1-production-ready-agent/backend/validation-archive.${{ inputs.environment }}.md
-            no.1-production-ready-agent/backend/validation-archive-dir.${{ inputs.environment }}.json
-            no.1-production-ready-agent/backend/validation-archive-dir.${{ inputs.environment }}.md
-            no.1-production-ready-agent/backend/validation-upload.${{ inputs.environment }}.json
-            no.1-production-ready-agent/backend/validation-upload.${{ inputs.environment }}.md
-            no.1-production-ready-agent/backend/validation-chain.${{ inputs.environment }}.json
-            no.1-production-ready-agent/backend/validation-chain.${{ inputs.environment }}.md
-            no.1-production-ready-agent/docs/agent-runtime-production-validation.manifest.json
+            agent/backend/validation-runner-readiness.${{ inputs.environment }}.json
+            agent/backend/validation-runner-readiness.${{ inputs.environment }}.md
+            agent/backend/validation-preflight.${{ inputs.environment }}.json
+            agent/backend/validation-preflight.${{ inputs.environment }}.md
+            agent/backend/validation-evidence.${{ inputs.environment }}.json
+            agent/backend/validation-evidence.${{ inputs.environment }}.md
+            agent/backend/validation-review.${{ inputs.environment }}.json
+            agent/backend/validation-bundle.${{ inputs.environment }}.json
+            agent/backend/validation-bundle.${{ inputs.environment }}.md
+            agent/backend/validation-archive.${{ inputs.environment }}.json
+            agent/backend/validation-archive.${{ inputs.environment }}.md
+            agent/backend/validation-archive-dir.${{ inputs.environment }}.json
+            agent/backend/validation-archive-dir.${{ inputs.environment }}.md
+            agent/backend/validation-upload.${{ inputs.environment }}.json
+            agent/backend/validation-upload.${{ inputs.environment }}.md
+            agent/backend/validation-chain.${{ inputs.environment }}.json
+            agent/backend/validation-chain.${{ inputs.environment }}.md
+            agent/docs/agent-runtime-production-validation.manifest.json

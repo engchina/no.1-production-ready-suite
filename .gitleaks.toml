@@ -1,11 +1,12 @@
-# gitleaks 設定 — シークレット混入検出(pre-commit hook / CI 共用)
+# gitleaks 設定 — シークレット混入検出(pre-commit hook / CI 共用、monorepo 全体)
+# パスは suite root からの相対パス(rag/ nl2sql/ agent/ platform/)で書く。
 #
 # 既定ルールセットを継承し、テスト/E2E の意図的なダミー値(プレースホルダ鍵・
 # 偽バケット名)のみを allowlist で除外する。実シークレットは検出させる。
-# ローカル実行用の gitignore 済みファイル(backend/model-settings.json 等)は
+# ローカル実行用の gitignore 済みファイル(rag/backend/model-settings.json 等)は
 # pre-commit の staged 走査対象外なので、ここでは扱わない。
 
-title = "Production Ready RAG - gitleaks"
+title = "Production Ready suite - gitleaks"
 
 [extend]
 useDefault = true
@@ -15,9 +16,10 @@ useDefault = true
 [[allowlists]]
 description = "テスト/E2E fixture は意図的なダミー鍵を含むため除外(CI の secret-scan 除外と同じ方針)"
 paths = [
-  '''backend/tests/.*''',
-  '''frontend/e2e/.*''',
-  '''frontend/src/lib/api\.test\.ts''',
+  '''(rag|nl2sql|agent)/backend/tests/.*''',
+  '''nl2sql/docs/test-data/.*''',
+  '''rag/frontend/e2e/.*''',
+  '''rag/frontend/src/lib/api\.test\.ts''',
 ]
 
 [[allowlists]]
