@@ -6,6 +6,8 @@ import {
   Button,
   Card,
   Banner,
+  DataTable,
+  type DataTableColumn,
   SelectField,
   type SelectFieldOption,
   ToggleChip,
@@ -36,7 +38,6 @@ import {
 import { useSelection } from "@/lib/useSelection";
 import { APP_ROUTES } from "@/lib/routes";
 import { t } from "@/lib/i18n";
-import { cn } from "@/lib/utils";
 import { formatBytes, formatDateTime, formatNumber } from "@/lib/format";
 import { toast } from "@/lib/toast";
 
@@ -331,58 +332,32 @@ export function FileListClient() {
           <Skeleton className="h-64 w-full rounded-lg" />
         ) : items.length > 0 ? (
           <>
-            <Card className="overflow-hidden">
-              <div className="bounded-scroll-area-lg overflow-x-auto">
-                <table className="min-w-[980px] w-full text-sm">
-                  <thead className="sticky top-0 z-10 bg-surface-sunken text-left text-fg-muted shadow-[inset_0_-1px_0_var(--color-border)]">
-                    <tr>
-                      <th className="w-10 px-4 py-3">
-                        <input
-                          type="checkbox"
-                          checked={allSelected}
-                          onChange={() => selection.toggleAll(pageIds)}
-                          aria-label={t("fileList.selectAllAria")}
-                          className="cursor-pointer accent-[var(--color-accent-emphasis)]"
-                        />
-                      </th>
-                      <th className="px-4 py-3 font-medium">{t("fileList.col.fileName")}</th>
-                      <th className="px-4 py-3 font-medium">{t("fileList.col.knowledgeBases")}</th>
-                      <th className="px-4 py-3 font-medium">{t("fileList.col.category")}</th>
-                      <th className="px-4 py-3 font-medium">{t("fileList.col.status")}</th>
-                      <th className="px-4 py-3 text-right font-medium">{t("fileList.col.size")}</th>
-                      <th className="px-4 py-3 font-medium">{t("fileList.col.uploadedAt")}</th>
-                      <th className="px-4 py-3 text-right font-medium">{t("fileList.col.actions")}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {items.map((doc) => (
-                      <Row
-                        key={doc.id}
-                        doc={doc}
-                        selected={selection.isSelected(doc.id)}
-                        onToggle={() => selection.toggle(doc.id)}
-                        onIngest={(force) =>
-                          enqueueIngestion.mutate(
-                            { id: doc.id, force },
-                            { onSuccess: startGraceWindow }
-                          )
-                        }
-                        onDelete={() => void runDelete(doc)}
-                        ingesting={
-                          enqueueIngestion.isPending &&
-                          enqueueIngestion.variables?.id === doc.id
-                        }
-                        deleting={
-                          deleteDocument.isPending &&
-                          deleteDocument.variables === doc.id
-                        }
-                        actionsDisabled={bulkBusy}
-                      />
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </Card>
+            <DataTable<DocumentSummary>
+              columns={documentColumns({
+                allSelected,
+                onToggleAll: () => selection.toggleAll(pageIds),
+                isSelected: (doc) => selection.isSelected(doc.id),
+                onToggle: (doc) => selection.toggle(doc.id),
+                onIngest: (doc, force) =>
+                  enqueueIngestion.mutate(
+                    { id: doc.id, force },
+                    { onSuccess: startGraceWindow }
+                  ),
+                onDelete: (doc) => void runDelete(doc),
+                isIngesting: (doc) =>
+                  enqueueIngestion.isPending &&
+                  enqueueIngestion.variables?.id === doc.id,
+                isDeleting: (doc) =>
+                  deleteDocument.isPending && deleteDocument.variables === doc.id,
+                actionsDisabled: bulkBusy,
+              })}
+              rows={items}
+              getRowKey={(doc) => doc.id}
+              isRowSelected={(doc) => selection.isSelected(doc.id)}
+              stickyHeader
+              className="bounded-scroll-area-lg"
+              tableClassName="w-full min-w-[980px] text-sm"
+            />
 
             {/* ページネーション */}
             <div className="flex items-center justify-between">
@@ -431,37 +406,57 @@ export function FileListClient() {
   );
 }
 
-function Row({
-  doc,
-  selected,
+/** 一覧の列定義。先頭列は一括選択のチェックボックス、ファイル名列を行見出しにする。 */
+function documentColumns({
+  allSelected,
+  onToggleAll,
+  isSelected,
   onToggle,
   onIngest,
   onDelete,
-  ingesting,
-  deleting,
+  isIngesting,
+  isDeleting,
   actionsDisabled,
 }: {
-  doc: DocumentSummary;
-  selected: boolean;
-  onToggle: () => void;
-  onIngest: (force: boolean) => void;
-  onDelete: () => void;
-  ingesting: boolean;
-  deleting: boolean;
+  allSelected: boolean;
+  onToggleAll: () => void;
+  isSelected: (doc: DocumentSummary) => boolean;
+  onToggle: (doc: DocumentSummary) => void;
+  onIngest: (doc: DocumentSummary, force: boolean) => void;
+  onDelete: (doc: DocumentSummary) => void;
+  isIngesting: (doc: DocumentSummary) => boolean;
+  isDeleting: (doc: DocumentSummary) => boolean;
   actionsDisabled: boolean;
-}) {
-  return (
-    <tr className={cn("border-t border-border", selected && "bg-info-subtle")}>
-      <td className="px-4 py-3">
+}): DataTableColumn<DocumentSummary>[] {
+  return [
+    {
+      key: "select",
+      header: (
         <input
           type="checkbox"
-          checked={selected}
-          onChange={onToggle}
+          checked={allSelected}
+          onChange={onToggleAll}
+          aria-label={t("fileList.selectAllAria")}
+          className="cursor-pointer accent-[var(--color-accent-emphasis)]"
+        />
+      ),
+      headerClassName: "w-10",
+      render: (doc) => (
+        <input
+          type="checkbox"
+          checked={isSelected(doc)}
+          onChange={() => onToggle(doc)}
           aria-label={t("fileList.selectRowAria")}
           className="cursor-pointer accent-[var(--color-accent-emphasis)]"
         />
-      </td>
-      <td className="max-w-[260px] px-4 py-3">
+      ),
+    },
+    {
+      key: "fileName",
+      header: t("fileList.col.fileName"),
+      rowHeader: true,
+      className: "max-w-[260px]",
+      render: (doc) => (
         <Link
           to={`${APP_ROUTES.documents}/${doc.id}`}
           className="block truncate font-medium text-accent-fg hover:underline"
@@ -469,40 +464,74 @@ function Row({
         >
           {doc.file_name}
         </Link>
-      </td>
-      <td className="max-w-[240px] px-4 py-3">
-        <KnowledgeBaseChips knowledgeBases={doc.knowledge_bases ?? []} />
-      </td>
-      <td className="px-4 py-3 text-fg-muted">{doc.category_name ?? "—"}</td>
-      <td className="px-4 py-3">
-        <StatusBadge status={doc.status} />
-      </td>
-      <td className="tnum px-4 py-3 text-right text-fg-muted">{formatBytes(doc.file_size_bytes)}</td>
-      <td className="tnum px-4 py-3 text-fg-muted">{formatDateTime(doc.uploaded_at)}</td>
-      <td className="px-4 py-3">
-        <div className="flex justify-end gap-2">
-          {(doc.status === "UPLOADED" || doc.status === "ERROR") && (
+      ),
+    },
+    {
+      key: "knowledgeBases",
+      header: t("fileList.col.knowledgeBases"),
+      className: "max-w-[240px]",
+      render: (doc) => <KnowledgeBaseChips knowledgeBases={doc.knowledge_bases ?? []} />,
+    },
+    {
+      key: "category",
+      header: t("fileList.col.category"),
+      className: "text-fg-muted",
+      render: (doc) => doc.category_name ?? "—",
+    },
+    {
+      key: "status",
+      header: t("fileList.col.status"),
+      render: (doc) => <StatusBadge status={doc.status} />,
+    },
+    {
+      key: "size",
+      header: t("fileList.col.size"),
+      align: "right",
+      className: "tnum text-fg-muted",
+      render: (doc) => formatBytes(doc.file_size_bytes),
+    },
+    {
+      key: "uploadedAt",
+      header: t("fileList.col.uploadedAt"),
+      className: "tnum text-fg-muted",
+      render: (doc) => formatDateTime(doc.uploaded_at),
+    },
+    {
+      key: "actions",
+      header: t("fileList.col.actions"),
+      align: "right",
+      render: (doc) => {
+        const ingesting = isIngesting(doc);
+        const deleting = isDeleting(doc);
+        return (
+          <div className="flex justify-end gap-2">
+            {(doc.status === "UPLOADED" || doc.status === "ERROR") && (
+              <Button
+                size="sm"
+                loading={ingesting}
+                disabled={deleting || actionsDisabled}
+                onClick={() => onIngest(doc, false)}
+                icon={Sparkles}
+              >
+                {t(doc.status === "ERROR" ? "flow.retry.preprocess" : "action.enqueueIngestion")}
+              </Button>
+            )}
             <Button
+              variant="danger"
               size="sm"
-              loading={ingesting}
-              disabled={deleting || actionsDisabled}
-              onClick={() => onIngest(false)} icon={Sparkles}>
-              {t(doc.status === "ERROR" ? "flow.retry.preprocess" : "action.enqueueIngestion")}
+              loading={deleting}
+              disabled={ingesting || actionsDisabled}
+              onClick={() => onDelete(doc)}
+              aria-label={t("fileList.delete.aria", { name: doc.file_name })}
+              icon={Trash2}
+            >
+              {t("fileList.delete.action")}
             </Button>
-          )}
-          <Button
-            variant="danger"
-            size="sm"
-            loading={deleting}
-            disabled={ingesting || actionsDisabled}
-            onClick={onDelete}
-            aria-label={t("fileList.delete.aria", { name: doc.file_name })} icon={Trash2}>
-            {t("fileList.delete.action")}
-          </Button>
-        </div>
-      </td>
-    </tr>
-  );
+          </div>
+        );
+      },
+    },
+  ];
 }
 
 function KnowledgeBaseChips({ knowledgeBases }: { knowledgeBases: KnowledgeBaseRef[] }) {

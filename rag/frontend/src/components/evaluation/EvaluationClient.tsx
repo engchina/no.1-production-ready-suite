@@ -8,6 +8,7 @@ import {
   CardDescription,
   CardHeader,
   CardTitle,
+  DataTable,
   SelectField,
   type SelectFieldOption,
 } from "@engchina/production-ready-ui";
@@ -29,7 +30,9 @@ import { EmptyState } from "@/components/StateViews";
 import { KnowledgeBaseScopePicker } from "@/components/knowledge-bases/KnowledgeBaseScopePicker";
 import {
   ApiError,
+  type EvaluationCaseResult,
   type EvaluationCompareResponse,
+  type EvaluationExperimentResult,
   type EvaluationExperiment,
   type EvaluationMetricName,
   type EvaluationMetrics,
@@ -655,42 +658,64 @@ function CaseTable({ metrics }: { metrics: EvaluationMetrics }) {
       <h3 id="evaluation-cases-title" className="mb-3 text-sm font-semibold text-fg">
         {t("evaluation.cases")}
       </h3>
-      <div className="overflow-hidden rounded-lg border border-border bg-surface">
-        <div className="max-h-[480px] overflow-auto [scrollbar-gutter:stable]">
-          <table className="w-full min-w-[680px] text-left text-sm">
-            <thead className="sticky top-0 z-10 bg-surface-sunken text-xs text-fg-muted shadow-[inset_0_-1px_0_var(--color-border)]">
-              <tr>
-                <th className="whitespace-nowrap px-3 py-2 font-medium sm:px-4 sm:py-3">{t("evaluation.case.id")}</th>
-                <th className="hidden whitespace-nowrap px-3 py-2 font-medium sm:table-cell sm:px-4 sm:py-3">{t("evaluation.metric.precision")}</th>
-                <th className="hidden whitespace-nowrap px-3 py-2 font-medium sm:table-cell sm:px-4 sm:py-3">{t("evaluation.metric.recall")}</th>
-                <th className="whitespace-nowrap px-3 py-2 font-medium sm:px-4 sm:py-3">{t("evaluation.metric.mrr")}</th>
-                <th className="whitespace-nowrap px-3 py-2 font-medium sm:px-4 sm:py-3">{t("evaluation.case.hit")}</th>
-                <th className="hidden whitespace-nowrap px-3 py-2 font-medium md:table-cell sm:px-4 sm:py-3">{t("evaluation.case.failures")}</th>
-                <th className="hidden whitespace-nowrap px-3 py-2 font-medium lg:table-cell sm:px-4 sm:py-3">{t("evaluation.case.trace")}</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border">
-              {metrics.case_results.map((result) => (
-                <tr key={result.case_id}>
-                  <td className="break-words px-3 py-2 font-medium text-fg sm:px-4 sm:py-3">{result.case_id}</td>
-                  <td className="tnum hidden whitespace-nowrap px-3 py-2 sm:table-cell sm:px-4 sm:py-3">{formatPercent(result.precision_at_k)}</td>
-                  <td className="tnum hidden whitespace-nowrap px-3 py-2 sm:table-cell sm:px-4 sm:py-3">{formatPercent(result.recall_at_k)}</td>
-                  <td className="tnum whitespace-nowrap px-3 py-2 sm:px-4 sm:py-3">{formatPercent(result.reciprocal_rank)}</td>
-                  <td className="px-3 py-2 sm:px-4 sm:py-3">
-                    <BooleanIcon value={result.answer_keyword_hit && result.groundedness_passed} />
-                  </td>
-                  <td className="hidden break-words px-3 py-2 text-xs text-fg-muted md:table-cell sm:px-4 sm:py-3">
-                    {result.failure_reasons.length ? result.failure_reasons.join(", ") : "-"}
-                  </td>
-                  <td className="tnum hidden whitespace-nowrap px-3 py-2 text-xs text-fg-muted lg:table-cell sm:px-4 sm:py-3">
-                    {result.trace_id.slice(0, 12)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
+      <DataTable<EvaluationCaseResult>
+        columns={[
+          {
+            key: "case_id",
+            header: t("evaluation.case.id"),
+            rowHeader: true,
+            className: "break-words font-medium text-fg",
+            render: (result) => result.case_id,
+          },
+          {
+            key: "precision",
+            header: t("evaluation.metric.precision"),
+            headerClassName: "hidden sm:table-cell",
+            className: "tnum hidden whitespace-nowrap sm:table-cell",
+            render: (result) => formatPercent(result.precision_at_k),
+          },
+          {
+            key: "recall",
+            header: t("evaluation.metric.recall"),
+            headerClassName: "hidden sm:table-cell",
+            className: "tnum hidden whitespace-nowrap sm:table-cell",
+            render: (result) => formatPercent(result.recall_at_k),
+          },
+          {
+            key: "mrr",
+            header: t("evaluation.metric.mrr"),
+            className: "tnum whitespace-nowrap",
+            render: (result) => formatPercent(result.reciprocal_rank),
+          },
+          {
+            key: "hit",
+            header: t("evaluation.case.hit"),
+            render: (result) => (
+              <BooleanIcon value={result.answer_keyword_hit && result.groundedness_passed} />
+            ),
+          },
+          {
+            key: "failures",
+            header: t("evaluation.case.failures"),
+            headerClassName: "hidden md:table-cell",
+            className: "hidden break-words text-xs text-fg-muted md:table-cell",
+            render: (result) =>
+              result.failure_reasons.length ? result.failure_reasons.join(", ") : "-",
+          },
+          {
+            key: "trace",
+            header: t("evaluation.case.trace"),
+            headerClassName: "hidden lg:table-cell",
+            className: "tnum hidden whitespace-nowrap text-xs text-fg-muted lg:table-cell",
+            render: (result) => result.trace_id.slice(0, 12),
+          },
+        ]}
+        rows={metrics.case_results}
+        getRowKey={(result) => result.case_id}
+        stickyHeader
+        className="max-h-[34rem] overflow-auto [scrollbar-gutter:stable]"
+        tableClassName="w-full min-w-[680px] text-sm"
+      />
     </section>
   );
 }
@@ -708,47 +733,62 @@ function CompareResult({ comparison }: { comparison: EvaluationCompareResponse }
           </span>
         ) : null}
       </div>
-      <div className="overflow-hidden rounded-lg border border-border bg-surface">
-        {/* contain:paint で横スクロール領域を確実に封じ込める。main の [contain:layout] 配下では
-            縦スクロールが発生しない scroll container が min-width をもつ表を祖先へ伝播させ、
-            ページが横スクロール(崩れ)するため(決定論的に再現・検証済み)。 */}
-        <div className="overflow-auto [contain:paint]">
-          <table className="w-full min-w-[640px] text-left text-sm">
-            <thead className="bg-surface-sunken text-xs text-fg-muted">
-              <tr>
-                <th className="whitespace-nowrap px-3 py-2 font-medium sm:px-4 sm:py-3">{t("evaluation.compare.rank")}</th>
-                <th className="whitespace-nowrap px-3 py-2 font-medium sm:px-4 sm:py-3">{t("evaluation.compare.experiment")}</th>
-                <th className="whitespace-nowrap px-3 py-2 font-medium sm:px-4 sm:py-3">{t("evaluation.compare.score")}</th>
-                <th className="hidden whitespace-nowrap px-3 py-2 font-medium md:table-cell sm:px-4 sm:py-3">{t("evaluation.metric.precision")}</th>
-                <th className="hidden whitespace-nowrap px-3 py-2 font-medium md:table-cell sm:px-4 sm:py-3">{t("evaluation.metric.recall")}</th>
-                <th className="hidden whitespace-nowrap px-3 py-2 font-medium md:table-cell sm:px-4 sm:py-3">{t("evaluation.metric.mrr")}</th>
-                <th className="whitespace-nowrap px-3 py-2 font-medium sm:px-4 sm:py-3">
-                  <span className="sr-only">{t("evaluation.status.passed")}</span>
-                </th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border">
-              {comparison.results.map((result) => (
-                <tr key={result.experiment.id}>
-                  <td className="tnum whitespace-nowrap px-3 py-2 sm:px-4 sm:py-3">{result.rank}</td>
-                  <td className="break-words px-3 py-2 font-medium text-fg sm:px-4 sm:py-3">
-                    {result.experiment.id}
-                  </td>
-                  <td className="tnum whitespace-nowrap px-3 py-2 sm:px-4 sm:py-3">{formatPercent(result.ranking_score)}</td>
-                  <td className="tnum hidden whitespace-nowrap px-3 py-2 md:table-cell sm:px-4 sm:py-3">
-                    {formatPercent(result.metrics.precision_at_k)}
-                  </td>
-                  <td className="tnum hidden whitespace-nowrap px-3 py-2 md:table-cell sm:px-4 sm:py-3">{formatPercent(result.metrics.recall_at_k)}</td>
-                  <td className="tnum hidden whitespace-nowrap px-3 py-2 md:table-cell sm:px-4 sm:py-3">{formatPercent(result.metrics.mrr)}</td>
-                  <td className="px-3 py-2 sm:px-4 sm:py-3">
-                    <StatusBadge passed={result.metrics.passed} compact />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
+      {/* contain:paint で横スクロール領域を確実に封じ込める。main の [contain:layout] 配下では
+          縦スクロールが発生しない scroll container が min-width をもつ表を祖先へ伝播させ、
+          ページが横スクロール(崩れ)するため(決定論的に再現・検証済み)。 */}
+      <DataTable<EvaluationExperimentResult>
+        columns={[
+          {
+            key: "rank",
+            header: t("evaluation.compare.rank"),
+            className: "tnum whitespace-nowrap",
+            render: (result) => result.rank,
+          },
+          {
+            key: "experiment",
+            header: t("evaluation.compare.experiment"),
+            rowHeader: true,
+            className: "break-words font-medium text-fg",
+            render: (result) => result.experiment.id,
+          },
+          {
+            key: "score",
+            header: t("evaluation.compare.score"),
+            className: "tnum whitespace-nowrap",
+            render: (result) => formatPercent(result.ranking_score),
+          },
+          {
+            key: "precision",
+            header: t("evaluation.metric.precision"),
+            headerClassName: "hidden md:table-cell",
+            className: "tnum hidden whitespace-nowrap md:table-cell",
+            render: (result) => formatPercent(result.metrics.precision_at_k),
+          },
+          {
+            key: "recall",
+            header: t("evaluation.metric.recall"),
+            headerClassName: "hidden md:table-cell",
+            className: "tnum hidden whitespace-nowrap md:table-cell",
+            render: (result) => formatPercent(result.metrics.recall_at_k),
+          },
+          {
+            key: "mrr",
+            header: t("evaluation.metric.mrr"),
+            headerClassName: "hidden md:table-cell",
+            className: "tnum hidden whitespace-nowrap md:table-cell",
+            render: (result) => formatPercent(result.metrics.mrr),
+          },
+          {
+            key: "passed",
+            header: <span className="sr-only">{t("evaluation.status.passed")}</span>,
+            render: (result) => <StatusBadge passed={result.metrics.passed} compact />,
+          },
+        ]}
+        rows={comparison.results}
+        getRowKey={(result) => result.experiment.id}
+        className="[contain:paint]"
+        tableClassName="w-full min-w-[640px] text-sm"
+      />
     </section>
   );
 }

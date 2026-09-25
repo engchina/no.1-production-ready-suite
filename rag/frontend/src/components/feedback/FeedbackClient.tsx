@@ -5,6 +5,7 @@ import {
   Button,
   Card,
   CardContent,
+  DataTable,
   SelectField,
   type SelectFieldOption,
   StatusBadge,
@@ -368,49 +369,87 @@ function Metric({ label, value, detail, delta }: { label: string; value: string;
 }
 
 function FeedbackTable({ items, onOpen }: { items: FeedbackItem[]; onOpen: (id: string, trigger: HTMLButtonElement) => void }) {
+  /*
+    列幅は固定しない（table-fixed の固定幅だと「役に立たなかった」等の折り返さない値が次の列に重なる）。
+    折り返さない列（時間・評価・対象・操作）は w-px + whitespace-nowrap で内容の幅に縮め、
+    折り返す列（理由・業務ビュー）は min-w で潰れず max-w で広がりすぎないようにし、残りの幅を問題の概要に渡す。
+  */
   return (
-    <div className="hidden max-h-[60vh] overflow-auto rounded-lg border border-border bg-surface md:block">
-      {/*
-        列幅は固定しない（table-fixed の固定幅だと「役に立たなかった」等の折り返さない値が次の列に重なる）。
-        折り返さない列（時間・評価・対象・操作）は w-px + whitespace-nowrap で内容の幅に縮め、
-        折り返す列（理由・業務ビュー）は min-w で潰れず max-w で広がりすぎないようにし、残りの幅を問題の概要に渡す。
-      */}
-      <table className="w-full min-w-[1260px] border-collapse text-left text-xs">
-        <thead className="sticky top-0 z-20 bg-surface-sunken text-fg-muted shadow-[0_1px_0_var(--color-border)] backdrop-blur">
-          <tr>
-            <TableHead className={NOWRAP_COLUMN}>{t("feedback.table.time")}</TableHead>
-            <TableHead className={NOWRAP_COLUMN}>{t("feedback.filters.rating")}</TableHead>
-            <TableHead className="min-w-40">{t("feedback.filters.reason")}</TableHead>
-            <TableHead className="min-w-36">{t("feedback.filters.businessView")}</TableHead>
-            <TableHead className={NOWRAP_COLUMN}>{t("feedback.table.targetSource")}</TableHead>
-            <TableHead className={NOWRAP_COLUMN}>{t("feedback.list.model")}</TableHead>
-            <TableHead>{t("feedback.table.question")}</TableHead>
-            <TableHead className={cn(NOWRAP_COLUMN, "text-right")}>{t("feedback.table.actions")}</TableHead>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-border">
-          {items.map((item) => (
-            <tr key={item.feedback_id} className="align-top transition-colors hover:bg-surface-hover">
-              <TableCell className={cn(NOWRAP_COLUMN, "tabular-nums text-fg-muted")}>{formatDateTime(item.created_at)}</TableCell>
-              <TableCell className={NOWRAP_COLUMN}><RatingBadge rating={item.rating} /></TableCell>
-              <TableCell><span className="line-clamp-2 max-w-48">{item.reason ? t(REASON_LABEL_KEYS[item.reason]) : "—"}</span></TableCell>
-              <TableCell><span className="line-clamp-2 max-w-48">{item.business_view_name ?? t("feedback.list.unknownBusinessView")}</span></TableCell>
-              <TableCell className={NOWRAP_COLUMN}>{targetSource(item)}</TableCell>
-              <TableCell className={NOWRAP_COLUMN}><span className="block w-36 truncate" title={item.model ?? undefined}>{item.model ?? "—"}</span></TableCell>
-              <TableCell>
-                <p className="line-clamp-2 max-w-xl text-sm leading-5 text-fg">{item.question_preview ?? item.conversation_title ?? item.comment_preview ?? t("feedback.list.legacyPreview")}</p>
-                {item.has_comment ? <span className="mt-1 inline-flex items-center gap-1 text-xs text-fg-muted"><MessageSquareText size={11} aria-hidden />{t("feedback.list.hasComment")}</span> : null}
-              </TableCell>
-              <TableCell className={cn(NOWRAP_COLUMN, "text-right")}>
-                <Button type="button" variant="secondary" size="sm" onClick={(event) => onOpen(item.feedback_id, event.currentTarget)} icon={Eye}>
-                  {t("feedback.list.openDetail")}
-                </Button>
-              </TableCell>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <DataTable<FeedbackItem>
+      columns={[
+        {
+          key: "time",
+          header: t("feedback.table.time"),
+          headerClassName: NOWRAP_COLUMN,
+          className: cn(CELL_PAD, NOWRAP_COLUMN, "tabular-nums text-fg-muted"),
+          render: (item) => formatDateTime(item.created_at),
+        },
+        {
+          key: "rating",
+          header: t("feedback.filters.rating"),
+          headerClassName: NOWRAP_COLUMN,
+          className: cn(CELL_PAD, NOWRAP_COLUMN),
+          render: (item) => <RatingBadge rating={item.rating} />,
+        },
+        {
+          key: "reason",
+          header: t("feedback.filters.reason"),
+          headerClassName: "min-w-40",
+          className: CELL_PAD,
+          render: (item) => <span className="line-clamp-2 max-w-48">{item.reason ? t(REASON_LABEL_KEYS[item.reason]) : "—"}</span>,
+        },
+        {
+          key: "businessView",
+          header: t("feedback.filters.businessView"),
+          headerClassName: "min-w-36",
+          className: CELL_PAD,
+          render: (item) => <span className="line-clamp-2 max-w-48">{item.business_view_name ?? t("feedback.list.unknownBusinessView")}</span>,
+        },
+        {
+          key: "targetSource",
+          header: t("feedback.table.targetSource"),
+          headerClassName: NOWRAP_COLUMN,
+          className: cn(CELL_PAD, NOWRAP_COLUMN),
+          render: (item) => targetSource(item),
+        },
+        {
+          key: "model",
+          header: t("feedback.list.model"),
+          headerClassName: NOWRAP_COLUMN,
+          className: cn(CELL_PAD, NOWRAP_COLUMN),
+          render: (item) => <span className="block w-36 truncate" title={item.model ?? undefined}>{item.model ?? "—"}</span>,
+        },
+        {
+          key: "question",
+          header: t("feedback.table.question"),
+          className: CELL_PAD,
+          render: (item) => (
+            <>
+              <p className="line-clamp-2 max-w-xl text-sm leading-5 text-fg">{item.question_preview ?? item.conversation_title ?? item.comment_preview ?? t("feedback.list.legacyPreview")}</p>
+              {item.has_comment ? <span className="mt-1 inline-flex items-center gap-1 text-xs text-fg-muted"><MessageSquareText size={11} aria-hidden />{t("feedback.list.hasComment")}</span> : null}
+            </>
+          ),
+        },
+        {
+          key: "actions",
+          header: t("feedback.table.actions"),
+          align: "right",
+          headerClassName: NOWRAP_COLUMN,
+          className: cn(CELL_PAD, NOWRAP_COLUMN),
+          render: (item) => (
+            <Button type="button" variant="secondary" size="sm" onClick={(event) => onOpen(item.feedback_id, event.currentTarget)} icon={Eye}>
+              {t("feedback.list.openDetail")}
+            </Button>
+          ),
+        },
+      ]}
+      rows={items}
+      getRowKey={(item) => item.feedback_id}
+      rowProps={() => ({ className: "align-top transition-colors hover:bg-surface-hover" })}
+      stickyHeader
+      className="hidden max-h-[60vh] overflow-auto md:block"
+      tableClassName="w-full min-w-[1260px] border-collapse"
+    />
   );
 }
 
@@ -620,14 +659,8 @@ function RatingBadge({ rating }: { rating: CitationFeedbackRating }) {
 
 /** 折り返さない値の列。w-px で内容の幅まで縮め、nowrap で次の列へはみ出させない。 */
 const NOWRAP_COLUMN = "w-px whitespace-nowrap";
-
-function TableHead({ children, className }: { children: React.ReactNode; className?: string }) {
-  return <th scope="col" className={cn("px-3 py-2 font-medium", className)}>{children}</th>;
-}
-
-function TableCell({ children, className }: { children: React.ReactNode; className?: string }) {
-  return <td className={cn("px-3 py-2.5", className)}>{children}</td>;
-}
+/** 明細行のセル余白（2 行の問題の概要を読みやすくするため DataTable 既定より縦を広げる）。 */
+const CELL_PAD = "py-2.5";
 
 function Metadata({ label, value }: { label: string; value: string }) {
   return <div className="min-w-0"><dt className="text-fg-muted">{label}</dt><dd className="mt-0.5 line-clamp-2 text-fg">{value}</dd></div>;
