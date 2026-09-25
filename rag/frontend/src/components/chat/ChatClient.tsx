@@ -655,7 +655,7 @@ export function ChatClient() {
                                     cancelRename();
                                   }
                                 }}
-                                className="h-11 min-w-0 flex-1 rounded-md border border-border bg-surface-sunken px-2 text-base text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring disabled:opacity-60 sm:h-9 sm:text-sm"
+                                className="h-11 min-w-0 flex-1 rounded-md border border-border-control bg-surface-sunken px-2 text-sm text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring disabled:opacity-60 sm:h-9 sm:text-sm"
                               />
                               <Button
                                 type="button"
@@ -817,7 +817,7 @@ export function ChatClient() {
                     activeId ? t("chat.composer.placeholder") : t("chat.composer.selectConversation")
                   }
                   disabled={!activeId || sending}
-                  className="min-h-11 min-w-0 flex-1 resize-y rounded-md border border-border bg-surface-sunken p-2 text-sm text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring disabled:opacity-60"
+                  className="min-h-11 min-w-0 flex-1 resize-y rounded-md border border-border-control bg-surface-sunken p-2 text-sm text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring disabled:opacity-60"
                 />
                 {sending ? (
                   <Button

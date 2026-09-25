@@ -163,7 +163,7 @@ function CommandPaletteDialog({ onClose }: { onClose: () => void }) {
             onChange={(event) => setQuery(event.target.value)}
             placeholder={t("command.search.placeholder")}
             // グローバルのフォーム focus 枠(inset ring)を打ち消し、パレットらしいシームレスな検索にする。
-            className="h-14 w-full bg-transparent text-base leading-6 text-fg caret-accent-fg outline-none placeholder:text-fg-muted focus-visible:shadow-none!"
+            className="h-14 w-full bg-transparent text-sm leading-6 text-fg caret-accent-fg outline-none placeholder:text-fg-muted focus-visible:shadow-none!"
           />
           {query ? (
             <button
