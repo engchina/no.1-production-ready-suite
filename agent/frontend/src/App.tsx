@@ -4,6 +4,7 @@ import { AppShell, PageHeader } from "@engchina/production-ready-ui";
 
 import { AppSidebar } from "@/components/layout/AppSidebar";
 import { DatabaseSettingsClient } from "@/components/settings/DatabaseSettingsClient";
+import { AppearanceSettings } from "@/components/settings/AppearanceSettings";
 import { ModelSettingsClient } from "@/components/settings/ModelSettingsClient";
 import { OciSettingsClient } from "@/components/settings/OciSettingsClient";
 import { UploadStorageSettingsClient } from "@/components/settings/UploadStorageSettingsClient";
@@ -60,6 +61,7 @@ export function App() {
           <Route path={APP_ROUTES.settingsCommandPolicy} element={<CommandPolicySettingsPage />} />
           <Route path={APP_ROUTES.settingsRuntimeSafety} element={<RuntimeSafetySettingsPage />} />
           <Route path={APP_ROUTES.settingsRuntimeSnapshot} element={<RuntimeSnapshotSettingsPage />} />
+          <Route path={APP_ROUTES.settingsAppearance} element={<AppearanceSettings />} />
         </Routes>
     </AppShell>
   );

@@ -8,11 +8,14 @@ ARG PLATFORM_DIR=platform
 WORKDIR /app
 COPY ${PLATFORM_DIR}/package.json ${PLATFORM_DIR}/package-lock.json ./${PLATFORM_DIR}/
 COPY ${PLATFORM_DIR}/packages/ui/package.json ./${PLATFORM_DIR}/packages/ui/
+COPY ${PLATFORM_DIR}/packages/system-settings/package.json ./${PLATFORM_DIR}/packages/system-settings/
 WORKDIR /app/${PLATFORM_DIR}
 RUN npm ci
 
 COPY ${PLATFORM_DIR}/packages/ui ./packages/ui
-RUN npm run build --workspace @engchina/production-ready-ui
+COPY ${PLATFORM_DIR}/packages/system-settings ./packages/system-settings
+# 共有 UI → 共有システム設定画面の順に build する（platform の npm run build）。
+RUN npm run build
 
 WORKDIR /app
 COPY ${APP_DIR}/frontend/package.json ${APP_DIR}/frontend/package-lock.json ./${APP_DIR}/frontend/

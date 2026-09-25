@@ -37,6 +37,7 @@ import { SearchClient } from "@/components/search/SearchClient";
 import { ErrorState } from "@/components/StateViews";
 import { DatabaseSettingsClient } from "@/components/settings/DatabaseSettingsClient";
 import { HuggingFaceSettingsClient } from "@/components/settings/HuggingFaceSettingsClient";
+import { AppearanceSettings } from "@/components/settings/AppearanceSettings";
 import { ModelSettingsClient } from "@/components/settings/ModelSettingsClient";
 import { OciSettingsClient } from "@/components/settings/OciSettingsClient";
 import { ParserAdapterSettingsClient } from "@/components/settings/ParserAdapterSettingsClient";
@@ -121,6 +122,7 @@ export function App() {
         <Route path={APP_ROUTES.settingsDatabase} element={<SettingsDatabaseRoute />} />
         <Route path={APP_ROUTES.settingsHuggingface} element={<SettingsHuggingfaceRoute />} />
         <Route path={APP_ROUTES.settingsServices} element={<SettingsServicesRoute />} />
+        <Route path={APP_ROUTES.settingsAppearance} element={<AppearanceSettings />} />
         <Route path="/settings" element={<Navigate to={APP_ROUTES.settingsOci} replace />} />
       </Route>
       <Route path="*" element={<Navigate to={APP_ROUTES.dashboard} replace />} />

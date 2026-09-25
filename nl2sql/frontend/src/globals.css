@@ -9,6 +9,7 @@
 
 /* 共有コンポーネントの utility クラスを Tailwind v4 のスキャン対象に含める。 */
 @source "../node_modules/@engchina/production-ready-ui/dist";
+@source "../node_modules/@engchina/production-ready-system-settings/dist";
 
 /*
  * 等幅書体。NL2SQL は Google Sans Code を @fontsource で自前ホストしているためここで定義する。

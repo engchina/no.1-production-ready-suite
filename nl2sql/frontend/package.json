@@ -16,6 +16,7 @@
     "lint": "oxlint --deny-warnings"
   },
   "dependencies": {
+    "@engchina/production-ready-system-settings": "file:../../platform/packages/system-settings",
     "@engchina/production-ready-ui": "file:../../platform/packages/ui",
     "@fontsource/google-sans-code": "5.3.0",
     "@fontsource/noto-sans-jp": "5.3.0",

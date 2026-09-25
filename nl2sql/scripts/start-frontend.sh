@@ -50,7 +50,8 @@ prepare_shared_ui() {
   echo "[frontend] 共有 UI パッケージをビルドします..."
   (
     cd "${SHARED_PLATFORM_DIR}"
-    npm run build --workspace @engchina/production-ready-ui
+    # 共有 UI と共有システム設定画面を依存順に build する（platform の npm run build）。
+    npm run build
   )
 
   local artifact

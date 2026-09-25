@@ -1,5 +1,8 @@
+import { SYSTEM_SETTINGS_PATHS } from "@engchina/production-ready-system-settings";
+
 /** RAG コンソールの画面ルート定義。 */
 export const APP_ROUTES = {
+  settingsAppearance: SYSTEM_SETTINGS_PATHS.appearance,
   login: "/login",
   dashboard: "/dashboard",
   upload: "/upload",

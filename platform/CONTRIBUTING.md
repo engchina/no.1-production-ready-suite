@@ -3,7 +3,7 @@
 `platform/` は **RAG / NL2SQL / Agent の前後端 single source of truth**。
 共通コードはここに集約し、各製品（`rag/` `nl2sql/` `agent/`）は `features/*`・ページ・業務文言だけを持つ。
 
-- フロント共有: `@engchina/production-ready-ui`（`packages/ui`）
+- フロント共有: `@engchina/production-ready-ui`（`packages/ui`）、`@engchina/production-ready-system-settings`（`packages/system-settings`、共通のシステム設定画面。`packages/ui` と違い業務の既定文言（日本語）を持ち、製品の i18n で上書きできる）
 - バックエンド共有: `production-ready-backend-core` / `pr_backend_core`（`packages/backend_core`）
 
 原則は前後端で共通: **共通機能の変更は必ず `platform/` で行い、各製品にコピーしない。**
@@ -12,7 +12,7 @@ GitHub 運用・PR 規約・CI は monorepo 共通の [../AGENTS.md](../AGENTS.m
 ## 1. 配布方法：monorepo 内の相対パス参照
 
 - 各製品は相対パスで参照する。publish や version pin は行わない（2026-09-25 の monorepo 統合で GitHub Packages 配布は廃止した）。
-  - frontend: `"@engchina/production-ready-ui": "file:../../platform/packages/ui"`
+  - frontend: `"@engchina/production-ready-ui": "file:../../platform/packages/ui"`、`"@engchina/production-ready-system-settings": "file:../../platform/packages/system-settings"`（`globals.css` に両方の `@source` を書く。build は platform で `npm run build`）
   - backend: `production-ready-backend-core = { path = "../../platform/packages/backend_core", editable = true }`（path を変えたら `uv lock` を再生成）
 - `package.json` / `pyproject.toml` の `version` は変更履歴の目安として semver で上げる（`patch`: バグ修正・内部実装、`minor`: 後方互換の追加、`major`: 破壊的変更）。破壊的変更は、同じ PR で3製品の利用箇所も直す。
 - frontend では Vite の `resolve.dedupe: ["react","react-dom"]` と `@source ".../@engchina/production-ready-ui/dist"`（globals.css）が必須（詳細は README）。

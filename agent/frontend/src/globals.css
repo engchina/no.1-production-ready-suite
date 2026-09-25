@@ -9,3 +9,4 @@
 
 /* 共有コンポーネントの utility クラスを Tailwind v4 のスキャン対象に含める。 */
 @source "../node_modules/@engchina/production-ready-ui/dist";
+@source "../node_modules/@engchina/production-ready-system-settings/dist";

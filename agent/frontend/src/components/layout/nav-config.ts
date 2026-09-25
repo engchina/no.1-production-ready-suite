@@ -1,4 +1,5 @@
 import {
+  Palette,
   BadgeCheck,
   Bot,
   Boxes,
@@ -84,6 +85,7 @@ export const NAV_SECTIONS: NavSection[] = [
       { href: APP_ROUTES.settingsExternalNl2Sql, labelKey: "nav.settingsExternalNl2Sql", icon: Settings },
       { href: APP_ROUTES.settingsExternalMcp, labelKey: "nav.settingsExternalMcp", icon: Settings },
       { href: APP_ROUTES.settingsRuntimeSnapshot, labelKey: "nav.settingsRuntimeSnapshot", icon: DatabaseBackup },
+      { href: APP_ROUTES.settingsAppearance, labelKey: "nav.settingsAppearance", icon: Palette },
     ],
   },
 ];

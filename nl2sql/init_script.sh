@@ -458,7 +458,7 @@ initialize_database_schema() {
 build_frontend() {
   log "Building shared UI package."
   run_as_app_user_in_dir "${PLATFORM_REPO_DIR}" "npm ci"
-  run_as_app_user_in_dir "${PLATFORM_REPO_DIR}" "npm run build --workspace @engchina/production-ready-ui"
+  run_as_app_user_in_dir "${PLATFORM_REPO_DIR}" "npm run build"
 
   log "Building NL2SQL frontend."
   run_as_app_user_in_dir "${FRONTEND_DIR}" "npm ci"

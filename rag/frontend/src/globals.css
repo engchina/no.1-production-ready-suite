@@ -20,3 +20,4 @@
  * 共有コンポーネントが使う utility クラスを確実に生成する（node_modules は既定で非走査のため）。
  */
 @source "../node_modules/@engchina/production-ready-ui/dist";
+@source "../node_modules/@engchina/production-ready-system-settings/dist";

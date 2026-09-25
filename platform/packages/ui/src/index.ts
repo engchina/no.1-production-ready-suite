@@ -98,6 +98,7 @@ export {
   type CreateUiStoreOptions,
   type ThemePreference,
 } from "./store/ui-store";
+export { initTheme, applyTheme, resolveDark, type ThemeStore } from "./theme";
 export {
   useToastStore,
   toast,

@@ -1,3 +1,5 @@
+import { SYSTEM_SETTINGS_PATHS } from "@engchina/production-ready-system-settings";
+
 /** NL2SQL コンソールのルート定義。 */
 export const APP_ROUTES = {
   login: "/login",
@@ -30,7 +32,7 @@ export const APP_ROUTES = {
   settingsModel: "/settings/model",
   settingsDatabase: "/settings/database",
   settingsSystemTables: "/settings/system-tables",
-  settingsAppearance: "/settings/appearance",
+  settingsAppearance: SYSTEM_SETTINGS_PATHS.appearance,
   securityUsers: "/settings/security/users",
   securityRoles: "/settings/security/roles",
   securityDeepSec: "/settings/security/deepsec",
