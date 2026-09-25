@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
 # フロントエンド(Vite + React)を開発モードで起動する。
-# - node_modules が無い場合のみ npm install を実行する。
+# - 共有 UI パッケージを検証・build してから Vite を起動する。
+# - node_modules / 共有 UI のリンクが無い場合、または package.json / package-lock.json が
+#   前回インストール時（node_modules/.package-lock.json）より新しい場合は npm install を実行する。
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 FRONTEND_DIR="${ROOT_DIR}/frontend"
+SHARED_PLATFORM_DIR="${SHARED_PLATFORM_DIR:-${ROOT_DIR}/../platform}"
+SHARED_UI_DIR="${SHARED_UI_DIR:-${SHARED_PLATFORM_DIR}/packages/ui}"
 
 HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-3000}"
@@ -17,6 +21,47 @@ if ! command -v npm >/dev/null 2>&1; then
   echo "[frontend] npm が見つかりません。Node.js をインストールしてください。" >&2
   exit 1
 fi
+
+prepare_shared_ui() {
+  if [ ! -f "${SHARED_UI_DIR}/package.json" ]; then
+    echo "[frontend] 共有 UI パッケージが見つかりません: ${SHARED_UI_DIR}" >&2
+    echo "[frontend] monorepo(no.1-production-ready-suite)の platform/ が rag/ と同じ階層にあることを確認してください。" >&2
+    echo "[frontend] 別の場所に配置した場合は SHARED_PLATFORM_DIR または SHARED_UI_DIR を指定してください。" >&2
+    return 1
+  fi
+
+  if [ ! -f "${SHARED_PLATFORM_DIR}/package.json" ]; then
+    echo "[frontend] 共有 platform の package.json が見つかりません: ${SHARED_PLATFORM_DIR}" >&2
+    return 1
+  fi
+
+  if [ ! -d "${SHARED_PLATFORM_DIR}/node_modules" ]; then
+    if [ ! -f "${SHARED_PLATFORM_DIR}/package-lock.json" ]; then
+      echo "[frontend] 共有 platform の package-lock.json が見つかりません: ${SHARED_PLATFORM_DIR}" >&2
+      return 1
+    fi
+    echo "[frontend] 共有 UI の依存をインストールします (npm ci)..."
+    (
+      cd "${SHARED_PLATFORM_DIR}"
+      npm ci
+    )
+  fi
+
+  echo "[frontend] 共有 UI パッケージをビルドします..."
+  (
+    cd "${SHARED_PLATFORM_DIR}"
+    # 共有 UI と共有システム設定画面を依存順に build する（platform の npm run build）。
+    npm run build
+  )
+
+  local artifact
+  for artifact in index.js index.d.ts tokens.css; do
+    if [ ! -f "${SHARED_UI_DIR}/dist/${artifact}" ]; then
+      echo "[frontend] 共有 UI のビルド成果物が見つかりません: ${SHARED_UI_DIR}/dist/${artifact}" >&2
+      return 1
+    fi
+  done
+}
 
 # 既に同じポートで起動しているプロセスがあれば停止する
 kill_port() {
@@ -37,10 +82,22 @@ kill_port() {
 
 kill_port "${PORT}"
 
+prepare_shared_ui
+
 cd "${FRONTEND_DIR}"
 
-if [ ! -d node_modules ]; then
+# git pull 等で依存が追加・更新されたのに node_modules が古いままだと、Vite が import を解決できない。
+dependencies_changed() {
+  local installed="node_modules/.package-lock.json"
+  [ -f package-lock.json ] || return 1
+  [ ! -f "${installed}" ] || [ package-lock.json -nt "${installed}" ] || [ package.json -nt "${installed}" ]
+}
+
+if [ ! -d node_modules ] || [ ! -e node_modules/@engchina/production-ready-ui/package.json ]; then
   echo "[frontend] 依存をインストールします (npm install)..."
+  npm install
+elif dependencies_changed; then
+  echo "[frontend] package.json / package-lock.json が更新されているため依存を更新します (npm install)..."
   npm install
 fi
 
