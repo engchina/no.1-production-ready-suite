@@ -36,8 +36,8 @@ for (const viewport of VIEWPORTS) {
     });
 
     test("未保存の Agent 作成フォームはサイドナビの移動を確認し、破棄を選ぶと移動する", async ({ page }) => {
-      await page.goto("/agents");
-      await expect(page.getByRole("heading", { name: "業務 Agent", level: 1 })).toBeVisible();
+      await page.goto("/agents?id=new");
+      await expect(page.getByRole("heading", { name: "業務 Agent を作成", level: 1 })).toBeVisible();
       expect(await beforeUnloadBlocks(page)).toBe(false);
 
       await page.locator("#new-agent-name").fill("下書きの Agent");
@@ -50,8 +50,14 @@ for (const viewport of VIEWPORTS) {
 
       // キャンセルすると移動せず、入力も残る。
       await dialog.getByRole("button", { name: "キャンセル" }).click();
-      await expect(page).toHaveURL(/\/agents$/);
+      await expect(page).toHaveURL(/\/agents\?id=new$/);
       await expect(page.locator("#new-agent-name")).toHaveValue("下書きの Agent");
+
+      // パンくずの一覧リンクも同じ離脱ガードで止まる。
+      await page.getByRole("navigation", { name: "パンくず" }).getByRole("link", { name: "業務 Agent" }).click();
+      await expect(dialog.getByText("変更を破棄しますか")).toBeVisible();
+      await dialog.getByRole("button", { name: "キャンセル" }).click();
+      await expect(page).toHaveURL(/\/agents\?id=new$/);
 
       await sidebarLink(page, "/runs").click();
       await dialog.getByRole("button", { name: "破棄して移動" }).click();
@@ -60,14 +66,20 @@ for (const viewport of VIEWPORTS) {
       expect(await beforeUnloadBlocks(page)).toBe(false);
     });
 
-    test("Agent を作成するとフォームが空に戻り、確認なしで移動できる", async ({ page }) => {
+    test("Agent を作成すると作成した Agent のエディタへ移り、確認なしで移動できる", async ({ page }) => {
       await page.goto("/agents");
+      await page.getByRole("button", { name: "業務 Agent を作成" }).click();
       await page.locator("#new-agent-name").fill("作成する Agent");
       await expect.poll(() => beforeUnloadBlocks(page)).toBe(true);
       await page.getByRole("button", { name: "作成", exact: true }).first().click();
       await expect(page.getByText("Agent を作成しました")).toBeVisible();
-      await expect(page.locator("#new-agent-name")).toHaveValue("");
+      await expect(page).toHaveURL(/\/agents\?id=agent-2$/);
+      await expect(page.getByRole("heading", { name: "作成する Agent", level: 1 })).toBeVisible();
       await expect.poll(() => beforeUnloadBlocks(page)).toBe(false);
+      // 新規フォームは履歴に残さない（戻るで空の作成フォームへ戻らない）。
+      await page.goBack();
+      await expect(page).toHaveURL(/\/agents$/);
+      await expect(page.getByRole("heading", { name: "業務 Agent", level: 1 })).toBeVisible();
 
       await sidebarLink(page, "/runs").click();
       await expect(page).toHaveURL(/\/runs$/);
@@ -98,15 +110,19 @@ for (const viewport of VIEWPORTS) {
       await expect(page.getByText("変更を破棄しますか")).toHaveCount(0);
     });
 
-    test("Skill の編集フォームはキャンセルでも破棄を確認する", async ({ page }) => {
+    test("Skill のエディタは画面内の「一覧に戻る」でも破棄を確認する", async ({ page }) => {
       await page.goto("/skills");
       await page.getByRole("button", { name: "スキルを追加" }).click();
       await page.locator("#skill-id").fill("draft_skill");
 
-      await page.getByRole("button", { name: "キャンセル", exact: true }).click();
+      // 狭い幅では PageHeader の補助操作が「その他の操作」に入る。
+      const more = page.getByTestId("page-actions-more");
+      if (await more.isVisible()) await more.click();
+      await page.getByRole("button", { name: "一覧に戻る" }).or(page.getByRole("menuitem", { name: "一覧に戻る" })).click();
       const dialog = page.getByRole("alertdialog").or(page.getByRole("dialog"));
       await expect(dialog.getByText("閉じると編集内容は破棄されます")).toBeVisible();
       await dialog.getByRole("button", { name: "破棄して閉じる" }).click();
+      await expect(page).toHaveURL(/\/skills$/);
       await expect(page.locator("#skill-id")).toHaveCount(0);
       expect(await beforeUnloadBlocks(page)).toBe(false);
     });
@@ -151,36 +167,30 @@ for (const viewport of VIEWPORTS) {
       await expectNoHorizontalOverflow(page);
     });
 
-    test("Skill の詳細の選択は残り、消えた対象は説明して選択を外す", async ({ page }) => {
+    test("Skill の編集対象は URL が唯一の情報源で、消えた対象は説明して一覧へ戻す", async ({ page }) => {
       await page.goto("/skills");
-      await page
-        .getByRole("button", { name: "詳細 business_rag_research" })
-        .filter({ visible: true })
-        .click();
-      // 詳細カードだけが出す読み取り専用の案内で、詳細が開いていることを確かめる。
+      await page.getByRole("button", { name: /業務 RAG 調査/ }).click();
+      await expect(page).toHaveURL(/\/skills\?id=business_rag_research$/);
+      // 詳細だけが出す読み取り専用の案内で、対象が開いていることを確かめる。
       const detail = page.getByText("このスキルは読み取り専用です", { exact: false });
       await expect(detail).toBeVisible();
 
-      await sidebarLink(page, "/agents").click();
-      await expect(page).toHaveURL(/\/agents$/);
-      await sidebarLink(page, "/skills").click();
-      await expect(detail).toBeVisible();
-
       await page.reload();
       await expect(detail).toBeVisible();
 
-      // 復元した選択が一覧にない場合は、黙って別の対象に置き換えず説明する。
-      await page.evaluate(() => {
-        window.sessionStorage.setItem(
-          "production-ready-agent.workspace.v1:skills.detailId",
-          JSON.stringify({ value: "deleted_skill", expiresAt: Date.now() + 60_000 })
-        );
-      });
-      await page.reload();
-      await expect(page.getByText("前回選択していた項目が見つかりません", { exact: false })).toBeVisible();
-      await expect.poll(() =>
-        page.evaluate(() => window.sessionStorage.getItem("production-ready-agent.workspace.v1:skills.detailId"))
-      ).toBeNull();
+      // 編集対象は sessionStorage ではなく URL に持つ（#137）。
+      const stored = await page.evaluate(() =>
+        Object.keys(window.sessionStorage).filter((key) => key.startsWith("production-ready-agent.workspace.v1:skills"))
+      );
+      expect(stored).toEqual([]);
+
+      // URL の対象が一覧にない場合は、黙って別の対象に置き換えず説明する。
+      await page.goto("/skills?id=deleted_skill");
+      await expect(page.getByText("対象が見つかりません")).toBeVisible();
+      await expect(page.getByText("「deleted_skill」は削除されたか、存在しません", { exact: false })).toBeVisible();
+      await page.getByRole("button", { name: "一覧に戻る" }).last().click();
+      await expect(page).toHaveURL(/\/skills$/);
+      await expectNoHorizontalOverflow(page);
     });
 
     test("Run の目標とメモリの検索語は残り、確認語は移動で解除される", async ({ page }) => {

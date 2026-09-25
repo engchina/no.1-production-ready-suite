@@ -13,13 +13,14 @@ export const WORKSPACE_NAMESPACE = "production-ready-agent.workspace.v1:";
 export const WORKSPACE_TTL_MS = 8 * 60 * 60 * 1000;
 const MAX_VALUE_CHARS = 20_000;
 
-/** 保存してよい field の allowlist（ページ → field）。 */
+/**
+ * 保存してよい field の allowlist（ページ → field）。
+ * A 型（一覧 → 全画面エディタ）の編集対象は URL の `?id=` が唯一の情報源なので、ここには置かない（#137）。
+ */
 export const WORKSPACE_FIELDS = {
   runs: ["selectedRunId", "streamMode", "goal"],
   audit: ["filterForm", "appliedForm"],
   memory: ["query"],
-  skills: ["detailId"],
-  marketplaces: ["browseId"],
 } as const;
 
 export type WorkspacePage = keyof typeof WORKSPACE_FIELDS;
