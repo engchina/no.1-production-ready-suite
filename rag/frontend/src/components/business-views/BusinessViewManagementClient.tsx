@@ -15,7 +15,7 @@ import {
   ToggleChip,
 } from "@engchina/production-ready-ui";
 import { Archive, Pencil, Sparkles, UserCog } from "lucide-react";
-import { useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 
 import { DegradedBanner } from "@/components/DegradedBanner";
 import { EmptyState, ErrorState } from "@/components/StateViews";
@@ -40,6 +40,7 @@ import {
 } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
+import { useCustomLeaveGuard } from "@/lib/leave-guard";
 import {
   useArchiveBusinessView,
   useBusinessView,
@@ -49,9 +50,64 @@ import {
 } from "@/lib/queries";
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
+import { readWorkspace, removeWorkspace, useWorkspaceState, writeWorkspace } from "@/lib/workspace-state";
 import { BusinessViewKnowledgePanel } from "./BusinessViewKnowledgePanel";
 
 const LIMIT = 20;
+
+interface BusinessViewListView {
+  filter: BusinessViewStatus | "ALL";
+  q: string;
+  offset: number;
+  editingId: string | null;
+}
+const INITIAL_VIEW: BusinessViewListView = { filter: "ACTIVE", q: "", offset: 0, editingId: null };
+
+function isBusinessViewListView(value: unknown): value is BusinessViewListView {
+  const view = value as BusinessViewListView;
+  return (
+    typeof view === "object" &&
+    view !== null &&
+    (FILTERS as unknown[]).includes(view.filter) &&
+    typeof view.q === "string" &&
+    Number.isInteger(view.offset) &&
+    view.offset >= 0 &&
+    (view.editingId === null || typeof view.editingId === "string")
+  );
+}
+
+interface BusinessViewDraft {
+  name: string;
+  description: string;
+  config: BusinessViewConfig;
+}
+
+function isBusinessViewDraft(value: unknown): value is BusinessViewDraft {
+  const draft = value as BusinessViewDraft;
+  return (
+    typeof draft === "object" &&
+    draft !== null &&
+    typeof draft.name === "string" &&
+    typeof draft.description === "string" &&
+    typeof draft.config === "object" &&
+    draft.config !== null &&
+    Array.isArray(draft.config.knowledge_base_ids) &&
+    typeof draft.config.query === "object"
+  );
+}
+
+/** KB の並び順は意味を持たないため、集合として比べる。 */
+function draftSignature(draft: BusinessViewDraft) {
+  return JSON.stringify({
+    ...draft,
+    name: draft.name.trim(),
+    description: draft.description.trim(),
+    config: {
+      ...draft.config,
+      knowledge_base_ids: [...draft.config.knowledge_base_ids].sort(),
+    },
+  });
+}
 const FILTERS: (BusinessViewStatus | "ALL")[] = ["ALL", "ACTIVE", "ARCHIVED"];
 const NAME_ERROR_ID = "business-view-name-error";
 const NAME_HELPER_ID = "business-view-name-helper";
@@ -163,11 +219,14 @@ function emptyConfig(): BusinessViewConfig {
 /** 業務ビュー(Business View)管理。複数 KB を業務視点で束ね、検索・回答方針と persona を設定する。 */
 export function BusinessViewManagementClient() {
   const confirm = useConfirm();
-  const [filter, setFilter] = useState<BusinessViewStatus | "ALL">("ACTIVE");
-  const [search, setSearch] = useState("");
-  const [q, setQ] = useState("");
-  const [offset, setOffset] = useState(0);
-  const [editingId, setEditingId] = useState<string | null>(null);
+  // 絞り込み・検索・ページ・編集対象は、ページを行き来しても再読込しても残す（workspace-state.md）。
+  const [view, setView] = useWorkspaceState("businessViews.view", INITIAL_VIEW, isBusinessViewListView);
+  const { filter, q, offset, editingId } = view;
+  const [search, setSearch] = useState(q);
+  const setFilter = (next: BusinessViewStatus | "ALL") => setView((current) => ({ ...current, filter: next }));
+  const setQ = (next: string) => setView((current) => ({ ...current, q: next }));
+  const setOffset = (next: number) => setView((current) => ({ ...current, offset: next }));
+  const setEditingId = (next: string | null) => setView((current) => ({ ...current, editingId: next }));
 
   const status = filter === "ALL" ? undefined : filter;
   const query = useBusinessViews({ status, q: q || undefined, limit: LIMIT, offset });
@@ -175,6 +234,12 @@ export function BusinessViewManagementClient() {
   const items = useMemo(() => page?.items ?? [], [page?.items]);
   const archive = useArchiveBusinessView();
   const editingDetail = useBusinessView(editingId);
+  const editingMissing = Boolean(editingId) && editingDetail.isError;
+
+  // 復元した編集対象が削除・取得失敗なら、別の対象へ置き換えずに編集を閉じる。
+  useEffect(() => {
+    if (editingMissing) setView((current) => ({ ...current, editingId: null }));
+  }, [editingMissing, setView]);
 
   const handleArchive = async (view: BusinessViewSummary) => {
     const ok = await confirm({
@@ -367,12 +432,44 @@ function BusinessViewForm({
 }) {
   const create = useCreateBusinessView();
   const update = useUpdateBusinessView();
-  const [name, setName] = useState(initial?.name ?? "");
-  const [description, setDescription] = useState(initial?.description ?? "");
-  const [config, setConfig] = useState<BusinessViewConfig>(
-    initial?.config ? normalizeBusinessViewConfig(initial.config) : emptyConfig()
+  const confirm = useConfirm();
+  // 未保存の下書きは同じタブの sessionStorage に残し、再読込・ページ往復で再開できるようにする。
+  const draftScope = initial?.id ?? "new";
+  const [baseline] = useState<BusinessViewDraft>(() => ({
+    name: initial?.name ?? "",
+    description: initial?.description ?? "",
+    config: initial?.config ? normalizeBusinessViewConfig(initial.config) : emptyConfig(),
+  }));
+  const [restored] = useState(() =>
+    readWorkspace<BusinessViewDraft | null>(
+      "businessViews.draft",
+      null,
+      (value): value is BusinessViewDraft | null => value === null || isBusinessViewDraft(value),
+      draftScope
+    )
   );
+  const [name, setName] = useState(restored?.name ?? baseline.name);
+  const [description, setDescription] = useState(restored?.description ?? baseline.description);
+  const [config, setConfig] = useState<BusinessViewConfig>(restored?.config ?? baseline.config);
   const [touched, setTouched] = useState(false);
+  const draft = useMemo(() => ({ name, description, config }), [name, description, config]);
+  const dirty = draftSignature(draft) !== draftSignature(baseline);
+
+  useEffect(() => {
+    if (dirty) writeWorkspace("businessViews.draft", draft, draftScope);
+    else removeWorkspace("businessViews.draft", draftScope);
+  }, [dirty, draft, draftScope]);
+
+  // 下書きはこのタブに残るため、確認では「破棄」ではなく未保存であることを伝える。
+  useCustomLeaveGuard(dirty, () =>
+    confirm({
+      title: t("businessViews.leaveGuard.title"),
+      description: t("businessViews.leaveGuard.description"),
+      confirmLabel: t("businessViews.leaveGuard.confirm"),
+      tone: "warning",
+      dismissOnOverlay: false,
+    })
+  );
   const isDefault = initial?.name === DEFAULT_BUSINESS_VIEW_NAME;
 
   const pending = create.isPending || update.isPending;
@@ -401,6 +498,7 @@ function BusinessViewForm({
         },
         {
           onSuccess: (detail) => {
+            removeWorkspace("businessViews.draft", draftScope);
             toast.success(t("businessViews.toast.updated"));
             onDone(detail.id);
           },
@@ -416,6 +514,7 @@ function BusinessViewForm({
       { name: name.trim(), description: description.trim() || null, config },
       {
         onSuccess: (detail) => {
+          removeWorkspace("businessViews.draft", draftScope);
           setName("");
           setDescription("");
           setConfig(emptyConfig());
@@ -439,6 +538,9 @@ function BusinessViewForm({
       </CardHeader>
       <CardContent>
         <form onSubmit={handleSubmit} className="space-y-5">
+          {restored && dirty ? (
+            <FormStatus tone="info" message={t("businessViews.draftRestored")} />
+          ) : null}
           <div className="grid gap-3 md:grid-cols-[minmax(0,18rem)_minmax(0,1fr)]">
             <div>
               <label htmlFor="business-view-name" className="text-sm font-medium text-fg">
@@ -674,7 +776,17 @@ function BusinessViewForm({
                 : t("businessViews.actions.create")}
             </Button>
             {mode === "edit" && onCancel ? (
-              <Button size="lg" variant="ghost" type="button" onClick={onCancel} disabled={pending}>
+              <Button
+                size="lg"
+                variant="ghost"
+                type="button"
+                onClick={() => {
+                  // 編集のキャンセルは下書きを明示的に捨てる操作。
+                  removeWorkspace("businessViews.draft", draftScope);
+                  onCancel();
+                }}
+                disabled={pending}
+              >
                 {t("businessViews.actions.cancel")}
               </Button>
             ) : null}

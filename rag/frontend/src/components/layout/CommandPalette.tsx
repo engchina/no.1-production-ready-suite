@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { CornerDownLeft, Search, X } from "lucide-react";
 
 import { t } from "@/lib/i18n";
+import { confirmPendingLeave } from "@/lib/leave-guard";
 import { cn } from "@/lib/utils";
 import { NAV_SECTIONS, type NavItem } from "./nav-config";
 
@@ -110,7 +111,12 @@ function CommandPaletteDialog({ onClose }: { onClose: () => void }) {
     const entry = results[index];
     if (!entry) return;
     onClose();
-    navigate(entry.item.href);
+    const href = entry.item.href;
+    if (href === window.location.pathname) return;
+    // navigate() は共有ガードの click 捕捉を通らないため、未保存の編集があれば先に確認する。
+    void confirmPendingLeave().then((confirmed) => {
+      if (confirmed) navigate(href);
+    });
   }
 
   function onKeyDown(event: React.KeyboardEvent) {

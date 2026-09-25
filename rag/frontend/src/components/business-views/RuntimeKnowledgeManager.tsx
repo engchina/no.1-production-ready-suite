@@ -22,6 +22,7 @@ import {
   type RuntimeKnowledgePreviewData,
 } from "@/lib/api";
 import { t } from "@/lib/i18n";
+import { useLeaveGuard } from "@/lib/leave-guard";
 import { useEditRuntimeKnowledge, useRuntimeKnowledge } from "@/lib/queries";
 
 type Row = Record<string, JsonValue>;
@@ -63,6 +64,11 @@ function list(value: JsonValue | undefined): string[] {
     : [];
 }
 
+/** 種類の切替だけでは dirty にしない（入力値と編集対象を比べる）。 */
+function editableSnapshot({ selected, name, title, labels, content, enabled }: FormState) {
+  return JSON.stringify([selected, name, title, labels, content, enabled]);
+}
+
 function formFromRow(kind: RuntimeKnowledgeKind, row: Row): FormState {
   const identity = kind === "terms" ? text(row.term) : text(row.id);
   return {
@@ -89,6 +95,13 @@ export function RuntimeKnowledgeManager({
   const query = useRuntimeKnowledge(businessViewId);
   const save = useEditRuntimeKnowledge(businessViewId);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
+  // 読み込んだ行（または空の新規）を基準に、未保存の入力だけを離脱ガードの対象にする。
+  const [baseline, setBaseline] = useState<FormState>(EMPTY_FORM);
+  const load = (next: FormState) => {
+    setForm(next);
+    setBaseline(next);
+  };
+  useLeaveGuard(editableSnapshot(form) !== editableSnapshot(baseline));
   const [question, setQuestion] = useState("");
   const [preview, setPreview] = useState<RuntimeKnowledgePreviewData | null>(
     null,
@@ -111,7 +124,7 @@ export function RuntimeKnowledgeManager({
       },
       {
         onSuccess: () => {
-          setForm({ ...EMPTY_FORM, kind: form.kind });
+          load({ ...EMPTY_FORM, kind: form.kind });
           toast.success(
             t(
               remove
@@ -197,7 +210,7 @@ export function RuntimeKnowledgeManager({
               size="sm"
               variant="ghost"
               icon={Pencil}
-              onClick={() => setForm(formFromRow(kind, row))}
+              onClick={() => load(formFromRow(kind, row))}
             >
               {t("businessViews.runtime.edit")}
             </Button>
@@ -323,7 +336,7 @@ export function RuntimeKnowledgeManager({
                   size="sm"
                   variant="ghost"
                   icon={X}
-                  onClick={() => setForm({ ...EMPTY_FORM, kind: form.kind })}
+                  onClick={() => load({ ...EMPTY_FORM, kind: form.kind })}
                 >
                   {t("businessViews.runtime.cancel")}
                 </Button>

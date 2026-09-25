@@ -20,6 +20,7 @@ import { CheckCircle2, FileText, Plus } from "lucide-react";
 import { ErrorState } from "@/components/StateViews";
 import { ApiError, type PromptVersionData } from "@/lib/api";
 import { t } from "@/lib/i18n";
+import { useLeaveGuard } from "@/lib/leave-guard";
 import { usePromptVersions, useCreatePromptVersion, useActivatePromptVersion } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 
@@ -37,6 +38,9 @@ export function PromptVersionsClient() {
   const [note, setNote] = useState("");
   const [activateOnCreate, setActivateOnCreate] = useState(true);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+
+  // 作成前の新しい版の入力があるときだけ離脱を確認する（作成成功で入力は空に戻る）。
+  useLeaveGuard(Boolean(name.trim() || systemPrompt.trim() || note.trim()));
 
   if (query.isPending) {
     return (
