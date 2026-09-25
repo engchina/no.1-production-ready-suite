@@ -63,11 +63,13 @@ const EXPECTED_ICON_NAMES_BY_LABEL_KEY = new Map<string, string>([
   ["nav.securityUsers", "Users"],
   ["nav.securityRoles", "Shield"],
   ["nav.securityDeepSec", "ShieldCheck"],
+  // 運用設定（#81）
+  ["nav.settingsSystemTables", "TableProperties"],
+  // システム設定（3製品共通）
   ["nav.settingsOci", "KeyRound"],
   ["nav.settingsUploadStorage", "Cloud"],
   ["nav.settingsModel", "BrainCog"],
   ["nav.settingsDatabase", "Database"],
-  ["nav.settingsSystemTables", "TableProperties"],
   ["nav.settingsAppearance", "Palette"],
 ]);
 
@@ -102,6 +104,7 @@ test("サイドバーは AI 活用だけを初期展開し、保存済みの明�
     "nav.section.prepare": true,
     "nav.section.improve": true,
     "nav.section.security": true,
+    "nav.section.operations": true,
     "nav.section.settings": true,
   });
 
@@ -115,6 +118,7 @@ test("サイドバーは AI 活用だけを初期展開し、保存済みの明�
       "nav.section.prepare": false,
       "nav.section.improve": true,
       "nav.section.security": true,
+      "nav.section.operations": true,
       "nav.section.settings": true,
     }
   );
