@@ -243,13 +243,15 @@ def test_du_client_uses_region_override_when_building_document_client(
         captured["region"] = region
         return {"region": region}
 
-    monkeypatch.setattr(
-        "rag_parser_core.oci_document_understanding.importlib.import_module",
-        _fake_import_module,
-    )
+    # import_module の差し替えは最後に行う（pytest 9.1 以降の monkeypatch は文字列の target を
+    # importlib.import_module で解決するため、先に差し替えると後続の setattr が偽物を通る）。
     monkeypatch.setattr(
         "rag_parser_core.oci_document_understanding.load_oci_config_without_prompt",
         _fake_load_config,
+    )
+    monkeypatch.setattr(
+        "rag_parser_core.oci_document_understanding.importlib.import_module",
+        _fake_import_module,
     )
 
     client = OciDocumentUnderstandingClient(_du_settings())
@@ -294,13 +296,15 @@ def test_du_client_uses_du_region_for_object_storage_by_default(
         captured["region"] = region
         return {"region": region}
 
-    monkeypatch.setattr(
-        "rag_parser_core.oci_document_understanding.importlib.import_module",
-        _fake_import_module,
-    )
+    # import_module の差し替えは最後に行う（pytest 9.1 以降の monkeypatch は文字列の target を
+    # importlib.import_module で解決するため、先に差し替えると後続の setattr が偽物を通る）。
     monkeypatch.setattr(
         "rag_parser_core.oci_document_understanding.load_oci_config_without_prompt",
         _fake_load_config,
+    )
+    monkeypatch.setattr(
+        "rag_parser_core.oci_document_understanding.importlib.import_module",
+        _fake_import_module,
     )
 
     client = OciDocumentUnderstandingClient(_du_settings())
