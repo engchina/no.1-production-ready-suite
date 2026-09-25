@@ -6,6 +6,7 @@ monorepo `no.1-production-ready-suite` の `platform/`。No.1 Production Ready �
 ```
 packages/
   ui/             @engchina/production-ready-ui    — 共有フロント UI/UX（Vite library / React 19 / Tailwind v4）
+  system-settings/ @engchina/production-ready-system-settings — 3製品共通のシステム設定画面（外観ほか。#70）
   backend_core/   production-ready-backend-core    — 共有 FastAPI インフラ（Python 3.12 / pydantic v2 / uv）
 templates/
   backend-service/  FastAPI サービス雛形（backend_core 利用）

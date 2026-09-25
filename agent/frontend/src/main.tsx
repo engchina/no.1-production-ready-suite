@@ -3,11 +3,15 @@ import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
-import { ConfirmProvider, Toaster } from "@engchina/production-ready-ui";
+import { ConfirmProvider, Toaster, initTheme } from "@engchina/production-ready-ui";
 
 import { App } from "./App";
 // globals.css が tailwindcss + 共有 tokens.css + @source を取り込む（単一エントリ）。
 import "./globals.css";
+import { useUiStore } from "@/lib/ui-store";
+
+// 永続化テーマを描画前に適用（FOUC 回避）＋ store / OS 設定の変更を購読する（#95）。
+initTheme(useUiStore);
 
 const root = document.getElementById("root");
 if (!root) {

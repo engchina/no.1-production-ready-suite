@@ -534,7 +534,8 @@ build_frontend_staging() {
     trap - ERR
     cd "${PLATFORM_REPO_DIR}"
     run_as_app_user npm ci
-    run_as_app_user npm run build --workspace @engchina/production-ready-ui
+    # 共有 UI と共有システム設定画面を依存順に build する（platform の npm run build）。
+    run_as_app_user npm run build
   )
   log "NL2SQL frontend を型検証し、一時 directory へビルドします。"
   remove_generated_path "${FRONTEND_STAGING_DIR}"

@@ -1,5 +1,8 @@
+import { SYSTEM_SETTINGS_PATHS } from "@engchina/production-ready-system-settings";
+
 /** Agent コンソールのルート定義。 */
 export const APP_ROUTES = {
+  settingsAppearance: SYSTEM_SETTINGS_PATHS.appearance,
   dashboard: "/",
   agents: "/agents",
   runtimes: "/runtimes",

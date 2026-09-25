@@ -1,7 +1,7 @@
 # --- frontend (packages/ui) ---
 node_modules
 packages/*/node_modules
-packages/ui/dist/
+packages/*/dist/
 
 # --- backend (packages/backend_core, Python/uv) ---
 .venv

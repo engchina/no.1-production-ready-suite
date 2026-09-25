@@ -33,7 +33,7 @@ PORT=3997 \
   "${APP_DIR}/scripts/start-frontend.sh"
 
 EXPECTED_CALLS="${PLATFORM_DIR}|ci
-${PLATFORM_DIR}|run build --workspace @engchina/production-ready-ui
+${PLATFORM_DIR}|run build
 ${APP_DIR}/frontend|run dev -- --host 0.0.0.0 --port 3997"
 ACTUAL_CALLS="$(<"${NPM_CALL_LOG}")"
 

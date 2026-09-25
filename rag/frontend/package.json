@@ -12,6 +12,7 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
+    "@engchina/production-ready-system-settings": "file:../../platform/packages/system-settings",
     "@engchina/production-ready-ui": "file:../../platform/packages/ui",
     "@tanstack/react-query": "^5.103.2",
     "@xyflow/react": "^12.11.6",

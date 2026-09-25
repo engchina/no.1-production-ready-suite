@@ -1,4 +1,5 @@
 import {
+  Palette,
   Database,
   FlaskConical,
   FileSearch,
@@ -198,6 +199,7 @@ export const NAV_SECTIONS: NavSection[] = [
         sidebarLabelKey: "nav.settingsServices.sidebar",
         icon: Server,
       },
+      { href: APP_ROUTES.settingsAppearance, labelKey: "nav.settingsAppearance", icon: Palette },
     ],
   },
 ];

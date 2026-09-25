@@ -9,13 +9,13 @@
 
 | ディレクトリ | 内容 | 固有ルール |
 |---|---|---|
-| `platform/` | 3製品の共通基盤。`packages/ui`（`@engchina/production-ready-ui`）、`packages/backend_core`（`pr_backend_core`）、デザインシステム（`docs/design-system/`） | [platform/AGENTS.md](./platform/AGENTS.md) |
+| `platform/` | 3製品の共通基盤。`packages/ui`（`@engchina/production-ready-ui`）、`packages/system-settings`（`@engchina/production-ready-system-settings`、共通のシステム設定画面）、`packages/backend_core`（`pr_backend_core`）、デザインシステム（`docs/design-system/`） | [platform/AGENTS.md](./platform/AGENTS.md) |
 | `rag/` | Production Ready RAG（ナレッジ構築・業務ビュー・検索・回答） | [rag/AGENTS.md](./rag/AGENTS.md) |
 | `nl2sql/` | Production Ready NL2SQL（SQL 専用の自然言語問い合わせ） | [nl2sql/AGENTS.md](./nl2sql/AGENTS.md) |
 | `agent/` | Production Control Plane for AI Agents | [agent/AGENTS.md](./agent/AGENTS.md) |
 
 - **依存の向きは `platform/` → 各製品の一方向。** 製品同士はコードで依存しない。製品間の連携（例: Agent が RAG / NL2SQL を呼ぶ）は HTTP API 経由にする。
-- 製品は `platform/` を相対パスで参照する（frontend: `file:../../platform/packages/ui`、backend: `path = "../../platform/packages/backend_core"`、lint: `../../platform/docs/design-system/…`）。パッケージの publish や version pin は行わない。
+- 製品は `platform/` を相対パスで参照する（frontend: `file:../../platform/packages/ui` / `file:../../platform/packages/system-settings`、backend: `path = "../../platform/packages/backend_core"`、lint: `../../platform/docs/design-system/…`）。パッケージの publish や version pin は行わない。
 - 各製品の backend / frontend / Docker image / 配備は独立している。まとめているのはソースと CI だけ。
 - 2026-09-25 に旧4 repo（`no.1-production-ready-{platform,rag,nl2sql,agent}`）を統合した（#71）。旧 repo は archive 済みで、commit message 内の `engchina/no.1-production-ready-<製品>#N` は旧 repo の Issue / PR を指す。
 
