@@ -42,6 +42,15 @@ const agentJa = {
   "nav.settingsRuntimeSafety": "Runtime Safety",
   "nav.settingsRuntimeSnapshot": "Control Plane バックアップ",
 
+  // 未保存変更の離脱ガードと作業状態の保持（#87）
+  "guard.discardTitle": "変更を破棄しますか",
+  "guard.discardDescription": "保存されていない変更があります。移動すると編集内容は破棄されます。",
+  "guard.discardConfirm": "破棄して移動",
+  "guard.closeDescription": "保存されていない変更があります。閉じると編集内容は破棄されます。",
+  "guard.closeConfirm": "破棄して閉じる",
+  "workspace.selectionMissing": "前回選択していた項目が見つかりません。削除されたか、参照できなくなった可能性があります。一覧から選び直してください。",
+  "workspace.draftNotSaved": "入力中の内容をこのタブに一時保存できませんでした。移動や再読込の前に確認します。",
+
   "page.dashboard.subtitle": "Business Agent を定義し、選択した Runtime で実行する",
   "page.agents.subtitle": "業務指示と Skill を定義し、実行先は Binding で分離する",
   "page.runtimes.subtitle": "OpenClaw / Hermes / DeerFlow の状態・能力・サービスを管理する",

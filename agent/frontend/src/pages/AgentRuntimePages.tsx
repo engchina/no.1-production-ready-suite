@@ -71,6 +71,15 @@ import {
   type ToolDefinition,
 } from "@/lib/api";
 import { t } from "@/lib/i18n";
+import { sameDraft, useDirtySources, useEditorLeaveGuard, useSettingsLeaveGuard } from "@/lib/leave-guard";
+import {
+  isNullableString,
+  isOneOf,
+  isString,
+  useRestoredSelectionCheck,
+  useWorkspaceState,
+  type WorkspaceValidator,
+} from "@/lib/workspace-state";
 
 type ToolPolicyChoice = "default" | "allow" | "ask" | "deny";
 type RunStreamMode = "sse" | "websocket";
@@ -389,6 +398,12 @@ export function AgentsPage() {
     onSuccess: refreshBindings,
   });
   const availableSkills = skills.data?.skills ?? [];
+  // 新規・各 Agent のエディタと Binding 追加フォームの dirty を集約して 1 つの離脱ガードで守る（#87）。
+  const dirtySources = useDirtySources();
+  useEditorLeaveGuard(
+    dirtySources.anyDirty,
+    createAgent.isPending || patchAgent.isPending || createBinding.isPending
+  );
 
   return (
     <>
@@ -400,7 +415,8 @@ export function AgentsPage() {
           availableSkills={availableSkills}
           pending={createAgent.isPending}
           error={createAgent.error}
-          onSave={(payload) => createAgent.mutate(payload)}
+          onSave={(payload, onSaved) => createAgent.mutate(payload, { onSuccess: onSaved })}
+          onDirtyChange={(dirty) => dirtySources.report("agent:new", dirty)}
         />
         <QueryState query={agents}>
           <div className="grid min-w-0 gap-4">
@@ -415,7 +431,10 @@ export function AgentsPage() {
                     availableSkills={availableSkills}
                     pending={patchAgent.isPending}
                     error={patchAgent.error}
-                    onSave={(payload) => patchAgent.mutate({ agent, payload })}
+                    onSave={(payload, onSaved) =>
+                      patchAgent.mutate({ agent, payload }, { onSuccess: onSaved })
+                    }
+                    onDirtyChange={(dirty) => dirtySources.report(`agent:${agent.id}`, dirty)}
                   />
                   <RuntimeBindingsPanel
                     agent={agent}
@@ -435,7 +454,8 @@ export function AgentsPage() {
                       deleteBinding.error ??
                       syncBinding.error
                     }
-                    onCreate={(payload) => createBinding.mutate(payload)}
+                    onCreate={(payload, onSaved) => createBinding.mutate(payload, { onSuccess: onSaved })}
+                    onDirtyChange={(dirty) => dirtySources.report(`binding:${agent.id}`, dirty)}
                     onDefault={(binding) =>
                       patchBinding.mutate({ binding, payload: { is_default: true } })
                     }
@@ -602,6 +622,8 @@ export function RuntimesPage() {
   );
 }
 
+const DEFAULT_RUN_GOAL = "外部データを確認して要点を整理する";
+
 export function RunsPage() {
   const queryClient = useQueryClient();
   const confirm = useConfirm();
@@ -643,14 +665,30 @@ export function RunsPage() {
       refreshRunQueries();
     },
   });
-  const [goal, setGoal] = useState("外部データを確認して要点を整理する");
+  // 作業状態（目標の下書き・選択中の Run・購読方式）はこのタブの sessionStorage に残す（#87）。
+  // Agent / Binding は実行条件なので残さず、戻るたびに選び直す（実行の意思は確認し直す）。
+  const [goal, setGoal, goalSaved] = useWorkspaceState("runs", "goal", DEFAULT_RUN_GOAL, isString);
   const [agentId, setAgentId] = useState("default");
   const [bindingId, setBindingId] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
-  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
-  const [streamMode, setStreamMode] = useState<RunStreamMode>("sse");
+  const [selectedRunId, setSelectedRunId] = useWorkspaceState(
+    "runs",
+    "selectedRunId",
+    null as string | null,
+    isNullableString
+  );
+  const [streamMode, setStreamMode] = useWorkspaceState(
+    "runs",
+    "streamMode",
+    "sse" as RunStreamMode,
+    isOneOf<RunStreamMode>(["sse", "websocket"])
+  );
+  // 一時保存に失敗した下書きは、離脱の前に破棄を確認する。
+  useEditorLeaveGuard(!goalSaved && goal !== DEFAULT_RUN_GOAL);
 
   const runItems = runs.data?.runs ?? [];
+  const runIds = useMemo(() => runs.data?.runs.map((run) => run.id), [runs.data?.runs]);
+  const restoredSelection = useRestoredSelectionCheck(selectedRunId, runIds);
   const selectedRun = runItems.find((run) => run.id === selectedRunId) ?? runItems[0];
   const agentBindings = (bindings.data?.bindings ?? []).filter(
     (binding) => binding.agent_id === agentId && binding.enabled
@@ -809,6 +847,7 @@ export function RunsPage() {
                 <Banner severity="warning">{t("run.unbound")}</Banner>
               ) : null}
               {formError ? <Banner severity="danger">{formError}</Banner> : null}
+              {!goalSaved ? <Banner severity="warning">{t("workspace.draftNotSaved")}</Banner> : null}
               {createRun.error ? <Banner severity="danger">{createRun.error.message}</Banner> : null}
               <Button onClick={submitRun} loading={createRun.isPending} className="w-full" icon={PlayCircle}>
                 {t("run.form.submit")}
@@ -817,10 +856,16 @@ export function RunsPage() {
           </Card>
 
           <QueryState query={runs}>
+            {restoredSelection.missing ? (
+              <Banner severity="warning">{t("workspace.selectionMissing")}</Banner>
+            ) : null}
             <RunHistoryList
               runs={runItems}
               selectedRunId={selectedRun?.id ?? null}
-              onSelect={setSelectedRunId}
+              onSelect={(runId) => {
+                restoredSelection.dismiss();
+                setSelectedRunId(runId);
+              }}
             />
           </QueryState>
         </div>
@@ -937,42 +982,82 @@ export function ApprovalsPage() {
 
 type AuditWarningsFilter = "any" | "true" | "false";
 
+/** 監査の絞り込みフォーム。入力中の条件と適用済みの条件をこの形で sessionStorage に残す（#87）。 */
+interface AuditFilterForm {
+  runId: string;
+  toolName: string;
+  stepStatus: string;
+  approvalStatus: string;
+  errorCode: string;
+  warnings: AuditWarningsFilter;
+  limit: string;
+}
+
+const DEFAULT_AUDIT_FILTER_FORM: AuditFilterForm = {
+  runId: "",
+  toolName: "",
+  stepStatus: "",
+  approvalStatus: "",
+  errorCode: "",
+  warnings: "any",
+  limit: "100",
+};
+
+const isAuditFilterForm: WorkspaceValidator<AuditFilterForm> = (value): value is AuditFilterForm => {
+  if (typeof value !== "object" || value === null) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    Object.keys(DEFAULT_AUDIT_FILTER_FORM).every((key) => typeof record[key] === "string") &&
+    ["any", "true", "false"].includes(record.warnings as string)
+  );
+};
+
+function auditFiltersOf(form: AuditFilterForm): ToolCallAuditFilters {
+  const parsedLimit = Number(form.limit);
+  return {
+    run_id: form.runId.trim() || undefined,
+    tool_name: form.toolName || undefined,
+    status: form.stepStatus || undefined,
+    approval_status: form.approvalStatus || undefined,
+    error_code: form.errorCode.trim() || undefined,
+    has_guardrail_warnings: form.warnings === "any" ? undefined : form.warnings === "true",
+    limit: Number.isInteger(parsedLimit) && parsedLimit > 0 ? parsedLimit : 100,
+    offset: 0,
+  };
+}
+
 export function AuditPage() {
   const tools = useQuery({ queryKey: ["tools"], queryFn: agentApi.listTools });
-  const [runId, setRunId] = useState("");
-  const [toolName, setToolName] = useState("");
-  const [stepStatus, setStepStatus] = useState("");
-  const [approvalStatus, setApprovalStatus] = useState("");
-  const [errorCode, setErrorCode] = useState("");
-  const [warnings, setWarnings] = useState<AuditWarningsFilter>("any");
-  const [limit, setLimit] = useState("100");
-  const [appliedFilters, setAppliedFilters] = useState<ToolCallAuditFilters>({ limit: 100 });
+  const [filterForm, setFilterForm] = useWorkspaceState(
+    "audit",
+    "filterForm",
+    DEFAULT_AUDIT_FILTER_FORM,
+    isAuditFilterForm
+  );
+  const [appliedForm, setAppliedForm] = useWorkspaceState(
+    "audit",
+    "appliedForm",
+    DEFAULT_AUDIT_FILTER_FORM,
+    isAuditFilterForm
+  );
+  const appliedFilters = useMemo(() => auditFiltersOf(appliedForm), [appliedForm]);
   const audit = useQuery({
     queryKey: ["audit", "tool-calls", appliedFilters],
     queryFn: () => agentApi.listToolCallAudit(appliedFilters),
   });
+  const { runId, toolName, stepStatus, approvalStatus, errorCode, warnings, limit } = filterForm;
 
-  function currentFilters(): ToolCallAuditFilters {
-    const parsedLimit = Number(limit);
-    return {
-      run_id: runId.trim() || undefined,
-      tool_name: toolName || undefined,
-      status: stepStatus || undefined,
-      approval_status: approvalStatus || undefined,
-      error_code: errorCode.trim() || undefined,
-      has_guardrail_warnings: warnings === "any" ? undefined : warnings === "true",
-      limit: Number.isInteger(parsedLimit) && parsedLimit > 0 ? parsedLimit : 100,
-      offset: 0,
-    };
+  function setFilter<K extends keyof AuditFilterForm>(key: K, value: AuditFilterForm[K]) {
+    setFilterForm((current) => ({ ...current, [key]: value }));
   }
 
   function applyFilters() {
-    setAppliedFilters(currentFilters());
+    setAppliedForm(filterForm);
   }
 
   function downloadCsv() {
     const link = document.createElement("a");
-    link.href = agentApi.toolCallAuditCsvUrl(currentFilters());
+    link.href = agentApi.toolCallAuditCsvUrl(auditFiltersOf(filterForm));
     link.download = "agent-tool-call-audit.csv";
     link.click();
     toast.success(t("audit.csvDownloaded"));
@@ -1002,7 +1087,7 @@ export function AuditPage() {
                 <input
                   id="audit-run-id"
                   value={runId}
-                  onChange={(event) => setRunId(event.target.value)}
+                  onChange={(event) => setFilter("runId", event.target.value)}
                   className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 />
               </Field>
@@ -1010,7 +1095,7 @@ export function AuditPage() {
                 <select
                   id="audit-tool-name"
                   value={toolName}
-                  onChange={(event) => setToolName(event.target.value)}
+                  onChange={(event) => setFilter("toolName", event.target.value)}
                   className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 >
                   <option value="">{t("common.all")}</option>
@@ -1025,7 +1110,7 @@ export function AuditPage() {
                 <select
                   id="audit-step-status"
                   value={stepStatus}
-                  onChange={(event) => setStepStatus(event.target.value)}
+                  onChange={(event) => setFilter("stepStatus", event.target.value)}
                   className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 >
                   <option value="">{t("common.all")}</option>
@@ -1040,7 +1125,7 @@ export function AuditPage() {
                 <select
                   id="audit-approval-status"
                   value={approvalStatus}
-                  onChange={(event) => setApprovalStatus(event.target.value)}
+                  onChange={(event) => setFilter("approvalStatus", event.target.value)}
                   className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 >
                   <option value="">{t("common.all")}</option>
@@ -1055,7 +1140,7 @@ export function AuditPage() {
                 <input
                   id="audit-error-code"
                   value={errorCode}
-                  onChange={(event) => setErrorCode(event.target.value)}
+                  onChange={(event) => setFilter("errorCode", event.target.value)}
                   className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 />
               </Field>
@@ -1063,7 +1148,7 @@ export function AuditPage() {
                 <select
                   id="audit-warning-filter"
                   value={warnings}
-                  onChange={(event) => setWarnings(event.target.value as AuditWarningsFilter)}
+                  onChange={(event) => setFilter("warnings", event.target.value as AuditWarningsFilter)}
                   className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 >
                   <option value="any">{t("common.all")}</option>
@@ -1078,7 +1163,7 @@ export function AuditPage() {
                   min="1"
                   max="1000"
                   value={limit}
-                  onChange={(event) => setLimit(event.target.value)}
+                  onChange={(event) => setFilter("limit", event.target.value)}
                   className="h-10 w-full rounded-md border border-border-control bg-surface-sunken px-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
                 />
               </Field>
@@ -1276,7 +1361,8 @@ export function ToolsPage() {
 
 export function MemoryPage() {
   const queryClient = useQueryClient();
-  const [query, setQuery] = useState("");
+  // 検索語は作業状態として残し、登録フォームの未保存の入力は離脱ガードで守る（#87）。
+  const [query, setQuery] = useWorkspaceState("memory", "query", "", isString);
   const [kind, setKind] = useState<MemoryKind>("user_preference");
   const [content, setContent] = useState("");
   const [metadataText, setMetadataText] = useState("{}");
@@ -1295,6 +1381,8 @@ export function MemoryPage() {
       void queryClient.invalidateQueries({ queryKey: ["memory"] });
     },
   });
+
+  useEditorLeaveGuard(content.trim() !== "" || metadataText.trim() !== "{}", addMemory.isPending);
 
   function submitMemory() {
     setFormError(null);
@@ -1396,6 +1484,12 @@ export function MemoryPage() {
   );
 }
 
+interface ExternalSettingsDraft {
+  baseUrl: string;
+  timeoutSeconds: string;
+  defaultLimit: string;
+}
+
 export function ExternalSettingsPage({ kind }: { kind: "rag" | "nl2sql" }) {
   const queryClient = useQueryClient();
   const isRag = kind === "rag";
@@ -1425,22 +1519,39 @@ export function ExternalSettingsPage({ kind }: { kind: "rag" | "nl2sql" }) {
   const [baseUrl, setBaseUrl] = useState("");
   const [timeoutSeconds, setTimeoutSeconds] = useState("10");
   const [defaultLimit, setDefaultLimit] = useState("100");
+  const [baseline, setBaseline] = useState<ExternalSettingsDraft | null>(null);
 
   useEffect(() => {
     const current = settings.data;
     if (current) {
-      setBaseUrl(current.base_url ?? "");
-      setTimeoutSeconds(String(current.timeout_seconds));
-      setDefaultLimit(String(current.default_limit ?? 100));
+      const saved = {
+        baseUrl: current.base_url ?? "",
+        timeoutSeconds: String(current.timeout_seconds),
+        defaultLimit: String(current.default_limit ?? 100),
+      };
+      setBaseUrl(saved.baseUrl);
+      setTimeoutSeconds(saved.timeoutSeconds);
+      setDefaultLimit(saved.defaultLimit);
+      setBaseline(saved);
     }
   }, [settings.data]);
 
+  const draft: ExternalSettingsDraft = { baseUrl, timeoutSeconds, defaultLimit };
+  // RAG では既定件数を扱わないので比較から外す。
+  const comparable = (value: ExternalSettingsDraft) => (isNl2Sql ? value : { ...value, defaultLimit: "" });
+  const isDirty = baseline !== null && !sameDraft(comparable(draft), comparable(baseline));
+  useSettingsLeaveGuard(isDirty, mutation.isPending);
+
   function save() {
-    mutation.mutate({
-      base_url: baseUrl,
-      timeout_seconds: Number(timeoutSeconds),
-      default_limit: isNl2Sql ? Number(defaultLimit) : undefined,
-    });
+    const submitted = draft;
+    mutation.mutate(
+      {
+        base_url: baseUrl,
+        timeout_seconds: Number(timeoutSeconds),
+        default_limit: isNl2Sql ? Number(defaultLimit) : undefined,
+      },
+      { onSuccess: () => setBaseline(submitted) }
+    );
   }
 
   return (
@@ -1701,6 +1812,7 @@ export function McpServersPage() {
     queryFn: agentApi.listExternalMcpServers,
   });
   const [form, setForm] = useState<McpServerFormState>(EMPTY_MCP_FORM);
+  const [formBaseline, setFormBaseline] = useState<McpServerFormState>(EMPTY_MCP_FORM);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [formOpen, setFormOpen] = useState(false);
 
@@ -1749,21 +1861,30 @@ export function McpServersPage() {
     },
   });
 
-  function openCreate() {
+  // 開いているフォームが開いた時点の内容から変わっていれば未保存（secret 欄も含む。値は保存しない）。#87
+  const formDirty = formOpen && !sameDraft(form, formBaseline);
+  const { confirmClose } = useEditorLeaveGuard(formDirty, saveMutation.isPending);
+
+  async function openCreate() {
+    if (!(await confirmClose())) return;
     setEditingId(null);
     setForm(EMPTY_MCP_FORM);
+    setFormBaseline(EMPTY_MCP_FORM);
     setFormOpen(true);
   }
 
-  function openEdit(server: ExternalMcpServerSettings) {
-    setEditingId(server.server_id);
-    setForm({
+  async function openEdit(server: ExternalMcpServerSettings) {
+    if (!(await confirmClose())) return;
+    const next = {
       ...EMPTY_MCP_FORM,
       serverId: server.server_id,
       label: server.label ?? "",
       baseUrl: server.base_url ?? "",
       timeoutSeconds: String(server.timeout_seconds),
-    });
+    };
+    setEditingId(server.server_id);
+    setForm(next);
+    setFormBaseline(next);
     setFormOpen(true);
   }
 
@@ -1771,6 +1892,11 @@ export function McpServersPage() {
     setFormOpen(false);
     setEditingId(null);
     setForm(EMPTY_MCP_FORM);
+    setFormBaseline(EMPTY_MCP_FORM);
+  }
+
+  async function cancelForm() {
+    if (await confirmClose()) closeForm();
   }
 
   function save() {
@@ -1810,7 +1936,7 @@ export function McpServersPage() {
                 <CardTitle>{t("settings.mcpServers.title")}</CardTitle>
                 <CardDescription>{t("settings.mcpServers.description")}</CardDescription>
               </div>
-              <Button size="sm" onClick={openCreate} icon={Plus}>
+              <Button size="sm" onClick={() => void openCreate()} icon={Plus}>
                 {t("settings.mcpServers.add")}
               </Button>
             </CardHeader>
@@ -1820,7 +1946,7 @@ export function McpServersPage() {
               ) : (
                 <McpServerTable
                   servers={list}
-                  onEdit={openEdit}
+                  onEdit={(server) => void openEdit(server)}
                   onDelete={remove}
                   onSetDefault={(id) => setDefaultMutation.mutate(id)}
                   busy={busy}
@@ -1932,7 +2058,7 @@ export function McpServersPage() {
                   <Button onClick={save} loading={saveMutation.isPending} icon={Save}>
                     {editingId ? t("common.save") : t("common.create")}
                   </Button>
-                  <Button variant="ghost" onClick={closeForm} icon={X}>
+                  <Button variant="ghost" onClick={() => void cancelForm()} icon={X}>
                     {t("common.cancel")}
                   </Button>
                 </div>
@@ -2137,10 +2263,14 @@ export function SkillsPage() {
   const confirm = useConfirm();
   const skills = useQuery({ queryKey: ["skills"], queryFn: agentApi.listSkills });
   const [form, setForm] = useState<SkillFormState>(EMPTY_SKILL_FORM);
+  const [formBaseline, setFormBaseline] = useState<SkillFormState>(EMPTY_SKILL_FORM);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [formOpen, setFormOpen] = useState(false);
-  const [detailId, setDetailId] = useState<string | null>(null);
+  // 詳細を開いている Skill は作業状態として残し、戻ったときに一覧で存在を確かめ直す（#87）。
+  const [detailId, setDetailId] = useWorkspaceState("skills", "detailId", null as string | null, isNullableString);
   const [formError, setFormError] = useState<string | null>(null);
+  const skillIds = useMemo(() => skills.data?.skills.map((skill) => skill.id), [skills.data?.skills]);
+  const restoredDetail = useRestoredSelectionCheck(detailId, skillIds, () => setDetailId(null));
 
   function invalidate() {
     void queryClient.invalidateQueries({ queryKey: ["skills"] });
@@ -2194,16 +2324,21 @@ export function SkillsPage() {
     },
   });
 
-  function openCreate() {
+  const formDirty = formOpen && !sameDraft(form, formBaseline);
+  const { confirmClose } = useEditorLeaveGuard(formDirty, saveMutation.isPending);
+
+  async function openCreate() {
+    if (!(await confirmClose())) return;
     setEditingId(null);
     setForm(EMPTY_SKILL_FORM);
+    setFormBaseline(EMPTY_SKILL_FORM);
     setFormError(null);
     setFormOpen(true);
   }
 
-  function openEdit(skill: AgentSkill) {
-    setEditingId(skill.id);
-    setForm({
+  async function openEdit(skill: AgentSkill) {
+    if (!(await confirmClose())) return;
+    const next = {
       id: skill.id,
       name: skill.name,
       description: skill.description,
@@ -2212,7 +2347,10 @@ export function SkillsPage() {
       enabled: skill.enabled,
       mcpRequirementsJson: JSON.stringify(skill.mcp_requirements, null, 2),
       resourceIdsJson: JSON.stringify(skill.resource_ids, null, 2),
-    });
+    };
+    setEditingId(skill.id);
+    setForm(next);
+    setFormBaseline(next);
     setFormError(null);
     setFormOpen(true);
   }
@@ -2221,7 +2359,12 @@ export function SkillsPage() {
     setFormOpen(false);
     setEditingId(null);
     setForm(EMPTY_SKILL_FORM);
+    setFormBaseline(EMPTY_SKILL_FORM);
     setFormError(null);
+  }
+
+  async function cancelForm() {
+    if (await confirmClose()) closeForm();
   }
 
   function save() {
@@ -2294,20 +2437,26 @@ export function SkillsPage() {
                   loading={reloadMutation.isPending} icon={RefreshCw}>
                   {t("skills.reload")}
                 </Button>
-                <Button size="sm" onClick={openCreate} icon={Plus}>
+                <Button size="sm" onClick={() => void openCreate()} icon={Plus}>
                   {t("skills.add")}
                 </Button>
               </div>
             </CardHeader>
-            <CardContent>
+            <CardContent className="space-y-4">
+              {restoredDetail.missing ? (
+                <Banner severity="warning">{t("workspace.selectionMissing")}</Banner>
+              ) : null}
               {list.length === 0 ? (
                 <EmptyState title={t("skills.empty")} />
               ) : (
                 <SkillTable
                   skills={list}
-                  onEdit={openEdit}
+                  onEdit={(skill) => void openEdit(skill)}
                   onDelete={remove}
-                  onDetail={(id) => setDetailId((current) => (current === id ? null : id))}
+                  onDetail={(id) => {
+                    restoredDetail.dismiss();
+                    setDetailId((current) => (current === id ? null : id));
+                  }}
                   busy={deleteMutation.isPending}
                 />
               )}
@@ -2406,7 +2555,7 @@ export function SkillsPage() {
                   <Button onClick={save} loading={saveMutation.isPending} icon={Save}>
                     {editingId ? t("common.save") : t("common.create")}
                   </Button>
-                  <Button variant="ghost" onClick={closeForm} icon={X}>
+                  <Button variant="ghost" onClick={() => void cancelForm()} icon={X}>
                     {t("common.cancel")}
                   </Button>
                 </div>
@@ -2657,6 +2806,19 @@ export function PluginsPage() {
     onSuccess: invalidate,
   });
 
+  // 入力中の manifest を未保存の変更として扱う（#87）。
+  const { confirmClose } = useEditorLeaveGuard(
+    formOpen && manifestJson.trim() !== "",
+    installMutation.isPending
+  );
+
+  async function cancelInstall() {
+    if (!(await confirmClose())) return;
+    setFormOpen(false);
+    setManifestJson("");
+    setFormError(null);
+  }
+
   function install() {
     setFormError(null);
     let parsed: unknown;
@@ -2758,12 +2920,7 @@ export function PluginsPage() {
                   <Button onClick={install} loading={installMutation.isPending} icon={Download}>
                     {t("plugins.installSubmit")}
                   </Button>
-                  <Button
-                    variant="ghost"
-                    onClick={() => {
-                      setFormOpen(false);
-                      setFormError(null);
-                    }} icon={X}>
+                  <Button variant="ghost" onClick={() => void cancelInstall()} icon={X}>
                     {t("common.cancel")}
                   </Button>
                 </div>
@@ -2895,6 +3052,8 @@ function PluginTable({
   );
 }
 
+const EMPTY_MARKETPLACE_FORM = { id: "", name: "", url: "" };
+
 export function PluginMarketplacesPage() {
   const queryClient = useQueryClient();
   const confirm = useConfirm();
@@ -2902,9 +3061,20 @@ export function PluginMarketplacesPage() {
     queryKey: ["plugin-marketplaces"],
     queryFn: agentApi.listPluginMarketplaces,
   });
-  const [form, setForm] = useState({ id: "", name: "", url: "" });
+  const [form, setForm] = useState(EMPTY_MARKETPLACE_FORM);
   const [formOpen, setFormOpen] = useState(false);
-  const [browseId, setBrowseId] = useState<string | null>(null);
+  // 連携機能を見ているマーケットプレイスは作業状態として残し、戻ったときに存在を確かめ直す（#87）。
+  const [browseId, setBrowseId] = useWorkspaceState(
+    "marketplaces",
+    "browseId",
+    null as string | null,
+    isNullableString
+  );
+  const marketplaceIds = useMemo(
+    () => markets.data?.marketplaces.map((source) => source.id),
+    [markets.data?.marketplaces]
+  );
+  const restoredBrowse = useRestoredSelectionCheck(browseId, marketplaceIds, () => setBrowseId(null));
 
   function invalidate() {
     void queryClient.invalidateQueries({ queryKey: ["plugin-marketplaces"] });
@@ -2926,10 +3096,20 @@ export function PluginMarketplacesPage() {
     onSuccess: () => {
       toast.success(t("marketplaces.added"));
       setFormOpen(false);
-      setForm({ id: "", name: "", url: "" });
+      setForm(EMPTY_MARKETPLACE_FORM);
       invalidate();
     },
   });
+  const { confirmClose } = useEditorLeaveGuard(
+    formOpen && !sameDraft(form, EMPTY_MARKETPLACE_FORM),
+    addMutation.isPending
+  );
+
+  async function cancelAdd() {
+    if (!(await confirmClose())) return;
+    setFormOpen(false);
+    setForm(EMPTY_MARKETPLACE_FORM);
+  }
   const refreshMutation = useMutation({
     mutationFn: (id: string) => agentApi.refreshPluginMarketplace(id),
     onSuccess: (_data, id) => {
@@ -2989,14 +3169,20 @@ export function PluginMarketplacesPage() {
                 {t("marketplaces.add")}
               </Button>
             </CardHeader>
-            <CardContent>
+            <CardContent className="space-y-4">
+              {restoredBrowse.missing ? (
+                <Banner severity="warning">{t("workspace.selectionMissing")}</Banner>
+              ) : null}
               {list.length === 0 ? (
                 <EmptyState title={t("marketplaces.empty")} />
               ) : (
                 <MarketplaceTable
                   sources={list}
                   onRefresh={(id) => refreshMutation.mutate(id)}
-                  onBrowse={(id) => setBrowseId((current) => (current === id ? null : id))}
+                  onBrowse={(id) => {
+                    restoredBrowse.dismiss();
+                    setBrowseId((current) => (current === id ? null : id));
+                  }}
                   onDelete={remove}
                   busy={busy}
                 />
@@ -3004,7 +3190,7 @@ export function PluginMarketplacesPage() {
             </CardContent>
           </Card>
 
-          {browseId ? (
+          {browseId && list.some((source) => source.id === browseId) ? (
             <MarketplaceBrowse marketplaceId={browseId} onInstalled={invalidatePlugins} />
           ) : null}
 
@@ -3046,7 +3232,7 @@ export function PluginMarketplacesPage() {
                   <Button onClick={add} loading={addMutation.isPending} icon={Save}>
                     {t("common.create")}
                   </Button>
-                  <Button variant="ghost" onClick={() => setFormOpen(false)} icon={X}>
+                  <Button variant="ghost" onClick={() => void cancelAdd()} icon={X}>
                     {t("common.cancel")}
                   </Button>
                 </div>
@@ -3202,6 +3388,17 @@ function parseCommandPrefixes(value: string): string[] {
   );
 }
 
+interface CommandPolicyDraft {
+  enabled: boolean;
+  workspaceRoot: string;
+  allowedPrefixes: string[];
+  defaultTimeout: string;
+  maxTimeout: string;
+  outputLimit: string;
+  artifactStorageBackend: "inline" | "filesystem";
+  artifactStoragePath: string;
+}
+
 export function CommandPolicySettingsPage() {
   const queryClient = useQueryClient();
   const settings = useQuery({
@@ -3224,6 +3421,7 @@ export function CommandPolicySettingsPage() {
   const [artifactStorageBackend, setArtifactStorageBackend] = useState<"inline" | "filesystem">("inline");
   const [artifactStoragePath, setArtifactStoragePath] = useState(".agent-artifacts");
   const [formError, setFormError] = useState<string | null>(null);
+  const [baseline, setBaseline] = useState<CommandPolicyDraft | null>(null);
 
   useEffect(() => {
     const current = settings.data;
@@ -3238,8 +3436,31 @@ export function CommandPolicySettingsPage() {
     setOutputLimit(String(current.output_limit_bytes));
     setArtifactStorageBackend(current.artifact_storage_backend);
     setArtifactStoragePath(current.artifact_storage_path);
+    setBaseline({
+      enabled: current.enabled,
+      workspaceRoot: current.workspace_root,
+      allowedPrefixes: parseCommandPrefixes(current.allowed_prefixes.join("\n")).sort(),
+      defaultTimeout: String(current.default_timeout_seconds),
+      maxTimeout: String(current.max_timeout_seconds),
+      outputLimit: String(current.output_limit_bytes),
+      artifactStorageBackend: current.artifact_storage_backend,
+      artifactStoragePath: current.artifact_storage_path,
+    });
     setFormError(null);
   }, [settings.data]);
+
+  // prefix は集合として比べる（順序・重複・空行の違いは変更に数えない）。#87
+  const draft: CommandPolicyDraft = {
+    enabled,
+    workspaceRoot,
+    allowedPrefixes: parseCommandPrefixes(allowedPrefixes).sort(),
+    defaultTimeout,
+    maxTimeout,
+    outputLimit,
+    artifactStorageBackend,
+    artifactStoragePath,
+  };
+  useSettingsLeaveGuard(baseline !== null && !sameDraft(draft, baseline), mutation.isPending);
 
   function save() {
     const parsedDefaultTimeout = Number(defaultTimeout);
@@ -3261,16 +3482,20 @@ export function CommandPolicySettingsPage() {
       return;
     }
     setFormError(null);
-    mutation.mutate({
-      enabled,
-      workspace_root: workspaceRoot,
-      allowed_prefixes: parseCommandPrefixes(allowedPrefixes),
-      default_timeout_seconds: parsedDefaultTimeout,
-      max_timeout_seconds: parsedMaxTimeout,
-      output_limit_bytes: parsedOutputLimit,
-      artifact_storage_backend: artifactStorageBackend,
-      artifact_storage_path: artifactStoragePath,
-    });
+    const submitted = draft;
+    mutation.mutate(
+      {
+        enabled,
+        workspace_root: workspaceRoot,
+        allowed_prefixes: parseCommandPrefixes(allowedPrefixes),
+        default_timeout_seconds: parsedDefaultTimeout,
+        max_timeout_seconds: parsedMaxTimeout,
+        output_limit_bytes: parsedOutputLimit,
+        artifact_storage_backend: artifactStorageBackend,
+        artifact_storage_path: artifactStoragePath,
+      },
+      { onSuccess: () => setBaseline(submitted) }
+    );
   }
 
   return (
@@ -3399,6 +3624,24 @@ export function CommandPolicySettingsPage() {
   );
 }
 
+interface ToolPolicyDraft {
+  defaultMode: "approval" | "deny";
+  policies: Array<[string, ToolPolicyChoice]>;
+}
+
+/** 「既定」は未指定と同じ意味なので外し、ツール名で並べて比べる。 */
+function toolPolicyDraftOf(
+  defaultMode: "approval" | "deny",
+  policies: Record<string, ToolPolicyChoice>
+): ToolPolicyDraft {
+  return {
+    defaultMode,
+    policies: Object.entries(policies)
+      .filter(([, policy]) => policy !== "default")
+      .sort(([left], [right]) => left.localeCompare(right)),
+  };
+}
+
 export function ToolPolicySettingsPage() {
   const queryClient = useQueryClient();
   const tools = useQuery({ queryKey: ["tools"], queryFn: agentApi.listTools });
@@ -3415,6 +3658,7 @@ export function ToolPolicySettingsPage() {
   });
   const [defaultMode, setDefaultMode] = useState<"approval" | "deny">("approval");
   const [toolPolicies, setToolPolicies] = useState<Record<string, ToolPolicyChoice>>({});
+  const [baseline, setBaseline] = useState<ToolPolicyDraft | null>(null);
 
   useEffect(() => {
     const current = settings.data;
@@ -3433,7 +3677,11 @@ export function ToolPolicySettingsPage() {
     });
     setDefaultMode(current.default_mode);
     setToolPolicies(nextPolicies);
+    setBaseline(toolPolicyDraftOf(current.default_mode, nextPolicies));
   }, [settings.data]);
+
+  const draft = toolPolicyDraftOf(defaultMode, toolPolicies);
+  useSettingsLeaveGuard(baseline !== null && !sameDraft(draft, baseline), mutation.isPending);
 
   function setPolicy(toolName: string, policy: ToolPolicyChoice) {
     setToolPolicies((current) => ({ ...current, [toolName]: policy }));
@@ -3452,12 +3700,16 @@ export function ToolPolicySettingsPage() {
         deny.push(toolName);
       }
     }
-    mutation.mutate({
-      default_mode: defaultMode,
-      allow: allow.sort(),
-      ask: ask.sort(),
-      deny: deny.sort(),
-    });
+    const submitted = draft;
+    mutation.mutate(
+      {
+        default_mode: defaultMode,
+        allow: allow.sort(),
+        ask: ask.sort(),
+        deny: deny.sort(),
+      },
+      { onSuccess: () => setBaseline(submitted) }
+    );
   }
 
   return (
@@ -3568,6 +3820,7 @@ export function RuntimeSafetySettingsPage() {
   const [maxToolCalls, setMaxToolCalls] = useState("20");
   const [maxPendingApprovals, setMaxPendingApprovals] = useState("5");
   const [formError, setFormError] = useState<string | null>(null);
+  const [baseline, setBaseline] = useState<{ maxToolCalls: string; maxPendingApprovals: string } | null>(null);
 
   useEffect(() => {
     const current = settings.data;
@@ -3576,8 +3829,15 @@ export function RuntimeSafetySettingsPage() {
     }
     setMaxToolCalls(String(current.max_tool_calls_per_run));
     setMaxPendingApprovals(String(current.max_pending_approvals_per_run));
+    setBaseline({
+      maxToolCalls: String(current.max_tool_calls_per_run),
+      maxPendingApprovals: String(current.max_pending_approvals_per_run),
+    });
     setFormError(null);
   }, [settings.data]);
+
+  const draft = { maxToolCalls, maxPendingApprovals };
+  useSettingsLeaveGuard(baseline !== null && !sameDraft(draft, baseline), mutation.isPending);
 
   function save() {
     const parsedMaxToolCalls = Number(maxToolCalls);
@@ -3592,10 +3852,14 @@ export function RuntimeSafetySettingsPage() {
       return;
     }
     setFormError(null);
-    mutation.mutate({
-      max_tool_calls_per_run: parsedMaxToolCalls,
-      max_pending_approvals_per_run: parsedMaxPendingApprovals,
-    });
+    const submitted = draft;
+    mutation.mutate(
+      {
+        max_tool_calls_per_run: parsedMaxToolCalls,
+        max_pending_approvals_per_run: parsedMaxPendingApprovals,
+      },
+      { onSuccess: () => setBaseline(submitted) }
+    );
   }
 
   return (
@@ -3663,6 +3927,10 @@ export function RuntimeSnapshotSettingsPage() {
       if (result.imported) {
         toast.success(t("settings.snapshot.imported"));
         void queryClient.invalidateQueries();
+        // 置換が済んだ入力は下書きではなくなるので空に戻す（確認語も解除する）。#87
+        setImportText("");
+        setReason("");
+        setConfirmText("");
       } else {
         toast.success(t("settings.snapshot.validated"));
       }
@@ -3675,6 +3943,8 @@ export function RuntimeSnapshotSettingsPage() {
   const [confirmText, setConfirmText] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
   const [validationResult, setValidationResult] = useState<RuntimeSnapshotImportResult | null>(null);
+  // インポート JSON と理由は未保存の下書き。確認語は保存も復元もしない（離脱で state ごと消える）。#87
+  useSettingsLeaveGuard(importText.trim() !== "" || reason.trim() !== "", importSnapshot.isPending);
 
   useEffect(() => {
     if (!snapshot.data) {
@@ -3956,6 +4226,35 @@ function summarizeSnapshot(snapshot: RuntimeSnapshot): RuntimeSnapshotSummary {
   };
 }
 
+interface AgentDraft {
+  name: string;
+  description: string;
+  instructions: string;
+  enabled: boolean;
+  skill_ids: string[];
+}
+
+function agentDraftOf(agent: AgentProfile | undefined): AgentDraft {
+  return {
+    name: agent?.name ?? "",
+    description: agent?.description ?? "",
+    instructions: agent?.instructions ?? "",
+    enabled: agent?.enabled ?? true,
+    // Skill の選択は集合なので並べ替えて比べる。
+    skill_ids: [...(agent?.skill_ids ?? [])].sort(),
+  };
+}
+
+/** エディタの dirty を親へ知らせる。unmount 時は false を知らせる。 */
+function useReportDirty(dirty: boolean, onDirtyChange: (dirty: boolean) => void) {
+  const callbackRef = useRef(onDirtyChange);
+  callbackRef.current = onDirtyChange;
+  useEffect(() => {
+    callbackRef.current(dirty);
+  }, [dirty]);
+  useEffect(() => () => callbackRef.current(false), []);
+}
+
 function AgentEditor({
   agent,
   title,
@@ -3964,6 +4263,7 @@ function AgentEditor({
   pending,
   error,
   onSave,
+  onDirtyChange,
 }: {
   agent?: AgentProfile;
   title: string;
@@ -3971,26 +4271,45 @@ function AgentEditor({
   availableSkills: AgentSkill[];
   pending: boolean;
   error: Error | null;
-  onSave: (payload: AgentProfileWritePayload) => void;
+  onSave: (payload: AgentProfileWritePayload, onSaved: () => void) => void;
+  onDirtyChange: (dirty: boolean) => void;
 }) {
-  const [name, setName] = useState(agent?.name ?? "");
-  const [agentDescription, setAgentDescription] = useState(agent?.description ?? "");
-  const [instructions, setInstructions] = useState(agent?.instructions ?? "");
-  const [enabled, setEnabled] = useState(agent?.enabled ?? true);
-  const [skillIds, setSkillIds] = useState<string[]>(agent?.skill_ids ?? []);
+  const saved = agentDraftOf(agent);
+  const savedKey = JSON.stringify(saved);
+  const [name, setName] = useState(saved.name);
+  const [agentDescription, setAgentDescription] = useState(saved.description);
+  const [instructions, setInstructions] = useState(saved.instructions);
+  const [enabled, setEnabled] = useState(saved.enabled);
+  const [skillIds, setSkillIds] = useState<string[]>(saved.skill_ids);
+  const [baseline, setBaseline] = useState<AgentDraft>(saved);
   const [formError, setFormError] = useState<string | null>(null);
 
+  // 保存済みの内容が変わったときだけフォームを取り直す。他の Agent の保存による一覧の再取得で
+  // 編集中の内容を上書きしない（#87）。
+  const isExisting = Boolean(agent);
   useEffect(() => {
-    if (!agent) {
+    if (!isExisting) {
       return;
     }
-    setName(agent.name);
-    setAgentDescription(agent.description);
-    setInstructions(agent.instructions);
-    setEnabled(agent.enabled);
-    setSkillIds(agent.skill_ids);
+    const next = JSON.parse(savedKey) as AgentDraft;
+    setName(next.name);
+    setAgentDescription(next.description);
+    setInstructions(next.instructions);
+    setEnabled(next.enabled);
+    setSkillIds(next.skill_ids);
+    setBaseline(next);
     setFormError(null);
-  }, [agent]);
+  }, [isExisting, savedKey]);
+
+  const draft: AgentDraft = {
+    name,
+    description: agentDescription,
+    instructions,
+    enabled,
+    skill_ids: [...skillIds].sort(),
+  };
+  const dirty = !sameDraft(draft, baseline);
+  useReportDirty(dirty, onDirtyChange);
 
   function toggleSkill(skillId: string) {
     setSkillIds((current) =>
@@ -4006,12 +4325,30 @@ function AgentEditor({
       setFormError(t("agent.nameRequired"));
       return;
     }
-    onSave({
+    const payload = {
       name: name.trim(),
       description: agentDescription.trim(),
       instructions: instructions.trim(),
       skill_ids: skillIds,
       enabled,
+    };
+    onSave(payload, () => {
+      if (agent) {
+        // 保存に成功した内容を基準にする（一覧の再取得を待たずに dirty を解く）。
+        setName(payload.name);
+        setAgentDescription(payload.description);
+        setInstructions(payload.instructions);
+        setBaseline({ ...payload, skill_ids: [...payload.skill_ids].sort() });
+        return;
+      }
+      // 新規作成に成功したら、次の作成のために空のフォームへ戻す。
+      const empty = agentDraftOf(undefined);
+      setName(empty.name);
+      setAgentDescription(empty.description);
+      setInstructions(empty.instructions);
+      setEnabled(empty.enabled);
+      setSkillIds(empty.skill_ids);
+      setBaseline(empty);
     });
   }
 
@@ -4126,26 +4463,36 @@ function RuntimeBindingsPanel({
   onDefault,
   onSync,
   onDelete,
+  onDirtyChange,
 }: {
   agent: AgentProfile;
   bindings: RuntimeBinding[];
   runtimes: RuntimeDefinition[];
   pending: boolean;
   error: Error | null;
-  onCreate: (payload: {
-    agent_id: string;
-    runtime_id: string;
-    native_agent_ref: string;
-    is_default: boolean;
-    enabled: boolean;
-  }) => void;
+  onCreate: (
+    payload: {
+      agent_id: string;
+      runtime_id: string;
+      native_agent_ref: string;
+      is_default: boolean;
+      enabled: boolean;
+    },
+    onSaved: () => void
+  ) => void;
   onDefault: (binding: RuntimeBinding) => void;
   onSync: (binding: RuntimeBinding) => void;
   onDelete: (binding: RuntimeBinding) => void;
+  onDirtyChange: (dirty: boolean) => void;
 }) {
   const candidates = runtimes.filter((runtime) => runtime.kind !== "legacy_native");
-  const [runtimeId, setRuntimeId] = useState(candidates[0]?.id ?? "");
+  const defaultRuntimeId = candidates[0]?.id ?? "";
+  const [runtimeId, setRuntimeId] = useState(defaultRuntimeId);
   const [nativeAgentRef, setNativeAgentRef] = useState(agent.id);
+  // 既定値（先頭の Runtime と Agent ID）から変えた入力を未保存の変更として扱う（#87）。
+  const dirty =
+    nativeAgentRef !== agent.id || (runtimeId !== "" && runtimeId !== defaultRuntimeId);
+  useReportDirty(dirty, onDirtyChange);
 
   useEffect(() => {
     if (!runtimeId && candidates[0]) {
@@ -4231,13 +4578,19 @@ function RuntimeBindingsPanel({
           loading={pending}
           disabled={!runtimeId || !nativeAgentRef.trim()}
           onClick={() =>
-            onCreate({
-              agent_id: agent.id,
-              runtime_id: runtimeId,
-              native_agent_ref: nativeAgentRef.trim(),
-              is_default: !bindings.length,
-              enabled: true,
-            })
+            onCreate(
+              {
+                agent_id: agent.id,
+                runtime_id: runtimeId,
+                native_agent_ref: nativeAgentRef.trim(),
+                is_default: !bindings.length,
+                enabled: true,
+              },
+              () => {
+                setRuntimeId(defaultRuntimeId);
+                setNativeAgentRef(agent.id);
+              }
+            )
           } icon={Plus}>
           {t("binding.add")}
         </Button>
