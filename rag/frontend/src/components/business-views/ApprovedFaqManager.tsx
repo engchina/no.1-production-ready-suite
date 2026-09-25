@@ -20,6 +20,7 @@ import {
   type ApprovedFaqRecordData,
 } from "@/lib/api";
 import { t } from "@/lib/i18n";
+import { useLeaveGuard } from "@/lib/leave-guard";
 import { useApprovedFaq, useApprovedFaqMutation } from "@/lib/queries";
 
 const IMPORT_MODE_OPTIONS: SelectFieldOption<ApprovedFaqImportMode>[] = [
@@ -63,6 +64,8 @@ export function ApprovedFaqManager({
     null,
   );
   const [previewError, setPreviewError] = useState("");
+  // 追加前の Q&A 入力があるときだけ離脱を確認する。
+  useLeaveGuard(Boolean(question.trim() || answer.trim()));
 
   const selectFile = async (next: File | null) => {
     setFile(next);

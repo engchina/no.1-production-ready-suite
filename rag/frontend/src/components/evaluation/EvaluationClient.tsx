@@ -41,6 +41,7 @@ import {
   type EvaluationSuiteStatusData,
 } from "@/lib/api";
 import { t, type I18nKey } from "@/lib/i18n";
+import { isOneOf, useWorkspaceState } from "@/lib/workspace-state";
 import { useCompareEvaluation, useEvaluationSettings, useRunEvaluation } from "@/lib/queries";
 import { APP_ROUTES } from "@/lib/routes";
 import { qualityCodeLabel } from "@/lib/source-profile-labels";
@@ -127,11 +128,27 @@ export function EvaluationClient() {
   const runMutation = useRunEvaluation();
   const compareMutation = useCompareEvaluation();
   const settingsQuery = useEvaluationSettings();
-  const [requestJson, setRequestJson] = useState(SAMPLE_REQUEST);
-  const [experimentsJson, setExperimentsJson] = useState(SAMPLE_EXPERIMENTS);
-  const [rankingMetric, setRankingMetric] = useState<EvaluationMetricName>("mrr");
-  const [knowledgeBaseIds, setKnowledgeBaseIds] = useState<string[]>([]);
-  const [suite, setSuite] = useState<SuiteSelection>(DEFAULT_SUITE_VALUE);
+  // 評価の入力（JSON・指標・KB スコープ・スイート）は、ページを行き来しても再読込しても残す
+  // （workspace-state.md）。評価結果は保存せず、戻っただけで評価を送り直さない。
+  const [requestJson, setRequestJson] = useWorkspaceState("evaluation.requestJson", SAMPLE_REQUEST);
+  const [experimentsJson, setExperimentsJson] = useWorkspaceState(
+    "evaluation.experimentsJson",
+    SAMPLE_EXPERIMENTS
+  );
+  const [rankingMetric, setRankingMetric] = useWorkspaceState<EvaluationMetricName>(
+    "evaluation.rankingMetric",
+    "mrr",
+    isOneOf(RANKING_METRICS)
+  );
+  const [knowledgeBaseIds, setKnowledgeBaseIds] = useWorkspaceState<string[]>(
+    "evaluation.knowledgeBaseIds",
+    []
+  );
+  const [suite, setSuite] = useWorkspaceState<SuiteSelection>(
+    "evaluation.suite",
+    DEFAULT_SUITE_VALUE,
+    isOneOf<SuiteSelection>([DEFAULT_SUITE_VALUE, ...SUITE_ORDER])
+  );
   const [runError, setRunError] = useState("");
   const [compareError, setCompareError] = useState("");
 

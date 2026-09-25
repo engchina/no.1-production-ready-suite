@@ -16,6 +16,7 @@ import { CheckCircle2, RotateCcw, Save, Share2 } from "lucide-react";
 
 import { ErrorState } from "@/components/StateViews";
 import { ApiError, type GraphProfileName, type GraphProfileStatusData } from "@/lib/api";
+import { useLeaveGuard } from "@/lib/leave-guard";
 import { t, type I18nKey } from "@/lib/i18n";
 import { useGraphSettings, useUpdateGraphSettings } from "@/lib/queries";
 import { cn } from "@/lib/utils";
@@ -34,6 +35,9 @@ export function GraphSettingsClient() {
       setProfile(query.data.profile);
     }
   }, [query.data, save.isPending]);
+
+  // 未保存の選択があるときだけ、サイドナビ・内部リンク・再読込での離脱を確認する。
+  useLeaveGuard(Boolean(query.data && profile !== null && profile !== query.data.profile));
 
   if (query.isPending) {
     return (

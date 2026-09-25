@@ -21,6 +21,7 @@ import {
   type VectorIndexProfileName,
   type VectorIndexProfileStatusData,
 } from "@/lib/api";
+import { useLeaveGuard } from "@/lib/leave-guard";
 import { t, type I18nKey } from "@/lib/i18n";
 import { useUpdateVectorIndexSettings, useVectorIndexSettings } from "@/lib/queries";
 import { cn } from "@/lib/utils";
@@ -41,6 +42,9 @@ export function VectorIndexSettingsClient() {
       setProfile((prev) => (prev === null ? query.data!.profile : prev));
     }
   }, [query.data, save.isPending]);
+
+  // 未保存の選択があるときだけ、サイドナビ・内部リンク・再読込での離脱を確認する。
+  useLeaveGuard(Boolean(query.data && profile !== null && profile !== query.data.profile));
 
   if (query.isPending) {
     return (

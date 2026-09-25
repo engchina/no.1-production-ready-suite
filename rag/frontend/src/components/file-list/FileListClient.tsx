@@ -40,6 +40,7 @@ import { APP_ROUTES } from "@/lib/routes";
 import { t } from "@/lib/i18n";
 import { formatBytes, formatDateTime, formatNumber } from "@/lib/format";
 import { toast } from "@/lib/toast";
+import { useWorkspaceState } from "@/lib/workspace-state";
 
 const LIMIT = 20;
 const FILTERS: (FileStatus | "ALL")[] = [
@@ -56,15 +57,41 @@ const FILTERS: (FileStatus | "ALL")[] = [
 ];
 const INGESTIBLE: ReadonlySet<FileStatus> = new Set(["UPLOADED", "ERROR"]);
 
+interface FileListView {
+  filter: FileStatus | "ALL";
+  q: string;
+  knowledgeBaseId: string;
+  offset: number;
+}
+const INITIAL_VIEW: FileListView = { filter: "ALL", q: "", knowledgeBaseId: "ALL", offset: 0 };
+
+function isFileListView(value: unknown): value is FileListView {
+  const view = value as FileListView;
+  return (
+    typeof view === "object" &&
+    view !== null &&
+    (FILTERS as unknown[]).includes(view.filter) &&
+    typeof view.q === "string" &&
+    typeof view.knowledgeBaseId === "string" &&
+    Number.isInteger(view.offset) &&
+    view.offset >= 0
+  );
+}
+
 /** 取込対象ドキュメントの一覧。絞り込み・検索・ページング・一括選択・行内アクション。 */
 export function FileListClient() {
   const qc = useQueryClient();
   const confirm = useConfirm();
-  const [filter, setFilter] = useState<FileStatus | "ALL">("ALL");
-  const [search, setSearch] = useState("");
-  const [q, setQ] = useState("");
-  const [knowledgeBaseId, setKnowledgeBaseId] = useState("ALL");
-  const [offset, setOffset] = useState(0);
+  // 絞り込み・検索・ページは、ページを行き来しても再読込しても残す（workspace-state.md）。
+  // 一括削除につながる行の選択は保存せず、ページを離れたら解除する。
+  const [view, setView] = useWorkspaceState("fileList.view", INITIAL_VIEW, isFileListView);
+  const { filter, q, knowledgeBaseId, offset } = view;
+  const [search, setSearch] = useState(q);
+  const setFilter = (next: FileStatus | "ALL") => setView((current) => ({ ...current, filter: next }));
+  const setQ = (next: string) => setView((current) => ({ ...current, q: next }));
+  const setKnowledgeBaseId = (next: string) =>
+    setView((current) => ({ ...current, knowledgeBaseId: next }));
+  const setOffset = (next: number) => setView((current) => ({ ...current, offset: next }));
   const [bulkIngest, setBulkIngest] = useState<{ done: number; total: number } | null>(null);
   const [bulkDelete, setBulkDelete] = useState<{ done: number; total: number } | null>(null);
 
@@ -96,6 +123,17 @@ export function FileListClient() {
     { graceActive }
   );
   const knowledgeBases = useKnowledgeBases({ status: "ACTIVE", limit: 100, offset: 0 });
+  // 復元した KB 絞り込みが削除・アーカイブ済みなら、その条件だけ「すべて」に戻す。
+  const knowledgeBaseFilterMissing =
+    knowledgeBaseId !== "ALL" &&
+    Boolean(knowledgeBases.data) &&
+    !knowledgeBases.data?.has_next &&
+    !knowledgeBases.data?.items.some((knowledgeBase) => knowledgeBase.id === knowledgeBaseId);
+  useEffect(() => {
+    if (knowledgeBaseFilterMissing) {
+      setView((current) => ({ ...current, knowledgeBaseId: "ALL", offset: 0 }));
+    }
+  }, [knowledgeBaseFilterMissing, setView]);
 
   const enqueueIngestion = useEnqueueDocumentIngestionJob();
   const deleteDocument = useDeleteDocument();
