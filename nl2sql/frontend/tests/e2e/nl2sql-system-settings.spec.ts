@@ -2990,6 +2990,33 @@ test("レビュー補完: 保存先の失敗再試行と OCI への離脱確認�
   await expect(page).toHaveURL(/settings\/oci$/);
 });
 
+test("未保存の変更があるときはブラウザの戻る操作でも破棄を確認する（#138）", async ({ page }) => {
+  await page.goto("/settings/upload-storage");
+  await expect(page.locator("#upload-storage-local-dir")).toBeEditable();
+  // 変更がなければ確認なしで移動できる（SPA 内の PUSH で履歴を 1 つ積む）。
+  await page.getByRole("complementary", { name: "サイドナビゲーション" }).getByRole("link", { name: "OCI 認証" }).click();
+  await expect(page).toHaveURL(/settings\/oci$/);
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+
+  const userOcid = page.locator("#oci-user-ocid");
+  await expect(userOcid).toBeEditable();
+  await userOcid.fill("ocid1.user.oc1..back-guard");
+
+  // 戻る → 確認。キャンセルすると URL と入力が残る。
+  await page.goBack();
+  const dialog = page.getByRole("alertdialog");
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "キャンセル", exact: true }).click();
+  await expect(page).toHaveURL(/settings\/oci$/);
+  await expect(userOcid).toHaveValue("ocid1.user.oc1..back-guard");
+
+  // もう一度戻る → 破棄して移動。
+  await page.goBack();
+  await dialog.getByRole("button", { name: "破棄して移動", exact: true }).click();
+  await expect(page).toHaveURL(/settings\/upload-storage$/);
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+});
+
 test("レビュー補完: システム設定6画面の表示とキーボード・横幅を記録する", async ({ page }, testInfo) => {
   for (const slug of ["oci", "upload-storage", "model", "database", "system-tables", "appearance"]) {
     await page.goto(`/settings/${slug}`);

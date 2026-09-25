@@ -64,7 +64,7 @@
 | 外部 RAG / 外部 NL2SQL / ツール権限 / Command Policy / Runtime Safety | `useSettingsLeaveGuard` | 取得した設定との差分（prefix は集合、ツール権限の「既定」は未指定として比較） |
 | Control Plane バックアップ | `useSettingsLeaveGuard` | インポート JSON と理由。確認語（`REPLACE`）は対象外で、離脱で解除される |
 
-ブラウザの戻る / 進む（`popstate`）は共有フックの制約で対象外（`<BrowserRouter>` のため）。A 型のエディタでも、戻る / 進むは URL の対象を開き直すだけで、未保存の編集は守らない。
+ブラウザの戻る / 進む（`popstate`）も、data router の `useBlocker` で確認する（#138）。A 型のエディタで未保存の編集があるときも、戻る / 進むで `?id=` が変わる前に破棄を確認する。
 
 ## 3. 作業状態の保持
 

@@ -1,6 +1,6 @@
 import { StrictMode, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
-import { BrowserRouter, useLocation } from "react-router-dom";
+import { RouterProvider, createBrowserRouter, useLocation } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ConfirmProvider, Toaster } from "@engchina/production-ready-ui";
 import { initTheme } from "@engchina/production-ready-ui";
@@ -50,20 +50,28 @@ function AppConfirmProvider({ children }: { children: ReactNode }) {
   );
 }
 
+/** 既存のルート定義（App の <Routes>）はそのまま使い、全体を data router の 1 つの splat route に載せる。 */
+function RootLayout() {
+  return (
+    <AuthProvider>
+      <AppConfirmProvider>
+        <App />
+        <Toaster
+          dismissLabel={t("common.dismiss")}
+          regionLabel={t("common.notifications")}
+        />
+      </AppConfirmProvider>
+    </AuthProvider>
+  );
+}
+
+// data router にすると、共有の離脱ガードがブラウザの戻る/進むも確認できる（useBlocker。#138）。
+const router = createBrowserRouter([{ path: "*", element: <RootLayout /> }]);
+
 createRoot(root).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
-        <AuthProvider>
-          <AppConfirmProvider>
-            <App />
-            <Toaster
-              dismissLabel={t("common.dismiss")}
-              regionLabel={t("common.notifications")}
-            />
-          </AppConfirmProvider>
-        </AuthProvider>
-      </BrowserRouter>
+      <RouterProvider router={router} />
     </QueryClientProvider>
   </StrictMode>
 );

@@ -35,6 +35,29 @@ for (const viewport of VIEWPORTS) {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
     });
 
+    test("未保存の Agent 作成フォームはブラウザの戻るでも確認する（#138）", async ({ page }) => {
+      await page.goto("/agents");
+      // 一覧 → 作成エディタ（?id=new）は SPA 内で履歴を 1 つ積む。
+      await page.getByRole("button", { name: "業務 Agent を作成" }).click();
+      await expect(page).toHaveURL(/\/agents\?id=new$/);
+      await page.locator("#new-agent-name").fill("下書きの Agent");
+      await expect.poll(() => beforeUnloadBlocks(page)).toBe(true);
+
+      // 戻る（?id=new → 一覧）→ 確認。キャンセルすると URL と入力が残る。
+      await page.goBack();
+      const dialog = page.getByRole("alertdialog").or(page.getByRole("dialog"));
+      await expect(dialog.getByText("変更を破棄しますか")).toBeVisible();
+      await dialog.getByRole("button", { name: "キャンセル" }).click();
+      await expect(page).toHaveURL(/\/agents\?id=new$/);
+      await expect(page.locator("#new-agent-name")).toHaveValue("下書きの Agent");
+
+      // もう一度戻る → 破棄して移動。
+      await page.goBack();
+      await dialog.getByRole("button", { name: "破棄して移動" }).click();
+      await expect(page).toHaveURL(/\/agents$/);
+      await expect(page.getByRole("heading", { name: "業務 Agent", level: 1 })).toBeVisible();
+    });
+
     test("未保存の Agent 作成フォームはサイドナビの移動を確認し、破棄を選ぶと移動する", async ({ page }) => {
       await page.goto("/agents?id=new");
       await expect(page.getByRole("heading", { name: "業務 Agent を作成", level: 1 })).toBeVisible();
