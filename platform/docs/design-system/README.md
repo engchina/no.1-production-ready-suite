@@ -1,6 +1,6 @@
 # Handoff: 基盤トークン再設計 + タイプスケール + 新コンポーネント
 
-**対象リポジトリ:** `engchina/no.1-production-ready-platform` / `packages/ui` (`@engchina/production-ready-ui`)
+**対象リポジトリ:** `engchina/no.1-production-ready-suite` の `platform/packages/ui` (`@engchina/production-ready-ui`)
 **影響範囲:** `packages/ui` + 消費側3アプリ（RAG / NL2SQL / Agent）
 **種別:** 基盤リファクタリング（見た目の意図的な変更を多数含む）
 **忠実度:** **hifi** — 全値が確定済み。ここに書かれた hex・px・トークン名をそのまま実装してください。
@@ -16,7 +16,7 @@
 |---|---|---|
 | `ARCHITECTURE.md` | **3アプリがこの DS をどう使うかの契約書。3チーム全員が読む** | 最初にこれを読む |
 | `css/` | design system の**実ソース**（プレーン CSS） | `packages/ui/src/styles/` に**ほぼそのまま移植できます** |
-| `adherence.oxlintrc.json` + `design-system-plugin.mjs` | 生の hex / inline style の生の px / 書体 / 型・角丸の任意値 / 旧トークン名 / 内部パス import / loading 中のラベル差し替えを検出する lint ルール | 各 repo の lint 設定から sibling パスで参照する（`AGENTS.md`「lint」節） |
+| `adherence.oxlintrc.json` + `design-system-plugin.mjs` | 生の hex / inline style の生の px / 書体 / 型・角丸の任意値 / 旧トークン名 / 内部パス import / loading 中のラベル差し替えを検出する lint ルール | 各製品の lint 設定から相対パス（`../../platform/…`）で参照する（`AGENTS.md`「lint」節） |
 | `components-reference.md` | 新規・変更されたコンポーネントの**参照実装**（React + インラインスタイル） | **そのまま出荷しない。** `packages/ui` の既存 `.tsx` / Tailwind の書き方に合わせて書き直す |
 | `reference/` | **目視確認用の HTML** | ブラウザで開いて見た目を確認するだけ。製品コードではない |
 

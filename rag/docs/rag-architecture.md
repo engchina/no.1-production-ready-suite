@@ -76,7 +76,7 @@ Oracle Developer Day 2026 の AIDB RAG / Memory Engineering 手法は [AIDB Memo
    - citation metadata には章節 metadata に加えて `retrieval_mode`、vector/keyword の rank/score、`rrf_k`、RRF score を含め、hybrid 召回の由来を query 本文なしで追跡できるようにする。
 
 7. 構造化・関係検索境界
-   - RAG repo では SQL 生成 endpoint を公開しない。SQL 専用の自然言語問い合わせは sibling repo `../no.1-production-ready-nl2sql` の責務とする。
+   - RAG repo では SQL 生成 endpoint を公開しない。SQL 専用の自然言語問い合わせは 同じ monorepo の `nl2sql/` の責務とする。
    - 集計・関係・横断要約のような query は、GraphRAG-lite と Oracle 26ai hybrid retrieval の範囲で扱う。
    - GraphRAG/navigation/metadata layer が未 materialize の場合は diagnostics と KB 詳細で `planned_only` / `needs_reingest` を表示し、構築済みと見せない。
 

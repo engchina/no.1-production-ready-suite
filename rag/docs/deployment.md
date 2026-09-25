@@ -104,7 +104,7 @@ container:
 docker compose config
 ```
 
-frontend の lint / dependency audit / Playwright E2E は sibling repo `no.1-production-ready-nl2sql` と同じく CI では実行しない。UI/UX を変更した PR では以下をローカルで実行し、結果を PR の `検証結果` に記載する(型検査は `npm run build` の `tsc --noEmit` が CI 上でも走る)。
+frontend の lint / dependency audit / Playwright E2E は `../nl2sql/` と同じく CI では実行しない。UI/UX を変更した PR では以下をローカルで実行し、結果を PR の `検証結果` に記載する(型検査は `npm run build` の `tsc --noEmit` が CI 上でも走る)。
 
 ```bash
 cd frontend

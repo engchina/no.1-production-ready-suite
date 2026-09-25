@@ -1,5 +1,0 @@
-# GitHub Packages へ切替後、各アプリ frontend/ に .npmrc としてコピーする。
-# @engchina scope のみ GitHub Packages registry に向ける（他は npm 公式のまま）。
-# CI では NODE_AUTH_TOKEN を、ローカルでは ${GITHUB_TOKEN}（read:packages 権限の PAT）を使う。
-@engchina:registry=https://npm.pkg.github.com
-//npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}

@@ -1,6 +1,6 @@
-# no.1-production-ready-platform
+# platform — No.1 Production Ready 共通基盤
 
-No.1 Production Ready 製品群（**RAG / NL2SQL / Agent**）が共有する **前後端の single source of truth**。
+monorepo `no.1-production-ready-suite` の `platform/`。No.1 Production Ready 製品群（**RAG / NL2SQL / Agent**）が共有する **前後端の single source of truth**。
 1 回の変更（トークン・コンポーネント / ログ・metrics・エラー envelope・app factory）で 3 プロジェクトを同時に底上げする。
 
 ```
@@ -10,14 +10,15 @@ packages/
 templates/
   backend-service/  FastAPI サービス雛形（backend_core 利用）
 docs/
-  consume-in-ci.md  各アプリ CI から共有パッケージを解決する方法
+  design-system/    デザインシステムの正本（ARCHITECTURE / README / components-reference / adherence lint）
+  backend-standard.md  共有 backend の標準
 ```
 
 - フロント標準・使い方: 本ファイル以下 + [`packages/ui/README.md`](packages/ui/README.md)
 - バックエンド標準・使い方: [`docs/backend-standard.md`](docs/backend-standard.md) + [`packages/backend_core/README.md`](packages/backend_core/README.md)
 - 変更運用ルール（前後端共通）: [`CONTRIBUTING.md`](CONTRIBUTING.md)
 
-各業務 repo は自分の `features/*`・ページ・API hooks・業務文言だけを持ち、共通基盤はこの platform に集約する。
+各製品（`../rag/` `../nl2sql/` `../agent/`）は自分の `features/*`・ページ・API hooks・業務文言だけを持ち、共通基盤はこの `platform/` に集約する。
 
 ---
 
@@ -61,7 +62,7 @@ npm run build         # dist/index.js + dist/index.d.ts + dist/tokens.css
 改行や連続空白を正規化したうえで、日本語・英語の文末を優先して折り返す。単独の長文や URL は
 コンテナ幅内で安全に折り返す。独自の通知本文を組む場合も公開 `MessageText` を使用する。
 
-### 1. 依存追加(開発時はローカル file: リンク)
+### 1. 依存追加(monorepo 内の file: リンク)
 
 ```jsonc
 // frontend/package.json
@@ -70,7 +71,6 @@ npm run build         # dist/index.js + dist/index.d.ts + dist/tokens.css
 }
 ```
 
-> 安定後は GitHub tag / npm registry へ切替可能。
 
 ### 2. Vite 設定(必須: React 重複回避)
 

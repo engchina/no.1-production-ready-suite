@@ -2,7 +2,7 @@
   "$schema": "./node_modules/oxlint/configuration_schema.json",
   // 既定の correctness カテゴリ（oxlint 標準）に加え、src/** にデザインシステム遵守ルールを掛ける。
   // ルールと JS プラグインの正本は platform の docs/design-system/adherence.oxlintrc.json / design-system-plugin.mjs。
-  // コピーせず相対パスで参照する（platform AGENTS.md「lint」節）。CI も platform を sibling に checkout している。
+  // コピーせず相対パスで参照する（platform AGENTS.md「lint」節）。monorepo の platform/ を CI でも同じパスで参照する。
   // アプリ固有のルールを足す場合は、adherence のセレクタを上書きしないよう別のルール名にする。
   "extends": ["../../platform/docs/design-system/adherence.oxlintrc.json"],
   // アプリ固有のルール用に、同じプラグインを別名で読み込む（adherence の design-system/restricted-syntax を上書きしない）。

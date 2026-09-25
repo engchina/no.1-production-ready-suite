@@ -1,96 +1,20 @@
 # AGENTS.md — Production Ready RAG
 
-> このファイルは **Claude Code と Codex の両方が参照する正本(single source of truth)** です。
-> `CLAUDE.md` はこのファイルを `@AGENTS.md` で取り込みます。ルールを変更する際は **必ずこのファイルを編集**してください。
+> **RAG（`rag/`）固有のルール**です。GitHub 運用・Issue / PR 規約・CI・デザインシステム・共通の技術方針は、monorepo 共通の [../AGENTS.md](../AGENTS.md) を正本として先に適用します。
+> Claude Code と Codex の両方が参照します。`CLAUDE.md` はこのファイルを `@AGENTS.md` で取り込みます。ルールを変更する際は **必ずこのファイル（共通ルールは ../AGENTS.md）を編集**してください。
 
-## 開発ワークフロー / GitHub 運用
+## GitHub 運用・Issue / PR 規約（RAG 固有の追加分）
 
-- **`main` ブランチへ直接 commit / push / 変更しない。** すべての変更は GitHub Issue を先に作成し、Issue に紐づく作業ブランチで行う。
-- 作業ブランチ名は既定で `codex/<issue-number>-<short-topic>` とする。既存 ref との衝突などで使用できない場合も、Issue 番号と作業内容が分かる名前を使う。
-- 変更後は Pull Request を作成し、関連 Issue、変更内容、検証結果を PR description に明記する。
-- merge は CI/checks が成功したことを確認してから行う。必須 CI が存在しない場合は、PR 上で checks 状態を確認し、実行した代替検証を明記してから merge 判断する。
-- docs-only の小さな変更や緊急修正も原則として同じ Issue → branch → PR → CI/checks → main merge の流れに従う。例外が必要な場合は、理由を添えてユーザ確認を取る。
-
-### GitHub Issue / Pull Request の記述規約
-
-#### 共通
-
-- Issue / PR のタイトルと本文は**原則として日本語**で記述する。code identifier、API path、file path、command、製品・ライブラリの固有名詞は英語のままでよい。
-- タイトルは対象と事象が分かる具体的な文にする。「不具合」「修正」「対応」だけの曖昧なタイトルにしない。
-- 本文は Markdown 見出しで構造化し、確認した事実と推測を区別する。未調査・未確定の項目は断定せず「調査中」「未確認」と明記し、判明後に本文を更新する。
-- API、関数、設定 key、status code、error message、再現値など、調査・レビュー・回帰テストに必要な具体情報を記載する。secret、token、個人情報、実 credential は記載しない。
+- 共通ルールは [../AGENTS.md](../AGENTS.md)「開発ワークフロー / GitHub 運用」に従う。Issue には `product:rag` label を付け、PR title の scope は `rag` にする。
 - ユーザー向け概念は `ナレッジ構築` / `業務ビュー` / `検索・回答設定` を使い、`pipeline` / `adapter` / `profile` などの工程語は code identifier を指す場合に限る。
-
-#### Issue
-
-- Issue の種別にかかわらず、最低でも `問題`、`症状`、`原因`、`修正方針` の4項目を含める。初回登録時に原因が未確定でも `原因` を省略せず、現時点の仮説または「調査中」と記載する。
-
-```markdown
-## 問題
-
-何が問題なのかを記載する。
-
-## 症状
-
-どのような入力や条件で何が起きるのかを、画面/API/状態/error message などの観測事実に基づいて記載する。
-
-## 原因
-
-どの code path、data flow、または設計が原因と考えられるかを記載する。未確定の場合は仮説と未確認事項を区別する。
-
-## 修正方針
-
-どこを、どのような考え方で修正するかを、責務境界と変更しない範囲を含めて記載する。
-```
-
-- 可能であれば `影響範囲`、`再現手順`、`関連ファイル`、`必要なテスト` も追加する。必要に応じて `期待動作`、`完了条件`、`補足`、`ログ`、`スクリーンショット`、`代替案`を追加する。
-- feature / docs / refactor / investigation Issue では、`問題` に背景や現在の不足、`症状` に現状の制約や具体例、`原因` に設計上の理由または調査対象を記載し、4項目を Issue の性質に合わせて具体化する。
 - 3 層モデル(文書レシピ / KB スコープ / Business View)に関わる Issue では、どの層の責務かを明記し、責務越境になっていないかを `修正方針` に記載する。
-- 長い log は必要箇所だけを抜粋し、再現に不要な出力を貼らない。
-- `完了条件`は「対応する」のような作業表現だけにせず、期待状態と必要な test / lint / build / 手動確認を判定可能な形で列挙する。
-
-#### Pull Request
-
-- PR title は原則として `<type>: <日本語の要約> (#<issue-number>)` とする。`type` は変更内容に合わせて `feat` / `fix` / `docs` / `test` / `refactor` / `chore` 等を使用する。
-- PR 本文は原則として次の見出しを使用する。
-
-```markdown
-## 関連 Issue
-
-Closes #<issue-number>
-
-## 背景 / 原因
-
-Issue の要点と、この変更が必要な理由を記載する。bug fix では根因を記載する。
-
-## 変更内容
-
-- 変更した責務・挙動を具体的に記載する
-- schema / API / UI / data migration / compatibility への影響を記載する
-
-## 検証結果
-
-- `<実行した command>` — pass / fail / skip と件数
-- 手動確認または Playwright の対象 flow / viewport / 状態
-
-## 既知の制約・残課題
-
-- 未対応範囲、既知の制約、follow-up Issue を記載する。なければ「なし」と記載する。
-```
-
-- `関連 Issue` には、merge で完了する Issue は `Closes #N`、参照のみは `Refs #N` と記載する。複数ある場合はすべて列挙する。
-- `変更内容` は commit の羅列ではなく、reviewer が挙動差分と責務境界を判断できる粒度で記載する。変更していない重要範囲や backward compatibility も必要に応じて明記する。
-- `検証結果` には実行した正確な command と結果を記載する。失敗・skip・未実行を隠さず、今回の変更によるものか既存問題かを分ける。実行できない test がある場合は理由と代替確認を記載する。backend は `uv run pytest` / `uv run ruff check .` / `uv run mypy .`、frontend は `npm run lint` / `npm run build` / `npm run test` を基本とする。
-- UI/UX 変更では、対象 Playwright spec、desktop / 375px viewport、主要導線と重要状態(空/読込/エラー/ブロック)の結果を記載する。見た目を変更した場合は必要に応じて screenshot または visual check の結果を添える。
-- OCI / Oracle / LLM を呼ぶ範囲の変更では、CI 上の決定論スタブによる確認と、手動/ステージングでの実サービス確認をそれぞれ区別して記載する。
-- docs-only など test 対象外の場合も `検証結果` を省略せず、`git diff --check` 等の実施結果と、コード test を実行しない理由を記載する。
-- PR 作成後に追加修正や検証結果の変化があった場合は、コメントだけで済ませず PR 本文を最終状態へ更新してから review / merge する。
+- PR の `検証結果` は、backend は `uv run pytest` / `uv run ruff check .` / `uv run mypy .`、frontend は `npm run lint` / `npm run build` / `npm run test` を基本とする。
 
 ## プロジェクト概要
 
 **A production-ready RAG reference implementation for enterprise knowledge search, document ingestion, grounding, answer generation, evaluation, observability, and deployment on Oracle / OCI.**
 
-本プロジェクトは、文書とナレッジベースを構築し、業務ごとの **Business View** から検索・回答する RAG システムを本番品質で提供することを目標とする。SQL 専用の自然言語問い合わせプロダクトは sibling repo `../no.1-production-ready-nl2sql` の責務であり、この repo へ機能・UI・設定を混在させない。
+本プロジェクトは、文書とナレッジベースを構築し、業務ごとの **Business View** から検索・回答する RAG システムを本番品質で提供することを目標とする。SQL 専用の自然言語問い合わせプロダクトは同じ monorepo の `../nl2sql/` の責務であり、`rag/` へ機能・UI・設定を混在させない。
 
 RAG の製品語は **ナレッジ構築**、**業務ビュー**、**検索・回答設定** を優先する。`producer / consumer / pipeline / adapter / profile` などの工程語は、コード内部または開発者向け診断に限定する。
 
@@ -151,61 +75,11 @@ RAG の製品語は **ナレッジ構築**、**業務ビュー**、**検索・�
 - メッセージ機構は [docs/frontend-messaging-spec.md](./docs/frontend-messaging-spec.md) を正本とする。
 - ボタンの大きさ・スタイル・アイコン・loading・ヘッダーの並び順は platform の `docs/design-system/` を正本とし、画面内の配置と命名は [docs/frontend-button-spec.md](./docs/frontend-button-spec.md) に従う。
 
-## デザインシステム / UI（platform が正本）
+## デザインシステム / UI
 
-- **UI に触る変更（`frontend/`）の前に、platform リポジトリの [docs/design-system/ARCHITECTURE.md](../platform/docs/design-system/ARCHITECTURE.md) を読む。** ワークスペースに sibling の `../no.1-production-ready-platform` が無い場合は GitHub の `engchina/no.1-production-ready-platform` の `docs/design-system/` を参照する。
-  - トークン値・コンポーネント仕様・意図的な見た目の変更点: 同 `README.md`
-  - 実装の参照: 同 `components-reference.md`
-  - 共通の禁止事項とレビュー観点: platform の `AGENTS.md`「デザインシステム / UI」節
-- **依存の向きは「デザインシステムの決定 → `@engchina/production-ready-ui`（platform の `packages/ui`）→ 本リポジトリ」の一方向。** 本リポジトリでコンポーネントやトークンを新規実装しない。必要になったら platform に `packages/ui` へ入れる Issue を立てる。
-- **本リポジトリが持てるのは次だけ。**
-  - ナビ構造（nav config）と業務コピー（i18n）
-  - データ取得・状態管理・権限
-  - ドメイン enum → コンポーネント prop の対応表（例: 状態 → `StatusBadge` の `variant`）
-  - 画面固有の業務レイアウト
-  - 1製品しか使わない部品は置いてよい。判断基準は「他の2製品がこれを欲しがるか」で、欲しがるなら `packages/ui` に入れる
-- **色・型・余白・角丸・影・モーション・フォーカス表示・テーマ（light / dark / auto）は `packages/ui` が持つ。** `frontend/src/globals.css` は `@import "tailwindcss"` → `@import "@engchina/production-ready-ui/styles.css"` → `@source "../node_modules/@engchina/production-ready-ui/dist"` と、画面固有のレイアウトだけにする。`main.tsx` から JS で import すると共有ユーティリティが生成されない。
+- 共通ルール（platform が正本・禁止事項・画面の構成・lint・UI 変更の検証）は [../AGENTS.md](../AGENTS.md)「デザインシステム / UI」に従う。lint は `frontend/eslint.config.mjs` が `../../platform/docs/design-system/adherence.oxlintrc.json` を import する。
+- 本ディレクトリの `docs/frontend-button-spec.md` / `docs/frontend-messaging-spec.md` は、デザインシステムが規定しない範囲でのみ有効とする。
 
-### 禁止事項
-
-- 生の hex（`#1a73c1` 等）と生の px を書く。色は `--color-*` トークン（`bg-surface` / `text-fg-muted` / `border-border-control` 等のユーティリティ）を使う。旧名（`bg-card` / `text-muted` / `bg-primary` / `var(--primary)` 等）は移行用の互換エイリアスで、新規コードで使わない。
-- `globals.css` に色トークンや `.dark { … }` の上書きを定義する。
-- `TextField` / `PageHeader` / `Button` / `StatusBadge` などの共有コンポーネントを再実装する。
-- `<table>` を手書きする。`DataTable` を使う。
-- `<div className="px-8 py-6">` や `style={{ padding: "1.5rem 2rem" }}` のような余白コンテナを手書きする。`PageBody` を使う。
-- `ToggleChip` をタブ代わりに使う。タブ＝同じ対象の別の見方に切り替えるのは `Tabs`、チップ＝データの絞り込みは `ToggleChip`。
-- `loading` 中にボタンのラベルを「実行中…」等に差し替える。ラベルは変えず、`icon` がスピナーに置き換わる。子要素にアイコンを書かず `icon={Upload}` で渡す。
-- 製品ごとのアクセント色を作る。製品は wordmark・ナビ・内容で区別する。
-- 絵文字と手描き SVG。アイコンは `lucide-react`（14 / 16 / 20 / 24px のみ）。
-- `@engchina/production-ready-ui` の内部パス（`dist/components/**` や `dist/tokens/*.css`）を import したりテストで読んだりする。パッケージのルートと `styles.css` だけを使う。
-
-### 画面の構成
-
-```tsx
-<AppShell sidebar={<Sidebar … footer={<SidebarAccountFooter … />} />}>
-  <PageHeader title="…" actions={[{ id, kind: "primary", label, icon }]} tabs={<Tabs … />} />
-  <PageBody>
-    <Section title="…">…</Section>
-  </PageBody>
-</AppShell>
-```
-
-- `PageHeader` の `actions` は配列で渡す（danger → utility → secondary → primary の順に自動で並び、右端が primary になる）。
-- `PageHeader` と `PageBody` に `wide` を渡す場合は必ず両方に同じ値を渡す。片方だけだと 1920px でタイトルと本文の左端がずれる。
-- 単位の境界: 文字サイズとコントロール高さは px、余白とレイアウト寸法は rem（14px ルート）。
-
-### 既存ルールとの優先順位
-
-- トークン・コンポーネントの見た目と振る舞い（サイズ・variant・アイコン・loading・ヘッダーの並び順・フォーカス・ダークテーマ）は、`ui-ux-pro-max` skill の一般論や本リポジトリの `docs/` より platform の `docs/design-system/` を優先する。
-- 本リポジトリの `docs/frontend-button-spec.md` / `docs/frontend-messaging-spec.md` は、デザインシステムが規定しない範囲（画面内の配置・文言キーの命名・通知チャネルの使い分け等）でのみ有効とする。
-
-### UI 変更の検証
-
-- ライト / ダークの両テーマで確認する。
-- 1280px / 1920px の両幅で確認する。1920px では PageHeader のタイトルと本文の左端が揃うこと。
-- キーボード操作（最初の Tab で「本文へスキップ」、フォーカスリングの視認性、`Tabs` の ← → / Home / End）を確認する。
-- 状態を表す UI は色だけに依存しない（`StatusBadge` / `Banner` / `Toast` はアイコン付き）。
-- 意図的な見た目の変更は platform の `docs/design-system/README.md` §7 と照合し、PR の `検証結果` に記載する。
 ### RAG 固有
 
 - 移行時に `ToggleChip` をタブとして使っている箇所（ビューの切替）を `Tabs` に置き換え、絞り込みの箇所だけ `ToggleChip` に残す。
@@ -326,4 +200,4 @@ npm run dev   # /api は BACKEND_URL を明示したときだけ proxy する（
 9. 機能開発では、既存パターン・既存 API・既存 UI コンポーネントを優先する。
 10. UI 作業は `ui-ux-pro-max` skill を使用する。
 11. 変更後は該当 lint・型チェック・テストを実行してから完了する。
-12. `main` へ直接 commit / push しない。Issue → 作業ブランチ → PR → CI/checks → merge の流れと、Issue / PR の記述規約([開発ワークフロー / GitHub 運用](#開発ワークフロー--github-運用))に従う。
+12. `main` へ直接 commit / push しない。Issue → 作業ブランチ → PR → CI/checks → merge の流れと、Issue / PR の記述規約（[../AGENTS.md](../AGENTS.md)「開発ワークフロー / GitHub 運用」）に従う。
