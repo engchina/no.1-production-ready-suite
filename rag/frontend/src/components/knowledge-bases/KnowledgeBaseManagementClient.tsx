@@ -8,6 +8,8 @@ import {
   CardContent,
   CardHeader,
   CardTitle,
+  DataTable,
+  type DataTableColumn,
   FieldError,
   FormStatus,
   ToggleChip,
@@ -144,32 +146,17 @@ export function KnowledgeBaseManagementClient() {
           <KnowledgeBaseListSkeleton />
         ) : items.length > 0 ? (
           <>
-            <Card className="overflow-hidden">
-              <div className="bounded-scroll-area-lg overflow-x-auto">
-                <table className="w-full min-w-[760px] text-sm">
-                  <thead className="sticky top-0 z-10 bg-surface-sunken text-left text-fg-muted shadow-[inset_0_-1px_0_var(--color-border)]">
-                    <tr>
-                      <th className="px-4 py-3 font-medium">{t("knowledgeBases.col.name")}</th>
-                      <th className="px-4 py-3 font-medium">{t("knowledgeBases.col.status")}</th>
-                      <th className="px-4 py-3 text-right font-medium">{t("knowledgeBases.col.documents")}</th>
-                      <th className="px-4 py-3 text-right font-medium">{t("knowledgeBases.col.indexed")}</th>
-                      <th className="px-4 py-3 font-medium">{t("knowledgeBases.col.updated")}</th>
-                      <th className="px-4 py-3 text-right font-medium">{t("knowledgeBases.col.actions")}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {items.map((knowledgeBase) => (
-                      <KnowledgeBaseRow
-                        key={knowledgeBase.id}
-                        knowledgeBase={knowledgeBase}
-                        archiving={archive.isPending && archive.variables === knowledgeBase.id}
-                        onArchive={() => void handleArchive(knowledgeBase)}
-                      />
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </Card>
+            <DataTable<KnowledgeBaseSummary>
+              columns={knowledgeBaseColumns({
+                archivingId: archive.isPending ? archive.variables : undefined,
+                onArchive: (knowledgeBase) => void handleArchive(knowledgeBase),
+              })}
+              rows={items}
+              getRowKey={(knowledgeBase) => knowledgeBase.id}
+              stickyHeader
+              className="bounded-scroll-area-lg"
+              tableClassName="w-full min-w-[760px] text-sm"
+            />
 
             <div className="flex items-center justify-between">
               <span className="tnum text-xs text-fg-muted">
@@ -301,55 +288,84 @@ function KnowledgeBaseCreateForm({ onCreated }: { onCreated: (id: string) => voi
   );
 }
 
-function KnowledgeBaseRow({
-  knowledgeBase,
-  archiving,
+/** 一覧の列定義。名前列を行見出しにし、操作列は右寄せにする。 */
+function knowledgeBaseColumns({
+  archivingId,
   onArchive,
 }: {
-  knowledgeBase: KnowledgeBaseSummary;
-  archiving: boolean;
-  onArchive: () => void;
-}) {
-  const isDefault = knowledgeBase.name === DEFAULT_KNOWLEDGE_BASE_NAME;
-  return (
-    <tr className="border-t border-border">
-      <td className="max-w-[18rem] px-4 py-3">
-        <Link
-          to={`${APP_ROUTES.knowledgeBases}/${knowledgeBase.id}`}
-          className="block max-w-full font-medium text-accent-fg hover:underline"
-        >
-          <span className="block truncate">{knowledgeBase.name}</span>
-        </Link>
-        {knowledgeBase.description ? (
-          <p className="mt-1 truncate text-xs text-fg-muted">{knowledgeBase.description}</p>
-        ) : null}
-      </td>
-      <td className="px-4 py-3">
-        <KnowledgeBaseStatusPill status={knowledgeBase.status} />
-      </td>
-      <td className="tnum px-4 py-3 text-right text-fg-muted">
-        {formatNumber(knowledgeBase.document_count)}
-      </td>
-      <td className="tnum px-4 py-3 text-right text-fg-muted">
-        {formatNumber(knowledgeBase.indexed_document_count)}
-      </td>
-      <td className="tnum px-4 py-3 text-fg-muted">{formatDateTime(knowledgeBase.updated_at)}</td>
-      <td className="px-4 py-3">
-        <div className="flex justify-end">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={onArchive}
-            loading={archiving}
-            disabled={knowledgeBase.status === "ARCHIVED" || isDefault}
-            aria-label={isDefault ? t("knowledgeBases.default.archiveDisabled") : undefined}
-            title={isDefault ? t("knowledgeBases.default.archiveDisabled") : undefined} icon={Archive}>
-            {t("knowledgeBases.actions.archive")}
-          </Button>
-        </div>
-      </td>
-    </tr>
-  );
+  archivingId: string | undefined;
+  onArchive: (knowledgeBase: KnowledgeBaseSummary) => void;
+}): DataTableColumn<KnowledgeBaseSummary>[] {
+  return [
+    {
+      key: "name",
+      header: t("knowledgeBases.col.name"),
+      rowHeader: true,
+      className: "max-w-[18rem]",
+      render: (knowledgeBase) => (
+        <>
+          <Link
+            to={`${APP_ROUTES.knowledgeBases}/${knowledgeBase.id}`}
+            className="block max-w-full font-medium text-accent-fg hover:underline"
+          >
+            <span className="block truncate">{knowledgeBase.name}</span>
+          </Link>
+          {knowledgeBase.description ? (
+            <p className="mt-1 truncate text-xs text-fg-muted">{knowledgeBase.description}</p>
+          ) : null}
+        </>
+      ),
+    },
+    {
+      key: "status",
+      header: t("knowledgeBases.col.status"),
+      render: (knowledgeBase) => <KnowledgeBaseStatusPill status={knowledgeBase.status} />,
+    },
+    {
+      key: "documents",
+      header: t("knowledgeBases.col.documents"),
+      align: "right",
+      className: "tnum text-fg-muted",
+      render: (knowledgeBase) => formatNumber(knowledgeBase.document_count),
+    },
+    {
+      key: "indexed",
+      header: t("knowledgeBases.col.indexed"),
+      align: "right",
+      className: "tnum text-fg-muted",
+      render: (knowledgeBase) => formatNumber(knowledgeBase.indexed_document_count),
+    },
+    {
+      key: "updated",
+      header: t("knowledgeBases.col.updated"),
+      className: "tnum text-fg-muted",
+      render: (knowledgeBase) => formatDateTime(knowledgeBase.updated_at),
+    },
+    {
+      key: "actions",
+      header: t("knowledgeBases.col.actions"),
+      align: "right",
+      render: (knowledgeBase) => {
+        const isDefault = knowledgeBase.name === DEFAULT_KNOWLEDGE_BASE_NAME;
+        return (
+          <div className="flex justify-end">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => onArchive(knowledgeBase)}
+              loading={archivingId === knowledgeBase.id}
+              disabled={knowledgeBase.status === "ARCHIVED" || isDefault}
+              aria-label={isDefault ? t("knowledgeBases.default.archiveDisabled") : undefined}
+              title={isDefault ? t("knowledgeBases.default.archiveDisabled") : undefined}
+              icon={Archive}
+            >
+              {t("knowledgeBases.actions.archive")}
+            </Button>
+          </div>
+        );
+      },
+    },
+  ];
 }
 
 function validateKnowledgeBaseName(name: string) {
