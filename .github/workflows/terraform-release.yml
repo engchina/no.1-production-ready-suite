@@ -1,6 +1,6 @@
 name: Terraform Release Package
 
-# monorepo の release は製品ごと（#94）。tag は <製品>-v*（nl2sql-v* / agent-v*）で、version も製品ごとに独立する。
+# monorepo の release は製品ごと（#94）。tag は <製品>-v*（nl2sql-v* / agent-v* / rag-v*）で、version も製品ごとに独立する。
 # 各製品は <製品>/terraform/stack と、次の 2 本（必須）+ 1 本（任意）を用意する。
 #   scripts/package_terraform_stack.py              → dist/production-ready-<製品>-terraform-stack.zip
 #   scripts/verify_terraform_stack_contract.py <zip> → stack の契約検証
@@ -11,10 +11,11 @@ on:
     tags:
       - "nl2sql-v*"
       - "agent-v*"
+      - "rag-v*"
   workflow_dispatch:
     inputs:
       products:
-        description: "Release する製品（カンマ区切り。例: nl2sql,agent）"
+        description: "Release する製品（カンマ区切り。例: nl2sql,agent,rag）"
         required: true
         type: string
       version:
@@ -45,8 +46,8 @@ jobs:
           import os
           import re
 
-          # stack を持つ製品だけを許可する（rag は #136 で stack ができたら足す）。
-          allowed = {"nl2sql", "agent"}
+          # stack を持つ製品だけを許可する。
+          allowed = {"nl2sql", "agent", "rag"}
           if os.environ["EVENT_NAME"] == "push":
               product, _, version = os.environ["REF_NAME"].partition("-")
               pairs = [(product, version)]
