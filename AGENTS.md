@@ -116,7 +116,7 @@ Issue の要点と、この変更が必要な理由を記載する。bug fix で
 - PR と `main` への push で `.github/workflows/ci.yml`（統合 CI）が動く。`changes` job が変更パスを判定し、**変更のあった製品の job だけ**を実行する。`platform/` または `ci.yml` を変更した場合は全製品の job を実行する。
 - 必須 check は **`CI OK`** の1つだけ（skip された job は成功扱い、failure / cancelled があれば失敗）。job を追加したら `ci-ok` の `needs` にも追加する。
 - secret 検出は root の `.gitleaks.toml` / `.gitleaksignore`（pre-commit hook は `.pre-commit-config.yaml`）。CI の gitleaks-action は gitleaks 8.24 系のため、allowlist は単一の `[allowlist]` で書く（`[[allowlists]]` は解釈されない）。誤検知の除外は fingerprint 単位で `.gitleaksignore` に理由付きで追加する。
-- 製品ごとの release tag は `<製品>-v*`（例: `nl2sql-v0.1.32` → `.github/workflows/nl2sql-terraform-release.yml`）。`releases/latest` は製品を区別しないので、README 等では tag を固定して参照する。
+- 製品ごとの release tag は `<製品>-v*`（例: `nl2sql-v0.1.32` / `agent-v0.1.0` / `rag-v0.1.0`）。`.github/workflows/terraform-release.yml` が tag の前置きで製品を判定し、`<製品>/scripts/package_terraform_stack.py` と `verify_terraform_stack_contract.py`（あれば `verify_terraform_release_extras.py`）を実行して、その製品の release に zip と sha256 を公開する。`workflow_dispatch` では製品を複数選び、製品ごとに独立した tag と release を作る（#94）。`releases/latest` は製品を区別しないので、README 等では tag を固定して参照する。
 - Dependabot（`.github/dependabot.yml`）の patch / minor 更新は `CI OK` 成功後に自動 merge される（`dependabot-auto-merge.yml`）。
 
 ## デザインシステム / UI（platform が正本）

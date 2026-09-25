@@ -84,6 +84,11 @@ docker compose --profile dispatcher up -d control-plane runtime-dispatcher
 公式 Runtime image は `docker-compose.yml` で `@sha256` 固定しています。更新時は公式 release と
 manifest を検証して digest を明示更新してください。
 
+## OCI への配備（Resource Manager）
+
+Compute 1 台 + Autonomous AI Database を OCI Resource Manager で配備する Terraform stack を
+`terraform/stack/` に置いています。入力・instance 上の構成・制約は [terraform/README.md](terraform/README.md) を参照してください。
+
 ## 主要 API
 
 | Method | Path | 用途 |

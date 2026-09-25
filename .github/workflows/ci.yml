@@ -328,6 +328,51 @@ jobs:
       - name: Validate compose config
         run: docker compose config --quiet
 
+  rag-terraform:
+    name: RAG / Terraform
+    needs: changes
+    if: needs.changes.outputs.rag == 'true' || needs.changes.outputs.platform == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rag
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: "1.5.7"
+
+      # docker compose で生成した override も検証する（ubuntu-latest には docker compose がある）。
+      - name: Test Compute init script
+        run: |
+          bash -n init_script.sh terraform/stack/extract_wallet.sh scripts/tests/init-script-deployment.test.sh
+          bash scripts/tests/init-script-deployment.test.sh
+
+      - name: Format check
+        run: terraform fmt -check -recursive terraform/stack
+
+      - name: Initialize Terraform
+        working-directory: rag/terraform/stack
+        run: terraform init -backend=false
+
+      - name: Validate Terraform
+        working-directory: rag/terraform/stack
+        run: terraform validate
+
+      - name: Package stack
+        run: python scripts/package_terraform_stack.py --output /tmp/production-ready-rag-terraform-stack.zip
+
+      - name: Verify stack contract
+        run: python scripts/verify_terraform_stack_contract.py /tmp/production-ready-rag-terraform-stack.zip
+
   # ---------------------------------------------------------------- nl2sql
 
   nl2sql-terraform:
@@ -656,6 +701,51 @@ jobs:
         env:
           UV_SYNC_ARGS: "--locked --dev"
 
+  # OCI Resource Manager 用 Terraform stack（#136）。実テナンシーへの配備確認は手動で行う。
+  agent-terraform:
+    name: Agent / Terraform
+    needs: changes
+    if: needs.changes.outputs.agent == 'true' || needs.changes.outputs.platform == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: agent
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: "1.5.7"
+
+      - name: Test Compute init script
+        run: |
+          bash -n init_script.sh terraform/stack/extract_wallet.sh scripts/tests/init-script-deployment.test.sh
+          bash scripts/tests/init-script-deployment.test.sh
+
+      - name: Format check
+        run: terraform fmt -check -recursive terraform/stack
+
+      - name: Initialize Terraform
+        working-directory: agent/terraform/stack
+        run: terraform init -backend=false
+
+      - name: Validate Terraform
+        working-directory: agent/terraform/stack
+        run: terraform validate
+
+      - name: Package stack
+        run: python scripts/package_terraform_stack.py --output /tmp/production-ready-agent-terraform-stack.zip
+
+      - name: Verify stack contract
+        run: python scripts/verify_terraform_stack_contract.py /tmp/production-ready-agent-terraform-stack.zip
+
   # ---------------------------------------------------------------- 集約
 
   ci-ok:
@@ -671,10 +761,12 @@ jobs:
       - rag-docrag-core
       - rag-frontend
       - rag-compose
+      - rag-terraform
       - nl2sql-terraform
       - nl2sql-frontend
       - nl2sql-backend
       - agent-checks
+      - agent-terraform
     runs-on: ubuntu-latest
     steps:
       # skip（変更のない製品）は成功扱い。failure / cancelled が1つでもあれば失敗させる。

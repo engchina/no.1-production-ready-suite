@@ -253,3 +253,16 @@ IDENTITY.md
 SOUL.md
 TOOLS.md
 USER.md
+
+# --- terraform stack（OCI Resource Manager） ---
+/dist/
+terraform/stack/.terraform/
+terraform/stack/.terraform.lock.hcl
+terraform/stack/*.tfstate
+terraform/stack/*.tfstate.*
+terraform/stack/*.tfvars
+terraform/stack/wallet*.zip
+terraform/stack/wallet_extracted/
+
+# docrag の既定の出力先（DOCRAG_OUTPUT_DIR 未設定時。parser サービスを起動すると作られる）
+.runs/

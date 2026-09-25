@@ -4,6 +4,7 @@ import { t } from "@/lib/i18n";
 
 import {
   serviceExecutionPolicyLabelKey,
+  servicePrimaryAction,
   serviceStoppedHintKey,
 } from "./ServicesManagementClient";
 
@@ -36,5 +37,15 @@ describe("ServicesManagementClient service policy helpers", () => {
   it("provides an in_process status label and a future-service hint", () => {
     expect(t("settings.services.status.in_process")).toBe("backend 内処理");
     expect(t("settings.services.futureServiceHint")).toContain("将来");
+  });
+
+  // 行に常に出す主操作は状態に応じて 1 つだけ（#158）。
+  it("picks one state-based primary lifecycle action per row", () => {
+    expect(servicePrimaryAction("running")).toBe("stop");
+    expect(servicePrimaryAction("degraded")).toBe("stop");
+    expect(servicePrimaryAction("stopped")).toBe("start");
+    expect(servicePrimaryAction("unconfigured")).toBe("start");
+    expect(servicePrimaryAction("loading")).toBe("start");
+    expect(servicePrimaryAction("error")).toBe("start");
   });
 });
