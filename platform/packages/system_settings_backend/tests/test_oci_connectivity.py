@@ -12,12 +12,28 @@ import pytest
 import requests
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec, rsa
+from pydantic import BaseModel
 from pytest import MonkeyPatch
 
-from app.clients import oci_connectivity
-from app.features.settings import router as settings_router
-from app.schemas.settings import OciConfigTestResult
-from app.settings import get_settings
+from pr_system_settings import oci as settings_router
+from pr_system_settings import oci_connectivity
+from pr_system_settings.oci import OciConfigTestResult
+
+
+class FakeSettings(BaseModel):
+    """製品の Settings のうち OCI 接続テストが読む属性だけを持つ（NL2SQL から移設。#100）。"""
+
+    oci_config_file: str = "~/.oci/config"
+    oci_config_profile: str = "DEFAULT"
+    oci_region: str = ""
+
+
+_SETTINGS = FakeSettings()
+
+
+def get_settings() -> FakeSettings:
+    return _SETTINGS
+
 
 oci: Any = importlib.import_module("oci")
 

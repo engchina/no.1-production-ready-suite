@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import base64
-import configparser
 import hashlib
 import hmac
 import io
@@ -19,7 +18,6 @@ import stat
 from asyncio import sleep, wait_for
 from collections.abc import Iterable, Mapping
 from csv import DictWriter
-from dataclasses import asdict
 from datetime import UTC, datetime
 from email import policy
 from email.parser import BytesParser
@@ -47,10 +45,12 @@ from fastapi import (
 )
 from fastapi.responses import Response, StreamingResponse
 from pr_backend_core import ApiResponse
+from pr_system_settings.oci import build_oci_router
+from pr_system_settings.oci_auth import (
+    load_oci_config_without_prompt as _load_oci_config_without_prompt,
+)
 from pr_system_settings.upload_storage import (
-    UploadStorageSettingsData,
     build_upload_storage_router,
-    upload_storage_settings_data,
 )
 from pydantic import BaseModel, Field, field_validator
 
@@ -138,38 +138,16 @@ from app.observability import (
     patch_trace_policy,
     trace_exporter_status,
 )
-from app.oci_connectivity import (
-    OCI_AUTH_CHECK_OPERATION,
-    OciConnectivityReport,
-    OciConnectivityStage,
-    OciConnectivityStageKey,
-    OciConnectivityStageStatus,
-    check_authenticated_api,
-    check_config_format,
-    check_private_key,
-    log_api_check_result,
-)
 from app.settings import get_settings
 
 router = APIRouter(tags=["agent-runtime"])
 
 BACKEND_ROOT = Path(__file__).resolve().parents[3]
 BACKEND_ENV_FILE = BACKEND_ROOT / ".env"
-OCI_CONFIG_MAX_BYTES = 64 * 1024
-OCI_PRIVATE_KEY_FILE = "~/.oci/oci_api_key.pem"
-OCI_CONFIG_KEYS = ("user", "fingerprint", "tenancy", "region", "key_file")
-OCI_PRIVATE_KEY_PASSPHRASE_REQUIRED_ERROR = (  # nosec B105 - エラーメッセージ定数
-    "OCI API 秘密鍵 PEM が暗号化されています。"
-    " pass_phrase を OCI config に設定するか、パスフレーズなしの秘密鍵 PEM を使用してください。"
-)
 PASSPHRASE_CONFIG_KEYS = frozenset({"pass_phrase", "passphrase", "key_password"})
 ENV_ASSIGNMENT_RE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=")
 ENV_FILE_MODE = 0o600
 MODEL_SETTINGS_FILE_MODE = 0o600
-OCI_DIRECTORY_MODE = 0o700
-OCI_CONFIG_FILE_MODE = 0o600
-OCI_PRIVATE_KEY_FILE_MODE = 0o600
-OCI_PRIVATE_KEY_MAX_BYTES = 64 * 1024
 ORACLE_WALLET_MAX_BYTES = 20 * 1024 * 1024
 ORACLE_WALLET_MAX_EXTRACTED_BYTES = 100 * 1024 * 1024
 ORACLE_WALLET_DIR_NAME = "wallet"
@@ -192,8 +170,6 @@ ModelSettingsTestTargetType = Literal[
     "embedding",
     "rerank",
 ]
-OciConfigTestStatus = Literal["success", "failed"]
-OciConfigField = Literal["user", "fingerprint", "tenancy", "region", "key_file"]
 _WEBSOCKET_COMMAND_DEDUPE_TTL_SECONDS = 300.0
 _WEBSOCKET_COMMAND_DEDUPE_MAX_ENTRIES = 2000
 _websocket_command_dedupe: dict[tuple[str, str], tuple[str, float]] = {}
@@ -541,193 +517,6 @@ class AdbSettingsUpdate(BaseModel):
         return value.strip()
 
 
-class OciConfigReadRequest(BaseModel):
-    config_file: str = Field(default="~/.oci/config", max_length=1024)
-    profile: str = Field(default="DEFAULT", max_length=128)
-
-    @field_validator("config_file", "profile")
-    @classmethod
-    def strip_text(cls, value: str) -> str:
-        return value.strip()
-
-    @field_validator("config_file")
-    @classmethod
-    def require_config_file(cls, value: str) -> str:
-        if not value:
-            raise ValueError("OCI config ファイルの path を入力してください。")
-        return value
-
-    @field_validator("profile")
-    @classmethod
-    def validate_profile(cls, value: str) -> str:
-        profile = value or "DEFAULT"
-        if any(char in profile for char in "[]\r\n"):
-            raise ValueError("プロファイル名に [ ] や改行は使用できません。")
-        return profile
-
-
-class OciConfigReadData(BaseModel):
-    profile: str = "DEFAULT"
-    user: str = ""
-    fingerprint: str = ""
-    tenancy: str = ""
-    region: str = ""
-    key_file: str = "~/.oci/oci_api_key.pem"
-    applied_fields: list[OciConfigField] = Field(default_factory=list)
-
-
-class OciSettingsUpdate(BaseModel):
-    user: str = Field(default="", max_length=512)
-    fingerprint: str = Field(default="", max_length=128)
-    tenancy: str = Field(default="", max_length=512)
-    region: str = Field(default="", max_length=128)
-
-    @field_validator("user", "fingerprint", "tenancy", "region")
-    @classmethod
-    def strip_text(cls, value: str) -> str:
-        return value.strip()
-
-    @field_validator("user")
-    @classmethod
-    def validate_user_ocid(cls, value: str) -> str:
-        if value and not value.startswith("ocid1.user."):
-            raise ValueError("ユーザー OCID は ocid1.user. で始めてください。")
-        return value
-
-    @field_validator("fingerprint")
-    @classmethod
-    def validate_fingerprint(cls, value: str) -> str:
-        if value and not re.fullmatch(r"[0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2})+", value):
-            raise ValueError("fingerprint は 16 進数をコロン区切りで入力してください。")
-        return value
-
-    @field_validator("tenancy")
-    @classmethod
-    def validate_tenancy_ocid(cls, value: str) -> str:
-        if value and not value.startswith("ocid1.tenancy."):
-            raise ValueError("テナンシ OCID は ocid1.tenancy. で始めてください。")
-        return value
-
-    @field_validator("region")
-    @classmethod
-    def validate_region(cls, value: str) -> str:
-        if value and not re.fullmatch(r"[a-z0-9-]+", value):
-            raise ValueError("リージョンは英小文字、数字、ハイフンで入力してください。")
-        return value
-
-
-class OciSettingsData(BaseModel):
-    config_file: str = "~/.oci/config"
-    profile: str = "DEFAULT"
-    user: str = ""
-    fingerprint: str = ""
-    tenancy: str = ""
-    region: str = ""
-    key_file: str = "~/.oci/oci_api_key.pem"
-    key_file_exists: bool = False
-    config_file_exists: bool = False
-    config_source: str = "runtime"
-
-
-class OciObjectStorageSettingsUpdate(BaseModel):
-    object_storage_region: str = Field(default="", max_length=128)
-    object_storage_namespace: str = Field(default="", max_length=256)
-
-    @field_validator("object_storage_region", "object_storage_namespace")
-    @classmethod
-    def strip_text(cls, value: str) -> str:
-        return value.strip()
-
-    @field_validator("object_storage_region")
-    @classmethod
-    def validate_region(cls, value: str) -> str:
-        if value and not re.fullmatch(r"[a-z0-9-]+", value):
-            raise ValueError("リージョンは英小文字、数字、ハイフンで入力してください。")
-        return value
-
-    @field_validator("object_storage_namespace")
-    @classmethod
-    def validate_namespace(cls, value: str) -> str:
-        if value and not re.fullmatch(r"[A-Za-z0-9._-]+", value):
-            raise ValueError(
-                "Object Storage の値は英数字、ハイフン、アンダースコア、ドットで入力してください。"
-            )
-        return value
-
-
-class OciConfigTestStage(BaseModel):
-    key: OciConnectivityStageKey
-    status: OciConnectivityStageStatus
-    message: str
-    action: str | None = None
-
-
-class OciConfigTestResult(BaseModel):
-    status: OciConfigTestStatus
-    profile: str = "DEFAULT"
-    config_file: str = "~/.oci/config"
-    key_file: str = "~/.oci/oci_api_key.pem"
-    config_file_exists: bool = False
-    key_file_exists: bool = False
-    missing_fields: list[str] = Field(default_factory=list)
-    permission_issues: list[str] = Field(default_factory=list)
-    oci_directory_mode: str | None = None
-    config_file_mode: str | None = None
-    key_file_mode: str | None = None
-    message: str
-    elapsed_ms: int = Field(default=0, ge=0)
-    checked_at: str
-    error_type: str | None = None
-    stages: list[OciConfigTestStage] = Field(default_factory=list)
-    region: str | None = None
-    auth_check_operation: str | None = None
-    http_status: int | None = None
-    service_code: str | None = None
-    request_id: str | None = None
-
-
-class OciObjectStorageNamespaceRequest(BaseModel):
-    config_file: str = Field(default="~/.oci/config", max_length=1024)
-    profile: str = Field(default="DEFAULT", max_length=128)
-    region: str = Field(default="", max_length=128)
-
-    @field_validator("config_file", "profile", "region")
-    @classmethod
-    def strip_text(cls, value: str) -> str:
-        return value.strip()
-
-    @field_validator("config_file")
-    @classmethod
-    def require_config_file(cls, value: str) -> str:
-        if not value:
-            raise ValueError("OCI config ファイルの path を入力してください。")
-        return value
-
-    @field_validator("profile")
-    @classmethod
-    def validate_profile(cls, value: str) -> str:
-        profile = value or "DEFAULT"
-        if any(char in profile for char in "[]\r\n"):
-            raise ValueError("プロファイル名に [ ] や改行は使用できません。")
-        return profile
-
-    @field_validator("region")
-    @classmethod
-    def require_region(cls, value: str) -> str:
-        if not value:
-            raise ValueError("Object Storage リージョンを入力してください。")
-        return value
-
-
-class OciObjectStorageNamespaceData(BaseModel):
-    namespace: str
-
-
-class OciPrivateKeyUploadData(BaseModel):
-    key_file: str
-    saved: bool
-
-
 class ToolAuditRecord(BaseModel):
     step_id: str
     tool_name: str
@@ -823,11 +612,21 @@ router.include_router(
     ),
     prefix="/settings",
 )
+# OCI 認証も3製品共通の実装（pr_system_settings.oci。#100）。
+# config 読込・接続テスト・namespace 取得もローカルの認証ファイルを読むため管理者に限定する。
+router.include_router(
+    build_oci_router(
+        get_settings=lambda: get_settings(),
+        env_file=lambda: BACKEND_ENV_FILE,
+        write_dependencies=[Depends(require_admin)],
+        action_dependencies=[Depends(require_admin)],
+    ),
+    prefix="/settings",
+)
 
 
 _model_settings_state: ModelSettingsPayload | None = None
 _database_settings_state: DatabaseSettingsData | None = None
-_oci_settings_state: OciSettingsData | None = None
 _adb_info_state: AdbInfoData | None = None
 
 
@@ -2064,266 +1863,6 @@ def _database_readiness(data: DatabaseSettingsData) -> str:
     return "ok"
 
 
-def _oci_settings_data(settings: object) -> OciSettingsData:
-    parsed = _read_runtime_oci_config(settings)
-    config_file = _settings_str_from(settings, "oci_config_file", "~/.oci/config")
-    profile = _settings_str_from(settings, "oci_config_profile", "DEFAULT")
-    config_path = Path(config_file).expanduser()
-    key_path = Path(OCI_PRIVATE_KEY_FILE).expanduser()
-
-    return OciSettingsData(
-        config_file=config_file,
-        profile=profile,
-        user=parsed.user if parsed is not None else "",
-        fingerprint=parsed.fingerprint if parsed is not None else "",
-        tenancy=parsed.tenancy if parsed is not None else "",
-        region=parsed.region if parsed is not None else "",
-        key_file=OCI_PRIVATE_KEY_FILE,
-        key_file_exists=key_path.is_file(),
-        config_file_exists=config_path.is_file(),
-        config_source="runtime",
-    )
-
-
-def _read_runtime_oci_config(settings: object) -> OciConfigReadData | None:
-    try:
-        content = _read_oci_config_text(
-            _settings_str_from(settings, "oci_config_file", "~/.oci/config")
-        )
-        return _parse_oci_config(
-            content,
-            _settings_str_from(settings, "oci_config_profile", "DEFAULT"),
-        )
-    except HTTPException:
-        return None
-
-
-def _get_oci_settings_state() -> OciSettingsData:
-    global _oci_settings_state
-    if _oci_settings_state is None:
-        _oci_settings_state = _oci_settings_data(get_settings())
-    return _oci_settings_state.model_copy(deep=True)
-
-
-def _set_oci_settings_state(patch: OciSettingsUpdate) -> OciSettingsData:
-    global _oci_settings_state
-    current = _get_oci_settings_state()
-    current.user = patch.user.strip()
-    current.fingerprint = patch.fingerprint.strip()
-    current.tenancy = patch.tenancy.strip()
-    current.region = patch.region.strip()
-    current.config_file_exists = bool(
-        current.user and current.fingerprint and current.tenancy and current.region
-    )
-    _oci_settings_state = current
-    return current.model_copy(deep=True)
-
-
-def _read_oci_config_text(config_file: str) -> str:
-    path = Path(config_file).expanduser()
-    try:
-        if not path.is_file():
-            raise HTTPException(
-                status_code=404,
-                detail=(
-                    "OCI config ファイルを読み取れません。"
-                    "バックエンドから参照できる path を指定してください。"
-                ),
-            )
-        if path.stat().st_size > OCI_CONFIG_MAX_BYTES:
-            raise HTTPException(status_code=413, detail="OCI config ファイルが大きすぎます。")
-        return path.read_text(encoding="utf-8")
-    except HTTPException:
-        raise
-    except UnicodeDecodeError as exc:
-        raise HTTPException(
-            status_code=400,
-            detail="OCI config ファイルは UTF-8 テキストとして読み取れる必要があります。",
-        ) from exc
-    except OSError as exc:
-        raise HTTPException(
-            status_code=404,
-            detail=(
-                "OCI config ファイルを読み取れません。"
-                "バックエンドから参照できる path を指定してください。"
-            ),
-        ) from exc
-
-
-def _parse_oci_config(content: str, profile: str) -> OciConfigReadData:
-    parser = configparser.ConfigParser(interpolation=None)
-    try:
-        parser.read_string(content)
-    except configparser.Error as exc:
-        raise HTTPException(
-            status_code=400,
-            detail="OCI config ファイルの形式を確認してください。",
-        ) from exc
-
-    selected_profile = profile.strip() or "DEFAULT"
-    if selected_profile.upper() == "DEFAULT":
-        entries = parser.defaults()
-    elif parser.has_section(selected_profile):
-        entries = parser[selected_profile]
-    else:
-        raise HTTPException(
-            status_code=404,
-            detail="指定した OCI config profile が見つかりません。",
-        )
-
-    values = {key: str(entries.get(key, "")).strip() for key in OCI_CONFIG_KEYS}
-    applied_fields = [key for key in OCI_CONFIG_KEYS if values[key]]
-    if not applied_fields:
-        raise HTTPException(
-            status_code=422,
-            detail="指定した profile から OCI config 項目を読み取れませんでした。",
-        )
-
-    return OciConfigReadData(
-        profile=selected_profile,
-        user=values["user"],
-        fingerprint=values["fingerprint"],
-        tenancy=values["tenancy"],
-        region=values["region"],
-        key_file=values["key_file"],
-        applied_fields=applied_fields,
-    )
-
-
-def _safe_oci_profile_name(profile: str) -> str:
-    selected = profile.strip() or "DEFAULT"
-    if any(char in selected for char in "[]\r\n"):
-        raise HTTPException(status_code=422, detail="プロファイル名に [ ] や改行は使用できません。")
-    return selected
-
-
-def _write_oci_config(settings: object, payload: OciSettingsUpdate) -> Path:
-    target = Path(_settings_str_from(settings, "oci_config_file", "~/.oci/config")).expanduser()
-    profile = _safe_oci_profile_name(_settings_str_from(settings, "oci_config_profile", "DEFAULT"))
-    parser = _load_oci_config_for_write(target)
-    values = {
-        "user": payload.user,
-        "fingerprint": payload.fingerprint,
-        "tenancy": payload.tenancy,
-        "region": payload.region,
-    }
-    if any(value.strip() for value in values.values()):
-        values["key_file"] = OCI_PRIVATE_KEY_FILE
-    _set_oci_config_profile(
-        parser,
-        profile,
-        {key: value for key, value in values.items() if value.strip()},
-    )
-    _atomic_write_oci_config(target, parser)
-    return target
-
-
-def _load_oci_config_for_write(path: Path) -> configparser.ConfigParser:
-    parser = configparser.ConfigParser(interpolation=None)
-    if not path.exists():
-        return parser
-    if path.is_dir():
-        raise HTTPException(
-            status_code=400,
-            detail="OCI config ファイル path がディレクトリを指しています。",
-        )
-    try:
-        if path.stat().st_size > OCI_CONFIG_MAX_BYTES:
-            raise HTTPException(status_code=413, detail="OCI config ファイルが大きすぎます。")
-        content = path.read_text(encoding="utf-8")
-    except HTTPException:
-        raise
-    except UnicodeDecodeError as exc:
-        raise HTTPException(
-            status_code=400,
-            detail="OCI config ファイルは UTF-8 テキストとして読み取れる必要があります。",
-        ) from exc
-    except OSError as exc:
-        raise HTTPException(
-            status_code=500,
-            detail="OCI config ファイルを更新前に読み取れませんでした。",
-        ) from exc
-    if not content.strip():
-        return parser
-    try:
-        parser.read_string(content)
-    except configparser.Error as exc:
-        raise HTTPException(
-            status_code=400,
-            detail="OCI config ファイルの形式を確認してください。",
-        ) from exc
-    return parser
-
-
-def _set_oci_config_profile(
-    parser: configparser.ConfigParser,
-    profile: str,
-    values: dict[str, str],
-) -> None:
-    if profile.upper() == "DEFAULT":
-        for key, value in values.items():
-            parser["DEFAULT"][key] = value
-        return
-    if not parser.has_section(profile):
-        parser.add_section(profile)
-    for key, value in values.items():
-        parser[profile][key] = value
-
-
-def _atomic_write_oci_config(path: Path, parser: configparser.ConfigParser) -> None:
-    tmp_path = path.with_name(f".{path.name}.tmp-{uuid4().hex}")
-    try:
-        _ensure_private_directory(path.parent)
-        buffer = StringIO()
-        parser.write(buffer, space_around_delimiters=False)
-        tmp_path.write_text(buffer.getvalue(), encoding="utf-8")
-        tmp_path.chmod(OCI_CONFIG_FILE_MODE)
-        tmp_path.replace(path)
-        path.chmod(OCI_CONFIG_FILE_MODE)
-    except OSError as exc:
-        if tmp_path.exists():
-            tmp_path.unlink(missing_ok=True)
-        raise HTTPException(
-            status_code=500,
-            detail="OCI config ファイルをバックエンドの固定 path へ保存できませんでした。",
-        ) from exc
-
-
-def _ensure_private_directory(path: Path) -> None:
-    path.mkdir(mode=OCI_DIRECTORY_MODE, parents=True, exist_ok=True)
-    path.chmod(OCI_DIRECTORY_MODE)
-
-
-def _persist_oci_settings(settings: object, payload: OciSettingsUpdate) -> None:
-    region = payload.region.strip()
-    _write_env_values(
-        BACKEND_ENV_FILE,
-        {
-            "OCI_CONFIG_FILE": _settings_str_from(settings, "oci_config_file", "~/.oci/config"),
-            "OCI_CONFIG_PROFILE": _settings_str_from(settings, "oci_config_profile", "DEFAULT"),
-            "OCI_REGION": region or None,
-        },
-        section_comment="# OCI 共通",
-        error_detail="OCI 認証設定を backend/.env へ保存できませんでした。",
-    )
-
-
-def _persist_oci_object_storage_settings(settings: object) -> None:
-    _write_env_values(
-        BACKEND_ENV_FILE,
-        {
-            "OBJECT_STORAGE_REGION": _settings_str_from(
-                settings,
-                "object_storage_region",
-                "",
-            ),
-            "OBJECT_STORAGE_NAMESPACE": _settings_str_from(settings, "object_storage_namespace"),
-        },
-        section_comment="# OCI Object Storage",
-        error_detail="OCI Object Storage 設定を backend/.env へ保存できませんでした。",
-    )
-
-
 def _persist_database_settings(
     settings: object,
     data: DatabaseSettingsData,
@@ -2568,47 +2107,8 @@ def _set_if_possible(target: object, name: str, value: object) -> None:
         return
 
 
-class OciPrivateKeyPassPhraseRequiredError(RuntimeError):
-    safe_for_user = True
-
-
 class OracleConnectionTimeoutError(RuntimeError):
     safe_for_user = True
-
-
-def _load_oci_config_without_prompt(
-    oci_config_module: object,
-    config_file: str,
-    profile: str,
-    *,
-    region: str | None = None,
-) -> dict[str, object]:
-    config_path = Path(config_file).expanduser()
-    from_file = cast(Any, oci_config_module).from_file
-    config = dict(from_file(str(config_path), profile))
-    if region:
-        config["region"] = region
-    _assert_oci_private_key_can_load_without_prompt(config, config_path)
-    return config
-
-
-def _assert_oci_private_key_can_load_without_prompt(
-    config: Mapping[str, object],
-    config_file: str | Path,
-) -> None:
-    key_file = str(config.get("key_file", "") or "").strip()
-    if not key_file or _has_pass_phrase(config):
-        return
-    key_path = _resolve_oci_key_file(key_file, config_file)
-    if _pem_file_is_encrypted(key_path):
-        raise OciPrivateKeyPassPhraseRequiredError(OCI_PRIVATE_KEY_PASSPHRASE_REQUIRED_ERROR)
-
-
-def _resolve_oci_key_file(key_file: str, config_file: str | Path) -> Path:
-    path = Path(key_file).expanduser()
-    if path.is_absolute():
-        return path
-    return Path(config_file).expanduser().parent / path
 
 
 def _pem_file_is_encrypted(path: Path) -> bool:
@@ -2622,292 +2122,6 @@ def _pem_file_is_encrypted(path: Path) -> bool:
 
 def _has_pass_phrase(config: Mapping[str, object]) -> bool:
     return any(str(config.get(key, "") or "").strip() for key in PASSPHRASE_CONFIG_KEYS)
-
-
-def _test_oci_config(settings: object) -> OciConfigTestResult:
-    """保存済み OCI 設定で、形式 → 鍵 → リージョン到達 → 認証の順に実疎通を確認する。"""
-    started = monotonic()
-    config_file = _settings_str_from(settings, "oci_config_file", "~/.oci/config")
-    profile = _safe_oci_profile_name(_settings_str_from(settings, "oci_config_profile", "DEFAULT"))
-    config_path = Path(config_file).expanduser()
-    key_path = Path(OCI_PRIVATE_KEY_FILE).expanduser()
-    report = OciConnectivityReport()
-    try:
-        content = _read_oci_config_text(config_file)
-        parsed = _parse_oci_config(content, profile)
-    except HTTPException as exc:
-        report.add(
-            OciConnectivityStage(
-                key="config_format",
-                status="failed",
-                message=str(exc.detail),
-                action="OCI config を「config 読込」で確認し、認証設定を保存し直してください。",
-            )
-        )
-        return _oci_config_test_result(
-            report,
-            started=started,
-            profile=profile,
-            config_file=config_file,
-            key_file=OCI_PRIVATE_KEY_FILE,
-            config_path=config_path,
-            key_path=key_path,
-            key_file_exists=key_path.is_file(),
-            error_type=type(exc).__name__,
-        )
-
-    parsed_values = {
-        "user": parsed.user,
-        "fingerprint": parsed.fingerprint,
-        "tenancy": parsed.tenancy,
-        "region": parsed.region,
-        "key_file": parsed.key_file,
-    }
-    missing_fields = [field for field in OCI_CONFIG_KEYS if not parsed_values[field].strip()]
-    key_file = parsed.key_file or OCI_PRIVATE_KEY_FILE
-    key_path = _resolve_oci_key_file(key_file, config_path)
-    key_file_exists = key_path.is_file()
-    permission_issues = _oci_permission_issues(config_path, key_path)
-    error_type: str | None = None
-
-    def finish(
-        *,
-        auth_check_operation: str | None = None,
-        http_status: int | None = None,
-        service_code: str | None = None,
-        request_id: str | None = None,
-    ) -> OciConfigTestResult:
-        return _oci_config_test_result(
-            report,
-            started=started,
-            profile=parsed.profile,
-            config_file=config_file,
-            key_file=key_file,
-            config_path=config_path,
-            key_path=key_path,
-            key_file_exists=key_file_exists,
-            missing_fields=missing_fields,
-            permission_issues=permission_issues,
-            region=parsed.region or None,
-            error_type=error_type,
-            auth_check_operation=auth_check_operation,
-            http_status=http_status,
-            service_code=service_code,
-            request_id=request_id,
-        )
-
-    config_permission_issues = [
-        issue for issue in permission_issues if not issue.startswith("秘密鍵")
-    ]
-    if missing_fields:
-        report.add(
-            OciConnectivityStage(
-                key="config_format",
-                status="failed",
-                message="OCI config の必須項目が不足しています。",
-                action="不足している項目を入力して認証設定を保存してください。",
-            )
-        )
-        return finish()
-    if not report.add(check_config_format(parsed_values)):
-        return finish()
-    if config_permission_issues:
-        report.stages[-1] = OciConnectivityStage(
-            key="config_format",
-            status="failed",
-            message="OCI 認証ファイルの権限を確認してください。",
-            action=" ".join(config_permission_issues),
-        )
-        return finish()
-
-    pass_phrase = _oci_config_private_key_pass_phrase(content, profile)
-    if not key_file_exists:
-        key_stage = OciConnectivityStage(
-            key="key_file",
-            status="failed",
-            message="OCI config の key_file が指す秘密鍵ファイルが見つかりません。",
-            action="OCI コンソールで API キーを登録した秘密鍵 PEM をアップロードしてください。",
-        )
-    elif _pem_file_is_encrypted(key_path) and not pass_phrase:
-        key_stage = OciConnectivityStage(
-            key="key_file",
-            status="failed",
-            message=OCI_PRIVATE_KEY_PASSPHRASE_REQUIRED_ERROR,
-            action="パスフレーズなしの秘密鍵 PEM をアップロードしてください。",
-        )
-        error_type = "OciPrivateKeyPassPhraseRequiredError"
-    elif len(permission_issues) != len(config_permission_issues):
-        key_stage = OciConnectivityStage(
-            key="key_file",
-            status="failed",
-            message="OCI 認証ファイルの権限を確認してください。",
-            action="秘密鍵ファイルは 0600 にしてください。",
-        )
-    else:
-        key_stage = check_private_key(key_path, parsed.fingerprint, pass_phrase)
-    if not report.add(key_stage):
-        return finish()
-
-    try:
-        oci_config = import_module("oci.config")
-        sdk_config = _load_oci_config_without_prompt(oci_config, config_file, profile)
-    except Exception as exc:
-        report.add(
-            OciConnectivityStage(
-                key="authentication",
-                status="failed",
-                message="OCI SDK で OCI config を読み込めませんでした。",
-                action="OCI config の内容を確認し、認証設定を保存し直してください。",
-            )
-        )
-        error_type = type(exc).__name__
-        return finish()
-
-    api_result = check_authenticated_api(sdk_config)
-    report.add(api_result.region)
-    report.add(api_result.authentication)
-    log_api_check_result(api_result)
-    error_type = api_result.error_type
-    return finish(
-        auth_check_operation=OCI_AUTH_CHECK_OPERATION,
-        http_status=api_result.http_status,
-        service_code=api_result.service_code,
-        request_id=api_result.request_id,
-    )
-
-
-def _oci_config_test_result(
-    report: OciConnectivityReport,
-    *,
-    started: float,
-    profile: str,
-    config_file: str,
-    key_file: str,
-    config_path: Path,
-    key_path: Path,
-    key_file_exists: bool,
-    missing_fields: list[str] | None = None,
-    permission_issues: list[str] | None = None,
-    region: str | None = None,
-    auth_check_operation: str | None = None,
-    http_status: int | None = None,
-    service_code: str | None = None,
-    request_id: str | None = None,
-    error_type: str | None = None,
-) -> OciConfigTestResult:
-    """段階の結果から API 応答を組み立てる。失敗した段階が 1 つでもあれば failed にする。"""
-    stages = report.finish()
-    failure = report.first_failure
-    message = (
-        failure.message
-        if failure
-        else f"OCI へ認証付きで接続できました（{OCI_AUTH_CHECK_OPERATION}）。"
-    )
-    return OciConfigTestResult(
-        status="failed" if failure else "success",
-        profile=profile,
-        config_file=config_file,
-        key_file=key_file,
-        config_file_exists=config_path.is_file(),
-        key_file_exists=key_file_exists,
-        missing_fields=missing_fields or [],
-        permission_issues=permission_issues or [],
-        oci_directory_mode=_mode_string(config_path.parent),
-        config_file_mode=_mode_string(config_path),
-        key_file_mode=_mode_string(key_path),
-        message=message,
-        elapsed_ms=max(0, round((monotonic() - started) * 1000)),
-        checked_at=_now_iso(),
-        error_type=error_type,
-        stages=[OciConfigTestStage(**asdict(stage)) for stage in stages],
-        region=region,
-        auth_check_operation=auth_check_operation,
-        http_status=http_status,
-        service_code=service_code,
-        request_id=request_id,
-    )
-
-
-def _oci_permission_issues(config_path: Path, key_path: Path) -> list[str]:
-    issues: list[str] = []
-    directory_mode = _path_mode(config_path.parent)
-    config_mode = _path_mode(config_path)
-    key_mode = _path_mode(key_path)
-    if directory_mode is not None and directory_mode != OCI_DIRECTORY_MODE:
-        issues.append("~/.oci ディレクトリは 0700 にしてください。")
-    if config_mode is not None and config_mode & 0o077:
-        issues.append("OCI config ファイルは 0600 にしてください。")
-    if key_mode is not None and key_mode & 0o077:
-        issues.append("秘密鍵ファイルは 0600 にしてください。")
-    return issues
-
-
-def _mode_string(path: Path) -> str | None:
-    mode = _path_mode(path)
-    return f"{mode:04o}" if mode is not None else None
-
-
-def _path_mode(path: Path) -> int | None:
-    try:
-        return stat.S_IMODE(path.stat().st_mode)
-    except OSError:
-        return None
-
-
-def _oci_config_private_key_pass_phrase(content: str, profile: str) -> str | None:
-    """OCI config profile の private key pass phrase を返す。値はログや応答に出さない。"""
-    parser = configparser.ConfigParser(interpolation=None)
-    try:
-        parser.read_string(content)
-    except configparser.Error:
-        return None
-
-    selected_profile = profile.strip() or "DEFAULT"
-    if selected_profile.upper() == "DEFAULT":
-        entries = parser.defaults()
-    elif parser.has_section(selected_profile):
-        entries = parser[selected_profile]
-    else:
-        return None
-    for key in PASSPHRASE_CONFIG_KEYS:
-        value = str(entries.get(key, "")).strip()
-        if value:
-            return value
-    return None
-
-
-def _read_object_storage_namespace(payload: OciObjectStorageNamespaceRequest) -> str:
-    try:
-        oci_config = import_module("oci.config")
-        object_storage = import_module("oci.object_storage")
-        config = _load_oci_config_without_prompt(
-            oci_config,
-            payload.config_file,
-            payload.profile,
-            region=payload.region,
-        )
-        response = object_storage.ObjectStorageClient(config).get_namespace()
-    except Exception as exc:
-        detail = (
-            str(exc)
-            if getattr(exc, "safe_for_user", False)
-            else (
-                "OCI Object Storage namespace を取得できませんでした。"
-                "OCI config / profile / region を確認してください。"
-            )
-        )
-        raise HTTPException(status_code=502, detail=detail) from exc
-
-    namespace = getattr(response, "data", "")
-    if not isinstance(namespace, str):
-        namespace = str(namespace) if namespace is not None else ""
-    namespace = namespace.strip()
-    if not namespace:
-        raise HTTPException(
-            status_code=502,
-            detail="OCI Object Storage namespace が空で返されました。",
-        )
-    return namespace
 
 
 def _get_adb_info_state() -> AdbInfoData:
@@ -2942,21 +2156,6 @@ def _set_adb_info_state(patch: AdbSettingsUpdate) -> AdbInfoData:
         region=database.region or None,
     )
     return _adb_info_state.model_copy(deep=True)
-
-
-def _oci_missing_fields(data: OciSettingsData) -> list[str]:
-    missing = []
-    if not data.user:
-        missing.append("user")
-    if not data.fingerprint:
-        missing.append("fingerprint")
-    if not data.tenancy:
-        missing.append("tenancy")
-    if not data.region:
-        missing.append("region")
-    if not data.key_file_exists:
-        missing.append("key_file")
-    return missing
 
 
 async def _uploaded_filename(request: Request) -> str:
@@ -2994,61 +2193,6 @@ async def _uploaded_file_from_request(request: Request) -> tuple[str, bytes]:
         payload = part.get_payload(decode=True)
         return filename, payload if isinstance(payload, bytes) else b""
     return "", b""
-
-
-def _install_oci_private_key(data: bytes, file_name: str | None) -> Path:
-    safe_name = PurePosixPath((file_name or "oci_api_key.pem").replace("\\", "/")).name
-    if Path(safe_name).suffix.lower() not in {".pem", ".key"}:
-        raise HTTPException(
-            status_code=415,
-            detail="秘密鍵は .pem または .key ファイルを選択してください。",
-        )
-    if not data:
-        raise HTTPException(status_code=400, detail="空の秘密鍵ファイルはアップロードできません。")
-    if len(data) > OCI_PRIVATE_KEY_MAX_BYTES:
-        raise HTTPException(status_code=413, detail="秘密鍵ファイルのサイズが上限を超えています。")
-    _validate_private_key_pem(data)
-
-    target = Path(OCI_PRIVATE_KEY_FILE).expanduser()
-    tmp_path = target.with_name(f".{target.name}.tmp-{uuid4().hex}")
-    try:
-        _ensure_private_directory(target.parent)
-        tmp_path.write_bytes(data)
-        tmp_path.chmod(OCI_PRIVATE_KEY_FILE_MODE)
-        tmp_path.replace(target)
-        target.chmod(OCI_PRIVATE_KEY_FILE_MODE)
-    except OSError as exc:
-        if tmp_path.exists():
-            tmp_path.unlink(missing_ok=True)
-        raise HTTPException(
-            status_code=500,
-            detail="秘密鍵ファイルをバックエンドの固定 path へ保存できませんでした。",
-        ) from exc
-    return target
-
-
-def _validate_private_key_pem(data: bytes) -> None:
-    try:
-        text = data.decode("utf-8")
-    except UnicodeDecodeError as exc:
-        raise HTTPException(
-            status_code=400,
-            detail="秘密鍵ファイルは UTF-8 の PEM テキストとして読み取れる必要があります。",
-        ) from exc
-    if "\x00" in text or "-----BEGIN " not in text or "PRIVATE KEY-----" not in text:
-        raise HTTPException(
-            status_code=400,
-            detail="秘密鍵 PEM ファイルの形式を確認してください。",
-        )
-    upper_text = text.upper()
-    if "BEGIN ENCRYPTED PRIVATE KEY" in upper_text or "PROC-TYPE: 4,ENCRYPTED" in upper_text:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "暗号化された OCI API 秘密鍵は pass phrase 入力が必要です。"
-                "パスフレーズなしの秘密鍵 PEM を使用してください。"
-            ),
-        )
 
 
 def _install_database_wallet(settings: object, data: bytes, file_name: str | None) -> Path:
@@ -3369,82 +2513,6 @@ async def stop_adb(_: None = Depends(require_admin)) -> ApiResponse[AdbInfoData]
     info.lifecycle_state = "STOPPED"
     _adb_info_state = info
     return ApiResponse(data=info)
-
-
-@router.get("/settings/oci", response_model=ApiResponse[OciSettingsData])
-async def get_oci_settings() -> ApiResponse[OciSettingsData]:
-    return ApiResponse(data=_get_oci_settings_state())
-
-
-@router.patch("/settings/oci", response_model=ApiResponse[OciSettingsData])
-async def patch_oci_settings(
-    patch: OciSettingsUpdate,
-    _: None = Depends(require_admin),
-) -> ApiResponse[OciSettingsData]:
-    global _oci_settings_state
-    settings = get_settings()
-    _write_oci_config(settings, patch)
-    _persist_oci_settings(settings, patch)
-    _set_if_possible(settings, "oci_region", patch.region)
-    _set_if_possible(settings, "oci_user_ocid", patch.user)
-    _set_if_possible(settings, "oci_fingerprint", patch.fingerprint)
-    _set_if_possible(settings, "oci_tenancy_ocid", patch.tenancy)
-    _oci_settings_state = _oci_settings_data(settings)
-    return ApiResponse(data=_oci_settings_state.model_copy(deep=True))
-
-
-@router.patch("/settings/oci/object-storage", response_model=ApiResponse[UploadStorageSettingsData])
-async def patch_oci_object_storage_settings(
-    patch: OciObjectStorageSettingsUpdate,
-    _: None = Depends(require_admin),
-) -> ApiResponse[UploadStorageSettingsData]:
-    settings = get_settings()
-    # 保存に成功してから runtime へ反映する（保存失敗時に未保存の値を返さない。#97）。
-    candidate = settings.model_copy(
-        update={
-            "object_storage_region": patch.object_storage_region,
-            "object_storage_namespace": patch.object_storage_namespace,
-        }
-    )
-    _persist_oci_object_storage_settings(candidate)
-    settings.object_storage_region = candidate.object_storage_region
-    settings.object_storage_namespace = candidate.object_storage_namespace
-    return ApiResponse(data=upload_storage_settings_data(settings))
-
-
-@router.post("/settings/oci/config/read", response_model=ApiResponse[OciConfigReadData])
-async def read_oci_config(payload: OciConfigReadRequest) -> ApiResponse[OciConfigReadData]:
-    content = _read_oci_config_text(payload.config_file)
-    return ApiResponse(data=_parse_oci_config(content, payload.profile))
-
-
-@router.post("/settings/oci/config/test", response_model=ApiResponse[OciConfigTestResult])
-async def test_oci_config() -> ApiResponse[OciConfigTestResult]:
-    settings = get_settings()
-    return ApiResponse(data=await anyio_to_thread.run_sync(_test_oci_config, settings))
-
-
-@router.post(
-    "/settings/oci/object-storage/namespace",
-    response_model=ApiResponse[OciObjectStorageNamespaceData],
-)
-async def read_oci_object_storage_namespace(
-    payload: OciObjectStorageNamespaceRequest,
-) -> ApiResponse[OciObjectStorageNamespaceData]:
-    namespace = _read_object_storage_namespace(payload)
-    return ApiResponse(data=OciObjectStorageNamespaceData(namespace=namespace))
-
-
-@router.post("/settings/oci/key-file", response_model=ApiResponse[OciPrivateKeyUploadData])
-async def upload_oci_private_key(
-    request: Request,
-    _: None = Depends(require_admin),
-) -> ApiResponse[OciPrivateKeyUploadData]:
-    global _oci_settings_state
-    filename, content = await _uploaded_file_from_request(request)
-    _install_oci_private_key(content, filename)
-    _oci_settings_state = _oci_settings_data(get_settings())
-    return ApiResponse(data=OciPrivateKeyUploadData(key_file=OCI_PRIVATE_KEY_FILE, saved=True))
 
 
 @router.get("/runtime/snapshot", response_model=ApiResponse[AgentRuntimeSnapshot])

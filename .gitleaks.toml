@@ -20,6 +20,7 @@ description = "テスト fixture・テンプレート・明確なダミー値の
 paths = [
   # テスト/E2E fixture は意図的なダミー鍵を含む
   '''(rag|nl2sql|agent)/backend/tests/.*''',
+  '''platform/packages/[^/]+/tests/.*''',
   '''nl2sql/docs/test-data/.*''',
   '''rag/frontend/e2e/.*''',
   '''rag/frontend/src/lib/api\.test\.ts''',

@@ -4,8 +4,11 @@
 
 - `pr_system_settings.env_file`：`backend/.env` の排他付き部分更新（`locked_env_file` / `replace_env_file` / `write_env_values`）
 - `pr_system_settings.upload_storage`：アップロード保存先 API（`build_upload_storage_router`）
+- `pr_system_settings.oci`：OCI 認証 API（`build_oci_router`。`~/.oci/config` の読み書き、秘密鍵の配置、接続テスト、Object Storage namespace 取得）。製品側からは `read_oci_config_text` / `parse_oci_config` / `read_runtime_oci_config` / `test_oci_config(verify_with_oci=)` も使える
+- `pr_system_settings.oci_connectivity` / `oci_auth`：OCI 接続テストの段階判定と、OCI SDK config の非対話ロード（`oci` extra。SDK は遅延 import）
 
-各製品は router を include し、製品ごとの差（Settings の取得、`.env` の場所、書込み権限の依存関係）を引数で渡す。
+各製品は router を include し、製品ごとの差（Settings の取得、`.env` の場所、書込み権限・操作権限の依存関係）を引数で渡す。
+OCI 認証の `action_dependencies` は、config 読込・接続テスト・namespace 取得に付ける依存関係（Agent は `require_admin`）。
 
 ```python
 from pr_system_settings.upload_storage import build_upload_storage_router

@@ -4165,17 +4165,23 @@ name = "production-ready-system-settings-backend"
 version = "0.1.0"
 source = { editable = "../../platform/packages/system_settings_backend" }
 dependencies = [
+    { name = "cryptography" },
     { name = "fastapi" },
     { name = "production-ready-backend-core" },
     { name = "pydantic" },
+    { name = "python-multipart" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "cryptography", specifier = ">=50.0.0" },
     { name = "fastapi", specifier = ">=0.121,<1.0" },
+    { name = "oci", marker = "extra == 'oci'", specifier = ">=2.168" },
     { name = "production-ready-backend-core", editable = "../../platform/packages/backend_core" },
     { name = "pydantic", specifier = ">=2.11" },
+    { name = "python-multipart", specifier = ">=0.0.20" },
 ]
+provides-extras = ["oci"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -4183,6 +4189,7 @@ dev = [
     { name = "black", specifier = ">=25.1" },
     { name = "httpx", specifier = "==0.28.1" },
     { name = "mypy", specifier = ">=1.14" },
+    { name = "oci", specifier = ">=2.168" },
     { name = "pip-audit", specifier = ">=2.9" },
     { name = "pytest", specifier = ">=8.3" },
     { name = "pytest-cov", specifier = ">=6.0" },
