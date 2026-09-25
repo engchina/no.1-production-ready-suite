@@ -131,7 +131,7 @@ export function DashboardPage() {
 
           <Card>
             <CardHeader>
-              <CardTitle>{t("nav.section.settings")}</CardTitle>
+              <CardTitle>{t("nav.section.operations")}</CardTitle>
               <CardDescription>{t("page.settings.subtitle")}</CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
