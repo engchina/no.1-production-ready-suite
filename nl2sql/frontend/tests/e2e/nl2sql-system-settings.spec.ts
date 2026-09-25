@@ -1874,7 +1874,7 @@ test("legacy JSON の原因と復旧方法を表示し、保存時に既存 Key 
 
   await page.goto("/settings/model");
   await expect(page.getByText("旧 JSON に API Key が残っています")).toBeVisible();
-  await expect(page.getByText(/原因: v1 の model-settings.json/)).toBeVisible();
+  await expect(page.getByText(/原因: 旧形式の model-settings.json/)).toBeVisible();
   await page.getByRole("button", { name: "OCI Enterprise AI: 保存" }).click();
 
   expect(savedRequests).toHaveLength(1);

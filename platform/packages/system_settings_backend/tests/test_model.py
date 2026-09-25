@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import stat
 from collections.abc import Mapping
 from pathlib import Path
@@ -262,18 +261,25 @@ def test_model_test_requires_model_id(tmp_path: Path) -> None:
     assert data["data"]["raw_error"] == "テストするモデル ID を入力してください。"
 
 
-def test_process_environment_key_is_not_overridden_by_env_file(
+def test_saved_key_overrides_process_environment_key(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    settings = FakeSettings()
+    """画面で保存した key はプロセスの環境変数より優先し、削除すると環境変数へ戻る。"""
+    monkeypatch.setenv(ENTERPRISE_AI_API_KEY_ENV, "sk-process")
+    settings = FakeSettings(oci_enterprise_ai_api_key="sk-process")
     store = make_store(tmp_path)
     store.load(settings)
-    make_client(settings, store).patch("/api/settings/model", json=PAYLOAD)
-    monkeypatch.setenv(ENTERPRISE_AI_API_KEY_ENV, "sk-process")
-    os.utime(tmp_path / "model-settings.json", ns=(1, 1))
+    client = make_client(settings, store)
 
-    store.reload_if_changed(settings)
+    client.patch("/api/settings/model", json=PAYLOAD)
+    data = client.get("/api/settings/model").json()["data"]
+    assert settings.oci_enterprise_ai_api_key == "sk-new"
+    assert data["settings"]["enterprise_ai"]["has_api_key"] is True
 
+    clear = {**PAYLOAD, "enterprise_ai": {**PAYLOAD["enterprise_ai"], "clear_api_key": True}}
+    cleared = client.patch("/api/settings/model", json=clear).json()["data"]
+    assert cleared["settings"]["enterprise_ai"]["has_api_key"] is True
+    client.get("/api/settings/model")
     assert settings.oci_enterprise_ai_api_key == "sk-process"
 
 
