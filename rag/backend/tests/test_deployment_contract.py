@@ -56,8 +56,11 @@ def test_backend_image_uses_gunicorn_uvicorn_worker() -> None:
     pyproject = (REPO_ROOT / "backend" / "pyproject.toml").read_text(encoding="utf-8")
     compose = (REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
 
-    assert '"gunicorn>=23,<24"' in pyproject
+    assert '"gunicorn>=26,<27"' in pyproject
     assert "exec uv run --no-sync gunicorn app.main:app" in dockerfile
+    # gunicorn 26 の control socket は既定で /run/user/<uid> に作られる。非 root の appuser では
+    # 作れない場所なので、使わない control interface は無効にする。
+    assert "--no-control-socket" in dockerfile
     assert "--worker-class uvicorn.workers.UvicornWorker" in dockerfile
     assert "--workers ${WEB_CONCURRENCY:-2}" in dockerfile
     assert "--timeout ${GUNICORN_TIMEOUT:-60}" in dockerfile
