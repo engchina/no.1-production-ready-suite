@@ -67,7 +67,6 @@ export const ja = {
   "settings.testResult.elapsed": "所要時間",
   "settings.testResult.checkedAt": "確認時刻",
   "settings.testResult.troubleshooting": "確認ポイント",
-  "settings.testResult.rawError": "実際のエラー詳細",
   "settings.testResult.errorType": "エラー種別",
   "common.api.timeout":
     "API の応答が {seconds} 秒以内に返りませんでした。バックエンドとデータベースの起動状態を確認して再試行してください。",
@@ -78,10 +77,7 @@ export const ja = {
   "settings.preview.actions": "{label} 操作",
   "settings.preview.env.copy": ".env をコピー",
   "settings.preview.json.copy": "JSON をコピー",
-  "settings.preview.copy.copied": "コピーしました",
   "settings.preview.copy.failed": "コピーできませんでした",
-  "settings.preview.secret.saved": "<保存済み secret>",
-  "settings.preview.secret.entered": "<入力済み secret>",
 
   "auth.status.checking": "認証状態を確認中…",
   "auth.status.error": "認証状態の確認に失敗しました。",
@@ -166,20 +162,6 @@ export const ja = {
   "command.hint.close": "閉じる",
 
   "settings.oci.subtitle": "OCI API キー認証情報を設定します。",
-  "settings.oci.auth.title": "OCI 認証設定",
-  "settings.oci.auth.cardTitle": "OCI 認証設定",
-  "settings.oci.auth.description":
-    "秘密鍵は画面へ貼り付けず、OCI config file の key_file 参照で管理します。",
-  "settings.oci.field.configFile": "OCI 設定ファイルのパス",
-  "settings.oci.field.configProfile": "OCI プロファイル",
-  "settings.oci.field.userOcid": "ユーザー OCID",
-  "settings.oci.field.fingerprint": "フィンガープリント",
-  "settings.oci.field.tenancyOcid": "テナンシ OCID",
-  "settings.oci.field.keyFile": "秘密鍵",
-  "settings.oci.field.region": "リージョン",
-  "settings.oci.placeholder.region": "選択してください",
-  "settings.oci.field.objectStorageRegion": "Object Storage リージョン",
-  "settings.oci.field.objectStorageNamespace": "Object Storage ネームスペース",
   "settings.parserAdapters.subtitle":
     "任意の文書 parser adapter の runtime 状態を確認します。",
   "settings.parserAdapters.overview.title": "Parser adapter runtime",
@@ -796,435 +778,23 @@ export const ja = {
   "settings.agentic.actions.unsaved": "未保存の変更があります。",
   "settings.agentic.loadError": "Agentic アダプター設定を取得できませんでした。",
   "settings.agentic.saveError": "Agentic アダプター設定を保存できませんでした。",
-  "settings.oci.required": "必須",
-  "settings.oci.helper.configFile":
-    "~/.oci/config 固定です。右のボタンで DEFAULT profile を読み取り、内容を反映します。",
-  "settings.oci.helper.configProfile": "DEFAULT 固定です。OCI config の DEFAULT profile を読み取ります。",
-  "settings.oci.helper.userOcid": "OCI config の user に相当するユーザー OCID。",
-  "settings.oci.helper.fingerprint": "OCI API キーの fingerprint。",
-  "settings.oci.helper.tenancyOcid": "OCI config の tenancy に相当するテナンシ OCID。",
-  "settings.oci.helper.keyFile":
-    "秘密鍵 PEM ファイルを選択すると ~/.oci/oci_api_key.pem に上書き保存します。パスは変更しません。",
-  "settings.oci.keyFile.missing":
-    "~/.oci/oci_api_key.pem が見つかりません。秘密鍵を選択すると、このパスに安全な権限で保存します。",
-  "settings.oci.privateKey.uploadCta": "`.pem` または `.key` ファイルをアップロード",
-  "settings.oci.privateKey.helpUpload":
-    "Oracle Cloud Infrastructure の秘密鍵ファイルをアップロードしてください。",
-  "settings.oci.privateKey.helpConfigured":
-    "秘密鍵はすでに設定済みです。差し替える場合は新しいファイルをアップロードしてください。",
-  "settings.oci.privateKey.configuredOnServer": "秘密鍵はサーバー側で設定済みです",
-  "settings.oci.privateKey.loaded": "秘密鍵を読み込みました",
-  "settings.oci.privateKey.path": "保存先: {path}",
-  "settings.oci.helper.region": "例: ap-tokyo-1 / ap-osaka-1 / us-chicago-1",
-  "settings.oci.helper.objectStorageRegion":
-    "アップロード保存先で指定する bucket のリージョン。例: ap-tokyo-1 / ap-osaka-1 / us-chicago-1",
-  "settings.oci.helper.objectStorageNamespace":
-    "取得ボタンで OCI Object Storage から取得します。手入力では変更できません。",
-  "settings.oci.configSample": "config ファイル例",
-  "settings.oci.configContent.title": "OCI config 内容",
-  "settings.oci.configContent.description":
-    "既存の config から user / fingerprint / tenancy / region / key_file を取り込めます。",
-  "settings.oci.configContent.input": "貼り付け内容",
-  "settings.oci.configContent.helper":
-    "~/.oci/config の対象 profile を貼り付けます。秘密鍵そのものは貼り付けないでください。",
-  "settings.oci.configContent.applyError": "有効な OCI config 項目を読み取れませんでした。",
-  "settings.oci.configContent.preview": "生成プレビュー",
-  "settings.oci.storage.title": "Object Storage",
-  "settings.oci.storage.description":
-    "アップロード保存先で使う Object Storage の namespace とリージョンを設定します。",
-  "settings.oci.actions.saveAuth": "OCI 設定を保存",
-  "settings.oci.actions.save": "保存",
-  "settings.oci.actions.saveAndTest": "保存してテスト",
-  "settings.oci.actions.saving": "保存中…",
-  "settings.oci.actions.saved": "保存しました",
-  "settings.oci.actions.test": "接続テスト",
-  "settings.oci.actions.testing": "テスト中…",
-  "settings.oci.actions.applyConfig": "config から反映",
-  "settings.oci.actions.applyingConfig": "読み込み中",
-  "settings.oci.actions.applied": "反映しました",
-  "settings.oci.actions.selectKeyFile": "秘密鍵を選択",
-  "settings.oci.actions.uploadingKeyFile": "アップロード中",
-  "settings.oci.actions.keyFileSelected": "上書きしました",
-  "settings.oci.actions.keyFileUploadFailed": "秘密鍵ファイルのアップロードに失敗しました。",
-  "settings.oci.actions.fetchNamespace": "取得",
-  "settings.oci.actions.fetchingNamespace": "取得中",
-  "settings.oci.actions.namespaceFetched": "取得しました",
-  "settings.oci.actions.namespaceFetchFailed": "namespace の取得に失敗しました。",
-  "settings.oci.message.saved": "OCI 認証設定を保存しました。",
-  "settings.oci.message.storageSaved": "Object Storage 設定を保存しました。",
-  "settings.oci.message.configImported": "OCI config を読み込みました。",
-  "settings.oci.message.keyUploaded": "秘密鍵ファイルをアップロードしました。",
-  "settings.oci.message.namespaceFetched": "Object Storage namespace を取得しました。",
-  "settings.oci.actions.copyConfig": "config をコピー",
-  "settings.oci.actions.copyEnv": ".env をコピー",
-  "settings.oci.actions.copied": "コピーしました",
-  "settings.oci.actions.copyFailed": "コピーできませんでした",
-  "settings.oci.status.title": "設定チェック",
-  "settings.oci.status.description": "必須値と形式を確認します。",
-  "settings.oci.status.complete": "{done}/{total} 入力済み",
-  "settings.oci.status.ok": "入力済み",
-  "settings.oci.status.missing": "未設定",
-  "settings.oci.status.invalid": "形式要確認",
-  "settings.oci.configTest.title": "OCI config テスト",
-  "settings.oci.configTest.checking": "OCI config を確認中…",
-  "settings.oci.configTest.success": "成功",
-  "settings.oci.configTest.failed": "要確認",
-  "settings.oci.configTest.error": "OCI config の保存または確認に失敗しました。",
-  "settings.oci.configTest.apiError":
-    "{message} バックエンドの起動状態と OCI 認証ファイルを確認して再試行してください。",
-  "settings.oci.configTest.missingField": "不足項目: {field}",
-  "settings.oci.configTest.missingKey": "秘密鍵ファイルが見つかりません。",
-  "settings.oci.configTest.stagesLabel": "確認段階",
-  "settings.oci.configTest.stage.config_format": "設定の形式",
-  "settings.oci.configTest.stage.key_file": "鍵の読み取り",
-  "settings.oci.configTest.stage.region": "リージョン到達",
-  "settings.oci.configTest.stage.authentication": "認証（API 応答）",
-  "settings.oci.configTest.stageStatus.success": "成功",
-  "settings.oci.configTest.stageStatus.failed": "失敗",
-  "settings.oci.configTest.stageStatus.skipped": "未実施",
-  "settings.oci.env.title": ".env プレビュー",
-  "settings.oci.env.description":
-    "保存時に backend/.env へ反映される OCI 共通設定です。",
-  "settings.oci.hint": "保存した設定は、AI分析やObject Storage接続に反映されます。接続テストはサーバーに保存済みの設定で OCI へ認証付きリクエストを送り、疎通を確認します。変更後は先に保存してください。",
-  "settings.oci.loading": "OCI 設定を読み込み中…",
-  "settings.oci.loadError": "OCI 設定を取得できませんでした。再試行してください。",
   "settings.draft.discardTitle": "変更を破棄しますか",
   "settings.draft.discardDescription": "保存されていない変更があります。移動すると編集内容は破棄されます。",
   "settings.draft.discardConfirm": "破棄して移動",
-  "settings.oci.configFileInput.aria": "OCI config ファイルを選択",
-  "settings.oci.keyFileInput.aria": "秘密鍵ファイルを選択",
-  "settings.oci.validation.required": "値を入力してください。",
-  "settings.oci.validation.invalidUserOcid":
-    "ユーザー OCID は ocid1.user. で始まる値を入力してください。",
-  "settings.oci.validation.invalidTenancyOcid":
-    "テナンシ OCID は ocid1.tenancy. で始まる値を入力してください。",
-  "settings.oci.validation.invalidFingerprint":
-    "fingerprint は 16 進数をコロン区切りで入力してください。",
-  "settings.oci.validation.invalidKeyFile": ".pem または .key ファイルを選択してください。",
-  "settings.oci.validation.invalidProfile": "プロファイル名に [ ] や改行は使用できません。",
   "settings.uploadStorage.subtitle":
     "ドキュメントアップロード時の原本保存先を local または OCI Object Storage から選択します。",
-  "settings.uploadStorage.loading": "アップロード保存先設定を読み込んでいます。",
-  "settings.uploadStorage.loadError": "アップロード保存先設定の取得に失敗しました。",
-  "settings.uploadStorage.saveError": "アップロード保存先設定の保存に失敗しました。",
-  "settings.uploadStorage.destination.title": "保存先",
-  "settings.uploadStorage.destination.description":
-    "アップロードされた PDF、画像、テキスト原本をどこへ保管するかを設定します。",
-  "settings.uploadStorage.field.backend": "アップロード原本の保存先",
-  "settings.uploadStorage.backend.local": "ローカルディレクトリ",
-  "settings.uploadStorage.backend.localDescription":
-    "バックエンドが稼働する環境の LOCAL_STORAGE_DIR 配下へ保存します。",
-  "settings.uploadStorage.backend.oci": "OCI Object Storage",
-  "settings.uploadStorage.backend.ociDescription":
-    "OCI 認証設定の namespace と指定 bucket へ保存します。",
-  "settings.uploadStorage.field.localStorageDir": "ローカル保存ディレクトリ",
-  "settings.uploadStorage.field.objectStorageRegion": "Object Storage リージョン",
-  "settings.uploadStorage.field.objectStorageNamespace": "Object Storage ネームスペース",
-  "settings.uploadStorage.field.objectStorageBucket": "Object Storage バケット",
-  "settings.uploadStorage.helper.localStorageDir":
-    "バックエンドプロセスから作成・書き込みできるディレクトリを指定します。",
-  "settings.uploadStorage.helper.objectStorageRegion":
-    "原本ファイルを保存する bucket のリージョン。OCI 認証設定の Object Storage リージョンと合わせます。",
-  "settings.uploadStorage.helper.objectStorageNamespace":
-    "OCI 認証設定で保存済みの Object Storage namespace を使用します。",
-  "settings.uploadStorage.helper.objectStorageBucket":
-    "Object Storage ネームスペースは OCI 認証設定の値を使用します。原本ファイルを保存する bucket 名を指定します。",
-  "settings.uploadStorage.actions.save": "保存",
-  "settings.uploadStorage.actions.saving": "保存中…",
-  "settings.uploadStorage.actions.saved": "保存しました",
-  "settings.uploadStorage.actions.openOciSettings": "OCI 認証設定を開く",
-  "settings.uploadStorage.env.title": ".env プレビュー",
-  "settings.uploadStorage.env.description":
-    "保存時に backend/.env へ反映されるアップロード保存先の値です。",
-  "settings.uploadStorage.env.copy": ".env をコピー",
-  "settings.uploadStorage.env.copied": "コピーしました",
-  "settings.uploadStorage.env.copyFailed": "コピーできませんでした",
-  "settings.uploadStorage.status.title": "保存先状態",
-  "settings.uploadStorage.status.description": "現在の保存先情報を確認します。",
-  "settings.uploadStorage.status.backend": "保存先",
-  "settings.uploadStorage.status.source": "反映先",
-  "settings.uploadStorage.status.maxUploadSize": "最大アップロードサイズ",
-  "settings.uploadStorage.status.localStorageDir": "ローカル保存先",
-  "settings.uploadStorage.status.objectStorage": "Object Storage",
-  "settings.uploadStorage.status.ociSettingsIncomplete":
-    "OCI Object Storage を使うには、リージョンとネームスペースの設定が必要です。",
-  "settings.uploadStorage.source.runtime": "backend/.env + 現在のプロセス設定",
-  "settings.uploadStorage.validation.required": "値を入力してください。",
-  "settings.uploadStorage.validation.localStorageDir":
-    "ローカル保存ディレクトリを入力してください。",
-  "settings.uploadStorage.validation.objectStorageRegion":
-    "OCI 認証設定で Object Storage リージョンを選択してください。",
-  "settings.uploadStorage.validation.objectStorageNamespace":
-    "OCI 認証設定で Object Storage ネームスペースを設定してください。",
-  "settings.uploadStorage.validation.objectStorageName":
-    "英数字、ハイフン、アンダースコア、ドットで入力してください。",
 
   "settings.model.subtitle":
     "OCI Enterprise AI の LLM カタログと OCI Generative AI（埋め込み/リランク）のモデルを設定します。",
-  "settings.model.loading": "モデル設定を読み込んでいます。",
-  "settings.model.loadError": "モデル設定の取得に失敗しました。",
-  "settings.model.saveError":
-    "モデル設定を保存できませんでした。入力内容とバックエンド接続を確認して再試行してください。",
-  "settings.model.saved": "モデル設定を保存しました。",
-  "settings.model.resetDone": "変更を元に戻しました。",
-  "settings.model.save": "保存",
-  "settings.model.reset": "元に戻す",
-  "settings.model.test.action": "テスト",
-  "settings.model.test.aria": "{model} をテスト",
-  "settings.model.test.ariaUnnamed": "モデル {number} をテスト",
-  "settings.model.test.result": "テスト結果",
-  "settings.model.test.troubleshooting": "確認ポイント",
-  "settings.model.test.rawError": "実際のエラー詳細",
-  "settings.model.test.errorType": "エラー種別",
-  "settings.model.test.elapsed": "所要時間",
-  "settings.model.test.details": "検証詳細",
-  "settings.model.test.failed":
-    "モデルテストに失敗しました。入力値とバックエンド接続を確認してください。",
-  "settings.model.test.apiFailed":
-    "モデルテスト API の呼び出しに失敗しました。バックエンドのログとネットワークを確認してください。",
-  "settings.model.test.noDetails": "詳細は返されませんでした。",
-  "settings.model.legacySecret.title": "旧 JSON に API Key が残っています",
-  "settings.model.legacySecret.description":
-    "原因: v1 の model-settings.json が secret を保存していました。復旧方法: この画面で保存すると API Key を backend/.env へ移し、JSON を secret のない v2 へ更新します。移行後は接続テストを実行してください。",
-  "settings.model.requiredInOci": "OCI 運用時必須",
-  "settings.model.fixed": "固定",
 
-  "settings.model.enterprise.title": "OCI Enterprise AI",
-  "settings.model.enterprise.description":
-    "回答生成と Vision/OCR 解析に使う Enterprise AI の接続情報を設定します。",
-  "settings.model.enterprise.saved": "OCI Enterprise AI 接続設定を保存しました。",
-  "settings.model.enterprise.endpoint": "Endpoint URL",
-  "settings.model.enterprise.endpointHelp":
-    "公式 docs の OpenAI-compatible base URL を指定します。Responses API path は /responses です。",
-  "settings.model.enterprise.endpointDocs": "公式ドキュメント（新しいタブで開く）",
-  "settings.model.enterprise.project": "Project OCID",
-  "settings.model.enterprise.projectHelp":
-    "OCI OpenAI-compatible API 呼び出しに必要な Generative AI project OCID。",
-  "settings.model.enterprise.apiKey": "API key",
-  "settings.model.enterprise.apiKeyHelp":
-    "OpenAI-compatible gateway の Bearer 認証で使います。保存先は backend/.env のみで、JSON や API 応答には含めません。",
-  "settings.model.enterprise.apiKeySaved": "保存済み",
-  "settings.model.enterprise.apiKeyNotSet": "未設定",
-  "settings.model.enterprise.apiKeyShow": "API key を表示",
-  "settings.model.enterprise.apiKeyHide": "API key を隠す",
-  "settings.model.enterprise.clearApiKey": "保存済み API key を削除する",
-  "settings.model.enterprise.models": "登録モデル",
-  "settings.model.enterprise.modelsDescription":
-    "回答生成と Vision/OCR 解析に使用するモデルを登録し、既定モデルを選択します。",
-  "settings.model.enterprise.modelsSaved": "登録モデルを保存しました。",
-  "settings.model.enterprise.addModel": "追加",
-  "settings.model.enterprise.default": "既定",
-  "settings.model.enterprise.modelId": "モデル ID",
-  "settings.model.enterprise.displayName": "表示名",
-  "settings.model.enterprise.vision": "Vision",
-  "settings.model.enterprise.removeModel": "モデルを削除",
-  "settings.model.enterprise.removeConfirm.title": "このモデルを削除しますか？",
-  "settings.model.enterprise.removeConfirm.description":
-    "モデル「{model}」を一覧から削除します。保存するまで確定しません。",
-  "settings.model.enterprise.removeConfirm.descriptionUnnamed":
-    "このモデルを一覧から削除します。保存するまで確定しません。",
-  "settings.model.enterprise.apiPath": "API パス",
-  "settings.model.enterprise.vlmInputMode": "VLM 入力方式",
-  "settings.model.enterprise.vlmInputModeHelp":
-    "文書を Enterprise AI Vision/OCR へ渡す搬送方式です。Parser adapter が先に解析した文書には使われません。",
-  "settings.model.enterprise.vlmInputMode.auto": "Auto",
-  "settings.model.enterprise.vlmInputMode.auto.description":
-    "画像は inline、PDF など非画像は Files API",
-  "settings.model.enterprise.vlmInputMode.filesApi": "Files API",
-  "settings.model.enterprise.vlmInputMode.filesApi.description":
-    "VLM 入力を明示的に /files へアップロード",
-  "settings.model.enterprise.vlmInputMode.inlineImage": "Inline image",
-  "settings.model.enterprise.vlmInputMode.inlineImage.description":
-    "画像だけ base64 data URL で送信",
-  "settings.model.enterprise.timeout": "タイムアウト（秒）",
-  "settings.model.enterprise.retries": "最大リトライ回数",
-  "settings.model.enterprise.advancedPayloadTitle": "カスタム gateway payload",
-  "settings.model.enterprise.advancedPayloadDescription":
-    "標準 payload と異なる独自 gateway の request body だけを調整します。",
-  "settings.model.enterprise.advancedPayloadConfigured": "設定あり",
-  "settings.model.enterprise.advancedPayloadStandard": "標準 payload",
-  "settings.model.enterprise.advancedPayloadNotice":
-    "OCI 公式の必須項目ではありません。独自 gateway / model deployment の request body が標準 payload と異なる場合のみ入力してください。",
-  "settings.model.enterprise.textPayloadTemplate": "回答生成 payload template",
-  "settings.model.enterprise.visionPayloadTemplate": "Vision/OCR payload template",
-  "settings.model.enterprise.payloadTemplateHelp":
-    "空欄の場合は公式 OpenAI-compatible endpoint 向けの標準 payload を使用します。",
 
-  "settings.model.genai.title": "OCI Generative AI",
-  "settings.model.genai.description":
-    "埋め込みとリランクのみ Generative AI の Cohere モデルを使います。",
-  "settings.model.genai.saved": "OCI Generative AI 設定を保存しました。",
-  "settings.model.genai.embeddingModel": "埋め込みモデル ID",
-  "settings.model.genai.embeddingDim": "Embedding 次元",
-  "settings.model.genai.embeddingDimHelp": "Cohere Embed v4 と Oracle 26ai のベクトル列に合わせます。",
-  "settings.model.genai.rerankModel": "リランクモデル ID",
 
-  "settings.model.placeholder.endpoint":
-    "https://inference.generativeai.us-chicago-1.oci.oraclecloud.com/openai/v1",
-  "settings.model.placeholder.project": "ocid1.generativeaiproject.oc1.us-chicago-1.xxxxxxxx",
-  "settings.model.placeholder.apiKey": "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-  "settings.model.placeholder.modelId": "enterprise-llm",
-  "settings.model.placeholder.displayName": "業務 NL2SQL 標準",
-  "settings.model.placeholder.apiPath": "/responses",
-  "settings.model.placeholder.textPayloadTemplate":
-    "{\"model\":\"${model}\",\"messages\":\"${messages}\",\"parameters\":\"${parameters}\"}",
-  "settings.model.placeholder.visionPayloadTemplate":
-    "{\"model\":\"${model}\",\"input\":{\"mime_type\":\"${mime_type}\",\"data_base64\":\"${data_base64}\"},\"response_format\":\"${response_format}\"}",
-  "settings.model.placeholder.embeddingModel": "cohere.embed-v4.0",
-  "settings.model.placeholder.rerankModel": "cohere.rerank-v4.0-fast",
 
-  "settings.model.validation.endpoint":
-    "Endpoint URL は http:// または https:// で始めてください。",
-  "settings.model.validation.project":
-    "Project OCID は ocid1.generativeaiproject. で始まる値を入力してください。",
-  "settings.model.validation.apiKey":
-    "API key 認証を使う場合は API key を入力してください。",
-  "settings.model.validation.path": "API パスは / または http(s):// で始めてください。",
-  "settings.model.validation.pathRequired": "API パスを入力してください。",
-  "settings.model.validation.modelRequired": "Enterprise AI のモデル ID を 1 件以上入力してください。",
-  "settings.model.validation.modelDuplicate": "Enterprise AI のモデル ID は重複できません。",
-  "settings.model.validation.defaultModel": "既定モデルを登録モデルから選択してください。",
-  "settings.model.validation.visionModel": "OCR 用に Vision 対応モデルを 1 件以上有効にしてください。",
-  "settings.model.validation.timeout": "タイムアウトは 0 より大きく 600 以下にしてください。",
-  "settings.model.validation.retries": "最大リトライ回数は 0 から 5 の範囲にしてください。",
-  "settings.model.validation.embeddingDim": "Embedding 次元は 1536 固定です。",
-  "settings.model.validation.payloadTemplate":
-    "Payload template は JSON object で入力してください。",
 
   "settings.database.subtitle": "Oracle 26ai 接続を設定します。",
   "settings.systemTables.subtitle":
     "NL2SQL 内部 schema、migration、保存領域の状態を確認・初期化します。",
   "settings.database.loading": "データベース設定を読み込んでいます。",
-  "settings.database.loadError": "データベース設定の取得に失敗しました。",
-  "settings.database.saveError": "データベース設定の保存に失敗しました。入力値と backend/.env の書き込み権限を確認してください。",
-  "settings.database.walletUploadError": "Wallet ZIP のアップロードに失敗しました。ZIP 形式とファイルサイズを確認してください。",
-  "settings.database.wallet.autoDownload.error":
-    "OCI から Wallet を取得できませんでした。OCI 認証、ADB OCID、IAM 権限を確認して再試行するか、Wallet ZIP を手動アップロードしてください。",
-  "settings.database.cardTitle": "データベース設定",
-  "settings.database.connection.title": "Oracle 26ai 接続",
-  "settings.database.connection.description":
-    "NL2SQL ドキュメントと VECTOR(1536, FLOAT32) チャンクを保存する Oracle Database 26ai の接続先。",
-  "settings.database.secrets.title": "認証情報",
-  "settings.database.secrets.description":
-    "secret はレスポンスに含めません。更新する場合だけ入力してください。",
-  "settings.database.field.user": "ユーザー名",
-  "settings.database.field.dbUser": "データベースユーザー",
-  "settings.database.field.dbPassword": "データベースパスワード",
-  "settings.database.field.connectionSecurity": "接続セキュリティ",
-  "settings.database.field.serviceDsn": "サービス名 / DSN",
-  "settings.database.field.directDsn": "接続 DSN",
-  "settings.database.field.walletDir": "Wallet ディレクトリ",
-  "settings.database.field.walletZip": "Wallet ZIP",
-  "settings.database.field.dsnService": "Wallet サービス名",
-  "settings.database.field.password": "パスワード",
-  "settings.database.field.walletPassword": "Wallet パスワード",
-  "settings.database.requiredMark": "必須",
-  "settings.database.helper.user": "Oracle 26ai に接続するアプリケーションユーザー。",
-  "settings.database.helper.dsnService":
-    "Wallet の tnsnames.ora から検出したサービス名を選択します。",
-  "settings.database.helper.dsnServiceManual":
-    "Wallet のサービス名を入力します。Wallet ZIP をアップロードすると候補から選べます。",
-  "settings.database.helper.directDsn":
-    "Walletless TLS では ADB の TCPS 接続文字列または host:port/service_name 形式を入力します。",
-  "settings.database.helper.walletDir":
-    "ORACLE_CLIENT_LIB_DIR/network/admin に固定されます。この画面からは変更できません。",
-  "settings.database.walletDir.missing":
-    "Wallet ディレクトリが見つかりません。Wallet ZIP を選択すると、この固定ディレクトリへ展開して作成します。",
-  "settings.database.helper.walletZip":
-    "ADB からダウンロードした Wallet ZIP を選択します。固定ディレクトリの内容を置き換えます。",
-  "settings.database.helper.passwordSaved":
-    "保存済みパスワードがあります。空欄のまま保存すると既存値を保持し、削除する場合は下のチェックボックスをオンにします。",
-  "settings.database.helper.passwordEmpty": "パスワード認証を使う場合のみ入力します。",
-  "settings.database.helper.passwordSavedCompact":
-    "空欄のまま保存すると既存のパスワードを保持します。",
-  "settings.database.helper.passwordRequired": "Oracle Database の接続パスワードを入力します。",
-  "settings.database.helper.walletPasswordSaved":
-    "保存済み Wallet パスワードがあります。空欄のまま保存すると既存値を保持し、削除する場合は下のチェックボックスをオンにします。",
-  "settings.database.helper.walletPasswordEmpty": "暗号化 Wallet を使う場合のみ入力します。",
-  "settings.database.placeholder.user": "nl2sql_app",
-  "settings.database.placeholder.dbUser": "admin",
-  "settings.database.placeholder.password": "******",
-  "settings.database.placeholder.passwordSaved": "********",
-  "settings.database.placeholder.serviceDsn": "DSN を選択してください",
-  "settings.database.placeholder.serviceDsnManual": "ragdb_high",
-  "settings.database.placeholder.directDsn": "adb.example.oraclecloud.com:1522/service_name",
-  "settings.database.placeholder.dsnService": "サービス名を選択",
-  "settings.database.placeholder.dsnServiceManual": "ragdb_high",
-  "settings.database.placeholder.walletDir": "/u01/aipoc/wallet",
-  "settings.database.placeholder.secret": "更新する場合のみ入力",
-  "settings.database.secrets.saved": "保存済み",
-  "settings.database.secrets.notSet": "未設定",
-  "settings.database.secrets.show": "DB パスワードを表示",
-  "settings.database.secrets.hide": "DB パスワードを隠す",
-  "settings.database.secrets.revealingPassword": "DB パスワードを取得中",
-  "settings.database.secrets.showWalletPassword": "Wallet パスワードを表示",
-  "settings.database.secrets.hideWalletPassword": "Wallet パスワードを隠す",
-  "settings.database.secrets.revealingWalletPassword": "Wallet パスワードを取得中",
-  "settings.database.secrets.revealError":
-    "保存済み DB パスワードの取得に失敗しました。入力値または保存状態を確認してください。",
-  "settings.database.secrets.clearPassword": "保存済みパスワードを削除する",
-  "settings.database.secrets.clearWalletPassword": "保存済み Wallet パスワードを削除する",
-  "settings.database.actions.save": "保存",
-  "settings.database.actions.saveDb": "DB設定を保存",
-  "settings.database.actions.saved": "保存しました",
-  "settings.database.actions.test": "接続テスト",
-  "settings.database.actions.testDb": "DB接続テスト",
-  "settings.database.actions.testing": "確認中…",
-  "settings.database.actions.selectWallet": "Wallet ZIP を選択",
-  "settings.database.actions.uploadingWallet": "アップロード中…",
-  "settings.database.actions.walletUploaded": "Wallet ZIP をアップロードしました: {fileName}",
-  "settings.database.wallet.autoDownload.pending":
-    "OCI から Wallet を取得し、サーバーへ安全に設定しています…",
-  "settings.database.wallet.autoDownload.retry": "OCI から再取得",
-  "settings.database.wallet.autoDownload.retryAria": "OCI から Wallet を再取得",
-  "settings.database.wallet.autoDownload.success":
-    "Oracle Wallet を OCI から取得し、サーバーへ設定しました。",
-  "settings.database.wallet.autoDownload.missingOcid":
-    "ADB OCID が未設定のため自動取得は行いません。ADB OCID を設定するか、下の領域から Wallet ZIP を手動アップロードしてください。",
-  "settings.database.connectionSecurity.walletMtlS": "Wallet mTLS",
-  "settings.database.connectionSecurity.walletMtlS.description": "mTLS 必須 ADB / private endpoint",
-  "settings.database.connectionSecurity.walletlessTls": "Walletless TLS",
-  "settings.database.connectionSecurity.walletlessTls.description": "mTLS 不要 ADB の一方向 TLS",
-  "settings.database.connectionSecurity.wallet_mtls.helper":
-    "Thin mode でも mTLS 必須 ADB へ接続できます。Wallet ZIP と Wallet サービス名を使用します。",
-  "settings.database.connectionSecurity.walletless_tls.helper":
-    "mTLS が不要な ADB だけで使用します。Wallet は渡さず、ACL で許可された接続元から直接 DSN へ接続します。",
-  "settings.database.walletlessTls.walletSkipped":
-    "Walletless TLS では Wallet を接続 kwargs に渡しません。mTLS 必須 ADB では Wallet mTLS を選択してください。",
-  "settings.database.walletInput.aria": "Wallet ZIP ファイルを選択",
-  "settings.database.wallet.title": "Wallet（ZIP）",
-  "settings.database.wallet.uploadCta": "`.zip` Wallet ファイルをアップロード",
-  "settings.database.wallet.help":
-    "Oracle Autonomous Database の Wallet ZIP をアップロードしてください。",
-  "settings.database.wallet.status": "Wallet状態",
-  "settings.database.wallet.statusConfigured": "設定済み",
-  "settings.database.wallet.statusNotConfigured": "未設定",
-  "settings.database.wallet.location": "Wallet保存先",
-  "settings.database.status.title": "接続状態",
-  "settings.database.status.description": "接続可否に必要な最小情報だけを表示します。",
-  "settings.database.status.authMethod": "認証方式",
-  "settings.database.status.wallet": "Wallet",
-  "settings.database.status.currentOwner": "現在の接続ユーザー",
-  "settings.database.status.accessibleSchemas": "参照可能な業務 schema",
-  "settings.database.status.schemaCount": "{count} schema",
-  "settings.database.status.schemaUnavailable": "取得できませんでした",
-  "settings.database.status.scopeBoundary":
-    "データベース接続ユーザーの権限がシステム上限です。実際の問い合わせ範囲は業務プロファイルで明示的に選択します。",
-  "settings.database.authMethod.password": "パスワード",
-  "settings.database.authMethod.wallet": "Wallet",
-  "settings.database.authMethod.passwordAndWallet": "パスワード + Wallet",
-  "settings.database.wallet.detected": "検出済み",
-  "settings.database.wallet.notDetected": "未検出",
-  "settings.database.env.description":
-    "保存時に backend/.env へ反映される Oracle 26ai 接続設定です。secret は伏せ字で表示します。",
-  "settings.database.test.meta":
-    "所要時間: {elapsed} ms / 確認時刻: {checkedAt}",
-  "settings.database.test.apiError":
-    "{message} バックエンドとデータベースの起動状態を確認して再試行してください。",
-  "settings.database.test.apiFailed":
-    "DB 接続テスト API の呼び出しに失敗しました。バックエンドとデータベースの起動状態を確認して再試行してください。",
-  "settings.database.hint":
-    "DB設定は `.env` の接続文字列に保存されます。Wallet と DSN が一致しているか確認してください。",
   "settings.database.selectAiCredential.title": "Select AI Credential",
   "settings.database.selectAiCredential.description":
     "Oracle DBMS_CLOUD_AI が OCI を呼び出すための署名鍵 Credential を、現在のデータベースユーザーに作成します。秘密鍵はブラウザへ返しません。",
@@ -1248,7 +818,6 @@ export const ja = {
   "settings.database.selectAiCredential.missing.keyEncrypted": "非暗号化の秘密鍵",
   "settings.database.selectAiCredential.missing.keyInvalid": "有効な PEM 秘密鍵",
   "settings.database.selectAiCredential.missing.unknown": "OCI 認証設定",
-  "settings.database.selectAiCredential.action.openOciSettings": "OCI 認証設定を開く",
   "settings.database.selectAiCredential.action.refresh": "状態を再取得",
   "settings.database.selectAiCredential.action.create": "Credential を作成",
   "settings.database.selectAiCredential.action.recreate": "Credential を再作成",
@@ -1262,59 +831,7 @@ export const ja = {
     "Select AI Credential の状態を取得できませんでした。データベース接続を確認して再試行してください。",
   "settings.database.selectAiCredential.error.change":
     "Select AI Credential を変更できませんでした。OCI 認証設定とデータベース権限を確認してください。",
-  "settings.database.validation.required": "値を入力してください。",
-  "settings.database.validation.passwordRequired":
-    "DB設定を保存するにはデータベースパスワードを入力してください。",
-  "settings.database.validation.invalidWalletZip":
-    "ZIP 形式の Wallet ファイルを選択してください。",
 
-  "settings.adb.title": "Autonomous Database 管理",
-  "settings.adb.description":
-    "OCI Autonomous Database の情報取得・起動・停止を行います。リージョンと ADB OCID を指定してください。",
-  "settings.adb.field.region": "リージョン",
-  "settings.adb.field.ocid": "ADB OCID",
-  "settings.adb.field.displayName": "表示名",
-  "settings.adb.field.dbName": "DB 名",
-  "settings.adb.field.status": "状態",
-  "settings.adb.field.cpuCoreCount": "CPU コア数",
-  "settings.adb.field.storage": "ストレージ (TB)",
-  "settings.adb.placeholder.region": "ap-osaka-1",
-  "settings.adb.placeholder.ocid": "ocid1.autonomousdatabase.oc1..",
-  "settings.adb.placeholder.ocidEmpty": "ADB OCID が設定されていません（backend/.env で設定）",
-  "settings.adb.helper.ocidReadonly":
-    "ADB OCID は backend/.env(ORACLE_ADB_OCID)を正本とする読み取り専用項目です。",
-  "settings.adb.action.refresh": "情報を再取得",
-  "settings.adb.action.start": "起動",
-  "settings.adb.action.starting": "起動中…",
-  "settings.adb.action.stop": "停止",
-  "settings.adb.action.stopping": "停止中…",
-  "settings.adb.statusUnknown": "不明",
-  "settings.adb.validation.ocidRequired": "ADB OCID を入力してください。",
-  "settings.adb.operationResult.title": "操作履歴",
-  "settings.adb.notify.infoOk": "データベース情報を取得しました。",
-  "settings.adb.notify.alreadyAvailable": "データベースは既に起動しています。",
-  "settings.adb.notify.alreadyStopped": "データベースは既に停止しています。",
-  "settings.adb.notify.infoFailed":
-    "ADB 情報を取得できませんでした。OCI 認証、リージョン、ADB OCID を確認して再試行してください。",
-  "settings.adb.notify.actionFailed": "ADB の操作に失敗しました。",
-  "settings.adb.operational.lifecycle": "OCI ADB",
-  "settings.adb.lifecycle.AVAILABLE": "起動済み",
-  "settings.adb.lifecycle.STARTING": "起動中",
-  "settings.adb.lifecycle.STOPPING": "停止中",
-  "settings.adb.lifecycle.STOPPED": "停止済み",
-  "settings.adb.lifecycle.UNAVAILABLE": "利用不可",
-  "settings.adb.lifecycle.PROVISIONING": "プロビジョニング中",
-  "settings.adb.lifecycle.TERMINATING": "削除中",
-  "settings.adb.lifecycle.TERMINATED": "削除済み",
-  "settings.adb.lifecycle.FAILED": "失敗",
-  "settings.adb.lifecycle.UPDATING": "更新中",
-  "settings.adb.lifecycle.RESTORING": "復元中",
-  "settings.adb.lifecycle.BACKUP_IN_PROGRESS": "バックアップ中",
-  "settings.adb.lifecycle.MAINTENANCE_IN_PROGRESS": "メンテナンス中",
-  "settings.adb.lifecycle.ROLE_CHANGE_IN_PROGRESS": "ロール変更中",
-  "settings.adb.lifecycle.UPGRADING": "アップグレード中",
-  "settings.adb.lifecycle.INACCESSIBLE": "アクセス不可",
-  "settings.adb.lifecycle.STANDBY": "スタンバイ",
 
   "fileList.subtitle": "取込、chunking、embedding、Oracle 26ai 索引の状態を確認します。",
   "fileList.searchPlaceholder": "ファイル名で検索",

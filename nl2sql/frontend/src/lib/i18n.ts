@@ -170,8 +170,6 @@ const nl2sqlJa = {
     "一度に選択できるファイルは 1 件です。{formats} ファイルを 1 件だけ選択してください。",
   "common.fileDropzone.error.unsupported":
     "このファイル形式は使用できません。{formats} ファイルを選択してください。",
-  "settings.oci.privateKey.replaceCta": "秘密鍵ファイルを差し替える",
-  "settings.database.wallet.replaceCta": "Wallet ZIP を差し替える",
   "qualityEvaluation.progress.processing": "SQL生成評価を実行しています",
 
   "security.common.loading": "セキュリティ設定を読み込んでいます。",
@@ -2729,9 +2727,6 @@ const nl2sqlJa = {
   "settings.database.systemTables.recreate.sectionTitle": "破壊的な再作成",
   "settings.database.systemTables.recreate.sectionDescription":
     "NL2SQL の中核データを削除して migration を最初から適用します。削除したデータは復元できません。",
-  "settings.database.systemTables.recreate.title": "システムテーブルをすべて再作成しますか",
-  "settings.database.systemTables.recreate.description":
-    "削除: Profile、オントロジー、schema catalog、履歴・評価・学習・状態データ。保持: 認証/RBAC/DeepSec、Oracle 接続設定、ユーザー業務表、旧 snapshot、Feedback Vector。削除した中核データは復元できません。",
   "dbGate.setupRequired.message":
     "データベースへの接続は確認できましたが、NL2SQL のシステムテーブルが初期化されていません。システム設定の「システムテーブル」から作成・更新してください。",
 
