@@ -286,7 +286,9 @@ for (const viewport of [
 
     await page.goto("/settings/services");
 
-    await page.getByRole("button", { name: "Docling ログ" }).click();
+    // ログは行の RowActionMenu に入っている（#158）。
+    await page.getByRole("button", { name: "Docling の操作" }).click();
+    await page.getByRole("menuitem", { name: "ログ" }).click();
     await expect(page.getByText("Docling のログ")).toBeVisible();
     await expect(page.getByText("docker compose logs / 最新 200 行")).toBeVisible();
     await expect(page.getByText("parser-docling boot complete")).toBeVisible();
@@ -313,6 +315,10 @@ test("制御無効時(prod)は起動/停止ボタンが disabled", async ({ page
   await expect(
     page.getByRole("button", { name: "Office→PDF 停止" })
   ).toBeDisabled();
+  // メニュー内のビルド / 削除も無効。
+  await page.getByRole("button", { name: "Docling の操作" }).click();
+  await expect(page.getByRole("menuitem", { name: "ビルド" })).toBeDisabled();
+  await expect(page.getByRole("menuitem", { name: "削除" })).toBeDisabled();
 });
 
 test("dev モードは docker バッジと有効化された制御を表示する", async ({ page }) => {
@@ -334,18 +340,21 @@ test("dev モードは docker バッジと有効化された制御を表示す�
   ).toBeEnabled();
 });
 
-test("各サービスにビルドとコンテナ削除のボタンがあり操作できる", async ({ page }) => {
+test("各サービスの操作メニューからビルドとコンテナ削除を実行できる", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
   await mockServices(page, { controlEnabled: true, deploymentMode: "dev" });
 
   await page.goto("/settings/services");
 
   // ビルドは確認なしで実行 → トースト。
-  await page.getByRole("button", { name: "Docling ビルド" }).click();
+  await page.getByRole("button", { name: "Docling の操作" }).click();
+  await page.getByRole("menuitem", { name: "ビルド" }).click();
   await expect(page.getByText("Docling のイメージをビルドしました。")).toBeVisible();
 
   // 削除は破壊的なので確認ダイアログを経て実行 → トースト。
-  await page.getByRole("button", { name: "Docling 削除" }).click();
+  await page.getByRole("button", { name: "Docling の操作" }).click();
+  await page.getByRole("menuitem", { name: "削除" }).click();
+  await expect(page.getByRole("heading", { name: "コンテナを削除しますか?" })).toBeVisible();
   await page.getByRole("button", { name: "削除する" }).click();
   await expect(page.getByText("Docling のコンテナを削除しました。")).toBeVisible();
 });
@@ -382,6 +391,9 @@ test("制御有効時は確認ダイアログを経て停止できる", async ({
   await expect(page.getByRole("heading", { name: "サービスを停止しますか?" })).toBeVisible();
   await page.getByRole("button", { name: "停止する" }).click();
   await expect(page.getByText("Office→PDF を停止しました。")).toBeVisible();
+  // 停止後は行の主操作が「起動」に切り替わる。
+  await expect(page.getByRole("button", { name: "Office→PDF 起動" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Office→PDF 停止" })).toHaveCount(0);
 });
 
 test("制御有効時は確認なしで起動できる", async ({ page }) => {
@@ -392,7 +404,66 @@ test("制御有効時は確認なしで起動できる", async ({ page }) => {
 
   await page.getByRole("button", { name: "Docling 起動" }).click();
   await expect(page.getByText("Docling を起動しました。")).toBeVisible();
+  // 起動後は行の主操作が「停止」に切り替わる。
+  await expect(page.getByRole("button", { name: "Docling 停止" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Docling 起動" })).toHaveCount(0);
 });
+
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 760 },
+  { name: "mobile", width: 375, height: 812 },
+]) {
+  test(`各行は状態に応じた主操作 1 つと操作メニュー 1 つだけを出す (${viewport.name})`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await mockServices(page, { controlEnabled: true, deploymentMode: "dev" });
+
+    await page.goto("/settings/services");
+    await expect(page.getByRole("heading", { name: "マイクロサービス" })).toBeVisible();
+
+    const expected: Record<string, "起動" | "停止" | null> = {
+      "preprocess-office-to-pdf": "停止",
+      "parser-docling": "起動",
+      "parser-asr": "起動",
+      "parser-oci-genai-vision": "起動",
+      "parser-oci-document-understanding": "起動",
+      // backend 内処理の段は操作を出さない。
+      "pipeline-chunking": null,
+      "pipeline-retrieval": null,
+    };
+    for (const [serviceId, primary] of Object.entries(expected)) {
+      const row = page.getByTestId(`service-row-${serviceId}`);
+      await expect(row).toBeVisible();
+      const buttons = row.getByRole("button");
+      if (primary === null) {
+        await expect(buttons).toHaveCount(0);
+        continue;
+      }
+      // 主操作のボタン + メニューのトリガーの 2 個だけ。
+      await expect(buttons).toHaveCount(2);
+      await expect(row.locator('[aria-haspopup="menu"]')).toHaveCount(1);
+      await expect(row.getByTestId(`service-primary-action-${serviceId}`)).toHaveText(primary);
+      for (const moved of ["ログ", "ビルド", "削除"]) {
+        await expect(row.getByRole("button", { name: moved, exact: true })).toHaveCount(0);
+      }
+    }
+    await expectNoHorizontalOverflow(page);
+
+    // メニューには ログ / ビルド / 削除（danger）が入る。
+    await page.getByRole("button", { name: "Docling の操作" }).click();
+    const menu = page.getByRole("menu");
+    await expect(menu.getByRole("menuitem")).toHaveText(["ログ", "ビルド", "削除"]);
+    await expect(menu.getByRole("menuitem", { name: "削除" })).toHaveAttribute(
+      "data-entity-action-tone",
+      "danger"
+    );
+    await expectNoHorizontalOverflow(page);
+    await page.keyboard.press("Escape");
+    await expect(menu).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Docling の操作" })).toBeFocused();
+  });
+}
 
 test("取得に失敗したら再試行できる", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
