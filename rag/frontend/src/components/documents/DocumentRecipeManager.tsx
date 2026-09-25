@@ -721,7 +721,7 @@ function RecipeComparison({
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
                 placeholder={t("documents.experiment.compare.placeholder")}
-                className="mt-1 h-10 w-full rounded-md border border-border bg-surface px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+                className="mt-1 h-10 w-full rounded-md border border-border-control bg-surface px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
                 onKeyDown={(event) => {
                   if (event.key === "Enter") void run();
                 }}

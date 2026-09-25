@@ -21,6 +21,9 @@ import {
   StatusBadge,
   Tabs,
   ContentActionBar,
+  TimedLoadingState,
+  type ProcessingActivityIcon,
+  type ProcessingPlacement,
 } from "@engchina/production-ready-ui";
 
 import { DialogOverlayPortal } from "@/components/ui/dialog-overlay";
@@ -36,11 +39,6 @@ import {
   type EntityAction,
   type EntityActionTone,
 } from "@/components/ObjectActions";
-import {
-  TimedLoadingState,
-  type ProcessingActivityIcon,
-  type ProcessingPlacement,
-} from "@/components/ProcessingState";
 import { FixedSplitPane } from "@/components/layout/FixedSplitPane";
 import { ErrorState } from "@/components/StateViews";
 import { IdentifierText } from "@/components/IdentifierText";
