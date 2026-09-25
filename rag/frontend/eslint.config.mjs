@@ -46,7 +46,10 @@ export default [
     },
     rules: {
       ...tsPlugin.configs.recommended.rules,
-      ...reactHooks.configs.recommended.rules,
+      // react-hooks 7 の recommended は React Compiler 系のルール（set-state-in-effect 等）を含む。
+      // 既存コードへの適用は別途判断するため、v5 と同じ 2 ルールに絞る（#88 / #90 の依存更新）。
+      "react-hooks/rules-of-hooks": "error",
+      "react-hooks/exhaustive-deps": "warn",
       "no-undef": "off",
       "no-unused-vars": "off",
       "@typescript-eslint/no-unused-vars": ["warn", { argsIgnorePattern: "^_" }],
