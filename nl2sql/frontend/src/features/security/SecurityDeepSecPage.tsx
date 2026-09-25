@@ -16,6 +16,7 @@ import {
   RequiredBadge,
   useConfirm,
   BulkSelectionActions,
+  ProcessingIndicator,
 } from "@engchina/production-ready-ui";
 import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -38,7 +39,6 @@ import { ListPlus,
 
 import { PageHeaderStatusBadge } from "@/components/PageHeaderStatusBadge";
 import { DbObjectSearchOwnerFields } from "@/components/DbObjectFilterFields";
-import { ProcessingIndicator } from "@/components/ProcessingState";
 import { ErrorState } from "@/components/StateViews";
 import { PageNotice } from "@/components/page-notice";
 import { FieldLabel, FieldLegend } from "@/components/ui/required-field";

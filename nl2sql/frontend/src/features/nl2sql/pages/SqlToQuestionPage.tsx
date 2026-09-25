@@ -10,9 +10,10 @@ import {
   FormStatus,
   Skeleton,
   PageBody,
+  ProcessingIndicator,
+  TimedLoadingState,
 } from "@engchina/production-ready-ui";
 
-import { ProcessingIndicator, TimedLoadingState } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";
 import { FieldLabel } from "@/components/ui/required-field";
 import { apiGet, apiPost, isAbortError } from "@/lib/api";

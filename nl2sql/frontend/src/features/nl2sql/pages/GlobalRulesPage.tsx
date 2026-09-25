@@ -11,9 +11,9 @@ import {
   StatusBadge,
   PageHeader,
   PageBody,
+  ProcessingIndicator,
 } from "@engchina/production-ready-ui";
 
-import { ProcessingIndicator } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";
 import { FileDropzone } from "@/components/ui/file-dropzone";
 import { apiFetch, apiGet, isAbortError } from "@/lib/api";
