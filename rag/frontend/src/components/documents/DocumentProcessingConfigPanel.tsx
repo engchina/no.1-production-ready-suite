@@ -22,6 +22,7 @@ import {
   type PreprocessProfileName,
 } from "@/lib/api";
 import { t, type I18nKey } from "@/lib/i18n";
+import { useLeaveGuard } from "@/lib/leave-guard";
 import {
   findParserCapability,
   formatSupportedFormats,
@@ -242,6 +243,8 @@ export function DocumentProcessingConfigPanel({
   }, [configs]);
 
   const dirty = configs ? JSON.stringify(form) !== JSON.stringify(configs.processing) : false;
+  // レシピの未保存の上書き設定があるときだけ離脱を確認する。
+  useLeaveGuard(dirty);
   const overrideCount = EDITED_FIELDS.filter((field) => form[field] !== null).length;
   const stages = useMemo(
     () => (configs ? stagesFor(form, configs.effective) : []),

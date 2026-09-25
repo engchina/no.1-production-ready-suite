@@ -5,6 +5,7 @@ import { createContext, useContext, type ReactNode } from "react";
 
 import { api, type AuthStatus, type AuthUser, type LoginRequestBody } from "./api";
 import { queryKeys } from "./queries";
+import { bindWorkspaceOwner, clearWorkspace } from "./workspace-state";
 
 interface AuthContextValue {
   status: AuthStatus | null;
@@ -42,6 +43,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logoutMutation = useMutation({
     mutationFn: api.logout,
     onSuccess: (status) => {
+      // 作業状態の一時保存は logout で消す（workspace-state.md）。
+      clearWorkspace();
       queryClient.setQueryData(queryKeys.authStatus, status);
       queryClient.invalidateQueries({ queryKey: ["dashboard"] });
       queryClient.invalidateQueries({ queryKey: ["documents"] });
@@ -51,6 +54,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const status = query.data ?? null;
   const authRequired = status?.auth_required ?? true;
   const isAuthenticated = Boolean(status?.authenticated) || authRequired === false;
+  // 画面が一時保存を読む前に、今のユーザーへ結び付ける（別ユーザーの下書きは消す）。
+  // 冪等な storage 操作なので render 中に呼んでよい。
+  if (status && isAuthenticated) bindWorkspaceOwner(status.user?.id ?? "");
 
   return (
     <AuthContext.Provider

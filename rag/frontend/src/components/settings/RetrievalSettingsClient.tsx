@@ -26,6 +26,7 @@ import {
   type RetrievalStrategyStatusData,
   type TextSearchTokenizerName,
 } from "@/lib/api";
+import { useLeaveGuard } from "@/lib/leave-guard";
 import { t, type I18nKey } from "@/lib/i18n";
 import { useRetrievalSettings, useUpdateRetrievalSettings } from "@/lib/queries";
 import { cn } from "@/lib/utils";
@@ -69,6 +70,11 @@ function formFromSettings(settings: RetrievalSettingsData): RetrievalForm {
 function isDirty(form: RetrievalForm, settings: RetrievalSettingsData): boolean {
   // legacy 読み替え中は保存で新形式へ移行するため、同値でも保存可能にする。
   if (settings.legacy_strategy) return true;
+  return formChanged(form, settings);
+}
+
+/** 利用者が選択を変えたか（離脱ガード用。legacy の移行保存だけでは確認しない）。 */
+function formChanged(form: RetrievalForm, settings: RetrievalSettingsData): boolean {
   const base = formFromSettings(settings);
   return (Object.keys(base) as (keyof RetrievalForm)[]).some((key) => form[key] !== base[key]);
 }
@@ -85,6 +91,9 @@ export function RetrievalSettingsClient() {
       setForm(formFromSettings(query.data));
     }
   }, [query.data, save.isPending]);
+
+  // 未保存の選択があるときだけ、サイドナビ・内部リンク・再読込での離脱を確認する。
+  useLeaveGuard(Boolean(query.data && form && formChanged(form, query.data)));
 
   if (query.isPending) {
     return (

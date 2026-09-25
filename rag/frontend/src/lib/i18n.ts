@@ -33,6 +33,11 @@ export const ja = {
   "common.undo": "元に戻す",
   "common.retry": "再試行",
   "common.skipToMain": "本文へスキップ",
+  // 未保存変更の離脱ガード（platform ux-contracts/workspace-state.md）
+  "common.leaveGuard.title": "変更を破棄しますか",
+  "common.leaveGuard.description":
+    "保存されていない変更があります。移動すると編集内容は破棄されます。",
+  "common.leaveGuard.confirm": "破棄して移動",
   "common.cardError.title": "この項目を表示できません",
   "common.cardError.titleWithLabel": "「{label}」を表示できません",
   "common.cardError.description":
@@ -1353,6 +1358,11 @@ export const ja = {
   "businessViews.domainKeywords.suggestError": "キーワード候補を生成できませんでした。",
   "businessViews.domainKeywords.noCandidates": "追加できる候補はありません。",
   "businessViews.domainKeywords.candidateStats": "出現 {frequency} 回 / {documents} 文書",
+  "businessViews.leaveGuard.title": "保存していない変更があります",
+  "businessViews.leaveGuard.description":
+    "移動しても、このタブで業務ビューに戻れば下書きから再開できます。保存するまで検索・回答には反映されません。",
+  "businessViews.leaveGuard.confirm": "移動する",
+  "businessViews.draftRestored": "保存していない下書きを復元しました。保存すると反映されます。",
   "businessViews.subtitle":
     "複数の知識ベースを業務視点で束ね、業務ごとに検索・回答方針を設定します。",
   "businessViews.create.title": "業務ビューを作成",

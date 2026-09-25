@@ -22,6 +22,7 @@ import {
   type GroundingSettingsData,
   type PostRetrievalPipelineName,
 } from "@/lib/api";
+import { useLeaveGuard } from "@/lib/leave-guard";
 import { t, type I18nKey } from "@/lib/i18n";
 import { useGroundingSettings, useUpdateGroundingSettings } from "@/lib/queries";
 import { cn } from "@/lib/utils";
@@ -86,6 +87,9 @@ export function GroundingSettingsClient() {
       setForm(formFromSettings(query.data));
     }
   }, [query.data, form]);
+
+  // 未保存の選択があるときだけ、サイドナビ・内部リンク・再読込での離脱を確認する。
+  useLeaveGuard(Boolean(query.data && form && isDirty(form, query.data)));
 
   if (query.isPending) {
     return (

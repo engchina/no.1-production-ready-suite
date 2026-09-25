@@ -29,6 +29,7 @@ import {
 } from "@/lib/api";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
+import { useLeaveGuard } from "@/lib/leave-guard";
 import {
   useArchiveKnowledgeBase,
   useCreateKnowledgeBase,
@@ -36,12 +37,32 @@ import {
 } from "@/lib/queries";
 import { APP_ROUTES } from "@/lib/routes";
 import { toast } from "@/lib/toast";
+import { useWorkspaceState } from "@/lib/workspace-state";
 import {
   KnowledgeBaseStatusPill,
   knowledgeBaseStatusLabel,
 } from "./KnowledgeBaseStatusPill";
 
 const LIMIT = 20;
+
+interface KnowledgeBaseListView {
+  filter: KnowledgeBaseStatus | "ALL";
+  q: string;
+  offset: number;
+}
+const INITIAL_VIEW: KnowledgeBaseListView = { filter: "ACTIVE", q: "", offset: 0 };
+
+function isKnowledgeBaseListView(value: unknown): value is KnowledgeBaseListView {
+  const view = value as KnowledgeBaseListView;
+  return (
+    typeof view === "object" &&
+    view !== null &&
+    (FILTERS as unknown[]).includes(view.filter) &&
+    typeof view.q === "string" &&
+    Number.isInteger(view.offset) &&
+    view.offset >= 0
+  );
+}
 const FILTERS: (KnowledgeBaseStatus | "ALL")[] = ["ALL", "ACTIVE", "ARCHIVED"];
 const NAME_ERROR_ID = "knowledge-base-name-error";
 
@@ -49,10 +70,13 @@ const NAME_ERROR_ID = "knowledge-base-name-error";
 export function KnowledgeBaseManagementClient() {
   const confirm = useConfirm();
   const navigate = useNavigate();
-  const [filter, setFilter] = useState<KnowledgeBaseStatus | "ALL">("ACTIVE");
-  const [search, setSearch] = useState("");
-  const [q, setQ] = useState("");
-  const [offset, setOffset] = useState(0);
+  // 絞り込み・検索・ページは、ページを行き来しても再読込しても残す（workspace-state.md）。
+  const [view, setView] = useWorkspaceState("knowledgeBases.view", INITIAL_VIEW, isKnowledgeBaseListView);
+  const { filter, q, offset } = view;
+  const [search, setSearch] = useState(q);
+  const setFilter = (next: KnowledgeBaseStatus | "ALL") => setView((current) => ({ ...current, filter: next }));
+  const setQ = (next: string) => setView((current) => ({ ...current, q: next }));
+  const setOffset = (next: number) => setView((current) => ({ ...current, offset: next }));
 
   const status = filter === "ALL" ? undefined : filter;
   const query = useKnowledgeBases({ status, q: q || undefined, limit: LIMIT, offset });
@@ -201,6 +225,8 @@ function KnowledgeBaseCreateForm({ onCreated }: { onCreated: (id: string) => voi
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [touched, setTouched] = useState(false);
+  // 作成前の入力があるときだけ離脱を確認する（作成成功で入力は空に戻る）。
+  useLeaveGuard(Boolean(name.trim() || description.trim()));
 
   const nameError = touched ? validateKnowledgeBaseName(name) : null;
 
