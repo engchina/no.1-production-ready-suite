@@ -11,6 +11,7 @@ import {
   PageBody,
   useConfirm,
   BulkSelectionActions,
+  ProcessingIndicator,
 } from "@engchina/production-ready-ui";
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -27,7 +28,6 @@ import { useSearchParams } from "react-router-dom";
 
 
 
-import { ProcessingIndicator } from "@/components/ProcessingState";
 import { ErrorState, LoadingState } from "@/components/StateViews";
 import { usePageNotice, PageNotice } from "@/components/page-notice";
 import { DisclosureChevron } from "@/components/ui/disclosure-chevron";

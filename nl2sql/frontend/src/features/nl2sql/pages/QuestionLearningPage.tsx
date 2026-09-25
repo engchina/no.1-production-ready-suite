@@ -15,6 +15,7 @@ import {
   PageBody,
   useConfirm,
   BulkSelectionActions,
+  ProcessingIndicator,
 } from "@engchina/production-ready-ui";
 import {
   useEffect,
@@ -40,7 +41,6 @@ import { useSearchParams } from "react-router-dom";
 
 import { RowActionMenu, type EntityAction } from "@/components/ObjectActions";
 import { PageHeaderStatusBadge } from "@/components/PageHeaderStatusBadge";
-import { ProcessingIndicator } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";
 import { useUnsavedChangesGuard } from "@/lib/useUnsavedChangesGuard";
 import { FileDropzone } from "@/components/ui/file-dropzone";

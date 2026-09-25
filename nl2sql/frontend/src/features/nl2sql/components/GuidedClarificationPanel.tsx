@@ -6,9 +6,9 @@ import {
   Button,
   StatusBadge,
   FieldError,
+  ProcessingIndicator,
 } from "@engchina/production-ready-ui";
 
-import { ProcessingIndicator } from "@/components/ProcessingState";
 import { isAbortError } from "@/lib/api";
 import { t } from "@/lib/i18n";
 

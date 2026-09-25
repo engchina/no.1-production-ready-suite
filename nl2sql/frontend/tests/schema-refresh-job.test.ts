@@ -134,7 +134,7 @@ test("all ten DB refresh routes use the shared header and workspace feedback", (
 test("shared schema feedback limits live announcements to the phase badge", () => {
   const feedback = source("../src/features/nl2sql/components/SchemaRefreshFeedback.tsx");
   const header = source("../src/components/PageHeaderStatusBadge.tsx");
-  const processing = source("../src/components/ProcessingState.tsx");
+  const processing = source("../../../platform/packages/ui/src/components/feedback/processing-state.tsx");
 
   assert.match(header, /role="status"[\s\S]{0,80}aria-live="polite"/u);
   assert.match(header, /<span aria-hidden="true">[\s\S]{0,120}className="sr-only"/u);

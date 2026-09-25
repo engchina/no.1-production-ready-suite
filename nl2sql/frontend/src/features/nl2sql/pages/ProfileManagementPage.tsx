@@ -27,13 +27,13 @@ import {
   type SelectFieldOption,
   BulkSelectionActions,
   ClearActionButton,
+  ProcessingIndicator,
 } from "@engchina/production-ready-ui";
 import { ErrorState } from "@/components/StateViews";
 import { IdentifierText } from "@/components/IdentifierText";
 
 import { ObjectActionBar } from "@/components/ObjectActions";
 import { PageHeaderStatusBadge } from "@/components/PageHeaderStatusBadge";
-import { ProcessingIndicator } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";
 import { FieldLabel } from "@/components/ui/required-field";
 import { ApiError, apiDelete, apiGet, apiPatch, apiPost, isTimeoutError } from "@/lib/api";

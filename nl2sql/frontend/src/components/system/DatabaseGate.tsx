@@ -2,9 +2,8 @@ import { useEffect, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "react-router-dom";
 
-import { Banner, PageBody } from "@engchina/production-ready-ui";
+import { Banner, PageBody, TimedLoadingState } from "@engchina/production-ready-ui";
 
-import { TimedLoadingState } from "@/components/ProcessingState";
 import { DatabaseUnavailableNotice, type DatabaseNoticeStatus } from "@/components/system/DatabaseUnavailableNotice";
 import {
   DATABASE_UNAVAILABLE_EVENT,

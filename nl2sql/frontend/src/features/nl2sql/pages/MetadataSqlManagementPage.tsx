@@ -19,10 +19,10 @@ import {
   PageBody,
   BulkSelectionActions,
   ContentActionBar,
+  ProcessingIndicator,
 } from "@engchina/production-ready-ui";
 
 
-import { ProcessingIndicator } from "@/components/ProcessingState";
 import { PageNotice } from "@/components/page-notice";
 import { ErrorState } from "@/components/StateViews";
 import { IdentifierText } from "@/components/IdentifierText";
