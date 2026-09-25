@@ -1,0 +1,26 @@
+[project]
+name = "parser-asr-service"
+version = "0.1.0"
+description = "parser microservice: 音声/動画の文字起こし(faster-whisper, GPU、外部 SaaS 非使用)"
+requires-python = ">=3.12"
+dependencies = [
+    "rag-parser-core[service]",
+    "faster-whisper>=1.0,<2.0",
+]
+
+[tool.uv.sources]
+rag-parser-core = { path = "../../../packages/rag_parser_core", editable = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]

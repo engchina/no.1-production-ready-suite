@@ -1,0 +1,1535 @@
+import type { OntologyGraph } from "./ontology/types";
+
+export type Nl2SqlEngine = "select_ai" | "select_ai_agent" | "enterprise_ai_direct";
+
+export type JobStatus = "pending" | "running" | "done" | "error";
+export type JobStepStatus = "pending" | "running" | "done" | "error" | "skipped";
+
+export interface JobStepData {
+  stage: string;
+  status: JobStepStatus;
+  elapsed_ms?: number | null;
+}
+
+export interface StageTiming {
+  stage: string;
+  elapsed_ms: number;
+}
+
+export interface EngineTiming {
+  engine: string;
+  elapsed_ms: number;
+  status: "success" | "failed" | "skipped";
+  error?: string;
+}
+
+export interface TimingEnvelope {
+  created_at: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  elapsed_ms?: number | null;
+  stage_timings: StageTiming[];
+}
+
+export interface SchemaColumn {
+  column_name: string;
+  logical_name: string;
+  data_type: string;
+  nullable: boolean;
+  comment: string;
+  sample_values: string[];
+  /** 列に関連付いた SQL ドメイン(OWNER.NAME)。23ai 以降の dictionary から取得。無ければ空。 */
+  domain_name?: string;
+}
+
+export interface SchemaTable {
+  table_name: string;
+  qualified_name?: string;
+  logical_name: string;
+  owner: string;
+  table_type: string;
+  comment: string;
+  row_count?: number | null;
+  columns: SchemaColumn[];
+  constraints: string[];
+  constraint_details?: Array<{
+    constraint_name: string;
+    constraint_type: "P" | "R" | "U" | "C";
+    owner?: string;
+    table_name: string;
+    columns: string[];
+    referenced_owner?: string | null;
+    referenced_table?: string | null;
+    referenced_columns: string[];
+    delete_rule?: string;
+    status?: string;
+    deferrable?: string;
+  }>;
+}
+
+export interface SchemaCatalog {
+  refreshed_at: string;
+  schema_fingerprint?: string;
+  tables: SchemaTable[];
+  current_owner?: string;
+  excluded_oracle_maintained_count?: number;
+  view_dependencies?: Array<{
+    owner?: string;
+    view_name: string;
+    referenced_owner?: string;
+    referenced_name: string;
+    referenced_type?: string;
+  }>;
+}
+
+export interface SchemaOwnerSummary {
+  owner: string;
+  is_current: boolean;
+  table_count: number;
+  view_count: number;
+}
+
+export interface SchemaOwnersData {
+  current_owner: string;
+  owners: SchemaOwnerSummary[];
+  excluded_oracle_maintained_count: number;
+}
+
+export interface AllowedObjects {
+  table_names: string[];
+  columns: Record<string, string[]>;
+}
+
+export interface ProfileSelectAiConfig {
+  profile_name: string;
+  previous_profile_name?: string;
+  region: string;
+  model: string;
+  embedding_model: string;
+  max_tokens: number;
+  enforce_object_list: boolean;
+  comments: boolean;
+  annotations: boolean;
+  constraints: boolean;
+  role: string;
+  additional_instructions: string;
+}
+
+export interface SelectAiRequestOverrides {
+  role: string;
+  additional_instructions: string;
+}
+
+export interface Nl2SqlProfile {
+  id: string;
+  name: string;
+  category?: string;
+  description: string;
+  allowed_tables: string[];
+  allowed_views: string[];
+  glossary: Record<string, string>;
+  sql_rules: string[];
+  default_row_limit: number;
+  safety_policy: string;
+  few_shot_examples: Array<Record<string, string>>;
+  select_ai_config: ProfileSelectAiConfig;
+  archived: boolean;
+  object_scope_version?: number;
+  version?: number;
+  etag?: string;
+  updated_at?: string;
+}
+
+export interface ProfileSummary {
+  id: string;
+  name: string;
+  category: string;
+  description: string;
+  archived: boolean;
+  allowed_table_count: number;
+  allowed_view_count: number;
+  glossary_count: number;
+  few_shot_count: number;
+  version: number;
+  etag: string;
+  updated_at: string;
+}
+
+export interface ProfileSummaryPage {
+  items: ProfileSummary[];
+  next_cursor: string | null;
+  total: number;
+  change_token: number;
+}
+
+export interface ProfileUsageContext {
+  id: string;
+  name: string;
+  category: string;
+  description: string;
+  allowed_tables: string[];
+  allowed_views: string[];
+  archived: boolean;
+  object_scope_version: number;
+  version: number;
+  etag: string;
+  updated_at: string;
+}
+
+export interface SchemaCatalogHead {
+  catalog_version: number;
+  schema_fingerprint: string;
+  refreshed_at: string;
+  object_count: number;
+  column_count: number;
+  change_token: number;
+  etag: string;
+}
+
+export interface SchemaObjectSummary {
+  owner: string;
+  object_name: string;
+  object_type: string;
+  logical_name: string;
+  comment: string;
+  row_count?: number | null;
+  column_count: number;
+  last_ddl_at: string;
+}
+
+export interface SchemaObjectPage {
+  items: SchemaObjectSummary[];
+  next_cursor: string | null;
+  total: number | null;
+  table_count?: number;
+  view_count?: number;
+  counts_included?: boolean;
+  catalog_version: number;
+}
+
+export interface SchemaObjectDetail {
+  table: SchemaTable;
+  dependencies: NonNullable<SchemaCatalog["view_dependencies"]>;
+  catalog_version: number;
+  etag: string;
+}
+
+export type SchemaRefreshJobStatus = "pending" | "running" | "done" | "error";
+export type SchemaRefreshJobMode = "full" | "targeted";
+
+export interface SchemaRefreshTargetObject {
+  owner: string;
+  object_name: string;
+  object_type?: "table" | "view" | "materialized_view" | "unknown";
+  expected_state?: "present" | "absent" | "unknown";
+}
+
+export interface SchemaRefreshJob {
+  job_id: string;
+  status: SchemaRefreshJobStatus;
+  mode?: SchemaRefreshJobMode;
+  source?: string;
+  target_objects?: SchemaRefreshTargetObject[];
+  requires_full_refresh?: boolean;
+  created_at: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  worker_id?: string;
+  heartbeat_at?: string | null;
+  lease_expires_at?: string | null;
+  attempt?: number;
+  phase?: "queued" | "scanning" | "fetching" | "persisting" | "done";
+  processed_objects?: number;
+  total_objects?: number;
+  scanned_objects: number;
+  changed_objects: number;
+  deleted_objects: number;
+  catalog_version: number;
+  error_code: string;
+}
+
+export interface SchemaRefreshActiveJobData {
+  active_job: SchemaRefreshJob | null;
+}
+
+export interface ProfileUpsertPayload {
+  name: string;
+  category?: string;
+  description?: string;
+  allowed_tables: string[];
+  allowed_views: string[];
+  glossary?: Record<string, string>;
+  sql_rules?: string[];
+  default_row_limit?: number;
+  safety_policy: string;
+  few_shot_examples?: Array<Record<string, string>>;
+  select_ai_config: ProfileSelectAiConfig;
+}
+
+export interface ProfileLearningMaterialImportData {
+  profile_id: string;
+  profile_name: string;
+  mode: string;
+  imported_terms: number;
+  imported_rules: number;
+  imported_examples: number;
+  skipped_count: number;
+  warnings: string[];
+  profile: Nl2SqlProfile;
+}
+
+export interface LegacyLearningMaterialData {
+  glossary: Record<string, string>;
+  rules: string[];
+  warnings?: string[];
+}
+
+export interface ProfileRecommendationCandidate {
+  profile_id: string;
+  profile_name: string;
+  score: number;
+  matched_terms: string[];
+  allowed_tables: string[];
+  category?: string;
+}
+
+export interface ProfileRecommendationData {
+  recommended_profile_id: string;
+  recommended_profile_name: string;
+  recommended_profile_category?: string;
+  confidence: number;
+  confidence_threshold?: number;
+  reason: string;
+  rewritten_question: string;
+  recommended_allowed_objects: AllowedObjects;
+  candidates: ProfileRecommendationCandidate[];
+  recommendation_source?: string;
+  classifier_version?: string;
+  category_scores?: Record<string, number>;
+  warnings?: string[];
+}
+
+export interface ClassifierTrainingExample {
+  id: string;
+  category: string;
+  text: string;
+  profile_id: string;
+  profile_name: string;
+  profile_category?: string;
+  source: string;
+  source_type: "file" | "feedback";
+  source_history_id: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export type ClassifierTrainingCandidateStatus =
+  | "pending"
+  | "added"
+  | "already_covered"
+  | "conflict"
+  | "profile_missing"
+  | "source_changed";
+
+export interface ClassifierTrainingCandidate {
+  history_id: string;
+  question: string;
+  profile_id: string;
+  profile_name: string;
+  profile_category?: string;
+  feedback_rating?: FeedbackRating | null;
+  feedback_comment: string;
+  created_at: string;
+  status: ClassifierTrainingCandidateStatus;
+  eligible: boolean;
+  training_example_id: string;
+  conflict_profile_ids: string[];
+}
+
+export interface ClassifierTrainingCandidatesData {
+  items: ClassifierTrainingCandidate[];
+  total: number;
+  next_cursor: string;
+  pending_count: number;
+  added_count: number;
+  attention_count: number;
+}
+
+export interface ClassifierFeedbackImportData {
+  imported_count: number;
+  skipped_count: number;
+  total_examples: number;
+  stale: boolean;
+  results: Array<{
+    history_id: string;
+    status: string;
+    training_example_id: string;
+    profile_id: string;
+    message: string;
+  }>;
+}
+
+export interface ClassifierImportData {
+  imported_count: number;
+  skipped_count: number;
+  total_examples: number;
+  categories: string[];
+  warnings: string[];
+  examples: ClassifierTrainingExample[];
+}
+
+export interface ClassifierTrainingDataData {
+  total_examples: number;
+  categories: string[];
+  warnings: string[];
+  examples: ClassifierTrainingExample[];
+}
+
+export interface ClassifierStatusData {
+  ready: boolean;
+  trained: boolean;
+  stale: boolean;
+  classifier_version: string;
+  updated_at: string;
+  example_count: number;
+  category_count: number;
+  categories: string[];
+  embedding_model: string;
+  vector_dimension: number;
+  persistence_mode: string;
+  recommendation_source: string;
+  metrics: Record<string, string | number>;
+  trained_example_count: number;
+  pending_change_count: number;
+  warnings: string[];
+}
+
+export interface ClassifierPredictionCandidate {
+  category: string;
+  score: number;
+  profile_id: string;
+  profile_name: string;
+  profile_category?: string;
+}
+
+export interface ClassifierPredictionData {
+  recommendation_source: string;
+  classifier_version: string;
+  predicted_category: string;
+  confidence: number;
+  candidates: ClassifierPredictionCandidate[];
+  warnings: string[];
+}
+
+export interface RewriteData {
+  original_question: string;
+  rewritten_question: string;
+  source: string;
+  model: string;
+  warnings: string[];
+}
+
+export interface SafetyReport {
+  is_safe: boolean;
+  is_select_only: boolean;
+  row_limit_applied: number;
+  blocked_reason: string;
+  warnings: string[];
+  referenced_tables: string[];
+  referenced_columns: string[];
+}
+
+export interface QueryResults {
+  columns: string[];
+  rows: Array<Record<string, unknown>>;
+  total: number;
+  returned_count?: number | null;
+  has_more?: boolean;
+  truncated?: boolean;
+  execution_context?: "deterministic" | "oracle_data_plane" | "deepsec_data_plane" | "admin_control_plane";
+  vpd_context_enforced?: boolean;
+}
+
+export interface Nl2SqlQuestionInterpretation {
+  available: boolean;
+  source: string;
+  original_question: string;
+  rewritten_question: string;
+  profile_id: string;
+  profile_name: string;
+  profile_category?: string;
+  target_objects: string[];
+  filters: string[];
+  group_by: string[];
+  order_by: string[];
+  aggregations: string[];
+  row_limit?: number | null;
+  confidence: number;
+  warnings: string[];
+}
+
+export interface Nl2SqlSqlInterpretation {
+  available: boolean;
+  source: string;
+  summary: string;
+  statement_type: string;
+  tables: string[];
+  columns: string[];
+  joins: string[];
+  filters: string[];
+  aggregations: string[];
+  group_by: string[];
+  order_by: string[];
+  limit?: number | null;
+  /** 生成 SQL を業務向けに説明する決定論の処理手順(処理手順を表示 ON のとき非空)。 */
+  logical_steps?: string[];
+  /** 同じ処理手順を業務者向け/技術者向けで併記した構造化版。 */
+  logical_step_details?: Nl2SqlLogicalStep[];
+  semantic_graph: Record<string, unknown>;
+  warnings: string[];
+}
+
+/** 処理手順 1 件の業務者向け(business)/技術者向け(technical)併記。 */
+export interface Nl2SqlLogicalStep {
+  kind?: string;
+  business?: string;
+  technical?: string;
+}
+
+/** SQL 論理構造 1 項目の業務者向け/技術者向け併記。 */
+export interface Nl2SqlLogicalStructureItem {
+  kind?: string;
+  business?: string;
+  technical?: string;
+}
+
+export interface Nl2SqlInterpretationArtifact {
+  available: boolean;
+  question: Nl2SqlQuestionInterpretation;
+  sql: Nl2SqlSqlInterpretation;
+  ontology_graph?: OntologyGraph | null;
+  /** use_ontology_context のエコー。false のとき Ontology 接地確認を表示しない(未指定は互換で表示)。 */
+  ontology_grounding_enabled?: boolean;
+  warnings: string[];
+}
+
+export interface Nl2SqlShowPromptArtifact {
+  available: boolean;
+  engine: Nl2SqlEngine;
+  action: string;
+  prompt: string;
+  unavailable_reason: string;
+  warnings: string[];
+}
+
+export interface Nl2SqlResult {
+  history_id?: string;
+  engine: Nl2SqlEngine;
+  engine_meta: Record<string, unknown>;
+  fallback_reason: string;
+  original_question: string;
+  rewritten_question: string;
+  generated_sql: string;
+  executable_sql: string;
+  explanation: string;
+  safety: SafetyReport;
+  recommendations: string[];
+  repaired_sql: string;
+  optimization_hints: string[];
+  results: QueryResults;
+  timing: TimingEnvelope;
+  interpretation?: Nl2SqlInterpretationArtifact | null;
+  show_prompt?: Nl2SqlShowPromptArtifact | null;
+}
+
+export interface GeneratedSqlPanelData {
+  engine: Nl2SqlEngine;
+  engine_meta: Record<string, unknown>;
+  fallback_reason: string;
+  generated_sql: string;
+  executable_sql: string;
+  explanation: string;
+  safety: SafetyReport;
+  recommendations: string[];
+  repaired_sql: string;
+  optimization_hints: string[];
+  rewritten_question: string;
+  interpretation?: Nl2SqlInterpretationArtifact | null;
+  show_prompt?: Nl2SqlShowPromptArtifact | null;
+}
+
+export interface PreviewData {
+  sql: string;
+  is_safe: boolean;
+  row_limit: number;
+  note: string;
+  engine: Nl2SqlEngine;
+  engine_meta: Record<string, unknown>;
+  fallback_reason: string;
+  rewritten_question: string;
+  executable_sql: string;
+  safety?: SafetyReport | null;
+  recommendations: string[];
+  repaired_sql: string;
+  optimization_hints: string[];
+  timing?: TimingEnvelope | null;
+}
+
+export interface JobCreateData {
+  job_id: string;
+  status: JobStatus;
+  created_at: string;
+  steps: JobStepData[];
+}
+
+export interface JobData {
+  job_id: string;
+  status: JobStatus;
+  created_at: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  elapsed_ms?: number | null;
+  result?: Nl2SqlResult | null;
+  error_message?: string | null;
+  /** 機械判定用の失敗分類(例: SCHEMA_CATALOG_EMPTY)。表示は error_message が正本。 */
+  error_code?: string | null;
+  warning_message?: string | null;
+  timing?: TimingEnvelope | null;
+  steps: JobStepData[];
+}
+
+export interface HistoryItem {
+  id: string;
+  question: string;
+  engine: Nl2SqlEngine;
+  generated_sql: string;
+  created_at: string;
+  elapsed_ms?: number | null;
+  generation_elapsed_ms?: number | null;
+  engine_timings?: EngineTiming[];
+  stage_timings?: StageTiming[];
+  feedback_rating?: "good" | "bad" | null;
+  profile_id: string;
+  profile_name: string;
+  profile_category?: string;
+  rewritten_question: string;
+  executable_sql: string;
+  safety_is_safe: boolean;
+  result_row_count: number;
+  result_columns: string[];
+  feedback_comment: string;
+  feedback_updated_at?: string;
+  admin_feedback_rating?: FeedbackRating | null;
+  admin_feedback_content?: string;
+  admin_feedback_updated_at?: string;
+  actor_user_uuid?: string;
+  actor_login_user_id?: string;
+  actor_display_name?: string;
+}
+
+export interface HistoryData {
+  items: HistoryItem[];
+  /** 続きがあるときだけ非空。「さらに読み込む」でこの cursor を渡す。 */
+  next_cursor?: string;
+  /** フィルタ適用後の総件数(数えられないときは null)。 */
+  total?: number | null;
+}
+
+export type FeedbackRating = "good" | "bad";
+
+export interface FeedbackData {
+  history_id: string;
+  rating: FeedbackRating;
+  saved: boolean;
+  comment: string;
+  feedback_content: string;
+}
+
+export interface FeedbackRecord extends HistoryItem {
+  training_status: ClassifierTrainingCandidateStatus | "";
+  training_example_id: string;
+}
+
+export interface FeedbackListData {
+  items: FeedbackRecord[];
+  total: number;
+  next_cursor: string;
+}
+
+export interface FeedbackClearData {
+  history_id: string;
+  cleared: boolean;
+}
+
+export interface FeedbackIndexData {
+  operation: string;
+  status: string;
+  executed: boolean;
+  runtime: string;
+  source_history_count: number;
+  indexable_count: number;
+  indexed_count: number;
+  vector_dimension: number;
+  vector_backend: string;
+  embedding_provider: string;
+  embedding_model: string;
+  embedding_configured: boolean;
+  ddl: string[];
+  warnings: string[];
+  timing: TimingEnvelope;
+}
+
+export interface FeedbackVectorEntry {
+  history_id: string;
+  question: string;
+  generated_sql: string;
+  profile_id: string;
+  profile_name: string;
+  profile_category?: string;
+  feedback_rating?: FeedbackRating | null;
+  feedback_comment: string;
+  admin_feedback_rating?: FeedbackRating | null;
+  admin_feedback_content?: string;
+  admin_feedback_updated_at?: string;
+  indexed: boolean;
+  created_at: string;
+}
+
+export interface FeedbackEntriesData {
+  items: FeedbackVectorEntry[];
+  total: number;
+  indexed_count: number;
+  warnings?: string[];
+}
+
+export interface FeedbackSearchConfigData {
+  similarity_threshold: number;
+  match_limit: number;
+}
+
+export interface DemoLearningData {
+  seeded_history_count: number;
+  seeded_feedback_count: number;
+  history_ids: string[];
+  profile_ids: string[];
+  message: string;
+}
+
+export interface SimilarHistoryItem {
+  history_id: string;
+  question: string;
+  sql: string;
+  profile_id: string;
+  profile_name: string;
+  score: number;
+  reason: string;
+}
+
+export interface SimilarHistoryData {
+  items: SimilarHistoryItem[];
+  used_for_generation?: boolean;
+  engine?: Nl2SqlEngine | null;
+}
+
+export type QualityEvaluationEngine = Nl2SqlEngine;
+export type QualityEvaluationStatus =
+  | "pending"
+  | "running"
+  | "completed"
+  | "completed_with_errors"
+  | "failed"
+  | "cancelled";
+export type QualityEvaluationVerdict =
+  | "correct"
+  | "incorrect"
+  | "uncertain"
+  | "not_analyzed";
+
+export interface QualityEvaluationEngineCapability {
+  engine: QualityEvaluationEngine;
+  label: string;
+  available: boolean;
+  reason: string;
+}
+
+export interface QualityEvaluationCapabilities {
+  engines: QualityEvaluationEngineCapability[];
+  judge: {
+    available: boolean;
+    reason: string;
+    provider: string;
+  };
+  limits: {
+    max_file_bytes: number;
+    max_cases: number;
+    max_attempts: number;
+    min_repeat_count: number;
+    max_repeat_count: number;
+    attempt_timeout_seconds: number;
+  };
+}
+
+export interface QualityEvaluationEngineSummary {
+  engine: QualityEvaluationEngine;
+  total_attempts: number;
+  generation_successes: number;
+  generation_success_rate: number;
+  correct: number;
+  incorrect: number;
+  uncertain: number;
+  not_analyzed: number;
+  normalized_sql_consistency: number;
+  error_count: number;
+}
+
+export interface QualityEvaluationJobSummary {
+  job_id: string;
+  profile_id: string;
+  profile_name: string;
+  profile_category?: string;
+  engines: QualityEvaluationEngine[];
+  repeat_count: number;
+  case_count: number;
+  total_attempts: number;
+  completed_attempts: number;
+  success_count: number;
+  error_count: number;
+  status: QualityEvaluationStatus;
+  current_case_id: string;
+  current_engine?: QualityEvaluationEngine | null;
+  current_repetition: number;
+  current_attempt_started_at?: string | null;
+  current_attempt_deadline_at?: string | null;
+  engine_summaries: QualityEvaluationEngineSummary[];
+  error_message: string;
+  heartbeat_at?: string | null;
+  lease_expires_at?: string | null;
+  attempt_no: number;
+  attempt_timeout_seconds: number;
+  created_at: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  updated_at: string;
+}
+
+export interface QualityEvaluationJobPage {
+  items: QualityEvaluationJobSummary[];
+  next_cursor?: string | null;
+  total: number;
+}
+
+export interface QualityEvaluationJudge {
+  verdict: Exclude<QualityEvaluationVerdict, "not_analyzed">;
+  confidence: number;
+  summary: string;
+  differences: string[];
+  risks: string[];
+  correction_suggestion: string;
+}
+
+export interface QualityEvaluationResult {
+  result_id: string;
+  job_id: string;
+  case_no: number;
+  case_id: string;
+  excel_row: number;
+  question: string;
+  expected_sql: string;
+  engine: QualityEvaluationEngine;
+  repetition_no: number;
+  generated_sql: string;
+  normalized_sql: string;
+  deterministic_analysis: {
+    is_safe: boolean;
+    is_select_only: boolean;
+    referenced_objects: string[];
+    structure_summary: string;
+    risk_findings: string[];
+  };
+  generation_elapsed_ms: number;
+  judge_elapsed_ms: number;
+  total_elapsed_ms: number;
+  verdict: QualityEvaluationVerdict;
+  judge?: QualityEvaluationJudge | null;
+  generation_error: string;
+  judge_error: string;
+  created_at: string;
+}
+
+export interface QualityEvaluationResultPage {
+  items: QualityEvaluationResult[];
+  next_cursor?: string | null;
+  total: number;
+}
+
+export interface ReverseSqlData {
+  question: string;
+  explanation: string;
+  referenced_tables: string[];
+  sql_structure?: string;
+  logical_structure?: string;
+  logical_structure_items?: Nl2SqlLogicalStructureItem[];
+  logical_steps?: string[];
+  logical_step_details?: Nl2SqlLogicalStep[];
+  source?: string;
+  warnings?: string[];
+}
+
+export interface AnalyzeData {
+  safety: SafetyReport;
+  explanation: string;
+  recommendations: string[];
+  executable_sql: string;
+  repaired_sql: string;
+  optimization_hints: string[];
+  structure_summary?: string;
+  risk_level?: string;
+  statement_type?: string;
+  object_names?: string[];
+  column_names?: string[];
+  conditions?: string[];
+  group_by?: string[];
+  order_by?: string[];
+  risk_findings?: string[];
+  repair_candidates?: string[];
+  operations?: string[];
+  filters?: string[];
+  joins?: string[];
+  aggregations?: string[];
+  llm_enhanced?: boolean;
+  llm_warnings?: string[];
+}
+
+export interface CommentSuggestion {
+  object_name: string;
+  object_type: string;
+  suggested_comment: string;
+}
+
+export interface CommentSuggestionData {
+  suggestions: CommentSuggestion[];
+  source?: string;
+  warnings?: string[];
+}
+
+export interface CommentApplyItem {
+  object_name: string;
+  object_type: string;
+  comment: string;
+}
+
+export interface CommentApplyStatement {
+  object_name: string;
+  object_type: string;
+  comment: string;
+  sql: string;
+  status: string;
+  error_message: string;
+}
+
+export interface CommentApplyData {
+  executed: boolean;
+  runtime: string;
+  statements: CommentApplyStatement[];
+  schema_refresh_job_id?: string;
+  schema_refresh_required?: boolean;
+  schema_refresh_reason_code?: string;
+  warnings: string[];
+  timing: TimingEnvelope;
+}
+
+export interface AnnotationSuggestion {
+  object_name: string;
+  object_type: string;
+  annotation_name: string;
+  annotation_value: string;
+}
+
+export interface AnnotationSuggestionData {
+  suggestions: AnnotationSuggestion[];
+  source: string;
+  warnings: string[];
+}
+
+export interface AnnotationApplyItem {
+  object_name: string;
+  object_type: string;
+  annotation_name: string;
+  annotation_value: string;
+}
+
+export interface AnnotationApplyStatement {
+  object_name: string;
+  object_type: string;
+  annotation_name: string;
+  annotation_value: string;
+  sql: string;
+  status: string;
+  error_message: string;
+}
+
+export interface AnnotationApplyData {
+  executed: boolean;
+  runtime: string;
+  statements: AnnotationApplyStatement[];
+  schema_refresh_job_id?: string;
+  schema_refresh_required?: boolean;
+  schema_refresh_reason_code?: string;
+  warnings: string[];
+  timing: TimingEnvelope;
+}
+
+export interface DiagnosticCheck {
+  name: string;
+  status: string;
+  message: string;
+}
+
+export interface AssetRefreshData {
+  engine: Nl2SqlEngine;
+  refreshed: boolean;
+  status: string;
+  refreshed_at: string;
+  profile_name: string;
+  team_name: string;
+  warning: string;
+  asset_names: Record<string, string>;
+  engine_meta: Record<string, unknown>;
+}
+
+export type ProfileSyncJobStatus =
+  | "queued"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "cancelled";
+
+export type ProfileSyncJobPhase =
+  | "queued"
+  | "syncing_oracle_profile"
+  | "rebuilding_agent_assets"
+  | "verifying"
+  | "succeeded"
+  | "failed"
+  | "cancelled";
+
+export interface ProfileSyncJobData {
+  job_id: string;
+  profile_id: string;
+  profile_etag: string;
+  status: ProfileSyncJobStatus;
+  phase: ProfileSyncJobPhase;
+  rebuild_agent_assets: boolean;
+  oracle_result?: SelectAiDbProfileMutationData | null;
+  agent_result?: AssetRefreshData | null;
+  error_code: string;
+  error_message_ja: string;
+  retry_of_job_id?: string | null;
+  created_at: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+}
+
+export interface AssetCleanupData {
+  engine: Nl2SqlEngine;
+  executed: boolean;
+  status: string;
+  cleaned_at: string;
+  profile_name: string;
+  team_name: string;
+  warning: string;
+  asset_names: Record<string, string>;
+  engine_meta: Record<string, unknown>;
+  profile_list_refresh_job_id?: string;
+  profile_list_refresh_required?: boolean;
+  profile_list_refresh_reason_code?: string;
+}
+
+export interface ProfileDeleteData {
+  profile: Nl2SqlProfile;
+  oracle_cleanup: AssetCleanupData[];
+}
+
+export interface DbAdminObjectSummary {
+  name: string;
+  owner: string;
+  qualified_name?: string;
+  object_type: string;
+  row_count?: number | null;
+  comment: string;
+}
+
+export interface DbAdminObjectDetail extends DbAdminObjectSummary {
+  columns: SchemaColumn[];
+  constraints?: string[];
+  ddl: string;
+  warnings: string[];
+}
+
+export interface DbAdminObjectsData {
+  runtime: string;
+  items: DbAdminObjectSummary[];
+  refreshed_at: string;
+  warnings: string[];
+}
+
+export interface DbAdminObjectPage {
+  runtime: string;
+  owner: string;
+  items: DbAdminObjectSummary[];
+  total: number;
+  table_count: number;
+  view_count: number;
+  counts_included?: boolean;
+  next_cursor: string | null;
+  refreshed_at: string;
+  catalog_version: number;
+  warnings: string[];
+}
+
+export interface DbAdminStatementResult {
+  index: number;
+  statement_type: string;
+  status: string;
+  sql: string;
+  row_count?: number | null;
+  message: string;
+  elapsed_ms: number;
+  error_message: string;
+  error_code?: string;
+}
+
+export interface DbAdminExecuteData {
+  executed: boolean;
+  runtime: string;
+  execution_context?:
+    | "deterministic"
+    | "oracle_data_plane"
+    | "deepsec_data_plane"
+    | "admin_control_plane";
+  vpd_context_enforced?: boolean;
+  select_result?: QueryResults | null;
+  statements: DbAdminStatementResult[];
+  committed: boolean;
+  rolled_back: boolean;
+  schema_refresh_job_id?: string;
+  schema_refresh_required?: boolean;
+  schema_refresh_reason_code?: string;
+  warnings: string[];
+  timing: TimingEnvelope;
+}
+
+export type SampleDataset = "hr" | "sales" | "inquiries";
+
+export interface SampleDataInfo {
+  dataset?: SampleDataset;
+  runtime: string;
+  profile_id: string;
+  confirmation: string;
+  objects: string[];
+  /** sample object を作成する schema と、objects の所有者付き名前。旧 backend では未返却。 */
+  owner?: string;
+  object_refs?: Array<{ name: string; owner?: string; qualified_name?: string }>;
+  imported_objects: string[];
+  /** 同名だが構成がサンプル定義と異なり、利用者のものとみなしたオブジェクト。 */
+  conflicting_objects?: string[];
+  /** 旧名（SAMPLE_NL2SQL_ 接頭辞）で残っているサンプルオブジェクト。削除時に併せて削除される。 */
+  legacy_objects?: string[];
+  sql: Record<string, string[]>;
+  warnings: string[];
+}
+
+export interface SampleDataMutationData {
+  dataset?: SampleDataset;
+  operation: string;
+  step: "tables" | "views" | "data" | "all";
+  runtime: string;
+  executed: boolean;
+  objects: string[];
+  statements: DbAdminStatementResult[];
+  warnings: string[];
+  profile_id: string;
+  schema_refresh_job_id?: string;
+  schema_refresh_required?: boolean;
+  schema_refresh_reason_code?: string;
+  timing: TimingEnvelope;
+}
+
+export interface DbAdminImportTabularData {
+  table_name: string;
+  /** 取込先の schema（current schema）。旧 backend では未返却。 */
+  owner?: string;
+  qualified_name?: string;
+  filename: string;
+  sheet_name: string;
+  mode: string;
+  columns: CsvImportColumn[];
+  row_count: number;
+  executed: boolean;
+  ddl: string;
+  insert_sql: string;
+  schema_refresh_job_id?: string;
+  schema_refresh_required?: boolean;
+  schema_refresh_reason_code?: string;
+  warnings: string[];
+  sample_rows: Array<Record<string, string | null>>;
+  timing: TimingEnvelope;
+}
+
+export type DbAdminStatementPolicy =
+  | "table_ddl"
+  | "view_ddl"
+  | "data_dml"
+  | "comment_sql"
+  | "annotation_sql"
+  | "domain_sql";
+
+export interface MetadataSqlTarget {
+  owner?: string;
+  object_name: string;
+  object_type: "table" | "view" | "materialized_view";
+}
+
+export interface MetadataSqlSampleTarget extends MetadataSqlTarget {
+  columns: string[];
+}
+
+export interface MetadataSqlSamplePayload {
+  targets: MetadataSqlSampleTarget[];
+  sample_limit: number;
+}
+
+export interface MetadataSqlSampleData {
+  sample_text: string;
+  sample_count: number;
+  runtime: string;
+  warnings: string[];
+}
+
+export type DomainOperation = "create" | "update" | "rebuild" | "delete";
+
+export interface DomainAnnotation {
+  name: string;
+  value: string;
+}
+
+export interface DomainColumnRef {
+  owner: string;
+  table_name: string;
+  column_name: string;
+}
+
+export interface DomainDefinition {
+  owner: string;
+  name: string;
+  qualified_name?: string;
+  domain_type: "single" | "multi_column" | "enumerated" | "flexible";
+  data_type: string;
+  strict: boolean;
+  nullable: boolean;
+  constraints: string[];
+  display: string;
+  order: string;
+  annotations: DomainAnnotation[];
+  columns: DomainColumnRef[];
+}
+
+export interface DomainInventoryPayload {
+  targets: MetadataSqlTarget[];
+}
+
+export interface DomainInventoryData {
+  domains: DomainDefinition[];
+  domain_text: string;
+  runtime: string;
+  warnings: string[];
+}
+
+export interface MetadataSqlGeneratePayload {
+  targets: MetadataSqlTarget[];
+  structure_text: string;
+  primary_key_text: string;
+  foreign_key_text: string;
+  sample_text: string;
+  extra_text: string;
+  /** ドメイン管理だけが送る。 */
+  operation?: DomainOperation;
+  domain_text?: string;
+  domains?: DomainDefinition[];
+}
+
+export interface MetadataSqlGenerateData {
+  sql: string;
+  source: string;
+  warnings: string[];
+  timing: TimingEnvelope;
+}
+
+export interface DbAdminDataPreviewData {
+  runtime: string;
+  sql: string;
+  results: QueryResults;
+  warnings: string[];
+}
+
+export interface DbAdminCsvUploadData {
+  table_name: string;
+  filename: string;
+  mode: string;
+  matched_columns: string[];
+  unmatched_csv_columns: string[];
+  row_count: number;
+  success_count: number;
+  error_count: number;
+  row_errors: string[];
+  hint: string;
+  executed: boolean;
+  runtime: string;
+  sample_rows: Array<Record<string, string | null>>;
+  warnings: string[];
+  timing: TimingEnvelope;
+}
+
+export type DbAdminJoinWherePromptProfile = "sql_structure";
+
+export interface DbAdminJoinWhereData {
+  join_text: string;
+  where_text: string;
+  source: string;
+  warnings: string[];
+  prompt_profile: DbAdminJoinWherePromptProfile;
+  structure_markdown?: string;
+}
+
+export interface SelectAiDbProfile {
+  name: string;
+  status: string;
+  owner: string;
+  created_at: string;
+  description?: string;
+  category?: string;
+  object_list?: Array<Record<string, unknown> | string>;
+  tables?: string[];
+  views?: string[];
+  region?: string;
+  model?: string;
+  embedding_model?: string;
+  schema_text?: string;
+  context_ddl?: string;
+  attributes: Record<string, unknown>;
+}
+
+export interface SelectAiDbProfilesData {
+  runtime: string;
+  profiles: SelectAiDbProfile[];
+  warnings: string[];
+  profile_list_refresh_required?: boolean;
+  profile_list_refresh_reason_code?: string;
+}
+
+export interface SelectAiDbProfileDetailData {
+  runtime: string;
+  profile: SelectAiDbProfile;
+  warnings: string[];
+}
+
+export type SelectAiDbProfileRefreshMode = "full" | "targeted";
+
+export type SelectAiDbProfileRefreshStatus = "pending" | "running" | "done" | "error";
+
+export type SelectAiDbProfileRefreshPhase = "queued" | "fetching" | "persisting" | "done";
+
+export interface SelectAiDbProfileRefreshTarget {
+  profile_name: string;
+  expected_state: "present" | "absent" | "unknown";
+}
+
+export interface SelectAiDbProfileRefreshJobData {
+  job_id: string;
+  status: SelectAiDbProfileRefreshStatus;
+  mode: SelectAiDbProfileRefreshMode;
+  source: string;
+  target_profiles: SelectAiDbProfileRefreshTarget[];
+  requires_full_refresh: boolean;
+  phase: SelectAiDbProfileRefreshPhase;
+  created_at: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  total_profiles: number;
+  processed_profiles: number;
+  scanned_profiles: number;
+  changed_profiles: number;
+  deleted_profiles: number;
+  error_code: string;
+  error_message: string;
+}
+
+export interface SelectAiDbProfileMutationData {
+  runtime: string;
+  executed: boolean;
+  status: string;
+  profile_name: string;
+  original_name: string;
+  ddl: string[];
+  profile?: SelectAiDbProfile | null;
+  warnings: string[];
+  engine_meta: Record<string, unknown>;
+  profile_list_refresh_job_id?: string;
+  profile_list_refresh_required?: boolean;
+  profile_list_refresh_reason_code?: string;
+}
+
+export interface SelectAiProfilesExportData {
+  profiles: SelectAiDbProfile[];
+  exported_at: string;
+}
+
+export interface SelectAiFeedbackEntry {
+  content: string;
+  sql_id: string;
+  sql_text: string;
+  attributes: Record<string, unknown>;
+  raw_attributes: string;
+}
+
+export interface SelectAiFeedbackEntriesData {
+  runtime: string;
+  profile_name: string;
+  index_name: string;
+  table_name: string;
+  /** feedback vector table の所有者（current schema）と所有者付き名前。旧 backend では未返却。 */
+  table_owner?: string;
+  table_qualified_name?: string;
+  items: SelectAiFeedbackEntry[];
+  total: number;
+  warnings: string[];
+}
+
+export type SelectAiFeedbackAddType = "positive" | "negative";
+
+export interface SelectAiFeedbackAddData {
+  runtime: string;
+  executed: boolean;
+  status: string;
+  profile_name: string;
+  index_name: string;
+  table_name: string;
+  sql_text: string;
+  stored_feedback_type: string;
+  plsql_preview: string;
+  warnings: string[];
+  engine_meta: Record<string, unknown>;
+}
+
+export interface AdminFeedbackReviewData {
+  history_id: string;
+  rating: FeedbackRating;
+  saved: boolean;
+  feedback_content: string;
+  select_ai_feedback?: SelectAiFeedbackAddData | null;
+  similar_history_publish?: SimilarHistoryPublishData | null;
+}
+
+export interface SimilarHistoryPublishData {
+  history_id: string;
+  status: "published" | "unpublished" | "skipped" | "warning";
+  runtime: string;
+  executed: boolean;
+  table_name: string;
+  index_name: string;
+  warnings: string[];
+}
+
+export interface SelectAiFeedbackMutationData {
+  runtime: string;
+  executed: boolean;
+  status: string;
+  profile_name: string;
+  index_name: string;
+  table_name: string;
+  warnings: string[];
+  engine_meta: Record<string, unknown>;
+}
+
+export interface AgentTeamRunData {
+  team_name: string;
+  prompt: string;
+  generated_sql: string;
+  conversation_id: string;
+  runtime: string;
+  warnings: string[];
+  engine_meta: Record<string, unknown>;
+}
+
+export interface SelectAiAgentAsset {
+  profile_id: string;
+  profile_name: string;
+  tool_name: string;
+  agent_name: string;
+  task_name: string;
+  team_name: string;
+  source: string;
+  attributes: Record<string, unknown>;
+}
+
+export interface SelectAiAgentAssetsData {
+  runtime: string;
+  items: SelectAiAgentAsset[];
+  warnings: string[];
+}
+
+export interface AgentConversationCreateData {
+  conversation_id: string;
+  runtime: string;
+  warnings: string[];
+}
+
+export interface AgentConversationItem {
+  conversation_id: string;
+  prompt: string;
+  response: string;
+  created_at: string;
+  team_name: string;
+}
+
+export interface AgentConversationsData {
+  runtime: string;
+  items: AgentConversationItem[];
+  warnings: string[];
+}
+
+export interface AgentPrivilegeCheckData {
+  runtime: string;
+  status: string;
+  checks: DiagnosticCheck[];
+  warnings: string[];
+}
+
+export interface SyntheticDataOperationData {
+  table_name: string;
+  object_list?: string[];
+  row_count: number;
+  executed: boolean;
+  runtime: string;
+  status: string;
+  message: string;
+  warnings: string[];
+  engine_meta: Record<string, unknown>;
+  timing: TimingEnvelope;
+}
+
+export interface SyntheticDataResultsData {
+  preview_digest?: string;
+  run_id?: string;
+  table_name: string;
+  runtime: string;
+  results: QueryResults;
+  warnings: string[];
+}
+
+export interface CsvImportColumn {
+  source_name: string;
+  column_name: string;
+  data_type: string;
+  nullable: boolean;
+}

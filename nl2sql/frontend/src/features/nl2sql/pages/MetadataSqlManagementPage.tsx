@@ -1,0 +1,1312 @@
+import { useWorkspaceState, useWorkspaceRevalidation, useWorkspaceActivation } from "@/components/WorkspaceState";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Database,
+  Code2,
+  FileText,
+  RefreshCw,
+  Table2,
+  Wand2,
+} from "lucide-react";
+
+import {
+  Button,
+  Banner,
+  EmptyState,
+  toast,
+  DataTable,
+  StatusBadge,
+  PageHeader,
+  PageBody,
+} from "@engchina/production-ready-ui";
+
+
+import { BulkSelectionActions } from "@/components/BulkSelectionActions";
+import { ContentActionBar } from "@/components/ContentActionBar";
+import { ProcessingIndicator } from "@/components/ProcessingState";
+import { PageNotice } from "@/components/page-notice";
+import { ErrorState } from "@/components/StateViews";
+import { IdentifierText } from "@/components/IdentifierText";
+import { apiGet, apiPost, isTimeoutError } from "@/lib/api";
+import { formatDateTime } from "@/lib/format";
+import { t } from "@/lib/i18n";
+import { useDebouncedValue } from "@/lib/useDebouncedValue";
+import { INFORMATION_TABLE_FIXED_VISIBLE_ROWS } from "@/lib/list-density";
+import { API_TIMEOUT_MS, requestTimeoutSeconds } from "@/lib/requestPolicy";
+import {
+  DB_OBJECT_GRID_ROW_CLASS,
+  DbManagementLoadingSkeleton,
+  DbManagementSelectField,
+  DbObjectManagementPanelShell,
+  DbObjectManagementTabs,
+  DbObjectSelectorFooter,
+  DbObjectSelectorToolbar,
+  DbObjectPanelHeader,
+  DbObjectCommentText,
+  DbObjectStepIndicator,
+  type DbObjectTab,
+  formatDbObjectName,
+  parseDbAdminObjectTarget,
+} from "../components/DbObjectManagementShared";
+import { DbObjectName } from "../components/DbObjectName";
+import { StatementRunnerCard } from "../components/DbAdminShared";
+import { buildMetadataInputTexts } from "../metadataSql";
+import { useDbAdminObjects, useSchemaRefreshJob } from "../incrementalQueries";
+import { dbAdminObjectCountsFromPage } from "../dbAdminObjectCounts";
+import { useSchemaRefreshCoordinator } from "../SchemaRefreshCoordinator";
+import {
+  SchemaRefreshHeaderStatus,
+  SchemaRefreshProcessing,
+} from "../components/SchemaRefreshFeedback";
+
+const METADATA_TARGET_LIMIT = 100;
+const METADATA_DETAIL_FETCH_BATCH_SIZE = 10;
+import type {
+  DbAdminObjectDetail,
+  DbAdminExecuteData,
+  DbAdminObjectSummary,
+  DbAdminStatementPolicy,
+  DomainInventoryData,
+  DomainInventoryPayload,
+  DomainOperation,
+  MetadataSqlGenerateData,
+  MetadataSqlGeneratePayload,
+  MetadataSqlSampleData,
+  MetadataSqlSamplePayload,
+  MetadataSqlTarget,
+  SchemaRefreshJob,
+} from "../types";
+
+type MetadataMode = "comment" | "annotation" | "domain";
+type MetadataPanel = "targets" | "input" | "execute";
+type TargetFilter = "all" | "table" | "view";
+type TargetSortKey = "name" | "object_type" | "owner";
+type TargetSortDirection = "asc" | "desc";
+
+interface TargetSortState {
+  key: TargetSortKey;
+  direction: TargetSortDirection;
+}
+
+interface MetadataTargetItem extends MetadataSqlTarget {
+  key: string;
+  qualifiedName: string;
+  owner: string;
+  row_count?: number | null;
+  comment: string;
+}
+
+const ANNOTATION_EXTRA_TEXT =
+  "ANNOTATIONSの安全な適用ガイド:\n" +
+  "- 語彙は \"DESCRIPTION\"(意味)、\"ALIASES\"(英語・日本語の同義語)、\"VALUES\"(コード値の意味)、\"UNITS\"(単位)、\"JOIN COLUMN\"(結合先)。名前は二重引用符で囲む\n" +
+  "- COMMENT: は入力項目名であり、annotation名には使わない。data_type / nullable は生成しない\n" +
+  "- VALUESはコメント・サンプルに根拠がある場合だけ付け、推測しない\n" +
+  "- DROPとADDは同一文で混在させず、別々のALTER文に分割。既存値の更新はADD OR REPLACE、新規のみはADD IF NOT EXISTS\n" +
+  "- DOMAIN=が付いた列はドメインから継承されるため \"JOIN COLUMN\" など表固有の情報だけを付ける\n" +
+  "- Select AIで使うには業務プロファイルの「アノテーションを利用」を有効にする\n" +
+  "例(表): ALTER TABLE CUST_MST ANNOTATIONS (ADD OR REPLACE \"DESCRIPTION\" 'Customer master. One row represents one customer.', ADD OR REPLACE \"ALIASES\" 'customers, 顧客');\n" +
+  "例(列): ALTER TABLE CUST_MST MODIFY (STAT_CD ANNOTATIONS (ADD OR REPLACE \"VALUES\" 'A = active (有効); I = inactive (休眠).'));\n" +
+  "例(ビュー列): ALTER VIEW SALES_V MODIFY (AMT ANNOTATIONS (ADD OR REPLACE \"UNITS\" 'Japanese yen (JPY).'));";
+
+const DOMAIN_EXTRA_TEXT =
+  "SQLドメインの安全な適用ガイド:\n" +
+  "- 1ドメイン = 1業務値(顧客ID、地域、状態、金額など)。複数テーブルで同じ意味の列は同じドメインを共有する\n" +
+  "- ドメインの型は列と同じ基本型にし、長さ・精度は列以下にする(STRICTは付けない)。文字型は長さ必須\n" +
+  "- 既存データが違反しうるCHECK制約は付けない(サンプルから値集合が明確な場合のみ)\n" +
+  "- ANNOTATIONSは \"DESCRIPTION\"(意味)、\"ALIASES\"(英語・日本語の同義語)、\"VALUES\"(コード値の意味)、\"UNITS\"(単位)で付ける。annotation名COMMENTは使わない\n" +
+  "- ビュー/MVの列には関連付けない。既にドメインが付いた列は MODIFY (<列>) DROP DOMAIN で外してから付け替える\n" +
+  "- 継承されるannotationをSelect AIで使うには業務プロファイルの「アノテーションを利用」を有効にする\n" +
+  "例(定義): CREATE DOMAIN IF NOT EXISTS CUSTOMER_ID_D AS NUMBER(10) ANNOTATIONS (\"DESCRIPTION\" 'Unique identifier for a customer.', \"ALIASES\" 'customer id, 顧客ID, 顧客番号');\n" +
+  "例(関連付け): ALTER TABLE ORD_TXN MODIFY (CUST_ID) ADD DOMAIN CUSTOMER_ID_D;";
+
+const MODE_CONFIG = {
+  comment: {
+    pageId: "comment-management",
+    policy: "comment_sql",
+    generatePath: "/api/nl2sql/comments/generate-sql",
+    titleKey: "nav.commentManagement",
+    subtitleKey: "metadataSql.comment.subtitle",
+    runnerKey: "metadataSql.comment.runner",
+    placeholderKey: "metadataSql.comment.placeholder",
+    extraText: "",
+  },
+  annotation: {
+    pageId: "annotation-management",
+    policy: "annotation_sql",
+    generatePath: "/api/nl2sql/annotations/generate-sql",
+    titleKey: "nav.annotationManagement",
+    subtitleKey: "metadataSql.annotation.subtitle",
+    runnerKey: "metadataSql.annotation.runner",
+    placeholderKey: "metadataSql.annotation.placeholder",
+    extraText: ANNOTATION_EXTRA_TEXT,
+  },
+  domain: {
+    pageId: "domain-management",
+    policy: "domain_sql",
+    generatePath: "/api/nl2sql/domains/generate-sql",
+    titleKey: "nav.domainManagement",
+    subtitleKey: "metadataSql.domain.subtitle",
+    runnerKey: "metadataSql.domain.runner",
+    placeholderKey: "metadataSql.domain.placeholder",
+    extraText: DOMAIN_EXTRA_TEXT,
+  },
+} as const satisfies Record<
+  MetadataMode,
+  {
+    pageId: string;
+    policy: DbAdminStatementPolicy;
+    generatePath: string;
+    titleKey: Parameters<typeof t>[0];
+    subtitleKey: Parameters<typeof t>[0];
+    runnerKey: Parameters<typeof t>[0];
+    placeholderKey: Parameters<typeof t>[0];
+    extraText: string;
+  }
+>;
+
+export function CommentManagementPage() {
+  return <MetadataSqlManagementPage mode="comment" />;
+}
+
+export function AnnotationManagementPage() {
+  return <MetadataSqlManagementPage mode="annotation" />;
+}
+
+export function DomainManagementPage() {
+  return <MetadataSqlManagementPage mode="domain" />;
+}
+
+function schemaRefreshRequiresFull(job: SchemaRefreshJob | null) {
+  if (!job) return false;
+  return (
+    Boolean(job.requires_full_refresh) ||
+    job.error_code === "schema_refresh_full_required" ||
+    job.error_code === "schema_refresh_target_unresolved"
+  );
+}
+
+function schemaRefreshRequiredMessage(reasonCode = "") {
+  if (reasonCode === "schema_refresh_target_unresolved") {
+    return t("dataMgmt.schemaJob.targetUnresolved");
+  }
+  return t("dataMgmt.schemaJob.fullRequired");
+}
+
+function schemaRefreshErrorMessage(job: SchemaRefreshJob) {
+  if (schemaRefreshRequiresFull(job)) {
+    return schemaRefreshRequiredMessage(job.error_code);
+  }
+  return job.error_code
+    ? `${t("dataMgmt.schemaJob.error")} (${job.error_code})`
+    : t("dataMgmt.schemaJob.error");
+}
+
+function objectListErrorMessage(error: unknown, fallbackKey: Parameters<typeof t>[0]) {
+  if (isTimeoutError(error)) {
+    return t("dataMgmt.objectList.timeout", {
+      seconds: requestTimeoutSeconds(API_TIMEOUT_MS.interactiveList),
+    });
+  }
+  return error instanceof Error ? error.message : t(fallbackKey);
+}
+
+function objectListLoadMoreErrorMessage(error: unknown, fallbackKey: Parameters<typeof t>[0]) {
+  if (isTimeoutError(error)) {
+    return t("objectSelector.loadMoreTimeout", {
+      seconds: requestTimeoutSeconds(API_TIMEOUT_MS.interactiveList),
+    });
+  }
+  return error instanceof Error ? error.message : t(fallbackKey);
+}
+
+function MetadataSqlManagementPage({ mode }: { mode: MetadataMode }) {
+  const { pageId, policy, generatePath } = MODE_CONFIG[mode];
+  useWorkspaceRevalidation();
+  const [activePanel, setActivePanel] = useWorkspaceState<MetadataPanel>("activePanel", "targets");
+  const [selectedKeys, setSelectedKeys] = useWorkspaceState<string[]>("selectedKeys", []);
+  const [details, setDetails] = useState<DbAdminObjectDetail[]>([]);
+  const [domainInventory, setDomainInventory] = useState<DomainInventoryData | null>(null);
+  const [domainOperation, setDomainOperation] = useWorkspaceState<DomainOperation>("domainOperation", "create");
+  const [sampleLimit, setSampleLimit] = useWorkspaceState("sampleLimit", 10);
+  const [refreshedSampleText, setRefreshedSampleText] = useState<string | null>(null);
+  const [extraText, setExtraText] = useWorkspaceState("extraText", MODE_CONFIG[mode].extraText);
+  const [generated, setGenerated] = useState<MetadataSqlGenerateData | null>(null);
+  const [generationResetSignal, setGenerationResetSignal] = useWorkspaceState("generationResetSignal", 0);
+  const [targetSearch, setTargetSearch] = useWorkspaceState("targetSearch", "");
+  const [targetOwnerPrefix, setTargetOwnerPrefix] = useWorkspaceState("targetOwnerPrefix", "");
+  const [targetFilter, setTargetFilter] = useWorkspaceState<TargetFilter>("targetFilter", "all");
+  const [targetSort, setTargetSort] = useWorkspaceState<TargetSortState>("targetSort", { key: "name", direction: "asc" });
+  const debouncedTargetSearch = useDebouncedValue(targetSearch, 250);
+  const debouncedTargetOwnerPrefix = useDebouncedValue(targetOwnerPrefix, 250);
+  const objectsQuery = useDbAdminObjects(
+    debouncedTargetSearch,
+    targetFilter,
+    "all",
+    debouncedTargetOwnerPrefix,
+    "name_comment"
+  );
+  const objectItems = useMemo(
+    () => (objectsQuery.data?.pages ?? []).flatMap((page) => page.items),
+    [objectsQuery.data]
+  );
+  const firstObjectPage = objectsQuery.data?.pages[0];
+  const totalTargetCount = dbAdminObjectCountsFromPage(firstObjectPage, objectItems).totalCount;
+  const validationSequence = useRef(0);
+  const selectionSignature = JSON.stringify([...selectedKeys].sort());
+  const currentSelection = useRef(selectionSignature);
+  currentSelection.current = selectionSignature;
+  // unmount 時に sequence を進める cleanup は置かない。開発モードの StrictMode は mount → 疑似 unmount → 再 mount で
+  // effect を二重実行するため、cleanup で sequence が進むと再活性化時の唯一の応答が「古い」と判定されて破棄され、
+  // loading が解除されない(#675)。画面は keep-alive で実 unmount はアプリ終了時だけなので不要。
+  const [validated, setValidated] = useState(false);
+  const [checkedAt, setCheckedAt] = useState("");
+  const [loading, setLoading] = useState("");
+  const [message, setMessage] = useState("");
+  const [schemaRefreshJobId, setSchemaRefreshJobId] = useState("");
+  const [schemaRefreshError, setSchemaRefreshError] = useState("");
+  const [schemaRefreshNeedsFull, setSchemaRefreshNeedsFull] = useState(false);
+  const completedSchemaRefreshJob = useRef("");
+  const sharedSchemaRefresh = useSchemaRefreshCoordinator();
+  const schemaRefreshJobQuery = useSchemaRefreshJob(schemaRefreshJobId);
+  const schemaRefreshing = sharedSchemaRefresh.isRefreshing;
+  const visibleSchemaRefreshError = schemaRefreshError || sharedSchemaRefresh.error;
+
+  const allTargets = useMemo(
+    () => targetItemsFromObjects(objectItems),
+    [objectItems]
+  );
+  const selectedTargets = useMemo(
+    () => selectedKeys.map((key) => targetFromKey(key)).filter(Boolean) as MetadataSqlTarget[],
+    [selectedKeys]
+  );
+  const inputTexts = useMemo(
+    () => buildMetadataInputTexts(details, sampleLimit),
+    [details, sampleLimit]
+  );
+  const generationSequence = useRef(0);
+  const generationSignature = JSON.stringify([
+    selectionSignature,
+    inputTexts,
+    sampleLimit,
+    extraText,
+    mode === "domain" ? [domainOperation, domainInventory?.domain_text ?? ""] : null,
+  ]);
+  const currentGenerationSignature = useRef(generationSignature);
+  currentGenerationSignature.current = generationSignature;
+  useEffect(() => {
+    generationSequence.current += 1;
+    setLoading((current) => current === "generate" ? "" : current);
+  }, [generationSignature]);
+  const panels = useMemo(
+    () =>
+      [
+        { id: "targets", label: t("metadataSql.tabs.targets"), icon: Table2 },
+        { id: "input", label: t("metadataSql.tabs.input"), icon: FileText },
+        { id: "execute", label: t("metadataSql.tabs.execute"), icon: Code2 },
+      ] satisfies Array<DbObjectTab<MetadataPanel>>,
+    []
+  );
+  const activePanelIndex = Math.max(
+    0,
+    panels.findIndex((panel) => panel.id === activePanel)
+  );
+  const renderStepIndicator = (panel: MetadataPanel) =>
+    activePanel === panel ? (
+      <DbObjectStepIndicator
+        steps={panels.map((item) => item.label)}
+        activeIndex={activePanelIndex}
+        ariaLabel={t("metadataSql.steps.label")}
+        dataTestId={`${pageId}-steps`}
+      />
+    ) : null;
+
+  const filteredTargets = useMemo(() => {
+    const q = targetSearch.trim().toLowerCase();
+    const ownerPrefixKey = targetOwnerPrefix.trim().toUpperCase();
+    return allTargets
+      .filter((item) => {
+        if (ownerPrefixKey && !item.owner.toUpperCase().startsWith(ownerPrefixKey)) return false;
+        if (targetFilter === "view" && !isViewLikeTarget(item.object_type)) return false;
+        if (targetFilter === "table" && item.object_type !== "table") return false;
+        if (!q) return true;
+        return (
+          item.object_name.toLowerCase().includes(q) ||
+          item.comment.toLowerCase().includes(q)
+        );
+      })
+      .sort((left, right) => {
+        const a = targetSortValue(left, targetSort.key);
+        const b = targetSortValue(right, targetSort.key);
+        const result = a < b ? -1 : a > b ? 1 : 0;
+        return targetSort.direction === "asc" ? result : -result;
+      });
+  }, [allTargets, targetFilter, targetOwnerPrefix, targetSearch, targetSort]);
+
+  const refreshObjects = async (announce = false) => {
+    setMessage("");
+    const result = await objectsQuery.refetch();
+    if (result.error) {
+      setMessage(result.error instanceof Error ? result.error.message : t("metadataSql.error.load"));
+      return;
+    }
+    if (announce) {
+      toast.success(t("common.action.refreshed"));
+    }
+  };
+
+  const refreshSchema = async () => {
+    setLoading("schema-refresh");
+    setMessage("");
+    setSchemaRefreshError("");
+    setSchemaRefreshNeedsFull(false);
+    try {
+      const job = await sharedSchemaRefresh.start();
+      if (job.job_id) {
+        completedSchemaRefreshJob.current = "";
+        setSchemaRefreshJobId(job.job_id);
+      }
+    } catch (err) {
+      setMessage(
+        err instanceof Error
+          ? err.message
+          : t("dataMgmt.schemaJob.submitError")
+      );
+    } finally {
+      setLoading("");
+    }
+  };
+
+  useEffect(() => {
+    const job = schemaRefreshJobQuery.data;
+    if (!job) return;
+    const reportKey = `${job.job_id}:${job.status}`;
+    if (completedSchemaRefreshJob.current === reportKey) return;
+    if (job.status === "done") {
+      completedSchemaRefreshJob.current = reportKey;
+      setSchemaRefreshError("");
+      setSchemaRefreshNeedsFull(false);
+      void refreshObjects();
+    } else if (job.status === "error") {
+      completedSchemaRefreshJob.current = reportKey;
+      const needsFull = schemaRefreshRequiresFull(job);
+      setSchemaRefreshNeedsFull(needsFull);
+      setSchemaRefreshError(schemaRefreshErrorMessage(job));
+    }
+  }, [schemaRefreshJobQuery.data]);
+
+  const reloadAfterMutation = (result: DbAdminExecuteData) => {
+    if (result.schema_refresh_job_id) {
+      sharedSchemaRefresh.track(result.schema_refresh_job_id);
+      completedSchemaRefreshJob.current = "";
+      setSchemaRefreshError("");
+      setSchemaRefreshNeedsFull(false);
+      setSchemaRefreshJobId(result.schema_refresh_job_id);
+    } else if (result.schema_refresh_required) {
+      setSchemaRefreshError(schemaRefreshRequiredMessage(result.schema_refresh_reason_code));
+      setSchemaRefreshNeedsFull(true);
+    }
+    void refreshObjects();
+  };
+
+  const toggleTarget = (target: MetadataSqlTarget) => {
+    const key = targetKey(target);
+    if (!selectedKeys.includes(key) && selectedKeys.length >= METADATA_TARGET_LIMIT) {
+      setMessage(t("metadataSql.error.targetLimit", { limit: METADATA_TARGET_LIMIT }));
+      return;
+    }
+    setMessage("");
+    setSelectedKeys((current) =>
+      current.includes(key) ? current.filter((item) => item !== key) : [...current, key]
+    );
+    setValidated(false);
+    setDetails([]);
+    setDomainInventory(null);
+    setRefreshedSampleText(null);
+    setGenerated(null);
+  };
+
+  const bulkSelectTargets = (targets: MetadataTargetItem[], selected: boolean) => {
+    const targetKeys = targets.map((target) => target.key);
+    const targetKeySet = new Set(targetKeys);
+    if (selected) {
+      const currentSet = new Set(selectedKeys);
+      const additions = targetKeys.filter((key) => !currentSet.has(key));
+      const available = Math.max(0, METADATA_TARGET_LIMIT - selectedKeys.length);
+      const limitedAdditions = additions.slice(0, available);
+      setSelectedKeys([...selectedKeys, ...limitedAdditions]);
+      setMessage(
+        additions.length > available
+          ? t("metadataSql.error.targetLimit", { limit: METADATA_TARGET_LIMIT })
+          : ""
+      );
+    } else {
+      setSelectedKeys(selectedKeys.filter((key) => !targetKeySet.has(key)));
+      setMessage("");
+    }
+    setValidated(false);
+    setDetails([]);
+    setDomainInventory(null);
+    setRefreshedSampleText(null);
+    setGenerated(null);
+  };
+
+  const toggleSort = (key: TargetSortKey) => {
+    setTargetSort((current) => ({
+      key,
+      direction: current.key === key && current.direction === "asc" ? "desc" : "asc",
+    }));
+  };
+
+  const fetchDetails = async (preserveWork = false) => {
+    generationSequence.current += 1;
+    if (selectedTargets.length === 0) {
+      setMessage(t("metadataSql.error.noTarget"));
+      return;
+    }
+    if (selectedTargets.length > METADATA_TARGET_LIMIT) {
+      setMessage(t("metadataSql.error.targetLimit", { limit: METADATA_TARGET_LIMIT }));
+      return;
+    }
+    const sequence = ++validationSequence.current;
+    const validatingSelection = selectionSignature;
+    if (!preserveWork) setActivePanel("input");
+    setValidated(false);
+    setLoading("details");
+    setMessage("");
+    try {
+      const nextDetails: DbAdminObjectDetail[] = [];
+      for (let index = 0; index < selectedTargets.length; index += METADATA_DETAIL_FETCH_BATCH_SIZE) {
+        const batch = selectedTargets.slice(index, index + METADATA_DETAIL_FETCH_BATCH_SIZE);
+        const batchDetails = await Promise.all(batch.map((target) => {
+          const params = new URLSearchParams();
+          if (target.owner) params.set("owner", target.owner);
+          const suffix = params.toString() ? `?${params.toString()}` : "";
+          return apiGet<DbAdminObjectDetail>(
+            isViewLikeTarget(target.object_type)
+              ? `/api/nl2sql/db-admin/views/${encodeURIComponent(target.object_name)}${suffix}`
+              : `/api/nl2sql/db-admin/tables/${encodeURIComponent(target.object_name)}${suffix}`
+          );
+        }));
+        nextDetails.push(...batchDetails);
+      }
+      let nextInventory: DomainInventoryData | null = null;
+      if (mode === "domain") {
+        // 既存ドメイン(定義と関連付け先)は更新/再作成/削除の判断材料。取得失敗は warning として残し、作成は続行できる。
+        const inventoryPayload: DomainInventoryPayload = {
+          targets: selectedTargets.filter((target) => target.object_type === "table"),
+        };
+        try {
+          nextInventory = await apiPost<DomainInventoryData>("/api/nl2sql/domains/inventory", inventoryPayload);
+        } catch (err) {
+          nextInventory = {
+            domains: [],
+            domain_text: "",
+            runtime: "",
+            warnings: [err instanceof Error ? err.message : t("metadataSql.error.details")],
+          };
+        }
+      }
+      if (sequence !== validationSequence.current || validatingSelection !== currentSelection.current) return;
+      setDetails(nextDetails);
+      setDomainInventory(nextInventory);
+      setValidated(true);
+      setCheckedAt(new Date().toISOString());
+      if (!preserveWork) { setRefreshedSampleText(null); setGenerated(null); }
+      if (!preserveWork) toast.success(t("metadataSql.toast.detailsLoaded", { count: nextDetails.length }));
+    } catch (err) {
+      if (sequence !== validationSequence.current || validatingSelection !== currentSelection.current) return;
+      setMessage(err instanceof Error ? err.message : t("metadataSql.error.details"));
+    } finally {
+      if (sequence === validationSequence.current) setLoading("");
+    }
+  };
+
+  useWorkspaceActivation(() => {
+    if (selectedTargets.length > 0) void fetchDetails(true);
+  });
+
+  const generateSql = async () => {
+    if (loading || !validated) return;
+    if (selectedTargets.length === 0) {
+      setMessage(t("metadataSql.error.noTarget"));
+      return;
+    }
+    if (selectedTargets.length > METADATA_TARGET_LIMIT || details.length > METADATA_TARGET_LIMIT) {
+      setMessage(t("metadataSql.error.targetLimit", { limit: METADATA_TARGET_LIMIT }));
+      return;
+    }
+    const sequence = ++generationSequence.current;
+    const submittedSignature = generationSignature;
+    const isCurrent = () => sequence === generationSequence.current &&
+      submittedSignature === currentGenerationSignature.current;
+    setActivePanel("execute");
+    setLoading("generate");
+    setMessage("");
+    try {
+      const samplePayload: MetadataSqlSamplePayload = {
+        targets: details.map((detail) => ({
+          owner: detail.owner,
+          object_name: detail.name,
+          object_type: normalizeMetadataTargetType(detail.object_type),
+          columns: detail.columns.map((column) => column.column_name),
+        })),
+        sample_limit: sampleLimit,
+      };
+      const samples = await apiPost<MetadataSqlSampleData>("/api/nl2sql/metadata-samples", samplePayload);
+      if (!isCurrent()) return;
+      setRefreshedSampleText(samples.sample_text);
+      const payload: MetadataSqlGeneratePayload = {
+        targets: selectedTargets,
+        structure_text: inputTexts.structureText,
+        primary_key_text: inputTexts.primaryKeyText,
+        foreign_key_text: inputTexts.foreignKeyText,
+        sample_text: samples.sample_text,
+        extra_text: extraText,
+        ...(mode === "domain"
+          ? {
+              operation: domainOperation,
+              domain_text: domainInventory?.domain_text ?? "",
+              domains: domainInventory?.domains ?? [],
+            }
+          : {}),
+      };
+      const generatedSql = await apiPost<MetadataSqlGenerateData>(generatePath, payload);
+      if (!isCurrent()) return;
+      setGenerated({
+        ...generatedSql,
+        warnings: [...(domainInventory?.warnings ?? []), ...samples.warnings, ...generatedSql.warnings],
+      });
+      setGenerationResetSignal((value) => value + 1);
+      toast.success(t("metadataSql.toast.generated"));
+    } catch (err) {
+      if (isCurrent()) setMessage(err instanceof Error ? err.message : t("metadataSql.error.generate"));
+    } finally {
+      if (sequence === generationSequence.current) setLoading("");
+    }
+  };
+
+  return (
+    <>
+      <PageHeader wide
+        title={t(MODE_CONFIG[mode].titleKey)}
+        subtitle={t(MODE_CONFIG[mode].subtitleKey)}
+        meta={
+          firstObjectPage?.refreshed_at
+            ? t("common.schemaRefreshedAt", {
+                date: formatDateTime(firstObjectPage.refreshed_at),
+              })
+            : undefined
+        }
+        status={<SchemaRefreshHeaderStatus testId={`${pageId}-schema-refresh-status`} />}
+        actions={[
+            {
+              id: "refresh",
+              kind: "utility",
+              label: t("common.action.refresh"),
+              icon: RefreshCw,
+              onClick: () => void refreshObjects(true),
+              loading: objectsQuery.isFetching && !objectsQuery.isFetchingNextPage,
+            },
+          {
+            id: "schema-refresh",
+            kind: "utility",
+            label: t("common.action.schemaRefresh"),
+            icon: RefreshCw,
+            onClick: () => void refreshSchema(),
+            loading: sharedSchemaRefresh.isStarting,
+            disabled: schemaRefreshing,
+          },
+        ]}
+      />
+      {selectedTargets.length > 0 && (checkedAt || activePanel !== "targets") ? (
+        <PageBody wide className="pb-0">
+          <Banner severity={validated ? "info" : "warning"} action={
+            <Button type="button" variant="secondary" size="sm" disabled={Boolean(loading)} onClick={() => void fetchDetails(true)}>{t("workspace.refresh")}</Button>
+          }>
+            {t(checkedAt ? "workspace.snapshot" : "workspace.unverified")}{checkedAt ? ` (${formatDateTime(checkedAt)})` : ""}
+          </Banner>
+        </PageBody>
+      ) : null}
+      <PageBody wide className="grid gap-4">
+        <PageNotice
+          notice={
+            message
+              ? { tone: "danger", message: `${message} ${t("metadataSql.error.retryHint")}` }
+              : visibleSchemaRefreshError
+                ? { tone: "danger", message: visibleSchemaRefreshError }
+                : null
+          }
+          action={
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={
+                schemaRefreshNeedsFull || Boolean(sharedSchemaRefresh.error)
+                  ? () => void refreshSchema()
+                  : () => void refreshObjects()
+              } icon={RefreshCw}>
+              <span>
+                {schemaRefreshNeedsFull || Boolean(sharedSchemaRefresh.error)
+                  ? t("common.action.schemaRefresh")
+                  : t("tableMgmt.action.refresh")}
+              </span>
+            </Button>
+          }
+        />
+        {schemaRefreshing ? (
+          <SchemaRefreshProcessing testId={`${pageId}-workspace-processing`} />
+        ) : objectsQuery.isFetching && !objectsQuery.isFetchingNextPage && Boolean(objectsQuery.data) ? (
+          <ProcessingIndicator
+            active
+            label={t("common.processing.refreshing")}
+            operationKey="metadata-objects-refresh"
+            placement="workspace"
+            className="rounded-md border border-border bg-surface px-3 py-2 shadow-sm"
+            testId={`${pageId}-workspace-processing`}
+            activityIcon="none"
+          />
+        ) : null}
+
+        <DbObjectManagementTabs
+          activeView={activePanel}
+          tabs={panels}
+          idPrefix={pageId}
+          ariaLabel={t("metadataSql.tabs.label")}
+          onViewChange={setActivePanel}
+        />
+
+        <DbObjectManagementPanelShell
+          id={`${pageId}-panel-targets`}
+          labelledBy={`${pageId}-tab-targets`}
+          idPrefix={pageId}
+          ariaLabel={t("metadataSql.workspace.targets")}
+          className={activePanel === "targets" ? "" : "hidden"}
+          topContent={renderStepIndicator("targets")}
+        >
+          <MetadataTargetGrid
+            pageId={pageId}
+            items={filteredTargets}
+            totalCount={totalTargetCount}
+            selectedKeys={selectedKeys}
+            loading={objectsQuery.isPending && !objectsQuery.data}
+            error={
+              objectsQuery.error && !objectsQuery.data
+                ? objectListErrorMessage(objectsQuery.error, "metadataSql.error.load")
+                : ""
+            }
+            search={targetSearch}
+            ownerPrefix={targetOwnerPrefix}
+            filter={targetFilter}
+            sort={targetSort}
+            hasNextPage={Boolean(objectsQuery.hasNextPage)}
+            loadingNextPage={objectsQuery.isFetchingNextPage}
+            loadMoreError={
+              objectsQuery.isFetchNextPageError && objectsQuery.error
+                ? objectListLoadMoreErrorMessage(objectsQuery.error, "metadataSql.error.load")
+                : ""
+            }
+            onSearchChange={setTargetSearch}
+            onOwnerPrefixChange={setTargetOwnerPrefix}
+            onFilterChange={setTargetFilter}
+            onSortChange={toggleSort}
+            onToggle={toggleTarget}
+            onBulkSelect={bulkSelectTargets}
+            onRetry={() => void refreshObjects()}
+            onLoadMore={() => void objectsQuery.fetchNextPage()}
+            onRetryLoadMore={() => void objectsQuery.fetchNextPage()}
+            onFetchDetails={() => void fetchDetails()}
+            fetchingDetails={loading === "details"}
+          />
+        </DbObjectManagementPanelShell>
+
+        <DbObjectManagementPanelShell
+          id={`${pageId}-panel-input`}
+          labelledBy={`${pageId}-tab-input`}
+          idPrefix={pageId}
+          ariaLabel={t("metadataSql.workspace.input")}
+          className={activePanel === "input" ? "" : "hidden"}
+          topContent={renderStepIndicator("input")}
+        >
+          <MetadataInputPanel
+            pageId={pageId}
+            inputTexts={inputTexts}
+            detailsReady={validated && details.length > 0}
+            detailsLoading={loading === "details"}
+            selectedCount={selectedTargets.length}
+            sampleLimit={sampleLimit}
+            sampleText={refreshedSampleText ?? inputTexts.sampleText}
+            extraText={extraText}
+            loading={loading === "generate"}
+            domain={
+              mode === "domain"
+                ? {
+                    operation: domainOperation,
+                    inventory: domainInventory,
+                    onOperationChange: setDomainOperation,
+                  }
+                : null
+            }
+            onSampleLimitChange={(value) => {
+              setSampleLimit(value);
+              setRefreshedSampleText(null);
+            }}
+            onExtraTextChange={setExtraText}
+            onGenerate={() => void generateSql()}
+          />
+        </DbObjectManagementPanelShell>
+
+        <DbObjectManagementPanelShell
+          id={`${pageId}-panel-execute`}
+          labelledBy={`${pageId}-tab-execute`}
+          idPrefix={pageId}
+          ariaLabel={t("metadataSql.workspace.execute")}
+          className={activePanel === "execute" ? "" : "hidden"}
+          topContent={renderStepIndicator("execute")}
+        >
+          <MetadataExecutePanel
+            pageId={pageId}
+            mode={mode}
+            generated={generated}
+            executionBlocked={selectedTargets.length > 0 && !validated}
+            draftScope={selectionSignature}
+            loading={loading === "generate"}
+            policy={policy}
+            resetSignal={generationResetSignal}
+            onExecuted={reloadAfterMutation}
+          />
+        </DbObjectManagementPanelShell>
+      </PageBody>
+    </>
+  );
+}
+
+function MetadataTargetGrid({
+  pageId,
+  items,
+  totalCount,
+  selectedKeys,
+  loading,
+  error,
+  search,
+  ownerPrefix,
+  filter,
+  sort,
+  hasNextPage,
+  loadingNextPage,
+  loadMoreError,
+  fetchingDetails,
+  onSearchChange,
+  onOwnerPrefixChange,
+  onFilterChange,
+  onSortChange,
+  onToggle,
+  onBulkSelect,
+  onRetry,
+  onLoadMore,
+  onRetryLoadMore,
+  onFetchDetails,
+}: {
+  pageId: string;
+  items: MetadataTargetItem[];
+  totalCount: number;
+  selectedKeys: string[];
+  loading: boolean;
+  error: string;
+  search: string;
+  ownerPrefix: string;
+  filter: TargetFilter;
+  sort: TargetSortState;
+  hasNextPage: boolean;
+  loadingNextPage: boolean;
+  loadMoreError: string;
+  fetchingDetails: boolean;
+  onSearchChange: (value: string) => void;
+  onOwnerPrefixChange: (value: string) => void;
+  onFilterChange: (value: TargetFilter) => void;
+  onSortChange: (key: TargetSortKey) => void;
+  onToggle: (target: MetadataSqlTarget) => void;
+  onBulkSelect: (targets: MetadataTargetItem[], selected: boolean) => void;
+  onRetry: () => void;
+  onLoadMore: () => void;
+  onRetryLoadMore: () => void;
+  onFetchDetails: () => void;
+}) {
+  const hasActiveFilter = Boolean(search.trim()) || Boolean(ownerPrefix.trim()) || filter !== "all";
+  const selectedSet = useMemo(() => new Set(selectedKeys), [selectedKeys]);
+  const selectedVisibleCount = items.filter((item) => selectedSet.has(item.key)).length;
+  const allVisibleSelected = items.length > 0 && selectedVisibleCount === items.length;
+
+  return (
+    <section className="grid min-w-0 content-start gap-3" aria-labelledby={`${pageId}-targets-heading`}>
+      <DbObjectPanelHeader
+        headingId={`${pageId}-targets-heading`}
+        icon={Table2}
+        title={t("metadataSql.targets.title")}
+        description={t("metadataSql.targets.hint")}
+        action={
+          <>
+            <StatusBadge
+              icon={false}
+              variant="neutral"
+              label={t("command.count", { count: totalCount })}
+            />
+            <StatusBadge icon={false} variant="info" label={t("metadataSql.targets.selected", { count: selectedKeys.length })} />
+          </>
+        }
+      />
+
+      <DbObjectSelectorToolbar
+        searchLabel={t("dbAdmin.search.label")}
+        searchPlaceholder={t("dbAdmin.search.placeholder")}
+        searchValue={search}
+        onSearchChange={onSearchChange}
+        resultLabel={t("objectSelector.resultCountWithSelected", {
+          visible: items.length,
+          total: totalCount,
+          selected: selectedKeys.length,
+        })}
+        dataTestId={`${pageId}-target-toolbar`}
+        ownerPrefixField={{
+          label: t("dbAdmin.owner.label"),
+          placeholder: t("dbAdmin.ownerPrefix.placeholder"),
+          value: ownerPrefix,
+          onChange: onOwnerPrefixChange,
+        }}
+      >
+        <DbManagementSelectField
+          label={t("metadataSql.targets.typeFilter")}
+          value={filter}
+          options={[
+            { value: "all", label: t("metadataSql.targets.typeFilterAll") },
+            { value: "table", label: t("metadataSql.targets.typeFilterTables") },
+            { value: "view", label: t("metadataSql.targets.typeFilterViews") },
+          ]}
+          className="sm:w-48"
+          onChange={onFilterChange}
+        />
+      </DbObjectSelectorToolbar>
+
+      {!loading && items.length > 0 ? (
+        <BulkSelectionActions
+          selectLabel={t("common.selection.selectVisible")}
+          clearLabel={t("common.selection.clearVisible")}
+          selectDisabled={allVisibleSelected}
+          clearDisabled={selectedVisibleCount === 0}
+          dataTestId={`${pageId}-target-selection-actions`}
+          onSelectAll={() => onBulkSelect(items, true)}
+          onClearAll={() => onBulkSelect(items, false)}
+        />
+      ) : null}
+
+      {loading ? (
+        <DbManagementLoadingSkeleton
+          idPrefix={`${pageId}-target`}
+          ariaLabel={t("metadataSql.targets.loading")}
+          variant="list"
+        />
+      ) : error ? (
+        <ErrorState message={error} onRetry={onRetry} />
+      ) : items.length === 0 ? (
+        <EmptyState
+          title={hasActiveFilter ? t("metadataSql.targets.noResultsTitle") : t("metadataSql.targets.emptyTitle")}
+          hint={hasActiveFilter ? t("metadataSql.targets.noResultsHint") : t("metadataSql.targets.emptyHint")}
+        />
+      ) : (
+        // コメントは別列ではなく対象名の直下に置き（テーブル管理・ビュー管理・データ管理と同じ形式）、空いた幅を対象名に回す。
+        // 種類はバッジ「テーブル」＋セル余白が収まる幅にする。狭い幅では対象名が 1 行に収まる最小幅を保ち、
+        // 一覧内の横スクロールで種類・所有者を確認する（5 行の固定高さを維持）。
+        <DataTable
+          columns={[
+            {
+              key: "name",
+              header: t("metadataSql.targets.grid.objectName"),
+              sortable: true,
+              className: "py-1 align-top",
+              render: (item, index) => {
+                const rowId = `${pageId}-target-${index}`;
+                return (
+                  <label className="flex min-h-11 cursor-pointer items-start gap-3 text-fg">
+                    <input
+                      type="checkbox"
+                      checked={selectedSet.has(item.key)}
+                      aria-labelledby={`${rowId}-name ${rowId}-hint`}
+                      aria-describedby={`${rowId}-comment`}
+                      onChange={() => onToggle(item)}
+                      className="mt-1 h-4 w-4 shrink-0 rounded border-border text-accent-fg focus:ring-focus-ring"
+                    />
+                    <span className="grid min-w-0">
+                      <span id={`${rowId}-name`} className="block">
+                        <DbObjectName value={item.qualifiedName} size="xs" interactive />
+                      </span>
+                      <DbObjectCommentText id={`${rowId}-comment`} comment={item.comment} />
+                      <span id={`${rowId}-hint`} className="sr-only">
+                        {t("metadataSql.targets.grid.toggleHint")}
+                      </span>
+                    </span>
+                  </label>
+                );
+              },
+            },
+            {
+              key: "object_type",
+              header: t("metadataSql.targets.grid.type"),
+              sortable: true,
+              headerClassName: "w-[7rem]",
+              className: "whitespace-nowrap py-1 align-top",
+              render: (item) => <StatusBadge icon={false} variant="neutral" label={targetTypeLabel(item.object_type)} />,
+            },
+            {
+              key: "owner",
+              header: t("metadataSql.targets.grid.owner"),
+              sortable: true,
+              headerClassName: "w-[8rem]",
+              className: "py-1 align-top font-mono text-fg-muted",
+              render: (item) => <IdentifierText value={item.owner || "-"} />,
+            },
+          ]}
+          rows={items}
+          getRowKey={(item) => item.key}
+          sort={sort}
+          onSortChange={(next) => onSortChange(next.key as TargetSortKey)}
+          isRowSelected={(item) => selectedSet.has(item.key)}
+          rowProps={() => ({ className: `${DB_OBJECT_GRID_ROW_CLASS} hover:bg-surface-hover` })}
+          testId={`${pageId}-target-grid`}
+          scrollTestId="db-admin-object-list"
+          tableClassName="w-full min-w-[28rem] table-fixed"
+          stickyHeader
+          visibleRows={INFORMATION_TABLE_FIXED_VISIBLE_ROWS}
+          fillVisibleRows
+        />
+      )}
+      {!loading && (
+        <DbObjectSelectorFooter
+          visibleCount={items.length}
+          totalCount={totalCount}
+          selectedCount={selectedKeys.length}
+          hasNextPage={hasNextPage}
+          loadingNextPage={loadingNextPage}
+          loadMoreError={loadMoreError}
+          dataTestId={`${pageId}-target-footer`}
+          onLoadMore={onLoadMore}
+          onRetryLoadMore={onRetryLoadMore}
+        />
+      )}
+      {!loading && (
+        <ContentActionBar
+          ariaLabel={t("metadataSql.targets.actions")}
+          title={t("metadataSql.targets.fetchActionTitle")}
+          description={
+            selectedKeys.length > 0
+              ? t("metadataSql.targets.fetchActionReady", { count: selectedKeys.length })
+              : t("metadataSql.targets.fetchActionDisabled")
+          }
+          actionsClassName="w-full sm:w-auto"
+          testId={`${pageId}-target-actions`}
+        >
+          <Button icon={Database}
+            type="button"
+            variant="primary"
+            size="lg"
+            className="w-full sm:w-auto"
+            loading={fetchingDetails}
+            disabled={selectedKeys.length === 0}
+            onClick={onFetchDetails}
+          >
+            <span>{t("metadataSql.action.fetchInfo")}</span>
+          </Button>
+        </ContentActionBar>
+      )}
+    </section>
+  );
+}
+
+function MetadataInputPanel({
+  pageId,
+  inputTexts,
+  detailsReady,
+  detailsLoading,
+  selectedCount,
+  sampleLimit,
+  sampleText,
+  extraText,
+  loading,
+  domain,
+  onSampleLimitChange,
+  onExtraTextChange,
+  onGenerate,
+}: {
+  pageId: string;
+  inputTexts: ReturnType<typeof buildMetadataInputTexts>;
+  detailsReady: boolean;
+  detailsLoading: boolean;
+  selectedCount: number;
+  sampleLimit: number;
+  sampleText: string;
+  extraText: string;
+  loading: boolean;
+  /** ドメイン管理だけ: 操作種別と既存ドメイン。 */
+  domain: {
+    operation: DomainOperation;
+    inventory: DomainInventoryData | null;
+    onOperationChange: (value: DomainOperation) => void;
+  } | null;
+  onSampleLimitChange: (value: number) => void;
+  onExtraTextChange: (value: string) => void;
+  onGenerate: () => void;
+}) {
+  return (
+    <div className="grid gap-4">
+      <DbObjectPanelHeader
+        icon={FileText}
+        title={t("metadataSql.input.title")}
+        description={t("metadataSql.input.hint")}
+      />
+
+      {detailsLoading ? (
+        <DbManagementLoadingSkeleton
+          idPrefix={`${pageId}-input`}
+          ariaLabel={t("metadataSql.input.loading")}
+          variant="detail"
+          placement="result"
+        />
+      ) : (
+        <>
+          {!detailsReady && (
+            <EmptyState title={t("metadataSql.input.emptyTitle")} hint={t("metadataSql.input.emptyHint")} />
+          )}
+
+          <div className="grid gap-3 rounded-md border border-border bg-surface-sunken p-3">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+              {domain ? (
+                <DbManagementSelectField
+                  label={t("metadataSql.domain.operation")}
+                  value={domain.operation}
+                  options={[
+                    { value: "create", label: t("metadataSql.domain.operation.create") },
+                    { value: "update", label: t("metadataSql.domain.operation.update") },
+                    { value: "rebuild", label: t("metadataSql.domain.operation.rebuild") },
+                    { value: "delete", label: t("metadataSql.domain.operation.delete") },
+                  ]}
+                  className="sm:w-72"
+                  onChange={domain.onOperationChange}
+                />
+              ) : null}
+              <label className="grid min-w-0 gap-1 text-sm font-medium text-fg sm:w-44">
+                <span>{t("metadataSql.input.sampleLimit")}</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={sampleLimit}
+                  onChange={(event) => {
+                    const value = Number(event.currentTarget.value);
+                    onSampleLimitChange(Number.isFinite(value) ? Math.min(100, Math.max(0, value)) : 0);
+                  }}
+                  className="min-h-11 w-full rounded-md border border-border-control bg-surface px-3 py-2 focus:border-focus-ring focus:ring-2 focus:ring-focus-ring"
+                />
+              </label>
+              <StatusBadge icon={false} variant={detailsReady ? "info" : "neutral"} label={t("metadataSql.targets.selected", { count: selectedCount })} />
+            </div>
+          </div>
+
+          <div className="grid gap-3 xl:grid-cols-2">
+            <MetadataTextarea label={t("metadataSql.input.structure")} value={inputTexts.structureText} rows={8} />
+            <MetadataTextarea label={t("metadataSql.input.sample")} value={sampleText} rows={8} />
+            <MetadataTextarea label={t("metadataSql.input.pk")} value={inputTexts.primaryKeyText} rows={5} />
+            <MetadataTextarea label={t("metadataSql.input.fk")} value={inputTexts.foreignKeyText} rows={5} />
+            {domain ? (
+              <MetadataTextarea
+                label={t("metadataSql.input.domains")}
+                value={domain.inventory?.domain_text || (detailsReady ? t("metadataSql.input.domainsEmpty") : "")}
+                rows={8}
+              />
+            ) : null}
+          </div>
+          {domain?.inventory?.warnings.map((warning) => (
+            <p key={warning} className="rounded-md border border-warning-border bg-warning-subtle px-3 py-2 text-sm text-warning-fg">
+              {warning}
+            </p>
+          ))}
+
+          <label className="grid gap-1 text-sm font-medium text-fg">
+            <span>{t("metadataSql.input.extra")}</span>
+            <textarea
+              value={extraText}
+              onChange={(event) => onExtraTextChange(event.currentTarget.value)}
+              rows={6}
+              className="min-h-32 rounded-md border border-border-control bg-surface px-3 py-2 text-sm leading-6 focus:border-focus-ring focus:ring-2 focus:ring-focus-ring"
+            />
+          </label>
+
+          <ContentActionBar
+            ariaLabel={t("metadataSql.input.actions")}
+            title={t("metadataSql.input.generateActionTitle")}
+            description={
+              detailsReady
+                ? t("metadataSql.input.generateActionReady", { count: selectedCount })
+                : t("metadataSql.input.generateActionDisabled")
+            }
+            actionsClassName="w-full sm:w-auto"
+            testId={`${pageId}-input-actions`}
+          >
+            <Button
+              type="button"
+              variant="primary"
+              size="lg"
+              className="w-full sm:w-auto"
+              loading={loading}
+              disabled={!detailsReady}
+              onClick={onGenerate} icon={Wand2}>
+              <span>{t("metadataSql.action.generate")}</span>
+            </Button>
+          </ContentActionBar>
+        </>
+      )}
+    </div>
+  );
+}
+
+function MetadataExecutePanel({
+  pageId,
+  mode,
+  generated,
+  executionBlocked,
+  draftScope,
+  loading,
+  policy,
+  resetSignal,
+  onExecuted,
+}: {
+  pageId: string;
+  mode: MetadataMode;
+  generated: MetadataSqlGenerateData | null;
+  loading: boolean;
+  policy: DbAdminStatementPolicy;
+  resetSignal: number;
+  executionBlocked: boolean;
+  draftScope: string;
+  onExecuted: (result: DbAdminExecuteData) => void | Promise<void>;
+}) {
+  return (
+    <div className="grid gap-4">
+      <DbObjectPanelHeader
+        icon={Code2}
+        title={t("metadataSql.execute.title")}
+        description={t("metadataSql.execute.hint")}
+        action={
+          generated ? (
+            <StatusBadge icon={false} variant={generated.source === "oci_enterprise_ai" ? "success" : "neutral"} label={generated.source} />
+          ) : null
+        }
+      />
+
+      {loading ? (
+        <DbManagementLoadingSkeleton
+          idPrefix={`${pageId}-execute-result`}
+          ariaLabel={t("metadataSql.execute.loading")}
+          variant="detail"
+          placement="result"
+        />
+      ) : (
+        <>
+          {!generated && (
+            <EmptyState title={t("metadataSql.execute.emptyTitle")} hint={t("metadataSql.execute.emptyHint")} />
+          )}
+
+          {generated?.warnings.map((warning) => (
+            <p key={warning} className="rounded-md border border-warning-border bg-warning-subtle px-3 py-2 text-sm text-warning-fg">
+              {warning}
+            </p>
+          ))}
+
+          <StatementRunnerCard
+            policy={policy}
+            executionBlocked={executionBlocked}
+            draftScope={draftScope}
+            title={t(MODE_CONFIG[mode].runnerKey)}
+            placeholder={t(MODE_CONFIG[mode].placeholderKey)}
+            initialSql={generated?.sql}
+            resetSignal={resetSignal}
+            executeOnly
+            framed={false}
+            onExecuted={onExecuted}
+          />
+        </>
+      )}
+    </div>
+  );
+}
+
+function MetadataTextarea({ label, value, rows }: { label: string; value: string; rows: number }) {
+  return (
+    <label className="grid min-w-0 gap-1 text-sm font-medium text-fg">
+      <span>{label}</span>
+      <textarea
+        readOnly
+        value={value}
+        rows={rows}
+        className="rounded-md border border-border-control bg-surface-sunken px-3 py-2 font-mono text-sm leading-6 text-fg"
+      />
+    </label>
+  );
+}
+
+function targetItemsFromObjects(items: DbAdminObjectSummary[]) {
+  return items.map((item): MetadataTargetItem => {
+    const objectType = normalizeMetadataTargetType(item.object_type);
+    const qualifiedName = formatDbObjectName(item);
+    const target: MetadataSqlTarget = {
+      owner: item.owner,
+      object_name: item.name,
+      object_type: objectType,
+    };
+    return {
+      ...target,
+      key: targetKey(target),
+      qualifiedName,
+      owner: item.owner,
+      row_count: item.row_count,
+      comment: item.comment,
+    };
+  });
+}
+
+function targetSortValue(item: MetadataTargetItem, key: TargetSortKey) {
+  if (key === "object_type") return item.object_type;
+  if (key === "owner") return item.owner.toLowerCase();
+  return item.qualifiedName.toLowerCase();
+}
+
+function targetTypeLabel(objectType: MetadataSqlTarget["object_type"]) {
+  if (objectType === "materialized_view") return t("metadataSql.targets.type.materializedView");
+  return objectType === "view" ? t("metadataSql.targets.type.view") : t("metadataSql.targets.type.table");
+}
+
+function targetKey(target: MetadataSqlTarget) {
+  const qualifiedName = parseDbAdminObjectTarget(target.object_name, target.owner).qualifiedName;
+  return `${target.object_type}:${qualifiedName}`;
+}
+
+function targetFromKey(key: string): MetadataSqlTarget | null {
+  const [objectType, ...nameParts] = key.split(":");
+  const qualifiedName = nameParts.join(":");
+  if (!isMetadataTargetType(objectType) || !qualifiedName) return null;
+  const target = parseDbAdminObjectTarget(qualifiedName);
+  return { owner: target.owner, object_name: target.name, object_type: objectType };
+}
+
+function normalizeMetadataTargetType(value: string): MetadataSqlTarget["object_type"] {
+  const normalized = value.replace(/[\s_-]+/gu, "_").toLowerCase();
+  if (normalized === "materialized_view" || normalized === "materializedview" || normalized === "mview") {
+    return "materialized_view";
+  }
+  return normalized === "view" ? "view" : "table";
+}
+
+function isMetadataTargetType(value: string): value is MetadataSqlTarget["object_type"] {
+  return value === "table" || value === "view" || value === "materialized_view";
+}
+
+function isViewLikeTarget(value: MetadataSqlTarget["object_type"]) {
+  return value === "view" || value === "materialized_view";
+}

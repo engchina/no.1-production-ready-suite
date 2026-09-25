@@ -1,0 +1,3801 @@
+"""設定 API。"""
+
+import asyncio
+import base64
+import configparser
+import fcntl
+import importlib
+import io
+import json
+import logging
+import re
+import shutil
+import stat
+import time
+from collections.abc import Iterable, Iterator, Mapping
+from contextlib import contextmanager
+from dataclasses import asdict
+from pathlib import Path, PurePosixPath
+from typing import Annotated, Literal
+from uuid import uuid4
+from zipfile import BadZipFile, ZipFile
+
+from fastapi import APIRouter, File, HTTPException, Request, UploadFile
+from fastapi.responses import JSONResponse
+from rag_parser_core.capabilities import ADAPTER_CAPABILITIES, supported_modalities
+from rag_pipeline_core.retrieval import decompose_retrieval_strategy
+
+from app.auth import AuthSession
+from app.clients.external_parser import (
+    ENGINE_SPECS,
+    ExternalParserBackend,
+    ExternalParserClient,
+    external_parser_connection,
+)
+from app.clients.oci_auth import (
+    OCI_PRIVATE_KEY_PASSPHRASE_REQUIRED_ERROR,
+    load_oci_config_without_prompt,
+    pem_file_is_encrypted,
+    resolve_oci_key_file,
+)
+from app.clients.oci_connectivity import (
+    OCI_AUTH_CHECK_OPERATION,
+    OciConnectivityReport,
+    OciConnectivityStage,
+    check_authenticated_api,
+    check_config_format,
+    check_private_key,
+)
+from app.clients.oci_database import AutonomousDatabaseInfo, OciDatabaseClient
+from app.clients.oci_document_understanding import OciDocumentUnderstandingClient
+from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
+from app.clients.oci_genai import OciGenAiClient
+from app.clients.oracle import (
+    CustomPromptNotConfiguredError,
+    GenerationSettingsRevisionConflictError,
+    OracleClient,
+    StoredGenerationSettings,
+    StoredPromptVersion,
+    close_oracle_pool,
+    test_oracle_connection,
+)
+from app.config import (
+    EnterpriseAiConfiguredModel,
+    Settings,
+    enterprise_ai_default_model_id,
+    enterprise_ai_model_catalog,
+    get_settings,
+    load_persisted_model_settings,
+    resolve_model_settings_file,
+)
+from app.rag.agentic_adapter import (
+    agentic_adapter_runtime_settings,
+    normalize_agentic_profile,
+)
+from app.rag.chunking_strategy import (
+    chunking_runtime_settings,
+    normalize_chunking_strategy,
+)
+from app.rag.evaluation_adapter import (
+    evaluation_adapter_runtime_settings,
+    normalize_evaluation_suite,
+)
+from app.rag.extraction_field_adapter import (
+    FieldDefinition,
+    load_field_schema,
+    save_field_schema,
+)
+from app.rag.generation_adapter import (
+    generation_adapter_runtime_settings,
+    normalize_generation_profile,
+)
+from app.rag.graph_adapter import (
+    graph_adapter_runtime_settings,
+    normalize_graph_profile,
+)
+from app.rag.grounding_adapter import (
+    grounding_adapter_runtime_settings,
+    normalize_post_retrieval_pipeline,
+)
+from app.rag.guardrail_adapter import (
+    guardrail_adapter_runtime_settings,
+    normalize_guardrail_policy,
+)
+from app.rag.oracle_schema import vector_index_reindex_sql
+from app.rag.parser_adapter_contract import (
+    parser_adapter_contract_artifact_payload,
+    run_parser_adapter_compatibility_matrix,
+)
+from app.rag.parser_adapter_readiness import parser_adapter_runtime_settings
+from app.rag.parser_adapter_scorecard import (
+    ParserAdapterSourceRoute,
+    build_parser_adapter_scorecard,
+    build_parser_adapter_source_routes,
+)
+from app.rag.preprocess_strategy import (
+    normalize_preprocess_profile,
+    preprocess_runtime_settings,
+)
+from app.rag.retrieval_adapter import (
+    RetrievalStrategyStatus,
+    retrieval_adapter_runtime_settings,
+)
+from app.rag.system_schema import (
+    SystemSchemaError,
+    oracle_error_code,
+    system_schema_manager,
+)
+from app.rag.system_schema_runtime import system_schema_runtime
+from app.rag.vector_index_adapter import (
+    normalize_vector_index_profile,
+    vector_index_adapter_runtime_settings,
+)
+from app.readiness import (
+    READINESS_OK,
+    oracle_readiness_check,
+    upload_storage_readiness_checks,
+)
+from app.schemas.common import ApiResponse
+from app.schemas.evaluation import EvaluationThresholds
+from app.schemas.settings import (
+    AdbInfoData,
+    AdbOperationStatus,
+    AdbSettingsUpdate,
+    AgenticProfileStatusData,
+    AgenticSettingsData,
+    AgenticSettingsUpdate,
+    AnswerRecordSettingsData,
+    AnswerRecordSettingsUpdate,
+    ChunkingSettingsData,
+    ChunkingSettingsUpdate,
+    ChunkingStrategyStatusData,
+    DatabaseConnectionTestResult,
+    DatabaseSettingsData,
+    DatabaseSettingsUpdate,
+    EnterpriseAiModelEntrySettings,
+    EnterpriseAiModelSettings,
+    EvaluationSettingsData,
+    EvaluationSettingsUpdate,
+    EvaluationSuiteStatusData,
+    ExternalParserConnectionData,
+    ExternalParserConnectionStatusData,
+    ExtractionFieldsSettingsData,
+    ExtractionFieldsSettingsUpdate,
+    FieldDefinitionData,
+    GenerationProfileStatusData,
+    GenerationSettingsData,
+    GenerationSettingsUpdate,
+    GenerativeAiModelSettings,
+    GraphProfileStatusData,
+    GraphSettingsData,
+    GraphSettingsUpdate,
+    GroundingPipelineStatusData,
+    GroundingSettingsData,
+    GroundingSettingsUpdate,
+    GuardrailPolicyStatusData,
+    GuardrailSettingsData,
+    GuardrailSettingsUpdate,
+    HuggingFaceSettingsData,
+    HuggingFaceSettingsUpdate,
+    ModelSettingsCheckStatus,
+    ModelSettingsData,
+    ModelSettingsPayload,
+    ModelSettingsTestRequest,
+    ModelSettingsTestResult,
+    ModelSettingsTestTargetType,
+    OciConfigField,
+    OciConfigReadData,
+    OciConfigReadRequest,
+    OciConfigTestResult,
+    OciConfigTestStage,
+    OciConfigTestStatus,
+    OciObjectStorageNamespaceData,
+    OciObjectStorageNamespaceRequest,
+    OciObjectStorageSettingsUpdate,
+    OciPrivateKeyUploadData,
+    OciSettingsData,
+    OciSettingsUpdate,
+    ParserAdapterBackendSourceMatrixData,
+    ParserAdapterContractCaseData,
+    ParserAdapterContractData,
+    ParserAdapterContractSummaryData,
+    ParserAdapterScorecardData,
+    ParserAdapterScorecardEntryData,
+    ParserAdapterSettingsData,
+    ParserAdapterSettingsUpdate,
+    ParserAdapterSourceRouteData,
+    ParserAdapterStatusData,
+    ParserBackendCapabilityData,
+    ParserServiceBackendData,
+    PreprocessProfileStatusData,
+    PreprocessSettingsData,
+    PreprocessSettingsUpdate,
+    PromptVersionCreate,
+    PromptVersionData,
+    PromptVersionsData,
+    RetrievalSettingsData,
+    RetrievalSettingsUpdate,
+    RetrievalStrategyStatusData,
+    SystemTablesInitializeRequest,
+    SystemTablesOperationData,
+    SystemTablesStatusData,
+    UploadStorageSettingsData,
+    UploadStorageSettingsUpdate,
+    VectorIndexProfileStatusData,
+    VectorIndexSettingsData,
+    VectorIndexSettingsUpdate,
+)
+
+router = APIRouter()
+logger = logging.getLogger(__name__)
+OCI_CONFIG_MAX_BYTES = 64 * 1024
+OCI_DIRECTORY_MODE = 0o700
+OCI_CONFIG_FILE_MODE = 0o600
+OCI_PRIVATE_KEY_FILE = "~/.oci/oci_api_key.pem"
+OCI_PRIVATE_KEY_FILE_MODE = 0o600
+OCI_PRIVATE_KEY_MAX_BYTES = 64 * 1024
+ORACLE_WALLET_MAX_BYTES = 20 * 1024 * 1024
+ORACLE_WALLET_MAX_EXTRACTED_BYTES = 100 * 1024 * 1024
+ORACLE_WALLET_REQUIRED_FILES = frozenset(
+    {"tnsnames.ora", "sqlnet.ora", "cwallet.sso", "ewallet.pem"}
+)
+ORACLE_WALLET_SKIPPED_FILES = frozenset(
+    {"readme", "keystore.jks", "truststore.jks", "ojdbc.properties", "ewallet.p12"}
+)
+MODEL_SETTINGS_FILE_MODE = 0o600
+BACKEND_ENV_FILE = Path(__file__).resolve().parents[3] / ".env"
+ENV_FILE_MODE = 0o600
+ENV_ASSIGNMENT_RE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=")
+ORACLE_ERROR_CODE_RE = re.compile(r"\b(?:ORA|DPY|DPI)-\d{4,5}\b", re.IGNORECASE)
+OCI_CONFIG_KEYS: tuple[OciConfigField, ...] = (
+    "user",
+    "fingerprint",
+    "tenancy",
+    "region",
+    "key_file",
+)
+MODEL_TEST_IMAGE_BYTES = base64.b64decode(
+    "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMCAgICAgMCAgIDAwMDBAYEBAQEBAgGBgUGCQgKCgkICQkKDA8MCgsO"
+    "CwkJDRENDg8QEBEQCgwSExIQEw8QEBD/2wBDAQMDAwQDBAgEBAgQCwkLEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ"
+    "EBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBD/wAARCAIAAgADASIAAhEBAxEB/8QAFwABAQEBAAAAAAAAAAAAAAAA"
+    "AAYJA//EACQQAQABAAsBAQEBAAAAAAAAAAAHAwQFBhc3V3aWtNMBAhEh/8QAGQEBAAMBAQAAAAAAAAAAAAAAAAMH"
+    "CAQB/8QAKBEBAAECAA8BAQAAAAAAAAAAAAECAwQFExUzNFJTcXKRkrGy0TER/9oADAMBAAIRAxEAPwDVMAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGJgCrG8wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGvkHZKR"
+    "/tayupRLdEQdkpH+1rK6lEt1nWNFTwjww3jXX7/PV7SAJXAAAAAAAAAAAAAAAAAAAAAxMAVY3mAAAAAAAAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAA18g7JSP9rWV1KJboiDslI/2tZXUolus6xoqeEeGG8a6/f56vaQBK4AAAAAAAAAAA"
+    "AAAAAAAAAGJgCrG8wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGvkHZKR/tayupRLdEQdkpH+1rK6lEt1nWN"
+    "FTwjww3jXX7/AD1e0gCVwAAAAAAAAAAAAAAAAAAAAMTAFWN5gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAANf"
+    "IOyUj/a1ldSiW6Ig7JSP9rWV1KJbrOsaKnhHhhvGuv3+er2kASuAAAAAAAAAAAAAAAAAAAABiYAqxvMAAAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAABr5B2Skf7WsrqUS3REHZKR/tayupRLdZ1jRU8I8MN411+/z1e0gCVwAAAAAA"
+    "AAAAAAAAAAAAAAMTAFWN5gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAANfIOyUj/a1ldSiW6Ig7JSP9rWV1KJ"
+    "brOsaKnhHhhvGuv3+er2kASuAAAAAAAAAAAAAAAAAAAABiYAqxvMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    "ABr5B2Skf7WsrqUS3REHZKR/tayupRLdZ1jRU8I8MN411+/z1e0gCVwAAAAAAAAAAAAAAAAAAAAMTAFWN5gAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAANfIOyUj/AGtZXUoluiIOyUj/AGtZXUolus6xoqeEeGG8a6/f56vaQBK4"
+    "AAAAAAAAAAAAAAAAAAAAGJgCrG8wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGvkHZKR/tayupRLdEQdkpH+"
+    "1rK6lEt1nWNFTwjww3jXX7/PV7SAJXAAAAAAAAAAAAAAAAAAAAAxMAVY3mAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    "AAAAAAAA18g7JSP9rWV1KJboiDslI/2tZXUolus6xoqeEeGG8a6/f56vaQBK4AAAAAAAAAAAAAAAAAAAAGJgCrG8"
+    "wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGvkHZKR/tayupRLdEQdkpH+1rK6lEt1nWNFTwjww3jXX7/AD1e"
+    "0gCVwAAAAAAAAAAAAAAAAAAAAMTAFWN5gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAANfIOyUj/a1ldSiW6Ig"
+    "7JSP9rWV1KJbrOsaKnhHhhvGuv3+er2kASuAAAAAAAAAAAAAAAAAAAABiYAqxvMAAAAAAAAAAAAAAAAAAAAAAAAA"
+    "AAAAAAAAAAAABr5B2Skf7WsrqUS3REHZKR/tayupRLdZ1jRU8I8MN411+/z1e0gCVwAAAAAAAAAAAAAAAAAAAAMT"
+    "AFWN5gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAANfIOyUj/a1ldSiW6Ig7JSP9rWV1KJbrOsaKnhHhhvGuv3"
+    "+er2kASuAAAAAAAAAAAAAAAAAAAABiYAqxvMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABr5B2Skf7WsrqUS"
+    "3REHZKR/tayupRLdZ1jRU8I8MN411+/z1e0gCVwAAAAAAAAAAAAAAAAAAAAMTAFWN5gAAAAAAAAAAAAAAAAAAAAA"
+    "AAAAAAAAAAAAAAAANfIOyUj/AGtZXUoluiIOyUj/AGtZXUolus6xoqeEeGG8a6/f56vaQBK4AAAAAAAAAAAAAAAA"
+    "AAAAGJgCrG8wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGvkHZKR/tayupRLdEQdkpH+1rK6lEt1nWNFTwjw"
+    "w3jXX7/PV7SAJXAAAAAAAAAAAAAAAAAAAAAxMAVY3mAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA18g7JSP9"
+    "rWV1KJboiDslI/2tZXUolus6xoqeEeGG8a6/f56vaQBK4AAAAAAAAAAAAAAAAAAAAGJgCrG8wAAAAAAAAAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAGvkHZKR/tayupRLdEQdkpH+1rK6lEt1nWNFTwjww3jXX7/AD1e0gCVwAAAAAAAAAAA"
+    "AAAAAAAAAMTAFWN5gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAANfIOyUj/a1ldSiW6Ig7JSP9rWV1KJbrOsa"
+    "KnhHhhvGuv3+er2kASuAAAAAAAAAAAAAAAAAAAABEYHQpo/cnj9U8zA6FNH7k8fqnmtxFkLWzHSHfnXD9/X3VfUR"
+    "gdCmj9yeP1TzMDoU0fuTx+qea3DIWtmOkGdcP39fdV9RGB0KaP3J4/VPMwOhTR+5PH6p5rcMha2Y6QZ1w/f191X1"
+    "EYHQpo/cnj9U8zA6FNH7k8fqnmtwyFrZjpBnXD9/X3VfURgdCmj9yeP1TzMDoU0fuTx+qea3DIWtmOkGdcP39fdV"
+    "9RGB0KaP3J4/VPMwOhTR+5PH6p5rcMha2Y6QZ1w/f191X1EYHQpo/cnj9U8zA6FNH7k8fqnmtwyFrZjpBnXD9/X3"
+    "VfURgdCmj9yeP1TzMDoU0fuTx+qea3DIWtmOkGdcP39fdV9RGB0KaP3J4/VPMwOhTR+5PH6p5rcMha2Y6QZ1w/f1"
+    "91X1EYHQpo/cnj9U8zA6FNH7k8fqnmtwyFrZjpBnXD9/X3VfURgdCmj9yeP1TzMDoU0fuTx+qea3DIWtmOkGdcP3"
+    "9fdV9RGB0KaP3J4/VPMwOhTR+5PH6p5rcMha2Y6QZ1w/f191X1EYHQpo/cnj9U8zA6FNH7k8fqnmtwyFrZjpBnXD"
+    "9/X3VfURgdCmj9yeP1TzMDoU0fuTx+qea3DIWtmOkGdcP39fdV9RGB0KaP3J4/VPMwOhTR+5PH6p5rcMha2Y6QZ1"
+    "w/f191X1EYHQpo/cnj9U8zA6FNH7k8fqnmtwyFrZjpBnXD9/X3VfURgdCmj9yeP1TzMDoU0fuTx+qea3DIWtmOkG"
+    "dcP39fdV9RGB0KaP3J4/VPMwOhTR+5PH6p5rcMha2Y6QZ1w/f191X1EYHQpo/cnj9U8zA6FNH7k8fqnmtwyFrZjp"
+    "BnXD9/X3VfURgdCmj9yeP1TzMDoU0fuTx+qea3DIWtmOkGdcP39fdV9cKjUalZdSq9m2bU6CqVOqUX4oKvV6Cj+U"
+    "dHQ0f5+fPz+fx+Pz+f58/P5+fPnz58+fP8+fPjuCX8cMzNU/2f0AHgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAD//2Q=="
+)
+
+
+@router.get("/model", response_model=ApiResponse[ModelSettingsData])
+async def get_model_settings() -> ApiResponse[ModelSettingsData]:
+    """現在のモデル設定を返す。"""
+    settings = get_settings()
+    payload = _payload_from_settings(settings)
+    return ApiResponse(data=_model_settings_data(payload, settings))
+
+
+@router.patch("/model", response_model=ApiResponse[ModelSettingsData])
+async def update_model_settings(
+    request: ModelSettingsPayload,
+) -> ApiResponse[ModelSettingsData]:
+    """モデル設定を永続化し、ランタイム設定へ反映する。"""
+    settings = get_settings()
+    with _model_settings_write_lock(settings):
+        load_persisted_model_settings(settings)
+        resolved_request = _model_settings_with_resolved_secret(settings, request)
+        _persist_model_settings(settings, resolved_request)
+        _apply_model_settings(settings, request)
+    payload = _payload_from_settings(settings)
+    return ApiResponse(data=_model_settings_data(payload, settings))
+
+
+@router.post("/model/check", response_model=ApiResponse[ModelSettingsData])
+async def check_model_settings(
+    request: ModelSettingsPayload,
+) -> ApiResponse[ModelSettingsData]:
+    """保存前のモデル設定を検証する。外部 AI API への推論呼び出しは行わない。"""
+    return ApiResponse(data=_model_settings_data(request, get_settings()))
+
+
+@router.post("/model/test", response_model=ApiResponse[ModelSettingsTestResult])
+async def test_model_settings(
+    request: ModelSettingsTestRequest,
+) -> ApiResponse[ModelSettingsTestResult]:
+    """保存前のモデル設定を使い、対象モデルだけを実 API で検証する。"""
+    started = time.perf_counter()
+    settings = get_settings()
+    candidate = _model_test_candidate_settings(settings, request)
+    try:
+        details = await _run_model_settings_test(candidate, request)
+    except Exception as exc:
+        return ApiResponse(
+            data=_failed_model_test_result(
+                request,
+                exc,
+                elapsed_ms=_elapsed_ms(started),
+                secrets=[candidate.oci_enterprise_ai_api_key],
+            )
+        )
+    return ApiResponse(
+        data=_successful_model_test_result(
+            request,
+            details=details,
+            elapsed_ms=_elapsed_ms(started),
+        )
+    )
+
+
+@router.get("/database", response_model=ApiResponse[DatabaseSettingsData])
+async def get_database_settings() -> ApiResponse[DatabaseSettingsData]:
+    """現在の Oracle 26ai 接続設定を返す。secret は返さない。"""
+    return ApiResponse(data=_database_settings_data(get_settings()))
+
+
+@router.get(
+    "/database/system-tables",
+    response_model=ApiResponse[SystemTablesStatusData],
+)
+async def get_system_tables_status() -> ApiResponse[SystemTablesStatusData]:
+    """RAG system table の状態を DDL なしで取得する。"""
+
+    try:
+        data = await asyncio.to_thread(system_schema_manager.status)
+    except Exception as exc:
+        code = oracle_error_code(exc)
+        safe_code = code if code.startswith("ORA-") else "SCHEMA_STATUS_UNAVAILABLE"
+        raise HTTPException(
+            status_code=503,
+            detail=f"システムテーブルの状態を取得できませんでした ({safe_code})。",
+        ) from exc
+    return ApiResponse(data=SystemTablesStatusData.model_validate(data))
+
+
+@router.post(
+    "/database/system-tables/initialize",
+    response_model=ApiResponse[SystemTablesOperationData],
+)
+async def initialize_system_tables(
+    payload: SystemTablesInitializeRequest,
+    request: Request,
+) -> ApiResponse[SystemTablesOperationData] | JSONResponse:
+    """管理者の明示操作として作成・更新または全再作成する。"""
+
+    session = getattr(request.state, "auth_session", None)
+    if not isinstance(session, AuthSession) or session.role not in {"ADMIN", "LOCAL"}:
+        raise HTTPException(
+            status_code=403,
+            detail="システムテーブル操作には管理者権限が必要です。",
+        )
+    try:
+        data = await asyncio.to_thread(
+            system_schema_manager.initialize,
+            recreate=payload.recreate,
+            confirmation=payload.confirmation,
+        )
+    except SystemSchemaError as exc:
+        headers = {"Retry-After": "5"} if exc.code == "ORA-00054" else None
+        return JSONResponse(
+            status_code=exc.status_code,
+            headers=headers,
+            content={
+                "data": None,
+                "error_messages": [exc.public_message],
+                "warning_messages": [],
+                "error_code": exc.code,
+            },
+        )
+    system_schema_runtime.invalidate()
+    return ApiResponse(data=SystemTablesOperationData.model_validate(data))
+
+
+@router.patch("/database", response_model=ApiResponse[DatabaseSettingsData])
+async def update_database_settings(
+    payload: DatabaseSettingsUpdate,
+) -> ApiResponse[DatabaseSettingsData]:
+    """Oracle 26ai 接続設定を backend/.env と現在プロセスへ反映する。"""
+    settings = get_settings()
+    candidate = _database_settings_candidate(settings, payload)
+    _persist_database_settings(candidate)
+    _apply_database_settings(settings, candidate)
+    close_oracle_pool()
+    return ApiResponse(data=_database_settings_data(settings))
+
+
+@router.get("/huggingface", response_model=ApiResponse[HuggingFaceSettingsData])
+async def get_huggingface_settings() -> ApiResponse[HuggingFaceSettingsData]:
+    """HuggingFace モデルダウンロード設定を返す。token 実値は返さない。"""
+    return ApiResponse(data=_huggingface_settings_data(get_settings()))
+
+
+@router.patch("/huggingface", response_model=ApiResponse[HuggingFaceSettingsData])
+async def update_huggingface_settings(
+    payload: HuggingFaceSettingsUpdate,
+) -> ApiResponse[HuggingFaceSettingsData]:
+    """HuggingFace 設定を backend/.env と現在プロセスへ反映する。"""
+    settings = get_settings()
+    candidate = _huggingface_settings_candidate(settings, payload)
+    _persist_huggingface_settings(candidate)
+    _apply_huggingface_settings(settings, candidate)
+    return ApiResponse(data=_huggingface_settings_data(settings))
+
+
+@router.post("/database/wallet", response_model=ApiResponse[DatabaseSettingsData])
+async def upload_database_wallet(
+    file: Annotated[UploadFile, File(...)],
+) -> ApiResponse[DatabaseSettingsData]:
+    """Oracle Wallet ZIP を固定の TNS_ADMIN ディレクトリへ展開する。"""
+    settings = get_settings()
+    data = await _read_upload_file(file, ORACLE_WALLET_MAX_BYTES)
+    wallet_dir = _install_database_wallet(settings, data, file.filename)
+    settings.oracle_wallet_dir = str(wallet_dir)
+    close_oracle_pool()
+    return ApiResponse(data=_database_settings_data(settings))
+
+
+@router.post("/database/test", response_model=ApiResponse[DatabaseConnectionTestResult])
+async def test_database_settings(
+    payload: DatabaseSettingsUpdate | None = None,
+) -> ApiResponse[DatabaseConnectionTestResult]:
+    """Oracle 26ai 接続設定を検証する。"""
+    started = time.perf_counter()
+    base = get_settings()
+    candidate = _database_settings_candidate(base, payload) if payload is not None else base
+    readiness = oracle_readiness_check(candidate)
+
+    if readiness != READINESS_OK:
+        return ApiResponse(
+            data=DatabaseConnectionTestResult(
+                status="failed",
+                readiness=readiness,
+                message="Oracle 26ai 接続に必要な設定が不足しています。",
+                elapsed_ms=_elapsed_ms(started),
+                troubleshooting=_database_connection_troubleshooting(readiness=readiness),
+            )
+        )
+
+    try:
+        await test_oracle_connection(candidate)
+    except Exception as exc:
+        oracle_error_codes = _oracle_error_codes(str(exc))
+        message = _database_connection_error_message(exc, oracle_error_codes)
+        return ApiResponse(
+            data=DatabaseConnectionTestResult(
+                status="failed",
+                readiness=readiness,
+                message=message,
+                elapsed_ms=_elapsed_ms(started),
+                troubleshooting=_database_connection_troubleshooting(
+                    readiness=readiness,
+                    error_text=str(exc),
+                    error_type=type(exc).__name__,
+                ),
+                details={
+                    "timeout_seconds": candidate.oracle_db_test_timeout_seconds,
+                    "tcp_connect_timeout_seconds": candidate.oracle_tcp_connect_timeout_seconds,
+                    "oracle_error_codes": ", ".join(oracle_error_codes) or None,
+                },
+                error_type=type(exc).__name__,
+            )
+        )
+
+    return ApiResponse(
+        data=DatabaseConnectionTestResult(
+            status="success",
+            readiness=readiness,
+            message="Oracle 26ai への接続に成功しました。",
+            elapsed_ms=_elapsed_ms(started),
+            details={
+                "timeout_seconds": candidate.oracle_db_test_timeout_seconds,
+                "tcp_connect_timeout_seconds": candidate.oracle_tcp_connect_timeout_seconds,
+            },
+        )
+    )
+
+
+@router.get("/database/adb", response_model=ApiResponse[AdbInfoData])
+async def get_adb_info() -> ApiResponse[AdbInfoData]:
+    """Autonomous Database の現在情報を取得する。"""
+    return ApiResponse(data=await _load_adb_info(get_settings()))
+
+
+@router.post("/database/adb/settings", response_model=ApiResponse[AdbInfoData])
+async def update_adb_settings(payload: AdbSettingsUpdate) -> ApiResponse[AdbInfoData]:
+    """ADB 操作対象 OCID と region を保存し、最新情報を返す。"""
+    settings = get_settings()
+    _apply_adb_settings(settings, payload)
+    _persist_adb_settings(settings)
+    return ApiResponse(data=await _load_adb_info(settings))
+
+
+@router.post("/database/adb/start", response_model=ApiResponse[AdbInfoData])
+async def start_adb() -> ApiResponse[AdbInfoData]:
+    """Autonomous Database を起動する。"""
+    return ApiResponse(data=await _control_adb(get_settings(), action="start"))
+
+
+@router.post("/database/adb/stop", response_model=ApiResponse[AdbInfoData])
+async def stop_adb() -> ApiResponse[AdbInfoData]:
+    """Autonomous Database を停止する。"""
+    return ApiResponse(data=await _control_adb(get_settings(), action="stop"))
+
+
+@router.get("/upload-storage", response_model=ApiResponse[UploadStorageSettingsData])
+async def get_upload_storage_settings() -> ApiResponse[UploadStorageSettingsData]:
+    """現在のアップロード原本保存先設定を返す。"""
+    return ApiResponse(data=_upload_storage_settings_data(get_settings()))
+
+
+@router.patch("/upload-storage", response_model=ApiResponse[UploadStorageSettingsData])
+async def update_upload_storage_settings(
+    payload: UploadStorageSettingsUpdate,
+) -> ApiResponse[UploadStorageSettingsData]:
+    """アップロード原本保存先を backend/.env と現在プロセスへ反映する。"""
+    settings = get_settings()
+    candidate = _upload_storage_settings_candidate(settings, payload)
+    _persist_upload_storage_settings(candidate)
+    _apply_upload_storage_settings(settings, candidate)
+    return ApiResponse(data=_upload_storage_settings_data(settings))
+
+
+@router.get("/parser-adapters", response_model=ApiResponse[ParserAdapterSettingsData])
+async def get_parser_adapter_settings() -> ApiResponse[ParserAdapterSettingsData]:
+    """任意 parser adapter の feature flag と package readiness を返す。"""
+    return ApiResponse(data=_parser_adapter_settings_data(get_settings()))
+
+
+@router.get(
+    "/parser-adapters/contract",
+    response_model=ApiResponse[ParserAdapterContractData],
+)
+async def get_parser_adapter_contract() -> ApiResponse[ParserAdapterContractData]:
+    """任意 parser adapter の schema remap compatibility matrix を返す。"""
+    return ApiResponse(data=_parser_adapter_contract_data(get_settings()))
+
+
+@router.get(
+    "/parser-adapters/{backend}/status",
+    response_model=ApiResponse[ExternalParserConnectionStatusData],
+)
+async def get_external_parser_status(
+    backend: ExternalParserBackend,
+) -> ApiResponse[ExternalParserConnectionStatusData]:
+    """外部 GPU parser の native health/models endpoint を確認する。"""
+    result = await asyncio.to_thread(ExternalParserClient(get_settings()).status, backend)
+    return ApiResponse(
+        data=ExternalParserConnectionStatusData(
+            backend=result.backend,
+            status=result.status,
+            version=result.version,
+            warning_code=result.warning_code,
+        )
+    )
+
+
+@router.patch("/parser-adapters", response_model=ApiResponse[ParserAdapterSettingsData])
+async def update_parser_adapter_settings(
+    payload: ParserAdapterSettingsUpdate,
+) -> ApiResponse[ParserAdapterSettingsData]:
+    """任意 parser adapter の backend/feature flag を共有設定と runtime へ反映する。"""
+    settings = get_settings()
+    with _model_settings_write_lock(settings):
+        load_persisted_model_settings(settings)
+        candidate = _parser_adapter_settings_candidate(settings, payload)
+        model_payload = _model_settings_with_resolved_secret(
+            settings,
+            _payload_from_settings(settings),
+        )
+        _persist_model_settings(candidate, model_payload)
+        _apply_parser_adapter_settings(settings, candidate)
+    return ApiResponse(data=_parser_adapter_settings_data(settings))
+
+
+@router.get("/preprocess", response_model=ApiResponse[PreprocessSettingsData])
+async def get_preprocess_settings() -> ApiResponse[PreprocessSettingsData]:
+    """前処理(Preprocess)アダプター(parse 前の原本変換)の選択と利用可否を返す。"""
+    return ApiResponse(data=_preprocess_settings_data(get_settings()))
+
+
+@router.patch("/preprocess", response_model=ApiResponse[PreprocessSettingsData])
+async def update_preprocess_settings(
+    payload: PreprocessSettingsUpdate,
+) -> ApiResponse[PreprocessSettingsData]:
+    """ファイル準備設定を backend/.env と現在プロセスへ反映する。"""
+    settings = get_settings()
+    candidate = _preprocess_settings_candidate(settings, payload)
+    _persist_preprocess_settings(candidate)
+    _apply_preprocess_settings(settings, candidate)
+    return ApiResponse(data=_preprocess_settings_data(settings))
+
+
+@router.get("/chunking", response_model=ApiResponse[ChunkingSettingsData])
+async def get_chunking_settings() -> ApiResponse[ChunkingSettingsData]:
+    """Chunking アダプター(分割戦略)の選択と多様化パラメータを返す。"""
+    return ApiResponse(data=_chunking_settings_data(get_settings()))
+
+
+@router.patch("/chunking", response_model=ApiResponse[ChunkingSettingsData])
+async def update_chunking_settings(
+    payload: ChunkingSettingsUpdate,
+) -> ApiResponse[ChunkingSettingsData]:
+    """文書分割設定を backend/.env と現在プロセスへ反映する。"""
+    settings = get_settings()
+    candidate = _chunking_settings_candidate(settings, payload)
+    _persist_chunking_settings(candidate)
+    _apply_chunking_settings(settings, candidate)
+    return ApiResponse(data=_chunking_settings_data(settings))
+
+
+@router.get("/retrieval", response_model=ApiResponse[RetrievalSettingsData])
+async def get_retrieval_settings() -> ApiResponse[RetrievalSettingsData]:
+    """Retrieval アダプター(検索戦略)の選択と解決内容を返す。"""
+    return ApiResponse(data=_retrieval_settings_data(get_settings()))
+
+
+@router.patch("/retrieval", response_model=ApiResponse[RetrievalSettingsData])
+async def update_retrieval_settings(
+    payload: RetrievalSettingsUpdate,
+) -> ApiResponse[RetrievalSettingsData]:
+    """検索方法設定を backend/.env と現在プロセスへ反映する。
+
+    保存は常に新形式(検索モード + トグル)。.env に残る legacy 複合値は、
+    この保存を通るときモード + トグルへ正規化される。
+    """
+    settings = get_settings()
+    candidate = settings.model_copy(update=_retrieval_settings_updates(settings, payload))
+    _persist_retrieval_settings(candidate)
+    _apply_retrieval_settings(settings, candidate)
+    return ApiResponse(data=_retrieval_settings_data(settings))
+
+
+@router.get("/grounding", response_model=ApiResponse[GroundingSettingsData])
+async def get_grounding_settings() -> ApiResponse[GroundingSettingsData]:
+    """Grounding アダプター(検索後処理)の選択と解決内容を返す。"""
+    return ApiResponse(data=_grounding_settings_data(get_settings()))
+
+
+@router.patch("/grounding", response_model=ApiResponse[GroundingSettingsData])
+async def update_grounding_settings(
+    payload: GroundingSettingsUpdate,
+) -> ApiResponse[GroundingSettingsData]:
+    """根拠確認設定(処理方式 + CRAG 閾値)を backend/.env と現在プロセスへ反映する。"""
+    settings = get_settings()
+    updates: dict[str, object] = {}
+    if payload.pipeline is not None:
+        updates["rag_post_retrieval_pipeline"] = normalize_post_retrieval_pipeline(payload.pipeline)
+    if payload.crag_low_confidence_threshold is not None:
+        updates["rag_grounding_crag_confidence_threshold"] = payload.crag_low_confidence_threshold
+    if payload.crag_high_confidence_threshold is not None:
+        updates["rag_crag_high_confidence_threshold"] = payload.crag_high_confidence_threshold
+    if payload.crag_max_hops is not None:
+        updates["rag_crag_max_hops"] = payload.crag_max_hops
+    if payload.crag_low_evidence_abstain is not None:
+        updates["rag_crag_low_evidence_abstain_enabled"] = payload.crag_low_evidence_abstain
+    candidate = settings.model_copy(update=updates)
+    _persist_grounding_settings(candidate)
+    _apply_grounding_settings(settings, candidate)
+    return ApiResponse(data=_grounding_settings_data(settings))
+
+
+@router.get("/generation", response_model=ApiResponse[GenerationSettingsData])
+async def get_generation_settings() -> ApiResponse[GenerationSettingsData]:
+    """Generation アダプター(回答生成プロファイル)の選択と解決内容を返す。"""
+    stored = await OracleClient().get_generation_settings()
+    return ApiResponse(data=_generation_settings_data(get_settings(), stored))
+
+
+@router.patch("/generation", response_model=ApiResponse[GenerationSettingsData])
+async def update_generation_settings(
+    payload: GenerationSettingsUpdate,
+) -> ApiResponse[GenerationSettingsData]:
+    """回答スタイル設定を Oracle GLOBAL 行へ revision 付きで保存する。"""
+    client = OracleClient()
+    try:
+        stored = await client.update_generation_settings(
+            profile=normalize_generation_profile(payload.profile),
+            expected_revision=payload.expected_revision,
+        )
+    except (GenerationSettingsRevisionConflictError, CustomPromptNotConfiguredError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return ApiResponse(data=_generation_settings_data(get_settings(), stored))
+
+
+def _prompt_versions_data(
+    settings: StoredGenerationSettings,
+    versions: list[StoredPromptVersion],
+) -> PromptVersionsData:
+    """Oracle prompt 版 store を互換 API 形へ変換する。"""
+    return PromptVersionsData(
+        active_version_id=settings.active_prompt_version_id,
+        settings_revision=settings.revision,
+        versions=[
+            PromptVersionData(
+                version_id=version.version_id,
+                name=version.name,
+                system_prompt=version.system_prompt,
+                note=version.note,
+                created_at=version.created_at,
+                created_by=version.created_by_hash or "",
+                active=version.version_id == settings.active_prompt_version_id,
+            )
+            for version in versions
+        ],
+    )
+
+
+@router.get("/answer-records", response_model=ApiResponse[AnswerRecordSettingsData])
+async def get_answer_record_settings() -> ApiResponse[AnswerRecordSettingsData]:
+    """DocRAG 回答記録の保持日数を返す。"""
+    return ApiResponse(
+        data=AnswerRecordSettingsData(
+            retention_days=get_settings().rag_answer_record_retention_days
+        )
+    )
+
+
+@router.patch("/answer-records", response_model=ApiResponse[AnswerRecordSettingsData])
+async def update_answer_record_settings(
+    payload: AnswerRecordSettingsUpdate,
+) -> ApiResponse[AnswerRecordSettingsData]:
+    """保持日数を backend/.env と現在プロセスへ反映し、期限切れの記録を削除する。"""
+    settings = get_settings()
+    _write_env_values(
+        BACKEND_ENV_FILE,
+        {"RAG_ANSWER_RECORD_RETENTION_DAYS": str(payload.retention_days)},
+        section_comment="# DocRAG 回答記録",
+        error_detail="回答記録の保持設定を backend/.env へ保存できませんでした。",
+    )
+    settings.rag_answer_record_retention_days = payload.retention_days
+    if payload.retention_days > 0:
+        try:
+            await OracleClient().purge_answer_records(payload.retention_days)
+        except Exception as exc:  # 次の回答保存時にも削除するため、設定保存は止めない。
+            logger.warning("answer record purge failed", extra={"error": str(exc)})
+    return ApiResponse(data=AnswerRecordSettingsData(retention_days=payload.retention_days))
+
+
+@router.get("/prompts", response_model=ApiResponse[PromptVersionsData])
+async def get_prompt_versions() -> ApiResponse[PromptVersionsData]:
+    """回答生成 system prompt の版一覧と有効版を返す(custom profile が使用)。"""
+    settings, versions = await OracleClient().list_prompt_versions()
+    return ApiResponse(data=_prompt_versions_data(settings, versions))
+
+
+@router.post("/prompts", response_model=ApiResponse[PromptVersionsData])
+async def create_prompt_version_endpoint(
+    payload: PromptVersionCreate,
+) -> ApiResponse[PromptVersionsData]:
+    """新しい prompt 版を作成する(activate=true で即時有効化)。"""
+    settings, versions = await OracleClient().create_prompt_version(
+        name=payload.name,
+        system_prompt=payload.system_prompt,
+        note=payload.note,
+        activate=payload.activate,
+    )
+    return ApiResponse(data=_prompt_versions_data(settings, versions))
+
+
+@router.post("/prompts/{version_id}/activate", response_model=ApiResponse[PromptVersionsData])
+async def activate_prompt_version_endpoint(
+    version_id: str,
+) -> ApiResponse[PromptVersionsData]:
+    """指定 prompt 版を有効化する(rollback = 旧版を再有効化)。"""
+    try:
+        settings, versions = await OracleClient().activate_prompt_version(version_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="指定の prompt 版が見つかりません。") from exc
+    return ApiResponse(data=_prompt_versions_data(settings, versions))
+
+
+def _extraction_fields_data() -> ExtractionFieldsSettingsData:
+    """field schema 定義を非機密 API 形へ変換する。"""
+    store = load_field_schema()
+    return ExtractionFieldsSettingsData(
+        fields=[
+            FieldDefinitionData(
+                name=field.name,
+                description=field.description,
+                value_type=field.value_type,
+            )
+            for field in store.fields
+        ]
+    )
+
+
+@router.get("/extraction-fields", response_model=ApiResponse[ExtractionFieldsSettingsData])
+async def get_extraction_fields_settings() -> ApiResponse[ExtractionFieldsSettingsData]:
+    """field 抽出 schema 定義(抽出対象 field の一覧)を返す。"""
+    return ApiResponse(data=_extraction_fields_data())
+
+
+@router.patch("/extraction-fields", response_model=ApiResponse[ExtractionFieldsSettingsData])
+async def update_extraction_fields_settings(
+    payload: ExtractionFieldsSettingsUpdate,
+) -> ApiResponse[ExtractionFieldsSettingsData]:
+    """field 抽出 schema 定義を保存する(name 重複は 422)。"""
+    definitions = [
+        FieldDefinition(name=field.name, description=field.description, value_type=field.value_type)
+        for field in payload.fields
+    ]
+    try:
+        save_field_schema(definitions)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return ApiResponse(data=_extraction_fields_data())
+
+
+@router.get("/guardrail", response_model=ApiResponse[GuardrailSettingsData])
+async def get_guardrail_settings() -> ApiResponse[GuardrailSettingsData]:
+    """Guardrail アダプター(安全ポリシー)の選択と解決内容を返す。"""
+    return ApiResponse(data=_guardrail_settings_data(get_settings()))
+
+
+@router.patch("/guardrail", response_model=ApiResponse[GuardrailSettingsData])
+async def update_guardrail_settings(
+    payload: GuardrailSettingsUpdate,
+) -> ApiResponse[GuardrailSettingsData]:
+    """安全チェック設定を backend/.env と現在プロセスへ反映する。"""
+    settings = get_settings()
+    update: dict[str, object] = {"rag_guardrail_policy": normalize_guardrail_policy(payload.policy)}
+    if payload.backend is not None:
+        update["rag_guardrail_backend"] = payload.backend
+    candidate = settings.model_copy(update=update)
+    readiness_issue = _oci_guardrails_warning_code(candidate)
+    if candidate.rag_guardrail_backend == "oci_guardrails" and readiness_issue:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "OCI Guardrails を選択する前に、compartment と OCI API キー認証を"
+                "システム設定 > OCI 認証で設定してください。"
+            ),
+        )
+    _persist_guardrail_settings(candidate)
+    settings.rag_guardrail_policy = candidate.rag_guardrail_policy
+    settings.rag_guardrail_backend = candidate.rag_guardrail_backend
+    return ApiResponse(data=_guardrail_settings_data(settings))
+
+
+@router.get("/vector-index", response_model=ApiResponse[VectorIndexSettingsData])
+async def get_vector_index_settings() -> ApiResponse[VectorIndexSettingsData]:
+    """Vector Index アダプター(索引/検索精度)の選択と解決内容を返す。"""
+    return ApiResponse(data=_vector_index_settings_data(get_settings()))
+
+
+@router.patch("/vector-index", response_model=ApiResponse[VectorIndexSettingsData])
+async def update_vector_index_settings(
+    payload: VectorIndexSettingsUpdate,
+) -> ApiResponse[VectorIndexSettingsData]:
+    """検索インデックス設定を backend/.env と現在プロセスへ反映する。"""
+    settings = get_settings()
+    candidate = settings.model_copy(
+        update={"rag_vector_index_profile": normalize_vector_index_profile(payload.profile)}
+    )
+    _persist_vector_index_settings(candidate)
+    settings.rag_vector_index_profile = candidate.rag_vector_index_profile
+    return ApiResponse(data=_vector_index_settings_data(settings))
+
+
+@router.get("/evaluation-suite", response_model=ApiResponse[EvaluationSettingsData])
+async def get_evaluation_settings() -> ApiResponse[EvaluationSettingsData]:
+    """Evaluation アダプター(評価スイート/閾値)の選択と解決内容を返す。"""
+    return ApiResponse(data=_evaluation_settings_data(get_settings()))
+
+
+@router.patch("/evaluation-suite", response_model=ApiResponse[EvaluationSettingsData])
+async def update_evaluation_settings(
+    payload: EvaluationSettingsUpdate,
+) -> ApiResponse[EvaluationSettingsData]:
+    """品質評価設定を backend/.env と現在プロセスへ反映する。"""
+    settings = get_settings()
+    candidate = settings.model_copy(
+        update={"rag_evaluation_suite": normalize_evaluation_suite(payload.suite)}
+    )
+    _persist_evaluation_settings(candidate)
+    settings.rag_evaluation_suite = candidate.rag_evaluation_suite
+    return ApiResponse(data=_evaluation_settings_data(settings))
+
+
+@router.get("/graph", response_model=ApiResponse[GraphSettingsData])
+async def get_graph_settings() -> ApiResponse[GraphSettingsData]:
+    """GraphRAG アダプター(知識グラフ構築)の選択と解決内容を返す。"""
+    return ApiResponse(data=_graph_settings_data(get_settings()))
+
+
+@router.patch("/graph", response_model=ApiResponse[GraphSettingsData])
+async def update_graph_settings(
+    payload: GraphSettingsUpdate,
+) -> ApiResponse[GraphSettingsData]:
+    """関係情報設定を backend/.env と現在プロセスへ反映する。"""
+    settings = get_settings()
+    candidate = settings.model_copy(
+        update={
+            "rag_graph_profile": normalize_graph_profile(payload.profile),
+            # UI で明示保存したら新 profile を正本にし、legacy の full 強制上書きを退役させる。
+            "rag_graph_enabled": False,
+        }
+    )
+    _persist_graph_settings(candidate)
+    settings.rag_graph_profile = candidate.rag_graph_profile
+    settings.rag_graph_enabled = candidate.rag_graph_enabled
+    return ApiResponse(data=_graph_settings_data(settings))
+
+
+@router.get("/agentic", response_model=ApiResponse[AgenticSettingsData])
+async def get_agentic_settings() -> ApiResponse[AgenticSettingsData]:
+    """Agentic アダプター(クエリ計画)の選択と解決内容を返す。"""
+    return ApiResponse(data=_agentic_settings_data(get_settings()))
+
+
+@router.patch("/agentic", response_model=ApiResponse[AgenticSettingsData])
+async def update_agentic_settings(
+    payload: AgenticSettingsUpdate,
+) -> ApiResponse[AgenticSettingsData]:
+    """高度な検索設定を backend/.env と現在プロセスへ反映する。"""
+    settings = get_settings()
+    candidate = settings.model_copy(
+        update={
+            "rag_agentic_profile": normalize_agentic_profile(payload.profile),
+            "rag_agentic_max_subqueries": payload.max_subqueries,
+        }
+    )
+    _persist_agentic_settings(candidate)
+    settings.rag_agentic_profile = candidate.rag_agentic_profile
+    settings.rag_agentic_max_subqueries = candidate.rag_agentic_max_subqueries
+    return ApiResponse(data=_agentic_settings_data(settings))
+
+
+@router.get("/oci", response_model=ApiResponse[OciSettingsData])
+async def get_oci_settings() -> ApiResponse[OciSettingsData]:
+    """OCI 認証設定画面の初期表示に使う runtime 設定を返す。"""
+    return ApiResponse(data=_oci_settings_data(get_settings()))
+
+
+@router.patch("/oci", response_model=ApiResponse[OciSettingsData])
+async def update_oci_settings(
+    payload: OciSettingsUpdate,
+) -> ApiResponse[OciSettingsData]:
+    """OCI SDK config と backend/.env を更新し、runtime の共通設定へ反映する。"""
+    settings = get_settings()
+    _write_oci_config(settings, payload)
+    _persist_oci_settings(settings, payload)
+    settings.oci_region = payload.region
+    return ApiResponse(data=_oci_settings_data(settings))
+
+
+@router.patch("/oci/object-storage", response_model=ApiResponse[UploadStorageSettingsData])
+async def update_oci_object_storage_settings(
+    payload: OciObjectStorageSettingsUpdate,
+) -> ApiResponse[UploadStorageSettingsData]:
+    """OCI Object Storage 共通設定を backend/.env と runtime へ反映する。"""
+    settings = get_settings()
+    candidate = settings.model_copy(
+        update={
+            "object_storage_region": payload.object_storage_region,
+            "object_storage_namespace": payload.object_storage_namespace,
+        }
+    )
+    _persist_oci_object_storage_settings(candidate)
+    settings.object_storage_region = candidate.object_storage_region
+    settings.object_storage_namespace = candidate.object_storage_namespace
+    return ApiResponse(data=_upload_storage_settings_data(settings))
+
+
+@router.post("/oci/config/read", response_model=ApiResponse[OciConfigReadData])
+async def read_oci_config(
+    payload: OciConfigReadRequest,
+) -> ApiResponse[OciConfigReadData]:
+    """バックエンドから読める OCI config file の指定 profile を読み取る。"""
+    content = _read_oci_config_text(payload.config_file)
+    return ApiResponse(data=_parse_oci_config(content, payload.profile))
+
+
+@router.post("/oci/config/test", response_model=ApiResponse[OciConfigTestResult])
+async def test_oci_config() -> ApiResponse[OciConfigTestResult]:
+    """保存済み OCI 設定で、形式・鍵・リージョン到達・認証を段階的に確認する。"""
+    return ApiResponse(data=await asyncio.to_thread(_test_oci_config, get_settings()))
+
+
+@router.post(
+    "/oci/object-storage/namespace",
+    response_model=ApiResponse[OciObjectStorageNamespaceData],
+)
+async def read_oci_object_storage_namespace(
+    payload: OciObjectStorageNamespaceRequest,
+) -> ApiResponse[OciObjectStorageNamespaceData]:
+    """OCI Object Storage API から tenancy namespace を取得する。"""
+    namespace = _read_object_storage_namespace(payload)
+    return ApiResponse(data=OciObjectStorageNamespaceData(namespace=namespace))
+
+
+@router.post("/oci/key-file", response_model=ApiResponse[OciPrivateKeyUploadData])
+async def upload_oci_private_key(
+    file: Annotated[UploadFile, File(...)],
+) -> ApiResponse[OciPrivateKeyUploadData]:
+    """OCI API 秘密鍵を固定 path へ上書き保存する。"""
+    data = await _read_upload_file(
+        file,
+        OCI_PRIVATE_KEY_MAX_BYTES,
+        "秘密鍵 PEM ファイルのサイズが上限を超えています。",
+    )
+    _install_oci_private_key(data, file.filename)
+    return ApiResponse(data=OciPrivateKeyUploadData(key_file=OCI_PRIVATE_KEY_FILE, saved=True))
+
+
+def _payload_from_settings(settings: Settings) -> ModelSettingsPayload:
+    """Settings から UI 用 payload を組み立てる。"""
+    api_path = settings.oci_enterprise_ai_llm_path or settings.oci_enterprise_ai_vlm_path
+    return ModelSettingsPayload(
+        enterprise_ai=EnterpriseAiModelSettings(
+            endpoint=settings.oci_enterprise_ai_endpoint,
+            project_ocid=settings.oci_enterprise_ai_project_ocid,
+            api_key="",
+            has_api_key=bool(settings.oci_enterprise_ai_api_key.strip()),
+            clear_api_key=False,
+            models=[
+                EnterpriseAiModelEntrySettings(
+                    model_id=model.model_id,
+                    display_name=model.display_name,
+                    vision_enabled=model.vision_enabled,
+                )
+                for model in enterprise_ai_model_catalog(settings)
+            ],
+            default_model_id=enterprise_ai_default_model_id(settings),
+            api_path=api_path or "/responses",
+            vlm_input_mode=settings.oci_enterprise_ai_vlm_input_mode,
+            text_payload_template=settings.oci_enterprise_ai_llm_payload_template,
+            vision_payload_template=settings.oci_enterprise_ai_vlm_payload_template,
+            text_response_path=settings.oci_enterprise_ai_llm_response_path,
+            vision_response_path=settings.oci_enterprise_ai_vlm_response_path,
+            timeout_seconds=settings.oci_enterprise_ai_timeout_seconds,
+            max_retries=settings.oci_enterprise_ai_max_retries,
+            llm_max_output_tokens=settings.oci_enterprise_ai_llm_max_output_tokens,
+            vlm_max_output_tokens=settings.oci_enterprise_ai_vlm_max_output_tokens,
+        ),
+        generative_ai=GenerativeAiModelSettings(
+            embedding_model=settings.oci_genai_embedding_model,
+            embedding_dim=settings.oci_genai_embedding_dim,
+            rerank_model=settings.oci_genai_rerank_model,
+        ),
+    )
+
+
+def _apply_model_settings(settings: Settings, request: ModelSettingsPayload) -> None:
+    """API payload を Settings シングルトンへ反映する。"""
+    enterprise_ai = request.enterprise_ai
+    generative_ai = request.generative_ai
+
+    settings.oci_enterprise_ai_endpoint = enterprise_ai.endpoint or ""
+    settings.oci_enterprise_ai_project_ocid = enterprise_ai.project_ocid
+    settings.oci_enterprise_ai_api_key = _secret_value(
+        current=settings.oci_enterprise_ai_api_key,
+        update=enterprise_ai.api_key,
+        clear=enterprise_ai.clear_api_key,
+    )
+    settings.oci_enterprise_ai_models = [
+        EnterpriseAiConfiguredModel(
+            model_id=model.model_id,
+            display_name=model.display_name,
+            vision_enabled=model.vision_enabled,
+        )
+        for model in enterprise_ai.models
+        if model.model_id
+    ]
+    settings.oci_enterprise_ai_default_model = enterprise_ai.default_model_id
+    default_model = enterprise_ai.default_model_id
+    vision_model = next(
+        (
+            model.model_id
+            for model in enterprise_ai.models
+            if model.model_id == default_model and model.vision_enabled
+        ),
+        "",
+    ) or next(
+        (
+            model.model_id
+            for model in enterprise_ai.models
+            if model.model_id and model.vision_enabled
+        ),
+        default_model,
+    )
+    settings.oci_enterprise_ai_llm_model = default_model
+    settings.oci_enterprise_ai_vlm_model = vision_model
+    settings.oci_enterprise_ai_llm_path = enterprise_ai.api_path
+    settings.oci_enterprise_ai_vlm_path = enterprise_ai.api_path
+    settings.oci_enterprise_ai_vlm_input_mode = enterprise_ai.vlm_input_mode
+    settings.oci_enterprise_ai_llm_payload_template = enterprise_ai.text_payload_template
+    settings.oci_enterprise_ai_vlm_payload_template = enterprise_ai.vision_payload_template
+    settings.oci_enterprise_ai_llm_response_path = enterprise_ai.text_response_path
+    settings.oci_enterprise_ai_vlm_response_path = enterprise_ai.vision_response_path
+    settings.oci_enterprise_ai_timeout_seconds = enterprise_ai.timeout_seconds
+    settings.oci_enterprise_ai_max_retries = enterprise_ai.max_retries
+    settings.oci_enterprise_ai_llm_max_output_tokens = enterprise_ai.llm_max_output_tokens
+    settings.oci_enterprise_ai_vlm_max_output_tokens = enterprise_ai.vlm_max_output_tokens
+
+    settings.oci_genai_embedding_model = generative_ai.embedding_model
+    settings.oci_genai_embedding_dim = generative_ai.embedding_dim
+    settings.oci_genai_rerank_model = generative_ai.rerank_model
+
+
+def _model_settings_with_resolved_secret(
+    settings: Settings,
+    request: ModelSettingsPayload,
+) -> ModelSettingsPayload:
+    """保存用 payload では既存 secret の保持/削除を解決しておく。"""
+    enterprise_ai = request.enterprise_ai
+    resolved_api_key = _secret_value(
+        current=settings.oci_enterprise_ai_api_key,
+        update=enterprise_ai.api_key,
+        clear=enterprise_ai.clear_api_key,
+    )
+    resolved_enterprise_ai = enterprise_ai.model_copy(
+        update={
+            "api_key": resolved_api_key,
+            "has_api_key": bool(resolved_api_key.strip()),
+            "clear_api_key": False,
+        }
+    )
+    return request.model_copy(update={"enterprise_ai": resolved_enterprise_ai})
+
+
+@contextmanager
+def _model_settings_write_lock(settings: Settings) -> Iterator[None]:
+    """共有設定の read-modify-write を worker 間で直列化する。"""
+    path = resolve_model_settings_file(settings.model_settings_file)
+    lock_path = path.with_name(f"{path.name}.lock")
+    try:
+        _ensure_model_settings_directory(lock_path.parent)
+        with lock_path.open("a", encoding="utf-8") as lock_file:
+            lock_path.chmod(MODEL_SETTINGS_FILE_MODE)
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+    except OSError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="設定の共有ロックを取得できませんでした。",
+        ) from exc
+
+
+def _persist_model_settings(settings: Settings, payload: ModelSettingsPayload) -> None:
+    """共有ランタイム設定を JSON ファイルへ atomic に保存する。"""
+    path = resolve_model_settings_file(settings.model_settings_file)
+    document = _model_settings_document(payload, settings)
+    try:
+        _ensure_model_settings_directory(path.parent)
+        tmp_path = path.with_name(f".{path.name}.tmp-{uuid4().hex}")
+        try:
+            tmp_path.write_text(
+                json.dumps(document, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            tmp_path.chmod(MODEL_SETTINGS_FILE_MODE)
+            tmp_path.replace(path)
+            path.chmod(MODEL_SETTINGS_FILE_MODE)
+        finally:
+            tmp_path.unlink(missing_ok=True)
+    except OSError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="設定を共有永続化ファイルへ保存できませんでした。",
+        ) from exc
+
+
+def _model_settings_document(
+    payload: ModelSettingsPayload,
+    parser_settings: Settings,
+) -> dict[str, object]:
+    """モデルと parser 接続を保つ共有永続化 document へ変換する。"""
+    enterprise_ai = payload.enterprise_ai
+    generative_ai = payload.generative_ai
+    return {
+        "version": 2,
+        "enterprise_ai": {
+            "endpoint": enterprise_ai.endpoint,
+            "project_ocid": enterprise_ai.project_ocid,
+            "api_key": enterprise_ai.api_key,
+            "models": [
+                {
+                    "model_id": model.model_id,
+                    "display_name": model.display_name,
+                    "vision_enabled": model.vision_enabled,
+                }
+                for model in enterprise_ai.models
+                if model.model_id
+            ],
+            "default_model_id": enterprise_ai.default_model_id,
+            "api_path": enterprise_ai.api_path,
+            "vlm_input_mode": enterprise_ai.vlm_input_mode,
+            "text_payload_template": enterprise_ai.text_payload_template,
+            "vision_payload_template": enterprise_ai.vision_payload_template,
+            "text_response_path": enterprise_ai.text_response_path,
+            "vision_response_path": enterprise_ai.vision_response_path,
+            "timeout_seconds": enterprise_ai.timeout_seconds,
+            "max_retries": enterprise_ai.max_retries,
+            "llm_max_output_tokens": enterprise_ai.llm_max_output_tokens,
+            "vlm_max_output_tokens": enterprise_ai.vlm_max_output_tokens,
+        },
+        "generative_ai": {
+            "embedding_model": generative_ai.embedding_model,
+            "embedding_dim": generative_ai.embedding_dim,
+            "rerank_model": generative_ai.rerank_model,
+        },
+        "parser_adapters": {
+            "adapter_backend": parser_settings.rag_parser_adapter_backend,
+            "docling_enabled": parser_settings.rag_parser_docling_enabled,
+            "docling_vision_enabled": parser_settings.rag_parser_docling_vision_enabled,
+            "marker_enabled": parser_settings.rag_parser_marker_enabled,
+            "unstructured_enabled": parser_settings.rag_parser_unstructured_enabled,
+            "unlimited_ocr_enabled": parser_settings.rag_parser_unlimited_ocr_enabled,
+            "mineru_enabled": parser_settings.rag_parser_mineru_enabled,
+            "dots_ocr_enabled": parser_settings.rag_parser_dots_ocr_enabled,
+            "glm_ocr_enabled": parser_settings.rag_parser_glm_ocr_enabled,
+            "unlimited_ocr_api_host": parser_settings.rag_parser_unlimited_ocr_api_host,
+            "unlimited_ocr_model": parser_settings.rag_parser_unlimited_ocr_model,
+            "unlimited_ocr_api_key": parser_settings.rag_parser_unlimited_ocr_api_key,
+            "mineru_api_host": parser_settings.rag_parser_mineru_api_host,
+            "mineru_api_key": parser_settings.rag_parser_mineru_api_key,
+            "dots_ocr_api_host": parser_settings.rag_parser_dots_ocr_api_host,
+            "dots_ocr_model": parser_settings.rag_parser_dots_ocr_model,
+            "dots_ocr_api_key": parser_settings.rag_parser_dots_ocr_api_key,
+            "glm_ocr_api_host": parser_settings.rag_parser_glm_ocr_api_host,
+            "glm_ocr_model": parser_settings.rag_parser_glm_ocr_model,
+            "glm_ocr_api_key": parser_settings.rag_parser_glm_ocr_api_key,
+        },
+    }
+
+
+def _model_test_candidate_settings(
+    base: Settings,
+    request: ModelSettingsTestRequest,
+) -> Settings:
+    """保存前 payload を実テスト用の一時 Settings へ変換する。"""
+    resolved_payload = _model_settings_with_resolved_secret(base, request.settings)
+    candidate = base.model_copy(deep=True)
+    _apply_model_settings(candidate, resolved_payload)
+    _apply_model_test_target(candidate, request)
+    return candidate
+
+
+def _apply_model_test_target(
+    settings: Settings,
+    request: ModelSettingsTestRequest,
+) -> None:
+    """対象モデルだけをテスト呼び出しに使うよう Settings を調整する。"""
+    model_id = request.model_id.strip()
+    if request.target_type == "enterprise_text":
+        settings.oci_enterprise_ai_default_model = model_id
+        settings.oci_enterprise_ai_llm_model = model_id
+    elif request.target_type == "enterprise_vision":
+        settings.oci_enterprise_ai_default_model = model_id
+        settings.oci_enterprise_ai_vlm_model = model_id
+        settings.oci_enterprise_ai_models = [
+            EnterpriseAiConfiguredModel(
+                model_id=model.model_id,
+                display_name=model.display_name,
+                vision_enabled=(model.model_id == model_id or model.vision_enabled),
+            )
+            for model in settings.oci_enterprise_ai_models
+        ]
+    elif request.target_type == "embedding":
+        settings.oci_genai_embedding_model = model_id
+    elif request.target_type == "rerank":
+        settings.oci_genai_rerank_model = model_id
+
+
+async def _run_model_settings_test(
+    settings: Settings,
+    request: ModelSettingsTestRequest,
+) -> dict[str, str | int | float | bool | None]:
+    """対象モデルの実 API 呼び出しを行い、表示用 details を返す。"""
+    _require_model_test_id(request)
+    if request.target_type == "enterprise_text":
+        text = await OciEnterpriseAiClient(settings=settings).generate(
+            "モデル接続テストです。短く応答してください。",
+            "これは Production Ready RAG のモデル接続テスト用コンテキストです。",
+        )
+        return {"response_chars": len(text), "surface": "llm"}
+    if request.target_type == "enterprise_vision":
+        text = await OciEnterpriseAiClient(settings=settings).generate_from_image(
+            MODEL_TEST_IMAGE_BYTES,
+            "白い背景にある大きな図形の色を日本語で1語だけ返してください。",
+            mime_type="image/jpeg",
+        )
+        return {
+            "surface": "vision",
+            "response_chars": len(text),
+        }
+    if request.target_type == "embedding":
+        vectors = await OciGenAiClient(settings=settings).embed(
+            ["モデル接続テスト"],
+            input_type="SEARCH_QUERY",
+        )
+        vector = vectors[0] if vectors else []
+        return {"vector_dim": len(vector), "input_count": len(vectors)}
+    ranks = await OciGenAiClient(settings=settings).rerank(
+        "モデル接続テスト",
+        [
+            "これはモデル接続テストに関する候補文書です。",
+            "別の業務文書に関する候補文書です。",
+        ],
+        top_n=1,
+    )
+    top_score = ranks[0][1] if ranks else None
+    return {"ranked_count": len(ranks), "top_score": top_score}
+
+
+def _require_model_test_id(request: ModelSettingsTestRequest) -> None:
+    """空の model_id は実 API 呼び出し前に分かりやすく失敗させる。"""
+    if not request.model_id.strip():
+        raise ValueError("テストするモデル ID を入力してください。")
+
+
+def _successful_model_test_result(
+    request: ModelSettingsTestRequest,
+    *,
+    details: dict[str, str | int | float | bool | None],
+    elapsed_ms: int,
+) -> ModelSettingsTestResult:
+    """成功時のモデルテスト結果を作る。"""
+    return ModelSettingsTestResult(
+        status="success",
+        target_type=request.target_type,
+        model_id=request.model_id,
+        message=_model_test_success_message(request.target_type, request.model_id),
+        troubleshooting=[],
+        elapsed_ms=elapsed_ms,
+        details=details,
+    )
+
+
+def _failed_model_test_result(
+    request: ModelSettingsTestRequest,
+    exc: Exception,
+    *,
+    elapsed_ms: int,
+    secrets: list[str],
+) -> ModelSettingsTestResult:
+    """失敗時のモデルテスト結果を作る。"""
+    raw_error = _sanitize_model_test_error(str(exc), secrets)
+    return ModelSettingsTestResult(
+        status="failed",
+        target_type=request.target_type,
+        model_id=request.model_id,
+        message=_model_test_failure_message(request.target_type, request.model_id),
+        troubleshooting=_model_test_troubleshooting(
+            request.target_type,
+            raw_error,
+            type(exc).__name__,
+        ),
+        raw_error=raw_error,
+        error_type=type(exc).__name__,
+        elapsed_ms=elapsed_ms,
+        details={},
+    )
+
+
+def _model_test_success_message(target_type: ModelSettingsTestTargetType, model_id: str) -> str:
+    """モデル種別別の成功メッセージ。"""
+    if target_type == "enterprise_text":
+        return f"Enterprise AI の回答生成モデル「{model_id}」から応答を取得しました。"
+    if target_type == "enterprise_vision":
+        return (
+            f"Enterprise AI の Vision モデル「{model_id}」から構造化抽出レスポンスを取得しました。"
+        )
+    if target_type == "embedding":
+        return f"Embedding モデル「{model_id}」で 1536 次元ベクトルを取得しました。"
+    return f"Rerank モデル「{model_id}」から順位スコアを取得しました。"
+
+
+def _model_test_failure_message(target_type: ModelSettingsTestTargetType, model_id: str) -> str:
+    """モデル種別別の失敗メッセージ。"""
+    if target_type in {"enterprise_text", "enterprise_vision"}:
+        return f"Enterprise AI モデル「{model_id or '未入力'}」のテストに失敗しました。"
+    if target_type == "embedding":
+        return f"Embedding モデル「{model_id or '未入力'}」のテストに失敗しました。"
+    return f"Rerank モデル「{model_id or '未入力'}」のテストに失敗しました。"
+
+
+def _model_test_troubleshooting(
+    target_type: ModelSettingsTestTargetType,
+    raw_error: str,
+    error_type: str,
+) -> list[str]:
+    """実エラーからユーザーが次に確認しやすい項目を返す。"""
+    lowered = f"{raw_error} {error_type}".lower()
+    tips: list[str] = []
+    if target_type in {"enterprise_text", "enterprise_vision"}:
+        tips.extend(
+            [
+                "Endpoint URL、API パス、Project OCID、API key が Enterprise AI の"
+                " OpenAI-compatible gateway と一致しているか確認してください。",
+                "モデル ID が Enterprise AI 側の model deployment / gateway で"
+                "利用可能か確認してください。",
+            ]
+        )
+        if "response path" in lowered or "回答 text" in raw_error or "構造化抽出" in raw_error:
+            tips.append(
+                "独自 gateway の場合は payload template と response path が"
+                "実レスポンスの JSON 構造に合っているか確認してください。"
+            )
+    else:
+        tips.extend(
+            [
+                "OCI config file、profile、region、compartment OCID が"
+                "バックエンド実行環境から参照できるか確認してください。",
+                "モデル ID と IAM policy が OCI Generative AI Inference の"
+                " embedding/rerank 呼び出しを許可しているか確認してください。",
+            ]
+        )
+    if any(token in lowered for token in ("401", "unauthorized", "authentication")):
+        tips.append(
+            "認証エラーです。API key / OCI config の資格情報を再発行または再保存してください。"
+        )
+    if any(token in lowered for token in ("403", "notauthorized", "not authorized", "forbidden")):
+        tips.append(
+            "権限エラーです。Project / compartment / IAM policy の対象が"
+            "このモデル呼び出しを許可しているか確認してください。"
+        )
+    if any(token in lowered for token in ("404", "not found")):
+        tips.append(
+            "Endpoint、API パス、model ID のいずれかが見つかっていません。"
+            "リージョンと model deployment 名も確認してください。"
+        )
+    if any(token in lowered for token in ("timeout", "timed out")):
+        tips.append(
+            "タイムアウトです。ネットワーク経路を確認し、"
+            "必要ならタイムアウト秒数を一時的に長くしてください。"
+        )
+    if any(token in lowered for token in ("429", "quota", "rate")):
+        tips.append(
+            "レート制限または quota の可能性があります。"
+            "しばらく待つか service limit を確認してください。"
+        )
+    if any(token in lowered for token in ("500", "502", "503", "504")):
+        tips.append(
+            "サービス側または gateway 側の一時障害の可能性があります。"
+            "少し待って再試行し、OCI 側の稼働状況を確認してください。"
+        )
+    return list(dict.fromkeys(tips))
+
+
+def _sanitize_model_test_error(raw_error: str, secrets: list[str]) -> str:
+    """実エラーは残しつつ、既知の secret だけを伏せる。"""
+    sanitized = raw_error.strip() or "詳細メッセージは返されませんでした。"
+    for secret in secrets:
+        cleaned = secret.strip()
+        if cleaned:
+            sanitized = sanitized.replace(cleaned, "<secret>")
+    return sanitized[:2000]
+
+
+def _elapsed_ms(started: float) -> int:
+    """perf_counter の開始時刻から経過 ms を返す。"""
+    return max(0, round((time.perf_counter() - started) * 1000))
+
+
+def _oracle_error_codes(error_text: str) -> list[str]:
+    """Oracle / python-oracledb の公開してよいエラーコードだけを抽出する。"""
+    return list(dict.fromkeys(match.upper() for match in ORACLE_ERROR_CODE_RE.findall(error_text)))
+
+
+def _database_connection_error_message(exc: Exception, oracle_error_codes: list[str]) -> str:
+    """secret を含めず、Oracle 接続エラーの原因カテゴリをユーザーへ返す。"""
+    if getattr(exc, "safe_for_user", False):
+        return str(exc)
+
+    code_label = f"（{', '.join(oracle_error_codes)}）" if oracle_error_codes else ""
+    code_set = set(oracle_error_codes)
+    if "ORA-01017" in code_set:
+        return (
+            f"Oracle 26ai へ接続できませんでした{code_label}。"
+            "ユーザー名または DB パスワードを確認してください。"
+        )
+    if "ORA-12154" in code_set:
+        return (
+            f"Oracle 26ai へ接続できませんでした{code_label}。"
+            "Wallet サービス名が tnsnames.ora に存在するか確認してください。"
+        )
+    if "ORA-12506" in code_set:
+        return (
+            f"Oracle 26ai へ接続できませんでした{code_label}。"
+            "ADB のアクセス制御リストまたは network ACL が"
+            "この接続元を許可しているか確認してください。"
+        )
+    if code_set & {"ORA-12514", "ORA-12505"}:
+        return (
+            f"Oracle 26ai へ接続できませんでした{code_label}。"
+            "Wallet サービス名と ADB の稼働状態を確認してください。"
+        )
+    if code_set & {"ORA-12541", "DPY-6005", "DPY-6000"}:
+        return (
+            f"Oracle 26ai へ接続できませんでした{code_label}。"
+            "ADB の listener と TCPS 1522 への到達性を確認してください。"
+        )
+    if "DPY-4011" in code_set:
+        return (
+            f"Oracle 26ai へ接続できませんでした{code_label}。"
+            "Wallet ZIP と Wallet パスワードを確認してください。"
+        )
+    if code_set & {"DPI-1047", "DPI-1072"}:
+        return (
+            f"Oracle 26ai へ接続できませんでした{code_label}。"
+            "Oracle Instant Client の配置と ORACLE_CLIENT_LIB_DIR を確認してください。"
+        )
+    if oracle_error_codes:
+        return (
+            f"Oracle 26ai へ接続できませんでした{code_label}。"
+            "下の確認ポイントと backend ログを確認してください。"
+        )
+    return (
+        "Oracle 26ai へ接続できませんでした。"
+        "下の確認ポイントと backend ログの Oracle エラーコードを確認してください。"
+    )
+
+
+def _database_connection_troubleshooting(
+    *,
+    readiness: str,
+    error_text: str = "",
+    error_type: str = "",
+) -> list[str]:
+    """Oracle 接続テストの結果から次に確認するポイントを返す。"""
+    tips: list[str] = []
+    if readiness == "missing":
+        tips.append(
+            "ユーザー名、Wallet サービス名、Wallet ZIP が入力・アップロード済みか確認してください。"
+        )
+    if readiness == "missing_credentials":
+        tips.append("DB パスワードまたは Wallet パスワードが保存済みか確認してください。")
+    if readiness == "wallet_not_found":
+        tips.append("ADB からダウンロードした Wallet ZIP をアップロードし直してください。")
+    if readiness == "invalid":
+        tips.append("Wallet の tnsnames.ora / sqlnet.ora とサービス名の形式を確認してください。")
+
+    combined = f"{error_text} {error_type}".lower()
+    if any(token in combined for token in ("timeout", "timed out", "oracleconnectiontimeouterror")):
+        tips.append(
+            "接続テストがタイムアウトしました。ADB が起動中か、VCN/VPN/プロキシ経路から "
+            "TCPS 1522 に到達できるか確認してください。"
+        )
+    if "ora-01017" in combined:
+        tips.append("ユーザー名または DB パスワードが正しいか確認してください。")
+    if "ora-12154" in combined or "tns" in combined:
+        tips.append("Wallet サービス名が tnsnames.ora に存在するか確認してください。")
+    if "ora-12506" in combined:
+        tips.append(
+            "ADB の Network Access / ACL で、この実行ホストの public IP または VCN 経路を"
+            "許可してください。"
+        )
+    if "ora-12514" in combined or "ora-12505" in combined:
+        tips.append("Wallet サービス名が ADB の接続文字列として有効か確認してください。")
+    if "ora-12541" in combined or "dpy-6005" in combined or "dpy-6000" in combined:
+        tips.append(
+            "データベースが停止していないか、ADB の listener に到達できるか確認してください。"
+        )
+    if "wallet" in combined or "dpy-4011" in combined:
+        tips.append(
+            "Wallet ZIP の内容、Wallet パスワード、ORACLE_CLIENT_LIB_DIR を確認してください。"
+        )
+    if "dpi-1047" in combined or "dpi-1072" in combined:
+        tips.append(
+            "Oracle Instant Client が ORACLE_CLIENT_LIB_DIR に存在し、"
+            "実行環境から読み込めるか確認してください。"
+        )
+    if "operationalerror" in combined and not tips:
+        tips.append(
+            "backend ログに出ている ORA/DPY/DPI エラーコードを確認し、"
+            "Wallet、サービス名、認証情報、ネットワーク経路を切り分けてください。"
+        )
+
+    if not tips:
+        tips.append(
+            "バックエンドログの Oracle エラーコードと Wallet / DSN /"
+            "ネットワーク設定を確認してください。"
+        )
+    return list(dict.fromkeys(tips))
+
+
+def _ensure_model_settings_directory(path: Path) -> None:
+    """モデル設定保存先を作る。既存ディレクトリの権限は勝手に変えない。"""
+    existed = path.exists()
+    path.mkdir(mode=OCI_DIRECTORY_MODE, parents=True, exist_ok=True)
+    if not existed:
+        path.chmod(OCI_DIRECTORY_MODE)
+
+
+def _database_settings_data(settings: Settings) -> DatabaseSettingsData:
+    """Settings から表示用データを作る。"""
+    wallet_dir = settings.resolved_oracle_wallet_dir.strip()
+    wallet_path = Path(wallet_dir).expanduser() if wallet_dir else None
+    if wallet_path is not None:
+        _sanitize_database_wallet_dir(wallet_path)
+    wallet_uploaded = wallet_path is not None and wallet_path.is_dir()
+    available_services = (
+        _extract_wallet_services(wallet_path) if wallet_path is not None and wallet_uploaded else []
+    )
+
+    return DatabaseSettingsData(
+        user=settings.oracle_user,
+        dsn=settings.oracle_dsn,
+        wallet_dir=wallet_dir,
+        wallet_uploaded=wallet_uploaded,
+        available_services=available_services,
+        has_password=bool(settings.oracle_password.strip()),
+        has_wallet_password=bool(settings.oracle_wallet_password.strip()),
+        readiness=oracle_readiness_check(settings),
+        embedding_dimension=settings.oci_genai_embedding_dim,
+        vector_column=f"VECTOR({settings.oci_genai_embedding_dim}, FLOAT32)",
+        adb_ocid=settings.oracle_adb_ocid,
+        region=settings.resolved_oracle_adb_region,
+        config_source="runtime",
+    )
+
+
+def _sanitize_database_wallet_dir(wallet_path: Path) -> None:
+    """denpyo 実装と同じく Thin mode で不要な Wallet ファイルを残さない。"""
+    if not wallet_path.is_dir():
+        return
+    for file_name in ORACLE_WALLET_SKIPPED_FILES:
+        try:
+            path = wallet_path / file_name
+            if path.is_file():
+                path.unlink()
+        except OSError:
+            continue
+
+
+def _database_settings_candidate(
+    base: Settings,
+    payload: DatabaseSettingsUpdate,
+) -> Settings:
+    """更新 payload を適用した一時 Settings を作る。"""
+    updates = {
+        "oracle_user": payload.user,
+        "oracle_dsn": payload.dsn,
+        "oracle_wallet_dir": base.resolved_oracle_wallet_dir,
+        "oracle_password": _secret_value(
+            current=base.oracle_password,
+            update=payload.password,
+            clear=payload.clear_password,
+        ),
+        "oracle_wallet_password": _secret_value(
+            current=base.oracle_wallet_password,
+            update=payload.wallet_password,
+            clear=payload.clear_wallet_password,
+        ),
+    }
+    return base.model_copy(update=updates)
+
+
+def _apply_database_settings(target: Settings, source: Settings) -> None:
+    """Oracle 関連設定だけ現在プロセスへ反映する。"""
+    target.oracle_user = source.oracle_user
+    target.oracle_password = source.oracle_password
+    target.oracle_dsn = source.oracle_dsn
+    target.oracle_wallet_dir = source.oracle_wallet_dir
+    target.oracle_wallet_password = source.oracle_wallet_password
+
+
+def _persist_database_settings(settings: Settings) -> None:
+    """Oracle 26ai 接続設定を backend/.env へ永続化する。"""
+    values = {
+        "ORACLE_USER": settings.oracle_user,
+        "ORACLE_PASSWORD": settings.oracle_password,
+        "ORACLE_DSN": settings.oracle_dsn,
+        "ORACLE_CLIENT_LIB_DIR": settings.oracle_client_lib_dir,
+        "ORACLE_WALLET_PASSWORD": settings.oracle_wallet_password,
+    }
+    if not settings.oracle_client_lib_dir.strip() and settings.oracle_wallet_dir.strip():
+        values["ORACLE_WALLET_DIR"] = settings.oracle_wallet_dir
+    _write_env_values(
+        BACKEND_ENV_FILE,
+        values,
+        section_comment="# Oracle 26ai",
+        error_detail="Oracle 26ai 接続設定を backend/.env へ保存できませんでした。",
+    )
+
+
+def _huggingface_settings_data(settings: Settings) -> HuggingFaceSettingsData:
+    """Settings から HuggingFace 設定の表示用データを作る(token 実値は返さない)。"""
+    return HuggingFaceSettingsData(
+        endpoint=settings.huggingface_endpoint,
+        token_configured=bool(settings.huggingface_token.strip()),
+        config_source="runtime",
+    )
+
+
+def _huggingface_settings_candidate(
+    base: Settings,
+    payload: HuggingFaceSettingsUpdate,
+) -> Settings:
+    """更新 payload を適用した一時 Settings を作る。"""
+    updates = {
+        "huggingface_endpoint": payload.endpoint,
+        "huggingface_token": _secret_value(
+            current=base.huggingface_token,
+            update=payload.token,
+            clear=payload.clear_token,
+        ),
+    }
+    return base.model_copy(update=updates)
+
+
+def _apply_huggingface_settings(target: Settings, source: Settings) -> None:
+    """HuggingFace 関連設定だけ現在プロセスへ反映する。"""
+    target.huggingface_endpoint = source.huggingface_endpoint
+    target.huggingface_token = source.huggingface_token
+
+
+def _persist_huggingface_settings(settings: Settings) -> None:
+    """HuggingFace 設定を backend/.env へ永続化する(env キーは標準名)。"""
+    _write_env_values(
+        BACKEND_ENV_FILE,
+        {
+            "HF_TOKEN": settings.huggingface_token,
+            "HF_ENDPOINT": settings.huggingface_endpoint,
+        },
+        section_comment="# HuggingFace モデルダウンロード",
+        error_detail="HuggingFace 設定を backend/.env へ保存できませんでした。",
+    )
+
+
+def _apply_adb_settings(settings: Settings, payload: AdbSettingsUpdate) -> None:
+    """ADB 操作対象 OCID と region を現在プロセスへ反映する。"""
+    settings.oracle_adb_ocid = payload.adb_ocid
+    settings.oracle_adb_region = payload.region
+
+
+def _persist_adb_settings(settings: Settings) -> None:
+    """ADB 操作対象 OCID と region を backend/.env へ永続化する。"""
+    _write_env_values(
+        BACKEND_ENV_FILE,
+        {
+            "ORACLE_ADB_OCID": settings.oracle_adb_ocid,
+            "ORACLE_ADB_REGION": settings.oracle_adb_region,
+        },
+        section_comment="# Oracle Autonomous Database 管理",
+        error_detail="ADB 設定を backend/.env へ保存できませんでした。",
+    )
+
+
+def _adb_info_data(
+    status: AdbOperationStatus,
+    message: str,
+    info: AutonomousDatabaseInfo,
+    region: str | None,
+    *,
+    lifecycle_override: str | None = None,
+) -> AdbInfoData:
+    """ADB 情報スナップショットを表示用データへ変換する。"""
+    return AdbInfoData(
+        status=status,
+        message=message,
+        id=info.id,
+        display_name=info.display_name,
+        lifecycle_state=lifecycle_override or info.lifecycle_state,
+        db_name=info.db_name,
+        cpu_core_count=info.cpu_core_count,
+        data_storage_size_in_tbs=info.data_storage_size_in_tbs,
+        region=region,
+    )
+
+
+async def _load_adb_info(settings: Settings) -> AdbInfoData:
+    """ADB の情報を取得する。設定不足や OCI エラーは status へ載せて返す。"""
+    region = settings.resolved_oracle_adb_region or None
+    adb_ocid = settings.oracle_adb_ocid.strip()
+    if not adb_ocid:
+        return AdbInfoData(
+            status="not_configured",
+            message="ADB OCID が設定されていません。",
+            region=region,
+        )
+    try:
+        info = await OciDatabaseClient(settings=settings).get_autonomous_database(adb_ocid)
+    except Exception as exc:  # noqa: BLE001 - OCI SDK の多様な例外を表示用に握る
+        return AdbInfoData(
+            status="error",
+            message=f"データベース情報の取得に失敗しました: {exc}",
+            id=adb_ocid,
+            region=region,
+        )
+    return _adb_info_data("success", "データベース情報を取得しました。", info, region)
+
+
+async def _control_adb(settings: Settings, *, action: Literal["start", "stop"]) -> AdbInfoData:
+    """ADB を起動 / 停止する。現在状態を確認してから制御リクエストを送る。"""
+    region = settings.resolved_oracle_adb_region or None
+    adb_ocid = settings.oracle_adb_ocid.strip()
+    if not adb_ocid:
+        return AdbInfoData(
+            status="not_configured",
+            message="ADB OCID が設定されていません。",
+            region=region,
+        )
+
+    client = OciDatabaseClient(settings=settings)
+    try:
+        info = await client.get_autonomous_database(adb_ocid)
+    except Exception as exc:  # noqa: BLE001 - OCI SDK の多様な例外を表示用に握る
+        return AdbInfoData(
+            status="error",
+            message=f"データベース情報の取得に失敗しました: {exc}",
+            id=adb_ocid,
+            region=region,
+        )
+
+    state = info.lifecycle_state
+    if action == "start":
+        if state == "AVAILABLE":
+            return _adb_info_data(
+                "already_available", "データベースは既に起動しています。", info, region
+            )
+        if state not in ("STOPPED", "UNAVAILABLE"):
+            return _adb_info_data(
+                "cannot_start",
+                f"データベースの現在の状態 ({state}) では起動できません。",
+                info,
+                region,
+            )
+        try:
+            await client.start_autonomous_database(adb_ocid)
+        except Exception as exc:  # noqa: BLE001 - OCI SDK の多様な例外を表示用に握る
+            return _adb_info_data("error", f"データベースの起動に失敗しました: {exc}", info, region)
+        return _adb_info_data(
+            "accepted",
+            f"データベース '{info.display_name}' の起動を開始しました。",
+            info,
+            region,
+            lifecycle_override="STARTING",
+        )
+
+    if state == "STOPPED":
+        return _adb_info_data("already_stopped", "データベースは既に停止しています。", info, region)
+    if state != "AVAILABLE":
+        return _adb_info_data(
+            "cannot_stop",
+            f"データベースの現在の状態 ({state}) では停止できません。",
+            info,
+            region,
+        )
+    try:
+        await client.stop_autonomous_database(adb_ocid)
+    except Exception as exc:  # noqa: BLE001 - OCI SDK の多様な例外を表示用に握る
+        return _adb_info_data("error", f"データベースの停止に失敗しました: {exc}", info, region)
+    return _adb_info_data(
+        "accepted",
+        f"データベース '{info.display_name}' の停止を開始しました。",
+        info,
+        region,
+        lifecycle_override="STOPPING",
+    )
+
+
+async def _read_upload_file(
+    file: UploadFile,
+    max_bytes: int,
+    too_large_detail: str = "Wallet ZIP のサイズが上限を超えています。",
+) -> bytes:
+    """アップロードファイルを上限付きで読み込む。"""
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(1024 * 1024)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_bytes:
+            raise HTTPException(status_code=413, detail=too_large_detail)
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _install_oci_private_key(data: bytes, file_name: str | None) -> Path:
+    """OCI API 秘密鍵 PEM を固定 path へ上書き保存する。"""
+    safe_name = PurePosixPath((file_name or "oci_api_key.pem").replace("\\", "/")).name
+    if Path(safe_name).suffix.lower() not in {".pem", ".key"}:
+        raise HTTPException(
+            status_code=415,
+            detail="秘密鍵は .pem または .key ファイルを選択してください。",
+        )
+    if not data:
+        raise HTTPException(status_code=400, detail="空の秘密鍵ファイルはアップロードできません。")
+    _validate_private_key_pem(data)
+
+    target = Path(OCI_PRIVATE_KEY_FILE).expanduser()
+    tmp_path = target.with_name(f".{target.name}.tmp-{uuid4().hex}")
+    try:
+        _ensure_private_directory(target.parent)
+        tmp_path.write_bytes(data)
+        tmp_path.chmod(OCI_PRIVATE_KEY_FILE_MODE)
+        tmp_path.replace(target)
+        target.chmod(OCI_PRIVATE_KEY_FILE_MODE)
+    except OSError as exc:
+        if tmp_path.exists():
+            tmp_path.unlink(missing_ok=True)
+        raise HTTPException(
+            status_code=500,
+            detail="秘密鍵ファイルをバックエンドの固定 path へ保存できませんでした。",
+        ) from exc
+    return target
+
+
+def _validate_private_key_pem(data: bytes) -> None:
+    """秘密鍵らしい PEM テキストだけを受け付ける。"""
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="秘密鍵ファイルは UTF-8 の PEM テキストとして読み取れる必要があります。",
+        ) from exc
+    if "\x00" in text or "-----BEGIN " not in text or "PRIVATE KEY-----" not in text:
+        raise HTTPException(
+            status_code=400,
+            detail="秘密鍵 PEM ファイルの形式を確認してください。",
+        )
+    upper_text = text.upper()
+    if "BEGIN ENCRYPTED PRIVATE KEY" in upper_text or "PROC-TYPE: 4,ENCRYPTED" in upper_text:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "暗号化された OCI API 秘密鍵は pass phrase 入力が必要です。"
+                "パスフレーズなしの秘密鍵 PEM を使用してください。"
+            ),
+        )
+
+
+def _install_database_wallet(settings: Settings, data: bytes, file_name: str | None) -> Path:
+    """Wallet ZIP を ORACLE_CLIENT_LIB_DIR/network/admin へ展開する。"""
+    safe_name = _safe_wallet_filename(file_name)
+    if not safe_name.lower().endswith(".zip"):
+        raise HTTPException(
+            status_code=415,
+            detail="Oracle Wallet は ZIP ファイルを選択してください。",
+        )
+    if not data:
+        raise HTTPException(status_code=400, detail="空の Wallet ZIP はアップロードできません。")
+
+    target = _wallet_storage_root(settings)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp_dir = target.parent / f".{target.name}.tmp-{uuid4().hex}"
+    try:
+        wallet_dir = _extract_wallet_zip(data, tmp_dir)
+        if target.exists():
+            if target.is_dir():
+                shutil.rmtree(target)
+            else:
+                target.unlink()
+        shutil.move(str(wallet_dir), str(target))
+        return target
+    except HTTPException:
+        raise
+    except OSError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Wallet ZIP をバックエンドの保存先へ展開できませんでした。",
+        ) from exc
+    finally:
+        _remove_tmp_wallet_dir(tmp_dir)
+
+
+def _extract_wallet_zip(data: bytes, target_dir: Path) -> Path:
+    """ZIP を検証しながら展開し、config_dir として使うディレクトリを返す。"""
+    extracted_files: list[Path] = []
+    total_uncompressed = 0
+    try:
+        with ZipFile(io.BytesIO(data)) as archive:
+            members = [member for member in archive.infolist() if not member.is_dir()]
+            if not members:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Wallet ZIP にファイルが含まれていません。",
+                )
+            for member in members:
+                total_uncompressed += member.file_size
+                if total_uncompressed > ORACLE_WALLET_MAX_EXTRACTED_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail="Wallet ZIP の展開後サイズが上限を超えています。",
+                    )
+                destination = _wallet_member_destination(target_dir, member.filename)
+                if destination.name.lower() in ORACLE_WALLET_SKIPPED_FILES:
+                    continue
+                if _zip_member_is_symlink(member.external_attr):
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Wallet ZIP にシンボリックリンクは含められません。",
+                    )
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                with archive.open(member) as src, destination.open("wb") as dst:
+                    shutil.copyfileobj(src, dst)
+                extracted_files.append(destination)
+    except BadZipFile as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="Wallet ZIP の形式を確認してください。",
+        ) from exc
+
+    wallet_dir = _find_wallet_config_dir(extracted_files)
+    if wallet_dir is None:
+        required = ", ".join(sorted(ORACLE_WALLET_REQUIRED_FILES))
+        raise HTTPException(
+            status_code=400,
+            detail=f"Wallet ZIP に {required} が含まれているか確認してください。",
+        )
+    return wallet_dir
+
+
+def _wallet_member_destination(root: Path, member_name: str) -> Path:
+    """Zip Slip を防ぎながら member の展開先を決める。"""
+    path = PurePosixPath(member_name.replace("\\", "/"))
+    if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
+        raise HTTPException(
+            status_code=400,
+            detail="Wallet ZIP に安全でないファイルパスが含まれています。",
+        )
+    destination = (root.joinpath(*path.parts)).resolve()
+    resolved_root = root.resolve()
+    if resolved_root != destination and resolved_root not in destination.parents:
+        raise HTTPException(
+            status_code=400,
+            detail="Wallet ZIP に安全でないファイルパスが含まれています。",
+        )
+    return destination
+
+
+def _find_wallet_config_dir(extracted_files: list[Path]) -> Path | None:
+    """tnsnames.ora/sqlnet.ora と認証ファイルが揃うディレクトリを探す。"""
+    candidates = {path.parent for path in extracted_files}
+    for candidate in sorted(candidates, key=lambda path: len(path.parts)):
+        names = {path.name.lower() for path in extracted_files if path.parent == candidate}
+        if ORACLE_WALLET_REQUIRED_FILES.issubset(names):
+            return candidate
+    return None
+
+
+def _extract_wallet_services(wallet_dir: Path) -> list[str]:
+    """tnsnames.ora からトップレベルの TNS alias を抽出する。"""
+    tnsnames = wallet_dir / "tnsnames.ora"
+    if not tnsnames.is_file():
+        return []
+
+    try:
+        content = tnsnames.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    reserved_names = {
+        "ADDRESS",
+        "ADDRESS_LIST",
+        "CONNECT_DATA",
+        "DESCRIPTION",
+        "DESCRIPTION_LIST",
+        "HOST",
+        "PORT",
+        "PROTOCOL",
+        "SECURITY",
+        "SERVICE_NAME",
+        "SSL_SERVER_CERT_DN",
+    }
+    services: list[str] = []
+    seen: set[str] = set()
+    for match in re.finditer(r"(?m)^([A-Za-z0-9_.-]+)\s*=", content):
+        service = match.group(1)
+        normalized = service.upper()
+        if normalized in reserved_names or normalized in seen:
+            continue
+        seen.add(normalized)
+        services.append(service)
+    return services
+
+
+def _zip_member_is_symlink(external_attr: int) -> bool:
+    """ZIP metadata 上の symlink を拒否する。"""
+    mode = external_attr >> 16
+    return bool(mode and stat.S_ISLNK(mode))
+
+
+def _wallet_storage_root(settings: Settings) -> Path:
+    """アップロード Wallet の固定保存先。"""
+    return Path(settings.resolved_oracle_wallet_dir).expanduser().resolve()
+
+
+def _safe_wallet_filename(file_name: str | None) -> str:
+    """表示名由来の ZIP ファイル名を basename に丸める。"""
+    name = PurePosixPath((file_name or "wallet.zip").replace("\\", "/")).name.strip()
+    name = re.sub(r"[\x00-\x1f\x7f]+", "_", name).strip(" .")
+    return name[:255] if name else "wallet.zip"
+
+
+def _remove_tmp_wallet_dir(path: Path) -> None:
+    """失敗時に今回作成した一時展開先だけを片付ける。"""
+    if path.exists():
+        shutil.rmtree(path, ignore_errors=True)
+
+
+def _upload_storage_settings_data(settings: Settings) -> UploadStorageSettingsData:
+    """Settings からアップロード保存先の表示用データを作る。"""
+    return UploadStorageSettingsData(
+        backend=settings.upload_storage_backend,
+        local_storage_dir=settings.local_storage_dir,
+        object_storage_region=settings.object_storage_region,
+        object_storage_namespace=settings.object_storage_namespace,
+        object_storage_bucket=settings.object_storage_bucket,
+        readiness=_upload_storage_readiness(settings),
+        max_upload_bytes=settings.max_upload_bytes,
+        config_source="runtime",
+    )
+
+
+def _parser_service_backends_data(settings: Settings) -> list[ParserServiceBackendData]:
+    """service 系 parser backend の選択状態と設定可用性を作る。"""
+    selected = str(getattr(settings, "rag_parser_adapter_backend", "local"))
+    vlm_configured = bool(settings.oci_enterprise_ai_endpoint.strip())
+    du_configured = OciDocumentUnderstandingClient(settings=settings).is_configured()
+    return [
+        ParserServiceBackendData(
+            backend="oci_genai_vision",
+            # 旧称 enterprise_ai_vlm も選択値として受理(後方互換エイリアス)。
+            selected=selected in ("oci_genai_vision", "enterprise_ai_vlm"),
+            configured=vlm_configured,
+            warning_code=(None if vlm_configured else "enterprise_ai_endpoint_unconfigured"),
+        ),
+        ParserServiceBackendData(
+            backend="oci_document_understanding",
+            selected=selected == "oci_document_understanding",
+            configured=du_configured,
+            warning_code=(None if du_configured else "oci_document_understanding_unconfigured"),
+        ),
+    ]
+
+
+def _parser_adapter_settings_data(settings: Settings) -> ParserAdapterSettingsData:
+    """Settings から parser adapter readiness の表示用データを作る。"""
+    runtime = parser_adapter_runtime_settings(settings)
+    scorecard = build_parser_adapter_scorecard(runtime)
+    source_routes = build_parser_adapter_source_routes(runtime)
+    route_data = [_parser_adapter_source_route_data(route) for route in source_routes]
+    return ParserAdapterSettingsData(
+        adapter_backend=runtime.adapter_backend,
+        effective_order=list(runtime.effective_order),
+        docling_vision_enabled=settings.rag_parser_docling_vision_enabled,
+        service_backends=_parser_service_backends_data(settings),
+        adapters=[
+            ParserAdapterStatusData(
+                backend=adapter.backend,
+                package_name=adapter.package_name,
+                import_name=adapter.import_name,
+                distribution_name=adapter.distribution_name,
+                install_package=adapter.install_package,
+                enabled=adapter.enabled,
+                selected=adapter.selected,
+                installed=adapter.installed,
+                status=adapter.status,
+                version=adapter.version,
+                warning_code=adapter.warning_code,
+            )
+            for adapter in runtime.adapters
+        ],
+        connections=[
+            ExternalParserConnectionData(
+                backend=backend,
+                protocol=connection.protocol,
+                endpoint=connection.endpoint,
+                model=connection.model,
+                api_key_configured=bool(connection.api_key),
+                configured=connection.configured,
+            )
+            for backend in ENGINE_SPECS
+            for connection in [external_parser_connection(settings, backend)]
+        ],
+        scorecard=ParserAdapterScorecardData(
+            selected_backend=scorecard.selected_backend,
+            recommended_backend=scorecard.recommended_backend,
+            metrics_source=scorecard.metrics_source,
+            metrics_applied_to=scorecard.metrics_applied_to,
+            entries=[
+                ParserAdapterScorecardEntryData(
+                    backend=entry.backend,
+                    rank=entry.rank,
+                    score=entry.score,
+                    status=entry.status,
+                    recommended=entry.recommended,
+                    executable=entry.executable,
+                    selected=entry.selected,
+                    enabled=entry.enabled,
+                    installed=entry.installed,
+                    metric_source=entry.metric_source,
+                    metric_count=entry.metric_count,
+                    signals=dict(entry.signals),
+                    reason_codes=list(entry.reason_codes),
+                    warning_codes=list(entry.warning_codes),
+                )
+                for entry in scorecard.entries
+            ],
+        ),
+        source_routes=route_data,
+        backend_source_kind_matrix=_parser_adapter_backend_source_matrix(route_data),
+        capabilities=_parser_backend_capabilities_data(),
+        config_source="runtime",
+    )
+
+
+def _parser_backend_capabilities_data() -> list[ParserBackendCapabilityData]:
+    """capabilities 正本から backend ごとの対応形式宣言を作る(別名は除外)。"""
+    return [
+        ParserBackendCapabilityData(
+            backend=backend,
+            modalities=[m.value for m in supported_modalities(backend)],
+            extensions=sorted(capability.extensions),
+        )
+        for backend, capability in ADAPTER_CAPABILITIES.items()
+        if backend != "enterprise_ai_vlm"
+    ]
+
+
+def _parser_adapter_contract_data(settings: Settings) -> ParserAdapterContractData:
+    """Settings から parser adapter compatibility matrix の表示用データを作る。"""
+    matrix = run_parser_adapter_compatibility_matrix(settings)
+    payload = parser_adapter_contract_artifact_payload(matrix)
+    raw_summary = payload.get("summary")
+    summary = raw_summary if isinstance(raw_summary, dict) else {}
+    raw_cases = payload.get("cases")
+    artifact_cases = (
+        [case for case in raw_cases if isinstance(case, dict)]
+        if isinstance(raw_cases, list | tuple)
+        else []
+    )
+    return ParserAdapterContractData(
+        passed=matrix.passed,
+        fixture_root=str(payload["fixture_root"]),
+        source_kinds=list(matrix.source_kinds),
+        backends=list(matrix.backends),
+        case_count=matrix.case_count,
+        blocking_failure_count=matrix.blocking_failure_count,
+        cases=[
+            ParserAdapterContractCaseData(
+                backend=case["backend"],
+                source_kind=str(case["source_kind"]),
+                fixture_name=str(case["fixture_name"]),
+                content_type=str(case["content_type"]),
+                status=case["status"],
+                blocking=bool(case["blocking"]),
+                parser_backend=(str(case["parser_backend"]) if "parser_backend" in case else None),
+                parser_version=(str(case["parser_version"]) if "parser_version" in case else None),
+                adapter_import_name=(
+                    str(case["adapter_import_name"]) if "adapter_import_name" in case else None
+                ),
+                adapter_distribution_name=(
+                    str(case["adapter_distribution_name"])
+                    if "adapter_distribution_name" in case
+                    else None
+                ),
+                adapter_package_version=(
+                    str(case["adapter_package_version"])
+                    if "adapter_package_version" in case
+                    else None
+                ),
+                template=str(case["template"]) if "template" in case else None,
+                element_count=_int_value(case.get("element_count")),
+                page_count=_int_value(case.get("page_count")),
+                table_count=_int_value(case.get("table_count")),
+                table_cell_count=_int_value(case.get("table_cell_count")),
+                asset_count=_int_value(case.get("asset_count")),
+                bbox_count=_int_value(case.get("bbox_count")),
+                warning_codes=_string_list(case.get("warning_codes")),
+                reason_codes=_string_list(case.get("reason_codes")),
+            )
+            for case in artifact_cases
+        ],
+        summary=ParserAdapterContractSummaryData.model_validate(summary),
+        config_source="runtime",
+    )
+
+
+def _int_value(value: object) -> int:
+    return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
+def _string_list(value: object) -> list[str]:
+    if not isinstance(value, list | tuple | set | frozenset):
+        return []
+    return [item for item in value if isinstance(item, str)]
+
+
+def _parser_adapter_source_route_data(
+    route: ParserAdapterSourceRoute,
+) -> ParserAdapterSourceRouteData:
+    return ParserAdapterSourceRouteData(
+        source_kind=route.source_kind,
+        candidate_order=list(route.candidate_order),
+        attempted_order=list(route.attempted_order),
+        active_order=list(route.active_order),
+        selected_backend=route.selected_backend,
+        reason_codes=list(route.reason_codes),
+        warning_codes=list(route.warning_codes),
+    )
+
+
+def _parser_adapter_backend_source_matrix(
+    routes: list[ParserAdapterSourceRouteData],
+) -> ParserAdapterBackendSourceMatrixData:
+    backend_source_kinds: dict[str, list[str]] = {}
+    covered_source_kinds: list[str] = []
+    for route in routes:
+        backend_source_kinds.setdefault(route.selected_backend, []).append(route.source_kind)
+        covered_source_kinds.append(route.source_kind)
+    normalized_backend_source_kinds = {
+        backend: sorted(set(source_kinds))
+        for backend, source_kinds in sorted(backend_source_kinds.items())
+    }
+    required_source_kinds = sorted({route.source_kind for route in routes})
+    covered = sorted(set(covered_source_kinds))
+    return ParserAdapterBackendSourceMatrixData(
+        evidence_source="runtime_routes",
+        required_source_kinds=required_source_kinds,
+        covered_source_kinds=covered,
+        missing_source_kinds=sorted(set(required_source_kinds) - set(covered)),
+        backend_source_kinds=normalized_backend_source_kinds,
+        route_evidence=routes,
+    )
+
+
+def _parser_adapter_settings_candidate(
+    base: Settings,
+    payload: ParserAdapterSettingsUpdate,
+) -> Settings:
+    """parser adapter 更新 payload から保存候補 settings を作る。"""
+    updates: dict[str, object] = {
+        "rag_parser_adapter_backend": payload.adapter_backend,
+        "rag_parser_docling_enabled": _optional_bool(
+            payload.docling_enabled,
+            base.rag_parser_docling_enabled,
+        ),
+        "rag_parser_docling_vision_enabled": _optional_bool(
+            payload.docling_vision_enabled,
+            base.rag_parser_docling_vision_enabled,
+        ),
+        "rag_parser_marker_enabled": _optional_bool(
+            payload.marker_enabled,
+            base.rag_parser_marker_enabled,
+        ),
+        "rag_parser_unstructured_enabled": _optional_bool(
+            payload.unstructured_enabled,
+            base.rag_parser_unstructured_enabled,
+        ),
+        "rag_parser_unlimited_ocr_enabled": _optional_bool(
+            payload.unlimited_ocr_enabled,
+            base.rag_parser_unlimited_ocr_enabled,
+        ),
+        "rag_parser_mineru_enabled": _optional_bool(
+            payload.mineru_enabled,
+            base.rag_parser_mineru_enabled,
+        ),
+        "rag_parser_dots_ocr_enabled": _optional_bool(
+            payload.dots_ocr_enabled,
+            base.rag_parser_dots_ocr_enabled,
+        ),
+        "rag_parser_glm_ocr_enabled": _optional_bool(
+            payload.glm_ocr_enabled,
+            base.rag_parser_glm_ocr_enabled,
+        ),
+    }
+    for connection in payload.connections:
+        spec = ENGINE_SPECS[connection.backend]
+        if "endpoint" in connection.model_fields_set:
+            updates[spec.endpoint_field] = connection.endpoint or ""
+        if spec.model_field and "model" in connection.model_fields_set:
+            updates[spec.model_field] = connection.model or ""
+        updates[spec.api_key_field] = _secret_value(
+            current=str(getattr(base, spec.api_key_field, "") or ""),
+            update=connection.api_key,
+            clear=connection.clear_api_key,
+        )
+    return base.model_copy(update=updates)
+
+
+def _apply_parser_adapter_settings(target: Settings, source: Settings) -> None:
+    """保存済み parser adapter 設定を現在プロセスへ反映する。"""
+    target.rag_parser_adapter_backend = source.rag_parser_adapter_backend
+    target.rag_parser_docling_enabled = source.rag_parser_docling_enabled
+    target.rag_parser_docling_vision_enabled = source.rag_parser_docling_vision_enabled
+    target.rag_parser_marker_enabled = source.rag_parser_marker_enabled
+    target.rag_parser_unstructured_enabled = source.rag_parser_unstructured_enabled
+    target.rag_parser_unlimited_ocr_enabled = source.rag_parser_unlimited_ocr_enabled
+    target.rag_parser_mineru_enabled = source.rag_parser_mineru_enabled
+    target.rag_parser_dots_ocr_enabled = source.rag_parser_dots_ocr_enabled
+    target.rag_parser_glm_ocr_enabled = source.rag_parser_glm_ocr_enabled
+    for spec in ENGINE_SPECS.values():
+        setattr(target, spec.endpoint_field, getattr(source, spec.endpoint_field))
+        if spec.model_field:
+            setattr(target, spec.model_field, getattr(source, spec.model_field))
+        setattr(target, spec.api_key_field, getattr(source, spec.api_key_field))
+
+
+def _optional_bool(value: bool | None, fallback: bool) -> bool:
+    return fallback if value is None else value
+
+
+def _upload_storage_settings_candidate(
+    base: Settings,
+    payload: UploadStorageSettingsUpdate,
+) -> Settings:
+    """更新 payload を適用した一時 Settings を作る。"""
+    updates = {
+        "upload_storage_backend": payload.backend,
+        "local_storage_dir": payload.local_storage_dir,
+        "object_storage_namespace": (
+            payload.object_storage_namespace
+            if payload.object_storage_namespace is not None
+            else base.object_storage_namespace
+        ),
+        "object_storage_bucket": payload.object_storage_bucket,
+    }
+    return base.model_copy(update=updates)
+
+
+def _persist_upload_storage_settings(settings: Settings) -> None:
+    """アップロード保存先設定を backend/.env へ永続化する。"""
+    values = {
+        "UPLOAD_STORAGE_BACKEND": settings.upload_storage_backend,
+        "LOCAL_STORAGE_DIR": settings.local_storage_dir,
+    }
+    if settings.upload_storage_backend == "oci":
+        values["OBJECT_STORAGE_REGION"] = settings.object_storage_region
+        values["OBJECT_STORAGE_NAMESPACE"] = settings.object_storage_namespace
+        values["OBJECT_STORAGE_BUCKET"] = settings.object_storage_bucket
+    _write_env_values(
+        BACKEND_ENV_FILE,
+        values,
+        section_comment="# アップロード保存先",
+        error_detail="アップロード保存先設定を backend/.env へ保存できませんでした。",
+    )
+
+
+def _graph_settings_data(settings: Settings) -> GraphSettingsData:
+    """Settings から関係情報設定の表示用データを作る。"""
+    runtime = graph_adapter_runtime_settings(settings)
+    return GraphSettingsData(
+        profile=runtime.profile,
+        enabled=runtime.enabled,
+        build_claims=runtime.build_claims,
+        build_community_summaries=runtime.build_community_summaries,
+        profiles=[
+            GraphProfileStatusData(
+                name=status.name,
+                origin=status.origin,
+                recommended_for=list(status.recommended_for),
+                selected=status.selected,
+                enabled=status.enabled,
+                build_claims=status.build_claims,
+                build_community_summaries=status.build_community_summaries,
+            )
+            for status in runtime.profiles
+        ],
+        config_source="runtime",
+    )
+
+
+def _persist_graph_settings(settings: Settings) -> None:
+    """関係情報設定を backend/.env へ永続化する。"""
+    _write_env_values(
+        BACKEND_ENV_FILE,
+        {
+            "RAG_GRAPH_PROFILE": settings.rag_graph_profile,
+            # legacy フラグも併記して、profile を正本に固定する(off/entities を選べる状態にする)。
+            "RAG_GRAPH_ENABLED": str(settings.rag_graph_enabled).lower(),
+        },
+        section_comment="# GraphRAG アダプター",
+        error_detail="関係情報設定を backend/.env へ保存できませんでした。",
+    )
+
+
+def _agentic_settings_data(settings: Settings) -> AgenticSettingsData:
+    """Settings から高度な検索設定の表示用データを作る。"""
+    runtime = agentic_adapter_runtime_settings(settings)
+    return AgenticSettingsData(
+        profile=runtime.profile,
+        enabled=runtime.enabled,
+        rewrite=runtime.rewrite,
+        decompose=runtime.decompose,
+        multi_hop=runtime.multi_hop,
+        max_subqueries=runtime.max_subqueries,
+        profiles=[
+            AgenticProfileStatusData(
+                name=status.name,
+                origin=status.origin,
+                recommended_for=list(status.recommended_for),
+                selected=status.selected,
+                enabled=status.enabled,
+                rewrite=status.rewrite,
+                decompose=status.decompose,
+                multi_hop=status.multi_hop,
+                hyde=status.hyde,
+            )
+            for status in runtime.profiles
+        ],
+        config_source="runtime",
+    )
+
+
+def _persist_agentic_settings(settings: Settings) -> None:
+    """高度な検索設定を backend/.env へ永続化する。"""
+    _write_env_values(
+        BACKEND_ENV_FILE,
+        {
+            "RAG_AGENTIC_PROFILE": settings.rag_agentic_profile,
+            "RAG_AGENTIC_MAX_SUBQUERIES": str(settings.rag_agentic_max_subqueries),
+        },
+        section_comment="# Agentic アダプター",
+        error_detail="高度な検索設定を backend/.env へ保存できませんでした。",
+    )
+
+
+def _evaluation_settings_data(settings: Settings) -> EvaluationSettingsData:
+    """Settings から品質評価設定の表示用データを作る。"""
+    runtime = evaluation_adapter_runtime_settings(settings)
+
+    def _thresholds_dict(thresholds: EvaluationThresholds | None) -> dict[str, float]:
+        if thresholds is None:
+            return {}
+        return {
+            key: float(value) for key, value in thresholds.model_dump(exclude_none=True).items()
+        }
+
+    return EvaluationSettingsData(
+        suite=runtime.suite,
+        thresholds=_thresholds_dict(runtime.thresholds),
+        suites=[
+            EvaluationSuiteStatusData(
+                name=status.name,
+                origin=status.origin,
+                recommended_for=list(status.recommended_for),
+                selected=status.selected,
+                thresholds=_thresholds_dict(status.thresholds),
+            )
+            for status in runtime.suites
+        ],
+        config_source="runtime",
+    )
+
+
+def _persist_evaluation_settings(settings: Settings) -> None:
+    """品質評価設定を backend/.env へ永続化する。"""
+    _write_env_values(
+        BACKEND_ENV_FILE,
+        {"RAG_EVALUATION_SUITE": settings.rag_evaluation_suite},
+        section_comment="# Evaluation アダプター",
+        error_detail="品質評価設定を backend/.env へ保存できませんでした。",
+    )
+
+
+def _vector_index_settings_data(settings: Settings) -> VectorIndexSettingsData:
+    """Settings から検索インデックス設定の表示用データを作る。"""
+    runtime = vector_index_adapter_runtime_settings(settings)
+    return VectorIndexSettingsData(
+        profile=runtime.profile,
+        target_accuracy=runtime.target_accuracy,
+        neighbors=runtime.neighbors,
+        efconstruction=runtime.efconstruction,
+        distance=runtime.distance,
+        requires_reprovision=runtime.requires_reprovision,
+        profiles=[
+            VectorIndexProfileStatusData(
+                name=status.name,
+                origin=status.origin,
+                recommended_for=list(status.recommended_for),
+                selected=status.selected,
+                target_accuracy=status.target_accuracy,
+                neighbors=status.neighbors,
+                efconstruction=status.efconstruction,
+                distance=status.distance,
+            )
+            for status in runtime.profiles
+        ],
+        reindex_sql=vector_index_reindex_sql(
+            target_accuracy=runtime.target_accuracy,
+            neighbors=runtime.neighbors,
+            efconstruction=runtime.efconstruction,
+            distance=runtime.distance,
+        ),
+        config_source="runtime",
+    )
+
+
+def _persist_vector_index_settings(settings: Settings) -> None:
+    """検索インデックス設定を backend/.env へ永続化する。"""
+    _write_env_values(
+        BACKEND_ENV_FILE,
+        {"RAG_VECTOR_INDEX_PROFILE": settings.rag_vector_index_profile},
+        section_comment="# Vector Index アダプター",
+        error_detail="検索インデックス設定を backend/.env へ保存できませんでした。",
+    )
+
+
+def _generation_settings_data(
+    settings: Settings,
+    stored: StoredGenerationSettings,
+) -> GenerationSettingsData:
+    """Oracle GLOBAL 行から回答スタイル設定の表示用データを作る。"""
+    runtime = generation_adapter_runtime_settings(
+        settings.model_copy(update={"rag_generation_profile": stored.profile})
+    )
+    return GenerationSettingsData(
+        profile=runtime.profile,
+        structured_output=runtime.structured_output,
+        profiles=[
+            GenerationProfileStatusData(
+                name=status.name,
+                origin=status.origin,
+                recommended_for=list(status.recommended_for),
+                selected=status.selected,
+                structured_output=status.structured_output,
+                contract_mode=status.contract_mode,
+                repair_enabled=status.repair_enabled,
+            )
+            for status in runtime.profiles
+        ],
+        config_source="oracle",
+        revision=stored.revision,
+        updated_at=stored.updated_at,
+        active_prompt_version_id=stored.active_prompt_version_id,
+        custom_prompt_configured=stored.active_prompt_version_id is not None,
+    )
+
+
+def _guardrail_settings_data(settings: Settings) -> GuardrailSettingsData:
+    """Settings から安全チェック設定の表示用データを作る。"""
+    runtime = guardrail_adapter_runtime_settings(settings)
+    return GuardrailSettingsData(
+        policy=runtime.policy,
+        block_prompt_injection=runtime.block_prompt_injection,
+        mask_sensitive_identifiers=runtime.mask_sensitive_identifiers,
+        max_query_chars=runtime.max_query_chars,
+        grounding_min_overlap=runtime.grounding_min_overlap,
+        grounding_min_ratio=runtime.grounding_min_ratio,
+        audit_emphasis=runtime.audit_emphasis,
+        policies=[
+            GuardrailPolicyStatusData(
+                name=status.name,
+                origin=status.origin,
+                recommended_for=list(status.recommended_for),
+                selected=status.selected,
+                grounding_min_overlap=status.grounding_min_overlap,
+                grounding_min_ratio=status.grounding_min_ratio,
+                audit_emphasis=status.audit_emphasis,
+            )
+            for status in runtime.policies
+        ],
+        backend=settings.rag_guardrail_backend,
+        oci_configured=_oci_guardrails_configured(settings),
+        oci_warning_code=_oci_guardrails_warning_code(settings),
+        config_source="runtime",
+    )
+
+
+def _oci_guardrails_configured(settings: Settings) -> bool:
+    """OCI Guardrails の compartment と API キー認証を静的に確認する。"""
+    compartment_configured = bool(
+        str(getattr(settings, "oci_guardrails_compartment_id", "") or "").strip()
+        or str(getattr(settings, "oci_compartment_id", "") or "").strip()
+    )
+    return (
+        compartment_configured
+        and _test_oci_config(settings, verify_with_oci=False).status == "success"
+    )
+
+
+def _oci_guardrails_warning_code(settings: Settings) -> str | None:
+    """oci_guardrails 選択時の静的 readiness warning code を返す。"""
+    if settings.rag_guardrail_backend != "oci_guardrails":
+        return None
+    compartment_configured = bool(
+        str(getattr(settings, "oci_guardrails_compartment_id", "") or "").strip()
+        or str(getattr(settings, "oci_compartment_id", "") or "").strip()
+    )
+    if not compartment_configured:
+        return "oci_guardrails_compartment_missing"
+    if _test_oci_config(settings, verify_with_oci=False).status != "success":
+        return "oci_guardrails_credentials_invalid"
+    return None
+
+
+def _persist_guardrail_settings(settings: Settings) -> None:
+    """安全チェック設定を backend/.env へ永続化する。"""
+    _write_env_values(
+        BACKEND_ENV_FILE,
+        {
+            "RAG_GUARDRAIL_POLICY": settings.rag_guardrail_policy,
+            "RAG_GUARDRAIL_BACKEND": settings.rag_guardrail_backend,
+        },
+        section_comment="# Guardrail アダプター",
+        error_detail="安全チェック設定を backend/.env へ保存できませんでした。",
+    )
+
+
+def _retrieval_status_data(
+    statuses: Iterable[RetrievalStrategyStatus],
+) -> list[RetrievalStrategyStatusData]:
+    return [
+        RetrievalStrategyStatusData(
+            name=status.name,
+            origin=status.origin,
+            recommended_for=list(status.recommended_for),
+            selected=status.selected,
+            gap_stop=status.gap_stop,
+            corrective_retrieval=status.corrective_retrieval,
+            business_fit_weighting=status.business_fit_weighting,
+        )
+        for status in statuses
+    ]
+
+
+def _retrieval_settings_data(settings: Settings) -> RetrievalSettingsData:
+    """Settings から検索方法設定の表示用データを作る。"""
+    runtime = retrieval_adapter_runtime_settings(settings)
+    return RetrievalSettingsData(
+        mode=runtime.mode,
+        legacy_strategy=runtime.legacy_strategy,
+        query_expansion=runtime.query_expansion,
+        query_expansion_llm=settings.rag_query_expansion_llm_enabled,
+        gap_stop=runtime.gap_stop,
+        corrective_retrieval=runtime.corrective_retrieval,
+        business_fit_weighting=runtime.business_fit_weighting,
+        text_search_tokenizer=settings.rag_text_search_tokenizer,
+        modes=_retrieval_status_data(runtime.modes),
+        config_source="runtime",
+    )
+
+
+def _retrieval_settings_updates(
+    settings: Settings, payload: RetrievalSettingsUpdate
+) -> dict[str, object]:
+    """更新 payload(新形式)から Settings 更新 dict を作る。
+
+    .env に legacy 複合値が残っている場合も、この保存を通るとモードへ正規化される
+    (legacy の強制トグルは明示 ON へ引き継ぎ、現在の有効トグルは
+    _persist_retrieval_settings が書き出す)。
+    """
+    updates: dict[str, object] = {}
+    current = decompose_retrieval_strategy(settings.rag_retrieval_strategy)
+    updates["rag_retrieval_strategy"] = current.mode
+    if current.forced_query_expansion:
+        updates["rag_query_expansion_enabled"] = True
+    if current.forced_gap_stop:
+        updates["rag_retrieval_gap_stop_enabled"] = True
+    if current.forced_corrective_retrieval:
+        updates["rag_retrieval_corrective_enabled"] = True
+    if current.forced_business_fit_weighting:
+        updates["rag_retrieval_business_fit_weighting_enabled"] = True
+    if payload.mode is not None:
+        updates["rag_retrieval_strategy"] = payload.mode
+    if payload.query_expansion is not None:
+        updates["rag_query_expansion_enabled"] = payload.query_expansion
+    if payload.query_expansion_llm is not None:
+        updates["rag_query_expansion_llm_enabled"] = payload.query_expansion_llm
+    if payload.gap_stop is not None:
+        updates["rag_retrieval_gap_stop_enabled"] = payload.gap_stop
+    if payload.corrective_retrieval is not None:
+        updates["rag_retrieval_corrective_enabled"] = payload.corrective_retrieval
+    if payload.business_fit_weighting is not None:
+        updates["rag_retrieval_business_fit_weighting_enabled"] = payload.business_fit_weighting
+    if payload.text_search_tokenizer is not None:
+        updates["rag_text_search_tokenizer"] = payload.text_search_tokenizer
+    return updates
+
+
+def _apply_retrieval_settings(target: Settings, source: Settings) -> None:
+    """保存済み検索方法設定を現在プロセスへ反映する。"""
+    target.rag_retrieval_strategy = source.rag_retrieval_strategy
+    target.rag_query_expansion_enabled = source.rag_query_expansion_enabled
+    target.rag_query_expansion_llm_enabled = source.rag_query_expansion_llm_enabled
+    target.rag_retrieval_gap_stop_enabled = source.rag_retrieval_gap_stop_enabled
+    target.rag_retrieval_corrective_enabled = source.rag_retrieval_corrective_enabled
+    target.rag_retrieval_business_fit_weighting_enabled = (
+        source.rag_retrieval_business_fit_weighting_enabled
+    )
+    target.rag_text_search_tokenizer = source.rag_text_search_tokenizer
+
+
+def _persist_retrieval_settings(settings: Settings) -> None:
+    """検索方法設定(モード + トグル)を backend/.env へ永続化する。"""
+    _write_env_values(
+        BACKEND_ENV_FILE,
+        {
+            "RAG_RETRIEVAL_STRATEGY": settings.rag_retrieval_strategy,
+            "RAG_QUERY_EXPANSION_ENABLED": _format_env_bool(settings.rag_query_expansion_enabled),
+            "RAG_QUERY_EXPANSION_LLM_ENABLED": _format_env_bool(
+                settings.rag_query_expansion_llm_enabled
+            ),
+            "RAG_RETRIEVAL_GAP_STOP_ENABLED": _format_env_bool(
+                settings.rag_retrieval_gap_stop_enabled
+            ),
+            "RAG_RETRIEVAL_CORRECTIVE_ENABLED": _format_env_bool(
+                settings.rag_retrieval_corrective_enabled
+            ),
+            "RAG_RETRIEVAL_BUSINESS_FIT_WEIGHTING_ENABLED": _format_env_bool(
+                settings.rag_retrieval_business_fit_weighting_enabled
+            ),
+            "RAG_TEXT_SEARCH_TOKENIZER": settings.rag_text_search_tokenizer,
+        },
+        section_comment="# Retrieval アダプター",
+        error_detail="検索方法設定を backend/.env へ保存できませんでした。",
+    )
+
+
+def _grounding_settings_data(settings: Settings) -> GroundingSettingsData:
+    """Settings から根拠確認設定の表示用データを作る。"""
+    runtime = grounding_adapter_runtime_settings(settings)
+    return GroundingSettingsData(
+        pipeline=runtime.pipeline,
+        dependency_promotion_enabled=runtime.dependency_promotion_enabled,
+        diversity_enabled=runtime.diversity_enabled,
+        expansion_mode=runtime.expansion_mode,
+        compression_enabled=runtime.compression_enabled,
+        crag_low_confidence_threshold=settings.rag_grounding_crag_confidence_threshold,
+        crag_high_confidence_threshold=settings.rag_crag_high_confidence_threshold,
+        crag_max_hops=settings.rag_crag_max_hops,
+        crag_low_evidence_abstain=settings.rag_crag_low_evidence_abstain_enabled,
+        pipelines=[
+            GroundingPipelineStatusData(
+                name=status.name,
+                origin=status.origin,
+                recommended_for=list(status.recommended_for),
+                selected=status.selected,
+                dependency_promotion=status.dependency_promotion,
+                diversity=status.diversity,
+                expansion_mode=status.expansion_mode,
+                compression=status.compression,
+                corrective=status.corrective,
+            )
+            for status in runtime.pipelines
+        ],
+        config_source="runtime",
+    )
+
+
+def _apply_grounding_settings(target: Settings, source: Settings) -> None:
+    """保存済み根拠確認設定を現在プロセスへ反映する。"""
+    target.rag_post_retrieval_pipeline = source.rag_post_retrieval_pipeline
+    target.rag_grounding_crag_confidence_threshold = source.rag_grounding_crag_confidence_threshold
+    target.rag_crag_high_confidence_threshold = source.rag_crag_high_confidence_threshold
+    target.rag_crag_max_hops = source.rag_crag_max_hops
+    target.rag_crag_low_evidence_abstain_enabled = source.rag_crag_low_evidence_abstain_enabled
+
+
+def _persist_grounding_settings(settings: Settings) -> None:
+    """根拠確認設定(処理方式 + CRAG 閾値)を backend/.env へ永続化する。"""
+    _write_env_values(
+        BACKEND_ENV_FILE,
+        {
+            "RAG_POST_RETRIEVAL_PIPELINE": settings.rag_post_retrieval_pipeline,
+            "RAG_GROUNDING_CRAG_CONFIDENCE_THRESHOLD": str(
+                settings.rag_grounding_crag_confidence_threshold
+            ),
+            "RAG_CRAG_HIGH_CONFIDENCE_THRESHOLD": str(settings.rag_crag_high_confidence_threshold),
+            "RAG_CRAG_MAX_HOPS": str(settings.rag_crag_max_hops),
+            "RAG_CRAG_LOW_EVIDENCE_ABSTAIN_ENABLED": _format_env_bool(
+                settings.rag_crag_low_evidence_abstain_enabled
+            ),
+        },
+        section_comment="# Grounding アダプター",
+        error_detail="根拠確認設定を backend/.env へ保存できませんでした。",
+    )
+
+
+def _preprocess_settings_data(settings: Settings) -> PreprocessSettingsData:
+    """Settings からファイル準備設定の表示用データを作る。"""
+    runtime = preprocess_runtime_settings(settings)
+    return PreprocessSettingsData(
+        profile=runtime.profile,
+        service_enabled=runtime.service_enabled,
+        service_url=runtime.service_url,
+        canonical_artifact_prefix=runtime.canonical_artifact_prefix,
+        profiles=[
+            PreprocessProfileStatusData(
+                name=status.name,
+                origin=status.origin,
+                recommended_for=list(status.recommended_for),
+                selected=status.selected,
+                in_process=status.in_process,
+                requires_service=status.requires_service,
+                available=status.available,
+            )
+            for status in runtime.profiles
+        ],
+        config_source="runtime",
+    )
+
+
+def _preprocess_settings_candidate(
+    base: Settings,
+    payload: PreprocessSettingsUpdate,
+) -> Settings:
+    """前処理アダプター更新 payload から保存候補 settings を作る。"""
+    return base.model_copy(
+        update={"rag_preprocess_profile": normalize_preprocess_profile(payload.profile)}
+    )
+
+
+def _apply_preprocess_settings(target: Settings, source: Settings) -> None:
+    """保存済みファイル準備設定を現在プロセスへ反映する。"""
+    target.rag_preprocess_profile = source.rag_preprocess_profile
+
+
+def _persist_preprocess_settings(settings: Settings) -> None:
+    """ファイル準備設定を backend/.env へ永続化する。"""
+    _write_env_values(
+        BACKEND_ENV_FILE,
+        {"RAG_PREPROCESS_PROFILE": settings.rag_preprocess_profile},
+        section_comment="# 前処理(Preprocess)アダプター",
+        error_detail="ファイル準備設定を backend/.env へ保存できませんでした。",
+    )
+
+
+def _chunking_settings_data(settings: Settings) -> ChunkingSettingsData:
+    """Settings から文書分割設定の表示用データを作る。"""
+    runtime = chunking_runtime_settings(settings)
+    return ChunkingSettingsData(
+        strategy=runtime.strategy,
+        chunk_size=runtime.chunk_size,
+        overlap=runtime.overlap,
+        child_size=runtime.child_size,
+        min_chars=runtime.min_chars,
+        delimiter=runtime.delimiter,
+        context_header_enabled=settings.rag_chunk_context_header_enabled,
+        strategies=[
+            ChunkingStrategyStatusData(
+                name=status.name,
+                origin=status.origin,
+                recommended_for=list(status.recommended_for),
+                selected=status.selected,
+                uses_child_size=status.uses_child_size,
+            )
+            for status in runtime.strategies
+        ],
+        config_source="runtime",
+    )
+
+
+def _chunking_settings_candidate(
+    base: Settings,
+    payload: ChunkingSettingsUpdate,
+) -> Settings:
+    """Chunking アダプター更新 payload から保存候補 settings を作る。"""
+    return base.model_copy(
+        update={
+            "rag_chunking_strategy": normalize_chunking_strategy(payload.strategy),
+            "rag_chunk_size": payload.chunk_size,
+            "rag_chunk_overlap": payload.overlap,
+            "rag_chunk_child_size": payload.child_size,
+            "rag_chunk_min_chars": payload.min_chars,
+            "rag_chunk_delimiter": payload.delimiter,
+            "rag_chunk_context_header_enabled": payload.context_header_enabled,
+        }
+    )
+
+
+def _apply_chunking_settings(target: Settings, source: Settings) -> None:
+    """保存済み文書分割設定を現在プロセスへ反映する。"""
+    target.rag_chunking_strategy = source.rag_chunking_strategy
+    target.rag_chunk_size = source.rag_chunk_size
+    target.rag_chunk_overlap = source.rag_chunk_overlap
+    target.rag_chunk_child_size = source.rag_chunk_child_size
+    target.rag_chunk_min_chars = source.rag_chunk_min_chars
+    target.rag_chunk_delimiter = source.rag_chunk_delimiter
+    target.rag_chunk_context_header_enabled = source.rag_chunk_context_header_enabled
+
+
+def _persist_chunking_settings(settings: Settings) -> None:
+    """文書分割設定を backend/.env へ永続化する。"""
+    _write_env_values(
+        BACKEND_ENV_FILE,
+        {
+            "RAG_CHUNKING_STRATEGY": settings.rag_chunking_strategy,
+            "RAG_CHUNK_SIZE": str(settings.rag_chunk_size),
+            "RAG_CHUNK_OVERLAP": str(settings.rag_chunk_overlap),
+            "RAG_CHUNK_CHILD_SIZE": str(settings.rag_chunk_child_size),
+            "RAG_CHUNK_MIN_CHARS": str(settings.rag_chunk_min_chars),
+            "RAG_CHUNK_DELIMITER": settings.rag_chunk_delimiter,
+            "RAG_CHUNK_CONTEXT_HEADER_ENABLED": _format_env_bool(
+                settings.rag_chunk_context_header_enabled
+            ),
+        },
+        section_comment="# Chunking アダプター",
+        error_detail="文書分割設定を backend/.env へ保存できませんでした。",
+    )
+
+
+def _format_env_bool(value: bool) -> str:
+    return "true" if value else "false"
+
+
+def _persist_oci_settings(settings: Settings, payload: OciSettingsUpdate) -> None:
+    """OCI 共通設定を backend/.env へ永続化する。"""
+    region = payload.region.strip()
+    _write_env_values(
+        BACKEND_ENV_FILE,
+        {
+            "OCI_CONFIG_FILE": settings.oci_config_file,
+            "OCI_CONFIG_PROFILE": settings.oci_config_profile,
+            "OCI_REGION": region or None,
+        },
+        section_comment="# OCI 共通",
+        error_detail="OCI 認証設定を backend/.env へ保存できませんでした。",
+    )
+
+
+def _persist_oci_object_storage_settings(settings: Settings) -> None:
+    """OCI Object Storage 共通設定を backend/.env へ永続化する。"""
+    _write_env_values(
+        BACKEND_ENV_FILE,
+        {
+            "OBJECT_STORAGE_REGION": settings.object_storage_region,
+            "OBJECT_STORAGE_NAMESPACE": settings.object_storage_namespace,
+        },
+        section_comment="# OCI Object Storage",
+        error_detail="OCI Object Storage 設定を backend/.env へ保存できませんでした。",
+    )
+
+
+def _write_env_values(
+    path: Path,
+    values: Mapping[str, str | None],
+    *,
+    section_comment: str,
+    error_detail: str,
+) -> None:
+    """既存 .env のコメントや無関係な値を保ったまま指定 key だけ更新する。"""
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+        next_lines: list[str] = []
+        written: set[str] = set()
+        for line in lines:
+            key = _env_assignment_key(line)
+            if key is None or key not in values:
+                next_lines.append(line)
+                continue
+            if key in written:
+                continue
+            value = values[key]
+            if value is None:
+                written.add(key)
+                continue
+            next_lines.append(f"{key}={_format_env_value(value)}")
+            written.add(key)
+
+        missing = [key for key, value in values.items() if key not in written and value is not None]
+        if missing:
+            if next_lines and next_lines[-1].strip():
+                next_lines.append("")
+            next_lines.append(section_comment)
+            for key in missing:
+                value = values[key]
+                if value is not None:
+                    next_lines.append(f"{key}={_format_env_value(value)}")
+
+        content = "\n".join(next_lines).rstrip() + "\n"
+        _replace_env_file(path, content)
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=error_detail) from exc
+
+
+def _env_assignment_key(line: str) -> str | None:
+    """通常の .env 代入行から key を取り出す。コメント行は対象外。"""
+    if line.lstrip().startswith("#"):
+        return None
+    match = ENV_ASSIGNMENT_RE.match(line)
+    return match.group(1) if match else None
+
+
+def _format_env_value(value: str) -> str:
+    """python-dotenv と shell の両方で読みやすい .env value へ整形する。"""
+    normalized = value.strip()
+    if not normalized:
+        return ""
+    if re.search(r"[\s#\"']", normalized):
+        return '"' + normalized.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    return normalized
+
+
+def _replace_env_file(path: Path, content: str) -> None:
+    """同一ディレクトリ内の一時ファイルから atomic replace する。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else ENV_FILE_MODE
+    tmp_path = path.with_name(f".{path.name}.tmp-{uuid4().hex}")
+    try:
+        tmp_path.write_text(content, encoding="utf-8")
+        tmp_path.chmod(mode)
+        tmp_path.replace(path)
+        path.chmod(mode)
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
+def _apply_upload_storage_settings(target: Settings, source: Settings) -> None:
+    """アップロード保存先関連設定だけ現在プロセスへ反映する。"""
+    target.upload_storage_backend = source.upload_storage_backend
+    target.local_storage_dir = source.local_storage_dir
+    target.object_storage_namespace = source.object_storage_namespace
+    target.object_storage_bucket = source.object_storage_bucket
+
+
+def _upload_storage_readiness(settings: Settings) -> str:
+    """アップロード保存先の readiness status を返す。"""
+    checks = upload_storage_readiness_checks(settings)
+    return next(iter(checks.values()), "missing")
+
+
+def _write_oci_config(settings: Settings, payload: OciSettingsUpdate) -> Path:
+    """OCI SDK config を安全な権限で作成または更新する。"""
+    target = Path(settings.oci_config_file).expanduser()
+    profile = _safe_oci_profile_name(settings.oci_config_profile)
+    parser = _load_oci_config_for_write(target)
+    values = {
+        "user": payload.user,
+        "fingerprint": payload.fingerprint,
+        "tenancy": payload.tenancy,
+        "region": payload.region,
+    }
+    if any(value.strip() for value in values.values()):
+        values["key_file"] = OCI_PRIVATE_KEY_FILE
+    _set_oci_config_profile(
+        parser,
+        profile,
+        {key: value for key, value in values.items() if value.strip()},
+    )
+    _atomic_write_oci_config(target, parser)
+    return target
+
+
+def _safe_oci_profile_name(profile: str) -> str:
+    """OCI profile 名を INI section として安全な文字列へ制限する。"""
+    selected = profile.strip() or "DEFAULT"
+    if any(char in selected for char in "[]\r\n"):
+        raise HTTPException(status_code=422, detail="プロファイル名に [ ] や改行は使用できません。")
+    return selected
+
+
+def _load_oci_config_for_write(path: Path) -> configparser.ConfigParser:
+    """既存 config があれば読み、なければ空の parser を返す。"""
+    parser = configparser.ConfigParser(interpolation=None)
+    if not path.exists():
+        return parser
+    if path.is_dir():
+        raise HTTPException(
+            status_code=400,
+            detail="OCI config ファイル path がディレクトリを指しています。",
+        )
+    try:
+        if path.stat().st_size > OCI_CONFIG_MAX_BYTES:
+            raise HTTPException(status_code=413, detail="OCI config ファイルが大きすぎます。")
+        content = path.read_text(encoding="utf-8")
+    except HTTPException:
+        raise
+    except UnicodeDecodeError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="OCI config ファイルは UTF-8 テキストとして読み取れる必要があります。",
+        ) from exc
+    except OSError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="OCI config ファイルを更新前に読み取れませんでした。",
+        ) from exc
+    if not content.strip():
+        return parser
+    try:
+        parser.read_string(content)
+    except configparser.Error as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="OCI config ファイルの形式を確認してください。",
+        ) from exc
+    return parser
+
+
+def _set_oci_config_profile(
+    parser: configparser.ConfigParser,
+    profile: str,
+    values: dict[str, str],
+) -> None:
+    """DEFAULT または指定 profile に OCI SDK 必須値を設定する。"""
+    if profile.upper() == "DEFAULT":
+        for key, value in values.items():
+            parser["DEFAULT"][key] = value
+        return
+    if not parser.has_section(profile):
+        parser.add_section(profile)
+    for key, value in values.items():
+        parser[profile][key] = value
+
+
+def _atomic_write_oci_config(path: Path, parser: configparser.ConfigParser) -> None:
+    """config を一時ファイル経由で保存し、ディレクトリ/ファイル権限を補正する。"""
+    tmp_path = path.with_name(f".{path.name}.tmp-{uuid4().hex}")
+    try:
+        _ensure_private_directory(path.parent)
+        buffer = io.StringIO()
+        parser.write(buffer, space_around_delimiters=False)
+        tmp_path.write_text(buffer.getvalue(), encoding="utf-8")
+        tmp_path.chmod(OCI_CONFIG_FILE_MODE)
+        tmp_path.replace(path)
+        path.chmod(OCI_CONFIG_FILE_MODE)
+    except OSError as exc:
+        if tmp_path.exists():
+            tmp_path.unlink(missing_ok=True)
+        raise HTTPException(
+            status_code=500,
+            detail="OCI config ファイルをバックエンドの固定 path へ保存できませんでした。",
+        ) from exc
+
+
+def _ensure_private_directory(path: Path) -> None:
+    """OCI credential directory を作成し、所有者だけが入れる権限に補正する。"""
+    path.mkdir(mode=OCI_DIRECTORY_MODE, parents=True, exist_ok=True)
+    path.chmod(OCI_DIRECTORY_MODE)
+
+
+def _test_oci_config(
+    settings: Settings,
+    *,
+    verify_with_oci: bool = True,
+) -> OciConfigTestResult:
+    """保存済み OCI 設定で、形式 → 鍵 → リージョン到達 → 認証の順に確認する。
+
+    `verify_with_oci=False` は画面表示用の静的 readiness 向けで、OCI へ通信せず
+    形式と鍵の段階だけを確認する(リージョン到達と認証は未実施のまま返す)。
+    """
+    started = time.perf_counter()
+    config_file = settings.oci_config_file
+    config_path = Path(config_file).expanduser()
+    profile = _safe_oci_profile_name(settings.oci_config_profile)
+    key_path = Path(OCI_PRIVATE_KEY_FILE).expanduser()
+    report = OciConnectivityReport()
+    try:
+        content = _read_oci_config_text(config_file)
+        parsed = _parse_oci_config(content, profile)
+    except HTTPException as exc:
+        report.add(
+            OciConnectivityStage(
+                key="config_format",
+                status="failed",
+                message=str(exc.detail),
+                action="OCI config を「config 読込」で確認し、認証設定を保存し直してください。",
+            )
+        )
+        return _oci_config_test_result(
+            report,
+            started=started,
+            profile=profile,
+            config_file=config_file,
+            key_file=OCI_PRIVATE_KEY_FILE,
+            config_path=config_path,
+            key_path=key_path,
+            key_file_exists=key_path.is_file(),
+            error_type="HTTPException",
+        )
+
+    parsed_values = {
+        "user": parsed.user,
+        "fingerprint": parsed.fingerprint,
+        "tenancy": parsed.tenancy,
+        "region": parsed.region,
+        "key_file": parsed.key_file,
+    }
+    missing_fields: list[OciConfigField] = [
+        field for field in OCI_CONFIG_KEYS if not parsed_values[field].strip()
+    ]
+    key_file = parsed.key_file or OCI_PRIVATE_KEY_FILE
+    key_path = resolve_oci_key_file(key_file, config_path)
+    key_file_exists = key_path.is_file()
+    permission_issues = _oci_permission_issues(config_path, key_path)
+    error_type: str | None = None
+
+    def finish(
+        *,
+        auth_check_operation: str | None = None,
+        http_status: int | None = None,
+        service_code: str | None = None,
+        request_id: str | None = None,
+    ) -> OciConfigTestResult:
+        return _oci_config_test_result(
+            report,
+            started=started,
+            profile=parsed.profile,
+            config_file=config_file,
+            key_file=key_file,
+            config_path=config_path,
+            key_path=key_path,
+            key_file_exists=key_file_exists,
+            missing_fields=missing_fields,
+            permission_issues=permission_issues,
+            region=parsed.region or None,
+            error_type=error_type,
+            auth_check_operation=auth_check_operation,
+            http_status=http_status,
+            service_code=service_code,
+            request_id=request_id,
+        )
+
+    config_permission_issues = [
+        issue for issue in permission_issues if not issue.startswith("秘密鍵")
+    ]
+    if missing_fields:
+        report.add(
+            OciConnectivityStage(
+                key="config_format",
+                status="failed",
+                message="OCI config の必須項目が不足しています。",
+                action="不足している項目を入力して認証設定を保存してください。",
+            )
+        )
+        return finish()
+    if not report.add(check_config_format(parsed_values)):
+        return finish()
+    if config_permission_issues:
+        report.stages[-1] = OciConnectivityStage(
+            key="config_format",
+            status="failed",
+            message="OCI 認証ファイルの権限を確認してください。",
+            action=" ".join(config_permission_issues),
+        )
+        return finish()
+
+    pass_phrase = _oci_config_private_key_pass_phrase(content, profile)
+    if not key_file_exists:
+        key_stage = OciConnectivityStage(
+            key="key_file",
+            status="failed",
+            message="OCI config の key_file が指す秘密鍵ファイルが見つかりません。",
+            action="OCI コンソールで API キーを登録した秘密鍵 PEM をアップロードしてください。",
+        )
+    elif pem_file_is_encrypted(key_path) and not pass_phrase:
+        key_stage = OciConnectivityStage(
+            key="key_file",
+            status="failed",
+            message=OCI_PRIVATE_KEY_PASSPHRASE_REQUIRED_ERROR,
+            action="パスフレーズなしの秘密鍵 PEM をアップロードしてください。",
+        )
+        error_type = "OciPrivateKeyPassPhraseRequiredError"
+    elif len(permission_issues) != len(config_permission_issues):
+        key_stage = OciConnectivityStage(
+            key="key_file",
+            status="failed",
+            message="OCI 認証ファイルの権限を確認してください。",
+            action="秘密鍵ファイルは 0600 にしてください。",
+        )
+    else:
+        key_stage = check_private_key(key_path, parsed.fingerprint, pass_phrase)
+    if not report.add(key_stage) or not verify_with_oci:
+        return finish()
+
+    try:
+        oci_config = importlib.import_module("oci.config")
+        sdk_config = load_oci_config_without_prompt(oci_config, config_file, profile)
+    except Exception as exc:
+        report.add(
+            OciConnectivityStage(
+                key="authentication",
+                status="failed",
+                message="OCI SDK で OCI config を読み込めませんでした。",
+                action="OCI config の内容を確認し、認証設定を保存し直してください。",
+            )
+        )
+        error_type = type(exc).__name__
+        return finish()
+
+    api_result = check_authenticated_api(sdk_config)
+    report.add(api_result.region)
+    report.add(api_result.authentication)
+    logger.info(
+        "oci_config_test_api_check_completed",
+        extra={
+            "oci_auth_check_operation": OCI_AUTH_CHECK_OPERATION,
+            "oci_region_stage": api_result.region.status,
+            "oci_authentication_stage": api_result.authentication.status,
+            "oci_http_status": api_result.http_status,
+            "oci_service_code": api_result.service_code,
+            "oci_request_id": api_result.request_id,
+            "oci_error_type": api_result.error_type,
+        },
+    )
+    error_type = api_result.error_type
+    return finish(
+        auth_check_operation=OCI_AUTH_CHECK_OPERATION,
+        http_status=api_result.http_status,
+        service_code=api_result.service_code,
+        request_id=api_result.request_id,
+    )
+
+
+def _oci_config_test_result(
+    report: OciConnectivityReport,
+    *,
+    started: float,
+    profile: str,
+    config_file: str,
+    key_file: str,
+    config_path: Path,
+    key_path: Path,
+    key_file_exists: bool,
+    missing_fields: list[OciConfigField] | None = None,
+    permission_issues: list[str] | None = None,
+    region: str | None = None,
+    auth_check_operation: str | None = None,
+    http_status: int | None = None,
+    service_code: str | None = None,
+    request_id: str | None = None,
+    error_type: str | None = None,
+) -> OciConfigTestResult:
+    """段階の結果から API 応答を組み立てる。失敗した段階が 1 つでもあれば failed にする。"""
+    stages = report.finish()
+    failure = report.first_failure
+    status: OciConfigTestStatus = "failed" if failure else "success"
+    if failure:
+        message = failure.message
+    elif auth_check_operation:
+        message = f"OCI へ認証付きで接続できました（{auth_check_operation}）。"
+    else:
+        message = "OCI config と秘密鍵を確認しました（OCI への接続は未確認）。"
+    return OciConfigTestResult(
+        status=status,
+        profile=profile,
+        config_file=config_file,
+        key_file=key_file,
+        config_file_exists=config_path.is_file(),
+        key_file_exists=key_file_exists,
+        missing_fields=missing_fields or [],
+        permission_issues=permission_issues or [],
+        oci_directory_mode=_mode_string(config_path.parent),
+        config_file_mode=_mode_string(config_path),
+        key_file_mode=_mode_string(key_path),
+        message=message,
+        elapsed_ms=_elapsed_ms(started),
+        error_type=error_type,
+        stages=[OciConfigTestStage(**asdict(stage)) for stage in stages],
+        region=region,
+        auth_check_operation=auth_check_operation,
+        http_status=http_status,
+        service_code=service_code,
+        request_id=request_id,
+    )
+
+
+def _oci_permission_issues(config_path: Path, key_path: Path) -> list[str]:
+    """OCI credential path の group/other 権限露出を検出する。"""
+    issues: list[str] = []
+    directory_mode = _path_mode(config_path.parent)
+    config_mode = _path_mode(config_path)
+    key_mode = _path_mode(key_path)
+    if directory_mode is not None and directory_mode != OCI_DIRECTORY_MODE:
+        issues.append("~/.oci ディレクトリは 0700 にしてください。")
+    if config_mode is not None and config_mode & 0o077:
+        issues.append("OCI config ファイルは 0600 にしてください。")
+    if key_mode is not None and key_mode & 0o077:
+        issues.append("秘密鍵ファイルは 0600 にしてください。")
+    return issues
+
+
+def _mode_string(path: Path) -> str | None:
+    """path の permission mode を 4 桁 8 進数で返す。"""
+    mode = _path_mode(path)
+    return f"{mode:04o}" if mode is not None else None
+
+
+def _oci_config_private_key_pass_phrase(content: str, profile: str) -> str | None:
+    """OCI config profile の private key pass phrase を返す。値はログや応答に出さない。"""
+    parser = configparser.ConfigParser(interpolation=None)
+    try:
+        parser.read_string(content)
+    except configparser.Error:
+        return None
+
+    selected_profile = profile.strip() or "DEFAULT"
+    if selected_profile.upper() == "DEFAULT":
+        entries = parser.defaults()
+    elif parser.has_section(selected_profile):
+        entries = parser[selected_profile]
+    else:
+        return None
+    for key in ("pass_phrase", "passphrase", "key_password"):
+        value = str(entries.get(key, "")).strip()
+        if value:
+            return value
+    return None
+
+
+def _path_mode(path: Path) -> int | None:
+    """存在しない path の mode 取得失敗を通常値として扱う。"""
+    try:
+        return stat.S_IMODE(path.stat().st_mode)
+    except OSError:
+        return None
+
+
+def _oci_settings_data(settings: Settings) -> OciSettingsData:
+    """Settings と OCI config から OCI 設定画面の初期表示データを作る。"""
+    parsed = _read_runtime_oci_config(settings)
+    config_path = Path(settings.oci_config_file).expanduser()
+    key_path = Path(OCI_PRIVATE_KEY_FILE).expanduser()
+
+    return OciSettingsData(
+        config_file=settings.oci_config_file,
+        profile=settings.oci_config_profile,
+        user=parsed.user if parsed is not None else "",
+        fingerprint=parsed.fingerprint if parsed is not None else "",
+        tenancy=parsed.tenancy if parsed is not None else "",
+        region=parsed.region if parsed is not None else "",
+        key_file=OCI_PRIVATE_KEY_FILE,
+        key_file_exists=key_path.is_file(),
+        config_file_exists=config_path.is_file(),
+        config_source="runtime",
+    )
+
+
+def _read_runtime_oci_config(settings: Settings) -> OciConfigReadData | None:
+    """runtime の OCI config を表示用に読む。読めない場合は画面表示を継続する。"""
+    try:
+        content = _read_oci_config_text(settings.oci_config_file)
+        return _parse_oci_config(content, settings.oci_config_profile)
+    except HTTPException:
+        return None
+
+
+def _read_object_storage_namespace(payload: OciObjectStorageNamespaceRequest) -> str:
+    """OCI SDK で Object Storage namespace を取得する。"""
+    try:
+        oci_config = importlib.import_module("oci.config")
+        object_storage = importlib.import_module("oci.object_storage")
+        config = load_oci_config_without_prompt(
+            oci_config,
+            payload.config_file,
+            payload.profile,
+            region=payload.region,
+        )
+        response = object_storage.ObjectStorageClient(config).get_namespace()
+    except Exception as exc:
+        detail = (
+            str(exc)
+            if getattr(exc, "safe_for_user", False)
+            else (
+                "OCI Object Storage namespace を取得できませんでした。"
+                "OCI config / profile / region を確認してください。"
+            )
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=detail,
+        ) from exc
+
+    namespace = getattr(response, "data", "")
+    if not isinstance(namespace, str):
+        namespace = str(namespace) if namespace is not None else ""
+    namespace = namespace.strip()
+    if not namespace:
+        raise HTTPException(
+            status_code=502,
+            detail="OCI Object Storage namespace が空で返されました。",
+        )
+    return namespace
+
+
+def _secret_value(*, current: str, update: str | None, clear: bool) -> str:
+    """secret の保持・更新・削除を判定する。"""
+    if clear:
+        return ""
+    if update is not None and update != "":
+        return update
+    return current
+
+
+def _read_oci_config_text(config_file: str) -> str:
+    """OCI config file を安全な上限付きで読み込む。"""
+    path = Path(config_file).expanduser()
+    try:
+        if not path.is_file():
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    "OCI config ファイルを読み取れません。"
+                    "バックエンドから参照できる path を指定してください。"
+                ),
+            )
+        if path.stat().st_size > OCI_CONFIG_MAX_BYTES:
+            raise HTTPException(status_code=413, detail="OCI config ファイルが大きすぎます。")
+        return path.read_text(encoding="utf-8")
+    except HTTPException:
+        raise
+    except UnicodeDecodeError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="OCI config ファイルは UTF-8 テキストとして読み取れる必要があります。",
+        ) from exc
+    except OSError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "OCI config ファイルを読み取れません。"
+                "バックエンドから参照できる path を指定してください。"
+            ),
+        ) from exc
+
+
+def _parse_oci_config(content: str, profile: str) -> OciConfigReadData:
+    """OCI config の profile から UI に反映する値だけを抽出する。"""
+    parser = configparser.ConfigParser(interpolation=None)
+    try:
+        parser.read_string(content)
+    except configparser.Error as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="OCI config ファイルの形式を確認してください。",
+        ) from exc
+
+    selected_profile = profile.strip() or "DEFAULT"
+    if selected_profile.upper() == "DEFAULT":
+        entries = parser.defaults()
+    elif parser.has_section(selected_profile):
+        entries = parser[selected_profile]
+    else:
+        raise HTTPException(
+            status_code=404,
+            detail="指定した OCI config profile が見つかりません。",
+        )
+
+    values = {key: str(entries.get(key, "")).strip() for key in OCI_CONFIG_KEYS}
+    applied_fields = [key for key in OCI_CONFIG_KEYS if values[key]]
+    if not applied_fields:
+        raise HTTPException(
+            status_code=422,
+            detail="指定した profile から OCI config 項目を読み取れませんでした。",
+        )
+
+    return OciConfigReadData(
+        profile=selected_profile,
+        user=values["user"],
+        fingerprint=values["fingerprint"],
+        tenancy=values["tenancy"],
+        region=values["region"],
+        key_file=values["key_file"],
+        applied_fields=applied_fields,
+    )
+
+
+def _model_settings_data(payload: ModelSettingsPayload, settings: Settings) -> ModelSettingsData:
+    """payload と静的チェック結果を API data へ変換する。"""
+    return ModelSettingsData(
+        settings=_public_model_settings_payload(payload),
+        checks={
+            "enterprise_ai": _enterprise_ai_status(payload.enterprise_ai),
+            "generative_ai": _generative_ai_status(payload.generative_ai),
+            "embedding_dim": _embedding_dim_status(payload.generative_ai),
+        },
+        model_settings_file=settings.model_settings_file,
+        source="runtime",
+    )
+
+
+def _public_model_settings_payload(
+    payload: ModelSettingsPayload,
+) -> ModelSettingsPayload:
+    """secret を除いたモデル設定 payload を返す。"""
+    enterprise_ai = payload.enterprise_ai.model_copy(
+        update={
+            "api_key": "",
+            "has_api_key": (
+                not payload.enterprise_ai.clear_api_key
+                and (
+                    payload.enterprise_ai.has_api_key or _is_present(payload.enterprise_ai.api_key)
+                )
+            ),
+            "clear_api_key": False,
+        }
+    )
+    return ModelSettingsPayload(
+        enterprise_ai=enterprise_ai,
+        generative_ai=payload.generative_ai,
+    )
+
+
+def _enterprise_ai_status(
+    settings: EnterpriseAiModelSettings,
+) -> ModelSettingsCheckStatus:
+    """Enterprise AI の必須設定が揃っているか確認する。"""
+    required = (settings.endpoint, settings.project_ocid, settings.api_path)
+    if not all(_is_present(value or "") for value in required):
+        return "missing"
+    if not settings.endpoint or not settings.endpoint.startswith(("http://", "https://")):
+        return "invalid"
+    if not settings.project_ocid.startswith("ocid1.generativeaiproject."):
+        return "invalid"
+    if not settings.api_path.startswith(("/", "http://", "https://")):
+        return "invalid"
+    if not _secret_is_available(settings):
+        return "missing"
+    model_ids = [model.model_id for model in settings.models if _is_present(model.model_id)]
+    if len(model_ids) != len(settings.models):
+        return "missing"
+    if len(model_ids) != len(set(model_ids)):
+        return "invalid"
+    if not model_ids or not _is_present(settings.default_model_id):
+        return "missing"
+    if settings.default_model_id not in model_ids:
+        return "invalid"
+    if not any(model.vision_enabled for model in settings.models if _is_present(model.model_id)):
+        return "missing"
+    return "ok"
+
+
+def _generative_ai_status(
+    settings: GenerativeAiModelSettings,
+) -> ModelSettingsCheckStatus:
+    """Generative AI の必須設定が揃っているか確認する。"""
+    if _embedding_dim_status(settings) == "invalid":
+        return "invalid"
+    required = (settings.embedding_model, settings.rerank_model)
+    return "ok" if all(_is_present(value) for value in required) else "missing"
+
+
+def _embedding_dim_status(
+    settings: GenerativeAiModelSettings,
+) -> ModelSettingsCheckStatus:
+    """Oracle 26ai VECTOR 列と embedding 次元の互換性を確認する。"""
+    return "ok" if settings.embedding_dim == 1536 else "invalid"
+
+
+def _is_present(value: str) -> bool:
+    """空白のみの値を未設定として扱う。"""
+    return bool(value.strip())
+
+
+def _secret_is_available(settings: EnterpriseAiModelSettings) -> bool:
+    """新規入力または保存済み Enterprise AI API key があるか確認する。"""
+    if settings.clear_api_key:
+        return False
+    return _is_present(settings.api_key) or settings.has_api_key

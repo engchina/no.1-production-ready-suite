@@ -1,0 +1,322 @@
+import { ArrowRight } from "lucide-react";
+import {
+  Button,
+  Banner,
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  TextField,
+  toast,
+} from "@engchina/production-ready-ui";
+import { useState, type FormEvent, type ReactNode } from "react";
+import { ArrowLeft, KeyRound, LogIn, LogOut, ShieldCheck } from "lucide-react";
+import { Navigate, useLocation, useNavigate } from "react-router-dom";
+
+
+import { ProcessingIndicator } from "@/components/ProcessingState";
+import { FieldLabel } from "@/components/ui/required-field";
+import { ApiError } from "@/lib/api";
+import { t } from "@/lib/i18n";
+import { APP_ROUTES } from "@/lib/routes";
+import { securityApi } from "./api";
+import { currentUserHasPermission } from "./menu-permissions";
+import { defaultEntryRoute } from "./route-permissions";
+import { useAuth } from "./AuthProvider";
+
+const INPUT_CLASS =
+  "h-11 w-full rounded-md border border-border bg-surface px-3 text-sm text-fg outline-none transition focus:border-focus-ring focus:ring-2 focus:ring-focus-ring disabled:opacity-60";
+
+function AuthSurface({ children }: { children: ReactNode }) {
+  return (
+    <main className="flex min-h-screen items-center justify-center bg-canvas px-4 py-10">
+      <div className="w-full max-w-md space-y-5">
+        <div className="flex items-center justify-center gap-3 text-center">
+          <span className="inline-flex h-11 w-11 items-center justify-center rounded-xl bg-accent-emphasis text-fg-on-accent">
+            <ShieldCheck size={24} aria-hidden />
+          </span>
+          <div className="text-left">
+            <p className="text-sm font-semibold text-fg">{t("app.sidebarTitle.line1")}</p>
+            <p className="text-xs text-fg-muted">{t("app.sidebarTitle.line2")}</p>
+          </div>
+        </div>
+        {children}
+      </div>
+    </main>
+  );
+}
+
+function loginErrorMessage(cause: unknown): string {
+  if (cause instanceof ApiError) {
+    return cause.baseMessages[0] || t("auth.login.error");
+  }
+  if (cause instanceof Error) {
+    return cause.message || t("auth.login.error");
+  }
+  return t("auth.login.error");
+}
+
+export function LoginPage() {
+  const auth = useAuth();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const [loginUserId, setLoginUserId] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  if (auth.status === "authenticated") {
+    return <Navigate to={auth.user?.force_password_change ? APP_ROUTES.passwordChange : defaultEntryRoute(auth.hasPermission)} replace />;
+  }
+
+  const handleSubmit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!loginUserId.trim() || !password) {
+      setError(t("auth.login.required"));
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const current = await auth.login(loginUserId, password);
+      const requested = (location.state as { from?: string } | null)?.from;
+      const canAccess = (permission: string) => currentUserHasPermission(current, permission);
+      navigate(
+        current.force_password_change
+          ? APP_ROUTES.passwordChange
+          : requested || defaultEntryRoute(canAccess),
+        { replace: true }
+      );
+    } catch (cause) {
+      // 認証失敗は利用者の入力ミスなので、調査用のリクエスト ID は表示しない
+      setError(loginErrorMessage(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <AuthSurface>
+      <Card>
+        <CardHeader>
+          <CardTitle>{t("auth.login.title")}</CardTitle>
+          <p className="text-sm leading-6 text-fg-muted">{t("auth.login.subtitle")}</p>
+        </CardHeader>
+        <CardContent>
+          <form className="space-y-4" onSubmit={handleSubmit} noValidate>
+            {error ? <Banner severity="danger">{error}</Banner> : null}
+            {/* 認証の入力はモバイルでも 44px のタッチ領域を確保する。未入力は送信時に検証する（noValidate）。 */}
+            <TextField
+              id="auth-login-user-id"
+              label={t("auth.login.name")}
+              required
+              requiredLabel={t("common.required")}
+              autoComplete="username"
+              autoFocus
+              inputClassName="h-11"
+              value={loginUserId}
+              onValueChange={setLoginUserId}
+            />
+            <TextField
+              id="auth-login-password"
+              label={t("auth.login.password")}
+              required
+              requiredLabel={t("common.required")}
+              type="password"
+              autoComplete="current-password"
+              inputClassName="h-11"
+              value={password}
+              onValueChange={setPassword}
+            />
+            {/* 認証の主導線はモバイルでも 44px のタッチ領域を確保する。 */}
+            <Button size="lg" touchTarget className="w-full" loading={busy} type="submit" icon={LogIn}>
+              {t("auth.login.submit")}
+            </Button>
+            {busy ? (
+              <ProcessingIndicator
+                active
+                label={t("auth.login.submit")}
+                operationKey="auth-login"
+                placement="action"
+                testId="auth-login-processing"
+                activityIcon="none"
+              />
+            ) : null}
+          </form>
+        </CardContent>
+      </Card>
+    </AuthSurface>
+  );
+}
+
+export function PasswordChangePage() {
+  const auth = useAuth();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmation, setConfirmation] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  if (auth.status === "unauthenticated") return <Navigate to={APP_ROUTES.login} replace />;
+  if (auth.user?.debug_mode) {
+    return <Navigate to={defaultEntryRoute(auth.hasPermission)} replace />;
+  }
+
+  const fallbackRoute = defaultEntryRoute(auth.hasPermission);
+  const canChangePassword = auth.user?.password_change_allowed !== false;
+  const handleBack = () => {
+    if (window.history.length > 1 && location.key !== "default") {
+      navigate(-1);
+      return;
+    }
+    navigate(fallbackRoute, { replace: true });
+  };
+  const handleLeavePasswordChange = () => {
+    if (auth.user?.force_password_change) {
+      void auth.logout().finally(() => navigate(APP_ROUTES.login, { replace: true }));
+      return;
+    }
+    handleBack();
+  };
+  const handleLogout = () => {
+    void auth.logout().finally(() => navigate(APP_ROUTES.login, { replace: true }));
+  };
+
+  const handleSubmit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (newPassword !== confirmation) {
+      setError(t("auth.password.mismatch"));
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      await securityApi.changePassword(currentPassword, newPassword);
+      toast.success(t("auth.password.changed"));
+      window.setTimeout(() => {
+        void auth.refresh().finally(() => navigate(APP_ROUTES.login, { replace: true }));
+      }, 900);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : t("security.common.saveError"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!canChangePassword) {
+    return (
+      <AuthSurface>
+        <Card>
+          <CardHeader>
+            <CardTitle>{t("auth.password.title")}</CardTitle>
+            <p className="text-sm leading-6 text-fg-muted">{t("auth.password.notAllowedSubtitle")}</p>
+          </CardHeader>
+          <CardContent className="space-y-5">
+            <Banner severity="warning">{t("auth.password.notAllowed")}</Banner>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <Button type="button" size="lg" touchTarget className="w-full whitespace-nowrap" variant="secondary" onClick={handleBack} icon={ArrowLeft}>
+                {t("auth.password.back")}
+              </Button>
+              <Button type="button" size="lg" touchTarget className="w-full whitespace-nowrap" onClick={handleLogout} icon={LogOut}>
+                {t("auth.sidebar.logout")}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      </AuthSurface>
+    );
+  }
+
+  return (
+    <AuthSurface>
+      <Card>
+        <CardHeader>
+          <CardTitle>{t("auth.password.title")}</CardTitle>
+          <p className="text-sm leading-6 text-fg-muted">{t("auth.password.subtitle")}</p>
+        </CardHeader>
+        <CardContent>
+          <form className="space-y-4" onSubmit={handleSubmit}>
+            {error ? <Banner severity="danger">{error}</Banner> : null}
+            <Banner severity="info">{t("auth.password.rule")}</Banner>
+            {[
+              ["auth-password-current", t("auth.password.current"), currentPassword, setCurrentPassword, "current-password"],
+              ["auth-password-new", t("auth.password.new"), newPassword, setNewPassword, "new-password"],
+              ["auth-password-confirm", t("auth.password.confirm"), confirmation, setConfirmation, "new-password"],
+            ].map(([id, label, value, setter, autoComplete]) => (
+              <div key={String(id)} className="block space-y-1.5 text-sm font-medium">
+                <FieldLabel htmlFor={String(id)} label={String(label)} required />
+                <input
+                  id={String(id)}
+                  required
+                  aria-required="true"
+                  type="password"
+                  className={INPUT_CLASS}
+                  autoComplete={String(autoComplete)}
+                  value={String(value)}
+                  onChange={(event) => (setter as (value: string) => void)(event.target.value)}
+                />
+              </div>
+            ))}
+            <div className="border-t border-border pt-4">
+              <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.35fr)]">
+                <Button
+                  size="lg" touchTarget className="w-full whitespace-nowrap"
+                  disabled={busy}
+                  type="button"
+                  variant="secondary"
+                  onClick={handleLeavePasswordChange} icon={ArrowLeft}>
+                  {auth.user?.force_password_change ? t("auth.password.backToLogin") : t("auth.password.back")}
+                </Button>
+                <Button size="lg" touchTarget className="w-full whitespace-nowrap" loading={busy} type="submit" icon={KeyRound}>
+                  {t("auth.password.submit")}
+                </Button>
+              </div>
+              {busy ? (
+                <ProcessingIndicator
+                  active
+                  label={t("auth.password.submit")}
+                  operationKey="auth-password-change"
+                  placement="action"
+                  className="mt-3"
+                  testId="auth-password-processing"
+                  activityIcon="none"
+                />
+              ) : null}
+            </div>
+          </form>
+        </CardContent>
+      </Card>
+    </AuthSurface>
+  );
+}
+
+export function ForbiddenPage() {
+  const auth = useAuth();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const requestId = (location.state as { requestId?: unknown } | null)?.requestId;
+  return (
+    <AuthSurface>
+      <Card>
+        <CardHeader>
+          <CardTitle>{t("auth.forbidden.title")}</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-5">
+          <Banner severity="warning">
+            <p>{t("auth.forbidden.description")}</p>
+            {typeof requestId === "string" && requestId ? (
+              <p className="mt-1 break-all text-xs text-fg-muted">
+                {t("common.requestId")}: <code>{requestId}</code>
+              </p>
+            ) : null}
+          </Banner>
+          <Button icon={ArrowRight} type="button" className="w-full" onClick={() => navigate(defaultEntryRoute(auth.hasPermission), { replace: true })}>
+            {t("auth.forbidden.back")}
+          </Button>
+        </CardContent>
+      </Card>
+    </AuthSurface>
+  );
+}

@@ -1,0 +1,82 @@
+{
+  "cases": [
+    {
+      "id": "policy-approval-amount",
+      "query": "経費申請の承認条件はいくらですか。",
+      "relevant_document_ids": ["replace-with-indexed-document-id"],
+      "expected_answer_keywords": ["120000", "承認"]
+    },
+    {
+      "id": "manual-storage-location",
+      "query": "請求書原本の保管場所を教えてください。",
+      "relevant_document_ids": ["replace-with-indexed-document-id"],
+      "expected_answer_keywords": ["Object Storage", "保管"]
+    }
+  ],
+  "experiments": [
+    {
+      "id": "hybrid-deep",
+      "mode": "hybrid",
+      "top_k": 20,
+      "rerank_top_n": 5,
+      "filters": {
+        "status": "INDEXED"
+      }
+    },
+    {
+      "id": "vector-deep",
+      "mode": "vector",
+      "top_k": 20,
+      "rerank_top_n": 5,
+      "filters": {
+        "status": "INDEXED"
+      }
+    },
+    {
+      "id": "keyword-shallow",
+      "mode": "keyword",
+      "top_k": 10,
+      "rerank_top_n": 3,
+      "filters": {
+        "status": "INDEXED"
+      }
+    },
+    {
+      "id": "hybrid-table-chunks",
+      "mode": "hybrid",
+      "top_k": 20,
+      "rerank_top_n": 5,
+      "filters": {
+        "status": "INDEXED",
+        "content_kind": "table"
+      }
+    },
+    {
+      "id": "hybrid-diverse-neighbors",
+      "mode": "hybrid",
+      "top_k": 20,
+      "rerank_top_n": 8,
+      "filters": {
+        "status": "INDEXED"
+      },
+      "rag_overrides": {
+        "rrf_k": 30,
+        "context_diversity_lambda": 0.4,
+        "context_neighbor_window": 1,
+        "context_compression_enabled": true,
+        "context_compression_max_sentences": 3,
+        "context_compression_max_chars_per_chunk": 1200,
+        "query_expansion_enabled": true,
+        "query_expansion_max_variants": 3,
+        "oracle_vector_target_accuracy": 90
+      }
+    }
+  ],
+  "ranking_metric": "recall_at_k",
+  "thresholds": {
+    "recall_at_k": 0.8,
+    "mrr": 0.7,
+    "answer_keyword_hit_rate": 0.8,
+    "groundedness_pass_rate": 0.9
+  }
+}

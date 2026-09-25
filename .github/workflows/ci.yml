@@ -1,5 +1,10 @@
 name: CI
 
+# monorepo（platform / rag / nl2sql / agent）の統合 CI（#71）。
+# changes job で変更パスを判定し、変更のあった製品の job だけを実行する。
+# platform/ と本 workflow の変更は全製品に影響するため、全 job を実行する。
+# branch protection の必須 check は最後の `CI OK` だけにする（skip された job を必須にすると pending のまま止まるため）。
+
 on:
   pull_request:
   push:
@@ -11,9 +16,66 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
-    name: Build & typecheck (@engchina/production-ready-ui)
+  changes:
+    name: Detect changes
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      platform: ${{ steps.filter.outputs.platform }}
+      rag: ${{ steps.filter.outputs.rag }}
+      nl2sql: ${{ steps.filter.outputs.nl2sql }}
+      agent: ${{ steps.filter.outputs.agent }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Filter paths
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            platform:
+              - "platform/**"
+              - ".github/workflows/ci.yml"
+            rag:
+              - "rag/**"
+            nl2sql:
+              - "nl2sql/**"
+            agent:
+              - "agent/**"
+
+  secret-scan:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # full history を走査して過去コミットの混入も検出する
+          fetch-depth: 0
+
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@v3
+        env:
+          # gitleaks-action は PR スキャンに GITHUB_TOKEN を要求する(未指定だと失敗する)。
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # pre-commit hook と同一の設定/ルールで走査する（monorepo root の設定）
+          GITLEAKS_CONFIG: .gitleaks.toml
+          # OSS リポジトリ向けライセンスは不要(private の場合のみ要設定)
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
+
+  # ---------------------------------------------------------------- platform
+
+  platform-ui:
+    name: Platform / UI (@engchina/production-ready-ui)
+    needs: changes
+    if: needs.changes.outputs.platform == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: platform
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -23,7 +85,7 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: package-lock.json
+          cache-dependency-path: platform/package-lock.json
 
       - name: Install dependencies
         run: npm ci
@@ -45,12 +107,14 @@ jobs:
           test -f packages/ui/dist/tokens.css
           test -f packages/ui/dist/tokens/colors.css
 
-  backend-core:
-    name: Build & test (production-ready-backend-core)
+  platform-backend-core:
+    name: Platform / backend_core (production-ready-backend-core)
+    needs: changes
+    if: needs.changes.outputs.platform == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: packages/backend_core
+        working-directory: platform/packages/backend_core
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -59,7 +123,7 @@ jobs:
         uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
-          cache-dependency-glob: packages/backend_core/uv.lock
+          cache-dependency-glob: platform/packages/backend_core/uv.lock
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -86,3 +150,492 @@ jobs:
 
       - name: Dependency audit
         run: uv run pip-audit
+
+  # ---------------------------------------------------------------- rag
+
+  rag-backend:
+    name: RAG / Backend
+    needs: changes
+    if: needs.changes.outputs.rag == 'true' || needs.changes.outputs.platform == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rag/backend
+    steps:
+      # backend は共有 production-ready-backend-core（../../platform/packages/backend_core）に path 依存する。
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: rag/backend/uv.lock
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --locked --dev
+
+      - name: Format check
+        run: uv run black --check .
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Type check
+        run: uv run mypy .
+
+      # coverage threshold を gate にしていないため CI では計測しない(nl2sql と同一構成)。
+      - name: Test
+        run: uv run pytest
+
+      - name: Security scan
+        run: uv run bandit -c pyproject.toml -r app
+
+      - name: Dependency audit
+        # oci 2.185.1 が cryptography<51.0.0 へ制約を緩和したため cryptography 50 系へ更新でき、
+        # GHSA-537c-gmf6-5ccf の ignore は不要になった。ignore を戻す場合は理由をここへ明記する。
+        run: uv run pip-audit
+
+  rag-docrag-core:
+    name: RAG / DocRAG core
+    needs: changes
+    if: needs.changes.outputs.rag == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rag/packages/docrag_core
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      # rag_poc(DocRAG)由来の解析・分割・回答・FAQ/ドメインキーワードの回帰テスト。
+      # docling/torch は入れず、PDF 描画・日本語分割・Excel の任意依存だけを入れる。
+      - name: Test docrag_core
+        run: |
+          uv venv -p 3.12 .venv
+          uv pip install -p .venv/bin/python -e ".[pdf,japanese,excel,oracle]" pytest
+          .venv/bin/python -m pytest -q tests
+
+  rag-frontend:
+    name: RAG / Frontend
+    needs: changes
+    if: needs.changes.outputs.rag == 'true' || needs.changes.outputs.platform == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rag/frontend
+    steps:
+      # frontend は file:../../platform/packages/ui に依存するため、先に共有 UI を build する。
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            rag/frontend/package-lock.json
+            platform/package-lock.json
+
+      - name: Build shared UI package
+        working-directory: platform
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install dependencies
+        run: npm ci
+
+      # lint / type check / dependency audit / Playwright E2E は CI では実行しない
+      # (nl2sql と同一構成)。型検査は build の `tsc --noEmit` が兼ねる。
+      # lint / audit / E2E はローカル検証と PR review で確認する。
+      - name: Unit test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+  rag-compose:
+    name: RAG / Docker Compose
+    needs: changes
+    if: needs.changes.outputs.rag == 'true' || needs.changes.outputs.platform == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rag
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Validate compose config
+        run: docker compose config --quiet
+
+  # ---------------------------------------------------------------- nl2sql
+
+  nl2sql-terraform:
+    name: NL2SQL / Terraform
+    needs: changes
+    if: needs.changes.outputs.nl2sql == 'true' || needs.changes.outputs.platform == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: nl2sql
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: "1.5.7"
+
+      - name: Test deployment update and recovery scripts
+        run: |
+          bash -n init_script.sh scripts/git-pull.sh scripts/update-after-pull.sh scripts/tail-logs.sh
+          bash scripts/tests/git-pull.test.sh
+          bash scripts/tests/init-script-deployment.test.sh
+          bash scripts/tests/update-after-pull.test.sh
+          bash scripts/tests/tail-logs.test.sh
+
+      - name: Format check
+        run: terraform fmt -check -recursive terraform/stack
+
+      - name: Initialize Terraform
+        working-directory: nl2sql/terraform/stack
+        run: terraform init -backend=false
+
+      - name: Validate Terraform
+        working-directory: nl2sql/terraform/stack
+        run: terraform validate
+
+      - name: Package stack
+        run: python scripts/package_terraform_stack.py --output /tmp/production-ready-nl2sql-terraform-stack.zip
+
+      - name: Verify ADB stack contract
+        run: python scripts/verify_terraform_stack_contract.py /tmp/production-ready-nl2sql-terraform-stack.zip
+
+      - name: Verify package contents
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          import stat
+          import zipfile
+
+          package = Path("/tmp/production-ready-nl2sql-terraform-stack.zip")
+          required = {
+              "schema.yaml",
+              "adb.tf",
+              "compute.tf",
+              "datasources.tf",
+              "locals.tf",
+              "output.tf",
+              "provider.tf",
+              "variables.tf",
+              "versions.tf",
+              "extract_wallet.sh",
+              "cloud_init/bootstrap.template.yaml",
+          }
+          forbidden_names = {
+              ".terraform.lock.hcl",
+              "wallet_full.zip",
+              "wallet_small.zip",
+          }
+          with zipfile.ZipFile(package) as archive:
+              names = set(archive.namelist())
+              missing = required - names
+              forbidden = {
+                  name
+                  for name in names
+                  if name in forbidden_names
+                  or name.startswith(".terraform/")
+                  or name.endswith(".tfstate")
+                  or ".tfstate." in name
+                  or name.endswith(".tfvars")
+                  or name.endswith(".tfvars.json")
+                  or (name.startswith("wallet") and name.endswith(".zip"))
+              }
+              mode = archive.getinfo("extract_wallet.sh").external_attr >> 16
+              locals_tf = archive.read("locals.tf").decode()
+              schema_yaml = archive.read("schema.yaml").decode()
+              variables_tf = archive.read("variables.tf").decode()
+          if missing:
+              raise SystemExit(f"missing package entries: {sorted(missing)}")
+          if forbidden:
+              raise SystemExit(f"forbidden package entries: {sorted(forbidden)}")
+          if not mode & stat.S_IXUSR:
+              raise SystemExit("extract_wallet.sh is not executable in package")
+          if (
+              "APP_ADMIN_LOGIN_USER_ID=" not in locals_tf
+              or "APP_ADMIN_LOGIN_USER_PASSWORD=" not in locals_tf
+          ):
+              raise SystemExit("APP_ADMIN credentials are missing from backend.env")
+          deepsec_schema_group = re.search(
+              r"- title: Deep Data Security\s+visible: true\s+variables:\s+"
+              r"- oracle_deepsec_enabled\s+"
+              r"- oracle_deepsec_data_user_password",
+              schema_yaml,
+          )
+          if not deepsec_schema_group:
+              raise SystemExit("DeepSec toggle/password are missing from the visible Resource Manager group")
+          deepsec_enabled_schema_block = re.search(
+              r"(?ms)^  oracle_deepsec_enabled:\n(?:(?:    .*)\n)+",
+              schema_yaml,
+          )
+          deepsec_enabled_schema_checks = [
+              "type: boolean",
+              "required: true",
+              "visible: true",
+              "default: true",
+          ]
+          if not deepsec_enabled_schema_block or any(
+              check not in deepsec_enabled_schema_block.group(0)
+              for check in deepsec_enabled_schema_checks
+          ):
+              raise SystemExit("DeepSec enabled Resource Manager form field is incomplete")
+          deepsec_schema_block = re.search(
+              r"(?ms)^  oracle_deepsec_data_user_password:\n(?:(?:    .*)\n)+",
+              schema_yaml,
+          )
+          deepsec_schema_checks = [
+              "type: password",
+              "required: false",
+              "- oracle_deepsec_enabled",
+              "- true",
+              "ORACLE_DEEPSEC_DATA_USER_PASSWORD",
+              "confirmation: true",
+              "pattern: '^[^\"\\r\\n]{12,256}$'",
+          ]
+          if not deepsec_schema_block or any(
+              check not in deepsec_schema_block.group(0)
+              for check in deepsec_schema_checks
+          ):
+              raise SystemExit("DeepSec password Resource Manager form field is incomplete")
+          deepsec_variable_block = re.search(
+              r'(?ms)^variable "oracle_deepsec_data_user_password" \{.*?^}',
+              variables_tf,
+          )
+          deepsec_variable_checks = [
+              "type        = string",
+              "sensitive   = true",
+              "default     = \"\"",
+              "trimspace(var.oracle_deepsec_data_user_password) == \"\"",
+              "length(var.oracle_deepsec_data_user_password) >= 12",
+              "length(var.oracle_deepsec_data_user_password) <= 256",
+              "!can(regex(\"[\\r\\n]\", var.oracle_deepsec_data_user_password))",
+              "!can(regex(\"\\\"\", var.oracle_deepsec_data_user_password))",
+          ]
+          if (
+              not deepsec_variable_block
+              or any(
+                  check not in deepsec_variable_block.group(0)
+                  for check in deepsec_variable_checks
+              )
+          ):
+              raise SystemExit("DeepSec password Terraform variable validation is incomplete")
+          if (
+              "ORACLE_DEEPSEC_ENABLED=${var.oracle_deepsec_enabled}" not in locals_tf
+              or "ORACLE_DEEPSEC_DATA_USER_PASSWORD=${var.oracle_deepsec_enabled ? "
+              "var.oracle_deepsec_data_user_password : \"\"}" not in locals_tf
+          ):
+              raise SystemExit("DeepSec toggle/password are missing from backend.env")
+          if "first SYSTEM_ADMIN web login" in schema_yaml:
+              raise SystemExit("ADB password is still described as a web login password")
+          print("Terraform package contents verified.")
+          PY
+
+  nl2sql-frontend:
+    name: NL2SQL / Frontend
+    needs: changes
+    if: needs.changes.outputs.nl2sql == 'true' || needs.changes.outputs.platform == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: nl2sql/frontend
+    steps:
+      # frontend は file:../../platform/packages/ui に依存するため、先に共有 UI を build する。
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: |
+            nl2sql/frontend/package-lock.json
+            platform/package-lock.json
+
+      - name: Build shared UI package
+        working-directory: platform
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install dependencies
+        run: npm ci
+
+      # デザインシステム遵守ルール（frontend/.oxlintrc.json が ../../platform の
+      # docs/design-system/adherence.oxlintrc.json を extends）と oxlint 既定の correctness ルール。
+      - name: Lint
+        run: npm run lint
+
+      - name: Logic tests
+        run: npm run test:logic
+
+      - name: Build
+        run: npm run build
+
+  nl2sql-backend:
+    name: NL2SQL / Backend
+    needs: changes
+    if: needs.changes.outputs.nl2sql == 'true' || needs.changes.outputs.platform == 'true'
+    runs-on: ubuntu-latest
+    env:
+      NL2SQL_RUNTIME_MODE: memory
+      NL2SQL_FEEDBACK_EMBEDDING_ENABLED: "false"
+    defaults:
+      run:
+        working-directory: nl2sql/backend
+    steps:
+      # backend は共有 production-ready-backend-core（../../platform/packages/backend_core）に path 依存する。
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v10.0.1
+        with:
+          enable-cache: true
+          cache-dependency-glob: nl2sql/backend/uv.lock
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --locked --dev
+
+      - name: Format check
+        run: uv run black --check .
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Type check
+        run: uv run mypy .
+
+      - name: Test
+        run: uv run pytest
+
+      - name: Security scan
+        run: uv run bandit -r app
+
+      - name: Dependency audit
+        # OCI SDK currently constrains cryptography to <47.0.0, while GHSA-537c-gmf6-5ccf
+        # lists 48.0.1 as the first fixed version. Keep auditing all other findings.
+        run: uv run pip-audit --ignore-vuln GHSA-537c-gmf6-5ccf
+
+  # ---------------------------------------------------------------- agent
+
+  agent-checks:
+    name: Agent / Full Checks
+    needs: changes
+    if: needs.changes.outputs.agent == 'true' || needs.changes.outputs.platform == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: agent
+    steps:
+      # backend / frontend は ../../platform の共有パッケージに path 依存する。
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            agent/frontend/package-lock.json
+            platform/package-lock.json
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: agent/backend/uv.lock
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build shared UI package
+        working-directory: platform
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install frontend dependencies
+        working-directory: agent/frontend
+        run: npm ci
+
+      - name: Install Playwright browsers
+        working-directory: agent/frontend
+        run: npx playwright install --with-deps chromium
+
+      - name: Run standard checks
+        run: scripts/check-all.sh
+        env:
+          UV_SYNC_ARGS: "--locked --dev"
+
+  # ---------------------------------------------------------------- 集約
+
+  ci-ok:
+    name: CI OK
+    if: always()
+    needs:
+      - changes
+      - secret-scan
+      - platform-ui
+      - platform-backend-core
+      - rag-backend
+      - rag-docrag-core
+      - rag-frontend
+      - rag-compose
+      - nl2sql-terraform
+      - nl2sql-frontend
+      - nl2sql-backend
+      - agent-checks
+    runs-on: ubuntu-latest
+    steps:
+      # skip（変更のない製品）は成功扱い。failure / cancelled が1つでもあれば失敗させる。
+      - name: Check results
+        env:
+          RESULTS: ${{ toJSON(needs.*.result) }}
+        run: |
+          echo "job results: ${RESULTS}"
+          if echo "${RESULTS}" | grep -Eq '"(failure|cancelled)"'; then
+            echo "::error::失敗または中断された job があります。"
+            exit 1
+          fi

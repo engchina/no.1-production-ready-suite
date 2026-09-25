@@ -1,0 +1,23 @@
+{
+  "schema_version": "1.0",
+  "environment": "production",
+  "decision": "approved",
+  "reviewed_at": "2026-06-21T00:00:00Z",
+  "reviewer": "platform-release-owner",
+  "evidence_sha256": "<sha256-of-backend/validation-evidence.production.json>",
+  "manifest_sha256": "<sha256-of-docs/agent-runtime-production-validation.manifest.json>",
+  "checklist": {
+    "validator_passed": true,
+    "live_mode_confirmed": true,
+    "runner_readiness_accepted": true,
+    "secrets_absent": true,
+    "oracle_sla_accepted": true,
+    "rbac_jwks_accepted": true,
+    "mcp_oauth_accepted": true,
+    "container_sandbox_accepted": true,
+    "rollback_plan_confirmed": true
+  },
+  "notes": [
+    "Attach this review JSON to the release record with the evidence artifact bundle."
+  ]
+}

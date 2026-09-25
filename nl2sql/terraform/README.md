@@ -1,0 +1,439 @@
+# Production Ready NL2SQL Terraform Stack
+
+This directory contains the OCI Resource Manager stack for Production Ready
+NL2SQL. The stack provisions:
+
+- Oracle Autonomous AI Database 26ai, or connection settings for an existing ADB
+- A generated ADB wallet for the selected/new ADB
+- One OCI Compute instance
+- A cloud-init bootstrap that clones the suite monorepo and runs the application
+  directly on Compute with Nginx and systemd
+
+The default application source is:
+
+- `https://github.com/engchina/no.1-production-ready-suite.git`, ref `main`
+  (NL2SQL is `nl2sql/` and the shared packages are `platform/` in the same clone)
+
+## Deploy
+
+### One-click Deploy
+
+Click the button below to open OCI Resource Manager with the Osaka region
+(`ap-osaka-1`) selected by default.
+
+[![Deploy to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?region=ap-osaka-1&zipUrl=https://github.com/engchina/no.1-production-ready-suite/releases/download/nl2sql-v0.1.32/production-ready-nl2sql-terraform-stack.zip)
+
+The button uses the nl2sql-v0.1.32 GitHub Release asset (in `no.1-production-ready-suite`) named
+`production-ready-nl2sql-terraform-stack.zip`. Publish that release with the
+asset before using the one-click deploy URL.
+
+### Manual Package and Upload
+
+From the repository root, build the OCI Resource Manager zip package:
+
+```bash
+python scripts/package_terraform_stack.py
+```
+
+The default output is
+`dist/production-ready-nl2sql-terraform-stack.zip`. Upload that zip to OCI
+Resource Manager and create a stack. Provide the required form values:
+
+- OCI deployment/Compute compartment, region, availability domain, VCN, and
+  subnets. The ADB compartment defaults to the current deployment compartment
+  and remains independently selectable in the Autonomous AI Database section.
+- Application administrator password. The username is fixed to `system_admin`
+  and is case-sensitive.
+- Deep Data Security setting. `ORACLE_DEEPSEC_ENABLED` defaults to `true`; when
+  enabled, provide the DATA USER password. The stack keeps
+  `ORACLE_DEEPSEC_DATA_USER` fixed as `DEEPSEC_DATA_USER` and writes the
+  password to `ORACLE_DEEPSEC_DATA_USER_PASSWORD` in `backend/.env`. When
+  disabled, the form hides the password input and writes an empty password.
+- Oracle driver mode is intentionally fixed to Thin:
+  `ORACLE_DRIVER_MODE=thin` and `ORACLE_CLIENT_LIB_DIR=`. The Resource Manager
+  form keeps ADB mTLS required by default and hides that control. The cloud-init
+  script does not install Oracle Instant Client because Deep Data Security is
+  supported only by python-oracledb Thin mode in this stack.
+- Autonomous AI Database mode: `ADBのコンパートメント` is initially populated
+  from Resource Manager's current `Create in compartment` selection and can be
+  changed before choosing `ADBの利用方法`. The ADB compartment controls only the
+  new ADB destination or the existing ADB picker; it does not change the Compute
+  compartment or runtime `OCI_COMPARTMENT_ID`.
+  - `新規 Autonomous AI Database の作成`: provide the new ADB sizing, network,
+    license, and password fields. The default workload is `LH`; the form
+    exposes `OLTP`, `AJD`, `APEX`, and `LH` only. Network access defaults to
+    `プライベート・エンドポイント・アクセスのみ`; the VCN and subnet compartment
+    pickers default to the current Resource Manager `Create in compartment`
+    value. The selected subnet must be reachable from the application Compute
+    subnet through the configured VCN routing and security rules.
+    The other access types match the Autonomous AI Database creation screen:
+    `すべての場所からのセキュア・アクセス` creates a public endpoint without
+    an ADB access-control list, while
+    `許可されたIPおよびVCN限定のセキュア・アクセス` configures the
+    serverless ADB access-control list through `whitelisted_ips` and requires
+    either a VCN or comma-separated IP/CIDR entries. Selecting a VCN without a
+    subnet allows the entire VCN; selecting a subnet writes
+    `VCN_OCID;SUBNET_CIDR` to `whitelisted_ips`.
+    New ADBs default to Thin-compatible Wallet mTLS
+    (`相互TLS (mTLS)認証が必要=true`). The Resource Manager form hides this
+    advanced control. Direct Terraform callers can set it to `false`; in that
+    case the bootstrap writes `ORACLE_CONNECTION_SECURITY=walletless_tls`. Use
+    that only with an ADB connection string that supports one-way TLS and an ACL
+    that permits the application host.
+    For public endpoint ACL deployments, ensure the Compute subnet has a valid
+    OCI private path to ADB; otherwise enter the Compute/NAT public egress IP or
+    CIDR.
+  - `既存の Autonomous AI Database を選択`: provide the existing ADB OCID plus the
+    values written to `ORACLE_USER` and `ORACLE_PASSWORD`. `ORACLE_DSN` can be
+    left blank; the stack uses the selected ADB `db_name` with `_high`, for
+    example `NL2SQLADB` becomes `nl2sqladb_high`. The Resource Manager form
+    hides the wallet password input; wallet generation reuses
+    `existing_oracle_password`. This stack reads the selected ADB and generates
+    a wallet, but does not modify its network access, mTLS, or access-control
+    list settings.
+- Compute image, shape, subnet, and SSH public key. The Compute image selector
+  exposes the Tokyo and Osaka Ubuntu image OCIDs. The SSH key input uses the
+  Resource Manager native SSH key control, so operators can generate a key pair
+  and download the private/public keys, upload a `.pub` file, or paste an
+  existing public key.
+
+The network access input contract intentionally uses the Japanese labels shown
+above. Legacy values `PUBLIC_ENDPOINT`,
+`SECURE_ACCESS_FROM_ALLOWED_IPS_AND_VCNS`, `PRIVATE_ENDPOINT_ONLY`,
+`CIDR_BLOCK`, and the legacy `adb_use_private_subnet` variable are not accepted.
+Update existing `.tfvars` before planning this stack version.
+Resource Manager initializes `adb_compartment_ocid` from `compartment_ocid`, but
+the two inputs remain independent after initialization. Direct Terraform callers
+must continue to set `adb_compartment_ocid` explicitly; the Terraform variable
+does not fall back to `compartment_ocid`. Existing ADB OCIDs must belong to the
+selected ADB compartment.
+
+[Resource Manager automatically prepopulates the reserved `compartment_ocid`
+variable](https://docs.oracle.com/en-us/iaas/Content/ResourceManager/Concepts/terraformconfigresourcemanager.htm)
+on the Console pages used to create and edit a stack.
+
+### Optional Resource Manager Form Browser Check
+
+The Resource Manager UI is rendered by OCI and cannot be reproduced by the
+local frontend. To verify the generated form without creating an ADB, upload the
+package to a dedicated test tenancy, save an authenticated Playwright storage
+state, and stop at the Create stack form:
+
+```bash
+cd frontend
+OCI_RESOURCE_MANAGER_ADB_FORM_URL="https://cloud.oracle.com/resourcemanager/stacks/create?..." \
+OCI_RESOURCE_MANAGER_STORAGE_STATE="/absolute/path/to/oci-storage-state.json" \
+npm run test:e2e:oci-resource-manager
+```
+
+The opt-in test runs at desktop and 375px widths and verifies that the ADB
+compartment precedes the create/existing selection, plus the `LH` workload
+default without `DW`, private endpoint access default, Japanese access labels,
+SSH key generation/download controls, keyboard selection, hidden mTLS and wallet
+password controls, and progressive disclosure. It does not submit the form or
+run an Apply job.
+
+After apply completes, use the `application_url` output. The default application
+port is `80`. The public entrypoint is `http://<compute-ip>/`; browser API
+requests use the same origin under `/api/...`.
+
+AI runtime settings are intentionally not collected by the Resource Manager
+stack. After the application starts, configure OCI authentication, OCI
+Enterprise AI, OCI Generative AI, and Select AI from the application System
+Settings pages.
+
+This stack renders deployment secrets into Compute cloud-init so the instance
+can create `backend/.env`. Treat the Resource Manager stack, job history, and
+state as sensitive operational material.
+
+## Release Asset
+
+The release workflow publishes:
+
+- `production-ready-nl2sql-terraform-stack.zip`
+- `production-ready-nl2sql-terraform-stack.zip.sha256`
+
+The README deploy button pins an `nl2sql-v*` release tag. The suite monorepo
+publishes releases for several products, so `releases/latest` may not point to an
+NL2SQL release.
+
+## Runtime Notes
+
+The bootstrap script writes `/u01/aipoc/no.1-production-ready-suite/nl2sql/backend/.env`
+on the instance and starts in the background from cloud-init, matching the
+proven No.1-SQL-Assist Terraform bootstrap pattern. Track progress in
+`/var/log/cloud-init-custom.log` and `/var/log/nl2sql-init.log` until the
+application services are ready.
+The bootstrap starts:
+
+- Nginx on the configured application port, default `80`
+- `production-ready-nl2sql-backend` on private upstream `127.0.0.1:8000`
+
+Nginx serves `frontend/dist` at `/` and reverse proxies `/api/` to the backend.
+Only TCP `80` needs to be opened publicly for the application. If ADB uses a
+private endpoint, the selected network must still allow Compute to reach ADB on
+TCP `1522`.
+
+The bootstrap applies the core system schema and application security/RBAC
+migrations idempotently. When both commands succeed, it enables and starts the
+schema refresh, quality evaluation, and ontology workers. If either command
+still fails after retries, the backend and Nginx remain available in degraded
+mode and all three workers stay stopped. The affected settings/security page
+shows a recoverable initialization error instead of an unhandled Oracle error.
+
+After completing the manual recovery commands in the troubleshooting section,
+operators can enable the workers with:
+
+```bash
+sudo systemctl enable --now production-ready-nl2sql-schema-refresh-worker
+sudo systemctl enable --now production-ready-nl2sql-quality-evaluation-worker
+sudo systemctl enable --now production-ready-nl2sql-ontology-worker
+```
+
+The configured `SYSTEM_ADMIN` login comes from the application administrator
+values supplied in Resource Manager:
+
+- `APP_ADMIN_LOGIN_USER_ID=system_admin`
+- `APP_ADMIN_LOGIN_USER_PASSWORD`
+
+Deep Data Security is enabled by default in Terraform deployments. If
+`oracle_deepsec_enabled=false`, `ORACLE_DEEPSEC_ENABLED=false` and the DATA USER
+password is written empty:
+
+- `ORACLE_DEEPSEC_ENABLED` (`true` by default)
+- `ORACLE_DEEPSEC_DATA_USER=DEEPSEC_DATA_USER`
+- `ORACLE_DEEPSEC_DATA_USER_PASSWORD`
+
+After deployment, open `システム設定 > Deep Data Security`, apply the V001 steps in
+order, then run the Data Grant verification.
+
+The stack reserves a fixed Oracle Select AI credential name and the default
+Select AI region:
+
+- `NL2SQL_SELECT_AI_CREDENTIAL_NAME=OCI_CRED`
+- `NL2SQL_SELECT_AI_REGION=us-chicago-1`
+
+After deployment, open `システム設定 > データベース設定 > Select AI Credential`.
+The administrator explicitly creates `OCI_CRED` for the current Oracle schema
+from the server-side OCI config signing key. The private key is passed to
+`DBMS_CLOUD.CREATE_CREDENTIAL` only as an Oracle bind variable; Terraform,
+browser responses, and persisted application settings never receive it. An
+existing credential is not overwritten automatically and requires the explicit
+recreate confirmation flow. Historical Profile sync jobs are not retried
+automatically after credential creation.
+
+This configured administrator is independent from the database connection user,
+does not read from `NL2SQL_APP_USERS`, and does not require the auth/RBAC tables
+to exist. Application-local users are checked from `NL2SQL_APP_USERS`. The
+configured administrator password can be changed from the application password
+change screen; the backend writes the new value back to `backend/.env`.
+
+When `adb_deployment_mode` selects an existing ADB (`既存の Autonomous AI
+Database を選択`, or legacy `USE_EXISTING`), the stack does not create any ADB
+resource. It generates a wallet from the selected existing ADB OCID and writes the
+database values into `backend/.env`:
+
+- `ORACLE_USER`
+- `ORACLE_PASSWORD`
+- `ORACLE_DSN` (`existing_oracle_dsn`, or `<selected ADB db_name lowercased>_high`
+  when left blank)
+- `ORACLE_CONNECTION_SECURITY` (`wallet_mtls` when mTLS is required,
+  otherwise `walletless_tls`)
+- `ORACLE_WALLET_PASSWORD` (reuses `existing_oracle_password`)
+- `ORACLE_ADB_OCID`
+- `ORACLE_ADB_REGION`
+
+The Resource Manager form hides the application environment and auth cookie
+security inputs. Direct HTTP deployments keep the internal defaults
+`app_environment=local`, `DEBUG=false`, and `app_auth_cookie_secure=false`.
+If you override these Terraform variables outside the form for HTTPS, use
+`app_environment=production` with `app_auth_cookie_secure=true`.
+
+## Updating an Existing Compute Deployment
+
+After manually pulling the required repositories, run the post-pull update
+script as the `ubuntu` user when passwordless sudo is available. The script uses
+only non-interactive `sudo -n` and never prompts for the `ubuntu` password. If
+the instance does not grant passwordless sudo, start the script through an
+existing root-capable path with `sudo ./scripts/update-after-pull.sh`. In root
+mode, dependency synchronization, frontend builds, and database CLIs are still
+executed as `ubuntu`; only systemd, snapshots, logging, and permission repair
+retain root privileges. The script does not run Git commands and does not
+rewrite `backend/.env`, the Wallet contents, systemd units, or the Nginx
+configuration.
+
+```bash
+cd /u01/aipoc/no.1-production-ready-suite/nl2sql
+./scripts/update-after-pull.sh --check
+./scripts/update-after-pull.sh --repair-only
+./scripts/update-after-pull.sh
+```
+
+Without passwordless sudo, use the root-launch form instead; these commands do
+not make the build output root-owned:
+
+```bash
+sudo ./scripts/update-after-pull.sh --check
+sudo ./scripts/update-after-pull.sh --repair-only
+sudo ./scripts/update-after-pull.sh
+```
+
+`--check` only inspects the fixed paths, Wallet and `.env` permissions, systemd
+units, and system schema status. It does not create a lock, log, snapshot, stop a
+service, or run a migration. `--repair-only` skips dependency synchronization
+and frontend building, then snapshots and repairs the deployed instance,
+applies migrations, and restores services. With no arguments, the script first
+synchronizes and compile-checks the backend and builds the shared UI and NL2SQL
+frontend into a staging directory while the current services remain available.
+Only after those steps succeed does it enter the maintenance window.
+
+Before stopping services, mutating modes create a root-only snapshot below
+`/u01/aipoc/recovery`. They then enforce `/u01/aipoc` as `root:ubuntu 0775`,
+`/u01/aipoc/wallet` as `ubuntu:ubuntu 0700`, and Wallet files, the install lock,
+and `backend/.env` as `0600`. `ORACLE_WALLET_DIR` remains fixed at
+`/u01/aipoc/wallet`; the `.env` file is parsed without sourcing secret values.
+System and security migrations are idempotent. The script never deletes
+`.wallet.tmp-*` or `.wallet.backup-*`, never recreates the schema, and never
+applies the administrator-confirmed DeepSec foundation plan.
+
+If a migration, backend health check, or worker restart fails, all external
+workers are disabled and the script makes a best-effort attempt to restore the
+backend. The existing `frontend/dist` remains active. In a full update, the new
+frontend is promoted only after the backend is healthy and every service is
+active. If the final public/Nginx health check fails, the previous frontend is
+restored while the successfully initialized backend and workers remain running.
+The command log is appended to `/var/log/nl2sql-update.log`.
+
+The shared platform defaults to `platform/` in the same suite checkout
+(`/u01/aipoc/no.1-production-ready-suite/platform`). For a nonstandard installation,
+override `PLATFORM_REPO_DIR`. `BACKEND_HEALTH_URL`, `PUBLIC_HEALTH_URL`,
+`HEALTHCHECK_TIMEOUT_SECONDS`, and `HEALTHCHECK_INTERVAL_SECONDS` are also
+available for nondefault ports or health-check timing.
+
+## Troubleshooting
+
+### Live application logs
+
+`scripts/tail-logs.sh` is a read-only viewer that merges the four
+`production-ready-nl2sql-*` units and the `/var/log` files into one stream and
+renders the backend's JSON log lines in human-readable form. It never restarts
+or otherwise mutates a service. Run it on the Compute instance:
+
+```bash
+cd /u01/aipoc/no.1-production-ready-suite/nl2sql
+./scripts/tail-logs.sh --status          # unit state + backend/public health check
+./scripts/tail-logs.sh                   # follow the four application units
+./scripts/tail-logs.sh --backend         # backend only
+./scripts/tail-logs.sh --all             # units + Nginx + init/update logs
+./scripts/tail-logs.sh --level ERROR --since "-15 min" --no-follow
+```
+
+`--help` lists every option (`--workers`, `--unit`, `--nginx`, `--init`,
+`--update`, `--lines`, `--grep`, `--raw`). It falls back to `sudo` automatically
+when journald is not readable as the current user; if that fails, rerun with
+`sudo ./scripts/tail-logs.sh`.
+
+The equivalent manual commands, and everything the script does not cover:
+
+```bash
+sudo tail -f /var/log/cloud-init-custom.log
+sudo tail -f /var/log/nl2sql-init.log
+cd /u01/aipoc/no.1-production-ready-suite/nl2sql
+sudo systemctl status production-ready-nl2sql-backend
+sudo journalctl -u production-ready-nl2sql-backend -f
+sudo journalctl -u production-ready-nl2sql-schema-refresh-worker -f
+sudo journalctl -u production-ready-nl2sql-quality-evaluation-worker -f
+sudo journalctl -u production-ready-nl2sql-ontology-worker -f
+sudo nginx -t
+sudo tail -f /var/log/nginx/production-ready-nl2sql-error.log
+curl -i http://127.0.0.1:8000/api/health
+curl -i http://127.0.0.1/api/health
+curl -i http://127.0.0.1/health
+```
+
+### Validate an updated or repaired Compute instance
+
+After a successful update or repair, validate with relative UTC time instead of
+converting the browser timestamp manually:
+
+```bash
+sudo systemctl --no-pager --full status \
+  production-ready-nl2sql-backend.service \
+  production-ready-nl2sql-schema-refresh-worker.service \
+  production-ready-nl2sql-quality-evaluation-worker.service \
+  production-ready-nl2sql-ontology-worker.service
+sudo journalctl \
+  -u production-ready-nl2sql-backend.service \
+  -u production-ready-nl2sql-schema-refresh-worker.service \
+  --since "-15 min" --no-pager -o short-iso
+```
+
+Then confirm Wallet refresh, application user management, the pending DeepSec
+V001 plan, and completion of any previously pending schema refresh job from the
+UI. Docker is not part of this recovery path, and OCI SDK circuit-breaker INFO
+messages are not failures.
+
+For the permanent Resource Manager rollout, publish the fixed application with
+an immutable `application_git_ref` and create a replacement Compute instance.
+Updating `user_data` metadata on an already booted instance does not rerun
+cloud-init. Keep the repaired old instance until the replacement passes the same
+health/UI checks, and migrate `/u01/data/production-ready-nl2sql` before cutover
+when it contains local documents or settings.
+
+The cloud-init bootstrap:
+
+1. Installs Nginx, Node.js 24, uv, and build dependencies.
+2. Clones the NL2SQL and shared platform repositories.
+3. Extracts the ADB wallet to `/u01/aipoc/wallet`.
+4. Writes the runtime `backend/.env`.
+5. Installs backend dependencies with `uv sync --locked --no-dev --python 3.12`.
+6. Keeps `/u01/aipoc/wallet` at `ubuntu:ubuntu 0700` with files at `0600`, and
+   sets `/u01/aipoc` to `root:ubuntu 0775` for Wallet install locks and atomic
+   temporary/backup directories.
+7. Runs `nl2sql_system_schema --initialize` and
+   `app_security_migrate --apply --skip-bootstrap` with retries.
+8. Builds the shared UI package and `frontend/dist`.
+9. Starts the backend service with systemd and starts external workers only
+   when both schema commands succeeded.
+10. Configures Nginx to serve the SPA and same-origin `/api/` path.
+
+This Resource Manager deployment is a direct systemd + Nginx installation.
+Docker is not installed or required on the Compute instance.
+
+Node.js installation uses the NodeSource apt repository first. If apt candidate
+inspection, installation, or post-install validation fails, the init script
+falls back to the official Node.js `latest-v24.x` Linux tarball with
+`SHASUMS256.txt` verification. Override `NODEJS_OFFICIAL_RELEASE_BASE_URL` or
+`NODEJS_OFFICIAL_INSTALL_DIR` only for controlled mirrors or recovery testing;
+`NODEJS_OFFICIAL_BIN_DIR` is also available when the symlink target must be
+isolated.
+
+Backend startup remains independent of database reachability and table
+existence. The bootstrap tries both migrations first, but if the database is not
+ready yet the application still starts in degraded mode. Check
+`/var/log/nl2sql-init.log` for `WARNING: Continuing in degraded mode`, then run:
+
+```bash
+cd /u01/aipoc/no.1-production-ready-suite/nl2sql/backend
+sudo -u ubuntu /usr/local/bin/uv run python -m app.cli.nl2sql_system_schema --initialize
+sudo -u ubuntu /usr/local/bin/uv run python -m app.cli.app_security_migrate --apply --skip-bootstrap
+sudo systemctl restart production-ready-nl2sql-backend
+sudo systemctl enable --now production-ready-nl2sql-schema-refresh-worker
+sudo systemctl enable --now production-ready-nl2sql-quality-evaluation-worker
+sudo systemctl enable --now production-ready-nl2sql-ontology-worker
+```
+
+The security migration creates `NL2SQL_DEEPSEC_MIGRATIONS`, allowing the Deep
+Data Security page to show the pending V001 foundation plan. The bootstrap does
+not apply those administrator-confirmed DeepSec foundation steps automatically.
+
+## Stack Boundaries
+
+This stack preserves the project architecture:
+
+- LLM/VLM: OCI Enterprise AI
+- Embedding/rerank: OCI Generative AI
+- Vector search and application state: Oracle 26ai
+
+Do not replace these with another LLM provider, external rerank provider, or
+external vector database in this stack.

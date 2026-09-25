@@ -1,0 +1,156 @@
+/**
+ * RAG 由来のシステム設定画面が利用する TanStack Query フック。
+ * Agent Runtime 側の既存 query key と衝突しないよう settings 名前空間に閉じる。
+ */
+
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+
+import {
+  api,
+  type AdbSettingsUpdate,
+  type DatabaseSettingsUpdate,
+  type ModelSettingsPayload,
+  type ModelSettingsTestRequest,
+  type UploadStorageSettingsUpdate,
+} from "./api";
+
+export const queryKeys = {
+  dashboardSummary: ["dashboard", "summary"] as const,
+  modelSettings: ["settings", "model"] as const,
+  databaseSettings: ["settings", "database"] as const,
+  adbInfo: ["settings", "database", "adb"] as const,
+  uploadStorageSettings: ["settings", "upload-storage"] as const,
+};
+
+export const ADB_TRANSITIONAL_STATES: ReadonlySet<string> = new Set<string>([
+  "STARTING",
+  "STOPPING",
+  "PROVISIONING",
+  "TERMINATING",
+  "UPDATING",
+  "RESTORING",
+  "BACKUP_IN_PROGRESS",
+  "MAINTENANCE_IN_PROGRESS",
+  "ROLE_CHANGE_IN_PROGRESS",
+]);
+
+export const ACTIVE_REFETCH_INTERVAL_MS = 4000;
+
+export function adbIsTransitioning(state: string | null | undefined): boolean {
+  return state != null && ADB_TRANSITIONAL_STATES.has(state);
+}
+
+export function useModelSettings() {
+  return useQuery({
+    queryKey: queryKeys.modelSettings,
+    queryFn: api.getModelSettings,
+  });
+}
+
+export function useUpdateModelSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: ModelSettingsPayload) => api.updateModelSettings(payload),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.modelSettings });
+    },
+  });
+}
+
+export function useTestModelSettings() {
+  return useMutation({
+    mutationFn: (payload: ModelSettingsTestRequest) => api.testModelSettings(payload),
+  });
+}
+
+export function useDatabaseSettings() {
+  return useQuery({
+    queryKey: queryKeys.databaseSettings,
+    queryFn: api.getDatabaseSettings,
+  });
+}
+
+export function useUpdateDatabaseSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: DatabaseSettingsUpdate) => api.updateDatabaseSettings(payload),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.databaseSettings });
+      qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
+    },
+  });
+}
+
+export function useUploadDatabaseWallet() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (file: File) => api.uploadDatabaseWallet(file),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.databaseSettings });
+      qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
+    },
+  });
+}
+
+export function useTestDatabaseSettings() {
+  return useMutation({
+    mutationFn: (payload: DatabaseSettingsUpdate) => api.testDatabaseSettings(payload),
+  });
+}
+
+export function useAdbInfo() {
+  return useQuery({
+    queryKey: queryKeys.adbInfo,
+    queryFn: api.getAdbInfo,
+    refetchInterval: (query) =>
+      adbIsTransitioning(query.state.data?.lifecycle_state)
+        ? ACTIVE_REFETCH_INTERVAL_MS
+        : false,
+  });
+}
+
+export function useUpdateAdbSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: AdbSettingsUpdate) => api.updateAdbSettings(payload),
+    onSuccess: (data) => {
+      qc.setQueryData(queryKeys.adbInfo, data);
+      qc.invalidateQueries({ queryKey: queryKeys.databaseSettings });
+    },
+  });
+}
+
+export function useStartAdb() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.startAdb(),
+    onSuccess: (data) => qc.setQueryData(queryKeys.adbInfo, data),
+  });
+}
+
+export function useStopAdb() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.stopAdb(),
+    onSuccess: (data) => qc.setQueryData(queryKeys.adbInfo, data),
+  });
+}
+
+export function useUploadStorageSettings() {
+  return useQuery({
+    queryKey: queryKeys.uploadStorageSettings,
+    queryFn: api.getUploadStorageSettings,
+  });
+}
+
+export function useUpdateUploadStorageSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: UploadStorageSettingsUpdate) =>
+      api.updateUploadStorageSettings(payload),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.uploadStorageSettings });
+      qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
+    },
+  });
+}

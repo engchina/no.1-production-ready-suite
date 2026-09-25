@@ -1,0 +1,814 @@
+"use client";
+
+import {
+  AlertCircle,
+  Check,
+  CheckCircle2,
+  Circle,
+  Clock3,
+  Copy,
+  Eye,
+  LoaderCircle,
+  Plus,
+  RotateCcw,
+  Search,
+  SearchCheck,
+  Settings2,
+  Trash2,
+} from "lucide-react";
+import { useMemo, useRef, useState, type ReactNode } from "react";
+
+import { DocumentProcessingConfigPanel } from "./DocumentProcessingConfigPanel";
+import { EmptyState } from "@/components/StateViews";
+import {
+  canAddRecipe,
+  canDeleteRecipe,
+  recipeConfigLocked,
+  recipeIsActive,
+  recipeLayerStatuses,
+  resolveSelectedRecipe,
+  type RecipeLayerStatusView,
+} from "./DocumentRecipeManager.logic";
+import { CitationCard } from "@/components/search/CitationCard";
+import {
+  Banner,
+  Button,
+  FormStatus,
+  SelectField,
+  Skeleton,
+} from "@engchina/production-ready-ui";
+import { useConfirm } from "@/components/ui/confirm-dialog";
+import {
+  ApiError,
+  api,
+  type DocumentChunkSet,
+  type DocumentIngestionConfigData,
+  type DocumentLayerStatusName,
+  type DocumentRecipeStep,
+  type DocumentRecipeView,
+  type IngestionJobPhase,
+  type SearchResponse,
+} from "@/lib/api";
+import { formatDateTime } from "@/lib/format";
+import { t, type I18nKey } from "@/lib/i18n";
+import {
+  useApproveDocumentRecipe,
+  useCreateDocumentRecipe,
+  useDeleteDocumentRecipe,
+  useEnqueueDocumentRecipeJob,
+} from "@/lib/queries";
+import { cn } from "@/lib/utils";
+
+const PHASES: Array<{ phase: IngestionJobPhase; label: I18nKey; shortLabel: I18nKey }> = [
+  {
+    phase: "PREPROCESS",
+    label: "flow.step.preprocess",
+    shortLabel: "documents.recipes.phase.preprocess",
+  },
+  {
+    phase: "EXTRACT",
+    label: "flow.step.extract",
+    shortLabel: "documents.recipes.phase.extract",
+  },
+  {
+    phase: "CHUNK",
+    label: "flow.step.chunk",
+    shortLabel: "documents.recipes.phase.chunk",
+  },
+  {
+    phase: "INDEX",
+    label: "flow.step.indexing",
+    shortLabel: "documents.recipes.phase.index",
+  },
+];
+
+type AddMode = "clone" | "defaults";
+
+export function DocumentRecipeManager({
+  documentId,
+  recipes,
+  selectedRecipeId,
+  onSelect,
+  loading,
+  error,
+  onRetry,
+  chunkSets,
+  sourceModality = null,
+}: {
+  documentId: string;
+  recipes: DocumentRecipeView[];
+  selectedRecipeId: string | null;
+  onSelect: (recipeId: string) => void;
+  loading: boolean;
+  error: unknown;
+  onRetry: () => void;
+  chunkSets?: DocumentChunkSet[];
+  sourceModality?: string | null;
+}) {
+  const selected = resolveSelectedRecipe(recipes, selectedRecipeId);
+  const createRecipe = useCreateDocumentRecipe();
+  const deleteRecipe = useDeleteDocumentRecipe();
+  const enqueue = useEnqueueDocumentRecipeJob();
+  const approve = useApproveDocumentRecipe();
+  const confirm = useConfirm();
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const [addMode, setAddMode] = useState<AddMode>("clone");
+  const configData = useMemo(
+    () => (selected ? recipeConfigData(selected) : null),
+    [selected]
+  );
+
+  const openAddDialog = () => {
+    setAddMode("clone");
+    dialogRef.current?.showModal();
+  };
+
+  const active = selected ? recipeIsActive(selected) : false;
+  const atMaximum = !canAddRecipe(recipes.length);
+  const atMinimum = recipes.length <= 1;
+
+  const handleCreate = () => {
+    createRecipe.mutate(
+      {
+        id: documentId,
+        copyFrom: addMode === "clone" ? selected?.recipe_id ?? null : null,
+      },
+      {
+        onSuccess: (recipe) => {
+          dialogRef.current?.close();
+          onSelect(recipe.recipe_id);
+        },
+      }
+    );
+  };
+
+  const handleDelete = async () => {
+    if (!selected || !canDeleteRecipe(recipes.length, active)) return;
+    const confirmed = await confirm({
+      title: t("documents.recipes.deleteTitle"),
+      description: t("documents.recipes.deleteDescription"),
+      confirmLabel: t("common.delete"),
+      tone: "danger",
+    });
+    if (!confirmed) return;
+    deleteRecipe.mutate(
+      { id: documentId, recipeId: selected.recipe_id },
+      {
+        onSuccess: () => {
+          const fallback = recipes.find((recipe) => recipe.recipe_id !== selected.recipe_id);
+          if (fallback) onSelect(fallback.recipe_id);
+        },
+      }
+    );
+  };
+
+  const handleProcess = () => {
+    if (!selected || active) return;
+    if (["PREPROCESSED", "REVIEW", "CHUNKED"].includes(selected.status)) {
+      approve.mutate({ id: documentId, recipeId: selected.recipe_id });
+      return;
+    }
+    enqueue.mutate({
+      id: documentId,
+      recipeId: selected.recipe_id,
+      phase: selected.failed_phase ?? "PREPROCESS",
+    });
+  };
+
+  if (loading) {
+    return (
+      <section aria-label={t("documents.recipes.title")} className="space-y-3">
+        <Skeleton className="h-9 w-48" />
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          <Skeleton className="h-28" />
+          <Skeleton className="hidden h-28 sm:block" />
+        </div>
+      </section>
+    );
+  }
+
+  if (error) {
+    return (
+      <Banner severity="warning" title={t("documents.recipes.loadError")}>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p>{error instanceof ApiError ? error.message : t("flow.buildConfig.loadErrorHint")}</p>
+          <Button type="button" variant="secondary" size="sm" onClick={onRetry} icon={RotateCcw}>
+            {t("common.retry")}
+          </Button>
+        </div>
+      </Banner>
+    );
+  }
+
+  if (!selected) {
+    return <FormStatus tone="info" message={t("documents.recipes.empty")} />;
+  }
+
+  const processPending = enqueue.isPending || approve.isPending;
+  const processError = enqueue.error ?? approve.error;
+
+  return (
+    <section aria-label={t("documents.recipes.title")} className="space-y-3">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2">
+            <Settings2 size={16} className="text-accent-fg" aria-hidden />
+            <h2 className="text-sm font-semibold text-fg">
+              {t("documents.recipes.title")}
+            </h2>
+            <span className="tnum rounded-md bg-surface-hover px-2 py-0.5 text-xs font-medium text-fg-muted">
+              {t("documents.recipes.count", { count: recipes.length })}
+            </span>
+          </div>
+          <p className="mt-1 text-xs text-fg-muted">
+            {atMaximum ? t("documents.recipes.max") : t("documents.recipes.subtitle")}
+          </p>
+        </div>
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          onClick={openAddDialog}
+          disabled={atMaximum}
+          title={atMaximum ? t("documents.recipes.max") : undefined} icon={Plus}>
+          {t("documents.recipes.add")}
+        </Button>
+      </div>
+
+      <div className="sm:hidden">
+        <SelectField
+          id={`recipe-select-${documentId}`}
+          label={t("documents.recipes.select")}
+          value={selected.recipe_id}
+          options={recipes.map((recipe) => ({
+            value: recipe.recipe_id,
+            label: `${recipeName(recipe)} · ${t(recipeStatus(recipe).label)}`,
+          }))}
+          onValueChange={onSelect}
+          buttonClassName="min-h-11"
+        />
+      </div>
+
+      <div className="hidden gap-3 sm:grid sm:grid-cols-2 xl:grid-cols-3">
+        {recipes.map((recipe) => (
+          <RecipeCard
+            key={recipe.recipe_id}
+            recipe={recipe}
+            selected={recipe.recipe_id === selected.recipe_id}
+            onSelect={() => onSelect(recipe.recipe_id)}
+          />
+        ))}
+      </div>
+
+      <div className="rounded-lg border border-border bg-surface p-3 sm:p-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="text-base font-semibold text-fg">{recipeName(selected)}</h3>
+              <RecipeStatusBadge recipe={selected} />
+              {selected.needs_reprocessing ? (
+                <span className="rounded-full bg-warning-subtle px-2 py-0.5 text-xs font-medium text-warning-fg">
+                  {t("documents.recipes.reprocess")}
+                </span>
+              ) : null}
+            </div>
+            <RecipeLayerStatusChips statuses={recipeLayerStatuses(selected, chunkSets)} />
+            <p className="mt-1 text-xs text-fg-muted">
+              {t("documents.recipes.updated", { time: formatDateTime(selected.updated_at) })}
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => void handleDelete()}
+              disabled={atMinimum || active || deleteRecipe.isPending}
+              title={atMinimum ? t("documents.recipes.min") : undefined} icon={Trash2}>
+              {t("documents.recipes.delete")}
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              onClick={handleProcess}
+              loading={processPending}
+              disabled={active}
+            >
+              {processButtonLabel(selected)}
+            </Button>
+          </div>
+        </div>
+
+        <RecipeSteps recipe={selected} />
+
+        {/* 失敗の原因本文は上部の状態メッセージスロット(DocumentWorkspace)が正本(messaging-spec §9 P2)。
+            ここは「検索は旧出力で継続中」という状況提示のみ残す。 */}
+        {selected.status === "ERROR" && selected.searchable ? (
+          <Banner severity="warning" className="mt-3">
+            {t("documents.recipes.staleError")}
+          </Banner>
+        ) : null}
+        {processError ? (
+          <FormStatus
+            tone="danger"
+            message={processError instanceof ApiError ? processError.message : t("flow.ingestFailed")}
+          />
+        ) : null}
+
+        <div className="mt-4">
+          <DocumentProcessingConfigPanel
+            documentId={documentId}
+            recipeId={selected.recipe_id}
+            data={configData}
+            loading={false}
+            error={null}
+            onRetry={onRetry}
+            disabled={recipeConfigLocked(selected)}
+            sourceModality={sourceModality}
+          />
+        </div>
+        <RecipeComparison documentId={documentId} recipes={recipes} />
+      </div>
+
+      <dialog
+        ref={dialogRef}
+        className="m-auto w-[calc(100%-2rem)] max-w-lg rounded-xl border border-border bg-surface-overlay p-0 text-fg shadow-[var(--shadow-dialog)] backdrop:bg-[var(--scrim)]"
+        onClose={() => setAddMode("clone")}
+        onClick={(event) => {
+          if (event.target === event.currentTarget) dialogRef.current?.close();
+        }}
+      >
+        <div className="p-5">
+          <h2 className="text-base font-semibold">{t("documents.recipes.addTitle")}</h2>
+          <p className="mt-1 text-sm text-fg-muted">{t("documents.recipes.addDescription")}</p>
+          <div className="mt-4 grid gap-2">
+            <AddModeOption
+              selected={addMode === "clone"}
+              icon={<Copy size={16} aria-hidden />}
+              label={t("documents.recipes.clone")}
+              onSelect={() => setAddMode("clone")}
+            />
+            <AddModeOption
+              selected={addMode === "defaults"}
+              icon={<Settings2 size={16} aria-hidden />}
+              label={t("documents.recipes.defaults")}
+              onSelect={() => setAddMode("defaults")}
+            />
+          </div>
+          {createRecipe.error ? (
+            <FormStatus
+              tone="danger"
+              message={
+                createRecipe.error instanceof ApiError
+                  ? createRecipe.error.message
+                  : t("flow.ingestFailed")
+              }
+            />
+          ) : null}
+          <div className="mt-5 flex justify-end gap-2">
+            <Button type="button" variant="ghost" onClick={() => dialogRef.current?.close()}>
+              {t("common.cancel")}
+            </Button>
+            <Button type="button" onClick={handleCreate} loading={createRecipe.isPending} icon={Plus}>
+              {t("documents.recipes.create")}
+            </Button>
+          </div>
+        </div>
+      </dialog>
+    </section>
+  );
+}
+
+function RecipeCard({
+  recipe,
+  selected,
+  onSelect,
+}: {
+  recipe: DocumentRecipeView;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  const completed = completedStepCount(recipe);
+  return (
+    <button
+      type="button"
+      aria-pressed={selected}
+      onClick={onSelect}
+      className={cn(
+        "min-w-0 rounded-lg border p-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring",
+        selected
+          ? "border-accent-emphasis bg-accent-subtle shadow-sm"
+          : "border-border bg-surface hover:border-accent-emphasis hover:bg-surface-hover"
+      )}
+    >
+      <div className="flex items-start justify-between gap-2">
+        <span className="font-semibold text-fg">{recipeName(recipe)}</span>
+        <span className="tnum text-xs font-medium text-fg-muted">{completed}/4</span>
+      </div>
+      <div className="mt-2 flex items-center gap-2">
+        <RecipeStatusBadge recipe={recipe} />
+      </div>
+      <div className="mt-3 grid grid-cols-4 gap-1" aria-label={`${completed}/4`}>
+        {PHASES.map(({ phase }) => {
+          const step = recipe.steps.find((item) => item.phase === phase);
+          return (
+            <span
+              key={phase}
+              className={cn(
+                "h-1.5 rounded-full",
+                step?.status === "FAILED"
+                  ? "bg-danger-emphasis"
+                  : step?.status === "RUNNING"
+                    ? "bg-info-emphasis"
+                    : step?.status === "SUCCEEDED"
+                      ? "bg-success-emphasis"
+                      : step?.status === "NEEDS_REVIEW"
+                        ? "bg-warning-emphasis"
+                        : "bg-border"
+              )}
+            />
+          );
+        })}
+      </div>
+    </button>
+  );
+}
+
+function RecipeSteps({ recipe }: { recipe: DocumentRecipeView }) {
+  return (
+    <ol className="mt-4 grid grid-cols-4 gap-1" aria-label={t("documents.recipes.title")}>
+      {PHASES.map(({ phase, label, shortLabel }, index) => {
+        const step = recipe.steps.find((item) => item.phase === phase);
+        return (
+          <li key={phase} className="relative min-w-0 text-center">
+            {index > 0 ? (
+              <span className="absolute right-1/2 top-3 h-px w-full bg-border" aria-hidden />
+            ) : null}
+            <span
+              className={cn(
+                "relative z-10 mx-auto flex size-6 items-center justify-center rounded-full border bg-surface",
+                stepTone(step)
+              )}
+            >
+              <StepIcon step={step} />
+            </span>
+            <span className="mt-1.5 block min-h-7 px-0.5 text-xs leading-3 text-fg-muted sm:text-xs sm:leading-4">
+              <span className="sm:hidden">{t(shortLabel)}</span>
+              <span className="hidden sm:inline">{t(label)}</span>
+            </span>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+function StepIcon({ step }: { step: DocumentRecipeStep | undefined }) {
+  if (step?.status === "RUNNING") {
+    return <LoaderCircle size={14} className="animate-spin" aria-hidden />;
+  }
+  if (step?.status === "FAILED") return <AlertCircle size={14} aria-hidden />;
+  if (step?.status === "NEEDS_REVIEW") return <Eye size={14} aria-hidden />;
+  if (step?.status === "SUCCEEDED") return <Check size={14} aria-hidden />;
+  return <Circle size={10} aria-hidden />;
+}
+
+function RecipeStatusBadge({ recipe }: { recipe: DocumentRecipeView }) {
+  const status = recipeStatus(recipe);
+  const Icon = status.icon;
+  return (
+    <span className={cn("inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium", status.className)}>
+      <Icon size={14} className={status.spin ? "animate-spin" : undefined} aria-hidden />
+      {t(status.label)}
+    </span>
+  );
+}
+
+const LAYER_LABEL_KEYS: Record<RecipeLayerStatusView["layer"], I18nKey> = {
+  metadata: "knowledgeBases.variant.layer.metadata",
+  graph: "knowledgeBases.variant.layer.graph",
+  navigation: "knowledgeBases.variant.layer.navigation",
+};
+
+const LAYER_STATUS_LABEL_KEYS: Record<DocumentLayerStatusName, I18nKey> = {
+  not_requested: "knowledgeBases.variant.layerStatus.not_requested",
+  planned_only: "knowledgeBases.variant.layerStatus.planned_only",
+  materialized: "knowledgeBases.variant.layerStatus.materialized",
+  needs_reingest: "knowledgeBases.variant.layerStatus.needs_reingest",
+  error: "knowledgeBases.variant.layerStatus.error",
+};
+
+const LAYER_STATUS_TONES: Record<DocumentLayerStatusName, string> = {
+  not_requested: "bg-surface-hover text-fg-muted",
+  planned_only: "bg-warning-subtle text-warning-fg",
+  materialized: "bg-success-subtle text-success-fg",
+  needs_reingest: "bg-warning-subtle text-warning-fg",
+  error: "bg-danger-subtle text-danger-fg",
+};
+
+/** 派生 layer(項目抽出/関係情報/ナビ)の実体化状態チップ。reason は title で開示する。 */
+function RecipeLayerStatusChips({ statuses }: { statuses: RecipeLayerStatusView[] }) {
+  if (!statuses.length) return null;
+  return (
+    <div className="mt-1.5 flex flex-wrap items-center gap-1.5" data-testid="recipe-layer-statuses">
+      {statuses.map((entry) => (
+        <span
+          key={entry.layer}
+          title={entry.reason ?? undefined}
+          data-testid={`recipe-layer-${entry.layer}`}
+          className={cn(
+            "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium",
+            LAYER_STATUS_TONES[entry.status]
+          )}
+        >
+          {t(LAYER_LABEL_KEYS[entry.layer])}
+          <span aria-hidden>·</span>
+          {t(LAYER_STATUS_LABEL_KEYS[entry.status])}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function recipeStatus(recipe: DocumentRecipeView) {
+  const stepStatuses = recipe.steps.map((step) => step.status);
+  if (stepStatuses.includes("RUNNING")) {
+    return {
+      label: "documents.recipes.status.running" as const,
+      icon: LoaderCircle,
+      className: "bg-info-subtle text-info-fg",
+      spin: true,
+    };
+  }
+  if (stepStatuses.includes("QUEUED")) {
+    return {
+      label: "documents.recipes.status.queued" as const,
+      icon: Clock3,
+      className: "bg-surface-hover text-fg-muted",
+      spin: false,
+    };
+  }
+  if (recipe.status === "ERROR") {
+    return {
+      label: "documents.recipes.status.error" as const,
+      icon: AlertCircle,
+      className: "bg-danger-subtle text-danger-fg",
+      spin: false,
+    };
+  }
+  if (["PREPROCESSED", "REVIEW", "CHUNKED"].includes(recipe.status)) {
+    return {
+      label: "documents.recipes.status.review" as const,
+      icon: Clock3,
+      className: "bg-warning-subtle text-warning-fg",
+      spin: false,
+    };
+  }
+  if (recipe.searchable) {
+    return {
+      label: "documents.recipes.status.searchable" as const,
+      icon: SearchCheck,
+      className: "bg-success-subtle text-success-fg",
+      spin: false,
+    };
+  }
+  return {
+    label: "documents.recipes.status.idle" as const,
+    icon: Circle,
+    className: "bg-surface-hover text-fg-muted",
+    spin: false,
+  };
+}
+
+function stepTone(step: DocumentRecipeStep | undefined) {
+  if (step?.status === "FAILED") return "border-danger-fg text-danger-fg";
+  if (step?.status === "RUNNING") return "border-info-fg text-info-fg";
+  if (step?.status === "NEEDS_REVIEW") return "border-warning-fg text-warning-fg";
+  if (step?.status === "SUCCEEDED") return "border-success-fg bg-success-emphasis text-fg-on-emphasis";
+  return "border-border text-fg-muted";
+}
+
+function completedStepCount(recipe: DocumentRecipeView) {
+  // NEEDS_REVIEW は「工程完了・承認待ち」なので完了数に含める。
+  return recipe.steps.filter(
+    (step) => step.status === "SUCCEEDED" || step.status === "NEEDS_REVIEW"
+  ).length;
+}
+
+function recipeName(recipe: DocumentRecipeView) {
+  return t("documents.recipes.name", { slot: recipe.slot_no });
+}
+
+function processButtonLabel(recipe: DocumentRecipeView) {
+  if (recipeIsActive(recipe)) return t("documents.recipes.status.running");
+  if (recipe.status === "ERROR") return t("documents.recipes.retry");
+  if (recipe.searchable) return t("documents.recipes.reprocessAction");
+  if (["PREPROCESSED", "REVIEW", "CHUNKED"].includes(recipe.status)) {
+    return t("documents.recipes.resume");
+  }
+  return t("documents.recipes.run");
+}
+
+function recipeConfigData(recipe: DocumentRecipeView): DocumentIngestionConfigData {
+  const effective = recipe.effective_processing_config;
+  return {
+    document_id: recipe.document_id,
+    is_indexed: recipe.searchable,
+    processing_config: recipe.processing_config,
+    effective_processing_config: effective,
+    effective_preprocess_profile: effective.preprocess_profile ?? "passthrough",
+    effective_chunking_strategy: effective.chunking_strategy ?? "structure_aware",
+    effective_parser_adapter_backend: effective.parser_adapter_backend ?? "docling",
+    observed_chunking_strategy: null,
+    observed_parser_backend: null,
+    chunking_drift: recipe.needs_reprocessing,
+    parser_drift: recipe.needs_reprocessing,
+    config_drift: recipe.needs_reprocessing,
+    drift_fields: [],
+  };
+}
+
+function RecipeComparison({
+  documentId,
+  recipes,
+}: {
+  documentId: string;
+  recipes: DocumentRecipeView[];
+}) {
+  const searchable = recipes.filter((recipe) => recipe.searchable && recipe.active_chunk_set_id);
+  const [open, setOpen] = useState(false);
+  const [leftId, setLeftId] = useState(searchable[0]?.recipe_id ?? "");
+  const [rightId, setRightId] = useState(searchable[1]?.recipe_id ?? "");
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<{
+    left: SearchResponse;
+    right: SearchResponse;
+  } | null>(null);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState("");
+
+  const options = searchable.map((recipe) => ({
+    value: recipe.recipe_id,
+    label: recipeName(recipe),
+  }));
+  const left = searchable.find((recipe) => recipe.recipe_id === leftId) ?? searchable[0];
+  const right =
+    searchable.find((recipe) => recipe.recipe_id === rightId) ?? searchable[1] ?? searchable[0];
+
+  const run = async () => {
+    if (!left?.active_chunk_set_id || !right?.active_chunk_set_id || !query.trim()) return;
+    setPending(true);
+    setError("");
+    setResults(null);
+    try {
+      const [leftResult, rightResult] = await Promise.all([
+        api.search({
+          query: query.trim(),
+          top_k: 5,
+          filters: { document_id: documentId, chunk_set_id: left.active_chunk_set_id },
+        }),
+        api.search({
+          query: query.trim(),
+          top_k: 5,
+          filters: { document_id: documentId, chunk_set_id: right.active_chunk_set_id },
+        }),
+      ]);
+      setResults({ left: leftResult, right: rightResult });
+    } catch (reason) {
+      setError(
+        reason instanceof ApiError ? reason.message : t("documents.experiment.compare.error")
+      );
+    } finally {
+      setPending(false);
+    }
+  };
+
+  return (
+    <div className="mt-4 border-t border-border pt-4">
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        onClick={() => setOpen((value) => !value)}
+        disabled={searchable.length < 2} icon={Search}>
+        {t("documents.experiment.compare.title")}
+      </Button>
+      {searchable.length < 2 ? (
+        <p className="mt-1 text-xs text-fg-muted">{t("documents.recipes.compareNeedsTwo")}</p>
+      ) : null}
+      {open ? (
+        <div className="mt-3 space-y-3 rounded-lg border border-border bg-surface-sunken p-3">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <SelectField
+              id={`recipe-compare-left-${documentId}`}
+              label={t("documents.recipes.compareLeft")}
+              value={left?.recipe_id ?? ""}
+              options={options}
+              onValueChange={setLeftId}
+            />
+            <SelectField
+              id={`recipe-compare-right-${documentId}`}
+              label={t("documents.recipes.compareRight")}
+              value={right?.recipe_id ?? ""}
+              options={options}
+              onValueChange={setRightId}
+            />
+          </div>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+            <label className="min-w-0 flex-1 text-sm font-medium text-fg">
+              {t("documents.experiment.compare.queryLabel")}
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder={t("documents.experiment.compare.placeholder")}
+                className="mt-1 h-10 w-full rounded-md border border-border bg-surface px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") void run();
+                }}
+              />
+            </label>
+            <Button
+              type="button"
+              onClick={() => void run()}
+              loading={pending}
+              disabled={!query.trim() || left?.recipe_id === right?.recipe_id}
+            >
+              {t("documents.experiment.compare.run")}
+            </Button>
+          </div>
+          {error ? <FormStatus tone="danger" message={error} /> : null}
+          {results ? (
+            <div className="grid gap-4 lg:grid-cols-2">
+              <ComparisonColumn
+                title={left ? recipeName(left) : ""}
+                result={results.left}
+              />
+              <ComparisonColumn
+                title={right ? recipeName(right) : ""}
+                result={results.right}
+              />
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ComparisonColumn({ title, result }: { title: string; result: SearchResponse }) {
+  const chunks = result.citations;
+  return (
+    <section className="min-w-0">
+      <h4 className="mb-2 text-sm font-semibold text-fg">{title}</h4>
+      {chunks.length ? (
+        <ol className="space-y-2">
+          {chunks.map((chunk, index) => (
+            <CitationCard
+              key={`${chunk.chunk_id}-${index}`}
+              chunk={chunk}
+              index={index}
+            />
+          ))}
+        </ol>
+      ) : (
+        <div aria-live="polite">
+          <EmptyState
+            title={t("search.noResults")}
+            hint={result.answer || t("search.noResultsHint")}
+          />
+        </div>
+      )}
+    </section>
+  );
+}
+
+function AddModeOption({
+  selected,
+  icon,
+  label,
+  onSelect,
+}: {
+  selected: boolean;
+  icon: ReactNode;
+  label: string;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={selected}
+      onClick={onSelect}
+      className={cn(
+        "flex min-h-12 items-center gap-3 rounded-lg border px-3 text-left text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring",
+        selected ? "border-accent-emphasis bg-accent-subtle text-fg" : "border-border text-fg-muted"
+      )}
+    >
+      <span className={cn("flex size-8 items-center justify-center rounded-md", selected ? "bg-accent-subtle text-accent-fg" : "bg-surface-hover")}>
+        {icon}
+      </span>
+      <span className="flex-1">{label}</span>
+      {selected ? <CheckCircle2 size={16} className="text-accent-fg" aria-hidden /> : null}
+    </button>
+  );
+}

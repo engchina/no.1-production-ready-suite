@@ -1,0 +1,1491 @@
+import {
+  Button,
+  Banner,
+  DataTable,
+  EmptyState,
+  toast,
+  StatusBadge,
+  PageHeader,
+  FieldError,
+  FormStatus,
+  PageBody,
+  useConfirm,
+} from "@engchina/production-ready-ui";
+import { useEffect, useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  BarChart3,
+  CheckCircle2,
+  CircleStop,
+  Download,
+  FileSpreadsheet,
+  Play,
+  Trash2,
+} from "lucide-react";
+import { useSearchParams } from "react-router-dom";
+
+
+
+import { BulkSelectionActions } from "@/components/BulkSelectionActions";
+import { ProcessingIndicator } from "@/components/ProcessingState";
+import { ErrorState, LoadingState } from "@/components/StateViews";
+import { usePageNotice, PageNotice } from "@/components/page-notice";
+import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
+import { FileDropzone } from "@/components/ui/file-dropzone";
+import { FieldLabel } from "@/components/ui/required-field";
+import { ApiError, apiDelete, apiFetch, apiGet, apiPost, apiPostForm } from "@/lib/api";
+import { downloadBlob, downloadFilename } from "@/lib/download";
+import { RowActionMenu } from "@/components/ObjectActions";
+import { t } from "@/lib/i18n";
+import { toastError } from "@/lib/toast";
+import { XLSX_TEMPLATE_FILE_FORMATS } from "@/lib/tabular-file-formats";
+import { engineLabel } from "../labels";
+import { profileDisplayLabel, profileRecordDisplayLabel } from "../profileDisplay";
+import { QuestionText } from "../components/QuestionText";
+import {
+  qualityEvaluationAttemptTimedOut,
+  qualityEvaluationLastHeartbeatMs,
+  qualityEvaluationLeaseExpired,
+  qualityEvaluationPollingInterval,
+  toggleQualityEvaluationEngine,
+  validateQualityEvaluationInput,
+  type QualityEvaluationValidationCode,
+} from "../qualityEvaluationLogic";
+import type {
+  ProfileSummaryPage,
+  QualityEvaluationCapabilities,
+  QualityEvaluationEngine,
+  QualityEvaluationEngineSummary,
+  QualityEvaluationJobPage,
+  QualityEvaluationJobSummary,
+  QualityEvaluationResult,
+  QualityEvaluationResultPage,
+  QualityEvaluationStatus,
+  QualityEvaluationVerdict,
+} from "../types";
+
+const TERMINAL_STATUSES = new Set<QualityEvaluationStatus>([
+  "completed",
+  "completed_with_errors",
+  "failed",
+  "cancelled",
+]);
+const ACTIVE_STATUSES = new Set<QualityEvaluationStatus>(["pending", "running"]);
+const sectionClass = "grid min-w-0 gap-5 rounded-lg border border-border bg-surface p-4 shadow-sm lg:p-5";
+const controlClass =
+  "min-h-11 w-full rounded-md border border-border bg-surface-sunken px-3 py-2 text-sm text-fg outline-none transition focus:border-focus-ring focus:ring-2 focus:ring-focus-ring disabled:cursor-not-allowed disabled:opacity-60";
+
+type FormErrors = Partial<Record<"profile" | "file" | "engines" | "repeat", string>>;
+
+function qualityEvaluationQueryPollingInterval(
+  status: QualityEvaluationStatus | undefined,
+  error: unknown
+) {
+  if (error) return false;
+  return qualityEvaluationPollingInterval(status);
+}
+
+function retryQualityEvaluationJob(failureCount: number, error: unknown) {
+  if (error instanceof ApiError && error.status === 404) return false;
+  return failureCount < 3;
+}
+
+export function EvaluationPage() {
+  const queryClient = useQueryClient();
+  const confirm = useConfirm();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const currentJobId = searchParams.get("job") ?? "";
+  const { notice, showNotice, clearNotice } = usePageNotice();
+  const [profileId, setProfileId] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const [engines, setEngines] = useState<QualityEvaluationEngine[]>([]);
+  const [repeatCount, setRepeatCount] = useState(1);
+  const [formErrors, setFormErrors] = useState<FormErrors>({});
+  const [startError, setStartError] = useState("");
+  const [jobCursor, setJobCursor] = useState<string | null>(null);
+  const [jobCursorHistory, setJobCursorHistory] = useState<Array<string | null>>([]);
+  const [resultCursor, setResultCursor] = useState<string | null>(null);
+  const [resultCursorHistory, setResultCursorHistory] = useState<Array<string | null>>([]);
+  const [downloading, setDownloading] = useState(false);
+
+  const capabilitiesQuery = useQuery({
+    queryKey: ["quality-evaluations", "capabilities", profileId],
+    queryFn: () => {
+      const query = profileId ? `?profile_id=${encodeURIComponent(profileId)}` : "";
+      return apiGet<QualityEvaluationCapabilities>(
+        `/api/nl2sql/quality-evaluations/capabilities${query}`
+      );
+    },
+  });
+  const profilesQuery = useQuery({
+    queryKey: ["nl2sql", "profiles", "quality-evaluation"],
+    queryFn: () =>
+      apiGet<ProfileSummaryPage>("/api/nl2sql/profiles/search?limit=100"),
+  });
+  const recentJobsQuery = useQuery({
+    queryKey: ["quality-evaluations", "jobs", jobCursor],
+    queryFn: () =>
+      apiGet<QualityEvaluationJobPage>(
+        `/api/nl2sql/quality-evaluations?limit=10${
+          jobCursor ? `&cursor=${encodeURIComponent(jobCursor)}` : ""
+        }`
+      ),
+    refetchInterval: (query) =>
+      query.state.error
+        ? false
+        : query.state.data?.items.some((job) => ACTIVE_STATUSES.has(job.status))
+        ? qualityEvaluationPollingInterval("running")
+        : false,
+  });
+  const currentJobQuery = useQuery({
+    queryKey: ["quality-evaluations", "job", currentJobId],
+    queryFn: () =>
+      apiGet<QualityEvaluationJobSummary>(
+        `/api/nl2sql/quality-evaluations/${encodeURIComponent(currentJobId)}`
+      ),
+    enabled: Boolean(currentJobId),
+    retry: retryQualityEvaluationJob,
+    refetchInterval: (query) =>
+      qualityEvaluationQueryPollingInterval(query.state.data?.status, query.state.error),
+  });
+  const currentJob = currentJobQuery.data ?? null;
+  const recentJobs = recentJobsQuery.data?.items ?? [];
+  const showRecentJobsPagination = Boolean(
+    recentJobsQuery.data &&
+      (recentJobs.length > 0 || recentJobsQuery.data.next_cursor || jobCursorHistory.length > 0)
+  );
+  const resultsQuery = useQuery({
+    queryKey: ["quality-evaluations", "results", currentJobId, resultCursor],
+    queryFn: () =>
+      apiGet<QualityEvaluationResultPage>(
+        `/api/nl2sql/quality-evaluations/${encodeURIComponent(
+          currentJobId
+        )}/results?limit=25${
+          resultCursor ? `&cursor=${encodeURIComponent(resultCursor)}` : ""
+        }`
+      ),
+    enabled: Boolean(currentJob && TERMINAL_STATUSES.has(currentJob.status)),
+  });
+
+  useEffect(() => {
+    const profiles = profilesQuery.data?.items ?? [];
+    if (!profileId && profiles.length > 0) setProfileId(profiles[0].id);
+  }, [profileId, profilesQuery.data]);
+
+  useEffect(() => {
+    setResultCursor(null);
+    setResultCursorHistory([]);
+  }, [currentJobId]);
+
+  useEffect(() => {
+    if (currentJob && TERMINAL_STATUSES.has(currentJob.status)) {
+      void queryClient.invalidateQueries({ queryKey: ["quality-evaluations", "jobs"] });
+    }
+  }, [currentJob?.status, currentJob?.job_id, queryClient]);
+
+  const startMutation = useMutation({
+    mutationFn: async () => {
+      if (!file) throw new Error(t("qualityEvaluation.file.required"));
+      const form = new FormData();
+      form.append("profile_id", profileId);
+      for (const engine of engines) form.append("engines", engine);
+      form.append("repeat_count", String(repeatCount));
+      form.append("file", file);
+      return apiPostForm<QualityEvaluationJobSummary>(
+        "/api/nl2sql/quality-evaluations",
+        form
+      );
+    },
+    onSuccess: (job) => {
+      setStartError("");
+      queryClient.setQueryData(["quality-evaluations", "job", job.job_id], job);
+      void queryClient.invalidateQueries({ queryKey: ["quality-evaluations", "jobs"] });
+      const next = new URLSearchParams(searchParams);
+      next.set("job", job.job_id);
+      setSearchParams(next, { replace: true });
+      toast.success(t("qualityEvaluation.notice.started"));
+    },
+    onError: (cause) => {
+      setStartError(qualityEvaluationStartErrorMessage(cause));
+    },
+  });
+
+  const deleteJobMutation = useMutation({
+    mutationFn: (job: QualityEvaluationJobSummary) =>
+      apiDelete<QualityEvaluationJobSummary>(
+        `/api/nl2sql/quality-evaluations/${encodeURIComponent(job.job_id)}`
+      ),
+    onSuccess: (deleted) => {
+      void queryClient.invalidateQueries({ queryKey: ["quality-evaluations", "jobs"] });
+      queryClient.removeQueries({ queryKey: ["quality-evaluations", "job", deleted.job_id] });
+      queryClient.removeQueries({
+        queryKey: ["quality-evaluations", "results", deleted.job_id],
+      });
+      if (deleted.job_id === currentJobId) {
+        const next = new URLSearchParams(searchParams);
+        next.delete("job");
+        setSearchParams(next, { replace: true });
+        setResultCursor(null);
+        setResultCursorHistory([]);
+      }
+      toast.success(t("qualityEvaluation.notice.deleted"));
+    },
+    onError: () => {
+      toastError(t("qualityEvaluation.error.delete"));
+    },
+  });
+  const cancelJobMutation = useMutation({
+    mutationFn: (job: QualityEvaluationJobSummary) =>
+      apiPost<QualityEvaluationJobSummary>(
+        `/api/nl2sql/quality-evaluations/${encodeURIComponent(job.job_id)}/cancel`
+      ),
+    onSuccess: (cancelled) => {
+      queryClient.setQueryData(["quality-evaluations", "job", cancelled.job_id], cancelled);
+      void queryClient.invalidateQueries({ queryKey: ["quality-evaluations", "jobs"] });
+      void queryClient.invalidateQueries({
+        queryKey: ["quality-evaluations", "results", cancelled.job_id],
+      });
+      toast.success(t("qualityEvaluation.notice.cancelled"));
+    },
+    onError: () => {
+      toastError(t("qualityEvaluation.error.cancel"));
+    },
+  });
+
+  const capabilities = capabilitiesQuery.data;
+  const selectedCapabilities = useMemo(
+    () =>
+      capabilities?.engines.filter((item) => engines.includes(item.engine)) ?? [],
+    [capabilities?.engines, engines]
+  );
+  const availableEngineIds = useMemo(
+    () =>
+      (capabilities?.engines ?? [])
+        .filter((capability) => capability.available)
+        .map((capability) => capability.engine),
+    [capabilities?.engines]
+  );
+  const selectedAvailableEngineCount = availableEngineIds.filter((engine) =>
+    engines.includes(engine)
+  ).length;
+  const selectedUnavailable = selectedCapabilities.some((item) => !item.available);
+  const running = Boolean(currentJob && ACTIVE_STATUSES.has(currentJob.status));
+  const conditionsLocked = running || startMutation.isPending;
+  const pageLoading = capabilitiesQuery.isLoading || profilesQuery.isLoading;
+  const pageError = capabilitiesQuery.error || profilesQuery.error;
+
+  const validate = () => {
+    const codes = validateQualityEvaluationInput({
+      profileId,
+      file,
+      engines,
+      repeatCount,
+      maxFileBytes: capabilities?.limits.max_file_bytes ?? 10 * 1024 * 1024,
+      capabilities: capabilities?.engines ?? [],
+    });
+    const next: FormErrors = Object.fromEntries(
+      Object.entries(codes).map(([field, code]) => [
+        field,
+        validationMessage(code as QualityEvaluationValidationCode, capabilities),
+      ])
+    );
+    setFormErrors(next);
+    return Object.keys(next).length === 0;
+  };
+
+  const startEvaluation = () => {
+    if (conditionsLocked) return;
+    clearNotice();
+    setStartError("");
+    if (validate()) startMutation.mutate();
+  };
+
+  const toggleEngine = (engine: QualityEvaluationEngine) => {
+    setEngines((current) => toggleQualityEvaluationEngine(current, engine));
+    setFormErrors((current) => ({ ...current, engines: undefined }));
+  };
+  const selectAllEngines = () => {
+    setEngines((current) => [...new Set([...current, ...availableEngineIds])]);
+    setFormErrors((current) => ({ ...current, engines: undefined }));
+  };
+  const clearAllEngines = () => {
+    const availableEngineSet = new Set(availableEngineIds);
+    setEngines((current) => current.filter((engine) => !availableEngineSet.has(engine)));
+    setFormErrors((current) => ({ ...current, engines: undefined }));
+  };
+
+  const openJob = (jobId: string) => {
+    const next = new URLSearchParams(searchParams);
+    next.set("job", jobId);
+    setSearchParams(next);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const deleteJob = async (job: QualityEvaluationJobSummary) => {
+    if (!TERMINAL_STATUSES.has(job.status)) return;
+    const confirmed = await confirm({
+      title: t("qualityEvaluation.confirm.delete.title"),
+      description: t("qualityEvaluation.confirm.delete.description", {
+        job: profileRecordDisplayLabel(job),
+        createdAt: formatDate(job.created_at),
+      }),
+      confirmLabel: t("qualityEvaluation.action.delete"),
+      tone: "danger",
+    });
+    if (!confirmed) return;
+    deleteJobMutation.mutate(job);
+  };
+
+  const cancelJob = async (job: QualityEvaluationJobSummary) => {
+    if (!ACTIVE_STATUSES.has(job.status)) return;
+    const confirmed = await confirm({
+      title: t("qualityEvaluation.confirm.cancel.title"),
+      description: t("qualityEvaluation.confirm.cancel.description"),
+      confirmLabel: t("qualityEvaluation.confirm.cancel.confirm"),
+      tone: "danger",
+    });
+    if (!confirmed) return;
+    cancelJobMutation.mutate(job);
+  };
+
+  const downloadFile = async (path: string, fallbackName: string) => {
+    setDownloading(true);
+    try {
+      const response = await apiFetch(path);
+      if (!response.ok) throw new Error(t("qualityEvaluation.error.download"));
+      const blob = await response.blob();
+      const filename = downloadFilename(response, fallbackName);
+      downloadBlob(filename, blob);
+      toast.success(t("qualityEvaluation.notice.downloaded"));
+    } catch (cause) {
+      showNotice(
+        "danger",
+        cause instanceof Error ? cause.message : t("qualityEvaluation.error.download")
+      );
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  return (
+    <>
+      <PageHeader wide title={t("nav.evaluation")} subtitle={t("qualityEvaluation.subtitle")} />
+      <PageBody wide className="grid min-w-0 gap-4 lg:gap-6">
+        <PageNotice notice={notice} onDismiss={clearNotice} />
+        {pageError ? (
+          <ErrorState
+            message={t("qualityEvaluation.error.load")}
+            onRetry={() => {
+              void capabilitiesQuery.refetch();
+              void profilesQuery.refetch();
+            }}
+          />
+        ) : null}
+
+        <section className={sectionClass} aria-labelledby="quality-evaluation-conditions">
+          <SectionHeader
+            icon={FileSpreadsheet}
+            id="quality-evaluation-conditions"
+            title={t("qualityEvaluation.conditions.title")}
+            description={t("qualityEvaluation.conditions.description")}
+          />
+          {pageLoading ? (
+            <LoadingState label={t("common.loading")} placement="panel" />
+          ) : pageError ? null : (
+            <form
+              className="grid min-w-0 gap-5"
+              aria-label={t("qualityEvaluation.conditions.title")}
+              noValidate
+              onSubmit={(event) => {
+                event.preventDefault();
+                startEvaluation();
+              }}
+            >
+              {capabilities && !capabilities.judge.available ? (
+                <Banner
+                  severity="warning"
+                  title={t("qualityEvaluation.judge.unavailableTitle")}
+                >
+                  {capabilities?.judge.reason}
+                </Banner>
+              ) : null}
+
+              <div
+                className="grid min-w-0 gap-4 lg:grid-cols-2 lg:items-start"
+                data-testid="quality-evaluation-input-row"
+              >
+                <div
+                  className="grid min-w-0 content-start gap-1.5 text-sm font-medium text-fg"
+                  data-testid="quality-evaluation-profile-field"
+                >
+                  <FieldLabel
+                    htmlFor="quality-evaluation-profile"
+                    label={t("qualityEvaluation.profile.label")}
+                    required
+                  />
+                  <select
+                    id="quality-evaluation-profile"
+                    required
+                    className={controlClass}
+                    value={profileId}
+                    onChange={(event) => {
+                      setProfileId(event.currentTarget.value);
+                      setFormErrors((current) => ({ ...current, profile: undefined }));
+                    }}
+                    aria-invalid={Boolean(formErrors.profile)}
+                    aria-describedby={formErrors.profile ? "quality-profile-error" : undefined}
+                    disabled={conditionsLocked}
+                  >
+                    <option value="">{t("qualityEvaluation.profile.placeholder")}</option>
+                    {(profilesQuery.data?.items ?? [])
+                      .filter((profile) => !profile.archived)
+                      .map((profile) => (
+                        <option key={profile.id} value={profile.id}>
+                          {profileDisplayLabel(profile)}
+                        </option>
+                      ))}
+                  </select>
+                  <FieldError id="quality-profile-error" message={formErrors.profile} />
+                </div>
+
+                <div className="grid min-w-0 content-start gap-2">
+                  <FileDropzone
+                    label={t("qualityEvaluation.file.label")}
+                    accept={XLSX_TEMPLATE_FILE_FORMATS.accept}
+                    formatLabel={XLSX_TEMPLATE_FILE_FORMATS.formatLabel}
+                    selectedText={
+                      file ? t("qualityEvaluation.file.selected", { name: file.name }) : ""
+                    }
+                    hint={t("qualityEvaluation.file.hint")}
+                    errorText={formErrors.file}
+                    icon="spreadsheet"
+                    required
+                    disabled={conditionsLocked}
+                    dataTestId="quality-evaluation-file"
+                    onReject={(reason) =>
+                      setFormErrors((current) => ({
+                        ...current,
+                        file:
+                          reason === "multiple-files"
+                            ? t("common.fileDropzone.error.multiple", {
+                                formats: XLSX_TEMPLATE_FILE_FORMATS.formatLabel,
+                              })
+                            : t("qualityEvaluation.file.invalidExtension"),
+                      }))
+                    }
+                    onFiles={([selectedFile]) => {
+                      setFile(selectedFile);
+                      setFormErrors((current) => ({ ...current, file: undefined }));
+                    }}
+                  />
+                  <div>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="secondary"
+                      disabled={downloading}
+                      onClick={() =>
+                        void downloadFile(
+                          "/api/nl2sql/quality-evaluations/template.xlsx",
+                          "nl2sql_quality_evaluation_template.xlsx"
+                        )
+                      } icon={Download}>
+                      {t("qualityEvaluation.template.download")}
+                    </Button>
+                  </div>
+                </div>
+              </div>
+
+              <fieldset
+                className="grid min-w-0 gap-3 border-t border-border pt-4"
+                disabled={conditionsLocked}
+                aria-describedby="quality-engines-hint quality-engines-error"
+                data-testid="quality-evaluation-engine-fieldset"
+              >
+                <legend className="sr-only">{t("qualityEvaluation.engines.label")}</legend>
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold text-fg">
+                    {t("qualityEvaluation.engines.label")}
+                  </div>
+                  <p id="quality-engines-hint" className="mt-1 text-xs leading-5 text-fg-muted">
+                    {t("qualityEvaluation.engines.hint")}
+                  </p>
+                </div>
+                {availableEngineIds.length > 0 ? (
+                  <BulkSelectionActions
+                    selectLabel={t("common.selection.selectAll")}
+                    clearLabel={t("common.selection.clearAll")}
+                    selectDisabled={
+                      conditionsLocked || selectedAvailableEngineCount === availableEngineIds.length
+                    }
+                    clearDisabled={conditionsLocked || selectedAvailableEngineCount === 0}
+                    dataTestId="quality-evaluation-engine-selection-actions"
+                    onSelectAll={selectAllEngines}
+                    onClearAll={clearAllEngines}
+                  />
+                ) : null}
+                <div
+                  className="grid min-w-0 gap-3 md:grid-cols-3"
+                  data-testid="quality-evaluation-engine-grid"
+                >
+                  {(capabilities?.engines ?? []).map((capability) => {
+                    const selected = engines.includes(capability.engine);
+                    return (
+                      <label
+                        key={capability.engine}
+                        className={`grid min-h-[6.75rem] min-w-0 content-start gap-2 rounded-md border p-4 outline-none transition focus-within:ring-2 focus-within:ring-focus-ring ${
+                          capability.available
+                            ? selected
+                              ? "border-accent-emphasis bg-accent-subtle"
+                              : "border-border bg-surface-sunken hover:border-accent-emphasis"
+                            : "cursor-not-allowed border-border bg-surface-hover opacity-70"
+                        }`}
+                      >
+                        <span className="flex min-w-0 items-start gap-3">
+                          <input
+                            type="checkbox"
+                            className="mt-0.5 size-4 accent-accent-emphasis"
+                            checked={selected}
+                            disabled={!capability.available || conditionsLocked}
+                            onChange={() => toggleEngine(capability.engine)}
+                          />
+                          <span className="min-w-0">
+                            <span className="block font-semibold text-fg">
+                              {capability.label}
+                            </span>
+                            {!capability.available ? (
+                              <span className="mt-1 block text-xs leading-5 text-fg-muted">
+                                {capability.reason}
+                              </span>
+                            ) : (
+                              <span className="mt-1 block text-xs text-fg-muted">
+                                {t("qualityEvaluation.engines.strict")}
+                              </span>
+                            )}
+                          </span>
+                        </span>
+                        {!capability.available ? (
+                          <StatusBadge
+                            variant="warning"
+                            label={t("qualityEvaluation.engines.unavailable")}
+                            className="justify-self-start"
+                          />
+                        ) : null}
+                      </label>
+                    );
+                  })}
+                </div>
+                <FieldError id="quality-engines-error" message={formErrors.engines} />
+              </fieldset>
+
+              <div
+                className="grid min-w-0 gap-3 border-t border-border pt-4 lg:grid-cols-[minmax(13rem,20rem)_minmax(0,1fr)] lg:items-start"
+                data-testid="quality-evaluation-run-summary"
+              >
+                <label
+                  className="grid gap-1.5 text-sm font-medium text-fg"
+                  data-testid="quality-evaluation-repeat-field"
+                >
+                  <span data-testid="quality-evaluation-repeat-label">
+                    {t("qualityEvaluation.repeat.label")}
+                  </span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={10}
+                    step={1}
+                    inputMode="numeric"
+                    className={controlClass}
+                    value={repeatCount}
+                    disabled={conditionsLocked}
+                    aria-invalid={Boolean(formErrors.repeat)}
+                    aria-describedby="quality-repeat-hint quality-repeat-error"
+                    onChange={(event) => {
+                      setRepeatCount(Number(event.currentTarget.value));
+                      setFormErrors((current) => ({ ...current, repeat: undefined }));
+                    }}
+                  />
+                  <span id="quality-repeat-hint" className="text-xs font-normal text-fg-muted">
+                    {t("qualityEvaluation.repeat.hint")}
+                  </span>
+                  <FieldError id="quality-repeat-error" message={formErrors.repeat} />
+                </label>
+                <div
+                  className="grid min-w-0 content-start gap-1.5 text-sm"
+                  data-testid="quality-evaluation-estimate-summary"
+                >
+                  <div
+                    className="font-medium text-fg"
+                    data-testid="quality-evaluation-estimate-label"
+                  >
+                    {t("qualityEvaluation.estimate.title")}
+                  </div>
+                  <p
+                    className="flex min-h-11 min-w-0 items-center break-words leading-6 text-fg-muted"
+                    data-testid="quality-evaluation-estimate-value"
+                  >
+                    {currentJob
+                      ? t("qualityEvaluation.estimate.confirmed", {
+                          generations: currentJob.total_attempts,
+                          analyses: currentJob.total_attempts,
+                        })
+                      : t("qualityEvaluation.estimate.formula", {
+                          engines: engines.length,
+                          repeats: repeatCount || 0,
+                        })}
+                  </p>
+                </div>
+              </div>
+
+              <div data-testid="quality-evaluation-judge-note">
+                <Banner severity="info">{t("qualityEvaluation.judge.note")}</Banner>
+              </div>
+              <div
+                className="grid min-w-0 justify-items-end gap-2 border-t border-border pt-4"
+                data-testid="quality-evaluation-action-footer"
+              >
+                <Button
+                  type="submit"
+                  size="lg"
+                  variant="primary"
+                  loading={startMutation.isPending}
+                  disabled={
+                    running ||
+                    startMutation.isPending ||
+                    !capabilities?.judge.available ||
+                    selectedUnavailable
+                  } icon={Play}>
+                  {t("qualityEvaluation.action.start")}
+                </Button>
+                <FormStatus
+                  tone="danger"
+                  message={startError}
+                  className="w-full justify-self-stretch"
+                />
+              </div>
+            </form>
+          )}
+        </section>
+
+        <div className="grid min-w-0 gap-4 lg:grid-cols-2 lg:items-start lg:gap-6">
+          <section className={sectionClass} aria-labelledby="quality-evaluation-progress">
+            <SectionHeader
+              icon={Play}
+              id="quality-evaluation-progress"
+              title={t("qualityEvaluation.progress.title")}
+              description={t("qualityEvaluation.progress.description")}
+            />
+            <div>
+              {!currentJobId ? (
+                <EmptyState
+                  title={t("qualityEvaluation.progress.emptyTitle")}
+                  hint={t("qualityEvaluation.progress.emptyHint")}
+                />
+              ) : currentJobQuery.isLoading ? (
+                <LoadingState label={t("common.loading")} placement="job" />
+              ) : currentJobQuery.isError || !currentJob ? (
+                <ErrorState
+                  message={t("qualityEvaluation.error.load")}
+                  onRetry={() => void currentJobQuery.refetch()}
+                />
+              ) : (
+                <JobProgress
+                  job={currentJob}
+                  onCancel={cancelJob}
+                  cancelling={
+                    cancelJobMutation.isPending &&
+                    cancelJobMutation.variables?.job_id === currentJob.job_id
+                  }
+                />
+              )}
+            </div>
+          </section>
+
+          <section className={sectionClass} aria-labelledby="quality-evaluation-summary">
+            <SectionHeader
+              icon={BarChart3}
+              id="quality-evaluation-summary"
+              title={t("qualityEvaluation.summary.title")}
+              description={t("qualityEvaluation.summary.description")}
+              action={
+                currentJob && TERMINAL_STATUSES.has(currentJob.status) ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    loading={downloading}
+                    onClick={() =>
+                      void downloadFile(
+                        `/api/nl2sql/quality-evaluations/${encodeURIComponent(
+                          currentJob.job_id
+                        )}/results.xlsx`,
+                        "nl2sql_quality_evaluation.xlsx"
+                      )
+                    } icon={Download}>
+                    {t("qualityEvaluation.action.download")}
+                  </Button>
+                ) : null
+              }
+            />
+            <div>
+              {!currentJob || !TERMINAL_STATUSES.has(currentJob.status) ? (
+                <EmptyState
+                  title={t("qualityEvaluation.summary.waitingTitle")}
+                  hint={t("qualityEvaluation.summary.waitingHint")}
+                />
+              ) : currentJob.engine_summaries.length === 0 ? (
+                <EmptyState
+                  title={t("qualityEvaluation.details.emptyTitle")}
+                  hint={currentJob.error_message || t("qualityEvaluation.details.emptyHint")}
+                />
+              ) : (
+                <div className="grid min-w-0 gap-3 xl:grid-cols-2">
+                  {currentJob.engine_summaries.map((summary) => (
+                    <EngineSummaryCard key={summary.engine} summary={summary} />
+                  ))}
+                </div>
+              )}
+            </div>
+          </section>
+        </div>
+
+        <section className={sectionClass} aria-labelledby="quality-evaluation-details">
+          <SectionHeader
+            icon={CheckCircle2}
+            id="quality-evaluation-details"
+            title={t("qualityEvaluation.details.title")}
+            description={t("qualityEvaluation.details.description")}
+          />
+          <div>
+            {!currentJob || !TERMINAL_STATUSES.has(currentJob.status) ? (
+              <EmptyState
+                title={t("qualityEvaluation.details.emptyTitle")}
+                hint={t("qualityEvaluation.details.emptyHint")}
+              />
+            ) : resultsQuery.isLoading ? (
+              <LoadingState label={t("common.loading")} placement="result" />
+            ) : resultsQuery.isError ? (
+              <ErrorState
+                message={t("qualityEvaluation.error.load")}
+                onRetry={() => void resultsQuery.refetch()}
+              />
+            ) : !resultsQuery.data?.items.length ? (
+              <EmptyState
+                title={t("qualityEvaluation.details.emptyTitle")}
+                hint={currentJob.error_message || t("qualityEvaluation.details.emptyHint")}
+              />
+            ) : (
+              <>
+                <ResultTable results={resultsQuery.data.items} />
+                <Pagination
+                  canGoPrevious={resultCursorHistory.length > 0}
+                  canGoNext={Boolean(resultsQuery.data.next_cursor)}
+                  onPrevious={() => {
+                    const history = [...resultCursorHistory];
+                    setResultCursor(history.pop() ?? null);
+                    setResultCursorHistory(history);
+                  }}
+                  onNext={() => {
+                    setResultCursorHistory((history) => [...history, resultCursor]);
+                    setResultCursor(resultsQuery.data?.next_cursor ?? null);
+                  }}
+                />
+              </>
+            )}
+          </div>
+        </section>
+
+        <section className={sectionClass} aria-labelledby="quality-evaluation-recent">
+          <SectionHeader
+            icon={FileSpreadsheet}
+            id="quality-evaluation-recent"
+            title={t("qualityEvaluation.recent.title")}
+            description={t("qualityEvaluation.recent.description")}
+          />
+          <div>
+            {recentJobsQuery.isLoading ? (
+              <LoadingState label={t("common.loading")} placement="panel" />
+            ) : recentJobsQuery.isError ? (
+              <ErrorState
+                message={t("qualityEvaluation.error.load")}
+                onRetry={() => void recentJobsQuery.refetch()}
+              />
+            ) : (
+              <>
+                {recentJobs.length === 0 ? (
+                  <EmptyState
+                    title={t("qualityEvaluation.recent.emptyTitle")}
+                    hint={t("qualityEvaluation.recent.emptyHint")}
+                  />
+                ) : (
+                  <div
+                    className="grid max-h-[17.5rem] min-w-0 gap-2 overflow-auto pr-1 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    role="region"
+                    aria-label={t("qualityEvaluation.recent.scrollRegion")}
+                    tabIndex={0}
+                    data-testid="quality-evaluation-recent-jobs-scroll-region"
+                  >
+                    {recentJobs.map((job) => (
+                      <article
+                        key={job.job_id}
+                        className={`grid min-w-0 gap-3 rounded-lg border p-4 md:grid-cols-[1fr_auto] md:items-center ${
+                          job.job_id === currentJobId
+                            ? "border-accent-emphasis bg-accent-subtle"
+                            : "border-border bg-surface-sunken"
+                        }`}
+                      >
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-semibold text-fg">
+                              {profileRecordDisplayLabel(job)}
+                            </span>
+                            <StatusBadge
+                              variant={statusVariant(job.status)}
+                              label={statusLabel(job.status)}
+                            />
+                          </div>
+                          <p className="mt-1 break-words text-xs text-fg-muted">
+                            {formatDate(job.created_at)} ·{" "}
+                            {t("qualityEvaluation.recent.meta", {
+                              cases: job.case_count,
+                              attempts: job.total_attempts,
+                            })}
+                          </p>
+                        </div>
+                        <div className="flex shrink-0 flex-wrap justify-end gap-2">
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="secondary"
+                            onClick={() => openJob(job.job_id)}
+                          >
+                            {t("qualityEvaluation.action.view")}
+                          </Button>
+                          {/* 中止・削除は行内に並べず、行メニューにまとめる（docs/frontend-button-spec.md §5.1）。 */}
+                          <RowActionMenu
+                            ariaLabel={t("qualityEvaluation.action.rowActions", { job: profileRecordDisplayLabel(job) })}
+                            testId={`quality-evaluation-job-actions-${job.job_id}`}
+                            loading={
+                              (cancelJobMutation.isPending && cancelJobMutation.variables?.job_id === job.job_id) ||
+                              (deleteJobMutation.isPending && deleteJobMutation.variables?.job_id === job.job_id)
+                            }
+                            actions={[
+                              {
+                                id: "cancel",
+                                label: t("qualityEvaluation.action.cancel"),
+                                ariaLabel: t("qualityEvaluation.action.cancelJob", { job: profileRecordDisplayLabel(job) }),
+                                icon: CircleStop,
+                                tone: "danger",
+                                visible: ACTIVE_STATUSES.has(job.status),
+                                disabled: cancelJobMutation.isPending,
+                                onSelect: () => cancelJob(job),
+                              },
+                              {
+                                id: "delete",
+                                label: t("qualityEvaluation.action.delete"),
+                                ariaLabel: TERMINAL_STATUSES.has(job.status)
+                                  ? t("qualityEvaluation.action.deleteJob", { job: profileRecordDisplayLabel(job) })
+                                  : t("qualityEvaluation.action.deleteDisabled"),
+                                icon: Trash2,
+                                tone: "danger",
+                                disabled: !TERMINAL_STATUSES.has(job.status) || deleteJobMutation.isPending,
+                                onSelect: () => deleteJob(job),
+                              },
+                            ]}
+                          />
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                )}
+                {showRecentJobsPagination ? (
+                  <Pagination
+                    canGoPrevious={jobCursorHistory.length > 0}
+                    canGoNext={Boolean(recentJobsQuery.data?.next_cursor)}
+                    onPrevious={() => {
+                      const history = [...jobCursorHistory];
+                      setJobCursor(history.pop() ?? null);
+                      setJobCursorHistory(history);
+                    }}
+                    onNext={() => {
+                      setJobCursorHistory((history) => [...history, jobCursor]);
+                      setJobCursor(recentJobsQuery.data?.next_cursor ?? null);
+                    }}
+                  />
+                ) : null}
+              </>
+            )}
+          </div>
+        </section>
+      </PageBody>
+    </>
+  );
+}
+
+function SectionHeader({
+  icon: Icon,
+  id,
+  title,
+  description,
+  action,
+}: {
+  icon: typeof FileSpreadsheet;
+  id: string;
+  title: string;
+  description: string;
+  action?: React.ReactNode;
+}) {
+  return (
+    <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+      <div className="flex min-w-0 items-start gap-3">
+        <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-accent-subtle text-accent-fg">
+          <Icon className="size-5" aria-hidden="true" />
+        </span>
+        <div className="min-w-0">
+          <h2 id={id} className="text-base font-semibold text-fg">
+            {title}
+          </h2>
+          <p className="mt-1 text-sm leading-6 text-fg-muted">{description}</p>
+        </div>
+      </div>
+      {action ? <div className="shrink-0">{action}</div> : null}
+    </div>
+  );
+}
+
+function JobProgress({
+  job,
+  onCancel,
+  cancelling = false,
+}: {
+  job: QualityEvaluationJobSummary;
+  onCancel?: (job: QualityEvaluationJobSummary) => void | Promise<void>;
+  cancelling?: boolean;
+}) {
+  const active = ACTIVE_STATUSES.has(job.status);
+  const attemptTimeoutSeconds = Math.round(Math.max(1, job.attempt_timeout_seconds || 0));
+  const lastHeartbeatMs = qualityEvaluationLastHeartbeatMs(job);
+  const lastHeartbeatLabel =
+    lastHeartbeatMs === null
+      ? t("qualityEvaluation.progress.heartbeatMissing")
+      : formatDate(job.heartbeat_at ?? "");
+  const attemptTimedOut = qualityEvaluationAttemptTimedOut(job);
+  const leaseExpired = qualityEvaluationLeaseExpired(job);
+  const percentage = job.total_attempts
+    ? Math.round((job.completed_attempts / job.total_attempts) * 100)
+    : 0;
+  return (
+    <div className="grid min-w-0 gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <StatusBadge variant={statusVariant(job.status)} label={statusLabel(job.status)} />
+          <span className="text-sm font-semibold tabular-nums text-fg">
+            {t("qualityEvaluation.progress.count", {
+              completed: job.completed_attempts,
+              total: job.total_attempts,
+            })}
+          </span>
+        </div>
+        {active && onCancel ? (
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            tone="danger"
+            loading={cancelling}
+            disabled={cancelling}
+            onClick={() => void onCancel(job)} icon={CircleStop}>
+            {t("qualityEvaluation.action.cancel")}
+          </Button>
+        ) : null}
+      </div>
+      <ProcessingIndicator
+        active={active}
+        operationKey={job.job_id}
+        startedAt={job.started_at ?? job.created_at}
+        finishedAt={job.finished_at}
+        label={t("qualityEvaluation.progress.processing")}
+        finalLabel={statusLabel(job.status)}
+        showSlowMessage={active}
+        placement="job"
+        testId="quality-evaluation-timing"
+      />
+      <div
+        className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-fg-muted"
+        data-testid="quality-evaluation-job-diagnostics"
+      >
+        <span>
+          {t("qualityEvaluation.progress.lastHeartbeat")}{" "}
+          <span className="font-medium text-fg">{lastHeartbeatLabel}</span>
+        </span>
+        <span>
+          {t("qualityEvaluation.progress.attemptTimeout")}{" "}
+          <span className="font-medium text-fg">
+            {t("qualityEvaluation.progress.timeoutSeconds", {
+              seconds: attemptTimeoutSeconds,
+            })}
+          </span>
+        </span>
+      </div>
+      {attemptTimedOut ? (
+        <div role="status" aria-live="polite">
+          <Banner
+            severity="warning"
+            title={t("qualityEvaluation.progress.attemptTimedOutTitle")}
+          >
+            {t("qualityEvaluation.progress.attemptTimedOutHint", {
+              seconds: attemptTimeoutSeconds,
+            })}
+          </Banner>
+        </div>
+      ) : leaseExpired ? (
+        <div role="status" aria-live="polite">
+          <Banner severity="warning" title={t("qualityEvaluation.progress.leaseExpiredTitle")}>
+            {t("qualityEvaluation.progress.leaseExpiredHint")}
+          </Banner>
+        </div>
+      ) : null}
+      <div
+        className="h-2 overflow-hidden rounded-full bg-surface-hover"
+        role="progressbar"
+        aria-valuemin={0}
+        aria-valuemax={job.total_attempts}
+        aria-valuenow={job.completed_attempts}
+        aria-label={t("qualityEvaluation.progress.title")}
+      >
+        <div
+          className="h-full rounded-full bg-accent-emphasis transition-[width] duration-300"
+          style={{ width: `${percentage}%` }}
+        />
+      </div>
+      <dl className="grid min-w-0 gap-2 sm:grid-cols-2 xl:grid-cols-5">
+        <Metric
+          label={t("qualityEvaluation.progress.currentCase")}
+          value={job.current_case_id || "-"}
+        />
+        <Metric
+          label={t("qualityEvaluation.progress.currentEngine")}
+          value={job.current_engine ? engineLabel(job.current_engine) : "-"}
+        />
+        <Metric
+          label={t("qualityEvaluation.progress.currentRepeat")}
+          value={job.current_repetition ? `${job.current_repetition} / ${job.repeat_count}` : "-"}
+        />
+        <Metric
+          label={t("qualityEvaluation.progress.success")}
+          value={String(job.success_count)}
+        />
+        <Metric
+          label={t("qualityEvaluation.progress.errors")}
+          value={String(job.error_count)}
+          danger={job.error_count > 0}
+        />
+      </dl>
+      {job.error_message ? (
+        <div role="status" aria-live="polite">
+          <Banner
+            severity={job.status === "cancelled" ? "info" : "danger"}
+            title={statusLabel(job.status)}
+          >
+            {job.error_message}
+          </Banner>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function Metric({ label, value, danger = false }: { label: string; value: string; danger?: boolean }) {
+  return (
+    <div className="min-w-0 rounded-lg border border-border bg-surface-hover p-3">
+      <dt className="text-xs text-fg-muted">{label}</dt>
+      <dd className={`mt-1 break-words text-sm font-semibold ${danger ? "text-danger-fg" : "text-fg"}`}>
+        {value}
+      </dd>
+    </div>
+  );
+}
+
+function EngineSummaryCard({ summary }: { summary: QualityEvaluationEngineSummary }) {
+  return (
+    <article className="grid min-w-0 gap-4 rounded-lg border border-border bg-surface-sunken p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="font-semibold text-fg">{engineLabel(summary.engine)}</h3>
+        <StatusBadge
+          variant={summary.error_count ? "warning" : "success"}
+          label={t("qualityEvaluation.summary.errors", { count: summary.error_count })}
+        />
+      </div>
+      <dl className="grid grid-cols-2 gap-2">
+        <Metric
+          label={t("qualityEvaluation.summary.successRate")}
+          value={formatPercent(summary.generation_success_rate)}
+        />
+        <Metric
+          label={t("qualityEvaluation.summary.consistency")}
+          value={formatPercent(summary.normalized_sql_consistency)}
+        />
+      </dl>
+      <div>
+        <div className="text-xs font-medium text-fg-muted">
+          {t("qualityEvaluation.summary.verdicts")}
+        </div>
+        <div className="mt-2 flex flex-wrap gap-2">
+          <VerdictBadge verdict="correct" count={summary.correct} />
+          <VerdictBadge verdict="incorrect" count={summary.incorrect} />
+          <VerdictBadge verdict="uncertain" count={summary.uncertain} />
+          <VerdictBadge verdict="not_analyzed" count={summary.not_analyzed} />
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function ResultTable({ results }: { results: QualityEvaluationResult[] }) {
+  return (
+    <>
+      <DataTable
+        columns={[
+          {
+            key: "case",
+            header: t("qualityEvaluation.details.case"),
+            className: "max-w-56 py-3 align-top",
+            render: (result) => (
+              <>
+                <div className="font-semibold text-fg">{result.case_id}</div>
+                <QuestionText value={result.question} variant="compact" maxLines={2} className="mt-1 text-fg-muted" />
+              </>
+            ),
+          },
+          {
+            key: "engine",
+            header: t("qualityEvaluation.details.engine"),
+            className: "py-3 align-top",
+            render: (result) => (
+              <>
+                <div className="font-medium text-fg">{engineLabel(result.engine)}</div>
+                <div className="mt-1 text-fg-muted">#{result.repetition_no}</div>
+              </>
+            ),
+          },
+          {
+            key: "expectedSql",
+            header: t("qualityEvaluation.details.expectedSql"),
+            className: "max-w-72 py-3 align-top",
+            render: (result) => <SqlBlock sql={result.expected_sql} />,
+          },
+          {
+            key: "generatedSql",
+            header: t("qualityEvaluation.details.generatedSql"),
+            className: "max-w-72 py-3 align-top",
+            render: (result) => <SqlBlock sql={result.generated_sql} error={result.generation_error} />,
+          },
+          {
+            key: "judgement",
+            header: t("qualityEvaluation.details.judgement"),
+            className: "max-w-64 py-3 align-top",
+            render: (result) => <ResultJudgement result={result} showAnalysis={false} />,
+          },
+          {
+            key: "elapsed",
+            header: t("qualityEvaluation.details.elapsed"),
+            className: "whitespace-nowrap py-3 align-top text-fg-muted",
+            render: (result) => `${result.total_elapsed_ms} ms`,
+          },
+        ]}
+        rows={results}
+        getRowKey={(result) => result.result_id}
+        renderRowDetail={(result) =>
+          hasResultAnalysis(result) ? (
+            <div className="pb-2">
+              <ResultAnalysisDetails result={result} />
+            </div>
+          ) : null
+        }
+        tableClassName="w-full min-w-[74rem]"
+        className="hidden max-h-[30.5rem] rounded-lg md:block"
+        scrollAriaLabel={t("qualityEvaluation.details.scrollRegion")}
+        scrollTestId="quality-evaluation-results-table"
+        stickyHeader
+      />
+      <div
+        className="grid max-h-[37.5rem] min-w-0 gap-3 overflow-auto pr-1 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring md:hidden"
+        role="region"
+        aria-label={t("qualityEvaluation.details.scrollRegion")}
+        tabIndex={0}
+        data-testid="quality-evaluation-results-cards-scroll-region"
+      >
+        {results.map((result) => (
+          <article key={result.result_id} className="grid min-w-0 gap-3 rounded-lg border border-border p-4">
+            <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
+              <div className="min-w-0">
+                <h3 className="break-words font-semibold text-fg">{result.case_id}</h3>
+                <QuestionText
+                  value={result.question}
+                  variant="compact"
+                  maxLines={2}
+                  className="mt-1 text-fg-muted"
+                />
+              </div>
+              <VerdictBadge verdict={result.verdict} />
+            </div>
+            <div className="text-xs font-medium text-fg-muted">
+              {engineLabel(result.engine)} / #{result.repetition_no} / {result.total_elapsed_ms} ms
+            </div>
+            <div>
+              <div className="mb-1 text-xs font-medium text-fg-muted">
+                {t("qualityEvaluation.details.expectedSql")}
+              </div>
+              <SqlBlock sql={result.expected_sql} />
+            </div>
+            <div>
+              <div className="mb-1 text-xs font-medium text-fg-muted">
+                {t("qualityEvaluation.details.generatedSql")}
+              </div>
+              <SqlBlock sql={result.generated_sql} error={result.generation_error} />
+            </div>
+            <ResultJudgement result={result} />
+          </article>
+        ))}
+      </div>
+    </>
+  );
+}
+
+function ResultJudgement({
+  result,
+  showAnalysis = true,
+}: {
+  result: QualityEvaluationResult;
+  showAnalysis?: boolean;
+}) {
+  const hasAnalysis = hasResultAnalysis(result);
+  return (
+    <div className="grid min-w-0 gap-2">
+      <ResultJudgementSummary result={result} />
+      {showAnalysis && hasAnalysis ? <ResultAnalysisDetails result={result} /> : null}
+    </div>
+  );
+}
+
+function ResultJudgementSummary({ result }: { result: QualityEvaluationResult }) {
+  return (
+    <>
+      <div className="flex flex-wrap items-center gap-2">
+        <VerdictBadge verdict={result.verdict} />
+        {result.judge ? (
+          <span className="text-xs tabular-nums text-fg-muted">
+            {Math.round(result.judge.confidence * 100)}%
+          </span>
+        ) : null}
+        <StatusBadge
+          variant={result.deterministic_analysis.is_safe ? "success" : "danger"}
+          label={
+            result.deterministic_analysis.is_safe
+              ? t("qualityEvaluation.details.safe")
+              : t("qualityEvaluation.details.unsafe")
+          }
+        />
+      </div>
+      {result.judge?.summary ? (
+        <p className="break-words text-xs leading-5 text-fg">{result.judge.summary}</p>
+      ) : null}
+    </>
+  );
+}
+
+function ResultAnalysisDetails({ result }: { result: QualityEvaluationResult }) {
+  const errors = [result.generation_error, result.judge_error].filter(Boolean);
+  return (
+    <details className="group/disclosure min-w-0 text-xs">
+      <summary
+        className="inline-flex min-h-8 cursor-pointer list-none items-center gap-1 font-medium text-accent-fg outline-none focus-visible:ring-2 focus-visible:ring-focus-ring [&::-webkit-details-marker]:hidden"
+        data-testid="quality-evaluation-analysis-toggle"
+      >
+        <span>{t("qualityEvaluation.details.analysis")}</span>
+        <DisclosureChevron expanded="group" size={14} />
+      </summary>
+      <div
+        className="mt-2 grid min-w-0 gap-2 rounded-md bg-surface-hover p-3 text-fg-muted"
+        data-testid="quality-evaluation-analysis-detail"
+      >
+        <AnalysisList
+          label={t("qualityEvaluation.details.differences")}
+          items={result.judge?.differences ?? []}
+        />
+        <AnalysisList
+          label={t("qualityEvaluation.details.risks")}
+          items={[...(result.judge?.risks ?? []), ...result.deterministic_analysis.risk_findings]}
+        />
+        {result.judge?.correction_suggestion ? (
+          <div>
+            <div className="font-medium text-fg">
+              {t("qualityEvaluation.details.suggestion")}
+            </div>
+            <p className="mt-1 break-words">{result.judge.correction_suggestion}</p>
+          </div>
+        ) : null}
+        <AnalysisList label={t("qualityEvaluation.details.error")} items={errors} danger />
+      </div>
+    </details>
+  );
+}
+
+function hasResultAnalysis(result: QualityEvaluationResult) {
+  return Boolean(
+    result.judge ||
+      result.generation_error ||
+      result.judge_error ||
+      result.deterministic_analysis.risk_findings.length
+  );
+}
+
+function AnalysisList({
+  label,
+  items,
+  danger = false,
+}: {
+  label: string;
+  items: string[];
+  danger?: boolean;
+}) {
+  if (!items.length) return null;
+  return (
+    <div>
+      <div className={`font-medium ${danger ? "text-danger-fg" : "text-fg"}`}>{label}</div>
+      <ul className="mt-1 list-disc space-y-1 pl-4">
+        {items.map((item, index) => (
+          <li key={`${index}-${item}`} className="break-words">
+            {item}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function SqlBlock({ sql, error }: { sql: string; error?: string }) {
+  if (!sql) {
+    return (
+      <span className={`break-words text-xs ${error ? "text-danger-fg" : "text-fg-muted"}`}>
+        {error || "-"}
+      </span>
+    );
+  }
+  return (
+    <pre className="max-h-32 min-w-0 overflow-auto whitespace-pre-wrap break-all rounded-md bg-surface-hover p-2 font-mono text-xs leading-5 text-fg">
+      {sql}
+    </pre>
+  );
+}
+
+function VerdictBadge({
+  verdict,
+  count,
+}: {
+  verdict: QualityEvaluationVerdict;
+  count?: number;
+}) {
+  return (
+    <StatusBadge
+      variant={verdictVariant(verdict)}
+      label={`${verdictLabel(verdict)}${count === undefined ? "" : ` ${count}`}`}
+    />
+  );
+}
+
+function Pagination({
+  canGoPrevious,
+  canGoNext,
+  onPrevious,
+  onNext,
+}: {
+  canGoPrevious: boolean;
+  canGoNext: boolean;
+  onPrevious: () => void;
+  onNext: () => void;
+}) {
+  if (!canGoPrevious && !canGoNext) return null;
+  return (
+    <nav
+      className="mt-4 flex justify-end gap-2"
+      aria-label={t("qualityEvaluation.pagination.label")}
+    >
+      <Button
+        type="button"
+        size="sm"
+        variant="secondary"
+        disabled={!canGoPrevious}
+        onClick={onPrevious}
+      >
+        {t("qualityEvaluation.action.previous")}
+      </Button>
+      <Button
+        type="button"
+        size="sm"
+        variant="secondary"
+        disabled={!canGoNext}
+        onClick={onNext}
+      >
+        {t("qualityEvaluation.action.next")}
+      </Button>
+    </nav>
+  );
+}
+
+function statusLabel(status: QualityEvaluationStatus) {
+  return t(`qualityEvaluation.status.${status}`);
+}
+
+function statusVariant(status: QualityEvaluationStatus) {
+  if (status === "completed") return "success" as const;
+  if (status === "completed_with_errors") return "warning" as const;
+  if (status === "failed") return "danger" as const;
+  if (status === "running") return "info" as const;
+  return "neutral" as const;
+}
+
+function verdictLabel(verdict: QualityEvaluationVerdict) {
+  return t(`qualityEvaluation.verdict.${verdict}`);
+}
+
+function verdictVariant(verdict: QualityEvaluationVerdict) {
+  if (verdict === "correct") return "success" as const;
+  if (verdict === "incorrect") return "danger" as const;
+  if (verdict === "uncertain") return "warning" as const;
+  return "neutral" as const;
+}
+
+function formatPercent(value: number) {
+  return `${Math.round(value * 100)}%`;
+}
+
+function formatDate(value: string) {
+  const date = new Date(value);
+  return Number.isNaN(date.valueOf()) ? value : new Intl.DateTimeFormat("ja-JP", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(date);
+}
+
+function validationMessage(
+  code: QualityEvaluationValidationCode,
+  capabilities?: QualityEvaluationCapabilities
+) {
+  if (code === "profile_required") return t("qualityEvaluation.profile.required");
+  if (code === "file_required") return t("qualityEvaluation.file.required");
+  if (code === "file_extension") return t("qualityEvaluation.file.invalidExtension");
+  if (code === "file_size") {
+    return t("qualityEvaluation.file.tooLarge", {
+      size: Math.floor((capabilities?.limits.max_file_bytes ?? 10 * 1024 * 1024) / 1024 / 1024),
+    });
+  }
+  if (code === "engine_required") return t("qualityEvaluation.engines.required");
+  return t("qualityEvaluation.repeat.invalid");
+}
+
+function qualityEvaluationStartErrorMessage(cause: unknown) {
+  if (cause instanceof ApiError) return cause.messages.join(" ");
+  if (cause instanceof Error && cause.message) return cause.message;
+  return t("qualityEvaluation.error.start");
+}
