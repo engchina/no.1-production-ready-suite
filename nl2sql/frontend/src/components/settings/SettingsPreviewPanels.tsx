@@ -16,9 +16,9 @@ import {
   CardHeader,
   CardTitle,
   FormStatus,
+  ContentActionBar,
 } from "@engchina/production-ready-ui";
 
-import { ContentActionBar } from "@/components/ContentActionBar";
 import { copyTextToClipboard } from "@/lib/clipboard";
 import { t } from "@/lib/i18n";
 import { cn } from "@/lib/utils";

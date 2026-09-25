@@ -31,7 +31,7 @@ const fileDropzone = readFileSync(
   "utf8",
 );
 const clearActionButton = readFileSync(
-  new URL("../src/components/ui/clear-action-button.tsx", import.meta.url),
+  new URL("../../../platform/packages/ui/src/components/ui/clear-action-button.tsx", import.meta.url),
   "utf8",
 );
 const messages = readFileSync(new URL("../src/lib/i18n.ts", import.meta.url), "utf8");

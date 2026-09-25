@@ -7,10 +7,10 @@ import {
   PageHeader,
   Banner,
   PageBody,
+  ActionResultRegion,
 } from "@engchina/production-ready-ui";
 import { FieldLabel } from "@/components/ui/required-field";
 
-import { ActionResultRegion } from "@/components/ActionResultRegion";
 import {
   ExecutionActivityPanel,
   type ExecutionActivityStatus,

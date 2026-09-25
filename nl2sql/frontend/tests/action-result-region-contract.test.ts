@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const actionResultRegionSource = readFileSync(
-  new URL("../src/components/ActionResultRegion.tsx", import.meta.url),
+  new URL("../../../platform/packages/ui/src/components/feedback/action-result-region.tsx", import.meta.url),
   "utf8",
 );
 import { readdirSync } from "node:fs";

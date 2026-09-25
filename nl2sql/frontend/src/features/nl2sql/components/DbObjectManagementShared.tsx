@@ -20,9 +20,9 @@ import {
   toast,
   StatusBadge,
   Tabs,
+  ContentActionBar,
 } from "@engchina/production-ready-ui";
 
-import { ContentActionBar } from "@/components/ContentActionBar";
 import { DialogOverlayPortal } from "@/components/ui/dialog-overlay";
 import {
   DbManagementSearchField,

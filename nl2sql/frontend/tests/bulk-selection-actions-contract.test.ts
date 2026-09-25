@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const source = readFileSync(
-  new URL("../src/components/BulkSelectionActions.tsx", import.meta.url),
+  new URL("../../../platform/packages/ui/src/components/ui/bulk-selection-actions.tsx", import.meta.url),
   "utf8"
 );
 
@@ -18,7 +18,7 @@ const migratedPages = [
 ].map((path) => readFileSync(new URL(path, import.meta.url), "utf8"));
 
 test("BulkSelectionActions uses shared Button variants for select and clear", () => {
-  assert.match(source, /from "@engchina\/production-ready-ui"/u);
+  assert.match(source, /from "\.\/button"/u);
   assert.match(source, /variant="secondary"/u);
   assert.match(source, /variant="ghost"/u);
   assert.match(source, /size = "sm"/u);

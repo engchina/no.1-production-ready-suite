@@ -6,10 +6,10 @@ import {
   Banner,
   toast,
   StatusBadge,
+  ContentActionBar,
 } from "@engchina/production-ready-ui";
 import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
 
-import { ContentActionBar } from "@/components/ContentActionBar";
 import { LogicalStepsList } from "./LogicalStepsList";
 import { copyTextToClipboard } from "@/lib/clipboard";
 import { t } from "@/lib/i18n";

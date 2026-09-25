@@ -13,8 +13,7 @@ import {
 
 import { t } from "./messages";
 import { validateFileDropzoneSelection, type FileDropzoneRejectReason } from "./fileDropzone";
-import { cn } from "@engchina/production-ready-ui";
-import { ClearActionButton } from "./clear-action-button";
+import { cn, ClearActionButton } from "@engchina/production-ready-ui";
 import {
   FieldError,
   Spinner,
