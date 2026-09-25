@@ -48,6 +48,7 @@ import { t, type I18nKey } from "@/lib/i18n";
 import { APP_ROUTES } from "@/lib/routes";
 import { useBusinessViews } from "@/lib/queries";
 import { formatDateTime } from "@/lib/format";
+import { useNowMs } from "@/lib/use-now-ms";
 import { isOneOf, useWorkspaceState } from "@/lib/workspace-state";
 import { DocragAnswerHistory } from "./DocragAnswerHistory";
 import { DocragAnswerPanel } from "./DocragAnswerPanel";
@@ -175,7 +176,6 @@ export function SearchClient() {
   const [run, setRun] = useState<SearchRun | null>(null);
   const [faqSuggestions, setFaqSuggestions] = useState<ApprovedFaqSuggestionData[] | null>(null);
   const [faqAnswer, setFaqAnswer] = useState<ApprovedFaqSuggestionData | null>(null);
-  const [elapsedNowMs, setElapsedNowMs] = useState(Date.now());
   const abortRef = useRef<AbortController | null>(null);
   const navigate = useNavigate();
   const businessViewsQuery = useBusinessViews({ status: "ACTIVE", limit: 50, offset: 0 });
@@ -201,25 +201,9 @@ export function SearchClient() {
     (option) => Number(option.value) <= Number(topK)
   );
   const runStartedAtMs = run?.startedAtMs;
-
-  useEffect(() => {
-    if (phase !== "streaming" || runStartedAtMs == null) return;
-    setElapsedNowMs(Date.now());
-    const timer = window.setInterval(() => setElapsedNowMs(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, [phase, runStartedAtMs]);
-
-  // pointerdown と click の両方から呼ばれる。類似問の照会を await する間も二重送信しないよう ref で守る。
-  const submittingRef = useRef(false);
-  const submit = async (skipFaq = false) => {
-    if (submittingRef.current) return;
-    submittingRef.current = true;
-    try {
-      await runSubmit(skipFaq);
-    } finally {
-      submittingRef.current = false;
-    }
-  };
+  // 回答生成中だけ 1 秒ごとに時計を進める。開始直後（時計の購読前）は開始時刻を下限にして 0 秒と見せる。
+  const clockNowMs = useNowMs(phase === "streaming" && runStartedAtMs != null, runStartedAtMs);
+  const elapsedNowMs = Math.max(clockNowMs, runStartedAtMs ?? clockNowMs);
 
   const runSubmit = async (skipFaq: boolean) => {
     const trimmed = query.trim();
@@ -255,7 +239,6 @@ export function SearchClient() {
     setCitations([]);
     setMeta(null);
     setErrorText("");
-    setElapsedNowMs(startedAtMs);
     setRun({
       startedAtMs,
       startedAtIso: new Date(startedAtMs).toISOString(),
@@ -326,6 +309,18 @@ export function SearchClient() {
       if (abortRef.current === controller) {
         abortRef.current = null;
       }
+    }
+  };
+
+  // pointerdown と click の両方から呼ばれる。類似問の照会を await する間も二重送信しないよう ref で守る。
+  const submittingRef = useRef(false);
+  const submit = async (skipFaq = false) => {
+    if (submittingRef.current) return;
+    submittingRef.current = true;
+    try {
+      await runSubmit(skipFaq);
+    } finally {
+      submittingRef.current = false;
     }
   };
 

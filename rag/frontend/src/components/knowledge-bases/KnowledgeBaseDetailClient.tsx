@@ -1,7 +1,7 @@
 "use client";
 
 import { FilePlus2, Files, Unlink } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { EmptyState, ErrorState } from "@/components/StateViews";
@@ -158,15 +158,16 @@ function DocumentAssignment({ knowledgeBase }: { knowledgeBase: KnowledgeBaseDet
     [options]
   );
 
-  useEffect(() => {
-    if (!documentId && options[0]) {
-      setDocumentId(options[0].id);
-      return;
-    }
-    if (documentId && options.length > 0 && !options.some((document) => document.id === documentId)) {
-      setDocumentId(options[0].id);
-    }
-  }, [documentId, options]);
+  // 未選択か、選んでいた文書が候補から外れたときは、先頭の候補を選び直す（render 中に調整）。
+  if (!documentId && options[0]) {
+    setDocumentId(options[0].id);
+  } else if (
+    documentId &&
+    options.length > 0 &&
+    !options.some((document) => document.id === documentId)
+  ) {
+    setDocumentId(options[0].id);
+  }
 
   const handleAssign = () => {
     if (!documentId) return;

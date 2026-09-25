@@ -1,5 +1,5 @@
 import { Plus, Save, Sparkles } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
 import {
   Button,
@@ -17,6 +17,7 @@ import {
 import { ApiError } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { useLeaveGuard } from "@/lib/leave-guard";
+import { useValuesChanged } from "@/lib/render-sync";
 import {
   useDomainKeywords,
   useSaveDomainKeywords,
@@ -97,9 +98,11 @@ function DomainKeywordsEditor({ businessViewId }: { businessViewId: string }) {
     [query.data?.keywords],
   );
 
-  useEffect(() => {
+  // 保存済みの語句が変わったレンダーで、編集欄を保存値に戻す。
+  const savedChanged = useValuesChanged([saved]);
+  if (savedChanged) {
     setText(saved.join("\n"));
-  }, [saved]);
+  }
 
   const current = parseKeywords(text);
   const dirty = current.join("\n") !== saved.join("\n");

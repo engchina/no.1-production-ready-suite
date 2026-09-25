@@ -11,7 +11,7 @@ import {
   FormStatus,
   Skeleton,
 } from "@engchina/production-ready-ui";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { CheckCircle2, RotateCcw, Save, Shuffle } from "lucide-react";
 
 import { ErrorState } from "@/components/StateViews";
@@ -21,6 +21,7 @@ import {
   type PreprocessProfileStatusData,
 } from "@/lib/api";
 import { useLeaveGuard } from "@/lib/leave-guard";
+import { useValuesChanged } from "@/lib/render-sync";
 import { t, type I18nKey } from "@/lib/i18n";
 import { usePreprocessSettings, useUpdatePreprocessSettings } from "@/lib/queries";
 import { cn } from "@/lib/utils";
@@ -43,11 +44,11 @@ export function PreprocessSettingsClient() {
   const [profile, setProfile] = useState<PreprocessProfileName | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (query.data && !save.isPending) {
-      setProfile(query.data.profile);
-    }
-  }, [query.data, save.isPending]);
+  // server 値か保存中フラグが変わったレンダーで、選択を server 値に戻す。
+  const serverChanged = useValuesChanged([query.data, save.isPending]);
+  if (serverChanged && query.data && !save.isPending) {
+    setProfile(query.data.profile);
+  }
 
   // 未保存の選択があるときだけ、サイドナビ・内部リンク・再読込での離脱を確認する。
   useLeaveGuard(Boolean(query.data && profile !== null && profile !== query.data.profile));
