@@ -41,6 +41,7 @@ COPY --from=builder /app/backend/.venv ./.venv
 COPY agent/backend/ ./
 
 EXPOSE 8000
+# Runtime の repository は process の中の状態を正として書き戻すため、worker は 1 つに固定する（#165）。
 CMD ["gunicorn", "app.main:app", \
      "--worker-class", "uvicorn.workers.UvicornWorker", \
-     "--bind", "0.0.0.0:8000", "--workers", "2"]
+     "--bind", "0.0.0.0:8000", "--workers", "1"]
