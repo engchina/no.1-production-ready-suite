@@ -45,7 +45,8 @@ export default defineConfig(() => {
         "@": fileURLToPath(new URL("./src", import.meta.url)),
       },
       // 共有 UI パッケージ（file: リンク）の React 重複を防ぐ（"Invalid hook call" 回避）。
-      dedupe: ["react", "react-dom"],
+      // 共有システム設定パッケージが Router / React Query の context を共有できるよう、これらも 1 コピーへ集約する（#97）。
+      dedupe: ["react", "react-dom", "react-router-dom", "@tanstack/react-query"],
     },
     server: {
       host: "0.0.0.0",

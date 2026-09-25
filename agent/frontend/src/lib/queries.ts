@@ -11,7 +11,6 @@ import {
   type DatabaseSettingsUpdate,
   type ModelSettingsPayload,
   type ModelSettingsTestRequest,
-  type UploadStorageSettingsUpdate,
 } from "./api";
 
 export const queryKeys = {
@@ -136,21 +135,4 @@ export function useStopAdb() {
   });
 }
 
-export function useUploadStorageSettings() {
-  return useQuery({
-    queryKey: queryKeys.uploadStorageSettings,
-    queryFn: api.getUploadStorageSettings,
-  });
-}
 
-export function useUpdateUploadStorageSettings() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (payload: UploadStorageSettingsUpdate) =>
-      api.updateUploadStorageSettings(payload),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: queryKeys.uploadStorageSettings });
-      qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
-    },
-  });
-}

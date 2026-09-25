@@ -8,6 +8,17 @@ import {
 } from "./database-load-error.ts";
 import { t } from "./i18n";
 
+// アップロード保存先 API の型は platform の共有パッケージが正本（#97）。
+export type {
+  UploadStorageBackend,
+  UploadStorageSettingsData,
+  UploadStorageSettingsUpdate,
+} from "@engchina/production-ready-system-settings";
+import type {
+  UploadStorageSettingsData,
+  UploadStorageSettingsUpdate,
+} from "@engchina/production-ready-system-settings";
+
 export interface ApiEnvelope<T> {
   data: T;
   error?: string;
@@ -309,7 +320,6 @@ export type ModelSettingsTestTargetType =
   | "enterprise_vision"
   | "embedding"
   | "rerank";
-export type UploadStorageBackend = "local" | "oci";
 export type DatabaseConnectionTestStatus = "success" | "failed";
 export type OciConfigTestStatus = "success" | "failed";
 export type OciConfigTestStageKey = "config_format" | "key_file" | "region" | "authentication";
@@ -600,24 +610,7 @@ export interface DatabaseConnectionTestResult {
   error_type: string | null;
 }
 
-export interface UploadStorageSettingsData {
-  backend: UploadStorageBackend;
-  local_storage_dir: string;
-  object_storage_region: string;
-  object_storage_namespace: string;
-  object_storage_bucket: string;
-  readiness: string;
-  max_upload_bytes: number;
-  config_source: "runtime";
-}
 
-export interface UploadStorageSettingsUpdate {
-  backend: UploadStorageBackend;
-  local_storage_dir: string;
-  object_storage_region?: string;
-  object_storage_namespace?: string;
-  object_storage_bucket: string;
-}
 
 export type OciConfigField =
   | "user"

@@ -55,7 +55,8 @@ export default defineConfig(() => {
       },
       // 共有 UI パッケージ（file: リンク）は自分の node_modules の React を解決しうるため、
       // React/ReactDOM を必ずこのアプリの 1 コピーへ集約する（"Invalid hook call" 回避）。
-      dedupe: ["react", "react-dom"],
+      // 共有システム設定パッケージが Router / React Query の context を共有できるよう、これらも 1 コピーへ集約する（#97）。
+      dedupe: ["react", "react-dom", "react-router-dom", "@tanstack/react-query"],
     },
     server: {
       host: "0.0.0.0",

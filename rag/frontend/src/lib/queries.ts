@@ -1501,18 +1501,6 @@ export function useExternalParserStatus(
   });
 }
 
-/** アップロード原本の保存先設定をランタイム保存。 */
-export function useUpdateUploadStorageSettings() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (payload: UploadStorageSettingsUpdate) =>
-      api.updateUploadStorageSettings(payload),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: queryKeys.uploadStorageSettings });
-      qc.invalidateQueries({ queryKey: queryKeys.dashboardSummary });
-    },
-  });
-}
 
 /** GraphRAG アダプター(知識グラフ構築)の runtime 設定。 */
 export function useGraphSettings() {

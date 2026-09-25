@@ -273,7 +273,11 @@ test("編集画面の dirty 判定は順序非依存の比較を使う", () => {
 
 test("編集画面はルート遷移とタブ離脱の両方を未保存ガードで保護する", () => {
   const guard = readFileSync(
-    new URL("../src/lib/useUnsavedChangesGuard.ts", import.meta.url),
+    // 実装は platform の共有パッケージ（#97）。
+    new URL(
+      "../../../platform/packages/system-settings/src/guards/useUnsavedChangesGuard.ts",
+      import.meta.url,
+    ),
     "utf8",
   );
   // BrowserRouter では useBlocker(data router 専用)が使えないため、

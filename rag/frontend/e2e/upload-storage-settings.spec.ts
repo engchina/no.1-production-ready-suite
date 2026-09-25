@@ -42,19 +42,13 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
-test("アップロード保存先設定で OCI Object Storage に切り替えられる", async ({
-  page,
-}) => {
-  let current = { ...localStorageSettings };
+// 画面は platform の共有パッケージ（NL2SQL と同じ画面。#97）。右側の状態パネル / .env プレビューは持たない。
+test("アップロード保存先設定で OCI Object Storage に切り替えて保存できる", async ({ page }) => {
+  let current: UploadStorageSettingsData = {
+    ...localStorageSettings,
+    object_storage_namespace: "oci-page-namespace",
+  };
   let lastPayload: unknown = null;
-  await page.addInitScript(() => {
-    window.localStorage.setItem(
-      "production-ready-rag.oci-settings.v1",
-      JSON.stringify({
-        objectStorageNamespace: "oci-page-namespace",
-      })
-    );
-  });
   await mockUploadStorageSettings(page, () => current, async (payload) => {
     lastPayload = payload;
     current = {
@@ -66,62 +60,53 @@ test("アップロード保存先設定で OCI Object Storage に切り替えら
 
   await page.goto("/settings/upload-storage");
 
-  await expect(
-    page.getByRole("heading", { name: "アップロード保存先" })
-  ).toBeVisible();
-  await expect(page.getByText("200.0 MB")).toBeVisible();
-  await expect(page.getByRole("button", { name: ".env をコピー" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "JSON プレビュー" })).toHaveCount(0);
-  await expect(page.getByRole("heading", { name: "運用メモ" })).toBeVisible();
-  const envPreview = page.getByLabel(".env プレビュー");
-  await expect(envPreview).toContainText("UPLOAD_STORAGE_BACKEND=local");
-  await expect(envPreview).toContainText("LOCAL_STORAGE_DIR=/u01/data/production-ready-rag");
-  await page.getByRole("radio", { name: /OCI Object Storage/ }).check();
-  await expect(page.getByLabel("Object Storage ネームスペース")).toHaveCount(0);
-  await page.getByLabel("Object Storage バケット").fill("rag-originals");
-  await expect(envPreview).toContainText("UPLOAD_STORAGE_BACKEND=oci");
-  await expect(envPreview).toContainText("OBJECT_STORAGE_REGION=ap-osaka-1");
-  await expect(envPreview).toContainText(
-    "OBJECT_STORAGE_NAMESPACE=oci-page-namespace"
+  await expect(page.getByRole("heading", { name: "アップロード保存先" }).first()).toBeVisible();
+  await expect(page.getByRole("heading", { name: "保存先", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: ".env をコピー" })).toHaveCount(0);
+  await expect(page.locator("#upload-storage-local-dir")).toHaveValue(
+    "/u01/data/production-ready-rag"
   );
-  await expect(envPreview).toContainText("OBJECT_STORAGE_BUCKET=rag-originals");
+
+  await page.getByRole("radio", { name: /OCI Object Storage/ }).check();
+  await expect(page.getByLabel(/Object Storage ネームスペース/)).toHaveValue("oci-page-namespace");
+  await page.getByLabel(/Object Storage バケット/).fill("rag-originals");
   await page.getByRole("button", { name: "保存" }).click();
 
   await expect(page.getByText("保存しました")).toBeVisible();
-  await expect(page.getByText("oci-page-namespace/rag-originals")).toBeVisible();
   expect(lastPayload).toMatchObject({
     backend: "oci",
+    object_storage_region: "ap-osaka-1",
     object_storage_namespace: "oci-page-namespace",
     object_storage_bucket: "rag-originals",
   });
 });
 
-test("アップロード保存先は OCI の未設定項目があっても保存できる", async ({ page }) => {
-  let current = { ...localStorageSettings };
-  let lastPayload: unknown = null;
-  await mockUploadStorageSettings(page, () => current, async (payload) => {
-    lastPayload = payload;
-    current = {
-      ...current,
-      ...(payload as Partial<UploadStorageSettingsData>),
-      readiness: "missing",
-    };
-  });
+test("アップロード保存先は OCI の未設定項目があると保存前に止め、OCI 認証設定へ案内する", async ({
+  page,
+}) => {
+  let patchCount = 0;
+  await mockUploadStorageSettings(
+    page,
+    () => localStorageSettings,
+    async () => {
+      patchCount += 1;
+    }
+  );
 
   await page.goto("/settings/upload-storage");
 
   await page.getByRole("radio", { name: /OCI Object Storage/ }).check();
-  const memo = operationMemoCard(page);
-  await expect(memo.getByText("値を入力してください。")).toBeVisible();
+  await expect(
+    page.getByText("OCI Object Storage を使うには、リージョンとネームスペースの設定が必要です。")
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "OCI 認証設定を開く" })).toBeVisible();
   await page.getByRole("button", { name: "保存" }).click();
 
-  await expect(page.getByText("保存しました")).toBeVisible();
-  await expect(page.getByText("Readiness: 未設定")).toBeVisible();
-  expect(lastPayload).toMatchObject({
-    backend: "oci",
-    object_storage_namespace: "",
-    object_storage_bucket: "",
-  });
+  await expect(
+    page.getByText("OCI 認証設定で Object Storage ネームスペースを設定してください。")
+  ).toBeVisible();
+  await expect(page.getByText("値を入力してください。")).toBeVisible();
+  expect(patchCount).toBe(0);
 });
 
 test("アップロード画面から現在の保存先と設定導線を確認できる", async ({ page }) => {
@@ -671,12 +656,4 @@ function failedUploadSourceProfile() {
     quality_status: "warning",
     quality_warnings: ["unknown_modality"],
   };
-}
-
-function operationMemoCard(page: Page) {
-  return page
-    .getByRole("heading", { name: "運用メモ" })
-    .locator(
-      "xpath=ancestor::div[contains(concat(' ', normalize-space(@class), ' '), ' rounded-lg ')][1]"
-    );
 }

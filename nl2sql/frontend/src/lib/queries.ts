@@ -8,7 +8,6 @@ import {
   type ModelSettingsTestRequest,
   type SelectAiCredentialCreateRequest,
   type SystemTablesInitializeRequest,
-  type UploadStorageSettingsUpdate,
 } from "@/lib/api";
 
 export const queryKeys = {
@@ -257,20 +256,4 @@ export function useStopAdb() {
   });
 }
 
-export function useUploadStorageSettings() {
-  return useQuery({
-    queryKey: queryKeys.uploadStorageSettings,
-    queryFn: ({ signal }) => api.getUploadStorageSettings({ signal }),
-  });
-}
 
-export function useUpdateUploadStorageSettings() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (payload: UploadStorageSettingsUpdate) =>
-      api.updateUploadStorageSettings(payload),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: queryKeys.uploadStorageSettings });
-    },
-  });
-}
