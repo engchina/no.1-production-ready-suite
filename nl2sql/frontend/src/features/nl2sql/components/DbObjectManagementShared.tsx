@@ -28,6 +28,7 @@ import {
   RowActionMenu,
   type EntityAction,
   type EntityActionTone,
+  FixedSplitPane,
 } from "@engchina/production-ready-ui";
 
 import { DialogOverlayPortal } from "@/components/ui/dialog-overlay";
@@ -37,7 +38,7 @@ import {
   DbOwnerPrefixFilterField,
   type DbObjectFilterFieldProps,
 } from "@/components/DbObjectFilterFields";
-import { FixedSplitPane } from "@/components/layout/FixedSplitPane";
+import { FIXED_SPLIT_STORAGE_PREFIX } from "@/lib/ui-store";
 import { ErrorState } from "@/components/StateViews";
 import { IdentifierText } from "@/components/IdentifierText";
 import { copyTextToClipboard } from "@/lib/clipboard";
@@ -49,7 +50,7 @@ import {
   INFORMATION_TABLE_VISIBLE_ROWS,
 } from "@/lib/list-density";
 import { cn } from "@/lib/utils";
-import type { FixedSplitWidePane } from "@/lib/fixed-split-pane";
+import type { FixedSplitWidePane } from "@engchina/production-ready-ui";
 import {
   formatDbObjectName,
   parseDbAdminObjectTarget,
@@ -322,6 +323,7 @@ export function DbObjectManagementPanelShell({
       {topContent}
       {splitPaneId ? (
         <FixedSplitPane
+          storagePrefix={FIXED_SPLIT_STORAGE_PREFIX}
           splitId={splitPaneId}
           preferredWidePane={preferredWidePane}
           minLeftPaneWidthPx={minLeftPaneWidthPx}

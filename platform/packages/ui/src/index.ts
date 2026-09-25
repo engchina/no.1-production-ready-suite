@@ -129,6 +129,13 @@ export { Sidebar, SidebarAccountFooter, type SidebarFooterAction, type SidebarPr
 export { PageHeader, type PageHeaderAction } from "./components/app-shell/PageHeader";
 export { PageBody, Section } from "./components/app-shell/PageBody";
 export {
+  FixedSplitPane,
+  DEFAULT_FIXED_SPLIT_PANE_LABELS,
+  type FixedSplitPaneProps,
+  type FixedSplitPaneLabels,
+} from "./components/app-shell/fixed-split-pane";
+export * from "./lib/fixed-split-pane";
+export {
   Breadcrumbs,
   type BreadcrumbItem,
 } from "./components/app-shell/Breadcrumbs";

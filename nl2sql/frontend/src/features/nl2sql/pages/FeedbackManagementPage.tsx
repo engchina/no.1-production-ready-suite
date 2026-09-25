@@ -33,10 +33,11 @@ import {
   ProcessingIndicator,
   ObjectActionBar,
   type EntityAction,
+  FixedSplitPane,
 } from "@engchina/production-ready-ui";
 
 import { FormActionBar } from "@/components/FormActionBar";
-import { FixedSplitPane } from "@/components/layout/FixedSplitPane";
+import { FIXED_SPLIT_STORAGE_PREFIX } from "@/lib/ui-store";
 
 import { PageNotice } from "@/components/page-notice";
 import { apiDelete, apiGet, apiPatch, apiPost, isAbortError } from "@/lib/api";
@@ -782,6 +783,7 @@ export function FeedbackManagementPage() {
               ) : null}
 
               <FixedSplitPane
+                storagePrefix={FIXED_SPLIT_STORAGE_PREFIX}
                 splitId="feedback-management-entries-split"
                 preferredWidePane="left"
                 minLeftPaneWidthPx={560}
