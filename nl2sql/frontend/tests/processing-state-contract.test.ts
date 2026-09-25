@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const processingSource = readFileSync(
-  new URL("../src/components/ProcessingState.tsx", import.meta.url),
+  new URL("../../../platform/packages/ui/src/components/feedback/processing-state.tsx", import.meta.url),
   "utf8",
 );
 const managementShellSource = readFileSync(

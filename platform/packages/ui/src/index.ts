@@ -60,6 +60,26 @@ export {
   EmptyState,
 } from "./components/feedback/state-views";
 export {
+  ProcessingIndicator,
+  TimedLoadingState,
+  useOperationTiming,
+  DEFAULT_PROCESSING_LABELS,
+  type ProcessingIndicatorProps,
+  type TimedLoadingStateProps,
+  type ProcessingPlacement,
+  type ProcessingActivityIcon,
+  type ProcessingLabels,
+  type UseOperationTimingOptions,
+  type OperationTiming,
+} from "./components/feedback/processing-state";
+export {
+  operationTimestampMs,
+  elapsedMsSince,
+  elapsedMsBetween,
+  formatElapsedClock,
+  type OperationTimestamp,
+} from "./lib/operation-timing";
+export {
   ActionResultRegion,
   type ActionResultRegionProps,
 } from "./components/feedback/action-result-region";
