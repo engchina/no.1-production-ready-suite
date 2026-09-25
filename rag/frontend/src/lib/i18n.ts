@@ -33,6 +33,9 @@ export const ja = {
   "common.undo": "元に戻す",
   "common.retry": "再試行",
   "common.skipToMain": "本文へスキップ",
+  // 対象オブジェクトの操作（platform ux-contracts/buttons.md §5.1。RowActionMenu / ObjectActionBar）
+  "common.objectActions.aria": "{name} の操作",
+  "common.objectActions.more": "その他の操作",
   // 未保存変更の離脱ガード（platform ux-contracts/workspace-state.md）
   "common.leaveGuard.title": "変更を破棄しますか",
   "common.leaveGuard.description":
@@ -1286,6 +1289,9 @@ export const ja = {
   "businessViews.faq.actions": "操作",
   "businessViews.faq.delete": "削除",
   "businessViews.faq.deleted": "FAQ を削除しました。",
+  "businessViews.faq.deleteConfirm.title": "この FAQ を削除しますか？",
+  "businessViews.faq.deleteConfirm.description":
+    "「{question}」を承認済み FAQ から削除します。検索の類似問の候補に出なくなります。",
   "businessViews.faq.add": "追加",
   "businessViews.faq.added": "FAQ を追加しました。",
   "businessViews.faq.addTitle": "FAQ を追加",
@@ -1399,6 +1405,7 @@ export const ja = {
   "businessViews.actions.save": "保存する",
   "businessViews.actions.cancel": "取消",
   "businessViews.actions.edit": "編集",
+  "businessViews.actions.editNamed": "{name} を編集",
   "businessViews.actions.archive": "アーカイブ",
   "businessViews.actions.newView": "新規作成",
   "businessViews.filter.aria": "業務ビューの状態で絞り込み",
@@ -1989,6 +1996,7 @@ export const ja = {
   "documents.recipes.defaults": "全体既定から作成",
   "documents.recipes.create": "追加する",
   "documents.recipes.delete": "レシピを削除",
+  "documents.recipes.deleteDisabledMin": "レシピを削除（少なくとも1件必要です）",
   "documents.recipes.deleteTitle": "この処理レシピを削除しますか？",
   "documents.recipes.deleteDescription":
     "このレシピの処理結果と検索索引を削除します。この操作は元に戻せません。",

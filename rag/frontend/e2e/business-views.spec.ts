@@ -133,8 +133,13 @@ for (const viewport of [
     await page.goto("/business-views");
 
     const card = page.getByRole("listitem").filter({ hasText: "DEFAULT" });
-    await expect(card.getByRole("button", { name: "DEFAULT はアーカイブできません" })).toBeDisabled();
-    await card.getByRole("button", { name: "編集" }).click();
+    // アーカイブはカードの RowActionMenu に入り、DEFAULT では理由付きで無効（#131）。
+    await card.getByRole("button", { name: "DEFAULT の操作" }).click();
+    await expect(page.getByRole("menuitem", { name: "DEFAULT はアーカイブできません" })).toBeDisabled();
+    await page.keyboard.press("Escape");
+    await card.getByRole("button", { name: "DEFAULT を編集" }).click();
+    // 編集対象に選んだカードは aria-current で示す（page-archetypes.md §0-7）。
+    await expect(card).toHaveAttribute("aria-current", "true");
 
     await expect(page.getByLabel("名前", { exact: true })).toHaveAttribute("readonly", "");
     await expect(page.getByText("DEFAULT の名前は変更できません。")).toBeVisible();

@@ -10,17 +10,18 @@ import {
   CardTitle,
   DataTable,
   type DataTableColumn,
+  type EntityAction,
   FieldError,
   FormStatus,
+  RowActionMenu,
   ToggleChip,
 } from "@engchina/production-ready-ui";
-import { Archive, Database, Search } from "lucide-react";
+import { Database, Search } from "lucide-react";
 import { useMemo, useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 import { DegradedBanner } from "@/components/DegradedBanner";
 import { EmptyState, ErrorState } from "@/components/StateViews";
-import { useConfirm } from "@/components/ui/confirm-dialog";
 import {
   ApiError,
   DEFAULT_KNOWLEDGE_BASE_NAME,
@@ -30,11 +31,7 @@ import {
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { useLeaveGuard } from "@/lib/leave-guard";
-import {
-  useArchiveKnowledgeBase,
-  useCreateKnowledgeBase,
-  useKnowledgeBases,
-} from "@/lib/queries";
+import { useCreateKnowledgeBase, useKnowledgeBases } from "@/lib/queries";
 import { APP_ROUTES } from "@/lib/routes";
 import { toast } from "@/lib/toast";
 import { useWorkspaceState } from "@/lib/workspace-state";
@@ -42,6 +39,7 @@ import {
   KnowledgeBaseStatusPill,
   knowledgeBaseStatusLabel,
 } from "./KnowledgeBaseStatusPill";
+import { useKnowledgeBaseActions } from "./knowledge-base-actions";
 
 const LIMIT = 20;
 
@@ -68,7 +66,6 @@ const NAME_ERROR_ID = "knowledge-base-name-error";
 
 /** ナレッジベース一覧。作成・一覧・アーカイブを扱う。詳細(所属文書・構築設定)は詳細ページへ。 */
 export function KnowledgeBaseManagementClient() {
-  const confirm = useConfirm();
   const navigate = useNavigate();
   // 絞り込み・検索・ページは、ページを行き来しても再読込しても残す（workspace-state.md）。
   const [view, setView] = useWorkspaceState("knowledgeBases.view", INITIAL_VIEW, isKnowledgeBaseListView);
@@ -83,29 +80,12 @@ export function KnowledgeBaseManagementClient() {
   const page = query.data;
   const items = useMemo(() => page?.items ?? [], [page?.items]);
 
-  const archive = useArchiveKnowledgeBase();
+  // 行の操作（アーカイブ）は詳細ページの ObjectActionBar と同じ定義を使う。
+  const knowledgeBaseActions = useKnowledgeBaseActions();
 
   const resetView = (fn: () => void) => {
     fn();
     setOffset(0);
-  };
-
-  const handleArchive = async (knowledgeBase: KnowledgeBaseSummary) => {
-    const ok = await confirm({
-      title: t("knowledgeBases.confirm.archive.title"),
-      description: t("knowledgeBases.confirm.archive.description", {
-        name: knowledgeBase.name,
-      }),
-      confirmLabel: t("knowledgeBases.actions.archive"),
-      tone: "danger",
-      dismissOnOverlay: false,
-    });
-    if (!ok) return;
-    archive.mutate(knowledgeBase.id, {
-      onSuccess: () => toast.success(t("knowledgeBases.toast.archived")),
-      onError: (error) =>
-        toast.error(error instanceof ApiError ? error.message : t("knowledgeBases.error.archive")),
-    });
   };
 
   return (
@@ -171,10 +151,7 @@ export function KnowledgeBaseManagementClient() {
         ) : items.length > 0 ? (
           <>
             <DataTable<KnowledgeBaseSummary>
-              columns={knowledgeBaseColumns({
-                archivingId: archive.isPending ? archive.variables : undefined,
-                onArchive: (knowledgeBase) => void handleArchive(knowledgeBase),
-              })}
+              columns={knowledgeBaseColumns({ actionsFor: knowledgeBaseActions })}
               rows={items}
               getRowKey={(knowledgeBase) => knowledgeBase.id}
               stickyHeader
@@ -316,11 +293,9 @@ function KnowledgeBaseCreateForm({ onCreated }: { onCreated: (id: string) => voi
 
 /** 一覧の列定義。名前列を行見出しにし、操作列は右寄せにする。 */
 function knowledgeBaseColumns({
-  archivingId,
-  onArchive,
+  actionsFor,
 }: {
-  archivingId: string | undefined;
-  onArchive: (knowledgeBase: KnowledgeBaseSummary) => void;
+  actionsFor: (knowledgeBase: KnowledgeBaseSummary) => EntityAction[];
 }): DataTableColumn<KnowledgeBaseSummary>[] {
   return [
     {
@@ -371,25 +346,13 @@ function knowledgeBaseColumns({
       key: "actions",
       header: t("knowledgeBases.col.actions"),
       align: "right",
-      render: (knowledgeBase) => {
-        const isDefault = knowledgeBase.name === DEFAULT_KNOWLEDGE_BASE_NAME;
-        return (
-          <div className="flex justify-end">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => onArchive(knowledgeBase)}
-              loading={archivingId === knowledgeBase.id}
-              disabled={knowledgeBase.status === "ARCHIVED" || isDefault}
-              aria-label={isDefault ? t("knowledgeBases.default.archiveDisabled") : undefined}
-              title={isDefault ? t("knowledgeBases.default.archiveDisabled") : undefined}
-              icon={Archive}
-            >
-              {t("knowledgeBases.actions.archive")}
-            </Button>
-          </div>
-        );
-      },
+      render: (knowledgeBase) => (
+        <RowActionMenu
+          actions={actionsFor(knowledgeBase)}
+          ariaLabel={t("common.objectActions.aria", { name: knowledgeBase.name })}
+          testId={`knowledge-base-row-actions-${knowledgeBase.id}`}
+        />
+      ),
     },
   ];
 }
