@@ -58,13 +58,14 @@ export function useSyntheticRuns({ poll = false, enabled = true } = {}) {
 
 export function SyntheticRunNotifications() {
   const query = useSyntheticRuns({ poll: true });
-  const observed = useRef(new Map<string, string>());
   const scope = JSON.stringify(query.key);
-  const previousScope = useRef(scope);
-  if (previousScope.current !== scope) { observed.current.clear(); previousScope.current = scope; }
+  // 観測済みの状態は利用者・DB の範囲ごとに持つ。範囲が変わったら effect の中で捨てる（render 中に ref を読み書きしない）。
+  const observed = useRef({ scope, runs: new Map<string, string>() });
   useEffect(() => {
+    if (observed.current.scope !== scope) observed.current = { scope, runs: new Map() };
+    const runs = observed.current.runs;
     for (const run of query.data ?? []) {
-      const previous = observed.current.get(run.run_id);
+      const previous = runs.get(run.run_id);
       if (previous && previous !== run.status && runFinished(run)) {
         const label = runLabel(run);
         const options = {
@@ -74,9 +75,9 @@ export function SyntheticRunNotifications() {
         if (run.status === "completed") toast.success(label, options);
         else toast.warning(label, options);
       }
-      observed.current.set(run.run_id, run.status);
+      runs.set(run.run_id, run.status);
     }
-  }, [query.data]);
+  }, [query.data, scope]);
   return null;
 }
 

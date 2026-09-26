@@ -184,7 +184,10 @@ export function SecurityRolesPage() {
   const [roles, setRoles] = useState<SecurityRole[]>([]);
   const [permissions, setPermissions] = useState<PermissionDefinition[]>([]);
   const [profileAccessProfiles, setProfileAccessProfiles] = useState<ProfileAccessProfile[]>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  // 選択中のロールと、利用者が自分で選んだか（manual）を 1 つの state で持つ（render で manual を読むため ref にしない）。
+  const [selection, setSelection] = useState<{ id: string | null; manual: boolean }>({ id: null, manual: false });
+  const selectedId = selection.id;
+  const selectRole = (id: string | null, manual = true) => setSelection({ id, manual });
   const [editingId, setEditingId] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<RolePanelView>("list");
   const [search, setSearch] = useState("");
@@ -205,7 +208,6 @@ export function SecurityRolesPage() {
   const roleCodeRef = useRef<HTMLInputElement | null>(null);
   const displayNameRef = useRef<HTMLInputElement | null>(null);
   const loadSequence = useRef(0);
-  const selectedRoleManualSelection = useRef(false);
   const { abortAll, run: runScopedRequest } = useRequestScope();
 
   const editingRole = roles.find((role) => role.role_id === editingId) ?? null;
@@ -301,7 +303,7 @@ export function SecurityRolesPage() {
   const visibleSelectedId =
     activeView === "list"
       ? selectedVisibleKey(filteredRoles, selectedId, (role) => role.role_id, {
-          preserveSelected: selectedRoleManualSelection.current,
+          preserveSelected: selection.manual,
         })
       : selectedId;
   const selectedRole = roles.find((role) => role.role_id === visibleSelectedId) ?? null;
@@ -342,10 +344,10 @@ export function SecurityRolesPage() {
         setPermissions(permissionRows);
         setProfileAccessProfiles(profileRows.rows);
         setProfileAccessLoadWarning(profileRows.warning);
-        setSelectedId((current) =>
-          current && roleRows.some((role) => role.role_id === current)
+        setSelection((current) =>
+          !current.id || roleRows.some((role) => role.role_id === current.id)
             ? current
-            : null
+            : { ...current, id: null }
         );
       });
       if (announce && sequence === loadSequence.current) {
@@ -375,12 +377,11 @@ export function SecurityRolesPage() {
 
   useEffect(() => {
     if (activeView !== "list" || loading) return;
-    setSelectedId((current) => {
-      const nextId = selectedVisibleKey(filteredRoles, current, (role) => role.role_id, {
-        preserveSelected: selectedRoleManualSelection.current,
+    setSelection((current) => {
+      const nextId = selectedVisibleKey(filteredRoles, current.id, (role) => role.role_id, {
+        preserveSelected: current.manual,
       });
-      if (nextId !== current) selectedRoleManualSelection.current = false;
-      return nextId;
+      return nextId === current.id ? current : { id: nextId, manual: false };
     });
   }, [activeView, filteredRoles, loading]);
 
@@ -407,8 +408,7 @@ export function SecurityRolesPage() {
   };
 
   const startEdit = (role: SecurityRole) => {
-    selectedRoleManualSelection.current = true;
-    setSelectedId(role.role_id);
+    selectRole(role.role_id);
     setEditingId(role.role_id);
     setActiveView("edit");
     const nextDraft = {
@@ -520,8 +520,7 @@ export function SecurityRolesPage() {
     try {
       const archived = await securityApi.archiveRole(role);
       setRoles((rows) => rows.map((row) => (row.role_id === archived.role_id ? archived : row)));
-      selectedRoleManualSelection.current = true;
-      setSelectedId(archived.role_id);
+      selectRole(archived.role_id);
       finishToList();
       toast.success(t("security.common.saved"));
     } catch (cause) {
@@ -547,8 +546,7 @@ export function SecurityRolesPage() {
     try {
       const restored = await securityApi.restoreRole(role);
       setRoles((rows) => rows.map((row) => (row.role_id === restored.role_id ? restored : row)));
-      selectedRoleManualSelection.current = true;
-      setSelectedId(restored.role_id);
+      selectRole(restored.role_id);
       finishToList();
       toast.success(t("security.common.saved"));
     } catch (cause) {
@@ -562,8 +560,7 @@ export function SecurityRolesPage() {
 
   const handleDelete = async (role: SecurityRole) => {
     if (operationBusy || !canDeleteRole(role)) return;
-    selectedRoleManualSelection.current = true;
-    setSelectedId(role.role_id);
+    selectRole(role.role_id);
     if (
       !(await confirm({
         title: t("security.roles.delete"),
@@ -587,8 +584,7 @@ export function SecurityRolesPage() {
       const nextRole =
         filteredRoles[deletedIndex + 1] ?? filteredRoles[deletedIndex - 1] ?? null;
       setRoles((rows) => rows.filter((row) => row.role_id !== role.role_id));
-      selectedRoleManualSelection.current = Boolean(nextRole);
-      setSelectedId(nextRole?.role_id ?? null);
+      selectRole(nextRole?.role_id ?? null, Boolean(nextRole));
       setEditingId(null);
       setActiveView("list");
       setFormError("");
@@ -746,8 +742,7 @@ export function SecurityRolesPage() {
             onClick={(event) => {
               event.stopPropagation();
               if (operationBusy) return;
-              selectedRoleManualSelection.current = true;
-              setSelectedId(role.role_id);
+              selectRole(role.role_id);
             }}
           >
             <SecurityIdentityLines id={role.role_code} name={role.display_name} />
@@ -861,8 +856,7 @@ export function SecurityRolesPage() {
                   selectedRowKey={visibleSelectedId}
                   onRowClick={(role) => {
                     if (operationBusy) return;
-                    selectedRoleManualSelection.current = true;
-                    setSelectedId(role.role_id);
+                    selectRole(role.role_id);
                   }}
                   getRowKey={(role) => role.role_id}
                   rowProps={(role) => ({ className: INFORMATION_TABLE_ROW_CLASS, "aria-label": t("security.roles.showRole", { name: role.role_code }) })}

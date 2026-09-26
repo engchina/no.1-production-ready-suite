@@ -16,6 +16,7 @@ import {
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -568,7 +569,8 @@ export function OntologyBuildSection({
   const [businessText, setBusinessText] = useWorkspaceState(`markdown:${profileId}:business-text`, "");
   const [retainedDraft, setRetainedDraft] = useWorkspaceState(`markdown:${profileId}:draft`, {text:"",baseline:"",revisionId:"",etag:""});
   const retainedDraftRef = useRef(retainedDraft);
-  retainedDraftRef.current = retainedDraft;
+  // 最新の一時保存を commit 時に入れる（render 中に ref を書かない）。
+  useLayoutEffect(() => { retainedDraftRef.current = retainedDraft; });
   const [qaFile, setQaFile] = useState<File | null>(null);
   const [sourceFiles, setSourceFiles] = useState<File[]>([]);
   const [sourceFilesError, setSourceFilesError] = useState("");

@@ -4,6 +4,7 @@ import {
   useEffect,
   useLayoutEffect,
   useRef,
+  useState,
   type ReactNode,
   type RefObject,
 } from "react";
@@ -370,19 +371,23 @@ function ScopedWorkspace({ children }: { children: ReactNode }) {
 function KeepAlivePages() {
   const { pathname } = useLocation();
   const auth = useAuth();
-  const mounted = useRef(new Set<string>());
+  // 訪問済みのページは state で持つ（render 中に ref を読み書きしない）。初訪問の render で追加する。
+  const [visited, setVisited] = useState<ReadonlySet<string>>(() => new Set());
+  let mounted = visited;
   if (
     KEEP_ALIVE_PATHS.has(pathname) &&
-    auth.hasPermission(ROUTE_PERMISSIONS[pathname])
+    auth.hasPermission(ROUTE_PERMISSIONS[pathname]) &&
+    !visited.has(pathname)
   ) {
-    mounted.current.add(pathname);
+    mounted = new Set(visited).add(pathname);
+    setVisited(mounted);
   }
 
   return (
     <>
       {KEEP_ALIVE_PAGES.filter(
         (page) =>
-          mounted.current.has(page.path) && auth.hasPermission(ROUTE_PERMISSIONS[page.path])
+          mounted.has(page.path) && auth.hasPermission(ROUTE_PERMISSIONS[page.path])
       ).map((page) => (
         <WorkspacePage key={page.path} page={page.path} active={page.path === pathname}>
           <Suspense fallback={<RouteLoadingFallback />}>{page.element}</Suspense>

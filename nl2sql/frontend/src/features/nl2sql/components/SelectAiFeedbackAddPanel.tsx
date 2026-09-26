@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { MessageSquareText, ThumbsDown, ThumbsUp } from "lucide-react";
 
 import {
@@ -51,7 +51,8 @@ export function SelectAiFeedbackAddPanel({
   );
   const question = history?.question || result?.original_question || questionText || "";
   const historyId = history?.id || result?.history_id || "";
-  currentHistoryId.current = historyId;
+  // 最新の履歴 ID を commit 時に入れる（render 中に ref を書かない）。
+  useLayoutEffect(() => { currentHistoryId.current = historyId; });
 
   useEffect(() => {
     setFeedbackContent(history?.feedback_comment ?? "");

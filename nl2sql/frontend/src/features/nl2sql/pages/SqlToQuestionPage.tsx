@@ -1,5 +1,5 @@
 import { useWorkspaceState, useWorkspaceRevalidation, useWorkspaceActivation, useWorkspaceActive, WorkspaceResultNotice } from "@/components/WorkspaceState";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ArrowRightLeft, BookOpen, Database, FileText, RefreshCw } from "lucide-react";
 
 import {
@@ -67,7 +67,8 @@ export function SqlToQuestionPage() {
   const [structureText, setStructureText] = useWorkspaceState(`structureText:${selectedProfileId}`, "");
   const [questionSnapshot, setQuestionSnapshot] = useWorkspaceState(`questionSnapshot:${selectedProfileId}`, EMPTY_QUESTION_SNAPSHOT);
   const reverse = questionSnapshot.generatedAt && questionSnapshot.sourceSql === sql ? questionSnapshot : null;
-  const generatedThisVisit = useRef<typeof EMPTY_QUESTION_SNAPSHOT | null>(null);
+  // この訪問で生成した結果（render で比べるため state で持つ）。
+  const [generatedThisVisit, setGeneratedThisVisit] = useState<typeof EMPTY_QUESTION_SNAPSHOT | null>(null);
   const [editingStructure, setEditingStructure] = useState(false);
   const [sqlGenerationLoading, setSqlGenerationLoading] = useState(false);
   const [sqlGenerationError, setSqlGenerationError] = useState("");
@@ -79,7 +80,8 @@ export function SqlToQuestionPage() {
   const structureSignature = JSON.stringify([selectedProfileId, structureText, false]);
   const workspaceActive = useWorkspaceActive();
   const activeRef = useRef(workspaceActive);
-  activeRef.current = workspaceActive;
+  // 最新の表示状態を commit 時に入れる（render 中に ref を書かない）。
+  useLayoutEffect(() => { activeRef.current = workspaceActive; });
   const focusStructure = useRef(false);
   useEffect(() => {
     if (activePanel === "structure" && focusStructure.current && workspaceActive) {
@@ -218,7 +220,7 @@ export function SqlToQuestionPage() {
           warnings: data.warnings ?? [],
           generatedAt: new Date().toISOString(),
         };
-        generatedThisVisit.current = snapshot;
+        setGeneratedThisVisit(snapshot);
         setQuestionSnapshot(snapshot);
         setStructureText(data.logical_structure || "");
         setRegenerated(null);
@@ -525,7 +527,7 @@ export function SqlToQuestionPage() {
             {reverse ? (
               <section className="grid content-start gap-3 text-sm">
                 {structureText !== reverse.logicalStructure && <FormStatus tone="warning" message={t("sqlToQuestion.result.staleStructure")} />}
-                <WorkspaceResultNotice result={reverse} inputSignature={JSON.stringify([selectedProfileId, sql, false])} finishedAt={reverse.generatedAt} restored={reverse !== generatedThisVisit.current} />
+                <WorkspaceResultNotice result={reverse} inputSignature={JSON.stringify([selectedProfileId, sql, false])} finishedAt={reverse.generatedAt} restored={reverse !== generatedThisVisit} />
                 <div className="min-w-0 rounded-md border border-border bg-surface p-3">
                   <p className="text-xs font-medium text-fg-muted">{t("sqlToQuestion.result.question")}</p>
                   <QuestionText

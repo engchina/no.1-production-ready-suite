@@ -627,7 +627,8 @@ function ExecutableNl2SqlWorkbench() {
   // 実行中かどうかは ref で参照し、effect の再実行トリガーにしない。
   // active を依存に入れると job 完了(active: true → false)のたびに同じ質問で推薦 API が再実行される。
   const activeRef = useRef(active);
-  activeRef.current = active;
+  // 最新の active を commit 時に入れる（render 中に ref を書かない）。
+  useLayoutEffect(() => { activeRef.current = active; });
   useEffect(() => {
     const trimmed = question.trim();
     setAutoDetectLowConfidence(false);
@@ -791,7 +792,8 @@ function ExecutableNl2SqlWorkbench() {
   };
 
   const detectionContext = useRef("");
-  detectionContext.current = profileRecommendationSignature(question, profileId);
+  // 最新の判定条件を commit 時に入れる（render 中に ref を書かない）。
+  useLayoutEffect(() => { detectionContext.current = profileRecommendationSignature(question, profileId); });
 
   // 質問から業務プロファイルを自動判定（学習済み分類器 → 決定論フォールバック）して選択する。
   const detectProfile = useCallback(async () => {

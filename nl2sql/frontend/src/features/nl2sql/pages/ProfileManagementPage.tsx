@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ListPlus,
   ArrowLeft,
@@ -1329,11 +1329,13 @@ export function ProfileManagementPage() {
   // ?profile= が唯一の情報源: null=一覧 / "new"=新規 / <id>=編集
   const profileParam = searchParams.get("profile");
   const editTargetRef = useRef(profileParam);
-  editTargetRef.current = profileParam;
+  // 最新の編集対象を commit 時に入れる（render 中に ref を書かない）。
+  useLayoutEffect(() => { editTargetRef.current = profileParam; });
   const [bulkSelecting, setBulkSelecting] = useState(false);
   const mutationBusy = bulkSelecting || (loading !== "" && loading !== "load");
   const mutationBusyRef = useRef(mutationBusy);
-  mutationBusyRef.current = mutationBusy;
+  // 最新の実行中状態を commit 時に入れる（render 中に ref を書かない）。handler は直前に true を先に入れる。
+  useLayoutEffect(() => { mutationBusyRef.current = mutationBusy; });
   const syncJobParam = searchParams.get("syncJobId") ?? "";
   const activeView: ActiveView = profileParam ? "editor" : "list";
   const selectedProfileId = profileParam && profileParam !== "new" ? profileParam : "";
