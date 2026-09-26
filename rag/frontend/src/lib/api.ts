@@ -1263,6 +1263,24 @@ export interface FeedbackDetail extends FeedbackItem {
   execution: FeedbackExecutionInfo;
 }
 
+export type DocragPromptKey = "vlm_answer" | "image_retrieval";
+
+/** 編集できる DocRAG プロンプト(rag_poc の vlm_answer.txt / image_retrieval.txt)。 */
+export interface DocragPromptView {
+  key: DocragPromptKey;
+  content: string;
+  default_content: string;
+  customized: boolean;
+  required_placeholders: string[];
+  updated_at: string | null;
+}
+
+export interface DocragPromptsData {
+  prompts: DocragPromptView[];
+  /** 回答フローの各段の読み取り専用プロンプト(コードで管理)。 */
+  stages: { id: string; prompts: { id: string; content: string }[] }[];
+}
+
 export interface FeedbackApprovedFaqPromotion {
   business_view_id: string;
   question: string;
@@ -2976,6 +2994,15 @@ export const api = {
   },
   getFeedbackDetail: (id: string) =>
     request<FeedbackDetail>(`/api/feedback/${encodeURIComponent(id)}`),
+  getDocragPrompts: () => request<DocragPromptsData>("/api/settings/docrag-prompts"),
+  saveDocragPrompt: (key: DocragPromptKey, content: string) =>
+    request<DocragPromptsData>(`/api/settings/docrag-prompts/${key}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content }),
+    }),
+  resetDocragPrompt: (key: DocragPromptKey) =>
+    request<DocragPromptsData>(`/api/settings/docrag-prompts/${key}`, { method: "DELETE" }),
   promoteFeedbackToApprovedFaq: (id: string) =>
     request<FeedbackApprovedFaqPromotion>(
       `/api/feedback/${encodeURIComponent(id)}/approved-faq`,

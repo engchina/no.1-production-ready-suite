@@ -83,3 +83,39 @@ def test_parse_endpoint_passes_vision_option() -> None:
     assert response.json()["extraction"]["raw_text"] == "ok"
     assert captured["vision_enabled"] is True
     assert captured["file_name"] == "manual.pdf"
+
+
+def test_parse_endpoint_passes_image_retrieval_prompt() -> None:
+    captured: dict[str, object] = {}
+
+    def fake_analyze(source_bytes: bytes, **kwargs: object) -> StructuredExtraction:
+        captured.update(kwargs)
+        return StructuredExtraction(raw_text="ok")
+
+    options = '{"vision_enabled": true, "image_retrieval_prompt": "独自 {{image_metadata}}"}'
+    with patch("app.main.analyze_source", side_effect=fake_analyze):
+        TestClient(app).post(
+            "/parse",
+            files={"file": ("manual.pdf", b"%PDF-1.4", "application/pdf")},
+            data={"content_type": "application/pdf", "parser_options": options},
+        )
+        TestClient(app).post(
+            "/parse",
+            files={"file": ("manual.pdf", b"%PDF-1.4", "application/pdf")},
+            data={"parser_options": '{"vision_enabled": true}'},
+        )
+
+    assert captured["image_retrieval_prompt"] is None  # 2 回目は未編集(既定値)
+
+
+def test_image_retrieval_prompt_override_applies_only_inside_block() -> None:
+    from docrag.knowledge.prompt_files import IMAGE_RETRIEVAL_PROMPT_KEY, read_prompt
+
+    from app.extraction import _image_retrieval_prompt_override
+
+    default = read_prompt(IMAGE_RETRIEVAL_PROMPT_KEY)
+    with _image_retrieval_prompt_override("独自 {{image_metadata}}"):
+        assert read_prompt(IMAGE_RETRIEVAL_PROMPT_KEY) == "独自 {{image_metadata}}"
+    with _image_retrieval_prompt_override(None):
+        assert read_prompt(IMAGE_RETRIEVAL_PROMPT_KEY) == default
+    assert read_prompt(IMAGE_RETRIEVAL_PROMPT_KEY) == default

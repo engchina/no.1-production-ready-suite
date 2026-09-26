@@ -2224,6 +2224,58 @@ class OracleClient:
                 row[key] = json.loads(str(row[key]))
         return row
 
+    async def list_docrag_prompts(self) -> dict[str, dict[str, object]]:
+        """編集した DocRAG プロンプトを {key: {content, updated_at}} で返す(未編集は含めない)。"""
+        rows = await self._fetch_all(
+            "SELECT prompt_key, content, updated_at FROM rag_docrag_prompts", {}
+        )
+        return {
+            str(row["prompt_key"]): {
+                "content": str(row.get("content") or ""),
+                "updated_at": row.get("updated_at"),
+            }
+            for row in rows
+        }
+
+    async def save_docrag_prompt(self, key: str, content: str) -> None:
+        """DocRAG プロンプトを保存する(同じ key は上書き)。"""
+
+        def operation(connection: OracleConnectionProtocol) -> None:
+            _execute(
+                connection,
+                """
+                MERGE INTO rag_docrag_prompts target
+                USING (SELECT :prompt_key AS prompt_key FROM dual) source
+                ON (target.prompt_key = source.prompt_key)
+                WHEN MATCHED THEN UPDATE SET
+                    target.content = :content,
+                    target.updated_at = SYSTIMESTAMP
+                WHEN NOT MATCHED THEN INSERT (prompt_key, content)
+                VALUES (:prompt_key, :content)
+                """,
+                {"prompt_key": key, "content": content},
+            )
+
+        await self._run_transaction(operation)
+
+    async def delete_docrag_prompt(self, key: str) -> bool:
+        """保存した DocRAG プロンプトを消して既定値へ戻す。消した場合 True。"""
+
+        def operation(connection: OracleConnectionProtocol) -> int:
+            return _execute_count(
+                connection,
+                "DELETE FROM rag_docrag_prompts WHERE prompt_key = :prompt_key",
+                {"prompt_key": key},
+            )
+
+        return await self._run_transaction(operation) > 0
+
+    async def docrag_prompt_overrides(self) -> dict[str, str]:
+        """回答・解析へ渡す DocRAG プロンプトの上書き({key: content})。"""
+        return {
+            key: str(value["content"]) for key, value in (await self.list_docrag_prompts()).items()
+        }
+
     async def save_answer_evaluation(self, trace_id: str, evaluation: Mapping[str, object]) -> bool:
         """保存済み DocRAG 回答へ標準回答による評価結果を保存する(再評価は上書き)。"""
 
@@ -11569,6 +11621,17 @@ CREATE TABLE {table_name} (
 
 CREATE INDEX {table_name}_view_idx
     ON {table_name} (business_view_id, created_at DESC);
+""".strip()
+
+
+def oracle_docrag_prompt_schema_sql(table_name: str = "rag_docrag_prompts") -> str:
+    """編集した DocRAG プロンプトの保存 table DDL(rag_poc の prompts/<key>.txt に相当)。"""
+    return f"""
+CREATE TABLE {table_name} (
+    prompt_key  VARCHAR2(64) PRIMARY KEY,
+    content     CLOB NOT NULL,
+    updated_at  TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
+)
 """.strip()
 
 

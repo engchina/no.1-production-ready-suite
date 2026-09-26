@@ -21,6 +21,7 @@ from app.clients.oracle import (
     oracle_business_view_schema_sql,
     oracle_chunk_set_schema_sql,
     oracle_conversation_schema_sql,
+    oracle_docrag_prompt_schema_sql,
     oracle_document_recipe_schema_sql,
     oracle_document_schema_sql,
     oracle_evaluation_artifact_schema_sql,
@@ -170,6 +171,11 @@ def oracle_schema_sections() -> list[OracleSchemaSection]:
             name="answer_records",
             table_name="rag_answer_records",
             sql=oracle_answer_record_schema_sql(),
+        ),
+        OracleSchemaSection(
+            name="docrag_prompts",
+            table_name="rag_docrag_prompts",
+            sql=oracle_docrag_prompt_schema_sql(),
         ),
         OracleSchemaSection(
             name="business_view_knowledge",
@@ -447,6 +453,11 @@ def oracle_schema_migration_sections() -> list[OracleSchemaSection]:
             name="20260926_003_feedback_reasons_corrected_answer",
             table_name="rag_citation_feedback",
             sql=_feedback_reasons_corrected_answer_migration_sql(),
+        ),
+        OracleSchemaSection(
+            name="20260926_004_docrag_prompts",
+            table_name="rag_docrag_prompts",
+            sql=_docrag_prompts_migration_sql(),
         ),
     ]
 
@@ -965,6 +976,27 @@ BEGIN
 
     IF v_column_count = 0 THEN
         EXECUTE IMMEDIATE 'ALTER TABLE rag_documents ADD (processing_config JSON)';
+    END IF;
+END;
+/
+""".strip()
+
+
+def _docrag_prompts_migration_sql() -> str:
+    """編集した DocRAG プロンプトの保存表を追加する(冪等)。"""
+    return """
+DECLARE
+    v_table_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_table_count
+    FROM user_tables
+    WHERE table_name = 'RAG_DOCRAG_PROMPTS';
+    IF v_table_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE TABLE rag_docrag_prompts ('
+            || 'prompt_key VARCHAR2(64) PRIMARY KEY,'
+            || 'content CLOB NOT NULL,'
+            || 'updated_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL)';
     END IF;
 END;
 /

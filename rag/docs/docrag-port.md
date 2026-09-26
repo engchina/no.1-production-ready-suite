@@ -31,7 +31,12 @@ LLM と VLM は、プロジェクト全体で openai SDK（OCI OpenAI 互換の 
 | 文書の分類（大分類・中分類・小分類）と有効期間 | 文書のメタデータ | 文書詳細の「文書の分類と有効期間」（`PUT /api/documents/{id}/classification`） |
 | 分類フィルタ・基準日 | 検索要求 | RAG 検索 > 詳細条件 >「文書の分類で絞り込む」（`filters` の `large_category` / `middle_category` / `small_category` / `as_of`） |
 
+| DocRAG の回答生成テンプレート（`vlm_answer`） | global | 検索・回答設定 > 回答プロンプト（各段のプロンプトは読み取り専用で表示） |
+| 図・画像の読み取りプロンプト（`image_retrieval`） | global | 検索・回答設定 > 文書解析（Docling の「図・画像を AI で読み取る」が有効なとき） |
+
 KB（ナレッジベース）は検索対象の範囲を決めるだけで、上記のどれも持たない。
+
+編集したプロンプトは `rag_docrag_prompts` に保存する（migration `20260926_004_docrag_prompts`）。回答では docrag の runtime の `prompt_overrides` で渡し、解析では `parser_options.image_retrieval_prompt` で docling サービスへ渡す（Vision の段階だけ有効）。未編集なら rag_poc と同じコードの既定値を使う。画像の読み取りプロンプトの変更は、解析済みの文書には再解析するまで反映しない。
 
 分類フィルタと有効期間は rag_poc の `_classification_filter_sql` と同じ意味で絞り込む。分類は指定した項目だけを完全一致で比べる。有効期間は基準日（未指定なら今日）で常に絞り、期間のない文書は除外しない。終了日は排他的（`effective_to` の当日は期間外）。分類と有効期間は文書単位で、レシピを切り替えても変わらない。
 
