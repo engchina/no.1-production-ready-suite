@@ -21,6 +21,7 @@ import {
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -285,14 +286,20 @@ export function UserManagementPage({
     await requestData(sequence, announce);
   };
 
+  // 製品が描画のたびに新しい api オブジェクトを渡しても初回読込をやり直さないよう、最新の api は ref で読む。
+  const apiRef = useRef(api);
+  useLayoutEffect(() => {
+    apiRef.current = api;
+  });
+
   // 読込中・エラー表示の初期化は呼び出し側で行う（初回表示は初期 state が読込中）。
   // 初回読込の effect から使うため、安定した参照にする（依存は useRequestScope の安定した run だけ）。
   const requestData = useCallback(async (sequence: number, announce: boolean) => {
     try {
       await runScopedRequest(async (signal) => {
         const [userRows, roleRows] = await Promise.all([
-          api.users({ signal }),
-          api.roles(false, { signal }),
+          apiRef.current.users({ signal }),
+          apiRef.current.roles(false, { signal }),
         ]);
         if (signal.aborted || sequence !== loadSequence.current) return;
         setUsers(userRows);
@@ -318,7 +325,7 @@ export function UserManagementPage({
     } finally {
       if (sequence === loadSequence.current) setLoading(false);
     }
-  }, [api, runScopedRequest]);
+  }, [runScopedRequest]);
 
   // abortAll / requestData は安定した参照なので、この effect はマウント時に 1 回だけ動く。
   useEffect(() => {

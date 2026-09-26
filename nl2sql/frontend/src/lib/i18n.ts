@@ -336,7 +336,7 @@ const nl2sqlJa = {
   "security.roles.unknownGroup": "未分類",
   "security.roles.permissionCatalogEmpty": "権限カタログを読み込めませんでした。再読込してください。",
   "profiles.access.title": "利用可能ロール",
-  "profiles.access.hint": "この業務プロファイルを利用できるロールです。設定はロール・権限管理で変更します。",
+  "profiles.access.hint": "この業務プロファイルを利用できるロールです。設定は権限管理で変更します。",
   "profiles.access.none": "この業務プロファイルを利用できるロールはまだ設定されていません。",
   "security.deepsec.subtitle": "サーバーで版管理された SQL のみを、順序どおりに適用・検証します。",
   "security.deepsec.status": "構成状態",

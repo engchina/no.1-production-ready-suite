@@ -1365,7 +1365,8 @@ export function ProfileManagementPage() {
     queryFn: () => apiGet<SelectAiDbProfilesData>(BUSINESS_SELECT_AI_DB_PROFILES_URL),
     staleTime: 5_000,
   });
-  const canViewProfileAccess = auth.hasPermission(MENU_PERMISSIONS.securityRoles);
+  // 利用可能ロールの一覧 API は権限管理（menu.security_permissions）の担当（#206）。
+  const canViewProfileAccess = auth.hasPermission(MENU_PERMISSIONS.securityPermissions);
   const profileAccessProfilesQuery = useQuery({
     queryKey: ["security", "profile-access", "profiles"],
     queryFn: () => securityApi.profileAccessProfiles(),
