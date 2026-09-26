@@ -72,9 +72,9 @@ def test_patch_oci_writes_config_keeps_other_profiles_and_env(
     assert stat.S_IMODE(config.stat().st_mode) == 0o600
     assert stat.S_IMODE(oci_home.stat().st_mode) == 0o700
     env_text = env_file.read_text(encoding="utf-8")
-    assert f"OCI_CONFIG_FILE={config}" in env_text
-    assert "OCI_CONFIG_PROFILE=DEFAULT" in env_text
-    assert "OCI_REGION=ap-osaka-1" in env_text
+    assert f"PLATFORM_OCI_CONFIG_FILE={config}" in env_text
+    assert "PLATFORM_OCI_CONFIG_PROFILE=DEFAULT" in env_text
+    assert "PLATFORM_OCI_REGION=ap-osaka-1" in env_text
     assert settings.oci_region == "ap-osaka-1"
 
 

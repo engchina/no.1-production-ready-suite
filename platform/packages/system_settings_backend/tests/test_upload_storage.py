@@ -60,7 +60,10 @@ def test_get_returns_runtime_values_and_falls_back_to_oci_region(tmp_path: Path)
 
 def test_patch_persists_only_upload_keys_and_mutates_runtime(tmp_path: Path) -> None:
     env_file = tmp_path / ".env"
-    env_file.write_text("# 既存\nOCI_REGION=ap-osaka-1\nLOCAL_STORAGE_DIR=/old\n", encoding="utf-8")
+    env_file.write_text(
+        "# 既存\nPLATFORM_OCI_REGION=ap-osaka-1\nPLATFORM_LOCAL_STORAGE_DIR=/old\n",
+        encoding="utf-8",
+    )
     env_file.chmod(0o640)
     settings = FakeSettings(object_storage_namespace="ns-keep")
 
@@ -81,11 +84,14 @@ def test_patch_persists_only_upload_keys_and_mutates_runtime(tmp_path: Path) -> 
     assert settings.upload_storage_backend == "oci"
     assert settings.local_storage_dir == "/u01/data/x"
     content = env_file.read_text(encoding="utf-8")
-    assert "# 既存\nOCI_REGION=ap-osaka-1\nLOCAL_STORAGE_DIR=/u01/data/x\n" in content
-    assert "UPLOAD_STORAGE_BACKEND=oci" in content
-    assert "OBJECT_STORAGE_REGION=us-chicago-1" in content
-    assert "OBJECT_STORAGE_NAMESPACE=ns-keep" in content
-    assert "OBJECT_STORAGE_BUCKET=originals" in content
+    assert (
+        "# 既存\nPLATFORM_OCI_REGION=ap-osaka-1\nPLATFORM_LOCAL_STORAGE_DIR=/u01/data/x\n"
+        in content
+    )
+    assert "PLATFORM_UPLOAD_STORAGE_BACKEND=oci" in content
+    assert "PLATFORM_OBJECT_STORAGE_REGION=us-chicago-1" in content
+    assert "PLATFORM_OBJECT_STORAGE_NAMESPACE=ns-keep" in content
+    assert "PLATFORM_OBJECT_STORAGE_BUCKET=originals" in content
     assert stat.S_IMODE(env_file.stat().st_mode) == 0o640
 
 

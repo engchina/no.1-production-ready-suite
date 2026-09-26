@@ -75,7 +75,7 @@ def test_manual_integration_preview_smoke(
     assert "readiness=" in output
     assert "[ok] preview_enterprise_ai_direct:" in output
     assert "provider=oci_enterprise_ai,mode=direct" in output
-    assert "ORACLE_PASSWORD" not in output
+    assert "PLATFORM_ORACLE_PASSWORD" not in output
 
 
 def test_manual_integration_execute_smoke(
@@ -106,7 +106,7 @@ def test_manual_integration_execute_smoke(
     assert "[ok] job_enterprise_ai_direct:" in output
     assert "status=done" in output
     assert "provider=oci_enterprise_ai,mode=direct" in output
-    assert "ORACLE_PASSWORD" not in output
+    assert "PLATFORM_ORACLE_PASSWORD" not in output
 
 
 def test_manual_integration_diagnostics_only_writes_single_step_report(
@@ -179,8 +179,8 @@ def test_manual_integration_require_enterprise_ai_stops_when_unconfigured(
     output = capsys.readouterr().out
     assert "[ng] diagnostics:" in output
     assert "Enterprise AI Direct is not ready" in output
-    assert "OCI_ENTERPRISE_AI_ENDPOINT" in output
-    assert "ORACLE_PASSWORD" not in output
+    assert "PLATFORM_OCI_ENTERPRISE_AI_ENDPOINT" in output
+    assert "PLATFORM_ORACLE_PASSWORD" not in output
 
 
 def test_manual_integration_require_feedback_embedding_stops_when_unconfigured(
@@ -204,7 +204,7 @@ def test_manual_integration_require_feedback_embedding_stops_when_unconfigured(
     output = capsys.readouterr().out
     assert "[ng] diagnostics:" in output
     assert "Feedback embedding is not ready" in output
-    assert "ORACLE_PASSWORD" not in output
+    assert "PLATFORM_ORACLE_PASSWORD" not in output
 
 
 def test_manual_integration_require_oracle_persistence_stops_when_memory_store(
@@ -233,7 +233,7 @@ def test_manual_integration_require_oracle_persistence_stops_when_memory_store(
     output = capsys.readouterr().out
     assert "[ng] diagnostics:" in output
     assert "Oracle persistence is not ready" in output
-    assert "ORACLE_PASSWORD" not in output
+    assert "PLATFORM_ORACLE_PASSWORD" not in output
 
 
 def test_manual_integration_require_refreshed_assets_checks_selected_engines(
@@ -383,7 +383,7 @@ def test_manual_integration_execute_feedback_index_smoke(
     assert "[ok] feedback_index_rebuild:" in output
     assert "executed=True" in output
     assert "backend=oracle_26ai" in output
-    assert "ORACLE_PASSWORD" not in output
+    assert "PLATFORM_ORACLE_PASSWORD" not in output
 
 
 def test_manual_integration_full_smoke_runs_supporting_checks_and_jobs(
@@ -416,7 +416,7 @@ def test_manual_integration_full_smoke_runs_supporting_checks_and_jobs(
     assert "[ok] support_feedback_index:" in output
     assert "[ok] preview_enterprise_ai_direct:" in output
     assert "[ok] job_enterprise_ai_direct:" in output
-    assert "ORACLE_PASSWORD" not in output
+    assert "PLATFORM_ORACLE_PASSWORD" not in output
 
 
 def test_manual_integration_release_gate_expands_production_gate_steps(
@@ -545,7 +545,7 @@ def test_manual_integration_release_gate_expands_production_gate_steps(
         "preview_select_ai_agent",
         "job_select_ai",
     }
-    assert "ORACLE_PASSWORD" not in output
+    assert "PLATFORM_ORACLE_PASSWORD" not in output
 
 
 def test_manual_integration_reports_diagnostics_after_asset_refresh(
@@ -568,7 +568,7 @@ def test_manual_integration_reports_diagnostics_after_asset_refresh(
     assert "[ok] refresh_select_ai:" in output
     assert "[ok] diagnostics_after_refresh:" in output
     assert "select_ai:ok" in output
-    assert "ORACLE_PASSWORD" not in output
+    assert "PLATFORM_ORACLE_PASSWORD" not in output
 
 
 def test_manual_integration_supporting_features_smoke(
@@ -590,7 +590,7 @@ def test_manual_integration_supporting_features_smoke(
     assert "[ok] support_comments:" in output
     assert "[ok] support_comment_sql_generation:" in output
     assert "[ok] support_feedback_index:" in output
-    assert "ORACLE_PASSWORD" not in output
+    assert "PLATFORM_ORACLE_PASSWORD" not in output
 
 
 def test_manual_integration_legacy_absorption_flags_and_report(
@@ -686,7 +686,7 @@ def test_manual_integration_legacy_absorption_flags_and_report(
         "legacy_db_profile_drop_execute",
         "feedback_index_rebuild",
     }
-    assert "ORACLE_PASSWORD" not in output
+    assert "PLATFORM_ORACLE_PASSWORD" not in output
 
 
 def test_manual_integration_legacy_classifier_requires_oracle_state(
@@ -765,7 +765,7 @@ def test_manual_integration_debug_raw_preview_smoke(
     output = capsys.readouterr().out
     assert "[ok] debug_select_ai_generate_raw:" in output
     assert "raw='SELECT 1'" in output
-    assert "ORACLE_PASSWORD" not in output
+    assert "PLATFORM_ORACLE_PASSWORD" not in output
 
 
 def test_raw_summary_truncates_multiline_text() -> None:

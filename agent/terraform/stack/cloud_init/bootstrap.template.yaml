@@ -18,6 +18,12 @@ write_files:
     encoding: "gzip+base64"
     content: |
       ${backend_env}
+  - path: "/u01/aipoc/props/platform.env"
+    permissions: "0600"
+    owner: "root:root"
+    encoding: "gzip+base64"
+    content: |
+      ${platform_env}
   - path: "/u01/aipoc/props/wallet.zip"
     permissions: "0600"
     owner: "root:root"

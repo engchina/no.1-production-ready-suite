@@ -30,7 +30,7 @@ from app.features.nl2sql.object_identity import (
     qualified_object_name,
 )
 from app.features.nl2sql.object_visibility import is_user_visible_schema_object
-from app.settings import Settings, get_settings
+from app.settings import BACKEND_ENV_FILE, Settings, get_settings
 
 from .domain import (
     LEGACY_APP_USER_ID_SCOPE_VALUE_SOURCE,
@@ -44,16 +44,13 @@ from .domain import (
 )
 from .scope_relations import DependencyPlan
 from .service import (
-    _BACKEND_ENV_FILE,
     SecurityApiError,
     SecurityService,
-    _env_assignment_key,
-    _format_env_value,
     get_security_service,
 )
 
 PLAN_VERSION = "V001"
-PASSWORD_PLACEHOLDER = "<secret:ORACLE_DEEPSEC_DATA_USER_PASSWORD>"  # nosec B105
+PASSWORD_PLACEHOLDER = "<secret:NL2SQL_ORACLE_DEEPSEC_DATA_USER_PASSWORD>"  # nosec B105
 DEEPSEC_DATA_USER = "DEEPSEC_DATA_USER"
 DEEPSEC_APPLY_CONFIRMATION = "ADMIN_EXECUTE"
 DEEPSEC_RESET_CONFIRMATION = "ADMIN_RESET"
@@ -115,26 +112,35 @@ _DEEPSEC_INTERNAL_OBJECT_PREFIXES = (
     "PLATFORM_",
 )
 _DEEPSEC_CONFLICTING_POLICY_DETAIL_LIMIT = 5
-_DEEPSEC_ENABLED_KEY = "ORACLE_DEEPSEC_ENABLED"
-_DEEPSEC_DATA_USER_KEY = "ORACLE_DEEPSEC_DATA_USER"
-_DEEPSEC_DATA_USER_PASSWORD_KEY = "ORACLE_DEEPSEC_DATA_USER_PASSWORD"  # nosec B105
+# DeepSec の設定は NL2SQL 固有なので製品の backend/.env に置く（#211）。
+# テストが差し替えられるよう module の値として持つ。
+_BACKEND_ENV_FILE = BACKEND_ENV_FILE
+_DEEPSEC_ENABLED_KEY = "NL2SQL_ORACLE_DEEPSEC_ENABLED"
+_DEEPSEC_DATA_USER_KEY = "NL2SQL_ORACLE_DEEPSEC_DATA_USER"
+_DEEPSEC_DATA_USER_PASSWORD_KEY = "NL2SQL_ORACLE_DEEPSEC_DATA_USER_PASSWORD"  # nosec B105
 _ORACLE_PASSWORD_REUSE_RE = re.compile(r"\bORA-28007\b", re.IGNORECASE)
-_REMOVED_DEEPSEC_KEYS = frozenset(
-    {
-        "ORACLE_DEEPSEC_END_USER",
-        "ORACLE_DEEPSEC_END_USER_PASSWORD",
-        "ORACLE_DEEPSEC_APP_USER",
-        "ORACLE_DEEPSEC_APP_USER_PASSWORD",
-    }
-)
 _DEEPSEC_CONFIG_KEYS = frozenset(
     {
         _DEEPSEC_ENABLED_KEY,
         _DEEPSEC_DATA_USER_KEY,
         _DEEPSEC_DATA_USER_PASSWORD_KEY,
-        *_REMOVED_DEEPSEC_KEYS,
     }
 )
+_ENV_ASSIGNMENT_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=")
+
+
+def _env_assignment_key(line: str) -> str | None:
+    match = _ENV_ASSIGNMENT_RE.match(line)
+    return match.group(1) if match else None
+
+
+def _format_env_value(value: str) -> str:
+    if not value:
+        return '""'
+    if re.search(r"\s|#|=|'|\\", value):
+        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{escaped}"'
+    return value
 
 
 def _strict_identifier(value: str) -> str:
@@ -179,7 +185,7 @@ def _has_forbidden_password_char(value: str) -> bool:
 def _quoted_password(value: str) -> str:
     if not value or len(value) > 256 or _has_forbidden_password_char(value):
         raise SecurityApiError(
-            503, "ORACLE_DEEPSEC_DATA_USER_PASSWORD を安全な値で設定してください。"
+            503, "NL2SQL_ORACLE_DEEPSEC_DATA_USER_PASSWORD を安全な値で設定してください。"
         )
     return '"' + value.replace('"', '""') + '"'
 
@@ -188,7 +194,7 @@ def _validate_data_user_password(value: str) -> str:
     if len(value) < 12 or len(value) > 256 or _has_forbidden_password_char(value):
         raise SecurityApiError(
             400,
-            "ORACLE_DEEPSEC_DATA_USER_PASSWORD は12〜256文字で、"
+            "NL2SQL_ORACLE_DEEPSEC_DATA_USER_PASSWORD は12〜256文字で、"
             "二重引用符と制御文字を含めずに指定してください。",
         )
     return value
@@ -206,8 +212,16 @@ def _looks_like_missing_scope_filters_column(exc: Exception) -> bool:
 
 
 def _write_deepsec_config_env_locked(settings: Settings, env_path: Path) -> None:
+    """DeepSec の 3 key を書く。既存の key があればその位置に、なければ末尾の節に置く。"""
     lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
-    next_lines = [line for line in lines if _env_assignment_key(line) not in _DEEPSEC_CONFIG_KEYS]
+    insert_at: int | None = None
+    next_lines: list[str] = []
+    for line in lines:
+        if _env_assignment_key(line) in _DEEPSEC_CONFIG_KEYS:
+            if insert_at is None:
+                insert_at = len(next_lines)
+            continue
+        next_lines.append(line)
     deepsec_lines = [
         f"{_DEEPSEC_ENABLED_KEY}=true",
         f"{_DEEPSEC_DATA_USER_KEY}={_format_env_value(settings.oracle_deepsec_data_user)}",
@@ -216,14 +230,6 @@ def _write_deepsec_config_env_locked(settings: Settings, env_path: Path) -> None
             f"{_format_env_value(settings.oracle_deepsec_data_user_password)}"
         ),
     ]
-    insert_at = next(
-        (
-            index
-            for index, line in enumerate(next_lines)
-            if _env_assignment_key(line) == "ORACLE_ADB_OCID"
-        ),
-        None,
-    )
     if insert_at is None:
         if next_lines and next_lines[-1].strip():
             next_lines.append("")
@@ -1429,7 +1435,7 @@ class DeepSecService:
     ) -> dict[str, object]:
         _ = actor
         if not self.settings.oracle_deepsec_enabled:
-            raise SecurityApiError(409, "ORACLE_DEEPSEC_ENABLED=true を設定してください。")
+            raise SecurityApiError(409, "NL2SQL_ORACLE_DEEPSEC_ENABLED=true を設定してください。")
         role = self._editable_data_entitlement_role(role_id, expected_version=expected_version)
         self.pools.validate_deepsec_control_configuration()
         with self.pools.control_connection() as conn, conn.cursor() as cursor:
@@ -1459,7 +1465,7 @@ class DeepSecService:
                 f"Data Grant の適用には confirmation={DEEPSEC_APPLY_CONFIRMATION} が必要です。",
             )
         if not self.settings.oracle_deepsec_enabled:
-            raise SecurityApiError(409, "ORACLE_DEEPSEC_ENABLED=true を設定してください。")
+            raise SecurityApiError(409, "NL2SQL_ORACLE_DEEPSEC_ENABLED=true を設定してください。")
         role = self._editable_data_entitlement_role(role_id, expected_version=expected_version)
         self.pools.validate_deepsec_control_configuration()
         try:
@@ -1913,7 +1919,8 @@ class DeepSecService:
         if not self.settings.oracle_user.strip() or not self.settings.oracle_dsn.strip():
             raise SecurityApiError(
                 409,
-                "Oracle END USER への同期には ORACLE_USER と ORACLE_DSN の設定が必要です。",
+                "Oracle END USER への同期には PLATFORM_ORACLE_USER と "
+                "PLATFORM_ORACLE_DSN の設定が必要です。",
             )
         try:
             synced = self._sync_existing_data_user_password()
@@ -1973,7 +1980,8 @@ class DeepSecService:
             raise SecurityApiError(
                 409,
                 "DeepSec DATA USER パスワードを Oracle END USER へ同期できませんでした。"
-                "ORACLE_USER に CREATE END USER / ALTER END USER 権限があるか確認してください: "
+                "PLATFORM_ORACLE_USER に CREATE END USER / ALTER END USER 権限があるか"
+                "確認してください: "
                 f"{safe_error}",
             ) from exc
         return True
@@ -1991,7 +1999,7 @@ class DeepSecService:
                 f"DeepSec step の適用には confirmation={DEEPSEC_APPLY_CONFIRMATION} が必要です。",
             )
         if not self.settings.oracle_deepsec_enabled:
-            raise SecurityApiError(409, "ORACLE_DEEPSEC_ENABLED=true を設定してください。")
+            raise SecurityApiError(409, "NL2SQL_ORACLE_DEEPSEC_ENABLED=true を設定してください。")
         self.pools.validate_deepsec_configuration()
         plan = {step.step_no: step for step in build_v001_plan(self.settings)}
         step = plan.get(step_no)
@@ -2366,7 +2374,7 @@ class DeepSecService:
     def verify(self, actor: Principal) -> dict[str, object]:
         _ = actor
         if not self.settings.oracle_deepsec_enabled:
-            raise SecurityApiError(409, "ORACLE_DEEPSEC_ENABLED=true を設定してください。")
+            raise SecurityApiError(409, "NL2SQL_ORACLE_DEEPSEC_ENABLED=true を設定してください。")
         self.pools.validate_deepsec_control_configuration()
         entitlements = [
             entitlement

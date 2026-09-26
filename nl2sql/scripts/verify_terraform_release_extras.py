@@ -13,11 +13,25 @@ with zipfile.ZipFile(package) as archive:
     locals_tf = archive.read("locals.tf").decode()
     schema_yaml = archive.read("schema.yaml").decode()
     variables_tf = archive.read("variables.tf").decode()
+
+
+def heredoc_body(name: str) -> str:
+    """locals.tf の `<name> = <<-EOT` heredoc の本文。"""
+    match = re.search(rf"(?ms)^  {name} = <<-EOT\n(.*?)^EOT$", locals_tf)
+    if not match:
+        raise SystemExit(f"{name} heredoc is missing from locals.tf")
+    return match.group(1)
+
+
+# 製品固有の設定は backend_env（backend/.env）、3製品共通の設定は platform_env（platform/.env。#211）。
+backend_env = heredoc_body("backend_env")
+platform_env = heredoc_body("platform_env")
 if (
-    "APP_ADMIN_LOGIN_USER_ID=" not in locals_tf
-    or "APP_ADMIN_LOGIN_USER_PASSWORD=" not in locals_tf
+    "PLATFORM_ADMIN_LOGIN_USER_ID=${var.app_admin_login_user_id}" not in platform_env
+    or "PLATFORM_ADMIN_LOGIN_USER_PASSWORD=${var.app_admin_login_user_password}"
+    not in platform_env
 ):
-    raise SystemExit("APP_ADMIN credentials are missing from backend.env")
+    raise SystemExit("PLATFORM_ADMIN credentials are missing from platform.env")
 deepsec_schema_group = re.search(
     r"- title: Deep Data Security\s+visible: true\s+variables:\s+"
     r"- oracle_deepsec_enabled\s+"
@@ -50,7 +64,7 @@ deepsec_schema_checks = [
     "required: false",
     "- oracle_deepsec_enabled",
     "- true",
-    "ORACLE_DEEPSEC_DATA_USER_PASSWORD",
+    "NL2SQL_ORACLE_DEEPSEC_DATA_USER_PASSWORD",
     "confirmation: true",
     "pattern: '^[^\"\\r\\n]{12,256}$'",
 ]
@@ -82,9 +96,9 @@ if (
 ):
     raise SystemExit("DeepSec password Terraform variable validation is incomplete")
 if (
-    "ORACLE_DEEPSEC_ENABLED=${var.oracle_deepsec_enabled}" not in locals_tf
-    or "ORACLE_DEEPSEC_DATA_USER_PASSWORD=${var.oracle_deepsec_enabled ? "
-    "var.oracle_deepsec_data_user_password : \"\"}" not in locals_tf
+    "NL2SQL_ORACLE_DEEPSEC_ENABLED=${var.oracle_deepsec_enabled}" not in backend_env
+    or "NL2SQL_ORACLE_DEEPSEC_DATA_USER_PASSWORD=${var.oracle_deepsec_enabled ? "
+    "var.oracle_deepsec_data_user_password : \"\"}" not in backend_env
 ):
     raise SystemExit("DeepSec toggle/password are missing from backend.env")
 ssh_schema_block = re.search(

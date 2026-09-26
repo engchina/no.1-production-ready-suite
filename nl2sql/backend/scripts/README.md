@@ -1,8 +1,9 @@
 # NL2SQL Manual Integration
 
 `nl2sql_manual_integration.py` is a local smoke test for real Oracle Select AI /
-Select AI Agent wiring. It uses `backend/.env` through the existing FastAPI
-settings and does not print secret values.
+Select AI Agent wiring. It uses the shared `platform/.env` (`PLATFORM_*`) and
+`backend/.env` (`NL2SQL_*`) through the existing FastAPI settings (#211) and does
+not print secret values.
 
 Safe preview-only check:
 
@@ -25,7 +26,7 @@ uv run python scripts/nl2sql_manual_integration.py --diagnostics-only --json-rep
 ```
 
 Enterprise AI Direct-required check. This fails fast when
-`OCI_ENTERPRISE_AI_ENDPOINT`, `OCI_ENTERPRISE_AI_API_KEY`, or an Enterprise AI
+`PLATFORM_OCI_ENTERPRISE_AI_ENDPOINT`, `PLATFORM_OCI_ENTERPRISE_AI_API_KEY`, or an Enterprise AI
 model is missing, and also fails if `enterprise_ai_direct` falls back to
 deterministic mode:
 

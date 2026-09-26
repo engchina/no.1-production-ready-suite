@@ -67,17 +67,19 @@ zip の契約検証、`scripts/tests/init-script-deployment.test.sh` を実行�
 ## 入力
 
 - 配備先: region、compartment、availability domain、VCN、Compute subnet、SSH 公開鍵
-- アプリケーションへのアクセス: RAG の backend は Cookie session の login（`AUTH_MODE=production`）で UI と API を保護します。
-  - `app_login_user`（既定 `rag_admin`）→ `AUTH_USERNAME`、`app_login_password`（必須、12〜64 文字、英大文字・小文字・数字を含む）→ `AUTH_PASSWORD`
-  - `app_auth_cookie_secure` → `AUTH_COOKIE_SECURE`。HTTP のまま使う間は `false`（既定）。HTTPS の終端を前に置いたら `true` にします。
-  - `AUTH_SESSION_SECRET` と `AUDIT_CONTEXT_HASH_SALT` は instance 上で `openssl rand` で1回だけ生成します（Terraform の state には残りません）。
+- アプリケーションへのアクセス: RAG の backend は Cookie session の login（`RAG_AUTH_MODE=production`）で UI と API を保護します。
+  - `app_login_user`（既定 `rag_admin`）→ `RAG_AUTH_USERNAME`、`app_login_password`（必須、12〜64 文字、英大文字・小文字・数字を含む）→ `RAG_AUTH_PASSWORD`
+  - `app_auth_cookie_secure` → `RAG_AUTH_COOKIE_SECURE`。HTTP のまま使う間は `false`（既定）。HTTPS の終端を前に置いたら `true` にします。
+  - `RAG_AUTH_SESSION_SECRET` と `RAG_AUDIT_CONTEXT_HASH_SALT` は instance 上で `openssl rand` で1回だけ生成します（Terraform の state には残りません）。
 - 文書解析: `enable_parser_docling` / `enable_parser_marker` / `enable_oci_cloud_parsers`（上の表）
 - Autonomous AI Database: 画面構成とネットワーク・アクセス（既定はプライベート・エンドポイント）は NL2SQL / Agent の stack と同じです。
   既定の DB 名は `RAGADB`、workload は `OLTP`（取込 job・chunk・vector を継続して書き込むため）です。
 
 AI の設定（OCI 認証、OCI Enterprise AI、埋め込み / リランク、アップロード保存先）は stack では受け取りません。起動後にアプリケーションのシステム設定で行います。
-compose の env_file は `$` を展開するため、入力の値は `backend/.env` に single quote で囲んで書きます。そのため、password と DSN に single quote は使えません。
-stack は secret を cloud-init に埋め込んで `backend/.env` を作るため、Resource Manager の stack・job 履歴・state は機密として扱ってください。
+入力は RAG 固有の設定（ログイン等。`RAG_*`）を `rag/backend/.env`、3製品共通の設定（DB 接続・OCI region / compartment・アップロード保存先。`PLATFORM_*`）を共通 `.env`（`platform/.env`）に分けて書きます（#211）。
+compose の env_file は `$` を展開するため、入力の値は single quote で囲んで書きます。そのため、password と DSN に single quote は使えません。
+stack は secret を cloud-init に埋め込んで `backend/.env` と `platform/.env` を作るため、Resource Manager の stack・job 履歴・state は機密として扱ってください。
+`platform/.env` はシステム設定画面の保存先でもあるため、init script は既にあれば上書きしません（再実行で画面の保存値を消さない）。
 
 ## ADB の schema（DDL）
 
@@ -99,12 +101,13 @@ Oracle 26ai の table / vector index / Oracle Text / audit table の DDL は Ter
 | backend | compose の `backend`（gunicorn + UvicornWorker、`127.0.0.1:8000` だけに公開） |
 | 取込 | compose の `ingestion-worker`（取込 queue を消費する専用 worker） |
 | compose | `rag-compose`（`/usr/local/bin/rag-compose`。project 名 `production-ready-rag`）と `production-ready-rag.service` |
-| 設定 | `/u01/aipoc/no.1-production-ready-suite/rag/backend/.env`（compose の env_file、`0600`） |
-| Wallet | `/u01/aipoc/wallet`（container の appuser が所有、`0700` / file は `0600`）。Thin mode + Wallet(mTLS) で接続（`ORACLE_CLIENT_LIB_DIR` は空） |
-| データ | compose の named volume（`backend-local-storage`: 原本と model 設定、`oci-config`: OCI 認証） |
+| 設定 | RAG 固有: `/u01/aipoc/no.1-production-ready-suite/rag/backend/.env`（compose の env_file、`0600`）<br>3製品共通: `/u01/aipoc/no.1-production-ready-suite/platform/.env`（backend / ingestion-worker に `platform/` を mount し `PLATFORM_ENV_FILE` で読み書き。container の appuser が所有、`0600`。`model-settings.json` も同じディレクトリ） |
+| Wallet | `/u01/aipoc/wallet`（container の appuser が所有、`0700` / file は `0600`）。Thin mode + Wallet(mTLS) で接続（`PLATFORM_ORACLE_CLIENT_LIB_DIR` は空） |
+| データ | compose の named volume（`backend-local-storage`: 原本、`oci-config`: OCI 認証） |
 | ログ | `/var/log/cloud-init-custom.log`、`/var/log/rag-init.log`、`sudo rag-compose logs -f backend` |
 
-- `ENVIRONMENT` / `LOCAL_STORAGE_DIR` / `MODEL_SETTINGS_FILE` / `OCI_CONFIG_FILE` と各 service の URL は `docker-compose.yml` の `environment` が正本です（`backend/.env` には書きません）。
+- `RAG_ENVIRONMENT` / `PLATFORM_ENV_FILE` / `PLATFORM_LOCAL_STORAGE_DIR` / `PLATFORM_OCI_CONFIG_FILE` と各 service の URL は `docker-compose.yml` の `environment` が正本です（`.env` には書きません）。
+- 既存の instance を #211 以降の版へ更新する手順は [docs/deployment.md](../docs/deployment.md) の「既存環境の更新手順（#211）」を参照してください。
 - サービス管理画面の起動/停止（`RAG_SERVICE_CONTROL_ENABLED`）は無効のままです（backend に docker socket を渡さない）。
 - `/api/ready` は OCI / AI の設定が揃うまで `503` を返すため、compose の healthcheck は設定前は unhealthy になります。init script は `/api/health` で起動を確認します。
 

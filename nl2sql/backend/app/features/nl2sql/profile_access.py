@@ -1,7 +1,7 @@
 """profile 単位のアクセス制御ヘルパ(nl2sql router / ontology router 共有)。
 
 `Principal.allowed_profile_ids` に基づく行レベルアクセス判定を 1 箇所に集約する。
-認証無効(APP_AUTH_ENABLED=false)のとき principal は存在せず、テナント概念が
+認証無効(NL2SQL_APP_AUTH_ENABLED=false)のとき principal は存在せず、テナント概念が
 無いため全 actor 制約を外す(管理者相当)。認証有効時は authorize_api_request が
 principal を必ず設定する。
 """

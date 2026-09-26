@@ -3,10 +3,10 @@
 ## 適用範囲
 
 本機能は OCI IAM を使用せず、Oracle に永続化した local application user と role で認証・認可する。
-ただし `backend/.env` の `APP_ADMIN_LOGIN_USER_ID=system_admin` / `APP_ADMIN_LOGIN_USER_PASSWORD` に一致する構成管理者は、
-認証 table を参照しない `SYSTEM_ADMIN` として扱う。`APP_ADMIN_LOGIN_USER_ID` は `system_admin` 固定・
+ただし共通 `.env`（`platform/.env`）の `PLATFORM_ADMIN_LOGIN_USER_ID=system_admin` / `PLATFORM_ADMIN_LOGIN_USER_PASSWORD` に一致する構成管理者は、
+認証 table を参照しない `SYSTEM_ADMIN` として扱う。`PLATFORM_ADMIN_LOGIN_USER_ID` は `system_admin` 固定・
 大小文字区別であり、`System_Admin` / `SYSTEM_ADMIN` などは database user へ fallback しない。
-`ORACLE_USER` / `ORACLE_PASSWORD` は database connection 専用であり、application login には使用しない。
+`PLATFORM_ORACLE_USER` / `PLATFORM_ORACLE_PASSWORD` は database connection 専用であり、application login には使用しない。
 アプリケーション機能権限は FastAPI の route manifest で default deny とし、画面表示制御に加えて API 側でも
 毎回ユーザー状態、role、permission を再評価する。
 
@@ -54,7 +54,7 @@ V001 step の Oracle 実行・compile エラーは HTTP 409 として返し、De
 
 ## 初期 migration と構成管理者
 
-`APP_ADMIN_LOGIN_USER_ID=system_admin` / `APP_ADMIN_LOGIN_USER_PASSWORD` を `backend/.env` に設定すると、その構成管理者で
+`PLATFORM_ADMIN_LOGIN_USER_ID=system_admin` / `PLATFORM_ADMIN_LOGIN_USER_PASSWORD` を共通 `.env`（`platform/.env`。#211）に設定すると、その構成管理者で
 アプリケーションへログインできる。この `SYSTEM_ADMIN` ログインは `PLATFORM_USERS` /
 `PLATFORM_AUTH_SESSIONS` を読まず、認証 table が未作成でも利用できる。通常の application user を追加して
 使う場合は、DB 接続後に次を一度実行する。
@@ -67,9 +67,9 @@ uv run python -m app.cli.app_security_migrate --apply --skip-bootstrap
 ```
 
 通常の application user は `PLATFORM_USERS` から照合される。構成管理者の password は application
-password 変更画面から変更でき、変更結果は `backend/.env` の `APP_ADMIN_LOGIN_USER_PASSWORD` に書き戻される。
-旧キー `APP_ADMIN_PASSWORD` だけを持つ既存 `.env` は読み取り時に fallback として受理されるが、
-password 変更を行うと旧キー行は除去され `APP_ADMIN_LOGIN_USER_PASSWORD` へ移行する。
+password 変更画面から変更でき、変更結果は共通 `.env` の `PLATFORM_ADMIN_LOGIN_USER_PASSWORD` に書き戻される
+（3製品で同じ構成管理者を使う）。旧キー（`APP_ADMIN_LOGIN_USER_*` / `APP_ADMIN_PASSWORD` など）は読まない。
+既存環境は [configuration.md](./configuration.md) の「既存環境の更新手順（#211）」で移す。
 通常 user の password はこれまでどおり DB hash として保存される。ユーザー管理 API/UI は
 `system_admin` の大小文字違いを含む DB user 作成を拒否する。
 
@@ -169,20 +169,20 @@ DeepSec のデータ接続（DATA USER 経由の SQL 実行）が使えないた
 migration 004 から `NL2SQL_*` object を直接作成する。005 に残る旧 prefix は移行元を識別するためだけの
 versioned legacy reference であり、runtime object 名としては使用しない。
 
-本番では少なくとも次を設定する。
+本番では少なくとも次を設定する（`NL2SQL_*` は `backend/.env`、`PLATFORM_*` は共通 `.env`。#211）。
 
 ```dotenv
-APP_AUTH_ENABLED=true
-APP_AUTH_COOKIE_SECURE=true
-APP_AUTH_IDLE_TIMEOUT_MINUTES=60
-APP_AUTH_ABSOLUTE_TIMEOUT_HOURS=12
-APP_AUTH_FAILED_LOGIN_LIMIT=5
-APP_AUTH_LOCKOUT_MINUTES=15
+NL2SQL_APP_AUTH_ENABLED=true
+PLATFORM_AUTH_COOKIE_SECURE=true
+PLATFORM_AUTH_IDLE_TIMEOUT_MINUTES=60
+PLATFORM_AUTH_ABSOLUTE_TIMEOUT_HOURS=12
+PLATFORM_AUTH_FAILED_LOGIN_LIMIT=5
+PLATFORM_AUTH_LOCKOUT_MINUTES=15
 ```
 
 既定では、通常ユーザーの無操作 timeout は 60 分、session の絶対有効期限は 12 時間とする。
 業務端末が管理下にあり、無人端末リスクを組織として受容できる低リスク環境でだけ、
-deployment 固有の `.env` で `APP_AUTH_IDLE_TIMEOUT_MINUTES=720` を明示して 12 時間の無操作
+deployment 固有の `.env` で `PLATFORM_AUTH_IDLE_TIMEOUT_MINUTES=720` を明示して 12 時間の無操作
 timeout に拡張できる。これは production 既定値ではない。
 
 `system_admin` 構成管理者は認証 table 未作成時の bootstrap / 運用復旧用 identity であり、
@@ -191,15 +191,15 @@ timeout に拡張できる。これは production 既定値ではない。
 
 ## DeepSec V001 の前提
 
-DeepSec は python-oracledb Thin mode のみ対応する。`ORACLE_DEEPSEC_ENABLED=true` の場合、
-`ORACLE_DRIVER_MODE=thick` は起動時の設定 validation、Oracle 接続検証、DeepSec status / V001 適用で
+DeepSec は python-oracledb Thin mode のみ対応する。`NL2SQL_ORACLE_DEEPSEC_ENABLED=true` の場合、
+`PLATFORM_ORACLE_DRIVER_MODE=thick` は起動時の設定 validation、Oracle 接続検証、DeepSec status / V001 適用で
 fail-fast する。DATA USER password は Deep Data Security 画面から保存でき、保存後は API を再起動せずに
 次の適用・検証・data-plane query から使用される。`DATA USER 認証` の保存 / `Oracle へ同期` は
 `DEEPSEC_DATA_USER` が未作成なら `CREATE END USER IF NOT EXISTS ...`、作成済みなら
 `ALTER END USER IF EXISTS ... IDENTIFIED BY ...` で DB 側の password / account unlock / schema association
-も同期する。同期に失敗した場合、backend `.env` と runtime 設定は保存前へ戻す。
+も同期する。同期に失敗した場合、`backend/.env`（`NL2SQL_ORACLE_DEEPSEC_*`）と runtime 設定は保存前へ戻す。
 
-DeepSec V001 と `DATA USER 認証` の同期を実行する `ORACLE_USER` には少なくとも `CREATE ROLE`、
+DeepSec V001 と `DATA USER 認証` の同期を実行する `PLATFORM_ORACLE_USER` には少なくとも `CREATE ROLE`、
 `CREATE END USER`、`ALTER END USER`、`CREATE DATA ROLE`、`GRANT ANY ROLE` / Data Role grant、`CREATE CONTEXT`、
 `CREATE PROCEDURE`、対象 object への `GRANT SELECT`、および DeepSec metadata view 参照権限が必要。
 `ORA-01017` が通常ユーザーの SELECT 実行時だけ発生する場合は、application RBAC ではなく
@@ -209,14 +209,14 @@ DATA USER password の漂移を疑い、Deep Data Security 画面で password �
 共通設定:
 
 ```dotenv
-ORACLE_DEEPSEC_ENABLED=true
-ORACLE_DEEPSEC_DATA_USER=DEEPSEC_DATA_USER
-ORACLE_DEEPSEC_DATA_USER_PASSWORD=<strong-random-secret>
-ORACLE_DRIVER_MODE=thin
-ORACLE_CLIENT_LIB_DIR=
-ORACLE_CONNECTION_SECURITY=wallet_mtls
-ORACLE_WALLET_DIR=<thin-mode-wallet-or-config-directory>
-ORACLE_WALLET_PASSWORD=<wallet-password-if-required>
+NL2SQL_ORACLE_DEEPSEC_ENABLED=true
+NL2SQL_ORACLE_DEEPSEC_DATA_USER=DEEPSEC_DATA_USER
+NL2SQL_ORACLE_DEEPSEC_DATA_USER_PASSWORD=<strong-random-secret>
+PLATFORM_ORACLE_DRIVER_MODE=thin
+PLATFORM_ORACLE_CLIENT_LIB_DIR=
+PLATFORM_ORACLE_CONNECTION_SECURITY=wallet_mtls
+PLATFORM_ORACLE_WALLET_DIR=<thin-mode-wallet-or-config-directory>
+PLATFORM_ORACLE_WALLET_PASSWORD=<wallet-password-if-required>
 ```
 
 Thin mTLS の Wallet / config directory には `tnsnames.ora` と `ewallet.pem` を配置する。

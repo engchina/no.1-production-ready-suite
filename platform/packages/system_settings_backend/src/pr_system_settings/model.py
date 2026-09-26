@@ -1,7 +1,8 @@
 """モデル設定の API（3製品共通。NL2SQL の実装を基準に移設。#103）。
 
 - OCI Enterprise AI（回答生成 / Vision）と OCI Generative AI（埋め込み / リランク）の設定
-- API key は `backend/.env` の `OCI_ENTERPRISE_AI_API_KEY` だけに保存し、JSON には書かない
+- API key は共通 `.env`（`platform/.env`）の `PLATFORM_OCI_ENTERPRISE_AI_API_KEY` だけに
+  保存し、JSON には書かない
 - それ以外は `model-settings.json`（`version: 3`）へ保存し、起動時と mtime の変化時に読み込む
 - 製品固有の節（RAG の `parser_adapters`）は `ModelSettingsSection` で読み書きする
 - モデル単位の接続テスト。実際の呼び出しは製品が `run_model_test` で渡す
@@ -31,7 +32,7 @@ from .env_file import write_env_values
 
 logger = logging.getLogger(__name__)
 
-ENTERPRISE_AI_API_KEY_ENV = "OCI_ENTERPRISE_AI_API_KEY"
+ENTERPRISE_AI_API_KEY_ENV = "PLATFORM_OCI_ENTERPRISE_AI_API_KEY"
 MODEL_SETTINGS_DOCUMENT_VERSION = 3
 MODEL_SETTINGS_FILE_MODE = 0o600
 MODEL_SETTINGS_DIRECTORY_MODE = 0o700
@@ -493,7 +494,11 @@ class ModelSettingsSection:
 
 
 class ModelSettingsStore:
-    """model-settings.json と `.env` の API key の読み書き。製品ごとに 1 つ作る。"""
+    """model-settings.json と `.env` の API key の読み書き。製品ごとに 1 つ作る。
+
+    model-settings.json と API key は3製品で共有する（共通 `.env`。#211）。
+    製品固有の節の secret は `section_env_file`（製品の `backend/.env`）へ保存する。
+    """
 
     def __init__(
         self,
@@ -501,9 +506,11 @@ class ModelSettingsStore:
         resolve_path: Callable[[Any], Path],
         env_file: Callable[[Any], Path],
         sections: Sequence[ModelSettingsSection] = (),
+        section_env_file: Callable[[Any], Path] | None = None,
     ) -> None:
         self._resolve_path = resolve_path
         self._env_file = env_file
+        self._section_env_file = section_env_file or env_file
         self._sections = tuple(sections)
         self._loaded: tuple[str, int | None] | None = None
 
@@ -513,6 +520,10 @@ class ModelSettingsStore:
     def env_file(self, settings: Any) -> Path:
         """API key を保存する `.env`。"""
         return self._env_file(settings)
+
+    def section_env_file(self, settings: Any) -> Path:
+        """製品固有の節の secret を保存する `.env`。"""
+        return self._section_env_file(settings)
 
     def reset(self) -> None:
         """テストや明示的な再初期化のため、最後に読んだファイルの記録を消す。"""
@@ -530,7 +541,7 @@ class ModelSettingsStore:
         path = self.path(settings)
         if not path.is_file():
             # JSON がなくても、`.env` にある節の secret は使う。
-            env_values = _dotenv_values(self.env_file(settings))
+            env_values = _dotenv_values(self.section_env_file(settings))
             for section in self._sections:
                 self._apply_section_secrets(
                     settings, section, None, env_values, refresh=refresh_secret
@@ -544,7 +555,7 @@ class ModelSettingsStore:
                 raise ValueError("JSON object ではありません。")
             persisted = _PersistedModelSettings.model_validate(raw)
             self._apply(settings, persisted)
-            env_values = _dotenv_values(self.env_file(settings))
+            env_values = _dotenv_values(self.section_env_file(settings))
             for section in self._sections:
                 section_raw = raw.get(section.name)
                 section_map = section_raw if isinstance(section_raw, Mapping) else None
@@ -595,28 +606,41 @@ class ModelSettingsStore:
         `.env` を先に書くのは、JSON の mtime を見て再読込する別 worker が新しい key を読めるように
         するため。`lock()` の中で呼ぶ。失敗時は OSError を送出する。
         """
-        env_file = self.env_file(settings)
-        values: dict[str, str | None] = {ENTERPRISE_AI_API_KEY_ENV: api_key.strip() or None}
-        for section in self._sections:
-            for secret in section.secrets:
-                values[secret.env] = str(getattr(settings, secret.attr, "") or "").strip() or None
-        current = _dotenv_values(env_file)
-        for name, value in values.items():
-            # 環境変数から来ただけの値は `.env` に書かない（環境変数を変えたら追従させる）。
-            if name not in current and value == (os.environ.get(name) or "").strip():
-                values[name] = None
-        previous = {name: current.get(name) or None for name in values}
-        _write_env_secrets(env_file, values)
+        section_values: dict[str, str | None] = {
+            secret.env: str(getattr(settings, secret.attr, "") or "").strip() or None
+            for section in self._sections
+            for secret in section.secrets
+        }
+        targets = [(self.env_file(settings), {ENTERPRISE_AI_API_KEY_ENV: api_key.strip() or None})]
+        if section_values:
+            targets.append((self.section_env_file(settings), section_values))
+        written: list[tuple[Path, dict[str, str | None]]] = []
         try:
+            for env_file, values in targets:
+                current = _dotenv_values(env_file)
+                for name, value in values.items():
+                    # 環境変数から来ただけの値は `.env` に書かない（環境変数を変えたら追従させる）。
+                    if name not in current and value == (os.environ.get(name) or "").strip():
+                        values[name] = None
+                previous = {name: current.get(name) or None for name in values}
+                _write_env_secrets(env_file, values)
+                written.append((env_file, previous))
             self.write_document(settings, payload)
         except OSError:
-            _write_env_secrets(env_file, previous)
+            for env_file, previous in reversed(written):
+                _write_env_secrets(env_file, previous)
             raise
 
     def write_document(self, settings: Any, payload: ModelSettingsPayload) -> None:
         """JSON を atomic に保存する（secret は書かない）。`lock()` の中で呼ぶ。"""
         path = self.path(settings)
-        document = _model_settings_document(payload)
+        # 共有ファイルなので、他の製品の節（この製品が知らない key）は残す。
+        document = {
+            key: value
+            for key, value in _read_document(path).items()
+            if key not in _COMMON_DOCUMENT_KEYS
+        }
+        document.update(_model_settings_document(payload))
         for section in self._sections:
             secret_keys = {secret.key for secret in section.secrets}
             document[section.name] = {
@@ -729,6 +753,17 @@ def _model_settings_document(payload: ModelSettingsPayload) -> dict[str, Any]:
         },
         "generative_ai": generative.model_dump(),
     }
+
+
+_COMMON_DOCUMENT_KEYS = frozenset({"version", "enterprise_ai", "generative_ai"})
+
+
+def _read_document(path: Path) -> dict[str, Any]:
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+    except (OSError, ValueError):
+        return {}
+    return raw if isinstance(raw, dict) else {}
 
 
 def _dotenv_values(env_file: Path) -> dict[str, str | None]:

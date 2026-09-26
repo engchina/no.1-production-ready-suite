@@ -31,6 +31,7 @@ from pr_system_settings.upload_storage import (
 )
 from starlette.responses import JSONResponse
 
+from app import settings as app_settings
 from app.api.concurrency import run_sync_io
 from app.api.problems import api_problem_response
 from app.clients.oci_auth import (
@@ -61,7 +62,6 @@ from app.schemas.settings import (
     SystemTablesStatusData,
 )
 from app.settings import (
-    BACKEND_ENV_FILE,
     MODEL_SETTINGS_STORE,
     Settings,
     get_settings,
@@ -69,11 +69,12 @@ from app.settings import (
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 # アップロード保存先は3製品共通の実装（platform の pr_system_settings。#97）。
-# テストで get_settings / BACKEND_ENV_FILE を差し替えられるよう、呼出時に module の値を参照する。
+# 保存先は3製品共通の `.env`（platform/.env。#211）。
+# テストで get_settings / PLATFORM_ENV_FILE を差し替えられるよう、呼出時に module の値を参照する。
 router.include_router(
     build_upload_storage_router(
         get_settings=lambda: get_settings(),
-        env_file=lambda: BACKEND_ENV_FILE,
+        env_file=lambda: app_settings.PLATFORM_ENV_FILE,
     )
 )
 # OCI 認証も3製品共通の実装（pr_system_settings.oci。#100）。
@@ -81,7 +82,7 @@ router.include_router(
 router.include_router(
     build_oci_router(
         get_settings=lambda: get_settings(),
-        env_file=lambda: BACKEND_ENV_FILE,
+        env_file=lambda: app_settings.PLATFORM_ENV_FILE,
     )
 )
 # モデル設定も3製品共通の実装（pr_system_settings.model。#103）。
@@ -106,7 +107,7 @@ def _deepsec_readiness(settings: Settings) -> str | None:
 router.include_router(
     build_database_router(
         get_settings=lambda: get_settings(),
-        env_file=lambda: BACKEND_ENV_FILE,
+        env_file=lambda: app_settings.PLATFORM_ENV_FILE,
         test_connection=lambda candidate: test_oracle_connection(candidate),
         on_saved=lambda _settings: close_oracle_pool(),
         extra_readiness=_deepsec_readiness,
@@ -596,7 +597,7 @@ def _load_select_ai_signing_material(settings: Settings) -> _SelectAiSigningMate
 
 def _persist_select_ai_credential_settings(settings: Settings, region: str) -> None:
     _write_env_values(
-        BACKEND_ENV_FILE,
+        app_settings.BACKEND_ENV_FILE,
         {
             "NL2SQL_SELECT_AI_CREDENTIAL_NAME": SELECT_AI_CREDENTIAL_NAME,
             "NL2SQL_SELECT_AI_REGION": region,

@@ -363,7 +363,7 @@ const nl2sqlJa = {
   "security.deepsec.driver": "Oracle ドライバーモード",
   "security.deepsec.connectionSecurity": "接続セキュリティ",
   "security.deepsec.dataUser": "共有 DATA USER",
-  "security.deepsec.banner.disabled": "Deep Data Security が無効です。このページで DATA USER パスワードを保存すると、ORACLE_DEEPSEC_ENABLED=true と固定 DATA USER を backend/.env に反映します。",
+  "security.deepsec.banner.disabled": "Deep Data Security が無効です。このページで DATA USER パスワードを保存すると、NL2SQL_ORACLE_DEEPSEC_ENABLED=true と固定 DATA USER を backend/.env に反映します。",
   "security.deepsec.banner.passwordMissing": "DATA USER パスワードが未設定です。このページで保存すると API を再起動せずに次の適用・検証から使用できます。",
   "security.deepsec.config.title": "DATA USER 認証情報",
   "security.deepsec.config.password": "DATA USER パスワード",

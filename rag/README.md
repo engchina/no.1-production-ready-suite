@@ -25,7 +25,8 @@ UI/UX は日本語第一の業務アプリとして、情報設計・画面構�
 # バックエンド(重い parser 依存は持たない。外部 parser はマイクロサービスへ HTTP 委譲)
 cd backend
 uv sync
-cp .env.example .env        # OCI / Oracle の接続情報を設定
+cp ../../platform/.env.example ../../platform/.env   # 3製品共通の設定（OCI / Oracle 接続など。PLATFORM_*）
+cp .env.example .env        # RAG 固有の設定（RAG_*）
 uv run uvicorn app.main:app --reload    # http://localhost:8000/docs
 
 # フロントエンド（別ターミナル）
@@ -76,7 +77,7 @@ docker compose --profile gpu up --build
 
 `evaluation/golden-set.example.json` は評価 API のテンプレートです。実データ投入後に `evaluation/golden-set.json` へコピーして document id と期待キーワードを調整し、CI / staging gate で使います。
 
-Backend は常に OCI Enterprise AI、OCI Generative AI、Oracle 26ai を前提に動作します。開発・staging・本番のいずれも OCI / Oracle 接続情報を `.env` または設定画面から注入してください。
+Backend は常に OCI Enterprise AI、OCI Generative AI、Oracle 26ai を前提に動作します。開発・staging・本番のいずれも OCI / Oracle 接続情報を共通 `.env`（リポジトリの `platform/.env`、`PLATFORM_*`）または設定画面から注入してください。RAG 固有の設定は `backend/.env`（`RAG_*`）に置きます（#211。詳細と既存環境の移行は [docs/deployment.md](docs/deployment.md)）。
 
 ## OCI への配備（Resource Manager）
 

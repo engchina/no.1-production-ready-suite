@@ -1,6 +1,7 @@
 """アプリケーション設定。
 
-環境変数 / `.env` から読み込む。シークレットはコードにハードコードしない。
+環境変数 → 3製品共通の `platform/.env`（`PLATFORM_*`）→ RAG の `backend/.env`（`RAG_*`）から
+読み込む（#211）。シークレットはコードにハードコードしない。
 """
 
 from collections.abc import Mapping
@@ -8,6 +9,11 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal, Self
 
+from pr_backend_core.config import (
+    PlatformEnvSourcesMixin,
+    platform_env_file,
+    product_settings_config,
+)
 from pr_system_settings.model import EnterpriseAiConfiguredModel as EnterpriseAiConfiguredModel
 from pr_system_settings.model import (
     ModelSecretStateMixin,
@@ -21,7 +27,7 @@ from pr_system_settings.model import (
 from pr_system_settings.model import enterprise_ai_model_catalog as enterprise_ai_model_catalog
 from pr_system_settings.model import enterprise_ai_vision_model_id as enterprise_ai_vision_model_id
 from pydantic import BaseModel, Field, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings
 from rag_pipeline_core.chunking import (
     CHUNK_OVERLAP_MAX_CHARS as CHUNK_OVERLAP_MAX_CHARS,
 )
@@ -176,6 +182,10 @@ AgenticProfile = Literal[
 ]
 EnterpriseAiVlmInputMode = Literal["files_api", "inline_image"]
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
+# RAG 固有の設定（`RAG_*`）を置く `backend/.env`。
+BACKEND_ENV_FILE = BACKEND_ROOT / ".env"
+# 3製品共通の設定（`PLATFORM_*`）を置く `platform/.env`。`PLATFORM_ENV_FILE` で上書きできる。
+PLATFORM_ENV_FILE = platform_env_file(BACKEND_ROOT)
 DEFAULT_MODEL_SETTINGS_FILE = "model-settings.json"
 DEFAULT_LOCAL_STORAGE_DIR = "/u01/data/production-ready-rag"
 
@@ -205,10 +215,11 @@ class _PersistedParserAdapterSettings(BaseModel):
     glm_ocr_api_key: str = Field(default="", max_length=4096)
 
 
-class Settings(ModelSecretStateMixin, BaseSettings):
-    """環境変数ベースの設定。"""
+class Settings(PlatformEnvSourcesMixin, ModelSecretStateMixin, BaseSettings):
+    """環境変数ベースの設定。旧名（属性名と同じ環境変数名）は読まない（#211）。"""
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    # 環境変数名は属性名から決める（共通の属性は `PLATFORM_*`、それ以外は `RAG_*`。#211）。
+    model_config = product_settings_config(prefix="RAG_", backend_dir=BACKEND_ROOT)
 
     # --- アプリ ---
     app_name: str = "production-ready-rag"
@@ -231,9 +242,10 @@ class Settings(ModelSecretStateMixin, BaseSettings):
     )
 
     # --- HuggingFace モデルダウンロード ---
-    # env キーは標準名(HF_TOKEN/HF_ENDPOINT)に合わせ、compose からも同じ値を参照できるようにする。
-    huggingface_token: str = Field(default="", validation_alias="HF_TOKEN")
-    huggingface_endpoint: str = Field(default="", validation_alias="HF_ENDPOINT")
+    # RAG_HUGGINGFACE_TOKEN / RAG_HUGGINGFACE_ENDPOINT。huggingface_hub が読む HF_TOKEN /
+    # HF_ENDPOINT は、サービス管理が compose の parser コンテナへ環境変数として渡す。
+    huggingface_token: str = Field(default="")
+    huggingface_endpoint: str = Field(default="")
 
     # CORS 許可オリジン（フロントエンド）
     cors_origins: list[str] = Field(default=["http://localhost:3000"])
@@ -311,7 +323,9 @@ class Settings(ModelSecretStateMixin, BaseSettings):
     oracle_client_lib_dir: str = Field(default="/u01/aipoc/instantclient_23_26")
     oracle_wallet_dir: str = Field(
         default="",
-        description=("互換用。Wallet 配置先は ORACLE_CLIENT_LIB_DIR/network/admin へ固定する。"),
+        description=(
+            "互換用。Wallet 配置先は PLATFORM_ORACLE_CLIENT_LIB_DIR/network/admin へ固定する。"
+        ),
     )
     oracle_wallet_password: str = Field(default="")
     oracle_adb_ocid: str = Field(
@@ -323,7 +337,9 @@ class Settings(ModelSecretStateMixin, BaseSettings):
     )
     oracle_adb_region: str = Field(
         default="",
-        description="Autonomous Database 管理専用の OCI region。未設定なら OCI_REGION を使う。",
+        description=(
+            "Autonomous Database 管理専用の OCI region。未設定なら PLATFORM_OCI_REGION を使う。"
+        ),
     )
     oracle_tcp_connect_timeout_seconds: float = Field(
         default=10.0,
@@ -351,7 +367,8 @@ class Settings(ModelSecretStateMixin, BaseSettings):
     upload_storage_backend: UploadStorageBackend = Field(
         default="local",
         description=(
-            "アップロード原本の保存先。local は LOCAL_STORAGE_DIR、oci は OCI Object Storage。"
+            "アップロード原本の保存先。local は PLATFORM_LOCAL_STORAGE_DIR、"
+            "oci は OCI Object Storage。"
         ),
     )
 
@@ -1003,7 +1020,7 @@ class Settings(ModelSecretStateMixin, BaseSettings):
         default="balanced",
         description=(
             "索引/検索精度の Vector Index アダプター。balanced(既定)は"
-            "ORACLE_VECTOR_TARGET_ACCURACY をそのまま使い、accurate は高再現(98)、"
+            "RAG_ORACLE_VECTOR_TARGET_ACCURACY をそのまま使い、accurate は高再現(98)、"
             "fast は低レイテンシ(85)へ検索時 target accuracy を上書きする。"
             "推奨 HNSW ビルドパラメータは設定画面に表示し、適用には索引再作成が必要。"
         ),
@@ -1434,7 +1451,7 @@ class Settings(ModelSecretStateMixin, BaseSettings):
     oci_document_understanding_object_storage_region: str = Field(
         default="",
         description=(
-            "DU 入出力 Object Storage の region。空のときは OCI_REGION、"
+            "DU 入出力 Object Storage の region。空のときは PLATFORM_OCI_REGION、"
             "さらに空なら object_storage_region を使う。"
         ),
     )
@@ -1611,7 +1628,7 @@ class Settings(ModelSecretStateMixin, BaseSettings):
     @field_validator("model_settings_file")
     @classmethod
     def normalize_model_settings_file(cls, value: str) -> str:
-        """空指定は backend/.env と同じ階層の既定ファイルへ戻す。"""
+        """空指定は共通 `.env` と同じ階層の既定ファイルへ戻す。"""
         return value.strip() or DEFAULT_MODEL_SETTINGS_FILE
 
     @field_validator("huggingface_endpoint")
@@ -1703,7 +1720,7 @@ class Settings(ModelSecretStateMixin, BaseSettings):
 
     @property
     def oracle_driver_mode(self) -> str:
-        """RAG は ORACLE_CLIENT_LIB_DIR があれば Thick mode で接続する（Wallet の判定用）。"""
+        """PLATFORM_ORACLE_CLIENT_LIB_DIR があれば Thick mode で接続する（Wallet の判定用）。"""
         return "thick" if self.oracle_client_lib_dir.strip() else "thin"
 
     @property
@@ -1713,7 +1730,7 @@ class Settings(ModelSecretStateMixin, BaseSettings):
 
     @property
     def resolved_oracle_wallet_dir(self) -> str:
-        """参照実装と同じく ORACLE_CLIENT_LIB_DIR/network/admin を Wallet 配置先にする。"""
+        """参照実装と同じく PLATFORM_ORACLE_CLIENT_LIB_DIR/network/admin を Wallet 配置先にする。"""
         client_lib_dir = self.oracle_client_lib_dir.strip()
         if client_lib_dir:
             return str(Path(client_lib_dir).expanduser() / "network" / "admin")
@@ -1721,7 +1738,7 @@ class Settings(ModelSecretStateMixin, BaseSettings):
 
     @property
     def resolved_oracle_adb_region(self) -> str:
-        """ADB 管理専用 region。旧設定互換のため OCI_REGION へ fallback する。"""
+        """ADB 管理専用 region。旧設定互換のため PLATFORM_OCI_REGION へ fallback する。"""
         return self.oracle_adb_region.strip() or self.oci_region.strip()
 
 
@@ -1747,12 +1764,15 @@ def reset_settings_cache() -> None:
 
 
 def resolve_model_settings_file(path_value: str) -> Path:
-    """MODEL_SETTINGS_FILE を backend/.env と同じディレクトリ基準で解決する。"""
+    """PLATFORM_MODEL_SETTINGS_FILE を共通 `.env` と同じディレクトリ基準で解決する。
+
+    model-settings.json は3製品で共有する（#211）。
+    """
     raw_path = path_value.strip() or DEFAULT_MODEL_SETTINGS_FILE
     path = Path(raw_path).expanduser()
     if path.is_absolute():
         return path
-    return (BACKEND_ROOT / path).resolve()
+    return (PLATFORM_ENV_FILE.parent / path).resolve()
 
 
 _PARSER_ADAPTER_FIELDS = tuple(_PersistedParserAdapterSettings.model_fields)
@@ -1779,7 +1799,7 @@ PARSER_ADAPTERS_SECTION = ModelSettingsSection(
     name="parser_adapters",
     load=_load_parser_adapters,
     dump=_dump_parser_adapters,
-    # parser の API key は JSON に書かず、モデル設定の API key と同じ .env に保存する（#106）。
+    # parser の API key は JSON に書かず、RAG の backend/.env に保存する（#106 / #211）。
     secrets=tuple(
         SectionSecret(key=key, attr=f"rag_parser_{key}", env=f"RAG_PARSER_{key.upper()}")
         for key in _PARSER_ADAPTER_FIELDS
@@ -1788,11 +1808,12 @@ PARSER_ADAPTERS_SECTION = ModelSettingsSection(
 )
 MODEL_SETTINGS_STORE = ModelSettingsStore(
     resolve_path=lambda settings: resolve_model_settings_file(settings.model_settings_file),
-    # API key は JSON と同じディレクトリの `.env` に保存する。開発では backend/.env。
-    # コンテナでは JSON と同じ volume に置き、API と取込 worker が同じ key を読む。
-    env_file=lambda settings: resolve_model_settings_file(settings.model_settings_file).parent
-    / ".env",
+    # モデルの API key（PLATFORM_OCI_ENTERPRISE_AI_API_KEY）は共通 `.env`、parser の API key
+    # （RAG_PARSER_*_API_KEY）は RAG の backend/.env に保存する（#211）。
+    # テストで差し替えられるよう、呼出時に module の値を参照する。
+    env_file=lambda _settings: PLATFORM_ENV_FILE,
     sections=(PARSER_ADAPTERS_SECTION,),
+    section_env_file=lambda _settings: BACKEND_ENV_FILE,
 )
 
 

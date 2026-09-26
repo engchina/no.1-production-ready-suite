@@ -202,10 +202,11 @@ Issue の要点と、この変更が必要な理由を記載する。bug fix で
 
 ### 設定（`.env`）とデータベース object の命名
 
-- **3製品共通の設定は、platform の共通 backend `.env` 1 ファイルで管理し、変数名は `PLATFORM_` で始める。** システム設定画面の保存先もこのファイルにする。配備では同じファイルを3製品のコンテナにマウント（または env_file で渡す）する。
+- **3製品共通の設定は、platform の共通 `.env`（`platform/.env`、雛形は `platform/.env.example`）1 ファイルで管理し、変数名は `PLATFORM_` で始める。** システム設定画面の保存先（OCI 認証・アップロード保存先・モデル・データベース）と、共通認証の構成管理者・認証ポリシーもこのファイルにする。`model-settings.json` も3製品で共有する。配備では同じファイルを3製品のコンテナにマウント（または env_file で渡す）し、場所は `PLATFORM_ENV_FILE` で上書きできる。
 - **各製品の `backend/.env` には、その製品だけが使う変数だけを置き、`RAG_` / `NL2SQL_` / `AGENT_` で始める。** 共通の設定を製品の `.env` に重複して持たない。
 - **3製品共通の仕組み（ユーザー管理・ロール管理など）が使うテーブルは `PLATFORM_` で始める。製品固有の仕組みが使うテーブルは `RAG_` / `NL2SQL_` / `AGENT_` で始める。** index / constraint / sequence / view なども同じ接頭辞にそろえる。例: ユーザー・ロール・セッションは `PLATFORM_`、NL2SQL のロールの機能権限・業務プロファイル利用権限・Data Grant は `NL2SQL_`。
 - 名前を変えるときは旧名との互換を持たない（旧名の環境変数は読まず、テーブルは migration で改名する）。既存環境の更新手順を配備ドキュメントに書く。
-- ユーザー・ロール・セッションのテーブルは `PLATFORM_*` へ移した（[#212](https://github.com/engchina/no.1-production-ready-suite/issues/212)）。`.env` の一元化は [#211](https://github.com/engchina/no.1-production-ready-suite/issues/211) で行う。新しく追加する変数・テーブルは最初からこの規則に従う。
+- 環境変数名は Settings の属性名から `pr_backend_core.config.product_settings_config` が決める（[#211](https://github.com/engchina/no.1-production-ready-suite/issues/211)）。共通の属性（`PLATFORM_SETTING_FIELDS`）は `PLATFORM_` + 属性名（先頭の `app_` は除く）、それ以外は製品の接頭辞 + 属性名（接頭辞で始まる属性は重ねない）。共通の設定を足すときは `PLATFORM_SETTING_FIELDS` と `platform/.env.example` に加える。既存環境は `platform/scripts/migrate_env_to_platform.py` で移す。
+- ユーザー・ロール・セッションのテーブルは `PLATFORM_*` へ移した（[#212](https://github.com/engchina/no.1-production-ready-suite/issues/212)）。新しく追加する変数・テーブルは最初からこの規則に従う。
 - 3 製品は同じ Oracle schema を共有する前提のため、各製品は他製品の接頭辞（`PLATFORM_` / `RAG_` / `NL2SQL_` / `AGENT_`）のオブジェクトを業務データとして扱わない（例: NL2SQL の業務プロファイルの対象一覧・管理 SQL から除外する）。
 - ユーザーとロールを共有するため、ロールの割り当て・復元では製品をまたぐ権限昇格を防ぐ（`pr_system_settings.auth` の `PRODUCT_ROLE_PERMISSION_TABLES`）。製品が権限テーブルを追加するときは、この登録と `ON DELETE CASCADE` の FK（`PLATFORM_ROLES` への参照）を合わせて用意する。

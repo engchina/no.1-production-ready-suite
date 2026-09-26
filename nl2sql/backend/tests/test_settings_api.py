@@ -152,7 +152,7 @@ def test_select_ai_credential_create_and_recreate_persist_safe_settings(
     env_file = tmp_path / ".env"
     env_file.write_text("KEEP_ME=1\n", encoding="utf-8")
     fake_adapter = _FakeSelectAiCredentialAdapter(exists=initial_exists)
-    monkeypatch.setattr(settings_router, "BACKEND_ENV_FILE", env_file)
+    monkeypatch.setattr(app_settings, "BACKEND_ENV_FILE", env_file)
     monkeypatch.setattr(
         settings_router,
         "OracleNl2SqlAdapter",
@@ -550,10 +550,10 @@ def test_update_oci_settings_writes_config_and_env(
 ) -> None:
     home = tmp_path / "home"
     env_file = tmp_path / ".env"
-    env_file.write_text("KEEP_ME=1\nOCI_REGION=old-region\n", encoding="utf-8")
+    env_file.write_text("KEEP_ME=1\nPLATFORM_OCI_REGION=old-region\n", encoding="utf-8")
     settings = get_settings()
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setattr(settings_router, "BACKEND_ENV_FILE", env_file)
+    monkeypatch.setattr(app_settings, "PLATFORM_ENV_FILE", env_file)
     monkeypatch.setattr(settings, "oci_config_file", "~/.oci/config")
     monkeypatch.setattr(settings, "oci_config_profile", "DEFAULT")
 
@@ -580,9 +580,9 @@ def test_update_oci_settings_writes_config_and_env(
 
     env_text = env_file.read_text(encoding="utf-8")
     assert "KEEP_ME=1" in env_text
-    assert "OCI_CONFIG_FILE=~/.oci/config" in env_text
-    assert "OCI_CONFIG_PROFILE=DEFAULT" in env_text
-    assert "OCI_REGION=ap-osaka-1" in env_text
+    assert "PLATFORM_OCI_CONFIG_FILE=~/.oci/config" in env_text
+    assert "PLATFORM_OCI_CONFIG_PROFILE=DEFAULT" in env_text
+    assert "PLATFORM_OCI_REGION=ap-osaka-1" in env_text
 
 
 def test_update_oci_settings_does_not_write_empty_config_defaults(
@@ -591,10 +591,10 @@ def test_update_oci_settings_does_not_write_empty_config_defaults(
 ) -> None:
     home = tmp_path / "home"
     env_file = tmp_path / ".env"
-    env_file.write_text("KEEP_ME=1\nOCI_REGION=old-region\n", encoding="utf-8")
+    env_file.write_text("KEEP_ME=1\nPLATFORM_OCI_REGION=old-region\n", encoding="utf-8")
     settings = get_settings()
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setattr(settings_router, "BACKEND_ENV_FILE", env_file)
+    monkeypatch.setattr(app_settings, "PLATFORM_ENV_FILE", env_file)
     monkeypatch.setattr(settings, "oci_config_file", "~/.oci/config")
     monkeypatch.setattr(settings, "oci_config_profile", "DEFAULT")
     monkeypatch.setattr(settings, "oci_region", "us-chicago-1")
@@ -614,7 +614,7 @@ def test_update_oci_settings_does_not_write_empty_config_defaults(
     assert settings.oci_region == ""
     env_text = env_file.read_text(encoding="utf-8")
     assert "KEEP_ME=1" in env_text
-    assert "OCI_REGION" not in env_text
+    assert "PLATFORM_OCI_REGION" not in env_text
 
 
 def test_read_oci_config_reports_missing_profile(tmp_path: Path) -> None:
@@ -818,7 +818,10 @@ def test_download_database_wallet_creates_missing_wallet_dir(
     assert captured["password"] == settings.oracle_password
     assert settings.oracle_wallet_password == settings.oracle_password
     assert str(captured["password"]) not in resp.text
-    assert dotenv_values(tmp_path / ".env")["ORACLE_WALLET_PASSWORD"] == settings.oracle_password
+    assert (
+        dotenv_values(tmp_path / ".env")["PLATFORM_ORACLE_WALLET_PASSWORD"]
+        == settings.oracle_password
+    )
     assert (wallet_dir / "tnsnames.ora").is_file()
     assert stat.S_IMODE(wallet_dir.stat().st_mode) == 0o700
     for file_name in shared_database.database_wallet_required_files(settings.oracle_driver_mode):
@@ -879,7 +882,10 @@ def test_download_database_wallet_repairs_partial_serverless_wallet(
     assert password == previous_wallet_password
     assert password != settings.oracle_password
     assert settings.oracle_wallet_password == previous_wallet_password
-    assert dotenv_values(tmp_path / ".env")["ORACLE_WALLET_PASSWORD"] == previous_wallet_password
+    assert (
+        dotenv_values(tmp_path / ".env")["PLATFORM_ORACLE_WALLET_PASSWORD"]
+        == previous_wallet_password
+    )
     assert password not in resp.text
     assert pool_closed == [True]
     assert stat.S_IMODE(wallet_dir.stat().st_mode) == 0o700
@@ -1378,7 +1384,7 @@ def test_update_database_settings_preserves_client_lib_dir_in_env(
     settings = get_settings()
     env_file = tmp_path / ".env"
     client_lib_dir = tmp_path / "instantclient_23_26"
-    monkeypatch.setattr(settings_router, "BACKEND_ENV_FILE", env_file)
+    monkeypatch.setattr(app_settings, "PLATFORM_ENV_FILE", env_file)
     monkeypatch.setattr(settings, "oracle_driver_mode", "thick")
     monkeypatch.setattr(settings, "oracle_client_lib_dir", str(client_lib_dir))
     monkeypatch.setattr(settings, "oracle_wallet_dir", "")
@@ -1402,12 +1408,12 @@ def test_update_database_settings_preserves_client_lib_dir_in_env(
     assert data["client_lib_dir"] == str(client_lib_dir)
     assert data["wallet_dir"] == str(client_lib_dir / "network" / "admin")
     env_text = env_file.read_text(encoding="utf-8")
-    assert "ORACLE_DRIVER_MODE=thick" in env_text
-    assert "ORACLE_CONNECTION_SECURITY=wallet_mtls" in env_text
-    assert f"ORACLE_CLIENT_LIB_DIR={client_lib_dir}" in env_text
-    assert f"ORACLE_CLIENT_LIB_DIR={client_lib_dir / 'network' / 'admin'}" not in env_text
-    assert f"ORACLE_WALLET_DIR={client_lib_dir / 'network' / 'admin'}" in env_text
-    assert "ORACLE_PASSWORD=old-password" in env_text
+    assert "PLATFORM_ORACLE_DRIVER_MODE=thick" in env_text
+    assert "PLATFORM_ORACLE_CONNECTION_SECURITY=wallet_mtls" in env_text
+    assert f"PLATFORM_ORACLE_CLIENT_LIB_DIR={client_lib_dir}" in env_text
+    assert f"PLATFORM_ORACLE_CLIENT_LIB_DIR={client_lib_dir / 'network' / 'admin'}" not in env_text
+    assert f"PLATFORM_ORACLE_WALLET_DIR={client_lib_dir / 'network' / 'admin'}" in env_text
+    assert "PLATFORM_ORACLE_PASSWORD=old-password" in env_text
 
 
 def test_update_database_settings_persists_thin_wallet_dir_separately(
@@ -1417,7 +1423,7 @@ def test_update_database_settings_persists_thin_wallet_dir_separately(
     settings = get_settings()
     env_file = tmp_path / ".env"
     wallet_dir = tmp_path / "wallet"
-    monkeypatch.setattr(settings_router, "BACKEND_ENV_FILE", env_file)
+    monkeypatch.setattr(app_settings, "PLATFORM_ENV_FILE", env_file)
     monkeypatch.setattr(settings, "oracle_driver_mode", "thin")
     monkeypatch.setattr(settings, "oracle_connection_security", "wallet_mtls")
     monkeypatch.setattr(settings, "oracle_client_lib_dir", "")
@@ -1441,11 +1447,11 @@ def test_update_database_settings_persists_thin_wallet_dir_separately(
     assert data["client_lib_dir"] == ""
     assert data["wallet_dir"] == str(wallet_dir)
     env_text = env_file.read_text(encoding="utf-8")
-    assert "ORACLE_DRIVER_MODE=thin" in env_text
-    assert "ORACLE_CONNECTION_SECURITY=wallet_mtls" in env_text
-    assert "ORACLE_CLIENT_LIB_DIR=\n" in env_text
-    assert f"ORACLE_WALLET_DIR={wallet_dir}" in env_text
-    assert "ORACLE_WALLET_PASSWORD=wallet-secret" in env_text
+    assert "PLATFORM_ORACLE_DRIVER_MODE=thin" in env_text
+    assert "PLATFORM_ORACLE_CONNECTION_SECURITY=wallet_mtls" in env_text
+    assert "PLATFORM_ORACLE_CLIENT_LIB_DIR=\n" in env_text
+    assert f"PLATFORM_ORACLE_WALLET_DIR={wallet_dir}" in env_text
+    assert "PLATFORM_ORACLE_WALLET_PASSWORD=wallet-secret" in env_text
 
 
 def test_database_connection_test_rejects_dsn_missing_from_wallet(
@@ -1522,7 +1528,7 @@ def test_database_connection_test_rejects_deepsec_thick_driver_mode(
     assert data["status"] == "failed"
     assert data["readiness"] == "invalid_configuration"
     assert "Thin mode" in data["message"]
-    assert any("ORACLE_DRIVER_MODE=thin" in tip for tip in data["troubleshooting"])
+    assert any("PLATFORM_ORACLE_DRIVER_MODE=thin" in tip for tip in data["troubleshooting"])
 
 
 def test_database_connection_test_rejects_walletless_tls_wallet_alias(
@@ -1563,7 +1569,7 @@ def test_update_upload_storage_persists_env_and_keeps_namespace(
 ) -> None:
     settings = get_settings()
     env_file = tmp_path / ".env"
-    monkeypatch.setattr(settings_router, "BACKEND_ENV_FILE", env_file)
+    monkeypatch.setattr(app_settings, "PLATFORM_ENV_FILE", env_file)
     monkeypatch.setattr(settings, "object_storage_region", "ap-osaka-1")
     monkeypatch.setattr(settings, "object_storage_namespace", "existingnamespace")
 
@@ -1580,11 +1586,11 @@ def test_update_upload_storage_persists_env_and_keeps_namespace(
     data = resp.json()["data"]
     assert data["object_storage_namespace"] == "existingnamespace"
     env_text = env_file.read_text(encoding="utf-8")
-    assert "UPLOAD_STORAGE_BACKEND=oci" in env_text
-    assert "LOCAL_STORAGE_DIR=/u01/data/production-ready-nl2sql" in env_text
-    assert "OBJECT_STORAGE_REGION=ap-osaka-1" in env_text
-    assert "OBJECT_STORAGE_NAMESPACE=existingnamespace" in env_text
-    assert "OBJECT_STORAGE_BUCKET=rag-uploads" in env_text
+    assert "PLATFORM_UPLOAD_STORAGE_BACKEND=oci" in env_text
+    assert "PLATFORM_LOCAL_STORAGE_DIR=/u01/data/production-ready-nl2sql" in env_text
+    assert "PLATFORM_OBJECT_STORAGE_REGION=ap-osaka-1" in env_text
+    assert "PLATFORM_OBJECT_STORAGE_NAMESPACE=existingnamespace" in env_text
+    assert "PLATFORM_OBJECT_STORAGE_BUCKET=rag-uploads" in env_text
 
 
 def test_update_upload_storage_persists_payload_region(
@@ -1593,7 +1599,7 @@ def test_update_upload_storage_persists_payload_region(
 ) -> None:
     settings = get_settings()
     env_file = tmp_path / ".env"
-    monkeypatch.setattr(settings_router, "BACKEND_ENV_FILE", env_file)
+    monkeypatch.setattr(app_settings, "PLATFORM_ENV_FILE", env_file)
     monkeypatch.setattr(settings, "object_storage_region", "")
     monkeypatch.setattr(settings, "object_storage_namespace", "")
 
@@ -1613,8 +1619,8 @@ def test_update_upload_storage_persists_payload_region(
     assert data["object_storage_region"] == "ap-osaka-1"
     assert data["object_storage_namespace"] == "existingnamespace"
     env_text = env_file.read_text(encoding="utf-8")
-    assert "OBJECT_STORAGE_REGION=ap-osaka-1" in env_text
-    assert "OBJECT_STORAGE_NAMESPACE=existingnamespace" in env_text
+    assert "PLATFORM_OBJECT_STORAGE_REGION=ap-osaka-1" in env_text
+    assert "PLATFORM_OBJECT_STORAGE_NAMESPACE=existingnamespace" in env_text
 
 
 def test_update_upload_storage_rejects_incomplete_oci_settings(
@@ -1623,7 +1629,7 @@ def test_update_upload_storage_rejects_incomplete_oci_settings(
 ) -> None:
     settings = get_settings()
     env_file = tmp_path / ".env"
-    monkeypatch.setattr(settings_router, "BACKEND_ENV_FILE", env_file)
+    monkeypatch.setattr(app_settings, "PLATFORM_ENV_FILE", env_file)
     monkeypatch.setattr(settings, "object_storage_region", "")
     monkeypatch.setattr(settings, "object_storage_namespace", "")
 
@@ -1642,8 +1648,8 @@ def test_update_upload_storage_rejects_incomplete_oci_settings(
 
 
 def test_upload_storage_defaults_use_nl2sql_names(monkeypatch: MonkeyPatch) -> None:
-    monkeypatch.delenv("LOCAL_STORAGE_DIR", raising=False)
-    monkeypatch.delenv("OBJECT_STORAGE_BUCKET", raising=False)
+    monkeypatch.delenv("PLATFORM_LOCAL_STORAGE_DIR", raising=False)
+    monkeypatch.delenv("PLATFORM_OBJECT_STORAGE_BUCKET", raising=False)
 
     settings = Settings(_env_file=None)
 
@@ -1658,11 +1664,10 @@ def test_update_model_settings_persists_v2_json_and_env_secret(
     settings = get_settings()
     model_settings_file = tmp_path / "model-settings.json"
     env_file = tmp_path / ".env"
-    env_file.write_text("OCI_ENTERPRISE_AI_API_KEY=saved-secret\n", encoding="utf-8")
+    env_file.write_text("PLATFORM_OCI_ENTERPRISE_AI_API_KEY=saved-secret\n", encoding="utf-8")
     env_file.chmod(0o600)
     monkeypatch.setattr(settings, "model_settings_file", str(model_settings_file))
-    monkeypatch.setattr(settings_router, "BACKEND_ENV_FILE", env_file)
-    monkeypatch.setattr(app_settings, "BACKEND_ENV_FILE", env_file)
+    monkeypatch.setattr(app_settings, "PLATFORM_ENV_FILE", env_file)
     settings.set_runtime_enterprise_ai_api_key("saved-secret")
 
     resp = client.patch(
@@ -1717,7 +1722,9 @@ def test_update_model_settings_persists_v2_json_and_env_secret(
     assert "api_key" not in document["enterprise_ai"]
     assert document["enterprise_ai"]["models"][1]["model_id"] == "mistral.vision-model"
     assert document["generative_ai"]["embedding_dim"] == 1536
-    assert env_file.read_text(encoding="utf-8") == "OCI_ENTERPRISE_AI_API_KEY=saved-secret\n"
+    assert (
+        env_file.read_text(encoding="utf-8") == "PLATFORM_OCI_ENTERPRISE_AI_API_KEY=saved-secret\n"
+    )
     assert resp.json()["data"]["secret_source"] == "environment"
     assert resp.json()["data"]["legacy_secret_detected"] is False
     assert stat.S_IMODE(model_settings_file.stat().st_mode) == 0o600
@@ -1730,27 +1737,29 @@ def test_enterprise_ai_api_key_env_update_and_clear_are_atomic(
 ) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text(
-        "# keep this comment\nOCI_ENTERPRISE_AI_API_KEY=old-secret\nDEBUG=true\n",
+        "# keep this comment\n"
+        "PLATFORM_OCI_ENTERPRISE_AI_API_KEY=old-secret\n"
+        "PLATFORM_OCI_REGION=x\n",
         encoding="utf-8",
     )
     env_file.chmod(0o600)
-    monkeypatch.setattr(settings_router, "BACKEND_ENV_FILE", env_file)
+    monkeypatch.setattr(app_settings, "PLATFORM_ENV_FILE", env_file)
 
     ModelSettingsStore._write_api_key(env_file, "new-secret")
 
     updated = env_file.read_text(encoding="utf-8")
     assert "old-secret" not in updated
-    assert "OCI_ENTERPRISE_AI_API_KEY=new-secret" in updated
+    assert "PLATFORM_OCI_ENTERPRISE_AI_API_KEY=new-secret" in updated
     assert "# keep this comment" in updated
-    assert "DEBUG=true" in updated
+    assert "PLATFORM_OCI_REGION=x" in updated
     assert stat.S_IMODE(env_file.stat().st_mode) == 0o600
 
     ModelSettingsStore._write_api_key(env_file, None)
 
     cleared = env_file.read_text(encoding="utf-8")
-    assert "OCI_ENTERPRISE_AI_API_KEY" not in cleared
+    assert "PLATFORM_OCI_ENTERPRISE_AI_API_KEY" not in cleared
     assert "# keep this comment" in cleared
-    assert "DEBUG=true" in cleared
+    assert "PLATFORM_OCI_REGION=x" in cleared
     assert stat.S_IMODE(env_file.stat().st_mode) == 0o600
 
 
@@ -1845,27 +1854,89 @@ def test_v3_model_settings_never_reads_api_key_field(tmp_path: Path) -> None:
     assert settings.legacy_model_secret_detected is True
 
 
-def test_oci_config_profile_prefers_canonical_and_falls_back_to_legacy() -> None:
-    canonical = Settings(
-        _env_file=None,
-        oci_config_profile="CANONICAL",
-        oci_profile="LEGACY",
-    )
-    legacy = Settings(_env_file=None, oci_config_profile="", oci_profile="LEGACY")
+def test_oci_config_profile_defaults_to_default_profile() -> None:
+    """PLATFORM_OCI_CONFIG_PROFILE だけを読む（旧 OCI_PROFILE の互換は持たない。#211）。"""
+    canonical = Settings(_env_file=None, oci_config_profile="CANONICAL")
+    empty = Settings(_env_file=None, oci_config_profile="")
 
     assert canonical.resolved_oci_config_profile == "CANONICAL"
-    assert legacy.resolved_oci_config_profile == "LEGACY"
+    assert empty.resolved_oci_config_profile == "DEFAULT"
+    assert "oci_profile" not in Settings.model_fields
+
+
+def test_settings_read_platform_env_then_product_env(tmp_path: Path) -> None:
+    """共通キーは共通 .env、製品キーは backend/.env から読む（#211）。"""
+    platform_env = tmp_path / "platform.env"
+    platform_env.write_text(
+        "PLATFORM_ORACLE_DSN=shared_high\nPLATFORM_OCI_CONFIG_PROFILE=SHARED\n",
+        encoding="utf-8",
+    )
+    backend_env = tmp_path / "backend.env"
+    backend_env.write_text(
+        "NL2SQL_LOG_LEVEL=WARNING\n"
+        "NL2SQL_ORACLE_DEEPSEC_DATA_USER=PRODUCT_DATA_USER\n"
+        "NL2SQL_SELECT_AI_REGION=ap-osaka-1\n",
+        encoding="utf-8",
+    )
+
+    settings = Settings(_env_file=(platform_env, backend_env))
+
+    assert settings.oracle_dsn == "shared_high"
+    assert settings.oci_config_profile == "SHARED"
+    assert settings.log_level == "WARNING"
+    assert settings.oracle_deepsec_data_user == "PRODUCT_DATA_USER"
+    assert settings.nl2sql_select_ai_region == "ap-osaka-1"
+
+
+def test_settings_ignore_legacy_env_names(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """新名がないとき、旧名（接頭辞なし）を環境変数からも .env からも読まない（#211。互換なし）。"""
+    platform_env = tmp_path / "platform.env"
+    platform_env.write_text("OCI_REGION=legacy-region\n", encoding="utf-8")
+    backend_env = tmp_path / "backend.env"
+    backend_env.write_text("LOG_LEVEL=WARN\nORACLE_DEEPSEC_DATA_USER=LEGACY\n", encoding="utf-8")
+    monkeypatch.delenv("PLATFORM_ORACLE_DSN", raising=False)
+    monkeypatch.setenv("ORACLE_DSN", "legacy_high")
+    monkeypatch.setenv("OCI_COMPARTMENT_ID", "legacy-compartment")
+
+    settings = Settings(_env_file=(platform_env, backend_env))
+
+    assert settings.oracle_dsn == ""
+    assert settings.oci_compartment_id == ""
+    assert settings.oci_region == ""
+    assert settings.log_level == "INFO"
+    assert settings.oracle_deepsec_data_user == "DEEPSEC_DATA_USER"
+    # 属性名での生成（テストや内部の Settings(oracle_dsn=...)）は引き続き使える。
+    assert Settings(_env_file=None, oracle_dsn="named_high").oracle_dsn == "named_high"
+
+
+def test_model_settings_file_resolves_next_to_platform_env(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """model-settings.json は3製品で共有し、相対パスは共通 .env の場所から解決する（#211）。"""
+    monkeypatch.setattr(app_settings, "PLATFORM_ENV_FILE", tmp_path / "shared" / ".env")
+
+    assert (
+        app_settings.resolve_model_settings_file("model-settings.json")
+        == (tmp_path / "shared" / "model-settings.json").resolve()
+    )
+    assert app_settings.resolve_model_settings_file(str(tmp_path / "abs.json")) == (
+        tmp_path / "abs.json"
+    )
 
 
 def test_nonlocal_security_boundaries_fail_closed() -> None:
-    with pytest.raises(ValueError, match="DEBUG=true"):
+    with pytest.raises(ValueError, match="NL2SQL_DEBUG=true"):
         Settings(
             _env_file=None,
             environment="production",
             debug=True,
             app_auth_enabled=False,
         )
-    with pytest.raises(ValueError, match="APP_AUTH_COOKIE_SECURE=true"):
+    with pytest.raises(ValueError, match="PLATFORM_AUTH_COOKIE_SECURE=true"):
         Settings(
             _env_file=None,
             environment="production",
@@ -2176,7 +2247,7 @@ def test_update_adb_settings_persists_dedicated_region(
 ) -> None:
     settings = get_settings()
     env_file = tmp_path / ".env"
-    monkeypatch.setattr(settings_router, "BACKEND_ENV_FILE", env_file)
+    monkeypatch.setattr(app_settings, "PLATFORM_ENV_FILE", env_file)
     monkeypatch.setattr(settings, "oracle_adb_ocid", "")
     monkeypatch.setattr(settings, "oracle_adb_region", "")
     calls: list[str] = []
@@ -2208,9 +2279,9 @@ def test_update_adb_settings_persists_dedicated_region(
     assert settings.oracle_adb_ocid == "ocid1.autonomousdatabase.oc1..saved"
     assert settings.oracle_adb_region == "ap-tokyo-1"
     env_text = env_file.read_text(encoding="utf-8")
-    assert "ORACLE_ADB_OCID=ocid1.autonomousdatabase.oc1..saved" in env_text
-    assert "ORACLE_ADB_REGION=ap-tokyo-1" in env_text
-    assert "OCI_REGION=ap-tokyo-1" not in env_text
+    assert "PLATFORM_ORACLE_ADB_OCID=ocid1.autonomousdatabase.oc1..saved" in env_text
+    assert "PLATFORM_ORACLE_ADB_REGION=ap-tokyo-1" in env_text
+    assert "PLATFORM_OCI_REGION=ap-tokyo-1" not in env_text
     assert calls == ["ocid1.autonomousdatabase.oc1..saved"]
 
 
@@ -2337,7 +2408,7 @@ def test_oracle_connect_kwargs_wallet_mtls_requires_wallet_readiness(tmp_path: P
 def _configure_wallet_download(monkeypatch: MonkeyPatch, tmp_path: Path) -> Settings:
     settings = get_settings()
     wallet_dir = tmp_path / "wallet"
-    monkeypatch.setattr(settings_router, "BACKEND_ENV_FILE", tmp_path / ".env")
+    monkeypatch.setattr(app_settings, "PLATFORM_ENV_FILE", tmp_path / ".env")
     key_file = tmp_path / "oci_api_key.pem"
     key_file.write_text(
         "-----BEGIN PRIVATE KEY-----\nfixture\n-----END PRIVATE KEY-----\n",

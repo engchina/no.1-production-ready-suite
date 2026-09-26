@@ -200,7 +200,7 @@ ingestion が担う(`SERVICE_ADAPTER_BACKENDS`)。
   これは確定スタックに無い **追加 OCI サービス**(LLM/VLM=Enterprise AI、OCR は Enterprise AI VLM 再
   マップという従来方針からの拡張)であり、**ユーザ明示要望による**。別 LLM provider・外部ベクトル DB は
   導入しない。設定は `OCI_DOCUMENT_UNDERSTANDING_*`(compartment/namespace/bucket/prefix/language/
-  poll/timeout)。空欄は汎用 `OCI_COMPARTMENT_ID` / `OBJECT_STORAGE_*` を使う。
+  poll/timeout)。空欄は汎用 `PLATFORM_OCI_COMPARTMENT_ID` / `PLATFORM_OBJECT_STORAGE_*` を使う。
 - 設定 API `GET/PATCH /api/settings/parser-adapters` は両 backend を選択値として受理し、GET 応答の
   `service_backends[]` で選択状態と設定可用性(`configured` / `warning_code`)を返す。
 

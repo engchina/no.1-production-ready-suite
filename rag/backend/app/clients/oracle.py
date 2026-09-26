@@ -11512,7 +11512,7 @@ def _oracle_connect_kwargs(
 
 
 def _init_oracle_client(oracledb: Any, settings: Settings) -> None:
-    """ORACLE_CLIENT_LIB_DIR があるときは nl2sql と同じ thick client を使う。"""
+    """PLATFORM_ORACLE_CLIENT_LIB_DIR があるときは nl2sql と同じ thick client を使う。"""
     global _ORACLE_CLIENT_INITIALIZED_LIB_DIR
     lib_dir = settings.oracle_client_lib_dir.strip()
     if not lib_dir or lib_dir == _ORACLE_CLIENT_INITIALIZED_LIB_DIR:

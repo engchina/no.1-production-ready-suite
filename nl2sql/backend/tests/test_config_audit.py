@@ -5,45 +5,96 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from app.config_audit import ENV_ASSIGNMENT_RE, audit_configuration, stable_audit_json
-from app.settings import Settings
+from app.config_audit import (
+    ENV_ASSIGNMENT_RE,
+    AuditPaths,
+    audit_configuration,
+    settings_env_keys,
+    stable_audit_json,
+)
+
+BACKEND_DIR = Path(__file__).resolve().parents[1]
+PLATFORM_ENV_EXAMPLE = BACKEND_DIR.parents[1] / "platform" / ".env.example"
+
+
+def _paths(
+    tmp_path: Path,
+    *,
+    env_path: Path | None = None,
+    platform_env_path: Path | None = None,
+    model_settings_path: Path | None = None,
+) -> AuditPaths:
+    return AuditPaths(
+        example_path=BACKEND_DIR / ".env.example",
+        env_path=env_path or tmp_path / "missing.env",
+        platform_example_path=PLATFORM_ENV_EXAMPLE,
+        platform_env_path=platform_env_path or tmp_path / "missing-platform.env",
+        model_settings_path=model_settings_path or tmp_path / "missing-model-settings.json",
+    )
 
 
 def test_repository_env_example_is_complete_and_secret_free(tmp_path: Path) -> None:
-    backend_dir = Path(__file__).resolve().parents[1]
-
-    result = audit_configuration(
-        example_path=backend_dir / ".env.example",
-        env_path=tmp_path / "missing.env",
-        model_settings_path=tmp_path / "missing-model-settings.json",
-    )
+    """製品キーは backend/.env.example、共通キーは platform/.env.example にそろっている。"""
+    result = audit_configuration(_paths(tmp_path))
 
     assert result.ok is True
     assert result.findings == []
 
 
+def test_product_env_example_has_only_product_keys() -> None:
+    """backend/.env.example は NL2SQL_* だけを持ち、共通キーは platform/.env.example が持つ。"""
+    platform_keys, product_keys = settings_env_keys()
+    example_keys = {
+        match.group("key")
+        for line in (BACKEND_DIR / ".env.example").read_text(encoding="utf-8").splitlines()
+        if (match := ENV_ASSIGNMENT_RE.match(line)) is not None
+    }
+
+    assert all(key.startswith("PLATFORM_") for key in platform_keys)
+    assert all(key.startswith("NL2SQL_") for key in product_keys)
+    assert example_keys == product_keys
+
+
+def test_audit_reports_platform_keys_left_in_product_env(tmp_path: Path) -> None:
+    """移行し忘れた共通キーや旧名が製品の .env に残っていれば error にする。"""
+    env_file = tmp_path / ".env"
+    env_file.write_text("PLATFORM_ORACLE_DSN=db_high\nORACLE_DSN=db_high\n", encoding="utf-8")
+    env_file.chmod(0o600)
+    platform_env = tmp_path / "platform.env"
+    platform_env.write_text("PLATFORM_ORACLE_DSN=db_high\nNL2SQL_DEBUG=true\n", encoding="utf-8")
+    platform_env.chmod(0o644)
+
+    result = audit_configuration(
+        _paths(tmp_path, env_path=env_file, platform_env_path=platform_env)
+    )
+    findings = {item.code: item for item in result.findings}
+
+    assert result.ok is False
+    assert findings["ENV_ACTUAL_UNKNOWN_KEYS"].keys == ("ORACLE_DSN", "PLATFORM_ORACLE_DSN")
+    assert findings["PLATFORM_ENV_ACTUAL_UNKNOWN_KEYS"].keys == ("NL2SQL_DEBUG",)
+    assert "PLATFORM_ENV_ACTUAL_PERMISSIONS_NOT_0600" in findings
+
+
 def test_audit_reports_unknown_duplicate_malformed_and_security_combinations(
     tmp_path: Path,
 ) -> None:
-    backend_dir = Path(__file__).resolve().parents[1]
-    example = backend_dir / ".env.example"
     env_file = tmp_path / ".env"
     env_file.write_text(
-        "ENVIRONMENT=production\n"
-        "DEBUG=true\n"
-        "DEBUG=false\n"
-        "APP_AUTH_ENABLED=true\n"
-        "APP_AUTH_COOKIE_SECURE=false\n"
+        "NL2SQL_ENVIRONMENT=production\n"
+        "NL2SQL_DEBUG=true\n"
+        "NL2SQL_DEBUG=false\n"
+        "NL2SQL_APP_AUTH_ENABLED=true\n"
         "UNKNOWN_SETTING=value\n"
         "not an assignment\n",
         encoding="utf-8",
     )
     env_file.chmod(0o600)
+    platform_env = tmp_path / "platform.env"
+    platform_env.write_text("PLATFORM_AUTH_COOKIE_SECURE=false\n", encoding="utf-8")
+    platform_env.chmod(0o600)
 
     result = audit_configuration(
-        example_path=example,
-        env_path=env_file,
-        model_settings_path=tmp_path / "missing.json",
+        _paths(tmp_path, env_path=env_file, platform_env_path=platform_env)
     )
     codes = {item.code for item in result.findings}
 
@@ -55,18 +106,15 @@ def test_audit_reports_unknown_duplicate_malformed_and_security_combinations(
 
 
 def test_audit_rejects_deepsec_with_thick_driver(tmp_path: Path) -> None:
-    backend_dir = Path(__file__).resolve().parents[1]
     env_file = tmp_path / ".env"
-    env_file.write_text(
-        "ORACLE_DEEPSEC_ENABLED=true\n" "ORACLE_DRIVER_MODE=thick\n",
-        encoding="utf-8",
-    )
+    env_file.write_text("NL2SQL_ORACLE_DEEPSEC_ENABLED=true\n", encoding="utf-8")
     env_file.chmod(0o600)
+    platform_env = tmp_path / "platform.env"
+    platform_env.write_text("PLATFORM_ORACLE_DRIVER_MODE=thick\n", encoding="utf-8")
+    platform_env.chmod(0o600)
 
     result = audit_configuration(
-        example_path=backend_dir / ".env.example",
-        env_path=env_file,
-        model_settings_path=tmp_path / "missing.json",
+        _paths(tmp_path, env_path=env_file, platform_env_path=platform_env)
     )
     codes = {item.code for item in result.findings}
 
@@ -75,7 +123,6 @@ def test_audit_rejects_deepsec_with_thick_driver(tmp_path: Path) -> None:
 
 
 def test_audit_detects_legacy_json_without_disclosing_secret(tmp_path: Path) -> None:
-    backend_dir = Path(__file__).resolve().parents[1]
     model_settings = tmp_path / "model-settings.json"
     model_settings.write_text(
         json.dumps(
@@ -88,11 +135,7 @@ def test_audit_detects_legacy_json_without_disclosing_secret(tmp_path: Path) -> 
     )
     model_settings.chmod(0o600)
 
-    result = audit_configuration(
-        example_path=backend_dir / ".env.example",
-        env_path=tmp_path / "missing.env",
-        model_settings_path=model_settings,
-    )
+    result = audit_configuration(_paths(tmp_path, model_settings_path=model_settings))
     output = stable_audit_json(result)
 
     assert "MODEL_SETTINGS_LEGACY_SECRET" in output
@@ -106,37 +149,52 @@ def test_terraform_cloud_init_keeps_thin_mtls_without_instant_client() -> None:
     init_script = (repo_root / "init_script.sh").read_text(encoding="utf-8").lower()
     dockerfile = (repo_root / "backend" / "Dockerfile").read_text(encoding="utf-8").lower()
 
-    assert "ORACLE_DEEPSEC_ENABLED=${var.oracle_deepsec_enabled}" in locals_tf
-    assert "ORACLE_DRIVER_MODE=thin" in locals_tf
-    assert "ORACLE_CLIENT_LIB_DIR=" in locals_tf
+    assert "NL2SQL_ORACLE_DEEPSEC_ENABLED=${var.oracle_deepsec_enabled}" in _terraform_env_body(
+        "backend_env"
+    )
+    assert "PLATFORM_ORACLE_DRIVER_MODE=thin" in _terraform_env_body("platform_env")
+    assert "PLATFORM_ORACLE_CLIENT_LIB_DIR=" in _terraform_env_body("platform_env")
+    assert "platform_env        = base64gzip(local.platform_env)" in locals_tf
+    assert '"${app_root}/props/platform.env" "${platform_repo_dir}/.env"' in init_script
     assert "instantclient" not in init_script
     assert "instantclient" not in dockerfile
 
 
-def _terraform_backend_env_body() -> str:
-    """locals.tf の backend_env heredoc 本文だけを取り出す。"""
+def _terraform_env_body(name: str) -> str:
+    """locals.tf の `<name> = <<-EOT` heredoc 本文だけを取り出す。"""
     repo_root = Path(__file__).resolve().parents[2]
     locals_tf = (repo_root / "terraform" / "stack" / "locals.tf").read_text(encoding="utf-8")
-    _, _, after = locals_tf.partition("backend_env = <<-EOT\n")
-    assert after, "locals.tf に backend_env heredoc が見つかりません。"
+    _, _, after = locals_tf.partition(f"{name} = <<-EOT\n")
+    assert after, f"locals.tf に {name} heredoc が見つかりません。"
     body, _, _ = after.partition("\nEOT")
     return body
 
 
-def test_terraform_backend_env_renders_select_ai_credential_name() -> None:
-    """Select AI credential 名は env 専用キーのため Terraform が書き込む必要がある。"""
-    assert "NL2SQL_SELECT_AI_CREDENTIAL_NAME=OCI_CRED" in _terraform_backend_env_body()
-    assert "NL2SQL_SELECT_AI_REGION=us-chicago-1" in _terraform_backend_env_body()
-
-
-def test_terraform_backend_env_keys_are_known_settings() -> None:
-    """Terraform が撒くキーは Settings に存在する（未知キーは audit の error になる）。"""
-    known_keys = {name.upper() for name in Settings.model_fields}
-    rendered_keys = {
+def _rendered_keys(body: str) -> set[str]:
+    return {
         match.group("key")
-        for line in _terraform_backend_env_body().splitlines()
+        for line in body.splitlines()
         if (match := ENV_ASSIGNMENT_RE.match(line)) is not None
     }
 
-    assert rendered_keys, "backend_env から key を抽出できませんでした。"
-    assert rendered_keys <= known_keys
+
+def test_terraform_backend_env_renders_select_ai_credential_name() -> None:
+    """Select AI credential 名は env 専用キーのため Terraform が書き込む必要がある。"""
+    assert "NL2SQL_SELECT_AI_CREDENTIAL_NAME=OCI_CRED" in _terraform_env_body("backend_env")
+    assert "NL2SQL_SELECT_AI_REGION=us-chicago-1" in _terraform_env_body("backend_env")
+
+
+def test_terraform_env_keys_are_known_settings_in_the_right_file() -> None:
+    """Terraform が撒くキーは Settings に存在し、共通キーは platform.env、製品キーは backend.env。
+
+    未知キーや置き場所の誤りは audit の error になる（#211）。
+    """
+    platform_keys, product_keys = settings_env_keys()
+    backend_keys = _rendered_keys(_terraform_env_body("backend_env"))
+    platform_env_keys = _rendered_keys(_terraform_env_body("platform_env"))
+
+    assert backend_keys, "backend_env から key を抽出できませんでした。"
+    assert platform_env_keys, "platform_env から key を抽出できませんでした。"
+    assert backend_keys <= product_keys
+    assert platform_env_keys <= platform_keys
+    assert "PLATFORM_ADMIN_LOGIN_USER_PASSWORD" in platform_env_keys

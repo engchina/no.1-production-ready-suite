@@ -311,7 +311,7 @@ def get_catalog_entry(service_id: str) -> ServiceCatalogEntry | None:
 def is_dev_mode(settings: Settings) -> bool:
     """local 環境が dev か判定する。
 
-    ``ENVIRONMENT`` を流用し、``prod``/``production`` 以外は dev とみなす
+    ``RAG_ENVIRONMENT`` を流用し、``prod``/``production`` 以外は dev とみなす
     (readiness の production 判定と整合)。dev/prod とも docker compose で起動/停止し、
     dev のみ ``docker-compose.dev.yml`` を重ねてコンテナのポートを localhost へ公開する。
     """

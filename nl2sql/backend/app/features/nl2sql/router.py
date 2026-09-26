@@ -318,7 +318,7 @@ class ActorAccess(NamedTuple):
 def _actor_access_args(request: Request, *, manage_permission: str) -> ActorAccess:
     principal = _principal_from_request(request)
     if principal is None:
-        # 意図的な fail-open: APP_AUTH_ENABLED=false のとき principal は存在せず、
+        # 意図的な fail-open: NL2SQL_APP_AUTH_ENABLED=false のとき principal は存在せず、
         # テナント概念が無いため全 actor 制約を外す(管理者相当)。認証有効時は
         # authorize_api_request が principal を必ず設定するので、この分岐には入らない。
         return ActorAccess(actor_user_uuid="", actor_can_manage=True)

@@ -1,9 +1,9 @@
 """Probe OCI Enterprise AI Vision through the OpenAI Responses SDK.
 
 Required environment variables:
-  OCI_ENTERPRISE_AI_ENDPOINT
-  OCI_ENTERPRISE_AI_PROJECT_OCID
-  OCI_ENTERPRISE_AI_API_KEY
+  PLATFORM_OCI_ENTERPRISE_AI_ENDPOINT
+  PLATFORM_OCI_ENTERPRISE_AI_PROJECT_OCID
+  PLATFORM_OCI_ENTERPRISE_AI_API_KEY
 
 Optional:
   OCI_ENTERPRISE_AI_MODEL
@@ -75,9 +75,9 @@ TEST_IMAGE_JPEG_BASE64 = (
 
 
 def main() -> int:
-    endpoint = _required_env("OCI_ENTERPRISE_AI_ENDPOINT")
-    project_ocid = _required_env("OCI_ENTERPRISE_AI_PROJECT_OCID")
-    api_key = _required_env("OCI_ENTERPRISE_AI_API_KEY")
+    endpoint = _required_env("PLATFORM_OCI_ENTERPRISE_AI_ENDPOINT")
+    project_ocid = _required_env("PLATFORM_OCI_ENTERPRISE_AI_PROJECT_OCID")
+    api_key = _required_env("PLATFORM_OCI_ENTERPRISE_AI_API_KEY")
     model = os.getenv("OCI_ENTERPRISE_AI_MODEL", "google.gemini-2.5-flash").strip()
 
     _validate_test_image()

@@ -109,6 +109,46 @@ run_public_base_url_case() (
   resolve_public_base_url "${case_dir}/backend.env"
 )
 
+run_install_env_case() (
+  local case_dir="${TEST_TMP_DIR}/install-env"
+  prepare_case "${case_dir}"
+  mkdir -p "${case_dir}/app/no.1-production-ready-suite/platform"
+  APP_USER="$(id -un)"
+  APP_GROUP="$(id -gn)"
+  export APP_USER APP_GROUP APPLICATION_PORT=80
+  # shellcheck source=/dev/null
+  source "${REPO_DIR}/init_script.sh"
+
+  curl() {
+    printf '%s\n' '[{"vnicId":"ocid1.vnic.oc1..test","privateIp":"10.0.1.23","subnetCidrBlock":"10.0.1.0/24"}]'
+  }
+
+  printf 'PLATFORM_ORACLE_DSN=agentdb_high\n' > "${PROPS_DIR}/platform.env"
+  printf 'AGENT_CONTROL_PLANE_PUBLIC_BASE_URL=\n' > "${PROPS_DIR}/backend.env"
+  python3 -c 'import sys, zipfile; zipfile.ZipFile(sys.argv[1], "w").writestr("tnsnames.ora", "agentdb_high=\n")' \
+    "${PROPS_DIR}/wallet.zip"
+
+  install_runtime_env
+)
+
+# --- 共通 .env（platform/.env）と Agent の backend/.env（#211） ---
+run_install_env_case
+install_suite="${TEST_TMP_DIR}/install-env/app/no.1-production-ready-suite"
+grep -qx 'PLATFORM_ORACLE_DSN=agentdb_high' "${install_suite}/platform/.env" \
+  || fail "共通 .env が platform/.env に置かれていない"
+test "$(stat -c '%a' "${install_suite}/platform/.env")" = "600" || fail "platform/.env の permission が 0600 ではない"
+grep -qx 'AGENT_CONTROL_PLANE_PUBLIC_BASE_URL=http://10.0.1.23/api' "${install_suite}/agent/backend/.env" \
+  || fail "backend/.env の public base URL が補われていない"
+test "$(stat -c '%a' "${install_suite}/agent/backend/.env")" = "600" || fail "backend/.env の permission が 0600 ではない"
+if grep -q 'PLATFORM_' "${install_suite}/agent/backend/.env"; then
+  fail "backend/.env に共通の設定が入っている"
+fi
+# 再実行では、画面で保存した共通 .env を上書きしない。
+printf 'PLATFORM_ORACLE_DSN=saved_from_ui\n' > "${install_suite}/platform/.env"
+run_install_env_case
+grep -qx 'PLATFORM_ORACLE_DSN=saved_from_ui' "${install_suite}/platform/.env" \
+  || fail "再実行で共通 .env が上書きされた"
+
 # --- DB 初期化（Runtime repository の import で table を作る） ---
 run_initialization_case success ""
 test "$(cat "${TEST_TMP_DIR}/success/ready")" = "true" || fail "DB 初期化成功時に ready にならない"

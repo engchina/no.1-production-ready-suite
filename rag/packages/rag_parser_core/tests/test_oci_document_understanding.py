@@ -69,14 +69,14 @@ def _du_result_json() -> dict[str, object]:
 
 def test_config_from_env_resolves_fallbacks() -> None:
     env = {
-        "OCI_COMPARTMENT_ID": "ocid1.compartment.oc1..fallback",
-        "OCI_REGION": "us-chicago-1",
-        "OBJECT_STORAGE_REGION": "ap-osaka-1",
-        "OBJECT_STORAGE_NAMESPACE": "ns-default",
-        "OBJECT_STORAGE_BUCKET": "bucket-default",
-        "OCI_DOCUMENT_UNDERSTANDING_LANGUAGE": "JPN",
-        "OCI_DOCUMENT_UNDERSTANDING_FEATURES": '["DOCUMENT_TEXT_EXTRACTION"]',
-        "OCI_DOCUMENT_UNDERSTANDING_POLL_INTERVAL_SECONDS": "0.5",
+        "PLATFORM_OCI_COMPARTMENT_ID": "ocid1.compartment.oc1..fallback",
+        "PLATFORM_OCI_REGION": "us-chicago-1",
+        "PLATFORM_OBJECT_STORAGE_REGION": "ap-osaka-1",
+        "PLATFORM_OBJECT_STORAGE_NAMESPACE": "ns-default",
+        "PLATFORM_OBJECT_STORAGE_BUCKET": "bucket-default",
+        "RAG_OCI_DOCUMENT_UNDERSTANDING_LANGUAGE": "JPN",
+        "RAG_OCI_DOCUMENT_UNDERSTANDING_FEATURES": '["DOCUMENT_TEXT_EXTRACTION"]',
+        "RAG_OCI_DOCUMENT_UNDERSTANDING_POLL_INTERVAL_SECONDS": "0.5",
     }
     config = OciDocumentUnderstandingConfig.from_env(env)
     # 専用設定が空なら object_storage_* / compartment へ fallback する。
@@ -93,9 +93,9 @@ def test_config_from_env_resolves_fallbacks() -> None:
 def test_config_from_env_allows_du_object_storage_region_override() -> None:
     config = OciDocumentUnderstandingConfig.from_env(
         {
-            "OCI_REGION": "us-chicago-1",
-            "OBJECT_STORAGE_REGION": "ap-osaka-1",
-            "OCI_DOCUMENT_UNDERSTANDING_OBJECT_STORAGE_REGION": "eu-frankfurt-1",
+            "PLATFORM_OCI_REGION": "us-chicago-1",
+            "PLATFORM_OBJECT_STORAGE_REGION": "ap-osaka-1",
+            "RAG_OCI_DOCUMENT_UNDERSTANDING_OBJECT_STORAGE_REGION": "eu-frankfurt-1",
         }
     )
     assert config.object_storage_region == "eu-frankfurt-1"

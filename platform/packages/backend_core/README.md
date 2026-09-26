@@ -12,6 +12,7 @@ No.1 Production Ready 製品群（**RAG / NL2SQL / Agent**）の backend が共�
 |---|---|
 | `create_app(...)` | CORS・request-id/メトリクス・例外 envelope・health/ready・/metrics を備えた app factory |
 | `config.BaseServiceSettings` | `.env` ベースの共通設定基底（app_version / log_level / environment / cors_origins） |
+| `config.product_settings_config` | 製品の Settings の `model_config`。共通 `platform/.env` → 製品の `backend/.env` の順に読み、共通の属性（`PLATFORM_SETTING_FIELDS`）は `PLATFORM_*`、それ以外は製品の接頭辞の環境変数名にする（#211。旧名は読まない） |
 | `logging.configure_logging` | JSON 構造化ログ（サービス固有のノイズロガー抑制を注入可能） |
 | `schemas` | `ApiResponse[T]` / `Page[T]` / `HealthData`（**RAG 実証済み envelope を標準採用**） |
 | `api.errors` | HTTPException / 検証 / 未処理例外 → `ApiResponse` 統一ハンドラ |

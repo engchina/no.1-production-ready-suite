@@ -2,22 +2,19 @@
 
 ログイン・セッション・構成管理者・ユーザー / ロールの共通操作・製品をまたぐ権限昇格の防止は
 platform の `pr_system_settings.auth.service.AuthService` が持つ（#212）。ここには NL2SQL の権限
-（`permissions.py`）・業務プロファイル利用権限・Data Grant と、構成管理者の `.env`（APP_ADMIN_*）の
-読み書きだけを置く。
+（`permissions.py`）・業務プロファイル利用権限・Data Grant と、構成管理者を置く共通 `.env` の場所
+だけを置く（構成管理者の `PLATFORM_ADMIN_*` の読み書きは platform の AuthService。#211）。
 """
 
 from __future__ import annotations
 
 import logging
-import re
 from collections.abc import Sequence
 from copy import deepcopy
 from functools import lru_cache
 from pathlib import Path
 from uuid import uuid4
 
-from dotenv import dotenv_values
-from pr_system_settings.auth.domain import FIXED_ADMIN_LOGIN_USER_ID
 from pr_system_settings.auth.domain import Principal as PlatformPrincipal
 from pr_system_settings.auth.domain import RoleRecord as PlatformRoleRecord
 from pr_system_settings.auth.domain import SessionRecord as PlatformSessionRecord
@@ -26,7 +23,7 @@ from pr_system_settings.auth.errors import LoginFailed as LoginFailed
 from pr_system_settings.auth.errors import SecurityApiError as SecurityApiError
 from pr_system_settings.auth.service import AuthService
 
-from app.env_file import locked_env_file, replace_env_file
+from app import settings as settings_module
 from app.settings import Settings, get_settings
 
 from .domain import (
@@ -60,37 +57,6 @@ from .store import (
 DataEntitlementDraft = tuple[str, str, str] | DataEntitlementRecord
 logger = logging.getLogger(__name__)
 
-_APP_ADMIN_LOGIN_USER_ID_KEY = "APP_ADMIN_LOGIN_USER_ID"
-_LEGACY_APP_ADMIN_USERNAME_KEY = "APP_ADMIN_USERNAME"
-_APP_ADMIN_LOGIN_USER_PASSWORD_KEY = "APP_ADMIN_LOGIN_USER_PASSWORD"  # nosec B105
-_LEGACY_APP_ADMIN_PASSWORD_KEY = "APP_ADMIN_PASSWORD"  # nosec B105
-_APP_AUTH_ENABLED_KEY = "APP_AUTH_ENABLED"
-_FIXED_APP_ADMIN_LOGIN_USER_ID = FIXED_ADMIN_LOGIN_USER_ID
-_BACKEND_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
-_ENV_ASSIGNMENT_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=")
-
-
-def _env_assignment_key(line: str) -> str | None:
-    match = _ENV_ASSIGNMENT_RE.match(line)
-    return match.group(1) if match else None
-
-
-def _format_env_value(value: str) -> str:
-    if not value:
-        return '""'
-    if re.search(r"\s|#|=|'|\\", value):
-        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
-        return f'"{escaped}"'
-    return value
-
-
-def _read_backend_env_value(key: str) -> str | None:
-    if not _BACKEND_ENV_FILE.exists():
-        return None
-    values = dotenv_values(_BACKEND_ENV_FILE)
-    value = values.get(key)
-    return str(value) if value is not None else None
-
 
 class SecurityService(AuthService):
     """NL2SQL の認証/RBAC。共通部分は platform の AuthService。"""
@@ -103,8 +69,6 @@ class SecurityService(AuthService):
     role_catalog_permissions = frozenset({"menu.security_roles", "menu.security_permissions"})
     # 既存の構成管理者 token を無効にしないよう、NL2SQL の接頭辞を保つ。
     configured_admin_token_prefix = "nl2sql-system-admin-v1"  # nosec B105 - token の接頭辞
-    admin_login_env_key = _APP_ADMIN_LOGIN_USER_ID_KEY
-    admin_password_env_key = _APP_ADMIN_LOGIN_USER_PASSWORD_KEY
     migration_hint = (
         "`uv run python -m app.cli.app_security_migrate --apply --skip-bootstrap` "
         "を実行してから再試行してください。"
@@ -262,54 +226,11 @@ class SecurityService(AuthService):
     def _verify_password(self, password: str, password_hash: str) -> tuple[bool, str | None]:
         return verify_password(password, password_hash)
 
-    # ---- 構成管理者（backend/.env の APP_ADMIN_*） ----
+    # ---- 構成管理者（共通 .env の PLATFORM_ADMIN_*） ----
 
-    def _configured_system_admin_credentials(self) -> tuple[str, str]:
-        login_user_id = _read_backend_env_value(_APP_ADMIN_LOGIN_USER_ID_KEY)
-        if login_user_id is None:
-            login_user_id = _read_backend_env_value(_LEGACY_APP_ADMIN_USERNAME_KEY)
-        password = _read_backend_env_value(_APP_ADMIN_LOGIN_USER_PASSWORD_KEY)
-        if password is None:
-            password = _read_backend_env_value(_LEGACY_APP_ADMIN_PASSWORD_KEY)
-        if login_user_id is None:
-            login_user_id = self.settings.app_admin_login_user_id
-        if password is None:
-            password = self.settings.app_admin_login_user_password
-        return login_user_id.strip(), password
-
-    def _write_configured_system_admin_password(self, password: str) -> None:
-        with locked_env_file(_BACKEND_ENV_FILE) as env_path:
-            lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
-            next_lines = [
-                line
-                for line in lines
-                if _env_assignment_key(line)
-                not in {
-                    _APP_ADMIN_LOGIN_USER_ID_KEY,
-                    _LEGACY_APP_ADMIN_USERNAME_KEY,
-                    _APP_ADMIN_LOGIN_USER_PASSWORD_KEY,
-                    _LEGACY_APP_ADMIN_PASSWORD_KEY,
-                }
-            ]
-            admin_lines = [
-                f"{_APP_ADMIN_LOGIN_USER_ID_KEY}={_FIXED_APP_ADMIN_LOGIN_USER_ID}",
-                f"{_APP_ADMIN_LOGIN_USER_PASSWORD_KEY}={_format_env_value(password)}",
-            ]
-            insert_at = next(
-                (
-                    index
-                    for index, line in enumerate(next_lines)
-                    if _env_assignment_key(line) == _APP_AUTH_ENABLED_KEY
-                ),
-                None,
-            )
-            if insert_at is None:
-                if next_lines and next_lines[-1].strip():
-                    next_lines.append("")
-                next_lines.extend(admin_lines)
-            else:
-                next_lines[insert_at:insert_at] = admin_lines
-            replace_env_file(env_path, "\n".join(next_lines).rstrip() + "\n")
+    def _platform_env_file(self) -> Path | None:
+        """構成管理者の資格情報を置く共通 `.env`。テストが差し替えられるよう呼出時に参照する。"""
+        return settings_module.PLATFORM_ENV_FILE
 
     # ---- NL2SQL のロール編集（権限・業務プロファイル・Data Grant） ----
 

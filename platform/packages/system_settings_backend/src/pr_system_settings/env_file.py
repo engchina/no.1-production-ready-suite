@@ -1,4 +1,4 @@
-"""`backend/.env` の排他付き部分更新。
+"""`.env` の排他付き部分更新。
 
 NL2SQL の app/env_file.py と settings router から移設した（#97）。
 """

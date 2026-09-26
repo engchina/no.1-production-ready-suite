@@ -12,14 +12,16 @@ _DIAGNOSTICS = (
         {"DPY-6001", "ORA-12514", "ORA-12505"},
         "service_not_registered",
         "要求したデータベースサービスが listener に登録されていません。",
-        "OCI Console で ADB の稼働状態を確認し、ORACLE_DSN のサービス名を現在の接続文字列と"
+        "OCI Console で ADB の稼働状態を確認し、"
+        "PLATFORM_ORACLE_DSN のサービス名を現在の接続文字列と"
         "照合してください。Wallet 利用時は tnsnames.ora が対象 ADB のものか確認してください。",
     ),
     (
         {"ORA-01017"},
         "invalid_credentials",
         "データベースのユーザー名またはパスワードが拒否されました。",
-        "ORACLE_USER と ORACLE_PASSWORD を確認してください。DB パスワードと Wallet "
+        "PLATFORM_ORACLE_USER と PLATFORM_ORACLE_PASSWORD を確認してください。"
+        "DB パスワードと Wallet "
         "パスワードは別の設定です。",
     ),
     (
@@ -32,7 +34,7 @@ _DIAGNOSTICS = (
         {"ORA-12154", "DPY-4000"},
         "dsn_resolution_failed",
         "接続先サービス名を解決できませんでした。",
-        "ORACLE_DSN と ORACLE_WALLET_DIR の tnsnames.ora を確認してください。"
+        "PLATFORM_ORACLE_DSN と PLATFORM_ORACLE_WALLET_DIR の tnsnames.ora を確認してください。"
         "Walletless TLS では host:port/service_name または接続記述子を指定してください。",
     ),
     (
@@ -46,8 +48,10 @@ _DIAGNOSTICS = (
         {"DPI-1047", "DPI-1072"},
         "client_unavailable",
         "Oracle Client ライブラリを利用できません。",
-        "ORACLE_DRIVER_MODE を確認してください。標準の Thin mode では Instant Client は不要です。"
-        "Thick mode 利用時は ORACLE_CLIENT_LIB_DIR とライブラリの互換性を確認してください。",
+        "PLATFORM_ORACLE_DRIVER_MODE を確認してください。"
+        "標準の Thin mode では Instant Client は不要です。"
+        "Thick mode 利用時は PLATFORM_ORACLE_CLIENT_LIB_DIR と"
+        "ライブラリの互換性を確認してください。",
     ),
     (
         {"DPY-4011", "ORA-03113", "ORA-03114"},
@@ -85,14 +89,15 @@ def oracle_connection_diagnostics(exc: Exception) -> dict[str, object]:
             summary = "データベース接続の応答が制限時間内に返りませんでした。"
             action = (
                 "ADB の稼働状態、接続先ホスト・ポートへの到達性と VCN / VPN / Firewall を確認し、"
-                "ORACLE_DB_TEST_TIMEOUT_SECONDS と ORACLE_TCP_CONNECT_TIMEOUT_SECONDS "
+                "PLATFORM_ORACLE_DB_TEST_TIMEOUT_SECONDS と "
+                "PLATFORM_ORACLE_TCP_CONNECT_TIMEOUT_SECONDS "
                 "を確認してください。"
             )
         elif code_set & {"ORA-12541", "DPY-6000", "DPY-6005"}:
             category = "connection_unavailable"
             summary = "データベースへの接続を確立できませんでした。"
             action = (
-                "ADB / listener の稼働状態と ORACLE_DSN のホスト・ポートを確認し、"
+                "ADB / listener の稼働状態と PLATFORM_ORACLE_DSN のホスト・ポートを確認し、"
                 "DNS、VCN / VPN / Firewall、ADB のアクセス制御を切り分けてください。"
                 "DPY-6005 だけでは原因を特定できないため、併記されたエラーも確認してください。"
             )

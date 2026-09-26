@@ -25,11 +25,14 @@ def test_oracle_persistence_roundtrip_and_conflict_rollback() -> None:
     # conftest の APP 上書きを使わず、ローカル接続設定を明示的に読込む。
     from dotenv import dotenv_values
 
-    env = dotenv_values(Path(__file__).parents[1] / ".env")
+    # 接続設定は共通 .env（platform/.env の PLATFORM_ORACLE_*。#211）
+    env = dotenv_values(Path(__file__).parents[3] / "platform" / ".env")
     connection_settings: dict[str, Any] = {
-        key.lower(): value
+        key.removeprefix("PLATFORM_").lower(): value
         for key, value in env.items()
-        if key.startswith("ORACLE_") and key.lower() in Settings.model_fields and value is not None
+        if key.startswith("PLATFORM_ORACLE_")
+        and key.removeprefix("PLATFORM_").lower() in Settings.model_fields
+        and value is not None
     }
     settings = Settings(_env_file=None, **connection_settings)
     adapter = OracleNl2SqlAdapter(settings)
