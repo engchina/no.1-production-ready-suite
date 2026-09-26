@@ -721,7 +721,7 @@ export function SearchClient() {
                     <SearchExecutionMeta meta={meta} />
                   ) : null}
                   {meta && phase === "done" && meta.diagnostics?.docrag ? (
-                    <DocragAnswerPanel docrag={meta.diagnostics.docrag} />
+                    <DocragAnswerPanel docrag={meta.diagnostics.docrag} traceId={meta.trace_id} />
                   ) : null}
                 </CardContent>
               </Card>

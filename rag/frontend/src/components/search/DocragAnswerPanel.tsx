@@ -2,9 +2,21 @@ import { StatusBadge } from "@engchina/production-ready-ui";
 
 import { confidenceVariant, parseDocragDiagnostics } from "@/lib/docrag-answer";
 import { t } from "@/lib/i18n";
+import { DocragAnswerEvaluation } from "./DocragAnswerEvaluation";
 
-/** DocRAG 回答エンジンの根拠構成と実行記録(信頼度・人手確認・根拠木・工程)。 */
-export function DocragAnswerPanel({ docrag }: { docrag: unknown }) {
+/**
+ * DocRAG 回答エンジンの根拠構成と実行記録(信頼度・人手確認・根拠木・工程)。
+ * traceId を渡すと、保存した回答を標準回答で評価する欄も出す。
+ */
+export function DocragAnswerPanel({
+  docrag,
+  traceId,
+  evaluation,
+}: {
+  docrag: unknown;
+  traceId?: string | null;
+  evaluation?: unknown;
+}) {
   const data = parseDocragDiagnostics(docrag);
   if (!data) return null;
   return (
@@ -102,6 +114,9 @@ export function DocragAnswerPanel({ docrag }: { docrag: unknown }) {
           </p>
         ) : null}
       </details>
+      {traceId ? (
+        <DocragAnswerEvaluation key={traceId} traceId={traceId} evaluation={evaluation} />
+      ) : null}
     </section>
   );
 }

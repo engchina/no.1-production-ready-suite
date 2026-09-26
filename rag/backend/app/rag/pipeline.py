@@ -1602,6 +1602,7 @@ class RagPipeline:
             citations=outcome.citations,
             diagnostics=diagnostics.docrag or {},
             surface="search" if history is None else "chat",
+            evaluation_input=outcome.evaluation_input,
         )
         return SearchResponse(
             answer=final_answer,
@@ -1624,6 +1625,7 @@ class RagPipeline:
         citations: list[RetrievedChunk],
         diagnostics: Mapping[str, JsonValue],
         surface: str,
+        evaluation_input: Mapping[str, object] | None = None,
     ) -> None:
         """DocRAG 回答を保存する(rag_poc の answer JSON 保存に相当)。失敗しても回答は返す。"""
         business_view_id = (
@@ -1641,6 +1643,7 @@ class RagPipeline:
                     "answer": answer,
                     "citations": [citation.model_dump(mode="json") for citation in citations],
                     "diagnostics": dict(diagnostics),
+                    "evaluation_input": evaluation_input,
                 }
             )
             if self._settings.rag_answer_record_retention_days > 0:

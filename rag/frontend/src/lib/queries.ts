@@ -1077,6 +1077,18 @@ export function useDocragAnswer(traceId: string | null) {
   });
 }
 
+/** 保存済み DocRAG 回答を標準回答で評価する(LLM を複数回呼ぶ)。詳細のキャッシュを更新する。 */
+export function useEvaluateDocragAnswer() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ traceId, standardAnswer }: { traceId: string; standardAnswer: string }) =>
+      api.evaluateDocragAnswer(traceId, standardAnswer),
+    onSuccess: (detail) => {
+      qc.setQueryData(["docrag-answer", detail.trace_id], detail);
+    },
+  });
+}
+
 /** 保存済み DocRAG 回答の削除。一覧・詳細のキャッシュを捨てる。 */
 export function useDeleteDocragAnswer() {
   const qc = useQueryClient();

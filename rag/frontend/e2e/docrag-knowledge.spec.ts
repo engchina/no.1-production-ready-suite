@@ -196,38 +196,7 @@ test("類似する承認済み FAQ を提示し、FAQ の回答を LLM なしで
 test("類似問を使わない場合は DocRAG 回答と根拠パネルを表示する", async ({ page }) => {
   await mockCommon(page);
   await mockBusinessViewApi(page, { suggestions: [faqSuggestion] });
-  const docrag = {
-    confidence: "high",
-    needs_human_review: true,
-    insufficient_reason: "",
-    generated_queries: ["受注 取消 手順"],
-    execution_steps: [{ name: "質問の理解", status: "complete", elapsed_seconds: 0.3, llm_calls: 1 }],
-    evidence_tree: [
-      {
-        parent_id: "doc-1:p1",
-        source: "manual.pdf",
-        page: 3,
-        children: [{ chunk_id: "doc-1:c1", role: "retrieved_anchor", is_model_used: true, page: 3 }],
-      },
-    ],
-  };
-  await page.route("**/api/search/stream", (route) =>
-    route.fulfill({
-      status: 200,
-      headers: { "content-type": "text/event-stream" },
-      body: [
-        `event: metadata\ndata: ${JSON.stringify({
-          trace_id: "trace-docrag",
-          elapsed_ms: 20,
-          guardrail_warnings: [],
-          diagnostics: { business_view_applied: "bv-1", retrieval_strategy: "docrag", docrag },
-        })}\n\n`,
-        `event: delta\ndata: ${JSON.stringify({ text: "受注一覧で取消を押します。" })}\n\n`,
-        `event: citations\ndata: ${JSON.stringify([])}\n\n`,
-        `event: done\ndata: ${JSON.stringify({ trace_id: "trace-docrag" })}\n\n`,
-      ].join(""),
-    })
-  );
+  await mockDocragStream(page);
 
   await selectBusinessViewAndAsk(page, "受注を取り消すには？");
   await page.getByRole("button", { name: "類似問を使用しない（通常の回答生成）" }).click();
@@ -241,6 +210,87 @@ test("類似問を使わない場合は DocRAG 回答と根拠パネルを表示
   await expect(panel.getByText("回答に使用")).toBeVisible();
   await expectNoPageOverflow(page);
 });
+
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 900 },
+  { name: "mobile", width: 375, height: 900 },
+]) {
+  test(`DocRAG 回答を標準回答で評価し、4 軸の点と合否を表示する (${viewport.name})`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await mockCommon(page);
+    await mockBusinessViewApi(page);
+    await mockDocragStream(page);
+    let evaluationBody: Record<string, unknown> | null = null;
+    await page.route("**/api/search/answers/trace-docrag/evaluation", (route) => {
+      evaluationBody = route.request().postDataJSON() as Record<string, unknown>;
+      return route.fulfill({
+        json: envelope({
+          trace_id: "trace-docrag",
+          business_view_id: "bv-1",
+          surface: "search",
+          answer_engine: "docrag",
+          question: "受注を取り消すには？",
+          rewritten_question: null,
+          confidence: "high",
+          created_at: "2026-09-26T01:00:00Z",
+          answer: "受注一覧で取消を押します。",
+          citations: [],
+          docrag: {},
+          evaluation_available: true,
+          evaluation: {
+            status: "completed",
+            message: "回答品質を4軸で評価しています。",
+            total_score: 17,
+            max_score: 20,
+            pass_threshold: 16,
+            passed: true,
+            standard_answer: "受注一覧で対象を選び、取消を押します。",
+            evaluated_at: "2026-09-26T01:01:00Z",
+            scores: {
+              accuracy: { score: 5, reason: "標準回答と一致します。" },
+              coverage: { score: 4, reason: "対象の選択が抜けています。" },
+              evidence_consistency: { score: 4, reason: "根拠で確認できます。" },
+              generation_quality: { score: 4, reason: "簡潔です。" },
+            },
+            standard_answer_scope: {
+              requirements: [{ requirement: "受注一覧で対象を選ぶ" }, { requirement: "取消を押す" }],
+            },
+            coverage_checks: [
+              { requirement_index: 1, status: "missing", answer_quote: "" },
+              { requirement_index: 2, status: "addressed", answer_quote: "取消を押します" },
+            ],
+            claim_checks: [
+              { answer_quote: "受注一覧で取消を押します。", status: "supported", reason: "手順書に記載" },
+            ],
+            external_data_items: [],
+          },
+        }),
+      });
+    });
+
+    await selectBusinessViewAndAsk(page, "受注を取り消すには？");
+
+    const evaluation = page.getByRole("region", { name: "標準回答による評価" });
+    const run = evaluation.getByRole("button", { name: "標準回答で評価" });
+    await expect(run).toBeDisabled();
+    await evaluation.getByLabel("標準回答").fill("受注一覧で対象を選び、取消を押します。");
+    await run.click();
+
+    await expect.poll(() => evaluationBody).toEqual({
+      standard_answer: "受注一覧で対象を選び、取消を押します。",
+    });
+    await expect(evaluation.getByText("合格", { exact: true })).toBeVisible();
+    await expect(evaluation.getByText("合計 17 / 20 点（合格は 16 点以上）")).toBeVisible();
+    const accuracy = evaluation.getByRole("row", { name: /正確性/ });
+    await expect(accuracy).toContainText("5 / 5");
+    await evaluation.getByText("標準回答の項目への対応（2）").click();
+    await expect(evaluation.getByText("未対応")).toBeVisible();
+    await expect(evaluation.getByText("受注一覧で対象を選ぶ")).toBeVisible();
+    await expectNoPageOverflow(page);
+  });
+}
 
 test("DocRAG の回答履歴から過去の回答・根拠を開き直し、削除できる", async ({ page }) => {
   await mockCommon(page);
@@ -328,3 +378,38 @@ test("DocRAG の回答履歴から過去の回答・根拠を開き直し、削�
   await expect(page.getByText("受注一覧で取消ボタンを押します。")).toHaveCount(0);
   expect(deleted).toBe(true);
 });
+
+async function mockDocragStream(page: Page) {
+  const docrag = {
+    confidence: "high",
+    needs_human_review: true,
+    insufficient_reason: "",
+    generated_queries: ["受注 取消 手順"],
+    execution_steps: [{ name: "質問の理解", status: "complete", elapsed_seconds: 0.3, llm_calls: 1 }],
+    evidence_tree: [
+      {
+        parent_id: "doc-1:p1",
+        source: "manual.pdf",
+        page: 3,
+        children: [{ chunk_id: "doc-1:c1", role: "retrieved_anchor", is_model_used: true, page: 3 }],
+      },
+    ],
+  };
+  await page.route("**/api/search/stream", (route) =>
+    route.fulfill({
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+      body: [
+        `event: metadata\ndata: ${JSON.stringify({
+          trace_id: "trace-docrag",
+          elapsed_ms: 20,
+          guardrail_warnings: [],
+          diagnostics: { business_view_applied: "bv-1", retrieval_strategy: "docrag", docrag },
+        })}\n\n`,
+        `event: delta\ndata: ${JSON.stringify({ text: "受注一覧で取消を押します。" })}\n\n`,
+        `event: citations\ndata: ${JSON.stringify([])}\n\n`,
+        `event: done\ndata: ${JSON.stringify({ trace_id: "trace-docrag" })}\n\n`,
+      ].join(""),
+    })
+  );
+}

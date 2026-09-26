@@ -2860,6 +2860,11 @@ export const api = {
     request<DocragAnswerDetail>(
       `/api/search/answers/${encodeURIComponent(traceId)}`,
     ),
+  evaluateDocragAnswer: (traceId: string, standardAnswer: string) =>
+    request<DocragAnswerDetail>(
+      `/api/search/answers/${encodeURIComponent(traceId)}/evaluation`,
+      jsonBody({ standard_answer: standardAnswer }),
+    ),
   deleteDocragAnswer: (traceId: string) =>
     request<{ trace_id: string }>(
       `/api/search/answers/${encodeURIComponent(traceId)}`,
@@ -3340,4 +3345,8 @@ export interface DocragAnswerDetail extends DocragAnswerSummary {
   answer: string;
   citations: RetrievedChunk[];
   docrag: Record<string, JsonValue>;
+  /** 標準回答で評価できるか(この機能より前の回答は評価の入力を持たない)。 */
+  evaluation_available?: boolean;
+  /** 標準回答による評価の結果(未評価は null)。 */
+  evaluation?: Record<string, JsonValue> | null;
 }

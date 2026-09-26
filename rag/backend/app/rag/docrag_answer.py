@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import re
 import tempfile
@@ -37,6 +38,8 @@ from app.schemas.search import RetrievedChunk, SearchMode, SearchRequest
 
 T = TypeVar("T")
 
+logger = logging.getLogger(__name__)
+
 DOCRAG_ANSWER_ENGINE = "docrag"
 DOCRAG_SOURCE_RUN_ID = "0" * 16
 # 回答フロー 1 件の I/O 待ちの上限(秒)。LLM/検索の個別 timeout は各 client が持つ。
@@ -51,6 +54,21 @@ class DocragAnswerOutcome:
     citations: list[RetrievedChunk]
     diagnostics: dict[str, Any]
     context_text: str
+    # 標準回答による LLM 評価(evaluate_answer_payload)の入力。回答記録に保存する。
+    evaluation_input: dict[str, Any] | None = None
+
+
+# evaluate_answer_payload が読む回答 payload のキー(answer_result_payload の部分集合)。
+EVALUATION_INPUT_KEYS = (
+    "question",
+    "answer_text",
+    "reasoning_summary",
+    "insufficient_reason",
+    "used_images",
+    "external_data_required",
+    "external_data_items",
+    "evidence_items",
+)
 
 
 @dataclass
@@ -512,4 +530,33 @@ def _outcome_from_result(result: Any, state: _SearchState) -> DocragAnswerOutcom
         citations=citations,
         diagnostics=diagnostics,
         context_text=context_text,
+        evaluation_input=_evaluation_input(result),
     )
+
+
+def _evaluation_input(result: Any) -> dict[str, Any] | None:
+    """rag_poc の回答 payload から、標準回答での評価に使う部分だけを取り出す。"""
+    from docrag.generation.answer_payload import answer_result_payload
+
+    try:
+        payload = answer_result_payload(result, answer_id="", run_id=DOCRAG_SOURCE_RUN_ID)
+    except Exception:  # noqa: BLE001 - 評価の入力は補助。回答の返却を止めない。
+        logger.warning("docrag evaluation input build failed", exc_info=True)
+        return None
+    return {key: payload.get(key) for key in EVALUATION_INPUT_KEYS}
+
+
+def evaluate_answer_record(
+    evaluation_input: Mapping[str, Any], standard_answer: str, settings: Settings
+) -> dict[str, Any]:
+    """保存した回答を標準回答で評価する(rag_poc の evaluate_answer_payload)。
+
+    同期関数で、LLM を複数回呼ぶ。呼び出し側は worker thread で動かす。
+    """
+    from docrag.evaluation.answer_eval import evaluate_answer_payload
+
+    with tempfile.TemporaryDirectory(prefix="docrag-eval-") as work:
+        docrag_settings = build_docrag_settings(settings, output_dir=Path(work))
+        return evaluate_answer_payload(
+            {**evaluation_input, "standard_answer": standard_answer}, docrag_settings
+        )

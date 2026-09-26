@@ -52,7 +52,8 @@ KB（ナレッジベース）は検索対象の範囲を決めるだけで、上
    - 業務ビューを選んで検索すると、先に類似する承認済み FAQ を照会する。候補があれば「この FAQ の回答を使う（LLM を使わない）」か「類似問を使用しない」を選ぶ。
    - DocRAG の回答には「回答の根拠と実行記録（DocRAG）」パネル（信頼度、人手確認、根拠の構成、実行記録）が付く。
    - 過去の DocRAG 回答は、検索画面の「DocRAG の回答履歴」から回答・根拠・実行記録ごと開き直せる。チャットでは各回答の「保存された根拠と実行記録を開く」から開く。どちらも「この回答を削除」で個別に削除できる。
-6. **チャット**：DocRAG エンジンでも会話履歴を使う。直前までの会話から質問を単独で意味が通る形に書き換えてから検索・回答する（書き換え後の質問は回答パネルに表示する）。
+6. **評価**：DocRAG の回答パネル（RAG 検索・回答履歴・チャット）の「標準回答による評価」に期待する回答を入れて「標準回答で評価」を押すと、rag_poc の 4 軸評価（`docrag.evaluation.answer_eval`、各 5 点・合計 20 点、16 点以上で合格）を実行し、結果を回答記録に保存する。rag_poc と違い、生成の後に評価する。この機能より前に保存した回答は評価の入力を持たないので評価できない。
+7. **チャット**：DocRAG エンジンでも会話履歴を使う。直前までの会話から質問を単独で意味が通る形に書き換えてから検索・回答する（書き換え後の質問は回答パネルに表示する）。
 
 ## 設定一覧
 
@@ -79,7 +80,7 @@ docling サービスの Vision は、backend のサービス管理が橋渡し�
 - **文書の分類と有効期間**：`rag_documents.classification`（JSON）。migration `20260926_001_documents_classification` で列を追加する。ACL に使う `category_name` とは別に持つ。
 - **業務ビューの知識**：`rag_business_view_knowledge`（業務ビュー × 種別、rag_poc の JSON payload のまま）。表は「システム設定 > データベース」のシステムテーブルから、migration `20260925_001_business_view_knowledge` で作成する。
 - **親子チャンク**：子を `rag_chunks` に保存する。親の本文（`docrag_parent_text`）、検索用テキスト（`docrag_search_text`）、metadata v4（`docrag_metadata_json`）は子の metadata に持つ。
-- **DocRAG の回答**：`rag_answer_records`（trace_id 単位で質問・書き換え後の質問・回答・引用・DocRAG の診断情報）。migration `20260925_002_answer_records` で作成する。保存に失敗しても回答は返す。保存期間を過ぎた記録は、回答の保存時と保存期間の設定変更時に削除する。
+- **DocRAG の回答**：`rag_answer_records`（trace_id 単位で質問・書き換え後の質問・回答・引用・DocRAG の診断情報）。標準回答での評価の入力（`evaluation_input_json`、根拠の本文を含む）と評価結果（`evaluation_json`）も同じ行に持つ（migration `20260926_002_answer_record_evaluation`）。回答を同じ trace_id で保存し直すと評価結果は消える。migration `20260925_002_answer_records` で作成する。保存に失敗しても回答は返す。保存期間を過ぎた記録は、回答の保存時と保存期間の設定変更時に削除する。
 - **切り出し画像**：保存しない。プレビューは `GET /api/documents/{id}/crop` で、回答時は一時ディレクトリで都度作る。
 
 ## rag_poc との差分
@@ -88,7 +89,7 @@ docling サービスの Vision は、backend のサービス管理が橋渡し�
 - ADB の独自スキーマ（`rag_chunk_runs` / `rag_chunk_embeddings` など）は使わない。検索は backend の hybrid 検索（vector と Oracle Text の RRF）に、rag_poc の「原質問を主軸にした重み付き融合」と Sudachi 分割を組み合わせる。
 - chicago / osaka の 2 系統 LLM 設定と、OCI SDK の LLM 経路は廃止した。
 - 移植していないもの：
-  - Gradio UI、PPT 資料、`verify/` の問題セット、評価スクリプト、質問履歴
+  - Gradio UI、PPT 資料、`verify/` の問題セット、評価スクリプト（`run_answer_eval.py` などの一括評価。1 件ずつの標準回答での評価は画面から使える）、質問履歴
   - フィードバックから FAQ への自動昇格
 
 ## 既知の制約
