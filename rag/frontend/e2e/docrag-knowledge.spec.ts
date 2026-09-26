@@ -175,6 +175,44 @@ async function selectBusinessViewAndAsk(page: Page, question: string) {
   await page.getByRole("button", { name: "検索", exact: true }).click();
 }
 
+test("よく聞かれている質問を入力欄の下に出し、選ぶと質問欄に入る", async ({ page }) => {
+  await mockCommon(page);
+  await mockBusinessViewApi(page);
+  const requested: string[] = [];
+  await page.route("**/api/business-views/bv-1/query-suggestions**", (route) => {
+    requested.push(new URL(route.request().url()).searchParams.get("q") ?? "");
+    return route.fulfill({
+      json: envelope({
+        business_view_id: "bv-1",
+        enabled: true,
+        suggestions: [
+          { question: "受注を取り消すには？", count: 5 },
+          { question: "受注の締め日は？", count: 3 },
+        ],
+      }),
+    });
+  });
+
+  await page.goto("/search");
+  await page.getByRole("combobox", { name: /対象の業務ビュー/ }).click();
+  await page
+    .getByRole("listbox", { name: /対象の業務ビュー/ })
+    .getByRole("option", { name: /受注サポート/ })
+    .click();
+  await page.keyboard.press("Escape");
+  const input = page.getByRole("textbox", { name: "RAG 検索" });
+  await input.fill("受注");
+  const suggestions = page.getByRole("list", { name: "よく聞かれている質問" });
+  await expect(suggestions.getByRole("button")).toHaveCount(2);
+  await expect.poll(() => requested.at(-1)).toBe("受注");
+
+  await suggestions.getByRole("button", { name: "受注を取り消すには？" }).click();
+  await expect(input).toHaveValue("受注を取り消すには？");
+  // 質問欄と同じ候補は出さない。
+  await expect(suggestions.getByRole("button")).toHaveCount(1);
+  await expectNoPageOverflow(page);
+});
+
 test("類似する承認済み FAQ を提示し、FAQ の回答を LLM なしで表示する", async ({ page }) => {
   await mockCommon(page);
   await mockBusinessViewApi(page, { suggestions: [faqSuggestion] });

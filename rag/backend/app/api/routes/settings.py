@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import json
 import logging
 import re
 import stat
@@ -170,6 +171,8 @@ from app.schemas.settings import (
     PromptVersionCreate,
     PromptVersionData,
     PromptVersionsData,
+    QueryHistorySettingsData,
+    QueryHistorySettingsUpdate,
     RetrievalSettingsData,
     RetrievalSettingsUpdate,
     RetrievalStrategyStatusData,
@@ -580,6 +583,53 @@ async def update_answer_record_settings(
         except Exception as exc:  # 次の回答保存時にも削除するため、設定保存は止めない。
             logger.warning("answer record purge failed", extra={"error": str(exc)})
     return ApiResponse(data=AnswerRecordSettingsData(retention_days=payload.retention_days))
+
+
+@router.get("/query-history", response_model=ApiResponse[QueryHistorySettingsData])
+async def get_query_history_settings() -> ApiResponse[QueryHistorySettingsData]:
+    """質問履歴の設定を返す。"""
+    return ApiResponse(data=_query_history_settings(get_settings()))
+
+
+@router.patch("/query-history", response_model=ApiResponse[QueryHistorySettingsData])
+async def update_query_history_settings(
+    payload: QueryHistorySettingsUpdate,
+) -> ApiResponse[QueryHistorySettingsData]:
+    """質問履歴の設定を backend/.env と現在プロセスへ反映し、期限切れの履歴を削除する。"""
+    settings = get_settings()
+    _write_env_values(
+        BACKEND_ENV_FILE,
+        {
+            "RAG_QUERY_HISTORY_ENABLED": "true" if payload.enabled else "false",
+            "RAG_QUERY_HISTORY_RETENTION_DAYS": str(payload.retention_days),
+            "RAG_QUERY_HISTORY_MIN_COUNT": str(payload.min_count),
+            "RAG_QUERY_HISTORY_SUGGESTION_LIMIT": str(payload.suggestion_limit),
+            "RAG_QUERY_HISTORY_BLOCKLIST": json.dumps(payload.blocklist, ensure_ascii=False),
+        },
+        section_comment="# 質問履歴",
+        error_detail="質問履歴の設定を backend/.env へ保存できませんでした。",
+    )
+    settings.rag_query_history_enabled = payload.enabled
+    settings.rag_query_history_retention_days = payload.retention_days
+    settings.rag_query_history_min_count = payload.min_count
+    settings.rag_query_history_suggestion_limit = payload.suggestion_limit
+    settings.rag_query_history_blocklist = list(payload.blocklist)
+    if payload.retention_days > 0:
+        try:
+            await OracleClient().purge_query_history(payload.retention_days)
+        except Exception as exc:  # 次の記録時にも削除するため、設定保存は止めない。
+            logger.warning("query history purge failed", extra={"error": str(exc)})
+    return ApiResponse(data=_query_history_settings(settings))
+
+
+def _query_history_settings(settings: Settings) -> QueryHistorySettingsData:
+    return QueryHistorySettingsData(
+        enabled=settings.rag_query_history_enabled,
+        retention_days=settings.rag_query_history_retention_days,
+        min_count=settings.rag_query_history_min_count,
+        suggestion_limit=settings.rag_query_history_suggestion_limit,
+        blocklist=list(settings.rag_query_history_blocklist),
+    )
 
 
 @router.get("/docrag-prompts", response_model=ApiResponse[DocragPromptsData])

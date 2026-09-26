@@ -30,6 +30,7 @@ from app.rag.business_view_knowledge import (
     suggest_approved_faq,
     suggest_domain_keywords,
 )
+from app.rag.query_history import query_history_suggestions
 from app.schemas.business_view import BusinessViewDetail
 from app.schemas.business_view_knowledge import (
     ApprovedFaqAddRequest,
@@ -46,6 +47,8 @@ from app.schemas.business_view_knowledge import (
     DomainKeywordsData,
     DomainKeywordSuggestionData,
     DomainKeywordsUpdate,
+    QuerySuggestion,
+    QuerySuggestionsData,
     RuntimeKnowledgeData,
     RuntimeKnowledgeEditRequest,
     RuntimeKnowledgePreviewData,
@@ -379,5 +382,47 @@ async def post_runtime_knowledge_preview(
             expanded_question=context.expanded_question,
             matched_terms=[term.term for term in context.matched_terms],
             matched_rules=[rule.title or rule.rule_id for rule in context.matched_rules],
+        )
+    )
+
+
+@router.get(
+    "/{business_view_id}/query-suggestions",
+    response_model=ApiResponse[QuerySuggestionsData],
+)
+async def get_query_suggestions(
+    business_view_id: str,
+    q: str = Query(default="", max_length=500),
+    large_category: str = Query(default="", max_length=200),
+    middle_category: str = Query(default="", max_length=200),
+    small_category: str = Query(default="", max_length=200),
+) -> ApiResponse[QuerySuggestionsData]:
+    """業務ビューでよく聞かれる質問を、入力中の質問との類似度順に返す(質問履歴が有効なときだけ)。"""
+    settings = get_settings()
+    oracle = OracleClient()
+    await _require_business_view(oracle, business_view_id)
+    classification = {
+        key: value
+        for key, value in {
+            "large_category": large_category,
+            "middle_category": middle_category,
+            "small_category": small_category,
+        }.items()
+        if value.strip()
+    }
+    suggestions = await query_history_suggestions(
+        oracle,
+        settings,
+        business_view_id=business_view_id,
+        question=q,
+        classification=classification,
+    )
+    return ApiResponse(
+        data=QuerySuggestionsData(
+            business_view_id=business_view_id,
+            enabled=settings.rag_query_history_enabled,
+            suggestions=[
+                QuerySuggestion(question=item.question, count=item.count) for item in suggestions
+            ],
         )
     )

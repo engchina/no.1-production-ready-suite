@@ -53,6 +53,7 @@ import { useNowMs } from "@/lib/use-now-ms";
 import { isOneOf, useWorkspaceState } from "@/lib/workspace-state";
 import { DocragAnswerHistory } from "./DocragAnswerHistory";
 import { DocragAnswerPanel } from "./DocragAnswerPanel";
+import { QuerySuggestions } from "./QuerySuggestions";
 import { ApprovedFaqAnswer, ApprovedFaqSuggestions } from "./ApprovedFaqSuggestions";
 
 type Phase = "idle" | "streaming" | "done" | "cancelled" | "error";
@@ -454,6 +455,14 @@ export function SearchClient() {
                   </Button>
                 ) : null}
               </div>
+
+              <QuerySuggestions
+                businessViewId={businessViewIds[0] ?? null}
+                query={query}
+                filters={classificationSuggestionFilters(classification)}
+                disabled={isStreaming}
+                onSelect={setQuery}
+              />
 
               <div className="space-y-1.5">
                 <div className="flex flex-wrap items-center gap-1" role="group" aria-label={t("search.pipeline")}>
@@ -1374,6 +1383,15 @@ const EMPTY_CLASSIFICATION_FILTERS: ClassificationFilterValues = {
   small_category: "",
   as_of: "",
 };
+
+/** 質問の候補は分類だけで絞る（基準日は候補に関係しない）。 */
+function classificationSuggestionFilters(values: ClassificationFilterValues): Record<string, string> {
+  const filters: Record<string, string> = {};
+  for (const key of ["large_category", "middle_category", "small_category"] as const) {
+    if (values[key].trim()) filters[key] = values[key].trim();
+  }
+  return filters;
+}
 
 function isClassificationFilterValues(value: unknown): value is ClassificationFilterValues {
   return (
